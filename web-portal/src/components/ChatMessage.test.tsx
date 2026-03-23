@@ -27,7 +27,7 @@ describe('ChatMessage', () => {
     // User messages are self-end (right-aligned)
     const msgDiv = container.firstChild as HTMLElement
     expect(msgDiv.className).toContain('self-end')
-    expect(msgDiv.className).toContain('bg-user-msg')
+    expect(msgDiv.className).toContain('from-accent/10')
   })
 
   it('renders assistant message', () => {
@@ -37,7 +37,7 @@ describe('ChatMessage', () => {
     expect(screen.getByText('Bot reply')).toBeInTheDocument()
     const msgDiv = container.firstChild as HTMLElement
     expect(msgDiv.className).toContain('self-start')
-    expect(msgDiv.className).toContain('bg-ai-msg')
+    expect(msgDiv.className).toContain('backdrop-blur')
   })
 
   it('renders assistant markdown message', () => {

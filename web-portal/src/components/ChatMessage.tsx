@@ -1,9 +1,11 @@
-import { memo, useMemo } from 'react'
+import { memo, useMemo, useState, useCallback } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
+import type { Components } from 'react-markdown'
 import type { Attachment, ChatMessage as ChatMessageType } from '../types/messages'
 import VoiceOutput from './VoiceOutput'
+import { cn } from '@/lib/utils'
 
 const REMARK_PLUGINS = [remarkGfm]
 const REHYPE_PLUGINS = [rehypeHighlight]
@@ -62,22 +64,85 @@ function hasTextContent(text: string): boolean {
   return stripped.length > 0
 }
 
+function CopyButton({ text, className }: { text: string; className?: string }) {
+  const [copied, setCopied] = useState(false)
+  const handleCopy = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    } catch {
+      // clipboard not available
+    }
+  }, [text])
+  return (
+    <button
+      onClick={handleCopy}
+      className={cn(
+        'px-2 py-0.5 text-[11px] rounded-md border border-white/10 bg-white/5 text-text-secondary hover:bg-white/10 hover:text-text transition-all duration-150',
+        className,
+      )}
+      title="Copy"
+    >
+      {copied ? 'Copied!' : 'Copy'}
+    </button>
+  )
+}
+
+function makeComponents(isUser: boolean): Components {
+  return {
+    pre({ children, ...props }) {
+      // Extract raw text from the code element inside pre
+      const codeEl = (children as React.ReactElement | null)
+      const rawText: string = (() => {
+        try {
+          const el = codeEl as React.ReactElement<{ children?: React.ReactNode }>
+          const inner = el?.props?.children
+          if (typeof inner === 'string') return inner
+          return ''
+        } catch {
+          return ''
+        }
+      })()
+      return (
+        <div className="relative group/code">
+          <pre {...props}>{children}</pre>
+          {rawText && (
+            <CopyButton
+              text={rawText}
+              className="absolute top-2 right-2 opacity-0 group-hover/code:opacity-100 transition-opacity"
+            />
+          )}
+        </div>
+      )
+    },
+  }
+}
+
+const USER_COMPONENTS = makeComponents(true)
+const AI_COMPONENTS = makeComponents(false)
+
 function ChatMessageComponent({ message }: ChatMessageProps) {
   const isUser = message.sender === 'user'
   const showVoiceOutput = !isUser && !message.isStreaming && hasTextContent(message.text)
 
   return (
     <div
-      className={`max-w-[75%] px-[18px] py-[14px] rounded-[18px] leading-relaxed break-words overflow-wrap-break-word animate-[msg-in_0.3s_cubic-bezier(0.25,0.46,0.45,0.94)] text-[15px] backdrop-blur-[20px] ${
+      className={cn(
+        'group relative max-w-[75%] px-[18px] py-[14px] leading-relaxed break-words overflow-wrap-break-word animate-[msg-in_0.3s_cubic-bezier(0.25,0.46,0.45,0.94)] text-[15px]',
         isUser
-          ? 'self-end bg-user-msg rounded-br-[6px] border border-accent/15'
-          : 'self-start bg-ai-msg rounded-bl-[6px] border border-border prose-ai'
-      }`}
+          ? 'self-end bg-gradient-to-br from-accent/10 to-accent/5 rounded-2xl rounded-br-[6px] border border-accent/15'
+          : 'self-start bg-white/[0.03] backdrop-blur border border-white/5 rounded-2xl rounded-bl-[6px] prose-ai',
+      )}
     >
       {isUser || !message.isMarkdown ? (
         <span>{message.text}</span>
       ) : (
-        <ReactMarkdown remarkPlugins={REMARK_PLUGINS} rehypePlugins={REHYPE_PLUGINS}>
+        <ReactMarkdown
+          remarkPlugins={REMARK_PLUGINS}
+          rehypePlugins={REHYPE_PLUGINS}
+          components={isUser ? USER_COMPONENTS : AI_COMPONENTS}
+        >
           {message.text}
         </ReactMarkdown>
       )}
@@ -92,6 +157,10 @@ function ChatMessageComponent({ message }: ChatMessageProps) {
           <VoiceOutput text={message.text} />
         </div>
       )}
+      <CopyButton
+        text={message.text}
+        className="absolute -top-3 right-2 opacity-0 group-hover:opacity-100 transition-opacity"
+      />
     </div>
   )
 }

@@ -206,7 +206,7 @@ export default function ChatInput({ onSend, disabled }: ChatInputProps) {
           ))}
         </div>
       )}
-      <div className="flex gap-2.5 items-end">
+      <div className="flex gap-2.5 items-end bg-white/5 backdrop-blur border border-white/10 rounded-xl px-3 py-2 focus-within:border-accent focus-within:shadow-[0_0_15px_rgba(0,229,255,0.15)] transition-all duration-200">
         <button
           className="flex items-center justify-center relative w-[42px] h-[42px] border border-border rounded-xl bg-bg-tertiary text-text-secondary cursor-pointer shrink-0 transition-all duration-200 hover:text-accent hover:border-accent hover:bg-accent-glow disabled:opacity-40 disabled:cursor-not-allowed"
           onClick={() => fileInputRef.current?.click()}
@@ -230,11 +230,11 @@ export default function ChatInput({ onSend, disabled }: ChatInputProps) {
           placeholder="Send a message... (Enter to send, Shift+Enter for new line)"
           rows={1}
           disabled={disabled}
-          className="flex-1 resize-none border border-border rounded-[14px] px-4 py-3 font-[inherit] text-[15px] bg-input-bg text-text leading-relaxed max-h-[140px] outline-none transition-all duration-200 focus:border-accent focus:shadow-[0_0_0_3px_var(--color-accent-glow)] placeholder:text-text-tertiary disabled:opacity-40"
+          className="flex-1 resize-none border-none rounded-[14px] px-4 py-3 font-[inherit] text-[15px] bg-transparent text-text leading-relaxed max-h-[140px] outline-none transition-all duration-200 placeholder:text-text-tertiary disabled:opacity-40"
         />
         <VoiceRecorder onTranscript={handleVoiceTranscript} disabled={disabled} />
         <button
-          className="self-end px-[22px] py-[11px] bg-accent text-white border-none rounded-[14px] cursor-pointer text-[15px] font-semibold transition-all duration-200 whitespace-nowrap shrink-0 tracking-tight hover:bg-accent-hover hover:-translate-y-px hover:shadow-[0_4px_12px_var(--color-accent-glow)] disabled:opacity-40 disabled:cursor-not-allowed disabled:translate-y-0 disabled:shadow-none"
+          className="self-end px-[22px] py-[11px] bg-accent text-white border-none rounded-[14px] cursor-pointer text-[15px] font-semibold transition-all duration-200 whitespace-nowrap shrink-0 tracking-tight hover:bg-accent-hover hover:scale-105 hover:shadow-[0_0_20px_rgba(0,229,255,0.3)] active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed disabled:scale-100 disabled:shadow-none"
           onClick={handleSend}
           disabled={disabled || (!text.trim() && files.length === 0)}
         >
