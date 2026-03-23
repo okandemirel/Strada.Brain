@@ -6,13 +6,13 @@
 
 <p align="center">
   <strong>AI-Powered Development Agent for Unity / Strada.Core Projects</strong><br/>
-  An autonomous coding agent that connects to a web dashboard, Telegram, Discord, Slack, WhatsApp, or your terminal &mdash; reads your codebase, writes code, runs builds, learns from its mistakes, and operates autonomously with a 24/7 daemon loop. Now with multi-agent orchestration, task delegation, memory consolidation, a deployment subsystem with approval gates, media sharing with LLM vision support, a configurable personality system via SOUL.md, control-plane clarification review, intelligent multi-provider routing with task-aware dynamic switching, confidence-based consensus verification, an autonomous Agent Core with OODA reasoning loop, and Strada.MCP integration.
+  An autonomous coding agent that connects to a web dashboard, Telegram, Discord, Slack, WhatsApp, or your terminal &mdash; reads your codebase, writes code, runs builds, learns from its mistakes, and operates autonomously with a 24/7 daemon loop. Now with multi-agent orchestration, task delegation, memory consolidation, a deployment subsystem with approval gates, media sharing with LLM vision support, a configurable personality system via SOUL.md, control-plane clarification review, intelligent multi-provider routing with task-aware dynamic switching, confidence-based consensus verification, an autonomous Agent Core with OODA reasoning loop, an extensible skill ecosystem with SKILL.md manifests and a git-based registry, and Strada.MCP integration.
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/TypeScript-5.7-blue?style=flat-square&logo=typescript" alt="TypeScript">
   <img src="https://img.shields.io/badge/Node.js-%3E%3D20-green?style=flat-square&logo=node.js" alt="Node.js">
-  <img src="https://img.shields.io/badge/tests-4100%2B-brightgreen?style=flat-square" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-4413%2B-brightgreen?style=flat-square" alt="Tests">
   <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="License">
 </p>
 
@@ -263,6 +263,80 @@ The built-in web portal (`http://localhost:3000`) provides a full AI workspace w
 **Keyboard shortcuts:** `Alt+1-4` mode switching, `Cmd/Ctrl+B` toggle sidebar, `Cmd/Ctrl+\` toggle secondary panel, `Cmd/Ctrl+?` shortcuts help.
 
 **Stack:** React 19, Vite, Tailwind CSS v4, Zustand, TanStack Query, Radix UI, ReactFlow, tldraw, Monaco Editor.
+
+---
+
+## Skill Ecosystem
+
+Skills are optional capability bundles you can install, share, and build on top of Strada.Brain. Each skill is a directory with a `SKILL.md` manifest and optional environment configuration.
+
+### Installing skills
+
+```bash
+# Install from any public git repository
+strada skill install https://github.com/okandemirel/strada-skill-example
+
+# List installed skills and their status
+strada skill list
+
+# Update all managed skills
+strada skill update
+
+# Search the public registry
+strada skill search <query>
+
+# Show details for an installed skill
+strada skill info <name>
+
+# Enable or disable a skill
+strada skill enable <name>
+strada skill disable <name>
+
+# Remove a skill
+strada skill remove <name>
+```
+
+### Creating a skill
+
+A skill is a directory containing at minimum a `SKILL.md` file with YAML frontmatter:
+
+```markdown
+---
+name: my-skill
+version: 1.0.0
+description: A short description of what this skill does
+author: your-name
+requires:
+  bins:
+    - some-cli-tool        # must exist in PATH
+  env:
+    - MY_API_KEY           # must be set
+  skills:
+    - another-skill        # dependency on another skill
+capabilities:
+  - code-generation
+  - analysis
+---
+
+The body of SKILL.md is the system prompt or documentation injected into
+the agent when this skill is active.
+```
+
+### 3-tier loading
+
+Skills are discovered from three locations, in priority order:
+
+| Tier | Location | Purpose |
+|------|----------|---------|
+| **workspace** | `.strada/skills/` in your project root | Project-specific skills, highest priority |
+| **managed** | `~/.strada/skills/` | User-installed skills via `strada skill install` |
+| **bundled** | `src/skills/bundled/` inside the Strada.Brain checkout | Shipped with the application, always available |
+
+Skills in a higher-priority tier override those with the same name in lower tiers. A skill whose `requires` conditions are not met is placed in `gated` status and excluded from the active tool surface until its prerequisites are satisfied.
+
+### Registry
+
+The public skill registry is a JSON index of community-maintained skills. Run `strada skill search` to browse it. Each entry lists the git repository, description, tags, version, and author. The registry URL is configurable via `SKILL_REGISTRY_URL`.
 
 ---
 
@@ -1213,6 +1287,16 @@ src/
     metrics-cli.ts      # CLI metrics display command
   utils/
     media-processor.ts  # Media download, validation (MIME/size/magic bytes), SSRF protection
+  skills/
+    types.ts                  # SkillManifest, SkillEntry, SkillStatus, RegistryEntry types
+    skill-loader.ts           # 3-tier skill discovery (bundled / managed / workspace)
+    skill-gating.ts           # Prerequisite gate checks (bins, env, config, skill deps)
+    skill-config.ts           # Per-skill enable/disable persistence (skills.json)
+    skill-env-injector.ts     # Injects skill env vars into process.env at activation
+    skill-manager.ts          # High-level lifecycle: load, enable, disable, install, remove
+    skill-cli.ts              # `strada skill` subcommands (install, list, update, search, info, ...)
+    skill-registry-client.ts  # Fetches and searches the remote JSON registry index
+    frontmatter-parser.ts     # YAML frontmatter extraction from SKILL.md files
   security/             # Auth, RBAC, path guard, rate limiter, secret sanitizer
   intelligence/         # C# parsing, project analysis, code quality
   dashboard/            # HTTP, WebSocket, Prometheus dashboards
@@ -1225,6 +1309,8 @@ src/
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, code conventions, and PR guidelines.
+
+See [AGENTS.md](AGENTS.md) for detailed coding conventions, architecture patterns, and agent-specific guidelines used when working with AI coding assistants inside this repository.
 
 ---
 
