@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type Chan
 import type { Attachment } from '../types/messages'
 import { useWorkspaceStore } from '../stores/workspace-store'
 import VoiceRecorder from './VoiceRecorder'
+import { ShimmerButton } from './ui/shimmer-button'
+import { CoolMode } from './ui/cool-mode'
 
 interface ChatInputProps {
   onSend: (text: string, attachments?: Attachment[]) => boolean | void
@@ -233,13 +235,19 @@ export default function ChatInput({ onSend, disabled }: ChatInputProps) {
           className="flex-1 resize-none border-none rounded-[14px] px-4 py-3 font-[inherit] text-[15px] bg-transparent text-text leading-relaxed max-h-[140px] outline-none transition-all duration-200 placeholder:text-text-tertiary disabled:opacity-40"
         />
         <VoiceRecorder onTranscript={handleVoiceTranscript} disabled={disabled} />
-        <button
-          className="self-end px-[22px] py-[11px] bg-accent text-white border-none rounded-[14px] cursor-pointer text-[15px] font-semibold transition-all duration-200 whitespace-nowrap shrink-0 tracking-tight hover:bg-accent-hover hover:scale-105 hover:shadow-[0_0_20px_rgba(0,229,255,0.3)] active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed disabled:scale-100 disabled:shadow-none"
-          onClick={handleSend}
-          disabled={disabled || (!text.trim() && files.length === 0)}
-        >
-          Send
-        </button>
+        <CoolMode options={{ particle: '✦', particleCount: 8, speedUp: 18 }}>
+          <ShimmerButton
+            shimmerColor="#00e5ff"
+            background="rgba(0,229,255,0.12)"
+            borderRadius="14px"
+            shimmerDuration="2.5s"
+            className="self-end px-[22px] py-[11px] text-accent border-accent/30 text-[15px] font-semibold whitespace-nowrap shrink-0 tracking-tight hover:scale-105 hover:shadow-[0_0_20px_rgba(0,229,255,0.3)] active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed disabled:scale-100 disabled:shadow-none disabled:hover:scale-100"
+            onClick={handleSend}
+            disabled={disabled || (!text.trim() && files.length === 0)}
+          >
+            Send
+          </ShimmerButton>
+        </CoolMode>
         <input
           ref={fileInputRef}
           type="file"
