@@ -11,6 +11,7 @@ import { TooltipProvider, Tooltip, TooltipTrigger, TooltipContent } from '../ui/
 import AdminNav from './AdminNav'
 import MiniChat from '../workspace/MiniChat'
 import NotificationCenter from './NotificationCenter'
+import { SparklesText } from '../ui/sparkles-text'
 
 export default function Sidebar() {
   const { status } = useWS()
@@ -48,7 +49,7 @@ export default function Sidebar() {
       {/* Logo / Brand */}
       <div className={`flex flex-row items-center gap-3 p-4 border-b border-border bg-gradient-to-b from-transparent to-bg-tertiary/30 shrink-0 ${collapsed ? 'justify-center px-2' : ''}`}>
         <img src="/strada-brain-icon.png" alt="" width="28" height="28" className="w-7 h-7 rounded-lg shrink-0 object-contain" />
-        {!collapsed && <span className="text-[17px] font-bold text-text tracking-tight whitespace-nowrap overflow-hidden text-ellipsis">Strada.Brain</span>}
+        {!collapsed && <SparklesText className="text-[17px] font-bold tracking-tight whitespace-nowrap overflow-hidden text-ellipsis" colors={{ first: '#00e5ff', second: '#9E7AFF' }}>Strada.Brain</SparklesText>}
       </div>
 
       {/* Mode buttons */}

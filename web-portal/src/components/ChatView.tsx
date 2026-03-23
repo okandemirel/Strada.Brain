@@ -6,6 +6,7 @@ import ConfirmDialog from './ConfirmDialog'
 import TypingIndicator from './TypingIndicator'
 import EmptyState from './EmptyState'
 import PrimaryWorkerSelector from './PrimaryWorkerSelector'
+import { BlurFade } from './ui/blur-fade'
 
 export default function ChatView() {
   const { messages, status, confirmation, isTyping, sendMessage, sendConfirmation } = useWS()
@@ -44,7 +45,7 @@ export default function ChatView() {
       <div className="flex-1 overflow-y-auto px-6 py-6 flex flex-col gap-3 scroll-smooth" ref={messagesContainerRef}>
         {messages.length === 0 && !isTyping ? (
           <div className="flex-1 flex items-center justify-center">
-            <EmptyState />
+            <BlurFade><EmptyState /></BlurFade>
           </div>
         ) : (
           <div className="w-full max-w-prose mx-auto flex flex-col gap-3">
