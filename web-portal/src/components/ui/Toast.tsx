@@ -16,7 +16,7 @@ function ToastItem({ notification }: { notification: WorkspaceNotification }) {
     return () => clearTimeout(timer)
   }, [notification.id])
 
-  const isModeSuggest = notification.title === 'Mode switched'
+  const isModeSuggest = notification.kind === 'mode_suggest'
 
   return (
     <div
@@ -53,7 +53,6 @@ export default function ToastContainer() {
 
   if (notifications.length === 0) return null
 
-  // Show last 3 notifications
   const visible = notifications.slice(-3)
 
   return (

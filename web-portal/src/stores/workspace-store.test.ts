@@ -116,7 +116,7 @@ describe('useWorkspaceStore — previousMode and undo', () => {
     const state = useWorkspaceStore.getState()
     expect(state.mode).toBe('chat')
     expect(state.previousMode).toBeNull()
-    expect(state.userOverride).toBe(true)
+    expect(state.userOverride).toBe(false)
   })
 
   it('undoModeSwitch does nothing when previousMode is null', () => {

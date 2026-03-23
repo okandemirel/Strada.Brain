@@ -179,7 +179,7 @@ describe('workspace integration — override flow', () => {
     const ws = useWorkspaceStore.getState()
     expect(ws.mode).toBe('chat')
     expect(ws.previousMode).toBeNull()
-    expect(ws.userOverride).toBe(true)
+    expect(ws.userOverride).toBe(false)
   })
 })
 

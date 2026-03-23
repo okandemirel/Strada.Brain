@@ -4,6 +4,7 @@ export type WorkspaceMode = 'chat' | 'monitor' | 'canvas' | 'code'
 
 export interface WorkspaceNotification {
   id: string
+  kind?: 'mode_suggest' | 'general'
   title: string
   message: string
   severity: 'info' | 'warning' | 'error'
@@ -49,7 +50,7 @@ export const useWorkspaceStore = create<WorkspaceState>()((set) => ({
   ...initialState,
   setMode: (mode) => set((state) => ({ mode, previousMode: state.mode, userOverride: true })),
   suggestMode: (mode) => set((state) => (state.userOverride || state.mode === mode ? state : { mode, previousMode: state.mode })),
-  undoModeSwitch: () => set((state) => (state.previousMode ? { mode: state.previousMode, previousMode: null, userOverride: true } : state)),
+  undoModeSwitch: () => set((state) => (state.previousMode ? { mode: state.previousMode, previousMode: null, userOverride: false } : state)),
   resetOverride: () => set({ userOverride: false, mode: 'chat' }),
   toggleSecondary: () => set((state) => ({ secondaryVisible: !state.secondaryVisible })),
   setPanelSizes: (sizes) => set((state) => ({ panelSizes: { ...state.panelSizes, ...sizes } })),

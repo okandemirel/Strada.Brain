@@ -93,6 +93,7 @@ export function dispatchWorkspaceMessage(data: { type: string; [key: string]: un
       // Show toast only if mode actually changed
       if (!ws.userOverride && payload.mode !== prevMode) {
         ws.addNotification({
+          kind: 'mode_suggest',
           title: 'Mode switched',
           message: payload.reason ?? `Switched to ${payload.mode}`,
           severity: 'info',

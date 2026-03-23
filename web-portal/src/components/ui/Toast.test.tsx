@@ -76,8 +76,9 @@ describe('ToastContainer', () => {
     expect(useWorkspaceStore.getState().notifications).toHaveLength(0)
   })
 
-  it('shows undo button for "Mode switched" notifications', () => {
+  it('shows undo button for mode_suggest notifications', () => {
     useWorkspaceStore.getState().addNotification({
+      kind: 'mode_suggest',
       title: 'Mode switched',
       message: 'Switched to monitor',
       severity: 'info',
@@ -93,6 +94,7 @@ describe('ToastContainer', () => {
     useWorkspaceStore.getState().suggestMode('monitor')
 
     useWorkspaceStore.getState().addNotification({
+      kind: 'mode_suggest',
       title: 'Mode switched',
       message: 'Switched to monitor',
       severity: 'info',
