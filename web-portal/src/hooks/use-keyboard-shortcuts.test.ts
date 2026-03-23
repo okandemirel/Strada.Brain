@@ -7,6 +7,7 @@ describe('useKeyboardShortcuts', () => {
     setMode: vi.fn(),
     toggleSidebar: vi.fn(),
     toggleSecondary: vi.fn(),
+    showShortcutsHelp: vi.fn(),
   }
 
   afterEach(() => {
