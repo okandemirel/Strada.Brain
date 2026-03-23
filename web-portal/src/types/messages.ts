@@ -38,6 +38,7 @@ export interface StreamEndMessage {
   type: 'stream_end'
   streamId: string
   text: string
+  instinctIds?: string[]
 }
 
 export interface ConfirmationMessage {

@@ -258,7 +258,9 @@ export function useWebSocket(): UseWebSocketReturn {
         case 'markdown': {
           const store = useSessionStore.getState()
           store.setTyping(false)
-          const instinctIds = Array.isArray(data.instinctIds) ? data.instinctIds as string[] : undefined
+          const instinctIds = Array.isArray(data.instinctIds)
+            ? (data.instinctIds as unknown[]).filter((id): id is string => typeof id === 'string')
+            : undefined
           store.addMessage({
             id: data.messageId || generateId(),
             sender: 'assistant',
@@ -301,10 +303,17 @@ export function useWebSocket(): UseWebSocketReturn {
         case 'stream_end': {
           streamsRef.current.delete(data.streamId)
           const store = useSessionStore.getState()
+          const streamEndInstinctIds = Array.isArray(data.instinctIds)
+            ? (data.instinctIds as unknown[]).filter((id): id is string => typeof id === 'string')
+            : undefined
           if (data.text) {
             const streamMsg = store.messages.find((m) => m.streamId === data.streamId)
             if (streamMsg) {
-              store.updateMessage(streamMsg.id, { text: data.text, isStreaming: false })
+              store.updateMessage(streamMsg.id, {
+                text: data.text,
+                isStreaming: false,
+                ...(streamEndInstinctIds && streamEndInstinctIds.length > 0 ? { instinctIds: streamEndInstinctIds } : {}),
+              })
             }
           } else {
             const streamMsg = store.messages.find((m) => m.streamId === data.streamId)

@@ -99,7 +99,7 @@ function makeComponents(isUser: boolean): Components {
 const USER_COMPONENTS = makeComponents(true)
 const AI_COMPONENTS = makeComponents(false)
 
-function FeedbackToolbar({
+const FeedbackToolbar = memo(function FeedbackToolbar({
   messageId,
   feedback,
   onFeedback,
@@ -138,7 +138,7 @@ function FeedbackToolbar({
       </button>
     </div>
   )
-}
+})
 
 function ChatMessageComponent({ message, onFeedback }: ChatMessageProps) {
   const isUser = message.sender === 'user'

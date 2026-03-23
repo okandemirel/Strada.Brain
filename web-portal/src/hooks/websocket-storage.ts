@@ -38,6 +38,13 @@ function normalizeStoredMessage(value: unknown): ChatMessage | null {
   if (typeof candidate.text !== 'string') return null
   if (typeof candidate.timestamp !== 'number' || !Number.isFinite(candidate.timestamp)) return null
 
+  const instinctIds = Array.isArray(candidate.instinctIds)
+    ? (candidate.instinctIds as unknown[]).filter((id): id is string => typeof id === 'string')
+    : undefined
+  const feedback = candidate.feedback === 'thumbs_up' || candidate.feedback === 'thumbs_down'
+    ? candidate.feedback
+    : undefined
+
   return {
     id: candidate.id,
     sender: candidate.sender,
@@ -45,6 +52,8 @@ function normalizeStoredMessage(value: unknown): ChatMessage | null {
     isMarkdown: Boolean(candidate.isMarkdown),
     isStreaming: false,
     timestamp: candidate.timestamp,
+    ...(instinctIds && instinctIds.length > 0 ? { instinctIds } : {}),
+    ...(feedback ? { feedback } : {}),
   }
 }
 
@@ -84,6 +93,8 @@ export function writeSessionMessages(
       text: message.text,
       isMarkdown: message.isMarkdown,
       timestamp: message.timestamp,
+      ...(message.instinctIds && message.instinctIds.length > 0 ? { instinctIds: message.instinctIds } : {}),
+      ...(message.feedback ? { feedback: message.feedback } : {}),
     }))
 
   try {

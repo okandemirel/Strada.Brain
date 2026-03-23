@@ -351,7 +351,13 @@ export class WebChannel
     streamId: string,
     finalText: string,
   ): Promise<void> {
-    this.sendToClient(chatId, { type: "stream_end", streamId, text: finalText });
+    const instinctIds = this.appliedInstinctIds.get(chatId);
+    this.sendToClient(chatId, {
+      type: "stream_end",
+      streamId,
+      text: finalText,
+      ...(instinctIds && instinctIds.length > 0 ? { instinctIds } : {}),
+    });
   }
 
   // ===========================================================================
