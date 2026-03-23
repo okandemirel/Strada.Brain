@@ -158,6 +158,7 @@ import {
   executeAndTrackTools,
   refreshMemoryIfNeeded,
   runConsensusIfAvailable,
+  checkPendingBlocks,
 } from "./orchestrator-loop-shared.js";
 import { createAutonomyBundle } from "./orchestrator-autonomy-tracker.js";
 import {
@@ -1938,16 +1939,15 @@ export class Orchestrator {
                   logLabel: "bg",
                 });
 
-                // Pending checks (kept inline — tightly coupled to loop return)
+                // Pending checks (tightly coupled to loop return)
                 if (response.toolCalls.length === 0) {
-                  const pendingPlanReviewText = this.sessionManager.getPendingPlanReviewVisibleText(chatId);
-                  if (pendingPlanReviewText) {
-                    return bgFinishBlocked(pendingPlanReviewText);
-                  }
-                  const pendingWriteRejectionText =
-                    this.sessionManager.getPendingSelfManagedWriteRejectionVisibleText(session, response.text);
-                  if (pendingWriteRejectionText) {
-                    return bgFinishBlocked(pendingWriteRejectionText);
+                  const pending = checkPendingBlocks({
+                    getPendingPlanReviewVisibleText: (c) => this.sessionManager.getPendingPlanReviewVisibleText(c),
+                    getPendingSelfManagedWriteRejectionVisibleText: (s, d) => this.sessionManager.getPendingSelfManagedWriteRejectionVisibleText(s as Session, d),
+                    chatId, session, responseText: response.text,
+                  });
+                  if (pending.blocked) {
+                    return bgFinishBlocked(pending.text);
                   }
                 }
 
@@ -2084,17 +2084,13 @@ export class Orchestrator {
 
               // Final response — return text (extracted to orchestrator-end-turn-handler.ts)
               if (response.stopReason === "end_turn" || response.toolCalls.length === 0) {
-                const pendingPlanReviewText = this.sessionManager.getPendingPlanReviewVisibleText(chatId);
-                if (pendingPlanReviewText) {
-                  return bgFinishBlocked(pendingPlanReviewText);
-                }
-
-                const pendingWriteRejectionText = this.sessionManager.getPendingSelfManagedWriteRejectionVisibleText(
-                  session,
-                  response.text,
-                );
-                if (pendingWriteRejectionText) {
-                  return bgFinishBlocked(pendingWriteRejectionText);
+                const pending = checkPendingBlocks({
+                  getPendingPlanReviewVisibleText: (c) => this.sessionManager.getPendingPlanReviewVisibleText(c),
+                  getPendingSelfManagedWriteRejectionVisibleText: (s, d) => this.sessionManager.getPendingSelfManagedWriteRejectionVisibleText(s as Session, d),
+                  chatId, session, responseText: response.text,
+                });
+                if (pending.blocked) {
+                  return bgFinishBlocked(pending.text);
                 }
 
                 const bgEndTurnCtx: BgEndTurnContext = {
@@ -2909,29 +2905,15 @@ export class Orchestrator {
             modelId: currentAssignment.modelId,
           });
 
-          // Pending checks (kept inline — tightly coupled to loop return)
+          // Pending checks (tightly coupled to loop return)
           if (response.toolCalls.length === 0) {
-            const pendingPlanReviewText = this.sessionManager.getPendingPlanReviewVisibleText(chatId);
-            if (pendingPlanReviewText) {
-              await this.sessionManager.sendVisibleAssistantMarkdown(chatId, session, pendingPlanReviewText);
-              this.recordMetricEnd(metricId, {
-                agentPhase: AgentPhase.COMPLETE,
-                iterations: agentState.iteration,
-                toolCallCount: agentState.stepResults.length,
-                hitMaxIterations: false,
-              });
-              return;
-            }
-            const pendingWriteRejectionText = this.sessionManager.getPendingSelfManagedWriteRejectionVisibleText(
-              session,
-              response.text,
-            );
-            if (pendingWriteRejectionText) {
-              await this.sessionManager.sendVisibleAssistantMarkdown(
-                chatId,
-                session,
-                pendingWriteRejectionText,
-              );
+            const pending = checkPendingBlocks({
+              getPendingPlanReviewVisibleText: (c) => this.sessionManager.getPendingPlanReviewVisibleText(c),
+              getPendingSelfManagedWriteRejectionVisibleText: (s, d) => this.sessionManager.getPendingSelfManagedWriteRejectionVisibleText(s as Session, d),
+              chatId, session, responseText: response.text,
+            });
+            if (pending.blocked) {
+              await this.sessionManager.sendVisibleAssistantMarkdown(chatId, session, pending.text);
               this.recordMetricEnd(metricId, {
                 agentPhase: AgentPhase.COMPLETE,
                 iterations: agentState.iteration,
@@ -2972,56 +2954,9 @@ export class Orchestrator {
             if (interactiveAction.flow === "continue") {
               let replanState = interactiveAction.newState;
 
-              // ─── Goal Decomposition: reactive decomposition when stuck ──────
-              if (this.goalDecomposer && this.activeGoalTrees.has(conversationScope)) {
-                try {
-                  const goalTree = this.activeGoalTrees.get(conversationScope)!;
-                  // Find the currently-executing node
-                  let executingNodeId: GoalNodeId | null = null;
-                  for (const [, node] of goalTree.nodes) {
-                    if (node.status === "executing") {
-                      executingNodeId = node.id;
-                      break;
-                    }
-                  }
-                  if (executingNodeId) {
-                    const executingNode = goalTree.nodes.get(executingNodeId)!;
-                    this.emitGoalEvent(
-                      goalTree.rootId,
-                      executingNodeId,
-                      "failed",
-                      executingNode.depth,
-                    );
-                    const updatedTree = await this.goalDecomposer.decomposeReactive(
-                      goalTree,
-                      executingNodeId,
-                      response.text ?? "",
-                    );
-                    if (updatedTree) {
-                      this.activeGoalTrees.set(conversationScope, updatedTree);
-                      const treeViz = renderGoalTree(updatedTree);
-                      await this.sessionManager.sendVisibleAssistantMarkdown(
-                        chatId,
-                        session,
-                        "Goal tree updated (reactive decomposition):\n```\n" + treeViz + "\n```",
-                      );
-                    } else {
-                      getLogger().info("Reactive decomposition skipped (depth limit reached)", {
-                        chatId,
-                        nodeId: executingNodeId,
-                      });
-                    }
-                  }
-                } catch (reactiveError) {
-                  // Reactive decomposition failure is non-fatal
-                  getLogger().warn("Reactive goal decomposition failed", {
-                    chatId,
-                    error:
-                      reactiveError instanceof Error ? reactiveError.message : String(reactiveError),
-                  });
-                }
-              }
-              // ────────────────────────────────────────────────────────────────
+              await this.runReactiveGoalDecomposition({
+                conversationScope, chatId, session, responseText: response.text ?? "",
+              });
 
               replanState = transitionPhase(replanState, AgentPhase.REPLANNING);
               if (response.text) {
@@ -3148,35 +3083,10 @@ export class Orchestrator {
             autoTransition: false,
           });
 
-          if (
-            agentState.phase === AgentPhase.PLANNING &&
-            this.goalDecomposer &&
-            this.goalDecomposer.shouldDecompose(lastUserMessage)
-          ) {
-            try {
-              const goalTree = await this.goalDecomposer.decomposeProactive(
-                conversationScope,
-                lastUserMessage,
-              );
-              this.activeGoalTrees.set(conversationScope, goalTree);
-              this.emitGoalEvent(goalTree.rootId, goalTree.rootId, "pending", 0);
-              const treeViz = renderGoalTree(goalTree);
-              await this.sessionManager.sendVisibleAssistantMarkdown(
-                chatId,
-                session,
-                "Goal decomposition:\n```\n" + treeViz + "\n```",
-              );
-              const treeSummary = summarizeTree(goalTree);
-              agentState = {
-                ...agentState,
-                plan: (agentState.plan ?? "") + "\n\n[Goal Tree: " + treeSummary + "]",
-              };
-            } catch (decompError) {
-              getLogger().warn("Proactive goal decomposition failed", {
-                chatId,
-                error: decompError instanceof Error ? decompError.message : String(decompError),
-              });
-            }
+          if (agentState.phase === AgentPhase.PLANNING) {
+            agentState = await this.runProactiveGoalDecomposition({
+              conversationScope, userMessage: lastUserMessage, chatId, session, agentState,
+            });
           }
 
           this.interactionPolicy.requirePlanReview(
@@ -3201,24 +3111,13 @@ export class Orchestrator {
         // If no tool calls, send the final text response (extracted to orchestrator-end-turn-handler.ts)
         // (streaming already sent it, so skip for streamed end_turn)
         if (response.stopReason === "end_turn" || response.toolCalls.length === 0) {
-          const pendingPlanReviewText = this.sessionManager.getPendingPlanReviewVisibleText(chatId);
-          if (pendingPlanReviewText) {
-            await this.sessionManager.sendVisibleAssistantMarkdown(chatId, session, pendingPlanReviewText);
-            this.recordMetricEnd(metricId, {
-              agentPhase: AgentPhase.COMPLETE,
-              iterations: agentState.iteration,
-              toolCallCount: agentState.stepResults.length,
-              hitMaxIterations: false,
-            });
-            return;
-          }
-
-          const pendingWriteRejectionText = this.sessionManager.getPendingSelfManagedWriteRejectionVisibleText(
-            session,
-            response.text,
-          );
-          if (pendingWriteRejectionText) {
-            await this.sessionManager.sendVisibleAssistantMarkdown(chatId, session, pendingWriteRejectionText);
+          const pending = checkPendingBlocks({
+            getPendingPlanReviewVisibleText: (c) => this.sessionManager.getPendingPlanReviewVisibleText(c),
+            getPendingSelfManagedWriteRejectionVisibleText: (s, d) => this.sessionManager.getPendingSelfManagedWriteRejectionVisibleText(s as Session, d),
+            chatId, session, responseText: response.text,
+          });
+          if (pending.blocked) {
+            await this.sessionManager.sendVisibleAssistantMarkdown(chatId, session, pending.text);
             this.recordMetricEnd(metricId, {
               agentPhase: AgentPhase.COMPLETE,
               iterations: agentState.iteration,
@@ -3319,36 +3218,9 @@ export class Orchestrator {
             autoTransition: false, // Goal decomposition may happen before transition
           });
 
-          // ─── Goal Decomposition: proactive decomposition for complex tasks ───
-          if (this.goalDecomposer && this.goalDecomposer.shouldDecompose(lastUserMessage)) {
-            try {
-              const goalTree = await this.goalDecomposer.decomposeProactive(
-                conversationScope,
-                lastUserMessage,
-              );
-              this.activeGoalTrees.set(conversationScope, goalTree);
-              this.emitGoalEvent(goalTree.rootId, goalTree.rootId, "pending", 0);
-              const treeViz = renderGoalTree(goalTree);
-              await this.sessionManager.sendVisibleAssistantMarkdown(
-                chatId,
-                session,
-                "Goal decomposition:\n```\n" + treeViz + "\n```",
-              );
-              // Augment plan with decomposition summary
-              const treeSummary = summarizeTree(goalTree);
-              agentState = {
-                ...agentState,
-                plan: (agentState.plan ?? "") + "\n\n[Goal Tree: " + treeSummary + "]",
-              };
-            } catch (decompError) {
-              // Decomposition failure is non-fatal -- continue without decomposition
-              getLogger().warn("Proactive goal decomposition failed", {
-                chatId,
-                error: decompError instanceof Error ? decompError.message : String(decompError),
-              });
-            }
-          }
-          // ────────────────────────────────────────────────────────────────────
+          agentState = await this.runProactiveGoalDecomposition({
+            conversationScope, userMessage: lastUserMessage, chatId, session, agentState,
+          });
 
           agentState = transitionPhase(agentState, AgentPhase.EXECUTING);
         }
@@ -5149,6 +5021,113 @@ export class Orchestrator {
         rootId: String(rootId),
         nodeId: String(nodeId),
         status: String(status),
+      });
+    }
+  }
+
+  // ─── Goal decomposition helpers ───────────────────────────────────────────
+
+  /**
+   * Run proactive goal decomposition if the decomposer is available and the
+   * message qualifies. Returns an updated agentState with plan augmented by
+   * the goal tree summary. Non-fatal: errors are logged and the original
+   * agentState is returned unchanged.
+   */
+  private async runProactiveGoalDecomposition(opts: {
+    conversationScope: string;
+    userMessage: string;
+    chatId: string;
+    session: Session;
+    agentState: AgentState;
+  }): Promise<AgentState> {
+    if (!this.goalDecomposer || !this.goalDecomposer.shouldDecompose(opts.userMessage)) {
+      return opts.agentState;
+    }
+    try {
+      const goalTree = await this.goalDecomposer.decomposeProactive(
+        opts.conversationScope,
+        opts.userMessage,
+      );
+      this.activeGoalTrees.set(opts.conversationScope, goalTree);
+      this.emitGoalEvent(goalTree.rootId, goalTree.rootId, "pending", 0);
+      const treeViz = renderGoalTree(goalTree);
+      await this.sessionManager.sendVisibleAssistantMarkdown(
+        opts.chatId,
+        opts.session,
+        "Goal decomposition:\n```\n" + treeViz + "\n```",
+      );
+      const treeSummary = summarizeTree(goalTree);
+      return {
+        ...opts.agentState,
+        plan: (opts.agentState.plan ?? "") + "\n\n[Goal Tree: " + treeSummary + "]",
+      };
+    } catch (decompError) {
+      getLogger().warn("Proactive goal decomposition failed", {
+        chatId: opts.chatId,
+        error: decompError instanceof Error ? decompError.message : String(decompError),
+      });
+      return opts.agentState;
+    }
+  }
+
+  /**
+   * Run reactive goal decomposition when the REFLECTING phase decides to REPLAN.
+   * Finds the currently-executing node, marks it failed, and attempts to
+   * decompose reactively. Non-fatal: errors are logged and swallowed.
+   */
+  private async runReactiveGoalDecomposition(opts: {
+    conversationScope: string;
+    chatId: string;
+    session: Session;
+    responseText: string;
+  }): Promise<void> {
+    if (!this.goalDecomposer || !this.activeGoalTrees.has(opts.conversationScope)) {
+      return;
+    }
+    try {
+      const goalTree = this.activeGoalTrees.get(opts.conversationScope)!;
+      // Find the currently-executing node
+      let executingNodeId: GoalNodeId | null = null;
+      for (const [, node] of goalTree.nodes) {
+        if (node.status === "executing") {
+          executingNodeId = node.id;
+          break;
+        }
+      }
+      if (executingNodeId) {
+        const executingNode = goalTree.nodes.get(executingNodeId)!;
+        this.emitGoalEvent(
+          goalTree.rootId,
+          executingNodeId,
+          "failed",
+          executingNode.depth,
+        );
+        const updatedTree = await this.goalDecomposer.decomposeReactive(
+          goalTree,
+          executingNodeId,
+          opts.responseText,
+        );
+        if (updatedTree) {
+          this.activeGoalTrees.set(opts.conversationScope, updatedTree);
+          const treeViz = renderGoalTree(updatedTree);
+          await this.sessionManager.sendVisibleAssistantMarkdown(
+            opts.chatId,
+            opts.session,
+            "Goal tree updated (reactive decomposition):\n```\n" + treeViz + "\n```",
+          );
+        } else {
+          getLogger().info("Reactive decomposition skipped (depth limit reached)", {
+            chatId: opts.chatId,
+            nodeId: executingNodeId,
+          });
+        }
+      }
+    } catch (reactiveError) {
+      // Reactive decomposition failure is non-fatal
+      getLogger().warn("Reactive goal decomposition failed", {
+        chatId: opts.chatId,
+        error:
+          reactiveError instanceof Error ? reactiveError.message : String(reactiveError),
       });
     }
   }

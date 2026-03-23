@@ -4,6 +4,7 @@ import {
   executeAndTrackTools,
   refreshMemoryIfNeeded,
   runConsensusIfAvailable,
+  checkPendingBlocks,
 } from "./orchestrator-loop-shared.js";
 
 // ---------------------------------------------------------------------------
@@ -306,5 +307,66 @@ describe("runConsensusIfAvailable", () => {
     });
     // Should not throw
     await runConsensusIfAvailable(ctx as any);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// checkPendingBlocks
+// ---------------------------------------------------------------------------
+
+describe("checkPendingBlocks", () => {
+  function makeDeps(overrides: Partial<Parameters<typeof checkPendingBlocks>[0]> = {}) {
+    return {
+      getPendingPlanReviewVisibleText: vi.fn().mockReturnValue(null),
+      getPendingSelfManagedWriteRejectionVisibleText: vi.fn().mockReturnValue(null),
+      chatId: "c1",
+      session: { messages: [] },
+      responseText: "some text",
+      ...overrides,
+    } as Parameters<typeof checkPendingBlocks>[0];
+  }
+
+  it("returns blocked:false when no pending blocks", () => {
+    const result = checkPendingBlocks(makeDeps());
+    expect(result.blocked).toBe(false);
+  });
+
+  it("returns blocked:true with plan review text when plan review is pending", () => {
+    const result = checkPendingBlocks(makeDeps({
+      getPendingPlanReviewVisibleText: vi.fn().mockReturnValue("Plan review pending"),
+    }));
+    expect(result).toEqual({ blocked: true, text: "Plan review pending" });
+  });
+
+  it("returns blocked:true with write rejection text when write rejection is pending", () => {
+    const result = checkPendingBlocks(makeDeps({
+      getPendingSelfManagedWriteRejectionVisibleText: vi.fn().mockReturnValue("Write rejected"),
+    }));
+    expect(result).toEqual({ blocked: true, text: "Write rejected" });
+  });
+
+  it("prioritizes plan review over write rejection", () => {
+    const result = checkPendingBlocks(makeDeps({
+      getPendingPlanReviewVisibleText: vi.fn().mockReturnValue("Plan text"),
+      getPendingSelfManagedWriteRejectionVisibleText: vi.fn().mockReturnValue("Write text"),
+    }));
+    expect(result).toEqual({ blocked: true, text: "Plan text" });
+  });
+
+  it("passes chatId to getPendingPlanReviewVisibleText", () => {
+    const fn = vi.fn().mockReturnValue(null);
+    checkPendingBlocks(makeDeps({ getPendingPlanReviewVisibleText: fn, chatId: "test-chat" }));
+    expect(fn).toHaveBeenCalledWith("test-chat");
+  });
+
+  it("passes session and responseText to getPendingSelfManagedWriteRejectionVisibleText", () => {
+    const fn = vi.fn().mockReturnValue(null);
+    const session = { messages: [{ role: "user", content: "hi" }] };
+    checkPendingBlocks(makeDeps({
+      getPendingSelfManagedWriteRejectionVisibleText: fn,
+      session: session as any,
+      responseText: "draft",
+    }));
+    expect(fn).toHaveBeenCalledWith(session, "draft");
   });
 });

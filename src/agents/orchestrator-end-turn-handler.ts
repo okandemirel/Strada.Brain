@@ -8,7 +8,7 @@
  */
 
 import type { AgentState } from "./agent-state.js";
-import type { ProviderResponse } from "./providers/provider.interface.js";
+import type { ConversationMessage, ProviderResponse } from "./providers/provider.interface.js";
 import type {
   SupervisorAssignment,
   SupervisorExecutionStrategy,
@@ -110,8 +110,8 @@ export interface BgEndTurnContext extends EndTurnCoreContext {
     systemPrompt: string;
     usageHandler?: (usage: TaskUsageEvent) => void;
   }) => Promise<string>;
-  readonly persistSessionToMemory: (chatId: string, messages: readonly unknown[], force: boolean) => Promise<void>;
-  readonly getVisibleTranscript: (session: Session) => readonly unknown[];
+  readonly persistSessionToMemory: (chatId: string, messages: ConversationMessage[], force: boolean) => Promise<void>;
+  readonly getVisibleTranscript: (session: Session) => ConversationMessage[];
 }
 
 export interface InteractiveEndTurnContext extends EndTurnCoreContext {

@@ -282,6 +282,49 @@ export interface BuildPhaseOutcomeTelemetryParams {
 // Pattern 4: pushContinuationMessages
 // =============================================================================
 
+// =============================================================================
+// Pattern 5: checkPendingBlocks
+// =============================================================================
+
+/**
+ * Result from checking pending plan reviews and write rejections.
+ * Callers handle the action (BG returns `bgFinishBlocked`, Interactive sends markdown + returns).
+ */
+export type PendingBlockResult =
+  | { blocked: true; text: string }
+  | { blocked: false };
+
+/**
+ * Checks for pending plan reviews and self-managed write rejections.
+ *
+ * Encapsulates the repeated pattern of checking `getPendingPlanReviewVisibleText`
+ * followed by `getPendingSelfManagedWriteRejectionVisibleText`. Callers handle
+ * the loop-specific action when `blocked === true`.
+ */
+export function checkPendingBlocks(deps: {
+  getPendingPlanReviewVisibleText: (chatId: string) => string | null;
+  getPendingSelfManagedWriteRejectionVisibleText: (
+    session: { messages: readonly { role: string; content: unknown }[] },
+    draft: string | null | undefined,
+  ) => string | null;
+  chatId: string;
+  session: { messages: readonly { role: string; content: unknown }[] };
+  responseText: string | null | undefined;
+}): PendingBlockResult {
+  const planText = deps.getPendingPlanReviewVisibleText(deps.chatId);
+  if (planText) {
+    return { blocked: true, text: planText };
+  }
+  const writeRejectionText = deps.getPendingSelfManagedWriteRejectionVisibleText(
+    deps.session,
+    deps.responseText,
+  );
+  if (writeRejectionText) {
+    return { blocked: true, text: writeRejectionText };
+  }
+  return { blocked: false };
+}
+
 /**
  * Appends the current assistant response (if any) and a user continuation gate
  * into the session message list.
