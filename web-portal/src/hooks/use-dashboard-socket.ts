@@ -60,7 +60,7 @@ export function dispatchWorkspaceMessage(data: { type: string; [key: string]: un
       const monitor = useMonitorStore.getState()
       monitor.setActiveRootId(payload.rootId as string)
       const dag = (payload.dag ?? { nodes: payload.nodes, edges: payload.edges }) as Bag
-      monitor.setDAG(dag as DagState)
+      monitor.setDAG(dag as unknown as DagState)
       const nodes = (dag.nodes ?? []) as Bag[]
       for (const node of nodes) {
         monitor.addTask({
@@ -148,7 +148,7 @@ export function dispatchWorkspaceMessage(data: { type: string; [key: string]: un
     case 'monitor:dag_restructure': {
       const monitor = useMonitorStore.getState()
       if (payload.nodes && payload.edges) {
-        monitor.setDAG({ nodes: payload.nodes, edges: payload.edges } as DagState)
+        monitor.setDAG({ nodes: payload.nodes, edges: payload.edges } as unknown as DagState)
         const nodes = payload.nodes as Bag[]
         for (const node of nodes) {
           monitor.addTask({
