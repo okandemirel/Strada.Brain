@@ -12,7 +12,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/TypeScript-5.7-blue?style=flat-square&logo=typescript" alt="TypeScript">
   <img src="https://img.shields.io/badge/Node.js-%3E%3D20-green?style=flat-square&logo=node.js" alt="Node.js">
-  <img src="https://img.shields.io/badge/tests-4413%2B-brightgreen?style=flat-square" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-4527%2B-brightgreen?style=flat-square" alt="Tests">
   <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="License">
 </p>
 
@@ -33,7 +33,7 @@
 
 Strada.Brain is an AI agent you talk to through a chat channel. You describe what you want -- "create a new ECS system for player movement" or "find all components that use health" -- and the agent reads your C# project, writes the code, runs `dotnet build`, fixes errors automatically, and sends you the result.
 
-It has persistent memory backed by SQLite + HNSW vectors, learns from past errors using hybrid weighted confidence scoring, decomposes complex goals into parallel DAG execution, automatically synthesizes multi-tool chains with saga rollback, and can run as a 24/7 daemon with proactive triggers. It supports multi-agent orchestration with per-channel session isolation, hierarchical task delegation across agent tiers, automatic memory consolidation, a runtime self-improvement loop that materializes reusable `skill` / `workflow` / `knowledge_patch` artifacts in shadow mode before promoting them to active guidance, and a deployment subsystem with human-in-the-loop approval gates and circuit breaker protection.
+It has persistent memory backed by SQLite + HNSW vectors, learns from past errors using hybrid weighted confidence scoring, decomposes complex goals into parallel DAG execution, automatically synthesizes multi-tool chains with saga rollback, and can run as a 24/7 daemon with proactive triggers. It supports multi-agent orchestration with per-channel session isolation, hierarchical task delegation across agent tiers, automatic memory consolidation, a runtime self-improvement loop that materializes reusable `skill` / `workflow` / `knowledge_patch` artifacts in shadow mode before promoting them to active guidance, a deployment subsystem with human-in-the-loop approval gates and circuit breaker protection, and a modern glassmorphism web portal with Magic UI components (shadcn/ui + 21st.dev) featuring animated metrics, blur transitions, and a persistent notification center.
 
 New in this release: Strada.Brain now features an **Agent Core** -- an autonomous OODA reasoning engine that observes the environment (file changes, git state, build results), reasons about priorities using learned patterns, and takes action proactively. The **multi-provider routing** system dynamically selects the best AI provider for each task type (planning, code generation, debugging, review) with configurable presets (budget/balanced/performance). A **confidence-based consensus** system automatically consults a second provider when the agent's confidence is low, preventing errors on critical operations. All features gracefully degrade -- with a single provider, the system works identically to before with zero overhead.
 
@@ -262,7 +262,17 @@ The built-in web portal (`http://localhost:3000`) provides a full AI workspace w
 
 **Keyboard shortcuts:** `Alt+1-4` mode switching, `Cmd/Ctrl+B` toggle sidebar, `Cmd/Ctrl+\` toggle secondary panel, `Cmd/Ctrl+?` shortcuts help.
 
-**Stack:** React 19, Vite, Tailwind CSS v4, Zustand, TanStack Query, Radix UI, ReactFlow, tldraw, Monaco Editor.
+**Stack:** React 19, Vite, Tailwind CSS v4, shadcn/ui, Zustand, TanStack Query, Radix UI, ReactFlow, tldraw, Monaco Editor.
+
+### Modern UI with Shadcn/UI + 21st.dev
+
+The web portal features a premium glassmorphism design powered by shadcn/ui and community components from [21st.dev](https://21st.dev) and [Magic UI](https://magicui.design):
+
+- **Glassmorphism theme**: `backdrop-blur`, translucent surfaces, glow effects, and micro-interactions across all panels
+- **Magic UI components**: NumberTicker (animated metrics), BlurFade (page transitions), BorderBeam (active cards), TypingAnimation ("Thinking..." indicator), SparklesText (brand sparkles), ShimmerButton (send shimmer), CoolMode (confetti easter egg)
+- **Sonner notifications**: Toast system with auto-dismiss, severity colors, undo actions + persistent Notification Center sheet
+- **Collapsible admin nav**: 11 admin pages accessible from sidebar with route-aware auto-expand
+- **Shared primitives**: PageSkeleton, PageError, CopyButton, Sparkline, StatusDot, Badge, Sheet, ScrollArea, Input, Table
 
 ---
 
@@ -377,7 +387,7 @@ The web portal includes a **Marketplace** tab at `/admin/skills` where you can b
 
 ```
 +-----------------------------------------------------------------+
-|  Chat Channels + Web Portal (4-mode workspace)                  |
+|  Chat Channels + Web Portal (4-mode workspace, shadcn/ui + Magic UI) |
 |  Web | Telegram | Discord | Slack | WhatsApp | CLI | Matrix     |
 |  IRC | Teams                                                     |
 +------------------------------+----------------------------------+

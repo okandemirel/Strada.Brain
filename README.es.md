@@ -14,7 +14,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/TypeScript-5.7-blue?style=flat-square&logo=typescript" alt="TypeScript">
   <img src="https://img.shields.io/badge/Node.js-%3E%3D20-green?style=flat-square&logo=node.js" alt="Node.js">
-  <img src="https://img.shields.io/badge/tests-4100%2B-brightgreen?style=flat-square" alt="Pruebas">
+  <img src="https://img.shields.io/badge/tests-4527%2B-brightgreen?style=flat-square" alt="Pruebas">
   <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="Licencia">
 </p>
 
@@ -35,7 +35,7 @@
 
 Strada.Brain es un agente de IA con el que hablas a traves de un canal de chat. Describes lo que quieres -- "crea un nuevo sistema ECS para movimiento del jugador" o "encuentra todos los componentes que usan health" -- y el agente lee tu proyecto C#, escribe el codigo, ejecuta `dotnet build`, corrige errores automaticamente y te envia el resultado.
 
-Tiene memoria persistente respaldada por SQLite + vectores HNSW, aprende de errores pasados usando puntuacion de confianza hibrida ponderada, descompone objetivos complejos en ejecucion paralela de DAGs, sintetiza automaticamente cadenas de herramientas multiples con saga rollback y puede ejecutarse como un daemon 24/7 con disparadores proactivos. Soporta orquestacion multi-agente con aislamiento de sesion por canal, delegacion jerarquica de tareas entre niveles de agentes, consolidacion automatica de memoria y un subsistema de despliegue con puertas de aprobacion humana y proteccion de disyuntor.
+Tiene memoria persistente respaldada por SQLite + vectores HNSW, aprende de errores pasados usando puntuacion de confianza hibrida ponderada, descompone objetivos complejos en ejecucion paralela de DAGs, sintetiza automaticamente cadenas de herramientas multiples con saga rollback y puede ejecutarse como un daemon 24/7 con disparadores proactivos. Soporta orquestacion multi-agente con aislamiento de sesion por canal, delegacion jerarquica de tareas entre niveles de agentes, consolidacion automatica de memoria, un subsistema de despliegue con puertas de aprobacion humana y proteccion de disyuntor, y un portal web glassmorphism moderno con componentes Magic UI (shadcn/ui + 21st.dev) con metricas animadas, transiciones de desenfoque y un centro de notificaciones persistente.
 
 Nuevo en esta version: Strada.Brain ahora incluye un **Agent Core** -- un motor de razonamiento OODA autonomo que observa el entorno (cambios de archivos, estado de git, resultados de compilacion), razona sobre prioridades usando patrones aprendidos y actua proactivamente. El sistema de **enrutamiento multi-proveedor** selecciona dinamicamente el mejor proveedor de IA para cada tipo de tarea (planificacion, generacion de codigo, depuracion, revision) con presets configurables (budget/balanced/performance). Un sistema de **consenso basado en confianza** consulta automaticamente a un segundo proveedor cuando la confianza del agente es baja, previniendo errores en operaciones criticas. Todas las caracteristicas degradan de forma controlada -- con un solo proveedor, el sistema funciona de forma identica a antes sin ninguna sobrecarga.
 
@@ -256,7 +256,17 @@ El portal web integrado (`http://localhost:3000`) proporciona un espacio de trab
 
 **Atajos de teclado:** `Alt+1-4` cambio de modo, `Cmd/Ctrl+B` alternar barra lateral, `Cmd/Ctrl+\` alternar panel secundario, `Cmd/Ctrl+?` ayuda de atajos.
 
-**Stack tecnologico:** React 19, Vite, Tailwind CSS v4, Zustand, TanStack Query, Radix UI, ReactFlow, tldraw, Monaco Editor.
+**Stack tecnologico:** React 19, Vite, Tailwind CSS v4, shadcn/ui, Zustand, TanStack Query, Radix UI, ReactFlow, tldraw, Monaco Editor.
+
+### Interfaz moderna con Shadcn/UI + 21st.dev
+
+El portal web presenta un diseno glassmorphism premium impulsado por shadcn/ui y componentes de la comunidad de [21st.dev](https://21st.dev) y [Magic UI](https://magicui.design):
+
+- **Tema glassmorphism**: `backdrop-blur`, superficies translucidas, efectos de brillo y micro-interacciones en todos los paneles
+- **Componentes Magic UI**: NumberTicker (metricas animadas), BlurFade (transiciones de pagina), BorderBeam (tarjetas activas), TypingAnimation (indicador "Pensando..."), SparklesText (destellos de marca), ShimmerButton (brillo de envio), CoolMode (easter egg de confeti)
+- **Notificaciones Sonner**: Sistema de toasts con cierre automatico, colores de severidad, acciones de deshacer + hoja de Centro de Notificaciones persistente
+- **Navegacion admin colapsable**: 11 paginas de administracion accesibles desde la barra lateral con auto-expansion consciente de la ruta
+- **Primitivas compartidas**: PageSkeleton, PageError, CopyButton, Sparkline, StatusDot, Badge, Sheet, ScrollArea, Input, Table
 
 ---
 
@@ -301,7 +311,7 @@ El portal web incluye una pestana **Marketplace** en `/admin/skills` donde puede
 
 ```
 +-----------------------------------------------------------------+
-|  Canales de Chat + Portal Web (espacio de trabajo 4 modos)       |
+|  Canales de Chat + Portal Web (4 modos, shadcn/ui + Magic UI)    |
 |  Web | Telegram | Discord | Slack | WhatsApp | CLI | Matrix     |
 |  IRC | Teams                                                     |
 +------------------------------+----------------------------------+

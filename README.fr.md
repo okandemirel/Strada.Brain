@@ -14,7 +14,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/TypeScript-5.7-blue?style=flat-square&logo=typescript" alt="TypeScript">
   <img src="https://img.shields.io/badge/Node.js-%3E%3D20-green?style=flat-square&logo=node.js" alt="Node.js">
-  <img src="https://img.shields.io/badge/tests-4100%2B-brightgreen?style=flat-square" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-4527%2B-brightgreen?style=flat-square" alt="Tests">
   <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="Licence">
 </p>
 
@@ -35,7 +35,7 @@
 
 Strada.Brain est un agent IA avec lequel vous communiquez via un canal de chat. Vous d&eacute;crivez ce que vous voulez -- "cr&eacute;e un nouveau syst&egrave;me ECS pour le mouvement du joueur" ou "trouve tous les composants qui utilisent la sant&eacute;" -- et l'agent lit votre projet C#, &eacute;crit le code, lance `dotnet build`, corrige les erreurs automatiquement et vous envoie le r&eacute;sultat.
 
-Il dispose d'une m&eacute;moire persistante adoss&eacute;e &agrave; SQLite + vecteurs HNSW, apprend des erreurs pass&eacute;es gr&acirc;ce &agrave; un scoring de confiance hybride pond&eacute;r&eacute;, d&eacute;compose les objectifs complexes en ex&eacute;cution parall&egrave;le via un DAG, synth&eacute;tise automatiquement des cha&icirc;nes d'outils multi-&eacute;tapes avec saga rollback et peut fonctionner en tant que daemon 24/7 avec des d&eacute;clencheurs proactifs. Il supporte l'orchestration multi-agent avec isolation par canal et session, la d&eacute;l&eacute;gation hi&eacute;rarchique de t&acirc;ches entre niveaux d'agents, la consolidation automatique de m&eacute;moire et un sous-syst&egrave;me de d&eacute;ploiement avec portes d'approbation humaine et protection par disjoncteur.
+Il dispose d'une m&eacute;moire persistante adoss&eacute;e &agrave; SQLite + vecteurs HNSW, apprend des erreurs pass&eacute;es gr&acirc;ce &agrave; un scoring de confiance hybride pond&eacute;r&eacute;, d&eacute;compose les objectifs complexes en ex&eacute;cution parall&egrave;le via un DAG, synth&eacute;tise automatiquement des cha&icirc;nes d'outils multi-&eacute;tapes avec saga rollback et peut fonctionner en tant que daemon 24/7 avec des d&eacute;clencheurs proactifs. Il supporte l'orchestration multi-agent avec isolation par canal et session, la d&eacute;l&eacute;gation hi&eacute;rarchique de t&acirc;ches entre niveaux d'agents, la consolidation automatique de m&eacute;moire, un sous-syst&egrave;me de d&eacute;ploiement avec portes d'approbation humaine et protection par disjoncteur, ainsi qu'un portail web glassmorphisme moderne avec des composants Magic UI (shadcn/ui + 21st.dev) incluant des m&eacute;triques anim&eacute;es, des transitions avec effet de flou et un centre de notifications persistant.
 
 Nouveau dans cette version : Strada.Brain int&egrave;gre d&eacute;sormais un **Agent Core** -- un moteur de raisonnement OODA autonome qui observe l'environnement (modifications de fichiers, &eacute;tat git, r&eacute;sultats de build), raisonne sur les priorit&eacute;s &agrave; l'aide de mod&egrave;les appris et agit de mani&egrave;re proactive. Le syst&egrave;me de **routage multi-fournisseur** s&eacute;lectionne dynamiquement le meilleur fournisseur IA pour chaque type de t&acirc;che (planification, g&eacute;n&eacute;ration de code, d&eacute;bogage, revue) avec des pr&eacute;r&eacute;glages configurables (budget/balanced/performance). Un syst&egrave;me de **consensus bas&eacute; sur la confiance** consulte automatiquement un second fournisseur lorsque la confiance de l'agent est faible, pr&eacute;venant les erreurs sur les op&eacute;rations critiques. Toutes les fonctionnalit&eacute;s se d&eacute;gradent gracieusement -- avec un seul fournisseur, le syst&egrave;me fonctionne de mani&egrave;re identique &agrave; avant sans surco&ucirc;t.
 
@@ -256,7 +256,17 @@ Le portail web integre (`http://localhost:3000`) fournit un espace de travail IA
 
 **Raccourcis clavier :** `Alt+1-4` changement de mode, `Cmd/Ctrl+B` basculer la barre laterale, `Cmd/Ctrl+\` basculer le panneau secondaire, `Cmd/Ctrl+?` aide raccourcis.
 
-**Stack technique :** React 19, Vite, Tailwind CSS v4, Zustand, TanStack Query, Radix UI, ReactFlow, tldraw, Monaco Editor.
+**Stack technique :** React 19, Vite, Tailwind CSS v4, shadcn/ui, Zustand, TanStack Query, Radix UI, ReactFlow, tldraw, Monaco Editor.
+
+### Interface moderne avec Shadcn/UI + 21st.dev
+
+Le portail web presente un design glassmorphisme premium propulse par shadcn/ui et des composants communautaires de [21st.dev](https://21st.dev) et [Magic UI](https://magicui.design) :
+
+- **Theme glassmorphisme** : `backdrop-blur`, surfaces translucides, effets de lueur et micro-interactions sur tous les panneaux
+- **Composants Magic UI** : NumberTicker (metriques animees), BlurFade (transitions de page), BorderBeam (cartes actives), TypingAnimation (indicateur "Reflexion..."), SparklesText (etincelles de marque), ShimmerButton (shimmer d'envoi), CoolMode (easter egg confetti)
+- **Notifications Sonner** : Systeme de toasts avec fermeture automatique, couleurs de severite, actions d'annulation + feuille de Centre de Notifications persistante
+- **Navigation admin repliable** : 11 pages d'administration accessibles depuis la barre laterale avec auto-expansion selon la route
+- **Primitives partagees** : PageSkeleton, PageError, CopyButton, Sparkline, StatusDot, Badge, Sheet, ScrollArea, Input, Table
 
 ---
 
@@ -301,7 +311,7 @@ Le portail web inclut un onglet **Marketplace** dans `/admin/skills` pour parcou
 
 ```
 +-----------------------------------------------------------------+
-|  Chat Channels + Portail Web (espace de travail 4 modes)         |
+|  Chat Channels + Portail Web (4 modes, shadcn/ui + Magic UI)     |
 |  Web | Telegram | Discord | Slack | WhatsApp | CLI | Matrix     |
 |  IRC | Teams                                                     |
 +------------------------------+----------------------------------+

@@ -14,7 +14,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/TypeScript-5.7-blue?style=flat-square&logo=typescript" alt="TypeScript">
   <img src="https://img.shields.io/badge/Node.js-%3E%3D20-green?style=flat-square&logo=node.js" alt="Node.js">
-  <img src="https://img.shields.io/badge/tests-4100%2B-brightgreen?style=flat-square" alt="Testler">
+  <img src="https://img.shields.io/badge/tests-4527%2B-brightgreen?style=flat-square" alt="Testler">
   <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="Lisans">
 </p>
 
@@ -35,7 +35,7 @@
 
 Strada.Brain, bir sohbet kanali uzerinden konustugunuz bir yapay zeka ajanidir. Ne istediginizi tanimlayarak -- "oyuncu hareketi icin yeni bir ECS sistemi olustur" veya "saglik kullanan tum bilesenleri bul" -- ajanin C# projenizi okumasini, kodu yazmasini, `dotnet build` calistirmasini, hatalari otomatik olarak duzeltmesini ve sonucu size gondermesini saglayabilirsiniz.
 
-Ajan, SQLite + HNSW vektorler ile desteklenen kalici hafizaya sahiptir; gecmis hatalardan hibrit agirlikli guven puanlamasi ile ogrenir; karmasik hedefleri paralel DAG yurutmesine ayristirir; cok aracli zincirleri saga geri alma destekli olarak otomatik sentezler; ve proaktif tetikleyicilerle 7/24 daemon olarak calisabilir. Kanal bazinda oturum izolasyonlu coklu ajan orkestrasyonunu, ajan seviyeleri arasi hiyerarsik gorev delegasyonunu, otomatik bellek konsolidasyonunu ve insan-dongu-icinde onay kapilari ile devre kesici korumali dagitim alt sistemini destekler.
+Ajan, SQLite + HNSW vektorler ile desteklenen kalici hafizaya sahiptir; gecmis hatalardan hibrit agirlikli guven puanlamasi ile ogrenir; karmasik hedefleri paralel DAG yurutmesine ayristirir; cok aracli zincirleri saga geri alma destekli olarak otomatik sentezler; ve proaktif tetikleyicilerle 7/24 daemon olarak calisabilir. Kanal bazinda oturum izolasyonlu coklu ajan orkestrasyonunu, ajan seviyeleri arasi hiyerarsik gorev delegasyonunu, otomatik bellek konsolidasyonunu, insan-dongu-icinde onay kapilari ile devre kesici korumali dagitim alt sistemini ve Magic UI bilesenleri (shadcn/ui + 21st.dev) ile animasyonlu metrikler, bulaniklaştırma gecisleri ve kalici bildirim merkezi sunan modern glassmorfizm web portalini destekler.
 
 Bu surumde yeni: Strada.Brain artik bir **Agent Core** iceriyor -- cevrevi (dosya degisiklikleri, git durumu, derleme sonuclari) gozlemleyen, ogrenilmis kaliplari kullanarak oncelikler hakkinda akil yuruten ve proaktif olarak eyleme gecen otonom bir OODA akil yurutme motoru. **Coklu saglayici yonlendirme** sistemi, her gorev tipi (planlama, kod uretimi, hata ayiklama, inceleme) icin yapilandirilabilir on ayarlarla (budget/balanced/performance) en iyi AI saglayiciyi dinamik olarak secer. **Guven tabanli konsensus** sistemi, ajanin guveni dusuk oldugunda otomatik olarak farkli bir saglayicidan ikinci bir gorus alir ve kritik islemlerde hatalari onler. Tum ozellikler duzgun bir sekilde degrade olur -- tek saglayici ile sistem onceki gibi sifir ek yuk ile calisir.
 
@@ -260,7 +260,17 @@ Dahili web portali (`http://localhost:3000`) 4 baglam-uyarlamali mod ile tam bir
 
 **Klavye kisayollari:** `Alt+1-4` mod gecisi, `Cmd/Ctrl+B` kenar cubugunu ac/kapat, `Cmd/Ctrl+\` ikincil paneli ac/kapat, `Cmd/Ctrl+?` kisayol yardimi.
 
-**Teknoloji yigini:** React 19, Vite, Tailwind CSS v4, Zustand, TanStack Query, Radix UI, ReactFlow, tldraw, Monaco Editor.
+**Teknoloji yigini:** React 19, Vite, Tailwind CSS v4, shadcn/ui, Zustand, TanStack Query, Radix UI, ReactFlow, tldraw, Monaco Editor.
+
+### Shadcn/UI + 21st.dev ile Modern Arayuz
+
+Web portali, shadcn/ui ve [21st.dev](https://21st.dev) ile [Magic UI](https://magicui.design) topluluk bilesenleri tarafindan desteklenen premium bir glassmorfizm tasarima sahiptir:
+
+- **Glassmorfizm temasi**: Tum panellerde `backdrop-blur`, saydam yuzeyler, parcilti efektleri ve mikro-etkilesimler
+- **Magic UI bilesenleri**: NumberTicker (animasyonlu metrikler), BlurFade (sayfa gecisleri), BorderBeam (aktif kartlar), TypingAnimation ("Dusunuyor..." gostergesi), SparklesText (marka parciltisi), ShimmerButton (gonderme parciltisi), CoolMode (konfeti paskalya yumurtasi)
+- **Sonner bildirimleri**: Otomatik kapanma, onem renkleri, geri alma eylemleri + kalici Bildirim Merkezi sayfasi iceren toast sistemi
+- **Katlanabilir yonetim navs**: Rota-farkindalikli otomatik genisletme ile kenar cubugundan erisilen 11 yonetim sayfasi
+- **Paylasilmis ilkel bilesenleri**: PageSkeleton, PageError, CopyButton, Sparkline, StatusDot, Badge, Sheet, ScrollArea, Input, Table
 
 ---
 
@@ -308,7 +318,7 @@ Web portal `/admin/skills` adresinde bir **Market** sekmesi icerir. Topluluk kay
 
 ```
 +-----------------------------------------------------------------+
-|  Sohbet Kanallari + Web Portali (4 modlu calisma alani)          |
+|  Sohbet Kanallari + Web Portali (4 mod, shadcn/ui + Magic UI)    |
 |  Web | Telegram | Discord | Slack | WhatsApp | CLI | Matrix     |
 |  IRC | Teams                                                     |
 +------------------------------+----------------------------------+
