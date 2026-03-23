@@ -241,12 +241,32 @@ Strada.Brain prueft taeglich automatisch auf Updates und wendet diese an, wenn d
 
 ---
 
+## Web-Portal
+
+Das integrierte Web-Portal (`http://localhost:3000`) bietet einen vollstaendigen AI-Arbeitsbereich mit 4 kontextadaptiven Modi:
+
+| Modus | Tastenkuerzel | Beschreibung |
+|-------|---------------|-------------|
+| **Chat** | `Alt+1` | Konversationsschnittstelle mit Dateianhang, Spracheingabe und Markdown-Rendering |
+| **Monitor** | `Alt+2` | Echtzeit-DAG-Visualisierung von Zielzerlegung, Aufgabenstatus, Review-Pipeline und Interventionssteuerung |
+| **Canvas** | `Alt+3` | Visueller Arbeitsbereich mit tldraw — 9 benutzerdefinierte Formen (CodeBlock, UMLClass, APIEndpoint, DataFlow usw.) automatisch aus Agenten-Ausgabe generiert |
+| **Code** | `Alt+4` | IDE-aehnliche Ansicht mit Monaco-Editor (Multi-Tab, Syntax-Hervorhebung), Dateibaum-Explorer und Terminalausgabe |
+
+**Automatische Umschaltung:** Das Portal wechselt automatisch den Modus basierend auf Agentenaktivitaet — Zielausfuehrung oeffnet Monitor, Dateischreiben oeffnet Code, visuelle Ausgabe oeffnet Canvas. Benutzer koennen mit manueller Modusauswahl uebersteuern; das Senden einer Chat-Nachricht setzt die Uebersteuerung zurueck.
+
+**Tastenkuerzel:** `Alt+1-4` Moduswechsel, `Cmd/Ctrl+B` Seitenleiste umschalten, `Cmd/Ctrl+\` Sekundaerpanel umschalten, `Cmd/Ctrl+?` Tastenkuerzelhilfe.
+
+**Technologie-Stack:** React 19, Vite, Tailwind CSS v4, Zustand, TanStack Query, Radix UI, ReactFlow, tldraw, Monaco Editor.
+
+---
+
 ## Architektur
 
 ```
 +-----------------------------------------------------------------+
-|  Chat-Kanaele                                                    |
-|  Web | Telegram | Discord | Slack | WhatsApp | CLI              |
+|  Chat-Kanaele + Web-Portal (4-Modus-Arbeitsbereich)              |
+|  Web | Telegram | Discord | Slack | WhatsApp | CLI | Matrix     |
+|  IRC | Teams                                                     |
 +------------------------------+----------------------------------+
                                |
                     IChannelAdapter-Interface

@@ -241,12 +241,32 @@ Strada.Brain v&eacute;rifie automatiquement les mises &agrave; jour quotidiennem
 
 ---
 
+## Portail Web
+
+Le portail web integre (`http://localhost:3000`) fournit un espace de travail IA complet avec 4 modes adaptatifs au contexte :
+
+| Mode | Raccourci | Description |
+|------|-----------|-------------|
+| **Chat** | `Alt+1` | Interface conversationnelle avec pieces jointes, entree vocale et rendu markdown |
+| **Moniteur** | `Alt+2` | Visualisation DAG en temps reel de la decomposition des objectifs, statuts des taches, pipeline de revision et controles d'intervention |
+| **Canevas** | `Alt+3` | Espace de travail visuel avec tldraw — 9 formes personnalisees (CodeBlock, UMLClass, APIEndpoint, DataFlow, etc.) generees automatiquement a partir de la sortie de l'agent |
+| **Code** | `Alt+4` | Vue de type IDE avec editeur Monaco (multi-onglets, coloration syntaxique), explorateur d'arborescence de fichiers et sortie terminal |
+
+**Commutation automatique :** Le portail change automatiquement de mode en fonction de l'activite de l'agent — l'execution d'objectifs ouvre le Moniteur, les ecritures de fichiers ouvrent le Code, la sortie visuelle ouvre le Canevas. Les utilisateurs peuvent remplacer avec une selection manuelle de mode ; l'envoi d'un message de chat reinitialise le remplacement.
+
+**Raccourcis clavier :** `Alt+1-4` changement de mode, `Cmd/Ctrl+B` basculer la barre laterale, `Cmd/Ctrl+\` basculer le panneau secondaire, `Cmd/Ctrl+?` aide raccourcis.
+
+**Stack technique :** React 19, Vite, Tailwind CSS v4, Zustand, TanStack Query, Radix UI, ReactFlow, tldraw, Monaco Editor.
+
+---
+
 ## Architecture
 
 ```
 +-----------------------------------------------------------------+
-|  Chat Channels                                                   |
-|  Web | Telegram | Discord | Slack | WhatsApp | CLI              |
+|  Chat Channels + Portail Web (espace de travail 4 modes)         |
+|  Web | Telegram | Discord | Slack | WhatsApp | CLI | Matrix     |
+|  IRC | Teams                                                     |
 +------------------------------+----------------------------------+
                                |
                     IChannelAdapter interface

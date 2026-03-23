@@ -247,12 +247,32 @@ Strada.Brain automatically checks for updates daily and applies them when idle. 
 
 ---
 
+## Web Portal
+
+The built-in web portal (`http://localhost:3000`) provides a full AI workspace with 4 context-adaptive modes:
+
+| Mode | Shortcut | Description |
+|------|----------|-------------|
+| **Chat** | `Alt+1` | Conversational interface with file attachments, voice input, and markdown rendering |
+| **Monitor** | `Alt+2` | Real-time DAG visualization of goal decomposition, task statuses, review pipeline, and intervention controls |
+| **Canvas** | `Alt+3` | Visual workspace with tldraw — 9 custom shapes (CodeBlock, UMLClass, APIEndpoint, DataFlow, etc.) auto-generated from agent output |
+| **Code** | `Alt+4` | IDE-like view with Monaco editor (multi-tab, syntax highlighting), file tree explorer, and terminal output |
+
+**Auto-switching:** The portal automatically switches modes based on agent activity — goal execution opens Monitor, file writes open Code, visual output opens Canvas. Users can override with manual mode selection; sending a chat message resets the override.
+
+**Keyboard shortcuts:** `Alt+1-4` mode switching, `Cmd/Ctrl+B` toggle sidebar, `Cmd/Ctrl+\` toggle secondary panel, `Cmd/Ctrl+?` shortcuts help.
+
+**Stack:** React 19, Vite, Tailwind CSS v4, Zustand, TanStack Query, Radix UI, ReactFlow, tldraw, Monaco Editor.
+
+---
+
 ## Architecture
 
 ```
 +-----------------------------------------------------------------+
-|  Chat Channels                                                   |
-|  Web | Telegram | Discord | Slack | WhatsApp | CLI              |
+|  Chat Channels + Web Portal (4-mode workspace)                  |
+|  Web | Telegram | Discord | Slack | WhatsApp | CLI | Matrix     |
+|  IRC | Teams                                                     |
 +------------------------------+----------------------------------+
                                |
                     IChannelAdapter interface

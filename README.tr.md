@@ -245,12 +245,32 @@ Strada.Brain, her gun otomatik olarak guncellemeleri kontrol eder ve acil oldugu
 
 ---
 
+## Web Portali
+
+Dahili web portali (`http://localhost:3000`) 4 baglam-uyarlamali mod ile tam bir AI calisma alani saglar:
+
+| Mod | Kisayol | Aciklama |
+|-----|---------|----------|
+| **Sohbet** | `Alt+1` | Dosya ekleri, sesli giris ve markdown olusturma ile sohbet arayuzu |
+| **Monitor** | `Alt+2` | Hedef ayristirma, gorev durumlari, inceleme hatti ve mudahale kontrollerinin gercek zamanli DAG gorsellestirmesi |
+| **Kanvas** | `Alt+3` | tldraw ile gorsel calisma alani — ajan ciktisindan otomatik olusturulan 9 ozel sekil (CodeBlock, UMLClass, APIEndpoint, DataFlow, vb.) |
+| **Kod** | `Alt+4` | Monaco editoru (coklu sekme, sozdizimi vurgulama), dosya agaci gezgini ve terminal ciktisi ile IDE benzeri gorunum |
+
+**Otomatik gecis:** Portal, ajan aktivitesine gore otomatik olarak mod degistirir — hedef yurutme Monitor'u acar, dosya yazma Kod'u acar, gorsel cikti Kanvas'i acar. Kullanicilar manuel mod secimiyle geersiz kilabilir; bir sohbet mesaji gondermek gecersiz kilmayi sifirlar.
+
+**Klavye kisayollari:** `Alt+1-4` mod gecisi, `Cmd/Ctrl+B` kenar cubugunu ac/kapat, `Cmd/Ctrl+\` ikincil paneli ac/kapat, `Cmd/Ctrl+?` kisayol yardimi.
+
+**Teknoloji yigini:** React 19, Vite, Tailwind CSS v4, Zustand, TanStack Query, Radix UI, ReactFlow, tldraw, Monaco Editor.
+
+---
+
 ## Mimari
 
 ```
 +-----------------------------------------------------------------+
-|  Sohbet Kanallari                                                |
-|  Web | Telegram | Discord | Slack | WhatsApp | CLI              |
+|  Sohbet Kanallari + Web Portali (4 modlu calisma alani)          |
+|  Web | Telegram | Discord | Slack | WhatsApp | CLI | Matrix     |
+|  IRC | Teams                                                     |
 +------------------------------+----------------------------------+
                                |
                     IChannelAdapter arayuzu

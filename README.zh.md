@@ -241,12 +241,32 @@ Strada.Brain 每天自动检查更新，在空闲时应用更新。源码 checko
 
 ---
 
+## Web 门户
+
+内置 Web 门户（`http://localhost:3000`）提供具有 4 种上下文自适应模式的完整 AI 工作区：
+
+| 模式 | 快捷键 | 描述 |
+|------|--------|------|
+| **聊天** | `Alt+1` | 支持文件附件、语音输入和 Markdown 渲染的对话界面 |
+| **监控** | `Alt+2` | 目标分解、任务状态、审查管道和干预控制的实时 DAG 可视化 |
+| **画布** | `Alt+3` | 使用 tldraw 的可视化工作区 — 从代理输出自动生成 9 种自定义图形（CodeBlock、UMLClass、APIEndpoint、DataFlow 等） |
+| **代码** | `Alt+4` | 具有 Monaco 编辑器（多标签页、语法高亮）、文件树浏览器和终端输出的 IDE 风格视图 |
+
+**自动切换：** 门户根据代理活动自动切换模式 — 目标执行打开监控，文件写入打开代码，可视化输出打开画布。用户可以通过手动模式选择覆盖；发送聊天消息会重置覆盖。
+
+**键盘快捷键：** `Alt+1-4` 模式切换，`Cmd/Ctrl+B` 切换侧边栏，`Cmd/Ctrl+\` 切换辅助面板，`Cmd/Ctrl+?` 快捷键帮助。
+
+**技术栈：** React 19、Vite、Tailwind CSS v4、Zustand、TanStack Query、Radix UI、ReactFlow、tldraw、Monaco Editor。
+
+---
+
 ## 架构
 
 ```
 +-----------------------------------------------------------------+
-|  聊天频道                                                        |
-|  Web | Telegram | Discord | Slack | WhatsApp | CLI              |
+|  聊天频道 + Web 门户（4 模式工作区）                              |
+|  Web | Telegram | Discord | Slack | WhatsApp | CLI | Matrix     |
+|  IRC | Teams                                                     |
 +------------------------------+----------------------------------+
                                |
                     IChannelAdapter 接口
