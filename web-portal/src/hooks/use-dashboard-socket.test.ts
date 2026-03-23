@@ -113,6 +113,79 @@ describe('dispatchWorkspaceMessage', () => {
   })
 })
 
+describe('dispatchWorkspaceMessage — workspace:notification', () => {
+  beforeEach(() => {
+    useWorkspaceStore.getState().reset()
+  })
+
+  it('adds notification to workspace store', () => {
+    dispatchWorkspaceMessage({
+      type: 'workspace:notification',
+      title: 'Build Complete',
+      message: 'Project built successfully',
+      severity: 'info',
+    })
+
+    const notifications = useWorkspaceStore.getState().notifications
+    expect(notifications).toHaveLength(1)
+    expect(notifications[0].title).toBe('Build Complete')
+    expect(notifications[0].message).toBe('Project built successfully')
+    expect(notifications[0].severity).toBe('info')
+  })
+
+  it('handles payload wrapper for notification', () => {
+    dispatchWorkspaceMessage({
+      type: 'workspace:notification',
+      payload: {
+        title: 'Error',
+        message: 'Something failed',
+        severity: 'error',
+      },
+    })
+
+    const notifications = useWorkspaceStore.getState().notifications
+    expect(notifications).toHaveLength(1)
+    expect(notifications[0].title).toBe('Error')
+    expect(notifications[0].severity).toBe('error')
+  })
+})
+
+describe('dispatchWorkspaceMessage — payload envelope unwrap', () => {
+  beforeEach(() => {
+    useMonitorStore.getState().clearMonitor()
+    useWorkspaceStore.getState().reset()
+  })
+
+  it('unwraps monitor:dag_init from payload envelope', () => {
+    dispatchWorkspaceMessage({
+      type: 'monitor:dag_init',
+      payload: {
+        rootId: 'wrapped-root',
+        dag: {
+          nodes: [{ id: 'w1', title: 'Wrapped', status: 'pending', reviewStatus: 'none' }],
+          edges: [],
+        },
+      },
+      timestamp: Date.now(),
+    })
+
+    const state = useMonitorStore.getState()
+    expect(state.activeRootId).toBe('wrapped-root')
+    expect(Object.keys(state.tasks)).toHaveLength(1)
+    expect(state.tasks['w1'].title).toBe('Wrapped')
+  })
+
+  it('unwraps workspace:mode_suggest from payload envelope', () => {
+    dispatchWorkspaceMessage({
+      type: 'workspace:mode_suggest',
+      payload: { mode: 'monitor' },
+      timestamp: Date.now(),
+    })
+
+    expect(useWorkspaceStore.getState().mode).toBe('monitor')
+  })
+})
+
 describe('isWorkspaceMessage — code prefix', () => {
   it('returns true for code: prefix', () => {
     expect(isWorkspaceMessage('code:file_open')).toBe(true)

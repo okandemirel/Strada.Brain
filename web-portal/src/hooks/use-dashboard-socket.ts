@@ -48,13 +48,17 @@ export type WorkspaceMessage =
  * and tested independently.
  */
 export function dispatchWorkspaceMessage(data: { type: string; [key: string]: unknown }): void {
+  // All events from monitor-bridge arrive wrapped as { type, payload, timestamp }.
+  // Unwrap consistently for all cases.
+  const payload = (data as any).payload ?? data
+
   switch (data.type) {
     case 'monitor:dag_init': {
-      const msg = data as unknown as MonitorDagInitMessage
       const monitor = useMonitorStore.getState()
-      monitor.setActiveRootId(msg.rootId)
-      monitor.setDAG(msg.dag as DagState)
-      for (const node of msg.dag.nodes) {
+      monitor.setActiveRootId(payload.rootId)
+      const dag = payload.dag ?? { nodes: payload.nodes, edges: payload.edges }
+      monitor.setDAG(dag as DagState)
+      for (const node of (dag.nodes ?? [])) {
         monitor.addTask({
           id: node.id,
           nodeId: node.id,
@@ -68,14 +72,12 @@ export function dispatchWorkspaceMessage(data: { type: string; [key: string]: un
     }
 
     case 'monitor:task_update': {
-      const msg = data as unknown as MonitorTaskUpdateMessage
-      useMonitorStore.getState().updateTask(msg.taskId, msg.updates)
+      useMonitorStore.getState().updateTask(payload.taskId, payload.updates ?? payload)
       break
     }
 
     case 'monitor:agent_activity': {
-      const msg = data as unknown as MonitorAgentActivityMessage
-      useMonitorStore.getState().addActivity(msg.activity)
+      useMonitorStore.getState().addActivity(payload.activity ?? payload)
       break
     }
 
@@ -85,25 +87,32 @@ export function dispatchWorkspaceMessage(data: { type: string; [key: string]: un
     }
 
     case 'workspace:mode_suggest': {
-      const msg = data as unknown as WorkspaceModeSuggestMessage
-      useWorkspaceStore.getState().suggestMode(msg.mode)
+      useWorkspaceStore.getState().suggestMode(payload.mode)
+      break
+    }
+
+    case 'workspace:notification': {
+      useWorkspaceStore.getState().addNotification({
+        title: payload.title ?? '',
+        message: payload.message ?? '',
+        severity: payload.severity ?? 'info',
+      })
       break
     }
 
     case 'canvas:shapes_add':
-      useCanvasStore.getState().addPendingShapes((data as any).shapes || [])
+      useCanvasStore.getState().addPendingShapes(payload.shapes || [])
       break
 
     case 'canvas:shapes_update':
-      useCanvasStore.getState().updatePendingShapes((data as any).shapes || [])
+      useCanvasStore.getState().updatePendingShapes(payload.shapes || [])
       break
 
     case 'canvas:shapes_remove':
-      useCanvasStore.getState().removePendingShapeIds((data as any).shapeIds || [])
+      useCanvasStore.getState().removePendingShapeIds(payload.shapeIds || [])
       break
 
     case 'monitor:gate_request': {
-      const payload = (data as any).payload ?? data
       if (payload.nodeId) {
         useMonitorStore.getState().updateTask(payload.nodeId, { reviewStatus: 'review_stuck' })
       }
@@ -111,7 +120,6 @@ export function dispatchWorkspaceMessage(data: { type: string; [key: string]: un
     }
 
     case 'monitor:review_result': {
-      const payload = (data as any).payload ?? data
       if (payload.nodeId) {
         useMonitorStore.getState().updateTask(payload.nodeId, {
           reviewStatus: payload.passed ? 'passed' : 'failed',
@@ -123,7 +131,6 @@ export function dispatchWorkspaceMessage(data: { type: string; [key: string]: un
     }
 
     case 'monitor:dag_restructure': {
-      const payload = (data as any).payload ?? data
       const monitor = useMonitorStore.getState()
       if (payload.nodes && payload.edges) {
         monitor.setDAG({ nodes: payload.nodes, edges: payload.edges } as DagState)
