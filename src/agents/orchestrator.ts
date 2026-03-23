@@ -2838,6 +2838,7 @@ export class Orchestrator {
     }
     // Store per-session instinct IDs for appliedInstinctIds attribution
     this.currentSessionInstinctIds.set(chatId, matchedInstinctIds);
+    this.propagateInstinctIdsToChannel(chatId, matchedInstinctIds);
 
     // ─── Memory Re-retrieval: create refresher ───────────────────────
     const memoryRefresher = this.sessionManager.createMemoryRefresher(initialContentHashes);
@@ -3381,6 +3382,7 @@ export class Orchestrator {
               for (const id of ids) idSet.add(id);
               matchedInstinctIds = [...idSet].slice(0, 200);
               this.currentSessionInstinctIds.set(chatId, matchedInstinctIds);
+              this.propagateInstinctIdsToChannel(chatId, matchedInstinctIds);
             },
           });
           systemPrompt = memRefresh.systemPrompt;
@@ -3423,8 +3425,17 @@ export class Orchestrator {
       // ────────────────────────────────────────────────────────────────
       // Clean up per-session instinct IDs and goal trees to prevent memory leak
       this.currentSessionInstinctIds.delete(chatId);
+      this.propagateInstinctIdsToChannel(chatId, []);
       // Note: activeGoalTrees intentionally NOT cleaned up here -- trees persist across messages
       // in a session for reactive decomposition. Cleaned up in cleanupSessions and eviction.
+    }
+  }
+
+  /** Propagate instinct IDs to the channel adapter for feedback attribution. */
+  private propagateInstinctIdsToChannel(chatId: string, instinctIds: string[]): void {
+    const ch = this.channel as unknown as Record<string, unknown>;
+    if (typeof ch.setAppliedInstinctIds === "function") {
+      (ch.setAppliedInstinctIds as (chatId: string, ids: string[]) => void)(chatId, instinctIds);
     }
   }
 
