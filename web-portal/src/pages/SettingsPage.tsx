@@ -413,7 +413,7 @@ export default function SettingsPage() {
   // --- Render ---
 
   return (
-    <div className="flex-1 overflow-y-auto p-7 w-full animate-[admin-fade-in_0.3s_ease]">
+    <div className="h-full overflow-y-auto p-7 w-full animate-[admin-fade-in_0.3s_ease]">
       <h2 className="text-[22px] font-bold tracking-tight mb-6 text-text">Settings</h2>
 
       <div className="mb-7">

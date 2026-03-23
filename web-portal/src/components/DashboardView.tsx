@@ -50,7 +50,7 @@ export default function DashboardView() {
 
   if (loading) {
     return (
-      <div className="flex-1 overflow-y-auto p-7 w-full">
+      <div className="h-full overflow-y-auto p-7 w-full">
         <div className="flex items-center justify-center h-[200px] text-text-secondary text-[15px]">Loading dashboard data...</div>
       </div>
     )
@@ -60,7 +60,7 @@ export default function DashboardView() {
 
   if (!hasAnyData) {
     return (
-      <div className="flex-1 overflow-y-auto p-7 w-full">
+      <div className="h-full overflow-y-auto p-7 w-full">
         <div className="flex flex-col items-center justify-center h-[200px] gap-2.5 text-text-secondary text-center">
           <h3 className="text-text text-lg font-semibold">Dashboard Unavailable</h3>
           <p className="text-sm max-w-[400px]">
@@ -97,7 +97,7 @@ export default function DashboardView() {
   const activeTriggers = triggers.filter((t) => t.enabled).length
 
   return (
-    <div className="flex-1 overflow-y-auto p-7 w-full">
+    <div className="h-full overflow-y-auto p-7 w-full">
       <div className="flex items-center justify-between mb-7">
         <h2 className="text-[22px] font-bold tracking-tight">System Dashboard</h2>
         <div className="flex items-center gap-3">

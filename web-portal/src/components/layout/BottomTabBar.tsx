@@ -1,9 +1,20 @@
+import { useNavigate, useLocation } from 'react-router-dom'
 import { useWorkspaceStore } from '../../stores/workspace-store'
 import { WORKSPACE_MODES } from '../../config/workspace-modes'
 
 export default function BottomTabBar() {
   const mode = useWorkspaceStore((s) => s.mode)
   const setMode = useWorkspaceStore((s) => s.setMode)
+  const navigate = useNavigate()
+  const location = useLocation()
+
+  const handleTab = (tabMode: typeof mode) => {
+    if (!tabMode) return
+    setMode(tabMode)
+    if (tabMode === 'chat' && location.pathname.startsWith('/admin')) {
+      navigate('/')
+    }
+  }
 
   return (
     <nav className="fixed bottom-0 left-0 right-0 h-14 bg-bg-secondary border-t border-border flex items-center justify-around px-2 z-50 md:hidden">
@@ -13,7 +24,7 @@ export default function BottomTabBar() {
         return (
           <button
             key={tab.mode}
-            onClick={() => tab.enabled && setMode(tab.mode)}
+            onClick={() => tab.enabled && handleTab(tab.mode)}
             disabled={!tab.enabled}
             className={`flex flex-col items-center gap-0.5 p-2 rounded-lg transition-colors ${
               active ? 'text-accent' : tab.enabled ? 'text-text-secondary' : 'text-text-tertiary opacity-40'

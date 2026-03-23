@@ -12,6 +12,7 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
 } from '../ui/dropdown-menu'
+import { useWorkspaceStore } from '../../stores/workspace-store'
 
 interface AdminPage {
   to: string
@@ -37,6 +38,8 @@ interface AdminDropdownProps {
 }
 
 export default function AdminDropdown({ collapsed }: AdminDropdownProps) {
+  const setMode = useWorkspaceStore((s) => s.setMode)
+
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -57,6 +60,7 @@ export default function AdminDropdown({ collapsed }: AdminDropdownProps) {
           <DropdownMenuItem key={page.to} asChild>
             <NavLink
               to={page.to}
+              onClick={() => setMode('chat')}
               className={({ isActive }) =>
                 `flex items-center gap-2.5 px-2 py-1.5 rounded-md text-sm no-underline w-full ${
                   isActive

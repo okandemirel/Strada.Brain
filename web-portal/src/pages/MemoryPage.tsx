@@ -39,7 +39,7 @@ export default function MemoryPage() {
   const maxTierCount = Math.max(1, ...tiers.map(t => t.count))
 
   return (
-    <div className="flex-1 overflow-y-auto p-7 w-full animate-[admin-fade-in_0.3s_ease]">
+    <div className="h-full overflow-y-auto p-7 w-full animate-[admin-fade-in_0.3s_ease]">
       <h2 className="text-[22px] font-bold tracking-tight mb-6 text-text">Memory</h2>
 
       <div className="mb-7">

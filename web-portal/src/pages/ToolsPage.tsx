@@ -41,7 +41,7 @@ export default function ToolsPage() {
 
   if (tools.length === 0) {
     return (
-      <div className="flex-1 overflow-y-auto p-7 w-full animate-[admin-fade-in_0.3s_ease]">
+      <div className="h-full overflow-y-auto p-7 w-full animate-[admin-fade-in_0.3s_ease]">
         <h2 className="text-[22px] font-bold tracking-tight mb-6 text-text">Tools</h2>
         <div className="flex flex-col items-center justify-center h-[200px] gap-2.5 text-text-secondary text-center">
           <h3 className="text-text text-lg font-semibold">No Tools Available</h3>
@@ -61,7 +61,7 @@ export default function ToolsPage() {
   })
 
   return (
-    <div className="flex-1 overflow-y-auto p-7 w-full animate-[admin-fade-in_0.3s_ease]">
+    <div className="h-full overflow-y-auto p-7 w-full animate-[admin-fade-in_0.3s_ease]">
       <h2 className="text-[22px] font-bold tracking-tight mb-6 text-text">Tools ({tools.length})</h2>
       <input
         className="w-full max-w-[400px] px-4 py-2.5 border border-border rounded-xl bg-input-bg text-text font-[inherit] text-sm outline-none transition-all duration-200 mb-5 focus:border-accent focus:shadow-[0_0_0_3px_var(--color-accent-glow)] placeholder:text-text-tertiary"

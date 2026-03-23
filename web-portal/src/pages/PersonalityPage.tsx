@@ -70,7 +70,7 @@ export default function PersonalityPage() {
   if (isLoading) return <div className="flex flex-1 items-center justify-center h-[200px] text-text-secondary text-[15px]">Loading personality...</div>
 
   return (
-    <div className="flex-1 overflow-y-auto p-7 w-full animate-[admin-fade-in_0.3s_ease]">
+    <div className="h-full overflow-y-auto p-7 w-full animate-[admin-fade-in_0.3s_ease]">
       <h2 className="text-[22px] font-bold tracking-tight mb-6 text-text">Personality</h2>
 
       {error && (

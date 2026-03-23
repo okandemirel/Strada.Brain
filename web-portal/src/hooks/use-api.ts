@@ -434,6 +434,7 @@ export function usePersonality() {
     queryKey: ['personality'],
     queryFn: () => fetchApi<PersonalityResponse>('/api/personality'),
     refetchInterval: false, // personality rarely changes; mutations will invalidate
+    refetchOnMount: 'always', // ensure fresh data after onboarding or profile switch
   })
 }
 
