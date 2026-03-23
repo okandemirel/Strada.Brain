@@ -1,34 +1,41 @@
-import { forwardRef, type ButtonHTMLAttributes } from 'react'
+import * as React from 'react'
+import { cva, type VariantProps } from 'class-variance-authority'
+import { cn } from '@/lib/utils'
 
-type Variant = 'default' | 'outline' | 'ghost' | 'destructive'
-type Size = 'default' | 'sm' | 'lg' | 'icon'
+const buttonVariants = cva(
+  'inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-lg text-sm font-medium transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 cursor-pointer',
+  {
+    variants: {
+      variant: {
+        default: 'bg-accent text-black hover:bg-accent-hover active:scale-[0.97]',
+        outline: 'border border-border bg-transparent text-text hover:bg-bg-tertiary hover:border-border-hover',
+        ghost: 'bg-transparent text-text-secondary hover:bg-bg-tertiary hover:text-text',
+        destructive: 'bg-error text-white hover:bg-error/90 active:scale-[0.97]',
+        glow: 'bg-accent text-black hover:bg-accent-hover hover:shadow-[0_0_20px_rgba(0,229,255,0.3)] active:scale-[0.97]',
+      },
+      size: {
+        default: 'h-9 px-4 py-2',
+        sm: 'h-8 rounded-md px-3 text-xs',
+        lg: 'h-11 rounded-lg px-6',
+        icon: 'h-9 w-9',
+      },
+    },
+    defaultVariants: {
+      variant: 'default',
+      size: 'default',
+    },
+  }
+)
 
-interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
-  variant?: Variant
-  size?: Size
-}
+export interface ButtonProps
+  extends React.ButtonHTMLAttributes<HTMLButtonElement>,
+    VariantProps<typeof buttonVariants> {}
 
-const variantClasses: Record<Variant, string> = {
-  default: 'bg-accent text-bg hover:bg-accent-hover',
-  outline: 'border border-border bg-transparent hover:bg-surface-hover text-text',
-  ghost: 'hover:bg-surface-hover text-text',
-  destructive: 'bg-error text-white hover:bg-error/80',
-}
-
-const sizeClasses: Record<Size, string> = {
-  default: 'h-9 px-4 py-2 text-sm',
-  sm: 'h-8 px-3 text-xs',
-  lg: 'h-11 px-6 text-base',
-  icon: 'h-9 w-9',
-}
-
-export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
-  ({ className = '', variant = 'default', size = 'default', ...props }, ref) => (
-    <button
-      ref={ref}
-      className={`inline-flex items-center justify-center rounded-lg font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:pointer-events-none disabled:opacity-50 ${variantClasses[variant]} ${sizeClasses[size]} ${className}`}
-      {...props}
-    />
-  ),
+const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
+  ({ className, variant, size, ...props }, ref) => (
+    <button className={cn(buttonVariants({ variant, size, className }))} ref={ref} {...props} />
+  )
 )
 Button.displayName = 'Button'
+
+export { Button, buttonVariants }

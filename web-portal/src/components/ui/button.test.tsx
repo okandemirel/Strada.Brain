@@ -22,7 +22,7 @@ describe('Button', () => {
   it('renders ghost variant', () => {
     render(<Button variant="ghost">Ghost</Button>)
     const btn = screen.getByRole('button', { name: 'Ghost' })
-    expect(btn.className).toContain('hover:bg-surface-hover')
+    expect(btn.className).toContain('hover:bg-bg-tertiary')
     expect(btn.className).not.toContain('bg-accent')
   })
 
@@ -30,6 +30,13 @@ describe('Button', () => {
     render(<Button variant="destructive">Delete</Button>)
     const btn = screen.getByRole('button', { name: 'Delete' })
     expect(btn.className).toContain('bg-error')
+  })
+
+  it('renders glow variant', () => {
+    render(<Button variant="glow">Glow</Button>)
+    const btn = screen.getByRole('button', { name: 'Glow' })
+    expect(btn.className).toContain('bg-accent')
+    expect(btn.className).toContain('hover:shadow-')
   })
 
   it('renders sm size', () => {
@@ -43,7 +50,6 @@ describe('Button', () => {
     render(<Button size="lg">Large</Button>)
     const btn = screen.getByRole('button', { name: 'Large' })
     expect(btn.className).toContain('h-11')
-    expect(btn.className).toContain('text-base')
   })
 
   it('renders icon size', () => {
