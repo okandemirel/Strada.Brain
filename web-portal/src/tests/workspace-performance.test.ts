@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { useMonitorStore } from '../stores/monitor-store'
 import { useCodeStore } from '../stores/code-store'
+import { useCanvasStore } from '../stores/canvas-store'
 import { useWorkspaceStore } from '../stores/workspace-store'
 import { dispatchWorkspaceMessage } from '../hooks/use-dashboard-socket'
 
@@ -9,6 +10,7 @@ describe('workspace performance benchmarks', () => {
     useMonitorStore.getState().clearMonitor()
     useWorkspaceStore.getState().reset()
     useCodeStore.getState().reset()
+    useCanvasStore.getState().reset()
   })
 
   it('DAG with 50+ nodes initializes under 50ms', () => {
@@ -93,6 +95,20 @@ describe('workspace performance benchmarks', () => {
     expect(elapsed).toBeLessThan(500)
     // Cap is 5000
     expect(useCodeStore.getState().terminalOutput.length).toBeLessThanOrEqual(5000)
+  })
+
+  it('100 canvas shape additions process under 50ms', () => {
+    const start = performance.now()
+    for (let i = 0; i < 100; i++) {
+      dispatchWorkspaceMessage({
+        type: 'canvas:shapes_add',
+        shapes: [{ type: 'CodeBlock', id: `shape-${i}`, props: { code: `console.log(${i})` } }],
+      })
+    }
+    const elapsed = performance.now() - start
+
+    expect(elapsed).toBeLessThan(50)
+    expect(useCanvasStore.getState().pendingShapes).toHaveLength(100)
   })
 
   it('50 rapid mode suggestions process under 20ms', () => {
