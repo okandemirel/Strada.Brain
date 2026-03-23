@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { usePersonality } from '../hooks/use-api'
-import { Skeleton } from '../components/ui/skeleton'
+import { PageSkeleton } from '../components/ui/page-skeleton'
 
 const SYSTEM_PROFILES = new Set(['default', 'casual', 'formal', 'minimal'])
 const PROFILE_NAME_RE = /^[a-zA-Z0-9_-]+$/
@@ -68,15 +68,7 @@ export default function PersonalityPage() {
     createMutation.mutate({ name: trimmedName, content: newContent })
   }
 
-  if (isLoading) return (
-    <div className="h-full overflow-y-auto p-7 w-full">
-      <Skeleton className="h-7 w-48 mb-6" />
-      <Skeleton className="h-4 w-64 mb-4" />
-      <div className="space-y-3">
-        {Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-12 rounded-xl" />)}
-      </div>
-    </div>
-  )
+  if (isLoading) return <PageSkeleton />
 
   return (
     <div className="h-full overflow-y-auto p-7 w-full animate-[admin-fade-in_0.3s_ease]">

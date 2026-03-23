@@ -1,4 +1,4 @@
-import { memo, useMemo, useState, useCallback } from 'react'
+import { memo, useMemo } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
@@ -6,6 +6,7 @@ import type { Components } from 'react-markdown'
 import type { Attachment, ChatMessage as ChatMessageType } from '../types/messages'
 import VoiceOutput from './VoiceOutput'
 import { cn } from '@/lib/utils'
+import { CopyButton } from './ui/copy-button'
 
 const REMARK_PLUGINS = [remarkGfm]
 const REHYPE_PLUGINS = [rehypeHighlight]
@@ -64,31 +65,6 @@ function hasTextContent(text: string): boolean {
   return stripped.length > 0
 }
 
-function CopyButton({ text, className }: { text: string; className?: string }) {
-  const [copied, setCopied] = useState(false)
-  const handleCopy = useCallback(async () => {
-    try {
-      await navigator.clipboard.writeText(text)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 1500)
-    } catch {
-      // clipboard not available
-    }
-  }, [text])
-  return (
-    <button
-      onClick={handleCopy}
-      className={cn(
-        'px-2 py-0.5 text-[11px] rounded-md border border-white/10 bg-white/5 text-text-secondary hover:bg-white/10 hover:text-text transition-all duration-150',
-        className,
-      )}
-      title="Copy"
-    >
-      {copied ? 'Copied!' : 'Copy'}
-    </button>
-  )
-}
-
 function makeComponents(isUser: boolean): Components {
   return {
     pre({ children, ...props }) {
@@ -132,7 +108,7 @@ function ChatMessageComponent({ message }: ChatMessageProps) {
         'group relative max-w-[75%] px-[18px] py-[14px] leading-relaxed break-words overflow-wrap-break-word animate-[msg-in_0.3s_cubic-bezier(0.25,0.46,0.45,0.94)] text-[15px]',
         isUser
           ? 'self-end bg-gradient-to-br from-accent/10 to-accent/5 rounded-2xl rounded-br-[6px] border border-accent/15'
-          : 'self-start bg-white/[0.03] backdrop-blur border border-white/5 rounded-2xl rounded-bl-[6px] prose-ai',
+          : 'self-start bg-white/3 backdrop-blur border border-white/5 rounded-2xl rounded-bl-[6px] prose-ai',
       )}
     >
       {isUser || !message.isMarkdown ? (

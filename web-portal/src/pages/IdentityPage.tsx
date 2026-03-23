@@ -1,6 +1,7 @@
 import { formatUptime } from '../utils/format'
 import { useDaemon, useMetrics } from '../hooks/use-api'
-import { Skeleton } from '../components/ui/skeleton'
+import { PageSkeleton } from '../components/ui/page-skeleton'
+import { PageError } from '../components/ui/page-error'
 
 function formatDate(ts: string): string {
   try {
@@ -23,24 +24,8 @@ export default function IdentityPage() {
     ? daemonQuery.error.message
     : null
 
-  if (loading) return (
-    <div className="h-full overflow-y-auto p-7 w-full">
-      <Skeleton className="h-7 w-48 mb-6" />
-      <Skeleton className="h-4 w-64 mb-4" />
-      <div className="space-y-3">
-        {Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-12 rounded-xl" />)}
-      </div>
-    </div>
-  )
-  if (error && !daemonQuery.data) return (
-    <div className="h-full overflow-y-auto p-7 w-full">
-      <div className="flex flex-col items-center justify-center h-[200px] gap-3 text-text-secondary">
-        <div className="text-4xl">⚠</div>
-        <h3 className="text-text text-lg font-semibold">Failed to Load Identity</h3>
-        <p className="text-sm max-w-[400px] text-center">{error}</p>
-      </div>
-    </div>
-  )
+  if (loading) return <PageSkeleton />
+  if (error && !daemonQuery.data) return <PageError title="Failed to Load Identity" message={error} />
 
   const daemon = daemonQuery.data ?? null
   const uptime = metricsQuery.data?.uptime ? metricsQuery.data.uptime / 1000 : 0

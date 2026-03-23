@@ -1,5 +1,6 @@
 import { useMemoryStats, useConsolidation, useMaintenance } from '../hooks/use-api'
-import { Skeleton } from '../components/ui/skeleton'
+import { PageSkeleton } from '../components/ui/page-skeleton'
+import { PageError } from '../components/ui/page-error'
 
 interface TierInfo {
   name: string
@@ -22,24 +23,8 @@ export default function MemoryPage() {
   const consolidation = consolidationQuery.data ?? null
   const maintenance = maintenanceQuery.data ?? null
 
-  if (loading) return (
-    <div className="h-full overflow-y-auto p-7 w-full">
-      <Skeleton className="h-7 w-48 mb-6" />
-      <Skeleton className="h-4 w-64 mb-4" />
-      <div className="space-y-3">
-        {Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-12 rounded-xl" />)}
-      </div>
-    </div>
-  )
-  if (error && !memoryStats && !consolidation) return (
-    <div className="h-full overflow-y-auto p-7 w-full">
-      <div className="flex flex-col items-center justify-center h-[200px] gap-3 text-text-secondary">
-        <div className="text-4xl">⚠</div>
-        <h3 className="text-text text-lg font-semibold">Failed to Load Memory</h3>
-        <p className="text-sm max-w-[400px] text-center">{error}</p>
-      </div>
-    </div>
-  )
+  if (loading) return <PageSkeleton />
+  if (error && !memoryStats && !consolidation) return <PageError title="Failed to Load Memory" message={error} />
 
   const tiers: TierInfo[] = []
   if (consolidation?.perTier) {

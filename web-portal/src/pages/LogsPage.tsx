@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
 import { useLogs } from '../hooks/use-api'
-import { Skeleton } from '../components/ui/skeleton'
+import { PageSkeleton } from '../components/ui/page-skeleton'
 
 interface LogEntry {
   timestamp: string
@@ -56,15 +56,7 @@ export default function LogsPage() {
     }
   }, [logs, autoScroll])
 
-  if (logsQuery.isLoading) return (
-    <div className="h-full overflow-y-auto p-7 w-full">
-      <Skeleton className="h-7 w-48 mb-6" />
-      <Skeleton className="h-4 w-64 mb-4" />
-      <div className="space-y-3">
-        {Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-12 rounded-xl" />)}
-      </div>
-    </div>
-  )
+  if (logsQuery.isLoading) return <PageSkeleton />
 
   const filtered = logs.filter(entry => {
     if (levelFilter !== 'all' && getLevelClass(entry.level) !== levelFilter) return false

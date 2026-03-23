@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useConfig } from '../hooks/use-api'
-import { Skeleton } from '../components/ui/skeleton'
+import { PageSkeleton } from '../components/ui/page-skeleton'
+import { PageError } from '../components/ui/page-error'
 
 interface ConfigEntry {
   key: string
@@ -14,24 +15,8 @@ export default function ConfigPage() {
   const { data, error, isLoading } = useConfig()
   const [filter, setFilter] = useState('')
 
-  if (error) return (
-    <div className="h-full overflow-y-auto p-7 w-full">
-      <div className="flex flex-col items-center justify-center h-[200px] gap-3 text-text-secondary">
-        <div className="text-4xl">⚠</div>
-        <h3 className="text-text text-lg font-semibold">Failed to Load Configuration</h3>
-        <p className="text-sm max-w-[400px] text-center">{error.message}</p>
-      </div>
-    </div>
-  )
-  if (isLoading || !data) return (
-    <div className="h-full overflow-y-auto p-7 w-full">
-      <Skeleton className="h-7 w-48 mb-6" />
-      <Skeleton className="h-4 w-64 mb-4" />
-      <div className="space-y-3">
-        {Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-12 rounded-xl" />)}
-      </div>
-    </div>
-  )
+  if (error) return <PageError title="Failed to Load Configuration" message={error.message} />
+  if (isLoading || !data) return <PageSkeleton />
 
   const normalizedFilter = filter.toLowerCase()
   const fallbackEntries: ConfigEntry[] = Object.entries(data.config).map(([key, value]) => ({

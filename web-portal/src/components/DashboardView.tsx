@@ -1,8 +1,8 @@
 import { useHealth, useMetrics, useTriggers, useAgents, useDelegations, useConsolidation, useDeployment, useMaintenance } from '../hooks/use-api'
 import MetricCard from './MetricCard'
-import { Skeleton } from './ui/skeleton'
+import { PageSkeleton } from './ui/page-skeleton'
+import { Sparkline } from './ui/sparkline'
 import { formatUptime } from '../utils/format'
-import { cn } from '@/lib/utils'
 
 function formatNumber(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
@@ -24,20 +24,6 @@ function getStatusClass(status: string): string {
   }
 }
 
-function Sparkline({ data, className }: { data: number[]; className?: string }) {
-  if (!data || data.length < 2) return null
-  const max = Math.max(...data)
-  const min = Math.min(...data)
-  const range = max - min || 1
-  const w = 80
-  const h = 24
-  const points = data.map((v, i) => `${(i / (data.length - 1)) * w},${h - ((v - min) / range) * h}`).join(' ')
-  return (
-    <svg width={w} height={h} className={cn('inline-block', className)} viewBox={`0 0 ${w} ${h}`}>
-      <polyline points={points} fill="none" stroke="var(--color-accent)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  )
-}
 
 export default function DashboardView() {
   const healthQuery = useHealth()
@@ -66,16 +52,7 @@ export default function DashboardView() {
   const lastUpdated = metricsQuery.dataUpdatedAt || healthQuery.dataUpdatedAt || null
 
   if (loading) {
-    return (
-      <div className="h-full overflow-y-auto p-7 w-full">
-        <Skeleton className="h-8 w-48 mb-6" />
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
-          {Array.from({ length: 8 }).map((_, i) => (
-            <Skeleton key={i} className="h-24 rounded-2xl" />
-          ))}
-        </div>
-      </div>
-    )
+    return <PageSkeleton rows={8} grid />
   }
 
   const hasAnyData = health || metrics

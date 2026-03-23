@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
 import {
   BarChart3, Settings, SlidersHorizontal, Wrench, Radio, Users,
@@ -37,6 +37,10 @@ export default function AdminNav({ collapsed }: AdminNavProps) {
   const setMode = useWorkspaceStore((s) => s.setMode)
   const isOnAdmin = location.pathname.startsWith('/admin')
   const [expanded, setExpanded] = useState(isOnAdmin)
+
+  useEffect(() => {
+    setExpanded(isOnAdmin)
+  }, [isOnAdmin])
 
   if (collapsed) {
     // In collapsed mode, show just the shield icon that expands on hover

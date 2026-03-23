@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import React from 'react'
 import { render, screen } from '@testing-library/react'
 import type { ChatMessage, ConfirmationState, ConnectionStatus } from '../types/messages'
 
@@ -19,6 +20,10 @@ vi.mock('./VoiceRecorder', () => ({
 
 vi.mock('./VoiceOutput', () => ({
   default: () => null,
+}))
+
+vi.mock('./ui/blur-fade', () => ({
+  BlurFade: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }))
 
 import ChatView from './ChatView'
@@ -83,8 +88,8 @@ describe('ChatView', () => {
   it('shows typing indicator when isTyping is true', () => {
     mockUseWS.mockReturnValue(createMockWS({ messages: [{ id: '1', sender: 'user', text: 'test', isMarkdown: false, timestamp: Date.now() }], isTyping: true }))
     const { container } = render(<ChatView />)
-    // The typing indicator renders 3 bouncing dots
-    const dots = container.querySelectorAll('.animate-\\[bounce-dot_1\\.4s_ease-in-out_infinite\\]')
-    expect(dots.length).toBe(3)
+    // The typing indicator renders a TypingAnimation component inside a bubble
+    const bubble = container.querySelector('.backdrop-blur.border.border-white\\/5.rounded-xl')
+    expect(bubble).toBeInTheDocument()
   })
 })

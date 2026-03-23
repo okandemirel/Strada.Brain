@@ -4,10 +4,38 @@ import { ScrollArea } from '../ui/scroll-area'
 import { Badge } from '../ui/badge'
 import { Separator } from '../ui/separator'
 import { X } from 'lucide-react'
+import { SEVERITY_DOT } from '../../config/status-styles'
 
 interface NotificationCenterProps {
   open: boolean
   onOpenChange: (open: boolean) => void
+}
+
+interface NotificationEntry {
+  id: string
+  title: string
+  message: string
+  severity: string
+  timestamp: number
+}
+
+function NotificationItem({ n, onDismiss }: { n: NotificationEntry; onDismiss: (id: string) => void }) {
+  return (
+    <div className="flex items-start gap-2 px-2 py-2 rounded-lg hover:bg-bg-tertiary transition-colors group">
+      <span className={`mt-1.5 w-1.5 h-1.5 rounded-full shrink-0 ${SEVERITY_DOT[n.severity] ?? SEVERITY_DOT.info}`} />
+      <div className="flex-1 min-w-0">
+        <div className="text-xs font-medium text-text truncate">{n.title}</div>
+        <div className="text-[11px] text-text-secondary truncate">{n.message}</div>
+      </div>
+      <button
+        onClick={() => onDismiss(n.id)}
+        className="shrink-0 opacity-0 group-hover:opacity-70 hover:!opacity-100 text-text-tertiary transition-opacity cursor-pointer bg-transparent border-none p-0.5"
+        aria-label="Dismiss"
+      >
+        <X size={12} />
+      </button>
+    </div>
+  )
 }
 
 export default function NotificationCenter({ open, onOpenChange }: NotificationCenterProps) {
@@ -17,12 +45,6 @@ export default function NotificationCenter({ open, onOpenChange }: NotificationC
   const today = new Date().setHours(0, 0, 0, 0)
   const todayItems = [...notifications].filter((n) => n.timestamp >= today).reverse()
   const olderItems = [...notifications].filter((n) => n.timestamp < today).reverse()
-
-  const severityDot: Record<string, string> = {
-    error: 'bg-error',
-    warning: 'bg-warning',
-    info: 'bg-accent',
-  }
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -42,20 +64,7 @@ export default function NotificationCenter({ open, onOpenChange }: NotificationC
                 <div className="mb-2">
                   <div className="text-[10px] font-semibold text-text-tertiary uppercase tracking-wide px-2 py-1.5">Today</div>
                   {todayItems.map((n) => (
-                    <div key={n.id} className="flex items-start gap-2 px-2 py-2 rounded-lg hover:bg-bg-tertiary transition-colors group">
-                      <span className={`mt-1.5 w-1.5 h-1.5 rounded-full shrink-0 ${severityDot[n.severity] ?? 'bg-accent'}`} />
-                      <div className="flex-1 min-w-0">
-                        <div className="text-xs font-medium text-text truncate">{n.title}</div>
-                        <div className="text-[11px] text-text-secondary truncate">{n.message}</div>
-                      </div>
-                      <button
-                        onClick={() => dismissNotification(n.id)}
-                        className="shrink-0 opacity-0 group-hover:opacity-70 hover:!opacity-100 text-text-tertiary transition-opacity cursor-pointer bg-transparent border-none p-0.5"
-                        aria-label="Dismiss"
-                      >
-                        <X size={12} />
-                      </button>
-                    </div>
+                    <NotificationItem key={n.id} n={n} onDismiss={dismissNotification} />
                   ))}
                 </div>
               )}
@@ -65,20 +74,7 @@ export default function NotificationCenter({ open, onOpenChange }: NotificationC
                   <div>
                     <div className="text-[10px] font-semibold text-text-tertiary uppercase tracking-wide px-2 py-1.5">Earlier</div>
                     {olderItems.map((n) => (
-                      <div key={n.id} className="flex items-start gap-2 px-2 py-2 rounded-lg hover:bg-bg-tertiary transition-colors group">
-                        <span className={`mt-1.5 w-1.5 h-1.5 rounded-full shrink-0 ${severityDot[n.severity] ?? 'bg-accent'}`} />
-                        <div className="flex-1 min-w-0">
-                          <div className="text-xs font-medium text-text truncate">{n.title}</div>
-                          <div className="text-[11px] text-text-secondary truncate">{n.message}</div>
-                        </div>
-                        <button
-                          onClick={() => dismissNotification(n.id)}
-                          className="shrink-0 opacity-0 group-hover:opacity-70 hover:!opacity-100 text-text-tertiary transition-opacity cursor-pointer bg-transparent border-none p-0.5"
-                          aria-label="Dismiss"
-                        >
-                          <X size={12} />
-                        </button>
-                      </div>
+                      <NotificationItem key={n.id} n={n} onDismiss={dismissNotification} />
                     ))}
                   </div>
                 </>

@@ -15,7 +15,7 @@ export default function CodeEditor() {
   return (
     <div className="flex flex-col h-full">
       {/* Tab bar */}
-      <div className="flex items-center bg-white/[0.03] backdrop-blur border-b border-white/5 overflow-x-auto shrink-0">
+      <div className="flex items-center bg-white/3 backdrop-blur border-b border-white/5 overflow-x-auto shrink-0">
         {tabs.map((tab) => (
           <button
             key={tab.path}
