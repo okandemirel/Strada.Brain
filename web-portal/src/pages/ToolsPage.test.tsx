@@ -34,8 +34,9 @@ describe('ToolsPage', () => {
   it('renders loading state', () => {
     mockUseTools.mockReturnValue({ data: undefined, error: null, isLoading: true })
     mockUseMetrics.mockReturnValue({ data: undefined, error: null, isLoading: true })
-    renderPage()
-    expect(screen.getByText('Loading tools...')).toBeInTheDocument()
+    const { container } = renderPage()
+    // Loading state renders Skeleton components (no text)
+    expect(container.querySelector('.animate-pulse')).toBeInTheDocument()
   })
 
   it('renders data with tool cards', () => {
@@ -60,7 +61,8 @@ describe('ToolsPage', () => {
     mockUseTools.mockReturnValue({ data: undefined, error: new Error('Tools API down'), isLoading: false })
     mockUseMetrics.mockReturnValue({ data: undefined, error: new Error('Metrics API down'), isLoading: false })
     renderPage()
-    expect(screen.getByText('Error: Tools API down')).toBeInTheDocument()
+    expect(screen.getByText('Failed to Load Tools')).toBeInTheDocument()
+    expect(screen.getByText('Tools API down')).toBeInTheDocument()
   })
 
   it('shows empty state when no tools available', () => {

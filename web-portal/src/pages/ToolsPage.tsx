@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useTools, useMetrics } from '../hooks/use-api'
+import { Skeleton } from '../components/ui/skeleton'
 
 interface ToolInfo {
   name: string
@@ -24,8 +25,24 @@ export default function ToolsPage() {
     : null
   const loading = toolsQuery.isLoading && metricsQuery.isLoading
 
-  if (error) return <div className="flex flex-1 items-center justify-center h-[200px] text-error text-[15px]">Error: {error}</div>
-  if (loading) return <div className="flex flex-1 items-center justify-center h-[200px] text-text-secondary text-[15px]">Loading tools...</div>
+  if (error) return (
+    <div className="h-full overflow-y-auto p-7 w-full">
+      <div className="flex flex-col items-center justify-center h-[200px] gap-3 text-text-secondary">
+        <div className="text-4xl">⚠</div>
+        <h3 className="text-text text-lg font-semibold">Failed to Load Tools</h3>
+        <p className="text-sm max-w-[400px] text-center">{error}</p>
+      </div>
+    </div>
+  )
+  if (loading) return (
+    <div className="h-full overflow-y-auto p-7 w-full">
+      <Skeleton className="h-7 w-48 mb-6" />
+      <Skeleton className="h-4 w-64 mb-4" />
+      <div className="space-y-3">
+        {Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-12 rounded-xl" />)}
+      </div>
+    </div>
+  )
 
   let tools: ToolInfo[] = toolsQuery.data?.tools ?? []
   const callCounts: Record<string, number> = (metricsQuery.data?.toolCallCounts as Record<string, number>) ?? {}
@@ -77,7 +94,7 @@ export default function ToolsPage() {
             className={`px-3.5 py-1.5 border rounded-lg font-[inherit] text-[13px] font-medium cursor-pointer transition-all duration-150 ${
               typeFilter === type
                 ? 'bg-accent-glow text-accent border-accent font-semibold'
-                : 'border-border bg-bg-tertiary text-text-secondary hover:bg-bg-elevated hover:text-text hover:border-border-hover'
+                : 'border-white/5 bg-white/5 text-text-secondary hover:bg-white/10 hover:text-text hover:border-border-hover'
             }`}
             onClick={() => setTypeFilter(type)}
           >
@@ -90,7 +107,7 @@ export default function ToolsPage() {
           const calls = callCounts[tool.name] ?? 0
           const errors = errorCounts[tool.name] ?? 0
           return (
-            <div key={tool.name} className="bg-bg-secondary border border-border rounded-[14px] p-4 transition-all duration-200 hover:border-border-hover hover:-translate-y-px hover:shadow-[var(--shadow-sm)]">
+            <div key={tool.name} className="bg-white/3 backdrop-blur border border-white/5 rounded-2xl p-4 transition-all duration-200 hover:border-border-hover hover:-translate-y-px hover:shadow-[var(--shadow-sm)]">
               <div className="text-sm font-semibold text-text font-mono mb-1.5">{tool.name}</div>
               {tool.description && (
                 <div className="text-xs text-text-secondary leading-snug line-clamp-2">{tool.description}</div>
@@ -98,7 +115,7 @@ export default function ToolsPage() {
               <div className="flex gap-2 mt-2.5 flex-wrap">
                 {tool.type && (
                   <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-md uppercase tracking-[0.03em] ${
-                    tool.type === 'builtin' ? 'bg-accent-glow text-accent' : tool.type === 'chain' ? 'bg-success/10 text-success' : 'bg-bg-tertiary text-text-tertiary'
+                    tool.type === 'builtin' ? 'bg-accent-glow text-accent' : tool.type === 'chain' ? 'bg-success/10 text-success' : 'bg-white/5 text-text-tertiary'
                   }`}>
                     {tool.type}
                   </span>
@@ -109,13 +126,13 @@ export default function ToolsPage() {
                   </span>
                 )}
                 {tool.requiresBridge && (
-                  <span className="text-[10px] font-semibold px-2 py-0.5 rounded-md uppercase tracking-[0.03em] bg-bg-tertiary text-text-tertiary">bridge</span>
+                  <span className="text-[10px] font-semibold px-2 py-0.5 rounded-md uppercase tracking-[0.03em] bg-white/5 text-text-tertiary">bridge</span>
                 )}
                 {tool.readOnly === true && (
-                  <span className="text-[10px] font-semibold px-2 py-0.5 rounded-md uppercase tracking-[0.03em] bg-bg-tertiary text-text-tertiary">read-only</span>
+                  <span className="text-[10px] font-semibold px-2 py-0.5 rounded-md uppercase tracking-[0.03em] bg-white/5 text-text-tertiary">read-only</span>
                 )}
                 {calls > 0 && (
-                  <span className="text-[10px] font-semibold px-2 py-0.5 rounded-md uppercase tracking-[0.03em] bg-bg-tertiary text-text-tertiary">{calls} calls</span>
+                  <span className="text-[10px] font-semibold px-2 py-0.5 rounded-md uppercase tracking-[0.03em] bg-white/5 text-text-tertiary">{calls} calls</span>
                 )}
                 {errors > 0 && (
                   <span className="text-[10px] font-semibold px-2 py-0.5 rounded-md uppercase tracking-[0.03em] bg-error/10 text-error">

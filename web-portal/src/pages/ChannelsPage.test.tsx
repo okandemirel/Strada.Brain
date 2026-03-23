@@ -33,8 +33,9 @@ describe('ChannelsPage', () => {
   it('renders loading state', () => {
     mockUseChannels.mockReturnValue({ data: undefined, error: null, isLoading: true })
     mockUseHealth.mockReturnValue({ data: undefined, error: null, isLoading: true })
-    renderPage()
-    expect(screen.getByText('Loading channels...')).toBeInTheDocument()
+    const { container } = renderPage()
+    // Loading state renders Skeleton components (no text)
+    expect(container.querySelector('.animate-pulse')).toBeInTheDocument()
   })
 
   it('renders data with channels', () => {
@@ -61,7 +62,8 @@ describe('ChannelsPage', () => {
     mockUseChannels.mockReturnValue({ data: undefined, error: new Error('Channel error'), isLoading: false })
     mockUseHealth.mockReturnValue({ data: undefined, error: new Error('Health error'), isLoading: false })
     renderPage()
-    expect(screen.getByText('Error: Channel error')).toBeInTheDocument()
+    expect(screen.getByText('Failed to Load Channels')).toBeInTheDocument()
+    expect(screen.getByText('Channel error')).toBeInTheDocument()
   })
 
   it('renders server health section when health data available', () => {

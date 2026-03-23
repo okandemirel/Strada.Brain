@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { usePersonality } from '../hooks/use-api'
+import { Skeleton } from '../components/ui/skeleton'
 
 const SYSTEM_PROFILES = new Set(['default', 'casual', 'formal', 'minimal'])
 const PROFILE_NAME_RE = /^[a-zA-Z0-9_-]+$/
@@ -67,7 +68,15 @@ export default function PersonalityPage() {
     createMutation.mutate({ name: trimmedName, content: newContent })
   }
 
-  if (isLoading) return <div className="flex flex-1 items-center justify-center h-[200px] text-text-secondary text-[15px]">Loading personality...</div>
+  if (isLoading) return (
+    <div className="h-full overflow-y-auto p-7 w-full">
+      <Skeleton className="h-7 w-48 mb-6" />
+      <Skeleton className="h-4 w-64 mb-4" />
+      <div className="space-y-3">
+        {Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-12 rounded-xl" />)}
+      </div>
+    </div>
+  )
 
   return (
     <div className="h-full overflow-y-auto p-7 w-full animate-[admin-fade-in_0.3s_ease]">
@@ -89,7 +98,7 @@ export default function PersonalityPage() {
         <>
           <div className="mb-7">
             <div className="text-xs font-semibold uppercase tracking-[0.04em] text-text-tertiary mb-3.5 flex items-center gap-2">Active Profile</div>
-            <div className="flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl mb-4 text-sm">
+            <div className="flex justify-between items-center px-4 py-2.5 bg-white/3 backdrop-blur border border-white/5 rounded-xl mb-4 text-sm">
               <span className="text-text-secondary">Current Profile</span>
               <span className="text-text font-semibold">{data?.activeProfile ?? 'default'}</span>
             </div>
@@ -103,7 +112,7 @@ export default function PersonalityPage() {
                   const isActive = name === data.activeProfile
                   const isSystem = SYSTEM_PROFILES.has(name)
                   return (
-                    <div key={name} className={`bg-bg-secondary border rounded-xl p-3.5 cursor-default transition-all duration-150 hover:border-border-hover ${isActive ? 'border-accent bg-accent-glow' : 'border-border'}`}>
+                    <div key={name} className={`bg-white/3 backdrop-blur border rounded-xl p-3.5 cursor-default transition-all duration-150 hover:border-border-hover ${isActive ? 'border-accent shadow-[0_0_0_2px_var(--color-accent-glow),0_0_12px_var(--color-accent-glow)]' : 'border-white/5'}`}>
                       <div className="text-sm font-semibold text-text mb-1 flex items-center gap-2">
                         {name}
                         {isActive && <span className="text-[10px] text-accent font-semibold uppercase">Active</span>}
@@ -139,16 +148,16 @@ export default function PersonalityPage() {
           {data?.channelOverrides && Object.keys(data.channelOverrides).length > 0 && (
             <div className="mb-7">
               <div className="text-xs font-semibold uppercase tracking-[0.04em] text-text-tertiary mb-3.5 flex items-center gap-2">Channel Overrides</div>
-              <table className="w-full bg-bg-secondary border border-border rounded-[14px] overflow-hidden" style={{ borderSpacing: 0, borderCollapse: 'separate' }}>
+              <table className="w-full bg-white/3 backdrop-blur border border-white/5 rounded-2xl overflow-hidden" style={{ borderSpacing: 0, borderCollapse: 'separate' }}>
                 <thead>
                   <tr>
-                    <th className="px-4 py-2.5 text-left bg-bg-tertiary font-semibold text-text-secondary text-[11px] uppercase tracking-[0.04em] border-b border-border">Channel</th>
-                    <th className="px-4 py-2.5 text-left bg-bg-tertiary font-semibold text-text-secondary text-[11px] uppercase tracking-[0.04em] border-b border-border">Profile</th>
+                    <th className="px-4 py-2.5 text-left bg-white/5 font-semibold text-text-secondary text-[11px] uppercase tracking-[0.04em] border-b border-white/5">Channel</th>
+                    <th className="px-4 py-2.5 text-left bg-white/5 font-semibold text-text-secondary text-[11px] uppercase tracking-[0.04em] border-b border-white/5">Profile</th>
                   </tr>
                 </thead>
                 <tbody>
                   {Object.entries(data.channelOverrides).map(([ch, profile]) => (
-                    <tr key={ch} className="hover:bg-bg-tertiary">
+                    <tr key={ch} className="hover:bg-white/5">
                       <td className="px-4 py-2.5 text-[13px] border-b border-border font-semibold">{ch}</td>
                       <td className="px-4 py-2.5 text-[13px] border-b border-border">{profile}</td>
                     </tr>
@@ -167,7 +176,7 @@ export default function PersonalityPage() {
                 </button>
               </div>
               {showRaw && (
-                <div className="bg-bg-secondary border border-border rounded-[14px] p-5 text-sm text-text leading-relaxed whitespace-pre-wrap break-words max-h-[500px] overflow-y-auto">{data.content}</div>
+                <div className="bg-white/3 backdrop-blur border border-white/5 rounded-2xl p-5 text-sm text-text leading-relaxed whitespace-pre-wrap break-words max-h-[500px] overflow-y-auto">{data.content}</div>
               )}
             </div>
           )}

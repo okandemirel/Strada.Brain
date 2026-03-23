@@ -1,4 +1,5 @@
 import { useMemoryStats, useConsolidation, useMaintenance } from '../hooks/use-api'
+import { Skeleton } from '../components/ui/skeleton'
 
 interface TierInfo {
   name: string
@@ -21,8 +22,24 @@ export default function MemoryPage() {
   const consolidation = consolidationQuery.data ?? null
   const maintenance = maintenanceQuery.data ?? null
 
-  if (loading) return <div className="flex flex-1 items-center justify-center h-[200px] text-text-secondary text-[15px]">Loading memory data...</div>
-  if (error && !memoryStats && !consolidation) return <div className="flex flex-1 items-center justify-center h-[200px] text-error text-[15px]">Error: {error}</div>
+  if (loading) return (
+    <div className="h-full overflow-y-auto p-7 w-full">
+      <Skeleton className="h-7 w-48 mb-6" />
+      <Skeleton className="h-4 w-64 mb-4" />
+      <div className="space-y-3">
+        {Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-12 rounded-xl" />)}
+      </div>
+    </div>
+  )
+  if (error && !memoryStats && !consolidation) return (
+    <div className="h-full overflow-y-auto p-7 w-full">
+      <div className="flex flex-col items-center justify-center h-[200px] gap-3 text-text-secondary">
+        <div className="text-4xl">⚠</div>
+        <h3 className="text-text text-lg font-semibold">Failed to Load Memory</h3>
+        <p className="text-sm max-w-[400px] text-center">{error}</p>
+      </div>
+    </div>
+  )
 
   const tiers: TierInfo[] = []
   if (consolidation?.perTier) {
@@ -45,12 +62,12 @@ export default function MemoryPage() {
       <div className="mb-7">
         <div className="text-xs font-semibold uppercase tracking-[0.04em] text-text-tertiary mb-3.5 flex items-center gap-2">Overview</div>
         <div className="flex gap-2.5 flex-wrap mb-5">
-          <div className="flex-1 min-w-[150px] flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl text-sm">
+          <div className="flex-1 min-w-[150px] flex justify-between items-center px-4 py-2.5 bg-white/3 backdrop-blur border border-white/5 rounded-xl text-sm">
             <span className="text-text-secondary">Total Entries</span>
             <span className="text-text font-semibold">{totalEntries.toLocaleString()}</span>
           </div>
           {memoryStats && (
-            <div className="flex-1 min-w-[150px] flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl text-sm">
+            <div className="flex-1 min-w-[150px] flex justify-between items-center px-4 py-2.5 bg-white/3 backdrop-blur border border-white/5 rounded-xl text-sm">
               <span className="text-text-secondary">Analysis Cache</span>
               <span className="text-text font-semibold flex items-center gap-1.5">
                 <span className={`inline-block w-2 h-2 rounded-full shrink-0 ${memoryStats.hasAnalysisCache ? 'bg-success shadow-[0_0_6px_var(--color-success)]' : 'bg-text-tertiary'}`} />
@@ -59,7 +76,7 @@ export default function MemoryPage() {
             </div>
           )}
           {consolidation?.enabled !== undefined && (
-            <div className="flex-1 min-w-[150px] flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl text-sm">
+            <div className="flex-1 min-w-[150px] flex justify-between items-center px-4 py-2.5 bg-white/3 backdrop-blur border border-white/5 rounded-xl text-sm">
               <span className="text-text-secondary">Consolidation</span>
               <span className="text-text font-semibold flex items-center gap-1.5">
                 <span className={`inline-block w-2 h-2 rounded-full shrink-0 ${consolidation.enabled ? 'bg-success shadow-[0_0_6px_var(--color-success)]' : 'bg-text-tertiary'}`} />
@@ -68,7 +85,7 @@ export default function MemoryPage() {
             </div>
           )}
           {memoryStats?.health && (
-            <div className="flex-1 min-w-[150px] flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl text-sm">
+            <div className="flex-1 min-w-[150px] flex justify-between items-center px-4 py-2.5 bg-white/3 backdrop-blur border border-white/5 rounded-xl text-sm">
               <span className="text-text-secondary">Memory Health</span>
               <span className="text-text font-semibold flex items-center gap-1.5">
                 <span className={`inline-block w-2 h-2 rounded-full shrink-0 ${memoryStats.health.healthy ? 'bg-success shadow-[0_0_6px_var(--color-success)]' : 'bg-warning shadow-[0_0_6px_var(--color-warning)]'}`} />
@@ -83,7 +100,7 @@ export default function MemoryPage() {
         <div className="mb-7">
           <div className="text-xs font-semibold uppercase tracking-[0.04em] text-text-tertiary mb-3.5 flex items-center gap-2">Tier Distribution</div>
           {tiers.map(tier => (
-            <div key={tier.name} className="flex items-center gap-3.5 px-4 py-3.5 bg-bg-secondary border border-border rounded-[14px] mb-2.5">
+            <div key={tier.name} className="flex items-center gap-3.5 px-4 py-3.5 bg-white/3 backdrop-blur border border-white/5 rounded-2xl mb-2.5">
               <span className="text-sm font-semibold text-text min-w-[100px]">{tier.name}</span>
               <div className="flex-1">
                 <div className="h-2 bg-bg-tertiary rounded overflow-hidden">
@@ -108,12 +125,12 @@ export default function MemoryPage() {
           <div className="text-xs font-semibold uppercase tracking-[0.04em] text-text-tertiary mb-3.5 flex items-center gap-2">Index Health</div>
           <div className="flex gap-2.5 flex-wrap">
             {memoryStats.health.storageUsagePercent !== undefined && (
-              <div className="flex-1 min-w-[150px] flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl text-sm">
+              <div className="flex-1 min-w-[150px] flex justify-between items-center px-4 py-2.5 bg-white/3 backdrop-blur border border-white/5 rounded-xl text-sm">
                 <span className="text-text-secondary">Storage Usage</span>
                 <span className="text-text font-semibold">{memoryStats.health.storageUsagePercent}%</span>
               </div>
             )}
-            <div className="flex-1 min-w-[150px] flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl text-sm">
+            <div className="flex-1 min-w-[150px] flex justify-between items-center px-4 py-2.5 bg-white/3 backdrop-blur border border-white/5 rounded-xl text-sm">
               <span className="text-text-secondary">Issues</span>
               <span className="text-text font-semibold">{memoryStats.health.issues?.length ?? 0}</span>
             </div>
@@ -131,19 +148,19 @@ export default function MemoryPage() {
           <div className="text-xs font-semibold uppercase tracking-[0.04em] text-text-tertiary mb-3.5 flex items-center gap-2">Consolidation</div>
           <div className="flex gap-2.5 flex-wrap">
             {consolidation.totalRuns !== undefined && (
-              <div className="flex-1 min-w-[150px] flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl text-sm">
+              <div className="flex-1 min-w-[150px] flex justify-between items-center px-4 py-2.5 bg-white/3 backdrop-blur border border-white/5 rounded-xl text-sm">
                 <span className="text-text-secondary">Total Runs</span>
                 <span className="text-text font-semibold">{consolidation.totalRuns}</span>
               </div>
             )}
             {consolidation.lifetimeSavings !== undefined && (
-              <div className="flex-1 min-w-[150px] flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl text-sm">
+              <div className="flex-1 min-w-[150px] flex justify-between items-center px-4 py-2.5 bg-white/3 backdrop-blur border border-white/5 rounded-xl text-sm">
                 <span className="text-text-secondary">Entries Saved</span>
                 <span className="text-text font-semibold">{consolidation.lifetimeSavings}</span>
               </div>
             )}
             {consolidation.totalCostUsd !== undefined && (
-              <div className="flex-1 min-w-[150px] flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl text-sm">
+              <div className="flex-1 min-w-[150px] flex justify-between items-center px-4 py-2.5 bg-white/3 backdrop-blur border border-white/5 rounded-xl text-sm">
                 <span className="text-text-secondary">Total Cost</span>
                 <span className="text-text font-semibold">${consolidation.totalCostUsd.toFixed(3)}</span>
               </div>
@@ -156,25 +173,25 @@ export default function MemoryPage() {
         <div className="mb-7">
           <div className="text-xs font-semibold uppercase tracking-[0.04em] text-text-tertiary mb-3.5 flex items-center gap-2">Memory Decay</div>
           <div className="flex gap-2.5 flex-wrap">
-            <div className="flex-1 min-w-[150px] flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl text-sm">
+            <div className="flex-1 min-w-[150px] flex justify-between items-center px-4 py-2.5 bg-white/3 backdrop-blur border border-white/5 rounded-xl text-sm">
               <span className="text-text-secondary">Decay</span>
               <span className="text-text font-semibold flex items-center gap-1.5">
                 <span className="inline-block w-2 h-2 rounded-full shrink-0 bg-success shadow-[0_0_6px_var(--color-success)]" /> Active
               </span>
             </div>
             {maintenance.decay.totalExempt !== undefined && (
-              <div className="flex-1 min-w-[150px] flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl text-sm">
+              <div className="flex-1 min-w-[150px] flex justify-between items-center px-4 py-2.5 bg-white/3 backdrop-blur border border-white/5 rounded-xl text-sm">
                 <span className="text-text-secondary">Exempt Domains</span>
                 <span className="text-text font-semibold">{maintenance.decay.totalExempt}</span>
               </div>
             )}
             {maintenance.pruning && (
               <>
-                <div className="flex-1 min-w-[150px] flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl text-sm">
+                <div className="flex-1 min-w-[150px] flex justify-between items-center px-4 py-2.5 bg-white/3 backdrop-blur border border-white/5 rounded-xl text-sm">
                   <span className="text-text-secondary">Retention</span>
                   <span className="text-text font-semibold">{maintenance.pruning.retentionDays} days</span>
                 </div>
-                <div className="flex-1 min-w-[150px] flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl text-sm">
+                <div className="flex-1 min-w-[150px] flex justify-between items-center px-4 py-2.5 bg-white/3 backdrop-blur border border-white/5 rounded-xl text-sm">
                   <span className="text-text-secondary">Last Pruned</span>
                   <span className="text-text font-semibold">{maintenance.pruning.lastPrunedCount} entries</span>
                 </div>

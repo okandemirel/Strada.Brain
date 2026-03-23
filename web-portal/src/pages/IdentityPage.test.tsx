@@ -33,8 +33,9 @@ describe('IdentityPage', () => {
   it('renders loading state', () => {
     mockUseDaemon.mockReturnValue({ data: undefined, error: null, isLoading: true })
     mockUseMetrics.mockReturnValue({ data: undefined, error: null, isLoading: true })
-    renderPage()
-    expect(screen.getByText('Loading identity...')).toBeInTheDocument()
+    const { container } = renderPage()
+    // Loading state renders Skeleton components (no text)
+    expect(container.querySelector('.animate-pulse')).toBeInTheDocument()
   })
 
   it('renders data with identity information', () => {
@@ -69,7 +70,8 @@ describe('IdentityPage', () => {
     mockUseDaemon.mockReturnValue({ data: undefined, error: new Error('Daemon unreachable'), isLoading: false })
     mockUseMetrics.mockReturnValue({ data: undefined, error: new Error('Metrics unreachable'), isLoading: false })
     renderPage()
-    expect(screen.getByText('Error: Daemon unreachable')).toBeInTheDocument()
+    expect(screen.getByText('Failed to Load Identity')).toBeInTheDocument()
+    expect(screen.getByText('Daemon unreachable')).toBeInTheDocument()
   })
 
   it('renders daemon budget info', () => {

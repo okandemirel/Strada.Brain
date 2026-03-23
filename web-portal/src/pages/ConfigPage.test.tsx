@@ -30,8 +30,9 @@ describe('ConfigPage', () => {
 
   it('renders loading state', () => {
     mockUseConfig.mockReturnValue({ data: undefined, error: null, isLoading: true })
-    renderPage()
-    expect(screen.getByText('Loading configuration...')).toBeInTheDocument()
+    const { container } = renderPage()
+    // Loading state renders Skeleton components (no text)
+    expect(container.querySelector('.animate-pulse')).toBeInTheDocument()
   })
 
   it('renders data with config table', () => {
@@ -58,7 +59,8 @@ describe('ConfigPage', () => {
   it('renders error state', () => {
     mockUseConfig.mockReturnValue({ data: undefined, error: new Error('Network failure'), isLoading: false })
     renderPage()
-    expect(screen.getByText('Error: Network failure')).toBeInTheDocument()
+    expect(screen.getByText('Failed to Load Configuration')).toBeInTheDocument()
+    expect(screen.getByText('Network failure')).toBeInTheDocument()
   })
 
   it('renders summary badges when summary present', () => {

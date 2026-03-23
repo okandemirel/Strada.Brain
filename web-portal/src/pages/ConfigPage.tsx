@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useConfig } from '../hooks/use-api'
+import { Skeleton } from '../components/ui/skeleton'
 
 interface ConfigEntry {
   key: string
@@ -13,8 +14,24 @@ export default function ConfigPage() {
   const { data, error, isLoading } = useConfig()
   const [filter, setFilter] = useState('')
 
-  if (error) return <div className="flex flex-1 items-center justify-center h-[200px] text-error text-[15px]">Error: {error.message}</div>
-  if (isLoading || !data) return <div className="flex flex-1 items-center justify-center h-[200px] text-text-secondary text-[15px]">Loading configuration...</div>
+  if (error) return (
+    <div className="h-full overflow-y-auto p-7 w-full">
+      <div className="flex flex-col items-center justify-center h-[200px] gap-3 text-text-secondary">
+        <div className="text-4xl">⚠</div>
+        <h3 className="text-text text-lg font-semibold">Failed to Load Configuration</h3>
+        <p className="text-sm max-w-[400px] text-center">{error.message}</p>
+      </div>
+    </div>
+  )
+  if (isLoading || !data) return (
+    <div className="h-full overflow-y-auto p-7 w-full">
+      <Skeleton className="h-7 w-48 mb-6" />
+      <Skeleton className="h-4 w-64 mb-4" />
+      <div className="space-y-3">
+        {Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-12 rounded-xl" />)}
+      </div>
+    </div>
+  )
 
   const normalizedFilter = filter.toLowerCase()
   const fallbackEntries: ConfigEntry[] = Object.entries(data.config).map(([key, value]) => ({
@@ -43,15 +60,15 @@ export default function ConfigPage() {
       <h2 className="text-[22px] font-bold tracking-tight mb-6 text-text">Configuration</h2>
       {data.summary && (
         <div className="flex gap-2.5 flex-wrap mb-4">
-          <div className="flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl text-sm">
+          <div className="flex justify-between items-center px-4 py-2.5 bg-white/3 backdrop-blur border border-white/5 rounded-xl text-sm">
             <span className="text-text-secondary">Core</span>
             <span className="text-text font-semibold ml-4">{data.summary.core}</span>
           </div>
-          <div className="flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl text-sm">
+          <div className="flex justify-between items-center px-4 py-2.5 bg-white/3 backdrop-blur border border-white/5 rounded-xl text-sm">
             <span className="text-text-secondary">Advanced</span>
             <span className="text-text font-semibold ml-4">{data.summary.advanced}</span>
           </div>
-          <div className="flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl text-sm">
+          <div className="flex justify-between items-center px-4 py-2.5 bg-white/3 backdrop-blur border border-white/5 rounded-xl text-sm">
             <span className="text-text-secondary">Experimental</span>
             <span className="text-text font-semibold ml-4">{data.summary.experimental}</span>
           </div>
@@ -66,7 +83,7 @@ export default function ConfigPage() {
       />
       {groupedEntries.length === 0 ? (
         <div className="mb-6">
-          <table className="w-full border-collapse bg-bg-secondary border border-border rounded-[14px] overflow-hidden" style={{ borderSpacing: 0 }}>
+          <table className="w-full border-collapse bg-white/3 backdrop-blur border border-white/5 rounded-2xl overflow-hidden" style={{ borderSpacing: 0 }}>
             <tbody>
               <tr>
                 <td className="px-4 py-2.5 text-left text-[13px] border-b border-border font-mono text-xs text-accent whitespace-nowrap w-[40%]">No matching settings</td>
@@ -79,10 +96,10 @@ export default function ConfigPage() {
         groupedEntries.map(([category, items]) => (
           <div key={category} className="mb-6">
             <h3 className="text-xs font-semibold uppercase tracking-[0.04em] text-text-tertiary mb-2.5">{category}</h3>
-            <table className="w-full bg-bg-secondary border border-border rounded-[14px] overflow-hidden" style={{ borderSpacing: 0, borderCollapse: 'separate' }}>
+            <table className="w-full bg-white/3 backdrop-blur border border-white/5 rounded-2xl overflow-hidden" style={{ borderSpacing: 0, borderCollapse: 'separate' }}>
               <tbody>
                 {items.map((entry) => (
-                  <tr key={entry.key} className="hover:bg-bg-tertiary">
+                  <tr key={entry.key} className="hover:bg-white/5">
                     <td className="px-4 py-2.5 text-left text-[13px] border-b border-border font-mono text-xs text-accent whitespace-nowrap w-[40%]">
                       <div>{entry.key}</div>
                       <div className="text-xs opacity-75 mt-1 font-sans text-text-tertiary">{entry.description}</div>

@@ -30,8 +30,9 @@ describe('LogsPage', () => {
 
   it('renders loading state', () => {
     mockUseLogs.mockReturnValue({ data: undefined, error: null, isLoading: true, isError: false })
-    renderPage()
-    expect(screen.getByText('Loading logs...')).toBeInTheDocument()
+    const { container } = renderPage()
+    // Loading state renders Skeleton components (no text)
+    expect(container.querySelector('.animate-pulse')).toBeInTheDocument()
   })
 
   it('renders data with log entries', () => {

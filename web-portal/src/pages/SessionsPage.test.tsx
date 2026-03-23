@@ -37,8 +37,9 @@ describe('SessionsPage', () => {
     mockUseSessions.mockReturnValue({ data: undefined, error: null, isLoading: true })
     mockUseMetrics.mockReturnValue({ data: undefined, error: null, isLoading: true })
     mockUseAgents.mockReturnValue({ data: undefined, error: null, isLoading: true })
-    renderPage()
-    expect(screen.getByText('Loading sessions...')).toBeInTheDocument()
+    const { container } = renderPage()
+    // Loading state renders Skeleton components (no text)
+    expect(container.querySelector('.animate-pulse')).toBeInTheDocument()
   })
 
   it('renders data with sessions list', () => {
@@ -66,7 +67,8 @@ describe('SessionsPage', () => {
     mockUseMetrics.mockReturnValue({ data: undefined, error: new Error('Metrics failed'), isLoading: false })
     mockUseAgents.mockReturnValue({ data: undefined, error: new Error('Agents failed'), isLoading: false })
     renderPage()
-    expect(screen.getByText('Error: Session fetch failed')).toBeInTheDocument()
+    expect(screen.getByText('Failed to Load Sessions')).toBeInTheDocument()
+    expect(screen.getByText('Session fetch failed')).toBeInTheDocument()
   })
 
   it('renders metrics overview when available', () => {

@@ -422,15 +422,15 @@ export default function SettingsPage() {
           <div className="flex items-center justify-center text-text-secondary text-[15px]">Loading...</div>
         ) : bootReport ? (
           <>
-            <div className="flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl mb-2 text-sm">
+            <div className="flex justify-between items-center px-4 py-2.5 bg-white/3 backdrop-blur border border-white/5 rounded-xl mb-2 text-sm">
               <span className="text-text-secondary">Protected Channels</span>
               <span className="text-text font-semibold">{bootReport.goldenPath.channels.join(', ')}</span>
             </div>
-            <div className="flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl mb-2 text-sm">
+            <div className="flex justify-between items-center px-4 py-2.5 bg-white/3 backdrop-blur border border-white/5 rounded-xl mb-2 text-sm">
               <span className="text-text-secondary">Recommended Preset</span>
               <span className="text-text font-semibold">{bootReport.goldenPath.recommendedPreset}</span>
             </div>
-            <table className="w-full bg-bg-secondary border border-border rounded-[14px] overflow-hidden [border-spacing:0] [border-collapse:separate]">
+            <table className="w-full bg-white/3 backdrop-blur border border-white/5 rounded-2xl overflow-hidden [border-spacing:0] [border-collapse:separate]">
               <thead>
                 <tr>
                   <th>Stage</th>
@@ -448,7 +448,7 @@ export default function SettingsPage() {
                 ))}
               </tbody>
             </table>
-            <table className="w-full bg-bg-secondary border border-border rounded-[14px] overflow-hidden [border-spacing:0] [border-collapse:separate]">
+            <table className="w-full bg-white/3 backdrop-blur border border-white/5 rounded-2xl overflow-hidden [border-spacing:0] [border-collapse:separate]">
               <thead>
                 <tr>
                   <th>Capability</th>
@@ -485,7 +485,7 @@ export default function SettingsPage() {
           <div className="flex items-center justify-center text-text-secondary text-[15px]">Loading...</div>
         ) : (
           <>
-            <div className="flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl mb-2 text-sm">
+            <div className="flex justify-between items-center px-4 py-2.5 bg-white/3 backdrop-blur border border-white/5 rounded-xl mb-2 text-sm">
               <span className="text-text-secondary">Autonomous Mode</span>
               <button
                 className={`settings-toggle ${autoStatus?.enabled ? 'on' : 'off'}`}
@@ -497,7 +497,7 @@ export default function SettingsPage() {
               </button>
             </div>
 
-            <div className="flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl mb-2 text-sm">
+            <div className="flex justify-between items-center px-4 py-2.5 bg-white/3 backdrop-blur border border-white/5 rounded-xl mb-2 text-sm">
               <span className="text-text-secondary">Status</span>
               <span className="text-text font-semibold">
                 <span className={`inline-block w-2 h-2 rounded-full shrink-0 ${autoStatus?.enabled ? 'bg-success shadow-[0_0_6px_var(--color-success)]' : 'bg-text-tertiary'}`} />{' '}
@@ -506,13 +506,13 @@ export default function SettingsPage() {
             </div>
 
             {autoStatus?.enabled && autoStatus.remainingMs != null && (
-              <div className="flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl mb-2 text-sm">
+              <div className="flex justify-between items-center px-4 py-2.5 bg-white/3 backdrop-blur border border-white/5 rounded-xl mb-2 text-sm">
                 <span className="text-text-secondary">Time Remaining</span>
                 <span className="text-text font-semibold">{formatRemaining(autoStatus.remainingMs)}</span>
               </div>
             )}
 
-            <div className="flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl mb-2 text-sm">
+            <div className="flex justify-between items-center px-4 py-2.5 bg-white/3 backdrop-blur border border-white/5 rounded-xl mb-2 text-sm">
               <span className="text-text-secondary">Duration (hours)</span>
               <input
                 className="w-20 px-2.5 py-1.5 border border-border rounded-lg bg-input-bg text-text font-mono text-[13px] text-center outline-none transition-all duration-150 focus:border-accent focus:shadow-[0_0_0_3px_var(--color-accent-glow)] disabled:opacity-50 disabled:cursor-not-allowed"
@@ -540,7 +540,7 @@ export default function SettingsPage() {
           <div className="flex items-center justify-center text-text-secondary text-[15px]">Loading...</div>
         ) : (
           <>
-            <div className="flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl mb-2 text-sm">
+            <div className="flex justify-between items-center px-4 py-2.5 bg-white/3 backdrop-blur border border-white/5 rounded-xl mb-2 text-sm">
               <span className="text-text-secondary">Daemon</span>
               <span className="text-text font-semibold flex items-center gap-3">
                 <span>
@@ -562,13 +562,13 @@ export default function SettingsPage() {
             {daemonStatus?.running ? (
               <>
                 {/* Budget */}
-                <div className="flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl mb-2 text-sm">
+                <div className="flex justify-between items-center px-4 py-2.5 bg-white/3 backdrop-blur border border-white/5 rounded-xl mb-2 text-sm">
                   <span className="text-text-secondary">Budget</span>
                   <span className="text-text font-semibold">
                     ${daemonStatus.budget.usedUsd.toFixed(2)} / ${daemonStatus.budget.limitUsd.toFixed(2)} used ({daemonBudgetPercent.toFixed(1)}%)
                   </span>
                 </div>
-                <div className="flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl mb-2 text-sm">
+                <div className="flex justify-between items-center px-4 py-2.5 bg-white/3 backdrop-blur border border-white/5 rounded-xl mb-2 text-sm">
                   <span className="text-text-secondary" />
                   <div style={{ flex: 1, maxWidth: 260 }}>
                     <div
@@ -598,7 +598,7 @@ export default function SettingsPage() {
                 </div>
 
                 {/* Triggers */}
-                <div className="flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl mb-2 text-sm">
+                <div className="flex justify-between items-center px-4 py-2.5 bg-white/3 backdrop-blur border border-white/5 rounded-xl mb-2 text-sm">
                   <span className="text-text-secondary">Triggers</span>
                   <span className="text-text font-semibold">
                     {daemonStatus.triggers.length} active trigger{daemonStatus.triggers.length !== 1 ? 's' : ''}
@@ -607,7 +607,7 @@ export default function SettingsPage() {
 
                 {/* Approval Queue */}
                 {daemonStatus.approvalQueue.length > 0 && (
-                  <div className="flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl mb-2 text-sm">
+                  <div className="flex justify-between items-center px-4 py-2.5 bg-white/3 backdrop-blur border border-white/5 rounded-xl mb-2 text-sm">
                     <span className="text-text-secondary">Approval Queue</span>
                     <span className="text-text font-semibold text-warning">
                       {daemonStatus.approvalQueue.length} pending approval{daemonStatus.approvalQueue.length !== 1 ? 's' : ''}
@@ -617,7 +617,7 @@ export default function SettingsPage() {
 
                 {/* Interval */}
                 {daemonStatus.intervalMs != null && (
-                  <div className="flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl mb-2 text-sm">
+                  <div className="flex justify-between items-center px-4 py-2.5 bg-white/3 backdrop-blur border border-white/5 rounded-xl mb-2 text-sm">
                     <span className="text-text-secondary">Heartbeat Interval</span>
                     <span className="text-text font-semibold">
                       {daemonStatus.intervalMs >= 60000
@@ -629,14 +629,14 @@ export default function SettingsPage() {
 
                 {daemonStatus.startupNotices && daemonStatus.startupNotices.length > 0 && (
                   <div className="mt-4 grid gap-2">
-                    <div className="flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl mb-2 text-sm">
+                    <div className="flex justify-between items-center px-4 py-2.5 bg-white/3 backdrop-blur border border-white/5 rounded-xl mb-2 text-sm">
                       <span className="text-text-secondary">Startup Notices</span>
                       <span className="text-text font-semibold">{daemonStatus.startupNotices.length}</span>
                     </div>
                     {daemonStatus.startupNotices.map((notice, index) => (
                       <div
                         key={`${notice}-${index}`}
-                        className="relative bg-bg-secondary border border-border rounded-xl p-3.5 text-left cursor-default font-[inherit] transition-all duration-150"
+                        className="relative bg-white/3 backdrop-blur border border-white/5 rounded-xl p-3.5 text-left cursor-default font-[inherit] transition-all duration-150"
                       >
                         <div className="text-xs text-text-tertiary leading-relaxed mt-2.5 mb-1">
                           {notice}
@@ -657,7 +657,7 @@ export default function SettingsPage() {
                     {daemonStatus.startupNotices.map((notice, index) => (
                       <div
                         key={`${notice}-${index}`}
-                        className="relative bg-bg-secondary border border-border rounded-xl p-3.5 text-left cursor-default font-[inherit] transition-all duration-150"
+                        className="relative bg-white/3 backdrop-blur border border-white/5 rounded-xl p-3.5 text-left cursor-default font-[inherit] transition-all duration-150"
                       >
                         <div className="text-xs text-text-tertiary leading-relaxed mt-2.5 mb-1">
                           {notice}
@@ -683,7 +683,7 @@ export default function SettingsPage() {
           <div className="flex items-center justify-center text-text-secondary text-[15px]">Loading...</div>
         ) : (
           <>
-            <div className="flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl mb-2 text-sm">
+            <div className="flex justify-between items-center px-4 py-2.5 bg-white/3 backdrop-blur border border-white/5 rounded-xl mb-2 text-sm">
               <span className="text-text-secondary">Routing Preset</span>
               <div>
                 {(['budget', 'balanced', 'performance'] as const).map(p => (
@@ -706,7 +706,7 @@ export default function SettingsPage() {
 
             {routingDecisions.length > 0 && (
               <div>
-                <div className="flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl mb-2 text-sm">
+                <div className="flex justify-between items-center px-4 py-2.5 bg-white/3 backdrop-blur border border-white/5 rounded-xl mb-2 text-sm">
                   <span className="text-text-secondary">Recent Worker Decisions</span>
                   <span className="text-text font-semibold">{routingDecisions.length}</span>
                 </div>
@@ -714,7 +714,7 @@ export default function SettingsPage() {
                   {routingDecisions.map((decision, index) => (
                     <div
                       key={`${decision.provider}-${decision.timestamp}-${index}`}
-                      className="relative bg-bg-secondary border border-border rounded-xl p-3.5 text-left cursor-pointer font-[inherit] transition-all duration-150 hover:border-border-hover hover:-translate-y-px hover:shadow-[var(--shadow-sm)] disabled:cursor-default"
+                      className="relative bg-white/3 backdrop-blur border border-white/5 rounded-xl p-3.5 text-left cursor-pointer font-[inherit] transition-all duration-150 hover:border-border-hover hover:-translate-y-px hover:shadow-[var(--shadow-sm)] disabled:cursor-default"
                       style={{
                         textAlign: 'left',
                         padding: '12px 14px',
@@ -757,7 +757,7 @@ export default function SettingsPage() {
 
             {executionTraces.length > 0 && (
               <div>
-                <div className="flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl mb-2 text-sm">
+                <div className="flex justify-between items-center px-4 py-2.5 bg-white/3 backdrop-blur border border-white/5 rounded-xl mb-2 text-sm">
                   <span className="text-text-secondary">Recent Runtime Execution</span>
                   <span className="text-text font-semibold">{executionTraces.length}</span>
                 </div>
@@ -765,7 +765,7 @@ export default function SettingsPage() {
                   {executionTraces.map((trace, index) => (
                     <div
                       key={`${trace.provider}-${trace.phase}-${trace.role}-${trace.timestamp}-${index}`}
-                      className="relative bg-bg-secondary border border-border rounded-xl p-3.5 text-left cursor-pointer font-[inherit] transition-all duration-150 hover:border-border-hover hover:-translate-y-px hover:shadow-[var(--shadow-sm)] disabled:cursor-default"
+                      className="relative bg-white/3 backdrop-blur border border-white/5 rounded-xl p-3.5 text-left cursor-pointer font-[inherit] transition-all duration-150 hover:border-border-hover hover:-translate-y-px hover:shadow-[var(--shadow-sm)] disabled:cursor-default"
                       style={{
                         textAlign: 'left',
                         padding: '12px 14px',
@@ -797,7 +797,7 @@ export default function SettingsPage() {
 
             {phaseOutcomes.length > 0 && (
               <div>
-                <div className="flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl mb-2 text-sm">
+                <div className="flex justify-between items-center px-4 py-2.5 bg-white/3 backdrop-blur border border-white/5 rounded-xl mb-2 text-sm">
                   <span className="text-text-secondary">Recent Phase Outcomes</span>
                   <span className="text-text font-semibold">{phaseOutcomes.length}</span>
                 </div>
@@ -805,7 +805,7 @@ export default function SettingsPage() {
                   {phaseOutcomes.map((outcome, index) => (
                     <div
                       key={`${outcome.provider}-${outcome.phase}-${outcome.role}-${outcome.timestamp}-${index}`}
-                      className="relative bg-bg-secondary border border-border rounded-xl p-3.5 text-left cursor-pointer font-[inherit] transition-all duration-150 hover:border-border-hover hover:-translate-y-px hover:shadow-[var(--shadow-sm)] disabled:cursor-default"
+                      className="relative bg-white/3 backdrop-blur border border-white/5 rounded-xl p-3.5 text-left cursor-pointer font-[inherit] transition-all duration-150 hover:border-border-hover hover:-translate-y-px hover:shadow-[var(--shadow-sm)] disabled:cursor-default"
                       style={{
                         textAlign: 'left',
                         padding: '12px 14px',
@@ -838,7 +838,7 @@ export default function SettingsPage() {
 
             {phaseScores.length > 0 && (
               <div>
-                <div className="flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl mb-2 text-sm">
+                <div className="flex justify-between items-center px-4 py-2.5 bg-white/3 backdrop-blur border border-white/5 rounded-xl mb-2 text-sm">
                   <span className="text-text-secondary">Adaptive Phase Scores</span>
                   <span className="text-text font-semibold">{phaseScores.length}</span>
                 </div>
@@ -846,7 +846,7 @@ export default function SettingsPage() {
                   {phaseScores.map((score, index) => (
                     <div
                       key={`${score.provider}-${score.phase}-${score.role}-${index}`}
-                      className="relative bg-bg-secondary border border-border rounded-xl p-3.5 text-left cursor-default font-[inherit] transition-all duration-150"
+                      className="relative bg-white/3 backdrop-blur border border-white/5 rounded-xl p-3.5 text-left cursor-default font-[inherit] transition-all duration-150"
                     >
                       <div className="flex justify-between gap-3 mb-1.5">
                         <div className="text-sm font-semibold text-text mb-1.5">
@@ -881,7 +881,7 @@ export default function SettingsPage() {
 
             {runtimeArtifacts.length > 0 && (
               <div>
-                <div className="flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl mb-2 text-sm">
+                <div className="flex justify-between items-center px-4 py-2.5 bg-white/3 backdrop-blur border border-white/5 rounded-xl mb-2 text-sm">
                   <span className="text-text-secondary">Runtime Self-Improvement</span>
                   <span className="text-text font-semibold">{runtimeArtifacts.length}</span>
                 </div>
@@ -889,7 +889,7 @@ export default function SettingsPage() {
                   {runtimeArtifacts.map((artifact) => (
                     <div
                       key={artifact.id}
-                      className="relative bg-bg-secondary border border-border rounded-xl p-3.5 text-left cursor-default font-[inherit] transition-all duration-150"
+                      className="relative bg-white/3 backdrop-blur border border-white/5 rounded-xl p-3.5 text-left cursor-default font-[inherit] transition-all duration-150"
                     >
                       <div className="flex justify-between gap-3 mb-1.5">
                         <div className="text-sm font-semibold text-text mb-1.5">
@@ -934,7 +934,7 @@ export default function SettingsPage() {
         ) : (
           <>
             {activeProvider && (
-              <div className="flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl mb-2 text-sm">
+              <div className="flex justify-between items-center px-4 py-2.5 bg-white/3 backdrop-blur border border-white/5 rounded-xl mb-2 text-sm">
                 <span className="text-text-secondary">Primary Execution Worker</span>
                 <span className="text-text font-semibold">
                   {activeProvider.providerName}
@@ -946,7 +946,7 @@ export default function SettingsPage() {
             )}
 
             {activeProvider?.model && (
-              <div className="flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl mb-2 text-sm">
+              <div className="flex justify-between items-center px-4 py-2.5 bg-white/3 backdrop-blur border border-white/5 rounded-xl mb-2 text-sm">
                 <span className="text-text-secondary">Worker Model</span>
                 <span className="text-text font-semibold font-mono text-xs">
                   {activeProvider.model}
@@ -955,7 +955,7 @@ export default function SettingsPage() {
             )}
 
             {activeProvider?.selectionMode && (
-              <div className="flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl mb-2 text-sm">
+              <div className="flex justify-between items-center px-4 py-2.5 bg-white/3 backdrop-blur border border-white/5 rounded-xl mb-2 text-sm">
                 <span className="text-text-secondary">Selection Mode</span>
                 <span className="text-text font-semibold">
                   {activeProvider.selectionMode === 'strada-primary-worker'
@@ -966,7 +966,7 @@ export default function SettingsPage() {
             )}
 
             {activeProvider?.executionPool && activeProvider.executionPool.length > 0 && (
-              <div className="flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl mb-2 text-sm">
+              <div className="flex justify-between items-center px-4 py-2.5 bg-white/3 backdrop-blur border border-white/5 rounded-xl mb-2 text-sm">
                 <span className="text-text-secondary">Execution Pool</span>
                 <span className="text-text font-semibold">
                   {activeProvider.executionPool.map((provider) => provider.name).join(', ')}
@@ -976,21 +976,21 @@ export default function SettingsPage() {
 
             {embeddingStatus && (
               <>
-                <div className="flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl mb-2 text-sm">
+                <div className="flex justify-between items-center px-4 py-2.5 bg-white/3 backdrop-blur border border-white/5 rounded-xl mb-2 text-sm">
                   <span className="text-text-secondary">Embedding Provider</span>
                   <span className="text-text font-semibold font-mono text-xs">
                     {embeddingStatus.resolvedProviderName ?? 'Hash fallback'}
                   </span>
                 </div>
 
-                <div className="flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl mb-2 text-sm">
+                <div className="flex justify-between items-center px-4 py-2.5 bg-white/3 backdrop-blur border border-white/5 rounded-xl mb-2 text-sm">
                   <span className="text-text-secondary">Embedding Resolution</span>
                   <span className="text-text font-semibold">
                     {embeddingStatus.resolutionSource ?? embeddingStatus.state}
                   </span>
                 </div>
 
-                <div className="flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl mb-2 text-sm">
+                <div className="flex justify-between items-center px-4 py-2.5 bg-white/3 backdrop-blur border border-white/5 rounded-xl mb-2 text-sm">
                   <span className="text-text-secondary">Embedding Dimensions</span>
                   <span className="text-text font-semibold font-mono text-xs">
                     {embeddingStatus.activeDimensions ?? embeddingStatus.configuredDimensions ?? 'n/a'}
@@ -1028,7 +1028,7 @@ export default function SettingsPage() {
       <div className="mb-7">
         <div className="text-xs font-semibold uppercase tracking-[0.04em] text-text-tertiary mb-3.5 flex items-center gap-2">Voice Mode</div>
 
-        <div className="flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl mb-2 text-sm">
+        <div className="flex justify-between items-center px-4 py-2.5 bg-white/3 backdrop-blur border border-white/5 rounded-xl mb-2 text-sm">
           <div>
             <span className="text-text-secondary">Voice Input</span>
             {!speechInputAvailable && (
@@ -1047,7 +1047,7 @@ export default function SettingsPage() {
           </button>
         </div>
 
-        <div className="flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl mb-2 text-sm">
+        <div className="flex justify-between items-center px-4 py-2.5 bg-white/3 backdrop-blur border border-white/5 rounded-xl mb-2 text-sm">
           <div>
             <span className="text-text-secondary">Voice Output (Auto-read Responses)</span>
             {!speechOutputAvailable && (

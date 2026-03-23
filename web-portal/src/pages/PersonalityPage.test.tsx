@@ -36,8 +36,9 @@ describe('PersonalityPage', () => {
 
   it('renders loading state', () => {
     mockUsePersonality.mockReturnValue({ data: undefined, error: null, isLoading: true })
-    renderPage()
-    expect(screen.getByText('Loading personality...')).toBeInTheDocument()
+    const { container } = renderPage()
+    // Loading state renders Skeleton components (no text)
+    expect(container.querySelector('.animate-pulse')).toBeInTheDocument()
   })
 
   it('renders data with personality profiles', () => {

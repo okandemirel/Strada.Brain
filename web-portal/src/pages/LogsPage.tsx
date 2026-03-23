@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
 import { useLogs } from '../hooks/use-api'
+import { Skeleton } from '../components/ui/skeleton'
 
 interface LogEntry {
   timestamp: string
@@ -24,7 +25,7 @@ function getLevelBadgeClass(cls: string): string {
     case 'info': return 'bg-accent/10 text-accent'
     case 'warn': return 'bg-warning/10 text-warning'
     case 'error': return 'bg-error/10 text-error'
-    default: return 'bg-bg-tertiary text-text-tertiary'
+    default: return 'bg-white/5 text-text-tertiary'
   }
 }
 
@@ -55,7 +56,15 @@ export default function LogsPage() {
     }
   }, [logs, autoScroll])
 
-  if (logsQuery.isLoading) return <div className="flex flex-1 items-center justify-center h-[200px] text-text-secondary text-[15px]">Loading logs...</div>
+  if (logsQuery.isLoading) return (
+    <div className="h-full overflow-y-auto p-7 w-full">
+      <Skeleton className="h-7 w-48 mb-6" />
+      <Skeleton className="h-4 w-64 mb-4" />
+      <div className="space-y-3">
+        {Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-12 rounded-xl" />)}
+      </div>
+    </div>
+  )
 
   const filtered = logs.filter(entry => {
     if (levelFilter !== 'all' && getLevelClass(entry.level) !== levelFilter) return false
@@ -99,7 +108,7 @@ export default function LogsPage() {
             className={`px-3.5 py-1.5 border rounded-lg font-[inherit] text-[13px] font-medium cursor-pointer transition-all duration-150 ${
               levelFilter === level
                 ? 'bg-accent-glow text-accent border-accent font-semibold'
-                : 'border-border bg-bg-tertiary text-text-secondary hover:bg-bg-elevated hover:text-text hover:border-border-hover'
+                : 'border-white/5 bg-white/5 text-text-secondary hover:bg-white/10 hover:text-text hover:border-border-hover'
             }`}
             onClick={() => setLevelFilter(level)}
           >
@@ -120,9 +129,9 @@ export default function LogsPage() {
           <p className="text-sm max-w-[400px]">No log entries match the current filters.</p>
         </div>
       ) : (
-        <div className="bg-bg-secondary border border-border rounded-[14px] overflow-hidden max-h-[calc(100vh-260px)] overflow-y-auto" ref={containerRef}>
+        <div className="bg-white/3 backdrop-blur border border-white/5 rounded-2xl overflow-hidden max-h-[calc(100vh-260px)] overflow-y-auto" ref={containerRef}>
           {filtered.map((entry, i) => (
-            <div key={`${entry.timestamp}-${entry.level}-${i}`} className="flex items-start gap-3 px-4 py-2 border-b border-border text-[13px] transition-colors hover:bg-bg-tertiary last:border-b-0 max-md:flex-col max-md:gap-1">
+            <div key={`${entry.timestamp}-${entry.level}-${i}`} className="flex items-start gap-3 px-4 py-2 border-b border-border text-[13px] transition-colors hover:bg-white/5 last:border-b-0 max-md:flex-col max-md:gap-1">
               <span className="font-mono text-[11px] text-text-tertiary whitespace-nowrap shrink-0 min-w-[80px]">{formatTimestamp(entry.timestamp)}</span>
               <span className={`inline-block text-[10px] font-bold px-2 py-0.5 rounded-md uppercase tracking-[0.04em] min-w-[50px] text-center ${getLevelBadgeClass(getLevelClass(entry.level))}`}>{entry.level}</span>
               <span className="text-text font-mono text-xs leading-relaxed break-words flex-1">

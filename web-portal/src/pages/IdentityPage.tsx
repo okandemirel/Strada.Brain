@@ -1,5 +1,6 @@
 import { formatUptime } from '../utils/format'
 import { useDaemon, useMetrics } from '../hooks/use-api'
+import { Skeleton } from '../components/ui/skeleton'
 
 function formatDate(ts: string): string {
   try {
@@ -22,8 +23,24 @@ export default function IdentityPage() {
     ? daemonQuery.error.message
     : null
 
-  if (loading) return <div className="flex flex-1 items-center justify-center h-[200px] text-text-secondary text-[15px]">Loading identity...</div>
-  if (error && !daemonQuery.data) return <div className="flex flex-1 items-center justify-center h-[200px] text-error text-[15px]">Error: {error}</div>
+  if (loading) return (
+    <div className="h-full overflow-y-auto p-7 w-full">
+      <Skeleton className="h-7 w-48 mb-6" />
+      <Skeleton className="h-4 w-64 mb-4" />
+      <div className="space-y-3">
+        {Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-12 rounded-xl" />)}
+      </div>
+    </div>
+  )
+  if (error && !daemonQuery.data) return (
+    <div className="h-full overflow-y-auto p-7 w-full">
+      <div className="flex flex-col items-center justify-center h-[200px] gap-3 text-text-secondary">
+        <div className="text-4xl">⚠</div>
+        <h3 className="text-text text-lg font-semibold">Failed to Load Identity</h3>
+        <p className="text-sm max-w-[400px] text-center">{error}</p>
+      </div>
+    </div>
+  )
 
   const daemon = daemonQuery.data ?? null
   const uptime = metricsQuery.data?.uptime ? metricsQuery.data.uptime / 1000 : 0
@@ -38,7 +55,7 @@ export default function IdentityPage() {
         <div className="text-xs font-semibold uppercase tracking-[0.04em] text-text-tertiary mb-3.5 flex items-center gap-2">Agent Identity</div>
         {identity ? (
           <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-3.5">
-            <div className="bg-bg-secondary backdrop-blur-[20px] border border-border rounded-2xl p-[18px] flex flex-col gap-2.5 transition-all duration-200 hover:border-border-hover hover:-translate-y-0.5 hover:shadow-[var(--shadow-md)]">
+            <div className="bg-white/3 backdrop-blur border border-white/5 rounded-2xl p-[18px] flex flex-col gap-2.5 transition-all duration-200 hover:border-border-hover hover:-translate-y-0.5 hover:shadow-[var(--shadow-md)]">
               <div className="flex items-center justify-between gap-2.5">
                 <span className="text-[15px] font-semibold text-text tracking-tight">{identity.agentName}</span>
                 <span className="inline-block text-[10px] font-bold px-2 py-0.5 rounded-md uppercase tracking-[0.04em] bg-accent/10 text-accent">v{identity.version}</span>
@@ -62,7 +79,7 @@ export default function IdentityPage() {
                 </div>
               </div>
             </div>
-            <div className="bg-bg-secondary backdrop-blur-[20px] border border-border rounded-2xl p-[18px] flex flex-col gap-2.5 transition-all duration-200 hover:border-border-hover hover:-translate-y-0.5 hover:shadow-[var(--shadow-md)]">
+            <div className="bg-white/3 backdrop-blur border border-white/5 rounded-2xl p-[18px] flex flex-col gap-2.5 transition-all duration-200 hover:border-border-hover hover:-translate-y-0.5 hover:shadow-[var(--shadow-md)]">
               <div className="flex items-center justify-between gap-2.5">
                 <span className="text-[15px] font-semibold text-text tracking-tight">Continuity</span>
               </div>
@@ -90,14 +107,14 @@ export default function IdentityPage() {
         <div className="mb-7">
           <div className="text-xs font-semibold uppercase tracking-[0.04em] text-text-tertiary mb-3.5 flex items-center gap-2">Daemon Status</div>
           <div className="flex gap-2.5 flex-wrap mb-4">
-            <div className="flex-1 min-w-[150px] flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl text-sm">
+            <div className="flex-1 min-w-[150px] flex justify-between items-center px-4 py-2.5 bg-white/3 backdrop-blur border border-white/5 rounded-xl text-sm">
               <span className="text-text-secondary">Running</span>
               <span className="text-text font-semibold flex items-center gap-1.5">
                 <span className={`inline-block w-2 h-2 rounded-full shrink-0 ${daemon.running ? 'bg-success shadow-[0_0_6px_var(--color-success)]' : 'bg-text-tertiary'}`} />
                 {daemon.running ? 'Yes' : 'No'}
               </span>
             </div>
-            <div className="flex-1 min-w-[150px] flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl text-sm">
+            <div className="flex-1 min-w-[150px] flex justify-between items-center px-4 py-2.5 bg-white/3 backdrop-blur border border-white/5 rounded-xl text-sm">
               <span className="text-text-secondary">Budget Used</span>
               <span className="text-text font-semibold">
                 ${daemon.budget.usedUsd.toFixed(2)}
@@ -105,7 +122,7 @@ export default function IdentityPage() {
               </span>
             </div>
             {daemon.budget.limitUsd > 0 && (
-              <div className="flex-1 min-w-[150px] flex justify-between items-center px-4 py-2.5 bg-bg-secondary border border-border rounded-xl text-sm">
+              <div className="flex-1 min-w-[150px] flex justify-between items-center px-4 py-2.5 bg-white/3 backdrop-blur border border-white/5 rounded-xl text-sm">
                 <span className="text-text-secondary">Budget %</span>
                 <span className="text-text font-semibold">{daemonBudgetPercent.toFixed(1)}%</span>
               </div>
@@ -126,18 +143,18 @@ export default function IdentityPage() {
       {daemon?.triggers && daemon.triggers.length > 0 && (
         <div className="mb-7">
           <div className="text-xs font-semibold uppercase tracking-[0.04em] text-text-tertiary mb-3.5 flex items-center gap-2">Triggers ({daemon.triggers.length})</div>
-          <table className="w-full bg-bg-secondary border border-border rounded-[14px] overflow-hidden" style={{ borderSpacing: 0, borderCollapse: 'separate' }}>
+          <table className="w-full bg-white/3 backdrop-blur border border-white/5 rounded-2xl overflow-hidden" style={{ borderSpacing: 0, borderCollapse: 'separate' }}>
             <thead>
               <tr>
-                <th className="px-4 py-2.5 text-left bg-bg-tertiary font-semibold text-text-secondary text-[11px] uppercase tracking-[0.04em] border-b border-border">Name</th>
-                <th className="px-4 py-2.5 text-left bg-bg-tertiary font-semibold text-text-secondary text-[11px] uppercase tracking-[0.04em] border-b border-border">Type</th>
-                <th className="px-4 py-2.5 text-left bg-bg-tertiary font-semibold text-text-secondary text-[11px] uppercase tracking-[0.04em] border-b border-border">State</th>
-                <th className="px-4 py-2.5 text-left bg-bg-tertiary font-semibold text-text-secondary text-[11px] uppercase tracking-[0.04em] border-b border-border">Circuit</th>
+                <th className="px-4 py-2.5 text-left bg-white/5 font-semibold text-text-secondary text-[11px] uppercase tracking-[0.04em] border-b border-white/5">Name</th>
+                <th className="px-4 py-2.5 text-left bg-white/5 font-semibold text-text-secondary text-[11px] uppercase tracking-[0.04em] border-b border-white/5">Type</th>
+                <th className="px-4 py-2.5 text-left bg-white/5 font-semibold text-text-secondary text-[11px] uppercase tracking-[0.04em] border-b border-white/5">State</th>
+                <th className="px-4 py-2.5 text-left bg-white/5 font-semibold text-text-secondary text-[11px] uppercase tracking-[0.04em] border-b border-white/5">Circuit</th>
               </tr>
             </thead>
             <tbody>
               {daemon.triggers.map(t => (
-                <tr key={t.name} className="hover:bg-bg-tertiary">
+                <tr key={t.name} className="hover:bg-white/5">
                   <td className="px-4 py-2.5 text-[13px] border-b border-border font-mono text-xs">{t.name}</td>
                   <td className="px-4 py-2.5 text-[13px] border-b border-border">{t.type}</td>
                   <td className="px-4 py-2.5 text-[13px] border-b border-border">

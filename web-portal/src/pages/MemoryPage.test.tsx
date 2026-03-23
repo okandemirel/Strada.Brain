@@ -37,8 +37,9 @@ describe('MemoryPage', () => {
     mockUseMemoryStats.mockReturnValue({ data: undefined, error: null, isLoading: true })
     mockUseConsolidation.mockReturnValue({ data: undefined, error: null, isLoading: true })
     mockUseMaintenance.mockReturnValue({ data: undefined, error: null, isLoading: true })
-    renderPage()
-    expect(screen.getByText('Loading memory data...')).toBeInTheDocument()
+    const { container } = renderPage()
+    // Loading state renders Skeleton components (no text)
+    expect(container.querySelector('.animate-pulse')).toBeInTheDocument()
   })
 
   it('renders data with tier distribution', () => {
@@ -78,7 +79,8 @@ describe('MemoryPage', () => {
     mockUseConsolidation.mockReturnValue({ data: undefined, error: new Error('Consolidation error'), isLoading: false })
     mockUseMaintenance.mockReturnValue({ data: undefined, error: new Error('Maintenance error'), isLoading: false })
     renderPage()
-    expect(screen.getByText('Error: Memory endpoint down')).toBeInTheDocument()
+    expect(screen.getByText('Failed to Load Memory')).toBeInTheDocument()
+    expect(screen.getByText('Memory endpoint down')).toBeInTheDocument()
   })
 
   it('renders memory health info when available', () => {
