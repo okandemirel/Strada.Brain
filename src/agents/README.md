@@ -4,9 +4,11 @@ The agents subsystem contains the orchestrator (agent loop), AI providers, tools
 
 > **Note:** This is the **PAOR loop** (reactive, user-triggered). The proactive autonomous loop (OODA) lives in `src/agent-core/`. See CONTRIBUTING.md for how they relate.
 
-## Orchestrator (`orchestrator.ts` + helpers)
+## Orchestrator (`orchestrator.ts` + 16 helper modules)
 
-The `Orchestrator` class implements a single-agent, multi-tool loop. There is one orchestrator instance — the tool set defines what it can do.
+The `Orchestrator` class implements a single-agent, multi-tool loop with two execution modes: background tasks (autonomous, epoch-based) and interactive agent loops (user-facing, streaming). One orchestrator instance per application — the tool set defines what it can do.
+
+The orchestrator delegates to 16 focused helper modules for intervention pipelines, reflection handling, end-turn processing, session management, tool execution, consensus, and more. The core `orchestrator.ts` (~5,185 lines) coordinates these modules while the total ecosystem spans ~13,000 lines.
 
 **Message processing:**
 
@@ -112,25 +114,48 @@ Tools are namespaced: `plugin_my-plugin_hello`. Path traversal is validated. All
 
 ## Key Files
 
-| File                             | Purpose                                                  |
-| -------------------------------- | -------------------------------------------------------- |
-| `orchestrator.ts`                | Agent loop, session management, streaming, tool dispatch |
-| `orchestrator-supervisor-routing.ts` | Provider routing, supervisor assignment, multi-provider strategy |
+### Orchestrator Core + Extracted Modules
+
+| File | Purpose |
+| ---- | ------- |
+| `orchestrator.ts` | Agent loop coordinator (~5,185 lines) — two loops (BG + Interactive), session management, streaming, tool dispatch |
+| `orchestrator-reflection-handler.ts` | REFLECTING phase DONE/REPLAN/CONTINUE handlers — extracted from both loops |
+| `orchestrator-end-turn-handler.ts` | End-turn response handlers — clarification → boundary → verifier → synthesis pipeline |
+| `orchestrator-intervention-pipeline.ts` | 4-stage intervention chain: clarification → verifier → visibility → loop recovery |
+| `orchestrator-loop-shared.ts` | Shared loop functions: executeAndTrackTools, refreshMemoryIfNeeded, runConsensusIfAvailable, checkPendingBlocks |
+| `orchestrator-loop-utils.ts` | PAOR state transitions: handlePlanPhaseTransition, processReflectionPreamble, applyReflectionContinuation, handleReplanDecision |
 | `orchestrator-session-manager.ts` | SessionManager class — session state, transcript, persistence, plan review |
-| `orchestrator-clarification.ts`  | User boundary detection, clarification intervention logic |
+| `orchestrator-autonomy-tracker.ts` | AutonomyBundle factory — creates ErrorRecovery, TaskPlanner, SelfVerification, ExecutionJournal per loop |
+| `orchestrator-consensus.ts` | Consensus verification orchestration |
+| `orchestrator-tool-execution.ts` | Tool execution + autonomy result tracking |
+| `orchestrator-supervisor-routing.ts` | Provider routing, supervisor assignment, multi-provider strategy |
+| `orchestrator-clarification.ts` | User boundary detection, clarification intervention logic |
 | `orchestrator-context-builder.ts` | System prompt construction, context layers, soul personality injection |
 | `orchestrator-interaction-policy.ts` | Execution policy, shell review, autonomous mode |
 | `orchestrator-phase-telemetry.ts` | PAOR phase transition telemetry |
-| `orchestrator-runtime-utils.ts`  | Phase transitions, step result mapping |
-| `orchestrator-text-utils.ts`     | Response formatting, identity resolution, prompt sanitization |
-| `autonomy/error-recovery.ts`     | C# error categorization and recovery injection           |
-| `autonomy/task-planner.ts`       | Stall detection, budget warnings, learning trajectory    |
-| `autonomy/self-verification.ts`  | Build verification gate                                  |
-| `autonomy/constants.ts`          | MUTATION_TOOLS, VERIFY_TOOLS, COMPILABLE_EXT             |
-| `context/strada-knowledge.ts`    | System prompt, project context builder                   |
-| `plugins/plugin-loader.ts`       | External plugin discovery and loading                    |
-| `providers/claude.ts`            | Primary provider (Anthropic SDK)                         |
-| `providers/fallback-chain.ts`    | Multi-provider failover                                  |
-| `providers/provider-registry.ts` | Provider presets and chain builder                       |
-| `tools/tool.interface.ts`        | ITool, IEnhancedTool interfaces                          |
-| `tools/tool-core.interface.ts`   | ToolContext, ToolExecutionResult types                   |
+| `orchestrator-runtime-utils.ts` | Reflection parsing, phase transitions, step result mapping |
+| `orchestrator-text-utils.ts` | Response formatting, identity resolution, prompt sanitization |
+
+### Autonomy Layer
+
+| File | Purpose |
+| ---- | ------- |
+| `autonomy/error-recovery.ts` | C# error categorization and recovery injection |
+| `autonomy/task-planner.ts` | Stall detection, budget warnings, learning trajectory |
+| `autonomy/self-verification.ts` | Build verification gate |
+| `autonomy/execution-journal.ts` | Task branches, failed approaches, rollback memory |
+| `autonomy/control-loop-tracker.ts` | Background loop iteration tracking |
+| `autonomy/strada-conformance.ts` | Strada.Core conformance guard |
+| `autonomy/constants.ts` | MUTATION_TOOLS, VERIFY_TOOLS, COMPILABLE_EXT |
+
+### Other
+
+| File | Purpose |
+| ---- | ------- |
+| `context/strada-knowledge.ts` | System prompt, project context builder |
+| `plugins/plugin-loader.ts` | External plugin discovery and loading |
+| `providers/claude.ts` | Primary provider (Anthropic SDK) |
+| `providers/fallback-chain.ts` | Multi-provider failover |
+| `providers/provider-registry.ts` | Provider presets and chain builder |
+| `tools/tool.interface.ts` | ITool, IEnhancedTool interfaces |
+| `tools/tool-core.interface.ts` | ToolContext, ToolExecutionResult types |

@@ -21,7 +21,7 @@ npm run doctor             # Diagnose setup issues
 ## Architecture Overview
 
 - Entry: `src/index.ts` (Commander CLI) → `src/core/bootstrap.ts`
-- Agent loop: `src/agents/` — Orchestrator with PAOR cycle, tools, delegation, multi-agent
+- Agent loop: `src/agents/` — Orchestrator (~5K lines) + 16 helper modules (reflection, intervention pipeline, end-turn, session, consensus, tool execution, loop shared, autonomy tracker, etc.)
 - Shared agent utils: `src/agent-core/`
 - 9 channel adapters: `src/channels/{web,telegram,discord,slack,whatsapp,cli,matrix,irc,teams}/`
 - Config: `src/config/` — Zod-validated, 90+ env vars
@@ -35,7 +35,7 @@ npm run doctor             # Diagnose setup issues
 ### Key Patterns
 
 - **PAOR Loop**: Plan → Act → Observe → Reflect — the core agent execution cycle in the orchestrator
-- **Modular Decomposition**: Large files (orchestrator, bootstrap) delegate to focused helper modules
+- **Modular Decomposition**: Orchestrator delegates to 16 focused modules; bootstrap delegates to bootstrap-providers, bootstrap-memory, bootstrap-channels, bootstrap-wiring
 - **TypedEventBus**: All subsystem communication is event-driven
 - **Channel Isolation**: Each channel adapter implements a common interface, sessions are isolated per-channel
 - **Provider Agnostic**: LLM calls go through a unified provider layer supporting 6+ providers
