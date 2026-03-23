@@ -79,6 +79,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - React + Vite web portal replacing vanilla HTML/JS (dark/light theme, file upload, streaming responses)
 - Dashboard tab in web portal with full metrics (system health, tokens, tools, agent performance, daemon, deployment)
 - Collapsible side panel in web portal with agent status and session info
+- **Web Portal — Shadcn/UI Integration**: Full migration to shadcn/ui component system with `cn()` utility, `components.json` registry, and `@/` path alias. Migrated Button (with cva variants), Dialog, DropdownMenu, Tooltip, Tabs to shadcn/ui pattern. Added 7 new base components: Badge, Sheet, ScrollArea, Skeleton, Input, Table, Separator
+- **Web Portal — 21st.dev / Magic UI Components**: Integrated community components from 21st.dev and Magic UI registries — NumberTicker (animated dashboard metrics), BlurFade (page entry animations), BorderBeam (active card borders), TypingAnimation (AI thinking indicator), SparklesText (brand title sparkles), ShimmerButton (chat send shimmer), CoolMode (send button confetti easter egg). 11 components installed via `npx shadcn@latest add`
+- **Web Portal — Glassmorphism Visual Evolution**: Evolved portal identity from flat dark UI to modern glassmorphism design. `backdrop-blur-xl`, `bg-white/3`, `border-white/5` applied to all panels: Sidebar (with cyan left-bar active indicator, micro-interactions), Chat (gradient user bubbles, glassmorphism AI bubbles, hover-reveal copy buttons), Dashboard (redesigned MetricCards with status-colored accent strips, count-up animation, SVG sparklines), Monitor (DAG node status borders, timeline activity feed, kanban drag glow), Code panel (file type icons, tab glow, glassmorphism terminal), all admin pages
+- **Web Portal — Sonner Notification System**: Replaced custom Toast with Sonner toast library. Transient toasts (auto-dismiss, severity colors, action buttons with undo) + persistent Notification Center sheet (grouped history: today/earlier, dismiss actions). Dual-write pattern: Sonner owns display, workspace-store owns history
+- **Web Portal — Collapsible Admin Navigation**: Replaced AdminDropdown with in-sidebar collapsible AdminNav section. Chevron toggle, smooth height animation, auto-expand on admin routes, cyan active highlighting. 11 admin pages directly accessible from sidebar
+- **Web Portal — Shared UI Primitives**: Extracted reusable components from review findings — PageSkeleton (loading shimmer), PageError (error state), CopyButton (clipboard with timer cleanup), Sparkline (React.memo SVG), StatusDot styles (`status-styles.ts`), glass style constants (`lib/styles.ts`)
 
 ### Security
 - DaemonSecurityPolicy autonomous override now includes time-based expiry (auto-revokes)
@@ -97,6 +103,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Discord image attachments now downloaded and magic-bytes validated
 
 ### Fixed
+- **Web Portal — 6 Navigation & UI Bugs**: Fixed admin panel navigation from Code/Monitor/Canvas tabs (mode→chat on admin click), chat return from admin pages (navigate to / on Chat click), admin panel scroll on all 10 pages (flex-1→h-full), notification button (was no-op), personality page stale data after onboarding (refetchOnMount: always), mobile BottomTabBar same-route navigation
+- **Web Portal — AdminNav Route Sync**: Fixed stale expanded state when navigating between admin and non-admin routes (useEffect sync)
+- **Web Portal — CopyButton Timer Leak**: Fixed setTimeout not cleared on unmount in CopyButton (useRef + cleanup)
 - **Windows `npm run bootstrap`**: bash-only `;` command separator replaced with cross-platform `&&` — bootstrap was silently broken on Windows cmd.exe
 - **Windows `npm run test`**: NODE_OPTIONS heap config moved into `run-vitest-batches.mjs` programmatically — POSIX `VAR=val cmd` syntax doesn't work on Windows
 - **Kimi K2.5 type assertion**: added missing intermediate `unknown` cast for `OpenAIMessage` → `Record<string, unknown>` conversion (CI typecheck failure)
