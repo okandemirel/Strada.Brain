@@ -203,12 +203,16 @@ export class CLIChannel implements IChannelAdapter {
     // Detect feedback commands before routing to the normal handler
     const feedbackType = this.detectFeedback(trimmed);
     if (feedbackType) {
-      this.fireFeedback(feedbackType, "cli-local", "cli-user");
-      console.log(
-        feedbackType === "thumbs_up"
-          ? "\nThanks for the positive feedback!\n"
-          : "\nThanks for the feedback. I'll try to improve.\n",
-      );
+      const sent = this.fireFeedback(feedbackType, "cli-local", "cli-user");
+      if (sent) {
+        console.log(
+          feedbackType === "thumbs_up"
+            ? "\nThanks for the positive feedback!\n"
+            : "\nThanks for the feedback. I'll try to improve.\n",
+        );
+      } else {
+        console.log("\nNo recent response to give feedback on.\n");
+      }
       this.showUserPrompt();
       return;
     }
@@ -243,16 +247,17 @@ export class CLIChannel implements IChannelAdapter {
     return null;
   }
 
-  /** Fire the feedback callback with stored instinct IDs (if any). */
+  /** Fire the feedback callback with stored instinct IDs. Returns true if feedback was actually sent. */
   private fireFeedback(
     type: "thumbs_up" | "thumbs_down",
     chatId: string,
     userId?: string,
-  ): void {
-    if (!this.feedbackReactionCallback) return;
+  ): boolean {
+    if (!this.feedbackReactionCallback) return false;
     const instinctIds = this.appliedInstinctIds.get(chatId);
-    if (!instinctIds || instinctIds.length === 0) return;
+    if (!instinctIds || instinctIds.length === 0) return false;
     this.feedbackReactionCallback(type, instinctIds, userId, "reaction");
+    return true;
   }
 
   private async drainInputQueue(): Promise<void> {

@@ -87,13 +87,15 @@ export class TeamsChannel implements IChannelAdapter {
             // Detect feedback before routing to the normal handler
             const feedbackType = this.detectFeedback(context.activity.text);
             if (feedbackType) {
-              this.fireFeedback(feedbackType, chatId, context.activity.from.id);
+              const sent = this.fireFeedback(feedbackType, chatId, context.activity.from.id);
               this.activeTurnContexts.set(chatId, context);
               try {
                 await context.sendActivity(
-                  feedbackType === "thumbs_up"
-                    ? "Thanks for the positive feedback!"
-                    : "Thanks for the feedback. I'll try to improve.",
+                  sent
+                    ? (feedbackType === "thumbs_up"
+                        ? "Thanks for the positive feedback!"
+                        : "Thanks for the feedback. I'll try to improve.")
+                    : "No recent response to give feedback on.",
                 );
               } finally {
                 if (this.activeTurnContexts.get(chatId) === context) {
@@ -188,16 +190,17 @@ export class TeamsChannel implements IChannelAdapter {
     return null;
   }
 
-  /** Fire the feedback callback with stored instinct IDs (if any). */
+  /** Fire the feedback callback with stored instinct IDs. Returns true if feedback was actually sent. */
   private fireFeedback(
     type: "thumbs_up" | "thumbs_down",
     chatId: string,
     userId?: string,
-  ): void {
-    if (!this.feedbackReactionCallback) return;
+  ): boolean {
+    if (!this.feedbackReactionCallback) return false;
     const instinctIds = this.appliedInstinctIds.get(chatId);
-    if (!instinctIds || instinctIds.length === 0) return;
+    if (!instinctIds || instinctIds.length === 0) return false;
     this.feedbackReactionCallback(type, instinctIds, userId, "reaction");
+    return true;
   }
 }
 

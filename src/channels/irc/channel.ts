@@ -96,8 +96,9 @@ export class IRCChannel implements IChannelAdapter {
           const instinctIds = this.appliedInstinctIds.get(chatId);
           if (instinctIds && instinctIds.length > 0) {
             this.feedbackReactionCallback(feedbackType, instinctIds, from, "reaction");
+            return; // consumed as feedback
           }
-          return; // consumed as feedback — do not route to normal handler
+          // No instinctIds — fall through to normal message routing
         }
       }
 

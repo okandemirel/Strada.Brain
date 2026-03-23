@@ -101,8 +101,9 @@ export class MatrixChannel implements IChannelAdapter, IChannelRichMessaging {
           const instinctIds = this.appliedInstinctIds.get(roomId);
           if (instinctIds && instinctIds.length > 0) {
             this.feedbackReactionCallback(feedbackType, instinctIds, sender, "reaction");
+            return; // consumed as feedback
           }
-          return; // consumed as feedback — do not route to normal handler
+          // No instinctIds — fall through to normal message routing
         }
       }
 
