@@ -3,8 +3,56 @@
 // ---------------------------------------------------------------------------
 
 import type { ITool, ToolContext, ToolExecutionResult } from "../../../agents/tools/tool.interface.js";
-import { readdir } from "node:fs/promises";
-import { join, relative } from "node:path";
+import { readdir, realpath } from "node:fs/promises";
+import { join, relative, resolve } from "node:path";
+
+// ---------------------------------------------------------------------------
+// Security
+// ---------------------------------------------------------------------------
+
+/**
+ * Sensitive path prefixes that must never be walked, regardless of the
+ * directory argument supplied by the LLM or user.
+ */
+const SENSITIVE_PATH_PATTERNS: RegExp[] = [
+  /[/\\]\.ssh[/\\]?$/i,
+  /[/\\]\.gnupg[/\\]?$/i,
+  /[/\\]\.aws[/\\]?$/i,
+  /[/\\]\.config[/\\]?$/i,
+  /^\/etc(\/|$)/,
+  /^\/root(\/|$)/,
+  /^\/proc(\/|$)/,
+  /^\/sys(\/|$)/,
+];
+
+/**
+ * Resolve and validate the directory path. Rejects null bytes, symlink
+ * escapes to non-existent ancestors, and sensitive system directories.
+ */
+async function resolveAndValidateDir(directory: string): Promise<{ ok: true; resolved: string } | { ok: false; error: string }> {
+  if (directory.includes("\0")) {
+    return { ok: false, error: "Directory path contains invalid characters." };
+  }
+
+  const normalized = resolve(directory);
+
+  // Resolve symlinks so a symlink pointing to /etc cannot bypass the check
+  let resolved: string;
+  try {
+    resolved = await realpath(normalized);
+  } catch {
+    // Path does not exist yet or is unreadable — use normalize without realpath
+    resolved = normalized;
+  }
+
+  for (const pattern of SENSITIVE_PATH_PATTERNS) {
+    if (pattern.test(resolved)) {
+      return { ok: false, error: "Access to this directory is not permitted." };
+    }
+  }
+
+  return { ok: true, resolved };
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -64,7 +112,11 @@ const unityFindScripts: ITool = {
     if (!directory) {
       return { content: "Error: directory parameter is required." };
     }
-    const files = await findFilesByExtension(directory, ".cs");
+    const validation = await resolveAndValidateDir(directory);
+    if (!validation.ok) {
+      return { content: `Error: ${validation.error}` };
+    }
+    const files = await findFilesByExtension(validation.resolved, ".cs");
     if (files.length === 0) {
       return { content: "No .cs files found." };
     }
@@ -93,7 +145,11 @@ const unityListScenes: ITool = {
     if (!directory) {
       return { content: "Error: directory parameter is required." };
     }
-    const files = await findFilesByExtension(directory, ".unity");
+    const validation = await resolveAndValidateDir(directory);
+    if (!validation.ok) {
+      return { content: `Error: ${validation.error}` };
+    }
+    const files = await findFilesByExtension(validation.resolved, ".unity");
     if (files.length === 0) {
       return { content: "No .unity scene files found." };
     }

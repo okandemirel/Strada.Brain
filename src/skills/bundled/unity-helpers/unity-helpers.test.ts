@@ -5,9 +5,11 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // ---------------------------------------------------------------------------
 
 const mockReaddir = vi.fn();
+const mockRealpath = vi.fn();
 
 vi.mock("node:fs/promises", () => ({
   readdir: (...args: unknown[]) => mockReaddir(...args),
+  realpath: (...args: unknown[]) => mockRealpath(...args),
 }));
 
 // Must import *after* vi.mock so the mock is in place.
@@ -52,6 +54,8 @@ function setupTree(tree: Record<string, MockDirent[]>) {
 
 beforeEach(() => {
   mockReaddir.mockReset();
+  // Default: realpath resolves to the path as-is (no symlink remapping)
+  mockRealpath.mockImplementation((p: unknown) => Promise.resolve(p as string));
 });
 
 // ---------------------------------------------------------------------------
@@ -159,5 +163,55 @@ describe("unity_list_scenes", () => {
 
     const result = await tool.execute({ directory: "/project" }, dummyContext);
     expect(result.content).toBe("No .unity scene files found.");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Security: directory traversal / sensitive path rejection
+// ---------------------------------------------------------------------------
+
+describe("security: sensitive path rejection", () => {
+  const scriptsTool = findTool("unity_find_scripts");
+  const scenesTool = findTool("unity_list_scenes");
+
+  it("rejects /etc for unity_find_scripts", async () => {
+    mockRealpath.mockResolvedValue("/etc");
+    const result = await scriptsTool.execute({ directory: "/etc" }, dummyContext);
+    expect(result.content).toContain("Error");
+    expect(result.content).toContain("not permitted");
+    expect(mockReaddir).not.toHaveBeenCalled();
+  });
+
+  it("rejects ~/.ssh for unity_list_scenes", async () => {
+    const sshPath = "/Users/testuser/.ssh";
+    mockRealpath.mockResolvedValue(sshPath);
+    const result = await scenesTool.execute({ directory: sshPath }, dummyContext);
+    expect(result.content).toContain("Error");
+    expect(result.content).toContain("not permitted");
+    expect(mockReaddir).not.toHaveBeenCalled();
+  });
+
+  it("rejects symlink pointing to sensitive dir", async () => {
+    // The input looks innocent but realpath resolves to /etc
+    mockRealpath.mockResolvedValue("/etc");
+    const result = await scriptsTool.execute({ directory: "/project/symlink-to-etc" }, dummyContext);
+    expect(result.content).toContain("Error");
+    expect(result.content).toContain("not permitted");
+  });
+
+  it("rejects path with null byte", async () => {
+    const result = await scriptsTool.execute({ directory: "/project\0evil" }, dummyContext);
+    expect(result.content).toContain("Error");
+    expect(result.content).toContain("invalid characters");
+    expect(mockRealpath).not.toHaveBeenCalled();
+  });
+
+  it("allows a normal project directory", async () => {
+    mockRealpath.mockResolvedValue("/home/user/my-game");
+    setupTree({
+      "/home/user/my-game": [file("Player.cs")],
+    });
+    const result = await scriptsTool.execute({ directory: "/home/user/my-game" }, dummyContext);
+    expect(result.content).toContain("Found 1 script(s)");
   });
 });
