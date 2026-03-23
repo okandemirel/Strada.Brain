@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { useMonitorStore } from '../stores/monitor-store'
 import { useCodeStore } from '../stores/code-store'
-import { useCanvasStore } from '../stores/canvas-store'
 import { useWorkspaceStore } from '../stores/workspace-store'
 import { dispatchWorkspaceMessage } from '../hooks/use-dashboard-socket'
 
