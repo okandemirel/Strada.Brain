@@ -137,14 +137,23 @@ export class KimiProvider extends OpenAIProvider {
     const result = super.buildMessages(systemPrompt, messages);
 
     // Kimi K2.5: extract <reasoning> blocks from assistant text and
-    // set as reasoning_content field (required when thinking is enabled)
+    // set as reasoning_content field (required when thinking is enabled).
+    // When thinking is enabled, ALL assistant messages must include
+    // reasoning_content or the API returns 400. Messages that were stored
+    // without reasoning (e.g. visible-only responses) get a null fallback.
     for (const msg of result) {
-      if (msg.role === "assistant" && typeof msg.content === "string") {
-        const match = msg.content.match(/<reasoning>\s*\n([\s\S]*?)\n\s*<\/reasoning>\s*\n*/);
-        if (match) {
-          (msg as unknown as Record<string, unknown>)["reasoning_content"] = match[1];
-          msg.content = msg.content.replace(/<reasoning>\s*\n[\s\S]*?\n\s*<\/reasoning>\s*\n*/g, "");
-          if (!msg.content.trim()) msg.content = null;
+      if (msg.role === "assistant") {
+        const rec = msg as unknown as Record<string, unknown>;
+        if (typeof msg.content === "string") {
+          const match = msg.content.match(/<reasoning>\s*\n([\s\S]*?)\n\s*<\/reasoning>\s*\n*/);
+          if (match) {
+            rec["reasoning_content"] = match[1];
+            msg.content = msg.content.replace(/<reasoning>\s*\n[\s\S]*?\n\s*<\/reasoning>\s*\n*/g, "");
+            if (!msg.content.trim()) msg.content = null;
+          }
+        }
+        if (rec["reasoning_content"] === undefined) {
+          rec["reasoning_content"] = null;
         }
       }
     }
@@ -158,9 +167,7 @@ export class KimiProvider extends OpenAIProvider {
       ?.providerMetadata?.reasoning_content as string | undefined;
 
     const assistantMsg = super.buildAssistantToolCallMessage(msg);
-    if (reasoning) {
-      (assistantMsg as unknown as Record<string, unknown>)["reasoning_content"] = reasoning;
-    }
+    (assistantMsg as unknown as Record<string, unknown>)["reasoning_content"] = reasoning ?? null;
     return assistantMsg;
   }
 }

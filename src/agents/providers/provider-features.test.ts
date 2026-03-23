@@ -662,7 +662,7 @@ describe("Feature: Kimi reasoning_content round-trip", () => {
     expect(assistantMsg.reasoning_content).toBe("I need to read the file first");
   });
 
-  it("buildMessages omits reasoning_content when not present", () => {
+  it("buildMessages sets reasoning_content to null when not present", () => {
     const kimi = new KimiProvider("key");
     const build = (sys: string, msgs: any[]) => (kimi as any).buildMessages(sys, msgs);
 
@@ -681,7 +681,7 @@ describe("Feature: Kimi reasoning_content round-trip", () => {
 
     const result = build("system", messages);
     const assistantMsg = result.find((m: any) => m.role === "assistant");
-    expect(assistantMsg.reasoning_content).toBeUndefined();
+    expect(assistantMsg.reasoning_content).toBeNull();
   });
 
   it("buildMessages finds reasoning_content from any tool call position", () => {

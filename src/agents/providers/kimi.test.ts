@@ -208,7 +208,7 @@ describe("KimiProvider", () => {
       expect(assistant.content).toBeNull();
     });
 
-    it("does not modify assistant messages without reasoning", () => {
+    it("sets reasoning_content to null on assistant messages without reasoning", () => {
       const provider = new KimiProvider("test-key");
       const buildMessages = getBuildMessages(provider);
 
@@ -219,7 +219,7 @@ describe("KimiProvider", () => {
 
       const assistant = messages.find((m) => m.role === "assistant")!;
       expect(assistant.content).toBe("Just a plain response");
-      expect(assistant.reasoning_content).toBeUndefined();
+      expect(assistant.reasoning_content).toBeNull();
     });
 
     it("preserves system and user messages unchanged", () => {
