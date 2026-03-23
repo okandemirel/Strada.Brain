@@ -14,10 +14,17 @@ import { trackAndRecordToolResults } from "./orchestrator-tool-execution.js";
 import type { ConsensusVerificationParams } from "./orchestrator-consensus.js";
 import { runConsensusVerification } from "./orchestrator-consensus.js";
 import { replaceSection } from "./orchestrator-runtime-utils.js";
-import type { TaskClassification } from "../agent-core/routing/routing-types.js";
+import type {
+  ExecutionPhase,
+  PhaseOutcomeStatus,
+  PhaseOutcomeTelemetry,
+  TaskClassification,
+  VerifierDecision,
+} from "../agent-core/routing/routing-types.js";
 import type { SupervisorAssignment, SupervisorExecutionStrategy } from "./orchestrator-supervisor-routing.js";
 import type { ConfidenceEstimator } from "../agent-core/routing/confidence-estimator.js";
 import type { MemoryRefresher } from "./memory-refresher.js";
+import type { ProviderResponse } from "./providers/provider.interface.js";
 
 // =============================================================================
 // Pattern 1: executeAndTrackTools
@@ -246,4 +253,47 @@ export async function runConsensusIfAvailable(
   } catch {
     // Consensus failure is non-fatal
   }
+}
+
+// =============================================================================
+// Shared types for handler context callbacks
+// (used by orchestrator-reflection-handler.ts and orchestrator-end-turn-handler.ts)
+// =============================================================================
+
+export interface RecordPhaseOutcomeParams {
+  chatId: string;
+  identityKey: string;
+  assignment: SupervisorAssignment;
+  phase: ExecutionPhase;
+  status: PhaseOutcomeStatus;
+  task: TaskClassification;
+  reason?: string;
+  telemetry?: PhaseOutcomeTelemetry;
+}
+
+export interface BuildPhaseOutcomeTelemetryParams {
+  state?: AgentState;
+  usage?: ProviderResponse["usage"];
+  verifierDecision?: VerifierDecision;
+  failureReason?: string | null;
+}
+
+// =============================================================================
+// Pattern 4: pushContinuationMessages
+// =============================================================================
+
+/**
+ * Appends the current assistant response (if any) and a user continuation gate
+ * into the session message list.
+ *
+ * Shared between orchestrator-reflection-handler and orchestrator-end-turn-handler.
+ */
+export function pushContinuationMessages(
+  ctx: { responseText: string | undefined; session: { messages: Array<{ role: string; content: string | unknown[] }> } },
+  gate: string,
+): void {
+  if (ctx.responseText) {
+    ctx.session.messages.push({ role: "assistant", content: ctx.responseText });
+  }
+  ctx.session.messages.push({ role: "user", content: gate });
 }

@@ -22,13 +22,7 @@ import type { InteractionBoundaryDecision } from "./autonomy/visibility-boundary
 import type { TaskProgressKind, TaskProgressSignal, TaskProgressUpdate, TaskUsageEvent } from "../tasks/types.js";
 import type { ProgressLanguage } from "../tasks/progress-signals.js";
 import type { WorkspaceLease } from "./supervisor/supervisor-types.js";
-import type {
-  ExecutionPhase,
-  PhaseOutcomeStatus,
-  PhaseOutcomeTelemetry,
-  TaskClassification,
-  VerifierDecision,
-} from "../agent-core/routing/routing-types.js";
+import type { PhaseOutcomeTelemetry } from "../agent-core/routing/routing-types.js";
 import type {
   InterventionDeps,
   LoopRecoveryIntervention,
@@ -51,6 +45,11 @@ import {
   handleVerifierReplan,
 } from "./orchestrator-loop-utils.js";
 import { shouldSurfaceTerminalFailureFromReflection } from "./orchestrator-runtime-utils.js";
+import {
+  pushContinuationMessages,
+  type RecordPhaseOutcomeParams,
+  type BuildPhaseOutcomeTelemetryParams,
+} from "./orchestrator-loop-shared.js";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -58,26 +57,6 @@ export type ReflectionLoopAction =
   | { flow: "continue"; newState: AgentState }
   | { flow: "done"; visibleText: string; newState: AgentState; status?: "blocked" | "completed" }
   | { flow: "blocked"; visibleText: string; status?: "blocked" | "completed" };
-
-// ─── Shared callback shapes ────────────────────────────────────────────────────
-
-interface RecordPhaseOutcomeParams {
-  chatId: string;
-  identityKey: string;
-  assignment: SupervisorAssignment;
-  phase: ExecutionPhase;
-  status: PhaseOutcomeStatus;
-  task: TaskClassification;
-  reason?: string;
-  telemetry?: PhaseOutcomeTelemetry;
-}
-
-interface BuildPhaseOutcomeTelemetryParams {
-  state?: AgentState;
-  usage?: ProviderResponse["usage"];
-  verifierDecision?: VerifierDecision;
-  failureReason?: string | null;
-}
 
 // ─── Context interfaces ────────────────────────────────────────────────────────
 
@@ -136,18 +115,6 @@ export interface BgReflectionContext extends ReflectionCoreContext {
 
 export interface InteractiveReflectionContext extends ReflectionCoreContext {
   readonly systemPrompt: string;
-}
-
-// ─── Private helper: pushContinuationMessages ──────────────────────────────────
-
-function pushContinuationMessages(
-  ctx: { responseText: string | undefined; session: { messages: Array<{ role: string; content: string | unknown[] }> } },
-  gate: string,
-): void {
-  if (ctx.responseText) {
-    ctx.session.messages.push({ role: "assistant", content: ctx.responseText });
-  }
-  ctx.session.messages.push({ role: "user", content: gate });
 }
 
 // ─── Private helper: applyBgLoopRecoveryResult ─────────────────────────────────

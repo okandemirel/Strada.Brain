@@ -19,16 +19,10 @@ import type { SelfVerification } from "./autonomy/self-verification.js";
 import type { StradaConformanceGuard } from "./autonomy/strada-conformance.js";
 import type { ControlLoopTracker } from "./autonomy/control-loop-tracker.js";
 import type { InteractionBoundaryDecision } from "./autonomy/visibility-boundary.js";
-import type { TaskProgressSignal, TaskProgressUpdate, TaskUsageEvent } from "../tasks/types.js";
+import type { TaskProgressKind, TaskProgressSignal, TaskProgressUpdate, TaskUsageEvent } from "../tasks/types.js";
 import type { ProgressLanguage } from "../tasks/progress-signals.js";
 import type { WorkspaceLease } from "./supervisor/supervisor-types.js";
-import type {
-  ExecutionPhase,
-  PhaseOutcomeStatus,
-  PhaseOutcomeTelemetry,
-  TaskClassification,
-  VerifierDecision,
-} from "../agent-core/routing/routing-types.js";
+import type { PhaseOutcomeTelemetry } from "../agent-core/routing/routing-types.js";
 import type {
   InterventionDeps,
   LoopRecoveryIntervention,
@@ -53,6 +47,11 @@ import {
   toExecutionPhase as toExecutionPhaseModel,
 } from "./orchestrator-phase-telemetry.js";
 import { getLogger } from "../utils/logger.js";
+import {
+  pushContinuationMessages,
+  type RecordPhaseOutcomeParams,
+  type BuildPhaseOutcomeTelemetryParams,
+} from "./orchestrator-loop-shared.js";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -60,26 +59,6 @@ export type EndTurnLoopAction =
   | { flow: "continue"; newState: AgentState }
   | { flow: "done"; visibleText: string; newState: AgentState; status?: "blocked" | "completed" }
   | { flow: "blocked"; visibleText: string; status?: "blocked" | "completed" };
-
-// ─── Shared callback shapes ────────────────────────────────────────────────────
-
-interface RecordPhaseOutcomeParams {
-  chatId: string;
-  identityKey: string;
-  assignment: SupervisorAssignment;
-  phase: ExecutionPhase;
-  status: PhaseOutcomeStatus;
-  task: TaskClassification;
-  reason?: string;
-  telemetry?: PhaseOutcomeTelemetry;
-}
-
-interface BuildPhaseOutcomeTelemetryParams {
-  state?: AgentState;
-  usage?: ProviderResponse["usage"];
-  verifierDecision?: VerifierDecision;
-  failureReason?: string | null;
-}
 
 // ─── Context interfaces ────────────────────────────────────────────────────────
 
@@ -148,18 +127,6 @@ export interface InteractiveEndTurnContext extends EndTurnCoreContext {
   }) => Promise<void>;
 }
 
-// ─── Private helper: pushContinuationMessages ──────────────────────────────────
-
-function pushContinuationMessages(
-  ctx: { responseText: string | undefined; session: { messages: Array<{ role: string; content: string | unknown[] }> } },
-  gate: string,
-): void {
-  if (ctx.responseText) {
-    ctx.session.messages.push({ role: "assistant", content: ctx.responseText });
-  }
-  ctx.session.messages.push({ role: "user", content: gate });
-}
-
 // ─── Private helper: applyBgLoopRecoveryResult ─────────────────────────────────
 
 function applyBgLoopRecoveryResult(
@@ -169,7 +136,7 @@ function applyBgLoopRecoveryResult(
   opts: {
     fallbackGate: string;
     replanProgressMessage: string;
-    defaultProgressKind: string;
+    defaultProgressKind: TaskProgressKind;
     defaultProgressMessage: string;
   },
 ): EndTurnLoopAction {
@@ -191,7 +158,7 @@ function applyBgLoopRecoveryResult(
       ctx.prompt,
       ctx.progressTitle,
       {
-        kind: "loop_recovery" as const,
+        kind: "loop_recovery",
         message: opts.replanProgressMessage,
       },
       ctx.progressLanguage,
@@ -205,7 +172,7 @@ function applyBgLoopRecoveryResult(
     ctx.prompt,
     ctx.progressTitle,
     {
-      kind: opts.defaultProgressKind as "clarification" | "visibility" | "verification",
+      kind: opts.defaultProgressKind,
       message: opts.defaultProgressMessage,
     },
     ctx.progressLanguage,
@@ -340,7 +307,7 @@ export async function handleBgEndTurn(
     (rawBoundary.kind === "plan_review" || rawBoundary.kind === "terminal_failure") &&
     rawBoundary.visibleText
   ) {
-    const surfacedText = ctx.formatBoundaryVisibleText(rawBoundary)!;
+    const surfacedText = ctx.formatBoundaryVisibleText(rawBoundary) ?? rawBoundary.visibleText ?? "";
     ctx.appendVisibleAssistantMessage(ctx.session, surfacedText);
     await ctx.persistSessionToMemory(
       ctx.chatId,
