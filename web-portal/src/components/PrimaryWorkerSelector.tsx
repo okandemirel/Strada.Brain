@@ -64,7 +64,7 @@ export function PrimaryWorkerSelectorSurface({
     <>
       <button
         type="button"
-        className="flex items-center gap-1.5 bg-bg-tertiary border border-border rounded-lg px-2.5 py-[5px] cursor-pointer text-text-secondary text-xs font-medium transition-all duration-200 whitespace-nowrap hover:bg-bg-elevated hover:text-text hover:border-border-hover"
+        className="flex items-center gap-1.5 bg-white/[0.03] backdrop-blur border border-white/5 rounded-lg px-2.5 py-[5px] cursor-pointer text-text-secondary text-xs font-medium transition-all duration-200 whitespace-nowrap hover:bg-white/5 hover:text-text hover:border-border-hover"
         onClick={onToggleOpen}
         title="Set Strada's primary execution worker"
       >

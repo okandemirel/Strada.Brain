@@ -118,7 +118,7 @@ function ConfirmDialogBody({ confirmation, onRespond }: ConfirmDialogProps) {
           <div className="mb-4">
             <textarea
               ref={modifyInputRef}
-              className="w-full resize-none rounded-lg border border-border bg-bg p-3 text-sm text-text placeholder:text-text-tertiary focus:outline-none focus:ring-2 focus:ring-accent"
+              className="w-full resize-none rounded-lg border border-white/10 bg-white/5 backdrop-blur p-3 text-sm text-text placeholder:text-text-tertiary focus:outline-none focus:ring-2 focus:ring-accent"
               value={modifyText}
               onChange={(e) => setModifyText(e.target.value)}
               onKeyDown={handleModifyKeyDown}
@@ -151,7 +151,7 @@ function ConfirmDialogBody({ confirmation, onRespond }: ConfirmDialogProps) {
               ref={idx === 0 ? firstBtnRef : undefined}
               variant={isRecommended(option) ? 'default' : 'outline'}
               onClick={() => handleOptionClick(option)}
-              className="relative"
+              className={`relative ${isRecommended(option) ? 'border-accent shadow-[0_0_0_2px_var(--color-accent-glow)]' : 'hover:bg-white/5'}`}
             >
               {isRecommended(option) && (
                 <span className="mr-1.5 rounded-full bg-bg/20 px-1.5 py-0.5 text-[10px] font-semibold uppercase">
@@ -174,7 +174,7 @@ function PlanDisplay({ question }: { question: string }) {
     <div className="mb-4">
       <DialogTitle className="mb-3 text-accent">Plan: {title}</DialogTitle>
       {steps.length > 0 && (
-        <ol className="space-y-1.5">
+        <ol className="space-y-1.5 rounded-xl border border-white/5 bg-white/[0.03] backdrop-blur p-2">
           {steps.map((step, i) => (
             <li
               key={i}

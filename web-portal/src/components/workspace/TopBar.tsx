@@ -7,7 +7,7 @@ export default function TopBar() {
   const Icon = config.icon
 
   return (
-    <div className="flex h-10 items-center gap-2 border-b bg-bg-secondary/50 px-4 text-sm font-medium text-text-secondary">
+    <div className="flex h-10 items-center gap-2 border-b border-white/5 bg-bg-secondary/30 backdrop-blur-xl px-4 text-sm font-medium text-text-secondary">
       <Icon size={16} className="text-accent" />
       <span>{config.label}</span>
     </div>

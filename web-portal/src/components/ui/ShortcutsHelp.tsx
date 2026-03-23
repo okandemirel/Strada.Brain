@@ -35,7 +35,7 @@ export default function ShortcutsHelp({ open, onOpenChange }: ShortcutsHelpProps
           {SHORTCUTS.map((shortcut) => (
             <div key={shortcut.keys} className="contents">
               <span className="text-sm text-text-secondary">{shortcut.description}</span>
-              <kbd className="inline-flex items-center gap-1 rounded border border-border bg-bg px-2 py-0.5 text-xs font-mono text-text">
+              <kbd className="inline-flex items-center gap-1 rounded-md border border-white/10 bg-white/5 px-2 py-0.5 text-xs font-mono text-text">
                 {shortcut.keys}
               </kbd>
             </div>
