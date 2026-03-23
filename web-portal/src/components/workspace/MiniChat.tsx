@@ -25,7 +25,7 @@ export default function MiniChat() {
 
   return (
     <div className="p-2 border-t border-border">
-      <div className="flex items-center gap-1.5 rounded-lg bg-surface border border-border-subtle px-2 py-1">
+      <div className="flex items-center gap-1.5 rounded-xl bg-white/3 backdrop-blur border border-white/5 px-2 py-1">
         <input
           type="text"
           value={text}
@@ -35,7 +35,7 @@ export default function MiniChat() {
           disabled={disabled}
           maxLength={4000}
           aria-label="Quick message"
-          className="flex-1 bg-transparent text-xs text-text placeholder:text-text-tertiary outline-none min-w-0"
+          className="flex-1 bg-transparent text-xs text-text placeholder:text-text-tertiary outline-none min-w-0 focus:border-accent focus:shadow-[0_0_0_3px_var(--color-accent-glow)]"
         />
         <button
           onClick={handleSend}

@@ -71,8 +71,8 @@ vi.mock('../ui/tooltip', () => ({
   TooltipContent: ({ children }: { children: React.ReactNode }) => <span data-testid="tooltip-content">{children}</span>,
 }))
 
-// Mock AdminDropdown to isolate Sidebar tests
-vi.mock('./AdminDropdown', () => ({
+// Mock AdminNav to isolate Sidebar tests
+vi.mock('./AdminNav', () => ({
   default: ({ collapsed }: { collapsed: boolean }) => (
     <div data-testid="admin-dropdown" data-collapsed={collapsed}>Admin</div>
   ),

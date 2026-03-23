@@ -8,7 +8,7 @@ import { useWorkspaceStore } from '../../stores/workspace-store'
 import { WORKSPACE_MODES } from '../../config/workspace-modes'
 import { CONNECTION_STATUS } from '../../config/connection-status'
 import { TooltipProvider, Tooltip, TooltipTrigger, TooltipContent } from '../ui/tooltip'
-import AdminDropdown from './AdminDropdown'
+import AdminNav from './AdminNav'
 import MiniChat from '../workspace/MiniChat'
 import NotificationCenter from './NotificationCenter'
 
@@ -43,10 +43,10 @@ export default function Sidebar() {
 
   return (
     <aside
-      className={`hidden md:flex flex-col h-screen bg-bg-secondary border-r border-border transition-all duration-300 ${collapsed ? 'w-14' : 'w-60'} max-md:fixed max-md:z-[1000]`}
+      className={`hidden md:flex flex-col h-screen bg-bg-secondary/80 backdrop-blur-xl border-r border-white/5 transition-all duration-300 ${collapsed ? 'w-14' : 'w-60'} max-md:fixed max-md:z-[1000]`}
     >
       {/* Logo / Brand */}
-      <div className={`flex flex-row items-center gap-3 p-4 border-b border-border shrink-0 ${collapsed ? 'justify-center px-2' : ''}`}>
+      <div className={`flex flex-row items-center gap-3 p-4 border-b border-border bg-gradient-to-b from-transparent to-bg-tertiary/30 shrink-0 ${collapsed ? 'justify-center px-2' : ''}`}>
         <img src="/strada-brain-icon.png" alt="" width="28" height="28" className="w-7 h-7 rounded-lg shrink-0 object-contain" />
         {!collapsed && <span className="text-[17px] font-bold text-text tracking-tight whitespace-nowrap overflow-hidden text-ellipsis">Strada.Brain</span>}
       </div>
@@ -87,8 +87,8 @@ export default function Sidebar() {
                   collapsed ? 'justify-center px-2' : ''
                 } ${
                   isActive
-                    ? 'bg-accent-glow text-accent font-semibold'
-                    : 'text-text-secondary hover:bg-bg-tertiary hover:text-text'
+                    ? 'relative before:absolute before:left-0 before:top-1/2 before:-translate-y-1/2 before:h-5 before:w-0.5 before:bg-accent before:rounded-r bg-accent-glow text-accent font-semibold'
+                    : 'text-text-secondary hover:bg-bg-tertiary hover:text-text hover:translate-x-0.5'
                 }`}
                 title={collapsed ? btn.label : undefined}
               >
@@ -102,9 +102,9 @@ export default function Sidebar() {
         </div>
       </TooltipProvider>
 
-      {/* Admin dropdown */}
+      {/* Admin nav */}
       <div className="px-2">
-        <AdminDropdown collapsed={collapsed} />
+        <AdminNav collapsed={collapsed} />
       </div>
 
       {/* Mini chat — only when expanded */}
