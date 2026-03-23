@@ -1885,6 +1885,7 @@ export class Orchestrator {
                 bgAgentState.phase,
                 currentAssignment.role,
               );
+              const currentToolNames = currentToolDefinitions.map((d) => d.name);
               activePrompt += this.buildSupervisorRolePrompt(executionStrategy, currentAssignment);
 
               const response = await currentProvider.chat(
@@ -1960,7 +1961,7 @@ export class Orchestrator {
                   selfVerification,
                   stradaConformance,
                   taskStartedAtMs,
-                  currentToolNames: currentToolDefinitions.map((d) => d.name),
+                  currentToolNames,
                   currentAssignment,
                   interventionDeps,
                   session,
@@ -2033,7 +2034,7 @@ export class Orchestrator {
                 response.toolCalls.length === 0 &&
                 userExplicitlyAskedForPlan(prompt) &&
                 draftLooksLikeInternalPlanArtifact(response.text ?? "", {
-                  toolNames: currentToolDefinitions.map((definition) => definition.name),
+                  toolNames: currentToolNames,
                 })
               ) {
                 bgAgentState = handlePlanPhaseTransition({
@@ -2122,7 +2123,7 @@ export class Orchestrator {
                     reason: "Clarification review kept the task internal.",
                     gate: clarificationIntervention.gate,
                     iteration: bgIteration,
-                    availableToolNames: currentToolDefinitions.map((definition) => definition.name),
+                    availableToolNames: currentToolNames,
                     selfVerification,
                     usageHandler: options.onUsage ?? this.onUsage,
                     onProgress: emitProgress,
@@ -2207,7 +2208,7 @@ export class Orchestrator {
                   state: bgAgentState,
                   selfVerification,
                   taskStartedAtMs,
-                  availableToolNames: currentToolDefinitions.map((definition) => definition.name),
+                  availableToolNames: currentToolNames,
                   terminalFailureReported: isTerminalFailureReport(response.text),
                 });
                 if (rawBoundary.kind === "internal_continue" && rawBoundary.gate) {
@@ -2225,7 +2226,7 @@ export class Orchestrator {
                     reason: "Visibility boundary kept the task internal.",
                     gate: rawBoundary.gate,
                     iteration: bgIteration,
-                    availableToolNames: currentToolDefinitions.map((definition) => definition.name),
+                    availableToolNames: currentToolNames,
                     selfVerification,
                     usageHandler: options.onUsage ?? this.onUsage,
                     onProgress: emitProgress,
@@ -2312,7 +2313,7 @@ export class Orchestrator {
                   stradaConformance,
                   strategy: executionStrategy,
                   taskStartedAtMs,
-                  availableToolNames: currentToolDefinitions.map((definition) => definition.name),
+                  availableToolNames: currentToolNames,
                   usageHandler: options.onUsage ?? this.onUsage,
                 }, interventionDeps);
                 if (workerCollector) {
@@ -2353,7 +2354,7 @@ export class Orchestrator {
                     reason: verifierIntervention.result.summary,
                     gate: verifierIntervention.gate,
                     iteration: bgIteration,
-                    availableToolNames: currentToolDefinitions.map((definition) => definition.name),
+                    availableToolNames: currentToolNames,
                     selfVerification,
                     usageHandler: options.onUsage ?? this.onUsage,
                     onProgress: emitProgress,
@@ -2421,7 +2422,7 @@ export class Orchestrator {
                     reason: verifierIntervention.result.summary,
                     gate: verifierIntervention.gate,
                     iteration: bgIteration,
-                    availableToolNames: currentToolDefinitions.map((definition) => definition.name),
+                    availableToolNames: currentToolNames,
                     selfVerification,
                     usageHandler: options.onUsage ?? this.onUsage,
                     onProgress: emitProgress,
@@ -2492,7 +2493,7 @@ export class Orchestrator {
                   state: bgAgentState,
                   selfVerification,
                   taskStartedAtMs,
-                  availableToolNames: currentToolDefinitions.map((definition) => definition.name),
+                  availableToolNames: currentToolNames,
                   terminalFailureReported: isTerminalFailureReport(response.text),
                 });
                 if (finalBoundary.kind === "internal_continue" && finalBoundary.gate) {
@@ -3263,6 +3264,7 @@ export class Orchestrator {
           agentState.phase,
           currentAssignment.role,
         );
+        const currentToolNames = currentToolDefinitions.map((d) => d.name);
         let response;
         if (canStream) {
           // Silent streaming: use streaming internally (SSE parsing, timeout, reasoning_content)
@@ -3370,7 +3372,7 @@ export class Orchestrator {
             selfVerification,
             stradaConformance,
             taskStartedAtMs,
-            currentToolNames: currentToolDefinitions.map((d) => d.name),
+            currentToolNames,
             currentAssignment,
             interventionDeps,
             session,
@@ -3552,7 +3554,7 @@ export class Orchestrator {
           response.toolCalls.length === 0 &&
           userExplicitlyAskedForPlan(lastUserMessage) &&
           draftLooksLikeInternalPlanArtifact(response.text ?? "", {
-            toolNames: currentToolDefinitions.map((definition) => definition.name),
+            toolNames: currentToolNames,
           })
         ) {
           agentState = handlePlanPhaseTransition({
@@ -3694,7 +3696,7 @@ export class Orchestrator {
             stradaConformance,
             strategy: executionStrategy,
             taskStartedAtMs,
-            availableToolNames: currentToolDefinitions.map((definition) => definition.name),
+            availableToolNames: currentToolNames,
             usageHandler: this.onUsage,
           }, interventionDeps);
           if (verifierIntervention.kind === "continue" && verifierIntervention.gate) {
@@ -3797,7 +3799,7 @@ export class Orchestrator {
               systemPrompt,
               selfVerification,
               taskStartedAtMs,
-              availableToolNames: currentToolDefinitions.map((definition) => definition.name),
+              availableToolNames: currentToolNames,
               usageHandler: this.onUsage,
             }, interventionDeps);
             if (visibilityDecision.kind === "internal_continue" && visibilityDecision.gate) {

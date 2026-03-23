@@ -138,16 +138,30 @@ export interface InteractiveReflectionContext extends ReflectionCoreContext {
   readonly systemPrompt: string;
 }
 
+// ─── Private helper: pushContinuationMessages ──────────────────────────────────
+
+function pushContinuationMessages(
+  ctx: { responseText: string | undefined; session: { messages: Array<{ role: string; content: string | unknown[] }> } },
+  gate: string,
+): void {
+  if (ctx.responseText) {
+    ctx.session.messages.push({ role: "assistant", content: ctx.responseText });
+  }
+  ctx.session.messages.push({ role: "user", content: gate });
+}
+
 // ─── Private helper: applyBgLoopRecoveryResult ─────────────────────────────────
 
 function applyBgLoopRecoveryResult(
   loopRecovery: LoopRecoveryIntervention,
-  agentState: AgentState,
   ctx: BgReflectionContext,
-  fallbackGate: string,
-  replanProgressMessage: string,
-  defaultProgressKind: TaskProgressKind,
-  defaultProgressMessage: string,
+  agentState: AgentState,
+  opts: {
+    fallbackGate: string;
+    replanProgressMessage: string;
+    defaultProgressKind: TaskProgressKind;
+    defaultProgressMessage: string;
+  },
 ): ReflectionLoopAction {
   if (loopRecovery.action === "blocked" && loopRecovery.message) {
     return { flow: "blocked", visibleText: loopRecovery.message };
@@ -162,16 +176,13 @@ function applyBgLoopRecoveryResult(
       providerName: ctx.executionStrategy.reviewer.providerName,
       modelId: ctx.executionStrategy.reviewer.modelId,
     });
-    if (ctx.responseText) {
-      ctx.session.messages.push({ role: "assistant", content: ctx.responseText });
-    }
-    ctx.session.messages.push({ role: "user", content: loopRecovery.gate });
+    pushContinuationMessages(ctx, loopRecovery.gate);
     ctx.emitProgress(ctx.buildStructuredProgressSignal(
       ctx.prompt,
       ctx.progressTitle,
       {
         kind: "loop_recovery",
-        message: replanProgressMessage,
+        message: opts.replanProgressMessage,
       },
       ctx.progressLanguage,
     ));
@@ -180,19 +191,13 @@ function applyBgLoopRecoveryResult(
 
   // Default: continue
   const newState = applyReflectionContinuation(agentState, ctx.responseText);
-  if (ctx.responseText) {
-    ctx.session.messages.push({ role: "assistant", content: ctx.responseText });
-  }
-  ctx.session.messages.push({
-    role: "user",
-    content: loopRecovery.gate ?? fallbackGate,
-  });
+  pushContinuationMessages(ctx, loopRecovery.gate ?? opts.fallbackGate);
   ctx.emitProgress(ctx.buildStructuredProgressSignal(
     ctx.prompt,
     ctx.progressTitle,
     {
-      kind: defaultProgressKind,
-      message: defaultProgressMessage,
+      kind: opts.defaultProgressKind,
+      message: opts.defaultProgressMessage,
     },
     ctx.progressLanguage,
   ));
@@ -238,6 +243,8 @@ export async function handleBgReflectionDone(
   agentState: AgentState,
   ctx: BgReflectionContext,
 ): Promise<ReflectionLoopAction> {
+  const terminalFailureDetected = isTerminalFailureReport(ctx.responseText);
+
   // 1. Clarification intervention
   const clarificationIntervention = await resolveDraftClarificationInterventionPipeline({
     chatId: ctx.chatId,
@@ -258,15 +265,12 @@ export async function handleBgReflectionDone(
       "Clarification review kept the task internal.",
       clarificationIntervention.gate,
     );
-    return applyBgLoopRecoveryResult(
-      loopRecovery,
-      agentState,
-      ctx,
-      clarificationIntervention.gate,
-      "Loop recovery requested a replan after clarification review.",
-      "clarification",
-      "Clarification review kept the task internal",
-    );
+    return applyBgLoopRecoveryResult(loopRecovery, ctx, agentState, {
+      fallbackGate: clarificationIntervention.gate,
+      replanProgressMessage: "Loop recovery requested a replan after clarification review.",
+      defaultProgressKind: "clarification",
+      defaultProgressMessage: "Clarification review kept the task internal",
+    });
   }
   if (
     (clarificationIntervention.kind === "ask_user" ||
@@ -286,7 +290,7 @@ export async function handleBgReflectionDone(
     selfVerification: ctx.selfVerification,
     taskStartedAtMs: ctx.taskStartedAtMs,
     availableToolNames: ctx.currentToolNames,
-    terminalFailureReported: isTerminalFailureReport(ctx.responseText),
+    terminalFailureReported: terminalFailureDetected,
   });
 
   if (rawBoundary.kind === "internal_continue" && rawBoundary.gate) {
@@ -297,22 +301,19 @@ export async function handleBgReflectionDone(
       "Visibility boundary kept the task internal.",
       rawBoundary.gate,
     );
-    return applyBgLoopRecoveryResult(
-      loopRecovery,
-      agentState,
-      ctx,
-      rawBoundary.gate,
-      "Loop recovery requested a replan after visibility review.",
-      "visibility",
-      "Visibility boundary kept the task internal",
-    );
+    return applyBgLoopRecoveryResult(loopRecovery, ctx, agentState, {
+      fallbackGate: rawBoundary.gate,
+      replanProgressMessage: "Loop recovery requested a replan after visibility review.",
+      defaultProgressKind: "visibility",
+      defaultProgressMessage: "Visibility boundary kept the task internal",
+    });
   }
 
   if (
     (rawBoundary.kind === "plan_review" || rawBoundary.kind === "terminal_failure") &&
     rawBoundary.visibleText
   ) {
-    const surfacedText = ctx.formatBoundaryVisibleText(rawBoundary)!;
+    const surfacedText = ctx.formatBoundaryVisibleText(rawBoundary) ?? rawBoundary.visibleText ?? "";
     ctx.appendVisibleAssistantMessage(ctx.session, surfacedText);
     await ctx.persistSessionToMemory(
       ctx.chatId,
@@ -375,15 +376,12 @@ export async function handleBgReflectionDone(
       verifierIntervention.result.summary,
       verifierIntervention.gate,
     );
-    return applyBgLoopRecoveryResult(
-      loopRecovery,
-      agentState,
-      ctx,
-      verifierIntervention.gate!,
-      "Loop recovery requested a replan after repeated verifier feedback.",
-      "verification",
-      "Verification required before completion",
-    );
+    return applyBgLoopRecoveryResult(loopRecovery, ctx, agentState, {
+      fallbackGate: verifierIntervention.gate,
+      replanProgressMessage: "Loop recovery requested a replan after repeated verifier feedback.",
+      defaultProgressKind: "verification",
+      defaultProgressMessage: "Verification required before completion",
+    });
   }
 
   // 3b. Verifier says "replan"
@@ -421,13 +419,7 @@ export async function handleBgReflectionDone(
         }),
       }),
     });
-    if (ctx.responseText) {
-      ctx.session.messages.push({ role: "assistant", content: ctx.responseText });
-    }
-    ctx.session.messages.push({
-      role: "user",
-      content: loopRecovery.gate ?? verifierIntervention.gate,
-    });
+    pushContinuationMessages(ctx, loopRecovery.gate ?? verifierIntervention.gate);
     ctx.emitProgress(ctx.buildStructuredProgressSignal(
       ctx.prompt,
       ctx.progressTitle,
@@ -469,7 +461,7 @@ export async function handleBgReflectionDone(
     selfVerification: ctx.selfVerification,
     taskStartedAtMs: ctx.taskStartedAtMs,
     availableToolNames: ctx.currentToolNames,
-    terminalFailureReported: isTerminalFailureReport(ctx.responseText),
+    terminalFailureReported: terminalFailureDetected,
   });
 
   if (finalBoundary.kind === "internal_continue" && finalBoundary.gate) {
@@ -480,15 +472,12 @@ export async function handleBgReflectionDone(
       "Visibility boundary rejected the draft.",
       finalBoundary.gate,
     );
-    return applyBgLoopRecoveryResult(
-      loopRecovery,
-      agentState,
-      ctx,
-      finalBoundary.gate,
-      "Loop recovery requested a replan after the draft was rejected.",
-      "visibility",
-      "Visibility boundary rejected the draft",
-    );
+    return applyBgLoopRecoveryResult(loopRecovery, ctx, agentState, {
+      fallbackGate: finalBoundary.gate,
+      replanProgressMessage: "Loop recovery requested a replan after the draft was rejected.",
+      defaultProgressKind: "visibility",
+      defaultProgressMessage: "Visibility boundary rejected the draft",
+    });
   }
 
   // 6. Approved finish path
@@ -574,10 +563,7 @@ export function handleBgReflectionContinue(
 ): ReflectionLoopAction {
   const newState = applyReflectionContinuation(agentState, ctx.responseText, { skipLastReflection: true });
   if (responseToolCallCount === 0) {
-    if (ctx.responseText) {
-      ctx.session.messages.push({ role: "assistant", content: ctx.responseText });
-    }
-    ctx.session.messages.push({ role: "user", content: "Please continue." });
+    pushContinuationMessages(ctx, "Please continue.");
   }
   return { flow: "continue", newState };
 }
@@ -602,10 +588,7 @@ export async function handleInteractiveReflectionDone(
 
   if (clarificationIntervention.kind === "continue" && clarificationIntervention.gate) {
     const newState = applyReflectionContinuation(agentState, ctx.responseText);
-    if (ctx.responseText) {
-      ctx.session.messages.push({ role: "assistant", content: ctx.responseText });
-    }
-    ctx.session.messages.push({ role: "user", content: clarificationIntervention.gate });
+    pushContinuationMessages(ctx, clarificationIntervention.gate);
     return { flow: "continue", newState };
   }
   if (
@@ -654,10 +637,7 @@ export async function handleInteractiveReflectionDone(
       }),
     });
     const newState = applyReflectionContinuation(agentState, ctx.responseText);
-    if (ctx.responseText) {
-      ctx.session.messages.push({ role: "assistant", content: ctx.responseText });
-    }
-    ctx.session.messages.push({ role: "user", content: verifierIntervention.gate });
+    pushContinuationMessages(ctx, verifierIntervention.gate);
     return { flow: "continue", newState };
   }
 
@@ -686,10 +666,7 @@ export async function handleInteractiveReflectionDone(
         }),
       }),
     });
-    if (ctx.responseText) {
-      ctx.session.messages.push({ role: "assistant", content: ctx.responseText });
-    }
-    ctx.session.messages.push({ role: "user", content: verifierIntervention.gate });
+    pushContinuationMessages(ctx, verifierIntervention.gate);
     return { flow: "continue", newState };
   }
 
@@ -709,10 +686,7 @@ export async function handleInteractiveReflectionDone(
   }, ctx.interventionDeps);
 
   if (visibilityDecision.kind === "internal_continue" && visibilityDecision.gate) {
-    if (ctx.responseText) {
-      ctx.session.messages.push({ role: "assistant", content: ctx.responseText });
-    }
-    ctx.session.messages.push({ role: "user", content: visibilityDecision.gate });
+    pushContinuationMessages(ctx, visibilityDecision.gate);
     const newState = applyReflectionContinuation(agentState, ctx.responseText);
     return { flow: "continue", newState };
   }
@@ -815,10 +789,7 @@ export async function handleInteractiveReflectionContinue(
         usageHandler: ctx.usageHandler,
       }, ctx.interventionDeps);
       if (visibilityDecision.kind === "internal_continue" && visibilityDecision.gate) {
-        if (ctx.responseText) {
-          ctx.session.messages.push({ role: "assistant", content: ctx.responseText });
-        }
-        ctx.session.messages.push({ role: "user", content: visibilityDecision.gate });
+        pushContinuationMessages(ctx, visibilityDecision.gate);
         return { flow: "continue", newState };
       }
       return {
@@ -828,10 +799,7 @@ export async function handleInteractiveReflectionContinue(
       };
     }
 
-    if (ctx.responseText) {
-      ctx.session.messages.push({ role: "assistant", content: ctx.responseText });
-    }
-    ctx.session.messages.push({ role: "user", content: "Please continue." });
+    pushContinuationMessages(ctx, "Please continue.");
   }
 
   return { flow: "continue", newState };
