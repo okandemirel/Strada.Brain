@@ -144,7 +144,6 @@ import {
 } from "./orchestrator-text-utils.js";
 import {
   normalizeFailureFingerprint,
-  replaceSection,
   sanitizeEventInput,
   sanitizeToolResult,
 } from "./orchestrator-runtime-utils.js";
@@ -157,7 +156,11 @@ import {
   handleVerifierReplan,
 } from "./orchestrator-loop-utils.js";
 import { runConsensusVerification } from "./orchestrator-consensus.js";
-import { trackAndRecordToolResults } from "./orchestrator-tool-execution.js";
+import {
+  executeAndTrackTools,
+  refreshMemoryIfNeeded,
+  runConsensusIfAvailable,
+} from "./orchestrator-loop-shared.js";
 import { createAutonomyBundle } from "./orchestrator-autonomy-tracker.js";
 import {
   buildExecutionTraceRecord,
@@ -2554,45 +2557,41 @@ export class Orchestrator {
               }
               // ────────────────────────────────────────────────────────────────
 
-              // Handle tool calls
-              session.messages.push({
-                role: "assistant",
-                content: response.text,
-                tool_calls: response.toolCalls,
-              });
-
-              const toolResults = await this.executeToolCalls(chatId, response.toolCalls, {
-                mode: workerMode,
-                taskPrompt: prompt,
-                sessionMessages: session.messages,
-                onUsage: options.onUsage ?? this.onUsage,
-                identityKey,
-                strategy: executionStrategy,
-                agentState: bgAgentState,
-                touchedFiles: [...selfVerification.getState().touchedFiles],
-                workspaceLease: options.workspaceLease,
-              });
-              bgToolCallCount += response.toolCalls.length;
+              // Handle tool calls + autonomy tracking
               const verificationStateBefore = selfVerification.getState();
               const touchedFilesBefore = new Set(verificationStateBefore.touchedFiles);
-
-              // Autonomy tracking
-              trackAndRecordToolResults({
+              const { toolResults } = await executeAndTrackTools({
                 chatId,
+                responseText: response.text,
                 toolCalls: response.toolCalls,
-                toolResults,
-                taskPlanner,
-                selfVerification,
-                stradaConformance,
-                errorRecovery,
-                executionJournal,
-                agentPhase: bgAgentState.phase,
-                providerName: currentAssignment.providerName,
-                modelId: currentAssignment.modelId,
-                emitToolResult: (c, tc, tr) => this.emitToolResult(c, tc, tr),
-                workerCollector: workerCollector ?? undefined,
-                workspaceId: options.workspaceLease?.id,
+                session,
+                executeToolCalls: (c, tc, opts) => this.executeToolCalls(c, tc, opts),
+                executeOptions: {
+                  mode: workerMode,
+                  taskPrompt: prompt,
+                  sessionMessages: session.messages,
+                  onUsage: options.onUsage ?? this.onUsage,
+                  identityKey,
+                  strategy: executionStrategy,
+                  agentState: bgAgentState,
+                  touchedFiles: [...selfVerification.getState().touchedFiles],
+                  workspaceLease: options.workspaceLease,
+                },
+                trackingParams: {
+                  taskPlanner,
+                  selfVerification,
+                  stradaConformance,
+                  errorRecovery,
+                  executionJournal,
+                  agentPhase: bgAgentState.phase,
+                  providerName: currentAssignment.providerName,
+                  modelId: currentAssignment.modelId,
+                  emitToolResult: (c, tc, tr) => this.emitToolResult(c, tc, tr),
+                  workerCollector: workerCollector ?? undefined,
+                  workspaceId: options.workspaceLease?.id,
+                },
               });
+              bgToolCallCount += response.toolCalls.length;
               const verificationStateAfter = selfVerification.getState();
               const newTouchedFiles = [...verificationStateAfter.touchedFiles]
                 .filter((file) => !touchedFilesBefore.has(file));
@@ -2616,36 +2615,25 @@ export class Orchestrator {
 
               // ─── Consensus: verify output with second provider if confidence is low ───
               if (this.consensusManager && this.confidenceEstimator && this.providerRouter) {
-                try {
-                  const bgTaskClass = this.taskClassifier.classify(prompt);
-                  const bgConfidence = this.confidenceEstimator.estimate({
-                    task: bgTaskClass,
-                    providerName: currentAssignment.providerName,
-                    providerCapabilities: currentProvider.capabilities,
-                    agentState: bgAgentState,
-                    responseLength: (response.text ?? "").length,
-                  });
-                  await runConsensusVerification({
-                    consensusManager: this.consensusManager,
-                    availableProviderCount: this.providerManager.listAvailable().length,
-                    taskClass: bgTaskClass,
-                    confidence: bgConfidence,
-                    originalOutput: {
-                      text: response.text ?? undefined,
-                      toolCalls: response.toolCalls.map((tc: ToolCall) => ({ name: tc.name, input: tc.input })),
-                    },
-                    originalProviderName: currentAssignment.providerName,
-                    prompt,
-                    reviewAssignment: this.resolveConsensusReviewAssignment(executionStrategy.reviewer, currentAssignment, identityKey),
-                    chatId,
-                    identityKey,
-                    logLabel: "background",
-                    recordExecutionTrace: (p) => this.recordExecutionTrace(p),
-                    recordPhaseOutcome: (p) => this.recordPhaseOutcome(p),
-                  });
-                } catch {
-                  // Consensus failure is non-fatal
-                }
+                await runConsensusIfAvailable({
+                  consensusManager: this.consensusManager,
+                  confidenceEstimator: this.confidenceEstimator,
+                  providerManager: this.providerManager,
+                  taskClassifier: this.taskClassifier,
+                  prompt,
+                  responseText: response.text,
+                  toolCalls: response.toolCalls,
+                  currentAssignment,
+                  currentProviderCapabilities: currentProvider.capabilities,
+                  agentState: bgAgentState,
+                  executionStrategy,
+                  identityKey,
+                  chatId,
+                  logLabel: "background",
+                  resolveConsensusReviewAssignment: (r, c, k) => this.resolveConsensusReviewAssignment(r, c, k),
+                  recordExecutionTrace: (p) => this.recordExecutionTrace(p),
+                  recordPhaseOutcome: (p) => this.recordPhaseOutcome(p),
+                });
               }
               // ────────────────────────────────────────────────────────────────────
 
@@ -2680,40 +2668,17 @@ export class Orchestrator {
               }
 
               // ─── Memory Re-retrieval (background path) ───────────────────────
-              if (bgMemoryRefresher) {
-                try {
-                  const check = await bgMemoryRefresher.shouldRefresh(bgIteration, prompt, chatId);
-                  if (check.should) {
-                    const refreshed = await bgMemoryRefresher.refresh(
-                      prompt,
-                      chatId,
-                      check.reason,
-                      bgIteration,
-                      check.cosineDistance,
-                    );
-                    if (refreshed.triggered) {
-                      if (refreshed.newMemoryContext) {
-                        systemPrompt = replaceSection(
-                          systemPrompt,
-                          "re-retrieval:memory",
-                          `## Relevant Memory\n${refreshed.newMemoryContext}`,
-                        );
-                      }
-                      if (refreshed.newRagContext) {
-                        systemPrompt = replaceSection(
-                          systemPrompt,
-                          "re-retrieval:rag",
-                          refreshed.newRagContext,
-                        );
-                      }
-                      if (refreshed.newInsights?.length) {
-                        bgAgentState = { ...bgAgentState, learnedInsights: refreshed.newInsights };
-                      }
-                    }
-                  }
-                } catch {
-                  // Re-retrieval failure is non-fatal
-                }
+              {
+                const memRefresh = await refreshMemoryIfNeeded({
+                  memoryRefresher: bgMemoryRefresher,
+                  iteration: bgIteration,
+                  queryContext: prompt,
+                  chatId,
+                  systemPrompt,
+                  agentState: bgAgentState,
+                });
+                systemPrompt = memRefresh.systemPrompt;
+                bgAgentState = memRefresh.agentState;
               }
               // ─────────────────────────────────────────────────────────────────
             }
@@ -3950,81 +3915,62 @@ export class Orchestrator {
         }
         // ────────────────────────────────────────────────────────────────
 
-        // Handle tool calls
-        // First, add the assistant message with tool calls
-        session.messages.push({
-          role: "assistant",
-          content: response.text,
-          tool_calls: response.toolCalls,
-        });
-
+        // Handle tool calls + autonomy tracking
         // Intermediate text is stored in session for LLM context but NOT sent to user.
         // User only sees the final response (end_turn without tool calls).
-
-        // Execute all tool calls
-        const toolResults = await this.executeToolCalls(chatId, response.toolCalls, {
-          mode: "interactive",
-          userId,
-          taskPrompt: lastUserMessage,
-          sessionMessages: session.messages,
-          onUsage: this.onUsage,
-          identityKey,
-          strategy: executionStrategy,
-          agentState,
-          touchedFiles: [...selfVerification.getState().touchedFiles],
-        });
-
-        // ─── Autonomy: track + analyze results ─────────────────────────────
-        trackAndRecordToolResults({
+        const { toolResults } = await executeAndTrackTools({
           chatId,
+          responseText: response.text,
           toolCalls: response.toolCalls,
-          toolResults,
-          taskPlanner,
-          selfVerification,
-          stradaConformance,
-          errorRecovery,
-          executionJournal,
-          agentPhase: agentState.phase,
-          providerName: currentAssignment.providerName,
-          modelId: currentAssignment.modelId,
-          emitToolResult: (c, tc, tr) => this.emitToolResult(c, tc, tr),
+          session,
+          executeToolCalls: (c, tc, opts) => this.executeToolCalls(c, tc, opts),
+          executeOptions: {
+            mode: "interactive",
+            userId,
+            taskPrompt: lastUserMessage,
+            sessionMessages: session.messages,
+            onUsage: this.onUsage,
+            identityKey,
+            strategy: executionStrategy,
+            agentState,
+            touchedFiles: [...selfVerification.getState().touchedFiles],
+          },
+          trackingParams: {
+            taskPlanner,
+            selfVerification,
+            stradaConformance,
+            errorRecovery,
+            executionJournal,
+            agentPhase: agentState.phase,
+            providerName: currentAssignment.providerName,
+            modelId: currentAssignment.modelId,
+            emitToolResult: (c, tc, tr) => this.emitToolResult(c, tc, tr),
+          },
         });
 
         // Inject state-aware context (stall detection, budget warnings)
         const stateCtx = taskPlanner.getStateInjection();
-        // ────────────────────────────────────────────────────────────────────
 
         // ─── Consensus: verify output with second provider if confidence is low ───
         if (this.consensusManager && this.confidenceEstimator && this.providerRouter) {
-          try {
-            const taskClass = this.taskClassifier.classify(lastUserMessage);
-            const confidence = this.confidenceEstimator.estimate({
-              task: taskClass,
-              providerName: currentAssignment.providerName,
-              providerCapabilities: currentProvider.capabilities,
-              agentState,
-              responseLength: (response.text ?? "").length,
-            });
-            await runConsensusVerification({
-              consensusManager: this.consensusManager,
-              availableProviderCount: this.providerManager.listAvailable().length,
-              taskClass,
-              confidence,
-              originalOutput: {
-                text: response.text ?? undefined,
-                toolCalls: response.toolCalls.map((tc: ToolCall) => ({ name: tc.name, input: tc.input })),
-              },
-              originalProviderName: currentAssignment.providerName,
-              prompt: lastUserMessage,
-              reviewAssignment: this.resolveConsensusReviewAssignment(executionStrategy.reviewer, currentAssignment, identityKey),
-              chatId,
-              identityKey,
-              recordExecutionTrace: (p) => this.recordExecutionTrace(p),
-              recordPhaseOutcome: (p) => this.recordPhaseOutcome(p),
-            });
-          } catch {
-            // Consensus failure is non-fatal
-          }
+          await runConsensusIfAvailable({
+            consensusManager: this.consensusManager,
+            confidenceEstimator: this.confidenceEstimator,
+            providerManager: this.providerManager,
+            taskClassifier: this.taskClassifier,
+            prompt: lastUserMessage,
+            responseText: response.text,
+            toolCalls: response.toolCalls,
+            currentAssignment,
+            currentProviderCapabilities: currentProvider.capabilities,
+            agentState,
+            executionStrategy,
+            identityKey,
+            chatId,
+            resolveConsensusReviewAssignment: (r, c, k) => this.resolveConsensusReviewAssignment(r, c, k),
+            recordExecutionTrace: (p) => this.recordExecutionTrace(p),
+            recordPhaseOutcome: (p) => this.recordPhaseOutcome(p),
+          });
         }
         // ────────────────────────────────────────────────────────────────────
 
@@ -4050,48 +3996,25 @@ export class Orchestrator {
         }
 
         // ─── Memory Re-retrieval ─────────────────────────────────────────
-        if (memoryRefresher) {
-          try {
-            const recentContext = this.sessionManager.extractLastUserMessage(session);
-            const check = await memoryRefresher.shouldRefresh(iteration, recentContext, chatId);
-            if (check.should) {
-              const refreshed = await memoryRefresher.refresh(
-                recentContext,
-                chatId,
-                check.reason,
-                iteration,
-                check.cosineDistance,
-              );
-              if (refreshed.triggered) {
-                if (refreshed.newMemoryContext) {
-                  systemPrompt = replaceSection(
-                    systemPrompt,
-                    "re-retrieval:memory",
-                    `## Relevant Memory\n${refreshed.newMemoryContext}`,
-                  );
-                }
-                if (refreshed.newRagContext) {
-                  systemPrompt = replaceSection(
-                    systemPrompt,
-                    "re-retrieval:rag",
-                    refreshed.newRagContext,
-                  );
-                }
-                if (refreshed.newInsights?.length) {
-                  agentState = { ...agentState, learnedInsights: refreshed.newInsights };
-                }
-                if (refreshed.newInstinctIds?.length) {
-                  // Deduplicate and cap instinct IDs to prevent unbounded growth
-                  const idSet = new Set(matchedInstinctIds);
-                  for (const id of refreshed.newInstinctIds) idSet.add(id);
-                  matchedInstinctIds = [...idSet].slice(0, 200);
-                  this.currentSessionInstinctIds.set(chatId, matchedInstinctIds);
-                }
-              }
-            }
-          } catch {
-            // Re-retrieval failure is non-fatal
-          }
+        {
+          const recentContext = this.sessionManager.extractLastUserMessage(session);
+          const memRefresh = await refreshMemoryIfNeeded({
+            memoryRefresher,
+            iteration,
+            queryContext: recentContext,
+            chatId,
+            systemPrompt,
+            agentState,
+            onNewInstinctIds: (ids) => {
+              // Deduplicate and cap instinct IDs to prevent unbounded growth
+              const idSet = new Set(matchedInstinctIds);
+              for (const id of ids) idSet.add(id);
+              matchedInstinctIds = [...idSet].slice(0, 200);
+              this.currentSessionInstinctIds.set(chatId, matchedInstinctIds);
+            },
+          });
+          systemPrompt = memRefresh.systemPrompt;
+          agentState = memRefresh.agentState;
         }
         // ─────────────────────────────────────────────────────────────────
       }
