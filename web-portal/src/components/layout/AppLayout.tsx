@@ -5,7 +5,7 @@ import { TooltipProvider } from '../ui/tooltip'
 import Sidebar from './Sidebar'
 import PanelLayout from '../workspace/PanelLayout'
 import BottomTabBar from './BottomTabBar'
-import ToastContainer from '../ui/Toast'
+import { Toaster } from 'sonner'
 import ShortcutsHelp from '../ui/ShortcutsHelp'
 import { useKeyboardShortcuts } from '../../hooks/use-keyboard-shortcuts'
 import { useWorkspaceStore } from '../../stores/workspace-store'
@@ -74,7 +74,18 @@ function AppLayoutInner() {
         </div>
       </div>
       <BottomTabBar />
-      <ToastContainer />
+      <Toaster
+        position="bottom-right"
+        toastOptions={{
+          style: {
+            background: 'var(--color-bg-secondary)',
+            border: '1px solid rgba(255,255,255,0.1)',
+            color: 'var(--color-text)',
+            backdropFilter: 'blur(16px)',
+          },
+        }}
+        visibleToasts={3}
+      />
       <ShortcutsHelp open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
     </>
   )

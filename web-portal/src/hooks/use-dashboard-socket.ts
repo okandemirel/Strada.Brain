@@ -1,3 +1,4 @@
+import { toast } from 'sonner'
 import { useMonitorStore } from '../stores/monitor-store'
 import { useWorkspaceStore, type WorkspaceMode } from '../stores/workspace-store'
 import { useCanvasStore } from '../stores/canvas-store'
@@ -102,6 +103,12 @@ export function dispatchWorkspaceMessage(data: { type: string; [key: string]: un
           message: (payload.reason as string) ?? `Switched to ${payload.mode}`,
           severity: 'info',
         })
+        toast.info((payload.reason as string) ?? `Switched to ${payload.mode}`, {
+          action: {
+            label: 'Undo',
+            onClick: () => useWorkspaceStore.getState().undoModeSwitch(),
+          },
+        })
       }
       break
     }
@@ -112,6 +119,11 @@ export function dispatchWorkspaceMessage(data: { type: string; [key: string]: un
         message: (payload.message as string) ?? '',
         severity: (payload.severity as 'info' | 'warning' | 'error') ?? 'info',
       })
+      const sev = (payload.severity as string) ?? 'info'
+      const msg = (payload.message as string) ?? ''
+      if (sev === 'error') toast.error(msg)
+      else if (sev === 'warning') toast.warning(msg)
+      else toast.info(msg)
       break
     }
 

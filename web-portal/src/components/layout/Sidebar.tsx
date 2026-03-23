@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { Sun, Moon, ChevronLeft, ChevronRight, Bell } from 'lucide-react'
 import { useWS } from '../../hooks/useWS'
@@ -10,6 +10,7 @@ import { CONNECTION_STATUS } from '../../config/connection-status'
 import { TooltipProvider, Tooltip, TooltipTrigger, TooltipContent } from '../ui/tooltip'
 import AdminDropdown from './AdminDropdown'
 import MiniChat from '../workspace/MiniChat'
+import NotificationCenter from './NotificationCenter'
 
 export default function Sidebar() {
   const { status } = useWS()
@@ -18,12 +19,10 @@ export default function Sidebar() {
   const currentMode = useWorkspaceStore((s) => s.mode)
   const setMode = useWorkspaceStore((s) => s.setMode)
   const notifications = useWorkspaceStore((s) => s.notifications)
-  const dismissNotification = useWorkspaceStore((s) => s.dismissNotification)
   const notificationCount = notifications.length
   const navigate = useNavigate()
   const location = useLocation()
   const [notifOpen, setNotifOpen] = useState(false)
-  const notifRef = useRef<HTMLDivElement>(null)
 
   const handleModeClick = (mode: typeof currentMode) => {
     setMode(mode)
@@ -31,18 +30,6 @@ export default function Sidebar() {
       navigate('/')
     }
   }
-
-  // Close notification panel on outside click
-  useEffect(() => {
-    if (!notifOpen) return
-    const handler = (e: MouseEvent) => {
-      if (notifRef.current && !notifRef.current.contains(e.target as Node)) {
-        setNotifOpen(false)
-      }
-    }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
-  }, [notifOpen])
 
   useEffect(() => {
     const mq = window.matchMedia('(max-width: 1439px)')
@@ -129,52 +116,22 @@ export default function Sidebar() {
       {/* Footer */}
       <div className="p-2 border-t border-border flex flex-col gap-0.5 shrink-0">
         {/* Notifications */}
-        <div className="relative" ref={notifRef}>
-          <button
-            aria-label="Notifications"
-            onClick={() => setNotifOpen((prev) => !prev)}
-            className={`relative flex items-center gap-2.5 px-3 py-2 rounded-[10px] text-text-secondary text-sm font-medium whitespace-nowrap overflow-hidden select-none transition-all duration-150 cursor-pointer bg-transparent border-none font-[inherit] text-left w-full hover:bg-bg-tertiary hover:text-text ${collapsed ? 'justify-center px-2' : ''}`}
-          >
-            <span className="w-[22px] text-center text-base shrink-0 leading-none relative">
-              <Bell size={16} />
-              {notificationCount > 0 && (
-                <span className="absolute -top-1.5 -right-1.5 min-w-[16px] h-4 px-1 rounded-full bg-accent text-[10px] font-bold text-white flex items-center justify-center leading-none">
-                  {notificationCount > 9 ? '9+' : notificationCount}
-                </span>
-              )}
-            </span>
-            {!collapsed && <span className="whitespace-nowrap overflow-hidden text-ellipsis">Notifications</span>}
-          </button>
-          {notifOpen && (
-            <div className="absolute bottom-full left-0 mb-2 w-72 max-h-80 overflow-y-auto bg-bg-secondary border border-border rounded-xl shadow-lg z-50">
-              <div className="px-3 py-2 border-b border-border text-xs font-semibold text-text-secondary uppercase tracking-wide">
-                Notifications {notificationCount > 0 && `(${notificationCount})`}
-              </div>
-              {notifications.length === 0 ? (
-                <div className="px-3 py-6 text-center text-sm text-text-tertiary">No notifications</div>
-              ) : (
-                <div className="flex flex-col">
-                  {[...notifications].reverse().slice(0, 20).map((n) => (
-                    <div key={n.id} className="flex items-start gap-2 px-3 py-2 border-b border-border last:border-b-0 hover:bg-bg-tertiary">
-                      <span className={`mt-1 w-2 h-2 rounded-full shrink-0 ${n.severity === 'error' ? 'bg-error' : n.severity === 'warning' ? 'bg-warning' : 'bg-accent'}`} />
-                      <div className="flex-1 min-w-0">
-                        <div className="text-xs font-semibold text-text truncate">{n.title}</div>
-                        <div className="text-xs text-text-secondary truncate">{n.message}</div>
-                      </div>
-                      <button
-                        onClick={(e) => { e.stopPropagation(); dismissNotification(n.id) }}
-                        className="shrink-0 text-text-tertiary hover:text-text text-xs px-1 cursor-pointer bg-transparent border-none"
-                        aria-label="Dismiss"
-                      >
-                        &times;
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
+        <button
+          aria-label="Notifications"
+          onClick={() => setNotifOpen((prev) => !prev)}
+          className={`relative flex items-center gap-2.5 px-3 py-2 rounded-[10px] text-text-secondary text-sm font-medium whitespace-nowrap overflow-hidden select-none transition-all duration-150 cursor-pointer bg-transparent border-none font-[inherit] text-left w-full hover:bg-bg-tertiary hover:text-text ${collapsed ? 'justify-center px-2' : ''}`}
+        >
+          <span className="w-[22px] text-center text-base shrink-0 leading-none relative">
+            <Bell size={16} />
+            {notificationCount > 0 && (
+              <span className="absolute -top-1.5 -right-1.5 min-w-[16px] h-4 px-1 rounded-full bg-accent text-[10px] font-bold text-white flex items-center justify-center leading-none">
+                {notificationCount > 9 ? '9+' : notificationCount}
+              </span>
+            )}
+          </span>
+          {!collapsed && <span className="whitespace-nowrap overflow-hidden text-ellipsis">Notifications</span>}
+        </button>
+        <NotificationCenter open={notifOpen} onOpenChange={setNotifOpen} />
 
         {/* Theme toggle */}
         <button
