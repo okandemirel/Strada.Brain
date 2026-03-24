@@ -298,6 +298,7 @@ export type EnvVarName =
   | "STRADA_LOOP_DENSITY_THRESHOLD"
   | "STRADA_LOOP_DENSITY_WINDOW"
   | "STRADA_LOOP_MAX_RECOVERY_EPISODES"
+  | "STRADA_LOOP_STALE_ANALYSIS_THRESHOLD"
   // Daemon Full Autonomy
   | "STRADA_DAEMON_FULL_AUTONOMY"
 
@@ -778,6 +779,7 @@ export interface Config {
   readonly loopDensityThreshold: number;
   readonly loopDensityWindow: number;
   readonly loopMaxRecoveryEpisodes: number;
+  readonly loopStaleAnalysisThreshold: number;
   // Daemon Full Autonomy
   readonly daemonFullAutonomy: boolean;
 
@@ -1609,7 +1611,7 @@ export const configSchema = z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(1).max(100))
-      .default("5"),
+      .default("3"),
     loopFingerprintWindow: z
       .string()
       .transform((s) => parseInt(s, 10))
@@ -1619,7 +1621,7 @@ export const configSchema = z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(1).max(100))
-      .default("8"),
+      .default("5"),
     loopDensityWindow: z
       .string()
       .transform((s) => parseInt(s, 10))
@@ -1630,6 +1632,11 @@ export const configSchema = z
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(1).max(50))
       .default("5"),
+    loopStaleAnalysisThreshold: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(1).max(20))
+      .default("3"),
     // Daemon Full Autonomy
     daemonFullAutonomy: boolFromString(true),
 
@@ -2232,6 +2239,7 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
     loopDensityThreshold: rawConfig.loopDensityThreshold,
     loopDensityWindow: rawConfig.loopDensityWindow,
     loopMaxRecoveryEpisodes: rawConfig.loopMaxRecoveryEpisodes,
+    loopStaleAnalysisThreshold: rawConfig.loopStaleAnalysisThreshold,
     daemonFullAutonomy: rawConfig.daemonFullAutonomy,
 
     routing: {
@@ -2706,6 +2714,7 @@ interface EnvVars {
   loopDensityThreshold: string | undefined;
   loopDensityWindow: string | undefined;
   loopMaxRecoveryEpisodes: string | undefined;
+  loopStaleAnalysisThreshold: string | undefined;
   // Daemon Full Autonomy
   daemonFullAutonomy: string | undefined;
   // Provider Routing
@@ -2987,6 +2996,7 @@ function loadFromEnv(): EnvVars {
     loopDensityThreshold: process.env["STRADA_LOOP_DENSITY_THRESHOLD"],
     loopDensityWindow: process.env["STRADA_LOOP_DENSITY_WINDOW"],
     loopMaxRecoveryEpisodes: process.env["STRADA_LOOP_MAX_RECOVERY_EPISODES"],
+    loopStaleAnalysisThreshold: process.env["STRADA_LOOP_STALE_ANALYSIS_THRESHOLD"],
     // Daemon Full Autonomy
     daemonFullAutonomy: process.env["STRADA_DAEMON_FULL_AUTONOMY"],
     // Provider Routing

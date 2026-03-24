@@ -138,8 +138,9 @@ describe("Autonomy Blocker Scenario — Game .cs File Editing", () => {
   });
 
   describe("Scenario 2: Control loop tracker tolerance", () => {
-    it("default thresholds allow 4 same-fingerprint events without triggering", () => {
-      const tracker = new ControlLoopTracker(); // defaults: fpThreshold=5
+    it("default thresholds allow 2 same-fingerprint events without triggering", () => {
+      // Disable stale analysis to isolate fingerprint behavior
+      const tracker = new ControlLoopTracker({ staleAnalysisThreshold: 100 });
 
       const event = {
         kind: "verifier_continue" as const,
@@ -148,20 +149,21 @@ describe("Autonomy Blocker Scenario — Game .cs File Editing", () => {
         iteration: 1,
       };
 
-      // 4 events — should NOT trigger with new default (was 3 before fix)
-      for (let i = 1; i <= 4; i++) {
+      // 2 events — should NOT trigger (default fpThreshold=3)
+      for (let i = 1; i <= 2; i++) {
         const result = tracker.recordGate({ ...event, iteration: i });
         expect(result).toBeNull();
       }
 
-      // 5th event — SHOULD trigger
-      const trigger = tracker.recordGate({ ...event, iteration: 5 });
+      // 3rd event — SHOULD trigger
+      const trigger = tracker.recordGate({ ...event, iteration: 3 });
       expect(trigger).not.toBeNull();
       expect(trigger!.reason).toBe("same_fingerprint_repeated");
     });
 
-    it("allows 7 mixed gate events without density trigger (old threshold was 5)", () => {
-      const tracker = new ControlLoopTracker(); // defaults: densityThreshold=8
+    it("allows 4 mixed gate events without density trigger", () => {
+      // Disable stale analysis to isolate density behavior
+      const tracker = new ControlLoopTracker({ staleAnalysisThreshold: 100 });
 
       const kinds = [
         "verifier_continue",
@@ -170,8 +172,8 @@ describe("Autonomy Blocker Scenario — Game .cs File Editing", () => {
         "verifier_replan",
       ] as const;
 
-      // 7 mixed events — should NOT trigger density (old threshold 5 would have)
-      for (let i = 1; i <= 7; i++) {
+      // 4 mixed events — should NOT trigger density (default=5)
+      for (let i = 1; i <= 4; i++) {
         const result = tracker.recordGate({
           kind: kinds[i % kinds.length]!,
           reason: `reason-${i}`,
@@ -180,17 +182,37 @@ describe("Autonomy Blocker Scenario — Game .cs File Editing", () => {
         expect(result).toBeNull();
       }
 
-      // 8th event — SHOULD trigger density
+      // 5th event — SHOULD trigger density
       const trigger = tracker.recordGate({
         kind: "verifier_continue",
-        reason: "reason-8",
-        iteration: 8,
+        reason: "reason-5",
+        iteration: 5,
       });
       expect(trigger).not.toBeNull();
       expect(trigger!.reason).toBe("internal_gate_density");
     });
 
-    it("maxRecoveryEpisodes defaults to 5 (was ~2)", () => {
+    it("stale analysis triggers after 3 consecutive gates without tool execution", () => {
+      const tracker = new ControlLoopTracker();
+
+      for (let i = 1; i <= 2; i++) {
+        expect(tracker.recordGate({
+          kind: "clarification_internal_continue",
+          reason: "Clarification kept internal",
+          iteration: i,
+        })).toBeNull();
+      }
+
+      const trigger = tracker.recordGate({
+        kind: "clarification_internal_continue",
+        reason: "Clarification kept internal",
+        iteration: 3,
+      });
+      expect(trigger).not.toBeNull();
+      expect(trigger!.reason).toBe("stale_analysis_loop");
+    });
+
+    it("maxRecoveryEpisodes defaults to 5", () => {
       const tracker = new ControlLoopTracker();
       expect(tracker.maxRecoveryEpisodes).toBe(5);
     });
@@ -289,6 +311,7 @@ describe("Autonomy Blocker Scenario — Game .cs File Editing", () => {
         loopDensityThreshold: 15,
         loopDensityWindow: 50,
         loopMaxRecoveryEpisodes: 8,
+        loopStaleAnalysisThreshold: 100, // disable stale analysis for this test
       });
 
       // Conformance: editing game file should NOT trigger

@@ -6719,26 +6719,8 @@ DONE`,
       expect(result).toContain("configured iteration budget");
     });
 
-    it("delegates analysis after repeated clarification-internal loops", async () => {
+    it("detects stale analysis loop and stops early instead of looping indefinitely", async () => {
       const delegateAnalysisTool = createMockTool("delegate_analysis");
-      vi.mocked(delegateAnalysisTool.execute).mockResolvedValue({
-        content: "Delegated analysis: runtime log sampling is still missing.",
-        metadata: {
-          workerResult: {
-            status: "completed",
-            finalSummary: "Delegated analysis: runtime log sampling is still missing.",
-            visibleResponse: "Delegated analysis: runtime log sampling is still missing.",
-            provider: "mock",
-            catalogVersion: "mock:default",
-            assignmentVersion: 0,
-            touchedFiles: ["Assets/Level.asset"],
-            toolTrace: [],
-            verificationResults: [],
-            reviewFindings: [],
-            artifacts: [],
-          },
-        },
-      } as any);
 
       const backgroundOrch = new Orchestrator({
         providerManager: {
@@ -6753,76 +6735,26 @@ DONE`,
         requireConfirmation: false,
         taskConfig: {
           ...DEFAULT_TASK_CONFIG,
-          backgroundEpochMaxIterations: 7,
+          backgroundEpochMaxIterations: 20,
           backgroundAutoContinue: false,
         },
       });
 
-      mockProvider.chat
-        .mockResolvedValueOnce({
-          text: "Should I ask which console error matters most?",
-          toolCalls: [],
-          stopReason: "end_turn",
-          usage: { inputTokens: 10, outputTokens: 20 },
-        })
-        .mockResolvedValueOnce({
-          text: JSON.stringify({
-            decision: "internal_continue",
-            reason: "Strada can still inspect local runtime evidence first.",
-            recommendedNextAction: "Inspect the project and logs before asking the user.",
-          }),
-          toolCalls: [],
-          stopReason: "end_turn",
-          usage: { inputTokens: 10, outputTokens: 20 },
-        })
-        .mockResolvedValueOnce({
-          text: "Should I ask which console error matters most?",
-          toolCalls: [],
-          stopReason: "end_turn",
-          usage: { inputTokens: 10, outputTokens: 20 },
-        })
-        .mockResolvedValueOnce({
-          text: JSON.stringify({
-            decision: "internal_continue",
-            reason: "Strada can still inspect local runtime evidence first.",
-            recommendedNextAction: "Inspect the project and logs before asking the user.",
-          }),
-          toolCalls: [],
-          stopReason: "end_turn",
-          usage: { inputTokens: 10, outputTokens: 20 },
-        })
-        .mockResolvedValueOnce({
-          text: "Should I ask which console error matters most?",
-          toolCalls: [],
-          stopReason: "end_turn",
-          usage: { inputTokens: 10, outputTokens: 20 },
-        })
-        .mockResolvedValueOnce({
-          text: JSON.stringify({
-            decision: "internal_continue",
-            reason: "Strada can still inspect local runtime evidence first.",
-            recommendedNextAction: "Inspect the project and logs before asking the user.",
-          }),
-          toolCalls: [],
-          stopReason: "end_turn",
-          usage: { inputTokens: 10, outputTokens: 20 },
-        })
-        .mockResolvedValueOnce({
-          text: JSON.stringify({
-            decision: "delegate_analysis",
-            reason: "The loop needs an external root-cause diagnosis path.",
-            delegationTask: "Analyze the repeated clarification loop and identify missing evidence.",
-          }),
-          toolCalls: [],
-          stopReason: "end_turn",
-          usage: { inputTokens: 10, outputTokens: 20 },
-        })
-        .mockResolvedValueOnce({
-          text: "1. Inspect the specific runtime log source.\n2. Avoid asking the user yet.",
+      // Simulate repeated text-only responses (clarification loop)
+      for (let i = 0; i < 20; i++) {
+        mockProvider.chat.mockResolvedValueOnce({
+          text: i % 2 === 0
+            ? "Should I ask which console error matters most?"
+            : JSON.stringify({
+                decision: "internal_continue",
+                reason: "Strada can still inspect local runtime evidence first.",
+                recommendedNextAction: "Inspect the project and logs before asking the user.",
+              }),
           toolCalls: [],
           stopReason: "end_turn",
           usage: { inputTokens: 10, outputTokens: 20 },
         });
+      }
 
       const progress = vi.fn();
       const result = await backgroundOrch.runBackgroundTask("console üzerinden errorlere bak ve çöz", {
@@ -6832,13 +6764,16 @@ DONE`,
         onProgress: progress,
       });
 
-      expect(delegateAnalysisTool.execute).toHaveBeenCalled();
-      expect(progress).toHaveBeenCalledWith(
-        expect.objectContaining({
-          kind: "delegation",
-        }),
+      // Stale analysis detection should stop the loop well before 20 iterations.
+      // The loop recovery progress signal should have been emitted.
+      const progressCalls = progress.mock.calls.flat();
+      const hasLoopRecoveryOrClarification = progressCalls.some(
+        (call: any) => call?.kind === "loop_recovery" || call?.kind === "clarification" || call?.kind === "replanning",
       );
-      expect(result).toContain("configured iteration budget");
+      expect(hasLoopRecoveryOrClarification).toBe(true);
+
+      // Should NOT have used all 20 iterations — stale detection catches it early
+      expect(mockProvider.chat.mock.calls.length).toBeLessThan(15);
     });
 
     it("streaming error handling: chatStream throws gracefully handled", async () => {

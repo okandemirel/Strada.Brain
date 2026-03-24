@@ -483,6 +483,7 @@ export class Orchestrator {
   private readonly loopDensityThreshold?: number;
   private readonly loopDensityWindow?: number;
   private readonly loopMaxRecoveryEpisodes?: number;
+  private readonly loopStaleAnalysisThreshold?: number;
   private readonly runtimeArtifactMatches = new Map<
     string,
     {
@@ -551,6 +552,7 @@ export class Orchestrator {
     loopDensityThreshold?: number;
     loopDensityWindow?: number;
     loopMaxRecoveryEpisodes?: number;
+    loopStaleAnalysisThreshold?: number;
   }) {
     this.providerManager = opts.providerManager;
     this.channel = opts.channel;
@@ -616,6 +618,7 @@ export class Orchestrator {
     this.loopDensityThreshold = opts.loopDensityThreshold;
     this.loopDensityWindow = opts.loopDensityWindow;
     this.loopMaxRecoveryEpisodes = opts.loopMaxRecoveryEpisodes;
+    this.loopStaleAnalysisThreshold = opts.loopStaleAnalysisThreshold;
     this.getIdentityState = opts.getIdentityState;
     this.crashRecoveryContext = opts.crashRecoveryContext;
 
@@ -1924,6 +1927,7 @@ export class Orchestrator {
           loopDensityThreshold: this.loopDensityThreshold,
           loopDensityWindow: this.loopDensityWindow,
           loopMaxRecoveryEpisodes: this.loopMaxRecoveryEpisodes,
+          loopStaleAnalysisThreshold: this.loopStaleAnalysisThreshold,
         });
         const controlLoopTracker = controlLoopTrackerOrNull!;
         const interventionDeps = this.buildInterventionDeps();
@@ -2328,6 +2332,9 @@ export class Orchestrator {
                 },
               });
               bgToolCallCount += response.toolCalls.length;
+              if (response.toolCalls.length > 0) {
+                controlLoopTracker.markToolExecution();
+              }
               const verificationStateAfter = selfVerification.getState();
               const newTouchedFiles = [...verificationStateAfter.touchedFiles]
                 .filter((file) => !touchedFilesBefore.has(file));
@@ -2901,6 +2908,7 @@ export class Orchestrator {
       loopDensityThreshold: this.loopDensityThreshold,
       loopDensityWindow: this.loopDensityWindow,
       loopMaxRecoveryEpisodes: this.loopMaxRecoveryEpisodes,
+      loopStaleAnalysisThreshold: this.loopStaleAnalysisThreshold,
     });
     const interventionDeps = this.buildInterventionDeps();
     const taskStartedAtMs = Date.now();

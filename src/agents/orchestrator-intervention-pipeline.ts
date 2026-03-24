@@ -433,6 +433,46 @@ export async function handleBackgroundLoopRecovery(
     return { action: "none" };
   }
 
+  // Stale analysis loop: agent is stuck generating text without tool execution.
+  // Force blocked immediately on second trigger to prevent wasting iterations.
+  if (trigger.reason === "stale_analysis_loop") {
+    const staleRecovery = params.tracker.markRecoveryAttempt(trigger.fingerprint);
+    const staleMsg =
+      "Blocked checkpoint: The agent has been generating analysis/clarification text " +
+      `without executing any tools for ${trigger.sameFingerprintCount} consecutive turns. ` +
+      "No implementation work has started despite clear required changes.";
+    params.executionJournal.recordLoopRecoveryEpisode({
+      fingerprint: trigger.fingerprint,
+      decision: staleRecovery >= 2 ? "blocked" : "replan_local",
+      summary: staleMsg,
+    });
+    if (staleRecovery >= 2) {
+      return {
+        action: "blocked",
+        message: buildLoopRecoveryCheckpointMessage({
+          prompt: params.prompt,
+          brief: params.executionJournal.buildRecoveryBrief({
+            fingerprint: trigger.fingerprint,
+            latestReason: trigger.latestReason,
+            touchedFiles,
+            recoveryEpisode: staleRecovery,
+            availableDelegations: [],
+          }),
+          decision: { decision: "blocked", reason: staleMsg },
+          touchedFiles,
+        }),
+      };
+    }
+    return {
+      action: "replan",
+      gate: [
+        "[STALE ANALYSIS DETECTED] You have been generating text-only analysis without using any tools.",
+        "STOP analyzing and START implementing. Use your available tools (file_read, file_write, shell, etc.) to make concrete progress.",
+        "Do not generate another analysis response. Execute tool calls in your next response.",
+      ].join("\n\n"),
+    };
+  }
+
   const delegationTool = selectLoopRecoveryDelegationTool(
     params.availableToolNames,
     touchedFiles,
@@ -580,7 +620,7 @@ export async function handleBackgroundLoopRecovery(
   if (
     finalDecision.decision === "blocked" &&
     params.daemonMode &&
-    brief.recoveryEpisode < (params.maxRecoveryEpisodes ?? 5) * 2
+    brief.recoveryEpisode < (params.maxRecoveryEpisodes ?? 5)
   ) {
     finalDecision = {
       ...finalDecision,

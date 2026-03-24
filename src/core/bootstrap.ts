@@ -450,6 +450,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     loopDensityThreshold: config.loopDensityThreshold,
     loopDensityWindow: config.loopDensityWindow,
     loopMaxRecoveryEpisodes: config.loopMaxRecoveryEpisodes,
+    loopStaleAnalysisThreshold: config.loopStaleAnalysisThreshold,
   });
 
   // Wire SupervisorBrain executeNode callback (post-construction circular dependency resolution)

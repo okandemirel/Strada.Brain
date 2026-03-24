@@ -30,25 +30,29 @@ export interface ControlLoopConfig {
   readonly gateDensityThreshold?: number;
   readonly gateDensityWindow?: number;
   readonly maxRecoveryEpisodes?: number;
+  readonly staleAnalysisThreshold?: number;
 }
 
 export class ControlLoopTracker {
   private readonly events: StoredGateEvent[] = [];
   private readonly seenEvidence = new Set<string>();
   private readonly recoveryEpisodes = new Map<string, number>();
+  private consecutiveNoToolGates = 0;
 
   private readonly fpThreshold: number;
   private readonly fpWindow: number;
   private readonly densityThreshold: number;
   private readonly densityWindow: number;
   readonly maxRecoveryEpisodes: number;
+  private readonly staleAnalysisThreshold: number;
 
   constructor(config?: ControlLoopConfig) {
-    this.fpThreshold = config?.sameFingerprintThreshold ?? 5;
+    this.fpThreshold = config?.sameFingerprintThreshold ?? 3;
     this.fpWindow = config?.sameFingerprintWindow ?? 20;
-    this.densityThreshold = config?.gateDensityThreshold ?? 8;
+    this.densityThreshold = config?.gateDensityThreshold ?? 5;
     this.densityWindow = config?.gateDensityWindow ?? 30;
     this.maxRecoveryEpisodes = config?.maxRecoveryEpisodes ?? 5;
+    this.staleAnalysisThreshold = config?.staleAnalysisThreshold ?? 3;
   }
 
   recordGate(event: ControlLoopGateEvent): ControlLoopTrigger | null {
@@ -57,7 +61,20 @@ export class ControlLoopTracker {
       fingerprint: normalizeFingerprint(event.kind, event.reason, event.gate),
     };
     this.events.push(stored);
+    this.consecutiveNoToolGates++;
     this.prune(event.iteration);
+
+    // Stale analysis: consecutive gates without any tool execution
+    if (this.consecutiveNoToolGates >= this.staleAnalysisThreshold) {
+      return {
+        fingerprint: stored.fingerprint,
+        sameFingerprintCount: this.consecutiveNoToolGates,
+        recentGateCount: this.events.length,
+        recoveryEpisode: this.recoveryEpisodes.get(stored.fingerprint) ?? 0,
+        reason: "stale_analysis_loop",
+        latestReason: stored.reason,
+      };
+    }
 
     const sameFingerprintEvents = this.events.filter((entry) =>
       entry.fingerprint === stored.fingerprint &&
@@ -89,8 +106,13 @@ export class ControlLoopTracker {
     return null;
   }
 
+  markToolExecution(): void {
+    this.consecutiveNoToolGates = 0;
+  }
+
   markVerificationClean(_iteration: number): void {
     this.events.length = 0;
+    this.consecutiveNoToolGates = 0;
   }
 
   markMeaningfulFileEvidence(files: readonly string[], _iteration: number): void {
@@ -104,12 +126,14 @@ export class ControlLoopTracker {
       this.seenEvidence.add(file);
     }
     this.events.length = 0;
+    this.consecutiveNoToolGates = 0;
   }
 
   markRecoveryAttempt(fingerprint: string): number {
     const next = (this.recoveryEpisodes.get(fingerprint) ?? 0) + 1;
     this.recoveryEpisodes.set(fingerprint, next);
     this.events.length = 0;
+    this.consecutiveNoToolGates = 0;
     return next;
   }
 
