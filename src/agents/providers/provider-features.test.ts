@@ -106,7 +106,7 @@ describe("Feature: max_tokens from capabilities", () => {
     { name: "DeepSeek", cls: DeepSeekProvider, args: ["key"], expected: 8192 },
     { name: "Groq", cls: GroqProvider, args: ["key"], expected: 8192 },
     { name: "Mistral", cls: MistralProvider, args: ["key"], expected: 8192 },
-    { name: "Kimi", cls: KimiProvider, args: ["key"], expected: 8192 },
+    { name: "Kimi", cls: KimiProvider, args: ["key"], expected: 16384 },
     { name: "Qwen", cls: QwenProvider, args: ["key"], expected: 8192 },
     { name: "MiniMax", cls: MiniMaxProvider, args: ["key"], expected: 4096 },
     { name: "Together", cls: TogetherProvider, args: ["key"], expected: 4096 },
@@ -662,7 +662,7 @@ describe("Feature: Kimi reasoning_content round-trip", () => {
     expect(assistantMsg.reasoning_content).toBe("I need to read the file first");
   });
 
-  it("buildMessages sets reasoning_content to null when not present", () => {
+  it("buildMessages uses '.' fallback for tool-call messages without reasoning", () => {
     const kimi = new KimiProvider("key");
     const build = (sys: string, msgs: any[]) => (kimi as any).buildMessages(sys, msgs);
 
@@ -681,7 +681,7 @@ describe("Feature: Kimi reasoning_content round-trip", () => {
 
     const result = build("system", messages);
     const assistantMsg = result.find((m: any) => m.role === "assistant");
-    expect(assistantMsg.reasoning_content).toBeNull();
+    expect(assistantMsg.reasoning_content).toBe(".");
   });
 
   it("buildMessages finds reasoning_content from any tool call position", () => {

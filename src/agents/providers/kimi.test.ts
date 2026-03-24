@@ -29,7 +29,7 @@ describe("KimiProvider", () => {
   it("has correct name and capabilities", () => {
     const provider = new KimiProvider("test-key");
     expect(provider.name).toBe("Kimi (Moonshot)");
-    expect(provider.capabilities.maxTokens).toBe(8192);
+    expect(provider.capabilities.maxTokens).toBe(16384);
     expect(provider.capabilities.vision).toBe(true);
     expect(provider.capabilities.toolCalling).toBe(true);
     expect(provider.capabilities.systemPrompt).toBe(true);
@@ -208,7 +208,7 @@ describe("KimiProvider", () => {
       expect(assistant.content).toBeNull();
     });
 
-    it("sets reasoning_content to null on assistant messages without reasoning", () => {
+    it("omits reasoning_content on text-only assistant messages without reasoning", () => {
       const provider = new KimiProvider("test-key");
       const buildMessages = getBuildMessages(provider);
 
@@ -219,7 +219,42 @@ describe("KimiProvider", () => {
 
       const assistant = messages.find((m) => m.role === "assistant")!;
       expect(assistant.content).toBe("Just a plain response");
-      expect(assistant.reasoning_content).toBeNull();
+      expect("reasoning_content" in assistant).toBe(false);
+    });
+
+    it("uses '.' fallback for tool-call messages without captured reasoning", () => {
+      const provider = new KimiProvider("test-key");
+      const buildMessages = getBuildMessages(provider);
+
+      const messages = buildMessages("system prompt", [
+        { role: "user", content: "hi" },
+        {
+          role: "assistant",
+          content: "calling tool",
+          tool_calls: [{ id: "tc1", name: "test_tool", input: {} }],
+        },
+      ]) as Array<Record<string, unknown>>;
+
+      const assistant = messages.find((m) => m.role === "assistant")!;
+      expect(assistant.reasoning_content).toBe(".");
+    });
+
+    it("extracts reasoning from content for tool-call messages (streaming backup)", () => {
+      const provider = new KimiProvider("test-key");
+      const buildMessages = getBuildMessages(provider);
+
+      const messages = buildMessages("system prompt", [
+        { role: "user", content: "hi" },
+        {
+          role: "assistant",
+          content: "<reasoning>\nI should use a tool\n</reasoning>\n\ncalling tool",
+          tool_calls: [{ id: "tc1", name: "test_tool", input: {} }],
+        },
+      ]) as Array<Record<string, unknown>>;
+
+      const assistant = messages.find((m) => m.role === "assistant")!;
+      expect(assistant.reasoning_content).toBe("I should use a tool");
+      expect(assistant.content).toBe("calling tool");
     });
 
     it("preserves system and user messages unchanged", () => {

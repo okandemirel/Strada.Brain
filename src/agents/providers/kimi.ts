@@ -50,7 +50,7 @@ interface KimiResponse {
  */
 export class KimiProvider extends OpenAIProvider {
   override readonly capabilities: ProviderCapabilities = {
-    maxTokens: 8192,
+    maxTokens: 16384,
     streaming: true,
     structuredStreaming: false,
     toolCalling: true,
@@ -138,9 +138,8 @@ export class KimiProvider extends OpenAIProvider {
 
     // Kimi K2.5: extract <reasoning> blocks from assistant text and
     // set as reasoning_content field (required when thinking is enabled).
-    // When thinking is enabled, ALL assistant messages must include
-    // reasoning_content or the API returns 400. Messages that were stored
-    // without reasoning (e.g. visible-only responses) get a null fallback.
+    // Tool-call messages MUST carry reasoning_content as a non-null string
+    // or the API returns 400.  Text-only messages tolerate omission.
     for (const msg of result) {
       if (msg.role === "assistant") {
         const rec = msg as unknown as Record<string, unknown>;
@@ -152,8 +151,17 @@ export class KimiProvider extends OpenAIProvider {
             if (!msg.content.trim()) msg.content = null;
           }
         }
-        if (rec["reasoning_content"] === undefined) {
-          rec["reasoning_content"] = null;
+        // Tool-call messages: Kimi requires reasoning_content as a non-null
+        // string.  Use "." as a minimal fallback when reasoning was not
+        // captured (should not happen with K2.5, but defends against it).
+        // Text-only messages: omit the field entirely when absent — the API
+        // only validates reasoning_content on tool-call messages.
+        if (rec["reasoning_content"] === undefined || rec["reasoning_content"] === null) {
+          if (msg.tool_calls && msg.tool_calls.length > 0) {
+            rec["reasoning_content"] = ".";
+          } else {
+            delete rec["reasoning_content"];
+          }
         }
       }
     }
@@ -167,7 +175,12 @@ export class KimiProvider extends OpenAIProvider {
       ?.providerMetadata?.reasoning_content as string | undefined;
 
     const assistantMsg = super.buildAssistantToolCallMessage(msg);
-    (assistantMsg as unknown as Record<string, unknown>)["reasoning_content"] = reasoning ?? null;
+    // Set reasoning if found from providerMetadata.  If absent, leave
+    // undefined — the buildMessages loop will extract from <reasoning>
+    // tags in content or apply the "." fallback for tool-call messages.
+    if (reasoning) {
+      (assistantMsg as unknown as Record<string, unknown>)["reasoning_content"] = reasoning;
+    }
     return assistantMsg;
   }
 }
