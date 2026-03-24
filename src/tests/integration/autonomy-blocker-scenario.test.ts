@@ -138,7 +138,7 @@ describe("Autonomy Blocker Scenario — Game .cs File Editing", () => {
   });
 
   describe("Scenario 2: Control loop tracker tolerance", () => {
-    it("default thresholds allow 2 same-fingerprint events without triggering", () => {
+    it("default thresholds allow 14 same-fingerprint events without triggering", () => {
       // Disable stale analysis to isolate fingerprint behavior
       const tracker = new ControlLoopTracker({ staleAnalysisThreshold: 100 });
 
@@ -149,19 +149,19 @@ describe("Autonomy Blocker Scenario — Game .cs File Editing", () => {
         iteration: 1,
       };
 
-      // 2 events — should NOT trigger (default fpThreshold=3)
-      for (let i = 1; i <= 2; i++) {
+      // 14 events — should NOT trigger (default fpThreshold=15)
+      for (let i = 1; i <= 14; i++) {
         const result = tracker.recordGate({ ...event, iteration: i });
         expect(result).toBeNull();
       }
 
-      // 3rd event — SHOULD trigger
-      const trigger = tracker.recordGate({ ...event, iteration: 3 });
+      // 15th event — SHOULD trigger
+      const trigger = tracker.recordGate({ ...event, iteration: 15 });
       expect(trigger).not.toBeNull();
       expect(trigger!.reason).toBe("same_fingerprint_repeated");
     });
 
-    it("allows 4 mixed gate events without density trigger", () => {
+    it("allows 19 mixed gate events without density trigger", () => {
       // Disable stale analysis to isolate density behavior
       const tracker = new ControlLoopTracker({ staleAnalysisThreshold: 100 });
 
@@ -172,8 +172,8 @@ describe("Autonomy Blocker Scenario — Game .cs File Editing", () => {
         "verifier_replan",
       ] as const;
 
-      // 4 mixed events — should NOT trigger density (default=5)
-      for (let i = 1; i <= 4; i++) {
+      // 19 mixed events — should NOT trigger density (default=20)
+      for (let i = 1; i <= 19; i++) {
         const result = tracker.recordGate({
           kind: kinds[i % kinds.length]!,
           reason: `reason-${i}`,
@@ -182,20 +182,20 @@ describe("Autonomy Blocker Scenario — Game .cs File Editing", () => {
         expect(result).toBeNull();
       }
 
-      // 5th event — SHOULD trigger density
+      // 20th event — SHOULD trigger density
       const trigger = tracker.recordGate({
         kind: "verifier_continue",
-        reason: "reason-5",
-        iteration: 5,
+        reason: "reason-20",
+        iteration: 20,
       });
       expect(trigger).not.toBeNull();
       expect(trigger!.reason).toBe("internal_gate_density");
     });
 
-    it("stale analysis triggers after 3 consecutive gates without tool execution", () => {
+    it("stale analysis triggers after 10 consecutive gates without tool execution", () => {
       const tracker = new ControlLoopTracker();
 
-      for (let i = 1; i <= 2; i++) {
+      for (let i = 1; i <= 9; i++) {
         expect(tracker.recordGate({
           kind: "clarification_internal_continue",
           reason: "Clarification kept internal",
@@ -206,7 +206,7 @@ describe("Autonomy Blocker Scenario — Game .cs File Editing", () => {
       const trigger = tracker.recordGate({
         kind: "clarification_internal_continue",
         reason: "Clarification kept internal",
-        iteration: 3,
+        iteration: 10,
       });
       expect(trigger).not.toBeNull();
       expect(trigger!.reason).toBe("stale_analysis_loop");

@@ -3,8 +3,8 @@ import { ControlLoopTracker } from "./control-loop-tracker.js";
 
 describe("ControlLoopTracker", () => {
   it("triggers when the same fingerprint repeats within the short window", () => {
-    // Disable stale analysis to isolate fingerprint behavior
-    const tracker = new ControlLoopTracker({ staleAnalysisThreshold: 100 });
+    // Disable stale analysis, use explicit fpThreshold to isolate fingerprint behavior
+    const tracker = new ControlLoopTracker({ staleAnalysisThreshold: 100, sameFingerprintThreshold: 3 });
 
     expect(tracker.recordGate({
       kind: "verifier_continue",
@@ -59,7 +59,7 @@ describe("ControlLoopTracker", () => {
   });
 
   it("escalates the recovery episode counter after each recovery attempt", () => {
-    const tracker = new ControlLoopTracker({ staleAnalysisThreshold: 100 });
+    const tracker = new ControlLoopTracker({ staleAnalysisThreshold: 100, sameFingerprintThreshold: 3 });
 
     for (let i = 1; i <= 2; i++) {
       tracker.recordGate({
@@ -113,13 +113,13 @@ describe("ControlLoopTracker", () => {
     expect(tracker.recordGate({ ...event, iteration: 6 })).not.toBeNull();
   });
 
-  it("default fingerprint threshold is 3", () => {
+  it("default fingerprint threshold is 15", () => {
     const tracker = new ControlLoopTracker({ staleAnalysisThreshold: 100 });
     const event = { kind: "verifier_continue" as const, reason: "test", iteration: 1 };
-    for (let i = 1; i <= 2; i++) {
+    for (let i = 1; i <= 14; i++) {
       expect(tracker.recordGate({ ...event, iteration: i })).toBeNull();
     }
-    expect(tracker.recordGate({ ...event, iteration: 3 })).not.toBeNull();
+    expect(tracker.recordGate({ ...event, iteration: 15 })).not.toBeNull();
   });
 
   it("exposes maxRecoveryEpisodes from config", () => {
@@ -132,27 +132,23 @@ describe("ControlLoopTracker", () => {
   it("triggers stale_analysis_loop after consecutive gates without tool execution", () => {
     const tracker = new ControlLoopTracker();
 
-    expect(tracker.recordGate({
-      kind: "clarification_internal_continue",
-      reason: "Clarification review kept the task internal.",
-      iteration: 1,
-    })).toBeNull();
-
-    expect(tracker.recordGate({
-      kind: "clarification_internal_continue",
-      reason: "Clarification review kept the task internal.",
-      iteration: 2,
-    })).toBeNull();
+    for (let i = 1; i <= 9; i++) {
+      expect(tracker.recordGate({
+        kind: "clarification_internal_continue",
+        reason: "Clarification review kept the task internal.",
+        iteration: i,
+      })).toBeNull();
+    }
 
     const trigger = tracker.recordGate({
       kind: "clarification_internal_continue",
       reason: "Clarification review kept the task internal.",
-      iteration: 3,
+      iteration: 10,
     });
 
     expect(trigger).not.toBeNull();
     expect(trigger?.reason).toBe("stale_analysis_loop");
-    expect(trigger?.sameFingerprintCount).toBe(3);
+    expect(trigger?.sameFingerprintCount).toBe(10);
   });
 
   it("resets stale analysis counter on markToolExecution", () => {
@@ -275,6 +271,28 @@ describe("ControlLoopTracker", () => {
     expect(trigger?.reason).toBe("stale_analysis_loop");
   });
 
+  it("incrementTextOnlyGate increments counter without recording gate event", () => {
+    const tracker = new ControlLoopTracker({ staleAnalysisThreshold: 100 });
+    tracker.incrementTextOnlyGate();
+    tracker.incrementTextOnlyGate();
+    expect(tracker.getConsecutiveTextOnlyGates()).toBe(2);
+    const trigger = tracker.recordGate({
+      kind: "clarification_internal_continue",
+      reason: "test",
+      iteration: 1,
+    });
+    expect(trigger).toBeNull();
+  });
+
+  it("getConsecutiveTextOnlyGates returns current counter value", () => {
+    const tracker = new ControlLoopTracker();
+    expect(tracker.getConsecutiveTextOnlyGates()).toBe(0);
+    tracker.incrementTextOnlyGate();
+    expect(tracker.getConsecutiveTextOnlyGates()).toBe(1);
+    tracker.markToolExecution();
+    expect(tracker.getConsecutiveTextOnlyGates()).toBe(0);
+  });
+
   it("custom staleAnalysisThreshold from config", () => {
     const tracker = new ControlLoopTracker({
       sameFingerprintThreshold: 100,
@@ -298,21 +316,26 @@ describe("ControlLoopTracker", () => {
   it("mixed gate kinds still accumulate stale analysis counter", () => {
     const tracker = new ControlLoopTracker({ sameFingerprintThreshold: 100, gateDensityThreshold: 100 });
 
-    // Different kinds — fingerprint won't match, but stale analysis should still fire
-    tracker.recordGate({
-      kind: "clarification_internal_continue",
-      reason: "test a",
-      iteration: 1,
-    });
-    tracker.recordGate({
-      kind: "visibility_internal_continue",
-      reason: "test b",
-      iteration: 2,
-    });
+    const kinds = [
+      "clarification_internal_continue",
+      "visibility_internal_continue",
+      "verifier_continue",
+      "verifier_replan",
+    ] as const;
+
+    // Different kinds — fingerprint won't match, but stale analysis should still fire at threshold (default=10)
+    for (let i = 1; i <= 9; i++) {
+      expect(tracker.recordGate({
+        kind: kinds[i % kinds.length]!,
+        reason: `test ${i}`,
+        iteration: i,
+      })).toBeNull();
+    }
+
     const trigger = tracker.recordGate({
-      kind: "verifier_continue",
-      reason: "test c",
-      iteration: 3,
+      kind: "verifier_replan",
+      reason: "test 10",
+      iteration: 10,
     });
 
     expect(trigger?.reason).toBe("stale_analysis_loop");

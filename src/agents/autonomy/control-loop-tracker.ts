@@ -47,12 +47,12 @@ export class ControlLoopTracker {
   private readonly staleAnalysisThreshold: number;
 
   constructor(config?: ControlLoopConfig) {
-    this.fpThreshold = config?.sameFingerprintThreshold ?? 3;
+    this.fpThreshold = config?.sameFingerprintThreshold ?? 15;
     this.fpWindow = config?.sameFingerprintWindow ?? 20;
-    this.densityThreshold = config?.gateDensityThreshold ?? 5;
+    this.densityThreshold = config?.gateDensityThreshold ?? 20;
     this.densityWindow = config?.gateDensityWindow ?? 30;
     this.maxRecoveryEpisodes = config?.maxRecoveryEpisodes ?? 5;
-    this.staleAnalysisThreshold = config?.staleAnalysisThreshold ?? 3;
+    this.staleAnalysisThreshold = config?.staleAnalysisThreshold ?? 10;
   }
 
   recordGate(event: ControlLoopGateEvent): ControlLoopTrigger | null {
@@ -104,6 +104,14 @@ export class ControlLoopTracker {
     }
 
     return null;
+  }
+
+  incrementTextOnlyGate(): void {
+    this.consecutiveNoToolGates++;
+  }
+
+  getConsecutiveTextOnlyGates(): number {
+    return this.consecutiveNoToolGates;
   }
 
   markToolExecution(): void {
