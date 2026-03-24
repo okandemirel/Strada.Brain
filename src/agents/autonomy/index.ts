@@ -77,4 +77,14 @@ export { InteractionPolicyStateMachine } from "./interaction-policy.js";
 export type { InteractionGateKind, InteractionGateState, InteractionWriteBlock } from "./interaction-policy.js";
 export { decideInteractionBoundary } from "./visibility-boundary.js";
 export type { InteractionBoundaryDecision, InteractionBoundaryDecisionKind } from "./visibility-boundary.js";
+export {
+  buildBehavioralSnapshot,
+  runProgressAssessment,
+  buildProgressAssessmentRequest,
+  parseProgressAssessment,
+  buildDirectiveGate,
+  buildStuckCheckpointMessage,
+  PROGRESS_ASSESSMENT_SYSTEM_PROMPT,
+} from "./progress-assessment.js";
+export type { BehavioralSnapshot, ProgressAssessment, BuildBehavioralSnapshotParams } from "./progress-assessment.js";
 export { MUTATION_TOOLS, VERIFY_TOOLS, WRITE_OPERATIONS, COMPILABLE_EXT, extractFilePath } from "./constants.js";
