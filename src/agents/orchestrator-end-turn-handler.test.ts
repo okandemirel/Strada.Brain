@@ -105,6 +105,7 @@ describe("handleBgEndTurn", () => {
       usageHandler: undefined,
       recordPhaseOutcome: vi.fn(),
       buildPhaseOutcomeTelemetry: vi.fn(),
+      progressAssessmentEnabled: false,
       controlLoopTracker: { markVerificationClean: vi.fn(), markMeaningfulFileEvidence: vi.fn() } as any,
       workerCollector: undefined,
       progressTitle: "Test",

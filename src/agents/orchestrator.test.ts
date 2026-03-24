@@ -6733,6 +6733,7 @@ DONE`,
         projectPath: "/tmp/test-project",
         readOnly: false,
         requireConfirmation: false,
+        progressAssessmentEnabled: false,
         taskConfig: {
           ...DEFAULT_TASK_CONFIG,
           backgroundEpochMaxIterations: 20,

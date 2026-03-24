@@ -83,6 +83,7 @@ export interface EndTurnCoreContext {
 }
 
 export interface BgEndTurnContext extends EndTurnCoreContext {
+  readonly progressAssessmentEnabled?: boolean;
   readonly controlLoopTracker: ControlLoopTracker;
   readonly workerCollector: WorkerRunCollector | undefined;
   readonly progressTitle: string;
@@ -210,6 +211,8 @@ async function runBgLoopRecovery(
     session: ctx.session,
     workerCollector: ctx.workerCollector,
     workspaceLease: ctx.workspaceLease,
+    progressAssessmentEnabled: ctx.progressAssessmentEnabled,
+    taskStartedAtMs: ctx.taskStartedAtMs,
   }, ctx.interventionDeps);
 }
 

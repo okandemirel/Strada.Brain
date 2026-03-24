@@ -78,6 +78,12 @@ import {
 } from "./autonomy/index.js";
 import { isVerificationToolName } from "./autonomy/constants.js";
 import type { StradaConformanceGuard } from "./autonomy/strada-conformance.js";
+import {
+  buildBehavioralSnapshot,
+  runProgressAssessment,
+  buildDirectiveGate,
+  buildStuckCheckpointMessage,
+} from "./autonomy/progress-assessment.js";
 import type { Session } from "./orchestrator-session-manager.js";
 import { toPhaseOutcomeStatus as toPhaseOutcomeStatusModel } from "./orchestrator-phase-telemetry.js";
 import { getLogger, type LogEntry } from "../utils/logger.js";
@@ -419,9 +425,85 @@ export async function handleBackgroundLoopRecovery(
     workspaceLease?: WorkspaceLease;
     daemonMode?: boolean;
     maxRecoveryEpisodes?: number;
+    progressAssessmentEnabled?: boolean;
+    taskStartedAtMs?: number;
   },
   deps: InterventionDeps,
 ): Promise<LoopRecoveryIntervention> {
+  // ─── Progress Assessment (primary defense) ──────────────────────────────────
+  params.tracker.incrementTextOnlyGate();
+  const gateCount = params.tracker.getConsecutiveTextOnlyGates();
+
+  // Free first analysis — agent may be legitimately exploring
+  if (gateCount <= 1) {
+    return { action: "none" };
+  }
+
+  // Run LLM-based progress assessment (haiku-tier)
+  if (params.progressAssessmentEnabled !== false) {
+    try {
+      const touchedFilesForSnapshot = [...params.selfVerification.getState().touchedFiles];
+      const snapshot = buildBehavioralSnapshot({
+        prompt: params.prompt,
+        state: params.state,
+        touchedFileCount: touchedFilesForSnapshot.length,
+        consecutiveTextOnlyGates: gateCount,
+        taskStartedAtMs: params.taskStartedAtMs ?? Date.now(),
+        draftExcerpt: (params.gate ?? params.reason ?? "").slice(0, 200),
+      });
+      const assessment = await runProgressAssessment(
+        snapshot,
+        params.strategy.reviewer as Parameters<typeof runProgressAssessment>[1],
+        {
+          recordAuxiliaryUsage: deps.recordAuxiliaryUsage as Parameters<typeof runProgressAssessment>[2]["recordAuxiliaryUsage"],
+          usageHandler: params.usageHandler,
+        },
+      );
+
+      if (assessment) {
+        if (assessment.verdict === "progressing") {
+          // Agent is fine — record gate for safety-net tracking, continue
+          params.tracker.recordGate({
+            kind: params.kind,
+            reason: params.reason,
+            gate: params.gate,
+            iteration: params.iteration,
+          });
+          return { action: "none" };
+        }
+        if (assessment.verdict === "stuck" && assessment.confidence !== "low") {
+          // Agent is stuck — act without recording gate
+          const fingerprint = `progress_assessment_stuck:${params.kind}`;
+          const recoveryAttempt = params.tracker.markRecoveryAttempt(fingerprint);
+          params.executionJournal.recordLoopRecoveryEpisode({
+            fingerprint,
+            decision: recoveryAttempt >= 2 ? "blocked" : "replan_local",
+            summary: `Progress assessment: ${assessment.verdict} (${assessment.confidence}). ${assessment.directive ?? ""}`.trim(),
+          });
+          if (recoveryAttempt >= 2) {
+            return {
+              action: "blocked",
+              message: buildStuckCheckpointMessage(
+                params.prompt,
+                assessment,
+                [...params.selfVerification.getState().touchedFiles],
+              ),
+            };
+          }
+          return {
+            action: "replan",
+            gate: buildDirectiveGate(assessment),
+          };
+        }
+        // stuck + low confidence → fall through to safety net
+      }
+      // assessment is null (parse error / timeout) → fall through to safety net
+    } catch {
+      // Non-fatal: progress assessment failure falls through to safety net
+    }
+  }
+
+  // ─── Safety Net: existing ControlLoopTracker logic ──────────────────────────
   const touchedFiles = [...params.selfVerification.getState().touchedFiles];
   const trigger = params.tracker.recordGate({
     kind: params.kind,

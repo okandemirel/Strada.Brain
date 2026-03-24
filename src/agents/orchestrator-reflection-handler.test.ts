@@ -71,6 +71,7 @@ function buildMockBgCtx(overrides: Partial<BgReflectionContext> = {}): BgReflect
     buildPhaseOutcomeTelemetry: vi.fn().mockReturnValue(undefined),
     usageHandler: undefined,
     // BgReflectionContext-specific
+    progressAssessmentEnabled: false,
     controlLoopTracker: {} as BgReflectionContext["controlLoopTracker"],
     workerCollector: undefined,
     progressTitle: "Test task",
