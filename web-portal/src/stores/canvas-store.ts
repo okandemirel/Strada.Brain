@@ -4,6 +4,7 @@ export interface CanvasShape {
   type: string
   id: string
   props: Record<string, unknown>
+  source?: 'agent' | 'user'
 }
 
 interface CanvasState {

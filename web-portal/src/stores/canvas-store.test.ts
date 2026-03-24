@@ -30,6 +30,24 @@ describe('useCanvasStore', () => {
     expect(useCanvasStore.getState().pendingShapes).toEqual([])
   })
 
+  it('preserves source field on pending shapes', () => {
+    const { addPendingShapes } = useCanvasStore.getState()
+    addPendingShapes([
+      { type: 'code-block', id: 'cb1', props: { code: 'test' }, source: 'agent' },
+    ])
+    const shapes = useCanvasStore.getState().pendingShapes
+    expect(shapes[0].source).toBe('agent')
+  })
+
+  it('allows shapes without source field (backward compat)', () => {
+    const { addPendingShapes } = useCanvasStore.getState()
+    addPendingShapes([
+      { type: 'code-block', id: 'cb2', props: { code: 'test' } },
+    ])
+    const shapes = useCanvasStore.getState().pendingShapes
+    expect(shapes[0].source).toBeUndefined()
+  })
+
   it('reset clears everything', () => {
     useCanvasStore.getState().setSessionId('s1')
     useCanvasStore.getState().setDirty(true)
