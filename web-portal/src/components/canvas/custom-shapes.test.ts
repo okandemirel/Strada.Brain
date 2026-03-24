@@ -14,7 +14,10 @@ vi.mock('tldraw', () => {
     BaseBoxShapeUtil: MockBaseBoxShapeUtil,
     HTMLContainer: ({ children }: { children: unknown }) => children,
     T: {
-      string: { validate: (v: unknown) => typeof v === 'string' },
+      string: Object.assign(
+        { validate: (v: unknown) => typeof v === 'string' },
+        { optional: () => ({ validate: (v: unknown) => v === undefined || typeof v === 'string' }) },
+      ),
       number: { validate: (v: unknown) => typeof v === 'number' },
     },
   }
@@ -68,15 +71,15 @@ describe('customShapeUtils', () => {
 
 describe('Individual shape utils', () => {
   const utilClasses = [
-    { Util: CodeBlockShapeUtil, type: 'code-block', propKeys: ['w', 'h', 'code', 'language', 'title'] },
-    { Util: DiffBlockShapeUtil, type: 'diff-block', propKeys: ['w', 'h', 'diff', 'filePath'] },
-    { Util: DiagramNodeShapeUtil, type: 'diagram-node', propKeys: ['w', 'h', 'label', 'nodeType', 'status'] },
-    { Util: NoteBlockShapeUtil, type: 'note-block', propKeys: ['w', 'h', 'content', 'color'] },
-    { Util: TerminalBlockShapeUtil, type: 'terminal-block', propKeys: ['w', 'h', 'command', 'output'] },
-    { Util: FileCardShapeUtil, type: 'file-card', propKeys: ['w', 'h', 'filePath', 'language', 'lineCount'] },
-    { Util: ImageBlockShapeUtil, type: 'image-block', propKeys: ['w', 'h', 'src', 'alt'] },
-    { Util: TaskCardShapeUtil, type: 'task-card', propKeys: ['w', 'h', 'title', 'status', 'priority'] },
-    { Util: ConnectionArrowShapeUtil, type: 'connection-arrow', propKeys: ['w', 'h', 'label'] },
+    { Util: CodeBlockShapeUtil, type: 'code-block', propKeys: ['w', 'h', 'code', 'language', 'title', 'source'] },
+    { Util: DiffBlockShapeUtil, type: 'diff-block', propKeys: ['w', 'h', 'diff', 'filePath', 'source'] },
+    { Util: DiagramNodeShapeUtil, type: 'diagram-node', propKeys: ['w', 'h', 'label', 'nodeType', 'status', 'source'] },
+    { Util: NoteBlockShapeUtil, type: 'note-block', propKeys: ['w', 'h', 'content', 'color', 'source'] },
+    { Util: TerminalBlockShapeUtil, type: 'terminal-block', propKeys: ['w', 'h', 'command', 'output', 'source'] },
+    { Util: FileCardShapeUtil, type: 'file-card', propKeys: ['w', 'h', 'filePath', 'language', 'lineCount', 'source'] },
+    { Util: ImageBlockShapeUtil, type: 'image-block', propKeys: ['w', 'h', 'src', 'alt', 'source'] },
+    { Util: TaskCardShapeUtil, type: 'task-card', propKeys: ['w', 'h', 'title', 'status', 'priority', 'source'] },
+    { Util: ConnectionArrowShapeUtil, type: 'connection-arrow', propKeys: ['w', 'h', 'label', 'source'] },
   ]
 
   for (const { Util, type, propKeys } of utilClasses) {
@@ -93,4 +96,11 @@ describe('Individual shape utils', () => {
       })
     })
   }
+})
+
+describe('AI badge helper', () => {
+  it('is exported for use in shape components', async () => {
+    const mod = await import('./custom-shapes')
+    expect(typeof mod.AiBadge).toBe('function')
+  })
 })

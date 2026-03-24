@@ -8,7 +8,7 @@ vi.mock('tldraw', () => {
     static props = {}
   }
   const HTMLContainer = ({ children }: { children: React.ReactNode }) => <div>{children}</div>
-  const T = { number: 0, string: '' }
+  const T = { number: 0, string: Object.assign('', { optional: () => undefined }) }
 
   return {
     BaseBoxShapeUtil,

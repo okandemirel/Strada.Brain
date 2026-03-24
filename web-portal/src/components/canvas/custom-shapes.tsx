@@ -5,6 +5,14 @@ import {
   type TLBaseShape,
 } from 'tldraw'
 
+import './canvas-styles.css'
+
+/** Renders a small "AI" badge when source is 'agent'. */
+export function AiBadge({ source }: { source?: string }) {
+  if (source !== 'agent') return null
+  return <span className="strada-ai-badge">AI</span>
+}
+
 // ---------------------------------------------------------------------------
 // Shape type identifiers
 // ---------------------------------------------------------------------------
@@ -27,47 +35,47 @@ export const SHAPE_TYPES = {
 
 type CodeBlockShape = TLBaseShape<
   typeof SHAPE_TYPES.codeBlock,
-  { w: number; h: number; code: string; language: string; title: string }
+  { w: number; h: number; code: string; language: string; title: string; source?: string }
 >
 
 type DiffBlockShape = TLBaseShape<
   typeof SHAPE_TYPES.diffBlock,
-  { w: number; h: number; diff: string; filePath: string }
+  { w: number; h: number; diff: string; filePath: string; source?: string }
 >
 
 type FileCardShape = TLBaseShape<
   typeof SHAPE_TYPES.fileCard,
-  { w: number; h: number; filePath: string; language: string; lineCount: number }
+  { w: number; h: number; filePath: string; language: string; lineCount: number; source?: string }
 >
 
 type DiagramNodeShape = TLBaseShape<
   typeof SHAPE_TYPES.diagramNode,
-  { w: number; h: number; label: string; nodeType: string; status: string }
+  { w: number; h: number; label: string; nodeType: string; status: string; source?: string }
 >
 
 type TerminalBlockShape = TLBaseShape<
   typeof SHAPE_TYPES.terminalBlock,
-  { w: number; h: number; command: string; output: string }
+  { w: number; h: number; command: string; output: string; source?: string }
 >
 
 type ImageBlockShape = TLBaseShape<
   typeof SHAPE_TYPES.imageBlock,
-  { w: number; h: number; src: string; alt: string }
+  { w: number; h: number; src: string; alt: string; source?: string }
 >
 
 type TaskCardShape = TLBaseShape<
   typeof SHAPE_TYPES.taskCard,
-  { w: number; h: number; title: string; status: string; priority: string }
+  { w: number; h: number; title: string; status: string; priority: string; source?: string }
 >
 
 type NoteBlockShape = TLBaseShape<
   typeof SHAPE_TYPES.noteBlock,
-  { w: number; h: number; content: string; color: string }
+  { w: number; h: number; content: string; color: string; source?: string }
 >
 
 type ConnectionArrowShape = TLBaseShape<
   typeof SHAPE_TYPES.connectionArrow,
-  { w: number; h: number; label: string }
+  { w: number; h: number; label: string; source?: string }
 >
 
 // ---------------------------------------------------------------------------
@@ -96,10 +104,11 @@ export class CodeBlockShapeUtil extends BaseBoxShapeUtil<CodeBlockShape> {
     code: T.string,
     language: T.string,
     title: T.string,
+    source: T.string.optional(),
   }
 
   override getDefaultProps(): CodeBlockShape['props'] {
-    return { w: 400, h: 240, code: '', language: 'typescript', title: 'Untitled' }
+    return { w: 400, h: 240, code: '', language: 'typescript', title: 'Untitled', source: undefined }
   }
 
   component(shape: CodeBlockShape) {
@@ -114,6 +123,7 @@ export class CodeBlockShapeUtil extends BaseBoxShapeUtil<CodeBlockShape> {
             flexDirection: 'column',
           }}
         >
+          <AiBadge source={shape.props.source} />
           <div
             style={{
               padding: '6px 10px',
@@ -163,10 +173,11 @@ export class DiffBlockShapeUtil extends BaseBoxShapeUtil<DiffBlockShape> {
     h: T.number,
     diff: T.string,
     filePath: T.string,
+    source: T.string.optional(),
   }
 
   override getDefaultProps(): DiffBlockShape['props'] {
-    return { w: 420, h: 260, diff: '', filePath: '' }
+    return { w: 420, h: 260, diff: '', filePath: '', source: undefined }
   }
 
   component(shape: DiffBlockShape) {
@@ -181,6 +192,7 @@ export class DiffBlockShapeUtil extends BaseBoxShapeUtil<DiffBlockShape> {
             flexDirection: 'column',
           }}
         >
+          <AiBadge source={shape.props.source} />
           <div
             style={{
               padding: '6px 10px',
@@ -228,10 +240,11 @@ export class DiagramNodeShapeUtil extends BaseBoxShapeUtil<DiagramNodeShape> {
     label: T.string,
     nodeType: T.string,
     status: T.string,
+    source: T.string.optional(),
   }
 
   override getDefaultProps(): DiagramNodeShape['props'] {
-    return { w: 180, h: 80, label: 'Node', nodeType: 'default', status: 'idle' }
+    return { w: 180, h: 80, label: 'Node', nodeType: 'default', status: 'idle', source: undefined }
   }
 
   component(shape: DiagramNodeShape) {
@@ -257,6 +270,7 @@ export class DiagramNodeShapeUtil extends BaseBoxShapeUtil<DiagramNodeShape> {
             gap: 6,
           }}
         >
+          <AiBadge source={shape.props.source} />
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <div
               style={{
@@ -292,10 +306,11 @@ export class NoteBlockShapeUtil extends BaseBoxShapeUtil<NoteBlockShape> {
     h: T.number,
     content: T.string,
     color: T.string,
+    source: T.string.optional(),
   }
 
   override getDefaultProps(): NoteBlockShape['props'] {
-    return { w: 240, h: 160, content: '', color: '#f9e2af' }
+    return { w: 240, h: 160, content: '', color: '#f9e2af', source: undefined }
   }
 
   component(shape: NoteBlockShape) {
@@ -311,6 +326,7 @@ export class NoteBlockShapeUtil extends BaseBoxShapeUtil<NoteBlockShape> {
             lineHeight: 1.5,
           }}
         >
+          <AiBadge source={shape.props.source} />
           {shape.props.content}
         </div>
       </HTMLContainer>
@@ -333,10 +349,11 @@ export class TerminalBlockShapeUtil extends BaseBoxShapeUtil<TerminalBlockShape>
     h: T.number,
     command: T.string,
     output: T.string,
+    source: T.string.optional(),
   }
 
   override getDefaultProps(): TerminalBlockShape['props'] {
-    return { w: 420, h: 200, command: '', output: '' }
+    return { w: 420, h: 200, command: '', output: '', source: undefined }
   }
 
   component(shape: TerminalBlockShape) {
@@ -351,6 +368,7 @@ export class TerminalBlockShapeUtil extends BaseBoxShapeUtil<TerminalBlockShape>
             flexDirection: 'column',
           }}
         >
+          <AiBadge source={shape.props.source} />
           <div
             style={{
               padding: '6px 10px',
@@ -401,10 +419,11 @@ export class FileCardShapeUtil extends BaseBoxShapeUtil<FileCardShape> {
     filePath: T.string,
     language: T.string,
     lineCount: T.number,
+    source: T.string.optional(),
   }
 
   override getDefaultProps(): FileCardShape['props'] {
-    return { w: 240, h: 100, filePath: '', language: '', lineCount: 0 }
+    return { w: 240, h: 100, filePath: '', language: '', lineCount: 0, source: undefined }
   }
 
   component(shape: FileCardShape) {
@@ -423,6 +442,7 @@ export class FileCardShapeUtil extends BaseBoxShapeUtil<FileCardShape> {
             gap: 6,
           }}
         >
+          <AiBadge source={shape.props.source} />
           <span style={{ color: '#89b4fa', fontWeight: 600, fontSize: 13 }}>{filename}</span>
           <span style={{ color: '#a6adc8', fontSize: 11 }}>{shape.props.filePath}</span>
           <div style={{ display: 'flex', gap: 12, color: '#6c7086', fontSize: 11 }}>
@@ -450,10 +470,11 @@ export class ImageBlockShapeUtil extends BaseBoxShapeUtil<ImageBlockShape> {
     h: T.number,
     src: T.string,
     alt: T.string,
+    source: T.string.optional(),
   }
 
   override getDefaultProps(): ImageBlockShape['props'] {
-    return { w: 320, h: 240, src: '', alt: '' }
+    return { w: 320, h: 240, src: '', alt: '', source: undefined }
   }
 
   component(shape: ImageBlockShape) {
@@ -470,6 +491,7 @@ export class ImageBlockShapeUtil extends BaseBoxShapeUtil<ImageBlockShape> {
             justifyContent: 'center',
           }}
         >
+          <AiBadge source={shape.props.source} />
           {safeSrc ? (
             <img
               src={safeSrc}
@@ -501,10 +523,11 @@ export class TaskCardShapeUtil extends BaseBoxShapeUtil<TaskCardShape> {
     title: T.string,
     status: T.string,
     priority: T.string,
+    source: T.string.optional(),
   }
 
   override getDefaultProps(): TaskCardShape['props'] {
-    return { w: 240, h: 120, title: 'Task', status: 'todo', priority: 'medium' }
+    return { w: 240, h: 120, title: 'Task', status: 'todo', priority: 'medium', source: undefined }
   }
 
   component(shape: TaskCardShape) {
@@ -527,6 +550,7 @@ export class TaskCardShapeUtil extends BaseBoxShapeUtil<TaskCardShape> {
             flexDirection: 'column',
           }}
         >
+          <AiBadge source={shape.props.source} />
           <div style={{ height: 3, background: barColor }} />
           <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
             <span style={{ color: '#cdd6f4', fontWeight: 600, fontSize: 13 }}>
@@ -566,10 +590,11 @@ export class ConnectionArrowShapeUtil extends BaseBoxShapeUtil<ConnectionArrowSh
     w: T.number,
     h: T.number,
     label: T.string,
+    source: T.string.optional(),
   }
 
   override getDefaultProps(): ConnectionArrowShape['props'] {
-    return { w: 120, h: 40, label: '' }
+    return { w: 120, h: 40, label: '', source: undefined }
   }
 
   component(shape: ConnectionArrowShape) {
@@ -587,6 +612,7 @@ export class ConnectionArrowShapeUtil extends BaseBoxShapeUtil<ConnectionArrowSh
             fontSize: 11,
           }}
         >
+          <AiBadge source={shape.props.source} />
           {shape.props.label || '---'}
         </div>
       </HTMLContainer>
