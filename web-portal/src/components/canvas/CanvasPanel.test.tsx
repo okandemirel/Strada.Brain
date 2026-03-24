@@ -51,6 +51,7 @@ vi.mock('tldraw/tldraw.css', () => ({}))
 
 vi.mock('./custom-shapes', () => ({
   customShapeUtils: Array.from({ length: 9 }, (_, i) => ({ type: `shape-${i}` })),
+  SHAPE_TYPES: {},
 }))
 
 vi.mock('./canvas-overrides', () => ({
@@ -61,6 +62,25 @@ vi.mock('./canvas-overrides', () => ({
 
 vi.mock('../../hooks/useTheme', () => ({
   useTheme: () => ({ theme: 'dark' as const, toggleTheme: vi.fn() }),
+}))
+
+const mockApplyTemplate = vi.fn()
+vi.mock('./canvas-templates', () => ({
+  TEMPLATES: [
+    { id: 'architecture', title: 'Architecture', description: 'test', icon: 'A' },
+    { id: 'blank', title: 'Blank', description: 'test', icon: '+' },
+  ],
+  applyTemplate: (...args: unknown[]) => mockApplyTemplate(...args),
+}))
+
+// Mock CanvasWelcome - render template buttons directly for testing
+vi.mock('./canvas-welcome', () => ({
+  default: ({ onSelect }: { onSelect: (id: string) => void }) => (
+    <div data-testid="canvas-welcome">
+      <button data-testid="canvas-template-architecture" onClick={() => onSelect('architecture')}>Architecture</button>
+      <button data-testid="canvas-template-blank" onClick={() => onSelect('blank')}>Blank</button>
+    </div>
+  ),
 }))
 
 import CanvasPanel from './CanvasPanel'
@@ -83,6 +103,36 @@ const revokeObjectURLSpy = vi.fn()
 vi.stubGlobal('URL', { ...URL, createObjectURL: createObjectURLSpy, revokeObjectURL: revokeObjectURLSpy })
 
 // ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/** Set up fetch to return a session with existing shapes so component skips welcome */
+function setupSessionWithShapes(sessionId = 'test-sess') {
+  fetchSpy.mockResolvedValueOnce(
+    new Response(JSON.stringify({ canvas: { shapes: JSON.stringify({ store: {} }) } }), { status: 200 }),
+  )
+  useSessionStore.getState().setSession(sessionId, 'p1')
+}
+
+/** Enter editor mode via template selection */
+async function enterEditorViaTemplate(user: ReturnType<typeof userEvent.setup>) {
+  const btn = screen.getByTestId('canvas-template-architecture')
+  await user.click(btn)
+  // requestAnimationFrame fires the transition to 'editor'
+  await act(async () => { vi.advanceTimersByTime(100) })
+}
+
+/** Enter editor mode via session restore (existing shapes) and render */
+async function renderInEditorMode(sessionId = 'test-sess') {
+  setupSessionWithShapes(sessionId)
+  render(<CanvasPanel />)
+  // Let the fetch resolve and mode transition happen
+  await act(async () => { await vi.advanceTimersByTimeAsync(100) })
+  // Let tldraw onMount fire
+  await act(async () => { vi.advanceTimersByTime(10) })
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -96,78 +146,129 @@ describe('CanvasPanel', () => {
     mockLoadSnapshot.mockReset()
     mockEditorOn.mockReset()
     mockCreateShape.mockReset()
+    mockApplyTemplate.mockReset()
   })
 
   afterEach(() => {
     vi.useRealTimers()
   })
 
-  it('renders tldraw canvas inside a full-size container', () => {
-    render(<CanvasPanel />)
+  // -- Welcome state --------------------------------------------------------
+
+  describe('Welcome state', () => {
+    it('renders welcome screen by default', () => {
+      render(<CanvasPanel />)
+      expect(screen.getByTestId('canvas-welcome')).toBeInTheDocument()
+      expect(screen.queryByTestId('tldraw-canvas')).not.toBeInTheDocument()
+    })
+
+    it('transitions to editor on template select', async () => {
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+      render(<CanvasPanel />)
+
+      const btn = screen.getByTestId('canvas-template-architecture')
+      await user.click(btn)
+      await act(async () => { vi.advanceTimersByTime(100) })
+
+      // Welcome should be gone, tldraw should be visible
+      expect(screen.queryByTestId('canvas-welcome')).not.toBeInTheDocument()
+      expect(screen.getByTestId('tldraw-canvas')).toBeInTheDocument()
+    })
+
+    it('skips welcome when session has existing shapes', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        new Response(JSON.stringify({ canvas: { shapes: JSON.stringify({ store: {} }) } }), { status: 200 }),
+      )
+      useSessionStore.getState().setSession('has-shapes', 'p1')
+
+      render(<CanvasPanel />)
+      await act(async () => { await vi.advanceTimersByTimeAsync(100) })
+
+      expect(screen.queryByTestId('canvas-welcome')).not.toBeInTheDocument()
+      expect(screen.getByTestId('tldraw-canvas')).toBeInTheDocument()
+    })
+
+    it('shows welcome toolbar without editor buttons', () => {
+      render(<CanvasPanel />)
+      expect(screen.getByTestId('canvas-toolbar')).toBeInTheDocument()
+      expect(screen.queryByTestId('canvas-export-json')).not.toBeInTheDocument()
+      expect(screen.queryByTestId('canvas-zoom-to-fit')).not.toBeInTheDocument()
+    })
+  })
+
+  // -- Editor mode (restored via session shapes) ----------------------------
+
+  it('renders tldraw canvas inside a full-size container', async () => {
+    await renderInEditorMode()
     expect(screen.getByTestId('canvas-panel')).toBeInTheDocument()
     expect(screen.getByTestId('tldraw-canvas')).toBeInTheDocument()
   })
 
-  it('passes custom shape utils to tldraw', () => {
-    render(<CanvasPanel />)
+  it('passes custom shape utils to tldraw', async () => {
+    await renderInEditorMode()
     const canvas = screen.getByTestId('tldraw-canvas')
     expect(canvas.getAttribute('data-shape-utils')).toBe('9')
   })
 
-  it('passes Toolbar and ContextMenu components to tldraw', () => {
-    render(<CanvasPanel />)
+  it('passes Toolbar and ContextMenu components to tldraw', async () => {
+    await renderInEditorMode()
     const canvas = screen.getByTestId('tldraw-canvas')
     expect(canvas.getAttribute('data-has-components')).toBe('true')
     expect(canvas.getAttribute('data-component-keys')).toContain('Toolbar')
     expect(canvas.getAttribute('data-component-keys')).toContain('ContextMenu')
   })
 
-  it('renders toolbar with Export JSON button', () => {
-    render(<CanvasPanel />)
+  it('renders toolbar with Export JSON button in editor mode', async () => {
+    await renderInEditorMode()
     expect(screen.getByTestId('canvas-toolbar')).toBeInTheDocument()
     expect(screen.getByTestId('canvas-export-json')).toBeInTheDocument()
   })
 
-  it('renders Zoom to Fit button in toolbar', () => {
-    render(<CanvasPanel />)
+  it('renders Zoom to Fit button in toolbar in editor mode', async () => {
+    await renderInEditorMode()
     expect(screen.getByTestId('canvas-zoom-to-fit')).toBeInTheDocument()
   })
 
   // -- Dirty indicator ------------------------------------------------------
 
-  it('shows unsaved indicator when dirty', () => {
+  it('shows unsaved indicator when dirty', async () => {
     useCanvasStore.getState().setDirty(true)
-    render(<CanvasPanel />)
+    await renderInEditorMode()
     expect(screen.getByTestId('canvas-dirty-indicator')).toBeInTheDocument()
     expect(screen.getByTestId('canvas-dirty-indicator').textContent).toBe('unsaved')
   })
 
-  it('does not show dirty indicator when clean', () => {
-    render(<CanvasPanel />)
+  it('does not show dirty indicator when clean', async () => {
+    await renderInEditorMode()
     expect(screen.queryByTestId('canvas-dirty-indicator')).not.toBeInTheDocument()
   })
 
-  it('shows green saved indicator when not dirty', () => {
+  it('shows green saved indicator when not dirty', async () => {
     useCanvasStore.getState().setDirty(false)
-    render(<CanvasPanel />)
+    await renderInEditorMode()
     expect(screen.getByTestId('canvas-saved-indicator')).toBeInTheDocument()
   })
 
   // -- Auto-save ------------------------------------------------------------
 
   it('triggers auto-save after 5 seconds when dirty', async () => {
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify({ canvas: { shapes: JSON.stringify({ store: {} }) } }), { status: 200 }),
+    )
     fetchSpy.mockResolvedValue(new Response(JSON.stringify({ status: 'saved' }), { status: 200 }))
     useSessionStore.getState().setSession('test-sess', 'p1')
 
     render(<CanvasPanel />)
 
+    // Let fetch resolve + transition to editor
+    await act(async () => { await vi.advanceTimersByTimeAsync(100) })
     // Wait for tldraw onMount
     await act(async () => { vi.advanceTimersByTime(10) })
 
     // Set dirty
     act(() => { useCanvasStore.getState().setDirty(true) })
 
-    // Before 5s — no fetch
+    // Before 5s — no PUT fetch
     expect(fetchSpy).not.toHaveBeenCalledWith(
       expect.stringContaining('/api/canvas/'),
       expect.objectContaining({ method: 'PUT' }),
@@ -195,13 +296,17 @@ describe('CanvasPanel', () => {
   })
 
   it('clears dirty flag after successful save', async () => {
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify({ canvas: { shapes: JSON.stringify({ store: {} }) } }), { status: 200 }),
+    )
     fetchSpy.mockResolvedValue(new Response(JSON.stringify({ status: 'saved' }), { status: 200 }))
     useSessionStore.getState().setSession('sess-clean', 'p1')
 
     render(<CanvasPanel />)
+    await act(async () => { await vi.advanceTimersByTimeAsync(100) })
     await act(async () => { vi.advanceTimersByTime(10) })
     act(() => { useCanvasStore.getState().setDirty(true) })
-    await act(async () => { vi.advanceTimersByTime(5100) })
+    await act(async () => { await vi.advanceTimersByTimeAsync(5100) })
 
     expect(useCanvasStore.getState().isDirty).toBe(false)
   })
@@ -217,9 +322,7 @@ describe('CanvasPanel', () => {
 
     render(<CanvasPanel />)
 
-    // Let onMount + fetch resolve
-    await act(async () => { vi.advanceTimersByTime(10) })
-    // Wait for fetch promise to resolve
+    // Let fetch resolve
     await act(async () => { await vi.advanceTimersByTimeAsync(100) })
 
     expect(fetchSpy).toHaveBeenCalledWith('/api/canvas/load-sess')
@@ -231,7 +334,6 @@ describe('CanvasPanel', () => {
 
     expect(fetchSpy).not.toHaveBeenCalledWith(
       expect.stringContaining('/api/canvas/'),
-      // No method option means it's a GET
     )
   })
 
@@ -243,6 +345,8 @@ describe('CanvasPanel', () => {
     render(<CanvasPanel />)
     await act(async () => { await vi.advanceTimersByTimeAsync(100) })
 
+    // Should stay on welcome since no shapes came back
+    expect(screen.getByTestId('canvas-welcome')).toBeInTheDocument()
     expect(mockLoadSnapshot).not.toHaveBeenCalled()
   })
 
@@ -272,10 +376,7 @@ describe('CanvasPanel', () => {
       return originalCreateElement(tag, options)
     })
 
-    render(<CanvasPanel />)
-
-    // Wait for editor mount
-    await act(async () => { vi.advanceTimersByTime(10) })
+    await renderInEditorMode()
 
     const btn = screen.getByTestId('canvas-export-json')
     await user.click(btn)
@@ -290,10 +391,7 @@ describe('CanvasPanel', () => {
   // -- Pending shapes -------------------------------------------------------
 
   it('processes pending shapes into the editor', async () => {
-    render(<CanvasPanel />)
-
-    // Wait for editor mount
-    await act(async () => { vi.advanceTimersByTime(10) })
+    await renderInEditorMode()
 
     act(() => {
       useCanvasStore.getState().addPendingShapes([
