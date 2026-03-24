@@ -27,21 +27,36 @@ const mockEditor = {
     getSnapshot: mockGetSnapshot,
     loadSnapshot: mockLoadSnapshot,
   },
+  getViewportPageBounds: () => ({ center: { x: 500, y: 400 } }),
+  zoomToFit: vi.fn(),
 }
 
 vi.mock('tldraw', () => ({
-  Tldraw: (props: { onMount?: (editor: unknown) => void; shapeUtils?: unknown[] }) => {
+  Tldraw: (props: { onMount?: (editor: unknown) => void; shapeUtils?: unknown[]; components?: Record<string, unknown> }) => {
     // Simulate onMount callback — fire it on next tick so the component is rendered
     if (props.onMount) {
       setTimeout(() => props.onMount!(mockEditor), 0)
     }
-    return <div data-testid="tldraw-canvas" data-shape-utils={props.shapeUtils?.length ?? 0} />
+    return (
+      <div
+        data-testid="tldraw-canvas"
+        data-shape-utils={props.shapeUtils?.length ?? 0}
+        data-has-components={props.components ? 'true' : 'false'}
+        data-component-keys={props.components ? Object.keys(props.components).join(',') : ''}
+      />
+    )
   },
 }))
 vi.mock('tldraw/tldraw.css', () => ({}))
 
 vi.mock('./custom-shapes', () => ({
   customShapeUtils: Array.from({ length: 9 }, (_, i) => ({ type: `shape-${i}` })),
+}))
+
+vi.mock('./canvas-overrides', () => ({
+  CustomToolbar: () => null,
+  CustomContextMenu: () => null,
+  setExportJsonFn: vi.fn(),
 }))
 
 vi.mock('../../hooks/useTheme', () => ({
@@ -99,10 +114,23 @@ describe('CanvasPanel', () => {
     expect(canvas.getAttribute('data-shape-utils')).toBe('9')
   })
 
+  it('passes Toolbar and ContextMenu components to tldraw', () => {
+    render(<CanvasPanel />)
+    const canvas = screen.getByTestId('tldraw-canvas')
+    expect(canvas.getAttribute('data-has-components')).toBe('true')
+    expect(canvas.getAttribute('data-component-keys')).toContain('Toolbar')
+    expect(canvas.getAttribute('data-component-keys')).toContain('ContextMenu')
+  })
+
   it('renders toolbar with Export JSON button', () => {
     render(<CanvasPanel />)
     expect(screen.getByTestId('canvas-toolbar')).toBeInTheDocument()
     expect(screen.getByTestId('canvas-export-json')).toBeInTheDocument()
+  })
+
+  it('renders Zoom to Fit button in toolbar', () => {
+    render(<CanvasPanel />)
+    expect(screen.getByTestId('canvas-zoom-to-fit')).toBeInTheDocument()
   })
 
   // -- Dirty indicator ------------------------------------------------------
@@ -117,6 +145,12 @@ describe('CanvasPanel', () => {
   it('does not show dirty indicator when clean', () => {
     render(<CanvasPanel />)
     expect(screen.queryByTestId('canvas-dirty-indicator')).not.toBeInTheDocument()
+  })
+
+  it('shows green saved indicator when not dirty', () => {
+    useCanvasStore.getState().setDirty(false)
+    render(<CanvasPanel />)
+    expect(screen.getByTestId('canvas-saved-indicator')).toBeInTheDocument()
   })
 
   // -- Auto-save ------------------------------------------------------------

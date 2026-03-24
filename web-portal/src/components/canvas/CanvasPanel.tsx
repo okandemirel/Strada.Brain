@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { Tldraw, type Editor, type TLShapeId } from 'tldraw'
 import 'tldraw/tldraw.css'
 import { useCanvasStore } from '../../stores/canvas-store'
 import { useSessionStore } from '../../stores/session-store'
 import { useTheme } from '../../hooks/useTheme'
 import { customShapeUtils } from './custom-shapes'
+import { CustomToolbar, CustomContextMenu, setExportJsonFn } from './canvas-overrides'
 
 /** Trigger a browser download from an in-memory blob. */
 function downloadBlob(blob: Blob, filename: string): void {
@@ -25,6 +26,11 @@ export default function CanvasPanel() {
   const { theme } = useTheme()
   const editorRef = useRef<Editor | null>(null)
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const tldrawComponents = useMemo(() => ({
+    Toolbar: CustomToolbar,
+    ContextMenu: CustomContextMenu,
+  }), [])
 
   const handleMount = useCallback(
     (editor: Editor) => {
@@ -87,10 +93,15 @@ export default function CanvasPanel() {
     }
   }, [isDirty, sessionId, setDirty])
 
-  // Process pending shapes from agent into the tldraw editor
+  // Process pending shapes from agent into the tldraw editor with auto-layout
   useEffect(() => {
     const editor = editorRef.current
     if (!editor || pendingShapes.length === 0) return
+
+    const GAP = 20
+    const bounds = editor.getViewportPageBounds()
+    let nextX = bounds.center.x - ((pendingShapes.length - 1) * (200 + GAP)) / 2
+    const baseY = bounds.center.y - 50
 
     editor.run(() => {
       for (const pending of pendingShapes) {
@@ -101,8 +112,14 @@ export default function CanvasPanel() {
           editor.createShape({
             id: pending.id as TLShapeId,
             type: pending.type,
-            props: pending.props,
+            x: nextX,
+            y: baseY,
+            props: {
+              ...pending.props,
+              ...(pending.source === 'agent' ? { source: 'agent' } : {}),
+            },
           })
+          nextX += 200 + GAP
         }
       }
     })
@@ -120,6 +137,11 @@ export default function CanvasPanel() {
     downloadBlob(blob, `canvas-${Date.now()}.json`)
   }, [])
 
+  // Wire exportJSON into the context menu override
+  useEffect(() => {
+    setExportJsonFn(exportJSON)
+  }, [exportJSON])
+
   return (
     <div className="flex h-full w-full flex-col" data-testid="canvas-panel">
       <div
@@ -134,19 +156,32 @@ export default function CanvasPanel() {
         <button
           type="button"
           className="rounded bg-[#313244] px-2 py-0.5 text-xs text-[#cdd6f4] hover:bg-[#45475a]"
+          onClick={() => editorRef.current?.zoomToFit()}
+          data-testid="canvas-zoom-to-fit"
+        >
+          Zoom to Fit
+        </button>
+        <button
+          type="button"
+          className="rounded bg-[#313244] px-2 py-0.5 text-xs text-[#cdd6f4] hover:bg-[#45475a]"
           onClick={exportJSON}
           data-testid="canvas-export-json"
         >
           Export JSON
         </button>
-        {isDirty && (
+        {isDirty ? (
           <span className="text-[10px] text-[#f9e2af]" data-testid="canvas-dirty-indicator">
             unsaved
+          </span>
+        ) : (
+          <span className="flex items-center gap-1 text-[10px] text-[#a6e3a1]" data-testid="canvas-saved-indicator">
+            <span className="inline-block w-1.5 h-1.5 rounded-full bg-[#a6e3a1]" />
+            saved
           </span>
         )}
       </div>
       <div className="relative flex-1">
-        <Tldraw onMount={handleMount} shapeUtils={customShapeUtils} />
+        <Tldraw onMount={handleMount} shapeUtils={customShapeUtils} components={tldrawComponents} />
       </div>
     </div>
   )
