@@ -523,6 +523,7 @@ export class Orchestrator {
     consensusManager?: import("../agent-core/routing/consensus-manager.js").ConsensusManager;
     confidenceEstimator?: import("../agent-core/routing/confidence-estimator.js").ConfidenceEstimator;
     onUsage?: (usage: TaskUsageEvent) => void;
+    memoryDbPath?: string;
   }) {
     this.providerManager = opts.providerManager;
     this.channel = opts.channel;
@@ -607,7 +608,7 @@ export class Orchestrator {
       instinctRetriever: this.instinctRetriever,
       eventEmitter: this.eventEmitter,
       taskExecutionStore: this.taskExecutionStore,
-      sessionsDir: join(this.projectPath ?? ".", ".strada-memory", "sessions"),
+      sessionsDir: join(opts.memoryDbPath ?? join(this.projectPath ?? ".", ".strada-memory"), "sessions"),
     });
   }
 

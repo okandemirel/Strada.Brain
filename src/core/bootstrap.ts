@@ -406,6 +406,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     consensusManager,
     confidenceEstimator,
     interventionEngine: learningResult.interventionEngine,
+    memoryDbPath: config.memory.dbPath,
   });
 
   const { chainManager } = await initializeToolChainStage({

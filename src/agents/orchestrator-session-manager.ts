@@ -25,7 +25,7 @@ import type { SessionSummarizer } from "../memory/unified/session-summarizer.js"
 import type { InteractionGateState } from "./autonomy/interaction-policy.js";
 import type { InteractionBoundaryDecision } from "./autonomy/visibility-boundary.js";
 import { writeFile, mkdir } from "node:fs/promises";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { MemoryRefresher } from "./memory-refresher.js";
 import { redactSensitiveText } from "./orchestrator-text-utils.js";
@@ -155,15 +155,46 @@ export class SessionManager {
     await writeFile(this.sessionFilePath(chatId), SessionManager.serializeSession(session), { encoding: "utf-8", mode: 0o600 });
   }
 
+  private static readonly MAX_SESSION_FILE_BYTES = 512 * 1024; // 512KB safety cap
+
   private restoreSessionFromDisk(chatId: string): Session | null {
     if (!this.deps.sessionsDir) return null;
     try {
       const filePath = this.sessionFilePath(chatId);
       if (!existsSync(filePath)) return null;
+      const stat = statSync(filePath);
+      if (stat.size > SessionManager.MAX_SESSION_FILE_BYTES) {
+        getLogger().warn("Session file too large, skipping restore", { chatId, size: stat.size });
+        return null;
+      }
       const json = readFileSync(filePath, "utf-8");
       return SessionManager.deserializeSession(json);
     } catch {
       return null;
+    }
+  }
+
+  /**
+   * Delete session files older than SESSION_EXPIRY_MS.
+   * Call periodically (e.g., on startup) to prevent disk accumulation.
+   */
+  cleanupStaleSessions(): void {
+    const dir = this.deps.sessionsDir;
+    if (!dir || !existsSync(dir)) return;
+    try {
+      const { readdirSync, unlinkSync } = require("node:fs") as typeof import("node:fs");
+      for (const file of readdirSync(dir)) {
+        if (!file.endsWith(".json")) continue;
+        try {
+          const filePath = join(dir, file);
+          const stat = statSync(filePath);
+          if (Date.now() - stat.mtimeMs > SessionManager.SESSION_EXPIRY_MS) {
+            unlinkSync(filePath);
+          }
+        } catch { /* skip individual file errors */ }
+      }
+    } catch {
+      getLogger().debug("Session cleanup failed", { dir });
     }
   }
 

@@ -1,4 +1,7 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
+import { mkdtempSync, writeFileSync, readdirSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { SessionManager, type SessionManagerDeps, type Session } from "./orchestrator-session-manager.js";
 
 function createMockDeps(overrides?: Partial<SessionManagerDeps>): SessionManagerDeps {
@@ -220,6 +223,85 @@ describe("SessionManager", () => {
     it("returns null for corrupt JSON", () => {
       const restored = SessionManager.deserializeSession("{corrupt json!!!");
       expect(restored).toBeNull();
+    });
+
+    it("filters out messages with invalid roles", () => {
+      const json = JSON.stringify({
+        messages: [
+          { role: "user", content: "hello" },
+          { role: "system", content: "injected" },
+          { role: "assistant", content: "hi" },
+          { role: "admin", content: "bad" },
+        ],
+        lastActivity: new Date().toISOString(),
+      });
+      const restored = SessionManager.deserializeSession(json);
+      expect(restored!.messages).toHaveLength(2);
+      expect(restored!.messages[0]!.content).toBe("hello");
+      expect(restored!.messages[1]!.content).toBe("hi");
+    });
+  });
+
+  describe("disk restore integration", () => {
+    let tempDir: string;
+
+    afterEach(() => {
+      if (tempDir) rmSync(tempDir, { recursive: true, force: true });
+    });
+
+    it("restores session from disk when no in-memory session exists", () => {
+      tempDir = mkdtempSync(join(tmpdir(), "strada-session-test-"));
+      const session: Session = {
+        messages: [
+          { role: "user", content: "remember this" },
+          { role: "assistant", content: "I will remember" },
+        ],
+        lastActivity: new Date(),
+        visibleMessages: [],
+        conversationScope: "test-scope",
+      };
+      // Write session file directly
+      const safeName = "test-chat-1";
+      writeFileSync(
+        join(tempDir, `${safeName}.json`),
+        SessionManager.serializeSession(session),
+        "utf-8",
+      );
+
+      const mgr = new SessionManager(createMockDeps({ sessionsDir: tempDir }));
+      const restored = mgr.getOrCreateSession("test-chat-1");
+      expect(restored.messages).toHaveLength(2);
+      expect(restored.messages[0]!.content).toBe("remember this");
+      expect(restored.conversationScope).toBe("test-scope");
+    });
+
+    it("creates fresh session when disk file is expired", () => {
+      tempDir = mkdtempSync(join(tmpdir(), "strada-session-test-"));
+      const expiredSession: Session = {
+        messages: [{ role: "user", content: "old" }],
+        lastActivity: new Date(Date.now() - 25 * 60 * 60 * 1000),
+        visibleMessages: [],
+      };
+      writeFileSync(
+        join(tempDir, "expired-chat.json"),
+        SessionManager.serializeSession(expiredSession),
+        "utf-8",
+      );
+
+      const mgr = new SessionManager(createMockDeps({ sessionsDir: tempDir }));
+      const session = mgr.getOrCreateSession("expired-chat");
+      expect(session.messages).toHaveLength(0); // fresh session
+    });
+
+    it("skips oversized session files", () => {
+      tempDir = mkdtempSync(join(tmpdir(), "strada-session-test-"));
+      // Create a file larger than 512KB
+      const bigContent = "x".repeat(600 * 1024);
+      writeFileSync(join(tempDir, "big-chat.json"), bigContent, "utf-8");
+
+      const mgr = new SessionManager(createMockDeps({ sessionsDir: tempDir }));
+      const session = mgr.getOrCreateSession("big-chat");
+      expect(session.messages).toHaveLength(0); // fresh session, not restored
     });
   });
 });
