@@ -37,11 +37,8 @@ export function useShiki() {
   const [isLoading, setIsLoading] = useState(!cachedHighlighter)
 
   useEffect(() => {
-    if (cachedHighlighter) {
-      setHighlighter(cachedHighlighter)
-      setIsLoading(false)
-      return
-    }
+    // If already cached, initial state handles it — no effect needed
+    if (cachedHighlighter) return
     let cancelled = false
     getHighlighter().then((h) => {
       if (!cancelled) {
