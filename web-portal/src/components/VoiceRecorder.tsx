@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, useMemo } from 'react'
+import { toast } from 'sonner'
 
 interface VoiceRecorderProps {
   onTranscript: (text: string) => void
@@ -28,6 +29,8 @@ function getSpeechRecognition(): SpeechRecognitionConstructor | null {
     | null
 }
 
+const FATAL_ERRORS = new Set(['not-allowed', 'service-not-available', 'language-not-supported'])
+
 export default function VoiceRecorder({ onTranscript, disabled }: VoiceRecorderProps) {
   const [isRecording, setIsRecording] = useState(false)
   const recognitionRef = useRef<SpeechRecognitionInstance | null>(null)
@@ -36,12 +39,12 @@ export default function VoiceRecorder({ onTranscript, disabled }: VoiceRecorderP
   const generationRef = useRef(0)
   const onTranscriptRef = useRef(onTranscript)
   const startRef = useRef<() => void>(() => {})
+  const micGrantedRef = useRef(false)
 
   useEffect(() => { onTranscriptRef.current = onTranscript }, [onTranscript])
 
   const supported = useMemo(() => typeof window !== 'undefined' && getSpeechRecognition() !== null, [])
 
-  // Initialize the recognition starter in an effect (refs cannot be accessed during render)
   useEffect(() => {
     const start = (): void => {
       const SpeechRecognitionCtor = getSpeechRecognition()
@@ -58,7 +61,7 @@ export default function VoiceRecorder({ onTranscript, disabled }: VoiceRecorderP
         for (let i = event.resultIndex; i < event.results.length; i++) {
           const result = event.results[i]
           if (result.isFinal && result[0]) {
-            const transcript = result[0].transcript.trim()
+            const transcript = result[0].transcript.trim().slice(0, 5000)
             if (transcript) {
               onTranscriptRef.current(transcript)
             }
@@ -67,20 +70,26 @@ export default function VoiceRecorder({ onTranscript, disabled }: VoiceRecorderP
       }
 
       recognition.onerror = (event) => {
-        if (event.error === 'no-speech') return
-        if (event.error !== 'aborted' && import.meta.env.DEV) {
+        if (event.error === 'no-speech' || event.error === 'aborted') return
+        if (import.meta.env.DEV) {
           console.warn('[VoiceRecorder] Speech recognition error:', event.error)
         }
-        wantRecordingRef.current = false
+        if (FATAL_ERRORS.has(event.error)) {
+          wantRecordingRef.current = false
+          toast.error(event.error === 'not-allowed'
+            ? 'Microphone permission denied'
+            : 'Speech recognition temporarily unavailable')
+        }
       }
 
       recognition.onend = () => {
         if (generationRef.current !== gen) return
         recognitionRef.current = null
-        if (wantRecordingRef.current && restartCountRef.current < 3) {
+        if (wantRecordingRef.current && restartCountRef.current < 5) {
+          const delay = 300 * Math.pow(2, restartCountRef.current)
           restartCountRef.current++
           setTimeout(() => {
-            if (wantRecordingRef.current) {
+            if (wantRecordingRef.current && generationRef.current === gen) {
               try {
                 startRef.current()
               } catch {
@@ -88,7 +97,7 @@ export default function VoiceRecorder({ onTranscript, disabled }: VoiceRecorderP
                 setIsRecording(false)
               }
             }
-          }, 300)
+          }, delay)
           return
         }
         wantRecordingRef.current = false
@@ -119,18 +128,40 @@ export default function VoiceRecorder({ onTranscript, disabled }: VoiceRecorderP
       return
     }
 
-    if (recognitionRef.current) return
+    // Guard against double-click while getUserMedia dialog is open
+    if (wantRecordingRef.current || recognitionRef.current) return
 
-    try {
-      wantRecordingRef.current = true
-      restartCountRef.current = 0
-      startRef.current()
-      setIsRecording(true)
-    } catch (err) {
-      if (import.meta.env.DEV) console.warn('[VoiceRecorder] Failed to start speech recognition:', err)
-      wantRecordingRef.current = false
-      setIsRecording(false)
+    wantRecordingRef.current = true
+    restartCountRef.current = 0
+
+    const begin = () => {
+      try {
+        startRef.current()
+        setIsRecording(true)
+      } catch (err) {
+        wantRecordingRef.current = false
+        if (import.meta.env.DEV) console.warn('[VoiceRecorder] Start failed:', err)
+      }
     }
+
+    // getUserMedia reliably triggers the browser permission prompt;
+    // SpeechRecognition.start() alone silently fails in some configurations.
+    if (!micGrantedRef.current && navigator.mediaDevices?.getUserMedia) {
+      navigator.mediaDevices.getUserMedia({ audio: true })
+        .then((stream) => {
+          stream.getTracks().forEach((t) => t.stop())
+          micGrantedRef.current = true
+          if (wantRecordingRef.current) begin()
+        })
+        .catch((err) => {
+          wantRecordingRef.current = false
+          toast.error('Microphone permission denied')
+          if (import.meta.env.DEV) console.warn('[VoiceRecorder] getUserMedia failed:', err)
+        })
+      return
+    }
+
+    begin()
   }, [isRecording])
 
   if (!supported) return null
