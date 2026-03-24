@@ -39,7 +39,7 @@
   border-radius: 8px;
   border: none;
   background: transparent;
-  color: #a6adc8;
+  color: rgba(166, 173, 200, 0.8);
   font-size: 14px;
   cursor: pointer;
   transition: all 0.15s ease;
@@ -48,7 +48,7 @@
 
 .strada-toolbar-btn:hover {
   background: rgba(0, 229, 255, 0.1);
-  color: #cdd6f4;
+  color: rgba(205, 214, 244, 1);
   box-shadow: 0 0 8px rgba(0, 229, 255, 0.15);
 }
 
