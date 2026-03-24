@@ -223,6 +223,14 @@
   }
 
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  /* Restore tldraw's own styling inside its container */
+  .tl-container, .tl-container *, .tl-container *::before, .tl-container *::after {
+    box-sizing: revert;
+    margin: revert;
+    padding: revert;
+  }
+
   html, body, #root { height: 100%; overflow: hidden; }
 
   body {

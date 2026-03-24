@@ -145,7 +145,7 @@ export default function CanvasPanel() {
           </span>
         )}
       </div>
-      <div className="flex-1">
+      <div className="relative flex-1">
         <Tldraw onMount={handleMount} shapeUtils={customShapeUtils} />
       </div>
     </div>
