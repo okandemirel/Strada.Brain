@@ -7,7 +7,7 @@
  * All interfaces use readonly fields for immutability.
  */
 
-import type { GoalNode, GoalNodeId, GoalTree } from "../goals/types.js";
+import type { GoalNode, GoalNodeId } from "../goals/types.js";
 import type { ToolResult } from "../agents/providers/provider-core.interface.js";
 
 // =============================================================================

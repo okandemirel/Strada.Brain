@@ -103,7 +103,7 @@ export class ProviderAssigner {
       return node;
     }
 
-    const best = ranked[0];
+    const best = ranked[0]!;
     return {
       ...node,
       assignedProvider: best.providerName,
@@ -190,9 +190,9 @@ export class ProviderAssigner {
         break;
       }
 
-      if (!assigned) {
+      if (!assigned && ranked.length > 0) {
         // All providers at cap — fall back to best available (allow overflow)
-        const best = ranked[0];
+        const best = ranked[0]!;
         results.push({
           ...node,
           assignedProvider: best.providerName,

@@ -266,9 +266,11 @@ export class CapabilityMatcher {
     const ambiguousIndices: number[] = [];
     const ambiguousNodes: GoalNode[] = [];
     for (let i = 0; i < nodes.length; i++) {
-      if (heuristicProfiles[i].confidence < 0.7) {
+      const profile = heuristicProfiles[i];
+      const node = nodes[i];
+      if (profile && node && profile.confidence < 0.7) {
         ambiguousIndices.push(i);
-        ambiguousNodes.push(nodes[i]);
+        ambiguousNodes.push(node);
       }
     }
 
@@ -281,20 +283,20 @@ export class CapabilityMatcher {
     // Merge: use triage result for ambiguous nodes, heuristic for the rest
     const finalProfiles = [...heuristicProfiles];
     for (let j = 0; j < ambiguousIndices.length; j++) {
-      const idx = ambiguousIndices[j];
+      const idx = ambiguousIndices[j]!;
       const triageProfile = triageProfiles[j];
-      // If triage returned a real result (not just default), use it
-      // Otherwise keep the heuristic default
-      finalProfiles[idx] = {
-        ...triageProfile,
-        source: triageProfile.source === "llm-triage" ? "llm-triage" : "hybrid",
-      };
+      if (triageProfile) {
+        finalProfiles[idx] = {
+          ...triageProfile,
+          source: triageProfile.source === "llm-triage" ? "llm-triage" : "hybrid",
+        };
+      }
     }
 
     // Build TaggedGoalNodes
     return nodes.map((node, i) => ({
       ...node,
       capabilityProfile: finalProfiles[i],
-    }));
+    })) as TaggedGoalNode[];
   }
 }

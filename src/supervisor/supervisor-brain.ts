@@ -8,7 +8,7 @@
  * when the pipeline is interrupted mid-execution.
  */
 
-import type { GoalNode, GoalNodeId, GoalTree } from "../goals/types.js";
+import type { GoalNode, GoalTree } from "../goals/types.js";
 import type {
   NodeResult,
   SupervisorConfig,
