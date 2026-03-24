@@ -24,7 +24,7 @@ function downloadBlob(blob: Blob, filename: string): void {
 const toolbarBtnCls = 'rounded bg-white/5 px-2 py-0.5 text-xs text-text hover:bg-white/10'
 const toolbarCls = 'flex items-center gap-2 border-b border-white/5 bg-white/3 backdrop-blur-xl px-3 py-1.5'
 
-function LoadingSpinner(): JSX.Element {
+function LoadingSpinner() {
   return (
     <div className="flex items-center gap-2 text-text-secondary text-sm">
       <div className="h-4 w-4 rounded-full border-2 border-accent/30 border-t-accent animate-spin" />

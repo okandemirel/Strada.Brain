@@ -166,9 +166,7 @@ describe('CanvasPanel', () => {
       const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
       render(<CanvasPanel />)
 
-      const btn = screen.getByTestId('canvas-template-architecture')
-      await user.click(btn)
-      await act(async () => { vi.advanceTimersByTime(100) })
+      await enterEditorViaTemplate(user)
 
       // Welcome should be gone, tldraw should be visible
       expect(screen.queryByTestId('canvas-welcome')).not.toBeInTheDocument()
