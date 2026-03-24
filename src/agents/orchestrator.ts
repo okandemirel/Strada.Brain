@@ -228,6 +228,7 @@ import {
   type InteractiveEndTurnContext,
   type EndTurnLoopAction,
 } from "./orchestrator-end-turn-handler.js";
+import type { SupervisorBrain } from "../supervisor/supervisor-brain.js";
 
 const TYPING_INTERVAL_MS = 4000;
 const STREAM_THROTTLE_MS = 500; // Throttle streaming updates to channels
@@ -467,6 +468,9 @@ export class Orchestrator {
   private readonly taskClassifier = new TaskClassifier();
   private readonly onUsage?: (usage: TaskUsageEvent) => void;
   private readonly taskContext = new AsyncLocalStorage<TaskExecutionContext>();
+  private readonly supervisorBrain?: SupervisorBrain;
+  private supervisorBrainActive = false;
+  private readonly supervisorComplexityThreshold: "moderate" | "complex";
   private readonly runtimeArtifactMatches = new Map<
     string,
     {
@@ -524,6 +528,8 @@ export class Orchestrator {
     confidenceEstimator?: import("../agent-core/routing/confidence-estimator.js").ConfidenceEstimator;
     onUsage?: (usage: TaskUsageEvent) => void;
     memoryDbPath?: string;
+    supervisorBrain?: SupervisorBrain;
+    supervisorComplexityThreshold?: "moderate" | "complex";
   }) {
     this.providerManager = opts.providerManager;
     this.channel = opts.channel;
@@ -580,6 +586,8 @@ export class Orchestrator {
     this.consensusManager = opts.consensusManager;
     this.confidenceEstimator = opts.confidenceEstimator;
     this.onUsage = opts.onUsage;
+    this.supervisorBrain = opts.supervisorBrain;
+    this.supervisorComplexityThreshold = opts.supervisorComplexityThreshold ?? "complex";
     this.getIdentityState = opts.getIdentityState;
     this.crashRecoveryContext = opts.crashRecoveryContext;
 
@@ -652,6 +660,14 @@ export class Orchestrator {
 
     const maxEpochs = this.taskConfig.backgroundMaxEpochs;
     return maxEpochs === 0 || completedEpochCount < maxEpochs;
+  }
+
+  private shouldActivateSupervisor(classification: TaskClassification): boolean {
+    const threshold = this.supervisorComplexityThreshold;
+    if (threshold === "moderate") {
+      return classification.complexity === "moderate" || classification.complexity === "complex";
+    }
+    return classification.complexity === "complex";
   }
 
   private buildBackgroundIterationBudgetStopMessage(epochCount: number): string {
@@ -2683,6 +2699,32 @@ export class Orchestrator {
     );
     if (trimmed.length > 0) {
       await this.sessionManager.persistSessionToMemory(chatId, trimmed, /* force */ true);
+    }
+
+    // Supervisor Brain gate: route complex tasks to multi-provider pipeline
+    if (this.supervisorBrain && !this.supervisorBrainActive) {
+      const classification = this.taskClassifier?.classify(text);
+      if (classification && this.shouldActivateSupervisor(classification)) {
+        this.supervisorBrainActive = true;
+        try {
+          const result = await this.supervisorBrain.execute(text, {
+            chatId,
+            userId,
+            conversationId,
+          });
+          if (result) {
+            // Supervisor handled it — send result and return
+            await this.sessionManager.sendVisibleAssistantMarkdown(chatId, session, result.output);
+            return;
+          }
+          // Supervisor returned null (not complex enough), fall through to PAOR
+        } catch (err) {
+          // Supervisor failed — log and fall through to regular PAOR
+          getLogger().warn("Supervisor brain failed, falling through to PAOR", { error: String(err) });
+        } finally {
+          this.supervisorBrainActive = false;
+        }
+      }
     }
 
     // Start typing indicator loop

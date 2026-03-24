@@ -37,6 +37,7 @@ import {
   initializeRuntimeStateStage,
   initializeSessionRuntimeStage,
   initializeTaskRuntimeStage,
+  initializeSupervisorStage,
   initializeToolChainStage,
   initializeToolRegistryStage,
   registerDashboardPostBootStage,
@@ -362,6 +363,13 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       learningStorage: learningResult.storage,
     });
 
+  const { supervisorBrain } = initializeSupervisorStage({
+    config,
+    logger,
+    providerManager,
+    goalDecomposer,
+  });
+
   // Initialize orchestrator
   const orchestrator = new Orchestrator({
     providerManager,
@@ -407,7 +415,46 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     confidenceEstimator,
     interventionEngine: learningResult.interventionEngine,
     memoryDbPath: config.memory.dbPath,
+    supervisorBrain,
+    supervisorComplexityThreshold: config.supervisor.complexityThreshold,
   });
+
+  // Wire SupervisorBrain executeNode callback (post-construction circular dependency resolution)
+  if (supervisorBrain) {
+    supervisorBrain.setExecuteNode(async (node, context) => {
+      try {
+        const output = await orchestrator.runBackgroundTask(node.task, {
+          chatId: context.chatId,
+          signal: context.signal ?? AbortSignal.timeout(300_000),
+          onProgress: () => {},
+          channelType: channelType,
+        });
+        return {
+          nodeId: node.id,
+          status: "ok" as const,
+          output: output ?? "",
+          artifacts: [],
+          toolResults: [],
+          provider: node.assignedProvider ?? "unknown",
+          model: node.assignedModel ?? "unknown",
+          cost: 0,
+          duration: 0,
+        };
+      } catch (err) {
+        return {
+          nodeId: node.id,
+          status: "failed" as const,
+          output: String(err),
+          artifacts: [],
+          toolResults: [],
+          provider: node.assignedProvider ?? "unknown",
+          model: node.assignedModel ?? "unknown",
+          cost: 0,
+          duration: 0,
+        };
+      }
+    });
+  }
 
   const { chainManager } = await initializeToolChainStage({
     config,
