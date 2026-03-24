@@ -69,7 +69,7 @@ export function createMonitorLifecycle(workspaceBus: WorkspaceBus): MonitorLifec
       workspaceBus.emit('monitor:dag_init', goalTreeToDagPayload(goalTree))
     },
 
-    goalRestructured(conversationScope: string, goalTree: GoalTree): void {
+    goalRestructured(_conversationScope: string, goalTree: GoalTree): void {
       // Restructure doesn't affect simple task tracking (already cleared by goalDecomposed)
       workspaceBus.emit('monitor:dag_restructure', goalTreeToDagPayload(goalTree))
     },
