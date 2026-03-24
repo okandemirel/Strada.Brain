@@ -40,7 +40,7 @@ export default function CanvasPanel() {
       editor.user.updateUserPreferences({ colorScheme: theme })
       editor.on('change', () => setDirty(true))
     },
-    [setDirty],
+    [setDirty, theme],
   )
 
   // Sync tldraw color scheme when portal theme changes
