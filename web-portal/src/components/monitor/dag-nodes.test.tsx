@@ -80,7 +80,7 @@ describe('ReviewNode', () => {
 
   it('uses warning border styling', () => {
     const { container } = render(<Review data={{ label: 'Review', status: 'pending' }} />)
-    const node = container.firstElementChild as HTMLElement
+    const node = container.querySelector('.rounded-lg') as HTMLElement
     expect(node.className).toContain('border-warning')
   })
 })
@@ -93,19 +93,19 @@ describe('GateNode', () => {
 
   it('renders with warning border for waiting status', () => {
     const { container } = render(<Gate data={{ label: 'Gate', status: 'waiting' }} />)
-    const node = container.firstElementChild as HTMLElement
+    const node = container.querySelector('.rounded-lg') as HTMLElement
     expect(node.className).toContain('border-warning')
   })
 
   it('renders with success border for approved status', () => {
     const { container } = render(<Gate data={{ label: 'Gate', status: 'approved' }} />)
-    const node = container.firstElementChild as HTMLElement
+    const node = container.querySelector('.rounded-lg') as HTMLElement
     expect(node.className).toContain('border-success')
   })
 
   it('renders with error border for rejected status', () => {
     const { container } = render(<Gate data={{ label: 'Gate', status: 'rejected' }} />)
-    const node = container.firstElementChild as HTMLElement
+    const node = container.querySelector('.rounded-lg') as HTMLElement
     expect(node.className).toContain('border-error')
   })
 
