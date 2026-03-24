@@ -11,22 +11,21 @@ import {
   type TLUiContextMenuProps,
 } from 'tldraw'
 import { SHAPE_TYPES } from './custom-shapes'
-import './canvas-styles.css'
 
 /** Export JSON callback — set by CanvasPanel so context menu can trigger export */
 let _exportJsonFn: (() => void) | null = null
-export function setExportJsonFn(fn: () => void) { _exportJsonFn = fn }
+export function setExportJsonFn(fn: () => void): void { _exportJsonFn = fn }
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-function createShapeAtCenter(editor: ReturnType<typeof useEditor>, type: string) {
+function createShapeAtCenter(editor: ReturnType<typeof useEditor>, type: string): void {
   const center = editor.getViewportPageBounds().center
   editor.createShape({ type, x: center.x - 100, y: center.y - 50 })
 }
 
-function createShapeAtPointer(editor: ReturnType<typeof useEditor>, type: string) {
+function createShapeAtPointer(editor: ReturnType<typeof useEditor>, type: string): void {
   const point = editor.inputs.currentPagePoint
   editor.createShape({ type, x: point.x - 100, y: point.y - 50 })
 }

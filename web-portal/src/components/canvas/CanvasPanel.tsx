@@ -22,6 +22,16 @@ function downloadBlob(blob: Blob, filename: string): void {
 }
 
 const toolbarBtnCls = 'rounded bg-white/5 px-2 py-0.5 text-xs text-text hover:bg-white/10'
+const toolbarCls = 'flex items-center gap-2 border-b border-white/5 bg-white/3 backdrop-blur-xl px-3 py-1.5'
+
+function LoadingSpinner(): JSX.Element {
+  return (
+    <div className="flex items-center gap-2 text-text-secondary text-sm">
+      <div className="h-4 w-4 rounded-full border-2 border-accent/30 border-t-accent animate-spin" />
+      Loading canvas...
+    </div>
+  )
+}
 
 export default function CanvasPanel() {
   const pendingShapes = useCanvasStore((s) => s.pendingShapes)
@@ -50,6 +60,8 @@ export default function CanvasPanel() {
       .then((data) => {
         if (data?.canvas?.shapes) {
           try {
+            // Skip restore if user already picked a template
+            if (selectedTemplateRef.current) return
             const snapshot = JSON.parse(data.canvas.shapes)
             snapshotRef.current = snapshot
             import('tldraw/tldraw.css')
@@ -161,7 +173,7 @@ export default function CanvasPanel() {
   if (editorMode === 'welcome') {
     return (
       <div className="flex h-full w-full flex-col" data-testid="canvas-panel">
-        <div className="flex items-center gap-2 border-b border-white/5 bg-white/3 backdrop-blur-xl px-3 py-1.5" data-testid="canvas-toolbar">
+        <div className={toolbarCls} data-testid="canvas-toolbar">
           <span className="text-xs font-medium text-text-secondary">Canvas</span>
         </div>
         <CanvasWelcome onSelect={handleTemplateSelect} />
@@ -172,7 +184,7 @@ export default function CanvasPanel() {
   // Editor mode — tldraw loaded
   return (
     <div className="flex h-full w-full flex-col" data-testid="canvas-panel">
-      <div className="flex items-center gap-2 border-b border-white/5 bg-white/3 backdrop-blur-xl px-3 py-1.5" data-testid="canvas-toolbar">
+      <div className={toolbarCls} data-testid="canvas-toolbar">
         <span className="text-xs font-medium text-text-secondary">Canvas</span>
         <span className="text-[10px] text-text-secondary bg-white/5 rounded px-1.5 py-0.5 md:hidden">
           View only
@@ -196,10 +208,7 @@ export default function CanvasPanel() {
       <div className="relative flex-1">
         <Suspense fallback={
           <div className="flex h-full items-center justify-center">
-            <div className="flex items-center gap-2 text-text-secondary text-sm">
-              <div className="h-4 w-4 rounded-full border-2 border-accent/30 border-t-accent animate-spin" />
-              Loading canvas...
-            </div>
+            <LoadingSpinner />
           </div>
         }>
           <TldrawEditor onMount={handleMount} shapeUtils={customShapeUtils} components={tldrawComponents} />

@@ -8,7 +8,7 @@ interface CanvasWelcomeProps {
 export default function CanvasWelcome({ onSelect }: CanvasWelcomeProps) {
   const [loading, setLoading] = useState(false)
 
-  const handleClick = (id: TemplateId) => {
+  function handleClick(id: TemplateId): void {
     if (loading) return
     setLoading(true)
     onSelect(id)
