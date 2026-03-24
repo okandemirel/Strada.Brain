@@ -102,6 +102,7 @@ import { formatResumePrompt, prepareTreeForResume } from "../goals/goal-resume.j
 import type { GoalTree, GoalNodeId, GoalStatus } from "../goals/types.js";
 import type { WorkspaceBus } from "../dashboard/workspace-bus.js";
 import { goalTreeToDagPayload } from "../dashboard/workspace-events.js";
+import type { MonitorLifecycle } from '../dashboard/monitor-lifecycle.js';
 import { parseGoalBlock, buildGoalTreeFromBlock } from "../goals/types.js";
 import type { TaskManager } from "../tasks/task-manager.js";
 import type { SoulLoader } from "./soul/index.js";
@@ -452,6 +453,7 @@ export class Orchestrator {
   private taskManager: TaskManager | null = null;
   /** Workspace bus for monitor UI events (lazy setter — bus created after orchestrator) */
   private workspaceBus: WorkspaceBus | null = null;
+  private monitorLifecycle: MonitorLifecycle | null = null;
   private readonly soulLoader: SoulLoader | null;
   private readonly dmPolicy: DMPolicy;
   private readonly sessionSummarizer?: SessionSummarizer;
@@ -484,6 +486,7 @@ export class Orchestrator {
   private readonly loopDensityWindow?: number;
   private readonly loopMaxRecoveryEpisodes?: number;
   private readonly loopStaleAnalysisThreshold?: number;
+  private readonly progressAssessmentEnabled: boolean;
   private readonly runtimeArtifactMatches = new Map<
     string,
     {
@@ -553,6 +556,7 @@ export class Orchestrator {
     loopDensityWindow?: number;
     loopMaxRecoveryEpisodes?: number;
     loopStaleAnalysisThreshold?: number;
+    progressAssessmentEnabled?: boolean;
   }) {
     this.providerManager = opts.providerManager;
     this.channel = opts.channel;
@@ -619,6 +623,7 @@ export class Orchestrator {
     this.loopDensityWindow = opts.loopDensityWindow;
     this.loopMaxRecoveryEpisodes = opts.loopMaxRecoveryEpisodes;
     this.loopStaleAnalysisThreshold = opts.loopStaleAnalysisThreshold;
+    this.progressAssessmentEnabled = opts.progressAssessmentEnabled ?? true;
     this.getIdentityState = opts.getIdentityState;
     this.crashRecoveryContext = opts.crashRecoveryContext;
 
@@ -1360,6 +1365,10 @@ export class Orchestrator {
     this.workspaceBus = bus;
   }
 
+  setMonitorLifecycle(lifecycle: MonitorLifecycle): void {
+    this.monitorLifecycle = lifecycle;
+  }
+
   private buildWorkerToolDefinitions(
     task: TaskClassification,
     phase: AgentPhase,
@@ -1928,6 +1937,7 @@ export class Orchestrator {
           loopDensityWindow: this.loopDensityWindow,
           loopMaxRecoveryEpisodes: this.loopMaxRecoveryEpisodes,
           loopStaleAnalysisThreshold: this.loopStaleAnalysisThreshold,
+          progressAssessmentEnabled: this.progressAssessmentEnabled,
         });
         const controlLoopTracker = controlLoopTrackerOrNull!;
         const interventionDeps = this.buildInterventionDeps();
@@ -2753,6 +2763,10 @@ export class Orchestrator {
       await this.sessionManager.persistSessionToMemory(chatId, trimmed, /* force */ true);
     }
 
+    // Monitor lifecycle: emit simple DAG so monitor workspace always shows something
+    const conversationScopeForMonitor = resolveConversationScope(chatId, conversationId);
+    this.monitorLifecycle?.requestStart(conversationScopeForMonitor, text);
+
     // Supervisor Brain gate: route complex tasks to multi-provider pipeline
     if (this.supervisorBrain && !this.supervisorBrainActive) {
       const classification = this.taskClassifier?.classify(text);
@@ -2767,6 +2781,7 @@ export class Orchestrator {
           if (result) {
             // Supervisor handled it — send result and return
             await this.sessionManager.sendVisibleAssistantMarkdown(chatId, session, result.output);
+            this.monitorLifecycle?.requestEnd(resolveConversationScope(chatId, conversationId));
             return;
           }
           // Supervisor returned null (not complex enough), fall through to PAOR
@@ -2798,6 +2813,7 @@ export class Orchestrator {
       logger.error("Agent loop error", { chatId, error: errMsg });
       await this.sessionManager.sendVisibleAssistantText(chatId, session, classifyErrorMessage(error));
     } finally {
+      this.monitorLifecycle?.requestEnd(resolveConversationScope(chatId, conversationId));
       clearInterval(typingInterval);
       // Persist conversation summary (forced to ensure no messages are lost)
       const visibleMessages = this.sessionManager.getVisibleTranscript(session);
@@ -2909,6 +2925,7 @@ export class Orchestrator {
       loopDensityWindow: this.loopDensityWindow,
       loopMaxRecoveryEpisodes: this.loopMaxRecoveryEpisodes,
       loopStaleAnalysisThreshold: this.loopStaleAnalysisThreshold,
+      progressAssessmentEnabled: this.progressAssessmentEnabled,
     });
     const interventionDeps = this.buildInterventionDeps();
     const taskStartedAtMs = Date.now();
@@ -5248,7 +5265,11 @@ export class Orchestrator {
       );
       this.activeGoalTrees.set(opts.conversationScope, goalTree);
       this.emitGoalEvent(goalTree.rootId, goalTree.rootId, "pending", 0);
-      this.emitDagEvent("monitor:dag_init", goalTree);
+      if (this.monitorLifecycle) {
+        this.monitorLifecycle.goalDecomposed(opts.conversationScope, goalTree);
+      } else {
+        this.emitDagEvent("monitor:dag_init", goalTree);
+      }
       const treeViz = renderGoalTree(goalTree);
       await this.sessionManager.sendVisibleAssistantMarkdown(
         opts.chatId,
@@ -5308,7 +5329,11 @@ export class Orchestrator {
         );
         if (updatedTree) {
           this.activeGoalTrees.set(opts.conversationScope, updatedTree);
-          this.emitDagEvent("monitor:dag_restructure", updatedTree);
+          if (this.monitorLifecycle) {
+            this.monitorLifecycle.goalRestructured(opts.conversationScope, updatedTree);
+          } else {
+            this.emitDagEvent("monitor:dag_restructure", updatedTree);
+          }
           const treeViz = renderGoalTree(updatedTree);
           await this.sessionManager.sendVisibleAssistantMarkdown(
             opts.chatId,

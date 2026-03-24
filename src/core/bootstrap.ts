@@ -80,6 +80,7 @@ import { createWorkspaceBus, type WorkspaceBus } from "../dashboard/workspace-bu
 import { createLearningWorkspaceBridge } from "../dashboard/learning-workspace-bridge.js";
 import { createMonitorBridge } from "../dashboard/monitor-bridge.js";
 import { CanvasStorage } from "../dashboard/canvas-storage.js";
+import { createMonitorLifecycle } from "../dashboard/monitor-lifecycle.js";
 import Database from "better-sqlite3";
 
 // Auto-update imports
@@ -451,6 +452,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     loopDensityWindow: config.loopDensityWindow,
     loopMaxRecoveryEpisodes: config.loopMaxRecoveryEpisodes,
     loopStaleAnalysisThreshold: config.loopStaleAnalysisThreshold,
+    progressAssessmentEnabled: config.progressAssessmentEnabled,
   });
 
   // Wire SupervisorBrain executeNode callback (post-construction circular dependency resolution)
@@ -937,6 +939,8 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
 
   // Wire workspace bus into orchestrator + background executor for monitor events
   orchestrator.setWorkspaceBus(workspaceBus);
+  const monitorLifecycle = createMonitorLifecycle(workspaceBus);
+  orchestrator.setMonitorLifecycle(monitorLifecycle);
   backgroundExecutor.setWorkspaceBus(workspaceBus);
   if (supervisorBrain) {
     supervisorBrain.setEventEmitter(workspaceBus);

@@ -33,6 +33,7 @@ export interface CreateAutonomyBundleParams {
   readonly loopDensityWindow?: number;
   readonly loopMaxRecoveryEpisodes?: number;
   readonly loopStaleAnalysisThreshold?: number;
+  readonly progressAssessmentEnabled?: boolean;
 }
 
 export function createAutonomyBundle(params: CreateAutonomyBundleParams): AutonomyBundle {
