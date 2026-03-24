@@ -24,7 +24,7 @@ import type { TaskExecutionStore } from "../memory/unified/task-execution-store.
 import type { SessionSummarizer } from "../memory/unified/session-summarizer.js";
 import type { InteractionGateState } from "./autonomy/interaction-policy.js";
 import type { InteractionBoundaryDecision } from "./autonomy/visibility-boundary.js";
-import { writeFile, readFile, mkdir } from "node:fs/promises";
+import { writeFile, mkdir } from "node:fs/promises";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { MemoryRefresher } from "./memory-refresher.js";
