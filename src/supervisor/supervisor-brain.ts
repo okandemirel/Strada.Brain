@@ -139,7 +139,13 @@ export class SupervisorBrain {
       }
 
       // Step 4: Extract leaf nodes (non-root nodes)
+      const MAX_SUPERVISOR_NODES = 50;
       const leafNodes = this.extractLeafNodes(goalTree);
+
+      if (leafNodes.length > MAX_SUPERVISOR_NODES) {
+        return this.makePartialResult([],
+          `Task decomposed into ${leafNodes.length} sub-tasks, exceeding the limit of ${MAX_SUPERVISOR_NODES}. Please break your request into smaller tasks.`);
+      }
 
       if (leafNodes.length === 0) {
         return this.makePartialResult([], "No sub-tasks after decomposition");
@@ -216,9 +222,10 @@ export class SupervisorBrain {
 
       return supervisorResult;
     } catch (err: unknown) {
-      // Pipeline error — return partial result with error info
-      const message = err instanceof Error ? err.message : String(err);
-      return this.makePartialResult([], `Pipeline error: ${message}`);
+      const { getLogger } = await import("../utils/logger.js");
+      const logger = getLogger?.();
+      logger?.warn("Supervisor pipeline error", { error: err instanceof Error ? err.message : String(err) });
+      return this.makePartialResult([], "An error occurred during task execution. Please try again.");
     }
   }
 

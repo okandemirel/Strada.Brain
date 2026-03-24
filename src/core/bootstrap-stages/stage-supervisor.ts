@@ -132,7 +132,7 @@ export function initializeSupervisorStage(
     try {
       triageProvider = params.providerManager.getProviderByName(triageProviderName) ?? undefined;
     } catch {
-      params.logger.debug("Supervisor triage provider not available, using heuristic-only matching", {
+      params.logger.warn("Supervisor triage provider not available, using heuristic-only matching", {
         triageProvider: triageProviderName,
       });
     }
