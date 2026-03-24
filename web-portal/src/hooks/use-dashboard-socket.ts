@@ -3,6 +3,7 @@ import { useMonitorStore } from '../stores/monitor-store'
 import { useWorkspaceStore, type WorkspaceMode } from '../stores/workspace-store'
 import { useCanvasStore } from '../stores/canvas-store'
 import { useCodeStore } from '../stores/code-store'
+import { useSupervisorStore } from '../stores/supervisor-store'
 import type { MonitorTask, ActivityEntry, DagState } from '../stores/monitor-store'
 
 // ---- Workspace message type definitions ----
@@ -227,6 +228,112 @@ export function dispatchWorkspaceMessage(data: { type: string; [key: string]: un
       break
     }
 
+    // === Supervisor events ===
+
+    case 'supervisor:activated': {
+      useSupervisorStore.getState().activate(
+        payload.taskId as string,
+        payload.nodeCount as number,
+      )
+      break
+    }
+
+    case 'supervisor:plan_ready': {
+      useSupervisorStore.getState().setPlan(
+        payload.assignments as Record<string, { provider: string; model: string }>,
+      )
+      break
+    }
+
+    case 'supervisor:wave_start': {
+      useSupervisorStore.getState().setWaveStart(
+        payload.waveIndex as number,
+        payload.nodes as Array<{ nodeId: string; provider: string }>,
+      )
+      break
+    }
+
+    case 'supervisor:node_start': {
+      useSupervisorStore.getState().updateNode(payload.nodeId as string, {
+        status: 'running',
+        provider: payload.provider as string,
+        model: payload.model as string,
+        wave: payload.wave as number,
+      })
+      break
+    }
+
+    case 'supervisor:node_complete': {
+      useSupervisorStore.getState().updateNode(payload.nodeId as string, {
+        status: payload.status as string,
+        duration: payload.duration as number,
+        cost: payload.cost as number,
+      })
+      break
+    }
+
+    case 'supervisor:node_failed': {
+      const sup = useSupervisorStore.getState()
+      sup.updateNode(payload.nodeId as string, { status: 'failed' })
+      sup.addAlert({
+        kind: 'failed',
+        nodeId: payload.nodeId as string,
+        message: `${payload.error as string} (level ${payload.failureLevel}, ${payload.nextAction})`,
+      })
+      break
+    }
+
+    case 'supervisor:escalation': {
+      useSupervisorStore.getState().addAlert({
+        kind: 'escalation',
+        nodeId: payload.nodeId as string,
+        message: `${payload.fromProvider} -> ${payload.toProvider}: ${payload.reason}`,
+      })
+      break
+    }
+
+    case 'supervisor:wave_done': {
+      // Update node statuses from wave results
+      const store = useSupervisorStore.getState()
+      const results = (payload.results ?? []) as Array<{ nodeId: string; status: string }>
+      for (const r of results) {
+        store.updateNode(r.nodeId, { status: r.status })
+      }
+      break
+    }
+
+    case 'supervisor:verify_start': {
+      useSupervisorStore.getState().updateNode(payload.nodeId as string, {
+        status: 'verifying',
+      })
+      break
+    }
+
+    case 'supervisor:verify_done': {
+      useSupervisorStore.getState().updateNode(payload.nodeId as string, {
+        status: 'done',
+        verdict: payload.verdict as string,
+      })
+      break
+    }
+
+    case 'supervisor:complete': {
+      useSupervisorStore.getState().setComplete({
+        totalNodes: payload.totalNodes as number,
+        succeeded: payload.succeeded as number,
+        failed: payload.failed as number,
+        skipped: payload.skipped as number,
+        cost: payload.cost as number,
+        duration: payload.duration as number,
+      })
+      break
+    }
+
+    case 'supervisor:aborted': {
+      useSupervisorStore.getState().setAborted()
+      break
+    }
+
     default:
       // Unknown workspace message type — ignore
       break
@@ -238,5 +345,5 @@ export function dispatchWorkspaceMessage(data: { type: string; [key: string]: un
  * that should be dispatched via dispatchWorkspaceMessage.
  */
 export function isWorkspaceMessage(type: string): boolean {
-  return type.startsWith('monitor:') || type.startsWith('workspace:') || type.startsWith('canvas:') || type.startsWith('code:')
+  return type.startsWith('monitor:') || type.startsWith('workspace:') || type.startsWith('canvas:') || type.startsWith('code:') || type.startsWith('supervisor:')
 }

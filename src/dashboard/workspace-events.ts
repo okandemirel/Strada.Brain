@@ -109,6 +109,20 @@ export interface WorkspaceEventMap {
   'code:reject_diff': { path: string; hunkIndex: number }
   'code:request_file': { path: string }
 
+  // === Supervisor events (multi-agent DAG execution) ===
+  'supervisor:activated': { taskId: string; complexity: string; nodeCount: number }
+  'supervisor:plan_ready': { dag: { rootId: string; nodeCount: number }; assignments: Record<string, { provider: string; model: string }> }
+  'supervisor:wave_start': { waveIndex: number; nodes: Array<{ nodeId: string; provider: string }> }
+  'supervisor:node_start': { nodeId: string; provider: string; model: string; wave: number }
+  'supervisor:node_complete': { nodeId: string; status: string; duration: number; cost: number }
+  'supervisor:node_failed': { nodeId: string; error: string; failureLevel: number; nextAction: string }
+  'supervisor:escalation': { nodeId: string; fromProvider: string; toProvider: string; reason: string }
+  'supervisor:wave_done': { waveIndex: number; results: Array<{ nodeId: string; status: string }>; totalCost: number }
+  'supervisor:verify_start': { nodeId: string; verifierProvider: string }
+  'supervisor:verify_done': { nodeId: string; verdict: string; issues?: string[] }
+  'supervisor:complete': { totalNodes: number; succeeded: number; failed: number; skipped: number; cost: number; duration: number }
+  'supervisor:aborted': { reason: string; completedNodes: number; partialResult: boolean }
+
   // === Workspace meta events ===
   'workspace:mode_suggest': { mode: string; reason: string }
   'workspace:notification': { title: string; message: string; severity: 'info' | 'warning' | 'error' }

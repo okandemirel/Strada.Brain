@@ -3,6 +3,7 @@ import ActivityFeed from './ActivityFeed'
 import TaskDetailPanel from './TaskDetailPanel'
 import InterventionToolbar from './InterventionToolbar'
 import GateDialog from './GateDialog'
+import SupervisorPanel from './SupervisorPanel'
 
 const DAGView = lazy(() => import('./DAGView'))
 const KanbanBoard = lazy(() => import('./KanbanBoard'))
@@ -68,6 +69,10 @@ export default function MonitorPanel() {
 
       {/* Right: Activity feed + task detail */}
       <div className="flex flex-col w-64 shrink-0 bg-white/3 backdrop-blur border-l border-white/5 min-h-0">
+        {/* Supervisor panel */}
+        <div className="shrink-0 border-b border-border overflow-y-auto max-h-64 px-2 py-2">
+          <SupervisorPanel />
+        </div>
         {/* Task detail */}
         <div className="flex flex-col shrink-0 max-h-48 border-b border-border overflow-y-auto">
           <div className="px-3 py-2 text-xs font-semibold text-text-secondary uppercase tracking-wide shrink-0">
