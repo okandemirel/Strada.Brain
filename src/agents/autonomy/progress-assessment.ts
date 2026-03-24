@@ -163,7 +163,7 @@ export function parseProgressAssessment(text: string): ProgressAssessment | null
       return {
         verdict: parsed.verdict as ProgressAssessment["verdict"],
         confidence: parsed.confidence as ProgressAssessment["confidence"],
-        directive: typeof parsed.directive === "string" ? parsed.directive : undefined,
+        directive: typeof parsed.directive === "string" ? parsed.directive.slice(0, 500) : undefined,
       };
     } catch {
       // Try next candidate.

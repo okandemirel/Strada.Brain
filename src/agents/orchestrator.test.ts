@@ -6734,6 +6734,7 @@ DONE`,
         readOnly: false,
         requireConfirmation: false,
         progressAssessmentEnabled: false,
+        loopStaleAnalysisThreshold: 3, // low threshold for safety-net testing
         taskConfig: {
           ...DEFAULT_TASK_CONFIG,
           backgroundEpochMaxIterations: 20,

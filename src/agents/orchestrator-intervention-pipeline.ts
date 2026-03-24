@@ -431,11 +431,20 @@ export async function handleBackgroundLoopRecovery(
   deps: InterventionDeps,
 ): Promise<LoopRecoveryIntervention> {
   // ─── Progress Assessment (primary defense) ──────────────────────────────────
-  params.tracker.incrementTextOnlyGate();
-  const gateCount = params.tracker.getConsecutiveTextOnlyGates();
+  // Compute gate count without double-incrementing: recordGate() already
+  // increments consecutiveNoToolGates, so we read the CURRENT value + 1
+  // to predict what it will be after the next recordGate() call.
+  const gateCount = params.tracker.getConsecutiveTextOnlyGates() + 1;
 
-  // Free first analysis — agent may be legitimately exploring
+  // Free first analysis — agent may be legitimately exploring.
+  // Record the gate (which increments the counter) and return.
   if (gateCount <= 1) {
+    params.tracker.recordGate({
+      kind: params.kind,
+      reason: params.reason,
+      gate: params.gate,
+      iteration: params.iteration,
+    });
     return { action: "none" };
   }
 
