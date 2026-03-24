@@ -72,6 +72,22 @@ export class ExecutionJournal {
     });
   }
 
+  /**
+   * Seed this journal from a previous session's snapshot.
+   * Carries forward learned insights and verifier state so "try again"
+   * retains context from the previous attempt.
+   */
+  seedFromSnapshot(previous: ExecutionJournalSnapshot): void {
+    if (previous.learnedInsights) {
+      for (const insight of previous.learnedInsights) {
+        this.learnedInsights.add(insight);
+      }
+    }
+    if (previous.verifierSummary) {
+      this.lastVerifierSummary = previous.verifierSummary;
+    }
+  }
+
   recordPlan(
     plan: string | null | undefined,
     phase: AgentPhase,

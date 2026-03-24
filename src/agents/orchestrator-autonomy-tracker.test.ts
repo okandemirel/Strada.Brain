@@ -36,6 +36,20 @@ describe("createAutonomyBundle", () => {
     expect(snapshot).toBeDefined();
   });
 
+  it("seeds execution journal from previous snapshot when provided", () => {
+    const bundle = createAutonomyBundle({
+      prompt: "continue",
+      iterationBudget: 10,
+      previousJournalSnapshot: {
+        learnedInsights: ["Config uses Zod"],
+        verifierSummary: "Build passed",
+      },
+    });
+    const snapshot = bundle.executionJournal.snapshot();
+    expect(snapshot.learnedInsights).toContain("Config uses Zod");
+    expect(snapshot.verifierSummary).toBe("Build passed");
+  });
+
   it("works without optional params", () => {
     const bundle = createAutonomyBundle({
       prompt: "Test",

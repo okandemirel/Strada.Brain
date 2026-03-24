@@ -24,6 +24,7 @@ export interface CreateAutonomyBundleParams {
   readonly projectWorldSummary?: string;
   readonly projectWorldFingerprint?: string;
   readonly includeControlLoopTracker?: boolean;
+  readonly previousJournalSnapshot?: import("./autonomy/execution-journal.js").ExecutionJournalSnapshot;
 }
 
 export function createAutonomyBundle(params: CreateAutonomyBundleParams): AutonomyBundle {
@@ -31,6 +32,9 @@ export function createAutonomyBundle(params: CreateAutonomyBundleParams): Autono
   const taskPlanner = new TaskPlanner({ iterationBudget: params.iterationBudget });
   const selfVerification = new SelfVerification();
   const executionJournal = new ExecutionJournal(params.prompt);
+  if (params.previousJournalSnapshot) {
+    executionJournal.seedFromSnapshot(params.previousJournalSnapshot);
+  }
   const controlLoopTracker = params.includeControlLoopTracker ? new ControlLoopTracker() : null;
 
   if (params.projectWorldSummary && params.projectWorldFingerprint) {

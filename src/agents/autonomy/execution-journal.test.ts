@@ -68,6 +68,39 @@ describe("ExecutionJournal", () => {
     expect(prompt).toContain("Required verifier actions");
   });
 
+  it("seeds from a previous snapshot preserving insights and verifier summary", () => {
+    const original = new ExecutionJournal("original task");
+    original.recordVerifierResult({
+      decision: "replan",
+      summary: "Config uses Zod validation",
+      gate: "[VERIFIER PIPELINE: REPLAN REQUIRED]",
+      checks: [],
+      evidence: {
+        task: { type: "analysis", complexity: "simple", criticality: "low" },
+        hasTerminalFailureReport: false,
+        conformanceRequired: false,
+        recentFailures: [],
+        recentSteps: [],
+        recentLogIssues: [],
+        touchedFiles: [],
+        mutationStepCount: 0,
+        inspectionStepCount: 0,
+        verificationStepCount: 0,
+        totalStepCount: 0,
+        lastVerificationAt: null,
+      },
+    });
+    const snapshot = original.snapshot();
+    expect(snapshot.learnedInsights).toContain("Verifier pipeline: Config uses Zod validation");
+    expect(snapshot.verifierSummary).toBe("Config uses Zod validation");
+
+    const seeded = new ExecutionJournal("follow-up task");
+    seeded.seedFromSnapshot(snapshot);
+    const seededSnapshot = seeded.snapshot();
+    expect(seededSnapshot.learnedInsights).toContain("Verifier pipeline: Config uses Zod validation");
+    expect(seededSnapshot.verifierSummary).toBe("Config uses Zod validation");
+  });
+
   it("exports a compact snapshot for persistent execution memory", () => {
     const journal = new ExecutionJournal("Investigate the broken Unity level import");
     journal.attachProjectWorldContext({

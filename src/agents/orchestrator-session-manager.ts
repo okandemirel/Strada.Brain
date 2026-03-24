@@ -46,6 +46,7 @@ export interface Session {
   profileKey?: string;
   mixedParticipants?: boolean;
   postSetupBootstrapDelivered?: boolean;
+  lastJournalSnapshot?: import("./autonomy/execution-journal.js").ExecutionJournalSnapshot;
 }
 
 /**

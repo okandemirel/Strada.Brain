@@ -1859,6 +1859,7 @@ export class Orchestrator {
           projectWorldSummary: bgProjectWorldSummary,
           projectWorldFingerprint: bgProjectWorldFingerprint,
           includeControlLoopTracker: true,
+          previousJournalSnapshot: session.lastJournalSnapshot,
         });
         const controlLoopTracker = controlLoopTrackerOrNull!;
         const interventionDeps = this.buildInterventionDeps();
@@ -2401,6 +2402,7 @@ export class Orchestrator {
           throw error;
         } finally {
           this.sessionManager.persistExecutionMemory(identityKey, executionJournal);
+          session.lastJournalSnapshot = executionJournal.snapshot();
           // ─── Metrics: safety net for unexpected exits (endTask is idempotent) ─
           this.recordMetricEnd(metricId, {
             agentPhase: bgAgentState.phase,
@@ -2801,6 +2803,7 @@ export class Orchestrator {
       stradaDeps: this.stradaDeps,
       projectWorldSummary,
       projectWorldFingerprint,
+      previousJournalSnapshot: session.lastJournalSnapshot,
     });
     const interventionDeps = this.buildInterventionDeps();
     const taskStartedAtMs = Date.now();
@@ -3415,6 +3418,7 @@ export class Orchestrator {
       throw error;
     } finally {
       this.sessionManager.persistExecutionMemory(identityKey, executionJournal);
+      session.lastJournalSnapshot = executionJournal.snapshot();
       // ─── Metrics: safety net for unexpected exits (endTask is idempotent) ─
       this.recordMetricEnd(metricId, {
         agentPhase: agentState.phase,
