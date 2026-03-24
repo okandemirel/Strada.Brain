@@ -911,6 +911,9 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   // Wire workspace bus into orchestrator + background executor for monitor events
   orchestrator.setWorkspaceBus(workspaceBus);
   backgroundExecutor.setWorkspaceBus(workspaceBus);
+  if (supervisorBrain) {
+    supervisorBrain.setEventEmitter(workspaceBus);
+  }
 
   // Wire workspace bus into dashboard for monitor REST endpoints (Phase 3)
   if (dashboard) {

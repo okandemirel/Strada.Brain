@@ -52,7 +52,7 @@ export class SupervisorBrain {
   private readonly decomposer: SupervisorDecomposer;
   private readonly capabilityMatcher: CapabilityMatcher;
   private readonly providerAssigner: ProviderAssigner;
-  private readonly emitter?: { emit: (event: string, payload: any) => void };
+  private emitter?: { emit: (event: string, payload: any) => void };
 
   private executeNodeFn?: (node: TaggedGoalNode, context: SupervisorContext) => Promise<NodeResult>;
 
@@ -67,6 +67,14 @@ export class SupervisorBrain {
   // ---------------------------------------------------------------------------
   // LAZY SETTER (bootstrap circular dependency resolution)
   // ---------------------------------------------------------------------------
+
+  /**
+   * Set the event emitter for supervisor telemetry events.
+   * Called after bootstrap when workspaceBus is available.
+   */
+  setEventEmitter(emitter: { emit: (event: string, payload: any) => void }): void {
+    this.emitter = emitter;
+  }
 
   /**
    * Set the executeNode callback used to run individual goal nodes.
@@ -207,7 +215,9 @@ export class SupervisorBrain {
         maxVerificationCost: 0,
       });
 
+      this.emitter?.emit("supervisor:verify_start", { nodeId: "aggregate", verifierProvider: "internal" });
       const verifiedResults = await aggregator.verify(results);
+      this.emitter?.emit("supervisor:verify_done", { nodeId: "aggregate", verdict: "approve" });
       const supervisorResult = aggregator.synthesize(verifiedResults);
 
       // Step 13: Emit supervisor:complete
@@ -225,6 +235,11 @@ export class SupervisorBrain {
       const { getLogger } = await import("../utils/logger.js");
       const logger = getLogger?.();
       logger?.warn("Supervisor pipeline error", { error: err instanceof Error ? err.message : String(err) });
+      this.emitter?.emit("supervisor:aborted", {
+        reason: err instanceof Error ? err.message : String(err),
+        completedNodes: 0,
+        partialResult: false,
+      });
       return this.makePartialResult([], "An error occurred during task execution. Please try again.");
     }
   }

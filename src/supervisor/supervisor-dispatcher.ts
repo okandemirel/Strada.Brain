@@ -192,10 +192,17 @@ export class SupervisorDispatcher {
     // Each in-flight node holds one. Returned on success, consumed on failure.
     const budget = new Semaphore(this.config.maxFailureBudget);
 
-    for (const wave of waves) {
+    for (let waveIndex = 0; waveIndex < waves.length; waveIndex++) {
+      const wave = waves[waveIndex]!;
       if (budgetExhausted || signal?.aborted) break;
 
+      this.emitter?.emit("supervisor:wave_start", {
+        waveIndex,
+        nodes: wave.map((n) => ({ nodeId: n.id, provider: n.assignedProvider ?? "unknown" })),
+      });
+
       const inFlight: Promise<void>[] = [];
+      const waveResults: NodeResult[] = [];
 
       for (const node of wave) {
         // Check if any dependency failed -> skip
@@ -233,24 +240,29 @@ export class SupervisorDispatcher {
 
         const task = (async () => {
           try {
-            const result = await this.executeWithRetry(node, signal);
+            const result = await this.executeWithRetry(node, signal, waveIndex);
             results.push(result);
 
             if (result.status === "failed") {
               failedNodeIds.add(node.id as string);
               // Budget permit is consumed (not returned)
-              this.emitter?.emit("supervisor:node:fail", {
+              this.emitter?.emit("supervisor:node_failed", {
                 nodeId: node.id,
-                provider: result.provider,
+                error: result.output ?? "Unknown error",
+                failureLevel: 1,
+                nextAction: "skip",
               });
             } else {
               // Success: return the budget permit
               budget.release();
-              this.emitter?.emit("supervisor:node:complete", {
+              this.emitter?.emit("supervisor:node_complete", {
                 nodeId: node.id,
-                provider: result.provider,
+                status: result.status,
+                duration: result.duration ?? 0,
+                cost: result.cost ?? 0,
               });
             }
+            waveResults.push(result);
           } finally {
             concurrency.release();
           }
@@ -260,6 +272,12 @@ export class SupervisorDispatcher {
       }
 
       await Promise.allSettled(inFlight);
+
+      this.emitter?.emit("supervisor:wave_done", {
+        waveIndex,
+        results: waveResults.map((r) => ({ nodeId: r.nodeId, status: r.status })),
+        totalCost: waveResults.reduce((sum, r) => sum + (r.cost ?? 0), 0),
+      });
     }
 
     return results;
@@ -300,15 +318,17 @@ export class SupervisorDispatcher {
   private async executeWithRetry(
     node: TaggedGoalNode,
     externalSignal?: AbortSignal,
+    waveIndex = 0,
   ): Promise<NodeResult> {
     const maxAttempts = 2; // 1 initial + 1 retry
 
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       try {
-        this.emitter?.emit("supervisor:node:start", {
+        this.emitter?.emit("supervisor:node_start", {
           nodeId: node.id,
-          provider: node.assignedProvider,
-          attempt,
+          provider: node.assignedProvider ?? "unknown",
+          model: node.assignedModel ?? "unknown",
+          wave: waveIndex,
         });
 
         const result = await this.executeWithTimeout(node, externalSignal);

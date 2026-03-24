@@ -34,6 +34,18 @@ export function createMonitorBridge(
         'code:annotation_clear',
         'workspace:mode_suggest',
         'workspace:notification',
+        'supervisor:activated',
+        'supervisor:plan_ready',
+        'supervisor:wave_start',
+        'supervisor:node_start',
+        'supervisor:node_complete',
+        'supervisor:node_failed',
+        'supervisor:escalation',
+        'supervisor:wave_done',
+        'supervisor:verify_start',
+        'supervisor:verify_done',
+        'supervisor:complete',
+        'supervisor:aborted',
       ] as const
 
       for (const event of FORWARDED_EVENTS) {

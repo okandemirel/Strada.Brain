@@ -78,11 +78,24 @@ export const useMonitorStore = create<MonitorState>()((set) => ({
     set((s) => ({ tasks: { ...s.tasks, [task.id]: task } })),
 
   updateTask: (id, updates) =>
-    set((s) =>
-      s.tasks[id]
-        ? { tasks: { ...s.tasks, [id]: { ...s.tasks[id], ...updates } } }
-        : s,
-    ),
+    set((s) => {
+      if (!s.tasks[id]) return s
+      const newTasks = { ...s.tasks, [id]: { ...s.tasks[id], ...updates } }
+      // Sync status into dag.nodes so DAGView re-renders
+      let newDag = s.dag
+      if (s.dag && ('status' in updates || 'reviewStatus' in updates)) {
+        const idx = s.dag.nodes.findIndex((n) => n.id === id)
+        if (idx >= 0) {
+          const updatedNodes = [...s.dag.nodes]
+          const dagUpdates: Record<string, unknown> = {}
+          if (updates.status) dagUpdates.status = updates.status
+          if (updates.reviewStatus) dagUpdates.reviewStatus = updates.reviewStatus
+          updatedNodes[idx] = { ...updatedNodes[idx], ...dagUpdates }
+          newDag = { ...s.dag, nodes: updatedNodes }
+        }
+      }
+      return { tasks: newTasks, dag: newDag }
+    }),
 
   setDAG: (dag) => set({ dag }),
 

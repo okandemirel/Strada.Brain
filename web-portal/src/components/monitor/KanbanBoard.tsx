@@ -20,7 +20,10 @@ const COLUMNS = [
     id: 'done',
     label: 'Done',
     filter: (t: MonitorTask) =>
-      t.status === 'completed' && t.reviewStatus === 'review_passed',
+      t.status === 'completed' &&
+      t.reviewStatus !== 'spec_review' &&
+      t.reviewStatus !== 'quality_review' &&
+      t.reviewStatus !== 'review_stuck',
   },
   {
     id: 'issues',
