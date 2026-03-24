@@ -314,13 +314,14 @@ export class NoteBlockShapeUtil extends BaseBoxShapeUtil<NoteBlockShape> {
   }
 
   component(shape: NoteBlockShape) {
+    const safeColor = /^#[0-9a-fA-F]{3,8}$/.test(shape.props.color) ? shape.props.color : '#f9e2af'
     return (
       <HTMLContainer>
         <div
           style={{
             ...baseContainerStyle,
-            background: shape.props.color + '22',
-            border: `1px solid ${shape.props.color}66`,
+            background: safeColor + '22',
+            border: `1px solid ${safeColor}66`,
             padding: 12,
             color: '#cdd6f4',
             lineHeight: 1.5,
@@ -478,7 +479,7 @@ export class ImageBlockShapeUtil extends BaseBoxShapeUtil<ImageBlockShape> {
   }
 
   component(shape: ImageBlockShape) {
-    const safeSrc = /^(https?:\/\/|data:image\/)/.test(shape.props.src) ? shape.props.src : ''
+    const safeSrc = /^(data:image\/|blob:)/.test(shape.props.src) ? shape.props.src : ''
     return (
       <HTMLContainer>
         <div
