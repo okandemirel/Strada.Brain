@@ -43,7 +43,7 @@ import {
   createInstinctId,
 } from "../types.js";
 import { createBrand, type ToolName, type TimestampMs, type JsonObject } from "../../types/index.js";
-import { seedStradaConventions } from "../seeds/strada-core-seeds.js";
+import { seedAllFrameworkConventions } from "../seeds/framework-seeds.js";
 
 const VERDICT_SCORE = {
   HIGH: 0.7,
@@ -150,7 +150,7 @@ export class LearningPipeline {
     this.isRunning = true;
 
     // Seed Strada.Core conventions on every boot (idempotent — skips existing patterns)
-    seedStradaConventions(this.storage).catch((_err) => {
+    seedAllFrameworkConventions(this.storage).catch((_err) => {
       // Seed errors are non-fatal — conventions will be seeded on next boot
     });
 

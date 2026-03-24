@@ -1,6 +1,11 @@
 /**
  * Authoritative Strada.Core API Reference
  *
+ * @deprecated This static reference is superseded by the Framework Knowledge Layer
+ * (FrameworkSchemaProvider). It is retained as fallback data when the live
+ * knowledge store has no data. New code should use getFrameworkSchemaProvider()
+ * from src/intelligence/framework/index.ts.
+ *
  * Single source of truth for Strada.Core API surface, verified against
  * a real Strada.Core source checkout during sync/audit workflows.
  *

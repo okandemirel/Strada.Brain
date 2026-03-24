@@ -26,6 +26,7 @@ import { isOk, isSome } from "../types/index.js";
 import type { MetricsCollector } from "../dashboard/metrics.js";
 import {
   STRADA_SYSTEM_PROMPT,
+  STRADA_AGENT_PREAMBLE,
   buildProjectContext,
   buildDepsContext,
   buildCapabilityManifest,
@@ -33,6 +34,7 @@ import {
   buildCrashNotificationSection,
   buildProjectWorldMemorySection,
 } from "./context/strada-knowledge.js";
+import type { FrameworkPromptGenerator } from "../intelligence/framework/framework-prompt-generator.js";
 import type { IdentityState } from "../identity/identity-state.js";
 import type { CrashRecoveryContext } from "../identity/crash-recovery.js";
 import type { StradaDepsStatus } from "../config/strada-deps.js";
@@ -488,6 +490,8 @@ export class Orchestrator {
       shadowIds: string[];
     }
   >();
+  /** Framework Knowledge Layer prompt generator (injected by bootstrap when available) */
+  private frameworkPromptGenerator: FrameworkPromptGenerator | null = null;
 
   constructor(opts: {
     providerManager: ProviderManager;
@@ -702,9 +706,19 @@ export class Orchestrator {
     );
   }
 
+  setFrameworkPromptGenerator(generator: FrameworkPromptGenerator): void {
+    this.frameworkPromptGenerator = generator;
+    this.rebuildBaseSystemPrompt();
+  }
+
   private rebuildBaseSystemPrompt(): void {
+    const frameworkSection = this.frameworkPromptGenerator?.buildFrameworkKnowledgeSection();
+    const knowledgeBase = frameworkSection
+      ? STRADA_AGENT_PREAMBLE + frameworkSection
+      : STRADA_SYSTEM_PROMPT; // fallback to static knowledge
+
     this.systemPrompt =
-      STRADA_SYSTEM_PROMPT +
+      knowledgeBase +
       buildProjectContext(this.projectPath) +
       buildDepsContext(this.stradaDeps) +
       buildCapabilityManifest() +

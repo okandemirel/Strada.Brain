@@ -1,23 +1,15 @@
 /**
  * Strada.Core API Extractor
  *
- * Parses Strada.Core C# source files and extracts a structured API snapshot.
- * Reuses csharp-deep-parser.ts for parsing.
+ * Backward-compatible wrapper around the generalized CSharpFrameworkExtractor.
+ * New code should use CSharpFrameworkExtractor directly from framework/index.ts.
+ *
+ * @deprecated Use CSharpFrameworkExtractor from ./framework/index.js instead.
  */
 
-import { readFile, realpath } from "node:fs/promises";
-import { relative, resolve } from "node:path";
-import { glob } from "glob";
-import {
-  parseDeep,
-  getClasses,
-  getStructs,
-  getInterfaces,
-  getEnums,
-  getMethods,
-  type CSharpAST,
-} from "./csharp-deep-parser.js";
-import { getLogger } from "../utils/logger.js";
+import { CSharpFrameworkExtractor } from "./framework/framework-extractor-csharp.js";
+import { CORE_PACKAGE_CONFIG } from "./framework/framework-package-configs.js";
+import type { FrameworkAPISnapshot } from "./framework/framework-types.js";
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
@@ -44,148 +36,37 @@ export interface CoreAPISnapshot {
   fileCount: number;
 }
 
-// ─── Helpers ───────────────────────────────────────────────────────────────
+// ─── Conversion ────────────────────────────────────────────────────────────
 
-/** Build a generic-aware display name: "Foo<T1, T2>" */
-function displayName(name: string, genericParams: string[]): string {
-  return genericParams.length > 0 ? `${name}<${genericParams.join(", ")}>` : name;
-}
-
-/** Resolve the namespace a type lives in from the AST. */
-function resolveNamespace(ast: CSharpAST, typeName: string): string {
-  for (const ns of ast.namespaces) {
-    if (ns.members.some((m) => m.name === typeName)) return ns.name;
-  }
-  return "";
-}
-
-function getOptionalLogger() {
-  try {
-    return getLogger();
-  } catch {
-    return null;
-  }
+function toCoreLegacy(snapshot: FrameworkAPISnapshot): CoreAPISnapshot {
+  return {
+    namespaces: [...snapshot.namespaces],
+    baseClasses: new Map(snapshot.baseClasses),
+    attributes: new Map(snapshot.attributes),
+    interfaces: snapshot.interfaces.map((i) => ({ ...i })),
+    enums: snapshot.enums.map((e) => ({ ...e })),
+    classes: snapshot.classes.map((c) => ({ ...c })),
+    structs: snapshot.structs.map((s) => ({ ...s })),
+    extractedAt: snapshot.extractedAt,
+    sourcePath: snapshot.sourcePath,
+    fileCount: snapshot.fileCount,
+  };
 }
 
 // ─── Extractor ─────────────────────────────────────────────────────────────
 
+/**
+ * @deprecated Use CSharpFrameworkExtractor from ./framework/index.js instead.
+ */
 export class StradaCoreExtractor {
-  private readonly corePath: string;
+  private readonly inner: CSharpFrameworkExtractor;
 
   constructor(corePath: string) {
-    this.corePath = corePath;
+    this.inner = new CSharpFrameworkExtractor(corePath, CORE_PACKAGE_CONFIG);
   }
 
-  /**
-   * Extract a full API snapshot from Strada.Core source.
-   */
   async extract(): Promise<CoreAPISnapshot> {
-    const logger = getOptionalLogger();
-    // Resolve to real path to prevent symlink escapes
-    const resolvedPath = await realpath(resolve(this.corePath));
-
-    const files = await glob("**/*.cs", {
-      cwd: resolvedPath,
-      absolute: true,
-      ignore: ["**/Tests/**", "**/bin/**", "**/obj/**"],
-    });
-
-    const namespaceSet = new Set<string>();
-    const baseClassMap = new Map<string, Set<string>>();
-    const attributeMap = new Map<string, string[]>();
-    const ifaceList: CoreAPISnapshot["interfaces"] = [];
-    const enumList: CoreAPISnapshot["enums"] = [];
-    const classList: CoreAPISnapshot["classes"] = [];
-    const structList: CoreAPISnapshot["structs"] = [];
-
-    let parsed = 0;
-
-    for (const filePath of files) {
-      let ast: CSharpAST;
-      try {
-        const content = await readFile(filePath, "utf-8");
-        ast = parseDeep(content, relative(resolvedPath, filePath));
-      } catch (err) {
-        logger?.debug(`Skipping ${relative(resolvedPath, filePath)}: ${(err as Error).message}`);
-        continue;
-      }
-      parsed++;
-
-      // Collect namespaces
-      for (const ns of ast.namespaces) {
-        if (ns.name) namespaceSet.add(ns.name);
-      }
-
-      // Classes
-      for (const cls of getClasses(ast)) {
-        const ns = resolveNamespace(ast, cls.name);
-        const isAbstract = cls.modifiers.includes("abstract");
-
-        classList.push({
-          name: displayName(cls.name, cls.genericParams),
-          namespace: ns,
-          baseTypes: cls.baseTypes,
-          isAbstract,
-        });
-
-        // Track base class variants
-        if (cls.baseTypes.length > 0) {
-          const baseName = cls.baseTypes[0]!.replace(/<[^>]+>/g, "");
-          if (!baseClassMap.has(baseName)) baseClassMap.set(baseName, new Set());
-          baseClassMap.get(baseName)!.add(cls.baseTypes[0]!);
-        }
-
-        // Attributes
-        if (cls.attributes.length > 0) {
-          attributeMap.set(cls.name, cls.attributes.map((a) => a.name));
-        }
-      }
-
-      // Structs
-      for (const st of getStructs(ast)) {
-        structList.push({
-          name: displayName(st.name, st.genericParams),
-          namespace: resolveNamespace(ast, st.name),
-          baseTypes: st.baseTypes,
-        });
-      }
-
-      // Interfaces
-      for (const iface of getInterfaces(ast)) {
-        ifaceList.push({
-          name: displayName(iface.name, iface.genericParams),
-          namespace: resolveNamespace(ast, iface.name),
-          methods: getMethods(iface).map((m) => m.name),
-        });
-      }
-
-      // Enums
-      for (const en of getEnums(ast)) {
-        enumList.push({
-          name: en.name,
-          namespace: resolveNamespace(ast, en.name),
-          values: en.values,
-        });
-      }
-    }
-
-    // Convert base class sets to arrays
-    const baseClasses = new Map<string, string[]>();
-    for (const [key, variants] of baseClassMap) {
-      baseClasses.set(key, [key, ...([...variants].filter((v) => v !== key))]);
-    }
-
-    return {
-      namespaces: [...namespaceSet].sort(),
-      baseClasses,
-      attributes: attributeMap,
-      interfaces: ifaceList,
-      enums: enumList,
-      classes: classList,
-      structs: structList,
-      extractedAt: new Date(),
-      sourcePath: this.corePath,
-      fileCount: parsed,
-    };
+    const snapshot = await this.inner.extract();
+    return toCoreLegacy(snapshot);
   }
 }

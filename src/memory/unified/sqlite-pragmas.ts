@@ -9,7 +9,7 @@
 
 import type Database from "better-sqlite3";
 
-export type SqliteProfile = "memory" | "learning" | "tasks" | "preferences" | "identity" | "daemon";
+export type SqliteProfile = "memory" | "learning" | "tasks" | "preferences" | "identity" | "daemon" | "balanced";
 
 /** Cache sizes in KiB (negative = KiB convention for SQLite cache_size pragma) */
 const CACHE_SIZES: Record<SqliteProfile, number> = {
@@ -19,6 +19,7 @@ const CACHE_SIZES: Record<SqliteProfile, number> = {
   preferences: -2000, // 2MB
   identity: -2000, // 2MB
   daemon: -4000, // 4MB
+  balanced: -8000, // 8MB
 };
 
 /**

@@ -593,6 +593,15 @@ export interface StradaDependencyConfig {
   readonly unityEditorPath?: string;
   readonly scriptExecuteEnabled: boolean;
   readonly reflectionInvokeEnabled: boolean;
+  readonly frameworkSync?: {
+    readonly bootSync?: boolean;
+    readonly watchEnabled?: boolean;
+    readonly watchDebounceMs?: number;
+    readonly gitFallbackEnabled?: boolean;
+    readonly gitCacheDir?: string;
+    readonly gitCacheMaxAgeMs?: number;
+    readonly maxDriftScore?: number;
+  };
 }
 
 export const DEFAULT_STRADA_CORE_REPO_URL = "https://github.com/okandemirel/Strada.Core.git";

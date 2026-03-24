@@ -6,6 +6,7 @@
  */
 
 import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Config } from "../config/config.js";
 import { type DurationMs } from "../types/index.js";
@@ -20,6 +21,8 @@ import { FileVectorStore } from "../rag/vector-store.js";
 import type { DIContainer } from "./di-container.js";
 import { ToolRegistry } from "./tool-registry.js";
 import { checkStradaDeps } from "../config/strada-deps.js";
+import type { FrameworkKnowledgeStore } from "../intelligence/framework/framework-knowledge-store.js";
+import type { FrameworkSyncPipeline } from "../intelligence/framework/framework-sync-pipeline.js";
 import {
   LEARNING_DEFAULTS,
 } from "../common/constants.js";
@@ -186,32 +189,55 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     logger.info("Strada.MCP not found (optional — install for MCP server capabilities)");
   }
 
-  // Drift validation: compare Brain's API knowledge against Core source (fire-and-forget)
-  if (stradaDeps.coreInstalled && stradaDeps.corePath) {
-    const corePath = stradaDeps.corePath;
+  // Framework Knowledge Layer: extract + store + drift check for all Strada packages
+  const frameworkSyncConfig = {
+    bootSync: config.strada?.frameworkSync?.bootSync ?? true,
+    watchEnabled: config.strada?.frameworkSync?.watchEnabled ?? false,
+    watchDebounceMs: config.strada?.frameworkSync?.watchDebounceMs ?? 2000,
+    gitFallbackEnabled: config.strada?.frameworkSync?.gitFallbackEnabled ?? true,
+    gitCacheDir: config.strada?.frameworkSync?.gitCacheDir ?? join(homedir(), ".strada", "framework-cache"),
+    gitCacheMaxAgeMs: config.strada?.frameworkSync?.gitCacheMaxAgeMs ?? 24 * 60 * 60 * 1000,
+    maxDriftScore: config.strada?.frameworkSync?.maxDriftScore ?? 30,
+  };
+
+  let frameworkStore: FrameworkKnowledgeStore | null = null;
+  let frameworkSyncPipeline: FrameworkSyncPipeline | null = null;
+
+  if (frameworkSyncConfig.bootSync) {
     void (async () => {
       try {
-        const { StradaCoreExtractor } = await import("../intelligence/strada-core-extractor.js");
-        const { validateDrift, formatDriftReport } =
-          await import("../intelligence/strada-drift-validator.js");
-        const extractor = new StradaCoreExtractor(corePath);
-        const snapshot = await extractor.extract();
-        const driftReport = validateDrift(snapshot);
-        if (driftReport.errors.length > 0) {
-          logger.warn("Strada.Core API drift detected", {
-            errors: driftReport.errors.length,
-            warnings: driftReport.warnings.length,
-            driftScore: driftReport.driftScore,
-          });
-          logger.debug(formatDriftReport(driftReport));
-        } else {
-          logger.info("Strada.Core API drift check passed", {
-            driftScore: driftReport.driftScore,
-          });
+        const { FrameworkKnowledgeStore, FrameworkSyncPipeline, initializeFrameworkSchemaProvider } =
+          await import("../intelligence/framework/index.js");
+
+        const dbPath = join(config.memory?.dbPath ?? join(homedir(), ".strada-memory"), "framework-knowledge.db");
+        frameworkStore = new FrameworkKnowledgeStore(dbPath);
+        frameworkStore.initialize();
+
+        frameworkSyncPipeline = new FrameworkSyncPipeline(frameworkStore, frameworkSyncConfig, stradaDeps);
+        const syncResult = await frameworkSyncPipeline.bootSync();
+
+        initializeFrameworkSchemaProvider(frameworkStore);
+
+        for (const report of syncResult.reports) {
+          if (report.driftScore > frameworkSyncConfig.maxDriftScore) {
+            logger.warn(`Framework drift detected for ${report.packageId}`, {
+              driftScore: report.driftScore,
+              errors: report.errors.length,
+              version: report.currentVersion,
+            });
+          }
         }
-      } catch (driftError) {
-        logger.debug("Drift validation skipped", {
-          reason: driftError instanceof Error ? driftError.message : "unknown",
+
+        logger.info("Framework Knowledge Layer synced", {
+          packages: syncResult.reports.map((r) => `${r.packageId}:v${r.currentVersion ?? "?"}`).join(", "),
+        });
+
+        if (frameworkSyncConfig.watchEnabled) {
+          await frameworkSyncPipeline.startWatcher();
+        }
+      } catch (fwError) {
+        logger.debug("Framework sync skipped", {
+          reason: fwError instanceof Error ? fwError.message : "unknown",
         });
       }
     })();
