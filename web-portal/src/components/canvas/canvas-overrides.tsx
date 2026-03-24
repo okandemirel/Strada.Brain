@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components */
 import {
   DefaultToolbar,
   DefaultToolbarContent,
@@ -128,7 +129,7 @@ export function CustomContextMenu(props: TLUiContextMenuProps) {
                   key={shape.type}
                   id={`strada-add-${shape.type}`}
                   label={shape.label}
-                  onSelect={(_source) => createShapeAtPointer(editor, shape.type)}
+                  onSelect={() => createShapeAtPointer(editor, shape.type)}
                 />
               ))}
             </TldrawUiMenuSubmenu>
@@ -137,17 +138,17 @@ export function CustomContextMenu(props: TLUiContextMenuProps) {
         <TldrawUiMenuItem
           id="strada-select-all"
           label="Select All"
-          onSelect={(_source) => editor.selectAll()}
+          onSelect={() => { editor.selectAll() }}
         />
         <TldrawUiMenuItem
           id="strada-zoom-to-fit"
           label="Zoom to Fit"
-          onSelect={(_source) => editor.zoomToFit()}
+          onSelect={() => { editor.zoomToFit() }}
         />
         <TldrawUiMenuItem
           id="strada-export-json"
           label="Export JSON"
-          onSelect={(_source) => _exportJsonFn?.()}
+          onSelect={() => _exportJsonFn?.()}
         />
       </TldrawUiMenuGroup>
       <DefaultContextMenuContent />
