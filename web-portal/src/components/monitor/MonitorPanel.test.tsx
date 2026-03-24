@@ -109,4 +109,11 @@ describe('MonitorPanel', () => {
     render(<MonitorPanel />)
     expect(screen.getByText('Select a task to see details.')).toBeInTheDocument()
   })
+
+  it('renders resize handles as separators', () => {
+    render(<MonitorPanel />)
+    const separators = screen.getAllByRole('separator')
+    // 3 resize handles: sidebar horizontal, supervisor/detail vertical, detail/activity vertical
+    expect(separators.length).toBe(3)
+  })
 })

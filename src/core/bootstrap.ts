@@ -942,6 +942,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   const monitorLifecycle = createMonitorLifecycle(workspaceBus);
   orchestrator.setMonitorLifecycle(monitorLifecycle);
   backgroundExecutor.setWorkspaceBus(workspaceBus);
+  backgroundExecutor.setMonitorLifecycle(monitorLifecycle);
   if (supervisorBrain) {
     supervisorBrain.setEventEmitter(workspaceBus);
   }

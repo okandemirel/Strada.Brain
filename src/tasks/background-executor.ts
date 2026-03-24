@@ -43,6 +43,7 @@ import type { BudgetTracker } from "../daemon/budget/budget-tracker.js";
 import { getLogger } from "../utils/logger.js";
 import { WorkspaceLeaseManager } from "../agents/multi/workspace-lease-manager.js";
 import type { WorkerRunResult } from "../agents/supervisor/supervisor-types.js";
+import type { MonitorLifecycle } from "../dashboard/monitor-lifecycle.js";
 import type { WorkspaceBus } from "../dashboard/workspace-bus.js";
 import { goalTreeToDagPayload } from "../dashboard/workspace-events.js";
 
@@ -124,6 +125,7 @@ export class BackgroundExecutor {
   private readonly learningEventBus?: IEventEmitter<LearningEventMap>;
   private readonly workspaceLeaseManager?: WorkspaceLeaseManager;
   private workspaceBus?: WorkspaceBus;
+  private monitorLifecycle?: MonitorLifecycle;
   private daemonBudgetTracker?: BudgetTracker;
 
   constructor(opts: BackgroundExecutorOptions) {
@@ -154,6 +156,10 @@ export class BackgroundExecutor {
 
   setWorkspaceBus(bus: WorkspaceBus): void {
     this.workspaceBus = bus;
+  }
+
+  setMonitorLifecycle(lifecycle: MonitorLifecycle): void {
+    this.monitorLifecycle = lifecycle;
   }
 
   /**
@@ -351,6 +357,9 @@ export class BackgroundExecutor {
     this.taskManager.updateStatus(task.id, TaskStatus.executing);
     onProgress("Task started");
 
+    // Monitor lifecycle: emit simple DAG so monitor workspace always shows something
+    this.monitorLifecycle?.requestStart(task.chatId, task.prompt);
+
     let taskLease: Awaited<ReturnType<WorkspaceLeaseManager["acquireLease"]>> | undefined;
     try {
       // Check for pre-decomposed goal tree (from inline goal detection)
@@ -446,6 +455,7 @@ export class BackgroundExecutor {
         });
       }
     } finally {
+      this.monitorLifecycle?.requestEnd(task.chatId);
       await taskLease?.release().catch(() => {});
     }
   }
@@ -806,7 +816,9 @@ Is this failure critical? A critical failure means dependent sub-goals cannot pr
     };
 
     // Workspace monitor: emit DAG initialisation for dashboard UI
-    if (this.workspaceBus) {
+    if (this.monitorLifecycle) {
+      this.monitorLifecycle.goalDecomposed(task.chatId, goalTree);
+    } else if (this.workspaceBus) {
       this.workspaceBus.emit("monitor:dag_init", goalTreeToDagPayload(goalTree));
     }
 

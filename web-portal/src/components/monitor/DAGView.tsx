@@ -164,7 +164,9 @@ export default function DAGView() {
         proOptions={{ hideAttribution: true }}
       >
         <Background color="var(--color-border-subtle)" gap={20} />
-        <Controls className="!bg-surface !border-border !shadow-lg" />
+        <Controls
+          className="!bg-surface !border-border !shadow-lg [&>button]:!bg-surface [&>button]:!border-border [&>button]:!fill-text-secondary [&>button:hover]:!bg-white/10"
+        />
       </ReactFlow>
     </div>
   )

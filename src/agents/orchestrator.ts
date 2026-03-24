@@ -2767,7 +2767,6 @@ export class Orchestrator {
 
     // Monitor lifecycle: emit simple DAG so monitor workspace always shows something
     const conversationScopeForMonitor = resolveConversationScope(chatId, conversationId);
-    console.log('[MonitorLifecycle] about to call requestStart, lifecycle set:', !!this.monitorLifecycle);
     this.monitorLifecycle?.requestStart(conversationScopeForMonitor, text);
 
     // Supervisor Brain gate: route complex tasks to multi-provider pipeline

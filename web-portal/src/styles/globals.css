@@ -231,6 +231,13 @@
     padding: revert;
   }
 
+  /* Restore ReactFlow's own styling inside its container */
+  .react-flow__controls, .react-flow__controls *, .react-flow__minimap, .react-flow__minimap *,
+  .react-flow__handle, .react-flow__node * {
+    margin: revert;
+    padding: revert;
+  }
+
 
   html, body, #root { height: 100%; overflow: hidden; }
 

@@ -44,26 +44,28 @@ type TaskNodeType = Node<TaskNodeData, 'task'>
 
 export function TaskNode({ data }: NodeProps<TaskNodeType>) {
   return (
-    <div
-      className={cn(
-        'relative overflow-hidden bg-white/3 backdrop-blur border border-white/5 rounded-xl px-3 py-2 min-w-[160px] shadow-sm border-l-[3px]',
-        STATUS_BORDER_COLORS[data.status] || 'border-l-text-tertiary',
-      )}
-    >
-      {data.status === 'executing' && (
-        <BorderBeam size={40} duration={3} colorFrom="#00e5ff" colorTo="#7c3aed" borderWidth={2} />
-      )}
-      <Handle type="target" position={Position.Top} className="!bg-border" />
-      <div className="flex items-center gap-2">
-        <StatusDot status={data.status} />
-        <span className="text-xs font-medium text-text truncate">{data.label}</span>
-      </div>
-      {data.reviewStatus && data.reviewStatus !== 'none' && (
-        <div className="mt-1 text-[10px] text-text-secondary">
-          Review: {data.reviewStatus}
+    <div className="relative">
+      <Handle type="target" position={Position.Top} className="!bg-border !w-1.5 !h-1.5 !min-w-0 !min-h-0 !opacity-0" />
+      <div
+        className={cn(
+          'relative overflow-hidden bg-white/3 backdrop-blur border border-white/5 rounded-xl px-3 py-2 min-w-[160px] max-w-[240px] shadow-sm border-l-[3px]',
+          STATUS_BORDER_COLORS[data.status] || 'border-l-text-tertiary',
+        )}
+      >
+        {data.status === 'executing' && (
+          <BorderBeam size={40} duration={3} colorFrom="#00e5ff" colorTo="#7c3aed" borderWidth={2} />
+        )}
+        <div className="flex items-center gap-2">
+          <StatusDot status={data.status} />
+          <span className="text-xs font-medium text-text truncate">{data.label}</span>
         </div>
-      )}
-      <Handle type="source" position={Position.Bottom} className="!bg-border" />
+        {data.reviewStatus && data.reviewStatus !== 'none' && (
+          <div className="mt-1 text-[10px] text-text-secondary">
+            Review: {data.reviewStatus}
+          </div>
+        )}
+      </div>
+      <Handle type="source" position={Position.Bottom} className="!bg-border !w-1.5 !h-1.5 !min-w-0 !min-h-0 !opacity-0" />
     </div>
   )
 }
@@ -92,18 +94,20 @@ type ReviewNodeType = Node<ReviewNodeData, 'review'>
 
 export function ReviewNode({ data }: NodeProps<ReviewNodeType>) {
   return (
-    <div className="rounded-lg border-2 border-warning bg-surface px-3 py-2 min-w-[160px] shadow-sm">
-      <Handle type="target" position={Position.Top} className="!bg-warning" />
-      <div className="flex items-center gap-2">
-        <span
-          className={`w-2 h-2 rounded-full shrink-0 ${REVIEW_COLORS[data.status] || 'bg-warning'}`}
-        />
-        <span className="text-xs font-medium text-text truncate">{data.label}</span>
+    <div className="relative">
+      <Handle type="target" position={Position.Top} className="!bg-warning !w-1.5 !h-1.5 !min-w-0 !min-h-0 !opacity-0" />
+      <div className="rounded-lg border-2 border-warning bg-surface px-3 py-2 min-w-[160px] max-w-[240px] shadow-sm">
+        <div className="flex items-center gap-2">
+          <span
+            className={`w-2 h-2 rounded-full shrink-0 ${REVIEW_COLORS[data.status] || 'bg-warning'}`}
+          />
+          <span className="text-xs font-medium text-text truncate">{data.label}</span>
+        </div>
+        {data.reviewType && (
+          <div className="mt-1 text-[10px] text-text-secondary">{data.reviewType}</div>
+        )}
       </div>
-      {data.reviewType && (
-        <div className="mt-1 text-[10px] text-text-secondary">{data.reviewType}</div>
-      )}
-      <Handle type="source" position={Position.Bottom} className="!bg-warning" />
+      <Handle type="source" position={Position.Bottom} className="!bg-warning !w-1.5 !h-1.5 !min-w-0 !min-h-0 !opacity-0" />
     </div>
   )
 }
@@ -136,15 +140,17 @@ export function GateNode({ data }: NodeProps<GateNodeType>) {
   const dotColor = GATE_DOT_COLORS[data.status] || 'bg-warning'
 
   return (
-    <div
-      className={`rounded-lg border-2 ${borderColor} bg-surface px-3 py-2 min-w-[120px] shadow-sm text-center`}
-    >
-      <Handle type="target" position={Position.Top} className="!bg-border" />
-      <div className="flex items-center justify-center gap-2">
-        <span className={`w-2 h-2 rounded-full shrink-0 ${dotColor}`} />
-        <span className="text-xs font-semibold text-text">{data.label}</span>
+    <div className="relative">
+      <Handle type="target" position={Position.Top} className="!bg-border !w-1.5 !h-1.5 !min-w-0 !min-h-0 !opacity-0" />
+      <div
+        className={`rounded-lg border-2 ${borderColor} bg-surface px-3 py-2 min-w-[120px] max-w-[240px] shadow-sm text-center`}
+      >
+        <div className="flex items-center justify-center gap-2">
+          <span className={`w-2 h-2 rounded-full shrink-0 ${dotColor}`} />
+          <span className="text-xs font-semibold text-text">{data.label}</span>
+        </div>
       </div>
-      <Handle type="source" position={Position.Bottom} className="!bg-border" />
+      <Handle type="source" position={Position.Bottom} className="!bg-border !w-1.5 !h-1.5 !min-w-0 !min-h-0 !opacity-0" />
     </div>
   )
 }

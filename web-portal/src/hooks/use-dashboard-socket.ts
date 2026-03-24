@@ -71,7 +71,7 @@ export function dispatchWorkspaceMessage(data: { type: string; [key: string]: un
           title: (node.title ?? node.task ?? node.id) as string,
           status: node.status as string,
           reviewStatus: node.reviewStatus as string,
-          ...(node.dependencies ? { dependencies: node.dependencies as string[] } : {}),
+          ...((node.dependencies || node.dependsOn) ? { dependencies: (node.dependencies ?? node.dependsOn) as string[] } : {}),
         })
       }
       break
@@ -171,7 +171,7 @@ export function dispatchWorkspaceMessage(data: { type: string; [key: string]: un
             // Merge: preserve in-flight status from task_update events
             monitor.updateTask(id, {
               title: (node.title ?? node.task ?? node.id) as string,
-              ...(node.dependencies ? { dependencies: node.dependencies as string[] } : {}),
+              ...((node.dependencies || node.dependsOn) ? { dependencies: (node.dependencies ?? node.dependsOn) as string[] } : {}),
             })
           } else {
             monitor.addTask({
@@ -180,7 +180,7 @@ export function dispatchWorkspaceMessage(data: { type: string; [key: string]: un
               title: (node.title ?? node.task ?? node.id) as string,
               status: node.status as string,
               reviewStatus: node.reviewStatus as string,
-              ...(node.dependencies ? { dependencies: node.dependencies as string[] } : {}),
+              ...((node.dependencies || node.dependsOn) ? { dependencies: (node.dependencies ?? node.dependsOn) as string[] } : {}),
             })
           }
         }
