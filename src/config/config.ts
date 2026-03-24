@@ -289,6 +289,18 @@ export type EnvVarName =
   | "AUTONOMOUS_DEFAULT_ENABLED"
   | "AUTONOMOUS_DEFAULT_HOURS"
 
+  // Conformance Guard
+  | "STRADA_CONFORMANCE_ENABLED"
+  | "STRADA_CONFORMANCE_FRAMEWORK_PATHS_ONLY"
+  // Control Loop
+  | "STRADA_LOOP_FINGERPRINT_THRESHOLD"
+  | "STRADA_LOOP_FINGERPRINT_WINDOW"
+  | "STRADA_LOOP_DENSITY_THRESHOLD"
+  | "STRADA_LOOP_DENSITY_WINDOW"
+  | "STRADA_LOOP_MAX_RECOVERY_EPISODES"
+  // Daemon Full Autonomy
+  | "STRADA_DAEMON_FULL_AUTONOMY"
+
   // Model Intelligence Service
   | "MODEL_INTELLIGENCE_ENABLED"
   | "MODEL_INTELLIGENCE_REFRESH_HOURS"
@@ -747,6 +759,18 @@ export interface Config {
   readonly autonomousDefaultEnabled: boolean;
   /** Default duration in hours for autonomous mode when no duration is specified */
   readonly autonomousDefaultHours: number;
+
+  // Conformance Guard
+  readonly conformanceEnabled: boolean;
+  readonly conformanceFrameworkPathsOnly: boolean;
+  // Control Loop
+  readonly loopFingerprintThreshold: number;
+  readonly loopFingerprintWindow: number;
+  readonly loopDensityThreshold: number;
+  readonly loopDensityWindow: number;
+  readonly loopMaxRecoveryEpisodes: number;
+  // Daemon Full Autonomy
+  readonly daemonFullAutonomy: boolean;
 
   // Provider Routing
   readonly routing: {
@@ -1568,6 +1592,38 @@ export const configSchema = z
       .pipe(z.number().int().min(1).max(168))
       .default("24"),
 
+    // Conformance Guard
+    conformanceEnabled: boolFromString(true),
+    conformanceFrameworkPathsOnly: boolFromString(true),
+    // Control Loop
+    loopFingerprintThreshold: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(1).max(100))
+      .default("5"),
+    loopFingerprintWindow: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(1).max(200))
+      .default("20"),
+    loopDensityThreshold: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(1).max(100))
+      .default("8"),
+    loopDensityWindow: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(1).max(200))
+      .default("30"),
+    loopMaxRecoveryEpisodes: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(1).max(50))
+      .default("5"),
+    // Daemon Full Autonomy
+    daemonFullAutonomy: boolFromString(true),
+
     // Interaction Policy
     interactionMode: z.enum(["silent-first", "standard"]).default("silent-first"),
     interactionHeartbeatAfterMs: z
@@ -2160,6 +2216,15 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
     autonomousDefaultEnabled: rawConfig.autonomousDefaultEnabled,
     autonomousDefaultHours: rawConfig.autonomousDefaultHours,
 
+    conformanceEnabled: rawConfig.conformanceEnabled,
+    conformanceFrameworkPathsOnly: rawConfig.conformanceFrameworkPathsOnly,
+    loopFingerprintThreshold: rawConfig.loopFingerprintThreshold,
+    loopFingerprintWindow: rawConfig.loopFingerprintWindow,
+    loopDensityThreshold: rawConfig.loopDensityThreshold,
+    loopDensityWindow: rawConfig.loopDensityWindow,
+    loopMaxRecoveryEpisodes: rawConfig.loopMaxRecoveryEpisodes,
+    daemonFullAutonomy: rawConfig.daemonFullAutonomy,
+
     routing: {
       preset: rawConfig.routingPreset,
       phaseSwitching: rawConfig.routingPhaseSwitching,
@@ -2623,6 +2688,17 @@ interface EnvVars {
   // Autonomous Mode
   autonomousDefaultEnabled: string | undefined;
   autonomousDefaultHours: string | undefined;
+  // Conformance Guard
+  conformanceEnabled: string | undefined;
+  conformanceFrameworkPathsOnly: string | undefined;
+  // Control Loop
+  loopFingerprintThreshold: string | undefined;
+  loopFingerprintWindow: string | undefined;
+  loopDensityThreshold: string | undefined;
+  loopDensityWindow: string | undefined;
+  loopMaxRecoveryEpisodes: string | undefined;
+  // Daemon Full Autonomy
+  daemonFullAutonomy: string | undefined;
   // Provider Routing
   routingPreset: string | undefined;
   routingPhaseSwitching: string | undefined;
@@ -2893,6 +2969,17 @@ function loadFromEnv(): EnvVars {
     // Autonomous Mode
     autonomousDefaultEnabled: process.env["AUTONOMOUS_DEFAULT_ENABLED"],
     autonomousDefaultHours: process.env["AUTONOMOUS_DEFAULT_HOURS"],
+    // Conformance Guard
+    conformanceEnabled: process.env["STRADA_CONFORMANCE_ENABLED"],
+    conformanceFrameworkPathsOnly: process.env["STRADA_CONFORMANCE_FRAMEWORK_PATHS_ONLY"],
+    // Control Loop
+    loopFingerprintThreshold: process.env["STRADA_LOOP_FINGERPRINT_THRESHOLD"],
+    loopFingerprintWindow: process.env["STRADA_LOOP_FINGERPRINT_WINDOW"],
+    loopDensityThreshold: process.env["STRADA_LOOP_DENSITY_THRESHOLD"],
+    loopDensityWindow: process.env["STRADA_LOOP_DENSITY_WINDOW"],
+    loopMaxRecoveryEpisodes: process.env["STRADA_LOOP_MAX_RECOVERY_EPISODES"],
+    // Daemon Full Autonomy
+    daemonFullAutonomy: process.env["STRADA_DAEMON_FULL_AUTONOMY"],
     // Provider Routing
     routingPreset: process.env["ROUTING_PRESET"],
     routingPhaseSwitching: process.env["ROUTING_PHASE_SWITCHING"],

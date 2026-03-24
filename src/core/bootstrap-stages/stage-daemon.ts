@@ -170,6 +170,7 @@ export function initializeDaemonHeartbeatStage(
     (name) => params.toolRegistry.getMetadata(name),
     approvalQueue,
     new Set(daemonConfig.security.autoApproveTools),
+    params.config.daemonFullAutonomy,
   );
 
   const { webhookTriggers } = loadDaemonTriggersStage({

@@ -417,6 +417,13 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     memoryDbPath: config.memory.dbPath,
     supervisorBrain,
     supervisorComplexityThreshold: config.supervisor.complexityThreshold,
+    conformanceEnabled: config.conformanceEnabled,
+    conformanceFrameworkPathsOnly: config.conformanceFrameworkPathsOnly,
+    loopFingerprintThreshold: config.loopFingerprintThreshold,
+    loopFingerprintWindow: config.loopFingerprintWindow,
+    loopDensityThreshold: config.loopDensityThreshold,
+    loopDensityWindow: config.loopDensityWindow,
+    loopMaxRecoveryEpisodes: config.loopMaxRecoveryEpisodes,
   });
 
   // Wire SupervisorBrain executeNode callback (post-construction circular dependency resolution)

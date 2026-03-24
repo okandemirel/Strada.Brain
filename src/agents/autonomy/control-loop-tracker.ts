@@ -24,15 +24,32 @@ interface StoredGateEvent extends ControlLoopGateEvent {
   readonly fingerprint: string;
 }
 
-const SAME_FINGERPRINT_WINDOW = 12;
-const SAME_FINGERPRINT_THRESHOLD = 3;
-const INTERNAL_GATE_WINDOW = 20;
-const INTERNAL_GATE_THRESHOLD = 5;
+export interface ControlLoopConfig {
+  readonly sameFingerprintThreshold?: number;
+  readonly sameFingerprintWindow?: number;
+  readonly gateDensityThreshold?: number;
+  readonly gateDensityWindow?: number;
+  readonly maxRecoveryEpisodes?: number;
+}
 
 export class ControlLoopTracker {
   private readonly events: StoredGateEvent[] = [];
   private readonly seenEvidence = new Set<string>();
   private readonly recoveryEpisodes = new Map<string, number>();
+
+  private readonly fpThreshold: number;
+  private readonly fpWindow: number;
+  private readonly densityThreshold: number;
+  private readonly densityWindow: number;
+  readonly maxRecoveryEpisodes: number;
+
+  constructor(config?: ControlLoopConfig) {
+    this.fpThreshold = config?.sameFingerprintThreshold ?? 5;
+    this.fpWindow = config?.sameFingerprintWindow ?? 20;
+    this.densityThreshold = config?.gateDensityThreshold ?? 8;
+    this.densityWindow = config?.gateDensityWindow ?? 30;
+    this.maxRecoveryEpisodes = config?.maxRecoveryEpisodes ?? 5;
+  }
 
   recordGate(event: ControlLoopGateEvent): ControlLoopTrigger | null {
     const stored: StoredGateEvent = {
@@ -44,9 +61,9 @@ export class ControlLoopTracker {
 
     const sameFingerprintEvents = this.events.filter((entry) =>
       entry.fingerprint === stored.fingerprint &&
-      entry.iteration >= event.iteration - SAME_FINGERPRINT_WINDOW,
+      entry.iteration >= event.iteration - this.fpWindow,
     );
-    if (sameFingerprintEvents.length >= SAME_FINGERPRINT_THRESHOLD) {
+    if (sameFingerprintEvents.length >= this.fpThreshold) {
       return {
         fingerprint: stored.fingerprint,
         sameFingerprintCount: sameFingerprintEvents.length,
@@ -57,8 +74,8 @@ export class ControlLoopTracker {
       };
     }
 
-    const recentEvents = this.events.filter((entry) => entry.iteration >= event.iteration - INTERNAL_GATE_WINDOW);
-    if (recentEvents.length >= INTERNAL_GATE_THRESHOLD) {
+    const recentEvents = this.events.filter((entry) => entry.iteration >= event.iteration - this.densityWindow);
+    if (recentEvents.length >= this.densityThreshold) {
       return {
         fingerprint: stored.fingerprint,
         sameFingerprintCount: sameFingerprintEvents.length,
@@ -97,7 +114,7 @@ export class ControlLoopTracker {
   }
 
   private prune(currentIteration: number): void {
-    const minIteration = currentIteration - INTERNAL_GATE_WINDOW;
+    const minIteration = currentIteration - this.densityWindow;
     while (this.events.length > 0 && this.events[0] && this.events[0].iteration < minIteration) {
       this.events.shift();
     }

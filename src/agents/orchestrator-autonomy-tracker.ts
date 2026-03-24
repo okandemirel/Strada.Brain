@@ -25,6 +25,13 @@ export interface CreateAutonomyBundleParams {
   readonly projectWorldFingerprint?: string;
   readonly includeControlLoopTracker?: boolean;
   readonly previousJournalSnapshot?: import("./autonomy/execution-journal.js").ExecutionJournalSnapshot;
+  readonly conformanceEnabled?: boolean;
+  readonly conformanceFrameworkPathsOnly?: boolean;
+  readonly loopFingerprintThreshold?: number;
+  readonly loopFingerprintWindow?: number;
+  readonly loopDensityThreshold?: number;
+  readonly loopDensityWindow?: number;
+  readonly loopMaxRecoveryEpisodes?: number;
 }
 
 export function createAutonomyBundle(params: CreateAutonomyBundleParams): AutonomyBundle {
@@ -35,7 +42,15 @@ export function createAutonomyBundle(params: CreateAutonomyBundleParams): Autono
   if (params.previousJournalSnapshot) {
     executionJournal.seedFromSnapshot(params.previousJournalSnapshot);
   }
-  const controlLoopTracker = params.includeControlLoopTracker ? new ControlLoopTracker() : null;
+  const controlLoopTracker = params.includeControlLoopTracker
+    ? new ControlLoopTracker({
+        sameFingerprintThreshold: params.loopFingerprintThreshold,
+        sameFingerprintWindow: params.loopFingerprintWindow,
+        gateDensityThreshold: params.loopDensityThreshold,
+        gateDensityWindow: params.loopDensityWindow,
+        maxRecoveryEpisodes: params.loopMaxRecoveryEpisodes,
+      })
+    : null;
 
   if (params.projectWorldSummary && params.projectWorldFingerprint) {
     executionJournal.attachProjectWorldContext({
@@ -44,7 +59,10 @@ export function createAutonomyBundle(params: CreateAutonomyBundleParams): Autono
     });
   }
 
-  const stradaConformance = new StradaConformanceGuard(params.stradaDeps);
+  const stradaConformance = new StradaConformanceGuard(params.stradaDeps, {
+    enabled: params.conformanceEnabled,
+    frameworkPathsOnly: params.conformanceFrameworkPathsOnly,
+  });
   stradaConformance.trackPrompt(params.prompt);
 
   return { errorRecovery, taskPlanner, selfVerification, executionJournal, controlLoopTracker, stradaConformance };

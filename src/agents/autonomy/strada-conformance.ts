@@ -30,12 +30,20 @@ function stringifyInput(input: Record<string, unknown>): string {
   return JSON.stringify(input).toLowerCase();
 }
 
+export interface ConformanceGuardOptions {
+  readonly enabled?: boolean;
+  readonly frameworkPathsOnly?: boolean;
+}
+
 export class StradaConformanceGuard {
   private touchedFrameworkCode = false;
   private consultedAuthoritativeSource = false;
   private usedFrameworkGenerator = false;
 
-  constructor(private readonly deps?: StradaDepsStatus) {}
+  constructor(
+    private readonly deps?: StradaDepsStatus,
+    private readonly opts?: ConformanceGuardOptions,
+  ) {}
 
   trackPrompt(_prompt: string): void {}
 
@@ -65,7 +73,9 @@ export class StradaConformanceGuard {
       if (!executedTool.isError && MUTATION_TOOLS.has(executedTool.toolName)) {
         const filePath = extractFilePath(executedTool.input);
         if (filePath && isCompilableFile(filePath)) {
-          this.touchedFrameworkCode = true;
+          if (this.opts?.frameworkPathsOnly === false || isInsideFrameworkPath(filePath, this.deps)) {
+            this.touchedFrameworkCode = true;
+          }
         }
       }
 
@@ -90,6 +100,7 @@ export class StradaConformanceGuard {
   }
 
   needsConformanceReview(): boolean {
+    if (this.opts?.enabled === false) return false;
     return (
       hasAuthoritativeSource(this.deps) &&
       this.touchedFrameworkCode &&
@@ -109,4 +120,18 @@ export class StradaConformanceGuard {
       "confirm the implementation matches their real contracts/conventions, then continue."
     );
   }
+}
+
+function isInsideFrameworkPath(filePath: string, deps?: StradaDepsStatus): boolean {
+  const normalized = filePath.toLowerCase().replace(/\\/g, "/");
+  const frameworkPaths = [
+    deps?.corePath,
+    deps?.modulesPath,
+    deps?.mcpPath,
+  ]
+    .filter((p): p is string => Boolean(p))
+    .map((p) => p.toLowerCase().replace(/\\/g, "/"));
+
+  if (frameworkPaths.length === 0) return false;
+  return frameworkPaths.some((fp) => normalized.includes(fp));
 }

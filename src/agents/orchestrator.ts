@@ -472,6 +472,13 @@ export class Orchestrator {
   private readonly supervisorBrain?: SupervisorBrain;
   private supervisorBrainActive = false;
   private readonly supervisorComplexityThreshold: "moderate" | "complex";
+  private readonly conformanceEnabled?: boolean;
+  private readonly conformanceFrameworkPathsOnly?: boolean;
+  private readonly loopFingerprintThreshold?: number;
+  private readonly loopFingerprintWindow?: number;
+  private readonly loopDensityThreshold?: number;
+  private readonly loopDensityWindow?: number;
+  private readonly loopMaxRecoveryEpisodes?: number;
   private readonly runtimeArtifactMatches = new Map<
     string,
     {
@@ -531,6 +538,13 @@ export class Orchestrator {
     memoryDbPath?: string;
     supervisorBrain?: SupervisorBrain;
     supervisorComplexityThreshold?: "moderate" | "complex";
+    conformanceEnabled?: boolean;
+    conformanceFrameworkPathsOnly?: boolean;
+    loopFingerprintThreshold?: number;
+    loopFingerprintWindow?: number;
+    loopDensityThreshold?: number;
+    loopDensityWindow?: number;
+    loopMaxRecoveryEpisodes?: number;
   }) {
     this.providerManager = opts.providerManager;
     this.channel = opts.channel;
@@ -589,6 +603,13 @@ export class Orchestrator {
     this.onUsage = opts.onUsage;
     this.supervisorBrain = opts.supervisorBrain;
     this.supervisorComplexityThreshold = opts.supervisorComplexityThreshold ?? "complex";
+    this.conformanceEnabled = opts.conformanceEnabled;
+    this.conformanceFrameworkPathsOnly = opts.conformanceFrameworkPathsOnly;
+    this.loopFingerprintThreshold = opts.loopFingerprintThreshold;
+    this.loopFingerprintWindow = opts.loopFingerprintWindow;
+    this.loopDensityThreshold = opts.loopDensityThreshold;
+    this.loopDensityWindow = opts.loopDensityWindow;
+    this.loopMaxRecoveryEpisodes = opts.loopMaxRecoveryEpisodes;
     this.getIdentityState = opts.getIdentityState;
     this.crashRecoveryContext = opts.crashRecoveryContext;
 
@@ -1880,6 +1901,13 @@ export class Orchestrator {
           projectWorldFingerprint: bgProjectWorldFingerprint,
           includeControlLoopTracker: true,
           previousJournalSnapshot: session.lastJournalSnapshot,
+          conformanceEnabled: this.conformanceEnabled,
+          conformanceFrameworkPathsOnly: this.conformanceFrameworkPathsOnly,
+          loopFingerprintThreshold: this.loopFingerprintThreshold,
+          loopFingerprintWindow: this.loopFingerprintWindow,
+          loopDensityThreshold: this.loopDensityThreshold,
+          loopDensityWindow: this.loopDensityWindow,
+          loopMaxRecoveryEpisodes: this.loopMaxRecoveryEpisodes,
         });
         const controlLoopTracker = controlLoopTrackerOrNull!;
         const interventionDeps = this.buildInterventionDeps();
@@ -2850,6 +2878,13 @@ export class Orchestrator {
       projectWorldSummary,
       projectWorldFingerprint,
       previousJournalSnapshot: session.lastJournalSnapshot,
+      conformanceEnabled: this.conformanceEnabled,
+      conformanceFrameworkPathsOnly: this.conformanceFrameworkPathsOnly,
+      loopFingerprintThreshold: this.loopFingerprintThreshold,
+      loopFingerprintWindow: this.loopFingerprintWindow,
+      loopDensityThreshold: this.loopDensityThreshold,
+      loopDensityWindow: this.loopDensityWindow,
+      loopMaxRecoveryEpisodes: this.loopMaxRecoveryEpisodes,
     });
     const interventionDeps = this.buildInterventionDeps();
     const taskStartedAtMs = Date.now();

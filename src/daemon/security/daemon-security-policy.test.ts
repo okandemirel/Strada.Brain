@@ -137,6 +137,16 @@ describe("DaemonSecurityPolicy", () => {
   // Full flow
   // =========================================================================
 
+  describe("fullAutonomy mode", () => {
+    it("allows all tools including file_write when fullAutonomy is true", () => {
+      const fullAutoPolicy = new DaemonSecurityPolicy(lookupMetadata, queue, new Set(), true);
+      expect(fullAutoPolicy.checkPermission("file_write")).toBe("allow");
+      expect(fullAutoPolicy.checkPermission("git_commit")).toBe("allow");
+      expect(fullAutoPolicy.checkPermission("shell_exec")).toBe("allow");
+      expect(fullAutoPolicy.checkPermission("unknown_tool")).toBe("allow");
+    });
+  });
+
   describe("full security flow", () => {
     it("read-only tool bypasses queue entirely", () => {
       const permission = policy.checkPermission("file_read");

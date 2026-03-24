@@ -33,22 +33,31 @@ Allowed decisions:
 - "replan_local": the worker should create a meaningfully different plan now.
 - "delegate_analysis": ask a helper agent for root-cause analysis.
 - "delegate_code_review": ask a helper agent for code-level review of touched files.
-- "blocked": stop with an honest checkpoint because recovery is exhausted.
+- "blocked": stop with an honest checkpoint because recovery is truly exhausted.
 
 Rules:
 - Prefer replan_local over continue_local when the same verifier or clarification reason keeps repeating.
 - Prefer delegation on later recovery episodes when delegation is available.
-- Use blocked only when the same loop has already been through recovery and still lacks a clean verification path.
+- Use blocked ONLY as absolute last resort when ALL of these are true:
+  (a) recovery episode is at or beyond the configured maximum
+  (b) no delegation options are available
+  (c) replan has already been tried without progress
+- In daemon or autonomous mode, strongly prefer replan_local or delegation over blocked.
 
 Return JSON only:
 {"decision":"continue_local"|"replan_local"|"delegate_analysis"|"delegate_code_review"|"blocked","reason":"short reason","recommendedNextAction":"concrete next action when relevant","delegationTask":"task text for the delegated worker when relevant","summary":"short checkpoint or diagnosis summary"}`;
 
-export function buildLoopRecoveryReviewRequest(brief: LoopRecoveryBrief): string {
+export function buildLoopRecoveryReviewRequest(
+  brief: LoopRecoveryBrief,
+  opts?: { daemonMode?: boolean; maxRecoveryEpisodes?: number },
+): string {
   return [
     "Evaluate the repeated control-loop evidence and choose the next recovery action.",
     "",
     `Loop fingerprint: ${brief.fingerprint}`,
     `Recovery episode: ${brief.recoveryEpisode}`,
+    `Max recovery episodes: ${opts?.maxRecoveryEpisodes ?? 5}`,
+    `Daemon/autonomous mode: ${opts?.daemonMode ? "YES — prefer replan over blocked" : "no"}`,
     `Latest reason: ${brief.latestReason ?? "(none)"}`,
     `Verifier memory: ${brief.verifierSummary ?? "(none)"}`,
     "",

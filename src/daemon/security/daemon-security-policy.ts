@@ -49,6 +49,7 @@ export class DaemonSecurityPolicy {
     metadataLookup: MetadataLookup,
     approvalQueue: ApprovalQueue,
     autoApproveList: Set<string>,
+    private readonly fullAutonomy = false,
   ) {
     this.metadataLookup = metadataLookup;
     this.approvalQueue = approvalQueue;
@@ -90,6 +91,11 @@ export class DaemonSecurityPolicy {
    * 5. Everything else -> 'queue'
    */
   checkPermission(toolName: string): PermissionResult {
+    // Full autonomy mode: always allow, no expiry needed
+    if (this.fullAutonomy) {
+      return "allow";
+    }
+
     // Autonomous override: skip all permission checks when user has granted full autonomy
     if (this.autonomousOverride) {
       // Auto-revoke if expiry has passed

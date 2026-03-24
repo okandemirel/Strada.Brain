@@ -32,7 +32,7 @@ describe("StradaConformanceGuard", () => {
   it("requires a successful authoritative-source check before clearing framework code changes", () => {
     const guard = new StradaConformanceGuard(deps);
 
-    guard.trackToolCall("file_write", { path: "Assets/FooSystem.cs" }, false);
+    guard.trackToolCall("file_write", { path: "/tmp/project/Packages/Strada.Core/Runtime/FooSystem.cs" }, false);
     expect(guard.needsConformanceReview()).toBe(true);
 
     guard.trackToolCall("file_read", { path: "/tmp/project/Packages/Strada.Core/README.md" }, true);
@@ -72,5 +72,30 @@ describe("StradaConformanceGuard", () => {
     guard.trackToolCall("strada_create_component", { name: "FlowComponent" }, false);
 
     expect(guard.needsConformanceReview()).toBe(false);
+  });
+
+  it("returns false when enabled=false regardless of state", () => {
+    const guard = new StradaConformanceGuard(
+      { coreInstalled: true, corePath: "Packages/strada.core", modulesInstalled: false, modulesPath: null, mcpInstalled: false, mcpPath: null, mcpVersion: null, warnings: [] },
+      { enabled: false },
+    );
+    guard.trackToolCall("file_edit", { path: "Packages/strada.core/Runtime/Foo.cs" }, false, "");
+    expect(guard.needsConformanceReview()).toBe(false);
+  });
+
+  it("does not trigger for game project .cs files when frameworkPathsOnly is default", () => {
+    const guard = new StradaConformanceGuard(
+      { coreInstalled: true, corePath: "Packages/strada.core", modulesInstalled: false, modulesPath: null, mcpInstalled: false, mcpPath: null, mcpVersion: null, warnings: [] },
+    );
+    guard.trackToolCall("file_edit", { path: "Assets/Game/LevelSolver.cs" }, false, "");
+    expect(guard.needsConformanceReview()).toBe(false);
+  });
+
+  it("triggers for files inside Strada package directory", () => {
+    const guard = new StradaConformanceGuard(
+      { coreInstalled: true, corePath: "Packages/strada.core", modulesInstalled: false, modulesPath: null, mcpInstalled: false, mcpPath: null, mcpVersion: null, warnings: [] },
+    );
+    guard.trackToolCall("file_edit", { path: "Packages/strada.core/Runtime/Component.cs" }, false, "");
+    expect(guard.needsConformanceReview()).toBe(true);
   });
 });

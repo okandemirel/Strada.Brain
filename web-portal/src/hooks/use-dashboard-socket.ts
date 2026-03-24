@@ -78,7 +78,7 @@ export function dispatchWorkspaceMessage(data: { type: string; [key: string]: un
     }
 
     case 'monitor:task_update': {
-      useMonitorStore.getState().updateTask(payload.nodeId as string, (payload.updates ?? payload) as Partial<MonitorTask>)
+      useMonitorStore.getState().updateTask((payload.taskId ?? payload.nodeId) as string, (payload.updates ?? payload) as Partial<MonitorTask>)
       break
     }
 

@@ -356,6 +356,8 @@ export async function resolveLoopRecoveryReview(
     brief: LoopRecoveryBrief;
     strategy: SupervisorExecutionStrategy;
     usageHandler?: (usage: TaskUsageEvent) => void;
+    daemonMode?: boolean;
+    maxRecoveryEpisodes?: number;
   },
   deps: InterventionDeps,
 ): Promise<LoopRecoveryReviewDecision> {
@@ -366,7 +368,10 @@ export async function resolveLoopRecoveryReview(
       [
         {
           role: "user",
-          content: buildLoopRecoveryReviewRequest(params.brief),
+          content: buildLoopRecoveryReviewRequest(params.brief, {
+            daemonMode: params.daemonMode,
+            maxRecoveryEpisodes: params.maxRecoveryEpisodes,
+          }),
         },
       ],
       [],
@@ -412,6 +417,8 @@ export async function handleBackgroundLoopRecovery(
     session: Session;
     workerCollector?: WorkerRunCollector;
     workspaceLease?: WorkspaceLease;
+    daemonMode?: boolean;
+    maxRecoveryEpisodes?: number;
   },
   deps: InterventionDeps,
 ): Promise<LoopRecoveryIntervention> {
@@ -443,6 +450,8 @@ export async function handleBackgroundLoopRecovery(
     brief,
     strategy: params.strategy,
     usageHandler: params.usageHandler,
+    daemonMode: params.daemonMode,
+    maxRecoveryEpisodes: params.maxRecoveryEpisodes,
   }, deps);
   const recoveryAttempt = params.tracker.markRecoveryAttempt(trigger.fingerprint);
 
@@ -499,7 +508,10 @@ export async function handleBackgroundLoopRecovery(
         name: toolName,
         input: {
           task: delegatedTask,
-          context: buildLoopRecoveryReviewRequest(brief),
+          context: buildLoopRecoveryReviewRequest(brief, {
+            daemonMode: params.daemonMode,
+            maxRecoveryEpisodes: params.maxRecoveryEpisodes,
+          }),
           mode: "sync",
         },
       };
@@ -563,6 +575,19 @@ export async function handleBackgroundLoopRecovery(
     decision: finalDecision.decision ?? "replan_local",
     summary: finalDecision.reason ?? "Loop recovery requested a different path.",
   });
+
+  // Daemon/autonomous mode: convert "blocked" to "replan_local" unless truly exhausted
+  if (
+    finalDecision.decision === "blocked" &&
+    params.daemonMode &&
+    brief.recoveryEpisode < (params.maxRecoveryEpisodes ?? 5) * 2
+  ) {
+    finalDecision = {
+      ...finalDecision,
+      decision: "replan_local",
+      reason: `${finalDecision.reason ?? "blocked"} [daemon override: converting to replan]`,
+    };
+  }
 
   if (finalDecision.decision === "blocked") {
     return {
