@@ -282,6 +282,10 @@ registerPresetCommands(program);
 let appResult: import("./core/bootstrap.js").BootstrapResult | undefined;
 registerDaemonCommands(program, () => appResult?.daemonContext);
 
+// Register skill management commands (install, remove, list, update, search, info)
+import { registerSkillCommands } from "./skills/skill-cli.js";
+registerSkillCommands(program);
+
 program.action(async (opts: RootLaunchOptions) => {
   await runRootLauncher(opts);
 });

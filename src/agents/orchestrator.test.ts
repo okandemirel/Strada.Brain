@@ -5886,6 +5886,45 @@ DONE`,
       await expect(promise).resolves.toEqual(fallbackResponse);
       expect(streamingProvider.chat).toHaveBeenCalledTimes(1);
     });
+
+    it("propagates error when both stream and fallback chat fail", async () => {
+      const streamError = new Error("Stream connection refused");
+      const fallbackError = new Error("Fallback also failed");
+      const streamingProvider = {
+        name: "streaming",
+        capabilities: {
+          maxTokens: 4096,
+          streaming: true,
+          structuredStreaming: false,
+          toolCalling: true,
+          vision: false,
+          systemPrompt: true,
+        },
+        chat: vi.fn().mockRejectedValue(fallbackError),
+        chatStream: vi.fn().mockRejectedValue(streamError),
+      };
+      const timeoutOrch = new Orchestrator({
+        providerManager: { getProvider: () => streamingProvider, shutdown: vi.fn() } as any,
+        tools: [],
+        channel: mockChannel,
+        projectPath: "/tmp/test-project",
+        readOnly: false,
+        requireConfirmation: true,
+        streamInitialTimeoutMs: 50,
+        streamStallTimeoutMs: 50,
+      });
+
+      const promise = (timeoutOrch as any).silentStream(
+        "stream-chat",
+        "system",
+        { messages: [], lastActivity: new Date() },
+        streamingProvider,
+      );
+
+      await expect(promise).rejects.toThrow("Fallback also failed");
+      expect(streamingProvider.chatStream).toHaveBeenCalledTimes(1);
+      expect(streamingProvider.chat).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe("Memory Re-retrieval Integration", () => {

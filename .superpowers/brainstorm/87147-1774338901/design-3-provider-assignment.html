@@ -1,0 +1,223 @@
+<h2>Tasarım Bölüm 3/6: Provider Assignment Stratejisi</h2>
+<p class="subtitle">ProviderAssigner - Capability -> Provider Eşleştirme + Tek/Çoklu Provider Davranışı</p>
+
+<!-- Provider Capability Matrix -->
+<div class="mockup">
+  <div class="mockup-header">Provider Capability Matrisi (ModelIntelligence'dan)</div>
+  <div class="mockup-body" style="padding: 16px; overflow-x: auto;">
+    <table style="width: 100%; border-collapse: collapse; font-size: 11px; min-width: 600px;">
+      <thead>
+        <tr style="border-bottom: 2px solid #30363d;">
+          <th style="text-align: left; padding: 6px; color: #8b949e;">Provider</th>
+          <th style="text-align: center; padding: 6px; color: #f472b6;">reasoning</th>
+          <th style="text-align: center; padding: 6px; color: #60a5fa;">vision</th>
+          <th style="text-align: center; padding: 6px; color: #34d399;">code-gen</th>
+          <th style="text-align: center; padding: 6px; color: #a78bfa;">tool-use</th>
+          <th style="text-align: center; padding: 6px; color: #fbbf24;">long-ctx</th>
+          <th style="text-align: center; padding: 6px; color: #fb923c;">speed</th>
+          <th style="text-align: center; padding: 6px; color: #4ade80;">cost</th>
+          <th style="text-align: center; padding: 6px; color: #f43f5e;">quality</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr style="border-bottom: 1px solid #21262d;">
+          <td style="padding: 6px; color: #c9d1d9;">Claude Opus</td>
+          <td style="text-align: center; padding: 6px; color: #7ee787;">0.95</td>
+          <td style="text-align: center; padding: 6px; color: #7ee787;">0.90</td>
+          <td style="text-align: center; padding: 6px; color: #7ee787;">0.95</td>
+          <td style="text-align: center; padding: 6px; color: #7ee787;">0.95</td>
+          <td style="text-align: center; padding: 6px; color: #7ee787;">0.95</td>
+          <td style="text-align: center; padding: 6px; color: #fbbf24;">0.40</td>
+          <td style="text-align: center; padding: 6px; color: #ff7b72;">0.15</td>
+          <td style="text-align: center; padding: 6px; color: #7ee787;">0.98</td>
+        </tr>
+        <tr style="border-bottom: 1px solid #21262d;">
+          <td style="padding: 6px; color: #c9d1d9;">Claude Sonnet</td>
+          <td style="text-align: center; padding: 6px; color: #7ee787;">0.85</td>
+          <td style="text-align: center; padding: 6px; color: #7ee787;">0.90</td>
+          <td style="text-align: center; padding: 6px; color: #7ee787;">0.90</td>
+          <td style="text-align: center; padding: 6px; color: #7ee787;">0.90</td>
+          <td style="text-align: center; padding: 6px; color: #7ee787;">0.90</td>
+          <td style="text-align: center; padding: 6px; color: #fbbf24;">0.55</td>
+          <td style="text-align: center; padding: 6px; color: #fbbf24;">0.40</td>
+          <td style="text-align: center; padding: 6px; color: #7ee787;">0.90</td>
+        </tr>
+        <tr style="border-bottom: 1px solid #21262d;">
+          <td style="padding: 6px; color: #c9d1d9;">DeepSeek</td>
+          <td style="text-align: center; padding: 6px; color: #7ee787;">0.90</td>
+          <td style="text-align: center; padding: 6px; color: #ff7b72;">0.00</td>
+          <td style="text-align: center; padding: 6px; color: #7ee787;">0.85</td>
+          <td style="text-align: center; padding: 6px; color: #fbbf24;">0.75</td>
+          <td style="text-align: center; padding: 6px; color: #fbbf24;">0.50</td>
+          <td style="text-align: center; padding: 6px; color: #fbbf24;">0.50</td>
+          <td style="text-align: center; padding: 6px; color: #7ee787;">0.90</td>
+          <td style="text-align: center; padding: 6px; color: #fbbf24;">0.80</td>
+        </tr>
+        <tr style="border-bottom: 1px solid #21262d;">
+          <td style="padding: 6px; color: #c9d1d9;">Groq</td>
+          <td style="text-align: center; padding: 6px; color: #ff7b72;">0.30</td>
+          <td style="text-align: center; padding: 6px; color: #ff7b72;">0.00</td>
+          <td style="text-align: center; padding: 6px; color: #fbbf24;">0.60</td>
+          <td style="text-align: center; padding: 6px; color: #fbbf24;">0.70</td>
+          <td style="text-align: center; padding: 6px; color: #fbbf24;">0.50</td>
+          <td style="text-align: center; padding: 6px; color: #7ee787;">0.98</td>
+          <td style="text-align: center; padding: 6px; color: #7ee787;">0.85</td>
+          <td style="text-align: center; padding: 6px; color: #fbbf24;">0.55</td>
+        </tr>
+        <tr style="border-bottom: 1px solid #21262d;">
+          <td style="padding: 6px; color: #c9d1d9;">Gemini</td>
+          <td style="text-align: center; padding: 6px; color: #7ee787;">0.85</td>
+          <td style="text-align: center; padding: 6px; color: #7ee787;">0.90</td>
+          <td style="text-align: center; padding: 6px; color: #7ee787;">0.80</td>
+          <td style="text-align: center; padding: 6px; color: #7ee787;">0.85</td>
+          <td style="text-align: center; padding: 6px; color: #7ee787;">0.95</td>
+          <td style="text-align: center; padding: 6px; color: #fbbf24;">0.60</td>
+          <td style="text-align: center; padding: 6px; color: #fbbf24;">0.50</td>
+          <td style="text-align: center; padding: 6px; color: #7ee787;">0.85</td>
+        </tr>
+        <tr style="border-bottom: 1px solid #21262d;">
+          <td style="padding: 6px; color: #c9d1d9;">Kimi</td>
+          <td style="text-align: center; padding: 6px; color: #7ee787;">0.80</td>
+          <td style="text-align: center; padding: 6px; color: #ff7b72;">0.00</td>
+          <td style="text-align: center; padding: 6px; color: #7ee787;">0.85</td>
+          <td style="text-align: center; padding: 6px; color: #fbbf24;">0.75</td>
+          <td style="text-align: center; padding: 6px; color: #fbbf24;">0.65</td>
+          <td style="text-align: center; padding: 6px; color: #fbbf24;">0.55</td>
+          <td style="text-align: center; padding: 6px; color: #7ee787;">0.85</td>
+          <td style="text-align: center; padding: 6px; color: #fbbf24;">0.80</td>
+        </tr>
+        <tr style="border-bottom: 1px solid #21262d;">
+          <td style="padding: 6px; color: #c9d1d9;">Ollama</td>
+          <td style="text-align: center; padding: 6px; color: #ff7b72;">0.25</td>
+          <td style="text-align: center; padding: 6px; color: #ff7b72;">0.00</td>
+          <td style="text-align: center; padding: 6px; color: #fbbf24;">0.45</td>
+          <td style="text-align: center; padding: 6px; color: #fbbf24;">0.50</td>
+          <td style="text-align: center; padding: 6px; color: #ff7b72;">0.20</td>
+          <td style="text-align: center; padding: 6px; color: #fbbf24;">0.60</td>
+          <td style="text-align: center; padding: 6px; color: #7ee787;">1.00</td>
+          <td style="text-align: center; padding: 6px; color: #ff7b72;">0.35</td>
+        </tr>
+      </tbody>
+    </table>
+    <div style="color: #484f58; font-size: 10px; margin-top: 8px;">* Skorlar ModelIntelligence + hardcoded baseline'dan. Runtime'da healthCheck + execution history ile güncellenir.</div>
+  </div>
+</div>
+
+<!-- Scoring Algorithm -->
+<div class="mockup" style="margin-top: 20px;">
+  <div class="mockup-header">Scoring Algoritması</div>
+  <div class="mockup-body" style="padding: 20px;">
+    <div style="background: #0d1117; border-radius: 8px; padding: 16px; font-family: monospace; font-size: 11px; line-height: 1.9; color: #c9d1d9;">
+      <div><span style="color: #ff7b72;">function</span> <span style="color: #d2a8ff;">scoreProvider</span>(provider, capabilityProfile):</div>
+      <div>&nbsp;</div>
+      <div>&nbsp;&nbsp;<span style="color: #6e7681;">// 1. Hard filter: zorunlu capability yoksa elendir</span></div>
+      <div>&nbsp;&nbsp;<span style="color: #ff7b72;">for</span> tag <span style="color: #ff7b72;">in</span> capabilityProfile.primary:</div>
+      <div>&nbsp;&nbsp;&nbsp;&nbsp;<span style="color: #ff7b72;">if</span> provider.scores[tag] == <span style="color: #79c0ff;">0</span>: <span style="color: #ff7b72;">return</span> <span style="color: #79c0ff;">-1</span>  <span style="color: #6e7681;">// vision=0 ama vision gerekli -> ELENDIR</span></div>
+      <div>&nbsp;</div>
+      <div>&nbsp;&nbsp;<span style="color: #6e7681;">// 2. Weighted capability score</span></div>
+      <div>&nbsp;&nbsp;capScore = <span style="color: #79c0ff;">0</span></div>
+      <div>&nbsp;&nbsp;<span style="color: #ff7b72;">for</span> tag <span style="color: #ff7b72;">in</span> capabilityProfile.primary:</div>
+      <div>&nbsp;&nbsp;&nbsp;&nbsp;capScore += provider.scores[tag] * <span style="color: #79c0ff;">CAPABILITY_WEIGHT</span>  <span style="color: #6e7681;">// 0.6</span></div>
+      <div>&nbsp;</div>
+      <div>&nbsp;&nbsp;<span style="color: #6e7681;">// 3. Preference score</span></div>
+      <div>&nbsp;&nbsp;prefScore = provider.scores[capabilityProfile.preference] * <span style="color: #79c0ff;">PREFERENCE_WEIGHT</span>  <span style="color: #6e7681;">// 0.3</span></div>
+      <div>&nbsp;</div>
+      <div>&nbsp;&nbsp;<span style="color: #6e7681;">// 4. History bonus (execution trace'den)</span></div>
+      <div>&nbsp;&nbsp;historyScore = getSuccessRate(provider, tag) * <span style="color: #79c0ff;">HISTORY_WEIGHT</span>  <span style="color: #6e7681;">// 0.1</span></div>
+      <div>&nbsp;</div>
+      <div>&nbsp;&nbsp;<span style="color: #ff7b72;">return</span> capScore + prefScore + historyScore</div>
+    </div>
+  </div>
+</div>
+
+<!-- Single vs Multi Provider -->
+<div class="split" style="margin-top: 20px;">
+  <div class="mockup">
+    <div class="mockup-header" style="background: #238636;">Multi-Provider Modu</div>
+    <div class="mockup-body" style="padding: 16px;">
+      <div style="font-size: 12px; color: #c9d1d9; line-height: 1.8;">
+        <div style="color: #7ee787; font-weight: 600; margin-bottom: 8px;">Birden fazla provider mevcut</div>
+
+        <div style="background: #0d1117; border-radius: 8px; padding: 12px; font-family: monospace; font-size: 11px; margin-bottom: 10px;">
+          <div>Node 1 [reasoning+code-gen]</div>
+          <div>&nbsp;&nbsp;Claude: <span style="color: #7ee787;">0.91</span> <span style="color: #fbbf24;">&lt;- winner</span></div>
+          <div>&nbsp;&nbsp;DeepSeek: <span style="color: #fbbf24;">0.84</span></div>
+          <div>&nbsp;&nbsp;Groq: <span style="color: #ff7b72;">0.42</span></div>
+          <div>&nbsp;</div>
+          <div>Node 2 [vision+code-gen]</div>
+          <div>&nbsp;&nbsp;Claude: <span style="color: #7ee787;">0.89</span> <span style="color: #fbbf24;">&lt;- winner</span></div>
+          <div>&nbsp;&nbsp;DeepSeek: <span style="color: #ff7b72;">-1</span> <span style="color: #6e7681;">(no vision)</span></div>
+          <div>&nbsp;&nbsp;Gemini: <span style="color: #fbbf24;">0.83</span></div>
+          <div>&nbsp;</div>
+          <div>Node 3 [cost+tool-use]</div>
+          <div>&nbsp;&nbsp;DeepSeek: <span style="color: #7ee787;">0.87</span> <span style="color: #fbbf24;">&lt;- winner</span></div>
+          <div>&nbsp;&nbsp;Groq: <span style="color: #fbbf24;">0.79</span></div>
+          <div>&nbsp;&nbsp;Ollama: <span style="color: #fbbf24;">0.71</span></div>
+        </div>
+
+        <div style="font-size: 11px; color: #8b949e;">
+          <div style="color: #7ee787;">+ Diversity bonus: ayni provider'a 3+ node atanirsa spread</div>
+          <div style="color: #7ee787;">+ Load balance: provider basina max concurrent limit</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="mockup">
+    <div class="mockup-header" style="background: #8957e5;">Single-Provider Modu</div>
+    <div class="mockup-body" style="padding: 16px;">
+      <div style="font-size: 12px; color: #c9d1d9; line-height: 1.8;">
+        <div style="color: #d2a8ff; font-weight: 600; margin-bottom: 8px;">Tek provider (orn: sadece Claude)</div>
+
+        <div style="background: #0d1117; border-radius: 8px; padding: 12px; font-family: monospace; font-size: 11px; margin-bottom: 10px;">
+          <div>Node 1 [reasoning+code-gen]</div>
+          <div>&nbsp;&nbsp;Claude: <span style="color: #7ee787;">0.91</span> <span style="color: #fbbf24;">&lt;- tek secenek</span></div>
+          <div>&nbsp;</div>
+          <div>Node 2 [vision+code-gen]</div>
+          <div>&nbsp;&nbsp;Claude: <span style="color: #7ee787;">0.89</span> <span style="color: #fbbf24;">&lt;- tek secenek</span></div>
+          <div>&nbsp;</div>
+          <div>Node 3 [cost+tool-use]</div>
+          <div>&nbsp;&nbsp;Claude: <span style="color: #fbbf24;">0.65</span> <span style="color: #fbbf24;">&lt;- tek secenek</span></div>
+          <div>&nbsp;</div>
+          <div style="color: #d2a8ff; border-top: 1px solid #30363d; padding-top: 8px;">
+            Verification strategy:
+          </div>
+          <div>&nbsp;&nbsp;executor: <span style="color: #7ee787;">default prompt</span></div>
+          <div>&nbsp;&nbsp;reviewer: <span style="color: #fbbf24;">reviewer persona prompt</span></div>
+          <div>&nbsp;&nbsp;<span style="color: #6e7681;">// ayni model, farkli system prompt</span></div>
+        </div>
+
+        <div style="font-size: 11px; color: #8b949e;">
+          <div style="color: #d2a8ff;">+ Role-differentiated verification aktif</div>
+          <div style="color: #d2a8ff;">+ Wave execution yine paralel (ayni provider'da)</div>
+          <div style="color: #d2a8ff;">+ Decompose + supervise pipeline ayni calisir</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Assignment Rules -->
+<div style="margin-top: 20px; padding: 16px; background: rgba(99,102,241,0.06); border: 1px solid rgba(99,102,241,0.2); border-radius: 10px;">
+  <div style="color: #818cf8; font-weight: 600; font-size: 13px; margin-bottom: 10px;">Assignment Kurallari</div>
+  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; font-size: 12px;">
+    <div>
+      <div style="color: #c9d1d9; font-weight: 600; margin-bottom: 4px;">Hard Rules (ihlal edilemez)</div>
+      <div style="color: #8b949e; line-height: 1.7;">
+        1. Vision gerektiren node, vision=0 provider'a atanamaz<br>
+        2. Provider healthCheck fail ise atama yapilmaz<br>
+        3. Provider rate limit'e yakinsa baska provider tercih et<br>
+        4. Kullanici hard-pin ise tum node'lar o provider'a
+      </div>
+    </div>
+    <div>
+      <div style="color: #c9d1d9; font-weight: 600; margin-bottom: 4px;">Soft Rules (optimization)</div>
+      <div style="color: #8b949e; line-height: 1.7;">
+        1. Diversity: 1 provider'a %60'tan fazla node atama<br>
+        2. Cost balance: toplam maliyet bütçe limitinde kal<br>
+        3. History: gecmiste basarili olan provider'i tercih et<br>
+        4. Affinity: bagimliliktaki node'lari ayni provider'a at
+      </div>
+    </div>
+  </div>
+</div>

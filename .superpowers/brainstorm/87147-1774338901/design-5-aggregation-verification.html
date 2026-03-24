@@ -1,0 +1,224 @@
+<h2>Tasarım Bölüm 5/6: Result Aggregation + Verification</h2>
+<p class="subtitle">ResultAggregator - Cross-Validate, Conflict Resolution, Final Synthesis</p>
+
+<!-- Aggregation Pipeline -->
+<div class="mockup">
+  <div class="mockup-header">ResultAggregator - 3 Aşamalı Pipeline</div>
+  <div class="mockup-body" style="padding: 20px;">
+
+    <div style="display: flex; gap: 12px; align-items: stretch;">
+
+      <!-- Stage 1: Collect -->
+      <div style="flex: 1; border: 1px solid #238636; border-radius: 10px; padding: 14px; background: rgba(35,134,54,0.04);">
+        <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 10px;">
+          <div style="min-width: 24px; height: 24px; background: #238636; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; font-size: 11px; font-weight: 700;">1</div>
+          <div style="color: #7ee787; font-weight: 700; font-size: 13px;">Collect</div>
+        </div>
+        <div style="font-size: 11px; color: #8b949e; line-height: 1.7;">
+          Tüm node sonuçlarını topla<br><br>
+          Her node'dan:
+        </div>
+        <div style="background: #0d1117; border-radius: 6px; padding: 8px; margin-top: 6px; font-family: monospace; font-size: 10px; color: #c9d1d9; line-height: 1.7;">
+          <div>nodeId</div>
+          <div>status: ok | failed | skipped</div>
+          <div>output: string (LLM response)</div>
+          <div>artifacts: file changes[]</div>
+          <div>toolResults: ToolResult[]</div>
+          <div>provider: string</div>
+          <div>cost: number</div>
+          <div>duration: number</div>
+        </div>
+      </div>
+
+      <!-- Stage 2: Verify -->
+      <div style="flex: 1; border: 1px solid #8957e5; border-radius: 10px; padding: 14px; background: rgba(137,87,229,0.04);">
+        <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 10px;">
+          <div style="min-width: 24px; height: 24px; background: #8957e5; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; font-size: 11px; font-weight: 700;">2</div>
+          <div style="color: #d2a8ff; font-weight: 700; font-size: 13px;">Verify</div>
+        </div>
+        <div style="font-size: 11px; color: #8b949e; line-height: 1.7;">
+          Cross-validation stratejisi:
+        </div>
+        <div style="background: #0d1117; border-radius: 6px; padding: 8px; margin-top: 6px; font-family: monospace; font-size: 10px; color: #c9d1d9; line-height: 1.7;">
+          <div><span style="color: #ff7b72;">multi-provider:</span></div>
+          <div>&nbsp;Farklı provider'dan</div>
+          <div>&nbsp;reviewer persona ile</div>
+          <div>&nbsp;sonuçları cross-check</div>
+          <div>&nbsp;(ConsensusManager)</div>
+          <div>&nbsp;</div>
+          <div><span style="color: #d2a8ff;">single-provider:</span></div>
+          <div>&nbsp;Aynı provider'dan</div>
+          <div>&nbsp;reviewer system prompt</div>
+          <div>&nbsp;ile self-review</div>
+          <div>&nbsp;(role-differentiated)</div>
+        </div>
+      </div>
+
+      <!-- Stage 3: Synthesize -->
+      <div style="flex: 1; border: 1px solid #ffa657; border-radius: 10px; padding: 14px; background: rgba(255,167,87,0.04);">
+        <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 10px;">
+          <div style="min-width: 24px; height: 24px; background: #ffa657; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #0d1117; font-size: 11px; font-weight: 700;">3</div>
+          <div style="color: #ffa657; font-weight: 700; font-size: 13px;">Synthesize</div>
+        </div>
+        <div style="font-size: 11px; color: #8b949e; line-height: 1.7;">
+          Kullanıcıya tek tutarlı yanıt:
+        </div>
+        <div style="background: #0d1117; border-radius: 6px; padding: 8px; margin-top: 6px; font-family: monospace; font-size: 10px; color: #c9d1d9; line-height: 1.7;">
+          <div><span style="color: #7ee787;">Tüm node'lar OK:</span></div>
+          <div>&nbsp;Sonuçları birleştir</div>
+          <div>&nbsp;Tutarlılık kontrolü</div>
+          <div>&nbsp;Tek yanıt üret</div>
+          <div>&nbsp;</div>
+          <div><span style="color: #fbbf24;">Partial success:</span></div>
+          <div>&nbsp;Tamamlananları sun</div>
+          <div>&nbsp;Başarısızları belirt</div>
+          <div>&nbsp;Kalan işi öner</div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<!-- Verification Strategies -->
+<div class="split" style="margin-top: 20px;">
+  <div class="mockup">
+    <div class="mockup-header" style="background: #238636;">Multi-Provider Verification</div>
+    <div class="mockup-body" style="padding: 16px;">
+      <div style="background: #0d1117; border-radius: 8px; padding: 12px; font-family: monospace; font-size: 11px; line-height: 1.9; color: #c9d1d9;">
+        <div><span style="color: #6e7681;">// Node C: Claude ile yazıldı</span></div>
+        <div><span style="color: #6e7681;">// Verification: DeepSeek ile review</span></div>
+        <div>&nbsp;</div>
+        <div><span style="color: #ffa657;">verifier</span> = selectDifferentProvider(</div>
+        <div>&nbsp;&nbsp;excludeProvider: node.assignedProvider,</div>
+        <div>&nbsp;&nbsp;prefer: "reasoning"</div>
+        <div>)</div>
+        <div>&nbsp;</div>
+        <div><span style="color: #ffa657;">prompt</span> = buildReviewerPrompt(</div>
+        <div>&nbsp;&nbsp;originalTask: node.task,</div>
+        <div>&nbsp;&nbsp;output: node.output,</div>
+        <div>&nbsp;&nbsp;artifacts: node.artifacts</div>
+        <div>)</div>
+        <div>&nbsp;</div>
+        <div><span style="color: #6e7681;">// Sonuç: approve | flag_issues | reject</span></div>
+        <div><span style="color: #ff7b72;">if</span> (verdict === <span style="color: #a5d6ff;">"flag_issues"</span>):</div>
+        <div>&nbsp;&nbsp;node'u re-execute with issues context</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="mockup">
+    <div class="mockup-header" style="background: #8957e5;">Single-Provider Verification</div>
+    <div class="mockup-body" style="padding: 16px;">
+      <div style="background: #0d1117; border-radius: 8px; padding: 12px; font-family: monospace; font-size: 11px; line-height: 1.9; color: #c9d1d9;">
+        <div><span style="color: #6e7681;">// Node C: Claude ile yazıldı</span></div>
+        <div><span style="color: #6e7681;">// Verification: Claude + reviewer prompt</span></div>
+        <div>&nbsp;</div>
+        <div><span style="color: #ffa657;">reviewerPrompt</span> = `</div>
+        <div>&nbsp;&nbsp;You are a senior code reviewer.</div>
+        <div>&nbsp;&nbsp;You did NOT write this code.</div>
+        <div>&nbsp;&nbsp;Review critically for:</div>
+        <div>&nbsp;&nbsp;- Correctness</div>
+        <div>&nbsp;&nbsp;- Security vulnerabilities</div>
+        <div>&nbsp;&nbsp;- Edge cases</div>
+        <div>&nbsp;&nbsp;- Integration issues</div>
+        <div>&nbsp;&nbsp;Verdict: approve | flag_issues</div>
+        <div>`</div>
+        <div>&nbsp;</div>
+        <div><span style="color: #6e7681;">// Aynı model, farklı persona</span></div>
+        <div><span style="color: #6e7681;">// "Reviewer şapkası" yaklaşımı</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Conflict Resolution -->
+<div class="mockup" style="margin-top: 20px;">
+  <div class="mockup-header">Conflict Resolution - Node Sonuçları Arasında Çelişki</div>
+  <div class="mockup-body" style="padding: 20px;">
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+
+      <div>
+        <div style="color: #ffa657; font-weight: 600; font-size: 12px; margin-bottom: 8px;">Ne Zaman Çelişki Olur?</div>
+        <div style="font-size: 11px; color: #8b949e; line-height: 1.8;">
+          1. Node A "users" tablosu oluşturur, Node B farklı schema bekler<br>
+          2. Node C bir fonksiyon yazar, Node D aynı isimde farklı fonksiyon<br>
+          3. Node E bir config değiştirir, Node F aynı config'i farklı değiştirir<br>
+          4. Verification "flag_issues" döner, orijinal node re-execute gerekir
+        </div>
+      </div>
+
+      <div>
+        <div style="color: #7ee787; font-weight: 600; font-size: 12px; margin-bottom: 8px;">Nasıl Çözülür?</div>
+        <div style="font-size: 11px; color: #8b949e; line-height: 1.8;">
+          1. <span style="color: #c9d1d9;">File-level conflict detection:</span> aynı dosyayı değiştiren node'lar tespit et<br>
+          2. <span style="color: #c9d1d9;">LLM-driven merge:</span> çelişen değişiklikleri LLM ile birleştir<br>
+          3. <span style="color: #c9d1d9;">Dependency ordering:</span> DAG sırasına göre sonraki node'un değişikliği kazanır<br>
+          4. <span style="color: #c9d1d9;">Fallback:</span> otomatik çözülemezse kullanıcıya sun
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<!-- Synthesis Output -->
+<div class="mockup" style="margin-top: 20px;">
+  <div class="mockup-header">Final Synthesis - Kullanıcıya Sunulan Yanıt</div>
+  <div class="mockup-body" style="padding: 20px;">
+
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+
+      <!-- Full Success -->
+      <div style="border: 1px solid #238636; border-radius: 8px; padding: 12px; background: rgba(35,134,54,0.04);">
+        <div style="color: #7ee787; font-weight: 600; font-size: 12px; margin-bottom: 8px;">Tam Başarı</div>
+        <div style="background: #0d1117; border-radius: 6px; padding: 10px; font-size: 11px; color: #c9d1d9; line-height: 1.7;">
+          <div style="color: #7ee787;">Auth sistemi tamamlandı (5/5 görev):</div>
+          <div>&nbsp;</div>
+          <div>- DB schema oluşturuldu (users, sessions)</div>
+          <div>- JWT middleware implemente edildi</div>
+          <div>- Login/register endpoint'leri hazır</div>
+          <div>- Integration testleri yazıldı (12 test)</div>
+          <div>&nbsp;</div>
+          <div style="color: #484f58;">3 provider kullanıldı | 45s | $0.032</div>
+        </div>
+      </div>
+
+      <!-- Partial Success -->
+      <div style="border: 1px solid #fbbf24; border-radius: 8px; padding: 12px; background: rgba(251,191,36,0.04);">
+        <div style="color: #fbbf24; font-weight: 600; font-size: 12px; margin-bottom: 8px;">Kısmi Başarı</div>
+        <div style="background: #0d1117; border-radius: 6px; padding: 10px; font-size: 11px; color: #c9d1d9; line-height: 1.7;">
+          <div style="color: #fbbf24;">Auth sistemi kısmen tamamlandı (3/5):</div>
+          <div>&nbsp;</div>
+          <div style="color: #7ee787;">✓ DB schema oluşturuldu</div>
+          <div style="color: #7ee787;">✓ JWT middleware hazır</div>
+          <div style="color: #7ee787;">✓ Login endpoint çalışıyor</div>
+          <div style="color: #ff7b72;">✗ Register endpoint başarısız (rate limit)</div>
+          <div style="color: #8b949e;">⊘ Integration testleri atlandı (bağımlı)</div>
+          <div>&nbsp;</div>
+          <div style="color: #484f58;">Kalan işi tamamlamak ister misin?</div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<!-- Verification Config -->
+<div style="margin-top: 20px; padding: 16px; background: rgba(99,102,241,0.06); border: 1px solid rgba(99,102,241,0.2); border-radius: 10px;">
+  <div style="color: #818cf8; font-weight: 600; font-size: 13px; margin-bottom: 10px;">Verification Konfigürasyonu</div>
+  <div style="background: #0d1117; border-radius: 8px; padding: 12px; font-family: monospace; font-size: 11px; line-height: 1.8; color: #c9d1d9;">
+    <div><span style="color: #ff7b72;">interface</span> <span style="color: #ffa657;">VerificationConfig</span> {</div>
+    <div>&nbsp;&nbsp;<span style="color: #79c0ff;">mode</span>: <span style="color: #7ee787;">"always" | "critical-only" | "sampling" | "disabled"</span>;</div>
+    <div>&nbsp;&nbsp;<span style="color: #79c0ff;">samplingRate</span>: <span style="color: #7ee787;">number</span>;  <span style="color: #6e7681;">// 0-1, sampling modunda verify oranı</span></div>
+    <div>&nbsp;&nbsp;<span style="color: #79c0ff;">preferDifferentProvider</span>: <span style="color: #7ee787;">boolean</span>;  <span style="color: #6e7681;">// true: farklı provider ile verify</span></div>
+    <div>&nbsp;&nbsp;<span style="color: #79c0ff;">maxVerificationCost</span>: <span style="color: #7ee787;">number</span>;  <span style="color: #6e7681;">// toplam verification maliyeti limiti</span></div>
+    <div>}</div>
+    <div>&nbsp;</div>
+    <div><span style="color: #6e7681;">// Defaults:</span></div>
+    <div><span style="color: #6e7681;">// mode: "critical-only" (sadece quality preference'lı node'ları verify)</span></div>
+    <div><span style="color: #6e7681;">// samplingRate: 0.3 (sampling modunda %30)</span></div>
+    <div><span style="color: #6e7681;">// preferDifferentProvider: true</span></div>
+    <div><span style="color: #6e7681;">// maxVerificationCost: agent budget'ın %15'i</span></div>
+  </div>
+</div>

@@ -1,0 +1,207 @@
+<h2>Tasarım Bölüm 4/6: Dispatch + Failure Handling</h2>
+<p class="subtitle">SupervisorDispatcher - Wave Execution, Hata Yönetimi, Escalation</p>
+
+<!-- Wave Dispatch Flow -->
+<div class="mockup">
+  <div class="mockup-header">SupervisorDispatcher - Wave-Based Multi-Provider Execution</div>
+  <div class="mockup-body" style="padding: 20px;">
+
+    <!-- Example DAG -->
+    <div style="text-align: center; margin-bottom: 16px; color: #8b949e; font-size: 12px;">
+      Örnek: "Auth sistemi kur" - 5 sub-task, 3 wave
+    </div>
+
+    <div style="display: flex; gap: 12px; align-items: stretch;">
+
+      <!-- Wave 1 -->
+      <div style="flex: 1; border: 1px solid #238636; border-radius: 10px; padding: 12px; background: rgba(35,134,54,0.04);">
+        <div style="color: #7ee787; font-weight: 700; font-size: 12px; text-align: center; margin-bottom: 10px; border-bottom: 1px solid #21262d; padding-bottom: 6px;">Wave 1 (bağımsız)</div>
+        <div style="display: flex; flex-direction: column; gap: 8px;">
+          <div style="background: #0d1117; border-radius: 6px; padding: 8px; border-left: 3px solid #60a5fa;">
+            <div style="font-size: 11px; color: #60a5fa; font-weight: 600;">A: DB Schema</div>
+            <div style="font-size: 10px; color: #6e7681;">DeepSeek (cost)</div>
+            <div style="font-size: 10px; color: #484f58;">PAOR Loop #1</div>
+          </div>
+          <div style="background: #0d1117; border-radius: 6px; padding: 8px; border-left: 3px solid #f472b6;">
+            <div style="font-size: 11px; color: #f472b6; font-weight: 600;">B: JWT Config</div>
+            <div style="font-size: 10px; color: #6e7681;">Groq (speed)</div>
+            <div style="font-size: 10px; color: #484f58;">PAOR Loop #2</div>
+          </div>
+        </div>
+        <div style="text-align: center; color: #238636; font-size: 10px; margin-top: 8px;">Paralel çalışır</div>
+      </div>
+
+      <!-- Arrow -->
+      <div style="display: flex; align-items: center; color: #30363d; font-size: 18px;">→</div>
+
+      <!-- Wave 2 -->
+      <div style="flex: 1; border: 1px solid #8957e5; border-radius: 10px; padding: 12px; background: rgba(137,87,229,0.04);">
+        <div style="color: #d2a8ff; font-weight: 700; font-size: 12px; text-align: center; margin-bottom: 10px; border-bottom: 1px solid #21262d; padding-bottom: 6px;">Wave 2 (A,B'ye bağımlı)</div>
+        <div style="display: flex; flex-direction: column; gap: 8px;">
+          <div style="background: #0d1117; border-radius: 6px; padding: 8px; border-left: 3px solid #34d399;">
+            <div style="font-size: 11px; color: #34d399; font-weight: 600;">C: Auth Middleware</div>
+            <div style="font-size: 10px; color: #6e7681;">Claude (reasoning+code)</div>
+            <div style="font-size: 10px; color: #484f58;">PAOR Loop #3</div>
+          </div>
+          <div style="background: #0d1117; border-radius: 6px; padding: 8px; border-left: 3px solid #fbbf24;">
+            <div style="font-size: 11px; color: #fbbf24; font-weight: 600;">D: Login Endpoint</div>
+            <div style="font-size: 10px; color: #6e7681;">Claude (code-gen)</div>
+            <div style="font-size: 10px; color: #484f58;">PAOR Loop #4</div>
+          </div>
+        </div>
+        <div style="text-align: center; color: #8957e5; font-size: 10px; margin-top: 8px;">A,B tamamlanınca başlar</div>
+      </div>
+
+      <!-- Arrow -->
+      <div style="display: flex; align-items: center; color: #30363d; font-size: 18px;">→</div>
+
+      <!-- Wave 3 -->
+      <div style="flex: 1; border: 1px solid #ffa657; border-radius: 10px; padding: 12px; background: rgba(255,167,87,0.04);">
+        <div style="color: #ffa657; font-weight: 700; font-size: 12px; text-align: center; margin-bottom: 10px; border-bottom: 1px solid #21262d; padding-bottom: 6px;">Wave 3 (C,D'ye bağımlı)</div>
+        <div style="display: flex; flex-direction: column; gap: 8px;">
+          <div style="background: #0d1117; border-radius: 6px; padding: 8px; border-left: 3px solid #a78bfa;">
+            <div style="font-size: 11px; color: #a78bfa; font-weight: 600;">E: Integration Tests</div>
+            <div style="font-size: 10px; color: #6e7681;">Kimi (cost+code)</div>
+            <div style="font-size: 10px; color: #484f58;">PAOR Loop #5</div>
+          </div>
+        </div>
+        <div style="text-align: center; color: #ffa657; font-size: 10px; margin-top: 8px;">C,D tamamlanınca başlar</div>
+      </div>
+
+    </div>
+
+    <!-- Execution Detail -->
+    <div style="margin-top: 16px; background: #0d1117; border-radius: 8px; padding: 14px; font-family: monospace; font-size: 11px; line-height: 1.8; color: #c9d1d9;">
+      <div><span style="color: #ff7b72;">// Her sub-task icin PAOR loop spawn</span></div>
+      <div><span style="color: #ffa657;">for</span> wave <span style="color: #ff7b72;">in</span> topoSort(dag):</div>
+      <div>&nbsp;&nbsp;readyNodes = wave.filter(n => deps satisfied)</div>
+      <div>&nbsp;&nbsp;results = <span style="color: #ff7b72;">await</span> Promise.allSettled(</div>
+      <div>&nbsp;&nbsp;&nbsp;&nbsp;readyNodes.map(node => </div>
+      <div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;spawnPAORLoop(node, node.assignedProvider, node.assignedModel)</div>
+      <div>&nbsp;&nbsp;&nbsp;&nbsp;)</div>
+      <div>&nbsp;&nbsp;)</div>
+      <div>&nbsp;&nbsp;<span style="color: #6e7681;">// Concurrency: semaphore(config.maxParallelNodes || 4)</span></div>
+      <div>&nbsp;&nbsp;<span style="color: #6e7681;">// Her node icin AbortController + timeout</span></div>
+      <div>&nbsp;&nbsp;<span style="color: #6e7681;">// Progress event emit: supervisor:node_complete</span></div>
+    </div>
+  </div>
+</div>
+
+<!-- Failure Handling -->
+<div class="mockup" style="margin-top: 20px;">
+  <div class="mockup-header" style="background: #da3633;">Failure Handling - 4 Seviye Kurtarma</div>
+  <div class="mockup-body" style="padding: 20px;">
+
+    <div style="display: flex; flex-direction: column; gap: 12px;">
+
+      <!-- Level 1: Retry -->
+      <div style="display: flex; gap: 12px; align-items: start;">
+        <div style="min-width: 32px; height: 32px; background: #fbbf24; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #0d1117; font-size: 13px; font-weight: 700;">1</div>
+        <div style="flex: 1; border: 1px solid #fbbf24; border-radius: 8px; padding: 12px; background: rgba(251,191,36,0.04);">
+          <div style="color: #fbbf24; font-weight: 700; font-size: 13px;">Retry (aynı provider)</div>
+          <div style="color: #8b949e; font-size: 12px; margin-top: 4px;">
+            Geçici hata (timeout, rate limit, 5xx) → aynı provider'da 1x retry<br>
+            <span style="color: #484f58;">maxRetries: 1 | backoff: 2s</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Level 2: Escalate Provider -->
+      <div style="display: flex; gap: 12px; align-items: start;">
+        <div style="min-width: 32px; height: 32px; background: #ffa657; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #0d1117; font-size: 13px; font-weight: 700;">2</div>
+        <div style="flex: 1; border: 1px solid #ffa657; border-radius: 8px; padding: 12px; background: rgba(255,167,87,0.04);">
+          <div style="color: #ffa657; font-weight: 700; font-size: 13px;">Provider Escalation</div>
+          <div style="color: #8b949e; font-size: 12px; margin-top: 4px;">
+            Retry başarısız → ProviderAssigner'dan sonraki en iyi provider'ı al<br>
+            Örnek: Groq fail → DeepSeek'e geç → Claude'a geç<br>
+            <span style="color: #484f58;">Mevcut FallbackChainProvider mantığıyla uyumlu</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Level 3: Re-decompose -->
+      <div style="display: flex; gap: 12px; align-items: start;">
+        <div style="min-width: 32px; height: 32px; background: #ff7b72; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #0d1117; font-size: 13px; font-weight: 700;">3</div>
+        <div style="flex: 1; border: 1px solid #ff7b72; border-radius: 8px; padding: 12px; background: rgba(255,123,114,0.04);">
+          <div style="color: #ff7b72; font-weight: 700; font-size: 13px;">Re-Decompose (mevcut GoalDecomposer reactive)</div>
+          <div style="color: #8b949e; font-size: 12px; margin-top: 4px;">
+            Provider escalation da başarısız → node'u daha küçük parçalara kır<br>
+            GoalDecomposer.decomposeReactive() kullanır (mevcut, dokunulmaz)<br>
+            Yeni child node'lara tekrar CapabilityMatcher + ProviderAssigner çalışır<br>
+            <span style="color: #484f58;">maxRedecomposition: 2 per node</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Level 4: Criticality Check -->
+      <div style="display: flex; gap: 12px; align-items: start;">
+        <div style="min-width: 32px; height: 32px; background: #da3633; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; font-size: 13px; font-weight: 700;">4</div>
+        <div style="flex: 1; border: 1px solid #da3633; border-radius: 8px; padding: 12px; background: rgba(218,54,51,0.04);">
+          <div style="color: #f85149; font-weight: 700; font-size: 13px;">Criticality Check + Graceful Degrade</div>
+          <div style="color: #8b949e; font-size: 12px; margin-top: 4px;">
+            Re-decompose de başarısız → LLM ile criticality değerlendir<br>
+            <span style="color: #7ee787;">Non-critical:</span> node skip, bağımlılar devam eder, kullanıcıya partial result<br>
+            <span style="color: #f85149;">Critical:</span> bağımlı node'lar da skip, kullanıcıya hata + tamamlanan kısımları sun<br>
+            <span style="color: #484f58;">failureBudget: 3 (toplam max fail sayısı, mevcut GoalExecutor ile aynı)</span>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+  </div>
+</div>
+
+<!-- Timeout & Cancellation -->
+<div class="mockup" style="margin-top: 20px;">
+  <div class="mockup-header">Timeout, Cancellation & Budget</div>
+  <div class="mockup-body" style="padding: 20px;">
+    <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px;">
+
+      <div style="border: 1px solid #30363d; border-radius: 8px; padding: 12px;">
+        <div style="color: #ffa657; font-weight: 600; font-size: 12px; margin-bottom: 6px;">Per-Node Timeout</div>
+        <div style="color: #8b949e; font-size: 11px; line-height: 1.7;">
+          Her PAOR loop'a AbortController<br>
+          Default: 120s (interactive), 300s (background)<br>
+          Configurable per delegation type<br>
+          Timeout → Level 2 escalation'a geç
+        </div>
+      </div>
+
+      <div style="border: 1px solid #30363d; border-radius: 8px; padding: 12px;">
+        <div style="color: #f85149; font-weight: 600; font-size: 12px; margin-bottom: 6px;">Cancellation</div>
+        <div style="color: #8b949e; font-size: 11px; line-height: 1.7;">
+          Kullanıcı iptal ederse → tüm PAOR loop'lar abort<br>
+          Tamamlanan node'ların sonuçları korunur<br>
+          Partial result kullanıcıya sunulur<br>
+          AbortController.abort() cascade
+        </div>
+      </div>
+
+      <div style="border: 1px solid #30363d; border-radius: 8px; padding: 12px;">
+        <div style="color: #4ade80; font-weight: 600; font-size: 12px; margin-bottom: 6px;">Budget Guard</div>
+        <div style="color: #8b949e; font-size: 11px; line-height: 1.7;">
+          Her node tamamlanınca maliyet hesapla<br>
+          Toplam maliyet > agent budget → dur<br>
+          Tamamlanan kısımları sun<br>
+          Mevcut AgentBudgetTracker ile entegre
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<!-- Flow Summary -->
+<div style="margin-top: 20px; background: #0d1117; border-radius: 10px; padding: 16px; font-family: monospace; font-size: 11px; line-height: 2; color: #c9d1d9;">
+  <div style="color: #ff7b72;">// Tam failure handling akışı</div>
+  <div>node execution fails:</div>
+  <div>&nbsp;&nbsp;→ <span style="color: #fbbf24;">L1</span> retry(sameProvider, maxRetries=1, backoff=2s)</div>
+  <div>&nbsp;&nbsp;→ <span style="color: #ffa657;">L2</span> escalate(nextBestProvider from ProviderAssigner scores)</div>
+  <div>&nbsp;&nbsp;→ <span style="color: #ff7b72;">L3</span> redecompose(GoalDecomposer.reactive, maxRedecomp=2)</div>
+  <div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;→ new children get CapabilityMatcher + ProviderAssigner</div>
+  <div>&nbsp;&nbsp;→ <span style="color: #da3633;">L4</span> criticalityCheck(LLM)</div>
+  <div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;→ non-critical: skip node, dependents continue</div>
+  <div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;→ critical: skip node + dependents, partial result</div>
+  <div>&nbsp;&nbsp;→ failureBudget exhausted: abort all, return completed work</div>
+</div>

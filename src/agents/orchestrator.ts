@@ -3502,13 +3502,8 @@ export class Orchestrator {
           chatId,
           error: fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr),
         });
+        throw fallbackErr;
       }
-      return {
-        text: "",
-        toolCalls: [],
-        stopReason: "end_turn" as const,
-        usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-      };
     }
   };
 

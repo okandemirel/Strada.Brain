@@ -1,0 +1,190 @@
+<h2>Tasarım Bölüm 2/6: Capability Sistemi</h2>
+<p class="subtitle">CapabilityMatcher - Heuristic + Cheap LLM Triage Akışı</p>
+
+<!-- Capability Taxonomy -->
+<div class="mockup">
+  <div class="mockup-header">Capability Taksonomisi</div>
+  <div class="mockup-body" style="padding: 20px;">
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+
+      <!-- Primary Capabilities -->
+      <div style="border: 1px solid #30363d; border-radius: 10px; padding: 14px;">
+        <div style="color: #d2a8ff; font-weight: 700; font-size: 13px; margin-bottom: 10px; border-bottom: 1px solid #21262d; padding-bottom: 6px;">Primary Capabilities (model yeteneği)</div>
+
+        <div style="display: flex; flex-direction: column; gap: 8px; font-size: 12px;">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span style="background: #1f2937; border-radius: 4px; padding: 3px 8px; color: #f472b6; min-width: 90px; text-align: center;">reasoning</span>
+            <span style="color: #8b949e;">Derin analiz, karmaşık mantık, debugging</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span style="background: #1f2937; border-radius: 4px; padding: 3px 8px; color: #60a5fa; min-width: 90px; text-align: center;">vision</span>
+            <span style="color: #8b949e;">Görsel içerik işleme, image analysis</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span style="background: #1f2937; border-radius: 4px; padding: 3px 8px; color: #34d399; min-width: 90px; text-align: center;">code-gen</span>
+            <span style="color: #8b949e;">Kod yazma, refactoring, implementation</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span style="background: #1f2937; border-radius: 4px; padding: 3px 8px; color: #a78bfa; min-width: 90px; text-align: center;">tool-use</span>
+            <span style="color: #8b949e;">Tool calling yoğun görevler</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span style="background: #1f2937; border-radius: 4px; padding: 3px 8px; color: #fbbf24; min-width: 90px; text-align: center;">long-context</span>
+            <span style="color: #8b949e;">Büyük dosya/context işleme (>100K token)</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Operational Preferences -->
+      <div style="border: 1px solid #30363d; border-radius: 10px; padding: 14px;">
+        <div style="color: #ffa657; font-weight: 700; font-size: 13px; margin-bottom: 10px; border-bottom: 1px solid #21262d; padding-bottom: 6px;">Operational Preferences (optimizasyon)</div>
+
+        <div style="display: flex; flex-direction: column; gap: 8px; font-size: 12px;">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span style="background: #1f2937; border-radius: 4px; padding: 3px 8px; color: #fb923c; min-width: 90px; text-align: center;">speed</span>
+            <span style="color: #8b949e;">Hız öncelikli (Groq, Fireworks)</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span style="background: #1f2937; border-radius: 4px; padding: 3px 8px; color: #4ade80; min-width: 90px; text-align: center;">cost</span>
+            <span style="color: #8b949e;">Maliyet optimize (DeepSeek, Ollama)</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span style="background: #1f2937; border-radius: 4px; padding: 3px 8px; color: #f43f5e; min-width: 90px; text-align: center;">quality</span>
+            <span style="color: #8b949e;">Kalite öncelikli (Claude Opus, GPT-5)</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span style="background: #1f2937; border-radius: 4px; padding: 3px 8px; color: #38bdf8; min-width: 90px; text-align: center;">creative</span>
+            <span style="color: #8b949e;">Yaratıcı içerik, naming, copy</span>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<!-- Matching Flow -->
+<div class="mockup" style="margin-top: 20px;">
+  <div class="mockup-header">CapabilityMatcher - İki Aşamalı Analiz Akışı</div>
+  <div class="mockup-body" style="padding: 20px;">
+
+    <!-- Phase 1: Heuristic -->
+    <div style="border: 1px solid #238636; border-radius: 10px; padding: 14px; margin-bottom: 16px; background: rgba(35,134,54,0.04);">
+      <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 10px;">
+        <div style="min-width: 28px; height: 28px; background: #238636; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; font-size: 12px; font-weight: 700;">1</div>
+        <div style="color: #7ee787; font-weight: 700; font-size: 14px;">Heuristic First-Pass</div>
+        <div style="color: #484f58; font-size: 11px; margin-left: auto;">0ms, $0.00</div>
+      </div>
+
+      <div style="background: #0d1117; border-radius: 8px; padding: 14px; font-family: monospace; font-size: 11px; line-height: 2; color: #c9d1d9;">
+        <div><span style="color: #ff7b72;">// Pattern-based keyword matching</span></div>
+        <div><span style="color: #ffa657;">VISION_SIGNALS</span>: <span style="color: #a5d6ff;">"image", "photo", "screenshot", "visual", "thumbnail", "upload", "picture", "diagram"</span></div>
+        <div><span style="color: #ffa657;">REASONING_SIGNALS</span>: <span style="color: #a5d6ff;">"analyze", "debug", "investigate", "why", "trace", "evaluate", "compare", "assess"</span></div>
+        <div><span style="color: #ffa657;">CODEGEN_SIGNALS</span>: <span style="color: #a5d6ff;">"implement", "create", "build", "write code", "add feature", "refactor", "migrate"</span></div>
+        <div><span style="color: #ffa657;">TOOL_SIGNALS</span>: <span style="color: #a5d6ff;">"search", "find files", "run tests", "execute", "deploy", "install"</span></div>
+        <div><span style="color: #ffa657;">SPEED_SIGNALS</span>: <span style="color: #a5d6ff;">"quick", "fast", "simple check", "lint", "format"</span></div>
+        <div><span style="color: #ffa657;">QUALITY_SIGNALS</span>: <span style="color: #a5d6ff;">"critical", "production", "security", "review carefully"</span></div>
+        <div>&nbsp;</div>
+        <div><span style="color: #ff7b72;">// Confidence threshold</span></div>
+        <div><span style="color: #ffa657;">if</span> matchCount >= 2 <span style="color: #ffa657;">||</span> strongMatch: <span style="color: #7ee787;">confidence = "high"</span> -> tag kesinleşir</div>
+        <div><span style="color: #ffa657;">if</span> matchCount == 1: <span style="color: #fbbf24;">confidence = "medium"</span> -> tag eklenir ama LLM verify</div>
+        <div><span style="color: #ffa657;">if</span> matchCount == 0: <span style="color: #ff7b72;">confidence = "low"</span> -> LLM triage'a gönder</div>
+      </div>
+    </div>
+
+    <!-- Phase 2: Cheap LLM -->
+    <div style="border: 1px solid #8957e5; border-radius: 10px; padding: 14px; background: rgba(137,87,229,0.04);">
+      <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 10px;">
+        <div style="min-width: 28px; height: 28px; background: #8957e5; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; font-size: 12px; font-weight: 700;">2</div>
+        <div style="color: #d2a8ff; font-weight: 700; font-size: 14px;">Cheap LLM Triage</div>
+        <div style="color: #484f58; font-size: 11px; margin-left: auto;">sadece belirsiz node'lar icin, ~$0.001/node</div>
+      </div>
+
+      <div style="background: #0d1117; border-radius: 8px; padding: 14px; font-family: monospace; font-size: 11px; line-height: 1.8; color: #c9d1d9;">
+        <div><span style="color: #ff7b72;">// Triage provider secimi (tier: cheap)</span></div>
+        <div><span style="color: #ffa657;">provider</span>: Groq <span style="color: #6e7681;">// en hizli</span> || Haiku <span style="color: #6e7681;">// en ucuz</span> || DeepSeek</div>
+        <div>&nbsp;</div>
+        <div><span style="color: #ff7b72;">// Structured output prompt</span></div>
+        <div><span style="color: #a5d6ff;">"Analyze this sub-task and return capability requirements:</span></div>
+        <div><span style="color: #a5d6ff;"> Task: {node.task}</span></div>
+        <div><span style="color: #a5d6ff;"> Context: {parentGoal}</span></div>
+        <div><span style="color: #a5d6ff;"> Return JSON: { capabilities: string[], priority: 'speed'|'cost'|'quality' }"</span></div>
+        <div>&nbsp;</div>
+        <div><span style="color: #ff7b72;">// Output</span></div>
+        <div><span style="color: #7ee787;">{ capabilities: ["reasoning", "code-gen"], priority: "quality" }</span></div>
+      </div>
+
+      <div style="margin-top: 10px; display: flex; gap: 12px; font-size: 12px;">
+        <div style="color: #8b949e;">Batch destegi: birden fazla belirsiz node tek call'da</div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- Output Type -->
+<div class="mockup" style="margin-top: 20px;">
+  <div class="mockup-header">CapabilityProfile - Output Type</div>
+  <div class="mockup-body" style="padding: 20px;">
+    <div style="background: #0d1117; border-radius: 8px; padding: 16px; font-family: monospace; font-size: 12px; line-height: 1.8; color: #c9d1d9;">
+      <div><span style="color: #ff7b72;">interface</span> <span style="color: #ffa657;">CapabilityProfile</span> {</div>
+      <div>&nbsp;&nbsp;<span style="color: #79c0ff;">primary</span>: <span style="color: #7ee787;">CapabilityTag[]</span>;  <span style="color: #6e7681;">// ["reasoning", "code-gen"]</span></div>
+      <div>&nbsp;&nbsp;<span style="color: #79c0ff;">preference</span>: <span style="color: #7ee787;">"speed" | "cost" | "quality"</span>;</div>
+      <div>&nbsp;&nbsp;<span style="color: #79c0ff;">confidence</span>: <span style="color: #7ee787;">number</span>;  <span style="color: #6e7681;">// 0-1, heuristic high=0.9, LLM=0.7</span></div>
+      <div>&nbsp;&nbsp;<span style="color: #79c0ff;">source</span>: <span style="color: #7ee787;">"heuristic" | "llm-triage" | "hybrid"</span>;</div>
+      <div>}</div>
+      <div>&nbsp;</div>
+      <div><span style="color: #ff7b72;">type</span> <span style="color: #ffa657;">CapabilityTag</span> =</div>
+      <div>&nbsp;&nbsp;| <span style="color: #a5d6ff;">"reasoning"</span> | <span style="color: #a5d6ff;">"vision"</span> | <span style="color: #a5d6ff;">"code-gen"</span></div>
+      <div>&nbsp;&nbsp;| <span style="color: #a5d6ff;">"tool-use"</span> | <span style="color: #a5d6ff;">"long-context"</span></div>
+      <div>&nbsp;&nbsp;| <span style="color: #a5d6ff;">"speed"</span> | <span style="color: #a5d6ff;">"cost"</span> | <span style="color: #a5d6ff;">"quality"</span> | <span style="color: #a5d6ff;">"creative"</span>;</div>
+      <div>&nbsp;</div>
+      <div><span style="color: #ff7b72;">interface</span> <span style="color: #ffa657;">TaggedGoalNode</span> <span style="color: #ff7b72;">extends</span> <span style="color: #ffa657;">GoalNode</span> {</div>
+      <div>&nbsp;&nbsp;<span style="color: #79c0ff;">capabilityProfile</span>: <span style="color: #7ee787;">CapabilityProfile</span>;</div>
+      <div>&nbsp;&nbsp;<span style="color: #79c0ff;">assignedProvider</span>?: <span style="color: #7ee787;">string</span>;  <span style="color: #6e7681;">// ProviderAssigner tarafindan eklenir</span></div>
+      <div>&nbsp;&nbsp;<span style="color: #79c0ff;">assignedModel</span>?: <span style="color: #7ee787;">string</span>;</div>
+      <div>}</div>
+    </div>
+  </div>
+</div>
+
+<!-- Example -->
+<div style="margin-top: 20px; padding: 16px; background: rgba(99,102,241,0.06); border: 1px solid rgba(99,102,241,0.2); border-radius: 10px;">
+  <div style="color: #818cf8; font-weight: 600; font-size: 13px; margin-bottom: 10px;">Ornek: "Kullanici upload'larini isleyip thumbnail olusturan bir API kur"</div>
+  <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; font-size: 12px;">
+
+    <div style="background: #0d1117; border-radius: 8px; padding: 10px;">
+      <div style="color: #7ee787; font-weight: 600; margin-bottom: 4px;">Node 1: Upload API</div>
+      <div style="color: #8b949e;">Heuristic: "upload" -> tool-use</div>
+      <div style="color: #8b949e;">"API" -> code-gen</div>
+      <div style="display: flex; gap: 3px; margin-top: 4px;">
+        <span style="background: #1f2937; border-radius: 3px; padding: 1px 5px; font-size: 10px; color: #34d399;">code-gen</span>
+        <span style="background: #1f2937; border-radius: 3px; padding: 1px 5px; font-size: 10px; color: #a78bfa;">tool-use</span>
+      </div>
+      <div style="color: #484f58; font-size: 10px; margin-top: 4px;">confidence: 0.9 (heuristic)</div>
+    </div>
+
+    <div style="background: #0d1117; border-radius: 8px; padding: 10px;">
+      <div style="color: #7ee787; font-weight: 600; margin-bottom: 4px;">Node 2: Image Processing</div>
+      <div style="color: #8b949e;">Heuristic: "thumbnail" -> vision</div>
+      <div style="color: #8b949e;">"isleyip" -> code-gen</div>
+      <div style="display: flex; gap: 3px; margin-top: 4px;">
+        <span style="background: #1f2937; border-radius: 3px; padding: 1px 5px; font-size: 10px; color: #60a5fa;">vision</span>
+        <span style="background: #1f2937; border-radius: 3px; padding: 1px 5px; font-size: 10px; color: #34d399;">code-gen</span>
+      </div>
+      <div style="color: #484f58; font-size: 10px; margin-top: 4px;">confidence: 0.9 (heuristic)</div>
+    </div>
+
+    <div style="background: #0d1117; border-radius: 8px; padding: 10px;">
+      <div style="color: #fbbf24; font-weight: 600; margin-bottom: 4px;">Node 3: Storage Config</div>
+      <div style="color: #8b949e;">Heuristic: belirsiz</div>
+      <div style="color: #8b949e;">LLM triage -> cost, tool-use</div>
+      <div style="display: flex; gap: 3px; margin-top: 4px;">
+        <span style="background: #1f2937; border-radius: 3px; padding: 1px 5px; font-size: 10px; color: #4ade80;">cost</span>
+        <span style="background: #1f2937; border-radius: 3px; padding: 1px 5px; font-size: 10px; color: #a78bfa;">tool-use</span>
+      </div>
+      <div style="color: #484f58; font-size: 10px; margin-top: 4px;">confidence: 0.7 (llm-triage)</div>
+    </div>
+
+  </div>
+</div>

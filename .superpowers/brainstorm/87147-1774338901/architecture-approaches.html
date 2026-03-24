@@ -1,0 +1,160 @@
+<h2>Supervisor Brain - Mimari Yaklaşımlar</h2>
+<p class="subtitle">Netleşen kararlar doğrultusunda 3 yaklaşım karşılaştırması</p>
+
+<div style="background: rgba(99,102,241,0.08); border: 1px solid rgba(99,102,241,0.25); border-radius: 12px; padding: 16px 20px; margin-bottom: 24px;">
+  <div style="font-weight: 600; margin-bottom: 8px; color: #818cf8;">Onaylanan Kararlar</div>
+  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px; font-size: 13px;">
+    <div>1. Full Autonomous Team Lead</div>
+    <div>2. Tek provider: aynı pipeline + role-based verify</div>
+    <div>3. Adaptive activation (complexity threshold)</div>
+    <div>4. Hybrid capability analysis (heuristic + cheap LLM)</div>
+    <div>5. GoalDecomposer dokunulmaz, arada katmanlar</div>
+    <div>6. Chat: minimal progress / Monitor: full detail</div>
+  </div>
+</div>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)" style="border-left: 4px solid #10b981;">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>Full Pipeline (Önerilen)</h3>
+      <p style="margin-bottom: 12px;">5 yeni modül, tam pipeline, tüm kararları implemente eder</p>
+
+      <div style="background: #0d1117; border-radius: 8px; padding: 16px; font-family: monospace; font-size: 12px; line-height: 1.8; color: #c9d1d9; margin-bottom: 12px;">
+        <div style="color: #7ee787;">User Request</div>
+        <div style="color: #6e7681;">    |</div>
+        <div style="color: #ff7b72;">TaskClassifier</div>
+        <div style="color: #6e7681;">    |-- simple/moderate --> Mevcut PAOR (sıfır overhead)</div>
+        <div style="color: #6e7681;">    |-- complex --></div>
+        <div style="color: #6e7681;">        |</div>
+        <div style="color: #ffa657;">SupervisorBrain (yeni orkestratör)</div>
+        <div style="color: #6e7681;">        |</div>
+        <div style="color: #79c0ff;">GoalDecomposer (mevcut, dokunulmaz)</div>
+        <div style="color: #6e7681;">        | DAG nodes</div>
+        <div style="color: #d2a8ff;">CapabilityMatcher (yeni)</div>
+        <div style="color: #6e7681;">        | capability tags per node</div>
+        <div style="color: #d2a8ff;">ProviderAssigner (yeni)</div>
+        <div style="color: #6e7681;">        | provider:model per node</div>
+        <div style="color: #d2a8ff;">SupervisorDispatcher (yeni)</div>
+        <div style="color: #6e7681;">        | wave-based parallel PAOR loops</div>
+        <div style="color: #d2a8ff;">ResultAggregator (yeni)</div>
+        <div style="color: #6e7681;">        | cross-validate + merge</div>
+        <div style="color: #7ee787;">User Response</div>
+      </div>
+
+      <div class="pros-cons">
+        <div class="pros">
+          <h4>Artılar</h4>
+          <ul>
+            <li>Tüm kararları tam implemente eder</li>
+            <li>Her modül bağımsız test edilebilir</li>
+            <li>Clean separation of concerns</li>
+            <li>Tek ve çoklu provider aynı pipeline</li>
+            <li>Monitor panel için zengin telemetry</li>
+          </ul>
+        </div>
+        <div class="cons">
+          <h4>Eksiler</h4>
+          <ul>
+            <li>5 yeni modül = daha fazla kod</li>
+            <li>Pipeline overhead (ama sadece complex task'larda)</li>
+            <li>Integration testing karmaşıklığı</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Lean Pipeline</h3>
+      <p style="margin-bottom: 12px;">3 yeni modül, CapabilityMatcher + ProviderAssigner birleşik</p>
+
+      <div style="background: #0d1117; border-radius: 8px; padding: 16px; font-family: monospace; font-size: 12px; line-height: 1.8; color: #c9d1d9; margin-bottom: 12px;">
+        <div style="color: #7ee787;">User Request</div>
+        <div style="color: #6e7681;">    |</div>
+        <div style="color: #ff7b72;">TaskClassifier (mevcut)</div>
+        <div style="color: #6e7681;">    |-- simple --> Mevcut PAOR</div>
+        <div style="color: #6e7681;">    |-- complex --></div>
+        <div style="color: #ffa657;">SupervisorBrain</div>
+        <div style="color: #6e7681;">        |</div>
+        <div style="color: #79c0ff;">GoalDecomposer (mevcut)</div>
+        <div style="color: #6e7681;">        |</div>
+        <div style="color: #d2a8ff;">TaskRouter (yeni, match+assign birleşik)</div>
+        <div style="color: #6e7681;">        |</div>
+        <div style="color: #d2a8ff;">SupervisorExecutor (yeni, dispatch+aggregate birleşik)</div>
+        <div style="color: #6e7681;">        |</div>
+        <div style="color: #7ee787;">User Response</div>
+      </div>
+
+      <div class="pros-cons">
+        <div class="pros">
+          <h4>Artılar</h4>
+          <ul>
+            <li>Daha az modül, daha hızlı implemente</li>
+            <li>Daha az wiring karmaşıklığı</li>
+            <li>Yeterince modüler</li>
+          </ul>
+        </div>
+        <div class="cons">
+          <h4>Eksiler</h4>
+          <ul>
+            <li>Match + Assign birleşik = test zorlaşır</li>
+            <li>Dispatch + Aggregate birleşik = büyüyebilir</li>
+            <li>İleride ayırmak gerekebilir</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>Incremental (Fazlı Geliştirme)</h3>
+      <p style="margin-bottom: 12px;">Önce core, sonra genişlet - 2 fazda delivery</p>
+
+      <div style="background: #0d1117; border-radius: 8px; padding: 16px; font-family: monospace; font-size: 12px; line-height: 1.8; color: #c9d1d9; margin-bottom: 12px;">
+        <div style="color: #ff7b72;">Faz 1: Temel Supervisor</div>
+        <div style="color: #6e7681;">  GoalDecomposer --> CapabilityMatcher</div>
+        <div style="color: #6e7681;">  --> ProviderAssigner --> mevcut GoalExecutor</div>
+        <div style="color: #6e7681;">  (mevcut execution, yeni routing)</div>
+        <div>&nbsp;</div>
+        <div style="color: #ff7b72;">Faz 2: Tam Pipeline</div>
+        <div style="color: #6e7681;">  + SupervisorDispatcher (paralel PAOR)</div>
+        <div style="color: #6e7681;">  + ResultAggregator (cross-validate)</div>
+        <div style="color: #6e7681;">  + Monitor panel entegrasyonu</div>
+      </div>
+
+      <div class="pros-cons">
+        <div class="pros">
+          <h4>Artılar</h4>
+          <ul>
+            <li>Erken değer: Faz 1 ile hemen provider routing kazanılır</li>
+            <li>Risk azaltma: adım adım</li>
+            <li>Faz 1 sonrası feedback alıp Faz 2'yi şekillendir</li>
+          </ul>
+        </div>
+        <div class="cons">
+          <h4>Eksiler</h4>
+          <ul>
+            <li>Faz 1 tam vizyonu deliver etmez</li>
+            <li>Geçici mimari kararlar gerekebilir</li>
+            <li>İki ayrı integration cycle</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div style="margin-top: 20px; padding: 16px; background: rgba(16,185,129,0.08); border: 1px solid rgba(16,185,129,0.25); border-radius: 12px;">
+  <div style="font-weight: 600; color: #34d399; margin-bottom: 8px;">Önerim: A (Full Pipeline)</div>
+  <div style="font-size: 13px; color: #9ca3af;">
+    B yüzeysel tasarruf sağlar ama birleşik modüller büyüyünce yine ayırmak gerekir (orchestrator'da yaşadık).
+    C mantıklı görünür ama Faz 1'in geçici mimari kararları Faz 2'yi zorlaştırabilir.
+    A baştan doğru modüler yapıyı kurar — her modül 150-300 satır, focused, test edilebilir.
+    Zaten mevcut GoalDecomposer + GoalExecutor + GoalValidator + GoalStorage pattern'ını takip eder.
+  </div>
+</div>

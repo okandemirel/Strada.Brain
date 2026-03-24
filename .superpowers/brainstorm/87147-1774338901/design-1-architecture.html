@@ -1,0 +1,207 @@
+<h2>Tasarım Bölüm 1/6: Genel Mimari</h2>
+<p class="subtitle">Supervisor Brain - Full Pipeline Mimarisi</p>
+
+<!-- Overall Architecture Diagram -->
+<div class="mockup">
+  <div class="mockup-header">Supervisor Brain - Tam Akış Diyagramı</div>
+  <div class="mockup-body" style="padding: 24px;">
+
+    <!-- Entry Point -->
+    <div style="text-align: center; margin-bottom: 4px;">
+      <div style="display: inline-block; background: #1a1a2e; border: 2px solid #7ee787; border-radius: 12px; padding: 10px 28px; color: #7ee787; font-weight: 700; font-size: 15px;">
+        User Request
+      </div>
+    </div>
+    <div style="text-align: center; color: #6e7681; font-size: 20px;">|</div>
+
+    <!-- Gate: TaskClassifier -->
+    <div style="text-align: center; margin-bottom: 4px;">
+      <div style="display: inline-block; background: #1a1a2e; border: 2px solid #ff7b72; border-radius: 50px; padding: 10px 24px; color: #ff7b72; font-weight: 600;">
+        TaskClassifier (mevcut)
+      </div>
+    </div>
+
+    <!-- Branch -->
+    <div style="display: flex; justify-content: center; gap: 0; margin: 8px 0;">
+      <div style="flex: 1; text-align: right; padding-right: 20px;">
+        <div style="color: #6e7681; font-size: 12px;">simple / moderate</div>
+        <div style="color: #6e7681;">|</div>
+        <div style="display: inline-block; background: #1a1a2e; border: 1px solid #484f58; border-radius: 8px; padding: 8px 16px; color: #8b949e; font-size: 13px;">
+          Mevcut PAOR Loop<br>
+          <span style="font-size: 11px; color: #6e7681;">(sıfır overhead, bugünkü gibi)</span>
+        </div>
+      </div>
+      <div style="width: 2px; background: #30363d; margin: 0 12px;"></div>
+      <div style="flex: 1.5; padding-left: 20px;">
+        <div style="color: #ffa657; font-size: 12px; font-weight: 600;">complex</div>
+        <div style="color: #6e7681;">|</div>
+
+        <!-- Supervisor Brain Box -->
+        <div style="border: 2px solid #ffa657; border-radius: 16px; padding: 16px; background: rgba(255,167,87,0.04);">
+          <div style="color: #ffa657; font-weight: 700; font-size: 14px; margin-bottom: 12px; text-align: center;">
+            SupervisorBrain (yeni orkestratör)
+          </div>
+
+          <!-- Pipeline Steps -->
+          <div style="display: flex; flex-direction: column; gap: 6px;">
+
+            <!-- Step 1: GoalDecomposer -->
+            <div style="display: flex; align-items: center; gap: 10px;">
+              <div style="min-width: 24px; height: 24px; background: #238636; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; font-size: 11px; font-weight: 700;">1</div>
+              <div style="flex: 1; background: #0d1117; border: 1px solid #238636; border-radius: 8px; padding: 8px 12px;">
+                <div style="color: #7ee787; font-weight: 600; font-size: 13px;">GoalDecomposer <span style="color: #484f58; font-weight: 400;">(mevcut)</span></div>
+                <div style="color: #8b949e; font-size: 11px;">Task -> DAG (sub-goals + dependencies)</div>
+              </div>
+            </div>
+
+            <div style="text-align: center; color: #30363d; font-size: 10px;">DAG nodes |</div>
+
+            <!-- Step 2: CapabilityMatcher -->
+            <div style="display: flex; align-items: center; gap: 10px;">
+              <div style="min-width: 24px; height: 24px; background: #8957e5; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; font-size: 11px; font-weight: 700;">2</div>
+              <div style="flex: 1; background: #0d1117; border: 1px solid #8957e5; border-radius: 8px; padding: 8px 12px;">
+                <div style="color: #d2a8ff; font-weight: 600; font-size: 13px;">CapabilityMatcher <span style="color: #ff7b72; font-weight: 400;">(yeni)</span></div>
+                <div style="color: #8b949e; font-size: 11px;">Heuristic + cheap LLM triage -> capability tags per node</div>
+                <div style="display: flex; gap: 4px; margin-top: 4px; flex-wrap: wrap;">
+                  <span style="background: #1f2937; border-radius: 4px; padding: 2px 6px; font-size: 10px; color: #60a5fa;">vision</span>
+                  <span style="background: #1f2937; border-radius: 4px; padding: 2px 6px; font-size: 10px; color: #f472b6;">reasoning</span>
+                  <span style="background: #1f2937; border-radius: 4px; padding: 2px 6px; font-size: 10px; color: #34d399;">code-gen</span>
+                  <span style="background: #1f2937; border-radius: 4px; padding: 2px 6px; font-size: 10px; color: #fbbf24;">speed</span>
+                  <span style="background: #1f2937; border-radius: 4px; padding: 2px 6px; font-size: 10px; color: #a78bfa;">tool-heavy</span>
+                </div>
+              </div>
+            </div>
+
+            <div style="text-align: center; color: #30363d; font-size: 10px;">tagged nodes |</div>
+
+            <!-- Step 3: ProviderAssigner -->
+            <div style="display: flex; align-items: center; gap: 10px;">
+              <div style="min-width: 24px; height: 24px; background: #8957e5; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; font-size: 11px; font-weight: 700;">3</div>
+              <div style="flex: 1; background: #0d1117; border: 1px solid #8957e5; border-radius: 8px; padding: 8px 12px;">
+                <div style="color: #d2a8ff; font-weight: 600; font-size: 13px;">ProviderAssigner <span style="color: #ff7b72; font-weight: 400;">(yeni)</span></div>
+                <div style="color: #8b949e; font-size: 11px;">Capability tags + available providers -> best-fit assignment</div>
+                <div style="display: flex; gap: 4px; margin-top: 4px; flex-wrap: wrap;">
+                  <span style="background: #1f2937; border-radius: 4px; padding: 2px 6px; font-size: 10px; color: #60a5fa;">Node A -> Claude</span>
+                  <span style="background: #1f2937; border-radius: 4px; padding: 2px 6px; font-size: 10px; color: #f472b6;">Node B -> DeepSeek</span>
+                  <span style="background: #1f2937; border-radius: 4px; padding: 2px 6px; font-size: 10px; color: #34d399;">Node C -> Groq</span>
+                </div>
+              </div>
+            </div>
+
+            <div style="text-align: center; color: #30363d; font-size: 10px;">assigned nodes |</div>
+
+            <!-- Step 4: SupervisorDispatcher -->
+            <div style="display: flex; align-items: center; gap: 10px;">
+              <div style="min-width: 24px; height: 24px; background: #8957e5; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; font-size: 11px; font-weight: 700;">4</div>
+              <div style="flex: 1; background: #0d1117; border: 1px solid #8957e5; border-radius: 8px; padding: 8px 12px;">
+                <div style="color: #d2a8ff; font-weight: 600; font-size: 13px;">SupervisorDispatcher <span style="color: #ff7b72; font-weight: 400;">(yeni)</span></div>
+                <div style="color: #8b949e; font-size: 11px;">Wave-based parallel dispatch, her sub-task kendi PAOR loop'unda</div>
+                <div style="display: flex; gap: 8px; margin-top: 6px;">
+                  <div style="background: #1a1a2e; border: 1px solid #30363d; border-radius: 6px; padding: 4px 8px; font-size: 10px; text-align: center;">
+                    <div style="color: #60a5fa;">Wave 1</div>
+                    <div style="color: #6e7681;">A (Claude)</div>
+                  </div>
+                  <div style="color: #30363d; display: flex; align-items: center;">-></div>
+                  <div style="background: #1a1a2e; border: 1px solid #30363d; border-radius: 6px; padding: 4px 8px; font-size: 10px; text-align: center;">
+                    <div style="color: #f472b6;">Wave 2</div>
+                    <div style="color: #6e7681;">B,C (paralel)</div>
+                  </div>
+                  <div style="color: #30363d; display: flex; align-items: center;">-></div>
+                  <div style="background: #1a1a2e; border: 1px solid #30363d; border-radius: 6px; padding: 4px 8px; font-size: 10px; text-align: center;">
+                    <div style="color: #34d399;">Wave 3</div>
+                    <div style="color: #6e7681;">D (Groq)</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div style="text-align: center; color: #30363d; font-size: 10px;">results |</div>
+
+            <!-- Step 5: ResultAggregator -->
+            <div style="display: flex; align-items: center; gap: 10px;">
+              <div style="min-width: 24px; height: 24px; background: #8957e5; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; font-size: 11px; font-weight: 700;">5</div>
+              <div style="flex: 1; background: #0d1117; border: 1px solid #8957e5; border-radius: 8px; padding: 8px 12px;">
+                <div style="color: #d2a8ff; font-weight: 600; font-size: 13px;">ResultAggregator <span style="color: #ff7b72; font-weight: 400;">(yeni)</span></div>
+                <div style="color: #8b949e; font-size: 11px;">Cross-validate sonuçlar + conflict resolution + final synthesis</div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+
+        <div style="text-align: center; color: #6e7681; margin-top: 6px;">|</div>
+        <div style="text-align: center;">
+          <div style="display: inline-block; background: #1a1a2e; border: 2px solid #7ee787; border-radius: 12px; padding: 10px 28px; color: #7ee787; font-weight: 700; font-size: 15px;">
+            User Response
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- Component Summary Table -->
+<div style="margin-top: 24px;">
+  <h3>Bileşen Özeti</h3>
+  <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
+    <thead>
+      <tr style="border-bottom: 2px solid #30363d;">
+        <th style="text-align: left; padding: 8px; color: #8b949e;">Modül</th>
+        <th style="text-align: left; padding: 8px; color: #8b949e;">Durum</th>
+        <th style="text-align: left; padding: 8px; color: #8b949e;">Sorumluluk</th>
+        <th style="text-align: left; padding: 8px; color: #8b949e;">Tahmini Boyut</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr style="border-bottom: 1px solid #21262d;">
+        <td style="padding: 8px; color: #c9d1d9;">SupervisorBrain</td>
+        <td style="padding: 8px;"><span style="color: #ff7b72;">YENİ</span></td>
+        <td style="padding: 8px; color: #8b949e;">Pipeline orkestratörü, activation gate, telemetry</td>
+        <td style="padding: 8px; color: #8b949e;">~250 satır</td>
+      </tr>
+      <tr style="border-bottom: 1px solid #21262d;">
+        <td style="padding: 8px; color: #c9d1d9;">CapabilityMatcher</td>
+        <td style="padding: 8px;"><span style="color: #ff7b72;">YENİ</span></td>
+        <td style="padding: 8px; color: #8b949e;">Heuristic + cheap LLM ile capability tagging</td>
+        <td style="padding: 8px; color: #8b949e;">~200 satır</td>
+      </tr>
+      <tr style="border-bottom: 1px solid #21262d;">
+        <td style="padding: 8px; color: #c9d1d9;">ProviderAssigner</td>
+        <td style="padding: 8px;"><span style="color: #ff7b72;">YENİ</span></td>
+        <td style="padding: 8px; color: #8b949e;">Capability->provider scoring, tek/çoklu provider stratejisi</td>
+        <td style="padding: 8px; color: #8b949e;">~250 satır</td>
+      </tr>
+      <tr style="border-bottom: 1px solid #21262d;">
+        <td style="padding: 8px; color: #c9d1d9;">SupervisorDispatcher</td>
+        <td style="padding: 8px;"><span style="color: #ff7b72;">YENİ</span></td>
+        <td style="padding: 8px; color: #8b949e;">Wave-based multi-provider PAOR dispatch, progress tracking</td>
+        <td style="padding: 8px; color: #8b949e;">~300 satır</td>
+      </tr>
+      <tr style="border-bottom: 1px solid #21262d;">
+        <td style="padding: 8px; color: #c9d1d9;">ResultAggregator</td>
+        <td style="padding: 8px;"><span style="color: #ff7b72;">YENİ</span></td>
+        <td style="padding: 8px; color: #8b949e;">Cross-validate, conflict resolve, final synthesis</td>
+        <td style="padding: 8px; color: #8b949e;">~200 satır</td>
+      </tr>
+      <tr style="border-bottom: 1px solid #21262d;">
+        <td style="padding: 8px; color: #c9d1d9;">GoalDecomposer</td>
+        <td style="padding: 8px;"><span style="color: #238636;">MEVCUT</span></td>
+        <td style="padding: 8px; color: #8b949e;">DAG decomposition (dokunulmaz)</td>
+        <td style="padding: 8px; color: #8b949e;">361 satır</td>
+      </tr>
+      <tr style="border-bottom: 1px solid #21262d;">
+        <td style="padding: 8px; color: #c9d1d9;">TaskClassifier</td>
+        <td style="padding: 8px;"><span style="color: #238636;">MEVCUT</span></td>
+        <td style="padding: 8px; color: #8b949e;">Complexity gate (dokunulmaz)</td>
+        <td style="padding: 8px; color: #8b949e;">mevcut</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- File Location -->
+<div style="margin-top: 20px; padding: 12px 16px; background: rgba(99,102,241,0.08); border: 1px solid rgba(99,102,241,0.2); border-radius: 8px; font-size: 13px;">
+  <span style="color: #818cf8; font-weight: 600;">Dosya konumu:</span>
+  <span style="color: #8b949e;">src/supervisor/ dizini altında — orchestrator ve goals'dan bağımsız</span>
+</div>
