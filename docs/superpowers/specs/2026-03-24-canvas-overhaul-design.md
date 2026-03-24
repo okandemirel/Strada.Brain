@@ -25,6 +25,7 @@ The global reset `*, *::before, *::after { margin: 0; padding: 0; }` overrides t
 
 ```css
 .tl-container, .tl-container *, .tl-container *::before, .tl-container *::after {
+  box-sizing: revert;
   margin: revert;
   padding: revert;
 }
@@ -38,7 +39,19 @@ The global reset `*, *::before, *::after { margin: 0; padding: 0; }` overrides t
 
 **File:** `web-portal/src/components/canvas/canvas-overrides.tsx`
 
-Extend tldraw's native context menu (not replace) via the `overrides` prop:
+Extend tldraw's native context menu via the `components` prop (not `overrides` — tldraw v3's `TLUiOverrides` has no `contextMenu` method). Custom `ContextMenu` component wraps `DefaultContextMenu` + `DefaultContextMenuContent` to preserve native items:
+
+```tsx
+function CustomContextMenu(props: TLUiContextMenuProps) {
+  return (
+    <DefaultContextMenu {...props}>
+      {/* Strada custom items */}
+      <DefaultContextMenuContent />
+    </DefaultContextMenu>
+  )
+}
+// Usage: <Tldraw components={{ ContextMenu: CustomContextMenu }} />
+```
 
 ```
 Right-click on canvas
@@ -70,9 +83,21 @@ Right-click on canvas
 
 **File:** `web-portal/src/components/canvas/canvas-overrides.tsx`
 
-Extend tldraw's toolbar via the `components` prop:
+Override tldraw's toolbar via the `components.Toolbar` slot. The override must explicitly render `DefaultToolbar` + `DefaultToolbarContent` to preserve native tools — omitting this causes all default tools to disappear:
 
-- All tldraw default tools preserved (Select, Hand, Draw, Eraser, Arrow, Text, Note, Frame, Laser)
+```tsx
+function CustomToolbar() {
+  return (
+    <DefaultToolbar>
+      <DefaultToolbarContent />
+      {/* separator + Strada shape buttons */}
+    </DefaultToolbar>
+  )
+}
+// Usage: <Tldraw components={{ Toolbar: CustomToolbar, ContextMenu: CustomContextMenu }} />
+```
+
+- All tldraw default tools preserved via `DefaultToolbarContent`
 - Separator + "Strada Shapes" group appended below
 - Frequently-used custom shapes get toolbar buttons:
   - CodeBlock (`</>`)
@@ -94,7 +119,7 @@ Existing `pendingShapes` store → `useEffect` pipeline is preserved. Additions:
 - **Auto-layout:** Multiple agent shapes arranged in horizontal grid (no overlap)
 - **Zoom to fit suggestion:** After agent push, optional auto-zoom to show all shapes
 - **AI badge:** Small "AI" indicator on agent-created shapes (subtle, hover to reveal)
-- **Source tracking:** `CanvasShape` type gets `source: 'agent' | 'user'` field in store
+- **Source tracking:** `CanvasShape` type gets optional `source?: 'agent' | 'user'` field (defaults to `'user'` when absent — backward compatible with existing serialized data and backend callers). The AI badge renders only when `source === 'agent'`. Badge is rendered inside the shape's `component()` method as an absolutely-positioned overlay within the `HTMLContainer`, avoiding tldraw selection/transform clipping issues.
 
 ## 5. Strada Theme Harmony & UX Polish
 
@@ -121,7 +146,7 @@ Existing `pendingShapes` store → `useEffect` pipeline is preserved. Additions:
 ### Modified
 | File | Changes |
 |------|---------|
-| `web-portal/src/styles/globals.css` | tldraw CSS isolation (revert margin/padding) |
+| `web-portal/src/styles/globals.css` | tldraw CSS isolation (revert box-sizing/margin/padding) |
 | `web-portal/src/components/canvas/CanvasPanel.tsx` | Toolbar update (saved indicator, zoom-to-fit), tldraw overrides integration |
 | `web-portal/src/components/canvas/custom-shapes.tsx` | AI source badge, glow animation classes |
 | `web-portal/src/stores/canvas-store.ts` | `source` field on `CanvasShape` |
@@ -129,7 +154,7 @@ Existing `pendingShapes` store → `useEffect` pipeline is preserved. Additions:
 ### New
 | File | Purpose |
 |------|---------|
-| `web-portal/src/components/canvas/canvas-overrides.tsx` | tldraw `components` + `overrides` config (context menu, toolbar section) |
+| `web-portal/src/components/canvas/canvas-overrides.tsx` | tldraw `components` config: `CustomContextMenu` (wraps `DefaultContextMenu` + `DefaultContextMenuContent`) and `CustomToolbar` (wraps `DefaultToolbar` + `DefaultToolbarContent` + Strada shape buttons) |
 | `web-portal/src/components/canvas/canvas-styles.css` | Canvas-specific animations (glow, scale-in, context menu transitions) |
 
 ## Out of Scope
