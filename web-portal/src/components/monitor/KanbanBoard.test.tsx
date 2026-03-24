@@ -43,6 +43,10 @@ vi.mock('@dnd-kit/utilities', () => ({
   },
 }))
 
+vi.mock('../ui/number-ticker', () => ({
+  NumberTicker: ({ value }: { value: number }) => <span>{value}</span>,
+}))
+
 import KanbanBoard from './KanbanBoard'
 
 function makeTask(overrides: Partial<MonitorTask> & { id: string }): MonitorTask {

@@ -9,6 +9,7 @@ import {
 import '@xyflow/react/dist/style.css'
 import { useMonitorStore } from '../../stores/monitor-store'
 import { TaskNode, ReviewNode, GateNode } from './dag-nodes'
+import { TypingAnimation } from '../ui/typing-animation'
 
 const nodeTypes = { task: TaskNode, review: ReviewNode, gate: GateNode }
 
@@ -104,11 +105,14 @@ export default function DAGView() {
 
     const nodes = layoutNodes(dag.nodes, dag.edges)
 
+    const executingIds = new Set(
+      dag.nodes.filter((n) => (n.status as string) === 'executing').map((n) => n.id),
+    )
     const edges: Edge[] = dag.edges.map((e, i) => ({
       id: `e-${i}`,
       source: e.source,
       target: e.target,
-      animated: true,
+      animated: executingIds.has(e.source) || executingIds.has(e.target),
       style: { stroke: 'var(--color-border)' },
     }))
 
@@ -117,9 +121,9 @@ export default function DAGView() {
 
   if (!dag) {
     return (
-      <div className="flex flex-col items-center justify-center h-full gap-3 text-text-tertiary">
+      <div className="flex flex-col items-center justify-center h-full gap-4 text-text-tertiary">
         <svg
-          className="w-10 h-10 animate-pulse text-text-tertiary"
+          className="w-12 h-12 text-accent/30"
           fill="none"
           viewBox="0 0 24 24"
           stroke="currentColor"
@@ -131,7 +135,20 @@ export default function DAGView() {
           <line x1="12" y1="7" x2="5" y2="17" strokeLinecap="round" />
           <line x1="12" y1="7" x2="19" y2="17" strokeLinecap="round" />
         </svg>
-        <span className="text-sm">No active goal. Start a task to see the DAG.</span>
+        <TypingAnimation
+          className="text-sm text-text-tertiary"
+          words={[
+            'No active goal. Start a task to see the DAG.',
+            'Waiting for goal decomposition...',
+            'Send a complex task to trigger planning.',
+          ]}
+          duration={40}
+          deleteSpeed={20}
+          pauseDelay={2500}
+          loop
+          showCursor
+          cursorStyle="line"
+        />
       </div>
     )
   }

@@ -1,5 +1,6 @@
 import { Handle, Position, type Node, type NodeProps } from '@xyflow/react'
 import { cn } from '@/lib/utils'
+import { BorderBeam } from '../ui/border-beam'
 
 /* ------------------------------------------------------------------ */
 /*  Shared helpers                                                     */
@@ -45,10 +46,13 @@ export function TaskNode({ data }: NodeProps<TaskNodeType>) {
   return (
     <div
       className={cn(
-        'bg-white/3 backdrop-blur border border-white/5 rounded-xl px-3 py-2 min-w-[160px] shadow-sm border-l-[3px]',
+        'relative overflow-hidden bg-white/3 backdrop-blur border border-white/5 rounded-xl px-3 py-2 min-w-[160px] shadow-sm border-l-[3px]',
         STATUS_BORDER_COLORS[data.status] || 'border-l-text-tertiary',
       )}
     >
+      {data.status === 'executing' && (
+        <BorderBeam size={40} duration={3} colorFrom="#00e5ff" colorTo="#7c3aed" borderWidth={2} />
+      )}
       <Handle type="target" position={Position.Top} className="!bg-border" />
       <div className="flex items-center gap-2">
         <StatusDot status={data.status} />

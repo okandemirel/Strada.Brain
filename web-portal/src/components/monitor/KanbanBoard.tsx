@@ -1,8 +1,10 @@
+import { useMemo } from 'react'
 import { DndContext, closestCenter } from '@dnd-kit/core'
 import { SortableContext, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { useMonitorStore, type MonitorTask } from '../../stores/monitor-store'
 import { Badge } from '../ui/badge'
+import { NumberTicker } from '../ui/number-ticker'
 import { cn } from '@/lib/utils'
 
 const COLUMNS = [
@@ -67,7 +69,7 @@ function KanbanColumn({ id, label, tasks }: KanbanColumnProps) {
           {label}
         </span>
         <Badge variant="secondary" className="px-1.5 py-0 text-[10px] h-4 min-w-0">
-          {tasks.length}
+          <NumberTicker value={tasks.length} className="text-[10px] text-inherit" />
         </Badge>
       </div>
       <DndContext
@@ -93,12 +95,16 @@ function KanbanColumn({ id, label, tasks }: KanbanColumnProps) {
 
 export default function KanbanBoard() {
   const tasks = useMonitorStore((s) => s.tasks)
-  const taskList = Object.values(tasks)
+
+  const columns = useMemo(() => {
+    const taskList = Object.values(tasks)
+    return COLUMNS.map((col) => ({ ...col, tasks: taskList.filter(col.filter) }))
+  }, [tasks])
 
   return (
     <div className="flex gap-2 h-full px-3 py-2 overflow-x-auto">
-      {COLUMNS.map((col) => (
-        <KanbanColumn key={col.id} id={col.id} label={col.label} tasks={taskList.filter(col.filter)} />
+      {columns.map((col) => (
+        <KanbanColumn key={col.id} id={col.id} label={col.label} tasks={col.tasks} />
       ))}
     </div>
   )

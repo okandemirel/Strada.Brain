@@ -19,7 +19,7 @@ export interface MonitorDagInitMessage {
 
 export interface MonitorTaskUpdateMessage {
   type: 'monitor:task_update'
-  taskId: string
+  nodeId: string
   updates: Partial<MonitorTask>
 }
 
@@ -78,7 +78,7 @@ export function dispatchWorkspaceMessage(data: { type: string; [key: string]: un
     }
 
     case 'monitor:task_update': {
-      useMonitorStore.getState().updateTask(payload.taskId as string, (payload.updates ?? payload) as Partial<MonitorTask>)
+      useMonitorStore.getState().updateTask(payload.nodeId as string, (payload.updates ?? payload) as Partial<MonitorTask>)
       break
     }
 
@@ -161,17 +161,28 @@ export function dispatchWorkspaceMessage(data: { type: string; [key: string]: un
     case 'monitor:dag_restructure': {
       const monitor = useMonitorStore.getState()
       if (payload.nodes && payload.edges) {
+        if (payload.rootId) monitor.setActiveRootId(payload.rootId as string)
         monitor.setDAG({ nodes: payload.nodes, edges: payload.edges } as unknown as DagState)
+        const existingTasks = monitor.tasks
         const nodes = payload.nodes as Bag[]
         for (const node of nodes) {
-          monitor.addTask({
-            id: node.id as string,
-            nodeId: node.id as string,
-            title: (node.title ?? node.task ?? node.id) as string,
-            status: node.status as string,
-            reviewStatus: node.reviewStatus as string,
-            ...(node.dependencies ? { dependencies: node.dependencies as string[] } : {}),
-          })
+          const id = node.id as string
+          if (existingTasks[id]) {
+            // Merge: preserve in-flight status from task_update events
+            monitor.updateTask(id, {
+              title: (node.title ?? node.task ?? node.id) as string,
+              ...(node.dependencies ? { dependencies: node.dependencies as string[] } : {}),
+            })
+          } else {
+            monitor.addTask({
+              id,
+              nodeId: id,
+              title: (node.title ?? node.task ?? node.id) as string,
+              status: node.status as string,
+              reviewStatus: node.reviewStatus as string,
+              ...(node.dependencies ? { dependencies: node.dependencies as string[] } : {}),
+            })
+          }
         }
       }
       break

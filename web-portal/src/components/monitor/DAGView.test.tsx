@@ -39,6 +39,13 @@ vi.mock('@xyflow/react', () => ({
   Controls: () => <div data-testid="controls" />,
 }))
 
+// Mock TypingAnimation (character-by-character animation not testable in jsdom)
+vi.mock('../ui/typing-animation', () => ({
+  TypingAnimation: ({ words, children }: { words?: string[]; children?: string }) => (
+    <span>{words?.[0] ?? children}</span>
+  ),
+}))
+
 // Mock dag-nodes (they also use @xyflow/react internals)
 vi.mock('./dag-nodes', () => ({
   TaskNode: ({ data }: { data?: { label?: string } }) => <div>{data?.label}</div>,

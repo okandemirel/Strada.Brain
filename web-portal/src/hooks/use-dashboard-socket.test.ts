@@ -44,7 +44,7 @@ describe('dispatchWorkspaceMessage', () => {
 
     dispatchWorkspaceMessage({
       type: 'monitor:task_update',
-      taskId: 'n1',
+      nodeId: 'n1',
       updates: { status: 'executing', reviewStatus: 'spec_review' },
     })
 

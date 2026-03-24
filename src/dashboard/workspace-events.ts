@@ -1,3 +1,5 @@
+import type { GoalTree } from '../goals/types.js'
+
 export interface DagNodeShape {
   id: string
   task: string
@@ -5,6 +7,38 @@ export interface DagNodeShape {
   reviewStatus: string
   depth: number
   dependsOn: string[]
+}
+
+export interface DagPayload {
+  rootId: string
+  nodes: DagNodeShape[]
+  edges: Array<{ source: string; target: string }>
+}
+
+const MAX_TASK_LABEL_LENGTH = 200
+
+/** Convert a GoalTree into the DAG payload used by monitor events. */
+export function goalTreeToDagPayload(goalTree: GoalTree): DagPayload {
+  const nodes: DagNodeShape[] = []
+  const edges: Array<{ source: string; target: string }> = []
+  for (const [id, node] of goalTree.nodes) {
+    if (String(id) === String(goalTree.rootId)) continue
+    const task = node.task.length > MAX_TASK_LABEL_LENGTH
+      ? node.task.slice(0, MAX_TASK_LABEL_LENGTH) + '…'
+      : node.task
+    nodes.push({
+      id: String(id),
+      task,
+      status: String(node.status),
+      reviewStatus: String(node.reviewStatus ?? 'none'),
+      depth: node.depth,
+      dependsOn: node.dependsOn.map(String),
+    })
+    for (const dep of node.dependsOn) {
+      edges.push({ source: String(dep), target: String(id) })
+    }
+  }
+  return { rootId: String(goalTree.rootId), nodes, edges }
 }
 
 export interface WorkspaceEventMap {

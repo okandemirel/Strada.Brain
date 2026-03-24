@@ -1,4 +1,5 @@
 import { useMonitorStore } from '../../stores/monitor-store'
+import { BlurFade } from '../ui/blur-fade'
 
 export default function TaskDetailPanel() {
   const selectedTaskId = useMonitorStore((s) => s.selectedTaskId)
@@ -13,6 +14,7 @@ export default function TaskDetailPanel() {
 
   return (
     <div className="p-3 space-y-3 overflow-y-auto h-full">
+      <BlurFade key={task.id} duration={0.3} offset={4}>
       <div className="bg-white/3 backdrop-blur border border-white/5 rounded-xl p-3 space-y-2">
         <h3 className="text-sm font-semibold text-text">{task.title}</h3>
         <div className="space-y-2 text-xs">
@@ -50,6 +52,7 @@ export default function TaskDetailPanel() {
           )}
         </div>
       </div>
+      </BlurFade>
     </div>
   )
 }

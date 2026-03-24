@@ -44,6 +44,7 @@ import { getLogger } from "../utils/logger.js";
 import { WorkspaceLeaseManager } from "../agents/multi/workspace-lease-manager.js";
 import type { WorkerRunResult } from "../agents/supervisor/supervisor-types.js";
 import type { WorkspaceBus } from "../dashboard/workspace-bus.js";
+import { goalTreeToDagPayload } from "../dashboard/workspace-events.js";
 
 const LLM_TIMEOUT_MS = 10_000;
 
@@ -806,27 +807,7 @@ Is this failure critical? A critical failure means dependent sub-goals cannot pr
 
     // Workspace monitor: emit DAG initialisation for dashboard UI
     if (this.workspaceBus) {
-      const dagNodes: Array<{ id: string; task: string; status: string; reviewStatus: string; depth: number; dependsOn: string[] }> = [];
-      const dagEdges: Array<{ source: string; target: string }> = [];
-      for (const [id, node] of goalTree.nodes) {
-        if (String(id) === String(goalTree.rootId)) continue;
-        dagNodes.push({
-          id: String(id),
-          task: node.task,
-          status: String(node.status),
-          reviewStatus: String(node.reviewStatus ?? "none"),
-          depth: node.depth,
-          dependsOn: node.dependsOn.map(String),
-        });
-        for (const dep of node.dependsOn) {
-          dagEdges.push({ source: String(dep), target: String(id) });
-        }
-      }
-      this.workspaceBus.emit("monitor:dag_init", {
-        rootId: String(goalTree.rootId),
-        nodes: dagNodes,
-        edges: dagEdges,
-      });
+      this.workspaceBus.emit("monitor:dag_init", goalTreeToDagPayload(goalTree));
     }
 
     // Execute the tree with all callbacks

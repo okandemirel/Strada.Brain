@@ -97,6 +97,7 @@ import { renderGoalTree, summarizeTree } from "../goals/goal-renderer.js";
 import { formatResumePrompt, prepareTreeForResume } from "../goals/goal-resume.js";
 import type { GoalTree, GoalNodeId, GoalStatus } from "../goals/types.js";
 import type { WorkspaceBus } from "../dashboard/workspace-bus.js";
+import { goalTreeToDagPayload } from "../dashboard/workspace-events.js";
 import { parseGoalBlock, buildGoalTreeFromBlock } from "../goals/types.js";
 import type { TaskManager } from "../tasks/task-manager.js";
 import type { SoulLoader } from "./soul/index.js";
@@ -5130,6 +5131,15 @@ export class Orchestrator {
     }
   }
 
+  /** Emit a DAG lifecycle event so the web portal DAG/Kanban views populate */
+  private emitDagEvent(
+    eventName: "monitor:dag_init" | "monitor:dag_restructure",
+    goalTree: GoalTree,
+  ): void {
+    if (!this.workspaceBus) return;
+    this.workspaceBus.emit(eventName, goalTreeToDagPayload(goalTree));
+  }
+
   // ─── Goal decomposition helpers ───────────────────────────────────────────
 
   /**
@@ -5155,6 +5165,7 @@ export class Orchestrator {
       );
       this.activeGoalTrees.set(opts.conversationScope, goalTree);
       this.emitGoalEvent(goalTree.rootId, goalTree.rootId, "pending", 0);
+      this.emitDagEvent("monitor:dag_init", goalTree);
       const treeViz = renderGoalTree(goalTree);
       await this.sessionManager.sendVisibleAssistantMarkdown(
         opts.chatId,
@@ -5214,6 +5225,7 @@ export class Orchestrator {
         );
         if (updatedTree) {
           this.activeGoalTrees.set(opts.conversationScope, updatedTree);
+          this.emitDagEvent("monitor:dag_restructure", updatedTree);
           const treeViz = renderGoalTree(updatedTree);
           await this.sessionManager.sendVisibleAssistantMarkdown(
             opts.chatId,

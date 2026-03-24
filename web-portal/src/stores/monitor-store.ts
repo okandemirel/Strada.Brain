@@ -1,11 +1,28 @@
 import { create } from 'zustand'
 
+export type MonitorTaskStatus =
+  | 'pending'
+  | 'executing'
+  | 'completed'
+  | 'failed'
+  | 'skipped'
+  | 'verifying'
+
+export type MonitorReviewStatus =
+  | 'none'
+  | 'spec_review'
+  | 'quality_review'
+  | 'review_passed'
+  | 'review_stuck'
+  | 'passed'
+  | 'failed'
+
 export interface MonitorTask {
   id: string
   nodeId: string
   title: string
-  status: string
-  reviewStatus: string
+  status: MonitorTaskStatus | string
+  reviewStatus: MonitorReviewStatus | string
   agentId?: string
   startedAt?: number
   completedAt?: number
