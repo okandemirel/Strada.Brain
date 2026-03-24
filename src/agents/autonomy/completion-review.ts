@@ -64,7 +64,9 @@ Approve only when:
 5. The draft does not ask the user to pick a technical path, approve continuation, or choose the next engineering step unless a real hard blocker exists.
 
 Return JSON only:
-{"decision":"approve"|"continue"|"replan"|"fail","summary":"short summary","findings":["..."],"requiredActions":["..."],"closureStatus":"verified"|"partial"|"unverified","openInvestigations":["..."],"reviews":{"security":"clean|issues|not_applicable","code":"clean|issues|not_applicable","simplify":"clean|issues|not_applicable"},"logStatus":"clean|issues|not_applicable"}`;
+{"decision":"approve"|"continue"|"replan"|"fail","summary":"short summary","findings":["..."],"requiredActions":["..."],"closureStatus":"verified"|"partial"|"unverified","openInvestigations":["..."],"reviews":{"security":"clean|issues|not_applicable","code":"clean|issues|not_applicable","simplify":"clean|issues|not_applicable"},"logStatus":"clean|issues|not_applicable"}
+
+When build/compile tools are unavailable in the current environment, approve based on code analysis evidence alone. Do not require external build verification that cannot be performed.`;
 
 const COMPLETION_REVIEW_STAGE_SYSTEM_PROMPTS: Record<CompletionReviewStageName, string> = {
   code: `You are Strada Brain's code review stage.

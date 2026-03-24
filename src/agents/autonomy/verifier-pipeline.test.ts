@@ -252,6 +252,40 @@ DONE`;
     expect(result.gate).toContain("[COMPLETION REVIEW REQUIRED]");
   });
 
+  it("marks build check as not_applicable when buildToolsAvailable is false", () => {
+    const plan = planVerifierPipeline({
+      prompt: "fix the level editor",
+      draft: "I updated the ArrowLevelEditorWindow.cs file to fix the issue.",
+      state: createState({
+        stepResults: [
+          { toolName: "file_read", success: true, summary: "Read ArrowLevelEditorWindow.cs", timestamp: Date.now() - 300 },
+          { toolName: "file_edit", success: true, summary: "Updated ArrowLevelEditorWindow.cs", timestamp: Date.now() - 100 },
+        ],
+      }),
+      task: IMPLEMENTATION_TASK,
+      verificationState: {
+        pendingFiles: new Set(["Assets/Editor/ArrowLevelEditorWindow.cs"]),
+        touchedFiles: new Set(["Assets/Editor/ArrowLevelEditorWindow.cs"]),
+        hasCompilableChanges: true,
+        lastBuildOk: false,
+        lastVerificationAt: null,
+      },
+      buildVerificationGate: "[VERIFICATION REQUIRED] Run build",
+      conformanceGate: null,
+      logEntries: [],
+      chatId: "test-build-tools",
+      taskStartedAtMs: Date.now() - 1000,
+      buildToolsAvailable: false,
+    });
+
+    const buildCheck = plan.checks.find(c => c.name === "build");
+    expect(buildCheck?.status).toBe("not_applicable");
+    expect(buildCheck?.gate).toBeUndefined();
+
+    const targetedCheck = plan.checks.find(c => c.name === "targeted-repro");
+    expect(targetedCheck).toBeUndefined();
+  });
+
   it("turns a completion review replan decision into a verifier replan gate", () => {
     const plan = planVerifierPipeline({
       prompt: "Fix the runtime issue",

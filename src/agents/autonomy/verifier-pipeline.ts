@@ -69,6 +69,7 @@ export function planVerifierPipeline(params: {
   logEntries: readonly LogEntry[];
   chatId: string;
   taskStartedAtMs: number;
+  buildToolsAvailable?: boolean;
 }): VerifierPipelinePlan {
   const evidence = collectVerifierPipelineEvidence({
     state: params.state,
@@ -82,12 +83,16 @@ export function planVerifierPipeline(params: {
   });
 
   const checks: VerifierCheck[] = [];
-  const buildCheck = buildBuildVerifierCheck(params.buildVerificationGate);
+  const buildCheck = params.buildToolsAvailable === false
+    ? { name: "build" as const, status: "not_applicable" as const, summary: "Build tools unavailable in this environment." }
+    : buildBuildVerifierCheck(params.buildVerificationGate);
   if (buildCheck) {
     checks.push(buildCheck);
   }
 
-  const targetedCheck = buildTargetedReproVerifierCheck(evidence);
+  const targetedCheck = params.buildToolsAvailable === false
+    ? null
+    : buildTargetedReproVerifierCheck(evidence);
   if (targetedCheck) {
     checks.push(targetedCheck);
   }

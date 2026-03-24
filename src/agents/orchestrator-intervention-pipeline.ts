@@ -621,6 +621,10 @@ export async function resolveVerifierIntervention(
     ? params.selfVerification.getPrompt()
     : null;
   const conformanceGate = params.stradaConformance.getPrompt();
+  const buildToolsAvailable = params.availableToolNames
+    ? ["shell_execute", "unity_compile", "run_tests", "build"].some(t =>
+        params.availableToolNames!.includes(t))
+    : true;
   const plan = planVerifierPipeline({
     prompt: params.prompt,
     draft: params.draft ?? "",
@@ -632,6 +636,7 @@ export async function resolveVerifierIntervention(
     logEntries,
     chatId: params.chatId,
     taskStartedAtMs: params.taskStartedAtMs,
+    buildToolsAvailable,
   });
   const boundaryDecision = decideInteractionBoundary({
     prompt: params.prompt,
