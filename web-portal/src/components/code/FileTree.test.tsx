@@ -260,4 +260,24 @@ describe('FileTree', () => {
       expect(screen.getByText('Network error')).toBeInTheDocument()
     })
   })
+
+  // 11
+  it('renders Changed Files section when touchedFiles is non-empty', () => {
+    const touched = new Map<string, 'modified' | 'new' | 'deleted'>([
+      ['src/test.cs', 'modified'],
+    ])
+
+    render(<FileTree touchedFiles={touched} />)
+
+    expect(screen.getByText('Changed Files (1)')).toBeInTheDocument()
+  })
+
+  // 12
+  it('hides Changed Files section when touchedFiles is empty', () => {
+    const touched = new Map<string, 'modified' | 'new' | 'deleted'>()
+
+    render(<FileTree touchedFiles={touched} />)
+
+    expect(screen.queryByText(/Changed Files/)).not.toBeInTheDocument()
+  })
 })

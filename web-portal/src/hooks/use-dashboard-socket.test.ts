@@ -273,6 +273,8 @@ describe('dispatchWorkspaceMessage — code:* events', () => {
       type: 'code:file_update',
       path: 'src/app.ts',
       diff: '--- a/src/app.ts\n+++ b/src/app.ts\n@@ -1 +1 @@\n-old\n+new',
+      original: 'old',
+      modified: 'new',
     })
 
     const state = useCodeStore.getState()
@@ -280,6 +282,8 @@ describe('dispatchWorkspaceMessage — code:* events', () => {
     expect(state.tabs[0].path).toBe('src/app.ts')
     expect(state.tabs[0].isDiff).toBe(true)
     expect(state.tabs[0].diffContent).toContain('-old')
+    expect(state.tabs[0].originalContent).toBe('old')
+    expect(state.tabs[0].modifiedContent).toBe('new')
     expect(state.activeTab).toBe('src/app.ts')
     expect(state.touchedFiles.get('src/app.ts')).toBe('modified')
   })

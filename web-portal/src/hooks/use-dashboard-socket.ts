@@ -205,11 +205,18 @@ export function dispatchWorkspaceMessage(data: { type: string; [key: string]: un
       store.openFile({
         path: payload.path as string,
         content: existing?.content ?? '',
-        language: existing?.language ?? 'plaintext',
+        language: (payload.language as string) ?? existing?.language ?? 'plaintext',
         isDiff: true,
         diffContent: payload.diff as string,
+        originalContent: (payload.original as string) ?? existing?.content ?? '',
+        modifiedContent: (payload.modified as string) ?? '',
       })
       store.markTouched(payload.path as string, 'modified')
+      // Auto-switch to code workspace when diff arrives
+      const wsStore = useWorkspaceStore.getState()
+      if (!wsStore.userOverride && wsStore.mode !== 'code') {
+        wsStore.suggestMode('code')
+      }
       break
     }
 

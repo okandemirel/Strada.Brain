@@ -119,3 +119,61 @@ describe('useCodeStore — touchedFiles', () => {
     expect(useCodeStore.getState().touchedFiles.size).toBe(0)
   })
 })
+
+describe('useCodeStore — resolveDiff', () => {
+  beforeEach(() => useCodeStore.getState().reset())
+
+  it('resolveDiff with accepted=true updates content to modifiedContent', () => {
+    useCodeStore.getState().openFile({
+      path: 'src/test.ts',
+      content: 'original code',
+      language: 'typescript',
+      isDiff: true,
+      diffContent: '--- a\n+++ b',
+      originalContent: 'original code',
+      modifiedContent: 'modified code',
+    })
+
+    useCodeStore.getState().resolveDiff('src/test.ts', true)
+
+    const tab = useCodeStore.getState().tabs.find((t) => t.path === 'src/test.ts')!
+    expect(tab.content).toBe('modified code')
+  })
+
+  it('resolveDiff with accepted=false keeps original content', () => {
+    useCodeStore.getState().openFile({
+      path: 'src/test.ts',
+      content: 'original code',
+      language: 'typescript',
+      isDiff: true,
+      diffContent: '--- a\n+++ b',
+      originalContent: 'original code',
+      modifiedContent: 'modified code',
+    })
+
+    useCodeStore.getState().resolveDiff('src/test.ts', false)
+
+    const tab = useCodeStore.getState().tabs.find((t) => t.path === 'src/test.ts')!
+    expect(tab.content).toBe('original code')
+  })
+
+  it('resolveDiff clears diff fields (isDiff, diffContent, originalContent, modifiedContent)', () => {
+    useCodeStore.getState().openFile({
+      path: 'src/test.ts',
+      content: 'original code',
+      language: 'typescript',
+      isDiff: true,
+      diffContent: '--- a\n+++ b',
+      originalContent: 'original code',
+      modifiedContent: 'modified code',
+    })
+
+    useCodeStore.getState().resolveDiff('src/test.ts', true)
+
+    const tab = useCodeStore.getState().tabs.find((t) => t.path === 'src/test.ts')!
+    expect(tab.isDiff).toBe(false)
+    expect(tab.diffContent).toBeUndefined()
+    expect(tab.originalContent).toBeUndefined()
+    expect(tab.modifiedContent).toBeUndefined()
+  })
+})

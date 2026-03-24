@@ -176,6 +176,27 @@ export default function FileTree({ touchedFiles, onFileSelect, baseUrl = '' }: F
 
   return (
     <div className="h-full overflow-y-auto bg-bg-secondary p-1">
+      {files.size > 0 && (
+        <>
+          <div className="text-[10px] uppercase tracking-wider text-text-tertiary px-2 py-1 font-semibold">
+            Changed Files ({files.size})
+          </div>
+          {Array.from(files.entries()).map(([filePath, status]) => (
+            <button
+              key={filePath}
+              onClick={() => handleSelect(filePath)}
+              className={cn(
+                'flex items-center gap-1 w-full text-left px-3 py-0.5 text-xs rounded-md transition-colors hover:bg-white/5',
+                HIGHLIGHT_CLASSES[status] ?? '',
+              )}
+            >
+              <FileIcon name={filePath.split('/').pop() ?? ''} size={14} />
+              <span className="truncate">{filePath}</span>
+            </button>
+          ))}
+          <div className="border-b border-white/5 my-1" />
+        </>
+      )}
       <div className="text-[10px] uppercase tracking-wider text-text-tertiary px-2 py-1 font-semibold">Explorer</div>
       <TreeNode
         path="."

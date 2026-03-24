@@ -100,7 +100,7 @@ const EXTENSION_LANGUAGE_MAP: Record<string, string> = {
   ".r": "r",
 };
 
-function detectLanguage(filePath: string): string {
+export function detectLanguage(filePath: string): string {
   const ext = extname(filePath).toLowerCase();
   return EXTENSION_LANGUAGE_MAP[ext] ?? "plaintext";
 }

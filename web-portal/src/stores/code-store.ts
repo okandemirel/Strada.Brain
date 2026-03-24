@@ -6,6 +6,8 @@ export interface CodeTab {
   language: string
   isDiff?: boolean
   diffContent?: string
+  originalContent?: string
+  modifiedContent?: string
 }
 
 export interface Annotation {
@@ -32,6 +34,7 @@ interface CodeState {
   addAnnotation: (ann: Annotation) => void
   clearAnnotations: (path: string) => void
   markTouched: (path: string, status: TouchedStatus) => void
+  resolveDiff: (path: string, accepted: boolean) => void
   reset: () => void
 }
 
@@ -87,5 +90,21 @@ export const useCodeStore = create<CodeState>()((set) => ({
       return { touchedFiles: next }
     }),
 
-  reset: () => set(initialState),
+  resolveDiff: (path, accepted) =>
+    set((s) => ({
+      tabs: s.tabs.map((t) =>
+        t.path === path
+          ? {
+              ...t,
+              content: accepted && t.modifiedContent ? t.modifiedContent : t.content,
+              isDiff: false,
+              diffContent: undefined,
+              originalContent: undefined,
+              modifiedContent: undefined,
+            }
+          : t,
+      ),
+    })),
+
+  reset: () => set({ tabs: [], activeTab: null, terminalOutput: [], annotations: [], touchedFiles: new Map() }),
 }))

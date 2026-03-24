@@ -65,4 +65,15 @@ describe('CodePanel', () => {
     // 4 panels: file tree, right area, editor, terminal
     expect(panels.length).toBeGreaterThanOrEqual(4)
   })
+
+  // 6
+  it('renders with proper scroll containment classes (min-h-0, overflow-hidden)', () => {
+    const { container } = render(<CodePanel />)
+    const outerDiv = container.firstElementChild as HTMLElement
+    expect(outerDiv.className).toContain('h-full')
+    expect(outerDiv.className).toContain('flex')
+    expect(outerDiv.className).toContain('flex-col')
+    expect(outerDiv.className).toContain('min-h-0')
+    expect(outerDiv.className).toContain('overflow-hidden')
+  })
 })

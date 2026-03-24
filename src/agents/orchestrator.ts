@@ -8,7 +8,9 @@ import type {
 } from "./providers/provider.interface.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { detectLanguage } from "../dashboard/workspace-routes.js";
 import type { ProviderManager } from "./providers/provider-manager.js";
 import { getToolMetadata, type ITool, type ToolContext } from "./tools/tool.interface.js";
 import type {
@@ -5064,12 +5066,34 @@ export class Orchestrator {
       if (tc.name === "file_write" || tc.name === "file_edit") {
         const filePath = typeof toolInput.path === "string" ? toolInput.path : "";
         if (filePath && !tr.isError) {
-          const content = typeof toolInput.content === "string" ? toolInput.content
-            : typeof toolInput.new_string === "string" ? toolInput.new_string
-            : output.slice(0, 10_000);
-          const ext = filePath.split(".").pop() ?? "";
-          const language = ext || "text";
-          this.workspaceBus.emit("code:file_open", { path: filePath, content, language });
+          const language = detectLanguage(filePath);
+
+          if (tc.name === "file_edit" && typeof toolInput.old_string === "string" && typeof toolInput.new_string === "string") {
+            // file_edit → emit code:file_update with original + modified for diff view
+            try {
+              const modified = readFileSync(filePath, "utf-8");
+              // Use function replacement to avoid $-pattern interpretation in old_string
+              const oldStr = toolInput.old_string as string;
+              const newStr = toolInput.new_string as string;
+              const original = modified.replace(newStr, () => oldStr);
+              this.workspaceBus.emit("code:file_update", {
+                path: filePath,
+                diff: `${oldStr.slice(0, 250)} → ${newStr.slice(0, 250)}`,
+                original: original.slice(0, 500_000),
+                modified: modified.slice(0, 500_000),
+                language,
+              });
+            } catch {
+              const content = typeof toolInput.new_string === "string" ? toolInput.new_string : output.slice(0, 10_000);
+              this.workspaceBus.emit("code:file_open", { path: filePath, content, language });
+            }
+          } else {
+            // file_write → emit code:file_open (new/overwritten file)
+            const content = typeof toolInput.content === "string" ? toolInput.content
+              : typeof toolInput.new_string === "string" ? toolInput.new_string
+              : output.slice(0, 10_000);
+            this.workspaceBus.emit("code:file_open", { path: filePath, content, language });
+          }
           this.workspaceBus.emit("workspace:mode_suggest", { mode: "code", reason: "File operation detected" });
         }
       } else if (tc.name === "shell_exec" || tc.name === "dotnet_build" || tc.name === "dotnet_test") {

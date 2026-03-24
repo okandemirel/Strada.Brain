@@ -122,6 +122,9 @@ export interface WorkspaceEventMap {
   'code:file_update': {
     path: string
     diff: string
+    original: string
+    modified: string
+    language?: string
   }
   'code:terminal_output': {
     content: string

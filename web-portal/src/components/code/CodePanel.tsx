@@ -28,7 +28,7 @@ export default function CodePanel() {
   )
 
   return (
-    <div className="h-full flex flex-col">
+    <div className="h-full flex flex-col min-h-0 overflow-hidden">
       <PanelGroup direction="horizontal">
         <Panel defaultSize={20} minSize={12} maxSize={40}>
           <FileTree touchedFiles={touchedFiles} onFileSelect={handleFileSelect} />
