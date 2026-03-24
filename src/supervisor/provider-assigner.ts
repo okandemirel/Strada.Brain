@@ -133,10 +133,13 @@ export class ProviderAssigner {
     const depEdges = this.buildDependencyEdges(nodes);
 
     const results: TaggedGoalNode[] = [];
+    // O(1) lookup map for assigned nodes (kept in sync with results array)
+    const assignedMap = new Map<string, TaggedGoalNode>();
 
     for (const { node, ranked } of nodeRankings) {
       if (ranked.length === 0) {
         results.push(node);
+        assignedMap.set(node.id as string, node);
         continue;
       }
 
@@ -152,7 +155,7 @@ export class ProviderAssigner {
 
         // Dependency affinity: if a dependent node was already assigned,
         // prefer the same provider when scores are within threshold
-        const affinityProvider = this.getAffinityProvider(node, depEdges, results);
+        const affinityProvider = this.getAffinityProvider(node, depEdges, assignedMap);
         if (
           affinityProvider &&
           affinityProvider !== candidate.providerName &&
@@ -167,11 +170,13 @@ export class ProviderAssigner {
             const affinityCount = assignmentCounts.get(affinityProvider) ?? 0;
             if (affinityCount < maxPerProvider) {
               // Use the affinity provider instead
-              results.push({
+              const assignedNode = {
                 ...node,
                 assignedProvider: affinityProvider,
                 assignedModel: affinityCandidate.model,
-              });
+              };
+              results.push(assignedNode);
+              assignedMap.set(node.id as string, assignedNode);
               assignmentCounts.set(affinityProvider, affinityCount + 1);
               assigned = true;
               break;
@@ -180,11 +185,13 @@ export class ProviderAssigner {
         }
 
         // Normal assignment
-        results.push({
+        const assignedNode = {
           ...node,
           assignedProvider: candidate.providerName,
           assignedModel: candidate.model,
-        });
+        };
+        results.push(assignedNode);
+        assignedMap.set(node.id as string, assignedNode);
         assignmentCounts.set(candidate.providerName, currentCount + 1);
         assigned = true;
         break;
@@ -193,11 +200,13 @@ export class ProviderAssigner {
       if (!assigned && ranked.length > 0) {
         // All providers at cap — fall back to best available (allow overflow)
         const best = ranked[0]!;
-        results.push({
+        const assignedNode = {
           ...node,
           assignedProvider: best.providerName,
           assignedModel: best.model,
-        });
+        };
+        results.push(assignedNode);
+        assignedMap.set(node.id as string, assignedNode);
         const count = assignmentCounts.get(best.providerName) ?? 0;
         assignmentCounts.set(best.providerName, count + 1);
       }
@@ -317,14 +326,14 @@ export class ProviderAssigner {
   private getAffinityProvider(
     node: TaggedGoalNode,
     depEdges: Map<string, string[]>,
-    assigned: TaggedGoalNode[],
+    assignedMap: Map<string, TaggedGoalNode>,
   ): string | undefined {
     const deps = depEdges.get(node.id);
     if (!deps || deps.length === 0) return undefined;
 
-    // Find first assigned dependency
+    // Find first assigned dependency via O(1) Map lookup
     for (const depId of deps) {
-      const depNode = assigned.find((n) => n.id === depId);
+      const depNode = assignedMap.get(depId);
       if (depNode?.assignedProvider) {
         return depNode.assignedProvider;
       }

@@ -69,12 +69,37 @@ const CAPABILITY_MAPPINGS: readonly SignalMapping[] = [
 ];
 
 // =============================================================================
+// PRE-COMPILED REGEX CACHE
+// =============================================================================
+
+/** Pre-compile word-boundary regexes for all single-word signals at module load */
+const SIGNAL_REGEX_CACHE: Map<string, RegExp> = new Map();
+
+function ensureSignalRegexes(signals: readonly string[]): void {
+  for (const signal of signals) {
+    if (!signal.includes(" ") && !SIGNAL_REGEX_CACHE.has(signal)) {
+      SIGNAL_REGEX_CACHE.set(signal, new RegExp(`\\b${signal}\\b`, "i"));
+    }
+  }
+}
+
+// Pre-compile all signal dictionaries at module load
+ensureSignalRegexes(VISION_SIGNALS);
+ensureSignalRegexes(REASONING_SIGNALS);
+ensureSignalRegexes(CODEGEN_SIGNALS);
+ensureSignalRegexes(TOOL_SIGNALS);
+ensureSignalRegexes(SPEED_SIGNALS);
+ensureSignalRegexes(QUALITY_SIGNALS);
+ensureSignalRegexes(COST_SIGNALS);
+
+// =============================================================================
 // HELPERS
 // =============================================================================
 
 /**
  * Count how many signal keywords appear in the given text (case-insensitive).
- * Multi-word signals use substring matching; single-word signals use word boundary matching.
+ * Multi-word signals use substring matching; single-word signals use pre-compiled
+ * word boundary regexes from the module-level cache.
  */
 function countMatches(text: string, signals: readonly string[]): number {
   const lower = text.toLowerCase();
@@ -84,9 +109,9 @@ function countMatches(text: string, signals: readonly string[]): number {
       // Multi-word: simple substring match
       if (lower.includes(signal)) count++;
     } else {
-      // Single-word: word boundary match to avoid false positives
-      const re = new RegExp(`\\b${signal}\\b`, "i");
-      if (re.test(lower)) count++;
+      // Single-word: use pre-compiled regex from cache
+      const re = SIGNAL_REGEX_CACHE.get(signal);
+      if (re && re.test(lower)) count++;
     }
   }
   return count;

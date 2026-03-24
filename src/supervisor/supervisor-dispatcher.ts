@@ -269,18 +269,28 @@ export class SupervisorDispatcher {
   // HELPERS
   // ---------------------------------------------------------------------------
 
-  private makeSkippedResult(node: TaggedGoalNode, reason: string): NodeResult {
+  /** Factory for NodeResult objects — eliminates repeated boilerplate */
+  private makeResult(
+    node: TaggedGoalNode,
+    status: NodeResult["status"],
+    output: string,
+    overrides?: Partial<Pick<NodeResult, "cost" | "duration">>,
+  ): NodeResult {
     return {
       nodeId: node.id,
-      status: "skipped",
-      output: reason,
+      status,
+      output,
       artifacts: [],
       toolResults: [],
       provider: node.assignedProvider ?? "unknown",
       model: node.assignedModel ?? "unknown",
-      cost: 0,
-      duration: 0,
+      cost: overrides?.cost ?? 0,
+      duration: overrides?.duration ?? 0,
     };
+  }
+
+  private makeSkippedResult(node: TaggedGoalNode, reason: string): NodeResult {
+    return this.makeResult(node, "skipped", reason);
   }
 
   // ---------------------------------------------------------------------------
@@ -312,32 +322,16 @@ export class SupervisorDispatcher {
         }
 
         // Non-transient or second attempt: fail
-        return {
-          nodeId: node.id,
-          status: "failed",
-          output: err instanceof Error ? err.message : String(err),
-          artifacts: [],
-          toolResults: [],
-          provider: node.assignedProvider ?? "unknown",
-          model: node.assignedModel ?? "unknown",
-          cost: 0,
-          duration: 0,
-        };
+        return this.makeResult(
+          node,
+          "failed",
+          err instanceof Error ? err.message : String(err),
+        );
       }
     }
 
     // Should not reach here, but safety fallback
-    return {
-      nodeId: node.id,
-      status: "failed",
-      output: "Max retry attempts exhausted",
-      artifacts: [],
-      toolResults: [],
-      provider: node.assignedProvider ?? "unknown",
-      model: node.assignedModel ?? "unknown",
-      cost: 0,
-      duration: 0,
-    };
+    return this.makeResult(node, "failed", "Max retry attempts exhausted");
   }
 
   private async executeWithTimeout(
