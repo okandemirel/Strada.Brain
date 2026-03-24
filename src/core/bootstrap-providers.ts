@@ -77,6 +77,34 @@ export async function initializeAIProvider(
       models: config.providerModels,
     });
     logger.info("AI provider chain initialized", { chain: preflightResult.passedProviderIds });
+
+    // Auto-detect additional providers with valid keys as silent fallbacks
+    const explicitSet = new Set(configuredNames);
+    const additionalNames = Object.entries(apiKeys)
+      .filter(([name, key]) => !explicitSet.has(name) && name !== "claude" && name !== "anthropic" && key)
+      .map(([name]) => name);
+    if (hasConfiguredOpenAISubscription(config) && !explicitSet.has("openai") && !additionalNames.includes("openai")) {
+      additionalNames.unshift("openai");
+    }
+
+    if (additionalNames.length > 0) {
+      const fallbackPreflight = await preflightResponseProviders(
+        additionalNames,
+        providerCredentials,
+        config.providerModels,
+      );
+      if (fallbackPreflight.passedProviderIds.length > 0) {
+        const allProviderIds = [...defaultProviderOrder, ...fallbackPreflight.passedProviderIds];
+        defaultProviderOrder = allProviderIds;
+        defaultProvider = buildProviderChain(allProviderIds, providerCredentials, {
+          models: config.providerModels,
+        });
+        notices.push(
+          `Auto-appended fallback providers: ${fallbackPreflight.passedProviderIds.join(", ")}`,
+        );
+        logger.info("AI provider chain with auto-fallbacks", { chain: allProviderIds });
+      }
+    }
   }
   // 2) Anthropic key present — use ClaudeProvider directly
   else if (config.anthropicApiKey) {

@@ -156,13 +156,14 @@ function createTestConfig(overrides: {
   anthropicApiKey?: string;
   geminiApiKey?: string;
   kimiApiKey?: string;
+  deepseekApiKey?: string;
 } = {}): Config {
   return {
     anthropicApiKey: overrides.anthropicApiKey,
     geminiApiKey: overrides.geminiApiKey,
     kimiApiKey: overrides.kimiApiKey,
     openaiApiKey: undefined,
-    deepseekApiKey: undefined,
+    deepseekApiKey: overrides.deepseekApiKey,
     qwenApiKey: undefined,
     minimaxApiKey: undefined,
     groqApiKey: undefined,
@@ -561,5 +562,49 @@ describe("initializeAIProvider", () => {
       code: "NO_HEALTHY_AI_PROVIDER",
     });
     expect(buildProviderChain).not.toHaveBeenCalled();
+  });
+
+  it("auto-appends additional providers with valid keys as silent fallbacks", async () => {
+    const config = createTestConfig({
+      providerChain: "kimi",
+      kimiApiKey: "kimi-key",
+      deepseekApiKey: "ds-key",
+      geminiApiKey: "gem-key",
+    });
+
+    // First call: explicit chain preflight (kimi passes)
+    // Second call: fallback preflight (deepseek + gemini pass)
+    preflightResponseProvidersMock
+      .mockResolvedValueOnce({
+        passedProviderIds: ["kimi"],
+        failures: [],
+      })
+      .mockResolvedValueOnce({
+        passedProviderIds: ["deepseek", "gemini"],
+        failures: [],
+      });
+
+    const result = await initializeAIProvider(config, logger);
+
+    // Preflight called twice: once for explicit chain, once for fallback candidates
+    expect(preflightResponseProvidersMock).toHaveBeenCalledTimes(2);
+    expect(preflightResponseProvidersMock).toHaveBeenNthCalledWith(
+      2,
+      expect.arrayContaining(["deepseek", "gemini"]),
+      expect.anything(),
+      expect.anything(),
+    );
+
+    // buildProviderChain called twice: initial chain, then with fallbacks appended
+    expect(buildProviderChain).toHaveBeenCalledTimes(2);
+    expect(buildProviderChain).toHaveBeenLastCalledWith(
+      ["kimi", "deepseek", "gemini"],
+      expect.anything(),
+      expect.anything(),
+    );
+
+    expect(result.notices).toContain(
+      "Auto-appended fallback providers: deepseek, gemini",
+    );
   });
 });
