@@ -15,6 +15,7 @@ import type { IRAGPipeline } from "../rag/rag.interface.js";
 import type { MetricsCollector } from "../dashboard/metrics.js";
 import type { LearningStorage } from "../learning/storage/learning-storage.js";
 import type { MetricsStorage } from "../metrics/metrics-storage.js";
+import { execFileSync } from "node:child_process";
 import { PluginLoader } from "../agents/plugins/plugin-loader.js";
 import { getLogger } from "../utils/logger.js";
 import { ValidationError } from "../common/errors.js";
@@ -601,17 +602,22 @@ export class ToolRegistry {
       readOnly: false,
     });
 
-    // .NET operations
+    // .NET operations — only mark available if dotnet CLI is installed
+    const dotnetAvailable = isDotnetCliAvailable();
     this.register(new DotnetBuildTool(), {
       category: ToolCategories.DOTNET,
       dangerous: false,
       readOnly: true,
+      available: dotnetAvailable,
+      availabilityReason: dotnetAvailable ? undefined : "dotnet CLI not found in PATH",
     });
 
     this.register(new DotnetTestTool(), {
       category: ToolCategories.DOTNET,
       dangerous: false,
       readOnly: true,
+      available: dotnetAvailable,
+      availabilityReason: dotnetAvailable ? undefined : "dotnet CLI not found in PATH",
     });
 
     // Memory operations
@@ -730,6 +736,15 @@ export class ToolRegistry {
         }
       })();
     }
+  }
+}
+
+function isDotnetCliAvailable(): boolean {
+  try {
+    execFileSync("dotnet", ["--version"], { stdio: "pipe", timeout: 5_000 });
+    return true;
+  } catch {
+    return false;
   }
 }
 

@@ -1365,7 +1365,7 @@ export class Orchestrator {
       if (metadata?.controlPlaneOnly) {
         return false;
       }
-      if (metadata?.requiresBridge && metadata.available === false) {
+      if (metadata?.available === false) {
         return false;
       }
       if (!allowWriteTools && metadata?.readOnly === false) {
