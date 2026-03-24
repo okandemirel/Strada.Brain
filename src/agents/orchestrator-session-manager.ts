@@ -114,8 +114,20 @@ export class SessionManager {
       if (Date.now() - lastActivity.getTime() > SessionManager.SESSION_EXPIRY_MS) {
         return null; // expired
       }
+      // Validate message structure to prevent injection via tampered session files
+      const rawMessages = Array.isArray(data.messages) ? data.messages : [];
+      const messages = rawMessages.filter(
+        (m: unknown): m is ConversationMessage =>
+          typeof m === "object" && m !== null &&
+          "role" in m &&
+          ((m as Record<string, unknown>).role === "user" || (m as Record<string, unknown>).role === "assistant") &&
+          "content" in m &&
+          (typeof (m as Record<string, unknown>).content === "string" ||
+           (m as Record<string, unknown>).content === null ||
+           Array.isArray((m as Record<string, unknown>).content)),
+      );
       return {
-        messages: data.messages ?? [],
+        messages,
         visibleMessages: [],
         lastActivity,
         conversationScope: data.conversationScope,
@@ -129,20 +141,24 @@ export class SessionManager {
 
   // ── Disk persistence ──────────────────────────────────────────────────────
 
-  private async persistSessionToDisk(chatId: string, session: Session): Promise<void> {
-    const dir = this.deps.sessionsDir!;
-    if (!existsSync(dir)) {
-      await mkdir(dir, { recursive: true });
-    }
+  private sessionFilePath(chatId: string): string {
     const safeName = chatId.replace(/[^a-zA-Z0-9_-]/g, "_");
-    const filePath = join(dir, `${safeName}.json`);
-    await writeFile(filePath, SessionManager.serializeSession(session), "utf-8");
+    return join(this.deps.sessionsDir!, `${safeName}.json`);
+  }
+
+  private async persistSessionToDisk(chatId: string, session: Session): Promise<void> {
+    const dir = this.deps.sessionsDir;
+    if (!dir) return;
+    if (!existsSync(dir)) {
+      await mkdir(dir, { recursive: true, mode: 0o700 });
+    }
+    await writeFile(this.sessionFilePath(chatId), SessionManager.serializeSession(session), { encoding: "utf-8", mode: 0o600 });
   }
 
   private restoreSessionFromDisk(chatId: string): Session | null {
+    if (!this.deps.sessionsDir) return null;
     try {
-      const safeName = chatId.replace(/[^a-zA-Z0-9_-]/g, "_");
-      const filePath = join(this.deps.sessionsDir!, `${safeName}.json`);
+      const filePath = this.sessionFilePath(chatId);
       if (!existsSync(filePath)) return null;
       const json = readFileSync(filePath, "utf-8");
       return SessionManager.deserializeSession(json);

@@ -79,8 +79,12 @@ export class ExecutionJournal {
    */
   seedFromSnapshot(previous: ExecutionJournalSnapshot): void {
     if (previous.learnedInsights) {
-      for (const insight of previous.learnedInsights) {
-        this.learnedInsights.add(insight);
+      const maxInsights = 50;
+      const maxLength = 500;
+      for (const insight of previous.learnedInsights.slice(0, maxInsights)) {
+        if (typeof insight === "string" && insight.length <= maxLength) {
+          this.learnedInsights.add(insight);
+        }
       }
     }
     if (previous.verifierSummary) {

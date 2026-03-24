@@ -31,6 +31,27 @@ import type { EmbeddingResolutionResult, ProviderInitResult } from "./bootstrap-
 import type { IAIProvider } from "../agents/providers/provider.interface.js";
 import type * as winston from "winston";
 
+/**
+ * Collect provider names that have valid API keys, excluding "claude"/"anthropic"
+ * aliases and any names in the optional exclusion set.
+ * Prepends "openai" if an OpenAI subscription is configured but not yet listed.
+ */
+function detectAvailableProviderNames(
+  apiKeys: Record<string, string | undefined>,
+  config: Config,
+  exclude?: ReadonlySet<string>,
+): string[] {
+  const names = Object.entries(apiKeys)
+    .filter(([name, key]) =>
+      name !== "claude" && name !== "anthropic" && key && !(exclude?.has(name)),
+    )
+    .map(([name]) => name);
+  if (hasConfiguredOpenAISubscription(config) && !names.includes("openai") && !(exclude?.has("openai"))) {
+    names.unshift("openai");
+  }
+  return names;
+}
+
 export async function initializeAIProvider(
   config: Config,
   logger: winston.Logger,
@@ -79,13 +100,7 @@ export async function initializeAIProvider(
     logger.info("AI provider chain initialized", { chain: preflightResult.passedProviderIds });
 
     // Auto-detect additional providers with valid keys as silent fallbacks
-    const explicitSet = new Set(configuredNames);
-    const additionalNames = Object.entries(apiKeys)
-      .filter(([name, key]) => !explicitSet.has(name) && name !== "claude" && name !== "anthropic" && key)
-      .map(([name]) => name);
-    if (hasConfiguredOpenAISubscription(config) && !explicitSet.has("openai") && !additionalNames.includes("openai")) {
-      additionalNames.unshift("openai");
-    }
+    const additionalNames = detectAvailableProviderNames(apiKeys, config, new Set(configuredNames));
 
     if (additionalNames.length > 0) {
       const fallbackPreflight = await preflightResponseProviders(
@@ -102,7 +117,7 @@ export async function initializeAIProvider(
         notices.push(
           `Auto-appended fallback providers: ${fallbackPreflight.passedProviderIds.join(", ")}`,
         );
-        logger.info("AI provider chain with auto-fallbacks", { chain: allProviderIds });
+        logger.warn("AI provider chain with auto-fallbacks", { chain: allProviderIds });
       }
     }
   }
@@ -114,12 +129,7 @@ export async function initializeAIProvider(
   }
   // 3) No explicit chain and no Anthropic key — auto-detect from available keys
   else {
-    const detectedNames = Object.entries(apiKeys)
-      .filter(([name, key]) => name !== "claude" && name !== "anthropic" && key)
-      .map(([name]) => name);
-    if (hasConfiguredOpenAISubscription(config) && !detectedNames.includes("openai")) {
-      detectedNames.unshift("openai");
-    }
+    const detectedNames = detectAvailableProviderNames(apiKeys, config);
 
     if (detectedNames.length === 0) {
       throw new AppError(

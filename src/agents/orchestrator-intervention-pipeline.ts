@@ -75,8 +75,8 @@ import {
   type SelfVerification,
   type ControlLoopGateKind,
   type InteractionBoundaryDecision,
-  VERIFY_TOOLS,
 } from "./autonomy/index.js";
+import { isVerificationToolName } from "./autonomy/constants.js";
 import type { StradaConformanceGuard } from "./autonomy/strada-conformance.js";
 import type { Session } from "./orchestrator-session-manager.js";
 import { toPhaseOutcomeStatus as toPhaseOutcomeStatusModel } from "./orchestrator-phase-telemetry.js";
@@ -623,8 +623,7 @@ export async function resolveVerifierIntervention(
     : null;
   const conformanceGate = params.stradaConformance.getPrompt();
   const buildToolsAvailable = params.availableToolNames
-    ? params.availableToolNames.some(t =>
-        VERIFY_TOOLS.has(t) || /(?:^|[_-])(?:build|test|check|verify|lint|typecheck|compile)(?:$|[_-])/iu.test(t) || t === "shell_execute")
+    ? params.availableToolNames.some(t => isVerificationToolName(t) || t === "shell_exec")
     : true;
   const plan = planVerifierPipeline({
     prompt: params.prompt,
