@@ -1,10 +1,9 @@
-import { lazy, Suspense, useCallback } from 'react'
+import { useCallback } from 'react'
 import { useCodeStore, type CodeTab } from '../../stores/code-store'
 import { useWS } from '../../hooks/useWS'
 import { cn } from '@/lib/utils'
+import CodeViewer from './CodeViewer'
 import DiffViewer from './DiffViewer'
-
-const Editor = lazy(() => import('@monaco-editor/react').then((m) => ({ default: m.default })))
 
 function DiffActionBar({ file, onAction }: { file: CodeTab; onAction: (action: 'accept' | 'reject') => void }) {
   return (
@@ -31,7 +30,7 @@ function DiffActionBar({ file, onAction }: { file: CodeTab; onAction: (action: '
 function EditorContent({ file, onDiffAction }: { file: CodeTab; onDiffAction: (action: 'accept' | 'reject') => void }) {
   if (file.isDiff) {
     return (
-      <>
+      <div className="flex flex-col h-full">
         <DiffActionBar file={file} onAction={onDiffAction} />
         <div className="flex-1 min-h-0">
           <DiffViewer
@@ -40,33 +39,11 @@ function EditorContent({ file, onDiffAction }: { file: CodeTab; onDiffAction: (a
             language={file.language}
           />
         </div>
-      </>
+      </div>
     )
   }
 
-  return (
-    <Suspense
-      fallback={
-        <div className="flex items-center justify-center h-full text-text-tertiary text-sm animate-pulse">
-          Loading editor...
-        </div>
-      }
-    >
-      <Editor
-        path={file.path}
-        defaultLanguage={file.language}
-        defaultValue={file.content}
-        theme="vs-dark"
-        options={{
-          readOnly: true,
-          minimap: { enabled: true },
-          lineNumbers: 'on',
-          bracketPairColorization: { enabled: true },
-          scrollBeyondLastLine: false,
-        }}
-      />
-    </Suspense>
-  )
+  return <CodeViewer content={file.content} language={file.language} />
 }
 
 export default function CodeEditor() {
@@ -88,7 +65,6 @@ export default function CodeEditor() {
 
   return (
     <div className="flex flex-col h-full">
-      {/* Tab bar */}
       <div className="flex items-center bg-white/3 backdrop-blur border-b border-white/5 overflow-x-auto shrink-0">
         {tabs.map((tab) => (
           <button
@@ -97,7 +73,7 @@ export default function CodeEditor() {
             className={cn(
               'group flex items-center gap-1 px-3 py-1.5 text-xs border-r border-white/5 whitespace-nowrap transition-colors',
               activeTab === tab.path
-                ? 'border-b-2 border-b-accent text-text shadow-[0_1px_8px_0_rgba(var(--color-accent)/0.25)]'
+                ? 'border-b-2 border-b-accent text-text'
                 : 'text-text-secondary hover:text-text',
             )}
           >
@@ -117,8 +93,7 @@ export default function CodeEditor() {
           </button>
         ))}
       </div>
-      {/* Editor / Diff Viewer */}
-      <div className="flex-1 min-h-0 flex flex-col">
+      <div className="flex-1 min-h-0">
         {activeFile ? (
           <EditorContent file={activeFile} onDiffAction={handleDiffAction} />
         ) : (
