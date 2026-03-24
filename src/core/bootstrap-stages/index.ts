@@ -6,3 +6,4 @@ export * from "./stage-goals.js";
 export * from "./stage-agents.js";
 export * from "./stage-daemon.js";
 export * from "./stage-finalization.js";
+export * from "./stage-supervisor.js";

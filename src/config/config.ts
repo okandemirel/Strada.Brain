@@ -25,6 +25,7 @@ import type {
 import type { AgentConfig } from "../agents/multi/agent-types.js";
 import type { DelegationConfig } from "../agents/multi/delegation/delegation-types.js";
 import type { DeploymentConfig } from "../daemon/deployment/deployment-types.js";
+import type { SupervisorConfig } from "../supervisor/supervisor-types.js";
 import { getPreset } from "./presets.js";
 
 dotenv.config({ path: resolveDotenvPath({ moduleUrl: import.meta.url }) });
@@ -318,7 +319,18 @@ export type EnvVarName =
   | "STRADA_CONFIDENCE_WEIGHTS"
   | "STRADA_MAX_INSTINCTS"
   | "STRADA_DETECTION_WINDOW_SIZE"
-  | "STRADA_PERIODIC_EXTRACTION_INTERVAL";
+  | "STRADA_PERIODIC_EXTRACTION_INTERVAL"
+
+  // Supervisor Brain
+  | "SUPERVISOR_ENABLED"
+  | "SUPERVISOR_COMPLEXITY_THRESHOLD"
+  | "SUPERVISOR_MAX_PARALLEL_NODES"
+  | "SUPERVISOR_NODE_TIMEOUT_MS"
+  | "SUPERVISOR_VERIFICATION_MODE"
+  | "SUPERVISOR_VERIFICATION_BUDGET_PCT"
+  | "SUPERVISOR_TRIAGE_PROVIDER"
+  | "SUPERVISOR_MAX_FAILURE_BUDGET"
+  | "SUPERVISOR_DIVERSITY_CAP";
 
 /** Environment variable map type */
 export type EnvVarMap = Record<EnvVarName, string | undefined>;
@@ -758,6 +770,9 @@ export interface Config {
     readonly notify: boolean;
     readonly autoRestart: boolean;
   };
+
+  // Supervisor Brain
+  readonly supervisor: SupervisorConfig;
 }
 
 /** Partial config for updates */
@@ -1634,6 +1649,43 @@ export const configSchema = z
     autoUpdateChannel: z.enum(["stable", "latest"]).default("stable"),
     autoUpdateNotify: boolFromString(true),
     autoUpdateAutoRestart: boolFromString(true),
+
+    // Supervisor Brain
+    stradaSupervisorEnabled: boolFromString(true),
+    stradaSupervisorComplexityThreshold: z
+      .enum(["moderate", "complex"])
+      .default("complex"),
+    stradaSupervisorMaxParallelNodes: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(1).max(16))
+      .default("4"),
+    stradaSupervisorNodeTimeoutMs: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(10000).max(600000))
+      .default("120000"),
+    stradaSupervisorVerificationMode: z
+      .enum(["always", "critical-only", "sampling", "disabled"])
+      .default("critical-only"),
+    stradaSupervisorVerificationBudgetPct: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(0).max(50))
+      .default("15"),
+    stradaSupervisorTriageProvider: z
+      .string()
+      .default("groq"),
+    stradaSupervisorMaxFailureBudget: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(0).max(20))
+      .default("3"),
+    stradaSupervisorDiversityCap: z
+      .string()
+      .transform((s) => parseFloat(s))
+      .pipe(z.number().min(0).max(1))
+      .default("0.6"),
   })
   .superRefine((data, ctx) => {
     // Bayesian threshold ordering validation: deprecated < active < evolution < autoEvolve
@@ -2127,6 +2179,18 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
       notify: rawConfig.autoUpdateNotify,
       autoRestart: rawConfig.autoUpdateAutoRestart,
     },
+
+    supervisor: {
+      enabled: rawConfig.stradaSupervisorEnabled,
+      complexityThreshold: rawConfig.stradaSupervisorComplexityThreshold,
+      maxParallelNodes: rawConfig.stradaSupervisorMaxParallelNodes,
+      nodeTimeoutMs: rawConfig.stradaSupervisorNodeTimeoutMs,
+      verificationMode: rawConfig.stradaSupervisorVerificationMode,
+      verificationBudgetPct: rawConfig.stradaSupervisorVerificationBudgetPct,
+      triageProvider: rawConfig.stradaSupervisorTriageProvider,
+      maxFailureBudget: rawConfig.stradaSupervisorMaxFailureBudget,
+      diversityCap: rawConfig.stradaSupervisorDiversityCap,
+    },
   };
 
   return { kind: "valid", value: config };
@@ -2578,6 +2642,16 @@ interface EnvVars {
   stradaMaxInstincts: string | undefined;
   stradaDetectionWindowSize: string | undefined;
   stradaPeriodicExtractionInterval: string | undefined;
+  // Supervisor Brain
+  stradaSupervisorEnabled: string | undefined;
+  stradaSupervisorComplexityThreshold: string | undefined;
+  stradaSupervisorMaxParallelNodes: string | undefined;
+  stradaSupervisorNodeTimeoutMs: string | undefined;
+  stradaSupervisorVerificationMode: string | undefined;
+  stradaSupervisorVerificationBudgetPct: string | undefined;
+  stradaSupervisorTriageProvider: string | undefined;
+  stradaSupervisorMaxFailureBudget: string | undefined;
+  stradaSupervisorDiversityCap: string | undefined;
 }
 
 /**
@@ -2838,6 +2912,16 @@ function loadFromEnv(): EnvVars {
     stradaMaxInstincts: process.env["STRADA_MAX_INSTINCTS"],
     stradaDetectionWindowSize: process.env["STRADA_DETECTION_WINDOW_SIZE"],
     stradaPeriodicExtractionInterval: process.env["STRADA_PERIODIC_EXTRACTION_INTERVAL"],
+    // Supervisor Brain
+    stradaSupervisorEnabled: process.env["SUPERVISOR_ENABLED"],
+    stradaSupervisorComplexityThreshold: process.env["SUPERVISOR_COMPLEXITY_THRESHOLD"],
+    stradaSupervisorMaxParallelNodes: process.env["SUPERVISOR_MAX_PARALLEL_NODES"],
+    stradaSupervisorNodeTimeoutMs: process.env["SUPERVISOR_NODE_TIMEOUT_MS"],
+    stradaSupervisorVerificationMode: process.env["SUPERVISOR_VERIFICATION_MODE"],
+    stradaSupervisorVerificationBudgetPct: process.env["SUPERVISOR_VERIFICATION_BUDGET_PCT"],
+    stradaSupervisorTriageProvider: process.env["SUPERVISOR_TRIAGE_PROVIDER"],
+    stradaSupervisorMaxFailureBudget: process.env["SUPERVISOR_MAX_FAILURE_BUDGET"],
+    stradaSupervisorDiversityCap: process.env["SUPERVISOR_DIVERSITY_CAP"],
   };
 }
 
