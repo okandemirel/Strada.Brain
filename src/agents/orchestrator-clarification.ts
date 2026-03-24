@@ -202,7 +202,9 @@ export function shouldKeepClarificationInternal(
   ctx: ClarificationContext,
   decision: ClarificationReviewDecision | null | undefined,
   text: string,
+  progressStuck?: boolean,
 ): boolean {
+  if (progressStuck) return false;
   if (!decision || (decision.decision !== "ask_user" && decision.decision !== "blocked")) {
     return false;
   }
