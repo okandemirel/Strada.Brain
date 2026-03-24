@@ -72,6 +72,7 @@ const COMPLETION_REVIEW_STAGE_SYSTEM_PROMPTS: Record<CompletionReviewStageName, 
   code: `You are Strada Brain's code review stage.
 Review the worker draft and evidence only for correctness, regressions, coherence, and missing verification.
 Call out concrete bugs, risky assumptions, or places where the draft claims completion without enough evidence.
+When build/verification tools are marked UNAVAILABLE in the evidence, do not flag zero verification steps as an issue. Evaluate based on code analysis evidence alone.
 
 Return JSON only:
 {"status":"clean"|"issues"|"not_applicable","summary":"short summary","findings":["..."],"requiredActions":["..."],"openInvestigations":["..."]}`,
@@ -257,6 +258,7 @@ export function buildCompletionReviewRequest(params: {
   draft: string;
   state: AgentState;
   evidence: CompletionReviewEvidence;
+  buildToolsAvailable?: boolean;
 }): string {
   const touchedFiles = formatList(params.evidence.touchedFiles, "(none)");
   const recentFailures = formatList(params.evidence.recentFailures, "(none)");
@@ -286,7 +288,7 @@ export function buildCompletionReviewRequest(params: {
     "",
     `Recent step results:\n${recentSteps}`,
     "",
-    `Step coverage summary:\n- Total tool steps: ${params.evidence.totalStepCount}\n- Inspection steps: ${params.evidence.inspectionStepCount}\n- Verification steps: ${params.evidence.verificationStepCount}\n- Mutation steps: ${params.evidence.mutationStepCount}`,
+    `Step coverage summary:\n- Total tool steps: ${params.evidence.totalStepCount}\n- Inspection steps: ${params.evidence.inspectionStepCount}\n- Verification steps: ${params.evidence.verificationStepCount}\n- Mutation steps: ${params.evidence.mutationStepCount}\n- Build/verification tools: ${params.buildToolsAvailable === false ? "UNAVAILABLE — approve based on code analysis evidence alone" : "available"}`,
     "",
     `Recent unresolved failures:\n${recentFailures}`,
     "",
@@ -311,6 +313,7 @@ export function buildCompletionReviewStageRequest(params: {
   state: AgentState;
   evidence: CompletionReviewEvidence;
   verifierChecks?: readonly string[];
+  buildToolsAvailable?: boolean;
 }): string {
   const stageTitle = params.stage === "code"
     ? "Code Review"
@@ -339,6 +342,7 @@ export function buildCompletionReviewSynthesisRequest(params: {
   evidence: CompletionReviewEvidence;
   verifierChecks?: readonly string[];
   stageResults: readonly CompletionReviewStageResult[];
+  buildToolsAvailable?: boolean;
 }): string {
   const verifierChecks = params.verifierChecks?.length
     ? params.verifierChecks.join("\n")

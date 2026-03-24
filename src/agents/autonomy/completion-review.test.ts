@@ -3,6 +3,7 @@ import { AgentPhase, type AgentState } from "../agent-state.js";
 import {
   buildAutonomyDeflectionGate,
   buildCompletionReviewGate,
+  buildCompletionReviewRequest,
   collectCompletionReviewEvidence,
   hasOpenReviewFindings,
   hasOpenReviewFindingsForDraft,
@@ -354,5 +355,69 @@ Belirsizlik varsa ask_user ile tek bir soru sor ve show_plan ile onaylat.`,
 - ArrowInputSystem may still scan every arrow on input.
 - If the freeze continues, inspect Unity Profiler CPU Usage and Call Stack.
 DONE`)).toBe(true);
+  });
+
+  describe("buildCompletionReviewRequest build tools signal", () => {
+    it("includes UNAVAILABLE when buildToolsAvailable is false", () => {
+      const request = buildCompletionReviewRequest({
+        prompt: "Fix ArrowMovementSystem",
+        draft: "Fixed the movement logic.\nDONE",
+        state: createState({
+          stepResults: [
+            { toolName: "file_read", success: true, summary: "Read ArrowMovementSystem.cs", timestamp: Date.now() - 300 },
+            { toolName: "file_edit", success: true, summary: "Updated ArrowMovementSystem.cs", timestamp: Date.now() - 100 },
+          ],
+        }),
+        evidence: {
+          touchedFiles: ["Assets/Game/Systems/ArrowMovementSystem.cs"],
+          recentFailures: [],
+          recentSteps: ["[OK] file_edit: Updated ArrowMovementSystem.cs"],
+          totalStepCount: 2,
+          inspectionStepCount: 1,
+          verificationStepCount: 0,
+          mutationStepCount: 1,
+          recentLogIssues: [],
+          verificationState: {
+            pendingFiles: new Set(["Assets/Game/Systems/ArrowMovementSystem.cs"]),
+            touchedFiles: new Set(["Assets/Game/Systems/ArrowMovementSystem.cs"]),
+            hasCompilableChanges: true,
+            lastBuildOk: false,
+            lastVerificationAt: null,
+          },
+        },
+        buildToolsAvailable: false,
+      });
+
+      expect(request).toContain("Build/verification tools: UNAVAILABLE");
+      expect(request).toContain("approve based on code analysis evidence alone");
+    });
+
+    it("shows available when buildToolsAvailable is not explicitly false", () => {
+      const request = buildCompletionReviewRequest({
+        prompt: "Fix runtime issue",
+        draft: "Fixed.\nDONE",
+        state: createState(),
+        evidence: {
+          touchedFiles: ["src/runtime/reviewer.ts"],
+          recentFailures: [],
+          recentSteps: [],
+          totalStepCount: 1,
+          inspectionStepCount: 1,
+          verificationStepCount: 0,
+          mutationStepCount: 0,
+          recentLogIssues: [],
+          verificationState: {
+            pendingFiles: new Set(),
+            touchedFiles: new Set(["src/runtime/reviewer.ts"]),
+            hasCompilableChanges: false,
+            lastBuildOk: true,
+            lastVerificationAt: null,
+          },
+        },
+      });
+
+      expect(request).toContain("Build/verification tools: available");
+      expect(request).not.toContain("UNAVAILABLE");
+    });
   });
 });

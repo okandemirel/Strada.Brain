@@ -286,6 +286,58 @@ DONE`;
     expect(targetedCheck).toBeUndefined();
   });
 
+  it("exposes buildToolsAvailable on the plan when explicitly set", () => {
+    const plan = planVerifierPipeline({
+      prompt: "fix arrow input",
+      draft: "Fixed ArrowInputSystem.cs.\nDONE",
+      state: createState({
+        stepResults: [
+          { toolName: "file_read", success: true, summary: "Read ArrowInputSystem.cs", timestamp: Date.now() - 300 },
+          { toolName: "file_edit", success: true, summary: "Updated ArrowInputSystem.cs", timestamp: Date.now() - 100 },
+        ],
+      }),
+      task: IMPLEMENTATION_TASK,
+      verificationState: {
+        pendingFiles: new Set(["Assets/Game/Systems/ArrowInputSystem.cs"]),
+        touchedFiles: new Set(["Assets/Game/Systems/ArrowInputSystem.cs"]),
+        hasCompilableChanges: true,
+        lastBuildOk: false,
+        lastVerificationAt: null,
+      },
+      buildVerificationGate: null,
+      conformanceGate: null,
+      logEntries: [],
+      chatId: "test-expose",
+      taskStartedAtMs: Date.now() - 1000,
+      buildToolsAvailable: false,
+    });
+
+    expect(plan.buildToolsAvailable).toBe(false);
+  });
+
+  it("exposes buildToolsAvailable as undefined when not explicitly set", () => {
+    const plan = planVerifierPipeline({
+      prompt: "fix runtime issue",
+      draft: "All fixed.\nDONE",
+      state: createState(),
+      task: IMPLEMENTATION_TASK,
+      verificationState: {
+        pendingFiles: new Set(),
+        touchedFiles: new Set(["src/utils/helpers.ts"]),
+        hasCompilableChanges: false,
+        lastBuildOk: true,
+        lastVerificationAt: Date.now() - 200,
+      },
+      buildVerificationGate: null,
+      conformanceGate: null,
+      logEntries: [],
+      chatId: "test-default",
+      taskStartedAtMs: Date.now() - 1000,
+    });
+
+    expect(plan.buildToolsAvailable).toBeUndefined();
+  });
+
   it("turns a completion review replan decision into a verifier replan gate", () => {
     const plan = planVerifierPipeline({
       prompt: "Fix the runtime issue",

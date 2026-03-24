@@ -4143,6 +4143,7 @@ export class Orchestrator {
                 state: params.state,
                 evidence: params.plan.evidence,
                 verifierChecks,
+                buildToolsAvailable: params.plan.buildToolsAvailable,
               }),
             },
           ],
@@ -4218,6 +4219,7 @@ export class Orchestrator {
       evidence: params.plan.evidence,
       verifierChecks,
       stageResults,
+      buildToolsAvailable: params.plan.buildToolsAvailable,
     });
 
     const reviewResponse = await reviewer.provider.chat(

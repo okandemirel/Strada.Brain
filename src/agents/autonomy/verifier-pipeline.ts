@@ -46,6 +46,7 @@ export interface VerifierPipelinePlan {
   readonly initialDecision: VerifierPipelineDecision;
   readonly gate?: string;
   readonly summary: string;
+  readonly buildToolsAvailable?: boolean;
 }
 
 export interface VerifierPipelineResult {
@@ -113,6 +114,7 @@ export function planVerifierPipeline(params: {
       initialDecision: "continue",
       gate: buildVerifierPipelineGate("continue", gatingChecks, evidence),
       summary: "Static verifier checks still require more work.",
+      buildToolsAvailable: params.buildToolsAvailable,
     };
   }
 
@@ -123,6 +125,7 @@ export function planVerifierPipeline(params: {
       reviewRequired: false,
       initialDecision: "approve",
       summary: "The current draft is an honest terminal failure report.",
+      buildToolsAvailable: params.buildToolsAvailable,
     };
   }
 
@@ -133,6 +136,7 @@ export function planVerifierPipeline(params: {
       reviewRequired: false,
       initialDecision: "approve",
       summary: "No additional verifier review is required for this draft.",
+      buildToolsAvailable: params.buildToolsAvailable,
     };
   }
 
@@ -142,6 +146,7 @@ export function planVerifierPipeline(params: {
     reviewRequired: true,
     initialDecision: "continue",
     summary: "Dynamic completion review is required before Strada can finish.",
+    buildToolsAvailable: params.buildToolsAvailable,
   };
 }
 
@@ -163,6 +168,7 @@ export function buildVerifierPipelineReviewRequest(params: {
       draft: params.draft,
       state: params.state,
       evidence: params.plan.evidence,
+      buildToolsAvailable: params.plan.buildToolsAvailable,
     }),
     "",
     `Verifier pipeline status before review:\n${checkSummary}`,

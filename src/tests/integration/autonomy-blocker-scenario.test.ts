@@ -319,6 +319,58 @@ describe("Autonomy Blocker Scenario — Game .cs File Editing", () => {
       ).not.toBeNull();
     });
 
+    it("C# editing without dotnet_build does not produce blocking gate", () => {
+      const selfVerification = new SelfVerification();
+
+      // Agent edits game C# files — no dotnet_build available
+      for (const file of GAME_FILES) {
+        selfVerification.track("file_edit", { path: file }, { toolCallId: "t1", content: "ok", isError: false });
+      }
+
+      const verificationState = selfVerification.getState();
+      expect(verificationState.hasCompilableChanges).toBe(true);
+
+      // Simulate: only shell_exec available, no dotnet_build/dotnet_test
+      // This means buildToolsAvailable should be false for compilable changes
+      const plan = planVerifierPipeline({
+        prompt: "Fix ArrowMovementSystem freeze",
+        draft: "Fixed ArrowMovementSystem.cs and ArrowInputSystem.cs.\nDONE",
+        state: createState({
+          stepResults: [
+            { toolName: "file_read", success: true, summary: "Read ArrowMovementSystem.cs", timestamp: Date.now() - 500 },
+            { toolName: "file_edit", success: true, summary: "Updated ArrowMovementSystem.cs", timestamp: Date.now() - 400 },
+            { toolName: "file_read", success: true, summary: "Read ArrowInputSystem.cs", timestamp: Date.now() - 300 },
+            { toolName: "file_edit", success: true, summary: "Updated ArrowInputSystem.cs", timestamp: Date.now() - 200 },
+          ],
+        }),
+        task: { type: "implementation", complexity: "moderate", criticality: "medium" },
+        verificationState,
+        buildVerificationGate: selfVerification.needsVerification() ? selfVerification.getPrompt() : null,
+        conformanceGate: null,
+        logEntries: [
+          { timestamp: new Date().toISOString(), level: "warn", message: "Unity project not in build path", meta: { chatId: "test-cs" } },
+        ],
+        chatId: "test-cs",
+        taskStartedAtMs: Date.now() - 5000,
+        buildToolsAvailable: false, // no dotnet_build in tool list
+      });
+
+      // Build check should be not_applicable
+      const buildCheck = plan.checks.find(c => c.name === "build");
+      expect(buildCheck?.status).toBe("not_applicable");
+
+      // Targeted-repro check should be skipped entirely
+      const targetedCheck = plan.checks.find(c => c.name === "targeted-repro");
+      expect(targetedCheck).toBeUndefined();
+
+      // No gating checks should block
+      const gatingChecks = plan.checks.filter(c => c.gate);
+      expect(gatingChecks).toHaveLength(0);
+
+      // buildToolsAvailable should be exposed on the plan
+      expect(plan.buildToolsAvailable).toBe(false);
+    });
+
     it("disabled conformance never triggers even for framework files", () => {
       const bundle = createAutonomyBundle({
         prompt: "Fix framework bug",

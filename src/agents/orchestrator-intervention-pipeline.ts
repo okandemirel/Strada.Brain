@@ -647,9 +647,14 @@ export async function resolveVerifierIntervention(
     ? params.selfVerification.getPrompt()
     : null;
   const conformanceGate = params.stradaConformance.getPrompt();
-  const buildToolsAvailable = params.availableToolNames
-    ? params.availableToolNames.some(t => isVerificationToolName(t) || t === "shell_exec")
-    : true;
+  const hasExplicitVerifyTools = params.availableToolNames
+    ? params.availableToolNames.some(t => isVerificationToolName(t))
+    : false;
+  const buildToolsAvailable = verificationState.hasCompilableChanges
+    ? hasExplicitVerifyTools
+    : params.availableToolNames
+      ? hasExplicitVerifyTools || params.availableToolNames.some(t => t === "shell_exec")
+      : true;
   const plan = planVerifierPipeline({
     prompt: params.prompt,
     draft: params.draft ?? "",
