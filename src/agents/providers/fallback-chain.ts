@@ -19,6 +19,9 @@ import { getLogger } from "../../utils/logger.js";
  */
 function isNonRetryableRequestError(error: unknown): boolean {
   const msg = error instanceof Error ? error.message : String(error);
+  // reasoning_content errors are provider-specific (Kimi K2.5);
+  // fallback providers won't have this requirement, so allow fallthrough
+  if (/reasoning_content/i.test(msg)) return false;
   // HTTP 400 bad request — typically malformed body / invalid tool schema
   if (/\b400\b/.test(msg) && /bad.?request|invalid|malformed/i.test(msg)) return true;
   // HTTP 401/403 — auth errors won't resolve by switching provider

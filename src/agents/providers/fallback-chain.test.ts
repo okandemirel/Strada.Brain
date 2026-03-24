@@ -89,6 +89,21 @@ describe("FallbackChainProvider", () => {
     await expect(chain.healthCheck()).resolves.toBe(true);
   });
 
+  it("falls through on reasoning_content 400 error instead of rethrowing", async () => {
+    const p1 = createMockProvider();
+    (p1.chat as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error("400 Bad Request: reasoning_content is not allowed for this model")
+    );
+    const p2 = createMockProvider({ text: "fallback-ok" });
+
+    const chain = new FallbackChainProvider([p1, p2]);
+    const result = await chain.chat("sys", [], []);
+
+    expect(result.text).toBe("fallback-ok");
+    expect(p1.chat).toHaveBeenCalledTimes(1);
+    expect(p2.chat).toHaveBeenCalledTimes(1);
+  });
+
   it("falls back to a later provider for listModels", async () => {
     const p1 = createMockProvider();
     const p2 = createMockProvider();
