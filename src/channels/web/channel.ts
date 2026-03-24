@@ -371,10 +371,12 @@ export class WebChannel
     "Referrer-Policy": "no-referrer",
     "Content-Security-Policy":
       "default-src 'self'; " +
-      "script-src 'self'; " +
-      "style-src 'self'; " +
+      "script-src 'self' https://cdn.jsdelivr.net blob:; " +
+      "style-src 'self' 'unsafe-inline'; " +
       "connect-src 'self' ws://localhost:* ws://127.0.0.1:* wss://localhost:* wss://127.0.0.1:*; " +
       "img-src 'self' data: blob:; " +
+      "font-src 'self' data: https://cdn.jsdelivr.net; " +
+      "worker-src blob:; " +
       "object-src 'none'; " +
       "base-uri 'none'; " +
       "frame-ancestors 'none';",
@@ -742,7 +744,6 @@ export class WebChannel
         ) : [];
         if (
           (feedbackType === "thumbs_up" || feedbackType === "thumbs_down") &&
-          instinctIds.length > 0 &&
           this.feedbackReactionCallback
         ) {
           this.feedbackReactionCallback(

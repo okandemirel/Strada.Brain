@@ -39,10 +39,10 @@ export default function ChatView() {
 
   const handleFeedback = useCallback((messageId: string, feedbackType: 'thumbs_up' | 'thumbs_down') => {
     const msg = useSessionStore.getState().messages.find((m) => m.id === messageId)
-    if (!msg?.instinctIds || msg.instinctIds.length === 0) return
+    if (!msg) return
     if (msg.feedback === feedbackType) return
     updateMessage(messageId, { feedback: feedbackType })
-    sendRawJSON({ type: 'feedback', feedbackType, instinctIds: msg.instinctIds })
+    sendRawJSON({ type: 'feedback', feedbackType, instinctIds: msg.instinctIds ?? [] })
   }, [sendRawJSON, updateMessage])
 
   const isDisconnected = status !== 'connected'

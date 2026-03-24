@@ -143,7 +143,7 @@ const FeedbackToolbar = memo(function FeedbackToolbar({
 function ChatMessageComponent({ message, onFeedback }: ChatMessageProps) {
   const isUser = message.sender === 'user'
   const showVoiceOutput = !isUser && !message.isStreaming && hasTextContent(message.text)
-  const showFeedback = !isUser && !message.isStreaming && onFeedback && message.instinctIds && message.instinctIds.length > 0
+  const showFeedback = !isUser && !message.isStreaming && onFeedback
 
   return (
     <div
