@@ -254,10 +254,10 @@ export class CapabilityMatcher {
             ].includes(c),
         );
 
-        const pref = (["speed", "cost", "quality"] as const).includes(
-          entry.preference as any,
-        )
-          ? (entry.preference as "speed" | "cost" | "quality")
+        const validPrefs = ["speed", "cost", "quality"] as const;
+        type Pref = typeof validPrefs[number];
+        const pref: Pref = validPrefs.includes(entry.preference as Pref)
+          ? (entry.preference as Pref)
           : "quality";
 
         return {

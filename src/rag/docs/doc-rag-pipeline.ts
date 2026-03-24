@@ -117,7 +117,7 @@ export class DocRAGPipeline {
    * Search documentation by pre-computed query embedding.
    */
   async search(queryEmbedding: number[], topK: number): Promise<VectorSearchHit[]> {
-    return this.vectorStore.search(queryEmbedding as any, topK);
+    return this.vectorStore.search(queryEmbedding as unknown as Parameters<typeof this.vectorStore.search>[0], topK);
   }
 
   /** Total chunks indexed across all packages so far. */
@@ -189,8 +189,8 @@ export class DocRAGPipeline {
 
     const entries: VectorEntry[] = chunks.map((chunk, i) => ({
       id: chunk.id,
-      vector: result.embeddings[i]! as any,
-      chunk: chunk as any,
+      vector: result.embeddings[i]! as unknown as VectorEntry['vector'],
+      chunk: chunk as unknown as VectorEntry['chunk'],
       addedAt: createBrand(Date.now(), "TimestampMs" as const) as TimestampMs,
       accessCount: 0,
     }));

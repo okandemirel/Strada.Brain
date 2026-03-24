@@ -40,7 +40,7 @@ export interface SupervisorBrainOptions {
   readonly decomposer: SupervisorDecomposer;
   readonly capabilityMatcher: CapabilityMatcher;
   readonly providerAssigner: ProviderAssigner;
-  readonly eventEmitter?: { emit: (event: string, payload: any) => void };
+  readonly eventEmitter?: { emit: (event: string, payload: unknown) => void };
 }
 
 // =============================================================================
@@ -52,7 +52,7 @@ export class SupervisorBrain {
   private readonly decomposer: SupervisorDecomposer;
   private readonly capabilityMatcher: CapabilityMatcher;
   private readonly providerAssigner: ProviderAssigner;
-  private emitter?: { emit: (event: string, payload: any) => void };
+  private emitter?: { emit: (event: string, payload: unknown) => void };
 
   private executeNodeFn?: (node: TaggedGoalNode, context: SupervisorContext) => Promise<NodeResult>;
 
@@ -72,7 +72,7 @@ export class SupervisorBrain {
    * Set the event emitter for supervisor telemetry events.
    * Called after bootstrap when workspaceBus is available.
    */
-  setEventEmitter(emitter: { emit: (event: string, payload: any) => void }): void {
+  setEventEmitter(emitter: { emit: (event: string, payload: unknown) => void }): void {
     this.emitter = emitter;
   }
 
