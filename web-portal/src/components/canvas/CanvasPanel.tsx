@@ -17,6 +17,8 @@ function downloadBlob(blob: Blob, filename: string): void {
   URL.revokeObjectURL(url)
 }
 
+const toolbarBtnCls = 'rounded bg-[#313244] px-2 py-0.5 text-xs text-[#cdd6f4] hover:bg-[#45475a]'
+
 export default function CanvasPanel() {
   const pendingShapes = useCanvasStore((s) => s.pendingShapes)
   const clearPendingShapes = useCanvasStore((s) => s.clearPendingShapes)
@@ -38,7 +40,7 @@ export default function CanvasPanel() {
       editor.user.updateUserPreferences({ colorScheme: theme })
       editor.on('change', () => setDirty(true))
     },
-    [setDirty, theme],
+    [setDirty],
   )
 
   // Sync tldraw color scheme when portal theme changes
@@ -116,7 +118,7 @@ export default function CanvasPanel() {
             y: baseY,
             props: {
               ...pending.props,
-              ...(pending.source === 'agent' ? { source: 'agent' } : {}),
+              ...(pending.source ? { source: pending.source } : {}),
             },
           })
           nextX += 200 + GAP
@@ -140,6 +142,7 @@ export default function CanvasPanel() {
   // Wire exportJSON into the context menu override
   useEffect(() => {
     setExportJsonFn(exportJSON)
+    return () => setExportJsonFn(() => {})
   }, [exportJSON])
 
   return (
@@ -153,20 +156,10 @@ export default function CanvasPanel() {
           View only
         </span>
         <div className="flex-1" />
-        <button
-          type="button"
-          className="rounded bg-[#313244] px-2 py-0.5 text-xs text-[#cdd6f4] hover:bg-[#45475a]"
-          onClick={() => editorRef.current?.zoomToFit()}
-          data-testid="canvas-zoom-to-fit"
-        >
+        <button type="button" className={toolbarBtnCls} onClick={() => editorRef.current?.zoomToFit()} data-testid="canvas-zoom-to-fit">
           Zoom to Fit
         </button>
-        <button
-          type="button"
-          className="rounded bg-[#313244] px-2 py-0.5 text-xs text-[#cdd6f4] hover:bg-[#45475a]"
-          onClick={exportJSON}
-          data-testid="canvas-export-json"
-        >
+        <button type="button" className={toolbarBtnCls} onClick={exportJSON} data-testid="canvas-export-json">
           Export JSON
         </button>
         {isDirty ? (
