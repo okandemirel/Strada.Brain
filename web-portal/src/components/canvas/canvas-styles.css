@@ -1,0 +1,92 @@
+/* Agent push glow animation */
+@keyframes strada-shape-glow {
+  0% { box-shadow: 0 0 0 0 rgba(0, 229, 255, 0.4); }
+  50% { box-shadow: 0 0 12px 4px rgba(0, 229, 255, 0.25); }
+  100% { box-shadow: 0 0 0 0 rgba(0, 229, 255, 0); }
+}
+
+/* Shape creation scale-in */
+@keyframes strada-shape-in {
+  from { opacity: 0; transform: scale(0.9); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.strada-shape-glow {
+  animation: strada-shape-glow 1s ease-out;
+}
+
+.strada-shape-in {
+  animation: strada-shape-in 200ms ease-out;
+}
+
+/* AI badge on agent-created shapes */
+.strada-ai-badge {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  font-size: 9px;
+  font-weight: 700;
+  color: rgba(0, 229, 255, 0.4);
+  background: rgba(0, 229, 255, 0.08);
+  border: 1px solid rgba(0, 229, 255, 0.15);
+  border-radius: 4px;
+  padding: 1px 4px;
+  pointer-events: none;
+  transition: opacity 0.2s;
+  opacity: 0.5;
+  z-index: 1;
+}
+
+.strada-ai-badge:hover,
+*:hover > .strada-ai-badge {
+  opacity: 1;
+  color: rgba(0, 229, 255, 0.8);
+}
+
+/* Custom toolbar shape buttons */
+.strada-toolbar-separator {
+  width: 100%;
+  height: 1px;
+  background: rgba(255, 255, 255, 0.1);
+  margin: 4px 0;
+}
+
+.strada-toolbar-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  border: none;
+  background: transparent;
+  color: #a6adc8;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  backdrop-filter: blur(12px);
+}
+
+.strada-toolbar-btn:hover {
+  background: rgba(0, 229, 255, 0.1);
+  color: #cdd6f4;
+  box-shadow: 0 0 8px rgba(0, 229, 255, 0.15);
+}
+
+.strada-toolbar-btn:active {
+  transform: scale(0.95);
+}
+
+/* Context menu Strada section */
+.strada-ctx-group {
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  padding-top: 4px;
+  margin-top: 4px;
+}
+
+/* Glassmorphism for tldraw popover/context menu */
+.tl-container .tlui-popover__content {
+  backdrop-filter: blur(12px);
+  background: rgba(18, 18, 26, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
