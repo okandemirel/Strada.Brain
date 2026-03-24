@@ -8,6 +8,7 @@ import type {
 } from "./providers/provider.interface.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
+import { join } from "node:path";
 import type { ProviderManager } from "./providers/provider-manager.js";
 import { getToolMetadata, type ITool, type ToolContext } from "./tools/tool.interface.js";
 import type {
@@ -606,6 +607,7 @@ export class Orchestrator {
       instinctRetriever: this.instinctRetriever,
       eventEmitter: this.eventEmitter,
       taskExecutionStore: this.taskExecutionStore,
+      sessionsDir: join(this.projectPath ?? ".", ".strada-memory", "sessions"),
     });
   }
 

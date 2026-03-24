@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { SessionManager, type SessionManagerDeps } from "./orchestrator-session-manager.js";
+import { SessionManager, type SessionManagerDeps, type Session } from "./orchestrator-session-manager.js";
 
 function createMockDeps(overrides?: Partial<SessionManagerDeps>): SessionManagerDeps {
   return {
@@ -172,5 +172,54 @@ describe("SessionManager", () => {
     sm.cleanupSessions(3_600_000);
 
     expect(sm.sessions.has("chat-1")).toBe(true);
+  });
+
+  describe("session disk persistence", () => {
+    it("round-trips a session through serialize/deserialize", () => {
+      const session: Session = {
+        messages: [
+          { role: "user", content: "hello" },
+          { role: "assistant", content: "hi there" },
+        ],
+        lastActivity: new Date("2026-03-24T10:00:00Z"),
+        conversationScope: "scope-1",
+        lastJournalSnapshot: { learnedInsights: ["test insight"] },
+      };
+      const json = SessionManager.serializeSession(session);
+      const restored = SessionManager.deserializeSession(json);
+      expect(restored).not.toBeNull();
+      expect(restored!.messages).toHaveLength(2);
+      expect(restored!.messages[0]!.content).toBe("hello");
+      expect(restored!.conversationScope).toBe("scope-1");
+      expect(restored!.lastJournalSnapshot?.learnedInsights).toContain("test insight");
+    });
+
+    it("caps serialized messages at 50", () => {
+      const messages = Array.from({ length: 80 }, (_, i) => ({
+        role: "user" as const,
+        content: `msg-${i}`,
+      }));
+      const session: Session = { messages, lastActivity: new Date(), visibleMessages: [] };
+      const json = SessionManager.serializeSession(session);
+      const restored = SessionManager.deserializeSession(json);
+      expect(restored!.messages).toHaveLength(50);
+      expect(restored!.messages[0]!.content).toBe("msg-30");
+    });
+
+    it("returns null for expired sessions (>24h)", () => {
+      const session: Session = {
+        messages: [{ role: "user", content: "old" }],
+        lastActivity: new Date(Date.now() - 25 * 60 * 60 * 1000),
+        visibleMessages: [],
+      };
+      const json = SessionManager.serializeSession(session);
+      const restored = SessionManager.deserializeSession(json);
+      expect(restored).toBeNull();
+    });
+
+    it("returns null for corrupt JSON", () => {
+      const restored = SessionManager.deserializeSession("{corrupt json!!!");
+      expect(restored).toBeNull();
+    });
   });
 });

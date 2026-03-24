@@ -24,6 +24,9 @@ import type { TaskExecutionStore } from "../memory/unified/task-execution-store.
 import type { SessionSummarizer } from "../memory/unified/session-summarizer.js";
 import type { InteractionGateState } from "./autonomy/interaction-policy.js";
 import type { InteractionBoundaryDecision } from "./autonomy/visibility-boundary.js";
+import { writeFile, readFile, mkdir } from "node:fs/promises";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { MemoryRefresher } from "./memory-refresher.js";
 import { redactSensitiveText } from "./orchestrator-text-utils.js";
 import { stripInternalDecisionMarkers } from "./orchestrator-supervisor-routing.js";
@@ -71,6 +74,7 @@ export interface SessionManagerDeps {
   readonly instinctRetriever: InstinctRetriever | null;
   readonly eventEmitter: IEventEmitter<LearningEventMap> | null;
   readonly taskExecutionStore?: TaskExecutionStore;
+  readonly sessionsDir?: string;
 }
 
 // ─── SessionManager ──────────────────────────────────────────────────────────
@@ -78,6 +82,8 @@ export interface SessionManagerDeps {
 export class SessionManager {
   /** Minimum interval between debounced memory persists per chat (5s). */
   private static readonly PERSIST_DEBOUNCE_MS = 5_000;
+  private static readonly MAX_PERSISTED_MESSAGES = 50;
+  private static readonly SESSION_EXPIRY_MS = 24 * 60 * 60 * 1000; // 24 hours
 
   readonly sessions = new Map<string, Session>();
   readonly sessionLocks = new Map<string, Promise<void>>();
@@ -86,6 +92,63 @@ export class SessionManager {
 
   constructor(deps: SessionManagerDeps) {
     this.deps = deps;
+  }
+
+  // ── Serialization ─────────────────────────────────────────────────────────
+
+  static serializeSession(session: Session): string {
+    const messages = session.messages.slice(-SessionManager.MAX_PERSISTED_MESSAGES);
+    return JSON.stringify({
+      messages,
+      lastActivity: session.lastActivity.toISOString(),
+      conversationScope: session.conversationScope,
+      profileKey: session.profileKey,
+      lastJournalSnapshot: session.lastJournalSnapshot,
+    });
+  }
+
+  static deserializeSession(json: string): Session | null {
+    try {
+      const data = JSON.parse(json);
+      const lastActivity = new Date(data.lastActivity);
+      if (Date.now() - lastActivity.getTime() > SessionManager.SESSION_EXPIRY_MS) {
+        return null; // expired
+      }
+      return {
+        messages: data.messages ?? [],
+        visibleMessages: [],
+        lastActivity,
+        conversationScope: data.conversationScope,
+        profileKey: data.profileKey,
+        lastJournalSnapshot: data.lastJournalSnapshot,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  // ── Disk persistence ──────────────────────────────────────────────────────
+
+  private async persistSessionToDisk(chatId: string, session: Session): Promise<void> {
+    const dir = this.deps.sessionsDir!;
+    if (!existsSync(dir)) {
+      await mkdir(dir, { recursive: true });
+    }
+    const safeName = chatId.replace(/[^a-zA-Z0-9_-]/g, "_");
+    const filePath = join(dir, `${safeName}.json`);
+    await writeFile(filePath, SessionManager.serializeSession(session), "utf-8");
+  }
+
+  private restoreSessionFromDisk(chatId: string): Session | null {
+    try {
+      const safeName = chatId.replace(/[^a-zA-Z0-9_-]/g, "_");
+      const filePath = join(this.deps.sessionsDir!, `${safeName}.json`);
+      if (!existsSync(filePath)) return null;
+      const json = readFileSync(filePath, "utf-8");
+      return SessionManager.deserializeSession(json);
+    } catch {
+      return null;
+    }
   }
 
   // ── Accessor ─────────────────────────────────────────────────────────────
@@ -106,6 +169,15 @@ export class SessionManager {
       this.sessions.delete(chatId);
       this.sessions.set(chatId, session);
       return session;
+    }
+
+    // Try disk restore before creating fresh session
+    if (this.deps.sessionsDir) {
+      const restored = this.restoreSessionFromDisk(chatId);
+      if (restored) {
+        this.sessions.set(chatId, restored);
+        return restored;
+      }
     }
 
     // Evict oldest session if at capacity
@@ -345,6 +417,19 @@ export class SessionManager {
         chatId,
         error: error instanceof Error ? error.message : String(error),
       });
+    }
+
+    // Fire-and-forget disk persistence
+    if (this.deps.sessionsDir) {
+      const sessionForDisk = this.sessions.get(chatId);
+      if (sessionForDisk) {
+        this.persistSessionToDisk(chatId, sessionForDisk).catch((err) => {
+          getLogger().debug("Session disk persist failed", {
+            chatId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
+      }
     }
   }
 
