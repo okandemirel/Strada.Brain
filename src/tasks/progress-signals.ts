@@ -31,6 +31,7 @@ export function buildTaskProgressSummary(
   task: Pick<Task, "title" | "prompt">,
   update: TaskProgressUpdate | undefined,
   defaultLanguage: ProgressLanguage = "en",
+  progress?: { current: number; total: number; unit: string },
 ): string {
   const signal = update ? toTaskProgressSignal(update) : undefined;
   const summary = signal?.userSummary?.trim();
@@ -42,51 +43,69 @@ export function buildTaskProgressSummary(
   const files = formatFiles(signal?.files);
   const joinedFiles = files.join(language === "tr" ? " ve " : " and ");
 
+  let base: string;
   switch (signal?.kind) {
     case "editing":
-      return language === "tr"
+      base = language === "tr"
         ? joinedFiles
           ? `Strada agent: ${joinedFiles} üzerinde hata düzeltmeleri uyguluyorum.`
           : "Strada agent: ilgili dosyalarda hata düzeltmeleri uyguluyorum."
         : joinedFiles
           ? `Strada agent: applying fixes in ${joinedFiles}.`
           : "Strada agent: applying code fixes.";
+      break;
     case "verification":
-      return language === "tr"
+      base = language === "tr"
         ? "Strada agent: yaptığım değişiklikleri build ve kalite kontrolleriyle doğruluyorum."
         : "Strada agent: verifying the latest changes with build and quality checks.";
+      break;
     case "clarification":
-      return language === "tr"
+      base = language === "tr"
         ? "Strada agent: kararı size sormadan önce projeden ek kanıt topluyorum."
         : "Strada agent: gathering more project evidence before surfacing a question.";
+      break;
     case "visibility":
-      return language === "tr"
+      base = language === "tr"
         ? "Strada agent: sonucu paylaşmadan önce teknik kanıtları tekrar kontrol ediyorum."
         : "Strada agent: validating the technical evidence before surfacing the result.";
+      break;
     case "delegation":
-      return language === "tr"
+      base = language === "tr"
         ? "Strada agent: kök neden analizi için yardımcı agent incelemesi çalıştırıyorum."
         : "Strada agent: running a helper-agent diagnosis for root-cause analysis.";
+      break;
     case "loop_recovery":
-      return language === "tr"
+      base = language === "tr"
         ? "Strada agent: aynı noktaya döndüğümü fark ettim; farklı strateji ve ek kanıtla toparlanıyorum."
         : "Strada agent: I detected a repeated control loop and am recovering with a different strategy.";
+      break;
     case "replanning":
-      return language === "tr"
+      base = language === "tr"
         ? "Strada agent: mevcut yaklaşımı değiştirip yeni bir planla devam ediyorum."
         : "Strada agent: switching to a different plan.";
+      break;
     case "analysis":
     case "inspection":
-      return language === "tr"
+      base = language === "tr"
         ? joinedFiles
           ? `Strada agent: ${joinedFiles} ve ilgili kanıtları inceliyorum.`
           : "Strada agent: proje durumunu ve ilgili kanıtları inceliyorum."
         : joinedFiles
           ? `Strada agent: inspecting ${joinedFiles} and the surrounding evidence.`
           : "Strada agent: inspecting the project state and surrounding evidence.";
+      break;
     default:
-      return fallbackSummary(task.title, language);
+      base = fallbackSummary(task.title, language);
   }
+  return appendMilestone(base, progress);
+}
+
+function appendMilestone(
+  summary: string,
+  progress?: { current: number; total: number; unit: string },
+): string {
+  if (!progress) return summary;
+  return `${summary} — ${progress.current}/${progress.total} ${progress.unit}`;
 }
 
 function fallbackSummary(title: string, language: ProgressLanguage): string {
@@ -115,5 +134,5 @@ function formatFiles(files: readonly string[] | undefined): string[] {
   if (!files || files.length === 0) {
     return [];
   }
-  return [...new Set(files.map((file) => basename(file)).filter(Boolean))].slice(0, 2);
+  return [...new Set(files.map((file) => basename(file)).filter(Boolean))].slice(0, 3);
 }
