@@ -719,6 +719,7 @@
   .path-status { margin-top: 8px; font-size: 13px; }
   .path-status.valid { color: var(--color-success); }
   .path-status.invalid { color: var(--color-error); }
+  .path-status.warning { color: var(--color-warning, #f0ad4e); }
 
   /* Setup Browser */
   .browser-overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.5); backdrop-filter: blur(12px); display: flex; align-items: center; justify-content: center; z-index: 200; padding: 24px; }
@@ -758,6 +759,12 @@
   .mcp-dependency-value { font-size: 13px; font-weight: 600; color: #e8e8ed; margin-top: 4px; }
   .mcp-dependency-path { font-size: 10px; color: rgba(255, 255, 255, 0.3); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .mcp-dependency-path.mono { font-family: "SF Mono", Consolas, monospace; }
+  .mcp-dependency-install { margin-top: 6px; }
+  .mcp-dependency-install .btn-sm { padding: 3px 10px; font-size: 11px; border-radius: 6px; }
+  .mcp-dependency-install-status { display: block; font-size: 11px; margin-bottom: 4px; }
+  .mcp-dependency-install-status.working { color: var(--color-accent, #58a6ff); }
+  .mcp-dependency-install-status.success { color: var(--color-success); }
+  .mcp-dependency-install-status.error { color: var(--color-error); }
   .mcp-inline-note { font-size: 12px; color: rgba(255, 255, 255, 0.4); padding: 8px 12px; border-radius: 8px; background: rgba(255, 255, 255, 0.03); margin-bottom: 12px; }
   .mcp-inline-note.warning { color: var(--color-warning); background: rgba(251, 191, 36, 0.06); }
   .mcp-install-summary { margin-top: 12px; }

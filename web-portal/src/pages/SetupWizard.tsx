@@ -77,8 +77,11 @@ export default function SetupWizard() {
             mcpInstallError={wiz.mcpInstallError}
             mcpInstallMessage={wiz.mcpInstallMessage}
             mcpInstallPlan={wiz.mcpInstallPlan}
+            depInstallStatus={wiz.depInstallStatus}
+            depInstallError={wiz.depInstallError}
             validatePath={wiz.validatePath}
             installMcp={wiz.installMcp}
+            installDep={wiz.installDep}
             openBrowser={browser.open}
             onNext={wiz.nextStep}
             onBack={wiz.prevStep}
@@ -157,10 +160,13 @@ export default function SetupWizard() {
           mcpInstallError={wiz.mcpInstallError}
           mcpInstallMessage={wiz.mcpInstallMessage}
           mcpInstallPlan={wiz.mcpInstallPlan}
+          depInstallStatus={wiz.depInstallStatus}
+          depInstallError={wiz.depInstallError}
           loading={browser.loading}
           error={browser.error}
           browseTo={browser.browseTo}
           installMcp={wiz.installMcp}
+          installDep={wiz.installDep}
           onSelect={handleBrowserSelect}
           onClose={browser.close}
         />

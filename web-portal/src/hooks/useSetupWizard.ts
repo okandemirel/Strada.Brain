@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import type {
+  DepInstallResponse,
   McpInstallPlan,
   McpInstallResponse,
   McpInstallTarget,
@@ -9,6 +10,7 @@ import type {
   SaveStatus,
   SetupSaveResponse,
   SetupStatusResponse,
+  StradaDepPackage,
   StradaDepsStatus,
 } from '../types/setup'
 import {
@@ -290,6 +292,8 @@ export function useSetupWizard() {
   const [mcpInstallError, setMcpInstallError] = useState<string | null>(null)
   const [mcpInstallMessage, setMcpInstallMessage] = useState<string | null>(null)
   const [mcpInstallPlan, setMcpInstallPlan] = useState<McpInstallPlan | null>(null)
+  const [depInstallStatus, setDepInstallStatus] = useState<Partial<Record<StradaDepPackage, 'idle' | 'installing' | 'success' | 'error'>>>({})
+  const [depInstallError, setDepInstallError] = useState<Partial<Record<StradaDepPackage, string | null>>>({})
   const [channel, setChannelState] = useState('web')
   const [channelConfig, setChannelConfig] = useState<Record<string, string>>({})
   const [language, setLanguageState] = useState('en')
@@ -477,6 +481,8 @@ export function useSetupWizard() {
     setMcpInstallError(null)
     setMcpInstallMessage(null)
     setMcpInstallPlan(null)
+    setDepInstallStatus({})
+    setDepInstallError({})
   }, [])
 
   const applyPathAnalysis = useCallback((data: {
@@ -562,6 +568,41 @@ export function useSetupWizard() {
       setMcpInstallError(err instanceof Error ? err.message : 'Strada.MCP install failed')
       setMcpInstallMessage(null)
       setMcpInstallPlan(null)
+      return false
+    }
+  }, [applyPathAnalysis, projectPath])
+
+  const installDep = useCallback(async (pkg: StradaDepPackage): Promise<boolean> => {
+    const installPath = projectPath.trim()
+    if (!installPath) {
+      setDepInstallStatus((prev) => ({ ...prev, [pkg]: 'error' }))
+      setDepInstallError((prev) => ({ ...prev, [pkg]: 'Project path is required.' }))
+      return false
+    }
+
+    setDepInstallStatus((prev) => ({ ...prev, [pkg]: 'installing' }))
+    setDepInstallError((prev) => ({ ...prev, [pkg]: null }))
+
+    try {
+      const res = await fetch('/api/setup/install-dep', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': csrfTokenRef.current,
+        },
+        body: JSON.stringify({ projectPath: installPath, package: pkg }),
+      })
+      const data = await res.json().catch(() => ({})) as DepInstallResponse
+      if (!res.ok || !data.success) {
+        throw new Error(data.error ?? `Strada.${pkg === 'core' ? 'Core' : 'Modules'} install failed (${res.status})`)
+      }
+
+      applyPathAnalysis(data)
+      setDepInstallStatus((prev) => ({ ...prev, [pkg]: 'success' }))
+      return true
+    } catch (err) {
+      setDepInstallStatus((prev) => ({ ...prev, [pkg]: 'error' }))
+      setDepInstallError((prev) => ({ ...prev, [pkg]: err instanceof Error ? err.message : 'Install failed' }))
       return false
     }
   }, [applyPathAnalysis, projectPath])
@@ -877,6 +918,8 @@ export function useSetupWizard() {
     mcpInstallError,
     mcpInstallMessage,
     mcpInstallPlan,
+    depInstallStatus,
+    depInstallError,
     channel,
     channelConfig,
     language,
@@ -907,6 +950,7 @@ export function useSetupWizard() {
     setProjectPath,
     validatePath,
     installMcp,
+    installDep,
     setChannel,
     setChannelConfigField,
     setLanguage,

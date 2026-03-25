@@ -108,6 +108,18 @@ export interface McpInstallResponse {
   mcpRecommendation?: McpRecommendation
 }
 
+export type StradaDepPackage = 'core' | 'modules'
+
+export interface DepInstallResponse {
+  success?: boolean
+  error?: string
+  installedPath?: string
+  isUnityProject?: boolean
+  stradaDeps?: StradaDepsStatus
+  dependencyWarnings?: string[]
+  mcpRecommendation?: McpRecommendation
+}
+
 export type SaveStatus = 'idle' | 'saving' | SetupBootstrapViewStatus
 
 export interface SetupSaveResponse {

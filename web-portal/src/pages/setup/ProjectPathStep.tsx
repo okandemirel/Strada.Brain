@@ -1,4 +1,4 @@
-import type { McpInstallPlan, McpInstallTarget, McpRecommendation, StradaDepsStatus } from '../../types/setup'
+import type { McpInstallPlan, McpInstallTarget, McpRecommendation, StradaDepPackage, StradaDepsStatus } from '../../types/setup'
 import McpInstallPanel from './McpInstallPanel'
 
 interface ProjectPathStepProps {
@@ -14,8 +14,11 @@ interface ProjectPathStepProps {
   mcpInstallError: string | null
   mcpInstallMessage: string | null
   mcpInstallPlan: McpInstallPlan | null
+  depInstallStatus: Partial<Record<StradaDepPackage, 'idle' | 'installing' | 'success' | 'error'>>
+  depInstallError: Partial<Record<StradaDepPackage, string | null>>
   validatePath: () => Promise<void>
   installMcp: (target: McpInstallTarget) => Promise<boolean>
+  installDep: (pkg: StradaDepPackage) => Promise<boolean>
   openBrowser: () => void
   onNext: () => void
   onBack: () => void
@@ -34,8 +37,11 @@ export default function ProjectPathStep({
   mcpInstallError,
   mcpInstallMessage,
   mcpInstallPlan,
+  depInstallStatus,
+  depInstallError,
   validatePath,
   installMcp,
+  installDep,
   openBrowser,
   onNext,
   onBack,
@@ -65,8 +71,12 @@ export default function ProjectPathStep({
         </div>
 
         {pathValid !== null && (
-          <div className={`path-status ${pathValid ? 'valid' : 'invalid'}`}>
-            {pathValid ? 'Valid Unity project path' : (pathError ?? 'Invalid path')}
+          <div className={`path-status ${pathValid ? (pathIsUnityProject ? 'valid' : 'warning') : 'invalid'}`}>
+            {pathValid
+              ? (pathIsUnityProject
+                  ? 'Valid Unity project path'
+                  : 'Valid path, but this is not a Unity project (Assets/ and ProjectSettings/ not found)')
+              : (pathError ?? 'Invalid path')}
           </div>
         )}
 
@@ -80,8 +90,13 @@ export default function ProjectPathStep({
             mcpInstallError={mcpInstallError}
             mcpInstallMessage={mcpInstallMessage}
             mcpInstallPlan={mcpInstallPlan}
+            depInstallStatus={depInstallStatus}
+            depInstallError={depInstallError}
             onInstall={(target) => {
               void installMcp(target)
+            }}
+            onInstallDep={(pkg) => {
+              void installDep(pkg)
             }}
           />
         )}

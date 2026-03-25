@@ -3,6 +3,7 @@ import type {
   McpInstallPlan,
   McpInstallTarget,
   McpRecommendation,
+  StradaDepPackage,
   StradaDepsStatus,
 } from '../../types/setup'
 import McpInstallPanel from './McpInstallPanel'
@@ -19,10 +20,13 @@ interface DirectoryBrowserProps {
   mcpInstallError: string | null
   mcpInstallMessage: string | null
   mcpInstallPlan: McpInstallPlan | null
+  depInstallStatus?: Partial<Record<StradaDepPackage, 'idle' | 'installing' | 'success' | 'error'>>
+  depInstallError?: Partial<Record<StradaDepPackage, string | null>>
   loading: boolean
   error: string | null
   browseTo: (path: string) => void
   installMcp: (target: McpInstallTarget, overridePath?: string) => Promise<boolean>
+  installDep?: (pkg: StradaDepPackage) => Promise<boolean>
   onSelect: () => void
   onClose: () => void
 }
@@ -77,10 +81,13 @@ export default function DirectoryBrowser({
   mcpInstallError,
   mcpInstallMessage,
   mcpInstallPlan,
+  depInstallStatus,
+  depInstallError,
   loading,
   error,
   browseTo,
   installMcp,
+  installDep,
   onSelect,
   onClose,
 }: DirectoryBrowserProps) {
@@ -128,6 +135,8 @@ export default function DirectoryBrowser({
                 mcpInstallError={mcpInstallError}
                 mcpInstallMessage={mcpInstallMessage}
                 mcpInstallPlan={mcpInstallPlan}
+                depInstallStatus={depInstallStatus}
+                depInstallError={depInstallError}
                 installButtonLabel="Install into this project"
                 onInstall={(target) => {
                   void installMcp(target, currentPath).then((installed) => {
@@ -136,6 +145,13 @@ export default function DirectoryBrowser({
                     }
                   })
                 }}
+                onInstallDep={installDep ? (pkg) => {
+                  void installDep(pkg).then((installed) => {
+                    if (installed) {
+                      browseTo(currentPath)
+                    }
+                  })
+                } : undefined}
               />
             </div>
           )}

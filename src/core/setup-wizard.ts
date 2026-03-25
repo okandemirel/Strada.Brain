@@ -16,6 +16,7 @@ import { PROVIDER_PRESETS } from "../agents/providers/provider-registry.js";
 import {
   buildMcpRecommendation,
   checkStradaDeps,
+  installStradaDep,
   installStradaMcpSubmodule,
   type McpInstallTarget,
   type McpRecommendation,
@@ -56,6 +57,11 @@ interface SetupPathDependencyPayload {
 interface SetupInstallMcpRequest {
   projectPath?: string;
   target?: McpInstallTarget;
+}
+
+interface SetupInstallDepRequest {
+  projectPath?: string;
+  package?: string;
 }
 
 function logSetupLifecycle(event: string, detail: Record<string, unknown>): void {
@@ -636,40 +642,20 @@ export class SetupWizard {
       }
 
       if (url === "/api/setup" && method === "POST") {
-        if (this.handoffInProgress) {
-          this.json(res, 409, {
-            success: false,
-            handoff: true,
-            readyUrl: this.readyUrl,
-            error: "Configuration was already saved. Wait for Strada to finish starting.",
-          });
-          return;
-        }
-        const token = req.headers["x-csrf-token"];
-        if (token !== this.csrfToken) {
-          this.json(res, 403, { success: false, error: "Invalid CSRF token" });
-          return;
-        }
+        if (!this.guardMutatingRoute(req, res)) return;
         await this.handleSaveConfig(req, res);
         return;
       }
 
       if (url === "/api/setup/install-mcp" && method === "POST") {
-        if (this.handoffInProgress) {
-          this.json(res, 409, {
-            success: false,
-            handoff: true,
-            readyUrl: this.readyUrl,
-            error: "Configuration was already saved. Wait for Strada to finish starting.",
-          });
-          return;
-        }
-        const token = req.headers["x-csrf-token"];
-        if (token !== this.csrfToken) {
-          this.json(res, 403, { success: false, error: "Invalid CSRF token" });
-          return;
-        }
+        if (!this.guardMutatingRoute(req, res)) return;
         await this.handleInstallMcp(req, res);
+        return;
+      }
+
+      if (url === "/api/setup/install-dep" && method === "POST") {
+        if (!this.guardMutatingRoute(req, res)) return;
+        await this.handleInstallDep(req, res);
         return;
       }
 
@@ -737,6 +723,29 @@ export class SetupWizard {
       res.writeHead(404, SECURITY_HEADERS);
       res.end("Not Found");
     }
+  }
+
+  /**
+   * Guard for mutating (POST) routes: rejects requests when handoff is
+   * already in progress or when the CSRF token is missing/invalid.
+   * Returns false (and sends an error response) if the request was rejected.
+   */
+  private guardMutatingRoute(req: IncomingMessage, res: ServerResponse): boolean {
+    if (this.handoffInProgress) {
+      this.json(res, 409, {
+        success: false,
+        handoff: true,
+        readyUrl: this.readyUrl,
+        error: "Configuration was already saved. Wait for Strada to finish starting.",
+      });
+      return false;
+    }
+    const token = req.headers["x-csrf-token"];
+    if (token !== this.csrfToken) {
+      this.json(res, 403, { success: false, error: "Invalid CSRF token" });
+      return false;
+    }
+    return true;
   }
 
   /**
@@ -874,6 +883,53 @@ export class SetupWizard {
     this.json(res, 200, {
       success: true,
       install: installResult.value,
+      ...this.buildPathDependencyPayload(validatedProjectPath.resolved, true),
+    });
+  }
+
+  private async handleInstallDep(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const body = await this.readBody(req);
+    let payload: SetupInstallDepRequest;
+
+    try {
+      payload = JSON.parse(body) as SetupInstallDepRequest;
+    } catch {
+      this.json(res, 400, { success: false, error: "Invalid JSON" });
+      return;
+    }
+
+    const rawProjectPath = typeof payload.projectPath === "string" ? payload.projectPath : "";
+    const pkg = payload.package;
+    if (pkg !== "core" && pkg !== "modules") {
+      this.json(res, 400, { success: false, error: "Invalid package: must be 'core' or 'modules'" });
+      return;
+    }
+
+    const validatedProjectPath = await this.validateProjectPathForSave(rawProjectPath);
+    if (!validatedProjectPath.valid) {
+      this.json(res, 400, { success: false, error: validatedProjectPath.error });
+      return;
+    }
+
+    const isUnityProject = await this.detectUnityProject(validatedProjectPath.resolved);
+    if (!isUnityProject) {
+      this.json(res, 400, { success: false, error: "Selected path is not a Unity project" });
+      return;
+    }
+
+    const installResult = await installStradaDep(validatedProjectPath.resolved, pkg, {
+      coreRepoUrl: process.env["STRADA_CORE_REPO_URL"],
+      modulesRepoUrl: process.env["STRADA_MODULES_REPO_URL"],
+    });
+
+    if (installResult.kind === "err") {
+      this.json(res, 400, { success: false, error: installResult.error });
+      return;
+    }
+
+    this.json(res, 200, {
+      success: true,
+      installedPath: installResult.value,
       ...this.buildPathDependencyPayload(validatedProjectPath.resolved, true),
     });
   }

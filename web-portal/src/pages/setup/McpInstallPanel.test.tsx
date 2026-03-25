@@ -46,6 +46,73 @@ describe('McpInstallPanel', () => {
     expect(html).toContain('Install Strada.MCP')
   })
 
+  it('shows install button for missing Core when onInstallDep is provided', () => {
+    const html = renderToStaticMarkup(
+      <McpInstallPanel
+        projectPath="/Users/test/GameProject"
+        stradaDeps={{
+          coreInstalled: false,
+          corePath: null,
+          modulesInstalled: false,
+          modulesPath: null,
+          mcpInstalled: false,
+          mcpPath: null,
+          mcpVersion: null,
+          warnings: [],
+        }}
+        dependencyWarnings={[]}
+        mcpRecommendation={{
+          recommended: true,
+          reason: 'Install Strada.MCP',
+          featureList: [],
+        }}
+        mcpInstallStatus="idle"
+        mcpInstallError={null}
+        mcpInstallMessage={null}
+        mcpInstallPlan={null}
+        depInstallStatus={{}}
+        depInstallError={{}}
+        onInstall={() => {}}
+        onInstallDep={() => {}}
+      />,
+    )
+
+    expect(html).toContain('Install as git submodule')
+    expect(html).toContain('Strada.Core')
+    expect(html).toContain('Strada.Modules')
+  })
+
+  it('does not show install buttons when onInstallDep is not provided', () => {
+    const html = renderToStaticMarkup(
+      <McpInstallPanel
+        projectPath="/Users/test/GameProject"
+        stradaDeps={{
+          coreInstalled: false,
+          corePath: null,
+          modulesInstalled: false,
+          modulesPath: null,
+          mcpInstalled: false,
+          mcpPath: null,
+          mcpVersion: null,
+          warnings: [],
+        }}
+        dependencyWarnings={[]}
+        mcpRecommendation={{
+          recommended: true,
+          reason: 'Install Strada.MCP',
+          featureList: [],
+        }}
+        mcpInstallStatus="idle"
+        mcpInstallError={null}
+        mcpInstallMessage={null}
+        mcpInstallPlan={null}
+        onInstall={() => {}}
+      />,
+    )
+
+    expect(html).not.toContain('Install as git submodule')
+  })
+
   it('renders install results as structured runtime details', () => {
     const html = renderToStaticMarkup(
       <McpInstallPanel

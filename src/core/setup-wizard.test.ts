@@ -4,12 +4,13 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { preflightResponseProvidersMock, installStradaMcpSubmoduleMock } = vi.hoisted(() => ({
+const { preflightResponseProvidersMock, installStradaMcpSubmoduleMock, installStradaDepMock } = vi.hoisted(() => ({
   preflightResponseProvidersMock: vi.fn().mockResolvedValue({
     passedProviderIds: ["kimi"],
     failures: [],
   }),
   installStradaMcpSubmoduleMock: vi.fn(),
+  installStradaDepMock: vi.fn(),
 }));
 
 vi.mock("./response-provider-preflight.js", () => ({
@@ -21,6 +22,7 @@ vi.mock("../config/strada-deps.js", async (importOriginal) => {
   return {
     ...actual,
     installStradaMcpSubmodule: installStradaMcpSubmoduleMock,
+    installStradaDep: installStradaDepMock,
   };
 });
 
@@ -46,6 +48,7 @@ describe("SetupWizard path validation", () => {
       failures: [],
     });
     installStradaMcpSubmoduleMock.mockReset();
+    installStradaDepMock.mockReset();
   });
 
   afterEach(() => {
@@ -484,5 +487,83 @@ describe("SetupWizard path validation", () => {
         mcpRepoUrl: process.env["STRADA_MCP_REPO_URL"],
       }),
     );
+  });
+
+  it("installs Strada Core through the setup install-dep API", async () => {
+    const wizard = new SetupWizard({ port: 0 });
+    const unityProjectDir = fs.mkdtempSync(path.join(homedir(), "strada-setup-dep-"));
+    tmpDirs.push(unityProjectDir);
+    fs.mkdirSync(path.join(unityProjectDir, "Assets"), { recursive: true });
+    fs.mkdirSync(path.join(unityProjectDir, "ProjectSettings"), { recursive: true });
+    fs.mkdirSync(path.join(unityProjectDir, "Packages"), { recursive: true });
+
+    const installedPath = path.join(unityProjectDir, "Packages", "strada.core");
+    installStradaDepMock.mockResolvedValue({
+      kind: "ok" as const,
+      value: installedPath,
+    });
+
+    (wizard as unknown as {
+      readBody: (req: unknown) => Promise<string>;
+    }).readBody = async () => JSON.stringify({
+      projectPath: unityProjectDir,
+      package: "core",
+    });
+
+    const response = makeResponse();
+    await (wizard as unknown as {
+      csrfToken: string;
+      handleRequest: (req: { url: string; method: string; headers?: Record<string, string> }, res: unknown) => Promise<void>;
+    }).handleRequest({
+      url: "/api/setup/install-dep",
+      method: "POST",
+      headers: {
+        "x-csrf-token": (wizard as unknown as { csrfToken: string }).csrfToken,
+      },
+    }, response.response);
+
+    expect(response.read().statusCode).toBe(200);
+    expect(JSON.parse(response.read().body)).toMatchObject({
+      success: true,
+      installedPath,
+      isUnityProject: true,
+    });
+    expect(installStradaDepMock).toHaveBeenCalledWith(
+      unityProjectDir,
+      "core",
+      expect.objectContaining({
+        coreRepoUrl: process.env["STRADA_CORE_REPO_URL"],
+        modulesRepoUrl: process.env["STRADA_MODULES_REPO_URL"],
+      }),
+    );
+  });
+
+  it("rejects install-dep with invalid package name", async () => {
+    const wizard = new SetupWizard({ port: 0 });
+
+    (wizard as unknown as {
+      readBody: (req: unknown) => Promise<string>;
+    }).readBody = async () => JSON.stringify({
+      projectPath: homedir(),
+      package: "invalid",
+    });
+
+    const response = makeResponse();
+    await (wizard as unknown as {
+      csrfToken: string;
+      handleRequest: (req: { url: string; method: string; headers?: Record<string, string> }, res: unknown) => Promise<void>;
+    }).handleRequest({
+      url: "/api/setup/install-dep",
+      method: "POST",
+      headers: {
+        "x-csrf-token": (wizard as unknown as { csrfToken: string }).csrfToken,
+      },
+    }, response.response);
+
+    expect(response.read().statusCode).toBe(400);
+    expect(JSON.parse(response.read().body)).toMatchObject({
+      success: false,
+      error: "Invalid package: must be 'core' or 'modules'",
+    });
   });
 });

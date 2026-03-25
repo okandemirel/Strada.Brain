@@ -3,6 +3,7 @@ import type {
   McpInstallPlan,
   McpInstallTarget,
   McpRecommendation,
+  StradaDepPackage,
   StradaDepsStatus,
 } from '../../types/setup'
 
@@ -15,8 +16,11 @@ interface McpInstallPanelProps {
   mcpInstallError: string | null
   mcpInstallMessage: string | null
   mcpInstallPlan: McpInstallPlan | null
+  depInstallStatus?: Partial<Record<StradaDepPackage, 'idle' | 'installing' | 'success' | 'error'>>
+  depInstallError?: Partial<Record<StradaDepPackage, string | null>>
   installButtonLabel?: string
   onInstall: (target: McpInstallTarget) => void
+  onInstallDep?: (pkg: StradaDepPackage) => void
 }
 
 interface InstallTargetOption {
@@ -57,16 +61,44 @@ function DependencyStatusCard({
   label,
   installed,
   path,
+  installStatus,
+  installError,
+  onInstall,
 }: {
   label: string
   installed: boolean
   path: string | null
+  installStatus?: 'idle' | 'installing' | 'success' | 'error'
+  installError?: string | null
+  onInstall?: () => void
 }) {
   return (
     <div className={`mcp-dependency-card ${installed ? 'is-installed' : 'is-missing'}`}>
       <div className="mcp-dependency-label">{label}</div>
       <div className="mcp-dependency-value">{installed ? 'Installed' : 'Missing'}</div>
       <div className="mcp-dependency-path mono">{path ?? 'Not detected in this project'}</div>
+      {!installed && onInstall && (
+        <div className="mcp-dependency-install">
+          {installStatus === 'installing' && (
+            <span className="mcp-dependency-install-status working">Installing...</span>
+          )}
+          {installStatus === 'success' && (
+            <span className="mcp-dependency-install-status success">Installed</span>
+          )}
+          {installStatus === 'error' && (
+            <span className="mcp-dependency-install-status error">{installError ?? 'Install failed'}</span>
+          )}
+          {(!installStatus || installStatus === 'idle' || installStatus === 'error') && (
+            <button
+              type="button"
+              className="btn btn-sm btn-secondary"
+              onClick={onInstall}
+            >
+              Install as git submodule
+            </button>
+          )}
+        </div>
+      )}
     </div>
   )
 }
@@ -80,8 +112,11 @@ export default function McpInstallPanel({
   mcpInstallError,
   mcpInstallMessage,
   mcpInstallPlan,
+  depInstallStatus,
+  depInstallError,
   installButtonLabel = 'Install Strada.MCP',
   onInstall,
+  onInstallDep,
 }: McpInstallPanelProps) {
   const [installTargetOverride, setInstallTargetOverride] = useState<McpInstallTarget | null>(null)
   const installTarget = installTargetOverride ?? mcpInstallPlan?.target ?? 'packages'
@@ -126,11 +161,17 @@ export default function McpInstallPanel({
           label="Strada.Core"
           installed={stradaDeps.coreInstalled}
           path={stradaDeps.corePath}
+          installStatus={depInstallStatus?.core}
+          installError={depInstallError?.core}
+          onInstall={onInstallDep ? () => onInstallDep('core') : undefined}
         />
         <DependencyStatusCard
           label="Strada.Modules"
           installed={stradaDeps.modulesInstalled}
           path={stradaDeps.modulesPath}
+          installStatus={depInstallStatus?.modules}
+          installError={depInstallError?.modules}
+          onInstall={onInstallDep ? () => onInstallDep('modules') : undefined}
         />
         <DependencyStatusCard
           label="Strada.MCP"
