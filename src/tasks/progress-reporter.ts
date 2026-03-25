@@ -37,6 +37,7 @@ export class ProgressReporter {
   private readonly interaction: InteractionConfig;
   private readonly heartbeats = new Map<TaskId, HeartbeatState>();
   private readonly defaultLanguage: ProgressLanguage;
+  private lastNarrativeAt = 0;
 
   constructor(
     private readonly channel: IChannelAdapter,
@@ -136,7 +137,7 @@ export class ProgressReporter {
   private scheduleHeartbeat(task: Task): void {
     this.clearHeartbeat(task.id);
 
-    if (this.interaction.mode !== "silent-first" || this.interaction.heartbeatAfterMs <= 0) {
+    if (!["silent-first", "phase-driven"].includes(this.interaction.mode) || this.interaction.heartbeatAfterMs <= 0) {
       return;
     }
 
@@ -188,11 +189,22 @@ export class ProgressReporter {
     return state;
   }
 
+  /** Call when a progress:narrative event is emitted to suppress fallback heartbeat. */
+  onNarrativeEmitted(): void {
+    this.lastNarrativeAt = Date.now();
+  }
+
   private async maybeSendLiveStatus(
     task: Task,
     state: HeartbeatState,
     force = false,
   ): Promise<void> {
+    // In phase-driven mode, skip heartbeat if narrative pipeline was recently active
+    if (this.interaction.mode === "phase-driven" &&
+        this.lastNarrativeAt > 0 &&
+        Date.now() - this.lastNarrativeAt < this.interaction.heartbeatAfterMs) {
+      return;
+    }
     const summary = buildTaskProgressSummary(task, state.lastProgress, this.defaultLanguage);
     if (!summary) {
       return;
