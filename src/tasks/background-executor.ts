@@ -127,6 +127,8 @@ export class BackgroundExecutor {
   private workspaceBus?: WorkspaceBus;
   private monitorLifecycle?: MonitorLifecycle;
   private daemonBudgetTracker?: BudgetTracker;
+  private currentPhase?: 'planning' | 'acting' | 'observing' | 'reflecting';
+  private nodeProgress?: Map<string, { current: number; total: number; unit: string }>;
 
   constructor(opts: BackgroundExecutorOptions) {
     this.orchestrator = opts.orchestrator;
@@ -160,6 +162,15 @@ export class BackgroundExecutor {
 
   setMonitorLifecycle(lifecycle: MonitorLifecycle): void {
     this.monitorLifecycle = lifecycle;
+  }
+
+  setPhase(phase: 'planning' | 'acting' | 'observing' | 'reflecting'): void {
+    this.currentPhase = phase;
+  }
+
+  setNodeProgress(nodeId: string, current: number, total: number, unit: string): void {
+    if (!this.nodeProgress) this.nodeProgress = new Map();
+    this.nodeProgress.set(nodeId, { current, total, unit });
   }
 
   /**
@@ -582,6 +593,13 @@ export class BackgroundExecutor {
           nodeId: String(updatedNode.id),
           status: String(updatedNode.status),
           reviewStatus: updatedNode.reviewStatus,
+          phase: updatedNode.status === "executing"
+            ? (this.currentPhase ?? "acting")
+            : undefined,
+          progress: this.nodeProgress?.get(String(updatedNode.id)),
+          elapsed: updatedNode.startedAt
+            ? Date.now() - updatedNode.startedAt
+            : undefined,
         });
       }
 

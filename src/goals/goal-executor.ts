@@ -130,6 +130,8 @@ export class GoalExecutor {
       onWaveComplete?: (tree: GoalTree, waveIndex: number) => void;
       /** Called when a node exhausts retries -- returns new tree for recovery or null to proceed normally */
       onNodeFailed?: (tree: GoalTree, failedNode: GoalNode) => Promise<GoalTree | null>;
+      /** Called after each node completes to report overall progress */
+      onProgress?: (nodeId: string, current: number, total: number, unit: string) => void;
     },
   ): Promise<ExecutionResult> {
     const startTime = Date.now();
@@ -420,6 +422,17 @@ export class GoalExecutor {
         // Sequential: run one at a time in order
         for (const nodeId of readyNodes) {
           await executeNode(nodeId);
+        }
+      }
+
+      // Report progress after wave completes
+      if (opts?.onProgress) {
+        const completedCount = completedIds.size + skippedIds.size;
+        const totalNodes = [...mutableNodes.keys()].filter(id => id !== treeState.rootId).length;
+        // Report using the last node executed in this wave
+        const lastNodeId = readyNodes[readyNodes.length - 1];
+        if (lastNodeId !== undefined) {
+          opts.onProgress(String(lastNodeId), completedCount, totalNodes, "tasks");
         }
       }
 
