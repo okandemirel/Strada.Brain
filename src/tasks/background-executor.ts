@@ -58,6 +58,17 @@ function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T
   ]).finally(() => clearTimeout(timer));
 }
 
+/** Build a human-readable label for a substep based on tool name and language. */
+export function buildSubstepLabel(toolName: string, lang: string = "en"): string {
+  const labels: Record<string, Record<string, string>> = {
+    file_read: { en: "Analyzing file", tr: "Dosya analiz ediliyor" },
+    file_write: { en: "Applying changes", tr: "Duzenleme uygulaniyor" },
+    bash: { en: "Running command", tr: "Komut calistiriliyor" },
+    grep_search: { en: "Searching codebase", tr: "Arama yapiliyor" },
+  };
+  return labels[toolName]?.[lang] ?? labels[toolName]?.en ?? "Processing";
+}
+
 /** Truncate error messages to avoid leaking internal details. */
 function sanitizeError(error: string, maxLen = 200): string {
   // Strip absolute file paths
@@ -171,6 +182,22 @@ export class BackgroundExecutor {
   setNodeProgress(nodeId: string, current: number, total: number, unit: string): void {
     if (!this.nodeProgress) this.nodeProgress = new Map();
     this.nodeProgress.set(nodeId, { current, total, unit });
+  }
+
+  emitSubstep(
+    rootId: string,
+    nodeId: string,
+    substep: {
+      id: string;
+      label: string;
+      status: "active" | "done" | "skipped";
+      order: number;
+      files?: string[];
+    },
+  ): void {
+    if (this.workspaceBus) {
+      this.workspaceBus.emit("monitor:substep", { rootId, nodeId, substep });
+    }
   }
 
   /**
