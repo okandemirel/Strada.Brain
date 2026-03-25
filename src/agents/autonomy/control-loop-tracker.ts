@@ -31,6 +31,10 @@ export interface ControlLoopConfig {
   readonly gateDensityWindow?: number;
   readonly maxRecoveryEpisodes?: number;
   readonly staleAnalysisThreshold?: number;
+  /** Hard cap: force replan after this many consecutive text-only gates. */
+  readonly hardCapReplan?: number;
+  /** Hard cap: force block after this many consecutive text-only gates. */
+  readonly hardCapBlock?: number;
 }
 
 export class ControlLoopTracker {
@@ -45,6 +49,8 @@ export class ControlLoopTracker {
   private readonly densityWindow: number;
   readonly maxRecoveryEpisodes: number;
   private readonly staleAnalysisThreshold: number;
+  readonly hardCapReplan: number;
+  readonly hardCapBlock: number;
 
   constructor(config?: ControlLoopConfig) {
     this.fpThreshold = config?.sameFingerprintThreshold ?? 15;
@@ -52,7 +58,9 @@ export class ControlLoopTracker {
     this.densityThreshold = config?.gateDensityThreshold ?? 20;
     this.densityWindow = config?.gateDensityWindow ?? 30;
     this.maxRecoveryEpisodes = config?.maxRecoveryEpisodes ?? 5;
-    this.staleAnalysisThreshold = config?.staleAnalysisThreshold ?? 10;
+    this.staleAnalysisThreshold = config?.staleAnalysisThreshold ?? 3;
+    this.hardCapReplan = config?.hardCapReplan ?? 5;
+    this.hardCapBlock = config?.hardCapBlock ?? 8;
   }
 
   recordGate(event: ControlLoopGateEvent): ControlLoopTrigger | null {
@@ -152,6 +160,70 @@ export class ControlLoopTracker {
     }
   }
 }
+
+// ─── Adaptive Hard Cap ────────────────────────────────────────────────────────
+
+/**
+ * Context snapshot passed to computeAdaptiveHardCap.
+ * Keeps the function decoupled from AgentState (avoids circular import).
+ */
+export interface AdaptiveCapContext {
+  readonly phase: string;
+  readonly totalStepCount: number;
+  readonly hasActivePlan: boolean;
+  readonly failedApproachCount: number;
+}
+
+/**
+ * Computes context-aware hard cap thresholds instead of using static numbers.
+ *
+ * The configured base values (from env/config) serve as the MINIMUM floor.
+ * Adaptive logic adds headroom based on the agent's current state:
+ *
+ * - PLANNING/REPLANNING phase: text-only analysis is expected → +3 headroom
+ * - Agent has already executed tools: reflecting between actions is normal → +2
+ * - Agent in EXECUTING with zero tool calls: very suspicious → no headroom (base stays)
+ * - Multiple failed approaches: agent is struggling, give a bit more room → +1
+ *
+ * Block threshold always stays at least replan + 2 to allow the replan
+ * to take effect before hard-blocking.
+ */
+export function computeAdaptiveHardCap(
+  baseReplan: number,
+  baseBlock: number,
+  ctx: AdaptiveCapContext,
+): { replan: number; block: number } {
+  let replan = baseReplan;
+  let block = baseBlock;
+
+  // Planning phases legitimately produce text — plan generation is text-only by design
+  if (ctx.phase === "planning" || ctx.phase === "replanning") {
+    replan += 3;
+    block += 3;
+  }
+
+  // Agent has executed tools before: reflecting/re-analyzing between tool batches is normal
+  if (ctx.totalStepCount > 0) {
+    replan += 2;
+    block += 2;
+  }
+
+  // Agent in executing phase with zero tools ever: every text-only gate is suspicious
+  // No headroom added — base values apply (tightest detection)
+
+  // Multiple failed approaches: agent is iterating on solutions, give slight extra room
+  if (ctx.failedApproachCount >= 2) {
+    replan += 1;
+    block += 1;
+  }
+
+  // Ensure block > replan with enough gap for replan to take effect
+  block = Math.max(block, replan + 2);
+
+  return { replan, block };
+}
+
+// ─── Private helpers ──────────────────────────────────────────────────────────
 
 function normalizeFingerprint(
   kind: ControlLoopGateKind,

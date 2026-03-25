@@ -84,6 +84,7 @@ import {
   type CompletionReviewStageName,
   type CompletionReviewStageResult,
   type VerifierPipelineResult,
+  computeAdaptiveHardCap,
 } from "./autonomy/index.js";
 import { MUTATION_TOOLS, WRITE_OPERATIONS, extractFilePath, isVerificationToolName } from "./autonomy/constants.js";
 import { DMPolicy, isDestructiveOperation, type DMPolicyConfig } from "../security/dm-policy.js";
@@ -486,6 +487,8 @@ export class Orchestrator {
   private readonly loopDensityWindow?: number;
   private readonly loopMaxRecoveryEpisodes?: number;
   private readonly loopStaleAnalysisThreshold?: number;
+  private readonly loopHardCapReplan?: number;
+  private readonly loopHardCapBlock?: number;
   private readonly progressAssessmentEnabled: boolean;
   private readonly runtimeArtifactMatches = new Map<
     string,
@@ -556,6 +559,8 @@ export class Orchestrator {
     loopDensityWindow?: number;
     loopMaxRecoveryEpisodes?: number;
     loopStaleAnalysisThreshold?: number;
+    loopHardCapReplan?: number;
+    loopHardCapBlock?: number;
     progressAssessmentEnabled?: boolean;
   }) {
     this.providerManager = opts.providerManager;
@@ -623,6 +628,8 @@ export class Orchestrator {
     this.loopDensityWindow = opts.loopDensityWindow;
     this.loopMaxRecoveryEpisodes = opts.loopMaxRecoveryEpisodes;
     this.loopStaleAnalysisThreshold = opts.loopStaleAnalysisThreshold;
+    this.loopHardCapReplan = opts.loopHardCapReplan;
+    this.loopHardCapBlock = opts.loopHardCapBlock;
     this.progressAssessmentEnabled = opts.progressAssessmentEnabled ?? true;
     this.getIdentityState = opts.getIdentityState;
     this.crashRecoveryContext = opts.crashRecoveryContext;
@@ -1937,6 +1944,8 @@ export class Orchestrator {
           loopDensityWindow: this.loopDensityWindow,
           loopMaxRecoveryEpisodes: this.loopMaxRecoveryEpisodes,
           loopStaleAnalysisThreshold: this.loopStaleAnalysisThreshold,
+          loopHardCapReplan: this.loopHardCapReplan,
+          loopHardCapBlock: this.loopHardCapBlock,
           progressAssessmentEnabled: this.progressAssessmentEnabled,
         });
         const controlLoopTracker = controlLoopTrackerOrNull!;
@@ -2911,6 +2920,7 @@ export class Orchestrator {
       taskPlanner,
       selfVerification,
       executionJournal,
+      controlLoopTracker: interactiveControlLoopTracker,
       stradaConformance,
     } = createAutonomyBundle({
       prompt: lastUserMessage,
@@ -2918,6 +2928,7 @@ export class Orchestrator {
       stradaDeps: this.stradaDeps,
       projectWorldSummary,
       projectWorldFingerprint,
+      includeControlLoopTracker: true,
       previousJournalSnapshot: session.lastJournalSnapshot,
       conformanceEnabled: this.conformanceEnabled,
       conformanceFrameworkPathsOnly: this.conformanceFrameworkPathsOnly,
@@ -2927,6 +2938,8 @@ export class Orchestrator {
       loopDensityWindow: this.loopDensityWindow,
       loopMaxRecoveryEpisodes: this.loopMaxRecoveryEpisodes,
       loopStaleAnalysisThreshold: this.loopStaleAnalysisThreshold,
+      loopHardCapReplan: this.loopHardCapReplan,
+      loopHardCapBlock: this.loopHardCapBlock,
       progressAssessmentEnabled: this.progressAssessmentEnabled,
     });
     const interventionDeps = this.buildInterventionDeps();
@@ -3354,6 +3367,60 @@ export class Orchestrator {
               });
             },
           };
+          // ─── Interactive loop detection: track text-only gates ─────────
+          if (interactiveControlLoopTracker) {
+            interactiveControlLoopTracker.incrementTextOnlyGate();
+            const textOnlyGates = interactiveControlLoopTracker.getConsecutiveTextOnlyGates();
+            // Adaptive thresholds: phase-aware, progress-aware
+            const adaptiveCap = computeAdaptiveHardCap(
+              interactiveControlLoopTracker.hardCapReplan,
+              interactiveControlLoopTracker.hardCapBlock,
+              {
+                phase: agentState.phase,
+                totalStepCount: agentState.stepResults.length,
+                hasActivePlan: agentState.plan !== null,
+                failedApproachCount: agentState.failedApproaches.length,
+              },
+            );
+            if (textOnlyGates >= adaptiveCap.block) {
+              executionJournal.recordLoopRecoveryEpisode({
+                fingerprint: `interactive_hard_cap_block`,
+                decision: "blocked",
+                summary: `Interactive adaptive block: ${textOnlyGates} text-only gates (threshold: ${adaptiveCap.block}, phase: ${agentState.phase}).`,
+              });
+              const blockMsg =
+                `I've been analyzing without taking action for ${textOnlyGates} consecutive turns. ` +
+                "Stopping here to avoid an unproductive loop. Please provide more specific instructions or rephrase your request.";
+              await this.sessionManager.sendVisibleAssistantMarkdown(chatId, session, blockMsg);
+              this.recordMetricEnd(metricId, {
+                agentPhase: AgentPhase.COMPLETE,
+                iterations: agentState.iteration,
+                toolCallCount: agentState.stepResults.length,
+                hitMaxIterations: false,
+              });
+              return;
+            }
+            if (textOnlyGates >= adaptiveCap.replan) {
+              executionJournal.recordLoopRecoveryEpisode({
+                fingerprint: `interactive_hard_cap_replan`,
+                decision: "replan_local",
+                summary: `Interactive adaptive replan: ${textOnlyGates} text-only gates (threshold: ${adaptiveCap.replan}, phase: ${agentState.phase}).`,
+              });
+              // Force a replan gate — counter keeps climbing until tools are actually used
+              session.messages.push({ role: "assistant", content: response.text ?? "" });
+              session.messages.push({
+                role: "user",
+                content: [
+                  `[LOOP DETECTION] You have produced ${textOnlyGates} consecutive text-only responses without using any tools.`,
+                  "STOP analyzing and START implementing. Use your available tools (file_read, file_write, shell, etc.) to make concrete progress.",
+                  "Your next response MUST contain tool calls.",
+                ].join("\n\n"),
+              });
+              continue;
+            }
+          }
+          // ────────────────────────────────────────────────────────────────
+
           const interactiveEndAction: EndTurnLoopAction = await handleInteractiveEndTurn(agentState, interactiveEndTurnCtx);
 
           if (interactiveEndAction.flow === "continue") {
@@ -3445,6 +3512,11 @@ export class Orchestrator {
             emitToolResult: (c, tc, tr) => this.emitToolResult(c, tc, tr),
           },
         });
+
+        // Track tool execution in the interactive control loop tracker
+        if (interactiveControlLoopTracker && response.toolCalls.length > 0) {
+          interactiveControlLoopTracker.markToolExecution();
+        }
 
         // Inject state-aware context (stall detection, budget warnings)
         const stateCtx = taskPlanner.getStateInjection();

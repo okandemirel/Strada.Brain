@@ -132,7 +132,7 @@ describe("ControlLoopTracker", () => {
   it("triggers stale_analysis_loop after consecutive gates without tool execution", () => {
     const tracker = new ControlLoopTracker();
 
-    for (let i = 1; i <= 9; i++) {
+    for (let i = 1; i <= 2; i++) {
       expect(tracker.recordGate({
         kind: "clarification_internal_continue",
         reason: "Clarification review kept the task internal.",
@@ -143,12 +143,12 @@ describe("ControlLoopTracker", () => {
     const trigger = tracker.recordGate({
       kind: "clarification_internal_continue",
       reason: "Clarification review kept the task internal.",
-      iteration: 10,
+      iteration: 3,
     });
 
     expect(trigger).not.toBeNull();
     expect(trigger?.reason).toBe("stale_analysis_loop");
-    expect(trigger?.sameFingerprintCount).toBe(10);
+    expect(trigger?.sameFingerprintCount).toBe(3);
   });
 
   it("resets stale analysis counter on markToolExecution", () => {
@@ -323,8 +323,8 @@ describe("ControlLoopTracker", () => {
       "verifier_replan",
     ] as const;
 
-    // Different kinds — fingerprint won't match, but stale analysis should still fire at threshold (default=10)
-    for (let i = 1; i <= 9; i++) {
+    // Different kinds — fingerprint won't match, but stale analysis should still fire at threshold (default=3)
+    for (let i = 1; i <= 2; i++) {
       expect(tracker.recordGate({
         kind: kinds[i % kinds.length]!,
         reason: `test ${i}`,
@@ -334,8 +334,8 @@ describe("ControlLoopTracker", () => {
 
     const trigger = tracker.recordGate({
       kind: "verifier_replan",
-      reason: "test 10",
-      iteration: 10,
+      reason: "test 3",
+      iteration: 3,
     });
 
     expect(trigger?.reason).toBe("stale_analysis_loop");

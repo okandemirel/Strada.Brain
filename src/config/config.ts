@@ -299,6 +299,8 @@ export type EnvVarName =
   | "STRADA_LOOP_DENSITY_WINDOW"
   | "STRADA_LOOP_MAX_RECOVERY_EPISODES"
   | "STRADA_LOOP_STALE_ANALYSIS_THRESHOLD"
+  | "STRADA_LOOP_HARD_CAP_REPLAN"
+  | "STRADA_LOOP_HARD_CAP_BLOCK"
   | "STRADA_PROGRESS_ASSESSMENT_ENABLED"
   // Daemon Full Autonomy
   | "STRADA_DAEMON_FULL_AUTONOMY"
@@ -781,6 +783,8 @@ export interface Config {
   readonly loopDensityWindow: number;
   readonly loopMaxRecoveryEpisodes: number;
   readonly loopStaleAnalysisThreshold: number;
+  readonly loopHardCapReplan: number;
+  readonly loopHardCapBlock: number;
   readonly progressAssessmentEnabled: boolean;
   // Daemon Full Autonomy
   readonly daemonFullAutonomy: boolean;
@@ -1639,6 +1643,16 @@ export const configSchema = z
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(1).max(20))
       .default("3"),
+    loopHardCapReplan: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(2).max(20))
+      .default("5"),
+    loopHardCapBlock: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(3).max(30))
+      .default("8"),
     progressAssessmentEnabled: boolFromString(true),
     // Daemon Full Autonomy
     daemonFullAutonomy: boolFromString(true),
@@ -2243,6 +2257,8 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
     loopDensityWindow: rawConfig.loopDensityWindow,
     loopMaxRecoveryEpisodes: rawConfig.loopMaxRecoveryEpisodes,
     loopStaleAnalysisThreshold: rawConfig.loopStaleAnalysisThreshold,
+    loopHardCapReplan: rawConfig.loopHardCapReplan,
+    loopHardCapBlock: Math.max(rawConfig.loopHardCapBlock, rawConfig.loopHardCapReplan + 1),
     progressAssessmentEnabled: rawConfig.progressAssessmentEnabled,
     daemonFullAutonomy: rawConfig.daemonFullAutonomy,
 
@@ -2719,6 +2735,8 @@ interface EnvVars {
   loopDensityWindow: string | undefined;
   loopMaxRecoveryEpisodes: string | undefined;
   loopStaleAnalysisThreshold: string | undefined;
+  loopHardCapReplan: string | undefined;
+  loopHardCapBlock: string | undefined;
   progressAssessmentEnabled: string | undefined;
   // Daemon Full Autonomy
   daemonFullAutonomy: string | undefined;
@@ -3002,6 +3020,8 @@ function loadFromEnv(): EnvVars {
     loopDensityWindow: process.env["STRADA_LOOP_DENSITY_WINDOW"],
     loopMaxRecoveryEpisodes: process.env["STRADA_LOOP_MAX_RECOVERY_EPISODES"],
     loopStaleAnalysisThreshold: process.env["STRADA_LOOP_STALE_ANALYSIS_THRESHOLD"],
+    loopHardCapReplan: process.env["STRADA_LOOP_HARD_CAP_REPLAN"],
+    loopHardCapBlock: process.env["STRADA_LOOP_HARD_CAP_BLOCK"],
     progressAssessmentEnabled: process.env["STRADA_PROGRESS_ASSESSMENT_ENABLED"],
     // Daemon Full Autonomy
     daemonFullAutonomy: process.env["STRADA_DAEMON_FULL_AUTONOMY"],

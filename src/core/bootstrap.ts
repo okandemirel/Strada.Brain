@@ -452,6 +452,8 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     loopDensityWindow: config.loopDensityWindow,
     loopMaxRecoveryEpisodes: config.loopMaxRecoveryEpisodes,
     loopStaleAnalysisThreshold: config.loopStaleAnalysisThreshold,
+    loopHardCapReplan: config.loopHardCapReplan,
+    loopHardCapBlock: config.loopHardCapBlock,
     progressAssessmentEnabled: config.progressAssessmentEnabled,
   });
 

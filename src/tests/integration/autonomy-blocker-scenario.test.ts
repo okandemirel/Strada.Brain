@@ -192,10 +192,10 @@ describe("Autonomy Blocker Scenario — Game .cs File Editing", () => {
       expect(trigger!.reason).toBe("internal_gate_density");
     });
 
-    it("stale analysis triggers after 10 consecutive gates without tool execution", () => {
+    it("stale analysis triggers after 3 consecutive gates without tool execution", () => {
       const tracker = new ControlLoopTracker();
 
-      for (let i = 1; i <= 9; i++) {
+      for (let i = 1; i <= 2; i++) {
         expect(tracker.recordGate({
           kind: "clarification_internal_continue",
           reason: "Clarification kept internal",
@@ -206,7 +206,7 @@ describe("Autonomy Blocker Scenario — Game .cs File Editing", () => {
       const trigger = tracker.recordGate({
         kind: "clarification_internal_continue",
         reason: "Clarification kept internal",
-        iteration: 10,
+        iteration: 3,
       });
       expect(trigger).not.toBeNull();
       expect(trigger!.reason).toBe("stale_analysis_loop");

@@ -64,8 +64,8 @@ export type {
   VerifierPipelineResult,
 } from "./verifier-pipeline.js";
 export { ExecutionJournal } from "./execution-journal.js";
-export { ControlLoopTracker } from "./control-loop-tracker.js";
-export type { ControlLoopGateKind, ControlLoopGateEvent, ControlLoopTrigger } from "./control-loop-tracker.js";
+export { ControlLoopTracker, computeAdaptiveHardCap } from "./control-loop-tracker.js";
+export type { ControlLoopGateKind, ControlLoopGateEvent, ControlLoopTrigger, AdaptiveCapContext } from "./control-loop-tracker.js";
 export {
   LOOP_RECOVERY_REVIEW_SYSTEM_PROMPT,
   buildLoopRecoveryReviewRequest,

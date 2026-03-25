@@ -75,6 +75,7 @@ import {
   type SelfVerification,
   type ControlLoopGateKind,
   type InteractionBoundaryDecision,
+  computeAdaptiveHardCap,
 } from "./autonomy/index.js";
 import { isVerificationToolName } from "./autonomy/constants.js";
 import type { StradaConformanceGuard } from "./autonomy/strada-conformance.js";
@@ -436,6 +437,63 @@ export async function handleBackgroundLoopRecovery(
   // to predict what it will be after the next recordGate() call.
   const gateCount = params.tracker.getConsecutiveTextOnlyGates() + 1;
 
+  // Adaptive hard cap: thresholds adjust based on agent phase and progress.
+  // Planning/reflecting after tool use gets more headroom; executing with zero
+  // tools gets the tightest detection. Base values come from config.
+  const { replan: hardCapReplan, block: hardCapBlock } = computeAdaptiveHardCap(
+    params.tracker.hardCapReplan,
+    params.tracker.hardCapBlock,
+    {
+      phase: params.state.phase,
+      totalStepCount: params.state.stepResults.length,
+      hasActivePlan: params.state.plan !== null,
+      failedApproachCount: params.state.failedApproaches.length,
+    },
+  );
+
+  if (gateCount >= hardCapBlock) {
+    const fingerprint = `hard_cap_block:${params.kind}`;
+    params.tracker.markRecoveryAttempt(fingerprint);
+    params.executionJournal.recordLoopRecoveryEpisode({
+      fingerprint,
+      decision: "blocked",
+      summary: `Hard cap reached: ${gateCount} consecutive text-only gates without any tool execution.`,
+    });
+    return {
+      action: "blocked",
+      message:
+        `Blocked checkpoint: The agent has produced ${gateCount} consecutive text-only responses ` +
+        "without executing any tools. No implementation work has started despite clear required changes. " +
+        "Stopped to avoid wasting further iterations.",
+    };
+  }
+
+  if (gateCount >= hardCapReplan) {
+    const fingerprint = `hard_cap_replan:${params.kind}`;
+    const recoveryAttempt = params.tracker.markRecoveryAttempt(fingerprint);
+    params.executionJournal.recordLoopRecoveryEpisode({
+      fingerprint,
+      decision: recoveryAttempt >= 2 ? "blocked" : "replan_local",
+      summary: `Hard cap replan: ${gateCount} consecutive text-only gates.`,
+    });
+    if (recoveryAttempt >= 2) {
+      return {
+        action: "blocked",
+        message:
+          `Blocked checkpoint: After ${gateCount} consecutive text-only responses and multiple replan attempts, ` +
+          "the agent has not been able to start tool execution. Stopped to prevent infinite loop.",
+      };
+    }
+    return {
+      action: "replan",
+      gate: [
+        `[HARD CAP] You have produced ${gateCount} consecutive text-only responses without using any tools.`,
+        "STOP analyzing and START implementing immediately. Use your available tools to make concrete progress.",
+        "Your next response MUST contain tool calls. Do not generate another text-only response.",
+      ].join("\n\n"),
+    };
+  }
+
   // Free first analysis — agent may be legitimately exploring.
   // Record the gate (which increments the counter) and return.
   if (gateCount <= 1) {
@@ -471,13 +529,41 @@ export async function handleBackgroundLoopRecovery(
 
       if (assessment) {
         if (assessment.verdict === "progressing") {
-          // Agent is fine — record gate for safety-net tracking, continue
-          params.tracker.recordGate({
+          // Record gate for safety-net tracking.
+          // IMPORTANT: check the trigger — if the safety net fires,
+          // do NOT trust the progress assessment.
+          const progressingTrigger = params.tracker.recordGate({
             kind: params.kind,
             reason: params.reason,
             gate: params.gate,
             iteration: params.iteration,
           });
+          if (progressingTrigger && progressingTrigger.reason === "stale_analysis_loop") {
+            // Safety net overrides "progressing" — the agent has hit the
+            // stale analysis threshold despite claiming progress.
+            const staleRecovery = params.tracker.markRecoveryAttempt(progressingTrigger.fingerprint);
+            params.executionJournal.recordLoopRecoveryEpisode({
+              fingerprint: progressingTrigger.fingerprint,
+              decision: staleRecovery >= 2 ? "blocked" : "replan_local",
+              summary: `Stale analysis override: progress assessment said "progressing" but ${progressingTrigger.sameFingerprintCount} consecutive text-only gates detected.`,
+            });
+            if (staleRecovery >= 2) {
+              return {
+                action: "blocked",
+                message:
+                  `Blocked checkpoint: Despite claiming progress, the agent has produced ${progressingTrigger.sameFingerprintCount} ` +
+                  "consecutive text-only responses without any tool execution. Stopped to prevent infinite loop.",
+              };
+            }
+            return {
+              action: "replan",
+              gate: [
+                "[STALE ANALYSIS OVERRIDE] Progress assessment said 'progressing' but you have NOT used any tools.",
+                "STOP analyzing and START implementing. Use your available tools to make concrete progress.",
+                "Your next response MUST contain tool calls.",
+              ].join("\n\n"),
+            };
+          }
           return { action: "none" };
         }
         if (assessment.verdict === "stuck" && assessment.confidence !== "low") {

@@ -33,6 +33,8 @@ export interface CreateAutonomyBundleParams {
   readonly loopDensityWindow?: number;
   readonly loopMaxRecoveryEpisodes?: number;
   readonly loopStaleAnalysisThreshold?: number;
+  readonly loopHardCapReplan?: number;
+  readonly loopHardCapBlock?: number;
   readonly progressAssessmentEnabled?: boolean;
 }
 
@@ -52,6 +54,8 @@ export function createAutonomyBundle(params: CreateAutonomyBundleParams): Autono
         gateDensityWindow: params.loopDensityWindow,
         maxRecoveryEpisodes: params.loopMaxRecoveryEpisodes,
         staleAnalysisThreshold: params.loopStaleAnalysisThreshold,
+        hardCapReplan: params.loopHardCapReplan,
+        hardCapBlock: params.loopHardCapBlock,
       })
     : null;
 

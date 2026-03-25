@@ -107,9 +107,15 @@ export function buildBehavioralSnapshot(params: BuildBehavioralSnapshotParams): 
 export const PROGRESS_ASSESSMENT_SYSTEM_PROMPT = `You are Strada Brain's progress assessor.
 Given a behavioral snapshot of an executing agent, determine whether it is making meaningful progress toward the user's goal or is stuck in a repetitive analysis/clarification loop.
 
-"progressing" means: the agent has used tools, touched files, made mutations, or is in an early exploration phase with clear next steps.
+"progressing" means: the agent has recently used tools to read files, write code, run commands, or otherwise interact with the project. Text-only responses that analyze or plan DO NOT count as progress unless the agent has also executed tools in the same session.
 
-"stuck" means: the agent keeps generating text-only responses without tool execution, repeats the same analysis pattern, or has not transitioned from analysis to implementation despite sufficient context.
+"stuck" means ANY of these:
+- consecutiveTextOnlyGates >= 3 with zero mutations and zero inspections
+- The agent keeps generating analysis, plans, or clarification text without calling any tools
+- The same analysis or clarification pattern repeats across gates
+- The agent has context to act but keeps discussing instead of using tools
+
+CRITICAL: An agent that has never used a single tool and has 3+ consecutive text-only gates is STUCK, not "in an early exploration phase". Exploration requires tool calls (file_read, grep_search, etc).
 
 Return JSON only:
 {"verdict":"progressing"|"stuck","confidence":"high"|"medium"|"low","directive":"one concrete next action if stuck"}`;
