@@ -8,7 +8,7 @@
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from "node:http";
 import { existsSync } from "node:fs";
 import { readFile, writeFile, stat, readdir, realpath } from "node:fs/promises";
-import { join, extname, resolve } from "node:path";
+import { join, extname, resolve, sep, isAbsolute } from "node:path";
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -711,7 +711,7 @@ export class SetupWizard {
     if (ext && MIME_TYPES[ext]) {
       const candidate = resolve(join(staticDir, rawSegment));
       const safeRoot = resolve(staticDir);
-      if (!candidate.startsWith(safeRoot + "/") && candidate !== safeRoot) {
+      if (!candidate.startsWith(safeRoot + sep) && candidate !== safeRoot) {
         res.writeHead(403, SECURITY_HEADERS);
         res.end("Forbidden");
         return;
@@ -745,7 +745,7 @@ export class SetupWizard {
    */
   private validatePathSafety(path: string): string | null {
     if (path.includes("..")) return "Invalid path: directory traversal not allowed";
-    if (!path.startsWith("/")) return "Only absolute paths are accepted";
+    if (!isAbsolute(path)) return "Only absolute paths are accepted";
     return null;
   }
 
@@ -765,7 +765,7 @@ export class SetupWizard {
     }
 
     const home = homedir();
-    if (resolved !== home && !resolved.startsWith(home + "/")) {
+    if (resolved !== home && !resolved.startsWith(home + sep)) {
       return { valid: false, error: "Path must be inside your home directory" };
     }
 
@@ -903,7 +903,7 @@ export class SetupWizard {
     }
 
     const home = homedir();
-    if (resolved !== home && !resolved.startsWith(home + "/")) {
+    if (resolved !== home && !resolved.startsWith(home + sep)) {
       this.json(res, 403, { error: "Browsing outside your home directory is not permitted" });
       return;
     }

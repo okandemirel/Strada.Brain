@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+- **Windows Web Portal Setup**: Fixed path traversal checks using hardcoded `/` separator instead of `path.sep`, causing all static assets (JS, CSS, images) to return 403 Forbidden on Windows — the setup page and web portal appeared as a blank white page
+- **Windows Path Validation**: `validatePathSafety` rejected Windows absolute paths (`C:\...`) because it checked `startsWith("/")` instead of `path.isAbsolute()`; browse API and save API were unusable on Windows
+- **Windows Web Portal Auto-Build**: `ensureWebSetupAssetsReady` spawned `npm.cmd` without `shell: true`, causing EINVAL on Node.js 22+ and preventing the web portal from being built automatically during setup
+- **Windows Browser Launch URL Escaping**: `openBrowser` passed unquoted URLs containing `&` to `cmd /c start`, where `&` acts as a command separator; the cache-bust parameter was silently dropped
+- Cross-platform path separator fix applied consistently across `setup-wizard.ts`, `channel.ts`, `stage-daemon.ts`, `soul-loader.ts`, `speech-to-text.ts`, and `browser-automation.ts`
+
 ### Added
 - **Web Portal — Code Mode (Phase 5)**: Monaco editor with multi-tab support, syntax highlighting for 30+ languages, file tree explorer with lazy-loaded directories and agent-touched file highlights, terminal output panel with 5k line cap, diff viewer. Full WebSocket event pipeline: `code:file_open`, `code:file_update`, `code:terminal_output`, `code:annotation_add`. Workspace file REST endpoints with path security (traversal protection, denylist, symlink verification, 1MB size limit)
 - **Web Portal — Auto Mode Switching (Phase 6)**: Intelligent auto-switching between Chat, Monitor, Canvas, and Code modes based on agent activity. Toast notification system with auto-dismiss, severity colors, and mode-switch undo. Keyboard shortcuts help modal (`Cmd/Ctrl+?`). Sidebar notification bell with badge count. Chat override reset (sending a message resumes auto-switch). Monitor export endpoint (`POST /api/monitor/export`) generating markdown reports with DAG summary, task list, and review results. Performance validated: 60-node DAG <50ms, 100 task updates <100ms, 50 code tabs <50ms

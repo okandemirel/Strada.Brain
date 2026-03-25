@@ -332,7 +332,7 @@ async function askWithRetry(
  */
 function getBrowserCommand(url: string): [string, string[]] {
   if (process.platform === "darwin") return ["open", [url]];
-  if (process.platform === "win32") return ["cmd", ["/c", "start", '""', url]];
+  if (process.platform === "win32") return ["cmd", ["/c", "start", '""', `"${url}"`]];
   return ["xdg-open", [url]];
 }
 
@@ -738,6 +738,7 @@ function ensureWebSetupAssetsReady(): { ready: boolean; needsNodeUpgrade: boolea
     const installResult = spawnSync(getNpmCommand(), ["install", "--prefix", "web-portal"], {
       stdio: "inherit",
       cwd: process.cwd(),
+      shell: process.platform === "win32",
     });
     if (installResult.status !== 0) {
       return { ready: false, needsNodeUpgrade: false };
@@ -748,6 +749,7 @@ function ensureWebSetupAssetsReady(): { ready: boolean; needsNodeUpgrade: boolea
   const buildResult = spawnSync(getNpmCommand(), ["--prefix", "web-portal", "run", "build"], {
     stdio: "inherit",
     cwd: process.cwd(),
+    shell: process.platform === "win32",
   });
   return {
     ready: buildResult.status === 0 && hasWebSetupAssets(),

@@ -130,6 +130,8 @@ Web sihirbazinda kaydetme tamamlandiginda Strada ayni URL uzerinden acik handoff
 Bu ilk devir sirasinda Strada onboarding turunu ve ilk autonomy tercihini de ilk chat oturumuna uygular; boylece acilis konusmasi ve Settings ekrani sihirbazda sectiginiz durumla hemen uyusur.
 Ilk gercek chat mesaji teknik bir gorevse Strada artik ise hemen baslar ve uzun bir intake akisi acmak yerine onboarding'i en fazla tek kisa takip sorusuna indirir.
 RAG acik ama kullanilabilir bir embedding provider yoksa sihirbaz artik review adimina gecmenize izin verir; ancak gecerli bir embedding provider secene kadar veya RAG'i kapatana kadar Save bloklu kalir.
+> **Windows web setup duzeltmesi:** Onceki surumlerde path-separator hatasi nedeniyle Windows'ta web setup sayfasi bos gorunuyordu (tum statik dosyalar path traversal korumasi tarafindan engelleniyordu). Bu sorun artik giderildi — hem `.\strada.ps1 setup --web` hem de kurulum sonrasi `127.0.0.1:3000` adresindeki web portali Windows'ta sorunsuz calisir. Daha once Windows'ta terminal setup'a geri donmek zorunda kaldiysaniz, artik web setup onerilir.
+
 Ilk basarili kurulumdan sonra `./strada` komutu artik akilli launcher olur:
 - ilk kullanimda config yoksa setup'i otomatik acar
 - sonraki kullanimlarda web, CLI, daemon, setup veya doctor secimi yapabileceginiz terminal paneli gosterir

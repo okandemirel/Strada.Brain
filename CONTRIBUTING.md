@@ -309,6 +309,13 @@ To contribute a skill directly to the Strada.Brain repo:
 3. Run tests: `npx vitest run src/skills/bundled/your-skill/`
 4. Bundled skills should have **zero external dependencies**
 
+## Cross-Platform Guidelines
+
+- **Path separators:** Never use hardcoded `"/"` in path containment checks (e.g., `startsWith(root + "/")`). Use `path.sep` from `node:path` instead. On Windows, `path.resolve()` produces backslash paths and a hardcoded `/` will always fail the comparison.
+- **Absolute path checks:** Use `path.isAbsolute()` instead of `startsWith("/")` — Windows absolute paths start with a drive letter (e.g., `C:\`).
+- **Spawning `.cmd` files:** On Windows, spawning `.cmd`/`.bat` files (like `npm.cmd`) requires `shell: true` in the `spawn`/`spawnSync` options on Node.js 22+ (CVE-2024-27980). Use `shell: process.platform === "win32"`.
+- **URL escaping in CMD:** When passing URLs to `cmd /c start`, quote the URL to prevent `&` from being interpreted as a command separator.
+
 ## Security Guidelines
 
 - Never hardcode secrets or credentials in source files.

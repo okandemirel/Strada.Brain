@@ -110,10 +110,10 @@ export class SpeechToTextTool implements ITool {
     }
 
     // Local file — validate path stays within project directory
-    const { resolve } = await import("node:path");
+    const { resolve, sep } = await import("node:path");
     const safeRoot = resolve(context.projectPath);
     const resolved = resolve(safeRoot, url);
-    if (!resolved.startsWith(safeRoot + "/") && resolved !== safeRoot) {
+    if (!resolved.startsWith(safeRoot + sep) && resolved !== safeRoot) {
       throw new Error("Path traversal blocked: audio path must be within the project directory");
     }
 

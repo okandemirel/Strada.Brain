@@ -128,7 +128,7 @@ describe("SetupWizard path validation", () => {
       validateProjectPathForSave: (
         rawPath: string,
       ) => Promise<{ valid: true; resolved: string } | { valid: false; error: string }>;
-    }).validateProjectPathForSave("/tmp");
+    }).validateProjectPathForSave(process.platform === "win32" ? "C:\\Windows" : "/tmp");
 
     expect(result).toEqual({
       valid: false,

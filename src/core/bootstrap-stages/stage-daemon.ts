@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join, resolve, sep } from "node:path";
 import type * as winston from "winston";
 import type { Config } from "../../config/config.js";
 import { resolveRuntimePaths } from "../../common/runtime-paths.js";
@@ -41,7 +41,7 @@ export function loadDaemonTriggersStage(
 ): DaemonTriggerStageResult {
   const projectRoot = params.projectRoot ?? resolveRuntimePaths({ moduleUrl: import.meta.url }).configRoot;
   const heartbeatPath = resolve(projectRoot, params.daemonConfig.heartbeat.heartbeatFile);
-  if (!heartbeatPath.startsWith(projectRoot + "/") && heartbeatPath !== projectRoot) {
+  if (!heartbeatPath.startsWith(projectRoot + sep) && heartbeatPath !== projectRoot) {
     throw new AppError("HEARTBEAT file path is outside project root", "DAEMON_CONFIG_ERROR", 400);
   }
 
@@ -71,7 +71,7 @@ export function loadDaemonTriggersStage(
           break;
         case "file-watch": {
           const resolvedWatchPath = resolve(projectRoot, def.path);
-          if (!resolvedWatchPath.startsWith(projectRoot + "/") && resolvedWatchPath !== projectRoot) {
+          if (!resolvedWatchPath.startsWith(projectRoot + sep) && resolvedWatchPath !== projectRoot) {
             params.logger.warn("File-watch path outside project root, skipping", {
               trigger: def.name,
               path: def.path,

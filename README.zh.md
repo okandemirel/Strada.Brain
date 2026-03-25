@@ -129,6 +129,8 @@ git clone https://github.com/okandemirel/Strada.Brain.git Strada.Brain
 在这次首次切换里，Strada 也会把 onboarding 回合和初始 autonomy 选择重新应用到第一段聊天会话中，因此开场对话和 Settings 页面会立即反映向导里的选择。
 如果第一条真正的聊天消息就是技术任务，Strada 现在会先开始解决问题，并把 onboarding 压缩到至多一个简短的跟进问题，而不是先抛出一整套 intake 问卷。
 如果启用了 RAG 但还没有可用的 embedding provider，向导现在会允许你继续进入 review 步骤；不过在你选择有效的 embedding provider 或关闭 RAG 之前，Save 会保持阻塞。
+> **Windows Web 设置修复：** 早期版本存在路径分隔符 bug，导致 Windows 上 Web 设置页面显示空白（所有静态资源被路径遍历保护拦截）。此问题已修复 —— `.\strada.ps1 setup --web` 和设置后 `127.0.0.1:3000` 上的 Web 门户在 Windows 上均可正常工作。如果你之前在 Windows 上不得不回退到终端设置，现在推荐使用 Web 设置。
+
 第一次 setup 完成后，不带子命令的 `./strada` 会变成你的智能启动器：
 - 第一次使用时如果没有 config，会自动进入 setup
 - 之后会显示一个终端面板，让你选择 web、CLI、daemon、setup 或 doctor

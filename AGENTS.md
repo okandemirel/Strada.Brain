@@ -64,6 +64,8 @@ npm run doctor             # Diagnose setup issues
 
 - Never hardcode API keys, secrets, or credentials
 - All file paths must be sanitized against directory traversal
+- Path containment checks must use `path.sep` (not hardcoded `"/"`), and absolute path detection must use `path.isAbsolute()` (not `startsWith("/")`) for Windows compatibility
+- Spawning `.cmd` files on Windows requires `shell: true` (Node.js 22+, CVE-2024-27980)
 - User input validated at system boundaries using Zod schemas
 - Web channel binds to `127.0.0.1` only
 - Media processing includes SSRF protection and magic byte validation

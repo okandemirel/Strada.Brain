@@ -13,7 +13,7 @@ import {
 } from "node:http";
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { join, extname, resolve } from "node:path";
+import { join, extname, resolve, sep } from "node:path";
 import { randomBytes, timingSafeEqual, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer, type WebSocket } from "ws";
@@ -434,7 +434,7 @@ export class WebChannel
     if (rawSegment !== "/") {
       const candidate = resolve(join(this.staticDir, rawSegment));
       const safeRoot = resolve(this.staticDir);
-      if (!candidate.startsWith(safeRoot + "/") && candidate !== safeRoot) {
+      if (!candidate.startsWith(safeRoot + sep) && candidate !== safeRoot) {
         res.writeHead(403, WebChannel.SECURITY_HEADERS);
         res.end("Forbidden");
         return;

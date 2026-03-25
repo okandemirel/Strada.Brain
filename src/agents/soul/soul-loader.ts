@@ -7,7 +7,7 @@
 
 import { readFile, realpath, readdir, writeFile, unlink } from "node:fs/promises";
 import { watch, mkdirSync, existsSync, type FSWatcher } from "node:fs";
-import { resolve, join } from "node:path";
+import { resolve, join, sep } from "node:path";
 import { getLogger } from "../../utils/logger.js";
 import type { ChannelType } from "../../channels/channel-messages.interface.js";
 
@@ -199,10 +199,10 @@ export class SoulLoader {
 
     // Verify resolved path is within basePath
     const resolvedFile = resolve(this.basePath, fileName);
-    if (!resolvedFile.startsWith(resolvedBase + "/") && resolvedFile !== resolvedBase) {
+    if (!resolvedFile.startsWith(resolvedBase + sep) && resolvedFile !== resolvedBase) {
       // Also check without realpath for non-symlinked setups
       const plainBase = resolve(this.basePath);
-      if (!resolvedFile.startsWith(plainBase + "/") && resolvedFile !== plainBase) {
+      if (!resolvedFile.startsWith(plainBase + sep) && resolvedFile !== plainBase) {
         logger.warn("Soul file rejected — outside project directory", { file: fileName });
         return null;
       }
@@ -211,7 +211,7 @@ export class SoulLoader {
     // Resolve symlinks on the file itself and re-check
     try {
       const realPath = await realpath(filePath);
-      if (!realPath.startsWith(resolvedBase + "/") && realPath !== resolvedBase) {
+      if (!realPath.startsWith(resolvedBase + sep) && realPath !== resolvedBase) {
         logger.warn("Soul file rejected — symlink escapes project directory", { file: fileName, realPath });
         return null;
       }

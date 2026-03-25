@@ -129,6 +129,8 @@ Une fois l'assistant web enregistr&eacute;, Strada bascule vers l'application we
 Lors de ce premier basculement, Strada rejoue aussi le tour d'onboarding et le choix initial d'autonomy dans la premi&egrave;re session de chat, afin que la conversation d'ouverture et l'&eacute;cran Settings refl&egrave;tent imm&eacute;diatement ce qui a &eacute;t&eacute; choisi dans l'assistant.
 Si le premier vrai message du chat est technique, Strada commence maintenant &agrave; traiter la t&acirc;che tout de suite et limite l'onboarding &agrave; au plus une courte question de suivi au lieu d'ouvrir un questionnaire d'intake complet.
 Si le RAG est activ&eacute; sans fournisseur d'embeddings utilisable, l'assistant vous laisse maintenant aller jusqu'&agrave; l'&eacute;tape de revue ; en revanche Save reste bloqu&eacute; tant que vous n'avez pas choisi un fournisseur d'embeddings valide ou d&eacute;sactiv&eacute; le RAG.
+> **Correctif web setup Windows :** Les versions précédentes avaient un bug de séparateur de chemin qui faisait apparaître la page de web setup vide sur Windows (tous les assets statiques étaient bloqués par la protection anti-traversée de chemin). C'est maintenant corrigé — `.\strada.ps1 setup --web` et le portail web à `127.0.0.1:3000` fonctionnent correctement sur Windows. Si vous deviez auparavant recourir au setup terminal sur Windows, le web setup est désormais recommandé.
+
 Apr&egrave;s le premier setup r&eacute;ussi, `./strada` sans sous-commande devient votre launcher intelligent :
 - au premier usage, il ouvre automatiquement le setup si la config manque
 - ensuite, il affiche un panneau terminal pour choisir web, CLI, daemon, setup ou doctor

@@ -18,7 +18,7 @@ import {
 import { getLogger } from "../../utils/logger.js";
 import { createWriteStream } from "node:fs";
 import { mkdir, stat, unlink, writeFile } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 
@@ -517,7 +517,7 @@ export class BrowserAutomationTool implements ITool {
     const session = this.requireSession(sessionId);
     const candidate = resolve(join(context.workingDirectory, input.downloadPath));
     const safeRoot = resolve(context.workingDirectory);
-    if (!candidate.startsWith(safeRoot + "/") && candidate !== safeRoot) {
+    if (!candidate.startsWith(safeRoot + sep) && candidate !== safeRoot) {
       return { content: "Download path traversal blocked: path must be within working directory", isError: true };
     }
     const fullPath = candidate;

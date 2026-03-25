@@ -128,6 +128,8 @@ Setup writes global provider-model defaults into `.env`, while chat and Settings
 If the first real chat message is technical, Strada still starts solving immediately and only learns whatever name/style/detail preferences it can infer from that same reply.
 If RAG is enabled without a usable embedding provider, the wizard now lets you continue to the review step but keeps Save blocked until you choose a valid embedding provider or disable RAG.
 
+> **Windows web setup fix:** Earlier versions had a path-separator bug that caused the web setup page to appear blank on Windows (all static assets were blocked by the path traversal guard). This is now fixed — both `.\strada.ps1 setup --web` and the post-setup web portal at `127.0.0.1:3000` work correctly on Windows. If you previously had to fall back to terminal setup on Windows, web setup is now the recommended path.
+
 After the first successful setup, running `./strada` with no subcommand becomes your smart launcher:
 - first use: opens setup automatically if config is missing
 - later uses: shows a terminal launcher so you can choose web, CLI, daemon mode, setup, or doctor

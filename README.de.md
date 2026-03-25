@@ -129,6 +129,8 @@ Wenn die erste echte Chat-Nachricht bereits eine technische Aufgabe ist, beginnt
 Das Terminal-Setup akzeptiert kommagetrennte Provider in einer einzigen Eingabe (z. B. `kimi,deepseek`) fuer Fallback- oder Multi-Agent-Orchestrierung; alternativ koennen Sie Provider auch einzeln interaktiv eingeben. Die Schleife "Einen weiteren hinzufuegen?" erscheint nur, wenn ein einzelner Provider eingegeben wird. Die Embedding-Provider-Wahl bleibt getrennt.
 Sobald Sie im Web-Assistenten speichern, uebergibt Strada auf derselben URL an die eigentliche Web-App, damit ein Refresh waehrend des Uebergangs nicht auf einer toten Setup-Seite landet.
 Wenn RAG aktiviert ist, aber kein nutzbarer Embedding-Provider konfiguriert wurde, laesst der Assistent Sie jetzt bis zum Review-Schritt weitergehen; Speichern bleibt jedoch blockiert, bis Sie einen gueltigen Embedding-Provider waehlen oder RAG deaktivieren.
+> **Windows Web-Setup-Fix:** Fruehere Versionen hatten einen Path-Separator-Bug, der die Web-Setup-Seite auf Windows leer erscheinen liess (alle statischen Assets wurden vom Path-Traversal-Guard blockiert). Dies ist jetzt behoben — sowohl `.\strada.ps1 setup --web` als auch das Web-Portal unter `127.0.0.1:3000` funktionieren korrekt auf Windows. Falls Sie zuvor auf Windows auf das Terminal-Setup zurueckgreifen mussten, ist Web-Setup jetzt der empfohlene Weg.
+
 Nach dem ersten erfolgreichen Setup wird `./strada` ohne Subcommand zum smarten Launcher:
 - beim ersten Start oeffnet es das Setup automatisch, falls die Config fehlt
 - spaeter zeigt es ein Terminal-Panel fuer Web, CLI, Daemon, Setup oder Doctor
