@@ -30,6 +30,17 @@ export interface MonitorTask {
   implementationResult?: unknown
   specReviewResult?: unknown
   qualityReviewResult?: unknown
+  phase?: 'planning' | 'acting' | 'observing' | 'reflecting'
+  progress?: { current: number; total: number; unit: string }
+  elapsed?: number
+  substeps?: Array<{
+    id: string
+    label: string
+    status: 'active' | 'done' | 'skipped'
+    order: number
+    files?: string[]
+  }>
+  expandedByUser?: boolean
 }
 
 export interface DagState {
