@@ -76,17 +76,47 @@ function ensureRepositoryRoot() {
 
 function printMissingNpm() {
   console.error("Strada requires npm so it can prepare the local checkout.");
+  console.error("npm usually ships with Node.js. Ensure your Node.js installation includes npm,");
+  console.error("or re-run the Strada launcher (strada.cmd / strada.ps1) to trigger the automatic Node.js setup.");
 }
 
 function resolveCommandBinary(command, platform = process.platform) {
-  return isWindows(platform) ? `${command}.cmd` : command;
+  if (!isWindows(platform)) {
+    return command;
+  }
+  // When using a portable/standalone Node.js (STRADA_NODE_PATH), npm.cmd lives
+  // next to node.exe and may not be on the system PATH.  Resolve the full path
+  // so that `execFileSync` / `spawnSync` find it regardless of PATH.
+  const nodeDir = process.env.STRADA_NODE_PATH ? path.dirname(process.env.STRADA_NODE_PATH) : null;
+  if (nodeDir) {
+    const candidate = path.join(nodeDir, `${command}.cmd`);
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return `${command}.cmd`;
+}
+
+/**
+ * Build spawn options that work correctly on Windows.
+ *
+ * Node.js 22+ rejects `.cmd`/`.bat` execution via `spawn`/`execFile` without
+ * `shell: true` (CVE-2024-27980). We add `shell: true` on Windows so that the
+ * underlying CreateProcess call is handled by cmd.exe, which knows how to
+ * launch `.cmd` stubs such as `npm.cmd`.
+ */
+function windowsSafeSpawnOptions(options = {}) {
+  if (isWindows()) {
+    return { ...options, shell: true };
+  }
+  return options;
 }
 
 function ensureSourceCheckout() {
   ensureRepositoryRoot();
   const npmCommand = resolveCommandBinary("npm");
   try {
-    execFileSync(npmCommand, ["--version"], { stdio: "ignore" });
+    execFileSync(npmCommand, ["--version"], windowsSafeSpawnOptions({ stdio: "ignore" }));
   } catch {
     printMissingNpm();
     process.exit(1);
@@ -94,10 +124,10 @@ function ensureSourceCheckout() {
 
   if (!existsSync(path.join(ROOT_DIR, "node_modules"))) {
     console.log("Preparing Strada dependencies...");
-    const result = spawnSync(npmCommand, ["install"], {
+    const result = spawnSync(npmCommand, ["install"], windowsSafeSpawnOptions({
       cwd: ROOT_DIR,
       stdio: "inherit",
-    });
+    }));
     if (result.status !== 0) {
       process.exit(result.status ?? 1);
     }
@@ -108,10 +138,10 @@ function ensurePrepared() {
   ensureSourceCheckout();
   if (!existsSync(DIST_ENTRY)) {
     console.log("Preparing Strada build...");
-    const result = spawnSync(resolveCommandBinary("npm"), ["run", "bootstrap"], {
+    const result = spawnSync(resolveCommandBinary("npm"), ["run", "bootstrap"], windowsSafeSpawnOptions({
       cwd: ROOT_DIR,
       stdio: "inherit",
-    });
+    }));
     if (result.status !== 0) {
       process.exit(result.status ?? 1);
     }
@@ -316,7 +346,43 @@ exec "$NODE_BIN" ${quotePosixSingle(path.join(ROOT_DIR, "scripts", "source-launc
 function buildPowerShellWrapper() {
   const sourceLauncherPath = quotePowerShellSingle(path.join(ROOT_DIR, "scripts", "source-launcher.mjs"));
   return `$ErrorActionPreference = "Stop"
-$nodePath = if ($env:STRADA_NODE_PATH) { $env:STRADA_NODE_PATH } else { "node" }
+# --- Node.js resolution with portable fallback ---
+$nodePath = $null
+if ($env:STRADA_NODE_PATH) { $nodePath = $env:STRADA_NODE_PATH }
+if (-not $nodePath) { $nodePath = (Get-Command node -ErrorAction SilentlyContinue).Source }
+if (-not $nodePath) {
+  $stradaLocal = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { Join-Path $env:USERPROFILE 'AppData\\Local' }
+  $portable = Join-Path $stradaLocal 'Strada\\node\\node.exe'
+  if (Test-Path $portable) { $nodePath = $portable }
+}
+if (-not $nodePath) {
+  $stradaLocal = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { Join-Path $env:USERPROFILE 'AppData\\Local' }
+  $nodeDir = Join-Path $stradaLocal 'Strada\\node'
+  $nodeVer = 'v22.18.0'
+  $arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64' -or $env:PROCESSOR_ARCHITEW6432 -eq 'ARM64') { 'arm64' } else { 'x64' }
+  Write-Host ''; Write-Host 'Node.js is not installed. Strada can download a portable copy (~30 MB, one-time).'
+  Write-Host "Install to: $nodeDir"; Write-Host ''
+  $r = Read-Host 'Download portable Node.js now? [Y/n]'
+  if ($r -and $r.ToLower() -eq 'n') { Write-Host 'Install Node.js from https://nodejs.org or set STRADA_NODE_PATH'; exit 1 }
+  $zip = "node-$nodeVer-win-$arch.zip"; $url = "https://nodejs.org/dist/$nodeVer/$zip"
+  $tmp = Join-Path ([IO.Path]::GetTempPath()) 'strada-node-install'
+  try {
+    New-Item -ItemType Directory -Path $tmp -Force | Out-Null; New-Item -ItemType Directory -Path $nodeDir -Force | Out-Null
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    $ProgressPreference = 'SilentlyContinue'; Write-Host "Downloading Node.js $nodeVer ($arch)..."
+    Invoke-WebRequest -Uri $url -OutFile (Join-Path $tmp $zip) -UseBasicParsing
+    Expand-Archive -Path (Join-Path $tmp $zip) -DestinationPath $tmp -Force
+    $ex = Join-Path $tmp "node-$nodeVer-win-$arch"
+    Copy-Item (Join-Path $ex 'node.exe') $nodeDir -Force
+    foreach ($f in @('npm','npm.cmd','npx','npx.cmd','corepack','corepack.cmd')) { $s = Join-Path $ex $f; if (Test-Path $s) { Copy-Item $s $nodeDir -Force } }
+    $nm = Join-Path $ex 'node_modules'; if (Test-Path $nm) { Copy-Item $nm (Join-Path $nodeDir 'node_modules') -Recurse -Force }
+    Write-Host "Installed Node.js $nodeVer to $nodeDir"
+    $nodePath = Join-Path $nodeDir 'node.exe'
+  } catch { Write-Host "Download failed: $_"; Write-Host 'Install Node.js from https://nodejs.org'; exit 1 }
+  finally { if (Test-Path $tmp) { Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue } }
+}
+$env:STRADA_NODE_PATH = $nodePath
+$nd = Split-Path -Parent $nodePath; if ($env:PATH -notlike "*$nd*") { $env:PATH = "$nd;$env:PATH" }
 $launcherPath = $MyInvocation.MyCommand.Path
 & $nodePath ${sourceLauncherPath} '--wrapper-kind' 'powershell' '--wrapper-path' $launcherPath @args
 exit $LASTEXITCODE
@@ -324,14 +390,44 @@ exit $LASTEXITCODE
 }
 
 function buildCmdWrapper() {
+  const sourceLauncher = path.join(ROOT_DIR, "scripts", "source-launcher.mjs");
   return `@echo off
-setlocal
-set "STRADA_SOURCE_LAUNCHER=${path.join(ROOT_DIR, "scripts", "source-launcher.mjs")}"
-if defined STRADA_NODE_PATH (
-  set "NODE_EXE=%STRADA_NODE_PATH%"
-) else (
-  set "NODE_EXE=node"
-)
+setlocal EnableDelayedExpansion
+set "STRADA_SOURCE_LAUNCHER=${sourceLauncher}"
+:: --- Node.js resolution with portable fallback ---
+if defined STRADA_NODE_PATH ( set "NODE_EXE=%STRADA_NODE_PATH%" & goto :strada_found )
+where node >nul 2>nul
+if not errorlevel 1 ( set "NODE_EXE=node" & goto :strada_found )
+if defined LOCALAPPDATA ( set "SNDIR=%LOCALAPPDATA%\\Strada\\node" ) else ( set "SNDIR=%USERPROFILE%\\AppData\\Local\\Strada\\node" )
+if exist "%SNDIR%\\node.exe" ( set "NODE_EXE=%SNDIR%\\node.exe" & goto :strada_found )
+echo. & echo Node.js is not installed. Strada can download a portable copy (~30 MB, one-time).
+echo Install to: %SNDIR% & echo.
+set /p "CONFIRM=Download portable Node.js now? [Y/n] "
+if /i "%CONFIRM%"=="n" ( echo Install Node.js from https://nodejs.org or set STRADA_NODE_PATH & exit /b 1 )
+if /i "%CONFIRM%"=="no" ( echo Install Node.js from https://nodejs.org or set STRADA_NODE_PATH & exit /b 1 )
+set "ARCH=x64"
+if "%PROCESSOR_ARCHITECTURE%"=="ARM64" set "ARCH=arm64"
+if "%PROCESSOR_ARCHITEW6432%"=="ARM64" set "ARCH=arm64"
+set "NV=v22.18.0" & set "ZN=node-%NV%-win-%ARCH%.zip"
+echo. & echo Downloading Node.js %NV% (%ARCH%)...
+set "TD=%TEMP%\\strada-node-install"
+if exist "%TD%" rmdir /s /q "%TD%"
+mkdir "%TD%" & mkdir "%SNDIR%" 2>nul
+powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12;$ProgressPreference='SilentlyContinue';Invoke-WebRequest -Uri 'https://nodejs.org/dist/%NV%/%ZN%' -OutFile '%TD%\\%ZN%' -UseBasicParsing;Expand-Archive -Path '%TD%\\%ZN%' -DestinationPath '%TD%' -Force"
+if errorlevel 1 ( echo Download failed. Install Node.js from https://nodejs.org & rmdir /s /q "%TD%" 2>nul & exit /b 1 )
+set "EX=%TD%\\node-%NV%-win-%ARCH%"
+copy /y "%EX%\\node.exe" "%SNDIR%\\node.exe" >nul
+for %%F in (npm npm.cmd npx npx.cmd corepack corepack.cmd) do ( if exist "%EX%\\%%F" copy /y "%EX%\\%%F" "%SNDIR%\\%%F" >nul )
+if exist "%EX%\\node_modules" xcopy /e /i /q /y "%EX%\\node_modules" "%SNDIR%\\node_modules" >nul
+rmdir /s /q "%TD%" 2>nul
+echo Installed Node.js %NV% to %SNDIR% & echo.
+set "NODE_EXE=%SNDIR%\\node.exe"
+:strada_found
+for %%I in ("%NODE_EXE%") do set "NDIR=%%~dpI"
+set "NDIR=%NDIR:~0,-1%"
+echo "%PATH%" | findstr /i /c:"%NDIR%" >nul 2>nul
+if errorlevel 1 set "PATH=%NDIR%;%PATH%"
+set "STRADA_NODE_PATH=%NODE_EXE%"
 "%NODE_EXE%" "%STRADA_SOURCE_LAUNCHER%" --wrapper-kind cmd --wrapper-path "%~f0" %*
 exit /b %ERRORLEVEL%
 `;

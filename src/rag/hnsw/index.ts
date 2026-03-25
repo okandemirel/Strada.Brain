@@ -9,6 +9,7 @@
 export {
   HNSWVectorStore,
   createHNSWVectorStore,
+  isHnswAvailable,
   DEFAULT_HNSW_CONFIG,
   type IHNSWVectorStore,
   type HNSWConfig,

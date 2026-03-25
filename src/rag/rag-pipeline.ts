@@ -19,7 +19,7 @@ import { chunkCSharpFile } from "./chunker.js";
 import { rerankResults } from "./reranker.js";
 import { getLogger } from "../utils/logger.js";
 import { FileVectorStore } from "./vector-store.js";
-import { createHNSWVectorStore, type IHNSWVectorStore } from "./hnsw/hnsw-vector-store.js";
+import { createHNSWVectorStore, isHnswAvailable, type IHNSWVectorStore } from "./hnsw/hnsw-vector-store.js";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
@@ -84,7 +84,7 @@ export class RAGPipeline implements IRAGPipeline {
       useHNSW: true,
       ...config,
     };
-    this.useHNSW = this.config.useHNSW ?? true;
+    this.useHNSW = (this.config.useHNSW ?? true) && isHnswAvailable();
   }
 
   // ---------------------------------------------------------------------------

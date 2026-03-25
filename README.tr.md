@@ -47,7 +47,7 @@ Bu surumde yeni: Strada.Brain artik bir **Agent Core** iceriyor -- cevrevi (dosy
 
 ### On Kosullar
 
-- **Node.js 20.19+** (veya **22.12+**) ve npm
+- **Node.js 20.19+** (veya **22.12+**) — Node.js sisteminizde kurulu degilse, launcher otomatik olarak tasinabilir bir kopya indirmeyi teklif eder (yalnizca Windows, ~30 MB tek seferlik indirme, `%LOCALAPPDATA%\Strada\node` altinda saklanir). Alternatif olarak `STRADA_NODE_PATH` ile ozel bir binary gosterebilirsiniz.
 - En az bir desteklenen AI saglayici kimligi (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY` vb.), bir OpenAI ChatGPT/Codex subscription oturumu (`OPENAI_AUTH_MODE=chatgpt-subscription`) veya yalnizca `ollama` kullanan bir `PROVIDER_CHAIN`
 - Bir **Unity projesi** (ajana verdiginiz yol). Tam Strada-ozel yardim icin Strada.Core onerilir.
 
@@ -82,6 +82,8 @@ git clone https://github.com/okandemirel/Strada.Brain.git Strada.Brain
 > `SyntaxError: Unexpected identifier 'pipefail'` hatasi goruyorsaniz, `node strada` calistirdiniz ve Node.js bash launcher'i JavaScript olarak okumaya calisti. Bunun yerine `.\strada.cmd`, `.\strada.ps1` veya `node strada.js` kullanin.
 
 `./strada` kaynak checkout icin kanonik launcher'dir. Ilk calistirmada gerekli hazirligi kendi yapar; normal kurulumda artik manuel `npm install`, `npm run bootstrap` veya `npm link` gerekmez.
+
+> **Node.js kurulu degil mi? Sorun degil.** Windows'ta sistem PATH'inde `node` bulunamazsa launcher (`strada.cmd` / `strada.ps1`) otomatik olarak tasinabilir bir Node.js indirmeyi teklif eder. Tasinabilir runtime `%LOCALAPPDATA%\Strada\node` altinda saklanir ve yalnizca Strada tarafindan kullanilir — sistem PATH'inizi degistirmez, diger araclarla catismaz. Istege bagli olarak <https://nodejs.org> adresinden kendiniz kurabilir veya mevcut bir binary'yi `set STRADA_NODE_PATH=C:\yol\node.exe` ile gosterebilirsiniz.
 
 `./strada install-command` atlanirsa parent klasorden `./Strada.Brain/strada ...` veya repo kokunden `./strada ...` kullanmaya devam edin. Kurulduktan sonra yalniz `strada ...` komutu her yerden calisir.
 

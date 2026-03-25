@@ -47,7 +47,7 @@ Neu in dieser Version: Strada.Brain verfuegt jetzt ueber einen **Agent Core** --
 
 ### Voraussetzungen
 
-- **Node.js 20.19+** (oder **22.12+**) und npm
+- **Node.js 20.19+** (oder **22.12+**) — falls Node.js nicht installiert ist, bietet der Launcher an, automatisch eine portable Kopie herunterzuladen (nur Windows, einmaliger Download von ca. 30 MB, gespeichert in `%LOCALAPPDATA%\Strada\node`). Sie koennen auch mit `STRADA_NODE_PATH` auf ein eigenes Binary verweisen.
 - Mindestens eine unterstuetzte AI-Provider-Credential (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY` usw.), eine OpenAI ChatGPT/Codex-Subscription-Session (`OPENAI_AUTH_MODE=chatgpt-subscription`) oder eine reine `ollama`-`PROVIDER_CHAIN`
 - Ein **Unity-Projekt** (der Pfad, den Sie dem Agenten geben). Fuer volle Strada-spezifische Hilfe wird Strada.Core empfohlen.
 
@@ -84,6 +84,8 @@ git clone https://github.com/okandemirel/Strada.Brain.git Strada.Brain
 Fuehren Sie alle `npm` Befehle im Repository-Root aus, also in dem Ordner mit `package.json`. Wenn Sie einen Fehler wie `ENOENT ... /Strada/package.json` sehen, sind Sie eine Ebene zu hoch; wechseln Sie zuerst nach `Strada.Brain` oder fuehren Sie den Befehl als `cd Strada.Brain && ...` aus.
 
 `./strada` ist der kanonische Launcher fuer den Source-Checkout. Beim ersten Start bereitet er den Checkout automatisch vor, sodass der normale Setup-Weg kein `npm link` mehr braucht.
+
+> **Kein Node.js? Kein Problem.** Unter Windows bietet der Launcher (`strada.cmd` / `strada.ps1`) an, automatisch eine portable Version von Node.js herunterzuladen, wenn `node` nicht im System-PATH gefunden wird. Die portable Laufzeit wird in `%LOCALAPPDATA%\Strada\node` gespeichert und ausschliesslich von Strada verwendet -- sie aendert weder Ihren System-PATH noch beeinflusst sie andere Tools. Sie koennen die Eingabeaufforderung ueberspringen und Node.js selbst von <https://nodejs.org> installieren oder mit `set STRADA_NODE_PATH=C:\path\to\node.exe` auf ein vorhandenes Binary verweisen.
 
 Wenn Sie `./strada install-command` ueberspringen, verwenden Sie den Checkout weiter ueber `./Strada.Brain/strada ...` aus dem Elternordner oder `./strada ...` im Repository-Root. Nach der Installation funktioniert `strada ...` von ueberall.
 

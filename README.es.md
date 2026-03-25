@@ -47,7 +47,7 @@ Nuevo en esta version: Strada.Brain ahora incluye un **Agent Core** -- un motor 
 
 ### Requisitos Previos
 
-- **Node.js 20.19+** (o **22.12+**) y npm
+- **Node.js 20.19+** (o **22.12+**) — si Node.js no esta instalado, el lanzador ofrecera descargar una copia portatil automaticamente (solo Windows, descarga unica de ~30 MB, almacenada en `%LOCALAPPDATA%\Strada\node`). Tambien puedes apuntar a un binario personalizado con `STRADA_NODE_PATH`.
 - Al menos una credencial compatible de proveedor de IA (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, etc.), una sesion de suscripcion OpenAI ChatGPT/Codex (`OPENAI_AUTH_MODE=chatgpt-subscription`) o una `PROVIDER_CHAIN` solo con `ollama`
 - Un **proyecto Unity** (la ruta que le das al agente). Strada.Core se recomienda para una ayuda totalmente consciente del framework.
 
@@ -84,6 +84,8 @@ git clone https://github.com/okandemirel/Strada.Brain.git Strada.Brain
 Ejecuta todos los comandos `npm` desde la raiz del repositorio, la carpeta que contiene `package.json`. Si ves un error como `ENOENT ... /Strada/package.json`, estas un nivel por encima; entra primero en `Strada.Brain` o ejecuta `cd Strada.Brain && ...`.
 
 `./strada` es el launcher canonico del source checkout. En el primer arranque prepara el checkout automaticamente, asi que el setup normal ya no necesita `npm link`.
+
+> **No tienes Node.js? No hay problema.** En Windows, si `node` no se encuentra en el PATH del sistema, el lanzador (`strada.cmd` / `strada.ps1`) te ofrecera descargar un Node.js portatil automaticamente. El runtime portatil se almacena en `%LOCALAPPDATA%\Strada\node` y es usado exclusivamente por Strada — no modifica tu PATH del sistema ni interfiere con otras herramientas. Puedes omitir la solicitud e instalar Node.js por tu cuenta desde <https://nodejs.org>, o apuntar a cualquier binario existente con `set STRADA_NODE_PATH=C:\path\to\node.exe`.
 
 Si omites `./strada install-command`, sigue usando `./Strada.Brain/strada ...` desde la carpeta padre o `./strada ...` desde la raiz del repositorio. Despues de instalarlo, `strada ...` funciona desde cualquier lugar.
 

@@ -47,7 +47,7 @@ Strada.Brain はチャットチャネルを通じて対話する AI エージェ
 
 ### 前提条件
 
-- **Node.js 20.19+**（または **22.12+**）および npm
+- **Node.js 20.19+**（または **22.12+**）— Node.js がインストールされていない場合、ランチャーがポータブル版の自動ダウンロードを提案します（Windows のみ、約 30 MB の一回限りのダウンロード、`%LOCALAPPDATA%\Strada\node` に保存）。`STRADA_NODE_PATH` でカスタムバイナリを指定することもできます。
 - 少なくとも 1 つの対応 AI プロバイダー認証情報（`ANTHROPIC_API_KEY`、`OPENAI_API_KEY`、`GEMINI_API_KEY` など）、OpenAI ChatGPT/Codex subscription セッション（`OPENAI_AUTH_MODE=chatgpt-subscription`）、または `ollama` のみの `PROVIDER_CHAIN`
 - **Unity プロジェクト**（エージェントに渡すパス）。Strada.Core があると Strada 固有の支援がより完全になります。
 
@@ -84,6 +84,8 @@ git clone https://github.com/okandemirel/Strada.Brain.git Strada.Brain
 すべての `npm` コマンドは `package.json` があるリポジトリルートで実行してください。`ENOENT ... /Strada/package.json` のようなエラーが出た場合は一つ上の階層にいるので、先に `cd Strada.Brain` するか `cd Strada.Brain && ...` で実行してください。
 
 `./strada` は source checkout 向けの正式ランチャーです。初回起動時に checkout を自動準備するため、通常セットアップで `npm link` は不要です。
+
+> **Node.js がなくても大丈夫です。** Windows では、システム PATH に `node` が見つからない場合、ランチャー（`strada.cmd` / `strada.ps1`）がポータブル版 Node.js の自動ダウンロードを提案します。ポータブルランタイムは `%LOCALAPPDATA%\Strada\node` に保存され、Strada 専用で使用されます。システム PATH を変更したり、他のツールに干渉したりすることはありません。プロンプトをスキップして <https://nodejs.org> から自分で Node.js をインストールするか、`set STRADA_NODE_PATH=C:\path\to\node.exe` で既存のバイナリを指定することもできます。
 
 `./strada install-command` を省略した場合でも、親フォルダからは `./Strada.Brain/strada ...`、リポジトリルートからは `./strada ...` を使い続けられます。インストール後は bare `strada ...` がどこからでも使えます。
 

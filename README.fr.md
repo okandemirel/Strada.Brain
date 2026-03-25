@@ -47,7 +47,7 @@ Nouveau dans cette version : Strada.Brain int&egrave;gre d&eacute;sormais un **A
 
 ### Pr&eacute;requis
 
-- **Node.js 20.19+** (ou **22.12+**) et npm
+- **Node.js 20.19+** (ou **22.12+**) — si Node.js n'est pas installe, le lanceur proposera de telecharger automatiquement une copie portable (Windows uniquement, telechargement unique d'environ 30 Mo, stocke dans `%LOCALAPPDATA%\Strada\node`). Vous pouvez aussi pointer vers un binaire personnalise avec `STRADA_NODE_PATH`.
 - Au moins un identifiant compatible de fournisseur IA (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, etc.), une session OpenAI ChatGPT/Codex subscription (`OPENAI_AUTH_MODE=chatgpt-subscription`) ou une `PROVIDER_CHAIN` basee uniquement sur `ollama`
 - Un **projet Unity** (le chemin donn&eacute; &agrave; l'agent). Strada.Core est recommand&eacute; pour une assistance pleinement consciente du framework.
 
@@ -84,6 +84,8 @@ git clone https://github.com/okandemirel/Strada.Brain.git Strada.Brain
 Executez toutes les commandes `npm` depuis la racine du depot, c'est-a-dire le dossier qui contient `package.json`. Si vous voyez une erreur du type `ENOENT ... /Strada/package.json`, vous etes un niveau trop haut; entrez d'abord dans `Strada.Brain` ou executez `cd Strada.Brain && ...`.
 
 `./strada` est le launcher canonique du checkout source. Au premier lancement, il prepare automatiquement le checkout, donc le setup normal n'a plus besoin de `npm link`.
+
+> **Pas de Node.js ? Pas de souci.** Sous Windows, si `node` n'est pas trouve dans le PATH systeme, le lanceur (`strada.cmd` / `strada.ps1`) vous proposera de telecharger automatiquement un Node.js portable. Le runtime portable est stocke dans `%LOCALAPPDATA%\Strada\node` et utilise uniquement par Strada — il ne modifie pas votre PATH systeme et n'interfere pas avec d'autres outils. Vous pouvez ignorer l'invite et installer Node.js vous-meme depuis <https://nodejs.org>, ou pointer vers un binaire existant avec `set STRADA_NODE_PATH=C:\path\to\node.exe`.
 
 Si vous sautez `./strada install-command`, continuez a utiliser `./Strada.Brain/strada ...` depuis le dossier parent ou `./strada ...` depuis la racine du depot. Apres installation, `strada ...` fonctionne depuis n'importe ou.
 

@@ -9,10 +9,12 @@ beforeAll(() => {
 import { join } from "node:path";
 import { mkdtempSync, rmSync, mkdirSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { HNSWVectorStore, createHNSWVectorStore } from "./hnsw-vector-store.js";
+import { HNSWVectorStore, createHNSWVectorStore, isHnswAvailable } from "./hnsw-vector-store.js";
 import type { VectorEntry, CodeChunk } from "../rag.interface.js";
 
-describe("HNSWVectorStore", () => {
+const describeIfHnsw = isHnswAvailable() ? describe : describe.skip;
+
+describeIfHnsw("HNSWVectorStore", () => {
   let tempDir: string;
   let store: HNSWVectorStore;
   const dimensions = 128;

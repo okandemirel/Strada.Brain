@@ -9,9 +9,27 @@ import { join } from "node:path";
 import { existsSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import type { IVectorStore, VectorEntry, VectorSearchHit, CodeChunk } from "../rag.interface.js";
 import { getLogger } from "../../utils/logger.js";
+import { createRequire } from "node:module";
 import type { QuantizationType, QuantizedVector } from "./quantization.js";
-import hnswlib from "hnswlib-node";
-const { HierarchicalNSW } = hnswlib;
+
+// hnswlib-node is an optional native dependency that requires Python + C++ build
+// tools to compile.  We load it lazily so that the rest of Strada works even when
+// the native module is unavailable (e.g. on Windows without build tools).
+let HierarchicalNSW: any;
+let hnswAvailable = false;
+
+try {
+  const esmRequire = createRequire(import.meta.url);
+  const hnswlib = esmRequire("hnswlib-node");
+  HierarchicalNSW = hnswlib.HierarchicalNSW;
+  hnswAvailable = true;
+} catch {
+  // hnswlib-node not installed or failed to load – graceful degradation
+}
+
+export function isHnswAvailable(): boolean {
+  return hnswAvailable;
+}
 
 function getLoggerSafe() {
   try {
@@ -133,6 +151,14 @@ export class HNSWVectorStore implements IHNSWVectorStore {
 
   async initialize(): Promise<void> {
     if (this.isInitialized) return;
+
+    if (!hnswAvailable) {
+      throw new Error(
+        "hnswlib-node is not available. HNSW vector search requires the optional " +
+        "hnswlib-node native module. On Windows, install Python 3 and C++ Build Tools " +
+        "(npm install --global windows-build-tools) then run: npm install hnswlib-node",
+      );
+    }
 
     try {
       // Create store directory

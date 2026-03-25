@@ -47,7 +47,7 @@ Strada.Brain 是一个通过聊天频道与您对话的 AI 代理。您描述您
 
 ### 前提条件
 
-- **Node.js 20.19+**（或 **22.12+**）和 npm
+- **Node.js 20.19+**（或 **22.12+**）— 如果未安装 Node.js，启动器会自动提示下载便携版（仅限 Windows，约 30 MB 一次性下载，存储在 `%LOCALAPPDATA%\Strada\node`）。你也可以通过 `STRADA_NODE_PATH` 指定自定义的 Node 可执行文件路径。
 - 至少一个受支持的 AI 提供商凭据（`ANTHROPIC_API_KEY`、`OPENAI_API_KEY`、`GEMINI_API_KEY` 等），一个 OpenAI ChatGPT/Codex subscription 会话（`OPENAI_AUTH_MODE=chatgpt-subscription`），或者仅使用 `ollama` 的 `PROVIDER_CHAIN`
 - 一个 **Unity 项目**（您提供给代理的路径）。如果希望获得完整的 Strada 框架感知帮助，建议配合 Strada.Core。
 
@@ -84,6 +84,8 @@ git clone https://github.com/okandemirel/Strada.Brain.git Strada.Brain
 所有 `npm` 命令都必须在包含 `package.json` 的仓库根目录中执行。如果看到类似 `ENOENT ... /Strada/package.json` 的错误，说明你当前在上一级目录；请先执行 `cd Strada.Brain`，或者把命令写成 `cd Strada.Brain && ...`。
 
 `./strada` 是源码 checkout 的规范 launcher。首次运行时它会自动准备本地 checkout，所以常规 setup 已经不再需要手动 `npm link`。
+
+> **没有 Node.js？没关系。** 在 Windows 上，如果系统 PATH 中找不到 `node`，启动器（`strada.cmd` / `strada.ps1`）会提示你自动下载便携版 Node.js。该便携运行时存储在 `%LOCALAPPDATA%\Strada\node`，仅供 Strada 使用——它不会修改你的系统 PATH，也不会干扰其他工具。你可以跳过提示并自行从 <https://nodejs.org> 安装 Node.js，或者通过 `set STRADA_NODE_PATH=C:\path\to\node.exe` 指向任何现有的 Node 可执行文件。
 
 如果你跳过 `./strada install-command`，仍然可以在父目录中继续使用 `./Strada.Brain/strada ...`，或者在仓库根目录中使用 `./strada ...`。安装完成后，裸命令 `strada ...` 可以在任何位置使用。
 

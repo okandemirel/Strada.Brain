@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { RAGPipeline } from "../rag-pipeline.js";
-import { HNSWVectorStore, createHNSWVectorStore } from "./hnsw-vector-store.js";
+import { HNSWVectorStore, createHNSWVectorStore, isHnswAvailable } from "./hnsw-vector-store.js";
 import type { IEmbeddingProvider, EmbeddingBatch } from "../rag.interface.js";
 
 // Mock embedding provider for testing
@@ -46,7 +46,9 @@ class MockEmbeddingProvider implements IEmbeddingProvider {
   }
 }
 
-describe("HNSW RAG Integration", () => {
+const describeIfHnsw = isHnswAvailable() ? describe : describe.skip;
+
+describeIfHnsw("HNSW RAG Integration", () => {
   let tempDir: string;
   let vectorStore: HNSWVectorStore;
   let embeddingProvider: MockEmbeddingProvider;
