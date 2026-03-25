@@ -184,7 +184,7 @@ describe("SessionManager", () => {
           { role: "user", content: "hello" },
           { role: "assistant", content: "hi there" },
         ],
-        lastActivity: new Date("2026-03-24T10:00:00Z"),
+        lastActivity: new Date(Date.now() - 60_000),
         conversationScope: "scope-1",
         lastJournalSnapshot: { learnedInsights: ["test insight"] },
       };
