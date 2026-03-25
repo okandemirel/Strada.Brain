@@ -332,13 +332,22 @@ async function askWithRetry(
  */
 function getBrowserCommand(url: string): [string, string[]] {
   if (process.platform === "darwin") return ["open", [url]];
-  if (process.platform === "win32") return ["cmd", ["/c", "start", '""', `"${url}"`]];
+  if (process.platform === "win32") {
+    // Escape CMD meta-characters so & does not split the command.
+    const escaped = url.replace(/[&|<>^%]/g, "^$&");
+    return ["cmd", ["/c", "start", '""', escaped]];
+  }
   return ["xdg-open", [url]];
 }
 
 function openBrowser(url: string): void {
   const [cmd, args] = getBrowserCommand(url);
-  const proc = spawn(cmd, args, { stdio: "ignore", detached: true });
+  const proc = spawn(cmd, args, {
+    stdio: "ignore",
+    detached: true,
+    // Prevent Node.js from re-quoting args for cmd.exe (same approach as sindresorhus/open).
+    ...(process.platform === "win32" && { windowsVerbatimArguments: true }),
+  });
   proc.on("error", () => {
     console.log(`\n  Could not open browser automatically.`);
     console.log(`  Please open: ${url}\n`);
