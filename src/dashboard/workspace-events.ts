@@ -55,6 +55,9 @@ export interface WorkspaceEventMap {
     status: string
     reviewStatus?: string
     agentId?: string
+    phase?: 'planning' | 'acting' | 'observing' | 'reflecting'
+    progress?: { current: number; total: number; unit: string }
+    elapsed?: number
   }
   'monitor:review_result': {
     rootId: string
@@ -163,4 +166,54 @@ export interface WorkspaceEventMap {
   // === Workspace meta events ===
   'workspace:mode_suggest': { mode: string; reason: string }
   'workspace:notification': { title: string; message: string; severity: 'info' | 'warning' | 'error' }
+
+  // === Monitor substep events (enriched pipeline) ===
+  'monitor:substep': {
+    rootId: string
+    nodeId: string
+    substep: {
+      id: string
+      label: string
+      status: 'active' | 'done' | 'skipped'
+      order: number
+      files?: string[]
+    }
+  }
+
+  // === Progress narrative events ===
+  'progress:narrative': {
+    nodeId?: string
+    narrative: string
+    lang: string
+    milestone?: {
+      current: number
+      total: number
+      label: string
+    }
+  }
+
+  // === Canvas agent interaction events ===
+  'canvas:agent_draw': {
+    action: 'draw' | 'update' | 'clear' | 'annotate' | 'highlight'
+    shapes: Array<{
+      type: string
+      id: string
+      props: Record<string, unknown>
+      position?: { x: number; y: number }
+      connections?: string[]
+    }>
+    layout?: 'auto' | 'grid' | 'tree' | 'flow'
+    viewport?: { x: number; y: number; zoom: number }
+    intent?: string
+  }
+
+  'canvas:user_feedback': {
+    action: 'select' | 'delete' | 'annotate' | 'connect'
+    shapeIds: string[]
+    annotation?: string
+    snapshot?: {
+      shapeCount: number
+      selectedTypes: string[]
+    }
+  }
 }
