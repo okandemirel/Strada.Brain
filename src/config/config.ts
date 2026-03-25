@@ -579,10 +579,12 @@ export interface TaskConfig {
 }
 
 export interface InteractionConfig {
-  readonly mode: "silent-first" | "standard";
+  readonly mode: "silent-first" | "standard" | "phase-driven";
   readonly heartbeatAfterMs: number;
   readonly heartbeatIntervalMs: number;
   readonly escalationPolicy: "hard-blockers-only" | "standard";
+  readonly narrativeEnabled?: boolean;
+  readonly narrativeThrottleMs?: number;
 }
 
 /** Strada dependency configuration */
@@ -614,10 +616,12 @@ export const DEFAULT_STRADA_MCP_REPO_URL = "https://github.com/okandemirel/Strad
 export const DEFAULT_LLM_STREAM_INITIAL_TIMEOUT_MS = 10 * 60 * 1000;
 export const DEFAULT_LLM_STREAM_STALL_TIMEOUT_MS = 2 * 60 * 1000;
 export const DEFAULT_INTERACTION_CONFIG: InteractionConfig = {
-  mode: "silent-first",
+  mode: "phase-driven",
   heartbeatAfterMs: 120_000,
   heartbeatIntervalMs: 300_000,
   escalationPolicy: "hard-blockers-only",
+  narrativeEnabled: true,
+  narrativeThrottleMs: 8_000,
 };
 export const DEFAULT_TASK_CONFIG: TaskConfig = {
   concurrencyLimit: 3,
@@ -1658,7 +1662,7 @@ export const configSchema = z
     daemonFullAutonomy: boolFromString(true),
 
     // Interaction Policy
-    interactionMode: z.enum(["silent-first", "standard"]).default("silent-first"),
+    interactionMode: z.enum(["silent-first", "standard", "phase-driven"]).default("phase-driven"),
     interactionHeartbeatAfterMs: z
       .string()
       .transform((s) => parseInt(s, 10))
