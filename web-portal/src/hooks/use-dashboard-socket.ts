@@ -87,6 +87,29 @@ export function dispatchWorkspaceMessage(data: { type: string; [key: string]: un
       break
     }
 
+    case 'progress:narrative': {
+      const narrative = (payload.narrative as string) ?? ''
+      const nodeId = payload.nodeId as string | undefined
+      const milestone = payload.milestone as
+        | { current: number; total: number; label: string }
+        | undefined
+
+      if (nodeId) {
+        useMonitorStore.getState().updateTask(nodeId, {
+          narrative,
+          ...(milestone ? { milestone } : {}),
+        })
+      }
+
+      useMonitorStore.getState().addActivity({
+        taskId: nodeId,
+        action: 'progress_narrative',
+        detail: narrative,
+        timestamp: typeof data.timestamp === 'number' ? data.timestamp : Date.now(),
+      })
+      break
+    }
+
     case 'monitor:clear': {
       useMonitorStore.getState().clearMonitor()
       break
@@ -161,6 +184,7 @@ export function dispatchWorkspaceMessage(data: { type: string; [key: string]: un
         source: 'agent' as const,
       }))
       const action = payload.action as string | undefined
+      const autoSwitch = payload.autoSwitch !== false
 
       if (action === 'clear') {
         useCanvasStore.getState().removePendingShapeIds(shapes.map((shape) => shape.id))
@@ -171,7 +195,7 @@ export function dispatchWorkspaceMessage(data: { type: string; [key: string]: un
       }
 
       const wsStore = useWorkspaceStore.getState()
-      if (!wsStore.userOverride && wsStore.mode !== 'canvas') {
+      if (autoSwitch && !wsStore.userOverride && wsStore.mode !== 'canvas') {
         wsStore.suggestMode('canvas')
       }
       break
@@ -407,5 +431,10 @@ export function dispatchWorkspaceMessage(data: { type: string; [key: string]: un
  * that should be dispatched via dispatchWorkspaceMessage.
  */
 export function isWorkspaceMessage(type: string): boolean {
-  return type.startsWith('monitor:') || type.startsWith('workspace:') || type.startsWith('canvas:') || type.startsWith('code:') || type.startsWith('supervisor:')
+  return type.startsWith('monitor:')
+    || type.startsWith('workspace:')
+    || type.startsWith('canvas:')
+    || type.startsWith('code:')
+    || type.startsWith('supervisor:')
+    || type.startsWith('progress:')
 }

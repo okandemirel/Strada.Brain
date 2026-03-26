@@ -91,6 +91,7 @@ import type { PostSetupBootstrap } from "../common/setup-contract.js";
 
 // Task system imports
 import { MessageRouter } from "../tasks/index.js";
+import { buildTaskProgressSummary } from "../tasks/progress-signals.js";
 
 import type { IChannelAdapter } from "../channels/channel.interface.js";
 
@@ -509,12 +510,32 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   // Wire SupervisorBrain executeNode callback (post-construction circular dependency resolution)
   if (supervisorBrain) {
     supervisorBrain.setExecuteNode(async (node, context) => {
+      let lastNarrative = "";
+      let lastNarrativeAt = 0;
       try {
         const output = await orchestrator.runBackgroundTask(node.task, {
           chatId: context.chatId,
           signal: context.signal ?? AbortSignal.timeout(300_000),
-          onProgress: () => {},
+          onProgress: (update) => {
+            const narrative = buildTaskProgressSummary(
+              { title: node.task, prompt: node.task },
+              update,
+              "en",
+            );
+            const now = Date.now();
+            if (!workspaceBus || (!narrative || (narrative === lastNarrative && now - lastNarrativeAt < 1500))) {
+              return;
+            }
+            lastNarrative = narrative;
+            lastNarrativeAt = now;
+            workspaceBus.emit("progress:narrative", {
+              nodeId: String(node.id),
+              narrative,
+              lang: narrative.startsWith("Aşama:") ? "tr" : "en",
+            });
+          },
           channelType: channelType,
+          supervisorMode: "off",
         });
         return {
           nodeId: node.id,

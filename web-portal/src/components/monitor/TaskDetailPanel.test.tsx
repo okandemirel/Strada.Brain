@@ -88,4 +88,20 @@ describe('TaskDetailPanel', () => {
     render(<TaskDetailPanel />)
     expect(screen.queryByText('Agent:')).not.toBeInTheDocument()
   })
+
+  it('shows the latest narrative update when present', () => {
+    mockTasks = {
+      t1: makeTask({
+        id: 't1',
+        narrative: 'Plan ready: 4 steps are lined up.',
+        milestone: { current: 0, total: 4, label: 'steps' },
+      }),
+    }
+    mockSelectedTaskId = 't1'
+    render(<TaskDetailPanel />)
+    expect(screen.getByText('Latest Update')).toBeInTheDocument()
+    expect(screen.getByText('Plan ready: 4 steps are lined up.')).toBeInTheDocument()
+    expect(screen.getByText('0/4')).toBeInTheDocument()
+    expect(screen.getByText('steps')).toBeInTheDocument()
+  })
 })

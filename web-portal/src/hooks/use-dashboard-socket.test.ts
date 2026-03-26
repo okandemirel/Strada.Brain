@@ -71,6 +71,36 @@ describe('dispatchWorkspaceMessage', () => {
     expect(activities[0].tool).toBe('read')
   })
 
+  it('handles progress:narrative by updating the task and activity feed', () => {
+    useMonitorStore.getState().addTask({
+      id: 'n1',
+      nodeId: 'n1',
+      title: 'Task 1',
+      status: 'executing',
+      reviewStatus: 'none',
+    })
+
+    dispatchWorkspaceMessage({
+      type: 'progress:narrative',
+      payload: {
+        nodeId: 'n1',
+        narrative: 'Plan ready: 3 steps are lined up.',
+        milestone: { current: 0, total: 3, label: 'steps' },
+      },
+      timestamp: 123,
+    })
+
+    const state = useMonitorStore.getState()
+    expect(state.tasks['n1'].narrative).toBe('Plan ready: 3 steps are lined up.')
+    expect(state.tasks['n1'].milestone).toEqual({ current: 0, total: 3, label: 'steps' })
+    expect(state.activities.at(-1)).toMatchObject({
+      taskId: 'n1',
+      action: 'progress_narrative',
+      detail: 'Plan ready: 3 steps are lined up.',
+      timestamp: 123,
+    })
+  })
+
   it('handles workspace:mode_suggest by suggesting mode', () => {
     dispatchWorkspaceMessage({
       type: 'workspace:mode_suggest',
@@ -134,6 +164,24 @@ describe('dispatchWorkspaceMessage', () => {
     expect(useWorkspaceStore.getState().mode).toBe('canvas')
     expect(useCanvasStore.getState().pendingUpdates).toEqual([
       { id: 'shape-4', type: 'diagram-node', props: { label: 'Updated' }, source: 'agent' },
+    ])
+  })
+
+  it('keeps the current mode when canvas:agent_draw opts out of auto-switch', () => {
+    dispatchWorkspaceMessage({
+      type: 'canvas:agent_draw',
+      payload: {
+        action: 'update',
+        autoSwitch: false,
+        shapes: [
+          { id: 'shape-5', props: { label: 'Background sync' } },
+        ],
+      },
+    })
+
+    expect(useWorkspaceStore.getState().mode).toBe('chat')
+    expect(useCanvasStore.getState().pendingUpdates).toEqual([
+      { id: 'shape-5', props: { label: 'Background sync' }, source: 'agent' },
     ])
   })
 
@@ -253,6 +301,10 @@ describe('isWorkspaceMessage — code prefix', () => {
     expect(isWorkspaceMessage('code:terminal_clear')).toBe(true)
     expect(isWorkspaceMessage('code:annotation_add')).toBe(true)
     expect(isWorkspaceMessage('code:annotation_clear')).toBe(true)
+  })
+
+  it('returns true for progress: prefix', () => {
+    expect(isWorkspaceMessage('progress:narrative')).toBe(true)
   })
 })
 

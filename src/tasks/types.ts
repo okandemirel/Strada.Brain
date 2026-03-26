@@ -152,6 +152,8 @@ export interface BackgroundTaskOptions {
   onUsage?: (usage: TaskUsageEvent) => void;
   /** Optional isolated workspace for parallel worker execution. */
   workspaceLease?: WorkspaceLease;
+  /** Internal: disable supervisor routing for nested worker runs. */
+  supervisorMode?: "auto" | "off";
 }
 
 export interface TaskUsageEvent {

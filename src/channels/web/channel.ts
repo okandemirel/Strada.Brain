@@ -18,7 +18,7 @@ import { randomBytes, timingSafeEqual, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer, type WebSocket } from "ws";
 import { isAllowedOrigin } from "../../security/origin-validation.js";
-import { validateMediaAttachment, validateMagicBytes } from "../../utils/media-processor.js";
+import { validateMediaAttachment, validateMagicBytes, normalizeMimeType } from "../../utils/media-processor.js";
 import { SETUP_QUERY_PARAM, type PostSetupBootstrapContext } from "../../common/setup-contract.js";
 import { WebIdentityStore, type WebIdentity } from "./web-identity-store.js";
 import type {
@@ -87,6 +87,14 @@ const MODULE_DIR = fileURLToPath(new URL(".", import.meta.url));
 const PACKAGED_STATIC_DIR = fileURLToPath(new URL("static/", import.meta.url));
 const SOURCE_BUILD_STATIC_DIR = resolve(MODULE_DIR, "../../../web-portal/dist");
 const SETUP_CACHE_BUST_PARAM = "t";
+const WEB_PLACEHOLDER_TEXTS = new Set([
+  "(voice message)",
+  "(file attachment)",
+]);
+
+function isFrontendPlaceholderText(text: string): boolean {
+  return WEB_PLACEHOLDER_TEXTS.has(text.trim().toLowerCase());
+}
 
 function resolveStaticDir(): string {
   if (existsSync(SOURCE_BUILD_STATIC_DIR)) {
@@ -643,7 +651,7 @@ export class WebChannel
         const attachments: Attachment[] = [];
         if (rawAttachments && Array.isArray(rawAttachments)) {
           for (const raw of rawAttachments.slice(0, 5)) { // Max 5 attachments per message
-            const mimeType = raw.mimeType || raw.type; // Frontend sends "type", normalize to mimeType
+            const mimeType = normalizeMimeType(raw.mimeType || raw.type); // Frontend sends "type", normalize to mimeType
             if (!raw.name || !mimeType) continue;
             const buf = raw.data ? Buffer.from(raw.data, "base64") : undefined;
             const size = buf?.length ?? raw.size ?? 0;
@@ -680,12 +688,20 @@ export class WebChannel
           }
         }
 
+        const normalizedText = limitIncomingText(text || "");
+        if (!normalizedText && attachments.length === 0) {
+          return;
+        }
+        if (attachments.length === 0 && isFrontendPlaceholderText(normalizedText)) {
+          return;
+        }
+
         const msg: IncomingMessage = {
           channelType: "web",
           chatId,
           conversationId: client?.profileId ?? chatId,
           userId: client?.profileId ?? chatId,
-          text: limitIncomingText(text || ""),
+          text: normalizedText,
           attachments: attachments.length > 0 ? attachments : undefined,
           timestamp: new Date(),
         };

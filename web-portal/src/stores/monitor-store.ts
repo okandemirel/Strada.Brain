@@ -33,6 +33,12 @@ export interface MonitorTask {
   phase?: 'planning' | 'acting' | 'observing' | 'reflecting'
   progress?: { current: number; total: number; unit: string }
   elapsed?: number
+  narrative?: string
+  milestone?: {
+    current: number
+    total: number
+    label: string
+  }
   substeps?: Array<{
     id: string
     label: string

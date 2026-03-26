@@ -58,6 +58,8 @@ export interface WorkspaceEventMap {
     phase?: 'planning' | 'acting' | 'observing' | 'reflecting'
     progress?: { current: number; total: number; unit: string }
     elapsed?: number
+    startedAt?: number
+    completedAt?: number
   }
   'monitor:review_result': {
     rootId: string
@@ -197,7 +199,7 @@ export interface WorkspaceEventMap {
   'canvas:agent_draw': {
     action: 'draw' | 'update' | 'clear' | 'annotate' | 'highlight'
     shapes: Array<{
-      type: string
+      type?: string
       id: string
       props: Record<string, unknown>
       position?: { x: number; y: number }
@@ -206,6 +208,7 @@ export interface WorkspaceEventMap {
     layout?: 'auto' | 'grid' | 'tree' | 'flow'
     viewport?: { x: number; y: number; zoom: number }
     intent?: string
+    autoSwitch?: boolean
   }
 
   'canvas:user_feedback': {

@@ -117,6 +117,15 @@ describe("MediaProcessor", () => {
       }
     });
 
+    it("accepts codec-qualified audio MIME types by normalizing them", () => {
+      const result = validateMediaAttachment({
+        mimeType: "audio/webm;codecs=opus",
+        size: 1024 * 1024,
+        type: "audio",
+      });
+      expect(result.valid).toBe(true);
+    });
+
     it("accepts valid document types", () => {
       for (const mime of ["application/pdf", "text/plain", "text/csv"]) {
         const result = validateMediaAttachment({

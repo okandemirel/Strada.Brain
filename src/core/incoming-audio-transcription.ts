@@ -1,7 +1,7 @@
 import type { Attachment, IncomingMessage } from "../channels/channel-messages.interface.js";
 import { limitIncomingText } from "../channels/channel-messages.interface.js";
 import { SpeechToTextTool } from "../agents/tools/speech-to-text.js";
-import { isUrlSafeToFetch, validateMagicBytes, validateMediaAttachment } from "../utils/media-processor.js";
+import { isUrlSafeToFetch, normalizeMimeType, validateMagicBytes, validateMediaAttachment } from "../utils/media-processor.js";
 import { getLogger } from "../utils/logger.js";
 
 export interface IncomingAudioTranscriptionResult {
@@ -53,7 +53,7 @@ async function transcribeAudioAttachment(
   attachment: Attachment,
   projectPath: string,
 ): Promise<string | null> {
-  const mimeType = attachment.mimeType ?? "";
+  const mimeType = normalizeMimeType(attachment.mimeType) ?? "";
   const logger = getLogger();
 
   if (attachment.data) {
@@ -125,7 +125,7 @@ export async function transcribeIncomingAudioMessage(
       message: msg,
       shouldDrop: !hasText,
       userWarning: !hasText
-        ? "Voice transcription is unavailable because OPENAI_API_KEY is not configured."
+        ? "Voice transcription is unavailable because no compatible speech-to-text provider is configured."
         : undefined,
     };
   }

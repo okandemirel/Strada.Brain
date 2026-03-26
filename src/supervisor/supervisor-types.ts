@@ -7,7 +7,7 @@
  * All interfaces use readonly fields for immutability.
  */
 
-import type { GoalNode, GoalNodeId } from "../goals/types.js";
+import type { GoalNode, GoalNodeId, GoalTree } from "../goals/types.js";
 import type { ToolResult } from "../agents/providers/provider-core.interface.js";
 
 // =============================================================================
@@ -130,6 +130,8 @@ export interface SupervisorContext {
   readonly userId?: string;
   readonly conversationId?: string;
   readonly signal?: AbortSignal;
+  readonly onGoalDecomposed?: (goalTree: GoalTree) => void;
+  readonly reportUpdate?: (markdown: string) => Promise<void> | void;
 }
 
 /** Aggregate result of a full supervisor execution run */

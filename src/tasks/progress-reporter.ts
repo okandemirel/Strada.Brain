@@ -18,6 +18,7 @@ import { classifyTaskErrorMessage } from "../utils/error-messages.js";
 interface HeartbeatState {
   chatId?: string;
   timeoutId?: ReturnType<typeof setTimeout>;
+  earlyTimeoutId?: ReturnType<typeof setTimeout>;
   scheduledUpdateId?: ReturnType<typeof setTimeout>;
   live?: boolean;
   streamId?: string;
@@ -30,8 +31,11 @@ function unrefTimer(timer: { unref?: () => void }): void {
   timer.unref?.();
 }
 
-const STREAMING_UPDATE_THROTTLE_MS = 8_000;
+const STREAMING_UPDATE_THROTTLE_MS = 4_000;
 const FALLBACK_UPDATE_THROTTLE_MS = 60_000;
+const EARLY_PROGRESS_HEARTBEAT_MS = 1_500;
+const EARLY_GOAL_HEARTBEAT_MS = 750;
+const PHASE_DRIVEN_INITIAL_HEARTBEAT_MS = 20_000;
 
 export class ProgressReporter {
   private readonly interaction: InteractionConfig;
@@ -102,6 +106,7 @@ export class ProgressReporter {
     this.sendTyping(task.chatId);
     const state = this.getHeartbeatState(task.id);
     state.lastProgress = message;
+    this.scheduleEarlyHeartbeat(task, state, message);
     if (state.live) {
       void this.maybeSendLiveStatus(task, state);
     }
@@ -143,6 +148,9 @@ export class ProgressReporter {
 
     const state = this.getHeartbeatState(task.id);
     state.chatId = task.chatId;
+    const heartbeatAfterMs = this.interaction.mode === "phase-driven"
+      ? Math.min(this.interaction.heartbeatAfterMs, PHASE_DRIVEN_INITIAL_HEARTBEAT_MS)
+      : this.interaction.heartbeatAfterMs;
     const timeoutId = setTimeout(() => {
       const current = this.heartbeats.get(task.id);
       if (!current) {
@@ -150,10 +158,41 @@ export class ProgressReporter {
       }
       current.live = true;
       void this.maybeSendLiveStatus(task, current, true);
-    }, this.interaction.heartbeatAfterMs);
+    }, heartbeatAfterMs);
 
     state.timeoutId = timeoutId;
     unrefTimer(timeoutId);
+  }
+
+  private scheduleEarlyHeartbeat(
+    task: Task,
+    state: HeartbeatState,
+    message: TaskProgressUpdate,
+  ): void {
+    if (state.live || state.earlyTimeoutId) {
+      return;
+    }
+    if (!["silent-first", "phase-driven"].includes(this.interaction.mode) || this.interaction.heartbeatAfterMs <= 0) {
+      return;
+    }
+
+    const signal = typeof message === "string" ? undefined : message;
+    const delay = signal?.kind === "goal" ? EARLY_GOAL_HEARTBEAT_MS : EARLY_PROGRESS_HEARTBEAT_MS;
+    const effectiveDelay = Math.min(delay, this.interaction.heartbeatAfterMs);
+    state.earlyTimeoutId = setTimeout(() => {
+      const current = this.heartbeats.get(task.id);
+      if (!current) {
+        return;
+      }
+      current.earlyTimeoutId = undefined;
+      current.live = true;
+      if (current.timeoutId) {
+        clearTimeout(current.timeoutId);
+        current.timeoutId = undefined;
+      }
+      void this.maybeSendLiveStatus(task, current, true);
+    }, effectiveDelay);
+    unrefTimer(state.earlyTimeoutId);
   }
 
   private clearHeartbeat(taskId: TaskId, finalizeStream = false): void {
@@ -163,6 +202,9 @@ export class ProgressReporter {
     }
     if (state.timeoutId) {
       clearTimeout(state.timeoutId);
+    }
+    if (state.earlyTimeoutId) {
+      clearTimeout(state.earlyTimeoutId);
     }
     if (state.scheduledUpdateId) {
       clearTimeout(state.scheduledUpdateId);

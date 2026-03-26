@@ -85,13 +85,27 @@ interface ValidationInput {
   type: string;
 }
 
+export function normalizeMimeType(mimeType?: string | null): string | undefined {
+  if (typeof mimeType !== "string") {
+    return undefined;
+  }
+
+  const trimmed = mimeType.trim().toLowerCase();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  return trimmed.split(";")[0]?.trim() || undefined;
+}
+
 // ── Validation ───────────────────────────────────────────────────────────────
 
 /**
  * Validate a media attachment's MIME type and size.
  */
 export function validateMediaAttachment(input: ValidationInput): MediaValidationResult {
-  const { mimeType, size, type } = input;
+  const { size, type } = input;
+  const mimeType = normalizeMimeType(input.mimeType);
 
   if (!mimeType) {
     return { valid: false, reason: "Missing MIME type" };
@@ -129,7 +143,7 @@ function getMaxSize(type: string, mimeType: string): number {
 export function validateMagicBytes(data: Buffer, mimeType: string): boolean {
   if (data.length === 0) return false;
 
-  const signatures = MAGIC_BYTES[mimeType];
+  const signatures = MAGIC_BYTES[normalizeMimeType(mimeType) ?? mimeType];
   if (!signatures) return true; // No signature to check
 
   return signatures.every(({ offset, bytes }) => {
@@ -149,7 +163,7 @@ export function toBase64ImageSource(
 ): Extract<ImageSource, { type: "base64" }> {
   return {
     type: "base64",
-    media_type: mimeType,
+    media_type: normalizeMimeType(mimeType) ?? mimeType,
     data: data.toString("base64"),
   };
 }
@@ -313,7 +327,7 @@ export async function downloadMedia(
  * (types that can be sent to LLM vision APIs).
  */
 export function isVisionCompatible(mimeType: string): boolean {
-  return ALLOWED_IMAGE_TYPES.has(mimeType);
+  return ALLOWED_IMAGE_TYPES.has(normalizeMimeType(mimeType) ?? mimeType);
 }
 
 /**
@@ -322,9 +336,10 @@ export function isVisionCompatible(mimeType: string): boolean {
 export function mimeToAttachmentType(
   mimeType: string | undefined | null,
 ): "image" | "video" | "audio" | "document" {
-  if (!mimeType) return "document";
-  if (mimeType.startsWith("image/")) return "image";
-  if (mimeType.startsWith("video/")) return "video";
-  if (mimeType.startsWith("audio/")) return "audio";
+  const normalizedMimeType = normalizeMimeType(mimeType);
+  if (!normalizedMimeType) return "document";
+  if (normalizedMimeType.startsWith("image/")) return "image";
+  if (normalizedMimeType.startsWith("video/")) return "video";
+  if (normalizedMimeType.startsWith("audio/")) return "audio";
   return "document";
 }

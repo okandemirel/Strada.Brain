@@ -33,6 +33,8 @@ export { GoalDecomposer } from "./goal-decomposer.js";
 // Renderer
 export { renderGoalTree, summarizeTree } from "./goal-renderer.js";
 export type { GoalRendererOptions } from "./goal-renderer.js";
+export { buildGoalNarrativeFeedback, formatGoalPlanMarkdown } from "./goal-feedback.js";
+export type { GoalNarrativeFeedback } from "./goal-feedback.js";
 
 // Progress
 export { calculateProgress, renderProgressBar } from "./goal-progress.js";

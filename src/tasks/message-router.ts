@@ -17,6 +17,9 @@ import { CommandHandler } from "./command-handler.js";
 import { detectCommand } from "./command-detector.js";
 import { getLogger } from "../utils/logger.js";
 
+const TURKISH_HINT_RE = /[ğüşöçıİ]|\b(?:ve|için|şu|hata|düzelt|incele|bak|çöz|dosya|ekle|güncelle|mesaj)\b/iu;
+const QUEUE_NOTICE_COOLDOWN_MS = 15_000;
+
 export interface MessageRouterOptions {
   readonly burstWindowMs: number;
   readonly maxBurstMessages: number;
@@ -34,6 +37,7 @@ export class MessageRouter {
   private notifiedChats: Set<string> | null = new Set<string>();
   private startupNoticeMarkdown?: string;
   private readonly pendingTaskBatches = new Map<string, PendingTaskBatch>();
+  private readonly queueNoticeCooldowns = new Map<string, number>();
   private readonly burstWindowMs: number;
   private readonly maxBurstMessages: number;
 
@@ -174,11 +178,17 @@ export class MessageRouter {
       burstCount: batch.messages.length,
     });
 
+    const hasActiveConversationTask = this.hasActiveTaskForConversation(
+      conversationKey,
+      batch.chatId,
+    );
     this.taskManager.submit(batch.chatId, batch.channelType, prompt, {
       attachments: attachments.length > 0 ? attachments : undefined,
       conversationId,
       userId,
     });
+
+    await this.sendBurstOrQueueNotice(batch, hasActiveConversationTask);
   }
 
   private buildBatchedPrompt(messages: IncomingMessage[]): string {
@@ -194,5 +204,69 @@ export class MessageRouter {
       "",
       ...parts,
     ].join("\n\n");
+  }
+
+  private hasActiveTaskForConversation(conversationKey: string, chatId: string): boolean {
+    return this.taskManager.listActiveTasks(chatId).some((task) =>
+      getTaskConversationKey(task.chatId, task.channelType, task.conversationId) === conversationKey,
+    );
+  }
+
+  private detectLanguage(text: string): "en" | "tr" {
+    return TURKISH_HINT_RE.test(text) ? "tr" : "en";
+  }
+
+  private buildQueueNotice(messages: readonly IncomingMessage[], queuedBehindActiveTask: boolean): string | null {
+    if (messages.length === 0) return null;
+    const language = this.detectLanguage(messages.at(-1)?.text ?? "");
+    if (queuedBehindActiveTask) {
+      if (messages.length === 1) {
+        return language === "tr"
+          ? "Son mesajını kuyruğa aldım. Mevcut işi bitirir bitirmez buna geçeceğim."
+          : "I queued your latest message and will pick it up as soon as the current task finishes.";
+      }
+      return language === "tr"
+        ? `Son ${messages.length} mesajını birlikte kuyruğa aldım. Mevcut işi bitirir bitirmez bunları sırayla işleyeceğim.`
+        : `I queued your last ${messages.length} messages together and will process them as soon as the current task finishes.`;
+    }
+
+    if (messages.length <= 1) {
+      return null;
+    }
+
+    return language === "tr"
+      ? `Arka arkaya gelen ${messages.length} mesajını tek bir istek olarak birleştiriyorum.`
+      : `I’m combining your ${messages.length} consecutive messages into one ordered request.`;
+  }
+
+  private async sendBurstOrQueueNotice(
+    batch: PendingTaskBatch,
+    queuedBehindActiveTask: boolean,
+  ): Promise<void> {
+    if (!this.channel) {
+      return;
+    }
+
+    if (queuedBehindActiveTask) {
+      const cooldownUntil = this.queueNoticeCooldowns.get(batch.conversationKey) ?? 0;
+      if (Date.now() < cooldownUntil) {
+        return;
+      }
+      this.queueNoticeCooldowns.set(batch.conversationKey, Date.now() + QUEUE_NOTICE_COOLDOWN_MS);
+    }
+
+    const notice = this.buildQueueNotice(batch.messages, queuedBehindActiveTask);
+    if (!notice) {
+      return;
+    }
+
+    try {
+      await this.channel.sendText(batch.chatId, notice);
+    } catch (error) {
+      getLogger().warn("Failed to send queue/burst notice", {
+        chatId: batch.chatId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 }

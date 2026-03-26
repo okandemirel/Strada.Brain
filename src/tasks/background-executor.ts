@@ -15,7 +15,7 @@
  * DaemonEventBus for WebSocket dashboard broadcasting.
  */
 
-import type { Task, TaskProgressUpdate } from "./types.js";
+import type { Task, TaskProgressSignal, TaskProgressUpdate } from "./types.js";
 import { getTaskConversationKey, TaskStatus } from "./types.js";
 import type { TaskManager } from "./task-manager.js";
 import type { Orchestrator } from "../agents/orchestrator.js";
@@ -30,8 +30,8 @@ import type {
   ExecutionResult,
 } from "../goals/goal-executor.js";
 import type { GoalStorage } from "../goals/goal-storage.js";
-import { calculateProgress, renderProgressBar } from "../goals/goal-progress.js";
-import { renderGoalTree } from "../goals/goal-renderer.js";
+import { calculateProgress } from "../goals/goal-progress.js";
+import { buildGoalNarrativeFeedback } from "../goals/goal-feedback.js";
 import type { IAIProvider } from "../agents/providers/provider.interface.js";
 import type { IChannelAdapter } from "../channels/channel.interface.js";
 import { supportsInteractivity } from "../channels/channel.interface.js";
@@ -173,6 +173,41 @@ export class BackgroundExecutor {
 
   setMonitorLifecycle(lifecycle: MonitorLifecycle): void {
     this.monitorLifecycle = lifecycle;
+  }
+
+  private emitGoalNarrative(task: Task, tree: GoalTree, nodeId?: string): void {
+    if (!this.workspaceBus) {
+      return;
+    }
+    const feedback = buildGoalNarrativeFeedback(tree, task.prompt);
+    this.workspaceBus.emit("progress:narrative", {
+      ...(nodeId ? { nodeId } : {}),
+      narrative: feedback.narrative,
+      lang: feedback.language,
+      milestone: feedback.milestone,
+    });
+  }
+
+  private buildGoalProgressSignal(task: Task, tree: GoalTree, updated = false): TaskProgressSignal {
+    const feedback = buildGoalNarrativeFeedback(tree, task.prompt);
+    return {
+      kind: "goal",
+      message: updated
+        ? `Goal progress updated: ${feedback.milestone.current}/${feedback.milestone.total} ${feedback.milestone.label}`
+        : `Goal plan ready: ${feedback.milestone.total} ${feedback.milestone.label}`,
+      userSummary: feedback.narrative,
+    };
+  }
+
+  private buildKickoffProgressSignal(task: Task): TaskProgressSignal {
+    const isTurkish = /[ğüşöçıİ]|\b(?:ve|için|şu|hata|düzelt|incele|bak|çöz|dosya|ekle|güncelle)\b/iu.test(task.prompt);
+    return {
+      kind: "analysis",
+      message: "Task started",
+      userSummary: isTurkish
+        ? "Aşama: inceleme. Son aksiyon: ilgili kanıtlar üzerinde hızlı bir ilk tarama başlattım. Sıradaki adım: ilk somut müdahale noktasını çıkaracağım."
+        : "Stage: inspection. Last action: I started a quick first pass over the relevant evidence. Next: I'll line up the first concrete intervention point.",
+    };
   }
 
   setPhase(phase: 'planning' | 'acting' | 'observing' | 'reflecting'): void {
@@ -321,6 +356,7 @@ export class BackgroundExecutor {
       attachments?: import("../channels/channel.interface.js").Attachment[];
       onUsage?: (usage: { provider: string; inputTokens: number; outputTokens: number }) => void;
       workspaceLease?: Awaited<ReturnType<WorkspaceLeaseManager["acquireLease"]>>;
+      supervisorMode?: import("./types.js").BackgroundTaskOptions["supervisorMode"];
     },
   ): Promise<{ output: string; workerResult?: WorkerRunResult }> {
     if (typeof (orchestrator as Orchestrator & { runWorkerTask?: unknown }).runWorkerTask === "function") {
@@ -339,6 +375,7 @@ export class BackgroundExecutor {
             attachments?: import("../channels/channel.interface.js").Attachment[];
             onUsage?: (usage: { provider: string; inputTokens: number; outputTokens: number }) => void;
             workspaceLease?: Awaited<ReturnType<WorkspaceLeaseManager["acquireLease"]>>;
+            supervisorMode?: import("./types.js").BackgroundTaskOptions["supervisorMode"];
           }) => Promise<WorkerRunResult>;
         }
       ).runWorkerTask({
@@ -354,6 +391,7 @@ export class BackgroundExecutor {
         attachments: params.attachments,
         onUsage: params.onUsage,
         workspaceLease: params.workspaceLease,
+        supervisorMode: params.supervisorMode,
       });
       return {
         output: workerResult.visibleResponse,
@@ -373,6 +411,7 @@ export class BackgroundExecutor {
         attachments: params.attachments,
         onUsage: params.onUsage,
         workspaceLease: params.workspaceLease,
+        supervisorMode: params.supervisorMode,
       }),
     };
   }
@@ -393,7 +432,7 @@ export class BackgroundExecutor {
 
     // Update status to executing
     this.taskManager.updateStatus(task.id, TaskStatus.executing);
-    onProgress("Task started");
+    onProgress(this.buildKickoffProgressSignal(task));
 
     // Monitor lifecycle: emit simple DAG so monitor workspace always shows something
     this.monitorLifecycle?.requestStart(task.chatId, task.prompt);
@@ -450,6 +489,7 @@ export class BackgroundExecutor {
         attachments: task.attachments,
         onUsage: this.buildUsageRecorder(task),
         workspaceLease: taskLease,
+        supervisorMode: "auto",
       });
 
       if (signal.aborted) {
@@ -520,8 +560,8 @@ export class BackgroundExecutor {
     const goalTree = preBuiltTree ?? await this.decomposer!.decomposeProactive(task.chatId, task.prompt);
     const nodeCount = goalTree.nodes.size - 1; // exclude root
     logger.info("Task decomposed into goal tree", { taskId: task.id, nodeCount, preBuilt: !!preBuiltTree });
-    onProgress(`Decomposed into ${nodeCount} sub-goals`);
-    onProgress(renderGoalTree(goalTree));
+    onProgress(this.buildGoalProgressSignal(task, goalTree));
+    this.emitGoalNarrative(task, goalTree);
 
     // Emit goal:started event
     if (this.daemonEventBus) {
@@ -576,6 +616,7 @@ export class BackgroundExecutor {
           userId: task.userId,
           onUsage: this.buildUsageRecorder(task),
           workspaceLease,
+          supervisorMode: "off",
         });
         if (result.workerResult) {
           childWorkerResults.set(node.id, result.workerResult);
@@ -635,9 +676,8 @@ export class BackgroundExecutor {
       const isTerminal = updatedNode.status === "completed" || updatedNode.status === "failed" || updatedNode.status === "skipped";
       if (now - lastProgressUpdate >= PROGRESS_THROTTLE_MS || isTerminal) {
         lastProgressUpdate = now;
-        const progress = calculateProgress(updatedTree);
-        const progressContent = renderProgressBar(progress.completed, progress.total) + "\n" + renderGoalTree(updatedTree);
-        onProgress(progressContent);
+        onProgress(this.buildGoalProgressSignal(task, updatedTree, true));
+        this.emitGoalNarrative(task, updatedTree, String(updatedNode.id));
       }
     };
 

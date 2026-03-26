@@ -15,6 +15,12 @@
  */
 
 import type { TaggedGoalNode, NodeResult } from "./supervisor-types.js";
+import {
+  buildSupervisorCanvasNodeUpdate,
+  buildSupervisorCanvasSummaryUpdate,
+  buildSupervisorNodeNarrative,
+  buildSupervisorWaveNarrative,
+} from "./supervisor-feedback.js";
 
 // =============================================================================
 // TYPES
@@ -30,6 +36,8 @@ export interface DispatcherOptions {
   readonly executeNode: (node: TaggedGoalNode) => Promise<NodeResult>;
   readonly config: DispatcherConfig;
   readonly eventEmitter?: { emit: (event: string, payload: unknown) => void };
+  readonly rootId?: string;
+  readonly taskDescription?: string;
 }
 
 // =============================================================================
@@ -106,11 +114,92 @@ export class SupervisorDispatcher {
   private readonly executeNode: DispatcherOptions["executeNode"];
   private readonly config: DispatcherConfig;
   private readonly emitter?: DispatcherOptions["eventEmitter"];
+  private readonly rootId?: string;
+  private readonly taskDescription?: string;
 
   constructor(options: DispatcherOptions) {
     this.executeNode = options.executeNode;
     this.config = options.config;
     this.emitter = options.eventEmitter;
+    this.rootId = options.rootId;
+    this.taskDescription = options.taskDescription;
+  }
+
+  private emitActivity(detail: string, taskId?: string, action = "supervisor_dispatch"): void {
+    this.emitter?.emit("monitor:agent_activity", {
+      ...(taskId ? { taskId } : {}),
+      action,
+      detail,
+      timestamp: Date.now(),
+    });
+  }
+
+  private emitNodeWorkspaceStatus(
+    node: TaggedGoalNode,
+    status: "executing" | "completed" | "failed" | "skipped" | "verifying",
+    result?: Pick<NodeResult, "duration">,
+  ): void {
+    if (!this.rootId) {
+      return;
+    }
+
+    this.emitter?.emit("monitor:task_update", {
+      rootId: this.rootId,
+      nodeId: String(node.id),
+      status,
+      agentId: node.assignedProvider ?? "unknown",
+      phase: status === "executing" ? "acting" : "observing",
+      ...(status === "executing" ? { startedAt: Date.now() } : {}),
+      ...(status !== "executing" ? { completedAt: Date.now() } : {}),
+      ...(result?.duration ? { elapsed: result.duration } : {}),
+    });
+  }
+
+  private emitNodeNarrative(
+    node: TaggedGoalNode,
+    status: "pending" | "running" | "verifying" | "done" | "failed" | "skipped",
+    reason?: string,
+  ): void {
+    const taskDescription = this.taskDescription;
+    if (!taskDescription) {
+      return;
+    }
+    const feedback = buildSupervisorNodeNarrative({
+      task: taskDescription,
+      node,
+      status,
+      ...(reason ? { reason } : {}),
+    });
+    this.emitter?.emit("progress:narrative", {
+      nodeId: String(node.id),
+      narrative: feedback.narrative,
+      lang: feedback.language,
+    });
+  }
+
+  private emitNodeCanvasUpdate(
+    node: TaggedGoalNode,
+    status: "pending" | "running" | "verifying" | "done" | "failed" | "skipped",
+  ): void {
+    this.emitter?.emit("canvas:agent_draw", buildSupervisorCanvasNodeUpdate({
+      node,
+      status,
+    }));
+  }
+
+  private emitSkippedNode(node: TaggedGoalNode, reason: string): NodeResult {
+    const result = this.makeSkippedResult(node, reason);
+    this.emitNodeWorkspaceStatus(node, "skipped", result);
+    this.emitNodeNarrative(node, "skipped", reason);
+    this.emitNodeCanvasUpdate(node, "skipped");
+    this.emitActivity(reason, String(node.id), "supervisor_node_skipped");
+    this.emitter?.emit("supervisor:node_complete", {
+      nodeId: node.id,
+      status: result.status,
+      duration: result.duration ?? 0,
+      cost: result.cost ?? 0,
+    });
+    return result;
   }
 
   // ---------------------------------------------------------------------------
@@ -200,6 +289,24 @@ export class SupervisorDispatcher {
         waveIndex,
         nodes: wave.map((n) => ({ nodeId: n.id, provider: n.assignedProvider ?? "unknown" })),
       });
+      if (this.rootId && this.taskDescription) {
+        const feedback = buildSupervisorWaveNarrative({
+          task: this.taskDescription,
+          waveIndex,
+          totalWaves: waves.length,
+          nodes: wave,
+        });
+        this.emitter?.emit("progress:narrative", {
+          narrative: feedback.narrative,
+          lang: feedback.language,
+        });
+        this.emitter?.emit("canvas:agent_draw", buildSupervisorCanvasSummaryUpdate({
+          rootId: this.rootId,
+          summary: feedback.canvasSummary,
+          tone: "active",
+        }));
+        this.emitActivity(feedback.narrative, undefined, "supervisor_wave_start");
+      }
 
       const inFlight: Promise<void>[] = [];
       const waveResults: NodeResult[] = [];
@@ -210,12 +317,12 @@ export class SupervisorDispatcher {
           failedNodeIds.has(depId as string),
         );
         if (hasFailedDep) {
-          results.push(this.makeSkippedResult(node, "Skipped: dependency failed"));
+          results.push(this.emitSkippedNode(node, "Skipped: dependency failed"));
           continue;
         }
 
         if (budgetExhausted || signal?.aborted) {
-          results.push(this.makeSkippedResult(node, "Skipped: budget exhausted or aborted"));
+          results.push(this.emitSkippedNode(node, "Skipped: budget exhausted or aborted"));
           continue;
         }
 
@@ -225,7 +332,7 @@ export class SupervisorDispatcher {
         const gotBudget = budget.tryAcquire();
         if (!gotBudget) {
           budgetExhausted = true;
-          results.push(this.makeSkippedResult(node, "Skipped: budget exhausted"));
+          results.push(this.emitSkippedNode(node, "Skipped: budget exhausted"));
           continue;
         }
 
@@ -234,7 +341,7 @@ export class SupervisorDispatcher {
         if (budgetExhausted || signal?.aborted) {
           concurrency.release();
           budget.release(); // return unused permit
-          results.push(this.makeSkippedResult(node, "Skipped: budget exhausted or aborted"));
+          results.push(this.emitSkippedNode(node, "Skipped: budget exhausted or aborted"));
           continue;
         }
 
@@ -246,6 +353,10 @@ export class SupervisorDispatcher {
             if (result.status === "failed") {
               failedNodeIds.add(node.id as string);
               // Budget permit is consumed (not returned)
+              this.emitNodeWorkspaceStatus(node, "failed", result);
+              this.emitNodeNarrative(node, "failed", result.output);
+              this.emitNodeCanvasUpdate(node, "failed");
+              this.emitActivity(result.output ?? "Unknown error", String(node.id), "supervisor_node_failed");
               this.emitter?.emit("supervisor:node_failed", {
                 nodeId: node.id,
                 error: result.output ?? "Unknown error",
@@ -255,6 +366,16 @@ export class SupervisorDispatcher {
             } else {
               // Success: return the budget permit
               budget.release();
+              const workspaceStatus = result.status === "ok" ? "completed" : "skipped";
+              const narrativeStatus = result.status === "ok" ? "done" : "skipped";
+              this.emitNodeWorkspaceStatus(node, workspaceStatus, result);
+              this.emitNodeNarrative(node, narrativeStatus);
+              this.emitNodeCanvasUpdate(node, narrativeStatus);
+              this.emitActivity(
+                result.status === "ok" ? "Node completed" : "Node skipped",
+                String(node.id),
+                "supervisor_node_complete",
+              );
               this.emitter?.emit("supervisor:node_complete", {
                 nodeId: node.id,
                 status: result.status,
@@ -330,6 +451,14 @@ export class SupervisorDispatcher {
           model: node.assignedModel ?? "unknown",
           wave: waveIndex,
         });
+        this.emitNodeWorkspaceStatus(node, "executing");
+        this.emitNodeNarrative(node, "running");
+        this.emitNodeCanvasUpdate(node, "running");
+        this.emitActivity(
+          `Started on ${node.assignedProvider ?? "unknown"}`,
+          String(node.id),
+          "supervisor_node_start",
+        );
 
         const result = await this.executeWithTimeout(node, externalSignal);
         return result;

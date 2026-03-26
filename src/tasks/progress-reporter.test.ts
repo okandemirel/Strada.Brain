@@ -86,7 +86,7 @@ describe("ProgressReporter", () => {
     vi.useRealTimers();
   });
 
-  it("waits for the configured delay before opening a live status message", async () => {
+  it("opens the initial live status after the shorter phase-driven heartbeat window", async () => {
     const channel = {
       sendText: vi.fn().mockResolvedValue(undefined),
       sendMarkdown: vi.fn().mockResolvedValue(undefined),
@@ -100,13 +100,13 @@ describe("ProgressReporter", () => {
     expect(channel.sendTypingIndicator).toHaveBeenCalledWith("chat-1");
     expect(channel.sendText).not.toHaveBeenCalled();
 
-    await vi.advanceTimersByTimeAsync(119_999);
+    await vi.advanceTimersByTimeAsync(19_999);
     expect(channel.sendText).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(1);
     expect(channel.sendText).toHaveBeenCalledWith(
       "chat-1",
-      "Strada agent: working on Investigate the failing build and fix it.",
+      "Stage: working. Last action: I'm moving through \"Investigate the failing build and fix it\". Next: I'll share the verified result once it is ready.",
     );
 
     await vi.advanceTimersByTimeAsync(300_000);
@@ -123,7 +123,7 @@ describe("ProgressReporter", () => {
     new ProgressReporter(channel as any, taskManager as any);
 
     taskManager.emitCreated(createTask());
-    await vi.advanceTimersByTimeAsync(120_000);
+    await vi.advanceTimersByTimeAsync(20_000);
     expect(channel.sendText).toHaveBeenCalledTimes(1);
 
     taskManager.emitCompleted("task_heartbeat", "**Done**");
@@ -149,13 +149,13 @@ describe("ProgressReporter", () => {
       title: "console üzerinden errorlere bak ve çöz",
       prompt: "console üzerinden errorlere bak ve çöz",
     }));
-    await vi.advanceTimersByTimeAsync(120_000);
+    await vi.advanceTimersByTimeAsync(20_000);
 
     expect(channel.startStreamingMessage).toHaveBeenCalledWith("chat-1");
     expect(channel.updateStreamingMessage).toHaveBeenCalledWith(
       "chat-1",
       "stream-1",
-      "Strada agent: console üzerinden errorlere bak ve çöz üzerinde çalışıyorum.",
+      "Aşama: çalışma. Son aksiyon: \"console üzerinden errorlere bak ve çöz\" üzerinde ilerliyorum. Sıradaki adım: doğruladığım sonucu paylaşacağım.",
     );
 
     taskManager.emitProgress("task_heartbeat", {
@@ -168,12 +168,74 @@ describe("ProgressReporter", () => {
     expect(channel.updateStreamingMessage).toHaveBeenCalledWith(
       "chat-1",
       "stream-1",
-      "Strada agent: UnityAdsService.cs ve GameController.cs üzerinde hata düzeltmeleri uyguluyorum.",
+      "Aşama: düzenleme. Son aksiyon: UnityAdsService.cs ve GameController.cs üzerinde düzeltme uyguluyorum. Sıradaki adım: değişiklikleri hemen doğrulayacağım.",
     );
 
     taskManager.emitBlocked("task_heartbeat", "Blocked checkpoint");
     expect(channel.finalizeStreamingMessage).toHaveBeenCalledWith("chat-1", "stream-1", "");
     expect(channel.sendMarkdown).toHaveBeenCalledWith("chat-1", "Blocked checkpoint");
+  });
+
+  it("opens a live status early once meaningful progress arrives", async () => {
+    const channel = {
+      sendText: vi.fn().mockResolvedValue(undefined),
+      sendMarkdown: vi.fn().mockResolvedValue(undefined),
+      sendTypingIndicator: vi.fn().mockResolvedValue(undefined),
+      startStreamingMessage: vi.fn().mockResolvedValue("stream-1"),
+      updateStreamingMessage: vi.fn().mockResolvedValue(undefined),
+      finalizeStreamingMessage: vi.fn().mockResolvedValue(undefined),
+    };
+    const taskManager = new MockTaskManager();
+    new ProgressReporter(channel as any, taskManager as any, undefined, "en");
+
+    taskManager.emitCreated(createTask());
+    taskManager.emitProgress("task_heartbeat", {
+      kind: "analysis",
+      message: "Inspecting files",
+      userSummary: "Strada agent: inspecting the project state and surrounding evidence.",
+    });
+
+    await vi.advanceTimersByTimeAsync(1_499);
+    expect(channel.startStreamingMessage).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(channel.startStreamingMessage).toHaveBeenCalledWith("chat-1");
+    expect(channel.updateStreamingMessage).toHaveBeenCalledWith(
+      "chat-1",
+      "stream-1",
+      "Strada agent: inspecting the project state and surrounding evidence.",
+    );
+  });
+
+  it("surfaces a kickoff summary shortly after execution starts", async () => {
+    const channel = {
+      sendText: vi.fn().mockResolvedValue(undefined),
+      sendMarkdown: vi.fn().mockResolvedValue(undefined),
+      sendTypingIndicator: vi.fn().mockResolvedValue(undefined),
+      startStreamingMessage: vi.fn().mockResolvedValue("stream-1"),
+      updateStreamingMessage: vi.fn().mockResolvedValue(undefined),
+      finalizeStreamingMessage: vi.fn().mockResolvedValue(undefined),
+    };
+    const taskManager = new MockTaskManager();
+    new ProgressReporter(channel as any, taskManager as any, undefined, "en");
+
+    taskManager.emitCreated(createTask());
+    taskManager.emitProgress("task_heartbeat", {
+      kind: "analysis",
+      message: "Task started",
+      userSummary: "Stage: inspection. Last action: I started a quick first pass over the relevant evidence. Next: I'll line up the first concrete intervention point.",
+    });
+
+    await vi.advanceTimersByTimeAsync(1_499);
+    expect(channel.startStreamingMessage).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(channel.startStreamingMessage).toHaveBeenCalledWith("chat-1");
+    expect(channel.updateStreamingMessage).toHaveBeenCalledWith(
+      "chat-1",
+      "stream-1",
+      "Stage: inspection. Last action: I started a quick first pass over the relevant evidence. Next: I'll line up the first concrete intervention point.",
+    );
   });
 
   it("disables heartbeats when interaction mode is standard", async () => {

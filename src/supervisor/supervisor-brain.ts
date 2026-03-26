@@ -20,6 +20,16 @@ import type { CapabilityMatcher } from "./capability-matcher.js";
 import type { ProviderAssigner } from "./provider-assigner.js";
 import { SupervisorDispatcher } from "./supervisor-dispatcher.js";
 import { ResultAggregator } from "./result-aggregator.js";
+import { goalTreeToDagPayload } from "../dashboard/workspace-events.js";
+import {
+  buildSupervisorAbortNarrative,
+  buildSupervisorActivationNarrative,
+  buildSupervisorCanvasPlan,
+  buildSupervisorCanvasSummaryUpdate,
+  buildSupervisorCompletionNarrative,
+  buildSupervisorPlanNarrative,
+  buildSupervisorVerificationNarrative,
+} from "./supervisor-feedback.js";
 
 // =============================================================================
 // DECOMPOSER INTERFACE (minimal contract for loose coupling)
@@ -97,6 +107,31 @@ export class SupervisorBrain {
     this.abortController.abort();
   }
 
+  private emitActivity(detail: string, taskId?: string, action = "supervisor_update"): void {
+    this.emitter?.emit("monitor:agent_activity", {
+      ...(taskId ? { taskId } : {}),
+      action,
+      detail,
+      timestamp: Date.now(),
+    });
+  }
+
+  private emitNarrative(narrative: string, lang: string, nodeId?: string): void {
+    this.emitter?.emit("progress:narrative", {
+      ...(nodeId ? { nodeId } : {}),
+      narrative,
+      lang,
+    });
+  }
+
+  private async reportUpdate(context: SupervisorContext, markdown: string): Promise<void> {
+    try {
+      await context.reportUpdate?.(markdown);
+    } catch {
+      // Progress updates are best-effort only.
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // MAIN PIPELINE
   // ---------------------------------------------------------------------------
@@ -126,6 +161,7 @@ export class SupervisorBrain {
     // Merge external signal with internal abort controller
     const externalSignal = context.signal;
     const internalSignal = this.abortController.signal;
+    let goalRootId: string | null = null;
 
     try {
       // Step 2: Emit supervisor:activated
@@ -134,12 +170,25 @@ export class SupervisorBrain {
         complexity: this.config.complexityThreshold,
         nodeCount: 0, // updated after decomposition
       });
+      const activation = buildSupervisorActivationNarrative(task);
+      this.emitNarrative(activation.narrative, activation.language);
+      this.emitActivity(activation.narrative, context.chatId, "supervisor_activated");
+      this.emitter?.emit("workspace:mode_suggest", {
+        mode: "monitor",
+        reason: activation.narrative,
+      });
+      await this.reportUpdate(context, activation.markdown);
 
       // Step 3: Decompose the task into a GoalTree
       const goalTree = await this.decomposer.decomposeProactive(
         context.chatId,
         task,
       );
+      goalRootId = String(goalTree.rootId);
+      context.onGoalDecomposed?.(goalTree);
+      if (!context.onGoalDecomposed) {
+        this.emitter?.emit("monitor:dag_init", goalTreeToDagPayload(goalTree));
+      }
 
       // Check abort after decomposition
       if (externalSignal?.aborted || internalSignal.aborted) {
@@ -173,6 +222,20 @@ export class SupervisorBrain {
         this.config.diversityCap,
       );
 
+      const executeNodeFn = this.executeNodeFn;
+      const dispatcher = new SupervisorDispatcher({
+        executeNode: (node: TaggedGoalNode) => executeNodeFn(node, context),
+        config: {
+          maxParallelNodes: this.config.maxParallelNodes,
+          nodeTimeoutMs: this.config.nodeTimeoutMs,
+          maxFailureBudget: this.config.maxFailureBudget,
+        },
+        eventEmitter: this.emitter,
+        rootId: String(goalTree.rootId),
+        taskDescription: task,
+      });
+      const waves = dispatcher.computeWaves(assignedNodes);
+
       // Step 7: Emit supervisor:plan_ready
       const assignments: Record<string, { provider: string; model: string }> = {};
       for (const node of assignedNodes) {
@@ -185,23 +248,26 @@ export class SupervisorBrain {
         dag: { rootId: goalTree.rootId, nodeCount: assignedNodes.length },
         assignments,
       });
+      const plan = buildSupervisorPlanNarrative({
+        task,
+        nodeCount: assignedNodes.length,
+        nodes: assignedNodes,
+        totalWaves: waves.length,
+      });
+      this.emitNarrative(plan.narrative, plan.language);
+      this.emitActivity(plan.narrative, context.chatId, "supervisor_plan_ready");
+      this.emitter?.emit("canvas:agent_draw", buildSupervisorCanvasPlan({
+        rootId: String(goalTree.rootId),
+        task,
+        nodes: assignedNodes,
+        summary: plan.canvasSummary,
+      }));
+      await this.reportUpdate(context, plan.markdown);
 
       // Check abort after assignment
       if (externalSignal?.aborted || internalSignal.aborted) {
         return this.makePartialResult([], "Aborted after provider assignment");
       }
-
-      // Step 8: Create dispatcher and dispatch
-      const executeNodeFn = this.executeNodeFn;
-      const dispatcher = new SupervisorDispatcher({
-        executeNode: (node: TaggedGoalNode) => executeNodeFn(node, context),
-        config: {
-          maxParallelNodes: this.config.maxParallelNodes,
-          nodeTimeoutMs: this.config.nodeTimeoutMs,
-          maxFailureBudget: this.config.maxFailureBudget,
-        },
-        eventEmitter: this.emitter,
-      });
 
       // Combine signals: use external signal if provided, otherwise internal
       const dispatchSignal = externalSignal ?? internalSignal;
@@ -216,6 +282,15 @@ export class SupervisorBrain {
       });
 
       this.emitter?.emit("supervisor:verify_start", { nodeId: "aggregate", verifierProvider: "internal" });
+      const verification = buildSupervisorVerificationNarrative(task);
+      this.emitNarrative(verification.narrative, verification.language);
+      this.emitActivity(verification.narrative, "aggregate", "supervisor_verify_start");
+      this.emitter?.emit("canvas:agent_draw", buildSupervisorCanvasSummaryUpdate({
+        rootId: String(goalTree.rootId),
+        summary: verification.canvasSummary,
+        tone: "active",
+      }));
+      await this.reportUpdate(context, verification.markdown);
       const verifiedResults = await aggregator.verify(results);
       this.emitter?.emit("supervisor:verify_done", { nodeId: "aggregate", verdict: "approve" });
       const supervisorResult = aggregator.synthesize(verifiedResults);
@@ -229,17 +304,39 @@ export class SupervisorBrain {
         cost: supervisorResult.totalCost,
         duration: supervisorResult.totalDuration,
       });
+      const completion = buildSupervisorCompletionNarrative({
+        task,
+        result: supervisorResult,
+      });
+      this.emitNarrative(completion.narrative, completion.language);
+      this.emitActivity(completion.narrative, context.chatId, "supervisor_complete");
+      this.emitter?.emit("canvas:agent_draw", buildSupervisorCanvasSummaryUpdate({
+        rootId: String(goalTree.rootId),
+        summary: completion.canvasSummary,
+        tone: supervisorResult.failed > 0 ? "error" : "success",
+      }));
 
       return supervisorResult;
     } catch (err: unknown) {
       const { getLogger } = await import("../utils/logger.js");
       const logger = getLogger?.();
       logger?.warn("Supervisor pipeline error", { error: err instanceof Error ? err.message : String(err) });
+      const abort = buildSupervisorAbortNarrative({
+        task,
+        reason: err instanceof Error ? err.message : String(err),
+      });
+      this.emitNarrative(abort.narrative, abort.language);
+      this.emitActivity(abort.narrative, context.chatId, "supervisor_aborted");
       this.emitter?.emit("supervisor:aborted", {
         reason: err instanceof Error ? err.message : String(err),
         completedNodes: 0,
         partialResult: false,
       });
+      this.emitter?.emit("canvas:agent_draw", buildSupervisorCanvasSummaryUpdate({
+        rootId: goalRootId ?? context.chatId,
+        summary: abort.canvasSummary,
+        tone: "error",
+      }));
       return this.makePartialResult([], "An error occurred during task execution. Please try again.");
     }
   }

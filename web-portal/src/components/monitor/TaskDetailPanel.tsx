@@ -182,6 +182,25 @@ export default function TaskDetailPanel() {
             </div>
           )}
 
+          {(task.narrative || task.milestone) && (
+            <div className="rounded-2xl border border-white/8 bg-white/[0.03] px-4 py-3">
+              <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-text-tertiary">
+                Latest Update
+              </div>
+              {task.narrative && (
+                <div className="mt-2 text-sm leading-6 text-text">
+                  {task.narrative}
+                </div>
+              )}
+              {task.milestone && (
+                <div className="mt-3 inline-flex items-center gap-2 rounded-full border border-accent/15 bg-accent/10 px-3 py-1 text-xs text-accent">
+                  <span className="font-semibold">{task.milestone.current}/{task.milestone.total}</span>
+                  <span>{task.milestone.label}</span>
+                </div>
+              )}
+            </div>
+          )}
+
           {task.substeps && task.substeps.length > 0 && (
             <div className="rounded-2xl border border-white/8 bg-white/[0.03] px-4 py-3">
               <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-text-tertiary">

@@ -461,6 +461,81 @@ describe("WebChannel inbound message limits", () => {
       }),
     );
   });
+
+  it("accepts codec-qualified recorder audio and normalizes the MIME type", async () => {
+    const channel = new WebChannel();
+    const socket = createMockSocket();
+    const handler = vi.fn().mockResolvedValue(undefined);
+
+    channel.onMessage(handler);
+    (channel as unknown as { handleWsConnection: (ws: unknown) => void }).handleWsConnection(socket);
+
+    socket.emit(
+      "message",
+      Buffer.from(JSON.stringify({
+        type: "message",
+        text: "(voice message)",
+        attachments: [
+          {
+            name: "voice.webm",
+            type: "audio/webm;codecs=opus",
+            data: Buffer.from("voice").toString("base64"),
+          },
+        ],
+      })),
+    );
+
+    await Promise.resolve();
+
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "(voice message)",
+        attachments: [
+          expect.objectContaining({
+            type: "audio",
+            mimeType: "audio/webm",
+            name: "voice.webm",
+          }),
+        ],
+      }),
+    );
+  });
+
+  it("does not route placeholder-only messages when every attachment is rejected", async () => {
+    const channel = new WebChannel();
+    const socket = createMockSocket();
+    const handler = vi.fn().mockResolvedValue(undefined);
+
+    channel.onMessage(handler);
+    (channel as unknown as { handleWsConnection: (ws: unknown) => void }).handleWsConnection(socket);
+
+    socket.emit(
+      "message",
+      Buffer.from(JSON.stringify({
+        type: "message",
+        text: "(voice message)",
+        attachments: [
+          {
+            name: "voice.wma",
+            type: "audio/x-ms-wma",
+            data: Buffer.from("voice").toString("base64"),
+          },
+        ],
+      })),
+    );
+
+    await Promise.resolve();
+
+    expect(handler).not.toHaveBeenCalled();
+    expect(socket.getSentMessages()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "text",
+          text: 'File "voice.wma" was rejected: unsupported format or invalid content.',
+        }),
+      ]),
+    );
+  });
 });
 
 describe("WebChannel HTTP surface", () => {

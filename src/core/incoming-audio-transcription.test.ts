@@ -60,6 +60,34 @@ describe("transcribeIncomingAudioMessage", () => {
     expect(result.message.text).toBe("merhaba dunya");
   });
 
+  it("normalizes codec-qualified WebM audio before transcription validation", async () => {
+    process.env["OPENAI_API_KEY"] = "sk-test";
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ text: "normalized transcript" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    ));
+
+    const msg = makeMessage({
+      text: "(voice message)",
+      attachments: [
+        {
+          type: "audio",
+          name: "voice.webm",
+          mimeType: "audio/webm;codecs=opus",
+          data: Buffer.from("voice-data"),
+          size: 10,
+        },
+      ],
+    });
+
+    const result = await transcribeIncomingAudioMessage(msg, "/tmp/project");
+
+    expect(result.shouldDrop).toBe(false);
+    expect(result.message.text).toBe("normalized transcript");
+  });
+
   it("drops pure audio messages when transcription is unavailable", async () => {
     const msg = makeMessage({
       attachments: [
@@ -76,6 +104,6 @@ describe("transcribeIncomingAudioMessage", () => {
     const result = await transcribeIncomingAudioMessage(msg, "/tmp/project");
 
     expect(result.shouldDrop).toBe(true);
-    expect(result.userWarning).toContain("OPENAI_API_KEY");
+    expect(result.userWarning).toContain("speech-to-text provider");
   });
 });

@@ -786,6 +786,205 @@ describe("Orchestrator", () => {
     expect(mockChannel.sendMarkdown).toHaveBeenCalledWith("chat-exact-output", "Atlas");
   });
 
+  it("wires supervisor callbacks into visible progress and monitor lifecycle", async () => {
+    const mockProvider = createMockProvider();
+    const mockChannel = createMockChannel();
+    const goalTree = buildGoalTreeFromBlock(
+      {
+        isGoal: true,
+        estimatedMinutes: 5,
+        nodes: [
+          { id: "plan", task: "Inspect the failing flow", dependsOn: [] },
+        ],
+      },
+      "chat-supervisor-callbacks",
+      "Investigate the complex failure",
+    );
+
+    const supervisorBrain = {
+      execute: vi.fn(async (_task: string, context: { reportUpdate?: (markdown: string) => Promise<void>; onGoalDecomposed?: (goalTree: typeof goalTree) => void }) => {
+        await context.reportUpdate?.("**Stage:** planning");
+        context.onGoalDecomposed?.(goalTree);
+        return {
+          success: true,
+          partial: false,
+          output: "Supervisor final answer",
+          totalNodes: 1,
+          succeeded: 1,
+          failed: 0,
+          skipped: 0,
+          totalCost: 0,
+          totalDuration: 0,
+          nodeResults: [],
+        };
+      }),
+    };
+
+    const orchestrator = new Orchestrator({
+      providerManager: {
+        getProvider: () => mockProvider,
+        getProviderByName: () => mockProvider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        listAvailable: () => [{ name: "mock", label: "mock", defaultModel: "default" }],
+        shutdown: vi.fn(),
+      } as any,
+      tools: [],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: false,
+      supervisorBrain: supervisorBrain as any,
+      supervisorComplexityThreshold: "complex",
+    });
+
+    const monitorLifecycle = {
+      requestStart: vi.fn(),
+      goalDecomposed: vi.fn(),
+      goalRestructured: vi.fn(),
+      requestEnd: vi.fn(),
+    };
+    orchestrator.setMonitorLifecycle(monitorLifecycle as any);
+    (orchestrator as any).taskClassifier = {
+      classify: vi.fn().mockReturnValue({
+        type: "analysis",
+        complexity: "complex",
+        criticality: "high",
+      }),
+    };
+
+    await orchestrator.handleMessage({
+      channelType: "cli",
+      chatId: "chat-supervisor-callbacks",
+      userId: "user1",
+      text: "Investigate the complex failure",
+      timestamp: new Date(),
+    });
+
+    expect(supervisorBrain.execute).toHaveBeenCalledTimes(1);
+    expect(monitorLifecycle.requestStart).toHaveBeenCalledWith(
+      "chat-supervisor-callbacks",
+      "Investigate the complex failure",
+    );
+    expect(monitorLifecycle.goalDecomposed).toHaveBeenCalledWith(
+      "chat-supervisor-callbacks",
+      goalTree,
+    );
+    expect(mockChannel.sendMarkdown).toHaveBeenCalledWith(
+      "chat-supervisor-callbacks",
+      "**Stage:** planning",
+    );
+    expect(mockChannel.sendMarkdown).toHaveBeenCalledWith(
+      "chat-supervisor-callbacks",
+      "Supervisor final answer",
+    );
+  });
+
+  it("routes top-level background tasks through supervisor planning when allowed", async () => {
+    const mockProvider = createMockProvider();
+    const mockChannel = createMockChannel();
+    const supervisorBrain = {
+      execute: vi.fn().mockResolvedValue({
+        success: true,
+        partial: false,
+        output: "Supervisor background answer",
+        totalNodes: 1,
+        succeeded: 1,
+        failed: 0,
+        skipped: 0,
+        totalCost: 0,
+        totalDuration: 0,
+        nodeResults: [],
+      }),
+    };
+
+    const orchestrator = new Orchestrator({
+      providerManager: {
+        getProvider: () => mockProvider,
+        getProviderByName: () => mockProvider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        listAvailable: () => [{ name: "mock", label: "mock", defaultModel: "default" }],
+        shutdown: vi.fn(),
+      } as any,
+      tools: [],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: false,
+      supervisorBrain: supervisorBrain as any,
+      supervisorComplexityThreshold: "complex",
+    });
+    (orchestrator as any).taskClassifier = {
+      classify: vi.fn().mockReturnValue({
+        type: "analysis",
+        complexity: "complex",
+        criticality: "high",
+      }),
+    };
+
+    const progress = vi.fn();
+    const result = await orchestrator.runBackgroundTask("Investigate the complex failure", {
+      signal: AbortSignal.timeout(5_000),
+      onProgress: progress,
+      chatId: "bg-supervisor",
+      channelType: "cli",
+    });
+
+    expect(result).toBe("Supervisor background answer");
+    expect(supervisorBrain.execute).toHaveBeenCalledTimes(1);
+    expect(mockProvider.chat).not.toHaveBeenCalled();
+    expect(progress).toHaveBeenCalled();
+  });
+
+  it("keeps nested background workers out of supervisor routing when disabled", async () => {
+    const mockProvider = createMockProvider();
+    mockProvider.chat.mockResolvedValueOnce({
+      text: "Nested worker answer",
+      toolCalls: [],
+      stopReason: "end_turn" as const,
+      usage: { inputTokens: 5, outputTokens: 7 },
+    });
+    const mockChannel = createMockChannel();
+    const supervisorBrain = {
+      execute: vi.fn(),
+    };
+
+    const orchestrator = new Orchestrator({
+      providerManager: {
+        getProvider: () => mockProvider,
+        getProviderByName: () => mockProvider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        listAvailable: () => [{ name: "mock", label: "mock", defaultModel: "default" }],
+        shutdown: vi.fn(),
+      } as any,
+      tools: [],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: false,
+      supervisorBrain: supervisorBrain as any,
+      supervisorComplexityThreshold: "complex",
+    });
+    (orchestrator as any).taskClassifier = {
+      classify: vi.fn().mockReturnValue({
+        type: "analysis",
+        complexity: "complex",
+        criticality: "high",
+      }),
+    };
+
+    const result = await orchestrator.runBackgroundTask("Nested worker task", {
+      signal: AbortSignal.timeout(5_000),
+      onProgress: vi.fn(),
+      chatId: "bg-supervisor-off",
+      channelType: "cli",
+      supervisorMode: "off",
+    });
+
+    expect(result).toBe("Nested worker answer");
+    expect(supervisorBrain.execute).not.toHaveBeenCalled();
+    expect(mockProvider.chat).toHaveBeenCalledTimes(1);
+  });
+
   it("enforces the exact visible output contract even when a single worker adds extra text", async () => {
     mockProvider.chat.mockResolvedValueOnce({
       text: "Atlas\nHere is your answer.",

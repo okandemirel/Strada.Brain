@@ -101,7 +101,8 @@ import { buildTaskProgressSummary, type ProgressLanguage } from "../tasks/progre
 import type { IEventEmitter, LearningEventMap } from "../core/event-bus.js";
 import type { MetricsRecorder } from "../metrics/metrics-recorder.js";
 import type { GoalDecomposer } from "../goals/goal-decomposer.js";
-import { renderGoalTree, summarizeTree } from "../goals/goal-renderer.js";
+import { summarizeTree } from "../goals/goal-renderer.js";
+import { formatGoalPlanMarkdown } from "../goals/goal-feedback.js";
 import { formatResumePrompt, prepareTreeForResume } from "../goals/goal-resume.js";
 import type { GoalTree, GoalNodeId, GoalStatus } from "../goals/types.js";
 import type { WorkspaceBus } from "../dashboard/workspace-bus.js";
@@ -204,6 +205,7 @@ import {
   type SupervisorExecutionStrategy,
   type SupervisorRole,
 } from "./orchestrator-supervisor-routing.js";
+import { buildSupervisorActivationNarrative } from "../supervisor/supervisor-feedback.js";
 import { SessionManager, type Session } from "./orchestrator-session-manager.js";
 import {
   buildSafeVisibleFallbackFromDraft as buildSafeVisibleFallbackFromDraftHelper,
@@ -714,6 +716,56 @@ export class Orchestrator {
       return classification.complexity === "moderate" || classification.complexity === "complex";
     }
     return classification.complexity === "complex";
+  }
+
+  private stripSupervisorProgressMarkdown(markdown: string): string {
+    return markdown
+      .replace(/\*\*/g, "")
+      .replace(/^[ \t]*-\s+/gm, "")
+      .trim();
+  }
+
+  private async tryHandleSupervisor(params: {
+    prompt: string;
+    chatId: string;
+    userId?: string;
+    conversationId?: string;
+    onActivated?: (
+      activation: ReturnType<typeof buildSupervisorActivationNarrative>,
+    ) => Promise<void> | void;
+    reportUpdate?: (markdown: string) => Promise<void> | void;
+    onGoalDecomposed?: (goalTree: GoalTree) => void;
+  }): Promise<import("../supervisor/supervisor-types.js").SupervisorResult | null> {
+    if (!this.supervisorBrain || this.supervisorBrainActive) {
+      return null;
+    }
+
+    const classification = this.taskClassifier?.classify(params.prompt);
+    if (!classification || !this.shouldActivateSupervisor(classification)) {
+      return null;
+    }
+
+    this.supervisorBrainActive = true;
+    try {
+      const activation = buildSupervisorActivationNarrative(params.prompt);
+      try {
+        await params.onActivated?.(activation);
+      } catch {
+        // Activation feedback is best-effort only.
+      }
+      return await this.supervisorBrain.execute(params.prompt, {
+        chatId: params.chatId,
+        userId: params.userId,
+        conversationId: params.conversationId,
+        ...(params.onGoalDecomposed ? { onGoalDecomposed: params.onGoalDecomposed } : {}),
+        ...(params.reportUpdate ? { reportUpdate: params.reportUpdate } : {}),
+      });
+    } catch (err) {
+      getLogger().warn("Supervisor brain failed, falling through to PAOR", { error: String(err) });
+      return null;
+    } finally {
+      this.supervisorBrainActive = false;
+    }
   }
 
   private buildBackgroundIterationBudgetStopMessage(epochCount: number): string {
@@ -1698,6 +1750,11 @@ export class Orchestrator {
     let visibleResponse = "";
     let thrownReason: string | undefined;
     try {
+      const supervisorMode = (
+        request as WorkerRunRequest & {
+          supervisorMode?: BackgroundTaskOptions["supervisorMode"];
+        }
+      ).supervisorMode ?? (request.mode === "background" ? "auto" : "off");
       visibleResponse = await this.runBackgroundTask(
         request.prompt,
         {
@@ -1712,6 +1769,7 @@ export class Orchestrator {
           onUsage: request.onUsage,
           parentMetricId: request.parentMetricId,
           workspaceLease: request.workspaceLease,
+          supervisorMode,
           __workerCollector: collector,
           __workerMode: request.mode,
         } as BackgroundTaskOptions & {
@@ -1770,6 +1828,7 @@ export class Orchestrator {
 
   async runBackgroundTask(prompt: string, options: BackgroundTaskOptions): Promise<string> {
     const { signal, onProgress, chatId } = options;
+    const supervisorMode = options.supervisorMode ?? "auto";
     const workerCollector = (
       options as BackgroundTaskOptions & { __workerCollector?: WorkerRunCollector }
     ).__workerCollector;
@@ -2007,6 +2066,47 @@ export class Orchestrator {
         };
 
         try {
+          if (supervisorMode !== "off") {
+            let lastSupervisorSummary: string | null = null;
+            const emitSupervisorProgress = (summary: string, message: string): void => {
+              const normalized = summary.trim();
+              if (!normalized || normalized === lastSupervisorSummary) {
+                return;
+              }
+              lastSupervisorSummary = normalized;
+              emitProgress({
+                kind: "goal",
+                message,
+                userSummary: normalized,
+              });
+            };
+            const supervisorResult = await this.tryHandleSupervisor({
+              prompt,
+              chatId,
+              userId: options.userId,
+              conversationId: options.conversationId,
+              onActivated: (activation) => {
+                emitSupervisorProgress(
+                  this.stripSupervisorProgressMarkdown(activation.markdown),
+                  "Supervisor activation",
+                );
+              },
+              reportUpdate: (markdown) => {
+                emitSupervisorProgress(
+                  this.stripSupervisorProgressMarkdown(markdown),
+                  "Supervisor update",
+                );
+              },
+            });
+            if (supervisorResult) {
+              return finish(
+                supervisorResult.output,
+                "completed",
+                supervisorResult.output,
+              );
+            }
+          }
+
           while (true) {
             for (
               bgEpochIteration = 0;
@@ -2782,33 +2882,6 @@ export class Orchestrator {
     const conversationScopeForMonitor = resolveConversationScope(chatId, conversationId);
     this.monitorLifecycle?.requestStart(conversationScopeForMonitor, text);
 
-    // Supervisor Brain gate: route complex tasks to multi-provider pipeline
-    if (this.supervisorBrain && !this.supervisorBrainActive) {
-      const classification = this.taskClassifier?.classify(text);
-      if (classification && this.shouldActivateSupervisor(classification)) {
-        this.supervisorBrainActive = true;
-        try {
-          const result = await this.supervisorBrain.execute(text, {
-            chatId,
-            userId,
-            conversationId,
-          });
-          if (result) {
-            // Supervisor handled it — send result and return
-            await this.sessionManager.sendVisibleAssistantMarkdown(chatId, session, result.output);
-            this.monitorLifecycle?.requestEnd(resolveConversationScope(chatId, conversationId));
-            return;
-          }
-          // Supervisor returned null (not complex enough), fall through to PAOR
-        } catch (err) {
-          // Supervisor failed — log and fall through to regular PAOR
-          getLogger().warn("Supervisor brain failed, falling through to PAOR", { error: String(err) });
-        } finally {
-          this.supervisorBrainActive = false;
-        }
-      }
-    }
-
     // Start typing indicator loop
     const typingInterval = setInterval(() => {
       if (supportsRichMessaging(this.channel)) {
@@ -3004,6 +3077,28 @@ export class Orchestrator {
     const interactiveIterationLimit = this.getInteractiveIterationLimit();
 
     try {
+      const supervisorResult = await this.tryHandleSupervisor({
+        prompt: lastUserMessage,
+        chatId,
+        userId,
+        conversationId,
+        onGoalDecomposed: (goalTree) =>
+          this.monitorLifecycle?.goalDecomposed(conversationScope, goalTree),
+        reportUpdate: async (markdown) => {
+          await this.sessionManager.sendVisibleAssistantMarkdown(chatId, session, markdown);
+        },
+      });
+      if (supervisorResult) {
+        await this.sessionManager.sendVisibleAssistantMarkdown(chatId, session, supervisorResult.output);
+        this.recordMetricEnd(metricId, {
+          agentPhase: AgentPhase.COMPLETE,
+          iterations: agentState.iteration,
+          toolCallCount: agentState.stepResults.length,
+          hitMaxIterations: false,
+        });
+        return;
+      }
+
       for (let iteration = 0; iteration < interactiveIterationLimit; iteration++) {
         const {
           executionStrategy: iterStrategy,
@@ -5400,11 +5495,10 @@ export class Orchestrator {
       } else {
         this.emitDagEvent("monitor:dag_init", goalTree);
       }
-      const treeViz = renderGoalTree(goalTree);
       await this.sessionManager.sendVisibleAssistantMarkdown(
         opts.chatId,
         opts.session,
-        "Goal decomposition:\n```\n" + treeViz + "\n```",
+        formatGoalPlanMarkdown(goalTree, { seedText: opts.userMessage }),
       );
       const treeSummary = summarizeTree(goalTree);
       return {
@@ -5464,11 +5558,13 @@ export class Orchestrator {
           } else {
             this.emitDagEvent("monitor:dag_restructure", updatedTree);
           }
-          const treeViz = renderGoalTree(updatedTree);
           await this.sessionManager.sendVisibleAssistantMarkdown(
             opts.chatId,
             opts.session,
-            "Goal tree updated (reactive decomposition):\n```\n" + treeViz + "\n```",
+            formatGoalPlanMarkdown(updatedTree, {
+              seedText: updatedTree.taskDescription,
+              updated: true,
+            }),
           );
         } else {
           getLogger().info("Reactive decomposition skipped (depth limit reached)", {

@@ -46,78 +46,150 @@ export function buildTaskProgressSummary(
   let base: string;
   switch (signal?.kind) {
     case "editing":
-      base = language === "tr"
-        ? joinedFiles
-          ? `Strada agent: ${joinedFiles} üzerinde hata düzeltmeleri uyguluyorum.`
-          : "Strada agent: ilgili dosyalarda hata düzeltmeleri uyguluyorum."
-        : joinedFiles
-          ? `Strada agent: applying fixes in ${joinedFiles}.`
-          : "Strada agent: applying code fixes.";
+      base = buildLabeledSummary(language, {
+        stage: language === "tr" ? "düzenleme" : "editing",
+        lastAction: language === "tr"
+          ? joinedFiles
+            ? `${joinedFiles} üzerinde düzeltme uyguluyorum`
+            : "ilgili dosyalarda düzeltme uyguluyorum"
+          : joinedFiles
+            ? `I started applying fixes in ${joinedFiles}`
+            : "I started applying code fixes",
+        nextStep: language === "tr"
+          ? "değişiklikleri hemen doğrulayacağım"
+          : "I'll verify the changes immediately",
+      });
       break;
     case "verification":
-      base = language === "tr"
-        ? "Strada agent: yaptığım değişiklikleri build ve kalite kontrolleriyle doğruluyorum."
-        : "Strada agent: verifying the latest changes with build and quality checks.";
+      base = buildLabeledSummary(language, {
+        stage: language === "tr" ? "doğrulama" : "verification",
+        lastAction: language === "tr"
+          ? "son değişiklikleri build ve kalite kontrollerine soktum"
+          : "I ran the latest changes through build and quality checks",
+        nextStep: language === "tr"
+          ? "çıkan sinyalleri teyit edip sonucu paylaşacağım"
+          : "I'll confirm the signals and package the result",
+      });
       break;
     case "clarification":
-      base = language === "tr"
-        ? "Strada agent: kararı size sormadan önce projeden ek kanıt topluyorum."
-        : "Strada agent: gathering more project evidence before surfacing a question.";
+      base = buildLabeledSummary(language, {
+        stage: language === "tr" ? "ek kanıt toplama" : "evidence gathering",
+        lastAction: language === "tr"
+          ? "eksik kararı netleştirmek için projeden ek sinyal topluyorum"
+          : "I gathered extra project evidence to close the missing decision",
+        nextStep: language === "tr"
+          ? "gerekirse bunu size net bir soruya çevireceğim"
+          : "I'll turn any remaining gap into a direct question if needed",
+      });
       break;
     case "visibility":
-      base = language === "tr"
-        ? "Strada agent: sonucu paylaşmadan önce teknik kanıtları tekrar kontrol ediyorum."
-        : "Strada agent: validating the technical evidence before surfacing the result.";
+      base = buildLabeledSummary(language, {
+        stage: language === "tr" ? "son kontrol" : "final review",
+        lastAction: language === "tr"
+          ? "paylaşmadan önce teknik kanıtları tekrar çapraz kontrol ediyorum"
+          : "I cross-checked the technical evidence before surfacing the result",
+        nextStep: language === "tr"
+          ? "sonucu gereksiz iç detay olmadan özetleyeceğim"
+          : "I'll summarize the outcome without dumping internal noise",
+      });
       break;
     case "delegation":
-      base = language === "tr"
-        ? "Strada agent: kök neden analizi için yardımcı agent incelemesi çalıştırıyorum."
-        : "Strada agent: running a helper-agent diagnosis for root-cause analysis.";
+      base = buildLabeledSummary(language, {
+        stage: language === "tr" ? "yardımcı inceleme" : "delegated diagnosis",
+        lastAction: language === "tr"
+          ? "kök neden için yardımcı agent incelemesi başlattım"
+          : "I started a helper-agent pass for root-cause analysis",
+        nextStep: language === "tr"
+          ? "bulguları ana akışa bağlayıp ilerleyeceğim"
+          : "I'll merge the findings back into the main execution path",
+      });
       break;
     case "loop_recovery":
-      base = language === "tr"
-        ? "Strada agent: aynı noktaya döndüğümü fark ettim; farklı strateji ve ek kanıtla toparlanıyorum."
-        : "Strada agent: I detected a repeated control loop and am recovering with a different strategy.";
+      base = buildLabeledSummary(language, {
+        stage: language === "tr" ? "toparlanma" : "recovery",
+        lastAction: language === "tr"
+          ? "aynı döngüye girdiğimi fark edip yaklaşımı değiştirdim"
+          : "I detected a repeated loop and switched strategies",
+        nextStep: language === "tr"
+          ? "alternatif yolu yeni kanıtla test edeceğim"
+          : "I'll test the alternative path against fresh evidence",
+      });
       break;
     case "replanning":
-      base = language === "tr"
-        ? "Strada agent: mevcut yaklaşımı değiştirip yeni bir planla devam ediyorum."
-        : "Strada agent: switching to a different plan.";
+      base = buildLabeledSummary(language, {
+        stage: language === "tr" ? "plan revizyonu" : "replanning",
+        lastAction: language === "tr"
+          ? "mevcut planı revize ettim"
+          : "I revised the current plan",
+        nextStep: language === "tr"
+          ? "güncellenen planla yürütmeye devam edeceğim"
+          : "I'll resume execution with the updated plan",
+      });
       break;
     case "analysis":
     case "inspection":
-      base = language === "tr"
-        ? joinedFiles
-          ? `Strada agent: ${joinedFiles} ve ilgili kanıtları inceliyorum.`
-          : "Strada agent: proje durumunu ve ilgili kanıtları inceliyorum."
-        : joinedFiles
-          ? `Strada agent: inspecting ${joinedFiles} and the surrounding evidence.`
-          : "Strada agent: inspecting the project state and surrounding evidence.";
+      base = buildLabeledSummary(language, {
+        stage: language === "tr" ? "inceleme" : "inspection",
+        lastAction: language === "tr"
+          ? joinedFiles
+            ? `${joinedFiles} ve ilgili akışı tarıyorum`
+            : "proje durumunu ve ilgili kanıtları tarıyorum"
+          : joinedFiles
+            ? `I'm scanning ${joinedFiles} and the surrounding path`
+            : "I'm scanning the project state and surrounding evidence",
+        nextStep: language === "tr"
+          ? "ilk somut müdahale noktasını çıkaracağım"
+          : "I'll line up the first concrete intervention point",
+      });
+      break;
+    case "goal":
+      base = buildLabeledSummary(language, {
+        stage: language === "tr" ? "plan yürütme" : "plan execution",
+        lastAction: language === "tr"
+          ? "çalışma planını güncelledim"
+          : "I refreshed the execution plan",
+        nextStep: language === "tr"
+          ? "hazır olan bir sonraki adıma geçiyorum"
+          : "I'm moving into the next ready step",
+      });
       break;
     default:
       base = fallbackSummary(task.title, language);
   }
-  return appendMilestone(base, progress);
+  return appendMilestone(base, progress, language);
 }
 
 function appendMilestone(
   summary: string,
   progress?: { current: number; total: number; unit: string },
+  language: ProgressLanguage = "en",
 ): string {
   if (!progress) return summary;
-  return `${summary} — ${progress.current}/${progress.total} ${progress.unit}`;
+  return `${summary} ${progressStatus(progress, language)}`;
 }
 
 function fallbackSummary(title: string, language: ProgressLanguage): string {
   const normalized = title.replace(/\s+/g, " ").trim().slice(0, 80);
   if (!normalized) {
-    return language === "tr"
-      ? "Strada agent: görev üzerinde çalışıyorum."
-      : "Strada agent: still working on the task.";
+    return buildLabeledSummary(language, {
+      stage: language === "tr" ? "çalışma" : "working",
+      lastAction: language === "tr"
+        ? "görevin yürütme hattını açık tutuyorum"
+        : "I'm keeping the task execution path moving",
+      nextStep: language === "tr"
+        ? "doğruladığım sonucu paylaşacağım"
+        : "I'll share the verified result once it is ready",
+    });
   }
-  return language === "tr"
-    ? `Strada agent: ${normalized} üzerinde çalışıyorum.`
-    : `Strada agent: working on ${normalized}.`;
+  return buildLabeledSummary(language, {
+    stage: language === "tr" ? "çalışma" : "working",
+    lastAction: language === "tr"
+      ? `"${normalized}" üzerinde ilerliyorum`
+      : `I'm moving through "${normalized}"`,
+    nextStep: language === "tr"
+      ? "doğruladığım sonucu paylaşacağım"
+      : "I'll share the verified result once it is ready",
+  });
 }
 
 function detectProgressLanguage(
@@ -135,4 +207,29 @@ function formatFiles(files: readonly string[] | undefined): string[] {
     return [];
   }
   return [...new Set(files.map((file) => basename(file)).filter(Boolean))].slice(0, 3);
+}
+
+function buildLabeledSummary(
+  language: ProgressLanguage,
+  parts: {
+    stage: string;
+    lastAction: string;
+    nextStep: string;
+  },
+): string {
+  if (language === "tr") {
+    return `Aşama: ${parts.stage}. Son aksiyon: ${parts.lastAction}. Sıradaki adım: ${parts.nextStep}.`;
+  }
+
+  return `Stage: ${parts.stage}. Last action: ${parts.lastAction}. Next: ${parts.nextStep}.`;
+}
+
+function progressStatus(
+  progress: { current: number; total: number; unit: string },
+  language: ProgressLanguage,
+): string {
+  if (language === "tr") {
+    return `Durum: ${progress.current}/${progress.total} ${progress.unit}.`;
+  }
+  return `Status: ${progress.current}/${progress.total} ${progress.unit}.`;
 }

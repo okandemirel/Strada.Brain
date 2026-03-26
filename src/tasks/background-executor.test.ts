@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { BackgroundExecutor } from "./background-executor.js";
 import type { Task } from "./types.js";
 import { TaskStatus } from "./types.js";
+import { getTaskProgressMessage } from "./progress-signals.js";
 import type { GoalTree, GoalNode, GoalNodeId } from "../goals/types.js";
 import { generateGoalNodeId } from "../goals/types.js";
 
@@ -189,7 +190,7 @@ describe("BackgroundExecutor - Pre-decomposed Tree Path", () => {
     expect(mockTaskManager.updateStatus).not.toHaveBeenCalled();
     expect(mockTaskManager.complete).not.toHaveBeenCalled();
     expect(mockTaskManager.fail).not.toHaveBeenCalled();
-    expect(onProgress).not.toHaveBeenCalledWith("Task started");
+    expect(onProgress).not.toHaveBeenCalled();
   });
 
   it("never runs two tasks from the same conversation in parallel", async () => {
@@ -1120,7 +1121,7 @@ describe("BackgroundExecutor - Enhanced Escalation (Plan 16-03)", () => {
     executor.setTaskManager(mockTaskManager as any);
 
     const progressMessages: string[] = [];
-    const onProgress = vi.fn((msg: string) => progressMessages.push(msg));
+    const onProgress = vi.fn((msg) => progressMessages.push(getTaskProgressMessage(msg)));
     executor.enqueue(task, new AbortController().signal, onProgress);
 
     await vi.waitFor(() => {

@@ -39,6 +39,27 @@ describe('useMonitorStore', () => {
     expect(useMonitorStore.getState().tasks['n1'].status).toBe('executing')
   })
 
+  it('stores narrative and milestone updates on a task', () => {
+    useMonitorStore.getState().addTask({
+      id: 'n1',
+      nodeId: 'n1',
+      title: 'Task 1',
+      status: 'pending',
+      reviewStatus: 'none',
+    })
+    useMonitorStore.getState().updateTask('n1', {
+      narrative: 'Progress: 1/3 steps are complete.',
+      milestone: { current: 1, total: 3, label: 'steps' },
+    })
+
+    expect(useMonitorStore.getState().tasks['n1'].narrative).toBe('Progress: 1/3 steps are complete.')
+    expect(useMonitorStore.getState().tasks['n1'].milestone).toEqual({
+      current: 1,
+      total: 3,
+      label: 'steps',
+    })
+  })
+
   it('ignores update for non-existent task', () => {
     useMonitorStore.getState().updateTask('missing', { status: 'done' })
     expect(useMonitorStore.getState().tasks).toEqual({})

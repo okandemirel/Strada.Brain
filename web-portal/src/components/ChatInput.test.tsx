@@ -9,7 +9,7 @@ vi.mock('./VoiceRecorder', () => ({
       type="button"
       onClick={() => onVoiceMessage({
         name: 'voice.webm',
-        type: 'audio/webm',
+        type: 'audio/webm;codecs=opus',
         data: 'dm9pY2U=',
         size: 5,
       })}
@@ -137,7 +137,7 @@ describe('ChatInput', () => {
 
     expect(onSend).toHaveBeenCalledWith('(voice message)', [{
       name: 'voice.webm',
-      type: 'audio/webm',
+      type: 'audio/webm;codecs=opus',
       data: 'dm9pY2U=',
       size: 5,
     }])

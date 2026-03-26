@@ -19,10 +19,29 @@ function createMessage(text: string): IncomingMessage {
   };
 }
 
+function createTaskManager(
+  submitMock: ReturnType<typeof vi.fn>,
+  overrides: Partial<{
+    submit: ReturnType<typeof vi.fn>;
+    listActiveTasks: () => Array<{
+      chatId: string;
+      channelType: string;
+      conversationId?: string;
+    }>;
+  }> = {},
+) {
+  return {
+    submit: submitMock,
+    listActiveTasks: () => [],
+    ...overrides,
+  };
+}
+
 describe("MessageRouter", () => {
   const submit = vi.fn();
   const handle = vi.fn();
   const sendMarkdown = vi.fn().mockResolvedValue(undefined);
+  const sendText = vi.fn().mockResolvedValue(undefined);
 
   beforeEach(() => {
     vi.useFakeTimers();
@@ -31,6 +50,8 @@ describe("MessageRouter", () => {
     handle.mockReset();
     sendMarkdown.mockReset();
     sendMarkdown.mockResolvedValue(undefined);
+    sendText.mockReset();
+    sendText.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -39,9 +60,9 @@ describe("MessageRouter", () => {
 
   it("sends startup notices once before the first task", async () => {
     const router = new MessageRouter(
-      { submit } as never,
+      createTaskManager(submit) as never,
       { handle } as unknown as CommandHandler,
-      { sendMarkdown } as never,
+      { sendMarkdown, sendText } as never,
       [
         "RAG disabled: no compatible embedding provider found.",
         "Daemon disabled: budget is missing.",
@@ -70,9 +91,9 @@ describe("MessageRouter", () => {
 
   it("still routes commands after sending startup notices", async () => {
     const router = new MessageRouter(
-      { submit } as never,
+      createTaskManager(submit) as never,
       { handle } as unknown as CommandHandler,
-      { sendMarkdown } as never,
+      { sendMarkdown, sendText } as never,
       ["Instinct embeddings disabled."],
       TEST_ROUTER_OPTIONS,
     );
@@ -86,9 +107,9 @@ describe("MessageRouter", () => {
 
   it("flushes a pending batch before handling a command", async () => {
     const router = new MessageRouter(
-      { submit } as never,
+      createTaskManager(submit) as never,
       { handle } as unknown as CommandHandler,
-      { sendMarkdown } as never,
+      { sendMarkdown, sendText } as never,
       [],
       TEST_ROUTER_OPTIONS,
     );
@@ -107,9 +128,9 @@ describe("MessageRouter", () => {
 
   it("keeps different channel conversations isolated even when chat IDs match", async () => {
     const router = new MessageRouter(
-      { submit } as never,
+      createTaskManager(submit) as never,
       { handle } as unknown as CommandHandler,
-      { sendMarkdown } as never,
+      { sendMarkdown, sendText } as never,
       [],
       TEST_ROUTER_OPTIONS,
     );
@@ -132,5 +153,82 @@ describe("MessageRouter", () => {
       conversationId: undefined,
       userId: "user-1",
     });
+  });
+
+  it("acknowledges consecutive messages as one request", async () => {
+    const router = new MessageRouter(
+      createTaskManager(submit) as never,
+      { handle } as unknown as CommandHandler,
+      { sendMarkdown, sendText } as never,
+      [],
+      TEST_ROUTER_OPTIONS,
+    );
+
+    await router.route(createMessage("ilk mesaj"));
+    await router.route(createMessage("ikinci mesaj"));
+    await vi.advanceTimersByTimeAsync(TEST_ROUTER_OPTIONS.burstWindowMs);
+
+    expect(sendText).toHaveBeenCalledWith(
+      "chat-1",
+      "Arka arkaya gelen 2 mesajını tek bir istek olarak birleştiriyorum.",
+    );
+  });
+
+  it("acknowledges when a new message is queued behind an active task", async () => {
+    const router = new MessageRouter(
+      createTaskManager(submit, {
+        listActiveTasks: () => [{
+          chatId: "chat-1",
+          channelType: "cli",
+          conversationId: undefined,
+        }],
+      }) as never,
+      { handle } as unknown as CommandHandler,
+      { sendMarkdown, sendText } as never,
+      [],
+      TEST_ROUTER_OPTIONS,
+    );
+
+    await router.route(createMessage("follow-up"));
+    await vi.advanceTimersByTimeAsync(TEST_ROUTER_OPTIONS.burstWindowMs);
+
+    expect(sendText).toHaveBeenCalledWith(
+      "chat-1",
+      "I queued your latest message and will pick it up as soon as the current task finishes.",
+    );
+  });
+
+  it("batches consecutive follow-ups into one queued task while a task is active", async () => {
+    const router = new MessageRouter(
+      createTaskManager(submit, {
+        listActiveTasks: () => [{
+          chatId: "chat-1",
+          channelType: "cli",
+          conversationId: undefined,
+        }],
+      }) as never,
+      { handle } as unknown as CommandHandler,
+      { sendMarkdown, sendText } as never,
+      [],
+      TEST_ROUTER_OPTIONS,
+    );
+
+    await router.route(createMessage("ilk düzeltme"));
+    await router.route(createMessage("bir de şu hataya bak"));
+    await vi.advanceTimersByTimeAsync(TEST_ROUTER_OPTIONS.burstWindowMs);
+
+    expect(submit).toHaveBeenCalledTimes(1);
+    expect(submit).toHaveBeenCalledWith(
+      "chat-1",
+      "cli",
+      expect.stringContaining("[User message 2]\nbir de şu hataya bak"),
+      expect.objectContaining({
+        userId: "user-1",
+      }),
+    );
+    expect(sendText).toHaveBeenCalledWith(
+      "chat-1",
+      "Son 2 mesajını birlikte kuyruğa aldım. Mevcut işi bitirir bitirmez bunları sırayla işleyeceğim.",
+    );
   });
 });
