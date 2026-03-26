@@ -12,6 +12,7 @@ import { mkdirSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
 import type { Task, TaskId, ProgressEntry } from "./types.js";
 import { TaskStatus } from "./types.js";
+import type { TaskOrigin } from "../daemon/daemon-types.js";
 
 // ─── Schema ──────────────────────────────────────────────────────────────────────
 
@@ -209,7 +210,7 @@ export class TaskStorage {
       updatedAt: row.updated_at,
       completedAt: row.completed_at ?? undefined,
       parentId: row.parent_id ? (row.parent_id as TaskId) : undefined,
-      origin: row.origin ?? undefined,
+      origin: this.parseTaskOrigin(row.origin),
       triggerName: row.trigger_name ?? undefined,
     };
   }
@@ -219,16 +220,21 @@ export class TaskStorage {
 
     const columns = this.db.prepare("PRAGMA table_info(tasks)").all() as Array<{ name: string }>;
     const knownColumns = new Set(columns.map((column) => column.name));
-    const missingColumns: Array<[string, string]> = [
+    const migratableColumns: Array<[string, string]> = [
       ["conversation_id", "TEXT"],
       ["user_id", "TEXT"],
       ["origin", "TEXT"],
       ["trigger_name", "TEXT"],
-    ].filter(([name]) => !knownColumns.has(name));
+    ];
+    const missingColumns = migratableColumns.filter(([name]) => !knownColumns.has(name));
 
     for (const [name, definition] of missingColumns) {
       this.db.exec(`ALTER TABLE tasks ADD COLUMN ${name} ${definition}`);
     }
+  }
+
+  private parseTaskOrigin(origin: string | null): TaskOrigin | undefined {
+    return origin === "user" || origin === "daemon" ? origin : undefined;
   }
 
   private ensureConnection(): void {
