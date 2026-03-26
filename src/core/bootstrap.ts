@@ -269,7 +269,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   const providerManager = providerInit.manager;
   const activityRegistry = new ChannelActivityRegistry();
 
-  const { ragPipeline, learningResult, startupNotices } = await initializeKnowledgeStage(
+  const { ragPipeline: codeRagPipeline, learningResult, startupNotices } = await initializeKnowledgeStage(
     {
       config,
       logger,
@@ -281,6 +281,35 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       initializeLearning,
     },
   );
+
+  // DocRAG + CompositeRAG: wrap code RAG with documentation search when available
+  let ragPipeline = codeRagPipeline;
+  if (codeRagPipeline && cachedEmbeddingProvider && config.rag?.docRag?.enabled !== false) {
+    try {
+      const { CompositeRAGPipeline, DocRAGPipeline, discoverPackageRoots } =
+        await import("../rag/docs/index.js");
+      const packageRoots = discoverPackageRoots(stradaDeps);
+      if (packageRoots.length > 0) {
+        const docVectorStorePath = join(config.memory?.dbPath ?? join(homedir(), ".strada-memory"), "vectors", "hnsw-docs");
+        const docVectorStore = new FileVectorStore(docVectorStorePath, cachedEmbeddingProvider.dimensions);
+        const docPipeline = new DocRAGPipeline(cachedEmbeddingProvider, docVectorStore);
+        ragPipeline = new CompositeRAGPipeline(
+          codeRagPipeline as RAGPipeline,
+          docPipeline,
+          cachedEmbeddingProvider,
+          packageRoots,
+        );
+        logger.info("DocRAG enabled: composite pipeline wraps code + framework docs", {
+          packages: packageRoots.map((p) => p.name).join(", "),
+        });
+      }
+    } catch (docRagError) {
+      logger.debug("DocRAG initialization skipped (non-fatal)", {
+        reason: docRagError instanceof Error ? docRagError.message : String(docRagError),
+      });
+      // ragPipeline remains the code-only pipeline
+    }
+  }
 
   // Initialize tools (registry created here, initialized after metricsStorage below)
   const toolRegistry = new ToolRegistry(config.pluginDirs);

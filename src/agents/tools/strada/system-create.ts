@@ -3,6 +3,7 @@ import { dirname } from "node:path";
 import { validatePath, isValidCSharpIdentifier } from "../../../security/path-guard.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "../tool.interface.js";
 import { STRADA_API } from "../../context/strada-api-reference.js";
+import { getFrameworkSchemaProvider } from "../../../intelligence/framework/framework-schema-provider.js";
 
 export class SystemCreateTool implements ITool {
   readonly name = "strada_create_system";
@@ -112,7 +113,8 @@ export class SystemCreateTool implements ITool {
       return { content: "Error: invalid namespace", isError: true };
     }
 
-    const validBases = STRADA_API.baseClasses.systems;
+    const provider = getFrameworkSchemaProvider();
+    const validBases = provider?.getSystemBaseClasses() ?? STRADA_API.baseClasses.systems;
     if (!validBases.includes(baseClass)) {
       return {
         content: `Error: base_class must be one of: ${validBases.join(", ")}`,

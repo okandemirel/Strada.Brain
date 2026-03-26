@@ -16,17 +16,21 @@ import {
   type StructDecl,
 } from "./csharp-deep-parser.js";
 import { STRADA_API } from "../agents/context/strada-api-reference.js";
+import { getFrameworkSchemaProvider } from "./framework/framework-schema-provider.js";
 import { getLogger } from "../utils/logger.js";
 
 const MAX_FILE_SIZE = 1024 * 1024; // 1MB per file
 
 /** Known base class names that start with 'I' but are NOT interfaces */
-const KNOWN_BASE_CLASSES = new Set([
-  ...STRADA_API.baseClasses.systems,
-  "EntityMediator",
-  "Controller",
-  "ModuleConfig",
-]);
+function getKnownBaseClasses(): Set<string> {
+  const provider = getFrameworkSchemaProvider();
+  return new Set([
+    ...(provider?.getSystemBaseClasses() ?? STRADA_API.baseClasses.systems),
+    "EntityMediator",
+    "Controller",
+    "ModuleConfig",
+  ]);
+}
 
 /** Pre-computed cache per parsed file to avoid re-traversing AST */
 interface ParsedFileCache {
@@ -269,9 +273,10 @@ export class StradaAnalyzer {
 
   private findSystems(cached: ParsedFileCache[]): SystemInfo[] {
     const systems: SystemInfo[] = [];
+    const provider = getFrameworkSchemaProvider();
     const systemBases = [
-      ...STRADA_API.baseClasses.systems,
-      ...new Set(STRADA_API.baseClasses.burstSystemVariants.map((base) => stripGenericArgs(base))),
+      ...(provider?.getSystemBaseClasses() ?? STRADA_API.baseClasses.systems),
+      ...new Set((provider?.getBurstSystemVariants() ?? STRADA_API.baseClasses.burstSystemVariants).map((base) => stripGenericArgs(base))),
     ];
     for (const { ast, classes, nsLookup } of cached) {
       for (const cls of classes) {
@@ -317,6 +322,7 @@ export class StradaAnalyzer {
 
   private findServices(cached: ParsedFileCache[]): ServiceInfo[] {
     const services: ServiceInfo[] = [];
+    const knownBases = getKnownBaseClasses();
     for (const { ast, classes, nsLookup } of cached) {
       for (const cls of classes) {
         for (const bt of cls.baseTypes) {
@@ -327,7 +333,7 @@ export class StradaAnalyzer {
             clean.startsWith("I") &&
             clean.length > 1 &&
             clean[1] === clean[1]!.toUpperCase() &&
-            !KNOWN_BASE_CLASSES.has(clean)
+            !knownBases.has(clean)
           ) {
             services.push({
               interfaceName: clean,

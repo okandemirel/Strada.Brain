@@ -5,7 +5,7 @@
  * and git fallback for packages not installed locally.
  */
 
-import { existsSync, statSync, mkdirSync } from "node:fs";
+import { existsSync, statSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import type { FSWatcher } from "chokidar";
@@ -247,7 +247,7 @@ export class FrameworkSyncPipeline {
 
       // Remove stale cache if exists
       if (existsSync(cacheDir)) {
-        execFileSync("rm", ["-rf", cacheDir], { timeout: 10_000 });
+        rmSync(cacheDir, { recursive: true, force: true });
       }
 
       // Shallow clone with HTTPS-only protocol (security)

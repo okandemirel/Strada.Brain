@@ -6,8 +6,7 @@
  */
 
 import { readFile, realpath } from "node:fs/promises";
-import { readFileSync, existsSync } from "node:fs";
-import { relative, resolve, join } from "node:path";
+import { relative, resolve } from "node:path";
 import { glob } from "glob";
 import {
   parseDeep,
@@ -163,18 +162,4 @@ export class CSharpFrameworkExtractor extends FrameworkExtractor {
     };
   }
 
-  protected async detectVersion(): Promise<string | null> {
-    // Unity Package Manager format: package.json with "version" field
-    const packageJsonPath = join(this.sourcePath, "package.json");
-    if (existsSync(packageJsonPath)) {
-      try {
-        const content = readFileSync(packageJsonPath, "utf-8");
-        const pkg = JSON.parse(content) as { version?: string };
-        if (pkg.version) return pkg.version;
-      } catch {
-        /* ignore parse errors */
-      }
-    }
-    return null;
-  }
 }

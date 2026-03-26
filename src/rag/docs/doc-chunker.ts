@@ -8,11 +8,8 @@
 import { createHash } from "node:crypto";
 import type { FilePath, TimestampMs } from "../../types/index.js";
 import type { DocChunkKind } from "../rag.interface.js";
+import { computeContentHash } from "../chunker.js";
 import type { FrameworkDocChunk, DocSourceType, PackageRoot } from "./doc-rag.interface.js";
-
-function hashContent(content: string): string {
-  return createHash("sha256").update(content).digest("hex").substring(0, 16);
-}
 
 function chunkId(pkg: string, version: string, filePath: string, index: number): string {
   return createHash("sha256")
@@ -57,7 +54,7 @@ export function chunkMarkdown(
     chunks.push({
       id: chunkId(pkg.name, pkg.version, filePath, sectionIndex),
       content: text,
-      contentHash: hashContent(text),
+      contentHash: computeContentHash(text),
       filePath: filePath as FilePath,
       indexedAt: now,
       kind: docSourceToChunkKind(docSource),
@@ -152,7 +149,7 @@ export function chunkXmlDocs(
         chunks.push({
           id: chunkId(pkg.name, pkg.version, filePath, sectionIndex),
           content: `${symbolName}: ${docText}`,
-          contentHash: hashContent(docText),
+          contentHash: computeContentHash(docText),
           filePath: filePath as FilePath,
           indexedAt: now,
           kind: "xml_doc",
@@ -188,7 +185,7 @@ export function chunkCSharpExample(
     return [{
       id: chunkId(pkg.name, pkg.version, filePath, 0),
       content,
-      contentHash: hashContent(content),
+      contentHash: computeContentHash(content),
       filePath: filePath as FilePath,
       indexedAt: now,
       kind: "api_doc",
@@ -222,7 +219,7 @@ export function chunkCSharpExample(
       chunks.push({
         id: chunkId(pkg.name, pkg.version, filePath, index),
         content: text,
-        contentHash: hashContent(text),
+        contentHash: computeContentHash(text),
         filePath: filePath as FilePath,
         indexedAt: now,
         kind: "api_doc",
@@ -240,7 +237,7 @@ export function chunkCSharpExample(
     chunks.push({
       id: chunkId(pkg.name, pkg.version, filePath, 0),
       content: content.substring(0, maxChunkChars),
-      contentHash: hashContent(content),
+      contentHash: computeContentHash(content),
       filePath: filePath as FilePath,
       indexedAt: now,
       kind: "api_doc",

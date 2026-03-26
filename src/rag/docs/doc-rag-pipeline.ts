@@ -8,7 +8,7 @@
 import { readFile } from "node:fs/promises";
 import { basename } from "node:path";
 import { glob } from "glob";
-import { createHash } from "node:crypto";
+import { computeContentHash } from "../chunker.js";
 import type {
   IEmbeddingProvider,
   IVectorStore,
@@ -129,13 +129,9 @@ export class DocRAGPipeline {
   // Private helpers
   // ---------------------------------------------------------------------------
 
-  private contentHash(content: string): string {
-    return createHash("sha256").update(content).digest("hex").substring(0, 16);
-  }
-
   private async indexMarkdownFile(filePath: string, pkg: PackageRoot): Promise<number> {
     const content = await readFile(filePath, "utf-8");
-    const hash = this.contentHash(content);
+    const hash = computeContentHash(content);
     if (this.fileHashes.get(filePath) === hash) return 0;
     this.fileHashes.set(filePath, hash);
 
@@ -159,7 +155,7 @@ export class DocRAGPipeline {
     if (!content.includes("/// <summary>")) return 0;
 
     const xmlHashKey = `xml:${filePath}`;
-    const hash = this.contentHash(content);
+    const hash = computeContentHash(content);
     if (this.fileHashes.get(xmlHashKey) === hash) return 0;
     this.fileHashes.set(xmlHashKey, hash);
 
@@ -172,7 +168,7 @@ export class DocRAGPipeline {
 
   private async indexExampleFile(filePath: string, pkg: PackageRoot): Promise<number> {
     const content = await readFile(filePath, "utf-8");
-    const hash = this.contentHash(content);
+    const hash = computeContentHash(content);
     if (this.fileHashes.get(filePath) === hash) return 0;
     this.fileHashes.set(filePath, hash);
 
@@ -187,14 +183,21 @@ export class DocRAGPipeline {
     const texts = chunks.map((c) => c.content);
     const result = await this.embeddingProvider.embed(texts);
 
-    const entries: VectorEntry[] = chunks.map((chunk, i) => ({
-      id: chunk.id,
-      vector: result.embeddings[i]! as unknown as VectorEntry['vector'],
-      chunk: chunk as unknown as VectorEntry['chunk'],
-      addedAt: createBrand(Date.now(), "TimestampMs" as const) as TimestampMs,
-      accessCount: 0,
-    }));
+    const entries: VectorEntry[] = [];
+    for (let i = 0; i < chunks.length; i++) {
+      const vector = result.embeddings[i];
+      if (!Array.isArray(vector) || vector.length === 0) continue;
+      entries.push({
+        id: chunks[i]!.id,
+        vector: vector as unknown as VectorEntry['vector'],
+        chunk: chunks[i] as unknown as VectorEntry['chunk'],
+        addedAt: createBrand(Date.now(), "TimestampMs" as const) as TimestampMs,
+        accessCount: 0,
+      });
+    }
 
-    await this.vectorStore.upsert(entries);
+    if (entries.length > 0) {
+      await this.vectorStore.upsert(entries);
+    }
   }
 }

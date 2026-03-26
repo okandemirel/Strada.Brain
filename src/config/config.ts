@@ -467,6 +467,12 @@ export interface RAGConfig {
   readonly baseUrl?: string;
   readonly dimensions?: number;
   readonly contextMaxTokens: number;
+  readonly docRag?: {
+    readonly enabled?: boolean;
+    readonly maxDocChunkChars?: number;
+    readonly overlapChars?: number;
+    readonly frameworkBoost?: number;
+  };
 }
 
 /** Dashboard configuration */
