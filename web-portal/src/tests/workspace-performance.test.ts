@@ -76,6 +76,7 @@ describe('workspace performance benchmarks', () => {
         path: `src/file-${i}.ts`,
         content: `// File ${i}\n`.repeat(100),
         language: 'typescript',
+        touchedStatus: 'new',
       })
     }
     const elapsed = performance.now() - start
