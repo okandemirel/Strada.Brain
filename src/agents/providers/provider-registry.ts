@@ -1,7 +1,7 @@
 import type { IAIProvider } from "./provider.interface.js";
 import { ClaudeProvider } from "./claude.js";
 import { OpenAIProvider } from "./openai.js";
-import type { OpenAIAuthMode } from "../../config/config.js";
+import type { AnthropicAuthMode, OpenAIAuthMode } from "../../config/config.js";
 import { OllamaProvider } from "./ollama.js";
 import { FallbackChainProvider } from "./fallback-chain.js";
 import { GeminiProvider } from "./gemini.js";
@@ -105,6 +105,10 @@ export interface ProviderConfig {
   name: string;
   /** API key (not needed for Ollama) */
   apiKey?: string;
+  /** Anthropic auth mode */
+  anthropicAuthMode?: AnthropicAuthMode;
+  /** Optional long-lived Claude auth token for bearer auth */
+  anthropicAuthToken?: string;
   /** OpenAI auth mode */
   openaiAuthMode?: OpenAIAuthMode;
   /** Optional local Codex auth.json path for ChatGPT/Codex subscription access */
@@ -121,6 +125,8 @@ export interface ProviderConfig {
 
 export interface ProviderCredential {
   apiKey?: string;
+  anthropicAuthMode?: AnthropicAuthMode;
+  anthropicAuthToken?: string;
   openaiAuthMode?: OpenAIAuthMode;
   openaiChatgptAuthFile?: string;
   openaiSubscriptionAccessToken?: string;
@@ -135,6 +141,10 @@ function hasOpenAISubscriptionCredential(config: ProviderConfig): boolean {
     || Boolean(config.openaiChatgptAuthFile);
 }
 
+function hasAnthropicSubscriptionCredential(config: ProviderConfig): boolean {
+  return Boolean(config.anthropicAuthToken);
+}
+
 /**
  * Build a provider from configuration.
  */
@@ -142,8 +152,19 @@ export function createProvider(config: ProviderConfig): IAIProvider {
   const { name } = config;
 
   if (name === "claude" || name === "anthropic") {
-    if (!config.apiKey) throw new Error("Claude provider requires an API key");
-    return new ClaudeProvider(config.apiKey, config.model);
+    if (!config.apiKey && !hasAnthropicSubscriptionCredential(config)) {
+      throw new Error("Claude provider requires an API key or Claude subscription auth token");
+    }
+    if (hasAnthropicSubscriptionCredential(config)) {
+      return new ClaudeProvider(
+        {
+          mode: "claude-subscription",
+          authToken: config.anthropicAuthToken!,
+        },
+        config.model,
+      );
+    }
+    return new ClaudeProvider(config.apiKey!, config.model);
   }
 
   if (name === "ollama") {
@@ -224,6 +245,8 @@ export function buildProviderChain(
       const provider = createProvider({
         name: trimmed,
         apiKey: credential.apiKey,
+        anthropicAuthMode: credential.anthropicAuthMode,
+        anthropicAuthToken: credential.anthropicAuthToken,
         openaiAuthMode: credential.openaiAuthMode,
         openaiChatgptAuthFile: credential.openaiChatgptAuthFile,
         openaiSubscriptionAccessToken: credential.openaiSubscriptionAccessToken,
@@ -235,6 +258,13 @@ export function buildProviderChain(
 
       const preset = PROVIDER_PRESETS[trimmed];
       const keyPrefix = credential.apiKey?.slice(0, 6)
+        ?? (hasAnthropicSubscriptionCredential({
+          name: trimmed,
+          anthropicAuthMode: credential.anthropicAuthMode,
+          anthropicAuthToken: credential.anthropicAuthToken,
+        })
+          ? "(subscription)"
+          : undefined)
         ?? (hasOpenAISubscriptionCredential({
           name: trimmed,
           openaiAuthMode: credential.openaiAuthMode,

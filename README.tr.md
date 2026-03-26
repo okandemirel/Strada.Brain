@@ -48,7 +48,7 @@ Bu surumde yeni: Strada.Brain artik bir **Agent Core** iceriyor -- cevrevi (dosy
 ### On Kosullar
 
 - **Node.js 20.19+** (veya **22.12+**) — Node.js sisteminizde kurulu degilse, launcher otomatik olarak tasinabilir bir kopya indirmeyi teklif eder (yalnizca Windows, ~30 MB tek seferlik indirme, `%LOCALAPPDATA%\Strada\node` altinda saklanir). Alternatif olarak `STRADA_NODE_PATH` ile ozel bir binary gosterebilirsiniz.
-- En az bir desteklenen AI saglayici kimligi (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY` vb.), bir OpenAI ChatGPT/Codex subscription oturumu (`OPENAI_AUTH_MODE=chatgpt-subscription`) veya yalnizca `ollama` kullanan bir `PROVIDER_CHAIN`
+- En az bir desteklenen AI saglayici kimligi (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY` vb.), bir Claude subscription token'i (`ANTHROPIC_AUTH_MODE=claude-subscription` + `ANTHROPIC_AUTH_TOKEN`), bir OpenAI ChatGPT/Codex subscription oturumu (`OPENAI_AUTH_MODE=chatgpt-subscription`) veya yalnizca `ollama` kullanan bir `PROVIDER_CHAIN`
 - Bir **Unity projesi** (ajana verdiginiz yol). Tam Strada-ozel yardim icin Strada.Core onerilir.
 
 ### 1. Kurulum
@@ -122,10 +122,11 @@ Node 22 `nvm` icinde zaten kuruluysa Strada yeniden indirmek yerine o kurulumu t
 Ilk tarayici acilisi acik bir setup bayragi da tasir; boylece cache'te kalmis eski bir portal sekmesi bile olu bir "Not Found" sayfasina dusmek yerine setup sihirbazina gider.
 Ilk web handoff restart ile yarisirsa Strada artik bu acilisi otomatik olarak tekrar dener. Config kaydedildikten sonra Strada ana uygulama hazir olana kadar ayni URL'de handoff ekranini ayakta tutar; setup'i tekrar calistirmayin.
 
-Sihirbaz, Unity proje yolunuz, AI saglayici API anahtari, varsayilan kanal ve dili sorar. `./strada setup` artik varsayilan olarak **Web Tarayicisi** yolunu tercih eder; daha hizli metin akisina bilincli olarak ihtiyaciniz varsa **Terminal** secin.
+Sihirbaz, Unity proje yolunuz, AI saglayici erisimi, varsayilan kanal ve dili sorar. `./strada setup` artik varsayilan olarak **Web Tarayicisi** yolunu tercih eder; daha hizli metin akisina bilincli olarak ihtiyaciniz varsa **Terminal** secin.
 Terminal setup, tek bir istemde virgule ayrilmis provider'lari kabul eder (ornegin `kimi,deepseek`) ya da bunlari tek tek etkilesimli olarak girebilirsiniz. "Baska eklensin mi?" dongusu yalnizca tek bir provider girildiginde gosterilir. Embedding provider secimi ayri kalir.
 Secilen her response worker setup tamamlanmadan once preflight'tan gecmek zorundadir. Setup, `strada doctor` ve startup artik ayni kontrati kullanir; gecersiz provider zincirleri sessizce atlanmaz.
 OpenAI `chatgpt-subscription` modunda setup artik kaydetmeden once gercek bir Responses probe'u ile yerel Codex/ChatGPT oturumunu dogrular. Suresi dolmus subscription oturumlari setup ve `strada doctor` seviyesinde raporlanir.
+Claude `claude-subscription` modunda setup, `claude auth login --claudeai` ve `claude setup-token` sonrasinda uretilen `ANTHROPIC_AUTH_TOKEN` degerini ister, Anthropic'in bu akisi Claude Code / Claude.ai ile sinirladigini uyari olarak gosterir ve kaydetmeden once secilen worker'in preflight'i gecmesini yine zorunlu tutar.
 Web sihirbazinda kaydetme tamamlandiginda Strada ayni URL uzerinden acik handoff durumlariyla (`saved`, `booting`, `ready`, `failed`) ana web uygulamasina devreder; boylece refresh gecisi olu setup sayfasina dusmez ve bootstrap hatasi gorunur kalir.
 Bu ilk devir sirasinda Strada onboarding turunu ve ilk autonomy tercihini de ilk chat oturumuna uygular; boylece acilis konusmasi ve Settings ekrani sihirbazda sectiginiz durumla hemen uyusur.
 Ilk gercek chat mesaji teknik bir gorevse Strada artik ise hemen baslar ve uzun bir intake akisi acmak yerine onboarding'i en fazla tek kisa takip sorusuna indirir.
@@ -152,7 +153,15 @@ Git/source kurulumlarda `strada doctor`, source launcher zaten calisiyorsa eksik
 Alternatif olarak, `.env` dosyasini manuel olarak olusturun:
 
 ```env
-ANTHROPIC_API_KEY=sk-ant-...      # Claude API anahtariniz
+# Claude API anahtari ile
+ANTHROPIC_API_KEY=sk-ant-...
+
+# Veya Claude subscription token'i ile
+# 1. claude auth login --claudeai
+# 2. claude setup-token
+ANTHROPIC_AUTH_MODE=claude-subscription
+ANTHROPIC_AUTH_TOKEN=sk-ant-sid01-...
+
 UNITY_PROJECT_PATH=/path/to/your/UnityProject  # Assets/ icermeli
 JWT_SECRET=<su sekilde olusturun: openssl rand -hex 64>
 ```
@@ -634,17 +643,19 @@ Tum yapilandirma ortam degiskenleri araciligiyla yapilir. Tam liste icin `.env.e
 
 | Degisken | Aciklama |
 |----------|----------|
-| `ANTHROPIC_API_KEY` | Claude API anahtari (birincil LLM saglayici) |
+| AI saglayici erisimi | En az bir saglayici kimligi, `ANTHROPIC_AUTH_MODE=claude-subscription` + `ANTHROPIC_AUTH_TOKEN`, `OPENAI_AUTH_MODE=chatgpt-subscription` veya `ollama` iceren bir `PROVIDER_CHAIN` |
 | `UNITY_PROJECT_PATH` | Unity proje kokunuzun mutlak yolu (`Assets/` icermeli) |
 | `JWT_SECRET` | JWT imzalama icin gizli anahtar. Olusturun: `openssl rand -hex 64` |
 
 ### AI Saglayicilari
 
-OpenAI uyumlu herhangi bir saglayici calisir. Asagidaki tum saglayicilar zaten uygulanmistir; cogunlugu API anahtari ile etkinlesir, OpenAI ise bu makinedeki yerel ChatGPT/Codex abonelik oturumunu konusma icin yeniden kullanabilir.
+Desteklenen herhangi bir hosted saglayici calisir. Asagidaki tum saglayicilar zaten uygulanmistir; cogunlugu API anahtari ile etkinlesir, Claude subscription token'i ve OpenAI subscription oturumu da desteklenen konusma kimlik dogrulama yollaridir.
 
 | Degisken | Saglayici | Varsayilan Model |
 |----------|-----------|------------------|
-| `ANTHROPIC_API_KEY` | Claude (birincil) | `claude-sonnet-4-20250514` |
+| `ANTHROPIC_API_KEY` | Claude API anahtari | `claude-sonnet-4-20250514` |
+| `ANTHROPIC_AUTH_MODE` | Claude kimlik dogrulama modu | `api-key` (varsayilan) veya `claude-subscription` |
+| `ANTHROPIC_AUTH_TOKEN` | Claude subscription bearer token'i | `ANTHROPIC_AUTH_MODE=claude-subscription` iken `claude setup-token` ile uretilir |
 | `OPENAI_API_KEY` | OpenAI | `gpt-4o` |
 | `DEEPSEEK_API_KEY` | DeepSeek | `deepseek-chat` |
 | `GROQ_API_KEY` | Groq | `llama-3.3-70b-versatile` |
@@ -661,6 +672,7 @@ OpenAI uyumlu herhangi bir saglayici calisir. Asagidaki tum saglayicilar zaten u
 | `OPENAI_CHATGPT_AUTH_FILE` | Opsiyonel Codex oturum dosyasi | `OPENAI_AUTH_MODE=chatgpt-subscription` iken varsayilan `~/.codex/auth.json` |
 
 **Saglayici zinciri:** `PROVIDER_CHAIN` degiskenini virgule ayrilmis saglayici adlari listesi olarak ayarlayin. Strada control-plane olarak kalir ve bu zinciri birincil execution worker, supervisor routing ve fallback secimi icin varsayilan orkestrasyon havuzu olarak kullanir. Ornek: `PROVIDER_CHAIN=kimi,deepseek,claude` once Kimi'yi kullanir, Kimi basarisiz olursa DeepSeek, sonra Claude. Secilen response worker'lar startup preflight'ini gecmek zorundadir; setup, doctor ve bootstrap artik gecersiz girdileri sessizce zincirden dusurmez.
+`claude`, `ANTHROPIC_API_KEY` veya `ANTHROPIC_AUTH_MODE=claude-subscription` ile `ANTHROPIC_AUTH_TOKEN` uzerinden calisabilir; `openai` ise `OPENAI_API_KEY` veya yerel ChatGPT/Codex subscription oturumu ile calisabilir.
 Aciklayici soru yonetimi de bu control-plane'in parcasi oldu. Bir worker kullaniciya soru onerebilir, ama Strada artik herhangi bir taslagi `ask_user` turune cevirmeden once iceride `clarification-review` asamasindan gecirir.
 Tamamlama da artik dahili bir verifier pipeline uzerinden gecer. Build verification, targeted repro / failing-path kontrolleri, log review, Strada conformance ve completion review temiz olmadan Strada isi bitirmez. `/routing info` ve dashboard artik hem runtime execution trace'lerini hem de phase outcome'lari (`approved`, `continued`, `replanned`, `blocked`) gosterir.
 Strada artik her gorev icin dahili bir execution journal ve rollback memory de tutar. Replan akislari son guvenli checkpoint'i, tukenen branch'leri, project/world anchor bilgisini ve hardcoded provider lore olmadan provider routing'e geri beslenen adaptive phase scores sinyalini kullanir. Bu skorlar artik verifier clean rate, rollback pressure, retry count, repeated failure fingerprints, repeated world-context failures, phase-local token cost, provider catalog freshness ve shared catalog icindeki official alignment / capability drift sinyalini de hesaba katar.
@@ -671,6 +683,7 @@ Ayni learning hatti artik runtime self-improvement artifacts da uretir: tekrar e
 Bu replay context artik phase/provider telemetry bilgisini de persist eder; boylece adaptive routing benzer gorevlerde yalnizca in-memory runtime history'e degil, basarili gecmis worker'lara da bakabilir.
 
 **Onemli:** `OPENAI_AUTH_MODE=chatgpt-subscription` sadece Strada icindeki OpenAI konusma turlari icin gecerli olur. OpenAI API veya embedding kotasi saglamaz. `EMBEDDING_PROVIDER=openai` secersen yine `OPENAI_API_KEY` gerekir.
+`ANTHROPIC_AUTH_MODE=claude-subscription`, yerel Claude girisinden (`claude auth login --claudeai` sonra `claude setup-token`) uretilen bir bearer token kullanir. Anthropic claude.ai subscription auth'i Claude Code ve Claude.ai ile sinirli olarak dokumante eder; bu yuzden bu mod ileri seviye, riski kullaniciya ait bir secenektir.
 Strada bariz sonraki adimlari kullaniciya geri paslamaz. Bir saglayici eksik analiz donerse, "ne yapmaliyim?" diye sorarsa veya yeterli kanit olmadan genis kapsamli bir tamamlanma iddiasi kurarsa, Strada donguyu yeniden acar, ek inceleme/review turu yaptirir ve ancak sonuc dogrulandiginda ya da gercek bir dis engel kaldiginda kullaniciya doner.
 
 ### Sohbet Kanallari

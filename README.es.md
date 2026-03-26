@@ -48,7 +48,7 @@ Nuevo en esta version: Strada.Brain ahora incluye un **Agent Core** -- un motor 
 ### Requisitos Previos
 
 - **Node.js 20.19+** (o **22.12+**) — si Node.js no esta instalado, el lanzador ofrecera descargar una copia portatil automaticamente (solo Windows, descarga unica de ~30 MB, almacenada en `%LOCALAPPDATA%\Strada\node`). Tambien puedes apuntar a un binario personalizado con `STRADA_NODE_PATH`.
-- Al menos una credencial compatible de proveedor de IA (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, etc.), una sesion de suscripcion OpenAI ChatGPT/Codex (`OPENAI_AUTH_MODE=chatgpt-subscription`) o una `PROVIDER_CHAIN` solo con `ollama`
+- Al menos una credencial compatible de proveedor de IA (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, etc.), un token de suscripcion Claude (`ANTHROPIC_AUTH_MODE=claude-subscription` + `ANTHROPIC_AUTH_TOKEN`), una sesion de suscripcion OpenAI ChatGPT/Codex (`OPENAI_AUTH_MODE=chatgpt-subscription`) o una `PROVIDER_CHAIN` solo con `ollama`
 - Un **proyecto Unity** (la ruta que le das al agente). Strada.Core se recomienda para una ayuda totalmente consciente del framework.
 
 ### 1. Instalacion
@@ -122,9 +122,10 @@ Si Node 22 ya esta instalado en `nvm`, Strada reutiliza ese runtime en lugar de 
 Ese primer arranque en el navegador tambien lleva una marca explicita de setup, para que incluso una pestana antigua en cache del portal vuelva al asistente en lugar de caer en una pagina muerta de "Not Found".
 Si el primer handoff web coincide con el reinicio, Strada ahora reintenta ese arranque automaticamente. Una vez guardada la configuracion, Strada mantiene la pantalla de handoff en la misma URL hasta que la app principal este lista; no vuelvas a ejecutar el setup.
 
-El asistente te pide la ruta de tu proyecto Unity, la clave de API del proveedor de IA, el canal por defecto e idioma. `./strada setup` ahora prioriza **Navegador Web** por defecto; elige **Terminal** solo si quieres de forma explicita el flujo de texto mas rapido.
+El asistente te pide la ruta de tu proyecto Unity, el acceso al proveedor de IA, el canal por defecto e idioma. `./strada setup` ahora prioriza **Navegador Web** por defecto; elige **Terminal** solo si quieres de forma explicita el flujo de texto mas rapido.
 El setup de terminal acepta proveedores separados por comas en un solo prompt (p. ej. `kimi,deepseek`) para fallback u orquestacion multiagente, o puedes agregarlos uno a uno de forma interactiva. El bucle "¿Agregar otro?" solo aparece cuando se introduce un unico proveedor. La eleccion del proveedor de embeddings se mantiene separada.
 Cuando OpenAI usa `chatgpt-subscription`, el setup valida la sesion local de Codex/ChatGPT antes de guardar. Las sesiones caducadas se rechazan en setup y tambien se reportan en `strada doctor`.
+Cuando Claude usa `claude-subscription`, el setup espera un `ANTHROPIC_AUTH_TOKEN` generado despues de `claude auth login --claudeai` y `claude setup-token`, muestra una advertencia de que Anthropic documenta este flujo como limitado a Claude Code / Claude.ai y sigue exigiendo que el worker seleccionado pase preflight antes de guardar.
 Cuando guardas el asistente web, Strada entrega el control a la aplicacion web principal en la misma URL para que un refresh durante la transicion no te deje en una pagina de setup muerta.
 En esa primera transicion Strada tambien reaplica el turno de onboarding y la eleccion inicial de autonomia en la primera sesion de chat, para que la conversacion inicial y la pantalla de Settings reflejen de inmediato lo elegido en el asistente.
 Si el primer mensaje real del chat es tecnico, Strada ahora empieza a resolverlo de inmediato y reduce el onboarding a como mucho una sola pregunta corta de seguimiento en lugar de abrir un formulario de intake.
@@ -151,7 +152,15 @@ En instalaciones git/source, `strada doctor` ya no trata un `dist/` ausente como
 Alternativamente, crea `.env` manualmente:
 
 ```env
-ANTHROPIC_API_KEY=sk-ant-...      # Tu clave de API de Claude
+# Claude con clave de API
+ANTHROPIC_API_KEY=sk-ant-...
+
+# O Claude con token de suscripcion
+# 1. claude auth login --claudeai
+# 2. claude setup-token
+ANTHROPIC_AUTH_MODE=claude-subscription
+ANTHROPIC_AUTH_TOKEN=sk-ant-sid01-...
+
 UNITY_PROJECT_PATH=/path/to/your/UnityProject  # Debe contener Assets/
 JWT_SECRET=<generar con: openssl rand -hex 64>
 ```
@@ -669,17 +678,19 @@ Toda la configuracion se realiza mediante variables de entorno. Consulta `.env.e
 
 | Variable | Descripcion |
 |----------|-------------|
-| `ANTHROPIC_API_KEY` | Clave de API de Claude (proveedor LLM principal) |
+| Acceso a proveedor IA | Al menos una credencial de proveedor, `ANTHROPIC_AUTH_MODE=claude-subscription` + `ANTHROPIC_AUTH_TOKEN`, `OPENAI_AUTH_MODE=chatgpt-subscription` o una `PROVIDER_CHAIN` con `ollama` |
 | `UNITY_PROJECT_PATH` | Ruta absoluta al directorio raiz de tu proyecto Unity (debe contener `Assets/`) |
 | `JWT_SECRET` | Secreto para firma JWT. Generar: `openssl rand -hex 64` |
 
 ### Proveedores de IA
 
-Cualquier proveedor compatible con OpenAI funciona. Todos los proveedores listados a continuacion estan implementados; la mayoria se activa con una clave de API, y OpenAI tambien puede usar la suscripcion local de ChatGPT/Codex de esta maquina para las conversaciones.
+Cualquier proveedor soportado funciona. Todos los proveedores listados a continuacion estan implementados; la mayoria se activa con una clave de API, y para las conversaciones tambien se admiten tokens de suscripcion de Claude y la suscripcion local de ChatGPT/Codex.
 
 | Variable | Proveedor | Modelo por Defecto |
 |----------|-----------|-------------------|
-| `ANTHROPIC_API_KEY` | Claude (principal) | `claude-sonnet-4-20250514` |
+| `ANTHROPIC_API_KEY` | Clave de API de Claude | `claude-sonnet-4-20250514` |
+| `ANTHROPIC_AUTH_MODE` | Modo de autenticacion de Claude | `api-key` (por defecto) o `claude-subscription` |
+| `ANTHROPIC_AUTH_TOKEN` | Token bearer de suscripcion Claude | generado con `claude setup-token` cuando `ANTHROPIC_AUTH_MODE=claude-subscription` |
 | `OPENAI_API_KEY` | OpenAI | `gpt-4o` |
 | `DEEPSEEK_API_KEY` | DeepSeek | `deepseek-chat` |
 | `GROQ_API_KEY` | Groq | `llama-3.3-70b-versatile` |
@@ -696,6 +707,7 @@ Cualquier proveedor compatible con OpenAI funciona. Todos los proveedores listad
 | `OPENAI_CHATGPT_AUTH_FILE` | Archivo opcional de sesion Codex | por defecto `~/.codex/auth.json` cuando `OPENAI_AUTH_MODE=chatgpt-subscription` |
 
 **Cadena de proveedores:** Configura `PROVIDER_CHAIN` con una lista de nombres de proveedores separados por comas. Strada sigue siendo el plano de control y usa esta cadena como pool de orquestacion por defecto para el worker principal, el routing del supervisor y sus fallbacks. Ejemplo: `PROVIDER_CHAIN=kimi,deepseek,claude` usa Kimi primero, DeepSeek si Kimi falla, luego Claude.
+`claude` puede funcionar con `ANTHROPIC_API_KEY` o con `ANTHROPIC_AUTH_MODE=claude-subscription` usando `ANTHROPIC_AUTH_TOKEN`; `openai` puede funcionar con `OPENAI_API_KEY` o con la sesion local de suscripcion ChatGPT/Codex.
 La aclaracion tambien forma parte de ese plano de control. Un worker puede proponer una pregunta al usuario, pero Strada ahora ejecuta primero una fase interna de `clarification-review` antes de convertir cualquier borrador en un turno `ask_user`.
 La finalizacion tambien pasa ahora por un verifier pipeline interno. La verificacion de build, la comprobacion targeted repro / failing-path, la revision de logs, la conformance de Strada y la completion review deben quedar limpias antes de que Strada termine. `/routing info` y el dashboard ahora muestran tanto las trazas de ejecucion reales como los phase outcomes (`approved`, `continued`, `replanned`, `blocked`).
 Strada ahora tambien mantiene un execution journal y rollback memory internos por tarea. Los replans pueden reutilizar el ultimo checkpoint estable, recordar ramas agotadas, llevar un project/world anchor y devolver adaptive phase scores al routing sin lore hardcodeado por proveedor. Esos scores ahora tambien consideran verifier clean rate, rollback pressure, retry count, repeated failure fingerprints, repeated world-context failures, phase-local token cost, provider catalog freshness y official alignment / capability drift del catalogo compartido.
@@ -706,6 +718,7 @@ Ese mismo camino de learning ahora tambien materializa runtime self-improvement 
 Ese replay context ahora tambien persiste phase/provider telemetry, para que el adaptive routing pueda reutilizar workers exitosos en tareas similares en lugar de depender solo de la runtime history en memoria.
 
 **Importante:** `OPENAI_AUTH_MODE=chatgpt-subscription` solo cubre los turnos de conversacion de OpenAI dentro de Strada. No concede cuota de API ni de embeddings de OpenAI. Si eliges `EMBEDDING_PROVIDER=openai`, sigues necesitando `OPENAI_API_KEY`.
+`ANTHROPIC_AUTH_MODE=claude-subscription` usa un token bearer generado desde un login local de Claude (`claude auth login --claudeai` y luego `claude setup-token`). Anthropic documenta la autenticacion de suscripcion de claude.ai como limitada a Claude Code y Claude.ai, asi que este modo se ofrece como una opcion avanzada bajo responsabilidad del usuario.
 Strada no le devuelve al usuario los siguientes pasos obvios. Si un proveedor devuelve un analisis incompleto, pregunta que debe hacer despues o hace una afirmacion amplia de finalizacion sin evidencia suficiente, Strada reabre el bucle, ejecuta otra pasada de inspeccion/revision y solo responde cuando el resultado esta verificado o queda un bloqueo externo real.
 
 ### Canales de Chat

@@ -48,7 +48,7 @@ Strada.Brain 是一个通过聊天频道与您对话的 AI 代理。您描述您
 ### 前提条件
 
 - **Node.js 20.19+**（或 **22.12+**）— 如果未安装 Node.js，启动器会自动提示下载便携版（仅限 Windows，约 30 MB 一次性下载，存储在 `%LOCALAPPDATA%\Strada\node`）。你也可以通过 `STRADA_NODE_PATH` 指定自定义的 Node 可执行文件路径。
-- 至少一个受支持的 AI 提供商凭据（`ANTHROPIC_API_KEY`、`OPENAI_API_KEY`、`GEMINI_API_KEY` 等），一个 OpenAI ChatGPT/Codex subscription 会话（`OPENAI_AUTH_MODE=chatgpt-subscription`），或者仅使用 `ollama` 的 `PROVIDER_CHAIN`
+- 至少一个受支持的 AI 提供商凭据（`ANTHROPIC_API_KEY`、`OPENAI_API_KEY`、`GEMINI_API_KEY` 等），一个 Claude subscription 令牌（`ANTHROPIC_AUTH_MODE=claude-subscription` + `ANTHROPIC_AUTH_TOKEN`），一个 OpenAI ChatGPT/Codex subscription 会话（`OPENAI_AUTH_MODE=chatgpt-subscription`），或者仅使用 `ollama` 的 `PROVIDER_CHAIN`
 - 一个 **Unity 项目**（您提供给代理的路径）。如果希望获得完整的 Strada 框架感知帮助，建议配合 Strada.Core。
 
 ### 1. 安装
@@ -122,9 +122,10 @@ git clone https://github.com/okandemirel/Strada.Brain.git Strada.Brain
 第一次浏览器打开时还会带上明确的 setup 标记，因此即使旧的门户缓存标签页还在，也会重新进入 setup 向导，而不是落到一个失效的 "Not Found" 页面。
 如果第一次 Web handoff 正好撞上重启时机，Strada 现在会自动重试那次启动。配置保存后，Strada 会在同一个 URL 上保持 handoff 页面直到主应用准备完成；不要再次运行 setup。
 
-向导会询问您的 Unity 项目路径、AI 提供商 API 密钥、默认频道和语言。`./strada setup` 现在默认优先 **Web 浏览器**；只有在你明确想走更快的纯文本流程时，才选择 **终端**。
+向导会询问您的 Unity 项目路径、AI 提供商访问方式、默认频道和语言。`./strada setup` 现在默认优先 **Web 浏览器**；只有在你明确想走更快的纯文本流程时，才选择 **终端**。
 终端 setup 在单个提示中接受以逗号分隔的 provider（例如 `kimi,deepseek`），用于 fallback / 多代理编排；也可以逐个交互式添加。"是否继续添加？"循环仅在输入单个 provider 时出现。embedding provider 选择保持独立。
 当 OpenAI 使用 `chatgpt-subscription` 时，setup 现在会在保存前校验本机上的 Codex/ChatGPT 会话。过期的 session 会在 setup 阶段被拒绝，并在 `strada doctor` 中继续报告。
+当 Claude 使用 `claude-subscription` 时，setup 会要求填写在 `claude auth login --claudeai` 和 `claude setup-token` 之后生成的 `ANTHROPIC_AUTH_TOKEN`，同时提示 Anthropic 将该流程文档化为仅限 Claude Code / Claude.ai 使用，并继续要求所选 worker 在保存前通过 preflight。
 当你在 Web 向导里保存后，Strada 会在同一个 URL 上接管到主 Web 应用，因此切换期间刷新也不会掉回失效的 setup 页面。
 在这次首次切换里，Strada 也会把 onboarding 回合和初始 autonomy 选择重新应用到第一段聊天会话中，因此开场对话和 Settings 页面会立即反映向导里的选择。
 如果第一条真正的聊天消息就是技术任务，Strada 现在会先开始解决问题，并把 onboarding 压缩到至多一个简短的跟进问题，而不是先抛出一整套 intake 问卷。
@@ -151,7 +152,15 @@ strada doctor
 或者，手动创建 `.env`：
 
 ```env
-ANTHROPIC_API_KEY=sk-ant-...      # 您的 Claude API 密钥
+# 使用 Claude API 密钥
+ANTHROPIC_API_KEY=sk-ant-...
+
+# 或使用 Claude subscription 令牌
+# 1. claude auth login --claudeai
+# 2. claude setup-token
+ANTHROPIC_AUTH_MODE=claude-subscription
+ANTHROPIC_AUTH_TOKEN=sk-ant-sid01-...
+
 UNITY_PROJECT_PATH=/path/to/your/UnityProject  # 必须包含 Assets/
 JWT_SECRET=<使用以下命令生成: openssl rand -hex 64>
 ```
@@ -668,17 +677,19 @@ npm run dev -- daemon --channel web
 
 | 变量 | 说明 |
 |------|------|
-| `ANTHROPIC_API_KEY` | Claude API 密钥（主要 LLM 提供商） |
+| AI 提供商访问 | 至少一个提供商凭据、`ANTHROPIC_AUTH_MODE=claude-subscription` + `ANTHROPIC_AUTH_TOKEN`、`OPENAI_AUTH_MODE=chatgpt-subscription`，或包含 `ollama` 的 `PROVIDER_CHAIN` |
 | `UNITY_PROJECT_PATH` | Unity 项目根目录的绝对路径（必须包含 `Assets/`） |
 | `JWT_SECRET` | 用于 JWT 签名的密钥。生成方式：`openssl rand -hex 64` |
 
 ### AI 提供商
 
-任何 OpenAI 兼容的提供商均可使用。以下所有提供商都已实现；大多数通过 API 密钥激活，而 OpenAI 也可以复用这台机器上的本地 ChatGPT/Codex 订阅会话来处理对话回合。
+任何受支持的托管提供商都可以使用。以下所有提供商都已实现；大多数通过 API 密钥激活，而对话回合也支持 Claude subscription 令牌以及这台机器上的本地 ChatGPT/Codex 订阅会话。
 
 | 变量 | 提供商 | 默认模型 |
 |------|--------|----------|
-| `ANTHROPIC_API_KEY` | Claude（主要） | `claude-sonnet-4-20250514` |
+| `ANTHROPIC_API_KEY` | Claude API 密钥 | `claude-sonnet-4-20250514` |
+| `ANTHROPIC_AUTH_MODE` | Claude 认证模式 | `api-key`（默认）或 `claude-subscription` |
+| `ANTHROPIC_AUTH_TOKEN` | Claude subscription bearer 令牌 | 当 `ANTHROPIC_AUTH_MODE=claude-subscription` 时通过 `claude setup-token` 生成 |
 | `OPENAI_API_KEY` | OpenAI | `gpt-4o` |
 | `DEEPSEEK_API_KEY` | DeepSeek | `deepseek-chat` |
 | `GROQ_API_KEY` | Groq | `llama-3.3-70b-versatile` |
@@ -695,6 +706,7 @@ npm run dev -- daemon --channel web
 | `OPENAI_CHATGPT_AUTH_FILE` | 可选 Codex 会话文件 | 当 `OPENAI_AUTH_MODE=chatgpt-subscription` 时默认使用 `~/.codex/auth.json` |
 
 **提供商链：** 将 `PROVIDER_CHAIN` 设置为以逗号分隔的提供商名称列表。Strada 仍然是控制平面，并将这条链作为默认编排池，用于主执行 worker、supervisor 路由以及故障回退。示例：`PROVIDER_CHAIN=kimi,deepseek,claude` 首先使用 Kimi，Kimi 失败则使用 DeepSeek，然后是 Claude。
+`claude` 可以由 `ANTHROPIC_API_KEY` 驱动，也可以通过 `ANTHROPIC_AUTH_MODE=claude-subscription` 与 `ANTHROPIC_AUTH_TOKEN` 驱动；`openai` 则可以使用 `OPENAI_API_KEY` 或本机上的 ChatGPT/Codex subscription 会话。
 澄清也是这个控制平面的一部分。worker 可以提出一个用户问题草案，但 Strada 现在会先运行内部 `clarification-review` 阶段，再决定这个草案能否真的变成 `ask_user` 回合。
 完成判定现在也要经过内部 verifier pipeline。build verification、targeted repro / failing-path 检查、log review、Strada conformance 和 completion review 都必须清理干净，Strada 才会结束。`/routing info` 和 dashboard 现在除了 runtime execution traces 之外，也会显示 phase outcomes (`approved`, `continued`, `replanned`, `blocked`)。
 Strada 现在还会为每个任务维护内部 execution journal 和 rollback memory。replan 可以复用最近的稳定 checkpoint、记住已经耗尽的 branch、携带 project/world anchor，并把 adaptive phase scores 回灌到 routing，而不依赖 hardcoded provider lore。这些 score 现在还会考虑 verifier clean rate、rollback pressure、retry count、repeated failure fingerprints、repeated world-context failures、phase-local token cost、provider catalog freshness，以及共享目录给出的 official alignment / capability drift。
@@ -705,6 +717,7 @@ Replay correlation 现在也会连同 chat-scoped `taskRunId` 一起持久化，
 这个 replay context 现在还会持久化 phase/provider telemetry，因此 adaptive routing 在相似任务上可以复用已经成功过的 worker，而不是只依赖内存里的 runtime history。
 
 **重要：** `OPENAI_AUTH_MODE=chatgpt-subscription` 只覆盖 Strada 内的 OpenAI 对话回合，不会提供 OpenAI API 或 embeddings 配额。如果你选择 `EMBEDDING_PROVIDER=openai`，仍然需要 `OPENAI_API_KEY`。
+`ANTHROPIC_AUTH_MODE=claude-subscription` 使用从本机 Claude 登录（`claude auth login --claudeai` 后再执行 `claude setup-token`）生成的 bearer 令牌。Anthropic 将 claude.ai subscription auth 文档化为仅限 Claude Code 和 Claude.ai，因此此模式以“风险由用户自行承担”的高级选项形式提供。
 Strada 不会把明显的下一步再丢回给用户。如果某个 provider 返回了不完整的分析、反过来询问用户下一步该做什么，或在证据不足时声称大范围任务已经完成，Strada 会重新打开循环，再做一轮检查/评审，只有在结果已经验证完毕或确实只剩真实外部阻塞时才向用户返回。
 
 ### 聊天频道

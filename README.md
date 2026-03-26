@@ -46,7 +46,7 @@ New in this release: Strada.Brain now features an **Agent Core** -- an autonomou
 ### Prerequisites
 
 - **Node.js 20.19+** (or **22.12+**) — if Node.js is not installed, the launcher will offer to download a portable copy automatically (Windows only, ~30 MB one-time download, stored in `%LOCALAPPDATA%\Strada\node`). You can also point to a custom binary with `STRADA_NODE_PATH`.
-- At least one supported AI provider configured (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, etc.), an OpenAI ChatGPT/Codex subscription session (`OPENAI_AUTH_MODE=chatgpt-subscription`), or an `ollama`-only `PROVIDER_CHAIN`
+- At least one supported AI provider configured (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, etc.), a Claude subscription token (`ANTHROPIC_AUTH_MODE=claude-subscription` + `ANTHROPIC_AUTH_TOKEN`), an OpenAI ChatGPT/Codex subscription session (`OPENAI_AUTH_MODE=chatgpt-subscription`), or an `ollama`-only `PROVIDER_CHAIN`
 - A **Unity project** (the path you give the agent). Strada.Core is recommended for full framework-aware assistance; without it, Strada.Brain still runs with reduced Strada-specific guidance.
 
 ### 1. Install
@@ -124,6 +124,7 @@ Terminal setup accepts comma-separated providers in a single prompt (e.g. `kimi,
 Every selected response worker must pass preflight before setup can finish. Setup, `strada doctor`, and startup now use the same contract, so invalid provider chains are rejected instead of being silently skipped.
 Fresh setup now enables both multi-agent orchestration and task delegation by default. If you want the legacy single-agent path, explicitly set `MULTI_AGENT_ENABLED=false`; delegation does not initialize when multi-agent is disabled even if `TASK_DELEGATION_ENABLED=true`.
 When OpenAI uses `chatgpt-subscription`, setup validates the local Codex/ChatGPT session with a real Responses probe before saving. Expired subscription sessions are rejected during setup and reported by `strada doctor`.
+When Claude uses `claude-subscription`, setup expects an `ANTHROPIC_AUTH_TOKEN` generated after `claude auth login --claudeai` and `claude setup-token`, warns that Anthropic documents this flow as limited to Claude Code / Claude.ai, and still requires the selected response worker to pass preflight before save completes.
 After you save the web wizard, Strada exposes explicit handoff states on the same URL (`saved`, `booting`, `ready`, `failed`) so refreshes can survive the transition and bootstrap failures stay visible until you retry setup.
 That handoff is now server-owned: once the first resolved web identity/session exists, Strada sends one assistant-authored welcome in the configured language and applies any setup-time autonomy bootstrap exactly once.
 Setup writes global provider-model defaults into `.env`, while chat and Settings keep using identity-scoped provider/model overrides on top of those defaults.
@@ -156,7 +157,16 @@ For git/source installs, `strada doctor` treats a missing `dist/` folder as a wa
 Alternatively, create `.env` manually:
 
 ```env
-ANTHROPIC_API_KEY=sk-ant-...      # Or use another supported provider key instead
+# Claude via API key
+ANTHROPIC_API_KEY=sk-ant-...
+
+# Or Claude via subscription token
+# 1. claude auth login --claudeai
+# 2. claude setup-token
+ANTHROPIC_AUTH_MODE=claude-subscription
+ANTHROPIC_AUTH_TOKEN=sk-ant-sid01-...
+
+# Or use another supported provider key instead
 UNITY_PROJECT_PATH=/path/to/your/UnityProject  # Must contain Assets/
 # Optional: enable internal system auth / JWT sessions
 JWT_SECRET=<generate with: openssl rand -hex 64>
@@ -757,11 +767,13 @@ All configuration is via environment variables. See `.env.example` for the full 
 
 ### AI Providers
 
-Any OpenAI-compatible provider works. Configure at least one hosted provider key, or include `ollama` in `PROVIDER_CHAIN` for local-only operation.
+Any supported hosted provider works. Configure at least one hosted provider credential, a supported subscription token/session, or include `ollama` in `PROVIDER_CHAIN` for local-only operation.
 
 | Variable | Provider | Default Model |
 |----------|----------|---------------|
-| `ANTHROPIC_API_KEY` | Claude | `claude-sonnet-4-20250514` |
+| `ANTHROPIC_API_KEY` | Claude API key auth | `claude-sonnet-4-20250514` |
+| `ANTHROPIC_AUTH_MODE` | Claude auth mode | `api-key` (default) or `claude-subscription` |
+| `ANTHROPIC_AUTH_TOKEN` | Claude subscription bearer token | generated via `claude setup-token` when `ANTHROPIC_AUTH_MODE=claude-subscription` |
 | `OPENAI_API_KEY` | OpenAI | `gpt-4o` |
 | `DEEPSEEK_API_KEY` | DeepSeek | `deepseek-chat` |
 | `GROQ_API_KEY` | Groq | `llama-3.3-70b-versatile` |
@@ -777,7 +789,7 @@ Any OpenAI-compatible provider works. Configure at least one hosted provider key
 | `OPENAI_AUTH_MODE` | OpenAI auth mode | `api-key` (default) or `chatgpt-subscription` |
 | `OPENAI_CHATGPT_AUTH_FILE` | Optional Codex auth session file | defaults to `~/.codex/auth.json` when `OPENAI_AUTH_MODE=chatgpt-subscription` |
 
-**Provider chain:** Set `PROVIDER_CHAIN` to a comma-separated list of provider names. Strada stays the control plane and uses this chain as the default orchestration pool for the primary execution worker, supervisor routing, and fallback on failure. Example: `PROVIDER_CHAIN=kimi,deepseek,claude` uses Kimi first, DeepSeek if Kimi fails, then Claude. `openai` can be backed by either `OPENAI_API_KEY` or a local ChatGPT/Codex subscription session. All selected response workers must pass startup preflight; setup, doctor, and bootstrap no longer silently drop invalid entries from the configured chain.
+**Provider chain:** Set `PROVIDER_CHAIN` to a comma-separated list of provider names. Strada stays the control plane and uses this chain as the default orchestration pool for the primary execution worker, supervisor routing, and fallback on failure. Example: `PROVIDER_CHAIN=kimi,deepseek,claude` uses Kimi first, DeepSeek if Kimi fails, then Claude. `claude` can be backed by either `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` with `ANTHROPIC_AUTH_MODE=claude-subscription`; `openai` can be backed by either `OPENAI_API_KEY` or a local ChatGPT/Codex subscription session. All selected response workers must pass startup preflight; setup, doctor, and bootstrap no longer silently drop invalid entries from the configured chain.
 Clarification is also part of that control plane. Worker providers may propose a user question, but Strada now runs an internal `clarification-review` phase before any provider draft can become an `ask_user` turn.
 Completion now runs through an internal verifier pipeline as well. Build verification, targeted repro / failing-path checks, log review, Strada conformance, and completion review must clear before Strada can finish. `/routing info` and the dashboard now show both runtime execution traces and phase outcomes (`approved`, `continued`, `replanned`, `blocked`).
 That completion review now also tracks structured closure state. If a worker says the build is clean but still lists runtime hypotheses, "remaining potential issues", or profiler/debug checks that Strada can continue internally, the task stays open in both interactive and daemon paths until those investigations are either verified or surfaced as a real blocker.
@@ -794,6 +806,7 @@ Replay correlation is now persisted with chat-scoped `taskRunId` values as well,
 That same learning path now materializes runtime self-improvement artifacts. Repeated high-confidence patterns become `skill`, `workflow`, or `knowledge_patch` artifacts in `shadow` state first; only verifier-backed clean shadow runs can promote them to `active` guidance. `/routing info` exposes the current identity-scoped artifact telemetry for the active project with aggregated samples plus clean/retry/failure/blocker counts, while the dashboard/settings UI shows the split shadow-sample vs active-use counters and the last promotion / rejection / retirement reason.
 
 **Important:** `OPENAI_AUTH_MODE=chatgpt-subscription` only covers OpenAI conversation turns inside Strada. It does not grant OpenAI API billing or embeddings quota. If you choose `EMBEDDING_PROVIDER=openai`, you still need an `OPENAI_API_KEY`.
+`ANTHROPIC_AUTH_MODE=claude-subscription` uses a bearer token generated from a local Claude login (`claude auth login --claudeai` then `claude setup-token`). Anthropic documents claude.ai subscription auth as limited to Claude Code and Claude.ai, so this mode is exposed as an advanced, user-assumed-risk option.
 
 ### Chat Channels
 

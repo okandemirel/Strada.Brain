@@ -214,6 +214,18 @@ describe("SetupWizard path validation", () => {
     expect(lines).toContain('OPENAI_MODEL="gpt-5.4"');
   });
 
+  it("writes Claude subscription env lines when setup selects bearer auth", () => {
+    const lines = buildSetupEnvLines({
+      PROVIDER_CHAIN: "claude",
+      ANTHROPIC_AUTH_MODE: "claude-subscription",
+      ANTHROPIC_AUTH_TOKEN: "claude-subscription-token-123456",
+    }, homedir(), 3000);
+
+    expect(lines).toContain('ANTHROPIC_AUTH_MODE="claude-subscription"');
+    expect(lines).toContain('ANTHROPIC_AUTH_TOKEN="claude-subscription-token-123456"');
+    expect(lines).not.toContain("ANTHROPIC_API_KEY");
+  });
+
   it("rejects unsupported curated model selections during setup save", async () => {
     const wizard = new SetupWizard({ port: 0 });
     const response = await saveWizard(wizard, {

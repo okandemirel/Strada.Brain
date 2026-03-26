@@ -14,7 +14,38 @@ export const PRESETS: PresetDef[] = [
 ]
 
 export const PROVIDERS: ProviderDef[] = [
-  { id: 'claude', name: 'Claude', envKey: 'ANTHROPIC_API_KEY', placeholder: 'sk-ant-...', recommended: true, helpUrl: 'https://console.anthropic.com' },
+  {
+    id: 'claude',
+    name: 'Claude',
+    envKey: 'ANTHROPIC_API_KEY',
+    placeholder: 'sk-ant-...',
+    recommended: true,
+    helpUrl: 'https://console.anthropic.com',
+    authModes: [
+      {
+        id: 'api-key',
+        label: 'API Key',
+        description: 'Use Anthropic API billing with a standard API key.',
+        requiresSecret: true,
+        secretEnvKey: 'ANTHROPIC_API_KEY',
+        secretLabel: 'Claude API Key',
+        secretPlaceholder: 'sk-ant-...',
+        helpLabel: 'Get key',
+        helpUrl: 'https://console.anthropic.com',
+      },
+      {
+        id: 'claude-subscription',
+        label: 'Claude Subscription',
+        description: 'Use a Claude subscription token. Run `claude auth login --claudeai`, then `claude setup-token`, and paste the generated token here. Use at your own risk.',
+        requiresSecret: true,
+        secretEnvKey: 'ANTHROPIC_AUTH_TOKEN',
+        secretLabel: 'Claude Auth Token',
+        secretPlaceholder: 'Paste token from claude setup-token',
+        helpLabel: 'Setup token',
+        helpUrl: 'https://code.claude.com/docs/en/setup',
+      },
+    ],
+  },
   {
     id: 'openai',
     name: 'OpenAI',
@@ -27,6 +58,7 @@ export const PROVIDERS: ProviderDef[] = [
         label: 'API Key',
         description: 'Use OpenAI Platform billing with a standard API key.',
         requiresSecret: true,
+        secretEnvKey: 'OPENAI_API_KEY',
         secretLabel: 'OpenAI API Key',
         secretPlaceholder: 'sk-...',
       },

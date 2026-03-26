@@ -18,6 +18,7 @@ import {
 } from "../rag/embeddings/embedding-resolver.js";
 import {
   collectProviderCredentials,
+  hasConfiguredAnthropicSubscription,
   hasConfiguredOpenAISubscription,
   hasUsableProviderConfig,
   normalizeProviderNames,
@@ -46,6 +47,9 @@ function detectAvailableProviderNames(
       name !== "claude" && name !== "anthropic" && key && !(exclude?.has(name)),
     )
     .map(([name]) => name);
+  if (hasConfiguredAnthropicSubscription(config) && !names.includes("claude") && !(exclude?.has("claude"))) {
+    names.unshift("claude");
+  }
   if (hasConfiguredOpenAISubscription(config) && !names.includes("openai") && !(exclude?.has("openai"))) {
     names.unshift("openai");
   }
@@ -68,9 +72,11 @@ export async function initializeAIProvider(
   if (config.providerChain) {
     const requestedNames = normalizeProviderNames(config.providerChain);
     const configuredNames = requestedNames.filter((name) =>
-      name === "openai" && hasConfiguredOpenAISubscription(config)
+      (name === "claude" || name === "anthropic") && hasConfiguredAnthropicSubscription(config)
         ? true
-        : hasUsableProviderConfig(name, apiKeys),
+        : name === "openai" && hasConfiguredOpenAISubscription(config)
+        ? true
+        : hasUsableProviderConfig(name, apiKeys, config),
     );
     const unavailableNames = requestedNames.filter((name) => !configuredNames.includes(name));
 
@@ -122,9 +128,11 @@ export async function initializeAIProvider(
     }
   }
   // 2) Anthropic key present — use ClaudeProvider directly
-  else if (config.anthropicApiKey) {
+  else if (config.anthropicApiKey || hasConfiguredAnthropicSubscription(config)) {
     defaultProviderOrder = ["claude"];
-    defaultProvider = new ClaudeProvider(config.anthropicApiKey);
+    defaultProvider = config.anthropicAuthToken
+      ? new ClaudeProvider({ mode: "claude-subscription", authToken: config.anthropicAuthToken })
+      : new ClaudeProvider(config.anthropicApiKey!);
     logger.info("AI provider initialized", { name: defaultProvider.name });
   }
   // 3) No explicit chain and no Anthropic key — auto-detect from available keys

@@ -125,9 +125,13 @@ export default function ProvidersStep({
           {providerSettingsProviders.map((provider) => {
             const modelOptions = getProviderModelOptions(provider.id)
             const selectedAuthMode = providerAuthModes[provider.id] ?? provider.authModes?.[0]?.id ?? 'api-key'
+            const selectedAuthModeDef = provider.authModes?.find((mode) => mode.id === selectedAuthMode)
             const usingOpenAISubscription = provider.id === 'openai' && selectedAuthMode === 'chatgpt-subscription'
-            const showsCredentialField = provider.envKey !== null && !usingOpenAISubscription
+            const usingClaudeSubscription = provider.id === 'claude' && selectedAuthMode === 'claude-subscription'
+            const showsCredentialField = selectedAuthModeDef?.requiresSecret ?? (provider.envKey !== null && !usingOpenAISubscription)
             const selectedModel = providerModels[provider.id] ?? getDefaultProviderModel(provider.id) ?? ''
+            const helpUrl = selectedAuthModeDef?.helpUrl ?? provider.helpUrl
+            const helpLabel = selectedAuthModeDef?.helpLabel ?? 'Get key'
 
             return (
               <div key={provider.id} className="provider-key-field">
@@ -208,15 +212,15 @@ export default function ProvidersStep({
                 {showsCredentialField && (
                   <>
                     <label htmlFor={`key-${provider.id}`}>
-                      {provider.authModes?.find((mode) => mode.id === selectedAuthMode)?.secretLabel ?? provider.name}
-                      {provider.helpUrl && (
+                      {selectedAuthModeDef?.secretLabel ?? provider.name}
+                      {helpUrl && (
                         <a
-                          href={provider.helpUrl}
+                          href={helpUrl}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="key-help-link"
                         >
-                          Get key
+                          {helpLabel}
                         </a>
                       )}
                     </label>
@@ -224,7 +228,7 @@ export default function ProvidersStep({
                       id={`key-${provider.id}`}
                       type="password"
                       placeholder={
-                        provider.authModes?.find((mode) => mode.id === selectedAuthMode)?.secretPlaceholder
+                        selectedAuthModeDef?.secretPlaceholder
                         ?? provider.placeholder
                         ?? ''
                       }
@@ -242,6 +246,17 @@ export default function ProvidersStep({
                     </p>
                     <p className="warning">
                       This does not grant OpenAI API or embedding quota. If you later choose OpenAI for embeddings, you still need an OpenAI API key.
+                    </p>
+                  </div>
+                )}
+
+                {usingClaudeSubscription && (
+                  <div className="provider-helper-copy">
+                    <p>
+                      Strada will send Claude requests with the subscription token you provide here.
+                    </p>
+                    <p className="warning">
+                      Anthropic documents claude.ai subscription auth as restricted outside Claude Code and Claude.ai. Strada exposes this mode only if you choose to use it, at your own risk.
                     </p>
                   </div>
                 )}

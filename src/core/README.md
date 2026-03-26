@@ -12,7 +12,7 @@ Initialization sequence (order matters):
 
 1. Logger (via `createLogger`)
 2. `AuthManager` — per-channel allow-lists (Telegram user IDs, Discord user/role IDs, WhatsApp numbers)
-3. AI provider — single `ClaudeProvider` or a multi-provider chain built from `config.providerChain` (comma-separated names mapped to API keys)
+3. AI provider — single `ClaudeProvider` or a multi-provider chain built from `config.providerChain` (comma-separated names resolved against provider credentials, API keys, or supported subscription auth)
 4. `FileMemoryManager` — optional, gated on `config.memory.enabled`
 5. `RAGPipeline` — optional, gated on `config.rag.enabled`; selects `OllamaEmbeddingProvider` or `OpenAIEmbeddingProvider`, wraps it in `CachedEmbeddingProvider`, configures HNSW params from env vars, triggers background `indexProject()`
 6. Learning system — `LearningStorage` + `LearningPipeline` + `RuntimeArtifactManager` + `ErrorRecoveryEngine` + `TaskPlanner`; falls back to bare `TaskPlanner`/`ErrorRecoveryEngine` on failure
@@ -89,7 +89,7 @@ A minimal HTTP server that runs during first-time configuration when no valid `.
 **HTTP Endpoints:**
 
 - `GET /` — Serves the setup UI (`setup.html`)
-- `POST /api/setup` — Accepts JSON-encoded configuration, validates required fields (`UNITY_PROJECT_PATH`, provider credentials, OpenAI subscription session state when `chatgpt-subscription` is selected), runs real preflight for every selected response worker, sanitizes all values, writes `.env`, and then hands off to the main app
+- `POST /api/setup` — Accepts JSON-encoded configuration, validates required fields (`UNITY_PROJECT_PATH`, provider credentials, OpenAI subscription session state when `chatgpt-subscription` is selected, Claude subscription token presence when `claude-subscription` is selected), runs real preflight for every selected response worker, sanitizes all values, writes `.env`, and then hands off to the main app
 - `GET /api/setup/status` — Returns explicit bootstrap handoff state (`collecting`, `saved`, `booting`, `ready`, `failed`) so the frontend can show startup progress or failure without guessing from `/health`
 - `GET /api/setup/validate-path` — Query parameter `path` (must be absolute, no `..` sequences); returns `{ valid: true }` if directory exists, or `{ valid: false, error: "..." }` otherwise
 
@@ -97,7 +97,7 @@ A minimal HTTP server that runs during first-time configuration when no valid `.
 
 - **Newline injection prevention:** All `.env` values are sanitized via `sanitizeEnvValue()` to strip carriage returns and newlines, blocking log injection and key overwriting attacks
 - **Directory traversal blocking:** Path validation rejects relative paths, `..` sequences, and URL-encoded traversals using `path.resolve()` normalization
-- **Subscription auth validation:** OpenAI `chatgpt-subscription` mode is rejected early when the local Codex/ChatGPT session file is missing, malformed, already expired, or fails the real Responses preflight probe
+- **Subscription auth validation:** OpenAI `chatgpt-subscription` mode is rejected early when the local Codex/ChatGPT session file is missing, malformed, already expired, or fails the real Responses preflight probe. Claude `claude-subscription` mode requires an `ANTHROPIC_AUTH_TOKEN`; when it is missing, setup/doctor surface `claude auth login --claudeai` plus `claude setup-token` guidance before the Claude worker can pass preflight
 - **Fail-closed provider setup:** Every selected response worker must pass setup preflight. Invalid provider chains are rejected instead of being silently skipped during startup
 - **HTTP security headers:** Every response includes:
   - `X-Content-Type-Options: nosniff` — prevents MIME sniffing
@@ -110,7 +110,7 @@ A minimal HTTP server that runs during first-time configuration when no valid `.
 **Supported Configuration Contract:**
 
 - Required: `UNITY_PROJECT_PATH` plus at least one usable response worker selection
-- Provider-specific: setup accepts API-key providers, OpenAI `chatgpt-subscription`, and multi-provider response chains, but every selected response worker must pass real preflight before save can complete
+- Provider-specific: setup accepts API-key providers, Claude `claude-subscription`, OpenAI `chatgpt-subscription`, and multi-provider response chains, but every selected response worker must pass real preflight before save can complete
 - Optional channel/auth settings: web/CLI defaults, Telegram/Discord/other channel credentials when the chosen setup flow collects them
 - Auto-populated defaults: `STREAMING_ENABLED=true`, `REQUIRE_EDIT_CONFIRMATION=true`, `LOG_LEVEL=info`
 - Failure reporting: invalid response workers are returned as structured provider failures instead of being silently dropped from the generated config

@@ -31,8 +31,19 @@ export class ClaudeProvider implements IAIProvider {
   private readonly client: Anthropic;
   private readonly model: string;
 
-  constructor(apiKey: string, model = "claude-sonnet-4-6-20250514") {
-    this.client = new Anthropic({ apiKey });
+  constructor(
+    auth:
+      | string
+      | { mode: "api-key"; apiKey: string }
+      | { mode: "claude-subscription"; authToken: string },
+    model = "claude-sonnet-4-6-20250514",
+  ) {
+    const normalizedAuth = typeof auth === "string"
+      ? { apiKey: auth }
+      : auth.mode === "claude-subscription"
+        ? { authToken: auth.authToken }
+        : { apiKey: auth.apiKey };
+    this.client = new Anthropic(normalizedAuth);
     this.model = model;
   }
 

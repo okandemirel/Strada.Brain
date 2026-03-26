@@ -48,7 +48,7 @@ Nouveau dans cette version : Strada.Brain int&egrave;gre d&eacute;sormais un **A
 ### Pr&eacute;requis
 
 - **Node.js 20.19+** (ou **22.12+**) — si Node.js n'est pas installe, le lanceur proposera de telecharger automatiquement une copie portable (Windows uniquement, telechargement unique d'environ 30 Mo, stocke dans `%LOCALAPPDATA%\Strada\node`). Vous pouvez aussi pointer vers un binaire personnalise avec `STRADA_NODE_PATH`.
-- Au moins un identifiant compatible de fournisseur IA (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, etc.), une session OpenAI ChatGPT/Codex subscription (`OPENAI_AUTH_MODE=chatgpt-subscription`) ou une `PROVIDER_CHAIN` basee uniquement sur `ollama`
+- Au moins un identifiant compatible de fournisseur IA (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, etc.), un jeton Claude subscription (`ANTHROPIC_AUTH_MODE=claude-subscription` + `ANTHROPIC_AUTH_TOKEN`), une session OpenAI ChatGPT/Codex subscription (`OPENAI_AUTH_MODE=chatgpt-subscription`) ou une `PROVIDER_CHAIN` basee uniquement sur `ollama`
 - Un **projet Unity** (le chemin donn&eacute; &agrave; l'agent). Strada.Core est recommand&eacute; pour une assistance pleinement consciente du framework.
 
 ### 1. Installation
@@ -122,9 +122,10 @@ Si Node 22 est deja installe dans `nvm`, Strada reutilise ce runtime au lieu de 
 Cette premiere ouverture navigateur porte aussi un marqueur explicite de setup, afin qu'un ancien onglet portail mis en cache retombe bien sur l'assistant plutot que sur une page morte "Not Found".
 Si le premier handoff web tombe pendant le redemarrage, Strada reessaie maintenant ce lancement automatiquement. Une fois la configuration enregistree, Strada garde l'ecran de handoff sur la meme URL jusqu'a ce que l'application principale soit prete ; ne relancez donc pas le setup.
 
-L'assistant vous demande votre chemin de projet Unity, votre cl&eacute; API de fournisseur IA, votre canal par d&eacute;faut et votre langue. `./strada setup` privilegie maintenant **Navigateur Web** par d&eacute;faut ; choisissez **Terminal** seulement si vous voulez explicitement le flux texte le plus rapide.
+L'assistant vous demande votre chemin de projet Unity, votre acces fournisseur IA, votre canal par d&eacute;faut et votre langue. `./strada setup` privilegie maintenant **Navigateur Web** par d&eacute;faut ; choisissez **Terminal** seulement si vous voulez explicitement le flux texte le plus rapide.
 Le setup terminal accepte des fournisseurs separes par des virgules en une seule saisie (par ex. `kimi,deepseek`) pour le fallback ou l'orchestration multi-agent, ou vous pouvez les ajouter un par un de facon interactive. La boucle "Ajouter un autre ?" n'apparait que lorsqu'un seul fournisseur est saisi. Le choix du fournisseur d'embeddings reste separe.
 Quand OpenAI utilise `chatgpt-subscription`, le setup valide maintenant la session locale Codex/ChatGPT avant l'enregistrement. Les sessions expirees sont refusees pendant le setup et egalement signalees par `strada doctor`.
+Quand Claude utilise `claude-subscription`, le setup attend un `ANTHROPIC_AUTH_TOKEN` genere apres `claude auth login --claudeai` et `claude setup-token`, affiche un avertissement indiquant qu'Anthropic documente ce flux comme limite a Claude Code / Claude.ai, et exige toujours que le worker choisi passe le preflight avant l'enregistrement.
 Une fois l'assistant web enregistr&eacute;, Strada bascule vers l'application web principale sur la m&ecirc;me URL afin qu'un refresh pendant la transition ne vous laisse pas sur une page de setup morte.
 Lors de ce premier basculement, Strada rejoue aussi le tour d'onboarding et le choix initial d'autonomy dans la premi&egrave;re session de chat, afin que la conversation d'ouverture et l'&eacute;cran Settings refl&egrave;tent imm&eacute;diatement ce qui a &eacute;t&eacute; choisi dans l'assistant.
 Si le premier vrai message du chat est technique, Strada commence maintenant &agrave; traiter la t&acirc;che tout de suite et limite l'onboarding &agrave; au plus une courte question de suivi au lieu d'ouvrir un questionnaire d'intake complet.
@@ -151,7 +152,15 @@ Sur une installation git/source, `strada doctor` ne traite plus un dossier `dist
 Alternativement, cr&eacute;ez `.env` manuellement :
 
 ```env
-ANTHROPIC_API_KEY=sk-ant-...      # Votre cl&eacute; API Claude
+# Claude via cl&eacute; API
+ANTHROPIC_API_KEY=sk-ant-...
+
+# Ou Claude via jeton de subscription
+# 1. claude auth login --claudeai
+# 2. claude setup-token
+ANTHROPIC_AUTH_MODE=claude-subscription
+ANTHROPIC_AUTH_TOKEN=sk-ant-sid01-...
+
 UNITY_PROJECT_PATH=/path/to/your/UnityProject  # Doit contenir Assets/
 JWT_SECRET=<g&eacute;n&eacute;rer avec : openssl rand -hex 64>
 ```
@@ -668,17 +677,19 @@ Toute la configuration se fait via des variables d'environnement. Consultez `.en
 
 | Variable | Description |
 |----------|-------------|
-| `ANTHROPIC_API_KEY` | Cl&eacute; API Claude (fournisseur LLM principal) |
+| Acces fournisseur IA | Au moins un identifiant fournisseur, `ANTHROPIC_AUTH_MODE=claude-subscription` + `ANTHROPIC_AUTH_TOKEN`, `OPENAI_AUTH_MODE=chatgpt-subscription` ou une `PROVIDER_CHAIN` avec `ollama` |
 | `UNITY_PROJECT_PATH` | Chemin absolu vers la racine de votre projet Unity (doit contenir `Assets/`) |
 | `JWT_SECRET` | Secret pour la signature JWT. G&eacute;n&eacute;rer : `openssl rand -hex 64` |
 
 ### Fournisseurs d'IA
 
-Tout fournisseur compatible OpenAI fonctionne. Tous les fournisseurs ci-dessous sont d&eacute;j&agrave; impl&eacute;ment&eacute;s&nbsp;; la plupart s'activent avec une cl&eacute; API, et OpenAI peut aussi r&eacute;utiliser l'abonnement local ChatGPT/Codex de cette machine pour les conversations.
+Tout fournisseur pris en charge fonctionne. Tous les fournisseurs ci-dessous sont d&eacute;j&agrave; impl&eacute;ment&eacute;s&nbsp;; la plupart s'activent avec une cl&eacute; API, et les conversations prennent aussi en charge les jetons de subscription Claude ainsi que l'abonnement local ChatGPT/Codex.
 
 | Variable | Fournisseur | Mod&egrave;le par D&eacute;faut |
 |----------|-------------|-------------------|
-| `ANTHROPIC_API_KEY` | Claude (principal) | `claude-sonnet-4-20250514` |
+| `ANTHROPIC_API_KEY` | Cl&eacute; API Claude | `claude-sonnet-4-20250514` |
+| `ANTHROPIC_AUTH_MODE` | Mode d'authentification Claude | `api-key` (par d&eacute;faut) ou `claude-subscription` |
+| `ANTHROPIC_AUTH_TOKEN` | Jeton bearer de subscription Claude | g&eacute;n&eacute;r&eacute; via `claude setup-token` quand `ANTHROPIC_AUTH_MODE=claude-subscription` |
 | `OPENAI_API_KEY` | OpenAI | `gpt-4o` |
 | `DEEPSEEK_API_KEY` | DeepSeek | `deepseek-chat` |
 | `GROQ_API_KEY` | Groq | `llama-3.3-70b-versatile` |
@@ -695,6 +706,7 @@ Tout fournisseur compatible OpenAI fonctionne. Tous les fournisseurs ci-dessous 
 | `OPENAI_CHATGPT_AUTH_FILE` | Fichier de session Codex optionnel | `~/.codex/auth.json` par d&eacute;faut quand `OPENAI_AUTH_MODE=chatgpt-subscription` |
 
 **Cha&icirc;ne de fournisseurs :** D&eacute;finissez `PROVIDER_CHAIN` avec une liste de noms de fournisseurs s&eacute;par&eacute;s par des virgules. Strada reste le plan de contr&ocirc;le et s'en sert comme pool d'orchestration par d&eacute;faut pour le worker principal, le routage du superviseur et les fallbacks. Exemple : `PROVIDER_CHAIN=kimi,deepseek,claude` utilise Kimi en premier, DeepSeek si Kimi &eacute;choue, puis Claude.
+`claude` peut fonctionner via `ANTHROPIC_API_KEY` ou via `ANTHROPIC_AUTH_MODE=claude-subscription` avec `ANTHROPIC_AUTH_TOKEN` ; `openai` peut fonctionner via `OPENAI_API_KEY` ou via la session locale ChatGPT/Codex subscription.
 La clarification fait aussi partie de ce plan de contr&ocirc;le. Un worker peut proposer une question &agrave; l'utilisateur, mais Strada ex&eacute;cute d'abord une phase interne de `clarification-review` avant qu'un brouillon puisse devenir un tour `ask_user`.
 La finalisation passe maintenant elle aussi par un verifier pipeline interne. La v&eacute;rification de build, le targeted repro / failing-path, la revue des logs, la conformance Strada et la completion review doivent &ecirc;tre propres avant que Strada termine. `/routing info` et le dashboard affichent maintenant &agrave; la fois les traces d'ex&eacute;cution r&eacute;elles et les phase outcomes (`approved`, `continued`, `replanned`, `blocked`).
 Strada conserve d&eacute;sormais aussi un execution journal et une rollback memory internes pour chaque t&acirc;che. Les replans peuvent r&eacute;utiliser le dernier checkpoint stable, m&eacute;moriser les branches &eacute;puis&eacute;es, transporter un project/world anchor et renvoyer des adaptive phase scores vers le routing sans lore de fournisseur hardcod&eacute;. Ces scores tiennent maintenant aussi compte du verifier clean rate, du rollback pressure, du retry count, des repeated failure fingerprints, des repeated world-context failures, du phase-local token cost, du provider catalog freshness et de l'official alignment / capability drift du catalogue partag&eacute;.
@@ -705,6 +717,7 @@ Ce m&ecirc;me chemin de learning mat&eacute;rialise maintenant aussi des runtime
 Ce replay context persiste maintenant aussi la phase/provider telemetry, afin que l'adaptive routing puisse r&eacute;utiliser les workers qui ont d&eacute;j&agrave; r&eacute;ussi sur des t&acirc;ches similaires au lieu de ne regarder que la runtime history en m&eacute;moire.
 
 **Important :** `OPENAI_AUTH_MODE=chatgpt-subscription` couvre uniquement les tours de conversation OpenAI dans Strada. Cela ne donne pas de quota API ni embeddings OpenAI. Si vous choisissez `EMBEDDING_PROVIDER=openai`, il vous faut toujours `OPENAI_API_KEY`.
+`ANTHROPIC_AUTH_MODE=claude-subscription` utilise un jeton bearer genere a partir d'un login Claude local (`claude auth login --claudeai`, puis `claude setup-token`). Anthropic documente l'authentification de subscription claude.ai comme limitee a Claude Code et Claude.ai ; ce mode est donc expose comme une option avancee a vos risques.
 Strada ne renvoie pas les prochaines etapes evidentes a l'utilisateur. Si un fournisseur renvoie une analyse incomplete, demande quoi faire ensuite, ou affirme une completion large sans preuves suffisantes, Strada rouvre la boucle, relance une passe d'inspection/revue, et ne repond que lorsque le resultat est verifie ou qu'un vrai blocage externe subsiste.
 
 ### Canaux de Chat

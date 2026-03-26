@@ -39,6 +39,8 @@ describe("loadConfig", () => {
     vi.mocked(statSync).mockReturnValue({ isDirectory: () => true } as ReturnType<typeof statSync>);
     // Clear relevant env vars
     delete process.env["ANTHROPIC_API_KEY"];
+    delete process.env["ANTHROPIC_AUTH_MODE"];
+    delete process.env["ANTHROPIC_AUTH_TOKEN"];
     delete process.env["TELEGRAM_BOT_TOKEN"];
     delete process.env["ALLOWED_TELEGRAM_USER_IDS"];
     delete process.env["ALLOWED_DISCORD_USER_IDS"];
@@ -172,6 +174,21 @@ describe("loadConfig", () => {
     setEnv({ ANTHROPIC_API_KEY: undefined });
     delete process.env["ANTHROPIC_API_KEY"];
     expect(() => loadConfig()).toThrow("Invalid configuration");
+  });
+
+  it("accepts Claude subscription auth without an Anthropic API key", () => {
+    setEnv({
+      ANTHROPIC_API_KEY: undefined,
+      ANTHROPIC_AUTH_MODE: "claude-subscription",
+      ANTHROPIC_AUTH_TOKEN: "claude-subscription-token-123456",
+    });
+    delete process.env["ANTHROPIC_API_KEY"];
+
+    const config = loadConfig();
+
+    expect(config.anthropicApiKey).toBeUndefined();
+    expect(config.anthropicAuthMode).toBe("claude-subscription");
+    expect(config.anthropicAuthToken).toBe("claude-subscription-token-123456");
   });
 
   it("throws when UNITY_PROJECT_PATH is missing", () => {

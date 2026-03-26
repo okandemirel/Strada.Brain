@@ -15,8 +15,11 @@ export interface ProviderAuthModeDef {
   label: string
   description: string
   requiresSecret?: boolean
+  secretEnvKey?: string
   secretLabel?: string
   secretPlaceholder?: string
+  helpLabel?: string
+  helpUrl?: string
 }
 
 export interface ProviderDef {

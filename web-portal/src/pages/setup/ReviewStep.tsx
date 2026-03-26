@@ -100,19 +100,23 @@ export default function ReviewStep({
         {Array.from(checkedProviders)
           .filter((id) => {
             const provider = PROVIDER_MAP[id]
-            if (id === 'openai' && providerAuthModes.openai === 'chatgpt-subscription') {
+            const authModeDef = provider?.authModes?.find((mode) => mode.id === providerAuthModes[id])
+              ?? provider?.authModes?.[0]
+            if (authModeDef?.requiresSecret) {
               return (providerKeys[id] ?? '').trim().length > 0
             }
-            return provider?.envKey && (providerKeys[id] ?? '').trim().length > 0
+            return provider?.envKey ? (providerKeys[id] ?? '').trim().length > 0 : false
           })
           .map((id) => {
             const provider = PROVIDER_MAP[id]
+            const authModeDef = provider?.authModes?.find((mode) => mode.id === providerAuthModes[id])
+              ?? provider?.authModes?.[0]
             return (
               <div key={id} className="review-item">
                 <span className="review-label">
                   {id === 'openai' && providerAuthModes.openai === 'chatgpt-subscription'
                     ? 'OpenAI Embedding Key'
-                    : `${provider.name} Key`}
+                    : authModeDef?.secretLabel ?? `${provider.name} Key`}
                 </span>
                 <span className="review-value mono">
                   {maskKey(providerKeys[id])}
@@ -174,6 +178,26 @@ export default function ReviewStep({
             <span className="review-label">OpenAI Subscription Scope</span>
             <span className="review-value">
               Conversation only. OpenAI embeddings still require an API key.
+            </span>
+          </div>
+        )}
+
+        {checkedProviders.has('claude') && (
+          <div className="review-item">
+            <span className="review-label">Claude Auth</span>
+            <span className="review-value">
+              {providerAuthModes.claude === 'claude-subscription'
+                ? 'Claude subscription token'
+                : 'API key'}
+            </span>
+          </div>
+        )}
+
+        {checkedProviders.has('claude') && providerAuthModes.claude === 'claude-subscription' && (
+          <div className="review-item">
+            <span className="review-label">Claude Subscription Warning</span>
+            <span className="review-value">
+              Anthropic documents claude.ai subscription auth as restricted outside Claude Code and Claude.ai. Use this mode at your own risk.
             </span>
           </div>
         )}

@@ -7,6 +7,7 @@ import {
   getSourceLauncherCommand,
   getSourceSetupCommand,
 } from "../common/launcher-guidance.js";
+import { inspectClaudeSubscriptionAuth } from "../common/claude-subscription-auth.js";
 import { inspectOpenAiSubscriptionAuth } from "../common/openai-subscription-auth.js";
 import { loadConfigSafe, type Config } from "../config/config.js";
 import { checkStradaDeps } from "../config/strada-deps.js";
@@ -81,13 +82,16 @@ function summarizeResponseWorker(config: Config): string {
     .map((entry) => entry.trim())
     .filter(Boolean)
     .join(", ");
+  const claudeMode = config.anthropicAuthToken
+    ? "Claude can use the configured subscription auth token."
+    : "Claude uses API billing when selected.";
   const openaiMode = config.openaiAuthMode === "chatgpt-subscription"
     ? "OpenAI conversation turns can reuse the local ChatGPT/Codex subscription session."
     : "OpenAI uses API billing when selected.";
 
   return providerChain
-    ? `Strada control plane ready. Primary orchestration pool: ${providerChain}. ${openaiMode}`
-    : `Strada control plane ready. ${openaiMode}`;
+    ? `Strada control plane ready. Primary orchestration pool: ${providerChain}. ${claudeMode} ${openaiMode}`
+    : `Strada control plane ready. ${claudeMode} ${openaiMode}`;
 }
 
 export async function collectDoctorReport(options: DoctorOptions = {}): Promise<DoctorReport> {
@@ -212,6 +216,27 @@ export async function collectDoctorReport(options: DoctorOptions = {}): Promise<
       .map((entry) => entry.trim())
       .filter(Boolean)
       ?? [];
+    const claudeInResponsePool = responseChain.length === 0
+      ? Boolean(configResult.value.anthropicApiKey || configResult.value.anthropicAuthToken)
+      : responseChain.includes("claude") || responseChain.includes("anthropic");
+    if (claudeInResponsePool && configResult.value.anthropicAuthMode === "claude-subscription") {
+      const authInspection = inspectClaudeSubscriptionAuth({
+        authToken: configResult.value.anthropicAuthToken,
+      });
+      const claudeIsOnlyResponseWorker = responseChain.length <= 1;
+      checks.push({
+        id: "claude-subscription",
+        label: "Claude subscription token",
+        status: authInspection.ok ? "pass" : (claudeIsOnlyResponseWorker ? "fail" : "warn"),
+        detail: authInspection.ok
+          ? authInspection.detail
+          : `${authInspection.detail} Claude conversation turns will fail until you add a token or switch Claude to API-key mode.`,
+        fix: authInspection.ok
+          ? undefined
+          : `Run \`claude auth login --claudeai\`, then \`claude setup-token\`, paste the generated token into setup, or re-run \`${getSourceSetupCommand(platform)}\` and switch Claude to API-key mode.`,
+      });
+    }
+
     const openAiInResponsePool = responseChain.length === 0
       ? configResult.value.openaiAuthMode === "chatgpt-subscription"
       : responseChain.includes("openai");

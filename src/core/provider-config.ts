@@ -20,18 +20,32 @@ export function normalizeProviderNames(providerChain?: string): string[] {
 export function hasUsableProviderConfig(
   name: string,
   apiKeys: Record<string, string | undefined>,
+  config?: Config,
 ): boolean {
   if (name === "ollama") return true;
   if (name === "claude" || name === "anthropic") {
-    return !!(apiKeys["claude"] || apiKeys["anthropic"]);
+    return !!(
+      apiKeys["claude"]
+      || apiKeys["anthropic"]
+      || config?.anthropicAuthMode === "claude-subscription"
+      || config?.anthropicAuthToken
+    );
   }
   return !!apiKeys[name];
 }
 
 export function collectProviderCredentials(config: Config): ProviderCredentialMap {
   return {
-    claude: { apiKey: config.anthropicApiKey },
-    anthropic: { apiKey: config.anthropicApiKey },
+    claude: {
+      apiKey: config.anthropicApiKey,
+      anthropicAuthMode: config.anthropicAuthMode,
+      anthropicAuthToken: config.anthropicAuthToken,
+    },
+    anthropic: {
+      apiKey: config.anthropicApiKey,
+      anthropicAuthMode: config.anthropicAuthMode,
+      anthropicAuthToken: config.anthropicAuthToken,
+    },
     openai: {
       apiKey: config.openaiApiKey,
       openaiAuthMode: config.openaiAuthMode,
@@ -49,6 +63,10 @@ export function collectProviderCredentials(config: Config): ProviderCredentialMa
     fireworks: { apiKey: config.fireworksApiKey },
     gemini: { apiKey: config.geminiApiKey },
   };
+}
+
+export function hasConfiguredAnthropicSubscription(config: Config): boolean {
+  return Boolean(config.anthropicAuthToken);
 }
 
 export function hasConfiguredOpenAISubscription(config: Config): boolean {
@@ -89,6 +107,10 @@ export function detectConfiguredProviderNames(
 export function detectConfiguredResponseProviders(config: Config): string[] {
   const apiKeys = collectApiKeys(config);
   const detectedNames = detectConfiguredProviderNames(apiKeys);
+
+  if (hasConfiguredAnthropicSubscription(config) && !detectedNames.includes("claude")) {
+    detectedNames.unshift("claude");
+  }
 
   if (hasConfiguredOpenAISubscription(config) && !detectedNames.includes("openai")) {
     detectedNames.unshift("openai");

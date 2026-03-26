@@ -37,6 +37,8 @@ dotenv.config({ path: resolveDotenvPath({ moduleUrl: import.meta.url }) });
 /** Environment variable names used by the application */
 export type EnvVarName =
   | "ANTHROPIC_API_KEY"
+  | "ANTHROPIC_AUTH_MODE"
+  | "ANTHROPIC_AUTH_TOKEN"
   | "OPENAI_API_KEY"
   | "OPENAI_AUTH_MODE"
   | "OPENAI_CHATGPT_AUTH_FILE"
@@ -373,6 +375,9 @@ export type EmbeddingProvider =
 /** OpenAI authentication modes */
 export type OpenAIAuthMode = "api-key" | "chatgpt-subscription";
 
+/** Anthropic authentication modes */
+export type AnthropicAuthMode = "api-key" | "claude-subscription";
+
 /** AI provider names */
 export type AIProviderName =
   | "claude"
@@ -647,6 +652,8 @@ export const DEFAULT_TASK_CONFIG: TaskConfig = {
 export interface Config {
   // AI Providers
   readonly anthropicApiKey?: string;
+  readonly anthropicAuthMode?: AnthropicAuthMode;
+  readonly anthropicAuthToken?: string;
   readonly openaiApiKey?: string;
   readonly openaiAuthMode: OpenAIAuthMode;
   readonly openaiChatgptAuthFile?: string;
@@ -885,6 +892,8 @@ export const configSchema = z
   .object({
     // AI Providers
     anthropicApiKey: z.string().optional(),
+    anthropicAuthMode: z.enum(["api-key", "claude-subscription"]).default("api-key"),
+    anthropicAuthToken: z.string().optional(),
     openaiApiKey: z.string().optional(),
     openaiAuthMode: z.enum(["api-key", "chatgpt-subscription"]).default("api-key"),
     openaiChatgptAuthFile: z.string().optional(),
@@ -1830,6 +1839,7 @@ export const configSchema = z
       data.fireworksApiKey,
       data.geminiApiKey,
     ].some((k) => k && k.length > 0);
+    const hasAnthropicSubscription = Boolean(data.anthropicAuthToken);
     const hasOpenAISubscription =
       data.openaiAuthMode === "chatgpt-subscription" ||
       Boolean(data.openaiSubscriptionAccessToken && data.openaiSubscriptionAccountId) ||
@@ -1837,7 +1847,15 @@ export const configSchema = z
 
     const hasOllama = data.providerChain?.includes("ollama") ?? false;
 
-    if (!hasAnyKey && !hasOpenAISubscription && !hasOllama) {
+    if (data.anthropicAuthMode === "claude-subscription" && !data.anthropicAuthToken) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "ANTHROPIC_AUTH_TOKEN is required when ANTHROPIC_AUTH_MODE=claude-subscription",
+        path: ["anthropicAuthToken"],
+      });
+    }
+
+    if (!hasAnyKey && !hasAnthropicSubscription && !hasOpenAISubscription && !hasOllama) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: "At least one AI provider API key is required (or use Ollama)",
@@ -1882,6 +1900,8 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
   const rawConfig = result.data;
   const config: Config = {
     anthropicApiKey: rawConfig.anthropicApiKey,
+    anthropicAuthMode: rawConfig.anthropicAuthMode,
+    anthropicAuthToken: rawConfig.anthropicAuthToken,
     openaiApiKey: rawConfig.openaiApiKey,
     openaiAuthMode: rawConfig.openaiAuthMode,
     openaiChatgptAuthFile: rawConfig.openaiChatgptAuthFile,
@@ -2500,6 +2520,8 @@ export const secretPatterns: SecretPattern[] = [
  */
 interface EnvVars {
   anthropicApiKey: string | undefined;
+  anthropicAuthMode: string | undefined;
+  anthropicAuthToken: string | undefined;
   openaiApiKey: string | undefined;
   openaiAuthMode: string | undefined;
   openaiChatgptAuthFile: string | undefined;
@@ -2787,6 +2809,8 @@ interface EnvVars {
 function loadFromEnv(): EnvVars {
   return {
     anthropicApiKey: process.env["ANTHROPIC_API_KEY"],
+    anthropicAuthMode: process.env["ANTHROPIC_AUTH_MODE"],
+    anthropicAuthToken: process.env["ANTHROPIC_AUTH_TOKEN"],
     openaiApiKey: process.env["OPENAI_API_KEY"],
     openaiAuthMode: process.env["OPENAI_AUTH_MODE"],
     openaiChatgptAuthFile: process.env["OPENAI_CHATGPT_AUTH_FILE"],
@@ -3194,8 +3218,8 @@ export function hasRequiredApiKeys(config: Config): { valid: boolean; missing: s
   if (config.providerChain) {
     const names = config.providerChain.split(",").map((s) => s.trim());
     const keyMap: Record<string, string | undefined> = {
-      claude: config.anthropicApiKey,
-      anthropic: config.anthropicApiKey,
+      claude: config.anthropicApiKey ?? config.anthropicAuthToken,
+      anthropic: config.anthropicApiKey ?? config.anthropicAuthToken,
       openai:
         config.openaiApiKey ??
         (config.openaiAuthMode === "chatgpt-subscription" ||
@@ -3216,6 +3240,13 @@ export function hasRequiredApiKeys(config: Config): { valid: boolean; missing: s
     for (const name of names) {
       if (name === "ollama") continue; // no key needed
       if (!keyMap[name]) {
+        if (name === "claude" || name === "anthropic") {
+          const hasSubscription = Boolean(config.anthropicAuthToken);
+          if (!hasSubscription) {
+            missing.push("ANTHROPIC_API_KEY");
+          }
+          continue;
+        }
         if (name === "openai") {
           const hasSubscription =
             config.openaiAuthMode === "chatgpt-subscription" ||
@@ -3229,9 +3260,10 @@ export function hasRequiredApiKeys(config: Config): { valid: boolean; missing: s
         missing.push(`${name.toUpperCase()}_API_KEY`);
       }
     }
-  } else if (!config.anthropicApiKey) {
+  } else if (!config.anthropicApiKey && !config.anthropicAuthToken) {
     // No chain specified and no Anthropic key — check if any key exists
     const hasAny = [
+      config.anthropicApiKey ?? config.anthropicAuthToken,
       config.openaiApiKey ??
         (config.openaiAuthMode === "chatgpt-subscription" ||
         Boolean(config.openaiSubscriptionAccessToken && config.openaiSubscriptionAccountId) ||
@@ -3349,6 +3381,8 @@ export function createPartialConfig(env: Partial<EnvVarMap>): PartialConfig {
   const raw: Record<string, unknown> = {};
 
   if (env.ANTHROPIC_API_KEY) raw.anthropicApiKey = env.ANTHROPIC_API_KEY;
+  if (env.ANTHROPIC_AUTH_MODE) raw.anthropicAuthMode = env.ANTHROPIC_AUTH_MODE;
+  if (env.ANTHROPIC_AUTH_TOKEN) raw.anthropicAuthToken = env.ANTHROPIC_AUTH_TOKEN;
   if (env.OPENAI_API_KEY) raw.openaiApiKey = env.OPENAI_API_KEY;
   if (env.OPENAI_AUTH_MODE) raw.openaiAuthMode = env.OPENAI_AUTH_MODE;
   if (env.OPENAI_CHATGPT_AUTH_FILE) raw.openaiChatgptAuthFile = env.OPENAI_CHATGPT_AUTH_FILE;

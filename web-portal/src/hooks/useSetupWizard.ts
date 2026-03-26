@@ -277,7 +277,7 @@ export function useSetupWizard() {
   const [selectedPreset, setSelectedPreset] = useState<string | null>(null)
   const [checkedProviders, setCheckedProviders] = useState<Set<string>>(new Set(['claude']))
   const [providerKeys, setProviderKeys] = useState<Record<string, string>>({})
-  const [providerAuthModes, setProviderAuthModes] = useState<Record<string, string>>({ openai: 'api-key' })
+  const [providerAuthModes, setProviderAuthModes] = useState<Record<string, string>>({ claude: 'api-key', openai: 'api-key' })
   const [providerModels, setProviderModels] = useState<Record<string, string>>(() =>
     buildProviderModelDefaults(['claude'], null),
   )
@@ -735,17 +735,27 @@ export function useSetupWizard() {
     // Add provider API keys
     for (const id of chain) {
       const provider = PROVIDER_MAP[id]
+      const authModeDef = provider?.authModes?.find((mode) => mode.id === providerAuthModes[id])
+        ?? provider?.authModes?.[0]
+      const key = (providerKeys[id] ?? '').trim()
+      if (id === 'claude') {
+        config.ANTHROPIC_AUTH_MODE = providerAuthModes.claude === 'claude-subscription'
+          ? 'claude-subscription'
+          : 'api-key'
+      }
       if (id === 'openai') {
         config.OPENAI_AUTH_MODE = providerAuthModes.openai === 'chatgpt-subscription'
           ? 'chatgpt-subscription'
           : 'api-key'
       }
-      if (provider?.envKey) {
-        const key = (providerKeys[id] ?? '').trim()
-        if (key && !(id === 'openai' && providerAuthModes.openai === 'chatgpt-subscription')) {
-          config[provider.envKey] = key
-        }
+      const secretEnvKey = authModeDef?.secretEnvKey ?? provider?.envKey
+      if (!secretEnvKey || !key) {
+        continue
       }
+      if (id === 'openai' && providerAuthModes.openai === 'chatgpt-subscription') {
+        continue
+      }
+      config[secretEnvKey] = key
     }
 
     if (ragEnabled && embeddingProvider && embeddingProvider !== 'auto') {

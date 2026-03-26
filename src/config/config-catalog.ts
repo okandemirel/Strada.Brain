@@ -26,6 +26,11 @@ const EXACT_RULES: Record<string, ConfigDescriptor> = {
     tier: "core",
     description: "OpenAI authentication mode for the shared control plane.",
   },
+  anthropicAuthMode: {
+    category: "Core",
+    tier: "core",
+    description: "Claude authentication mode for the shared control plane.",
+  },
   language: {
     category: "Core",
     tier: "core",

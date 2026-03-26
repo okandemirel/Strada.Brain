@@ -191,10 +191,11 @@ const DEFAULT_PROVIDER_MODELS: Record<string, string> = {
 };
 const MODEL_NAME_RE = /^[A-Za-z0-9._:/-]+$/;
 
+const KNOWN_ANTHROPIC_AUTH_MODES = new Set(["api-key", "claude-subscription"]);
 const KNOWN_OPENAI_AUTH_MODES = new Set(["api-key", "chatgpt-subscription"]);
 
 const PROVIDER_ENV_KEYS = [
-  "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "DEEPSEEK_API_KEY",
+  "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "OPENAI_API_KEY", "DEEPSEEK_API_KEY",
   "QWEN_API_KEY", "KIMI_API_KEY", "MINIMAX_API_KEY",
   "GROQ_API_KEY", "MISTRAL_API_KEY", "TOGETHER_API_KEY",
   "FIREWORKS_API_KEY", "GEMINI_API_KEY",
@@ -377,6 +378,9 @@ export function buildSetupEnvLines(
   }
   if (config.OPENAI_AUTH_MODE) {
     lines.push(`OPENAI_AUTH_MODE=${sanitizeEnvValue(config.OPENAI_AUTH_MODE)}`);
+  }
+  if (config.ANTHROPIC_AUTH_MODE) {
+    lines.push(`ANTHROPIC_AUTH_MODE=${sanitizeEnvValue(config.ANTHROPIC_AUTH_MODE)}`);
   }
   if (config.OPENAI_CHATGPT_AUTH_FILE) {
     lines.push(`OPENAI_CHATGPT_AUTH_FILE=${sanitizeEnvValue(config.OPENAI_CHATGPT_AUTH_FILE)}`);
@@ -1038,6 +1042,16 @@ export class SetupWizard {
       return;
     }
 
+    if (config.ANTHROPIC_AUTH_MODE && !KNOWN_ANTHROPIC_AUTH_MODES.has(String(config.ANTHROPIC_AUTH_MODE))) {
+      this.json(res, 400, { success: false, error: "Invalid ANTHROPIC_AUTH_MODE value" });
+      return;
+    }
+
+    if (config.ANTHROPIC_AUTH_MODE === "claude-subscription" && !config.ANTHROPIC_AUTH_TOKEN) {
+      this.json(res, 400, { success: false, error: "ANTHROPIC_AUTH_TOKEN is required for Claude subscription mode" });
+      return;
+    }
+
     if (config.OPENAI_AUTH_MODE && !KNOWN_OPENAI_AUTH_MODES.has(String(config.OPENAI_AUTH_MODE))) {
       this.json(res, 400, { success: false, error: "Invalid OPENAI_AUTH_MODE value" });
       return;
@@ -1165,6 +1179,15 @@ export class SetupWizard {
         apiKey: envKey ? config[envKey] : undefined,
       };
     }
+
+    credentials["claude"] = {
+      apiKey: config.ANTHROPIC_API_KEY,
+      anthropicAuthMode: config.ANTHROPIC_AUTH_MODE === "claude-subscription"
+        ? "claude-subscription"
+        : "api-key",
+      anthropicAuthToken: config.ANTHROPIC_AUTH_TOKEN,
+    };
+    credentials["anthropic"] = credentials["claude"];
 
     credentials["openai"] = {
       apiKey: config.OPENAI_API_KEY,

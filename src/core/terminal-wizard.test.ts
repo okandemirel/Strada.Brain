@@ -64,6 +64,28 @@ describe("generateEnvContent", () => {
     expect(content).toContain('OPENAI_API_KEY="sk-proj-openai-embed-key"');
   });
 
+  it("supports Claude subscription mode with a bearer auth token", () => {
+    const content = generateEnvContent({
+      unityProjectPath: "/Users/test/MyGame",
+      provider: "claude",
+      providerChain: ["claude"],
+      providerCredentials: {
+        claude: "claude-subscription-token-123456",
+      },
+      providerAuthModes: {
+        claude: "claude-subscription",
+      },
+      embeddingProvider: "auto",
+      channel: "web",
+      language: "en",
+    });
+
+    expect(content).toContain("ANTHROPIC_AUTH_MODE=claude-subscription");
+    expect(content).toContain('ANTHROPIC_AUTH_TOKEN="claude-subscription-token-123456"');
+    expect(content).toContain("PROVIDER_CHAIN=claude");
+    expect(content).not.toContain("ANTHROPIC_API_KEY");
+  });
+
   it("supports other response providers without falling back to Claude/Gemini-only logic", () => {
     const content = generateEnvContent({
       unityProjectPath: "/Users/test/MyGame",

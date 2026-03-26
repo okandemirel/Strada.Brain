@@ -53,6 +53,15 @@ describe("createProvider", () => {
     expect(provider.name).toBe("claude");
   });
 
+  it("creates Claude provider from a subscription auth token", () => {
+    const provider = createProvider({
+      name: "claude",
+      anthropicAuthMode: "claude-subscription",
+      anthropicAuthToken: "claude-subscription-token-123456",
+    });
+    expect(provider.name).toBe("claude");
+  });
+
   it("creates Ollama provider", () => {
     const provider = createProvider({ name: "ollama" });
     expect(provider.name).toBe("ollama");
@@ -162,5 +171,16 @@ describe("buildProviderChain", () => {
     });
 
     expect(provider.name).toBe("OpenAI");
+  });
+
+  it("builds Claude from subscription token credentials", () => {
+    const provider = buildProviderChain(["claude"], {
+      claude: {
+        anthropicAuthMode: "claude-subscription",
+        anthropicAuthToken: "claude-subscription-token-123456",
+      },
+    });
+
+    expect(provider.name).toBe("claude");
   });
 });

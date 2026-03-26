@@ -87,6 +87,24 @@ describe("response-provider-preflight", () => {
     expect(anthropicModelsListMock).toHaveBeenCalledWith({ limit: 1 });
   });
 
+  it("passes Claude subscription-token preflight without an initialized logger", async () => {
+    anthropicModelsListMock.mockResolvedValue({
+      data: [{ id: "claude-sonnet-4-6-20250514" }],
+    });
+
+    await expect(preflightResponseProviders(
+      ["claude"],
+      {
+        claude: { anthropicAuthToken: "claude-subscription-token-123456" },
+      },
+    )).resolves.toEqual({
+      passedProviderIds: ["claude"],
+      failures: [],
+    });
+
+    expect(anthropicModelsListMock).toHaveBeenCalledWith({ limit: 1 });
+  });
+
   it("passes Ollama preflight without an initialized logger", async () => {
     mockFetch.mockResolvedValue({
       ok: true,

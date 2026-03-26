@@ -1,3 +1,4 @@
+import { inspectClaudeSubscriptionAuth } from "../common/claude-subscription-auth.js";
 import { inspectOpenAiSubscriptionAuth } from "../common/openai-subscription-auth.js";
 import {
   createProvider,
@@ -29,6 +30,21 @@ function isOpenAiSubscriptionCredential(credential?: ProviderCredential): boolea
     || Boolean(credential?.openaiChatgptAuthFile);
 }
 
+function isClaudeSubscriptionCredential(credential?: ProviderCredential): boolean {
+  return Boolean(credential?.anthropicAuthToken);
+}
+
+function getClaudeSubscriptionFailureDetail(credential?: ProviderCredential): string {
+  const inspection = inspectClaudeSubscriptionAuth({
+    authToken: credential?.anthropicAuthToken,
+    env: process.env,
+  });
+  if (!inspection.ok) {
+    return inspection.detail;
+  }
+  return "Claude subscription health probe failed. Generate a new Claude auth token or switch Claude to API-key mode.";
+}
+
 function getOpenAiSubscriptionFailureDetail(credential?: ProviderCredential): string {
   const inspection = inspectOpenAiSubscriptionAuth({
     authFile: credential?.openaiChatgptAuthFile,
@@ -43,6 +59,9 @@ function getOpenAiSubscriptionFailureDetail(credential?: ProviderCredential): st
 }
 
 function getGenericFailureDetail(providerId: string, providerName: string): string {
+  if (providerId === "claude" || providerId === "anthropic") {
+    return `${providerName} health check failed. Verify the API key or Claude auth token and network access.`;
+  }
   if (providerId === "openai") {
     return `${providerName} health check failed. Verify the configured API key or subscription session.`;
   }
@@ -54,6 +73,10 @@ function getSafeFailureDetail(
   providerName: string,
   credential?: ProviderCredential,
 ): string {
+  if ((providerId === "claude" || providerId === "anthropic") && isClaudeSubscriptionCredential(credential)) {
+    return getClaudeSubscriptionFailureDetail(credential);
+  }
+
   if (providerId === "openai" && isOpenAiSubscriptionCredential(credential)) {
     return getOpenAiSubscriptionFailureDetail(credential);
   }
@@ -96,6 +119,8 @@ export async function preflightResponseProviders(
       const provider = createProvider({
         name: providerId,
         apiKey: credential?.apiKey,
+        anthropicAuthMode: credential?.anthropicAuthMode,
+        anthropicAuthToken: credential?.anthropicAuthToken,
         openaiAuthMode: credential?.openaiAuthMode,
         openaiChatgptAuthFile: credential?.openaiChatgptAuthFile,
         openaiSubscriptionAccessToken: credential?.openaiSubscriptionAccessToken,

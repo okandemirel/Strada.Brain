@@ -124,6 +124,19 @@ describe("docs consistency", () => {
     expect(readRepoFile("src/memory/README.md")).toContain("Runtime self-improvement artifacts");
   });
 
+  it("documents Claude subscription token setup and caveats", () => {
+    expect(readRepoFile("README.md")).toContain("ANTHROPIC_AUTH_MODE");
+    expect(readRepoFile("README.md")).toContain("ANTHROPIC_AUTH_TOKEN");
+    expect(readRepoFile("README.md")).toContain("claude setup-token");
+    expect(readRepoFile("README.md")).toContain("user-assumed-risk option");
+    expect(readRepoFile("src/config/README.md")).toContain("ANTHROPIC_AUTH_MODE");
+    expect(readRepoFile("src/config/README.md")).toContain("ANTHROPIC_AUTH_TOKEN");
+    expect(readRepoFile("src/config/README.md")).toContain("claude setup-token");
+    expect(readRepoFile("src/config/README.md")).toContain("user-assumed-risk option");
+    expect(readRepoFile("src/core/README.md")).toContain("claude-subscription");
+    expect(readRepoFile("src/core/README.md")).toContain("claude setup-token");
+  });
+
   it("marks localized READMEs as translations that defer to the English canonical README", () => {
     for (const relativePath of localizedReadmes) {
       const content = readRepoFile(relativePath);
@@ -134,6 +147,10 @@ describe("docs consistency", () => {
       expect(content).toContain("chatgpt-subscription");
       expect(content).toContain("EMBEDDING_PROVIDER=openai");
       expect(content).toContain("OPENAI_API_KEY");
+      expect(content).toContain("ANTHROPIC_AUTH_MODE");
+      expect(content).toContain("ANTHROPIC_AUTH_TOKEN");
+      expect(content).toContain("claude-subscription");
+      expect(content).toContain("claude setup-token");
       expect(content).toContain(localizedProviderChainPhrases[relativePath]);
       expect(content).toContain(localizedControlPlanePhrases[relativePath]);
       expect(content).toContain("./strada install-command");
