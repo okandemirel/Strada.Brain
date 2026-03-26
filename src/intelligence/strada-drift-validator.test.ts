@@ -31,7 +31,12 @@ describe("validateDrift", () => {
     const snapshot: CoreAPISnapshot = {
       namespaces: trackedNamespaces,
       baseClasses: new Map(),
-      attributes: new Map(),
+      attributes: new Map(
+        Object.entries(STRADA_API.systemAttributes).map(([key, val]) => {
+          const match = /^\[(\w+)/.exec(val);
+          return [key, match ? [match[1]!] : [val]] as [string, string[]];
+        }),
+      ),
       interfaces: [
         { name: "IComponent", namespace: STRADA_API.namespaces.ecs, methods: [] },
         { name: "IPoolable", namespace: STRADA_API.namespaces.pooling, methods: [] },
