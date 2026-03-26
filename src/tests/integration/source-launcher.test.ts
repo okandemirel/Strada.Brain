@@ -223,8 +223,12 @@ describe("source launcher install-command", () => {
     expect(readFileSync(path.join(installDir, "strada.ps1"), "utf8")).toContain(path.join("scripts", "source-launcher.mjs"));
   });
 
-  it("marks web setup and default web launches as requiring a prepared source checkout", async () => {
-    const { requiresPreparedSourceCheckout } = await loadSourceLauncherModule();
+  it("runs repo CLI commands from source and only prepares web launches", async () => {
+    const { requiresPreparedSourceCheckout, shouldRunFromSource } = await loadSourceLauncherModule();
+
+    expect(shouldRunFromSource(["cli"])).toBe(true);
+    expect(shouldRunFromSource(["start", "--channel", "cli"])).toBe(true);
+    expect(shouldRunFromSource(["doctor"])).toBe(true);
 
     expect(requiresPreparedSourceCheckout([])).toBe(true);
     expect(requiresPreparedSourceCheckout(["setup", "--web"])).toBe(true);

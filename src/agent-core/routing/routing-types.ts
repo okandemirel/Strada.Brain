@@ -77,6 +77,7 @@ export type ExecutionPhase =
   | "synthesis"
   | "clarification-review"
   | "completion-review"
+  | "visibility-review"
   | "consensus-review"
   | "shell-review";
 export type ExecutionTraceSource =
@@ -85,6 +86,7 @@ export type ExecutionTraceSource =
   | "synthesis"
   | "clarification-review"
   | "completion-review"
+  | "visibility-review"
   | "consensus-review"
   | "shell-review";
 

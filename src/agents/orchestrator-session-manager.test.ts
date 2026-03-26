@@ -78,6 +78,22 @@ describe("SessionManager", () => {
     expect(deps.channel.sendMarkdown).toHaveBeenCalledWith("chat-1", "**bold**");
   });
 
+  it("strips provider reasoning blocks before storing and sending visible markdown", async () => {
+    const deps = createMockDeps();
+    const sm = new SessionManager(deps);
+    const session = sm.getOrCreateSession("chat-1");
+
+    await sm.sendVisibleAssistantMarkdown(
+      "chat-1",
+      session,
+      "<reasoning>\ninternal chain of thought\n</reasoning>\n\nVisible answer",
+    );
+
+    expect(session.messages).toHaveLength(1);
+    expect(session.messages[0]).toEqual({ role: "assistant", content: "Visible answer" });
+    expect(deps.channel.sendMarkdown).toHaveBeenCalledWith("chat-1", "Visible answer");
+  });
+
   it("extractLastUserMessage returns last user string content", () => {
     const sm = new SessionManager(createMockDeps());
     const session = sm.getOrCreateSession("chat-1");

@@ -1,10 +1,12 @@
 import type { AgentState } from "./agent-state.js";
+import { MUTATION_TOOLS, isVerificationToolName } from "./autonomy/constants.js";
 import { isTerminalFailureReport } from "./autonomy/index.js";
 import type { ProviderResponse } from "./providers/provider.interface.js";
 import { redactSensitiveText } from "./orchestrator-text-utils.js";
 
 const MAX_TOOL_RESULT_LENGTH = 8192;
 const REFLECTION_DECISION_RE = /\*\*\s*(DONE_WITH_SUGGESTIONS|DONE|REPLAN|CONTINUE)\s*\*\*/;
+const BLOCKING_STEP_FAILURE_RE = /\b(?:build|test|check|verify|lint|typecheck|compile|smoke|permission denied|access denied|workspace|read-only|validation|security)\b/iu;
 
 export type ReflectionDecision = "CONTINUE" | "REPLAN" | "DONE" | "DONE_WITH_SUGGESTIONS";
 
@@ -45,16 +47,32 @@ export function validateReflectionDecision(
   if (decision !== "DONE" && decision !== "DONE_WITH_SUGGESTIONS") {
     return { decision };
   }
-  // Evidence-based override: if last 3 steps have failures, DONE is premature
+  // Evidence-based override: only blocking recent failures should keep the loop open.
   const recentSteps = state.stepResults.slice(-3);
-  const failedRecent = recentSteps.filter(s => !s.success);
-  if (failedRecent.length > 0) {
+  const blockingFailures = recentSteps.filter(isBlockingStepFailure);
+  if (blockingFailures.length > 0) {
     return {
       decision: "CONTINUE",
-      overrideReason: `DONE overridden: ${failedRecent.length} recent step(s) failed`,
+      overrideReason: `DONE overridden: ${blockingFailures.length} blocking recent step(s) failed`,
     };
   }
   return { decision };
+}
+
+function isBlockingStepFailure(step: AgentState["stepResults"][number]): boolean {
+  if (step.success) {
+    return false;
+  }
+
+  if (MUTATION_TOOLS.has(step.toolName) || isVerificationToolName(step.toolName)) {
+    return true;
+  }
+
+  if (step.errorCategory && BLOCKING_STEP_FAILURE_RE.test(step.errorCategory)) {
+    return true;
+  }
+
+  return BLOCKING_STEP_FAILURE_RE.test(step.summary);
 }
 
 export function shouldSurfaceTerminalFailureFromReflection(response: ProviderResponse): boolean {

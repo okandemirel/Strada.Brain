@@ -47,6 +47,17 @@ describe("buildPlanningPrompt", () => {
     const result = buildPlanningPrompt("Build API");
     expect(result).not.toContain("Learned Patterns");
   });
+
+  it("adds an exact-target execution priority section when the prompt names files or project-relative paths", () => {
+    const result = buildPlanningPrompt(
+      "Temp altında `strada_autonomy_smoke.txt` oluştur, oku ve sil",
+    );
+    expect(result).toContain("## Execution Priority");
+    expect(result).toContain("The user named explicit targets:");
+    expect(result).toContain("Temp");
+    expect(result).toContain("strada_autonomy_smoke.txt");
+    expect(result).toContain("Do not reinterpret project paths like `Temp/...` as absolute OS paths like `/tmp/...`");
+  });
 });
 
 describe("buildReflectionPrompt", () => {

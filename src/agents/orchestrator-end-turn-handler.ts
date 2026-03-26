@@ -52,6 +52,7 @@ import {
   type RecordPhaseOutcomeParams,
   type BuildPhaseOutcomeTelemetryParams,
 } from "./orchestrator-loop-shared.js";
+import { shouldDeferRawBoundaryForDirectTarget } from "./prompt-targets.js";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -213,6 +214,7 @@ async function runBgLoopRecovery(
     session: ctx.session,
     workerCollector: ctx.workerCollector,
     workspaceLease: ctx.workspaceLease,
+    daemonMode: true,
     progressAssessmentEnabled: ctx.progressAssessmentEnabled,
     taskStartedAtMs: ctx.taskStartedAtMs,
   }, ctx.interventionDeps);
@@ -325,7 +327,15 @@ export async function handleBgEndTurn(
   });
 
   // 2a. Boundary: internal continue with loop recovery
-  if (rawBoundary.kind === "internal_continue" && rawBoundary.gate) {
+  if (
+    rawBoundary.kind === "internal_continue"
+    && rawBoundary.gate
+    && !shouldDeferRawBoundaryForDirectTarget({
+      prompt: ctx.prompt,
+      touchedFileCount: ctx.selfVerification.getState().touchedFiles.size,
+      hasCompilableChanges: ctx.selfVerification.getState().hasCompilableChanges,
+    })
+  ) {
     const loopRecovery = await runBgLoopRecovery(
       ctx,
       agentState,
@@ -365,6 +375,7 @@ export async function handleBgEndTurn(
   const verifierIntervention = await resolveVerifierInterventionPipeline({
     chatId: ctx.chatId,
     identityKey: ctx.identityKey,
+    executionMode: "background",
     prompt: ctx.prompt,
     state: agentState,
     draft: ctx.responseText,
@@ -491,8 +502,19 @@ export async function handleBgEndTurn(
   });
 
   if (finalBoundary.kind === "internal_continue" && finalBoundary.gate) {
-    pushContinuationMessages(ctx, finalBoundary.gate);
-    return { flow: "continue", newState: agentState };
+    const loopRecovery = await runBgLoopRecovery(
+      ctx,
+      agentState,
+      "visibility_internal_continue",
+      "Visibility boundary rejected the draft.",
+      finalBoundary.gate,
+    );
+    return applyBgLoopRecoveryResult(loopRecovery, ctx, agentState, {
+      fallbackGate: finalBoundary.gate,
+      replanProgressMessage: "Loop recovery requested a replan after the draft was rejected.",
+      defaultProgressKind: "visibility",
+      defaultProgressMessage: "Visibility boundary rejected the draft",
+    });
   }
 
   // 6. Approved finish path
@@ -588,6 +610,7 @@ export async function handleInteractiveEndTurn(
   const verifierIntervention = await resolveVerifierInterventionPipeline({
     chatId: ctx.chatId,
     identityKey: ctx.identityKey,
+    executionMode: "interactive",
     prompt: ctx.prompt,
     state: agentState,
     draft: ctx.responseText,

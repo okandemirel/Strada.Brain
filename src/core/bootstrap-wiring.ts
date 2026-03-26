@@ -22,6 +22,7 @@ import { ToolRegistry } from "./tool-registry.js";
 import { SoulLoader } from "../agents/soul/index.js";
 import { SESSION_CLEANUP_INTERVAL_MS } from "../common/constants.js";
 import { MessageRouter, TaskStorage } from "../tasks/index.js";
+import type { TaskManager } from "../tasks/task-manager.js";
 import type { ChainManager } from "../learning/chains/index.js";
 import type { GoalStorage } from "../goals/index.js";
 import type { IdentityStateManager } from "../identity/identity-state.js";
@@ -140,12 +141,34 @@ export interface ShutdownOptions {
   stoppableServers?: Array<{ stop(): Promise<void> | void }>;
   soulLoader?: SoulLoader;
   autoUpdater?: AutoUpdater;
+  taskManager?: TaskManager;
+}
+
+function failIncompleteTasksInStorage(
+  taskStorage: Pick<TaskStorage, "loadIncomplete" | "updateError">,
+  reason: string,
+): void {
+  const logger = getLogger();
+  const activeTasks = taskStorage.loadIncomplete();
+  if (activeTasks.length === 0) {
+    return;
+  }
+
+  logger.info("Persisting shutdown failure state for active tasks", { count: activeTasks.length });
+  for (const task of activeTasks) {
+    taskStorage.updateError(task.id, reason);
+    logger.warn("Task marked as failed in storage on shutdown", {
+      taskId: task.id,
+      previousStatus: task.status,
+    });
+  }
 }
 
 export function createShutdownHandler(options: ShutdownOptions): () => Promise<void> {
   const { dashboard, ragPipeline, memoryManager, channel, cleanupInterval, learningPipeline } =
     options;
   const logger = getLogger();
+  const shutdownTaskReason = "Task interrupted by system shutdown. Please submit again.";
 
   return async (): Promise<void> => {
     const SHUTDOWN_TIMEOUT_MS = 30_000;
@@ -191,6 +214,13 @@ export function createShutdownHandler(options: ShutdownOptions): () => Promise<v
       // Stop chain detection timer before draining events
       if (options.chainManager) {
         options.chainManager.stop();
+      }
+
+      if (options.taskManager) {
+        options.taskManager.failActiveTasksOnShutdown(shutdownTaskReason);
+      }
+      if (options.taskStorage) {
+        failIncompleteTasksInStorage(options.taskStorage, shutdownTaskReason);
       }
 
       // Drain event bus and learning queue before stopping pipeline

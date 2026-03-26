@@ -120,6 +120,40 @@ describe("verifier-pipeline", () => {
     expect(plan.initialDecision).toBe("approve");
   });
 
+  it("approves bounded Temp shell tasks without forcing completion review", () => {
+    const plan = planVerifierPipeline({
+      prompt: "Temp altında `strada_autonomy_smoke.txt` oluştur, içine `autonomy ok` yaz, sonra dosyayı oku ve sil.",
+      draft: "Temp görevini tamamladım.",
+      state: createState({
+        stepResults: [
+          { toolName: "list_directory", success: true, summary: "Listed Temp", timestamp: Date.now() - 900 },
+          { toolName: "shell_exec", success: true, summary: "Touched Temp workspace", timestamp: Date.now() - 750 },
+          { toolName: "glob_search", success: true, summary: "Matched strada_autonomy_smoke.txt", timestamp: Date.now() - 600 },
+          { toolName: "file_write", success: true, summary: "Wrote Temp/strada_autonomy_smoke.txt", timestamp: Date.now() - 450 },
+          { toolName: "file_read", success: true, summary: "Read Temp/strada_autonomy_smoke.txt", timestamp: Date.now() - 300 },
+          { toolName: "file_delete", success: true, summary: "Deleted Temp/strada_autonomy_smoke.txt", timestamp: Date.now() - 150 },
+        ],
+      }),
+      task: DEBUG_TASK,
+      verificationState: {
+        pendingFiles: new Set(),
+        touchedFiles: new Set(["Temp/strada_autonomy_smoke.txt"]),
+        hasCompilableChanges: false,
+        lastBuildOk: null,
+        lastVerificationAt: null,
+      },
+      buildVerificationGate: null,
+      conformanceGate: null,
+      logEntries: [],
+      chatId: "chat-temp-shell",
+      taskStartedAtMs: Date.now() - 1000,
+    });
+
+    expect(plan.reviewRequired).toBe(false);
+    expect(plan.initialDecision).toBe("approve");
+    expect(plan.summary).toContain("No additional verifier review");
+  });
+
   it("forces completion review for read-only investigation work even when static verifier checks are clean", () => {
     const plan = planVerifierPipeline({
       prompt: "Fix the runtime issue and keep going until the real issue is verified",

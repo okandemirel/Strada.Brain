@@ -1,5 +1,7 @@
 import type { TaskClassification } from "../../agent-core/routing/routing-types.js";
 import type { CompletionReviewEvidence } from "./completion-review.js";
+import { analyzePromptTargets } from "../prompt-targets.js";
+import { stripVisibleProviderArtifacts } from "../orchestrator-text-utils.js";
 import {
   buildAutonomyDeflectionGate,
   classifyAutonomyDrift,
@@ -64,6 +66,8 @@ const PROJECT_ARTIFACT_SIGNAL_RE =
   /\b(?:file|files|path|folder|directory|repo(?:sitory)?|project|workspace|codebase|module|component|service|system|class|struct|interface|method|function|scene|asset|prefab|scriptable|package|config|migration|database|portal|wizard|setup|dashboard|page|screen|view)\b|(?:\/|\\)[\w./-]+|(?:^|[\s`'"])\w+\.(?:ts|tsx|js|jsx|cjs|mjs|cs|json|md|yml|yaml|toml|xml|sql|py|java|kt|swift|go|rs|asset|prefab|meta)\b/iu;
 const RUNTIME_DIAGNOSTIC_SIGNAL_RE =
   /\b(?:build|compile|lint|typecheck|runtime|profiler|call stack|stack trace|freeze|crash|exception|editor|play mode|log|logs|warning|warnings|error|errors)\b/iu;
+const INTERNAL_CAPABILITY_MEMO_RE =
+  /\b(?:current tool(?:s|set)?|tool(?:s|set)? available|available tool(?:s)?|ability|capability)\b.{0,80}\b(?:cannot|can't|unable|missing|lack|do not have)\b|\b(?:mevcut\s+araç\s+set(?:i|imde)?|araç\s+set(?:i|imde)?|yetene(?:ğim|gi)m?|yeteneği\s+olmadığı|araç\s+setimde|yapamıyorum|edemiyorum|oluşturamıyorum)\b/iu;
 
 function buildVisibilityContinueGate(
   summary: string,
@@ -161,9 +165,10 @@ function looksLikeInternalMilestoneHandoff(text: string): boolean {
 export function decideInteractionBoundary(
   input: InteractionBoundaryInput,
 ): InteractionBoundaryDecision {
-  const rawDraft = input.workerDraft.trim();
-  const visibleDraft = input.visibleDraft.trim();
+  const rawDraft = stripVisibleProviderArtifacts(input.workerDraft).trim();
+  const visibleDraft = stripVisibleProviderArtifacts(input.visibleDraft).trim();
   const visibleOrRawDraft = visibleDraft || rawDraft;
+  const promptTargetProfile = analyzePromptTargets(input.prompt);
 
   if (!visibleOrRawDraft) {
     return {
@@ -255,6 +260,23 @@ export function decideInteractionBoundary(
   }
 
   if (
+    promptTargetProfile.hasExplicitTargets
+    && input.canInspectLocally
+    && looksLikeInternalCapabilityMemo(visibleOrRawDraft)
+    && !looksLikeUserActionableTerminalBlocker(visibleOrRawDraft)
+  ) {
+    return {
+      kind: "internal_continue",
+      reason: "The current draft describes an internal tool/capability limitation, not a user-ready blocker.",
+      gate: buildVisibilityContinueGate(
+        "The current draft reports an internal capability limitation instead of a verified external blocker.",
+        "Continue internally. Use the available local tools on the named targets, and only surface a blocker if a real external permission/access dependency remains.",
+        input.evidence,
+      ),
+    };
+  }
+
+  if (
     taskLooksLocallyInspectable(input.task, input.prompt, input.canInspectLocally) &&
     input.evidence.totalStepCount === 0 &&
     !looksLikeExternalBlocker(visibleOrRawDraft)
@@ -290,4 +312,8 @@ export function decideInteractionBoundary(
     reason: "The current draft is safe to surface as the user-facing result.",
     visibleText: visibleDraft || rawDraft,
   };
+}
+
+function looksLikeInternalCapabilityMemo(text: string): boolean {
+  return INTERNAL_CAPABILITY_MEMO_RE.test(text);
 }

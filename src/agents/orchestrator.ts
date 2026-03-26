@@ -72,13 +72,17 @@ import {
 } from "./providers/provider-knowledge.js";
 import {
   COMPLETION_REVIEW_SYNTHESIS_SYSTEM_PROMPT,
-  draftLooksLikeInternalPlanArtifact,
   buildCompletionReviewStageRequest,
   buildCompletionReviewStageSystemPrompt,
   buildCompletionReviewSynthesisRequest,
+  buildVisibilityReviewRequest,
+  draftLooksLikeInternalPlanArtifact,
   parseCompletionReviewDecision,
   parseCompletionReviewStageResult,
+  parseVisibilityReviewDecision,
   planVerifierPipeline,
+  sanitizeVisibilityReviewDecision,
+  VISIBILITY_REVIEW_SYSTEM_PROMPT,
   InteractionPolicyStateMachine,
   userExplicitlyAskedForPlan,
   type CompletionReviewStageName,
@@ -1433,6 +1437,7 @@ export class Orchestrator {
       getTaskRunId: () => this.getTaskExecutionContext()?.taskRunId,
       synthesizeUserFacingResponse: (p) => this.synthesizeUserFacingResponse(p),
       runCompletionReviewStages: (p) => this.runCompletionReviewStages(p),
+      runVisibilityReview: (p) => this.runVisibilityReview(p),
       executeToolCalls: (chatId, toolCalls, opts) => this.executeToolCalls(chatId, toolCalls, opts),
       getLogRingBuffer: () => typeof getLogRingBuffer === "function" ? getLogRingBuffer() : [],
       buildStructuredProgressSignal: (prompt, title, signal, lang) => this.buildStructuredProgressSignal(prompt, title, signal, lang),
@@ -4158,6 +4163,74 @@ export class Orchestrator {
         summary: decision.summary,
       },
     ];
+  }
+
+  private async runVisibilityReview(params: {
+    chatId: string;
+    identityKey: string;
+    prompt: string;
+    draft: string;
+    evidence: ReturnType<typeof planVerifierPipeline>["evidence"];
+    task: TaskClassification;
+    strategy: SupervisorExecutionStrategy;
+    canInspectLocally: boolean;
+    usageHandler?: (usage: TaskUsageEvent) => void;
+  }): Promise<{
+    decision: ReturnType<typeof sanitizeVisibilityReviewDecision>;
+    usage?: ProviderResponse["usage"];
+  }> {
+    const reviewer = this.resolveSupervisorAssignment(
+      "reviewer",
+      { ...params.strategy.task, type: "analysis" },
+      "visibility-review",
+      params.identityKey,
+      params.strategy.reviewer.providerName,
+      params.strategy.reviewer.provider,
+      `${params.prompt}\n\nVisibility review.`,
+    );
+
+    const response = await reviewer.provider.chat(
+      `${this.systemPrompt}\n\n${VISIBILITY_REVIEW_SYSTEM_PROMPT}${this.buildSupervisorRolePrompt(params.strategy, reviewer)}`,
+      [
+        {
+          role: "user",
+          content: buildVisibilityReviewRequest({
+            prompt: params.prompt,
+            draft: params.draft,
+            evidence: params.evidence,
+            task: params.task,
+            canInspectLocally: params.canInspectLocally,
+          }),
+        },
+      ],
+      [],
+    );
+    this.recordExecutionTrace({
+      chatId: params.chatId,
+      identityKey: params.identityKey,
+      assignment: reviewer,
+      phase: "visibility-review",
+      source: "visibility-review",
+      task: params.task,
+    });
+    this.recordAuxiliaryUsage(reviewer.providerName, response.usage, params.usageHandler);
+    const decision = sanitizeVisibilityReviewDecision(
+      parseVisibilityReviewDecision(response.text),
+    );
+    this.recordPhaseOutcome({
+      chatId: params.chatId,
+      identityKey: params.identityKey,
+      assignment: reviewer,
+      phase: "visibility-review",
+      source: "visibility-review",
+      status: decision?.decision === "internal_continue" ? "continued" : "approved",
+      task: params.task,
+      reason: decision?.reason ?? "Visibility review completed.",
+      telemetry: this.buildPhaseOutcomeTelemetry({
+        usage: response.usage,
+      }),
+    });
+    return { decision, usage: response.usage };
   }
 
   private async runCompletionReviewStages(params: {

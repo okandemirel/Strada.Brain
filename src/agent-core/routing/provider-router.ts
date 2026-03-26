@@ -619,6 +619,7 @@ export class ProviderRouter {
       normalizedPhase === "planning"
       || normalizedPhase === "clarification-review"
       || normalizedPhase === "completion-review"
+      || normalizedPhase === "visibility-review"
       || normalizedPhase === "consensus-review"
       || normalizedPhase === "synthesis"
     )
@@ -979,6 +980,7 @@ function normalizeExecutionPhase(phase: string | undefined): ExecutionPhase | nu
     case "synthesis":
     case "clarification-review":
     case "completion-review":
+    case "visibility-review":
     case "consensus-review":
     case "shell-review":
       return phase;

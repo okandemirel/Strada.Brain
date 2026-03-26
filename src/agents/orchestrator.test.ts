@@ -4596,6 +4596,35 @@ DONE`,
       expect(systemPromptArg).toContain("Learning Pipeline");
       expect(systemPromptArg).toContain("Introspection");
     });
+
+    it("includes exact-target execution priority when the user names a file target", async () => {
+      const chatSpy = vi.fn().mockResolvedValueOnce({
+        text: "Tamam",
+        toolCalls: [],
+        stopReason: "end_turn" as const,
+        usage: { inputTokens: 10, outputTokens: 20 },
+      });
+      mockProvider.chat = chatSpy;
+
+      const promise = orch.handleMessage({
+        channelType: "cli",
+        chatId: "target-priority-check",
+        userId: "user1",
+        text: "Temp altında `strada_autonomy_smoke.txt` oluştur.",
+        timestamp: new Date(),
+      });
+      await vi.advanceTimersByTimeAsync(100);
+      await promise;
+
+      const systemPromptArg = chatSpy.mock.calls[0]![0] as string;
+      expect(systemPromptArg).toContain("## Execution Priority");
+      expect(systemPromptArg).toContain("The user named explicit targets:");
+      expect(systemPromptArg).toContain("Temp");
+      expect(systemPromptArg).toContain("strada_autonomy_smoke.txt");
+      expect(systemPromptArg).toContain("Do not reinterpret project paths like `Temp/...` as absolute OS paths like `/tmp/...`");
+      expect(systemPromptArg).toContain("Do not stop on a plan, checklist, or progress memo after a direct target operation.");
+      expect(systemPromptArg).toContain("Do not widen verification to repository-wide build, test, or quality checks");
+    });
   });
 
   describe("isWriteOperation", () => {
@@ -6584,7 +6613,7 @@ DONE`,
       });
 
       expect(result).toBe("Finished after rollover.");
-      expect(mockProvider.chat).toHaveBeenCalledTimes(3);
+      expect(mockProvider.chat).toHaveBeenCalledTimes(4);
       expect(readTool.execute).toHaveBeenCalledTimes(2);
       expect(mockRecorder.endTask).toHaveBeenCalledWith(
         "metric_bg_rollover",

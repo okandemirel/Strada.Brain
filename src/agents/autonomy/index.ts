@@ -78,6 +78,15 @@ export type { InteractionGateKind, InteractionGateState, InteractionWriteBlock }
 export { decideInteractionBoundary } from "./visibility-boundary.js";
 export type { InteractionBoundaryDecision, InteractionBoundaryDecisionKind } from "./visibility-boundary.js";
 export {
+  VISIBILITY_REVIEW_SYSTEM_PROMPT,
+  buildVisibilityReviewGate,
+  buildVisibilityReviewRequest,
+  parseVisibilityReviewDecision,
+  sanitizeVisibilityReviewDecision,
+  shouldRunVisibilityReview,
+} from "./visibility-review.js";
+export type { VisibilityReviewDecision, VisibilityReviewDecisionKind } from "./visibility-review.js";
+export {
   buildBehavioralSnapshot,
   runProgressAssessment,
   buildProgressAssessmentRequest,

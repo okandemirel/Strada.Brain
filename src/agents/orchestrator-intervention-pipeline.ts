@@ -68,6 +68,9 @@ import {
   decideInteractionBoundary,
   isTerminalFailureReport,
   finalizeVerifierPipelineReview,
+  buildVisibilityReviewGate,
+  sanitizeVisibilityReviewDecision,
+  shouldRunVisibilityReview,
   userExplicitlyAskedForPlan,
   draftLooksLikeInternalPlanArtifact,
   type ControlLoopTracker,
@@ -85,6 +88,7 @@ import {
   buildDirectiveGate,
   buildStuckCheckpointMessage,
 } from "./autonomy/progress-assessment.js";
+import { shouldDeferRawBoundaryForDirectTarget } from "./prompt-targets.js";
 import type { Session } from "./orchestrator-session-manager.js";
 import { toPhaseOutcomeStatus as toPhaseOutcomeStatusModel } from "./orchestrator-phase-telemetry.js";
 import { getLogger, type LogEntry } from "../utils/logger.js";
@@ -216,6 +220,20 @@ export interface InterventionDeps {
   }) => Promise<{
     decision: ReturnType<typeof parseCompletionReviewDecision>;
     stageResults: CompletionReviewStageResult[];
+    usage?: ProviderResponse["usage"];
+  }>;
+  readonly runVisibilityReview: (params: {
+    chatId: string;
+    identityKey: string;
+    prompt: string;
+    draft: string;
+    evidence: ReturnType<typeof planVerifierPipeline>["evidence"];
+    task: TaskClassification;
+    strategy: SupervisorExecutionStrategy;
+    canInspectLocally: boolean;
+    usageHandler?: (usage: TaskUsageEvent) => void;
+  }) => Promise<{
+    decision: ReturnType<typeof sanitizeVisibilityReviewDecision>;
     usage?: ProviderResponse["usage"];
   }>;
   // Matches actual signature: (chatId, toolCalls, options?) -- NOT object params
@@ -908,9 +926,10 @@ export async function handleBackgroundLoopRecovery(
             touchedFiles,
           );
           const recoveryAttempt = params.tracker.markRecoveryAttempt(fingerprint);
+          const hardBlockRecoveryEpisode = Math.max(2, params.maxRecoveryEpisodes ?? 5);
           const assessmentSummary =
             `Progress assessment: ${assessment.verdict} (${assessment.confidence}). ${assessment.directive ?? ""}`.trim();
-          if (recoveryAttempt >= 2) {
+          if (recoveryAttempt >= hardBlockRecoveryEpisode) {
             params.executionJournal.recordLoopRecoveryEpisode({
               fingerprint,
               decision: "blocked",
@@ -1216,6 +1235,7 @@ export async function resolveVerifierIntervention(
   params: {
     chatId: string;
     identityKey: string;
+    executionMode: "interactive" | "background";
     prompt: string;
     state: AgentState;
     draft: string | null | undefined;
@@ -1270,7 +1290,15 @@ export async function resolveVerifierIntervention(
     terminalFailureReported: isTerminalFailureReport(params.draft ?? ""),
     availableToolNames: params.availableToolNames,
   });
-  if (boundaryDecision.kind === "internal_continue" && boundaryDecision.gate) {
+  if (
+    boundaryDecision.kind === "internal_continue"
+    && boundaryDecision.gate
+    && !shouldDeferRawBoundaryForDirectTarget({
+      prompt: params.prompt,
+      touchedFileCount: plan.evidence.touchedFiles.length,
+      hasCompilableChanges: verificationState.hasCompilableChanges,
+    })
+  ) {
     deps.recordRuntimeArtifactEvaluation({
       chatId: params.chatId,
       taskRunId: deps.getTaskRunId(),
@@ -1291,7 +1319,90 @@ export async function resolveVerifierIntervention(
     };
   }
 
+  const canInspectLocally = canInspectLocallyHelper(
+    deps.clarificationContext,
+    params.prompt,
+    params.strategy.task,
+    params.availableToolNames ?? [],
+  );
+
+  const runVisibilityReviewGate = async (): Promise<{
+    kind: "continue";
+    gate: string;
+    result: {
+      decision: "continue";
+      gate: string;
+      summary: string;
+      checks: typeof plan.checks;
+      evidence: typeof plan.evidence;
+    };
+  } | null> => {
+    if (
+      params.executionMode !== "background"
+      || boundaryDecision.kind !== "final_answer"
+      || !shouldRunVisibilityReview({
+        draft: boundaryDecision.visibleText ?? params.draft ?? "",
+        evidence: plan.evidence,
+        task: params.strategy.task,
+        canInspectLocally,
+      })
+    ) {
+      return null;
+    }
+
+    try {
+      const visibilityReview = await deps.runVisibilityReview({
+        chatId: params.chatId,
+        identityKey: params.identityKey,
+        prompt: params.prompt,
+        draft: boundaryDecision.visibleText ?? params.draft ?? "",
+        evidence: plan.evidence,
+        task: params.strategy.task,
+        strategy: params.strategy,
+        canInspectLocally,
+        usageHandler: params.usageHandler,
+      });
+
+      if (visibilityReview.decision?.decision !== "internal_continue") {
+        return null;
+      }
+
+      const gate = buildVisibilityReviewGate(visibilityReview.decision, plan.evidence);
+      deps.recordRuntimeArtifactEvaluation({
+        chatId: params.chatId,
+        taskRunId: deps.getTaskRunId(),
+        decision: "continue",
+        summary: visibilityReview.decision.reason ?? "Visibility review kept the draft internal.",
+        failureReason: params.draft,
+      });
+      return {
+        kind: "continue",
+        gate,
+        result: {
+          decision: "continue",
+          gate,
+          summary: visibilityReview.decision.reason ?? "Visibility review kept the draft internal.",
+          checks: plan.checks,
+          evidence: plan.evidence,
+        },
+      };
+    } catch (error) {
+      getLogger().warn("Visibility review provider failed", {
+        chatId: params.chatId,
+        provider: params.strategy.reviewer.providerName,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
+  };
+
   if (!plan.reviewRequired) {
+    if (plan.initialDecision === "approve") {
+      const visibilityGate = await runVisibilityReviewGate();
+      if (visibilityGate) {
+        return visibilityGate;
+      }
+    }
     deps.recordRuntimeArtifactEvaluation({
       chatId: params.chatId,
       taskRunId: deps.getTaskRunId(),
@@ -1345,6 +1456,12 @@ export async function resolveVerifierIntervention(
         failureReason: params.draft,
       }),
     });
+    if (result.decision === "approve") {
+      const visibilityGate = await runVisibilityReviewGate();
+      if (visibilityGate) {
+        return visibilityGate;
+      }
+    }
     deps.recordRuntimeArtifactEvaluation({
       chatId: params.chatId,
       taskRunId: deps.getTaskRunId(),

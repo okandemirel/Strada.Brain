@@ -293,14 +293,23 @@ describe("runConsensusIfAvailable", () => {
   });
 
   it("calls classify, estimate, and runConsensusVerification", async () => {
-    const ctx = makeCtx();
+    const ctx = makeCtx({ toolCalls: [] });
     await runConsensusIfAvailable(ctx as any);
     expect(ctx.taskClassifier.classify).toHaveBeenCalledWith("test prompt");
     expect(ctx.confidenceEstimator.estimate).toHaveBeenCalled();
   });
 
+  it("skips consensus for non-critical tool batches", async () => {
+    const ctx = makeCtx();
+
+    await runConsensusIfAvailable(ctx as any);
+
+    expect(ctx.confidenceEstimator.estimate).not.toHaveBeenCalled();
+  });
+
   it("swallows errors from consensus verification", async () => {
     const ctx = makeCtx({
+      toolCalls: [],
       consensusManager: {
         shouldConsult: vi.fn().mockImplementation(() => { throw new Error("boom"); }),
       },

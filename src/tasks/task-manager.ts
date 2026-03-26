@@ -8,7 +8,7 @@
 
 import { EventEmitter } from "node:events";
 import type { Task, TaskId, TaskProgressUpdate } from "./types.js";
-import { TaskStatus, ACTIVE_STATUSES, generateTaskId } from "./types.js";
+import { TaskStatus, ACTIVE_STATUSES, TERMINAL_STATUSES, generateTaskId } from "./types.js";
 import { getTaskProgressMessage } from "./progress-signals.js";
 import type { TaskStorage } from "./task-storage.js";
 import type { BackgroundExecutor } from "./background-executor.js";
@@ -16,6 +16,7 @@ import { getLogger } from "../utils/logger.js";
 import type { TaskOrigin } from "../daemon/daemon-types.js";
 import type { GoalTree } from "../goals/types.js";
 import type { Orchestrator } from "../agents/orchestrator.js";
+import { stripVisibleProviderArtifacts } from "../agents/orchestrator-text-utils.js";
 
 export class TaskManager extends EventEmitter {
   private readonly abortControllers = new Map<TaskId, AbortController>();
@@ -127,6 +128,25 @@ export class TaskManager extends EventEmitter {
   }
 
   /**
+   * Count active user-facing tasks across chats.
+   * Daemon-internal tasks are excluded so control-plane observers do not
+   * mistake their own background work for a foreground user session.
+   */
+  countActiveForegroundTasks(excludedChatIds: readonly string[] = []): number {
+    const excluded = new Set(excludedChatIds);
+    return this.storage.loadIncomplete().filter((task) =>
+      task.channelType !== "daemon" && !excluded.has(task.chatId)
+    ).length;
+  }
+
+  /**
+   * Check whether any foreground user task is currently active.
+   */
+  hasActiveForegroundTasks(excludedChatIds: readonly string[] = []): boolean {
+    return this.countActiveForegroundTasks(excludedChatIds) > 0;
+  }
+
+  /**
    * Add a progress entry to a task.
    */
   addProgress(taskId: TaskId, message: TaskProgressUpdate): void {
@@ -138,10 +158,11 @@ export class TaskManager extends EventEmitter {
    * Mark a task as completed with result.
    */
   complete(taskId: TaskId, result: string): void {
-    this.storage.updateResult(taskId, result);
+    const sanitizedResult = stripVisibleProviderArtifacts(result);
+    this.storage.updateResult(taskId, sanitizedResult);
     this.abortControllers.delete(taskId);
-    this.emit("task:completed", taskId, result);
-    getLogger().info("Task completed", { taskId, resultLength: result.length });
+    this.emit("task:completed", taskId, sanitizedResult);
+    getLogger().info("Task completed", { taskId, resultLength: sanitizedResult.length });
   }
 
   /**
@@ -158,16 +179,21 @@ export class TaskManager extends EventEmitter {
    * Mark a task as blocked with a checkpoint summary.
    */
   block(taskId: TaskId, result: string): void {
-    this.storage.updateBlocked(taskId, result);
+    const sanitizedResult = stripVisibleProviderArtifacts(result);
+    this.storage.updateBlocked(taskId, sanitizedResult);
     this.abortControllers.delete(taskId);
-    this.emit("task:blocked", taskId, result);
-    getLogger().warn("Task blocked", { taskId, resultLength: result.length });
+    this.emit("task:blocked", taskId, sanitizedResult);
+    getLogger().warn("Task blocked", { taskId, resultLength: sanitizedResult.length });
   }
 
   /**
    * Update task status.
    */
   updateStatus(taskId: TaskId, status: TaskStatus): void {
+    const task = this.storage.load(taskId);
+    if (task && TERMINAL_STATUSES.has(task.status)) {
+      return;
+    }
     this.storage.updateStatus(taskId, status);
     this.emit("task:status", taskId, status);
   }
@@ -190,6 +216,34 @@ export class TaskManager extends EventEmitter {
         "Task interrupted by system restart. Please submit again.",
       );
       logger.warn("Task marked as failed on recovery", { taskId: task.id, previousStatus: task.status });
+    }
+  }
+
+  /**
+   * Fail active tasks during graceful shutdown so they do not remain
+   * executing until a later startup recovery pass.
+   */
+  failActiveTasksOnShutdown(reason = "Task interrupted by system shutdown. Please submit again."): void {
+    const logger = getLogger();
+    const activeTasks = this.storage.loadIncomplete();
+
+    if (activeTasks.length === 0) return;
+
+    logger.info("Failing active tasks on shutdown", { count: activeTasks.length });
+
+    for (const task of activeTasks) {
+      const ac = this.abortControllers.get(task.id);
+      if (ac) {
+        ac.abort();
+        this.abortControllers.delete(task.id);
+      }
+
+      this.storage.updateError(task.id, reason);
+      this.emit("task:failed", task.id, reason);
+      logger.warn("Task marked as failed on shutdown", {
+        taskId: task.id,
+        previousStatus: task.status,
+      });
     }
   }
 }

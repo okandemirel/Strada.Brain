@@ -210,11 +210,13 @@ describe("buildReasoningPrompt", () => {
       observations: [obs],
       budgetRemainingPct: 80,
       activeTaskCount: 0,
+      activeForegroundTaskCount: 0,
       learnedInsights: [],
       recentHistory: [],
     });
     expect(prompt).toContain("Build failed");
     expect(prompt).toContain("Budget remaining: 80%");
+    expect(prompt).toContain("Foreground user tasks: 0");
   });
 
   it("includes learned insights", () => {
@@ -222,10 +224,12 @@ describe("buildReasoningPrompt", () => {
       observations: [createObservation("git", "changes")],
       budgetRemainingPct: 90,
       activeTaskCount: 0,
+      activeForegroundTaskCount: 1,
       learnedInsights: ["Always run tests after build"],
       recentHistory: [],
     });
     expect(prompt).toContain("Always run tests after build");
+    expect(prompt).toContain("avoid notify/escalate unless the situation is truly urgent");
   });
 });
 

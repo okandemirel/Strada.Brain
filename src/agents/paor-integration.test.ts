@@ -302,9 +302,18 @@ describe("PAOR integration", () => {
       expect(result.overrideReason).toContain("DONE overridden");
     });
 
+    it("should ignore incidental inspection failures when later evidence is otherwise clean", () => {
+      const state = makeState({ stepResults: [
+        { toolName: "list_directory", success: false, summary: "Temp directory missing", timestamp: 1 },
+        { toolName: "file_read", success: true, summary: "Read fallback path", timestamp: 2 },
+      ]});
+      const result = validateReflectionDecision("DONE", state);
+      expect(result.decision).toBe("DONE");
+    });
+
     it("should override DONE_WITH_SUGGESTIONS to CONTINUE on failure", () => {
       const state = makeState({ stepResults: [
-        { toolName: "deploy", success: false, summary: "timeout", timestamp: 1 },
+        { toolName: "dotnet_build", success: false, summary: "compile failed", timestamp: 1 },
       ]});
       const result = validateReflectionDecision("DONE_WITH_SUGGESTIONS", state);
       expect(result.decision).toBe("CONTINUE");

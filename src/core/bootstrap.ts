@@ -1051,6 +1051,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       cleanupInterval,
       learningPipeline: learningResult.pipeline,
       taskStorage,
+      taskManager,
       providerManager,
       eventBus: learningResult.eventBus,
       learningQueue: learningResult.learningQueue,

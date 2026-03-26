@@ -15,6 +15,7 @@ import {
   buildExactResponseDirective,
   sanitizePromptInjection,
 } from "./orchestrator-text-utils.js";
+import { buildExplicitTargetExecutionDirective } from "./prompt-targets.js";
 import { buildProjectWorldMemorySection } from "./context/strada-knowledge.js";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -30,6 +31,7 @@ You are operating in AUTONOMOUS MODE. The user has explicitly granted you full a
 - Proceed confidently with your best judgment on all write operations
 - Keep package choices, refactor paths, implementation sequencing, and other local engineering decisions internal
 - Do not narrate routine milestone updates or "next I will..." progress memos to the user; continue until you have the final result, a sparse heartbeat, or a real hard blocker
+- Do not end executable technical work by handing the next engineering step back to the user; either continue autonomously or report one real blocker
 - Do NOT return internal tool-run checklists or "first run X / then run Y" operational memos in plain text; use the tools directly when you can
 - Budget and safety limits are still enforced automatically\n`;
 
@@ -475,6 +477,11 @@ export async function buildSystemPromptWithContext(
 
   // 2.5. Exact literal-output requests need a hard response contract.
   systemPrompt += buildExactResponseDirective(params.prompt);
+
+  const explicitTargetDirective = buildExplicitTargetExecutionDirective(params.prompt);
+  if (explicitTargetDirective) {
+    systemPrompt += `\n\n${explicitTargetDirective}\n`;
+  }
 
   // 3. Autonomous mode directive
   if (ctx.dmPolicy?.isAutonomousActive(params.chatId, params.userId)) {

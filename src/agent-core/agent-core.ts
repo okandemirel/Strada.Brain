@@ -13,13 +13,15 @@ import type { TaskManager } from "../tasks/task-manager.js";
 import type { TaskId } from "../tasks/types.js";
 import { getLogger } from "../utils/logger.js";
 import { ObservationEngine } from "./observation-engine.js";
-import { createObservation } from "./observation-types.js";
+import { createObservation, type AgentObservation } from "./observation-types.js";
 import { PriorityScorer } from "./priority-scorer.js";
 import { buildReasoningPrompt, parseReasoningResponse } from "./reasoning-prompt.js";
-import type { AgentCoreConfig, BudgetTrackerRef, InstinctRetrieverRef } from "./agent-core-types.js";
+import type { ActionDecision, AgentCoreConfig, BudgetTrackerRef, InstinctRetrieverRef } from "./agent-core-types.js";
 import { DEFAULT_AGENT_CORE_CONFIG } from "./agent-core-types.js";
 import type { ProviderRouter } from "./routing/provider-router.js";
 import { TaskClassifier } from "./routing/task-classifier.js";
+
+const FOREGROUND_DECISION_DEFER_MINUTES = 5;
 
 export class AgentCore {
   static readonly AGENT_CHAT_ID = "agent-core";
@@ -134,9 +136,11 @@ export class AgentCore {
 
       // Get active task count for context
       let activeTaskCount = 0;
+      let activeForegroundTaskCount = 0;
       try {
         const tasks = this.taskManager.listTasks(AgentCore.AGENT_CHAT_ID);
         activeTaskCount = tasks.filter(t => t.status === "executing" || t.status === "pending").length;
+        activeForegroundTaskCount = this.taskManager.countActiveForegroundTasks?.([AgentCore.AGENT_CHAT_ID]) ?? 0;
       } catch {
         // Non-fatal
       }
@@ -145,6 +149,7 @@ export class AgentCore {
         observations: ranked,
         budgetRemainingPct: Math.max(0, Math.round((1.0 - budget.pct) * 100)),
         activeTaskCount,
+        activeForegroundTaskCount,
         learnedInsights,
         recentHistory: this.observationEngine.getHistory(5),
       });
@@ -200,6 +205,9 @@ export class AgentCore {
 
         case "notify":
           if (decision.message) {
+            if (this.deferHumanVisibleDecision(decision, ranked[0], activeForegroundTaskCount)) {
+              break;
+            }
             // Find any connected user channel to notify
             try {
               await this.channel.sendText(AgentCore.AGENT_CHAT_ID, decision.message);
@@ -211,6 +219,9 @@ export class AgentCore {
 
         case "escalate":
           if (decision.question) {
+            if (this.deferHumanVisibleDecision(decision, ranked[0], activeForegroundTaskCount)) {
+              break;
+            }
             try {
               await this.channel.sendText(AgentCore.AGENT_CHAT_ID, `[Agent needs input] ${decision.question}`);
             } catch {
@@ -280,6 +291,29 @@ export class AgentCore {
   /** Check if a tick is currently in progress */
   isTickInFlight(): boolean {
     return this.tickInFlight;
+  }
+
+  private deferHumanVisibleDecision(
+    decision: Pick<ActionDecision, "action">,
+    observation: AgentObservation | undefined,
+    activeForegroundTaskCount: number,
+  ): boolean {
+    if (activeForegroundTaskCount <= 0) {
+      return false;
+    }
+
+    if (observation) {
+      this.observationEngine.defer(observation, FOREGROUND_DECISION_DEFER_MINUTES);
+    }
+
+    this.logger.info("AgentCore: deferred human-visible decision during foreground task", {
+      action: decision.action,
+      activeForegroundTaskCount,
+      observationSource: observation?.source,
+      topObservation: observation?.summary.slice(0, 120),
+      deferMinutes: observation ? FOREGROUND_DECISION_DEFER_MINUTES : 0,
+    });
+    return true;
   }
 
   /** Check tracked tasks for completion and inject outcome observations. */

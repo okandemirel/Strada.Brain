@@ -1,4 +1,5 @@
 import type { AgentState } from "./agent-state.js";
+import { buildExplicitTargetExecutionDirective } from "./prompt-targets.js";
 
 /**
  * Builds a planning prompt that asks the LLM to create a numbered plan.
@@ -34,6 +35,11 @@ export function buildPlanningPrompt(
     "- When build/test fails, fix in dependency order: missing types → undefined symbols → type mismatches → logic errors.",
     "- After each fix, verify again. If stuck after 3 attempts, try a fundamentally different approach.",
   ];
+
+  const explicitTargetDirective = buildExplicitTargetExecutionDirective(taskDescription);
+  if (explicitTargetDirective) {
+    lines.push("", explicitTargetDirective);
+  }
 
   if (learnedInsights && learnedInsights.length > 0) {
     lines.push("", "### Learned Patterns", "");

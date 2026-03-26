@@ -14,6 +14,7 @@ import {
 } from "./providers/provider-knowledge.js";
 import { createCatalogVersion } from "./supervisor/supervisor-types.js";
 import { TaskClassifier } from "../agent-core/routing/task-classifier.js";
+import { stripVisibleProviderArtifacts } from "./orchestrator-text-utils.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -602,5 +603,7 @@ export function stripInternalDecisionMarkers(text: string | null | undefined): s
   if (!text) {
     return "";
   }
-  return text.replace(INTERNAL_DECISION_LINE_RE, "").trim();
+  return stripVisibleProviderArtifacts(
+    text.replace(INTERNAL_DECISION_LINE_RE, "").trim(),
+  );
 }

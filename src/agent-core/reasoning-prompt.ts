@@ -18,6 +18,7 @@ export function buildReasoningPrompt(params: {
   observations: AgentObservation[];
   budgetRemainingPct: number;
   activeTaskCount: number;
+  activeForegroundTaskCount: number;
   learnedInsights: string[];
   recentHistory: readonly AgentObservation[];
 }): string {
@@ -48,6 +49,7 @@ export function buildReasoningPrompt(params: {
     "### Status",
     `- Budget remaining: ${params.budgetRemainingPct}%`,
     `- Active tasks: ${params.activeTaskCount}`,
+    `- Foreground user tasks: ${params.activeForegroundTaskCount}`,
     "",
   );
 
@@ -114,6 +116,7 @@ export function buildReasoningPrompt(params: {
     "- Prefer 'adjust' to tune runtime parameters: priorityThreshold (0-100), sourceBoost per source, reasoningIntervalMs (5000-300000)",
     "- If budget is below 20%, only execute for critical issues (build failures, test failures)",
     "- If there are already active tasks, prefer waiting unless something urgent appeared",
+    "- If a foreground user task is already running, avoid notify/escalate unless the situation is truly urgent and cannot wait",
   );
 
   return lines.join("\n");

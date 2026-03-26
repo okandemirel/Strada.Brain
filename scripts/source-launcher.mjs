@@ -940,6 +940,7 @@ export function shouldRunFromSource(args) {
 
   return args.some((arg) => [
     "start",
+    "cli",
     "setup",
     "doctor",
     "--help",

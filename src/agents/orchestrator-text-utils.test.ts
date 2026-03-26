@@ -9,6 +9,7 @@ import {
   extractNaturalLanguageDirectiveUpdates,
   resolveConversationScope,
   resolveIdentityKey,
+  stripVisibleProviderArtifacts,
 } from "./orchestrator-text-utils.js";
 
 describe("orchestrator-text-utils", () => {
@@ -17,6 +18,13 @@ describe("orchestrator-text-utils", () => {
 
     expect(extractExactResponseLiteral(prompt)).toBe("ship it");
     expect(applyVisibleResponseContract(prompt, "different text")).toBe("ship it");
+  });
+
+  it("strips provider reasoning artifacts from visible output", () => {
+    const raw = "<reasoning>\ninternal chain of thought\n</reasoning>\n\nVisible answer.";
+
+    expect(stripVisibleProviderArtifacts(raw)).toBe("Visible answer.");
+    expect(applyVisibleResponseContract("Explain briefly", raw)).toBe("Visible answer.");
   });
 
   it("extracts natural language profile and autonomy updates", () => {

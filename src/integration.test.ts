@@ -76,6 +76,19 @@ function createSimpleProvider() {
   };
 }
 
+function createReasoningLeakProvider() {
+  return {
+    name: "mock-reasoning-leak",
+    capabilities: defaultCapabilities,
+    chat: vi.fn(async (): Promise<ProviderResponse> => ({
+      text: "<reasoning>\ninternal-only\n</reasoning>\n\nVisible answer.",
+      toolCalls: [],
+      stopReason: "end_turn",
+      usage: { inputTokens: 20, outputTokens: 15, totalTokens: 35 },
+    })),
+  };
+}
+
 function createUnknownToolProvider() {
   let callCount = 0;
   return {
@@ -206,6 +219,34 @@ describe("Integration: full message flow", () => {
     expect(channel.sendMarkdown).toHaveBeenCalledWith(
       "integration-2",
       "Hello! How can I help you?"
+    );
+  });
+
+  it("does not leak provider reasoning blocks to the CLI-visible response", async () => {
+    const provider = createReasoningLeakProvider();
+
+    const orchestrator = new Orchestrator({
+      providerManager: { getProvider: () => provider, shutdown: vi.fn() } as any,
+      tools: [fileReadTool],
+      channel,
+      projectPath: "/test/project",
+      readOnly: false,
+      requireConfirmation: false,
+    });
+
+    const promise = orchestrator.handleMessage({
+      channelType: "cli",
+      chatId: "integration-reasoning",
+      userId: "user-1",
+      text: "Explain briefly",
+      timestamp: new Date(),
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    await promise;
+
+    expect(channel.sendMarkdown).toHaveBeenCalledWith(
+      "integration-reasoning",
+      "Visible answer."
     );
   });
 

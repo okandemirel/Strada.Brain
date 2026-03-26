@@ -151,4 +151,25 @@ describe("decideInteractionBoundary", () => {
     expect(decision.kind).toBe("terminal_failure");
     expect(decision.visibleText).toContain("Please sign in again");
   });
+
+  it("keeps internal capability memos for direct Temp tasks internal and strips reasoning blocks", () => {
+    const decision = decideInteractionBoundary({
+      prompt: "Temp altında `strada_autonomy_smoke.txt` oluştur ve sonra sil",
+      workerDraft: "<reasoning>\nI cannot finish this.\n</reasoning>\n\nMevcut araç setimde dizin oluşturma yeteneği olmadığı için Temp klasörünü oluşturup dosya yazamıyorum.",
+      visibleDraft: "",
+      task: task("analysis"),
+      evidence: {
+        ...baseEvidence,
+        totalStepCount: 3,
+        inspectionStepCount: 1,
+      },
+      canInspectLocally: true,
+      availableToolNames: ["file_write", "shell_exec", "list_directory"],
+      terminalFailureReported: true,
+    });
+
+    expect(decision.kind).toBe("internal_continue");
+    expect(decision.gate).toContain("internal capability limitation");
+    expect(decision.gate).not.toContain("<reasoning>");
+  });
 });

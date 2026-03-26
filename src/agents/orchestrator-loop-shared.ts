@@ -221,6 +221,13 @@ export async function runConsensusIfAvailable(
 
   try {
     const taskClass = ctx.taskClassifier.classify(ctx.prompt);
+    if (
+      ctx.toolCalls.length > 0 &&
+      taskClass.criticality !== "critical" &&
+      taskClass.type !== "destructive-operation"
+    ) {
+      return;
+    }
     const confidence = ctx.confidenceEstimator.estimate({
       task: taskClass,
       providerName: ctx.currentAssignment.providerName,

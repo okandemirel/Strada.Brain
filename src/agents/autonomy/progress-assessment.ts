@@ -1,4 +1,5 @@
 import type { AgentState } from "../agent-state.js";
+import { extractPromptTargets as extractPromptTargetsHelper } from "../prompt-targets.js";
 import { MUTATION_TOOLS, isVerificationToolName } from "./constants.js";
 
 // ---------------------------------------------------------------------------
@@ -7,6 +8,7 @@ import { MUTATION_TOOLS, isVerificationToolName } from "./constants.js";
 
 export interface BehavioralSnapshot {
   readonly prompt: string;
+  readonly promptTargets: readonly string[];
   readonly currentPhase: string;
   readonly totalStepCount: number;
   readonly mutationStepCount: number;
@@ -83,6 +85,7 @@ export function buildBehavioralSnapshot(params: BuildBehavioralSnapshotParams): 
 
   return {
     prompt: params.prompt.slice(0, 200),
+    promptTargets: extractPromptTargets(params.prompt),
     currentPhase: state.phase,
     totalStepCount: state.stepResults.length,
     mutationStepCount,
@@ -117,6 +120,8 @@ Given a behavioral snapshot of an executing agent, determine whether it is makin
 
 CRITICAL: An agent that has never used a single tool and has 3+ consecutive text-only gates is STUCK, not "in an early exploration phase". Exploration requires tool calls (file_read, grep_search, etc).
 
+If the user goal contains a concrete file name, directory, path fragment, or other explicit target, preserve that target in your directive. Do NOT invent a different absolute OS path unless the user explicitly asked for that path.
+
 Return JSON only:
 {"verdict":"progressing"|"stuck","confidence":"high"|"medium"|"low","directive":"one concrete next action if stuck"}`;
 
@@ -127,6 +132,7 @@ Return JSON only:
 export function buildProgressAssessmentRequest(snapshot: BehavioralSnapshot): string {
   return [
     `User goal: ${snapshot.prompt}`,
+    `Prompt targets: ${snapshot.promptTargets.length > 0 ? snapshot.promptTargets.join(", ") : "none detected"}`,
     `Phase: ${snapshot.currentPhase}`,
     `Steps: ${snapshot.totalStepCount} total (${snapshot.mutationStepCount} mutations, ${snapshot.inspectionStepCount} inspections, ${snapshot.verificationStepCount} verifications)`,
     `Consecutive text-only gates: ${snapshot.consecutiveTextOnlyGates}`,
@@ -139,6 +145,10 @@ export function buildProgressAssessmentRequest(snapshot: BehavioralSnapshot): st
     "",
     "Is this agent making meaningful progress or stuck?",
   ].join("\n");
+}
+
+function extractPromptTargets(prompt: string): string[] {
+  return extractPromptTargetsHelper(prompt, 6);
 }
 
 // ---------------------------------------------------------------------------
@@ -224,6 +234,12 @@ export function buildDirectiveGate(assessment: ProgressAssessment): string {
   ];
   if (directive) {
     lines.push(`Required next action: ${directive}`);
+    lines.push(
+      "Execute that required action before any broader repository audit or exploratory inspection.",
+    );
+    lines.push(
+      "If the directive names a concrete file, path, artifact, or command target, act on that exact target first and only broaden scope if the direct attempt fails.",
+    );
   } else {
     lines.push("Use your available tools (file_read, file_write, shell, etc.) to make concrete progress on the task.");
   }

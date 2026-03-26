@@ -33,6 +33,7 @@ function makeState(overrides: Record<string, unknown> = {}) {
 function makeSnapshot(overrides: Partial<BehavioralSnapshot> = {}): BehavioralSnapshot {
   return {
     prompt: "fix the bug",
+    promptTargets: [],
     currentPhase: AgentPhase.EXECUTING,
     totalStepCount: 5,
     mutationStepCount: 2,
@@ -103,6 +104,21 @@ describe("buildBehavioralSnapshot", () => {
     expect(snap.verificationStepCount).toBe(0);
     expect(snap.lastToolName).toBeNull();
     expect(snap.timeSinceLastMutationMs).toBeGreaterThanOrEqual(5000);
+  });
+
+  it("extracts project-relative target hints from the prompt", () => {
+    const now = Date.now();
+    const snap = buildBehavioralSnapshot({
+      prompt: "Temp altında `strada_autonomy_smoke.txt` oluştur ve sonra sil",
+      state: makeState(),
+      touchedFileCount: 0,
+      consecutiveTextOnlyGates: 2,
+      taskStartedAtMs: now - 1000,
+      draftExcerpt: "still analyzing",
+    });
+
+    expect(snap.promptTargets).toContain("Temp");
+    expect(snap.promptTargets).toContain("strada_autonomy_smoke.txt");
   });
 
   it("reflects plan presence", () => {
@@ -253,6 +269,7 @@ describe("buildProgressAssessmentRequest", () => {
     const snap = makeSnapshot();
     const request = buildProgressAssessmentRequest(snap);
     expect(request).toContain("User goal: fix the bug");
+    expect(request).toContain("Prompt targets: none detected");
     expect(request).toContain("Phase: executing");
     expect(request).toContain("Steps: 5 total (2 mutations, 2 inspections, 1 verifications)");
     expect(request).toContain("Consecutive text-only gates: 0");
@@ -269,6 +286,13 @@ describe("buildProgressAssessmentRequest", () => {
     const snap = makeSnapshot({ lastToolName: null });
     const request = buildProgressAssessmentRequest(snap);
     expect(request).toContain("Last tool: none");
+  });
+
+  it("includes prompt target hints when available", () => {
+    const request = buildProgressAssessmentRequest(makeSnapshot({
+      promptTargets: ["Temp", "strada_autonomy_smoke.txt"],
+    }));
+    expect(request).toContain("Prompt targets: Temp, strada_autonomy_smoke.txt");
   });
 });
 
@@ -287,6 +311,8 @@ describe("buildDirectiveGate", () => {
     expect(gate).toContain("[PROGRESS ASSESSMENT]");
     expect(gate).toContain("STOP generating text-only responses.");
     expect(gate).toContain("Required next action: Use file_read on src/config.ts");
+    expect(gate).toContain("Execute that required action before any broader repository audit");
+    expect(gate).toContain("act on that exact target first");
     expect(gate).toContain("Do not produce another text-only analysis response.");
   });
 

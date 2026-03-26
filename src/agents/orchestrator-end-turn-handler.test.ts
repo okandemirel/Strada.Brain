@@ -71,6 +71,7 @@ function makeMinimalInterventionDeps() {
     getTaskRunId: vi.fn(),
     synthesizeUserFacingResponse: vi.fn(async (p: any) => p.draft || ""),
     runCompletionReviewStages: vi.fn(async () => ({ stages: [], finalDecision: "approve" })),
+    runVisibilityReview: vi.fn(async () => ({ decision: { decision: "allow", reason: "safe to surface" } })),
     executeToolCalls: vi.fn(async () => []),
     getLogRingBuffer: vi.fn(() => []),
     buildStructuredProgressSignal: vi.fn((_p, _t, s) => s),
@@ -137,6 +138,140 @@ describe("handleBgEndTurn", () => {
       expect(result.visibleText).toBe("What do you mean?");
       expect(result.status).toBe("blocked");
     }
+
+    vi.restoreAllMocks();
+  });
+
+  it("passes daemonMode=true into background loop recovery", async () => {
+    const agentState = createInitialState();
+    const ctx: BgEndTurnContext = {
+      chatId: "test-chat",
+      identityKey: "test-user",
+      prompt: "test prompt",
+      responseText: "draft text",
+      responseUsage: undefined,
+      executionStrategy: makeMinimalStrategy(),
+      executionJournal: { recordVerifierResult: vi.fn() } as any,
+      selfVerification: makeMinimalSelfVerification(),
+      stradaConformance: {} as any,
+      taskStartedAtMs: Date.now(),
+      currentToolNames: [],
+      currentAssignment: makeMinimalAssignment(),
+      interventionDeps: makeMinimalInterventionDeps(),
+      session: makeMinimalSession(),
+      usageHandler: undefined,
+      recordPhaseOutcome: vi.fn(),
+      buildPhaseOutcomeTelemetry: vi.fn(),
+      progressAssessmentEnabled: false,
+      controlLoopTracker: { markVerificationClean: vi.fn(), markMeaningfulFileEvidence: vi.fn() } as any,
+      workerCollector: undefined,
+      progressTitle: "Test",
+      progressLanguage: "en" as any,
+      iteration: 0,
+      workspaceLease: undefined,
+      systemPrompt: "test",
+      emitProgress: vi.fn(),
+      buildStructuredProgressSignal: vi.fn((_p, _t, s) => s) as any,
+      getClarificationContext: () => ({ interactionConfig: {}, toolMetadataByName: {} }) as any,
+      formatBoundaryVisibleText: vi.fn((b) => b.visibleText),
+      appendVisibleAssistantMessage: vi.fn(),
+      synthesizeUserFacingResponse: vi.fn(async (p) => p.draft),
+      persistSessionToMemory: vi.fn(async () => {}),
+      getVisibleTranscript: vi.fn(() => []),
+    };
+
+    const originalModule = await import("./orchestrator-intervention-pipeline.js");
+    vi.spyOn(originalModule, "resolveDraftClarificationIntervention").mockResolvedValueOnce({
+      kind: "continue",
+      gate: "Keep going.",
+    } as any);
+    const recoverySpy = vi.spyOn(originalModule, "handleBackgroundLoopRecovery").mockResolvedValueOnce({
+      action: "blocked",
+      message: "Stopped.",
+    } as any);
+
+    await handleBgEndTurn(agentState, ctx);
+
+    expect(recoverySpy).toHaveBeenCalledWith(
+      expect.objectContaining({ daemonMode: true }),
+      expect.anything(),
+    );
+
+    vi.restoreAllMocks();
+  });
+
+  it("routes final visibility rejection through background loop recovery", async () => {
+    const agentState = createInitialState();
+    const ctx: BgEndTurnContext = {
+      chatId: "test-chat",
+      identityKey: "test-user",
+      prompt: "test prompt",
+      responseText: "draft text",
+      responseUsage: undefined,
+      executionStrategy: makeMinimalStrategy(),
+      executionJournal: { recordVerifierResult: vi.fn() } as any,
+      selfVerification: makeMinimalSelfVerification(),
+      stradaConformance: {} as any,
+      taskStartedAtMs: Date.now(),
+      currentToolNames: [],
+      currentAssignment: makeMinimalAssignment(),
+      interventionDeps: makeMinimalInterventionDeps(),
+      session: makeMinimalSession(),
+      usageHandler: undefined,
+      recordPhaseOutcome: vi.fn(),
+      buildPhaseOutcomeTelemetry: vi.fn(),
+      progressAssessmentEnabled: false,
+      controlLoopTracker: { markVerificationClean: vi.fn(), markMeaningfulFileEvidence: vi.fn() } as any,
+      workerCollector: undefined,
+      progressTitle: "Test",
+      progressLanguage: "en" as any,
+      iteration: 0,
+      workspaceLease: undefined,
+      systemPrompt: "test",
+      emitProgress: vi.fn(),
+      buildStructuredProgressSignal: vi.fn((_p, _t, s) => s) as any,
+      getClarificationContext: () => ({ interactionConfig: {}, toolMetadataByName: {} }) as any,
+      formatBoundaryVisibleText: vi.fn((b) => b.visibleText),
+      appendVisibleAssistantMessage: vi.fn(),
+      synthesizeUserFacingResponse: vi.fn(async () => "handoff draft"),
+      persistSessionToMemory: vi.fn(async () => {}),
+      getVisibleTranscript: vi.fn(() => []),
+    };
+
+    const originalModule = await import("./orchestrator-intervention-pipeline.js");
+    const clarificationModule = await import("./orchestrator-clarification.js");
+    vi.spyOn(originalModule, "resolveDraftClarificationIntervention").mockResolvedValueOnce({
+      kind: "none",
+    } as any);
+    vi.spyOn(originalModule, "resolveVerifierIntervention").mockResolvedValueOnce({
+      kind: "approve",
+      result: { summary: "ok" },
+    } as any);
+    vi.spyOn(clarificationModule, "decideUserVisibleBoundary")
+      .mockReturnValueOnce({ kind: "final_answer" } as any)
+      .mockReturnValueOnce({
+        kind: "internal_continue",
+        gate: "[VISIBILITY LOOP] Continue internally.",
+      } as any);
+    const recoverySpy = vi.spyOn(originalModule, "handleBackgroundLoopRecovery").mockResolvedValueOnce({
+      action: "continue",
+      gate: "[VISIBILITY LOOP] Continue internally.",
+    } as any);
+
+    const result = await handleBgEndTurn(agentState, ctx);
+
+    expect(recoverySpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        daemonMode: true,
+        kind: "visibility_internal_continue",
+      }),
+      expect.anything(),
+    );
+    expect(result.flow).toBe("continue");
+    expect((ctx.session as any).messages).toContainEqual({
+      role: "user",
+      content: "[VISIBILITY LOOP] Continue internally.",
+    });
 
     vi.restoreAllMocks();
   });

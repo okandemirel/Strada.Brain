@@ -50,6 +50,7 @@ import {
   type RecordPhaseOutcomeParams,
   type BuildPhaseOutcomeTelemetryParams,
 } from "./orchestrator-loop-shared.js";
+import { shouldDeferRawBoundaryForDirectTarget } from "./prompt-targets.js";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -131,6 +132,7 @@ function applyBgLoopRecoveryResult(
     replanProgressMessage: string;
     defaultProgressKind: TaskProgressKind;
     defaultProgressMessage: string;
+    defaultContinueState?: AgentState;
   },
 ): ReflectionLoopAction {
   if (loopRecovery.action === "blocked" && loopRecovery.message) {
@@ -160,7 +162,7 @@ function applyBgLoopRecoveryResult(
   }
 
   // Default: continue
-  const newState = applyReflectionContinuation(agentState, ctx.responseText);
+  const newState = opts.defaultContinueState ?? applyReflectionContinuation(agentState, ctx.responseText);
   pushContinuationMessages(ctx, loopRecovery.gate ?? opts.fallbackGate);
   ctx.emitProgress(ctx.buildStructuredProgressSignal(
     ctx.prompt,
@@ -172,6 +174,353 @@ function applyBgLoopRecoveryResult(
     ctx.progressLanguage,
   ));
   return { flow: "continue", newState };
+}
+
+type BgLoopRecoveryKind = Parameters<typeof handleBackgroundLoopRecoveryPipeline>[0]["kind"];
+
+interface BgLoopRecoveryDirective {
+  readonly kind: BgLoopRecoveryKind;
+  readonly reason: string;
+  readonly gate: string;
+  readonly fallbackGate: string;
+  readonly replanProgressMessage: string;
+  readonly defaultProgressKind: TaskProgressKind;
+  readonly defaultProgressMessage: string;
+}
+
+type BgReflectionCompletionEvaluation =
+  | {
+    readonly kind: "done";
+    readonly visibleText: string;
+    readonly status?: "blocked" | "completed";
+    readonly approved?: boolean;
+  }
+  | {
+    readonly kind: "blocked";
+    readonly visibleText: string;
+  }
+  | {
+    readonly kind: "loop_recovery";
+    readonly directive: BgLoopRecoveryDirective;
+  }
+  | {
+    readonly kind: "verifier_replan";
+    readonly gate: string;
+    readonly summary: string;
+  };
+
+function buildBgLoopRecoveryDirective(params: BgLoopRecoveryDirective): BgLoopRecoveryDirective {
+  return params;
+}
+
+async function completeBgReflectionDone(
+  agentState: AgentState,
+  ctx: BgReflectionContext,
+  evaluation: Extract<BgReflectionCompletionEvaluation, { kind: "done" }>,
+): Promise<ReflectionLoopAction> {
+  if (evaluation.visibleText) {
+    ctx.appendVisibleAssistantMessage(ctx.session, evaluation.visibleText);
+  }
+  if (evaluation.approved) {
+    ctx.recordPhaseOutcome({
+      chatId: ctx.chatId,
+      identityKey: ctx.identityKey,
+      assignment: ctx.currentAssignment,
+      phase: "reflecting",
+      status: "approved",
+      task: ctx.executionStrategy.task,
+      reason: "Reflection accepted completion after the verifier pipeline cleared the task.",
+      telemetry: ctx.buildPhaseOutcomeTelemetry({
+        state: agentState,
+        usage: ctx.responseUsage,
+        verifierDecision: "approve",
+      }),
+    });
+  }
+  await ctx.persistSessionToMemory(
+    ctx.chatId,
+    ctx.getVisibleTranscript(ctx.session),
+    /* force */ true,
+  );
+  return {
+    flow: "done",
+    visibleText: evaluation.visibleText || "Task completed without output.",
+    newState: agentState,
+    status: evaluation.status,
+  };
+}
+
+async function applyBgReflectionLoopRecovery(
+  agentState: AgentState,
+  ctx: BgReflectionContext,
+  directive: BgLoopRecoveryDirective,
+  defaultContinueState?: AgentState,
+): Promise<ReflectionLoopAction> {
+  const loopRecovery = await runBgLoopRecovery(
+    ctx,
+    agentState,
+    directive.kind,
+    directive.reason,
+    directive.gate,
+  );
+  return applyBgLoopRecoveryResult(loopRecovery, ctx, agentState, {
+    fallbackGate: directive.fallbackGate,
+    replanProgressMessage: directive.replanProgressMessage,
+    defaultProgressKind: directive.defaultProgressKind,
+    defaultProgressMessage: directive.defaultProgressMessage,
+    defaultContinueState,
+  });
+}
+
+async function applyBgVerifierReplan(
+  agentState: AgentState,
+  ctx: BgReflectionContext,
+  summary: string,
+  gate: string,
+): Promise<ReflectionLoopAction> {
+  const loopRecovery = await runBgLoopRecovery(
+    ctx,
+    agentState,
+    "verifier_replan",
+    summary,
+    gate,
+  );
+  if (loopRecovery.action === "blocked" && loopRecovery.message) {
+    return { flow: "blocked", visibleText: loopRecovery.message };
+  }
+  const newState = handleVerifierReplan({
+    agentState,
+    executionJournal: ctx.executionJournal,
+    responseText: ctx.responseText,
+    reason: loopRecovery.summary ?? summary,
+    providerName: ctx.executionStrategy.reviewer.providerName,
+    modelId: ctx.executionStrategy.reviewer.modelId,
+    onBeforeTransition: () => ctx.recordPhaseOutcome({
+      chatId: ctx.chatId,
+      identityKey: ctx.identityKey,
+      assignment: ctx.currentAssignment,
+      phase: "reflecting",
+      status: "replanned",
+      task: ctx.executionStrategy.task,
+      reason: summary,
+      telemetry: ctx.buildPhaseOutcomeTelemetry({
+        state: agentState,
+        usage: ctx.responseUsage,
+        verifierDecision: "replan",
+        failureReason: summary,
+      }),
+    }),
+  });
+  pushContinuationMessages(ctx, loopRecovery.gate ?? gate);
+  ctx.emitProgress(ctx.buildStructuredProgressSignal(
+    ctx.prompt,
+    ctx.progressTitle,
+    {
+      kind: loopRecovery.action === "replan" ? "loop_recovery" : "replanning",
+      message:
+        loopRecovery.action === "replan"
+          ? "Loop recovery requested a replan after repeated verifier feedback."
+          : "Verifier pipeline requested a replan",
+    },
+    ctx.progressLanguage,
+  ));
+  return { flow: "continue", newState };
+}
+
+async function evaluateBgReflectionCompletion(
+  agentState: AgentState,
+  ctx: BgReflectionContext,
+): Promise<BgReflectionCompletionEvaluation> {
+  const terminalFailureDetected = isTerminalFailureReport(ctx.responseText);
+
+  const clarificationIntervention = await resolveDraftClarificationInterventionPipeline({
+    chatId: ctx.chatId,
+    identityKey: ctx.identityKey,
+    prompt: ctx.prompt,
+    draft: ctx.responseText ?? "",
+    state: agentState,
+    strategy: ctx.executionStrategy,
+    touchedFiles: [...ctx.selfVerification.getState().touchedFiles],
+    usageHandler: ctx.usageHandler,
+  }, ctx.interventionDeps);
+
+  if (clarificationIntervention.kind === "continue" && clarificationIntervention.gate) {
+    return {
+      kind: "loop_recovery",
+      directive: buildBgLoopRecoveryDirective({
+        kind: "clarification_internal_continue",
+        reason: "Clarification review kept the task internal.",
+        gate: clarificationIntervention.gate,
+        fallbackGate: clarificationIntervention.gate,
+        replanProgressMessage: "Loop recovery requested a replan after clarification review.",
+        defaultProgressKind: "clarification",
+        defaultProgressMessage: "Clarification review kept the task internal",
+      }),
+    };
+  }
+  if (
+    (clarificationIntervention.kind === "ask_user" ||
+      clarificationIntervention.kind === "blocked") &&
+    clarificationIntervention.message
+  ) {
+    return { kind: "blocked", visibleText: clarificationIntervention.message };
+  }
+
+  const rawBoundary = decideUserVisibleBoundaryHelper(ctx.getClarificationContext(), {
+    chatId: ctx.chatId,
+    prompt: ctx.prompt,
+    workerDraft: ctx.responseText ?? "",
+    task: ctx.executionStrategy.task,
+    state: agentState,
+    selfVerification: ctx.selfVerification,
+    taskStartedAtMs: ctx.taskStartedAtMs,
+    availableToolNames: ctx.currentToolNames,
+    terminalFailureReported: terminalFailureDetected,
+  });
+
+  if (
+    rawBoundary.kind === "internal_continue"
+    && rawBoundary.gate
+    && !shouldDeferRawBoundaryForDirectTarget({
+      prompt: ctx.prompt,
+      touchedFileCount: ctx.selfVerification.getState().touchedFiles.size,
+      hasCompilableChanges: ctx.selfVerification.getState().hasCompilableChanges,
+    })
+  ) {
+    return {
+      kind: "loop_recovery",
+      directive: buildBgLoopRecoveryDirective({
+        kind: "visibility_internal_continue",
+        reason: "Visibility boundary kept the task internal.",
+        gate: rawBoundary.gate,
+        fallbackGate: rawBoundary.gate,
+        replanProgressMessage: "Loop recovery requested a replan after visibility review.",
+        defaultProgressKind: "visibility",
+        defaultProgressMessage: "Visibility boundary kept the task internal",
+      }),
+    };
+  }
+
+  if (
+    (rawBoundary.kind === "plan_review" || rawBoundary.kind === "terminal_failure") &&
+    rawBoundary.visibleText
+  ) {
+    return {
+      kind: "done",
+      visibleText: ctx.formatBoundaryVisibleText(rawBoundary) ?? rawBoundary.visibleText ?? "",
+      status: rawBoundary.kind === "plan_review" ? "blocked" : "completed",
+    };
+  }
+
+  const verifierIntervention = await resolveVerifierInterventionPipeline({
+    chatId: ctx.chatId,
+    identityKey: ctx.identityKey,
+    executionMode: "background",
+    prompt: ctx.prompt,
+    state: agentState,
+    draft: ctx.responseText,
+    selfVerification: ctx.selfVerification,
+    stradaConformance: ctx.stradaConformance,
+    strategy: ctx.executionStrategy,
+    taskStartedAtMs: ctx.taskStartedAtMs,
+    availableToolNames: ctx.currentToolNames,
+    usageHandler: ctx.usageHandler,
+  }, ctx.interventionDeps);
+
+  if (ctx.workerCollector) {
+    ctx.workerCollector.verifierResult = verifierIntervention.result;
+  }
+  ctx.executionJournal.recordVerifierResult(
+    verifierIntervention.result,
+    ctx.executionStrategy.reviewer.providerName,
+    ctx.executionStrategy.reviewer.modelId,
+  );
+
+  if (verifierIntervention.kind === "continue" && verifierIntervention.gate) {
+    ctx.recordPhaseOutcome({
+      chatId: ctx.chatId,
+      identityKey: ctx.identityKey,
+      assignment: ctx.currentAssignment,
+      phase: "reflecting",
+      status: "continued",
+      task: ctx.executionStrategy.task,
+      reason: verifierIntervention.result.summary,
+      telemetry: ctx.buildPhaseOutcomeTelemetry({
+        state: agentState,
+        usage: ctx.responseUsage,
+        verifierDecision: "continue",
+        failureReason: verifierIntervention.result.summary,
+      }),
+    });
+    return {
+      kind: "loop_recovery",
+      directive: buildBgLoopRecoveryDirective({
+        kind: "verifier_continue",
+        reason: verifierIntervention.result.summary,
+        gate: verifierIntervention.gate,
+        fallbackGate: verifierIntervention.gate,
+        replanProgressMessage: "Loop recovery requested a replan after repeated verifier feedback.",
+        defaultProgressKind: "verification",
+        defaultProgressMessage: "Verification required before completion",
+      }),
+    };
+  }
+
+  if (verifierIntervention.kind === "replan" && verifierIntervention.gate) {
+    return {
+      kind: "verifier_replan",
+      gate: verifierIntervention.gate,
+      summary: verifierIntervention.result.summary,
+    };
+  }
+
+  const finalText = await ctx.synthesizeUserFacingResponse({
+    chatId: ctx.chatId,
+    identityKey: ctx.identityKey,
+    prompt: ctx.prompt,
+    draft: ctx.responseText ?? "",
+    agentState,
+    strategy: ctx.executionStrategy,
+    systemPrompt: ctx.systemPrompt,
+    usageHandler: ctx.usageHandler,
+  });
+  if (ctx.workerCollector) {
+    ctx.workerCollector.lastAssignment = ctx.executionStrategy.synthesizer;
+  }
+
+  const finalBoundary = decideUserVisibleBoundaryHelper(ctx.getClarificationContext(), {
+    chatId: ctx.chatId,
+    prompt: ctx.prompt,
+    workerDraft: ctx.responseText ?? "",
+    visibleDraft: finalText,
+    task: ctx.executionStrategy.task,
+    state: agentState,
+    selfVerification: ctx.selfVerification,
+    taskStartedAtMs: ctx.taskStartedAtMs,
+    availableToolNames: ctx.currentToolNames,
+    terminalFailureReported: terminalFailureDetected,
+  });
+
+  if (finalBoundary.kind === "internal_continue" && finalBoundary.gate) {
+    return {
+      kind: "loop_recovery",
+      directive: buildBgLoopRecoveryDirective({
+        kind: "visibility_internal_continue",
+        reason: "Visibility boundary rejected the draft.",
+        gate: finalBoundary.gate,
+        fallbackGate: finalBoundary.gate,
+        replanProgressMessage: "Loop recovery requested a replan after the draft was rejected.",
+        defaultProgressKind: "visibility",
+        defaultProgressMessage: "Visibility boundary rejected the draft",
+      }),
+    };
+  }
+
+  return {
+    kind: "done",
+    visibleText: finalBoundary.visibleText ?? finalText,
+    approved: true,
+  };
 }
 
 // ─── Background loop recovery pipeline call helper ─────────────────────────────
@@ -204,6 +553,7 @@ async function runBgLoopRecovery(
     session: ctx.session,
     workerCollector: ctx.workerCollector,
     workspaceLease: ctx.workspaceLease,
+    daemonMode: true,
     progressAssessmentEnabled: ctx.progressAssessmentEnabled,
     taskStartedAtMs: ctx.taskStartedAtMs,
   }, ctx.interventionDeps);
@@ -249,272 +599,19 @@ export async function handleBgReflectionDone(
   agentState: AgentState,
   ctx: BgReflectionContext,
 ): Promise<ReflectionLoopAction> {
-  const terminalFailureDetected = isTerminalFailureReport(ctx.responseText);
+  const evaluation = await evaluateBgReflectionCompletion(agentState, ctx);
 
-  // 1. Clarification intervention
-  const clarificationIntervention = await resolveDraftClarificationInterventionPipeline({
-    chatId: ctx.chatId,
-    identityKey: ctx.identityKey,
-    prompt: ctx.prompt,
-    draft: ctx.responseText ?? "",
-    state: agentState,
-    strategy: ctx.executionStrategy,
-    touchedFiles: [...ctx.selfVerification.getState().touchedFiles],
-    usageHandler: ctx.usageHandler,
-  }, ctx.interventionDeps);
-
-  if (clarificationIntervention.kind === "continue" && clarificationIntervention.gate) {
-    const loopRecovery = await runBgLoopRecovery(
-      ctx,
-      agentState,
-      "clarification_internal_continue",
-      "Clarification review kept the task internal.",
-      clarificationIntervention.gate,
-    );
-    return applyBgLoopRecoveryResult(loopRecovery, ctx, agentState, {
-      fallbackGate: clarificationIntervention.gate,
-      replanProgressMessage: "Loop recovery requested a replan after clarification review.",
-      defaultProgressKind: "clarification",
-      defaultProgressMessage: "Clarification review kept the task internal",
-    });
+  if (evaluation.kind === "blocked") {
+    return { flow: "blocked", visibleText: evaluation.visibleText };
   }
-  if (
-    (clarificationIntervention.kind === "ask_user" ||
-      clarificationIntervention.kind === "blocked") &&
-    clarificationIntervention.message
-  ) {
-    return { flow: "blocked", visibleText: clarificationIntervention.message };
+  if (evaluation.kind === "done") {
+    return completeBgReflectionDone(agentState, ctx, evaluation);
+  }
+  if (evaluation.kind === "verifier_replan") {
+    return applyBgVerifierReplan(agentState, ctx, evaluation.summary, evaluation.gate);
   }
 
-  // 2. First boundary check
-  const rawBoundary = decideUserVisibleBoundaryHelper(ctx.getClarificationContext(), {
-    chatId: ctx.chatId,
-    prompt: ctx.prompt,
-    workerDraft: ctx.responseText ?? "",
-    task: ctx.executionStrategy.task,
-    state: agentState,
-    selfVerification: ctx.selfVerification,
-    taskStartedAtMs: ctx.taskStartedAtMs,
-    availableToolNames: ctx.currentToolNames,
-    terminalFailureReported: terminalFailureDetected,
-  });
-
-  if (rawBoundary.kind === "internal_continue" && rawBoundary.gate) {
-    const loopRecovery = await runBgLoopRecovery(
-      ctx,
-      agentState,
-      "visibility_internal_continue",
-      "Visibility boundary kept the task internal.",
-      rawBoundary.gate,
-    );
-    return applyBgLoopRecoveryResult(loopRecovery, ctx, agentState, {
-      fallbackGate: rawBoundary.gate,
-      replanProgressMessage: "Loop recovery requested a replan after visibility review.",
-      defaultProgressKind: "visibility",
-      defaultProgressMessage: "Visibility boundary kept the task internal",
-    });
-  }
-
-  if (
-    (rawBoundary.kind === "plan_review" || rawBoundary.kind === "terminal_failure") &&
-    rawBoundary.visibleText
-  ) {
-    const surfacedText = ctx.formatBoundaryVisibleText(rawBoundary) ?? rawBoundary.visibleText ?? "";
-    ctx.appendVisibleAssistantMessage(ctx.session, surfacedText);
-    await ctx.persistSessionToMemory(
-      ctx.chatId,
-      ctx.getVisibleTranscript(ctx.session),
-      /* force */ true,
-    );
-    return {
-      flow: "done",
-      visibleText: surfacedText,
-      newState: agentState,
-      status: rawBoundary.kind === "plan_review" ? "blocked" : "completed",
-    };
-  }
-
-  // 3. Verifier intervention
-  const verifierIntervention = await resolveVerifierInterventionPipeline({
-    chatId: ctx.chatId,
-    identityKey: ctx.identityKey,
-    prompt: ctx.prompt,
-    state: agentState,
-    draft: ctx.responseText,
-    selfVerification: ctx.selfVerification,
-    stradaConformance: ctx.stradaConformance,
-    strategy: ctx.executionStrategy,
-    taskStartedAtMs: ctx.taskStartedAtMs,
-    availableToolNames: ctx.currentToolNames,
-    usageHandler: ctx.usageHandler,
-  }, ctx.interventionDeps);
-
-  if (ctx.workerCollector) {
-    ctx.workerCollector.verifierResult = verifierIntervention.result;
-  }
-  ctx.executionJournal.recordVerifierResult(
-    verifierIntervention.result,
-    ctx.executionStrategy.reviewer.providerName,
-    ctx.executionStrategy.reviewer.modelId,
-  );
-
-  // 3a. Verifier says "continue"
-  if (verifierIntervention.kind === "continue" && verifierIntervention.gate) {
-    ctx.recordPhaseOutcome({
-      chatId: ctx.chatId,
-      identityKey: ctx.identityKey,
-      assignment: ctx.currentAssignment,
-      phase: "reflecting",
-      status: "continued",
-      task: ctx.executionStrategy.task,
-      reason: verifierIntervention.result.summary,
-      telemetry: ctx.buildPhaseOutcomeTelemetry({
-        state: agentState,
-        usage: ctx.responseUsage,
-        verifierDecision: "continue",
-        failureReason: verifierIntervention.result.summary,
-      }),
-    });
-    const loopRecovery = await runBgLoopRecovery(
-      ctx,
-      agentState,
-      "verifier_continue",
-      verifierIntervention.result.summary,
-      verifierIntervention.gate,
-    );
-    return applyBgLoopRecoveryResult(loopRecovery, ctx, agentState, {
-      fallbackGate: verifierIntervention.gate,
-      replanProgressMessage: "Loop recovery requested a replan after repeated verifier feedback.",
-      defaultProgressKind: "verification",
-      defaultProgressMessage: "Verification required before completion",
-    });
-  }
-
-  // 3b. Verifier says "replan"
-  if (verifierIntervention.kind === "replan" && verifierIntervention.gate) {
-    const loopRecovery = await runBgLoopRecovery(
-      ctx,
-      agentState,
-      "verifier_replan",
-      verifierIntervention.result.summary,
-      verifierIntervention.gate,
-    );
-    if (loopRecovery.action === "blocked" && loopRecovery.message) {
-      return { flow: "blocked", visibleText: loopRecovery.message };
-    }
-    const newState = handleVerifierReplan({
-      agentState,
-      executionJournal: ctx.executionJournal,
-      responseText: ctx.responseText,
-      reason: loopRecovery.summary ?? verifierIntervention.result.summary,
-      providerName: ctx.executionStrategy.reviewer.providerName,
-      modelId: ctx.executionStrategy.reviewer.modelId,
-      onBeforeTransition: () => ctx.recordPhaseOutcome({
-        chatId: ctx.chatId,
-        identityKey: ctx.identityKey,
-        assignment: ctx.currentAssignment,
-        phase: "reflecting",
-        status: "replanned",
-        task: ctx.executionStrategy.task,
-        reason: verifierIntervention.result.summary,
-        telemetry: ctx.buildPhaseOutcomeTelemetry({
-          state: agentState,
-          usage: ctx.responseUsage,
-          verifierDecision: "replan",
-          failureReason: verifierIntervention.result.summary,
-        }),
-      }),
-    });
-    pushContinuationMessages(ctx, loopRecovery.gate ?? verifierIntervention.gate);
-    ctx.emitProgress(ctx.buildStructuredProgressSignal(
-      ctx.prompt,
-      ctx.progressTitle,
-      {
-        kind: loopRecovery.action === "replan" ? "loop_recovery" : "replanning",
-        message:
-          loopRecovery.action === "replan"
-            ? "Loop recovery requested a replan after repeated verifier feedback."
-            : "Verifier pipeline requested a replan",
-      },
-      ctx.progressLanguage,
-    ));
-    return { flow: "continue", newState };
-  }
-
-  // 4. Synthesize user-facing response
-  const finalText = await ctx.synthesizeUserFacingResponse({
-    chatId: ctx.chatId,
-    identityKey: ctx.identityKey,
-    prompt: ctx.prompt,
-    draft: ctx.responseText ?? "",
-    agentState,
-    strategy: ctx.executionStrategy,
-    systemPrompt: ctx.systemPrompt,
-    usageHandler: ctx.usageHandler,
-  });
-  if (ctx.workerCollector) {
-    ctx.workerCollector.lastAssignment = ctx.executionStrategy.synthesizer;
-  }
-
-  // 5. Second boundary check on synthesized text
-  const finalBoundary = decideUserVisibleBoundaryHelper(ctx.getClarificationContext(), {
-    chatId: ctx.chatId,
-    prompt: ctx.prompt,
-    workerDraft: ctx.responseText ?? "",
-    visibleDraft: finalText,
-    task: ctx.executionStrategy.task,
-    state: agentState,
-    selfVerification: ctx.selfVerification,
-    taskStartedAtMs: ctx.taskStartedAtMs,
-    availableToolNames: ctx.currentToolNames,
-    terminalFailureReported: terminalFailureDetected,
-  });
-
-  if (finalBoundary.kind === "internal_continue" && finalBoundary.gate) {
-    const loopRecovery = await runBgLoopRecovery(
-      ctx,
-      agentState,
-      "visibility_internal_continue",
-      "Visibility boundary rejected the draft.",
-      finalBoundary.gate,
-    );
-    return applyBgLoopRecoveryResult(loopRecovery, ctx, agentState, {
-      fallbackGate: finalBoundary.gate,
-      replanProgressMessage: "Loop recovery requested a replan after the draft was rejected.",
-      defaultProgressKind: "visibility",
-      defaultProgressMessage: "Visibility boundary rejected the draft",
-    });
-  }
-
-  // 6. Approved finish path
-  const surfacedFinalText = finalBoundary.visibleText ?? finalText;
-  if (surfacedFinalText) {
-    ctx.appendVisibleAssistantMessage(ctx.session, surfacedFinalText);
-  }
-  ctx.recordPhaseOutcome({
-    chatId: ctx.chatId,
-    identityKey: ctx.identityKey,
-    assignment: ctx.currentAssignment,
-    phase: "reflecting",
-    status: "approved",
-    task: ctx.executionStrategy.task,
-    reason: "Reflection accepted completion after the verifier pipeline cleared the task.",
-    telemetry: ctx.buildPhaseOutcomeTelemetry({
-      state: agentState,
-      usage: ctx.responseUsage,
-      verifierDecision: "approve",
-    }),
-  });
-  await ctx.persistSessionToMemory(
-    ctx.chatId,
-    ctx.getVisibleTranscript(ctx.session),
-    /* force */ true,
-  );
-  return {
-    flow: "done",
-    visibleText: surfacedFinalText || "Task completed without output.",
-    newState: agentState,
-  };
+  return applyBgReflectionLoopRecovery(agentState, ctx, evaluation.directive);
 }
 
 // ─── Background REPLAN handler ─────────────────────────────────────────────────
@@ -569,6 +666,20 @@ export async function handleBgReflectionContinue(
 ): Promise<ReflectionLoopAction> {
   const newState = applyReflectionContinuation(agentState, ctx.responseText, { skipLastReflection: true });
   if (responseToolCallCount === 0) {
+    const cleanedDraft = ctx.interventionDeps.stripInternalDecisionMarkers(ctx.responseText ?? "").trim();
+    if (cleanedDraft) {
+      const evaluation = await evaluateBgReflectionCompletion(agentState, ctx);
+      if (evaluation.kind === "blocked") {
+        return { flow: "blocked", visibleText: evaluation.visibleText };
+      }
+      if (evaluation.kind === "done") {
+        return completeBgReflectionDone(agentState, ctx, evaluation);
+      }
+      if (evaluation.kind === "verifier_replan") {
+        return applyBgVerifierReplan(agentState, ctx, evaluation.summary, evaluation.gate);
+      }
+      return applyBgReflectionLoopRecovery(agentState, ctx, evaluation.directive, newState);
+    }
     const loopRecovery = await runBgLoopRecovery(
       ctx,
       agentState,
@@ -600,17 +711,13 @@ export async function handleBgReflectionContinue(
       ));
       return { flow: "continue", newState: replannedState };
     }
-    pushContinuationMessages(ctx, loopRecovery.gate ?? "Please continue.");
-    ctx.emitProgress(ctx.buildStructuredProgressSignal(
-      ctx.prompt,
-      ctx.progressTitle,
-      {
-        kind: "analysis",
-        message: "Reflection continued without tool execution",
-      },
-      ctx.progressLanguage,
-    ));
-    return { flow: "continue", newState };
+    return applyBgLoopRecoveryResult(loopRecovery, ctx, agentState, {
+      fallbackGate: "Please continue.",
+      replanProgressMessage: "Loop recovery requested a replan after reflection continue.",
+      defaultProgressKind: "analysis",
+      defaultProgressMessage: "Reflection continued without tool execution",
+      defaultContinueState: newState,
+    });
   }
   return { flow: "continue", newState };
 }
@@ -674,6 +781,7 @@ export async function handleInteractiveReflectionDone(
   const verifierIntervention = await resolveVerifierInterventionPipeline({
     chatId: ctx.chatId,
     identityKey: ctx.identityKey,
+    executionMode: "interactive",
     prompt: ctx.prompt,
     state: agentState,
     draft: ctx.responseText,

@@ -11,6 +11,7 @@ import {
   parseCompletionReviewDecision,
   parseCompletionReviewStageResult,
   shouldRunCompletionReview,
+  userExplicitlyAskedForCompletionReview,
   userExplicitlyAskedForPlan,
 } from "./completion-review.js";
 
@@ -319,6 +320,82 @@ Belirsizlik varsa ask_user ile tek bir soru sor ve show_plan ile onaylat.`,
 
     expect(buildAutonomyDeflectionGate(draft, evidence, "Show me the plan before you touch the code.")).toBeNull();
     expect(shouldRunCompletionReview(evidence, draft, "Show me the plan before you touch the code.")).toBe(false);
+  });
+
+  it("skips completion review for low-risk non-code mutation footprints", () => {
+    const evidence = collectCompletionReviewEvidence({
+      state: createState({
+        stepResults: [
+          { toolName: "list_directory", success: true, summary: "Listed Temp", timestamp: Date.now() - 500 },
+          { toolName: "file_write", success: true, summary: "Wrote Temp/strada_autonomy_smoke.txt", timestamp: Date.now() - 250 },
+        ],
+      }),
+      verificationState: {
+        pendingFiles: new Set(),
+        touchedFiles: new Set(["Temp/strada_autonomy_smoke.txt"]),
+        hasCompilableChanges: false,
+        lastBuildOk: null,
+        lastVerificationAt: null,
+      },
+      chatId: "chat-low-risk-mutation",
+      taskStartedAtMs: Date.now() - 1000,
+      logEntries: [],
+    });
+
+    expect(shouldRunCompletionReview(evidence, "tamam")).toBe(false);
+  });
+
+  it("skips completion review for bounded shell-based Temp mutations", () => {
+    const evidence = collectCompletionReviewEvidence({
+      state: createState({
+        stepResults: [
+          { toolName: "list_directory", success: true, summary: "Listed Temp", timestamp: Date.now() - 900 },
+          { toolName: "shell_exec", success: true, summary: "Touched Temp workspace", timestamp: Date.now() - 750 },
+          { toolName: "glob_search", success: true, summary: "Matched strada_autonomy_smoke.txt", timestamp: Date.now() - 600 },
+          { toolName: "file_write", success: true, summary: "Wrote Temp/strada_autonomy_smoke.txt", timestamp: Date.now() - 450 },
+          { toolName: "file_read", success: true, summary: "Read Temp/strada_autonomy_smoke.txt", timestamp: Date.now() - 300 },
+          { toolName: "file_delete", success: true, summary: "Deleted Temp/strada_autonomy_smoke.txt", timestamp: Date.now() - 150 },
+        ],
+      }),
+      verificationState: {
+        pendingFiles: new Set(),
+        touchedFiles: new Set(["Temp/strada_autonomy_smoke.txt"]),
+        hasCompilableChanges: false,
+        lastBuildOk: null,
+        lastVerificationAt: null,
+      },
+      chatId: "chat-low-risk-shell-mutation",
+      taskStartedAtMs: Date.now() - 1000,
+      logEntries: [],
+    });
+
+    const prompt = "Temp altında `strada_autonomy_smoke.txt` oluştur, içine `autonomy ok` yaz, sonra dosyayı oku ve sil.";
+    expect(shouldRunCompletionReview(evidence, "Temp görevini tamamladım.", prompt)).toBe(false);
+  });
+
+  it("keeps completion review when the user explicitly requires final review before finishing", () => {
+    const evidence = collectCompletionReviewEvidence({
+      state: createState({
+        stepResults: [
+          { toolName: "list_directory", success: true, summary: "Listed docs", timestamp: Date.now() - 500 },
+          { toolName: "file_write", success: true, summary: "Wrote docs/result.md", timestamp: Date.now() - 250 },
+        ],
+      }),
+      verificationState: {
+        pendingFiles: new Set(),
+        touchedFiles: new Set(["docs/result.md"]),
+        hasCompilableChanges: false,
+        lastBuildOk: null,
+        lastVerificationAt: null,
+      },
+      chatId: "chat-review-requested",
+      taskStartedAtMs: Date.now() - 1000,
+      logEntries: [],
+    });
+
+    const prompt = "Produce the result artifact and finish only after full review";
+    expect(userExplicitlyAskedForCompletionReview(prompt)).toBe(true);
+    expect(shouldRunCompletionReview(evidence, "Result finalized.", prompt)).toBe(true);
   });
 
   it("does not treat generic execution-plan discussion as an explicit plan-review request", () => {

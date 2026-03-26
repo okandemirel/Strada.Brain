@@ -17,6 +17,8 @@ const ASSISTANT_PERSONALITY_PATTERNS = [
 ] as const;
 const RESPONSE_FORMAT_CUSTOM_RE =
   /(?:(?:şu|su|this|following)\s+format(?:ta)?(?:\s+(?:cevap\s+ver|reply|respond))?|(?:cevap|yanıt|reply|respond)(?:ların|ler?n)?\s*(?:şöyle|like\s+this|in\s+this\s+format))(?:\s+ol(?:sun|malı|acak))?\s*[:\-]?\s*(.+)$/iu;
+const PROVIDER_REASONING_BLOCK_RE =
+  /<reasoning>\s*[\r\n]+[\s\S]*?[\r\n]+\s*<\/reasoning>\s*(?:[\r\n]+)?/giu;
 const AUTONOMY_ENABLE_RE =
   /(?:\b(?:autonom|otonom|autonomous)\b.*\b(?:çalış|calis|aç|ac|aktif|etkin|enable|turn\s+on|work|ilerle)\b|\b(?:onay|approval)\b.*\b(?:sormadan|istemeden|without\s+asking|without\s+approval)\b|\b(?:tam\s+yetki|full\s+autonomy|full\s+authority)\b)/iu;
 const AUTONOMY_DISABLE_RE =
@@ -153,9 +155,13 @@ export function buildExactResponseDirective(prompt: string): string {
   ].join("\n");
 }
 
+export function stripVisibleProviderArtifacts(responseText: string): string {
+  return responseText.replace(PROVIDER_REASONING_BLOCK_RE, "").trim();
+}
+
 export function applyVisibleResponseContract(prompt: string, responseText: string): string {
   const literal = extractExactResponseLiteral(prompt);
-  return literal ?? responseText;
+  return literal ?? stripVisibleProviderArtifacts(responseText);
 }
 
 export function getStringPreference(

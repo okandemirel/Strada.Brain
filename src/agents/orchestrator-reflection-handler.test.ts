@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import {
+  handleBgReflectionDone,
   handleBgReflectionReplan,
   handleBgReflectionContinue,
   handleInteractiveReflectionReplan,
@@ -31,7 +32,13 @@ function buildMockExecutionJournal() {
 
 function buildMockSelfVerification() {
   return {
-    getState: vi.fn().mockReturnValue({ touchedFiles: [] }),
+    getState: vi.fn().mockReturnValue({
+      touchedFiles: [],
+      hasCompilableChanges: false,
+      lastVerificationAt: null,
+    }),
+    needsVerification: vi.fn().mockReturnValue(false),
+    getPrompt: vi.fn().mockReturnValue(""),
   };
 }
 
@@ -58,14 +65,18 @@ function buildMockBgCtx(overrides: Partial<BgReflectionContext> = {}): BgReflect
     } as unknown as BgReflectionContext["executionStrategy"],
     executionJournal: buildMockExecutionJournal() as unknown as BgReflectionContext["executionJournal"],
     selfVerification: buildMockSelfVerification() as unknown as BgReflectionContext["selfVerification"],
-    stradaConformance: {} as BgReflectionContext["stradaConformance"],
+    stradaConformance: {
+      getPrompt: vi.fn().mockReturnValue(""),
+    } as unknown as BgReflectionContext["stradaConformance"],
     taskStartedAtMs: Date.now(),
     currentToolNames: [],
     currentAssignment: {
       providerName: "openai",
       modelId: "gpt-4",
     } as unknown as BgReflectionContext["currentAssignment"],
-    interventionDeps: {} as BgReflectionContext["interventionDeps"],
+    interventionDeps: {
+      stripInternalDecisionMarkers: vi.fn((text: string | null | undefined) => text ?? ""),
+    } as unknown as BgReflectionContext["interventionDeps"],
     session: session as unknown as BgReflectionContext["session"],
     recordPhaseOutcome: vi.fn(),
     buildPhaseOutcomeTelemetry: vi.fn().mockReturnValue(undefined),
@@ -116,14 +127,18 @@ function buildMockInteractiveCtx(
     } as unknown as InteractiveReflectionContext["executionStrategy"],
     executionJournal: buildMockExecutionJournal() as unknown as InteractiveReflectionContext["executionJournal"],
     selfVerification: buildMockSelfVerification() as unknown as InteractiveReflectionContext["selfVerification"],
-    stradaConformance: {} as InteractiveReflectionContext["stradaConformance"],
+    stradaConformance: {
+      getPrompt: vi.fn().mockReturnValue(""),
+    } as unknown as InteractiveReflectionContext["stradaConformance"],
     taskStartedAtMs: Date.now(),
     currentToolNames: [],
     currentAssignment: {
       providerName: "openai",
       modelId: "gpt-4",
     } as unknown as InteractiveReflectionContext["currentAssignment"],
-    interventionDeps: {} as InteractiveReflectionContext["interventionDeps"],
+    interventionDeps: {
+      stripInternalDecisionMarkers: vi.fn((text: string | null | undefined) => text ?? ""),
+    } as unknown as InteractiveReflectionContext["interventionDeps"],
     session: session as unknown as InteractiveReflectionContext["session"],
     recordPhaseOutcome: vi.fn(),
     buildPhaseOutcomeTelemetry: vi.fn().mockReturnValue(undefined),
@@ -209,6 +224,31 @@ describe("handleBgReflectionReplan", () => {
   });
 });
 
+describe("handleBgReflectionDone", () => {
+  it("passes daemonMode=true into background loop recovery", async () => {
+    const state = makeReflectingState();
+    const ctx = buildMockBgCtx({ responseText: "Still internal." });
+    const originalModule = await import("./orchestrator-intervention-pipeline.js");
+    vi.spyOn(originalModule, "resolveDraftClarificationIntervention").mockResolvedValueOnce({
+      kind: "continue",
+      gate: "Continue internally.",
+    } as any);
+    const recoverySpy = vi.spyOn(originalModule, "handleBackgroundLoopRecovery").mockResolvedValueOnce({
+      action: "blocked",
+      message: "Stopped.",
+    } as any);
+
+    await handleBgReflectionDone(state, ctx);
+
+    expect(recoverySpy).toHaveBeenCalledWith(
+      expect.objectContaining({ daemonMode: true }),
+      expect.anything(),
+    );
+
+    vi.restoreAllMocks();
+  });
+});
+
 // ─── handleBgReflectionContinue ──────────────────────────────────────────────────
 
 describe("handleBgReflectionContinue", () => {
@@ -228,7 +268,12 @@ describe("handleBgReflectionContinue", () => {
 
   it("pushes assistant message and 'Please continue.' when no tool calls", async () => {
     const state = makeReflectingState();
-    const ctx = buildMockBgCtx({ responseText: "Continuing the analysis." });
+    const ctx = buildMockBgCtx({
+      responseText: "Continuing the analysis.",
+      interventionDeps: {
+        stripInternalDecisionMarkers: vi.fn().mockReturnValue(""),
+      } as unknown as BgReflectionContext["interventionDeps"],
+    });
 
     await handleBgReflectionContinue(state, ctx, 0);
 
@@ -257,6 +302,31 @@ describe("handleBgReflectionContinue", () => {
     const assistantMessages = messages.filter((m) => m.role === "assistant");
     expect(assistantMessages).toHaveLength(0);
     expect(messages).toContainEqual({ role: "user", content: "Please continue." });
+  });
+
+  it("finishes when a text-only continue draft is already finalizable", async () => {
+    const state = makeReflectingState();
+    const ctx = buildMockBgCtx({
+      responseText: "Active project scope is /repo.",
+      synthesizeUserFacingResponse: vi.fn().mockResolvedValue("Active project scope is /repo."),
+    });
+    const originalModule = await import("./orchestrator-intervention-pipeline.js");
+    vi.spyOn(originalModule, "resolveDraftClarificationIntervention").mockResolvedValueOnce({
+      kind: "none",
+    } as any);
+    vi.spyOn(originalModule, "resolveVerifierIntervention").mockResolvedValueOnce({
+      kind: "approve",
+      result: { summary: "Approved." },
+    } as any);
+    const result = await handleBgReflectionContinue(state, ctx, 0);
+
+    expect(result.flow).toBe("done");
+    if (result.flow === "done") {
+      expect(result.visibleText).toBe("Active project scope is /repo.");
+    }
+    expect(ctx.persistSessionToMemory).toHaveBeenCalledOnce();
+
+    vi.restoreAllMocks();
   });
 });
 

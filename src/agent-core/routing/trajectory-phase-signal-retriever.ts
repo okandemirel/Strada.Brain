@@ -238,6 +238,7 @@ function isFailedReplayPhase(phaseTelemetry: TrajectoryPhaseReplay): boolean {
 function phaseUsesTrajectoryVerdict(phase: ExecutionPhase): boolean {
   return phase === "synthesis"
     || phase === "completion-review"
+    || phase === "visibility-review"
     || phase === "consensus-review"
     || phase === "shell-review";
 }

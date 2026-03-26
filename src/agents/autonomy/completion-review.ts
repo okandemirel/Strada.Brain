@@ -1,6 +1,7 @@
 import type { AgentState } from "../agent-state.js";
 import type { VerificationState } from "./self-verification.js";
 import type { LogEntry } from "../../utils/logger.js";
+import { analyzePromptTargets } from "../prompt-targets.js";
 
 export interface CompletionReviewEvidence {
   readonly touchedFiles: readonly string[];
@@ -139,6 +140,8 @@ const STRUCTURED_STEP_RE = /(?:^|\n)\s*(?:\d+\.\s+|[A-D]\)\s+|[-*]\s+)(?:run|rea
 const INTERNAL_PLAN_RE = /\b(?:execution-ready plan|execution plan|plan to fix|next step is|first step|second step|minimum inputs to proceed)\b/iu;
 const EXPLICIT_PLAN_REQUEST_RE =
   /\b(?:show|share|outline|walk me through|review)\b.{0,24}\b(?:your|the)\b.{0,16}\b(?:plan|approach|steps?|checklist)\b.{0,40}\b(?:before|first|prior to)\b|\b(?:before|first)\b.{0,40}\b(?:touch|change|edit|write|implement|execute|proceed|run)\b.{0,20}\b(?:show|share|outline|review|walk me through)\b.{0,20}\b(?:your|the)?\s*(?:plan|approach|steps?|checklist)\b|\b(?:plan[ıi]|yaklaş[ıi]m[ıi]n[ıi]|yaklas[ıi]m[ıi]n[ıi]|ad[ıi]mlar[ıi]n[ıi])\b.{0,30}\b(?:önce|once)\b.{0,30}\b(?:göster|goster|paylaş|paylas|anlat)\b/iu;
+const EXPLICIT_COMPLETION_REVIEW_REQUEST_RE =
+  /\b(?:full|final|complete|thorough|strict)\b.{0,24}\b(?:review|verification|validation|audit|check)\b|\b(?:review|verification|validation|audit|check)\b.{0,24}\b(?:before|prior to|until|only after|after)\b.{0,24}\b(?:finish|complete|finalize|declare done|return|ship)\b|\b(?:finish|complete|finalize|declare done|return|ship)\b.{0,24}\b(?:only after|after|until)\b.{0,24}\b(?:review|verification|validation|audit|check)\b|\b(?:tam\s+inceleme|tam\s+doğrulama|tam\s+kontrol|kapsamlı\s+inceleme|kapsamlı\s+doğrulama)\b|\b(?:inceleme|doğrulama|kontrol|denetim)\b.{0,24}\b(?:önce|olmadan|bitirmeden|tamamlamadan)\b.{0,24}\b(?:bitir|tamamla|kapat|dön)\b|\b(?:bitir|tamamla|kapat|dön)\b.{0,24}\b(?:önce|olmadan|sonra)\b.{0,24}\b(?:inceleme|doğrulama|kontrol|denetim)\b/iu;
 const INTERNAL_ROLE_RE = /\b(?:executor|worker|provider|orchestrator|planner|reviewer|synthesizer)\b/iu;
 const OPERATIONAL_SECTION_RE = /(?:^|\n)\s*[^\n:]{1,80}:\s*[^\n]+/gmu;
 const OPERATIONAL_VERB_RE = /\b(?:run|use|call|search|read|inspect|trace|collect|get|locate|identify|check|verify|create|update|fix|branch|treat|add|remove|ask|confirm|clarify|review|analy[sz]e|reproduce|arat|ara|oku|incele|kontrol et|doğrula|teyit et|çıkar|bak)\b/giu;
@@ -171,6 +174,18 @@ const INTERNAL_TOOL_NAMES = [
   "strada_create_system",
 ] as const;
 const INTERNAL_TOOL_TOKEN_RE = new RegExp(`\\b(?:${INTERNAL_TOOL_NAMES.join("|")})\\b`, "giu");
+const SAFE_BOUNDED_DIRECT_OPERATION_TOOLS = new Set([
+  "list_directory",
+  "glob_search",
+  "grep_search",
+  "find_file",
+  "file_read",
+  "file_write",
+  "file_edit",
+  "file_delete",
+  "file_manage",
+  "shell_exec",
+]);
 
 export function collectCompletionReviewEvidence(params: {
   state: AgentState;
@@ -215,6 +230,9 @@ export function shouldRunCompletionReview(
   draft: string,
   prompt = "",
 ): boolean {
+  if (isLowRiskMutationFootprint(evidence, draft, prompt)) {
+    return false;
+  }
   return (
     evidence.touchedFiles.length > 0 ||
     evidence.recentFailures.length > 0 ||
@@ -580,6 +598,9 @@ function draftNeedsReview(
   if (classifyAutonomyDrift(normalized, prompt) !== "none") {
     return true;
   }
+  if (userExplicitlyAskedForCompletionReview(prompt)) {
+    return true;
+  }
   if (draftLeavesOpenInvestigations(normalized)) {
     return evidence.totalStepCount > 0;
   }
@@ -589,6 +610,81 @@ function draftNeedsReview(
   return SCOPE_QUALIFIER_RE.test(normalized)
     && SCOPE_COMPLETION_VERB_RE.test(normalized)
     && evidence.totalStepCount > 0;
+}
+
+function isLowRiskMutationFootprint(
+  evidence: CompletionReviewEvidence,
+  draft: string,
+  prompt = "",
+): boolean {
+  const directTargetProfile = analyzePromptTargets(prompt);
+  const boundedDirectTargetOperation = isBoundedDirectTargetOperation(evidence, directTargetProfile);
+  const hasMutationEvidence = evidence.mutationStepCount > 0 || boundedDirectTargetOperation;
+  const hasTargetEvidence =
+    evidence.touchedFiles.length > 0
+    || (boundedDirectTargetOperation && directTargetProfile.hasExplicitTargets);
+
+  if (!hasTargetEvidence || !hasMutationEvidence) {
+    return false;
+  }
+  if (evidence.verificationState.hasCompilableChanges) {
+    return false;
+  }
+  if (evidence.recentFailures.length > 0 || evidence.recentLogIssues.length > 0) {
+    return false;
+  }
+  if (
+    evidence.mutationStepCount > (boundedDirectTargetOperation ? 3 : 1)
+    || evidence.verificationStepCount > 0
+  ) {
+    return false;
+  }
+  if (
+    evidence.inspectionStepCount > (boundedDirectTargetOperation ? 4 : 2)
+    || evidence.totalStepCount > (boundedDirectTargetOperation ? 8 : 4)
+  ) {
+    return false;
+  }
+
+  if (
+    boundedDirectTargetOperation
+    && (!directTargetProfile.isBoundedTargetSet || directTargetProfile.hasCompilableTarget)
+  ) {
+    return false;
+  }
+
+  const normalized = draft.trim();
+  if (!normalized) {
+    return false;
+  }
+
+  return !draftNeedsReview(normalized, evidence, prompt);
+}
+
+function isBoundedDirectTargetOperation(
+  evidence: CompletionReviewEvidence,
+  profile: ReturnType<typeof analyzePromptTargets>,
+): boolean {
+  if (!profile.hasExplicitTargets || !profile.isBoundedTargetSet) {
+    return false;
+  }
+  if (!profile.hasEphemeralRootTarget || !profile.allTargetsNonCompilable) {
+    return false;
+  }
+
+  const toolNames = extractRecentToolNames(evidence.recentSteps);
+  const hasDirectMutationTool = toolNames.some((toolName) =>
+    toolName === "shell_exec"
+      || toolName === "file_write"
+      || toolName === "file_edit"
+      || toolName === "file_delete"
+      || toolName === "file_manage"
+  );
+  if (!hasDirectMutationTool) {
+    return false;
+  }
+
+  return toolNames.every((toolName) => SAFE_BOUNDED_DIRECT_OPERATION_TOOLS.has(toolName));
 }
 
 export function classifyAutonomyDrift(
@@ -623,6 +719,10 @@ export function classifyAutonomyDrift(
 
 export function userExplicitlyAskedForPlan(prompt: string): boolean {
   return EXPLICIT_PLAN_REQUEST_RE.test(prompt.trim());
+}
+
+export function userExplicitlyAskedForCompletionReview(prompt: string): boolean {
+  return EXPLICIT_COMPLETION_REVIEW_REQUEST_RE.test(prompt.trim());
 }
 
 function isVerificationStep(toolName: string, summary: string): boolean {
@@ -719,6 +819,14 @@ function collectInternalToolMentions(
     mentions.add(token.toLowerCase());
   }
   return mentions;
+}
+
+function extractRecentToolNames(recentSteps: readonly string[]): string[] {
+  return recentSteps.flatMap((step) => {
+    const match = step.match(/^\[[A-Z]+\]\s+([^:]+):/u);
+    const toolName = match?.[1]?.trim();
+    return toolName ? [toolName] : [];
+  });
 }
 
 function buildDynamicToolTokenPattern(toolNames?: Iterable<string>): RegExp | null {

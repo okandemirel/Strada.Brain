@@ -6,7 +6,25 @@ import {
   replaceSection,
   sanitizeEventInput,
   sanitizeToolResult,
+  validateReflectionDecision,
 } from "./orchestrator-runtime-utils.js";
+import { AgentPhase, type AgentState } from "./agent-state.js";
+
+function createState(overrides: Partial<AgentState> = {}): AgentState {
+  return {
+    phase: AgentPhase.REFLECTING,
+    taskDescription: "test task",
+    iteration: 1,
+    plan: "do the work",
+    stepResults: [],
+    failedApproaches: [],
+    reflectionCount: 0,
+    lastReflection: null,
+    consecutiveErrors: 0,
+    learnedInsights: [],
+    ...overrides,
+  };
+}
 
 describe("orchestrator-runtime-utils", () => {
   it("replaces prompt sections and strips injected markers", () => {
@@ -49,5 +67,32 @@ describe("orchestrator-runtime-utils", () => {
     expect(
       sanitizeToolResult("token sk-secret-secret-secret value", 18),
     ).toContain("[REDACTED]");
+  });
+
+  it("ignores incidental inspection failures when reflection declares DONE", () => {
+    const result = validateReflectionDecision("DONE", createState({
+      stepResults: [
+        { toolName: "list_directory", success: false, summary: "Temp directory missing", timestamp: 1 },
+        { toolName: "file_read", success: true, summary: "Read fallback path", timestamp: 2 },
+      ],
+    }));
+
+    expect(result.decision).toBe("DONE");
+  });
+
+  it("keeps the loop open for blocking mutation or verification failures", () => {
+    const mutationFailure = validateReflectionDecision("DONE", createState({
+      stepResults: [
+        { toolName: "file_write", success: false, summary: "permission denied", timestamp: 1 },
+      ],
+    }));
+    expect(mutationFailure.decision).toBe("CONTINUE");
+
+    const verificationFailure = validateReflectionDecision("DONE", createState({
+      stepResults: [
+        { toolName: "shell_test", success: false, summary: "build failed", timestamp: 2 },
+      ],
+    }));
+    expect(verificationFailure.decision).toBe("CONTINUE");
   });
 });

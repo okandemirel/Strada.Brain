@@ -28,6 +28,7 @@ function createMocks(overrides?: {
   observations?: AgentObservation[];
   budgetPct?: number;
   chatResponse?: Record<string, unknown>;
+  activeForegroundTaskCount?: number;
 }) {
   const obs = overrides?.observations ?? [createObservation("build", "Build failed", { priority: 80 })];
   const engine = new ObservationEngine();
@@ -39,7 +40,12 @@ function createMocks(overrides?: {
       makeLLMResponse(overrides?.chatResponse ?? { action: "execute", goal: "Fix build", reasoning: "broken" }),
     ),
   };
-  const taskManager = { submit: vi.fn().mockReturnValue({ id: "task_mock01" }), listTasks: vi.fn().mockReturnValue([]), getStatus: vi.fn().mockReturnValue(null) };
+  const taskManager = {
+    submit: vi.fn().mockReturnValue({ id: "task_mock01" }),
+    listTasks: vi.fn().mockReturnValue([]),
+    getStatus: vi.fn().mockReturnValue(null),
+    countActiveForegroundTasks: vi.fn().mockReturnValue(overrides?.activeForegroundTaskCount ?? 0),
+  };
   const channel = { sendText: vi.fn().mockResolvedValue(undefined) };
   const budget = {
     getUsage: vi.fn().mockReturnValue({ usedUsd: 5, limitUsd: 10, pct: overrides?.budgetPct ?? 0.5 }),
@@ -171,6 +177,36 @@ describe("AgentCore OODA Integration", () => {
 
     expect(m.channel.sendText).toHaveBeenCalledWith("agent-core", "[Agent needs input] Should I deploy?");
     expect(m.taskManager.submit).not.toHaveBeenCalled();
+  });
+
+  it("suppresses notify while a foreground user task is active and defers the observation", async () => {
+    const obs = createObservation("git", "65 uncommitted change(s) detected", { priority: 80 });
+    const m = createMocks({
+      observations: [obs],
+      chatResponse: { action: "notify", message: "There are many local changes.", reasoning: "informing" },
+      activeForegroundTaskCount: 1,
+    });
+    const core = buildCore(m);
+    await core.tick();
+
+    expect(m.channel.sendText).not.toHaveBeenCalled();
+    expect(m.taskManager.submit).not.toHaveBeenCalled();
+    expect(m.engine.getDeferredCount()).toBe(1);
+  });
+
+  it("suppresses escalate while a foreground user task is active and defers the observation", async () => {
+    const obs = createObservation("git", "65 uncommitted change(s) detected", { priority: 80 });
+    const m = createMocks({
+      observations: [obs],
+      chatResponse: { action: "escalate", question: "Should I review the diff now?", reasoning: "need approval" },
+      activeForegroundTaskCount: 1,
+    });
+    const core = buildCore(m);
+    await core.tick();
+
+    expect(m.channel.sendText).not.toHaveBeenCalled();
+    expect(m.taskManager.submit).not.toHaveBeenCalled();
+    expect(m.engine.getDeferredCount()).toBe(1);
   });
 
   /* 8. Instinct integration */

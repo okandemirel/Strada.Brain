@@ -28,7 +28,10 @@ import { writeFile, mkdir } from "node:fs/promises";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { MemoryRefresher } from "./memory-refresher.js";
-import { redactSensitiveText } from "./orchestrator-text-utils.js";
+import {
+  redactSensitiveText,
+  stripVisibleProviderArtifacts,
+} from "./orchestrator-text-utils.js";
 import { stripInternalDecisionMarkers } from "./orchestrator-supervisor-routing.js";
 import { getLogger } from "../utils/logger.js";
 
@@ -343,7 +346,8 @@ export class SessionManager {
   }
 
   appendVisibleAssistantMessage(session: Session, content: string): void {
-    const message: ConversationMessage = { role: "assistant", content };
+    const sanitizedContent = stripVisibleProviderArtifacts(content);
+    const message: ConversationMessage = { role: "assistant", content: sanitizedContent };
     session.messages.push(message);
     this.ensureVisibleMessages(session).push(message);
   }
@@ -370,8 +374,9 @@ export class SessionManager {
     session: Session,
     content: string,
   ): Promise<void> {
-    this.appendVisibleAssistantMessage(session, content);
-    await this.deps.channel.sendText(chatId, content);
+    const sanitizedContent = stripVisibleProviderArtifacts(content);
+    this.appendVisibleAssistantMessage(session, sanitizedContent);
+    await this.deps.channel.sendText(chatId, sanitizedContent);
   }
 
   async sendVisibleAssistantMarkdown(
@@ -379,8 +384,9 @@ export class SessionManager {
     session: Session,
     content: string,
   ): Promise<void> {
-    this.appendVisibleAssistantMessage(session, content);
-    await this.deps.channel.sendMarkdown(chatId, content);
+    const sanitizedContent = stripVisibleProviderArtifacts(content);
+    this.appendVisibleAssistantMessage(session, sanitizedContent);
+    await this.deps.channel.sendMarkdown(chatId, sanitizedContent);
   }
 
   // ── Persistence ──────────────────────────────────────────────────────────
