@@ -19,6 +19,7 @@ import type { Task, TaskProgressSignal, TaskProgressUpdate } from "./types.js";
 import { getTaskConversationKey, TaskStatus } from "./types.js";
 import type { TaskManager } from "./task-manager.js";
 import type { Orchestrator } from "../agents/orchestrator.js";
+import { resolveConversationScope } from "../agents/orchestrator-text-utils.js";
 import type { GoalDecomposer } from "../goals/goal-decomposer.js";
 import type { GoalNode, GoalTree } from "../goals/types.js";
 import { GoalExecutor } from "../goals/goal-executor.js";
@@ -43,6 +44,7 @@ import type { BudgetTracker } from "../daemon/budget/budget-tracker.js";
 import { getLogger } from "../utils/logger.js";
 import { WorkspaceLeaseManager } from "../agents/multi/workspace-lease-manager.js";
 import type { WorkerRunResult } from "../agents/supervisor/supervisor-types.js";
+import { normalizeSupervisorProgressMarkdown } from "../supervisor/supervisor-feedback.js";
 import type { MonitorLifecycle } from "../dashboard/monitor-lifecycle.js";
 import type { WorkspaceBus } from "../dashboard/workspace-bus.js";
 import { goalTreeToDagPayload } from "../dashboard/workspace-events.js";
@@ -208,6 +210,92 @@ export class BackgroundExecutor {
         ? "Aşama: inceleme. Son aksiyon: ilgili kanıtlar üzerinde hızlı bir ilk tarama başlattım. Sıradaki adım: ilk somut müdahale noktasını çıkaracağım."
         : "Stage: inspection. Last action: I started a quick first pass over the relevant evidence. Next: I'll line up the first concrete intervention point.",
     };
+  }
+
+  private getConversationScope(task: Pick<Task, "chatId" | "conversationId">): string {
+    return resolveConversationScope(task.chatId, task.conversationId);
+  }
+
+  private beginGoalExecution(
+    task: Task,
+    goalTree: GoalTree,
+    onProgress: (message: TaskProgressUpdate) => void,
+  ): void {
+    const logger = getLogger();
+    onProgress(this.buildGoalProgressSignal(task, goalTree));
+    this.emitGoalNarrative(task, goalTree);
+
+    const conversationScope = this.getConversationScope(task);
+    if (this.monitorLifecycle) {
+      this.monitorLifecycle.goalDecomposed(conversationScope, goalTree);
+    } else if (this.workspaceBus) {
+      this.workspaceBus.emit("monitor:dag_init", goalTreeToDagPayload(goalTree));
+    }
+
+    if (this.daemonEventBus) {
+      this.daemonEventBus.emit("goal:started", {
+        rootId: goalTree.rootId,
+        taskDescription: goalTree.taskDescription,
+        nodeCount: goalTree.nodes.size - 1,
+        timestamp: Date.now(),
+      });
+    }
+
+    if (this.goalStorage) {
+      try {
+        this.goalStorage.upsertTree(goalTree, "executing");
+      } catch (e) {
+        logger.debug("Goal tree initial persistence failed", {
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
+    }
+  }
+
+  private completeGoalExecution(goalTree: GoalTree, durationMs: number, successCount: number): void {
+    const logger = getLogger();
+    if (this.goalStorage) {
+      try {
+        this.goalStorage.updateTreeStatus(goalTree.rootId, "completed");
+      } catch (e) {
+        logger.debug("Goal tree completion persistence failed", {
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
+    }
+
+    if (this.daemonEventBus) {
+      this.daemonEventBus.emit("goal:complete", {
+        rootId: goalTree.rootId,
+        taskDescription: goalTree.taskDescription,
+        durationMs,
+        successCount,
+        failureCount: 0,
+        timestamp: Date.now(),
+      });
+    }
+  }
+
+  private failGoalExecution(goalTree: GoalTree, error: string, failureCount: number): void {
+    const logger = getLogger();
+    if (this.goalStorage) {
+      try {
+        this.goalStorage.updateTreeStatus(goalTree.rootId, "failed");
+      } catch (e) {
+        logger.debug("Goal tree failure persistence failed", {
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
+    }
+
+    if (this.daemonEventBus) {
+      this.daemonEventBus.emit("goal:failed", {
+        rootId: goalTree.rootId,
+        error,
+        failureCount,
+        timestamp: Date.now(),
+      });
+    }
   }
 
   setPhase(phase: 'planning' | 'acting' | 'observing' | 'reflecting'): void {
@@ -434,20 +522,124 @@ export class BackgroundExecutor {
     this.taskManager.updateStatus(task.id, TaskStatus.executing);
     onProgress(this.buildKickoffProgressSignal(task));
 
+    const conversationScope = this.getConversationScope(task);
+
     // Monitor lifecycle: emit simple DAG so monitor workspace always shows something
-    this.monitorLifecycle?.requestStart(task.chatId, task.prompt);
+    this.monitorLifecycle?.requestStart(conversationScope, task.prompt);
 
     let taskLease: Awaited<ReturnType<WorkspaceLeaseManager["acquireLease"]>> | undefined;
+    let requestFailed = false;
+    let supervisorGoalTree: GoalTree | undefined;
+    let supervisorGoalStartedAt = 0;
     try {
+      const hasAttachmentInput = (task.attachments?.length ?? 0) > 0;
+      const shouldDecomposeTask = this.decomposer?.shouldDecompose(task.prompt) ?? false;
+      const shouldAttemptInlineGoalExecution = !hasAttachmentInput && (Boolean(task.goalTree) || shouldDecomposeTask);
+      const supervisorCapableOrchestrator = taskOrchestrator as Orchestrator & {
+        tryRouteThroughSupervisor?: (params: {
+          prompt: string;
+          chatId: string;
+          channelType?: string;
+          conversationId?: string;
+          userId?: string;
+          signal?: AbortSignal;
+          goalTree?: GoalTree;
+          forceEligibility?: boolean;
+          attachments?: import("../channels/channel.interface.js").Attachment[];
+          onActivated?: (activation: { markdown: string }) => Promise<void> | void;
+          reportUpdate?: (markdown: string) => Promise<void> | void;
+          onGoalDecomposed?: (goalTree: GoalTree) => void;
+        }) => Promise<import("../supervisor/supervisor-types.js").SupervisorResult | null>;
+      };
+
+      if (shouldAttemptInlineGoalExecution && typeof supervisorCapableOrchestrator.tryRouteThroughSupervisor === "function") {
+        let lastSupervisorSummary = "";
+        const emitSupervisorProgress = (summary: string): void => {
+          const normalized = summary.trim();
+          if (!normalized || normalized === lastSupervisorSummary) {
+            return;
+          }
+          lastSupervisorSummary = normalized;
+          onProgress({
+            kind: "goal",
+            message: "Supervisor update",
+            userSummary: normalized,
+          });
+        };
+        const supervisorResult = await supervisorCapableOrchestrator.tryRouteThroughSupervisor({
+          prompt: task.prompt,
+          chatId: task.chatId,
+          channelType: task.channelType,
+          conversationId: task.conversationId,
+          userId: task.userId,
+          signal,
+          goalTree: task.goalTree,
+          forceEligibility: shouldAttemptInlineGoalExecution,
+          attachments: task.attachments,
+          onGoalDecomposed: (goalTree: GoalTree) => {
+            supervisorGoalTree = goalTree;
+            supervisorGoalStartedAt = Date.now();
+            this.beginGoalExecution(task, goalTree, onProgress);
+          },
+          onActivated: (activation) => {
+            emitSupervisorProgress(normalizeSupervisorProgressMarkdown(activation.markdown));
+          },
+          reportUpdate: (markdown) => {
+            emitSupervisorProgress(normalizeSupervisorProgressMarkdown(markdown));
+          },
+        });
+
+        if (supervisorResult) {
+          if (supervisorGoalTree) {
+            if (supervisorResult.success) {
+              this.completeGoalExecution(
+                supervisorGoalTree,
+                Date.now() - supervisorGoalStartedAt,
+                supervisorResult.succeeded,
+              );
+            } else {
+              this.failGoalExecution(
+                supervisorGoalTree,
+                supervisorResult.partial ? "Goal execution blocked" : "Goal execution failed",
+                supervisorResult.failed + supervisorResult.skipped,
+              );
+            }
+          }
+
+          if (signal.aborted) {
+            return;
+          }
+
+          if (supervisorResult.success) {
+            this.taskManager.complete(task.id, supervisorResult.output);
+            return;
+          }
+          if (supervisorResult.partial) {
+            requestFailed = true;
+            this.taskManager.block(task.id, supervisorResult.output);
+            return;
+          }
+          requestFailed = true;
+          this.taskManager.fail(task.id, supervisorResult.output);
+          return;
+        }
+
+        if (signal.aborted) {
+          return;
+        }
+      }
+
       // Check for pre-decomposed goal tree (from inline goal detection)
-      if (task.goalTree) {
+      if (task.goalTree && !hasAttachmentInput) {
         const result = await this.executeDecomposed(task, signal, onProgress, task.goalTree);
         if (signal.aborted) return;
         if (!result.success) {
           if (result.blocked) {
+            requestFailed = true;
             this.taskManager.block(task.id, result.error ?? "Goal execution blocked");
             return;
           }
+          requestFailed = true;
           this.taskManager.fail(task.id, result.error ?? "Goal execution failed");
           return;
         }
@@ -456,14 +648,16 @@ export class BackgroundExecutor {
       }
 
       // Check if task should be decomposed into subtasks
-      if (this.decomposer?.shouldDecompose(task.prompt)) {
+      if (!hasAttachmentInput && shouldDecomposeTask) {
         const result = await this.executeDecomposed(task, signal, onProgress);
         if (signal.aborted) return;
         if (!result.success) {
           if (result.blocked) {
+            requestFailed = true;
             this.taskManager.block(task.id, result.error ?? "Goal execution blocked");
             return;
           }
+          requestFailed = true;
           this.taskManager.fail(task.id, result.error ?? "Goal execution failed");
           return;
         }
@@ -498,6 +692,7 @@ export class BackgroundExecutor {
       }
 
       if (result.workerResult && result.workerResult.status === "failed") {
+        requestFailed = true;
         this.taskManager.fail(
           task.id,
           result.workerResult.reason ?? (result.output || "Task failed"),
@@ -506,6 +701,7 @@ export class BackgroundExecutor {
       }
 
       if (result.workerResult && result.workerResult.status === "blocked") {
+        requestFailed = true;
         this.taskManager.block(
           task.id,
           result.workerResult.reason ?? (result.output || "Task blocked"),
@@ -521,19 +717,17 @@ export class BackgroundExecutor {
 
       const errMsg = error instanceof Error ? error.message : String(error);
       logger.error("Background task execution error", { taskId: task.id, error: errMsg });
+      requestFailed = true;
       this.taskManager.fail(task.id, errMsg);
 
       // Emit goal:failed if we have a goal tree context (INT-02 catch path)
-      if (this.daemonEventBus && task.goalTree) {
-        this.daemonEventBus.emit("goal:failed", {
-          rootId: task.goalTree.rootId,
-          error: errMsg,
-          failureCount: 0,
-          timestamp: Date.now(),
-        });
+      if (supervisorGoalTree) {
+        this.failGoalExecution(supervisorGoalTree, errMsg, 0);
+      } else if (task.goalTree) {
+        this.failGoalExecution(task.goalTree, errMsg, 0);
       }
     } finally {
-      this.monitorLifecycle?.requestEnd(task.chatId);
+      this.monitorLifecycle?.requestEnd(conversationScope, requestFailed);
       await taskLease?.release().catch(() => {});
     }
   }
@@ -560,27 +754,7 @@ export class BackgroundExecutor {
     const goalTree = preBuiltTree ?? await this.decomposer!.decomposeProactive(task.chatId, task.prompt);
     const nodeCount = goalTree.nodes.size - 1; // exclude root
     logger.info("Task decomposed into goal tree", { taskId: task.id, nodeCount, preBuilt: !!preBuiltTree });
-    onProgress(this.buildGoalProgressSignal(task, goalTree));
-    this.emitGoalNarrative(task, goalTree);
-
-    // Emit goal:started event
-    if (this.daemonEventBus) {
-      this.daemonEventBus.emit("goal:started", {
-        rootId: goalTree.rootId,
-        taskDescription: goalTree.taskDescription,
-        nodeCount,
-        timestamp: Date.now(),
-      });
-    }
-
-    // Persist initial tree state
-    if (this.goalStorage) {
-      try {
-        this.goalStorage.upsertTree(goalTree, "executing");
-      } catch (e) {
-        logger.debug("Goal tree initial persistence failed", { error: e instanceof Error ? e.message : String(e) });
-      }
-    }
+    this.beginGoalExecution(task, goalTree, onProgress);
 
     // Create executor with config (or defaults)
     const config: GoalExecutorConfig = {
@@ -900,13 +1074,6 @@ Is this failure critical? A critical failure means dependent sub-goals cannot pr
       }
     };
 
-    // Workspace monitor: emit DAG initialisation for dashboard UI
-    if (this.monitorLifecycle) {
-      this.monitorLifecycle.goalDecomposed(task.chatId, goalTree);
-    } else if (this.workspaceBus) {
-      this.workspaceBus.emit("monitor:dag_init", goalTreeToDagPayload(goalTree));
-    }
-
     // Execute the tree with all callbacks
     const result = await executor.executeTree(goalTree, nodeExecutor, signal, {
       onStatusChange,
@@ -916,7 +1083,6 @@ Is this failure critical? A critical failure means dependent sub-goals cannot pr
       onNodeFailed,
     });
 
-    // Persist final tree state
     const allChildWorkerResults = [...childWorkerResults.values()];
     const blockedWorker = allChildWorkerResults.find((workerResult) => workerResult.status === "blocked");
     const childWorkerIssues = allChildWorkerResults.some(
@@ -926,36 +1092,18 @@ Is this failure critical? A critical failure means dependent sub-goals cannot pr
         workerResult.verificationResults.some((entry) => entry.status === "issues"),
     );
     const hasFailed = result.aborted || result.failureCount > 0 || childWorkerIssues;
-    if (this.goalStorage) {
-      try {
-        this.goalStorage.upsertTree(result.tree, hasFailed ? "failed" : "completed");
-      } catch (e) {
-        logger.debug("Goal tree final persistence failed", { error: e instanceof Error ? e.message : String(e) });
-      }
-    }
-
-    // Emit goal event -- goal:failed for failures/aborts, goal:complete for successes only (INT-02)
-    if (this.daemonEventBus) {
-      if (hasFailed) {
-        this.daemonEventBus.emit("goal:failed", {
-          rootId: goalTree.rootId,
-          error: result.aborted
-            ? "Goal aborted"
-            : `${result.failureCount} sub-goal(s) failed`,
-          failureCount: result.failureCount,
-          timestamp: Date.now(),
-        });
-      } else {
-        const successCount = result.results.filter(r => r.result && !r.error).length;
-        this.daemonEventBus.emit("goal:complete", {
-          rootId: goalTree.rootId,
-          taskDescription: goalTree.taskDescription,
-          durationMs: Date.now() - startTime,
-          successCount,
-          failureCount: 0,
-          timestamp: Date.now(),
-        });
-      }
+    if (hasFailed) {
+      this.failGoalExecution(
+        goalTree,
+        result.aborted ? "Goal aborted" : `${result.failureCount} sub-goal(s) failed`,
+        result.failureCount,
+      );
+    } else {
+      this.completeGoalExecution(
+        goalTree,
+        Date.now() - startTime,
+        result.results.filter((r) => r.result && !r.error).length,
+      );
     }
 
     // Combine results

@@ -802,6 +802,7 @@ describe("Orchestrator", () => {
     );
 
     const supervisorBrain = {
+      shouldExecute: vi.fn().mockReturnValue(true),
       execute: vi.fn(async (_task: string, context: { reportUpdate?: (markdown: string) => Promise<void>; onGoalDecomposed?: (goalTree: typeof goalTree) => void }) => {
         await context.reportUpdate?.("**Stage:** planning");
         context.onGoalDecomposed?.(goalTree);
@@ -883,6 +884,7 @@ describe("Orchestrator", () => {
     const mockProvider = createMockProvider();
     const mockChannel = createMockChannel();
     const supervisorBrain = {
+      shouldExecute: vi.fn().mockReturnValue(true),
       execute: vi.fn().mockResolvedValue({
         success: true,
         partial: false,
@@ -935,6 +937,63 @@ describe("Orchestrator", () => {
     expect(progress).toHaveBeenCalled();
   });
 
+  it("marks partial supervisor background runs as blocked instead of completed", async () => {
+    const mockProvider = createMockProvider();
+    const mockChannel = createMockChannel();
+    const supervisorBrain = {
+      execute: vi.fn().mockResolvedValue({
+        success: false,
+        partial: true,
+        output: "Completed:\nstep 1\n\nSkipped:\n[step-2] skipped",
+        totalNodes: 2,
+        succeeded: 1,
+        failed: 0,
+        skipped: 1,
+        totalCost: 0,
+        totalDuration: 0,
+        nodeResults: [],
+      }),
+      shouldExecute: vi.fn().mockReturnValue(true),
+    };
+
+    const orchestrator = new Orchestrator({
+      providerManager: {
+        getProvider: () => mockProvider,
+        getProviderByName: () => mockProvider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        listAvailable: () => [{ name: "mock", label: "mock", defaultModel: "default" }],
+        shutdown: vi.fn(),
+      } as any,
+      tools: [],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: false,
+      supervisorBrain: supervisorBrain as any,
+      supervisorComplexityThreshold: "complex",
+    });
+    (orchestrator as any).taskClassifier = {
+      classify: vi.fn().mockReturnValue({
+        type: "analysis",
+        complexity: "complex",
+        criticality: "high",
+      }),
+    };
+
+    const result = await orchestrator.runWorkerTask({
+      prompt: "Investigate the complex failure",
+      mode: "background",
+      chatId: "bg-supervisor-partial",
+      channelType: "cli",
+      signal: AbortSignal.timeout(5_000),
+      onProgress: vi.fn(),
+    } as any);
+
+    expect(result.status).toBe("blocked");
+    expect(result.visibleResponse).toContain("Completed:");
+    expect(mockProvider.chat).not.toHaveBeenCalled();
+  });
+
   it("keeps nested background workers out of supervisor routing when disabled", async () => {
     const mockProvider = createMockProvider();
     mockProvider.chat.mockResolvedValueOnce({
@@ -945,6 +1004,7 @@ describe("Orchestrator", () => {
     });
     const mockChannel = createMockChannel();
     const supervisorBrain = {
+      shouldExecute: vi.fn().mockReturnValue(true),
       execute: vi.fn(),
     };
 
@@ -983,6 +1043,221 @@ describe("Orchestrator", () => {
     expect(result).toBe("Nested worker answer");
     expect(supervisorBrain.execute).not.toHaveBeenCalled();
     expect(mockProvider.chat).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets concurrent complex background tasks use supervisor on different conversations", async () => {
+    const mockProvider = createMockProvider();
+    const mockChannel = createMockChannel();
+    const release: Array<() => void> = [];
+    const supervisorBrain = {
+      shouldExecute: vi.fn().mockReturnValue(true),
+      execute: vi.fn().mockImplementation(async (prompt: string) => {
+        await new Promise<void>((resolve) => {
+          release.push(resolve);
+        });
+        return {
+          success: true,
+          partial: false,
+          output: `${prompt} done`,
+          totalNodes: 1,
+          succeeded: 1,
+          failed: 0,
+          skipped: 0,
+          totalCost: 0,
+          totalDuration: 0,
+          nodeResults: [],
+        };
+      }),
+    };
+
+    const orchestrator = new Orchestrator({
+      providerManager: {
+        getProvider: () => mockProvider,
+        getProviderByName: () => mockProvider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        listAvailable: () => [{ name: "mock", label: "mock", defaultModel: "default" }],
+        shutdown: vi.fn(),
+      } as any,
+      tools: [],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: false,
+      supervisorBrain: supervisorBrain as any,
+      supervisorComplexityThreshold: "complex",
+    });
+    (orchestrator as any).taskClassifier = {
+      classify: vi.fn().mockReturnValue({
+        type: "analysis",
+        complexity: "complex",
+        criticality: "high",
+      }),
+    };
+
+    const first = orchestrator.runBackgroundTask("Complex task A", {
+      signal: AbortSignal.timeout(5_000),
+      onProgress: vi.fn(),
+      chatId: "bg-supervisor-a",
+      channelType: "cli",
+      conversationId: "conv-a",
+    });
+    const second = orchestrator.runBackgroundTask("Complex task B", {
+      signal: AbortSignal.timeout(5_000),
+      onProgress: vi.fn(),
+      chatId: "bg-supervisor-b",
+      channelType: "cli",
+      conversationId: "conv-b",
+    });
+
+    await vi.waitFor(() => {
+      expect(supervisorBrain.execute).toHaveBeenCalledTimes(2);
+    });
+
+    release.splice(0).forEach((resolve) => resolve());
+
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      "Complex task A done",
+      "Complex task B done",
+    ]);
+    expect(mockProvider.chat).not.toHaveBeenCalled();
+  });
+
+  it("lets concurrent complex background tasks use supervisor on different channels with the same conversation scope", async () => {
+    const mockProvider = createMockProvider();
+    const mockChannel = createMockChannel();
+    const release: Array<() => void> = [];
+    const supervisorBrain = {
+      shouldExecute: vi.fn().mockReturnValue(true),
+      execute: vi.fn().mockImplementation(async (prompt: string) => {
+        await new Promise<void>((resolve) => {
+          release.push(resolve);
+        });
+        return {
+          success: true,
+          partial: false,
+          output: `${prompt} done`,
+          totalNodes: 1,
+          succeeded: 1,
+          failed: 0,
+          skipped: 0,
+          totalCost: 0,
+          totalDuration: 0,
+          nodeResults: [],
+        };
+      }),
+    };
+
+    const orchestrator = new Orchestrator({
+      providerManager: {
+        getProvider: () => mockProvider,
+        getProviderByName: () => mockProvider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        listAvailable: () => [{ name: "mock", label: "mock", defaultModel: "default" }],
+        shutdown: vi.fn(),
+      } as any,
+      tools: [],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: false,
+      supervisorBrain: supervisorBrain as any,
+      supervisorComplexityThreshold: "complex",
+    });
+    (orchestrator as any).taskClassifier = {
+      classify: vi.fn().mockReturnValue({
+        type: "analysis",
+        complexity: "complex",
+        criticality: "high",
+      }),
+    };
+
+    const first = orchestrator.runBackgroundTask("Cross-channel task A", {
+      signal: AbortSignal.timeout(5_000),
+      onProgress: vi.fn(),
+      chatId: "shared-chat",
+      channelType: "web",
+      conversationId: "thread-42",
+    });
+    const second = orchestrator.runBackgroundTask("Cross-channel task B", {
+      signal: AbortSignal.timeout(5_000),
+      onProgress: vi.fn(),
+      chatId: "shared-chat",
+      channelType: "telegram",
+      conversationId: "thread-42",
+    });
+
+    await vi.waitFor(() => {
+      expect(supervisorBrain.execute).toHaveBeenCalledTimes(2);
+    });
+
+    release.splice(0).forEach((resolve) => resolve());
+
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      "Cross-channel task A done",
+      "Cross-channel task B done",
+    ]);
+    expect(mockProvider.chat).not.toHaveBeenCalled();
+  });
+
+  it("keeps image-backed interactive requests on the multimodal PAOR path", async () => {
+    const mockProvider = createMockProvider();
+    mockProvider.capabilities.vision = true;
+    mockProvider.chat.mockResolvedValueOnce({
+      text: "Analyzed the image directly.",
+      toolCalls: [],
+      stopReason: "end_turn" as const,
+      usage: { inputTokens: 10, outputTokens: 20 },
+    });
+    const mockChannel = createMockChannel();
+    const supervisorBrain = {
+      shouldExecute: vi.fn().mockReturnValue(true),
+      execute: vi.fn(),
+    };
+
+    const orchestrator = new Orchestrator({
+      providerManager: {
+        getProvider: () => mockProvider,
+        getProviderByName: () => mockProvider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        listAvailable: () => [{ name: "mock", label: "mock", defaultModel: "default" }],
+        shutdown: vi.fn(),
+      } as any,
+      tools: [],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: false,
+      supervisorBrain: supervisorBrain as any,
+      supervisorComplexityThreshold: "complex",
+    });
+    (orchestrator as any).taskClassifier = {
+      classify: vi.fn().mockReturnValue({
+        type: "analysis",
+        complexity: "complex",
+        criticality: "high",
+      }),
+    };
+
+    await orchestrator.handleMessage({
+      channelType: "web",
+      chatId: "chat-vision-supervisor",
+      userId: "user1",
+      text: "Inspect this screenshot and explain the layout bug in detail",
+      attachments: [{
+        type: "image",
+        name: "layout.png",
+        mimeType: "image/png",
+        data: Buffer.from("png-data"),
+        size: 8,
+      }],
+      timestamp: new Date(),
+    } as any);
+
+    expect(supervisorBrain.execute).not.toHaveBeenCalled();
+    expect(mockProvider.chat).toHaveBeenCalledTimes(1);
+    const firstCallMessages = mockProvider.chat.mock.calls[0]?.[1] ?? [];
+    const userMessage = firstCallMessages.find((message: { role: string }) => message.role === "user");
+    expect(Array.isArray(userMessage?.content)).toBe(true);
   });
 
   it("enforces the exact visible output contract even when a single worker adds extra text", async () => {

@@ -80,6 +80,45 @@ describe("SupervisorBrain", () => {
     expect(decomposer.decomposeProactive).not.toHaveBeenCalled();
   });
 
+  it("uses a provided goalTree even when prompt decomposition is disabled", async () => {
+    const goalTree = makeGoalTree([
+      { id: "root", task: "Inspect design" },
+      { id: "s1", task: "Compare layout" },
+    ]);
+    const decomposer = {
+      shouldDecompose: vi.fn().mockReturnValue(false),
+      decomposeProactive: vi.fn(),
+    };
+    const executeNode = vi.fn().mockResolvedValue({
+      nodeId: "s1",
+      status: "ok",
+      output: "Compared layout",
+      artifacts: [],
+      toolResults: [],
+      provider: "claude",
+      model: "sonnet",
+      cost: 0,
+      duration: 10,
+    } satisfies NodeResult);
+
+    const brain = new SupervisorBrain({
+      config: DEFAULT_CONFIG,
+      decomposer: decomposer as any,
+      capabilityMatcher: new CapabilityMatcher(),
+      providerAssigner: new ProviderAssigner(PROVIDERS),
+    });
+    brain.setExecuteNode(executeNode);
+
+    const result = await brain.execute("simple prompt", {
+      chatId: "test",
+      goalTree,
+    });
+
+    expect(result?.success).toBe(true);
+    expect(decomposer.decomposeProactive).not.toHaveBeenCalled();
+    expect(executeNode).toHaveBeenCalledTimes(1);
+  });
+
   it("throws if executeNode not set", async () => {
     const decomposer = {
       shouldDecompose: vi.fn().mockReturnValue(true),
@@ -122,6 +161,68 @@ describe("SupervisorBrain", () => {
     const result = await brain.execute("Build", { chatId: "test", signal: controller.signal });
     // Should handle abort gracefully - either partial result or error caught
     expect(result).toBeDefined();
+  });
+
+  it("propagates brain aborts even when an external signal is present", async () => {
+    const decomposer = {
+      shouldDecompose: vi.fn().mockReturnValue(true),
+      decomposeProactive: vi.fn().mockResolvedValue(
+        makeGoalTree([{ id: "root", task: "Task" }, { id: "s1", task: "Sub" }]),
+      ),
+    };
+    let abortObserved = false;
+
+    const brain = new SupervisorBrain({
+      config: DEFAULT_CONFIG,
+      decomposer: decomposer as any,
+      capabilityMatcher: new CapabilityMatcher(),
+      providerAssigner: new ProviderAssigner(PROVIDERS),
+    });
+    brain.setExecuteNode(vi.fn().mockImplementation(async (_node: GoalNode, context) => {
+      await new Promise<never>((_resolve, reject) => {
+        const signal = context.signal;
+        if (!signal) {
+          reject(new Error("Missing signal"));
+          return;
+        }
+        if (signal.aborted) {
+          abortObserved = true;
+          reject(new Error("Aborted"));
+          return;
+        }
+        signal.addEventListener("abort", () => {
+          abortObserved = true;
+          reject(new Error("Aborted"));
+        }, { once: true });
+      });
+      return {
+        nodeId: "s1",
+        status: "ok",
+        output: "done",
+        artifacts: [],
+        toolResults: [],
+        provider: "claude",
+        model: "sonnet",
+        cost: 0,
+        duration: 0,
+      } satisfies NodeResult;
+    }));
+
+    const externalController = new AbortController();
+    const runPromise = brain.execute("Build", { chatId: "test", signal: externalController.signal });
+    await vi.waitFor(() => {
+      expect(decomposer.decomposeProactive).toHaveBeenCalledTimes(1);
+    });
+
+    brain.abort();
+
+    const result = await Promise.race([
+      runPromise,
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 250)),
+    ]);
+
+    expect(result).not.toBeNull();
+    expect(abortObserved).toBe(true);
   });
 
   it("emits telemetry events", async () => {

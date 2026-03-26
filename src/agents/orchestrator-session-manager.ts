@@ -352,16 +352,27 @@ export class SessionManager {
     this.ensureVisibleMessages(session).push(message);
   }
 
-  extractLastUserMessage(session: Session): string {
+  extractLastUserContent(session: Session): string | MessageContent[] | null {
     for (let i = session.messages.length - 1; i >= 0; i--) {
       const msg = session.messages[i]!;
-      if (msg.role !== "user") continue;
-      if (typeof msg.content === "string") return msg.content;
-      if (Array.isArray(msg.content)) {
-        const textParts = (msg.content as MessageContent[])
-          .filter((b): b is { type: "text"; text: string } => b.type === "text")
-          .map((b) => b.text);
-        if (textParts.length > 0) return textParts.join(" ");
+      if (msg.role === "user") {
+        return msg.content as string | MessageContent[] | null;
+      }
+    }
+    return null;
+  }
+
+  extractLastUserMessage(session: Session): string {
+    const content = this.extractLastUserContent(session);
+    if (typeof content === "string") {
+      return content;
+    }
+    if (Array.isArray(content)) {
+      const textParts = content
+        .filter((b): b is { type: "text"; text: string } => b.type === "text")
+        .map((b) => b.text);
+      if (textParts.length > 0) {
+        return textParts.join(" ");
       }
     }
     return "";

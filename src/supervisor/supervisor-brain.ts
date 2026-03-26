@@ -100,11 +100,17 @@ export class SupervisorBrain {
   // ABORT
   // ---------------------------------------------------------------------------
 
-  private abortController = new AbortController();
+  private readonly activeAbortControllers = new Set<AbortController>();
 
   /** Abort all active work. */
   abort(): void {
-    this.abortController.abort();
+    for (const controller of this.activeAbortControllers) {
+      controller.abort();
+    }
+  }
+
+  shouldExecute(task: string, goalTree?: GoalTree): boolean {
+    return !!goalTree || this.decomposer.shouldDecompose(task);
   }
 
   private emitActivity(detail: string, taskId?: string, action = "supervisor_update"): void {
@@ -147,7 +153,7 @@ export class SupervisorBrain {
     context: SupervisorContext,
   ): Promise<SupervisorResult | null> {
     // Step 1: Check if decomposition is warranted
-    if (!this.decomposer.shouldDecompose(task)) {
+    if (!this.shouldExecute(task, context.goalTree)) {
       return null;
     }
 
@@ -160,8 +166,10 @@ export class SupervisorBrain {
 
     // Merge external signal with internal abort controller
     const externalSignal = context.signal;
-    const internalSignal = this.abortController.signal;
+    const internalController = new AbortController();
+    const internalSignal = internalController.signal;
     let goalRootId: string | null = null;
+    this.activeAbortControllers.add(internalController);
 
     try {
       // Step 2: Emit supervisor:activated
@@ -180,7 +188,7 @@ export class SupervisorBrain {
       await this.reportUpdate(context, activation.markdown);
 
       // Step 3: Decompose the task into a GoalTree
-      const goalTree = await this.decomposer.decomposeProactive(
+      const goalTree = context.goalTree ?? await this.decomposer.decomposeProactive(
         context.chatId,
         task,
       );
@@ -222,9 +230,17 @@ export class SupervisorBrain {
         this.config.diversityCap,
       );
 
+      const dispatchSignal = externalSignal ? AbortSignal.any([externalSignal, internalSignal]) : internalSignal;
+      const dispatchContext: SupervisorContext =
+        context.signal === dispatchSignal
+          ? context
+          : {
+              ...context,
+              signal: dispatchSignal,
+            };
       const executeNodeFn = this.executeNodeFn;
       const dispatcher = new SupervisorDispatcher({
-        executeNode: (node: TaggedGoalNode) => executeNodeFn(node, context),
+        executeNode: (node: TaggedGoalNode) => executeNodeFn(node, dispatchContext),
         config: {
           maxParallelNodes: this.config.maxParallelNodes,
           nodeTimeoutMs: this.config.nodeTimeoutMs,
@@ -269,9 +285,11 @@ export class SupervisorBrain {
         return this.makePartialResult([], "Aborted after provider assignment");
       }
 
-      // Combine signals: use external signal if provided, otherwise internal
-      const dispatchSignal = externalSignal ?? internalSignal;
       const results = await dispatcher.dispatch(assignedNodes, dispatchSignal);
+
+      if (externalSignal?.aborted || internalSignal.aborted) {
+        return this.makePartialResult(results, "Aborted during node execution");
+      }
 
       // Step 10-12: Create aggregator, verify, and synthesize
       const aggregator = new ResultAggregator({
@@ -338,6 +356,8 @@ export class SupervisorBrain {
         tone: "error",
       }));
       return this.makePartialResult([], "An error occurred during task execution. Please try again.");
+    } finally {
+      this.activeAbortControllers.delete(internalController);
     }
   }
 

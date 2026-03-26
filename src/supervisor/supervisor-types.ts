@@ -130,6 +130,7 @@ export interface SupervisorContext {
   readonly userId?: string;
   readonly conversationId?: string;
   readonly signal?: AbortSignal;
+  readonly goalTree?: GoalTree;
   readonly onGoalDecomposed?: (goalTree: GoalTree) => void;
   readonly reportUpdate?: (markdown: string) => Promise<void> | void;
 }

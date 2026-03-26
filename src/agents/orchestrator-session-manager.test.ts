@@ -112,6 +112,20 @@ describe("SessionManager", () => {
     expect(sm.extractLastUserMessage(session)).toBe("");
   });
 
+  it("extractLastUserContent returns the raw last user content block array", () => {
+    const sm = new SessionManager(createMockDeps());
+    const session = sm.getOrCreateSession("chat-1");
+    const content = [
+      { type: "text", text: "inspect this screenshot" },
+      { type: "image", source: { type: "url", url: "https://example.com/test.png" } },
+    ] as any;
+
+    sm.appendVisibleUserMessage(session, content);
+
+    expect(sm.extractLastUserContent(session)).toEqual(content);
+    expect(sm.extractLastUserMessage(session)).toBe("inspect this screenshot");
+  });
+
   it("trimSession returns empty array when under limit", () => {
     const sm = new SessionManager(createMockDeps());
     const session = sm.getOrCreateSession("chat-1");

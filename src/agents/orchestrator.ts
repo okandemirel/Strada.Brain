@@ -189,6 +189,7 @@ import {
   type WorkerVerificationResult,
   type WorkspaceLease,
 } from "./supervisor/supervisor-types.js";
+import type { SupervisorResult } from "../supervisor/supervisor-types.js";
 import {
   buildStaticSupervisorAssignment as buildStaticSupervisorAssignmentHelper,
   buildCatalogAssignmentMetadata as buildCatalogAssignmentMetadataHelper,
@@ -205,7 +206,10 @@ import {
   type SupervisorExecutionStrategy,
   type SupervisorRole,
 } from "./orchestrator-supervisor-routing.js";
-import { buildSupervisorActivationNarrative } from "../supervisor/supervisor-feedback.js";
+import {
+  buildSupervisorActivationNarrative,
+  normalizeSupervisorProgressMarkdown,
+} from "../supervisor/supervisor-feedback.js";
 import { SessionManager, type Session } from "./orchestrator-session-manager.js";
 import {
   buildSafeVisibleFallbackFromDraft as buildSafeVisibleFallbackFromDraftHelper,
@@ -482,7 +486,7 @@ export class Orchestrator {
   private readonly onUsage?: (usage: TaskUsageEvent) => void;
   private readonly taskContext = new AsyncLocalStorage<TaskExecutionContext>();
   private readonly supervisorBrain?: SupervisorBrain;
-  private supervisorBrainActive = false;
+  private readonly activeSupervisorScopes = new Set<string>();
   private readonly supervisorComplexityThreshold: "moderate" | "complex";
   private readonly conformanceEnabled?: boolean;
   private readonly conformanceFrameworkPathsOnly?: boolean;
@@ -718,34 +722,71 @@ export class Orchestrator {
     return classification.complexity === "complex";
   }
 
-  private stripSupervisorProgressMarkdown(markdown: string): string {
-    return markdown
-      .replace(/\*\*/g, "")
-      .replace(/^[ \t]*-\s+/gm, "")
-      .trim();
+  private canRouteThroughSupervisor(params: {
+    userContent?: string | MessageContent[] | null;
+    attachments?: Attachment[];
+  }): boolean {
+    if (Array.isArray(params.userContent) && params.userContent.some((block) => block.type !== "text")) {
+      return false;
+    }
+    if ((params.attachments?.length ?? 0) > 0) {
+      return false;
+    }
+    return true;
   }
 
-  private async tryHandleSupervisor(params: {
+  private resolveSupervisorScope(chatId: string, channelType?: string, conversationId?: string): string {
+    return JSON.stringify([channelType?.trim() || "", resolveConversationScope(chatId, conversationId)]);
+  }
+
+  private getSupervisorWorkerStatus(result: SupervisorResult): WorkerRunResult["status"] {
+    if (result.success) {
+      return "completed";
+    }
+    return result.partial ? "blocked" : "failed";
+  }
+
+  async tryRouteThroughSupervisor(params: {
     prompt: string;
     chatId: string;
+    channelType?: string;
     userId?: string;
     conversationId?: string;
+    signal?: AbortSignal;
+    goalTree?: GoalTree;
+    forceEligibility?: boolean;
+    userContent?: string | MessageContent[] | null;
+    attachments?: Attachment[];
     onActivated?: (
       activation: ReturnType<typeof buildSupervisorActivationNarrative>,
     ) => Promise<void> | void;
     reportUpdate?: (markdown: string) => Promise<void> | void;
     onGoalDecomposed?: (goalTree: GoalTree) => void;
-  }): Promise<import("../supervisor/supervisor-types.js").SupervisorResult | null> {
-    if (!this.supervisorBrain || this.supervisorBrainActive) {
+  }): Promise<SupervisorResult | null> {
+    if (!this.supervisorBrain || !this.canRouteThroughSupervisor(params)) {
       return null;
     }
 
     const classification = this.taskClassifier?.classify(params.prompt);
-    if (!classification || !this.shouldActivateSupervisor(classification)) {
+    const shouldForceSupervisor = params.forceEligibility || Boolean(params.goalTree);
+    if (!shouldForceSupervisor && (!classification || !this.shouldActivateSupervisor(classification))) {
       return null;
     }
 
-    this.supervisorBrainActive = true;
+    if (!this.supervisorBrain.shouldExecute(params.prompt, params.goalTree)) {
+      return null;
+    }
+
+    const supervisorScope = this.resolveSupervisorScope(
+      params.chatId,
+      params.channelType,
+      params.conversationId,
+    );
+    if (this.activeSupervisorScopes.has(supervisorScope)) {
+      return null;
+    }
+
+    this.activeSupervisorScopes.add(supervisorScope);
     try {
       const activation = buildSupervisorActivationNarrative(params.prompt);
       try {
@@ -757,6 +798,8 @@ export class Orchestrator {
         chatId: params.chatId,
         userId: params.userId,
         conversationId: params.conversationId,
+        ...(params.signal ? { signal: params.signal } : {}),
+        ...(params.goalTree ? { goalTree: params.goalTree } : {}),
         ...(params.onGoalDecomposed ? { onGoalDecomposed: params.onGoalDecomposed } : {}),
         ...(params.reportUpdate ? { reportUpdate: params.reportUpdate } : {}),
       });
@@ -764,7 +807,7 @@ export class Orchestrator {
       getLogger().warn("Supervisor brain failed, falling through to PAOR", { error: String(err) });
       return null;
     } finally {
-      this.supervisorBrainActive = false;
+      this.activeSupervisorScopes.delete(supervisorScope);
     }
   }
 
@@ -2080,20 +2123,24 @@ export class Orchestrator {
                 userSummary: normalized,
               });
             };
-            const supervisorResult = await this.tryHandleSupervisor({
+            const supervisorResult = await this.tryRouteThroughSupervisor({
               prompt,
               chatId,
+              channelType: options.channelType,
               userId: options.userId,
               conversationId: options.conversationId,
+              signal,
+              userContent,
+              attachments: options.attachments,
               onActivated: (activation) => {
                 emitSupervisorProgress(
-                  this.stripSupervisorProgressMarkdown(activation.markdown),
+                  normalizeSupervisorProgressMarkdown(activation.markdown),
                   "Supervisor activation",
                 );
               },
               reportUpdate: (markdown) => {
                 emitSupervisorProgress(
-                  this.stripSupervisorProgressMarkdown(markdown),
+                  normalizeSupervisorProgressMarkdown(markdown),
                   "Supervisor update",
                 );
               },
@@ -2101,7 +2148,7 @@ export class Orchestrator {
             if (supervisorResult) {
               return finish(
                 supervisorResult.output,
-                "completed",
+                this.getSupervisorWorkerStatus(supervisorResult),
                 supervisorResult.output,
               );
             }
@@ -2895,7 +2942,7 @@ export class Orchestrator {
     }, TYPING_INTERVAL_MS);
 
     try {
-      await this.runAgentLoop(chatId, session, msg.channelType, userId, conversationId);
+      await this.runAgentLoop(chatId, session, msg.channelType, userId, conversationId, msg.attachments);
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : "Unknown error";
       logger.error("Agent loop error", { chatId, error: errMsg });
@@ -2930,9 +2977,14 @@ export class Orchestrator {
     channelType?: string,
     userId?: string,
     conversationId?: string,
+    attachments?: Attachment[],
   ): Promise<void> {
     const logger = getLogger();
     const conversationScope = resolveConversationScope(chatId, conversationId);
+    const lastUserContent = this.sessionManager.extractLastUserContent(session);
+    const lastUserHasRichInput =
+      (attachments?.length ?? 0) > 0
+      || (Array.isArray(lastUserContent) && lastUserContent.some((block) => block.type !== "text"));
     const identityKey = resolveIdentityKey(chatId, userId, conversationId, this.userProfileStore, channelType);
     const fallbackProvider = this.providerManager.getProvider(identityKey);
 
@@ -3077,11 +3129,14 @@ export class Orchestrator {
     const interactiveIterationLimit = this.getInteractiveIterationLimit();
 
     try {
-      const supervisorResult = await this.tryHandleSupervisor({
+      const supervisorResult = await this.tryRouteThroughSupervisor({
         prompt: lastUserMessage,
         chatId,
+        channelType,
         userId,
         conversationId,
+        userContent: lastUserContent,
+        attachments,
         onGoalDecomposed: (goalTree) =>
           this.monitorLifecycle?.goalDecomposed(conversationScope, goalTree),
         reportUpdate: async (markdown) => {
@@ -3318,7 +3373,7 @@ export class Orchestrator {
         // ─── Goal Detection: check for goal block in Plan phase response ───
         // Must run BEFORE end_turn early return since goal detection responses
         // may have no tool calls but should short-circuit to background execution.
-        if (agentState.phase === AgentPhase.PLANNING && this.taskManager) {
+        if (agentState.phase === AgentPhase.PLANNING && this.taskManager && !lastUserHasRichInput) {
           const goalBlock = parseGoalBlock(response.text ?? "");
           if (goalBlock && goalBlock.isGoal) {
             // Build GoalTree from LLM output using shared factory
@@ -3339,6 +3394,7 @@ export class Orchestrator {
             // Submit as background task with pre-decomposed tree
             this.taskManager.submit(chatId, channelType ?? "cli", lastUserMessage, {
               goalTree,
+              attachments: attachments?.length ? attachments : undefined,
               conversationId: conversationScope,
               userId: identityKey,
             });
