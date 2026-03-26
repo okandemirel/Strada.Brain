@@ -49,6 +49,13 @@ describe('MonitorPanel', () => {
     mockTasks = {}
     mockSelectedTaskId = null
     mockActivities = []
+    if (typeof localStorage.removeItem === 'function') {
+      localStorage.removeItem('strada-monitor-overview-collapsed')
+      localStorage.removeItem('strada-monitor-overview-height')
+      localStorage.removeItem('strada-monitor-sidebar-width')
+      localStorage.removeItem('strada-monitor-supervisor-height')
+      localStorage.removeItem('strada-monitor-detail-height')
+    }
   })
 
   it('renders DAG/Kanban toggle buttons', () => {
@@ -70,6 +77,11 @@ describe('MonitorPanel', () => {
   it('renders InterventionToolbar (Pause button)', () => {
     render(<MonitorPanel />)
     expect(screen.getByText('Pause')).toBeInTheDocument()
+  })
+
+  it('renders summary toggle button', () => {
+    render(<MonitorPanel />)
+    expect(screen.getByText('Hide Summary')).toBeInTheDocument()
   })
 
   it('DAG view is shown by default', () => {
@@ -110,10 +122,21 @@ describe('MonitorPanel', () => {
     expect(screen.getByText('Select a task to see details.')).toBeInTheDocument()
   })
 
+  it('can collapse the summary panel', async () => {
+    const { default: userEvent } = await import('@testing-library/user-event')
+    const user = userEvent.setup()
+
+    render(<MonitorPanel />)
+    await user.click(screen.getByText('Hide Summary'))
+
+    expect(screen.getByText('Show Summary')).toBeInTheDocument()
+    expect(screen.queryByTestId('monitor-overview')).not.toBeInTheDocument()
+  })
+
   it('renders resize handles as separators', () => {
     render(<MonitorPanel />)
     const separators = screen.getAllByRole('separator')
-    // 3 resize handles: sidebar horizontal, supervisor/detail vertical, detail/activity vertical
-    expect(separators.length).toBe(3)
+    // 4 resize handles: overview/main, sidebar, supervisor/detail, detail/activity
+    expect(separators.length).toBe(4)
   })
 })

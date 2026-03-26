@@ -12,6 +12,12 @@ function formatLastActivity(detail: string | undefined): string {
   return detail.length > 64 ? `${detail.slice(0, 61)}...` : detail
 }
 
+function buildFocusSummary(selectedTitle: string | undefined, reviewQueue: number): string {
+  if (selectedTitle) return `Focused task: ${selectedTitle}`
+  if (reviewQueue > 0) return `${reviewQueue} items are waiting for review.`
+  return 'Select a node to inspect owner, review gates, substeps, and timing.'
+}
+
 export default function MonitorOverview() {
   const tasks = useMonitorStore((s) => s.tasks)
   const activities = useMonitorStore((s) => s.activities)
@@ -48,41 +54,38 @@ export default function MonitorOverview() {
 
   const statCards = [
     {
-      label: 'Execution',
+      label: 'Tasks',
       value: `${summary.running}`,
-      meta: summary.total > 0 ? `${summary.total} total tasks` : 'No tasks yet',
+      meta: summary.total > 0 ? `${summary.total} total` : 'Idle',
       tone: 'text-accent',
     },
     {
-      label: 'Review Gates',
+      label: 'Review',
       value: `${summary.reviewQueue}`,
-      meta: summary.verifying > 0 ? `${summary.verifying} verifying` : 'No active gate',
+      meta: summary.verifying > 0 ? `${summary.verifying} verifying` : 'Clear',
       tone: 'text-amber-300',
     },
     {
       label: 'Agents',
       value: `${summary.agentCount}`,
-      meta: summary.blocked > 0 ? `${summary.blocked} blocked` : 'Pipeline healthy',
+      meta: summary.blocked > 0 ? `${summary.blocked} blocked` : 'Healthy',
       tone: summary.blocked > 0 ? 'text-rose-300' : 'text-emerald-300',
     },
     {
       label: 'Progress',
       value: `${summary.completionRatio}%`,
-      meta: `${summary.completed}/${summary.total} completed`,
+      meta: `${summary.completed}/${summary.total} done`,
       tone: 'text-text',
     },
   ]
 
   return (
-    <div
-      className="border-b border-white/5 bg-[radial-gradient(circle_at_top_left,rgba(0,229,255,0.12),transparent_28%),linear-gradient(180deg,rgba(255,255,255,0.04),rgba(255,255,255,0.02))]"
-      data-testid="monitor-overview"
-    >
-      <div className="grid gap-3 px-4 py-3 xl:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]">
-        <div className="rounded-2xl border border-white/8 bg-black/20 px-4 py-3 shadow-[0_18px_60px_rgba(0,0,0,0.18)]">
+    <div className="h-full overflow-y-auto bg-black/10" data-testid="monitor-overview">
+      <div className="px-4 py-3">
+        <div className="rounded-xl border border-white/8 bg-white/[0.03] px-4 py-3">
           <div className="flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <div className="text-[10px] font-semibold uppercase tracking-[0.24em] text-accent/80">
+            <div className="min-w-0 flex-1">
+              <div className="text-[10px] font-semibold uppercase tracking-[0.24em] text-accent/75">
                 Mission Control
               </div>
               <div className="mt-1 text-lg font-semibold text-text">Agent execution cockpit</div>
@@ -90,20 +93,8 @@ export default function MonitorOverview() {
                 Root goal <span className="text-text">{compactId(activeRootId)}</span>
               </div>
             </div>
-            {summary.selectedTask && (
-              <div className="rounded-xl border border-accent/15 bg-accent/8 px-3 py-2 text-right">
-                <div className="text-[10px] font-semibold uppercase tracking-[0.2em] text-accent/75">
-                  Focus
-                </div>
-                <div className="mt-1 text-sm font-medium text-text">
-                  {summary.selectedTask.title}
-                </div>
-              </div>
-            )}
-          </div>
 
-          <div className="mt-4 grid gap-3 sm:grid-cols-2">
-            <div className="rounded-xl border border-white/8 bg-white/[0.03] px-3 py-2">
+            <div className="min-w-[220px] max-w-full rounded-lg border border-white/10 bg-black/20 px-3 py-2">
               <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-text-tertiary">
                 Live Feed
               </div>
@@ -111,30 +102,24 @@ export default function MonitorOverview() {
                 {formatLastActivity(summary.lastActivity?.detail)}
               </div>
             </div>
-            <div className="rounded-xl border border-white/8 bg-white/[0.03] px-3 py-2">
-              <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-text-tertiary">
-                Operator Hint
-              </div>
-              <div className="mt-1 text-sm text-text-secondary">
-                Select a node to inspect owner, review gates, substeps, and timing.
-              </div>
-            </div>
           </div>
-        </div>
 
-        <div className="grid gap-3 sm:grid-cols-2">
-          {statCards.map((card) => (
-            <div
-              key={card.label}
-              className="rounded-2xl border border-white/8 bg-white/[0.04] px-4 py-3 shadow-[0_18px_40px_rgba(0,0,0,0.14)]"
-            >
-              <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-text-tertiary">
-                {card.label}
+          <div className="mt-3 text-sm text-text-secondary">
+            {buildFocusSummary(summary.selectedTask?.title, summary.reviewQueue)}
+          </div>
+
+          <div className="mt-3 flex flex-wrap gap-2">
+            {statCards.map((card) => (
+              <div
+                key={card.label}
+                className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/20 px-3 py-1.5 text-xs"
+              >
+                <span className="text-text-tertiary">{card.label}</span>
+                <span className={`font-semibold ${card.tone}`}>{card.value}</span>
+                <span className="text-text-secondary">{card.meta}</span>
               </div>
-              <div className={`mt-2 text-2xl font-semibold ${card.tone}`}>{card.value}</div>
-              <div className="mt-1 text-xs text-text-secondary">{card.meta}</div>
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
       </div>
     </div>

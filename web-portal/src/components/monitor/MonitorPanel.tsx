@@ -1,11 +1,11 @@
-import { Suspense, lazy, useState, useCallback, useRef } from 'react'
+import { Suspense, lazy, useCallback, useRef, useState } from 'react'
 import ActivityFeed from './ActivityFeed'
-import TaskDetailPanel from './TaskDetailPanel'
-import InterventionToolbar from './InterventionToolbar'
 import GateDialog from './GateDialog'
-import SupervisorPanel from './SupervisorPanel'
-import ResizeHandle from './ResizeHandle'
+import InterventionToolbar from './InterventionToolbar'
 import MonitorOverview from './MonitorOverview'
+import ResizeHandle from './ResizeHandle'
+import SupervisorPanel from './SupervisorPanel'
+import TaskDetailPanel from './TaskDetailPanel'
 
 const DAGView = lazy(() => import('./DAGView'))
 const KanbanBoard = lazy(() => import('./KanbanBoard'))
@@ -13,12 +13,18 @@ const KanbanBoard = lazy(() => import('./KanbanBoard'))
 type ViewMode = 'dag' | 'kanban'
 
 const STORAGE_KEY_SIDEBAR = 'strada-monitor-sidebar-width'
+const STORAGE_KEY_OVERVIEW = 'strada-monitor-overview-height'
+const STORAGE_KEY_OVERVIEW_COLLAPSED = 'strada-monitor-overview-collapsed'
 const STORAGE_KEY_DETAIL = 'strada-monitor-detail-height'
 const STORAGE_KEY_SUPERVISOR = 'strada-monitor-supervisor-height'
 
 const SIDEBAR_DEFAULT = 320
 const SIDEBAR_MIN = 200
 const SIDEBAR_MAX = 600
+
+const OVERVIEW_DEFAULT = 188
+const OVERVIEW_MIN = 104
+const OVERVIEW_MAX = 360
 
 const DETAIL_DEFAULT = 220
 const DETAIL_MIN = 80
@@ -30,8 +36,8 @@ const SUPERVISOR_MAX = 350
 
 function readStored(key: string, fallback: number): number {
   try {
-    const v = localStorage.getItem(key)
-    return v ? Number(v) : fallback
+    const value = localStorage.getItem(key)
+    return value ? Number(value) : fallback
   } catch {
     return fallback
   }
@@ -45,17 +51,59 @@ function writeStored(key: string, value: number): void {
   }
 }
 
+function readStoredBoolean(key: string, fallback: boolean): boolean {
+  try {
+    const value = localStorage.getItem(key)
+    return value == null ? fallback : value === 'true'
+  } catch {
+    return fallback
+  }
+}
+
+function writeStoredBoolean(key: string, value: boolean): void {
+  try {
+    localStorage.setItem(key, value ? 'true' : 'false')
+  } catch {
+    // localStorage unavailable
+  }
+}
+
 function clamp(val: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, val))
 }
 
+function SummaryStrip({ onExpand }: { onExpand: () => void }) {
+  return (
+    <div className="shrink-0 border-b border-white/6 bg-black/10 px-4 py-2">
+      <div className="flex items-center justify-between gap-3 rounded-lg border border-white/8 bg-white/[0.03] px-3 py-2">
+        <div>
+          <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-text-tertiary">
+            Summary Hidden
+          </div>
+          <div className="mt-0.5 text-xs text-text-secondary">
+            Workspace is expanded. Show the summary strip again when needed.
+          </div>
+        </div>
+        <button
+          onClick={onExpand}
+          className="shrink-0 rounded-md border border-white/8 bg-white/[0.03] px-3 py-1.5 text-xs font-medium text-text-secondary transition-colors hover:text-text"
+        >
+          Show Summary
+        </button>
+      </div>
+    </div>
+  )
+}
+
 export default function MonitorPanel() {
   const [viewMode, setViewMode] = useState<ViewMode>('dag')
-
-  // Resizable sidebar width (horizontal)
   const [sidebarWidth, setSidebarWidth] = useState(() => readStored(STORAGE_KEY_SIDEBAR, SIDEBAR_DEFAULT))
-
-  // Resizable section heights within sidebar (vertical)
+  const [overviewHeight, setOverviewHeight] = useState(() =>
+    readStored(STORAGE_KEY_OVERVIEW, OVERVIEW_DEFAULT),
+  )
+  const [overviewCollapsed, setOverviewCollapsed] = useState(() =>
+    readStoredBoolean(STORAGE_KEY_OVERVIEW_COLLAPSED, false),
+  )
   const [supervisorHeight, setSupervisorHeight] = useState(() =>
     readStored(STORAGE_KEY_SUPERVISOR, SUPERVISOR_DEFAULT),
   )
@@ -63,13 +111,12 @@ export default function MonitorPanel() {
     readStored(STORAGE_KEY_DETAIL, DETAIL_DEFAULT),
   )
 
-  // Refs for tracking drag state to avoid excessive localStorage writes
   const sidebarRef = useRef(sidebarWidth)
+  const overviewRef = useRef(overviewHeight)
   const supervisorRef = useRef(supervisorHeight)
   const detailRef = useRef(detailHeight)
 
   const onSidebarResize = useCallback((delta: number) => {
-    // Negative delta = dragging left = making sidebar wider (handle is on the left edge of sidebar)
     setSidebarWidth((prev) => {
       const next = clamp(prev - delta, SIDEBAR_MIN, SIDEBAR_MAX)
       sidebarRef.current = next
@@ -79,6 +126,26 @@ export default function MonitorPanel() {
 
   const onSidebarResizeEnd = useCallback(() => {
     writeStored(STORAGE_KEY_SIDEBAR, sidebarRef.current)
+  }, [])
+
+  const onOverviewResize = useCallback((delta: number) => {
+    setOverviewHeight((prev) => {
+      const next = clamp(prev + delta, OVERVIEW_MIN, OVERVIEW_MAX)
+      overviewRef.current = next
+      return next
+    })
+  }, [])
+
+  const onOverviewResizeEnd = useCallback(() => {
+    writeStored(STORAGE_KEY_OVERVIEW, overviewRef.current)
+  }, [])
+
+  const toggleOverview = useCallback(() => {
+    setOverviewCollapsed((prev) => {
+      const next = !prev
+      writeStoredBoolean(STORAGE_KEY_OVERVIEW_COLLAPSED, next)
+      return next
+    })
   }, [])
 
   const onSupervisorResize = useCallback((delta: number) => {
@@ -107,39 +174,65 @@ export default function MonitorPanel() {
 
   return (
     <div className="flex h-full min-h-0">
-      {/* Left: main view (DAG or Kanban) */}
-      <div className="flex flex-col flex-1 min-w-0 min-h-0">
-        <div className="flex items-center gap-2 px-4 py-2 border-b border-border shrink-0">
-          <button
-            onClick={() => setViewMode('dag')}
-            className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${
-              viewMode === 'dag'
-                ? 'bg-white/5 text-accent'
-                : 'text-text-secondary hover:text-text'
-            }`}
-          >
-            DAG
-          </button>
-          <button
-            onClick={() => setViewMode('kanban')}
-            className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${
-              viewMode === 'kanban'
-                ? 'bg-white/5 text-accent'
-                : 'text-text-secondary hover:text-text'
-            }`}
-          >
-            Kanban
-          </button>
-          <div className="ml-auto">
-            <InterventionToolbar />
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <div className="flex shrink-0 items-center justify-between gap-3 border-b border-white/6 px-4 py-3">
+          <div className="flex items-center gap-2">
+            <div className="inline-flex rounded-lg border border-white/8 bg-white/[0.03] p-1">
+              <button
+                onClick={() => setViewMode('dag')}
+                className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+                  viewMode === 'dag'
+                    ? 'bg-white/8 text-text'
+                    : 'text-text-secondary hover:text-text'
+                }`}
+              >
+                DAG
+              </button>
+              <button
+                onClick={() => setViewMode('kanban')}
+                className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+                  viewMode === 'kanban'
+                    ? 'bg-white/8 text-text'
+                    : 'text-text-secondary hover:text-text'
+                }`}
+              >
+                Kanban
+              </button>
+            </div>
+
+            <button
+              onClick={toggleOverview}
+              className="rounded-md border border-white/8 bg-white/[0.03] px-3 py-1.5 text-xs font-medium text-text-secondary transition-colors hover:text-text"
+            >
+              {overviewCollapsed ? 'Summary Hidden' : 'Hide Summary'}
+            </button>
           </div>
+
+          <InterventionToolbar />
         </div>
-        <MonitorOverview />
-        <div className="flex-1 min-h-0">
+
+        {overviewCollapsed ? (
+          <SummaryStrip onExpand={toggleOverview} />
+        ) : (
+          <>
+            <div className="shrink-0 overflow-y-auto" style={{ height: overviewHeight }}>
+              <MonitorOverview />
+            </div>
+
+            <ResizeHandle
+              direction="vertical"
+              onResize={onOverviewResize}
+              onResizeEnd={onOverviewResizeEnd}
+              className="border-y border-white/6 bg-white/[0.02]"
+            />
+          </>
+        )}
+
+        <div className="min-h-0 flex-1 overflow-hidden">
           {viewMode === 'dag' ? (
             <Suspense
               fallback={
-                <div className="flex items-center justify-center h-full text-text-tertiary text-sm">
+                <div className="flex h-full items-center justify-center text-sm text-text-tertiary">
                   Loading DAG view...
                 </div>
               }
@@ -149,7 +242,7 @@ export default function MonitorPanel() {
           ) : (
             <Suspense
               fallback={
-                <div className="flex items-center justify-center h-full text-text-tertiary text-sm">
+                <div className="flex h-full items-center justify-center text-sm text-text-tertiary">
                   Loading Kanban...
                 </div>
               }
@@ -160,23 +253,16 @@ export default function MonitorPanel() {
         </div>
       </div>
 
-      {/* Horizontal resize handle (between main view and sidebar) */}
       <ResizeHandle direction="horizontal" onResize={onSidebarResize} onResizeEnd={onSidebarResizeEnd} />
 
-      {/* Right: resizable sidebar */}
       <div
-        className="flex flex-col shrink-0 bg-white/3 backdrop-blur border-l border-white/5 min-h-0 overflow-hidden"
+        className="flex min-h-0 shrink-0 flex-col overflow-hidden border-l border-white/6 bg-white/[0.02] backdrop-blur"
         style={{ width: sidebarWidth }}
       >
-        {/* Supervisor panel — resizable height */}
-        <div
-          className="shrink-0 overflow-y-auto px-2 py-2"
-          style={{ height: supervisorHeight }}
-        >
+        <div className="shrink-0 overflow-y-auto px-2 py-2" style={{ height: supervisorHeight }}>
           <SupervisorPanel />
         </div>
 
-        {/* Vertical resize handle (between supervisor and task detail) */}
         <ResizeHandle
           direction="vertical"
           onResize={onSupervisorResize}
@@ -184,18 +270,13 @@ export default function MonitorPanel() {
           className="border-y border-border"
         />
 
-        {/* Task detail — resizable height */}
-        <div
-          className="flex flex-col shrink-0 overflow-y-auto"
-          style={{ height: detailHeight }}
-        >
-          <div className="px-3 py-2 text-xs font-semibold text-text-secondary uppercase tracking-wide shrink-0">
+        <div className="flex shrink-0 flex-col overflow-y-auto" style={{ height: detailHeight }}>
+          <div className="shrink-0 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-text-secondary">
             Task Detail
           </div>
           <TaskDetailPanel />
         </div>
 
-        {/* Vertical resize handle (between task detail and activity feed) */}
         <ResizeHandle
           direction="vertical"
           onResize={onDetailResize}
@@ -203,16 +284,16 @@ export default function MonitorPanel() {
           className="border-y border-border"
         />
 
-        {/* Activity feed — fills remaining space */}
-        <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
-          <div className="px-3 py-2 text-xs font-semibold text-text-secondary uppercase tracking-wide shrink-0">
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+          <div className="shrink-0 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-text-secondary">
             Activity
           </div>
-          <div className="flex-1 min-h-0 overflow-hidden">
+          <div className="min-h-0 flex-1 overflow-hidden">
             <ActivityFeed />
           </div>
         </div>
       </div>
+
       <GateDialog />
     </div>
   )

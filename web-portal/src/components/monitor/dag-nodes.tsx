@@ -1,10 +1,5 @@
 import { Handle, Position, type Node, type NodeProps } from '@xyflow/react'
 import { cn } from '@/lib/utils'
-import { BorderBeam } from '../ui/border-beam'
-
-/* ------------------------------------------------------------------ */
-/*  Shared helpers                                                     */
-/* ------------------------------------------------------------------ */
 
 const STATUS_COLORS: Record<string, string> = {
   pending: 'bg-text-tertiary',
@@ -25,14 +20,10 @@ const STATUS_BORDER_COLORS: Record<string, string> = {
 function StatusDot({ status }: { status: string }) {
   return (
     <span
-      className={`w-2 h-2 rounded-full shrink-0 ${STATUS_COLORS[status] || 'bg-text-tertiary'}`}
+      className={`h-2 w-2 shrink-0 rounded-full ${STATUS_COLORS[status] || 'bg-text-tertiary'}`}
     />
   )
 }
-
-/* ------------------------------------------------------------------ */
-/*  TaskNode                                                           */
-/* ------------------------------------------------------------------ */
 
 type TaskNodeData = {
   label: string
@@ -45,34 +36,34 @@ type TaskNodeType = Node<TaskNodeData, 'task'>
 export function TaskNode({ data }: NodeProps<TaskNodeType>) {
   return (
     <div className="relative">
-      <Handle type="target" position={Position.Top} className="!bg-border !w-1.5 !h-1.5 !min-w-0 !min-h-0 !opacity-0" />
+      <Handle
+        type="target"
+        position={Position.Top}
+        className="!min-h-0 !min-w-0 !h-1.5 !w-1.5 !bg-border !opacity-0"
+      />
       <div
         className={cn(
-          'relative overflow-hidden bg-white/3 backdrop-blur border border-white/5 rounded-xl px-3 py-2 min-w-[160px] max-w-[240px] shadow-sm border-l-[3px]',
+          'min-w-[172px] max-w-[240px] rounded-xl border border-white/10 bg-black/30 px-3 py-2 shadow-[0_10px_24px_rgba(0,0,0,0.14)] border-l-[3px]',
           STATUS_BORDER_COLORS[data.status] || 'border-l-text-tertiary',
+          data.status === 'executing' && 'ring-1 ring-accent/20',
         )}
       >
-        {data.status === 'executing' && (
-          <BorderBeam size={40} duration={3} colorFrom="#00e5ff" colorTo="#7c3aed" borderWidth={2} />
-        )}
         <div className="flex items-center gap-2">
           <StatusDot status={data.status} />
-          <span className="text-xs font-medium text-text truncate">{data.label}</span>
+          <span className="truncate text-xs font-medium text-text">{data.label}</span>
         </div>
         {data.reviewStatus && data.reviewStatus !== 'none' && (
-          <div className="mt-1 text-[10px] text-text-secondary">
-            Review: {data.reviewStatus}
-          </div>
+          <div className="mt-1 text-[10px] text-text-secondary">Review: {data.reviewStatus}</div>
         )}
       </div>
-      <Handle type="source" position={Position.Bottom} className="!bg-border !w-1.5 !h-1.5 !min-w-0 !min-h-0 !opacity-0" />
+      <Handle
+        type="source"
+        position={Position.Bottom}
+        className="!min-h-0 !min-w-0 !h-1.5 !w-1.5 !bg-border !opacity-0"
+      />
     </div>
   )
 }
-
-/* ------------------------------------------------------------------ */
-/*  ReviewNode                                                         */
-/* ------------------------------------------------------------------ */
 
 const REVIEW_COLORS: Record<string, string> = {
   pending: 'bg-text-tertiary',
@@ -95,26 +86,30 @@ type ReviewNodeType = Node<ReviewNodeData, 'review'>
 export function ReviewNode({ data }: NodeProps<ReviewNodeType>) {
   return (
     <div className="relative">
-      <Handle type="target" position={Position.Top} className="!bg-warning !w-1.5 !h-1.5 !min-w-0 !min-h-0 !opacity-0" />
-      <div className="rounded-lg border-2 border-warning bg-surface px-3 py-2 min-w-[160px] max-w-[240px] shadow-sm">
+      <Handle
+        type="target"
+        position={Position.Top}
+        className="!min-h-0 !min-w-0 !h-1.5 !w-1.5 !bg-warning !opacity-0"
+      />
+      <div className="min-w-[172px] max-w-[240px] rounded-xl border border-warning/40 bg-black/30 px-3 py-2 shadow-[0_10px_24px_rgba(0,0,0,0.14)]">
         <div className="flex items-center gap-2">
           <span
-            className={`w-2 h-2 rounded-full shrink-0 ${REVIEW_COLORS[data.status] || 'bg-warning'}`}
+            className={`h-2 w-2 shrink-0 rounded-full ${REVIEW_COLORS[data.status] || 'bg-warning'}`}
           />
-          <span className="text-xs font-medium text-text truncate">{data.label}</span>
+          <span className="truncate text-xs font-medium text-text">{data.label}</span>
         </div>
         {data.reviewType && (
           <div className="mt-1 text-[10px] text-text-secondary">{data.reviewType}</div>
         )}
       </div>
-      <Handle type="source" position={Position.Bottom} className="!bg-warning !w-1.5 !h-1.5 !min-w-0 !min-h-0 !opacity-0" />
+      <Handle
+        type="source"
+        position={Position.Bottom}
+        className="!min-h-0 !min-w-0 !h-1.5 !w-1.5 !bg-warning !opacity-0"
+      />
     </div>
   )
 }
-
-/* ------------------------------------------------------------------ */
-/*  GateNode                                                           */
-/* ------------------------------------------------------------------ */
 
 const GATE_COLORS: Record<string, string> = {
   waiting: 'border-warning',
@@ -141,16 +136,24 @@ export function GateNode({ data }: NodeProps<GateNodeType>) {
 
   return (
     <div className="relative">
-      <Handle type="target" position={Position.Top} className="!bg-border !w-1.5 !h-1.5 !min-w-0 !min-h-0 !opacity-0" />
+      <Handle
+        type="target"
+        position={Position.Top}
+        className="!min-h-0 !min-w-0 !h-1.5 !w-1.5 !bg-border !opacity-0"
+      />
       <div
-        className={`rounded-lg border-2 ${borderColor} bg-surface px-3 py-2 min-w-[120px] max-w-[240px] shadow-sm text-center`}
+        className={`min-w-[132px] max-w-[240px] rounded-xl border ${borderColor} bg-black/30 px-3 py-2 text-center shadow-[0_10px_24px_rgba(0,0,0,0.14)]`}
       >
         <div className="flex items-center justify-center gap-2">
-          <span className={`w-2 h-2 rounded-full shrink-0 ${dotColor}`} />
+          <span className={`h-2 w-2 shrink-0 rounded-full ${dotColor}`} />
           <span className="text-xs font-semibold text-text">{data.label}</span>
         </div>
       </div>
-      <Handle type="source" position={Position.Bottom} className="!bg-border !w-1.5 !h-1.5 !min-w-0 !min-h-0 !opacity-0" />
+      <Handle
+        type="source"
+        position={Position.Bottom}
+        className="!min-h-0 !min-w-0 !h-1.5 !w-1.5 !bg-border !opacity-0"
+      />
     </div>
   )
 }
