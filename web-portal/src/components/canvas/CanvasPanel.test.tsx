@@ -11,7 +11,7 @@ const mockLoadSnapshot = vi.fn()
 const mockEditorOn = vi.fn()
 const mockEditorRun = vi.fn((fn: () => void) => fn())
 const mockCreateShape = vi.fn()
-const mockGetShape = vi.fn((_: string) => undefined as { id: string; type: string; props: Record<string, unknown> } | undefined)
+const mockGetShape = vi.fn((_id: string) => undefined as { id: string; type: string; props: Record<string, unknown> } | undefined)
 const mockUpdateShape = vi.fn()
 const mockDeleteShapes = vi.fn()
 
