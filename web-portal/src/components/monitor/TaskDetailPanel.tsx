@@ -65,10 +65,12 @@ export default function TaskDetailPanel() {
   const tasks = useMonitorStore((s) => s.tasks)
   const task = selectedTaskId ? tasks[selectedTaskId] : null
 
+  const progressCurrent = task?.progress?.current
+  const progressTotal = task?.progress?.total
   const progressPercent = useMemo(() => {
-    if (!task?.progress || task.progress.total <= 0) return null
-    return Math.max(0, Math.min(100, Math.round((task.progress.current / task.progress.total) * 100)))
-  }, [task])
+    if (progressTotal == null || progressTotal <= 0 || progressCurrent == null) return null
+    return Math.max(0, Math.min(100, Math.round((progressCurrent / progressTotal) * 100)))
+  }, [progressCurrent, progressTotal])
 
   if (!task) {
     return (
