@@ -611,6 +611,35 @@ describe("SlackChannel file extraction", () => {
     expect(incoming.attachments[2].type).toBe("document");
   });
 
+  it("should route audio-only file messages without text", async () => {
+    mockDownloadMedia.mockResolvedValueOnce({
+      data: Buffer.from([0x00, 0x00, 0x00, 0x00]),
+      mimeType: "audio/mpeg",
+      size: 4,
+    });
+
+    const message = {
+      type: "message",
+      user: "U456",
+      channel: "C789",
+      text: "",
+      ts: "1234567890.000006",
+      team: "T001",
+      files: [
+        { id: "F4", name: "voice.mp3", mimetype: "audio/mpeg", size: 128, url_private: "https://files.slack.com/a2" },
+      ],
+    };
+
+    const say = vi.fn();
+    await capturedMessageCallback!({ message, say });
+
+    expect(messageHandlerFn).toHaveBeenCalledOnce();
+    const incoming = (messageHandlerFn as any).mock.calls[0][0];
+    expect(incoming.text).toBe("");
+    expect(incoming.attachments).toHaveLength(1);
+    expect(incoming.attachments[0].type).toBe("audio");
+  });
+
   it("should use downloadMedia with Bearer token auth", async () => {
     mockDownloadMedia.mockResolvedValueOnce({
       data: Buffer.from("text-data"),

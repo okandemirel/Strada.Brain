@@ -114,6 +114,7 @@ import {
   createShutdownHandler as _createShutdownHandler,
   generateSessionId as _generateSessionId,
 } from "./bootstrap-wiring.js";
+import { transcribeIncomingAudioMessage } from "./incoming-audio-transcription.js";
 
 // Re-export for backward compatibility (tests and other modules import these from bootstrap.js)
 export const initializeAIProvider = _initializeAIProvider;
@@ -799,7 +800,16 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
 
     // Multi-agent mode: route through AgentManager (AGENT-06)
     channel.onMessage(async (msg) => {
-      activityRegistry.recordActivity(channelType, msg.chatId);
+      const audioResult = await transcribeIncomingAudioMessage(msg, config.unityProjectPath);
+      if (audioResult.shouldDrop) {
+        if (audioResult.userWarning) {
+          await channel.sendText(msg.chatId, audioResult.userWarning);
+        }
+        return;
+      }
+      const normalizedMsg = audioResult.message;
+
+      activityRegistry.recordActivity(channelType, normalizedMsg.chatId);
       // Interrupt consolidation on user activity (MEM-13)
       heartbeatLoop?.onUserActivity();
       if (identityManager) {
@@ -809,9 +819,9 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       let taskRunId: string | undefined;
       if (learningResult.taskPlanner) {
         learningResult.taskPlanner.startTask({
-          sessionId: msg.chatId ?? generateSessionId(),
-          chatId: msg.chatId,
-          taskDescription: msg.text.slice(0, 200),
+          sessionId: normalizedMsg.chatId ?? generateSessionId(),
+          chatId: normalizedMsg.chatId,
+          taskDescription: normalizedMsg.text.slice(0, 200),
           learningPipeline: learningResult.pipeline,
         });
         taskRunId = learningResult.taskPlanner.getTaskRunId() ?? undefined;
@@ -820,14 +830,14 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       let routeError: unknown;
       await orchestrator.withTaskExecutionContext(
         {
-          chatId: msg.chatId,
-          conversationId: msg.conversationId,
-          userId: msg.userId,
+          chatId: normalizedMsg.chatId,
+          conversationId: normalizedMsg.conversationId,
+          userId: normalizedMsg.userId,
           taskRunId,
         },
         async () => {
           try {
-            await agentManager!.routeMessage(msg);
+            await agentManager!.routeMessage(normalizedMsg);
           } catch (error) {
             routeError = error;
             throw error;
@@ -835,10 +845,10 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
             if (learningResult.taskPlanner?.isActive()) {
               learningResult.taskPlanner.attachReplayContext(
                 await orchestrator.buildTrajectoryReplayContext({
-                  chatId: msg.chatId,
-                  userId: msg.userId,
-                  conversationId: msg.conversationId,
-                  channelType: msg.channelType,
+                  chatId: normalizedMsg.chatId,
+                  userId: normalizedMsg.userId,
+                  conversationId: normalizedMsg.conversationId,
+                  channelType: normalizedMsg.channelType,
                   sinceTimestamp: learningResult.taskPlanner.getTaskStartedAt() ?? undefined,
                   taskRunId,
                 }),
@@ -862,6 +872,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       orchestrator,
       learningResult.taskPlanner,
       learningResult.pipeline,
+      config.unityProjectPath,
       identityManager,
       heartbeatLoop,
       activityRegistry,

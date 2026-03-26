@@ -32,6 +32,7 @@ import type { IMemoryManager } from "../memory/memory.interface.js";
 import type { IRAGPipeline } from "../rag/rag.interface.js";
 import type { AgentManager as AgentManagerType } from "../agents/multi/agent-manager.js";
 import type { DelegationManager as DelegationManagerType } from "../agents/multi/delegation/delegation-manager.js";
+import { transcribeIncomingAudioMessage } from "./incoming-audio-transcription.js";
 
 export function wireMessageHandler(
   channel: IChannelAdapter,
@@ -39,14 +40,24 @@ export function wireMessageHandler(
   orchestrator: Orchestrator,
   taskPlanner: TaskPlanner,
   learningPipeline: LearningPipeline | undefined,
+  projectPath: string,
   identityManager?: IdentityStateManager,
   heartbeatLoopRef?: HeartbeatLoop,
   activityRegistryRef?: ChannelActivityRegistry,
   channelTypeName?: string,
 ): void {
   channel.onMessage(async (msg) => {
+    const audioResult = await transcribeIncomingAudioMessage(msg, projectPath);
+    if (audioResult.shouldDrop) {
+      if (audioResult.userWarning) {
+        await channel.sendText(msg.chatId, audioResult.userWarning);
+      }
+      return;
+    }
+    const normalizedMsg = audioResult.message;
+
     if (activityRegistryRef && channelTypeName) {
-      activityRegistryRef.recordActivity(channelTypeName, msg.chatId);
+      activityRegistryRef.recordActivity(channelTypeName, normalizedMsg.chatId);
     }
     // Interrupt consolidation on user activity (MEM-13)
     heartbeatLoopRef?.onUserActivity();
@@ -60,9 +71,9 @@ export function wireMessageHandler(
     let taskRunId: string | undefined;
     if (taskPlanner) {
       taskPlanner.startTask({
-        sessionId: msg.chatId ?? generateSessionId(),
-        chatId: msg.chatId,
-        taskDescription: msg.text.slice(0, 200),
+        sessionId: normalizedMsg.chatId ?? generateSessionId(),
+        chatId: normalizedMsg.chatId,
+        taskDescription: normalizedMsg.text.slice(0, 200),
         learningPipeline,
       });
       taskRunId = taskPlanner.getTaskRunId() ?? undefined;
@@ -71,15 +82,15 @@ export function wireMessageHandler(
     let routeError: unknown;
     await orchestrator.withTaskExecutionContext(
       {
-        chatId: msg.chatId,
-        conversationId: msg.conversationId,
-        userId: msg.userId,
+        chatId: normalizedMsg.chatId,
+        conversationId: normalizedMsg.conversationId,
+        userId: normalizedMsg.userId,
         taskRunId,
       },
       async () => {
         try {
           // Route through the message router (handles commands and task submission)
-          await messageRouter.route(msg);
+          await messageRouter.route(normalizedMsg);
         } catch (error) {
           routeError = error;
           throw error;
@@ -88,10 +99,10 @@ export function wireMessageHandler(
           if (taskPlanner?.isActive()) {
             taskPlanner.attachReplayContext(
               await orchestrator.buildTrajectoryReplayContext({
-                chatId: msg.chatId,
-                userId: msg.userId,
-                conversationId: msg.conversationId,
-                channelType: msg.channelType,
+                chatId: normalizedMsg.chatId,
+                userId: normalizedMsg.userId,
+                conversationId: normalizedMsg.conversationId,
+                channelType: normalizedMsg.channelType,
                 sinceTimestamp: taskPlanner.getTaskStartedAt() ?? undefined,
                 taskRunId,
               }),

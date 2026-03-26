@@ -5,6 +5,7 @@ import { useAutonomousStatus, useProviders, useRagStatus, useDaemon, useAgentAct
 import { resolveSettingsIdentity, shouldRefetchIdentityScopedSettings } from './settings-identity'
 import PrimaryWorkerSelector from '../components/PrimaryWorkerSelector'
 import type { BootReport } from '../../../src/common/capability-contract.ts'
+import { hasVoiceInputSupport, hasVoiceOutputSupport, useVoiceSettings } from '../hooks/use-voice-settings'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -147,44 +148,6 @@ interface DaemonStatus {
 // Helpers
 // ---------------------------------------------------------------------------
 
-const VOICE_STORAGE_KEY = 'strada-voice-settings'
-
-interface VoiceSettings {
-  inputEnabled: boolean
-  outputEnabled: boolean
-}
-
-function loadVoiceSettings(): VoiceSettings {
-  try {
-    const raw = localStorage.getItem(VOICE_STORAGE_KEY)
-    if (raw) {
-      const parsed = JSON.parse(raw) as Partial<VoiceSettings>
-      return {
-        inputEnabled: Boolean(parsed.inputEnabled),
-        outputEnabled: Boolean(parsed.outputEnabled),
-      }
-    }
-  } catch {
-    // Corrupted storage — fall through to defaults
-  }
-  return { inputEnabled: false, outputEnabled: false }
-}
-
-function saveVoiceSettings(settings: VoiceSettings): void {
-  localStorage.setItem(VOICE_STORAGE_KEY, JSON.stringify(settings))
-}
-
-function hasSpeechRecognition(): boolean {
-  return Boolean(
-    (window as unknown as Record<string, unknown>).SpeechRecognition ||
-    (window as unknown as Record<string, unknown>).webkitSpeechRecognition,
-  )
-}
-
-function hasSpeechSynthesis(): boolean {
-  return typeof window.speechSynthesis !== 'undefined'
-}
-
 function formatRemaining(ms: number): string {
   if (ms <= 0) return 'Expired'
   const totalMinutes = Math.floor(ms / 60000)
@@ -279,9 +242,9 @@ export default function SettingsPage() {
   const [daemonToggling, setDaemonToggling] = useState(false)
   const [routingPreset, setRoutingPreset] = useState<string>('balanced')
   const [routingSwitching, setRoutingSwitching] = useState(false)
-  const [voice, setVoice] = useState<VoiceSettings>(loadVoiceSettings)
-  const speechInputAvailable = hasSpeechRecognition()
-  const speechOutputAvailable = hasSpeechSynthesis()
+  const { voice, updateVoiceSettings } = useVoiceSettings()
+  const speechInputAvailable = hasVoiceInputSupport()
+  const speechOutputAvailable = hasVoiceOutputSupport()
   const daemonBudgetPercent = daemonStatus ? toPercent(daemonStatus.budget.pct) : 0
 
   // Sync routing preset from server
@@ -375,20 +338,18 @@ export default function SettingsPage() {
   }, [daemonToggling, daemonStatus, queryClient])
 
   const handleVoiceInputToggle = useCallback(() => {
-    setVoice((prev) => {
+    updateVoiceSettings((prev) => {
       const next = { ...prev, inputEnabled: !prev.inputEnabled }
-      saveVoiceSettings(next)
       return next
     })
-  }, [])
+  }, [updateVoiceSettings])
 
   const handleVoiceOutputToggle = useCallback(() => {
-    setVoice((prev) => {
+    updateVoiceSettings((prev) => {
       const next = { ...prev, outputEnabled: !prev.outputEnabled }
-      saveVoiceSettings(next)
       return next
     })
-  }, [])
+  }, [updateVoiceSettings])
 
   const handlePresetChange = useCallback(async (preset: string) => {
     if (routingSwitching) return
@@ -1033,7 +994,7 @@ export default function SettingsPage() {
             <span className="text-text-secondary">Voice Input</span>
             {!speechInputAvailable && (
               <div className="text-xs text-text-tertiary leading-relaxed mt-2.5 mb-1">
-                Speech recognition is not supported in this browser.
+                Voice capture is not supported in this browser.
               </div>
             )}
           </div>
@@ -1049,7 +1010,7 @@ export default function SettingsPage() {
 
         <div className="flex justify-between items-center px-4 py-2.5 bg-white/3 backdrop-blur border border-white/5 rounded-xl mb-2 text-sm">
           <div>
-            <span className="text-text-secondary">Voice Output (Auto-read Responses)</span>
+            <span className="text-text-secondary">Voice Output</span>
             {!speechOutputAvailable && (
               <div className="text-xs text-text-tertiary leading-relaxed mt-2.5 mb-1">
                 Speech synthesis is not supported in this browser.

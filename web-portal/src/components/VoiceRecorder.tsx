@@ -1,168 +1,174 @@
-import { useCallback, useEffect, useRef, useState, useMemo } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
+import type { Attachment } from '../types/messages'
+import { hasVoiceInputSupport } from '../hooks/use-voice-settings'
 
 interface VoiceRecorderProps {
-  onTranscript: (text: string) => void
+  onVoiceMessage: (attachment: Attachment) => boolean | void
   disabled?: boolean
 }
 
-interface SpeechRecognitionInstance extends EventTarget {
-  continuous: boolean
-  interimResults: boolean
-  lang: string
-  start(): void
-  stop(): void
-  abort(): void
-  onresult: ((event: { resultIndex: number; results: SpeechRecognitionResultList }) => void) | null
-  onerror: ((event: { error: string; message: string }) => void) | null
-  onend: (() => void) | null
+interface RecorderErrorEvent extends Event {
+  error?: DOMException
 }
 
-interface SpeechRecognitionConstructor {
-  new (): SpeechRecognitionInstance
+const MAX_VOICE_MESSAGE_BYTES = 10 * 1024 * 1024
+const PREFERRED_AUDIO_TYPES = [
+  'audio/webm;codecs=opus',
+  'audio/webm',
+  'audio/ogg;codecs=opus',
+  'audio/mp4',
+]
+
+function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      const result = typeof reader.result === 'string' ? reader.result : ''
+      resolve(result.split(',')[1] ?? '')
+    }
+    reader.onerror = () => reject(reader.error ?? new Error('Failed to read recorded audio'))
+    reader.readAsDataURL(blob)
+  })
 }
 
-function getSpeechRecognition(): SpeechRecognitionConstructor | null {
-  const w = window as unknown as Record<string, unknown>
-  return (w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null) as
-    | SpeechRecognitionConstructor
-    | null
+function pickRecorderMimeType(): string {
+  if (typeof window === 'undefined' || typeof window.MediaRecorder === 'undefined') return ''
+  if (typeof window.MediaRecorder.isTypeSupported !== 'function') return ''
+
+  return PREFERRED_AUDIO_TYPES.find((mimeType) => window.MediaRecorder.isTypeSupported(mimeType)) ?? ''
 }
 
-const FATAL_ERRORS = new Set(['not-allowed', 'service-not-available', 'language-not-supported'])
-
-export default function VoiceRecorder({ onTranscript, disabled }: VoiceRecorderProps) {
+export default function VoiceRecorder({ onVoiceMessage, disabled }: VoiceRecorderProps) {
   const [isRecording, setIsRecording] = useState(false)
-  const recognitionRef = useRef<SpeechRecognitionInstance | null>(null)
-  const wantRecordingRef = useRef(false)
-  const restartCountRef = useRef(0)
-  const generationRef = useRef(0)
-  const onTranscriptRef = useRef(onTranscript)
-  const startRef = useRef<() => void>(() => {})
-  const micGrantedRef = useRef(false)
-
-  useEffect(() => { onTranscriptRef.current = onTranscript }, [onTranscript])
-
-  const supported = useMemo(() => typeof window !== 'undefined' && getSpeechRecognition() !== null, [])
+  const [isProcessing, setIsProcessing] = useState(false)
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null)
+  const streamRef = useRef<MediaStream | null>(null)
+  const chunksRef = useRef<Blob[]>([])
+  const onVoiceMessageRef = useRef(onVoiceMessage)
+  const startPendingRef = useRef(false)
 
   useEffect(() => {
-    const start = (): void => {
-      const SpeechRecognitionCtor = getSpeechRecognition()
-      if (!SpeechRecognitionCtor) return
+    onVoiceMessageRef.current = onVoiceMessage
+  }, [onVoiceMessage])
 
-      const gen = ++generationRef.current
-      const recognition = new SpeechRecognitionCtor()
-      recognition.continuous = true
-      recognition.interimResults = false
-      recognition.lang = navigator.language || 'en-US'
-
-      recognition.onresult = (event) => {
-        restartCountRef.current = 0
-        for (let i = event.resultIndex; i < event.results.length; i++) {
-          const result = event.results[i]
-          if (result.isFinal && result[0]) {
-            const transcript = result[0].transcript.trim().slice(0, 5000)
-            if (transcript) {
-              onTranscriptRef.current(transcript)
-            }
-          }
-        }
-      }
-
-      recognition.onerror = (event) => {
-        if (event.error === 'no-speech' || event.error === 'aborted') return
-        if (import.meta.env.DEV) {
-          console.warn('[VoiceRecorder] Speech recognition error:', event.error)
-        }
-        if (FATAL_ERRORS.has(event.error)) {
-          wantRecordingRef.current = false
-          toast.error(event.error === 'not-allowed'
-            ? 'Microphone permission denied'
-            : 'Speech recognition temporarily unavailable')
-        }
-      }
-
-      recognition.onend = () => {
-        if (generationRef.current !== gen) return
-        recognitionRef.current = null
-        if (wantRecordingRef.current && restartCountRef.current < 5) {
-          const delay = 300 * Math.pow(2, restartCountRef.current)
-          restartCountRef.current++
-          setTimeout(() => {
-            if (wantRecordingRef.current && generationRef.current === gen) {
-              try {
-                startRef.current()
-              } catch {
-                wantRecordingRef.current = false
-                setIsRecording(false)
-              }
-            }
-          }, delay)
-          return
-        }
-        wantRecordingRef.current = false
-        setIsRecording(false)
-      }
-
-      recognitionRef.current = recognition
-      recognition.start()
-    }
-    startRef.current = start
-
-    return () => {
-      wantRecordingRef.current = false
-      if (recognitionRef.current) {
-        try { recognitionRef.current.abort() } catch { /* ignore */ }
-        recognitionRef.current = null
-      }
-    }
+  const cleanupStream = useCallback(() => {
+    if (!streamRef.current) return
+    streamRef.current.getTracks().forEach((track) => track.stop())
+    streamRef.current = null
   }, [])
+
+  useEffect(() => {
+    return () => {
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+        try { mediaRecorderRef.current.stop() } catch { /* ignore */ }
+      }
+      mediaRecorderRef.current = null
+      cleanupStream()
+    }
+  }, [cleanupStream])
+
+  const supported = hasVoiceInputSupport()
+
+  const handleStop = useCallback(async () => {
+    const blobType = mediaRecorderRef.current?.mimeType || chunksRef.current[0]?.type || 'audio/webm'
+    const audioBlob = new Blob(chunksRef.current, { type: blobType })
+    chunksRef.current = []
+    mediaRecorderRef.current = null
+    cleanupStream()
+    setIsRecording(false)
+
+    if (audioBlob.size === 0) {
+      toast.error('No audio captured')
+      return
+    }
+
+    if (audioBlob.size > MAX_VOICE_MESSAGE_BYTES) {
+      toast.error('Voice message is too large')
+      return
+    }
+
+    setIsProcessing(true)
+    try {
+      const attachment: Attachment = {
+        name: `voice-${Date.now()}.${blobType.includes('mp4') ? 'm4a' : blobType.includes('ogg') ? 'ogg' : 'webm'}`,
+        type: blobType,
+        data: await blobToBase64(audioBlob),
+        size: audioBlob.size,
+      }
+      const sent = onVoiceMessageRef.current(attachment)
+      if (sent === false) {
+        toast.error('Voice message could not be sent')
+        return
+      }
+    } catch (error) {
+      if (import.meta.env.DEV) {
+        console.warn('[VoiceRecorder] Failed to prepare audio message:', error)
+      }
+      toast.error('Voice message failed')
+    } finally {
+      setIsProcessing(false)
+    }
+  }, [cleanupStream])
+
+  const startRecording = useCallback(async () => {
+    if (startPendingRef.current || isProcessing) return
+    startPendingRef.current = true
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const mimeType = pickRecorderMimeType()
+      const recorder = mimeType
+        ? new MediaRecorder(stream, { mimeType })
+        : new MediaRecorder(stream)
+
+      streamRef.current = stream
+      chunksRef.current = []
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          chunksRef.current.push(event.data)
+        }
+      }
+      recorder.onerror = (event) => {
+        if (import.meta.env.DEV) {
+          console.warn('[VoiceRecorder] MediaRecorder error:', (event as RecorderErrorEvent).error)
+        }
+        toast.error('Audio recording failed')
+      }
+      recorder.onstop = () => {
+        void handleStop()
+      }
+
+      mediaRecorderRef.current = recorder
+      recorder.start(250)
+      setIsRecording(true)
+    } catch (error) {
+      if (import.meta.env.DEV) {
+        console.warn('[VoiceRecorder] Failed to start recording:', error)
+      }
+      cleanupStream()
+      toast.error('Microphone permission denied')
+    } finally {
+      startPendingRef.current = false
+    }
+  }, [cleanupStream, handleStop, isProcessing])
 
   const toggleRecording = useCallback(() => {
     if (isRecording) {
-      wantRecordingRef.current = false
-      if (recognitionRef.current) {
-        try { recognitionRef.current.stop() } catch { /* ignore */ }
+      const recorder = mediaRecorderRef.current
+      if (recorder && recorder.state !== 'inactive') {
+        try {
+          recorder.stop()
+        } catch {
+          cleanupStream()
+          setIsRecording(false)
+        }
       }
-      setIsRecording(false)
       return
     }
 
-    // Guard against double-click while getUserMedia dialog is open
-    if (wantRecordingRef.current || recognitionRef.current) return
-
-    wantRecordingRef.current = true
-    restartCountRef.current = 0
-
-    const begin = () => {
-      try {
-        startRef.current()
-        setIsRecording(true)
-      } catch (err) {
-        wantRecordingRef.current = false
-        if (import.meta.env.DEV) console.warn('[VoiceRecorder] Start failed:', err)
-      }
-    }
-
-    // getUserMedia reliably triggers the browser permission prompt;
-    // SpeechRecognition.start() alone silently fails in some configurations.
-    if (!micGrantedRef.current && navigator.mediaDevices?.getUserMedia) {
-      navigator.mediaDevices.getUserMedia({ audio: true })
-        .then((stream) => {
-          stream.getTracks().forEach((t) => t.stop())
-          micGrantedRef.current = true
-          if (wantRecordingRef.current) begin()
-        })
-        .catch((err) => {
-          wantRecordingRef.current = false
-          toast.error('Microphone permission denied')
-          if (import.meta.env.DEV) console.warn('[VoiceRecorder] getUserMedia failed:', err)
-        })
-      return
-    }
-
-    begin()
-  }, [isRecording])
+    void startRecording()
+  }, [cleanupStream, isRecording, startRecording])
 
   if (!supported) return null
 
@@ -171,19 +177,27 @@ export default function VoiceRecorder({ onTranscript, disabled }: VoiceRecorderP
       className={`flex items-center justify-center w-[42px] h-[42px] border rounded-xl cursor-pointer shrink-0 transition-all duration-200 ${
         isRecording
           ? 'text-error border-error bg-error/15 animate-[voice-pulse_1.5s_ease-in-out_infinite]'
+          : isProcessing
+            ? 'text-accent border-accent bg-accent/10'
           : 'border-border bg-bg-tertiary text-text-secondary hover:text-accent hover:border-accent hover:bg-accent-glow'
       } disabled:opacity-40 disabled:cursor-not-allowed`}
       onClick={toggleRecording}
-      disabled={disabled}
-      title={isRecording ? 'Stop recording' : 'Voice input'}
+      disabled={disabled || isProcessing}
+      title={isRecording ? 'Stop recording' : isProcessing ? 'Sending voice message' : 'Voice input'}
       type="button"
     >
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <rect x="9" y="1" width="6" height="12" rx="3" />
-        <path d="M19 10v1a7 7 0 01-14 0v-1" />
-        <line x1="12" y1="18" x2="12" y2="23" />
-        <line x1="8" y1="23" x2="16" y2="23" />
-      </svg>
+      {isProcessing ? (
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="animate-spin">
+          <path d="M21 12a9 9 0 11-6.22-8.56" />
+        </svg>
+      ) : (
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="9" y="1" width="6" height="12" rx="3" />
+          <path d="M19 10v1a7 7 0 01-14 0v-1" />
+          <line x1="12" y1="18" x2="12" y2="23" />
+          <line x1="8" y1="23" x2="16" y2="23" />
+        </svg>
+      )}
     </button>
   )
 }

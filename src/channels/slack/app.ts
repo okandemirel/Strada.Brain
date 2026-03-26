@@ -788,7 +788,7 @@ export class SlackChannel implements IChannelAdapter {
   }
 
   private async handleIncomingMessage(message: SlackMessageEvent, say: SayFn): Promise<void> {
-    if (message.subtype === "bot_message" || !message.text) return;
+    if (message.subtype === "bot_message") return;
 
     const userId = message.user;
     const teamId = message.team || "";
@@ -823,13 +823,11 @@ export class SlackChannel implements IChannelAdapter {
     }
 
     const threadTs = message.thread_ts;
-    let text = message.text;
+    let text = message.text ?? "";
 
     if (this.botUserId) {
       text = text.replace(new RegExp(`<@${this.botUserId}>`, "g"), "").trim();
     }
-
-    if (!text) return;
 
     const attachments: Attachment[] = [];
 
@@ -868,6 +866,8 @@ export class SlackChannel implements IChannelAdapter {
         });
       }
     }
+
+    if (!text && attachments.length === 0) return;
 
     const incomingMessage: IncomingMessage = {
       channelType: "slack",

@@ -8,10 +8,12 @@ import EmptyState from './EmptyState'
 import PrimaryWorkerSelector from './PrimaryWorkerSelector'
 import { BlurFade } from './ui/blur-fade'
 import { useSessionStore } from '../stores/session-store'
+import { useVoiceSettings } from '../hooks/use-voice-settings'
 
 export default function ChatView() {
   const { messages, status, confirmation, isTyping, sendMessage, sendConfirmation, sendRawJSON } = useWS()
   const updateMessage = useSessionStore((s) => s.updateMessage)
+  const { voice } = useVoiceSettings()
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const messagesContainerRef = useRef<HTMLDivElement>(null)
   const userScrolledUpRef = useRef(false)
@@ -60,7 +62,12 @@ export default function ChatView() {
         ) : (
           <div className="w-full max-w-prose mx-auto flex flex-col gap-3">
             {messages.map((msg) => (
-              <ChatMessage key={msg.id} message={msg} onFeedback={handleFeedback} />
+              <ChatMessage
+                key={msg.id}
+                message={msg}
+                onFeedback={handleFeedback}
+                voiceOutputEnabled={voice.outputEnabled}
+              />
             ))}
             {isTyping && <TypingIndicator />}
           </div>

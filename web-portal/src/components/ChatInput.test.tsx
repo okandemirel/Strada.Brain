@@ -4,7 +4,20 @@ import userEvent from '@testing-library/user-event'
 
 // Mock VoiceRecorder to avoid SpeechRecognition issues in jsdom
 vi.mock('./VoiceRecorder', () => ({
-  default: () => null,
+  default: ({ onVoiceMessage, disabled }: { onVoiceMessage: (attachment: unknown) => void; disabled?: boolean }) => (
+    <button
+      type="button"
+      onClick={() => onVoiceMessage({
+        name: 'voice.webm',
+        type: 'audio/webm',
+        data: 'dm9pY2U=',
+        size: 5,
+      })}
+      disabled={disabled}
+    >
+      Record Voice
+    </button>
+  ),
 }))
 
 import ChatInput from './ChatInput'
@@ -114,5 +127,19 @@ describe('ChatInput', () => {
     expect(resetOverrideSpy).toHaveBeenCalled()
 
     resetOverrideSpy.mockRestore()
+  })
+
+  it('sends a recorded voice attachment', async () => {
+    const user = userEvent.setup()
+    render(<ChatInput onSend={onSend} disabled={false} />)
+
+    await user.click(screen.getByRole('button', { name: 'Record Voice' }))
+
+    expect(onSend).toHaveBeenCalledWith('(voice message)', [{
+      name: 'voice.webm',
+      type: 'audio/webm',
+      data: 'dm9pY2U=',
+      size: 5,
+    }])
   })
 })

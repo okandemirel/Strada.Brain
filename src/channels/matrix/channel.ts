@@ -6,6 +6,7 @@
  *         MATRIX_ALLOWED_USER_IDS, MATRIX_ALLOWED_ROOM_IDS, MATRIX_ALLOW_OPEN_ACCESS
  */
 
+import { createDecipheriv, createHash } from "node:crypto";
 import type {
   IChannelAdapter,
   IChannelRichMessaging,
@@ -13,6 +14,12 @@ import type {
 import { limitIncomingText, type IncomingMessage, type Attachment } from "../channel-messages.interface.js";
 import { getLogger } from "../../utils/logger.js";
 import { isAllowedByDualAllowlistPolicy } from "../../security/access-policy.js";
+import {
+  downloadMedia,
+  mimeToAttachmentType,
+  validateMagicBytes,
+  validateMediaAttachment,
+} from "../../utils/media-processor.js";
 
 type MessageHandler = (msg: IncomingMessage) => Promise<void>;
 
@@ -84,38 +91,7 @@ export class MatrixChannel implements IChannelAdapter, IChannelRichMessaging {
       const roomId = event.getRoomId();
       if (sender === this.userId) return;
       if (!this.isAllowedInboundMessage(sender, roomId)) return;
-
-      const content = event.getContent();
-      if (content.msgtype !== "m.text") return;
-
-      // Feedback detection — intercept standalone emoji or /feedback commands
-      const trimmedBody = content.body.trim();
-      if (this.feedbackReactionCallback) {
-        let feedbackType: "thumbs_up" | "thumbs_down" | null = null;
-        if (FEEDBACK_UP_PATTERNS.includes(trimmedBody)) {
-          feedbackType = "thumbs_up";
-        } else if (FEEDBACK_DOWN_PATTERNS.includes(trimmedBody)) {
-          feedbackType = "thumbs_down";
-        }
-        if (feedbackType) {
-          const instinctIds = this.appliedInstinctIds.get(roomId);
-          if (instinctIds && instinctIds.length > 0) {
-            this.feedbackReactionCallback(feedbackType, instinctIds, sender, "reaction");
-            return; // consumed as feedback
-          }
-          // No instinctIds — fall through to normal message routing
-        }
-      }
-
-      const msg: IncomingMessage = {
-        channelType: "matrix",
-        chatId: roomId,
-        userId: sender,
-        text: limitIncomingText(content.body),
-        timestamp: new Date(event.getTs()),
-      };
-
-      this.handler?.(msg).catch(() => {});
+      void this.handleTimelineEvent(event, client);
     });
 
     await client.startClient({ initialSyncLimit: 0 });
@@ -160,6 +136,202 @@ export class MatrixChannel implements IChannelAdapter, IChannelRichMessaging {
     await this.sendText(chatId, `[Attachment: ${attachment.name}]`);
   }
 
+  private async handleTimelineEvent(event: MatrixEvent, client: MatrixClientLike): Promise<void> {
+    const content = event.getContent();
+
+    if (content.msgtype === "m.text") {
+      const trimmedBody = (content.body ?? "").trim();
+      if (this.feedbackReactionCallback) {
+        let feedbackType: "thumbs_up" | "thumbs_down" | null = null;
+        if (FEEDBACK_UP_PATTERNS.includes(trimmedBody)) {
+          feedbackType = "thumbs_up";
+        } else if (FEEDBACK_DOWN_PATTERNS.includes(trimmedBody)) {
+          feedbackType = "thumbs_down";
+        }
+        if (feedbackType) {
+          const instinctIds = this.appliedInstinctIds.get(event.getRoomId());
+          if (instinctIds && instinctIds.length > 0) {
+            this.feedbackReactionCallback(feedbackType, instinctIds, event.getSender(), "reaction");
+            return;
+          }
+        }
+      }
+    }
+
+    const msg = await this.toIncomingMessage(event, client);
+    if (!msg) return;
+    this.handler?.(msg).catch(() => {});
+  }
+
+  private async toIncomingMessage(
+    event: MatrixEvent,
+    client: MatrixClientLike,
+  ): Promise<IncomingMessage | null> {
+    const content = event.getContent();
+    const attachments = await this.extractAttachments(content, client);
+
+    let text = content.msgtype === "m.text"
+      ? limitIncomingText(content.body ?? "")
+      : attachments.some((attachment) => attachment.type === "audio")
+        ? "(voice message)"
+        : "";
+
+    if (!text && attachments.length === 0) {
+      return null;
+    }
+
+    if (text === "(voice message)" && attachments.length === 0) {
+      text = "";
+    }
+
+    return {
+      channelType: "matrix",
+      chatId: event.getRoomId(),
+      userId: event.getSender(),
+      text,
+      attachments: attachments.length > 0 ? attachments : undefined,
+      timestamp: new Date(event.getTs()),
+    };
+  }
+
+  private async extractAttachments(
+    content: MatrixMessageContent,
+    client: MatrixClientLike,
+  ): Promise<Attachment[]> {
+    if (!["m.audio", "m.file", "m.image", "m.video"].includes(content.msgtype)) {
+      return [];
+    }
+
+    const declaredMimeType = content.info?.mimetype ?? content.file?.mimetype ?? this.inferMimeTypeFromName(content.body);
+    const declaredType = content.msgtype === "m.audio"
+      ? "audio"
+      : content.msgtype === "m.image"
+        ? "image"
+        : content.msgtype === "m.video"
+          ? "video"
+          : mimeToAttachmentType(declaredMimeType);
+
+    const resolvedUrl = this.resolveMediaUrl(content, client);
+    let effectiveMimeType = declaredMimeType;
+    let data: Buffer | undefined;
+    let size = content.info?.size ?? 0;
+
+    if (resolvedUrl) {
+      const downloaded = await downloadMedia(resolvedUrl);
+      if (downloaded) {
+        if (this.isEncryptedFile(content.file)) {
+          const decrypted = this.decryptAttachment(downloaded.data, content.file);
+          if (!decrypted) {
+            return [];
+          }
+          data = decrypted;
+          size = decrypted.length;
+        } else {
+          data = downloaded.data;
+          size = downloaded.size;
+          effectiveMimeType = downloaded.mimeType || effectiveMimeType;
+        }
+      }
+    }
+
+    const type = content.msgtype === "m.file"
+      ? mimeToAttachmentType(effectiveMimeType)
+      : declaredType;
+
+    const validation = validateMediaAttachment({
+      mimeType: effectiveMimeType,
+      size,
+      type,
+    });
+    if (!validation.valid) {
+      return [];
+    }
+
+    if (data && effectiveMimeType && !validateMagicBytes(data, effectiveMimeType)) {
+      return [];
+    }
+
+    return [{
+      type,
+      name: content.body || this.defaultAttachmentName(type),
+      url: resolvedUrl,
+      mimeType: effectiveMimeType,
+      size,
+      data,
+    }];
+  }
+
+  private resolveMediaUrl(content: MatrixMessageContent, client: MatrixClientLike): string | undefined {
+    const rawUrl = typeof content.url === "string"
+      ? content.url
+      : typeof content.file?.url === "string"
+        ? content.file.url
+        : undefined;
+
+    if (!rawUrl) return undefined;
+    if (rawUrl.startsWith("mxc://")) {
+      return client.mxcUrlToHttp?.(rawUrl) ?? undefined;
+    }
+    return rawUrl;
+  }
+
+  private defaultAttachmentName(type: Attachment["type"]): string {
+    if (type === "audio") return "audio";
+    if (type === "image") return "image";
+    if (type === "video") return "video";
+    return "file";
+  }
+
+  private isEncryptedFile(file?: MatrixEncryptedFileInfo): boolean {
+    return Boolean(file?.key?.k || file?.iv || file?.hashes?.sha256);
+  }
+
+  private inferMimeTypeFromName(name?: string): string | undefined {
+    const lowerName = name?.toLowerCase() ?? "";
+    if (lowerName.endsWith(".mp3")) return "audio/mpeg";
+    if (lowerName.endsWith(".m4a")) return "audio/mp4";
+    if (lowerName.endsWith(".wav")) return "audio/wav";
+    if (lowerName.endsWith(".ogg") || lowerName.endsWith(".oga")) return "audio/ogg";
+    if (lowerName.endsWith(".webm")) return "audio/webm";
+    if (lowerName.endsWith(".mp4")) return "video/mp4";
+    if (lowerName.endsWith(".png")) return "image/png";
+    if (lowerName.endsWith(".jpg") || lowerName.endsWith(".jpeg")) return "image/jpeg";
+    if (lowerName.endsWith(".gif")) return "image/gif";
+    if (lowerName.endsWith(".webp")) return "image/webp";
+    if (lowerName.endsWith(".pdf")) return "application/pdf";
+    if (lowerName.endsWith(".txt")) return "text/plain";
+    if (lowerName.endsWith(".csv")) return "text/csv";
+    return undefined;
+  }
+
+  private decryptAttachment(data: Buffer, file?: MatrixEncryptedFileInfo): Buffer | null {
+    if (!file?.url || !file.key?.k || !file.iv || !file.hashes?.sha256) {
+      return null;
+    }
+    if (file.key.alg !== "A256CTR") {
+      return null;
+    }
+
+    try {
+      const expectedHash = Buffer.from(file.hashes.sha256, "base64url");
+      const actualHash = createHash("sha256").update(data).digest();
+      if (!actualHash.equals(expectedHash)) {
+        return null;
+      }
+
+      const key = Buffer.from(file.key.k, "base64url");
+      const iv = Buffer.from(file.iv, "base64url");
+      if (key.length !== 32 || iv.length !== 16) {
+        return null;
+      }
+
+      const decipher = createDecipheriv("aes-256-ctr", key, iv);
+      return Buffer.concat([decipher.update(data), decipher.final()]);
+    } catch {
+      return null;
+    }
+  }
+
   private isAllowedInboundMessage(userId: string, roomId: string): boolean {
     return isAllowedByDualAllowlistPolicy({
       primaryId: userId,
@@ -179,6 +351,7 @@ interface MatrixClientLike {
   sendTextMessage(roomId: string, text: string): Promise<void>;
   sendHtmlMessage(roomId: string, text: string, html: string): Promise<void>;
   sendTyping(roomId: string, typing: boolean, timeout: number): Promise<void>;
+  mxcUrlToHttp?(mxcUrl: string): string | null;
 }
 
 interface MatrixEvent {
@@ -186,5 +359,32 @@ interface MatrixEvent {
   getSender(): string;
   getRoomId(): string;
   getTs(): number;
-  getContent(): { msgtype: string; body: string; [key: string]: unknown };
+  getContent(): MatrixMessageContent;
+}
+
+interface MatrixMessageContent {
+  msgtype: string;
+  body?: string;
+  url?: string;
+  file?: MatrixEncryptedFileInfo;
+  info?: {
+    mimetype?: string;
+    size?: number;
+  };
+  [key: string]: unknown;
+}
+
+interface MatrixEncryptedFileInfo {
+  url?: string;
+  mimetype?: string;
+  iv?: string;
+  hashes?: {
+    sha256?: string;
+  };
+  key?: {
+    k?: string;
+    alg?: string;
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
 }

@@ -14,6 +14,7 @@ const REHYPE_PLUGINS = [rehypeHighlight]
 interface ChatMessageProps {
   message: ChatMessageType
   onFeedback?: (messageId: string, type: 'thumbs_up' | 'thumbs_down') => void
+  voiceOutputEnabled?: boolean
 }
 
 const SAFE_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp'])
@@ -140,9 +141,9 @@ const FeedbackToolbar = memo(function FeedbackToolbar({
   )
 })
 
-function ChatMessageComponent({ message, onFeedback }: ChatMessageProps) {
+function ChatMessageComponent({ message, onFeedback, voiceOutputEnabled = true }: ChatMessageProps) {
   const isUser = message.sender === 'user'
-  const showVoiceOutput = !isUser && !message.isStreaming && hasTextContent(message.text)
+  const showVoiceOutput = voiceOutputEnabled && !isUser && !message.isStreaming && hasTextContent(message.text)
   const showFeedback = !isUser && !message.isStreaming && onFeedback
 
   return (

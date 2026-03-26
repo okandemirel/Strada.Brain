@@ -4,6 +4,7 @@ import { useWorkspaceStore } from '../stores/workspace-store'
 import VoiceRecorder from './VoiceRecorder'
 import { ShimmerButton } from './ui/shimmer-button'
 import { CoolMode } from './ui/cool-mode'
+import { useVoiceSettings } from '../hooks/use-voice-settings'
 
 interface ChatInputProps {
   onSend: (text: string, attachments?: Attachment[]) => boolean | void
@@ -51,6 +52,7 @@ export default function ChatInput({ onSend, disabled }: ChatInputProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const sendingRef = useRef(false)
+  const { voice } = useVoiceSettings()
 
   const filesRef = useRef(files)
   filesRef.current = files
@@ -172,9 +174,13 @@ export default function ChatInput({ onSend, disabled }: ChatInputProps) {
     [addFiles],
   )
 
-  const handleVoiceTranscript = useCallback((transcript: string) => {
-    setText(prev => prev ? prev + ' ' + transcript : transcript)
-  }, [])
+  const handleVoiceMessage = useCallback((attachment: Attachment) => {
+    const sent = onSend('(voice message)', [attachment])
+    if (sent === false) return false
+
+    useWorkspaceStore.getState().resetOverride()
+    return true
+  }, [onSend])
 
   return (
     <div
@@ -234,7 +240,9 @@ export default function ChatInput({ onSend, disabled }: ChatInputProps) {
           disabled={disabled}
           className="flex-1 resize-none border-none rounded-[14px] px-4 py-3 font-[inherit] text-[15px] bg-transparent text-text leading-relaxed max-h-[140px] outline-none transition-all duration-200 placeholder:text-text-tertiary disabled:opacity-40"
         />
-        <VoiceRecorder onTranscript={handleVoiceTranscript} disabled={disabled} />
+        {voice.inputEnabled && (
+          <VoiceRecorder onVoiceMessage={handleVoiceMessage} disabled={disabled} />
+        )}
         <CoolMode options={{ particle: '✦', particleCount: 8, speedUp: 18 }}>
           <ShimmerButton
             shimmerColor="#00e5ff"
