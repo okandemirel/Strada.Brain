@@ -30,6 +30,10 @@ const COMPLEXITY_INDICATORS = [
   /(?:first|then|after|finally)/i, // sequential instructions
   /(?:module|system|feature|component).*(?:test|spec)/i, // feature + tests
   /\d+\s*(?:file|class|component|test)/i, // numbered items
+  /(?:investigate|analy[sz]e|audit|review|stabilize|improve|refactor|clean\s+up).*(?:fix|test|verify|document|remove)/i,
+  /(?:fix|improve|stabilize|refactor|clean\s+up).*(?:test|verify|validate|document)/i,
+  /(?:multiple|several|various|many|birden\s+fazla|[0-9]+\s*den\s+fazla).*(?:issues?|bugs?|problems?|editors?|files?|tasks?|levels?)/iu,
+  /(?:eksik|hatal[ıi]|kusursuz|test\s+edilmemi[sş]|gereksiz|ayr[ıi]ca).*(?:ve|hem|ayr[ıi]ca|birden\s+fazla|[0-9]+\s*den\s+fazla)/iu,
 ];
 
 /** Patterns indicating a simple, single-step request */

@@ -109,6 +109,14 @@ describe("GoalDecomposer", () => {
         decomposer.shouldDecompose("create a module with tests and documentation"),
       ).toBe(true);
     });
+
+    it("returns true for multilingual audit-and-fix prompts with verification work", () => {
+      expect(
+        decomposer.shouldDecompose(
+          "Level generatorleri ve hatali levelleri analiz et, duzelt, arrow progression'i iyilestir ve test et.",
+        ),
+      ).toBe(true);
+    });
   });
 
   // ===========================================================================

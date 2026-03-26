@@ -169,6 +169,86 @@ function serializeTaskDetail(tree: GoalTree, nodeId: string): Record<string, unk
   }
 }
 
+interface MonitorTaskRecord {
+  id: string
+  chatId: string
+  channelType: string
+  title: string
+  status: string
+  createdAt: number
+  updatedAt: number
+  completedAt?: number
+  result?: string
+  error?: string
+}
+
+interface MonitorTaskManager {
+  listAllActiveTasks(): MonitorTaskRecord[]
+}
+
+function getActiveStandaloneTasks(taskManager: MonitorTaskManager | undefined): MonitorTaskRecord[] {
+  if (!taskManager) return []
+  return taskManager
+    .listAllActiveTasks()
+    .filter((task) => task.channelType !== 'daemon')
+    .sort((left, right) => right.updatedAt - left.updatedAt)
+}
+
+function serializeStandaloneDag(tasks: MonitorTaskRecord[]): {
+  rootId: string
+  taskDescription: string
+  progress: { completed: number; total: number; percentage: number }
+  nodes: Array<{
+    id: string; task: string; status: string; depth: number
+    dependsOn: string[]; parentId: string | null
+    startedAt: number | null; completedAt: number | null
+    retryCount: number
+  }>
+  edges: Array<{ source: string; target: string }>
+} {
+  const nodes = tasks.map((task) => ({
+    id: task.id,
+    task: task.title,
+    status: task.status,
+    depth: 0,
+    dependsOn: [] as string[],
+    parentId: null,
+    startedAt: task.createdAt,
+    completedAt: task.completedAt ?? null,
+    retryCount: 0,
+  }))
+
+  return {
+    rootId: tasks[0]?.id ?? 'active-tasks',
+    taskDescription: tasks.length === 1 ? tasks[0]!.title : `${tasks.length} active tasks`,
+    progress: {
+      completed: 0,
+      total: tasks.length,
+      percentage: tasks.length > 0 ? 0 : 100,
+    },
+    nodes,
+    edges: [],
+  }
+}
+
+function serializeStandaloneTask(task: MonitorTaskRecord): Record<string, unknown> {
+  return {
+    id: task.id,
+    task: task.title,
+    status: task.status,
+    reviewStatus: 'none',
+    depth: 0,
+    dependsOn: [],
+    parentId: null,
+    result: task.result ?? null,
+    error: task.error ?? null,
+    startedAt: task.createdAt,
+    completedAt: task.completedAt ?? null,
+    retryCount: 0,
+    redecompositionCount: 0,
+  }
+}
+
 // =============================================================================
 // ROUTE HANDLER
 // =============================================================================
@@ -183,6 +263,7 @@ export function handleMonitorRoute(
   req: IncomingMessage,
   res: ServerResponse,
   goalStorage: GoalStorage | undefined,
+  taskManager: MonitorTaskManager | undefined,
   workspaceBus: WorkspaceBus | undefined,
   activityLog: MonitorActivityLog,
 ): boolean {
@@ -190,19 +271,24 @@ export function handleMonitorRoute(
 
   // ── GET /api/monitor/dag ──────────────────────────────────────────────
   if (method === 'GET' && (url === '/api/monitor/dag' || url.startsWith('/api/monitor/dag?'))) {
-    if (!goalStorage) {
-      jsonResponse(res, 200, { dag: null })
-      return true
-    }
     try {
-      // Find the most recent active (executing) goal tree
-      const activeTrees = goalStorage.getInterruptedTrees()
-      if (activeTrees.length === 0) {
-        jsonResponse(res, 200, { dag: null })
+      if (goalStorage) {
+        // Find the most recent active (executing) goal tree
+        const activeTrees = goalStorage.getInterruptedTrees()
+        if (activeTrees.length > 0) {
+          const tree = activeTrees[0]!
+          jsonResponse(res, 200, { dag: serializeDag(tree) })
+          return true
+        }
+      }
+
+      const activeTasks = getActiveStandaloneTasks(taskManager)
+      if (activeTasks.length > 0) {
+        jsonResponse(res, 200, { dag: serializeStandaloneDag(activeTasks) })
         return true
       }
-      const tree = activeTrees[0]!
-      jsonResponse(res, 200, { dag: serializeDag(tree) })
+
+      jsonResponse(res, 200, { dag: null })
     } catch {
       jsonResponse(res, 200, { dag: null })
     }
@@ -211,44 +297,54 @@ export function handleMonitorRoute(
 
   // ── GET /api/monitor/tasks ────────────────────────────────────────────
   if (method === 'GET' && (url === '/api/monitor/tasks' || url.startsWith('/api/monitor/tasks?'))) {
-    if (!goalStorage) {
-      jsonResponse(res, 200, { tasks: [] })
-      return true
-    }
     try {
       const params = new URL(url, 'http://localhost').searchParams
       const rootId = params.get('rootId')
 
       let tree: GoalTree | null = null
-      if (rootId) {
+      if (goalStorage && rootId) {
         tree = goalStorage.getTree(rootId as GoalNodeId)
-      } else {
+      } else if (goalStorage) {
         // Default: most recent active tree
         const activeTrees = goalStorage.getInterruptedTrees()
         tree = activeTrees.length > 0 ? activeTrees[0]! : null
       }
 
-      if (!tree) {
+      if (tree) {
+        const tasks: Array<Record<string, unknown>> = []
+        for (const [id, node] of tree.nodes) {
+          if (id === tree.rootId) continue // skip root meta-node
+          tasks.push({
+            id: node.id,
+            task: node.task,
+            status: node.status,
+            reviewStatus: node.reviewStatus ?? 'none',
+            depth: node.depth,
+            dependsOn: [...node.dependsOn],
+            parentId: node.parentId,
+            startedAt: node.startedAt ?? null,
+            completedAt: node.completedAt ?? null,
+            retryCount: node.retryCount ?? 0,
+          })
+        }
+        jsonResponse(res, 200, { rootId: tree.rootId, tasks })
+        return true
+      }
+
+      const activeTasks = getActiveStandaloneTasks(taskManager)
+      if (activeTasks.length === 0) {
         jsonResponse(res, 200, { tasks: [] })
         return true
       }
 
-      const tasks: Array<Record<string, unknown>> = []
-      for (const [id, node] of tree.nodes) {
-        if (id === tree.rootId) continue // skip root meta-node
-        tasks.push({
-          id: node.id,
-          task: node.task,
-          status: node.status,
-          depth: node.depth,
-          dependsOn: [...node.dependsOn],
-          parentId: node.parentId,
-          startedAt: node.startedAt ?? null,
-          completedAt: node.completedAt ?? null,
-          retryCount: node.retryCount ?? 0,
-        })
-      }
-      jsonResponse(res, 200, { rootId: tree.rootId, tasks })
+      const scopedTasks = rootId
+        ? activeTasks.filter((task) => task.id === rootId)
+        : activeTasks
+
+      jsonResponse(res, 200, {
+        rootId: rootId ?? activeTasks[0]!.id,
+        tasks: scopedTasks.map((task) => serializeStandaloneTask(task)),
+      })
     } catch {
       jsonResponse(res, 200, { tasks: [] })
     }
@@ -260,20 +356,25 @@ export function handleMonitorRoute(
   if (method === 'GET' && taskDetailMatch) {
     const taskId = decodeURIComponent(taskDetailMatch[1]!)
     if (taskId.length > 128) { jsonResponse(res, 400, { error: 'Invalid task id' }); return true }
-    if (!goalStorage) {
-      jsonResponse(res, 404, { error: 'Goal storage not available' })
-      return true
-    }
     try {
-      // Search across active trees for the node
-      const activeTrees = goalStorage.getInterruptedTrees()
-      for (const tree of activeTrees) {
-        const detail = serializeTaskDetail(tree, taskId)
-        if (detail) {
-          jsonResponse(res, 200, { task: detail, rootId: tree.rootId })
-          return true
+      if (goalStorage) {
+        // Search across active trees for the node
+        const activeTrees = goalStorage.getInterruptedTrees()
+        for (const tree of activeTrees) {
+          const detail = serializeTaskDetail(tree, taskId)
+          if (detail) {
+            jsonResponse(res, 200, { task: detail, rootId: tree.rootId })
+            return true
+          }
         }
       }
+
+      const standaloneTask = getActiveStandaloneTasks(taskManager).find((task) => task.id === taskId)
+      if (standaloneTask) {
+        jsonResponse(res, 200, { task: serializeStandaloneTask(standaloneTask), rootId: standaloneTask.id })
+        return true
+      }
+
       jsonResponse(res, 404, { error: 'Task not found' })
     } catch {
       jsonResponse(res, 500, { error: 'Failed to retrieve task' })
@@ -338,76 +439,101 @@ export function handleMonitorRoute(
 
   // ── POST /api/monitor/export ──────────────────────────────────────────
   if (method === 'POST' && (url === '/api/monitor/export' || url.startsWith('/api/monitor/export?'))) {
-    if (!goalStorage) {
-      jsonResponse(res, 200, { markdown: '# Monitor Export\n\nNo active goal trees.\n' })
-      return true
-    }
     try {
-      const activeTrees = goalStorage.getInterruptedTrees()
-      if (activeTrees.length === 0) {
-        jsonResponse(res, 200, { markdown: '# Monitor Export\n\nNo active goal trees.\n' })
+      if (goalStorage) {
+        const activeTrees = goalStorage.getInterruptedTrees()
+        if (activeTrees.length > 0) {
+          const tree = activeTrees[0]!
+          const progress = calculateProgress(tree)
+
+          const lines: string[] = []
+          lines.push('# Monitor Export')
+          lines.push('')
+          lines.push(`**Goal:** ${tree.taskDescription}`)
+          lines.push(`**Root ID:** ${tree.rootId}`)
+          lines.push('')
+
+          // DAG summary
+          let completed = 0
+          let failed = 0
+          let total = 0
+          const taskRows: Array<{ id: string; task: string; status: string; depth: number }> = []
+          for (const [id, node] of tree.nodes) {
+            if (id === tree.rootId) continue
+            total++
+            if (node.status === 'completed') completed++
+            if (node.status === 'failed') failed++
+            taskRows.push({ id: node.id, task: node.task, status: node.status, depth: node.depth })
+          }
+
+          lines.push('## DAG Summary')
+          lines.push('')
+          lines.push(`| Metric | Value |`)
+          lines.push(`|--------|-------|`)
+          lines.push(`| Total tasks | ${total} |`)
+          lines.push(`| Completed | ${completed} |`)
+          lines.push(`| Failed | ${failed} |`)
+          lines.push(`| Progress | ${progress.percentage}% |`)
+          lines.push('')
+
+          // Task list
+          lines.push('## Tasks')
+          lines.push('')
+          lines.push('| Status | Task | Depth |')
+          lines.push('|--------|------|-------|')
+          for (const row of taskRows) {
+            const statusIcon = row.status === 'completed' ? '[done]'
+              : row.status === 'failed' ? '[FAIL]'
+              : row.status === 'executing' ? '[....]'
+              : row.status === 'skipped' ? '[skip]'
+              : '[    ]'
+            lines.push(`| ${statusIcon} | ${row.task} | ${row.depth} |`)
+          }
+          lines.push('')
+
+          // Review results from recent activity
+          const recentActivity = activityLog.getRecent(MAX_ACTIVITY_ENTRIES)
+          const reviewEntries = recentActivity.filter((e) => e.action === 'review_result' || e.action.includes('review'))
+          if (reviewEntries.length > 0) {
+            lines.push('## Review Results')
+            lines.push('')
+            for (const entry of reviewEntries) {
+              lines.push(`- **${entry.action}**${entry.taskId ? ` (task: ${entry.taskId})` : ''}: ${entry.detail}`)
+            }
+            lines.push('')
+          }
+
+          lines.push(`---`)
+          lines.push(`*Exported at ${new Date().toISOString()}*`)
+          lines.push('')
+
+          jsonResponse(res, 200, { markdown: lines.join('\n') })
+          return true
+        }
+      }
+
+      const activeTasks = getActiveStandaloneTasks(taskManager)
+      if (activeTasks.length === 0) {
+        jsonResponse(res, 200, { markdown: '# Monitor Export\n\nNo active monitor items.\n' })
         return true
       }
-      const tree = activeTrees[0]!
-      const progress = calculateProgress(tree)
 
       const lines: string[] = []
       lines.push('# Monitor Export')
       lines.push('')
-      lines.push(`**Goal:** ${tree.taskDescription}`)
-      lines.push(`**Root ID:** ${tree.rootId}`)
+      lines.push('## Active Tasks')
       lines.push('')
-
-      // DAG summary
-      let completed = 0
-      let failed = 0
-      let total = 0
-      const taskRows: Array<{ id: string; task: string; status: string; depth: number }> = []
-      for (const [id, node] of tree.nodes) {
-        if (id === tree.rootId) continue
-        total++
-        if (node.status === 'completed') completed++
-        if (node.status === 'failed') failed++
-        taskRows.push({ id: node.id, task: node.task, status: node.status, depth: node.depth })
-      }
-
-      lines.push('## DAG Summary')
-      lines.push('')
-      lines.push(`| Metric | Value |`)
-      lines.push(`|--------|-------|`)
-      lines.push(`| Total tasks | ${total} |`)
-      lines.push(`| Completed | ${completed} |`)
-      lines.push(`| Failed | ${failed} |`)
-      lines.push(`| Progress | ${progress.percentage}% |`)
-      lines.push('')
-
-      // Task list
-      lines.push('## Tasks')
-      lines.push('')
-      lines.push('| Status | Task | Depth |')
-      lines.push('|--------|------|-------|')
-      for (const row of taskRows) {
-        const statusIcon = row.status === 'completed' ? '[done]'
-          : row.status === 'failed' ? '[FAIL]'
-          : row.status === 'executing' ? '[....]'
-          : row.status === 'skipped' ? '[skip]'
+      lines.push('| Status | Task | Updated |')
+      lines.push('|--------|------|---------|')
+      for (const task of activeTasks) {
+        const statusIcon = task.status === 'completed' ? '[done]'
+          : task.status === 'failed' ? '[FAIL]'
+          : task.status === 'executing' ? '[....]'
+          : task.status === 'skipped' ? '[skip]'
           : '[    ]'
-        lines.push(`| ${statusIcon} | ${row.task} | ${row.depth} |`)
+        lines.push(`| ${statusIcon} | ${task.title} | ${new Date(task.updatedAt).toISOString()} |`)
       }
       lines.push('')
-
-      // Review results from recent activity
-      const recentActivity = activityLog.getRecent(MAX_ACTIVITY_ENTRIES)
-      const reviewEntries = recentActivity.filter((e) => e.action === 'review_result' || e.action.includes('review'))
-      if (reviewEntries.length > 0) {
-        lines.push('## Review Results')
-        lines.push('')
-        for (const entry of reviewEntries) {
-          lines.push(`- **${entry.action}**${entry.taskId ? ` (task: ${entry.taskId})` : ''}: ${entry.detail}`)
-        }
-        lines.push('')
-      }
-
       lines.push(`---`)
       lines.push(`*Exported at ${new Date().toISOString()}*`)
       lines.push('')

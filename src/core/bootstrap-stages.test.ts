@@ -841,7 +841,7 @@ describe("bootstrap-stages", () => {
 
     expect(agentRegistry.initialize).toHaveBeenCalled();
     expect(agentBudgetTracker.initialize).toHaveBeenCalled();
-    expect(agentManager.setBackgroundTaskSubmitter).toHaveBeenCalled();
+    expect(agentManager.setBackgroundTaskSubmitter).not.toHaveBeenCalled();
     expect(agentManager.setDelegationFactory).toHaveBeenCalledWith(expect.any(Function));
     expect(orchestrator.addTool).toHaveBeenCalledWith({ name: "delegate-tool" });
     expect(providerRouter.setTierRouter).toHaveBeenCalledWith(tierRouter);
@@ -1140,6 +1140,7 @@ describe("bootstrap-stages", () => {
         getAllTools: vi.fn().mockReturnValue([{ name: "tool-a", description: "Tool A" }]),
         getMetadata: vi.fn().mockReturnValue({ category: "builtin" }),
       } as any,
+      taskManager: { _tag: "task-manager" } as any,
       orchestrator: { _tag: "orchestrator" } as any,
       soulLoader: { _tag: "soul-loader" } as any,
       config: makeConfig(),
@@ -1160,6 +1161,9 @@ describe("bootstrap-stages", () => {
     expect(dashboard.registerAgentServices).toHaveBeenCalled();
     expect(dashboard.registerConsolidationDeploymentServices).toHaveBeenCalled();
     expect(dashboard.registerExtendedServices).toHaveBeenCalled();
+    expect(dashboard.registerExtendedServices).toHaveBeenCalledWith(
+      expect.objectContaining({ taskManager: expect.objectContaining({ _tag: "task-manager" }) }),
+    );
     expect(dashboard.setProviderRouter).toHaveBeenCalled();
   });
 });

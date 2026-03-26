@@ -116,6 +116,7 @@ export function registerDashboardPostBootStage(
     agentBudgetTracker?: import("../../agents/multi/agent-budget-tracker.js").AgentBudgetTracker;
     daemonContext?: import("../../daemon/daemon-cli.js").DaemonContext;
     toolRegistry: ToolRegistry;
+    taskManager: import("../../tasks/task-manager.js").TaskManager;
     orchestrator: Orchestrator;
     soulLoader: SoulLoader;
     config: Config;
@@ -168,6 +169,7 @@ export function registerDashboardPostBootStage(
     toolRegistry: {
       getAllTools: () => params.toolRegistry.getToolInventory(),
     },
+    taskManager: params.taskManager,
     orchestratorSessions: params.orchestrator,
     soulLoader: params.soulLoader,
     configSnapshot: () => flatConfig,

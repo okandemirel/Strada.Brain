@@ -805,7 +805,6 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       if (identityManager) {
         identityManager.recordActivity();
         identityManager.incrementMessages();
-        identityManager.incrementTasks();
       }
       let taskRunId: string | undefined;
       if (learningResult.taskPlanner) {
@@ -950,6 +949,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     agentBudgetTracker: agentBudgetTrackerOuter,
     daemonContext,
     toolRegistry,
+    taskManager,
     orchestrator,
     soulLoader,
     config,

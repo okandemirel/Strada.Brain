@@ -128,6 +128,13 @@ export class TaskManager extends EventEmitter {
   }
 
   /**
+   * List all currently active tasks, newest first.
+   */
+  listAllActiveTasks(): Task[] {
+    return this.storage.loadIncomplete();
+  }
+
+  /**
    * Count active user-facing tasks across chats.
    * Daemon-internal tasks are excluded so control-plane observers do not
    * mistake their own background work for a foreground user session.

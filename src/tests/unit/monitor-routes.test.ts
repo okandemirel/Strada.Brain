@@ -63,6 +63,23 @@ function makeGoalStorage(trees: GoalTree[] = []) {
   } as any
 }
 
+function makeTaskManager(tasks: Array<{
+  id: string
+  chatId: string
+  channelType: string
+  title: string
+  status: string
+  createdAt: number
+  updatedAt: number
+  completedAt?: number
+  result?: string
+  error?: string
+}> = []) {
+  return {
+    listAllActiveTasks: vi.fn(() => tasks),
+  } as any
+}
+
 /** Build a fake IncomingMessage with optional JSON body */
 function fakeReq(method: string, body?: Record<string, unknown>): IncomingMessage {
   const readable = new Readable({
@@ -120,14 +137,14 @@ describe('handleMonitorRoute', () => {
   it('returns false for non-monitor routes', () => {
     const req = fakeReq('GET')
     const res = fakeRes()
-    const handled = handleMonitorRoute('/api/config', 'GET', req, res, undefined, undefined, activityLog)
+    const handled = handleMonitorRoute('/api/config', 'GET', req, res, undefined, undefined, undefined, activityLog)
     expect(handled).toBe(false)
   })
 
   it('GET /api/monitor/dag returns null when no goalStorage', () => {
     const req = fakeReq('GET')
     const res = fakeRes()
-    handleMonitorRoute('/api/monitor/dag', 'GET', req, res, undefined, undefined, activityLog)
+    handleMonitorRoute('/api/monitor/dag', 'GET', req, res, undefined, undefined, undefined, activityLog)
     expect(res._status).toBe(200)
     expect(JSON.parse(res._body)).toEqual({ dag: null })
   })
@@ -136,7 +153,7 @@ describe('handleMonitorRoute', () => {
     const req = fakeReq('GET')
     const res = fakeRes()
     const storage = makeGoalStorage([])
-    handleMonitorRoute('/api/monitor/dag', 'GET', req, res, storage, undefined, activityLog)
+    handleMonitorRoute('/api/monitor/dag', 'GET', req, res, storage, undefined, undefined, activityLog)
     expect(res._status).toBe(200)
     expect(JSON.parse(res._body)).toEqual({ dag: null })
   })
@@ -146,7 +163,7 @@ describe('handleMonitorRoute', () => {
     const storage = makeGoalStorage([tree])
     const req = fakeReq('GET')
     const res = fakeRes()
-    handleMonitorRoute('/api/monitor/dag', 'GET', req, res, storage, undefined, activityLog)
+    handleMonitorRoute('/api/monitor/dag', 'GET', req, res, storage, undefined, undefined, activityLog)
 
     expect(res._status).toBe(200)
     const body = JSON.parse(res._body)
@@ -156,10 +173,46 @@ describe('handleMonitorRoute', () => {
     expect(body.dag.taskDescription).toBe('Test goal')
   })
 
+  it('GET /api/monitor/dag falls back to standalone active tasks when no goal tree is active', () => {
+    const taskManager = makeTaskManager([
+      {
+        id: 'task-2',
+        chatId: 'chat-2',
+        channelType: 'web',
+        title: 'Second task',
+        status: 'executing',
+        createdAt: 1_500,
+        updatedAt: 2_500,
+      },
+      {
+        id: 'task-1',
+        chatId: 'chat-1',
+        channelType: 'web',
+        title: 'First task',
+        status: 'pending',
+        createdAt: 1_000,
+        updatedAt: 2_000,
+      },
+    ])
+    const req = fakeReq('GET')
+    const res = fakeRes()
+
+    handleMonitorRoute('/api/monitor/dag', 'GET', req, res, undefined, taskManager, undefined, activityLog)
+
+    expect(res._status).toBe(200)
+    const body = JSON.parse(res._body)
+    expect(body.dag.rootId).toBe('task-2')
+    expect(body.dag.taskDescription).toBe('2 active tasks')
+    expect(body.dag.nodes).toEqual([
+      expect.objectContaining({ id: 'task-2', task: 'Second task', status: 'executing' }),
+      expect.objectContaining({ id: 'task-1', task: 'First task', status: 'pending' }),
+    ])
+  })
+
   it('GET /api/monitor/tasks returns empty array when no goalStorage', () => {
     const req = fakeReq('GET')
     const res = fakeRes()
-    handleMonitorRoute('/api/monitor/tasks', 'GET', req, res, undefined, undefined, activityLog)
+    handleMonitorRoute('/api/monitor/tasks', 'GET', req, res, undefined, undefined, undefined, activityLog)
     expect(res._status).toBe(200)
     expect(JSON.parse(res._body)).toEqual({ tasks: [] })
   })
@@ -169,7 +222,7 @@ describe('handleMonitorRoute', () => {
     const storage = makeGoalStorage([tree])
     const req = fakeReq('GET')
     const res = fakeRes()
-    handleMonitorRoute('/api/monitor/tasks', 'GET', req, res, storage, undefined, activityLog)
+    handleMonitorRoute('/api/monitor/tasks', 'GET', req, res, storage, undefined, undefined, activityLog)
 
     expect(res._status).toBe(200)
     const body = JSON.parse(res._body)
@@ -179,13 +232,45 @@ describe('handleMonitorRoute', () => {
     expect(body.tasks[0].id).toBe('node-1')
   })
 
+  it('GET /api/monitor/tasks returns standalone task details when no goal tree is active', () => {
+    const taskManager = makeTaskManager([
+      {
+        id: 'task-standalone',
+        chatId: 'chat-1',
+        channelType: 'web',
+        title: 'Standalone task',
+        status: 'executing',
+        createdAt: 1_000,
+        updatedAt: 2_000,
+        result: 'Done',
+      },
+    ])
+    const req = fakeReq('GET')
+    const res = fakeRes()
+
+    handleMonitorRoute('/api/monitor/tasks', 'GET', req, res, undefined, taskManager, undefined, activityLog)
+
+    expect(res._status).toBe(200)
+    const body = JSON.parse(res._body)
+    expect(body.rootId).toBe('task-standalone')
+    expect(body.tasks).toEqual([
+      expect.objectContaining({
+        id: 'task-standalone',
+        task: 'Standalone task',
+        status: 'executing',
+        reviewStatus: 'none',
+        result: 'Done',
+      }),
+    ])
+  })
+
   it('GET /api/monitor/activity returns activity entries', () => {
     activityLog.push({ action: 'tool_execute', tool: 'read', detail: 'Reading file', timestamp: 1000 })
     activityLog.push({ action: 'tool_execute', tool: 'write', detail: 'Writing file', timestamp: 2000 })
 
     const req = fakeReq('GET')
     const res = fakeRes()
-    handleMonitorRoute('/api/monitor/activity', 'GET', req, res, undefined, undefined, activityLog)
+    handleMonitorRoute('/api/monitor/activity', 'GET', req, res, undefined, undefined, undefined, activityLog)
 
     expect(res._status).toBe(200)
     const body = JSON.parse(res._body)
@@ -201,7 +286,7 @@ describe('handleMonitorRoute', () => {
 
     const req = fakeReq('GET')
     const res = fakeRes()
-    handleMonitorRoute('/api/monitor/activity?limit=3', 'GET', req, res, undefined, undefined, activityLog)
+    handleMonitorRoute('/api/monitor/activity?limit=3', 'GET', req, res, undefined, undefined, undefined, activityLog)
 
     expect(res._status).toBe(200)
     const body = JSON.parse(res._body)
@@ -214,7 +299,7 @@ describe('handleMonitorRoute', () => {
 
     const req = fakeReq('POST', { rootId: 'root-1' })
     const res = fakeRes()
-    handleMonitorRoute('/api/monitor/task/node-1/approve', 'POST', req, res, undefined, workspaceBus, activityLog)
+    handleMonitorRoute('/api/monitor/task/node-1/approve', 'POST', req, res, undefined, undefined, workspaceBus as any, activityLog)
 
     // Wait for async readJsonBody to complete
     await new Promise((r) => setTimeout(r, 50))
@@ -232,7 +317,7 @@ describe('handleMonitorRoute', () => {
 
     const req = fakeReq('POST', { rootId: 'root-1' })
     const res = fakeRes()
-    handleMonitorRoute('/api/monitor/task/node-2/skip', 'POST', req, res, undefined, workspaceBus, activityLog)
+    handleMonitorRoute('/api/monitor/task/node-2/skip', 'POST', req, res, undefined, undefined, workspaceBus as any, activityLog)
 
     await new Promise((r) => setTimeout(r, 50))
 
@@ -246,7 +331,7 @@ describe('handleMonitorRoute', () => {
   it('POST /api/monitor/task/:id/approve returns 503 when no workspaceBus', () => {
     const req = fakeReq('POST', {})
     const res = fakeRes()
-    handleMonitorRoute('/api/monitor/task/node-1/approve', 'POST', req, res, undefined, undefined, activityLog)
+    handleMonitorRoute('/api/monitor/task/node-1/approve', 'POST', req, res, undefined, undefined, undefined, activityLog)
 
     expect(res._status).toBe(503)
     expect(JSON.parse(res._body).error).toBe('Workspace bus not available')
@@ -255,7 +340,7 @@ describe('handleMonitorRoute', () => {
   it('returns 404 for unknown /api/monitor/* path', () => {
     const req = fakeReq('GET')
     const res = fakeRes()
-    const handled = handleMonitorRoute('/api/monitor/unknown', 'GET', req, res, undefined, undefined, activityLog)
+    const handled = handleMonitorRoute('/api/monitor/unknown', 'GET', req, res, undefined, undefined, undefined, activityLog)
 
     expect(handled).toBe(true)
     expect(res._status).toBe(404)

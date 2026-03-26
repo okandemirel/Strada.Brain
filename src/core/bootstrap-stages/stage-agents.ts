@@ -123,17 +123,6 @@ export async function initializeMultiAgentDelegationStage(
   params.daemonContext.agentManager = agentManager;
   params.daemonContext.agentBudgetTracker = agentBudgetTracker;
 
-  if (params.daemonMode) {
-    agentManager.setBackgroundTaskSubmitter((msg, agent) => {
-      params.taskManager.submit(msg.chatId, msg.channelType, msg.text, {
-        attachments: msg.attachments,
-        conversationId: msg.conversationId,
-        orchestrator: agentManager.getLiveOrchestrator(agent.id),
-        userId: msg.userId,
-      });
-    });
-  }
-
   params.logger.info("Multi-agent system initialized", {
     maxConcurrent: params.config.agent.maxConcurrent,
     defaultBudget: params.config.agent.defaultBudgetUsd,

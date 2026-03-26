@@ -20,11 +20,15 @@ CREATE TABLE IF NOT EXISTS tasks (
   id TEXT PRIMARY KEY,
   chat_id TEXT NOT NULL,
   channel_type TEXT NOT NULL,
+  conversation_id TEXT,
+  user_id TEXT,
   title TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'pending',
   prompt TEXT NOT NULL,
   result TEXT,
   error TEXT,
+  origin TEXT,
+  trigger_name TEXT,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   completed_at INTEGER,
@@ -52,11 +56,15 @@ interface TaskRow {
   id: string;
   chat_id: string;
   channel_type: string;
+  conversation_id: string | null;
+  user_id: string | null;
   title: string;
   status: string;
   prompt: string;
   result: string | null;
   error: string | null;
+  origin: string | null;
+  trigger_name: string | null;
   created_at: number;
   updated_at: number;
   completed_at: number | null;
@@ -88,6 +96,7 @@ export class TaskStorage {
     // Standardized pragma configuration (8MB cache, 5s busy_timeout)
     configureSqlitePragmas(this.db, "tasks");
     this.db.exec(SCHEMA_SQL);
+    this.migrateLegacySchema();
     this.prepareStatements();
   }
 
@@ -105,11 +114,15 @@ export class TaskStorage {
       task.id,
       task.chatId,
       task.channelType,
+      task.conversationId ?? null,
+      task.userId ?? null,
       task.title,
       task.status,
       task.prompt,
       task.result ?? null,
       task.error ?? null,
+      task.origin ?? null,
+      task.triggerName ?? null,
       task.createdAt,
       task.updatedAt,
       task.completedAt ?? null,
@@ -184,6 +197,8 @@ export class TaskStorage {
       id: row.id as TaskId,
       chatId: row.chat_id,
       channelType: row.channel_type,
+      conversationId: row.conversation_id ?? undefined,
+      userId: row.user_id ?? undefined,
       title: row.title,
       status: row.status as TaskStatus,
       prompt: row.prompt,
@@ -194,7 +209,26 @@ export class TaskStorage {
       updatedAt: row.updated_at,
       completedAt: row.completed_at ?? undefined,
       parentId: row.parent_id ? (row.parent_id as TaskId) : undefined,
+      origin: row.origin ?? undefined,
+      triggerName: row.trigger_name ?? undefined,
     };
+  }
+
+  private migrateLegacySchema(): void {
+    if (!this.db) return;
+
+    const columns = this.db.prepare("PRAGMA table_info(tasks)").all() as Array<{ name: string }>;
+    const knownColumns = new Set(columns.map((column) => column.name));
+    const missingColumns: Array<[string, string]> = [
+      ["conversation_id", "TEXT"],
+      ["user_id", "TEXT"],
+      ["origin", "TEXT"],
+      ["trigger_name", "TEXT"],
+    ].filter(([name]) => !knownColumns.has(name));
+
+    for (const [name, definition] of missingColumns) {
+      this.db.exec(`ALTER TABLE tasks ADD COLUMN ${name} ${definition}`);
+    }
   }
 
   private ensureConnection(): void {
@@ -214,8 +248,12 @@ export class TaskStorage {
 
     const stmts: Record<string, string> = {
       insertTask: `
-        INSERT INTO tasks (id, chat_id, channel_type, title, status, prompt, result, error, created_at, updated_at, completed_at, parent_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO tasks (
+          id, chat_id, channel_type, conversation_id, user_id,
+          title, status, prompt, result, error, origin, trigger_name,
+          created_at, updated_at, completed_at, parent_id
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       getTask: `SELECT * FROM tasks WHERE id = ?`,
       updateStatus: `UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?`,
@@ -224,7 +262,7 @@ export class TaskStorage {
       updateBlocked: `UPDATE tasks SET result = ?, status = ?, updated_at = ?, completed_at = ? WHERE id = ?`,
       listByChatId: `SELECT * FROM tasks WHERE chat_id = ? ORDER BY created_at DESC LIMIT ?`,
       listActiveByChatId: `SELECT * FROM tasks WHERE chat_id = ? AND status IN ('pending', 'planning', 'executing', 'paused', 'waiting_for_input') ORDER BY created_at DESC`,
-      loadIncomplete: `SELECT * FROM tasks WHERE status IN ('pending', 'planning', 'executing', 'paused', 'waiting_for_input')`,
+      loadIncomplete: `SELECT * FROM tasks WHERE status IN ('pending', 'planning', 'executing', 'paused', 'waiting_for_input') ORDER BY updated_at DESC, created_at DESC`,
       insertProgress: `INSERT INTO task_progress (task_id, timestamp, message) VALUES (?, ?, ?)`,
       touchTask: `UPDATE tasks SET updated_at = ? WHERE id = ?`,
       getProgress: `SELECT * FROM task_progress WHERE task_id = ? ORDER BY timestamp ASC`,

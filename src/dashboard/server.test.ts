@@ -75,6 +75,28 @@ describe("DashboardServer", () => {
     expect(data.providerName).toBe("claude");
   });
 
+  it("overlays active foreground task count onto metrics when it exceeds active sessions", async () => {
+    const metrics = new MetricsCollector();
+    server = new DashboardServer(0, metrics, () => undefined);
+    server.registerExtendedServices({
+      taskManager: {
+        listAllActiveTasks: () => [],
+        countActiveForegroundTasks: () => 2,
+      },
+    });
+
+    if (!await safeStart(server)) return;
+
+    const addr = (server as unknown as { server: { address: () => { port: number } } }).server.address();
+    if (!addr || typeof addr === "string") return;
+
+    const res = await fetch(`http://localhost:${addr.port}/api/metrics`);
+    expect(res.status).toBe(200);
+
+    const data = await res.json();
+    expect(data.activeSessions).toBe(2);
+  });
+
   it("serves dashboard HTML", async () => {
     const metrics = new MetricsCollector();
     server = new DashboardServer(0, metrics, () => undefined);
@@ -101,6 +123,85 @@ describe("DashboardServer", () => {
 
     const res = await fetch(`http://localhost:${addr.port}/unknown`);
     expect(res.status).toBe(404);
+  });
+
+  it("merges orchestrator sessions with active foreground tasks", async () => {
+    const metrics = new MetricsCollector();
+    server = new DashboardServer(0, metrics, () => undefined);
+    server.registerServices({
+      channel: {
+        name: "web",
+        isHealthy: () => true,
+      } as any,
+    });
+    server.registerExtendedServices({
+      orchestratorSessions: {
+        getSessions: () => new Map([
+          ["chat-1", { lastActivity: new Date(2_000), messageCount: 3 }],
+        ]),
+      } as any,
+      taskManager: {
+        listAllActiveTasks: () => [
+          {
+            id: "task-1",
+            chatId: "chat-1",
+            channelType: "web",
+            title: "Existing session task",
+            status: "executing",
+            createdAt: 1_000,
+            updatedAt: 3_000,
+          },
+          {
+            id: "task-2",
+            chatId: "chat-2",
+            channelType: "telegram",
+            title: "Standalone task",
+            status: "pending",
+            createdAt: 1_500,
+            updatedAt: 2_500,
+          },
+          {
+            id: "task-daemon",
+            chatId: "daemon",
+            channelType: "daemon",
+            title: "Ignored daemon task",
+            status: "executing",
+            createdAt: 1_000,
+            updatedAt: 4_000,
+          },
+        ],
+        countActiveForegroundTasks: () => 2,
+      },
+    });
+
+    if (!await safeStart(server)) return;
+
+    const addr = (server as unknown as { server: { address: () => { port: number } } }).server.address();
+    if (!addr || typeof addr === "string") return;
+
+    const res = await fetch(`http://localhost:${addr.port}/api/sessions`);
+    expect(res.status).toBe(200);
+
+    const data = await res.json();
+    expect(data.count).toBe(2);
+    expect(data.sessions).toEqual([
+      expect.objectContaining({
+        id: "chat-1",
+        channel: "web",
+        startedAt: 1_000,
+        lastActivity: 3_000,
+        messageCount: 3,
+        activeTaskCount: 1,
+      }),
+      expect.objectContaining({
+        id: "chat-2",
+        channel: "telegram",
+        startedAt: 1_500,
+        lastActivity: 2_500,
+        messageCount: 1,
+        activeTaskCount: 1,
+      }),
+    ]);
   });
 
   it("allows tokenless mutable dashboard requests from trusted origins", () => {

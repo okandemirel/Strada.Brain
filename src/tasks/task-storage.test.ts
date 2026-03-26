@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import Database from "better-sqlite3";
 import { TaskStorage } from "./task-storage.js";
 import { TaskStatus, type Task } from "./types.js";
 
@@ -75,5 +76,48 @@ describe("TaskStorage", () => {
 
     expect(after.updatedAt).toBeGreaterThan(before.updatedAt);
     expect(after.progress.at(-1)?.message).toBe("Running tools: file_read");
+  });
+
+  it("migrates legacy task tables before saving new metadata fields", () => {
+    const dbPath = join(tmpDir, "legacy-tasks.db");
+    const legacyDb = new Database(dbPath);
+    legacyDb.exec(`
+      CREATE TABLE tasks (
+        id TEXT PRIMARY KEY,
+        chat_id TEXT NOT NULL,
+        channel_type TEXT NOT NULL,
+        title TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        prompt TEXT NOT NULL,
+        result TEXT,
+        error TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        completed_at INTEGER,
+        parent_id TEXT
+      );
+    `);
+    legacyDb.close();
+
+    const legacyStorage = new TaskStorage(dbPath);
+    legacyStorage.initialize();
+
+    const task = makeTask(TaskStatus.executing, {
+      conversationId: "thread-7",
+      userId: "user-42",
+      origin: "daemon",
+      triggerName: "nightly-scan",
+    });
+    legacyStorage.save(task);
+
+    const loaded = legacyStorage.load(task.id);
+    legacyStorage.close();
+
+    expect(loaded).toEqual(expect.objectContaining({
+      conversationId: "thread-7",
+      userId: "user-42",
+      origin: "daemon",
+      triggerName: "nightly-scan",
+    }));
   });
 });

@@ -348,6 +348,25 @@ interface DashboardProviderManager {
   ): Promise<void>;
 }
 
+/** Structural interface for task manager methods used by dashboard task/session endpoints. */
+interface DashboardTaskManager {
+  listAllActiveTasks(): Array<{
+    id: string;
+    chatId: string;
+    channelType: string;
+    conversationId?: string;
+    userId?: string;
+    title: string;
+    status: string;
+    result?: string;
+    error?: string;
+    createdAt: number;
+    updatedAt: number;
+    completedAt?: number;
+  }>;
+  countActiveForegroundTasks(excludedChatIds?: readonly string[]): number;
+}
+
 /** Structural interface for user profile store used by dashboard /api/user endpoints */
 interface DashboardUserProfileStore {
   getProfile?(chatId: string): { preferences: Record<string, unknown> } | null;
@@ -468,6 +487,7 @@ export class DashboardServer {
   private providerManager?: DashboardProviderManager;
   private userProfileStore?: DashboardUserProfileStore;
   private embeddingStatusProvider?: DashboardEmbeddingStatusProvider;
+  private taskManager?: DashboardTaskManager;
 
   // Provider router for agent activity / routing decisions
   private providerRouter?: DashboardProviderRouter;
@@ -574,6 +594,7 @@ export class DashboardServer {
     providerManager?: DashboardProviderManager;
     userProfileStore?: DashboardUserProfileStore;
     embeddingStatusProvider?: DashboardEmbeddingStatusProvider;
+    taskManager?: DashboardTaskManager;
     stradaDeps?: StradaDepsStatus;
     bootReport?: BootReport;
   }): void {
@@ -584,6 +605,7 @@ export class DashboardServer {
     this.providerManager = services.providerManager ?? this.providerManager;
     this.userProfileStore = services.userProfileStore ?? this.userProfileStore;
     this.embeddingStatusProvider = services.embeddingStatusProvider ?? this.embeddingStatusProvider;
+    this.taskManager = services.taskManager ?? this.taskManager;
     this.stradaDeps = services.stradaDeps ?? this.stradaDeps;
     this.bootReport = services.bootReport ?? this.bootReport;
   }
@@ -1248,20 +1270,50 @@ export class DashboardServer {
 
       // GET /api/sessions -- Active orchestrator sessions
       if (url === "/api/sessions") {
-        if (!this.orchestratorSessions) {
-          res.writeHead(200, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ sessions: [], count: 0 }));
-          return;
-        }
-        const sessions = this.orchestratorSessions.getSessions();
+        const sessions = this.orchestratorSessions?.getSessions() ?? new Map();
         const channelName = this.channel?.name ?? "unknown";
-        const list = Array.from(sessions.entries()).map(([chatId, s]) => ({
-          id: chatId,
-          channel: channelName,
-          startedAt: s.lastActivity instanceof Date ? s.lastActivity.getTime() : Number(s.lastActivity),
-          lastActivity: s.lastActivity instanceof Date ? s.lastActivity.getTime() : Number(s.lastActivity),
-          messageCount: s.messageCount,
-        }));
+        const merged = new Map<string, {
+          id: string;
+          channel: string;
+          startedAt: number;
+          lastActivity: number;
+          messageCount: number;
+          activeTaskCount?: number;
+        }>();
+
+        for (const [chatId, s] of sessions.entries()) {
+          const lastActivity = s.lastActivity instanceof Date ? s.lastActivity.getTime() : Number(s.lastActivity);
+          merged.set(chatId, {
+            id: chatId,
+            channel: channelName,
+            startedAt: lastActivity,
+            lastActivity,
+            messageCount: s.messageCount,
+          });
+        }
+
+        for (const task of this.taskManager?.listAllActiveTasks() ?? []) {
+          if (task.channelType === "daemon") continue;
+          const existing = merged.get(task.chatId);
+          if (existing) {
+            existing.startedAt = Math.min(existing.startedAt, task.createdAt);
+            existing.lastActivity = Math.max(existing.lastActivity, task.updatedAt);
+            existing.messageCount = Math.max(existing.messageCount, 1);
+            existing.activeTaskCount = (existing.activeTaskCount ?? 0) + 1;
+            continue;
+          }
+
+          merged.set(task.chatId, {
+            id: task.chatId,
+            channel: task.channelType || channelName,
+            startedAt: task.createdAt,
+            lastActivity: task.updatedAt,
+            messageCount: 1,
+            activeTaskCount: 1,
+          });
+        }
+
+        const list = Array.from(merged.values()).sort((left, right) => right.lastActivity - left.lastActivity);
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ sessions: list, count: list.length }));
         return;
@@ -1900,10 +1952,15 @@ export class DashboardServer {
 
       if (url === "/api/metrics") {
         const snapshot = this.metrics.getSnapshot(this.getMemoryStats());
+        const activeForegroundTasks = this.taskManager?.countActiveForegroundTasks() ?? 0;
+        const response =
+          activeForegroundTasks > snapshot.activeSessions
+            ? { ...snapshot, activeSessions: activeForegroundTasks }
+            : snapshot;
         res.writeHead(200, {
           "Content-Type": "application/json",
         });
-        res.end(JSON.stringify(snapshot));
+        res.end(JSON.stringify(response));
         return;
       }
 
@@ -1911,7 +1968,7 @@ export class DashboardServer {
       if (url.startsWith("/api/monitor")) {
         const handled = handleMonitorRoute(
           url, req.method ?? "GET", req, res,
-          this.goalStorage, this.workspaceBus, this.monitorActivityLog,
+          this.goalStorage, this.taskManager, this.workspaceBus, this.monitorActivityLog,
         );
         if (handled) return;
       }
