@@ -7,9 +7,14 @@ export default function TopBar() {
   const Icon = config.icon
 
   return (
-    <div className="flex h-10 items-center gap-2 border-b border-white/5 bg-bg-secondary/30 backdrop-blur-xl px-4 text-sm font-medium text-text-secondary">
+    <div className="flex min-h-12 items-center gap-3 border-b border-white/5 bg-bg-secondary/30 px-4 py-2 text-text-secondary backdrop-blur-xl">
       <Icon size={16} className="text-accent" />
-      <span>{config.label}</span>
+      <div className="min-w-0">
+        <div className="text-sm font-medium text-text">{config.label}</div>
+        <div className="truncate text-[11px] text-text-tertiary">
+          {config.description}
+        </div>
+      </div>
     </div>
   )
 }

@@ -41,6 +41,11 @@ vi.mock('tldraw', () => {
   }
 })
 vi.mock('./canvas-styles.css', () => ({}))
+vi.mock('../ui/tooltip', () => ({
+  Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  TooltipTrigger: ({ children, asChild }: { children: React.ReactNode; asChild?: boolean }) => asChild ? <>{children}</> : <span>{children}</span>,
+  TooltipContent: () => null,
+}))
 
 import { CustomToolbar, CustomContextMenu } from './canvas-overrides'
 

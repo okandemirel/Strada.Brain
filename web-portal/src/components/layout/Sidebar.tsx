@@ -65,6 +65,7 @@ export default function Sidebar() {
                   <TooltipTrigger asChild>
                     <button
                       disabled
+                      aria-label={btn.label}
                       className={`flex items-center gap-2.5 px-3 py-2 rounded-[10px] text-sm font-medium whitespace-nowrap overflow-hidden select-none bg-transparent border-none font-[inherit] text-left w-full opacity-40 cursor-not-allowed ${collapsed ? 'justify-center px-2' : ''}`}
                     >
                       <span className="w-[22px] text-center text-base shrink-0 leading-none">
@@ -73,31 +74,41 @@ export default function Sidebar() {
                       {!collapsed && <span className="whitespace-nowrap overflow-hidden text-ellipsis">{btn.label}</span>}
                     </button>
                   </TooltipTrigger>
-                  <TooltipContent side="right">
-                    <p>Coming soon</p>
+                  <TooltipContent side="right" className="max-w-[220px]">
+                    <div className="font-medium text-text">{btn.label}</div>
+                    <p className="mt-1 text-xs leading-5 text-text-secondary">{btn.description}</p>
+                    <p className="mt-2 text-xs text-text-tertiary">Coming soon</p>
                   </TooltipContent>
                 </Tooltip>
               )
             }
 
             return (
-              <button
-                key={btn.mode}
-                onClick={() => handleModeClick(btn.mode)}
-                className={`flex items-center gap-2.5 px-3 py-2 rounded-[10px] text-sm font-medium transition-all duration-150 cursor-pointer whitespace-nowrap overflow-hidden select-none bg-transparent border-none font-[inherit] text-left w-full ${
-                  collapsed ? 'justify-center px-2' : ''
-                } ${
-                  isActive
-                    ? 'relative before:absolute before:left-0 before:top-1/2 before:-translate-y-1/2 before:h-5 before:w-0.5 before:bg-accent before:rounded-r bg-accent-glow text-accent font-semibold'
-                    : 'text-text-secondary hover:bg-bg-tertiary hover:text-text hover:translate-x-0.5'
-                }`}
-                title={collapsed ? btn.label : undefined}
-              >
-                <span className="w-[22px] text-center text-base shrink-0 leading-none">
-                  <Icon size={18} />
-                </span>
-                {!collapsed && <span className="whitespace-nowrap overflow-hidden text-ellipsis">{btn.label}</span>}
-              </button>
+              <Tooltip key={btn.mode}>
+                <TooltipTrigger asChild>
+                  <button
+                    onClick={() => handleModeClick(btn.mode)}
+                    aria-label={btn.label}
+                    className={`flex items-center gap-2.5 px-3 py-2 rounded-[10px] text-sm font-medium transition-all duration-150 cursor-pointer whitespace-nowrap overflow-hidden select-none bg-transparent border-none font-[inherit] text-left w-full ${
+                      collapsed ? 'justify-center px-2' : ''
+                    } ${
+                      isActive
+                        ? 'relative before:absolute before:left-0 before:top-1/2 before:-translate-y-1/2 before:h-5 before:w-0.5 before:bg-accent before:rounded-r bg-accent-glow text-accent font-semibold'
+                        : 'text-text-secondary hover:bg-bg-tertiary hover:text-text hover:translate-x-0.5'
+                    }`}
+                    title={collapsed ? btn.label : undefined}
+                  >
+                    <span className="w-[22px] text-center text-base shrink-0 leading-none">
+                      <Icon size={18} />
+                    </span>
+                    {!collapsed && <span className="whitespace-nowrap overflow-hidden text-ellipsis">{btn.label}</span>}
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="right" className="max-w-[220px]">
+                  <div className="font-medium text-text">{btn.label}</div>
+                  <p className="mt-1 text-xs leading-5 text-text-secondary">{btn.description}</p>
+                </TooltipContent>
+              </Tooltip>
             )
           })}
         </div>

@@ -5,14 +5,39 @@ export interface ModeConfig {
   mode: WorkspaceMode
   icon: LucideIcon
   label: string
+  description: string
   enabled: boolean
 }
 
 export const WORKSPACE_MODES: ModeConfig[] = [
-  { mode: 'chat', icon: MessageSquare, label: 'Chat', enabled: true },
-  { mode: 'monitor', icon: Activity, label: 'Monitor', enabled: true },
-  { mode: 'canvas', icon: Paintbrush, label: 'Canvas', enabled: true },
-  { mode: 'code', icon: Code, label: 'Code', enabled: true },
+  {
+    mode: 'chat',
+    icon: MessageSquare,
+    label: 'Chat',
+    description: 'Talk to the agent and keep the current conversation in view.',
+    enabled: true,
+  },
+  {
+    mode: 'monitor',
+    icon: Activity,
+    label: 'Monitor',
+    description: 'Track agent progress, tasks, and live execution signals.',
+    enabled: true,
+  },
+  {
+    mode: 'canvas',
+    icon: Paintbrush,
+    label: 'Canvas',
+    description: 'Arrange architecture, notes, and agent visuals on a shared board.',
+    enabled: true,
+  },
+  {
+    mode: 'code',
+    icon: Code,
+    label: 'Code',
+    description: 'Inspect files, diffs, and terminal output in one workspace.',
+    enabled: true,
+  },
 ]
 
 export const MODE_BY_KEY: Record<string, ModeConfig> = Object.fromEntries(

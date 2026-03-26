@@ -59,6 +59,15 @@ vi.mock('./custom-shapes', () => ({
 vi.mock('./canvas-overrides', () => ({
   CustomToolbar: () => null,
   CustomContextMenu: () => null,
+  TOOLBAR_SHAPES: [
+    {
+      type: 'code-block',
+      label: '</>',
+      title: 'Code Block',
+      hint: 'code context',
+      description: 'code context',
+    },
+  ],
   setExportJsonFn: vi.fn(),
 }))
 
@@ -88,6 +97,7 @@ vi.mock('./canvas-welcome', () => ({
 import CanvasPanel from './CanvasPanel'
 import { useCanvasStore } from '../../stores/canvas-store'
 import { useSessionStore } from '../../stores/session-store'
+import { dispatchWorkspaceMessage } from '../../hooks/use-dashboard-socket'
 
 // ---------------------------------------------------------------------------
 // Fetch mock
@@ -198,6 +208,29 @@ describe('CanvasPanel', () => {
       expect(useCanvasStore.getState().pendingShapes).toEqual([])
     })
 
+    it('opens the editor when an agent canvas message is dispatched', async () => {
+      render(<CanvasPanel />)
+
+      act(() => {
+        dispatchWorkspaceMessage({
+          type: 'canvas:shapes_add',
+          payload: {
+            shapes: [
+              { type: 'diagram-node', id: 'agent-msg-1', props: { label: 'Agent message' } },
+            ],
+          },
+        })
+      })
+
+      await act(async () => { vi.advanceTimersByTime(100) })
+
+      expect(screen.queryByTestId('canvas-welcome')).not.toBeInTheDocument()
+      expect(screen.getByTestId('tldraw-canvas')).toBeInTheDocument()
+      expect(mockCreateShape).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'agent-msg-1', type: 'diagram-node' }),
+      )
+    })
+
     it('skips welcome when session has existing shapes', async () => {
       fetchSpy.mockResolvedValueOnce(
         new Response(JSON.stringify({ canvas: { shapes: JSON.stringify({ store: {} }) } }), { status: 200 }),
@@ -250,6 +283,12 @@ describe('CanvasPanel', () => {
   it('renders Zoom to Fit button in toolbar in editor mode', async () => {
     await renderInEditorMode()
     expect(screen.getByTestId('canvas-zoom-to-fit')).toBeInTheDocument()
+  })
+
+  it('renders quick insert dock in editor mode', async () => {
+    await renderInEditorMode()
+    expect(screen.getByTestId('canvas-quick-insert-dock')).toBeInTheDocument()
+    expect(screen.getByTestId('canvas-quick-insert-code-block')).toBeInTheDocument()
   })
 
   // -- Dirty indicator ------------------------------------------------------
@@ -426,6 +465,17 @@ describe('CanvasPanel', () => {
       expect.objectContaining({ type: 'code-block', props: { code: 'hello' } }),
     )
     expect(useCanvasStore.getState().pendingShapes).toEqual([])
+  })
+
+  it('creates a shape from the quick insert dock', async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+    await renderInEditorMode()
+
+    await user.click(screen.getByTestId('canvas-quick-insert-code-block'))
+
+    expect(mockCreateShape).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'code-block' }),
+    )
   })
 
   it('applies pending updates to existing editor shapes', async () => {

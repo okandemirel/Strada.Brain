@@ -10,6 +10,7 @@ import {
   useEditor,
   type TLUiContextMenuProps,
 } from 'tldraw'
+import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip'
 import { SHAPE_TYPES } from './custom-shapes'
 
 /** Export JSON callback — set by CanvasPanel so context menu can trigger export */
@@ -34,13 +35,49 @@ function createShapeAtPointer(editor: ReturnType<typeof useEditor>, type: string
 // Toolbar shape button definitions
 // ---------------------------------------------------------------------------
 
-const TOOLBAR_SHAPES = [
-  { type: SHAPE_TYPES.codeBlock, label: '</>', title: 'Code Block' },
-  { type: SHAPE_TYPES.diagramNode, label: '\u25C7', title: 'Diagram Node' },
-  { type: SHAPE_TYPES.taskCard, label: '\u2610', title: 'Task Card' },
-  { type: SHAPE_TYPES.noteBlock, label: '\u270E', title: 'Note Block' },
-  { type: SHAPE_TYPES.terminalBlock, label: '>_', title: 'Terminal' },
-  { type: SHAPE_TYPES.fileCard, label: '\uD83D\uDCC4', title: 'File Card' },
+export const TOOLBAR_SHAPES = [
+  {
+    type: SHAPE_TYPES.codeBlock,
+    label: '</>',
+    title: 'Code Block',
+    hint: 'Snippets, APIs, and implementation notes',
+    description: 'Paste implementation details, snippets, or API notes with code context.',
+  },
+  {
+    type: SHAPE_TYPES.diagramNode,
+    label: '\u25C7',
+    title: 'Diagram Node',
+    hint: 'Features, services, and flow anchors',
+    description: 'Mark a feature, service, screen, or architecture node on the board.',
+  },
+  {
+    type: SHAPE_TYPES.taskCard,
+    label: '\u2610',
+    title: 'Task Card',
+    hint: 'Work items with status and priority',
+    description: 'Track a work item with status and priority in the same canvas.',
+  },
+  {
+    type: SHAPE_TYPES.noteBlock,
+    label: '\u270E',
+    title: 'Note Block',
+    hint: 'Review notes and decisions',
+    description: 'Drop short review notes, decisions, or reminders next to related items.',
+  },
+  {
+    type: SHAPE_TYPES.terminalBlock,
+    label: '>_',
+    title: 'Terminal',
+    hint: 'Commands and shell output',
+    description: 'Capture commands, logs, or shell output without leaving the board.',
+  },
+  {
+    type: SHAPE_TYPES.fileCard,
+    label: '\uD83D\uDCC4',
+    title: 'File Card',
+    hint: 'File references and artifacts',
+    description: 'Reference a file or artifact so review context stays attached to the canvas.',
+  },
 ] as const
 
 // ---------------------------------------------------------------------------
@@ -54,17 +91,25 @@ export function CustomToolbar() {
     <DefaultToolbar>
       <DefaultToolbarContent />
       <div className="strada-toolbar-separator" />
-      {TOOLBAR_SHAPES.map(({ type, label, title }) => (
-        <button
-          key={type}
-          type="button"
-          className="strada-toolbar-btn"
-          data-testid={`strada-btn-${type}`}
-          title={title}
-          onClick={() => createShapeAtCenter(editor, type)}
-        >
-          {label}
-        </button>
+      {TOOLBAR_SHAPES.map(({ type, label, title, description }) => (
+        <Tooltip key={type}>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              className="strada-toolbar-btn"
+              data-testid={`strada-btn-${type}`}
+              title={title}
+              aria-label={title}
+              onClick={() => createShapeAtCenter(editor, type)}
+            >
+              {label}
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="right" className="max-w-[220px]">
+            <div className="font-medium text-text">{title}</div>
+            <p className="mt-1 text-xs leading-5 text-text-secondary">{description}</p>
+          </TooltipContent>
+        </Tooltip>
       ))}
     </DefaultToolbar>
   )

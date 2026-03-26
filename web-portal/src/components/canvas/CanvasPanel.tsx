@@ -4,7 +4,7 @@ import { useCanvasStore, type CanvasShape, type CanvasShapeUpdate } from '../../
 import { useSessionStore } from '../../stores/session-store'
 import { useTheme } from '../../hooks/useTheme'
 import { customShapeUtils } from './custom-shapes'
-import { CustomToolbar, CustomContextMenu, setExportJsonFn } from './canvas-overrides'
+import { CustomToolbar, CustomContextMenu, TOOLBAR_SHAPES, setExportJsonFn } from './canvas-overrides'
 import CanvasWelcome from './canvas-welcome'
 import { applyTemplate, type TemplateId } from './canvas-templates'
 
@@ -34,6 +34,12 @@ function formatLastSync(value: number | null): string {
   return `${Math.floor(diff / 3_600_000)}h ago`
 }
 
+function formatSessionLabel(sessionId: string | null): string {
+  if (!sessionId) return 'Transient session'
+  if (sessionId.length <= 26) return `Session ${sessionId}`
+  return `Session ${sessionId.slice(0, 8)}...${sessionId.slice(-6)}`
+}
+
 function LoadingSpinner() {
   return (
     <div className="flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-text-secondary">
@@ -42,6 +48,24 @@ function LoadingSpinner() {
     </div>
   )
 }
+
+const BOARD_ACTION_GUIDE = [
+  {
+    key: 'fit',
+    title: 'Zoom to Fit',
+    description: 'Centers the camera on the current board content.',
+  },
+  {
+    key: 'export',
+    title: 'Export JSON',
+    description: 'Downloads the current snapshot so you can reuse or inspect it elsewhere.',
+  },
+  {
+    key: 'save',
+    title: 'Auto-save',
+    description: 'Canvas edits save back to the current session about 5 seconds after changes stop.',
+  },
+] as const
 
 interface PendingCanvasSyncResult {
   agentAddCount: number
@@ -291,6 +315,14 @@ export default function CanvasPanel() {
     downloadBlob(blob, `canvas-${Date.now()}.json`)
   }, [])
 
+  const createShapeFromDock = useCallback((type: string) => {
+    const editor = editorRef.current
+    if (!editor) return
+
+    const center = editor.getViewportPageBounds().center
+    editor.createShape({ type, x: center.x - 100, y: center.y - 50 })
+  }, [])
+
   useEffect(() => {
     setExportJsonFn(exportJSON)
     return () => setExportJsonFn(() => {})
@@ -319,7 +351,7 @@ export default function CanvasPanel() {
                 )}
               </div>
               <div className="mt-2 text-sm text-text-secondary">
-                Launch a strong canvas frame, then keep applying live agent mutations into the same surface.
+                Start from a template, then keep architecture, notes, and agent-created visuals on one shared board.
               </div>
             </div>
           </div>
@@ -334,55 +366,92 @@ export default function CanvasPanel() {
     <div className="flex h-full w-full flex-col" data-testid="canvas-panel">
       <div className={toolbarCls} data-testid="canvas-toolbar">
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_left,rgba(125,211,252,0.12),transparent_24%),radial-gradient(circle_at_right,rgba(52,211,153,0.1),transparent_20%),linear-gradient(180deg,rgba(255,255,255,0.04),rgba(255,255,255,0))]" />
-        <div className="relative flex flex-wrap items-center gap-3">
-          <div className="min-w-0 flex-1">
+        <div className="relative grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(320px,380px)] xl:items-start">
+          <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <span className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.22em] text-text-secondary">
                 <span className="h-2 w-2 rounded-full bg-accent shadow-[0_0_10px_rgba(0,229,255,0.55)]" />
                 Canvas
               </span>
-              <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-text-secondary">
-                {sessionId ? `Session ${sessionId}` : 'Ephemeral session'}
+              <span
+                className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-text-secondary"
+                title={sessionId ?? 'Transient session'}
+              >
+                {formatSessionLabel(sessionId)}
               </span>
               <span className="rounded-full border border-accent/15 bg-accent/10 px-3 py-1 text-[11px] text-accent">
                 Agent visuals {agentVisualCount}
               </span>
               <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-text-secondary">
-                Sync {formatLastSync(lastAgentSyncAt)}
+                Agent sync {formatLastSync(lastAgentSyncAt)}
+              </span>
+              <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-text-secondary">
+                Queue {pendingMutationCount}
               </span>
             </div>
 
-            <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2">
+            <div className="mt-3">
               <div className="text-lg font-semibold tracking-[-0.04em] text-white">
-                Canvas studio
+                Shared visual board
               </div>
-              <div className="text-sm text-text-secondary">
-                Spatial layer for architecture maps, review clusters, and live agent mutations.
+              <div className="mt-2 max-w-3xl text-sm leading-6 text-text-secondary">
+                Keep architecture, user flow, risks, and review notes in one place. The quick-insert dock below exposes labeled block types, while the board keeps live agent visuals in the same surface.
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2 text-[11px] text-text-secondary">
+                <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1">
+                  Labeled quick insert
+                </span>
+                <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1">
+                  AI badge on agent visuals
+                </span>
+                <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1">
+                  Auto-save per session
+                </span>
               </div>
             </div>
           </div>
 
-          <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-text-secondary md:hidden">
-            View only
-          </span>
-
-          <div className="flex items-center gap-2">
-            <button type="button" className={toolbarBtnCls} onClick={() => editorRef.current?.zoomToFit()} data-testid="canvas-zoom-to-fit">
-              Zoom to Fit
+          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-1">
+            <button
+              type="button"
+              className={`${toolbarBtnCls} min-h-[60px] flex-col items-start justify-center gap-1 rounded-[22px] px-4 py-3 text-left`}
+              onClick={() => editorRef.current?.zoomToFit()}
+              title="Center the camera on the current board"
+              data-testid="canvas-zoom-to-fit"
+            >
+              <span className="text-sm text-white">Zoom to Fit</span>
+              <span className="text-[11px] leading-5 text-text-secondary">Center the current board content.</span>
             </button>
-            <button type="button" className={toolbarBtnCls} onClick={exportJSON} data-testid="canvas-export-json">
-              Export JSON
+            <button
+              type="button"
+              className={`${toolbarBtnCls} min-h-[60px] flex-col items-start justify-center gap-1 rounded-[22px] px-4 py-3 text-left`}
+              onClick={exportJSON}
+              title="Download the current canvas as JSON"
+              data-testid="canvas-export-json"
+            >
+              <span className="text-sm text-white">Export JSON</span>
+              <span className="text-[11px] leading-5 text-text-secondary">Download a portable canvas snapshot.</span>
             </button>
-            {isDirty ? (
-              <span className="rounded-full border border-yellow-400/20 bg-yellow-400/10 px-3 py-1 text-[11px] text-yellow-300" data-testid="canvas-dirty-indicator">
-                unsaved
-              </span>
-            ) : (
-              <span className="flex items-center gap-2 rounded-full border border-emerald-400/20 bg-emerald-400/10 px-3 py-1 text-[11px] text-emerald-300" data-testid="canvas-saved-indicator">
-                <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-300" />
-                saved
-              </span>
-            )}
+            <div className="rounded-[22px] border border-white/10 bg-black/20 px-4 py-3 text-left sm:col-span-2 xl:col-span-1">
+              <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-text-tertiary">
+                Save state
+              </div>
+              <div className="mt-2 flex items-center justify-between gap-3">
+                <div className="text-xs leading-5 text-text-secondary">
+                  Changes auto-save into the current session.
+                </div>
+                {isDirty ? (
+                  <span className="rounded-full border border-yellow-400/20 bg-yellow-400/10 px-3 py-1 text-[11px] text-yellow-300" data-testid="canvas-dirty-indicator">
+                    unsaved
+                  </span>
+                ) : (
+                  <span className="flex items-center gap-2 rounded-full border border-emerald-400/20 bg-emerald-400/10 px-3 py-1 text-[11px] text-emerald-300" data-testid="canvas-saved-indicator">
+                    <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-300" />
+                    saved
+                  </span>
+                )}
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -390,42 +459,9 @@ export default function CanvasPanel() {
         <div className="pointer-events-none absolute inset-0 z-0 bg-[radial-gradient(circle_at_top_left,rgba(125,211,252,0.08),transparent_22%),radial-gradient(circle_at_82%_14%,rgba(52,211,153,0.08),transparent_20%)]" />
         <div className="pointer-events-none absolute inset-0 z-0 opacity-[0.16] [background-image:linear-gradient(rgba(255,255,255,0.04)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.04)_1px,transparent_1px)] [background-size:34px_34px]" />
 
-        <div className="pointer-events-none absolute left-5 top-5 z-10 hidden max-w-[380px] rounded-[28px] border border-white/10 bg-[#0b1119]/78 p-5 shadow-[0_24px_90px_rgba(0,0,0,0.28)] backdrop-blur-2xl xl:block">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <div className="text-[10px] font-semibold uppercase tracking-[0.28em] text-sky-300/80">
-                Studio memo
-              </div>
-              <div className="mt-3 text-[22px] font-semibold leading-[1.05] tracking-[-0.04em] text-white">
-                Let the canvas read like an operator surface, not a debug dump.
-              </div>
-            </div>
-            <div className="grid h-16 w-16 grid-cols-2 gap-2 rounded-[22px] border border-white/10 bg-black/20 p-2">
-              <div className="rounded-lg bg-sky-300/20" />
-              <div className="rounded-lg bg-white/8" />
-              <div className="rounded-lg bg-white/8" />
-              <div className="rounded-lg bg-emerald-300/15" />
-            </div>
-          </div>
-          <div className="mt-4 text-sm leading-6 text-text-secondary">
-            Live updates appear only when the agent emits canvas mutations. Monitor activity on its own does not repaint this board.
-          </div>
-          <div className="mt-4 flex flex-wrap gap-2 text-[11px] text-text-secondary">
-            <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1">
-              Applied {agentVisualCount}
-            </span>
-            <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1">
-              Queue {pendingMutationCount}
-            </span>
-            <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1">
-              {sessionId ? 'Persistent canvas' : 'Transient canvas'}
-            </span>
-          </div>
-        </div>
-
-        <div className="pointer-events-none absolute right-5 top-5 z-10 hidden w-[220px] rounded-[28px] border border-white/10 bg-[#0b1119]/74 p-4 shadow-[0_20px_80px_rgba(0,0,0,0.26)] backdrop-blur-2xl 2xl:block">
+        <div className="pointer-events-none absolute right-5 top-5 z-10 hidden w-[280px] rounded-[28px] border border-white/10 bg-[#0b1119]/78 p-4 shadow-[0_20px_80px_rgba(0,0,0,0.26)] backdrop-blur-2xl 2xl:block">
           <div className="text-[10px] font-semibold uppercase tracking-[0.28em] text-text-tertiary">
-            Session state
+            Session pulse
           </div>
           <div className="mt-4 grid gap-3">
             <div className="rounded-[22px] border border-white/10 bg-white/[0.03] px-4 py-3">
@@ -439,6 +475,60 @@ export default function CanvasPanel() {
             <div className="rounded-[22px] border border-white/10 bg-white/[0.03] px-4 py-3">
               <div className="text-[10px] uppercase tracking-[0.22em] text-text-tertiary">Last sync</div>
               <div className="mt-2 text-sm font-medium text-text">{formatLastSync(lastAgentSyncAt)}</div>
+            </div>
+          </div>
+          <div className="mt-4 space-y-2">
+            {BOARD_ACTION_GUIDE.map((item) => (
+              <div
+                key={item.key}
+                className="rounded-[20px] border border-white/10 bg-black/20 px-4 py-3"
+              >
+                <div className="text-sm font-semibold text-text">{item.title}</div>
+                <div className="mt-1 text-xs leading-5 text-text-secondary">{item.description}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div
+          className="pointer-events-none absolute inset-x-0 bottom-5 z-10 hidden justify-center px-5 lg:flex"
+          data-testid="canvas-quick-insert-dock"
+        >
+          <div className="pointer-events-auto flex w-full max-w-[1120px] items-stretch gap-2 rounded-[30px] border border-white/10 bg-[#0b1119]/78 p-3 shadow-[0_24px_90px_rgba(0,0,0,0.26)] backdrop-blur-2xl">
+            <div className="hidden w-[220px] shrink-0 rounded-[24px] border border-white/10 bg-black/20 px-4 py-4 xl:flex xl:flex-col">
+              <div className="text-[10px] font-semibold uppercase tracking-[0.26em] text-sky-300/80">
+                Quick insert
+              </div>
+              <div className="mt-3 text-lg font-semibold tracking-[-0.04em] text-white">
+                Named blocks, always visible.
+              </div>
+              <div className="mt-2 text-xs leading-6 text-text-secondary">
+                Inspired by 21st-style floating panels: add the block you need without decoding icon-only controls.
+              </div>
+            </div>
+
+            <div className="grid min-w-0 flex-1 gap-2 md:grid-cols-3 xl:grid-cols-6">
+              {TOOLBAR_SHAPES.map((shape) => (
+                <button
+                  key={shape.type}
+                  type="button"
+                  onClick={() => createShapeFromDock(shape.type)}
+                  data-testid={`canvas-quick-insert-${shape.type}`}
+                  className="group flex min-h-[104px] flex-col items-start justify-between rounded-[24px] border border-white/10 bg-white/[0.035] px-4 py-4 text-left transition-all duration-200 hover:-translate-y-0.5 hover:border-sky-300/25 hover:bg-sky-300/[0.07] hover:shadow-[0_18px_48px_rgba(14,165,233,0.10)]"
+                  title={shape.description}
+                  aria-label={`Insert ${shape.title}`}
+                >
+                  <div className="grid h-11 w-11 place-items-center rounded-2xl border border-white/10 bg-black/20 text-sm font-semibold text-white">
+                    {shape.label}
+                  </div>
+                  <div className="min-w-0">
+                    <div className="text-sm font-semibold text-text">{shape.title}</div>
+                    <div className="mt-1 text-[11px] leading-5 text-text-secondary">
+                      {shape.hint}
+                    </div>
+                  </div>
+                </button>
+              ))}
             </div>
           </div>
         </div>

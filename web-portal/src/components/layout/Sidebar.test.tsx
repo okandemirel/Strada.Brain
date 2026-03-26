@@ -68,7 +68,7 @@ vi.mock('../ui/tooltip', () => ({
     if (asChild) return <>{children}</>
     return <span {...props}>{children}</span>
   },
-  TooltipContent: ({ children }: { children: React.ReactNode }) => <span data-testid="tooltip-content">{children}</span>,
+  TooltipContent: () => null,
 }))
 
 // Mock AdminNav to isolate Sidebar tests
