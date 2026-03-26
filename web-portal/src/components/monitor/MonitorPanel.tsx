@@ -5,6 +5,7 @@ import InterventionToolbar from './InterventionToolbar'
 import GateDialog from './GateDialog'
 import SupervisorPanel from './SupervisorPanel'
 import ResizeHandle from './ResizeHandle'
+import MonitorOverview from './MonitorOverview'
 
 const DAGView = lazy(() => import('./DAGView'))
 const KanbanBoard = lazy(() => import('./KanbanBoard'))
@@ -133,6 +134,7 @@ export default function MonitorPanel() {
             <InterventionToolbar />
           </div>
         </div>
+        <MonitorOverview />
         <div className="flex-1 min-h-0">
           {viewMode === 'dag' ? (
             <Suspense

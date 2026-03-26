@@ -128,12 +128,27 @@ export function dispatchWorkspaceMessage(data: { type: string; [key: string]: un
       break
     }
 
-    case 'canvas:shapes_add':
-      useCanvasStore.getState().addPendingShapes((payload.shapes as Array<{ type: string; id: string; props: Record<string, unknown> }>) || [])
+    case 'canvas:shapes_add': {
+      useCanvasStore.getState().addPendingShapes(
+        ((payload.shapes as Array<{ type: string; id: string; props: Record<string, unknown> }>) || []).map((shape) => ({
+          ...shape,
+          source: 'agent' as const,
+        })),
+      )
+      const wsStore = useWorkspaceStore.getState()
+      if (!wsStore.userOverride && wsStore.mode !== 'canvas') {
+        wsStore.suggestMode('canvas')
+      }
       break
+    }
 
     case 'canvas:shapes_update':
-      useCanvasStore.getState().updatePendingShapes((payload.shapes as Array<{ type: string; id: string; props: Record<string, unknown> }>) || [])
+      useCanvasStore.getState().updatePendingShapes(
+        ((payload.shapes as Array<{ type: string; id: string; props: Record<string, unknown> }>) || []).map((shape) => ({
+          ...shape,
+          source: 'agent' as const,
+        })),
+      )
       break
 
     case 'canvas:shapes_remove':

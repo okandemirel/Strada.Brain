@@ -24,6 +24,14 @@ function downloadBlob(blob: Blob, filename: string): void {
 const toolbarBtnCls = 'rounded bg-white/5 px-2 py-0.5 text-xs text-text hover:bg-white/10'
 const toolbarCls = 'flex items-center gap-2 border-b border-white/5 bg-white/3 backdrop-blur-xl px-3 py-1.5'
 
+function formatLastSync(value: number | null): string {
+  if (!value) return 'Waiting for agent'
+  const diff = Date.now() - value
+  if (diff < 60_000) return 'Just now'
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`
+  return `${Math.floor(diff / 3_600_000)}h ago`
+}
+
 function LoadingSpinner() {
   return (
     <div className="flex items-center gap-2 text-text-secondary text-sm">
@@ -46,6 +54,8 @@ export default function CanvasPanel() {
   const snapshotRef = useRef<unknown>(null)
 
   const [editorMode, setEditorMode] = useState<'welcome' | 'loading' | 'editor'>('welcome')
+  const [agentVisualCount, setAgentVisualCount] = useState(0)
+  const [lastAgentSyncAt, setLastAgentSyncAt] = useState<number | null>(null)
 
   const tldrawComponents = useMemo(() => ({
     Toolbar: CustomToolbar,
@@ -74,6 +84,13 @@ export default function CanvasPanel() {
       .catch(() => {})
   }, [sessionId])
 
+  useEffect(() => {
+    if (editorMode !== 'welcome' || pendingShapes.length === 0) return
+    import('tldraw/tldraw.css')
+    setEditorMode('loading')
+    requestAnimationFrame(() => setEditorMode('editor'))
+  }, [editorMode, pendingShapes.length])
+
   const handleTemplateSelect = useCallback((id: TemplateId) => {
     selectedTemplateRef.current = id
     import('tldraw/tldraw.css')
@@ -100,8 +117,41 @@ export default function CanvasPanel() {
         applyTemplate(editor, selectedTemplateRef.current)
         selectedTemplateRef.current = null
       }
+
+      if (pendingShapes.length > 0) {
+        const GAP = 20
+        const bounds = editor.getViewportPageBounds()
+        let nextX = bounds.center.x - ((pendingShapes.length - 1) * (200 + GAP)) / 2
+        const baseY = bounds.center.y - 50
+        const agentShapes = pendingShapes.filter((shape) => shape.source === 'agent')
+
+        editor.run(() => {
+          for (const pending of pendingShapes) {
+            const existing = editor.getShape(pending.id as TLShapeId)
+            if (existing) {
+              editor.updateShape({ id: pending.id as TLShapeId, type: pending.type, props: pending.props })
+            } else {
+              editor.createShape({
+                id: pending.id as TLShapeId,
+                type: pending.type,
+                x: nextX,
+                y: baseY,
+                props: { ...pending.props, ...(pending.source ? { source: pending.source } : {}) },
+              })
+              nextX += 200 + GAP
+            }
+          }
+        })
+
+        if (agentShapes.length > 0) {
+          setAgentVisualCount((prev) => prev + agentShapes.length)
+          setLastAgentSyncAt(Date.now())
+        }
+
+        clearPendingShapes()
+      }
     },
-    [setDirty, theme],
+    [clearPendingShapes, pendingShapes, setDirty, theme],
   )
 
   // Sync tldraw color scheme when portal theme changes
@@ -136,6 +186,7 @@ export default function CanvasPanel() {
     const bounds = editor.getViewportPageBounds()
     let nextX = bounds.center.x - ((pendingShapes.length - 1) * (200 + GAP)) / 2
     const baseY = bounds.center.y - 50
+    const agentShapes = pendingShapes.filter((shape) => shape.source === 'agent')
     editor.run(() => {
       for (const pending of pendingShapes) {
         const existing = editor.getShape(pending.id as TLShapeId)
@@ -153,6 +204,10 @@ export default function CanvasPanel() {
         }
       }
     })
+    if (agentShapes.length > 0) {
+      setAgentVisualCount((prev) => prev + agentShapes.length)
+      setLastAgentSyncAt(Date.now())
+    }
     clearPendingShapes()
   }, [pendingShapes, clearPendingShapes])
 
@@ -175,8 +230,13 @@ export default function CanvasPanel() {
       <div className="flex h-full w-full flex-col" data-testid="canvas-panel">
         <div className={toolbarCls} data-testid="canvas-toolbar">
           <span className="text-xs font-medium text-text-secondary">Canvas</span>
+          {pendingShapes.length > 0 && (
+            <span className="rounded-full border border-accent/20 bg-accent/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-accent">
+              Agent handoff
+            </span>
+          )}
         </div>
-        <CanvasWelcome onSelect={handleTemplateSelect} />
+        <CanvasWelcome onSelect={handleTemplateSelect} pendingShapeCount={pendingShapes.length} />
       </div>
     )
   }
@@ -185,7 +245,18 @@ export default function CanvasPanel() {
   return (
     <div className="flex h-full w-full flex-col" data-testid="canvas-panel">
       <div className={toolbarCls} data-testid="canvas-toolbar">
-        <span className="text-xs font-medium text-text-secondary">Canvas</span>
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="text-xs font-medium text-text-secondary">Canvas</span>
+          <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] text-text-secondary">
+            {sessionId ? `Session ${sessionId}` : 'Ephemeral session'}
+          </span>
+          <span className="rounded-full border border-accent/15 bg-accent/10 px-2 py-0.5 text-[10px] text-accent">
+            Agent visuals {agentVisualCount}
+          </span>
+          <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] text-text-secondary">
+            Sync {formatLastSync(lastAgentSyncAt)}
+          </span>
+        </div>
         <span className="text-[10px] text-text-secondary bg-white/5 rounded px-1.5 py-0.5 md:hidden">
           View only
         </span>
@@ -206,6 +277,25 @@ export default function CanvasPanel() {
         )}
       </div>
       <div className="relative flex-1">
+        <div className="pointer-events-none absolute left-4 top-4 z-10 hidden max-w-sm rounded-2xl border border-white/8 bg-bg/80 px-4 py-3 shadow-[0_18px_60px_rgba(0,0,0,0.18)] backdrop-blur-xl md:block">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-accent/80">
+            Agent Canvas
+          </div>
+          <div className="mt-1 text-sm font-medium text-text">
+            Visual outputs land here as architecture maps, diffs, and planning boards.
+          </div>
+          <div className="mt-2 flex flex-wrap gap-2 text-[10px] text-text-secondary">
+            <span className="rounded-full border border-white/10 bg-white/5 px-2 py-1">
+              Applied {agentVisualCount}
+            </span>
+            <span className="rounded-full border border-white/10 bg-white/5 px-2 py-1">
+              Queue {pendingShapes.length}
+            </span>
+            <span className="rounded-full border border-white/10 bg-white/5 px-2 py-1">
+              {sessionId ? 'Persistent canvas' : 'Transient canvas'}
+            </span>
+          </div>
+        </div>
         <Suspense fallback={
           <div className="flex h-full items-center justify-center">
             <LoadingSpinner />

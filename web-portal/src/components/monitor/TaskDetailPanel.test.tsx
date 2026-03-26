@@ -58,7 +58,7 @@ describe('TaskDetailPanel', () => {
     mockSelectedTaskId = 't1'
     render(<TaskDetailPanel />)
     expect(screen.getByText('executing')).toBeInTheDocument()
-    expect(screen.getByText('spec_review')).toBeInTheDocument()
+    expect(screen.getByText('spec review')).toBeInTheDocument()
   })
 
   it('shows agent ID when present', () => {
@@ -76,7 +76,8 @@ describe('TaskDetailPanel', () => {
     }
     mockSelectedTaskId = 't1'
     render(<TaskDetailPanel />)
-    expect(screen.getByText('dep-a, dep-b')).toBeInTheDocument()
+    expect(screen.getByText('dep-a')).toBeInTheDocument()
+    expect(screen.getByText('dep-b')).toBeInTheDocument()
   })
 
   it('does not show agent section when agentId is absent', () => {

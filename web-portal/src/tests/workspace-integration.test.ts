@@ -50,9 +50,6 @@ describe('workspace integration — auto-switch flow', () => {
   })
 
   it('canvas:shapes_add event dispatches shapes to canvas store', () => {
-    // canvas:shapes_add dispatches to the canvas store directly;
-    // mode_suggest for canvas is not implemented in the bridge yet,
-    // but the shapes should arrive in the canvas store
     dispatchWorkspaceMessage({
       type: 'canvas:shapes_add',
       payload: {
@@ -65,8 +62,8 @@ describe('workspace integration — auto-switch flow', () => {
     const canvas = useCanvasStore.getState()
     expect(canvas.pendingShapes).toHaveLength(1)
     expect(canvas.pendingShapes[0].id).toBe('r1')
-    // Mode should still be chat — no auto-switch for canvas:shapes_add
-    expect(useWorkspaceStore.getState().mode).toBe('chat')
+    expect(canvas.pendingShapes[0].source).toBe('agent')
+    expect(useWorkspaceStore.getState().mode).toBe('canvas')
   })
 
   it('workspace:mode_suggest with reason shows reason text in notification', () => {

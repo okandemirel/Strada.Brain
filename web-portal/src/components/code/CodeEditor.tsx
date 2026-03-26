@@ -7,9 +7,18 @@ import DiffViewer from './DiffViewer'
 
 function DiffActionBar({ file, onAction }: { file: CodeTab; onAction: (action: 'accept' | 'reject') => void }) {
   return (
-    <div className="flex items-center gap-2 px-3 py-1.5 bg-white/3 backdrop-blur border-b border-white/5 shrink-0">
-      <span className="text-xs text-text-secondary flex-1">
-        Review changes to {file.path.split('/').pop()}
+    <div className="flex items-center gap-3 border-b border-white/5 bg-[linear-gradient(180deg,rgba(255,255,255,0.04),rgba(255,255,255,0.02))] px-3 py-2 backdrop-blur shrink-0">
+      <div className="min-w-0 flex-1">
+        <div className="text-[10px] font-semibold uppercase tracking-[0.2em] text-accent/75">
+          Diff Review
+        </div>
+        <div className="mt-1 text-xs text-text-secondary">
+          <span className="text-text">{file.path.split('/').pop()}</span>
+          <span className="ml-2 hidden font-mono text-text-tertiary md:inline">{file.path}</span>
+        </div>
+      </div>
+      <span className="hidden rounded-full border border-white/10 bg-white/5 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-text-secondary md:inline-flex">
+        Split view
       </span>
       <button
         onClick={() => onAction('reject')}

@@ -2,12 +2,14 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { useMonitorStore } from '../stores/monitor-store'
 import { useWorkspaceStore } from '../stores/workspace-store'
 import { useCodeStore } from '../stores/code-store'
+import { useCanvasStore } from '../stores/canvas-store'
 import { dispatchWorkspaceMessage, isWorkspaceMessage } from './use-dashboard-socket'
 
 describe('dispatchWorkspaceMessage', () => {
   beforeEach(() => {
     useMonitorStore.getState().clearMonitor()
     useWorkspaceStore.getState().reset()
+    useCanvasStore.getState().reset()
   })
 
   it('handles monitor:dag_init by setting DAG and tasks', () => {
@@ -76,6 +78,20 @@ describe('dispatchWorkspaceMessage', () => {
     })
 
     expect(useWorkspaceStore.getState().mode).toBe('monitor')
+  })
+
+  it('handles canvas:shapes_add by queueing agent shapes and switching to canvas', () => {
+    dispatchWorkspaceMessage({
+      type: 'canvas:shapes_add',
+      payload: {
+        shapes: [
+          { type: 'Rectangle', id: 'shape-1', props: { width: 100 } },
+        ],
+      },
+    })
+
+    expect(useWorkspaceStore.getState().mode).toBe('canvas')
+    expect(useCanvasStore.getState().pendingShapes[0].source).toBe('agent')
   })
 
   it('does not override user-set mode on workspace:mode_suggest', () => {

@@ -173,6 +173,25 @@ describe('CanvasPanel', () => {
       expect(screen.getByTestId('tldraw-canvas')).toBeInTheDocument()
     })
 
+    it('auto-opens the editor when agent shapes arrive', async () => {
+      render(<CanvasPanel />)
+
+      act(() => {
+        useCanvasStore.getState().addPendingShapes([
+          { type: 'diagram-node', id: 'agent-1', props: { label: 'Agent' }, source: 'agent' },
+        ])
+      })
+
+      await act(async () => { vi.advanceTimersByTime(100) })
+
+      expect(screen.queryByTestId('canvas-welcome')).not.toBeInTheDocument()
+      expect(screen.getByTestId('tldraw-canvas')).toBeInTheDocument()
+      expect(mockCreateShape).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'agent-1', type: 'diagram-node' }),
+      )
+      expect(useCanvasStore.getState().pendingShapes).toEqual([])
+    })
+
     it('skips welcome when session has existing shapes', async () => {
       fetchSpy.mockResolvedValueOnce(
         new Response(JSON.stringify({ canvas: { shapes: JSON.stringify({ store: {} }) } }), { status: 200 }),

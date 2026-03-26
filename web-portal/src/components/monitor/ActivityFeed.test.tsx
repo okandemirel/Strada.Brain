@@ -52,12 +52,10 @@ describe('ActivityFeed', () => {
       { action: 'b', detail: 'Second', timestamp: 2 },
       { action: 'c', detail: 'Third', timestamp: 3 },
     ]
-    const { container } = render(<ActivityFeed />)
-    const details = container.querySelectorAll('.text-text-secondary')
-    expect(details).toHaveLength(3)
-    expect(details[0].textContent).toBe('First')
-    expect(details[1].textContent).toBe('Second')
-    expect(details[2].textContent).toBe('Third')
+    render(<ActivityFeed />)
+    const allText = screen.getByText('First').closest('.overflow-y-auto')?.textContent ?? ''
+    expect(allText.indexOf('First')).toBeLessThan(allText.indexOf('Second'))
+    expect(allText.indexOf('Second')).toBeLessThan(allText.indexOf('Third'))
   })
 
   it('does not show empty message when activities exist', () => {

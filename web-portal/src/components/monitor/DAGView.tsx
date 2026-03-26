@@ -99,9 +99,16 @@ function layoutNodes(
 export default function DAGView() {
   const dag = useMonitorStore((s) => s.dag)
   const setSelectedTask = useMonitorStore((s) => s.setSelectedTask)
+  const activeRootId = useMonitorStore((s) => s.activeRootId)
 
-  const { nodes, edges } = useMemo(() => {
-    if (!dag) return { nodes: [], edges: [] }
+  const { nodes, edges, summary } = useMemo(() => {
+    if (!dag) {
+      return {
+        nodes: [],
+        edges: [],
+        summary: { total: 0, running: 0, completed: 0, reviewQueue: 0 },
+      }
+    }
 
     const nodes = layoutNodes(dag.nodes, dag.edges)
 
@@ -116,45 +123,105 @@ export default function DAGView() {
       style: { stroke: 'var(--color-border)' },
     }))
 
-    return { nodes, edges }
+    const total = dag.nodes.length
+    const running = dag.nodes.filter((n) => (n.status as string) === 'executing').length
+    const completed = dag.nodes.filter((n) => (n.status as string) === 'completed').length
+    const reviewQueue = dag.nodes.filter((n) =>
+      ['spec_review', 'quality_review', 'review_stuck'].includes((n.reviewStatus as string) ?? 'none'),
+    ).length
+
+    return {
+      nodes,
+      edges,
+      summary: { total, running, completed, reviewQueue },
+    }
   }, [dag])
 
   if (!dag) {
     return (
-      <div className="flex flex-col items-center justify-center h-full gap-4 text-text-tertiary">
-        <svg
-          className="w-12 h-12 text-accent/30"
-          fill="none"
-          viewBox="0 0 24 24"
-          stroke="currentColor"
-          strokeWidth={1}
-        >
-          <circle cx="12" cy="5" r="2" />
-          <circle cx="5" cy="19" r="2" />
-          <circle cx="19" cy="19" r="2" />
-          <line x1="12" y1="7" x2="5" y2="17" strokeLinecap="round" />
-          <line x1="12" y1="7" x2="19" y2="17" strokeLinecap="round" />
-        </svg>
-        <TypingAnimation
-          className="text-sm text-text-tertiary"
-          words={[
-            'No active goal. Start a task to see the DAG.',
-            'Waiting for goal decomposition...',
-            'Send a complex task to trigger planning.',
-          ]}
-          duration={40}
-          deleteSpeed={20}
-          pauseDelay={2500}
-          loop
-          showCursor
-          cursorStyle="line"
-        />
+      <div className="flex h-full items-center justify-center px-6">
+        <div className="w-full max-w-3xl rounded-[28px] border border-white/8 bg-[radial-gradient(circle_at_top_left,rgba(0,229,255,0.14),transparent_26%),linear-gradient(180deg,rgba(255,255,255,0.04),rgba(255,255,255,0.02))] p-6 shadow-[0_28px_120px_rgba(0,0,0,0.22)]">
+          <div className="grid gap-5 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)]">
+            <div>
+              <div className="text-[10px] font-semibold uppercase tracking-[0.24em] text-accent/80">
+                DAG Workspace
+              </div>
+              <div className="mt-2 text-2xl font-semibold text-text">
+                No active goal. Start a task to see the DAG.
+              </div>
+              <TypingAnimation
+                className="mt-3 text-sm leading-6 text-text-secondary"
+                words={[
+                  'Waiting for goal decomposition...',
+                  'Send a complex task to trigger planning.',
+                  'Parallel branches and review gates will appear here.',
+                ]}
+                duration={40}
+                deleteSpeed={20}
+                pauseDelay={2500}
+                loop
+                showCursor
+                cursorStyle="line"
+              />
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-1">
+              {[
+                ['Parallel layout', 'Branches, dependencies, and gates stay visible in one flow.'],
+                ['Agent context', 'Node selection opens ownership, timing, and review detail.'],
+                ['Live execution', 'Edges animate while tasks are executing or awaiting review.'],
+              ].map(([title, description]) => (
+                <div
+                  key={title}
+                  className="rounded-2xl border border-white/8 bg-black/20 px-4 py-3"
+                >
+                  <div className="text-sm font-medium text-text">{title}</div>
+                  <div className="mt-1 text-xs leading-5 text-text-secondary">{description}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
       </div>
     )
   }
 
   return (
-    <div className="h-full w-full">
+    <div className="relative h-full w-full">
+      <div className="pointer-events-none absolute left-4 right-4 top-4 z-10 flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-[260px] max-w-[420px] rounded-2xl border border-white/8 bg-bg/80 px-4 py-3 backdrop-blur-xl shadow-[0_20px_60px_rgba(0,0,0,0.2)]">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-accent/80">
+            Flow State
+          </div>
+          <div className="mt-1 text-sm font-medium text-text">
+            Goal {activeRootId ? activeRootId : 'active'}
+          </div>
+          <div className="mt-1 text-xs leading-5 text-text-secondary">
+            {summary.running > 0
+              ? `${summary.running} nodes are executing now.`
+              : 'Select a node to inspect the current execution branch.'}
+          </div>
+        </div>
+
+        <div className="grid gap-2 sm:grid-cols-3">
+          {[
+            ['Running', `${summary.running}`, 'text-accent'],
+            ['Review', `${summary.reviewQueue}`, 'text-amber-300'],
+            ['Done', `${summary.completed}/${summary.total}`, 'text-emerald-300'],
+          ].map(([label, value, tone]) => (
+            <div
+              key={label}
+              className="min-w-[100px] rounded-2xl border border-white/8 bg-bg/80 px-3 py-2 text-right backdrop-blur-xl shadow-[0_18px_50px_rgba(0,0,0,0.18)]"
+            >
+              <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-text-tertiary">
+                {label}
+              </div>
+              <div className={`mt-1 text-lg font-semibold ${tone}`}>{value}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
       <ReactFlow
         nodes={nodes}
         edges={edges}
