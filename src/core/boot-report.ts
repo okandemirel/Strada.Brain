@@ -127,6 +127,9 @@ export function buildCapabilitySnapshot(options: CapabilitySnapshotOptions): Cap
   );
   const stradaMcpRuntime = options.stradaMcpRuntime;
   const stradaMcpInstalled = stradaMcpRuntime?.installed === true;
+  const multiAgentEnabled = options.config.agent.enabled;
+  const delegationEnabled = multiAgentEnabled && options.config.delegation.enabled;
+  const delegationBlockedByMultiAgent = !multiAgentEnabled && options.config.delegation.enabled;
   const unityBridgeStatus: CapabilityStatus = !stradaMcpInstalled
     ? "inactive"
     : stradaMcpRuntime?.bridgeConnected
@@ -187,7 +190,7 @@ export function buildCapabilitySnapshot(options: CapabilitySnapshotOptions): Cap
       stradaMcpInstalled
         ? (stradaMcpRuntime?.bridgeConnected
             ? "Live Unity console reads and error analysis are available."
-            : "Unity console tools are installed but unavailable until the live bridge connects.")
+            : "Live bridge console access is unavailable until the bridge connects; static console snapshot and analysis can still fall back to local project diagnostics.")
         : "Install Strada.MCP to unlock live Unity console reads and analysis.",
       true,
     ),
@@ -229,7 +232,7 @@ export function buildCapabilitySnapshot(options: CapabilitySnapshotOptions): Cap
       stradaMcpInstalled
         ? (stradaMcpRuntime?.bridgeConnected
             ? "Typed Unity project and player/build/quality settings access is available."
-            : "Unity settings tools are installed but unavailable until the live bridge connects.")
+            : "File-based project settings reads remain available; typed player, build, and quality settings tools require a live bridge.")
         : "Install Strada.MCP to unlock live Unity settings control.",
       false,
     ),
@@ -334,11 +337,11 @@ export function buildCapabilitySnapshot(options: CapabilitySnapshotOptions): Cap
       "Multi-Agent Orchestration",
       "Execution",
       "experimental",
-      options.config.agent.enabled ? "active" : "inactive",
+      multiAgentEnabled ? "active" : "inactive",
       "wired",
-      options.config.agent.enabled
-        ? "Multi-agent mode is enabled in config."
-        : "Multi-agent execution is now treated as opt-in during recovery.",
+      multiAgentEnabled
+        ? "Multi-agent orchestration is enabled in current config."
+        : "Disabled in current config (MULTI_AGENT_ENABLED=false). Multi-agent is outside the protected recovery surface.",
       false,
     ),
     createCapability(
@@ -346,11 +349,13 @@ export function buildCapabilitySnapshot(options: CapabilitySnapshotOptions): Cap
       "Sub-Agent Delegation",
       "Execution",
       "experimental",
-      options.config.delegation.enabled ? "active" : "inactive",
+      delegationEnabled ? "active" : "inactive",
       "wired",
-      options.config.delegation.enabled
-        ? "Delegation is enabled in config."
-        : "Delegation stays opt-in until the default surfaces harden.",
+      delegationEnabled
+        ? "Delegation is enabled in current config."
+        : delegationBlockedByMultiAgent
+          ? "Delegation is configured, but multi-agent orchestration is disabled, so it will not initialize in this runtime."
+          : "Disabled in current config (TASK_DELEGATION_ENABLED=false). Delegation is outside the protected recovery surface.",
       false,
     ),
     createCapability(

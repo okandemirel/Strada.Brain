@@ -128,6 +128,8 @@ Cuando OpenAI usa `chatgpt-subscription`, el setup valida la sesion local de Cod
 Cuando guardas el asistente web, Strada entrega el control a la aplicacion web principal en la misma URL para que un refresh durante la transicion no te deje en una pagina de setup muerta.
 En esa primera transicion Strada tambien reaplica el turno de onboarding y la eleccion inicial de autonomia en la primera sesion de chat, para que la conversacion inicial y la pantalla de Settings reflejen de inmediato lo elegido en el asistente.
 Si el primer mensaje real del chat es tecnico, Strada ahora empieza a resolverlo de inmediato y reduce el onboarding a como mucho una sola pregunta corta de seguimiento en lugar de abrir un formulario de intake.
+El `UNITY_PROJECT_PATH` configurado es el alcance autoritativo del proyecto para el trabajo de codigo de Strada. Si el editor tiene abierto otro proyecto Unity, Strada puede mostrar una advertencia de mismatch al arrancar, pero no cambia silenciosamente fuera del proyecto elegido en el setup.
+Los setups nuevos escriben ahora `MULTI_AGENT_ENABLED=true` y `TASK_DELEGATION_ENABLED=true` por defecto. Si quieres el camino legacy de agente unico, pon `MULTI_AGENT_ENABLED=false`; la delegacion no se inicializa mientras multi-agente este desactivado.
 Si RAG esta activado pero no hay un proveedor de embeddings utilizable, el asistente ahora te deja avanzar hasta la revision; aun asi Save queda bloqueado hasta que elijas un proveedor de embeddings valido o desactives RAG.
 > **Correccion de web setup en Windows:** Las versiones anteriores tenian un bug de separador de ruta que hacia que la pagina de web setup apareciera en blanco en Windows (todos los assets estaticos eran bloqueados por la proteccion de path traversal). Esto ya esta corregido — tanto `.\strada.ps1 setup --web` como el portal web en `127.0.0.1:3000` funcionan correctamente en Windows. Si antes tuvo que recurrir al setup por terminal en Windows, ahora se recomienda el web setup.
 
@@ -499,7 +501,7 @@ Multiples instancias de agente pueden ejecutarse simultaneamente con aislamiento
 **AgentRegistry:**
 - Registro central de todas las instancias de agente activas
 - Soporta verificaciones de salud y apagado controlado
-- Multi-agente es completamente opcional: cuando esta deshabilitado, el sistema opera de forma identica a v2.0
+- Cuando esta deshabilitado, el sistema opera de forma identica al camino legacy de agente unico
 
 ---
 
@@ -521,6 +523,8 @@ Los agentes pueden delegar sub-tareas a otros agentes usando un sistema de enrut
 **DelegationTool:**
 - Expuesta como una herramienta que el agente puede invocar para delegar trabajo
 - Incluye agregacion de resultados de sub-tareas delegadas
+
+El setup nuevo escribe `TASK_DELEGATION_ENABLED=true` por defecto, pero la delegacion solo se inicializa cuando `MULTI_AGENT_ENABLED=true`.
 
 ---
 
@@ -571,12 +575,13 @@ Un sistema de despliegue opcional con puertas de aprobacion humana y proteccion 
 
 Cuando el modo daemon esta activo, el Agent Core ejecuta un bucle continuo de observar-orientar-decidir-actuar:
 
-- **Observar**: Recopila el estado del entorno de 6 observadores (cambios de archivos, estado de git, resultados de compilacion, eventos de disparadores, actividad del usuario, resultados de pruebas)
+- **Observar**: Recopila el estado del entorno desde el conjunto de observadores registrados. El cableado daemon por defecto usa hoy observadores de trigger, user-activity y git-state; build/test solo se conectan cuando esas senales de runtime estan disponibles
 - **Orientar**: Puntua las observaciones usando prioridad informada por aprendizaje (PriorityScorer con integracion de instintos)
 - **Decidir**: Razonamiento LLM con limitacion consciente del presupuesto (intervalo minimo de 30s, umbral de prioridad, piso de presupuesto)
 - **Actuar**: Envia objetivos, notifica al usuario o espera (el agente puede decidir "nada que hacer")
 
 Seguridad: proteccion tickInFlight, limitacion de tasa, piso de presupuesto (10%) y aplicacion de DaemonSecurityPolicy.
+Limite de autoridad: Agent Core es un generador proactivo de objetivos y notificaciones, no un reemplazo paralelo del ejecutor PAOR. La ejecucion interactiva y en background sigue pasando por el bucle PAOR del orchestrator, la pipeline de verificacion y los controles compartidos de loop-recovery.
 
 ### Enrutamiento Inteligente Multi-Proveedor
 
@@ -754,7 +759,7 @@ Strada no le devuelve al usuario los siguientes pasos obvios. Si un proveedor de
 | `ENABLE_WEBSOCKET_DASHBOARD` | `false` | Habilitar dashboard en tiempo real via WebSocket |
 | `ENABLE_PROMETHEUS` | `false` | Habilitar endpoint de metricas Prometheus (puerto 9090) |
 | `MULTI_AGENT_ENABLED` | `true` | Habilitar orquestacion multi-agente |
-| `TASK_DELEGATION_ENABLED` | `false` | Habilitar delegacion de tareas entre agentes |
+| `TASK_DELEGATION_ENABLED` | `true` | Habilitar delegacion de tareas entre agentes; la delegacion solo se inicializa cuando `MULTI_AGENT_ENABLED=true` |
 | `AGENT_MAX_DELEGATION_DEPTH` | `2` | Profundidad maxima de cadena de delegacion |
 | `DEPLOY_ENABLED` | `false` | Habilitar subsistema de despliegue |
 | `SOUL_FILE` | `soul.md` | Ruta al archivo de personalidad del agente (recarga en caliente al cambiar) |

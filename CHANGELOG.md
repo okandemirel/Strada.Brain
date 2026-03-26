@@ -7,6 +7,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Fixed
+- **Authoritative Unity Project Scope**: Runtime startup now treats the setup-selected `UNITY_PROJECT_PATH` as the coding scope of record. If a different Unity project is open in the editor, Strada surfaces a mismatch warning instead of silently retargeting work
+- **Shared PAOR Loop Recovery**: Interactive `clarification/verifier/visibility/reflection continue` paths and background reflection-continue now converge on the same loop-recovery executor, avoiding repeated prompt-injection loops and letting stuck turns escalate through the same replan/delegation controls
 - **Windows Web Portal Setup**: Fixed path traversal checks using hardcoded `/` separator instead of `path.sep`, causing all static assets (JS, CSS, images) to return 403 Forbidden on Windows — the setup page and web portal appeared as a blank white page
 - **Windows Path Validation**: `validatePathSafety` rejected Windows absolute paths (`C:\...`) because it checked `startsWith("/")` instead of `path.isAbsolute()`; browse API and save API were unusable on Windows
 - **Windows Web Portal Auto-Build**: `ensureWebSetupAssetsReady` spawned `npm.cmd` without `shell: true`, causing EINVAL on Node.js 22+ and preventing the web portal from being built automatically during setup
@@ -23,7 +25,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Global CLI Install**: `npm install -g strada-brain` registers `strada` and `strada-brain` commands via bin field
 - **ChannelActivityRegistry**: Per-channel activity tracking for idle detection and cross-channel notification delivery
 - **BackgroundExecutor.hasRunningTasks()**: Public method for checking if background tasks are running or queued
-- **Agent Core**: Autonomous OODA reasoning loop (observe → orient → decide → act) with 6 environment observers (file-watch, git, build, trigger, user-activity, test-result), PriorityScorer with learning integration, budget-safe LLM reasoning with 3-layer throttling
+- **Agent Core**: Autonomous OODA reasoning loop (observe → orient → decide → act) with a registered observer set. Default daemon wiring currently uses trigger, user-activity, and git-state observers, while build/test observers are attached only when those runtime signals are available. Includes PriorityScorer with learning integration and budget-safe LLM reasoning with 3-layer throttling
 - **Multi-Provider Routing**: Task-aware dynamic provider selection with TaskClassifier (heuristic), ProviderRouter with configurable presets (budget/balanced/performance), PAOR phase switching across providers
 - **Confidence-Based Consensus**: ConfidenceEstimator (heuristic scoring from PAOR state) + ConsensusManager (review/re-execute strategies, fail-safe on errors)
 - **Autonomous Agent Overhaul**: 3-layer autonomous bypass (system prompt injection, ask_user/show_plan tool auto-resolve, DaemonSecurityPolicy override with time-based expiry)

@@ -48,6 +48,7 @@ import {
   type RAGResult,
 } from "./bootstrap-stages.js";
 import type * as winston from "winston";
+import { resolveRuntimeUnityProjectPath } from "./runtime-unity-project.js";
 
 // Learning system imports
 import {
@@ -159,7 +160,14 @@ const POST_SETUP_BOOTSTRAP_DELAY_MS = 1200;
  * Bootstrap the application with all services
  */
 export async function bootstrap(options: BootstrapOptions): Promise<BootstrapResult> {
-  const { channelType, config, container: customContainer, beforeChannelConnect } = options;
+  const { channelType, container: customContainer, beforeChannelConnect } = options;
+  const runtimeProjectResolution = resolveRuntimeUnityProjectPath(options.config.unityProjectPath);
+  const config = runtimeProjectResolution.effectiveProjectPath === options.config.unityProjectPath
+    ? options.config
+    : {
+      ...options.config,
+      unityProjectPath: runtimeProjectResolution.effectiveProjectPath,
+    };
   const container = customContainer!; // We ensure container exists below
 
   const logger = createLogger(config.logLevel, config.logFile);
@@ -168,6 +176,14 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     projectPath: config.unityProjectPath,
     readOnly: config.security.readOnlyMode,
   });
+  if (runtimeProjectResolution.notice) {
+    logger.warn("Runtime Unity project path mismatch detected", {
+      configuredProjectPath: runtimeProjectResolution.configuredProjectPath,
+      effectiveProjectPath: runtimeProjectResolution.effectiveProjectPath,
+      detectedProjectPaths: runtimeProjectResolution.detectedProjectPaths,
+      source: runtimeProjectResolution.source,
+    });
+  }
 
   configureAuthManager(config.security.systemAuth);
 
@@ -266,6 +282,9 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       isTransientEmbeddingVerificationError: _isTransientEmbeddingVerificationError,
     },
   );
+  if (runtimeProjectResolution.notice) {
+    runtimeStageNotices.push(runtimeProjectResolution.notice);
+  }
   const providerManager = providerInit.manager;
   const activityRegistry = new ChannelActivityRegistry();
 

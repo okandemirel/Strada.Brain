@@ -38,6 +38,7 @@ src/agent-core/
 
 ### AgentCore
 Runs as part of HeartbeatLoop.tick(). Each tick: collect observations → score priorities → LLM reasoning → act or wait. Protected by tickInFlight guard, 30s rate limit, budget floor (10%), and priority threshold (30).
+AgentCore does not directly take over an in-flight PAOR execution loop. Its job is to notice opportunities, submit proactive goals, and feed the orchestrator more work; the orchestrator still owns code-edit execution, verification, and loop recovery for those tasks.
 
 ### ObservationEngine
 Collects from registered observers, deduplicates within 60s window, maintains history (100 entries max). Priority-sorted output.

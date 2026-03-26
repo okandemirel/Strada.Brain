@@ -72,7 +72,13 @@ function buildMockBgCtx(overrides: Partial<BgReflectionContext> = {}): BgReflect
     usageHandler: undefined,
     // BgReflectionContext-specific
     progressAssessmentEnabled: false,
-    controlLoopTracker: {} as BgReflectionContext["controlLoopTracker"],
+    controlLoopTracker: {
+      getConsecutiveTextOnlyGates: vi.fn().mockReturnValue(0),
+      recordGate: vi.fn().mockReturnValue(null),
+      markRecoveryAttempt: vi.fn().mockReturnValue(1),
+      hardCapReplan: 5,
+      hardCapBlock: 8,
+    } as unknown as BgReflectionContext["controlLoopTracker"],
     workerCollector: undefined,
     progressTitle: "Test task",
     progressLanguage: "en" as BgReflectionContext["progressLanguage"],
@@ -206,11 +212,11 @@ describe("handleBgReflectionReplan", () => {
 // ─── handleBgReflectionContinue ──────────────────────────────────────────────────
 
 describe("handleBgReflectionContinue", () => {
-  it("returns { flow: 'continue' } with EXECUTING state (skipLastReflection)", () => {
+  it("returns { flow: 'continue' } with EXECUTING state (skipLastReflection)", async () => {
     const state = makeReflectingState();
     const ctx = buildMockBgCtx({ responseText: "Looks good, keep going." });
 
-    const result = handleBgReflectionContinue(state, ctx, 0);
+    const result = await handleBgReflectionContinue(state, ctx, 1);
 
     expect(result.flow).toBe("continue");
     if (result.flow === "continue") {
@@ -220,32 +226,32 @@ describe("handleBgReflectionContinue", () => {
     }
   });
 
-  it("pushes assistant message and 'Please continue.' when no tool calls", () => {
+  it("pushes assistant message and 'Please continue.' when no tool calls", async () => {
     const state = makeReflectingState();
     const ctx = buildMockBgCtx({ responseText: "Continuing the analysis." });
 
-    handleBgReflectionContinue(state, ctx, 0);
+    await handleBgReflectionContinue(state, ctx, 0);
 
     const messages = (ctx.session as unknown as { messages: Array<{ role: string; content: string }> }).messages;
     expect(messages).toContainEqual({ role: "assistant", content: "Continuing the analysis." });
     expect(messages).toContainEqual({ role: "user", content: "Please continue." });
   });
 
-  it("does not push any messages when there are tool calls", () => {
+  it("does not push any messages when there are tool calls", async () => {
     const state = makeReflectingState();
     const ctx = buildMockBgCtx({ responseText: "Using a tool." });
 
-    handleBgReflectionContinue(state, ctx, 2);
+    await handleBgReflectionContinue(state, ctx, 2);
 
     const messages = (ctx.session as unknown as { messages: Array<{ role: string; content: string }> }).messages;
     expect(messages).toHaveLength(0);
   });
 
-  it("does not push assistant message when responseText is undefined and no tool calls", () => {
+  it("does not push assistant message when responseText is undefined and no tool calls", async () => {
     const state = makeReflectingState();
     const ctx = buildMockBgCtx({ responseText: undefined });
 
-    handleBgReflectionContinue(state, ctx, 0);
+    await handleBgReflectionContinue(state, ctx, 0);
 
     const messages = (ctx.session as unknown as { messages: Array<{ role: string; content: string }> }).messages;
     const assistantMessages = messages.filter((m) => m.role === "assistant");
@@ -325,6 +331,44 @@ describe("handleInteractiveReflectionContinue", () => {
     const messages = (ctx.session as unknown as { messages: Array<{ role: string; content: string }> }).messages;
     expect(messages).toContainEqual({ role: "assistant", content: "Let me keep going." });
     expect(messages).toContainEqual({ role: "user", content: "Please continue." });
+  });
+
+  it("routes text-only reflection continue through loop recovery when tracker is present", async () => {
+    const state = makeReflectingState();
+    const ctx = buildMockInteractiveCtx({
+      responseText: "Let me keep going.",
+      progressAssessmentEnabled: false,
+      controlLoopTracker: {
+        getConsecutiveTextOnlyGates: vi.fn().mockReturnValue(1),
+        recordGate: vi.fn().mockReturnValue(null),
+        markRecoveryAttempt: vi.fn().mockReturnValue(1),
+        hardCapReplan: 5,
+        hardCapBlock: 8,
+      } as unknown as InteractiveReflectionContext["controlLoopTracker"],
+    });
+    const response = buildMockProviderResponse({
+      toolCalls: [],
+      stopReason: "end_turn",
+      text: "Let me keep going.",
+    });
+    const originalModule = await import("./orchestrator-intervention-pipeline.js");
+    vi.spyOn(originalModule, "handleBackgroundLoopRecovery").mockResolvedValueOnce({
+      action: "replan",
+      gate: "[LOOP RECOVERY] Use tools now.",
+      summary: "Reflection continue loop detected.",
+    } as any);
+
+    const result = await handleInteractiveReflectionContinue(state, ctx, response);
+
+    expect(result.flow).toBe("continue");
+    if (result.flow === "continue") {
+      expect(result.newState.phase).toBe(AgentPhase.REPLANNING);
+    }
+    const messages = (ctx.session as unknown as { messages: Array<{ role: string; content: string }> }).messages;
+    expect(messages).toContainEqual({ role: "assistant", content: "Let me keep going." });
+    expect(messages).toContainEqual({ role: "user", content: "[LOOP RECOVERY] Use tools now." });
+
+    vi.restoreAllMocks();
   });
 
   it("does not push assistant message when responseText is undefined and no tool calls", async () => {

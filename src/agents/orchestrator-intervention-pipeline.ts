@@ -336,6 +336,187 @@ export function buildLoopRecoveryCheckpointMessage(params: {
   ].filter(Boolean).join("\n\n");
 }
 
+function buildProgressAssessmentDelegationDecision(
+  toolName: "delegate_analysis" | "delegate_code_review",
+  assessment: import("./autonomy/progress-assessment.js").ProgressAssessment,
+  touchedFiles: readonly string[],
+): DelegationLoopRecoveryDecision {
+  const stuckReason =
+    `Progress assessment marked the worker as stuck (${assessment.confidence} confidence).`;
+  const directive = assessment.directive?.trim();
+  if (toolName === "delegate_code_review") {
+    return {
+      decision: toolName,
+      reason: directive ? `${stuckReason} ${directive}`.slice(0, 220) : stuckReason,
+      recommendedNextAction: directive,
+      delegationTask: [
+        "Review the touched files and identify the concrete change needed to break the current analysis loop.",
+        directive ? `Progress assessment directive: ${directive}` : "",
+        `Touched files:\n${touchedFiles.join("\n") || "(none)"}`,
+      ].filter(Boolean).join("\n\n"),
+      summary: directive ? `Delegated code review after stuck assessment: ${directive}` : "Delegated code review after stuck assessment.",
+    };
+  }
+
+  return {
+    decision: toolName,
+    reason: directive ? `${stuckReason} ${directive}`.slice(0, 220) : stuckReason,
+    recommendedNextAction: directive,
+    delegationTask: [
+      "Analyze why the primary worker is repeating analysis/clarification instead of executing tools.",
+      directive ? `Progress assessment directive: ${directive}` : "",
+      "Return the next concrete tool-driven action that should happen now.",
+    ].filter(Boolean).join("\n\n"),
+    summary: directive ? `Delegated loop analysis after stuck assessment: ${directive}` : "Delegated loop analysis after stuck assessment.",
+  };
+}
+
+function buildImmediateDelegationDecision(params: {
+  toolName: "delegate_analysis" | "delegate_code_review";
+  reason: string;
+  summary: string;
+  recommendedNextAction?: string;
+  touchedFiles: readonly string[];
+}): DelegationLoopRecoveryDecision {
+  if (params.toolName === "delegate_code_review") {
+    return {
+      decision: params.toolName,
+      reason: params.reason,
+      recommendedNextAction: params.recommendedNextAction,
+      delegationTask: [
+        "Review the touched files and identify the exact code-level change needed to break the current control loop.",
+        params.recommendedNextAction ? `Suggested next action: ${params.recommendedNextAction}` : "",
+        `Touched files:\n${params.touchedFiles.join("\n") || "(none)"}`,
+      ].filter(Boolean).join("\n\n"),
+      summary: params.summary,
+    };
+  }
+
+  return {
+    decision: params.toolName,
+    reason: params.reason,
+    recommendedNextAction: params.recommendedNextAction,
+    delegationTask: [
+      "Analyze why the current worker is still stuck in a text-only loop and return the exact next tool-backed move.",
+      params.recommendedNextAction ? `Suggested next action: ${params.recommendedNextAction}` : "",
+    ].filter(Boolean).join("\n\n"),
+    summary: params.summary,
+  };
+}
+
+async function executeLoopRecoveryDelegation(
+  params: {
+    chatId: string;
+    identityKey: string;
+    prompt: string;
+    title: string;
+    language?: ProgressLanguage;
+    state: AgentState;
+    strategy: SupervisorExecutionStrategy;
+    availableToolNames?: readonly string[];
+    selfVerification: SelfVerification;
+    executionJournal: ExecutionJournal;
+    usageHandler?: (usage: TaskUsageEvent) => void;
+    onProgress: (message: TaskProgressUpdate) => void;
+    session: Session;
+    workerCollector?: WorkerRunCollector;
+    workspaceLease?: WorkspaceLease;
+  },
+  deps: InterventionDeps,
+  options: {
+    brief: LoopRecoveryBrief;
+    touchedFiles: readonly string[];
+    decision: DelegationLoopRecoveryDecision;
+    reviewRequestOptions?: {
+      daemonMode?: boolean;
+      maxRecoveryEpisodes?: number;
+    };
+  },
+): Promise<LoopRecoveryIntervention | null> {
+  const toolName = options.decision.decision;
+  if (!params.availableToolNames?.includes(toolName)) {
+    return null;
+  }
+
+  params.onProgress(
+    deps.buildStructuredProgressSignal(
+      params.prompt,
+      params.title,
+      {
+        kind: "delegation",
+        message: `Loop recovery delegation: ${toolName}`,
+        delegationType: toolName.replace(/^delegate_/, ""),
+        files: options.touchedFiles,
+      },
+      params.language,
+    ),
+  );
+
+  const delegatedTask =
+    options.decision.delegationTask
+    ?? (
+      toolName === "delegate_code_review"
+        ? `Review the touched files and identify why the current verification loop is not closing cleanly.\nTouched files:\n${options.touchedFiles.join("\n") || "(none)"}`
+        : `Analyze the repeated control loop and identify the missing evidence or verification path.\nFingerprint: ${options.brief.fingerprint}\nVerifier memory: ${options.brief.verifierSummary ?? "(none)"}`
+    );
+  const toolCall: ToolCall = {
+    id: `loop-recovery-${randomUUID()}`,
+    name: toolName,
+    input: {
+      task: delegatedTask,
+      context: buildLoopRecoveryReviewRequest(options.brief, options.reviewRequestOptions),
+      mode: "sync",
+    },
+  };
+  const toolResults = await deps.executeToolCalls(params.chatId, [toolCall], {
+    mode: "background",
+    taskPrompt: params.prompt,
+    sessionMessages: params.session.messages,
+    onUsage: params.usageHandler,
+    identityKey: params.identityKey,
+    strategy: params.strategy,
+    agentState: params.state,
+    touchedFiles: options.touchedFiles,
+    workspaceLease: params.workspaceLease,
+  });
+  const toolResult = toolResults[0];
+  const delegatedWorkerResult = toolResult?.metadata?.["workerResult"] as WorkerRunResult | undefined;
+  if (toolResult) {
+    params.workerCollector?.toolTrace.push({
+      toolName: toolCall.name,
+      success: !(toolResult.isError ?? false),
+      summary: toolResult.content.slice(0, 200),
+      timestamp: Date.now(),
+      workspaceId: params.workspaceLease?.id,
+    });
+  }
+  if (delegatedWorkerResult) {
+    params.selfVerification.ingestWorkerResult(delegatedWorkerResult);
+    params.workerCollector?.childWorkerResults.push(delegatedWorkerResult);
+  }
+  params.executionJournal.recordDelegatedDiagnosis(
+    toolName.replace(/^delegate_/, ""),
+    toolResult?.content ?? delegatedWorkerResult?.finalSummary ?? "",
+  );
+  params.executionJournal.recordLoopRecoveryEpisode({
+    fingerprint: options.brief.fingerprint,
+    decision: options.decision.decision,
+    summary: options.decision.reason ?? "Delegated diagnosis requested.",
+  });
+  return {
+    action: "replan",
+    gate: buildLoopRecoveryGate({
+      brief: options.brief,
+      decision: options.decision,
+      delegatedSummary:
+        delegatedWorkerResult?.finalSummary
+        ?? toolResult?.content
+        ?? options.decision.summary,
+    }),
+    summary: delegatedWorkerResult?.finalSummary ?? toolResult?.content ?? options.decision.summary,
+  };
+}
+
 // ─── WorkerRunCollector (mirrored from orchestrator.ts local type) ────────────
 
 export interface WorkerRunCollector {
@@ -349,6 +530,10 @@ export interface WorkerRunCollector {
   status?: WorkerRunResult["status"];
   reason?: string;
 }
+
+type DelegationLoopRecoveryDecision = LoopRecoveryReviewDecision & {
+  decision: "delegate_analysis" | "delegate_code_review";
+};
 
 // ─── Complex Intervention Functions (use InterventionDeps) ────────────────────
 
@@ -453,11 +638,60 @@ export async function handleBackgroundLoopRecovery(
 
   if (gateCount >= hardCapBlock) {
     const fingerprint = `hard_cap_block:${params.kind}`;
-    params.tracker.markRecoveryAttempt(fingerprint);
+    const touchedFiles = [...params.selfVerification.getState().touchedFiles];
+    const hardCapDelegationTool = selectLoopRecoveryDelegationTool(
+      params.availableToolNames,
+      touchedFiles,
+    );
+    const recoveryAttempt = params.tracker.markRecoveryAttempt(fingerprint);
+    const hardCapSummary = `Hard cap reached: ${gateCount} consecutive text-only gates without any tool execution.`;
+    if (hardCapDelegationTool && recoveryAttempt < 2) {
+      const brief = params.executionJournal.buildRecoveryBrief({
+        fingerprint,
+        latestReason: hardCapSummary,
+        touchedFiles,
+        recoveryEpisode: recoveryAttempt,
+        availableDelegations: [hardCapDelegationTool],
+      });
+      const delegatedIntervention = await executeLoopRecoveryDelegation({
+        chatId: params.chatId,
+        identityKey: params.identityKey,
+        prompt: params.prompt,
+        title: params.title,
+        language: params.language,
+        state: params.state,
+        strategy: params.strategy,
+        availableToolNames: params.availableToolNames,
+        selfVerification: params.selfVerification,
+        executionJournal: params.executionJournal,
+        usageHandler: params.usageHandler,
+        onProgress: params.onProgress,
+        session: params.session,
+        workerCollector: params.workerCollector,
+        workspaceLease: params.workspaceLease,
+      }, deps, {
+        brief,
+        touchedFiles,
+        decision: buildImmediateDelegationDecision({
+          toolName: hardCapDelegationTool,
+          reason: hardCapSummary,
+          summary: "Hard-cap loop recovery delegated for immediate diagnosis.",
+          recommendedNextAction: "Identify the exact tool-backed move required to break the text-only loop now.",
+          touchedFiles,
+        }),
+        reviewRequestOptions: {
+          daemonMode: params.daemonMode,
+          maxRecoveryEpisodes: params.maxRecoveryEpisodes,
+        },
+      });
+      if (delegatedIntervention) {
+        return delegatedIntervention;
+      }
+    }
     params.executionJournal.recordLoopRecoveryEpisode({
       fingerprint,
       decision: "blocked",
-      summary: `Hard cap reached: ${gateCount} consecutive text-only gates without any tool execution.`,
+      summary: hardCapSummary,
     });
     return {
       action: "blocked",
@@ -470,11 +704,60 @@ export async function handleBackgroundLoopRecovery(
 
   if (gateCount >= hardCapReplan) {
     const fingerprint = `hard_cap_replan:${params.kind}`;
+    const touchedFiles = [...params.selfVerification.getState().touchedFiles];
+    const hardCapDelegationTool = selectLoopRecoveryDelegationTool(
+      params.availableToolNames,
+      touchedFiles,
+    );
     const recoveryAttempt = params.tracker.markRecoveryAttempt(fingerprint);
+    const hardCapSummary = `Hard cap replan: ${gateCount} consecutive text-only gates.`;
+    if (hardCapDelegationTool && recoveryAttempt < 2) {
+      const brief = params.executionJournal.buildRecoveryBrief({
+        fingerprint,
+        latestReason: hardCapSummary,
+        touchedFiles,
+        recoveryEpisode: recoveryAttempt,
+        availableDelegations: [hardCapDelegationTool],
+      });
+      const delegatedIntervention = await executeLoopRecoveryDelegation({
+        chatId: params.chatId,
+        identityKey: params.identityKey,
+        prompt: params.prompt,
+        title: params.title,
+        language: params.language,
+        state: params.state,
+        strategy: params.strategy,
+        availableToolNames: params.availableToolNames,
+        selfVerification: params.selfVerification,
+        executionJournal: params.executionJournal,
+        usageHandler: params.usageHandler,
+        onProgress: params.onProgress,
+        session: params.session,
+        workerCollector: params.workerCollector,
+        workspaceLease: params.workspaceLease,
+      }, deps, {
+        brief,
+        touchedFiles,
+        decision: buildImmediateDelegationDecision({
+          toolName: hardCapDelegationTool,
+          reason: hardCapSummary,
+          summary: "Hard-cap replan delegated for immediate diagnosis.",
+          recommendedNextAction: "Identify the next concrete tool call or code change required to make progress.",
+          touchedFiles,
+        }),
+        reviewRequestOptions: {
+          daemonMode: params.daemonMode,
+          maxRecoveryEpisodes: params.maxRecoveryEpisodes,
+        },
+      });
+      if (delegatedIntervention) {
+        return delegatedIntervention;
+      }
+    }
     params.executionJournal.recordLoopRecoveryEpisode({
       fingerprint,
       decision: recoveryAttempt >= 2 ? "blocked" : "replan_local",
-      summary: `Hard cap replan: ${gateCount} consecutive text-only gates.`,
+      summary: hardCapSummary,
     });
     if (recoveryAttempt >= 2) {
       return {
@@ -541,11 +824,61 @@ export async function handleBackgroundLoopRecovery(
           if (progressingTrigger && progressingTrigger.reason === "stale_analysis_loop") {
             // Safety net overrides "progressing" — the agent has hit the
             // stale analysis threshold despite claiming progress.
+            const touchedFiles = [...params.selfVerification.getState().touchedFiles];
+            const delegationTool = selectLoopRecoveryDelegationTool(
+              params.availableToolNames,
+              touchedFiles,
+            );
             const staleRecovery = params.tracker.markRecoveryAttempt(progressingTrigger.fingerprint);
+            const staleSummary =
+              `Stale analysis override: progress assessment said "progressing" but ${progressingTrigger.sameFingerprintCount} consecutive text-only gates detected.`;
+            if (delegationTool && staleRecovery < 2) {
+              const brief = params.executionJournal.buildRecoveryBrief({
+                fingerprint: progressingTrigger.fingerprint,
+                latestReason: staleSummary,
+                touchedFiles,
+                recoveryEpisode: staleRecovery,
+                availableDelegations: [delegationTool],
+              });
+              const delegatedIntervention = await executeLoopRecoveryDelegation({
+                chatId: params.chatId,
+                identityKey: params.identityKey,
+                prompt: params.prompt,
+                title: params.title,
+                language: params.language,
+                state: params.state,
+                strategy: params.strategy,
+                availableToolNames: params.availableToolNames,
+                selfVerification: params.selfVerification,
+                executionJournal: params.executionJournal,
+                usageHandler: params.usageHandler,
+                onProgress: params.onProgress,
+                session: params.session,
+                workerCollector: params.workerCollector,
+                workspaceLease: params.workspaceLease,
+              }, deps, {
+                brief,
+                touchedFiles,
+                decision: buildImmediateDelegationDecision({
+                  toolName: delegationTool,
+                  reason: staleSummary,
+                  summary: "Stale-analysis override delegated for immediate diagnosis.",
+                  recommendedNextAction: "Identify the exact missing tool execution path and break the loop now.",
+                  touchedFiles,
+                }),
+                reviewRequestOptions: {
+                  daemonMode: params.daemonMode,
+                  maxRecoveryEpisodes: params.maxRecoveryEpisodes,
+                },
+              });
+              if (delegatedIntervention) {
+                return delegatedIntervention;
+              }
+            }
             params.executionJournal.recordLoopRecoveryEpisode({
               fingerprint: progressingTrigger.fingerprint,
               decision: staleRecovery >= 2 ? "blocked" : "replan_local",
-              summary: `Stale analysis override: progress assessment said "progressing" but ${progressingTrigger.sameFingerprintCount} consecutive text-only gates detected.`,
+              summary: staleSummary,
             });
             if (staleRecovery >= 2) {
               return {
@@ -569,22 +902,71 @@ export async function handleBackgroundLoopRecovery(
         if (assessment.verdict === "stuck" && assessment.confidence !== "low") {
           // Agent is stuck — act without recording gate
           const fingerprint = `progress_assessment_stuck:${params.kind}`;
+          const touchedFiles = [...params.selfVerification.getState().touchedFiles];
+          const assessmentDelegationTool = selectLoopRecoveryDelegationTool(
+            params.availableToolNames,
+            touchedFiles,
+          );
           const recoveryAttempt = params.tracker.markRecoveryAttempt(fingerprint);
-          params.executionJournal.recordLoopRecoveryEpisode({
-            fingerprint,
-            decision: recoveryAttempt >= 2 ? "blocked" : "replan_local",
-            summary: `Progress assessment: ${assessment.verdict} (${assessment.confidence}). ${assessment.directive ?? ""}`.trim(),
-          });
+          const assessmentSummary =
+            `Progress assessment: ${assessment.verdict} (${assessment.confidence}). ${assessment.directive ?? ""}`.trim();
           if (recoveryAttempt >= 2) {
+            params.executionJournal.recordLoopRecoveryEpisode({
+              fingerprint,
+              decision: "blocked",
+              summary: assessmentSummary,
+            });
             return {
               action: "blocked",
               message: buildStuckCheckpointMessage(
                 params.prompt,
                 assessment,
-                [...params.selfVerification.getState().touchedFiles],
+                touchedFiles,
               ),
             };
           }
+          if (assessmentDelegationTool) {
+            const brief = params.executionJournal.buildRecoveryBrief({
+              fingerprint,
+              latestReason: assessmentSummary,
+              touchedFiles,
+              recoveryEpisode: recoveryAttempt,
+              availableDelegations: [assessmentDelegationTool],
+            });
+            const delegatedIntervention = await executeLoopRecoveryDelegation({
+              chatId: params.chatId,
+              identityKey: params.identityKey,
+              prompt: params.prompt,
+              title: params.title,
+              language: params.language,
+              state: params.state,
+              strategy: params.strategy,
+              availableToolNames: params.availableToolNames,
+              selfVerification: params.selfVerification,
+              executionJournal: params.executionJournal,
+              usageHandler: params.usageHandler,
+              onProgress: params.onProgress,
+              session: params.session,
+              workerCollector: params.workerCollector,
+              workspaceLease: params.workspaceLease,
+            }, deps, {
+              brief,
+              touchedFiles,
+              decision: buildProgressAssessmentDelegationDecision(
+                assessmentDelegationTool,
+                assessment,
+                touchedFiles,
+              ),
+            });
+            if (delegatedIntervention) {
+              return delegatedIntervention;
+            }
+          }
+          params.executionJournal.recordLoopRecoveryEpisode({
+            fingerprint,
+            decision: "replan_local",
+            summary: assessmentSummary,
+          });
           return {
             action: "replan",
             gate: buildDirectiveGate(assessment),
@@ -600,6 +982,10 @@ export async function handleBackgroundLoopRecovery(
 
   // ─── Safety Net: existing ControlLoopTracker logic ──────────────────────────
   const touchedFiles = [...params.selfVerification.getState().touchedFiles];
+  const recoveryDelegationTool = selectLoopRecoveryDelegationTool(
+    params.availableToolNames,
+    touchedFiles,
+  );
   const trigger = params.tracker.recordGate({
     kind: params.kind,
     reason: params.reason,
@@ -618,6 +1004,49 @@ export async function handleBackgroundLoopRecovery(
       "Blocked checkpoint: The agent has been generating analysis/clarification text " +
       `without executing any tools for ${trigger.sameFingerprintCount} consecutive turns. ` +
       "No implementation work has started despite clear required changes.";
+    if (recoveryDelegationTool && staleRecovery < 2) {
+      const staleBrief = params.executionJournal.buildRecoveryBrief({
+        fingerprint: trigger.fingerprint,
+        latestReason: staleMsg,
+        touchedFiles,
+        recoveryEpisode: staleRecovery,
+        availableDelegations: [recoveryDelegationTool],
+      });
+      const delegatedIntervention = await executeLoopRecoveryDelegation({
+        chatId: params.chatId,
+        identityKey: params.identityKey,
+        prompt: params.prompt,
+        title: params.title,
+        language: params.language,
+        state: params.state,
+        strategy: params.strategy,
+        availableToolNames: params.availableToolNames,
+        selfVerification: params.selfVerification,
+        executionJournal: params.executionJournal,
+        usageHandler: params.usageHandler,
+        onProgress: params.onProgress,
+        session: params.session,
+        workerCollector: params.workerCollector,
+        workspaceLease: params.workspaceLease,
+      }, deps, {
+        brief: staleBrief,
+        touchedFiles,
+        decision: buildImmediateDelegationDecision({
+          toolName: recoveryDelegationTool,
+          reason: staleMsg,
+          summary: "Stale-analysis recovery delegated for immediate diagnosis.",
+          recommendedNextAction: "Identify the missing tool execution path and break the text-only loop now.",
+          touchedFiles,
+        }),
+        reviewRequestOptions: {
+          daemonMode: params.daemonMode,
+          maxRecoveryEpisodes: params.maxRecoveryEpisodes,
+        },
+      });
+      if (delegatedIntervention) {
+        return delegatedIntervention;
+      }
+    }
     params.executionJournal.recordLoopRecoveryEpisode({
       fingerprint: trigger.fingerprint,
       decision: staleRecovery >= 2 ? "blocked" : "replan_local",
@@ -650,16 +1079,12 @@ export async function handleBackgroundLoopRecovery(
     };
   }
 
-  const delegationTool = selectLoopRecoveryDelegationTool(
-    params.availableToolNames,
-    touchedFiles,
-  );
   const brief = params.executionJournal.buildRecoveryBrief({
     fingerprint: trigger.fingerprint,
     latestReason: trigger.latestReason,
     touchedFiles,
     recoveryEpisode: trigger.recoveryEpisode + 1,
-    availableDelegations: delegationTool ? [delegationTool] : [],
+    availableDelegations: recoveryDelegationTool ? [recoveryDelegationTool] : [],
   });
   const reviewDecision = await resolveLoopRecoveryReview({
     chatId: params.chatId,
@@ -679,11 +1104,11 @@ export async function handleBackgroundLoopRecovery(
       reason: reviewDecision.reason ?? "Repeated control-loop recovery attempts did not produce a clean path.",
       summary: reviewDecision.summary,
     };
-  } else if (recoveryAttempt >= 1 && delegationTool) {
+  } else if (recoveryAttempt >= 1 && recoveryDelegationTool) {
     finalDecision = {
       ...reviewDecision,
       decision:
-        delegationTool === "delegate_code_review"
+        recoveryDelegationTool === "delegate_code_review"
           ? "delegate_code_review"
           : "delegate_analysis",
     };
@@ -696,89 +1121,34 @@ export async function handleBackgroundLoopRecovery(
   }
 
   if (finalDecision.decision === "delegate_analysis" || finalDecision.decision === "delegate_code_review") {
-    const toolName = finalDecision.decision === "delegate_code_review"
-      ? "delegate_code_review"
-      : "delegate_analysis";
-    if (params.availableToolNames?.includes(toolName)) {
-      params.onProgress(
-        deps.buildStructuredProgressSignal(
-          params.prompt,
-          params.title,
-          {
-            kind: "delegation",
-            message: `Loop recovery delegation: ${toolName}`,
-            delegationType: toolName.replace(/^delegate_/, ""),
-            files: touchedFiles,
-          },
-          params.language,
-        ),
-      );
-      const delegatedTask =
-        finalDecision.delegationTask
-        ?? (
-          toolName === "delegate_code_review"
-            ? `Review the touched files and identify why the current verification loop is not closing cleanly.\nTouched files:\n${touchedFiles.join("\n") || "(none)"}`
-            : `Analyze the repeated control loop and identify the missing evidence or verification path.\nFingerprint: ${brief.fingerprint}\nVerifier memory: ${brief.verifierSummary ?? "(none)"}`
-        );
-      const toolCall: ToolCall = {
-        id: `loop-recovery-${randomUUID()}`,
-        name: toolName,
-        input: {
-          task: delegatedTask,
-          context: buildLoopRecoveryReviewRequest(brief, {
-            daemonMode: params.daemonMode,
-            maxRecoveryEpisodes: params.maxRecoveryEpisodes,
-          }),
-          mode: "sync",
-        },
-      };
-      const toolResults = await deps.executeToolCalls(params.chatId, [toolCall], {
-        mode: "background",
-        taskPrompt: params.prompt,
-        sessionMessages: params.session.messages,
-        onUsage: params.usageHandler,
-        identityKey: params.identityKey,
-        strategy: params.strategy,
-        agentState: params.state,
-        touchedFiles,
-        workspaceLease: params.workspaceLease,
-      });
-      const toolResult = toolResults[0];
-      const delegatedWorkerResult = toolResult?.metadata?.["workerResult"] as WorkerRunResult | undefined;
-      if (toolResult) {
-        params.workerCollector?.toolTrace.push({
-          toolName: toolCall.name,
-          success: !(toolResult.isError ?? false),
-          summary: toolResult.content.slice(0, 200),
-          timestamp: Date.now(),
-          workspaceId: params.workspaceLease?.id,
-        });
-      }
-      if (delegatedWorkerResult) {
-        params.selfVerification.ingestWorkerResult(delegatedWorkerResult);
-        params.workerCollector?.childWorkerResults.push(delegatedWorkerResult);
-      }
-      params.executionJournal.recordDelegatedDiagnosis(
-        toolName.replace(/^delegate_/, ""),
-        toolResult?.content ?? delegatedWorkerResult?.finalSummary ?? "",
-      );
-      params.executionJournal.recordLoopRecoveryEpisode({
-        fingerprint: brief.fingerprint,
-        decision: finalDecision.decision,
-        summary: finalDecision.reason ?? "Delegated diagnosis requested.",
-      });
-      return {
-        action: "replan",
-        gate: buildLoopRecoveryGate({
-          brief,
-          decision: finalDecision,
-          delegatedSummary:
-            delegatedWorkerResult?.finalSummary
-            ?? toolResult?.content
-            ?? finalDecision.summary,
-        }),
-        summary: delegatedWorkerResult?.finalSummary ?? toolResult?.content ?? finalDecision.summary,
-      };
+    const delegationDecision = finalDecision as DelegationLoopRecoveryDecision;
+    const delegatedIntervention = await executeLoopRecoveryDelegation({
+      chatId: params.chatId,
+      identityKey: params.identityKey,
+      prompt: params.prompt,
+      title: params.title,
+      language: params.language,
+      state: params.state,
+      strategy: params.strategy,
+      availableToolNames: params.availableToolNames,
+      selfVerification: params.selfVerification,
+      executionJournal: params.executionJournal,
+      usageHandler: params.usageHandler,
+      onProgress: params.onProgress,
+      session: params.session,
+      workerCollector: params.workerCollector,
+      workspaceLease: params.workspaceLease,
+    }, deps, {
+      brief,
+      touchedFiles,
+      decision: delegationDecision,
+      reviewRequestOptions: {
+        daemonMode: params.daemonMode,
+        maxRecoveryEpisodes: params.maxRecoveryEpisodes,
+      },
+    });
+    if (delegatedIntervention) {
+      return delegatedIntervention;
     }
     finalDecision = {
       ...finalDecision,

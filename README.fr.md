@@ -128,6 +128,8 @@ Quand OpenAI utilise `chatgpt-subscription`, le setup valide maintenant la sessi
 Une fois l'assistant web enregistr&eacute;, Strada bascule vers l'application web principale sur la m&ecirc;me URL afin qu'un refresh pendant la transition ne vous laisse pas sur une page de setup morte.
 Lors de ce premier basculement, Strada rejoue aussi le tour d'onboarding et le choix initial d'autonomy dans la premi&egrave;re session de chat, afin que la conversation d'ouverture et l'&eacute;cran Settings refl&egrave;tent imm&eacute;diatement ce qui a &eacute;t&eacute; choisi dans l'assistant.
 Si le premier vrai message du chat est technique, Strada commence maintenant &agrave; traiter la t&acirc;che tout de suite et limite l'onboarding &agrave; au plus une courte question de suivi au lieu d'ouvrir un questionnaire d'intake complet.
+Le `UNITY_PROJECT_PATH` configur&eacute; est le scope de projet autoritatif pour le travail de code de Strada. Si un autre projet Unity est ouvert dans l'&eacute;diteur, Strada peut afficher un avertissement de mismatch au d&eacute;marrage, mais ne bascule pas silencieusement hors du projet choisi au setup.
+Les nouveaux setups &eacute;crivent maintenant `MULTI_AGENT_ENABLED=true` et `TASK_DELEGATION_ENABLED=true` par d&eacute;faut. Si vous voulez le chemin mono-agent legacy, d&eacute;finissez `MULTI_AGENT_ENABLED=false` ; la d&eacute;l&eacute;gation ne s'initialise pas tant que le multi-agent est d&eacute;sactiv&eacute;.
 Si le RAG est activ&eacute; sans fournisseur d'embeddings utilisable, l'assistant vous laisse maintenant aller jusqu'&agrave; l'&eacute;tape de revue ; en revanche Save reste bloqu&eacute; tant que vous n'avez pas choisi un fournisseur d'embeddings valide ou d&eacute;sactiv&eacute; le RAG.
 > **Correctif web setup Windows :** Les versions précédentes avaient un bug de séparateur de chemin qui faisait apparaître la page de web setup vide sur Windows (tous les assets statiques étaient bloqués par la protection anti-traversée de chemin). C'est maintenant corrigé — `.\strada.ps1 setup --web` et le portail web à `127.0.0.1:3000` fonctionnent correctement sur Windows. Si vous deviez auparavant recourir au setup terminal sur Windows, le web setup est désormais recommandé.
 
@@ -498,7 +500,7 @@ Plusieurs instances d'agents peuvent fonctionner simultan&eacute;ment avec isola
 **AgentRegistry :**
 - Registre central de toutes les instances d'agents actives
 - Supporte les v&eacute;rifications de sant&eacute; et l'arr&ecirc;t gracieux
-- Le multi-agent est enti&egrave;rement opt-in : lorsque d&eacute;sactiv&eacute;, le syst&egrave;me fonctionne de mani&egrave;re identique &agrave; la v2.0
+- Lorsqu'il est d&eacute;sactiv&eacute;, le syst&egrave;me fonctionne de mani&egrave;re identique au chemin mono-agent legacy
 
 ---
 
@@ -520,6 +522,8 @@ Les agents peuvent d&eacute;l&eacute;guer des sous-t&acirc;ches &agrave; d'autre
 **DelegationTool :**
 - Expos&eacute; comme un outil que l'agent peut invoquer pour d&eacute;l&eacute;guer du travail
 - Inclut l'agr&eacute;gation des r&eacute;sultats des sous-t&acirc;ches d&eacute;l&eacute;gu&eacute;es
+
+Le setup neuf &eacute;crit `TASK_DELEGATION_ENABLED=true` par d&eacute;faut, mais la d&eacute;l&eacute;gation ne s'initialise que lorsque `MULTI_AGENT_ENABLED=true`.
 
 ---
 
@@ -570,12 +574,13 @@ Un syst&egrave;me de d&eacute;ploiement opt-in avec portes d'approbation humaine
 
 Lorsque le mode daemon est actif, l'Agent Core ex&eacute;cute une boucle continue observer-orienter-d&eacute;cider-agir :
 
-- **Observer** : Collecte l'&eacute;tat de l'environnement depuis 6 observateurs (modifications de fichiers, &eacute;tat git, r&eacute;sultats de build, &eacute;v&eacute;nements de d&eacute;clencheurs, activit&eacute; utilisateur, r&eacute;sultats de tests)
+- **Observer** : Collecte l'&eacute;tat de l'environnement depuis l'ensemble d'observateurs enregistr&eacute;. Le c&acirc;blage daemon par d&eacute;faut utilise actuellement les observateurs trigger, user-activity et git-state ; les observateurs build/test ne sont branch&eacute;s que lorsque ces signaux runtime sont disponibles
 - **Orienter** : &Eacute;value les observations en utilisant une priorit&eacute; inform&eacute;e par l'apprentissage (PriorityScorer avec int&eacute;gration des instincts)
 - **D&eacute;cider** : Raisonnement LLM avec limitation de d&eacute;bit consciente du budget (intervalle minimum de 30s, seuil de priorit&eacute;, plancher de budget)
 - **Agir** : Soumet des objectifs, notifie l'utilisateur ou attend (l'agent peut d&eacute;cider "rien &agrave; faire")
 
 S&eacute;curit&eacute; : garde tickInFlight, limitation de d&eacute;bit, plancher de budget (10%) et application de DaemonSecurityPolicy.
+Fronti&egrave;re d'autorit&eacute; : Agent Core est un g&eacute;n&eacute;rateur proactif d'objectifs et de notifications, pas un rempla&ccedil;ant parall&egrave;le de l'ex&eacute;cuteur PAOR. L'ex&eacute;cution interactive et background continue de passer par la boucle PAOR de l'orchestrator, la pipeline de v&eacute;rification et les contr&ocirc;les partag&eacute;s de loop-recovery.
 
 ### Routage Intelligent Multi-Fournisseur
 
@@ -753,7 +758,7 @@ Strada ne renvoie pas les prochaines etapes evidentes a l'utilisateur. Si un fou
 | `ENABLE_WEBSOCKET_DASHBOARD` | `false` | Active le tableau de bord en temps r&eacute;el WebSocket |
 | `ENABLE_PROMETHEUS` | `false` | Active l'endpoint de m&eacute;triques Prometheus (port 9090) |
 | `MULTI_AGENT_ENABLED` | `true` | Activer l'orchestration multi-agent |
-| `TASK_DELEGATION_ENABLED` | `false` | Activer la d&eacute;l&eacute;gation de t&acirc;ches entre agents |
+| `TASK_DELEGATION_ENABLED` | `true` | Activer la d&eacute;l&eacute;gation de t&acirc;ches entre agents ; la d&eacute;l&eacute;gation ne s'initialise que lorsque `MULTI_AGENT_ENABLED=true` |
 | `AGENT_MAX_DELEGATION_DEPTH` | `2` | Profondeur maximale de cha&icirc;ne de d&eacute;l&eacute;gation |
 | `DEPLOY_ENABLED` | `false` | Activer le sous-syst&egrave;me de d&eacute;ploiement |
 | `SOUL_FILE` | `soul.md` | Chemin vers le fichier de personnalit&eacute; de l'agent (rechargement &agrave; chaud lors des changements) |

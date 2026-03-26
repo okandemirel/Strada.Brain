@@ -458,8 +458,8 @@ export function buildSetupEnvLines(
     "STREAMING_ENABLED=true",
     "REQUIRE_EDIT_CONFIRMATION=true",
     "DASHBOARD_ENABLED=true",
-    "MULTI_AGENT_ENABLED=false",
-    "TASK_DELEGATION_ENABLED=false",
+    "MULTI_AGENT_ENABLED=true",
+    "TASK_DELEGATION_ENABLED=true",
     "LOG_LEVEL=info",
   );
 

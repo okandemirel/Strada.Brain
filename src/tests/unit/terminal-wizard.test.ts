@@ -65,6 +65,8 @@ describe("TerminalWizard", () => {
       expect(content).toContain("DEFAULT_CHANNEL=web");
       expect(content).toContain("LANGUAGE_PREFERENCE=en");
       expect(content).toContain("STREAMING_ENABLED=true");
+      expect(content).toContain("MULTI_AGENT_ENABLED=true");
+      expect(content).toContain("TASK_DELEGATION_ENABLED=true");
     });
 
     it("should detect OpenAI key format", async () => {

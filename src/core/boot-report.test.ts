@@ -156,8 +156,47 @@ describe("boot report", () => {
       tier: "experimental",
       status: "inactive",
     });
+    expect(capabilities.find((capability) => capability.id === "delegation")).toMatchObject({
+      tier: "experimental",
+      status: "inactive",
+      detail: "Disabled in current config (TASK_DELEGATION_ENABLED=false). Delegation is outside the protected recovery surface.",
+    });
     expect(capabilities.find((capability) => capability.id === "pentest-scripts")).toMatchObject({
       status: "active",
+    });
+  });
+
+  it("keeps delegation inactive when multi-agent orchestration is disabled", () => {
+    const capabilities = buildCapabilitySnapshot({
+      config: makeConfig({
+        delegation: {
+          enabled: true,
+          maxDepth: 2,
+          maxConcurrentPerParent: 2,
+          tiers: {
+            local: "ollama:llama3.3",
+            cheap: "deepseek:deepseek-chat",
+            standard: "gemini:gemini-2.5-pro",
+            premium: "claude:sonnet",
+          },
+          types: [],
+          verbosity: "normal",
+        },
+      }),
+      installRoot: process.cwd(),
+      channelType: "web",
+      channelHealthy: true,
+      providerHealthy: true,
+      embeddingStatus: {
+        state: "active",
+        verified: true,
+        usingHashFallback: false,
+      },
+    });
+
+    expect(capabilities.find((capability) => capability.id === "delegation")).toMatchObject({
+      status: "inactive",
+      detail: "Delegation is configured, but multi-agent orchestration is disabled, so it will not initialize in this runtime.",
     });
   });
 

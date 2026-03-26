@@ -298,6 +298,7 @@ export function generateEnvContent(answers: WizardAnswers): string {
   lines.push("REQUIRE_EDIT_CONFIRMATION=true");
   lines.push("DASHBOARD_ENABLED=true");
   lines.push("MULTI_AGENT_ENABLED=true");
+  lines.push("TASK_DELEGATION_ENABLED=true");
   lines.push("LOG_LEVEL=info");
   lines.push("WEB_CHANNEL_PORT=3000");
   lines.push("DASHBOARD_PORT=3100");

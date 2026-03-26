@@ -130,6 +130,8 @@ Web sihirbazinda kaydetme tamamlandiginda Strada ayni URL uzerinden acik handoff
 Bu ilk devir sirasinda Strada onboarding turunu ve ilk autonomy tercihini de ilk chat oturumuna uygular; boylece acilis konusmasi ve Settings ekrani sihirbazda sectiginiz durumla hemen uyusur.
 Ilk gercek chat mesaji teknik bir gorevse Strada artik ise hemen baslar ve uzun bir intake akisi acmak yerine onboarding'i en fazla tek kisa takip sorusuna indirir.
 RAG acik ama kullanilabilir bir embedding provider yoksa sihirbaz artik review adimina gecmenize izin verir; ancak gecerli bir embedding provider secene kadar veya RAG'i kapatana kadar Save bloklu kalir.
+Yapilandirilmis `UNITY_PROJECT_PATH`, Strada'nin kod urettigi yetkili proje kapsamidir. Editor'de farkli bir Unity projesi acik olsa bile Strada yalnizca bir uyari verir; sessizce setup'ta secilen proje disina kaymaz.
+Yeni kurulumlar artik varsayilan olarak hem `MULTI_AGENT_ENABLED=true` hem de `TASK_DELEGATION_ENABLED=true` yazar. Legacy tek ajan yolunu istiyorsaniz `MULTI_AGENT_ENABLED=false` ayarlayin; `TASK_DELEGATION_ENABLED=true` olsa bile multi-agent kapaliysa delegasyon baslatilmaz.
 > **Windows web setup duzeltmesi:** Onceki surumlerde path-separator hatasi nedeniyle Windows'ta web setup sayfasi bos gorunuyordu (tum statik dosyalar path traversal korumasi tarafindan engelleniyordu). Bu sorun artik giderildi — hem `.\strada.ps1 setup --web` hem de kurulum sonrasi `127.0.0.1:3000` adresindeki web portali Windows'ta sorunsuz calisir. Daha once Windows'ta terminal setup'a geri donmek zorunda kaldiysaniz, artik web setup onerilir.
 
 Ilk basarili kurulumdan sonra `./strada` komutu artik akilli launcher olur:
@@ -496,6 +498,7 @@ Coklu ajan orkestrasyonu, birden fazla ajanin es zamanli olarak farkli gorevler 
 - **AgentBudgetTracker** -- ajan bazinda token ve maliyet takibi
 - **AgentRegistry** -- aktif ajanlarin merkezi kaydi
 - `MULTI_AGENT_ENABLED` ortam degiskeni varsayilan olarak etkindir; legacy tek ajan davranisina donmek icin `false` yapin
+- Yeni setup'lar `TASK_DELEGATION_ENABLED=true` de yazar; ancak delegasyon yalnizca `MULTI_AGENT_ENABLED=true` iken initialize edilir
 
 ---
 
@@ -507,6 +510,7 @@ Ajanlar, karmasik gorevleri diger ajanlara devredebilir.
 - **DelegationManager** -- delegasyon yasam dongusu yonetimi, maksimum derinlik 2
 - **DelegationTool** -- ajanin delegasyon yapabilmesi icin yerlesik arac
 - **Butce-bilincli** -- delegasyon, ebeveyn ajanin butcesinden pay alir
+- Yeni setup varsayilani `TASK_DELEGATION_ENABLED=true` olsa da delegasyon runtime'da yalnizca `MULTI_AGENT_ENABLED=true` ise acilir
 
 ---
 
@@ -536,12 +540,13 @@ Otonom dagitim alt sistemi, onay kapisi ve guvenlik mekanizmalari ile dagitim su
 
 Daemon modu aktif oldugunda, Agent Core surekli bir gozle-yonlendir-karar ver-eyle dongusu calistirir:
 
-- **Gozlem**: 6 gozlemciden cevre durumunu toplar (dosya degisiklikleri, git durumu, derleme sonuclari, tetikleyici olaylari, kullanici aktivitesi, test sonuclari)
+- **Gozlem**: Kayitli gozlemci setinden cevre durumunu toplar. Varsayilan daemon baglantisi su anda trigger, user-activity ve git-state gozlemcilerini kullanir; build/test gozlemcileri yalnizca bu runtime sinyalleri baglandiginda devreye girer
 - **Yonlendirme**: Ogrenme bilgisi ile oncelik puanlamasi kullanarak gozlemleri degerlendirir (InstinctRetriever entegrasyonlu PriorityScorer)
 - **Karar**: Butce bilincli kisitlama ile LLM akil yurutmesi (30sn minimum aralik, oncelik esigi, butce tabani)
 - **Eylem**: Hedef gonderir, kullaniciyi bilgilendirir veya bekler (ajan "yapilacak bir sey yok" diye karar verebilir)
 
 Guvenlik: tickInFlight korumasi, hiz sinirlamasi, butce tabani (%10) ve DaemonSecurityPolicy zorunlulugu.
+Yetki siniri: Agent Core proaktif bir hedef uretici ve bildirim katmanidir; PAOR yurutucusunun paralel bir yerine gecmez. Interactive ve background gorevler hala orkestratorun PAOR dongusu, verifier hatti ve ortak loop-recovery kontrolleri uzerinden calisir.
 
 ### Coklu Saglayici Akilli Yonlendirme
 
@@ -719,7 +724,7 @@ Strada bariz sonraki adimlari kullaniciya geri paslamaz. Bir saglayici eksik ana
 | `ENABLE_WEBSOCKET_DASHBOARD` | `false` | WebSocket gercek zamanli paneli etkinlestir |
 | `ENABLE_PROMETHEUS` | `false` | Prometheus metrik uc noktasini etkinlestir (port 9090) |
 | `MULTI_AGENT_ENABLED` | `true` | Coklu ajan orkestrasyonunu etkinlestir |
-| `TASK_DELEGATION_ENABLED` | `false` | Ajanlar arasi gorev delegasyonunu etkinlestir |
+| `TASK_DELEGATION_ENABLED` | `true` | Ajanlar arasi gorev delegasyonunu etkinlestir; delegasyon yalnizca `MULTI_AGENT_ENABLED=true` iken initialize edilir |
 | `AGENT_MAX_DELEGATION_DEPTH` | `2` | Maksimum delegasyon zincir derinligi |
 | `DEPLOY_ENABLED` | `false` | Dagitim alt sistemini etkinlestir |
 | `SOUL_FILE` | `soul.md` | Ajan kisilik dosyasinin yolu (degisiklikte sicak yeniden yuklenir) |

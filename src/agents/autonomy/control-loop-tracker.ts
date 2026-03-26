@@ -1,6 +1,7 @@
 export type ControlLoopGateKind =
   | "clarification_internal_continue"
   | "visibility_internal_continue"
+  | "reflection_continue"
   | "verifier_continue"
   | "verifier_replan";
 

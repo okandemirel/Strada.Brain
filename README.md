@@ -119,8 +119,10 @@ That first-run browser open also carries an explicit setup flag, so a stale cach
 If the first web handoff races the restart, Strada now retries that launch automatically before surfacing an error. Once the config is saved, Strada keeps the handoff page alive on the same URL until the main app is ready, so do not re-run setup.
 
 The wizard asks for your Unity project path, AI provider access, default channel, language, and per-provider default model selections. `./strada setup` now prefers **Web Browser** by default; choose **Terminal** only when you explicitly want the faster text flow.
+The configured `UNITY_PROJECT_PATH` is the authoritative project scope for Strada's coding work. If another Unity project is currently open in the editor, Strada may surface a startup warning about the mismatch, but it does not silently switch scope away from the setup-selected project.
 Terminal setup accepts comma-separated providers in a single prompt (e.g. `kimi,deepseek`) for fallback / multi-agent orchestration, or you can add them one at a time interactively. The "Add another?" loop only appears when a single provider is entered. The embedding provider choice stays separate.
 Every selected response worker must pass preflight before setup can finish. Setup, `strada doctor`, and startup now use the same contract, so invalid provider chains are rejected instead of being silently skipped.
+Fresh setup now enables both multi-agent orchestration and task delegation by default. If you want the legacy single-agent path, explicitly set `MULTI_AGENT_ENABLED=false`; delegation does not initialize when multi-agent is disabled even if `TASK_DELEGATION_ENABLED=true`.
 When OpenAI uses `chatgpt-subscription`, setup validates the local Codex/ChatGPT session with a real Responses probe before saving. Expired subscription sessions are rejected during setup and reported by `strada doctor`.
 After you save the web wizard, Strada exposes explicit handoff states on the same URL (`saved`, `booting`, `ready`, `failed`) so refreshes can survive the transition and bootstrap failures stay visible until you retry setup.
 That handoff is now server-owned: once the first resolved web identity/session exists, Strada sends one assistant-authored welcome in the configured language and applies any setup-time autonomy bootstrap exactly once.
@@ -652,12 +654,13 @@ An opt-in deployment system with human-in-the-loop approval gates and circuit br
 
 When daemon mode is active, the Agent Core runs a continuous observe-orient-decide-act loop:
 
-- **Observe**: Collects environment state from 6 observers (file changes, git status, build results, trigger events, user activity, test results)
+- **Observe**: Collects environment state from the registered observer set. The default daemon wiring currently uses trigger, user-activity, and git-state observers; build/test observers are wired only when those runtime signals are available.
 - **Orient**: Scores observations using learning-informed priority (PriorityScorer with instinct integration)
 - **Decide**: LLM reasoning with budget-aware throttling (30s minimum interval, priority threshold, budget floor)
 - **Act**: Submits goals, notifies user, or waits (agent can decide "nothing to do")
 
 Safety: tickInFlight guard, rate limiting, budget floor (10%), and DaemonSecurityPolicy enforcement.
+Authority boundary: Agent Core is a proactive goal generator and notifier, not a parallel replacement for the PAOR executor. Interactive and background task execution still runs through the orchestrator's PAOR loop, verifier pipeline, and shared loop-recovery controls.
 
 ### Multi-Provider Intelligent Routing
 
@@ -878,7 +881,7 @@ That same learning path now materializes runtime self-improvement artifacts. Rep
 | `TASK_MAX_CONCURRENT` | `3` | Maximum number of background tasks that can run at once across distinct conversations |
 | `TASK_MESSAGE_BURST_WINDOW_MS` | `350` | Time window for merging rapid consecutive user messages into one ordered task |
 | `TASK_MESSAGE_BURST_MAX_MESSAGES` | `8` | Maximum consecutive messages to merge into a single task burst |
-| `TASK_DELEGATION_ENABLED` | `false` | Enable task delegation between agents |
+| `TASK_DELEGATION_ENABLED` | `true` | Enable task delegation between agents; delegation only initializes when `MULTI_AGENT_ENABLED=true` |
 | `AGENT_MAX_DELEGATION_DEPTH` | `2` | Maximum delegation chain depth |
 | `AGENT_MAX_CONCURRENT_DELEGATIONS` | `3` | Maximum concurrent delegations per parent agent |
 | `DELEGATION_VERBOSITY` | `normal` | Delegation logging verbosity: `quiet`, `normal`, or `verbose` |

@@ -283,4 +283,62 @@ describe("handleInteractiveEndTurn", () => {
 
     vi.restoreAllMocks();
   });
+
+  it("routes clarification internal-continue through loop recovery when tracker is present", async () => {
+    const agentState = createInitialState();
+    const ctx: InteractiveEndTurnContext = {
+      chatId: "test-chat",
+      identityKey: "test-user",
+      prompt: "test prompt",
+      responseText: "some draft",
+      responseUsage: undefined,
+      executionStrategy: makeMinimalStrategy(),
+      executionJournal: {
+        recordVerifierResult: vi.fn(),
+      } as any,
+      selfVerification: makeMinimalSelfVerification(),
+      stradaConformance: {} as any,
+      taskStartedAtMs: Date.now(),
+      currentToolNames: [],
+      currentAssignment: makeMinimalAssignment(),
+      interventionDeps: makeMinimalInterventionDeps(),
+      session: makeMinimalSession(),
+      usageHandler: undefined,
+      recordPhaseOutcome: vi.fn(),
+      buildPhaseOutcomeTelemetry: vi.fn(),
+      systemPrompt: "test",
+      defaultLanguage: "en",
+      profileLanguage: undefined,
+      progressAssessmentEnabled: false,
+      controlLoopTracker: {
+        getConsecutiveTextOnlyGates: vi.fn().mockReturnValue(1),
+        recordGate: vi.fn().mockReturnValue(null),
+        markRecoveryAttempt: vi.fn().mockReturnValue(1),
+        hardCapReplan: 5,
+        hardCapBlock: 8,
+      } as any,
+      runTextConsensusIfCritical: vi.fn(async () => {}),
+    };
+
+    const originalModule = await import("./orchestrator-intervention-pipeline.js");
+    vi.spyOn(originalModule, "resolveDraftClarificationIntervention").mockResolvedValueOnce({
+      kind: "continue",
+      gate: "Please continue working on this.",
+    } as any);
+    vi.spyOn(originalModule, "handleBackgroundLoopRecovery").mockResolvedValueOnce({
+      action: "replan",
+      gate: "[LOOP RECOVERY] Switch to tool execution.",
+      summary: "Clarification loop detected.",
+    } as any);
+
+    const result = await handleInteractiveEndTurn(agentState, ctx);
+
+    expect(result.flow).toBe("continue");
+    if (result.flow === "continue") {
+      expect(result.newState.phase).toBe(AgentPhase.REPLANNING);
+    }
+    expect(ctx.session.messages[1].content).toBe("[LOOP RECOVERY] Switch to tool execution.");
+
+    vi.restoreAllMocks();
+  });
 });

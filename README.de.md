@@ -128,6 +128,8 @@ Nach dem Speichern des Web-Assistenten uebergibt Strada auf derselben URL an die
 Wenn die erste echte Chat-Nachricht bereits eine technische Aufgabe ist, beginnt Strada jetzt sofort mit der Bearbeitung und reduziert das Onboarding auf hoechstens eine kurze Rueckfrage statt einen kompletten Intake-Dialog zu starten.
 Das Terminal-Setup akzeptiert kommagetrennte Provider in einer einzigen Eingabe (z. B. `kimi,deepseek`) fuer Fallback- oder Multi-Agent-Orchestrierung; alternativ koennen Sie Provider auch einzeln interaktiv eingeben. Die Schleife "Einen weiteren hinzufuegen?" erscheint nur, wenn ein einzelner Provider eingegeben wird. Die Embedding-Provider-Wahl bleibt getrennt.
 Sobald Sie im Web-Assistenten speichern, uebergibt Strada auf derselben URL an die eigentliche Web-App, damit ein Refresh waehrend des Uebergangs nicht auf einer toten Setup-Seite landet.
+Der konfigurierte `UNITY_PROJECT_PATH` ist der authoritative Projekt-Scope fuer Stradas Coding-Arbeit. Wenn im Editor gerade ein anderes Unity-Projekt offen ist, zeigt Strada hoechstens eine Startwarnung wegen des Mismatchs an, wechselt aber nicht stillschweigend vom im Setup gewaehlten Projekt weg.
+Frische Setups schreiben jetzt standardmaessig sowohl `MULTI_AGENT_ENABLED=true` als auch `TASK_DELEGATION_ENABLED=true`. Wenn Sie den Legacy-Single-Agent-Pfad wollen, setzen Sie `MULTI_AGENT_ENABLED=false`; Delegation initialisiert nicht, solange Multi-Agent deaktiviert ist.
 Wenn RAG aktiviert ist, aber kein nutzbarer Embedding-Provider konfiguriert wurde, laesst der Assistent Sie jetzt bis zum Review-Schritt weitergehen; Speichern bleibt jedoch blockiert, bis Sie einen gueltigen Embedding-Provider waehlen oder RAG deaktivieren.
 > **Windows Web-Setup-Fix:** Fruehere Versionen hatten einen Path-Separator-Bug, der die Web-Setup-Seite auf Windows leer erscheinen liess (alle statischen Assets wurden vom Path-Traversal-Guard blockiert). Dies ist jetzt behoben — sowohl `.\strada.ps1 setup --web` als auch das Web-Portal unter `127.0.0.1:3000` funktionieren korrekt auf Windows. Falls Sie zuvor auf Windows auf das Terminal-Setup zurueckgreifen mussten, ist Web-Setup jetzt der empfohlene Weg.
 
@@ -491,6 +493,7 @@ Das Multi-Agent-System ermoeglicht die gleichzeitige Verwaltung mehrerer Agenten
 - **AgentRegistry** -- zentrale Registrierung aller aktiven Agenten
 
 **Aktivierung:** Standardmaessig aktiviert. Setzen Sie `MULTI_AGENT_ENABLED=false`, um das Legacy-Single-Agent-Verhalten zu verwenden.
+Frische Setups schreiben ausserdem `TASK_DELEGATION_ENABLED=true`; Delegation initialisiert dennoch nur, wenn Multi-Agent aktiv bleibt.
 
 ---
 
@@ -504,7 +507,7 @@ Das Delegationssystem ermoeglicht es Agenten, Aufgaben an andere Agenten zu dele
 - **DelegationTool** -- Tool-Schnittstelle fuer die Agenten-zu-Agenten-Delegation
 - Budgetbewusst -- delegierte Aufgaben werden gegen das Budget des delegierenden Agenten verrechnet
 
-**Aktivierung:** Opt-in ueber `TASK_DELEGATION_ENABLED=true`.
+**Aktivierung:** Frische Setups schreiben `TASK_DELEGATION_ENABLED=true` standardmaessig. Delegation initialisiert trotzdem nur, wenn auch `MULTI_AGENT_ENABLED=true` ist.
 
 ---
 
@@ -540,12 +543,13 @@ Das Deployment-Subsystem ermoeglicht automatisierte Deployments mit Sicherheitsg
 
 Wenn der Daemon-Modus aktiv ist, fuehrt der Agent Core eine kontinuierliche Beobachten-Orientieren-Entscheiden-Handeln-Schleife aus:
 
-- **Beobachten**: Sammelt den Umgebungsstatus von 6 Beobachtern (Dateiaenderungen, Git-Status, Build-Ergebnisse, Ausloeser-Ereignisse, Benutzeraktivitaet, Testergebnisse)
+- **Beobachten**: Sammelt den Umgebungsstatus aus dem registrierten Beobachter-Set. Die Standard-Daemon-Verdrahtung nutzt derzeit Trigger-, User-Activity- und Git-State-Beobachter; Build/Test-Beobachter werden nur zugeschaltet, wenn diese Runtime-Signale verfuegbar sind
 - **Orientieren**: Bewertet Beobachtungen mittels lernbasierter Priorisierung (PriorityScorer mit Instinkt-Integration)
 - **Entscheiden**: LLM-Reasoning mit budgetbewusster Drosselung (30s Mindestintervall, Prioritaetsschwelle, Budget-Untergrenze)
 - **Handeln**: Reicht Ziele ein, benachrichtigt den Benutzer oder wartet (der Agent kann entscheiden "nichts zu tun")
 
 Sicherheit: tickInFlight-Schutz, Ratenbegrenzung, Budget-Untergrenze (10%) und DaemonSecurityPolicy-Durchsetzung.
+Autoritaetsgrenze: Agent Core ist ein proaktiver Zielgenerator und Benachrichtigungs-Layer, kein paralleler Ersatz fuer den PAOR-Executor. Interaktive und Hintergrund-Aufgaben laufen weiterhin durch die PAOR-Schleife des Orchestrators, die Verifier-Pipeline und die gemeinsame Loop-Recovery-Steuerung.
 
 ### Multi-Provider Intelligentes Routing
 
@@ -723,7 +727,7 @@ Strada gibt offensichtliche naechste Schritte nicht an den Benutzer zurueck. Wen
 | `ENABLE_WEBSOCKET_DASHBOARD` | `false` | WebSocket-Echtzeit-Dashboard aktivieren |
 | `ENABLE_PROMETHEUS` | `false` | Prometheus-Metriken-Endpunkt aktivieren (Port 9090) |
 | `MULTI_AGENT_ENABLED` | `true` | Multi-Agent-Orchestrierung aktivieren |
-| `TASK_DELEGATION_ENABLED` | `false` | Aufgabendelegation zwischen Agenten aktivieren |
+| `TASK_DELEGATION_ENABLED` | `true` | Aufgabendelegation zwischen Agenten aktivieren; Delegation initialisiert nur bei `MULTI_AGENT_ENABLED=true` |
 | `AGENT_MAX_DELEGATION_DEPTH` | `2` | Maximale Delegationskettiefe |
 | `DEPLOY_ENABLED` | `false` | Deployment-Subsystem aktivieren |
 | `SOUL_FILE` | `soul.md` | Pfad zur Agenten-Persoenlichkeitsdatei (Hot-Reload bei Aenderung) |

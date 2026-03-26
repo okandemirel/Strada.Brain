@@ -119,6 +119,8 @@ export interface InteractiveEndTurnContext extends EndTurnCoreContext {
   readonly systemPrompt: string;
   readonly defaultLanguage: string;
   readonly profileLanguage: string | undefined;
+  readonly progressAssessmentEnabled?: boolean;
+  readonly controlLoopTracker?: ControlLoopTracker;
   // Consensus-related — type-erased to avoid coupling to ProviderCapabilities/ConfidenceEstimator
   readonly runTextConsensusIfCritical: (params: {
     agentState: AgentState;
@@ -211,6 +213,40 @@ async function runBgLoopRecovery(
     session: ctx.session,
     workerCollector: ctx.workerCollector,
     workspaceLease: ctx.workspaceLease,
+    progressAssessmentEnabled: ctx.progressAssessmentEnabled,
+    taskStartedAtMs: ctx.taskStartedAtMs,
+  }, ctx.interventionDeps);
+}
+
+async function runInteractiveLoopRecovery(
+  ctx: InteractiveEndTurnContext,
+  agentState: AgentState,
+  kind: Parameters<typeof handleBackgroundLoopRecoveryPipeline>[0]["kind"],
+  reason: string,
+  gate: string | undefined,
+): Promise<LoopRecoveryIntervention | null> {
+  if (!ctx.controlLoopTracker) {
+    return null;
+  }
+
+  return handleBackgroundLoopRecoveryPipeline({
+    chatId: ctx.chatId,
+    identityKey: ctx.identityKey,
+    prompt: ctx.prompt,
+    title: ctx.prompt.replace(/\s+/g, " ").trim().slice(0, 80) || "Task",
+    state: agentState,
+    strategy: ctx.executionStrategy,
+    tracker: ctx.controlLoopTracker,
+    executionJournal: ctx.executionJournal,
+    kind,
+    reason,
+    gate,
+    iteration: agentState.iteration,
+    availableToolNames: ctx.currentToolNames,
+    selfVerification: ctx.selfVerification,
+    usageHandler: ctx.usageHandler,
+    onProgress: () => {},
+    session: ctx.session,
     progressAssessmentEnabled: ctx.progressAssessmentEnabled,
     taskStartedAtMs: ctx.taskStartedAtMs,
   }, ctx.interventionDeps);
@@ -513,7 +549,24 @@ export async function handleInteractiveEndTurn(
 
   // 1a. Clarification: internal continue
   if (clarificationIntervention.kind === "continue" && clarificationIntervention.gate) {
-    pushContinuationMessages(ctx, clarificationIntervention.gate);
+    const loopRecovery = await runInteractiveLoopRecovery(
+      ctx,
+      agentState,
+      "clarification_internal_continue",
+      "Clarification review kept the task internal.",
+      clarificationIntervention.gate,
+    );
+    if (loopRecovery?.action === "blocked" && loopRecovery.message) {
+      return { flow: "blocked", visibleText: loopRecovery.message };
+    }
+    if (loopRecovery?.action === "replan" && loopRecovery.gate) {
+      pushContinuationMessages(ctx, loopRecovery.gate);
+      return {
+        flow: "continue",
+        newState: transitionToVerifierReplanModel(agentState, ctx.responseText),
+      };
+    }
+    pushContinuationMessages(ctx, loopRecovery?.gate ?? clarificationIntervention.gate);
     return { flow: "continue", newState: agentState };
   }
 
@@ -548,22 +601,45 @@ export async function handleInteractiveEndTurn(
 
   // 2a. Verifier: continue
   if (verifierIntervention.kind === "continue" && verifierIntervention.gate) {
+    const loopRecovery = await runInteractiveLoopRecovery(
+      ctx,
+      agentState,
+      "verifier_continue",
+      verifierIntervention.result.summary,
+      verifierIntervention.gate,
+    );
+    const status =
+      loopRecovery?.action === "replan"
+        ? "replanned"
+        : loopRecovery?.action === "blocked"
+          ? "blocked"
+          : "continued";
     ctx.recordPhaseOutcome({
       chatId: ctx.chatId,
       identityKey: ctx.identityKey,
       assignment: ctx.currentAssignment,
       phase: toExecutionPhaseModel(agentState.phase),
-      status: "continued",
+      status,
       task: ctx.executionStrategy.task,
       reason: verifierIntervention.result.summary,
       telemetry: ctx.buildPhaseOutcomeTelemetry({
         state: agentState,
         usage: ctx.responseUsage,
-        verifierDecision: "continue",
+        verifierDecision: loopRecovery?.action === "replan" ? "replan" : "continue",
         failureReason: verifierIntervention.result.summary,
       }),
     });
-    pushContinuationMessages(ctx, verifierIntervention.gate);
+    if (loopRecovery?.action === "blocked" && loopRecovery.message) {
+      return { flow: "blocked", visibleText: loopRecovery.message };
+    }
+    if (loopRecovery?.action === "replan" && loopRecovery.gate) {
+      pushContinuationMessages(ctx, loopRecovery.gate);
+      return {
+        flow: "continue",
+        newState: transitionToVerifierReplanModel(agentState, ctx.responseText),
+      };
+    }
+    pushContinuationMessages(ctx, loopRecovery?.gate ?? verifierIntervention.gate);
     logger.debug("Verification gate triggered", { chatId: ctx.chatId });
     return { flow: "continue", newState: agentState };
   }
@@ -623,8 +699,25 @@ export async function handleInteractiveEndTurn(
 
     // 4a. Internal continue
     if (visibilityDecision.kind === "internal_continue" && visibilityDecision.gate) {
+      const loopRecovery = await runInteractiveLoopRecovery(
+        ctx,
+        agentState,
+        "visibility_internal_continue",
+        visibilityDecision.reason,
+        visibilityDecision.gate,
+      );
+      if (loopRecovery?.action === "blocked" && loopRecovery.message) {
+        return { flow: "blocked", visibleText: loopRecovery.message };
+      }
+      if (loopRecovery?.action === "replan" && loopRecovery.gate) {
+        pushContinuationMessages(ctx, loopRecovery.gate);
+        return {
+          flow: "continue",
+          newState: transitionToVerifierReplanModel(agentState, ctx.responseText),
+        };
+      }
       ctx.session.messages.push({ role: "assistant", content: ctx.responseText });
-      ctx.session.messages.push({ role: "user", content: visibilityDecision.gate });
+      ctx.session.messages.push({ role: "user", content: loopRecovery?.gate ?? visibilityDecision.gate });
       return { flow: "continue", newState: agentState };
     }
 

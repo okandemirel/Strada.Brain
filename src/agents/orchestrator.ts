@@ -84,7 +84,6 @@ import {
   type CompletionReviewStageName,
   type CompletionReviewStageResult,
   type VerifierPipelineResult,
-  computeAdaptiveHardCap,
 } from "./autonomy/index.js";
 import { MUTATION_TOOLS, WRITE_OPERATIONS, extractFilePath, isVerificationToolName } from "./autonomy/constants.js";
 import { DMPolicy, isDestructiveOperation, type DMPolicyConfig } from "../security/dm-policy.js";
@@ -2140,7 +2139,7 @@ export class Orchestrator {
                 } else if (decision === "REPLAN") {
                   bgAction = handleBgReflectionReplan(bgAgentState, bgReflectionCtx);
                 } else {
-                  bgAction = handleBgReflectionContinue(bgAgentState, bgReflectionCtx, response.toolCalls.length);
+                  bgAction = await handleBgReflectionContinue(bgAgentState, bgReflectionCtx, response.toolCalls.length);
                 }
 
                 if (bgAction.flow === "continue") {
@@ -3135,6 +3134,8 @@ export class Orchestrator {
             recordPhaseOutcome: (p) => this.recordPhaseOutcome(p),
             buildPhaseOutcomeTelemetry: buildInteractivePhaseOutcomeTelemetry,
             systemPrompt,
+            progressAssessmentEnabled: this.progressAssessmentEnabled,
+            controlLoopTracker: interactiveControlLoopTracker ?? undefined,
           };
 
           let interactiveAction: ReflectionLoopAction;
@@ -3339,6 +3340,8 @@ export class Orchestrator {
             systemPrompt,
             defaultLanguage: this.defaultLanguage,
             profileLanguage: profile?.language,
+            progressAssessmentEnabled: this.progressAssessmentEnabled,
+            controlLoopTracker: interactiveControlLoopTracker ?? undefined,
             runTextConsensusIfCritical: async (p) => {
               if (!this.consensusManager || !this.confidenceEstimator) return;
               const textTaskClass = this.taskClassifier.classify(p.prompt);
@@ -3367,60 +3370,6 @@ export class Orchestrator {
               });
             },
           };
-          // ─── Interactive loop detection: track text-only gates ─────────
-          if (interactiveControlLoopTracker) {
-            interactiveControlLoopTracker.incrementTextOnlyGate();
-            const textOnlyGates = interactiveControlLoopTracker.getConsecutiveTextOnlyGates();
-            // Adaptive thresholds: phase-aware, progress-aware
-            const adaptiveCap = computeAdaptiveHardCap(
-              interactiveControlLoopTracker.hardCapReplan,
-              interactiveControlLoopTracker.hardCapBlock,
-              {
-                phase: agentState.phase,
-                totalStepCount: agentState.stepResults.length,
-                hasActivePlan: agentState.plan !== null,
-                failedApproachCount: agentState.failedApproaches.length,
-              },
-            );
-            if (textOnlyGates >= adaptiveCap.block) {
-              executionJournal.recordLoopRecoveryEpisode({
-                fingerprint: `interactive_hard_cap_block`,
-                decision: "blocked",
-                summary: `Interactive adaptive block: ${textOnlyGates} text-only gates (threshold: ${adaptiveCap.block}, phase: ${agentState.phase}).`,
-              });
-              const blockMsg =
-                `I've been analyzing without taking action for ${textOnlyGates} consecutive turns. ` +
-                "Stopping here to avoid an unproductive loop. Please provide more specific instructions or rephrase your request.";
-              await this.sessionManager.sendVisibleAssistantMarkdown(chatId, session, blockMsg);
-              this.recordMetricEnd(metricId, {
-                agentPhase: AgentPhase.COMPLETE,
-                iterations: agentState.iteration,
-                toolCallCount: agentState.stepResults.length,
-                hitMaxIterations: false,
-              });
-              return;
-            }
-            if (textOnlyGates >= adaptiveCap.replan) {
-              executionJournal.recordLoopRecoveryEpisode({
-                fingerprint: `interactive_hard_cap_replan`,
-                decision: "replan_local",
-                summary: `Interactive adaptive replan: ${textOnlyGates} text-only gates (threshold: ${adaptiveCap.replan}, phase: ${agentState.phase}).`,
-              });
-              // Force a replan gate — counter keeps climbing until tools are actually used
-              session.messages.push({ role: "assistant", content: response.text ?? "" });
-              session.messages.push({
-                role: "user",
-                content: [
-                  `[LOOP DETECTION] You have produced ${textOnlyGates} consecutive text-only responses without using any tools.`,
-                  "STOP analyzing and START implementing. Use your available tools (file_read, file_write, shell, etc.) to make concrete progress.",
-                  "Your next response MUST contain tool calls.",
-                ].join("\n\n"),
-              });
-              continue;
-            }
-          }
-          // ────────────────────────────────────────────────────────────────
-
           const interactiveEndAction: EndTurnLoopAction = await handleInteractiveEndTurn(agentState, interactiveEndTurnCtx);
 
           if (interactiveEndAction.flow === "continue") {

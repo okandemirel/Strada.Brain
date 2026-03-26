@@ -116,6 +116,8 @@ export interface BgReflectionContext extends ReflectionCoreContext {
 
 export interface InteractiveReflectionContext extends ReflectionCoreContext {
   readonly systemPrompt: string;
+  readonly progressAssessmentEnabled?: boolean;
+  readonly controlLoopTracker?: ControlLoopTracker;
 }
 
 // ─── Private helper: applyBgLoopRecoveryResult ─────────────────────────────────
@@ -202,6 +204,40 @@ async function runBgLoopRecovery(
     session: ctx.session,
     workerCollector: ctx.workerCollector,
     workspaceLease: ctx.workspaceLease,
+    progressAssessmentEnabled: ctx.progressAssessmentEnabled,
+    taskStartedAtMs: ctx.taskStartedAtMs,
+  }, ctx.interventionDeps);
+}
+
+async function runInteractiveLoopRecovery(
+  ctx: InteractiveReflectionContext,
+  agentState: AgentState,
+  kind: Parameters<typeof handleBackgroundLoopRecoveryPipeline>[0]["kind"],
+  reason: string,
+  gate: string | undefined,
+): Promise<LoopRecoveryIntervention | null> {
+  if (!ctx.controlLoopTracker) {
+    return null;
+  }
+
+  return handleBackgroundLoopRecoveryPipeline({
+    chatId: ctx.chatId,
+    identityKey: ctx.identityKey,
+    prompt: ctx.prompt,
+    title: ctx.prompt.replace(/\s+/g, " ").trim().slice(0, 80) || "Task",
+    state: agentState,
+    strategy: ctx.executionStrategy,
+    tracker: ctx.controlLoopTracker,
+    executionJournal: ctx.executionJournal,
+    kind,
+    reason,
+    gate,
+    iteration: agentState.iteration,
+    availableToolNames: ctx.currentToolNames,
+    selfVerification: ctx.selfVerification,
+    usageHandler: ctx.usageHandler,
+    onProgress: () => {},
+    session: ctx.session,
     progressAssessmentEnabled: ctx.progressAssessmentEnabled,
     taskStartedAtMs: ctx.taskStartedAtMs,
   }, ctx.interventionDeps);
@@ -526,14 +562,55 @@ export function handleBgReflectionReplan(
 
 // ─── Background CONTINUE handler ──────────────────────────────────────────────
 
-export function handleBgReflectionContinue(
+export async function handleBgReflectionContinue(
   agentState: AgentState,
   ctx: BgReflectionContext,
   responseToolCallCount: number,
-): ReflectionLoopAction {
+): Promise<ReflectionLoopAction> {
   const newState = applyReflectionContinuation(agentState, ctx.responseText, { skipLastReflection: true });
   if (responseToolCallCount === 0) {
-    pushContinuationMessages(ctx, "Please continue.");
+    const loopRecovery = await runBgLoopRecovery(
+      ctx,
+      agentState,
+      "reflection_continue",
+      "Reflection requested continuation without tool execution.",
+      "Please continue.",
+    );
+    if (loopRecovery.action === "blocked" && loopRecovery.message) {
+      return { flow: "blocked", visibleText: loopRecovery.message };
+    }
+    if (loopRecovery.action === "replan" && loopRecovery.gate) {
+      const replannedState = handleVerifierReplan({
+        agentState,
+        executionJournal: ctx.executionJournal,
+        responseText: ctx.responseText,
+        reason: loopRecovery.summary ?? "Loop recovery requested a different approach.",
+        providerName: ctx.executionStrategy.reviewer.providerName,
+        modelId: ctx.executionStrategy.reviewer.modelId,
+      });
+      pushContinuationMessages(ctx, loopRecovery.gate);
+      ctx.emitProgress(ctx.buildStructuredProgressSignal(
+        ctx.prompt,
+        ctx.progressTitle,
+        {
+          kind: "loop_recovery",
+          message: "Loop recovery requested a replan after reflection continue.",
+        },
+        ctx.progressLanguage,
+      ));
+      return { flow: "continue", newState: replannedState };
+    }
+    pushContinuationMessages(ctx, loopRecovery.gate ?? "Please continue.");
+    ctx.emitProgress(ctx.buildStructuredProgressSignal(
+      ctx.prompt,
+      ctx.progressTitle,
+      {
+        kind: "analysis",
+        message: "Reflection continued without tool execution",
+      },
+      ctx.progressLanguage,
+    ));
+    return { flow: "continue", newState };
   }
   return { flow: "continue", newState };
 }
@@ -557,8 +634,32 @@ export async function handleInteractiveReflectionDone(
   }, ctx.interventionDeps);
 
   if (clarificationIntervention.kind === "continue" && clarificationIntervention.gate) {
+    const loopRecovery = await runInteractiveLoopRecovery(
+      ctx,
+      agentState,
+      "clarification_internal_continue",
+      "Clarification review kept the task internal.",
+      clarificationIntervention.gate,
+    );
+    if (loopRecovery?.action === "blocked" && loopRecovery.message) {
+      return { flow: "blocked", visibleText: loopRecovery.message };
+    }
+    if (loopRecovery?.action === "replan" && loopRecovery.gate) {
+      pushContinuationMessages(ctx, loopRecovery.gate);
+      return {
+        flow: "continue",
+        newState: handleVerifierReplan({
+          agentState,
+          executionJournal: ctx.executionJournal,
+          responseText: ctx.responseText,
+          reason: loopRecovery.summary ?? "Loop recovery requested a different approach.",
+          providerName: ctx.executionStrategy.reviewer.providerName,
+          modelId: ctx.executionStrategy.reviewer.modelId,
+        }),
+      };
+    }
     const newState = applyReflectionContinuation(agentState, ctx.responseText);
-    pushContinuationMessages(ctx, clarificationIntervention.gate);
+    pushContinuationMessages(ctx, loopRecovery?.gate ?? clarificationIntervention.gate);
     return { flow: "continue", newState };
   }
   if (
@@ -591,24 +692,54 @@ export async function handleInteractiveReflectionDone(
 
   // 2a. Verifier says "continue"
   if (verifierIntervention.kind === "continue" && verifierIntervention.gate) {
+    const loopRecovery = await runInteractiveLoopRecovery(
+      ctx,
+      agentState,
+      "verifier_continue",
+      verifierIntervention.result.summary,
+      verifierIntervention.gate,
+    );
+    const continuedState = applyReflectionContinuation(agentState, ctx.responseText);
+    const recoveryStatus =
+      loopRecovery?.action === "replan"
+        ? "replanned"
+        : loopRecovery?.action === "blocked"
+          ? "blocked"
+          : "continued";
     ctx.recordPhaseOutcome({
       chatId: ctx.chatId,
       identityKey: ctx.identityKey,
       assignment: ctx.currentAssignment,
       phase: "reflecting",
-      status: "continued",
+      status: recoveryStatus,
       task: ctx.executionStrategy.task,
       reason: verifierIntervention.result.summary,
       telemetry: ctx.buildPhaseOutcomeTelemetry({
-        state: agentState,
+        state: loopRecovery?.action === "replan" ? continuedState : agentState,
         usage: ctx.responseUsage,
-        verifierDecision: "continue",
+        verifierDecision: loopRecovery?.action === "replan" ? "replan" : "continue",
         failureReason: verifierIntervention.result.summary,
       }),
     });
-    const newState = applyReflectionContinuation(agentState, ctx.responseText);
-    pushContinuationMessages(ctx, verifierIntervention.gate);
-    return { flow: "continue", newState };
+    if (loopRecovery?.action === "blocked" && loopRecovery.message) {
+      return { flow: "blocked", visibleText: loopRecovery.message };
+    }
+    if (loopRecovery?.action === "replan" && loopRecovery.gate) {
+      pushContinuationMessages(ctx, loopRecovery.gate);
+      return {
+        flow: "continue",
+        newState: handleVerifierReplan({
+          agentState,
+          executionJournal: ctx.executionJournal,
+          responseText: ctx.responseText,
+          reason: loopRecovery.summary ?? verifierIntervention.result.summary,
+          providerName: ctx.executionStrategy.reviewer.providerName,
+          modelId: ctx.executionStrategy.reviewer.modelId,
+        }),
+      };
+    }
+    pushContinuationMessages(ctx, loopRecovery?.gate ?? verifierIntervention.gate);
+    return { flow: "continue", newState: continuedState };
   }
 
   // 2b. Verifier says "replan"
@@ -656,7 +787,31 @@ export async function handleInteractiveReflectionDone(
   }, ctx.interventionDeps);
 
   if (visibilityDecision.kind === "internal_continue" && visibilityDecision.gate) {
-    pushContinuationMessages(ctx, visibilityDecision.gate);
+    const loopRecovery = await runInteractiveLoopRecovery(
+      ctx,
+      agentState,
+      "visibility_internal_continue",
+      visibilityDecision.reason,
+      visibilityDecision.gate,
+    );
+    if (loopRecovery?.action === "blocked" && loopRecovery.message) {
+      return { flow: "blocked", visibleText: loopRecovery.message };
+    }
+    if (loopRecovery?.action === "replan" && loopRecovery.gate) {
+      pushContinuationMessages(ctx, loopRecovery.gate);
+      return {
+        flow: "continue",
+        newState: handleVerifierReplan({
+          agentState,
+          executionJournal: ctx.executionJournal,
+          responseText: ctx.responseText,
+          reason: loopRecovery.summary ?? visibilityDecision.reason,
+          providerName: ctx.executionStrategy.reviewer.providerName,
+          modelId: ctx.executionStrategy.reviewer.modelId,
+        }),
+      };
+    }
+    pushContinuationMessages(ctx, loopRecovery?.gate ?? visibilityDecision.gate);
     const newState = applyReflectionContinuation(agentState, ctx.responseText);
     return { flow: "continue", newState };
   }
@@ -769,7 +924,32 @@ export async function handleInteractiveReflectionContinue(
       };
     }
 
-    pushContinuationMessages(ctx, "Please continue.");
+    const loopRecovery = await runInteractiveLoopRecovery(
+      ctx,
+      agentState,
+      "reflection_continue",
+      "Reflection requested continuation without tool execution.",
+      "Please continue.",
+    );
+    if (loopRecovery?.action === "blocked" && loopRecovery.message) {
+      return { flow: "blocked", visibleText: loopRecovery.message };
+    }
+    if (loopRecovery?.action === "replan" && loopRecovery.gate) {
+      pushContinuationMessages(ctx, loopRecovery.gate);
+      return {
+        flow: "continue",
+        newState: handleVerifierReplan({
+          agentState,
+          executionJournal: ctx.executionJournal,
+          responseText: ctx.responseText,
+          reason: loopRecovery.summary ?? "Loop recovery requested a different approach.",
+          providerName: ctx.executionStrategy.reviewer.providerName,
+          modelId: ctx.executionStrategy.reviewer.modelId,
+        }),
+      };
+    }
+
+    pushContinuationMessages(ctx, loopRecovery?.gate ?? "Please continue.");
   }
 
   return { flow: "continue", newState };

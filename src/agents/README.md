@@ -7,6 +7,7 @@ The agents subsystem contains the orchestrator (agent loop), AI providers, tools
 ## Orchestrator (`orchestrator.ts` + 16 helper modules)
 
 The `Orchestrator` class implements a single-agent, multi-tool loop with two execution modes: background tasks (autonomous, epoch-based) and interactive agent loops (user-facing, streaming). One orchestrator instance per application — the tool set defines what it can do.
+It is the execution authority for Strada's coding work: both interactive and background runs go through the same PAOR control plane, verifier gates, and loop-recovery machinery even when multi-agent delegation or daemon autonomy is enabled.
 
 The orchestrator delegates to 16 focused helper modules for intervention pipelines, reflection handling, end-turn processing, session management, tool execution, consensus, and more. The core `orchestrator.ts` (~5,185 lines) coordinates these modules while the total ecosystem spans ~13,000 lines.
 
@@ -95,6 +96,8 @@ The autonomy layer now also includes:
 - **Interaction Policy State Machine** — Keeps plan-review, write-block, and approval intent inside the control plane instead of surfacing provider planning drafts directly to the user
 - **Task Execution Memory** — Persists session summaries, open items, verifier memory, and learned insights separately from user profile state so recovery context survives without polluting persona/preferences
 - **Execution Replay** — Reuses prior recorded learning trajectories as cross-session hints, weighted by task similarity, same-world fingerprints, and terminal verdict quality when the replay phase is itself terminal or verification-oriented
+- **Control Loop Tracker + Progress Assessment** — Tracks repeated text-only/internal-continue gates and runs a structured stuck/progress assessment before letting the loop continue
+- **Shared Loop Recovery** — Interactive and background PAOR paths now use the same recovery executor, so clarification/visibility/verifier/reflection continue paths escalate through the same replan/delegation logic instead of silently spinning
 
 ## Plugins (`plugins/plugin-loader.ts`)
 
@@ -144,7 +147,7 @@ Tools are namespaced: `plugin_my-plugin_hello`. Path traversal is validated. All
 | `autonomy/task-planner.ts` | Stall detection, budget warnings, learning trajectory |
 | `autonomy/self-verification.ts` | Build verification gate |
 | `autonomy/execution-journal.ts` | Task branches, failed approaches, rollback memory |
-| `autonomy/control-loop-tracker.ts` | Background loop iteration tracking |
+| `autonomy/control-loop-tracker.ts` | Shared text-only gate tracking and loop-recovery fingerprints for interactive + background PAOR paths |
 | `autonomy/strada-conformance.ts` | Strada.Core conformance guard |
 | `autonomy/constants.ts` | MUTATION_TOOLS, VERIFY_TOOLS, COMPILABLE_EXT |
 

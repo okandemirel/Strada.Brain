@@ -330,6 +330,8 @@ describe("SetupWizard path validation", () => {
     expect(envContent).toContain('KIMI_API_KEY="sk-kimi"');
     expect(envContent).toContain("AUTONOMOUS_DEFAULT_ENABLED=true");
     expect(envContent).toContain("AUTONOMOUS_DEFAULT_HOURS=48");
+    expect(envContent).toContain("MULTI_AGENT_ENABLED=true");
+    expect(envContent).toContain("TASK_DELEGATION_ENABLED=true");
   });
 
   it("resolves setup completion even when waiting starts after save", async () => {

@@ -244,10 +244,12 @@ Security-related environment variables:
 | `RATE_LIMIT_DAILY_BUDGET_USD` | Max daily spend | `50` |
 | `RATE_LIMIT_MONTHLY_BUDGET_USD` | Max monthly spend | `1000` |
 | `MULTI_AGENT_ENABLED` | Enable multi-agent orchestration | `true` |
-| `TASK_DELEGATION_ENABLED` | Enable task delegation | `false` |
+| `TASK_DELEGATION_ENABLED` | Enable task delegation | `true` |
 | `AGENT_MAX_DELEGATION_DEPTH` | Maximum delegation chain depth | `2` |
 | `DEPLOY_ENABLED` | Enable deployment subsystem | `false` |
 | `WEBSOCKET_DASHBOARD_ALLOWED_ORIGINS` | Additional allowed WebSocket origins | (localhost only) |
+
+Fresh setup now writes both `MULTI_AGENT_ENABLED=true` and `TASK_DELEGATION_ENABLED=true` by default. Delegation still remains gated by multi-agent initialization, so it does not activate when `MULTI_AGENT_ENABLED=false`.
 
 ## Deployment Recommendations
 
