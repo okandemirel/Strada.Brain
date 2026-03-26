@@ -3,6 +3,45 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import McpInstallPanel from './McpInstallPanel'
 
 describe('McpInstallPanel', () => {
+  it('renders live dependency metadata with versions, sources, and project-relative paths', () => {
+    const html = renderToStaticMarkup(
+      <McpInstallPanel
+        projectPath="/Users/test/GameProject"
+        stradaDeps={{
+          coreInstalled: true,
+          corePath: '/Users/test/GameProject/Packages/strada.core',
+          coreVersion: '3.4.5',
+          coreSource: 'package-directory',
+          modulesInstalled: true,
+          modulesPath: null,
+          modulesVersion: null,
+          modulesSource: 'manifest',
+          mcpInstalled: true,
+          mcpPath: '/Users/test/GameProject/Packages/Submodules/Strada.MCP',
+          mcpVersion: '1.2.3',
+          mcpSource: 'project-local',
+          warnings: [],
+        }}
+        dependencyWarnings={[]}
+        mcpRecommendation={null}
+        mcpInstallStatus="idle"
+        mcpInstallError={null}
+        mcpInstallMessage={null}
+        mcpInstallPlan={null}
+        onInstall={() => {}}
+      />,
+    )
+
+    expect(html).toContain('3/3 packages detected')
+    expect(html).toContain('v3.4.5')
+    expect(html).toContain('Unity package')
+    expect(html).toContain('Manifest reference')
+    expect(html).toContain('Packages/strada.core')
+    expect(html).toContain('Packages/manifest.json')
+    expect(html).toContain('This project')
+    expect(html).toContain('Packages/Submodules/Strada.MCP')
+  })
+
   it('renders a clearer install flow with target cards and runtime checklist', () => {
     const html = renderToStaticMarkup(
       <McpInstallPanel
@@ -145,7 +184,7 @@ describe('McpInstallPanel', () => {
     )
 
     expect(html).toContain('Runtime ready')
-    expect(html).toContain('/Users/test/GameProject/Packages/Submodules/Strada.MCP')
+    expect(html).toContain('Packages/Submodules/Strada.MCP')
     expect(html).toContain('file:Submodules/Strada.MCP/unity-package/com.strada.mcp')
     expect(html).toContain('npm install completed')
     expect(html).toContain('1.2.3')

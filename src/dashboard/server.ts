@@ -1302,11 +1302,16 @@ export class DashboardServer {
         const deps = this.stradaDeps ? {
           coreInstalled: this.stradaDeps.coreInstalled,
           corePath: this.stradaDeps.corePath,
+          coreVersion: this.stradaDeps.coreVersion,
+          coreSource: this.stradaDeps.coreSource,
           modulesInstalled: this.stradaDeps.modulesInstalled,
           modulesPath: this.stradaDeps.modulesPath,
+          modulesVersion: this.stradaDeps.modulesVersion,
+          modulesSource: this.stradaDeps.modulesSource,
           mcpInstalled: this.stradaDeps.mcpInstalled,
           mcpPath: this.stradaDeps.mcpPath,
           mcpVersion: this.stradaDeps.mcpVersion,
+          mcpSource: this.stradaDeps.mcpSource,
         } : null;
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ identity, deps }));

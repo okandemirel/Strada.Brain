@@ -22,13 +22,26 @@ import {
 export interface StradaDepsStatus {
   readonly coreInstalled: boolean;
   readonly corePath: string | null;
+  readonly coreVersion?: string | null;
+  readonly coreSource?: StradaDepInstallSource | null;
   readonly modulesInstalled: boolean;
   readonly modulesPath: string | null;
+  readonly modulesVersion?: string | null;
+  readonly modulesSource?: StradaDepInstallSource | null;
   readonly mcpInstalled: boolean;
   readonly mcpPath: string | null;
   readonly mcpVersion: string | null;
+  readonly mcpSource?: StradaDepInstallSource | null;
   readonly warnings: string[];
 }
+
+export type StradaDepInstallSource =
+  | "package-directory"
+  | "manifest"
+  | "project-local"
+  | "configured-path"
+  | "sibling-checkout"
+  | "global-install";
 
 export interface McpRecommendation {
   readonly recommended: boolean;
@@ -53,6 +66,7 @@ export interface StradaMcpInstall {
   readonly installed: boolean;
   readonly path: string | null;
   readonly version: string | null;
+  readonly source?: StradaDepInstallSource | null;
 }
 
 const CORE_NAMES = ["strada.core", "com.strada.core", "Strada.Core"] as const;
@@ -138,17 +152,24 @@ export function checkStradaDeps(
     return {
       coreInstalled: false,
       corePath: null,
+      coreVersion: null,
+      coreSource: null,
       modulesInstalled: false,
       modulesPath: null,
+      modulesVersion: null,
+      modulesSource: null,
       mcpInstalled: mcp.installed,
       mcpPath: mcp.path,
       mcpVersion: mcp.version,
+      mcpSource: mcp.source ?? null,
       warnings,
     };
   }
 
   const corePath = findPackage(packagesDir, CORE_NAMES);
   const modulesPath = findPackage(packagesDir, MODULES_NAMES);
+  const coreVersion = corePath ? readPackageVersion(corePath) : null;
+  const modulesVersion = modulesPath ? readPackageVersion(modulesPath) : null;
 
   // Fallback: check manifest.json
   const coreInManifest = !corePath && checkManifest(packagesDir, CORE_NAMES);
@@ -175,11 +196,16 @@ export function checkStradaDeps(
   return {
     coreInstalled: corePath !== null || coreInManifest,
     corePath,
+    coreVersion,
+    coreSource: corePath ? "package-directory" : coreInManifest ? "manifest" : null,
     modulesInstalled: modulesPath !== null || modulesInManifest,
     modulesPath,
+    modulesVersion,
+    modulesSource: modulesPath ? "package-directory" : modulesInManifest ? "manifest" : null,
     mcpInstalled: mcp.installed,
     mcpPath: mcp.path,
     mcpVersion: mcp.version,
+    mcpSource: mcp.source ?? null,
     warnings,
   };
 }
@@ -281,7 +307,7 @@ export function detectStradaMcp(
 ): StradaMcpInstall {
   const resolvedConfig = resolveStradaDependencyConfig(config);
   if (resolvedConfig.mcpPath) {
-    const configuredInstall = readStradaMcpInstall(resolvedConfig.mcpPath);
+    const configuredInstall = readStradaMcpInstall(resolvedConfig.mcpPath, "configured-path");
     if (configuredInstall) {
       return configuredInstall;
     }
@@ -297,7 +323,7 @@ export function detectStradaMcp(
   // 1. Check sibling directory relative to Strada.Brain project root
   const brainRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
   const siblingPath = join(brainRoot, "..", "Strada.MCP");
-  const siblingInstall = readStradaMcpInstall(siblingPath);
+  const siblingInstall = readStradaMcpInstall(siblingPath, "sibling-checkout");
   if (siblingInstall) {
     return siblingInstall;
   }
@@ -311,7 +337,7 @@ export function detectStradaMcp(
     if (which) {
       const binDir = dirname(which);
       const globalPkgPath = join(binDir, "..", "lib", "node_modules", "strada-mcp");
-      const globalInstall = readStradaMcpInstall(globalPkgPath);
+      const globalInstall = readStradaMcpInstall(globalPkgPath, "global-install");
       if (globalInstall) {
         return globalInstall;
       }
@@ -320,7 +346,7 @@ export function detectStradaMcp(
     // `which` failed — strada-mcp not on PATH
   }
 
-  return { installed: false, path: null, version: null };
+  return { installed: false, path: null, version: null, source: null };
 }
 
 export function buildMcpRecommendation(
@@ -358,7 +384,7 @@ export function buildMcpRecommendation(
 function readProjectLocalStradaMcpInstall(unityProjectPath: string): StradaMcpInstall | null {
   for (const relativePath of MCP_PROJECT_LOCAL_CANDIDATES) {
     const candidate = join(unityProjectPath, relativePath);
-    const install = readStradaMcpInstall(candidate);
+    const install = readStradaMcpInstall(candidate, "project-local");
     if (install) {
       return install;
     }
@@ -367,7 +393,10 @@ function readProjectLocalStradaMcpInstall(unityProjectPath: string): StradaMcpIn
   return null;
 }
 
-function readStradaMcpInstall(candidatePath: string): StradaMcpInstall | null {
+function readStradaMcpInstall(
+  candidatePath: string,
+  source?: StradaDepInstallSource,
+): StradaMcpInstall | null {
   const packageJsonPath = join(candidatePath, "package.json");
   const metadata = readPackageMetadata(packageJsonPath);
   if (!metadata || metadata.name !== STRADA_MCP_PACKAGE_NAME) {
@@ -378,6 +407,7 @@ function readStradaMcpInstall(candidatePath: string): StradaMcpInstall | null {
     installed: true,
     path: candidatePath,
     version: metadata.version ?? null,
+    source: source ?? null,
   };
 }
 
@@ -388,6 +418,10 @@ function readPackageMetadata(packageJsonPath: string): { name?: string; version?
   } catch {
     return null;
   }
+}
+
+function readPackageVersion(packagePath: string): string | null {
+  return readPackageMetadata(join(packagePath, "package.json"))?.version ?? null;
 }
 
 function findPackage(packagesDir: string, names: readonly string[]): string | null {

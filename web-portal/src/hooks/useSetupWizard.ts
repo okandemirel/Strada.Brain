@@ -572,8 +572,8 @@ export function useSetupWizard() {
     }
   }, [applyPathAnalysis, projectPath])
 
-  const installDep = useCallback(async (pkg: StradaDepPackage): Promise<boolean> => {
-    const installPath = projectPath.trim()
+  const installDep = useCallback(async (pkg: StradaDepPackage, overridePath?: string): Promise<boolean> => {
+    const installPath = (overridePath ?? projectPath).trim()
     if (!installPath) {
       setDepInstallStatus((prev) => ({ ...prev, [pkg]: 'error' }))
       setDepInstallError((prev) => ({ ...prev, [pkg]: 'Project path is required.' }))
@@ -597,6 +597,9 @@ export function useSetupWizard() {
         throw new Error(data.error ?? `Strada.${pkg === 'core' ? 'Core' : 'Modules'} install failed (${res.status})`)
       }
 
+      setProjectPathState(installPath)
+      setPathValid(true)
+      setPathError(null)
       applyPathAnalysis(data)
       setDepInstallStatus((prev) => ({ ...prev, [pkg]: 'success' }))
       return true

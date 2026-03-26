@@ -18,7 +18,7 @@ interface ProjectPathStepProps {
   depInstallError: Partial<Record<StradaDepPackage, string | null>>
   validatePath: () => Promise<void>
   installMcp: (target: McpInstallTarget) => Promise<boolean>
-  installDep: (pkg: StradaDepPackage) => Promise<boolean>
+  installDep: (pkg: StradaDepPackage, overridePath?: string) => Promise<boolean>
   openBrowser: () => void
   onNext: () => void
   onBack: () => void

@@ -712,18 +712,18 @@
   .save-message a { color: var(--color-accent); }
 
   /* Setup Path */
-  .path-input-group { margin-bottom: 16px; }
-  .path-input-row { display: flex; gap: 8px; }
+  .path-input-group { margin-bottom: 16px; text-align: left; }
+  .path-input-row { display: flex; gap: 8px; align-items: stretch; }
   .path-input { flex: 1; padding: 10px 14px; border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 10px; background: rgba(0, 0, 0, 0.36); color: #e8e8ed; font-size: 14px; font-family: "SF Mono", Consolas, monospace; outline: none; transition: all 0.2s; }
   .path-input:focus { border-color: var(--color-accent); box-shadow: 0 0 0 3px var(--color-accent-glow); }
-  .path-status { margin-top: 8px; font-size: 13px; }
+  .path-status { margin-top: 8px; font-size: 13px; text-align: left; }
   .path-status.valid { color: var(--color-success); }
   .path-status.invalid { color: var(--color-error); }
   .path-status.warning { color: var(--color-warning, #f0ad4e); }
 
   /* Setup Browser */
   .browser-overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.5); backdrop-filter: blur(12px); display: flex; align-items: center; justify-content: center; z-index: 200; padding: 24px; }
-  .browser-modal { background: rgba(20, 20, 30, 0.92); backdrop-filter: blur(40px) saturate(180%); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 20px; width: 100%; max-width: 600px; max-height: calc(100vh - 48px); display: flex; flex-direction: column; min-height: 0; overflow: hidden; box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3), 0 8px 32px rgba(0, 0, 0, 0.4); }
+  .browser-modal { background: rgba(20, 20, 30, 0.92); backdrop-filter: blur(40px) saturate(180%); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 20px; width: 100%; max-width: 720px; max-height: calc(100vh - 48px); display: flex; flex-direction: column; min-height: 0; overflow: hidden; box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3), 0 8px 32px rgba(0, 0, 0, 0.4); }
   .browser-header { display: flex; justify-content: space-between; align-items: center; padding: 18px 24px; border-bottom: 1px solid rgba(255, 255, 255, 0.08); }
   .browser-header h3 { font-size: 17px; font-weight: 600; color: #e8e8ed; }
   .unity-badge { font-size: 10px; font-weight: 600; padding: 3px 8px; border-radius: 6px; background: var(--color-accent-glow); color: var(--color-accent); text-transform: uppercase; }
@@ -737,41 +737,56 @@
   .browser-entry:hover { background: rgba(255, 255, 255, 0.04); }
   .browser-loading, .browser-error, .browser-empty { padding: 20px 24px; text-align: center; color: rgba(255, 255, 255, 0.5); font-size: 14px; }
   .browser-error { color: var(--color-error); }
-  .browser-context-panel { padding: 12px 24px; border-bottom: 1px solid rgba(255, 255, 255, 0.08); overflow-x: hidden; }
+  .browser-context-panel { padding: 16px 24px; border-bottom: 1px solid rgba(255, 255, 255, 0.08); overflow-x: hidden; }
   .browser-actions { padding: 14px 24px; border-top: 1px solid rgba(255, 255, 255, 0.08); display: flex; justify-content: flex-end; gap: 8px; }
 
   /* MCP Install Panel */
-  .mcp-panel { padding: 16px; border-radius: 14px; border: 1px solid rgba(255, 255, 255, 0.08); margin-bottom: 16px; overflow: hidden; min-width: 0; }
-  .mcp-panel.is-installed { background: rgba(52, 211, 153, 0.04); border-color: rgba(52, 211, 153, 0.15); }
-  .mcp-panel.is-missing { background: rgba(251, 191, 36, 0.04); border-color: rgba(251, 191, 36, 0.12); }
-  .mcp-panel-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 12px; }
-  .mcp-panel-eyebrow { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: rgba(255, 255, 255, 0.4); margin-bottom: 4px; }
-  .mcp-panel-title { font-size: 16px; font-weight: 700; color: #e8e8ed; }
-  .mcp-panel-copy { font-size: 13px; color: rgba(255, 255, 255, 0.5); line-height: 1.5; margin-top: 4px; text-align: left; }
-  .mcp-runtime-pill { font-size: 10px; font-weight: 600; padding: 3px 10px; border-radius: 8px; white-space: nowrap; }
+  .mcp-panel { position: relative; padding: 18px; border-radius: 18px; border: 1px solid rgba(255, 255, 255, 0.08); margin-bottom: 16px; overflow: hidden; min-width: 0; text-align: left; box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03); }
+  .mcp-panel.is-installed { background: linear-gradient(180deg, rgba(17, 33, 37, 0.98), rgba(15, 26, 33, 0.96)); border-color: rgba(52, 211, 153, 0.16); }
+  .mcp-panel.is-missing { background: linear-gradient(180deg, rgba(33, 29, 17, 0.98), rgba(26, 22, 15, 0.96)); border-color: rgba(251, 191, 36, 0.16); }
+  .mcp-panel-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 14px; flex-wrap: wrap; }
+  .mcp-panel-copy-group { min-width: 0; flex: 1 1 320px; }
+  .mcp-panel-eyebrow { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: rgba(255, 255, 255, 0.42); margin-bottom: 6px; }
+  .mcp-panel-title-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .mcp-panel-title { font-size: 22px; font-weight: 700; color: #f3f5fb; letter-spacing: -0.02em; }
+  .mcp-version-chip { font-size: 11px; font-weight: 700; padding: 4px 10px; border-radius: 999px; background: rgba(255, 255, 255, 0.06); color: rgba(255, 255, 255, 0.72); }
+  .mcp-panel-copy { font-size: 14px; color: rgba(255, 255, 255, 0.62); line-height: 1.6; margin-top: 8px; text-align: left; max-width: 58ch; }
+  .mcp-panel-runtime { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+  .mcp-runtime-pill { font-size: 10px; font-weight: 700; padding: 4px 10px; border-radius: 999px; white-space: nowrap; text-transform: uppercase; letter-spacing: 0.04em; }
   .mcp-runtime-pill.is-installed { background: rgba(52, 211, 153, 0.15); color: var(--color-success); }
   .mcp-runtime-pill.is-missing { background: rgba(251, 191, 36, 0.12); color: var(--color-warning); }
-  .mcp-dependency-grid { display: grid; grid-template-columns: 1fr; gap: 8px; margin-bottom: 12px; overflow: hidden; }
-  @media (min-width: 480px) { .mcp-dependency-grid { grid-template-columns: repeat(3, 1fr); } }
-  .mcp-dependency-card { padding: 10px; border-radius: 10px; border: 1px solid rgba(255, 255, 255, 0.06); }
+  .mcp-runtime-caption { font-size: 11px; color: rgba(255, 255, 255, 0.42); }
+  .mcp-panel-snapshot { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; margin-bottom: 14px; }
+  .mcp-panel-stat { padding: 12px 14px; border-radius: 12px; background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.06); display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+  .mcp-panel-stat-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: rgba(255, 255, 255, 0.42); }
+  .mcp-panel-stat-value { font-size: 13px; font-weight: 600; color: #f3f5fb; line-height: 1.4; }
+  .mcp-dependency-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin-bottom: 14px; overflow: hidden; }
+  .mcp-dependency-card { padding: 14px; border-radius: 14px; border: 1px solid rgba(255, 255, 255, 0.06); display: flex; flex-direction: column; gap: 8px; min-width: 0; background: rgba(255, 255, 255, 0.035); }
   .mcp-dependency-card.is-installed { background: rgba(52, 211, 153, 0.06); }
-  .mcp-dependency-card.is-missing { background: rgba(248, 113, 113, 0.06); }
-  .mcp-dependency-label { font-size: 11px; font-weight: 600; color: rgba(255, 255, 255, 0.5); text-transform: uppercase; }
-  .mcp-dependency-value { font-size: 13px; font-weight: 600; color: #e8e8ed; margin-top: 4px; }
-  .mcp-dependency-path { font-size: 10px; color: rgba(255, 255, 255, 0.3); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mcp-dependency-card.is-missing { background: rgba(248, 113, 113, 0.05); }
+  .mcp-dependency-topline { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+  .mcp-dependency-label { font-size: 11px; font-weight: 700; color: rgba(255, 255, 255, 0.52); text-transform: uppercase; letter-spacing: 0.06em; }
+  .mcp-dependency-pill { font-size: 10px; font-weight: 700; padding: 3px 8px; border-radius: 999px; white-space: nowrap; }
+  .mcp-dependency-pill.is-installed { background: rgba(52, 211, 153, 0.14); color: var(--color-success); }
+  .mcp-dependency-pill.is-missing { background: rgba(248, 113, 113, 0.12); color: var(--color-error); }
+  .mcp-dependency-main { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+  .mcp-dependency-value { font-size: 17px; font-weight: 700; color: #f3f5fb; letter-spacing: -0.02em; }
+  .mcp-dependency-source { font-size: 12px; color: rgba(255, 255, 255, 0.52); }
+  .mcp-dependency-meta-label { font-size: 10px; font-weight: 700; color: rgba(255, 255, 255, 0.36); text-transform: uppercase; letter-spacing: 0.08em; }
+  .mcp-dependency-path { font-size: 11px; color: rgba(255, 255, 255, 0.44); line-height: 1.45; min-width: 0; overflow-wrap: anywhere; word-break: break-word; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
   .mcp-dependency-path.mono { font-family: "SF Mono", Consolas, monospace; }
-  .mcp-dependency-install { margin-top: 6px; }
+  .mcp-dependency-install { margin-top: auto; padding-top: 2px; }
   .mcp-dependency-install .btn-sm { padding: 3px 10px; font-size: 11px; border-radius: 6px; }
   .mcp-dependency-install-status { display: block; font-size: 11px; margin-bottom: 4px; }
   .mcp-dependency-install-status.working { color: var(--color-accent, #58a6ff); }
   .mcp-dependency-install-status.success { color: var(--color-success); }
   .mcp-dependency-install-status.error { color: var(--color-error); }
-  .mcp-inline-note { font-size: 12px; color: rgba(255, 255, 255, 0.4); padding: 8px 12px; border-radius: 8px; background: rgba(255, 255, 255, 0.03); margin-bottom: 12px; word-break: break-word; overflow-wrap: break-word; }
+  .mcp-inline-note { font-size: 12px; color: rgba(255, 255, 255, 0.52); padding: 10px 12px; border-radius: 10px; background: rgba(255, 255, 255, 0.03); margin-bottom: 12px; word-break: break-word; overflow-wrap: break-word; }
   .mcp-inline-note.warning { color: var(--color-warning); background: rgba(251, 191, 36, 0.06); }
-  .mcp-install-summary { margin-top: 12px; }
-  .mcp-summary-item { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; font-size: 13px; }
-  .mcp-summary-label { color: rgba(255, 255, 255, 0.5); flex-shrink: 0; }
-  .mcp-summary-value { color: #e8e8ed; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .mcp-install-summary { margin-top: 14px; display: grid; gap: 4px; }
+  .mcp-summary-item { display: grid; grid-template-columns: minmax(0, 132px) minmax(0, 1fr); gap: 12px; align-items: start; padding: 6px 0; font-size: 13px; }
+  .mcp-summary-label { color: rgba(255, 255, 255, 0.5); }
+  .mcp-summary-value { color: #e8e8ed; font-weight: 500; min-width: 0; overflow-wrap: anywhere; word-break: break-word; white-space: normal; }
   .mcp-summary-value.mono { font-family: "SF Mono", Consolas, monospace; font-size: 12px; }
   .mcp-feature-list { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
   .mcp-feature-chip { font-size: 11px; padding: 4px 10px; border-radius: 8px; background: var(--color-accent-glow); color: var(--color-accent); font-weight: 500; }
@@ -807,6 +822,14 @@
   /* ===== Responsive ===== */
   @media (max-width: 1024px) {
     .metric-grid-responsive { grid-template-columns: repeat(2, 1fr) !important; }
+  }
+  @media (max-width: 700px) {
+    .path-input-row { flex-direction: column; }
+    .path-input-row .btn { width: 100%; }
+    .browser-modal { max-width: none; }
+    .mcp-panel { padding: 16px; }
+    .mcp-panel-runtime { align-items: flex-start; }
+    .mcp-summary-item { grid-template-columns: 1fr; gap: 4px; }
   }
   @media (max-width: 480px) {
     .metric-grid-responsive { grid-template-columns: 1fr !important; }

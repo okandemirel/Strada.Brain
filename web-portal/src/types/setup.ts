@@ -49,14 +49,27 @@ export interface BrowseEntry {
   name: string
 }
 
+export type StradaDepInstallSource =
+  | 'package-directory'
+  | 'manifest'
+  | 'project-local'
+  | 'configured-path'
+  | 'sibling-checkout'
+  | 'global-install'
+
 export interface StradaDepsStatus {
   coreInstalled: boolean
   corePath: string | null
+  coreVersion?: string | null
+  coreSource?: StradaDepInstallSource | null
   modulesInstalled: boolean
   modulesPath: string | null
+  modulesVersion?: string | null
+  modulesSource?: StradaDepInstallSource | null
   mcpInstalled: boolean
   mcpPath: string | null
   mcpVersion: string | null
+  mcpSource?: StradaDepInstallSource | null
   warnings: string[]
 }
 

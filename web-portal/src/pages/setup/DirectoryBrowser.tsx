@@ -26,7 +26,7 @@ interface DirectoryBrowserProps {
   error: string | null
   browseTo: (path: string) => void
   installMcp: (target: McpInstallTarget, overridePath?: string) => Promise<boolean>
-  installDep?: (pkg: StradaDepPackage) => Promise<boolean>
+  installDep?: (pkg: StradaDepPackage, overridePath?: string) => Promise<boolean>
   onSelect: () => void
   onClose: () => void
 }
@@ -146,7 +146,7 @@ export default function DirectoryBrowser({
                   })
                 }}
                 onInstallDep={installDep ? (pkg) => {
-                  void installDep(pkg).then((installed) => {
+                  void installDep(pkg, currentPath).then((installed) => {
                     if (installed) {
                       browseTo(currentPath)
                     }

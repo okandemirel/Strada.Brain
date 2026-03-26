@@ -44,9 +44,15 @@ describe("checkStradaDeps", () => {
 
   it("detects strada.core directory", () => {
     mkdirSync(join(testDir, "Packages", "strada.core"), { recursive: true });
+    writeFileSync(
+      join(testDir, "Packages", "strada.core", "package.json"),
+      JSON.stringify({ name: "com.strada.core", version: "3.4.5" }),
+    );
     const result = checkStradaDeps(testDir);
     expect(result.coreInstalled).toBe(true);
     expect(result.corePath).toBe(join(testDir, "Packages", "strada.core"));
+    expect(result.coreVersion).toBe("3.4.5");
+    expect(result.coreSource).toBe("package-directory");
   });
 
   it("detects com.strada.core directory", () => {
@@ -86,6 +92,8 @@ describe("checkStradaDeps", () => {
     const result = checkStradaDeps(testDir);
     expect(result.coreInstalled).toBe(true);
     expect(result.corePath).toBeNull(); // manifest-only detection has no path
+    expect(result.coreVersion).toBeNull();
+    expect(result.coreSource).toBe("manifest");
   });
 
   it("produces no core warning when core is installed", () => {
@@ -116,6 +124,7 @@ describe("checkStradaDeps", () => {
     expect(result.mcpInstalled).toBe(true);
     expect(result.mcpPath).toBe(mcpDir);
     expect(result.mcpVersion).toBe("1.2.3");
+    expect(result.mcpSource).toBe("configured-path");
   });
 
   it("detects a project-local Strada.MCP install inside Packages/Submodules", () => {
@@ -131,6 +140,7 @@ describe("checkStradaDeps", () => {
     expect(result.mcpInstalled).toBe(true);
     expect(result.mcpPath).toBe(localMcpDir);
     expect(result.mcpVersion).toBe("2.0.0");
+    expect(result.mcpSource).toBe("project-local");
   });
 
   it("warns when configured STRADA_MCP_PATH is invalid", () => {
