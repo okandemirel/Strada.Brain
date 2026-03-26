@@ -160,7 +160,7 @@ describe("loadConfig", () => {
     expect(config.llmStreamInitialTimeoutMs).toBe(600000);
     expect(config.llmStreamStallTimeoutMs).toBe(120000);
     expect(config.interaction).toEqual({
-      mode: "silent-first",
+      mode: "phase-driven",
       heartbeatAfterMs: 120000,
       heartbeatIntervalMs: 300000,
       escalationPolicy: "hard-blockers-only",
