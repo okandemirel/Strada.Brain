@@ -94,6 +94,49 @@ describe('dispatchWorkspaceMessage', () => {
     expect(useCanvasStore.getState().pendingShapes[0].source).toBe('agent')
   })
 
+  it('handles canvas:shapes_update by queueing mutation updates', () => {
+    dispatchWorkspaceMessage({
+      type: 'canvas:shapes_update',
+      payload: {
+        shapes: [
+          { id: 'shape-2', props: { width: 220 } },
+        ],
+      },
+    })
+
+    expect(useCanvasStore.getState().pendingUpdates).toEqual([
+      { id: 'shape-2', props: { width: 220 }, source: 'agent' },
+    ])
+  })
+
+  it('handles canvas:shapes_remove by queueing removals', () => {
+    dispatchWorkspaceMessage({
+      type: 'canvas:shapes_remove',
+      payload: {
+        shapeIds: ['shape-3'],
+      },
+    })
+
+    expect(useCanvasStore.getState().pendingRemovals).toEqual(['shape-3'])
+  })
+
+  it('handles canvas:agent_draw updates by queueing updates and switching to canvas', () => {
+    dispatchWorkspaceMessage({
+      type: 'canvas:agent_draw',
+      payload: {
+        action: 'update',
+        shapes: [
+          { id: 'shape-4', type: 'diagram-node', props: { label: 'Updated' } },
+        ],
+      },
+    })
+
+    expect(useWorkspaceStore.getState().mode).toBe('canvas')
+    expect(useCanvasStore.getState().pendingUpdates).toEqual([
+      { id: 'shape-4', type: 'diagram-node', props: { label: 'Updated' }, source: 'agent' },
+    ])
+  })
+
   it('does not override user-set mode on workspace:mode_suggest', () => {
     useWorkspaceStore.getState().setMode('canvas')
 
@@ -265,14 +308,16 @@ describe('dispatchWorkspaceMessage — mode_suggest notifications', () => {
 describe('dispatchWorkspaceMessage — code:* events', () => {
   beforeEach(() => {
     useCodeStore.getState().reset()
+    useWorkspaceStore.getState().reset()
   })
 
-  it('code:file_open dispatches to useCodeStore.openFile and markTouched("new")', () => {
+  it('code:file_open dispatches to useCodeStore.openFile, marks touched when provided, and switches to code', () => {
     dispatchWorkspaceMessage({
       type: 'code:file_open',
       path: 'src/index.ts',
       content: 'console.log("hi")',
       language: 'typescript',
+      touchedStatus: 'new',
     })
 
     const state = useCodeStore.getState()
@@ -282,6 +327,7 @@ describe('dispatchWorkspaceMessage — code:* events', () => {
     expect(state.tabs[0].language).toBe('typescript')
     expect(state.activeTab).toBe('src/index.ts')
     expect(state.touchedFiles.get('src/index.ts')).toBe('new')
+    expect(useWorkspaceStore.getState().mode).toBe('code')
   })
 
   it('code:file_update dispatches to useCodeStore.openFile with isDiff and markTouched("modified")', () => {
@@ -363,6 +409,7 @@ describe('dispatchWorkspaceMessage — code:* events', () => {
         path: 'src/wrapped.ts',
         content: 'wrapped content',
         language: 'typescript',
+        touchedStatus: 'new',
       },
     })
 
@@ -372,5 +419,19 @@ describe('dispatchWorkspaceMessage — code:* events', () => {
     expect(state.tabs[0].content).toBe('wrapped content')
     expect(state.activeTab).toBe('src/wrapped.ts')
     expect(state.touchedFiles.get('src/wrapped.ts')).toBe('new')
+  })
+
+  it('code:file_open without touchedStatus leaves changed-files list untouched', () => {
+    dispatchWorkspaceMessage({
+      type: 'code:file_open',
+      path: 'src/read-only.ts',
+      content: 'const value = 1',
+      language: 'typescript',
+    })
+
+    const state = useCodeStore.getState()
+    expect(state.tabs).toHaveLength(1)
+    expect(state.touchedFiles.size).toBe(0)
+    expect(useWorkspaceStore.getState().mode).toBe('code')
   })
 })

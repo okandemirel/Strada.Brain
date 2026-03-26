@@ -121,6 +121,7 @@ export interface WorkspaceEventMap {
     path: string
     content: string
     language: string
+    touchedStatus?: 'modified' | 'new' | 'deleted'
   }
   'code:file_update': {
     path: string

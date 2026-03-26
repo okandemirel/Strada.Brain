@@ -1,94 +1,172 @@
+.strada-canvas-stage {
+  --strada-canvas-border: rgba(255, 255, 255, 0.1);
+  --strada-canvas-surface: rgba(9, 14, 23, 0.82);
+  --strada-canvas-surface-strong: rgba(6, 10, 17, 0.92);
+  --strada-canvas-shadow: 0 24px 80px rgba(0, 0, 0, 0.28);
+}
+
+.strada-canvas-stage .tl-background__wrapper {
+  background:
+    radial-gradient(circle at top left, rgba(125, 211, 252, 0.1), transparent 22%),
+    radial-gradient(circle at 82% 14%, rgba(52, 211, 153, 0.08), transparent 18%),
+    linear-gradient(180deg, rgba(7, 10, 16, 0.96), rgba(4, 7, 12, 1));
+}
+
+.strada-canvas-stage .tl-background {
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+  background-size: 34px 34px;
+  opacity: 0.18;
+}
+
 /* AI badge on agent-created shapes */
 .strada-ai-badge {
   position: absolute;
-  top: 4px;
-  right: 4px;
-  font-size: 9px;
+  top: 10px;
+  right: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  border-radius: 999px;
+  border: 1px solid rgba(125, 211, 252, 0.18);
+  background: rgba(125, 211, 252, 0.1);
+  padding: 0 9px;
+  color: rgba(186, 230, 253, 0.9);
+  font-size: 10px;
   font-weight: 700;
-  color: rgba(0, 229, 255, 0.4);
-  background: rgba(0, 229, 255, 0.08);
-  border: 1px solid rgba(0, 229, 255, 0.15);
-  border-radius: 4px;
-  padding: 1px 4px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
   pointer-events: none;
-  transition: opacity 0.2s;
-  opacity: 0.5;
-  z-index: 1;
+  transition: opacity 0.2s ease;
+  opacity: 0.72;
+  z-index: 2;
+}
+
+.strada-ai-badge::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: #7dd3fc;
+  box-shadow: 0 0 10px rgba(125, 211, 252, 0.5);
 }
 
 .strada-ai-badge:hover,
 *:hover > .strada-ai-badge {
   opacity: 1;
-  color: rgba(0, 229, 255, 0.8);
 }
 
 /* Custom toolbar shape buttons */
 .strada-toolbar-separator {
-  width: 100%;
+  width: calc(100% - 12px);
   height: 1px;
-  background: rgba(255, 255, 255, 0.1);
-  margin: 4px 0;
+  margin: 6px;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.14), transparent);
 }
 
 .strada-toolbar-btn {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
-  height: 36px;
-  border-radius: 8px;
-  border: none;
-  background: transparent;
-  color: rgba(166, 173, 200, 0.8);
-  font-size: 14px;
+  width: 40px;
+  height: 40px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.035);
+  color: rgba(232, 232, 237, 0.88);
+  font-size: 13px;
   cursor: pointer;
-  transition: all 0.15s ease;
-  backdrop-filter: blur(12px);
+  transition: transform 0.15s ease, border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+  backdrop-filter: blur(18px);
 }
 
 .strada-toolbar-btn:hover {
-  background: rgba(0, 229, 255, 0.1);
-  color: rgba(205, 214, 244, 1);
-  box-shadow: 0 0 8px rgba(0, 229, 255, 0.15);
+  border-color: rgba(125, 211, 252, 0.24);
+  background: rgba(125, 211, 252, 0.1);
+  box-shadow: 0 0 24px rgba(125, 211, 252, 0.12);
 }
 
 .strada-toolbar-btn:active {
   transform: scale(0.95);
 }
 
-/* Glassmorphism for tldraw popover/context menu */
-.tl-container .tlui-popover__content {
-  backdrop-filter: blur(12px);
-  background: rgba(18, 18, 26, 0.85);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+/* Shared chrome */
+.strada-canvas-stage .tlui-popover__content,
+.strada-canvas-stage .tlui-menu__wrapper,
+.strada-canvas-stage .tlui-style-panel__wrapper,
+.strada-canvas-stage .tlui-toolbar,
+.strada-canvas-stage .tlui-navigation-panel {
+  backdrop-filter: blur(24px);
+  background: var(--strada-canvas-surface) !important;
+  border: 1px solid var(--strada-canvas-border);
+  box-shadow: var(--strada-canvas-shadow);
+}
+
+.strada-canvas-stage .tlui-popover__content,
+.strada-canvas-stage .tlui-menu__wrapper,
+.strada-canvas-stage .tlui-style-panel__wrapper {
+  border-radius: 22px;
+}
+
+.strada-canvas-stage .tlui-toolbar {
+  border-radius: 24px;
+  padding: 8px;
+}
+
+.strada-canvas-stage .tlui-toolbar__tools,
+.strada-canvas-stage .tlui-toolbar__extras {
+  backdrop-filter: none;
+  background: transparent !important;
+}
+
+.strada-canvas-stage .tlui-toolbar__tools__list,
+.strada-canvas-stage .tlui-toolbar__extras__controls {
+  gap: 6px;
+}
+
+.strada-canvas-stage .tlui-button,
+.strada-canvas-stage .tlui-toolbar-toggle-group-item {
+  border-radius: 14px !important;
+}
+
+.strada-canvas-stage .tlui-button {
+  border: 1px solid transparent;
+  transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s ease;
+}
+
+.strada-canvas-stage .tlui-button:hover {
+  border-color: rgba(125, 211, 252, 0.18);
+  background: rgba(125, 211, 252, 0.08);
+}
+
+.strada-canvas-stage .tlui-button[data-state='open'],
+.strada-canvas-stage .tlui-button[aria-checked='true'] {
+  background: rgba(125, 211, 252, 0.12) !important;
+  border-color: rgba(125, 211, 252, 0.18);
+}
+
+.strada-canvas-stage .tlui-style-panel {
+  padding: 10px;
+}
+
+.strada-canvas-stage .tlui-navigation-panel {
+  border-radius: 18px;
+}
+
+.strada-canvas-stage .tlui-minimap {
+  display: none !important;
 }
 
 /* Hide tldraw Page sidebar */
-.tlui-page-menu__wrapper { display: none !important; }
+.strada-canvas-stage .tlui-page-menu__wrapper {
+  display: none !important;
+}
 
 /* Hide tldraw watermark */
-.tl-watermark_SEE-LICENSE { display: none !important; }
-a[href*="tldraw.dev"] { display: none !important; }
-.tl-watermark { display: none !important; }
-
-/* Glassmorphism toolbar */
-.tlui-toolbar {
-  backdrop-filter: blur(12px);
-  background: rgba(18, 18, 26, 0.85) !important;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 12px;
-}
-
-/* Style panels */
-.tlui-style-panel__wrapper {
-  backdrop-filter: blur(12px);
-  background: rgba(18, 18, 26, 0.85) !important;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-}
-
-/* Menu panels */
-.tlui-menu__wrapper,
-.tlui-toolbar__tools {
-  backdrop-filter: blur(12px);
-  background: rgba(18, 18, 26, 0.85) !important;
+.strada-canvas-stage .tl-watermark_SEE-LICENSE,
+.strada-canvas-stage a[href*="tldraw.dev"],
+.strada-canvas-stage .tl-watermark {
+  display: none !important;
 }

@@ -8,6 +8,13 @@ import {
 
 import './canvas-styles.css'
 
+const uiFont = '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif'
+const monoFont = '"SF Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace'
+const primaryText = '#f5f7fb'
+const secondaryText = '#97a1b5'
+const tertiaryText = '#667085'
+const panelRadius = 24
+
 /** Renders a small "AI" badge when source is 'agent'. */
 export function AiBadge({ source }: { source?: string }) {
   if (source !== 'agent') return null
@@ -86,11 +93,148 @@ type ConnectionArrowShape = TLBaseShape<
 const baseContainerStyle: React.CSSProperties = {
   width: '100%',
   height: '100%',
-  borderRadius: 8,
+  borderRadius: panelRadius,
   overflow: 'hidden',
-  fontFamily: 'system-ui, -apple-system, sans-serif',
+  fontFamily: uiFont,
   fontSize: 13,
   pointerEvents: 'all',
+  position: 'relative',
+}
+
+function createPanelStyle({
+  border,
+  glow,
+  background,
+}: {
+  border: string
+  glow: string
+  background?: string
+}): React.CSSProperties {
+  return {
+    ...baseContainerStyle,
+    background: background ?? 'linear-gradient(180deg, rgba(12, 18, 29, 0.98), rgba(8, 12, 20, 0.96))',
+    border: `1px solid ${border}`,
+    boxShadow: `0 18px 56px ${glow}`,
+    backdropFilter: 'blur(18px)',
+  }
+}
+
+function createHeaderStyle(borderColor: string): React.CSSProperties {
+  return {
+    padding: '12px 14px',
+    borderBottom: `1px solid ${borderColor}`,
+    background: 'linear-gradient(180deg, rgba(255,255,255,0.035), rgba(255,255,255,0.01))',
+  }
+}
+
+function createPillStyle({
+  color,
+  background,
+  border,
+}: {
+  color: string
+  background: string
+  border: string
+}): React.CSSProperties {
+  return {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 999,
+    padding: '4px 9px',
+    fontSize: 10,
+    fontWeight: 700,
+    textTransform: 'uppercase',
+    letterSpacing: '0.14em',
+    color,
+    background,
+    border: `1px solid ${border}`,
+  }
+}
+
+function createMonoBodyStyle(): React.CSSProperties {
+  return {
+    flex: 1,
+    margin: 0,
+    padding: 14,
+    overflow: 'auto',
+    whiteSpace: 'pre-wrap',
+    fontFamily: monoFont,
+    fontSize: 12,
+    lineHeight: 1.65,
+    color: '#d7deea',
+  }
+}
+
+function getSafeHexColor(color: string, fallback: string): string {
+  return /^#[0-9a-fA-F]{3,8}$/.test(color) ? color : fallback
+}
+
+function getStatusTone(status: string): { dot: string; background: string; border: string; label: string } {
+  const tones: Record<string, { dot: string; background: string; border: string; label: string }> = {
+    idle: {
+      dot: '#94a3b8',
+      background: 'rgba(148, 163, 184, 0.12)',
+      border: 'rgba(148, 163, 184, 0.18)',
+      label: '#cbd5e1',
+    },
+    active: {
+      dot: '#34d399',
+      background: 'rgba(52, 211, 153, 0.12)',
+      border: 'rgba(52, 211, 153, 0.18)',
+      label: '#a7f3d0',
+    },
+    error: {
+      dot: '#f87171',
+      background: 'rgba(248, 113, 113, 0.12)',
+      border: 'rgba(248, 113, 113, 0.18)',
+      label: '#fecaca',
+    },
+    pending: {
+      dot: '#fbbf24',
+      background: 'rgba(251, 191, 36, 0.12)',
+      border: 'rgba(251, 191, 36, 0.18)',
+      label: '#fde68a',
+    },
+  }
+  return tones[status] ?? tones.idle
+}
+
+function getPriorityTone(priority: string): { bar: string; background: string; border: string; label: string } {
+  const tones: Record<string, { bar: string; background: string; border: string; label: string }> = {
+    low: {
+      bar: '#34d399',
+      background: 'rgba(52, 211, 153, 0.12)',
+      border: 'rgba(52, 211, 153, 0.18)',
+      label: '#a7f3d0',
+    },
+    medium: {
+      bar: '#fbbf24',
+      background: 'rgba(251, 191, 36, 0.12)',
+      border: 'rgba(251, 191, 36, 0.18)',
+      label: '#fde68a',
+    },
+    high: {
+      bar: '#fb923c',
+      background: 'rgba(251, 146, 60, 0.12)',
+      border: 'rgba(251, 146, 60, 0.18)',
+      label: '#fdba74',
+    },
+    critical: {
+      bar: '#f87171',
+      background: 'rgba(248, 113, 113, 0.12)',
+      border: 'rgba(248, 113, 113, 0.18)',
+      label: '#fecaca',
+    },
+  }
+  return tones[priority] ?? tones.medium
+}
+
+function diffLineColor(line: string): string {
+  if (line.startsWith('+')) return '#86efac'
+  if (line.startsWith('-')) return '#fca5a5'
+  if (line.startsWith('@')) return '#7dd3fc'
+  return '#d7deea'
 }
 
 // ---------------------------------------------------------------------------
@@ -116,50 +260,35 @@ export class CodeBlockShapeUtil extends BaseBoxShapeUtil<CodeBlockShape> {
     return (
       <HTMLContainer>
         <div
-          style={{
-            ...baseContainerStyle,
-            background: '#1e1e2e',
-            border: '1px solid #45475a',
-            display: 'flex',
-            flexDirection: 'column',
-          }}
+          style={createPanelStyle({
+            border: 'rgba(125, 211, 252, 0.18)',
+            glow: 'rgba(14, 165, 233, 0.12)',
+          })}
         >
           <AiBadge source={shape.props.source} />
-          <div
-            style={{
-              padding: '6px 10px',
-              background: '#181825',
-              color: '#cdd6f4',
-              fontSize: 11,
-              borderBottom: '1px solid #45475a',
-              display: 'flex',
-              justifyContent: 'space-between',
-            }}
-          >
-            <span>{shape.props.title}</span>
-            <span style={{ color: '#a6adc8' }}>{shape.props.language}</span>
+          <div style={createHeaderStyle('rgba(125, 211, 252, 0.12)')}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+              <div>
+                <div style={{ ...createPillStyle({ color: '#bae6fd', background: 'rgba(125, 211, 252, 0.1)', border: 'rgba(125, 211, 252, 0.16)' }), marginBottom: 10 }}>
+                  Code Surface
+                </div>
+                <div style={{ color: primaryText, fontSize: 16, fontWeight: 600, letterSpacing: '-0.03em' }}>
+                  {shape.props.title}
+                </div>
+              </div>
+              <span style={createPillStyle({ color: '#dbeafe', background: 'rgba(255,255,255,0.04)', border: 'rgba(255,255,255,0.08)' })}>
+                {shape.props.language}
+              </span>
+            </div>
           </div>
-          <pre
-            style={{
-              flex: 1,
-              margin: 0,
-              padding: 10,
-              color: '#cdd6f4',
-              overflow: 'auto',
-              whiteSpace: 'pre-wrap',
-              fontSize: 12,
-              lineHeight: 1.5,
-            }}
-          >
-            {shape.props.code}
-          </pre>
+          <pre style={createMonoBodyStyle()}>{shape.props.code}</pre>
         </div>
       </HTMLContainer>
     )
   }
 
   indicator(shape: CodeBlockShape) {
-    return <rect width={shape.props.w} height={shape.props.h} rx={8} />
+    return <rect width={shape.props.w} height={shape.props.h} rx={panelRadius} />
   }
 }
 
@@ -185,47 +314,35 @@ export class DiffBlockShapeUtil extends BaseBoxShapeUtil<DiffBlockShape> {
     return (
       <HTMLContainer>
         <div
-          style={{
-            ...baseContainerStyle,
-            background: '#1e1e2e',
-            border: '1px solid #45475a',
-            display: 'flex',
-            flexDirection: 'column',
-          }}
+          style={createPanelStyle({
+            border: 'rgba(251, 191, 36, 0.16)',
+            glow: 'rgba(251, 191, 36, 0.1)',
+            background: 'linear-gradient(180deg, rgba(16, 17, 24, 0.98), rgba(12, 12, 18, 0.96))',
+          })}
         >
           <AiBadge source={shape.props.source} />
-          <div
-            style={{
-              padding: '6px 10px',
-              background: '#181825',
-              color: '#a6adc8',
-              fontSize: 11,
-              borderBottom: '1px solid #45475a',
-            }}
-          >
-            {shape.props.filePath || 'diff'}
+          <div style={createHeaderStyle('rgba(251, 191, 36, 0.12)')}>
+            <div style={createPillStyle({ color: '#fde68a', background: 'rgba(251, 191, 36, 0.1)', border: 'rgba(251, 191, 36, 0.16)' })}>
+              Review Diff
+            </div>
+            <div style={{ marginTop: 10, color: primaryText, fontSize: 15, fontWeight: 600, letterSpacing: '-0.03em' }}>
+              {shape.props.filePath || 'diff'}
+            </div>
           </div>
-          <pre
-            style={{
-              flex: 1,
-              margin: 0,
-              padding: 10,
-              color: '#cdd6f4',
-              overflow: 'auto',
-              whiteSpace: 'pre-wrap',
-              fontSize: 12,
-              lineHeight: 1.5,
-            }}
-          >
-            {shape.props.diff}
-          </pre>
+          <div style={{ ...createMonoBodyStyle(), paddingTop: 12 }}>
+            {shape.props.diff.split('\n').map((line, index) => (
+              <div key={`${shape.id}-diff-${index}`} style={{ color: diffLineColor(line), minHeight: 20 }}>
+                {line || ' '}
+              </div>
+            ))}
+          </div>
         </div>
       </HTMLContainer>
     )
   }
 
   indicator(shape: DiffBlockShape) {
-    return <rect width={shape.props.w} height={shape.props.h} rx={8} />
+    return <rect width={shape.props.w} height={shape.props.h} rx={panelRadius} />
   }
 }
 
@@ -249,50 +366,38 @@ export class DiagramNodeShapeUtil extends BaseBoxShapeUtil<DiagramNodeShape> {
   }
 
   component(shape: DiagramNodeShape) {
-    const statusColor: Record<string, string> = {
-      idle: '#6c7086',
-      active: '#a6e3a1',
-      error: '#f38ba8',
-      pending: '#f9e2af',
-    }
-    const dotColor = statusColor[shape.props.status] ?? '#6c7086'
+    const tone = getStatusTone(shape.props.status)
 
     return (
       <HTMLContainer>
         <div
-          style={{
-            ...baseContainerStyle,
-            background: '#1e1e2e',
-            border: '1px solid #45475a',
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: 6,
-          }}
+          style={createPanelStyle({
+            border: tone.border,
+            glow: `${tone.dot}22`,
+            background: 'linear-gradient(180deg, rgba(14, 19, 29, 0.98), rgba(8, 12, 19, 0.96))',
+          })}
         >
           <AiBadge source={shape.props.source} />
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <div
-              style={{
-                width: 8,
-                height: 8,
-                borderRadius: '50%',
-                background: dotColor,
-              }}
-            />
-            <span style={{ color: '#cdd6f4', fontWeight: 600, fontSize: 13 }}>
+          <div style={{ display: 'flex', height: '100%', flexDirection: 'column', justifyContent: 'space-between', padding: 16 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+              <span style={createPillStyle({ color: tone.label, background: tone.background, border: tone.border })}>
+                {shape.props.status}
+              </span>
+              <span style={{ fontSize: 10, color: tertiaryText, textTransform: 'uppercase', letterSpacing: '0.18em' }}>
+                {shape.props.nodeType}
+              </span>
+            </div>
+            <div style={{ color: primaryText, fontSize: 18, fontWeight: 600, letterSpacing: '-0.04em' }}>
               {shape.props.label}
-            </span>
+            </div>
           </div>
-          <span style={{ color: '#a6adc8', fontSize: 11 }}>{shape.props.nodeType}</span>
         </div>
       </HTMLContainer>
     )
   }
 
   indicator(shape: DiagramNodeShape) {
-    return <rect width={shape.props.w} height={shape.props.h} rx={8} />
+    return <rect width={shape.props.w} height={shape.props.h} rx={panelRadius} />
   }
 }
 
@@ -315,28 +420,33 @@ export class NoteBlockShapeUtil extends BaseBoxShapeUtil<NoteBlockShape> {
   }
 
   component(shape: NoteBlockShape) {
-    const safeColor = /^#[0-9a-fA-F]{3,8}$/.test(shape.props.color) ? shape.props.color : '#f9e2af'
+    const safeColor = getSafeHexColor(shape.props.color, '#fbbf24')
+
     return (
       <HTMLContainer>
         <div
-          style={{
-            ...baseContainerStyle,
-            background: safeColor + '22',
-            border: `1px solid ${safeColor}66`,
-            padding: 12,
-            color: '#cdd6f4',
-            lineHeight: 1.5,
-          }}
+          style={createPanelStyle({
+            border: `${safeColor}44`,
+            glow: `${safeColor}18`,
+            background: `linear-gradient(180deg, ${safeColor}18, rgba(17, 14, 9, 0.92))`,
+          })}
         >
           <AiBadge source={shape.props.source} />
-          {shape.props.content}
+          <div style={{ padding: 16 }}>
+            <div style={createPillStyle({ color: safeColor, background: `${safeColor}12`, border: `${safeColor}33` })}>
+              Review Note
+            </div>
+            <div style={{ marginTop: 14, color: primaryText, fontSize: 14, lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>
+              {shape.props.content}
+            </div>
+          </div>
         </div>
       </HTMLContainer>
     )
   }
 
   indicator(shape: NoteBlockShape) {
-    return <rect width={shape.props.w} height={shape.props.h} rx={8} />
+    return <rect width={shape.props.w} height={shape.props.h} rx={panelRadius} />
   }
 }
 
@@ -362,50 +472,30 @@ export class TerminalBlockShapeUtil extends BaseBoxShapeUtil<TerminalBlockShape>
     return (
       <HTMLContainer>
         <div
-          style={{
-            ...baseContainerStyle,
-            background: '#11111b',
-            border: '1px solid #45475a',
-            display: 'flex',
-            flexDirection: 'column',
-          }}
+          style={createPanelStyle({
+            border: 'rgba(52, 211, 153, 0.16)',
+            glow: 'rgba(52, 211, 153, 0.1)',
+            background: 'linear-gradient(180deg, rgba(7, 11, 15, 0.98), rgba(5, 8, 12, 0.98))',
+          })}
         >
           <AiBadge source={shape.props.source} />
-          <div
-            style={{
-              padding: '6px 10px',
-              background: '#181825',
-              color: '#a6adc8',
-              fontSize: 11,
-              borderBottom: '1px solid #313244',
-              display: 'flex',
-              gap: 6,
-            }}
-          >
-            <span style={{ color: '#f38ba8' }}>{'>'}</span>
-            <span style={{ color: '#cdd6f4' }}>{shape.props.command}</span>
+          <div style={createHeaderStyle('rgba(52, 211, 153, 0.12)')}>
+            <div style={createPillStyle({ color: '#a7f3d0', background: 'rgba(52, 211, 153, 0.1)', border: 'rgba(52, 211, 153, 0.16)' })}>
+              Terminal
+            </div>
+            <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 8, color: primaryText, fontFamily: monoFont, fontSize: 12 }}>
+              <span style={{ color: '#34d399' }}>$</span>
+              <span>{shape.props.command}</span>
+            </div>
           </div>
-          <pre
-            style={{
-              flex: 1,
-              margin: 0,
-              padding: 10,
-              color: '#a6adc8',
-              overflow: 'auto',
-              whiteSpace: 'pre-wrap',
-              fontSize: 12,
-              lineHeight: 1.4,
-            }}
-          >
-            {shape.props.output}
-          </pre>
+          <pre style={{ ...createMonoBodyStyle(), color: '#b8c3d9' }}>{shape.props.output}</pre>
         </div>
       </HTMLContainer>
     )
   }
 
   indicator(shape: TerminalBlockShape) {
-    return <rect width={shape.props.w} height={shape.props.h} rx={8} />
+    return <rect width={shape.props.w} height={shape.props.h} rx={panelRadius} />
   }
 }
 
@@ -434,22 +524,33 @@ export class FileCardShapeUtil extends BaseBoxShapeUtil<FileCardShape> {
     return (
       <HTMLContainer>
         <div
-          style={{
-            ...baseContainerStyle,
-            background: '#1e1e2e',
-            border: '1px solid #45475a',
-            padding: 12,
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 6,
-          }}
+          style={createPanelStyle({
+            border: 'rgba(255, 255, 255, 0.1)',
+            glow: 'rgba(255, 255, 255, 0.06)',
+            background: 'linear-gradient(180deg, rgba(14, 18, 28, 0.98), rgba(9, 12, 19, 0.96))',
+          })}
         >
           <AiBadge source={shape.props.source} />
-          <span style={{ color: '#89b4fa', fontWeight: 600, fontSize: 13 }}>{filename}</span>
-          <span style={{ color: '#a6adc8', fontSize: 11 }}>{shape.props.filePath}</span>
-          <div style={{ display: 'flex', gap: 12, color: '#6c7086', fontSize: 11 }}>
-            <span>{shape.props.language}</span>
-            <span>{shape.props.lineCount} lines</span>
+          <div style={{ display: 'flex', height: '100%', flexDirection: 'column', justifyContent: 'space-between', padding: 16 }}>
+            <div>
+              <div style={createPillStyle({ color: '#dbeafe', background: 'rgba(125, 211, 252, 0.08)', border: 'rgba(125, 211, 252, 0.14)' })}>
+                File
+              </div>
+              <div style={{ marginTop: 12, color: primaryText, fontSize: 16, fontWeight: 600, letterSpacing: '-0.03em' }}>
+                {filename}
+              </div>
+              <div style={{ marginTop: 6, color: secondaryText, fontSize: 11, lineHeight: 1.55 }}>
+                {shape.props.filePath}
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <span style={createPillStyle({ color: '#cbd5e1', background: 'rgba(255,255,255,0.04)', border: 'rgba(255,255,255,0.08)' })}>
+                {shape.props.language || 'File'}
+              </span>
+              <span style={createPillStyle({ color: '#cbd5e1', background: 'rgba(255,255,255,0.04)', border: 'rgba(255,255,255,0.08)' })}>
+                {shape.props.lineCount} lines
+              </span>
+            </div>
           </div>
         </div>
       </HTMLContainer>
@@ -457,7 +558,7 @@ export class FileCardShapeUtil extends BaseBoxShapeUtil<FileCardShape> {
   }
 
   indicator(shape: FileCardShape) {
-    return <rect width={shape.props.w} height={shape.props.h} rx={8} />
+    return <rect width={shape.props.w} height={shape.props.h} rx={panelRadius} />
   }
 }
 
@@ -484,24 +585,26 @@ export class ImageBlockShapeUtil extends BaseBoxShapeUtil<ImageBlockShape> {
     return (
       <HTMLContainer>
         <div
-          style={{
-            ...baseContainerStyle,
-            background: '#1e1e2e',
-            border: '1px solid #45475a',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-          }}
+          style={createPanelStyle({
+            border: 'rgba(255, 255, 255, 0.1)',
+            glow: 'rgba(125, 211, 252, 0.08)',
+            background: 'linear-gradient(180deg, rgba(10, 13, 20, 0.98), rgba(7, 10, 16, 0.96))',
+          })}
         >
           <AiBadge source={shape.props.source} />
           {safeSrc ? (
             <img
               src={safeSrc}
               alt={shape.props.alt}
-              style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
+              style={{ width: '100%', height: '100%', objectFit: 'cover' }}
             />
           ) : (
-            <span style={{ color: '#6c7086' }}>{shape.props.alt || 'No image'}</span>
+            <div style={{ display: 'flex', height: '100%', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 10 }}>
+              <div style={createPillStyle({ color: '#dbeafe', background: 'rgba(125, 211, 252, 0.08)', border: 'rgba(125, 211, 252, 0.14)' })}>
+                Image Slot
+              </div>
+              <span style={{ color: secondaryText, fontSize: 12 }}>{shape.props.alt || 'No image'}</span>
+            </div>
           )}
         </div>
       </HTMLContainer>
@@ -509,7 +612,7 @@ export class ImageBlockShapeUtil extends BaseBoxShapeUtil<ImageBlockShape> {
   }
 
   indicator(shape: ImageBlockShape) {
-    return <rect width={shape.props.w} height={shape.props.h} rx={8} />
+    return <rect width={shape.props.w} height={shape.props.h} rx={panelRadius} />
   }
 }
 
@@ -533,43 +636,30 @@ export class TaskCardShapeUtil extends BaseBoxShapeUtil<TaskCardShape> {
   }
 
   component(shape: TaskCardShape) {
-    const priorityColor: Record<string, string> = {
-      low: '#a6e3a1',
-      medium: '#f9e2af',
-      high: '#fab387',
-      critical: '#f38ba8',
-    }
-    const barColor = priorityColor[shape.props.priority] ?? '#6c7086'
+    const tone = getPriorityTone(shape.props.priority)
 
     return (
       <HTMLContainer>
         <div
-          style={{
-            ...baseContainerStyle,
-            background: '#1e1e2e',
-            border: '1px solid #45475a',
-            display: 'flex',
-            flexDirection: 'column',
-          }}
+          style={createPanelStyle({
+            border: tone.border,
+            glow: `${tone.bar}22`,
+            background: 'linear-gradient(180deg, rgba(14, 18, 27, 0.98), rgba(10, 12, 18, 0.96))',
+          })}
         >
           <AiBadge source={shape.props.source} />
-          <div style={{ height: 3, background: barColor }} />
-          <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <span style={{ color: '#cdd6f4', fontWeight: 600, fontSize: 13 }}>
-              {shape.props.title}
-            </span>
-            <div style={{ display: 'flex', gap: 8, fontSize: 11 }}>
-              <span
-                style={{
-                  padding: '2px 6px',
-                  borderRadius: 4,
-                  background: '#313244',
-                  color: '#cdd6f4',
-                }}
-              >
+          <div style={{ height: 4, background: `linear-gradient(90deg, ${tone.bar}, transparent)` }} />
+          <div style={{ padding: 16 }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+              <span style={createPillStyle({ color: '#cbd5e1', background: 'rgba(255,255,255,0.04)', border: 'rgba(255,255,255,0.08)' })}>
                 {shape.props.status}
               </span>
-              <span style={{ color: barColor }}>{shape.props.priority}</span>
+              <span style={createPillStyle({ color: tone.label, background: tone.background, border: tone.border })}>
+                {shape.props.priority}
+              </span>
+            </div>
+            <div style={{ marginTop: 14, color: primaryText, fontSize: 16, fontWeight: 600, letterSpacing: '-0.03em', lineHeight: 1.35 }}>
+              {shape.props.title}
             </div>
           </div>
         </div>
@@ -578,7 +668,7 @@ export class TaskCardShapeUtil extends BaseBoxShapeUtil<TaskCardShape> {
   }
 
   indicator(shape: TaskCardShape) {
-    return <rect width={shape.props.w} height={shape.props.h} rx={8} />
+    return <rect width={shape.props.w} height={shape.props.h} rx={panelRadius} />
   }
 }
 
@@ -604,25 +694,30 @@ export class ConnectionArrowShapeUtil extends BaseBoxShapeUtil<ConnectionArrowSh
       <HTMLContainer>
         <div
           style={{
-            ...baseContainerStyle,
-            background: '#31324433',
-            border: '1px dashed #45475a',
-            display: 'flex',
+            ...createPanelStyle({
+              border: 'rgba(255, 255, 255, 0.08)',
+              glow: 'rgba(255, 255, 255, 0.04)',
+              background: 'rgba(255, 255, 255, 0.03)',
+            }),
             alignItems: 'center',
             justifyContent: 'center',
-            color: '#a6adc8',
+            display: 'flex',
+            borderStyle: 'dashed',
+            color: secondaryText,
             fontSize: 11,
+            textTransform: 'uppercase',
+            letterSpacing: '0.14em',
           }}
         >
           <AiBadge source={shape.props.source} />
-          {shape.props.label || '---'}
+          {shape.props.label || 'link'}
         </div>
       </HTMLContainer>
     )
   }
 
   indicator(shape: ConnectionArrowShape) {
-    return <rect width={shape.props.w} height={shape.props.h} rx={4} />
+    return <rect width={shape.props.w} height={shape.props.h} rx={16} />
   }
 }
 

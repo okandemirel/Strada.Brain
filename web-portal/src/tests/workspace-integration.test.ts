@@ -66,6 +66,22 @@ describe('workspace integration — auto-switch flow', () => {
     expect(useWorkspaceStore.getState().mode).toBe('canvas')
   })
 
+  it('canvas:shapes_update event queues live canvas mutations', () => {
+    dispatchWorkspaceMessage({
+      type: 'canvas:shapes_update',
+      payload: {
+        shapes: [
+          { id: 'r2', props: { width: 120, status: 'active' } },
+        ],
+      },
+    })
+
+    const canvas = useCanvasStore.getState()
+    expect(canvas.pendingUpdates).toEqual([
+      { id: 'r2', props: { width: 120, status: 'active' }, source: 'agent' },
+    ])
+  })
+
   it('workspace:mode_suggest with reason shows reason text in notification', () => {
     dispatchWorkspaceMessage({
       type: 'workspace:mode_suggest',
@@ -293,6 +309,7 @@ describe('workspace integration — code event integration', () => {
       path: 'src/main.ts',
       content: 'export default {}',
       language: 'typescript',
+      touchedStatus: 'new',
     })
 
     const state = useCodeStore.getState()
@@ -302,6 +319,7 @@ describe('workspace integration — code event integration', () => {
     expect(state.tabs[0].language).toBe('typescript')
     expect(state.activeTab).toBe('src/main.ts')
     expect(state.touchedFiles.get('src/main.ts')).toBe('new')
+    expect(useWorkspaceStore.getState().mode).toBe('code')
   })
 
   it('code:terminal_output appends with command prefix', () => {
@@ -340,6 +358,7 @@ describe('workspace integration — code event integration', () => {
       path: 'src/utils.ts',
       content: 'export function add(a: number, b: number) { return a + b }',
       language: 'typescript',
+      touchedStatus: 'new',
     })
 
     expect(useCodeStore.getState().touchedFiles.get('src/utils.ts')).toBe('new')
@@ -360,6 +379,21 @@ describe('workspace integration — code event integration', () => {
     // Content should be preserved from the original open
     expect(state.tabs[0].content).toBe('export function add(a: number, b: number) { return a + b }')
     expect(state.touchedFiles.get('src/utils.ts')).toBe('modified')
+  })
+
+  it('code:file_open without touchedStatus opens the tab without marking a change', () => {
+    dispatchWorkspaceMessage({
+      type: 'code:file_open',
+      path: 'src/read.ts',
+      content: 'export const read = true',
+      language: 'typescript',
+    })
+
+    const state = useCodeStore.getState()
+    expect(state.tabs).toHaveLength(1)
+    expect(state.activeTab).toBe('src/read.ts')
+    expect(state.touchedFiles.size).toBe(0)
+    expect(useWorkspaceStore.getState().mode).toBe('code')
   })
 
   it('code:terminal_clear empties terminal', () => {

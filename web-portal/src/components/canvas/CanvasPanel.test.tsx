@@ -11,8 +11,9 @@ const mockLoadSnapshot = vi.fn()
 const mockEditorOn = vi.fn()
 const mockEditorRun = vi.fn((fn: () => void) => fn())
 const mockCreateShape = vi.fn()
-const mockGetShape = vi.fn(() => undefined)
+const mockGetShape = vi.fn((_: string) => undefined as { id: string; type: string; props: Record<string, unknown> } | undefined)
 const mockUpdateShape = vi.fn()
+const mockDeleteShapes = vi.fn()
 
 const mockEditor = {
   on: mockEditorOn,
@@ -20,6 +21,7 @@ const mockEditor = {
   createShape: mockCreateShape,
   getShape: mockGetShape,
   updateShape: mockUpdateShape,
+  deleteShapes: mockDeleteShapes,
   user: {
     updateUserPreferences: vi.fn(),
   },
@@ -146,6 +148,10 @@ describe('CanvasPanel', () => {
     mockLoadSnapshot.mockReset()
     mockEditorOn.mockReset()
     mockCreateShape.mockReset()
+    mockGetShape.mockReset()
+    mockGetShape.mockReturnValue(undefined)
+    mockUpdateShape.mockReset()
+    mockDeleteShapes.mockReset()
     mockApplyTemplate.mockReset()
   })
 
@@ -420,5 +426,37 @@ describe('CanvasPanel', () => {
       expect.objectContaining({ type: 'code-block', props: { code: 'hello' } }),
     )
     expect(useCanvasStore.getState().pendingShapes).toEqual([])
+  })
+
+  it('applies pending updates to existing editor shapes', async () => {
+    mockGetShape.mockImplementation((id: string) => (
+      id === 'cb1' ? { id: 'cb1', type: 'code-block', props: { code: 'before' } } : undefined
+    ))
+    await renderInEditorMode()
+
+    act(() => {
+      useCanvasStore.getState().updatePendingShapes([
+        { id: 'cb1', props: { code: 'after' }, source: 'agent' },
+      ])
+    })
+
+    expect(mockUpdateShape).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'cb1', type: 'code-block', props: { code: 'after' } }),
+    )
+    expect(useCanvasStore.getState().pendingUpdates).toEqual([])
+  })
+
+  it('applies pending removals to existing editor shapes', async () => {
+    mockGetShape.mockImplementation((id: string) => (
+      id === 'cb1' ? { id: 'cb1', type: 'code-block', props: { code: 'before' } } : undefined
+    ))
+    await renderInEditorMode()
+
+    act(() => {
+      useCanvasStore.getState().removePendingShapeIds(['cb1'])
+    })
+
+    expect(mockDeleteShapes).toHaveBeenCalledWith(['cb1'])
+    expect(useCanvasStore.getState().pendingRemovals).toEqual([])
   })
 })

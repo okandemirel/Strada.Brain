@@ -130,7 +130,7 @@ export function dispatchWorkspaceMessage(data: { type: string; [key: string]: un
 
     case 'canvas:shapes_add': {
       useCanvasStore.getState().addPendingShapes(
-        ((payload.shapes as Array<{ type: string; id: string; props: Record<string, unknown> }>) || []).map((shape) => ({
+        ((payload.shapes as Array<{ type?: string; id: string; props: Record<string, unknown> }>) || []).map((shape) => ({
           ...shape,
           source: 'agent' as const,
         })),
@@ -144,7 +144,7 @@ export function dispatchWorkspaceMessage(data: { type: string; [key: string]: un
 
     case 'canvas:shapes_update':
       useCanvasStore.getState().updatePendingShapes(
-        ((payload.shapes as Array<{ type: string; id: string; props: Record<string, unknown> }>) || []).map((shape) => ({
+        ((payload.shapes as Array<{ type?: string; id: string; props: Record<string, unknown> }>) || []).map((shape) => ({
           ...shape,
           source: 'agent' as const,
         })),
@@ -154,6 +154,28 @@ export function dispatchWorkspaceMessage(data: { type: string; [key: string]: un
     case 'canvas:shapes_remove':
       useCanvasStore.getState().removePendingShapeIds((payload.shapeIds as string[]) || [])
       break
+
+    case 'canvas:agent_draw': {
+      const shapes = ((payload.shapes as Array<{ type?: string; id: string; props: Record<string, unknown> }>) || []).map((shape) => ({
+        ...shape,
+        source: 'agent' as const,
+      }))
+      const action = payload.action as string | undefined
+
+      if (action === 'clear') {
+        useCanvasStore.getState().removePendingShapeIds(shapes.map((shape) => shape.id))
+      } else if (action === 'update' || action === 'annotate' || action === 'highlight') {
+        useCanvasStore.getState().updatePendingShapes(shapes)
+      } else {
+        useCanvasStore.getState().addPendingShapes(shapes)
+      }
+
+      const wsStore = useWorkspaceStore.getState()
+      if (!wsStore.userOverride && wsStore.mode !== 'canvas') {
+        wsStore.suggestMode('canvas')
+      }
+      break
+    }
 
     case 'monitor:gate_request': {
       if (payload.nodeId) {
@@ -210,7 +232,14 @@ export function dispatchWorkspaceMessage(data: { type: string; [key: string]: un
         content: (payload.content as string) ?? '',
         language: (payload.language as string) ?? 'plaintext',
       })
-      store.markTouched(payload.path as string, 'new')
+      const touchedStatus = payload.touchedStatus as 'modified' | 'new' | 'deleted' | undefined
+      if (touchedStatus) {
+        store.markTouched(payload.path as string, touchedStatus)
+      }
+      const wsStore = useWorkspaceStore.getState()
+      if (!wsStore.userOverride && wsStore.mode !== 'code') {
+        wsStore.suggestMode('code')
+      }
       break
     }
 
