@@ -15,6 +15,7 @@ import type { QuantizationType, QuantizedVector } from "./quantization.js";
 // hnswlib-node is an optional native dependency that requires Python + C++ build
 // tools to compile.  We load it lazily so that the rest of Strada works even when
 // the native module is unavailable (e.g. on Windows without build tools).
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- lazily loaded optional native module
 let HierarchicalNSW: any;
 let hnswAvailable = false;
 
