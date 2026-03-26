@@ -656,8 +656,14 @@ export class DelegationManager {
       return Boolean(
         this.opts.providerCredentials?.claude?.apiKey
         || this.opts.providerCredentials?.anthropic?.apiKey
-        || this.opts.providerCredentials?.claude?.anthropicAuthToken
-        || this.opts.providerCredentials?.anthropic?.anthropicAuthToken
+        || (
+          this.opts.providerCredentials?.claude?.anthropicAuthMode === "claude-subscription"
+          && this.opts.providerCredentials?.claude?.anthropicAuthToken
+        )
+        || (
+          this.opts.providerCredentials?.anthropic?.anthropicAuthMode === "claude-subscription"
+          && this.opts.providerCredentials?.anthropic?.anthropicAuthToken
+        )
         || this.opts.apiKeys.claude
         || this.opts.apiKeys.anthropic,
       );

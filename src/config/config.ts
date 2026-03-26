@@ -1839,7 +1839,9 @@ export const configSchema = z
       data.fireworksApiKey,
       data.geminiApiKey,
     ].some((k) => k && k.length > 0);
-    const hasAnthropicSubscription = Boolean(data.anthropicAuthToken);
+    const hasAnthropicSubscription =
+      data.anthropicAuthMode === "claude-subscription"
+      && Boolean(data.anthropicAuthToken);
     const hasOpenAISubscription =
       data.openaiAuthMode === "chatgpt-subscription" ||
       Boolean(data.openaiSubscriptionAccessToken && data.openaiSubscriptionAccountId) ||
@@ -3218,8 +3220,12 @@ export function hasRequiredApiKeys(config: Config): { valid: boolean; missing: s
   if (config.providerChain) {
     const names = config.providerChain.split(",").map((s) => s.trim());
     const keyMap: Record<string, string | undefined> = {
-      claude: config.anthropicApiKey ?? config.anthropicAuthToken,
-      anthropic: config.anthropicApiKey ?? config.anthropicAuthToken,
+      claude: config.anthropicApiKey ?? (
+        config.anthropicAuthMode === "claude-subscription" ? config.anthropicAuthToken : undefined
+      ),
+      anthropic: config.anthropicApiKey ?? (
+        config.anthropicAuthMode === "claude-subscription" ? config.anthropicAuthToken : undefined
+      ),
       openai:
         config.openaiApiKey ??
         (config.openaiAuthMode === "chatgpt-subscription" ||
@@ -3241,7 +3247,9 @@ export function hasRequiredApiKeys(config: Config): { valid: boolean; missing: s
       if (name === "ollama") continue; // no key needed
       if (!keyMap[name]) {
         if (name === "claude" || name === "anthropic") {
-          const hasSubscription = Boolean(config.anthropicAuthToken);
+          const hasSubscription =
+            config.anthropicAuthMode === "claude-subscription"
+            && Boolean(config.anthropicAuthToken);
           if (!hasSubscription) {
             missing.push("ANTHROPIC_API_KEY");
           }
@@ -3260,10 +3268,15 @@ export function hasRequiredApiKeys(config: Config): { valid: boolean; missing: s
         missing.push(`${name.toUpperCase()}_API_KEY`);
       }
     }
-  } else if (!config.anthropicApiKey && !config.anthropicAuthToken) {
+  } else if (
+    !config.anthropicApiKey
+    && !(config.anthropicAuthMode === "claude-subscription" && config.anthropicAuthToken)
+  ) {
     // No chain specified and no Anthropic key — check if any key exists
     const hasAny = [
-      config.anthropicApiKey ?? config.anthropicAuthToken,
+      config.anthropicApiKey ?? (
+        config.anthropicAuthMode === "claude-subscription" ? config.anthropicAuthToken : undefined
+      ),
       config.openaiApiKey ??
         (config.openaiAuthMode === "chatgpt-subscription" ||
         Boolean(config.openaiSubscriptionAccessToken && config.openaiSubscriptionAccountId) ||

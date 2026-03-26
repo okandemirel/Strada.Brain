@@ -72,9 +72,7 @@ export async function initializeAIProvider(
   if (config.providerChain) {
     const requestedNames = normalizeProviderNames(config.providerChain);
     const configuredNames = requestedNames.filter((name) =>
-      (name === "claude" || name === "anthropic") && hasConfiguredAnthropicSubscription(config)
-        ? true
-        : name === "openai" && hasConfiguredOpenAISubscription(config)
+      name === "openai" && hasConfiguredOpenAISubscription(config)
         ? true
         : hasUsableProviderConfig(name, apiKeys, config),
     );
@@ -130,8 +128,8 @@ export async function initializeAIProvider(
   // 2) Anthropic key present — use ClaudeProvider directly
   else if (config.anthropicApiKey || hasConfiguredAnthropicSubscription(config)) {
     defaultProviderOrder = ["claude"];
-    defaultProvider = config.anthropicAuthToken
-      ? new ClaudeProvider({ mode: "claude-subscription", authToken: config.anthropicAuthToken })
+    defaultProvider = hasConfiguredAnthropicSubscription(config)
+      ? new ClaudeProvider({ mode: "claude-subscription", authToken: config.anthropicAuthToken! })
       : new ClaudeProvider(config.anthropicApiKey!);
     logger.info("AI provider initialized", { name: defaultProvider.name });
   }

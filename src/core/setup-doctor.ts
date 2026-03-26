@@ -17,6 +17,7 @@ import { ChannelActivityRegistry } from "./channel-activity-registry.js";
 import {
   collectProviderCredentials,
   detectConfiguredResponseProviders,
+  hasConfiguredAnthropicSubscription,
   normalizeProviderNames,
 } from "./provider-config.js";
 import {
@@ -82,7 +83,7 @@ function summarizeResponseWorker(config: Config): string {
     .map((entry) => entry.trim())
     .filter(Boolean)
     .join(", ");
-  const claudeMode = config.anthropicAuthToken
+  const claudeMode = hasConfiguredAnthropicSubscription(config)
     ? "Claude can use the configured subscription auth token."
     : "Claude uses API billing when selected.";
   const openaiMode = config.openaiAuthMode === "chatgpt-subscription"
@@ -217,7 +218,7 @@ export async function collectDoctorReport(options: DoctorOptions = {}): Promise<
       .filter(Boolean)
       ?? [];
     const claudeInResponsePool = responseChain.length === 0
-      ? Boolean(configResult.value.anthropicApiKey || configResult.value.anthropicAuthToken)
+      ? Boolean(configResult.value.anthropicApiKey || hasConfiguredAnthropicSubscription(configResult.value))
       : responseChain.includes("claude") || responseChain.includes("anthropic");
     if (claudeInResponsePool && configResult.value.anthropicAuthMode === "claude-subscription") {
       const authInspection = inspectClaudeSubscriptionAuth({

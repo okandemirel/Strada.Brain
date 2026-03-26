@@ -191,6 +191,17 @@ describe("loadConfig", () => {
     expect(config.anthropicAuthToken).toBe("claude-subscription-token-123456");
   });
 
+  it("rejects a stale Claude auth token when auth mode is api-key", () => {
+    setEnv({
+      ANTHROPIC_API_KEY: undefined,
+      ANTHROPIC_AUTH_MODE: "api-key",
+      ANTHROPIC_AUTH_TOKEN: "stale-claude-subscription-token-123456",
+    });
+    delete process.env["ANTHROPIC_API_KEY"];
+
+    expect(() => loadConfig()).toThrow("Invalid configuration");
+  });
+
   it("throws when UNITY_PROJECT_PATH is missing", () => {
     setEnv({ UNITY_PROJECT_PATH: undefined });
     delete process.env["UNITY_PROJECT_PATH"];

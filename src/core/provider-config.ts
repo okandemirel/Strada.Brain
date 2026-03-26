@@ -27,8 +27,7 @@ export function hasUsableProviderConfig(
     return !!(
       apiKeys["claude"]
       || apiKeys["anthropic"]
-      || config?.anthropicAuthMode === "claude-subscription"
-      || config?.anthropicAuthToken
+      || (config ? hasConfiguredAnthropicSubscription(config) : false)
     );
   }
   return !!apiKeys[name];
@@ -66,7 +65,8 @@ export function collectProviderCredentials(config: Config): ProviderCredentialMa
 }
 
 export function hasConfiguredAnthropicSubscription(config: Config): boolean {
-  return Boolean(config.anthropicAuthToken);
+  return config.anthropicAuthMode === "claude-subscription"
+    && Boolean(config.anthropicAuthToken);
 }
 
 export function hasConfiguredOpenAISubscription(config: Config): boolean {

@@ -142,7 +142,8 @@ function hasOpenAISubscriptionCredential(config: ProviderConfig): boolean {
 }
 
 function hasAnthropicSubscriptionCredential(config: ProviderConfig): boolean {
-  return Boolean(config.anthropicAuthToken);
+  return config.anthropicAuthMode === "claude-subscription"
+    && Boolean(config.anthropicAuthToken);
 }
 
 /**
@@ -152,6 +153,9 @@ export function createProvider(config: ProviderConfig): IAIProvider {
   const { name } = config;
 
   if (name === "claude" || name === "anthropic") {
+    if (config.anthropicAuthMode === "claude-subscription" && !config.anthropicAuthToken) {
+      throw new Error("Claude subscription auth requires ANTHROPIC_AUTH_TOKEN");
+    }
     if (!config.apiKey && !hasAnthropicSubscriptionCredential(config)) {
       throw new Error("Claude provider requires an API key or Claude subscription auth token");
     }

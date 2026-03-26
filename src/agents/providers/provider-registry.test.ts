@@ -62,6 +62,14 @@ describe("createProvider", () => {
     expect(provider.name).toBe("claude");
   });
 
+  it("ignores a stale Claude auth token unless subscription mode is selected", () => {
+    expect(() => createProvider({
+      name: "claude",
+      anthropicAuthMode: "api-key",
+      anthropicAuthToken: "stale-claude-subscription-token-123456",
+    })).toThrow("Claude provider requires an API key or Claude subscription auth token");
+  });
+
   it("creates Ollama provider", () => {
     const provider = createProvider({ name: "ollama" });
     expect(provider.name).toBe("ollama");

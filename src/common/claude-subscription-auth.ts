@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import process from "node:process";
 
 export type ClaudeSubscriptionAuthIssue =
   | "missing-auth-token"
@@ -18,6 +19,7 @@ export interface ClaudeSubscriptionAuthInspection {
 interface InspectClaudeSubscriptionAuthOptions {
   readonly authToken?: string;
   readonly env?: NodeJS.ProcessEnv;
+  readonly platform?: NodeJS.Platform;
 }
 
 interface ClaudeAuthStatusPayload {
@@ -26,9 +28,11 @@ interface ClaudeAuthStatusPayload {
   subscriptionType?: unknown;
 }
 
-function readClaudeAuthStatus(): ClaudeSubscriptionAuthInspection | null {
-  const result = spawnSync("claude", ["auth", "status"], {
+function readClaudeAuthStatus(platform: NodeJS.Platform): ClaudeSubscriptionAuthInspection | null {
+  const command = platform === "win32" ? "claude.cmd" : "claude";
+  const result = spawnSync(command, ["auth", "status"], {
     encoding: "utf8",
+    shell: platform === "win32",
     stdio: ["ignore", "pipe", "pipe"],
   });
 
@@ -77,6 +81,7 @@ export function inspectClaudeSubscriptionAuth(
   options: InspectClaudeSubscriptionAuthOptions = {},
 ): ClaudeSubscriptionAuthInspection {
   const env = options.env ?? process.env;
+  const platform = options.platform ?? process.platform;
   const authToken = options.authToken?.trim() || env["ANTHROPIC_AUTH_TOKEN"]?.trim();
 
   if (authToken) {
@@ -87,7 +92,7 @@ export function inspectClaudeSubscriptionAuth(
     };
   }
 
-  return readClaudeAuthStatus() ?? {
+  return readClaudeAuthStatus(platform) ?? {
     ok: false,
     issue: "missing-auth-token",
     detail:

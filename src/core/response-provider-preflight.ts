@@ -31,7 +31,8 @@ function isOpenAiSubscriptionCredential(credential?: ProviderCredential): boolea
 }
 
 function isClaudeSubscriptionCredential(credential?: ProviderCredential): boolean {
-  return Boolean(credential?.anthropicAuthToken);
+  return credential?.anthropicAuthMode === "claude-subscription"
+    && Boolean(credential?.anthropicAuthToken);
 }
 
 function getClaudeSubscriptionFailureDetail(credential?: ProviderCredential): string {

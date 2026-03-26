@@ -628,8 +628,14 @@ export class ProviderManager {
       return !!(
         this.providerCredentials["claude"]?.apiKey
         || this.providerCredentials["anthropic"]?.apiKey
-        || this.providerCredentials["claude"]?.anthropicAuthToken
-        || this.providerCredentials["anthropic"]?.anthropicAuthToken
+        || (
+          this.providerCredentials["claude"]?.anthropicAuthMode === "claude-subscription"
+          && this.providerCredentials["claude"]?.anthropicAuthToken
+        )
+        || (
+          this.providerCredentials["anthropic"]?.anthropicAuthMode === "claude-subscription"
+          && this.providerCredentials["anthropic"]?.anthropicAuthToken
+        )
       );
     }
     if (providerName === "openai") {

@@ -95,7 +95,10 @@ describe("response-provider-preflight", () => {
     await expect(preflightResponseProviders(
       ["claude"],
       {
-        claude: { anthropicAuthToken: "claude-subscription-token-123456" },
+        claude: {
+          anthropicAuthMode: "claude-subscription",
+          anthropicAuthToken: "claude-subscription-token-123456",
+        },
       },
     )).resolves.toEqual({
       passedProviderIds: ["claude"],
