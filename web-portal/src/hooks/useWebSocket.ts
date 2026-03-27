@@ -12,6 +12,7 @@ import { dispatchWorkspaceMessage, isWorkspaceMessage } from './use-dashboard-so
 
 const MAX_RECONNECT_DELAY = 30000
 const MAX_RECONNECT_ATTEMPTS = 8
+const MESSAGE_RECEIPT_TIMEOUT_MS = 8000
 const CHAT_ID_STORAGE_KEY = 'strada-chatId'
 const PROFILE_ID_STORAGE_KEY = 'strada-profileId'
 const PROFILE_TOKEN_STORAGE_KEY = 'strada-profileToken'
@@ -103,6 +104,12 @@ export function useWebSocket(): UseWebSocketReturn {
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pendingReconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pendingReconnectChatIdRef = useRef<string | null>(null)
+  const pendingMessageTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
+  const pendingOutboundMessagesRef = useRef<Array<{
+    payload: Record<string, unknown>
+    clientMessageId?: string
+  }>>([])
+  const sessionReadyRef = useRef(false)
   const mountedRef = useRef(true)
   const connectRef = useRef<(() => void) | null>(null)
 
@@ -137,12 +144,80 @@ export function useWebSocket(): UseWebSocketReturn {
     }
   }, [])
 
+  const clearPendingMessageTimer = useCallback((messageId: string) => {
+    const timer = pendingMessageTimersRef.current.get(messageId)
+    if (!timer) return
+    clearTimeout(timer)
+    pendingMessageTimersRef.current.delete(messageId)
+  }, [])
+
+  const markMessageFailed = useCallback((messageId: string) => {
+    clearPendingMessageTimer(messageId)
+    useSessionStore.getState().updateMessage(messageId, {
+      deliveryState: 'failed',
+    })
+  }, [clearPendingMessageTimer])
+
+  const armPendingMessageTimer = useCallback((messageId: string) => {
+    clearPendingMessageTimer(messageId)
+    pendingMessageTimersRef.current.set(messageId, setTimeout(() => {
+      pendingMessageTimersRef.current.delete(messageId)
+      useSessionStore.getState().updateMessage(messageId, {
+        deliveryState: 'failed',
+      })
+    }, MESSAGE_RECEIPT_TIMEOUT_MS))
+  }, [clearPendingMessageTimer])
+
+  const markAllPendingMessagesFailed = useCallback(() => {
+    const store = useSessionStore.getState()
+    for (const message of store.messages) {
+      if (message.sender === 'user' && message.deliveryState === 'pending') {
+        markMessageFailed(message.id)
+      }
+    }
+  }, [markMessageFailed])
+
+  const deliverOutboundMessage = useCallback((entry: {
+    payload: Record<string, unknown>
+    clientMessageId?: string
+  }): 'sent' | 'defer' | 'failed' => {
+    const ws = wsRef.current
+    if (!ws || ws.readyState !== WebSocket.OPEN || !sessionReadyRef.current) {
+      return 'defer'
+    }
+
+    try {
+      ws.send(JSON.stringify(entry.payload))
+      if (entry.clientMessageId) {
+        armPendingMessageTimer(entry.clientMessageId)
+      }
+      return 'sent'
+    } catch {
+      if (entry.clientMessageId) {
+        markMessageFailed(entry.clientMessageId)
+      }
+      return 'failed'
+    }
+  }, [armPendingMessageTimer, markMessageFailed])
+
+  const flushPendingOutboundMessages = useCallback(() => {
+    while (pendingOutboundMessagesRef.current.length > 0) {
+      const next = pendingOutboundMessagesRef.current[0]
+      const outcome = deliverOutboundMessage(next)
+      if (outcome === 'defer') {
+        return
+      }
+      pendingOutboundMessagesRef.current.shift()
+    }
+  }, [deliverOutboundMessage])
+
   const connect = useCallback(() => {
     if (!mountedRef.current) return
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const ws = new WebSocket(`${protocol}//${window.location.host}`)
     wsRef.current = ws
+    sessionReadyRef.current = false
 
     ws.addEventListener('open', () => {
       if (!mountedRef.current) return
@@ -171,6 +246,7 @@ export function useWebSocket(): UseWebSocketReturn {
 
     ws.addEventListener('close', () => {
       if (!mountedRef.current) return
+      sessionReadyRef.current = false
       useSessionStore.getState().setStatus('disconnected')
 
       // Fix 6.3: Reset typing indicator on disconnect
@@ -193,6 +269,7 @@ export function useWebSocket(): UseWebSocketReturn {
       // Fix 6.5: Cap reconnection attempts to avoid infinite loops
       reconnectAttemptsRef.current += 1
       if (reconnectAttemptsRef.current > MAX_RECONNECT_ATTEMPTS) {
+        markAllPendingMessagesFailed()
         return
       }
 
@@ -240,6 +317,8 @@ export function useWebSocket(): UseWebSocketReturn {
               pendingReconnectTimerRef.current = null
               pendingReconnectChatIdRef.current = null
               acceptConnectedSession(data.chatId, data.reconnectToken, data.profileId, data.profileToken)
+              sessionReadyRef.current = true
+              flushPendingOutboundMessages()
             }, 400)
             break
           }
@@ -251,6 +330,16 @@ export function useWebSocket(): UseWebSocketReturn {
 
           pendingReconnectChatIdRef.current = null
           acceptConnectedSession(data.chatId, data.reconnectToken, data.profileId, data.profileToken)
+          sessionReadyRef.current = true
+          flushPendingOutboundMessages()
+          break
+        }
+
+        case 'message_received': {
+          clearPendingMessageTimer(data.clientMessageId)
+          useSessionStore.getState().updateMessage(data.clientMessageId, {
+            deliveryState: undefined,
+          })
           break
         }
 
@@ -334,7 +423,12 @@ export function useWebSocket(): UseWebSocketReturn {
           break
       }
     })
-  }, [acceptConnectedSession])
+  }, [
+    acceptConnectedSession,
+    clearPendingMessageTimer,
+    flushPendingOutboundMessages,
+    markAllPendingMessagesFailed,
+  ])
 
   useEffect(() => {
     connectRef.current = connect
@@ -356,6 +450,11 @@ export function useWebSocket(): UseWebSocketReturn {
       if (pendingReconnectTimerRef.current) {
         clearTimeout(pendingReconnectTimerRef.current)
       }
+      for (const timer of pendingMessageTimersRef.current.values()) {
+        clearTimeout(timer)
+      }
+      pendingMessageTimersRef.current.clear()
+      pendingOutboundMessagesRef.current = []
       if (wsRef.current) {
         wsRef.current.close()
       }
@@ -363,29 +462,50 @@ export function useWebSocket(): UseWebSocketReturn {
   }, [connect])
 
   const sendMessage = useCallback((text: string, attachments?: Attachment[]): boolean => {
-    const ws = wsRef.current
-    if (!ws || ws.readyState !== WebSocket.OPEN) return false
+    const clientMessageId = generateId()
 
     // Add user message to display
     useSessionStore.getState().addMessage({
-      id: generateId(),
+      id: clientMessageId,
       sender: 'user',
       text,
       isMarkdown: false,
       timestamp: Date.now(),
       attachments,
+      deliveryState: 'pending',
     })
 
     const payload: Record<string, unknown> = {
       type: 'message',
       text,
+      clientMessageId,
     }
     if (attachments && attachments.length > 0) {
       payload.attachments = attachments
     }
-    ws.send(JSON.stringify(payload))
-    return true
-  }, [])
+
+    const outbound = { payload, clientMessageId }
+    const delivery = deliverOutboundMessage(outbound)
+    if (delivery === 'sent') {
+      return true
+    }
+
+    if (delivery === 'defer') {
+      pendingOutboundMessagesRef.current.push(outbound)
+      const ws = wsRef.current
+      if (
+        mountedRef.current &&
+        (!ws || ws.readyState === WebSocket.CLOSED) &&
+        !reconnectTimerRef.current
+      ) {
+        useSessionStore.getState().setStatus('reconnecting')
+        connectRef.current?.()
+      }
+      return true
+    }
+
+    return false
+  }, [deliverOutboundMessage])
 
   const sendConfirmation = useCallback((confirmId: string, option: string) => {
     const ws = wsRef.current

@@ -379,6 +379,40 @@ describe("WebChannel inbound message limits", () => {
     );
   });
 
+  it("acknowledges inbound websocket messages as soon as they are accepted", async () => {
+    const channel = new WebChannel();
+    const socket = createMockSocket();
+    const handler = vi.fn().mockResolvedValue(undefined);
+
+    channel.onMessage(handler);
+    (channel as unknown as { handleWsConnection: (ws: unknown) => void }).handleWsConnection(socket);
+
+    socket.emit(
+      "message",
+      Buffer.from(JSON.stringify({
+        type: "message",
+        clientMessageId: "client-msg-1",
+        text: "hello",
+      })),
+    );
+
+    await Promise.resolve();
+
+    expect(socket.getSentMessages()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "message_received",
+          clientMessageId: "client-msg-1",
+        }),
+      ]),
+    );
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "hello",
+      }),
+    );
+  });
+
   it("restores the same durable web identity after a process restart", async () => {
     const tempDir = mkdtempSync(join(tmpdir(), "strada-web-channel-"));
     const dbPath = join(tempDir, "web-identities.db");
@@ -513,6 +547,7 @@ describe("WebChannel inbound message limits", () => {
       "message",
       Buffer.from(JSON.stringify({
         type: "message",
+        clientMessageId: "client-msg-voice",
         text: "(voice message)",
         attachments: [
           {
@@ -529,6 +564,10 @@ describe("WebChannel inbound message limits", () => {
     expect(handler).not.toHaveBeenCalled();
     expect(socket.getSentMessages()).toEqual(
       expect.arrayContaining([
+        expect.objectContaining({
+          type: "message_received",
+          clientMessageId: "client-msg-voice",
+        }),
         expect.objectContaining({
           type: "text",
           text: 'File "voice.wma" was rejected: unsupported format or invalid content.',

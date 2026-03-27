@@ -636,6 +636,9 @@ export class WebChannel
     switch (data.type) {
       case "message": {
         const text = String(data.text ?? "").trim();
+        const clientMessageId = typeof data.clientMessageId === "string"
+          ? data.clientMessageId.trim()
+          : "";
         const rawAttachments = data.attachments as Array<{
           type?: string;
           name?: string;
@@ -646,6 +649,12 @@ export class WebChannel
 
         if (!text && (!rawAttachments || rawAttachments.length === 0)) return;
         if (!this.handler) return;
+        if (clientMessageId) {
+          this.sendToClient(chatId, {
+            type: "message_received",
+            clientMessageId,
+          });
+        }
 
         // Convert base64 attachments to Attachment[] with validation
         const attachments: Attachment[] = [];

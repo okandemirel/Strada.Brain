@@ -54,6 +54,11 @@ export interface TypingMessage {
   active: boolean
 }
 
+export interface MessageReceivedMessage {
+  type: 'message_received'
+  clientMessageId: string
+}
+
 export type IncomingMessage =
   | ConnectedMessage
   | TextMessage
@@ -62,6 +67,7 @@ export type IncomingMessage =
   | StreamUpdateMessage
   | StreamEndMessage
   | ConfirmationMessage
+  | MessageReceivedMessage
   | TypingMessage
 
 /** Outgoing message types to the WebSocket server */
@@ -69,6 +75,7 @@ export type IncomingMessage =
 export interface SendMessage {
   type: 'message'
   text: string
+  clientMessageId?: string
   attachments?: Attachment[]
 }
 
@@ -133,6 +140,7 @@ export interface ChatMessage {
   attachments?: Attachment[]
   instinctIds?: string[]
   feedback?: 'thumbs_up' | 'thumbs_down'
+  deliveryState?: 'pending' | 'failed'
 }
 
 /** Connection status */

@@ -145,6 +145,13 @@ function ChatMessageComponent({ message, onFeedback, voiceOutputEnabled = true }
   const isUser = message.sender === 'user'
   const showVoiceOutput = voiceOutputEnabled && !isUser && !message.isStreaming && hasTextContent(message.text)
   const showFeedback = !isUser && !message.isStreaming && onFeedback
+  const deliveryLabel = isUser
+    ? message.deliveryState === 'pending'
+      ? 'Sending...'
+      : message.deliveryState === 'failed'
+        ? 'Not delivered'
+        : null
+    : null
 
   return (
     <div
@@ -171,6 +178,16 @@ function ChatMessageComponent({ message, onFeedback, voiceOutputEnabled = true }
       )}
       {message.isStreaming && (
         <span className="inline-block w-0.5 h-[1em] bg-accent ml-0.5 align-text-bottom animate-[blink_1s_step-end_infinite] rounded-[1px]" />
+      )}
+      {deliveryLabel && (
+        <div
+          className={cn(
+            'mt-2 text-[11px] font-medium',
+            message.deliveryState === 'failed' ? 'text-error' : 'text-text-tertiary',
+          )}
+        >
+          {deliveryLabel}
+        </div>
       )}
       {(showVoiceOutput || showFeedback) && (
         <div className="flex items-center gap-1.5 mt-2 opacity-0 transition-opacity duration-200 group-hover:opacity-100 focus-within:opacity-100">

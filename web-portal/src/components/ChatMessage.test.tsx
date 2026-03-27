@@ -112,4 +112,18 @@ describe('ChatMessage', () => {
     const cursor = container.querySelector('.animate-\\[blink_1s_step-end_infinite\\]')
     expect(cursor).toBeInTheDocument()
   })
+
+  it('shows delivery failure state for unsent user messages', () => {
+    render(
+      <ChatMessage
+        message={makeMessage({
+          sender: 'user',
+          text: 'Queued locally',
+          deliveryState: 'failed',
+        })}
+      />,
+    )
+
+    expect(screen.getByText('Not delivered')).toBeInTheDocument()
+  })
 })
