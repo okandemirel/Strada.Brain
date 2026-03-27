@@ -185,7 +185,7 @@ export function dispatchWorkspaceMessage(data: { type: string; [key: string]: un
       break
 
     case 'canvas:viewport':
-      useCanvasStore.getState().setPendingViewport(payload as CanvasViewport)
+      useCanvasStore.getState().setPendingViewport(payload as unknown as CanvasViewport)
       suggestCanvasMode()
       break
 
@@ -211,7 +211,7 @@ export function dispatchWorkspaceMessage(data: { type: string; [key: string]: un
       }
 
       if (payload.viewport) {
-        useCanvasStore.getState().setPendingViewport(payload.viewport as CanvasViewport)
+        useCanvasStore.getState().setPendingViewport(payload.viewport as unknown as CanvasViewport)
       }
       if (payload.layout) {
         useCanvasStore.getState().setPendingLayout(payload.layout as CanvasLayout)
