@@ -116,6 +116,7 @@ interface PendingBackgroundBatch {
 type BackgroundTaskSubmitter = (
   msg: IncomingMessage,
   agent: AgentInstance,
+  orchestrator: Orchestrator,
 ) => Promise<void> | void;
 
 // =============================================================================
@@ -246,7 +247,7 @@ export class AgentManager {
       if (this.messageBurstWindowMs > 0 && this.maxBurstMessages > 1) {
         this.bufferBackgroundMessage(msg, liveAgent);
       } else {
-        await this.backgroundTaskSubmitter(msg, liveAgent.instance);
+        await this.backgroundTaskSubmitter(msg, liveAgent.instance, liveAgent.orchestrator);
         this.syncMemoryCount(liveAgent);
       }
       return;
@@ -642,7 +643,7 @@ export class AgentManager {
       // Logger may be intentionally absent in isolated tests.
     }
 
-    await this.backgroundTaskSubmitter(merged, batch.liveAgent.instance);
+    await this.backgroundTaskSubmitter(merged, batch.liveAgent.instance, batch.liveAgent.orchestrator);
     this.syncMemoryCount(batch.liveAgent);
   }
 

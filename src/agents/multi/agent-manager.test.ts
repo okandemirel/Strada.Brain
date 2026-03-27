@@ -270,14 +270,15 @@ describe("AgentManager", () => {
 
       expect(response).toBeUndefined();
       expect(submitter).toHaveBeenCalledOnce();
-      expect(submitter).toHaveBeenCalledWith(
-        expect.objectContaining({ chatId: "chat-1", text: "Handle this in background" }),
-        expect.objectContaining({ key: resolveAgentKey("web", "chat-1") }),
-      );
-
       const { Orchestrator } = await import("../orchestrator.js");
       const mockConstructor = Orchestrator as unknown as Mock;
       const orchestratorInstance = mockConstructor.mock.results[0]?.value;
+      expect(submitter).toHaveBeenCalledWith(
+        expect.objectContaining({ chatId: "chat-1", text: "Handle this in background" }),
+        expect.objectContaining({ key: resolveAgentKey("web", "chat-1") }),
+        orchestratorInstance,
+      );
+
       expect(orchestratorInstance.handleMessage).not.toHaveBeenCalled();
     });
 
@@ -323,6 +324,10 @@ describe("AgentManager", () => {
             text: expect.stringContaining("part two"),
           }),
         );
+        const { Orchestrator } = await import("../orchestrator.js");
+        const mockConstructor = Orchestrator as unknown as Mock;
+        const orchestratorInstance = mockConstructor.mock.results[0]?.value;
+        expect(submitter.mock.calls[0]?.[2]).toBe(orchestratorInstance);
       } finally {
         await burstManager.shutdown();
         vi.useRealTimers();

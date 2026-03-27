@@ -120,6 +120,14 @@ export async function initializeMultiAgentDelegationStage(
 
   const agentManager = deps.createAgentManager?.(agentManagerOptions)
     ?? new AgentManager(agentManagerOptions);
+  agentManager.setBackgroundTaskSubmitter((msg, _agent, liveOrchestrator) => {
+    params.taskManager.submit(msg.chatId, msg.channelType, msg.text, {
+      attachments: msg.attachments,
+      conversationId: msg.conversationId,
+      userId: msg.userId,
+      orchestrator: liveOrchestrator,
+    });
+  });
   params.daemonContext.agentManager = agentManager;
   params.daemonContext.agentBudgetTracker = agentBudgetTracker;
 

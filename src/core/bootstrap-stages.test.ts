@@ -768,6 +768,9 @@ describe("bootstrap-stages", () => {
       registerDelegationServices: vi.fn(),
     } as any;
     const createDelegationTools = vi.fn().mockReturnValue([{ name: "delegate-tool" }] as any);
+    const taskManager = {
+      submit: vi.fn(),
+    } as any;
 
     const result = await initializeMultiAgentDelegationStage({
       config: makeConfig({
@@ -800,9 +803,7 @@ describe("bootstrap-stages", () => {
       daemonMode: true,
       daemonStorage,
       daemonContext,
-      taskManager: {
-        submit: vi.fn(),
-      } as any,
+      taskManager,
       orchestrator,
       learningEventBus: { _tag: "learning-event-bus" } as any,
       providerManager: {
@@ -841,7 +842,28 @@ describe("bootstrap-stages", () => {
 
     expect(agentRegistry.initialize).toHaveBeenCalled();
     expect(agentBudgetTracker.initialize).toHaveBeenCalled();
-    expect(agentManager.setBackgroundTaskSubmitter).not.toHaveBeenCalled();
+    expect(agentManager.setBackgroundTaskSubmitter).toHaveBeenCalledWith(expect.any(Function));
+    const submitter = agentManager.setBackgroundTaskSubmitter.mock.calls[0]?.[0];
+    expect(typeof submitter).toBe("function");
+    submitter?.({
+      channelType: "web",
+      chatId: "chat-123",
+      conversationId: "conv-123",
+      userId: "user-123",
+      text: "Fix the broken flow",
+      attachments: [{ type: "image", name: "shot.png" }],
+      timestamp: new Date("2026-03-27T12:00:00.000Z"),
+    }, {
+      id: "agent-123",
+    }, {
+      _tag: "agent-orchestrator",
+    });
+    expect(taskManager.submit).toHaveBeenCalledWith("chat-123", "web", "Fix the broken flow", {
+      attachments: [{ type: "image", name: "shot.png" }],
+      conversationId: "conv-123",
+      userId: "user-123",
+      orchestrator: { _tag: "agent-orchestrator" },
+    });
     expect(agentManager.setDelegationFactory).toHaveBeenCalledWith(expect.any(Function));
     expect(orchestrator.addTool).toHaveBeenCalledWith({ name: "delegate-tool" });
     expect(providerRouter.setTierRouter).toHaveBeenCalledWith(tierRouter);
