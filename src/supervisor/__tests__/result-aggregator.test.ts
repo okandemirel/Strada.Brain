@@ -18,12 +18,14 @@ describe("ResultAggregator", () => {
       const results = [
         makeResult("A", "ok", "Schema created"),
         makeResult("B", "failed", "Error"),
-        makeResult("C", "ok", "Endpoint ready"),
-        makeResult("D", "skipped"),
+        { ...makeResult("C", "failed", "Need user input"), blockedReason: "Need user input" },
+        makeResult("D", "ok", "Endpoint ready"),
+        makeResult("E", "skipped"),
       ];
       const collected = agg.collect(results);
       expect(collected.succeeded).toHaveLength(2);
       expect(collected.failed).toHaveLength(1);
+      expect(collected.blocked).toHaveLength(1);
       expect(collected.skipped).toHaveLength(1);
     });
   });
@@ -68,6 +70,21 @@ describe("ResultAggregator", () => {
       const output = agg.synthesize(results);
       expect(output.success).toBe(false);
       expect(output.partial).toBe(false);
+    });
+
+    it("treats blocked node results as partial work instead of total failure", () => {
+      const agg = new ResultAggregator({ mode: "disabled", samplingRate: 0, preferDifferentProvider: true, maxVerificationCost: 15 });
+      const results = [
+        { ...makeResult("A", "failed", "Need clarification from the user"), blockedReason: "Need clarification from the user" },
+        { ...makeResult("B", "failed", "Missing API credentials"), blockedReason: "Missing API credentials" },
+      ];
+      const output = agg.synthesize(results);
+      expect(output.success).toBe(false);
+      expect(output.partial).toBe(true);
+      expect(output.failed).toBe(2);
+      expect(output.output).toContain("Blocked:");
+      expect(output.output).toContain("Need clarification from the user");
+      expect(output.output).toContain("Missing API credentials");
     });
   });
 

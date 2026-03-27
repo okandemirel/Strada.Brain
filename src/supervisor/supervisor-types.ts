@@ -8,6 +8,7 @@
  */
 
 import type { GoalNode, GoalNodeId, GoalTree } from "../goals/types.js";
+import type { WorkerExecutionEnvelope } from "../agents/supervisor/supervisor-types.js";
 import type { ToolResult } from "../agents/providers/provider-core.interface.js";
 
 // =============================================================================
@@ -70,6 +71,7 @@ export interface NodeResult {
   readonly nodeId: GoalNodeId;
   readonly status: "ok" | "failed" | "skipped";
   readonly output: string;
+  readonly blockedReason?: string;
   readonly artifacts: FileChange[];
   readonly toolResults: ToolResult[];
   readonly provider: string;
@@ -125,11 +127,10 @@ export interface SupervisorConfig {
 // =============================================================================
 
 /** Runtime context passed into the supervisor for a single invocation */
-export interface SupervisorContext {
-  readonly chatId: string;
-  readonly userId?: string;
-  readonly conversationId?: string;
+export interface SupervisorContext extends WorkerExecutionEnvelope {
   readonly signal?: AbortSignal;
+  readonly userContent?: string | import("../agents/providers/provider-core.interface.js").MessageContent[] | null;
+  readonly planningPrompt?: string;
   readonly goalTree?: GoalTree;
   readonly onGoalDecomposed?: (goalTree: GoalTree) => void;
   readonly reportUpdate?: (markdown: string) => Promise<void> | void;

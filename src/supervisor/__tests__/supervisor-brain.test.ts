@@ -119,6 +119,159 @@ describe("SupervisorBrain", () => {
     expect(executeNode).toHaveBeenCalledTimes(1);
   });
 
+  it("uses planningPrompt for decomposition while keeping the visible task stable", async () => {
+    const planningTask = "Inspect this screenshot\n\nAvailable inputs:\n- Image attachment: layout.png (image/png)";
+    const now = Date.now();
+    const decomposer = {
+      shouldDecompose: vi.fn().mockImplementation((prompt: string) => prompt.includes("Image attachment")),
+      decomposeProactive: vi.fn().mockResolvedValue({
+        rootId: "root" as any,
+        sessionId: "s1",
+        taskDescription: planningTask,
+        planSummary: "Fallback single-step execution",
+        createdAt: now,
+        nodes: new Map([
+          ["root", {
+            id: "root",
+            parentId: null,
+            task: planningTask,
+            dependsOn: [],
+            depth: 0,
+            status: "pending",
+            createdAt: now,
+            updatedAt: now,
+          }],
+          ["s1", {
+            id: "s1",
+            parentId: "root",
+            task: planningTask,
+            dependsOn: [],
+            depth: 1,
+            status: "pending",
+            createdAt: now,
+            updatedAt: now,
+          }],
+        ]),
+      }),
+    };
+    const executeNode = vi.fn().mockResolvedValue({
+      nodeId: "s1",
+      status: "ok",
+      output: "Image analyzed",
+      artifacts: [],
+      toolResults: [],
+      provider: "claude",
+      model: "sonnet",
+      cost: 0,
+      duration: 10,
+    } satisfies NodeResult);
+
+    const brain = new SupervisorBrain({
+      config: DEFAULT_CONFIG,
+      decomposer: decomposer as any,
+      capabilityMatcher: new CapabilityMatcher(),
+      providerAssigner: new ProviderAssigner(PROVIDERS),
+    });
+    brain.setExecuteNode(executeNode);
+
+    const onGoalDecomposed = vi.fn();
+    const result = await brain.execute("Inspect this screenshot", {
+      chatId: "test",
+      planningPrompt: planningTask,
+      onGoalDecomposed,
+    });
+
+    expect(result?.success).toBe(true);
+    expect(decomposer.shouldDecompose).toHaveBeenCalledWith(
+      planningTask,
+    );
+    expect(decomposer.decomposeProactive).toHaveBeenCalledWith(
+      "test",
+      planningTask,
+    );
+    const visibleGoalTree = onGoalDecomposed.mock.calls[0]?.[0];
+    expect(visibleGoalTree).toMatchObject({
+      taskDescription: "Inspect this screenshot",
+    });
+    expect(visibleGoalTree?.nodes.get("root")?.task).toBe("Inspect this screenshot");
+    expect(visibleGoalTree?.nodes.get("s1")?.task).toBe("Inspect this screenshot");
+    expect(executeNode).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "s1",
+        task: planningTask,
+      }),
+      expect.anything(),
+    );
+    expect(executeNode).toHaveBeenCalledTimes(1);
+  });
+
+  it("serializes supervisor node execution when a shared workspace lease is present", async () => {
+    const decomposer = {
+      shouldDecompose: vi.fn().mockReturnValue(true),
+      decomposeProactive: vi.fn().mockResolvedValue(
+        makeGoalTree([
+          { id: "root", task: "Build auth" },
+          { id: "s1", task: "Edit model" },
+          { id: "s2", task: "Edit controller" },
+        ]),
+      ),
+    };
+
+    let releaseFirstNode: (() => void) | undefined;
+    const firstNodeStarted = new Promise<void>((resolve) => {
+      releaseFirstNode = resolve;
+    });
+    let firstInvocation = true;
+    const executeNode = vi.fn().mockImplementation(async (node: any) => {
+      if (firstInvocation) {
+        firstInvocation = false;
+        await firstNodeStarted;
+      }
+      return {
+        nodeId: node.id,
+        status: "ok",
+        output: `Done: ${node.task}`,
+        artifacts: [],
+        toolResults: [],
+        provider: "claude",
+        model: "sonnet",
+        cost: 0.001,
+        duration: 100,
+      } satisfies NodeResult;
+    });
+
+    const brain = new SupervisorBrain({
+      config: DEFAULT_CONFIG,
+      decomposer: decomposer as any,
+      capabilityMatcher: new CapabilityMatcher(),
+      providerAssigner: new ProviderAssigner(PROVIDERS),
+    });
+    brain.setExecuteNode(executeNode);
+
+    const execution = brain.execute("Build auth system", {
+      chatId: "test",
+      workspaceLease: {
+        id: "lease-1",
+        kind: "temp-copy",
+        sourceRoot: "/tmp/source",
+        leaseRoot: "/tmp",
+        path: "/tmp/workspace",
+        createdAt: Date.now(),
+        release: vi.fn(),
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(executeNode).toHaveBeenCalledTimes(1);
+    });
+
+    releaseFirstNode?.();
+
+    const result = await execution;
+    expect(result?.success).toBe(true);
+    expect(executeNode).toHaveBeenCalledTimes(2);
+  });
+
   it("throws if executeNode not set", async () => {
     const decomposer = {
       shouldDecompose: vi.fn().mockReturnValue(true),

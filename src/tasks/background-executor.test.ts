@@ -16,8 +16,13 @@ vi.mock("../utils/logger.js", () => ({
 }));
 
 function createMockOrchestrator() {
+  const evaluateSupervisorAdmission = vi.fn().mockResolvedValue({
+    path: "direct_worker",
+    reason: "low_complexity",
+  });
   return {
-    tryRouteThroughSupervisor: vi.fn().mockResolvedValue(null),
+    evaluateSupervisorAdmission,
+    tryRouteThroughSupervisor: evaluateSupervisorAdmission,
     runBackgroundTask: vi.fn().mockResolvedValue("task done"),
     synthesizeGoalExecutionResult: vi.fn().mockResolvedValue("task done"),
   };
@@ -109,17 +114,21 @@ describe("BackgroundExecutor - Pre-decomposed Tree Path", () => {
   it("routes pre-decomposed goalTree through supervisor when available", async () => {
     const goalTree = buildTestGoalTree();
     const task = createTestTask(goalTree);
-    mockOrch.tryRouteThroughSupervisor.mockResolvedValue({
-      success: true,
-      partial: false,
-      output: "supervisor task done",
-      totalNodes: 2,
-      succeeded: 2,
-      failed: 0,
-      skipped: 0,
-      totalCost: 0,
-      totalDuration: 0,
-      nodeResults: [],
+    mockOrch.evaluateSupervisorAdmission.mockResolvedValue({
+      path: "supervisor",
+      reason: "eligible",
+      result: {
+        success: true,
+        partial: false,
+        output: "supervisor task done",
+        totalNodes: 2,
+        succeeded: 2,
+        failed: 0,
+        skipped: 0,
+        totalCost: 0,
+        totalDuration: 0,
+        nodeResults: [],
+      },
     });
 
     const executor = new BackgroundExecutor({
@@ -150,7 +159,7 @@ describe("BackgroundExecutor - Pre-decomposed Tree Path", () => {
 
     expect(mockTaskManager.fail).not.toHaveBeenCalled();
     expect(mockTaskManager.complete).toHaveBeenCalledWith(task.id, "supervisor task done");
-    expect(mockOrch.tryRouteThroughSupervisor).toHaveBeenCalledWith(
+    expect(mockOrch.evaluateSupervisorAdmission).toHaveBeenCalledWith(
       expect.objectContaining({
         prompt: task.prompt,
         goalTree,
@@ -159,22 +168,142 @@ describe("BackgroundExecutor - Pre-decomposed Tree Path", () => {
     expect(mockDecomposer.decomposeProactive).not.toHaveBeenCalled();
   });
 
-  it("blocks queued goal tasks when supervisor returns a partial result", async () => {
+  it("keeps image-backed queued goal tasks on the shared supervisor path when admission succeeds", async () => {
     const goalTree = buildTestGoalTree();
-    const task = createTestTask(goalTree);
-    mockOrch.tryRouteThroughSupervisor.mockImplementation(async (params: { onGoalDecomposed?: (goalTree: GoalTree) => void }) => {
-      params.onGoalDecomposed?.(goalTree);
-      return {
-        success: false,
-        partial: true,
-        output: "Completed:\nstep 1\n\nSkipped:\n[step-2] skipped",
+    const task = createTestTask(goalTree, {
+      attachments: [{
+        type: "image",
+        name: "layout.png",
+        mimeType: "image/png",
+        data: Buffer.from("png-data"),
+        size: 8,
+      }],
+    });
+    mockOrch.evaluateSupervisorAdmission.mockResolvedValue({
+      path: "supervisor",
+      reason: "eligible",
+      result: {
+        success: true,
+        partial: false,
+        output: "supervisor handled image-backed goal",
         totalNodes: 2,
-        succeeded: 1,
+        succeeded: 2,
         failed: 0,
-        skipped: 1,
+        skipped: 0,
         totalCost: 0,
         totalDuration: 0,
         nodeResults: [],
+      },
+    });
+
+    const executor = new BackgroundExecutor({
+      orchestrator: mockOrch as any,
+      decomposer: mockDecomposer as any,
+      goalStorage: mockGoalStorage as any,
+      daemonEventBus: mockDaemonEventBus as any,
+      aiProvider: undefined,
+      channel: undefined,
+    });
+
+    const mockTaskManager = {
+      updateStatus: vi.fn(),
+      complete: vi.fn(),
+      fail: vi.fn(),
+      block: vi.fn(),
+    };
+    executor.setTaskManager(mockTaskManager as any);
+
+    executor.enqueue(task, new AbortController().signal, vi.fn());
+
+    await vi.waitFor(() => {
+      expect(mockTaskManager.complete).toHaveBeenCalledWith(task.id, "supervisor handled image-backed goal");
+    }, { timeout: 5000 });
+
+    expect(mockOrch.evaluateSupervisorAdmission).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: task.prompt,
+        goalTree,
+        attachments: task.attachments,
+        forceEligibility: true,
+        taskRunId: task.id,
+      }),
+    );
+    expect(mockOrch.runBackgroundTask).not.toHaveBeenCalled();
+    expect(mockTaskManager.fail).not.toHaveBeenCalled();
+    expect(mockTaskManager.block).not.toHaveBeenCalled();
+  });
+
+  it("falls back to a direct worker for rich-input goal trees when supervisor declines them", async () => {
+    const goalTree = buildTestGoalTree();
+    const task = createTestTask(goalTree, {
+      attachments: [{
+        type: "image",
+        name: "layout.png",
+        mimeType: "image/png",
+        data: Buffer.from("png-data"),
+        size: 8,
+      }],
+    });
+    mockOrch.evaluateSupervisorAdmission.mockResolvedValue({
+      path: "direct_worker",
+      reason: "busy",
+    });
+
+    const executor = new BackgroundExecutor({
+      orchestrator: mockOrch as any,
+      decomposer: mockDecomposer as any,
+      goalStorage: mockGoalStorage as any,
+      daemonEventBus: mockDaemonEventBus as any,
+      aiProvider: undefined,
+      channel: undefined,
+    });
+
+    const mockTaskManager = {
+      updateStatus: vi.fn(),
+      complete: vi.fn(),
+      fail: vi.fn(),
+      block: vi.fn(),
+    };
+    executor.setTaskManager(mockTaskManager as any);
+
+    executor.enqueue(task, new AbortController().signal, vi.fn());
+
+    await vi.waitFor(() => {
+      expect(mockTaskManager.complete).toHaveBeenCalledWith(task.id, "task done");
+    }, { timeout: 5000 });
+
+    expect(mockOrch.runBackgroundTask).toHaveBeenCalledWith(
+      task.prompt,
+      expect.objectContaining({
+        attachments: task.attachments,
+        supervisorMode: "off",
+      }),
+    );
+    expect(mockOrch.runBackgroundTask).toHaveBeenCalledTimes(1);
+    expect(mockTaskManager.fail).not.toHaveBeenCalled();
+    expect(mockTaskManager.block).not.toHaveBeenCalled();
+  });
+
+  it("blocks queued goal tasks when supervisor returns a partial result", async () => {
+    const goalTree = buildTestGoalTree();
+    const task = createTestTask(goalTree);
+    mockOrch.evaluateSupervisorAdmission.mockImplementation(async (params: { onGoalDecomposed?: (goalTree: GoalTree) => void }) => {
+      params.onGoalDecomposed?.(goalTree);
+      return {
+        path: "supervisor",
+        reason: "eligible",
+        result: {
+          success: false,
+          partial: true,
+          output: "Completed:\nstep 1\n\nSkipped:\n[step-2] skipped",
+          totalNodes: 2,
+          succeeded: 1,
+          failed: 0,
+          skipped: 1,
+          totalCost: 0,
+          totalDuration: 0,
+          nodeResults: [],
+        },
       };
     });
 
@@ -219,19 +348,23 @@ describe("BackgroundExecutor - Pre-decomposed Tree Path", () => {
       conversationId: "thread-7",
     });
     const monitorLifecycle = createMockMonitorLifecycle();
-    mockOrch.tryRouteThroughSupervisor.mockImplementation(async (params: { onGoalDecomposed?: (goalTree: GoalTree) => void }) => {
+    mockOrch.evaluateSupervisorAdmission.mockImplementation(async (params: { onGoalDecomposed?: (goalTree: GoalTree) => void }) => {
       params.onGoalDecomposed?.(goalTree);
       return {
-        success: true,
-        partial: false,
-        output: "supervisor task done",
-        totalNodes: 2,
-        succeeded: 2,
-        failed: 0,
-        skipped: 0,
-        totalCost: 0,
-        totalDuration: 0,
-        nodeResults: [],
+        path: "supervisor",
+        reason: "eligible",
+        result: {
+          success: true,
+          partial: false,
+          output: "supervisor task done",
+          totalNodes: 2,
+          succeeded: 2,
+          failed: 0,
+          skipped: 0,
+          totalCost: 0,
+          totalDuration: 0,
+          nodeResults: [],
+        },
       };
     });
 
@@ -267,19 +400,23 @@ describe("BackgroundExecutor - Pre-decomposed Tree Path", () => {
   it("emits goal lifecycle events for queued supervisor executions", async () => {
     const goalTree = buildTestGoalTree();
     const task = createTestTask(goalTree);
-    mockOrch.tryRouteThroughSupervisor.mockImplementation(async (params: { onGoalDecomposed?: (goalTree: GoalTree) => void }) => {
+    mockOrch.evaluateSupervisorAdmission.mockImplementation(async (params: { onGoalDecomposed?: (goalTree: GoalTree) => void }) => {
       params.onGoalDecomposed?.(goalTree);
       return {
-        success: true,
-        partial: false,
-        output: "supervisor task done",
-        totalNodes: 2,
-        succeeded: 2,
-        failed: 0,
-        skipped: 0,
-        totalCost: 0,
-        totalDuration: 0,
-        nodeResults: [],
+        path: "supervisor",
+        reason: "eligible",
+        result: {
+          success: true,
+          partial: false,
+          output: "supervisor task done",
+          totalNodes: 2,
+          succeeded: 2,
+          failed: 0,
+          skipped: 0,
+          totalCost: 0,
+          totalDuration: 0,
+          nodeResults: [],
+        },
       };
     });
 
@@ -355,10 +492,140 @@ describe("BackgroundExecutor - Pre-decomposed Tree Path", () => {
     }, { timeout: 5000 });
 
     expect(mockTaskManager.fail).not.toHaveBeenCalled();
-    expect(mockOrch.tryRouteThroughSupervisor).toHaveBeenCalled();
+    expect(mockOrch.evaluateSupervisorAdmission).toHaveBeenCalled();
 
     // Decomposer.decomposeProactive SHOULD have been called
     expect(mockDecomposer.decomposeProactive).toHaveBeenCalled();
+  });
+
+  it("re-enters shared planning for rich-input tasks that were goal-planned without a persisted tree", async () => {
+    const task = createTestTask(undefined, {
+      prompt: "Inspect this screenshot and explain the layout bug",
+      forceSharedPlanning: true,
+      attachments: [{
+        type: "image",
+        name: "layout.png",
+        mimeType: "image/png",
+        data: Buffer.from("png-data"),
+        size: 8,
+      }],
+    });
+
+    mockDecomposer.shouldDecompose.mockReturnValue(false);
+    mockOrch.evaluateSupervisorAdmission.mockResolvedValue({
+      path: "supervisor",
+      reason: "eligible",
+      result: {
+        success: true,
+        partial: false,
+        output: "supervisor handled grounded rich task",
+        totalNodes: 1,
+        succeeded: 1,
+        failed: 0,
+        skipped: 0,
+        totalCost: 0,
+        totalDuration: 0,
+        nodeResults: [],
+      },
+    });
+
+    const executor = new BackgroundExecutor({
+      orchestrator: mockOrch as any,
+      decomposer: mockDecomposer as any,
+      goalStorage: mockGoalStorage as any,
+      daemonEventBus: mockDaemonEventBus as any,
+      aiProvider: undefined,
+      channel: undefined,
+    });
+
+    const mockTaskManager = {
+      updateStatus: vi.fn(),
+      complete: vi.fn(),
+      fail: vi.fn(),
+      block: vi.fn(),
+    };
+    executor.setTaskManager(mockTaskManager as any);
+
+    executor.enqueue(task, new AbortController().signal, vi.fn());
+
+    await vi.waitFor(() => {
+      expect(mockTaskManager.complete).toHaveBeenCalledWith(task.id, "supervisor handled grounded rich task");
+    }, { timeout: 5000 });
+
+    expect(mockOrch.evaluateSupervisorAdmission).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: task.prompt,
+        goalTree: undefined,
+        forceEligibility: true,
+        attachments: task.attachments,
+        taskRunId: task.id,
+      }),
+    );
+    expect(mockOrch.runBackgroundTask).not.toHaveBeenCalled();
+    expect(mockDecomposer.decomposeProactive).not.toHaveBeenCalled();
+  });
+
+  it("preserves queued multimodal userContent when rich input has no attachment mirror", async () => {
+    const task = createTestTask(undefined, {
+      prompt: "Inspect this screenshot and explain the layout bug",
+      forceSharedPlanning: true,
+      userContent: [
+        { type: "text", text: "Inspect this screenshot and explain the layout bug" },
+        {
+          type: "image",
+          source: {
+            type: "base64",
+            media_type: "image/png",
+            data: Buffer.from("png-data").toString("base64"),
+          },
+        },
+      ],
+    });
+
+    mockDecomposer.shouldDecompose.mockReturnValue(false);
+    mockOrch.evaluateSupervisorAdmission.mockResolvedValue({
+      path: "direct_worker",
+      reason: "multimodal_passthrough",
+    });
+
+    const executor = new BackgroundExecutor({
+      orchestrator: mockOrch as any,
+      decomposer: mockDecomposer as any,
+      goalStorage: mockGoalStorage as any,
+      daemonEventBus: mockDaemonEventBus as any,
+      aiProvider: undefined,
+      channel: undefined,
+    });
+
+    const mockTaskManager = {
+      updateStatus: vi.fn(),
+      complete: vi.fn(),
+      fail: vi.fn(),
+      block: vi.fn(),
+    };
+    executor.setTaskManager(mockTaskManager as any);
+
+    executor.enqueue(task, new AbortController().signal, vi.fn());
+
+    await vi.waitFor(() => {
+      expect(mockTaskManager.complete).toHaveBeenCalledWith(task.id, "task done");
+    }, { timeout: 5000 });
+
+    expect(mockOrch.evaluateSupervisorAdmission).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userContent: task.userContent,
+        attachments: undefined,
+        forceEligibility: true,
+      }),
+    );
+    expect(mockOrch.runBackgroundTask).toHaveBeenCalledWith(
+      task.prompt,
+      expect.objectContaining({
+        userContent: task.userContent,
+        supervisorMode: "off",
+      }),
+    );
+    expect(mockDecomposer.decomposeProactive).not.toHaveBeenCalled();
   });
 
   it("falls back to inline goal execution when supervisor declines a pre-decomposed goalTree", async () => {
@@ -389,7 +656,7 @@ describe("BackgroundExecutor - Pre-decomposed Tree Path", () => {
     }, { timeout: 5000 });
 
     expect(mockTaskManager.fail).not.toHaveBeenCalled();
-    expect(mockOrch.tryRouteThroughSupervisor).toHaveBeenCalledWith(
+    expect(mockOrch.evaluateSupervisorAdmission).toHaveBeenCalledWith(
       expect.objectContaining({
         prompt: task.prompt,
         goalTree,
@@ -398,7 +665,7 @@ describe("BackgroundExecutor - Pre-decomposed Tree Path", () => {
     expect(mockDecomposer.decomposeProactive).not.toHaveBeenCalled();
   });
 
-  it("keeps image-backed goal tasks on the orchestrator worker path", async () => {
+  it("keeps image-backed goal tasks on the direct worker path when supervisor declines them", async () => {
     const goalTree = buildTestGoalTree();
     const task = createTestTask(goalTree, {
       attachments: [{
@@ -433,30 +700,43 @@ describe("BackgroundExecutor - Pre-decomposed Tree Path", () => {
       expect(mockTaskManager.complete).toHaveBeenCalledWith(task.id, "task done");
     }, { timeout: 5000 });
 
-    expect(mockOrch.tryRouteThroughSupervisor).not.toHaveBeenCalled();
+    expect(mockOrch.evaluateSupervisorAdmission).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: task.prompt,
+        goalTree,
+        attachments: task.attachments,
+        forceEligibility: true,
+        taskRunId: task.id,
+      }),
+    );
     expect(mockOrch.runBackgroundTask).toHaveBeenCalledWith(
       task.prompt,
       expect.objectContaining({
         attachments: task.attachments,
-        supervisorMode: "auto",
+        supervisorMode: "off",
       }),
     );
+    expect(mockOrch.runBackgroundTask).toHaveBeenCalledTimes(1);
   });
 
   it("routes queued pre-decomposed tasks through supervisor before inline goal execution", async () => {
     const goalTree = buildTestGoalTree();
     const task = createTestTask(goalTree);
-    mockOrch.tryRouteThroughSupervisor.mockResolvedValue({
-      success: true,
-      partial: false,
-      output: "supervisor handled queued task",
-      totalNodes: 2,
-      succeeded: 2,
-      failed: 0,
-      skipped: 0,
-      totalCost: 0,
-      totalDuration: 0,
-      nodeResults: [],
+    mockOrch.evaluateSupervisorAdmission.mockResolvedValue({
+      path: "supervisor",
+      reason: "eligible",
+      result: {
+        success: true,
+        partial: false,
+        output: "supervisor handled queued task",
+        totalNodes: 2,
+        succeeded: 2,
+        failed: 0,
+        skipped: 0,
+        totalCost: 0,
+        totalDuration: 0,
+        nodeResults: [],
+      },
     });
 
     const executor = new BackgroundExecutor({
@@ -482,7 +762,7 @@ describe("BackgroundExecutor - Pre-decomposed Tree Path", () => {
       expect(mockTaskManager.complete).toHaveBeenCalledWith(task.id, "supervisor handled queued task");
     }, { timeout: 5000 });
 
-    expect(mockOrch.tryRouteThroughSupervisor).toHaveBeenCalledWith(
+    expect(mockOrch.evaluateSupervisorAdmission).toHaveBeenCalledWith(
       expect.objectContaining({
         prompt: task.prompt,
         goalTree,
@@ -494,20 +774,91 @@ describe("BackgroundExecutor - Pre-decomposed Tree Path", () => {
     expect(mockTaskManager.block).not.toHaveBeenCalled();
   });
 
+  it("acquires a task-scoped workspace before queued supervisor routing and releases it after completion", async () => {
+    const goalTree = buildTestGoalTree();
+    const release = vi.fn().mockResolvedValue(undefined);
+    const workspaceLease = {
+      id: "lease-task",
+      path: "/tmp/task-lease",
+      release,
+    };
+    const acquireLease = vi.fn().mockResolvedValue(workspaceLease);
+    const task = createTestTask(goalTree, {
+      attachments: [{
+        type: "image",
+        name: "layout.png",
+        mimeType: "image/png",
+        data: Buffer.from("png"),
+        size: 3,
+      }],
+    });
+    mockOrch.evaluateSupervisorAdmission.mockResolvedValue({
+      path: "direct_worker",
+      reason: "fallback",
+    });
+
+    const executor = new BackgroundExecutor({
+      orchestrator: mockOrch as any,
+      decomposer: mockDecomposer as any,
+      goalStorage: mockGoalStorage as any,
+      daemonEventBus: mockDaemonEventBus as any,
+      workspaceLeaseManager: {
+        acquireLease,
+      } as any,
+      aiProvider: undefined,
+      channel: undefined,
+    });
+
+    const mockTaskManager = {
+      updateStatus: vi.fn(),
+      complete: vi.fn(),
+      fail: vi.fn(),
+      block: vi.fn(),
+    };
+    executor.setTaskManager(mockTaskManager as any);
+
+    executor.enqueue(task, new AbortController().signal, vi.fn());
+
+    await vi.waitFor(() => {
+      expect(mockTaskManager.complete).toHaveBeenCalledWith(task.id, "task done");
+    }, { timeout: 5000 });
+
+    expect(acquireLease).toHaveBeenCalledWith({
+      label: `task-${task.id}`,
+      workerId: String(task.id),
+    });
+    expect(mockOrch.evaluateSupervisorAdmission).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceLease,
+      }),
+    );
+    expect(mockOrch.runBackgroundTask).toHaveBeenCalledWith(
+      task.prompt,
+      expect.objectContaining({
+        workspaceLease,
+      }),
+    );
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
   it("routes queued decomposable tasks through supervisor before calling the decomposer", async () => {
     const task = createTestTask();
     mockDecomposer.shouldDecompose.mockReturnValue(true);
-    mockOrch.tryRouteThroughSupervisor.mockResolvedValue({
-      success: true,
-      partial: false,
-      output: "supervisor handled decomposable task",
-      totalNodes: 2,
-      succeeded: 2,
-      failed: 0,
-      skipped: 0,
-      totalCost: 0,
-      totalDuration: 0,
-      nodeResults: [],
+    mockOrch.evaluateSupervisorAdmission.mockResolvedValue({
+      path: "supervisor",
+      reason: "eligible",
+      result: {
+        success: true,
+        partial: false,
+        output: "supervisor handled decomposable task",
+        totalNodes: 2,
+        succeeded: 2,
+        failed: 0,
+        skipped: 0,
+        totalCost: 0,
+        totalDuration: 0,
+        nodeResults: [],
+      },
     });
 
     const executor = new BackgroundExecutor({
@@ -533,7 +884,7 @@ describe("BackgroundExecutor - Pre-decomposed Tree Path", () => {
       expect(mockTaskManager.complete).toHaveBeenCalledWith(task.id, "supervisor handled decomposable task");
     }, { timeout: 5000 });
 
-    expect(mockOrch.tryRouteThroughSupervisor).toHaveBeenCalledWith(
+    expect(mockOrch.evaluateSupervisorAdmission).toHaveBeenCalledWith(
       expect.objectContaining({
         prompt: task.prompt,
         forceEligibility: true,
@@ -543,7 +894,7 @@ describe("BackgroundExecutor - Pre-decomposed Tree Path", () => {
     expect(mockOrch.runBackgroundTask).not.toHaveBeenCalled();
   });
 
-  it("keeps vision-backed queued tasks on the direct worker path", async () => {
+  it("keeps vision-backed queued tasks on the direct worker path instead of executing the prebuilt tree", async () => {
     const goalTree = buildTestGoalTree();
     const task = createTestTask(goalTree, {
       attachments: [{
@@ -578,14 +929,23 @@ describe("BackgroundExecutor - Pre-decomposed Tree Path", () => {
       expect(mockTaskManager.complete).toHaveBeenCalledWith(task.id, "task done");
     }, { timeout: 5000 });
 
-    expect(mockOrch.tryRouteThroughSupervisor).not.toHaveBeenCalled();
+    expect(mockOrch.evaluateSupervisorAdmission).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: task.prompt,
+        goalTree,
+        attachments: task.attachments,
+        forceEligibility: true,
+        taskRunId: task.id,
+      }),
+    );
     expect(mockOrch.runBackgroundTask).toHaveBeenCalledWith(
       task.prompt,
       expect.objectContaining({
         attachments: task.attachments,
-        supervisorMode: "auto",
+        supervisorMode: "off",
       }),
     );
+    expect(mockOrch.runBackgroundTask).toHaveBeenCalledTimes(1);
   });
 
   it("does not overwrite cancelled tasks back to executing when already aborted", async () => {
@@ -867,6 +1227,145 @@ describe("BackgroundExecutor - Pre-decomposed Tree Path", () => {
       }),
     );
   });
+
+  it("reuses the shared worker envelope for delegated runs and releases acquired leases", async () => {
+    const release = vi.fn().mockResolvedValue(undefined);
+    const workspaceLease = {
+      id: "lease-1",
+      workspaceId: "ws-1",
+      release,
+    };
+    const acquireLease = vi.fn().mockResolvedValue(workspaceLease);
+    const usageRecorder = vi.fn();
+    const attachments = [{
+      type: "image",
+      name: "layout.png",
+      mimeType: "image/png",
+      data: Buffer.from("png"),
+      size: 3,
+    }];
+    const runWorkerTask = vi.fn().mockResolvedValue({
+      status: "completed",
+      finalSummary: "delegated ok",
+      visibleResponse: "delegated ok",
+      provider: "mock",
+      catalogVersion: "mock:default",
+      assignmentVersion: 0,
+      touchedFiles: [],
+      toolTrace: [],
+      verificationResults: [],
+      reviewFindings: [],
+      artifacts: [],
+    });
+    const workerOrchestrator = { runWorkerTask } as any;
+    const executor = new BackgroundExecutor({
+      orchestrator: workerOrchestrator,
+      workspaceLeaseManager: {
+        acquireLease,
+      } as any,
+    });
+
+    const result = await executor.runWorkerEnvelope(workerOrchestrator, {
+      mode: "delegated",
+      prompt: "Inspect delegated node",
+      signal: new AbortController().signal,
+      onProgress: vi.fn(),
+      chatId: "chat1",
+      taskRunId: "task_test123:node1",
+      channelType: "web",
+      conversationId: "thread-1",
+      userId: "user-1",
+      attachments,
+      onUsage: usageRecorder,
+      workspaceSourceRoot: "/tmp/parent-workspace",
+      supervisorMode: "off",
+    });
+
+    expect(acquireLease).toHaveBeenCalledWith({
+      label: "delegated-worker-task_test123:node1",
+      workerId: "task_test123:node1",
+      sourceRoot: "/tmp/parent-workspace",
+      forceTempCopy: true,
+    });
+    expect(runWorkerTask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mode: "delegated",
+        prompt: "Inspect delegated node",
+        chatId: "chat1",
+        taskRunId: "task_test123:node1",
+        channelType: "web",
+        conversationId: "thread-1",
+        userId: "user-1",
+        attachments,
+        onUsage: usageRecorder,
+        workspaceLease,
+        supervisorMode: "off",
+      }),
+    );
+    expect(result.output).toBe("delegated ok");
+    expect(result.workerResult?.visibleResponse).toBe("delegated ok");
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves completed checkpoint output when direct goal execution blocks", async () => {
+    const goalTree = buildTestGoalTree();
+    const executor = new BackgroundExecutor({
+      orchestrator: {
+        runWorkerTask: vi.fn()
+          .mockResolvedValueOnce({
+            status: "completed",
+            finalSummary: "step 1 complete",
+            visibleResponse: "step 1 complete",
+            provider: "mock",
+            catalogVersion: "mock:default",
+            assignmentVersion: 0,
+            touchedFiles: [],
+            toolTrace: [],
+            verificationResults: [],
+            reviewFindings: [],
+            artifacts: [],
+          })
+          .mockResolvedValueOnce({
+            status: "blocked",
+            finalSummary: "Need user input",
+            visibleResponse: "Need user input",
+            provider: "mock",
+            catalogVersion: "mock:default",
+            assignmentVersion: 0,
+            touchedFiles: [],
+            toolTrace: [],
+            verificationResults: [],
+            reviewFindings: [],
+            artifacts: [],
+            reason: "Need user input",
+          }),
+      } as any,
+      goalStorage: mockGoalStorage as any,
+      daemonEventBus: mockDaemonEventBus as any,
+    });
+
+    const mockTaskManager = {
+      updateStatus: vi.fn(),
+      complete: vi.fn(),
+      fail: vi.fn(),
+      block: vi.fn(),
+    };
+    executor.setTaskManager(mockTaskManager as any);
+
+    executor.enqueue(createTestTask(goalTree), new AbortController().signal, vi.fn());
+
+    await vi.waitFor(() => {
+      expect(mockTaskManager.block).toHaveBeenCalledWith(
+        "task_test123",
+        expect.stringContaining("## Sub-goal: Step 1"),
+      );
+    });
+
+    const blockedSummary = mockTaskManager.block.mock.calls[0]?.[1] as string;
+    expect(blockedSummary).toContain("Blocked:");
+    expect(blockedSummary).toContain("Need user input");
+    expect(mockTaskManager.complete).not.toHaveBeenCalled();
+  });
 });
 
 describe("BackgroundExecutor - Blocked worker results", () => {
@@ -946,7 +1445,7 @@ describe("BackgroundExecutor - Blocked worker results", () => {
     await vi.waitFor(() => {
       expect(mockTaskManager.block).toHaveBeenCalledWith(
         "task_test123",
-        "Verifier loop needs external diagnosis",
+        expect.stringContaining("Verifier loop needs external diagnosis"),
       );
     });
     expect(mockTaskManager.complete).not.toHaveBeenCalled();

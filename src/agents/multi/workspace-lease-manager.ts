@@ -11,6 +11,7 @@ export interface WorkspaceLeaseRequest {
   readonly workerId?: string;
   readonly preferGitWorktree?: boolean;
   readonly forceTempCopy?: boolean;
+  readonly sourceRoot?: string;
 }
 
 export interface WorkspaceLease {
@@ -59,6 +60,13 @@ const FALLBACK_COPY_EXCLUDES = new Set([
   ".cache",
   ".vite",
 ]);
+const DERIVED_COPY_EXCLUDES = new Set([
+  ".git",
+  "node_modules",
+  "coverage",
+  ".cache",
+  ".vite",
+]);
 
 function slugifySegment(value: string): string {
   const normalized = value.trim().toLowerCase();
@@ -101,9 +109,23 @@ export class WorkspaceLeaseManager {
     const createdAt = Date.now();
     const label = request.label?.trim() || undefined;
     const workerId = request.workerId?.trim() || undefined;
+    const sourceRoot = resolve(request.sourceRoot ?? this.projectRoot);
+    if (!existsSync(sourceRoot)) {
+      throw new Error(`Workspace source root does not exist: ${sourceRoot}`);
+    }
+    if (
+      sourceRoot !== this.projectRoot &&
+      !isInsidePath(this.projectRoot, sourceRoot) &&
+      !isInsidePath(this.leaseRoot, sourceRoot)
+    ) {
+      throw new Error(
+        `Workspace source root must be inside the project root or lease root: ${sourceRoot}`,
+      );
+    }
     const baseName = slugifySegment(workerId ?? label ?? "worker");
     const workspacePath = join(this.leaseRoot, `${baseName}-${id}`);
     const useWorktree =
+      sourceRoot === this.projectRoot &&
       this.preferGitWorktree &&
       !request.forceTempCopy &&
       (await this.canUseGitWorktree());
@@ -120,14 +142,14 @@ export class WorkspaceLeaseManager {
         };
       } catch {
         kind = "temp-copy";
-        await this.createTempCopy(workspacePath);
+        await this.createTempCopy(sourceRoot, workspacePath);
         releaseImpl = async () => {
           this.removeDirectory(workspacePath);
         };
       }
     } else {
       kind = "temp-copy";
-      await this.createTempCopy(workspacePath);
+      await this.createTempCopy(sourceRoot, workspacePath);
       releaseImpl = async () => {
         this.removeDirectory(workspacePath);
       };
@@ -137,7 +159,7 @@ export class WorkspaceLeaseManager {
     return {
       id,
       kind,
-      sourceRoot: this.projectRoot,
+      sourceRoot,
       leaseRoot: this.leaseRoot,
       path: workspacePath,
       label,
@@ -193,23 +215,23 @@ export class WorkspaceLeaseManager {
     this.removeDirectory(workspacePath);
   }
 
-  private async createTempCopy(workspacePath: string): Promise<void> {
+  private async createTempCopy(sourceRoot: string, workspacePath: string): Promise<void> {
     mkdirSync(dirname(workspacePath), { recursive: true });
-    cpSync(this.projectRoot, workspacePath, {
+    cpSync(sourceRoot, workspacePath, {
       recursive: true,
       force: true,
       preserveTimestamps: true,
       dereference: false,
-      filter: (source) => this.shouldCopyEntry(source),
+      filter: (source) => this.shouldCopyEntry(sourceRoot, source),
     });
   }
 
-  private shouldCopyEntry(sourcePath: string): boolean {
-    if (sourcePath === this.projectRoot) {
+  private shouldCopyEntry(sourceRoot: string, sourcePath: string): boolean {
+    if (sourcePath === sourceRoot) {
       return true;
     }
 
-    const relative = sourcePath.slice(this.projectRoot.length).replace(/^[/\\]/, "");
+    const relative = sourcePath.slice(sourceRoot.length).replace(/^[/\\]/, "");
     if (!relative) {
       return true;
     }
@@ -217,6 +239,10 @@ export class WorkspaceLeaseManager {
     const firstSegment = relative.split(/[/\\]/, 1)[0];
     if (!firstSegment) {
       return true;
+    }
+
+    if (sourceRoot !== this.projectRoot) {
+      return !DERIVED_COPY_EXCLUDES.has(firstSegment);
     }
 
     return !FALLBACK_COPY_EXCLUDES.has(firstSegment);

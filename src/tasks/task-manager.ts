@@ -17,6 +17,7 @@ import type { TaskOrigin } from "../daemon/daemon-types.js";
 import type { GoalTree } from "../goals/types.js";
 import type { Orchestrator } from "../agents/orchestrator.js";
 import { stripVisibleProviderArtifacts } from "../agents/orchestrator-text-utils.js";
+import type { MessageContent } from "../agents/providers/provider-core.interface.js";
 
 export class TaskManager extends EventEmitter {
   private readonly abortControllers = new Map<TaskId, AbortController>();
@@ -42,6 +43,8 @@ export class TaskManager extends EventEmitter {
       origin?: TaskOrigin;
       triggerName?: string;
       goalTree?: GoalTree;
+      forceSharedPlanning?: boolean;
+      userContent?: string | MessageContent[];
       attachments?: import("../channels/channel.interface.js").Attachment[];
       orchestrator?: Orchestrator;
       conversationId?: string;
@@ -66,6 +69,8 @@ export class TaskManager extends EventEmitter {
       origin: options?.origin ?? "user",
       triggerName: options?.triggerName,
       goalTree: options?.goalTree,
+      forceSharedPlanning: options?.forceSharedPlanning,
+      userContent: options?.userContent,
       attachments: options?.attachments,
       orchestrator: options?.orchestrator,
     };

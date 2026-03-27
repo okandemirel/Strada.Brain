@@ -20,6 +20,7 @@ import type {
 export interface CollectedResults {
   readonly succeeded: NodeResult[];
   readonly failed: NodeResult[];
+  readonly blocked: NodeResult[];
   readonly skipped: NodeResult[];
 }
 
@@ -47,6 +48,7 @@ export class ResultAggregator {
   collect(results: NodeResult[]): CollectedResults {
     const succeeded: NodeResult[] = [];
     const failed: NodeResult[] = [];
+    const blocked: NodeResult[] = [];
     const skipped: NodeResult[] = [];
 
     for (const r of results) {
@@ -55,7 +57,11 @@ export class ResultAggregator {
           succeeded.push(r);
           break;
         case "failed":
-          failed.push(r);
+          if (r.blockedReason) {
+            blocked.push(r);
+          } else {
+            failed.push(r);
+          }
           break;
         case "skipped":
           skipped.push(r);
@@ -63,7 +69,7 @@ export class ResultAggregator {
       }
     }
 
-    return { succeeded, failed, skipped };
+    return { succeeded, failed, blocked, skipped };
   }
 
   // ---------------------------------------------------------------------------
@@ -162,13 +168,13 @@ export class ResultAggregator {
 
   /** Generate a SupervisorResult from collected node results. */
   synthesize(results: NodeResult[]): SupervisorResult {
-    const { succeeded, failed, skipped } = this.collect(results);
+    const { succeeded, failed, blocked, skipped } = this.collect(results);
     const totalNodes = results.length;
     const totalCost = results.reduce((sum, r) => sum + r.cost, 0);
     const totalDuration = results.reduce((max, r) => Math.max(max, r.duration), 0);
 
     // Full success: all ok
-    if (failed.length === 0 && skipped.length === 0) {
+    if (failed.length === 0 && blocked.length === 0 && skipped.length === 0) {
       const output = succeeded.map((r) => r.output).join("\n\n");
       return {
         success: true,
@@ -185,7 +191,7 @@ export class ResultAggregator {
     }
 
     // Total failure: all failed (no successes)
-    if (succeeded.length === 0) {
+    if (succeeded.length === 0 && blocked.length === 0) {
       const failureDetails = failed
         .map((r) => `[${r.nodeId}] ${r.output}`)
         .join("\n");
@@ -203,26 +209,34 @@ export class ResultAggregator {
       };
     }
 
-    // Partial success: some ok, some failed/skipped
+    const sections: string[] = [];
     const completedWork = succeeded.map((r) => r.output).join("\n\n");
+    const blockedList = blocked
+      .map((r) => `[${r.nodeId}] ${r.blockedReason ?? r.output}`)
+      .join("\n");
     const failureList = failed.map((r) => `[${r.nodeId}] ${r.output}`).join("\n");
     const skippedList = skipped.map((r) => `[${r.nodeId}] skipped`).join("\n");
 
-    let output = `Completed:\n${completedWork}`;
-    if (failed.length > 0) {
-      output += `\n\nFailed:\n${failureList}`;
+    if (completedWork) {
+      sections.push(`Completed:\n${completedWork}`);
     }
-    if (skipped.length > 0) {
-      output += `\n\nSkipped:\n${skippedList}`;
+    if (blockedList) {
+      sections.push(`Blocked:\n${blockedList}`);
+    }
+    if (failureList) {
+      sections.push(`Failed:\n${failureList}`);
+    }
+    if (skippedList) {
+      sections.push(`Skipped:\n${skippedList}`);
     }
 
     return {
       success: false,
-      partial: true,
-      output,
+      partial: succeeded.length > 0 || blocked.length > 0,
+      output: sections.join("\n\n"),
       totalNodes,
       succeeded: succeeded.length,
-      failed: failed.length,
+      failed: failed.length + blocked.length,
       skipped: skipped.length,
       totalCost,
       totalDuration,

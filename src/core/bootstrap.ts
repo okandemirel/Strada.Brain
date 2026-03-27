@@ -75,6 +75,7 @@ import type { DelegationManager as DelegationManagerType } from "../agents/multi
 import { HeartbeatLoop } from "../daemon/heartbeat-loop.js";
 import { NotificationRouter } from "../daemon/reporting/notification-router.js";
 import { DigestReporter } from "../daemon/reporting/digest-reporter.js";
+import type { DaemonEventMap } from "../daemon/daemon-events.js";
 
 // Workspace / monitor bridge imports
 import { createWorkspaceBus, type WorkspaceBus } from "../dashboard/workspace-bus.js";
@@ -92,8 +93,10 @@ import type { PostSetupBootstrap } from "../common/setup-contract.js";
 // Task system imports
 import { MessageRouter } from "../tasks/index.js";
 import { buildTaskProgressSummary } from "../tasks/progress-signals.js";
+import type { BackgroundExecutor } from "../tasks/background-executor.js";
 
 import type { IChannelAdapter } from "../channels/channel.interface.js";
+import type { NodeResult, SupervisorContext, TaggedGoalNode } from "../supervisor/supervisor-types.js";
 
 // Extracted helpers — imported and re-exported for backward compatibility
 import {
@@ -131,6 +134,172 @@ const wireMessageHandler = _wireMessageHandler;
 const setupCleanup = _setupCleanup;
 const createShutdownHandler = _createShutdownHandler;
 const generateSessionId = _generateSessionId;
+
+export function createSupervisorExecuteNodeBridge(params: {
+  backgroundExecutor: Pick<BackgroundExecutor, "runWorkerEnvelope">;
+  orchestrator: Orchestrator;
+  workspaceBus?: WorkspaceBus | null;
+  defaultChannelType?: string;
+}): (node: TaggedGoalNode, context: SupervisorContext) => Promise<NodeResult> {
+  return async (node, context) => {
+    let lastNarrative = "";
+    let lastNarrativeAt = 0;
+    const nodeTaskRunId = `${context.taskRunId?.trim() || `supervisor:${context.chatId}`}:${node.id}`;
+    const startedAt = Date.now();
+    const toNodeArtifacts = (workerResult?: { touchedFiles?: readonly string[] }) =>
+      (workerResult?.touchedFiles ?? []).map((path) => ({ path, action: "modify" as const }));
+    try {
+      const result = await params.backgroundExecutor.runWorkerEnvelope(params.orchestrator, {
+        mode: "delegated",
+        prompt: node.task,
+        chatId: context.chatId,
+        channelType: context.channelType ?? params.defaultChannelType ?? "cli",
+        conversationId: context.conversationId,
+        userId: context.userId,
+        taskRunId: nodeTaskRunId,
+        assignedProvider: node.assignedProvider,
+        assignedModel: node.assignedModel,
+        attachments: context.attachments,
+        userContent: context.userContent,
+        onUsage: context.onUsage,
+        workspaceLease: context.workspaceLease,
+        signal: context.signal ?? AbortSignal.timeout(300_000),
+        onProgress: (update) => {
+          const narrative = buildTaskProgressSummary(
+            { title: node.task, prompt: node.task },
+            update,
+            "en",
+          );
+          const now = Date.now();
+          if (
+            !params.workspaceBus ||
+            (!narrative || (narrative === lastNarrative && now - lastNarrativeAt < 1500))
+          ) {
+            return;
+          }
+          lastNarrative = narrative;
+          lastNarrativeAt = now;
+          params.workspaceBus.emit("progress:narrative", {
+            nodeId: String(node.id),
+            narrative,
+            lang: narrative.startsWith("Aşama:") ? "tr" : "en",
+          });
+        },
+        supervisorMode: "off",
+      });
+
+      if (result.workerResult?.status === "blocked") {
+        return {
+          nodeId: node.id,
+          status: "failed" as const,
+          output: result.workerResult.reason ?? result.output ?? "Worker blocked",
+          blockedReason: result.workerResult.reason ?? result.output ?? "Worker blocked",
+          artifacts: toNodeArtifacts(result.workerResult),
+          toolResults: [],
+          provider: result.workerResult.provider ?? node.assignedProvider ?? "unknown",
+          model: result.workerResult.model ?? node.assignedModel ?? "unknown",
+          cost: 0,
+          duration: Date.now() - startedAt,
+        };
+      }
+
+      if (result.workerResult?.status === "failed") {
+        return {
+          nodeId: node.id,
+          status: "failed" as const,
+          output: result.workerResult.reason ?? result.output ?? "Worker failed",
+          artifacts: toNodeArtifacts(result.workerResult),
+          toolResults: [],
+          provider: result.workerResult.provider ?? node.assignedProvider ?? "unknown",
+          model: result.workerResult.model ?? node.assignedModel ?? "unknown",
+          cost: 0,
+          duration: Date.now() - startedAt,
+        };
+      }
+
+      return {
+        nodeId: node.id,
+        status: "ok" as const,
+        output: result.output ?? "",
+        artifacts: toNodeArtifacts(result.workerResult),
+        toolResults: [],
+        provider: result.workerResult?.provider ?? node.assignedProvider ?? "unknown",
+        model: result.workerResult?.model ?? node.assignedModel ?? "unknown",
+        cost: 0,
+        duration: Date.now() - startedAt,
+      };
+    } catch (err) {
+      return {
+        nodeId: node.id,
+        status: "failed" as const,
+        output: String(err),
+        artifacts: [],
+        toolResults: [],
+        provider: node.assignedProvider ?? "unknown",
+        model: node.assignedModel ?? "unknown",
+        cost: 0,
+        duration: Date.now() - startedAt,
+      };
+    }
+  };
+}
+
+export function initializeWorkspaceRuntime(params: {
+  learningEventBus?: IEventBus<LearningEventMap>;
+  daemonEventBus?: IEventBus<DaemonEventMap>;
+  channel: { broadcastRaw?: (msg: string) => void };
+  orchestrator: Pick<Orchestrator, "setWorkspaceBus" | "setMonitorLifecycle">;
+  backgroundExecutor: Pick<BackgroundExecutor, "setWorkspaceBus" | "setMonitorLifecycle" | "runWorkerEnvelope">;
+  supervisorBrain?: {
+    setExecuteNode: (fn: (node: TaggedGoalNode, context: SupervisorContext) => Promise<NodeResult>) => void;
+    setEventEmitter: (emitter: WorkspaceBus) => void;
+  } | null;
+  dashboard?: { setWorkspaceBus: (workspaceBus: WorkspaceBus) => void } | null;
+  stoppableServers?: Array<{ stop?: () => void }>;
+  channelType?: string;
+  orchestratorForSupervisorBridge: Orchestrator;
+}): WorkspaceBus {
+  const workspaceBus = createWorkspaceBus();
+
+  if (params.learningEventBus && params.daemonEventBus) {
+    const lwBridge = createLearningWorkspaceBridge(
+      params.learningEventBus,
+      params.daemonEventBus,
+      workspaceBus,
+    );
+    lwBridge.start();
+    params.stoppableServers?.push(lwBridge);
+  }
+
+  if (typeof params.channel.broadcastRaw === "function") {
+    const broadcastFn = params.channel.broadcastRaw.bind(params.channel);
+    const monitorBridge = createMonitorBridge(
+      workspaceBus,
+      broadcastFn,
+    );
+    monitorBridge.start();
+    params.stoppableServers?.push(monitorBridge);
+  }
+
+  params.orchestrator.setWorkspaceBus(workspaceBus);
+  const monitorLifecycle = createMonitorLifecycle(workspaceBus);
+  params.orchestrator.setMonitorLifecycle(monitorLifecycle);
+  params.backgroundExecutor.setWorkspaceBus(workspaceBus);
+  params.backgroundExecutor.setMonitorLifecycle(monitorLifecycle);
+  if (params.supervisorBrain) {
+    params.supervisorBrain.setExecuteNode(createSupervisorExecuteNodeBridge({
+      backgroundExecutor: params.backgroundExecutor,
+      orchestrator: params.orchestratorForSupervisorBridge,
+      workspaceBus,
+      defaultChannelType: params.channelType,
+    }));
+    params.supervisorBrain.setEventEmitter(workspaceBus);
+  }
+
+  params.dashboard?.setWorkspaceBus(workspaceBus);
+
+  return workspaceBus;
+}
 
 export interface BootstrapOptions {
   channelType: string;
@@ -506,63 +675,6 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     loopHardCapBlock: config.loopHardCapBlock,
     progressAssessmentEnabled: config.progressAssessmentEnabled,
   });
-
-  // Wire SupervisorBrain executeNode callback (post-construction circular dependency resolution)
-  if (supervisorBrain) {
-    supervisorBrain.setExecuteNode(async (node, context) => {
-      let lastNarrative = "";
-      let lastNarrativeAt = 0;
-      try {
-        const output = await orchestrator.runBackgroundTask(node.task, {
-          chatId: context.chatId,
-          signal: context.signal ?? AbortSignal.timeout(300_000),
-          onProgress: (update) => {
-            const narrative = buildTaskProgressSummary(
-              { title: node.task, prompt: node.task },
-              update,
-              "en",
-            );
-            const now = Date.now();
-            if (!workspaceBus || (!narrative || (narrative === lastNarrative && now - lastNarrativeAt < 1500))) {
-              return;
-            }
-            lastNarrative = narrative;
-            lastNarrativeAt = now;
-            workspaceBus.emit("progress:narrative", {
-              nodeId: String(node.id),
-              narrative,
-              lang: narrative.startsWith("Aşama:") ? "tr" : "en",
-            });
-          },
-          channelType: channelType,
-          supervisorMode: "off",
-        });
-        return {
-          nodeId: node.id,
-          status: "ok" as const,
-          output: output ?? "",
-          artifacts: [],
-          toolResults: [],
-          provider: node.assignedProvider ?? "unknown",
-          model: node.assignedModel ?? "unknown",
-          cost: 0,
-          duration: 0,
-        };
-      } catch (err) {
-        return {
-          nodeId: node.id,
-          status: "failed" as const,
-          output: String(err),
-          artifacts: [],
-          toolResults: [],
-          provider: node.assignedProvider ?? "unknown",
-          model: node.assignedModel ?? "unknown",
-          cost: 0,
-          duration: 0,
-        };
-      }
-    });
-  }
 
   const { chainManager } = await initializeToolChainStage({
     config,
@@ -948,6 +1060,21 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   // Setup cleanup
   const cleanupInterval = setupCleanup(orchestrator);
 
+  // Workspace/monitor runtime must be wired before channel.connect() so the
+  // first inbound supervisor request cannot race ahead of executeNode setup.
+  const workspaceBus = initializeWorkspaceRuntime({
+    learningEventBus: learningResult.eventBus,
+    daemonEventBus,
+    channel: channel as { broadcastRaw?: (msg: string) => void },
+    orchestrator,
+    backgroundExecutor,
+    supervisorBrain,
+    dashboard,
+    stoppableServers,
+    channelType,
+    orchestratorForSupervisorBridge: orchestrator,
+  });
+
   const bootReport = await finalizeChannelStartupStage({
     beforeChannelConnect,
     channel,
@@ -992,47 +1119,6 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     bootReport,
     providerRouter,
   });
-
-  // Workspace bus: bridge learning/daemon events into the monitor UI
-  const workspaceBus = createWorkspaceBus();
-
-  // Wire learning + daemon events into workspace bus (both buses are optional)
-  if (learningResult.eventBus && daemonEventBus) {
-    const lwBridge = createLearningWorkspaceBridge(
-      learningResult.eventBus,
-      daemonEventBus,
-      workspaceBus,
-    );
-    lwBridge.start();
-    stoppableServers.push(lwBridge);
-  }
-
-  // Monitor bridge: fan-out workspace events to all connected WS clients
-  const channelWithBroadcast = channel as { broadcastRaw?: (msg: string) => void };
-  if (typeof channelWithBroadcast.broadcastRaw === "function") {
-    const broadcastFn = channelWithBroadcast.broadcastRaw.bind(channelWithBroadcast);
-    const monitorBridge = createMonitorBridge(
-      workspaceBus,
-      broadcastFn,
-    );
-    monitorBridge.start();
-    stoppableServers.push(monitorBridge);
-  }
-
-  // Wire workspace bus into orchestrator + background executor for monitor events
-  orchestrator.setWorkspaceBus(workspaceBus);
-  const monitorLifecycle = createMonitorLifecycle(workspaceBus);
-  orchestrator.setMonitorLifecycle(monitorLifecycle);
-  backgroundExecutor.setWorkspaceBus(workspaceBus);
-  backgroundExecutor.setMonitorLifecycle(monitorLifecycle);
-  if (supervisorBrain) {
-    supervisorBrain.setEventEmitter(workspaceBus);
-  }
-
-  // Wire workspace bus into dashboard for monitor REST endpoints (Phase 3)
-  if (dashboard) {
-    dashboard.setWorkspaceBus(workspaceBus);
-  }
 
   // Wire canvas storage into dashboard for canvas REST endpoints (Phase 4)
   if (dashboard) {

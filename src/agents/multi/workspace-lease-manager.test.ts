@@ -135,4 +135,59 @@ describe("WorkspaceLeaseManager", () => {
 
     await lease.release();
   });
+
+  it("can derive a temp-copy lease from an existing workspace root", async () => {
+    const projectRoot = makeTempDir("workspace-lease-derived-project-");
+    const leaseRoot = makeTempDir("workspace-lease-root-");
+    const parentWorkspaceRoot = mkdtempSync(join(leaseRoot, "workspace-lease-derived-parent-"));
+    tempDirs.push(parentWorkspaceRoot);
+    writeFileSync(join(projectRoot, "base.txt"), "project");
+    writeFileSync(join(parentWorkspaceRoot, "base.txt"), "parent");
+    writeFileSync(join(parentWorkspaceRoot, "child.txt"), "derived");
+    mkdirSync(join(parentWorkspaceRoot, "dist"), { recursive: true });
+    mkdirSync(join(parentWorkspaceRoot, "node_modules", "left-pad"), { recursive: true });
+    writeFileSync(join(parentWorkspaceRoot, "dist", "bundle.js"), "compiled");
+    writeFileSync(join(parentWorkspaceRoot, "node_modules", "left-pad", "index.js"), "module.exports = 0;");
+
+    const { runner, calls } = createRunner([]);
+    const manager = new WorkspaceLeaseManager({
+      projectRoot,
+      leaseRoot,
+      commandRunner: runner,
+    });
+
+    const lease = await manager.acquireLease({
+      workerId: "worker-derived",
+      sourceRoot: parentWorkspaceRoot,
+    });
+
+    expect(lease.kind).toBe("temp-copy");
+    expect(lease.sourceRoot).toBe(parentWorkspaceRoot);
+    expect(readFileSync(join(lease.path, "base.txt"), "utf8")).toBe("parent");
+    expect(readFileSync(join(lease.path, "child.txt"), "utf8")).toBe("derived");
+    expect(readFileSync(join(lease.path, "dist", "bundle.js"), "utf8")).toBe("compiled");
+    expect(existsSync(join(lease.path, "node_modules"))).toBe(false);
+    expect(calls).toHaveLength(0);
+
+    await lease.release();
+  });
+
+  it("rejects source roots outside the project and lease roots", async () => {
+    const projectRoot = makeTempDir("workspace-lease-contained-project-");
+    const leaseRoot = makeTempDir("workspace-lease-contained-root-");
+    const unrelatedRoot = makeTempDir("workspace-lease-unrelated-");
+    writeFileSync(join(projectRoot, "base.txt"), "project");
+    writeFileSync(join(unrelatedRoot, "secret.txt"), "outside");
+
+    const manager = new WorkspaceLeaseManager({
+      projectRoot,
+      leaseRoot,
+      commandRunner: createRunner([]).runner,
+    });
+
+    await expect(manager.acquireLease({
+      sourceRoot: unrelatedRoot,
+      workerId: "worker-outside",
+    })).rejects.toThrow("Workspace source root must be inside the project root or lease root");
+  });
 });

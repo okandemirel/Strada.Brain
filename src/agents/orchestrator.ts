@@ -277,6 +277,179 @@ interface TaskExecutionContext {
   readonly taskRunId?: string;
 }
 
+export type SupervisorAdmissionPath = "supervisor" | "direct_worker" | "direct_goal_execution";
+
+export type SupervisorAdmissionReason =
+  | "eligible"
+  | "multimodal_passthrough"
+  | "busy"
+  | "low_complexity"
+  | "not_decomposable"
+  | "unavailable"
+  | "supervisor_error";
+
+export interface SupervisorAdmissionRequest {
+  readonly prompt: string;
+  readonly chatId: string;
+  readonly channelType?: string;
+  readonly userId?: string;
+  readonly conversationId?: string;
+  readonly signal?: AbortSignal;
+  readonly goalTree?: GoalTree;
+  readonly forceEligibility?: boolean;
+  readonly userContent?: string | MessageContent[] | null;
+  readonly attachments?: Attachment[];
+  readonly taskRunId?: string;
+  readonly onUsage?: (usage: TaskUsageEvent) => void;
+  readonly workspaceLease?: WorkspaceLease;
+  readonly onActivated?: (
+    activation: ReturnType<typeof buildSupervisorActivationNarrative>,
+  ) => Promise<void> | void;
+  readonly reportUpdate?: (markdown: string) => Promise<void> | void;
+  readonly onGoalDecomposed?: (goalTree: GoalTree) => void;
+}
+
+export type SupervisorAdmissionDecision =
+  | {
+      readonly path: "supervisor";
+      readonly reason: "eligible";
+      readonly result: SupervisorResult;
+    }
+  | {
+      readonly path: Exclude<SupervisorAdmissionPath, "supervisor">;
+      readonly reason: Exclude<SupervisorAdmissionReason, "eligible">;
+    };
+
+function extractSupervisorPromptText(
+  content?: string | MessageContent[] | null,
+): string {
+  if (typeof content === "string") {
+    return content.trim();
+  }
+  if (!Array.isArray(content)) {
+    return "";
+  }
+
+  return content
+    .flatMap((block) => {
+      switch (block.type) {
+        case "text":
+          return [block.text.trim()];
+        case "tool_result":
+          return [block.content.trim()];
+        case "tool_use":
+          return [`${block.name}(${JSON.stringify(block.input)})`];
+        case "image":
+          return [];
+      }
+    })
+    .filter((part) => part.length > 0)
+    .join("\n");
+}
+
+function describeSupervisorAttachment(attachment: Attachment): string {
+  const labelByType: Record<Attachment["type"], string> = {
+    image: "Image attachment",
+    audio: "Audio attachment",
+    video: "Video attachment",
+    document: "Document attachment",
+    file: "File attachment",
+  };
+  const label = labelByType[attachment.type] ?? "Attachment";
+  const name = attachment.name?.trim() || "unnamed";
+  const mime = attachment.mimeType?.trim() || "unknown";
+  return `${label}: ${name} (${mime})`;
+}
+
+function getSupervisorAttachmentNotes(
+  params: Pick<SupervisorAdmissionRequest, "userContent" | "attachments">,
+): string[] {
+  const attachmentNotes = (params.attachments ?? []).map(describeSupervisorAttachment);
+  if (attachmentNotes.length > 0) {
+    return attachmentNotes;
+  }
+
+  if (Array.isArray(params.userContent)) {
+    const imageBlockCount = params.userContent.filter((block) => block.type === "image").length;
+    if (imageBlockCount > 0) {
+      return [
+        `Image attachment${imageBlockCount === 1 ? "" : "s"} available for analysis (${imageBlockCount})`,
+      ];
+    }
+  }
+
+  return [];
+}
+
+function buildSupervisorPlanningPrompt(
+  params: Pick<SupervisorAdmissionRequest, "prompt" | "userContent" | "attachments">,
+): string {
+  const basePrompt = params.prompt.trim() || extractSupervisorPromptText(params.userContent) || DEFAULT_IMAGE_PROMPT;
+  const sections: string[] = [basePrompt];
+  const attachmentNotes = getSupervisorAttachmentNotes(params);
+
+  if (attachmentNotes.length > 0) {
+    sections.push(`Available inputs:\n${attachmentNotes.map((note) => `- ${note}`).join("\n")}`);
+  }
+
+  return sections.join("\n\n");
+}
+
+function appendAttachmentNotesToGroundingContent(
+  content: MessageContent[],
+  attachments?: Attachment[],
+): MessageContent[] {
+  const nonImageAttachmentNotes = (attachments ?? [])
+    .filter((attachment) => !attachment.mimeType || !isVisionCompatible(attachment.mimeType) || (!attachment.data && !attachment.url))
+    .map(describeSupervisorAttachment);
+  if (nonImageAttachmentNotes.length === 0) {
+    return content;
+  }
+
+  const supplementalText = `Additional attachments:\n${nonImageAttachmentNotes.map((note) => `- ${note}`).join("\n")}`;
+  const textIndex = content.findIndex((block) => block.type === "text");
+  if (textIndex === -1) {
+    return [{ type: "text", text: supplementalText }, ...content];
+  }
+
+  const textBlocks = content.filter((block): block is Extract<MessageContent, { type: "text" }> => block.type === "text");
+  if (nonImageAttachmentNotes.every((note) => textBlocks.some((block) => block.text.includes(note)))) {
+    return content;
+  }
+
+  const updated = [...content];
+  const current = updated[textIndex];
+  if (current?.type === "text") {
+    updated[textIndex] = {
+      ...current,
+      text: current.text.trim() ? `${current.text}\n\n${supplementalText}` : supplementalText,
+    };
+  }
+  return updated;
+}
+
+function buildSupervisorGroundingContent(
+  params: Pick<SupervisorAdmissionRequest, "prompt" | "userContent" | "attachments">,
+): MessageContent[] | null {
+  if (Array.isArray(params.userContent) && params.userContent.some((block) => block.type === "image")) {
+    return appendAttachmentNotesToGroundingContent(params.userContent, params.attachments);
+  }
+
+  const imageAttachments = (params.attachments ?? []).filter(
+    (attachment) => attachment.mimeType && isVisionCompatible(attachment.mimeType) && (attachment.data || attachment.url),
+  );
+  if (imageAttachments.length === 0) {
+    return null;
+  }
+
+  const content = buildUserContent(
+    params.prompt.trim() || extractSupervisorPromptText(params.userContent) || DEFAULT_IMAGE_PROMPT,
+    params.attachments,
+    true,
+  );
+  return Array.isArray(content) ? content : null;
+}
+
 type ToolExecutionMode = "interactive" | "background" | "delegated";
 
 interface ToolExecutionOptions {
@@ -722,21 +895,106 @@ export class Orchestrator {
     return classification.complexity === "complex";
   }
 
-  private canRouteThroughSupervisor(params: {
+  private hasRichSupervisorInput(params: {
     userContent?: string | MessageContent[] | null;
     attachments?: Attachment[];
   }): boolean {
     if (Array.isArray(params.userContent) && params.userContent.some((block) => block.type !== "text")) {
-      return false;
+      return true;
     }
-    if ((params.attachments?.length ?? 0) > 0) {
-      return false;
+    return (params.attachments?.length ?? 0) > 0;
+  }
+
+  private resolveSupervisorFallbackPath(
+    params: Pick<SupervisorAdmissionRequest, "goalTree" | "forceEligibility" | "userContent" | "attachments">,
+  ): Exclude<SupervisorAdmissionPath, "supervisor"> {
+    if (this.hasRichSupervisorInput(params)) {
+      return "direct_worker";
     }
-    return true;
+    if (params.goalTree) {
+      return "direct_goal_execution";
+    }
+    return params.forceEligibility ? "direct_goal_execution" : "direct_worker";
   }
 
   private resolveSupervisorScope(chatId: string, channelType?: string, conversationId?: string): string {
     return JSON.stringify([channelType?.trim() || "", resolveConversationScope(chatId, conversationId)]);
+  }
+
+  private selectSupervisorPlanningProvider(identityKey: string): IAIProvider | null {
+    const providerManager = this.providerManager as ProviderManager & {
+      getPrimaryProviderByName?: (name: string, model?: string) => IAIProvider | null;
+    };
+    const activeInfo = this.providerManager.getActiveInfo(identityKey);
+    const preferredProvider =
+      providerManager.getPrimaryProviderByName?.(activeInfo.providerName, activeInfo.model)
+      ?? this.providerManager.getProvider(identityKey);
+    if (preferredProvider.capabilities.vision) {
+      return preferredProvider;
+    }
+
+    for (const candidate of this.providerManager.listExecutionCandidates(identityKey)) {
+      const capabilities = this.providerManager.getProviderCapabilities(candidate.name, candidate.defaultModel);
+      if (!capabilities?.vision) {
+        continue;
+      }
+      const provider =
+        providerManager.getPrimaryProviderByName?.(candidate.name, candidate.defaultModel)
+        ?? this.providerManager.getProviderByName(candidate.name, candidate.defaultModel);
+      if (provider?.capabilities.vision) {
+        return provider;
+      }
+    }
+
+    return null;
+  }
+
+  private async resolveGroundedSupervisorPlanningPrompt(
+    params: SupervisorAdmissionRequest,
+    coarsePlanningPrompt: string,
+  ): Promise<string | null> {
+    const groundingContent = buildSupervisorGroundingContent(params);
+    if (!groundingContent) {
+      return null;
+    }
+
+    const identityKey = resolveIdentityKey(
+      params.chatId,
+      params.userId,
+      params.conversationId,
+      this.userProfileStore,
+      params.channelType,
+    );
+    const planningProvider = this.selectSupervisorPlanningProvider(identityKey);
+    if (!planningProvider?.capabilities.vision) {
+      return null;
+    }
+
+    try {
+      const response = await planningProvider.chat(
+        [
+          "You are preparing internal planning context for a task orchestrator.",
+          "Summarize only grounded facts from the user's multimodal input.",
+          "Include visible UI states, errors, labels, filenames, and constraints that matter for task decomposition.",
+          "Do not solve the task, ask follow-up questions, or invent unseen details.",
+          "Respond in at most 6 short bullet points.",
+        ].join(" "),
+        [{ role: "user", content: groundingContent }],
+        [],
+      );
+      this.recordProviderUsage(planningProvider.name, response.usage, params.onUsage);
+      const groundedContext = this.stripInternalDecisionMarkers(response.text ?? "").trim();
+      if (!groundedContext) {
+        return null;
+      }
+      return `${coarsePlanningPrompt}\n\nGrounded multimodal context:\n${groundedContext}`;
+    } catch (error) {
+      getLogger().warn("Failed to ground supervisor multimodal planning context", {
+        chatId: params.chatId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
   }
 
   private getSupervisorWorkerStatus(result: SupervisorResult): WorkerRunResult["status"] {
@@ -746,35 +1004,46 @@ export class Orchestrator {
     return result.partial ? "blocked" : "failed";
   }
 
-  async tryRouteThroughSupervisor(params: {
-    prompt: string;
-    chatId: string;
-    channelType?: string;
-    userId?: string;
-    conversationId?: string;
-    signal?: AbortSignal;
-    goalTree?: GoalTree;
-    forceEligibility?: boolean;
-    userContent?: string | MessageContent[] | null;
-    attachments?: Attachment[];
-    onActivated?: (
-      activation: ReturnType<typeof buildSupervisorActivationNarrative>,
-    ) => Promise<void> | void;
-    reportUpdate?: (markdown: string) => Promise<void> | void;
-    onGoalDecomposed?: (goalTree: GoalTree) => void;
-  }): Promise<SupervisorResult | null> {
-    if (!this.supervisorBrain || !this.canRouteThroughSupervisor(params)) {
-      return null;
+  async evaluateSupervisorAdmission(
+    params: SupervisorAdmissionRequest,
+  ): Promise<SupervisorAdmissionDecision> {
+    const fallbackPath = this.resolveSupervisorFallbackPath(params);
+    const coarsePlanningPrompt = buildSupervisorPlanningPrompt(params);
+    const shouldRegroundRichInput = this.hasRichSupervisorInput(params);
+    const supervisorGoalTree = shouldRegroundRichInput ? undefined : params.goalTree;
+    if (!this.supervisorBrain) {
+      return {
+        path: fallbackPath,
+        reason: "unavailable",
+      };
     }
 
-    const classification = this.taskClassifier?.classify(params.prompt);
+    const classification = this.taskClassifier?.classify(coarsePlanningPrompt);
     const shouldForceSupervisor = params.forceEligibility || Boolean(params.goalTree);
     if (!shouldForceSupervisor && (!classification || !this.shouldActivateSupervisor(classification))) {
-      return null;
+      return {
+        path: fallbackPath,
+        reason: "low_complexity",
+      };
     }
 
-    if (!this.supervisorBrain.shouldExecute(params.prompt, params.goalTree)) {
-      return null;
+    let supervisorPlanningPrompt = coarsePlanningPrompt;
+    if (shouldRegroundRichInput) {
+      const groundedPlanningPrompt = await this.resolveGroundedSupervisorPlanningPrompt(params, coarsePlanningPrompt);
+      if (!groundedPlanningPrompt) {
+        return {
+          path: fallbackPath,
+          reason: "multimodal_passthrough",
+        };
+      }
+      supervisorPlanningPrompt = groundedPlanningPrompt;
+    }
+
+    if (!this.supervisorBrain.shouldExecute(supervisorPlanningPrompt, supervisorGoalTree)) {
+      return {
+        path: fallbackPath,
+        reason: "not_decomposable",
+      };
     }
 
     const supervisorScope = this.resolveSupervisorScope(
@@ -783,7 +1052,10 @@ export class Orchestrator {
       params.conversationId,
     );
     if (this.activeSupervisorScopes.has(supervisorScope)) {
-      return null;
+      return {
+        path: fallbackPath,
+        reason: "busy",
+      };
     }
 
     this.activeSupervisorScopes.add(supervisorScope);
@@ -794,21 +1066,47 @@ export class Orchestrator {
       } catch {
         // Activation feedback is best-effort only.
       }
-      return await this.supervisorBrain.execute(params.prompt, {
+      const result = await this.supervisorBrain.execute(params.prompt, {
         chatId: params.chatId,
+        channelType: params.channelType,
         userId: params.userId,
         conversationId: params.conversationId,
+        taskRunId: params.taskRunId,
+        attachments: params.attachments,
+        onUsage: params.onUsage,
+        workspaceLease: params.workspaceLease,
+        userContent: params.userContent,
+        planningPrompt: supervisorPlanningPrompt,
         ...(params.signal ? { signal: params.signal } : {}),
-        ...(params.goalTree ? { goalTree: params.goalTree } : {}),
+        ...(supervisorGoalTree ? { goalTree: supervisorGoalTree } : {}),
         ...(params.onGoalDecomposed ? { onGoalDecomposed: params.onGoalDecomposed } : {}),
         ...(params.reportUpdate ? { reportUpdate: params.reportUpdate } : {}),
       });
+      if (!result) {
+        return {
+          path: fallbackPath,
+          reason: "not_decomposable",
+        };
+      }
+      return {
+        path: "supervisor",
+        reason: "eligible",
+        result,
+      };
     } catch (err) {
       getLogger().warn("Supervisor brain failed, falling through to PAOR", { error: String(err) });
-      return null;
+      return {
+        path: fallbackPath,
+        reason: "supervisor_error",
+      };
     } finally {
       this.activeSupervisorScopes.delete(supervisorScope);
     }
+  }
+
+  async tryRouteThroughSupervisor(params: SupervisorAdmissionRequest): Promise<SupervisorResult | null> {
+    const decision = await this.evaluateSupervisorAdmission(params);
+    return decision.path === "supervisor" ? decision.result : null;
   }
 
   private buildBackgroundIterationBudgetStopMessage(epochCount: number): string {
@@ -902,6 +1200,36 @@ export class Orchestrator {
     projectWorldFingerprint?: string,
   ): SupervisorExecutionStrategy {
     return buildSupervisorExecutionStrategyHelper(this.getSupervisorRoutingContext(), prompt, identityKey, fallbackProvider, projectWorldFingerprint);
+  }
+
+  private buildFixedSupervisorExecutionStrategy(
+    prompt: string,
+    identityKey: string,
+    providerName: string,
+    modelId: string | undefined,
+    provider: IAIProvider,
+  ): SupervisorExecutionStrategy {
+    const task = this.taskClassifier.classify(prompt);
+    const metadata = this.buildCatalogAssignmentMetadata(providerName, modelId, identityKey);
+    const buildAssignment = (role: SupervisorRole): SupervisorAssignment =>
+      this.buildStaticSupervisorAssignment(
+        role,
+        providerName,
+        modelId,
+        provider,
+        "Supervisor delegated child-worker assignment",
+        undefined,
+        metadata,
+      );
+
+    return {
+      task,
+      planner: buildAssignment("planner"),
+      executor: buildAssignment("executor"),
+      reviewer: buildAssignment("reviewer"),
+      synthesizer: buildAssignment("synthesizer"),
+      usesMultipleProviders: false,
+    };
   }
 
   private getPinnedToolTurnAssignment(
@@ -1028,6 +1356,7 @@ export class Orchestrator {
     toolTurnAffinity: SupervisorAssignment | null;
     projectWorldFingerprint?: string;
     enableGoalDetection: boolean;
+    fixedExecutionStrategy?: SupervisorExecutionStrategy;
   }): {
     executionStrategy: SupervisorExecutionStrategy;
     activePrompt: string;
@@ -1040,7 +1369,7 @@ export class Orchestrator {
     }>;
     currentToolNames: string[];
   } {
-    const executionStrategy = this.buildSupervisorExecutionStrategy(
+    const executionStrategy = params.fixedExecutionStrategy ?? this.buildSupervisorExecutionStrategy(
       params.prompt,
       params.identityKey,
       params.fallbackProvider,
@@ -1409,6 +1738,7 @@ export class Orchestrator {
 
   private buildWorkerArtifacts(params: {
     workspaceLease?: WorkspaceLease;
+    workspaceLeaseRetained?: boolean;
     touchedFiles: readonly string[];
     finalSummary: string;
   }): WorkerArtifactMetadata[] {
@@ -1417,7 +1747,7 @@ export class Orchestrator {
       artifacts.push({
         kind: "workspace",
         summary: `Worker executed in isolated workspace ${params.workspaceLease.id}.`,
-        path: params.workspaceLease.path,
+        ...(params.workspaceLeaseRetained !== false ? { path: params.workspaceLease.path } : {}),
       });
     }
     if (params.touchedFiles.length > 0) {
@@ -1785,6 +2115,7 @@ export class Orchestrator {
     attachments?: Attachment[];
     onUsage?: (usage: TaskUsageEvent) => void;
     parentMetricId?: string;
+    workspaceLeaseRetained?: boolean;
   }): Promise<WorkerRunResult> {
     const collector: WorkerRunCollector = {
       toolTrace: [],
@@ -1808,7 +2139,10 @@ export class Orchestrator {
           taskRunId: request.taskRunId,
           conversationId: request.conversationId,
           userId: request.userId,
+          assignedProvider: request.assignedProvider,
+          assignedModel: request.assignedModel,
           attachments: request.attachments,
+          userContent: request.userContent,
           onUsage: request.onUsage,
           parentMetricId: request.parentMetricId,
           workspaceLease: request.workspaceLease,
@@ -1862,6 +2196,7 @@ export class Orchestrator {
       reviewFindings,
       artifacts: this.buildWorkerArtifacts({
         workspaceLease: request.workspaceLease,
+        workspaceLeaseRetained: request.workspaceLeaseRetained,
         touchedFiles,
         finalSummary,
       }),
@@ -1895,12 +2230,30 @@ export class Orchestrator {
       },
       async () => {
         const logger = getLogger();
-        const fallbackProvider = this.providerManager.getProvider(identityKey);
-        let executionStrategy = this.buildSupervisorExecutionStrategy(
-          prompt,
-          identityKey,
-          fallbackProvider,
-        );
+        const fixedProviderName = options.assignedProvider?.trim();
+        const fixedModelId = options.assignedModel?.trim() || undefined;
+        const fixedProvider = fixedProviderName
+          ? this.providerManager.getProviderByName(fixedProviderName, fixedModelId)
+          : null;
+        const fallbackProvider = fixedProvider ?? this.providerManager.getProvider(identityKey);
+        const buildExecutionStrategy = (projectWorldFingerprint?: string): SupervisorExecutionStrategy => {
+          if (fixedProviderName && fixedProvider) {
+            return this.buildFixedSupervisorExecutionStrategy(
+              prompt,
+              identityKey,
+              fixedProviderName,
+              fixedModelId,
+              fixedProvider,
+            );
+          }
+          return this.buildSupervisorExecutionStrategy(
+            prompt,
+            identityKey,
+            fallbackProvider,
+            projectWorldFingerprint,
+          );
+        };
+        let executionStrategy = buildExecutionStrategy();
 
         // ─── Metrics: start recording ────────────────────────────────────
         const taskType = options.parentMetricId ? ("subtask" as const) : ("background" as const);
@@ -1914,7 +2267,7 @@ export class Orchestrator {
 
         // Build user content with vision support if attachments present
         const supportsVision = fallbackProvider.capabilities.vision;
-        const userContent = buildUserContent(
+        const userContent = options.userContent ?? buildUserContent(
           prompt || DEFAULT_IMAGE_PROMPT,
           options.attachments,
           supportsVision,
@@ -1996,12 +2349,7 @@ export class Orchestrator {
           preComputedEmbedding: bgEmbedding,
         });
         let systemPrompt = builtPrompt;
-        executionStrategy = this.buildSupervisorExecutionStrategy(
-          prompt,
-          identityKey,
-          fallbackProvider,
-          bgProjectWorldFingerprint,
-        );
+        executionStrategy = buildExecutionStrategy(bgProjectWorldFingerprint);
 
         // ─── PAOR State Machine ──────────────────────────────────────────────
         let bgAgentState = createInitialState(prompt);
@@ -2123,7 +2471,7 @@ export class Orchestrator {
                 userSummary: normalized,
               });
             };
-            const supervisorResult = await this.tryRouteThroughSupervisor({
+            const supervisorDecision = await this.evaluateSupervisorAdmission({
               prompt,
               chatId,
               channelType: options.channelType,
@@ -2132,6 +2480,9 @@ export class Orchestrator {
               signal,
               userContent,
               attachments: options.attachments,
+              taskRunId,
+              onUsage: options.onUsage ?? this.onUsage,
+              workspaceLease: options.workspaceLease,
               onActivated: (activation) => {
                 emitSupervisorProgress(
                   normalizeSupervisorProgressMarkdown(activation.markdown),
@@ -2145,7 +2496,8 @@ export class Orchestrator {
                 );
               },
             });
-            if (supervisorResult) {
+            if (supervisorDecision.path === "supervisor") {
+              const supervisorResult = supervisorDecision.result;
               return finish(
                 supervisorResult.output,
                 this.getSupervisorWorkerStatus(supervisorResult),
@@ -2182,6 +2534,7 @@ export class Orchestrator {
                 toolTurnAffinity,
                 projectWorldFingerprint: bgProjectWorldFingerprint,
                 enableGoalDetection: false,
+                fixedExecutionStrategy: fixedProviderName && fixedProvider ? executionStrategy : undefined,
               });
               executionStrategy = iterStrategy;
               if (workerCollector) {
@@ -3129,7 +3482,7 @@ export class Orchestrator {
     const interactiveIterationLimit = this.getInteractiveIterationLimit();
 
     try {
-      const supervisorResult = await this.tryRouteThroughSupervisor({
+      const supervisorDecision = await this.evaluateSupervisorAdmission({
         prompt: lastUserMessage,
         chatId,
         channelType,
@@ -3137,13 +3490,16 @@ export class Orchestrator {
         conversationId,
         userContent: lastUserContent,
         attachments,
+        taskRunId: this.getTaskExecutionContext()?.taskRunId,
+        onUsage: this.onUsage,
         onGoalDecomposed: (goalTree) =>
           this.monitorLifecycle?.goalDecomposed(conversationScope, goalTree),
         reportUpdate: async (markdown) => {
           await this.sessionManager.sendVisibleAssistantMarkdown(chatId, session, markdown);
         },
       });
-      if (supervisorResult) {
+      if (supervisorDecision.path === "supervisor") {
+        const supervisorResult = supervisorDecision.result;
         await this.sessionManager.sendVisibleAssistantMarkdown(chatId, session, supervisorResult.output);
         this.recordMetricEnd(metricId, {
           agentPhase: AgentPhase.COMPLETE,
@@ -3373,27 +3729,32 @@ export class Orchestrator {
         // ─── Goal Detection: check for goal block in Plan phase response ───
         // Must run BEFORE end_turn early return since goal detection responses
         // may have no tool calls but should short-circuit to background execution.
-        if (agentState.phase === AgentPhase.PLANNING && this.taskManager && !lastUserHasRichInput) {
+        if (agentState.phase === AgentPhase.PLANNING && this.taskManager) {
           const goalBlock = parseGoalBlock(response.text ?? "");
           if (goalBlock && goalBlock.isGoal) {
-            // Build GoalTree from LLM output using shared factory
-            const goalTree = buildGoalTreeFromBlock(
-              goalBlock,
-              conversationScope,
-              lastUserMessage,
-              response.text ?? undefined,
-            );
+            const goalTree = lastUserHasRichInput
+              ? undefined
+              : buildGoalTreeFromBlock(
+                goalBlock,
+                conversationScope,
+                lastUserMessage,
+                response.text ?? undefined,
+              );
 
             // Send acknowledgment
-            const nodeCount = goalTree.nodes.size - 1;
+            const nodeCount = goalTree ? goalTree.nodes.size - 1 : goalBlock.nodes.length;
             const ackMsg =
               `Working on: ${lastUserMessage.slice(0, 80)}` +
               ` (${nodeCount} step${nodeCount !== 1 ? "s" : ""}, ~${goalBlock.estimatedMinutes} min). I'll update you as I go.`;
             await this.sessionManager.sendVisibleAssistantText(chatId, session, ackMsg);
 
-            // Submit as background task with pre-decomposed tree
+            // Submit as a background task. The background executor now decides
+            // whether the request can execute a trusted goal tree directly or
+            // should stay on the shared worker path for rich input.
             this.taskManager.submit(chatId, channelType ?? "cli", lastUserMessage, {
-              goalTree,
+              ...(goalTree ? { goalTree } : {}),
+              ...(lastUserHasRichInput ? { forceSharedPlanning: true } : {}),
+              ...(lastUserContent ? { userContent: lastUserContent } : {}),
               attachments: attachments?.length ? attachments : undefined,
               conversationId: conversationScope,
               userId: identityKey,

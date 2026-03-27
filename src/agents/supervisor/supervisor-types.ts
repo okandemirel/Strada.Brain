@@ -1,5 +1,6 @@
 import type { TaskClassification } from "../../agent-core/routing/routing-types.js";
 import type { WorkspaceLease as ManagedWorkspaceLease, WorkspaceLeaseKind } from "../multi/workspace-lease-manager.js";
+import type { MessageContent } from "../providers/provider-core.interface.js";
 
 export interface ProviderCatalogSnapshot {
   readonly provider: string;
@@ -57,15 +58,29 @@ export interface WorkerArtifactMetadata {
   readonly path?: string;
 }
 
-export interface WorkerRunRequest {
-  readonly prompt: string;
-  readonly mode: "interactive" | "background" | "delegated";
+export interface WorkerUsageEvent {
+  readonly provider: string;
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+}
+
+export interface WorkerExecutionEnvelope {
   readonly chatId: string;
   readonly channelType?: string;
   readonly conversationId?: string;
   readonly userId?: string;
   readonly taskRunId?: string;
+  readonly assignedProvider?: string;
+  readonly assignedModel?: string;
+  readonly attachments?: import("../../channels/channel.interface.js").Attachment[];
+  readonly userContent?: string | MessageContent[] | null;
+  readonly onUsage?: (usage: WorkerUsageEvent) => void;
   readonly workspaceLease?: WorkspaceLease;
+}
+
+export interface WorkerRunRequest extends WorkerExecutionEnvelope {
+  readonly prompt: string;
+  readonly mode: "interactive" | "background" | "delegated";
 }
 
 export type WorkerRunStatus = "completed" | "failed" | "blocked";

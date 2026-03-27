@@ -18,7 +18,7 @@
 import type { Task, TaskProgressSignal, TaskProgressUpdate } from "./types.js";
 import { getTaskConversationKey, TaskStatus } from "./types.js";
 import type { TaskManager } from "./task-manager.js";
-import type { Orchestrator } from "../agents/orchestrator.js";
+import type { Orchestrator, SupervisorAdmissionDecision } from "../agents/orchestrator.js";
 import { resolveConversationScope } from "../agents/orchestrator-text-utils.js";
 import type { GoalDecomposer } from "../goals/goal-decomposer.js";
 import type { GoalNode, GoalTree } from "../goals/types.js";
@@ -43,7 +43,7 @@ import { estimateCost } from "../security/rate-limiter.js";
 import type { BudgetTracker } from "../daemon/budget/budget-tracker.js";
 import { getLogger } from "../utils/logger.js";
 import { WorkspaceLeaseManager } from "../agents/multi/workspace-lease-manager.js";
-import type { WorkerRunResult } from "../agents/supervisor/supervisor-types.js";
+import type { WorkerRunRequest, WorkerRunResult } from "../agents/supervisor/supervisor-types.js";
 import { normalizeSupervisorProgressMarkdown } from "../supervisor/supervisor-feedback.js";
 import type { MonitorLifecycle } from "../dashboard/monitor-lifecycle.js";
 import type { WorkspaceBus } from "../dashboard/workspace-bus.js";
@@ -91,6 +91,8 @@ interface DecomposedExecutionResult {
   blocked?: boolean;
   aborted: boolean;
 }
+
+type ManagedWorkspaceLease = Awaited<ReturnType<WorkspaceLeaseManager["acquireLease"]>>;
 
 interface GoalResultSynthesizer {
   synthesizeGoalExecutionResult?: (params: {
@@ -433,6 +435,7 @@ export class BackgroundExecutor {
   private async executeWorkerRun(
     orchestrator: Orchestrator,
     params: {
+      mode: WorkerRunRequest["mode"];
       prompt: string;
       signal: AbortSignal;
       onProgress: (message: TaskProgressUpdate) => void;
@@ -441,9 +444,13 @@ export class BackgroundExecutor {
       channelType: string;
       conversationId?: string;
       userId?: string;
+      assignedProvider?: string;
+      assignedModel?: string;
       attachments?: import("../channels/channel.interface.js").Attachment[];
+      userContent?: string | import("../agents/providers/provider-core.interface.js").MessageContent[] | null;
       onUsage?: (usage: { provider: string; inputTokens: number; outputTokens: number }) => void;
       workspaceLease?: Awaited<ReturnType<WorkspaceLeaseManager["acquireLease"]>>;
+      workspaceLeaseRetained?: boolean;
       supervisorMode?: import("./types.js").BackgroundTaskOptions["supervisorMode"];
     },
   ): Promise<{ output: string; workerResult?: WorkerRunResult }> {
@@ -452,7 +459,7 @@ export class BackgroundExecutor {
         orchestrator as Orchestrator & {
           runWorkerTask: (request: {
             prompt: string;
-            mode: "background";
+            mode: WorkerRunRequest["mode"];
             signal: AbortSignal;
             onProgress: (message: TaskProgressUpdate) => void;
             chatId: string;
@@ -460,15 +467,19 @@ export class BackgroundExecutor {
             channelType: string;
             conversationId?: string;
             userId?: string;
+            assignedProvider?: string;
+            assignedModel?: string;
             attachments?: import("../channels/channel.interface.js").Attachment[];
+            userContent?: string | import("../agents/providers/provider-core.interface.js").MessageContent[] | null;
             onUsage?: (usage: { provider: string; inputTokens: number; outputTokens: number }) => void;
             workspaceLease?: Awaited<ReturnType<WorkspaceLeaseManager["acquireLease"]>>;
+            workspaceLeaseRetained?: boolean;
             supervisorMode?: import("./types.js").BackgroundTaskOptions["supervisorMode"];
           }) => Promise<WorkerRunResult>;
         }
       ).runWorkerTask({
         prompt: params.prompt,
-        mode: "background",
+        mode: params.mode,
         signal: params.signal,
         onProgress: params.onProgress,
         chatId: params.chatId,
@@ -476,9 +487,13 @@ export class BackgroundExecutor {
         channelType: params.channelType,
         conversationId: params.conversationId,
         userId: params.userId,
+        assignedProvider: params.assignedProvider,
+        assignedModel: params.assignedModel,
         attachments: params.attachments,
+        userContent: params.userContent,
         onUsage: params.onUsage,
         workspaceLease: params.workspaceLease,
+        workspaceLeaseRetained: params.workspaceLeaseRetained,
         supervisorMode: params.supervisorMode,
       });
       return {
@@ -488,26 +503,85 @@ export class BackgroundExecutor {
     }
 
     return {
-      output: await orchestrator.runBackgroundTask(params.prompt, {
-        signal: params.signal,
-        onProgress: params.onProgress,
-        chatId: params.chatId,
-        taskRunId: params.taskRunId,
-        channelType: params.channelType,
-        conversationId: params.conversationId,
-        userId: params.userId,
-        attachments: params.attachments,
-        onUsage: params.onUsage,
-        workspaceLease: params.workspaceLease,
-        supervisorMode: params.supervisorMode,
-      }),
+      output: await orchestrator.runBackgroundTask(
+        params.prompt,
+        {
+          signal: params.signal,
+          onProgress: params.onProgress,
+          chatId: params.chatId,
+          taskRunId: params.taskRunId,
+          channelType: params.channelType,
+          conversationId: params.conversationId,
+          userId: params.userId,
+          assignedProvider: params.assignedProvider,
+          assignedModel: params.assignedModel,
+          attachments: params.attachments,
+          userContent: params.userContent,
+          onUsage: params.onUsage,
+          workspaceLease: params.workspaceLease,
+          workspaceLeaseRetained: params.workspaceLeaseRetained,
+          supervisorMode: params.supervisorMode,
+        } as import("./types.js").BackgroundTaskOptions & {
+          workspaceLeaseRetained?: boolean;
+        },
+      ),
     };
+  }
+
+  async runWorkerEnvelope(
+    orchestrator: Orchestrator,
+    params: {
+      mode: WorkerRunRequest["mode"];
+      prompt: string;
+      signal: AbortSignal;
+      onProgress: (message: TaskProgressUpdate) => void;
+      chatId: string;
+      taskRunId: string;
+      channelType: string;
+      conversationId?: string;
+      userId?: string;
+      assignedProvider?: string;
+      assignedModel?: string;
+      attachments?: import("../channels/channel.interface.js").Attachment[];
+      userContent?: string | import("../agents/providers/provider-core.interface.js").MessageContent[] | null;
+      onUsage?: (usage: { provider: string; inputTokens: number; outputTokens: number }) => void;
+      workspaceLease?: Awaited<ReturnType<WorkspaceLeaseManager["acquireLease"]>>;
+      workspaceSourceRoot?: string;
+      supervisorMode?: import("./types.js").BackgroundTaskOptions["supervisorMode"];
+    },
+  ): Promise<{ output: string; workerResult?: WorkerRunResult }> {
+    const managedWorkspaceLease = params.workspaceLease ?? (this.workspaceLeaseManager
+      ? await this.workspaceLeaseManager.acquireLease({
+        label: `${params.mode}-worker-${params.taskRunId}`,
+        workerId: params.taskRunId,
+        ...(params.workspaceSourceRoot
+          ? {
+              sourceRoot: params.workspaceSourceRoot,
+              forceTempCopy: true,
+            }
+          : {}),
+      })
+      : undefined);
+    const shouldReleaseLease = !params.workspaceLease && Boolean(managedWorkspaceLease);
+
+    try {
+      return await this.executeWorkerRun(orchestrator, {
+        ...params,
+        workspaceLease: managedWorkspaceLease,
+        workspaceLeaseRetained: !shouldReleaseLease,
+      });
+    } finally {
+      if (shouldReleaseLease) {
+        await managedWorkspaceLease?.release().catch(() => {});
+      }
+    }
   }
 
   private async executeTask(entry: QueueEntry): Promise<void> {
     const { task, signal, onProgress } = entry;
     const logger = getLogger();
     const taskOrchestrator = task.orchestrator ?? this.orchestrator;
+    let taskWorkspaceLease: ManagedWorkspaceLease | undefined;
 
     if (!this.taskManager) {
       logger.error("TaskManager not set on BackgroundExecutor");
@@ -527,16 +601,26 @@ export class BackgroundExecutor {
     // Monitor lifecycle: emit simple DAG so monitor workspace always shows something
     this.monitorLifecycle?.requestStart(conversationScope, task.prompt);
 
-    let taskLease: Awaited<ReturnType<WorkspaceLeaseManager["acquireLease"]>> | undefined;
     let requestFailed = false;
     let supervisorGoalTree: GoalTree | undefined;
     let supervisorGoalStartedAt = 0;
+    let workerSupervisorMode: import("./types.js").BackgroundTaskOptions["supervisorMode"] = "auto";
     try {
       const hasAttachmentInput = (task.attachments?.length ?? 0) > 0;
+      const hasRichUserContent =
+        Array.isArray(task.userContent) && task.userContent.some((block) => block.type !== "text");
       const shouldDecomposeTask = this.decomposer?.shouldDecompose(task.prompt) ?? false;
-      const shouldAttemptInlineGoalExecution = !hasAttachmentInput && (Boolean(task.goalTree) || shouldDecomposeTask);
+      const shouldAttemptSharedPlanning = Boolean(task.goalTree) || Boolean(task.forceSharedPlanning) || shouldDecomposeTask;
+      const shouldUseTaskWorkspace =
+        shouldAttemptSharedPlanning || (!hasAttachmentInput && shouldDecomposeTask);
+      if (shouldUseTaskWorkspace && this.workspaceLeaseManager) {
+        taskWorkspaceLease = await this.workspaceLeaseManager.acquireLease({
+          label: `task-${task.id}`,
+          workerId: String(task.id),
+        });
+      }
       const supervisorCapableOrchestrator = taskOrchestrator as Orchestrator & {
-        tryRouteThroughSupervisor?: (params: {
+        evaluateSupervisorAdmission?: (params: {
           prompt: string;
           chatId: string;
           channelType?: string;
@@ -545,14 +629,18 @@ export class BackgroundExecutor {
           signal?: AbortSignal;
           goalTree?: GoalTree;
           forceEligibility?: boolean;
+          userContent?: string | import("../agents/providers/provider-core.interface.js").MessageContent[] | null;
           attachments?: import("../channels/channel.interface.js").Attachment[];
+          taskRunId?: string;
+          onUsage?: (usage: { provider: string; inputTokens: number; outputTokens: number }) => void;
+          workspaceLease?: ManagedWorkspaceLease;
           onActivated?: (activation: { markdown: string }) => Promise<void> | void;
           reportUpdate?: (markdown: string) => Promise<void> | void;
           onGoalDecomposed?: (goalTree: GoalTree) => void;
-        }) => Promise<import("../supervisor/supervisor-types.js").SupervisorResult | null>;
+        }) => Promise<SupervisorAdmissionDecision>;
       };
 
-      if (shouldAttemptInlineGoalExecution && typeof supervisorCapableOrchestrator.tryRouteThroughSupervisor === "function") {
+      if (shouldAttemptSharedPlanning && typeof supervisorCapableOrchestrator.evaluateSupervisorAdmission === "function") {
         let lastSupervisorSummary = "";
         const emitSupervisorProgress = (summary: string): void => {
           const normalized = summary.trim();
@@ -566,7 +654,7 @@ export class BackgroundExecutor {
             userSummary: normalized,
           });
         };
-        const supervisorResult = await supervisorCapableOrchestrator.tryRouteThroughSupervisor({
+        const supervisorDecision = await supervisorCapableOrchestrator.evaluateSupervisorAdmission({
           prompt: task.prompt,
           chatId: task.chatId,
           channelType: task.channelType,
@@ -574,8 +662,12 @@ export class BackgroundExecutor {
           userId: task.userId,
           signal,
           goalTree: task.goalTree,
-          forceEligibility: shouldAttemptInlineGoalExecution,
+          forceEligibility: shouldAttemptSharedPlanning,
+          userContent: task.userContent,
           attachments: task.attachments,
+          taskRunId: task.id,
+          onUsage: this.buildUsageRecorder(task),
+          workspaceLease: taskWorkspaceLease,
           onGoalDecomposed: (goalTree: GoalTree) => {
             supervisorGoalTree = goalTree;
             supervisorGoalStartedAt = Date.now();
@@ -589,7 +681,8 @@ export class BackgroundExecutor {
           },
         });
 
-        if (supervisorResult) {
+        if (supervisorDecision.path === "supervisor") {
+          const supervisorResult = supervisorDecision.result;
           if (supervisorGoalTree) {
             if (supervisorResult.success) {
               this.completeGoalExecution(
@@ -627,16 +720,56 @@ export class BackgroundExecutor {
         if (signal.aborted) {
           return;
         }
+
+        workerSupervisorMode = "off";
+
+        if (supervisorDecision.path === "direct_goal_execution" && (!(hasAttachmentInput || hasRichUserContent) || task.goalTree)) {
+          const result = await this.executeDecomposed(
+            task,
+            signal,
+            onProgress,
+            task.goalTree,
+            taskWorkspaceLease,
+          );
+          if (signal.aborted) return;
+          if (!result.success) {
+            if (result.blocked) {
+              requestFailed = true;
+              this.taskManager.block(
+                task.id,
+                result.output || result.error || "Goal execution blocked",
+              );
+              return;
+            }
+            requestFailed = true;
+            this.taskManager.fail(task.id, result.error ?? "Goal execution failed");
+            return;
+          }
+          this.taskManager.complete(task.id, result.output);
+          return;
+        }
       }
 
-      // Check for pre-decomposed goal tree (from inline goal detection)
-      if (task.goalTree && !hasAttachmentInput) {
-        const result = await this.executeDecomposed(task, signal, onProgress, task.goalTree);
+      // Check for pre-decomposed goal tree (from inline goal detection).
+      // Rich-input tasks should stay on the shared planning/worker path unless
+      // supervisor explicitly accepted them, because text-authored trees are not
+      // trustworthy for multimodal decomposition.
+      if (task.goalTree && !(hasAttachmentInput || hasRichUserContent)) {
+        const result = await this.executeDecomposed(
+          task,
+          signal,
+          onProgress,
+          task.goalTree,
+          taskWorkspaceLease,
+        );
         if (signal.aborted) return;
         if (!result.success) {
           if (result.blocked) {
             requestFailed = true;
-            this.taskManager.block(task.id, result.error ?? "Goal execution blocked");
+            this.taskManager.block(
+              task.id,
+              result.output || result.error || "Goal execution blocked",
+            );
             return;
           }
           requestFailed = true;
@@ -648,13 +781,22 @@ export class BackgroundExecutor {
       }
 
       // Check if task should be decomposed into subtasks
-      if (!hasAttachmentInput && shouldDecomposeTask) {
-        const result = await this.executeDecomposed(task, signal, onProgress);
+      if (!(hasAttachmentInput || hasRichUserContent) && shouldDecomposeTask) {
+        const result = await this.executeDecomposed(
+          task,
+          signal,
+          onProgress,
+          undefined,
+          taskWorkspaceLease,
+        );
         if (signal.aborted) return;
         if (!result.success) {
           if (result.blocked) {
             requestFailed = true;
-            this.taskManager.block(task.id, result.error ?? "Goal execution blocked");
+            this.taskManager.block(
+              task.id,
+              result.output || result.error || "Goal execution blocked",
+            );
             return;
           }
           requestFailed = true;
@@ -665,13 +807,8 @@ export class BackgroundExecutor {
         return;
       }
 
-      taskLease = this.workspaceLeaseManager
-        ? await this.workspaceLeaseManager.acquireLease({
-          label: `task-${task.id}`,
-          workerId: task.id,
-        })
-        : undefined;
-      const result = await this.executeWorkerRun(taskOrchestrator, {
+      const result = await this.runWorkerEnvelope(taskOrchestrator, {
+        mode: "background",
         prompt: task.prompt,
         signal,
         onProgress,
@@ -681,9 +818,10 @@ export class BackgroundExecutor {
         conversationId: task.conversationId,
         userId: task.userId,
         attachments: task.attachments,
+        userContent: task.userContent,
         onUsage: this.buildUsageRecorder(task),
-        workspaceLease: taskLease,
-        supervisorMode: "auto",
+        workspaceLease: taskWorkspaceLease,
+        supervisorMode: workerSupervisorMode,
       });
 
       if (signal.aborted) {
@@ -727,8 +865,8 @@ export class BackgroundExecutor {
         this.failGoalExecution(task.goalTree, errMsg, 0);
       }
     } finally {
+      await taskWorkspaceLease?.release().catch(() => {});
       this.monitorLifecycle?.requestEnd(conversationScope, requestFailed);
-      await taskLease?.release().catch(() => {});
     }
   }
 
@@ -745,6 +883,7 @@ export class BackgroundExecutor {
     signal: AbortSignal,
     onProgress: (message: TaskProgressUpdate) => void,
     preBuiltTree?: GoalTree,
+    workspaceLease?: ManagedWorkspaceLease,
   ): Promise<DecomposedExecutionResult> {
     const logger = getLogger();
     const startTime = Date.now();
@@ -760,8 +899,8 @@ export class BackgroundExecutor {
     const config: GoalExecutorConfig = {
       maxRetries: 1,
       maxFailures: 3,
-      parallelExecution: true,
-      maxParallel: 3,
+      parallelExecution: workspaceLease ? false : true,
+      maxParallel: workspaceLease ? 1 : 3,
       ...this.goalExecutorConfig,
       maxRedecompositions: this.goalExecutorConfig?.maxRedecompositions ?? this.goalConfig?.maxRedecompositions ?? 2,
     };
@@ -771,43 +910,36 @@ export class BackgroundExecutor {
 
     // Node executor: delegates to orchestrator.runBackgroundTask
     const nodeExecutor = async (node: GoalNode, nodeSignal: AbortSignal): Promise<string> => {
-      const workspaceLease = this.workspaceLeaseManager
-        ? await this.workspaceLeaseManager.acquireLease({
-          label: `goal-node-${node.id}`,
-          workerId: `${task.id}:${node.id}`,
-        })
-        : undefined;
-      try {
-        const result = await this.executeWorkerRun(taskOrchestrator, {
-          prompt: node.task,
-          signal: nodeSignal,
-          onProgress: (msg: TaskProgressUpdate) =>
-            onProgress(typeof msg === "string" ? `[${node.task}] ${msg}` : msg),
-          chatId: task.chatId,
-          taskRunId: `${task.id}:${node.id}`,
-          channelType: task.channelType,
-          conversationId: task.conversationId,
-          userId: task.userId,
-          onUsage: this.buildUsageRecorder(task),
-          workspaceLease,
-          supervisorMode: "off",
-        });
-        if (result.workerResult) {
-          childWorkerResults.set(node.id, result.workerResult);
-          if (result.workerResult.status !== "completed") {
-            if (result.workerResult.status === "blocked" && !blockedWorkerReason) {
-              blockedWorkerReason =
-                result.workerResult.reason ?? (result.output || "Worker blocked");
-            }
-            throw new Error(
-              result.workerResult.reason ?? (result.output || "Worker did not complete"),
-            );
+      const result = await this.runWorkerEnvelope(taskOrchestrator, {
+        mode: "background",
+        prompt: node.task,
+        signal: nodeSignal,
+        onProgress: (msg: TaskProgressUpdate) =>
+          onProgress(typeof msg === "string" ? `[${node.task}] ${msg}` : msg),
+        chatId: task.chatId,
+        taskRunId: `${task.id}:${node.id}`,
+        channelType: task.channelType,
+        conversationId: task.conversationId,
+        userId: task.userId,
+        attachments: task.attachments,
+        userContent: task.userContent,
+        onUsage: this.buildUsageRecorder(task),
+        workspaceLease,
+        supervisorMode: "off",
+      });
+      if (result.workerResult) {
+        childWorkerResults.set(node.id, result.workerResult);
+        if (result.workerResult.status !== "completed") {
+          if (result.workerResult.status === "blocked" && !blockedWorkerReason) {
+            blockedWorkerReason =
+              result.workerResult.reason ?? (result.output || "Worker blocked");
           }
+          throw new Error(
+            result.workerResult.reason ?? (result.output || "Worker did not complete"),
+          );
         }
-        return result.output;
-      } finally {
-        await workspaceLease?.release().catch(() => {});
       }
+      return result.output;
     };
 
     // Status change callback: persist node status + send throttled progress update
@@ -1139,6 +1271,12 @@ Is this failure critical? A critical failure means dependent sub-goals cannot pr
           error: error instanceof Error ? error.message : String(error),
         });
       }
+    }
+    if (blockedWorker) {
+      const blockedSummary = blockedWorkerReason ?? blockedWorker.reason ?? "Goal execution blocked";
+      output = output.trim()
+        ? `${output}\n\nBlocked:\n${blockedSummary}`
+        : `Blocked:\n${blockedSummary}`;
     }
 
     return {

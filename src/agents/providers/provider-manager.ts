@@ -417,8 +417,12 @@ export class ProviderManager {
    * materialize a routing decision into an IAIProvider.
    * Returns null if provider cannot be created.
    */
-  getProviderByName(name: string): IAIProvider | null {
-    return this.buildResilientProvider(name);
+  getProviderByName(name: string, model?: string): IAIProvider | null {
+    return this.buildResilientProvider(name, model);
+  }
+
+  getPrimaryProviderByName(name: string, model?: string): IAIProvider | null {
+    return this.buildPrimaryProvider(name, model);
   }
 
   private getProviderOfficialSnapshot(name: string): ProviderOfficialSnapshot | undefined {

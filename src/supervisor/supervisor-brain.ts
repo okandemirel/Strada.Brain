@@ -138,6 +138,46 @@ export class SupervisorBrain {
     }
   }
 
+  private buildVisibleGoalTree(goalTree: GoalTree, task: string): GoalTree {
+    const normalizedTask = task.trim();
+    const originalTask = goalTree.taskDescription.trim();
+    if (!normalizedTask || originalTask === normalizedTask) {
+      return goalTree;
+    }
+
+    const updatedNodes = new Map(goalTree.nodes);
+    for (const [nodeId, node] of goalTree.nodes.entries()) {
+      if (node.task.trim() !== originalTask) {
+        continue;
+      }
+      updatedNodes.set(nodeId, {
+        ...node,
+        task: normalizedTask,
+      });
+    }
+
+    return {
+      ...goalTree,
+      taskDescription: normalizedTask,
+      nodes: updatedNodes,
+    };
+  }
+
+  private buildDisplayTaskLabels(
+    nodes: readonly TaggedGoalNode[],
+    visibleGoalTree: GoalTree,
+  ): Map<string, string> {
+    const labels = new Map<string, string>();
+    for (const node of nodes) {
+      const visibleNode = visibleGoalTree.nodes.get(node.id);
+      if (!visibleNode) {
+        continue;
+      }
+      labels.set(String(node.id), visibleNode.task);
+    }
+    return labels;
+  }
+
   // ---------------------------------------------------------------------------
   // MAIN PIPELINE
   // ---------------------------------------------------------------------------
@@ -152,8 +192,9 @@ export class SupervisorBrain {
     task: string,
     context: SupervisorContext,
   ): Promise<SupervisorResult | null> {
+    const planningTask = context.planningPrompt?.trim() || task;
     // Step 1: Check if decomposition is warranted
-    if (!this.shouldExecute(task, context.goalTree)) {
+    if (!this.shouldExecute(planningTask, context.goalTree)) {
       return null;
     }
 
@@ -188,14 +229,15 @@ export class SupervisorBrain {
       await this.reportUpdate(context, activation.markdown);
 
       // Step 3: Decompose the task into a GoalTree
-      const goalTree = context.goalTree ?? await this.decomposer.decomposeProactive(
+      const decomposedGoalTree = context.goalTree ?? await this.decomposer.decomposeProactive(
         context.chatId,
-        task,
+        planningTask,
       );
-      goalRootId = String(goalTree.rootId);
-      context.onGoalDecomposed?.(goalTree);
+      const visibleGoalTree = this.buildVisibleGoalTree(decomposedGoalTree, task);
+      goalRootId = String(decomposedGoalTree.rootId);
+      context.onGoalDecomposed?.(visibleGoalTree);
       if (!context.onGoalDecomposed) {
-        this.emitter?.emit("monitor:dag_init", goalTreeToDagPayload(goalTree));
+        this.emitter?.emit("monitor:dag_init", goalTreeToDagPayload(visibleGoalTree));
       }
 
       // Check abort after decomposition
@@ -205,7 +247,7 @@ export class SupervisorBrain {
 
       // Step 4: Extract leaf nodes (non-root nodes)
       const MAX_SUPERVISOR_NODES = 50;
-      const leafNodes = this.extractLeafNodes(goalTree);
+      const leafNodes = this.extractLeafNodes(decomposedGoalTree);
 
       if (leafNodes.length > MAX_SUPERVISOR_NODES) {
         return this.makePartialResult([],
@@ -229,6 +271,11 @@ export class SupervisorBrain {
         taggedNodes,
         this.config.diversityCap,
       );
+      const displayTaskLabels = this.buildDisplayTaskLabels(assignedNodes, visibleGoalTree);
+      const visibleAssignedNodes = assignedNodes.map((node) => ({
+        ...node,
+        task: displayTaskLabels.get(String(node.id)) ?? node.task,
+      }));
 
       const dispatchSignal = externalSignal ? AbortSignal.any([externalSignal, internalSignal]) : internalSignal;
       const dispatchContext: SupervisorContext =
@@ -242,13 +289,14 @@ export class SupervisorBrain {
       const dispatcher = new SupervisorDispatcher({
         executeNode: (node: TaggedGoalNode) => executeNodeFn(node, dispatchContext),
         config: {
-          maxParallelNodes: this.config.maxParallelNodes,
+          maxParallelNodes: context.workspaceLease ? 1 : this.config.maxParallelNodes,
           nodeTimeoutMs: this.config.nodeTimeoutMs,
           maxFailureBudget: this.config.maxFailureBudget,
         },
         eventEmitter: this.emitter,
-        rootId: String(goalTree.rootId),
+        rootId: String(decomposedGoalTree.rootId),
         taskDescription: task,
+        displayTaskLabels,
       });
       const waves = dispatcher.computeWaves(assignedNodes);
 
@@ -261,21 +309,21 @@ export class SupervisorBrain {
         };
       }
       this.emitter?.emit("supervisor:plan_ready", {
-        dag: { rootId: goalTree.rootId, nodeCount: assignedNodes.length },
+        dag: { rootId: decomposedGoalTree.rootId, nodeCount: assignedNodes.length },
         assignments,
       });
       const plan = buildSupervisorPlanNarrative({
         task,
         nodeCount: assignedNodes.length,
-        nodes: assignedNodes,
+        nodes: visibleAssignedNodes,
         totalWaves: waves.length,
       });
       this.emitNarrative(plan.narrative, plan.language);
       this.emitActivity(plan.narrative, context.chatId, "supervisor_plan_ready");
       this.emitter?.emit("canvas:agent_draw", buildSupervisorCanvasPlan({
-        rootId: String(goalTree.rootId),
+        rootId: String(decomposedGoalTree.rootId),
         task,
-        nodes: assignedNodes,
+        nodes: visibleAssignedNodes,
         summary: plan.canvasSummary,
       }));
       await this.reportUpdate(context, plan.markdown);
@@ -304,7 +352,7 @@ export class SupervisorBrain {
       this.emitNarrative(verification.narrative, verification.language);
       this.emitActivity(verification.narrative, "aggregate", "supervisor_verify_start");
       this.emitter?.emit("canvas:agent_draw", buildSupervisorCanvasSummaryUpdate({
-        rootId: String(goalTree.rootId),
+        rootId: String(decomposedGoalTree.rootId),
         summary: verification.canvasSummary,
         tone: "active",
       }));
@@ -329,7 +377,7 @@ export class SupervisorBrain {
       this.emitNarrative(completion.narrative, completion.language);
       this.emitActivity(completion.narrative, context.chatId, "supervisor_complete");
       this.emitter?.emit("canvas:agent_draw", buildSupervisorCanvasSummaryUpdate({
-        rootId: String(goalTree.rootId),
+        rootId: String(decomposedGoalTree.rootId),
         summary: completion.canvasSummary,
         tone: supervisorResult.failed > 0 ? "error" : "success",
       }));

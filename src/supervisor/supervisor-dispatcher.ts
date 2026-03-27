@@ -38,6 +38,7 @@ export interface DispatcherOptions {
   readonly eventEmitter?: { emit: (event: string, payload: unknown) => void };
   readonly rootId?: string;
   readonly taskDescription?: string;
+  readonly displayTaskLabels?: ReadonlyMap<string, string>;
 }
 
 // =============================================================================
@@ -116,6 +117,7 @@ export class SupervisorDispatcher {
   private readonly emitter?: DispatcherOptions["eventEmitter"];
   private readonly rootId?: string;
   private readonly taskDescription?: string;
+  private readonly displayTaskLabels?: ReadonlyMap<string, string>;
 
   constructor(options: DispatcherOptions) {
     this.executeNode = options.executeNode;
@@ -123,6 +125,18 @@ export class SupervisorDispatcher {
     this.emitter = options.eventEmitter;
     this.rootId = options.rootId;
     this.taskDescription = options.taskDescription;
+    this.displayTaskLabels = options.displayTaskLabels;
+  }
+
+  private getDisplayNode(node: TaggedGoalNode): TaggedGoalNode {
+    const displayTask = this.displayTaskLabels?.get(String(node.id));
+    if (!displayTask || displayTask === node.task) {
+      return node;
+    }
+    return {
+      ...node,
+      task: displayTask,
+    };
   }
 
   private emitActivity(detail: string, taskId?: string, action = "supervisor_dispatch"): void {
@@ -166,7 +180,7 @@ export class SupervisorDispatcher {
     }
     const feedback = buildSupervisorNodeNarrative({
       task: taskDescription,
-      node,
+      node: this.getDisplayNode(node),
       status,
       ...(reason ? { reason } : {}),
     });
@@ -182,7 +196,7 @@ export class SupervisorDispatcher {
     status: "pending" | "running" | "verifying" | "done" | "failed" | "skipped",
   ): void {
     this.emitter?.emit("canvas:agent_draw", buildSupervisorCanvasNodeUpdate({
-      node,
+      node: this.getDisplayNode(node),
       status,
     }));
   }
@@ -290,11 +304,12 @@ export class SupervisorDispatcher {
         nodes: wave.map((n) => ({ nodeId: n.id, provider: n.assignedProvider ?? "unknown" })),
       });
       if (this.rootId && this.taskDescription) {
+        const displayNodes = wave.map((node) => this.getDisplayNode(node));
         const feedback = buildSupervisorWaveNarrative({
           task: this.taskDescription,
           waveIndex,
           totalWaves: waves.length,
-          nodes: wave,
+          nodes: displayNodes,
         });
         this.emitter?.emit("progress:narrative", {
           narrative: feedback.narrative,

@@ -994,6 +994,51 @@ describe("Orchestrator", () => {
     expect(mockProvider.chat).not.toHaveBeenCalled();
   });
 
+  it("omits ephemeral workspace paths from worker artifacts when the lease is released by the caller", async () => {
+    const mockProvider = createMockProvider();
+    mockProvider.chat.mockResolvedValueOnce({
+      text: "Nested worker answer",
+      toolCalls: [],
+      stopReason: "end_turn" as const,
+      usage: { inputTokens: 5, outputTokens: 7 },
+    });
+    const mockChannel = createMockChannel();
+
+    const orchestrator = new Orchestrator({
+      providerManager: {
+        getProvider: () => mockProvider,
+        getProviderByName: () => mockProvider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        listAvailable: () => [{ name: "mock", label: "mock", defaultModel: "default" }],
+        shutdown: vi.fn(),
+      } as any,
+      tools: [],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: false,
+    });
+
+    const result = await orchestrator.runWorkerTask({
+      prompt: "Nested worker task",
+      mode: "delegated",
+      chatId: "bg-worker-artifact",
+      channelType: "cli",
+      signal: AbortSignal.timeout(5_000),
+      onProgress: vi.fn(),
+      workspaceLease: {
+        id: "lease-1",
+        path: "/tmp/lease-1",
+        release: vi.fn(),
+      } as any,
+      workspaceLeaseRetained: false,
+    });
+
+    const workspaceArtifact = result.artifacts.find((artifact) => artifact.kind === "workspace");
+    expect(workspaceArtifact).toBeDefined();
+    expect(workspaceArtifact?.path).toBeUndefined();
+  });
+
   it("keeps nested background workers out of supervisor routing when disabled", async () => {
     const mockProvider = createMockProvider();
     mockProvider.chat.mockResolvedValueOnce({
@@ -1043,6 +1088,56 @@ describe("Orchestrator", () => {
     expect(result).toBe("Nested worker answer");
     expect(supervisorBrain.execute).not.toHaveBeenCalled();
     expect(mockProvider.chat).toHaveBeenCalledTimes(1);
+  });
+
+  it("pins delegated worker runs to the supervisor-assigned provider", async () => {
+    const defaultProvider = createNamedProvider("default");
+    const assignedProvider = createNamedProvider("claude");
+    assignedProvider.chat.mockResolvedValueOnce({
+      text: "Assigned provider answer",
+      toolCalls: [],
+      stopReason: "end_turn" as const,
+      usage: { inputTokens: 9, outputTokens: 11 },
+    });
+    const mockChannel = createMockChannel();
+
+    const orchestrator = new Orchestrator({
+      providerManager: {
+        getProvider: () => defaultProvider,
+        getProviderByName: (name: string) => (name === "claude" ? assignedProvider : null),
+        getActiveInfo: () => ({ providerName: "default", model: "default", isDefault: true }),
+        listAvailable: () => [
+          { name: "default", label: "default", defaultModel: "default" },
+          { name: "claude", label: "claude", defaultModel: "sonnet" },
+        ],
+        listExecutionCandidates: () => [],
+        getProviderCapabilities: () => ({ vision: false }),
+        shutdown: vi.fn(),
+      } as any,
+      tools: [],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: false,
+      supervisorComplexityThreshold: "complex",
+    });
+
+    const result = await orchestrator.runWorkerTask({
+      prompt: "Inspect screenshot",
+      mode: "delegated",
+      signal: AbortSignal.timeout(5_000),
+      onProgress: vi.fn(),
+      chatId: "delegated-provider-pin",
+      channelType: "cli",
+      assignedProvider: "claude",
+      assignedModel: "sonnet",
+    });
+
+    expect(result.status).toBe("completed");
+    expect(result.provider).toBe("claude");
+    expect(result.model).toBe("sonnet");
+    expect(assignedProvider.chat).toHaveBeenCalledTimes(1);
+    expect(defaultProvider.chat).not.toHaveBeenCalled();
   });
 
   it("lets concurrent complex background tasks use supervisor on different conversations", async () => {
@@ -1199,19 +1294,30 @@ describe("Orchestrator", () => {
     expect(mockProvider.chat).not.toHaveBeenCalled();
   });
 
-  it("keeps image-backed interactive requests on the multimodal PAOR path", async () => {
+  it("routes complex image-backed interactive requests through supervisor with preserved multimodal context", async () => {
     const mockProvider = createMockProvider();
     mockProvider.capabilities.vision = true;
     mockProvider.chat.mockResolvedValueOnce({
-      text: "Analyzed the image directly.",
+      text: "- Screenshot shows a broken layout with overlapping panels.",
       toolCalls: [],
       stopReason: "end_turn" as const,
-      usage: { inputTokens: 10, outputTokens: 20 },
+      usage: { inputTokens: 12, outputTokens: 18 },
     });
     const mockChannel = createMockChannel();
     const supervisorBrain = {
       shouldExecute: vi.fn().mockReturnValue(true),
-      execute: vi.fn(),
+      execute: vi.fn().mockResolvedValue({
+        success: true,
+        partial: false,
+        output: "Supervisor analyzed the screenshot.",
+        totalNodes: 1,
+        succeeded: 1,
+        failed: 0,
+        skipped: 0,
+        totalCost: 0,
+        totalDuration: 0,
+        nodeResults: [],
+      }),
     };
 
     const orchestrator = new Orchestrator({
@@ -1253,11 +1359,427 @@ describe("Orchestrator", () => {
       timestamp: new Date(),
     } as any);
 
-    expect(supervisorBrain.execute).not.toHaveBeenCalled();
+    expect(supervisorBrain.execute).toHaveBeenCalledWith(
+      "Inspect this screenshot and explain the layout bug in detail",
+      expect.objectContaining({
+        attachments: expect.any(Array),
+        userContent: expect.arrayContaining([
+          expect.objectContaining({ type: "text" }),
+          expect.objectContaining({ type: "image" }),
+        ]),
+        planningPrompt: expect.stringContaining("Grounded multimodal context:"),
+      }),
+    );
     expect(mockProvider.chat).toHaveBeenCalledTimes(1);
-    const firstCallMessages = mockProvider.chat.mock.calls[0]?.[1] ?? [];
-    const userMessage = firstCallMessages.find((message: { role: string }) => message.role === "user");
-    expect(Array.isArray(userMessage?.content)).toBe(true);
+  });
+
+  it("builds a supervisor planning prompt for rich input without leaking it into the visible task", async () => {
+    const mockProvider = createMockProvider();
+    mockProvider.capabilities.vision = true;
+    mockProvider.chat.mockResolvedValueOnce({
+      text: "- The screenshot contains a broken layout and clipped panel labels.",
+      toolCalls: [],
+      stopReason: "end_turn" as const,
+      usage: { inputTokens: 8, outputTokens: 14 },
+    });
+    const mockChannel = createMockChannel();
+    const supervisorBrain = {
+      shouldExecute: vi.fn().mockReturnValue(true),
+      execute: vi.fn().mockResolvedValue({
+        success: true,
+        partial: false,
+        output: "Rich request handled",
+        totalNodes: 1,
+        succeeded: 1,
+        failed: 0,
+        skipped: 0,
+        totalCost: 0,
+        totalDuration: 0,
+        nodeResults: [],
+      }),
+    };
+
+    const orchestrator = new Orchestrator({
+      providerManager: {
+        getProvider: () => mockProvider,
+        getProviderByName: () => mockProvider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        listAvailable: () => [{ name: "mock", label: "mock", defaultModel: "default" }],
+        shutdown: vi.fn(),
+      } as any,
+      tools: [],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: false,
+      supervisorBrain: supervisorBrain as any,
+      supervisorComplexityThreshold: "complex",
+    });
+    (orchestrator as any).taskClassifier = {
+      classify: vi.fn().mockReturnValue({
+        type: "analysis",
+        complexity: "complex",
+        criticality: "high",
+      }),
+    };
+
+    const decision = await orchestrator.evaluateSupervisorAdmission({
+      prompt: "Inspect this screenshot and explain the layout bug in detail",
+      chatId: "chat-vision-decision",
+      channelType: "web",
+      forceEligibility: true,
+      userContent: [
+        { type: "text", text: "Inspect this screenshot and explain the layout bug in detail" },
+        { type: "image", source: { type: "base64", mediaType: "image/png", data: "cG5n" } },
+      ] as any,
+      attachments: [
+        {
+          type: "image",
+          name: "layout.png",
+          mimeType: "image/png",
+          data: Buffer.from("png-data"),
+          size: 8,
+        },
+        {
+          type: "document",
+          name: "trace.txt",
+          mimeType: "text/plain",
+          data: Buffer.from("trace-data"),
+          size: 10,
+        },
+      ],
+    });
+
+    expect(decision.path).toBe("supervisor");
+    expect(supervisorBrain.shouldExecute).toHaveBeenCalledWith(
+      expect.stringContaining("Grounded multimodal context:"),
+      undefined,
+    );
+    expect(supervisorBrain.execute).toHaveBeenCalledWith(
+      "Inspect this screenshot and explain the layout bug in detail",
+      expect.objectContaining({
+        userContent: expect.any(Array),
+        attachments: expect.any(Array),
+      }),
+    );
+    const executeContext = supervisorBrain.execute.mock.calls[0]?.[1];
+    expect(executeContext?.planningPrompt).toContain("Document attachment: trace.txt (text/plain)");
+    expect(executeContext?.planningPrompt).toContain("Grounded multimodal context:");
+    const groundingMessages = mockProvider.chat.mock.calls[0]?.[1] ?? [];
+    const groundingUserMessage = groundingMessages.find((message: { role: string }) => message.role === "user");
+    const groundingText = Array.isArray(groundingUserMessage?.content)
+      ? groundingUserMessage.content
+        .filter((block: { type: string }) => block.type === "text")
+        .map((block: { text?: string }) => block.text ?? "")
+        .join("\n")
+      : "";
+    expect(groundingText).toContain("Document attachment: trace.txt (text/plain)");
+  });
+
+  it("re-decomposes rich-input goal trees instead of reusing the prebuilt tree", async () => {
+    const mockProvider = createMockProvider();
+    mockProvider.capabilities.vision = true;
+    mockProvider.chat.mockResolvedValueOnce({
+      text: "- Screenshot shows a broken HUD alignment.",
+      toolCalls: [],
+      stopReason: "end_turn" as const,
+      usage: { inputTokens: 7, outputTokens: 12 },
+    });
+    const mockChannel = createMockChannel();
+    const supervisorBrain = {
+      shouldExecute: vi.fn().mockReturnValue(true),
+      execute: vi.fn().mockResolvedValue({
+        success: true,
+        partial: false,
+        output: "Supervisor rerouted the grounded request.",
+        totalNodes: 1,
+        succeeded: 1,
+        failed: 0,
+        skipped: 0,
+        totalCost: 0,
+        totalDuration: 0,
+        nodeResults: [],
+      }),
+    };
+    const goalTree = buildGoalTreeFromBlock(
+      {
+        isGoal: true,
+        estimatedMinutes: 4,
+        nodes: [{ id: "s1", task: "Inspect screenshot notes", dependsOn: [] }],
+      },
+      "thread-rich-tree",
+      "Inspect this screenshot",
+      "text-only plan",
+    );
+
+    const orchestrator = new Orchestrator({
+      providerManager: {
+        getProvider: () => mockProvider,
+        getProviderByName: () => mockProvider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        listAvailable: () => [{ name: "mock", label: "mock", defaultModel: "default" }],
+        shutdown: vi.fn(),
+      } as any,
+      tools: [],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: false,
+      supervisorBrain: supervisorBrain as any,
+      supervisorComplexityThreshold: "complex",
+    });
+    (orchestrator as any).taskClassifier = {
+      classify: vi.fn().mockReturnValue({
+        type: "analysis",
+        complexity: "complex",
+        criticality: "high",
+      }),
+    };
+
+    const decision = await orchestrator.evaluateSupervisorAdmission({
+      prompt: "Inspect this screenshot",
+      chatId: "chat-rich-tree",
+      channelType: "web",
+      forceEligibility: true,
+      goalTree,
+      userContent: [
+        { type: "text", text: "Inspect this screenshot" },
+        { type: "image", source: { type: "base64", media_type: "image/png", data: "cG5n" } },
+      ] as any,
+      attachments: [{
+        type: "image",
+        name: "layout.png",
+        mimeType: "image/png",
+        data: Buffer.from("png-data"),
+        size: 8,
+      }],
+    });
+
+    expect(decision.path).toBe("supervisor");
+    expect(supervisorBrain.shouldExecute).toHaveBeenCalledWith(
+      expect.stringContaining("Grounded multimodal context:"),
+      undefined,
+    );
+    const executeContext = supervisorBrain.execute.mock.calls[0]?.[1];
+    expect(executeContext?.goalTree).toBeUndefined();
+    expect(executeContext?.planningPrompt).toContain("Grounded multimodal context:");
+  });
+
+  it("uses the candidate default model when selecting a vision planning provider", async () => {
+    const preferredProvider = createMockProvider();
+    preferredProvider.capabilities.vision = false;
+    const visionProvider = createMockProvider();
+    visionProvider.capabilities.vision = true;
+    visionProvider.chat.mockResolvedValueOnce({
+      text: "- Grounded screenshot details from the vision model.",
+      toolCalls: [],
+      stopReason: "end_turn" as const,
+      usage: { inputTokens: 9, outputTokens: 13 },
+    });
+    const getProviderByName = vi.fn((_name: string, model?: string) =>
+      model === "vision-model" ? visionProvider : null,
+    );
+    const getPrimaryProviderByName = vi.fn((_name: string, model?: string) =>
+      model === "vision-model" ? visionProvider : null,
+    );
+    const mockChannel = createMockChannel();
+    const supervisorBrain = {
+      shouldExecute: vi.fn().mockReturnValue(true),
+      execute: vi.fn().mockResolvedValue({
+        success: true,
+        partial: false,
+        output: "Vision candidate selected.",
+        totalNodes: 1,
+        succeeded: 1,
+        failed: 0,
+        skipped: 0,
+        totalCost: 0,
+        totalDuration: 0,
+        nodeResults: [],
+      }),
+    };
+
+    const orchestrator = new Orchestrator({
+      providerManager: {
+        getProvider: () => preferredProvider,
+        getProviderByName,
+        getPrimaryProviderByName,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        getProviderCapabilities: (_name: string, model?: string) => ({ vision: model === "vision-model" }),
+        listExecutionCandidates: () => [{ name: "candidate", label: "Candidate", defaultModel: "vision-model" }],
+        listAvailable: () => [{ name: "candidate", label: "Candidate", defaultModel: "vision-model" }],
+        shutdown: vi.fn(),
+      } as any,
+      tools: [],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: false,
+      supervisorBrain: supervisorBrain as any,
+      supervisorComplexityThreshold: "complex",
+    });
+    (orchestrator as any).taskClassifier = {
+      classify: vi.fn().mockReturnValue({
+        type: "analysis",
+        complexity: "complex",
+        criticality: "high",
+      }),
+    };
+
+    const decision = await orchestrator.evaluateSupervisorAdmission({
+      prompt: "Inspect this screenshot",
+      chatId: "chat-vision-candidate",
+      channelType: "web",
+      forceEligibility: true,
+      attachments: [{
+        type: "image",
+        name: "layout.png",
+        mimeType: "image/png",
+        data: Buffer.from("png-data"),
+        size: 8,
+      }],
+    });
+
+    expect(decision.path).toBe("supervisor");
+    expect(getPrimaryProviderByName).toHaveBeenCalledWith("mock", "default");
+    expect(getPrimaryProviderByName).toHaveBeenCalledWith("candidate", "vision-model");
+    expect(supervisorBrain.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to the direct worker path when rich input cannot be grounded for supervisor planning", async () => {
+    const mockProvider = createMockProvider();
+    const mockChannel = createMockChannel();
+    const supervisorBrain = {
+      shouldExecute: vi.fn().mockReturnValue(true),
+      execute: vi.fn(),
+    };
+
+    const orchestrator = new Orchestrator({
+      providerManager: {
+        getProvider: () => mockProvider,
+        getProviderByName: () => null,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        getProviderCapabilities: () => ({ vision: false }),
+        listExecutionCandidates: () => [{ name: "mock", label: "mock", defaultModel: "default" }],
+        listAvailable: () => [{ name: "mock", label: "mock", defaultModel: "default" }],
+        shutdown: vi.fn(),
+      } as any,
+      tools: [],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: false,
+      supervisorBrain: supervisorBrain as any,
+      supervisorComplexityThreshold: "complex",
+    });
+    (orchestrator as any).taskClassifier = {
+      classify: vi.fn().mockReturnValue({
+        type: "analysis",
+        complexity: "complex",
+        criticality: "high",
+      }),
+    };
+
+    const decision = await orchestrator.evaluateSupervisorAdmission({
+      prompt: "Inspect this screenshot and explain the layout bug in detail",
+      chatId: "chat-vision-fallback",
+      channelType: "web",
+      forceEligibility: true,
+      userContent: [
+        { type: "text", text: "Inspect this screenshot and explain the layout bug in detail" },
+        { type: "image", source: { type: "base64", media_type: "image/png", data: "cG5n" } },
+      ] as any,
+      attachments: [{
+        type: "image",
+        name: "layout.png",
+        mimeType: "image/png",
+        data: Buffer.from("png-data"),
+        size: 8,
+      }],
+    });
+
+    expect(decision).toEqual({
+      path: "direct_worker",
+      reason: "multimodal_passthrough",
+    });
+    expect(supervisorBrain.execute).not.toHaveBeenCalled();
+  });
+
+  it("forwards the shared worker envelope into supervisor execution", async () => {
+    const mockProvider = createMockProvider();
+    const mockChannel = createMockChannel();
+    const usageRecorder = vi.fn();
+    const workspaceLease = {
+      id: "lease-1",
+      workspaceId: "ws-1",
+      release: vi.fn(),
+    };
+    const supervisorBrain = {
+      shouldExecute: vi.fn().mockReturnValue(true),
+      execute: vi.fn().mockResolvedValue({
+        success: true,
+        partial: false,
+        output: "Supervisor answer",
+        totalNodes: 1,
+        succeeded: 1,
+        failed: 0,
+        skipped: 0,
+        totalCost: 0,
+        totalDuration: 0,
+        nodeResults: [],
+      }),
+    };
+
+    const orchestrator = new Orchestrator({
+      providerManager: {
+        getProvider: () => mockProvider,
+        getProviderByName: () => mockProvider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        listAvailable: () => [{ name: "mock", label: "mock", defaultModel: "default" }],
+        shutdown: vi.fn(),
+      } as any,
+      tools: [],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: false,
+      supervisorBrain: supervisorBrain as any,
+      supervisorComplexityThreshold: "complex",
+    });
+    (orchestrator as any).taskClassifier = {
+      classify: vi.fn().mockReturnValue({
+        type: "analysis",
+        complexity: "complex",
+        criticality: "high",
+      }),
+    };
+
+    const decision = await orchestrator.evaluateSupervisorAdmission({
+      prompt: "Investigate the complex failure",
+      chatId: "chat-supervisor-envelope",
+      channelType: "web",
+      conversationId: "thread-9",
+      userId: "user-1",
+      taskRunId: "taskrun_123",
+      userContent: "Investigate the complex failure",
+      onUsage: usageRecorder,
+      workspaceLease: workspaceLease as any,
+    });
+
+    expect(decision.path).toBe("supervisor");
+    expect(supervisorBrain.execute).toHaveBeenCalledWith(
+      "Investigate the complex failure",
+      expect.objectContaining({
+        chatId: "chat-supervisor-envelope",
+        channelType: "web",
+        conversationId: "thread-9",
+        userId: "user-1",
+        taskRunId: "taskrun_123",
+        userContent: "Investigate the complex failure",
+        onUsage: usageRecorder,
+        workspaceLease,
+      }),
+    );
   });
 
   it("enforces the exact visible output contract even when a single worker adds extra text", async () => {
@@ -5778,6 +6300,78 @@ DONE`,
       expect(mockProvider.chat).toHaveBeenCalledTimes(1);
       // TaskManager was called
       expect(mockTaskManager.submit).toHaveBeenCalledTimes(1);
+    });
+
+    it("submits rich-input goal blocks to background without trusting a text-authored goal tree", async () => {
+      const mockTaskManager = {
+        submit: vi.fn().mockReturnValue({ id: "task_rich_goal" }),
+      };
+
+      const goalOrch = new Orchestrator({
+        providerManager: {
+          getProvider: () => mockProvider,
+          getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+          shutdown: vi.fn(),
+        } as any,
+        tools: [readTool],
+        channel: mockChannel,
+        projectPath: "/tmp/test-project",
+        readOnly: false,
+        requireConfirmation: false,
+      });
+      goalOrch.setTaskManager(mockTaskManager as any);
+      mockProvider.capabilities.vision = true;
+
+      const planWithGoal = `Plan:
+\`\`\`goal
+{"isGoal": true, "estimatedMinutes": 4, "nodes": [{"id": "s1", "task": "Inspect screenshot", "dependsOn": []}]}
+\`\`\``;
+
+      mockProvider.chat.mockResolvedValueOnce({
+        text: planWithGoal,
+        toolCalls: [],
+        stopReason: "end_turn" as const,
+        usage: { inputTokens: 50, outputTokens: 100 },
+      });
+
+      const promise = goalOrch.handleMessage({
+        channelType: "web",
+        chatId: "goal-detect-rich-input",
+        userId: "user1",
+        text: "Inspect this screenshot and explain the layout bug",
+        attachments: [{
+          type: "image",
+          name: "layout.png",
+          mimeType: "image/png",
+          data: Buffer.from("png-data"),
+          size: 8,
+        }],
+        timestamp: new Date(),
+      } as any);
+      await vi.advanceTimersByTimeAsync(100);
+      await promise;
+
+      expect(mockTaskManager.submit).toHaveBeenCalledWith(
+        "goal-detect-rich-input",
+        "web",
+        "Inspect this screenshot and explain the layout bug",
+        expect.objectContaining({
+          forceSharedPlanning: true,
+          attachments: expect.any(Array),
+          userContent: expect.any(Array),
+        }),
+      );
+      const submitOptions = mockTaskManager.submit.mock.calls[0]?.[3];
+      expect(submitOptions?.goalTree).toBeUndefined();
+      expect(mockProvider.chat).toHaveBeenCalledTimes(1);
+      expect(mockChannel.sendText).toHaveBeenCalledWith(
+        "goal-detect-rich-input",
+        expect.stringContaining("Inspect this screenshot and explain the layout bug"),
+      );
+      const renderedMarkdown = mockChannel.sendMarkdown.mock.calls
+        .filter(([chat]) => chat === "goal-detect-rich-input")
+        .map(([, markdown]) => String(markdown));
+      expect(renderedMarkdown.some((markdown) => markdown.includes("```goal"))).toBe(false);
     });
   });
 

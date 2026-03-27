@@ -10,6 +10,7 @@ import type { TaskOrigin } from "../daemon/daemon-types.js";
 import type { GoalTree } from "../goals/types.js";
 import type { Orchestrator } from "../agents/orchestrator.js";
 import type { WorkspaceLease } from "../agents/supervisor/supervisor-types.js";
+import type { MessageContent } from "../agents/providers/provider-core.interface.js";
 
 // ─── Task Identity ──────────────────────────────────────────────────────────────
 
@@ -111,6 +112,10 @@ export interface Task {
   triggerName?: string;
   /** Pre-decomposed goal tree for goal tasks (passed from Orchestrator to BackgroundExecutor) */
   goalTree?: GoalTree;
+  /** Hint that the request already produced a goal plan and must re-enter shared planning. */
+  forceSharedPlanning?: boolean;
+  /** Original multimodal user content for grounded planning / execution fallback. */
+  userContent?: string | MessageContent[];
   /** Attachments forwarded from the incoming message (images, files) */
   attachments?: import("../channels/channel.interface.js").Attachment[];
   /** Optional agent-specific orchestrator for queued execution paths. */
@@ -144,8 +149,14 @@ export interface BackgroundTaskOptions {
   taskRunId?: string;
   conversationId?: string;
   userId?: string;
+  /** Internal: fixed provider assignment for delegated supervisor child runs. */
+  assignedProvider?: string;
+  /** Internal: fixed model assignment for delegated supervisor child runs. */
+  assignedModel?: string;
   /** Attachments from the original message for vision/file support */
   attachments?: import("../channels/channel.interface.js").Attachment[];
+  /** Original multimodal user content from the initiating message. */
+  userContent?: string | MessageContent[];
   /** Parent metric ID for subtask tracking (passed from BackgroundExecutor for decomposed tasks) */
   parentMetricId?: string;
   /** Optional usage callback for recording provider/token consumption. */
