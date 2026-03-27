@@ -304,6 +304,14 @@ export class HeartbeatLoop {
         this.activeTriggerTasks.delete(name);
       }
 
+      if (
+        this.config.heartbeat.idlePause &&
+        this.taskManager.hasActiveForegroundTasks?.()
+      ) {
+        this.logger.debug("Trigger skipped (foreground task active)", { trigger: name });
+        continue;
+      }
+
       // 6. Evaluate trigger
       try {
         if (trigger.shouldFire(now)) {

@@ -138,14 +138,14 @@ describe("Autonomy Blocker Scenario — Game .cs File Editing", () => {
   });
 
   describe("Scenario 2: Control loop tracker tolerance", () => {
-    it("default thresholds allow 14 same-fingerprint events without triggering", () => {
-      // Disable stale analysis to isolate fingerprint behavior
+    it("keeps the generic 15-event tolerance for reflection gates", () => {
+      // Disable stale analysis to isolate generic fingerprint behavior
       const tracker = new ControlLoopTracker({ staleAnalysisThreshold: 100 });
 
       const event = {
-        kind: "verifier_continue" as const,
-        reason: "conformance gate still pending",
-        gate: "[STRADA CONFORMANCE REQUIRED]",
+        kind: "reflection_continue" as const,
+        reason: "Need another planning pass",
+        gate: "[REFLECTION: CONTINUE]",
         iteration: 1,
       };
 

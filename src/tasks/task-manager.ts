@@ -9,7 +9,7 @@
 import { EventEmitter } from "node:events";
 import type { Task, TaskId, TaskProgressUpdate } from "./types.js";
 import { TaskStatus, ACTIVE_STATUSES, TERMINAL_STATUSES, generateTaskId } from "./types.js";
-import { getTaskProgressMessage } from "./progress-signals.js";
+import { getTaskProgressMessage, toTaskProgressSignal } from "./progress-signals.js";
 import type { TaskStorage } from "./task-storage.js";
 import type { BackgroundExecutor } from "./background-executor.js";
 import { getLogger } from "../utils/logger.js";
@@ -162,7 +162,8 @@ export class TaskManager extends EventEmitter {
    * Add a progress entry to a task.
    */
   addProgress(taskId: TaskId, message: TaskProgressUpdate): void {
-    this.storage.addProgress(taskId, getTaskProgressMessage(message));
+    const signal = toTaskProgressSignal(message);
+    this.storage.addProgress(taskId, signal.userSummary?.trim() || getTaskProgressMessage(message));
     this.emit("task:progress", taskId, message);
   }
 

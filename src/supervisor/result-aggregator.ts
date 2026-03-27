@@ -85,7 +85,6 @@ export class ResultAggregator {
     }
 
     const okResults = results.filter((r) => r.status === "ok");
-    const otherResults = results.filter((r) => r.status !== "ok");
 
     let toVerify: NodeResult[];
 
@@ -112,29 +111,33 @@ export class ResultAggregator {
     }
 
     // Run verification on selected nodes
-    const verifiedSet = new Set<string>();
+    const updatedResults = [...results];
+    let verificationSpend = 0;
     for (const node of toVerify) {
+      const estimatedVerificationCost = Math.max(node.cost, 0) * 0.1;
+      const projectedSpend = verificationSpend + estimatedVerificationCost;
+      if (
+        Number.isFinite(this.verificationConfig.maxVerificationCost) &&
+        projectedSpend > this.verificationConfig.maxVerificationCost
+      ) {
+        break;
+      }
+      verificationSpend = projectedSpend;
       const verdict = await this.verifyFn(node);
-      verifiedSet.add(node.nodeId);
 
       if (verdict.verdict === "reject") {
-        // Mark rejected nodes as failed
-        const idx = results.indexOf(node);
+        const idx = updatedResults.findIndex((result) => result.nodeId === node.nodeId);
         if (idx !== -1) {
-          const failedNode: NodeResult = {
-            ...node,
+          updatedResults[idx] = {
+            ...updatedResults[idx]!,
             status: "failed",
             output: `Verification rejected: ${verdict.issues?.join(", ") ?? "no details"}`,
           };
-          return [
-            ...otherResults,
-            ...okResults.map((r) => (r === node ? failedNode : r)),
-          ];
         }
       }
     }
 
-    return results;
+    return updatedResults;
   }
 
   // ---------------------------------------------------------------------------

@@ -209,6 +209,70 @@ describe("handleBackgroundLoopRecovery", () => {
     expect(result.action).toBe("replan");
     expect(result.gate).toContain("Required next action: Use a tool to create the file");
   });
+
+  it("preserves blocked decisions for repeated internal review loops in daemon mode", async () => {
+    const deps = makeDeps();
+    const tracker = new ControlLoopTracker({
+      sameFingerprintThreshold: 1,
+      staleAnalysisThreshold: 100,
+      hardCapReplan: 99,
+      hardCapBlock: 100,
+    });
+    const params = makeBaseParams({
+      tracker,
+      availableToolNames: [],
+      progressAssessmentEnabled: false,
+      daemonMode: true,
+      kind: "clarification_internal_continue",
+      reason: "Clarification review kept the task internal.",
+      gate: "Keep working internally.",
+    });
+    const seeded = tracker.recordGate({
+      kind: "clarification_internal_continue",
+      reason: "Clarification review kept the task internal.",
+      gate: "Keep working internally.",
+      iteration: 0,
+    });
+    expect(seeded).not.toBeNull();
+    tracker.markRecoveryAttempt(seeded!.fingerprint);
+    tracker.incrementTextOnlyGate();
+
+    const result = await handleBackgroundLoopRecovery(params, deps);
+    expect(result.action).toBe("blocked");
+    expect(result.message).toContain("Blocked checkpoint:");
+  });
+
+  it("still allows daemon-mode replan overrides for generic reflection-continue loops", async () => {
+    const deps = makeDeps();
+    const tracker = new ControlLoopTracker({
+      sameFingerprintThreshold: 1,
+      staleAnalysisThreshold: 100,
+      hardCapReplan: 99,
+      hardCapBlock: 100,
+    });
+    const params = makeBaseParams({
+      tracker,
+      availableToolNames: [],
+      progressAssessmentEnabled: false,
+      daemonMode: true,
+      kind: "reflection_continue",
+      reason: "Reflection requested continuation without tool execution.",
+      gate: "Please continue.",
+    });
+    const seeded = tracker.recordGate({
+      kind: "reflection_continue",
+      reason: "Reflection requested continuation without tool execution.",
+      gate: "Please continue.",
+      iteration: 0,
+    });
+    expect(seeded).not.toBeNull();
+    tracker.markRecoveryAttempt(seeded!.fingerprint);
+    tracker.incrementTextOnlyGate();
+
+    const result = await handleBackgroundLoopRecovery(params, deps);
+    expect(result.action).toBe("replan");
+    expect(result.gate).toContain("[LOOP RECOVERY REQUIRED]");
+  });
 });
 
 describe("resolveVerifierIntervention", () => {

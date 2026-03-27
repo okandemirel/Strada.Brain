@@ -12,6 +12,7 @@ import { readFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { detectLanguage } from "../dashboard/workspace-routes.js";
 import type { ProviderManager } from "./providers/provider-manager.js";
+import { canonicalizeProviderName } from "./providers/provider-identity.js";
 import { getToolMetadata, type ITool, type ToolContext } from "./tools/tool.interface.js";
 import type {
   IChannelAdapter,
@@ -926,8 +927,9 @@ export class Orchestrator {
       getPrimaryProviderByName?: (name: string, model?: string) => IAIProvider | null;
     };
     const activeInfo = this.providerManager.getActiveInfo(identityKey);
+    const activeProviderName = canonicalizeProviderName(activeInfo.providerName) ?? activeInfo.providerName;
     const preferredProvider =
-      providerManager.getPrimaryProviderByName?.(activeInfo.providerName, activeInfo.model)
+      providerManager.getPrimaryProviderByName?.(activeProviderName, activeInfo.model)
       ?? this.providerManager.getProvider(identityKey);
     if (preferredProvider.capabilities.vision) {
       return preferredProvider;
@@ -2230,11 +2232,22 @@ export class Orchestrator {
       },
       async () => {
         const logger = getLogger();
-        const fixedProviderName = options.assignedProvider?.trim();
+        const fixedProviderName =
+          canonicalizeProviderName(options.assignedProvider)
+          ?? options.assignedProvider?.trim().toLowerCase();
         const fixedModelId = options.assignedModel?.trim() || undefined;
         const fixedProvider = fixedProviderName
           ? this.providerManager.getProviderByName(fixedProviderName, fixedModelId)
           : null;
+        if (options.assignedProvider && fixedProviderName && !fixedProvider) {
+          logger.warn("Delegated worker provider pin could not be materialized; using fallback provider", {
+            assignedProvider: options.assignedProvider,
+            canonicalProvider: fixedProviderName,
+            assignedModel: fixedModelId,
+            chatId,
+            taskRunId,
+          });
+        }
         const fallbackProvider = fixedProvider ?? this.providerManager.getProvider(identityKey);
         const buildExecutionStrategy = (projectWorldFingerprint?: string): SupervisorExecutionStrategy => {
           if (fixedProviderName && fixedProvider) {

@@ -5,6 +5,7 @@ export interface CanvasShape {
   id: string
   props: Record<string, unknown>
   source?: 'agent' | 'user'
+  position?: { x: number; y: number }
 }
 
 export interface CanvasShapeUpdate {
@@ -12,7 +13,16 @@ export interface CanvasShapeUpdate {
   props: Record<string, unknown>
   type?: string
   source?: 'agent' | 'user'
+  position?: { x: number; y: number }
 }
+
+export interface CanvasViewport {
+  x: number
+  y: number
+  zoom: number
+}
+
+export type CanvasLayout = 'auto' | 'grid' | 'tree' | 'flow'
 
 interface CanvasState {
   sessionId: string | null
@@ -20,15 +30,21 @@ interface CanvasState {
   pendingShapes: CanvasShape[]
   pendingUpdates: CanvasShapeUpdate[]
   pendingRemovals: string[]
+  pendingViewport: CanvasViewport | null
+  pendingLayout: CanvasLayout | null
 
   setSessionId: (id: string | null) => void
   setDirty: (dirty: boolean) => void
   addPendingShapes: (shapes: CanvasShape[]) => void
   updatePendingShapes: (shapes: CanvasShapeUpdate[]) => void
   removePendingShapeIds: (ids: string[]) => void
+  setPendingViewport: (viewport: CanvasViewport | null) => void
+  setPendingLayout: (layout: CanvasLayout | null) => void
   clearPendingShapes: () => void
   clearPendingUpdates: () => void
   clearPendingRemovals: () => void
+  clearPendingViewport: () => void
+  clearPendingLayout: () => void
   reset: () => void
 }
 
@@ -38,6 +54,8 @@ const initialState = {
   pendingShapes: [] as CanvasShape[],
   pendingUpdates: [] as CanvasShapeUpdate[],
   pendingRemovals: [] as string[],
+  pendingViewport: null as CanvasViewport | null,
+  pendingLayout: null as CanvasLayout | null,
 }
 
 export const useCanvasStore = create<CanvasState>()((set) => ({
@@ -61,6 +79,7 @@ export const useCanvasStore = create<CanvasState>()((set) => ({
         ...existing,
         ...(update.type ? { type: update.type } : {}),
         ...(update.source ? { source: update.source } : {}),
+        ...(update.position ? { position: update.position } : {}),
         props: { ...existing.props, ...update.props },
       }
     })
@@ -75,6 +94,7 @@ export const useCanvasStore = create<CanvasState>()((set) => ({
           ...existing,
           ...(update.type ? { type: update.type } : {}),
           ...(update.source ? { source: update.source } : {}),
+          ...(update.position ? { position: update.position } : {}),
           props: { ...existing.props, ...update.props },
         }
       } else {
@@ -96,8 +116,12 @@ export const useCanvasStore = create<CanvasState>()((set) => ({
       pendingRemovals: [...new Set([...s.pendingRemovals, ...ids])],
     }
   }),
+  setPendingViewport: (pendingViewport) => set({ pendingViewport }),
+  setPendingLayout: (pendingLayout) => set({ pendingLayout }),
   clearPendingShapes: () => set({ pendingShapes: [] }),
   clearPendingUpdates: () => set({ pendingUpdates: [] }),
   clearPendingRemovals: () => set({ pendingRemovals: [] }),
+  clearPendingViewport: () => set({ pendingViewport: null }),
+  clearPendingLayout: () => set({ pendingLayout: null }),
   reset: () => set(initialState),
 }))

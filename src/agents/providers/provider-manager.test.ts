@@ -177,6 +177,28 @@ describe("ProviderManager", () => {
     expect(provider?.name).toBe("chain(kimi->qwen)");
   });
 
+  it("canonicalizes labeled provider names before preference storage and direct lookup", () => {
+    const defaultProvider = makeProvider("chain(qwen->kimi)");
+    const manager = new ProviderManager(
+      defaultProvider,
+      { qwen: { apiKey: "qwen-key" }, kimi: { apiKey: "kimi-key" } },
+      { qwen: "qwen-max", kimi: "kimi-for-coding" },
+      "/tmp/provider-manager-test",
+      ["qwen", "kimi"],
+    );
+
+    manager.setPreference("chat-1", "Kimi (Moonshot)", "kimi-long-context");
+
+    expect(manager.getActiveInfo("chat-1")).toEqual({
+      providerName: "kimi",
+      model: "kimi-long-context",
+      isDefault: false,
+      selectionMode: "strada-preference-bias",
+      executionPolicyNote: "Strada remains the control plane. This selection biases routing toward the preferred provider/model, but planning, execution, review, and synthesis may still route dynamically unless an explicit hard pin is requested.",
+    });
+    expect(manager.getProviderByName("Kimi (Moonshot)")?.name).toBe("chain(kimi->qwen)");
+  });
+
   it("limits execution candidates to the configured default chain", () => {
     const defaultProvider = makeProvider("chain(qwen->kimi)");
     const manager = new ProviderManager(

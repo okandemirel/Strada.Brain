@@ -49,6 +49,12 @@ function createMockDaemonEventBus() {
   };
 }
 
+function createMockWorkspaceBus() {
+  return {
+    emit: vi.fn(),
+  };
+}
+
 function createMockMonitorLifecycle() {
   return {
     requestStart: vi.fn(),
@@ -103,12 +109,14 @@ describe("BackgroundExecutor - Pre-decomposed Tree Path", () => {
   let mockDecomposer: ReturnType<typeof createMockDecomposer>;
   let mockGoalStorage: ReturnType<typeof createMockGoalStorage>;
   let mockDaemonEventBus: ReturnType<typeof createMockDaemonEventBus>;
+  let mockWorkspaceBus: ReturnType<typeof createMockWorkspaceBus>;
 
   beforeEach(() => {
     mockOrch = createMockOrchestrator();
     mockDecomposer = createMockDecomposer();
     mockGoalStorage = createMockGoalStorage();
     mockDaemonEventBus = createMockDaemonEventBus();
+    mockWorkspaceBus = createMockWorkspaceBus();
   });
 
   it("routes pre-decomposed goalTree through supervisor when available", async () => {
@@ -165,6 +173,63 @@ describe("BackgroundExecutor - Pre-decomposed Tree Path", () => {
         goalTree,
       }),
     );
+    expect(mockDecomposer.decomposeProactive).not.toHaveBeenCalled();
+  });
+
+  it("routes top-level complex tasks through supervisor even without a prebuilt goal tree", async () => {
+    const task = createTestTask(undefined, {
+      prompt: "Audit the architecture, split the work across providers, and reconcile the findings",
+    });
+    mockDecomposer.shouldDecompose.mockReturnValue(false);
+    mockOrch.evaluateSupervisorAdmission.mockResolvedValue({
+      path: "supervisor",
+      reason: "eligible",
+      result: {
+        success: true,
+        partial: false,
+        output: "supervisor handled complex task",
+        totalNodes: 3,
+        succeeded: 3,
+        failed: 0,
+        skipped: 0,
+        totalCost: 0,
+        totalDuration: 0,
+        nodeResults: [],
+      },
+    });
+
+    const executor = new BackgroundExecutor({
+      orchestrator: mockOrch as any,
+      decomposer: mockDecomposer as any,
+      goalStorage: mockGoalStorage as any,
+      daemonEventBus: mockDaemonEventBus as any,
+      aiProvider: undefined,
+      channel: undefined,
+    });
+
+    const mockTaskManager = {
+      updateStatus: vi.fn(),
+      complete: vi.fn(),
+      fail: vi.fn(),
+      block: vi.fn(),
+    };
+    executor.setTaskManager(mockTaskManager as any);
+
+    executor.enqueue(task, new AbortController().signal, vi.fn());
+
+    await vi.waitFor(() => {
+      expect(mockTaskManager.complete).toHaveBeenCalledWith(task.id, "supervisor handled complex task");
+    }, { timeout: 5000 });
+
+    expect(mockOrch.evaluateSupervisorAdmission).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: task.prompt,
+        goalTree: undefined,
+        forceEligibility: false,
+        taskRunId: task.id,
+      }),
+    );
+    expect(mockOrch.runBackgroundTask).not.toHaveBeenCalled();
     expect(mockDecomposer.decomposeProactive).not.toHaveBeenCalled();
   });
 
@@ -496,6 +561,94 @@ describe("BackgroundExecutor - Pre-decomposed Tree Path", () => {
 
     // Decomposer.decomposeProactive SHOULD have been called
     expect(mockDecomposer.decomposeProactive).toHaveBeenCalled();
+  });
+
+  it("emits canvas task cards for normal goal execution and updates them as nodes advance", async () => {
+    const goalTree = buildTestGoalTree();
+    const task = createTestTask(goalTree);
+
+    const executor = new BackgroundExecutor({
+      orchestrator: mockOrch as any,
+      decomposer: mockDecomposer as any,
+      goalStorage: mockGoalStorage as any,
+      daemonEventBus: mockDaemonEventBus as any,
+      workspaceBus: mockWorkspaceBus as any,
+      aiProvider: undefined,
+      channel: undefined,
+    });
+
+    const mockTaskManager = {
+      updateStatus: vi.fn(),
+      complete: vi.fn(),
+      fail: vi.fn(),
+      block: vi.fn(),
+    };
+    executor.setTaskManager(mockTaskManager as any);
+
+    executor.enqueue(task, new AbortController().signal, vi.fn());
+
+    await vi.waitFor(() => {
+      expect(mockTaskManager.complete).toHaveBeenCalledWith(task.id, "task done");
+    }, { timeout: 5000 });
+
+    expect(mockWorkspaceBus.emit).toHaveBeenCalledWith(
+      "canvas:agent_draw",
+      expect.objectContaining({
+        action: "draw",
+        intent: "goal_execution_board",
+        layout: "flow",
+        shapes: expect.arrayContaining([
+          expect.objectContaining({
+            id: `goal-summary-${goalTree.rootId}`,
+            type: "note-block",
+          }),
+          expect.objectContaining({
+            id: expect.stringMatching(/^goal-task-goal_/),
+            type: "task-card",
+          }),
+        ]),
+      }),
+    );
+    expect(mockWorkspaceBus.emit).toHaveBeenCalledWith(
+      "canvas:agent_draw",
+      expect.objectContaining({
+        action: "update",
+        intent: "goal_execution_board",
+      }),
+    );
+  });
+
+  it("defers runnable daemon queue entries while foreground work is active", () => {
+    const executor = new BackgroundExecutor({
+      orchestrator: mockOrch as any,
+      decomposer: mockDecomposer as any,
+      goalStorage: mockGoalStorage as any,
+      daemonEventBus: mockDaemonEventBus as any,
+      aiProvider: undefined,
+      channel: undefined,
+    });
+    const taskManager = {
+      hasActiveForegroundTasks: vi.fn().mockReturnValue(true),
+    };
+    executor.setTaskManager(taskManager as any);
+
+    (executor as any).queue.push(
+      {
+        task: createTestTask(undefined, { id: "task_daemon" as Task["id"], origin: "daemon", chatId: "daemon", channelType: "daemon" }),
+        signal: new AbortController().signal,
+        onProgress: vi.fn(),
+      },
+      {
+        task: createTestTask(undefined, { id: "task_user" as Task["id"], origin: "user", chatId: "chat-user", channelType: "cli" }),
+        signal: new AbortController().signal,
+        onProgress: vi.fn(),
+      },
+    );
+
+    expect((executor as any).findNextRunnableIndex()).toBe(1);
+
+    (executor as any).queue.splice(1, 1);
+    expect((executor as any).findNextRunnableIndex()).toBe(-1);
   });
 
   it("re-enters shared planning for rich-input tasks that were goal-planned without a persisted tree", async () => {

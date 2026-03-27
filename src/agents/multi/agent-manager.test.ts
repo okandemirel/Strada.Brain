@@ -45,6 +45,8 @@ vi.mock("../orchestrator.js", () => {
       }),
       cleanupSessions: vi.fn(),
       setTaskManager: vi.fn(),
+      setWorkspaceBus: vi.fn(),
+      setMonitorLifecycle: vi.fn(),
     })),
   };
 });
@@ -362,6 +364,29 @@ describe("AgentManager", () => {
       } finally {
         await sharedManager.shutdown();
       }
+    });
+
+    it("wires the shared workspace runtime into existing and future per-agent orchestrators", async () => {
+      await manager.routeMessage(makeMsg());
+
+      const { Orchestrator } = await import("../orchestrator.js");
+      const mockConstructor = Orchestrator as unknown as Mock;
+      const firstOrchestrator = mockConstructor.mock.results.at(-1)?.value;
+      const workspaceBus = { emit: vi.fn() } as any;
+      const monitorLifecycle = {
+        requestStart: vi.fn(),
+        requestEnd: vi.fn(),
+      } as any;
+
+      manager.setWorkspaceRuntime(workspaceBus, monitorLifecycle);
+
+      expect(firstOrchestrator.setWorkspaceBus).toHaveBeenCalledWith(workspaceBus);
+      expect(firstOrchestrator.setMonitorLifecycle).toHaveBeenCalledWith(monitorLifecycle);
+
+      await manager.routeMessage(makeMsg({ chatId: "chat-2" }));
+      const secondOrchestrator = mockConstructor.mock.results.at(-1)?.value;
+      expect(secondOrchestrator.setWorkspaceBus).toHaveBeenCalledWith(workspaceBus);
+      expect(secondOrchestrator.setMonitorLifecycle).toHaveBeenCalledWith(monitorLifecycle);
     });
   });
 

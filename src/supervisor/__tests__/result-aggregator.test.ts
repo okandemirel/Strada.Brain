@@ -137,5 +137,39 @@ describe("ResultAggregator", () => {
       await agg.verify(results);
       expect(verifyFn).toHaveBeenCalledTimes(1); // only "A"
     });
+
+    it("marks explicitly rejected nodes as failed while keeping result order stable", async () => {
+      const verifyFn = vi.fn()
+        .mockResolvedValueOnce({ verdict: "reject", verifierProvider: "deepseek", issues: ["Missing verification"] })
+        .mockResolvedValueOnce({ verdict: "approve", verifierProvider: "deepseek" });
+      const agg = new ResultAggregator({ mode: "always", samplingRate: 0, preferDifferentProvider: true, maxVerificationCost: 15 }, verifyFn);
+      const results = [makeResult("A", "ok"), makeResult("B", "ok")];
+
+      const verified = await agg.verify(results);
+
+      expect(verified[0]).toMatchObject({
+        nodeId: "A",
+        status: "failed",
+        output: "Verification rejected: Missing verification",
+      });
+      expect(verified[1]).toMatchObject({
+        nodeId: "B",
+        status: "ok",
+      });
+    });
+
+    it("stops verifying once the configured verification budget would be exceeded", async () => {
+      const verifyFn = vi.fn().mockResolvedValue({ verdict: "approve", verifierProvider: "deepseek" });
+      const agg = new ResultAggregator({ mode: "always", samplingRate: 0, preferDifferentProvider: true, maxVerificationCost: 0.15 }, verifyFn);
+      const results = [
+        { ...makeResult("A", "ok"), cost: 1 },
+        { ...makeResult("B", "ok"), cost: 1 },
+      ];
+
+      await agg.verify(results);
+
+      expect(verifyFn).toHaveBeenCalledTimes(1);
+      expect(verifyFn).toHaveBeenCalledWith(expect.objectContaining({ nodeId: "A" }));
+    });
   });
 });

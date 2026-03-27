@@ -72,6 +72,10 @@ vi.mock("../memory/unified/migration.js", () => {
 
 vi.mock("../agents/providers/provider-registry.js", () => {
   return {
+    PROVIDER_PRESETS: {
+      kimi: { providerClass: vi.fn(), envVar: "KIMI_API_KEY", models: [] },
+      deepseek: { providerClass: vi.fn(), envVar: "DEEPSEEK_API_KEY", models: [] },
+    },
     buildProviderChain: vi.fn().mockImplementation((names: string[]) => ({
       name: names.join(","),
       healthCheck: vi.fn().mockResolvedValue(true),

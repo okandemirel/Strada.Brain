@@ -29,6 +29,7 @@ import type { StradaDepsStatus } from "../../config/strada-deps.js";
 import { collectApiKeys } from "../../rag/embeddings/embedding-resolver.js";
 import { collectProviderCredentials } from "../provider-config.js";
 import { WorkspaceLeaseManager } from "../../agents/multi/workspace-lease-manager.js";
+import type { SupervisorBrain } from "../../supervisor/supervisor-brain.js";
 import type {
   MultiAgentDelegationStageDeps,
   MultiAgentDelegationStageResult,
@@ -65,6 +66,7 @@ export async function initializeMultiAgentDelegationStage(
     providerRouter?: { setTierRouter(router: unknown): void };
     dashboard?: Pick<DashboardServer, "registerDelegationServices">;
     stradaDeps: StradaDepsStatus;
+    supervisorBrain?: SupervisorBrain;
   },
   deps: MultiAgentDelegationStageDeps = {},
 ): Promise<MultiAgentDelegationStageResult> {
@@ -116,6 +118,7 @@ export async function initializeMultiAgentDelegationStage(
     userProfileStore: params.userProfileStore,
     messageBurstWindowMs: params.config.tasks.messageBurstWindowMs,
     maxBurstMessages: params.config.tasks.messageBurstMaxMessages,
+    supervisorBrain: params.supervisorBrain,
   } satisfies ConstructorParameters<typeof AgentManager>[0];
 
   const agentManager = deps.createAgentManager?.(agentManagerOptions)

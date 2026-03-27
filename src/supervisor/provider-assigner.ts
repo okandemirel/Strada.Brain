@@ -13,6 +13,7 @@ import type {
   ProviderScore,
   TaggedGoalNode,
 } from "./supervisor-types.js";
+import { canonicalizeProviderName } from "../agents/providers/provider-identity.js";
 
 // =============================================================================
 // PROVIDER DESCRIPTOR
@@ -48,7 +49,10 @@ export class ProviderAssigner {
   private readonly historyMap: Map<string, Map<string, number>> = new Map();
 
   constructor(providers: readonly ProviderDescriptor[]) {
-    this.providers = providers;
+    this.providers = providers.map((provider) => ({
+      ...provider,
+      name: canonicalizeProviderName(provider.name) ?? provider.name,
+    }));
   }
 
   // ---------------------------------------------------------------------------
@@ -267,10 +271,11 @@ export class ProviderAssigner {
    * Used to build the history bonus over time.
    */
   recordOutcome(providerName: string, tags: CapabilityTag[], success: boolean): void {
-    if (!this.historyMap.has(providerName)) {
-      this.historyMap.set(providerName, new Map());
+    const canonicalProviderName = canonicalizeProviderName(providerName) ?? providerName;
+    if (!this.historyMap.has(canonicalProviderName)) {
+      this.historyMap.set(canonicalProviderName, new Map());
     }
-    const providerHistory = this.historyMap.get(providerName)!;
+    const providerHistory = this.historyMap.get(canonicalProviderName)!;
 
     for (const tag of tags) {
       const key = tag;
@@ -293,7 +298,8 @@ export class ProviderAssigner {
 
   /** Get success rate for a provider across given tags */
   private getSuccessRate(providerName: string, tags: CapabilityTag[]): number {
-    const providerHistory = this.historyMap.get(providerName);
+    const canonicalProviderName = canonicalizeProviderName(providerName) ?? providerName;
+    const providerHistory = this.historyMap.get(canonicalProviderName);
     if (!providerHistory || tags.length === 0) {
       return DEFAULT_HISTORY_SCORE;
     }

@@ -15,7 +15,11 @@
  * DaemonEventBus for WebSocket dashboard broadcasting.
  */
 
-import type { Task, TaskProgressSignal, TaskProgressUpdate } from "./types.js";
+import type {
+  Task,
+  TaskProgressSignal,
+  TaskProgressUpdate,
+} from "./types.js";
 import { getTaskConversationKey, TaskStatus } from "./types.js";
 import type { TaskManager } from "./task-manager.js";
 import type { Orchestrator, SupervisorAdmissionDecision } from "../agents/orchestrator.js";
@@ -47,9 +51,20 @@ import type { WorkerRunRequest, WorkerRunResult } from "../agents/supervisor/sup
 import { normalizeSupervisorProgressMarkdown } from "../supervisor/supervisor-feedback.js";
 import type { MonitorLifecycle } from "../dashboard/monitor-lifecycle.js";
 import type { WorkspaceBus } from "../dashboard/workspace-bus.js";
-import { goalTreeToDagPayload } from "../dashboard/workspace-events.js";
+import {
+  goalTreeToDagPayload,
+  type WorkspaceEventMap,
+} from "../dashboard/workspace-events.js";
 
 const LLM_TIMEOUT_MS = 10_000;
+const GOAL_CANVAS_SUMMARY_WIDTH = 320;
+const GOAL_CANVAS_SUMMARY_HEIGHT = 180;
+const GOAL_CANVAS_CARD_WIDTH = 240;
+const GOAL_CANVAS_CARD_HEIGHT = 120;
+const GOAL_CANVAS_COLUMN_GAP = 320;
+const GOAL_CANVAS_ROW_GAP = 180;
+const GOAL_CANVAS_SUMMARY_X = 0;
+const GOAL_CANVAS_SUMMARY_Y = 0;
 
 /** Race a promise against a timeout; resolves to fallback on timeout. */
 function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
@@ -76,6 +91,56 @@ function sanitizeError(error: string, maxLen = 200): string {
   // Strip absolute file paths
   const cleaned = error.replace(/\/[^\s:]+/g, "<path>");
   return cleaned.length > maxLen ? cleaned.slice(0, maxLen) + "…" : cleaned;
+}
+
+function truncateCanvasText(value: string, maxLen = 72): string {
+  const normalized = value.trim().replace(/\s+/g, " ");
+  return normalized.length > maxLen ? `${normalized.slice(0, maxLen - 1)}…` : normalized;
+}
+
+function goalCanvasSummaryShapeId(rootId: string): string {
+  return `goal-summary-${rootId}`;
+}
+
+function goalCanvasNodeShapeId(nodeId: string): string {
+  return `goal-task-${nodeId}`;
+}
+
+function mapGoalNodeCanvasStatus(node: Pick<GoalNode, "status" | "reviewStatus">): string {
+  if (node.reviewStatus === "spec_review" || node.reviewStatus === "quality_review") {
+    return "verifying";
+  }
+
+  switch (node.status) {
+    case "executing":
+      return "running";
+    case "completed":
+      return "done";
+    case "failed":
+      return "failed";
+    case "skipped":
+      return "skipped";
+    case "pending":
+    default:
+      return "pending";
+  }
+}
+
+function mapGoalNodeCanvasPriority(node: Pick<GoalNode, "status" | "reviewStatus">): string {
+  const canvasStatus = mapGoalNodeCanvasStatus(node);
+  switch (canvasStatus) {
+    case "failed":
+      return "critical";
+    case "running":
+    case "verifying":
+      return "high";
+    case "done":
+    case "skipped":
+      return "low";
+    case "pending":
+    default:
+      return "medium";
+  }
 }
 
 interface QueueEntry {
@@ -106,6 +171,13 @@ interface GoalResultSynthesizer {
     onUsage?: (usage: { provider: string; inputTokens: number; outputTokens: number }) => void;
     childWorkerResults?: readonly WorkerRunResult[];
   }) => Promise<string>;
+}
+
+interface TopLevelAdmissionResult {
+  decision: SupervisorAdmissionDecision;
+  canExecuteGoalInline: boolean;
+  supervisorGoalTree?: GoalTree;
+  supervisorGoalStartedAt: number;
 }
 
 export interface BackgroundExecutorOptions {
@@ -218,6 +290,113 @@ export class BackgroundExecutor {
     return resolveConversationScope(task.chatId, task.conversationId);
   }
 
+  private async resolveTopLevelAdmission(params: {
+    task: Task;
+    taskOrchestrator: Orchestrator;
+    signal: AbortSignal;
+    onProgress: (message: TaskProgressUpdate) => void;
+    workspaceLease?: ManagedWorkspaceLease;
+  }): Promise<TopLevelAdmissionResult> {
+    const { task, taskOrchestrator, signal, onProgress, workspaceLease } = params;
+    const hasRichInput =
+      (task.attachments?.length ?? 0) > 0 ||
+      (Array.isArray(task.userContent) && task.userContent.some((block) => block.type !== "text"));
+    const shouldDecomposeTask = this.decomposer?.shouldDecompose(task.prompt) ?? false;
+    const shouldAttemptSharedPlanning =
+      Boolean(task.goalTree) || Boolean(task.forceSharedPlanning) || shouldDecomposeTask;
+    const canExecuteGoalInline = !hasRichInput && (Boolean(task.goalTree) || shouldDecomposeTask);
+    const fallbackDecision: SupervisorAdmissionDecision = {
+      path: canExecuteGoalInline ? "direct_goal_execution" : "direct_worker",
+      reason: "unavailable",
+    };
+
+    const supervisorCapableOrchestrator = taskOrchestrator as Orchestrator & {
+      evaluateSupervisorAdmission?: (params: {
+        prompt: string;
+        chatId: string;
+        channelType?: string;
+        conversationId?: string;
+        userId?: string;
+        signal?: AbortSignal;
+        goalTree?: GoalTree;
+        forceEligibility?: boolean;
+        userContent?: string | import("../agents/providers/provider-core.interface.js").MessageContent[] | null;
+        attachments?: import("../channels/channel.interface.js").Attachment[];
+        taskRunId?: string;
+        onUsage?: (usage: { provider: string; inputTokens: number; outputTokens: number }) => void;
+        workspaceLease?: ManagedWorkspaceLease;
+        onActivated?: (activation: { markdown: string }) => Promise<void> | void;
+        reportUpdate?: (markdown: string) => Promise<void> | void;
+        onGoalDecomposed?: (goalTree: GoalTree) => void;
+      }) => Promise<SupervisorAdmissionDecision>;
+    };
+
+    if (typeof supervisorCapableOrchestrator.evaluateSupervisorAdmission !== "function") {
+      return {
+        decision: fallbackDecision,
+        canExecuteGoalInline,
+        supervisorGoalStartedAt: 0,
+      };
+    }
+
+    let lastSupervisorSummary = "";
+    let supervisorGoalTree: GoalTree | undefined;
+    let supervisorGoalStartedAt = 0;
+    const emitSupervisorProgress = (summary: string): void => {
+      const normalized = summary.trim();
+      if (!normalized || normalized === lastSupervisorSummary) {
+        return;
+      }
+      lastSupervisorSummary = normalized;
+      onProgress({
+        kind: "goal",
+        message: "Supervisor update",
+        userSummary: normalized,
+      });
+    };
+
+    const decision = await supervisorCapableOrchestrator.evaluateSupervisorAdmission({
+      prompt: task.prompt,
+      chatId: task.chatId,
+      channelType: task.channelType,
+      conversationId: task.conversationId,
+      userId: task.userId,
+      signal,
+      goalTree: task.goalTree,
+      forceEligibility: shouldAttemptSharedPlanning,
+      userContent: task.userContent,
+      attachments: task.attachments,
+      taskRunId: task.id,
+      onUsage: this.buildUsageRecorder(task),
+      workspaceLease,
+      onGoalDecomposed: (goalTree: GoalTree) => {
+        supervisorGoalTree = goalTree;
+        supervisorGoalStartedAt = Date.now();
+        this.beginGoalExecution(task, goalTree, onProgress);
+      },
+      onActivated: (activation) => {
+        emitSupervisorProgress(normalizeSupervisorProgressMarkdown(activation.markdown));
+      },
+      reportUpdate: (markdown) => {
+        emitSupervisorProgress(normalizeSupervisorProgressMarkdown(markdown));
+      },
+    });
+    const normalizedDecision =
+      decision.path === "direct_worker" && canExecuteGoalInline && shouldAttemptSharedPlanning
+        ? {
+            ...decision,
+            path: "direct_goal_execution" as const,
+          }
+        : decision;
+
+    return {
+      decision: normalizedDecision,
+      canExecuteGoalInline,
+      supervisorGoalTree,
+      supervisorGoalStartedAt,
+    };
+  }
+
   private beginGoalExecution(
     task: Task,
     goalTree: GoalTree,
@@ -226,6 +405,7 @@ export class BackgroundExecutor {
     const logger = getLogger();
     onProgress(this.buildGoalProgressSignal(task, goalTree));
     this.emitGoalNarrative(task, goalTree);
+    this.emitGoalCanvasSnapshot(task, goalTree);
 
     const conversationScope = this.getConversationScope(task);
     if (this.monitorLifecycle) {
@@ -254,7 +434,123 @@ export class BackgroundExecutor {
     }
   }
 
-  private completeGoalExecution(goalTree: GoalTree, durationMs: number, successCount: number): void {
+  private buildGoalCanvasSummary(
+    task: Task,
+    goalTree: GoalTree,
+    statusLine?: string,
+  ): WorkspaceEventMap["canvas:agent_draw"]["shapes"][number] {
+    const feedback = buildGoalNarrativeFeedback(goalTree, task.prompt);
+    const lines = [
+      truncateCanvasText(goalTree.taskDescription, 96),
+      "",
+      `Progress: ${feedback.milestone.current}/${feedback.milestone.total} ${feedback.milestone.label}`,
+      feedback.narrative,
+    ];
+
+    if (statusLine) {
+      lines.push("", statusLine);
+    }
+
+    return {
+      id: goalCanvasSummaryShapeId(String(goalTree.rootId)),
+      type: "note-block",
+      position: { x: GOAL_CANVAS_SUMMARY_X, y: GOAL_CANVAS_SUMMARY_Y },
+      props: {
+        w: GOAL_CANVAS_SUMMARY_WIDTH,
+        h: GOAL_CANVAS_SUMMARY_HEIGHT,
+        color: "#7dd3fc",
+        content: lines.join("\n"),
+      },
+    };
+  }
+
+  private buildGoalCanvasPositions(goalTree: GoalTree): Map<string, { x: number; y: number }> {
+    const nodesByDepth = new Map<number, GoalNode[]>();
+    for (const node of goalTree.nodes.values()) {
+      if (String(node.id) === String(goalTree.rootId)) {
+        continue;
+      }
+      const bucket = nodesByDepth.get(node.depth) ?? [];
+      bucket.push(node);
+      nodesByDepth.set(node.depth, bucket);
+    }
+
+    const positions = new Map<string, { x: number; y: number }>();
+    for (const [depth, nodes] of [...nodesByDepth.entries()].sort((left, right) => left[0] - right[0])) {
+      nodes.sort((left, right) => left.task.localeCompare(right.task));
+      const centeredOffset = ((nodes.length - 1) * GOAL_CANVAS_ROW_GAP) / 2;
+      nodes.forEach((node, index) => {
+        positions.set(String(node.id), {
+          x: GOAL_CANVAS_SUMMARY_X + (depth * GOAL_CANVAS_COLUMN_GAP),
+          y: GOAL_CANVAS_SUMMARY_Y + (index * GOAL_CANVAS_ROW_GAP) - centeredOffset,
+        });
+      });
+    }
+
+    return positions;
+  }
+
+  private buildGoalCanvasNodeShape(
+    node: GoalNode,
+    position: { x: number; y: number } | undefined,
+  ): WorkspaceEventMap["canvas:agent_draw"]["shapes"][number] {
+    return {
+      id: goalCanvasNodeShapeId(String(node.id)),
+      type: "task-card",
+      ...(position ? { position } : {}),
+      props: {
+        w: GOAL_CANVAS_CARD_WIDTH,
+        h: GOAL_CANVAS_CARD_HEIGHT,
+        title: truncateCanvasText(node.task),
+        status: mapGoalNodeCanvasStatus(node),
+        priority: mapGoalNodeCanvasPriority(node),
+      },
+    };
+  }
+
+  private emitGoalCanvasSnapshot(task: Task, goalTree: GoalTree): void {
+    if (!this.workspaceBus) {
+      return;
+    }
+
+    const positions = this.buildGoalCanvasPositions(goalTree);
+    this.workspaceBus.emit("canvas:agent_draw", {
+      action: "draw",
+      intent: "goal_execution_board",
+      autoSwitch: false,
+      layout: "flow",
+      shapes: [
+        this.buildGoalCanvasSummary(task, goalTree),
+        ...[...goalTree.nodes.values()]
+          .filter((node) => String(node.id) !== String(goalTree.rootId))
+          .map((node) => this.buildGoalCanvasNodeShape(node, positions.get(String(node.id)))),
+      ],
+    });
+  }
+
+  private emitGoalCanvasNodeUpdate(task: Task, goalTree: GoalTree, updatedNode: GoalNode): void {
+    if (!this.workspaceBus) {
+      return;
+    }
+
+    const positions = this.buildGoalCanvasPositions(goalTree);
+    this.workspaceBus.emit("canvas:agent_draw", {
+      action: "update",
+      intent: "goal_execution_board",
+      autoSwitch: false,
+      shapes: [
+        this.buildGoalCanvasSummary(task, goalTree),
+        this.buildGoalCanvasNodeShape(updatedNode, positions.get(String(updatedNode.id))),
+      ],
+    });
+  }
+
+  private completeGoalExecution(
+    task: Task,
+    goalTree: GoalTree,
+    durationMs: number,
+    successCount: number,
+  ): void {
     const logger = getLogger();
     if (this.goalStorage) {
       try {
@@ -276,9 +572,18 @@ export class BackgroundExecutor {
         timestamp: Date.now(),
       });
     }
+
+    this.workspaceBus?.emit("canvas:agent_draw", {
+      action: "update",
+      intent: "goal_execution_board",
+      autoSwitch: false,
+      shapes: [
+        this.buildGoalCanvasSummary(task, goalTree, "Status: completed"),
+      ],
+    });
   }
 
-  private failGoalExecution(goalTree: GoalTree, error: string, failureCount: number): void {
+  private failGoalExecution(task: Task, goalTree: GoalTree, error: string, failureCount: number): void {
     const logger = getLogger();
     if (this.goalStorage) {
       try {
@@ -298,6 +603,15 @@ export class BackgroundExecutor {
         timestamp: Date.now(),
       });
     }
+
+    this.workspaceBus?.emit("canvas:agent_draw", {
+      action: "update",
+      intent: "goal_execution_board",
+      autoSwitch: false,
+      shapes: [
+        this.buildGoalCanvasSummary(task, goalTree, `Blocked: ${sanitizeError(error, 120)}`),
+      ],
+    });
   }
 
   setPhase(phase: 'planning' | 'acting' | 'observing' | 'reflecting'): void {
@@ -415,6 +729,8 @@ export class BackgroundExecutor {
   }
 
   private findNextRunnableIndex(): number {
+    const shouldDeferDaemonWork = this.taskManager?.hasActiveForegroundTasks?.() ?? false;
+    let firstRunnableDaemonIndex = -1;
     for (let index = 0; index < this.queue.length; index += 1) {
       const entry = this.queue[index]!;
       if (entry.signal.aborted) {
@@ -426,10 +742,15 @@ export class BackgroundExecutor {
         entry.task.conversationId,
       );
       if (!this.activeConversations.has(conversationKey)) {
-        return index;
+        if (entry.task.origin !== "daemon") {
+          return index;
+        }
+        if (!shouldDeferDaemonWork && firstRunnableDaemonIndex < 0) {
+          firstRunnableDaemonIndex = index;
+        }
       }
     }
-    return -1;
+    return firstRunnableDaemonIndex;
   }
 
   private async executeWorkerRun(
@@ -602,191 +923,80 @@ export class BackgroundExecutor {
     this.monitorLifecycle?.requestStart(conversationScope, task.prompt);
 
     let requestFailed = false;
-    let supervisorGoalTree: GoalTree | undefined;
-    let supervisorGoalStartedAt = 0;
-    let workerSupervisorMode: import("./types.js").BackgroundTaskOptions["supervisorMode"] = "auto";
+    let activeGoalTree: GoalTree | undefined;
     try {
-      const hasAttachmentInput = (task.attachments?.length ?? 0) > 0;
-      const hasRichUserContent =
-        Array.isArray(task.userContent) && task.userContent.some((block) => block.type !== "text");
+      const hasRichInput =
+        (task.attachments?.length ?? 0) > 0 ||
+        (Array.isArray(task.userContent) && task.userContent.some((block) => block.type !== "text"));
       const shouldDecomposeTask = this.decomposer?.shouldDecompose(task.prompt) ?? false;
-      const shouldAttemptSharedPlanning = Boolean(task.goalTree) || Boolean(task.forceSharedPlanning) || shouldDecomposeTask;
+      const shouldAttemptSharedPlanning =
+        Boolean(task.goalTree) || Boolean(task.forceSharedPlanning) || shouldDecomposeTask;
       const shouldUseTaskWorkspace =
-        shouldAttemptSharedPlanning || (!hasAttachmentInput && shouldDecomposeTask);
+        shouldAttemptSharedPlanning || (!hasRichInput && shouldDecomposeTask);
       if (shouldUseTaskWorkspace && this.workspaceLeaseManager) {
         taskWorkspaceLease = await this.workspaceLeaseManager.acquireLease({
           label: `task-${task.id}`,
           workerId: String(task.id),
         });
       }
-      const supervisorCapableOrchestrator = taskOrchestrator as Orchestrator & {
-        evaluateSupervisorAdmission?: (params: {
-          prompt: string;
-          chatId: string;
-          channelType?: string;
-          conversationId?: string;
-          userId?: string;
-          signal?: AbortSignal;
-          goalTree?: GoalTree;
-          forceEligibility?: boolean;
-          userContent?: string | import("../agents/providers/provider-core.interface.js").MessageContent[] | null;
-          attachments?: import("../channels/channel.interface.js").Attachment[];
-          taskRunId?: string;
-          onUsage?: (usage: { provider: string; inputTokens: number; outputTokens: number }) => void;
-          workspaceLease?: ManagedWorkspaceLease;
-          onActivated?: (activation: { markdown: string }) => Promise<void> | void;
-          reportUpdate?: (markdown: string) => Promise<void> | void;
-          onGoalDecomposed?: (goalTree: GoalTree) => void;
-        }) => Promise<SupervisorAdmissionDecision>;
-      };
+      const admission = await this.resolveTopLevelAdmission({
+        task,
+        taskOrchestrator,
+        signal,
+        onProgress,
+        workspaceLease: taskWorkspaceLease,
+      });
+      const supervisorDecision = admission.decision;
 
-      if (shouldAttemptSharedPlanning && typeof supervisorCapableOrchestrator.evaluateSupervisorAdmission === "function") {
-        let lastSupervisorSummary = "";
-        const emitSupervisorProgress = (summary: string): void => {
-          const normalized = summary.trim();
-          if (!normalized || normalized === lastSupervisorSummary) {
-            return;
-          }
-          lastSupervisorSummary = normalized;
-          onProgress({
-            kind: "goal",
-            message: "Supervisor update",
-            userSummary: normalized,
-          });
-        };
-        const supervisorDecision = await supervisorCapableOrchestrator.evaluateSupervisorAdmission({
-          prompt: task.prompt,
-          chatId: task.chatId,
-          channelType: task.channelType,
-          conversationId: task.conversationId,
-          userId: task.userId,
-          signal,
-          goalTree: task.goalTree,
-          forceEligibility: shouldAttemptSharedPlanning,
-          userContent: task.userContent,
-          attachments: task.attachments,
-          taskRunId: task.id,
-          onUsage: this.buildUsageRecorder(task),
-          workspaceLease: taskWorkspaceLease,
-          onGoalDecomposed: (goalTree: GoalTree) => {
-            supervisorGoalTree = goalTree;
-            supervisorGoalStartedAt = Date.now();
-            this.beginGoalExecution(task, goalTree, onProgress);
-          },
-          onActivated: (activation) => {
-            emitSupervisorProgress(normalizeSupervisorProgressMarkdown(activation.markdown));
-          },
-          reportUpdate: (markdown) => {
-            emitSupervisorProgress(normalizeSupervisorProgressMarkdown(markdown));
-          },
-        });
-
-        if (supervisorDecision.path === "supervisor") {
-          const supervisorResult = supervisorDecision.result;
-          if (supervisorGoalTree) {
-            if (supervisorResult.success) {
-              this.completeGoalExecution(
-                supervisorGoalTree,
-                Date.now() - supervisorGoalStartedAt,
-                supervisorResult.succeeded,
-              );
-            } else {
-              this.failGoalExecution(
-                supervisorGoalTree,
-                supervisorResult.partial ? "Goal execution blocked" : "Goal execution failed",
-                supervisorResult.failed + supervisorResult.skipped,
-              );
-            }
-          }
-
-          if (signal.aborted) {
-            return;
-          }
-
+      if (supervisorDecision.path === "supervisor") {
+        const supervisorResult = supervisorDecision.result;
+        activeGoalTree = admission.supervisorGoalTree;
+        if (admission.supervisorGoalTree) {
           if (supervisorResult.success) {
-            this.taskManager.complete(task.id, supervisorResult.output);
-            return;
+            this.completeGoalExecution(
+              task,
+              admission.supervisorGoalTree,
+              Date.now() - admission.supervisorGoalStartedAt,
+              supervisorResult.succeeded,
+            );
+          } else {
+            this.failGoalExecution(
+              task,
+              admission.supervisorGoalTree,
+              supervisorResult.partial ? "Goal execution blocked" : "Goal execution failed",
+              supervisorResult.failed + supervisorResult.skipped,
+            );
           }
-          if (supervisorResult.partial) {
-            requestFailed = true;
-            this.taskManager.block(task.id, supervisorResult.output);
-            return;
-          }
-          requestFailed = true;
-          this.taskManager.fail(task.id, supervisorResult.output);
-          return;
         }
 
         if (signal.aborted) {
           return;
         }
 
-        workerSupervisorMode = "off";
-
-        if (supervisorDecision.path === "direct_goal_execution" && (!(hasAttachmentInput || hasRichUserContent) || task.goalTree)) {
-          const result = await this.executeDecomposed(
-            task,
-            signal,
-            onProgress,
-            task.goalTree,
-            taskWorkspaceLease,
-          );
-          if (signal.aborted) return;
-          if (!result.success) {
-            if (result.blocked) {
-              requestFailed = true;
-              this.taskManager.block(
-                task.id,
-                result.output || result.error || "Goal execution blocked",
-              );
-              return;
-            }
-            requestFailed = true;
-            this.taskManager.fail(task.id, result.error ?? "Goal execution failed");
-            return;
-          }
-          this.taskManager.complete(task.id, result.output);
+        if (supervisorResult.success) {
+          this.taskManager.complete(task.id, supervisorResult.output);
           return;
         }
+        if (supervisorResult.partial) {
+          requestFailed = true;
+          this.taskManager.block(task.id, supervisorResult.output);
+          return;
+        }
+        requestFailed = true;
+        this.taskManager.fail(task.id, supervisorResult.output);
+        return;
       }
 
-      // Check for pre-decomposed goal tree (from inline goal detection).
-      // Rich-input tasks should stay on the shared planning/worker path unless
-      // supervisor explicitly accepted them, because text-authored trees are not
-      // trustworthy for multimodal decomposition.
-      if (task.goalTree && !(hasAttachmentInput || hasRichUserContent)) {
+      if (signal.aborted) {
+        return;
+      }
+
+      if (supervisorDecision.path === "direct_goal_execution" && admission.canExecuteGoalInline) {
         const result = await this.executeDecomposed(
           task,
           signal,
           onProgress,
           task.goalTree,
-          taskWorkspaceLease,
-        );
-        if (signal.aborted) return;
-        if (!result.success) {
-          if (result.blocked) {
-            requestFailed = true;
-            this.taskManager.block(
-              task.id,
-              result.output || result.error || "Goal execution blocked",
-            );
-            return;
-          }
-          requestFailed = true;
-          this.taskManager.fail(task.id, result.error ?? "Goal execution failed");
-          return;
-        }
-        this.taskManager.complete(task.id, result.output);
-        return;
-      }
-
-      // Check if task should be decomposed into subtasks
-      if (!(hasAttachmentInput || hasRichUserContent) && shouldDecomposeTask) {
-        const result = await this.executeDecomposed(
-          task,
-          signal,
-          onProgress,
-          undefined,
           taskWorkspaceLease,
         );
         if (signal.aborted) return;
@@ -821,7 +1031,7 @@ export class BackgroundExecutor {
         userContent: task.userContent,
         onUsage: this.buildUsageRecorder(task),
         workspaceLease: taskWorkspaceLease,
-        supervisorMode: workerSupervisorMode,
+        supervisorMode: "off",
       });
 
       if (signal.aborted) {
@@ -859,10 +1069,10 @@ export class BackgroundExecutor {
       this.taskManager.fail(task.id, errMsg);
 
       // Emit goal:failed if we have a goal tree context (INT-02 catch path)
-      if (supervisorGoalTree) {
-        this.failGoalExecution(supervisorGoalTree, errMsg, 0);
+      if (activeGoalTree) {
+        this.failGoalExecution(task, activeGoalTree, errMsg, 0);
       } else if (task.goalTree) {
-        this.failGoalExecution(task.goalTree, errMsg, 0);
+        this.failGoalExecution(task, task.goalTree, errMsg, 0);
       }
     } finally {
       await taskWorkspaceLease?.release().catch(() => {});
@@ -984,6 +1194,7 @@ export class BackgroundExecutor {
         lastProgressUpdate = now;
         onProgress(this.buildGoalProgressSignal(task, updatedTree, true));
         this.emitGoalNarrative(task, updatedTree, String(updatedNode.id));
+        this.emitGoalCanvasNodeUpdate(task, updatedTree, updatedNode);
       }
     };
 
@@ -1226,12 +1437,14 @@ Is this failure critical? A critical failure means dependent sub-goals cannot pr
     const hasFailed = result.aborted || result.failureCount > 0 || childWorkerIssues;
     if (hasFailed) {
       this.failGoalExecution(
+        task,
         goalTree,
         result.aborted ? "Goal aborted" : `${result.failureCount} sub-goal(s) failed`,
         result.failureCount,
       );
     } else {
       this.completeGoalExecution(
+        task,
         goalTree,
         Date.now() - startTime,
         result.results.filter((r) => r.result && !r.error).length,

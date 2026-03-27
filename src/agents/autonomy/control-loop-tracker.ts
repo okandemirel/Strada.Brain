@@ -45,6 +45,7 @@ export class ControlLoopTracker {
   private consecutiveNoToolGates = 0;
 
   private readonly fpThreshold: number;
+  private readonly hasCustomFpThreshold: boolean;
   private readonly fpWindow: number;
   private readonly densityThreshold: number;
   private readonly densityWindow: number;
@@ -55,6 +56,7 @@ export class ControlLoopTracker {
 
   constructor(config?: ControlLoopConfig) {
     this.fpThreshold = config?.sameFingerprintThreshold ?? 15;
+    this.hasCustomFpThreshold = typeof config?.sameFingerprintThreshold === "number";
     this.fpWindow = config?.sameFingerprintWindow ?? 20;
     this.densityThreshold = config?.gateDensityThreshold ?? 20;
     this.densityWindow = config?.gateDensityWindow ?? 30;
@@ -89,7 +91,7 @@ export class ControlLoopTracker {
       entry.fingerprint === stored.fingerprint &&
       entry.iteration >= event.iteration - this.fpWindow,
     );
-    if (sameFingerprintEvents.length >= this.fpThreshold) {
+    if (sameFingerprintEvents.length >= this.getSameFingerprintThreshold(event.kind)) {
       return {
         fingerprint: stored.fingerprint,
         sameFingerprintCount: sameFingerprintEvents.length,
@@ -158,6 +160,20 @@ export class ControlLoopTracker {
     const minIteration = currentIteration - this.densityWindow;
     while (this.events.length > 0 && this.events[0] && this.events[0].iteration < minIteration) {
       this.events.shift();
+    }
+  }
+
+  private getSameFingerprintThreshold(kind: ControlLoopGateKind): number {
+    if (this.hasCustomFpThreshold) {
+      return this.fpThreshold;
+    }
+    switch (kind) {
+      case "clarification_internal_continue":
+      case "visibility_internal_continue":
+      case "verifier_continue":
+        return 3;
+      default:
+        return this.fpThreshold;
     }
   }
 }

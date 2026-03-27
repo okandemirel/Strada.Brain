@@ -101,4 +101,22 @@ describe("TaskManager", () => {
     expect(manager.countActiveForegroundTasks(["cli-local"])).toBe(1);
     expect(manager.hasActiveForegroundTasks(["cli-local"])).toBe(true);
   });
+
+  it("stores the user-facing summary when structured progress is provided", () => {
+    const storage = {
+      addProgress: vi.fn(),
+    } as any;
+    const manager = new TaskManager(storage, {} as any);
+
+    manager.addProgress("task_progress123" as Task["id"], {
+      kind: "verification",
+      message: "Verification required before completion",
+      userSummary: "Aşama: doğrulama. Son aksiyon: son değişiklikleri build ve kalite kontrollerine soktum. Sıradaki adım: çıkan sinyalleri teyit edip sonucu paylaşacağım.",
+    });
+
+    expect(storage.addProgress).toHaveBeenCalledWith(
+      "task_progress123",
+      "Aşama: doğrulama. Son aksiyon: son değişiklikleri build ve kalite kontrollerine soktum. Sıradaki adım: çıkan sinyalleri teyit edip sonucu paylaşacağım.",
+    );
+  });
 });

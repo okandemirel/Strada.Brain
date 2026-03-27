@@ -1,7 +1,7 @@
 import { toast } from 'sonner'
 import { useMonitorStore } from '../stores/monitor-store'
 import { useWorkspaceStore, type WorkspaceMode } from '../stores/workspace-store'
-import { useCanvasStore } from '../stores/canvas-store'
+import { useCanvasStore, type CanvasLayout, type CanvasViewport } from '../stores/canvas-store'
 import { useCodeStore } from '../stores/code-store'
 import { useSupervisorStore } from '../stores/supervisor-store'
 import type { MonitorTask, ActivityEntry, DagState } from '../stores/monitor-store'
@@ -46,6 +46,13 @@ export type WorkspaceMessage =
 
 /** Helper to safely read a property from an untyped payload bag. */
 type Bag = Record<string, unknown>
+
+function suggestCanvasMode(): void {
+  const wsStore = useWorkspaceStore.getState()
+  if (!wsStore.userOverride && wsStore.mode !== 'canvas') {
+    wsStore.suggestMode('canvas')
+  }
+}
 
 /**
  * Dispatches a workspace/monitor message to the appropriate Zustand stores.
@@ -153,33 +160,42 @@ export function dispatchWorkspaceMessage(data: { type: string; [key: string]: un
 
     case 'canvas:shapes_add': {
       useCanvasStore.getState().addPendingShapes(
-        ((payload.shapes as Array<{ type?: string; id: string; props: Record<string, unknown> }>) || []).map((shape) => ({
+        ((payload.shapes as Array<{ type?: string; id: string; props: Record<string, unknown>; position?: { x: number; y: number } }>) || []).map((shape) => ({
           ...shape,
           source: 'agent' as const,
         })),
       )
-      const wsStore = useWorkspaceStore.getState()
-      if (!wsStore.userOverride && wsStore.mode !== 'canvas') {
-        wsStore.suggestMode('canvas')
-      }
+      suggestCanvasMode()
       break
     }
 
     case 'canvas:shapes_update':
       useCanvasStore.getState().updatePendingShapes(
-        ((payload.shapes as Array<{ type?: string; id: string; props: Record<string, unknown> }>) || []).map((shape) => ({
+        ((payload.shapes as Array<{ type?: string; id: string; props: Record<string, unknown>; position?: { x: number; y: number } }>) || []).map((shape) => ({
           ...shape,
           source: 'agent' as const,
         })),
       )
+      suggestCanvasMode()
       break
 
     case 'canvas:shapes_remove':
       useCanvasStore.getState().removePendingShapeIds((payload.shapeIds as string[]) || [])
+      suggestCanvasMode()
+      break
+
+    case 'canvas:viewport':
+      useCanvasStore.getState().setPendingViewport(payload as CanvasViewport)
+      suggestCanvasMode()
+      break
+
+    case 'canvas:arrange':
+      useCanvasStore.getState().setPendingLayout((payload.layout as CanvasLayout | undefined) ?? 'auto')
+      suggestCanvasMode()
       break
 
     case 'canvas:agent_draw': {
-      const shapes = ((payload.shapes as Array<{ type?: string; id: string; props: Record<string, unknown> }>) || []).map((shape) => ({
+      const shapes = ((payload.shapes as Array<{ type?: string; id: string; props: Record<string, unknown>; position?: { x: number; y: number } }>) || []).map((shape) => ({
         ...shape,
         source: 'agent' as const,
       }))
@@ -194,9 +210,15 @@ export function dispatchWorkspaceMessage(data: { type: string; [key: string]: un
         useCanvasStore.getState().addPendingShapes(shapes)
       }
 
-      const wsStore = useWorkspaceStore.getState()
-      if (autoSwitch && !wsStore.userOverride && wsStore.mode !== 'canvas') {
-        wsStore.suggestMode('canvas')
+      if (payload.viewport) {
+        useCanvasStore.getState().setPendingViewport(payload.viewport as CanvasViewport)
+      }
+      if (payload.layout) {
+        useCanvasStore.getState().setPendingLayout(payload.layout as CanvasLayout)
+      }
+
+      if (autoSwitch) {
+        suggestCanvasMode()
       }
       break
     }

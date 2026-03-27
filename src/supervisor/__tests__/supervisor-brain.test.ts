@@ -62,6 +62,117 @@ describe("SupervisorBrain", () => {
     expect(executeNode).toHaveBeenCalledTimes(2);
   });
 
+  it("runs supervisor verification and feeds the outcome back into provider learning", async () => {
+    const decomposer = {
+      shouldDecompose: vi.fn().mockReturnValue(true),
+      decomposeProactive: vi.fn().mockResolvedValue(
+        makeGoalTree([
+          { id: "root", task: "Build auth" },
+          { id: "s1", task: "Implement endpoint" },
+        ]),
+      ),
+    };
+    const executeNode = vi.fn().mockResolvedValue({
+      nodeId: "s1",
+      status: "ok",
+      output: "Endpoint implemented without tests",
+      artifacts: [{ path: "src/api/auth.ts", action: "modify" }],
+      toolResults: [],
+      provider: "claude",
+      model: "sonnet",
+      cost: 0.001,
+      duration: 100,
+    } satisfies NodeResult);
+    const providerAssigner = new ProviderAssigner(PROVIDERS);
+    const recordOutcomeSpy = vi.spyOn(providerAssigner, "recordOutcome");
+    const verifyNode = vi.fn().mockResolvedValue({
+      verdict: "reject",
+      issues: ["Missing test coverage"],
+      verifierProvider: "deepseek",
+    });
+
+    const brain = new SupervisorBrain({
+      config: { ...DEFAULT_CONFIG, verificationMode: "always" },
+      decomposer: decomposer as any,
+      capabilityMatcher: new CapabilityMatcher(),
+      providerAssigner,
+      verifyNode,
+    });
+    brain.setExecuteNode(executeNode);
+
+    const result = await brain.execute("Build auth system", { chatId: "test" });
+
+    expect(verifyNode).toHaveBeenCalledTimes(1);
+    expect(result?.success).toBe(false);
+    expect(result?.partial).toBe(false);
+    expect(result?.nodeResults[0]).toMatchObject({
+      nodeId: "s1",
+      status: "failed",
+      output: "Verification rejected: Missing test coverage",
+    });
+    expect(recordOutcomeSpy).toHaveBeenCalledWith("claude", expect.any(Array), false);
+  });
+
+  it("limits critical-only verification to quality-sensitive nodes", async () => {
+    const goalTree = makeGoalTree([
+      { id: "root", task: "Review release" },
+      { id: "s1", task: "Critical security review" },
+      { id: "s2", task: "Quick lint" },
+    ]);
+    const decomposer = {
+      shouldDecompose: vi.fn().mockReturnValue(false),
+      decomposeProactive: vi.fn(),
+    };
+    const executeNode = vi.fn()
+      .mockResolvedValueOnce({
+        nodeId: "s1",
+        status: "ok",
+        output: "Security review done",
+        artifacts: [],
+        toolResults: [],
+        provider: "claude",
+        model: "sonnet",
+        cost: 0.001,
+        duration: 50,
+      } satisfies NodeResult)
+      .mockResolvedValueOnce({
+        nodeId: "s2",
+        status: "ok",
+        output: "Lint done",
+        artifacts: [],
+        toolResults: [],
+        provider: "claude",
+        model: "sonnet",
+        cost: 0.001,
+        duration: 50,
+      } satisfies NodeResult);
+    const verifyNode = vi.fn().mockResolvedValue({
+      verdict: "approve",
+      verifierProvider: "deepseek",
+    });
+
+    const brain = new SupervisorBrain({
+      config: { ...DEFAULT_CONFIG, verificationMode: "critical-only" },
+      decomposer: decomposer as any,
+      capabilityMatcher: new CapabilityMatcher(),
+      providerAssigner: new ProviderAssigner(PROVIDERS),
+      verifyNode,
+    });
+    brain.setExecuteNode(executeNode);
+
+    const result = await brain.execute("Review release readiness", {
+      chatId: "test",
+      goalTree,
+    });
+
+    expect(result?.success).toBe(true);
+    expect(verifyNode).toHaveBeenCalledTimes(1);
+    expect(verifyNode).toHaveBeenCalledWith(
+      expect.objectContaining({ nodeId: "s1" }),
+      expect.anything(),
+    );
+  });
+
   it("returns null for non-decomposable tasks", async () => {
     const decomposer = {
       shouldDecompose: vi.fn().mockReturnValue(false),

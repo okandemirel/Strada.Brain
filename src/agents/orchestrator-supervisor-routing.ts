@@ -12,6 +12,7 @@ import {
   buildProviderIntelligence,
   type ModelIntelligenceLookup,
 } from "./providers/provider-knowledge.js";
+import { canonicalizeProviderName } from "./providers/provider-identity.js";
 import { createCatalogVersion } from "./supervisor/supervisor-types.js";
 import { TaskClassifier } from "../agent-core/routing/task-classifier.js";
 import { stripVisibleProviderArtifacts } from "./orchestrator-text-utils.js";
@@ -105,8 +106,9 @@ export function buildCatalogAssignmentMetadata(
   assignmentVersion?: number;
   catalogVersion?: string;
 } {
+  const canonicalProviderName = canonicalizeProviderName(providerName) ?? providerName.trim().toLowerCase();
   const routingMetadata = ctx.providerManager.getRoutingMetadata?.(
-    providerName,
+    canonicalProviderName,
     modelId,
     identityKey,
   );
@@ -115,7 +117,7 @@ export function buildCatalogAssignmentMetadata(
     return {
       assignmentVersion,
       catalogVersion: createCatalogVersion({
-        provider: providerName,
+        provider: canonicalProviderName,
         model: modelId,
         updatedAt: undefined,
         stale: false,
@@ -139,14 +141,19 @@ export function buildCatalogAssignmentMetadata(
 export function getProviderByNameOrFallback(
   ctx: SupervisorRoutingContext,
   providerName: string | undefined,
+  fallbackProviderName: string,
   fallbackProvider: IAIProvider,
 ): { providerName: string; provider: IAIProvider } {
-  const normalizedName = providerName?.trim();
+  const normalizedName = canonicalizeProviderName(providerName) ?? providerName?.trim().toLowerCase();
+  const normalizedFallbackName =
+    canonicalizeProviderName(fallbackProviderName)
+    ?? canonicalizeProviderName(fallbackProvider.name)
+    ?? fallbackProviderName.trim().toLowerCase();
   const resolved =
     (normalizedName ? ctx.providerManager.getProviderByName?.(normalizedName) : null) ??
     fallbackProvider;
   return {
-    providerName: normalizedName || fallbackProvider.name,
+    providerName: normalizedName || normalizedFallbackName,
     provider: resolved,
   };
 }
@@ -156,22 +163,23 @@ export function resolveProviderModelId(
   providerName: string,
   identityKey: string,
 ): string | undefined {
-  const normalizedProvider = providerName.trim().toLowerCase();
+  const normalizedProvider = canonicalizeProviderName(providerName) ?? providerName.trim().toLowerCase();
   const activeInfo = ctx.providerManager.getActiveInfo?.(identityKey);
-  if (activeInfo?.providerName === normalizedProvider && activeInfo.model) {
+  const activeProviderName = canonicalizeProviderName(activeInfo?.providerName) ?? activeInfo?.providerName;
+  if (activeProviderName === normalizedProvider && activeInfo?.model) {
     return activeInfo.model;
   }
 
   const executionCandidate = ctx.providerManager
     .listExecutionCandidates?.(identityKey)
-    .find((candidate) => candidate.name === normalizedProvider);
+    .find((candidate) => (canonicalizeProviderName(candidate.name) ?? candidate.name) === normalizedProvider);
   if (executionCandidate?.defaultModel) {
     return executionCandidate.defaultModel;
   }
 
   const availableCandidate = ctx.providerManager
     .listAvailable?.()
-    .find((candidate) => candidate.name === normalizedProvider);
+    .find((candidate) => (canonicalizeProviderName(candidate.name) ?? candidate.name) === normalizedProvider);
   return availableCandidate?.defaultModel;
 }
 
@@ -187,17 +195,19 @@ export function resolveSupervisorAssignment(
   projectWorldFingerprint?: string,
 ): SupervisorAssignment {
   const activeInfo = ctx.providerManager.getActiveInfo?.(identityKey);
+  const canonicalFallbackName = canonicalizeProviderName(fallbackName) ?? fallbackName.trim().toLowerCase();
   if (activeInfo?.selectionMode === "strada-hard-pin") {
+    const pinnedProviderName = canonicalizeProviderName(activeInfo.providerName) ?? activeInfo.providerName;
     return buildStaticSupervisorAssignment(
       role,
-      activeInfo.providerName,
+      pinnedProviderName,
       activeInfo.model,
       ctx.providerManager.getProvider(identityKey),
       `honored the explicit user hard pin for ${role}`,
       "supervisor-strategy",
       buildCatalogAssignmentMetadata(
         ctx,
-        activeInfo.providerName,
+        pinnedProviderName,
         activeInfo.model,
         identityKey,
       ),
@@ -231,7 +241,12 @@ export function resolveSupervisorAssignment(
           taskDescription,
           projectWorldFingerprint,
         });
-    const resolved = getProviderByNameOrFallback(ctx, routed.provider, fallbackProvider);
+    const resolved = getProviderByNameOrFallback(
+      ctx,
+      routed.provider,
+      canonicalFallbackName,
+      fallbackProvider,
+    );
     const modelId = "model" in routed && typeof routed.model === "string"
       ? routed.model
       : resolveProviderModelId(ctx, resolved.providerName, identityKey);
@@ -259,12 +274,12 @@ export function resolveSupervisorAssignment(
   const modelId = resolveProviderModelId(ctx, fallbackName, identityKey);
   return buildStaticSupervisorAssignment(
     role,
-    fallbackName,
+    canonicalFallbackName,
     modelId,
     fallbackProvider,
     "routing fallback, reusing the current worker",
     undefined,
-    buildCatalogAssignmentMetadata(ctx, fallbackName, modelId, identityKey),
+    buildCatalogAssignmentMetadata(ctx, canonicalFallbackName, modelId, identityKey),
   );
 }
 
@@ -278,9 +293,10 @@ export function buildSupervisorExecutionStrategy(
   const task = ctx.taskClassifier.classify(prompt);
   const activeInfo = ctx.providerManager.getActiveInfo?.(identityKey);
   if (activeInfo?.selectionMode === "strada-hard-pin") {
+    const pinnedProviderName = canonicalizeProviderName(activeInfo.providerName) ?? activeInfo.providerName;
     const metadata = buildCatalogAssignmentMetadata(
       ctx,
-      activeInfo.providerName,
+      pinnedProviderName,
       activeInfo.model,
       identityKey,
     );
@@ -290,7 +306,7 @@ export function buildSupervisorExecutionStrategy(
     ): SupervisorAssignment =>
       buildStaticSupervisorAssignment(
         role,
-        activeInfo.providerName,
+        pinnedProviderName,
         activeInfo.model,
         fallbackProvider,
         reason,
@@ -319,7 +335,16 @@ export function buildSupervisorExecutionStrategy(
       usesMultipleProviders: false,
     };
   }
-  const selected = getProviderByNameOrFallback(ctx, activeInfo?.providerName, fallbackProvider);
+  const fallbackProviderName =
+    canonicalizeProviderName(activeInfo?.providerName)
+    ?? canonicalizeProviderName(fallbackProvider.name)
+    ?? fallbackProvider.name.trim().toLowerCase();
+  const selected = getProviderByNameOrFallback(
+    ctx,
+    activeInfo?.providerName,
+    fallbackProviderName,
+    fallbackProvider,
+  );
   const selectedProviderName = selected.providerName;
   const selectedProvider = selected.provider;
 
@@ -563,6 +588,7 @@ export function resolveConsensusReviewAssignment(
 
   const fallbackReviewProvider = getProviderByNameOrFallback(
     ctx,
+    fallbackReviewName,
     fallbackReviewName,
     currentAssignment.provider,
   );

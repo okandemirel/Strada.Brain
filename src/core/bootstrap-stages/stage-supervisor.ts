@@ -7,6 +7,7 @@ import { CapabilityMatcher } from "../../supervisor/capability-matcher.js";
 import { ProviderAssigner } from "../../supervisor/provider-assigner.js";
 import type { ProviderDescriptor as SupervisorProviderDescriptor } from "../../supervisor/provider-assigner.js";
 import { SupervisorBrain } from "../../supervisor/supervisor-brain.js";
+import { createSupervisorNodeVerifier } from "../../supervisor/supervisor-verification.js";
 
 // =============================================================================
 // STAGE RESULT
@@ -148,6 +149,7 @@ export function initializeSupervisorStage(
     // 4. Create ProviderAssigner
     const providerAssigner = deps.createProviderAssigner?.(descriptors)
       ?? new ProviderAssigner(descriptors);
+    const verifyNode = createSupervisorNodeVerifier(params.providerManager);
 
     // 5. Create SupervisorBrain
     const supervisorBrain = deps.createSupervisorBrain?.({
@@ -155,11 +157,13 @@ export function initializeSupervisorStage(
       decomposer: params.goalDecomposer,
       capabilityMatcher,
       providerAssigner,
+      verifyNode,
     }) ?? new SupervisorBrain({
       config: params.config.supervisor,
       decomposer: params.goalDecomposer,
       capabilityMatcher,
       providerAssigner,
+      verifyNode,
     });
 
     params.logger.info("Supervisor Brain initialized", {

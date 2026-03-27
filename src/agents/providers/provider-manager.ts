@@ -18,6 +18,7 @@ import { LRUCache } from "../../common/lru-cache.js";
 import type { ProviderOfficialSnapshot } from "./provider-source-registry.js";
 import type { RefreshResult } from "./model-intelligence.js";
 import { ProviderCatalog, type ProviderCatalogSnapshot } from "./provider-catalog.js";
+import { canonicalizeProviderName } from "./provider-identity.js";
 
 export interface ProviderActiveInfo {
   providerName: string;
@@ -236,7 +237,7 @@ export class ProviderManager {
   }
 
   private buildFallbackOrder(primaryName: string): string[] {
-    const normalizedPrimary = primaryName.trim().toLowerCase();
+    const normalizedPrimary = canonicalizeProviderName(primaryName) ?? primaryName.trim().toLowerCase();
     const seen = new Set<string>();
     const order: string[] = [];
 
@@ -246,7 +247,7 @@ export class ProviderManager {
     }
 
     for (const name of this.defaultProviderOrder) {
-      const normalized = name.trim().toLowerCase();
+      const normalized = canonicalizeProviderName(name) ?? name.trim().toLowerCase();
       if (!normalized || seen.has(normalized)) continue;
       seen.add(normalized);
       order.push(normalized);
@@ -260,21 +261,23 @@ export class ProviderManager {
   }
 
   private getDefaultPrimaryName(): string {
-    return this.defaultProviderOrder[0] ?? this.defaultProvider.name.trim().toLowerCase();
+    return canonicalizeProviderName(this.defaultProviderOrder[0] ?? this.defaultProvider.name)
+      ?? this.defaultProvider.name.trim().toLowerCase();
   }
 
   private getDefaultModelForProvider(name: string): string {
-    if (name === "claude" || name === "anthropic") {
-      return this.modelOverrides?.[name] ?? "claude-sonnet-4-6-20250514";
+    const canonicalName = canonicalizeProviderName(name) ?? name.trim().toLowerCase();
+    if (canonicalName === "claude" || canonicalName === "anthropic") {
+      return this.modelOverrides?.[canonicalName] ?? "claude-sonnet-4-6-20250514";
     }
-    if (name === "ollama") {
-      return this.modelOverrides?.[name] ?? "llama3.3";
+    if (canonicalName === "ollama") {
+      return this.modelOverrides?.[canonicalName] ?? "llama3.3";
     }
-    return this.modelOverrides?.[name] ?? PROVIDER_PRESETS[name]?.defaultModel ?? "default";
+    return this.modelOverrides?.[canonicalName] ?? PROVIDER_PRESETS[canonicalName]?.defaultModel ?? "default";
   }
 
   private buildPrimaryProvider(name: string, model?: string): IAIProvider | null {
-    const normalizedName = name.trim().toLowerCase();
+    const normalizedName = canonicalizeProviderName(name) ?? name.trim().toLowerCase();
     if (!normalizedName) {
       return null;
     }
@@ -320,10 +323,11 @@ export class ProviderManager {
       };
     }
 
-    const preset = PROVIDER_PRESETS[pref.providerName];
+    const providerName = canonicalizeProviderName(pref.providerName) ?? pref.providerName;
+    const preset = PROVIDER_PRESETS[providerName];
     return {
-      providerName: pref.providerName,
-      model: pref.model ?? this.modelOverrides?.[pref.providerName] ?? preset?.defaultModel ?? "default",
+      providerName,
+      model: pref.model ?? this.modelOverrides?.[providerName] ?? preset?.defaultModel ?? "default",
       isDefault: false,
       selectionMode: pref.selectionMode,
       executionPolicyNote: pref.selectionMode === "strada-hard-pin"
@@ -338,8 +342,15 @@ export class ProviderManager {
     model?: string,
     selectionMode: ProviderSelectionMode = "strada-preference-bias",
   ): void {
-    this.preferences.set(chatId, providerName, model, selectionMode);
-    getLogger().info("Provider preference set", { chatId, providerName, model, selectionMode });
+    const canonicalName = canonicalizeProviderName(providerName) ?? providerName.trim().toLowerCase();
+    this.preferences.set(chatId, canonicalName, model, selectionMode);
+    getLogger().info("Provider preference set", {
+      chatId,
+      providerName: canonicalName,
+      originalProviderName: providerName,
+      model,
+      selectionMode,
+    });
   }
 
   clearPreference(chatId: string): void {
@@ -418,19 +429,21 @@ export class ProviderManager {
    * Returns null if provider cannot be created.
    */
   getProviderByName(name: string, model?: string): IAIProvider | null {
-    return this.buildResilientProvider(name, model);
+    return this.buildResilientProvider(canonicalizeProviderName(name) ?? name, model);
   }
 
   getPrimaryProviderByName(name: string, model?: string): IAIProvider | null {
-    return this.buildPrimaryProvider(name, model);
+    return this.buildPrimaryProvider(canonicalizeProviderName(name) ?? name, model);
   }
 
   private getProviderOfficialSnapshot(name: string): ProviderOfficialSnapshot | undefined {
-    return this.modelCatalog?.getProviderOfficialSnapshot?.(name.trim().toLowerCase());
+    const canonicalName = canonicalizeProviderName(name) ?? name.trim().toLowerCase();
+    return this.modelCatalog?.getProviderOfficialSnapshot?.(canonicalName);
   }
 
   private getProviderCatalogHealth(name: string): ProviderCatalogHealth | undefined {
-    return this.modelCatalog?.getCatalogHealth?.(name.trim().toLowerCase());
+    const canonicalName = canonicalizeProviderName(name) ?? name.trim().toLowerCase();
+    return this.modelCatalog?.getCatalogHealth?.(canonicalName);
   }
 
   private mergeCapabilities(
@@ -537,19 +550,20 @@ export class ProviderManager {
   }
 
   private getProviderLabel(name: string): string {
-    if (name === "claude" || name === "anthropic") {
+    const canonicalName = canonicalizeProviderName(name) ?? name.trim().toLowerCase();
+    if (canonicalName === "claude" || canonicalName === "anthropic") {
       return "Anthropic Claude";
     }
-    if (name === "ollama") {
+    if (canonicalName === "ollama") {
       return "Ollama (Local)";
     }
-    return PROVIDER_PRESETS[name]?.label ?? name;
+    return PROVIDER_PRESETS[canonicalName]?.label ?? canonicalName;
   }
 
   private resolveExecutionPoolNames(chatId?: string): string[] {
     const preferred = chatId ? this.preferences.get(chatId) : undefined;
     const preferredProvider = preferred?.providerName;
-    const primaryName = preferredProvider?.trim().toLowerCase() || this.getDefaultPrimaryName();
+    const primaryName = canonicalizeProviderName(preferredProvider) || this.getDefaultPrimaryName();
     if (preferred?.selectionMode === "strada-hard-pin") {
       return this.isAvailable(primaryName) ? [primaryName] : [];
     }
@@ -627,8 +641,9 @@ export class ProviderManager {
   }
 
   isAvailable(providerName: string): boolean {
-    if (providerName === "ollama") return this.ollamaVerified;
-    if (providerName === "claude" || providerName === "anthropic") {
+    const canonicalName = canonicalizeProviderName(providerName) ?? providerName.trim().toLowerCase();
+    if (canonicalName === "ollama") return this.ollamaVerified;
+    if (canonicalName === "claude" || canonicalName === "anthropic") {
       return !!(
         this.providerCredentials["claude"]?.apiKey
         || this.providerCredentials["anthropic"]?.apiKey
@@ -642,7 +657,7 @@ export class ProviderManager {
         )
       );
     }
-    if (providerName === "openai") {
+    if (canonicalName === "openai") {
       const credential = this.providerCredentials["openai"];
       return Boolean(
         credential?.apiKey
@@ -651,7 +666,7 @@ export class ProviderManager {
         || credential?.openaiChatgptAuthFile,
       );
     }
-    return !!this.providerCredentials[providerName]?.apiKey;
+    return !!this.providerCredentials[canonicalName]?.apiKey;
   }
 
   /** Mark Ollama as verified-reachable (called by bootstrap after health check). */

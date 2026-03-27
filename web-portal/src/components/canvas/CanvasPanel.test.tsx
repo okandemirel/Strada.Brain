@@ -14,6 +14,7 @@ const mockCreateShape = vi.fn()
 const mockGetShape = vi.fn((_id: string) => undefined as { id: string; type: string; props: Record<string, unknown> } | undefined)
 const mockUpdateShape = vi.fn()
 const mockDeleteShapes = vi.fn()
+const mockSetCamera = vi.fn()
 
 const mockEditor = {
   on: mockEditorOn,
@@ -31,6 +32,7 @@ const mockEditor = {
   },
   getViewportPageBounds: () => ({ center: { x: 500, y: 400 } }),
   zoomToFit: vi.fn(),
+  setCamera: mockSetCamera,
 }
 
 vi.mock('tldraw', () => ({
@@ -162,6 +164,8 @@ describe('CanvasPanel', () => {
     mockGetShape.mockReturnValue(undefined)
     mockUpdateShape.mockReset()
     mockDeleteShapes.mockReset()
+    mockSetCamera.mockReset()
+    mockEditor.zoomToFit.mockReset()
     mockApplyTemplate.mockReset()
   })
 
@@ -206,6 +210,25 @@ describe('CanvasPanel', () => {
         expect.objectContaining({ id: 'agent-1', type: 'diagram-node' }),
       )
       expect(useCanvasStore.getState().pendingShapes).toEqual([])
+    })
+
+    it('auto-opens the editor when agent updates arrive without new shapes', async () => {
+      render(<CanvasPanel />)
+
+      act(() => {
+        useCanvasStore.getState().updatePendingShapes([
+          { id: 'agent-update-1', type: 'diagram-node', props: { label: 'Updated' }, source: 'agent' },
+        ])
+      })
+
+      await act(async () => { vi.advanceTimersByTime(100) })
+
+      expect(screen.queryByTestId('canvas-welcome')).not.toBeInTheDocument()
+      expect(screen.getByTestId('tldraw-canvas')).toBeInTheDocument()
+      expect(mockCreateShape).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'agent-update-1', type: 'diagram-node' }),
+      )
+      expect(useCanvasStore.getState().pendingUpdates).toEqual([])
     })
 
     it('opens the editor when an agent canvas message is dispatched', async () => {
@@ -508,5 +531,28 @@ describe('CanvasPanel', () => {
 
     expect(mockDeleteShapes).toHaveBeenCalledWith(['cb1'])
     expect(useCanvasStore.getState().pendingRemovals).toEqual([])
+  })
+
+  it('applies pending viewport and layout instructions when the editor mounts', async () => {
+    act(() => {
+      useCanvasStore.getState().setPendingViewport({ x: 12, y: 24, zoom: 1.5 })
+      useCanvasStore.getState().setPendingLayout('flow')
+      useCanvasStore.getState().updatePendingShapes([
+        { id: 'vp-1', type: 'diagram-node', props: { label: 'Viewport target' }, source: 'agent' },
+      ])
+    })
+
+    render(<CanvasPanel />)
+
+    await act(async () => { vi.advanceTimersByTime(100) })
+    await act(async () => { vi.advanceTimersByTime(10) })
+
+    expect(mockSetCamera).toHaveBeenCalledWith(
+      { x: 12, y: 24, z: 1.5 },
+      expect.objectContaining({ animation: expect.any(Object) }),
+    )
+    expect(mockEditor.zoomToFit).toHaveBeenCalled()
+    expect(useCanvasStore.getState().pendingViewport).toBeNull()
+    expect(useCanvasStore.getState().pendingLayout).toBeNull()
   })
 })

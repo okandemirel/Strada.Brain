@@ -150,6 +150,32 @@ describe('dispatchWorkspaceMessage', () => {
     expect(useCanvasStore.getState().pendingRemovals).toEqual(['shape-3'])
   })
 
+  it('handles canvas:viewport by queueing a viewport intent and switching to canvas', () => {
+    dispatchWorkspaceMessage({
+      type: 'canvas:viewport',
+      payload: {
+        x: 12,
+        y: 24,
+        zoom: 1.5,
+      },
+    })
+
+    expect(useWorkspaceStore.getState().mode).toBe('canvas')
+    expect(useCanvasStore.getState().pendingViewport).toEqual({ x: 12, y: 24, zoom: 1.5 })
+  })
+
+  it('handles canvas:arrange by queueing a layout intent and switching to canvas', () => {
+    dispatchWorkspaceMessage({
+      type: 'canvas:arrange',
+      payload: {
+        layout: 'flow',
+      },
+    })
+
+    expect(useWorkspaceStore.getState().mode).toBe('canvas')
+    expect(useCanvasStore.getState().pendingLayout).toBe('flow')
+  })
+
   it('handles canvas:agent_draw updates by queueing updates and switching to canvas', () => {
     dispatchWorkspaceMessage({
       type: 'canvas:agent_draw',
@@ -165,6 +191,23 @@ describe('dispatchWorkspaceMessage', () => {
     expect(useCanvasStore.getState().pendingUpdates).toEqual([
       { id: 'shape-4', type: 'diagram-node', props: { label: 'Updated' }, source: 'agent' },
     ])
+  })
+
+  it('handles canvas:agent_draw view metadata by queueing viewport and layout intents', () => {
+    dispatchWorkspaceMessage({
+      type: 'canvas:agent_draw',
+      payload: {
+        action: 'draw',
+        layout: 'tree',
+        viewport: { x: 5, y: 9, zoom: 1.25 },
+        shapes: [
+          { id: 'shape-meta-1', type: 'task-card', props: { title: 'Task' } },
+        ],
+      },
+    })
+
+    expect(useCanvasStore.getState().pendingLayout).toBe('tree')
+    expect(useCanvasStore.getState().pendingViewport).toEqual({ x: 5, y: 9, zoom: 1.25 })
   })
 
   it('keeps the current mode when canvas:agent_draw opts out of auto-switch', () => {

@@ -113,13 +113,25 @@ describe("ControlLoopTracker", () => {
     expect(tracker.recordGate({ ...event, iteration: 6 })).not.toBeNull();
   });
 
-  it("default fingerprint threshold is 15", () => {
+  it("default fingerprint threshold stays at 15 for generic reflection gates", () => {
     const tracker = new ControlLoopTracker({ staleAnalysisThreshold: 100 });
-    const event = { kind: "verifier_continue" as const, reason: "test", iteration: 1 };
+    const event = { kind: "reflection_continue" as const, reason: "test", iteration: 1 };
     for (let i = 1; i <= 14; i++) {
       expect(tracker.recordGate({ ...event, iteration: i })).toBeNull();
     }
     expect(tracker.recordGate({ ...event, iteration: 15 })).not.toBeNull();
+  });
+
+  it("uses a tighter default fingerprint threshold for repeated internal review gates", () => {
+    const tracker = new ControlLoopTracker({ staleAnalysisThreshold: 100 });
+    const event = { kind: "verifier_continue" as const, reason: "Need runtime replay", iteration: 1 };
+
+    expect(tracker.recordGate({ ...event, iteration: 1 })).toBeNull();
+    expect(tracker.recordGate({ ...event, iteration: 2 })).toBeNull();
+
+    const trigger = tracker.recordGate({ ...event, iteration: 3 });
+    expect(trigger?.reason).toBe("same_fingerprint_repeated");
+    expect(trigger?.sameFingerprintCount).toBe(3);
   });
 
   it("exposes maxRecoveryEpisodes from config", () => {

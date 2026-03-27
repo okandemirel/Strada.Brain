@@ -68,6 +68,7 @@ function makeTaskManager() {
       if (!t) return null;
       return { ...t, status: t.status };
     }),
+    hasActiveForegroundTasks: vi.fn(() => false),
     _setTaskStatus: (taskId: string, status: string) => {
       const t = tasks.get(taskId);
       if (t) t.status = status;
@@ -278,6 +279,41 @@ describe("HeartbeatLoop", () => {
     loop.start();
     loop.stop();
     expect(storage.setDaemonState).toHaveBeenCalledWith("daemon_was_running", "false");
+  });
+
+  it("skips trigger submission while a foreground task is active and idlePause is enabled", () => {
+    config = makeDaemonConfig({
+      heartbeat: {
+        intervalMs: 60000,
+        heartbeatFile: "HEARTBEAT.md",
+        idlePause: true,
+      },
+    });
+    taskManager = makeTaskManager();
+    taskManager.hasActiveForegroundTasks.mockReturnValue(true);
+    loop = new HeartbeatLoop(
+      registry,
+      taskManager as any,
+      budgetTracker as any,
+      securityPolicy as any,
+      approvalQueue as any,
+      storage as any,
+      identityManager as any,
+      eventBus,
+      config,
+      logger as any,
+    );
+    const trigger = makeTrigger("foreground-pause", { shouldFire: true });
+    registry.register(trigger);
+
+    loop.start();
+    (loop as any).tick();
+
+    expect(taskManager.submit).not.toHaveBeenCalled();
+    expect(logger.debug).toHaveBeenCalledWith(
+      "Trigger skipped (foreground task active)",
+      { trigger: "foreground-pause" },
+    );
   });
 
   // =========================================================================

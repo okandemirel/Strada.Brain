@@ -334,6 +334,17 @@ export function buildLoopRecoveryGate(params: {
   return lines.join("\n");
 }
 
+function shouldPreserveBlockedDecisionInDaemonMode(kind: ControlLoopGateKind): boolean {
+  switch (kind) {
+    case "clarification_internal_continue":
+    case "visibility_internal_continue":
+    case "verifier_continue":
+      return true;
+    default:
+      return false;
+  }
+}
+
 export function buildLoopRecoveryCheckpointMessage(params: {
   prompt: string;
   brief: LoopRecoveryBrief;
@@ -1186,7 +1197,8 @@ export async function handleBackgroundLoopRecovery(
   if (
     finalDecision.decision === "blocked" &&
     params.daemonMode &&
-    brief.recoveryEpisode < (params.maxRecoveryEpisodes ?? 5)
+    brief.recoveryEpisode < (params.maxRecoveryEpisodes ?? 5) &&
+    !shouldPreserveBlockedDecisionInDaemonMode(params.kind)
   ) {
     finalDecision = {
       ...finalDecision,

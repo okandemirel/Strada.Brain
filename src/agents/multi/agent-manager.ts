@@ -33,6 +33,9 @@ import type { IEmbeddingProvider } from "../../rag/rag.interface.js";
 import type { ITool } from "../../agents/tools/tool.interface.js";
 import type { DMPolicy } from "../../security/dm-policy.js";
 import type { UserProfileStore } from "../../memory/unified/user-profile-store.js";
+import type { MonitorLifecycle } from "../../dashboard/monitor-lifecycle.js";
+import type { WorkspaceBus } from "../../dashboard/workspace-bus.js";
+import type { SupervisorBrain } from "../../supervisor/supervisor-brain.js";
 import { estimateCost } from "../../security/rate-limiter.js";
 import { getLogger } from "../../utils/logger.js";
 import { Orchestrator } from "../orchestrator.js";
@@ -98,6 +101,7 @@ export interface AgentManagerOptions {
   readonly userProfileStore?: UserProfileStore;
   readonly messageBurstWindowMs?: number;
   readonly maxBurstMessages?: number;
+  readonly supervisorBrain?: SupervisorBrain;
 }
 
 /** In-memory representation of a running agent with its resources */
@@ -150,6 +154,8 @@ export class AgentManager {
   private readonly pendingBackgroundBatches = new Map<string, PendingBackgroundBatch>();
   private readonly messageBurstWindowMs: number;
   private readonly maxBurstMessages: number;
+  private workspaceBus?: WorkspaceBus;
+  private monitorLifecycle?: MonitorLifecycle;
 
   constructor(opts: AgentManagerOptions) {
     this.config = opts.config;
@@ -193,6 +199,15 @@ export class AgentManager {
   /** Route non-command messages into the background task system instead of interactive LLM turns. */
   setBackgroundTaskSubmitter(submitter: BackgroundTaskSubmitter): void {
     this.backgroundTaskSubmitter = submitter;
+  }
+
+  setWorkspaceRuntime(workspaceBus: WorkspaceBus, monitorLifecycle: MonitorLifecycle): void {
+    this.workspaceBus = workspaceBus;
+    this.monitorLifecycle = monitorLifecycle;
+    for (const liveAgent of this.agents.values()) {
+      liveAgent.orchestrator.setWorkspaceBus(workspaceBus);
+      liveAgent.orchestrator.setMonitorLifecycle(monitorLifecycle);
+    }
   }
 
   // ===========================================================================
@@ -542,6 +557,7 @@ export class AgentManager {
       userProfileStore: profileStore,
       soulLoader: this.opts.soulLoader,
       dmPolicy: this.opts.dmPolicy,
+      supervisorBrain: this.opts.supervisorBrain,
       onUsage: (usage) => {
         const costUsd = estimateCost(usage.inputTokens, usage.outputTokens, usage.provider);
         if (costUsd <= 0) {
@@ -554,6 +570,13 @@ export class AgentManager {
         });
       },
     });
+
+    if (this.workspaceBus) {
+      orchestrator.setWorkspaceBus(this.workspaceBus);
+    }
+    if (this.monitorLifecycle) {
+      orchestrator.setMonitorLifecycle(this.monitorLifecycle);
+    }
 
     // Inject delegation tools if factory is available (Phase 24)
     if (this.delegationToolFactory) {

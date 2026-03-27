@@ -98,4 +98,28 @@ describe("ProviderAssigner", () => {
     // deepseek should win because claude is rate-limited (score * 0.5)
     expect(result.assignedProvider).toBe("deepseek");
   });
+
+  it("canonicalizes labeled provider descriptors and outcome history", () => {
+    const labeled = new ProviderAssigner([
+      {
+        name: "Kimi (Moonshot)",
+        model: "kimi-for-coding",
+        scores: { reasoning: 0.8, vision: 0, "code-gen": 0.85, "tool-use": 0.8, "long-context": 0.9, speed: 0.6, cost: 0.7, quality: 0.8, creative: 0.7 },
+      },
+      {
+        name: "deepseek",
+        model: "deepseek-chat",
+        scores: { reasoning: 0.8, vision: 0, "code-gen": 0.84, "tool-use": 0.75, "long-context": 0.5, speed: 0.5, cost: 0.9, quality: 0.78, creative: 0.6 },
+      },
+    ]);
+    const node = makeTaggedNode("g-history", "Implement code path", {
+      primary: ["code-gen"], preference: "quality", confidence: 0.9, source: "heuristic" });
+
+    labeled.recordOutcome("kimi", ["code-gen"], true);
+    labeled.recordOutcome("Kimi (Moonshot)", ["code-gen"], true);
+
+    const ranked = labeled.getRankedProviders(node);
+    expect(ranked[0]?.providerName).toBe("kimi");
+    expect(ranked.some((entry) => entry.providerName === "Kimi (Moonshot)")).toBe(false);
+  });
 });

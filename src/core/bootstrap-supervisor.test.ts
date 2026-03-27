@@ -78,6 +78,7 @@ describe("createSupervisorExecuteNodeBridge", () => {
     const setExecuteNode = vi.fn();
     const setEventEmitter = vi.fn();
     const setDashboardWorkspaceBus = vi.fn();
+    const setAgentWorkspaceRuntime = vi.fn();
 
     const workspaceBus = initializeWorkspaceRuntime({
       channel: {},
@@ -97,6 +98,9 @@ describe("createSupervisorExecuteNodeBridge", () => {
       dashboard: {
         setWorkspaceBus: setDashboardWorkspaceBus,
       },
+      agentManager: {
+        setWorkspaceRuntime: setAgentWorkspaceRuntime,
+      },
       orchestratorForSupervisorBridge: {} as any,
       channelType: "cli",
       stoppableServers: [],
@@ -107,5 +111,6 @@ describe("createSupervisorExecuteNodeBridge", () => {
     expect(setExecuteNode).toHaveBeenCalledTimes(1);
     expect(setEventEmitter).toHaveBeenCalledWith(workspaceBus);
     expect(setDashboardWorkspaceBus).toHaveBeenCalledWith(workspaceBus);
+    expect(setAgentWorkspaceRuntime).toHaveBeenCalledWith(workspaceBus, expect.anything());
   });
 });

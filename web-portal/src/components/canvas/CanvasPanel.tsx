@@ -1,6 +1,12 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Editor, TLShapeId } from 'tldraw'
-import { useCanvasStore, type CanvasShape, type CanvasShapeUpdate } from '../../stores/canvas-store'
+import {
+  useCanvasStore,
+  type CanvasLayout,
+  type CanvasShape,
+  type CanvasShapeUpdate,
+  type CanvasViewport,
+} from '../../stores/canvas-store'
 import { useSessionStore } from '../../stores/session-store'
 import { useTheme } from '../../hooks/useTheme'
 import { customShapeUtils } from './custom-shapes'
@@ -72,16 +78,58 @@ interface PendingCanvasSyncResult {
   shouldMarkAgentSync: boolean
 }
 
-function updateExistingShape(editor: Editor, shapeId: string, props: Record<string, unknown>): boolean {
+function updateExistingShape(
+  editor: Editor,
+  shapeId: string,
+  props: Record<string, unknown>,
+  position?: { x: number; y: number },
+): boolean {
   const existing = editor.getShape(shapeId as TLShapeId)
   if (!existing) return false
 
-  editor.updateShape({
+  const update = {
     id: shapeId as TLShapeId,
     type: existing.type,
     props: { ...(existing.props as Record<string, unknown>), ...props },
-  })
+  } as {
+    id: TLShapeId
+    type: string
+    props: Record<string, unknown>
+    x?: number
+    y?: number
+  }
+  if (position) {
+    update.x = position.x
+    update.y = position.y
+  }
+  editor.updateShape(update)
   return true
+}
+
+function applyPendingCanvasView(
+  editor: Editor,
+  pendingViewport: CanvasViewport | null,
+  pendingLayout: CanvasLayout | null,
+): boolean {
+  let applied = false
+  const viewportEditor = editor as Editor & {
+    setCamera?: (camera: { x: number; y: number; z: number }, options?: { animation?: { duration: number } }) => void
+  }
+
+  if (pendingViewport && typeof viewportEditor.setCamera === 'function') {
+    viewportEditor.setCamera(
+      { x: pendingViewport.x, y: pendingViewport.y, z: pendingViewport.zoom },
+      { animation: { duration: 180 } },
+    )
+    applied = true
+  }
+
+  if (pendingLayout) {
+    editor.zoomToFit({ animation: { duration: 220 } })
+    applied = true
+  }
+
+  return applied
 }
 
 function syncPendingCanvasState(
@@ -116,14 +164,14 @@ function syncPendingCanvasState(
     }
 
     for (const pending of pendingShapes) {
-      if (updateExistingShape(editor, pending.id, pending.props)) continue
+      if (updateExistingShape(editor, pending.id, pending.props, pending.position)) continue
       if (!pending.type) continue
 
       editor.createShape({
         id: pending.id as TLShapeId,
         type: pending.type,
-        x: nextX,
-        y: baseY,
+        x: pending.position?.x ?? nextX,
+        y: pending.position?.y ?? baseY,
         props: { ...pending.props, ...(pending.source ? { source: pending.source } : {}) },
       })
       nextX += CARD_WIDTH + GAP
@@ -133,14 +181,14 @@ function syncPendingCanvasState(
     }
 
     for (const pending of pendingUpdates) {
-      if (updateExistingShape(editor, pending.id, pending.props)) continue
+      if (updateExistingShape(editor, pending.id, pending.props, pending.position)) continue
       if (!pending.type) continue
 
       editor.createShape({
         id: pending.id as TLShapeId,
         type: pending.type,
-        x: nextX,
-        y: baseY,
+        x: pending.position?.x ?? nextX,
+        y: pending.position?.y ?? baseY,
         props: { ...pending.props, ...(pending.source ? { source: pending.source } : {}) },
       })
       nextX += CARD_WIDTH + GAP
@@ -154,9 +202,13 @@ export default function CanvasPanel() {
   const pendingShapes = useCanvasStore((s) => s.pendingShapes)
   const pendingUpdates = useCanvasStore((s) => s.pendingUpdates)
   const pendingRemovals = useCanvasStore((s) => s.pendingRemovals)
+  const pendingViewport = useCanvasStore((s) => s.pendingViewport)
+  const pendingLayout = useCanvasStore((s) => s.pendingLayout)
   const clearPendingShapes = useCanvasStore((s) => s.clearPendingShapes)
   const clearPendingUpdates = useCanvasStore((s) => s.clearPendingUpdates)
   const clearPendingRemovals = useCanvasStore((s) => s.clearPendingRemovals)
+  const clearPendingViewport = useCanvasStore((s) => s.clearPendingViewport)
+  const clearPendingLayout = useCanvasStore((s) => s.clearPendingLayout)
   const isDirty = useCanvasStore((s) => s.isDirty)
   const setDirty = useCanvasStore((s) => s.setDirty)
   const sessionId = useSessionStore((s) => s.sessionId)
@@ -169,7 +221,12 @@ export default function CanvasPanel() {
   const [editorMode, setEditorMode] = useState<'welcome' | 'loading' | 'editor'>('welcome')
   const [agentVisualCount, setAgentVisualCount] = useState(0)
   const [lastAgentSyncAt, setLastAgentSyncAt] = useState<number | null>(null)
-  const pendingMutationCount = pendingShapes.length + pendingUpdates.length + pendingRemovals.length
+  const pendingMutationCount =
+    pendingShapes.length
+    + pendingUpdates.length
+    + pendingRemovals.length
+    + (pendingViewport ? 1 : 0)
+    + (pendingLayout ? 1 : 0)
 
   const tldrawComponents = useMemo(() => ({
     Toolbar: CustomToolbar,
@@ -199,11 +256,11 @@ export default function CanvasPanel() {
   }, [sessionId])
 
   useEffect(() => {
-    if (editorMode !== 'welcome' || pendingShapes.length === 0) return
+    if (editorMode !== 'welcome' || pendingMutationCount === 0) return
     import('tldraw/tldraw.css')
     setEditorMode('loading')
     requestAnimationFrame(() => setEditorMode('editor'))
-  }, [editorMode, pendingShapes.length])
+  }, [editorMode, pendingMutationCount])
 
   const handleTemplateSelect = useCallback((id: TemplateId) => {
     selectedTemplateRef.current = id
@@ -234,25 +291,32 @@ export default function CanvasPanel() {
 
       if (pendingMutationCount > 0) {
         const result = syncPendingCanvasState(editor, pendingShapes, pendingUpdates, pendingRemovals)
+        const appliedView = applyPendingCanvasView(editor, pendingViewport, pendingLayout)
         if (result.agentAddCount > 0) {
           setAgentVisualCount((prev) => prev + result.agentAddCount)
         }
-        if (result.shouldMarkAgentSync) {
+        if (result.shouldMarkAgentSync || appliedView) {
           setLastAgentSyncAt(Date.now())
         }
         clearPendingShapes()
         clearPendingUpdates()
         clearPendingRemovals()
+        clearPendingViewport()
+        clearPendingLayout()
       }
     },
     [
       clearPendingRemovals,
       clearPendingShapes,
       clearPendingUpdates,
+      clearPendingViewport,
+      clearPendingLayout,
       pendingMutationCount,
+      pendingLayout,
       pendingRemovals,
       pendingShapes,
       pendingUpdates,
+      pendingViewport,
       setDirty,
       theme,
     ],
@@ -288,23 +352,30 @@ export default function CanvasPanel() {
     if (!editor || pendingMutationCount === 0) return
 
     const result = syncPendingCanvasState(editor, pendingShapes, pendingUpdates, pendingRemovals)
+    const appliedView = applyPendingCanvasView(editor, pendingViewport, pendingLayout)
     if (result.agentAddCount > 0) {
       setAgentVisualCount((prev) => prev + result.agentAddCount)
     }
-    if (result.shouldMarkAgentSync) {
+    if (result.shouldMarkAgentSync || appliedView) {
       setLastAgentSyncAt(Date.now())
     }
     clearPendingShapes()
     clearPendingUpdates()
     clearPendingRemovals()
+    clearPendingViewport()
+    clearPendingLayout()
   }, [
     clearPendingRemovals,
     clearPendingShapes,
     clearPendingUpdates,
+    clearPendingViewport,
+    clearPendingLayout,
     pendingMutationCount,
+    pendingLayout,
     pendingRemovals,
     pendingShapes,
     pendingUpdates,
+    pendingViewport,
   ])
 
   // Export JSON
@@ -344,7 +415,7 @@ export default function CanvasPanel() {
                 <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-text-secondary">
                   Visual workspace
                 </span>
-                {pendingShapes.length > 0 && (
+                {pendingMutationCount > 0 && (
                   <span className="rounded-full border border-accent/20 bg-accent/10 px-3 py-1 text-[11px] font-medium text-accent">
                     Agent handoff
                   </span>
@@ -356,7 +427,7 @@ export default function CanvasPanel() {
             </div>
           </div>
         </div>
-        <CanvasWelcome onSelect={handleTemplateSelect} pendingShapeCount={pendingShapes.length} />
+        <CanvasWelcome onSelect={handleTemplateSelect} pendingShapeCount={pendingMutationCount} />
       </div>
     )
   }

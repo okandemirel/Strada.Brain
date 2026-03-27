@@ -15,7 +15,9 @@ import type {
   SupervisorContext,
   SupervisorResult,
   TaggedGoalNode,
+  VerificationVerdict,
 } from "./supervisor-types.js";
+import { canonicalizeProviderName } from "../agents/providers/provider-identity.js";
 import type { CapabilityMatcher } from "./capability-matcher.js";
 import type { ProviderAssigner } from "./provider-assigner.js";
 import { SupervisorDispatcher } from "./supervisor-dispatcher.js";
@@ -51,6 +53,7 @@ export interface SupervisorBrainOptions {
   readonly capabilityMatcher: CapabilityMatcher;
   readonly providerAssigner: ProviderAssigner;
   readonly eventEmitter?: { emit: (event: string, payload: unknown) => void };
+  readonly verifyNode?: (node: NodeResult, context: SupervisorContext) => Promise<VerificationVerdict>;
 }
 
 // =============================================================================
@@ -63,6 +66,7 @@ export class SupervisorBrain {
   private readonly capabilityMatcher: CapabilityMatcher;
   private readonly providerAssigner: ProviderAssigner;
   private emitter?: { emit: (event: string, payload: unknown) => void };
+  private readonly verifyNode?: (node: NodeResult, context: SupervisorContext) => Promise<VerificationVerdict>;
 
   private executeNodeFn?: (node: TaggedGoalNode, context: SupervisorContext) => Promise<NodeResult>;
 
@@ -72,6 +76,7 @@ export class SupervisorBrain {
     this.capabilityMatcher = options.capabilityMatcher;
     this.providerAssigner = options.providerAssigner;
     this.emitter = options.eventEmitter;
+    this.verifyNode = options.verifyNode;
   }
 
   // ---------------------------------------------------------------------------
@@ -340,12 +345,32 @@ export class SupervisorBrain {
       }
 
       // Step 10-12: Create aggregator, verify, and synthesize
+      const verificationBudget = results.reduce((sum, result) => sum + Math.max(result.cost, 0), 0);
+      const criticalNodeIds = new Set(
+        assignedNodes
+          .filter((node) => this.shouldVerifyCriticalNode(node))
+          .map((node) => String(node.id)),
+      );
       const aggregator = new ResultAggregator({
         mode: this.config.verificationMode,
         samplingRate: this.config.verificationBudgetPct / 100,
         preferDifferentProvider: true,
-        maxVerificationCost: 0,
-      });
+        maxVerificationCost:
+          verificationBudget > 0
+            ? verificationBudget * (this.config.verificationBudgetPct / 100)
+            : Number.POSITIVE_INFINITY,
+      }, this.verifyNode ? (node) => {
+        if (
+          this.config.verificationMode === "critical-only" &&
+          !criticalNodeIds.has(String(node.nodeId))
+        ) {
+          return Promise.resolve({
+            verdict: "approve" as const,
+            verifierProvider: canonicalizeProviderName(node.provider) ?? node.provider,
+          });
+        }
+        return this.verifyNode!(node, context);
+      } : undefined);
 
       this.emitter?.emit("supervisor:verify_start", { nodeId: "aggregate", verifierProvider: "internal" });
       const verification = buildSupervisorVerificationNarrative(task);
@@ -358,7 +383,16 @@ export class SupervisorBrain {
       }));
       await this.reportUpdate(context, verification.markdown);
       const verifiedResults = await aggregator.verify(results);
-      this.emitter?.emit("supervisor:verify_done", { nodeId: "aggregate", verdict: "approve" });
+      this.recordProviderOutcomes(assignedNodes, verifiedResults);
+      const verificationVerdict = verifiedResults.some((result, index) =>
+        results[index]?.status === "ok" && result.status !== "ok"
+      )
+        ? "reject"
+        : "approve";
+      this.emitter?.emit("supervisor:verify_done", {
+        nodeId: "aggregate",
+        verdict: verificationVerdict,
+      });
       const supervisorResult = aggregator.synthesize(verifiedResults);
 
       // Step 13: Emit supervisor:complete
@@ -424,6 +458,31 @@ export class SupervisorBrain {
       }
     }
     return nodes;
+  }
+
+  private recordProviderOutcomes(nodes: readonly TaggedGoalNode[], results: readonly NodeResult[]): void {
+    const capabilityByNode = new Map<string, readonly import("./supervisor-types.js").CapabilityTag[]>();
+    for (const node of nodes) {
+      capabilityByNode.set(String(node.id), [...node.capabilityProfile.primary]);
+    }
+
+    for (const result of results) {
+      const tags = capabilityByNode.get(String(result.nodeId));
+      if (!tags || tags.length === 0 || result.status === "skipped") {
+        continue;
+      }
+      this.providerAssigner.recordOutcome(result.provider, [...tags], result.status === "ok");
+    }
+  }
+
+  private shouldVerifyCriticalNode(node: TaggedGoalNode): boolean {
+    return /\bcritical\b|\bsecurity\b|\bproduction\b|\breview carefully\b/i.test(node.task)
+      || (
+        node.capabilityProfile.preference === "quality" &&
+        node.capabilityProfile.confidence >= 0.7
+      )
+      || node.capabilityProfile.primary.includes("reasoning")
+      || node.capabilityProfile.primary.includes("vision");
   }
 
   /**

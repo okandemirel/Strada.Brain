@@ -82,7 +82,7 @@ import { createWorkspaceBus, type WorkspaceBus } from "../dashboard/workspace-bu
 import { createLearningWorkspaceBridge } from "../dashboard/learning-workspace-bridge.js";
 import { createMonitorBridge } from "../dashboard/monitor-bridge.js";
 import { CanvasStorage } from "../dashboard/canvas-storage.js";
-import { createMonitorLifecycle } from "../dashboard/monitor-lifecycle.js";
+import { createMonitorLifecycle, type MonitorLifecycle } from "../dashboard/monitor-lifecycle.js";
 import Database from "better-sqlite3";
 
 // Auto-update imports
@@ -255,6 +255,9 @@ export function initializeWorkspaceRuntime(params: {
     setEventEmitter: (emitter: WorkspaceBus) => void;
   } | null;
   dashboard?: { setWorkspaceBus: (workspaceBus: WorkspaceBus) => void } | null;
+  agentManager?: {
+    setWorkspaceRuntime?: (workspaceBus: WorkspaceBus, monitorLifecycle: MonitorLifecycle) => void;
+  } | null;
   stoppableServers?: Array<{ stop?: () => void }>;
   channelType?: string;
   orchestratorForSupervisorBridge: Orchestrator;
@@ -286,6 +289,7 @@ export function initializeWorkspaceRuntime(params: {
   params.orchestrator.setMonitorLifecycle(monitorLifecycle);
   params.backgroundExecutor.setWorkspaceBus(workspaceBus);
   params.backgroundExecutor.setMonitorLifecycle(monitorLifecycle);
+  params.agentManager?.setWorkspaceRuntime?.(workspaceBus, monitorLifecycle);
   if (params.supervisorBrain) {
     params.supervisorBrain.setExecuteNode(createSupervisorExecuteNodeBridge({
       backgroundExecutor: params.backgroundExecutor,
@@ -875,6 +879,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
         providerRouter,
         dashboard,
         stradaDeps,
+        supervisorBrain,
       });
       agentManager = multiAgentStage.agentManager;
       agentBudgetTrackerOuter = multiAgentStage.agentBudgetTracker;
@@ -1070,6 +1075,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     backgroundExecutor,
     supervisorBrain,
     dashboard,
+    agentManager,
     stoppableServers,
     channelType,
     orchestratorForSupervisorBridge: orchestrator,

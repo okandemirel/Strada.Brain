@@ -1140,6 +1140,56 @@ describe("Orchestrator", () => {
     expect(defaultProvider.chat).not.toHaveBeenCalled();
   });
 
+  it("canonicalizes delegated worker provider labels before pinning execution", async () => {
+    const defaultProvider = createNamedProvider("default");
+    const assignedProvider = createNamedProvider("kimi");
+    assignedProvider.chat.mockResolvedValueOnce({
+      text: "Assigned provider answer",
+      toolCalls: [],
+      stopReason: "end_turn" as const,
+      usage: { inputTokens: 9, outputTokens: 11 },
+    });
+    const mockChannel = createMockChannel();
+
+    const orchestrator = new Orchestrator({
+      providerManager: {
+        getProvider: () => defaultProvider,
+        getProviderByName: (name: string) => (name === "kimi" ? assignedProvider : null),
+        getActiveInfo: () => ({ providerName: "default", model: "default", isDefault: true }),
+        listAvailable: () => [
+          { name: "default", label: "default", defaultModel: "default" },
+          { name: "kimi", label: "Kimi (Moonshot)", defaultModel: "kimi-for-coding" },
+        ],
+        listExecutionCandidates: () => [],
+        getProviderCapabilities: () => ({ vision: false }),
+        shutdown: vi.fn(),
+      } as any,
+      tools: [],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: false,
+      supervisorComplexityThreshold: "complex",
+    });
+
+    const result = await orchestrator.runWorkerTask({
+      prompt: "Inspect screenshot",
+      mode: "delegated",
+      signal: AbortSignal.timeout(5_000),
+      onProgress: vi.fn(),
+      chatId: "delegated-provider-pin-labeled",
+      channelType: "cli",
+      assignedProvider: "Kimi (Moonshot)",
+      assignedModel: "kimi-for-coding",
+    });
+
+    expect(result.status).toBe("completed");
+    expect(result.provider).toBe("kimi");
+    expect(result.model).toBe("kimi-for-coding");
+    expect(assignedProvider.chat).toHaveBeenCalledTimes(1);
+    expect(defaultProvider.chat).not.toHaveBeenCalled();
+  });
+
   it("lets concurrent complex background tasks use supervisor on different conversations", async () => {
     const mockProvider = createMockProvider();
     const mockChannel = createMockChannel();
