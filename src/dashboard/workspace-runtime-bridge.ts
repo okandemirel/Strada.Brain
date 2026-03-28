@@ -79,7 +79,7 @@ export function createWorkspaceRuntimeBridge(params: {
           node.id,
           bag.status as GoalStatus,
           node.result,
-          node.error,
+          typeof bag.error === "string" ? bag.error : node.error,
           node.retryCount,
           node.redecompositionCount,
         );

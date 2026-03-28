@@ -57,6 +57,50 @@ describe("createWorkspaceRuntimeBridge", () => {
     );
   });
 
+  it("persists failure reasons from monitor task updates into goal storage", () => {
+    const goalStorage = {
+      getTree: vi.fn().mockReturnValue({
+        nodes: new Map([
+          ["node-1", {
+            id: "node-1",
+            result: "checkpoint",
+            error: undefined,
+            retryCount: 0,
+            redecompositionCount: 0,
+          }],
+        ]),
+      }),
+      updateNodeStatus: vi.fn(),
+    } as any;
+    const taskManager = {
+      retryGoalRoot: vi.fn(),
+      retryTask: vi.fn(),
+      resumeGoalRoot: vi.fn(),
+      resumeTask: vi.fn(),
+      cancelGoalRoot: vi.fn(),
+      cancel: vi.fn(),
+    } as any;
+
+    const bridge = createWorkspaceRuntimeBridge({ workspaceBus, goalStorage, taskManager });
+    bridge.start();
+
+    workspaceBus.emit("monitor:task_update", {
+      rootId: "root-1",
+      nodeId: "node-1",
+      status: "failed",
+      error: "Aborted",
+    });
+
+    expect(goalStorage.updateNodeStatus).toHaveBeenCalledWith(
+      "node-1",
+      "failed",
+      "checkpoint",
+      "Aborted",
+      0,
+      0,
+    );
+  });
+
   it("routes retry and resume commands through TaskManager and emits notifications", () => {
     const received: Array<{ title: string; message: string; severity: string }> = [];
     const taskManager = {

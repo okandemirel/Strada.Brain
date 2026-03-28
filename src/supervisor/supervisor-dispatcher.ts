@@ -81,6 +81,72 @@ class Semaphore {
   }
 }
 
+/** Tracks failure budget slots across running nodes. */
+class FailureBudget {
+  private consumed = 0;
+  private inFlight = 0;
+  private readonly waiters = new Set<() => void>();
+
+  constructor(private readonly limit: number) {}
+
+  exhausted(): boolean {
+    return this.consumed >= this.limit;
+  }
+
+  async acquire(signal?: AbortSignal): Promise<boolean> {
+    while (true) {
+      if (this.exhausted()) {
+        return false;
+      }
+
+      if ((this.consumed + this.inFlight) < this.limit) {
+        this.inFlight++;
+        return true;
+      }
+
+      await new Promise<void>((resolve) => {
+        const wake = () => {
+          this.waiters.delete(wake);
+          if (signal) {
+            signal.removeEventListener("abort", wake);
+          }
+          resolve();
+        };
+
+        this.waiters.add(wake);
+        if (signal) {
+          signal.addEventListener("abort", wake, { once: true });
+        }
+      });
+
+      if (signal?.aborted) {
+        return false;
+      }
+    }
+  }
+
+  succeed(): void {
+    if (this.inFlight > 0) {
+      this.inFlight--;
+    }
+    this.notify();
+  }
+
+  fail(): void {
+    if (this.inFlight > 0) {
+      this.inFlight--;
+    }
+    this.consumed++;
+    this.notify();
+  }
+
+  private notify(): void {
+    for (const wake of [...this.waiters]) {
+      wake();
+    }
+  }
+}
+
 // =============================================================================
 // TRANSIENT ERROR DETECTION
 // =============================================================================
@@ -152,6 +218,7 @@ export class SupervisorDispatcher {
     node: TaggedGoalNode,
     status: "executing" | "completed" | "failed" | "skipped" | "verifying",
     result?: Pick<NodeResult, "duration">,
+    error?: string,
   ): void {
     if (!this.rootId) {
       return;
@@ -166,6 +233,7 @@ export class SupervisorDispatcher {
       ...(status === "executing" ? { startedAt: Date.now() } : {}),
       ...(status !== "executing" ? { completedAt: Date.now() } : {}),
       ...(result?.duration ? { elapsed: result.duration } : {}),
+      ...(error ? { error } : {}),
     });
   }
 
@@ -288,12 +356,11 @@ export class SupervisorDispatcher {
     const waves = this.computeWaves(nodes);
     const results: NodeResult[] = [];
     const failedNodeIds = new Set<string>();
+    let failureCount = 0;
     let budgetExhausted = false;
 
     const concurrency = new Semaphore(this.config.maxParallelNodes);
-    // Budget semaphore: starts with maxFailureBudget permits.
-    // Each in-flight node holds one. Returned on success, consumed on failure.
-    const budget = new Semaphore(this.config.maxFailureBudget);
+    const budget = new FailureBudget(this.config.maxFailureBudget);
 
     for (let waveIndex = 0; waveIndex < waves.length; waveIndex++) {
       const wave = waves[waveIndex]!;
@@ -341,11 +408,8 @@ export class SupervisorDispatcher {
           continue;
         }
 
-        // Acquire both concurrency slot and budget permit before launching.
-        // Budget permit is acquired first (non-blocking check via tryAcquire).
-        // If no budget permits remain, skip this and all subsequent nodes.
-        const gotBudget = budget.tryAcquire();
-        if (!gotBudget) {
+        const reservedBudget = await budget.acquire(signal);
+        if (!reservedBudget) {
           budgetExhausted = true;
           results.push(this.emitSkippedNode(node, "Skipped: budget exhausted"));
           continue;
@@ -353,9 +417,9 @@ export class SupervisorDispatcher {
 
         await concurrency.acquire();
 
-        if (budgetExhausted || signal?.aborted) {
+        if (budgetExhausted || signal?.aborted || budget.exhausted()) {
           concurrency.release();
-          budget.release(); // return unused permit
+          budget.succeed();
           results.push(this.emitSkippedNode(node, "Skipped: budget exhausted or aborted"));
           continue;
         }
@@ -367,8 +431,12 @@ export class SupervisorDispatcher {
 
             if (result.status === "failed") {
               failedNodeIds.add(node.id as string);
-              // Budget permit is consumed (not returned)
-              this.emitNodeWorkspaceStatus(node, "failed", result);
+              failureCount++;
+              budget.fail();
+              if (failureCount >= this.config.maxFailureBudget) {
+                budgetExhausted = true;
+              }
+              this.emitNodeWorkspaceStatus(node, "failed", result, result.output || "Unknown error");
               this.emitNodeNarrative(node, "failed", result.output);
               this.emitNodeCanvasUpdate(node, "failed");
               this.emitActivity(result.output ?? "Unknown error", String(node.id), "supervisor_node_failed");
@@ -379,11 +447,15 @@ export class SupervisorDispatcher {
                 nextAction: "skip",
               });
             } else {
-              // Success: return the budget permit
-              budget.release();
+              budget.succeed();
               const workspaceStatus = result.status === "ok" ? "completed" : "skipped";
               const narrativeStatus = result.status === "ok" ? "done" : "skipped";
-              this.emitNodeWorkspaceStatus(node, workspaceStatus, result);
+              this.emitNodeWorkspaceStatus(
+                node,
+                workspaceStatus,
+                result,
+                result.status === "skipped" ? result.output : undefined,
+              );
               this.emitNodeNarrative(node, narrativeStatus);
               this.emitNodeCanvasUpdate(node, narrativeStatus);
               this.emitActivity(

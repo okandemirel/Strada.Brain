@@ -53,6 +53,7 @@ export interface WorkspaceEventMap {
     rootId: string
     nodeId: string
     status: string
+    error?: string
     reviewStatus?: string
     agentId?: string
     phase?: 'planning' | 'acting' | 'observing' | 'reflecting'

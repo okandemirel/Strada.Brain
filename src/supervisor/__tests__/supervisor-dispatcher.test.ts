@@ -74,6 +74,50 @@ describe("SupervisorDispatcher", () => {
     expect(failed.length).toBeLessThanOrEqual(3);
   });
 
+  it("does not skip nodes just because the failure budget is lower than node count", async () => {
+    const executeNode = vi.fn().mockImplementation(async (node: TaggedGoalNode) =>
+      makeOkResult(node.id, node.assignedProvider!)
+    );
+
+    const nodes = Array.from({ length: 5 }, (_, i) =>
+      makeAssignedNode(`N${i}`, `Task ${i}`, "claude"));
+
+    const dispatcher = new SupervisorDispatcher({
+      executeNode,
+      config: { maxParallelNodes: 1, nodeTimeoutMs: 5000, maxFailureBudget: 3 },
+    });
+    const results = await dispatcher.dispatch(nodes);
+
+    expect(executeNode).toHaveBeenCalledTimes(5);
+    expect(results).toHaveLength(5);
+    expect(results.every((result) => result.status === "ok")).toBe(true);
+  });
+
+  it("emits failure reasons in monitor task updates", async () => {
+    const emit = vi.fn();
+    const executeNode = vi.fn().mockResolvedValue({
+      ...makeOkResult("A"),
+      status: "failed" as const,
+      output: "Aborted",
+    });
+
+    const dispatcher = new SupervisorDispatcher({
+      executeNode,
+      config: { maxParallelNodes: 1, nodeTimeoutMs: 5000, maxFailureBudget: 3 },
+      eventEmitter: { emit },
+      rootId: "root-1",
+    });
+
+    await dispatcher.dispatch([makeAssignedNode("A", "Task A", "claude")]);
+
+    expect(emit).toHaveBeenCalledWith("monitor:task_update", expect.objectContaining({
+      rootId: "root-1",
+      nodeId: "A",
+      status: "failed",
+      error: "Aborted",
+    }));
+  });
+
   it("handles timeout", async () => {
     const executeNode = vi.fn().mockImplementation(
       () => new Promise(resolve => setTimeout(() => resolve(makeOkResult("X")), 10000))
