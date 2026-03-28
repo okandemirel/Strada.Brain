@@ -231,6 +231,10 @@ describe("source launcher install-command", () => {
     expect(shouldRunFromSource(["doctor"])).toBe(true);
     expect(shouldRunFromSource(["update"])).toBe(true);
     expect(shouldRunFromSource(["version-info"])).toBe(true);
+    expect(shouldRunFromSource(["kill"])).toBe(true);
+    expect(shouldRunFromSource(["stop"])).toBe(true);
+    expect(shouldRunFromSource(["restart"])).toBe(true);
+    expect(shouldRunFromSource(["status"])).toBe(true);
 
     expect(requiresPreparedSourceCheckout([])).toBe(true);
     expect(requiresPreparedSourceCheckout(["setup", "--web"])).toBe(true);
@@ -242,6 +246,10 @@ describe("source launcher install-command", () => {
     expect(requiresPreparedSourceCheckout(["doctor"])).toBe(false);
     expect(requiresPreparedSourceCheckout(["update"])).toBe(false);
     expect(requiresPreparedSourceCheckout(["version-info"])).toBe(false);
+    expect(requiresPreparedSourceCheckout(["kill"])).toBe(false);
+    expect(requiresPreparedSourceCheckout(["stop"])).toBe(false);
+    expect(requiresPreparedSourceCheckout(["restart"])).toBe(false);
+    expect(requiresPreparedSourceCheckout(["status"])).toBe(false);
     expect(requiresPreparedSourceCheckout(["start", "--channel", "cli"])).toBe(false);
   });
 

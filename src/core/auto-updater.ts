@@ -195,7 +195,7 @@ export class AutoUpdater {
         return { pid, command };
       })
       .filter((entry): entry is { pid: number; command: string } => entry !== null)
-      .filter((entry) => /(?:src[\\/]+index\.ts|dist[\\/]+index\.js)\s+start(?:\s|$)/.test(entry.command));
+      .filter((entry) => /(?:src[\\/]+index\.ts|dist[\\/]+index\.js)\s+(?:start|cli)(?:\s|$)/.test(entry.command));
   }
 
   static parseLsofCwd(output: string): string | null {

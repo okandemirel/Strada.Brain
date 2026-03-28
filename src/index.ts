@@ -35,6 +35,12 @@ import {
   resolveQuickLaunchAction,
   type RootLaunchOptions,
 } from "./core/launcher.js";
+import {
+  getMatchingLocalRuntimeProcesses,
+  inferChannelFromRuntimeCommand,
+  isTcpPortBusy,
+  stopRuntimeProcesses,
+} from "./core/runtime-lifecycle.js";
 
 // Setup global error handlers
 process.env["STRADA_LAUNCH_CWD"] ??= getSafeCurrentWorkingDirectory(homedir());
@@ -88,6 +94,35 @@ program
   .description("Start Strada Brain in CLI mode (for local testing)")
   .action(async () => {
     await startApp("cli");
+  });
+
+program
+  .command("status")
+  .description("Show local runtime status for this Strada install")
+  .action(async () => {
+    await runStatusCommand();
+  });
+
+program
+  .command("kill")
+  .alias("stop")
+  .description("Stop local Strada runtime processes for this install")
+  .option("--force", "Use SIGKILL immediately instead of graceful shutdown", false)
+  .action(async (opts: { force?: boolean }) => {
+    await runKillCommand(opts.force === true);
+  });
+
+program
+  .command("restart")
+  .description("Restart Strada Brain for this install")
+  .option(
+    "--channel <type>",
+    `Channel to use after restart: ${CHANNEL_DEFAULTS.SUPPORTED_TYPES.join(", ")}`,
+  )
+  .option("--daemon", "Enable daemon heartbeat mode after restart")
+  .option("--force", "Use SIGKILL immediately instead of graceful shutdown", false)
+  .action(async (opts: { channel?: string; daemon?: boolean; force?: boolean }) => {
+    await runRestartCommand(opts.channel, opts.daemon, opts.force === true);
   });
 
 program
@@ -425,6 +460,46 @@ async function startApp(
     setupWizardPort: wizardPort,
   });
 
+  if (channelType === "web" && !activeWizard) {
+    const updater = await createCliAutoUpdater(config.autoUpdate);
+    const inspection = await updater.inspectLocalRuntimes();
+    const matchingRuntimes = getMatchingLocalRuntimeProcesses(inspection);
+    const matchingWebRuntimes = matchingRuntimes.filter((runtime) => (
+      inferChannelFromRuntimeCommand(runtime.command, getConfiguredDefaultChannel()) === "web"
+    ));
+    const busyPorts = [
+      ...(await isTcpPortBusy(config.web.port) ? [config.web.port] : []),
+      ...(await isTcpPortBusy(config.dashboard.port) ? [config.dashboard.port] : []),
+    ];
+
+    if (matchingWebRuntimes.length > 0 && busyPorts.length > 0) {
+      const activeRuntime = matchingWebRuntimes[0]!;
+      const activeChannel = inferChannelFromRuntimeCommand(
+        activeRuntime.command,
+        getConfiguredDefaultChannel(),
+      );
+      console.log(
+        `Strada is already running from this install (PID ${activeRuntime.pid}, channel ${activeChannel}).`,
+      );
+      console.log(`Web: http://127.0.0.1:${config.web.port}`);
+      console.log(`Dashboard: http://127.0.0.1:${config.dashboard.port}`);
+      console.log("Use `strada restart` to restart it or `strada kill` to stop it.");
+      return;
+    }
+
+    if (matchingWebRuntimes.length === 0 && busyPorts.length > 0) {
+      const detectedRuntime = inspection.runtimes[0] ?? null;
+      const runtimeHint = detectedRuntime
+        ? ` Detected local runtime PID ${detectedRuntime.pid} from ${detectedRuntime.cwd ?? "an unknown working directory"}.`
+        : "";
+      console.error(
+        `Cannot start web mode because port${busyPorts.length > 1 ? "s" : ""} ${busyPorts.join(", ")} ${busyPorts.length > 1 ? "are" : "is"} already in use.${runtimeHint}`,
+      );
+      console.error("Stop the conflicting process or use a different configured port.");
+      process.exit(1);
+    }
+  }
+
   try {
     // Validate channel type
     if (!isValidChannelType(channelType)) {
@@ -592,6 +667,140 @@ async function runLauncherAction(action: {
     }
     return;
   }
+}
+
+async function createCliAutoUpdater(
+  autoUpdateConfig?: {
+    enabled: boolean;
+    intervalHours: number;
+    idleTimeoutMin: number;
+    channel: "stable" | "latest";
+    notify: boolean;
+    autoRestart: boolean;
+  },
+) {
+  const { AutoUpdater } = await import("./core/auto-updater.js");
+  const { ChannelActivityRegistry } = await import("./core/channel-activity-registry.js");
+  const configResult = loadConfigSafe();
+  const resolvedAutoUpdateConfig = autoUpdateConfig ?? (
+    configResult.kind === "ok"
+      ? configResult.value.autoUpdate
+      : {
+        enabled: true,
+        intervalHours: 24,
+        idleTimeoutMin: 5,
+        channel: "stable" as const,
+        notify: false,
+        autoRestart: false,
+      }
+  );
+  return new AutoUpdater(
+    { autoUpdate: resolvedAutoUpdateConfig },
+    new ChannelActivityRegistry(),
+    { hasRunningTasks: () => false },
+  );
+}
+
+async function runStatusCommand(): Promise<void> {
+  const updater = await createCliAutoUpdater();
+  const inspection = await updater.inspectLocalRuntimes();
+  const matchingRuntimes = getMatchingLocalRuntimeProcesses(inspection);
+
+  console.log(`Install root: ${inspection.installRoot}`);
+  console.log(`Version: v${updater.getCurrentVersion()}`);
+  console.log(`Install method: ${updater.detectInstallMethod()}`);
+
+  const configResult = loadConfigSafe();
+  if (configResult.kind === "ok") {
+    const webPortBusy = await isTcpPortBusy(configResult.value.web.port);
+    const dashboardPortBusy = await isTcpPortBusy(configResult.value.dashboard.port);
+    console.log(`Web port ${configResult.value.web.port}: ${webPortBusy ? "busy" : "free"}`);
+    console.log(`Dashboard port ${configResult.value.dashboard.port}: ${dashboardPortBusy ? "busy" : "free"}`);
+  }
+
+  if (matchingRuntimes.length === 0) {
+    console.log("Runtime: no active process detected for this install.");
+  } else {
+    console.log(`Runtime: ${matchingRuntimes.length} active process${matchingRuntimes.length === 1 ? "" : "es"} for this install.`);
+    for (const runtime of matchingRuntimes) {
+      const channel = inferChannelFromRuntimeCommand(runtime.command, getConfiguredDefaultChannel());
+      console.log(`- PID ${runtime.pid} (${channel}) from ${runtime.cwd ?? "unknown working directory"}`);
+    }
+  }
+
+  const foreignRuntimes = inspection.runtimes.filter((runtime) => (
+    runtime.cwd === null || path.resolve(runtime.cwd) !== inspection.installRoot
+  ));
+  if (foreignRuntimes.length > 0) {
+    console.log("Other local Strada runtimes:");
+    for (const runtime of foreignRuntimes) {
+      console.log(`- PID ${runtime.pid} from ${runtime.cwd ?? "unknown working directory"}`);
+    }
+  }
+}
+
+async function runKillCommand(force: boolean): Promise<void> {
+  const updater = await createCliAutoUpdater();
+  const inspection = await updater.inspectLocalRuntimes();
+  const matchingRuntimes = getMatchingLocalRuntimeProcesses(inspection);
+
+  if (matchingRuntimes.length === 0) {
+    console.log(`No running Strada runtime detected for ${inspection.installRoot}.`);
+    return;
+  }
+
+  const result = await stopRuntimeProcesses(matchingRuntimes, { force });
+  for (const runtime of result.stopped) {
+    console.log(`Stopped PID ${runtime.pid}.`);
+  }
+  for (const runtime of result.alreadyStopped) {
+    console.log(`PID ${runtime.pid} was already stopped.`);
+  }
+
+  if (result.failed.length > 0) {
+    for (const runtime of result.failed) {
+      console.error(`Failed to stop PID ${runtime.pid}.`);
+    }
+    process.exit(1);
+  }
+}
+
+async function runRestartCommand(
+  channelType: string | undefined,
+  daemonMode: boolean | undefined,
+  force: boolean,
+): Promise<void> {
+  const updater = await createCliAutoUpdater();
+  const inspection = await updater.inspectLocalRuntimes();
+  const matchingRuntimes = getMatchingLocalRuntimeProcesses(inspection);
+  const defaultChannel = getConfiguredDefaultChannel();
+  const inferredChannel = matchingRuntimes[0]
+    ? inferChannelFromRuntimeCommand(matchingRuntimes[0].command, defaultChannel)
+    : defaultChannel;
+  const nextChannel = channelType ?? inferredChannel;
+
+  if (!isValidChannelType(nextChannel)) {
+    console.error(
+      `Invalid channel type: ${nextChannel}. Supported: ${CHANNEL_DEFAULTS.SUPPORTED_TYPES.join(", ")}`,
+    );
+    process.exit(1);
+  }
+
+  if (matchingRuntimes.length > 0) {
+    console.log(`Restarting ${matchingRuntimes.length} local runtime process${matchingRuntimes.length === 1 ? "" : "es"}...`);
+    const result = await stopRuntimeProcesses(matchingRuntimes, { force });
+    if (result.failed.length > 0) {
+      for (const runtime of result.failed) {
+        console.error(`Failed to stop PID ${runtime.pid}.`);
+      }
+      process.exit(1);
+    }
+  } else {
+    console.log("No running local Strada runtime detected; starting a fresh process.");
+  }
+
+  const inferredDaemonMode = matchingRuntimes.some((runtime) => /\s--daemon(?:\s|$)/.test(runtime.command));
+  await startApp(nextChannel, daemonMode === true || inferredDaemonMode);
 }
 
 // ============================================================================

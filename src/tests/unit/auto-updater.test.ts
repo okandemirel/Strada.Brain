@@ -90,6 +90,7 @@ describe("AutoUpdater", () => {
       const candidates = AutoUpdater.parsePsRuntimeProcesses([
         "101 /opt/homebrew/bin/node --import tsx /tmp/Strada.Brain/src/index.ts start",
         "202 /opt/homebrew/bin/node /tmp/Strada.Brain/dist/index.js start --channel web",
+        "250 /opt/homebrew/bin/node --import tsx /tmp/Strada.Brain/src/index.ts cli",
         "303 /opt/homebrew/bin/node /tmp/other-app/src/index.ts start",
       ].join("\n"));
 
@@ -101,6 +102,10 @@ describe("AutoUpdater", () => {
         {
           pid: 202,
           command: "/opt/homebrew/bin/node /tmp/Strada.Brain/dist/index.js start --channel web",
+        },
+        {
+          pid: 250,
+          command: "/opt/homebrew/bin/node --import tsx /tmp/Strada.Brain/src/index.ts cli",
         },
         {
           pid: 303,
