@@ -1010,6 +1010,16 @@ export class DashboardServer {
           return;
         }
         void this.autoUpdater.requestImmediateCheck().then((result) => {
+          if (result.error) {
+            res.writeHead(502, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({
+              status: "check_failed",
+              currentVersion: result.currentVersion,
+              latestVersion: result.latestVersion,
+              error: result.error,
+            }));
+            return;
+          }
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(JSON.stringify({
             status: result.available ? "update_pending" : "up_to_date",

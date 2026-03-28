@@ -23,6 +23,7 @@ export interface UpdateCheckResult {
   available: boolean;
   currentVersion: string;
   latestVersion: string | null;
+  error: string | null;
 }
 
 export interface RuntimeProcessInfo {
@@ -286,6 +287,19 @@ export class AutoUpdater {
     );
   }
 
+  private async installProjectDependencies(): Promise<void> {
+    await this.runCommand("npm", ["install"], UPDATE_TIMEOUT, this.installRoot);
+    const portalPkgPath = path.join(this.installRoot, "web-portal", "package.json");
+    if (fs.existsSync(portalPkgPath)) {
+      await this.runCommand(
+        "npm",
+        ["install"],
+        UPDATE_TIMEOUT,
+        path.join(this.installRoot, "web-portal"),
+      );
+    }
+  }
+
   private isStradaInstallRoot(candidateRoot: string): boolean {
     try {
       const pkgPath = path.join(candidateRoot, "package.json");
@@ -449,10 +463,20 @@ export class AutoUpdater {
             this.installRoot,
           )
         ).trim();
+        const behind = Number.parseInt(behindCount, 10);
+        if (!Number.isFinite(behind)) {
+          return {
+            available: false,
+            currentVersion,
+            latestVersion: remoteRev.length > 0 ? remoteRev.substring(0, 8) : null,
+            error: "Could not determine whether origin/main is ahead of this checkout.",
+          };
+        }
         return {
-          available: parseInt(behindCount, 10) > 0,
+          available: behind > 0,
           currentVersion,
           latestVersion: remoteRev.substring(0, 8),
+          error: null,
         };
       } else {
         const distTag = this.config.channel === "latest" ? "latest" : "stable";
@@ -463,16 +487,27 @@ export class AutoUpdater {
         );
         const remoteVersion = AutoUpdater.parseVersionFromOutput(output);
         if (!remoteVersion) {
-          return { available: false, currentVersion, latestVersion: null };
+          return {
+            available: false,
+            currentVersion,
+            latestVersion: null,
+            error: "Could not parse the latest published Strada version.",
+          };
         }
         return {
           available: AutoUpdater.isNewerVersion(currentVersion, remoteVersion),
           currentVersion,
           latestVersion: remoteVersion,
+          error: null,
         };
       }
-    } catch {
-      return { available: false, currentVersion, latestVersion: null };
+    } catch (err) {
+      return {
+        available: false,
+        currentVersion,
+        latestVersion: null,
+        error: (err as Error).message,
+      };
     }
   }
 
@@ -498,16 +533,7 @@ export class AutoUpdater {
             UPDATE_TIMEOUT,
             this.installRoot,
           );
-          await this.runCommand("npm", ["install"], UPDATE_TIMEOUT, this.installRoot);
-          const portalPkgPath = path.join(this.installRoot, "web-portal", "package.json");
-          if (fs.existsSync(portalPkgPath)) {
-            await this.runCommand(
-              "npm",
-              ["install"],
-              UPDATE_TIMEOUT,
-              path.join(this.installRoot, "web-portal"),
-            );
-          }
+          await this.installProjectDependencies();
           await this.runCommand("npm", ["run", "build"], UPDATE_TIMEOUT, this.installRoot);
         } catch (buildErr) {
           try {
@@ -518,7 +544,7 @@ export class AutoUpdater {
               this.installRoot,
             );
             // Restore old dependencies after source rollback
-            await this.runCommand("npm", ["install"], UPDATE_TIMEOUT, this.installRoot);
+            await this.installProjectDependencies();
           } catch {
             // Rollback failed — nothing we can do
           }
@@ -550,7 +576,7 @@ export class AutoUpdater {
               VERSION_CHECK_TIMEOUT,
               this.installRoot,
             );
-            await this.runCommand("npm", ["install"], UPDATE_TIMEOUT, this.installRoot);
+            await this.installProjectDependencies();
             await this.runCommand("npm", ["run", "build"], UPDATE_TIMEOUT, this.installRoot);
           } catch {
             // Rollback failed
@@ -643,7 +669,7 @@ export class AutoUpdater {
 
   async requestImmediateCheck(): Promise<UpdateCheckResult> {
     const result = await this.checkForUpdate();
-    if (result.available && result.latestVersion) {
+    if (!result.error && result.available && result.latestVersion) {
       this.pendingVersion = result.latestVersion;
       if (this.config.notify && this.notifyFn) {
         this.notifyFn(
@@ -657,6 +683,12 @@ export class AutoUpdater {
 
   private async runUpdateCheck(): Promise<void> {
     const result = await this.checkForUpdate();
+    if (result.error) {
+      if (this.config.notify && this.notifyFn) {
+        this.notifyFn(`Auto-update check failed: ${result.error}`);
+      }
+      return;
+    }
     if (!result.available || !result.latestVersion) return;
 
     this.pendingVersion = result.latestVersion;
@@ -686,6 +718,10 @@ export class AutoUpdater {
 
       try {
         const success = await this.performUpdate();
+        if (!success) {
+          this.startIdleMonitoring();
+          return;
+        }
         if (success && this.config.notify && this.notifyFn) {
           if (this.config.autoRestart && this.isDaemonProcess()) {
             this.notifyFn(

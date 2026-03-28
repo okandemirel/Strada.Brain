@@ -224,6 +224,35 @@ describe("AutoUpdater", () => {
     });
   });
 
+  describe("checkForUpdate", () => {
+    it("surfaces git update-check failures instead of pretending the install is current", async () => {
+      const dir = makeTmpDir();
+      fs.mkdirSync(path.join(dir, ".git"));
+
+      const { AutoUpdater } = await import("../../core/auto-updater.js");
+      const updater = new AutoUpdater(
+        mockConfig(),
+        mockRegistry(),
+        mockExecutor(),
+        {
+          installRoot: dir,
+          commandRunner: vi.fn(async (cmd: string, args: string[]) => {
+            if (cmd === "git" && args[0] === "fetch") {
+              throw new Error("fetch failed");
+            }
+            return "";
+          }),
+        },
+      );
+
+      await expect(updater.checkForUpdate()).resolves.toMatchObject({
+        available: false,
+        latestVersion: null,
+        error: "fetch failed",
+      });
+    });
+  });
+
   describe("performUpdate", () => {
     it("refreshes installed launcher bindings after a successful git update", async () => {
       const dir = makeTmpDir();
@@ -325,9 +354,42 @@ describe("AutoUpdater", () => {
       expect(commandRunner.mock.calls[3]![3]).toBe(path.join(dir, "web-portal"));
     });
 
+    it("restores web-portal dependencies when rollback follows a build failure", async () => {
+      const dir = makeTmpDir();
+      fs.mkdirSync(path.join(dir, ".git"));
+      fs.mkdirSync(path.join(dir, "web-portal"), { recursive: true });
+      fs.writeFileSync(path.join(dir, "web-portal", "package.json"), "{}");
+
+      const commandRunner = vi.fn(async (cmd: string, args: string[], _timeout?: number, cwd?: string) => {
+        if (cmd === "git" && args[0] === "rev-parse") return "abc123\n";
+        if (cmd === "npm" && args[0] === "run" && args[1] === "build") {
+          throw new Error("build failed");
+        }
+        return cwd ?? "";
+      });
+
+      const { AutoUpdater } = await import("../../core/auto-updater.js");
+      const updater = new AutoUpdater(
+        mockConfig(),
+        mockRegistry(),
+        mockExecutor(),
+        { installRoot: dir, commandRunner, sourceLauncherRefresher: vi.fn(async () => {}) },
+      );
+
+      await expect(updater.performUpdate()).rejects.toThrow("build failed");
+      const portalInstalls = commandRunner.mock.calls.filter(([cmd, args, , cwd]) => (
+        cmd === "npm"
+        && (args as string[])[0] === "install"
+        && cwd === path.join(dir, "web-portal")
+      ));
+      expect(portalInstalls).toHaveLength(2);
+    });
+
     it("runs health check after successful git update and rolls back on failure", async () => {
       const dir = makeTmpDir();
       fs.mkdirSync(path.join(dir, ".git"));
+      fs.mkdirSync(path.join(dir, "web-portal"), { recursive: true });
+      fs.writeFileSync(path.join(dir, "web-portal", "package.json"), "{}");
 
       const commandRunner = vi.fn(async (cmd: string, args: string[]) => {
         if (cmd === "git" && args[0] === "rev-parse") return "abc123\n";
@@ -360,6 +422,12 @@ describe("AutoUpdater", () => {
       // Verify rollback commands were called
       const cmds = commandRunner.mock.calls.map(([cmd, args]) => `${cmd} ${(args as string[]).join(" ")}`);
       expect(cmds).toContain("git reset --hard abc123");
+      const portalInstalls = commandRunner.mock.calls.filter(([cmd, args, , cwd]) => (
+        cmd === "npm"
+        && (args as string[])[0] === "install"
+        && cwd === path.join(dir, "web-portal")
+      ));
+      expect(portalInstalls).toHaveLength(2);
     });
 
     it("skips health check when healthChecker is not provided and dist/index.js is absent", async () => {
@@ -429,6 +497,7 @@ describe("AutoUpdater", () => {
         },
       );
 
+      await expect(updater.getPostUpdateNotice()).resolves.toContain("still running");
       await expect(updater.getPostUpdateNotice()).resolves.toContain(otherDir);
     });
 
@@ -537,6 +606,7 @@ describe("AutoUpdater", () => {
 
       const result = await updater.requestImmediateCheck();
       expect(result.available).toBe(true);
+      expect(result.error).toBeNull();
       expect(notifyFn).toHaveBeenCalledWith(
         expect.stringContaining("triggered by webhook"),
       );
@@ -567,8 +637,43 @@ describe("AutoUpdater", () => {
 
       const result = await updater.requestImmediateCheck();
       expect(result.available).toBe(false);
+      expect(result.error).toBeNull();
       expect(notifyFn).not.toHaveBeenCalled();
       updater.shutdown();
+    });
+
+    it("keeps a pending update alive when idle auto-update hits lock contention", async () => {
+      vi.useFakeTimers();
+      try {
+        const dir = makeTmpDir();
+        fs.mkdirSync(path.join(dir, ".git"));
+
+        const commandRunner = vi.fn(async (cmd: string, args: string[]) => {
+          if (cmd === "git" && args[0] === "fetch") return "";
+          if (cmd === "git" && args[0] === "rev-parse" && args[1] === "HEAD") return "aaa\n";
+          if (cmd === "git" && args[0] === "rev-parse" && args[1] === "origin/main") return "bbb\n";
+          if (cmd === "git" && args[0] === "rev-list") return "3\n";
+          return "";
+        });
+
+        const { AutoUpdater } = await import("../../core/auto-updater.js");
+        const updater = new AutoUpdater(
+          mockConfig(),
+          mockRegistry(),
+          mockExecutor(),
+          { installRoot: dir, commandRunner },
+        );
+        vi.spyOn(updater, "performUpdate").mockResolvedValue(false);
+
+        await updater.requestImmediateCheck();
+        await vi.advanceTimersByTimeAsync(30_000);
+
+        expect((updater as { pendingVersion: string | null }).pendingVersion).toBe("bbb\n".trim());
+        expect((updater as { idleCheckHandle: ReturnType<typeof setInterval> | null }).idleCheckHandle).not.toBeNull();
+        updater.shutdown();
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 });

@@ -201,6 +201,11 @@ program
       runtime.cwd !== null && path.resolve(runtime.cwd) !== path.resolve(updater.getInstallRoot())
     )) ?? null;
 
+    if (result.error) {
+      console.error(`❌ Could not check for updates: ${result.error}`);
+      process.exit(1);
+    }
+
     if (!result.available) {
       console.log(`✅ Strada Brain is up to date (v${result.currentVersion}) at ${updater.getInstallRoot()}.`);
       if (foreignRuntime) {
@@ -215,7 +220,11 @@ program
 
     console.log("Updating...");
     try {
-      await updater.performUpdate();
+      const updated = await updater.performUpdate();
+      if (!updated) {
+        console.error("⚠️ Another Strada update is already running for this install. Try again after it finishes.");
+        process.exit(1);
+      }
       console.log(`✅ Updated successfully at ${updater.getInstallRoot()}.`);
       const runtimeNotice = await updater.getPostUpdateNotice();
       if (runtimeNotice) {
@@ -301,8 +310,13 @@ program
 
     try {
       const result = await updater.checkForUpdate();
-      if (result.available) console.log(`Update available: v${result.latestVersion}`);
-      else console.log("Up to date.");
+      if (result.error) {
+        console.log(`Could not check for updates: ${result.error}`);
+      } else if (result.available) {
+        console.log(`Update available: v${result.latestVersion}`);
+      } else {
+        console.log("Up to date.");
+      }
     } catch {
       console.log("Could not check for updates.");
     }
