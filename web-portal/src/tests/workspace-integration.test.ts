@@ -78,7 +78,7 @@ describe('workspace integration — auto-switch flow', () => {
 
     const canvas = useCanvasStore.getState()
     expect(canvas.pendingUpdates).toEqual([
-      { id: 'r2', props: { width: 120, status: 'active' }, source: 'agent' },
+      { id: 'r2', props: { source: 'agent', status: 'active', width: 120 }, source: 'agent' },
     ])
   })
 
