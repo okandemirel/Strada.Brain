@@ -943,6 +943,8 @@ export function shouldRunFromSource(args) {
     "cli",
     "setup",
     "doctor",
+    "update",
+    "version-info",
     "--help",
     "-h",
     "--version",

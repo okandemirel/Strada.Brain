@@ -25,6 +25,18 @@ export interface UpdateCheckResult {
   latestVersion: string | null;
 }
 
+export interface RuntimeProcessInfo {
+  pid: number;
+  cwd: string | null;
+  command: string;
+}
+
+export interface LocalRuntimeInspection {
+  installRoot: string;
+  runtimes: RuntimeProcessInfo[];
+  matchingRuntime: RuntimeProcessInfo | null;
+}
+
 interface BackgroundExecutorLike {
   hasRunningTasks(): boolean;
 }
@@ -46,6 +58,7 @@ interface AutoUpdaterOptions {
   sourceLauncherRefresher?: () => Promise<void>;
   isDaemonProcess?: () => boolean;
   healthChecker?: () => Promise<void>;
+  runtimeInspector?: () => Promise<RuntimeProcessInfo[]>;
 }
 
 export class AutoUpdater {
@@ -63,6 +76,7 @@ export class AutoUpdater {
   private readonly sourceLauncherRefresher?: () => Promise<void>;
   private readonly isDaemonProcess: () => boolean;
   private readonly healthChecker?: () => Promise<void>;
+  private readonly runtimeInspector?: () => Promise<RuntimeProcessInfo[]>;
   private installMethod: InstallMethod | null = null;
   private intervalHandle: ReturnType<typeof setInterval> | null = null;
   private pendingVersion: string | null = null;
@@ -84,6 +98,7 @@ export class AutoUpdater {
     this.sourceLauncherRefresher = options.sourceLauncherRefresher;
     this.isDaemonProcess = options.isDaemonProcess ?? (() => process.env["STRADA_DAEMON"] === "1");
     this.healthChecker = options.healthChecker;
+    this.runtimeInspector = options.runtimeInspector;
   }
 
   static resolveInstallRoot(moduleUrl: string = import.meta.url): string {
@@ -93,6 +108,10 @@ export class AutoUpdater {
 
   getChannel(): "stable" | "latest" {
     return this.config.channel;
+  }
+
+  getInstallRoot(): string {
+    return this.installRoot;
   }
 
   setNotifyFn(fn: (msg: string) => void): void {
@@ -155,6 +174,39 @@ export class AutoUpdater {
     if (rMajor !== cMajor) return (rMajor ?? 0) > (cMajor ?? 0);
     if (rMinor !== cMinor) return (rMinor ?? 0) > (cMinor ?? 0);
     return (rPatch ?? 0) > (cPatch ?? 0);
+  }
+
+  static parsePsRuntimeProcesses(output: string): Array<{ pid: number; command: string }> {
+    return output
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0)
+      .map((line) => {
+        const match = line.match(/^(\d+)\s+(.*)$/);
+        if (!match) {
+          return null;
+        }
+        const pid = Number.parseInt(match[1] ?? "", 10);
+        const command = match[2]?.trim() ?? "";
+        if (!Number.isFinite(pid) || command.length === 0) {
+          return null;
+        }
+        return { pid, command };
+      })
+      .filter((entry): entry is { pid: number; command: string } => entry !== null)
+      .filter((entry) => /(?:src[\\/]+index\.ts|dist[\\/]+index\.js)\s+start(?:\s|$)/.test(entry.command));
+  }
+
+  static parseLsofCwd(output: string): string | null {
+    for (const line of output.split(/\r?\n/)) {
+      if (line.startsWith("n")) {
+        const cwd = line.slice(1).trim();
+        if (cwd.length > 0) {
+          return cwd;
+        }
+      }
+    }
+    return null;
   }
 
   getCurrentVersion(): string {
@@ -232,6 +284,115 @@ export class AutoUpdater {
       30_000,
       this.installRoot,
     );
+  }
+
+  private isStradaInstallRoot(candidateRoot: string): boolean {
+    try {
+      const pkgPath = path.join(candidateRoot, "package.json");
+      if (!fs.existsSync(pkgPath)) {
+        return false;
+      }
+      const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8")) as { name?: string };
+      return pkg.name === "strada-brain";
+    } catch {
+      return false;
+    }
+  }
+
+  private async resolveProcessCwd(pid: number): Promise<string | null> {
+    try {
+      const output = await this.runCommand("lsof", ["-a", "-p", String(pid), "-d", "cwd", "-Fn"], 5_000);
+      const cwd = AutoUpdater.parseLsofCwd(output);
+      if (cwd) {
+        return cwd;
+      }
+    } catch {
+      // Fall through to pwdx when available.
+    }
+
+    if (process.platform === "linux") {
+      try {
+        const output = await this.runCommand("pwdx", [String(pid)], 5_000);
+        const match = output.match(/^\s*\d+:\s+(.*)$/m);
+        const cwd = match?.[1]?.trim();
+        return cwd && cwd.length > 0 ? cwd : null;
+      } catch {
+        // Best-effort only.
+      }
+    }
+
+    return null;
+  }
+
+  private async detectRunningLocalRuntimes(): Promise<RuntimeProcessInfo[]> {
+    if (this.runtimeInspector) {
+      return this.runtimeInspector();
+    }
+
+    if (process.platform === "win32") {
+      return [];
+    }
+
+    try {
+      const output = await this.runCommand("ps", ["-Ao", "pid=,command="], 5_000);
+      const candidates = AutoUpdater.parsePsRuntimeProcesses(output)
+        .filter((entry) => entry.pid !== process.pid);
+      const runtimes: RuntimeProcessInfo[] = [];
+
+      for (const candidate of candidates) {
+        const cwd = await this.resolveProcessCwd(candidate.pid);
+        if (!cwd || !this.isStradaInstallRoot(cwd)) {
+          continue;
+        }
+        runtimes.push({ ...candidate, cwd });
+      }
+
+      return runtimes;
+    } catch {
+      return [];
+    }
+  }
+
+  async inspectLocalRuntimes(): Promise<LocalRuntimeInspection> {
+    const installRoot = path.resolve(this.installRoot);
+    const runtimes = await this.detectRunningLocalRuntimes();
+    const matchingRuntime = runtimes.find((runtime) => (
+      runtime.cwd !== null && path.resolve(runtime.cwd) === installRoot
+    )) ?? null;
+
+    return {
+      installRoot,
+      runtimes,
+      matchingRuntime,
+    };
+  }
+
+  private static isSameRuntimeRoot(runtime: RuntimeProcessInfo, installRoot: string): boolean {
+    return runtime.cwd !== null && path.resolve(runtime.cwd) === installRoot;
+  }
+
+  async getPostUpdateNotice(): Promise<string | null> {
+    const inspection = await this.inspectLocalRuntimes();
+    if (inspection.runtimes.length === 0) {
+      return null;
+    }
+
+    const foreignRuntime = inspection.runtimes.find((runtime) => (
+      !AutoUpdater.isSameRuntimeRoot(runtime, inspection.installRoot)
+    )) ?? null;
+
+    if (inspection.matchingRuntime) {
+      const primaryNotice = `A Strada runtime from this checkout is still running (PID ${inspection.matchingRuntime.pid}). Restart it to load the updated code.`;
+      if (!foreignRuntime) {
+        return primaryNotice;
+      }
+      const foreignRoot = foreignRuntime.cwd ?? "an unknown working directory";
+      return `${primaryNotice} Another local runtime is active from ${foreignRoot} (PID ${foreignRuntime.pid}); that checkout was not updated by this command.`;
+    }
+
+    const activeRuntime = foreignRuntime ?? inspection.runtimes[0]!;
+    const runtimeRoot = activeRuntime.cwd ?? "an unknown working directory";
+    return `Detected a running Strada runtime from ${runtimeRoot} (PID ${activeRuntime.pid}). This command updated ${inspection.installRoot}, not that checkout. Restart or update the active runtime separately.`;
   }
 
   private async refreshSourceLauncherBindings(): Promise<void> {

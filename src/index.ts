@@ -196,9 +196,17 @@ program
 
     const updater = new AutoUpdater(autoUpdateConfig, new ChannelActivityRegistry(), { hasRunningTasks: () => false });
     const result = await updater.checkForUpdate();
+    const runtimeInspection = await updater.inspectLocalRuntimes();
+    const foreignRuntime = runtimeInspection.runtimes.find((runtime) => (
+      runtime.cwd !== null && path.resolve(runtime.cwd) !== path.resolve(updater.getInstallRoot())
+    )) ?? null;
 
     if (!result.available) {
-      console.log(`✅ Strada Brain is up to date (v${result.currentVersion}).`);
+      console.log(`✅ Strada Brain is up to date (v${result.currentVersion}) at ${updater.getInstallRoot()}.`);
+      if (foreignRuntime) {
+        const runtimeRoot = foreignRuntime.cwd ?? "an unknown working directory";
+        console.log(`⚠️ Active local runtime is from ${runtimeRoot} (PID ${foreignRuntime.pid}). This install is current, but that checkout was not updated by this command.`);
+      }
       return;
     }
 
@@ -208,7 +216,13 @@ program
     console.log("Updating...");
     try {
       await updater.performUpdate();
-      console.log("✅ Updated successfully! Please restart with `strada start`.");
+      console.log(`✅ Updated successfully at ${updater.getInstallRoot()}.`);
+      const runtimeNotice = await updater.getPostUpdateNotice();
+      if (runtimeNotice) {
+        console.log(`⚠️ ${runtimeNotice}`);
+      } else {
+        console.log("Please restart with `strada start`.");
+      }
     } catch (err) {
       console.error(`❌ Update failed: ${(err as Error).message}`);
       process.exit(1);
@@ -263,7 +277,27 @@ program
 
     console.log(`Strada Brain v${currentVersion}`);
     console.log(`Install method: ${method}`);
+    console.log(`Install root: ${updater.getInstallRoot()}`);
     console.log(`Update channel: ${autoUpdateConfig.autoUpdate.channel}`);
+
+    const runtimeInspection = await updater.inspectLocalRuntimes();
+    const foreignRuntime = runtimeInspection.runtimes.find((runtime) => (
+      runtime.cwd !== null && path.resolve(runtime.cwd) !== path.resolve(updater.getInstallRoot())
+    )) ?? null;
+
+    if (runtimeInspection.matchingRuntime) {
+      console.log(`Active local runtime: PID ${runtimeInspection.matchingRuntime.pid} from this install root.`);
+    } else if (runtimeInspection.runtimes.length > 0) {
+      const activeRuntime = runtimeInspection.runtimes[0]!;
+      const runtimeRoot = activeRuntime.cwd ?? "unknown working directory";
+      console.log(`Active local runtime: PID ${activeRuntime.pid} from ${runtimeRoot}.`);
+    } else {
+      console.log("Active local runtime: none detected.");
+    }
+    if (foreignRuntime && (!runtimeInspection.matchingRuntime || foreignRuntime.pid !== runtimeInspection.matchingRuntime.pid)) {
+      const runtimeRoot = foreignRuntime.cwd ?? "unknown working directory";
+      console.log(`Other local runtime: PID ${foreignRuntime.pid} from ${runtimeRoot}.`);
+    }
 
     try {
       const result = await updater.checkForUpdate();

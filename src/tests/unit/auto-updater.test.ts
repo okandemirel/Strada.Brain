@@ -84,6 +84,38 @@ describe("AutoUpdater", () => {
     });
   });
 
+  describe("runtime inspection helpers", () => {
+    it("parses Strada runtime candidates from ps output", async () => {
+      const { AutoUpdater } = await import("../../core/auto-updater.js");
+      const candidates = AutoUpdater.parsePsRuntimeProcesses([
+        "101 /opt/homebrew/bin/node --import tsx /tmp/Strada.Brain/src/index.ts start",
+        "202 /opt/homebrew/bin/node /tmp/Strada.Brain/dist/index.js start --channel web",
+        "303 /opt/homebrew/bin/node /tmp/other-app/src/index.ts start",
+      ].join("\n"));
+
+      expect(candidates).toEqual([
+        {
+          pid: 101,
+          command: "/opt/homebrew/bin/node --import tsx /tmp/Strada.Brain/src/index.ts start",
+        },
+        {
+          pid: 202,
+          command: "/opt/homebrew/bin/node /tmp/Strada.Brain/dist/index.js start --channel web",
+        },
+        {
+          pid: 303,
+          command: "/opt/homebrew/bin/node /tmp/other-app/src/index.ts start",
+        },
+      ]);
+    });
+
+    it("parses cwd from lsof output", async () => {
+      const { AutoUpdater } = await import("../../core/auto-updater.js");
+      expect(AutoUpdater.parseLsofCwd("p1234\nfcwd\nn/Users/test/Strada.Brain\n")).toBe("/Users/test/Strada.Brain");
+      expect(AutoUpdater.parseLsofCwd("p1234\nfcwd\n")).toBeNull();
+    });
+  });
+
   describe("isNewerVersion", () => {
     it("should correctly compare semver versions", async () => {
       const { AutoUpdater } = await import("../../core/auto-updater.js");
@@ -351,6 +383,96 @@ describe("AutoUpdater", () => {
       // No health check command should be in the list (no dist/index.js)
       const cmds = commandRunner.mock.calls.map(([cmd, args]) => `${cmd} ${(args as string[]).join(" ")}`);
       expect(cmds).not.toContainEqual(expect.stringContaining("--version"));
+    });
+  });
+
+  describe("runtime notices", () => {
+    it("reports when the currently updated checkout still has a running runtime", async () => {
+      const dir = makeTmpDir();
+      fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name: "strada-brain", version: "1.0.0" }));
+
+      const { AutoUpdater } = await import("../../core/auto-updater.js");
+      const updater = new AutoUpdater(
+        mockConfig(),
+        mockRegistry(),
+        mockExecutor(),
+        {
+          installRoot: dir,
+          runtimeInspector: async () => [
+            { pid: 4242, cwd: dir, command: "node src/index.ts start" },
+          ],
+        },
+      );
+
+      await expect(updater.getPostUpdateNotice()).resolves.toContain("still running");
+      const inspection = await updater.inspectLocalRuntimes();
+      expect(inspection.matchingRuntime?.pid).toBe(4242);
+    });
+
+    it("reports both the matching and foreign runtimes when both are active", async () => {
+      const dir = makeTmpDir();
+      const otherDir = makeTmpDir();
+      fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name: "strada-brain", version: "1.0.0" }));
+      fs.writeFileSync(path.join(otherDir, "package.json"), JSON.stringify({ name: "strada-brain", version: "1.0.0" }));
+
+      const { AutoUpdater } = await import("../../core/auto-updater.js");
+      const updater = new AutoUpdater(
+        mockConfig(),
+        mockRegistry(),
+        mockExecutor(),
+        {
+          installRoot: dir,
+          runtimeInspector: async () => [
+            { pid: 4242, cwd: dir, command: "node src/index.ts start" },
+            { pid: 5252, cwd: otherDir, command: "node src/index.ts start" },
+          ],
+        },
+      );
+
+      await expect(updater.getPostUpdateNotice()).resolves.toContain(otherDir);
+    });
+
+    it("reports when a different checkout owns the active runtime", async () => {
+      const dir = makeTmpDir();
+      const otherDir = makeTmpDir();
+      fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name: "strada-brain", version: "1.0.0" }));
+      fs.writeFileSync(path.join(otherDir, "package.json"), JSON.stringify({ name: "strada-brain", version: "1.0.0" }));
+
+      const { AutoUpdater } = await import("../../core/auto-updater.js");
+      const updater = new AutoUpdater(
+        mockConfig(),
+        mockRegistry(),
+        mockExecutor(),
+        {
+          installRoot: dir,
+          runtimeInspector: async () => [
+            { pid: 5252, cwd: otherDir, command: "node src/index.ts start" },
+          ],
+        },
+      );
+
+      await expect(updater.getPostUpdateNotice()).resolves.toContain(otherDir);
+      const inspection = await updater.inspectLocalRuntimes();
+      expect(inspection.matchingRuntime).toBeNull();
+      expect(inspection.runtimes).toHaveLength(1);
+    });
+
+    it("returns no notice when no active runtime is detected", async () => {
+      const dir = makeTmpDir();
+      fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name: "strada-brain", version: "1.0.0" }));
+
+      const { AutoUpdater } = await import("../../core/auto-updater.js");
+      const updater = new AutoUpdater(
+        mockConfig(),
+        mockRegistry(),
+        mockExecutor(),
+        {
+          installRoot: dir,
+          runtimeInspector: async () => [],
+        },
+      );
+
+      await expect(updater.getPostUpdateNotice()).resolves.toBeNull();
     });
   });
 
