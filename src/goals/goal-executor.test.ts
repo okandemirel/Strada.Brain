@@ -248,6 +248,25 @@ describe("GoalExecutor", () => {
     expect(result.tree.nodes.get(aId)?.retryCount).toBe(2);
   });
 
+  it("stores a useful fallback error when a node fails with an empty message", async () => {
+    const blankExecutor: NodeExecutor = async () => {
+      throw new Error("");
+    };
+
+    const executor = new GoalExecutor({ ...defaultConfig, maxRetries: 0 });
+    const rootId = generateGoalNodeId();
+    const aId = generateGoalNodeId();
+
+    const root = makeNode({ id: rootId, task: "Root", status: "completed" });
+    const a = makeNode({ id: aId, parentId: rootId, depth: 1, task: "A" });
+    const tree = makeTree([root, a], rootId);
+
+    const result = await executor.executeTree(tree, blankExecutor, new AbortController().signal);
+
+    expect(result.tree.nodes.get(aId)?.status).toBe("failed");
+    expect(result.tree.nodes.get(aId)?.error).toBe("Unknown goal node failure");
+  });
+
   it("aborts when failure budget exceeded and no callback provided", async () => {
     const executor = new GoalExecutor({ ...defaultConfig, maxRetries: 0, maxFailures: 1 });
     const rootId = generateGoalNodeId();

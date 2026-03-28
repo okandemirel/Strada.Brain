@@ -15,6 +15,7 @@ import { useTheme } from '../../hooks/useTheme'
 import { customShapeUtils } from './custom-shapes'
 import { CustomToolbar, CustomContextMenu, TOOLBAR_SHAPES, setExportJsonFn } from './canvas-overrides'
 import CanvasWelcome from './canvas-welcome'
+import { normalizeCanvasIncomingShape } from './canvas-shape-normalizer'
 import { applyTemplate, type TemplateId } from './canvas-templates'
 
 const TldrawEditor = lazy(() =>
@@ -141,7 +142,14 @@ function syncPendingCanvasState(
   pendingUpdates: CanvasShapeUpdate[],
   pendingRemovals: string[],
 ): PendingCanvasSyncResult {
-  if (pendingShapes.length === 0 && pendingUpdates.length === 0 && pendingRemovals.length === 0) {
+  const normalizedPendingShapes = pendingShapes
+    .map((shape) => normalizeCanvasIncomingShape(shape))
+    .filter((shape): shape is CanvasShape => Boolean(shape))
+  const normalizedPendingUpdates = pendingUpdates
+    .map((shape) => normalizeCanvasIncomingShape(shape))
+    .filter((shape): shape is CanvasShapeUpdate => Boolean(shape))
+
+  if (normalizedPendingShapes.length === 0 && normalizedPendingUpdates.length === 0 && pendingRemovals.length === 0) {
     return { agentAddCount: 0, shouldMarkAgentSync: false }
   }
 
@@ -149,15 +157,15 @@ function syncPendingCanvasState(
   const CARD_WIDTH = 200
   const bounds = editor.getViewportPageBounds()
   const shapesToCreate = [
-    ...pendingShapes.filter((shape) => Boolean(shape.type) && !editor.getShape(shape.id as TLShapeId)),
-    ...pendingUpdates.filter((shape) => Boolean(shape.type) && !editor.getShape(shape.id as TLShapeId)),
+    ...normalizedPendingShapes.filter((shape) => Boolean(shape.type) && !editor.getShape(shape.id as TLShapeId)),
+    ...normalizedPendingUpdates.filter((shape) => Boolean(shape.type) && !editor.getShape(shape.id as TLShapeId)),
   ]
   let nextX = bounds.center.x - ((Math.max(shapesToCreate.length, 1) - 1) * (CARD_WIDTH + GAP)) / 2
   const baseY = bounds.center.y - 50
   let agentAddCount = 0
   const shouldMarkAgentSync =
-    pendingShapes.some((shape) => shape.source === 'agent') ||
-    pendingUpdates.some((shape) => shape.source === 'agent') ||
+    normalizedPendingShapes.some((shape) => shape.source === 'agent') ||
+    normalizedPendingUpdates.some((shape) => shape.source === 'agent') ||
     pendingRemovals.length > 0
 
   editor.run(() => {
@@ -166,34 +174,42 @@ function syncPendingCanvasState(
       editor.deleteShapes(removableIds as TLShapeId[])
     }
 
-    for (const pending of pendingShapes) {
+    for (const pending of normalizedPendingShapes) {
       if (updateExistingShape(editor, pending.id, pending.props, pending.position)) continue
       if (!pending.type) continue
 
-      editor.createShape({
-        id: pending.id as TLShapeId,
-        type: pending.type,
-        x: pending.position?.x ?? nextX,
-        y: pending.position?.y ?? baseY,
-        props: { ...pending.props, ...(pending.source ? { source: pending.source } : {}) },
-      })
+      try {
+        editor.createShape({
+          id: pending.id as TLShapeId,
+          type: pending.type,
+          x: pending.position?.x ?? nextX,
+          y: pending.position?.y ?? baseY,
+          props: { ...pending.props, ...(pending.source ? { source: pending.source } : {}) },
+        })
+      } catch {
+        continue
+      }
       nextX += CARD_WIDTH + GAP
       if (pending.source === 'agent') {
         agentAddCount += 1
       }
     }
 
-    for (const pending of pendingUpdates) {
+    for (const pending of normalizedPendingUpdates) {
       if (updateExistingShape(editor, pending.id, pending.props, pending.position)) continue
       if (!pending.type) continue
 
-      editor.createShape({
-        id: pending.id as TLShapeId,
-        type: pending.type,
-        x: pending.position?.x ?? nextX,
-        y: pending.position?.y ?? baseY,
-        props: { ...pending.props, ...(pending.source ? { source: pending.source } : {}) },
-      })
+      try {
+        editor.createShape({
+          id: pending.id as TLShapeId,
+          type: pending.type,
+          x: pending.position?.x ?? nextX,
+          y: pending.position?.y ?? baseY,
+          props: { ...pending.props, ...(pending.source ? { source: pending.source } : {}) },
+        })
+      } catch {
+        continue
+      }
       nextX += CARD_WIDTH + GAP
     }
   })

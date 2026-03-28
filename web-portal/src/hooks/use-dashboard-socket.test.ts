@@ -135,7 +135,7 @@ describe('dispatchWorkspaceMessage', () => {
     })
 
     expect(useCanvasStore.getState().pendingUpdates).toEqual([
-      { id: 'shape-2', props: { width: 220 }, source: 'agent' },
+      { id: 'shape-2', props: { width: 220, source: 'agent' }, source: 'agent' },
     ])
   })
 
@@ -189,7 +189,19 @@ describe('dispatchWorkspaceMessage', () => {
 
     expect(useWorkspaceStore.getState().mode).toBe('canvas')
     expect(useCanvasStore.getState().pendingUpdates).toEqual([
-      { id: 'shape-4', type: 'diagram-node', props: { label: 'Updated' }, source: 'agent' },
+      {
+        id: 'shape-4',
+        type: 'diagram-node',
+        props: {
+          w: 220,
+          h: 120,
+          label: 'Updated',
+          nodeType: 'diagram',
+          status: 'active',
+          source: 'agent',
+        },
+        source: 'agent',
+      },
     ])
   })
 
@@ -224,7 +236,7 @@ describe('dispatchWorkspaceMessage', () => {
 
     expect(useWorkspaceStore.getState().mode).toBe('chat')
     expect(useCanvasStore.getState().pendingUpdates).toEqual([
-      { id: 'shape-5', props: { label: 'Background sync' }, source: 'agent' },
+      { id: 'shape-5', props: { label: 'Background sync', source: 'agent' }, source: 'agent' },
     ])
   })
 

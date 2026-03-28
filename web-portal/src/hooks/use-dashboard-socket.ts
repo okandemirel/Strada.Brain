@@ -4,6 +4,7 @@ import { useWorkspaceStore, type WorkspaceMode } from '../stores/workspace-store
 import { useCanvasStore, type CanvasLayout, type CanvasViewport } from '../stores/canvas-store'
 import { useCodeStore } from '../stores/code-store'
 import { useSupervisorStore } from '../stores/supervisor-store'
+import { normalizeCanvasIncomingShapes } from '../components/canvas/canvas-shape-normalizer'
 import type { MonitorTask, ActivityEntry, DagState } from '../stores/monitor-store'
 
 // ---- Workspace message type definitions ----
@@ -163,22 +164,25 @@ export function dispatchWorkspaceMessage(data: { type: string; [key: string]: un
     }
 
     case 'canvas:shapes_add': {
-      useCanvasStore.getState().addPendingShapes(
+      const shapes = normalizeCanvasIncomingShapes(
         ((payload.shapes as Array<{ type?: string; id: string; props: Record<string, unknown>; position?: { x: number; y: number } }>) || []).map((shape) => ({
           ...shape,
           source: 'agent' as const,
         })),
       )
+      useCanvasStore.getState().addPendingShapes(shapes)
       suggestCanvasMode()
       break
     }
 
     case 'canvas:shapes_update':
       useCanvasStore.getState().updatePendingShapes(
-        ((payload.shapes as Array<{ type?: string; id: string; props: Record<string, unknown>; position?: { x: number; y: number } }>) || []).map((shape) => ({
-          ...shape,
-          source: 'agent' as const,
-        })),
+        normalizeCanvasIncomingShapes(
+          ((payload.shapes as Array<{ type?: string; id: string; props: Record<string, unknown>; position?: { x: number; y: number } }>) || []).map((shape) => ({
+            ...shape,
+            source: 'agent' as const,
+          })),
+        ),
       )
       suggestCanvasMode()
       break
@@ -199,10 +203,12 @@ export function dispatchWorkspaceMessage(data: { type: string; [key: string]: un
       break
 
     case 'canvas:agent_draw': {
-      const shapes = ((payload.shapes as Array<{ type?: string; id: string; props: Record<string, unknown>; position?: { x: number; y: number } }>) || []).map((shape) => ({
-        ...shape,
-        source: 'agent' as const,
-      }))
+      const shapes = normalizeCanvasIncomingShapes(
+        ((payload.shapes as Array<{ type?: string; id: string; props: Record<string, unknown>; position?: { x: number; y: number } }>) || []).map((shape) => ({
+          ...shape,
+          source: 'agent' as const,
+        })),
+      )
       const action = payload.action as string | undefined
       const autoSwitch = payload.autoSwitch !== false
 

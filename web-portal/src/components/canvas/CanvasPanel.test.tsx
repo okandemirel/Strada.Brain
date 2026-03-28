@@ -558,7 +558,16 @@ describe('CanvasPanel', () => {
     })
 
     expect(mockCreateShape).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'code-block', props: { code: 'hello' } }),
+      expect.objectContaining({
+        type: 'code-block',
+        props: expect.objectContaining({
+          code: 'hello',
+          title: 'Snippet',
+          language: 'text',
+          w: 420,
+          h: 260,
+        }),
+      }),
     )
     expect(useCanvasStore.getState().pendingShapes).toEqual([])
   })
@@ -587,7 +596,11 @@ describe('CanvasPanel', () => {
     })
 
     expect(mockUpdateShape).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'cb1', type: 'code-block', props: { code: 'after' } }),
+      expect.objectContaining({
+        id: 'cb1',
+        type: 'code-block',
+        props: expect.objectContaining({ code: 'after', source: 'agent' }),
+      }),
     )
     expect(useCanvasStore.getState().pendingUpdates).toEqual([])
   })

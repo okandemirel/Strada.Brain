@@ -5702,9 +5702,15 @@ export class Orchestrator {
 
       if (/```(?:mermaid|plantuml)|@startuml/i.test(output)) {
         shapes.push({
-          type: "diagram-node",
+          type: "code-block",
           id: `diagram-${Date.now()}`,
-          props: { content: output, language: output.includes("mermaid") ? "mermaid" : "plantuml" },
+          props: {
+            w: 420,
+            h: 260,
+            code: output,
+            language: output.includes("mermaid") ? "mermaid" : "plantuml",
+            title: "Generated diagram",
+          },
         });
       }
 
@@ -5712,7 +5718,12 @@ export class Orchestrator {
         shapes.push({
           type: "diff-block",
           id: `diff-${Date.now()}`,
-          props: { content: output },
+          props: {
+            w: 420,
+            h: 260,
+            diff: output,
+            filePath: "Generated diff",
+          },
         });
       }
 

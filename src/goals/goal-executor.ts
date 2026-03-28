@@ -295,7 +295,13 @@ export class GoalExecutor {
           }
 
           // Final failure after all retries exhausted
-          const error = err instanceof Error ? err.message : String(err);
+          const error = err instanceof Error
+            ? (
+              err.message.trim()
+              || (err.name.trim() && err.name.trim() !== "Error" ? err.name.trim() : "")
+              || "Unknown goal node failure"
+            )
+            : String(err).trim() || "Unknown goal node failure";
           updateNode(nodeId, {
             status: "failed" as const,
             error,
