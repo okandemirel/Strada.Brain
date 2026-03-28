@@ -34,12 +34,11 @@ import InterventionToolbar from './InterventionToolbar'
 
 function makeTask(overrides: Partial<MonitorTask> & { id: string }): MonitorTask {
   return {
-    id: overrides.id,
-    nodeId: overrides.nodeId ?? overrides.id,
-    rootId: overrides.rootId ?? 'root-1',
-    title: overrides.title ?? `Task ${overrides.id}`,
-    status: overrides.status ?? 'pending',
-    reviewStatus: overrides.reviewStatus ?? 'none',
+    nodeId: overrides.id,
+    rootId: 'root-1',
+    title: `Task ${overrides.id}`,
+    status: 'pending' as const,
+    reviewStatus: 'none' as const,
     ...overrides,
   }
 }

@@ -187,7 +187,9 @@ export function clearPersistedCanvasDraft(sessionId: string): void {
   window.localStorage.removeItem(getCanvasDraftStorageKey(sessionId))
 }
 
-function withPersistence(nextState: CanvasState): CanvasState {
+type CanvasDataState = Pick<CanvasState, 'sessionId' | 'isDirty'> & PersistedCanvasState
+
+function withPersistence<T extends CanvasDataState>(nextState: T): T {
   persistCanvasState(nextState)
   return nextState
 }
