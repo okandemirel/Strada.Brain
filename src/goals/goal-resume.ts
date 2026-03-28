@@ -47,6 +47,83 @@ export function prepareTreeForResume(tree: GoalTree): GoalTree {
   return { ...tree, nodes: mutableNodes };
 }
 
+function resetNodeForReplay(node: GoalNode): GoalNode {
+  return {
+    ...node,
+    status: "pending",
+    result: undefined,
+    error: undefined,
+    startedAt: undefined,
+    completedAt: undefined,
+    updatedAt: Date.now(),
+    reviewStatus: "none",
+    reviewIterations: 0,
+  };
+}
+
+function collectRetryTargetIds(tree: GoalTree, nodeId?: GoalNodeId): Set<GoalNodeId> {
+  if (!nodeId) {
+    return new Set(
+      [...tree.nodes.values()]
+        .filter((node) => node.id !== tree.rootId && node.status !== "completed")
+        .map((node) => node.id),
+    );
+  }
+
+  const targets = new Set<GoalNodeId>([nodeId]);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const node of tree.nodes.values()) {
+      if (targets.has(node.id)) {
+        continue;
+      }
+      const dependsOnTarget = node.dependsOn.some((dependencyId) => targets.has(dependencyId));
+      const isChildOfTarget = node.parentId ? targets.has(node.parentId) : false;
+      if (dependsOnTarget || isChildOfTarget) {
+        targets.add(node.id);
+        changed = true;
+      }
+    }
+  }
+  targets.delete(tree.rootId);
+  return targets;
+}
+
+/**
+ * Prepare a goal tree for retry.
+ *
+ * Completed nodes are preserved as checkpoints. Failed/skipped/executing nodes are
+ * reset to pending. When retrying a specific node, its dependency descendants are
+ * also reset so the affected branch can run again coherently.
+ */
+export function prepareTreeForRetry(tree: GoalTree, nodeId?: GoalNodeId): GoalTree {
+  const targetIds = collectRetryTargetIds(tree, nodeId);
+  const mutableNodes = new Map<GoalNodeId, GoalNode>();
+
+  for (const [id, node] of tree.nodes) {
+    if (id === tree.rootId) {
+      mutableNodes.set(id, node);
+      continue;
+    }
+
+    const shouldReset = targetIds.has(id);
+    if (!shouldReset) {
+      mutableNodes.set(id, node);
+      continue;
+    }
+
+    if (node.status === "completed" && !nodeId) {
+      mutableNodes.set(id, node);
+      continue;
+    }
+
+    mutableNodes.set(id, resetNodeForReplay(node));
+  }
+
+  return { ...tree, nodes: mutableNodes };
+}
+
 /**
  * Check if a tree is stale (older than 24 hours since last update).
  */

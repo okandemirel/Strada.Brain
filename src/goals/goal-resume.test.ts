@@ -13,6 +13,7 @@ import { describe, it, expect, vi } from "vitest";
 import {
   detectInterruptedTrees,
   prepareTreeForResume,
+  prepareTreeForRetry,
   isTreeStale,
   formatResumePrompt,
 } from "./goal-resume.js";
@@ -188,6 +189,70 @@ describe("prepareTreeForResume", () => {
     const node = resumed.nodes.get(aId)!;
     expect(node.startedAt).toBeUndefined();
     expect(node.completedAt).toBeUndefined();
+  });
+});
+
+describe("prepareTreeForRetry", () => {
+  it("resets a failed node and its dependency descendants to pending", () => {
+    const rootId = generateGoalNodeId();
+    const failedId = generateGoalNodeId();
+    const dependentId = generateGoalNodeId();
+
+    const root = makeNode({ id: rootId, task: "Root", status: "pending" });
+    const failed = makeNode({
+      id: failedId,
+      parentId: rootId,
+      depth: 1,
+      task: "Fix bug",
+      status: "failed",
+      error: "boom",
+      reviewStatus: "review_stuck",
+    });
+    const dependent = makeNode({
+      id: dependentId,
+      parentId: rootId,
+      depth: 1,
+      task: "Verify",
+      dependsOn: [failedId],
+      status: "skipped",
+    });
+
+    const retried = prepareTreeForRetry(makeTree([root, failed, dependent], rootId), failedId);
+
+    expect(retried.nodes.get(failedId)?.status).toBe("pending");
+    expect(retried.nodes.get(failedId)?.error).toBeUndefined();
+    expect(retried.nodes.get(failedId)?.reviewStatus).toBe("none");
+    expect(retried.nodes.get(dependentId)?.status).toBe("pending");
+  });
+
+  it("preserves completed nodes when retrying the full tree", () => {
+    const rootId = generateGoalNodeId();
+    const completedId = generateGoalNodeId();
+    const failedId = generateGoalNodeId();
+
+    const root = makeNode({ id: rootId, task: "Root", status: "pending" });
+    const completed = makeNode({
+      id: completedId,
+      parentId: rootId,
+      depth: 1,
+      task: "Already done",
+      status: "completed",
+      result: "kept",
+    });
+    const failed = makeNode({
+      id: failedId,
+      parentId: rootId,
+      depth: 1,
+      task: "Need retry",
+      status: "failed",
+      error: "boom",
+    });
+
+    const retried = prepareTreeForRetry(makeTree([root, completed, failed], rootId));
+
+    expect(retried.nodes.get(completedId)?.status).toBe("completed");
+    expect(retried.nodes.get(completedId)?.result).toBe("kept");
+    expect(retried.nodes.get(failedId)?.status).toBe("pending");
   });
 });
 

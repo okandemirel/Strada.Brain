@@ -5,6 +5,7 @@ import {
   useWebSocket,
 } from './useWebSocket'
 import { useSessionStore } from '../stores/session-store'
+import { useCanvasStore } from '../stores/canvas-store'
 
 const originalWebSocket = globalThis.WebSocket
 const originalLocalStorage = window.localStorage
@@ -83,11 +84,13 @@ describe('buildModelSwitchCommand', () => {
       configurable: true,
     })
     useSessionStore.getState().reset()
+    useCanvasStore.getState().reset()
   })
 
   afterEach(() => {
     cleanup()
     useSessionStore.getState().reset()
+    useCanvasStore.getState().reset()
     Object.defineProperty(globalThis, 'WebSocket', {
       value: originalWebSocket,
       configurable: true,
@@ -217,5 +220,57 @@ describe('buildModelSwitchCommand', () => {
     })
 
     expect(useSessionStore.getState().messages.at(-1)?.deliveryState).toBe('failed')
+  })
+
+  it('queues raw workspace commands until the session is ready', () => {
+    const { result } = renderHook(() => useWebSocket())
+    const socket = MockWebSocket.instances[0]
+    expect(socket).toBeDefined()
+
+    act(() => {
+      socket!.emit('open')
+      expect(result.current.sendRawJSON({ type: 'monitor:retry_task', rootId: 'root-1' })).toBe(true)
+    })
+
+    expect(socket!.sent).toHaveLength(1)
+
+    act(() => {
+      socket!.emit('message', {
+        type: 'connected',
+        chatId: 'chat-raw',
+        reconnectToken: 'reconnect-raw',
+        profileId: 'profile-raw',
+      })
+    })
+
+    expect(JSON.parse(socket!.sent.at(-1)!)).toEqual({
+      type: 'monitor:retry_task',
+      rootId: 'root-1',
+    })
+    expect(useCanvasStore.getState().sessionId).toBe('profile-raw')
+  })
+
+  it('drops queued raw commands if the claimed session changes before flush', () => {
+    vi.useFakeTimers()
+    localStorage.setItem('strada-chatId', 'chat-old')
+    localStorage.setItem('strada-profileId', 'profile-old')
+
+    const { result } = renderHook(() => useWebSocket())
+    const socket = MockWebSocket.instances[0]
+    expect(socket).toBeDefined()
+
+    act(() => {
+      socket!.emit('open')
+      expect(result.current.sendRawJSON({ type: 'monitor:cancel_task', rootId: 'root-old' })).toBe(true)
+      socket!.emit('message', {
+        type: 'connected',
+        chatId: 'chat-new',
+        reconnectToken: 'reconnect-new',
+        profileId: 'profile-new',
+      })
+      vi.advanceTimersByTime(1500)
+    })
+
+    expect(socket!.sent.some((payload) => payload.includes('monitor:cancel_task'))).toBe(false)
   })
 })

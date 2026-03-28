@@ -1,6 +1,9 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Editor, TLShapeId } from 'tldraw'
 import {
+  clearPersistedCanvasDraft,
+  persistCanvasDraft,
+  readPersistedCanvasDraft,
   useCanvasStore,
   type CanvasLayout,
   type CanvasShape,
@@ -198,6 +201,30 @@ function syncPendingCanvasState(
   return { agentAddCount, shouldMarkAgentSync }
 }
 
+function persistCanvasSnapshot(
+  sessionId: string,
+  snapshot: unknown,
+  keepalive = false,
+): Promise<Response> {
+  return fetch(`/api/canvas/${encodeURIComponent(sessionId)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ shapes: JSON.stringify(snapshot), viewport: '{}' }),
+    ...(keepalive ? { keepalive: true } : {}),
+  })
+}
+
+function clearEditorCanvas(editor: Editor): void {
+  const shapeIds = [...editor.getCurrentPageShapeIds()]
+  if (shapeIds.length === 0) return
+  editor.deleteShapes(shapeIds)
+}
+
+function loadEditorSnapshot(editor: Editor, snapshot: unknown): void {
+  clearEditorCanvas(editor)
+  editor.store.loadSnapshot(snapshot as Parameters<typeof editor.store.loadSnapshot>[0])
+}
+
 export default function CanvasPanel() {
   const pendingShapes = useCanvasStore((s) => s.pendingShapes)
   const pendingUpdates = useCanvasStore((s) => s.pendingUpdates)
@@ -212,9 +239,11 @@ export default function CanvasPanel() {
   const isDirty = useCanvasStore((s) => s.isDirty)
   const setDirty = useCanvasStore((s) => s.setDirty)
   const sessionId = useSessionStore((s) => s.sessionId)
+  const profileId = useSessionStore((s) => s.profileId)
   const { theme } = useTheme()
   const editorRef = useRef<Editor | null>(null)
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const selectedTemplateRef = useRef<TemplateId | null>(null)
   const snapshotRef = useRef<unknown>(null)
 
@@ -227,6 +256,7 @@ export default function CanvasPanel() {
     + pendingRemovals.length
     + (pendingViewport ? 1 : 0)
     + (pendingLayout ? 1 : 0)
+  const canvasDraftSessionId = profileId ?? sessionId
 
   const tldrawComponents = useMemo(() => ({
     Toolbar: CustomToolbar,
@@ -236,24 +266,72 @@ export default function CanvasPanel() {
   // Check if session has existing shapes — if so, skip welcome
   useEffect(() => {
     if (!sessionId) return
+    let cancelled = false
+    const persistedDraft = canvasDraftSessionId
+      ? readPersistedCanvasDraft(canvasDraftSessionId)
+      : null
     fetch(`/api/canvas/${encodeURIComponent(sessionId)}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
+        if (cancelled) return
+        if (selectedTemplateRef.current) return
+
+        let remoteSnapshot: unknown = null
+        let remoteUpdatedAt: number | null = null
         if (data?.canvas?.shapes) {
           try {
-            // Skip restore if user already picked a template
-            if (selectedTemplateRef.current) return
-            const snapshot = JSON.parse(data.canvas.shapes)
-            snapshotRef.current = snapshot
-            import('tldraw/tldraw.css')
-            setEditorMode('editor')
+            remoteSnapshot = JSON.parse(data.canvas.shapes)
+            remoteUpdatedAt = typeof data.canvas.updatedAt === 'number' ? data.canvas.updatedAt : null
           } catch {
-            /* invalid snapshot — stay on welcome */
+            remoteSnapshot = null
+            remoteUpdatedAt = null
           }
         }
+
+        const shouldPreferDraft = Boolean(
+          persistedDraft &&
+          (!remoteUpdatedAt || persistedDraft.updatedAt >= remoteUpdatedAt),
+        )
+        const snapshotToRestore = shouldPreferDraft
+          ? persistedDraft?.snapshot ?? null
+          : remoteSnapshot
+
+        if (snapshotToRestore) {
+          if (editorRef.current) {
+            loadEditorSnapshot(editorRef.current, snapshotToRestore)
+          } else {
+            snapshotRef.current = snapshotToRestore
+          }
+          setDirty(Boolean(shouldPreferDraft && persistedDraft?.dirty))
+          import('tldraw/tldraw.css')
+          setEditorMode('editor')
+          if (!shouldPreferDraft && canvasDraftSessionId && persistedDraft) {
+            clearPersistedCanvasDraft(canvasDraftSessionId)
+          }
+          return
+        }
+
+        setDirty(Boolean(persistedDraft?.dirty))
+        snapshotRef.current = null
+        if (editorRef.current) {
+          clearEditorCanvas(editorRef.current)
+        }
       })
-      .catch(() => {})
-  }, [sessionId])
+      .catch(() => {
+        if (cancelled || selectedTemplateRef.current || !persistedDraft) return
+        if (editorRef.current) {
+          loadEditorSnapshot(editorRef.current, persistedDraft.snapshot)
+        } else {
+          snapshotRef.current = persistedDraft.snapshot
+        }
+        setDirty(Boolean(persistedDraft.dirty))
+        import('tldraw/tldraw.css')
+        setEditorMode('editor')
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [canvasDraftSessionId, sessionId, setDirty])
 
   useEffect(() => {
     if (editorMode !== 'welcome' || pendingMutationCount === 0) return
@@ -273,12 +351,20 @@ export default function CanvasPanel() {
     (editor: Editor) => {
       editorRef.current = editor
       editor.user.updateUserPreferences({ colorScheme: theme })
-      editor.on('change', () => setDirty(true))
+      editor.on('change', () => {
+        setDirty(true)
+        if (!canvasDraftSessionId) return
+        if (draftTimerRef.current) clearTimeout(draftTimerRef.current)
+        draftTimerRef.current = setTimeout(() => {
+          const snapshot = editor.store.getSnapshot()
+          persistCanvasDraft(canvasDraftSessionId, snapshot, { dirty: true })
+        }, 250)
+      })
 
       // Restore snapshot if loading from session
       if (snapshotRef.current) {
         try {
-          editor.store.loadSnapshot(snapshotRef.current as Parameters<typeof editor.store.loadSnapshot>[0])
+          loadEditorSnapshot(editor, snapshotRef.current)
         } catch { /* ignore */ }
         snapshotRef.current = null
       }
@@ -319,6 +405,7 @@ export default function CanvasPanel() {
       pendingViewport,
       setDirty,
       theme,
+      canvasDraftSessionId,
     ],
   )
 
@@ -335,16 +422,42 @@ export default function CanvasPanel() {
       const snapshot = editorRef.current?.store.getSnapshot()
       if (!snapshot) return
       try {
-        await fetch(`/api/canvas/${encodeURIComponent(sessionId)}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ shapes: JSON.stringify(snapshot), viewport: '{}' }),
-        })
+        const response = await persistCanvasSnapshot(sessionId, snapshot)
+        if (!response.ok) {
+          return
+        }
+        if (canvasDraftSessionId) {
+          clearPersistedCanvasDraft(canvasDraftSessionId)
+        }
         setDirty(false)
       } catch { /* retry on next cycle */ }
     }, 5000)
     return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current) }
-  }, [isDirty, sessionId, setDirty])
+  }, [canvasDraftSessionId, isDirty, sessionId, setDirty])
+
+  useEffect(() => {
+    if (!sessionId) return
+
+    const flushOnPageHide = () => {
+      const snapshot = editorRef.current?.store.getSnapshot()
+      if (!snapshot) return
+      if (canvasDraftSessionId) {
+        persistCanvasDraft(canvasDraftSessionId, snapshot, { dirty: isDirty })
+      }
+      void persistCanvasSnapshot(sessionId, snapshot, true).catch(() => {})
+    }
+
+    window.addEventListener('pagehide', flushOnPageHide)
+    return () => {
+      window.removeEventListener('pagehide', flushOnPageHide)
+    }
+  }, [canvasDraftSessionId, isDirty, sessionId])
+
+  useEffect(() => {
+    return () => {
+      if (draftTimerRef.current) clearTimeout(draftTimerRef.current)
+    }
+  }, [])
 
   // Process pending shapes from agent
   useEffect(() => {

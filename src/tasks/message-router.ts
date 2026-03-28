@@ -15,9 +15,9 @@ import type { TaskManager } from "./task-manager.js";
 import { getTaskConversationKey } from "./types.js";
 import { CommandHandler } from "./command-handler.js";
 import { detectCommand } from "./command-detector.js";
+import { buildBatchedPrompt, buildBurstOrQueueNotice } from "./message-bursting.js";
 import { getLogger } from "../utils/logger.js";
 
-const TURKISH_HINT_RE = /[ğüşöçıİ]|\b(?:ve|için|şu|hata|düzelt|incele|bak|çöz|dosya|ekle|güncelle|mesaj)\b/iu;
 const QUEUE_NOTICE_COOLDOWN_MS = 15_000;
 
 export interface MessageRouterOptions {
@@ -192,18 +192,7 @@ export class MessageRouter {
   }
 
   private buildBatchedPrompt(messages: IncomingMessage[]): string {
-    if (messages.length === 1) {
-      return messages[0]!.text;
-    }
-
-    const parts = messages.map((message, index) =>
-      `[User message ${index + 1}]\n${message.text.trim()}`,
-    );
-    return [
-      `The user sent ${messages.length} consecutive messages before you responded. Treat them as one ordered request.`,
-      "",
-      ...parts,
-    ].join("\n\n");
+    return buildBatchedPrompt(messages);
   }
 
   private hasActiveTaskForConversation(conversationKey: string, chatId: string): boolean {
@@ -212,31 +201,8 @@ export class MessageRouter {
     );
   }
 
-  private detectLanguage(text: string): "en" | "tr" {
-    return TURKISH_HINT_RE.test(text) ? "tr" : "en";
-  }
-
   private buildQueueNotice(messages: readonly IncomingMessage[], queuedBehindActiveTask: boolean): string | null {
-    if (messages.length === 0) return null;
-    const language = this.detectLanguage(messages.at(-1)?.text ?? "");
-    if (queuedBehindActiveTask) {
-      if (messages.length === 1) {
-        return language === "tr"
-          ? "Son mesajını kuyruğa aldım. Mevcut işi bitirir bitirmez buna geçeceğim."
-          : "I queued your latest message and will pick it up as soon as the current task finishes.";
-      }
-      return language === "tr"
-        ? `Son ${messages.length} mesajını birlikte kuyruğa aldım. Mevcut işi bitirir bitirmez bunları sırayla işleyeceğim.`
-        : `I queued your last ${messages.length} messages together and will process them as soon as the current task finishes.`;
-    }
-
-    if (messages.length <= 1) {
-      return null;
-    }
-
-    return language === "tr"
-      ? `Arka arkaya gelen ${messages.length} mesajını tek bir istek olarak birleştiriyorum.`
-      : `I’m combining your ${messages.length} consecutive messages into one ordered request.`;
+    return buildBurstOrQueueNotice(messages, queuedBehindActiveTask);
   }
 
   private async sendBurstOrQueueNotice(

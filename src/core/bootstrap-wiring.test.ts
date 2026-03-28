@@ -45,12 +45,9 @@ describe("createShutdownHandler", () => {
     await shutdown();
 
     expect(taskManager.failActiveTasksOnShutdown).toHaveBeenCalledWith(
-      "Task interrupted by system shutdown. Please submit again.",
+      "Task interrupted by system shutdown. Resume is available after restart.",
     );
-    expect(taskStorage.updateError).toHaveBeenCalledWith(
-      activeTask.id,
-      "Task interrupted by system shutdown. Please submit again.",
-    );
+    expect(taskStorage.updateError).not.toHaveBeenCalled();
     expect(taskStorage.close).toHaveBeenCalledOnce();
   });
 });

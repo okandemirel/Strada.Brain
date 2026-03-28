@@ -7,6 +7,7 @@ import type {
   IncomingMessage,
 } from '../types/messages'
 import { useSessionStore } from '../stores/session-store'
+import { useCanvasStore } from '../stores/canvas-store'
 import { mergeSessionMessages, readSessionMessages, writeSessionMessages } from './websocket-storage'
 import { dispatchWorkspaceMessage, isWorkspaceMessage } from './use-dashboard-socket'
 
@@ -18,6 +19,7 @@ const PROFILE_ID_STORAGE_KEY = 'strada-profileId'
 const PROFILE_TOKEN_STORAGE_KEY = 'strada-profileToken'
 const LEGACY_PROFILE_CHAT_ID_STORAGE_KEY = 'strada-profileChatId'
 const RECONNECT_TOKEN_STORAGE_KEY = 'strada-reconnectToken'
+const SESSION_RECLAIM_GRACE_MS = 1500
 
 function generateId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
@@ -92,6 +94,7 @@ export function useWebSocket(): UseWebSocketReturn {
         storedChatId,
         storedProfileId ?? storedChatId,
       )
+      useCanvasStore.getState().setSessionId(storedProfileId ?? storedChatId)
     }
   }
 
@@ -108,6 +111,7 @@ export function useWebSocket(): UseWebSocketReturn {
   const pendingOutboundMessagesRef = useRef<Array<{
     payload: Record<string, unknown>
     clientMessageId?: string
+    expectedChatId?: string | null
   }>>([])
   const sessionReadyRef = useRef(false)
   const mountedRef = useRef(true)
@@ -130,6 +134,7 @@ export function useWebSocket(): UseWebSocketReturn {
     profileIdRef.current = nextProfileId
     profileTokenRef.current = profileToken?.trim() || profileTokenRef.current
     useSessionStore.getState().setSession(chatId, nextProfileId)
+    useCanvasStore.getState().setSessionId(nextProfileId)
     localStorage.setItem(CHAT_ID_STORAGE_KEY, chatId)
     localStorage.setItem(PROFILE_ID_STORAGE_KEY, nextProfileId)
     localStorage.removeItem(LEGACY_PROFILE_CHAT_ID_STORAGE_KEY)
@@ -180,6 +185,7 @@ export function useWebSocket(): UseWebSocketReturn {
   const deliverOutboundMessage = useCallback((entry: {
     payload: Record<string, unknown>
     clientMessageId?: string
+    expectedChatId?: string | null
   }): 'sent' | 'defer' | 'failed' => {
     const ws = wsRef.current
     if (!ws || ws.readyState !== WebSocket.OPEN || !sessionReadyRef.current) {
@@ -203,6 +209,14 @@ export function useWebSocket(): UseWebSocketReturn {
   const flushPendingOutboundMessages = useCallback(() => {
     while (pendingOutboundMessagesRef.current.length > 0) {
       const next = pendingOutboundMessagesRef.current[0]
+      if (
+        next?.expectedChatId != null &&
+        chatIdRef.current &&
+        chatIdRef.current !== next.expectedChatId
+      ) {
+        pendingOutboundMessagesRef.current.shift()
+        continue
+      }
       const outcome = deliverOutboundMessage(next)
       if (outcome === 'defer') {
         return
@@ -319,7 +333,7 @@ export function useWebSocket(): UseWebSocketReturn {
               acceptConnectedSession(data.chatId, data.reconnectToken, data.profileId, data.profileToken)
               sessionReadyRef.current = true
               flushPendingOutboundMessages()
-            }, 400)
+            }, SESSION_RECLAIM_GRACE_MS)
             break
           }
 
@@ -525,11 +539,31 @@ export function useWebSocket(): UseWebSocketReturn {
   }, [sendMessage])
 
   const sendRawJSON = useCallback((payload: Record<string, unknown>): boolean => {
-    const ws = wsRef.current
-    if (!ws || ws.readyState !== WebSocket.OPEN) return false
-    ws.send(JSON.stringify(payload))
-    return true
-  }, [])
+    const outbound = {
+      payload,
+      expectedChatId: chatIdRef.current,
+    }
+    const delivery = deliverOutboundMessage(outbound)
+    if (delivery === 'sent') {
+      return true
+    }
+
+    if (delivery === 'defer') {
+      pendingOutboundMessagesRef.current.push(outbound)
+      const ws = wsRef.current
+      if (
+        mountedRef.current &&
+        (!ws || ws.readyState === WebSocket.CLOSED) &&
+        !reconnectTimerRef.current
+      ) {
+        useSessionStore.getState().setStatus('reconnecting')
+        connectRef.current?.()
+      }
+      return true
+    }
+
+    return false
+  }, [deliverOutboundMessage])
 
   return {
     messages,

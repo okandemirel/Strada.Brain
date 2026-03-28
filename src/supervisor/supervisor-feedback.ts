@@ -73,7 +73,7 @@ function summarizeWaveTasks(
     : `${joined} and ${nodes.length - MAX_WAVE_TASKS} more`;
 }
 
-function mapCanvasPriority(node: TaggedGoalNode): string {
+function mapCanvasPriority(node: Pick<TaggedGoalNode, "capabilityProfile">): string {
   switch (node.capabilityProfile.preference) {
     case "quality":
       return "high";
@@ -481,8 +481,11 @@ export function buildSupervisorCanvasSummaryUpdate(params: {
     intent: "supervisor:summary",
     autoSwitch: false,
     shapes: [{
+      type: "note-block",
       id: supervisorSummaryShapeId(params.rootId),
       props: {
+        w: 320,
+        h: 180,
         content: params.summary,
         color,
       },
@@ -491,7 +494,7 @@ export function buildSupervisorCanvasSummaryUpdate(params: {
 }
 
 export function buildSupervisorCanvasNodeUpdate(params: {
-  node: Pick<TaggedGoalNode, "id" | "task" | "assignedProvider">;
+  node: Pick<TaggedGoalNode, "id" | "task" | "assignedProvider" | "capabilityProfile">;
   status: SupervisorCanvasTaskStatus;
 }): WorkspaceEventMap["canvas:agent_draw"] {
   return {
@@ -499,10 +502,14 @@ export function buildSupervisorCanvasNodeUpdate(params: {
     intent: "supervisor:node-status",
     autoSwitch: false,
     shapes: [{
+      type: "task-card",
       id: supervisorNodeShapeId(String(params.node.id)),
       props: {
+        w: 260,
+        h: 132,
         title: formatCanvasTaskTitle(params.node),
         status: params.status,
+        priority: mapCanvasPriority(params.node),
       },
     }],
   };

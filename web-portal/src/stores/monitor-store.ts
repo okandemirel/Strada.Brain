@@ -5,7 +5,11 @@ export type MonitorTaskStatus =
   | 'executing'
   | 'completed'
   | 'failed'
+  | 'blocked'
   | 'skipped'
+  | 'cancelled'
+  | 'paused'
+  | 'waiting_for_input'
   | 'verifying'
 
 export type MonitorReviewStatus =
@@ -20,6 +24,7 @@ export type MonitorReviewStatus =
 export interface MonitorTask {
   id: string
   nodeId: string
+  rootId?: string
   title: string
   status: MonitorTaskStatus | string
   reviewStatus: MonitorReviewStatus | string

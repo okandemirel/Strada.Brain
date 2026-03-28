@@ -38,8 +38,9 @@ vi.mock('./KanbanBoard', () => ({
 
 // Mock lucide-react icons
 vi.mock('lucide-react', () => ({
-  Pause: () => <svg data-testid="pause-icon" />,
   Play: () => <svg data-testid="play-icon" />,
+  RotateCcw: () => <svg data-testid="retry-icon" />,
+  Square: () => <svg data-testid="cancel-icon" />,
 }))
 
 import MonitorPanel from './MonitorPanel'
@@ -74,9 +75,9 @@ describe('MonitorPanel', () => {
     expect(screen.getByText('Activity')).toBeInTheDocument()
   })
 
-  it('renders InterventionToolbar (Pause button)', () => {
+  it('renders InterventionToolbar placeholder', () => {
     render(<MonitorPanel />)
-    expect(screen.getByText('Pause')).toBeInTheDocument()
+    expect(screen.getByText('Select a task to retry, resume, or cancel it.')).toBeInTheDocument()
   })
 
   it('renders summary toggle button', () => {

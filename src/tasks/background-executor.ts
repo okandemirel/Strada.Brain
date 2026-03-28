@@ -403,6 +403,7 @@ export class BackgroundExecutor {
     onProgress: (message: TaskProgressUpdate) => void,
   ): void {
     const logger = getLogger();
+    this.taskManager?.attachGoalRoot?.(task.id, String(goalTree.rootId));
     onProgress(this.buildGoalProgressSignal(task, goalTree));
     this.emitGoalNarrative(task, goalTree);
     this.emitGoalCanvasSnapshot(task, goalTree);

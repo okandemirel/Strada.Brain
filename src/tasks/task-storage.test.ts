@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import Database from "better-sqlite3";
 import { TaskStorage } from "./task-storage.js";
 import { TaskStatus, type Task } from "./types.js";
+import type { MessageContent } from "../agents/providers/provider-core.interface.js";
 
 function makeTask(status: TaskStatus, overrides: Partial<Task> = {}): Task {
   const now = Date.now();
@@ -105,8 +106,28 @@ describe("TaskStorage", () => {
     const task = makeTask(TaskStatus.executing, {
       conversationId: "thread-7",
       userId: "user-42",
+      goalRootId: "goal_root_1",
       origin: "daemon",
       triggerName: "nightly-scan",
+      forceSharedPlanning: true,
+      userContent: [
+        { type: "text", text: "Look at this screenshot" },
+        {
+          type: "image",
+          source: {
+            type: "base64",
+            media_type: "image/png",
+            data: "YWJj",
+          },
+        } as MessageContent,
+      ],
+      attachments: [{
+        type: "image",
+        name: "diagram.png",
+        mimeType: "image/png",
+        data: Buffer.from("abc"),
+        size: 3,
+      }],
     });
     legacyStorage.save(task);
 
@@ -116,8 +137,18 @@ describe("TaskStorage", () => {
     expect(loaded).toEqual(expect.objectContaining({
       conversationId: "thread-7",
       userId: "user-42",
+      goalRootId: "goal_root_1",
       origin: "daemon",
       triggerName: "nightly-scan",
+      forceSharedPlanning: true,
     }));
+    expect(loaded?.userContent).toEqual(task.userContent);
+    expect(loaded?.attachments?.[0]).toEqual(expect.objectContaining({
+      type: "image",
+      name: "diagram.png",
+      mimeType: "image/png",
+      size: 3,
+    }));
+    expect(loaded?.attachments?.[0]?.data?.toString()).toBe("abc");
   });
 });

@@ -184,12 +184,17 @@ interface MonitorTaskRecord {
 
 interface MonitorTaskManager {
   listAllActiveTasks(): MonitorTaskRecord[]
+  listRecoverableTasks?(limit?: number): MonitorTaskRecord[]
 }
 
 function getActiveStandaloneTasks(taskManager: MonitorTaskManager | undefined): MonitorTaskRecord[] {
   if (!taskManager) return []
-  return taskManager
-    .listAllActiveTasks()
+  const tasks = [
+    ...taskManager.listAllActiveTasks(),
+    ...(taskManager.listRecoverableTasks?.(20) ?? []),
+  ]
+  return tasks
+    .filter((task, index, all) => all.findIndex((candidate) => candidate.id === task.id) === index)
     .filter((task) => task.channelType !== 'daemon')
     .sort((left, right) => right.updatedAt - left.updatedAt)
 }

@@ -1,8 +1,31 @@
-import { describe, it, expect, beforeEach } from 'vitest'
-import { useCanvasStore } from './canvas-store'
+import { beforeEach, describe, expect, it } from 'vitest'
+import {
+  clearPersistedCanvasDraft,
+  persistCanvasDraft,
+  readPersistedCanvasDraft,
+  useCanvasStore,
+} from './canvas-store'
+
+function createStorageMock() {
+  const values = new Map<string, string>()
+  return {
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => {
+      values.set(key, value)
+    },
+    removeItem: (key: string) => {
+      values.delete(key)
+    },
+  }
+}
 
 describe('useCanvasStore', () => {
-  beforeEach(() => useCanvasStore.getState().reset())
+  beforeEach(() => {
+    const storage = createStorageMock()
+    Object.defineProperty(window, 'localStorage', { value: storage, configurable: true })
+    Object.defineProperty(globalThis, 'localStorage', { value: storage, configurable: true })
+    useCanvasStore.getState().reset()
+  })
 
   it('starts with null sessionId', () => {
     expect(useCanvasStore.getState().sessionId).toBeNull()
@@ -11,6 +34,36 @@ describe('useCanvasStore', () => {
   it('sets session ID', () => {
     useCanvasStore.getState().setSessionId('s1')
     expect(useCanvasStore.getState().sessionId).toBe('s1')
+  })
+
+  it('restores pending agent state from localStorage when session changes', () => {
+    localStorage.setItem('strada-canvas-state:s-restore', JSON.stringify({
+      pendingShapes: [{ type: 'code-block', id: 'cb-restore', props: { code: 'restored' }, source: 'agent' }],
+      pendingUpdates: [],
+      pendingRemovals: [],
+      pendingViewport: null,
+      pendingLayout: null,
+    }))
+
+    useCanvasStore.getState().setSessionId('s-restore')
+
+    expect(useCanvasStore.getState().pendingShapes).toEqual([
+      { type: 'code-block', id: 'cb-restore', props: { code: 'restored' }, source: 'agent' },
+    ])
+  })
+
+  it('persists and restores local canvas drafts', () => {
+    persistCanvasDraft('draft-session', { store: { shapes: [{ id: 'shape-1' }] } }, { dirty: true, updatedAt: 123 })
+
+    expect(readPersistedCanvasDraft('draft-session')).toEqual({
+      snapshot: { store: { shapes: [{ id: 'shape-1' }] } },
+      updatedAt: 123,
+      dirty: true,
+    })
+
+    clearPersistedCanvasDraft('draft-session')
+
+    expect(readPersistedCanvasDraft('draft-session')).toBeNull()
   })
 
   it('tracks dirty flag', () => {

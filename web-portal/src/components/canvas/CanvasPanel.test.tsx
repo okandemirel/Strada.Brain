@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, act } from '@testing-library/react'
 import { userEvent } from '@testing-library/user-event'
+import { persistCanvasDraft } from '../../stores/canvas-store'
 
 // ---------------------------------------------------------------------------
 // Mocks — tldraw requires browser APIs not available in jsdom
@@ -8,13 +9,19 @@ import { userEvent } from '@testing-library/user-event'
 
 const mockGetSnapshot = vi.fn(() => ({ store: { shapes: [] } }))
 const mockLoadSnapshot = vi.fn()
-const mockEditorOn = vi.fn()
+let mockChangeHandler: (() => void) | null = null
+const mockEditorOn = vi.fn((event: string, handler: () => void) => {
+  if (event === 'change') {
+    mockChangeHandler = handler
+  }
+})
 const mockEditorRun = vi.fn((fn: () => void) => fn())
 const mockCreateShape = vi.fn()
 const mockGetShape = vi.fn((_id: string) => undefined as { id: string; type: string; props: Record<string, unknown> } | undefined)
 const mockUpdateShape = vi.fn()
 const mockDeleteShapes = vi.fn()
 const mockSetCamera = vi.fn()
+const mockGetCurrentPageShapeIds = vi.fn(() => [] as string[])
 
 const mockEditor = {
   on: mockEditorOn,
@@ -23,6 +30,7 @@ const mockEditor = {
   getShape: mockGetShape,
   updateShape: mockUpdateShape,
   deleteShapes: mockDeleteShapes,
+  getCurrentPageShapeIds: mockGetCurrentPageShapeIds,
   user: {
     updateUserPreferences: vi.fn(),
   },
@@ -116,6 +124,19 @@ const createObjectURLSpy = vi.fn(() => 'blob:mock-url')
 const revokeObjectURLSpy = vi.fn()
 vi.stubGlobal('URL', { ...URL, createObjectURL: createObjectURLSpy, revokeObjectURL: revokeObjectURLSpy })
 
+function createStorageMock() {
+  const values = new Map<string, string>()
+  return {
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => {
+      values.set(key, value)
+    },
+    removeItem: (key: string) => {
+      values.delete(key)
+    },
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -153,18 +174,24 @@ async function renderInEditorMode(sessionId = 'test-sess') {
 describe('CanvasPanel', () => {
   beforeEach(() => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
+    const storage = createStorageMock()
+    Object.defineProperty(window, 'localStorage', { value: storage, configurable: true })
+    Object.defineProperty(globalThis, 'localStorage', { value: storage, configurable: true })
     useCanvasStore.getState().reset()
     useSessionStore.getState().reset()
     fetchSpy.mockReset()
     mockGetSnapshot.mockReturnValue({ store: { shapes: [] } })
     mockLoadSnapshot.mockReset()
     mockEditorOn.mockReset()
+    mockChangeHandler = null
     mockCreateShape.mockReset()
     mockGetShape.mockReset()
     mockGetShape.mockReturnValue(undefined)
     mockUpdateShape.mockReset()
     mockDeleteShapes.mockReset()
     mockSetCamera.mockReset()
+    mockGetCurrentPageShapeIds.mockReset()
+    mockGetCurrentPageShapeIds.mockReturnValue([])
     mockEditor.zoomToFit.mockReset()
     mockApplyTemplate.mockReset()
   })
@@ -317,8 +344,10 @@ describe('CanvasPanel', () => {
   // -- Dirty indicator ------------------------------------------------------
 
   it('shows unsaved indicator when dirty', async () => {
-    useCanvasStore.getState().setDirty(true)
     await renderInEditorMode()
+    act(() => {
+      useCanvasStore.getState().setDirty(true)
+    })
     expect(screen.getByTestId('canvas-dirty-indicator')).toBeInTheDocument()
     expect(screen.getByTestId('canvas-dirty-indicator').textContent).toBe('unsaved')
   })
@@ -394,6 +423,50 @@ describe('CanvasPanel', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(5100) })
 
     expect(useCanvasStore.getState().isDirty).toBe(false)
+  })
+
+  it('restores a newer local draft when the server snapshot is missing', async () => {
+    persistCanvasDraft('p1', { store: { shapes: [{ id: 'draft-shape' }] } }, { dirty: true, updatedAt: 999 })
+    fetchSpy.mockResolvedValue(new Response(JSON.stringify({ canvas: null }), { status: 200 }))
+    useSessionStore.getState().setSession('load-sess', 'p1')
+
+    render(<CanvasPanel />)
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(100) })
+    await screen.findByTestId('tldraw-canvas')
+    await act(async () => { vi.advanceTimersByTime(10) })
+
+    expect(mockLoadSnapshot).toHaveBeenCalledWith({ store: { shapes: [{ id: 'draft-shape' }] } })
+    expect(screen.getByTestId('canvas-dirty-indicator')).toBeInTheDocument()
+  })
+
+  it('persists a local draft on editor change and clears it after successful save', async () => {
+    fetchSpy
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ canvas: { shapes: JSON.stringify({ store: {} }) } }), { status: 200 }),
+      )
+      .mockResolvedValueOnce(new Response(JSON.stringify({ status: 'saved' }), { status: 200 }))
+    useSessionStore.getState().setSession('draft-sess', 'p1')
+
+    render(<CanvasPanel />)
+    await act(async () => { await vi.advanceTimersByTimeAsync(100) })
+    await act(async () => { vi.advanceTimersByTime(10) })
+
+    act(() => {
+      mockChangeHandler?.()
+    })
+    await act(async () => { vi.advanceTimersByTime(300) })
+
+    expect(JSON.parse(localStorage.getItem('strada-canvas-draft:p1') ?? 'null')).toEqual(
+      expect.objectContaining({
+        snapshot: { store: { shapes: [] } },
+        dirty: true,
+      }),
+    )
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(5100) })
+
+    expect(localStorage.getItem('strada-canvas-draft:p1')).toBeNull()
   })
 
   // -- Load on mount --------------------------------------------------------

@@ -75,6 +75,7 @@ export function dispatchWorkspaceMessage(data: { type: string; [key: string]: un
         monitor.addTask({
           id: node.id as string,
           nodeId: node.id as string,
+          rootId: payload.rootId as string,
           title: (node.title ?? node.task ?? node.id) as string,
           status: node.status as string,
           reviewStatus: node.reviewStatus as string,
@@ -85,7 +86,10 @@ export function dispatchWorkspaceMessage(data: { type: string; [key: string]: un
     }
 
     case 'monitor:task_update': {
-      useMonitorStore.getState().updateTask((payload.taskId ?? payload.nodeId) as string, (payload.updates ?? payload) as Partial<MonitorTask>)
+      useMonitorStore.getState().updateTask((payload.taskId ?? payload.nodeId) as string, {
+        ...((payload.rootId as string | undefined) ? { rootId: payload.rootId as string } : {}),
+        ...((payload.updates ?? payload) as Partial<MonitorTask>),
+      })
       break
     }
 
@@ -253,6 +257,7 @@ export function dispatchWorkspaceMessage(data: { type: string; [key: string]: un
           if (existingTasks[id]) {
             // Merge: preserve in-flight status from task_update events
             monitor.updateTask(id, {
+              ...(payload.rootId ? { rootId: payload.rootId as string } : {}),
               title: (node.title ?? node.task ?? node.id) as string,
               ...((node.dependencies || node.dependsOn) ? { dependencies: (node.dependencies ?? node.dependsOn) as string[] } : {}),
             })
@@ -260,6 +265,7 @@ export function dispatchWorkspaceMessage(data: { type: string; [key: string]: un
             monitor.addTask({
               id,
               nodeId: id,
+              ...(payload.rootId ? { rootId: payload.rootId as string } : {}),
               title: (node.title ?? node.task ?? node.id) as string,
               status: node.status as string,
               reviewStatus: node.reviewStatus as string,

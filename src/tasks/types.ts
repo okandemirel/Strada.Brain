@@ -96,6 +96,7 @@ export interface Task {
   channelType: string;
   conversationId?: string;
   userId?: string;
+  goalRootId?: string;
   title: string;
   status: TaskStatus;
   prompt: string;

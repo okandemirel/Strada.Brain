@@ -284,7 +284,7 @@ export async function initializeTaskRuntimeStage(
   const backgroundExecutor = deps.createBackgroundExecutor?.(backgroundExecutorOptions)
     ?? new BackgroundExecutor(backgroundExecutorOptions);
   const taskManager = deps.createTaskManager?.(taskStorage, backgroundExecutor)
-    ?? new TaskManager(taskStorage, backgroundExecutor);
+    ?? new TaskManager(taskStorage, backgroundExecutor, params.goalStorage);
 
   backgroundExecutor.setTaskManager(taskManager);
   params.orchestrator.setTaskManager(taskManager);

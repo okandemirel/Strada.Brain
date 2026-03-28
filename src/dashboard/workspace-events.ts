@@ -95,6 +95,21 @@ export interface WorkspaceEventMap {
     source: string
     timestamp: number
   }
+  'monitor:retry_task': {
+    rootId?: string
+    nodeId?: string
+    taskId?: string
+  }
+  'monitor:resume_task': {
+    rootId?: string
+    nodeId?: string
+    taskId?: string
+  }
+  'monitor:cancel_task': {
+    rootId?: string
+    nodeId?: string
+    taskId?: string
+  }
 
   // === Canvas events (Phase 4 — typed payloads) ===
   'canvas:shapes_add': {

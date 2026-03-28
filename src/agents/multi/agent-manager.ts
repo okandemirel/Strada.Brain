@@ -18,6 +18,9 @@ import type { IEventBus, LearningEventMap } from "../../core/event-bus.js";
 import type { IncomingMessage } from "../../channels/channel-messages.interface.js";
 import { detectCommand } from "../../tasks/command-detector.js";
 import type { CommandHandler } from "../../tasks/command-handler.js";
+import { buildBatchedPrompt, buildBurstOrQueueNotice } from "../../tasks/message-bursting.js";
+import { getTaskConversationKey } from "../../tasks/types.js";
+import type { TaskManager } from "../../tasks/task-manager.js";
 import type { IChannelAdapter } from "../../channels/channel.interface.js";
 import type { ProviderManager } from "../../agents/providers/provider-manager.js";
 import type { MetricsCollector } from "../../dashboard/metrics.js";
@@ -123,6 +126,8 @@ type BackgroundTaskSubmitter = (
   orchestrator: Orchestrator,
 ) => Promise<void> | void;
 
+const QUEUE_NOTICE_COOLDOWN_MS = 15_000;
+
 // =============================================================================
 // AGENT MANAGER
 // =============================================================================
@@ -152,8 +157,10 @@ export class AgentManager {
   /** Optional submitter for routing plain messages into background task execution */
   private backgroundTaskSubmitter?: BackgroundTaskSubmitter;
   private readonly pendingBackgroundBatches = new Map<string, PendingBackgroundBatch>();
+  private readonly queueNoticeCooldowns = new Map<string, number>();
   private readonly messageBurstWindowMs: number;
   private readonly maxBurstMessages: number;
+  private taskManager?: Pick<TaskManager, "listActiveTasks">;
   private workspaceBus?: WorkspaceBus;
   private monitorLifecycle?: MonitorLifecycle;
 
@@ -199,6 +206,10 @@ export class AgentManager {
   /** Route non-command messages into the background task system instead of interactive LLM turns. */
   setBackgroundTaskSubmitter(submitter: BackgroundTaskSubmitter): void {
     this.backgroundTaskSubmitter = submitter;
+  }
+
+  setTaskManager(taskManager: Pick<TaskManager, "listActiveTasks">): void {
+    this.taskManager = taskManager;
   }
 
   setWorkspaceRuntime(workspaceBus: WorkspaceBus, monitorLifecycle: MonitorLifecycle): void {
@@ -262,7 +273,14 @@ export class AgentManager {
       if (this.messageBurstWindowMs > 0 && this.maxBurstMessages > 1) {
         this.bufferBackgroundMessage(msg, liveAgent);
       } else {
+        const queuedBehindActiveTask = this.hasActiveTaskForConversation(msg);
         await this.backgroundTaskSubmitter(msg, liveAgent.instance, liveAgent.orchestrator);
+        await this.sendBurstOrQueueNotice(
+          [msg],
+          queuedBehindActiveTask,
+          getTaskConversationKey(msg.chatId, msg.channelType, msg.conversationId),
+          msg.chatId,
+        );
         this.syncMemoryCount(liveAgent);
       }
       return;
@@ -650,6 +668,12 @@ export class AgentManager {
     }
 
     const attachments = batch.messages.flatMap((message) => message.attachments ?? []);
+    const conversationKey = getTaskConversationKey(
+      latest.chatId,
+      latest.channelType,
+      latest.conversationId,
+    );
+    const queuedBehindActiveTask = this.hasActiveTaskForConversation(latest);
     const merged: IncomingMessage = {
       ...latest,
       attachments: attachments.length > 0 ? attachments : undefined,
@@ -667,22 +691,56 @@ export class AgentManager {
     }
 
     await this.backgroundTaskSubmitter(merged, batch.liveAgent.instance, batch.liveAgent.orchestrator);
+    await this.sendBurstOrQueueNotice(
+      batch.messages,
+      queuedBehindActiveTask,
+      conversationKey,
+      latest.chatId,
+    );
     this.syncMemoryCount(batch.liveAgent);
   }
 
   private buildBatchedPrompt(messages: IncomingMessage[]): string {
-    if (messages.length === 1) {
-      return messages[0]!.text;
+    return buildBatchedPrompt(messages);
+  }
+
+  private hasActiveTaskForConversation(msg: Pick<IncomingMessage, "chatId" | "channelType" | "conversationId">): boolean {
+    if (!this.taskManager) {
+      return false;
+    }
+    const conversationKey = getTaskConversationKey(msg.chatId, msg.channelType, msg.conversationId);
+    return this.taskManager.listActiveTasks(msg.chatId).some((task) =>
+      getTaskConversationKey(task.chatId, task.channelType, task.conversationId) === conversationKey,
+    );
+  }
+
+  private async sendBurstOrQueueNotice(
+    messages: readonly IncomingMessage[],
+    queuedBehindActiveTask: boolean,
+    conversationKey: string,
+    chatId: string,
+  ): Promise<void> {
+    const notice = buildBurstOrQueueNotice(messages, queuedBehindActiveTask);
+    if (!notice || typeof this.opts.channel.sendText !== "function") {
+      return;
     }
 
-    const parts = messages.map((message, index) =>
-      `[User message ${index + 1}]\n${message.text.trim()}`,
-    );
-    return [
-      `The user sent ${messages.length} consecutive messages before you responded. Treat them as one ordered request.`,
-      "",
-      ...parts,
-    ].join("\n\n");
+    if (queuedBehindActiveTask) {
+      const cooldownUntil = this.queueNoticeCooldowns.get(conversationKey) ?? 0;
+      if (Date.now() < cooldownUntil) {
+        return;
+      }
+      this.queueNoticeCooldowns.set(conversationKey, Date.now() + QUEUE_NOTICE_COOLDOWN_MS);
+    }
+
+    try {
+      await this.opts.channel.sendText(chatId, notice);
+    } catch (error) {
+      getLogger().warn("Failed to send multi-agent queue/burst notice", {
+        chatId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   // ===========================================================================

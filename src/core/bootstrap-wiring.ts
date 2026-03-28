@@ -179,7 +179,7 @@ export function createShutdownHandler(options: ShutdownOptions): () => Promise<v
   const { dashboard, ragPipeline, memoryManager, channel, cleanupInterval, learningPipeline } =
     options;
   const logger = getLogger();
-  const shutdownTaskReason = "Task interrupted by system shutdown. Please submit again.";
+  const shutdownTaskReason = "Task interrupted by system shutdown. Resume is available after restart.";
 
   return async (): Promise<void> => {
     const SHUTDOWN_TIMEOUT_MS = 30_000;
@@ -230,7 +230,7 @@ export function createShutdownHandler(options: ShutdownOptions): () => Promise<v
       if (options.taskManager) {
         options.taskManager.failActiveTasksOnShutdown(shutdownTaskReason);
       }
-      if (options.taskStorage) {
+      if (!options.taskManager && options.taskStorage) {
         failIncompleteTasksInStorage(options.taskStorage, shutdownTaskReason);
       }
 

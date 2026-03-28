@@ -137,6 +137,8 @@ describe("AgentManager", () => {
   let manager: AgentManager;
   let tmpDir: string;
   let daemonStorage: DaemonStorage;
+  let sendText: Mock;
+  let sendMarkdown: Mock;
 
   beforeEach(() => {
     mockUsageEvent = null;
@@ -155,6 +157,8 @@ describe("AgentManager", () => {
     budgetTracker.initialize();
 
     eventBus = new TypedEventBus<LearningEventMap>();
+    sendText = vi.fn().mockResolvedValue(undefined);
+    sendMarkdown = vi.fn().mockResolvedValue(undefined);
 
     manager = new AgentManager({
       config: makeConfig(),
@@ -164,7 +168,7 @@ describe("AgentManager", () => {
       // Shared resources (mocked)
       providerManager: {} as never,
       toolRegistry: { getAllTools: () => [] } as never,
-      channel: { sendMessage: vi.fn() } as never,
+      channel: { sendText, sendMarkdown } as never,
       projectPath: "/fake/project",
       readOnly: false,
       requireConfirmation: false,
@@ -293,7 +297,7 @@ describe("AgentManager", () => {
         eventBus,
         providerManager: {} as never,
         toolRegistry: { getAllTools: () => [] } as never,
-        channel: { sendMessage: vi.fn() } as never,
+        channel: { sendText, sendMarkdown } as never,
         projectPath: "/fake/project",
         readOnly: false,
         requireConfirmation: false,
@@ -330,6 +334,55 @@ describe("AgentManager", () => {
         const mockConstructor = Orchestrator as unknown as Mock;
         const orchestratorInstance = mockConstructor.mock.results[0]?.value;
         expect(submitter.mock.calls[0]?.[2]).toBe(orchestratorInstance);
+        expect(sendText).toHaveBeenCalledWith(
+          "chat-1",
+          "I’m combining your 2 consecutive messages into one ordered request.",
+        );
+      } finally {
+        await burstManager.shutdown();
+        vi.useRealTimers();
+      }
+    });
+
+    it("acknowledges when a background follow-up is queued behind an active task", async () => {
+      vi.useFakeTimers();
+      const burstManager = new AgentManager({
+        config: makeConfig(),
+        registry,
+        budgetTracker,
+        eventBus,
+        providerManager: {} as never,
+        toolRegistry: { getAllTools: () => [] } as never,
+        channel: { sendText, sendMarkdown } as never,
+        projectPath: "/fake/project",
+        readOnly: false,
+        requireConfirmation: false,
+        streamingEnabled: false,
+        stradaDeps: { installed: false, version: undefined },
+        memoryConfig: { dimensions: 768, dbBasePath: tmpDir },
+        messageBurstWindowMs: 25,
+        maxBurstMessages: 8,
+      });
+      const submitter = vi.fn();
+      burstManager.setBackgroundTaskSubmitter(submitter);
+      burstManager.setTaskManager({
+        listActiveTasks: vi.fn().mockReturnValue([{
+          chatId: "chat-1",
+          channelType: "web",
+          conversationId: undefined,
+        }]),
+      } as never);
+
+      try {
+        await burstManager.routeMessage(makeMsg({ text: "follow up while busy" }));
+        await vi.advanceTimersByTimeAsync(25);
+        await Promise.resolve();
+
+        expect(submitter).toHaveBeenCalledOnce();
+        expect(sendText).toHaveBeenCalledWith(
+          "chat-1",
+          "I queued your latest message and will pick it up as soon as the current task finishes.",
+        );
       } finally {
         await burstManager.shutdown();
         vi.useRealTimers();

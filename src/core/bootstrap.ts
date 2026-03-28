@@ -81,6 +81,7 @@ import type { DaemonEventMap } from "../daemon/daemon-events.js";
 import { createWorkspaceBus, type WorkspaceBus } from "../dashboard/workspace-bus.js";
 import { createLearningWorkspaceBridge } from "../dashboard/learning-workspace-bridge.js";
 import { createMonitorBridge } from "../dashboard/monitor-bridge.js";
+import { createWorkspaceRuntimeBridge } from "../dashboard/workspace-runtime-bridge.js";
 import { CanvasStorage } from "../dashboard/canvas-storage.js";
 import { createMonitorLifecycle, type MonitorLifecycle } from "../dashboard/monitor-lifecycle.js";
 import Database from "better-sqlite3";
@@ -1080,6 +1081,14 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     channelType,
     orchestratorForSupervisorBridge: orchestrator,
   });
+
+  const workspaceRuntimeBridge = createWorkspaceRuntimeBridge({
+    workspaceBus,
+    goalStorage,
+    taskManager,
+  });
+  workspaceRuntimeBridge.start();
+  stoppableServers.push(workspaceRuntimeBridge);
 
   const bootReport = await finalizeChannelStartupStage({
     beforeChannelConnect,

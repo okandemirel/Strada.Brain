@@ -807,6 +807,8 @@ export class WebChannel
       // Workspace monitor commands from frontend
       case "monitor:pause":
       case "monitor:resume":
+      case "monitor:retry_task":
+      case "monitor:resume_task":
       case "monitor:skip_task":
       case "monitor:cancel_task":
       case "monitor:approve_gate":

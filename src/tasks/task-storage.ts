@@ -13,6 +13,8 @@ import { dirname } from "node:path";
 import type { Task, TaskId, ProgressEntry } from "./types.js";
 import { TaskStatus } from "./types.js";
 import type { TaskOrigin } from "../daemon/daemon-types.js";
+import type { Attachment } from "../channels/channel.interface.js";
+import type { MessageContent } from "../agents/providers/provider-core.interface.js";
 
 // ─── Schema ──────────────────────────────────────────────────────────────────────
 
@@ -23,6 +25,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   channel_type TEXT NOT NULL,
   conversation_id TEXT,
   user_id TEXT,
+  goal_root_id TEXT,
   title TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'pending',
   prompt TEXT NOT NULL,
@@ -30,6 +33,9 @@ CREATE TABLE IF NOT EXISTS tasks (
   error TEXT,
   origin TEXT,
   trigger_name TEXT,
+  force_shared_planning INTEGER NOT NULL DEFAULT 0,
+  user_content_json TEXT,
+  attachments_json TEXT,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   completed_at INTEGER,
@@ -59,6 +65,7 @@ interface TaskRow {
   channel_type: string;
   conversation_id: string | null;
   user_id: string | null;
+  goal_root_id: string | null;
   title: string;
   status: string;
   prompt: string;
@@ -66,6 +73,9 @@ interface TaskRow {
   error: string | null;
   origin: string | null;
   trigger_name: string | null;
+  force_shared_planning: number | null;
+  user_content_json: string | null;
+  attachments_json: string | null;
   created_at: number;
   updated_at: number;
   completed_at: number | null;
@@ -77,6 +87,15 @@ interface ProgressRow {
   task_id: string;
   timestamp: number;
   message: string;
+}
+
+interface StoredAttachment {
+  type: Attachment["type"];
+  name: string;
+  url?: string;
+  dataBase64?: string;
+  mimeType?: string;
+  size?: number;
 }
 
 // ─── Storage Class ───────────────────────────────────────────────────────────────
@@ -117,6 +136,7 @@ export class TaskStorage {
       task.channelType,
       task.conversationId ?? null,
       task.userId ?? null,
+      task.goalRootId ?? null,
       task.title,
       task.status,
       task.prompt,
@@ -124,6 +144,9 @@ export class TaskStorage {
       task.error ?? null,
       task.origin ?? null,
       task.triggerName ?? null,
+      task.forceSharedPlanning ? 1 : 0,
+      this.serializeUserContent(task.userContent),
+      this.serializeAttachments(task.attachments),
       task.createdAt,
       task.updatedAt,
       task.completedAt ?? null,
@@ -159,6 +182,11 @@ export class TaskStorage {
     this.getStmt("updateBlocked").run(result, TaskStatus.blocked, Date.now(), Date.now(), id);
   }
 
+  updateGoalRoot(id: TaskId, goalRootId: string): void {
+    this.ensureConnection();
+    this.getStmt("updateGoalRoot").run(goalRootId, Date.now(), id);
+  }
+
   addProgress(id: TaskId, message: string): void {
     this.ensureConnection();
     const now = Date.now();
@@ -180,10 +208,23 @@ export class TaskStorage {
     return rows.map((r) => this.rowToTask(r, this.getProgress(r.id)));
   }
 
+  listRecoverable(limit = 20): Task[] {
+    this.ensureConnection();
+    const rows = this.getStmt("listRecoverable").all(limit) as TaskRow[];
+    return rows.map((r) => this.rowToTask(r, this.getProgress(r.id)));
+  }
+
   loadIncomplete(): Task[] {
     this.ensureConnection();
     const rows = this.getStmt("loadIncomplete").all() as TaskRow[];
     return rows.map((r) => this.rowToTask(r, this.getProgress(r.id)));
+  }
+
+  findLatestByGoalRoot(goalRootId: string): Task | null {
+    this.ensureConnection();
+    const row = this.getStmt("findLatestByGoalRoot").get(goalRootId) as TaskRow | undefined;
+    if (!row) return null;
+    return this.rowToTask(row, this.getProgress(row.id));
   }
 
   // ─── Private ────────────────────────────────────────────────────────────────
@@ -200,6 +241,7 @@ export class TaskStorage {
       channelType: row.channel_type,
       conversationId: row.conversation_id ?? undefined,
       userId: row.user_id ?? undefined,
+      goalRootId: row.goal_root_id ?? undefined,
       title: row.title,
       status: row.status as TaskStatus,
       prompt: row.prompt,
@@ -212,6 +254,9 @@ export class TaskStorage {
       parentId: row.parent_id ? (row.parent_id as TaskId) : undefined,
       origin: this.parseTaskOrigin(row.origin),
       triggerName: row.trigger_name ?? undefined,
+      forceSharedPlanning: row.force_shared_planning === 1,
+      userContent: this.parseUserContent(row.user_content_json),
+      attachments: this.parseAttachments(row.attachments_json),
     };
   }
 
@@ -223,8 +268,12 @@ export class TaskStorage {
     const migratableColumns: Array<[string, string]> = [
       ["conversation_id", "TEXT"],
       ["user_id", "TEXT"],
+      ["goal_root_id", "TEXT"],
       ["origin", "TEXT"],
       ["trigger_name", "TEXT"],
+      ["force_shared_planning", "INTEGER NOT NULL DEFAULT 0"],
+      ["user_content_json", "TEXT"],
+      ["attachments_json", "TEXT"],
     ];
     const missingColumns = migratableColumns.filter(([name]) => !knownColumns.has(name));
 
@@ -235,6 +284,58 @@ export class TaskStorage {
 
   private parseTaskOrigin(origin: string | null): TaskOrigin | undefined {
     return origin === "user" || origin === "daemon" ? origin : undefined;
+  }
+
+  private serializeUserContent(userContent?: string | MessageContent[]): string | null {
+    if (typeof userContent === "undefined") {
+      return null;
+    }
+    return JSON.stringify(userContent);
+  }
+
+  private parseUserContent(value: string | null): string | MessageContent[] | undefined {
+    if (!value) {
+      return undefined;
+    }
+    try {
+      return JSON.parse(value) as string | MessageContent[];
+    } catch {
+      return undefined;
+    }
+  }
+
+  private serializeAttachments(attachments?: Attachment[]): string | null {
+    if (!attachments || attachments.length === 0) {
+      return null;
+    }
+    const encoded: StoredAttachment[] = attachments.map((attachment) => ({
+      type: attachment.type,
+      name: attachment.name,
+      ...(attachment.url ? { url: attachment.url } : {}),
+      ...(attachment.data ? { dataBase64: attachment.data.toString("base64") } : {}),
+      ...(attachment.mimeType ? { mimeType: attachment.mimeType } : {}),
+      ...(typeof attachment.size === "number" ? { size: attachment.size } : {}),
+    }));
+    return JSON.stringify(encoded);
+  }
+
+  private parseAttachments(value: string | null): Attachment[] | undefined {
+    if (!value) {
+      return undefined;
+    }
+    try {
+      const decoded = JSON.parse(value) as StoredAttachment[];
+      return decoded.map((attachment) => ({
+        type: attachment.type,
+        name: attachment.name,
+        ...(attachment.url ? { url: attachment.url } : {}),
+        ...(attachment.dataBase64 ? { data: Buffer.from(attachment.dataBase64, "base64") } : {}),
+        ...(attachment.mimeType ? { mimeType: attachment.mimeType } : {}),
+        ...(typeof attachment.size === "number" ? { size: attachment.size } : {}),
+      }));
+    } catch {
+      return undefined;
+    }
   }
 
   private ensureConnection(): void {
@@ -255,20 +356,24 @@ export class TaskStorage {
     const stmts: Record<string, string> = {
       insertTask: `
         INSERT INTO tasks (
-          id, chat_id, channel_type, conversation_id, user_id,
+          id, chat_id, channel_type, conversation_id, user_id, goal_root_id,
           title, status, prompt, result, error, origin, trigger_name,
+          force_shared_planning, user_content_json, attachments_json,
           created_at, updated_at, completed_at, parent_id
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       getTask: `SELECT * FROM tasks WHERE id = ?`,
       updateStatus: `UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?`,
       updateResult: `UPDATE tasks SET result = ?, status = ?, updated_at = ?, completed_at = ? WHERE id = ?`,
       updateError: `UPDATE tasks SET error = ?, status = ?, updated_at = ?, completed_at = ? WHERE id = ?`,
       updateBlocked: `UPDATE tasks SET result = ?, status = ?, updated_at = ?, completed_at = ? WHERE id = ?`,
+      updateGoalRoot: `UPDATE tasks SET goal_root_id = ?, updated_at = ? WHERE id = ?`,
       listByChatId: `SELECT * FROM tasks WHERE chat_id = ? ORDER BY created_at DESC LIMIT ?`,
       listActiveByChatId: `SELECT * FROM tasks WHERE chat_id = ? AND status IN ('pending', 'planning', 'executing', 'paused', 'waiting_for_input') ORDER BY created_at DESC`,
+      listRecoverable: `SELECT * FROM tasks WHERE status IN ('blocked', 'failed', 'cancelled') ORDER BY updated_at DESC, created_at DESC LIMIT ?`,
       loadIncomplete: `SELECT * FROM tasks WHERE status IN ('pending', 'planning', 'executing', 'paused', 'waiting_for_input') ORDER BY updated_at DESC, created_at DESC`,
+      findLatestByGoalRoot: `SELECT * FROM tasks WHERE goal_root_id = ? ORDER BY updated_at DESC, created_at DESC LIMIT 1`,
       insertProgress: `INSERT INTO task_progress (task_id, timestamp, message) VALUES (?, ?, ?)`,
       touchTask: `UPDATE tasks SET updated_at = ? WHERE id = ?`,
       getProgress: `SELECT * FROM task_progress WHERE task_id = ? ORDER BY timestamp ASC`,

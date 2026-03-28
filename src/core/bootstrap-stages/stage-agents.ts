@@ -131,6 +131,7 @@ export async function initializeMultiAgentDelegationStage(
       orchestrator: liveOrchestrator,
     });
   });
+  agentManager.setTaskManager?.(params.taskManager);
   params.daemonContext.agentManager = agentManager;
   params.daemonContext.agentBudgetTracker = agentBudgetTracker;
 
