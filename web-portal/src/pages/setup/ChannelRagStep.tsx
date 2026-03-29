@@ -255,26 +255,28 @@ export default function ChannelRagStep({
             : 'Enable background monitoring with triggers, scheduled tasks, and proactive assistance.'}
         </p>
         {daemonEnabled && (
-          <div className="autonomy-slider-container">
-            <label className="autonomy-budget-label">Daemon Sub-Limit</label>
-            <input
-              type="range"
-              min={0.5}
-              max={10}
-              step={0.5}
-              value={daemonBudget}
-              onChange={(e) => setDaemonBudget(Number(e.target.value))}
-              className="autonomy-range"
-            />
-            <div className="autonomy-labels">
-              <span>$0.50</span>
-              <span className="autonomy-value">${daemonBudget.toFixed(2)}</span>
-              <span>$10.00</span>
+          <>
+            <div className="autonomy-slider-container">
+              <label className="autonomy-budget-label">Daemon Sub-Limit</label>
+              <input
+                type="range"
+                min={0.5}
+                max={10}
+                step={0.5}
+                value={daemonBudget}
+                onChange={(e) => setDaemonBudget(Number(e.target.value))}
+                className="autonomy-range"
+              />
+              <div className="autonomy-labels">
+                <span>$0.50</span>
+                <span className="autonomy-value">${daemonBudget.toFixed(2)}</span>
+                <span>$10.00</span>
+              </div>
             </div>
-          </div>
-          <p className="rag-info" style={{ marginTop: '0.3rem', fontSize: '0.75rem' }}>
-            Maximum daily spend for daemon triggers only (within the global budget).
-          </p>
+            <p className="rag-info" style={{ marginTop: '0.3rem', fontSize: '0.75rem' }}>
+              Maximum daily spend for daemon triggers only (within the global budget).
+            </p>
+          </>
         )}
       </div>
 

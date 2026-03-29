@@ -432,6 +432,18 @@ export function buildSetupEnvLines(
     "DASHBOARD_PORT=3100",
   );
 
+  // Global daily budget (unified budget system)
+  if (config.STRADA_BUDGET_DAILY_USD) {
+    const globalBudget = Number(config.STRADA_BUDGET_DAILY_USD);
+    if (Number.isFinite(globalBudget) && globalBudget > 0 && globalBudget <= 10000) {
+      lines.push(
+        "",
+        "# Global Budget",
+        `STRADA_BUDGET_DAILY_USD=${globalBudget}`,
+      );
+    }
+  }
+
   if (config.STRADA_DAEMON_ENABLED === "true") {
     const budget = Number(config.STRADA_DAEMON_DAILY_BUDGET);
     const safeBudget = Number.isFinite(budget) && budget >= 0.5 && budget <= 10 ? budget : 1.0;
