@@ -5,14 +5,12 @@
  * Uses a FIFO queue with configurable concurrency limit.
  * All work is I/O-bound (LLM API calls), so same event loop is fine.
  *
- * Optionally accepts a GoalDecomposer to decompose complex prompts
- * into goal trees. When GoalExecutor is available, executes sub-goals
- * in parallel waves with LLM criticality evaluation, failure budget UX,
- * channel-adaptive progress updates, and persistent tree state.
+ * Routes tasks through two execution paths:
+ *  - "supervisor": full supervisor-managed execution with goal decomposition
+ *  - "direct_worker": single-shot worker execution via orchestrator
  *
- * Supports pre-decomposed goal trees (from inline goal detection) to
- * skip redundant LLM decomposition. Emits goal lifecycle events to
- * DaemonEventBus for WebSocket dashboard broadcasting.
+ * Emits goal lifecycle events to DaemonEventBus for WebSocket dashboard
+ * broadcasting.
  */
 
 import type {
@@ -26,23 +24,12 @@ import type { Orchestrator, SupervisorAdmissionDecision } from "../agents/orches
 import { resolveConversationScope } from "../agents/orchestrator-text-utils.js";
 import type { GoalDecomposer } from "../goals/goal-decomposer.js";
 import type { GoalNode, GoalTree } from "../goals/types.js";
-import { GoalExecutor } from "../goals/goal-executor.js";
-import type {
-  GoalExecutorConfig,
-  CriticalityEvaluator,
-  OnFailureBudgetExceeded,
-  FailureReport,
-  ExecutionResult,
-} from "../goals/goal-executor.js";
 import type { GoalStorage } from "../goals/goal-storage.js";
-import { calculateProgress } from "../goals/goal-progress.js";
 import { buildGoalNarrativeFeedback } from "../goals/goal-feedback.js";
 import type { IAIProvider } from "../agents/providers/provider.interface.js";
 import type { IChannelAdapter } from "../channels/channel.interface.js";
-import { supportsInteractivity } from "../channels/channel.interface.js";
 import type { IEventEmitter, LearningEventMap } from "../core/event-bus.js";
 import type { DaemonEventMap } from "../daemon/daemon-events.js";
-import type { GoalConfig } from "../config/config.js";
 import { estimateCost } from "../security/rate-limiter.js";
 import type { BudgetTracker } from "../daemon/budget/budget-tracker.js";
 import type { UnifiedBudgetManager } from "../budget/unified-budget-manager.js";
@@ -57,7 +44,6 @@ import {
   type WorkspaceEventMap,
 } from "../dashboard/workspace-events.js";
 
-const LLM_TIMEOUT_MS = 10_000;
 const GOAL_CANVAS_SUMMARY_WIDTH = 320;
 const GOAL_CANVAS_SUMMARY_HEIGHT = 180;
 const GOAL_CANVAS_CARD_WIDTH = 240;
@@ -66,15 +52,6 @@ const GOAL_CANVAS_COLUMN_GAP = 320;
 const GOAL_CANVAS_ROW_GAP = 180;
 const GOAL_CANVAS_SUMMARY_X = 0;
 const GOAL_CANVAS_SUMMARY_Y = 0;
-
-/** Race a promise against a timeout; resolves to fallback on timeout. */
-function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
-  let timer: ReturnType<typeof setTimeout>;
-  return Promise.race([
-    promise,
-    new Promise<T>((resolve) => { timer = setTimeout(() => resolve(fallback), ms); }),
-  ]).finally(() => clearTimeout(timer));
-}
 
 /** Build a human-readable label for a substep based on tool name and language. */
 export function buildSubstepLabel(toolName: string, lang: string = "en"): string {
@@ -150,33 +127,10 @@ interface QueueEntry {
   onProgress: (message: TaskProgressUpdate) => void;
 }
 
-interface DecomposedExecutionResult {
-  output: string;
-  success: boolean;
-  error?: string;
-  blocked?: boolean;
-  aborted: boolean;
-}
-
 type ManagedWorkspaceLease = Awaited<ReturnType<WorkspaceLeaseManager["acquireLease"]>>;
-
-interface GoalResultSynthesizer {
-  synthesizeGoalExecutionResult?: (params: {
-    prompt: string;
-    goalTree: GoalTree;
-    executionResult: ExecutionResult;
-    chatId: string;
-    conversationId?: string;
-    userId?: string;
-    channelType?: string;
-    onUsage?: (usage: { provider: string; inputTokens: number; outputTokens: number }) => void;
-    childWorkerResults?: readonly WorkerRunResult[];
-  }) => Promise<string>;
-}
 
 interface TopLevelAdmissionResult {
   decision: SupervisorAdmissionDecision;
-  canExecuteGoalInline: boolean;
   supervisorGoalTree?: GoalTree;
   supervisorGoalStartedAt: number;
 }
@@ -186,11 +140,9 @@ export interface BackgroundExecutorOptions {
   concurrencyLimit?: number;
   decomposer?: GoalDecomposer;
   goalStorage?: GoalStorage;
-  goalExecutorConfig?: GoalExecutorConfig;
   aiProvider?: IAIProvider;
   channel?: IChannelAdapter;
   daemonEventBus?: IEventEmitter<DaemonEventMap>;
-  goalConfig?: GoalConfig;
   learningEventBus?: IEventEmitter<LearningEventMap>;
   workspaceLeaseManager?: WorkspaceLeaseManager;
   workspaceBus?: WorkspaceBus;
@@ -205,31 +157,19 @@ export class BackgroundExecutor {
   private readonly concurrencyLimit: number;
   private readonly decomposer?: GoalDecomposer;
   private readonly goalStorage?: GoalStorage;
-  private readonly goalExecutorConfig?: GoalExecutorConfig;
-  private readonly aiProvider?: IAIProvider;
-  private readonly channel?: IChannelAdapter;
   private readonly daemonEventBus?: IEventEmitter<DaemonEventMap>;
-  private readonly goalConfig?: GoalConfig;
-  private readonly learningEventBus?: IEventEmitter<LearningEventMap>;
   private readonly workspaceLeaseManager?: WorkspaceLeaseManager;
   private workspaceBus?: WorkspaceBus;
   private monitorLifecycle?: MonitorLifecycle;
   private daemonBudgetTracker?: BudgetTracker;
   private _unifiedBudgetManager?: UnifiedBudgetManager;
-  private currentPhase?: 'planning' | 'acting' | 'observing' | 'reflecting';
-  private nodeProgress?: Map<string, { current: number; total: number; unit: string }>;
 
   constructor(opts: BackgroundExecutorOptions) {
     this.orchestrator = opts.orchestrator;
     this.concurrencyLimit = opts.concurrencyLimit ?? 3;
     this.decomposer = opts.decomposer;
     this.goalStorage = opts.goalStorage;
-    this.goalExecutorConfig = opts.goalExecutorConfig;
-    this.aiProvider = opts.aiProvider;
-    this.channel = opts.channel;
     this.daemonEventBus = opts.daemonEventBus;
-    this.goalConfig = opts.goalConfig;
-    this.learningEventBus = opts.learningEventBus;
     this.workspaceLeaseManager = opts.workspaceLeaseManager;
     this.workspaceBus = opts.workspaceBus;
   }
@@ -304,18 +244,8 @@ export class BackgroundExecutor {
     workspaceLease?: ManagedWorkspaceLease;
   }): Promise<TopLevelAdmissionResult> {
     const { task, taskOrchestrator, signal, onProgress, workspaceLease } = params;
-    const hasRichInput =
-      (task.attachments?.length ?? 0) > 0 ||
-      (Array.isArray(task.userContent) && task.userContent.some((block) => block.type !== "text"));
-    const shouldDecomposeTask = this.decomposer?.shouldDecompose(task.prompt) ?? false;
-    const shouldAttemptSharedPlanning =
-      Boolean(task.goalTree) || Boolean(task.forceSharedPlanning) || shouldDecomposeTask;
-    // Only execute goals inline when a pre-built tree was provided (e.g., from
-    // inline goal detection). Heuristic shouldDecompose alone should NOT trigger
-    // goal execution — it must pass through the supervisor admission gate first.
-    const canExecuteGoalInline = !hasRichInput && Boolean(task.goalTree);
     const fallbackDecision: SupervisorAdmissionDecision = {
-      path: task.goalTree ? "direct_goal_execution" : "direct_worker",
+      path: "direct_worker",
       reason: "unavailable",
     };
 
@@ -343,7 +273,6 @@ export class BackgroundExecutor {
     if (typeof supervisorCapableOrchestrator.evaluateSupervisorAdmission !== "function") {
       return {
         decision: fallbackDecision,
-        canExecuteGoalInline,
         supervisorGoalStartedAt: 0,
       };
     }
@@ -393,17 +322,8 @@ export class BackgroundExecutor {
         emitSupervisorProgress(normalizeSupervisorProgressMarkdown(markdown));
       },
     });
-    const normalizedDecision =
-      decision.path === "direct_worker" && canExecuteGoalInline && shouldAttemptSharedPlanning
-        ? {
-            ...decision,
-            path: "direct_goal_execution" as const,
-          }
-        : decision;
-
     return {
-      decision: normalizedDecision,
-      canExecuteGoalInline,
+      decision,
       supervisorGoalTree,
       supervisorGoalStartedAt,
     };
@@ -541,23 +461,6 @@ export class BackgroundExecutor {
     });
   }
 
-  private emitGoalCanvasNodeUpdate(task: Task, goalTree: GoalTree, updatedNode: GoalNode): void {
-    if (!this.workspaceBus) {
-      return;
-    }
-
-    const positions = this.buildGoalCanvasPositions(goalTree);
-    this.workspaceBus.emit("canvas:agent_draw", {
-      action: "update",
-      intent: "goal_execution_board",
-      autoSwitch: false,
-      shapes: [
-        this.buildGoalCanvasSummary(task, goalTree),
-        this.buildGoalCanvasNodeShape(updatedNode, positions.get(String(updatedNode.id))),
-      ],
-    });
-  }
-
   private completeGoalExecution(
     task: Task,
     goalTree: GoalTree,
@@ -627,13 +530,12 @@ export class BackgroundExecutor {
     });
   }
 
-  setPhase(phase: 'planning' | 'acting' | 'observing' | 'reflecting'): void {
-    this.currentPhase = phase;
+  setPhase(_phase: 'planning' | 'acting' | 'observing' | 'reflecting'): void {
+    // No-op: direct_goal_execution path removed
   }
 
-  setNodeProgress(nodeId: string, current: number, total: number, unit: string): void {
-    if (!this.nodeProgress) this.nodeProgress = new Map();
-    this.nodeProgress.set(nodeId, { current, total, unit });
+  setNodeProgress(_nodeId: string, _current: number, _total: number, _unit: string): void {
+    // No-op: direct_goal_execution path removed
   }
 
   emitSubstep(
@@ -1004,32 +906,6 @@ export class BackgroundExecutor {
         return;
       }
 
-      if (supervisorDecision.path === "direct_goal_execution" && admission.canExecuteGoalInline) {
-        const result = await this.executeDecomposed(
-          task,
-          signal,
-          onProgress,
-          task.goalTree,
-          taskWorkspaceLease,
-        );
-        if (signal.aborted) return;
-        if (!result.success) {
-          if (result.blocked) {
-            requestFailed = true;
-            this.taskManager.block(
-              task.id,
-              result.output || result.error || "Goal execution blocked",
-            );
-            return;
-          }
-          requestFailed = true;
-          this.taskManager.fail(task.id, result.error ?? "Goal execution failed");
-          return;
-        }
-        this.taskManager.complete(task.id, result.output);
-        return;
-      }
-
       const result = await this.runWorkerEnvelope(taskOrchestrator, {
         mode: "background",
         prompt: task.prompt,
@@ -1091,440 +967,6 @@ export class BackgroundExecutor {
       await taskWorkspaceLease?.release().catch(() => {});
       this.monitorLifecycle?.requestEnd(conversationScope, requestFailed);
     }
-  }
-
-  /**
-   * Decompose a task into a goal tree, execute via GoalExecutor with parallel
-   * wave-based execution, LLM criticality evaluation, failure budget UX,
-   * channel-adaptive progress updates, and persistent tree state.
-   *
-   * When preBuiltTree is provided (from inline goal detection), uses it directly
-   * instead of calling decomposer.decomposeProactive -- zero extra LLM cost.
-   */
-  private async executeDecomposed(
-    task: Task,
-    signal: AbortSignal,
-    onProgress: (message: TaskProgressUpdate) => void,
-    preBuiltTree?: GoalTree,
-    workspaceLease?: ManagedWorkspaceLease,
-  ): Promise<DecomposedExecutionResult> {
-    const logger = getLogger();
-    const startTime = Date.now();
-    const taskOrchestrator = task.orchestrator ?? this.orchestrator;
-
-    // Use pre-built tree if provided, otherwise decompose
-    const goalTree = preBuiltTree ?? await this.decomposer!.decomposeProactive(task.chatId, task.prompt);
-    const nodeCount = goalTree.nodes.size - 1; // exclude root
-    logger.info("Task decomposed into goal tree", { taskId: task.id, nodeCount, preBuilt: !!preBuiltTree });
-    this.beginGoalExecution(task, goalTree, onProgress);
-
-    // Create executor with config (or defaults)
-    const config: GoalExecutorConfig = {
-      maxRetries: 1,
-      maxFailures: 3,
-      parallelExecution: workspaceLease ? false : true,
-      maxParallel: workspaceLease ? 1 : 3,
-      ...this.goalExecutorConfig,
-      maxRedecompositions: this.goalExecutorConfig?.maxRedecompositions ?? this.goalConfig?.maxRedecompositions ?? 2,
-    };
-    const executor = new GoalExecutor(config);
-    const childWorkerResults = new Map<string, WorkerRunResult>();
-    let blockedWorkerReason: string | undefined;
-
-    // Node executor: delegates to orchestrator.runBackgroundTask
-    const nodeExecutor = async (node: GoalNode, nodeSignal: AbortSignal): Promise<string> => {
-      const result = await this.runWorkerEnvelope(taskOrchestrator, {
-        mode: "background",
-        prompt: node.task,
-        signal: nodeSignal,
-        onProgress: (msg: TaskProgressUpdate) =>
-          onProgress(typeof msg === "string" ? `[${node.task}] ${msg}` : msg),
-        chatId: task.chatId,
-        taskRunId: `${task.id}:${node.id}`,
-        channelType: task.channelType,
-        conversationId: task.conversationId,
-        userId: task.userId,
-        attachments: task.attachments,
-        userContent: task.userContent,
-        onUsage: this.buildUsageRecorder(task),
-        workspaceLease,
-        supervisorMode: "off",
-      });
-      if (result.workerResult) {
-        childWorkerResults.set(node.id, result.workerResult);
-        if (result.workerResult.status !== "completed") {
-          if (result.workerResult.status === "blocked" && !blockedWorkerReason) {
-            blockedWorkerReason =
-              result.workerResult.reason ?? (result.output || "Worker blocked");
-          }
-          throw new Error(
-            result.workerResult.reason ?? (result.output || "Worker did not complete"),
-          );
-        }
-      }
-      return result.output;
-    };
-
-    // Status change callback: persist node status + send throttled progress update
-    let lastProgressUpdate = 0;
-    const PROGRESS_THROTTLE_MS = 500;
-
-    const onStatusChange = (updatedTree: GoalTree, updatedNode: GoalNode): void => {
-      // Persist individual node status change (not full tree rewrite)
-      if (this.goalStorage) {
-        try {
-          this.goalStorage.updateNodeStatus(
-            updatedNode.id, updatedNode.status,
-            updatedNode.result, updatedNode.error,
-            updatedNode.retryCount, updatedNode.redecompositionCount,
-          );
-        } catch (e) {
-          logger.debug("Goal node persistence failed", { error: e instanceof Error ? e.message : String(e) });
-        }
-      }
-
-      // Workspace monitor: task update event for dashboard UI
-      if (this.workspaceBus) {
-        this.workspaceBus.emit("monitor:task_update", {
-          rootId: String(updatedTree.rootId),
-          nodeId: String(updatedNode.id),
-          status: String(updatedNode.status),
-          reviewStatus: updatedNode.reviewStatus,
-          phase: updatedNode.status === "executing"
-            ? (this.currentPhase ?? "acting")
-            : undefined,
-          progress: this.nodeProgress?.get(String(updatedNode.id)),
-          elapsed: updatedNode.startedAt
-            ? Date.now() - updatedNode.startedAt
-            : undefined,
-        });
-      }
-
-      // Throttled progress rendering to avoid message flood
-      const now = Date.now();
-      const isTerminal = updatedNode.status === "completed" || updatedNode.status === "failed" || updatedNode.status === "skipped";
-      if (now - lastProgressUpdate >= PROGRESS_THROTTLE_MS || isTerminal) {
-        lastProgressUpdate = now;
-        onProgress(this.buildGoalProgressSignal(task, updatedTree, true));
-        this.emitGoalNarrative(task, updatedTree, String(updatedNode.id));
-        this.emitGoalCanvasNodeUpdate(task, updatedTree, updatedNode);
-      }
-    };
-
-    // Wave completion callback for daemon events (progress rendering handled by onStatusChange)
-    const onWaveComplete = (_updatedTree: GoalTree, waveIndex: number): void => {
-      if (this.daemonEventBus) {
-        const progress = calculateProgress(_updatedTree);
-        this.daemonEventBus.emit("goal:wave_complete", {
-          rootId: goalTree.rootId,
-          waveIndex,
-          completedCount: progress.completed,
-          totalCount: progress.total,
-          timestamp: Date.now(),
-        });
-      }
-    };
-
-    // LLM criticality evaluator (per user decision: "Agent decides at runtime whether
-    // child failure propagates to parent -- LLM evaluates criticality")
-    const criticalityEvaluator: CriticalityEvaluator | undefined = this.aiProvider
-      ? async (failedNode: GoalNode, parentTask: string): Promise<boolean> => {
-          try {
-            const response = await withTimeout(
-              this.aiProvider!.chat(
-                "You are a task criticality evaluator. Respond with exactly YES or NO followed by one sentence of reasoning.",
-                [{
-                  role: "user" as const,
-                  content: `A sub-goal failed during task execution. Evaluate if this failure is critical enough to block dependent sub-goals.
-
-<failed_subgoal>${failedNode.task}</failed_subgoal>
-<error>${sanitizeError(failedNode.error ?? "unknown error")}</error>
-<parent_goal>${parentTask}</parent_goal>
-
-Is this failure critical? A critical failure means dependent sub-goals cannot proceed without this result. A non-critical failure means other sub-goals can work around it. Respond with exactly YES or NO followed by one sentence of reasoning.`,
-                }],
-                [],
-              ),
-              LLM_TIMEOUT_MS,
-              { text: "YES" } as Awaited<ReturnType<IAIProvider["chat"]>>,
-            );
-            const text = response.text?.trim().toUpperCase() ?? "YES";
-            return text.startsWith("YES");
-          } catch (e) {
-            logger.debug("Criticality evaluation LLM call failed, defaulting to critical", { error: e instanceof Error ? e.message : String(e) });
-            return true; // Default to critical on LLM failure
-          }
-        }
-      : undefined;
-
-    // LLM-driven re-decomposition on node failure (Plan 16-03)
-    const onNodeFailed = this.decomposer && this.aiProvider
-      ? async (currentTree: GoalTree, failedNode: GoalNode): Promise<GoalTree | null> => {
-          const maxRedecompositions = this.goalConfig?.maxRedecompositions ?? 2;
-          const currentCount = failedNode.redecompositionCount ?? 0;
-
-          // Enforce per-node redecomposition limit
-          if (currentCount >= maxRedecompositions) {
-            logger.debug("Re-decomposition limit reached for node", {
-              nodeId: failedNode.id,
-              count: currentCount,
-              max: maxRedecompositions,
-            });
-            return null;
-          }
-
-          // Ask LLM: RETRY or DECOMPOSE?
-          try {
-            const advisorResponse = await withTimeout(
-              this.aiProvider!.chat(
-                "You are a goal execution recovery advisor. A sub-goal has failed. Decide the best recovery strategy. Respond with exactly RETRY or DECOMPOSE followed by a brief reason.",
-                [{
-                  role: "user" as const,
-                  content: `Original goal: ${goalTree.taskDescription}\n\nFailed sub-goal: ${failedNode.task}\nError: ${sanitizeError(failedNode.error ?? "unknown")}\nRedecomposition count: ${currentCount}/${maxRedecompositions}\n\nShould we RETRY the same approach or DECOMPOSE into smaller steps?`,
-                }],
-                [],
-              ),
-              LLM_TIMEOUT_MS,
-              { text: "RETRY" } as Awaited<ReturnType<IAIProvider["chat"]>>,
-            );
-
-            const decision = advisorResponse.text?.trim().toUpperCase() ?? "RETRY";
-
-            if (decision.startsWith("DECOMPOSE") && this.decomposer) {
-              // decomposeReactive builds its own completed-nodes context internally
-              const reflectionContext = `Error: ${failedNode.error ?? "unknown"}\nFailed task: ${failedNode.task}`;
-
-              const newTree = await this.decomposer.decomposeReactive(
-                currentTree,
-                failedNode.id,
-                reflectionContext,
-              );
-
-              if (newTree) {
-                // Increment redecompositionCount on the failed node in the new tree
-                const updatedFailedNode = newTree.nodes.get(failedNode.id);
-                if (updatedFailedNode) {
-                  const mutableNodes = new Map(newTree.nodes);
-                  mutableNodes.set(failedNode.id, {
-                    ...updatedFailedNode,
-                    redecompositionCount: currentCount + 1,
-                  });
-                  const updatedTree = { ...newTree, nodes: mutableNodes };
-
-                  // Emit goal:redecomposed event
-                  if (this.learningEventBus) {
-                    const newNodeCount = newTree.nodes.size - currentTree.nodes.size;
-                    this.learningEventBus.emit("goal:redecomposed", {
-                      rootId: goalTree.rootId,
-                      nodeId: failedNode.id,
-                      task: failedNode.task,
-                      newNodeCount,
-                      timestamp: Date.now(),
-                    });
-                  }
-
-                  return updatedTree;
-                }
-                return newTree;
-              }
-            }
-
-            // RETRY decision or DECOMPOSE failed
-            if (this.learningEventBus) {
-              this.learningEventBus.emit("goal:retry", {
-                rootId: goalTree.rootId,
-                nodeId: failedNode.id,
-                task: failedNode.task,
-                attempt: (failedNode.retryCount ?? 0) + 1,
-                timestamp: Date.now(),
-              });
-            }
-            return null;
-          } catch (e) {
-            logger.debug("onNodeFailed recovery failed", {
-              error: e instanceof Error ? e.message : String(e),
-            });
-            return null;
-          }
-        }
-      : undefined;
-
-    // Failure budget exceeded handler: detailed report, LLM diagnosis, 4-option escalation UX
-    const interactiveChannel = this.channel && supportsInteractivity(this.channel)
-      ? this.channel
-      : undefined;
-
-    const onFailureBudgetExceeded: OnFailureBudgetExceeded = async (report: FailureReport) => {
-      // Build detailed failure report
-      const failureLines: string[] = [
-        `Failure budget exceeded (${report.failureCount}/${report.maxFailures} failures):`,
-        "",
-      ];
-      for (const fn of report.failedNodes) {
-        failureLines.push(`[!] ${fn.task}`);
-        failureLines.push(`    Error: ${sanitizeError(fn.error)}`);
-        if (fn.retryCount > 0) failureLines.push(`    Retries: ${fn.retryCount}`);
-        failureLines.push("");
-      }
-
-      // LLM-generated diagnosis (best-effort, lightweight model)
-      let diagnosis = "";
-      if (this.aiProvider) {
-        try {
-          const diagResponse = await withTimeout(
-            this.aiProvider.chat(
-              "You are a task failure diagnostician. Provide a brief diagnosis and actionable fix suggestions. Be concise (2-3 sentences).",
-              [{
-                role: "user" as const,
-                content: `Task: ${goalTree.taskDescription}\n\nFailed sub-goals:\n${report.failedNodes.map(fn =>
-                  `- ${fn.task}: ${sanitizeError(fn.error)} (${fn.retryCount} retries)`
-                ).join("\n")}`,
-              }],
-              [],
-            ),
-            LLM_TIMEOUT_MS,
-            { text: "" } as Awaited<ReturnType<IAIProvider["chat"]>>,
-          );
-          diagnosis = diagResponse.text?.trim() ?? "";
-        } catch {
-          // LLM diagnosis is best-effort
-        }
-      }
-
-      if (diagnosis) {
-        failureLines.push("Diagnosis:", diagnosis, "");
-      }
-
-      const details = failureLines.join("\n");
-      const timeoutMinutes = this.goalConfig?.escalationTimeoutMinutes ?? 10;
-
-      if (interactiveChannel) {
-        const timeoutMs = timeoutMinutes * 60_000;
-        let timer: ReturnType<typeof setTimeout> | undefined;
-        const choice = await Promise.race([
-          interactiveChannel.requestConfirmation({
-            chatId: task.chatId,
-            question: `Failure budget exceeded (${report.failureCount}/${report.maxFailures}). How to proceed?`,
-            options: ["Continue", "Always Continue", "Abort"],
-            details,
-          }),
-          new Promise<string>((resolve) => {
-            timer = setTimeout(() => resolve("__timeout__"), timeoutMs);
-          }),
-        ]).finally(() => { if (timer !== undefined) clearTimeout(timer); });
-
-        if (choice === "__timeout__") {
-          await interactiveChannel.sendText(task.chatId,
-            `Auto-aborting after ${timeoutMinutes}min timeout.${diagnosis ? `\n${diagnosis}` : ""}`);
-          return { continue: false, alwaysContinue: false };
-        }
-
-        const normalized = choice.toLowerCase().trim();
-        if (normalized === "always continue") return { continue: true, alwaysContinue: true };
-        if (normalized === "continue") return { continue: true, alwaysContinue: false };
-        return { continue: false, alwaysContinue: false }; // Abort or unrecognized
-      } else {
-        // Non-interactive: send report via progress and auto-abort
-        onProgress(`Failure budget exceeded. ${diagnosis || "Aborting."}`);
-        return { continue: false, alwaysContinue: false };
-      }
-    };
-
-    // Execute the tree with all callbacks
-    const result = await executor.executeTree(goalTree, nodeExecutor, signal, {
-      onStatusChange,
-      criticalityEvaluator,
-      onFailureBudgetExceeded,
-      onWaveComplete,
-      onNodeFailed,
-    });
-
-    const allChildWorkerResults = [...childWorkerResults.values()];
-    const blockedWorker = allChildWorkerResults.find((workerResult) => workerResult.status === "blocked");
-    const childWorkerIssues = allChildWorkerResults.some(
-      (workerResult) =>
-        workerResult.status !== "completed" ||
-        workerResult.reviewFindings.some((finding) => finding.severity === "error") ||
-        workerResult.verificationResults.some((entry) => entry.status === "issues"),
-    );
-    const hasFailed = result.aborted || result.failureCount > 0 || childWorkerIssues;
-    if (hasFailed) {
-      this.failGoalExecution(
-        task,
-        goalTree,
-        result.aborted ? "Goal aborted" : `${result.failureCount} sub-goal(s) failed`,
-        result.failureCount,
-      );
-    } else {
-      this.completeGoalExecution(
-        task,
-        goalTree,
-        Date.now() - startTime,
-        result.results.filter((r) => r.result && !r.error).length,
-      );
-    }
-
-    // Combine results
-    const rawOutput = result.results
-      .filter(r => r.result)
-      .map(r => `## Sub-goal: ${r.task}\n\n${r.result}`)
-      .join("\n\n---\n\n");
-
-    let output = rawOutput;
-    const synthesizer = taskOrchestrator as GoalResultSynthesizer;
-    if (
-      !hasFailed &&
-      rawOutput &&
-      typeof synthesizer.synthesizeGoalExecutionResult === "function"
-    ) {
-      try {
-        const synthesized = await synthesizer.synthesizeGoalExecutionResult({
-          prompt: task.prompt,
-          goalTree: result.tree,
-          executionResult: result,
-          chatId: task.chatId,
-          conversationId: task.conversationId,
-          userId: task.userId,
-          channelType: task.channelType,
-          onUsage: this.buildUsageRecorder(task),
-          childWorkerResults: allChildWorkerResults,
-        });
-        if (synthesized.trim()) {
-          output = synthesized;
-        }
-      } catch (error) {
-        logger.debug("Goal result synthesis failed, falling back to raw sub-goal output", {
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
-    if (blockedWorker) {
-      const blockedSummary = blockedWorkerReason ?? blockedWorker.reason ?? "Goal execution blocked";
-      output = output.trim()
-        ? `${output}\n\nBlocked:\n${blockedSummary}`
-        : `Blocked:\n${blockedSummary}`;
-    }
-
-    return {
-      output,
-      success: !hasFailed && !blockedWorker,
-      error:
-        blockedWorkerReason
-        ?? blockedWorker?.reason
-        ?? (
-          hasFailed
-            ? (
-              result.aborted
-                ? "Goal aborted"
-                : childWorkerIssues && result.failureCount === 0
-                  ? "Child worker verification/review did not finish cleanly"
-                  : `${result.failureCount} sub-goal(s) failed`
-            )
-            : undefined
-        ),
-      blocked: Boolean(blockedWorker),
-      aborted: result.aborted,
-    };
   }
 
   private buildUsageRecorder(task: Task): ((usage: { provider: string; inputTokens: number; outputTokens: number }) => void) | undefined {

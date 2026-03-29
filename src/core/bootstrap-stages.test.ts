@@ -554,13 +554,6 @@ describe("bootstrap-stages", () => {
       activityRegistry,
       goalDecomposer: { _tag: "goal-decomposer" } as any,
       goalStorage: { _tag: "goal-storage" } as any,
-      goalExecutorConfig: {
-        maxRetries: 3,
-        maxFailures: 3,
-        parallelExecution: true,
-        maxParallel: 3,
-        maxRedecompositions: 2,
-      },
       learningEventBus: { _tag: "event-bus" } as any,
       identityManager,
       providerRouter: providerRouter as any,

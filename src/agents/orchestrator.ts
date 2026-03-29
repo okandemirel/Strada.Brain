@@ -278,7 +278,7 @@ interface TaskExecutionContext {
   readonly taskRunId?: string;
 }
 
-export type SupervisorAdmissionPath = "supervisor" | "direct_worker" | "direct_goal_execution";
+export type SupervisorAdmissionPath = "supervisor" | "direct_worker";
 
 export type SupervisorAdmissionReason =
   | "eligible"
@@ -907,15 +907,9 @@ export class Orchestrator {
   }
 
   private resolveSupervisorFallbackPath(
-    params: Pick<SupervisorAdmissionRequest, "goalTree" | "forceEligibility" | "userContent" | "attachments">,
+    _params: Pick<SupervisorAdmissionRequest, "goalTree" | "forceEligibility" | "userContent" | "attachments">,
   ): Exclude<SupervisorAdmissionPath, "supervisor"> {
-    if (this.hasRichSupervisorInput(params)) {
-      return "direct_worker";
-    }
-    if (params.goalTree) {
-      return "direct_goal_execution";
-    }
-    return params.forceEligibility ? "direct_goal_execution" : "direct_worker";
+    return "direct_worker";
   }
 
   private resolveSupervisorScope(chatId: string, channelType?: string, conversationId?: string): string {

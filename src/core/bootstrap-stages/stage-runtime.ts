@@ -25,7 +25,6 @@ import type {
   TaskRuntimeStageResult,
 } from "./bootstrap-stages-types.js";
 import type { Orchestrator } from "../../agents/orchestrator.js";
-import type { GoalExecutorConfig } from "../../goals/index.js";
 import { GoalDecomposer, GoalStorage } from "../../goals/index.js";
 import type { IEventBus, LearningEventMap } from "../event-bus.js";
 import { TypedEventBus } from "../event-bus.js";
@@ -240,7 +239,6 @@ export async function initializeTaskRuntimeStage(
     activityRegistry: ChannelActivityRegistry;
     goalDecomposer?: GoalDecomposer;
     goalStorage?: GoalStorage;
-    goalExecutorConfig: GoalExecutorConfig;
     learningEventBus?: IEventBus<LearningEventMap>;
     identityManager?: IdentityStateManager;
     providerRouter?: Parameters<CommandHandler["setProviderRouter"]>[0];
@@ -278,11 +276,9 @@ export async function initializeTaskRuntimeStage(
     concurrencyLimit: params.config.tasks.concurrencyLimit,
     decomposer: params.goalDecomposer,
     goalStorage: params.goalStorage,
-    goalExecutorConfig: params.goalExecutorConfig,
     aiProvider: params.providerManager.getProvider(""),
     channel: params.channel,
     daemonEventBus,
-    goalConfig: params.config.goal,
     learningEventBus: params.learningEventBus,
     workspaceLeaseManager,
   };

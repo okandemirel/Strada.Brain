@@ -591,7 +591,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     });
   }
 
-  const { goalStorage, goalDecomposer, interruptedGoalTrees, crashContext, goalExecutorConfig } =
+  const { goalStorage, goalDecomposer, interruptedGoalTrees, crashContext } =
     initializeGoalContextStage({
       config,
       logger,
@@ -718,7 +718,6 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     activityRegistry,
     goalDecomposer,
     goalStorage,
-    goalExecutorConfig,
     learningEventBus: learningResult.eventBus,
     identityManager,
     providerRouter,
