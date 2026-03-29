@@ -49,6 +49,7 @@ import type { SkillEntry } from "../skills/types.js";
 import { setSkillEnabled } from "../skills/skill-config.js";
 import { fetchRegistry, searchRegistry } from "../skills/skill-registry-client.js";
 import { isValidSkillName, installSkillFromRepo } from "../skills/skill-installer.js";
+import type { UnifiedBudgetManager } from "../budget/unified-budget-manager.js";
 
 /**
  * Readiness check result for the /ready endpoint.
@@ -508,6 +509,9 @@ export class DashboardServer {
   // Skill management context
   private skillManager?: DashboardSkillManager;
 
+  // Budget management context
+  private unifiedBudgetManager?: UnifiedBudgetManager;
+
   /** Timestamp of last /api/models/refresh call (rate limiting). */
   private _lastModelRefreshMs = 0;
 
@@ -715,6 +719,14 @@ export class DashboardServer {
    */
   registerSkillManager(skillManager: DashboardSkillManager): void {
     this.skillManager = skillManager;
+  }
+
+  /**
+   * Register unified budget manager for /api/budget endpoints.
+   * Call after UnifiedBudgetManager is initialized.
+   */
+  setUnifiedBudgetManager(mgr: UnifiedBudgetManager): void {
+    this.unifiedBudgetManager = mgr;
   }
 
   private getAutonomousDefaults(): { enabled: boolean; hours: number } {
@@ -2132,6 +2144,155 @@ export class DashboardServer {
           });
           return;
         }
+      }
+
+      // GET /api/budget -- Budget snapshot + config
+      if (url === "/api/budget" || url.startsWith("/api/budget?")) {
+        if (!this.unifiedBudgetManager) {
+          res.writeHead(503, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Budget manager not available" }));
+          return;
+        }
+        const snapshot = this.unifiedBudgetManager.getSnapshot();
+        const config = this.unifiedBudgetManager.getConfig();
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ...snapshot, config }));
+        return;
+      }
+
+      // GET /api/budget/history -- Daily spend history
+      if (url.startsWith("/api/budget/history")) {
+        if (!this.unifiedBudgetManager) {
+          res.writeHead(503, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Budget manager not available" }));
+          return;
+        }
+        const params = new URL(url, "http://localhost").searchParams;
+        const days = Math.min(Math.max(parseInt(params.get("days") ?? "7", 10), 1), 30);
+        const entries = this.unifiedBudgetManager.getDailyHistory(days);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ entries }));
+        return;
+      }
+
+      // POST /api/budget/config -- Update budget configuration
+      if (url === "/api/budget/config" && req.method === "POST") {
+        if (!this.unifiedBudgetManager) {
+          res.writeHead(503, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Budget manager not available" }));
+          return;
+        }
+        void this.readJsonBody<Record<string, unknown>>(req, res).then((parsed) => {
+          if (!parsed) return; // readJsonBody already sent the error response
+          try {
+            if (parsed.dailyLimitUsd !== undefined && (typeof parsed.dailyLimitUsd !== "number" || parsed.dailyLimitUsd < 0)) {
+              res.writeHead(400, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ error: "dailyLimitUsd must be a non-negative number" }));
+              return;
+            }
+            if (parsed.monthlyLimitUsd !== undefined && (typeof parsed.monthlyLimitUsd !== "number" || parsed.monthlyLimitUsd < 0)) {
+              res.writeHead(400, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ error: "monthlyLimitUsd must be a non-negative number" }));
+              return;
+            }
+            if (parsed.warnPct !== undefined && (typeof parsed.warnPct !== "number" || parsed.warnPct < 0.1 || parsed.warnPct > 0.99)) {
+              res.writeHead(400, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ error: "warnPct must be between 0.1 and 0.99" }));
+              return;
+            }
+            this.unifiedBudgetManager!.updateConfig(parsed as Parameters<UnifiedBudgetManager["updateConfig"]>[0]);
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ success: true, config: this.unifiedBudgetManager!.getConfig() }));
+          } catch (err) {
+            res.writeHead(400, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+          }
+        });
+        return;
+      }
+
+      // POST /api/settings/rate-limits -- Save rate limit overrides
+      if (url === "/api/settings/rate-limits" && req.method === "POST") {
+        if (!this.daemonStorage) {
+          res.writeHead(503, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Storage not available" }));
+          return;
+        }
+        void this.readJsonBody<Record<string, unknown>>(req, res).then((parsed) => {
+          if (!parsed) return;
+          try {
+            const storage = this.daemonStorage!;
+            if (parsed.messagesPerMinute !== undefined) {
+              storage.setSettingsOverride("rate_limit_messages_per_minute", String(parsed.messagesPerMinute));
+            }
+            if (parsed.messagesPerHour !== undefined) {
+              storage.setSettingsOverride("rate_limit_messages_per_hour", String(parsed.messagesPerHour));
+            }
+            if (parsed.messagesPerDay !== undefined) {
+              storage.setSettingsOverride("rate_limit_messages_per_day", String(parsed.messagesPerDay));
+            }
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ success: true }));
+          } catch (err) {
+            res.writeHead(400, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+          }
+        });
+        return;
+      }
+
+      // GET/POST /api/settings/voice -- Voice settings per chatId scope
+      if (url === "/api/settings/voice" || url.startsWith("/api/settings/voice?")) {
+        if (!this.daemonStorage) {
+          res.writeHead(503, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Storage not available" }));
+          return;
+        }
+        const voiceParams = new URL(url, "http://localhost").searchParams;
+        const chatId = voiceParams.get("chatId") ?? "global";
+
+        if (req.method === "GET" || req.method === "HEAD") {
+          const storage = this.daemonStorage;
+          const enabled = storage.getSettingsOverride("voice_enabled", chatId);
+          const language = storage.getSettingsOverride("voice_language", chatId);
+          const speed = storage.getSettingsOverride("voice_speed", chatId);
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({
+            enabled: enabled !== undefined ? enabled === "true" : null,
+            language: language ?? null,
+            speed: speed !== undefined ? parseFloat(speed) : null,
+            chatId,
+          }));
+          return;
+        }
+
+        if (req.method === "POST") {
+          void this.readJsonBody<Record<string, unknown>>(req, res).then((parsed) => {
+            if (!parsed) return;
+            try {
+              const storage = this.daemonStorage!;
+              if (parsed.enabled !== undefined) {
+                storage.setSettingsOverride("voice_enabled", String(Boolean(parsed.enabled)), chatId);
+              }
+              if (parsed.language !== undefined) {
+                storage.setSettingsOverride("voice_language", String(parsed.language), chatId);
+              }
+              if (parsed.speed !== undefined) {
+                storage.setSettingsOverride("voice_speed", String(parsed.speed), chatId);
+              }
+              res.writeHead(200, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ success: true }));
+            } catch (err) {
+              res.writeHead(400, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+            }
+          });
+          return;
+        }
+
+        res.writeHead(405, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Method not allowed" }));
+        return;
       }
 
       if (url === "/health") {
