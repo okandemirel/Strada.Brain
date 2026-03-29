@@ -291,6 +291,16 @@ describe("UnifiedBudgetManager", () => {
       expect(bus.events).toHaveLength(0);
     });
 
+    it("emits budget:exceeded when monthly limit is exceeded (daily unlimited)", () => {
+      mgr.updateConfig({ monthlyLimitUsd: 20 });
+      // Record enough to exceed monthly
+      mgr.recordCost(25, "daemon", {});
+      bus.events.length = 0; // clear config_updated event
+      mgr.checkAndEmitEvents();
+      const exceeded = bus.events.filter((e) => e.event === "budget:exceeded");
+      expect(exceeded.length).toBe(1);
+    });
+
     it("resets exceeded/warning flags when budget recovers (sum drops below limit)", () => {
       // Set a limit, exceed it, check events, then clear entries to simulate recovery
       mgr.updateConfig({ dailyLimitUsd: 10.0, warnPct: 0.8 });

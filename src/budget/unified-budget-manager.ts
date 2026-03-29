@@ -162,12 +162,34 @@ export class UnifiedBudgetManager {
 
   checkAndEmitEvents(): void {
     const config = this.configStore.getConfig();
-    if (config.dailyLimitUsd <= 0) return;
-    const dailyUsed = this.storage.sumBudgetSince(Date.now() - ROLLING_WINDOW_MS);
-    const pct = dailyUsed / config.dailyLimitUsd;
+    const now = Date.now();
+
+    // Check daily limit
+    let pct = 0;
+    let usedUsd = 0;
+    let limitUsd = 0;
+
+    if (config.dailyLimitUsd > 0) {
+      usedUsd = this.storage.sumBudgetSince(now - ROLLING_WINDOW_MS);
+      limitUsd = config.dailyLimitUsd;
+      pct = usedUsd / limitUsd;
+    }
+
+    // Check monthly limit (use whichever is higher percentage)
+    if (config.monthlyLimitUsd > 0) {
+      const monthlyUsed = this.storage.sumBudgetSince(now - MONTHLY_WINDOW_MS);
+      const monthlyPct = monthlyUsed / config.monthlyLimitUsd;
+      if (monthlyPct > pct) {
+        pct = monthlyPct;
+        usedUsd = monthlyUsed;
+        limitUsd = config.monthlyLimitUsd;
+      }
+    }
+
+    if (pct === 0) return; // No limits configured
 
     if (pct >= 1.0 && !this.exceededEmitted) {
-      this.eventBus.emit("budget:exceeded", { source: "global", pct, usedUsd: dailyUsed, limitUsd: config.dailyLimitUsd, isGlobal: true });
+      this.eventBus.emit("budget:exceeded", { source: "global", pct, usedUsd, limitUsd, isGlobal: true });
       this.exceededEmitted = true;
     } else if (pct < 1.0 && this.exceededEmitted) {
       this.exceededEmitted = false;
@@ -175,7 +197,7 @@ export class UnifiedBudgetManager {
     }
 
     if (pct >= config.warnPct && !this.warningEmitted && !this.exceededEmitted) {
-      this.eventBus.emit("budget:warning", { source: "global", pct, usedUsd: dailyUsed, limitUsd: config.dailyLimitUsd });
+      this.eventBus.emit("budget:warning", { source: "global", pct, usedUsd, limitUsd });
       this.warningEmitted = true;
     }
   }
