@@ -33,6 +33,7 @@ import { MS_PER_DAY } from "../learning/types.js";
 import { CircuitBreaker } from "./resilience/circuit-breaker.js";
 import type { TriggerDeduplicator } from "./dedup/trigger-deduplicator.js";
 import type * as winston from "winston";
+import type { UnifiedBudgetManager } from "../budget/unified-budget-manager.js";
 
 /** Identity manager interface -- only the subset HeartbeatLoop uses */
 interface IdentityActivity {
@@ -70,6 +71,9 @@ export class HeartbeatLoop {
   /** Deploy trigger (Phase 25) -- refreshed when user tasks settle */
   private deployTrigger?: DeployTriggerContract;
   private deployReadinessCheckInFlight?: Promise<void>;
+
+  /** Unified Budget Manager (optional -- injected after construction) */
+  private unifiedBudgetManager?: UnifiedBudgetManager;
 
   /** Agent Core autonomous reasoning loop (Phase 4) */
   private agentCore?: import("../agent-core/agent-core.js").AgentCore;
@@ -253,7 +257,14 @@ export class HeartbeatLoop {
         continue;
       }
 
-      // 3. Check budget
+      // 3. Check budget -- unified manager takes priority when available
+      if (this.unifiedBudgetManager) {
+        this.unifiedBudgetManager.checkAndEmitEvents();
+        if (this.unifiedBudgetManager.isGlobalExceeded()) {
+          break; // Stop processing triggers
+        }
+      }
+
       if (budgetUsage.pct >= 1.0) {
         if (!this.budgetExceededEmitted) {
           this.eventBus.emit("daemon:budget_exceeded", {
@@ -522,6 +533,13 @@ export class HeartbeatLoop {
    */
   setAgentCore(core: import("../agent-core/agent-core.js").AgentCore): void {
     this.agentCore = core;
+  }
+
+  /**
+   * Set the Unified Budget Manager for global cross-source budget enforcement.
+   */
+  setUnifiedBudgetManager(mgr: UnifiedBudgetManager): void {
+    this.unifiedBudgetManager = mgr;
   }
 
   /**

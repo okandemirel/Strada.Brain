@@ -180,6 +180,7 @@ export interface DaemonHeartbeatStageResult {
   securityPolicy: DaemonSecurityPolicy;
   heartbeatLoop: HeartbeatLoop;
   webhookTriggers: Map<string, WebhookTrigger>;
+  unifiedBudgetManager: import("../../budget/unified-budget-manager.js").UnifiedBudgetManager;
 }
 
 export interface MultiAgentDelegationStageResult {

@@ -45,6 +45,7 @@ import type { DaemonEventMap } from "../daemon/daemon-events.js";
 import type { GoalConfig } from "../config/config.js";
 import { estimateCost } from "../security/rate-limiter.js";
 import type { BudgetTracker } from "../daemon/budget/budget-tracker.js";
+import type { UnifiedBudgetManager } from "../budget/unified-budget-manager.js";
 import { getLogger } from "../utils/logger.js";
 import { WorkspaceLeaseManager } from "../agents/multi/workspace-lease-manager.js";
 import type { WorkerRunRequest, WorkerRunResult } from "../agents/supervisor/supervisor-types.js";
@@ -214,6 +215,7 @@ export class BackgroundExecutor {
   private workspaceBus?: WorkspaceBus;
   private monitorLifecycle?: MonitorLifecycle;
   private daemonBudgetTracker?: BudgetTracker;
+  private _unifiedBudgetManager?: UnifiedBudgetManager;
   private currentPhase?: 'planning' | 'acting' | 'observing' | 'reflecting';
   private nodeProgress?: Map<string, { current: number; total: number; unit: string }>;
 
@@ -241,6 +243,10 @@ export class BackgroundExecutor {
 
   setDaemonBudgetTracker(tracker: BudgetTracker): void {
     this.daemonBudgetTracker = tracker;
+  }
+
+  setUnifiedBudgetManager(mgr: UnifiedBudgetManager): void {
+    this._unifiedBudgetManager = mgr;
   }
 
   setWorkspaceBus(bus: WorkspaceBus): void {
@@ -1527,6 +1533,15 @@ Is this failure critical? A critical failure means dependent sub-goals cannot pr
       const costUsd = estimateCost(usage.inputTokens, usage.outputTokens, usage.provider);
       if (costUsd <= 0) {
         return;
+      }
+      if (this._unifiedBudgetManager) {
+        const source = task.origin === "daemon" ? "daemon" : "chat";
+        this._unifiedBudgetManager.recordCost(costUsd, source as "daemon" | "chat", {
+          model: usage.provider,
+          tokensIn: usage.inputTokens,
+          tokensOut: usage.outputTokens,
+          triggerName: task.triggerName,
+        });
       }
       this.daemonBudgetTracker?.recordCost(costUsd, {
         model: usage.provider,

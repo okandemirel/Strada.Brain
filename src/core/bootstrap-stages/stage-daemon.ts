@@ -20,6 +20,7 @@ import { TriggerRegistry } from "../../daemon/trigger-registry.js";
 import { HeartbeatLoop } from "../../daemon/heartbeat-loop.js";
 import { DaemonStorage } from "../../daemon/daemon-storage.js";
 import { BudgetTracker } from "../../daemon/budget/budget-tracker.js";
+import { UnifiedBudgetManager } from "../../budget/unified-budget-manager.js";
 import { ApprovalQueue } from "../../daemon/security/approval-queue.js";
 import { DaemonSecurityPolicy } from "../../daemon/security/daemon-security-policy.js";
 import { TriggerDeduplicator } from "../../daemon/dedup/trigger-deduplicator.js";
@@ -153,6 +154,10 @@ export function initializeDaemonHeartbeatStage(
     ?? new BudgetTracker(daemonStorage, daemonConfig.budget);
   params.backgroundExecutor.setDaemonBudgetTracker(budgetTracker);
 
+  const unifiedBudgetManager = new UnifiedBudgetManager(daemonStorage, params.daemonEventBus);
+  daemonStorage.migrateBudgetSource();
+  params.backgroundExecutor.setUnifiedBudgetManager(unifiedBudgetManager);
+
   const approvalQueue = deps.createApprovalQueue?.(
     daemonStorage,
     daemonConfig.security.approvalTimeoutMin,
@@ -214,6 +219,8 @@ export function initializeDaemonHeartbeatStage(
     }
   }
 
+  heartbeatLoop.setUnifiedBudgetManager(unifiedBudgetManager);
+
   heartbeatLoop.start();
   params.commandHandler.setHeartbeatLoop({
     start: () => heartbeatLoop.start(),
@@ -231,5 +238,6 @@ export function initializeDaemonHeartbeatStage(
     securityPolicy,
     heartbeatLoop,
     webhookTriggers,
+    unifiedBudgetManager,
   };
 }

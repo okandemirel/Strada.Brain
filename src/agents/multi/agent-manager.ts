@@ -40,6 +40,7 @@ import type { MonitorLifecycle } from "../../dashboard/monitor-lifecycle.js";
 import type { WorkspaceBus } from "../../dashboard/workspace-bus.js";
 import type { SupervisorBrain } from "../../supervisor/supervisor-brain.js";
 import { estimateCost } from "../../security/rate-limiter.js";
+import type { UnifiedBudgetManager } from "../../budget/unified-budget-manager.js";
 import { getLogger } from "../../utils/logger.js";
 import { Orchestrator } from "../orchestrator.js";
 import { AgentDBMemory } from "../../memory/unified/agentdb-memory.js";
@@ -151,6 +152,9 @@ export class AgentManager {
   /** Optional factory for injecting delegation tools per-agent (Phase 24) */
   private delegationToolFactory?: (parentAgentId: AgentId, depth: number) => ITool[];
 
+  /** Optional unified budget manager for cross-source cost tracking */
+  private _unifiedBudgetManager?: UnifiedBudgetManager;
+
   /** Optional command handler for intercepting prefix commands before LLM routing */
   private commandHandler?: CommandHandler;
 
@@ -196,6 +200,10 @@ export class AgentManager {
    */
   setDelegationFactory(factory: (parentAgentId: AgentId, depth: number) => ITool[]): void {
     this.delegationToolFactory = factory;
+  }
+
+  setUnifiedBudgetManager(mgr: UnifiedBudgetManager): void {
+    this._unifiedBudgetManager = mgr;
   }
 
   /** Set the command handler so prefix commands bypass the LLM pipeline */
@@ -580,6 +588,14 @@ export class AgentManager {
         const costUsd = estimateCost(usage.inputTokens, usage.outputTokens, usage.provider);
         if (costUsd <= 0) {
           return;
+        }
+        if (this._unifiedBudgetManager) {
+          this._unifiedBudgetManager.recordCost(costUsd, "agent", {
+            model: usage.provider,
+            tokensIn: usage.inputTokens,
+            tokensOut: usage.outputTokens,
+            agentId,
+          });
         }
         this.budgetTracker.recordCost(agentId, costUsd, {
           model: usage.provider,
