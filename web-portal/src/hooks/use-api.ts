@@ -184,6 +184,55 @@ interface TriggerItem {
   fireCount: number
 }
 
+interface BudgetResponse {
+  global: {
+    daily: { usedUsd: number; limitUsd: number; pct: number }
+    monthly: { usedUsd: number; limitUsd: number; pct: number }
+  }
+  breakdown: { daemon: number; agents: number; chat: number; verification: number }
+  subLimitStatus: { daemonExceeded: boolean; agentExceeded: Record<string, boolean> }
+  config: {
+    dailyLimitUsd: number
+    monthlyLimitUsd: number
+    warnPct: number
+    subLimits: { daemonDailyUsd: number; agentDefaultUsd: number; verificationPct: number }
+  }
+}
+
+interface BudgetHistoryResponse {
+  entries: Array<{
+    date: string
+    daemon: number
+    agents: number
+    chat: number
+    verification: number
+    total: number
+  }>
+}
+
+interface PersonalityProfilesResponse {
+  personality: {
+    activeProfile?: string
+    profiles?: string[]
+  } | null
+}
+
+interface LearningHealthResponse {
+  healthy: boolean
+  issues?: string[]
+  decisions?: Array<{ type: string; outcome: string; timestamp: number }>
+}
+
+interface TriggersListResponse {
+  triggers: Array<{
+    name: string
+    type: string
+    state: string
+    circuitState?: string
+    nextRun?: string | null
+  }>
+}
+
 interface DaemonResponse {
   running: boolean
   configured?: boolean
@@ -565,5 +614,49 @@ export function useSkillRegistry(query: string) {
     queryKey: ['skill-registry', query],
     queryFn: () => fetchApi<SkillRegistryResponse>(`/api/skills/registry?q=${encodeURIComponent(query)}`),
     staleTime: 60_000,
+  })
+}
+
+/** GET /api/budget */
+export function useBudget() {
+  return useQuery<BudgetResponse>({
+    queryKey: ['budget'],
+    queryFn: () => fetchApi<BudgetResponse>('/api/budget'),
+    refetchInterval: 30_000,
+  })
+}
+
+/** GET /api/budget/history?days=<n> */
+export function useBudgetHistory(days = 7) {
+  return useQuery<BudgetHistoryResponse>({
+    queryKey: ['budget-history', days],
+    queryFn: () => fetchApi<BudgetHistoryResponse>(`/api/budget/history?days=${days}`),
+    refetchInterval: 60_000,
+  })
+}
+
+/** GET /api/personality (profiles subset) */
+export function usePersonalityProfiles() {
+  return useQuery<PersonalityProfilesResponse>({
+    queryKey: ['personality-profiles'],
+    queryFn: () => fetchApi<PersonalityProfilesResponse>('/api/personality'),
+  })
+}
+
+/** GET /api/learning/health */
+export function useLearningHealth() {
+  return useQuery<LearningHealthResponse>({
+    queryKey: ['learning-health'],
+    queryFn: () => fetchApi<LearningHealthResponse>('/api/learning/health'),
+    refetchInterval: 30_000,
+  })
+}
+
+/** GET /api/triggers (detailed list) */
+export function useTriggersDetailed() {
+  return useQuery<TriggersListResponse>({
+    queryKey: ['triggers-detailed'],
+    queryFn: () => fetchApi<TriggersListResponse>('/api/triggers'),
+    refetchInterval: 30_000,
   })
 }
