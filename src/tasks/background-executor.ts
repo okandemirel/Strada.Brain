@@ -310,9 +310,12 @@ export class BackgroundExecutor {
     const shouldDecomposeTask = this.decomposer?.shouldDecompose(task.prompt) ?? false;
     const shouldAttemptSharedPlanning =
       Boolean(task.goalTree) || Boolean(task.forceSharedPlanning) || shouldDecomposeTask;
-    const canExecuteGoalInline = !hasRichInput && (Boolean(task.goalTree) || shouldDecomposeTask);
+    // Only execute goals inline when a pre-built tree was provided (e.g., from
+    // inline goal detection). Heuristic shouldDecompose alone should NOT trigger
+    // goal execution — it must pass through the supervisor admission gate first.
+    const canExecuteGoalInline = !hasRichInput && Boolean(task.goalTree);
     const fallbackDecision: SupervisorAdmissionDecision = {
-      path: canExecuteGoalInline ? "direct_goal_execution" : "direct_worker",
+      path: task.goalTree ? "direct_goal_execution" : "direct_worker",
       reason: "unavailable",
     };
 

@@ -525,12 +525,13 @@ describe("BackgroundExecutor - Pre-decomposed Tree Path", () => {
     );
   });
 
-  it("falls back to decomposer when task has no goalTree and shouldDecompose returns true", async () => {
+  it("routes to direct_worker when task has no goalTree even if shouldDecompose returns true", async () => {
+    // Without a pre-built goalTree, tasks should go through the direct worker path
+    // (PAOR loop) instead of being decomposed into goal nodes — this prevents
+    // simple messages from being split into dozens of sub-tasks.
     const task = createTestTask(); // no goalTree
-    const goalTree = buildTestGoalTree();
 
     mockDecomposer.shouldDecompose.mockReturnValue(true);
-    mockDecomposer.decomposeProactive.mockResolvedValue(goalTree);
 
     const executor = new BackgroundExecutor({
       orchestrator: mockOrch as any,
@@ -557,10 +558,13 @@ describe("BackgroundExecutor - Pre-decomposed Tree Path", () => {
     }, { timeout: 5000 });
 
     expect(mockTaskManager.fail).not.toHaveBeenCalled();
+    // Supervisor admission is still evaluated
     expect(mockOrch.evaluateSupervisorAdmission).toHaveBeenCalled();
-
-    // Decomposer.decomposeProactive SHOULD have been called
-    expect(mockDecomposer.decomposeProactive).toHaveBeenCalled();
+    // But decomposer.decomposeProactive should NOT have been called —
+    // only pre-built goalTree triggers inline goal execution
+    expect(mockDecomposer.decomposeProactive).not.toHaveBeenCalled();
+    // Instead, the direct worker path (runBackgroundTask) should run
+    expect(mockOrch.runBackgroundTask).toHaveBeenCalled();
   });
 
   it("emits canvas task cards for normal goal execution and updates them as nodes advance", async () => {
