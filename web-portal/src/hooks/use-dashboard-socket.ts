@@ -99,6 +99,23 @@ export function dispatchWorkspaceMessage(data: { type: string; [key: string]: un
       break
     }
 
+    case 'monitor:substep': {
+      const nodeId = (payload.nodeId ?? payload.taskId) as string
+      const substep = payload.substep as NonNullable<MonitorTask['substeps']>[number]
+      if (nodeId && substep) {
+        const task = useMonitorStore.getState().tasks[nodeId]
+        if (task) {
+          const existing = task.substeps ?? []
+          const idx = existing.findIndex((s) => s.id === substep.id)
+          const merged = idx >= 0
+            ? [...existing.slice(0, idx), { ...existing[idx], ...substep }, ...existing.slice(idx + 1)]
+            : [...existing, substep]
+          useMonitorStore.getState().updateTask(nodeId, { substeps: merged })
+        }
+      }
+      break
+    }
+
     case 'progress:narrative': {
       const narrative = (payload.narrative as string) ?? ''
       const nodeId = payload.nodeId as string | undefined

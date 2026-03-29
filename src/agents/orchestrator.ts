@@ -638,6 +638,8 @@ export class Orchestrator {
   /** Workspace bus for monitor UI events (lazy setter — bus created after orchestrator) */
   private workspaceBus: WorkspaceBus | null = null;
   private monitorLifecycle: MonitorLifecycle | null = null;
+  /** Tracks consecutive ask_user blocks per conversation to break clarification loops. */
+  private readonly askUserBlockCounts = new Map<string, number>();
   private readonly soulLoader: SoulLoader | null;
   private readonly dmPolicy: DMPolicy;
   private readonly sessionSummarizer?: SessionSummarizer;
@@ -5164,32 +5166,46 @@ export class Orchestrator {
         options.identityKey &&
         options.agentState
       ) {
-        const clarificationIntervention = await this.resolveAskUserClarificationIntervention({
-          chatId,
-          identityKey: options.identityKey,
-          toolCall: activeToolCall,
-          prompt: options.taskPrompt,
-          state: options.agentState,
-          strategy: options.strategy,
-          touchedFiles: options.touchedFiles,
-          usageHandler: options.onUsage,
-        });
-        if (clarificationIntervention.kind === "continue") {
-          results.push({
-            toolCallId: activeToolCall.id,
-            content:
-              clarificationIntervention.gate ?? "Continue internally without asking the user yet.",
-            isError: false,
+        // Break clarification loops: after 2 consecutive blocks, let ask_user through
+        const blockCount = this.askUserBlockCounts.get(chatId) ?? 0;
+        const MAX_ASK_USER_BLOCKS = 2;
+
+        if (blockCount < MAX_ASK_USER_BLOCKS) {
+          const clarificationIntervention = await this.resolveAskUserClarificationIntervention({
+            chatId,
+            identityKey: options.identityKey,
+            toolCall: activeToolCall,
+            prompt: options.taskPrompt,
+            state: options.agentState,
+            strategy: options.strategy,
+            touchedFiles: options.touchedFiles,
+            usageHandler: options.onUsage,
           });
-          continue;
+          if (clarificationIntervention.kind === "continue") {
+            this.askUserBlockCounts.set(chatId, blockCount + 1);
+            results.push({
+              toolCallId: activeToolCall.id,
+              content:
+                clarificationIntervention.gate ?? "Continue internally without asking the user yet.",
+              isError: false,
+            });
+            continue;
+          }
+          if (clarificationIntervention.input) {
+            activeToolCall = {
+              ...activeToolCall,
+              input:
+                clarificationIntervention.input as unknown as import("../types/index.js").JsonObject,
+            };
+          }
+        } else {
+          // Loop breaker: reset counter and let ask_user pass through
+          logger.info("Clarification loop breaker: letting ask_user through after repeated blocks", {
+            chatId, blockCount,
+          });
         }
-        if (clarificationIntervention.input) {
-          activeToolCall = {
-            ...activeToolCall,
-            input:
-              clarificationIntervention.input as unknown as import("../types/index.js").JsonObject,
-          };
-        }
+        // Reset counter when ask_user actually goes through
+        this.askUserBlockCounts.delete(chatId);
       }
 
       const readOnlyCheck = checkReadOnlyBlock(activeToolCall.name, this.readOnly);
@@ -5346,6 +5362,10 @@ export class Orchestrator {
       try {
         const result = await tool.execute(activeToolCall.input, toolContext);
         this.metrics?.recordToolCall(activeToolCall.name, Date.now() - toolStart, !result.isError);
+        // Reset ask_user block counter on successful non-ask_user tool execution (progress made)
+        if (!result.isError && activeToolCall.name !== "ask_user") {
+          this.askUserBlockCounts.delete(chatId);
+        }
         results.push({
           toolCallId: activeToolCall.id,
           content: sanitizeToolResult(result.content),

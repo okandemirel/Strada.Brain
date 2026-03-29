@@ -73,7 +73,7 @@ const QUESTION_STEM_RE = /\b(?:what|which|who|where|when|why|how|can you|could y
 const USER_ADDRESS_RE = /\b(?:you|your|yours|user|sen|seni|senin|siz|size|sizin)\b/iu;
 const USER_INPUT_REQUEST_RE = /\b(?:clarif(?:y|ication)|confirm|choose|pick|select|decide|prefer|share|provide|tell|specify|describe|send|paste|attach|upload|rephrase|explain|mean|want|continue|approve|allow|install|need from you)\b/iu;
 const EXTERNAL_BLOCKER_RE = /\b(?:missing|blocked|blocker|requires?|need|without|cannot|can't|unable|access|credential|permission|token|api[_ -]?key|login|account|subscription|approval|irreversible|external)\b/iu;
-const REQUIREMENT_GATHERING_RE = /\b(?:objective|scope|requirements?|inputs?|constraints?|repro(?:duction)?|expected|actual|symptom|target behavior|project health check)\b/iu;
+const REQUIREMENT_GATHERING_RE = /\b(?:objective|scope|requirements?|inputs?|constraints?|repro(?:duction)?|expected|actual|symptom|target behavior)\b/iu;
 const CHOICE_LIST_RE = /(?:^|\n)\s*(?:[A-D]\)|[1-9]\)|[-*])\s+\S/m;
 const DIRECTIVE_REQUEST_RE = /^(?:please\s+)?(?:clarify|confirm|choose|pick|select|decide|prefer|share|provide|tell|specify|describe|send|paste|attach|upload|rephrase|explain)\b/iu;
 
