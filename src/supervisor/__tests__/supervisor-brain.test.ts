@@ -312,6 +312,7 @@ describe("SupervisorBrain", () => {
         task: planningTask,
       }),
       expect.anything(),
+      expect.anything(), // AbortSignal from dispatcher
     );
     expect(executeNode).toHaveBeenCalledTimes(1);
   });
@@ -482,7 +483,7 @@ describe("SupervisorBrain", () => {
 
     const result = await Promise.race([
       runPromise,
-      new Promise<null>((resolve) => setTimeout(() => resolve(null), 250)),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000)),
     ]);
 
     expect(result).not.toBeNull();

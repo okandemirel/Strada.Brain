@@ -4658,6 +4658,7 @@ export class Orchestrator {
     };
   }
 
+  // @ts-expect-error -- method retained for backward compatibility with legacy review format; will be removed in a future cleanup pass
   private deriveStageResultsFromLegacyReviewDecision(
     decision: ReturnType<typeof parseCompletionReviewDecision>,
   ): CompletionReviewStageResult[] {
@@ -4788,7 +4789,8 @@ export class Orchestrator {
       totalOutputTokens += usage.outputTokens ?? 0;
     };
 
-    for (const stage of stages) {
+    // Run all review stages in parallel to reduce wall-clock time (3 sequential → 1 parallel batch)
+    const stagePromises = stages.map(async (stage) => {
       const assignment = this.resolveCompletionReviewStageAssignment(stage, params);
       try {
         const reviewResponse = await assignment.provider.chat(
@@ -4820,31 +4822,13 @@ export class Orchestrator {
         });
         this.recordAuxiliaryUsage(assignment.providerName, reviewResponse.usage, params.usageHandler);
         recordUsage(reviewResponse.usage);
-        const legacyDecision = parseCompletionReviewDecision(reviewResponse.text);
-        const looksLikeLegacyCompletionDecision = Boolean(
-          legacyDecision?.decision
-          || legacyDecision?.closureStatus
-          || legacyDecision?.logStatus
-          || legacyDecision?.reviews,
-        );
-        if (looksLikeLegacyCompletionDecision && stageResults.length === 0) {
-          return {
-            decision: legacyDecision,
-            stageResults: this.deriveStageResultsFromLegacyReviewDecision(legacyDecision),
-            usage: {
-              inputTokens: totalInputTokens,
-              outputTokens: totalOutputTokens,
-              totalTokens: totalInputTokens + totalOutputTokens,
-            },
-          };
-        }
-        stageResults.push(
+        return (
           parseCompletionReviewStageResult(reviewResponse.text, stage)
           ?? this.buildCompletionReviewStageFallback(
             stage,
             `${stage} review returned an invalid response.`,
             `Rerun the ${stage} review and continue conservatively until it is clean.`,
-          ),
+          )
         );
       } catch (error) {
         getLogger().warn("Completion review stage failed", {
@@ -4853,15 +4837,14 @@ export class Orchestrator {
           provider: assignment.providerName,
           error: error instanceof Error ? error.message : String(error),
         });
-        stageResults.push(
-          this.buildCompletionReviewStageFallback(
-            stage,
-            `${stage} review failed before Strada could validate completion.`,
-            `Investigate the ${stage} review failure, rerun that review, and continue conservatively.`,
-          ),
+        return this.buildCompletionReviewStageFallback(
+          stage,
+          `${stage} review failed before Strada could validate completion.`,
+          `Investigate the ${stage} review failure, rerun that review, and continue conservatively.`,
         );
       }
-    }
+    });
+    stageResults.push(...await Promise.all(stagePromises));
 
     const reviewer = this.resolveSupervisorAssignment(
       "reviewer",

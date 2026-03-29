@@ -68,7 +68,11 @@ export class SupervisorBrain {
   private emitter?: { emit: (event: string, payload: unknown) => void };
   private readonly verifyNode?: (node: NodeResult, context: SupervisorContext) => Promise<VerificationVerdict>;
 
-  private executeNodeFn?: (node: TaggedGoalNode, context: SupervisorContext) => Promise<NodeResult>;
+  private executeNodeFn?: (
+    node: TaggedGoalNode,
+    context: SupervisorContext,
+    signal: AbortSignal,
+  ) => Promise<NodeResult>;
 
   constructor(options: SupervisorBrainOptions) {
     this.config = options.config;
@@ -96,7 +100,11 @@ export class SupervisorBrain {
    * Must be called before execute() or execute() will throw.
    */
   setExecuteNode(
-    fn: (node: TaggedGoalNode, context: SupervisorContext) => Promise<NodeResult>,
+    fn: (
+      node: TaggedGoalNode,
+      context: SupervisorContext,
+      signal: AbortSignal,
+    ) => Promise<NodeResult>,
   ): void {
     this.executeNodeFn = fn;
   }
@@ -292,7 +300,8 @@ export class SupervisorBrain {
             };
       const executeNodeFn = this.executeNodeFn;
       const dispatcher = new SupervisorDispatcher({
-        executeNode: (node: TaggedGoalNode) => executeNodeFn(node, dispatchContext),
+        executeNode: (node: TaggedGoalNode, nodeSignal: AbortSignal) =>
+          executeNodeFn(node, dispatchContext, nodeSignal),
         config: {
           maxParallelNodes: context.workspaceLease ? 1 : this.config.maxParallelNodes,
           nodeTimeoutMs: this.config.nodeTimeoutMs,

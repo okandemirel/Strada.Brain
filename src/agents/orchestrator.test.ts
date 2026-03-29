@@ -595,37 +595,51 @@ describe("Orchestrator", () => {
     const reviewerProvider = createNamedProvider("reviewer");
     const synthProvider = createNamedProvider("synth");
 
+    const stageCleanResponse = {
+      text: JSON.stringify({ status: "clean", summary: "No issues found." }),
+      toolCalls: [] as never[],
+      stopReason: "end_turn" as const,
+      usage: { inputTokens: 5, outputTokens: 5 },
+    };
+
     plannerProvider.chat.mockResolvedValueOnce({
       text: "Plan:\n1. Read the file",
       toolCalls: [{ id: "tc-plan", name: "file_read", input: { path: "test.cs" } }],
       stopReason: "tool_use",
       usage: { inputTokens: 10, outputTokens: 20 },
     });
-    executorProvider.chat.mockResolvedValueOnce({
-      text: "Execution draft complete.\nDONE",
-      toolCalls: [],
-      stopReason: "end_turn",
-      usage: { inputTokens: 12, outputTokens: 18 },
-    });
-    reviewerProvider.chat.mockResolvedValueOnce({
-      text: JSON.stringify({
-        decision: "approve",
-        summary: "Completion review approved the executor result.",
-        closureStatus: "verified",
-        openInvestigations: [],
-        findings: [],
-        requiredActions: [],
-        reviews: {
-          security: "clean",
-          code: "clean",
-          simplify: "clean",
-        },
-        logStatus: "clean",
-      }),
-      toolCalls: [],
-      stopReason: "end_turn",
-      usage: { inputTokens: 8, outputTokens: 12 },
-    });
+    executorProvider.chat
+      .mockResolvedValueOnce({
+        text: "Execution draft complete.\nDONE",
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 12, outputTokens: 18 },
+      })
+      // Completion review stages routed to executor (simplify + security)
+      .mockResolvedValueOnce(stageCleanResponse)
+      .mockResolvedValueOnce(stageCleanResponse);
+    // Completion review: code stage + synthesis routed to reviewer
+    reviewerProvider.chat
+      .mockResolvedValueOnce(stageCleanResponse) // code stage
+      .mockResolvedValueOnce({
+        text: JSON.stringify({
+          decision: "approve",
+          summary: "Completion review approved the executor result.",
+          closureStatus: "verified",
+          openInvestigations: [],
+          findings: [],
+          requiredActions: [],
+          reviews: {
+            security: "clean",
+            code: "clean",
+            simplify: "clean",
+          },
+          logStatus: "clean",
+        }),
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 8, outputTokens: 12 },
+      });
     synthProvider.chat.mockResolvedValueOnce({
       text: "Supervisor final answer",
       toolCalls: [],
@@ -683,9 +697,10 @@ describe("Orchestrator", () => {
     await vi.advanceTimersByTimeAsync(100);
     await promise;
 
+    // planner(1) + executor(1 execution + 2 completion review stages) + reviewer(1 code stage + 1 synthesis) + synth(1 user-facing synthesis)
     expect(plannerProvider.chat).toHaveBeenCalledTimes(1);
-    expect(executorProvider.chat).toHaveBeenCalledTimes(1);
-    expect(reviewerProvider.chat).toHaveBeenCalledTimes(1);
+    expect(executorProvider.chat).toHaveBeenCalledTimes(3);
+    expect(reviewerProvider.chat).toHaveBeenCalledTimes(2);
     expect(synthProvider.chat).toHaveBeenCalledTimes(1);
     expect(plannerProvider.chat.mock.calls[0]?.[0]).toContain("Current worker role: planner");
     expect(plannerProvider.chat.mock.calls[0]?.[0]).toContain("Provider: planner");
@@ -3854,6 +3869,25 @@ describe("Orchestrator", () => {
         stopReason: "end_turn",
         usage: { inputTokens: 10, outputTokens: 20 },
       })
+      // Completion review: 3 parallel stages + 1 synthesis (replaces old single legacy call)
+      .mockResolvedValueOnce({
+        text: JSON.stringify({ status: "clean", summary: "No issues found." }),
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 5, outputTokens: 5 },
+      })
+      .mockResolvedValueOnce({
+        text: JSON.stringify({ status: "clean", summary: "No issues found." }),
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 5, outputTokens: 5 },
+      })
+      .mockResolvedValueOnce({
+        text: JSON.stringify({ status: "clean", summary: "No issues found." }),
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 5, outputTokens: 5 },
+      })
       .mockResolvedValueOnce({
         text: JSON.stringify({
           decision: "approve",
@@ -3882,7 +3916,8 @@ describe("Orchestrator", () => {
     await vi.advanceTimersByTimeAsync(100);
     await promise;
 
-    expect(mockProvider.chat).toHaveBeenCalledTimes(5);
+    // 1 tool + 1 autonomy-intercepted end_turn + 1 tool + 1 DONE end_turn + 3 completion review stages + 1 synthesis
+    expect(mockProvider.chat).toHaveBeenCalledTimes(8);
     expect(mockProvider.chat.mock.calls[2]?.[1]).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -3915,6 +3950,13 @@ describe("Orchestrator", () => {
       requireConfirmation: false,
     });
 
+    const stageClean = {
+      text: JSON.stringify({ status: "clean", summary: "No issues found." }),
+      toolCalls: [] as never[],
+      stopReason: "end_turn" as const,
+      usage: { inputTokens: 5, outputTokens: 5 },
+    };
+
     mockProvider.chat
       .mockResolvedValueOnce({
         text: "Inspecting the runtime path first.",
@@ -3940,6 +3982,9 @@ DONE`,
         stopReason: "end_turn",
         usage: { inputTokens: 10, outputTokens: 20 },
       })
+      // First DONE: boundary returns "internal_continue" (draft has open investigations),
+      // so runCompletionReviewStages is NOT called. The verifier returns "continue"
+      // immediately and this mock is consumed by the next regular loop iteration.
       .mockResolvedValueOnce({
         text: JSON.stringify({
           decision: "approve",
@@ -3982,6 +4027,10 @@ DONE`,
         stopReason: "end_turn",
         usage: { inputTokens: 10, outputTokens: 20 },
       })
+      // Second completion review: 3 parallel stages + 1 synthesis (verified -> approve)
+      .mockResolvedValueOnce(stageClean)
+      .mockResolvedValueOnce(stageClean)
+      .mockResolvedValueOnce(stageClean)
       .mockResolvedValueOnce({
         text: JSON.stringify({
           decision: "approve",
@@ -4048,6 +4097,13 @@ DONE`,
       requireConfirmation: false,
     });
 
+    const stageClean = {
+      text: JSON.stringify({ status: "clean", summary: "No issues found." }),
+      toolCalls: [] as never[],
+      stopReason: "end_turn" as const,
+      usage: { inputTokens: 5, outputTokens: 5 },
+    };
+
     mockProvider.chat
       .mockResolvedValueOnce({
         text: "Inspecting the level asset first.",
@@ -4067,6 +4123,10 @@ DONE`,
         stopReason: "end_turn",
         usage: { inputTokens: 10, outputTokens: 20 },
       })
+      // First completion review: 3 parallel stages + 1 synthesis (replan)
+      .mockResolvedValueOnce(stageClean)
+      .mockResolvedValueOnce(stageClean)
+      .mockResolvedValueOnce(stageClean)
       .mockResolvedValueOnce({
         text: JSON.stringify({
           decision: "replan",
@@ -4104,6 +4164,10 @@ DONE`,
         stopReason: "end_turn",
         usage: { inputTokens: 10, outputTokens: 20 },
       })
+      // Second completion review: 3 parallel stages + 1 synthesis (approve)
+      .mockResolvedValueOnce(stageClean)
+      .mockResolvedValueOnce(stageClean)
+      .mockResolvedValueOnce(stageClean)
       .mockResolvedValueOnce({
         text: JSON.stringify({
           decision: "approve",
@@ -4132,7 +4196,8 @@ DONE`,
     await vi.advanceTimersByTimeAsync(100);
     await promise;
 
-    expect(mockProvider.chat.mock.calls.length).toBeGreaterThanOrEqual(5);
+    // 1 tool + 1 DONE + (3 stages + 1 synthesis replan) + 1 tool + 1 DONE + (3 stages + 1 synthesis approve) = 12
+    expect(mockProvider.chat.mock.calls.length).toBeGreaterThanOrEqual(8);
     const flattenedMessages = mockProvider.chat.mock.calls.flatMap((call) => {
       const messages = call[1] as Array<{ role: string; content: unknown }> | undefined;
       return messages ?? [];
@@ -5209,6 +5274,13 @@ Belirsizlik varsa ask_user ile tek bir soru sor ve show_plan ile onaylat.`,
       requireConfirmation: false,
     });
 
+    const stageClean = {
+      text: JSON.stringify({ status: "clean", summary: "No issues found." }),
+      toolCalls: [] as never[],
+      stopReason: "end_turn" as const,
+      usage: { inputTokens: 5, outputTokens: 5 },
+    };
+
     mockProvider.chat
       .mockResolvedValueOnce({
         text: "Inspecting the runtime path first.",
@@ -5233,6 +5305,9 @@ DONE`,
         stopReason: "end_turn",
         usage: { inputTokens: 10, outputTokens: 20 },
       })
+      // First DONE: boundary returns "internal_continue" (draft has open investigations),
+      // so runCompletionReviewStages is NOT called. The verifier returns "continue"
+      // immediately and this mock is consumed by the next regular loop iteration.
       .mockResolvedValueOnce({
         text: JSON.stringify({
           decision: "approve",
@@ -5274,6 +5349,10 @@ DONE`,
         stopReason: "end_turn",
         usage: { inputTokens: 10, outputTokens: 20 },
       })
+      // Second completion review: 3 parallel stages + 1 synthesis (verified -> approve)
+      .mockResolvedValueOnce(stageClean)
+      .mockResolvedValueOnce(stageClean)
+      .mockResolvedValueOnce(stageClean)
       .mockResolvedValueOnce({
         text: JSON.stringify({
           decision: "approve",
@@ -7184,12 +7263,23 @@ DONE`,
 
       // Provider gives 3 tool iterations, then reflection (PAOR triggers after 3 steps),
       // then end_turn. The reflection response returns **DONE** to complete.
+      // Completion review runs 3 parallel stages + 1 synthesis.
+      const stageClean = {
+        text: JSON.stringify({ status: "clean", summary: "No issues found." }),
+        toolCalls: [] as never[],
+        stopReason: "end_turn" as const,
+        usage: { inputTokens: 5, outputTokens: 5 },
+      };
       const chatSpy = vi
         .fn()
         .mockResolvedValueOnce(createToolResponse("Step 1", "file_read"))
         .mockResolvedValueOnce(createToolResponse("Step 2", "file_read"))
         .mockResolvedValueOnce(createToolResponse("Step 3", "file_read"))
         .mockResolvedValueOnce(createToolResponse("All steps succeeded.\n**DONE**", undefined))
+        // Completion review: 3 parallel stages + 1 synthesis
+        .mockResolvedValueOnce(stageClean)
+        .mockResolvedValueOnce(stageClean)
+        .mockResolvedValueOnce(stageClean)
         .mockResolvedValueOnce({
           text: JSON.stringify({
             decision: "approve",
@@ -7208,8 +7298,7 @@ DONE`,
           toolCalls: [],
           stopReason: "end_turn",
           usage: { inputTokens: 10, outputTokens: 8 },
-        })
-        .mockResolvedValueOnce(createToolResponse("Task complete", undefined));
+        });
       mockProvider.chat = chatSpy;
 
       const orchBg = new Orchestrator({
@@ -7497,11 +7586,22 @@ DONE`,
         usage: { inputTokens: 120, outputTokens: 30 },
       };
 
+      const stageClean = {
+        text: JSON.stringify({ status: "clean", summary: "No issues found." }),
+        toolCalls: [] as never[],
+        stopReason: "end_turn" as const,
+        usage: { inputTokens: 5, outputTokens: 5 },
+      };
+
       mockProvider.chat
         .mockResolvedValueOnce(planResponse)
         .mockResolvedValueOnce(execResponse)
         .mockResolvedValueOnce(execResponse2)
         .mockResolvedValueOnce(reflectDoneResponse)
+        // Completion review: 3 parallel stages + 1 synthesis
+        .mockResolvedValueOnce(stageClean)
+        .mockResolvedValueOnce(stageClean)
+        .mockResolvedValueOnce(stageClean)
         .mockResolvedValueOnce({
           text: JSON.stringify({
             decision: "approve",
@@ -7532,8 +7632,8 @@ DONE`,
       await vi.advanceTimersByTimeAsync(100);
       await promise;
 
-      // Plan + 2 execution turns + reflect + completion review
-      expect(mockProvider.chat).toHaveBeenCalledTimes(5);
+      // Plan + 2 execution turns + reflect + 3 completion review stages + 1 synthesis
+      expect(mockProvider.chat).toHaveBeenCalledTimes(8);
       // Tool was executed 3 times
       expect(readTool.execute).toHaveBeenCalledTimes(3);
       // Final user-facing response strips internal DONE markers

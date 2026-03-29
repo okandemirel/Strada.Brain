@@ -525,13 +525,33 @@ describe("Orchestrator Integration", () => {
         },
       });
 
+      const stageClean = {
+        text: JSON.stringify({ status: "clean", summary: "No issues found." }),
+        toolCalls: [] as never[],
+        stopReason: "end_turn" as const,
+        usage: { inputTokens: 5, outputTokens: 5 },
+      };
+
       mockProvider.chat
         // First pass: 3 tool calls -> reflection with DONE
         .mockResolvedValueOnce(toolResponse("Step 1: read main", "file_read"))
         .mockResolvedValueOnce(toolResponse("Step 2: read helper", "file_read"))
         .mockResolvedValueOnce(toolResponse("Step 3: read utils", "file_read"))
         .mockResolvedValueOnce(toolResponse("All done.\n**DONE**"))
-        // Verifier rejects: findings require action
+        // First completion review: 3 parallel stages + 1 synthesis (rejects)
+        .mockResolvedValueOnce({
+          text: JSON.stringify({ status: "issues", summary: "Missing error handling", findings: ["Missing try-catch in utils.cs"], requiredActions: ["Add error handling to utils.cs"] }),
+          toolCalls: [] as never[],
+          stopReason: "end_turn" as const,
+          usage: { inputTokens: 5, outputTokens: 5 },
+        })
+        .mockResolvedValueOnce(stageClean)
+        .mockResolvedValueOnce({
+          text: JSON.stringify({ status: "issues", summary: "Security concern", findings: ["Unvalidated input in utils.cs"] }),
+          toolCalls: [] as never[],
+          stopReason: "end_turn" as const,
+          usage: { inputTokens: 5, outputTokens: 5 },
+        })
         .mockResolvedValueOnce({
           text: JSON.stringify({
             decision: "revise",
@@ -554,7 +574,10 @@ describe("Orchestrator Integration", () => {
         // After replan: LLM does one more tool call and then finishes
         .mockResolvedValueOnce(toolResponse("Fixing error handling...", "file_read"))
         .mockResolvedValueOnce(toolResponse("Fix applied. Task complete.\n**DONE**"))
-        // Second verifier pass: approves
+        // Second completion review: 3 parallel stages + 1 synthesis (approves)
+        .mockResolvedValueOnce(stageClean)
+        .mockResolvedValueOnce(stageClean)
+        .mockResolvedValueOnce(stageClean)
         .mockResolvedValueOnce(approvalResponse());
 
       const result = await orch.runBackgroundTask("Analyze and fix error handling", {
@@ -564,8 +587,9 @@ describe("Orchestrator Integration", () => {
         channelType: "cli",
       });
 
-      // The provider was called more than the initial 4+1 times (replan happened)
-      expect(mockProvider.chat.mock.calls.length).toBeGreaterThan(5);
+      // The provider was called more than the initial 4+4 times (replan happened)
+      // 4 tool/DONE + 4 first review (3 stages + 1 synthesis) + 2 after replan + 4 second review = 14
+      expect(mockProvider.chat.mock.calls.length).toBeGreaterThan(8);
       // Tool executed more than 3 times (initial 3 + at least 1 after replan)
       expect(readTool.execute.mock.calls.length).toBeGreaterThan(3);
       // Result should be a non-empty string

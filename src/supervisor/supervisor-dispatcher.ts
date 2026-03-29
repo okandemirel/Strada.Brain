@@ -33,7 +33,7 @@ export interface DispatcherConfig {
 }
 
 export interface DispatcherOptions {
-  readonly executeNode: (node: TaggedGoalNode) => Promise<NodeResult>;
+  readonly executeNode: (node: TaggedGoalNode, signal: AbortSignal) => Promise<NodeResult>;
   readonly config: DispatcherConfig;
   readonly eventEmitter?: { emit: (event: string, payload: unknown) => void };
   readonly rootId?: string;
@@ -592,11 +592,19 @@ export class SupervisorDispatcher {
     );
 
     try {
+      const nodePromise = this.executeNode(node, nodeController.signal);
+      // Suppress eventual rejection from the losing leg of the race
+      // to prevent unhandled-rejection crashes when abort wins.
+      nodePromise.catch(() => {});
       const result = await Promise.race([
-        this.executeNode(node),
+        nodePromise,
         this.waitForAbort(nodeController.signal),
       ]);
       return result;
+    } catch (err) {
+      // Abort the node controller so in-flight fetch() calls are cancelled
+      nodeController.abort();
+      throw err;
     } finally {
       clearTimeout(timer);
       if (externalSignal) {

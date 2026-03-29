@@ -417,7 +417,9 @@ export class HeartbeatLoop {
     }
 
     // Agent Core reasoning (Phase 4 — autonomous agent OODA loop)
-    if (this.agentCore) {
+    // Skip OODA tick when user foreground tasks are active to avoid
+    // provider contention and unnecessary budget consumption.
+    if (this.agentCore && !this.taskManager?.hasActiveForegroundTasks?.()) {
       // AgentCore.tick() has its own tickInFlight guard — safe to call every heartbeat
       await this.agentCore.tick();
     }

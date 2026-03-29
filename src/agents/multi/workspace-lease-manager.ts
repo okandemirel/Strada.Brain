@@ -59,6 +59,11 @@ const FALLBACK_COPY_EXCLUDES = new Set([
   "coverage",
   ".cache",
   ".vite",
+  "Library",
+  "Temp",
+  "Logs",
+  "Builds",
+  "obj",
 ]);
 const DERIVED_COPY_EXCLUDES = new Set([
   ".git",

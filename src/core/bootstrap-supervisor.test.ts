@@ -44,6 +44,7 @@ describe("createSupervisorExecuteNodeBridge", () => {
           path: "/tmp/parent-workspace",
         },
       } as any,
+      new AbortController().signal,
     );
 
     expect(runWorkerEnvelope).toHaveBeenCalledWith(
@@ -61,6 +62,7 @@ describe("createSupervisorExecuteNodeBridge", () => {
           id: "lease-parent",
           path: "/tmp/parent-workspace",
         }),
+        signal: expect.any(AbortSignal),
         supervisorMode: "off",
       }),
     );

@@ -1,10 +1,11 @@
 /**
  * Git State Observer
  * Periodically checks git status for uncommitted changes.
- * Runs git commands via child_process (sync, fast).
+ * Uses async child_process to avoid blocking the event loop.
+ * The synchronous collect() returns cached results; refresh runs in background.
  */
 
-import { execSync } from "node:child_process";
+import { execFileNoThrow } from "../../utils/execFileNoThrow.js";
 import { createObservation, type Observer, type AgentObservation } from "../observation-types.js";
 
 export class GitStateObserver implements Observer {
@@ -13,6 +14,8 @@ export class GitStateObserver implements Observer {
   private readonly projectPath: string;
   private readonly checkIntervalMs: number;
   private lastCheckMs = 0;
+  private pendingResult: AgentObservation[] = [];
+  private refreshInFlight = false;
 
   constructor(projectPath: string, checkIntervalMs = 120_000) {
     this.projectPath = projectPath;
@@ -26,41 +29,47 @@ export class GitStateObserver implements Observer {
     }
     this.lastCheckMs = now;
 
-    try {
-      // Safe: no user input in command string — hardcoded git porcelain call
-      const status = execSync("git status --porcelain", {
-        cwd: this.projectPath,
-        encoding: "utf-8",
-        timeout: 5000,
-      }).trim();
+    // Return cached result and trigger async refresh
+    const cached = this.pendingResult;
+    this.pendingResult = [];
+    this.refreshAsync();
+    return cached;
+  }
 
-      const lines = status ? status.split("\n") : [];
-      const uncommittedCount = lines.length;
+  private refreshAsync(): void {
+    if (this.refreshInFlight) return;
+    this.refreshInFlight = true;
 
-      // Only report on significant changes
-      if (uncommittedCount === this.lastUncommittedCount) {
-        return [];
-      }
+    execFileNoThrow("git", ["-C", this.projectPath, "status", "--porcelain"], 5000)
+      .then((result) => {
+        if (result.exitCode !== 0) return;
 
-      const prevCount = this.lastUncommittedCount;
-      this.lastUncommittedCount = uncommittedCount;
+        const status = result.stdout.trim();
+        const lines = status ? status.split("\n") : [];
+        const uncommittedCount = lines.length;
 
-      if (uncommittedCount > 0 && uncommittedCount > prevCount) {
-        return [
-          createObservation("git", `${uncommittedCount} uncommitted change(s) detected`, {
-            priority: 30,
-            context: {
-              uncommittedCount,
-              files: lines.slice(0, 10).map((l) => l.trim()),
-            },
-          }),
-        ];
-      }
+        if (uncommittedCount === this.lastUncommittedCount) return;
 
-      return [];
-    } catch {
-      // Git command failed (not a git repo, git not installed, etc.)
-      return [];
-    }
+        const prevCount = this.lastUncommittedCount;
+        this.lastUncommittedCount = uncommittedCount;
+
+        if (uncommittedCount > 0 && uncommittedCount > prevCount) {
+          this.pendingResult = [
+            createObservation("git", `${uncommittedCount} uncommitted change(s) detected`, {
+              priority: 30,
+              context: {
+                uncommittedCount,
+                files: lines.slice(0, 10).map((l) => l.trim()),
+              },
+            }),
+          ];
+        }
+      })
+      .catch(() => {
+        // Git command failed — non-fatal
+      })
+      .finally(() => {
+        this.refreshInFlight = false;
+      });
   }
 }

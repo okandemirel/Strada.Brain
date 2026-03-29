@@ -641,7 +641,7 @@ export const DEFAULT_TASK_CONFIG: TaskConfig = {
   interactiveMaxIterations: 50,
   backgroundEpochMaxIterations: 50,
   backgroundAutoContinue: true,
-  backgroundMaxEpochs: 0,
+  backgroundMaxEpochs: 3,
 };
 
 // =============================================================================
@@ -1723,7 +1723,7 @@ export const configSchema = z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(0).max(1_000_000))
-      .default("0"),
+      .default("3"),
 
     // Provider Routing
     routingPreset: z.enum(["budget", "balanced", "performance"]).default("balanced"),
@@ -1772,7 +1772,7 @@ export const configSchema = z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(10000).max(600000))
-      .default("120000"),
+      .default("300000"),
     stradaSupervisorVerificationMode: z
       .enum(["always", "critical-only", "sampling", "disabled"])
       .default("critical-only"),

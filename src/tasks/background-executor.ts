@@ -363,7 +363,10 @@ export class BackgroundExecutor {
       userId: task.userId,
       signal,
       goalTree: task.goalTree,
-      forceEligibility: shouldAttemptSharedPlanning,
+      // Do NOT bypass the supervisor complexity gate — let the orchestrator's
+      // shouldActivateSupervisor() always apply. Previously forceEligibility was
+      // set here which caused every decomposable prompt to skip the complexity
+      // threshold, routing simple messages through the full supervisor pipeline.
       userContent: task.userContent,
       attachments: task.attachments,
       taskRunId: task.id,

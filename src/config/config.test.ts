@@ -434,7 +434,7 @@ describe("loadConfig", () => {
       interactiveMaxIterations: 50,
       backgroundEpochMaxIterations: 50,
       backgroundAutoContinue: true,
-      backgroundMaxEpochs: 0,
+      backgroundMaxEpochs: 3,
     });
     expect(config.logLevel).toBe("info");
     expect(config.logFile).toBe("strada-brain.log");

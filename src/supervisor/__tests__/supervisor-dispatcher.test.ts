@@ -132,6 +132,33 @@ describe("SupervisorDispatcher", () => {
     expect(results[0].status).toBe("failed");
   });
 
+  it("passes an abortable node signal to the executor on timeout", async () => {
+    let observedAbort = false;
+    const executeNode = vi.fn().mockImplementation(
+      async (_node: TaggedGoalNode, signal: AbortSignal) =>
+        new Promise<NodeResult>((_resolve, reject) => {
+          signal.addEventListener("abort", () => {
+            observedAbort = true;
+            reject(new Error("Aborted"));
+          }, { once: true });
+        })
+    );
+
+    const dispatcher = new SupervisorDispatcher({
+      executeNode,
+      config: { maxParallelNodes: 1, nodeTimeoutMs: 50, maxFailureBudget: 3 },
+    });
+
+    const results = await dispatcher.dispatch([makeAssignedNode("X", "Slow task", "claude")]);
+
+    expect(results[0]?.status).toBe("failed");
+    expect(observedAbort).toBe(true);
+    expect(executeNode).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "X" }),
+      expect.any(AbortSignal),
+    );
+  });
+
   it("supports external abort signal", async () => {
     const controller = new AbortController();
     const executeNode = vi.fn().mockImplementation(async () => {

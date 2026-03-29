@@ -141,8 +141,8 @@ export function createSupervisorExecuteNodeBridge(params: {
   orchestrator: Orchestrator;
   workspaceBus?: WorkspaceBus | null;
   defaultChannelType?: string;
-}): (node: TaggedGoalNode, context: SupervisorContext) => Promise<NodeResult> {
-  return async (node, context) => {
+}): (node: TaggedGoalNode, context: SupervisorContext, signal: AbortSignal) => Promise<NodeResult> {
+  return async (node, context, signal) => {
     let lastNarrative = "";
     let lastNarrativeAt = 0;
     const nodeTaskRunId = `${context.taskRunId?.trim() || `supervisor:${context.chatId}`}:${node.id}`;
@@ -164,7 +164,7 @@ export function createSupervisorExecuteNodeBridge(params: {
         userContent: context.userContent,
         onUsage: context.onUsage,
         workspaceLease: context.workspaceLease,
-        signal: context.signal ?? AbortSignal.timeout(300_000),
+        signal: signal ?? context.signal ?? AbortSignal.timeout(300_000),
         onProgress: (update) => {
           const narrative = buildTaskProgressSummary(
             { title: node.task, prompt: node.task },
@@ -252,7 +252,9 @@ export function initializeWorkspaceRuntime(params: {
   orchestrator: Pick<Orchestrator, "setWorkspaceBus" | "setMonitorLifecycle">;
   backgroundExecutor: Pick<BackgroundExecutor, "setWorkspaceBus" | "setMonitorLifecycle" | "runWorkerEnvelope">;
   supervisorBrain?: {
-    setExecuteNode: (fn: (node: TaggedGoalNode, context: SupervisorContext) => Promise<NodeResult>) => void;
+    setExecuteNode: (
+      fn: (node: TaggedGoalNode, context: SupervisorContext, signal: AbortSignal) => Promise<NodeResult>
+    ) => void;
     setEventEmitter: (emitter: WorkspaceBus) => void;
   } | null;
   dashboard?: { setWorkspaceBus: (workspaceBus: WorkspaceBus) => void } | null;

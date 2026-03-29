@@ -225,7 +225,7 @@ describe("BackgroundExecutor - Pre-decomposed Tree Path", () => {
       expect.objectContaining({
         prompt: task.prompt,
         goalTree: undefined,
-        forceEligibility: false,
+        // forceEligibility removed — supervisor always applies its own complexity gate
         taskRunId: task.id,
       }),
     );
@@ -289,7 +289,7 @@ describe("BackgroundExecutor - Pre-decomposed Tree Path", () => {
         prompt: task.prompt,
         goalTree,
         attachments: task.attachments,
-        forceEligibility: true,
+        // forceEligibility removed — supervisor always applies its own complexity gate
         taskRunId: task.id,
       }),
     );
@@ -709,7 +709,7 @@ describe("BackgroundExecutor - Pre-decomposed Tree Path", () => {
       expect.objectContaining({
         prompt: task.prompt,
         goalTree: undefined,
-        forceEligibility: true,
+        // forceEligibility removed — supervisor always applies its own complexity gate
         attachments: task.attachments,
         taskRunId: task.id,
       }),
@@ -768,7 +768,7 @@ describe("BackgroundExecutor - Pre-decomposed Tree Path", () => {
       expect.objectContaining({
         userContent: task.userContent,
         attachments: undefined,
-        forceEligibility: true,
+        // forceEligibility removed — supervisor always applies its own complexity gate
       }),
     );
     expect(mockOrch.runBackgroundTask).toHaveBeenCalledWith(
@@ -858,7 +858,7 @@ describe("BackgroundExecutor - Pre-decomposed Tree Path", () => {
         prompt: task.prompt,
         goalTree,
         attachments: task.attachments,
-        forceEligibility: true,
+        // forceEligibility removed — supervisor always applies its own complexity gate
         taskRunId: task.id,
       }),
     );
@@ -919,7 +919,7 @@ describe("BackgroundExecutor - Pre-decomposed Tree Path", () => {
       expect.objectContaining({
         prompt: task.prompt,
         goalTree,
-        forceEligibility: true,
+        // forceEligibility removed — supervisor always applies its own complexity gate
       }),
     );
     expect(mockOrch.runBackgroundTask).not.toHaveBeenCalled();
@@ -1040,7 +1040,7 @@ describe("BackgroundExecutor - Pre-decomposed Tree Path", () => {
     expect(mockOrch.evaluateSupervisorAdmission).toHaveBeenCalledWith(
       expect.objectContaining({
         prompt: task.prompt,
-        forceEligibility: true,
+        // forceEligibility removed — supervisor always applies its own complexity gate
       }),
     );
     expect(mockDecomposer.decomposeProactive).not.toHaveBeenCalled();
@@ -1087,7 +1087,7 @@ describe("BackgroundExecutor - Pre-decomposed Tree Path", () => {
         prompt: task.prompt,
         goalTree,
         attachments: task.attachments,
-        forceEligibility: true,
+        // forceEligibility removed — supervisor always applies its own complexity gate
         taskRunId: task.id,
       }),
     );

@@ -24,6 +24,8 @@ function isNonRetryableRequestError(error: unknown): boolean {
   if (/reasoning_content/i.test(msg)) return false;
   // HTTP 400 bad request — typically malformed body / invalid tool schema
   if (/\b400\b/.test(msg) && /bad.?request|invalid|malformed/i.test(msg)) return true;
+  // HTTP 403 quota/rate-limit — a different provider may still have capacity
+  if (/\b403\b/.test(msg) && /quota|limit|billing|cycle|exceeded|usage/i.test(msg)) return false;
   // HTTP 401/403 — auth errors won't resolve by switching provider
   if (/\b40[13]\b/.test(msg)) return true;
   // Explicit "invalid" schema / tool_calls format errors

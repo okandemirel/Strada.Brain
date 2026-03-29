@@ -22,6 +22,8 @@ export interface FetchWithRetryOptions {
   drainBody?: boolean;
   /** Sanitize error text using secret sanitizer (default true) */
   sanitizeErrors?: boolean;
+  /** AbortSignal for cancellation — propagated to fetch() */
+  signal?: AbortSignal;
 }
 
 const DEFAULTS = {
@@ -52,7 +54,8 @@ export async function fetchWithRetry(
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     let response: Response;
     try {
-      response = await fetch(url, init);
+      const fetchInit = opts.signal ? { ...init, signal: opts.signal } : init;
+      response = await fetch(url, fetchInit);
     } catch (err) {
       if (attempt === maxRetries) {
         throw err instanceof Error ? err : new Error(String(err));
@@ -61,7 +64,7 @@ export async function fetchWithRetry(
         attempt: attempt + 1,
         error: err instanceof Error ? err.message : String(err),
       });
-      await sleep(baseDelayMs * Math.pow(2, attempt) + Math.random() * 100);
+      await sleep(baseDelayMs * Math.pow(2, attempt) + Math.random() * 100, opts.signal);
       continue;
     }
 
@@ -96,12 +99,21 @@ export async function fetchWithRetry(
       maxRetries,
     });
 
-    await sleep(delay);
+    await sleep(delay, opts.signal);
   }
 
   throw new Error(`${callerName} max retries exceeded`);
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) { reject(signal.reason ?? new Error("Aborted")); return; }
+    const timer = setTimeout(resolve, ms);
+    if (signal) {
+      signal.addEventListener("abort", () => {
+        clearTimeout(timer);
+        reject(signal.reason ?? new Error("Aborted"));
+      }, { once: true });
+    }
+  });
 }
