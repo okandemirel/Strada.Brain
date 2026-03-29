@@ -397,6 +397,13 @@ export class DaemonStorage {
    */
   migrateBudgetSource(): void {
     this.assertOpen();
+    // Ensure agent_id column exists first (needed by insertBudgetWithSourceAndAgent)
+    try {
+      this.db!.exec(`ALTER TABLE budget_entries ADD COLUMN agent_id TEXT DEFAULT NULL`);
+    } catch {
+      // Column already exists -- safe to ignore
+    }
+    this.db!.exec(`CREATE INDEX IF NOT EXISTS idx_budget_agent ON budget_entries(agent_id, timestamp)`);
     try {
       this.db!.exec(`ALTER TABLE budget_entries ADD COLUMN source TEXT DEFAULT 'daemon'`);
     } catch {
