@@ -348,7 +348,12 @@ export type EnvVarName =
   | "SUPERVISOR_VERIFICATION_BUDGET_PCT"
   | "SUPERVISOR_TRIAGE_PROVIDER"
   | "SUPERVISOR_MAX_FAILURE_BUDGET"
-  | "SUPERVISOR_DIVERSITY_CAP";
+  | "SUPERVISOR_DIVERSITY_CAP"
+
+  // Unified Budget System
+  | "STRADA_BUDGET_DAILY_USD"
+  | "STRADA_BUDGET_MONTHLY_USD"
+  | "STRADA_BUDGET_WARN_PCT";
 
 /** Environment variable map type */
 export type EnvVarMap = Record<EnvVarName, string | undefined>;
@@ -648,6 +653,13 @@ export const DEFAULT_TASK_CONFIG: TaskConfig = {
 // MAIN CONFIG TYPE
 // =============================================================================
 
+/** Unified budget configuration */
+export interface BudgetConfig {
+  readonly dailyLimitUsd: number;
+  readonly monthlyLimitUsd: number;
+  readonly warnPct: number;
+}
+
 /** Complete application configuration */
 export interface Config {
   // AI Providers
@@ -831,6 +843,9 @@ export interface Config {
 
   // Supervisor Brain
   readonly supervisor: SupervisorConfig;
+
+  // Unified Budget System
+  readonly budget: BudgetConfig;
 }
 
 /** Partial config for updates */
@@ -1175,6 +1190,26 @@ export const configSchema = z
       .transform((s) => parseFloat(s))
       .pipe(z.number().min(0))
       .default("0"),
+
+    // Unified Budget System
+    stradaBudgetDailyUsd: z
+      .string()
+      .optional()
+      .default("0")
+      .transform((s) => parseFloat(s))
+      .pipe(z.number().min(0).max(10000)),
+    stradaBudgetMonthlyUsd: z
+      .string()
+      .optional()
+      .default("0")
+      .transform((s) => parseFloat(s))
+      .pipe(z.number().min(0).max(100000)),
+    stradaBudgetWarnPct: z
+      .string()
+      .optional()
+      .default("0.8")
+      .transform((s) => parseFloat(s))
+      .pipe(z.number().min(0.1).max(0.99)),
 
     // Logging
     logLevel: logLevelSchema.default("info"),
@@ -2325,6 +2360,12 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
       maxFailureBudget: rawConfig.stradaSupervisorMaxFailureBudget,
       diversityCap: rawConfig.stradaSupervisorDiversityCap,
     },
+
+    budget: {
+      dailyLimitUsd: rawConfig.stradaBudgetDailyUsd,
+      monthlyLimitUsd: rawConfig.stradaBudgetMonthlyUsd,
+      warnPct: rawConfig.stradaBudgetWarnPct,
+    },
   };
 
   return { kind: "valid", value: config };
@@ -2623,6 +2664,10 @@ interface EnvVars {
   rateLimitTokensPerDay: string | undefined;
   rateLimitDailyBudgetUsd: string | undefined;
   rateLimitMonthlyBudgetUsd: string | undefined;
+  // Unified Budget System
+  stradaBudgetDailyUsd: string | undefined;
+  stradaBudgetMonthlyUsd: string | undefined;
+  stradaBudgetWarnPct: string | undefined;
   logLevel: string | undefined;
   logFile: string | undefined;
   webChannelPort: string | undefined;
@@ -2912,6 +2957,10 @@ function loadFromEnv(): EnvVars {
     rateLimitTokensPerDay: process.env["RATE_LIMIT_TOKENS_PER_DAY"],
     rateLimitDailyBudgetUsd: process.env["RATE_LIMIT_DAILY_BUDGET_USD"],
     rateLimitMonthlyBudgetUsd: process.env["RATE_LIMIT_MONTHLY_BUDGET_USD"],
+    // Unified Budget System
+    stradaBudgetDailyUsd: process.env["STRADA_BUDGET_DAILY_USD"],
+    stradaBudgetMonthlyUsd: process.env["STRADA_BUDGET_MONTHLY_USD"],
+    stradaBudgetWarnPct: process.env["STRADA_BUDGET_WARN_PCT"],
     logLevel: process.env["LOG_LEVEL"],
     logFile: process.env["LOG_FILE"],
     webChannelPort: process.env["WEB_CHANNEL_PORT"],
