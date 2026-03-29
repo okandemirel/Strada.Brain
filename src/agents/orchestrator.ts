@@ -907,7 +907,7 @@ export class Orchestrator {
   }
 
   private resolveSupervisorFallbackPath(
-    _params: Pick<SupervisorAdmissionRequest, "goalTree" | "userContent" | "attachments" | "prompt">,
+    _params: Pick<SupervisorAdmissionRequest, "goalTree" | "userContent" | "attachments">,
   ): Exclude<SupervisorAdmissionPath, "supervisor"> {
     return "direct_worker";
   }
@@ -5131,6 +5131,16 @@ export class Orchestrator {
       chatId,
       channel: this.channel,
       soulLoader: this.soulLoader,
+      // Dynamic tool registration callbacks
+      registerDynamicTool: (tool) => this.addTool(tool),
+      unregisterDynamicTool: (name) => {
+        if (this.tools.has(name)) {
+          this.removeTool(name);
+          return true;
+        }
+        return false;
+      },
+      lookupTool: (name) => this.tools.get(name),
     };
 
     for (const tc of toolCalls) {

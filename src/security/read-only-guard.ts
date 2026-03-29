@@ -34,6 +34,10 @@ const WRITE_TOOLS: ReadonlySet<string> = new Set([
   "dotnet_add_package",
   "dotnet_remove_package",
   "dotnet_new",
+  // Dynamic tool/skill creation
+  "create_tool",
+  "create_skill",
+  "remove_dynamic_tool",
 ]);
 
 const READ_TOOLS: ReadonlySet<string> = new Set([
@@ -103,6 +107,15 @@ export function checkReadOnlyBlock(toolName: string, readOnlyMode: boolean): Rea
       allowed: false,
       error: `Tool '${toolName}' is disabled in read-only mode.`,
       suggestion: SUGGESTIONS[normalizedName] ?? "Use read-only tools to explore the codebase.",
+    };
+  }
+
+  // Block all dynamic tools in read-only mode (they can execute shell commands)
+  if (normalizedName.startsWith("dynamic_")) {
+    return {
+      allowed: false,
+      error: `Dynamic tool '${toolName}' is disabled in read-only mode.`,
+      suggestion: "Dynamic tools cannot run in read-only mode.",
     };
   }
 

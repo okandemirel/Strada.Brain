@@ -125,6 +125,11 @@ import { ShowPlanTool } from "../agents/tools/show-plan.js";
 import { SwitchPersonalityTool } from "../agents/tools/switch-personality.js";
 import { CreatePersonalityTool } from "../agents/tools/create-personality.js";
 
+// Dynamic tool/skill creation
+import { CreateToolTool } from "../agents/tools/dynamic/create-tool.js";
+import { CreateSkillTool } from "../agents/tools/dynamic/create-skill.js";
+import { RemoveDynamicToolTool } from "../agents/tools/dynamic/remove-dynamic.js";
+
 // ============================================================================
 // Tool Registry
 // ============================================================================
@@ -701,6 +706,25 @@ export class ToolRegistry {
 
     this.register(new CreatePersonalityTool(), {
       category: ToolCategories.INTROSPECTION,
+      dangerous: false,
+      readOnly: false,
+    });
+
+    // Dynamic tool/skill creation
+    this.register(new CreateToolTool(), {
+      category: ToolCategories.CUSTOM,
+      dangerous: false,
+      readOnly: false,
+    });
+
+    this.register(new CreateSkillTool(), {
+      category: ToolCategories.CUSTOM,
+      dangerous: false,
+      readOnly: false,
+    });
+
+    this.register(new RemoveDynamicToolTool(), {
+      category: ToolCategories.CUSTOM,
       dangerous: false,
       readOnly: false,
     });

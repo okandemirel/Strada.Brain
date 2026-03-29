@@ -201,6 +201,10 @@ export const WRITE_OPERATIONS = new Set([
   "strada_create_component",
   "strada_create_mediator",
   "strada_create_system",
+  // Dynamic tool/skill creation
+  "create_tool",
+  "create_skill",
+  "remove_dynamic_tool",
 ]);
 
 // ============================================================================

@@ -30,6 +30,15 @@ export interface ToolContext {
    * `requestConfirmation`. Optional — tools degrade gracefully.
    */
   channel?: unknown;
+
+  // ── Dynamic tool registration (provided by orchestrator) ─────────────
+
+  /** Register a new tool at runtime. Available in next PAOR iteration. */
+  registerDynamicTool?: (tool: import("./tool.interface.js").ITool) => void;
+  /** Unregister a dynamic tool by name. Returns true if found and removed. */
+  unregisterDynamicTool?: (toolName: string) => boolean;
+  /** Look up an existing tool by name (for composite tool chaining). */
+  lookupTool?: (toolName: string) => import("./tool.interface.js").ITool | undefined;
 }
 
 // ============================================================================
