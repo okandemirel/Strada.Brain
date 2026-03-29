@@ -49,6 +49,40 @@ export interface BudgetExceededEvent {
   readonly timestamp: number;
 }
 
+/** Unified budget warning event */
+export interface UnifiedBudgetWarningEvent {
+  readonly source: string;
+  readonly pct: number;
+  readonly usedUsd: number;
+  readonly limitUsd: number;
+}
+
+/** Unified budget exceeded event */
+export interface UnifiedBudgetExceededEvent {
+  readonly source: string;
+  readonly pct: number;
+  readonly usedUsd: number;
+  readonly limitUsd: number;
+  readonly isGlobal: boolean;
+}
+
+/** Budget sub-limit exceeded event */
+export interface BudgetSubExceededEvent {
+  readonly source: string;
+  readonly sourceId?: string;
+  readonly usedUsd: number;
+  readonly limitUsd: number;
+}
+
+/** Budget config updated event */
+export interface BudgetConfigUpdatedEvent {
+  readonly config: {
+    readonly dailyLimitUsd: number;
+    readonly monthlyLimitUsd: number;
+    readonly warnPct: number;
+  };
+}
+
 /** Emitted when a write operation is queued for approval */
 export interface ApprovalRequestedEvent {
   readonly approvalId: string;
@@ -246,4 +280,8 @@ export interface DaemonEventMap {
   "deploy:started": DeployStartedEvent;
   "deploy:completed": DeployCompletedEvent;
   "deploy:failed": DeployFailedEvent;
+  "budget:warning": UnifiedBudgetWarningEvent;
+  "budget:exceeded": UnifiedBudgetExceededEvent;
+  "budget:sub_exceeded": BudgetSubExceededEvent;
+  "budget:config_updated": BudgetConfigUpdatedEvent;
 }
