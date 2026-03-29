@@ -929,6 +929,11 @@ export class WebChannel
     "/api/daemon/stop",
     "/api/agent-activity",
     "/api/routing/preset",
+    "/api/budget",
+    "/api/budget/history",
+    "/api/budget/config",
+    "/api/learning/health",
+    "/api/learning/decisions",
   ]);
 
   /** Paths that accept POST or DELETE in addition to GET. */
@@ -940,6 +945,7 @@ export class WebChannel
     "/api/daemon/start",
     "/api/daemon/stop",
     "/api/routing/preset",
+    "/api/budget/config",
   ]);
 
   private getSingleHeader(
