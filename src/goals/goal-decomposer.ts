@@ -25,9 +25,9 @@ import { validateDAG } from "./goal-validator.js";
 
 /** Patterns indicating a complex, multi-step request */
 const COMPLEXITY_INDICATORS = [
-  /\band\b.*\band\b/i, // "X and Y and Z"
+  /\band\b.*\band\b/i, // "X and Y and Z" (3+ conjunctions)
   /create.*(?:with|including)/i, // "create X with Y"
-  /(?:first|then|after|finally)/i, // sequential instructions
+  /(?:first|then|after|finally).*(?:first|then|after|finally)/i, // 2+ sequential markers (not just one)
   /(?:module|system|feature|component).*(?:test|spec)/i, // feature + tests
   /\d+\s*(?:file|class|component|test)/i, // numbered items
   /(?:investigate|analy[sz]e|audit|review|stabilize|improve|refactor|clean\s+up).*(?:fix|test|verify|document|remove)/i,
@@ -38,9 +38,12 @@ const COMPLEXITY_INDICATORS = [
 
 /** Patterns indicating a simple, single-step request */
 const SIMPLE_PATTERNS = [
-  /^(?:read|show|display|list|find|search|check|get)\b/i,
-  /^(?:build|run|test|compile|lint)\b/i,
+  /^(?:read|show|display|list|find|search|check|get|explain|describe|what|how|why|where|who|when)\b/i,
+  /^(?:build|run|test|compile|lint|start|stop|restart)\b/i,
   /^(?:fix|update|change|rename|delete|remove)\s+(?:the\s+)?(?:one|single|a)\b/i,
+  /^(?:hello|hi|hey|merhaba|selam|sa|slm)\b/i,
+  /^(?:thanks|thank|teşekkür|sağ\s*ol)\b/iu,
+  /^.{0,60}[?]$/m, // Short question (up to 60 chars ending with ?)
 ];
 
 // =============================================================================
@@ -49,16 +52,16 @@ const SIMPLE_PATTERNS = [
 
 const PROACTIVE_PROMPT = `You are a goal decomposer for an AI development assistant.
 
-Given a complex task, break it into ordered sub-goals that form a directed acyclic graph (DAG).
-Each sub-goal should be independently executable and verifiable.
+Given a task, decide whether it needs decomposition and break it into sub-goals if appropriate.
 
 Rules:
+- If the task is simple and can be completed in a single execution pass, return exactly 1 sub-goal containing the full task
+- For complex tasks, break into 2-8 sub-goals forming a directed acyclic graph (DAG)
 - Each sub-goal = one logical unit of work
 - Use dependsOn to express ordering constraints (not a flat list)
 - Independent sub-goals should have empty dependsOn (they can run in parallel)
 - Sequential sub-goals should depend on their prerequisite
 - Set needsFurtherDecomposition=true for sub-goals that are themselves complex
-- Keep it concise: 2-8 sub-goals for most tasks
 
 Respond ONLY with JSON:
 {"nodes": [{"id": "s1", "task": "description", "dependsOn": [], "needsFurtherDecomposition": false}, ...]}`;

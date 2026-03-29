@@ -141,14 +141,26 @@ export class TaskClassifier {
 
     if (len < 20) return "trivial";
 
-    // "and" appears 3+ times or numbered list — complex regardless of length
+    // Structural complexity signals (content-based, not length-based)
     const andCount = (trimmed.match(/\band\b/gi) ?? []).length;
     const hasNumberedList = /\d+[.)]\s/m.test(trimmed);
+    const hasMultipleSteps = /(?:first|then|after|finally|next|step\s*\d)/i.test(trimmed);
+    const commaClauseCount = trimmed.split(/,/).length;
+    const hasMultipleTasks = andCount >= 3 || hasNumberedList;
+    const hasLongFeatureList = commaClauseCount >= 5 && len >= 200;
 
-    if (len >= 200 || andCount >= 3 || hasNumberedList) return "complex";
+    // Complex: multiple explicit tasks/steps regardless of length
+    if (hasMultipleTasks) return "complex";
+
+    // Long prompt with many comma-separated items → complex (feature lists, multi-requirement specs)
+    if (hasLongFeatureList) return "complex";
+
+    // Long AND has structural markers → complex
+    if (len >= 400 && hasMultipleSteps) return "complex";
 
     if (len < 80) return "simple";
 
+    // Moderate-length without structural markers → moderate (not complex)
     return "moderate";
   }
 
