@@ -43,7 +43,7 @@ const SIMPLE_PATTERNS = [
   /^(?:fix|update|change|rename|delete|remove)\s+(?:the\s+)?(?:one|single|a)\b/i,
   /^(?:hello|hi|hey|merhaba|selam|sa|slm)\b/i,
   /^(?:thanks|thank|teşekkür|sağ\s*ol)\b/iu,
-  /^.{0,60}[?]$/m, // Short question (up to 60 chars ending with ?)
+  /^.{0,60}[?]$/, // Short question (entire prompt up to 60 chars ending with ?)
 ];
 
 // =============================================================================

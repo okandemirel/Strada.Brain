@@ -95,13 +95,7 @@ export function initializeGoalContextStage(
     goalDecomposer,
     interruptedGoalTrees,
     crashContext,
-    goalExecutorConfig: {
-      maxRetries: params.config.goalMaxRetries,
-      maxFailures: params.config.goalMaxFailures,
-      parallelExecution: params.config.goalParallelExecution,
-      maxParallel: params.config.goalMaxParallel,
-      maxRedecompositions: params.config.goal.maxRedecompositions,
-    },
+    // goalExecutorConfig removed — execution unified into supervisor path
   };
 }
 

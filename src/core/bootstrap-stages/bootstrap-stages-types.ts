@@ -23,7 +23,7 @@ import { TrajectoryReplayRetriever } from "../../agents/trajectory-replay-retrie
 import type { RuntimeArtifactManager } from "../../learning/index.js";
 import type { ScopeContext } from "../../learning/matching/pattern-matcher.js";
 import { GoalStorage, GoalDecomposer } from "../../goals/index.js";
-import type { GoalExecutorConfig } from "../../goals/index.js";
+// GoalExecutorConfig removed — GoalExecutor path unified into supervisor
 import type { GoalTree } from "../../goals/types.js";
 import type { CrashRecoveryContext } from "../../identity/crash-recovery.js";
 import type { IAIProvider } from "../../agents/providers/provider.interface.js";
@@ -145,7 +145,7 @@ export interface GoalContextStageResult {
   goalDecomposer?: GoalDecomposer;
   interruptedGoalTrees: GoalTree[];
   crashContext: CrashRecoveryContext | null;
-  goalExecutorConfig: GoalExecutorConfig;
+  // goalExecutorConfig removed — execution unified into supervisor path
 }
 
 export interface SessionRuntimeStageResult {

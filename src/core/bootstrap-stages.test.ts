@@ -416,13 +416,7 @@ describe("bootstrap-stages", () => {
     expect(result.goalDecomposer).toBe(goalDecomposer);
     expect(result.interruptedGoalTrees).toEqual([{ id: "tree-1" }]);
     expect(result.crashContext).toBe(crashContext);
-    expect(result.goalExecutorConfig).toEqual({
-      maxRetries: 5,
-      maxFailures: 4,
-      parallelExecution: false,
-      maxParallel: 2,
-      maxRedecompositions: 6,
-    });
+    // goalExecutorConfig removed — execution unified into supervisor path
     expect(goalStorage.initialize).toHaveBeenCalled();
     expect(goalStorage.pruneOldTrees).toHaveBeenCalled();
     expect(logger.warn).toHaveBeenCalledWith(
