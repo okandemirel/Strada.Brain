@@ -73,6 +73,7 @@ export class WebSocketDashboardServer {
   private metricsInterval: NodeJS.Timeout | null = null;
   private heartbeatInterval: NodeJS.Timeout | null = null;
   private readonly logger = getLogger();
+  private getBudgetSnapshot?: () => unknown;
 
   constructor(opts: WebSocketDashboardServerOptions) {
     const configuredAuthToken = opts.authToken?.trim();
@@ -170,6 +171,10 @@ export class WebSocketDashboardServer {
 
   unregisterCommandHandler(command: string): void {
     this.commandHandlers.delete(command);
+  }
+
+  setGetBudgetSnapshot(fn: () => unknown): void {
+    this.getBudgetSnapshot = fn;
   }
 
   // ─── Broadcasting ────────────────────────────────────────────────────────────
@@ -372,7 +377,8 @@ export class WebSocketDashboardServer {
           ...this.metrics.getSnapshot(this.getMemoryStats?.()),
           plugins: this.getPluginsStats?.(),
           connectedClients: this.clients.size,
-          authenticatedClients: this.getAuthenticatedClientCount()
+          authenticatedClients: this.getAuthenticatedClientCount(),
+          budget: this.getBudgetSnapshot?.() ?? null,
         }
       });
     }, METRICS_INTERVAL_MS);

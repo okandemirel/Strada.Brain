@@ -50,6 +50,12 @@ import { setSkillEnabled } from "../skills/skill-config.js";
 import { fetchRegistry, searchRegistry } from "../skills/skill-registry-client.js";
 import { isValidSkillName, installSkillFromRepo } from "../skills/skill-installer.js";
 import type { UnifiedBudgetManager } from "../budget/unified-budget-manager.js";
+import type { WebSocketDashboardServer } from "./websocket-server.js";
+
+/** Minimal event bus interface for subscribing to budget events. */
+interface BudgetEventBusSubscribable {
+  on(event: string, listener: (payload: unknown) => void): void;
+}
 
 /**
  * Readiness check result for the /ready endpoint.
@@ -512,6 +518,9 @@ export class DashboardServer {
   // Budget management context
   private unifiedBudgetManager?: UnifiedBudgetManager;
 
+  // WebSocket server reference for budget event push
+  private wsServer?: WebSocketDashboardServer;
+
   /** Timestamp of last /api/models/refresh call (rate limiting). */
   private _lastModelRefreshMs = 0;
 
@@ -722,11 +731,38 @@ export class DashboardServer {
   }
 
   /**
+   * Register the WebSocket dashboard server for real-time event push.
+   * Call after WebSocketDashboardServer is initialized to enable budget event forwarding.
+   */
+  setWsServer(ws: WebSocketDashboardServer): void {
+    this.wsServer = ws;
+    if (this.unifiedBudgetManager) {
+      this.wsServer.setGetBudgetSnapshot(() => this.unifiedBudgetManager!.getSnapshot());
+    }
+  }
+
+  /**
    * Register unified budget manager for /api/budget endpoints.
    * Call after UnifiedBudgetManager is initialized.
    */
   setUnifiedBudgetManager(mgr: UnifiedBudgetManager): void {
     this.unifiedBudgetManager = mgr;
+    if (this.wsServer) {
+      this.wsServer.setGetBudgetSnapshot(() => mgr.getSnapshot());
+    }
+  }
+
+  /**
+   * Subscribe to budget events from the given event bus and forward them to WS clients.
+   * Call after both UnifiedBudgetManager and WsServer are registered.
+   */
+  setBudgetEventBus(bus: BudgetEventBusSubscribable): void {
+    const forwardBudgetEvent = (type: string) => (payload: unknown) => {
+      this.wsServer?.broadcastAuthenticated({ type: type as import("./websocket-server.js").WSMessageType, payload });
+    };
+    bus.on("budget:warning", forwardBudgetEvent("notification"));
+    bus.on("budget:exceeded", forwardBudgetEvent("notification"));
+    bus.on("budget:config_updated", forwardBudgetEvent("notification"));
   }
 
   private getAutonomousDefaults(): { enabled: boolean; hours: number } {
