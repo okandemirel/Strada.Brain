@@ -454,6 +454,42 @@ export function dispatchWorkspaceMessage(data: { type: string; [key: string]: un
       break
     }
 
+    // === Budget events ===
+
+    case 'budget:warning': {
+      const pct = typeof payload.pct === 'number' ? Math.round(payload.pct * 100) : '?'
+      const source = (payload.source as string) ?? 'global'
+      toast.warning(`Budget at ${pct}% — ${source} spending approaching limit`)
+      break
+    }
+
+    case 'budget:exceeded': {
+      const isGlobal = (payload.isGlobal as boolean) ?? true
+      const source = (payload.source as string) ?? 'global'
+      toast.error(isGlobal
+        ? 'Budget exceeded — all systems paused'
+        : `Budget exceeded — ${source} paused`)
+      break
+    }
+
+    case 'notification': {
+      const notifType = payload.type as string | undefined
+      if (notifType === 'budget:warning') {
+        const inner = (payload.data as Bag | undefined) ?? payload
+        const pct = typeof inner.pct === 'number' ? Math.round(inner.pct * 100) : '?'
+        const source = (inner.source as string) ?? 'global'
+        toast.warning(`Budget at ${pct}% — ${source} spending approaching limit`)
+      } else if (notifType === 'budget:exceeded') {
+        const inner = (payload.data as Bag | undefined) ?? payload
+        const isGlobal = (inner.isGlobal as boolean) ?? true
+        const source = (inner.source as string) ?? 'global'
+        toast.error(isGlobal
+          ? 'Budget exceeded — all systems paused'
+          : `Budget exceeded — ${source} paused`)
+      }
+      break
+    }
+
     default:
       // Unknown workspace message type — ignore
       break
@@ -471,4 +507,6 @@ export function isWorkspaceMessage(type: string): boolean {
     || type.startsWith('code:')
     || type.startsWith('supervisor:')
     || type.startsWith('progress:')
+    || type.startsWith('budget:')
+    || type === 'notification'
 }
