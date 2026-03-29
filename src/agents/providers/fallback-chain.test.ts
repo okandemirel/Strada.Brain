@@ -1,6 +1,7 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { FallbackChainProvider } from "./fallback-chain.js";
 import { createMockProvider } from "../../test-helpers.js";
+import { ProviderHealthRegistry } from "./provider-health.js";
 
 vi.mock("../../utils/logger.js", () => ({
   getLogger: () => ({
@@ -12,6 +13,9 @@ vi.mock("../../utils/logger.js", () => ({
 }));
 
 describe("FallbackChainProvider", () => {
+  beforeEach(() => {
+    ProviderHealthRegistry.resetInstance();
+  });
   it("throws when given empty provider list", () => {
     expect(() => new FallbackChainProvider([])).toThrow(
       "at least one provider"
@@ -43,11 +47,11 @@ describe("FallbackChainProvider", () => {
   });
 
   it("tries all providers and throws when all fail", async () => {
-    const p1 = createMockProvider();
+    const p1 = { ...createMockProvider(), name: "provider-1" };
     (p1.chat as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("P1 down"));
-    const p2 = createMockProvider();
+    const p2 = { ...createMockProvider(), name: "provider-2" };
     (p2.chat as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("P2 down"));
-    const p3 = createMockProvider();
+    const p3 = { ...createMockProvider(), name: "provider-3" };
     (p3.chat as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("P3 down"));
 
     const chain = new FallbackChainProvider([p1, p2, p3]);

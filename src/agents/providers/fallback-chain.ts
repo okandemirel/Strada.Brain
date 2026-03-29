@@ -10,6 +10,7 @@ import type {
 import type { MessageContent } from "./provider-core.interface.js";
 import { supportsStreaming } from "./provider.interface.js";
 import { getLogger } from "../../utils/logger.js";
+import { ProviderHealthRegistry } from "./provider-health.js";
 
 /**
  * Check whether a provider error is likely caused by the request itself
@@ -164,21 +165,38 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
     messages: ConversationMessage[],
   ): Promise<ProviderResponse> {
     const logger = getLogger();
+    const health = ProviderHealthRegistry.getInstance();
+    let lastError = "";
+    let attempted = 0;
 
     for (let i = 0; i < this.providers.length; i++) {
       const provider = this.providers[i]!;
+
+      // Skip providers that are currently unhealthy (cooldown not expired)
+      if (!health.isAvailable(provider.name)) {
+        logger.debug(`Skipping unhealthy provider (${label})`, {
+          provider: provider.name,
+          status: health.getStatus(provider.name),
+        });
+        continue;
+      }
+
+      attempted++;
       try {
         const safeMessages = this.stripImages(messages, provider);
         const response = await attempt(provider, safeMessages);
-        if (i > 0) {
+        health.recordSuccess(provider.name);
+        if (attempted > 1) {
           logger.info("Fallback provider succeeded", {
             provider: provider.name,
-            attempt: i + 1,
+            attempt: attempted,
           });
         }
         return response;
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);
+        lastError = errorMsg;
+        health.recordFailure(provider.name, errorMsg);
 
         if (isNonRetryableRequestError(error)) {
           logger.error(`Non-retryable provider error (${label}), not trying fallbacks`, {
@@ -188,8 +206,8 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
           throw error;
         }
 
-        const isLast = i === this.providers.length - 1;
-        if (isLast) {
+        const remaining = this.providers.slice(i + 1).filter((p) => health.isAvailable(p.name));
+        if (remaining.length === 0) {
           logger.error(`All providers failed (${label})`, {
             provider: provider.name,
             error: errorMsg,
@@ -198,14 +216,14 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
           throw new Error(`All providers failed. Last error: ${errorMsg}`);
         }
 
-        logger.warn(`Provider failed (${label}), trying next`, {
+        logger.warn(`Provider failed (${label}), trying next healthy provider`, {
           failedProvider: provider.name,
-          nextProvider: this.providers[i + 1]!.name,
+          nextProvider: remaining[0]!.name,
           error: errorMsg,
         });
       }
     }
 
-    throw new Error("All providers failed");
+    throw new Error(`All providers failed or unavailable. Last error: ${lastError}`);
   }
 }
