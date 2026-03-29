@@ -40,6 +40,7 @@ import {
   inferChannelFromRuntimeCommand,
   isTcpPortBusy,
   stopRuntimeProcesses,
+  waitForPortFree,
 } from "./core/runtime-lifecycle.js";
 
 // Setup global error handlers
@@ -50,9 +51,6 @@ setupGlobalErrorHandlers(
   (error) => {
     const logger = createLogger("error", "strada-brain-error.log");
     logger.error("Fatal error", { error: error.message, stack: error.stack });
-  },
-  () => {
-    // Cleanup will be handled by the bootstrap shutdown
   },
 );
 
@@ -701,7 +699,16 @@ async function createCliAutoUpdater(
   );
 }
 
+function warnIfWindows(): boolean {
+  if (process.platform === "win32") {
+    console.warn("Runtime detection is not supported on Windows. Process management commands (kill, restart, status) are unavailable.");
+    return true;
+  }
+  return false;
+}
+
 async function runStatusCommand(): Promise<void> {
+  if (warnIfWindows()) return;
   const updater = await createCliAutoUpdater();
   const inspection = await updater.inspectLocalRuntimes();
   const matchingRuntimes = getMatchingLocalRuntimeProcesses(inspection);
@@ -740,6 +747,7 @@ async function runStatusCommand(): Promise<void> {
 }
 
 async function runKillCommand(force: boolean): Promise<void> {
+  if (warnIfWindows()) return;
   const updater = await createCliAutoUpdater();
   const inspection = await updater.inspectLocalRuntimes();
   const matchingRuntimes = getMatchingLocalRuntimeProcesses(inspection);
@@ -770,6 +778,7 @@ async function runRestartCommand(
   daemonMode: boolean | undefined,
   force: boolean,
 ): Promise<void> {
+  if (warnIfWindows()) return;
   const updater = await createCliAutoUpdater();
   const inspection = await updater.inspectLocalRuntimes();
   const matchingRuntimes = getMatchingLocalRuntimeProcesses(inspection);
@@ -795,8 +804,34 @@ async function runRestartCommand(
       }
       process.exit(1);
     }
+
+    // Wait for ports to become free after stopping old process (TIME_WAIT)
+    if (nextChannel === "web") {
+      const configResult = loadConfigSafe();
+      if (configResult.kind === "ok") {
+        const { web, dashboard } = configResult.value;
+        const portsFree = await Promise.all([
+          waitForPortFree(web.port),
+          waitForPortFree(dashboard.port),
+        ]);
+        if (portsFree.some((free) => !free)) {
+          console.warn("Warning: ports may still be occupied. Proceeding with restart...");
+        }
+      }
+    }
   } else {
     console.log("No running local Strada runtime detected; starting a fresh process.");
+  }
+
+  const wasSupervisedMode = matchingRuntimes.some((runtime) => /\bsupervise\b/.test(runtime.command));
+  if (wasSupervisedMode && daemonMode === undefined) {
+    console.log("Previous process was running under `strada supervise`. Restarting in supervisor mode.");
+    const config = loadConfig();
+    const logger = createLogger(config.logLevel, config.logFile);
+    logger.info("Restarting in supervisor mode after restart command");
+    const daemon = new Daemon({ args: ["start", "--channel", nextChannel] });
+    await daemon.start();
+    return;
   }
 
   const inferredDaemonMode = matchingRuntimes.some((runtime) => /\s--daemon(?:\s|$)/.test(runtime.command));
@@ -835,6 +870,7 @@ function setupShutdownHandlers(shutdown: () => Promise<void>): void {
 
   process.on("SIGTERM", () => void handleShutdown("SIGTERM"));
   process.on("SIGINT", () => void handleShutdown("SIGINT"));
+  process.on("SIGHUP", () => void handleShutdown("SIGHUP"));
 
   // Handle uncaught errors
   process.on("uncaughtException", (error) => {

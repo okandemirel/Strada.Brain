@@ -514,19 +514,19 @@ export function wrapError(
  */
 export function setupGlobalErrorHandlers(
   onError?: (error: Error) => void,
-  onShutdown?: () => void
 ): void {
   const logger = console;
 
   process.on("uncaughtException", (error: Error) => {
     logger.error("Uncaught Exception:", error);
     onError?.(error);
-    
-    // Give time for cleanup
-    setTimeout(() => {
-      onShutdown?.();
+    // setupShutdownHandlers() in index.ts registers a second uncaughtException
+    // handler that drives graceful shutdown + process.exit(). If that handler
+    // hasn't been registered yet (e.g. crash during bootstrap), exit immediately
+    // so the process doesn't hang in a broken state.
+    if (process.listenerCount("uncaughtException") <= 1) {
       process.exit(1);
-    }, 1000);
+    }
   });
 
   process.on("unhandledRejection", (reason: unknown) => {

@@ -170,5 +170,8 @@ export class Daemon {
 
     process.on("SIGINT", () => handleSignal("SIGINT"));
     process.on("SIGTERM", () => handleSignal("SIGTERM"));
+    // SIGHUP is intentionally NOT handled here — the daemon supervisor should
+    // survive terminal close (SIGHUP) so the child process can be restarted.
+    // The child process handles SIGHUP via setupShutdownHandlers in index.ts.
   }
 }

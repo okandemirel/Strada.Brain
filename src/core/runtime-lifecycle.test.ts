@@ -38,6 +38,11 @@ describe("runtime lifecycle", () => {
     expect(inferChannelFromRuntimeCommand("node dist/index.js start", "web")).toBe("web");
   });
 
+  it("falls back to default channel for invalid --channel values", () => {
+    expect(inferChannelFromRuntimeCommand("node dist/index.js start --channel foobar", "web")).toBe("web");
+    expect(inferChannelFromRuntimeCommand("node dist/index.js start --channel INVALID", "telegram")).toBe("telegram");
+  });
+
   it("detects when a TCP port is busy", async () => {
     const net = await import("node:net");
     const server = net.createServer();

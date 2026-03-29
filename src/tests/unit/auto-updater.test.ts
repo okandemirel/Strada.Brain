@@ -92,6 +92,7 @@ describe("AutoUpdater", () => {
         "202 /opt/homebrew/bin/node /tmp/Strada.Brain/dist/index.js start --channel web",
         "250 /opt/homebrew/bin/node --import tsx /tmp/Strada.Brain/src/index.ts cli",
         "303 /opt/homebrew/bin/node /tmp/other-app/src/index.ts start",
+        "404 /opt/homebrew/bin/node --import tsx /tmp/Strada.Brain/src/index.ts supervise --channel web",
       ].join("\n"));
 
       expect(candidates).toEqual([
@@ -110,6 +111,10 @@ describe("AutoUpdater", () => {
         {
           pid: 303,
           command: "/opt/homebrew/bin/node /tmp/other-app/src/index.ts start",
+        },
+        {
+          pid: 404,
+          command: "/opt/homebrew/bin/node --import tsx /tmp/Strada.Brain/src/index.ts supervise --channel web",
         },
       ]);
     });
@@ -285,6 +290,7 @@ describe("AutoUpdater", () => {
 
       await expect(updater.performUpdate()).resolves.toBe(true);
       expect(commandRunner.mock.calls.map(([cmd, args]) => `${cmd} ${(args as string[]).join(" ")}`)).toEqual([
+        "git status --porcelain",
         "git rev-parse HEAD",
         "git pull origin main",
         "npm install",
@@ -349,6 +355,7 @@ describe("AutoUpdater", () => {
       await expect(updater.performUpdate()).resolves.toBe(true);
       const cmds = commandRunner.mock.calls.map(([cmd, args]) => `${cmd} ${(args as string[]).join(" ")}`);
       expect(cmds).toEqual([
+        "git status --porcelain",
         "git rev-parse HEAD",
         "git pull origin main",
         "npm install",
@@ -356,7 +363,7 @@ describe("AutoUpdater", () => {
         "npm run build",
       ]);
       // Second npm install should target web-portal directory
-      expect(commandRunner.mock.calls[3]![3]).toBe(path.join(dir, "web-portal"));
+      expect(commandRunner.mock.calls[4]![3]).toBe(path.join(dir, "web-portal"));
     });
 
     it("restores web-portal dependencies when rollback follows a build failure", async () => {
@@ -366,6 +373,7 @@ describe("AutoUpdater", () => {
       fs.writeFileSync(path.join(dir, "web-portal", "package.json"), "{}");
 
       const commandRunner = vi.fn(async (cmd: string, args: string[], _timeout?: number, cwd?: string) => {
+        if (cmd === "git" && args[0] === "status") return "";
         if (cmd === "git" && args[0] === "rev-parse") return "abc123\n";
         if (cmd === "npm" && args[0] === "run" && args[1] === "build") {
           throw new Error("build failed");

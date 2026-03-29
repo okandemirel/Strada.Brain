@@ -2,7 +2,7 @@ import { createServer } from "node:net";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { LocalRuntimeInspection, RuntimeProcessInfo } from "./auto-updater.js";
-import type { SupportedChannelType } from "../common/constants.js";
+import { CHANNEL_DEFAULTS, type SupportedChannelType } from "../common/constants.js";
 
 export interface StopRuntimeProcessesOptions {
   force?: boolean;
@@ -39,7 +39,7 @@ export function inferChannelFromRuntimeCommand(
 ): SupportedChannelType {
   const channelMatch = command.match(/--channel\s+([a-z]+)/i);
   const explicitChannel = channelMatch?.[1]?.toLowerCase();
-  if (explicitChannel) {
+  if (explicitChannel && (CHANNEL_DEFAULTS.SUPPORTED_TYPES as readonly string[]).includes(explicitChannel)) {
     return explicitChannel as SupportedChannelType;
   }
 
@@ -66,6 +66,29 @@ export async function isTcpPortBusy(port: number, host: string = "127.0.0.1"): P
     });
     server.listen(port, host);
   });
+}
+
+/**
+ * Wait until a TCP port becomes free, polling at `pollMs` intervals.
+ * Returns true if the port is free (or probe errors occur), false if still
+ * busy when the deadline expires. Probe errors are treated as "free" because
+ * they indicate the port is not held in a normal EADDRINUSE state.
+ */
+export async function waitForPortFree(
+  port: number,
+  timeoutMs: number = 5_000,
+  pollMs: number = 250,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      if (!(await isTcpPortBusy(port))) return true;
+    } catch {
+      return true;
+    }
+    await sleep(pollMs);
+  }
+  return false;
 }
 
 function isProcessAlive(

@@ -195,7 +195,7 @@ export class AutoUpdater {
         return { pid, command };
       })
       .filter((entry): entry is { pid: number; command: string } => entry !== null)
-      .filter((entry) => /(?:src[\\/]+index\.ts|dist[\\/]+index\.js)\s+(?:start|cli)(?:\s|$)/.test(entry.command));
+      .filter((entry) => /(?:src[\\/]+index\.ts|dist[\\/]+index\.js)\s+(?:start|cli|supervise)(?:\s|$)/.test(entry.command));
   }
 
   static parseLsofCwd(output: string): string | null {
@@ -472,10 +472,29 @@ export class AutoUpdater {
             error: "Could not determine whether origin/main is ahead of this checkout.",
           };
         }
+
+        // Read remote package.json version for consistent semver display
+        let remoteVersion: string | null = null;
+        try {
+          const remotePkgJson = (
+            await this.runCommand(
+              "git",
+              ["show", "origin/main:package.json"],
+              VERSION_CHECK_TIMEOUT,
+              this.installRoot,
+            )
+          ).trim();
+          const remotePkg = JSON.parse(remotePkgJson) as { version?: string };
+          remoteVersion = remotePkg.version ?? null;
+        } catch {
+          // Fall back to abbreviated SHA if remote package.json is unreadable
+          remoteVersion = remoteRev.length > 0 ? remoteRev.substring(0, 8) : null;
+        }
+
         return {
           available: behind > 0,
           currentVersion,
-          latestVersion: remoteRev.substring(0, 8),
+          latestVersion: remoteVersion,
           error: null,
         };
       } else {
@@ -518,6 +537,21 @@ export class AutoUpdater {
       const method = this.detectInstallMethod();
 
       if (method === "git") {
+        // Check for uncommitted changes before pulling
+        const statusOutput = (
+          await this.runCommand(
+            "git",
+            ["status", "--porcelain"],
+            VERSION_CHECK_TIMEOUT,
+            this.installRoot,
+          )
+        ).trim();
+        if (statusOutput.length > 0) {
+          throw new Error(
+            "Working tree has uncommitted changes. Please commit or stash your changes before updating.",
+          );
+        }
+
         const prePullSha = (
           await this.runCommand(
             "git",
@@ -727,7 +761,10 @@ export class AutoUpdater {
             this.notifyFn(
               `Updated to ${this.pendingVersion}. Restarting...`,
             );
-            setTimeout(() => process.exit(0), 2000);
+            // Send SIGTERM to self so setupShutdownHandlers triggers graceful
+            // shutdown (DB flush, connection close, etc.) before exit.
+            // The daemon wrapper will detect the clean exit and restart.
+            setTimeout(() => process.kill(process.pid, "SIGTERM"), 2000);
           } else {
             this.notifyFn(
               `Updated to ${this.pendingVersion}. Please restart with \`strada start\`${!this.isDaemonProcess() ? " (auto-restart requires `strada daemon`)" : ""}.`,
