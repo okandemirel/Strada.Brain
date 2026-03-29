@@ -907,7 +907,7 @@ export class Orchestrator {
   }
 
   private resolveSupervisorFallbackPath(
-    _params: Pick<SupervisorAdmissionRequest, "goalTree" | "forceEligibility" | "userContent" | "attachments">,
+    _params: Pick<SupervisorAdmissionRequest, "goalTree" | "userContent" | "attachments">,
   ): Exclude<SupervisorAdmissionPath, "supervisor"> {
     return "direct_worker";
   }
