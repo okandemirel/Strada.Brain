@@ -655,6 +655,18 @@ describe("bootstrap-stages", () => {
     const daemonStorage = {
       initialize: vi.fn(),
       getDaemonState: vi.fn().mockReturnValue("true"),
+      migrateBudgetSource: vi.fn(),
+      getAllBudgetConfig: vi.fn().mockReturnValue({}),
+      getBudgetConfig: vi.fn(),
+      setBudgetConfig: vi.fn(),
+      sumBudgetSince: vi.fn().mockReturnValue(0),
+      sumBudgetBySource: vi.fn().mockReturnValue({}),
+      sumBudgetForSource: vi.fn().mockReturnValue(0),
+      sumBudgetSinceForAgent: vi.fn().mockReturnValue(0),
+      getDailyHistory: vi.fn().mockReturnValue([]),
+      insertBudgetEntry: vi.fn(),
+      insertBudgetEntryWithSource: vi.fn(),
+      insertBudgetEntryWithAgent: vi.fn(),
     } as any;
     const triggerRegistry = {
       register: vi.fn(),
@@ -668,9 +680,11 @@ describe("bootstrap-stages", () => {
       stop: vi.fn(),
       isRunning: vi.fn().mockReturnValue(true),
       getDaemonStatus: vi.fn().mockReturnValue({ running: true }),
+      setUnifiedBudgetManager: vi.fn(),
     } as any;
     const backgroundExecutor = {
       setDaemonBudgetTracker: vi.fn(),
+      setUnifiedBudgetManager: vi.fn(),
     } as any;
     const commandHandler = {
       setHeartbeatLoop: vi.fn(),

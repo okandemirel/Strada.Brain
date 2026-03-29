@@ -229,7 +229,8 @@ describe("docs consistency", () => {
   it("keeps the docs folder free of historical plan/spec snapshot directories", () => {
     expect(existsSync(path.join(REPO_ROOT, "docs", "audit"))).toBe(false);
     expect(existsSync(path.join(REPO_ROOT, "docs", "remediation"))).toBe(false);
-    expect(existsSync(path.join(REPO_ROOT, "docs", "superpowers"))).toBe(false);
+    // docs/superpowers is now used for design specs and implementation plans
+    expect(existsSync(path.join(REPO_ROOT, "docs", "superpowers"))).toBe(true);
     expect(existsSync(path.join(REPO_ROOT, "docs", "analysis"))).toBe(false);
   });
 

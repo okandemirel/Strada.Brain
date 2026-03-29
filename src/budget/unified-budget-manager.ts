@@ -10,7 +10,6 @@ import { BudgetConfigStore } from "./budget-config-store.js";
 import type {
   BudgetSnapshot,
   BudgetSource,
-  BudgetUsage,
   CostMetadata,
   DailyHistoryEntry,
   UnifiedBudgetConfig,
@@ -130,7 +129,7 @@ export class UnifiedBudgetManager {
     return false; // chat and verification have no sub-limits
   }
 
-  canSpend(estimatedCost: number, source: BudgetSource, sourceId?: string): boolean {
+  canSpend(_estimatedCost: number, source: BudgetSource, sourceId?: string): boolean {
     return !this.isGlobalExceeded() && !this.isSourceExceeded(source, sourceId);
   }
 
