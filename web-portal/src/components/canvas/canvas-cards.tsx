@@ -376,19 +376,3 @@ export function MetricCardComponent({ shape }: CardProps) {
   )
 }
 
-/** Map card type string to component */
-export const CARD_COMPONENTS: Record<string, React.FC<CardProps>> = {
-  'code-block': CodeBlockCard,
-  'diff-block': DiffBlockCard,
-  'file-card': FileCardCard,
-  'diagram-node': DiagramNodeCard,
-  'terminal-block': TerminalBlockCard,
-  'image-block': ImageBlockCard,
-  'task-card': TaskCardCard,
-  'note-block': NoteBlockCard,
-  'goal-summary': GoalSummaryCard,
-  'error-card': ErrorCardComponent,
-  'test-result': TestResultCard,
-  'link-card': LinkCardComponent,
-  'metric-card': MetricCardComponent,
-}

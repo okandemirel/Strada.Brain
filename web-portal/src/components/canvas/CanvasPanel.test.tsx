@@ -17,7 +17,7 @@ vi.mock('@dnd-kit/core', () => ({
   }),
 }))
 
-vi.mock('./canvas-cards', () => ({
+vi.mock('./card-components', () => ({
   CARD_COMPONENTS: {
     'code-block': ({ shape }: { shape: { id: string; props: Record<string, unknown> } }) => (
       <div data-testid={`card-${shape.id}`} data-type="code-block">{String(shape.props.code ?? '')}</div>
