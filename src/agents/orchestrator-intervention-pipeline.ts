@@ -154,6 +154,8 @@ export interface InterventionDeps {
   readonly interactionPolicy: {
     requirePlanReview(chatId: string, reason: string, planText: string): void;
   };
+  /** Check if autonomous mode is active for a chat (plans auto-execute without user review) */
+  readonly isAutonomousActive?: (chatId: string, userId?: string) => boolean;
   readonly formatPlanReviewMessage: (draft: string) => string;
 
   // Telemetry
@@ -1706,6 +1708,15 @@ export async function resolveVisibleDraftDecision(
       toolNames: params.availableToolNames,
     })
   ) {
+    // In autonomous mode, plans are auto-executed — do not surface for review
+    if (deps.isAutonomousActive?.(params.chatId)) {
+      return {
+        kind: "internal_continue",
+        reason: "Autonomous mode: plan auto-approved for execution.",
+        visibleText: "",
+        gate: "Plan recorded. Now execute it step by step using the available tools. Start with the first actionable step.",
+      };
+    }
     deps.interactionPolicy.requirePlanReview(
       params.chatId,
       "user explicitly asked to review a plan first",

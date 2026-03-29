@@ -1862,6 +1862,7 @@ export class Orchestrator {
       executeToolCalls: (chatId, toolCalls, opts) => this.executeToolCalls(chatId, toolCalls, opts),
       getLogRingBuffer: () => typeof getLogRingBuffer === "function" ? getLogRingBuffer() : [],
       buildStructuredProgressSignal: (prompt, title, signal, lang) => this.buildStructuredProgressSignal(prompt, title, signal, lang),
+      isAutonomousActive: (chatId, userId) => this.dmPolicy?.isAutonomousActive(chatId, userId) ?? false,
     };
   }
 
@@ -2747,6 +2748,7 @@ export class Orchestrator {
                 (bgAgentState.phase === AgentPhase.PLANNING ||
                   bgAgentState.phase === AgentPhase.REPLANNING) &&
                 response.toolCalls.length === 0 &&
+                draftLooksLikeInternalPlanArtifact(response.text ?? "", { toolNames: currentToolNames }) &&
                 this.dmPolicy?.isAutonomousActive(chatId, options.userId)
               ) {
                 bgAgentState = handlePlanPhaseTransition({
@@ -3814,6 +3816,23 @@ export class Orchestrator {
             toolNames: currentToolNames,
           })
         ) {
+          // Autonomous mode: auto-execute plans, don't present for review
+          if (this.dmPolicy?.isAutonomousActive(chatId, userId)) {
+            agentState = handlePlanPhaseTransition({
+              agentState,
+              executionJournal,
+              responseText: response.text,
+              providerName: currentAssignment.providerName,
+              modelId: currentAssignment.modelId,
+              autoTransition: true,
+            });
+            session.messages.push(
+              { role: "assistant", content: response.text },
+              { role: "user", content: "Plan recorded. Now execute it step by step using the available tools. Start with the first actionable step." },
+            );
+            continue;
+          }
+
           agentState = handlePlanPhaseTransition({
             agentState,
             executionJournal,
@@ -3846,6 +3865,29 @@ export class Orchestrator {
             hitMaxIterations: false,
           });
           return;
+        }
+
+        // Interactive loop: autonomous mode auto-executes PLANNING text-only responses
+        if (
+          (agentState.phase === AgentPhase.PLANNING ||
+            agentState.phase === AgentPhase.REPLANNING) &&
+          response.toolCalls.length === 0 &&
+          draftLooksLikeInternalPlanArtifact(response.text ?? "", { toolNames: currentToolNames }) &&
+          this.dmPolicy?.isAutonomousActive(chatId, userId)
+        ) {
+          agentState = handlePlanPhaseTransition({
+            agentState,
+            executionJournal,
+            responseText: response.text,
+            providerName: currentAssignment.providerName,
+            modelId: currentAssignment.modelId,
+            autoTransition: true,
+          });
+          session.messages.push(
+            { role: "assistant", content: response.text },
+            { role: "user", content: "Plan recorded. Now execute it step by step using the available tools. Start with the first actionable step." },
+          );
+          continue;
         }
 
         // If no tool calls, send the final text response (extracted to orchestrator-end-turn-handler.ts)
