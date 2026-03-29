@@ -133,6 +133,20 @@ CREATE TABLE IF NOT EXISTS deployment_log (
 );
 CREATE INDEX IF NOT EXISTS idx_deployment_log_ts ON deployment_log(proposed_at DESC);
 CREATE INDEX IF NOT EXISTS idx_deployment_log_status ON deployment_log(status);
+
+CREATE TABLE IF NOT EXISTS budget_config (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS settings_overrides (
+  key TEXT NOT NULL,
+  scope TEXT NOT NULL DEFAULT 'global',
+  value TEXT NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (key, scope)
+);
 `;
 
 // =============================================================================
@@ -262,6 +276,17 @@ export class DaemonStorage {
     getFireHistory?: Database.Statement;
     // Trigger Fire History Pruning (Phase 21)
     pruneFireHistoryByAge?: Database.Statement;
+    // Budget source migration
+    sumBudgetBySource?: Database.Statement;
+    sumBudgetForSource?: Database.Statement;
+    dailyHistory?: Database.Statement;
+    // Budget config
+    getBudgetConfig?: Database.Statement;
+    setBudgetConfig?: Database.Statement;
+    getAllBudgetConfig?: Database.Statement;
+    // Settings overrides
+    getSettingsOverride?: Database.Statement;
+    setSettingsOverride?: Database.Statement;
   } = {};
 
   constructor(dbPath: string) {
@@ -364,6 +389,32 @@ export class DaemonStorage {
     );
   }
 
+  /**
+   * Migrate budget_entries table to add source column and related statements.
+   * Safe to call multiple times.
+   */
+  migrateBudgetSource(): void {
+    this.assertOpen();
+    try {
+      this.db!.exec(`ALTER TABLE budget_entries ADD COLUMN source TEXT DEFAULT 'daemon'`);
+    } catch {
+      // Column already exists -- safe to ignore
+    }
+    this.db!.exec(
+      `CREATE INDEX IF NOT EXISTS idx_budget_source ON budget_entries(source, timestamp)`,
+    );
+
+    this.stmts.sumBudgetBySource = this.db!.prepare(
+      `SELECT source, COALESCE(SUM(cost_usd), 0) AS total FROM budget_entries WHERE timestamp >= ? GROUP BY source`,
+    );
+    this.stmts.sumBudgetForSource = this.db!.prepare(
+      `SELECT COALESCE(SUM(cost_usd), 0) AS total FROM budget_entries WHERE source = ? AND timestamp >= ?`,
+    );
+    this.stmts.dailyHistory = this.db!.prepare(
+      `SELECT date(timestamp / 1000, 'unixepoch') AS day, source, COALESCE(SUM(cost_usd), 0) AS total FROM budget_entries WHERE timestamp >= ? GROUP BY day, source ORDER BY day`,
+    );
+  }
+
   /** Insert a budget cost entry with an agent_id (multi-agent support) */
   insertBudgetEntryWithAgent(entry: Omit<BudgetEntry, "id"> & { agentId: string }): void {
     this.assertOpen();
@@ -410,6 +461,113 @@ export class DaemonStorage {
     this.assertOpen();
     const rows = this.stmts.recentBudget!.all(limit) as BudgetRow[];
     return rows.map(this.rowToBudgetEntry);
+  }
+
+  /** Sum budget entries grouped by source since a timestamp */
+  sumBudgetBySource(windowStart: number): Record<string, number> {
+    this.assertOpen();
+    if (!this.stmts.sumBudgetBySource) {
+      throw new Error("Budget source migration not applied. Call migrateBudgetSource() first.");
+    }
+    const rows = this.stmts.sumBudgetBySource.all(windowStart) as Array<{ source: string; total: number }>;
+    const result: Record<string, number> = {};
+    for (const row of rows) result[row.source ?? "daemon"] = row.total;
+    return result;
+  }
+
+  /** Sum budget entries for a specific source since a timestamp */
+  sumBudgetForSource(source: string, windowStart: number): number {
+    this.assertOpen();
+    if (!this.stmts.sumBudgetForSource) {
+      throw new Error("Budget source migration not applied. Call migrateBudgetSource() first.");
+    }
+    const row = this.stmts.sumBudgetForSource.get(source, windowStart) as { total: number };
+    return row.total;
+  }
+
+  /** Get daily budget history grouped by source since a timestamp */
+  getDailyHistory(windowStart: number): Array<{ day: string; source: string; total: number }> {
+    this.assertOpen();
+    if (!this.stmts.dailyHistory) {
+      throw new Error("Budget source migration not applied. Call migrateBudgetSource() first.");
+    }
+    return this.stmts.dailyHistory.all(windowStart) as Array<{ day: string; source: string; total: number }>;
+  }
+
+  /** Insert a budget cost entry with a source field */
+  insertBudgetEntryWithSource(entry: {
+    costUsd: number;
+    model?: string | null;
+    tokensIn?: number | null;
+    tokensOut?: number | null;
+    triggerName?: string | null;
+    timestamp: number;
+    source: string;
+    agentId?: string | null;
+  }): void {
+    this.assertOpen();
+    if (entry.agentId) {
+      // Use agent-aware insert with source
+      this.db!.prepare(
+        `INSERT INTO budget_entries (cost_usd, model, tokens_in, tokens_out, trigger_name, timestamp, agent_id, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        entry.costUsd,
+        entry.model ?? null,
+        entry.tokensIn ?? null,
+        entry.tokensOut ?? null,
+        entry.triggerName ?? null,
+        entry.timestamp,
+        entry.agentId,
+        entry.source,
+      );
+    } else {
+      this.db!.prepare(
+        `INSERT INTO budget_entries (cost_usd, model, tokens_in, tokens_out, trigger_name, timestamp, source) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        entry.costUsd,
+        entry.model ?? null,
+        entry.tokensIn ?? null,
+        entry.tokensOut ?? null,
+        entry.triggerName ?? null,
+        entry.timestamp,
+        entry.source,
+      );
+    }
+  }
+
+  /** Get a budget config value by key */
+  getBudgetConfig(key: string): string | undefined {
+    this.assertOpen();
+    const row = this.stmts.getBudgetConfig!.get(key) as { value: string } | undefined;
+    return row?.value;
+  }
+
+  /** Set a budget config key-value pair */
+  setBudgetConfig(key: string, value: string): void {
+    this.assertOpen();
+    this.stmts.setBudgetConfig!.run(key, value, Date.now());
+  }
+
+  /** Get all budget config entries as a Record */
+  getAllBudgetConfig(): Record<string, string> {
+    this.assertOpen();
+    const rows = this.stmts.getAllBudgetConfig!.all() as Array<{ key: string; value: string }>;
+    const result: Record<string, string> = {};
+    for (const row of rows) result[row.key] = row.value;
+    return result;
+  }
+
+  /** Get a settings override value by key and scope */
+  getSettingsOverride(key: string, scope: string = "global"): string | undefined {
+    this.assertOpen();
+    const row = this.stmts.getSettingsOverride!.get(key, scope) as { value: string } | undefined;
+    return row?.value;
+  }
+
+  /** Set a settings override value */
+  setSettingsOverride(key: string, value: string, scope: string = "global"): void {
+    this.assertOpen();
+    this.stmts.setSettingsOverride!.run(key, scope, value, Date.now());
   }
 
   // =========================================================================
@@ -863,6 +1021,21 @@ export class DaemonStorage {
     // Trigger Fire History Pruning (Phase 21)
     this.stmts.pruneFireHistoryByAge = db.prepare(
       `DELETE FROM trigger_fire_history WHERE timestamp < ?`,
+    );
+
+    // Budget Config
+    this.stmts.getBudgetConfig = db.prepare(`SELECT value FROM budget_config WHERE key = ?`);
+    this.stmts.setBudgetConfig = db.prepare(
+      `INSERT OR REPLACE INTO budget_config (key, value, updated_at) VALUES (?, ?, ?)`,
+    );
+    this.stmts.getAllBudgetConfig = db.prepare(`SELECT key, value FROM budget_config`);
+
+    // Settings Overrides
+    this.stmts.getSettingsOverride = db.prepare(
+      `SELECT value FROM settings_overrides WHERE key = ? AND scope = ?`,
+    );
+    this.stmts.setSettingsOverride = db.prepare(
+      `INSERT OR REPLACE INTO settings_overrides (key, scope, value, updated_at) VALUES (?, ?, ?, ?)`,
     );
   }
 
