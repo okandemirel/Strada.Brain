@@ -218,9 +218,22 @@ interface PersonalityProfilesResponse {
 }
 
 interface LearningHealthResponse {
-  healthy: boolean
-  issues?: string[]
-  decisions?: Array<{ type: string; outcome: string; timestamp: number }>
+  aggregates: {
+    instinctSummary: { total: number; active: number; deprecated: number; permanent: number; proposed: number; avgConfidence: number }
+    topPerformers: Array<{ id: string; name: string; confidence: number; status: string }>
+    lowPerformers: Array<{ id: string; name: string; confidence: number; status: string }>
+    feedbackCounts: { thumbs_up: number; thumbs_down: number; teaching: number; correction: number } | null
+    recentFeedback: Array<{ id: string; type: string; content: string | null; createdAt: number }>
+  } | null
+  runtime: {
+    reflection: { totalDone: number; totalOverrides: number; overrideRate: number }
+    consensus: { totalVerifications: number; agreementRate: number; disagreements: unknown[] }
+    outcome: { totalTracked: number; successRate: number; instinctsUpdated: number }
+  }
+}
+
+interface LearningDecisionsResponse {
+  decisions: Array<{ type: string; outcome: string; timestamp: number }>
 }
 
 interface TriggersListResponse {
@@ -648,6 +661,15 @@ export function useLearningHealth() {
   return useQuery<LearningHealthResponse>({
     queryKey: ['learning-health'],
     queryFn: () => fetchApi<LearningHealthResponse>('/api/learning/health'),
+    refetchInterval: 30_000,
+  })
+}
+
+/** GET /api/learning/decisions */
+export function useLearningDecisions(limit = 50) {
+  return useQuery<LearningDecisionsResponse>({
+    queryKey: ['learning-decisions', limit],
+    queryFn: () => fetchApi<LearningDecisionsResponse>(`/api/learning/decisions?limit=${limit}`),
     refetchInterval: 30_000,
   })
 }

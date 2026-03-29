@@ -36,11 +36,11 @@ export class BudgetConfigStore {
     }
     // Validate and persist each field
     if (partial.dailyLimitUsd !== undefined) {
-      if (partial.dailyLimitUsd < 0) throw new Error("dailyLimitUsd must be >= 0");
+      if (typeof partial.dailyLimitUsd !== "number" || !Number.isFinite(partial.dailyLimitUsd) || partial.dailyLimitUsd < 0) throw new Error("dailyLimitUsd must be a finite number >= 0");
       this.storage.setBudgetConfig("dailyLimitUsd", String(partial.dailyLimitUsd));
     }
     if (partial.monthlyLimitUsd !== undefined) {
-      if (partial.monthlyLimitUsd < 0) throw new Error("monthlyLimitUsd must be >= 0");
+      if (typeof partial.monthlyLimitUsd !== "number" || !Number.isFinite(partial.monthlyLimitUsd) || partial.monthlyLimitUsd < 0) throw new Error("monthlyLimitUsd must be a finite number >= 0");
       this.storage.setBudgetConfig("monthlyLimitUsd", String(partial.monthlyLimitUsd));
     }
     if (partial.warnPct !== undefined) {
@@ -48,9 +48,18 @@ export class BudgetConfigStore {
     }
     if (partial.subLimits) {
       const sl = partial.subLimits;
-      if (sl.daemonDailyUsd !== undefined) this.storage.setBudgetConfig("subLimits.daemonDailyUsd", String(sl.daemonDailyUsd));
-      if (sl.agentDefaultUsd !== undefined) this.storage.setBudgetConfig("subLimits.agentDefaultUsd", String(sl.agentDefaultUsd));
-      if (sl.verificationPct !== undefined) this.storage.setBudgetConfig("subLimits.verificationPct", String(sl.verificationPct));
+      if (sl.daemonDailyUsd !== undefined) {
+        if (typeof sl.daemonDailyUsd !== "number" || !Number.isFinite(sl.daemonDailyUsd) || sl.daemonDailyUsd < 0) throw new Error("daemonDailyUsd must be a finite number >= 0");
+        this.storage.setBudgetConfig("subLimits.daemonDailyUsd", String(sl.daemonDailyUsd));
+      }
+      if (sl.agentDefaultUsd !== undefined) {
+        if (typeof sl.agentDefaultUsd !== "number" || !Number.isFinite(sl.agentDefaultUsd) || sl.agentDefaultUsd < 0) throw new Error("agentDefaultUsd must be a finite number >= 0");
+        this.storage.setBudgetConfig("subLimits.agentDefaultUsd", String(sl.agentDefaultUsd));
+      }
+      if (sl.verificationPct !== undefined) {
+        if (typeof sl.verificationPct !== "number" || !Number.isFinite(sl.verificationPct) || sl.verificationPct < 0 || sl.verificationPct > 1) throw new Error("verificationPct must be a finite number between 0 and 1");
+        this.storage.setBudgetConfig("subLimits.verificationPct", String(sl.verificationPct));
+      }
     }
     this.cached = null; // Invalidate cache
   }
