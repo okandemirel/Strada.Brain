@@ -144,14 +144,14 @@ export default function BudgetSection() {
           <p className="text-xs text-text-tertiary mb-2">Daemon Daily</p>
           <EditableLimit
             value={config.subLimits.daemonDailyUsd}
-            onSave={(v) => updateConfig({ 'subLimits.daemonDailyUsd': v })}
+            onSave={(v) => updateConfig({ subLimits: { daemonDailyUsd: v } })}
           />
         </div>
         <div className="bg-white/3 backdrop-blur border border-white/5 rounded-2xl p-5">
           <p className="text-xs text-text-tertiary mb-2">Per Agent</p>
           <EditableLimit
             value={config.subLimits.agentDefaultUsd}
-            onSave={(v) => updateConfig({ 'subLimits.agentDefaultUsd': v })}
+            onSave={(v) => updateConfig({ subLimits: { agentDefaultUsd: v } })}
           />
         </div>
       </div>

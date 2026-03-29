@@ -371,6 +371,7 @@ export class WebSocketDashboardServer {
 
   private startMetricsPush(): void {
     this.metricsInterval = setInterval(() => {
+      if (this.getAuthenticatedClientCount() === 0) return;
       this.broadcastAuthenticated({
         type: "metrics",
         payload: {

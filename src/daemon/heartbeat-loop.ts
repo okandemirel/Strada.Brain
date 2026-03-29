@@ -244,6 +244,15 @@ export class HeartbeatLoop {
     // Get budget usage once per tick (avoids up to 3 SQLite queries)
     const budgetUsage = this.budgetTracker.getUsage();
 
+    // Unified budget check -- run once per tick, not per trigger
+    if (this.unifiedBudgetManager) {
+      this.unifiedBudgetManager.checkAndEmitEvents();
+      if (this.unifiedBudgetManager.isGlobalExceeded()) {
+        this.lastTick = now;
+        return; // Skip all triggers this tick
+      }
+    }
+
     // Sequential evaluation -- prevents budget race conditions
     for (const trigger of triggers) {
       const name = trigger.metadata.name;
@@ -255,14 +264,6 @@ export class HeartbeatLoop {
       if (cb.isOpen()) {
         this.logger.debug("Trigger skipped (circuit open)", { trigger: name });
         continue;
-      }
-
-      // 3. Check budget -- unified manager takes priority when available
-      if (this.unifiedBudgetManager) {
-        this.unifiedBudgetManager.checkAndEmitEvents();
-        if (this.unifiedBudgetManager.isGlobalExceeded()) {
-          break; // Stop processing triggers
-        }
       }
 
       if (budgetUsage.pct >= 1.0) {

@@ -280,6 +280,8 @@ export class DaemonStorage {
     sumBudgetBySource?: Database.Statement;
     sumBudgetForSource?: Database.Statement;
     dailyHistory?: Database.Statement;
+    insertBudgetWithSource?: Database.Statement;
+    insertBudgetWithSourceAndAgent?: Database.Statement;
     // Budget config
     getBudgetConfig?: Database.Statement;
     setBudgetConfig?: Database.Statement;
@@ -413,6 +415,13 @@ export class DaemonStorage {
     this.stmts.dailyHistory = this.db!.prepare(
       `SELECT date(timestamp / 1000, 'unixepoch') AS day, source, COALESCE(SUM(cost_usd), 0) AS total FROM budget_entries WHERE timestamp >= ? GROUP BY day, source ORDER BY day`,
     );
+
+    this.stmts.insertBudgetWithSourceAndAgent = this.db!.prepare(
+      `INSERT INTO budget_entries (cost_usd, model, tokens_in, tokens_out, trigger_name, timestamp, agent_id, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    this.stmts.insertBudgetWithSource = this.db!.prepare(
+      `INSERT INTO budget_entries (cost_usd, model, tokens_in, tokens_out, trigger_name, timestamp, source) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    );
   }
 
   /** Insert a budget cost entry with an agent_id (multi-agent support) */
@@ -508,9 +517,10 @@ export class DaemonStorage {
     this.assertOpen();
     if (entry.agentId) {
       // Use agent-aware insert with source
-      this.db!.prepare(
-        `INSERT INTO budget_entries (cost_usd, model, tokens_in, tokens_out, trigger_name, timestamp, agent_id, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).run(
+      if (!this.stmts.insertBudgetWithSourceAndAgent) {
+        throw new Error("Budget source migration not applied. Call migrateBudgetSource() first.");
+      }
+      this.stmts.insertBudgetWithSourceAndAgent.run(
         entry.costUsd,
         entry.model ?? null,
         entry.tokensIn ?? null,
@@ -521,9 +531,10 @@ export class DaemonStorage {
         entry.source,
       );
     } else {
-      this.db!.prepare(
-        `INSERT INTO budget_entries (cost_usd, model, tokens_in, tokens_out, trigger_name, timestamp, source) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      ).run(
+      if (!this.stmts.insertBudgetWithSource) {
+        throw new Error("Budget source migration not applied. Call migrateBudgetSource() first.");
+      }
+      this.stmts.insertBudgetWithSource.run(
         entry.costUsd,
         entry.model ?? null,
         entry.tokensIn ?? null,

@@ -79,9 +79,9 @@ export class UnifiedBudgetManager {
     const now = Date.now();
     const dailyStart = now - ROLLING_WINDOW_MS;
     const monthlyStart = now - MONTHLY_WINDOW_MS;
-    const dailyTotal = this.storage.sumBudgetSince(dailyStart);
-    const monthlyTotal = this.storage.sumBudgetSince(monthlyStart);
     const bySource = this.storage.sumBudgetBySource(dailyStart);
+    const dailyTotal = Object.values(bySource).reduce((s, v) => s + v, 0);
+    const monthlyTotal = this.storage.sumBudgetSince(monthlyStart);
 
     return {
       global: {
@@ -129,8 +129,18 @@ export class UnifiedBudgetManager {
     return false; // chat and verification have no sub-limits
   }
 
-  canSpend(_estimatedCost: number, source: BudgetSource, sourceId?: string): boolean {
-    return !this.isGlobalExceeded() && !this.isSourceExceeded(source, sourceId);
+  canSpend(estimatedCost: number, source: BudgetSource, sourceId?: string): boolean {
+    const config = this.configStore.getConfig();
+    const now = Date.now();
+    if (config.dailyLimitUsd > 0) {
+      const used = this.storage.sumBudgetSince(now - ROLLING_WINDOW_MS);
+      if (used + estimatedCost >= config.dailyLimitUsd) return false;
+    }
+    if (config.monthlyLimitUsd > 0) {
+      const used = this.storage.sumBudgetSince(now - MONTHLY_WINDOW_MS);
+      if (used + estimatedCost >= config.monthlyLimitUsd) return false;
+    }
+    return !this.isSourceExceeded(source, sourceId);
   }
 
   getDailyHistory(days: number): DailyHistoryEntry[] {
@@ -161,6 +171,9 @@ export class UnifiedBudgetManager {
 
   checkAndEmitEvents(): void {
     const config = this.configStore.getConfig();
+
+    if (config.dailyLimitUsd === 0 && config.monthlyLimitUsd === 0) return;
+
     const now = Date.now();
 
     // Check daily limit
@@ -184,8 +197,6 @@ export class UnifiedBudgetManager {
         limitUsd = config.monthlyLimitUsd;
       }
     }
-
-    if (pct === 0) return; // No limits configured
 
     if (pct >= 1.0 && !this.exceededEmitted) {
       this.eventBus.emit("budget:exceeded", { source: "global", pct, usedUsd, limitUsd, isGlobal: true });

@@ -2221,21 +2221,6 @@ export class DashboardServer {
         void this.readJsonBody<Record<string, unknown>>(req, res).then((parsed) => {
           if (!parsed) return; // readJsonBody already sent the error response
           try {
-            if (parsed.dailyLimitUsd !== undefined && (typeof parsed.dailyLimitUsd !== "number" || parsed.dailyLimitUsd < 0)) {
-              res.writeHead(400, { "Content-Type": "application/json" });
-              res.end(JSON.stringify({ error: "dailyLimitUsd must be a non-negative number" }));
-              return;
-            }
-            if (parsed.monthlyLimitUsd !== undefined && (typeof parsed.monthlyLimitUsd !== "number" || parsed.monthlyLimitUsd < 0)) {
-              res.writeHead(400, { "Content-Type": "application/json" });
-              res.end(JSON.stringify({ error: "monthlyLimitUsd must be a non-negative number" }));
-              return;
-            }
-            if (parsed.warnPct !== undefined && (typeof parsed.warnPct !== "number" || parsed.warnPct < 0.1 || parsed.warnPct > 0.99)) {
-              res.writeHead(400, { "Content-Type": "application/json" });
-              res.end(JSON.stringify({ error: "warnPct must be between 0.1 and 0.99" }));
-              return;
-            }
             this.unifiedBudgetManager!.updateConfig(parsed as Parameters<UnifiedBudgetManager["updateConfig"]>[0]);
             res.writeHead(200, { "Content-Type": "application/json" });
             res.end(JSON.stringify({ success: true, config: this.unifiedBudgetManager!.getConfig() }));
@@ -2244,6 +2229,21 @@ export class DashboardServer {
             res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
           }
         });
+        return;
+      }
+
+      // GET /api/settings/rate-limits -- Read rate limit overrides
+      if ((url === "/api/settings/rate-limits" || url.startsWith("/api/settings/rate-limits?")) && (req.method === "GET" || !req.method)) {
+        if (!this.daemonStorage) {
+          res.writeHead(503, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Storage not available" }));
+          return;
+        }
+        const mpm = this.daemonStorage?.getSettingsOverride("rate_limit_messages_per_minute") ?? "0";
+        const mph = this.daemonStorage?.getSettingsOverride("rate_limit_messages_per_hour") ?? "0";
+        const tpd = this.daemonStorage?.getSettingsOverride("rate_limit_tokens_per_day") ?? "0";
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ messagesPerMinute: Number(mpm), messagesPerHour: Number(mph), tokensPerDay: Number(tpd) }));
         return;
       }
 
