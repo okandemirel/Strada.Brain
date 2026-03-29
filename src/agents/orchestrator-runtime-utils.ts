@@ -7,6 +7,8 @@ import { redactSensitiveText } from "./orchestrator-text-utils.js";
 const MAX_TOOL_RESULT_LENGTH = 8192;
 const REFLECTION_DECISION_RE = /\*\*\s*(DONE_WITH_SUGGESTIONS|DONE|REPLAN|CONTINUE)\s*\*\*/;
 const BLOCKING_STEP_FAILURE_RE = /\b(?:build|test|check|verify|lint|typecheck|compile|smoke|permission denied|access denied|read-only|validation|security)\b/iu;
+/** Failures caused by external abort signals — these should not block PAOR DONE decisions */
+const ABORT_CAUSED_FAILURE_RE = /\bAborted\b|Task cancelled/i;
 
 export type ReflectionDecision = "CONTINUE" | "REPLAN" | "DONE" | "DONE_WITH_SUGGESTIONS";
 
@@ -64,8 +66,7 @@ function isBlockingStepFailure(step: AgentState["stepResults"][number]): boolean
     return false;
   }
 
-  // Abort-caused failures are not blocking — the task was externally cancelled
-  if (/\bAborted\b|Task cancelled/i.test(step.summary)) {
+  if (ABORT_CAUSED_FAILURE_RE.test(step.summary)) {
     return false;
   }
 

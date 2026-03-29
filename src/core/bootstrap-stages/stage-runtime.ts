@@ -259,8 +259,13 @@ export async function initializeTaskRuntimeStage(
 
   let workspaceLeaseManager: WorkspaceLeaseManager | undefined;
   try {
+    const envExcludes = process.env["WORKSPACE_COPY_EXCLUDES"];
+    const additionalExcludes = envExcludes
+      ? envExcludes.split(",").map((s) => s.trim()).filter(Boolean)
+      : ["Library", "Temp", "Logs", "Builds", "obj"];
     workspaceLeaseManager = new WorkspaceLeaseManager({
       projectRoot: params.config.unityProjectPath,
+      additionalExcludes,
     });
   } catch (error) {
     params.logger.warn("Workspace isolation disabled for background executor", {

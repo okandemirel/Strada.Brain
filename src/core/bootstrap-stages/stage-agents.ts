@@ -162,8 +162,13 @@ export async function initializeMultiAgentDelegationStage(
       : [...(deps.defaultDelegationTypes ?? DEFAULT_DELEGATION_TYPES)];
     let workspaceLeaseManager: WorkspaceLeaseManager | undefined;
     try {
+      const envExcludes = process.env["WORKSPACE_COPY_EXCLUDES"];
+      const additionalExcludes = envExcludes
+        ? envExcludes.split(",").map((s) => s.trim()).filter(Boolean)
+        : ["Library", "Temp", "Logs", "Builds", "obj"];
       workspaceLeaseManager = new WorkspaceLeaseManager({
         projectRoot: params.config.unityProjectPath,
+        additionalExcludes,
       });
     } catch (error) {
       params.logger.warn("Workspace isolation disabled for delegation manager", {

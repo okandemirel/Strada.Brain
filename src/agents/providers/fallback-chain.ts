@@ -17,19 +17,22 @@ import { getLogger } from "../../utils/logger.js";
  * provider issue. Non-retryable errors should NOT fall through to the
  * next provider because they would fail identically.
  */
+/** Regex for provider-specific reasoning protocol errors that should fall through */
+const REASONING_CONTENT_RE = /reasoning_content/i;
+/** Regex for HTTP 400 errors caused by malformed request body or schema */
+const BAD_REQUEST_RE = /bad.?request|invalid|malformed/i;
+/** Regex for quota/rate-limit 403 errors that can be resolved by switching provider */
+const QUOTA_LIMIT_RE = /quota|limit|billing|cycle|exceeded|usage/i;
+/** Regex for invalid tool/schema errors */
+const INVALID_TOOL_RE = /invalid.*tool|tool.*invalid|invalid.*schema/i;
+
 function isNonRetryableRequestError(error: unknown): boolean {
   const msg = error instanceof Error ? error.message : String(error);
-  // reasoning_content errors are provider-specific (Kimi K2.5);
-  // fallback providers won't have this requirement, so allow fallthrough
-  if (/reasoning_content/i.test(msg)) return false;
-  // HTTP 400 bad request — typically malformed body / invalid tool schema
-  if (/\b400\b/.test(msg) && /bad.?request|invalid|malformed/i.test(msg)) return true;
-  // HTTP 403 quota/rate-limit — a different provider may still have capacity
-  if (/\b403\b/.test(msg) && /quota|limit|billing|cycle|exceeded|usage/i.test(msg)) return false;
-  // HTTP 401/403 — auth errors won't resolve by switching provider
+  if (REASONING_CONTENT_RE.test(msg)) return false;
+  if (/\b400\b/.test(msg) && BAD_REQUEST_RE.test(msg)) return true;
+  if (/\b403\b/.test(msg) && QUOTA_LIMIT_RE.test(msg)) return false;
   if (/\b40[13]\b/.test(msg)) return true;
-  // Explicit "invalid" schema / tool_calls format errors
-  if (/invalid.*tool|tool.*invalid|invalid.*schema/i.test(msg)) return true;
+  if (INVALID_TOOL_RE.test(msg)) return true;
   return false;
 }
 

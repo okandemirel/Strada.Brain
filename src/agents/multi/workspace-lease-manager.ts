@@ -47,11 +47,13 @@ export interface WorkspaceLeaseManagerOptions {
   readonly preferGitWorktree?: boolean;
   readonly commandRunner?: WorkspaceCommandRunner;
   readonly worktreeTimeoutMs?: number;
+  /** Additional directory names to exclude from fallback temp-copy workspaces */
+  readonly additionalExcludes?: readonly string[];
 }
 
 const DEFAULT_LEASE_ROOT = join(os.tmpdir(), "strada-workspaces");
 const DEFAULT_WORKTREE_TIMEOUT_MS = 30_000;
-const FALLBACK_COPY_EXCLUDES = new Set([
+const BASE_FALLBACK_COPY_EXCLUDES = new Set([
   ".git",
   "node_modules",
   ".strada-memory",
@@ -59,11 +61,6 @@ const FALLBACK_COPY_EXCLUDES = new Set([
   "coverage",
   ".cache",
   ".vite",
-  "Library",
-  "Temp",
-  "Logs",
-  "Builds",
-  "obj",
 ]);
 const DERIVED_COPY_EXCLUDES = new Set([
   ".git",
@@ -91,6 +88,7 @@ export class WorkspaceLeaseManager {
   private readonly preferGitWorktree: boolean;
   private readonly commandRunner: WorkspaceCommandRunner;
   private readonly worktreeTimeoutMs: number;
+  private readonly fallbackExcludes: Set<string>;
 
   constructor(options: WorkspaceLeaseManagerOptions) {
     if (!options.projectRoot.trim()) {
@@ -107,6 +105,9 @@ export class WorkspaceLeaseManager {
     this.preferGitWorktree = options.preferGitWorktree ?? true;
     this.commandRunner = options.commandRunner ?? runProcess;
     this.worktreeTimeoutMs = options.worktreeTimeoutMs ?? DEFAULT_WORKTREE_TIMEOUT_MS;
+    this.fallbackExcludes = options.additionalExcludes?.length
+      ? new Set([...BASE_FALLBACK_COPY_EXCLUDES, ...options.additionalExcludes])
+      : BASE_FALLBACK_COPY_EXCLUDES;
   }
 
   async acquireLease(request: WorkspaceLeaseRequest = {}): Promise<WorkspaceLease> {
@@ -250,7 +251,7 @@ export class WorkspaceLeaseManager {
       return !DERIVED_COPY_EXCLUDES.has(firstSegment);
     }
 
-    return !FALLBACK_COPY_EXCLUDES.has(firstSegment);
+    return !this.fallbackExcludes.has(firstSegment);
   }
 
   private removeDirectory(workspacePath: string): void {
