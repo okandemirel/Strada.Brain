@@ -34,12 +34,20 @@ export interface ProviderHealthConfig {
   downCooldownMs: number;
 }
 
-const DEFAULT_CONFIG: ProviderHealthConfig = {
-  degradedThreshold: 2,
-  downThreshold: 5,
-  degradedCooldownMs: 30_000,    // 30 seconds
-  downCooldownMs: 120_000,       // 2 minutes
-};
+function resolveDefaultConfig(): ProviderHealthConfig {
+  const envInt = (key: string, fallback: number): number => {
+    const raw = process.env[key];
+    if (!raw) return fallback;
+    const parsed = parseInt(raw, 10);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+  };
+  return {
+    degradedThreshold: envInt("PROVIDER_HEALTH_DEGRADED_THRESHOLD", 2),
+    downThreshold: envInt("PROVIDER_HEALTH_DOWN_THRESHOLD", 5),
+    degradedCooldownMs: envInt("PROVIDER_HEALTH_DEGRADED_COOLDOWN_MS", 30_000),
+    downCooldownMs: envInt("PROVIDER_HEALTH_DOWN_COOLDOWN_MS", 120_000),
+  };
+}
 
 export class ProviderHealthRegistry {
   private static instance: ProviderHealthRegistry | null = null;
@@ -48,7 +56,7 @@ export class ProviderHealthRegistry {
   private readonly config: ProviderHealthConfig;
 
   constructor(config: Partial<ProviderHealthConfig> = {}) {
-    this.config = { ...DEFAULT_CONFIG, ...config };
+    this.config = { ...resolveDefaultConfig(), ...config };
   }
 
   static getInstance(config?: Partial<ProviderHealthConfig>): ProviderHealthRegistry {
