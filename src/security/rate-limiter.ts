@@ -8,21 +8,9 @@
  */
 
 import { getLogger } from "../utils/logger.js";
+import { estimateCost } from "../budget/cost-model.js";
 
-// ---------- Cost model ----------
-
-/** Approximate cost per 1M tokens for each provider (USD). */
-const PROVIDER_COSTS: Record<string, { input: number; output: number }> = {
-  claude: { input: 3.0, output: 15.0 },
-  openai: { input: 2.5, output: 10.0 },
-  deepseek: { input: 0.14, output: 0.28 },
-  groq: { input: 0.05, output: 0.08 },
-  mistral: { input: 0.25, output: 0.25 },
-  ollama: { input: 0, output: 0 },
-};
-
-/** Fallback cost for unknown providers. */
-const DEFAULT_COST = { input: 2.0, output: 10.0 };
+export { estimateCost } from "../budget/cost-model.js";
 
 // ---------- Types ----------
 
@@ -290,18 +278,6 @@ export class RateLimiter {
 }
 
 // ---------- Utility functions ----------
-
-/**
- * Estimate cost in USD for a given token usage.
- */
-export function estimateCost(
-  inputTokens: number,
-  outputTokens: number,
-  provider: string
-): number {
-  const costs = PROVIDER_COSTS[provider] ?? DEFAULT_COST;
-  return (inputTokens * costs.input + outputTokens * costs.output) / 1_000_000;
-}
 
 function startOfDayUTC(date: Date): number {
   return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
