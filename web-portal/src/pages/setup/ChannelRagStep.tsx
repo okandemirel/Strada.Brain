@@ -23,6 +23,8 @@ interface ChannelRagStepProps {
   setAutonomyHours: (hours: number) => void
   daemonBudget: number
   setDaemonBudget: (budget: number) => void
+  globalDailyBudget: number
+  setGlobalDailyBudget: (budget: number) => void
   onNext: () => void
   onBack: () => void
 }
@@ -50,6 +52,8 @@ export default function ChannelRagStep({
   setAutonomyHours,
   daemonBudget,
   setDaemonBudget,
+  globalDailyBudget,
+  setGlobalDailyBudget,
   onNext,
   onBack,
 }: ChannelRagStepProps) {
@@ -209,6 +213,30 @@ export default function ChannelRagStep({
       </div>
 
       <div className="rag-toggle">
+        <h3 className="section-label">Global Daily Budget</h3>
+        <p className="rag-info">
+          Maximum daily spend across all systems (daemon, agents, chat). Set to $0 for unlimited.
+        </p>
+        <div className="autonomy-slider-container">
+          <label className="autonomy-budget-label">Daily Limit</label>
+          <input
+            type="range"
+            min={0}
+            max={50}
+            step={1}
+            value={globalDailyBudget}
+            onChange={(e) => setGlobalDailyBudget(Number(e.target.value))}
+            className="autonomy-range"
+          />
+          <div className="autonomy-labels">
+            <span>Unlimited</span>
+            <span className="autonomy-value">{globalDailyBudget === 0 ? 'Unlimited' : `$${globalDailyBudget.toFixed(0)}`}</span>
+            <span>$50</span>
+          </div>
+        </div>
+      </div>
+
+      <div className="rag-toggle">
         <h3 className="section-label">Daemon Mode</h3>
         <label className="toggle-switch">
           <input
@@ -228,7 +256,7 @@ export default function ChannelRagStep({
         </p>
         {daemonEnabled && (
           <div className="autonomy-slider-container">
-            <label className="autonomy-budget-label">Daily Budget</label>
+            <label className="autonomy-budget-label">Daemon Sub-Limit</label>
             <input
               type="range"
               min={0.5}
@@ -244,6 +272,9 @@ export default function ChannelRagStep({
               <span>$10.00</span>
             </div>
           </div>
+          <p className="rag-info" style={{ marginTop: '0.3rem', fontSize: '0.75rem' }}>
+            Maximum daily spend for daemon triggers only (within the global budget).
+          </p>
         )}
       </div>
 

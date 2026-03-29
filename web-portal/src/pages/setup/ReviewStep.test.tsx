@@ -16,6 +16,7 @@ describe('ReviewStep', () => {
         language="en"
         ragEnabled={false}
         embeddingProvider="auto"
+        globalDailyBudget={0}
         daemonEnabled={false}
         daemonBudget={1}
         autonomyEnabled={false}

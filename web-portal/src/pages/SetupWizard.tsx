@@ -112,6 +112,8 @@ export default function SetupWizard() {
             setAutonomyHours={wiz.setAutonomyHours}
             daemonBudget={wiz.daemonBudget}
             setDaemonBudget={wiz.setDaemonBudget}
+            globalDailyBudget={wiz.globalDailyBudget}
+            setGlobalDailyBudget={wiz.setGlobalDailyBudget}
             onNext={wiz.nextStep}
             onBack={wiz.prevStep}
           />
@@ -129,6 +131,7 @@ export default function SetupWizard() {
             language={wiz.language}
             ragEnabled={wiz.ragEnabled}
             embeddingProvider={wiz.embeddingProvider}
+            globalDailyBudget={wiz.globalDailyBudget}
             daemonEnabled={wiz.daemonEnabled}
             daemonBudget={wiz.daemonBudget}
             autonomyEnabled={wiz.autonomyEnabled}

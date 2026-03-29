@@ -303,6 +303,7 @@ export function useSetupWizard() {
   const [autonomyEnabled, setAutonomyEnabledState] = useState(false)
   const [autonomyHours, setAutonomyHoursState] = useState(4)
   const [daemonBudget, setDaemonBudgetState] = useState(1.0)
+  const [globalDailyBudget, setGlobalDailyBudgetState] = useState(0) // 0 = unlimited
   const [saveCommitted, setSaveCommitted] = useState(false)
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle')
   const [saveError, setSaveError] = useState<string | null>(null)
@@ -650,6 +651,10 @@ export function useSetupWizard() {
     setDaemonBudgetState(budget)
   }, [])
 
+  const setGlobalDailyBudget = useCallback((budget: number) => {
+    setGlobalDailyBudgetState(budget)
+  }, [])
+
   const setProviderModel = useCallback((id: string, model: string) => {
     setProviderModels((prev) => ({ ...prev, [id]: model }))
   }, [])
@@ -714,7 +719,12 @@ export function useSetupWizard() {
 
     if (daemonEnabled) {
       config.STRADA_DAEMON_ENABLED = 'true'
-      config.STRADA_DAEMON_DAILY_BUDGET = String(daemonBudget)
+      if (daemonBudget > 0) {
+        config.STRADA_DAEMON_DAILY_BUDGET = String(daemonBudget)
+      }
+    }
+    if (globalDailyBudget > 0) {
+      config.STRADA_BUDGET_DAILY_USD = String(globalDailyBudget)
     }
     if (autonomyEnabled) {
       config.AUTONOMOUS_DEFAULT_ENABLED = 'true'
@@ -908,7 +918,7 @@ export function useSetupWizard() {
       setSaveStatus('error')
       setSaveError(err instanceof Error ? err.message : 'Save failed')
     }
-  }, [projectPath, ragEnabled, embeddingProvider, language, channel, selectedPreset, checkedProviders, providerKeys, providerAuthModes, providerModels, channelConfig, daemonEnabled, autonomyEnabled, autonomyHours, daemonBudget, reviewBlockingReason, applySetupBootstrapStatus, rememberReadyUrl, stopBootstrapPolling, isBootstrapPollingActive])
+  }, [projectPath, ragEnabled, embeddingProvider, language, channel, selectedPreset, checkedProviders, providerKeys, providerAuthModes, providerModels, channelConfig, daemonEnabled, autonomyEnabled, autonomyHours, daemonBudget, globalDailyBudget, reviewBlockingReason, applySetupBootstrapStatus, rememberReadyUrl, stopBootstrapPolling, isBootstrapPollingActive])
 
   return {
     // State
@@ -942,6 +952,7 @@ export function useSetupWizard() {
     autonomyEnabled,
     autonomyHours,
     daemonBudget,
+    globalDailyBudget,
     saveStatus,
     saveError,
     saveWarning,
@@ -973,6 +984,7 @@ export function useSetupWizard() {
     setAutonomyEnabled,
     setAutonomyHours,
     setDaemonBudget,
+    setGlobalDailyBudget,
     save,
     validateCurrentStep,
   }

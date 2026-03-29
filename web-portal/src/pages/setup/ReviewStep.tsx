@@ -13,6 +13,7 @@ interface ReviewStepProps {
   language: string
   ragEnabled: boolean
   embeddingProvider: string
+  globalDailyBudget: number
   daemonEnabled: boolean
   daemonBudget: number
   autonomyEnabled: boolean
@@ -45,6 +46,7 @@ export default function ReviewStep({
   language,
   ragEnabled,
   embeddingProvider,
+  globalDailyBudget,
   daemonEnabled,
   daemonBudget,
   autonomyEnabled,
@@ -248,8 +250,13 @@ export default function ReviewStep({
         </div>
 
         <div className="review-item">
+          <span className="review-label">Daily Budget</span>
+          <span className="review-value">{globalDailyBudget > 0 ? `$${globalDailyBudget.toFixed(0)}/day` : 'Unlimited'}</span>
+        </div>
+
+        <div className="review-item">
           <span className="review-label">Daemon Mode</span>
-          <span className="review-value">{daemonEnabled ? `Enabled ($${daemonBudget.toFixed(2)}/day)` : 'Disabled'}</span>
+          <span className="review-value">{daemonEnabled ? `Enabled${daemonBudget > 0 ? ` (sub-limit: $${daemonBudget.toFixed(2)}/day)` : ''}` : 'Disabled'}</span>
         </div>
 
         <div className="review-item">
