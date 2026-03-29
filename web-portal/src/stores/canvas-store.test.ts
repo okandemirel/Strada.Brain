@@ -1,8 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
-  clearPersistedCanvasDraft,
-  persistCanvasDraft,
-  readPersistedCanvasDraft,
   useCanvasStore,
 } from './canvas-store'
 
@@ -52,18 +49,17 @@ describe('useCanvasStore', () => {
     ])
   })
 
-  it('persists and restores local canvas drafts', () => {
-    persistCanvasDraft('draft-session', { store: { shapes: [{ id: 'shape-1' }] } }, { dirty: true, updatedAt: 123 })
+  it('manages shapes in store', () => {
+    const shape = { id: 's1', type: 'code-block', x: 10, y: 20, w: 400, h: 240, props: { code: 'test' } }
+    useCanvasStore.getState().addShape(shape)
+    expect(useCanvasStore.getState().shapes).toHaveLength(1)
+    expect(useCanvasStore.getState().shapes[0].id).toBe('s1')
 
-    expect(readPersistedCanvasDraft('draft-session')).toEqual({
-      snapshot: { store: { shapes: [{ id: 'shape-1' }] } },
-      updatedAt: 123,
-      dirty: true,
-    })
+    useCanvasStore.getState().updateShape('s1', { x: 50 })
+    expect(useCanvasStore.getState().shapes[0].x).toBe(50)
 
-    clearPersistedCanvasDraft('draft-session')
-
-    expect(readPersistedCanvasDraft('draft-session')).toBeNull()
+    useCanvasStore.getState().removeShapes(['s1'])
+    expect(useCanvasStore.getState().shapes).toHaveLength(0)
   })
 
   it('tracks dirty flag', () => {

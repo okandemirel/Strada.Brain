@@ -224,13 +224,6 @@
 
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-  /* Restore tldraw's own styling inside its container */
-  .tl-container, .tl-container *, .tl-container *::before, .tl-container *::after {
-    box-sizing: revert;
-    margin: revert;
-    padding: revert;
-  }
-
   /* Restore ReactFlow's own styling inside its container */
   .react-flow__controls, .react-flow__controls *, .react-flow__minimap, .react-flow__minimap *,
   .react-flow__handle, .react-flow__node * {

@@ -1,4 +1,5 @@
 import type { CanvasShape } from '../../stores/canvas-store'
+import type { CanvasConnection } from './canvas-types'
 
 type RawCanvasShape = {
   type?: string
@@ -135,6 +136,62 @@ export function normalizeCanvasIncomingShape(shape: RawCanvasShape): CanvasShape
       }, source)
       break
 
+    case 'goal-summary':
+      normalizedProps = withSource({
+        w: asNumber(props.w, 340),
+        h: asNumber(props.h, 200),
+        title: asString(props.title, 'Goal'),
+        taskCount: asNumber(props.taskCount, 0),
+        completedCount: asNumber(props.completedCount, 0),
+        failedCount: asNumber(props.failedCount, 0),
+        executingCount: asNumber(props.executingCount, 0),
+        skippedCount: asNumber(props.skippedCount, 0),
+      }, source)
+      break
+
+    case 'error-card':
+      normalizedProps = withSource({
+        w: asNumber(props.w, 400),
+        h: asNumber(props.h, 220),
+        message: asString(props.message, asString(props.title, 'Error')),
+        stack: asString(props.stack, asString(props.content, '')),
+        severity: asString(props.severity, 'error'),
+      }, source)
+      break
+
+    case 'test-result':
+      normalizedProps = withSource({
+        w: asNumber(props.w, 300),
+        h: asNumber(props.h, 180),
+        passed: asNumber(props.passed, 0),
+        failed: asNumber(props.failed, 0),
+        skipped: asNumber(props.skipped, 0),
+        coverage: asNumber(props.coverage, 0),
+        failedTests: Array.isArray(props.failedTests) ? props.failedTests.map(String) : [],
+      }, source)
+      break
+
+    case 'link-card':
+      normalizedProps = withSource({
+        w: asNumber(props.w, 300),
+        h: asNumber(props.h, 120),
+        url: asString(props.url, ''),
+        title: asString(props.title, 'Link'),
+        description: asString(props.description, ''),
+      }, source)
+      break
+
+    case 'metric-card':
+      normalizedProps = withSource({
+        w: asNumber(props.w, 200),
+        h: asNumber(props.h, 140),
+        label: asString(props.label, 'Metric'),
+        value: typeof props.value === 'number' ? props.value : asNumber(props.value, 0),
+        unit: asString(props.unit, ''),
+        trend: asString(props.trend, ''),
+      }, source)
+      break
+
     case 'connection-arrow':
       normalizedProps = withSource({
         w: asNumber(props.w, 160),
@@ -161,4 +218,14 @@ export function normalizeCanvasIncomingShapes(shapes: RawCanvasShape[]): CanvasS
   return shapes
     .map((shape) => normalizeCanvasIncomingShape(shape))
     .filter((shape): shape is CanvasShape => Boolean(shape))
+}
+
+export function normalizeCanvasConnection(raw: { id?: string; from?: string; to?: string; label?: string }): CanvasConnection | null {
+  if (!raw.from || !raw.to) return null
+  return {
+    id: raw.id ?? `conn-${raw.from}-${raw.to}`,
+    from: raw.from,
+    to: raw.to,
+    label: raw.label,
+  }
 }

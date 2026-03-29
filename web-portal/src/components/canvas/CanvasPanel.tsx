@@ -1,745 +1,356 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { Editor, TLShapeId } from 'tldraw'
-import {
-  clearPersistedCanvasDraft,
-  persistCanvasDraft,
-  readPersistedCanvasDraft,
-  useCanvasStore,
-  type CanvasLayout,
-  type CanvasShape,
-  type CanvasShapeUpdate,
-  type CanvasViewport,
-} from '../../stores/canvas-store'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { DndContext, useDraggable, type DragEndEvent } from '@dnd-kit/core'
+import { useCanvasStore, type CanvasShape } from '../../stores/canvas-store'
+import { useMonitorStore } from '../../stores/monitor-store'
 import { useSessionStore } from '../../stores/session-store'
-import { useTheme } from '../../hooks/useTheme'
-import { customShapeUtils } from './custom-shapes'
-import { CustomToolbar, CustomContextMenu, TOOLBAR_SHAPES, setExportJsonFn } from './canvas-overrides'
-import CanvasWelcome from './canvas-welcome'
 import { normalizeCanvasIncomingShape } from './canvas-shape-normalizer'
-import { applyTemplate, type TemplateId } from './canvas-templates'
+import { CARD_COMPONENTS } from './canvas-cards'
+import { getDefaultDimensions, type ResolvedShape } from './canvas-types'
+import CanvasViewport from './canvas-viewport'
+import CanvasControls from './canvas-controls'
+import CanvasMinimap from './canvas-minimap'
+import CanvasConnections from './canvas-connections'
+import CanvasEmptyState from './canvas-empty-state'
+import {
+  formatLastSync,
+  formatSessionLabel,
+  canvasShapeToResolved,
+  buildMonitorFallbackShapes,
+  buildFallbackConnections,
+} from './canvas-helpers'
 
-const TldrawEditor = lazy(() =>
-  import('tldraw').then((m) => ({ default: m.Tldraw }))
-)
-
-function downloadBlob(blob: Blob, filename: string): void {
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = filename
-  a.click()
-  URL.revokeObjectURL(url)
-}
+/* ── Style constants ───────────────────────────────────────────────── */
 
 const toolbarBtnCls =
-  'inline-flex items-center rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-xs font-medium text-text transition-colors hover:border-white/20 hover:bg-white/[0.08]'
+  'inline-flex items-center rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-xs font-medium text-slate-400 transition-colors hover:border-white/20 hover:bg-white/[0.08]'
 const toolbarCls =
   'relative overflow-hidden border-b border-white/6 bg-[#0b1018]/92 px-4 py-3 backdrop-blur-2xl'
 
-function formatLastSync(value: number | null): string {
-  if (!value) return 'Waiting for agent'
-  const diff = Date.now() - value
-  if (diff < 60_000) return 'Just now'
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`
-  return `${Math.floor(diff / 3_600_000)}h ago`
-}
+const SAVE_DEBOUNCE_MS = 5_000
 
-function formatSessionLabel(sessionId: string | null): string {
-  if (!sessionId) return 'Transient session'
-  if (sessionId.length <= 26) return `Session ${sessionId}`
-  return `Session ${sessionId.slice(0, 8)}...${sessionId.slice(-6)}`
-}
+/* ── Draggable card wrapper ────────────────────────────────────────── */
 
-function LoadingSpinner() {
+function DraggableCard({ shape, zoom }: { shape: ResolvedShape; zoom: number }) {
+  const { attributes, listeners, setNodeRef, transform } = useDraggable({ id: shape.id })
+  const CardComponent = CARD_COMPONENTS[shape.type]
+  if (!CardComponent) return null
+
+  const tx = transform ? transform.x / zoom : 0
+  const ty = transform ? transform.y / zoom : 0
+
   return (
-    <div className="flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-text-secondary">
-      <div className="h-4 w-4 rounded-full border-2 border-accent/30 border-t-accent animate-spin" />
-      Loading canvas...
+    <div
+      ref={setNodeRef}
+      className="absolute touch-none"
+      style={{
+        left: shape.x + tx,
+        top: shape.y + ty,
+        width: shape.w,
+        zIndex: transform ? 50 : 1,
+      }}
+      {...listeners}
+      {...attributes}
+    >
+      <CardComponent shape={shape} />
     </div>
   )
 }
 
-const BOARD_ACTION_GUIDE = [
-  {
-    key: 'fit',
-    title: 'Zoom to Fit',
-    description: 'Centers the camera on the current board content.',
-  },
-  {
-    key: 'export',
-    title: 'Export JSON',
-    description: 'Downloads the current snapshot so you can reuse or inspect it elsewhere.',
-  },
-  {
-    key: 'save',
-    title: 'Auto-save',
-    description: 'Canvas edits save back to the current session about 5 seconds after changes stop.',
-  },
-] as const
-
-interface PendingCanvasSyncResult {
-  agentAddCount: number
-  shouldMarkAgentSync: boolean
-}
-
-function updateExistingShape(
-  editor: Editor,
-  shapeId: string,
-  props: Record<string, unknown>,
-  position?: { x: number; y: number },
-): boolean {
-  const existing = editor.getShape(shapeId as TLShapeId)
-  if (!existing) return false
-
-  const update = {
-    id: shapeId as TLShapeId,
-    type: existing.type,
-    props: { ...(existing.props as Record<string, unknown>), ...props },
-  } as {
-    id: TLShapeId
-    type: string
-    props: Record<string, unknown>
-    x?: number
-    y?: number
-  }
-  if (position) {
-    update.x = position.x
-    update.y = position.y
-  }
-  editor.updateShape(update)
-  return true
-}
-
-function applyPendingCanvasView(
-  editor: Editor,
-  pendingViewport: CanvasViewport | null,
-  pendingLayout: CanvasLayout | null,
-): boolean {
-  let applied = false
-  const viewportEditor = editor as Editor & {
-    setCamera?: (camera: { x: number; y: number; z: number }, options?: { animation?: { duration: number } }) => void
-  }
-
-  if (pendingViewport && typeof viewportEditor.setCamera === 'function') {
-    viewportEditor.setCamera(
-      { x: pendingViewport.x, y: pendingViewport.y, z: pendingViewport.zoom },
-      { animation: { duration: 180 } },
-    )
-    applied = true
-  }
-
-  if (pendingLayout) {
-    editor.zoomToFit({ animation: { duration: 220 } })
-    applied = true
-  }
-
-  return applied
-}
-
-function syncPendingCanvasState(
-  editor: Editor,
-  pendingShapes: CanvasShape[],
-  pendingUpdates: CanvasShapeUpdate[],
-  pendingRemovals: string[],
-): PendingCanvasSyncResult {
-  const normalizedPendingShapes = pendingShapes
-    .map((shape) => normalizeCanvasIncomingShape(shape))
-    .filter((shape): shape is CanvasShape => Boolean(shape))
-  const normalizedPendingUpdates = pendingUpdates
-    .map((shape) => normalizeCanvasIncomingShape(shape))
-    .filter((shape): shape is CanvasShapeUpdate => Boolean(shape))
-
-  if (normalizedPendingShapes.length === 0 && normalizedPendingUpdates.length === 0 && pendingRemovals.length === 0) {
-    return { agentAddCount: 0, shouldMarkAgentSync: false }
-  }
-
-  const GAP = 20
-  const CARD_WIDTH = 200
-  const bounds = editor.getViewportPageBounds()
-  const shapesToCreate = [
-    ...normalizedPendingShapes.filter((shape) => Boolean(shape.type) && !editor.getShape(shape.id as TLShapeId)),
-    ...normalizedPendingUpdates.filter((shape) => Boolean(shape.type) && !editor.getShape(shape.id as TLShapeId)),
-  ]
-  let nextX = bounds.center.x - ((Math.max(shapesToCreate.length, 1) - 1) * (CARD_WIDTH + GAP)) / 2
-  const baseY = bounds.center.y - 50
-  let agentAddCount = 0
-  const shouldMarkAgentSync =
-    normalizedPendingShapes.some((shape) => shape.source === 'agent') ||
-    normalizedPendingUpdates.some((shape) => shape.source === 'agent') ||
-    pendingRemovals.length > 0
-
-  editor.run(() => {
-    const removableIds = pendingRemovals.filter((shapeId) => editor.getShape(shapeId as TLShapeId))
-    if (removableIds.length > 0) {
-      editor.deleteShapes(removableIds as TLShapeId[])
-    }
-
-    for (const pending of normalizedPendingShapes) {
-      if (updateExistingShape(editor, pending.id, pending.props, pending.position)) continue
-      if (!pending.type) continue
-
-      try {
-        editor.createShape({
-          id: pending.id as TLShapeId,
-          type: pending.type,
-          x: pending.position?.x ?? nextX,
-          y: pending.position?.y ?? baseY,
-          props: { ...pending.props, ...(pending.source ? { source: pending.source } : {}) },
-        })
-      } catch {
-        continue
-      }
-      nextX += CARD_WIDTH + GAP
-      if (pending.source === 'agent') {
-        agentAddCount += 1
-      }
-    }
-
-    for (const pending of normalizedPendingUpdates) {
-      if (updateExistingShape(editor, pending.id, pending.props, pending.position)) continue
-      if (!pending.type) continue
-
-      try {
-        editor.createShape({
-          id: pending.id as TLShapeId,
-          type: pending.type,
-          x: pending.position?.x ?? nextX,
-          y: pending.position?.y ?? baseY,
-          props: { ...pending.props, ...(pending.source ? { source: pending.source } : {}) },
-        })
-      } catch {
-        continue
-      }
-      nextX += CARD_WIDTH + GAP
-    }
-  })
-
-  return { agentAddCount, shouldMarkAgentSync }
-}
-
-function persistCanvasSnapshot(
-  sessionId: string,
-  snapshot: unknown,
-  keepalive = false,
-): Promise<Response> {
-  return fetch(`/api/canvas/${encodeURIComponent(sessionId)}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ shapes: JSON.stringify(snapshot), viewport: '{}' }),
-    ...(keepalive ? { keepalive: true } : {}),
-  })
-}
-
-function clearEditorCanvas(editor: Editor): void {
-  const shapeIds = [...editor.getCurrentPageShapeIds()]
-  if (shapeIds.length === 0) return
-  editor.deleteShapes(shapeIds)
-}
-
-function loadEditorSnapshot(editor: Editor, snapshot: unknown): void {
-  clearEditorCanvas(editor)
-  editor.store.loadSnapshot(snapshot as Parameters<typeof editor.store.loadSnapshot>[0])
-}
+/* ── Main component ────────────────────────────────────────────────── */
 
 export default function CanvasPanel() {
+  /* Store selectors */
+  const shapes = useCanvasStore((s) => s.shapes)
+  const connections = useCanvasStore((s) => s.connections)
+  const viewport = useCanvasStore((s) => s.viewport)
   const pendingShapes = useCanvasStore((s) => s.pendingShapes)
   const pendingUpdates = useCanvasStore((s) => s.pendingUpdates)
   const pendingRemovals = useCanvasStore((s) => s.pendingRemovals)
   const pendingViewport = useCanvasStore((s) => s.pendingViewport)
   const pendingLayout = useCanvasStore((s) => s.pendingLayout)
+  const isDirty = useCanvasStore((s) => s.isDirty)
+  const setShapes = useCanvasStore((s) => s.setShapes)
+  const setViewport = useCanvasStore((s) => s.setViewport)
+  const addShape = useCanvasStore((s) => s.addShape)
+  const updateShape = useCanvasStore((s) => s.updateShape)
+  const removeShapes = useCanvasStore((s) => s.removeShapes)
+  const setDirty = useCanvasStore((s) => s.setDirty)
   const clearPendingShapes = useCanvasStore((s) => s.clearPendingShapes)
   const clearPendingUpdates = useCanvasStore((s) => s.clearPendingUpdates)
   const clearPendingRemovals = useCanvasStore((s) => s.clearPendingRemovals)
   const clearPendingViewport = useCanvasStore((s) => s.clearPendingViewport)
   const clearPendingLayout = useCanvasStore((s) => s.clearPendingLayout)
-  const isDirty = useCanvasStore((s) => s.isDirty)
-  const setDirty = useCanvasStore((s) => s.setDirty)
-  const sessionId = useSessionStore((s) => s.sessionId)
-  const profileId = useSessionStore((s) => s.profileId)
-  const { theme } = useTheme()
-  const editorRef = useRef<Editor | null>(null)
-  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const selectedTemplateRef = useRef<TemplateId | null>(null)
-  const snapshotRef = useRef<unknown>(null)
 
-  const [editorMode, setEditorMode] = useState<'welcome' | 'loading' | 'editor'>('welcome')
+  const sessionId = useSessionStore((s) => s.sessionId)
+  const tasks = useMonitorStore((s) => s.tasks)
+  const dag = useMonitorStore((s) => s.dag)
+  const activeRootId = useMonitorStore((s) => s.activeRootId)
+
+  /* Local state */
+  const [loading, setLoading] = useState(false)
   const [agentVisualCount, setAgentVisualCount] = useState(0)
   const [lastAgentSyncAt, setLastAgentSyncAt] = useState<number | null>(null)
+  const containerRef = useRef<HTMLDivElement>(null)
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
   const pendingMutationCount =
-    pendingShapes.length
-    + pendingUpdates.length
-    + pendingRemovals.length
-    + (pendingViewport ? 1 : 0)
-    + (pendingLayout ? 1 : 0)
-  const canvasDraftSessionId = profileId ?? sessionId
+    pendingShapes.length + pendingUpdates.length + pendingRemovals.length +
+    (pendingViewport ? 1 : 0) + (pendingLayout ? 1 : 0)
 
-  const tldrawComponents = useMemo(() => ({
-    Toolbar: CustomToolbar,
-    ContextMenu: CustomContextMenu,
-  }), [])
+  /* ── Apply pending mutations ──────────────────────────────────── */
 
-  // Check if session has existing shapes — if so, skip welcome
+  useEffect(() => {
+    if (pendingMutationCount === 0) return
+    let agentAdded = 0
+
+    if (pendingShapes.length > 0) {
+      for (const raw of pendingShapes) {
+        const normalized = normalizeCanvasIncomingShape(raw)
+        if (!normalized) continue
+        addShape(canvasShapeToResolved(normalized))
+        if (normalized.source === 'agent') agentAdded++
+      }
+      clearPendingShapes()
+    }
+
+    if (pendingUpdates.length > 0) {
+      for (const raw of pendingUpdates) {
+        const normalized = normalizeCanvasIncomingShape(raw as CanvasShape)
+        if (!normalized) continue
+        const resolved = canvasShapeToResolved(normalized)
+        updateShape(normalized.id, resolved)
+        if (normalized.source === 'agent') agentAdded++
+      }
+      clearPendingUpdates()
+    }
+
+    if (pendingRemovals.length > 0) {
+      removeShapes(pendingRemovals)
+      clearPendingRemovals()
+    }
+
+    if (pendingViewport) {
+      setViewport({ x: pendingViewport.x, y: pendingViewport.y, zoom: pendingViewport.zoom })
+      clearPendingViewport()
+    }
+
+    if (pendingLayout) {
+      // Read shapes from store to avoid stale closure
+      const currentShapes = useCanvasStore.getState().shapes
+      if (currentShapes.length > 0 && containerRef.current) {
+        const rect = containerRef.current.getBoundingClientRect()
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+        for (const s of currentShapes) {
+          minX = Math.min(minX, s.x); minY = Math.min(minY, s.y)
+          maxX = Math.max(maxX, s.x + s.w); maxY = Math.max(maxY, s.y + s.h)
+        }
+        const PAD = 60
+        const worldW = (maxX - minX) + PAD * 2
+        const worldH = (maxY - minY) + PAD * 2
+        const fitZoom = Math.min(rect.width / worldW, rect.height / worldH, 1.5)
+        setViewport({
+          x: (rect.width - worldW * fitZoom) / 2 - (minX - PAD) * fitZoom,
+          y: (rect.height - worldH * fitZoom) / 2 - (minY - PAD) * fitZoom,
+          zoom: fitZoom,
+        })
+      }
+      clearPendingLayout()
+    }
+
+    if (agentAdded > 0) {
+      setAgentVisualCount((c) => c + agentAdded)
+      setLastAgentSyncAt(Date.now())
+    }
+    setDirty(true)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingMutationCount])
+
+  /* ── Load saved canvas on session change ──────────────────────── */
+
   useEffect(() => {
     if (!sessionId) return
     let cancelled = false
-    const persistedDraft = canvasDraftSessionId
-      ? readPersistedCanvasDraft(canvasDraftSessionId)
-      : null
+    setLoading(true)
+
     fetch(`/api/canvas/${encodeURIComponent(sessionId)}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
         if (cancelled) return
-        if (selectedTemplateRef.current) return
+        if (!data?.canvas?.shapes) return
 
-        let remoteSnapshot: unknown = null
-        let remoteUpdatedAt: number | null = null
-        if (data?.canvas?.shapes) {
-          try {
-            remoteSnapshot = JSON.parse(data.canvas.shapes)
-            remoteUpdatedAt = typeof data.canvas.updatedAt === 'number' ? data.canvas.updatedAt : null
-          } catch {
-            remoteSnapshot = null
-            remoteUpdatedAt = null
-          }
-        }
-
-        const shouldPreferDraft = Boolean(
-          persistedDraft &&
-          (!remoteUpdatedAt || persistedDraft.updatedAt >= remoteUpdatedAt),
-        )
-        const snapshotToRestore = shouldPreferDraft
-          ? persistedDraft?.snapshot ?? null
-          : remoteSnapshot
-
-        if (snapshotToRestore) {
-          if (editorRef.current) {
-            loadEditorSnapshot(editorRef.current, snapshotToRestore)
-          } else {
-            snapshotRef.current = snapshotToRestore
-          }
-          setDirty(Boolean(shouldPreferDraft && persistedDraft?.dirty))
-          import('tldraw/tldraw.css')
-          setEditorMode('editor')
-          if (!shouldPreferDraft && canvasDraftSessionId && persistedDraft) {
-            clearPersistedCanvasDraft(canvasDraftSessionId)
-          }
-          return
-        }
-
-        setDirty(Boolean(persistedDraft?.dirty))
-        snapshotRef.current = null
-        if (editorRef.current) {
-          clearEditorCanvas(editorRef.current)
-        }
-      })
-      .catch(() => {
-        if (cancelled || selectedTemplateRef.current || !persistedDraft) return
-        if (editorRef.current) {
-          loadEditorSnapshot(editorRef.current, persistedDraft.snapshot)
-        } else {
-          snapshotRef.current = persistedDraft.snapshot
-        }
-        setDirty(Boolean(persistedDraft.dirty))
-        import('tldraw/tldraw.css')
-        setEditorMode('editor')
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [canvasDraftSessionId, sessionId, setDirty])
-
-  useEffect(() => {
-    if (editorMode !== 'welcome' || pendingMutationCount === 0) return
-    import('tldraw/tldraw.css')
-    setEditorMode('loading')
-    requestAnimationFrame(() => setEditorMode('editor'))
-  }, [editorMode, pendingMutationCount])
-
-  const handleTemplateSelect = useCallback((id: TemplateId) => {
-    selectedTemplateRef.current = id
-    import('tldraw/tldraw.css')
-    setEditorMode('loading')
-    requestAnimationFrame(() => setEditorMode('editor'))
-  }, [])
-
-  const handleMount = useCallback(
-    (editor: Editor) => {
-      editorRef.current = editor
-      editor.user.updateUserPreferences({ colorScheme: theme })
-      editor.on('change', () => {
-        setDirty(true)
-        if (!canvasDraftSessionId) return
-        if (draftTimerRef.current) clearTimeout(draftTimerRef.current)
-        draftTimerRef.current = setTimeout(() => {
-          const snapshot = editor.store.getSnapshot()
-          persistCanvasDraft(canvasDraftSessionId, snapshot, { dirty: true })
-        }, 250)
-      })
-
-      // Restore snapshot if loading from session
-      if (snapshotRef.current) {
         try {
-          loadEditorSnapshot(editor, snapshotRef.current)
+          const parsed = JSON.parse(data.canvas.shapes)
+          if (parsed && typeof parsed === 'object' && 'store' in parsed) {
+            // Migrate tldraw snapshot format
+            const store = parsed.store as Record<string, unknown>
+            const migrated: ResolvedShape[] = []
+            let idx = 0
+            for (const entry of Object.values(store)) {
+              if (!entry || typeof entry !== 'object') continue
+              const e = entry as Record<string, unknown>
+              if (e.typeName !== 'shape') continue
+              const dims = getDefaultDimensions(String(e.type ?? 'note-block'))
+              const props = (e.props as Record<string, unknown>) ?? {}
+              migrated.push({
+                id: String(e.id ?? `migrated-${idx++}`),
+                type: String(e.type ?? 'note-block'),
+                x: typeof e.x === 'number' ? e.x : idx * 260,
+                y: typeof e.y === 'number' ? e.y : 100,
+                w: typeof props.w === 'number' ? props.w : dims.w,
+                h: typeof props.h === 'number' ? props.h : dims.h,
+                props,
+                source: props.source as 'agent' | 'user' | undefined,
+              })
+            }
+            if (migrated.length > 0) setShapes(migrated)
+          } else if (Array.isArray(parsed) && parsed.length > 0) {
+            setShapes(parsed as ResolvedShape[])
+          }
+        } catch { /* invalid JSON */ }
+
+        try {
+          if (data.canvas.viewport) {
+            const vp = JSON.parse(data.canvas.viewport)
+            if (vp && typeof vp.x === 'number') setViewport(vp)
+          }
         } catch { /* ignore */ }
-        snapshotRef.current = null
-      }
+      })
+      .catch(() => { /* network error */ })
+      .finally(() => { if (!cancelled) setLoading(false) })
 
-      // Apply template if one was selected
-      if (selectedTemplateRef.current) {
-        applyTemplate(editor, selectedTemplateRef.current)
-        selectedTemplateRef.current = null
-      }
+    return () => { cancelled = true }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId])
 
-      if (pendingMutationCount > 0) {
-        const result = syncPendingCanvasState(editor, pendingShapes, pendingUpdates, pendingRemovals)
-        const appliedView = applyPendingCanvasView(editor, pendingViewport, pendingLayout)
-        if (result.agentAddCount > 0) {
-          setAgentVisualCount((prev) => prev + result.agentAddCount)
-        }
-        if (result.shouldMarkAgentSync || appliedView) {
-          setLastAgentSyncAt(Date.now())
-        }
-        clearPendingShapes()
-        clearPendingUpdates()
-        clearPendingRemovals()
-        clearPendingViewport()
-        clearPendingLayout()
-      }
-    },
-    [
-      clearPendingRemovals,
-      clearPendingShapes,
-      clearPendingUpdates,
-      clearPendingViewport,
-      clearPendingLayout,
-      pendingMutationCount,
-      pendingLayout,
-      pendingRemovals,
-      pendingShapes,
-      pendingUpdates,
-      pendingViewport,
-      setDirty,
-      theme,
-      canvasDraftSessionId,
-    ],
-  )
+  /* ── Auto-save (debounced) ────────────────────────────────────── */
 
-  // Sync tldraw color scheme when portal theme changes
   useEffect(() => {
-    editorRef.current?.user.updateUserPreferences({ colorScheme: theme })
-  }, [theme])
-
-  // Debounced auto-save
-  useEffect(() => {
-    if (!isDirty || !sessionId || !editorRef.current) return
+    if (!isDirty || !sessionId) return
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
-    saveTimerRef.current = setTimeout(async () => {
-      const snapshot = editorRef.current?.store.getSnapshot()
-      if (!snapshot) return
-      try {
-        const response = await persistCanvasSnapshot(sessionId, snapshot)
-        if (!response.ok) {
-          return
-        }
-        if (canvasDraftSessionId) {
-          clearPersistedCanvasDraft(canvasDraftSessionId)
-        }
-        setDirty(false)
-      } catch { /* retry on next cycle */ }
-    }, 5000)
+    saveTimerRef.current = setTimeout(() => {
+      const { shapes: currentShapes, viewport: currentViewport } = useCanvasStore.getState()
+      fetch(`/api/canvas/${encodeURIComponent(sessionId)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ shapes: JSON.stringify(currentShapes), viewport: JSON.stringify(currentViewport) }),
+      })
+        .then(() => setDirty(false))
+        .catch(() => { /* silent */ })
+    }, SAVE_DEBOUNCE_MS)
     return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current) }
-  }, [canvasDraftSessionId, isDirty, sessionId, setDirty])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isDirty, sessionId, shapes, viewport])
 
-  useEffect(() => {
-    if (!sessionId) return
+  /* ── Pan / Zoom handlers ──────────────────────────────────────── */
 
-    const flushOnPageHide = () => {
-      const snapshot = editorRef.current?.store.getSnapshot()
-      if (!snapshot) return
-      if (canvasDraftSessionId) {
-        persistCanvasDraft(canvasDraftSessionId, snapshot, { dirty: isDirty })
-      }
-      void persistCanvasSnapshot(sessionId, snapshot, true).catch(() => {})
+  const onPan = useCallback((dx: number, dy: number) => {
+    setViewport({ x: viewport.x + dx, y: viewport.y + dy, zoom: viewport.zoom })
+  }, [viewport, setViewport])
+
+  const onZoom = useCallback((nextZoom: number, cx: number, cy: number) => {
+    const ratio = nextZoom / viewport.zoom
+    setViewport({ x: cx - (cx - viewport.x) * ratio, y: cy - (cy - viewport.y) * ratio, zoom: nextZoom })
+  }, [viewport, setViewport])
+
+  const onZoomIn = useCallback(() => {
+    setViewport({ ...viewport, zoom: Math.min(3.0, viewport.zoom * 1.2) })
+  }, [viewport, setViewport])
+
+  const onZoomOut = useCallback(() => {
+    setViewport({ ...viewport, zoom: Math.max(0.1, viewport.zoom / 1.2) })
+  }, [viewport, setViewport])
+
+  const zoomToFit = useCallback(() => {
+    if (shapes.length === 0) return
+    const el = containerRef.current
+    if (!el) return
+    const cw = el.clientWidth
+    const ch = el.clientHeight - 48
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+    for (const s of shapes) {
+      minX = Math.min(minX, s.x); minY = Math.min(minY, s.y)
+      maxX = Math.max(maxX, s.x + s.w); maxY = Math.max(maxY, s.y + s.h)
     }
+    const pad = 60
+    const ww = maxX - minX + pad * 2, wh = maxY - minY + pad * 2
+    const z = Math.min(1.2, Math.max(0.1, Math.min(cw / ww, ch / wh)))
+    setViewport({ x: (cw - ww * z) / 2 - (minX - pad) * z, y: (ch - wh * z) / 2 - (minY - pad) * z, zoom: z })
+  }, [shapes, setViewport])
 
-    window.addEventListener('pagehide', flushOnPageHide)
-    return () => {
-      window.removeEventListener('pagehide', flushOnPageHide)
-    }
-  }, [canvasDraftSessionId, isDirty, sessionId])
+  /* ── Monitor fallback visualize ───────────────────────────────── */
 
-  useEffect(() => {
-    return () => {
-      if (draftTimerRef.current) clearTimeout(draftTimerRef.current)
-    }
-  }, [])
+  const handleVisualize = useCallback(() => {
+    const fallback = buildMonitorFallbackShapes(activeRootId, dag, tasks)
+    if (fallback.length === 0) return
+    const shapeIdSet = new Set(fallback.map((s) => s.id))
+    setShapes(fallback)
+    useCanvasStore.getState().setConnections(buildFallbackConnections(dag, shapeIdSet))
+    setAgentVisualCount(fallback.length)
+    setLastAgentSyncAt(Date.now())
+    setDirty(true)
+    requestAnimationFrame(() => zoomToFit())
+  }, [activeRootId, dag, tasks, setShapes, setDirty, zoomToFit])
 
-  // Process pending shapes from agent
-  useEffect(() => {
-    const editor = editorRef.current
-    if (!editor || pendingMutationCount === 0) return
+  /* ── Drag end ─────────────────────────────────────────────────── */
 
-    const result = syncPendingCanvasState(editor, pendingShapes, pendingUpdates, pendingRemovals)
-    const appliedView = applyPendingCanvasView(editor, pendingViewport, pendingLayout)
-    if (result.agentAddCount > 0) {
-      setAgentVisualCount((prev) => prev + result.agentAddCount)
-    }
-    if (result.shouldMarkAgentSync || appliedView) {
-      setLastAgentSyncAt(Date.now())
-    }
-    clearPendingShapes()
-    clearPendingUpdates()
-    clearPendingRemovals()
-    clearPendingViewport()
-    clearPendingLayout()
-  }, [
-    clearPendingRemovals,
-    clearPendingShapes,
-    clearPendingUpdates,
-    clearPendingViewport,
-    clearPendingLayout,
-    pendingMutationCount,
-    pendingLayout,
-    pendingRemovals,
-    pendingShapes,
-    pendingUpdates,
-    pendingViewport,
-  ])
+  const handleDragEnd = useCallback((event: DragEndEvent) => {
+    const { active, delta } = event
+    if (!delta) return
+    const id = String(active.id)
+    const shape = shapes.find((s) => s.id === id)
+    if (!shape) return
+    updateShape(id, { x: shape.x + delta.x / viewport.zoom, y: shape.y + delta.y / viewport.zoom })
+    setDirty(true)
+  }, [shapes, viewport.zoom, updateShape, setDirty])
 
-  // Export JSON
-  const exportJSON = useCallback(() => {
-    if (!editorRef.current) return
-    const snapshot = editorRef.current.store.getSnapshot()
-    const blob = new Blob([JSON.stringify(snapshot, null, 2)], { type: 'application/json' })
-    downloadBlob(blob, `canvas-${Date.now()}.json`)
-  }, [])
+  /* ── Render ───────────────────────────────────────────────────── */
 
-  const createShapeFromDock = useCallback((type: string) => {
-    const editor = editorRef.current
-    if (!editor) return
+  const cw = containerRef.current?.clientWidth ?? 800
+  const ch = containerRef.current?.clientHeight ?? 600
 
-    const center = editor.getViewportPageBounds().center
-    editor.createShape({ type, x: center.x - 100, y: center.y - 50 })
-  }, [])
-
-  useEffect(() => {
-    setExportJsonFn(exportJSON)
-    return () => setExportJsonFn(() => {})
-  }, [exportJSON])
-
-  // Welcome mode — no tldraw loaded
-  if (editorMode === 'welcome') {
-    return (
-      <div className="flex h-full w-full flex-col" data-testid="canvas-panel">
-        <div className={toolbarCls} data-testid="canvas-toolbar">
-          <div className="absolute inset-0 bg-[radial-gradient(circle_at_left,rgba(125,211,252,0.12),transparent_24%),linear-gradient(180deg,rgba(255,255,255,0.04),rgba(255,255,255,0))]" />
-          <div className="relative flex flex-wrap items-center gap-3">
-            <div className="min-w-0 flex-1">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.22em] text-text-secondary">
-                  <span className="h-2 w-2 rounded-full bg-accent shadow-[0_0_10px_rgba(0,229,255,0.55)]" />
-                  Canvas
-                </span>
-                <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-text-secondary">
-                  Visual workspace
-                </span>
-                {pendingMutationCount > 0 && (
-                  <span className="rounded-full border border-accent/20 bg-accent/10 px-3 py-1 text-[11px] font-medium text-accent">
-                    Agent handoff
-                  </span>
-                )}
-              </div>
-              <div className="mt-2 text-sm text-text-secondary">
-                Start from a template, then keep architecture, notes, and agent-created visuals on one shared board.
-              </div>
-            </div>
-          </div>
-        </div>
-        <CanvasWelcome onSelect={handleTemplateSelect} pendingShapeCount={pendingMutationCount} />
-      </div>
-    )
-  }
-
-  // Editor mode — tldraw loaded
   return (
-    <div className="flex h-full w-full flex-col" data-testid="canvas-panel">
-      <div className={toolbarCls} data-testid="canvas-toolbar">
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_left,rgba(125,211,252,0.12),transparent_24%),radial-gradient(circle_at_right,rgba(52,211,153,0.1),transparent_20%),linear-gradient(180deg,rgba(255,255,255,0.04),rgba(255,255,255,0))]" />
-        <div className="relative grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(320px,380px)] xl:items-start">
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.22em] text-text-secondary">
-                <span className="h-2 w-2 rounded-full bg-accent shadow-[0_0_10px_rgba(0,229,255,0.55)]" />
-                Canvas
-              </span>
-              <span
-                className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-text-secondary"
-                title={sessionId ?? 'Transient session'}
-              >
-                {formatSessionLabel(sessionId)}
-              </span>
-              <span className="rounded-full border border-accent/15 bg-accent/10 px-3 py-1 text-[11px] text-accent">
-                Agent visuals {agentVisualCount}
-              </span>
-              <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-text-secondary">
-                Agent sync {formatLastSync(lastAgentSyncAt)}
-              </span>
-              <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-[11px] text-text-secondary">
-                Queue {pendingMutationCount}
-              </span>
-            </div>
-
-            <div className="mt-3">
-              <div className="text-lg font-semibold tracking-[-0.04em] text-white">
-                Shared visual board
-              </div>
-              <div className="mt-2 max-w-3xl text-sm leading-6 text-text-secondary">
-                Keep architecture, user flow, risks, and review notes in one place. The quick-insert dock below exposes labeled block types, while the board keeps live agent visuals in the same surface.
-              </div>
-              <div className="mt-3 flex flex-wrap gap-2 text-[11px] text-text-secondary">
-                <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1">
-                  Labeled quick insert
-                </span>
-                <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1">
-                  AI badge on agent visuals
-                </span>
-                <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1">
-                  Auto-save per session
-                </span>
-              </div>
-            </div>
-          </div>
-
-          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-1">
-            <button
-              type="button"
-              className={`${toolbarBtnCls} min-h-[60px] flex-col items-start justify-center gap-1 rounded-[22px] px-4 py-3 text-left`}
-              onClick={() => editorRef.current?.zoomToFit()}
-              title="Center the camera on the current board"
-              data-testid="canvas-zoom-to-fit"
-            >
-              <span className="text-sm text-white">Zoom to Fit</span>
-              <span className="text-[11px] leading-5 text-text-secondary">Center the current board content.</span>
-            </button>
-            <button
-              type="button"
-              className={`${toolbarBtnCls} min-h-[60px] flex-col items-start justify-center gap-1 rounded-[22px] px-4 py-3 text-left`}
-              onClick={exportJSON}
-              title="Download the current canvas as JSON"
-              data-testid="canvas-export-json"
-            >
-              <span className="text-sm text-white">Export JSON</span>
-              <span className="text-[11px] leading-5 text-text-secondary">Download a portable canvas snapshot.</span>
-            </button>
-            <div className="rounded-[22px] border border-white/10 bg-black/20 px-4 py-3 text-left sm:col-span-2 xl:col-span-1">
-              <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-text-tertiary">
-                Save state
-              </div>
-              <div className="mt-2 flex items-center justify-between gap-3">
-                <div className="text-xs leading-5 text-text-secondary">
-                  Changes auto-save into the current session.
-                </div>
-                {isDirty ? (
-                  <span className="rounded-full border border-yellow-400/20 bg-yellow-400/10 px-3 py-1 text-[11px] text-yellow-300" data-testid="canvas-dirty-indicator">
-                    unsaved
-                  </span>
-                ) : (
-                  <span className="flex items-center gap-2 rounded-full border border-emerald-400/20 bg-emerald-400/10 px-3 py-1 text-[11px] text-emerald-300" data-testid="canvas-saved-indicator">
-                    <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-300" />
-                    saved
-                  </span>
-                )}
-              </div>
-            </div>
-          </div>
+    <div ref={containerRef} className="relative flex h-full w-full flex-col bg-[#060a10]">
+      {/* Toolbar header */}
+      <div className={toolbarCls}>
+        <div className="flex items-center gap-3">
+          <span className={toolbarBtnCls}>
+            <span className="mr-1.5 h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.5)]" />
+            CANVAS
+          </span>
+          <span className="text-[10px] font-medium text-slate-600">{formatSessionLabel(sessionId)}</span>
+          <div className="flex-1" />
+          {agentVisualCount > 0 && <span className={toolbarBtnCls}>Agent visuals {agentVisualCount}</span>}
+          <span className={toolbarBtnCls}>Agent sync {formatLastSync(lastAgentSyncAt)}</span>
+          {pendingMutationCount > 0 && <span className={toolbarBtnCls}>Queue {pendingMutationCount}</span>}
         </div>
       </div>
-      <div className="strada-canvas-stage relative flex-1 overflow-hidden">
-        <div className="pointer-events-none absolute inset-0 z-0 bg-[radial-gradient(circle_at_top_left,rgba(125,211,252,0.08),transparent_22%),radial-gradient(circle_at_82%_14%,rgba(52,211,153,0.08),transparent_20%)]" />
-        <div className="pointer-events-none absolute inset-0 z-0 opacity-[0.16] [background-image:linear-gradient(rgba(255,255,255,0.04)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.04)_1px,transparent_1px)] [background-size:34px_34px]" />
 
-        <div className="pointer-events-none absolute right-5 top-5 z-10 hidden w-[280px] rounded-[28px] border border-white/10 bg-[#0b1119]/78 p-4 shadow-[0_20px_80px_rgba(0,0,0,0.26)] backdrop-blur-2xl 2xl:block">
-          <div className="text-[10px] font-semibold uppercase tracking-[0.28em] text-text-tertiary">
-            Session pulse
-          </div>
-          <div className="mt-4 grid gap-3">
-            <div className="rounded-[22px] border border-white/10 bg-white/[0.03] px-4 py-3">
-              <div className="text-[10px] uppercase tracking-[0.22em] text-text-tertiary">Visuals</div>
-              <div className="mt-2 text-2xl font-semibold tracking-[-0.04em] text-white">{agentVisualCount}</div>
-            </div>
-            <div className="rounded-[22px] border border-white/10 bg-white/[0.03] px-4 py-3">
-              <div className="text-[10px] uppercase tracking-[0.22em] text-text-tertiary">Queued</div>
-              <div className="mt-2 text-2xl font-semibold tracking-[-0.04em] text-white">{pendingMutationCount}</div>
-            </div>
-            <div className="rounded-[22px] border border-white/10 bg-white/[0.03] px-4 py-3">
-              <div className="text-[10px] uppercase tracking-[0.22em] text-text-tertiary">Last sync</div>
-              <div className="mt-2 text-sm font-medium text-text">{formatLastSync(lastAgentSyncAt)}</div>
+      {/* Canvas area */}
+      <div className="relative flex-1 overflow-hidden">
+        {loading ? (
+          <div className="absolute inset-0 flex items-center justify-center">
+            <div className="flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-slate-500">
+              <div className="h-4 w-4 rounded-full border-2 border-sky-400/30 border-t-sky-400 animate-spin" />
+              Loading canvas...
             </div>
           </div>
-          <div className="mt-4 space-y-2">
-            {BOARD_ACTION_GUIDE.map((item) => (
-              <div
-                key={item.key}
-                className="rounded-[20px] border border-white/10 bg-black/20 px-4 py-3"
-              >
-                <div className="text-sm font-semibold text-text">{item.title}</div>
-                <div className="mt-1 text-xs leading-5 text-text-secondary">{item.description}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div
-          className="pointer-events-none absolute inset-x-0 bottom-5 z-10 hidden justify-center px-5 lg:flex"
-          data-testid="canvas-quick-insert-dock"
-        >
-          <div className="pointer-events-auto flex w-full max-w-[1120px] items-stretch gap-2 rounded-[30px] border border-white/10 bg-[#0b1119]/78 p-3 shadow-[0_24px_90px_rgba(0,0,0,0.26)] backdrop-blur-2xl">
-            <div className="hidden w-[220px] shrink-0 rounded-[24px] border border-white/10 bg-black/20 px-4 py-4 xl:flex xl:flex-col">
-              <div className="text-[10px] font-semibold uppercase tracking-[0.26em] text-sky-300/80">
-                Quick insert
-              </div>
-              <div className="mt-3 text-lg font-semibold tracking-[-0.04em] text-white">
-                Named blocks, always visible.
-              </div>
-              <div className="mt-2 text-xs leading-6 text-text-secondary">
-                Inspired by 21st-style floating panels: add the block you need without decoding icon-only controls.
-              </div>
-            </div>
-
-            <div className="grid min-w-0 flex-1 gap-2 md:grid-cols-3 xl:grid-cols-6">
-              {TOOLBAR_SHAPES.map((shape) => (
-                <button
-                  key={shape.type}
-                  type="button"
-                  onClick={() => createShapeFromDock(shape.type)}
-                  data-testid={`canvas-quick-insert-${shape.type}`}
-                  className="group flex min-h-[104px] flex-col items-start justify-between rounded-[24px] border border-white/10 bg-white/[0.035] px-4 py-4 text-left transition-all duration-200 hover:-translate-y-0.5 hover:border-sky-300/25 hover:bg-sky-300/[0.07] hover:shadow-[0_18px_48px_rgba(14,165,233,0.10)]"
-                  title={shape.description}
-                  aria-label={`Insert ${shape.title}`}
-                >
-                  <div className="grid h-11 w-11 place-items-center rounded-2xl border border-white/10 bg-black/20 text-sm font-semibold text-white">
-                    {shape.label}
-                  </div>
-                  <div className="min-w-0">
-                    <div className="text-sm font-semibold text-text">{shape.title}</div>
-                    <div className="mt-1 text-[11px] leading-5 text-text-secondary">
-                      {shape.hint}
-                    </div>
-                  </div>
-                </button>
+        ) : shapes.length === 0 ? (
+          <CanvasEmptyState onVisualize={handleVisualize} />
+        ) : (
+          <DndContext onDragEnd={handleDragEnd}>
+            <CanvasViewport x={viewport.x} y={viewport.y} zoom={viewport.zoom} onPan={onPan} onZoom={onZoom}>
+              <CanvasConnections connections={connections} shapes={shapes} />
+              {shapes.map((shape) => (
+                <DraggableCard key={shape.id} shape={shape} zoom={viewport.zoom} />
               ))}
-            </div>
-          </div>
-        </div>
+            </CanvasViewport>
+          </DndContext>
+        )}
 
-        <Suspense fallback={
-          <div className="flex h-full items-center justify-center">
-            <LoadingSpinner />
-          </div>
-        }>
-          <TldrawEditor onMount={handleMount} shapeUtils={customShapeUtils} components={tldrawComponents} />
-        </Suspense>
+        <CanvasControls zoom={viewport.zoom} onZoomIn={onZoomIn} onZoomOut={onZoomOut} onZoomFit={zoomToFit} />
+        {shapes.length > 0 && (
+          <CanvasMinimap shapes={shapes} viewport={viewport} containerWidth={cw} containerHeight={ch} />
+        )}
       </div>
     </div>
   )
