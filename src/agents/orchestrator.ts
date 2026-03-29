@@ -907,7 +907,7 @@ export class Orchestrator {
   }
 
   private resolveSupervisorFallbackPath(
-    _params: Pick<SupervisorAdmissionRequest, "goalTree" | "userContent" | "attachments">,
+    _params: Pick<SupervisorAdmissionRequest, "goalTree" | "userContent" | "attachments" | "prompt">,
   ): Exclude<SupervisorAdmissionPath, "supervisor"> {
     return "direct_worker";
   }
@@ -2738,6 +2738,30 @@ export class Orchestrator {
                   "blocked",
                   planText ?? "Plan prepared for review.",
                 );
+              }
+
+              // Autonomous mode: text-only responses during PLANNING/REPLANNING are internal
+              // plans, not final responses. Record the plan, transition to EXECUTING, and
+              // let the PAOR loop continue. The agent should execute — not present plans.
+              if (
+                (bgAgentState.phase === AgentPhase.PLANNING ||
+                  bgAgentState.phase === AgentPhase.REPLANNING) &&
+                response.toolCalls.length === 0 &&
+                this.dmPolicy?.isAutonomousActive(chatId, options.userId)
+              ) {
+                bgAgentState = handlePlanPhaseTransition({
+                  agentState: bgAgentState,
+                  executionJournal,
+                  responseText: response.text,
+                  providerName: currentAssignment.providerName,
+                  modelId: currentAssignment.modelId,
+                  autoTransition: true,
+                });
+                session.messages.push(
+                  { role: "assistant", content: response.text },
+                  { role: "user", content: "Plan recorded. Now execute it step by step using the available tools. Start with the first actionable step." },
+                );
+                continue;
               }
 
               // Final response — return text (extracted to orchestrator-end-turn-handler.ts)
