@@ -460,13 +460,12 @@ strada skill search <쿼리>            # 레지스트리 검색
 - Kahn 알고리즘이 비순환 DAG 구조를 검증
 - 반응형 재분해: 노드가 실패하면 더 작은 복구 단계로 분할 가능
 
-**GoalExecutor:**
+**목표 실행 (SupervisorDispatcher 경유):**
 - 웨이브 기반 병렬 실행이 의존성 순서를 준수
-- 세마포어 기반 동시성 제한 (`GOAL_MAX_PARALLEL`)
-- 실패 예산 (`GOAL_MAX_FAILURES`)과 사용자 대면 계속 진행 프롬프트
-- LLM 중요도 평가가 실패한 노드가 의존 노드를 차단해야 하는지 결정
-- 노드별 재시도 로직 (`GOAL_MAX_RETRIES`)과 소진 시 복구 분해
-- 취소를 위한 AbortSignal 지원
+- 세마포어 기반 동시성 제한 (`SUPERVISOR_MAX_PARALLEL_NODES`)
+- 실패 예산 (`SUPERVISOR_MAX_FAILURE_BUDGET`)과 구성 가능한 임계값
+- 노드별 타임아웃과 fetch 레이어로의 AbortSignal 전파
+- ProviderHealthRegistry를 통한 상태 인식 프로바이더 폴백
 - `GoalStorage` (SQLite)를 통한 영구 목표 트리 상태로 재시작 후 재개 가능
 
 ---

@@ -297,7 +297,7 @@ export interface SupervisorAdmissionRequest {
   readonly conversationId?: string;
   readonly signal?: AbortSignal;
   readonly goalTree?: GoalTree;
-  readonly forceEligibility?: boolean;
+  // forceEligibility removed — supervisor complexity gate always applies
   readonly userContent?: string | MessageContent[] | null;
   readonly attachments?: Attachment[];
   readonly taskRunId?: string;
@@ -1015,7 +1015,7 @@ export class Orchestrator {
     }
 
     const classification = this.taskClassifier?.classify(coarsePlanningPrompt);
-    const shouldForceSupervisor = params.forceEligibility || Boolean(params.goalTree);
+    const shouldForceSupervisor = Boolean(params.goalTree);
     if (!shouldForceSupervisor && (!classification || !this.shouldActivateSupervisor(classification))) {
       return {
         path: fallbackPath,

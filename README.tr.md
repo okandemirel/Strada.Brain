@@ -467,13 +467,12 @@ Karmasik cok adimli istekler, otomatik olarak yonlu dongusuz cizge (DAG) yapili 
 - Kahn algoritmasi dongu icermeyen DAG yapisini dogrular
 - Reaktif yeniden ayristirma: bir dugum basarisiz oldugunda, daha kucuk kurtarma adimlarina bolunebilir
 
-**GoalExecutor:**
+**Hedef Yurutme (SupervisorDispatcher ile):**
 - Dalga tabanli paralel yurutme, bagimlilik siralamasina uyar
-- Semafor tabanli es zamanlilik sinirlamasi (`GOAL_MAX_PARALLEL`)
-- Basarisizlik butceleri (`GOAL_MAX_FAILURES`) ile kullaniciya yonelik devam ettirme istemleri
-- LLM kritiklik degerlendirmesi, basarisiz bir dugumun bagimlilari engelleyip engellemeyecegini belirler
-- Dugum basina yeniden deneme mantigi (`GOAL_MAX_RETRIES`) ve tukenmede kurtarma ayristirmasi
-- AbortSignal ile iptal destegi
+- Semafor tabanli es zamanlilik sinirlamasi (`SUPERVISOR_MAX_PARALLEL_NODES`)
+- Basarisizlik butceleri (`SUPERVISOR_MAX_FAILURE_BUDGET`) ile yapilandirabilir esik degerleri
+- Dugum basina zaman asimi ve fetch katmanina AbortSignal yayilimi
+- ProviderHealthRegistry ile saglik duyarli saglayici yedeklemesi
 - Yeniden baslatma sonrasi devam icin `GoalStorage` (SQLite) ile kalici hedef agaci durumu
 
 ---

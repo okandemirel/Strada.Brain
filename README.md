@@ -543,13 +543,12 @@ Complex multi-step requests are automatically decomposed into a directed acyclic
 - Kahn's algorithm validates cycle-free DAG structure
 - Reactive re-decomposition: when a node fails, it can be broken into smaller recovery steps
 
-**GoalExecutor:**
+**Goal Execution (via SupervisorDispatcher):**
 - Wave-based parallel execution respects dependency ordering
-- Semaphore-based concurrency limiting (`GOAL_MAX_PARALLEL`)
-- Failure budgets (`GOAL_MAX_FAILURES`) with user-facing continuation prompts
-- LLM criticality evaluation determines whether a failed node should block dependents
-- Per-node retry logic (`GOAL_MAX_RETRIES`) with recovery decomposition on exhaustion
-- AbortSignal support for cancellation
+- Semaphore-based concurrency limiting (`SUPERVISOR_MAX_PARALLEL_NODES`)
+- Failure budgets (`SUPERVISOR_MAX_FAILURE_BUDGET`) with configurable thresholds
+- Per-node timeout with AbortSignal propagation to fetch layer
+- Health-aware provider fallback via ProviderHealthRegistry
 - Persistent goal tree state via `GoalStorage` (SQLite) for resume after restart
 
 ---

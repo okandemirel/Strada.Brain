@@ -460,13 +460,12 @@ Komplexe mehrstufige Anfragen werden automatisch in einen gerichteten azyklische
 - Kahn-Algorithmus validiert zyklenfreie DAG-Struktur
 - Reaktive Neuzerlegung: Wenn ein Knoten fehlschlaegt, kann er in kleinere Wiederherstellungsschritte aufgeteilt werden
 
-**GoalExecutor:**
+**Zielausfuehrung (ueber SupervisorDispatcher):**
 - Wellenbasierte parallele Ausfuehrung respektiert die Abhaengigkeitsreihenfolge
-- Semaphor-basierte Nebenlaeufigkeitsbegrenzung (`GOAL_MAX_PARALLEL`)
-- Fehlerbudgets (`GOAL_MAX_FAILURES`) mit Benutzer-Fortsetzungsaufforderungen
-- LLM-Kritikalitaetsbewertung bestimmt, ob ein fehlgeschlagener Knoten Abhaengige blockieren soll
-- Knotenweise Wiederholungslogik (`GOAL_MAX_RETRIES`) mit Wiederherstellungszerlegung bei Erschoepfung
-- AbortSignal-Unterstuetzung fuer Abbruch
+- Semaphor-basierte Nebenlaeufigkeitsbegrenzung (`SUPERVISOR_MAX_PARALLEL_NODES`)
+- Fehlerbudgets (`SUPERVISOR_MAX_FAILURE_BUDGET`) mit konfigurierbaren Schwellenwerten
+- Knotenweises Timeout mit AbortSignal-Weitergabe an die Fetch-Schicht
+- Gesundheitsbewusster Anbieter-Fallback ueber ProviderHealthRegistry
 - Persistenter Zielbaum-Status ueber `GoalStorage` (SQLite) fuer Wiederaufnahme nach Neustart
 
 ---

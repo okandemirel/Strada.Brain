@@ -461,13 +461,12 @@ Las solicitudes complejas de multiples pasos se descomponen automaticamente en u
 - El algoritmo de Kahn valida la estructura DAG libre de ciclos
 - Re-descomposicion reactiva: cuando un nodo falla, puede dividirse en pasos de recuperacion mas pequenos
 
-**GoalExecutor:**
+**Ejecucion de Objetivos (via SupervisorDispatcher):**
 - Ejecucion paralela por olas que respeta el orden de dependencias
-- Limitacion de concurrencia basada en semaforo (`GOAL_MAX_PARALLEL`)
-- Presupuestos de fallo (`GOAL_MAX_FAILURES`) con solicitudes de continuacion al usuario
-- Evaluacion de criticidad por LLM para determinar si un nodo fallido debe bloquear a sus dependientes
-- Logica de reintentos por nodo (`GOAL_MAX_RETRIES`) con descomposicion de recuperacion al agotarse
-- Soporte de AbortSignal para cancelacion
+- Limitacion de concurrencia basada en semaforo (`SUPERVISOR_MAX_PARALLEL_NODES`)
+- Presupuestos de fallo (`SUPERVISOR_MAX_FAILURE_BUDGET`) con umbrales configurables
+- Timeout por nodo con propagacion de AbortSignal a la capa fetch
+- Fallback de proveedor con reconocimiento de salud via ProviderHealthRegistry
 - Estado persistente del arbol de objetivos via `GoalStorage` (SQLite) para reanudacion tras reinicio
 
 ---

@@ -460,13 +460,12 @@ Les requ&ecirc;tes complexes multi-&eacute;tapes sont automatiquement d&eacute;c
 - L'algorithme de Kahn valide l'absence de cycles dans la structure DAG
 - Red&eacute;composition r&eacute;active : lorsqu'un noeud &eacute;choue, il peut &ecirc;tre d&eacute;compos&eacute; en &eacute;tapes de r&eacute;cup&eacute;ration plus petites
 
-**GoalExecutor :**
+**Ex&eacute;cution des Objectifs (via SupervisorDispatcher) :**
 - Ex&eacute;cution parall&egrave;le par vagues respectant l'ordre des d&eacute;pendances
-- Limitation de la concurrence par s&eacute;maphore (`GOAL_MAX_PARALLEL`)
-- Budgets d'&eacute;checs (`GOAL_MAX_FAILURES`) avec invites de continuation pour l'utilisateur
-- &Eacute;valuation de criticit&eacute; par le LLM pour d&eacute;terminer si un noeud en &eacute;chec doit bloquer ses d&eacute;pendants
-- Logique de r&eacute;essai par noeud (`GOAL_MAX_RETRIES`) avec d&eacute;composition de r&eacute;cup&eacute;ration en cas d'&eacute;puisement
-- Support AbortSignal pour l'annulation
+- Limitation de la concurrence par s&eacute;maphore (`SUPERVISOR_MAX_PARALLEL_NODES`)
+- Budgets d'&eacute;checs (`SUPERVISOR_MAX_FAILURE_BUDGET`) avec seuils configurables
+- Timeout par noeud avec propagation d'AbortSignal &agrave; la couche fetch
+- Fallback de fournisseur avec prise en compte de la sant&eacute; via ProviderHealthRegistry
 - &Eacute;tat persistant de l'arbre d'objectifs via `GoalStorage` (SQLite) pour la reprise apr&egrave;s red&eacute;marrage
 
 ---

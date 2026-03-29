@@ -258,7 +258,7 @@ export class BackgroundExecutor {
         userId?: string;
         signal?: AbortSignal;
         goalTree?: GoalTree;
-        forceEligibility?: boolean;
+        // forceEligibility removed — supervisor complexity gate always applies
         userContent?: string | import("../agents/providers/provider-core.interface.js").MessageContent[] | null;
         attachments?: import("../channels/channel.interface.js").Attachment[];
         taskRunId?: string;

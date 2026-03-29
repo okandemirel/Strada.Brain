@@ -4,7 +4,7 @@
 
 **Goal:** Build an intelligent multi-provider orchestration layer that autonomously decomposes complex tasks, assigns sub-tasks to optimal providers, dispatches parallel PAOR loops, and aggregates results.
 
-**Architecture:** New `src/supervisor/` module with 5 core components (CapabilityMatcher, ProviderAssigner, SupervisorDispatcher, ResultAggregator, SupervisorBrain) connected via a pipeline. Sits above the existing PAOR loop, activated by TaskClassifier complexity gate. Existing GoalDecomposer, GoalExecutor, and ConsensusManager are used as-is.
+**Architecture:** New `src/supervisor/` module with 5 core components (CapabilityMatcher, ProviderAssigner, SupervisorDispatcher, ResultAggregator, SupervisorBrain) connected via a pipeline. Sits above the existing PAOR loop, activated by TaskClassifier complexity gate. Existing GoalDecomposer and ConsensusManager are used as-is. Goal execution is coordinated through the supervisor and direct-worker paths.
 
 **Tech Stack:** TypeScript, Zod (config validation), TypedEventBus (telemetry), SQLite (via GoalStorage), React (monitor panel)
 
