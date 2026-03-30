@@ -1,9 +1,6 @@
 import { useRef, useEffect } from 'react'
 import { useMonitorStore } from '../../stores/monitor-store'
-
-function formatActionLabel(action: string): string {
-  return action.replace(/_/g, ' ')
-}
+import { normalizeLabel } from './monitor-utils'
 
 export default function ActivityFeed() {
   const activities = useMonitorStore((s) => s.activities)
@@ -52,7 +49,7 @@ export default function ActivityFeed() {
                   {new Date(entry.timestamp).toLocaleTimeString()}
                 </span>
                 <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-text-secondary">
-                  {formatActionLabel(entry.action)}
+                  {normalizeLabel(entry.action)}
                 </span>
                 {entry.tool && (
                   <span className="rounded-full border border-accent/10 bg-accent/10 px-2 py-0.5 font-mono text-[10px] text-accent">

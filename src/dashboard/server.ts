@@ -2183,10 +2183,15 @@ export class DashboardServer {
           res.end(JSON.stringify({ error: "Budget manager not available" }));
           return;
         }
-        const snapshot = this.unifiedBudgetManager.getSnapshot();
-        const config = this.unifiedBudgetManager.getConfig();
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ ...snapshot, config }));
+        try {
+          const snapshot = this.unifiedBudgetManager.getSnapshot();
+          const config = this.unifiedBudgetManager.getConfig();
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ ...snapshot, config }));
+        } catch (err) {
+          res.writeHead(500, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: err instanceof Error ? err.message : "Budget snapshot failed" }));
+        }
         return;
       }
 

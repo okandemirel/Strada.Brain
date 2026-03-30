@@ -41,7 +41,8 @@ export default function LearningSection() {
   const issues: string[] = []
   if (runtime.reflection.overrideRate > 0.5) issues.push(`High reflection override rate: ${(runtime.reflection.overrideRate * 100).toFixed(0)}%`)
   if (runtime.consensus.agreementRate < 0.5 && runtime.consensus.totalVerifications > 0) issues.push(`Low consensus agreement rate: ${(runtime.consensus.agreementRate * 100).toFixed(0)}%`)
-  if (aggregates?.lowPerformers && aggregates.lowPerformers.length > 3) issues.push(`${aggregates.lowPerformers.length} low-performing instincts detected`)
+  const trueLowPerformers = aggregates?.lowPerformers?.filter((p) => p.confidence < 0.5) ?? []
+  if (trueLowPerformers.length > 3) issues.push(`${trueLowPerformers.length} low-performing instincts detected`)
   const healthy = issues.length === 0
 
   return (

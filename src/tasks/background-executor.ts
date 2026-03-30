@@ -975,7 +975,7 @@ export class BackgroundExecutor {
   }
 
   private buildUsageRecorder(task: Task): ((usage: { provider: string; inputTokens: number; outputTokens: number }) => void) | undefined {
-    if (task.origin !== "daemon" || !this.daemonBudgetTracker) {
+    if (!this._unifiedBudgetManager && !this.daemonBudgetTracker) {
       return undefined;
     }
 
@@ -986,12 +986,13 @@ export class BackgroundExecutor {
       }
       if (this._unifiedBudgetManager) {
         const source = task.origin === "daemon" ? "daemon" : "chat";
-        this._unifiedBudgetManager.recordCost(costUsd, source as "daemon" | "chat", {
+        this._unifiedBudgetManager.recordCost(costUsd, source, {
           model: usage.provider,
           tokensIn: usage.inputTokens,
           tokensOut: usage.outputTokens,
           triggerName: task.triggerName,
         });
+        return;
       }
       this.daemonBudgetTracker?.recordCost(costUsd, {
         model: usage.provider,

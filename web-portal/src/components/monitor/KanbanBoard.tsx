@@ -4,6 +4,7 @@ import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-
 import { CSS } from '@dnd-kit/utilities'
 import { cn } from '@/lib/utils'
 import { useMonitorStore, type MonitorTask } from '../../stores/monitor-store'
+import { normalizeLabel } from './monitor-utils'
 
 const COLUMNS = [
   { id: 'backlog', label: 'Backlog', filter: (task: MonitorTask) => task.status === 'pending' },
@@ -40,9 +41,6 @@ const TASK_CARD_TONES: Record<string, string> = {
   verifying: 'border-amber-400/20 bg-amber-400/10',
 }
 
-function formatLabel(value: string): string {
-  return value.replace(/_/g, ' ')
-}
 
 function TaskCard({ task }: { task: MonitorTask }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
@@ -67,11 +65,11 @@ function TaskCard({ task }: { task: MonitorTask }) {
       <div className="truncate text-sm font-medium text-text">{task.title}</div>
       <div className="mt-2 flex flex-wrap gap-1.5">
         <span className="rounded-full border border-white/10 bg-black/20 px-2 py-0.5 text-[10px] uppercase tracking-wide text-text-secondary">
-          {formatLabel(task.status)}
+          {normalizeLabel(task.status)}
         </span>
         {task.reviewStatus !== 'none' && (
           <span className="rounded-full border border-white/10 bg-black/20 px-2 py-0.5 text-[10px] uppercase tracking-wide text-text-secondary">
-            {formatLabel(task.reviewStatus)}
+            {normalizeLabel(task.reviewStatus)}
           </span>
         )}
       </div>
