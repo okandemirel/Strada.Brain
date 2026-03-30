@@ -467,7 +467,7 @@ interface ToolExecutionOptions {
   workingDirectoryOverride?: string;
   workspaceLease?: WorkspaceLease;
   /** Goal tree context for substep emission to workspace bus. */
-  goalContext?: { rootId: string; nodeId: string };
+  goalContext?: import("../tasks/types.js").GoalContext;
 }
 
 interface SelfManagedWriteReview {
@@ -2117,6 +2117,8 @@ export class Orchestrator {
     onUsage?: (usage: TaskUsageEvent) => void;
     parentMetricId?: string;
     workspaceLeaseRetained?: boolean;
+    supervisorMode?: BackgroundTaskOptions["supervisorMode"];
+    goalContext?: import("../tasks/types.js").GoalContext;
   }): Promise<WorkerRunResult> {
     const collector: WorkerRunCollector = {
       toolTrace: [],
@@ -2125,11 +2127,7 @@ export class Orchestrator {
     let visibleResponse = "";
     let thrownReason: string | undefined;
     try {
-      const supervisorMode = (
-        request as WorkerRunRequest & {
-          supervisorMode?: BackgroundTaskOptions["supervisorMode"];
-        }
-      ).supervisorMode ?? (request.mode === "background" ? "auto" : "off");
+      const supervisorMode = request.supervisorMode ?? (request.mode === "background" ? "auto" : "off");
       visibleResponse = await this.runBackgroundTask(
         request.prompt,
         {
@@ -2148,7 +2146,7 @@ export class Orchestrator {
           parentMetricId: request.parentMetricId,
           workspaceLease: request.workspaceLease,
           supervisorMode,
-          goalContext: (request as WorkerRunRequest & { goalContext?: { rootId: string; nodeId: string } }).goalContext,
+          goalContext: request.goalContext,
           __workerCollector: collector,
           __workerMode: request.mode,
         } as BackgroundTaskOptions & {
@@ -5368,41 +5366,25 @@ export class Orchestrator {
       const substepId = `${activeToolCall.name}-${substepOrder}`;
       substepOrder++;
 
-      // Emit substep "active" before execution
-      if (goalCtx && this.workspaceBus) {
-        this.workspaceBus.emit("monitor:substep", {
-          rootId: goalCtx.rootId,
-          nodeId: goalCtx.nodeId,
-          substep: {
-            id: substepId,
-            label: activeToolCall.name,
-            status: "active" as const,
-            order: substepOrder,
-          },
-        });
-      }
-
-      try {
-        const result = await tool.execute(activeToolCall.input, toolContext);
-        this.metrics?.recordToolCall(activeToolCall.name, Date.now() - toolStart, !result.isError);
-        // Reset ask_user block counter on successful non-ask_user tool execution (progress made)
-        if (!result.isError && activeToolCall.name !== "ask_user") {
-          this.askUserBlockCounts.delete(chatId);
-        }
-
-        // Emit substep "done" after successful execution
+      const emitSubstep = (status: "active" | "done" | "skipped"): void => {
         if (goalCtx && this.workspaceBus) {
           this.workspaceBus.emit("monitor:substep", {
             rootId: goalCtx.rootId,
             nodeId: goalCtx.nodeId,
-            substep: {
-              id: substepId,
-              label: activeToolCall.name,
-              status: (result.isError ? "skipped" : "done") as "done" | "skipped",
-              order: substepOrder,
-            },
+            substep: { id: substepId, label: activeToolCall.name, status, order: substepOrder },
           });
         }
+      };
+
+      emitSubstep("active");
+
+      try {
+        const result = await tool.execute(activeToolCall.input, toolContext);
+        this.metrics?.recordToolCall(activeToolCall.name, Date.now() - toolStart, !result.isError);
+        if (!result.isError && activeToolCall.name !== "ask_user") {
+          this.askUserBlockCounts.delete(chatId);
+        }
+        emitSubstep(result.isError ? "skipped" : "done");
 
         results.push({
           toolCallId: activeToolCall.id,
@@ -5418,15 +5400,7 @@ export class Orchestrator {
           tool: activeToolCall.name,
           error: errMsg,
         });
-
-        // Emit substep "skipped" on error
-        if (goalCtx && this.workspaceBus) {
-          this.workspaceBus.emit("monitor:substep", {
-            rootId: goalCtx.rootId,
-            nodeId: goalCtx.nodeId,
-            substep: { id: substepId, label: activeToolCall.name, status: "skipped" as const, order: substepOrder },
-          });
-        }
+        emitSubstep("skipped");
 
         results.push({
           toolCallId: activeToolCall.id,
@@ -5556,6 +5530,8 @@ export class Orchestrator {
    */
   cleanupSessions(maxAgeMs: number = 3_600_000): void {
     this.sessionManager.cleanupSessions(maxAgeMs);
+    // Prune stale ask_user block counters alongside expired sessions
+    this.askUserBlockCounts.clear();
   }
 
   private async maybeUpdateUserProfileFromPrompt(

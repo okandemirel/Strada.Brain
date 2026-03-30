@@ -31,6 +31,7 @@ export class TaskManager extends EventEmitter {
     private readonly goalStorage?: GoalStorage,
   ) {
     super();
+    this.setMaxListeners(20);
   }
 
   /**

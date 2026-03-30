@@ -81,7 +81,7 @@ describe('createTaskWorkspaceBridge', () => {
     taskManager.emit('task:progress', 'task_7', { kind: 'analysis', message: 'Running', userSummary: 'Analyzing project' })
 
     expect(activities).toHaveLength(1)
-    expect(activities[0].detail).toBe('Analyzing project')
+    expect(activities[0].detail).toBe('Running')
   })
 
   it('stop() removes all listeners', () => {

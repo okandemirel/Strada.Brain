@@ -52,10 +52,6 @@ import { isValidSkillName, installSkillFromRepo } from "../skills/skill-installe
 import type { UnifiedBudgetManager } from "../budget/unified-budget-manager.js";
 import type { WebSocketDashboardServer } from "./websocket-server.js";
 
-/** Minimal event bus interface for subscribing to budget events. */
-interface BudgetEventBusSubscribable {
-  on(event: string, listener: (payload: unknown) => void): void;
-}
 
 /**
  * Readiness check result for the /ready endpoint.
@@ -750,19 +746,6 @@ export class DashboardServer {
     if (this.wsServer) {
       this.wsServer.setGetBudgetSnapshot(() => mgr.getSnapshot());
     }
-  }
-
-  /**
-   * Subscribe to budget events from the given event bus and forward them to WS clients.
-   * Call after both UnifiedBudgetManager and WsServer are registered.
-   */
-  setBudgetEventBus(bus: BudgetEventBusSubscribable): void {
-    const forwardBudgetEvent = (type: string) => (payload: unknown) => {
-      this.wsServer?.broadcastAuthenticated({ type: type as import("./websocket-server.js").WSMessageType, payload });
-    };
-    bus.on("budget:warning", forwardBudgetEvent("notification"));
-    bus.on("budget:exceeded", forwardBudgetEvent("notification"));
-    bus.on("budget:config_updated", forwardBudgetEvent("notification"));
   }
 
   private getAutonomousDefaults(): { enabled: boolean; hours: number } {

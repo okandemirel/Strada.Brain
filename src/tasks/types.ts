@@ -167,7 +167,13 @@ export interface BackgroundTaskOptions {
   /** Internal: disable supervisor routing for nested worker runs. */
   supervisorMode?: "auto" | "off";
   /** Goal tree context for substep emission (rootId + nodeId). */
-  goalContext?: { rootId: string; nodeId: string };
+  goalContext?: GoalContext;
+}
+
+/** Minimal goal tree reference for substep/event context. */
+export interface GoalContext {
+  readonly rootId: string;
+  readonly nodeId: string;
 }
 
 export interface TaskUsageEvent {

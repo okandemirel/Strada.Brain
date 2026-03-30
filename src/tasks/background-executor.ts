@@ -688,7 +688,7 @@ export class BackgroundExecutor {
       workspaceLease?: Awaited<ReturnType<WorkspaceLeaseManager["acquireLease"]>>;
       workspaceLeaseRetained?: boolean;
       supervisorMode?: import("./types.js").BackgroundTaskOptions["supervisorMode"];
-      goalContext?: { rootId: string; nodeId: string };
+      goalContext?: import("./types.js").GoalContext;
     },
   ): Promise<{ output: string; workerResult?: WorkerRunResult }> {
     if (typeof (orchestrator as Orchestrator & { runWorkerTask?: unknown }).runWorkerTask === "function") {
@@ -712,7 +712,7 @@ export class BackgroundExecutor {
             workspaceLease?: Awaited<ReturnType<WorkspaceLeaseManager["acquireLease"]>>;
             workspaceLeaseRetained?: boolean;
             supervisorMode?: import("./types.js").BackgroundTaskOptions["supervisorMode"];
-            goalContext?: { rootId: string; nodeId: string };
+            goalContext?: import("./types.js").GoalContext;
           }) => Promise<WorkerRunResult>;
         }
       ).runWorkerTask({
@@ -788,7 +788,7 @@ export class BackgroundExecutor {
       workspaceLease?: Awaited<ReturnType<WorkspaceLeaseManager["acquireLease"]>>;
       workspaceSourceRoot?: string;
       supervisorMode?: import("./types.js").BackgroundTaskOptions["supervisorMode"];
-      goalContext?: { rootId: string; nodeId: string };
+      goalContext?: import("./types.js").GoalContext;
     },
   ): Promise<{ output: string; workerResult?: WorkerRunResult }> {
     const managedWorkspaceLease = params.workspaceLease ?? (this.workspaceLeaseManager

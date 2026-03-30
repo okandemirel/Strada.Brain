@@ -11,17 +11,8 @@ import type { EventEmitter } from 'node:events'
 import type { IEventBus } from '../core/event-bus.js'
 import type { WorkspaceEventMap } from './workspace-events.js'
 import type { TaskProgressUpdate } from '../tasks/types.js'
+import { getTaskProgressMessage } from '../tasks/progress-signals.js'
 import type { WorkspaceBridge } from './learning-workspace-bridge.js'
-
-function getTaskProgressMessage(message: TaskProgressUpdate): string {
-  if (typeof message === 'string') return message
-  if (typeof message === 'object' && message !== null) {
-    return (message as { userSummary?: string; message?: string }).userSummary
-      ?? (message as { message?: string }).message
-      ?? 'Processing'
-  }
-  return 'Processing'
-}
 
 export function createTaskWorkspaceBridge(
   taskManager: EventEmitter,
