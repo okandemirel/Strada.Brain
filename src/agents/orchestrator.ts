@@ -6007,15 +6007,8 @@ export class Orchestrator {
       depth,
       timestamp: Date.now(),
     });
-
-    // Workspace monitor: task update event for dashboard UI
-    if (this.workspaceBus) {
-      this.workspaceBus.emit("monitor:task_update", {
-        rootId: String(rootId),
-        nodeId: String(nodeId),
-        status: String(status),
-      });
-    }
+    // monitor:task_update is emitted by learning-workspace-bridge
+    // reacting to goal:status-changed — no direct emit here to avoid duplicates.
   }
 
   /** Emit a DAG lifecycle event so the web portal DAG/Kanban views populate */

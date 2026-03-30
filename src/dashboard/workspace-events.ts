@@ -186,6 +186,10 @@ export interface WorkspaceEventMap {
   'workspace:mode_suggest': { mode: string; reason: string }
   'workspace:notification': { title: string; message: string; severity: 'info' | 'warning' | 'error' }
 
+  // === Budget events ===
+  'budget:warning': { source: string; pct: number; usedUsd: number; limitUsd: number }
+  'budget:exceeded': { source: string; pct: number; usedUsd: number; limitUsd: number; isGlobal: boolean }
+
   // === Monitor substep events (enriched pipeline) ===
   'monitor:substep': {
     rootId: string

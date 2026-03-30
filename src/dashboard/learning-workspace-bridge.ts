@@ -50,6 +50,20 @@ export function createLearningWorkspaceBridge(
       }
       daemonBus.on('goal:started', onGoalStarted)
       listeners.push(() => daemonBus.off('goal:started', onGoalStarted))
+
+      // budget:warning → budget:warning on workspace bus
+      const onBudgetWarning = (event: DaemonEventMap['budget:warning']) => {
+        workspaceBus.emit('budget:warning', event)
+      }
+      daemonBus.on('budget:warning', onBudgetWarning)
+      listeners.push(() => daemonBus.off('budget:warning', onBudgetWarning))
+
+      // budget:exceeded → budget:exceeded on workspace bus
+      const onBudgetExceeded = (event: DaemonEventMap['budget:exceeded']) => {
+        workspaceBus.emit('budget:exceeded', event)
+      }
+      daemonBus.on('budget:exceeded', onBudgetExceeded)
+      listeners.push(() => daemonBus.off('budget:exceeded', onBudgetExceeded))
     },
 
     stop() {

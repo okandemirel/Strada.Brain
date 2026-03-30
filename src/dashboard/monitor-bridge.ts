@@ -49,6 +49,8 @@ export function createMonitorBridge(
         'supervisor:verify_done',
         'supervisor:complete',
         'supervisor:aborted',
+        'budget:warning',
+        'budget:exceeded',
       ] as const
 
       for (const event of FORWARDED_EVENTS) {

@@ -60,6 +60,13 @@ export function createTaskWorkspaceBridge(
           detail: 'Task completed',
           timestamp: Date.now(),
         })
+        // Fallback: ensure monitor task node transitions to completed
+        // even if monitorLifecycle.requestEnd was not called
+        workspaceBus.emit('monitor:task_update', {
+          rootId: taskId,
+          nodeId: taskId,
+          status: 'completed',
+        })
       }
       taskManager.on('task:completed', onCompleted)
       listeners.push(() => taskManager.off('task:completed', onCompleted))
@@ -71,6 +78,11 @@ export function createTaskWorkspaceBridge(
           detail: `Task failed: ${error.slice(0, 120)}`,
           timestamp: Date.now(),
         })
+        workspaceBus.emit('monitor:task_update', {
+          rootId: taskId,
+          nodeId: taskId,
+          status: 'failed',
+        })
       }
       taskManager.on('task:failed', onFailed)
       listeners.push(() => taskManager.off('task:failed', onFailed))
@@ -81,6 +93,11 @@ export function createTaskWorkspaceBridge(
           action: 'task_blocked',
           detail: `Task blocked: ${checkpoint.slice(0, 120)}`,
           timestamp: Date.now(),
+        })
+        workspaceBus.emit('monitor:task_update', {
+          rootId: taskId,
+          nodeId: taskId,
+          status: 'blocked',
         })
       }
       taskManager.on('task:blocked', onBlocked)

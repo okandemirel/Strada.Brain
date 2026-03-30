@@ -103,15 +103,24 @@ export function dispatchWorkspaceMessage(data: { type: string; [key: string]: un
       const nodeId = (payload.nodeId ?? payload.taskId) as string
       const substep = payload.substep as NonNullable<MonitorTask['substeps']>[number]
       if (nodeId && substep) {
-        const task = useMonitorStore.getState().tasks[nodeId]
-        if (task) {
-          const existing = task.substeps ?? []
-          const idx = existing.findIndex((s) => s.id === substep.id)
-          const merged = idx >= 0
-            ? [...existing.slice(0, idx), { ...existing[idx], ...substep }, ...existing.slice(idx + 1)]
-            : [...existing, substep]
-          useMonitorStore.getState().updateTask(nodeId, { substeps: merged })
+        const store = useMonitorStore.getState()
+        // Auto-create placeholder task if substep arrives before dag_init (race condition)
+        if (!store.tasks[nodeId]) {
+          store.addTask({
+            id: nodeId,
+            nodeId,
+            title: nodeId,
+            status: 'executing',
+            reviewStatus: 'none',
+          })
         }
+        const task = store.tasks[nodeId]!
+        const existing = task.substeps ?? []
+        const idx = existing.findIndex((s) => s.id === substep.id)
+        const merged = idx >= 0
+          ? [...existing.slice(0, idx), { ...existing[idx], ...substep }, ...existing.slice(idx + 1)]
+          : [...existing, substep]
+        store.updateTask(nodeId, { substeps: merged })
       }
       break
     }
