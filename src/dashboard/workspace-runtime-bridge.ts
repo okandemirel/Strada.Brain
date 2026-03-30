@@ -169,11 +169,56 @@ export function createWorkspaceRuntimeBridge(params: {
         );
       };
 
+      const handleMoveTask = (payload: unknown) => {
+        if (!goalStorage) return;
+        const action = extractActionPayload(payload);
+        if (!action.rootId || !action.nodeId) {
+          getLogger().debug("monitor:move_task dropped — missing rootId or nodeId", action);
+          return;
+        }
+
+        const bag = (payload && typeof payload === "object" ? payload : {}) as Record<string, unknown>;
+        const newStatus = typeof bag.newStatus === "string" ? bag.newStatus : undefined;
+        const toColumn = typeof bag.toColumn === "string" ? bag.toColumn : undefined;
+
+        if (!newStatus || !GOAL_NODE_STATUSES.has(newStatus as GoalStatus)) {
+          getLogger().debug("monitor:move_task dropped — missing or invalid newStatus", { newStatus });
+          return;
+        }
+
+        const tree = goalStorage.getTree(action.rootId as never);
+        const node = tree?.nodes.get(action.nodeId as never);
+        if (!tree || !node) {
+          getLogger().debug("monitor:move_task dropped — goal tree or node not found", {
+            rootId: action.rootId,
+            nodeId: action.nodeId,
+          });
+          return;
+        }
+
+        goalStorage.updateNodeStatus(
+          node.id,
+          newStatus as GoalStatus,
+          node.result,
+          node.error,
+          node.retryCount,
+          node.redecompositionCount,
+        );
+
+        emitNotification(
+          workspaceBus,
+          "info",
+          "Task moved",
+          `Task moved to ${toColumn ?? newStatus} by user.`,
+        );
+      };
+
       const bindings = [
         ["monitor:task_update", handleTaskUpdate],
         ["monitor:retry_task", handleRetry],
         ["monitor:resume_task", handleResume],
         ["monitor:cancel_task", handleCancel],
+        ["monitor:move_task", handleMoveTask],
       ] as const;
 
       for (const [event, handler] of bindings) {

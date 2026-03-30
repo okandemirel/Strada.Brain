@@ -767,7 +767,7 @@
   .mcp-dependency-value { font-size: 17px; font-weight: 700; color: #f3f5fb; letter-spacing: -0.02em; }
   .mcp-dependency-source { font-size: 12px; color: rgba(255, 255, 255, 0.52); }
   .mcp-dependency-meta-label { font-size: 10px; font-weight: 700; color: rgba(255, 255, 255, 0.36); text-transform: uppercase; letter-spacing: 0.08em; }
-  .mcp-dependency-path { font-size: 11px; color: rgba(255, 255, 255, 0.44); line-height: 1.45; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mcp-dependency-path { font-size: 11px; color: rgba(255, 255, 255, 0.44); line-height: 1.45; min-width: 0; overflow-wrap: break-word; word-break: break-word; }
   .mcp-dependency-path.mono { font-family: "SF Mono", Consolas, monospace; }
   .mcp-dependency-install { margin-top: auto; padding-top: 6px; }
   .mcp-dependency-install .mcp-card-action { display: block; width: 100%; padding: 8px 12px; font-size: 12px; border-radius: 8px; }
@@ -793,9 +793,8 @@
   .mcp-checklist { list-style: none; padding: 0; }
   .mcp-checklist li { font-size: 12px; color: rgba(255, 255, 255, 0.4); line-height: 1.6; padding-left: 16px; position: relative; text-align: left; }
   .mcp-checklist li::before { content: "\2713"; position: absolute; left: 0; color: var(--color-success); }
-  .mcp-target-grid { display: grid; grid-template-columns: 1fr; gap: 10px; margin-bottom: 12px; }
-  @media (min-width: 520px) { .mcp-target-grid { grid-template-columns: repeat(2, 1fr); } }
-  .mcp-target-card { display: flex; flex-direction: column; gap: 6px; padding: 14px; border-radius: 14px; border: 1.5px solid rgba(255, 255, 255, 0.08); background: rgba(255, 255, 255, 0.03); cursor: pointer; transition: all 0.2s; text-align: left; }
+  .mcp-target-grid { display: flex; gap: 10px; margin-bottom: 12px; overflow-x: auto; scroll-snap-type: x mandatory; padding-bottom: 4px; }
+  .mcp-target-card { display: flex; flex-direction: column; gap: 6px; padding: 14px; border-radius: 14px; border: 1.5px solid rgba(255, 255, 255, 0.08); background: rgba(255, 255, 255, 0.03); cursor: pointer; transition: all 0.2s; text-align: left; flex: 1 0 min(260px, 80%); scroll-snap-align: start; }
   .mcp-target-card:hover { border-color: rgba(255, 255, 255, 0.16); }
   .mcp-target-card.selected { border-color: var(--color-accent); background: var(--color-accent-glow); }
   .mcp-target-header { display: flex; justify-content: space-between; align-items: flex-start; }

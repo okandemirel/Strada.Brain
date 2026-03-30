@@ -82,7 +82,7 @@ describe('McpInstallPanel', () => {
     expect(html).toContain('/Users/test/GameProject/Packages/Submodules/Strada.MCP')
     expect(html).toContain('file:Submodules/Strada.MCP/unity-package/com.strada.mcp')
     expect(html).toContain('Live Unity console reading and error analysis')
-    expect(html).toContain('Install Strada.MCP')
+    expect(html).toContain('Install Strada.MCP to unlock')
   })
 
   it('shows install button for missing Core when onInstallDep is provided', () => {
@@ -118,7 +118,8 @@ describe('McpInstallPanel', () => {
 
     expect(html).toContain('Strada.Core')
     expect(html).toContain('Strada.Modules')
-    expect(html).toContain('Install Strada.MCP')
+    const installBtnMatches = html.match(/mcp-card-action/g)
+    expect(installBtnMatches?.length).toBe(3)
   })
 
   it('does not show dep install buttons when onInstallDep is not provided but MCP still has its own', () => {
@@ -149,7 +150,6 @@ describe('McpInstallPanel', () => {
       />,
     )
 
-    expect(html).toContain('Install Strada.MCP')
     const installBtnMatches = html.match(/mcp-card-action/g)
     expect(installBtnMatches?.length).toBe(1)
   })

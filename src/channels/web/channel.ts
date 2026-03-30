@@ -811,6 +811,7 @@ export class WebChannel
       case "monitor:retry_task":
       case "monitor:resume_task":
       case "monitor:skip_task":
+      case "monitor:move_task":
       case "monitor:cancel_task":
       case "monitor:approve_gate":
       case "monitor:reject_gate":

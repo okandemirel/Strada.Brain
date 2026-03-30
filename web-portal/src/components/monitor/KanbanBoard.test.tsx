@@ -5,21 +5,47 @@ import type { MonitorTask } from '../../stores/monitor-store'
 // Mock store state
 let mockTasks: Record<string, MonitorTask> = {}
 const mockSetSelectedTask = vi.fn()
+const mockUpdateTask = vi.fn()
 
 vi.mock('../../stores/monitor-store', () => ({
   useMonitorStore: (selector?: (s: Record<string, unknown>) => unknown) => {
     const state = {
       tasks: mockTasks,
       setSelectedTask: mockSetSelectedTask,
+      updateTask: mockUpdateTask,
+      activeRootId: 'root-1',
     }
     return selector ? selector(state) : state
   },
 }))
 
+const mockSendRawJSON = vi.fn()
+vi.mock('../../hooks/useWS', () => ({
+  useWS: () => ({ sendRawJSON: mockSendRawJSON }),
+}))
+
 // Mock @dnd-kit (no pointer events in jsdom)
+let capturedOnDragEnd: ((event: unknown) => void) | undefined
+
 vi.mock('@dnd-kit/core', () => ({
-  DndContext: ({ children }: { children?: React.ReactNode }) => <div data-testid="dnd-context">{children}</div>,
+  DndContext: ({ children, onDragEnd }: { children?: React.ReactNode; onDragEnd?: (e: unknown) => void }) => {
+    capturedOnDragEnd = onDragEnd
+    return <div data-testid="dnd-context">{children}</div>
+  },
   closestCenter: vi.fn(),
+  PointerSensor: vi.fn(),
+  useSensor: vi.fn(),
+  useSensors: vi.fn(),
+  useDroppable: ({ id }: { id: string }) => ({
+    setNodeRef: vi.fn(),
+    isOver: false,
+    active: null,
+    over: null,
+    node: { current: null },
+    rect: { current: null },
+    overRect: null,
+    droppableId: id,
+  }),
 }))
 
 vi.mock('@dnd-kit/sortable', () => ({
@@ -63,6 +89,9 @@ describe('KanbanBoard', () => {
   beforeEach(() => {
     mockTasks = {}
     mockSetSelectedTask.mockClear()
+    mockUpdateTask.mockClear()
+    mockSendRawJSON.mockClear()
+    capturedOnDragEnd = undefined
   })
 
   it('renders 5 column headers', () => {
@@ -81,7 +110,6 @@ describe('KanbanBoard', () => {
       t3: makeTask({ id: 't3', status: 'executing' }),
     }
     render(<KanbanBoard />)
-    // Backlog should have 2, Working should have 1 (shown in Badge)
     expect(screen.getByText('2')).toBeInTheDocument()
     expect(screen.getByText('1')).toBeInTheDocument()
   })
@@ -107,7 +135,6 @@ describe('KanbanBoard', () => {
       t1: makeTask({ id: 't1', title: 'Under Review', status: 'executing', reviewStatus: 'spec_review' }),
     }
     render(<KanbanBoard />)
-    // Task appears in both Working (status=executing) and Review (reviewStatus=spec_review) columns
     expect(screen.getAllByText('Under Review').length).toBeGreaterThanOrEqual(1)
   })
 
@@ -137,5 +164,83 @@ describe('KanbanBoard', () => {
     render(<KanbanBoard />)
     await user.click(screen.getByText('Click Me'))
     expect(mockSetSelectedTask).toHaveBeenCalledWith('t1')
+  })
+
+  it('cross-column drag updates task and sends WS message', () => {
+    mockTasks = {
+      t1: makeTask({ id: 't1', title: 'Drag Me', status: 'failed', nodeId: 'node-1', rootId: 'root-1' }),
+    }
+    render(<KanbanBoard />)
+    expect(capturedOnDragEnd).toBeDefined()
+
+    // Simulate dragging from Issues column to Backlog column
+    capturedOnDragEnd!({ active: { id: 't1' }, over: { id: 'backlog' } })
+
+    expect(mockUpdateTask).toHaveBeenCalledWith('t1', { status: 'pending', reviewStatus: 'none' })
+    expect(mockSendRawJSON).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'monitor:move_task',
+        taskId: 't1',
+        nodeId: 'node-1',
+        toColumn: 'backlog',
+        newStatus: 'pending',
+      }),
+    )
+  })
+
+  it('drag within same column does not trigger move', () => {
+    mockTasks = {
+      t1: makeTask({ id: 't1', status: 'pending' }),
+      t2: makeTask({ id: 't2', status: 'pending' }),
+    }
+    render(<KanbanBoard />)
+    expect(capturedOnDragEnd).toBeDefined()
+
+    // Drag t1 onto t2 — both in backlog, same column
+    capturedOnDragEnd!({ active: { id: 't1' }, over: { id: 't2' } })
+
+    expect(mockUpdateTask).not.toHaveBeenCalled()
+    expect(mockSendRawJSON).not.toHaveBeenCalled()
+  })
+
+  it('preserves skipped status when dragging to issues column', () => {
+    // Task with skipped status + quality_review puts it in "review" column via filter priority
+    mockTasks = {
+      t1: makeTask({ id: 't1', status: 'skipped', reviewStatus: 'quality_review', nodeId: 'n1', rootId: 'r1' }),
+    }
+    render(<KanbanBoard />)
+
+    // Drag from review column to issues — should preserve 'skipped', not coerce to 'failed'
+    capturedOnDragEnd!({ active: { id: 't1' }, over: { id: 'issues' } })
+
+    expect(mockUpdateTask).toHaveBeenCalledWith('t1', { status: 'skipped', reviewStatus: 'none' })
+  })
+
+  it('preserves quality_review status when dragging to review column', () => {
+    // Task in backlog with quality_review set from a prior review
+    mockTasks = {
+      t1: makeTask({ id: 't1', status: 'pending', reviewStatus: 'quality_review', nodeId: 'n1', rootId: 'r1' }),
+    }
+    render(<KanbanBoard />)
+
+    // Drag from backlog to review — should keep quality_review, not overwrite to spec_review
+    capturedOnDragEnd!({ active: { id: 't1' }, over: { id: 'review' } })
+
+    expect(mockUpdateTask).toHaveBeenCalledWith('t1', { status: 'executing', reviewStatus: 'quality_review' })
+  })
+
+  it('rolls back optimistic update when WS send fails', () => {
+    mockSendRawJSON.mockReturnValue(false)
+    mockTasks = {
+      t1: makeTask({ id: 't1', status: 'failed', nodeId: 'n1', rootId: 'r1' }),
+    }
+    render(<KanbanBoard />)
+
+    capturedOnDragEnd!({ active: { id: 't1' }, over: { id: 'backlog' } })
+
+    // First call: optimistic update
+    expect(mockUpdateTask).toHaveBeenNthCalledWith(1, 't1', { status: 'pending', reviewStatus: 'none' })
+    // Second call: rollback
+    expect(mockUpdateTask).toHaveBeenNthCalledWith(2, 't1', { status: 'failed', reviewStatus: 'none' })
   })
 })

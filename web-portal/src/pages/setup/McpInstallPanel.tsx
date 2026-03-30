@@ -202,7 +202,7 @@ export default function McpInstallPanel({
   mcpInstallPlan,
   depInstallStatus,
   depInstallError,
-  installButtonLabel = 'Install Strada.MCP',
+  installButtonLabel = 'Install',
   compact = false,
   onInstall,
   onInstallDep,
@@ -288,6 +288,7 @@ export default function McpInstallPanel({
           source={stradaDeps.coreSource}
           installStatus={depInstallStatus?.core}
           installError={depInstallError?.core}
+          installButtonLabel={installButtonLabel}
           onInstall={onInstallDep ? () => onInstallDep('core') : undefined}
         />
         <DependencyStatusCard
@@ -299,6 +300,7 @@ export default function McpInstallPanel({
           source={stradaDeps.modulesSource}
           installStatus={depInstallStatus?.modules}
           installError={depInstallError?.modules}
+          installButtonLabel={installButtonLabel}
           onInstall={onInstallDep ? () => onInstallDep('modules') : undefined}
         />
         <DependencyStatusCard

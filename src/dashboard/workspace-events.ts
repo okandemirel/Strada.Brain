@@ -111,6 +111,15 @@ export interface WorkspaceEventMap {
     nodeId?: string
     taskId?: string
   }
+  'monitor:move_task': {
+    rootId?: string
+    taskId?: string
+    nodeId?: string
+    fromColumn?: string
+    toColumn?: string
+    newStatus?: string
+    newReviewStatus?: string
+  }
 
   // === Canvas events (Phase 4 — typed payloads) ===
   'canvas:shapes_add': {

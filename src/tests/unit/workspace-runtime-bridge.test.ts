@@ -151,4 +151,59 @@ describe("createWorkspaceRuntimeBridge", () => {
 
     expect(taskManager.cancelGoalRoot).toHaveBeenCalledWith("root-1");
   });
+
+  it("routes move_task through goalStorage and emits notification", () => {
+    const received: Array<{ title: string; message: string; severity: string }> = [];
+    const goalStorage = {
+      getTree: vi.fn().mockReturnValue({
+        nodes: new Map([
+          ["node-1", {
+            id: "node-1",
+            result: "data",
+            error: undefined,
+            retryCount: 0,
+            redecompositionCount: 0,
+          }],
+        ]),
+      }),
+      updateNodeStatus: vi.fn(),
+    } as any;
+    const taskManager = {
+      retryGoalRoot: vi.fn(),
+      retryTask: vi.fn(),
+      resumeGoalRoot: vi.fn(),
+      resumeTask: vi.fn(),
+      cancelGoalRoot: vi.fn(),
+      cancel: vi.fn(),
+    } as any;
+
+    workspaceBus.on("workspace:notification", (payload) => {
+      received.push(payload as { title: string; message: string; severity: string });
+    });
+
+    const bridge = createWorkspaceRuntimeBridge({ workspaceBus, goalStorage, taskManager });
+    bridge.start();
+
+    workspaceBus.emit("monitor:move_task", {
+      rootId: "root-1",
+      nodeId: "node-1",
+      taskId: "task-1",
+      fromColumn: "issues",
+      toColumn: "backlog",
+      newStatus: "pending",
+      newReviewStatus: "none",
+    });
+
+    expect(goalStorage.updateNodeStatus).toHaveBeenCalledWith(
+      "node-1",
+      "pending",
+      "data",
+      undefined,
+      0,
+      0,
+    );
+    expect(received).toEqual(expect.arrayContaining([
+      expect.objectContaining({ title: "Task moved", severity: "info" }),
+    ]));
+  });
 });
