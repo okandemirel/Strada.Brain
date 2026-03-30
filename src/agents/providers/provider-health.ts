@@ -93,8 +93,7 @@ export class ProviderHealthRegistry {
    */
   recordFailure(providerName: string, error: string): void {
     const normalized = providerName.trim().toLowerCase();
-    const existing = this.entries.get(normalized);
-    const failures = (existing?.consecutiveFailures ?? 0) + 1;
+    const failures = this.nextFailureCount(normalized);
     const now = Date.now();
 
     let status: ProviderHealthStatus = "healthy";
@@ -115,6 +114,33 @@ export class ProviderHealthRegistry {
       lastError: error.slice(0, 200),
       cooldownUntil,
     });
+  }
+
+  /**
+   * Record a quota/billing exhaustion — sets a long cooldown (8 hours)
+   * so the provider is not retried until the quota resets.
+   */
+  recordQuotaExhausted(providerName: string, error: string): void {
+    const normalized = providerName.trim().toLowerCase();
+    const existing = this.entries.get(normalized);
+    const now = Date.now();
+    const QUOTA_COOLDOWN_MS = 8 * 60 * 60 * 1000; // 8 hours
+
+    // Don't extend an existing active cooldown — keep the original expiry
+    const existingCooldown = existing?.cooldownUntil ?? 0;
+    const cooldownUntil = existingCooldown > now ? existingCooldown : now + QUOTA_COOLDOWN_MS;
+
+    this.entries.set(normalized, {
+      status: "down",
+      consecutiveFailures: this.nextFailureCount(normalized),
+      lastFailureAt: now,
+      lastError: error.slice(0, 200),
+      cooldownUntil,
+    });
+  }
+
+  private nextFailureCount(normalizedName: string): number {
+    return (this.entries.get(normalizedName)?.consecutiveFailures ?? 0) + 1;
   }
 
   /**

@@ -118,4 +118,45 @@ describe("FallbackChainProvider", () => {
 
     await expect(chain.listModels()).resolves.toEqual(["kimi-for-coding"]);
   });
+
+  it("applies long cooldown for 403 quota errors and skips the provider on subsequent calls", async () => {
+    const p1 = { ...createMockProvider(), name: "kimi" };
+    (p1.chat as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error("Kimi API error 403: You've reached your usage limit for this billing cycle")
+    );
+    const p2 = { ...createMockProvider({ text: "openai-ok" }), name: "openai" };
+
+    const chain = new FallbackChainProvider([p1, p2]);
+
+    // First call: Kimi fails with quota 403, falls back to OpenAI
+    const result1 = await chain.chat("sys", [], []);
+    expect(result1.text).toBe("openai-ok");
+    expect(p1.chat).toHaveBeenCalledTimes(1);
+
+    // Verify Kimi is now marked as down with quota cooldown
+    const health = ProviderHealthRegistry.getInstance();
+    const entry = health.getEntry("kimi");
+    expect(entry?.status).toBe("down");
+    expect(entry!.cooldownUntil).toBeGreaterThan(Date.now() + 7 * 60 * 60 * 1000); // at least 7h remaining
+
+    // Second call: Kimi should be SKIPPED entirely (no attempt)
+    (p1.chat as ReturnType<typeof vi.fn>).mockClear();
+    const result2 = await chain.chat("sys", [], []);
+    expect(result2.text).toBe("openai-ok");
+    expect(p1.chat).not.toHaveBeenCalled(); // Kimi was skipped
+  });
+
+  it("does not extend an existing quota cooldown on repeated failures", async () => {
+    const health = ProviderHealthRegistry.getInstance();
+
+    // Simulate first quota exhaustion
+    health.recordQuotaExhausted("kimi", "403 quota exceeded");
+    const firstCooldown = health.getEntry("kimi")!.cooldownUntil;
+
+    // Simulate second quota exhaustion (should NOT extend the cooldown)
+    health.recordQuotaExhausted("kimi", "403 quota exceeded again");
+    const secondCooldown = health.getEntry("kimi")!.cooldownUntil;
+
+    expect(secondCooldown).toBe(firstCooldown);
+  });
 });

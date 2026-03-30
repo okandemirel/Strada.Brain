@@ -41,6 +41,7 @@ vi.mock('lucide-react', () => ({
   Play: () => <svg data-testid="play-icon" />,
   RotateCcw: () => <svg data-testid="retry-icon" />,
   Square: () => <svg data-testid="cancel-icon" />,
+  X: () => <svg data-testid="x-icon" />,
 }))
 
 import MonitorPanel from './MonitorPanel'
@@ -63,11 +64,6 @@ describe('MonitorPanel', () => {
     render(<MonitorPanel />)
     expect(screen.getByText('DAG')).toBeInTheDocument()
     expect(screen.getByText('Kanban')).toBeInTheDocument()
-  })
-
-  it('renders Task Detail section header', () => {
-    render(<MonitorPanel />)
-    expect(screen.getByText('Task Detail')).toBeInTheDocument()
   })
 
   it('renders Activity section header', () => {
@@ -118,11 +114,6 @@ describe('MonitorPanel', () => {
     })
   })
 
-  it('shows task detail placeholder when no task selected', () => {
-    render(<MonitorPanel />)
-    expect(screen.getByText('Select a task to see details.')).toBeInTheDocument()
-  })
-
   it('can collapse the summary panel', async () => {
     const { default: userEvent } = await import('@testing-library/user-event')
     const user = userEvent.setup()
@@ -137,7 +128,7 @@ describe('MonitorPanel', () => {
   it('renders resize handles as separators', () => {
     render(<MonitorPanel />)
     const separators = screen.getAllByRole('separator')
-    // 4 resize handles: overview/main, sidebar, supervisor/detail, detail/activity
-    expect(separators.length).toBe(4)
+    // 3 resize handles: overview/main, sidebar, supervisor/activity
+    expect(separators.length).toBe(3)
   })
 })

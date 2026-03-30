@@ -2,6 +2,7 @@ import type { GoalStatus } from "../goals/types.js";
 import type { GoalStorage } from "../goals/goal-storage.js";
 import type { TaskManager } from "../tasks/task-manager.js";
 import type { WorkspaceBus } from "./workspace-bus.js";
+import { getLogger } from "../utils/logger.js";
 
 const GOAL_NODE_STATUSES = new Set<GoalStatus>([
   "pending",
@@ -72,6 +73,11 @@ export function createWorkspaceRuntimeBridge(params: {
         const tree = goalStorage.getTree(bag.rootId as never);
         const node = tree?.nodes.get(bag.nodeId as never);
         if (!tree || !node) {
+          getLogger().debug("monitor:task_update dropped — goal tree or node not found in storage", {
+            rootId: bag.rootId,
+            nodeId: bag.nodeId,
+            treeFound: !!tree,
+          });
           return;
         }
 

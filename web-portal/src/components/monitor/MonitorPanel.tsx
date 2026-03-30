@@ -5,7 +5,7 @@ import InterventionToolbar from './InterventionToolbar'
 import MonitorOverview from './MonitorOverview'
 import ResizeHandle from './ResizeHandle'
 import SupervisorPanel from './SupervisorPanel'
-import TaskDetailPanel from './TaskDetailPanel'
+import TaskInspectModal from './TaskInspectModal'
 
 const DAGView = lazy(() => import('./DAGView'))
 const KanbanBoard = lazy(() => import('./KanbanBoard'))
@@ -15,7 +15,6 @@ type ViewMode = 'dag' | 'kanban'
 const STORAGE_KEY_SIDEBAR = 'strada-monitor-sidebar-width'
 const STORAGE_KEY_OVERVIEW = 'strada-monitor-overview-height'
 const STORAGE_KEY_OVERVIEW_COLLAPSED = 'strada-monitor-overview-collapsed'
-const STORAGE_KEY_DETAIL = 'strada-monitor-detail-height'
 const STORAGE_KEY_SUPERVISOR = 'strada-monitor-supervisor-height'
 
 const SIDEBAR_DEFAULT = 320
@@ -25,10 +24,6 @@ const SIDEBAR_MAX = 600
 const OVERVIEW_DEFAULT = 188
 const OVERVIEW_MIN = 104
 const OVERVIEW_MAX = 360
-
-const DETAIL_DEFAULT = 220
-const DETAIL_MIN = 80
-const DETAIL_MAX = 500
 
 const SUPERVISOR_DEFAULT = 160
 const SUPERVISOR_MIN = 60
@@ -107,15 +102,9 @@ export default function MonitorPanel() {
   const [supervisorHeight, setSupervisorHeight] = useState(() =>
     readStored(STORAGE_KEY_SUPERVISOR, SUPERVISOR_DEFAULT),
   )
-  const [detailHeight, setDetailHeight] = useState(() =>
-    readStored(STORAGE_KEY_DETAIL, DETAIL_DEFAULT),
-  )
-
   const sidebarRef = useRef(sidebarWidth)
   const overviewRef = useRef(overviewHeight)
   const supervisorRef = useRef(supervisorHeight)
-  const detailRef = useRef(detailHeight)
-
   const onSidebarResize = useCallback((delta: number) => {
     setSidebarWidth((prev) => {
       const next = clamp(prev - delta, SIDEBAR_MIN, SIDEBAR_MAX)
@@ -158,18 +147,6 @@ export default function MonitorPanel() {
 
   const onSupervisorResizeEnd = useCallback(() => {
     writeStored(STORAGE_KEY_SUPERVISOR, supervisorRef.current)
-  }, [])
-
-  const onDetailResize = useCallback((delta: number) => {
-    setDetailHeight((prev) => {
-      const next = clamp(prev + delta, DETAIL_MIN, DETAIL_MAX)
-      detailRef.current = next
-      return next
-    })
-  }, [])
-
-  const onDetailResizeEnd = useCallback(() => {
-    writeStored(STORAGE_KEY_DETAIL, detailRef.current)
   }, [])
 
   return (
@@ -270,20 +247,6 @@ export default function MonitorPanel() {
           className="border-y border-border"
         />
 
-        <div className="flex shrink-0 flex-col overflow-y-auto" style={{ height: detailHeight }}>
-          <div className="shrink-0 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-text-secondary">
-            Task Detail
-          </div>
-          <TaskDetailPanel />
-        </div>
-
-        <ResizeHandle
-          direction="vertical"
-          onResize={onDetailResize}
-          onResizeEnd={onDetailResizeEnd}
-          className="border-y border-border"
-        />
-
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
           <div className="shrink-0 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-text-secondary">
             Activity
@@ -294,6 +257,7 @@ export default function MonitorPanel() {
         </div>
       </div>
 
+      <TaskInspectModal />
       <GateDialog />
     </div>
   )

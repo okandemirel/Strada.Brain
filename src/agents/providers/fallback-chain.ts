@@ -196,7 +196,13 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);
         lastError = errorMsg;
-        health.recordFailure(provider.name, errorMsg);
+
+        // Quota/billing errors get a long cooldown so the provider is skipped for hours
+        if (/\b403\b/.test(errorMsg) && QUOTA_LIMIT_RE.test(errorMsg)) {
+          health.recordQuotaExhausted(provider.name, errorMsg);
+        } else {
+          health.recordFailure(provider.name, errorMsg);
+        }
 
         if (isNonRetryableRequestError(error)) {
           logger.error(`Non-retryable provider error (${label}), not trying fallbacks`, {

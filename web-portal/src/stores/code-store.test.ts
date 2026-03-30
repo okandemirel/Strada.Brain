@@ -120,6 +120,31 @@ describe('useCodeStore — touchedFiles', () => {
   })
 })
 
+describe('useCodeStore — closeFile auto-accepts diff', () => {
+  beforeEach(() => useCodeStore.getState().reset())
+
+  it('closing a diff tab auto-resolves to modified content', () => {
+    useCodeStore.getState().openFile({
+      path: 'src/test.ts',
+      content: 'original code',
+      language: 'typescript',
+      isDiff: true,
+      originalContent: 'original code',
+      modifiedContent: 'modified code',
+    })
+    useCodeStore.getState().openFile({ path: 'other.ts', content: '', language: 'typescript' })
+
+    useCodeStore.getState().closeFile('src/test.ts')
+    expect(useCodeStore.getState().tabs.find((t) => t.path === 'src/test.ts')).toBeUndefined()
+  })
+
+  it('closing a non-diff tab works normally', () => {
+    useCodeStore.getState().openFile({ path: 'a.ts', content: 'hello', language: 'typescript' })
+    useCodeStore.getState().closeFile('a.ts')
+    expect(useCodeStore.getState().tabs).toHaveLength(0)
+  })
+})
+
 describe('useCodeStore — resolveDiff', () => {
   beforeEach(() => useCodeStore.getState().reset())
 

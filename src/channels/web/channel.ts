@@ -21,6 +21,7 @@ import { isAllowedOrigin } from "../../security/origin-validation.js";
 import { validateMediaAttachment, validateMagicBytes, normalizeMimeType } from "../../utils/media-processor.js";
 import { SETUP_QUERY_PARAM, type PostSetupBootstrapContext } from "../../common/setup-contract.js";
 import { WebIdentityStore, type WebIdentity } from "./web-identity-store.js";
+import { getLogger } from "../../utils/logger.js";
 import type {
   IChannelAdapter,
   IChannelStreaming,
@@ -834,7 +835,12 @@ export class WebChannel
 
   private sendToClient(chatId: string, data: Record<string, unknown>): void {
     const client = this.clients.get(chatId);
-    if (!client || client.ws.readyState !== 1) return;
+    if (!client || client.ws.readyState !== 1) {
+      if (!client) {
+        getLogger().debug("sendToClient: no active WS client for chatId, response may be lost", { chatId, type: data.type });
+      }
+      return;
+    }
     this.sendJson(client.ws, data);
   }
 

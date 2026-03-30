@@ -106,6 +106,7 @@ import { summarizeTree } from "../goals/goal-renderer.js";
 import { formatGoalPlanMarkdown } from "../goals/goal-feedback.js";
 import { formatResumePrompt, prepareTreeForResume } from "../goals/goal-resume.js";
 import type { GoalTree, GoalNodeId, GoalStatus } from "../goals/types.js";
+import type { GoalStorage } from "../goals/goal-storage.js";
 import type { WorkspaceBus } from "../dashboard/workspace-bus.js";
 import { goalTreeToDagPayload } from "../dashboard/workspace-events.js";
 import type { MonitorLifecycle } from '../dashboard/monitor-lifecycle.js';
@@ -631,6 +632,8 @@ export class Orchestrator {
   private readonly goalDecomposer: GoalDecomposer | null;
   private readonly reRetrievalConfig?: ReRetrievalConfig;
   private readonly embeddingProvider?: IEmbeddingProvider;
+  /** Goal storage for persisting goal trees (enables DAG/Kanban UI updates) */
+  private goalStorage: GoalStorage | null = null;
   /** Active goal trees per session for proactive/reactive decomposition */
   private readonly activeGoalTrees = new Map<string, GoalTree>();
   /** Interrupted goal trees detected on startup, pending user resume/discard decision */
@@ -1803,6 +1806,10 @@ export class Orchestrator {
 
   setMonitorLifecycle(lifecycle: MonitorLifecycle): void {
     this.monitorLifecycle = lifecycle;
+  }
+
+  setGoalStorage(storage: GoalStorage): void {
+    this.goalStorage = storage;
   }
 
   private buildWorkerToolDefinitions(
@@ -3528,8 +3535,14 @@ export class Orchestrator {
         attachments,
         taskRunId: this.getTaskExecutionContext()?.taskRunId,
         onUsage: this.onUsage,
-        onGoalDecomposed: (goalTree) =>
-          this.monitorLifecycle?.goalDecomposed(conversationScope, goalTree),
+        onGoalDecomposed: (goalTree) => {
+          this.monitorLifecycle?.goalDecomposed(conversationScope, goalTree);
+          try {
+            this.goalStorage?.upsertTree(goalTree, "executing");
+          } catch {
+            // Goal persistence is best-effort; DAG display still works via WS events
+          }
+        },
         reportUpdate: async (markdown) => {
           await this.sessionManager.sendVisibleAssistantMarkdown(chatId, session, markdown);
         },
@@ -4857,23 +4870,29 @@ export class Orchestrator {
     // Run all review stages in parallel to reduce wall-clock time (3 sequential → 1 parallel batch)
     const stagePromises = stages.map(async (stage) => {
       const assignment = this.resolveCompletionReviewStageAssignment(stage, params);
+      const stageRequest = buildCompletionReviewStageRequest({
+        stage,
+        prompt: params.prompt,
+        draft: params.draft,
+        state: params.state,
+        evidence: params.plan.evidence,
+        verifierChecks,
+        buildToolsAvailable: params.plan.buildToolsAvailable,
+      });
+      const stageMessages: ConversationMessage[] = [{ role: "user", content: stageRequest }];
+
+      const parseOrFallback = (text: string): CompletionReviewStageResult =>
+        parseCompletionReviewStageResult(text, stage)
+        ?? this.buildCompletionReviewStageFallback(
+          stage,
+          `${stage} review returned an invalid response.`,
+          `Rerun the ${stage} review and continue conservatively until it is clean.`,
+        );
+
       try {
         const reviewResponse = await assignment.provider.chat(
           `${this.systemPrompt}\n\n${buildCompletionReviewStageSystemPrompt(stage)}${this.buildSupervisorRolePrompt(params.strategy, assignment)}`,
-          [
-            {
-              role: "user",
-              content: buildCompletionReviewStageRequest({
-                stage,
-                prompt: params.prompt,
-                draft: params.draft,
-                state: params.state,
-                evidence: params.plan.evidence,
-                verifierChecks,
-                buildToolsAvailable: params.plan.buildToolsAvailable,
-              }),
-            },
-          ],
+          stageMessages,
           [],
         );
         this.recordExecutionTrace({
@@ -4887,26 +4906,37 @@ export class Orchestrator {
         });
         this.recordAuxiliaryUsage(assignment.providerName, reviewResponse.usage, params.usageHandler);
         recordUsage(reviewResponse.usage);
-        return (
-          parseCompletionReviewStageResult(reviewResponse.text, stage)
-          ?? this.buildCompletionReviewStageFallback(
-            stage,
-            `${stage} review returned an invalid response.`,
-            `Rerun the ${stage} review and continue conservatively until it is clean.`,
-          )
-        );
+        return parseOrFallback(reviewResponse.text);
       } catch (error) {
-        getLogger().warn("Completion review stage failed", {
+        getLogger().warn("Completion review stage failed, trying main provider chain", {
           chatId: params.chatId,
           stage,
           provider: assignment.providerName,
           error: error instanceof Error ? error.message : String(error),
         });
-        return this.buildCompletionReviewStageFallback(
-          stage,
-          `${stage} review failed before Strada could validate completion.`,
-          `Investigate the ${stage} review failure, rerun that review, and continue conservatively.`,
-        );
+        // Retry with the main provider chain (FallbackChainProvider) before giving up
+        try {
+          const chainProvider = this.providerManager.getProvider(params.identityKey);
+          const retryResponse = await chainProvider.chat(
+            `${this.systemPrompt}\n\n${buildCompletionReviewStageSystemPrompt(stage)}`,
+            stageMessages,
+            [],
+          );
+          this.recordAuxiliaryUsage(chainProvider.name, retryResponse.usage, params.usageHandler);
+          recordUsage(retryResponse.usage);
+          return parseOrFallback(retryResponse.text);
+        } catch (retryError) {
+          getLogger().debug("Completion review stage retry also failed", {
+            chatId: params.chatId,
+            stage,
+            error: retryError instanceof Error ? retryError.message : String(retryError),
+          });
+          return this.buildCompletionReviewStageFallback(
+            stage,
+            `${stage} review failed before Strada could validate completion.`,
+            `Investigate the ${stage} review failure, rerun that review, and continue conservatively.`,
+          );
+        }
       }
     });
     stageResults.push(...await Promise.all(stagePromises));
@@ -4939,13 +4969,30 @@ export class Orchestrator {
         },
       ],
       [],
-    ).catch((error) => {
-      getLogger().warn("Completion review synthesis failed", {
+    ).catch(async (error) => {
+      getLogger().warn("Completion review synthesis failed, trying main provider chain", {
         chatId: params.chatId,
         provider: reviewer.providerName,
         error: error instanceof Error ? error.message : String(error),
       });
-      return null;
+      // Retry with the main provider chain before giving up
+      try {
+        const chainProvider = this.providerManager.getProvider(params.identityKey);
+        const retryResponse = await chainProvider.chat(
+          `${this.systemPrompt}\n\n${COMPLETION_REVIEW_SYNTHESIS_SYSTEM_PROMPT}`,
+          [{ role: "user", content: synthesisRequest }],
+          [],
+        );
+        this.recordAuxiliaryUsage(chainProvider.name, retryResponse.usage, params.usageHandler);
+        recordUsage(retryResponse.usage);
+        return retryResponse;
+      } catch (retryError) {
+        getLogger().debug("Completion review synthesis retry also failed", {
+          chatId: params.chatId,
+          error: retryError instanceof Error ? retryError.message : String(retryError),
+        });
+        return null;
+      }
     });
     if (!reviewResponse) {
       return {

@@ -49,6 +49,7 @@ import {
 } from "./bootstrap-stages.js";
 import type * as winston from "winston";
 import { resolveRuntimeUnityProjectPath } from "./runtime-unity-project.js";
+import type { GoalStorage } from "../goals/goal-storage.js";
 
 // Learning system imports
 import {
@@ -252,7 +253,7 @@ export function initializeWorkspaceRuntime(params: {
   learningEventBus?: IEventBus<LearningEventMap>;
   daemonEventBus?: IEventBus<DaemonEventMap>;
   channel: { broadcastRaw?: (msg: string) => void };
-  orchestrator: Pick<Orchestrator, "setWorkspaceBus" | "setMonitorLifecycle">;
+  orchestrator: Pick<Orchestrator, "setWorkspaceBus" | "setMonitorLifecycle" | "setGoalStorage">;
   backgroundExecutor: Pick<BackgroundExecutor, "setWorkspaceBus" | "setMonitorLifecycle" | "runWorkerEnvelope">;
   supervisorBrain?: {
     setExecuteNode: (
@@ -267,6 +268,7 @@ export function initializeWorkspaceRuntime(params: {
   stoppableServers?: Array<{ stop?: () => void }>;
   channelType?: string;
   orchestratorForSupervisorBridge: Orchestrator;
+  goalStorage?: GoalStorage;
 }): WorkspaceBus {
   const workspaceBus = createWorkspaceBus();
 
@@ -293,6 +295,9 @@ export function initializeWorkspaceRuntime(params: {
   params.orchestrator.setWorkspaceBus(workspaceBus);
   const monitorLifecycle = createMonitorLifecycle(workspaceBus);
   params.orchestrator.setMonitorLifecycle(monitorLifecycle);
+  if (params.goalStorage) {
+    params.orchestrator.setGoalStorage(params.goalStorage);
+  }
   params.backgroundExecutor.setWorkspaceBus(workspaceBus);
   params.backgroundExecutor.setMonitorLifecycle(monitorLifecycle);
   params.agentManager?.setWorkspaceRuntime?.(workspaceBus, monitorLifecycle);
@@ -1088,6 +1093,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     stoppableServers,
     channelType,
     orchestratorForSupervisorBridge: orchestrator,
+    goalStorage,
   });
 
   const workspaceRuntimeBridge = createWorkspaceRuntimeBridge({
