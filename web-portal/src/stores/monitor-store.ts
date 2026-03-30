@@ -84,6 +84,7 @@ interface MonitorState {
 }
 
 const MAX_ACTIVITIES = 200
+const MAX_TASKS = 500
 
 const initialState = {
   tasks: {} as Record<string, MonitorTask>,
@@ -102,9 +103,11 @@ export const useMonitorStore = create<MonitorState>()((set) => ({
   updateTask: (id, updates) =>
     set((s) => {
       // Auto-create a placeholder task when an update arrives before dag_init
-      // (e.g. WS reconnect, late-arriving nodes, or race conditions)
+      // (e.g. WS reconnect, late-arriving nodes, or race conditions).
+      // DAG sync is intentionally skipped — the DAG is not yet initialized.
+      // When dag_init arrives later, setDAG will populate it.
       if (!s.tasks[id]) {
-        if (updates.status || updates.title) {
+        if ((updates.status || updates.title) && Object.keys(s.tasks).length < MAX_TASKS) {
           const created: MonitorTask = {
             id,
             nodeId: updates.nodeId ?? id,

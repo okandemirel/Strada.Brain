@@ -3,6 +3,7 @@ dist/
 web-portal/dist/
 .env
 *.log
+*.tsbuildinfo
 .DS_Store
 *.sqlite
 *.sqlite-journal

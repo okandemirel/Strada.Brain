@@ -88,17 +88,17 @@ export function dispatchWorkspaceMessage(data: { type: string; [key: string]: un
 
     case 'monitor:task_update': {
       const src = (payload.updates ?? payload) as Bag
-      const updates: Partial<MonitorTask> = {
-        ...((payload.rootId as string | undefined) ? { rootId: payload.rootId as string } : {}),
-        ...(typeof src.status === 'string' ? { status: src.status } : {}),
-        ...(typeof src.reviewStatus === 'string' ? { reviewStatus: src.reviewStatus } : {}),
-        ...(typeof src.agentId === 'string' ? { agentId: src.agentId } : {}),
-        ...(typeof src.phase === 'string' ? { phase: src.phase as MonitorTask['phase'] } : {}),
-        ...(typeof src.startedAt === 'number' ? { startedAt: src.startedAt } : {}),
-        ...(typeof src.completedAt === 'number' ? { completedAt: src.completedAt } : {}),
-        ...(typeof src.elapsed === 'number' ? { elapsed: src.elapsed } : {}),
-        ...(typeof src.error === 'string' ? { narrative: src.error } : {}),
-      }
+      const updates: Partial<MonitorTask> = {}
+      if (typeof payload.rootId === 'string') updates.rootId = payload.rootId
+      if (typeof src.status === 'string') updates.status = src.status
+      if (typeof src.reviewStatus === 'string') updates.reviewStatus = src.reviewStatus
+      if (typeof src.agentId === 'string') updates.agentId = src.agentId
+      if (typeof src.phase === 'string') updates.phase = src.phase as MonitorTask['phase']
+      if (typeof src.startedAt === 'number') updates.startedAt = src.startedAt
+      if (typeof src.completedAt === 'number') updates.completedAt = src.completedAt
+      if (typeof src.elapsed === 'number') updates.elapsed = src.elapsed
+      if (typeof src.error === 'string') updates.narrative = src.error
+      if (src.progress && typeof src.progress === 'object') updates.progress = src.progress as MonitorTask['progress']
       useMonitorStore.getState().updateTask((payload.taskId ?? payload.nodeId) as string, updates)
       break
     }
