@@ -746,15 +746,13 @@ describe("DashboardServer", () => {
     expect(autonomousRes.status).toBe(200);
     expect(isAutonomousMode).toHaveBeenCalledWith("thread-7");
 
-    const setAutonomousRes = await fetch(`http://localhost:${addr.port}/api/user/autonomous`, {
+    const setAutonomousRes = await fetch(`http://localhost:${addr.port}/api/user/autonomous?chatId=shared-chat&conversationId=thread-7`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Origin: `http://localhost:${addr.port}`,
       },
       body: JSON.stringify({
-        chatId: "shared-chat",
-        conversationId: "thread-7",
         enabled: true,
         hours: 2,
       }),

@@ -1,4 +1,5 @@
 import { useLearningHealth, useLearningDecisions } from '../../hooks/use-api'
+import { PageError } from '../../components/ui/page-error'
 
 function formatTimestamp(ts: number): string {
   return new Date(ts).toLocaleString(undefined, {
@@ -16,16 +17,20 @@ const OUTCOME_COLORS: Record<string, string> = {
 }
 
 export default function LearningSection() {
-  const { data, isLoading } = useLearningHealth()
+  const { data, isLoading, error } = useLearningHealth()
   const { data: decisionsData } = useLearningDecisions(20)
 
-  if (isLoading || !data) {
+  if (isLoading) {
     return (
       <div>
         <h2 className="text-lg font-semibold text-text mb-1">Learning</h2>
         <p className="text-sm text-text-tertiary">Loading...</p>
       </div>
     )
+  }
+
+  if (error || !data) {
+    return <PageError title="Learning Unavailable" message={error instanceof Error ? error.message : 'Learning pipeline could not be initialized.'} />
   }
 
   const aggregates = data.aggregates

@@ -762,6 +762,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
         approvalQueue: approvalQueueInstance,
         heartbeatLoop: activeHeartbeatLoop,
         webhookTriggers,
+        unifiedBudgetManager,
       } = initializeDaemonHeartbeatStage({
         config,
         logger,
@@ -887,6 +888,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
         supervisorBrain,
       });
       agentManager = multiAgentStage.agentManager;
+      agentManager.setUnifiedBudgetManager(unifiedBudgetManager);
       agentBudgetTrackerOuter = multiAgentStage.agentBudgetTracker;
       delegationManager = multiAgentStage.delegationManager;
 
@@ -914,8 +916,10 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
         daemonContext: daemonContext!,
       });
 
-      // Wire daemon context into dashboard (Plan 05 + Plan 18-03 enrichment)
       if (dashboard) {
+        dashboard.setUnifiedBudgetManager(unifiedBudgetManager);
+
+        // Wire daemon context into dashboard (Plan 05 + Plan 18-03 enrichment)
         dashboard.setDaemonContext({
           heartbeatLoop,
           registry: triggerRegistry,

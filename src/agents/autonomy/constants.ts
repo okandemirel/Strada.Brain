@@ -14,6 +14,7 @@ export { WRITE_OPERATIONS } from "../../common/constants.js";
 /** Tools that mutate source files (subset of WRITE_OPERATIONS). */
 export const MUTATION_TOOLS: ReadonlySet<string> = new Set([
   "file_write", "file_edit", "file_delete", "file_rename",
+  "shell_exec",
   "strada_create_module", "strada_create_component",
   "strada_create_mediator", "strada_create_system",
 ]);

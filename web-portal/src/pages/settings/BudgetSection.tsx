@@ -2,6 +2,7 @@ import { useState, useCallback } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { useBudget, useBudgetHistory } from '../../hooks/use-api'
+import { PageError } from '../../components/ui/page-error'
 import { Sparkline } from '../../components/ui/sparkline'
 
 function ProgressBar({ pct, className = '' }: { pct: number; className?: string }) {
@@ -64,7 +65,7 @@ const BREAKDOWN_LABELS: Record<string, string> = {
 }
 
 export default function BudgetSection() {
-  const { data: budget, isLoading } = useBudget()
+  const { data: budget, isLoading, error } = useBudget()
   const { data: history } = useBudgetHistory(7)
   const queryClient = useQueryClient()
 
@@ -83,13 +84,17 @@ export default function BudgetSection() {
     }
   }, [queryClient])
 
-  if (isLoading || !budget) {
+  if (isLoading) {
     return (
       <div>
         <h2 className="text-lg font-semibold text-text mb-1">Budget</h2>
         <p className="text-sm text-text-tertiary">Loading...</p>
       </div>
     )
+  }
+
+  if (error || !budget) {
+    return <PageError title="Budget Unavailable" message={error instanceof Error ? error.message : 'Enable daemon mode to activate budget tracking.'} />
   }
 
   const { global, breakdown, config } = budget
