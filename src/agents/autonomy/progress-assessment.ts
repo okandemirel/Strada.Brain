@@ -117,8 +117,10 @@ Given a behavioral snapshot of an executing agent, determine whether it is makin
 - The agent keeps generating analysis, plans, or clarification text without calling any tools
 - The same analysis or clarification pattern repeats across gates
 - The agent has context to act but keeps discussing instead of using tools
+- inspectionStepCount >= 8 AND mutationStepCount === 0: the agent is stuck in a read-only loop, reading files endlessly without ever writing or editing. This is NOT exploration — it is analysis paralysis.
 
 CRITICAL: An agent that has never used a single tool and has 3+ consecutive text-only gates is STUCK, not "in an early exploration phase". Exploration requires tool calls (file_read, grep_search, etc).
+CRITICAL: An agent that has 8+ inspection steps (file_read, grep_search) but ZERO mutation steps (file_write, file_edit, bash) is STUCK in a read-only analysis loop. It must transition to action.
 
 If the user goal contains a concrete file name, directory, path fragment, or other explicit target, preserve that target in your directive. Do NOT invent a different absolute OS path unless the user explicitly asked for that path.
 

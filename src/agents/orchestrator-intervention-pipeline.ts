@@ -928,6 +928,18 @@ export async function handleBackgroundLoopRecovery(
               ].join("\n\n"),
             };
           }
+          // Heuristic override: inspection-only loop (many reads, zero writes)
+          if (snapshot.inspectionStepCount >= 8 && snapshot.mutationStepCount === 0) {
+            return {
+              action: "replan",
+              gate: [
+                "[INSPECTION-ONLY LOOP OVERRIDE] You have executed " + snapshot.inspectionStepCount + " inspection tools (file_read, grep_search) but ZERO mutation tools (file_write, file_edit, bash).",
+                "You are stuck in a read-only analysis loop. STOP reading more files.",
+                "Your next response MUST contain a mutation tool call: file_write, file_edit, or bash.",
+                "If you have enough context to act, ACT NOW. If you truly cannot proceed, use ask_user.",
+              ].join("\n\n"),
+            };
+          }
           return { action: "none" };
         }
         if (assessment.verdict === "stuck" && assessment.confidence !== "low") {

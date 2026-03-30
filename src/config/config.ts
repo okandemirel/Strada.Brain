@@ -1797,7 +1797,7 @@ export const configSchema = z
     stradaSupervisorEnabled: boolFromString(true),
     stradaSupervisorComplexityThreshold: z
       .enum(["moderate", "complex"])
-      .default("complex"),
+      .default("moderate"),
     stradaSupervisorMaxParallelNodes: z
       .string()
       .transform((s) => parseInt(s, 10))
