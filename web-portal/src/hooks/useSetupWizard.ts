@@ -717,8 +717,8 @@ export function useSetupWizard() {
       config.SYSTEM_PRESET = selectedPreset
     }
 
+    config.STRADA_DAEMON_ENABLED = daemonEnabled ? 'true' : 'false'
     if (daemonEnabled) {
-      config.STRADA_DAEMON_ENABLED = 'true'
       if (daemonBudget > 0) {
         config.STRADA_DAEMON_DAILY_BUDGET = String(daemonBudget)
       }
@@ -726,8 +726,8 @@ export function useSetupWizard() {
     if (globalDailyBudget > 0) {
       config.STRADA_BUDGET_DAILY_USD = String(globalDailyBudget)
     }
+    config.AUTONOMOUS_DEFAULT_ENABLED = autonomyEnabled ? 'true' : 'false'
     if (autonomyEnabled) {
-      config.AUTONOMOUS_DEFAULT_ENABLED = 'true'
       config.AUTONOMOUS_DEFAULT_HOURS = String(autonomyHours)
     }
 

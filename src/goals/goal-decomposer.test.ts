@@ -96,26 +96,26 @@ describe("GoalDecomposer", () => {
   describe("shouldDecompose", () => {
     const decomposer = new GoalDecomposer(undefined, 3);
 
-    it("returns false for short prompts (< 30 chars)", () => {
+    it("returns false for trivially short prompts (< 30 chars)", () => {
       expect(decomposer.shouldDecompose("fix the bug")).toBe(false);
+      expect(decomposer.shouldDecompose("build it")).toBe(false);
+      expect(decomposer.shouldDecompose("hello")).toBe(false);
+      expect(decomposer.shouldDecompose("これは何？")).toBe(false);
     });
 
-    it("returns false for simple patterns (e.g., 'build the project')", () => {
-      expect(decomposer.shouldDecompose("build the project and deploy to staging")).toBe(false);
-    });
-
-    it("returns true for complex patterns (e.g., 'create a module with tests and documentation')", () => {
-      expect(
-        decomposer.shouldDecompose("create a module with tests and documentation"),
-      ).toBe(true);
-    });
-
-    it("returns true for multilingual audit-and-fix prompts with verification work", () => {
-      expect(
-        decomposer.shouldDecompose(
-          "Level generatorleri ve hatali levelleri analiz et, duzelt, arrow progression'i iyilestir ve test et.",
-        ),
-      ).toBe(true);
+    it("returns true for any prompt >= 30 chars regardless of language", () => {
+      // English
+      expect(decomposer.shouldDecompose("Create a module with tests and documentation")).toBe(true);
+      // Turkish
+      expect(decomposer.shouldDecompose("Level generatorleri ve hatali levelleri analiz et")).toBe(true);
+      // German
+      expect(decomposer.shouldDecompose("Erstelle ein neues Authentifizierungssystem mit JWT")).toBe(true);
+      // Japanese (>= 30 chars)
+      expect(decomposer.shouldDecompose("新しい認証システムを作成し、テストを更新し、ステージング環境にデプロイしてください")).toBe(true);
+      // Chinese (>= 30 chars)
+      expect(decomposer.shouldDecompose("创建一个新的用户认证服务，编写全面的单元测试，并更新项目文档和部署配置")).toBe(true);
+      // Arabic (>= 30 chars)
+      expect(decomposer.shouldDecompose("قم بإنشاء نظام مصادقة جديد مع اختبارات الوحدة وتحديث الوثائق والنشر")).toBe(true);
     });
   });
 

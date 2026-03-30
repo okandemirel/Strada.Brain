@@ -1,3 +1,5 @@
+import { MUTATION_TOOLS } from "./constants.js";
+
 export type ControlLoopGateKind =
   | "clarification_internal_continue"
   | "visibility_internal_continue"
@@ -125,8 +127,13 @@ export class ControlLoopTracker {
     return this.consecutiveNoToolGates;
   }
 
-  markToolExecution(): void {
-    this.consecutiveNoToolGates = 0;
+  markToolExecution(toolName?: string): void {
+    // Only reset stale analysis counter on mutation tools, not read-only tools
+    // like file_read, grep_search, list_directory. When no toolName is provided
+    // (backward compat), assume mutation to preserve existing behavior.
+    if (!toolName || MUTATION_TOOLS.has(toolName)) {
+      this.consecutiveNoToolGates = 0;
+    }
   }
 
   markVerificationClean(_iteration: number): void {

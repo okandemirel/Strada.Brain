@@ -20,31 +20,12 @@ import { generateGoalNodeId, parseLLMOutput } from "./types.js";
 import { validateDAG } from "./goal-validator.js";
 
 // =============================================================================
-// HEURISTIC PATTERNS (copied from TaskDecomposer -- being replaced)
+// DECOMPOSITION GUARD — minimal, language-agnostic
 // =============================================================================
-
-/** Patterns indicating a complex, multi-step request */
-const COMPLEXITY_INDICATORS = [
-  /\band\b.*\band\b/i, // "X and Y and Z" (3+ conjunctions)
-  /create.*(?:with|including)/i, // "create X with Y"
-  /(?:first|then|after|finally).*(?:first|then|after|finally)/i, // 2+ sequential markers (not just one)
-  /(?:module|system|feature|component).*(?:test|spec)/i, // feature + tests
-  /\d+\s*(?:file|class|component|test)/i, // numbered items
-  /(?:investigate|analy[sz]e|audit|review|stabilize|improve|refactor|clean\s+up).*(?:fix|test|verify|document|remove)/i,
-  /(?:fix|improve|stabilize|refactor|clean\s+up).*(?:test|verify|validate|document)/i,
-  /(?:multiple|several|various|many|birden\s+fazla|[0-9]+\s*den\s+fazla).*(?:issues?|bugs?|problems?|editors?|files?|tasks?|levels?)/iu,
-  /(?:eksik|hatal[ıi]|kusursuz|test\s+edilmemi[sş]|gereksiz|ayr[ıi]ca).*(?:ve|hem|ayr[ıi]ca|birden\s+fazla|[0-9]+\s*den\s+fazla)/iu,
-];
-
-/** Patterns indicating a simple, single-step request */
-const SIMPLE_PATTERNS = [
-  /^(?:read|show|display|list|find|search|check|get|explain|describe|what|how|why|where|who|when)\b/i,
-  /^(?:build|run|test|compile|lint|start|stop|restart)\b/i,
-  /^(?:fix|update|change|rename|delete|remove)\s+(?:the\s+)?(?:one|single|a)\b/i,
-  /^(?:hello|hi|hey|merhaba|selam|sa|slm)\b/i,
-  /^(?:thanks|thank|teşekkür|sağ\s*ol)\b/iu,
-  /^.{0,60}[?]$/, // Short question (entire prompt up to 60 chars ending with ?)
-];
+// The LLM is the only component that understands all languages.
+// shouldDecompose is a MINIMAL pre-filter: it only blocks obviously
+// trivial messages to avoid a wasted LLM call. Everything else goes
+// to the LLM which returns a single-node tree if the task is simple.
 
 // =============================================================================
 // LLM PROMPTS
@@ -95,14 +76,12 @@ export class GoalDecomposer {
    * Returns true for complex multi-step requests, false for simple ones.
    */
   shouldDecompose(prompt: string): boolean {
-    // Too short to be complex
-    if (prompt.length < 30) return false;
-
-    // Matches a known simple pattern -- skip decomposition
-    if (SIMPLE_PATTERNS.some((p) => p.test(prompt))) return false;
-
-    // Matches a complexity indicator -- decompose
-    return COMPLEXITY_INDICATORS.some((p) => p.test(prompt));
+    const trimmed = prompt.trim();
+    // Only skip decomposition for trivially short messages (greetings,
+    // single words, very short questions). The LLM handles everything
+    // else — it returns a single-node tree for simple tasks, multi-node
+    // for complex ones. No language-specific heuristics needed.
+    return trimmed.length >= 30;
   }
 
   /**

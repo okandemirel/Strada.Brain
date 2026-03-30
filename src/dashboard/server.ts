@@ -1591,38 +1591,49 @@ export class DashboardServer {
       }
 
       // POST /api/user/autonomous -- Set autonomous mode
-      if (req.method === "POST" && url === "/api/user/autonomous") {
+      if (req.method === "POST" && url.startsWith("/api/user/autonomous")) {
         if (!this.userProfileStore) {
           res.writeHead(501, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ error: "User profile store not available" }));
           return;
         }
-        void this.readJsonBody<{ chatId?: string; userId?: string; conversationId?: string; enabled?: boolean; hours?: number }>(req, res).then((parsed) => {
+        // Identity from query params (consistent with GET handler)
+        const params = new URL(url, "http://localhost").searchParams;
+        const chatId = params.get("chatId");
+        const userId = params.get("userId");
+        const conversationId = params.get("conversationId");
+        if (!chatId) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Missing required query parameter: chatId" }));
+          return;
+        }
+        if (
+          chatId.length > DASHBOARD_IDENTITY_MAX_LENGTH ||
+          isDashboardIdentityPartTooLong(userId) ||
+          isDashboardIdentityPartTooLong(conversationId)
+        ) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: `Identity values too long (max ${DASHBOARD_IDENTITY_MAX_LENGTH} chars)` }));
+          return;
+        }
+        void this.readJsonBody<{ enabled?: boolean; durationHours?: number; hours?: number }>(req, res).then((parsed) => {
           if (!parsed) return;
-          if (!parsed.chatId || typeof parsed.enabled !== "boolean") {
+          if (typeof parsed.enabled !== "boolean") {
             res.writeHead(400, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ error: "Missing required fields: chatId (string), enabled (boolean)" }));
+            res.end(JSON.stringify({ error: "Missing required field: enabled (boolean)" }));
             return;
           }
+          const hours = parsed.durationHours ?? parsed.hours;
           const MIN_HOURS = 1;
           const MAX_HOURS = 168;
-          if (parsed.hours !== undefined && (typeof parsed.hours !== "number" || parsed.hours < MIN_HOURS || parsed.hours > MAX_HOURS)) {
+          if (hours !== undefined && (typeof hours !== "number" || hours < MIN_HOURS || hours > MAX_HOURS)) {
             res.writeHead(400, { "Content-Type": "application/json" });
             res.end(JSON.stringify({ error: `hours must be between ${MIN_HOURS} and ${MAX_HOURS}` }));
             return;
           }
-          if (
-            (typeof parsed.chatId === "string" && parsed.chatId.length > DASHBOARD_IDENTITY_MAX_LENGTH) ||
-            isDashboardIdentityPartTooLong(parsed.userId ?? null) ||
-            isDashboardIdentityPartTooLong(parsed.conversationId ?? null)
-          ) {
-            res.writeHead(400, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ error: `Identity values too long (max ${DASHBOARD_IDENTITY_MAX_LENGTH} chars)` }));
-            return;
-          }
-          const identityKey = resolveDashboardIdentityKey(parsed.chatId, parsed.userId, parsed.conversationId);
-          const expiresAt = parsed.hours && parsed.hours > 0
-            ? Date.now() + parsed.hours * 3600000
+          const identityKey = resolveDashboardIdentityKey(chatId!, userId, conversationId);
+          const expiresAt = hours && hours > 0
+            ? Date.now() + hours * 3600000
             : undefined;
           void this.userProfileStore!.setAutonomousMode(identityKey, parsed.enabled, expiresAt).then(() => {
             res.writeHead(200, { "Content-Type": "application/json" });

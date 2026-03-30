@@ -444,27 +444,23 @@ export function buildSetupEnvLines(
     }
   }
 
-  if (config.STRADA_DAEMON_ENABLED === "true") {
+  const daemonEnabled = config.STRADA_DAEMON_ENABLED === "true";
+  lines.push("", "# Daemon Mode", `STRADA_DAEMON_ENABLED=${daemonEnabled}`);
+  if (daemonEnabled) {
     const budget = Number(config.STRADA_DAEMON_DAILY_BUDGET);
     const safeBudget = Number.isFinite(budget) && budget >= 0.5 && budget <= 10 ? budget : 1.0;
     lines.push(
-      "",
-      "# Daemon Mode",
-      "STRADA_DAEMON_ENABLED=true",
       `STRADA_DAEMON_DAILY_BUDGET=${safeBudget}`,
       "STRADA_DAEMON_HEARTBEAT_INTERVAL=30000",
     );
   }
 
-  if (config.AUTONOMOUS_DEFAULT_ENABLED === "true") {
+  const autonomyEnabled = config.AUTONOMOUS_DEFAULT_ENABLED === "true";
+  lines.push("", "# Autonomy", `AUTONOMOUS_DEFAULT_ENABLED=${autonomyEnabled}`);
+  if (autonomyEnabled) {
     const hours = Number(config.AUTONOMOUS_DEFAULT_HOURS);
     if (Number.isFinite(hours) && hours >= 1 && hours <= 168) {
-      lines.push(
-        "",
-        "# Autonomy",
-        "AUTONOMOUS_DEFAULT_ENABLED=true",
-        `AUTONOMOUS_DEFAULT_HOURS=${hours}`,
-      );
+      lines.push(`AUTONOMOUS_DEFAULT_HOURS=${hours}`);
     }
   }
 

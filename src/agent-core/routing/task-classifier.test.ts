@@ -64,7 +64,41 @@ describe("TaskClassifier", () => {
   });
 
   /* ---------------------------------------------------------------- */
-  /*  Prompt classification — complexity                              */
+  /*  Non-English prompts → code-generation (most permissive)         */
+  /* ---------------------------------------------------------------- */
+
+  it("classifies non-English prompts as code-generation (all tools available)", () => {
+    // Turkish
+    expect(classifier.classify("Yeni bir servis ekle ve güncelle").type).toBe("code-generation");
+    // German
+    expect(classifier.classify("Erstelle einen neuen Service mit Authentifizierung").type).toBe("code-generation");
+    // Japanese
+    expect(classifier.classify("新しいサービスクラスを作成してください").type).toBe("code-generation");
+    // Chinese
+    expect(classifier.classify("创建一个新的用户认证服务").type).toBe("code-generation");
+    // French
+    expect(classifier.classify("Créer un nouveau service d'authentification").type).toBe("code-generation");
+  });
+
+  it("classifies short non-English questions as simple-question", () => {
+    expect(classifier.classify("TypeScript nedir?").type).toBe("simple-question");
+    expect(classifier.classify("これは何ですか？").type).toBe("simple-question");
+    expect(classifier.classify("Was ist das?").type).toBe("simple-question");
+    expect(classifier.classify("¿Qué es esto?").type).toBe("simple-question");
+  });
+
+  it("classifies Turkish multi-action prompt as code-generation with full tool access", () => {
+    const result = classifier.classify(
+      "proje ne alemde eksiklere bakalım, 100 Level generate eden birden fazla editorümüz var gereksiz yer",
+    );
+    // Non-English → code-generation (most permissive, all tools available)
+    expect(result.type).toBe("code-generation");
+    // Long enough (> 80 chars) → moderate or complex
+    expect(["moderate", "complex"]).toContain(result.complexity);
+  });
+
+  /* ---------------------------------------------------------------- */
+  /*  Prompt classification — complexity (language-agnostic)           */
   /* ---------------------------------------------------------------- */
 
   it("detects trivial complexity for very short prompts", () => {
@@ -79,34 +113,35 @@ describe("TaskClassifier", () => {
     expect(result.complexity).toBe("simple");
   });
 
-  it("detects moderate complexity for medium prompts", () => {
+  it("complexity is length-based: >= 120 chars = complex (best-effort signal, not a gate)", () => {
+    // English (140+ chars)
+    expect(classifier.classify(
+      "Create a comprehensive authentication system with JWT tokens, refresh token rotation, and role-based access control for the new platform.",
+    ).complexity).toBe("complex");
+    // Turkish (140+ chars)
+    expect(classifier.classify(
+      "Proje ne alemde eksiklere bakalım ve tamamen kusursuz hale getirelim mi? Benim hatırladığım bir konu vardı, birden fazla editorümüz var.",
+    ).complexity).toBe("complex");
+    // German (120+ chars)
+    expect(classifier.classify(
+      "Erstelle ein neues Authentifizierungssystem mit JWT-Tokens und aktualisiere alle Tests und deploye es in die Staging-Umgebung.",
+    ).complexity).toBe("complex");
+  });
+
+  it("CJK prompts get moderate complexity due to shorter char count — LLM handles actual decomposition", () => {
+    // Japanese (62 chars) — CJK packs more meaning per char, but length-based
+    // classification rates this as moderate. This is acceptable because
+    // shouldDecompose (>= 30 chars) still sends it to the LLM for decomposition.
+    expect(classifier.classify(
+      "新しい認証システムを作成し、テストを更新し、ステージング環境にデプロイしてください。それからドキュメントも更新してください。",
+    ).complexity).toBe("moderate");
+  });
+
+  it("detects moderate for medium-length prompts (60-120 chars)", () => {
     const result = classifier.classify(
-      "Create a React component that displays a sortable table with pagination support, column filtering, and export to CSV functionality",
+      "Create a React component that displays a sortable table with pagination support",
     );
     expect(result.complexity).toBe("moderate");
-  });
-
-  it("detects complex for long prompts (>= 200 chars)", () => {
-    const longPrompt =
-      "Create a comprehensive authentication system with JWT tokens, refresh token rotation, " +
-      "role-based access control, OAuth2 integration for Google and GitHub, two-factor authentication " +
-      "via TOTP, account lockout after failed attempts, and audit logging for all auth events.";
-    const result = classifier.classify(longPrompt);
-    expect(result.complexity).toBe("complex");
-  });
-
-  it("detects complex when 'and' appears 3+ times", () => {
-    const result = classifier.classify(
-      "Update the service and the controller and the repository and the tests",
-    );
-    expect(result.complexity).toBe("complex");
-  });
-
-  it("detects complex for numbered lists", () => {
-    const result = classifier.classify(
-      "Please do the following: 1) Add validation 2) Update tests 3) Fix the bug in line 42",
-    );
-    expect(result.complexity).toBe("complex");
   });
 
   /* ---------------------------------------------------------------- */

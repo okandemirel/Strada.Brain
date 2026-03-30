@@ -16,6 +16,10 @@ import type {
 /*  Keyword patterns for task-type detection                          */
 /* ------------------------------------------------------------------ */
 
+// Type patterns use English keywords only as HINTS — they don't gate
+// tool availability (write tools are always available in executor role).
+// Non-English prompts fall through to the default "code-generation" type,
+// which is the most permissive. The LLM handles intent in any language.
 const TYPE_PATTERNS: Array<{ pattern: RegExp; type: TaskType }> = [
   {
     pattern: /\b(analyze|explain|describe|what\s+is|how\s+does)\b/i,
@@ -121,11 +125,13 @@ export class TaskClassifier {
   private detectType(prompt: string): TaskType {
     const trimmed = prompt.trim();
 
-    // Short question heuristic
-    if (trimmed.length < 50 && trimmed.endsWith("?")) {
+    // Language-agnostic: short prompt ending with ? in any language = simple question
+    if (trimmed.length < 60 && /[?？؟]$/.test(trimmed)) {
       return "simple-question";
     }
 
+    // English keyword hints — non-English prompts fall through to
+    // "code-generation" (most permissive type, all tools available)
     for (const { pattern, type } of TYPE_PATTERNS) {
       if (pattern.test(trimmed)) {
         return type;
@@ -136,32 +142,18 @@ export class TaskClassifier {
   }
 
   private detectComplexity(prompt: string): TaskComplexity {
-    const trimmed = prompt.trim();
-    const len = trimmed.length;
+    const len = prompt.trim().length;
 
+    // Language-agnostic: complexity is a best-effort signal for metrics
+    // and phase prompts. It does NOT gate tool availability or supervisor
+    // activation (those decisions use shouldDecompose + LLM).
+    //
+    // Simple length-based tiers — no language-specific patterns.
+    // The LLM is the real judge of complexity.
     if (len < 20) return "trivial";
-
-    // Structural complexity signals (content-based, not length-based)
-    const andCount = (trimmed.match(/\band\b/gi) ?? []).length;
-    const hasNumberedList = /\d+[.)]\s/m.test(trimmed);
-    const hasMultipleSteps = /(?:first|then|after|finally|next|step\s*\d)/i.test(trimmed);
-    const commaClauseCount = trimmed.split(/,/).length;
-    const hasMultipleTasks = andCount >= 3 || hasNumberedList;
-    const hasLongFeatureList = commaClauseCount >= 5 && len >= 200;
-
-    // Complex: multiple explicit tasks/steps regardless of length
-    if (hasMultipleTasks) return "complex";
-
-    // Long prompt with many comma-separated items → complex (feature lists, multi-requirement specs)
-    if (hasLongFeatureList) return "complex";
-
-    // Long AND has structural markers → complex
-    if (len >= 400 && hasMultipleSteps) return "complex";
-
-    if (len < 80) return "simple";
-
-    // Moderate-length without structural markers → moderate (not complex)
-    return "moderate";
+    if (len < 60) return "simple";
+    if (len < 120) return "moderate";
+    return "complex";
   }
 
   private detectCriticality(

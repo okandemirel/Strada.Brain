@@ -196,7 +196,8 @@ describe("SetupWizard path validation", () => {
       AUTONOMOUS_DEFAULT_HOURS: "48",
     }, homedir(), 3000);
 
-    expect(disabledLines.some((line) => line.includes("AUTONOMOUS_DEFAULT_"))).toBe(false);
+    expect(disabledLines).toContain("AUTONOMOUS_DEFAULT_ENABLED=false");
+    expect(disabledLines.some((line) => line.includes("AUTONOMOUS_DEFAULT_HOURS"))).toBe(false);
   });
 
   it("writes provider model defaults from presets and explicit overrides", () => {

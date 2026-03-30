@@ -1020,7 +1020,8 @@ export class Orchestrator {
 
     const classification = this.taskClassifier?.classify(coarsePlanningPrompt);
     const shouldForceSupervisor = Boolean(params.goalTree);
-    if (!shouldForceSupervisor && (!classification || !this.shouldActivateSupervisor(classification))) {
+    const isDecomposable = this.goalDecomposer?.shouldDecompose(coarsePlanningPrompt) ?? false;
+    if (!shouldForceSupervisor && !isDecomposable && (!classification || !this.shouldActivateSupervisor(classification))) {
       return {
         path: fallbackPath,
         reason: "low_complexity",
@@ -1805,7 +1806,7 @@ export class Orchestrator {
   }
 
   private buildWorkerToolDefinitions(
-    task: TaskClassification,
+    _task: TaskClassification,
     phase: AgentPhase,
     role: SupervisorAssignment["role"],
   ): Array<{
@@ -1815,8 +1816,6 @@ export class Orchestrator {
   }> {
     const allowWriteTools =
       role === "executor" &&
-      task.type !== "analysis" &&
-      task.type !== "simple-question" &&
       phase !== AgentPhase.PLANNING &&
       phase !== AgentPhase.REPLANNING &&
       phase !== AgentPhase.REFLECTING;
@@ -2894,8 +2893,8 @@ export class Orchestrator {
                 },
               });
               bgToolCallCount += response.toolCalls.length;
-              if (response.toolCalls.length > 0) {
-                controlLoopTracker.markToolExecution();
+              for (const tc of response.toolCalls) {
+                controlLoopTracker.markToolExecution(tc.name);
               }
               const verificationStateAfter = selfVerification.getState();
               const newTouchedFiles = [...verificationStateAfter.touchedFiles]
@@ -4057,8 +4056,10 @@ export class Orchestrator {
         });
 
         // Track tool execution in the interactive control loop tracker
-        if (interactiveControlLoopTracker && response.toolCalls.length > 0) {
-          interactiveControlLoopTracker.markToolExecution();
+        if (interactiveControlLoopTracker) {
+          for (const tc of response.toolCalls) {
+            interactiveControlLoopTracker.markToolExecution(tc.name);
+          }
         }
 
         // Inject state-aware context (stall detection, budget warnings)

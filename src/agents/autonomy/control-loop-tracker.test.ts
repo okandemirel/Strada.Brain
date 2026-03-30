@@ -163,7 +163,7 @@ describe("ControlLoopTracker", () => {
     expect(trigger?.sameFingerprintCount).toBe(3);
   });
 
-  it("resets stale analysis counter on markToolExecution", () => {
+  it("resets stale analysis counter on markToolExecution with mutation tool", () => {
     // Use high fingerprint/density thresholds to isolate stale analysis behavior
     const tracker = new ControlLoopTracker({
       sameFingerprintThreshold: 100,
@@ -182,8 +182,8 @@ describe("ControlLoopTracker", () => {
       iteration: 2,
     });
 
-    // Tool execution resets the stale counter
-    tracker.markToolExecution();
+    // Mutation tool execution resets the stale counter
+    tracker.markToolExecution("file_write");
 
     // Should not trigger — stale counter was reset
     expect(tracker.recordGate({
@@ -203,6 +203,38 @@ describe("ControlLoopTracker", () => {
       kind: "clarification_internal_continue",
       reason: "test",
       iteration: 5,
+    });
+    expect(trigger?.reason).toBe("stale_analysis_loop");
+  });
+
+  it("does NOT reset stale analysis counter on read-only tool execution", () => {
+    const tracker = new ControlLoopTracker({
+      sameFingerprintThreshold: 100,
+      gateDensityThreshold: 100,
+      staleAnalysisThreshold: 3,
+    });
+
+    tracker.recordGate({
+      kind: "clarification_internal_continue",
+      reason: "test",
+      iteration: 1,
+    });
+    tracker.recordGate({
+      kind: "clarification_internal_continue",
+      reason: "test",
+      iteration: 2,
+    });
+
+    // Read-only tools should NOT reset the stale counter
+    tracker.markToolExecution("file_read");
+    tracker.markToolExecution("grep_search");
+    tracker.markToolExecution("list_directory");
+
+    // 3rd gate should still trigger — read-only tools didn't reset
+    const trigger = tracker.recordGate({
+      kind: "clarification_internal_continue",
+      reason: "test",
+      iteration: 3,
     });
     expect(trigger?.reason).toBe("stale_analysis_loop");
   });
@@ -301,7 +333,7 @@ describe("ControlLoopTracker", () => {
     expect(tracker.getConsecutiveTextOnlyGates()).toBe(0);
     tracker.incrementTextOnlyGate();
     expect(tracker.getConsecutiveTextOnlyGates()).toBe(1);
-    tracker.markToolExecution();
+    tracker.markToolExecution("file_edit");
     expect(tracker.getConsecutiveTextOnlyGates()).toBe(0);
   });
 
