@@ -888,7 +888,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
         supervisorBrain,
       });
       agentManager = multiAgentStage.agentManager;
-      agentManager.setUnifiedBudgetManager(unifiedBudgetManager);
+      agentManager?.setUnifiedBudgetManager?.(unifiedBudgetManager);
       agentBudgetTrackerOuter = multiAgentStage.agentBudgetTracker;
       delegationManager = multiAgentStage.delegationManager;
 
