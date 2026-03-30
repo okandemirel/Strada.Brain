@@ -398,6 +398,19 @@ export class SupervisorBrain {
       )
         ? "reject"
         : "approve";
+
+      // Emit per-node monitor:task_update for verification-rejected nodes
+      for (let i = 0; i < verifiedResults.length; i++) {
+        if (results[i]?.status === "ok" && verifiedResults[i]?.status !== "ok") {
+          this.emitter?.emit("monitor:task_update", {
+            rootId: String(decomposedGoalTree.rootId),
+            nodeId: String(verifiedResults[i]!.nodeId),
+            status: verifiedResults[i]!.status === "failed" ? "failed" : "skipped",
+            completedAt: Date.now(),
+          });
+        }
+      }
+
       this.emitter?.emit("supervisor:verify_done", {
         nodeId: "aggregate",
         verdict: verificationVerdict,
