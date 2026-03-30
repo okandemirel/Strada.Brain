@@ -688,6 +688,7 @@ export class BackgroundExecutor {
       workspaceLease?: Awaited<ReturnType<WorkspaceLeaseManager["acquireLease"]>>;
       workspaceLeaseRetained?: boolean;
       supervisorMode?: import("./types.js").BackgroundTaskOptions["supervisorMode"];
+      goalContext?: { rootId: string; nodeId: string };
     },
   ): Promise<{ output: string; workerResult?: WorkerRunResult }> {
     if (typeof (orchestrator as Orchestrator & { runWorkerTask?: unknown }).runWorkerTask === "function") {
@@ -711,6 +712,7 @@ export class BackgroundExecutor {
             workspaceLease?: Awaited<ReturnType<WorkspaceLeaseManager["acquireLease"]>>;
             workspaceLeaseRetained?: boolean;
             supervisorMode?: import("./types.js").BackgroundTaskOptions["supervisorMode"];
+            goalContext?: { rootId: string; nodeId: string };
           }) => Promise<WorkerRunResult>;
         }
       ).runWorkerTask({
@@ -731,6 +733,7 @@ export class BackgroundExecutor {
         workspaceLease: params.workspaceLease,
         workspaceLeaseRetained: params.workspaceLeaseRetained,
         supervisorMode: params.supervisorMode,
+        goalContext: params.goalContext,
       });
       return {
         output: workerResult.visibleResponse,
@@ -757,6 +760,7 @@ export class BackgroundExecutor {
           workspaceLease: params.workspaceLease,
           workspaceLeaseRetained: params.workspaceLeaseRetained,
           supervisorMode: params.supervisorMode,
+          goalContext: params.goalContext,
         } as import("./types.js").BackgroundTaskOptions & {
           workspaceLeaseRetained?: boolean;
         },
@@ -784,6 +788,7 @@ export class BackgroundExecutor {
       workspaceLease?: Awaited<ReturnType<WorkspaceLeaseManager["acquireLease"]>>;
       workspaceSourceRoot?: string;
       supervisorMode?: import("./types.js").BackgroundTaskOptions["supervisorMode"];
+      goalContext?: { rootId: string; nodeId: string };
     },
   ): Promise<{ output: string; workerResult?: WorkerRunResult }> {
     const managedWorkspaceLease = params.workspaceLease ?? (this.workspaceLeaseManager

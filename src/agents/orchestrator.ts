@@ -466,6 +466,8 @@ interface ToolExecutionOptions {
   projectPathOverride?: string;
   workingDirectoryOverride?: string;
   workspaceLease?: WorkspaceLease;
+  /** Goal tree context for substep emission to workspace bus. */
+  goalContext?: { rootId: string; nodeId: string };
 }
 
 interface SelfManagedWriteReview {
@@ -2146,6 +2148,7 @@ export class Orchestrator {
           parentMetricId: request.parentMetricId,
           workspaceLease: request.workspaceLease,
           supervisorMode,
+          goalContext: (request as WorkerRunRequest & { goalContext?: { rootId: string; nodeId: string } }).goalContext,
           __workerCollector: collector,
           __workerMode: request.mode,
         } as BackgroundTaskOptions & {
@@ -2876,6 +2879,7 @@ export class Orchestrator {
                   agentState: bgAgentState,
                   touchedFiles: [...selfVerification.getState().touchedFiles],
                   workspaceLease: options.workspaceLease,
+                  goalContext: options.goalContext,
                 },
                 trackingParams: {
                   taskPlanner,
@@ -5124,6 +5128,8 @@ export class Orchestrator {
     const projectPath = options.projectPathOverride ?? workspacePath ?? this.projectPath;
     const workingDirectory =
       options.workingDirectoryOverride ?? workspacePath ?? this.projectPath;
+    const goalCtx = options.goalContext;
+    let substepOrder = 0;
 
     const toolContext: ToolContext & { soulLoader?: SoulLoader | null } = {
       projectPath,
@@ -5359,6 +5365,23 @@ export class Orchestrator {
       }
 
       const toolStart = Date.now();
+      const substepId = `${activeToolCall.name}-${substepOrder}`;
+      substepOrder++;
+
+      // Emit substep "active" before execution
+      if (goalCtx && this.workspaceBus) {
+        this.workspaceBus.emit("monitor:substep", {
+          rootId: goalCtx.rootId,
+          nodeId: goalCtx.nodeId,
+          substep: {
+            id: substepId,
+            label: activeToolCall.name,
+            status: "active" as const,
+            order: substepOrder,
+          },
+        });
+      }
+
       try {
         const result = await tool.execute(activeToolCall.input, toolContext);
         this.metrics?.recordToolCall(activeToolCall.name, Date.now() - toolStart, !result.isError);
@@ -5366,6 +5389,21 @@ export class Orchestrator {
         if (!result.isError && activeToolCall.name !== "ask_user") {
           this.askUserBlockCounts.delete(chatId);
         }
+
+        // Emit substep "done" after successful execution
+        if (goalCtx && this.workspaceBus) {
+          this.workspaceBus.emit("monitor:substep", {
+            rootId: goalCtx.rootId,
+            nodeId: goalCtx.nodeId,
+            substep: {
+              id: substepId,
+              label: activeToolCall.name,
+              status: (result.isError ? "skipped" : "done") as "done" | "skipped",
+              order: substepOrder,
+            },
+          });
+        }
+
         results.push({
           toolCallId: activeToolCall.id,
           content: sanitizeToolResult(result.content),
@@ -5380,6 +5418,16 @@ export class Orchestrator {
           tool: activeToolCall.name,
           error: errMsg,
         });
+
+        // Emit substep "skipped" on error
+        if (goalCtx && this.workspaceBus) {
+          this.workspaceBus.emit("monitor:substep", {
+            rootId: goalCtx.rootId,
+            nodeId: goalCtx.nodeId,
+            substep: { id: substepId, label: activeToolCall.name, status: "skipped" as const, order: substepOrder },
+          });
+        }
+
         results.push({
           toolCallId: activeToolCall.id,
           content: "Tool execution failed",

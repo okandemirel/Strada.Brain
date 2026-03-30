@@ -166,6 +166,8 @@ export interface BackgroundTaskOptions {
   workspaceLease?: WorkspaceLease;
   /** Internal: disable supervisor routing for nested worker runs. */
   supervisorMode?: "auto" | "off";
+  /** Goal tree context for substep emission (rootId + nodeId). */
+  goalContext?: { rootId: string; nodeId: string };
 }
 
 export interface TaskUsageEvent {

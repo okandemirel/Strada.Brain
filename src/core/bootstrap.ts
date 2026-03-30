@@ -150,6 +150,7 @@ export function createSupervisorExecuteNodeBridge(params: {
     const toNodeArtifacts = (workerResult?: { touchedFiles?: readonly string[] }) =>
       (workerResult?.touchedFiles ?? []).map((path) => ({ path, action: "modify" as const }));
     try {
+      const goalRootId = context.goalTree ? String(context.goalTree.rootId) : undefined;
       const result = await params.backgroundExecutor.runWorkerEnvelope(params.orchestrator, {
         mode: "delegated",
         prompt: node.task,
@@ -165,6 +166,7 @@ export function createSupervisorExecuteNodeBridge(params: {
         onUsage: context.onUsage,
         workspaceLease: context.workspaceLease,
         signal: signal ?? context.signal ?? AbortSignal.timeout(300_000),
+        ...(goalRootId ? { goalContext: { rootId: goalRootId, nodeId: String(node.id) } } : {}),
         onProgress: (update) => {
           const narrative = buildTaskProgressSummary(
             { title: node.task, prompt: node.task },
