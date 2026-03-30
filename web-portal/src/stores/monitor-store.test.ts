@@ -60,9 +60,17 @@ describe('useMonitorStore', () => {
     })
   })
 
-  it('ignores update for non-existent task', () => {
+  it('auto-creates a placeholder task when updating a non-existent ID with status', () => {
     useMonitorStore.getState().updateTask('missing', { status: 'done' })
-    expect(useMonitorStore.getState().tasks).toEqual({})
+    const task = useMonitorStore.getState().tasks['missing']
+    expect(task).toBeDefined()
+    expect(task!.status).toBe('done')
+    expect(task!.title).toBe('missing')
+  })
+
+  it('ignores update for non-existent task without status or title', () => {
+    useMonitorStore.getState().updateTask('ghost', { elapsed: 500 })
+    expect(useMonitorStore.getState().tasks['ghost']).toBeUndefined()
   })
 
   it('sets DAG', () => {

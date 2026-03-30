@@ -87,10 +87,19 @@ export function dispatchWorkspaceMessage(data: { type: string; [key: string]: un
     }
 
     case 'monitor:task_update': {
-      useMonitorStore.getState().updateTask((payload.taskId ?? payload.nodeId) as string, {
+      const src = (payload.updates ?? payload) as Bag
+      const updates: Partial<MonitorTask> = {
         ...((payload.rootId as string | undefined) ? { rootId: payload.rootId as string } : {}),
-        ...((payload.updates ?? payload) as Partial<MonitorTask>),
-      })
+        ...(typeof src.status === 'string' ? { status: src.status } : {}),
+        ...(typeof src.reviewStatus === 'string' ? { reviewStatus: src.reviewStatus } : {}),
+        ...(typeof src.agentId === 'string' ? { agentId: src.agentId } : {}),
+        ...(typeof src.phase === 'string' ? { phase: src.phase as MonitorTask['phase'] } : {}),
+        ...(typeof src.startedAt === 'number' ? { startedAt: src.startedAt } : {}),
+        ...(typeof src.completedAt === 'number' ? { completedAt: src.completedAt } : {}),
+        ...(typeof src.elapsed === 'number' ? { elapsed: src.elapsed } : {}),
+        ...(typeof src.error === 'string' ? { narrative: src.error } : {}),
+      }
+      useMonitorStore.getState().updateTask((payload.taskId ?? payload.nodeId) as string, updates)
       break
     }
 

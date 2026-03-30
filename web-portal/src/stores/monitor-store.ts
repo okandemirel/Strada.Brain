@@ -101,7 +101,22 @@ export const useMonitorStore = create<MonitorState>()((set) => ({
 
   updateTask: (id, updates) =>
     set((s) => {
-      if (!s.tasks[id]) return s
+      // Auto-create a placeholder task when an update arrives before dag_init
+      // (e.g. WS reconnect, late-arriving nodes, or race conditions)
+      if (!s.tasks[id]) {
+        if (updates.status || updates.title) {
+          const created: MonitorTask = {
+            id,
+            nodeId: updates.nodeId ?? id,
+            title: updates.title ?? id,
+            status: updates.status ?? 'executing',
+            reviewStatus: updates.reviewStatus ?? 'none',
+            ...updates,
+          }
+          return { tasks: { ...s.tasks, [id]: created } }
+        }
+        return s
+      }
       const newTasks = { ...s.tasks, [id]: { ...s.tasks[id], ...updates } }
       // Sync status into dag.nodes so DAGView re-renders
       let newDag = s.dag
