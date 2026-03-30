@@ -20,6 +20,7 @@ interface McpInstallPanelProps {
   depInstallStatus?: Partial<Record<StradaDepPackage, 'idle' | 'installing' | 'success' | 'error'>>
   depInstallError?: Partial<Record<StradaDepPackage, string | null>>
   installButtonLabel?: string
+  compact?: boolean
   onInstall: (target: McpInstallTarget) => void
   onInstallDep?: (pkg: StradaDepPackage) => void
 }
@@ -200,6 +201,7 @@ export default function McpInstallPanel({
   depInstallStatus,
   depInstallError,
   installButtonLabel = 'Install Strada.MCP',
+  compact = false,
   onInstall,
   onInstallDep,
 }: McpInstallPanelProps) {
@@ -258,22 +260,24 @@ export default function McpInstallPanel({
         </div>
       </div>
 
-      <div className="mcp-panel-snapshot">
-        <div className="mcp-panel-stat">
-          <span className="mcp-panel-stat-label">Detected packages</span>
-          <span className="mcp-panel-stat-value">{detectedPackageCount}/3</span>
+      {!compact && (
+        <div className="mcp-panel-snapshot">
+          <div className="mcp-panel-stat">
+            <span className="mcp-panel-stat-label">Detected packages</span>
+            <span className="mcp-panel-stat-value">{detectedPackageCount}/3</span>
+          </div>
+          <div className="mcp-panel-stat">
+            <span className="mcp-panel-stat-label">
+              {stradaDeps.mcpInstalled ? 'Runtime source' : 'Recommended target'}
+            </span>
+            <span className="mcp-panel-stat-value">
+              {stradaDeps.mcpInstalled
+                ? (runtimeSourceLabel ?? 'Detected')
+                : activeTarget.title}
+            </span>
+          </div>
         </div>
-        <div className="mcp-panel-stat">
-          <span className="mcp-panel-stat-label">
-            {stradaDeps.mcpInstalled ? 'Runtime source' : 'Recommended target'}
-          </span>
-          <span className="mcp-panel-stat-value">
-            {stradaDeps.mcpInstalled
-              ? (runtimeSourceLabel ?? 'Detected')
-              : activeTarget.title}
-          </span>
-        </div>
-      </div>
+      )}
 
       <div className="mcp-dependency-grid">
         <DependencyStatusCard
@@ -318,30 +322,34 @@ export default function McpInstallPanel({
 
       {showInstallFlow && (
         <>
-          <div className="mcp-feature-list">
-            {mcpRecommendation.featureList.slice(0, 4).map((feature) => (
-              <div key={feature} className="mcp-feature-chip">
-                {feature}
+          {!compact && (
+            <>
+              <div className="mcp-feature-list">
+                {mcpRecommendation.featureList.slice(0, 4).map((feature) => (
+                  <div key={feature} className="mcp-feature-chip">
+                    {feature}
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
 
-          <div className="mcp-guidance-grid">
-            <div className="mcp-guidance-card">
-              <div className="mcp-guidance-title">What Brain will do</div>
-              <ul className="mcp-checklist">
-                <li>Add Strada.MCP as a git submodule inside the Unity project.</li>
-                <li>Wire `com.strada.mcp` into `Packages/manifest.json`.</li>
-                <li>Run `npm install` so Brain can load the runtime immediately.</li>
-              </ul>
-            </div>
-            <div className="mcp-guidance-card">
-              <div className="mcp-guidance-title">Discovery</div>
-              <p>{mcpRecommendation.discoveryHint ?? 'Brain auto-detects sibling and project-local Strada.MCP installs.'}</p>
-              <div className="mcp-guidance-title secondary">Install note</div>
-              <p>{mcpRecommendation.installHint ?? 'Choose where the checkout should live inside the project.'}</p>
-            </div>
-          </div>
+              <div className="mcp-guidance-grid">
+                <div className="mcp-guidance-card">
+                  <div className="mcp-guidance-title">What Brain will do</div>
+                  <ul className="mcp-checklist">
+                    <li>Add Strada.MCP as a git submodule inside the Unity project.</li>
+                    <li>Wire `com.strada.mcp` into `Packages/manifest.json`.</li>
+                    <li>Run `npm install` so Brain can load the runtime immediately.</li>
+                  </ul>
+                </div>
+                <div className="mcp-guidance-card">
+                  <div className="mcp-guidance-title">Discovery</div>
+                  <p>{mcpRecommendation.discoveryHint ?? 'Brain auto-detects sibling and project-local Strada.MCP installs.'}</p>
+                  <div className="mcp-guidance-title secondary">Install note</div>
+                  <p>{mcpRecommendation.installHint ?? 'Choose where the checkout should live inside the project.'}</p>
+                </div>
+              </div>
+            </>
+          )}
 
           <div className="mcp-target-grid" role="radiogroup" aria-label="Strada.MCP install target">
             {INSTALL_TARGETS.map((option) => {

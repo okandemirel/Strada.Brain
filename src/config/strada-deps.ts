@@ -69,8 +69,8 @@ export interface StradaMcpInstall {
   readonly source?: StradaDepInstallSource | null;
 }
 
-const CORE_NAMES = ["strada.core", "com.strada.core", "Strada.Core"] as const;
-const MODULES_NAMES = ["strada.modules", "com.strada.modules", "Strada.Modules"] as const;
+const CORE_NAMES = ["strada.core", "com.strada.core", "Strada.Core", "Submodules/Strada.Core"] as const;
+const MODULES_NAMES = ["strada.modules", "com.strada.modules", "Strada.Modules", "Submodules/Strada.Modules"] as const;
 const STRADA_MCP_PACKAGE_NAME = "strada-mcp";
 const DEFAULT_STRADA_DEPENDENCY_CONFIG: StradaDependencyConfig = {
   coreRepoUrl: DEFAULT_STRADA_CORE_REPO_URL,
@@ -84,9 +84,13 @@ const DEFAULT_STRADA_DEPENDENCY_CONFIG: StradaDependencyConfig = {
 };
 
 const TARGET_PATHS = {
-  core: "Packages/strada.core",
-  modules: "Packages/strada.modules",
+  core: "Packages/Submodules/Strada.Core",
+  modules: "Packages/Submodules/Strada.Modules",
 } as const;
+const DEP_MANIFEST_ENTRIES: Record<"core" | "modules", { name: string; reference: string }> = {
+  core: { name: "com.strada.core", reference: "file:Submodules/Strada.Core" },
+  modules: { name: "com.strada.modules", reference: "file:Submodules/Strada.Modules" },
+};
 const MCP_SUBMODULE_TARGETS: Record<McpInstallTarget, string> = {
   packages: "Packages/Submodules/Strada.MCP",
   assets: "Assets/Strada.MCP",
@@ -227,21 +231,24 @@ export async function installStradaDep(
   const repoUrl = pkg === "core" ? resolvedConfig.coreRepoUrl : resolvedConfig.modulesRepoUrl;
   const targetPath = TARGET_PATHS[pkg];
   const fullTargetPath = join(unityProjectPath, targetPath);
+  const fullManifestPath = join(unityProjectPath, "Packages", "manifest.json");
 
-  return new Promise((resolve) => {
-    execFile(
-      "git",
-      ["submodule", "add", repoUrl, targetPath],
-      { cwd: unityProjectPath },
-      (error, _stdout, stderr) => {
-        if (error) {
-          resolve(err(stderr || error.message));
-        } else {
-          resolve(ok(fullTargetPath));
-        }
-      },
-    );
-  });
+  try {
+    await runExecFile("git", ["submodule", "add", repoUrl, targetPath], unityProjectPath);
+  } catch (error) {
+    return err(`Failed to add ${pkg} submodule: ${formatExecError(error)}`);
+  }
+
+  if (existsSync(fullManifestPath)) {
+    const { name, reference } = DEP_MANIFEST_ENTRIES[pkg];
+    try {
+      updateUnityManifestDependency(fullManifestPath, name, reference);
+    } catch (error) {
+      return err(`Submodule was added, but Packages/manifest.json could not be updated: ${formatExecError(error)}`);
+    }
+  }
+
+  return ok(fullTargetPath);
 }
 
 export async function installStradaMcpSubmodule(

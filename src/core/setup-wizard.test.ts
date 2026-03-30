@@ -512,7 +512,7 @@ describe("SetupWizard path validation", () => {
     fs.mkdirSync(path.join(unityProjectDir, "ProjectSettings"), { recursive: true });
     fs.mkdirSync(path.join(unityProjectDir, "Packages"), { recursive: true });
 
-    const installedPath = path.join(unityProjectDir, "Packages", "strada.core");
+    const installedPath = path.join(unityProjectDir, "Packages", "Submodules", "Strada.Core");
     installStradaDepMock.mockResolvedValue({
       kind: "ok" as const,
       value: installedPath,

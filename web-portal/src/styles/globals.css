@@ -731,7 +731,7 @@
   .browser-loading, .browser-error, .browser-empty { padding: 20px 24px; text-align: center; color: rgba(255, 255, 255, 0.5); font-size: 14px; }
   .browser-error { color: var(--color-error); }
   .browser-context-panel { padding: 16px 24px; border-bottom: 1px solid rgba(255, 255, 255, 0.08); overflow-x: hidden; }
-  .browser-actions { padding: 14px 24px; border-top: 1px solid rgba(255, 255, 255, 0.08); display: flex; justify-content: flex-end; gap: 8px; }
+  .browser-actions { padding: 14px 24px; border-top: 1px solid rgba(255, 255, 255, 0.08); display: flex; justify-content: space-between; gap: 8px; }
 
   /* MCP Install Panel */
   .mcp-panel { position: relative; padding: 18px; border-radius: 18px; border: 1px solid rgba(255, 255, 255, 0.08); margin-bottom: 16px; overflow: hidden; min-width: 0; text-align: left; box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03); }

@@ -138,6 +138,7 @@ export default function DirectoryBrowser({
                 depInstallStatus={depInstallStatus}
                 depInstallError={depInstallError}
                 installButtonLabel="Install into this project"
+                compact
                 onInstall={(target) => {
                   void installMcp(target, currentPath).then((installed) => {
                     if (installed) {
