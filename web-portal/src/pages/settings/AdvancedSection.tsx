@@ -68,7 +68,7 @@ export default function AdvancedSection() {
     } finally {
       setToggling(false)
     }
-  }, [autonomousEnabled, durationHours, identity, queryClient])
+  }, [autonomousEnabled, durationHours, identity, queryClient, t])
 
   function formatRemaining(ms: number): string {
     const h = Math.floor(ms / 3_600_000)

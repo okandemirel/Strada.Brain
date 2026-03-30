@@ -124,7 +124,7 @@ export default function ChatInput({ onSend, disabled }: ChatInputProps) {
     } finally {
       sendingRef.current = false
     }
-  }, [text, files, onSend])
+  }, [text, files, onSend, t])
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -182,7 +182,7 @@ export default function ChatInput({ onSend, disabled }: ChatInputProps) {
 
     useWorkspaceStore.getState().resetOverride()
     return true
-  }, [onSend])
+  }, [onSend, t])
 
   return (
     <div

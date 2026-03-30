@@ -111,7 +111,7 @@ export default function VoiceRecorder({ onVoiceMessage, disabled }: VoiceRecorde
     } finally {
       setIsProcessing(false)
     }
-  }, [cleanupStream])
+  }, [cleanupStream, t])
 
   const startRecording = useCallback(async () => {
     if (startPendingRef.current || isProcessing) return
@@ -153,7 +153,7 @@ export default function VoiceRecorder({ onVoiceMessage, disabled }: VoiceRecorde
     } finally {
       startPendingRef.current = false
     }
-  }, [cleanupStream, handleStop, isProcessing])
+  }, [cleanupStream, handleStop, isProcessing, t])
 
   const toggleRecording = useCallback(() => {
     if (isRecording) {

@@ -44,7 +44,7 @@ export default function RoutingSection() {
     } finally {
       setApplyingPreset(null)
     }
-  }, [])
+  }, [t])
 
   const routing = activity?.routing?.slice(0, 6) ?? []
   const execution = activity?.execution?.slice(0, 6) ?? []

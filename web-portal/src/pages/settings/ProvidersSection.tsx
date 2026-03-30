@@ -28,7 +28,7 @@ export default function ProvidersSection() {
     } finally {
       setRefreshing(false)
     }
-  }, [queryClient])
+  }, [queryClient, t])
 
   const ragStatus = ragData?.status
   const active = providers?.active

@@ -84,7 +84,7 @@ export default function BudgetSection() {
     } catch {
       toast.error(t('budget.toastFailed'))
     }
-  }, [queryClient])
+  }, [queryClient, t])
 
   if (isLoading) {
     return (

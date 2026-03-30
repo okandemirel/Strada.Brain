@@ -1,5 +1,16 @@
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAgents } from '../../hooks/use-api'
+
+function relativeTime(ts: number, renderNow: number, t: (key: string, opts?: Record<string, unknown>) => string): string {
+  const diffMs = renderNow - ts
+  const diffMin = Math.floor(diffMs / 60_000)
+  if (diffMin < 1) return t('agents.timeJustNow')
+  if (diffMin < 60) return t('agents.timeMinutesAgo', { count: diffMin })
+  const diffH = Math.floor(diffMin / 60)
+  if (diffH < 24) return t('agents.timeHoursAgo', { count: diffH })
+  return t('agents.timeDaysAgo', { count: Math.floor(diffH / 24) })
+}
 
 const STATUS_COLORS: Record<string, string> = {
   active: 'bg-green-500/20 text-green-400',
@@ -20,15 +31,7 @@ export default function AgentsSection() {
   const { t } = useTranslation('settings')
   const { data, isLoading } = useAgents()
 
-  function relativeTime(ts: number): string {
-    const diffMs = Date.now() - ts
-    const diffMin = Math.floor(diffMs / 60_000)
-    if (diffMin < 1) return t('agents.timeJustNow')
-    if (diffMin < 60) return t('agents.timeMinutesAgo', { count: diffMin })
-    const diffH = Math.floor(diffMin / 60)
-    if (diffH < 24) return t('agents.timeHoursAgo', { count: diffH })
-    return t('agents.timeDaysAgo', { count: Math.floor(diffH / 24) })
-  }
+  const [renderNow] = useState(() => Date.now())
 
   if (isLoading || !data) {
     return (
@@ -92,7 +95,7 @@ export default function AgentsSection() {
                     <td className="px-4 py-3 font-mono text-xs text-text">
                       {agent.budgetCapUsd != null ? `$${agent.budgetCapUsd.toFixed(2)}` : '—'}
                     </td>
-                    <td className="px-4 py-3 text-xs text-text-tertiary">{relativeTime(agent.lastActivity)}</td>
+                    <td className="px-4 py-3 text-xs text-text-tertiary">{relativeTime(agent.lastActivity, renderNow, t)}</td>
                   </tr>
                 ))}
               </tbody>
