@@ -1,0 +1,95 @@
+{
+  "panel": {
+    "title": "画布",
+    "loading": "加载画布中...",
+    "agentVisuals": "智能体可视化 {{count}}",
+    "agentSync": "智能体同步 {{time}}",
+    "queue": "队列 {{count}}"
+  },
+  "cards": {
+    "aiBadge": "AI",
+    "codeBlock": {
+      "badge": "代码",
+      "defaultTitle": "代码片段"
+    },
+    "diffBlock": {
+      "badge": "差异"
+    },
+    "fileCard": {
+      "badge": "文件",
+      "lines": "{{count}} 行"
+    },
+    "diagramNode": {
+      "defaultLabel": "节点",
+      "statusActive": "活跃",
+      "statusIdle": "空闲",
+      "statusError": "错误",
+      "statusPending": "待处理"
+    },
+    "terminalBlock": {
+      "badge": "终端"
+    },
+    "imageBlock": {
+      "badge": "图片",
+      "noImage": "无图片"
+    },
+    "taskCard": {
+      "defaultTitle": "任务",
+      "statusTodo": "待办",
+      "priorityLow": "低",
+      "priorityMedium": "中",
+      "priorityHigh": "高",
+      "priorityCritical": "紧急"
+    },
+    "noteBlock": {
+      "badge": "笔记"
+    },
+    "goalSummary": {
+      "badge": "目标",
+      "defaultTitle": "目标",
+      "tasks": "任务：",
+      "running": "运行中：{{count}}",
+      "failed": "失败：{{count}}",
+      "skipped": "已跳过：{{count}}",
+      "done": "已完成：{{count}}"
+    },
+    "errorCard": {
+      "badgeWarning": "警告",
+      "badgeError": "错误",
+      "defaultMessage": "错误",
+      "showStackTrace": "显示堆栈跟踪",
+      "hideStackTrace": "隐藏堆栈跟踪"
+    },
+    "testResult": {
+      "badgePassed": "测试通过",
+      "badgeFailed": "测试失败",
+      "passed": "通过",
+      "failed": "失败",
+      "coverage": "覆盖率"
+    },
+    "linkCard": {
+      "badge": "链接",
+      "defaultTitle": "链接"
+    },
+    "metricCard": {
+      "badge": "指标",
+      "defaultLabel": "指标"
+    }
+  },
+  "controls": {
+    "zoomOut": "缩小",
+    "zoomIn": "放大",
+    "zoomToFit": "适应窗口"
+  },
+  "empty": {
+    "agentActivity": "智能体活动",
+    "tasksInProgress": "{{count}} 个任务进行中",
+    "tasksInProgress_plural": "{{count}} 个任务进行中",
+    "running": "{{count}} 个运行中",
+    "done": "{{count}} 个已完成",
+    "visualizeOnCanvas": "在画布上可视化",
+    "spatialCanvas": "空间画布",
+    "agentVisualsDescription": "智能体可视化内容将自动出现在这里。",
+    "blankCanvasDescription": "或者创建一个空白画布来自由排列模块。"
+  }
+}

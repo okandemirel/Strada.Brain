@@ -1,9 +1,12 @@
+import { useTranslation } from 'react-i18next'
+
 interface ProgressBarProps {
   step: number
   totalSteps: number
 }
 
 export default function ProgressBar({ step, totalSteps }: ProgressBarProps) {
+  const { t } = useTranslation('setup')
   const fillWidth = `${(step / totalSteps) * 100}%`
 
   return (
@@ -20,7 +23,7 @@ export default function ProgressBar({ step, totalSteps }: ProgressBarProps) {
             stepNum < step && 'completed',
           ].filter(Boolean).join(' ')
 
-          return <div key={stepNum} className={className} />
+          return <div key={stepNum} className={className} aria-label={t('progress.stepLabel', { step: stepNum, total: totalSteps })} />
         })}
       </div>
     </div>

@@ -1,4 +1,5 @@
 import { useState, useCallback } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { useAutonomousStatus, useBootReport } from '../../hooks/use-api'
@@ -30,6 +31,7 @@ const CAPABILITY_STATUS_COLORS: Record<string, string> = {
 }
 
 export default function AdvancedSection() {
+  const { t } = useTranslation('settings')
   const { sessionId, profileId } = useWS()
   const identity = resolveSettingsIdentity(sessionId, profileId)
   const { data: autonomousData } = useAutonomousStatus(identity?.query ?? null)
@@ -44,7 +46,7 @@ export default function AdvancedSection() {
 
   const toggleAutonomous = useCallback(async () => {
     if (!identity) {
-      toast.error('No active session — open a chat first')
+      toast.error(t('advanced.noActiveSession'))
       return
     }
     setToggling(true)
@@ -59,10 +61,10 @@ export default function AdvancedSection() {
         body: JSON.stringify(body),
       })
       if (!res.ok) throw new Error('Failed')
-      toast.success(autonomousEnabled ? 'Autonomous mode disabled' : `Autonomous mode enabled for ${durationHours}h`)
+      toast.success(autonomousEnabled ? t('advanced.toastDisabled') : t('advanced.toastEnabled', { hours: durationHours }))
       setTimeout(() => queryClient.invalidateQueries({ queryKey: ['autonomous'] }), 500)
     } catch {
-      toast.error('Failed to update autonomous mode')
+      toast.error(t('advanced.toastFailed'))
     } finally {
       setToggling(false)
     }
@@ -71,33 +73,33 @@ export default function AdvancedSection() {
   function formatRemaining(ms: number): string {
     const h = Math.floor(ms / 3_600_000)
     const m = Math.floor((ms % 3_600_000) / 60_000)
-    if (h > 0) return `${h}h ${m}m remaining`
-    return `${m}m remaining`
+    if (h > 0) return t('advanced.remainingHours', { hours: h, minutes: m })
+    return t('advanced.remainingMinutes', { minutes: m })
   }
 
   return (
     <div>
-      <h2 className="text-lg font-semibold text-text mb-1">Advanced</h2>
-      <p className="text-sm text-text-tertiary mb-6">System configuration and diagnostics</p>
+      <h2 className="text-lg font-semibold text-text mb-1">{t('advanced.title')}</h2>
+      <p className="text-sm text-text-tertiary mb-6">{t('advanced.description')}</p>
 
       {/* Autonomous Mode */}
       <p className="text-xs font-semibold uppercase tracking-[0.04em] text-text-tertiary mb-3.5">
-        Autonomous Mode
+        {t('advanced.autonomousMode')}
       </p>
       <div className="bg-white/3 backdrop-blur border border-white/5 rounded-2xl p-5 mb-4">
         <div className="flex justify-between items-center mb-3">
           <div>
-            <p className="text-sm font-medium text-text">Autonomous Mode</p>
+            <p className="text-sm font-medium text-text">{t('advanced.autonomousLabel')}</p>
             <p className="text-xs text-text-tertiary mt-0.5">
               {autonomousEnabled && remainingMs != null
                 ? formatRemaining(remainingMs)
-                : 'Allow the agent to act without per-step approval'}
+                : t('advanced.autonomousDescription')}
             </p>
           </div>
           <button
             onClick={toggleAutonomous}
             disabled={toggling || !identity}
-            title={!identity ? 'Open a chat session first' : undefined}
+            title={!identity ? t('advanced.openChatFirst') : undefined}
             className={`relative w-10 h-6 rounded-full transition-colors duration-200 outline-none focus-visible:ring-2 focus-visible:ring-accent/50 disabled:opacity-40 disabled:cursor-not-allowed ${autonomousEnabled ? 'bg-[var(--color-accent)]' : 'bg-white/10'}`}
           >
             <span
@@ -109,7 +111,7 @@ export default function AdvancedSection() {
         {/* Duration slider (only meaningful when not yet enabled) */}
         {!autonomousEnabled && (
           <div>
-            <p className="text-xs text-text-tertiary mb-2">Duration when enabling</p>
+            <p className="text-xs text-text-tertiary mb-2">{t('advanced.durationWhenEnabling')}</p>
             <div className="flex gap-1.5 flex-wrap">
               {DURATION_OPTIONS.map((opt) => (
                 <button
@@ -127,14 +129,14 @@ export default function AdvancedSection() {
 
       {/* Boot Report */}
       {bootLoading && (
-        <p className="text-sm text-text-tertiary animate-pulse mb-4">Loading boot report...</p>
+        <p className="text-sm text-text-tertiary animate-pulse mb-4">{t('advanced.loadingBootReport')}</p>
       )}
 
       {bootReport && (
         <>
           {/* Boot Stages */}
           <p className="text-xs font-semibold uppercase tracking-[0.04em] text-text-tertiary mb-3.5">
-            Boot Stages
+            {t('advanced.bootStages')}
           </p>
           <div className="bg-white/3 backdrop-blur border border-white/5 rounded-2xl mb-4 overflow-hidden">
             {bootReport.stages.map((stage, i) => (
@@ -159,7 +161,7 @@ export default function AdvancedSection() {
           {bootReport.capabilities.length > 0 && (
             <>
               <p className="text-xs font-semibold uppercase tracking-[0.04em] text-text-tertiary mb-3.5">
-                Capabilities
+                {t('advanced.capabilities')}
               </p>
               <div className="bg-white/3 backdrop-blur border border-white/5 rounded-2xl mb-4 overflow-hidden">
                 {bootReport.capabilities.map((cap, i) => (
@@ -187,15 +189,15 @@ export default function AdvancedSection() {
 
           {/* System Info */}
           <p className="text-xs font-semibold uppercase tracking-[0.04em] text-text-tertiary mb-3.5">
-            System Info
+            {t('advanced.systemInfo')}
           </p>
           <div className="bg-white/3 backdrop-blur border border-white/5 rounded-2xl mb-4 overflow-hidden">
             <div className="flex justify-between items-center px-4 py-2.5 border-b border-white/5 text-sm">
-              <span className="text-text-secondary">Recommended Preset</span>
+              <span className="text-text-secondary">{t('advanced.recommendedPreset')}</span>
               <span className="text-text font-mono text-xs">{bootReport.goldenPath.recommendedPreset}</span>
             </div>
             <div className="flex justify-between items-center px-4 py-2.5 text-sm">
-              <span className="text-text-secondary">Active Channels</span>
+              <span className="text-text-secondary">{t('advanced.activeChannels')}</span>
               <span className="text-text font-mono text-xs">{bootReport.goldenPath.channels.join(', ')}</span>
             </div>
           </div>

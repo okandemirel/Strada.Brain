@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import { useMonitorStore } from '../../stores/monitor-store'
 
 interface CanvasEmptyStateProps {
@@ -5,6 +6,7 @@ interface CanvasEmptyStateProps {
 }
 
 export default function CanvasEmptyState({ onVisualize }: CanvasEmptyStateProps) {
+  const { t } = useTranslation('canvas')
   const activeRootId = useMonitorStore(s => s.activeRootId)
   const tasks = useMonitorStore(s => s.tasks)
 
@@ -33,21 +35,21 @@ export default function CanvasEmptyState({ onVisualize }: CanvasEmptyStateProps)
       <div className="relative z-10 flex flex-col items-center gap-6 max-w-md text-center px-6">
         {hasAgentContext ? (
           <div className="rounded-2xl border border-sky-400/15 bg-sky-400/[0.06] px-6 py-5 backdrop-blur-xl w-full">
-            <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-sky-400/70">Agent Activity</div>
+            <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-sky-400/70">{t('empty.agentActivity')}</div>
             <div className="mt-3 text-lg font-semibold text-white">
-              {activeTasks.length} task{activeTasks.length !== 1 ? 's' : ''} in progress
+              {t('empty.tasksInProgress', { count: activeTasks.length })}
             </div>
             <div className="mt-2 flex justify-center gap-4 text-xs">
               {executingCount > 0 && (
                 <span className="flex items-center gap-1.5">
                   <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.6)]" />
-                  <span className="text-emerald-300">{executingCount} running</span>
+                  <span className="text-emerald-300">{t('empty.running', { count: executingCount })}</span>
                 </span>
               )}
               {completedCount > 0 && (
                 <span className="flex items-center gap-1.5">
                   <span className="h-1.5 w-1.5 rounded-full bg-sky-400" />
-                  <span className="text-sky-300">{completedCount} done</span>
+                  <span className="text-sky-300">{t('empty.done', { count: completedCount })}</span>
                 </span>
               )}
             </div>
@@ -58,7 +60,7 @@ export default function CanvasEmptyState({ onVisualize }: CanvasEmptyStateProps)
               data-testid="canvas-visualize-btn"
             >
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10" /><path d="M8 12l2 2 4-4" /></svg>
-              Visualize on Canvas
+              {t('empty.visualizeOnCanvas')}
             </button>
           </div>
         ) : (
@@ -70,11 +72,11 @@ export default function CanvasEmptyState({ onVisualize }: CanvasEmptyStateProps)
               </svg>
             </div>
             <div>
-              <div className="text-sm font-medium text-slate-400">Spatial canvas</div>
+              <div className="text-sm font-medium text-slate-400">{t('empty.spatialCanvas')}</div>
               <div className="mt-1.5 text-xs text-slate-600 leading-relaxed">
-                Agent visuals will appear here automatically.
+                {t('empty.agentVisualsDescription')}
                 <br />
-                Or start a blank canvas to arrange blocks freely.
+                {t('empty.blankCanvasDescription')}
               </div>
             </div>
           </>

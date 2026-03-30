@@ -1,4 +1,5 @@
 import { Suspense, lazy, useCallback, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import ActivityFeed from './ActivityFeed'
 import GateDialog from './GateDialog'
 import InterventionToolbar from './InterventionToolbar'
@@ -68,22 +69,23 @@ function clamp(val: number, min: number, max: number): number {
 }
 
 function SummaryStrip({ onExpand }: { onExpand: () => void }) {
+  const { t } = useTranslation('monitor')
   return (
     <div className="shrink-0 border-b border-white/6 bg-black/10 px-4 py-2">
       <div className="flex items-center justify-between gap-3 rounded-lg border border-white/8 bg-white/[0.03] px-3 py-2">
         <div>
           <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-text-tertiary">
-            Summary Hidden
+            {t('panel.summaryHidden')}
           </div>
           <div className="mt-0.5 text-xs text-text-secondary">
-            Workspace is expanded. Show the summary strip again when needed.
+            {t('panel.summaryDescription')}
           </div>
         </div>
         <button
           onClick={onExpand}
           className="shrink-0 rounded-md border border-white/8 bg-white/[0.03] px-3 py-1.5 text-xs font-medium text-text-secondary transition-colors hover:text-text"
         >
-          Show Summary
+          {t('panel.showSummary')}
         </button>
       </div>
     </div>
@@ -91,6 +93,7 @@ function SummaryStrip({ onExpand }: { onExpand: () => void }) {
 }
 
 export default function MonitorPanel() {
+  const { t } = useTranslation('monitor')
   const [viewMode, setViewMode] = useState<ViewMode>('dag')
   const [sidebarWidth, setSidebarWidth] = useState(() => readStored(STORAGE_KEY_SIDEBAR, SIDEBAR_DEFAULT))
   const [overviewHeight, setOverviewHeight] = useState(() =>
@@ -163,7 +166,7 @@ export default function MonitorPanel() {
                     : 'text-text-secondary hover:text-text'
                 }`}
               >
-                DAG
+                {t('panel.viewDag')}
               </button>
               <button
                 onClick={() => setViewMode('kanban')}
@@ -173,7 +176,7 @@ export default function MonitorPanel() {
                     : 'text-text-secondary hover:text-text'
                 }`}
               >
-                Kanban
+                {t('panel.viewKanban')}
               </button>
             </div>
 
@@ -181,7 +184,7 @@ export default function MonitorPanel() {
               onClick={toggleOverview}
               className="rounded-md border border-white/8 bg-white/[0.03] px-3 py-1.5 text-xs font-medium text-text-secondary transition-colors hover:text-text"
             >
-              {overviewCollapsed ? 'Summary Hidden' : 'Hide Summary'}
+              {overviewCollapsed ? t('panel.summaryHidden') : t('panel.hideSummary')}
             </button>
           </div>
 
@@ -210,7 +213,7 @@ export default function MonitorPanel() {
             <Suspense
               fallback={
                 <div className="flex h-full items-center justify-center text-sm text-text-tertiary">
-                  Loading DAG view...
+                  {t('panel.loadingDag')}
                 </div>
               }
             >
@@ -220,7 +223,7 @@ export default function MonitorPanel() {
             <Suspense
               fallback={
                 <div className="flex h-full items-center justify-center text-sm text-text-tertiary">
-                  Loading Kanban...
+                  {t('panel.loadingKanban')}
                 </div>
               }
             >
@@ -249,7 +252,7 @@ export default function MonitorPanel() {
 
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
           <div className="shrink-0 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-text-secondary">
-            Activity
+            {t('activity.sidebarTitle')}
           </div>
           <div className="min-h-0 flex-1 overflow-hidden">
             <ActivityFeed />

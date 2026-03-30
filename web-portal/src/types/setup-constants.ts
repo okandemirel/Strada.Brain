@@ -111,8 +111,8 @@ export const CHANNELS: ChannelDef[] = [
     name: 'Telegram',
     icon: 'send',
     fields: [
-      { domId: 'telegramToken', envKey: 'TELEGRAM_BOT_TOKEN', label: 'Bot Token', placeholder: '123456:ABC-DEF...' },
-      { domId: 'telegramUsers', envKey: 'ALLOWED_TELEGRAM_USER_IDS', label: 'Allowed User IDs', placeholder: '12345,67890' },
+      { domId: 'telegramToken', envKey: 'TELEGRAM_BOT_TOKEN', label: 'Bot Token', labelKey: 'channels.fields.telegram.botToken', placeholder: '123456:ABC-DEF...' },
+      { domId: 'telegramUsers', envKey: 'ALLOWED_TELEGRAM_USER_IDS', label: 'Allowed User IDs', labelKey: 'channels.fields.telegram.allowedUserIds', placeholder: '12345,67890' },
     ],
   },
   {
@@ -120,7 +120,7 @@ export const CHANNELS: ChannelDef[] = [
     name: 'Discord',
     icon: 'hash',
     fields: [
-      { domId: 'discordToken', envKey: 'DISCORD_BOT_TOKEN', label: 'Bot Token', placeholder: 'MTk...' },
+      { domId: 'discordToken', envKey: 'DISCORD_BOT_TOKEN', label: 'Bot Token', labelKey: 'channels.fields.discord.botToken', placeholder: 'MTk...' },
     ],
   },
   {
@@ -128,8 +128,8 @@ export const CHANNELS: ChannelDef[] = [
     name: 'Slack',
     icon: 'message-square',
     fields: [
-      { domId: 'slackBotToken', envKey: 'SLACK_BOT_TOKEN', label: 'Bot Token', placeholder: 'xoxb-...' },
-      { domId: 'slackAppToken', envKey: 'SLACK_APP_TOKEN', label: 'App Token', placeholder: 'xapp-...' },
+      { domId: 'slackBotToken', envKey: 'SLACK_BOT_TOKEN', label: 'Bot Token', labelKey: 'channels.fields.slack.botToken', placeholder: 'xoxb-...' },
+      { domId: 'slackAppToken', envKey: 'SLACK_APP_TOKEN', label: 'App Token', labelKey: 'channels.fields.slack.appToken', placeholder: 'xapp-...' },
     ],
   },
   {
@@ -137,8 +137,8 @@ export const CHANNELS: ChannelDef[] = [
     name: 'WhatsApp',
     icon: 'phone',
     fields: [
-      { domId: 'whatsappAllowedNumbers', envKey: 'WHATSAPP_ALLOWED_NUMBERS', label: 'Allowed Numbers', placeholder: '+1234567890' },
-      { domId: 'whatsappSessionPath', envKey: 'WHATSAPP_SESSION_PATH', label: 'Session Path', placeholder: '.wwebjs_auth' },
+      { domId: 'whatsappAllowedNumbers', envKey: 'WHATSAPP_ALLOWED_NUMBERS', label: 'Allowed Numbers', labelKey: 'channels.fields.whatsapp.allowedNumbers', placeholder: '+1234567890' },
+      { domId: 'whatsappSessionPath', envKey: 'WHATSAPP_SESSION_PATH', label: 'Session Path', labelKey: 'channels.fields.whatsapp.sessionPath', placeholder: '.wwebjs_auth' },
     ],
   },
   { id: 'cli', name: 'CLI', icon: 'terminal', fields: [] },

@@ -1,0 +1,95 @@
+{
+  "panel": {
+    "title": "CANVAS",
+    "loading": "Cargando canvas...",
+    "agentVisuals": "Visuales del agente {{count}}",
+    "agentSync": "Sincronizacion del agente {{time}}",
+    "queue": "Cola {{count}}"
+  },
+  "cards": {
+    "aiBadge": "IA",
+    "codeBlock": {
+      "badge": "Codigo",
+      "defaultTitle": "Fragmento"
+    },
+    "diffBlock": {
+      "badge": "Diff"
+    },
+    "fileCard": {
+      "badge": "Archivo",
+      "lines": "{{count}} lineas"
+    },
+    "diagramNode": {
+      "defaultLabel": "Nodo",
+      "statusActive": "activo",
+      "statusIdle": "inactivo",
+      "statusError": "error",
+      "statusPending": "pendiente"
+    },
+    "terminalBlock": {
+      "badge": "Terminal"
+    },
+    "imageBlock": {
+      "badge": "Imagen",
+      "noImage": "Sin imagen"
+    },
+    "taskCard": {
+      "defaultTitle": "Tarea",
+      "statusTodo": "pendiente",
+      "priorityLow": "baja",
+      "priorityMedium": "media",
+      "priorityHigh": "alta",
+      "priorityCritical": "critica"
+    },
+    "noteBlock": {
+      "badge": "Nota"
+    },
+    "goalSummary": {
+      "badge": "Objetivo",
+      "defaultTitle": "Objetivo",
+      "tasks": "Tareas:",
+      "running": "En ejecucion: {{count}}",
+      "failed": "Fallidas: {{count}}",
+      "skipped": "Omitidas: {{count}}",
+      "done": "Completadas: {{count}}"
+    },
+    "errorCard": {
+      "badgeWarning": "Advertencia",
+      "badgeError": "Error",
+      "defaultMessage": "Error",
+      "showStackTrace": "Mostrar Stack Trace",
+      "hideStackTrace": "Ocultar Stack Trace"
+    },
+    "testResult": {
+      "badgePassed": "Tests Aprobados",
+      "badgeFailed": "Tests Fallidos",
+      "passed": "Aprobados",
+      "failed": "Fallidos",
+      "coverage": "Cobertura"
+    },
+    "linkCard": {
+      "badge": "Enlace",
+      "defaultTitle": "Enlace"
+    },
+    "metricCard": {
+      "badge": "Metrica",
+      "defaultLabel": "Metrica"
+    }
+  },
+  "controls": {
+    "zoomOut": "Alejar",
+    "zoomIn": "Acercar",
+    "zoomToFit": "Ajustar al tamano"
+  },
+  "empty": {
+    "agentActivity": "Actividad del Agente",
+    "tasksInProgress": "{{count}} tarea en progreso",
+    "tasksInProgress_plural": "{{count}} tareas en progreso",
+    "running": "{{count}} en ejecucion",
+    "done": "{{count}} completadas",
+    "visualizeOnCanvas": "Visualizar en Canvas",
+    "spatialCanvas": "Canvas espacial",
+    "agentVisualsDescription": "Los elementos visuales del agente apareceran aqui automaticamente.",
+    "blankCanvasDescription": "O inicia un canvas en blanco para organizar bloques libremente."
+  }
+}

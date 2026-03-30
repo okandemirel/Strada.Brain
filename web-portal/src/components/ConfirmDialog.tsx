@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import type { ConfirmationState } from '../types/messages'
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from './ui/dialog'
 import { Button } from './ui/button'
@@ -37,6 +38,7 @@ export default function ConfirmDialog({ confirmation, onRespond }: ConfirmDialog
 }
 
 function ConfirmDialogBody({ confirmation, onRespond }: ConfirmDialogProps) {
+  const { t } = useTranslation()
   const firstBtnRef = useRef<HTMLButtonElement>(null)
   const [modifyText, setModifyText] = useState('')
   const [showModifyInput, setShowModifyInput] = useState(false)
@@ -110,7 +112,7 @@ function ConfirmDialogBody({ confirmation, onRespond }: ConfirmDialogProps) {
         ) : (
           // Radix warns if no Description is present; provide a hidden one
           <DialogDescription className="sr-only">
-            {isPlan ? 'Review the plan steps below' : 'Choose an option'}
+            {isPlan ? t('confirm.reviewPlan') : t('confirm.chooseOption')}
           </DialogDescription>
         )}
 
@@ -122,7 +124,7 @@ function ConfirmDialogBody({ confirmation, onRespond }: ConfirmDialogProps) {
               value={modifyText}
               onChange={(e) => setModifyText(e.target.value)}
               onKeyDown={handleModifyKeyDown}
-              placeholder="Describe your modification..."
+              placeholder={t('confirm.modifyPlaceholder')}
               rows={3}
             />
             <div className="mt-2 flex justify-end gap-2">
@@ -131,14 +133,14 @@ function ConfirmDialogBody({ confirmation, onRespond }: ConfirmDialogProps) {
                 size="sm"
                 onClick={() => { setShowModifyInput(false); setModifyText('') }}
               >
-                Cancel
+                {t('confirm.cancel')}
               </Button>
               <Button
                 size="sm"
                 onClick={handleModifySubmit}
                 disabled={!modifyText.trim()}
               >
-                Submit
+                {t('confirm.submit')}
               </Button>
             </div>
           </div>
@@ -155,7 +157,7 @@ function ConfirmDialogBody({ confirmation, onRespond }: ConfirmDialogProps) {
             >
               {isRecommended(option) && (
                 <span className="mr-1.5 rounded-full bg-bg/20 px-1.5 py-0.5 text-[10px] font-semibold uppercase">
-                  Recommended
+                  {t('confirm.recommended')}
                 </span>
               )}
               {option.replace(/\s*\(recommended\)/i, '')}
@@ -168,11 +170,12 @@ function ConfirmDialogBody({ confirmation, onRespond }: ConfirmDialogProps) {
 }
 
 function PlanDisplay({ question }: { question: string }) {
+  const { t } = useTranslation()
   const { title, steps } = parsePlanSteps(question)
 
   return (
     <div className="mb-4">
-      <DialogTitle className="mb-3 text-accent">Plan: {title}</DialogTitle>
+      <DialogTitle className="mb-3 text-accent">{t('confirm.planPrefix')} {title}</DialogTitle>
       {steps.length > 0 && (
         <ol className="space-y-1.5 rounded-xl border border-white/5 bg-white/[0.03] backdrop-blur p-2">
           {steps.map((step, i) => (

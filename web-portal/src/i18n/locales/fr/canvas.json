@@ -1,0 +1,95 @@
+{
+  "panel": {
+    "title": "CANVAS",
+    "loading": "Chargement du canvas...",
+    "agentVisuals": "Visuels de l'agent {{count}}",
+    "agentSync": "Synchronisation de l'agent {{time}}",
+    "queue": "File d'attente {{count}}"
+  },
+  "cards": {
+    "aiBadge": "IA",
+    "codeBlock": {
+      "badge": "Code",
+      "defaultTitle": "Extrait"
+    },
+    "diffBlock": {
+      "badge": "Diff"
+    },
+    "fileCard": {
+      "badge": "Fichier",
+      "lines": "{{count}} lignes"
+    },
+    "diagramNode": {
+      "defaultLabel": "Noeud",
+      "statusActive": "actif",
+      "statusIdle": "inactif",
+      "statusError": "erreur",
+      "statusPending": "en attente"
+    },
+    "terminalBlock": {
+      "badge": "Terminal"
+    },
+    "imageBlock": {
+      "badge": "Image",
+      "noImage": "Aucune image"
+    },
+    "taskCard": {
+      "defaultTitle": "Tache",
+      "statusTodo": "a faire",
+      "priorityLow": "basse",
+      "priorityMedium": "moyenne",
+      "priorityHigh": "haute",
+      "priorityCritical": "critique"
+    },
+    "noteBlock": {
+      "badge": "Note"
+    },
+    "goalSummary": {
+      "badge": "Objectif",
+      "defaultTitle": "Objectif",
+      "tasks": "Taches :",
+      "running": "En cours : {{count}}",
+      "failed": "Echouees : {{count}}",
+      "skipped": "Ignorees : {{count}}",
+      "done": "Terminees : {{count}}"
+    },
+    "errorCard": {
+      "badgeWarning": "Avertissement",
+      "badgeError": "Erreur",
+      "defaultMessage": "Erreur",
+      "showStackTrace": "Afficher la trace de la pile",
+      "hideStackTrace": "Masquer la trace de la pile"
+    },
+    "testResult": {
+      "badgePassed": "Tests reussis",
+      "badgeFailed": "Tests echoues",
+      "passed": "Reussis",
+      "failed": "Echoues",
+      "coverage": "Couverture"
+    },
+    "linkCard": {
+      "badge": "Lien",
+      "defaultTitle": "Lien"
+    },
+    "metricCard": {
+      "badge": "Metrique",
+      "defaultLabel": "Metrique"
+    }
+  },
+  "controls": {
+    "zoomOut": "Dezoomer",
+    "zoomIn": "Zoomer",
+    "zoomToFit": "Ajuster a la vue"
+  },
+  "empty": {
+    "agentActivity": "Activite de l'agent",
+    "tasksInProgress": "{{count}} tache en cours",
+    "tasksInProgress_plural": "{{count}} taches en cours",
+    "running": "{{count}} en cours",
+    "done": "{{count}} terminees",
+    "visualizeOnCanvas": "Visualiser sur le Canvas",
+    "spatialCanvas": "Canvas spatial",
+    "agentVisualsDescription": "Les visuels de l'agent apparaitront ici automatiquement.",
+    "blankCanvasDescription": "Ou commencez un canvas vierge pour organiser les blocs librement."
+  }
+}

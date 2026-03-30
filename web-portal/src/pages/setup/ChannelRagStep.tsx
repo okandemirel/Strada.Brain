@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import { CHANNELS, LANGUAGES, EMBEDDING_CAPABLE, EMBEDDING_PROVIDERS, PROVIDER_MAP } from '../../types/setup-constants'
 
 interface ChannelRagStepProps {
@@ -57,6 +58,7 @@ export default function ChannelRagStep({
   onNext,
   onBack,
 }: ChannelRagStepProps) {
+  const { t } = useTranslation('setup')
   const selectedChannel = CHANNELS.find((c) => c.id === channel)
   const autoDetectedEmbeddingProviderId = Array.from(checkedProviders).find((id) => EMBEDDING_CAPABLE.has(id))
   const selectedEmbeddingProviderId =
@@ -85,9 +87,9 @@ export default function ChannelRagStep({
 
   return (
     <div className="step">
-      <h2>Channel &amp; Settings</h2>
+      <h2>{t('channels.title')}</h2>
       <p className="step-subtitle">
-        Select your primary communication channel and configure additional settings.
+        {t('channels.subtitle')}
       </p>
 
       <div className="channel-grid">
@@ -101,7 +103,7 @@ export default function ChannelRagStep({
               onChange={() => setChannel(ch.id)}
             />
             <div className={`channel-card${channel === ch.id ? ' selected' : ''}`}>
-              <span className="channel-name">{ch.name}</span>
+              <span className="channel-name">{t(`channels.names.${ch.id}`)}</span>
             </div>
           </label>
         ))}
@@ -109,10 +111,10 @@ export default function ChannelRagStep({
 
       {selectedChannel && selectedChannel.fields.length > 0 && (
         <div className="channel-fields">
-          <h3 className="section-label">{selectedChannel.name} Configuration</h3>
+          <h3 className="section-label">{t('channels.configuration', { channel: t(`channels.names.${selectedChannel.id}`) })}</h3>
           {selectedChannel.fields.map((field) => (
             <div key={field.domId} className="channel-field">
-              <label htmlFor={field.domId}>{field.label}</label>
+              <label htmlFor={field.domId}>{field.labelKey ? t(field.labelKey) : field.label}</label>
               <input
                 id={field.domId}
                 type="text"
@@ -127,21 +129,21 @@ export default function ChannelRagStep({
       )}
 
       <div className="language-select">
-        <h3 className="section-label">Language</h3>
+        <h3 className="section-label">{t('channels.language.title')}</h3>
         <select
           value={language}
           onChange={(e) => setLanguage(e.target.value)}
         >
           {LANGUAGES.map((lang) => (
             <option key={lang.code} value={lang.code}>
-              {lang.name}
+              {t(`channels.languages.${lang.code}`)}
             </option>
           ))}
         </select>
       </div>
 
       <div className="rag-toggle">
-        <h3 className="section-label">RAG (Retrieval-Augmented Generation)</h3>
+        <h3 className="section-label">{t('channels.rag.title')}</h3>
         <label className="toggle-switch">
           <input
             type="checkbox"
@@ -150,19 +152,19 @@ export default function ChannelRagStep({
           />
           <span className="toggle-slider" />
           <span className="toggle-label">
-            {ragEnabled ? 'Enabled' : 'Disabled'}
+            {ragEnabled ? t('channels.rag.enabled') : t('channels.rag.disabled')}
           </span>
         </label>
         <p className={`rag-info${!ragEnabled || !embeddingProviderName ? ' warning' : ''}`}>
-          {!ragEnabled && 'RAG is disabled. Code search will not be available.'}
-          {ragEnabled && embeddingProviderName && `\u2713 RAG enabled \u2014 will use ${embeddingProviderName} for embeddings, independently from the response provider chain.`}
-          {ragEnabled && !embeddingProviderName && checkedProviders.size > 0 && '\u26A0 Your current response providers don\'t support embeddings. Select Gemini, OpenAI, or Ollama as the embedding provider to enable RAG code search.'}
-          {ragEnabled && !embeddingProviderName && checkedProviders.size === 0 && '\u26A0 RAG enabled \u2014 embedding provider will be auto-detected from your providers.'}
+          {!ragEnabled && t('channels.rag.disabledInfo')}
+          {ragEnabled && embeddingProviderName && t('channels.rag.enabledWithProvider', { provider: embeddingProviderName })}
+          {ragEnabled && !embeddingProviderName && checkedProviders.size > 0 && t('channels.rag.noEmbeddingProviderWithProviders')}
+          {ragEnabled && !embeddingProviderName && checkedProviders.size === 0 && t('channels.rag.noEmbeddingProviderNoProviders')}
         </p>
 
         {ragEnabled && (
           <div className="embedding-provider-select">
-            <label htmlFor="embeddingProvider">Embedding Provider</label>
+            <label htmlFor="embeddingProvider">{t('channels.rag.embeddingProvider')}</label>
             <select
               id="embeddingProvider"
               value={embeddingProvider}
@@ -170,26 +172,26 @@ export default function ChannelRagStep({
             >
               {EMBEDDING_PROVIDERS.map((ep) => (
                 <option key={ep.id} value={ep.id}>
-                  {ep.name}
+                  {t(`channels.embeddingProviders.${ep.id}`)}
                 </option>
               ))}
             </select>
             <p className="rag-info" style={{ marginTop: '0.65rem' }}>
-              This is a system-wide memory/RAG choice. It does not change which provider Strada uses for conversation turns.
+              {t('channels.rag.embeddingProviderInfo')}
             </p>
             {ragEnabled && !embeddingProviderName && (
               <p className="rag-info warning" style={{ marginTop: '0.55rem' }}>
-                You can still continue to review, but setup will stay blocked until you pick a valid embedding provider or disable RAG.
+                {t('channels.rag.blockedInfo')}
               </p>
             )}
             {openaiEmbeddingNeedsApiKey && (
               <p className="rag-info warning" style={{ marginTop: '0.55rem' }}>
-                OpenAI ChatGPT/Codex subscription auth covers conversation only. OpenAI embeddings still require an OpenAI API key.
+                {t('channels.rag.openaiEmbeddingNeedsKey')}
               </p>
             )}
             {needsDedicatedEmbeddingKey && explicitEmbeddingProvider?.envKey && explicitEmbeddingProvider.placeholder && (
               <div className="channel-field" style={{ marginTop: '0.85rem' }}>
-                <label htmlFor="embeddingProviderKey">{explicitEmbeddingProvider.name} Embedding API Key</label>
+                <label htmlFor="embeddingProviderKey">{t('channels.rag.dedicatedEmbeddingKeyLabel', { provider: explicitEmbeddingProvider.name })}</label>
                 <input
                   id="embeddingProviderKey"
                   type="password"
@@ -199,11 +201,11 @@ export default function ChannelRagStep({
                   autoComplete="off"
                 />
                 <p className="rag-info" style={{ marginTop: '0.55rem' }}>
-                  This key is used only for embeddings. It does not add {explicitEmbeddingProvider.name} to the response provider chain.
+                  {t('channels.rag.dedicatedEmbeddingKeyInfo', { provider: explicitEmbeddingProvider.name })}
                 </p>
                 {embeddingProvider === 'openai' && providerAuthModes.openai === 'chatgpt-subscription' && (
                   <p className="rag-info warning" style={{ marginTop: '0.45rem' }}>
-                    Subscription login is not used for this embedding request path.
+                    {t('channels.rag.subscriptionNotUsedForEmbedding')}
                   </p>
                 )}
               </div>
@@ -213,12 +215,12 @@ export default function ChannelRagStep({
       </div>
 
       <div className="rag-toggle">
-        <h3 className="section-label">Global Daily Budget</h3>
+        <h3 className="section-label">{t('channels.budget.title')}</h3>
         <p className="rag-info">
-          Maximum daily spend across all systems (daemon, agents, chat). Set to $0 for unlimited.
+          {t('channels.budget.description')}
         </p>
         <div className="autonomy-slider-container">
-          <label className="autonomy-budget-label">Daily Limit</label>
+          <label className="autonomy-budget-label">{t('channels.budget.dailyLimit')}</label>
           <input
             type="range"
             min={0}
@@ -229,15 +231,15 @@ export default function ChannelRagStep({
             className="autonomy-range"
           />
           <div className="autonomy-labels">
-            <span>Unlimited</span>
-            <span className="autonomy-value">{globalDailyBudget === 0 ? 'Unlimited' : `$${globalDailyBudget.toFixed(0)}`}</span>
-            <span>$50</span>
+            <span>{t('channels.budget.unlimited')}</span>
+            <span className="autonomy-value">{globalDailyBudget === 0 ? t('channels.budget.valueUnlimited') : t('channels.budget.valueAmount', { amount: globalDailyBudget.toFixed(0) })}</span>
+            <span>{t('channels.budget.maxLabel')}</span>
           </div>
         </div>
       </div>
 
       <div className="rag-toggle">
-        <h3 className="section-label">Daemon Mode</h3>
+        <h3 className="section-label">{t('channels.daemon.title')}</h3>
         <label className="toggle-switch">
           <input
             type="checkbox"
@@ -246,18 +248,18 @@ export default function ChannelRagStep({
           />
           <span className="toggle-slider" />
           <span className="toggle-label">
-            {daemonEnabled ? 'Enabled' : 'Disabled'}
+            {daemonEnabled ? t('channels.daemon.enabled') : t('channels.daemon.disabled')}
           </span>
         </label>
         <p className={`rag-info${!daemonEnabled ? ' warning' : ''}`}>
           {daemonEnabled
-            ? 'Daemon mode active \u2014 background monitoring with triggers, scheduled tasks, and proactive assistance.'
-            : 'Enable background monitoring with triggers, scheduled tasks, and proactive assistance.'}
+            ? t('channels.daemon.enabledInfo')
+            : t('channels.daemon.disabledInfo')}
         </p>
         {daemonEnabled && (
           <>
             <div className="autonomy-slider-container">
-              <label className="autonomy-budget-label">Daemon Sub-Limit</label>
+              <label className="autonomy-budget-label">{t('channels.daemon.subLimit')}</label>
               <input
                 type="range"
                 min={0.5}
@@ -268,20 +270,20 @@ export default function ChannelRagStep({
                 className="autonomy-range"
               />
               <div className="autonomy-labels">
-                <span>$0.50</span>
+                <span>{t('channels.daemon.subLimitMin')}</span>
                 <span className="autonomy-value">${daemonBudget.toFixed(2)}</span>
-                <span>$10.00</span>
+                <span>{t('channels.daemon.subLimitMax')}</span>
               </div>
             </div>
             <p className="rag-info" style={{ marginTop: '0.3rem', fontSize: '0.75rem' }}>
-              Maximum daily spend for daemon triggers only (within the global budget).
+              {t('channels.daemon.subLimitInfo')}
             </p>
           </>
         )}
       </div>
 
       <div className="rag-toggle">
-        <h3 className="section-label">Autonomy</h3>
+        <h3 className="section-label">{t('channels.autonomy.title')}</h3>
         <label className="toggle-switch">
           <input
             type="checkbox"
@@ -290,17 +292,17 @@ export default function ChannelRagStep({
           />
           <span className="toggle-slider" />
           <span className="toggle-label">
-            {autonomyEnabled ? 'Enabled' : 'Disabled'}
+            {autonomyEnabled ? t('channels.autonomy.enabled') : t('channels.autonomy.disabled')}
           </span>
         </label>
         <p className={`rag-info${!autonomyEnabled ? ' warning' : ''}`}>
           {autonomyEnabled
-            ? 'Autonomous mode active \u2014 the agent can execute operations without asking for confirmation.'
-            : 'Enable autonomous mode to let the agent operate without requiring confirmation for each action.'}
+            ? t('channels.autonomy.enabledInfo')
+            : t('channels.autonomy.disabledInfo')}
         </p>
         {autonomyEnabled && (
           <div className="autonomy-slider-container">
-            <label className="autonomy-budget-label">Duration</label>
+            <label className="autonomy-budget-label">{t('channels.autonomy.duration')}</label>
             <input
               type="range"
               min={1}
@@ -311,9 +313,9 @@ export default function ChannelRagStep({
               className="autonomy-range"
             />
             <div className="autonomy-labels">
-              <span>1h</span>
-              <span className="autonomy-value">{autonomyHours}h</span>
-              <span>168h</span>
+              <span>{t('channels.autonomy.durationMin')}</span>
+              <span className="autonomy-value">{t('channels.autonomy.durationValue', { hours: autonomyHours })}</span>
+              <span>{t('channels.autonomy.durationMax')}</span>
             </div>
           </div>
         )}
@@ -321,10 +323,10 @@ export default function ChannelRagStep({
 
       <div className="step-actions">
         <button className="btn btn-secondary" onClick={onBack}>
-          Back
+          {t('wizard.nav.back')}
         </button>
         <button className="btn btn-primary" onClick={onNext}>
-          Next
+          {t('wizard.nav.next')}
         </button>
       </div>
     </div>

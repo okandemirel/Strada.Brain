@@ -1,0 +1,95 @@
+{
+  "panel": {
+    "title": "キャンバス",
+    "loading": "キャンバスを読み込み中...",
+    "agentVisuals": "エージェントビジュアル {{count}}",
+    "agentSync": "エージェント同期 {{time}}",
+    "queue": "キュー {{count}}"
+  },
+  "cards": {
+    "aiBadge": "AI",
+    "codeBlock": {
+      "badge": "コード",
+      "defaultTitle": "スニペット"
+    },
+    "diffBlock": {
+      "badge": "差分"
+    },
+    "fileCard": {
+      "badge": "ファイル",
+      "lines": "{{count}} 行"
+    },
+    "diagramNode": {
+      "defaultLabel": "ノード",
+      "statusActive": "アクティブ",
+      "statusIdle": "アイドル",
+      "statusError": "エラー",
+      "statusPending": "保留中"
+    },
+    "terminalBlock": {
+      "badge": "ターミナル"
+    },
+    "imageBlock": {
+      "badge": "画像",
+      "noImage": "画像なし"
+    },
+    "taskCard": {
+      "defaultTitle": "タスク",
+      "statusTodo": "未着手",
+      "priorityLow": "低",
+      "priorityMedium": "中",
+      "priorityHigh": "高",
+      "priorityCritical": "緊急"
+    },
+    "noteBlock": {
+      "badge": "メモ"
+    },
+    "goalSummary": {
+      "badge": "ゴール",
+      "defaultTitle": "ゴール",
+      "tasks": "タスク:",
+      "running": "実行中: {{count}}",
+      "failed": "失敗: {{count}}",
+      "skipped": "スキップ: {{count}}",
+      "done": "完了: {{count}}"
+    },
+    "errorCard": {
+      "badgeWarning": "警告",
+      "badgeError": "エラー",
+      "defaultMessage": "エラー",
+      "showStackTrace": "スタックトレースを表示",
+      "hideStackTrace": "スタックトレースを非表示"
+    },
+    "testResult": {
+      "badgePassed": "テスト通過",
+      "badgeFailed": "テスト失敗",
+      "passed": "通過",
+      "failed": "失敗",
+      "coverage": "カバレッジ"
+    },
+    "linkCard": {
+      "badge": "リンク",
+      "defaultTitle": "リンク"
+    },
+    "metricCard": {
+      "badge": "メトリック",
+      "defaultLabel": "メトリック"
+    }
+  },
+  "controls": {
+    "zoomOut": "ズームアウト",
+    "zoomIn": "ズームイン",
+    "zoomToFit": "全体表示"
+  },
+  "empty": {
+    "agentActivity": "エージェントアクティビティ",
+    "tasksInProgress": "{{count}} 件のタスクが進行中",
+    "tasksInProgress_plural": "{{count}} 件のタスクが進行中",
+    "running": "{{count}} 実行中",
+    "done": "{{count}} 完了",
+    "visualizeOnCanvas": "キャンバスに可視化",
+    "spatialCanvas": "空間キャンバス",
+    "agentVisualsDescription": "エージェントのビジュアルが自動的にここに表示されます。",
+    "blankCanvasDescription": "または空のキャンバスを開始して、自由にブロックを配置してください。"
+  }
+}

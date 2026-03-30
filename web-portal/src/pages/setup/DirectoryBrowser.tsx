@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import type {
   BrowseEntry,
   McpInstallPlan,
@@ -91,6 +92,8 @@ export default function DirectoryBrowser({
   onSelect,
   onClose,
 }: DirectoryBrowserProps) {
+  const { t } = useTranslation('setup')
+
   if (!isOpen) return null
 
   const separator = currentPath.includes('\\') ? '\\' : '/'
@@ -115,9 +118,9 @@ export default function DirectoryBrowser({
     <div className="browser-overlay" onClick={onClose}>
       <div className="browser-modal" onClick={(e) => e.stopPropagation()}>
         <div className="browser-header">
-          <h3>Browse Directory</h3>
+          <h3>{t('directory.title')}</h3>
           {isUnityProject && (
-            <span className="unity-badge">Unity Project</span>
+            <span className="unity-badge">{t('directory.unityBadge')}</span>
           )}
         </div>
 
@@ -137,7 +140,7 @@ export default function DirectoryBrowser({
                 mcpInstallPlan={mcpInstallPlan}
                 depInstallStatus={depInstallStatus}
                 depInstallError={depInstallError}
-                installButtonLabel="Install into this project"
+                installButtonLabel={t('directory.installButton')}
                 compact
                 onInstall={(target) => {
                   void installMcp(target, currentPath).then((installed) => {
@@ -158,7 +161,7 @@ export default function DirectoryBrowser({
           )}
 
           <div className="browser-entries">
-            {loading && <div className="browser-loading">Loading...</div>}
+            {loading && <div className="browser-loading">{t('directory.loading')}</div>}
 
             {error && <div className="browser-error">{error}</div>}
 
@@ -179,7 +182,7 @@ export default function DirectoryBrowser({
                   </button>
                 ))}
                 {entries.length === 0 && !currentPath && (
-                  <div className="browser-empty">No entries found</div>
+                  <div className="browser-empty">{t('directory.empty')}</div>
                 )}
               </>
             )}
@@ -188,10 +191,10 @@ export default function DirectoryBrowser({
 
         <div className="browser-actions">
           <button className="btn btn-secondary" onClick={onClose}>
-            Cancel
+            {t('directory.cancel')}
           </button>
           <button className="btn btn-primary" onClick={onSelect}>
-            Select
+            {t('directory.select')}
           </button>
         </div>
       </div>

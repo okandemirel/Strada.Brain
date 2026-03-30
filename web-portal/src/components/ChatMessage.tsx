@@ -1,4 +1,5 @@
 import { memo, useMemo } from 'react'
+import { useTranslation } from 'react-i18next'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
@@ -51,7 +52,7 @@ function AttachmentGallery({ attachments }: { attachments: Attachment[] }) {
           {others.map((file, i) => (
             <div key={i} className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-border rounded-[10px] bg-bg-tertiary text-xs transition-colors hover:bg-bg-elevated">
               <span className="text-[10px] font-bold text-accent uppercase">
-                {file.name.split('.').pop()?.toUpperCase() || 'FILE'}
+                {file.name.split('.').pop()?.toUpperCase() || 'FILE' /* static fallback, localized in ChatInput */}
               </span>
               <span className="text-text-secondary max-w-[160px] overflow-hidden text-ellipsis whitespace-nowrap">{file.name}</span>
             </div>
@@ -109,12 +110,13 @@ const FeedbackToolbar = memo(function FeedbackToolbar({
   feedback?: 'thumbs_up' | 'thumbs_down'
   onFeedback: (messageId: string, type: 'thumbs_up' | 'thumbs_down') => void
 }) {
+  const { t } = useTranslation()
   return (
     <div className="flex items-center gap-0.5">
       <button
         type="button"
         onClick={() => onFeedback(messageId, 'thumbs_up')}
-        aria-label="Good response"
+        aria-label={t('chat.goodResponse')}
         className={cn(
           'p-1 rounded-md text-xs transition-all duration-150',
           feedback === 'thumbs_up'
@@ -127,7 +129,7 @@ const FeedbackToolbar = memo(function FeedbackToolbar({
       <button
         type="button"
         onClick={() => onFeedback(messageId, 'thumbs_down')}
-        aria-label="Bad response"
+        aria-label={t('chat.badResponse')}
         className={cn(
           'p-1 rounded-md text-xs transition-all duration-150',
           feedback === 'thumbs_down'
@@ -142,14 +144,15 @@ const FeedbackToolbar = memo(function FeedbackToolbar({
 })
 
 function ChatMessageComponent({ message, onFeedback, voiceOutputEnabled = true }: ChatMessageProps) {
+  const { t } = useTranslation()
   const isUser = message.sender === 'user'
   const showVoiceOutput = voiceOutputEnabled && !isUser && !message.isStreaming && hasTextContent(message.text)
   const showFeedback = !isUser && !message.isStreaming && onFeedback
   const deliveryLabel = isUser
     ? message.deliveryState === 'pending'
-      ? 'Sending...'
+      ? t('chat.sending')
       : message.deliveryState === 'failed'
-        ? 'Not delivered'
+        ? t('chat.notDelivered')
         : null
     : null
 

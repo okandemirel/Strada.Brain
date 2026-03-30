@@ -1,0 +1,95 @@
+{
+  "panel": {
+    "title": "CANVAS",
+    "loading": "Canvas yükleniyor...",
+    "agentVisuals": "Ajan görselleri {{count}}",
+    "agentSync": "Ajan senkronizasyonu {{time}}",
+    "queue": "Kuyruk {{count}}"
+  },
+  "cards": {
+    "aiBadge": "AI",
+    "codeBlock": {
+      "badge": "Kod",
+      "defaultTitle": "Kod Parçacığı"
+    },
+    "diffBlock": {
+      "badge": "Fark"
+    },
+    "fileCard": {
+      "badge": "Dosya",
+      "lines": "{{count}} satır"
+    },
+    "diagramNode": {
+      "defaultLabel": "Düğüm",
+      "statusActive": "aktif",
+      "statusIdle": "boşta",
+      "statusError": "hata",
+      "statusPending": "bekliyor"
+    },
+    "terminalBlock": {
+      "badge": "Terminal"
+    },
+    "imageBlock": {
+      "badge": "Görsel",
+      "noImage": "Görsel yok"
+    },
+    "taskCard": {
+      "defaultTitle": "Görev",
+      "statusTodo": "yapılacak",
+      "priorityLow": "düşük",
+      "priorityMedium": "orta",
+      "priorityHigh": "yüksek",
+      "priorityCritical": "kritik"
+    },
+    "noteBlock": {
+      "badge": "Not"
+    },
+    "goalSummary": {
+      "badge": "Hedef",
+      "defaultTitle": "Hedef",
+      "tasks": "Görevler:",
+      "running": "Çalışan: {{count}}",
+      "failed": "Başarısız: {{count}}",
+      "skipped": "Atlanan: {{count}}",
+      "done": "Tamamlanan: {{count}}"
+    },
+    "errorCard": {
+      "badgeWarning": "Uyarı",
+      "badgeError": "Hata",
+      "defaultMessage": "Hata",
+      "showStackTrace": "Yığın İzini Göster",
+      "hideStackTrace": "Yığın İzini Gizle"
+    },
+    "testResult": {
+      "badgePassed": "Testler Geçti",
+      "badgeFailed": "Testler Başarısız",
+      "passed": "Geçti",
+      "failed": "Başarısız",
+      "coverage": "Kapsam"
+    },
+    "linkCard": {
+      "badge": "Bağlantı",
+      "defaultTitle": "Bağlantı"
+    },
+    "metricCard": {
+      "badge": "Metrik",
+      "defaultLabel": "Metrik"
+    }
+  },
+  "controls": {
+    "zoomOut": "Uzaklaştır",
+    "zoomIn": "Yakınlaştır",
+    "zoomToFit": "Sığdır"
+  },
+  "empty": {
+    "agentActivity": "Ajan Etkinliği",
+    "tasksInProgress": "{{count}} görev devam ediyor",
+    "tasksInProgress_plural": "{{count}} görev devam ediyor",
+    "running": "{{count}} çalışıyor",
+    "done": "{{count}} tamamlandı",
+    "visualizeOnCanvas": "Canvas'ta Görselleştir",
+    "spatialCanvas": "Uzamsal canvas",
+    "agentVisualsDescription": "Ajan görselleri burada otomatik olarak görünecek.",
+    "blankCanvasDescription": "Veya blokları serbestçe düzenlemek için boş bir canvas başlatın."
+  }
+}

@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import { formatTimeAgo } from '../utils/format'
 import { useSessions, useMetrics, useAgents } from '../hooks/use-api'
 import { PageSkeleton } from '../components/ui/page-skeleton'
@@ -17,6 +18,7 @@ function formatTime(ms: number): string {
 }
 
 export default function SessionsPage() {
+  const { t } = useTranslation('pages')
   const sessionsQuery = useSessions()
   const metricsQuery = useMetrics()
   const agentsQuery = useAgents()
@@ -27,7 +29,7 @@ export default function SessionsPage() {
     : null
   const metrics = metricsQuery.data ?? null
 
-  if (error) return <PageError title="Failed to Load Sessions" message={error} />
+  if (error) return <PageError title={t('sessions.errorTitle')} message={error} />
   if (loading) return <PageSkeleton />
 
   let sessions: SessionInfo[] = sessionsQuery.data?.sessions ?? []
@@ -43,18 +45,18 @@ export default function SessionsPage() {
 
   return (
     <div className="h-full overflow-y-auto p-7 w-full animate-[admin-fade-in_0.3s_ease]">
-      <h2 className="text-[22px] font-bold tracking-tight mb-6 text-text">Sessions</h2>
+      <h2 className="text-[22px] font-bold tracking-tight mb-6 text-text">{t('sessions.title')}</h2>
 
       {metrics && (
         <div className="mb-7">
-          <div className="text-xs font-semibold uppercase tracking-[0.04em] text-text-tertiary mb-3.5 flex items-center gap-2">Overview</div>
+          <div className="text-xs font-semibold uppercase tracking-[0.04em] text-text-tertiary mb-3.5 flex items-center gap-2">{t('sessions.overview')}</div>
           <div className="flex gap-2.5 flex-wrap mb-5">
             <div className="flex-1 min-w-[150px] flex justify-between items-center px-4 py-2.5 bg-white/3 backdrop-blur border border-white/5 rounded-xl text-sm">
-              <span className="text-text-secondary">Active Sessions</span>
+              <span className="text-text-secondary">{t('sessions.activeSessions')}</span>
               <span className="text-text font-semibold">{metrics.activeSessions}</span>
             </div>
             <div className="flex-1 min-w-[150px] flex justify-between items-center px-4 py-2.5 bg-white/3 backdrop-blur border border-white/5 rounded-xl text-sm">
-              <span className="text-text-secondary">Total Messages</span>
+              <span className="text-text-secondary">{t('sessions.totalMessages')}</span>
               <span className="text-text font-semibold">{metrics.totalMessages}</span>
             </div>
           </div>
@@ -62,14 +64,14 @@ export default function SessionsPage() {
       )}
 
       <div className="mb-7">
-        <div className="text-xs font-semibold uppercase tracking-[0.04em] text-text-tertiary mb-3.5 flex items-center gap-2">Active Sessions ({sessions.length})</div>
+        <div className="text-xs font-semibold uppercase tracking-[0.04em] text-text-tertiary mb-3.5 flex items-center gap-2">{t('sessions.activeSessionsList', { count: sessions.length })}</div>
         {sessions.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-[200px] gap-2.5 text-text-secondary text-center">
-            <h3 className="text-text text-lg font-semibold">No Active Sessions</h3>
+            <h3 className="text-text text-lg font-semibold">{t('sessions.noActiveTitle')}</h3>
             <p className="text-sm max-w-[400px]">
               {metrics
-                ? 'No session details available. Session tracking data may not be exposed.'
-                : 'Cannot reach the server. Make sure it is running.'}
+                ? t('sessions.noActiveWithMetrics')
+                : t('sessions.noActiveNoServer')}
             </p>
           </div>
         ) : (
@@ -80,12 +82,12 @@ export default function SessionsPage() {
                 <span className="text-xs text-text-secondary min-w-[80px]">{s.channel}</span>
                 {s.agentId && (
                   <span className="text-xs text-text-tertiary">
-                    Agent: {s.agentId.slice(0, 8)}
+                    {t('sessions.agentLabel', { id: s.agentId.slice(0, 8) })}
                   </span>
                 )}
                 {s.messageCount !== undefined && (
                   <span className="text-xs text-text-secondary">
-                    {s.messageCount} msgs
+                    {t('sessions.messageCount', { count: s.messageCount })}
                   </span>
                 )}
                 <span className="text-xs text-text-tertiary ml-auto">

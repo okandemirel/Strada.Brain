@@ -1,0 +1,95 @@
+{
+  "panel": {
+    "title": "캔버스",
+    "loading": "캔버스 로딩 중...",
+    "agentVisuals": "에이전트 시각화 {{count}}",
+    "agentSync": "에이전트 동기화 {{time}}",
+    "queue": "대기열 {{count}}"
+  },
+  "cards": {
+    "aiBadge": "AI",
+    "codeBlock": {
+      "badge": "코드",
+      "defaultTitle": "스니펫"
+    },
+    "diffBlock": {
+      "badge": "Diff"
+    },
+    "fileCard": {
+      "badge": "파일",
+      "lines": "{{count}}줄"
+    },
+    "diagramNode": {
+      "defaultLabel": "노드",
+      "statusActive": "활성",
+      "statusIdle": "유휴",
+      "statusError": "오류",
+      "statusPending": "대기 중"
+    },
+    "terminalBlock": {
+      "badge": "터미널"
+    },
+    "imageBlock": {
+      "badge": "이미지",
+      "noImage": "이미지 없음"
+    },
+    "taskCard": {
+      "defaultTitle": "작업",
+      "statusTodo": "할 일",
+      "priorityLow": "낮음",
+      "priorityMedium": "보통",
+      "priorityHigh": "높음",
+      "priorityCritical": "긴급"
+    },
+    "noteBlock": {
+      "badge": "노트"
+    },
+    "goalSummary": {
+      "badge": "목표",
+      "defaultTitle": "목표",
+      "tasks": "작업:",
+      "running": "실행 중: {{count}}",
+      "failed": "실패: {{count}}",
+      "skipped": "건너뜀: {{count}}",
+      "done": "완료: {{count}}"
+    },
+    "errorCard": {
+      "badgeWarning": "경고",
+      "badgeError": "오류",
+      "defaultMessage": "오류",
+      "showStackTrace": "스택 트레이스 표시",
+      "hideStackTrace": "스택 트레이스 숨기기"
+    },
+    "testResult": {
+      "badgePassed": "테스트 통과",
+      "badgeFailed": "테스트 실패",
+      "passed": "통과",
+      "failed": "실패",
+      "coverage": "커버리지"
+    },
+    "linkCard": {
+      "badge": "링크",
+      "defaultTitle": "링크"
+    },
+    "metricCard": {
+      "badge": "메트릭",
+      "defaultLabel": "메트릭"
+    }
+  },
+  "controls": {
+    "zoomOut": "축소",
+    "zoomIn": "확대",
+    "zoomToFit": "화면에 맞추기"
+  },
+  "empty": {
+    "agentActivity": "에이전트 활동",
+    "tasksInProgress": "{{count}}개 작업 진행 중",
+    "tasksInProgress_plural": "{{count}}개 작업 진행 중",
+    "running": "{{count}}개 실행 중",
+    "done": "{{count}}개 완료",
+    "visualizeOnCanvas": "캔버스에서 시각화",
+    "spatialCanvas": "공간 캔버스",
+    "agentVisualsDescription": "에이전트 시각화가 자동으로 여기에 표시됩니다.",
+    "blankCanvasDescription": "또는 빈 캔버스에서 블록을 자유롭게 배치하세요."
+  }
+}

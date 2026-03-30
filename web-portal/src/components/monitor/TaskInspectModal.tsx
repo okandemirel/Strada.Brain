@@ -1,4 +1,5 @@
 import { useMemo } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useShallow } from 'zustand/shallow'
 import { useMonitorStore, type ActivityEntry } from '../../stores/monitor-store'
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from '../ui/dialog'
@@ -12,17 +13,17 @@ import {
   resultToString,
 } from './monitor-utils'
 
-const STATUS_BANNER: Record<string, { bg: string; border: string; icon: string; label: string }> = {
-  completed: { bg: 'bg-emerald-500/10', border: 'border-emerald-500/20', icon: '\u2713', label: 'Task completed successfully' },
-  failed: { bg: 'bg-rose-500/10', border: 'border-rose-500/20', icon: '\u2717', label: 'Task failed' },
-  executing: { bg: 'bg-accent/10', border: 'border-accent/20', icon: '\u25B6', label: 'Task in progress' },
-  pending: { bg: 'bg-white/5', border: 'border-white/10', icon: '\u25CB', label: 'Waiting to start' },
-  skipped: { bg: 'bg-white/5', border: 'border-white/10', icon: '\u2192', label: 'Task was skipped' },
-  verifying: { bg: 'bg-amber-500/10', border: 'border-amber-500/20', icon: '\u2731', label: 'Verifying output' },
-  blocked: { bg: 'bg-orange-500/10', border: 'border-orange-500/20', icon: '\u26A0', label: 'Blocked by dependency' },
-  paused: { bg: 'bg-amber-500/10', border: 'border-amber-500/20', icon: '\u23F8', label: 'Paused' },
-  waiting_for_input: { bg: 'bg-sky-500/10', border: 'border-sky-500/20', icon: '\u270B', label: 'Waiting for input' },
-  cancelled: { bg: 'bg-white/5', border: 'border-white/10', icon: '\u2715', label: 'Cancelled' },
+const STATUS_BANNER: Record<string, { bg: string; border: string; icon: string; labelKey: string }> = {
+  completed: { bg: 'bg-emerald-500/10', border: 'border-emerald-500/20', icon: '\u2713', labelKey: 'inspect.bannerCompleted' },
+  failed: { bg: 'bg-rose-500/10', border: 'border-rose-500/20', icon: '\u2717', labelKey: 'inspect.bannerFailed' },
+  executing: { bg: 'bg-accent/10', border: 'border-accent/20', icon: '\u25B6', labelKey: 'inspect.bannerExecuting' },
+  pending: { bg: 'bg-white/5', border: 'border-white/10', icon: '\u25CB', labelKey: 'inspect.bannerPending' },
+  skipped: { bg: 'bg-white/5', border: 'border-white/10', icon: '\u2192', labelKey: 'inspect.bannerSkipped' },
+  verifying: { bg: 'bg-amber-500/10', border: 'border-amber-500/20', icon: '\u2731', labelKey: 'inspect.bannerVerifying' },
+  blocked: { bg: 'bg-orange-500/10', border: 'border-orange-500/20', icon: '\u26A0', labelKey: 'inspect.bannerBlocked' },
+  paused: { bg: 'bg-amber-500/10', border: 'border-amber-500/20', icon: '\u23F8', labelKey: 'inspect.bannerPaused' },
+  waiting_for_input: { bg: 'bg-sky-500/10', border: 'border-sky-500/20', icon: '\u270B', labelKey: 'inspect.bannerWaitingForInput' },
+  cancelled: { bg: 'bg-white/5', border: 'border-white/10', icon: '\u2715', labelKey: 'inspect.bannerCancelled' },
 }
 
 const SUBSTEP_ICONS: Record<string, { color: string; icon: string }> = {
@@ -32,9 +33,9 @@ const SUBSTEP_ICONS: Record<string, { color: string; icon: string }> = {
 }
 
 const RESULT_SECTIONS = [
-  { key: 'implementationResult' as const, label: 'Implementation' },
-  { key: 'specReviewResult' as const, label: 'Spec Review' },
-  { key: 'qualityReviewResult' as const, label: 'Quality Review' },
+  { key: 'implementationResult' as const, labelKey: 'inspect.resultImplementation' },
+  { key: 'specReviewResult' as const, labelKey: 'inspect.resultSpecReview' },
+  { key: 'qualityReviewResult' as const, labelKey: 'inspect.resultQualityReview' },
 ]
 
 function Badge({ value, styles }: { value: string; styles: Record<string, string> }) {
@@ -71,10 +72,11 @@ function MetricRow({ label, value }: { label: string; value: string }) {
 }
 
 function TaskActivityTimeline({ entries }: { entries: ActivityEntry[] }) {
+  const { t } = useTranslation('monitor')
   if (entries.length === 0) {
     return (
       <div className="py-2 text-center text-xs text-text-tertiary">
-        No activity recorded for this task.
+        {t('inspect.noActivity')}
       </div>
     )
   }
@@ -105,6 +107,7 @@ function TaskActivityTimeline({ entries }: { entries: ActivityEntry[] }) {
 }
 
 export default function TaskInspectModal() {
+  const { t } = useTranslation('monitor')
   const { task, tasks, allActivities, setSelectedTask } = useMonitorStore(
     useShallow((s) => ({
       task: s.selectedTaskId ? s.tasks[s.selectedTaskId] ?? null : null,
@@ -136,9 +139,9 @@ export default function TaskInspectModal() {
   const resultEntries = useMemo(() => {
     const results = { implementationResult: implResult, specReviewResult: specResult, qualityReviewResult: qualityResult }
     return RESULT_SECTIONS
-      .map(({ key, label }) => ({ label, text: resultToString(results[key as keyof typeof results]) }))
+      .map(({ key, labelKey }) => ({ label: t(labelKey), text: resultToString(results[key as keyof typeof results]) }))
       .filter((r): r is { label: string; text: string } => r.text !== null)
-  }, [implResult, specResult, qualityResult])
+  }, [implResult, specResult, qualityResult, t])
 
   const progressPercent =
     task?.progress && task.progress.total > 0
@@ -162,7 +165,7 @@ export default function TaskInspectModal() {
                 {task.title}
               </DialogTitle>
               <DialogDescription className="sr-only">
-                Detailed inspection of task {task.nodeId}
+                {t('inspect.descriptionPrefix')}{task.nodeId}
               </DialogDescription>
               <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs text-text-secondary">
                 <span className="font-mono">{task.nodeId}</span>
@@ -170,7 +173,7 @@ export default function TaskInspectModal() {
                   <>
                     <span className="text-white/20">|</span>
                     <span>
-                      Agent <span className="font-mono text-text">{task.agentId}</span>
+                      {t('inspect.agentLabel')} <span className="font-mono text-text">{task.agentId}</span>
                     </span>
                   </>
                 )}
@@ -182,7 +185,7 @@ export default function TaskInspectModal() {
                 <div className={cn('flex items-center gap-3 rounded-xl border px-4 py-3', banner.bg, banner.border)}>
                   <span className="text-lg">{banner.icon}</span>
                   <div>
-                    <div className="text-sm font-medium text-text">{banner.label}</div>
+                    <div className="text-sm font-medium text-text">{t(banner.labelKey)}</div>
                     {task.status === 'failed' && task.narrative && (
                       <div className="mt-1 text-xs text-rose-300/80">{task.narrative}</div>
                     )}
@@ -203,12 +206,12 @@ export default function TaskInspectModal() {
               </div>
 
               {(task.startedAt || task.completedAt || task.elapsed || progressPercent !== null) && (
-                <Section title="Runtime">
+                <Section title={t('inspect.sectionRuntime')}>
                   <div className="grid gap-3 sm:grid-cols-2">
                     {task.progress && progressPercent !== null && (
                       <div className="rounded-lg border border-white/8 bg-black/15 px-3 py-2.5">
                         <div className="flex items-center justify-between text-[10px] font-semibold uppercase tracking-wide text-text-tertiary">
-                          <span>Progress</span>
+                          <span>{t('inspect.progressLabel')}</span>
                           <span>{progressPercent}%</span>
                         </div>
                         <div className="mt-2 h-2 overflow-hidden rounded-full bg-white/6">
@@ -220,16 +223,16 @@ export default function TaskInspectModal() {
                       </div>
                     )}
                     <div className="space-y-2">
-                      {startedStr && <MetricRow label="Started" value={startedStr} />}
-                      {completedStr && <MetricRow label="Completed" value={completedStr} />}
-                      {elapsedStr && <MetricRow label="Elapsed" value={elapsedStr} />}
+                      {startedStr && <MetricRow label={t('inspect.startedLabel')} value={startedStr} />}
+                      {completedStr && <MetricRow label={t('inspect.completedLabel')} value={completedStr} />}
+                      {elapsedStr && <MetricRow label={t('inspect.elapsedLabel')} value={elapsedStr} />}
                     </div>
                   </div>
                 </Section>
               )}
 
               {(task.narrative || task.milestone) && task.status !== 'failed' && (
-                <Section title="Latest Update">
+                <Section title={t('inspect.sectionLatestUpdate')}>
                   {task.narrative && (
                     <div className="text-sm leading-relaxed text-text">{task.narrative}</div>
                   )}
@@ -243,7 +246,7 @@ export default function TaskInspectModal() {
               )}
 
               {task.dependencies && task.dependencies.length > 0 && (
-                <Section title="Dependencies">
+                <Section title={t('inspect.sectionDependencies')}>
                   <div className="flex flex-wrap gap-2">
                     {task.dependencies.map((dep) => {
                       const depTask = tasks[dep]
@@ -269,7 +272,7 @@ export default function TaskInspectModal() {
               )}
 
               {sortedSubsteps.length > 0 && (
-                <Section title={`Substeps (${doneCount}/${sortedSubsteps.length})`}>
+                <Section title={t('inspect.sectionSubsteps', { done: doneCount, total: sortedSubsteps.length })}>
                   <div className="space-y-2">
                     {sortedSubsteps.map((substep) => {
                       const indicator = SUBSTEP_ICONS[substep.status] ?? SUBSTEP_ICONS.active
@@ -302,7 +305,7 @@ export default function TaskInspectModal() {
               )}
 
               {resultEntries.length > 0 && (
-                <Section title="Results">
+                <Section title={t('inspect.sectionResults')}>
                   <div className="space-y-3">
                     {resultEntries.map(({ label, text }) => (
                       <div key={label}>
@@ -316,7 +319,7 @@ export default function TaskInspectModal() {
                 </Section>
               )}
 
-              <Section title={`Activity (${taskActivities.length})`}>
+              <Section title={t('inspect.sectionActivity', { count: taskActivities.length })}>
                 <TaskActivityTimeline entries={taskActivities} />
               </Section>
             </div>

@@ -1,4 +1,5 @@
 import { useCallback, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useCodeStore, type CodeTab } from '../../stores/code-store'
 import { cn } from '@/lib/utils'
 import CodeViewer from './CodeViewer'
@@ -8,12 +9,13 @@ import InlineDiffViewer from './InlineDiffViewer'
 type DiffViewMode = 'inline' | 'split'
 
 function DiffHeader({ file, mode, onToggle }: { file: CodeTab; mode: DiffViewMode; onToggle: () => void }) {
+  const { t } = useTranslation('code')
   return (
     <div className="flex items-center gap-3 border-b border-white/5 bg-[linear-gradient(180deg,rgba(255,255,255,0.04),rgba(255,255,255,0.02))] px-3 py-1.5 backdrop-blur shrink-0">
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-accent/75">
-            Changes
+            {t('diff.changes')}
           </span>
           <span className="text-xs text-text-tertiary font-mono">{file.path}</span>
         </div>
@@ -28,7 +30,7 @@ function DiffHeader({ file, mode, onToggle }: { file: CodeTab; mode: DiffViewMod
               <rect x="1" y="2" width="10" height="8" rx="1" stroke="currentColor" strokeWidth="1.2" />
               <line x1="6" y1="2" x2="6" y2="10" stroke="currentColor" strokeWidth="1.2" />
             </svg>
-            Split
+            {t('diff.splitView')}
           </>
         ) : (
           <>
@@ -37,7 +39,7 @@ function DiffHeader({ file, mode, onToggle }: { file: CodeTab; mode: DiffViewMod
               <line x1="3" y1="5" x2="9" y2="5" stroke="currentColor" strokeWidth="1.2" />
               <line x1="3" y1="7" x2="9" y2="7" stroke="currentColor" strokeWidth="1.2" />
             </svg>
-            Inline
+            {t('diff.inlineView')}
           </>
         )}
       </button>
@@ -81,6 +83,7 @@ function EditorContent({
 }
 
 export default function CodeEditor() {
+  const { t } = useTranslation('code')
   const tabs = useCodeStore((s) => s.tabs)
   const activeTab = useCodeStore((s) => s.activeTab)
   const closeFile = useCodeStore((s) => s.closeFile)
@@ -108,10 +111,10 @@ export default function CodeEditor() {
             )}
           >
             <span>{tab.path.split('/').pop()}</span>
-            {tab.isDiff && <span className="ml-1 text-[10px] text-accent font-medium">DIFF</span>}
+            {tab.isDiff && <span className="ml-1 text-[10px] text-accent font-medium">{t('editor.diffLabel')}</span>}
             <span
               role="button"
-              aria-label={`Close ${tab.path.split('/').pop()}`}
+              aria-label={t('editor.closeTab', { filename: tab.path.split('/').pop() })}
               onClick={(e) => {
                 e.stopPropagation()
                 closeFile(tab.path)
@@ -131,7 +134,7 @@ export default function CodeEditor() {
             onToggleDiffMode={handleToggleDiffMode}
           />
         ) : (
-          <div className="flex items-center justify-center h-full text-text-tertiary text-sm">No file open</div>
+          <div className="flex items-center justify-center h-full text-text-tertiary text-sm">{t('editor.noFileOpen')}</div>
         )}
       </div>
     </div>

@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import {
   PRESETS,
   PROVIDERS,
@@ -27,6 +28,7 @@ function PresetGrid({
   selectedPreset: string | null
   selectPreset: (id: string) => void
 }) {
+  const { t } = useTranslation('setup')
   return (
     <div className="preset-grid">
       {PRESETS.map((preset) => (
@@ -35,9 +37,9 @@ function PresetGrid({
           className={`preset-card${selectedPreset === preset.id ? ' selected' : ''}`}
           onClick={() => selectPreset(preset.id)}
         >
-          <div className="preset-name">{preset.name}</div>
-          <div className="preset-cost">{preset.cost}</div>
-          <div className="preset-desc">{preset.desc}</div>
+          <div className="preset-name">{t(`providers.presets.${preset.id}.name`)}</div>
+          <div className="preset-cost">{t(`providers.presets.${preset.id}.cost`)}</div>
+          <div className="preset-desc">{t(`providers.presets.${preset.id}.desc`)}</div>
         </div>
       ))}
     </div>
@@ -51,6 +53,7 @@ function ProviderGrid({
   checkedProviders: Set<string>
   toggleProvider: (id: string) => void
 }) {
+  const { t } = useTranslation('setup')
   return (
     <div className="provider-grid">
       {PROVIDERS.map((provider) => (
@@ -61,13 +64,13 @@ function ProviderGrid({
             onChange={() => toggleProvider(provider.id)}
           />
           <div className="provider-card">
-            <span className="provider-name">{provider.name}</span>
+            <span className="provider-name">{t(`providers.providerNames.${provider.id}`)}</span>
             {provider.recommended && (
-              <span className="provider-badge">Recommended</span>
+              <span className="provider-badge">{t('providers.recommended')}</span>
             )}
             {provider.embeddingRecommended && (
               <span className="provider-badge provider-badge-embedding">
-                Recommended for embeddings
+                {t('providers.embeddingRecommended')}
               </span>
             )}
           </div>
@@ -77,15 +80,10 @@ function ProviderGrid({
   )
 }
 
-function formatTierLabel(tier: 'budget' | 'standard' | 'premium'): string {
-  switch (tier) {
-    case 'budget':
-      return 'Budget'
-    case 'standard':
-      return 'Balanced'
-    case 'premium':
-      return 'Frontier'
-  }
+const TIER_KEYS: Record<string, string> = {
+  budget: 'providers.tier.budget',
+  standard: 'providers.tier.standard',
+  premium: 'providers.tier.premium',
 }
 
 export default function ProvidersStep({
@@ -102,18 +100,19 @@ export default function ProvidersStep({
   onNext,
   onBack,
 }: ProvidersStepProps) {
+  const { t } = useTranslation('setup')
   const providerSettingsProviders = PROVIDERS.filter((p) => checkedProviders.has(p.id))
 
   return (
     <div className="step">
-      <h2>AI Providers</h2>
+      <h2>{t('providers.title')}</h2>
       <p className="step-subtitle">
-        Choose a preset or manually select providers for your AI pipeline.
+        {t('providers.subtitle')}
       </p>
 
       <PresetGrid selectedPreset={selectedPreset} selectPreset={selectPreset} />
 
-      <h3 className="section-label">Providers</h3>
+      <h3 className="section-label">{t('providers.sectionProviders')}</h3>
       <ProviderGrid
         checkedProviders={checkedProviders}
         toggleProvider={toggleProvider}
@@ -121,7 +120,7 @@ export default function ProvidersStep({
 
       {providerSettingsProviders.length > 0 && (
         <div className="provider-keys">
-          <h3 className="section-label">Provider Access</h3>
+          <h3 className="section-label">{t('providers.sectionAccess')}</h3>
           {providerSettingsProviders.map((provider) => {
             const modelOptions = getProviderModelOptions(provider.id)
             const selectedAuthMode = providerAuthModes[provider.id] ?? provider.authModes?.[0]?.id ?? 'api-key'
@@ -131,15 +130,15 @@ export default function ProvidersStep({
             const showsCredentialField = selectedAuthModeDef?.requiresSecret ?? (provider.envKey !== null && !usingOpenAISubscription)
             const selectedModel = providerModels[provider.id] ?? getDefaultProviderModel(provider.id) ?? ''
             const helpUrl = selectedAuthModeDef?.helpUrl ?? provider.helpUrl
-            const helpLabel = selectedAuthModeDef?.helpLabel ?? 'Get key'
+            const helpLabel = selectedAuthModeDef?.helpLabel ?? t('providers.getKey')
 
             return (
               <div key={provider.id} className="provider-key-field">
                 <div className="provider-access-header">
                   <div>
-                    <div className="provider-access-name">{provider.name}</div>
+                    <div className="provider-access-name">{t(`providers.providerNames.${provider.id}`)}</div>
                     <div className="provider-access-summary">
-                      Configure the default worker model and access mode Strada should use after setup.
+                      {t('providers.accessSummary')}
                     </div>
                   </div>
                   {selectedModel && (
@@ -149,29 +148,32 @@ export default function ProvidersStep({
 
                 {provider.authModes && provider.authModes.length > 1 && (
                   <div className="provider-choice-group">
-                    <div className="provider-field-label">Access Mode</div>
+                    <div className="provider-field-label">{t('providers.accessMode')}</div>
                     <div className="provider-auth-grid">
-                    {provider.authModes.map((mode) => (
-                      <button
-                        type="button"
-                        key={mode.id}
-                        className={`provider-choice-card ${
-                          (providerAuthModes[provider.id] ?? provider.authModes?.[0]?.id) === mode.id
-                            ? 'selected'
-                            : ''
-                        }`}
-                        onClick={() => setProviderAuthMode(provider.id, mode.id)}
-                      >
-                        <span className="provider-choice-title">{mode.label}</span>
-                        <span className="provider-choice-copy">{mode.description}</span>
-                      </button>
-                    ))}
+                    {provider.authModes.map((mode) => {
+                      const modeKeySegment = mode.id === 'api-key' ? 'apiKey' : mode.id === 'chatgpt-subscription' ? 'chatgptSubscription' : mode.id === 'claude-subscription' ? 'subscription' : mode.id
+                      return (
+                        <button
+                          type="button"
+                          key={mode.id}
+                          className={`provider-choice-card ${
+                            (providerAuthModes[provider.id] ?? provider.authModes?.[0]?.id) === mode.id
+                              ? 'selected'
+                              : ''
+                          }`}
+                          onClick={() => setProviderAuthMode(provider.id, mode.id)}
+                        >
+                          <span className="provider-choice-title">{t(`providers.authModes.${provider.id}.${modeKeySegment}.label`)}</span>
+                          <span className="provider-choice-copy">{t(`providers.authModes.${provider.id}.${modeKeySegment}.description`)}</span>
+                        </button>
+                      )
+                    })}
                     </div>
                   </div>
                 )}
 
                 <div className="provider-choice-group">
-                  <div className="provider-field-label">Default Model</div>
+                  <div className="provider-field-label">{t('providers.defaultModel')}</div>
                   {modelOptions.length > 0 ? (
                     <div className="provider-model-grid">
                       {modelOptions.map((option) => (
@@ -184,14 +186,14 @@ export default function ProvidersStep({
                           <div className="provider-model-header">
                             <span className="provider-model-title">{option.label}</span>
                             <span className={`provider-model-tier tier-${option.tier}`}>
-                              {formatTierLabel(option.tier)}
+                              {t(TIER_KEYS[option.tier] ?? option.tier)}
                             </span>
                           </div>
                           <div className="provider-model-id">{option.model}</div>
                           <div className="provider-model-stats">
                             <span>{option.contextWindow}</span>
-                            <span>${option.inputPer1M.toFixed(2)} in</span>
-                            <span>${option.outputPer1M.toFixed(2)} out</span>
+                            <span>{t('providers.modelStats.in', { amount: option.inputPer1M.toFixed(2) })}</span>
+                            <span>{t('providers.modelStats.out', { amount: option.outputPer1M.toFixed(2) })}</span>
                           </div>
                           <div className="provider-model-notes">{option.notes}</div>
                         </button>
@@ -202,7 +204,7 @@ export default function ProvidersStep({
                       id={`model-${provider.id}`}
                       type="text"
                       value={selectedModel}
-                      placeholder={getDefaultProviderModel(provider.id) ?? 'Enter model id'}
+                      placeholder={getDefaultProviderModel(provider.id) ?? t('providers.modelPlaceholder')}
                       onChange={(e) => setProviderModel(provider.id, e.target.value)}
                       autoComplete="off"
                     />
@@ -212,7 +214,11 @@ export default function ProvidersStep({
                 {showsCredentialField && (
                   <>
                     <label htmlFor={`key-${provider.id}`}>
-                      {selectedAuthModeDef?.secretLabel ?? provider.name}
+                      {(() => {
+                        const modeKeySegment = selectedAuthMode === 'api-key' ? 'apiKey' : selectedAuthMode === 'chatgpt-subscription' ? 'chatgptSubscription' : selectedAuthMode === 'claude-subscription' ? 'subscription' : selectedAuthMode
+                        const secretLabelKey = `providers.authModes.${provider.id}.${modeKeySegment}.secretLabel`
+                        return t(secretLabelKey, { defaultValue: selectedAuthModeDef?.secretLabel ?? t(`providers.providerNames.${provider.id}`) })
+                      })()}
                       {helpUrl && (
                         <a
                           href={helpUrl}
@@ -220,7 +226,11 @@ export default function ProvidersStep({
                           rel="noopener noreferrer"
                           className="key-help-link"
                         >
-                          {helpLabel}
+                          {(() => {
+                            const modeKeySegment = selectedAuthMode === 'api-key' ? 'apiKey' : selectedAuthMode === 'chatgpt-subscription' ? 'chatgptSubscription' : selectedAuthMode === 'claude-subscription' ? 'subscription' : selectedAuthMode
+                            const helpLabelKey = `providers.authModes.${provider.id}.${modeKeySegment}.helpLabel`
+                            return t(helpLabelKey, { defaultValue: helpLabel })
+                          })()}
                         </a>
                       )}
                     </label>
@@ -242,10 +252,10 @@ export default function ProvidersStep({
                 {usingOpenAISubscription && (
                   <div className="provider-helper-copy">
                     <p>
-                      Strada will use the local Codex/ChatGPT subscription session available on this machine for OpenAI conversation turns.
+                      {t('providers.openai.subscriptionInfo')}
                     </p>
                     <p className="warning">
-                      This does not grant OpenAI API or embedding quota. If you later choose OpenAI for embeddings, you still need an OpenAI API key.
+                      {t('providers.openai.subscriptionWarning')}
                     </p>
                   </div>
                 )}
@@ -253,10 +263,10 @@ export default function ProvidersStep({
                 {usingClaudeSubscription && (
                   <div className="provider-helper-copy">
                     <p>
-                      Strada will send Claude requests with the subscription token you provide here.
+                      {t('providers.claude.subscriptionInfo')}
                     </p>
                     <p className="warning">
-                      Anthropic documents claude.ai subscription auth as restricted outside Claude Code and Claude.ai. Strada exposes this mode only if you choose to use it, at your own risk.
+                      {t('providers.claude.subscriptionWarning')}
                     </p>
                   </div>
                 )}
@@ -268,10 +278,10 @@ export default function ProvidersStep({
 
       <div className="step-actions">
         <button className="btn btn-secondary" onClick={onBack}>
-          Back
+          {t('wizard.nav.back')}
         </button>
         <button className="btn btn-primary" onClick={onNext}>
-          Next
+          {t('wizard.nav.next')}
         </button>
       </div>
     </div>

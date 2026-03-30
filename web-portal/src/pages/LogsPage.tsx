@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useLogs } from '../hooks/use-api'
 import { PageSkeleton } from '../components/ui/page-skeleton'
 
@@ -39,6 +40,7 @@ function formatTimestamp(ts: string): string {
 }
 
 export default function LogsPage() {
+  const { t } = useTranslation('pages')
   const logsQuery = useLogs()
   const [levelFilter, setLevelFilter] = useState<LevelFilter>('all')
   const [search, setSearch] = useState('')
@@ -72,13 +74,13 @@ export default function LogsPage() {
 
   return (
     <div className="h-full overflow-y-auto p-7 w-full animate-[admin-fade-in_0.3s_ease]">
-      <h2 className="text-[22px] font-bold tracking-tight mb-6 text-text">Logs</h2>
+      <h2 className="text-[22px] font-bold tracking-tight mb-6 text-text">{t('logs.title')}</h2>
 
       <div className="flex gap-3 mb-4 items-center flex-wrap">
         <input
           className="w-full max-w-[400px] px-4 py-2.5 border border-border rounded-xl bg-input-bg text-text font-[inherit] text-sm outline-none transition-all duration-200 focus:border-accent focus:shadow-[0_0_0_3px_var(--color-accent-glow)] placeholder:text-text-tertiary"
           type="text"
-          placeholder="Search logs..."
+          placeholder={t('logs.searchPlaceholder')}
           value={search}
           onChange={e => setSearch(e.target.value)}
         />
@@ -89,7 +91,7 @@ export default function LogsPage() {
             onChange={e => setAutoScroll(e.target.checked)}
             className="accent-accent"
           />
-          Auto-scroll
+          {t('logs.autoScroll')}
         </label>
       </div>
 
@@ -104,7 +106,7 @@ export default function LogsPage() {
             }`}
             onClick={() => setLevelFilter(level)}
           >
-            {level === 'all' ? 'All' : level}
+            {level === 'all' ? t('logs.filterAll') : level}
             {level !== 'all' && levelCounts[level] ? ` (${levelCounts[level]})` : ''}
           </button>
         ))}
@@ -112,13 +114,13 @@ export default function LogsPage() {
 
       {logsQuery.isError && logs.length === 0 ? (
         <div className="flex flex-col items-center justify-center h-[200px] gap-2.5 text-text-secondary text-center">
-          <h3 className="text-text text-lg font-semibold">Logs Unavailable</h3>
-          <p className="text-sm max-w-[400px]">The log endpoint is not available. Logs may not be exposed via the API yet.</p>
+          <h3 className="text-text text-lg font-semibold">{t('logs.unavailableTitle')}</h3>
+          <p className="text-sm max-w-[400px]">{t('logs.unavailableDescription')}</p>
         </div>
       ) : filtered.length === 0 ? (
         <div className="flex flex-col items-center justify-center h-[200px] gap-2.5 text-text-secondary text-center">
-          <h3 className="text-text text-lg font-semibold">No Matching Logs</h3>
-          <p className="text-sm max-w-[400px]">No log entries match the current filters.</p>
+          <h3 className="text-text text-lg font-semibold">{t('logs.noMatchingTitle')}</h3>
+          <p className="text-sm max-w-[400px]">{t('logs.noMatchingDescription')}</p>
         </div>
       ) : (
         <div className="bg-white/3 backdrop-blur border border-white/5 rounded-2xl overflow-hidden max-h-[calc(100vh-260px)] overflow-y-auto" ref={containerRef}>

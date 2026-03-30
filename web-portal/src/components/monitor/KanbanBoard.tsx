@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef } from 'react'
+import { useTranslation } from 'react-i18next'
 import {
   DndContext,
   closestCenter,
@@ -30,11 +31,11 @@ const COLUMN_STATUS_MAP: Record<string, { status: MonitorTaskStatus; reviewStatu
 }
 
 const COLUMNS = [
-  { id: 'backlog', label: 'Backlog', filter: (task: MonitorTask) => task.status === 'pending' },
-  { id: 'working', label: 'Working', filter: (task: MonitorTask) => task.status === 'executing' },
+  { id: 'backlog', labelKey: 'kanban.columns.backlog', filter: (task: MonitorTask) => task.status === 'pending' },
+  { id: 'working', labelKey: 'kanban.columns.working', filter: (task: MonitorTask) => task.status === 'executing' },
   {
     id: 'review',
-    label: 'Review',
+    labelKey: 'kanban.columns.review',
     filter: (task: MonitorTask) =>
       task.status === 'verifying' ||
       task.reviewStatus === 'spec_review' ||
@@ -42,7 +43,7 @@ const COLUMNS = [
   },
   {
     id: 'done',
-    label: 'Done',
+    labelKey: 'kanban.columns.done',
     filter: (task: MonitorTask) =>
       task.status === 'completed' &&
       task.reviewStatus !== 'spec_review' &&
@@ -51,7 +52,7 @@ const COLUMNS = [
   },
   {
     id: 'issues',
-    label: 'Issues',
+    labelKey: 'kanban.columns.issues',
     filter: (task: MonitorTask) =>
       task.status === 'failed' || task.status === 'skipped' || task.reviewStatus === 'review_stuck',
   },
@@ -116,6 +117,7 @@ interface KanbanColumnProps {
 }
 
 function KanbanColumn({ id, label, tasks }: KanbanColumnProps) {
+  const { t } = useTranslation('monitor')
   const { setNodeRef, isOver } = useDroppable({ id })
 
   return (
@@ -139,7 +141,7 @@ function KanbanColumn({ id, label, tasks }: KanbanColumnProps) {
         <div className="flex flex-1 flex-col gap-2 overflow-y-auto p-2.5">
           {tasks.length === 0 ? (
             <div className="flex flex-1 items-center justify-center rounded-xl border border-dashed border-white/8 bg-black/10 px-3 py-6 text-center text-xs text-text-tertiary">
-              No tasks
+              {t('kanban.empty')}
             </div>
           ) : (
             tasks.map((task) => <TaskCard key={task.id} task={task} />)
@@ -159,6 +161,7 @@ function resolveColumnId(task: MonitorTask): string | null {
 }
 
 export default function KanbanBoard() {
+  const { t } = useTranslation('monitor')
   const tasks = useMonitorStore((s) => s.tasks)
   const updateTask = useMonitorStore((s) => s.updateTask)
   const activeRootId = useMonitorStore((s) => s.activeRootId)
@@ -176,8 +179,8 @@ export default function KanbanBoard() {
 
   const columns = useMemo(() => {
     const taskList = Object.values(tasks)
-    return COLUMNS.map((column) => ({ ...column, tasks: taskList.filter(column.filter) }))
-  }, [tasks])
+    return COLUMNS.map((column) => ({ ...column, label: t(column.labelKey), tasks: taskList.filter(column.filter) }))
+  }, [tasks, t])
 
   // Stable callback — only depends on store actions and WS sender (both stable refs)
   const handleDragEnd = (event: DragEndEvent) => {

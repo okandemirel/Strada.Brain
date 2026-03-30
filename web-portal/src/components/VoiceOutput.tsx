@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 
 interface VoiceOutputProps {
   text: string
 }
 
 export default function VoiceOutput({ text }: VoiceOutputProps) {
+  const { t } = useTranslation()
   const [isSpeaking, setIsSpeaking] = useState(false)
   const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null)
   const supported = typeof window !== 'undefined' && typeof window.speechSynthesis !== 'undefined'
@@ -61,7 +63,7 @@ export default function VoiceOutput({ text }: VoiceOutputProps) {
           : 'text-text-tertiary hover:text-accent hover:bg-accent-glow'
       }`}
       onClick={toggleSpeech}
-      title={isSpeaking ? 'Stop speaking' : 'Read aloud'}
+      title={isSpeaking ? t('voice.stopSpeaking') : t('voice.readAloud')}
       type="button"
     >
       {isSpeaking ? (

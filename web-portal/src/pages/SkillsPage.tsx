@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useQueryClient } from '@tanstack/react-query'
 import { useSkills, useSkillRegistry } from '../hooks/use-api'
 import type { SkillEntryResponse, RegistrySkillEntry } from '../hooks/use-api'
@@ -68,7 +69,7 @@ function ToggleButton({ skill, onToggle }: ToggleButtonProps) {
     <button
       onClick={handleClick}
       disabled={pending || isGated || isError}
-      aria-label={isActive ? `Disable ${skill.manifest.name}` : `Enable ${skill.manifest.name}`}
+      aria-label={isActive ? `${skill.manifest.name}` : `${skill.manifest.name}`}
       className={`px-3 py-1 rounded-lg text-[12px] font-semibold border transition-all duration-150 font-[inherit] cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
         isActive
           ? 'border-error/40 bg-error/10 text-error hover:bg-error/20'
@@ -85,6 +86,7 @@ function ToggleButton({ skill, onToggle }: ToggleButtonProps) {
 // ---------------------------------------------------------------------------
 
 function InstalledTab() {
+  const { t } = useTranslation('pages')
   const skillsQuery = useSkills()
   const queryClient = useQueryClient()
   const [filter, setFilter] = useState('')
@@ -106,7 +108,7 @@ function InstalledTab() {
     return (
       <div className="flex flex-col items-center justify-center h-[200px] gap-3 text-text-secondary">
         <div className="text-4xl">⚠</div>
-        <h3 className="text-text text-lg font-semibold">Failed to Load Skills</h3>
+        <h3 className="text-text text-lg font-semibold">{t('skills.installed.failedTitle')}</h3>
         <p className="text-sm max-w-[400px] text-center">{error.message}</p>
       </div>
     )
@@ -117,9 +119,9 @@ function InstalledTab() {
   if (skills.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center h-[200px] gap-2.5 text-text-secondary text-center">
-        <h3 className="text-text text-lg font-semibold">No Skills Loaded</h3>
+        <h3 className="text-text text-lg font-semibold">{t('skills.installed.noSkillsTitle')}</h3>
         <p className="text-sm max-w-[400px]">
-          No skills are currently registered. Check the Marketplace tab to discover and install skills.
+          {t('skills.installed.noSkillsDescription')}
         </p>
       </div>
     )
@@ -152,7 +154,7 @@ function InstalledTab() {
       <input
         className="w-full max-w-[400px] px-4 py-2.5 border border-border rounded-xl bg-input-bg text-text font-[inherit] text-sm outline-none transition-all duration-200 mb-5 focus:border-accent focus:shadow-[0_0_0_3px_var(--color-accent-glow)] placeholder:text-text-tertiary"
         type="text"
-        placeholder="Search installed skills..."
+        placeholder={t('skills.installed.searchPlaceholder')}
         value={filter}
         onChange={(e) => setFilter(e.target.value)}
       />
@@ -169,7 +171,7 @@ function InstalledTab() {
                 : 'border-border bg-bg-tertiary text-text-secondary hover:bg-bg-elevated hover:text-text hover:border-border-hover'
             }`}
           >
-            {s === 'all' ? 'All' : s}
+            {s === 'all' ? t('skills.installed.filterAll') : s}
           </button>
         ))}
       </div>
@@ -179,12 +181,12 @@ function InstalledTab() {
         <table className="w-full text-sm border-collapse">
           <thead>
             <tr className="bg-bg-secondary border-b border-border">
-              <th className="text-left px-4 py-3 text-text-secondary font-semibold text-[12px] uppercase tracking-wide">Name</th>
-              <th className="text-left px-4 py-3 text-text-secondary font-semibold text-[12px] uppercase tracking-wide">Description</th>
-              <th className="text-left px-4 py-3 text-text-secondary font-semibold text-[12px] uppercase tracking-wide">Version</th>
-              <th className="text-left px-4 py-3 text-text-secondary font-semibold text-[12px] uppercase tracking-wide">Tier</th>
-              <th className="text-left px-4 py-3 text-text-secondary font-semibold text-[12px] uppercase tracking-wide">Status</th>
-              <th className="text-left px-4 py-3 text-text-secondary font-semibold text-[12px] uppercase tracking-wide">Actions</th>
+              <th className="text-left px-4 py-3 text-text-secondary font-semibold text-[12px] uppercase tracking-wide">{t('skills.installed.columnName')}</th>
+              <th className="text-left px-4 py-3 text-text-secondary font-semibold text-[12px] uppercase tracking-wide">{t('skills.installed.columnDescription')}</th>
+              <th className="text-left px-4 py-3 text-text-secondary font-semibold text-[12px] uppercase tracking-wide">{t('skills.installed.columnVersion')}</th>
+              <th className="text-left px-4 py-3 text-text-secondary font-semibold text-[12px] uppercase tracking-wide">{t('skills.installed.columnTier')}</th>
+              <th className="text-left px-4 py-3 text-text-secondary font-semibold text-[12px] uppercase tracking-wide">{t('skills.installed.columnStatus')}</th>
+              <th className="text-left px-4 py-3 text-text-secondary font-semibold text-[12px] uppercase tracking-wide">{t('skills.installed.columnActions')}</th>
             </tr>
           </thead>
           <tbody>
@@ -220,7 +222,7 @@ function InstalledTab() {
         </table>
         {filtered.length === 0 && (
           <div className="text-center py-8 text-text-tertiary text-sm">
-            No skills match your filter.
+            {t('skills.installed.noFilterMatch')}
           </div>
         )}
       </div>
@@ -233,6 +235,7 @@ function InstalledTab() {
 // ---------------------------------------------------------------------------
 
 function MarketplaceTab() {
+  const { t } = useTranslation('pages')
   const [search, setSearch] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [installing, setInstalling] = useState<string | null>(null)
@@ -280,7 +283,7 @@ function MarketplaceTab() {
       <input
         className="w-full max-w-[400px] px-4 py-2.5 border border-border rounded-xl bg-input-bg text-text font-[inherit] text-sm outline-none transition-all duration-200 mb-5 focus:border-accent focus:shadow-[0_0_0_3px_var(--color-accent-glow)] placeholder:text-text-tertiary"
         type="text"
-        placeholder="Search skills in registry..."
+        placeholder={t('skills.marketplace.searchPlaceholder')}
         value={search}
         onChange={(e) => handleSearch(e.target.value)}
       />
@@ -298,7 +301,7 @@ function MarketplaceTab() {
       {error && (
         <div className="flex flex-col items-center justify-center h-[200px] gap-3 text-text-secondary">
           <div className="text-4xl">⚠</div>
-          <h3 className="text-text text-lg font-semibold">Failed to Load Registry</h3>
+          <h3 className="text-text text-lg font-semibold">{t('skills.marketplace.failedTitle')}</h3>
           <p className="text-sm max-w-[400px] text-center">{error.message}</p>
         </div>
       )}
@@ -308,11 +311,11 @@ function MarketplaceTab() {
         <>
           {data.skills.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-[200px] gap-2.5 text-text-secondary text-center">
-              <h3 className="text-text text-lg font-semibold">No Skills Found</h3>
+              <h3 className="text-text text-lg font-semibold">{t('skills.marketplace.noSkillsTitle')}</h3>
               <p className="text-sm max-w-[400px]">
                 {debouncedSearch
-                  ? `No skills match "${debouncedSearch}". Try a different search term.`
-                  : 'The skill registry is empty. Check back later for community skills.'}
+                  ? t('skills.marketplace.noSkillsSearchDescription', { query: debouncedSearch })
+                  : t('skills.marketplace.noSkillsEmptyDescription')}
               </p>
             </div>
           ) : (
@@ -327,7 +330,7 @@ function MarketplaceTab() {
                     <div>
                       <h3 className="font-mono text-[14px] font-semibold text-text">{skill.name}</h3>
                       {skill.author && (
-                        <span className="text-[11px] text-text-tertiary">by {skill.author}</span>
+                        <span className="text-[11px] text-text-tertiary">{t('skills.marketplace.byAuthor', { author: skill.author })}</span>
                       )}
                     </div>
                     <span className="text-[11px] text-text-tertiary whitespace-nowrap">v{skill.version}</span>
@@ -356,7 +359,7 @@ function MarketplaceTab() {
                   <div className="pt-1">
                     {skill.installed ? (
                       <span className="text-[12px] font-semibold text-success px-3 py-1.5 rounded-lg bg-success/10 border border-success/20 inline-block">
-                        Installed
+                        {t('skills.marketplace.installed')}
                       </span>
                     ) : (
                       <button
@@ -364,7 +367,7 @@ function MarketplaceTab() {
                         disabled={installing === skill.name}
                         className="px-3 py-1.5 rounded-lg text-[12px] font-semibold border border-accent/40 bg-accent-glow text-accent hover:bg-accent/20 transition-all duration-150 font-[inherit] cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                       >
-                        {installing === skill.name ? 'Installing...' : 'Install'}
+                        {installing === skill.name ? t('skills.marketplace.installing') : t('skills.marketplace.install')}
                       </button>
                     )}
                   </div>
@@ -383,17 +386,18 @@ function MarketplaceTab() {
 // ---------------------------------------------------------------------------
 
 export default function SkillsPage() {
+  const { t } = useTranslation('pages')
   return (
     <div className="h-full overflow-y-auto p-7 w-full animate-[admin-fade-in_0.3s_ease]">
-      <h2 className="text-[22px] font-bold tracking-tight mb-2 text-text">Skills</h2>
+      <h2 className="text-[22px] font-bold tracking-tight mb-2 text-text">{t('skills.title')}</h2>
       <p className="text-sm text-text-tertiary mb-6">
-        Manage installed skills and discover new ones from the community registry.
+        {t('skills.description')}
       </p>
 
       <Tabs defaultValue="installed" className="w-full">
         <TabsList className="mb-6">
-          <TabsTrigger value="installed">Installed</TabsTrigger>
-          <TabsTrigger value="marketplace">Marketplace</TabsTrigger>
+          <TabsTrigger value="installed">{t('skills.tabInstalled')}</TabsTrigger>
+          <TabsTrigger value="marketplace">{t('skills.tabMarketplace')}</TabsTrigger>
         </TabsList>
 
         <TabsContent value="installed">

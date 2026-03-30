@@ -1,0 +1,95 @@
+{
+  "panel": {
+    "title": "CANVAS",
+    "loading": "Loading canvas...",
+    "agentVisuals": "Agent visuals {{count}}",
+    "agentSync": "Agent sync {{time}}",
+    "queue": "Queue {{count}}"
+  },
+  "cards": {
+    "aiBadge": "AI",
+    "codeBlock": {
+      "badge": "Code",
+      "defaultTitle": "Snippet"
+    },
+    "diffBlock": {
+      "badge": "Diff"
+    },
+    "fileCard": {
+      "badge": "File",
+      "lines": "{{count}} lines"
+    },
+    "diagramNode": {
+      "defaultLabel": "Node",
+      "statusActive": "active",
+      "statusIdle": "idle",
+      "statusError": "error",
+      "statusPending": "pending"
+    },
+    "terminalBlock": {
+      "badge": "Terminal"
+    },
+    "imageBlock": {
+      "badge": "Image",
+      "noImage": "No image"
+    },
+    "taskCard": {
+      "defaultTitle": "Task",
+      "statusTodo": "todo",
+      "priorityLow": "low",
+      "priorityMedium": "medium",
+      "priorityHigh": "high",
+      "priorityCritical": "critical"
+    },
+    "noteBlock": {
+      "badge": "Note"
+    },
+    "goalSummary": {
+      "badge": "Goal",
+      "defaultTitle": "Goal",
+      "tasks": "Tasks:",
+      "running": "Running: {{count}}",
+      "failed": "Failed: {{count}}",
+      "skipped": "Skipped: {{count}}",
+      "done": "Done: {{count}}"
+    },
+    "errorCard": {
+      "badgeWarning": "Warning",
+      "badgeError": "Error",
+      "defaultMessage": "Error",
+      "showStackTrace": "Show Stack Trace",
+      "hideStackTrace": "Hide Stack Trace"
+    },
+    "testResult": {
+      "badgePassed": "Tests Passed",
+      "badgeFailed": "Tests Failed",
+      "passed": "Passed",
+      "failed": "Failed",
+      "coverage": "Coverage"
+    },
+    "linkCard": {
+      "badge": "Link",
+      "defaultTitle": "Link"
+    },
+    "metricCard": {
+      "badge": "Metric",
+      "defaultLabel": "Metric"
+    }
+  },
+  "controls": {
+    "zoomOut": "Zoom out",
+    "zoomIn": "Zoom in",
+    "zoomToFit": "Zoom to fit"
+  },
+  "empty": {
+    "agentActivity": "Agent Activity",
+    "tasksInProgress": "{{count}} task in progress",
+    "tasksInProgress_plural": "{{count}} tasks in progress",
+    "running": "{{count}} running",
+    "done": "{{count}} done",
+    "visualizeOnCanvas": "Visualize on Canvas",
+    "spatialCanvas": "Spatial canvas",
+    "agentVisualsDescription": "Agent visuals will appear here automatically.",
+    "blankCanvasDescription": "Or start a blank canvas to arrange blocks freely."
+  }
+}

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import {
   BarChart3, Settings, SlidersHorizontal, Wrench, Radio, Users,
   ScrollText, Brain, Theater, Database, Shield, Puzzle, ChevronDown,
@@ -11,21 +12,21 @@ import { useWorkspaceStore } from '../../stores/workspace-store'
 interface AdminPage {
   to: string
   icon: LucideIcon
-  label: string
+  labelKey: string
 }
 
 const ADMIN_PAGES: AdminPage[] = [
-  { to: '/admin/dashboard', icon: BarChart3, label: 'Dashboard' },
-  { to: '/admin/config', icon: SlidersHorizontal, label: 'Config' },
-  { to: '/admin/tools', icon: Wrench, label: 'Tools' },
-  { to: '/admin/channels', icon: Radio, label: 'Channels' },
-  { to: '/admin/sessions', icon: Users, label: 'Sessions' },
-  { to: '/admin/logs', icon: ScrollText, label: 'Logs' },
-  { to: '/admin/identity', icon: Brain, label: 'Identity' },
-  { to: '/admin/personality', icon: Theater, label: 'Personality' },
-  { to: '/admin/memory', icon: Database, label: 'Memory' },
-  { to: '/admin/settings', icon: Settings, label: 'Settings' },
-  { to: '/admin/skills', icon: Puzzle, label: 'Skills' },
+  { to: '/admin/dashboard', icon: BarChart3, labelKey: 'nav.dashboard' },
+  { to: '/admin/config', icon: SlidersHorizontal, labelKey: 'nav.config' },
+  { to: '/admin/tools', icon: Wrench, labelKey: 'nav.tools' },
+  { to: '/admin/channels', icon: Radio, labelKey: 'nav.channels' },
+  { to: '/admin/sessions', icon: Users, labelKey: 'nav.sessions' },
+  { to: '/admin/logs', icon: ScrollText, labelKey: 'nav.logs' },
+  { to: '/admin/identity', icon: Brain, labelKey: 'nav.identity' },
+  { to: '/admin/personality', icon: Theater, labelKey: 'nav.personality' },
+  { to: '/admin/memory', icon: Database, labelKey: 'nav.memory' },
+  { to: '/admin/settings', icon: Settings, labelKey: 'nav.settings' },
+  { to: '/admin/skills', icon: Puzzle, labelKey: 'nav.skills' },
 ]
 
 interface AdminNavProps {
@@ -33,6 +34,7 @@ interface AdminNavProps {
 }
 
 export default function AdminNav({ collapsed }: AdminNavProps) {
+  const { t } = useTranslation()
   const location = useLocation()
   const setMode = useWorkspaceStore((s) => s.setMode)
   const isOnAdmin = location.pathname.startsWith('/admin')
@@ -48,7 +50,7 @@ export default function AdminNav({ collapsed }: AdminNavProps) {
       <button
         onClick={() => setExpanded((prev) => !prev)}
         className="flex items-center justify-center px-2 py-2 rounded-[10px] text-text-secondary text-sm font-medium transition-all duration-150 cursor-pointer bg-transparent border-none w-full hover:bg-bg-tertiary hover:text-text"
-        title="Admin"
+        title={t('sidebar.admin')}
       >
         <Shield size={18} />
       </button>
@@ -67,7 +69,7 @@ export default function AdminNav({ collapsed }: AdminNavProps) {
         <span className="w-[22px] text-center text-base shrink-0 leading-none">
           <Shield size={18} />
         </span>
-        <span className="flex-1 whitespace-nowrap overflow-hidden text-ellipsis">Admin</span>
+        <span className="flex-1 whitespace-nowrap overflow-hidden text-ellipsis">{t('sidebar.admin')}</span>
         <ChevronDown size={14} className={cn('transition-transform duration-200', expanded && 'rotate-180')} />
       </button>
 
@@ -93,7 +95,7 @@ export default function AdminNav({ collapsed }: AdminNavProps) {
               }
             >
               <page.icon size={14} className="shrink-0" />
-              <span className="truncate">{page.label}</span>
+              <span className="truncate">{t(page.labelKey)}</span>
             </NavLink>
           ))}
         </div>

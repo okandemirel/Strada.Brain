@@ -1,8 +1,10 @@
 import { useRef, useEffect } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useMonitorStore } from '../../stores/monitor-store'
 import { normalizeLabel } from './monitor-utils'
 
 export default function ActivityFeed() {
+  const { t } = useTranslation('monitor')
   const activities = useMonitorStore((s) => s.activities)
   const bottomRef = useRef<HTMLDivElement>(null)
 
@@ -14,9 +16,9 @@ export default function ActivityFeed() {
     return (
       <div className="p-4">
         <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.02] px-4 py-5">
-          <div className="text-sm text-text-tertiary">No activity yet.</div>
+          <div className="text-sm text-text-tertiary">{t('activity.empty')}</div>
           <div className="mt-2 text-xs leading-5 text-text-secondary">
-            Tool calls, agent observations, and review events will stream here in real time.
+            {t('activity.emptyDescription')}
           </div>
         </div>
       </div>
@@ -28,14 +30,14 @@ export default function ActivityFeed() {
       <div className="sticky top-0 z-[1] mb-3 flex items-center justify-between rounded-xl border border-white/6 bg-bg/80 px-3 py-2 backdrop-blur">
         <div>
           <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-text-tertiary">
-            Timeline
+            {t('activity.timelineLabel')}
           </div>
           <div className="mt-1 text-xs text-text-secondary">
-            {activities.length} activity events captured
+            {t('activity.eventsCaptured', { count: activities.length })}
           </div>
         </div>
         <span className="rounded-full border border-emerald-400/20 bg-emerald-400/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-300">
-          Live
+          {t('activity.liveIndicator')}
         </span>
       </div>
 

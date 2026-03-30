@@ -1,4 +1,5 @@
 import { useState, useCallback } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { useBudget, useBudgetHistory } from '../../hooks/use-api'
@@ -17,7 +18,7 @@ function ProgressBar({ pct, className = '' }: { pct: number; className?: string 
   )
 }
 
-function EditableLimit({ value, onSave }: { value: number; onSave: (v: number) => void }) {
+function EditableLimit({ value, onSave, unlimitedLabel, saveLabel, cancelLabel }: { value: number; onSave: (v: number) => void; unlimitedLabel: string; saveLabel: string; cancelLabel: string }) {
   const [editing, setEditing] = useState(false)
   const [input, setInput] = useState(String(value))
 
@@ -35,7 +36,7 @@ function EditableLimit({ value, onSave }: { value: number; onSave: (v: number) =
         onClick={() => { setInput(String(value)); setEditing(true) }}
         className="px-3 py-1.5 bg-white/5 border border-white/10 rounded-lg text-accent font-mono text-sm hover:border-accent/50 transition-colors"
       >
-        {value === 0 ? 'Unlimited' : `$${value.toFixed(2)}`}
+        {value === 0 ? unlimitedLabel : `$${value.toFixed(2)}`}
       </button>
     )
   }
@@ -51,23 +52,24 @@ function EditableLimit({ value, onSave }: { value: number; onSave: (v: number) =
         className="w-24 px-2.5 py-1.5 border border-border rounded-lg bg-input-bg text-text font-mono text-[13px] text-center outline-none focus:border-accent"
         autoFocus
       />
-      <button onClick={save} className="px-2 py-1 bg-accent/20 text-accent rounded text-xs">Save</button>
-      <button onClick={() => setEditing(false)} className="px-2 py-1 bg-white/5 text-text-secondary rounded text-xs">Cancel</button>
+      <button onClick={save} className="px-2 py-1 bg-accent/20 text-accent rounded text-xs">{saveLabel}</button>
+      <button onClick={() => setEditing(false)} className="px-2 py-1 bg-white/5 text-text-secondary rounded text-xs">{cancelLabel}</button>
     </div>
   )
 }
 
-const BREAKDOWN_LABELS: Record<string, string> = {
-  daemon: 'daemon',
-  agents: 'agents',
-  chat: 'chat',
-  verification: 'verification',
-}
-
 export default function BudgetSection() {
+  const { t } = useTranslation('settings')
   const { data: budget, isLoading, error } = useBudget()
   const { data: history } = useBudgetHistory(7)
   const queryClient = useQueryClient()
+
+  const BREAKDOWN_LABELS: Record<string, string> = {
+    daemon: t('budget.breakdownDaemon'),
+    agents: t('budget.breakdownAgents'),
+    chat: t('budget.breakdownChat'),
+    verification: t('budget.breakdownVerification'),
+  }
 
   const updateConfig = useCallback(async (update: Record<string, unknown>) => {
     try {
@@ -77,24 +79,24 @@ export default function BudgetSection() {
         body: JSON.stringify(update),
       })
       if (!res.ok) throw new Error('Failed to update')
-      toast.success('Budget settings updated')
+      toast.success(t('budget.toastUpdated'))
       setTimeout(() => queryClient.invalidateQueries({ queryKey: ['budget'] }), 500)
     } catch {
-      toast.error('Failed to update budget settings')
+      toast.error(t('budget.toastFailed'))
     }
   }, [queryClient])
 
   if (isLoading) {
     return (
       <div>
-        <h2 className="text-lg font-semibold text-text mb-1">Budget</h2>
-        <p className="text-sm text-text-tertiary">Loading...</p>
+        <h2 className="text-lg font-semibold text-text mb-1">{t('budget.title')}</h2>
+        <p className="text-sm text-text-tertiary">{t('budget.loading')}</p>
       </div>
     )
   }
 
   if (error || !budget) {
-    return <PageError title="Budget Unavailable" message={error instanceof Error ? error.message : 'Enable daemon mode to activate budget tracking.'} />
+    return <PageError title={t('budget.errorTitle')} message={error instanceof Error ? error.message : t('budget.errorFallback')} />
   }
 
   const { global, breakdown, config } = budget
@@ -105,65 +107,77 @@ export default function BudgetSection() {
 
   return (
     <div>
-      <h2 className="text-lg font-semibold text-text mb-1">Budget</h2>
-      <p className="text-sm text-text-tertiary mb-6">Manage spending limits across all systems</p>
+      <h2 className="text-lg font-semibold text-text mb-1">{t('budget.title')}</h2>
+      <p className="text-sm text-text-tertiary mb-6">{t('budget.description')}</p>
 
       {/* Daily Budget */}
       <div className="bg-white/3 backdrop-blur border border-white/5 rounded-2xl p-5 mb-4">
         <div className="flex items-center justify-between mb-3">
-          <span className="text-sm font-medium text-text">Daily Budget</span>
+          <span className="text-sm font-medium text-text">{t('budget.dailyBudget')}</span>
           <EditableLimit
             value={config.dailyLimitUsd}
             onSave={(v) => updateConfig({ dailyLimitUsd: v })}
+            unlimitedLabel={t('budget.unlimited')}
+            saveLabel={t('budget.save')}
+            cancelLabel={t('budget.cancel')}
           />
         </div>
         <ProgressBar pct={global.daily.pct} className="mb-2" />
         <p className="text-xs text-text-secondary">
-          <span>{`$${global.daily.usedUsd.toFixed(2)} used today`}</span>
-          {config.dailyLimitUsd > 0 && <span>{` of $${config.dailyLimitUsd.toFixed(2)}`}</span>}
+          <span>{t('budget.usedToday', { amount: `$${global.daily.usedUsd.toFixed(2)}` })}</span>
+          {config.dailyLimitUsd > 0 && <span>{t('budget.ofLimit', { limit: `$${config.dailyLimitUsd.toFixed(2)}` })}</span>}
         </p>
       </div>
 
       {/* Monthly Budget */}
       <div className="bg-white/3 backdrop-blur border border-white/5 rounded-2xl p-5 mb-4">
         <div className="flex items-center justify-between mb-3">
-          <span className="text-sm font-medium text-text">Monthly Budget</span>
+          <span className="text-sm font-medium text-text">{t('budget.monthlyBudget')}</span>
           <EditableLimit
             value={config.monthlyLimitUsd}
             onSave={(v) => updateConfig({ monthlyLimitUsd: v })}
+            unlimitedLabel={t('budget.unlimited')}
+            saveLabel={t('budget.save')}
+            cancelLabel={t('budget.cancel')}
           />
         </div>
         <ProgressBar pct={global.monthly.pct} className="mb-2" />
         <p className="text-xs text-text-secondary">
-          {`$${global.monthly.usedUsd.toFixed(2)} used this month`}
-          {config.monthlyLimitUsd > 0 && ` of $${config.monthlyLimitUsd.toFixed(2)}`}
+          {t('budget.usedThisMonth', { amount: `$${global.monthly.usedUsd.toFixed(2)}` })}
+          {config.monthlyLimitUsd > 0 && t('budget.ofLimit', { limit: `$${config.monthlyLimitUsd.toFixed(2)}` })}
         </p>
       </div>
 
       {/* Sub-Limits */}
       <p className="text-xs font-semibold uppercase tracking-[0.04em] text-text-tertiary mb-3">
-        Sub-Limits
+        {t('budget.subLimits')}
       </p>
       <div className="grid grid-cols-2 gap-3 mb-4">
         <div className="bg-white/3 backdrop-blur border border-white/5 rounded-2xl p-5">
-          <p className="text-xs text-text-tertiary mb-2">Daemon Daily</p>
+          <p className="text-xs text-text-tertiary mb-2">{t('budget.daemonDaily')}</p>
           <EditableLimit
             value={config.subLimits.daemonDailyUsd}
             onSave={(v) => updateConfig({ subLimits: { daemonDailyUsd: v } })}
+            unlimitedLabel={t('budget.unlimited')}
+            saveLabel={t('budget.save')}
+            cancelLabel={t('budget.cancel')}
           />
         </div>
         <div className="bg-white/3 backdrop-blur border border-white/5 rounded-2xl p-5">
-          <p className="text-xs text-text-tertiary mb-2">Per Agent</p>
+          <p className="text-xs text-text-tertiary mb-2">{t('budget.perAgent')}</p>
           <EditableLimit
             value={config.subLimits.agentDefaultUsd}
             onSave={(v) => updateConfig({ subLimits: { agentDefaultUsd: v } })}
+            unlimitedLabel={t('budget.unlimited')}
+            saveLabel={t('budget.save')}
+            cancelLabel={t('budget.cancel')}
           />
         </div>
       </div>
 
       {/* Today's Breakdown */}
       <p className="text-xs font-semibold uppercase tracking-[0.04em] text-text-tertiary mb-3">
-        Today's Breakdown
+        {t('budget.todaysBreakdown')}
       </p>
       <div className="bg-white/3 backdrop-blur border border-white/5 rounded-2xl p-5 mb-4 space-y-3">
         {(Object.keys(BREAKDOWN_LABELS) as Array<keyof typeof breakdown>).map((key) => {
@@ -185,7 +199,7 @@ export default function BudgetSection() {
       {historyTotals.length >= 2 && (
         <>
           <p className="text-xs font-semibold uppercase tracking-[0.04em] text-text-tertiary mb-3">
-            7-Day Spending
+            {t('budget.sevenDaySpending')}
           </p>
           <div className="bg-white/3 backdrop-blur border border-white/5 rounded-2xl p-5 mb-4">
             <Sparkline data={historyTotals} className="w-full h-10" />

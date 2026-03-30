@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import { useAgents } from '../../hooks/use-api'
 
 const STATUS_COLORS: Record<string, string> = {
@@ -15,24 +16,25 @@ function StatusBadge({ status }: { status: string }) {
   )
 }
 
-function relativeTime(ts: number): string {
-  const diffMs = Date.now() - ts
-  const diffMin = Math.floor(diffMs / 60_000)
-  if (diffMin < 1) return 'just now'
-  if (diffMin < 60) return `${diffMin}m ago`
-  const diffH = Math.floor(diffMin / 60)
-  if (diffH < 24) return `${diffH}h ago`
-  return `${Math.floor(diffH / 24)}d ago`
-}
-
 export default function AgentsSection() {
+  const { t } = useTranslation('settings')
   const { data, isLoading } = useAgents()
+
+  function relativeTime(ts: number): string {
+    const diffMs = Date.now() - ts
+    const diffMin = Math.floor(diffMs / 60_000)
+    if (diffMin < 1) return t('agents.timeJustNow')
+    if (diffMin < 60) return t('agents.timeMinutesAgo', { count: diffMin })
+    const diffH = Math.floor(diffMin / 60)
+    if (diffH < 24) return t('agents.timeHoursAgo', { count: diffH })
+    return t('agents.timeDaysAgo', { count: Math.floor(diffH / 24) })
+  }
 
   if (isLoading || !data) {
     return (
       <div>
-        <h2 className="text-lg font-semibold text-text mb-1">Agents</h2>
-        <p className="text-sm text-text-tertiary">Loading...</p>
+        <h2 className="text-lg font-semibold text-text mb-1">{t('agents.title')}</h2>
+        <p className="text-sm text-text-tertiary">{t('agents.loading')}</p>
       </div>
     )
   }
@@ -41,23 +43,23 @@ export default function AgentsSection() {
 
   return (
     <div>
-      <h2 className="text-lg font-semibold text-text mb-1">Agents</h2>
-      <p className="text-sm text-text-tertiary mb-6">Multi-agent system configuration</p>
+      <h2 className="text-lg font-semibold text-text mb-1">{t('agents.title')}</h2>
+      <p className="text-sm text-text-tertiary mb-6">{t('agents.description')}</p>
 
       {/* Status overview */}
       <div className="grid grid-cols-3 gap-3 mb-4">
         <div className="bg-white/3 backdrop-blur border border-white/5 rounded-2xl p-5">
-          <p className="text-xs text-text-tertiary mb-1">System</p>
+          <p className="text-xs text-text-tertiary mb-1">{t('agents.system')}</p>
           <p className={`text-sm font-semibold ${data.enabled ? 'text-green-400' : 'text-text-secondary'}`}>
-            {data.enabled ? 'Enabled' : 'Disabled'}
+            {data.enabled ? t('agents.enabled') : t('agents.disabled')}
           </p>
         </div>
         <div className="bg-white/3 backdrop-blur border border-white/5 rounded-2xl p-5">
-          <p className="text-xs text-text-tertiary mb-1">Active</p>
+          <p className="text-xs text-text-tertiary mb-1">{t('agents.active')}</p>
           <p className="text-sm font-semibold text-text">{data.activeCount ?? agents.length}</p>
         </div>
         <div className="bg-white/3 backdrop-blur border border-white/5 rounded-2xl p-5">
-          <p className="text-xs text-text-tertiary mb-1">Budget Used</p>
+          <p className="text-xs text-text-tertiary mb-1">{t('agents.budgetUsed')}</p>
           <p className="text-sm font-mono text-text">
             {data.globalBudget ? `$${data.globalBudget.usedUsd.toFixed(2)}` : '—'}
           </p>
@@ -68,17 +70,17 @@ export default function AgentsSection() {
       {agents.length > 0 && (
         <>
           <p className="text-xs font-semibold uppercase tracking-[0.04em] text-text-tertiary mb-3">
-            Active Agents
+            {t('agents.activeAgents')}
           </p>
           <div className="bg-white/3 backdrop-blur border border-white/5 rounded-2xl overflow-hidden mb-4">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-white/5">
-                  <th className="text-left text-xs text-text-tertiary font-medium px-4 py-3">ID</th>
-                  <th className="text-left text-xs text-text-tertiary font-medium px-4 py-3">Channel</th>
-                  <th className="text-left text-xs text-text-tertiary font-medium px-4 py-3">Status</th>
-                  <th className="text-left text-xs text-text-tertiary font-medium px-4 py-3">Budget Cap</th>
-                  <th className="text-left text-xs text-text-tertiary font-medium px-4 py-3">Last Active</th>
+                  <th className="text-left text-xs text-text-tertiary font-medium px-4 py-3">{t('agents.columnId')}</th>
+                  <th className="text-left text-xs text-text-tertiary font-medium px-4 py-3">{t('agents.columnChannel')}</th>
+                  <th className="text-left text-xs text-text-tertiary font-medium px-4 py-3">{t('agents.columnStatus')}</th>
+                  <th className="text-left text-xs text-text-tertiary font-medium px-4 py-3">{t('agents.columnBudgetCap')}</th>
+                  <th className="text-left text-xs text-text-tertiary font-medium px-4 py-3">{t('agents.columnLastActive')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -101,7 +103,7 @@ export default function AgentsSection() {
 
       {agents.length === 0 && (
         <div className="bg-white/3 backdrop-blur border border-white/5 rounded-2xl p-5 text-center">
-          <p className="text-sm text-text-tertiary">No active agents</p>
+          <p className="text-sm text-text-tertiary">{t('agents.noActiveAgents')}</p>
         </div>
       )}
     </div>

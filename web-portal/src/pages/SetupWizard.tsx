@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import { useSetupWizard } from '../hooks/useSetupWizard'
 import { useDirectoryBrowser } from '../hooks/useDirectoryBrowser'
 import ProgressBar from './setup/ProgressBar'
@@ -10,6 +11,7 @@ import DirectoryBrowser from './setup/DirectoryBrowser'
 
 
 export default function SetupWizard() {
+  const { t } = useTranslation('setup')
   const wiz = useSetupWizard()
   const browser = useDirectoryBrowser()
 
@@ -24,12 +26,12 @@ export default function SetupWizard() {
         <div className="setup-card">
           <h1>
             {wiz.setupAvailability === 'checking'
-              ? 'Checking setup availability...'
-              : 'Setup Wizard Unavailable'}
+              ? t('wizard.checking.title')
+              : t('wizard.unavailable.title')}
           </h1>
           <p>
             {wiz.setupAvailability === 'checking'
-              ? 'Verifying whether this instance is still in first-run setup mode.'
+              ? t('wizard.checking.description')
               : wiz.setupUnavailableReason}
           </p>
         </div>

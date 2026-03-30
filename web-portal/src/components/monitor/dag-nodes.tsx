@@ -1,4 +1,5 @@
 import { Handle, Position, type Node, type NodeProps } from '@xyflow/react'
+import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
 
 const STATUS_COLORS: Record<string, string> = {
@@ -34,6 +35,7 @@ type TaskNodeData = {
 type TaskNodeType = Node<TaskNodeData, 'task'>
 
 export function TaskNode({ data }: NodeProps<TaskNodeType>) {
+  const { t } = useTranslation('monitor')
   return (
     <div className="relative">
       <Handle
@@ -53,7 +55,7 @@ export function TaskNode({ data }: NodeProps<TaskNodeType>) {
           <span className="truncate text-xs font-medium text-text">{data.label}</span>
         </div>
         {data.reviewStatus && data.reviewStatus !== 'none' && (
-          <div className="mt-1 text-[10px] text-text-secondary">Review: {data.reviewStatus}</div>
+          <div className="mt-1 text-[10px] text-text-secondary">{t('dag.nodeReviewPrefix')}{data.reviewStatus}</div>
         )}
       </div>
       <Handle

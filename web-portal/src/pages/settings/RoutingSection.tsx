@@ -1,13 +1,14 @@
 import { useState, useCallback } from 'react'
+import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useAgentActivity } from '../../hooks/use-api'
 import { useWS } from '../../hooks/useWS'
 import { resolveSettingsIdentity } from '../settings-identity'
 
 const PRESETS = [
-  { id: 'budget', label: 'Budget', description: 'Minimize cost' },
-  { id: 'balanced', label: 'Balanced', description: 'Balance cost & quality' },
-  { id: 'performance', label: 'Performance', description: 'Maximize quality' },
+  { id: 'budget', labelKey: 'routing.presetBudget', descKey: 'routing.presetBudgetDesc' },
+  { id: 'balanced', labelKey: 'routing.presetBalanced', descKey: 'routing.presetBalancedDesc' },
+  { id: 'performance', labelKey: 'routing.presetPerformance', descKey: 'routing.presetPerformanceDesc' },
 ] as const
 
 type PresetId = (typeof PRESETS)[number]['id']
@@ -20,6 +21,7 @@ function timeAgo(ts: number): string {
 }
 
 export default function RoutingSection() {
+  const { t } = useTranslation('settings')
   const { sessionId, profileId } = useWS()
   const identity = resolveSettingsIdentity(sessionId, profileId)
   const { data: activity } = useAgentActivity(identity?.query ?? null)
@@ -36,9 +38,9 @@ export default function RoutingSection() {
         body: JSON.stringify({ preset }),
       })
       if (!res.ok) throw new Error('Failed')
-      toast.success(`Routing preset set to ${preset}`)
+      toast.success(t('routing.toastPresetSet', { preset }))
     } catch {
-      toast.error('Failed to apply routing preset')
+      toast.error(t('routing.toastPresetFailed'))
     } finally {
       setApplyingPreset(null)
     }
@@ -51,12 +53,12 @@ export default function RoutingSection() {
 
   return (
     <div>
-      <h2 className="text-lg font-semibold text-text mb-1">Routing</h2>
-      <p className="text-sm text-text-tertiary mb-6">Execution policy and provider routing</p>
+      <h2 className="text-lg font-semibold text-text mb-1">{t('routing.title')}</h2>
+      <p className="text-sm text-text-tertiary mb-6">{t('routing.description')}</p>
 
       {/* Preset Selector */}
       <p className="text-xs font-semibold uppercase tracking-[0.04em] text-text-tertiary mb-3.5">
-        Routing Preset
+        {t('routing.routingPreset')}
       </p>
       <div className="grid grid-cols-3 gap-2 mb-6">
         {PRESETS.map((p) => {
@@ -69,8 +71,8 @@ export default function RoutingSection() {
               disabled={isApplying}
               className={`px-3 py-3 rounded-xl border text-left transition-all duration-150 disabled:opacity-50 ${isActive ? 'bg-accent/15 border-accent/40 text-accent' : 'bg-white/3 backdrop-blur border-white/5 text-text-secondary hover:bg-white/5 hover:text-text hover:border-white/10'}`}
             >
-              <p className="text-xs font-semibold">{isApplying ? '...' : p.label}</p>
-              <p className="text-[10px] mt-0.5 opacity-70">{p.description}</p>
+              <p className="text-xs font-semibold">{isApplying ? '...' : t(p.labelKey)}</p>
+              <p className="text-[10px] mt-0.5 opacity-70">{t(p.descKey)}</p>
             </button>
           )
         })}
@@ -80,7 +82,7 @@ export default function RoutingSection() {
       {routing.length > 0 && (
         <>
           <p className="text-xs font-semibold uppercase tracking-[0.04em] text-text-tertiary mb-3.5">
-            Recent Routing Decisions
+            {t('routing.recentRoutingDecisions')}
           </p>
           <div className="bg-white/3 backdrop-blur border border-white/5 rounded-2xl mb-4 overflow-hidden">
             {routing.map((r, i) => (
@@ -107,7 +109,7 @@ export default function RoutingSection() {
       {execution.length > 0 && (
         <>
           <p className="text-xs font-semibold uppercase tracking-[0.04em] text-text-tertiary mb-3.5">
-            Recent Execution Traces
+            {t('routing.recentExecutionTraces')}
           </p>
           <div className="bg-white/3 backdrop-blur border border-white/5 rounded-2xl mb-4 overflow-hidden">
             {execution.map((e, i) => (
@@ -134,7 +136,7 @@ export default function RoutingSection() {
       {outcomes.length > 0 && (
         <>
           <p className="text-xs font-semibold uppercase tracking-[0.04em] text-text-tertiary mb-3.5">
-            Phase Outcomes
+            {t('routing.phaseOutcomes')}
           </p>
           <div className="bg-white/3 backdrop-blur border border-white/5 rounded-2xl mb-4 overflow-hidden">
             {outcomes.map((o, i) => (
@@ -159,7 +161,7 @@ export default function RoutingSection() {
       {phaseScores.length > 0 && (
         <>
           <p className="text-xs font-semibold uppercase tracking-[0.04em] text-text-tertiary mb-3.5">
-            Adaptive Phase Scores
+            {t('routing.adaptivePhaseScores')}
           </p>
           <div className="bg-white/3 backdrop-blur border border-white/5 rounded-2xl mb-4 overflow-hidden">
             {phaseScores.map((s, i) => (
@@ -186,7 +188,7 @@ export default function RoutingSection() {
       )}
 
       {routing.length === 0 && execution.length === 0 && outcomes.length === 0 && phaseScores.length === 0 && (
-        <p className="text-sm text-text-tertiary text-center py-8">No routing activity yet</p>
+        <p className="text-sm text-text-tertiary text-center py-8">{t('routing.noActivity')}</p>
       )}
     </div>
   )

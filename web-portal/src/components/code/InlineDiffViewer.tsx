@@ -1,4 +1,5 @@
 import { useMemo } from 'react'
+import { useTranslation } from 'react-i18next'
 import { diffLines, type Change } from 'diff'
 import { useShiki, resolveLanguage } from './useShiki'
 import { type Token, splitLines, makeTokenRenderer } from './diff-shared'
@@ -53,6 +54,7 @@ function markerColor(type: LineType): string {
 }
 
 export default function InlineDiffViewer({ original, modified, language }: InlineDiffViewerProps) {
+  const { t } = useTranslation('code')
   const { highlighter, isLoading } = useShiki()
 
   const lines = useMemo(() => {
@@ -89,7 +91,7 @@ export default function InlineDiffViewer({ original, modified, language }: Inlin
   if (isLoading || !lines) {
     return (
       <div className="flex h-full items-center justify-center text-sm text-text-tertiary animate-pulse">
-        Loading diff...
+        {t('diff.loadingDiff')}
       </div>
     )
   }

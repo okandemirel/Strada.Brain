@@ -1,24 +1,27 @@
 import { useMemo } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useMonitorStore } from '../../stores/monitor-store'
+import type { TFunction } from 'i18next'
 
-function compactId(value: string | null): string {
-  if (!value) return 'Awaiting goal'
+function compactId(value: string | null, t: TFunction): string {
+  if (!value) return t('overview.awaitingGoal')
   if (value.length <= 18) return value
   return `${value.slice(0, 10)}...${value.slice(-4)}`
 }
 
-function formatLastActivity(detail: string | undefined): string {
-  if (!detail) return 'No live activity yet'
+function formatLastActivity(detail: string | undefined, t: TFunction): string {
+  if (!detail) return t('overview.noLiveActivity')
   return detail.length > 64 ? `${detail.slice(0, 61)}...` : detail
 }
 
-function buildFocusSummary(selectedTitle: string | undefined, reviewQueue: number): string {
-  if (selectedTitle) return `Focused task: ${selectedTitle}`
-  if (reviewQueue > 0) return `${reviewQueue} items are waiting for review.`
-  return 'Select a node to inspect owner, review gates, substeps, and timing.'
+function buildFocusSummary(selectedTitle: string | undefined, reviewQueue: number, t: TFunction): string {
+  if (selectedTitle) return t('overview.focusedTask', { title: selectedTitle })
+  if (reviewQueue > 0) return t('overview.reviewWaiting', { count: reviewQueue })
+  return t('overview.selectNodeHint')
 }
 
 export default function MonitorOverview() {
+  const { t } = useTranslation('monitor')
   const tasks = useMonitorStore((s) => s.tasks)
   const activities = useMonitorStore((s) => s.activities)
   const activeRootId = useMonitorStore((s) => s.activeRootId)
@@ -54,27 +57,27 @@ export default function MonitorOverview() {
 
   const statCards = [
     {
-      label: 'Tasks',
+      label: t('overview.statTasks'),
       value: `${summary.running}`,
-      meta: summary.total > 0 ? `${summary.total} total` : 'Idle',
+      meta: summary.total > 0 ? t('overview.totalSuffix', { count: summary.total }) : t('overview.idle'),
       tone: 'text-accent',
     },
     {
-      label: 'Review',
+      label: t('overview.statReview'),
       value: `${summary.reviewQueue}`,
-      meta: summary.verifying > 0 ? `${summary.verifying} verifying` : 'Clear',
+      meta: summary.verifying > 0 ? t('overview.verifyingSuffix', { count: summary.verifying }) : t('overview.clear'),
       tone: 'text-amber-300',
     },
     {
-      label: 'Agents',
+      label: t('overview.statAgents'),
       value: `${summary.agentCount}`,
-      meta: summary.blocked > 0 ? `${summary.blocked} blocked` : 'Healthy',
+      meta: summary.blocked > 0 ? t('overview.blockedSuffix', { count: summary.blocked }) : t('overview.healthy'),
       tone: summary.blocked > 0 ? 'text-rose-300' : 'text-emerald-300',
     },
     {
-      label: 'Progress',
+      label: t('overview.statProgress'),
       value: `${summary.completionRatio}%`,
-      meta: `${summary.completed}/${summary.total} done`,
+      meta: t('overview.doneFraction', { completed: summary.completed, total: summary.total }),
       tone: 'text-text',
     },
   ]
@@ -86,26 +89,26 @@ export default function MonitorOverview() {
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="min-w-0 flex-1">
               <div className="text-[10px] font-semibold uppercase tracking-[0.24em] text-accent/75">
-                Mission Control
+                {t('overview.missionControl')}
               </div>
-              <div className="mt-1 text-lg font-semibold text-text">Agent execution cockpit</div>
+              <div className="mt-1 text-lg font-semibold text-text">{t('overview.cockpitTitle')}</div>
               <div className="mt-1 text-sm text-text-secondary">
-                Root goal <span className="text-text">{compactId(activeRootId)}</span>
+                {t('overview.rootGoal')} <span className="text-text">{compactId(activeRootId, t)}</span>
               </div>
             </div>
 
             <div className="min-w-[220px] max-w-full rounded-lg border border-white/10 bg-black/20 px-3 py-2">
               <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-text-tertiary">
-                Live Feed
+                {t('overview.liveFeed')}
               </div>
               <div className="mt-1 text-sm text-text">
-                {formatLastActivity(summary.lastActivity?.detail)}
+                {formatLastActivity(summary.lastActivity?.detail, t)}
               </div>
             </div>
           </div>
 
           <div className="mt-3 text-sm text-text-secondary">
-            {buildFocusSummary(summary.selectedTask?.title, summary.reviewQueue)}
+            {buildFocusSummary(summary.selectedTask?.title, summary.reviewQueue, t)}
           </div>
 
           <div className="mt-3 flex flex-wrap gap-2">

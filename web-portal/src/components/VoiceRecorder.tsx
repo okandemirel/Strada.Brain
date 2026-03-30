@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import type { Attachment } from '../types/messages'
 import { hasVoiceInputSupport } from '../hooks/use-voice-settings'
@@ -40,6 +41,7 @@ function pickRecorderMimeType(): string {
 }
 
 export default function VoiceRecorder({ onVoiceMessage, disabled }: VoiceRecorderProps) {
+  const { t } = useTranslation()
   const [isRecording, setIsRecording] = useState(false)
   const [isProcessing, setIsProcessing] = useState(false)
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
@@ -79,12 +81,12 @@ export default function VoiceRecorder({ onVoiceMessage, disabled }: VoiceRecorde
     setIsRecording(false)
 
     if (audioBlob.size === 0) {
-      toast.error('No audio captured')
+      toast.error(t('voice.noAudioCaptured'))
       return
     }
 
     if (audioBlob.size > MAX_VOICE_MESSAGE_BYTES) {
-      toast.error('Voice message is too large')
+      toast.error(t('voice.messageTooLarge'))
       return
     }
 
@@ -98,14 +100,14 @@ export default function VoiceRecorder({ onVoiceMessage, disabled }: VoiceRecorde
       }
       const sent = onVoiceMessageRef.current(attachment)
       if (sent === false) {
-        toast.error('Voice message could not be sent')
+        toast.error(t('voice.couldNotSend'))
         return
       }
     } catch (error) {
       if (import.meta.env.DEV) {
         console.warn('[VoiceRecorder] Failed to prepare audio message:', error)
       }
-      toast.error('Voice message failed')
+      toast.error(t('voice.messageFailed'))
     } finally {
       setIsProcessing(false)
     }
@@ -133,7 +135,7 @@ export default function VoiceRecorder({ onVoiceMessage, disabled }: VoiceRecorde
         if (import.meta.env.DEV) {
           console.warn('[VoiceRecorder] MediaRecorder error:', (event as RecorderErrorEvent).error)
         }
-        toast.error('Audio recording failed')
+        toast.error(t('voice.recordingFailed'))
       }
       recorder.onstop = () => {
         void handleStop()
@@ -147,7 +149,7 @@ export default function VoiceRecorder({ onVoiceMessage, disabled }: VoiceRecorde
         console.warn('[VoiceRecorder] Failed to start recording:', error)
       }
       cleanupStream()
-      toast.error('Microphone permission denied')
+      toast.error(t('voice.micPermissionDenied'))
     } finally {
       startPendingRef.current = false
     }
@@ -183,7 +185,7 @@ export default function VoiceRecorder({ onVoiceMessage, disabled }: VoiceRecorde
       } disabled:opacity-40 disabled:cursor-not-allowed`}
       onClick={toggleRecording}
       disabled={disabled || isProcessing}
-      title={isRecording ? 'Stop recording' : isProcessing ? 'Sending voice message' : 'Voice input'}
+      title={isRecording ? t('voice.stopRecording') : isProcessing ? t('voice.sendingVoice') : t('voice.voiceInput')}
       type="button"
     >
       {isProcessing ? (

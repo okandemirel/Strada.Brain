@@ -1,5 +1,6 @@
 import { Suspense, lazy, useState, useCallback } from 'react'
 import { Outlet } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import { WebSocketProvider } from '../../contexts/WebSocketContext'
 import { TooltipProvider } from '../ui/tooltip'
 import Sidebar from './Sidebar'
@@ -16,6 +17,7 @@ const CanvasPanel = lazy(() => import('../canvas/CanvasPanel'))
 const CodePanel = lazy(() => import('../code/CodePanel'))
 
 function PrimaryContent() {
+  const { t } = useTranslation()
   const mode = useWorkspaceStore((s) => s.mode)
 
   if (mode === 'monitor') {
@@ -23,7 +25,7 @@ function PrimaryContent() {
       <Suspense
         fallback={
           <div className="flex items-center justify-center h-full text-text-tertiary text-sm">
-            Loading monitor...
+            {t('workspace.loading.monitor')}
           </div>
         }
       >
@@ -34,7 +36,7 @@ function PrimaryContent() {
 
   if (mode === 'canvas') {
     return (
-      <Suspense fallback={<div>Loading Canvas...</div>}>
+      <Suspense fallback={<div>{t('workspace.loading.canvas')}</div>}>
         <CanvasPanel />
       </Suspense>
     )
@@ -45,7 +47,7 @@ function PrimaryContent() {
       <Suspense
         fallback={
           <div className="flex items-center justify-center h-full text-text-tertiary text-sm">
-            Loading code editor...
+            {t('workspace.loading.code')}
           </div>
         }
       >

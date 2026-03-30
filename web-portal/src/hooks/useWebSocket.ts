@@ -126,6 +126,7 @@ export function useWebSocket(): UseWebSocketReturn {
     reconnectToken: string,
     profileId?: string,
     profileToken?: string,
+    language?: string,
   ) => {
     const previousChatId = chatIdRef.current
     const nextProfileId = profileId?.trim() || profileIdRef.current || previousChatId || chatId
@@ -134,6 +135,12 @@ export function useWebSocket(): UseWebSocketReturn {
     profileIdRef.current = nextProfileId
     profileTokenRef.current = profileToken?.trim() || profileTokenRef.current
     useSessionStore.getState().setSession(chatId, nextProfileId)
+    if (language) {
+      const validLangs = ['en', 'tr', 'ja', 'ko', 'zh', 'de', 'es', 'fr']
+      if (validLangs.includes(language)) {
+        useSessionStore.getState().setLanguage(language as 'en')
+      }
+    }
     useCanvasStore.getState().setSessionId(nextProfileId)
     localStorage.setItem(CHAT_ID_STORAGE_KEY, chatId)
     localStorage.setItem(PROFILE_ID_STORAGE_KEY, nextProfileId)
@@ -330,7 +337,7 @@ export function useWebSocket(): UseWebSocketReturn {
             pendingReconnectTimerRef.current = setTimeout(() => {
               pendingReconnectTimerRef.current = null
               pendingReconnectChatIdRef.current = null
-              acceptConnectedSession(data.chatId, data.reconnectToken, data.profileId, data.profileToken)
+              acceptConnectedSession(data.chatId, data.reconnectToken, data.profileId, data.profileToken, data.language)
               sessionReadyRef.current = true
               flushPendingOutboundMessages()
             }, SESSION_RECLAIM_GRACE_MS)
@@ -343,7 +350,7 @@ export function useWebSocket(): UseWebSocketReturn {
           }
 
           pendingReconnectChatIdRef.current = null
-          acceptConnectedSession(data.chatId, data.reconnectToken, data.profileId, data.profileToken)
+          acceptConnectedSession(data.chatId, data.reconnectToken, data.profileId, data.profileToken, data.language)
           sessionReadyRef.current = true
           flushPendingOutboundMessages()
           break

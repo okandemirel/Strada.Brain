@@ -6,6 +6,7 @@ export interface ConnectedMessage {
   reconnectToken: string
   profileId?: string
   profileToken?: string
+  language?: string
 }
 
 export interface TextMessage {

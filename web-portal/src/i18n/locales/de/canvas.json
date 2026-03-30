@@ -1,0 +1,95 @@
+{
+  "panel": {
+    "title": "CANVAS",
+    "loading": "Canvas wird geladen...",
+    "agentVisuals": "Agenten-Visualisierungen {{count}}",
+    "agentSync": "Agenten-Sync {{time}}",
+    "queue": "Warteschlange {{count}}"
+  },
+  "cards": {
+    "aiBadge": "KI",
+    "codeBlock": {
+      "badge": "Code",
+      "defaultTitle": "Snippet"
+    },
+    "diffBlock": {
+      "badge": "Diff"
+    },
+    "fileCard": {
+      "badge": "Datei",
+      "lines": "{{count}} Zeilen"
+    },
+    "diagramNode": {
+      "defaultLabel": "Knoten",
+      "statusActive": "aktiv",
+      "statusIdle": "Leerlauf",
+      "statusError": "Fehler",
+      "statusPending": "ausstehend"
+    },
+    "terminalBlock": {
+      "badge": "Terminal"
+    },
+    "imageBlock": {
+      "badge": "Bild",
+      "noImage": "Kein Bild"
+    },
+    "taskCard": {
+      "defaultTitle": "Aufgabe",
+      "statusTodo": "Zu erledigen",
+      "priorityLow": "niedrig",
+      "priorityMedium": "mittel",
+      "priorityHigh": "hoch",
+      "priorityCritical": "kritisch"
+    },
+    "noteBlock": {
+      "badge": "Notiz"
+    },
+    "goalSummary": {
+      "badge": "Ziel",
+      "defaultTitle": "Ziel",
+      "tasks": "Aufgaben:",
+      "running": "Laufend: {{count}}",
+      "failed": "Fehlgeschlagen: {{count}}",
+      "skipped": "Übersprungen: {{count}}",
+      "done": "Erledigt: {{count}}"
+    },
+    "errorCard": {
+      "badgeWarning": "Warnung",
+      "badgeError": "Fehler",
+      "defaultMessage": "Fehler",
+      "showStackTrace": "Stack-Trace anzeigen",
+      "hideStackTrace": "Stack-Trace ausblenden"
+    },
+    "testResult": {
+      "badgePassed": "Tests bestanden",
+      "badgeFailed": "Tests fehlgeschlagen",
+      "passed": "Bestanden",
+      "failed": "Fehlgeschlagen",
+      "coverage": "Abdeckung"
+    },
+    "linkCard": {
+      "badge": "Link",
+      "defaultTitle": "Link"
+    },
+    "metricCard": {
+      "badge": "Metrik",
+      "defaultLabel": "Metrik"
+    }
+  },
+  "controls": {
+    "zoomOut": "Herauszoomen",
+    "zoomIn": "Hineinzoomen",
+    "zoomToFit": "Einpassen"
+  },
+  "empty": {
+    "agentActivity": "Agenten-Aktivität",
+    "tasksInProgress": "{{count}} Aufgabe in Bearbeitung",
+    "tasksInProgress_plural": "{{count}} Aufgaben in Bearbeitung",
+    "running": "{{count}} laufend",
+    "done": "{{count}} erledigt",
+    "visualizeOnCanvas": "Auf Canvas visualisieren",
+    "spatialCanvas": "Räumliches Canvas",
+    "agentVisualsDescription": "Agenten-Visualisierungen erscheinen hier automatisch.",
+    "blankCanvasDescription": "Oder starte ein leeres Canvas, um Blöcke frei anzuordnen."
+  }
+}

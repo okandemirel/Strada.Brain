@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type ChangeEvent, type DragEvent } from 'react'
+import { useTranslation } from 'react-i18next'
 import type { Attachment } from '../types/messages'
 import { useWorkspaceStore } from '../stores/workspace-store'
 import VoiceRecorder from './VoiceRecorder'
@@ -46,6 +47,7 @@ interface FilePreview {
 }
 
 export default function ChatInput({ onSend, disabled }: ChatInputProps) {
+  const { t } = useTranslation()
   const [text, setText] = useState('')
   const [files, setFiles] = useState<FilePreview[]>([])
   const [isDragOver, setIsDragOver] = useState(false)
@@ -107,7 +109,7 @@ export default function ChatInput({ onSend, disabled }: ChatInputProps) {
         )
       }
 
-      const sent = onSend(trimmed || '(file attachment)', attachments)
+      const sent = onSend(trimmed || t('chat.fileAttachment'), attachments)
       if (sent === false) return
 
       setText('')
@@ -175,7 +177,7 @@ export default function ChatInput({ onSend, disabled }: ChatInputProps) {
   )
 
   const handleVoiceMessage = useCallback((attachment: Attachment) => {
-    const sent = onSend('(voice message)', [attachment])
+    const sent = onSend(t('chat.voiceMessage'), [attachment])
     if (sent === false) return false
 
     useWorkspaceStore.getState().resetOverride()
@@ -198,7 +200,7 @@ export default function ChatInput({ onSend, disabled }: ChatInputProps) {
                 <img src={fp.previewUrl} alt={fp.file.name} className="w-12 h-12 object-cover rounded-lg" />
               ) : (
                 <div className="w-12 h-12 flex items-center justify-center bg-bg-secondary rounded-lg border border-border">
-                  <span className="text-[10px] font-bold text-text-secondary uppercase">{fp.file.name.split('.').pop()?.toUpperCase() || 'FILE'}</span>
+                  <span className="text-[10px] font-bold text-text-secondary uppercase">{fp.file.name.split('.').pop()?.toUpperCase() || t('ui.file')}</span>
                 </div>
               )}
               <span className="text-[11px] text-text-secondary text-ellipsis overflow-hidden whitespace-nowrap max-w-[80px] text-center">{fp.file.name}</span>
@@ -206,7 +208,7 @@ export default function ChatInput({ onSend, disabled }: ChatInputProps) {
               <button
                 className="absolute -top-1.5 -right-1.5 w-[22px] h-[22px] rounded-full border-none bg-bg-elevated text-text-secondary text-sm leading-none cursor-pointer flex items-center justify-center transition-all duration-200 shadow-sm hover:bg-error hover:text-white"
                 onClick={() => removeFile(i)}
-                title="Remove file"
+                title={t('chat.removeFile')}
               >
                 &times;
               </button>
@@ -218,7 +220,7 @@ export default function ChatInput({ onSend, disabled }: ChatInputProps) {
         <button
           className="flex items-center justify-center relative w-[42px] h-[42px] border border-border rounded-xl bg-bg-tertiary text-text-secondary cursor-pointer shrink-0 transition-all duration-200 hover:text-accent hover:border-accent hover:bg-accent-glow disabled:opacity-40 disabled:cursor-not-allowed"
           onClick={() => fileInputRef.current?.click()}
-          title="Attach file"
+          title={t('chat.attachFile')}
           disabled={disabled}
         >
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -235,7 +237,7 @@ export default function ChatInput({ onSend, disabled }: ChatInputProps) {
           value={text}
           onChange={handleTextChange}
           onKeyDown={handleKeyDown}
-          placeholder="Send a message... (Enter to send, Shift+Enter for new line)"
+          placeholder={t('chat.placeholder')}
           rows={1}
           disabled={disabled}
           className="flex-1 resize-none border-none rounded-[14px] px-4 py-3 font-[inherit] text-[15px] bg-transparent text-text leading-relaxed max-h-[140px] outline-none transition-all duration-200 placeholder:text-text-tertiary disabled:opacity-40"
@@ -253,7 +255,7 @@ export default function ChatInput({ onSend, disabled }: ChatInputProps) {
             onClick={handleSend}
             disabled={disabled || (!text.trim() && files.length === 0)}
           >
-            Send
+            {t('chat.send')}
           </ShimmerButton>
         </CoolMode>
         <input

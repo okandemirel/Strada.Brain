@@ -45,7 +45,7 @@ export interface ChannelDef {
   id: string
   name: string
   icon: string
-  fields: Array<{ domId: string; envKey: string; label: string; placeholder: string }>
+  fields: Array<{ domId: string; envKey: string; label: string; labelKey?: string; placeholder: string }>
 }
 
 export interface BrowseEntry {

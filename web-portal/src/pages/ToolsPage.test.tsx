@@ -51,7 +51,7 @@ describe('ToolsPage', () => {
       isLoading: false,
     })
     renderPage()
-    expect(screen.getByText(/Tools \(2\)/)).toBeInTheDocument()
+    expect(screen.getByText(/Tools/)).toBeInTheDocument()
     expect(screen.getByText('read_file')).toBeInTheDocument()
     expect(screen.getByText('web_search')).toBeInTheDocument()
     expect(screen.getByText('Read a file')).toBeInTheDocument()

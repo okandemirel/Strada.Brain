@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useWS } from '../hooks/useWS'
 
 export interface ProviderInfo {
@@ -51,7 +52,8 @@ export function PrimaryWorkerSelectorSurface({
   onProviderClick,
   onModelSelect,
 }: PrimaryWorkerSelectorSurfaceProps) {
-  const displayName = active?.provider ?? 'Worker'
+  const { t } = useTranslation()
+  const displayName = active?.provider ?? t('worker.defaultLabel')
   const displayLabel = active?.model
     ? `${active.provider}/${active.model}`
     : displayName
@@ -66,7 +68,7 @@ export function PrimaryWorkerSelectorSurface({
         type="button"
         className="flex items-center gap-1.5 bg-white/[0.03] backdrop-blur border border-white/5 rounded-lg px-2.5 py-[5px] cursor-pointer text-text-secondary text-xs font-medium transition-all duration-200 whitespace-nowrap hover:bg-white/5 hover:text-text hover:border-border-hover"
         onClick={onToggleOpen}
-        title="Set Strada's primary execution worker"
+        title={t('worker.title')}
       >
         <span className="max-w-[180px] overflow-hidden text-ellipsis">{displayLabel}</span>
         <svg
@@ -87,12 +89,12 @@ export function PrimaryWorkerSelectorSurface({
       {open && (
         <div className="absolute top-[calc(100%+4px)] right-0 min-w-[200px] max-h-[360px] overflow-y-auto bg-bg-secondary border border-border rounded-[10px] p-1 z-[100] shadow-[0_8px_24px_rgba(0,0,0,0.3)] backdrop-blur-[40px] backdrop-saturate-[180%]">
           <div className="px-3 py-2 text-[11px] text-text-secondary opacity-70 text-left leading-snug">
-            Strada stays in control.
+            {t('worker.description')}
             <br />
-            This sets the primary execution worker, not a direct chat target.
+            {t('worker.descriptionDetail')}
           </div>
           {modelsLoading && (
-            <div className="px-3 py-2 text-[11px] text-text-secondary opacity-70 text-center">Loading models...</div>
+            <div className="px-3 py-2 text-[11px] text-text-secondary opacity-70 text-center">{t('worker.loadingModels')}</div>
           )}
           {providers.map((p) => {
             const isActive = active?.provider === p.name
@@ -110,8 +112,8 @@ export function PrimaryWorkerSelectorSurface({
                   {p.contextWindow && (
                     <span className="flex items-center gap-1 shrink-0">
                       <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-bg-tertiary text-text-tertiary">{(p.contextWindow / 1000).toFixed(0)}K</span>
-                      {p.thinkingSupported && <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-bg-tertiary text-text-tertiary">Think</span>}
-                      {p.catalogUpdatedAt && <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-bg-tertiary text-text-tertiary">Live</span>}
+                      {p.thinkingSupported && <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-bg-tertiary text-text-tertiary">{t('worker.think')}</span>}
+                      {p.catalogUpdatedAt && <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-bg-tertiary text-text-tertiary">{t('worker.live')}</span>}
                     </span>
                   )}
                   <span className="flex items-center gap-1 shrink-0">
@@ -132,7 +134,7 @@ export function PrimaryWorkerSelectorSurface({
                   <div className="px-3 pb-[6px] text-[0.78rem] opacity-75 text-text-secondary">
                     {p.specialFeatures?.slice(0, 2).join(' \u2022 ')}
                     {p.specialFeatures?.length && p.officialSignals?.length ? ' \u2022 ' : ''}
-                    {p.officialSignals?.length ? `${p.officialSignals.length} live signals` : ''}
+                    {p.officialSignals?.length ? t('worker.liveSignals', { count: p.officialSignals.length }) : ''}
                   </div>
                 ) : null}
 

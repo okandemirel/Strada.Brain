@@ -1,4 +1,5 @@
 import { useMemo } from 'react'
+import { useTranslation } from 'react-i18next'
 import { diffLines, type Change } from 'diff'
 import { useShiki, resolveLanguage } from './useShiki'
 import { type Token, splitLines, makeTokenRenderer } from './diff-shared'
@@ -46,6 +47,7 @@ function lineMarker(type: SideType): string {
 }
 
 export default function DiffViewer({ original, modified, language }: DiffViewerProps) {
+  const { t } = useTranslation('code')
   const { highlighter, isLoading } = useShiki()
 
   const diffData = useMemo(() => {
@@ -174,7 +176,7 @@ export default function DiffViewer({ original, modified, language }: DiffViewerP
   if (isLoading || !diffData) {
     return (
       <div className="flex h-full items-center justify-center text-sm text-text-tertiary animate-pulse">
-        Loading diff...
+        {t('diff.loadingDiff')}
       </div>
     )
   }
@@ -184,15 +186,15 @@ export default function DiffViewer({ original, modified, language }: DiffViewerP
       <div className="grid grid-cols-2 border-b border-white/6 bg-white/[0.03]">
         <div className="border-r border-white/6 px-4 py-3">
           <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-text-tertiary">
-            Original
+            {t('diff.original')}
           </div>
-          <div className="mt-1 text-xs text-rose-300">-{diffData.removedCount} removed lines</div>
+          <div className="mt-1 text-xs text-rose-300">{t('diff.removedLines', { count: diffData.removedCount })}</div>
         </div>
         <div className="px-4 py-3">
           <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-text-tertiary">
-            Modified
+            {t('diff.modified')}
           </div>
-          <div className="mt-1 text-xs text-emerald-300">+{diffData.addedCount} added lines</div>
+          <div className="mt-1 text-xs text-emerald-300">{t('diff.addedLines', { count: diffData.addedCount })}</div>
         </div>
       </div>
 

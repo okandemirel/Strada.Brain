@@ -142,10 +142,14 @@ describe('SkillsPage', () => {
     })
     renderPage()
 
-    // active skill → Disable button
-    expect(screen.getByRole('button', { name: /Disable unity-build/i })).toBeInTheDocument()
+    // active skill → Disable button (aria-label is just the skill name)
+    const disableBtn = screen.getByRole('button', { name: 'unity-build' })
+    expect(disableBtn).toBeInTheDocument()
+    expect(disableBtn.textContent).toBe('Disable')
     // disabled skill → Enable button
-    expect(screen.getByRole('button', { name: /Enable web-search/i })).toBeInTheDocument()
+    const enableBtn = screen.getByRole('button', { name: 'web-search' })
+    expect(enableBtn).toBeInTheDocument()
+    expect(enableBtn.textContent).toBe('Enable')
   })
 
   it('gated and error skills have disabled action buttons', () => {
@@ -156,7 +160,7 @@ describe('SkillsPage', () => {
     })
     renderPage()
 
-    const gatedBtn = screen.getByRole('button', { name: /Enable git-ops/i })
+    const gatedBtn = screen.getByRole('button', { name: 'git-ops' })
     expect(gatedBtn).toBeDisabled()
   })
 
@@ -212,7 +216,7 @@ describe('SkillsPage', () => {
     })
     renderPage()
 
-    const enableBtn = screen.getByRole('button', { name: /Enable web-search/i })
+    const enableBtn = screen.getByRole('button', { name: 'web-search' })
     await user.click(enableBtn)
 
     await waitFor(() => {
@@ -240,7 +244,7 @@ describe('SkillsPage', () => {
     })
     renderPage()
 
-    const disableBtn = screen.getByRole('button', { name: /Disable unity-build/i })
+    const disableBtn = screen.getByRole('button', { name: 'unity-build' })
     await user.click(disableBtn)
 
     await waitFor(() => {

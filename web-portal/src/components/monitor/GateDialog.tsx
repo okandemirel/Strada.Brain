@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import { useMonitorStore } from '../../stores/monitor-store'
 import {
   Dialog,
@@ -8,6 +9,7 @@ import {
 import { Button } from '../ui/button'
 
 export default function GateDialog() {
+  const { t } = useTranslation('monitor')
   const tasks = useMonitorStore((s) => s.tasks)
   const stuckTask = Object.values(tasks).find((t) => t.reviewStatus === 'review_stuck')
 
@@ -24,15 +26,14 @@ export default function GateDialog() {
   return (
     <Dialog open={true}>
       <DialogContent hideClose>
-        <DialogTitle>Review Gate</DialogTitle>
+        <DialogTitle>{t('gate.title')}</DialogTitle>
         <DialogDescription>
-          Task &quot;{stuckTask.title}&quot; is stuck after maximum review iterations. What would you
-          like to do?
+          {t('gate.description', { title: stuckTask.title })}
         </DialogDescription>
         <div className="flex gap-2 mt-4">
-          <Button onClick={handleApprove}>Approve Anyway</Button>
+          <Button onClick={handleApprove}>{t('gate.approve')}</Button>
           <Button variant="outline" onClick={handleSkip}>
-            Skip Task
+            {t('gate.skip')}
           </Button>
         </div>
       </DialogContent>

@@ -1,0 +1,33 @@
+{
+  "editor": {
+    "diffLabel": "DIFF",
+    "noFileOpen": "Ningun archivo abierto",
+    "closeTab": "Cerrar {{filename}}"
+  },
+  "panel": {},
+  "viewer": {
+    "loadingSyntaxHighlighter": "Cargando resaltador de sintaxis...",
+    "searchPlaceholder": "Buscar...",
+    "matchCount": "{{current}}/{{total}}"
+  },
+  "diff": {
+    "changes": "Cambios",
+    "splitView": "Dividido",
+    "inlineView": "En linea",
+    "loadingDiff": "Cargando diff...",
+    "original": "Original",
+    "modified": "Modificado",
+    "removedLines": "-{{count}} lineas eliminadas",
+    "addedLines": "+{{count}} lineas agregadas"
+  },
+  "fileTree": {
+    "changedFiles": "Archivos Modificados ({{count}})",
+    "explorer": "Explorador",
+    "projectRoot": "Raiz del Proyecto",
+    "requestFailed": "La solicitud fallo",
+    "networkError": "Error de red"
+  },
+  "terminal": {
+    "noOutput": "Sin salida de terminal"
+  }
+}

@@ -1,4 +1,5 @@
 import { RotateCcw, Play, Square } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import { useWS } from '../../hooks/useWS'
 import { useMonitorStore } from '../../stores/monitor-store'
 import { Button } from '../ui/button'
@@ -8,6 +9,7 @@ const RESUMABLE_STATUSES = new Set(['blocked', 'paused', 'waiting_for_input'])
 const CANCELLABLE_STATUSES = new Set(['pending', 'executing', 'verifying'])
 
 export default function InterventionToolbar() {
+  const { t } = useTranslation('monitor')
   const { sendRawJSON } = useWS()
   const selectedTaskId = useMonitorStore((s) => s.selectedTaskId)
   const activeRootId = useMonitorStore((s) => s.activeRootId)
@@ -36,7 +38,7 @@ export default function InterventionToolbar() {
   if (!retryVisible && !resumeVisible && !cancelVisible) {
     return (
       <div className="flex items-center gap-2 text-xs text-text-tertiary">
-        Select a task to retry, resume, or cancel it.
+        {t('intervention.hint')}
       </div>
     )
   }
@@ -55,7 +57,7 @@ export default function InterventionToolbar() {
           })}
         >
           <RotateCcw size={14} />
-          <span className="ml-1 text-xs">Retry</span>
+          <span className="ml-1 text-xs">{t('intervention.retry')}</span>
         </Button>
       )}
 
@@ -70,7 +72,7 @@ export default function InterventionToolbar() {
           })}
         >
           <Play size={14} />
-          <span className="ml-1 text-xs">Resume</span>
+          <span className="ml-1 text-xs">{t('intervention.resume')}</span>
         </Button>
       )}
 
@@ -85,7 +87,7 @@ export default function InterventionToolbar() {
           })}
         >
           <Square size={14} />
-          <span className="ml-1 text-xs">Cancel</span>
+          <span className="ml-1 text-xs">{t('intervention.cancel')}</span>
         </Button>
       )}
     </div>

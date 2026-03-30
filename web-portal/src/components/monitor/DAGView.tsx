@@ -1,4 +1,5 @@
 import { useMemo } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Background, Controls, ReactFlow, type Edge, type Node } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import { useMonitorStore } from '../../stores/monitor-store'
@@ -85,6 +86,7 @@ function layoutNodes(
 }
 
 export default function DAGView() {
+  const { t } = useTranslation('monitor')
   const dag = useMonitorStore((s) => s.dag)
   const setSelectedTask = useMonitorStore((s) => s.setSelectedTask)
 
@@ -113,17 +115,17 @@ export default function DAGView() {
         <div className="flex h-full items-center justify-center rounded-2xl border border-dashed border-white/10 bg-white/[0.02] px-6">
           <div className="max-w-xl text-center">
             <div className="text-[10px] font-semibold uppercase tracking-[0.24em] text-accent/75">
-              DAG Workspace
+              {t('dag.workspace')}
             </div>
             <div className="mt-2 text-2xl font-semibold text-text">
-              No active goal. Start a task to see the DAG.
+              {t('dag.emptyTitle')}
             </div>
             <TypingAnimation
               className="mt-3 text-sm leading-6 text-text-secondary"
               words={[
-                'Parallel branches and review gates will appear here.',
-                'Waiting for goal decomposition...',
-                'Send a complex task to trigger planning.',
+                t('dag.emptyHint1'),
+                t('dag.emptyHint2'),
+                t('dag.emptyHint3'),
               ]}
               duration={40}
               deleteSpeed={20}

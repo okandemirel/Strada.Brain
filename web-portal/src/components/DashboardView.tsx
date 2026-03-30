@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import { useHealth, useMetrics, useTriggers, useAgents, useDelegations, useConsolidation, useDeployment, useMaintenance } from '../hooks/use-api'
 import MetricCard from './MetricCard'
 import { PageSkeleton } from './ui/page-skeleton'
@@ -26,6 +27,7 @@ function getStatusClass(status: string): string {
 
 
 export default function DashboardView() {
+  const { t } = useTranslation()
   const healthQuery = useHealth()
   const metricsQuery = useMetrics()
   const triggersQuery = useTriggers()
@@ -47,7 +49,7 @@ export default function DashboardView() {
 
   const dashboardEnabled = metricsQuery.isSuccess
   const error = !dashboardEnabled && !health
-    ? (metricsQuery.error?.message ?? healthQuery.error?.message ?? 'Dashboard not enabled and web channel unreachable')
+    ? (metricsQuery.error?.message ?? healthQuery.error?.message ?? t('dashboard.notEnabledUnreachable'))
     : null
   const lastUpdated = metricsQuery.dataUpdatedAt || healthQuery.dataUpdatedAt || null
 
@@ -61,9 +63,9 @@ export default function DashboardView() {
     return (
       <div className="h-full overflow-y-auto p-7 w-full">
         <div className="flex flex-col items-center justify-center h-[200px] gap-2.5 text-text-secondary text-center">
-          <h3 className="text-text text-lg font-semibold">Dashboard Unavailable</h3>
+          <h3 className="text-text text-lg font-semibold">{t('dashboard.unavailable')}</h3>
           <p className="text-sm max-w-[400px]">
-            {error || 'Could not connect to the dashboard or web channel. Make sure the server is running.'}
+            {error || t('dashboard.unavailableMessage')}
           </p>
         </div>
       </div>
@@ -98,14 +100,14 @@ export default function DashboardView() {
   return (
     <div className="h-full overflow-y-auto p-7 w-full">
       <div className="flex items-center justify-between mb-7">
-        <h2 className="text-[22px] font-bold tracking-tight">System Dashboard</h2>
+        <h2 className="text-[22px] font-bold tracking-tight">{t('dashboard.title')}</h2>
         <div className="flex items-center gap-3">
           {!dashboardEnabled && (
-            <span className="text-[11px] font-semibold px-2.5 py-1 rounded-lg bg-warning/10 text-warning">Dashboard API offline</span>
+            <span className="text-[11px] font-semibold px-2.5 py-1 rounded-lg bg-warning/10 text-warning">{t('dashboard.apiOffline')}</span>
           )}
           {lastUpdated && (
             <span className="text-xs text-text-tertiary">
-              Updated {new Date(lastUpdated).toLocaleTimeString()}
+              {t('dashboard.updated', { time: new Date(lastUpdated).toLocaleTimeString() })}
             </span>
           )}
         </div>
@@ -113,35 +115,35 @@ export default function DashboardView() {
 
       {/* System Health */}
       <section className="bg-white/3 backdrop-blur border border-white/5 rounded-2xl p-5 mb-6">
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-text-tertiary mb-3">System Health</h3>
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-text-tertiary mb-3">{t('dashboard.health.title')}</h3>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <div className="bg-white/3 backdrop-blur-xl border border-white/8 border-l-[3px] border-l-accent rounded-2xl p-4 flex flex-col gap-2 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[0_0_20px_rgba(0,229,255,0.15)]">
-            <span className="text-xs text-text-secondary font-medium uppercase tracking-wide">Status</span>
+            <span className="text-xs text-text-secondary font-medium uppercase tracking-wide">{t('dashboard.health.status')}</span>
             <div className="text-lg font-bold text-text flex items-baseline gap-1.5">
               <span className={`inline-block text-[13px] font-semibold px-3.5 py-[5px] rounded-lg uppercase tracking-[0.03em] ${getStatusClass(health?.status ?? 'unknown')}`}>
                 {health?.status ?? 'unknown'}
               </span>
             </div>
           </div>
-          <MetricCard title="Uptime" value={formatUptime(uptimeSeconds)} icon="T" />
-          <MetricCard title="Connected Clients" value={health?.clients ?? 0} icon="C" />
-          <MetricCard title="Active Sessions" value={metrics?.activeSessions ?? 0} icon="S" />
+          <MetricCard title={t('dashboard.health.uptime')} value={formatUptime(uptimeSeconds)} icon="T" />
+          <MetricCard title={t('dashboard.health.connectedClients')} value={health?.clients ?? 0} icon="C" />
+          <MetricCard title={t('dashboard.health.activeSessions')} value={metrics?.activeSessions ?? 0} icon="S" />
         </div>
       </section>
 
       {/* Metrics */}
       {metrics && (
         <section className="bg-white/3 backdrop-blur border border-white/5 rounded-2xl p-5 mb-6">
-          <h3 className="text-xs font-semibold uppercase tracking-wide text-text-tertiary mb-3">Metrics</h3>
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-text-tertiary mb-3">{t('dashboard.metrics.title')}</h3>
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-            <MetricCard title="Messages" value={formatNumber(metrics.totalMessages)} subtitle={`${messagesPerMin} msg/min`} />
-            <MetricCard title="Input Tokens" value={formatNumber(metrics.totalTokens.input)} />
-            <MetricCard title="Output Tokens" value={formatNumber(metrics.totalTokens.output)} />
-            <MetricCard title="Est. Cost" value={estimateCost(metrics.totalTokens.input, metrics.totalTokens.output)} subtitle={`${formatNumber(metrics.totalTokens.input + metrics.totalTokens.output)} total tokens`} />
+            <MetricCard title={t('dashboard.metrics.messages')} value={formatNumber(metrics.totalMessages)} subtitle={t('dashboard.metrics.msgPerMin', { rate: messagesPerMin })} />
+            <MetricCard title={t('dashboard.metrics.inputTokens')} value={formatNumber(metrics.totalTokens.input)} />
+            <MetricCard title={t('dashboard.metrics.outputTokens')} value={formatNumber(metrics.totalTokens.output)} />
+            <MetricCard title={t('dashboard.metrics.estCost')} value={estimateCost(metrics.totalTokens.input, metrics.totalTokens.output)} subtitle={t('dashboard.metrics.totalTokens', { count: formatNumber(metrics.totalTokens.input + metrics.totalTokens.output) })} />
           </div>
           {metrics.recentTokenUsage && metrics.recentTokenUsage.length >= 2 && (
             <div className="mt-3 flex items-center gap-2 text-xs text-text-secondary">
-              <span className="uppercase tracking-wide font-medium">Token trend</span>
+              <span className="uppercase tracking-wide font-medium">{t('dashboard.metrics.tokenTrend')}</span>
               <Sparkline data={metrics.recentTokenUsage.map((r) => r.input + r.output)} />
             </div>
           )}
@@ -152,9 +154,9 @@ export default function DashboardView() {
       {toolEntries.length > 0 && (
         <section className="bg-white/3 backdrop-blur border border-white/5 rounded-2xl p-5 mb-6">
           <h3 className="text-xs font-semibold uppercase tracking-wide text-text-tertiary mb-3 flex items-center gap-2">
-            Tool Usage
+            {t('dashboard.tools.title')}
             {totalToolErrors > 0 && (
-              <span className="text-[11px] font-semibold px-2 py-0.5 rounded-md bg-error/10 text-error normal-case tracking-normal">{toolErrorRate}% error rate</span>
+              <span className="text-[11px] font-semibold px-2 py-0.5 rounded-md bg-error/10 text-error normal-case tracking-normal">{t('dashboard.tools.errorRate', { rate: toolErrorRate })}</span>
             )}
           </h3>
           <div className="flex flex-col gap-2.5 mt-2.5">
@@ -182,12 +184,12 @@ export default function DashboardView() {
       {/* Agent Performance */}
       {metrics && (
         <section className="bg-white/3 backdrop-blur border border-white/5 rounded-2xl p-5 mb-6">
-          <h3 className="text-xs font-semibold uppercase tracking-wide text-text-tertiary mb-3">Agent Performance</h3>
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-text-tertiary mb-3">{t('dashboard.agent.title')}</h3>
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-            <MetricCard title="Total Tool Calls" value={formatNumber(totalToolCalls)} />
-            <MetricCard title="Tool Error Rate" value={`${toolErrorRate}%`} trend={totalToolErrors > 0 ? 'down' : 'neutral'} status={totalToolErrors > 0 ? 'error' : 'default'} />
-            <MetricCard title="Provider" value={metrics.providerName} />
-            {metrics.memoryStats && <MetricCard title="Memory Entries" value={formatNumber(metrics.memoryStats.totalEntries)} />}
+            <MetricCard title={t('dashboard.agent.totalToolCalls')} value={formatNumber(totalToolCalls)} />
+            <MetricCard title={t('dashboard.agent.toolErrorRate')} value={`${toolErrorRate}%`} trend={totalToolErrors > 0 ? 'down' : 'neutral'} status={totalToolErrors > 0 ? 'error' : 'default'} />
+            <MetricCard title={t('dashboard.agent.provider')} value={metrics.providerName} />
+            {metrics.memoryStats && <MetricCard title={t('dashboard.agent.memoryEntries')} value={formatNumber(metrics.memoryStats.totalEntries)} />}
           </div>
         </section>
       )}
@@ -195,17 +197,17 @@ export default function DashboardView() {
       {/* Daemon Triggers */}
       {triggers.length > 0 && (
         <section className="bg-white/3 backdrop-blur border border-white/5 rounded-2xl p-5 mb-6">
-          <h3 className="text-xs font-semibold uppercase tracking-wide text-text-tertiary mb-3">Daemon Triggers</h3>
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-text-tertiary mb-3">{t('dashboard.triggers.title')}</h3>
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-            <MetricCard title="Active Triggers" value={activeTriggers} subtitle={`${triggers.length} total`} status={activeTriggers > 0 ? 'success' : 'default'} />
+            <MetricCard title={t('dashboard.triggers.active')} value={activeTriggers} subtitle={t('dashboard.triggers.totalSuffix', { count: triggers.length })} status={activeTriggers > 0 ? 'success' : 'default'} />
           </div>
           <div className="mt-3.5 flex flex-col gap-1.5">
-            {triggers.map((t) => (
-              <div key={t.id} className="flex items-center gap-2.5 px-3.5 py-2.5 bg-bg-tertiary border border-border rounded-xl text-[13px] transition-all duration-200 hover:bg-bg-elevated">
-                <span className={`w-2 h-2 rounded-full shrink-0 ${t.enabled ? 'bg-success shadow-[0_0_6px_var(--color-success)]' : 'bg-text-tertiary'}`} />
-                <span className="text-text font-mono text-xs flex-1 overflow-hidden text-ellipsis whitespace-nowrap">{t.id}</span>
-                <span className="text-[11px] text-accent font-semibold uppercase">{t.type}</span>
-                <span className="text-xs text-text-tertiary whitespace-nowrap">{t.fireCount} fires</span>
+            {triggers.map((tr) => (
+              <div key={tr.id} className="flex items-center gap-2.5 px-3.5 py-2.5 bg-bg-tertiary border border-border rounded-xl text-[13px] transition-all duration-200 hover:bg-bg-elevated">
+                <span className={`w-2 h-2 rounded-full shrink-0 ${tr.enabled ? 'bg-success shadow-[0_0_6px_var(--color-success)]' : 'bg-text-tertiary'}`} />
+                <span className="text-text font-mono text-xs flex-1 overflow-hidden text-ellipsis whitespace-nowrap">{tr.id}</span>
+                <span className="text-[11px] text-accent font-semibold uppercase">{tr.type}</span>
+                <span className="text-xs text-text-tertiary whitespace-nowrap">{t('dashboard.triggers.fires', { count: tr.fireCount })}</span>
               </div>
             ))}
           </div>
@@ -215,10 +217,10 @@ export default function DashboardView() {
       {/* Multi-Agent */}
       {agents?.enabled && (
         <section className="bg-white/3 backdrop-blur border border-white/5 rounded-2xl p-5 mb-6">
-          <h3 className="text-xs font-semibold uppercase tracking-wide text-text-tertiary mb-3">Multi-Agent</h3>
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-text-tertiary mb-3">{t('dashboard.multiAgent.title')}</h3>
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-            <MetricCard title="Active Agents" value={agents.activeCount ?? 0} subtitle={`${agents.agents?.length ?? 0} total`} status={(agents.activeCount ?? 0) > 0 ? 'success' : 'default'} />
-            {agents.globalBudget && <MetricCard title="Budget Used" value={`$${agents.globalBudget.usedUsd.toFixed(2)}`} subtitle={`${(agents.globalBudget.pct * 100).toFixed(0)}% of limit`} status={agents.globalBudget.pct > 0.8 ? 'warning' : 'default'} />}
+            <MetricCard title={t('dashboard.multiAgent.activeAgents')} value={agents.activeCount ?? 0} subtitle={t('dashboard.triggers.totalSuffix', { count: agents.agents?.length ?? 0 })} status={(agents.activeCount ?? 0) > 0 ? 'success' : 'default'} />
+            {agents.globalBudget && <MetricCard title={t('dashboard.multiAgent.budgetUsed')} value={`$${agents.globalBudget.usedUsd.toFixed(2)}`} subtitle={t('dashboard.multiAgent.budgetPercent', { percent: (agents.globalBudget.pct * 100).toFixed(0) })} status={agents.globalBudget.pct > 0.8 ? 'warning' : 'default'} />}
           </div>
         </section>
       )}
@@ -226,11 +228,11 @@ export default function DashboardView() {
       {/* Delegations */}
       {delegations?.enabled && (
         <section className="bg-white/3 backdrop-blur border border-white/5 rounded-2xl p-5 mb-6">
-          <h3 className="text-xs font-semibold uppercase tracking-wide text-text-tertiary mb-3">Delegations</h3>
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-text-tertiary mb-3">{t('dashboard.delegations.title')}</h3>
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-            <MetricCard title="Active" value={delegations.active?.length ?? 0} />
+            <MetricCard title={t('dashboard.delegations.active')} value={delegations.active?.length ?? 0} />
             {delegations.stats?.map((s) => (
-              <MetricCard key={s.type} title={s.type} value={s.count} subtitle={`${(s.successRate * 100).toFixed(0)}% success`} status={s.successRate < 0.5 ? 'warning' : 'default'} />
+              <MetricCard key={s.type} title={s.type} value={s.count} subtitle={t('dashboard.delegations.successRate', { rate: (s.successRate * 100).toFixed(0) })} status={s.successRate < 0.5 ? 'warning' : 'default'} />
             ))}
           </div>
         </section>
@@ -239,11 +241,11 @@ export default function DashboardView() {
       {/* Consolidation */}
       {consolidation?.enabled && (
         <section className="bg-white/3 backdrop-blur border border-white/5 rounded-2xl p-5 mb-6">
-          <h3 className="text-xs font-semibold uppercase tracking-wide text-text-tertiary mb-3">Memory Consolidation</h3>
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-text-tertiary mb-3">{t('dashboard.consolidation.title')}</h3>
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-            <MetricCard title="Total Runs" value={consolidation.totalRuns ?? 0} />
-            <MetricCard title="Lifetime Savings" value={`${consolidation.lifetimeSavings ?? 0} entries`} status="success" />
-            {consolidation.totalCostUsd !== undefined && <MetricCard title="Consolidation Cost" value={`$${consolidation.totalCostUsd.toFixed(3)}`} />}
+            <MetricCard title={t('dashboard.consolidation.totalRuns')} value={consolidation.totalRuns ?? 0} />
+            <MetricCard title={t('dashboard.consolidation.lifetimeSavings')} value={t('dashboard.consolidation.savingsUnit', { count: consolidation.lifetimeSavings ?? 0 })} status="success" />
+            {consolidation.totalCostUsd !== undefined && <MetricCard title={t('dashboard.consolidation.cost')} value={`$${consolidation.totalCostUsd.toFixed(3)}`} />}
           </div>
         </section>
       )}
@@ -251,12 +253,12 @@ export default function DashboardView() {
       {/* Deployment */}
       {deployment?.enabled && deployment.stats && (
         <section className="bg-white/3 backdrop-blur border border-white/5 rounded-2xl p-5 mb-6">
-          <h3 className="text-xs font-semibold uppercase tracking-wide text-text-tertiary mb-3">Deployments</h3>
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-text-tertiary mb-3">{t('dashboard.deployments.title')}</h3>
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-            <MetricCard title="Total" value={deployment.stats.totalDeployments} />
-            <MetricCard title="Successful" value={deployment.stats.successful} status="success" />
-            <MetricCard title="Failed" value={deployment.stats.failed} trend={deployment.stats.failed > 0 ? 'down' : 'neutral'} status={deployment.stats.failed > 0 ? 'error' : 'default'} />
-            <MetricCard title="Circuit Breaker" value={deployment.stats.circuitBreakerState} />
+            <MetricCard title={t('dashboard.deployments.total')} value={deployment.stats.totalDeployments} />
+            <MetricCard title={t('dashboard.deployments.successful')} value={deployment.stats.successful} status="success" />
+            <MetricCard title={t('dashboard.deployments.failed')} value={deployment.stats.failed} trend={deployment.stats.failed > 0 ? 'down' : 'neutral'} status={deployment.stats.failed > 0 ? 'error' : 'default'} />
+            <MetricCard title={t('dashboard.deployments.circuitBreaker')} value={deployment.stats.circuitBreakerState} />
           </div>
         </section>
       )}
@@ -264,11 +266,11 @@ export default function DashboardView() {
       {/* Maintenance */}
       {maintenance?.decay?.enabled && (
         <section className="bg-white/3 backdrop-blur border border-white/5 rounded-2xl p-5 mb-6">
-          <h3 className="text-xs font-semibold uppercase tracking-wide text-text-tertiary mb-3">Maintenance</h3>
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-text-tertiary mb-3">{t('dashboard.maintenance.title')}</h3>
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-            <MetricCard title="Memory Decay" value={maintenance.decay.enabled ? 'Active' : 'Disabled'} status={maintenance.decay.enabled ? 'success' : 'default'} />
-            <MetricCard title="Exempt Domains" value={maintenance.decay.totalExempt ?? 0} />
-            {maintenance.pruning && <MetricCard title="Trigger Pruning" value={`${maintenance.pruning.retentionDays}d retention`} subtitle={`${maintenance.pruning.lastPrunedCount} last pruned`} />}
+            <MetricCard title={t('dashboard.maintenance.memoryDecay')} value={maintenance.decay.enabled ? t('dashboard.maintenance.memoryDecayActive') : t('dashboard.maintenance.memoryDecayDisabled')} status={maintenance.decay.enabled ? 'success' : 'default'} />
+            <MetricCard title={t('dashboard.maintenance.exemptDomains')} value={maintenance.decay.totalExempt ?? 0} />
+            {maintenance.pruning && <MetricCard title={t('dashboard.maintenance.triggerPruning')} value={t('dashboard.maintenance.retentionDays', { days: maintenance.pruning.retentionDays })} subtitle={t('dashboard.maintenance.lastPruned', { count: maintenance.pruning.lastPrunedCount })} />}
           </div>
         </section>
       )}
@@ -276,10 +278,10 @@ export default function DashboardView() {
       {/* Security */}
       {metrics?.securityStats && (metrics.securityStats.secretsSanitized > 0 || metrics.securityStats.toolsBlocked > 0) && (
         <section className="bg-white/3 backdrop-blur border border-white/5 rounded-2xl p-5 mb-6">
-          <h3 className="text-xs font-semibold uppercase tracking-wide text-text-tertiary mb-3">Security</h3>
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-text-tertiary mb-3">{t('dashboard.security.title')}</h3>
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-            <MetricCard title="Secrets Sanitized" value={metrics.securityStats.secretsSanitized} status={metrics.securityStats.secretsSanitized > 0 ? 'warning' : 'default'} />
-            <MetricCard title="Tools Blocked" value={metrics.securityStats.toolsBlocked} subtitle={metrics.readOnlyMode ? 'Read-only mode' : ''} status={metrics.securityStats.toolsBlocked > 0 ? 'error' : 'default'} />
+            <MetricCard title={t('dashboard.security.secretsSanitized')} value={metrics.securityStats.secretsSanitized} status={metrics.securityStats.secretsSanitized > 0 ? 'warning' : 'default'} />
+            <MetricCard title={t('dashboard.security.toolsBlocked')} value={metrics.securityStats.toolsBlocked} subtitle={metrics.readOnlyMode ? t('dashboard.security.readOnlyMode') : ''} status={metrics.securityStats.toolsBlocked > 0 ? 'error' : 'default'} />
           </div>
         </section>
       )}

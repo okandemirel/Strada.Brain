@@ -1,8 +1,10 @@
 import { useNavigate, useLocation } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import { useWorkspaceStore } from '../../stores/workspace-store'
 import { WORKSPACE_MODES } from '../../config/workspace-modes'
 
 export default function BottomTabBar() {
+  const { t } = useTranslation()
   const mode = useWorkspaceStore((s) => s.mode)
   const setMode = useWorkspaceStore((s) => s.setMode)
   const navigate = useNavigate()
@@ -31,7 +33,7 @@ export default function BottomTabBar() {
             }`}
           >
             <Icon size={20} />
-            <span className="text-[10px]">{tab.label}</span>
+            <span className="text-[10px]">{t(`modes.${tab.mode}.label`)}</span>
           </button>
         )
       })}

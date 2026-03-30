@@ -1,4 +1,5 @@
 import { useState, useCallback } from 'react'
+import { useTranslation } from 'react-i18next'
 import type { TouchedStatus } from '../../stores/code-store'
 import { ChevronRight, ChevronDown, File, FileCode, FileJson, FileText, Folder, FolderOpen, Package, Settings } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -40,6 +41,11 @@ function FileIcon({ name, size }: { name: string; size: number }) {
   return <File size={size} className="shrink-0 text-text-tertiary" />
 }
 
+const ERROR_KEYS: Record<string, string> = {
+  requestFailed: 'fileTree.requestFailed',
+  networkError: 'fileTree.networkError',
+}
+
 function TreeNode({
   path,
   name,
@@ -57,6 +63,7 @@ function TreeNode({
   onFileSelect: (path: string) => void
   baseUrl: string
 }) {
+  const { t } = useTranslation('code')
   const [state, setState] = useState<TreeNodeState>({
     entries: [],
     loading: false,
@@ -81,8 +88,8 @@ function TreeNode({
     try {
       const res = await fetch(`${baseUrl}/api/workspace/files?path=${encodeURIComponent(path)}`)
       if (!res.ok) {
-        const body = await res.json().catch(() => ({ error: 'Request failed' }))
-        setState((s) => ({ ...s, loading: false, error: body.error ?? 'Request failed' }))
+        const body = await res.json().catch(() => ({ error: undefined }))
+        setState((s) => ({ ...s, loading: false, error: body.error ?? 'requestFailed' }))
         return
       }
       const data = await res.json()
@@ -92,7 +99,7 @@ function TreeNode({
         expanded: true,
       })
     } catch {
-      setState((s) => ({ ...s, loading: false, error: 'Network error' }))
+      setState((s) => ({ ...s, loading: false, error: 'networkError' }))
     }
   }, [type, path, baseUrl, state.expanded, state.entries.length])
 
@@ -143,7 +150,7 @@ function TreeNode({
 
       {state.error && (
         <div className="text-[10px] text-error pl-6" style={{ paddingLeft: `${(depth + 1) * 12 + 4}px` }}>
-          {state.error}
+          {ERROR_KEYS[state.error] ? t(ERROR_KEYS[state.error]) : state.error}
         </div>
       )}
 
@@ -171,6 +178,7 @@ const EMPTY_MAP = new Map<string, TouchedStatus>()
 const NOOP = () => {}
 
 export default function FileTree({ touchedFiles, onFileSelect, baseUrl = '' }: FileTreeProps) {
+  const { t } = useTranslation('code')
   const files = touchedFiles ?? EMPTY_MAP
   const handleSelect = onFileSelect ?? NOOP
 
@@ -179,7 +187,7 @@ export default function FileTree({ touchedFiles, onFileSelect, baseUrl = '' }: F
       {files.size > 0 && (
         <>
           <div className="text-[10px] uppercase tracking-wider text-text-tertiary px-2 py-1 font-semibold">
-            Changed Files ({files.size})
+            {t('fileTree.changedFiles', { count: files.size })}
           </div>
           {Array.from(files.entries()).map(([filePath, status]) => (
             <button
@@ -197,10 +205,10 @@ export default function FileTree({ touchedFiles, onFileSelect, baseUrl = '' }: F
           <div className="border-b border-white/5 my-1" />
         </>
       )}
-      <div className="text-[10px] uppercase tracking-wider text-text-tertiary px-2 py-1 font-semibold">Explorer</div>
+      <div className="text-[10px] uppercase tracking-wider text-text-tertiary px-2 py-1 font-semibold">{t('fileTree.explorer')}</div>
       <TreeNode
         path="."
-        name="Project Root"
+        name={t('fileTree.projectRoot')}
         type="directory"
         depth={0}
         touchedFiles={files}

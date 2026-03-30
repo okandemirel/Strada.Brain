@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { DndContext, useDraggable, type DragEndEvent } from '@dnd-kit/core'
 import { useCanvasStore, type CanvasShape } from '../../stores/canvas-store'
 import { useMonitorStore } from '../../stores/monitor-store'
@@ -59,6 +60,7 @@ function DraggableCard({ shape, zoom }: { shape: ResolvedShape; zoom: number }) 
 /* ── Main component ────────────────────────────────────────────────── */
 
 export default function CanvasPanel() {
+  const { t } = useTranslation('canvas')
   /* Store selectors */
   const shapes = useCanvasStore((s) => s.shapes)
   const connections = useCanvasStore((s) => s.connections)
@@ -315,13 +317,13 @@ export default function CanvasPanel() {
         <div className="flex items-center gap-3">
           <span className={toolbarBtnCls}>
             <span className="mr-1.5 h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.5)]" />
-            CANVAS
+            {t('panel.title')}
           </span>
           <span className="text-[10px] font-medium text-slate-600">{formatSessionLabel(sessionId)}</span>
           <div className="flex-1" />
-          {agentVisualCount > 0 && <span className={toolbarBtnCls}>Agent visuals {agentVisualCount}</span>}
-          <span className={toolbarBtnCls}>Agent sync {formatLastSync(lastAgentSyncAt)}</span>
-          {pendingMutationCount > 0 && <span className={toolbarBtnCls}>Queue {pendingMutationCount}</span>}
+          {agentVisualCount > 0 && <span className={toolbarBtnCls}>{t('panel.agentVisuals', { count: agentVisualCount })}</span>}
+          <span className={toolbarBtnCls}>{t('panel.agentSync', { time: formatLastSync(lastAgentSyncAt) })}</span>
+          {pendingMutationCount > 0 && <span className={toolbarBtnCls}>{t('panel.queue', { count: pendingMutationCount })}</span>}
         </div>
       </div>
 
@@ -331,7 +333,7 @@ export default function CanvasPanel() {
           <div className="absolute inset-0 flex items-center justify-center">
             <div className="flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-slate-500">
               <div className="h-4 w-4 rounded-full border-2 border-sky-400/30 border-t-sky-400 animate-spin" />
-              Loading canvas...
+              {t('panel.loading')}
             </div>
           </div>
         ) : shapes.length === 0 ? (

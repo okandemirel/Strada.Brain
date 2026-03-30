@@ -1,0 +1,33 @@
+{
+  "editor": {
+    "diffLabel": "DIFF",
+    "noFileOpen": "열린 파일 없음",
+    "closeTab": "{{filename}} 닫기"
+  },
+  "panel": {},
+  "viewer": {
+    "loadingSyntaxHighlighter": "구문 강조 로딩 중...",
+    "searchPlaceholder": "검색...",
+    "matchCount": "{{current}}/{{total}}"
+  },
+  "diff": {
+    "changes": "변경 사항",
+    "splitView": "분할",
+    "inlineView": "인라인",
+    "loadingDiff": "Diff 로딩 중...",
+    "original": "원본",
+    "modified": "수정됨",
+    "removedLines": "-{{count}}줄 삭제됨",
+    "addedLines": "+{{count}}줄 추가됨"
+  },
+  "fileTree": {
+    "changedFiles": "변경된 파일 ({{count}})",
+    "explorer": "탐색기",
+    "projectRoot": "프로젝트 루트",
+    "requestFailed": "요청 실패",
+    "networkError": "네트워크 오류"
+  },
+  "terminal": {
+    "noOutput": "터미널 출력 없음"
+  }
+}

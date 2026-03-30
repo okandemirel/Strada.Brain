@@ -1,7 +1,9 @@
 import { useRef, useEffect } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useCodeStore } from '../../stores/code-store'
 
 export default function Terminal() {
+  const { t } = useTranslation('code')
   const output = useCodeStore((s) => s.terminalOutput)
   const bottomRef = useRef<HTMLDivElement>(null)
 
@@ -12,7 +14,7 @@ export default function Terminal() {
   return (
     <div className="h-full bg-bg/80 border border-white/5 rounded-lg text-text font-mono text-xs overflow-y-auto p-2">
       {output.length === 0 ? (
-        <div className="text-text-tertiary text-sm italic">No terminal output</div>
+        <div className="text-text-tertiary text-sm italic">{t('terminal.noOutput')}</div>
       ) : (
         output.map((line, i) => (
           <div key={i} className="whitespace-pre-wrap leading-5">

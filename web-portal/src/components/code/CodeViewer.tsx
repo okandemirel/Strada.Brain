@@ -1,4 +1,5 @@
 import { useMemo, useRef, useEffect, useState, useCallback } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useShiki, resolveLanguage } from './useShiki'
 
 interface CodeViewerProps {
@@ -8,6 +9,7 @@ interface CodeViewerProps {
 }
 
 export default function CodeViewer({ content, language, changedLines }: CodeViewerProps) {
+  const { t } = useTranslation('code')
   const { highlighter, isLoading } = useShiki()
   const scrollRef = useRef<HTMLDivElement>(null)
   const [searchOpen, setSearchOpen] = useState(false)
@@ -70,7 +72,7 @@ export default function CodeViewer({ content, language, changedLines }: CodeView
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-full text-text-tertiary text-sm animate-pulse">
-        Loading syntax highlighter...
+        {t('viewer.loadingSyntaxHighlighter')}
       </div>
     )
   }
@@ -83,12 +85,12 @@ export default function CodeViewer({ content, language, changedLines }: CodeView
             autoFocus
             value={searchQuery}
             onChange={(e) => { setSearchQuery(e.target.value); setActiveMatch(0) }}
-            placeholder="Search..."
+            placeholder={t('viewer.searchPlaceholder')}
             className="bg-transparent text-xs text-text outline-none w-40 placeholder:text-text-tertiary"
           />
           {matches.length > 0 && (
             <span className="text-[10px] text-text-tertiary whitespace-nowrap">
-              {activeMatch + 1}/{matches.length}
+              {t('viewer.matchCount', { current: activeMatch + 1, total: matches.length })}
             </span>
           )}
           <button onClick={() => navigateMatch(-1)} className="text-text-tertiary hover:text-text text-xs px-1">&uarr;</button>

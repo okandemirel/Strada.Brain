@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { usePersonality } from '../hooks/use-api'
 import { PageSkeleton } from '../components/ui/page-skeleton'
@@ -18,6 +19,7 @@ You are ...
 `
 
 export default function PersonalityPage() {
+  const { t } = useTranslation('pages')
   const queryClient = useQueryClient()
   const { data: rawData, error: fetchError, isLoading } = usePersonality()
   const data = rawData?.personality ?? null
@@ -56,15 +58,15 @@ export default function PersonalityPage() {
   })
 
   const handleSwitch = (profile: string) => { switchMutation.mutate(profile) }
-  const handleDelete = (name: string) => { if (!confirm(`Delete custom profile "${name}"?`)) return; deleteMutation.mutate(name) }
+  const handleDelete = (name: string) => { if (!confirm(t('personality.deleteConfirm', { name }))) return; deleteMutation.mutate(name) }
 
   const handleCreate = () => {
     setCreateError(null)
     const trimmedName = newName.trim().toLowerCase()
-    if (!trimmedName || !PROFILE_NAME_RE.test(trimmedName)) { setCreateError('Name must be alphanumeric, dash, or underscore only'); return }
-    if (SYSTEM_PROFILES.has(trimmedName)) { setCreateError(`Cannot use "${trimmedName}" -- it is a system profile`); return }
-    if (!newContent.trim()) { setCreateError('Content cannot be empty'); return }
-    if (newContent.length > 10240) { setCreateError('Content exceeds 10KB limit'); return }
+    if (!trimmedName || !PROFILE_NAME_RE.test(trimmedName)) { setCreateError(t('personality.validationNameFormat')); return }
+    if (SYSTEM_PROFILES.has(trimmedName)) { setCreateError(t('personality.validationSystemProfile', { name: trimmedName })); return }
+    if (!newContent.trim()) { setCreateError(t('personality.validationContentEmpty')); return }
+    if (newContent.length > 10240) { setCreateError(t('personality.validationContentTooLarge')); return }
     createMutation.mutate({ name: trimmedName, content: newContent })
   }
 
@@ -72,33 +74,33 @@ export default function PersonalityPage() {
 
   return (
     <div className="h-full overflow-y-auto p-7 w-full animate-[admin-fade-in_0.3s_ease]">
-      <h2 className="text-[22px] font-bold tracking-tight mb-6 text-text">Personality</h2>
+      <h2 className="text-[22px] font-bold tracking-tight mb-6 text-text">{t('personality.title')}</h2>
 
       {error && (
         <div className="text-error text-[13px] mb-4 flex items-center gap-2">
           {error}
-          <button className="px-3 py-1 border border-border rounded-lg bg-bg-tertiary text-text-secondary text-[11px] font-medium cursor-pointer hover:bg-bg-elevated" onClick={() => setError(null)}>Dismiss</button>
+          <button className="px-3 py-1 border border-border rounded-lg bg-bg-tertiary text-text-secondary text-[11px] font-medium cursor-pointer hover:bg-bg-elevated" onClick={() => setError(null)}>{t('personality.dismiss')}</button>
         </div>
       )}
 
       {fetchError && !data ? (
         <div className="flex flex-col items-center justify-center h-[200px] gap-2.5 text-text-secondary text-center">
-          <h3 className="text-text text-lg font-semibold">Personality Unavailable</h3>
-          <p className="text-sm max-w-[400px]">The personality endpoint is not available. SOUL.md personality system may not be active or the API is not yet exposed.</p>
+          <h3 className="text-text text-lg font-semibold">{t('personality.unavailableTitle')}</h3>
+          <p className="text-sm max-w-[400px]">{t('personality.unavailableDescription')}</p>
         </div>
       ) : (
         <>
           <div className="mb-7">
-            <div className="text-xs font-semibold uppercase tracking-[0.04em] text-text-tertiary mb-3.5 flex items-center gap-2">Active Profile</div>
+            <div className="text-xs font-semibold uppercase tracking-[0.04em] text-text-tertiary mb-3.5 flex items-center gap-2">{t('personality.activeProfile')}</div>
             <div className="flex justify-between items-center px-4 py-2.5 bg-white/3 backdrop-blur border border-white/5 rounded-xl mb-4 text-sm">
-              <span className="text-text-secondary">Current Profile</span>
+              <span className="text-text-secondary">{t('personality.currentProfile')}</span>
               <span className="text-text font-semibold">{data?.activeProfile ?? 'default'}</span>
             </div>
           </div>
 
           {data?.profiles && data.profiles.length > 0 && (
             <div className="mb-7">
-              <div className="text-xs font-semibold uppercase tracking-[0.04em] text-text-tertiary mb-3.5 flex items-center gap-2">Available Profiles</div>
+              <div className="text-xs font-semibold uppercase tracking-[0.04em] text-text-tertiary mb-3.5 flex items-center gap-2">{t('personality.availableProfiles')}</div>
               <div className="grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-2.5 mt-3.5">
                 {data.profiles.map(name => {
                   const isActive = name === data.activeProfile
@@ -107,9 +109,9 @@ export default function PersonalityPage() {
                     <div key={name} className={`bg-white/3 backdrop-blur border rounded-xl p-3.5 cursor-default transition-all duration-150 hover:border-border-hover ${isActive ? 'border-accent shadow-[0_0_0_2px_var(--color-accent-glow),0_0_12px_var(--color-accent-glow)]' : 'border-white/5'}`}>
                       <div className="text-sm font-semibold text-text mb-1 flex items-center gap-2">
                         {name}
-                        {isActive && <span className="text-[10px] text-accent font-semibold uppercase">Active</span>}
+                        {isActive && <span className="text-[10px] text-accent font-semibold uppercase">{t('personality.badgeActive')}</span>}
                         <span className={`text-[9px] px-1.5 py-0.5 rounded font-semibold uppercase ${isSystem ? 'bg-text-secondary/15 text-text-secondary' : 'bg-success/15 text-success'}`}>
-                          {isSystem ? 'System' : 'Custom'}
+                          {isSystem ? t('personality.badgeSystem') : t('personality.badgeCustom')}
                         </span>
                       </div>
                       <div className="flex gap-1.5 mt-2">
@@ -118,7 +120,7 @@ export default function PersonalityPage() {
                           disabled={isActive || switchMutation.isPending}
                           onClick={() => handleSwitch(name)}
                         >
-                          {isActive ? 'Selected' : 'Select'}
+                          {isActive ? t('personality.selected') : t('personality.select')}
                         </button>
                         {!isSystem && (
                           <button
@@ -126,7 +128,7 @@ export default function PersonalityPage() {
                             disabled={deleteMutation.isPending && deleteMutation.variables === name}
                             onClick={() => handleDelete(name)}
                           >
-                            {deleteMutation.isPending && deleteMutation.variables === name ? 'Deleting...' : 'Delete'}
+                            {deleteMutation.isPending && deleteMutation.variables === name ? t('personality.deleting') : t('personality.delete')}
                           </button>
                         )}
                       </div>
@@ -139,12 +141,12 @@ export default function PersonalityPage() {
 
           {data?.channelOverrides && Object.keys(data.channelOverrides).length > 0 && (
             <div className="mb-7">
-              <div className="text-xs font-semibold uppercase tracking-[0.04em] text-text-tertiary mb-3.5 flex items-center gap-2">Channel Overrides</div>
+              <div className="text-xs font-semibold uppercase tracking-[0.04em] text-text-tertiary mb-3.5 flex items-center gap-2">{t('personality.channelOverrides')}</div>
               <table className="w-full bg-white/3 backdrop-blur border border-white/5 rounded-2xl overflow-hidden" style={{ borderSpacing: 0, borderCollapse: 'separate' }}>
                 <thead>
                   <tr>
-                    <th className="px-4 py-2.5 text-left bg-white/5 font-semibold text-text-secondary text-[11px] uppercase tracking-[0.04em] border-b border-white/5">Channel</th>
-                    <th className="px-4 py-2.5 text-left bg-white/5 font-semibold text-text-secondary text-[11px] uppercase tracking-[0.04em] border-b border-white/5">Profile</th>
+                    <th className="px-4 py-2.5 text-left bg-white/5 font-semibold text-text-secondary text-[11px] uppercase tracking-[0.04em] border-b border-white/5">{t('personality.columnChannel')}</th>
+                    <th className="px-4 py-2.5 text-left bg-white/5 font-semibold text-text-secondary text-[11px] uppercase tracking-[0.04em] border-b border-white/5">{t('personality.columnProfile')}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -162,9 +164,9 @@ export default function PersonalityPage() {
           {data?.content && (
             <div className="mb-7">
               <div className="text-xs font-semibold uppercase tracking-[0.04em] text-text-tertiary mb-3.5 flex items-center gap-2">
-                SOUL.md Content
+                {t('personality.soulMdContent')}
                 <button className="px-3 py-1 border border-border rounded-lg bg-bg-tertiary text-text-secondary text-[11px] font-medium cursor-pointer ml-auto hover:bg-bg-elevated" onClick={() => setShowRaw(!showRaw)}>
-                  {showRaw ? 'Hide' : 'Show'}
+                  {showRaw ? t('personality.hide') : t('personality.show')}
                 </button>
               </div>
               {showRaw && (
@@ -174,21 +176,21 @@ export default function PersonalityPage() {
           )}
 
           <div className="mb-7">
-            <div className="text-xs font-semibold uppercase tracking-[0.04em] text-text-tertiary mb-3.5 flex items-center gap-2">Create Profile</div>
+            <div className="text-xs font-semibold uppercase tracking-[0.04em] text-text-tertiary mb-3.5 flex items-center gap-2">{t('personality.createProfile')}</div>
             <div className="flex flex-col gap-3">
               <div>
-                <label className="block text-xs text-text-secondary mb-1">Profile Name</label>
+                <label className="block text-xs text-text-secondary mb-1">{t('personality.profileName')}</label>
                 <input
                   type="text"
                   value={newName}
                   onChange={e => setNewName(e.target.value)}
-                  placeholder="e.g. jarvis"
+                  placeholder={t('personality.profileNamePlaceholder')}
                   maxLength={64}
                   className="w-full max-w-[300px] px-3 py-2 text-[13px] bg-bg-secondary border border-border rounded-md text-text outline-none focus:border-accent focus:shadow-[0_0_0_3px_var(--color-accent-glow)]"
                 />
               </div>
               <div>
-                <label className="block text-xs text-text-secondary mb-1">Content (Markdown)</label>
+                <label className="block text-xs text-text-secondary mb-1">{t('personality.contentLabel')}</label>
                 <textarea
                   value={newContent}
                   onChange={e => setNewContent(e.target.value)}
@@ -197,7 +199,7 @@ export default function PersonalityPage() {
                   className="w-full px-3 py-2 text-[13px] font-mono bg-bg-secondary border border-border rounded-md text-text outline-none resize-y focus:border-accent focus:shadow-[0_0_0_3px_var(--color-accent-glow)]"
                 />
                 <div className="text-[11px] text-text-secondary mt-1">
-                  {newContent.length.toLocaleString()} / 10,240 bytes
+                  {t('personality.contentCounter', { count: newContent.length.toLocaleString() })}
                 </div>
               </div>
               {createError && <div className="text-xs text-error">{createError}</div>}
@@ -206,15 +208,15 @@ export default function PersonalityPage() {
                 disabled={createMutation.isPending || !newName.trim()}
                 onClick={handleCreate}
               >
-                {createMutation.isPending ? 'Creating...' : 'Create Profile'}
+                {createMutation.isPending ? t('personality.creating') : t('personality.createButton')}
               </button>
             </div>
           </div>
 
           {!data?.content && !data?.profiles?.length && (
             <div className="flex flex-col items-center justify-center h-[200px] gap-2.5 text-text-secondary text-center">
-              <h3 className="text-text text-lg font-semibold">No Personality Data</h3>
-              <p className="text-sm max-w-[400px]">The personality API returned no data. SOUL.md may not be configured, or the API endpoint does not exist yet.</p>
+              <h3 className="text-text text-lg font-semibold">{t('personality.noDataTitle')}</h3>
+              <p className="text-sm max-w-[400px]">{t('personality.noDataDescription')}</p>
             </div>
           )}
         </>

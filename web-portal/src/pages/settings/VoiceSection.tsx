@@ -1,4 +1,5 @@
 import { useCallback } from 'react'
+import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import {
   hasVoiceInputSupport,
@@ -41,6 +42,7 @@ function Toggle({
 }
 
 export default function VoiceSection() {
+  const { t } = useTranslation('settings')
   const { voice, updateVoiceSettings } = useVoiceSettings()
   const inputSupported = hasVoiceInputSupport()
   const outputSupported = hasVoiceOutputSupport()
@@ -60,7 +62,7 @@ export default function VoiceSection() {
   const handleInputToggle = useCallback(
     (next: boolean) => {
       if (!inputSupported && next) {
-        toast.error('Voice input is not supported by this browser')
+        toast.error(t('voice.toastInputUnsupported'))
         return
       }
       updateVoiceSettings((prev) => {
@@ -69,13 +71,13 @@ export default function VoiceSection() {
         return updated
       })
     },
-    [inputSupported, updateVoiceSettings, syncToBackend],
+    [inputSupported, updateVoiceSettings, syncToBackend, t],
   )
 
   const handleOutputToggle = useCallback(
     (next: boolean) => {
       if (!outputSupported && next) {
-        toast.error('Voice output is not supported by this browser')
+        toast.error(t('voice.toastOutputUnsupported'))
         return
       }
       updateVoiceSettings((prev) => {
@@ -84,45 +86,45 @@ export default function VoiceSection() {
         return updated
       })
     },
-    [outputSupported, updateVoiceSettings, syncToBackend],
+    [outputSupported, updateVoiceSettings, syncToBackend, t],
   )
 
   return (
     <div>
-      <h2 className="text-lg font-semibold text-text mb-1">Voice</h2>
-      <p className="text-sm text-text-tertiary mb-6">Voice input and output settings</p>
+      <h2 className="text-lg font-semibold text-text mb-1">{t('voice.title')}</h2>
+      <p className="text-sm text-text-tertiary mb-6">{t('voice.description')}</p>
 
       <p className="text-xs font-semibold uppercase tracking-[0.04em] text-text-tertiary mb-3.5">
-        Browser Support
+        {t('voice.browserSupport')}
       </p>
       <div className="bg-white/3 backdrop-blur border border-white/5 rounded-2xl mb-4 overflow-hidden">
         <div className="flex justify-between items-center px-4 py-2.5 border-b border-white/5 text-sm">
-          <span className="text-text-secondary">Microphone (MediaRecorder)</span>
+          <span className="text-text-secondary">{t('voice.microphone')}</span>
           <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${inputSupported ? 'bg-green-500/15 text-green-400' : 'bg-red-500/15 text-red-400'}`}>
-            {inputSupported ? 'Supported' : 'Not supported'}
+            {inputSupported ? t('voice.supported') : t('voice.notSupported')}
           </span>
         </div>
         <div className="flex justify-between items-center px-4 py-2.5 text-sm">
-          <span className="text-text-secondary">Speech Synthesis</span>
+          <span className="text-text-secondary">{t('voice.speechSynthesis')}</span>
           <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${outputSupported ? 'bg-green-500/15 text-green-400' : 'bg-red-500/15 text-red-400'}`}>
-            {outputSupported ? 'Supported' : 'Not supported'}
+            {outputSupported ? t('voice.supported') : t('voice.notSupported')}
           </span>
         </div>
       </div>
 
       <p className="text-xs font-semibold uppercase tracking-[0.04em] text-text-tertiary mb-3.5">
-        Settings
+        {t('voice.settings')}
       </p>
       <Toggle
-        label="Voice Input"
-        description={inputSupported ? 'Enable microphone-based voice input' : 'Not available in this browser'}
+        label={t('voice.voiceInput')}
+        description={inputSupported ? t('voice.voiceInputDescSupported') : t('voice.voiceInputDescUnsupported')}
         enabled={voice.inputEnabled && inputSupported}
         disabled={!inputSupported}
         onChange={handleInputToggle}
       />
       <Toggle
-        label="Voice Output"
-        description={outputSupported ? 'Enable text-to-speech for responses' : 'Not available in this browser'}
+        label={t('voice.voiceOutput')}
+        description={outputSupported ? t('voice.voiceOutputDescSupported') : t('voice.voiceOutputDescUnsupported')}
         enabled={voice.outputEnabled && outputSupported}
         disabled={!outputSupported}
         onChange={handleOutputToggle}

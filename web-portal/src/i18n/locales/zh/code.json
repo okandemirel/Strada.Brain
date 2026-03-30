@@ -1,0 +1,33 @@
+{
+  "editor": {
+    "diffLabel": "差异",
+    "noFileOpen": "未打开文件",
+    "closeTab": "关闭 {{filename}}"
+  },
+  "panel": {},
+  "viewer": {
+    "loadingSyntaxHighlighter": "加载语法高亮中...",
+    "searchPlaceholder": "搜索...",
+    "matchCount": "{{current}}/{{total}}"
+  },
+  "diff": {
+    "changes": "更改",
+    "splitView": "分栏",
+    "inlineView": "内联",
+    "loadingDiff": "加载差异中...",
+    "original": "原始",
+    "modified": "修改后",
+    "removedLines": "-{{count}} 行已删除",
+    "addedLines": "+{{count}} 行已添加"
+  },
+  "fileTree": {
+    "changedFiles": "已更改文件（{{count}}）",
+    "explorer": "资源管理器",
+    "projectRoot": "项目根目录",
+    "requestFailed": "请求失败",
+    "networkError": "网络错误"
+  },
+  "terminal": {
+    "noOutput": "无终端输出"
+  }
+}

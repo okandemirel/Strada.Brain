@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useTools, useMetrics } from '../hooks/use-api'
 import { PageSkeleton } from '../components/ui/page-skeleton'
 import { PageError } from '../components/ui/page-error'
@@ -16,6 +17,7 @@ interface ToolInfo {
 }
 
 export default function ToolsPage() {
+  const { t } = useTranslation('pages')
   const toolsQuery = useTools()
   const metricsQuery = useMetrics()
   const [filter, setFilter] = useState('')
@@ -26,7 +28,7 @@ export default function ToolsPage() {
     : null
   const loading = toolsQuery.isLoading && metricsQuery.isLoading
 
-  if (error) return <PageError title="Failed to Load Tools" message={error} />
+  if (error) return <PageError title={t('tools.errorTitle')} message={error} />
   if (loading) return <PageSkeleton />
 
   let tools: ToolInfo[] = toolsQuery.data?.tools ?? []
@@ -44,10 +46,10 @@ export default function ToolsPage() {
   if (tools.length === 0) {
     return (
       <div className="h-full overflow-y-auto p-7 w-full animate-[admin-fade-in_0.3s_ease]">
-        <h2 className="text-[22px] font-bold tracking-tight mb-6 text-text">Tools</h2>
+        <h2 className="text-[22px] font-bold tracking-tight mb-6 text-text">{t('tools.title')}</h2>
         <div className="flex flex-col items-center justify-center h-[200px] gap-2.5 text-text-secondary text-center">
-          <h3 className="text-text text-lg font-semibold">No Tools Available</h3>
-          <p className="text-sm max-w-[400px]">Tool data is not available. Make sure the server is running.</p>
+          <h3 className="text-text text-lg font-semibold">{t('tools.noToolsTitle')}</h3>
+          <p className="text-sm max-w-[400px]">{t('tools.noToolsDescription')}</p>
         </div>
       </div>
     )
@@ -64,11 +66,11 @@ export default function ToolsPage() {
 
   return (
     <div className="h-full overflow-y-auto p-7 w-full animate-[admin-fade-in_0.3s_ease]">
-      <h2 className="text-[22px] font-bold tracking-tight mb-6 text-text">Tools ({tools.length})</h2>
+      <h2 className="text-[22px] font-bold tracking-tight mb-6 text-text">{t('tools.titleWithCount', { count: tools.length })}</h2>
       <input
         className="w-full max-w-[400px] px-4 py-2.5 border border-border rounded-xl bg-input-bg text-text font-[inherit] text-sm outline-none transition-all duration-200 mb-5 focus:border-accent focus:shadow-[0_0_0_3px_var(--color-accent-glow)] placeholder:text-text-tertiary"
         type="text"
-        placeholder="Search tools..."
+        placeholder={t('tools.searchPlaceholder')}
         value={filter}
         onChange={e => setFilter(e.target.value)}
       />
@@ -83,7 +85,7 @@ export default function ToolsPage() {
             }`}
             onClick={() => setTypeFilter(type)}
           >
-            {type === 'all' ? 'All' : type}
+            {type === 'all' ? t('tools.filterAll') : type}
           </button>
         ))}
       </div>
@@ -107,21 +109,21 @@ export default function ToolsPage() {
                 )}
                 {tool.available === false && (
                   <span className="text-[10px] font-semibold px-2 py-0.5 rounded-md uppercase tracking-[0.03em] bg-warning/10 text-warning">
-                    unavailable
+                    {t('tools.badgeUnavailable')}
                   </span>
                 )}
                 {tool.requiresBridge && (
-                  <span className="text-[10px] font-semibold px-2 py-0.5 rounded-md uppercase tracking-[0.03em] bg-white/5 text-text-tertiary">bridge</span>
+                  <span className="text-[10px] font-semibold px-2 py-0.5 rounded-md uppercase tracking-[0.03em] bg-white/5 text-text-tertiary">{t('tools.badgeBridge')}</span>
                 )}
                 {tool.readOnly === true && (
-                  <span className="text-[10px] font-semibold px-2 py-0.5 rounded-md uppercase tracking-[0.03em] bg-white/5 text-text-tertiary">read-only</span>
+                  <span className="text-[10px] font-semibold px-2 py-0.5 rounded-md uppercase tracking-[0.03em] bg-white/5 text-text-tertiary">{t('tools.badgeReadOnly')}</span>
                 )}
                 {calls > 0 && (
-                  <span className="text-[10px] font-semibold px-2 py-0.5 rounded-md uppercase tracking-[0.03em] bg-white/5 text-text-tertiary">{calls} calls</span>
+                  <span className="text-[10px] font-semibold px-2 py-0.5 rounded-md uppercase tracking-[0.03em] bg-white/5 text-text-tertiary">{t('tools.callCount', { count: calls })}</span>
                 )}
                 {errors > 0 && (
                   <span className="text-[10px] font-semibold px-2 py-0.5 rounded-md uppercase tracking-[0.03em] bg-error/10 text-error">
-                    {errors} errors
+                    {t('tools.errorCount', { count: errors })}
                   </span>
                 )}
               </div>

@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Badge } from '../ui/badge'
 import { useSupervisorStore } from '../../stores/supervisor-store'
 
@@ -21,6 +22,7 @@ function formatCost(c: number): string {
 }
 
 export default function SupervisorPanel() {
+  const { t } = useTranslation('monitor')
   const active = useSupervisorStore((s) => s.active)
   const nodes = useSupervisorStore((s) => s.nodes)
   const providers = useSupervisorStore((s) => s.providers)
@@ -46,15 +48,17 @@ export default function SupervisorPanel() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <h3 className="text-xs font-semibold text-text-secondary uppercase tracking-wide">
-          Supervisor
+          {t('supervisor.title')}
         </h3>
         {summary ? (
           <Badge variant={summary.failed > 0 ? 'destructive' : 'success'} className="text-[10px]">
-            {summary.failed > 0 ? 'Completed with errors' : 'Completed'}
+            {summary.failed > 0 ? t('supervisor.completedWithErrors') : t('supervisor.completed')}
           </Badge>
         ) : (
           <Badge variant="outline" className="text-[10px]">
-            Wave {waveIndex + 1}{totalWaves > 0 ? ` / ${totalWaves}` : ''}
+            {totalWaves > 0
+              ? t('supervisor.waveBadgeTotal', { current: waveIndex + 1, total: totalWaves })
+              : t('supervisor.waveBadge', { current: waveIndex + 1 })}
           </Badge>
         )}
       </div>
@@ -79,7 +83,7 @@ export default function SupervisorPanel() {
       {/* Provider usage */}
       {providerEntries.length > 0 && (
         <div className="space-y-1.5">
-          <div className="text-[10px] text-text-tertiary uppercase tracking-wide">Providers</div>
+          <div className="text-[10px] text-text-tertiary uppercase tracking-wide">{t('supervisor.providersLabel')}</div>
           {providerEntries.map(([name, info]) => (
             <div key={name} className="flex items-center gap-2 text-[11px]">
               <span className="w-16 text-text-secondary truncate">{name}</span>
@@ -99,15 +103,15 @@ export default function SupervisorPanel() {
       {summary && (
         <div className="grid grid-cols-3 gap-2 text-[11px]">
           <div className="bg-white/3 rounded-lg p-2 text-center">
-            <div className="text-text-tertiary">Succeeded</div>
+            <div className="text-text-tertiary">{t('supervisor.succeededLabel')}</div>
             <div className="text-success font-semibold">{summary.succeeded}/{summary.totalNodes}</div>
           </div>
           <div className="bg-white/3 rounded-lg p-2 text-center">
-            <div className="text-text-tertiary">Cost</div>
+            <div className="text-text-tertiary">{t('supervisor.costLabel')}</div>
             <div className="text-text font-semibold">{formatCost(summary.cost)}</div>
           </div>
           <div className="bg-white/3 rounded-lg p-2 text-center">
-            <div className="text-text-tertiary">Duration</div>
+            <div className="text-text-tertiary">{t('supervisor.durationLabel')}</div>
             <div className="text-text font-semibold">{formatDuration(summary.duration)}</div>
           </div>
         </div>
@@ -120,7 +124,9 @@ export default function SupervisorPanel() {
             onClick={() => setLogOpen(!logOpen)}
             className="text-[10px] text-warning hover:text-warning/80 transition-colors"
           >
-            {logOpen ? 'Hide' : 'Show'} {alertEvents.length} alert{alertEvents.length !== 1 ? 's' : ''}
+            {logOpen
+              ? (alertEvents.length !== 1 ? t('supervisor.hideAlertsPlural', { count: alertEvents.length }) : t('supervisor.hideAlerts', { count: alertEvents.length }))
+              : (alertEvents.length !== 1 ? t('supervisor.showAlertsPlural', { count: alertEvents.length }) : t('supervisor.showAlerts', { count: alertEvents.length }))}
           </button>
           {logOpen && (
             <div className="mt-1.5 space-y-1 max-h-32 overflow-y-auto">

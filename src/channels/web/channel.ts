@@ -18,6 +18,7 @@ import { randomBytes, timingSafeEqual, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer, type WebSocket } from "ws";
 import { isAllowedOrigin } from "../../security/origin-validation.js";
+import { loadConfigSafe } from "../../config/config.js";
 import { validateMediaAttachment, validateMagicBytes, normalizeMimeType } from "../../utils/media-processor.js";
 import { SETUP_QUERY_PARAM, type PostSetupBootstrapContext } from "../../common/setup-contract.js";
 import { WebIdentityStore, type WebIdentity } from "./web-identity-store.js";
@@ -600,12 +601,18 @@ export class WebChannel
 
     const identity = this.resolveWebIdentity(data);
     client.profileId = identity.profileId;
+    const cfgResult = loadConfigSafe();
+    if (cfgResult.kind === "err") {
+      getLogger().warn("Failed to load config for language preference, defaulting to en", { error: cfgResult.error });
+    }
+    const language = cfgResult.kind === "ok" ? cfgResult.value.language : "en";
     this.sendJson(ws, {
       type: "connected",
       chatId,
       reconnectToken,
       profileId: identity.profileId,
       profileToken: identity.profileToken,
+      language,
     });
 
     void this.consumePostSetupBootstrap({ chatId, profileId: identity.profileId, profileToken: identity.profileToken });

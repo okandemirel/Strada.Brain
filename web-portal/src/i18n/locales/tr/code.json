@@ -1,0 +1,33 @@
+{
+  "editor": {
+    "diffLabel": "FARK",
+    "noFileOpen": "Açık dosya yok",
+    "closeTab": "{{filename}} sekmesini kapat"
+  },
+  "panel": {},
+  "viewer": {
+    "loadingSyntaxHighlighter": "Sözdizimi vurgulayıcı yükleniyor...",
+    "searchPlaceholder": "Ara...",
+    "matchCount": "{{current}}/{{total}}"
+  },
+  "diff": {
+    "changes": "Değişiklikler",
+    "splitView": "Bölünmüş",
+    "inlineView": "Satır İçi",
+    "loadingDiff": "Fark yükleniyor...",
+    "original": "Orijinal",
+    "modified": "Değiştirilmiş",
+    "removedLines": "-{{count}} silinen satır",
+    "addedLines": "+{{count}} eklenen satır"
+  },
+  "fileTree": {
+    "changedFiles": "Değişen Dosyalar ({{count}})",
+    "explorer": "Gezgin",
+    "projectRoot": "Proje Kökü",
+    "requestFailed": "İstek başarısız",
+    "networkError": "Ağ hatası"
+  },
+  "terminal": {
+    "noOutput": "Terminal çıktısı yok"
+  }
+}

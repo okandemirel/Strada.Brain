@@ -1,8 +1,10 @@
 import { Suspense, lazy } from 'react'
 import { Routes, Route } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import ErrorBoundary from './components/ErrorBoundary'
 import AppLayout from './components/layout/AppLayout'
 import { detectSetupMode } from './utils/setup-mode'
+import { useLanguageSync } from './hooks/useLanguageSync'
 
 const ChatView = lazy(() => import('./components/ChatView'))
 const DashboardView = lazy(() => import('./components/DashboardView'))
@@ -19,27 +21,30 @@ const SkillsPage = lazy(() => import('./pages/SkillsPage'))
 const SetupWizard = lazy(() => import('./pages/SetupWizard'))
 
 function NotFoundPage() {
+  const { t } = useTranslation()
   return (
     <div className="flex flex-col items-center justify-center h-full text-text-tertiary">
-      <h1 className="text-6xl font-bold text-text mb-4">404</h1>
-      <p className="text-lg mb-6">Page not found</p>
+      <h1 className="text-6xl font-bold text-text mb-4">{t('errors.notFound.code')}</h1>
+      <p className="text-lg mb-6">{t('errors.notFound.message')}</p>
       <a href="/" className="text-accent hover:text-accent-hover transition-colors">
-        Back to Chat
+        {t('errors.notFound.backToChat')}
       </a>
     </div>
   )
 }
 
 function RouteLoadingFallback() {
+  const { t } = useTranslation()
   return (
     <div className="flex flex-1 flex-col items-center justify-center text-text-secondary gap-3">
-      <h2 className="text-text text-2xl font-bold tracking-tight">Loading Strada portal</h2>
-      <p className="text-[15px] text-text-tertiary">Preparing the next screen.</p>
+      <h2 className="text-text text-2xl font-bold tracking-tight">{t('workspace.loading.portal')}</h2>
+      <p className="text-[15px] text-text-tertiary">{t('workspace.loading.portalSubtitle')}</p>
     </div>
   )
 }
 
 export default function App() {
+  useLanguageSync()
   const rootDatasetSetupMode = typeof document !== 'undefined'
     ? document.getElementById('root')?.getAttribute('data-strada-setup') === '1'
     : false

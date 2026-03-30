@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import { Sun, Moon, ChevronLeft, ChevronRight, Bell } from 'lucide-react'
 import { useWS } from '../../hooks/useWS'
 import { useTheme } from '../../hooks/useTheme'
@@ -14,6 +15,7 @@ import NotificationCenter from './NotificationCenter'
 import { SparklesText } from '../ui/sparkles-text'
 
 export default function Sidebar() {
+  const { t } = useTranslation()
   const { status } = useWS()
   const { theme, toggleTheme } = useTheme()
   const { collapsed, toggle } = useSidebarStore()
@@ -58,6 +60,8 @@ export default function Sidebar() {
           {WORKSPACE_MODES.map((btn) => {
             const isActive = currentMode === btn.mode
             const Icon = btn.icon
+            const modeLabel = t(`modes.${btn.mode}.label`)
+            const modeDesc = t(`modes.${btn.mode}.description`)
 
             if (!btn.enabled) {
               return (
@@ -65,19 +69,19 @@ export default function Sidebar() {
                   <TooltipTrigger asChild>
                     <button
                       disabled
-                      aria-label={btn.label}
+                      aria-label={modeLabel}
                       className={`flex items-center gap-2.5 px-3 py-2 rounded-[10px] text-sm font-medium whitespace-nowrap overflow-hidden select-none bg-transparent border-none font-[inherit] text-left w-full opacity-40 cursor-not-allowed ${collapsed ? 'justify-center px-2' : ''}`}
                     >
                       <span className="w-[22px] text-center text-base shrink-0 leading-none">
                         <Icon size={18} />
                       </span>
-                      {!collapsed && <span className="whitespace-nowrap overflow-hidden text-ellipsis">{btn.label}</span>}
+                      {!collapsed && <span className="whitespace-nowrap overflow-hidden text-ellipsis">{modeLabel}</span>}
                     </button>
                   </TooltipTrigger>
                   <TooltipContent side="right" className="max-w-[220px]">
-                    <div className="font-medium text-text">{btn.label}</div>
-                    <p className="mt-1 text-xs leading-5 text-text-secondary">{btn.description}</p>
-                    <p className="mt-2 text-xs text-text-tertiary">Coming soon</p>
+                    <div className="font-medium text-text">{modeLabel}</div>
+                    <p className="mt-1 text-xs leading-5 text-text-secondary">{modeDesc}</p>
+                    <p className="mt-2 text-xs text-text-tertiary">{t('sidebar.comingSoon')}</p>
                   </TooltipContent>
                 </Tooltip>
               )
@@ -88,7 +92,7 @@ export default function Sidebar() {
                 <TooltipTrigger asChild>
                   <button
                     onClick={() => handleModeClick(btn.mode)}
-                    aria-label={btn.label}
+                    aria-label={modeLabel}
                     className={`flex items-center gap-2.5 px-3 py-2 rounded-[10px] text-sm font-medium transition-all duration-150 cursor-pointer whitespace-nowrap overflow-hidden select-none bg-transparent border-none font-[inherit] text-left w-full ${
                       collapsed ? 'justify-center px-2' : ''
                     } ${
@@ -96,17 +100,17 @@ export default function Sidebar() {
                         ? 'relative before:absolute before:left-0 before:top-1/2 before:-translate-y-1/2 before:h-5 before:w-0.5 before:bg-accent before:rounded-r bg-accent-glow text-accent font-semibold'
                         : 'text-text-secondary hover:bg-bg-tertiary hover:text-text hover:translate-x-0.5'
                     }`}
-                    title={collapsed ? btn.label : undefined}
+                    title={collapsed ? modeLabel : undefined}
                   >
                     <span className="w-[22px] text-center text-base shrink-0 leading-none">
                       <Icon size={18} />
                     </span>
-                    {!collapsed && <span className="whitespace-nowrap overflow-hidden text-ellipsis">{btn.label}</span>}
+                    {!collapsed && <span className="whitespace-nowrap overflow-hidden text-ellipsis">{modeLabel}</span>}
                   </button>
                 </TooltipTrigger>
                 <TooltipContent side="right" className="max-w-[220px]">
-                  <div className="font-medium text-text">{btn.label}</div>
-                  <p className="mt-1 text-xs leading-5 text-text-secondary">{btn.description}</p>
+                  <div className="font-medium text-text">{modeLabel}</div>
+                  <p className="mt-1 text-xs leading-5 text-text-secondary">{modeDesc}</p>
                 </TooltipContent>
               </Tooltip>
             )
@@ -129,7 +133,7 @@ export default function Sidebar() {
       <div className="p-2 border-t border-border flex flex-col gap-0.5 shrink-0">
         {/* Notifications */}
         <button
-          aria-label="Notifications"
+          aria-label={t('sidebar.notifications')}
           onClick={() => setNotifOpen((prev) => !prev)}
           className={`relative flex items-center gap-2.5 px-3 py-2 rounded-[10px] text-text-secondary text-sm font-medium whitespace-nowrap overflow-hidden select-none transition-all duration-150 cursor-pointer bg-transparent border-none font-[inherit] text-left w-full hover:bg-bg-tertiary hover:text-text ${collapsed ? 'justify-center px-2' : ''}`}
         >
@@ -141,7 +145,7 @@ export default function Sidebar() {
               </span>
             )}
           </span>
-          {!collapsed && <span className="whitespace-nowrap overflow-hidden text-ellipsis">Notifications</span>}
+          {!collapsed && <span className="whitespace-nowrap overflow-hidden text-ellipsis">{t('sidebar.notifications')}</span>}
         </button>
         <NotificationCenter open={notifOpen} onOpenChange={setNotifOpen} />
 
@@ -149,28 +153,28 @@ export default function Sidebar() {
         <button
           className={`flex items-center gap-2.5 px-3 py-2 rounded-[10px] text-text-secondary text-sm font-medium transition-all duration-150 cursor-pointer whitespace-nowrap overflow-hidden select-none bg-transparent border-none font-[inherit] text-left w-full hover:bg-bg-tertiary hover:text-text ${collapsed ? 'justify-center px-2' : ''}`}
           onClick={toggleTheme}
-          title={theme === 'dark' ? 'Light Mode' : 'Dark Mode'}
+          title={theme === 'dark' ? t('sidebar.lightMode') : t('sidebar.darkMode')}
         >
           <span className="w-[22px] text-center text-base shrink-0 leading-none">{theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}</span>
-          {!collapsed && <span className="whitespace-nowrap overflow-hidden text-ellipsis">{theme === 'dark' ? 'Light Mode' : 'Dark Mode'}</span>}
+          {!collapsed && <span className="whitespace-nowrap overflow-hidden text-ellipsis">{theme === 'dark' ? t('sidebar.lightMode') : t('sidebar.darkMode')}</span>}
         </button>
 
         {/* Collapse toggle */}
         <button
           className={`flex items-center gap-2.5 px-3 py-2 rounded-[10px] text-text-secondary text-sm font-medium transition-all duration-150 cursor-pointer whitespace-nowrap overflow-hidden select-none bg-transparent border-none font-[inherit] text-left w-full hover:bg-bg-tertiary hover:text-text ${collapsed ? 'justify-center px-2' : ''}`}
           onClick={toggle}
-          title={collapsed ? 'Expand' : 'Collapse'}
+          title={collapsed ? t('sidebar.expand') : t('sidebar.collapse')}
         >
           <span className="w-[22px] text-center text-base shrink-0 leading-none">{collapsed ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}</span>
-          {!collapsed && <span className="whitespace-nowrap overflow-hidden text-ellipsis">Collapse</span>}
+          {!collapsed && <span className="whitespace-nowrap overflow-hidden text-ellipsis">{t('sidebar.collapse')}</span>}
         </button>
 
         {/* Connection health */}
-        <div className={`flex flex-row items-center gap-2 px-3 py-2.5 text-xs text-text-tertiary whitespace-nowrap overflow-hidden ${collapsed ? 'justify-center px-2' : ''}`} title={CONNECTION_STATUS[status].label}>
+        <div className={`flex flex-row items-center gap-2 px-3 py-2.5 text-xs text-text-tertiary whitespace-nowrap overflow-hidden ${collapsed ? 'justify-center px-2' : ''}`} title={t(`connection.${status}`)}>
           <span className={`w-2 h-2 rounded-full shrink-0 transition-all duration-300 ${CONNECTION_STATUS[status].color}`} />
           {!collapsed && (
             <span className="overflow-hidden text-ellipsis">
-              {CONNECTION_STATUS[status].label}
+              {t(`connection.${status}`)}
             </span>
           )}
         </div>

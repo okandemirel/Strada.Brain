@@ -1,8 +1,10 @@
 import { useState, useCallback } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useWS } from '../../hooks/useWS'
 import { Send } from 'lucide-react'
 
 export default function MiniChat() {
+  const { t } = useTranslation()
   const { sendMessage, status } = useWS()
   const [text, setText] = useState('')
   const disabled = status !== 'connected'
@@ -31,17 +33,17 @@ export default function MiniChat() {
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="Quick message..."
+          placeholder={t('workspace.miniChat.placeholder')}
           disabled={disabled}
           maxLength={4000}
-          aria-label="Quick message"
+          aria-label={t('workspace.miniChat.inputLabel')}
           className="flex-1 bg-transparent text-xs text-text placeholder:text-text-tertiary outline-none min-w-0 focus:border-accent focus:shadow-[0_0_0_3px_var(--color-accent-glow)]"
         />
         <button
           onClick={handleSend}
           disabled={disabled || !text.trim()}
           className="p-1 rounded text-text-tertiary hover:text-accent disabled:opacity-30 transition-colors"
-          aria-label="Send"
+          aria-label={t('workspace.miniChat.sendLabel')}
         >
           <Send size={12} />
         </button>

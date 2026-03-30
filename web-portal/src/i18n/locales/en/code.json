@@ -1,0 +1,33 @@
+{
+  "editor": {
+    "diffLabel": "DIFF",
+    "noFileOpen": "No file open",
+    "closeTab": "Close {{filename}}"
+  },
+  "panel": {},
+  "viewer": {
+    "loadingSyntaxHighlighter": "Loading syntax highlighter...",
+    "searchPlaceholder": "Search...",
+    "matchCount": "{{current}}/{{total}}"
+  },
+  "diff": {
+    "changes": "Changes",
+    "splitView": "Split",
+    "inlineView": "Inline",
+    "loadingDiff": "Loading diff...",
+    "original": "Original",
+    "modified": "Modified",
+    "removedLines": "-{{count}} removed lines",
+    "addedLines": "+{{count}} added lines"
+  },
+  "fileTree": {
+    "changedFiles": "Changed Files ({{count}})",
+    "explorer": "Explorer",
+    "projectRoot": "Project Root",
+    "requestFailed": "Request failed",
+    "networkError": "Network error"
+  },
+  "terminal": {
+    "noOutput": "No terminal output"
+  }
+}

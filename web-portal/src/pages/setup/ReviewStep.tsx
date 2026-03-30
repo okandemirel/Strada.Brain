@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import { PRESETS, EMBEDDING_CAPABLE, EMBEDDING_PROVIDERS, PROVIDER_MAP } from '../../types/setup-constants'
 import type { SaveStatus } from '../../types/setup'
 import { buildSetupRetryHref } from '../../../../src/common/setup-state.ts'
@@ -62,6 +63,7 @@ export default function ReviewStep({
   onBack,
   onSave,
 }: ReviewStepProps) {
+  const { t } = useTranslation('setup')
   const preset = PRESETS.find((p) => p.id === selectedPreset)
   const providerChain = Array.from(checkedProviders)
     .map((id) => {

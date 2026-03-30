@@ -1,9 +1,11 @@
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { usePersonality } from '../../hooks/use-api'
 
 export default function PersonaSection() {
+  const { t } = useTranslation('settings')
   const { data, isLoading } = usePersonality()
   const queryClient = useQueryClient()
   const [switching, setSwitching] = useState<string | null>(null)
@@ -17,11 +19,11 @@ export default function PersonaSection() {
         body: JSON.stringify({ profile }),
       })
       if (!res.ok) throw new Error('Failed to switch profile')
-      toast.success(`Switched to profile: ${profile}`)
+      toast.success(t('persona.toastSwitched', { profile }))
       queryClient.invalidateQueries({ queryKey: ['personality'] })
       queryClient.invalidateQueries({ queryKey: ['personality-profiles'] })
     } catch {
-      toast.error('Failed to switch profile')
+      toast.error(t('persona.toastSwitchFailed'))
     } finally {
       setSwitching(null)
     }
@@ -30,8 +32,8 @@ export default function PersonaSection() {
   if (isLoading || !data) {
     return (
       <div>
-        <h2 className="text-lg font-semibold text-text mb-1">Persona</h2>
-        <p className="text-sm text-text-tertiary">Loading...</p>
+        <h2 className="text-lg font-semibold text-text mb-1">{t('persona.title')}</h2>
+        <p className="text-sm text-text-tertiary">{t('persona.loading')}</p>
       </div>
     )
   }
@@ -44,16 +46,16 @@ export default function PersonaSection() {
 
   return (
     <div>
-      <h2 className="text-lg font-semibold text-text mb-1">Persona</h2>
-      <p className="text-sm text-text-tertiary mb-6">Personality profiles and channel overrides</p>
+      <h2 className="text-lg font-semibold text-text mb-1">{t('persona.title')}</h2>
+      <p className="text-sm text-text-tertiary mb-6">{t('persona.description')}</p>
 
       {/* Active profile */}
       <div className="bg-white/3 backdrop-blur border border-white/5 rounded-2xl p-5 mb-4">
         <div className="flex items-center justify-between">
           <div>
-            <p className="text-xs text-text-tertiary mb-1">Active Profile</p>
+            <p className="text-xs text-text-tertiary mb-1">{t('persona.activeProfile')}</p>
             <p className="text-sm font-semibold text-accent">
-              {activeProfile ?? 'Default'}
+              {activeProfile ?? t('persona.default')}
             </p>
           </div>
           <span className="w-2 h-2 rounded-full bg-green-400 ring-4 ring-green-400/20" />
@@ -64,7 +66,7 @@ export default function PersonaSection() {
       {profiles.length > 0 && (
         <>
           <p className="text-xs font-semibold uppercase tracking-[0.04em] text-text-tertiary mb-3">
-            Available Profiles
+            {t('persona.availableProfiles')}
           </p>
           <div className="bg-white/3 backdrop-blur border border-white/5 rounded-2xl overflow-hidden mb-4">
             {profiles.map((profile, idx) => {
@@ -80,7 +82,7 @@ export default function PersonaSection() {
                       {profile}
                     </span>
                     {isActive && (
-                      <span className="text-xs text-text-tertiary">(active)</span>
+                      <span className="text-xs text-text-tertiary">{t('persona.active')}</span>
                     )}
                   </div>
                   {!isActive && (
@@ -89,7 +91,7 @@ export default function PersonaSection() {
                       disabled={switching === profile}
                       className="px-3 py-1 text-xs bg-white/5 border border-white/10 text-text-secondary rounded-lg hover:border-accent/50 hover:text-accent transition-colors disabled:opacity-50"
                     >
-                      {switching === profile ? 'Switching…' : 'Switch'}
+                      {switching === profile ? t('persona.switching') : t('persona.switch')}
                     </button>
                   )}
                 </div>
@@ -103,7 +105,7 @@ export default function PersonaSection() {
       {hasOverrides && (
         <>
           <p className="text-xs font-semibold uppercase tracking-[0.04em] text-text-tertiary mb-3">
-            Channel Overrides
+            {t('persona.channelOverrides')}
           </p>
           <div className="bg-white/3 backdrop-blur border border-white/5 rounded-2xl overflow-hidden mb-4">
             {Object.entries(channelOverrides).map(([channel, profile], idx, arr) => (
@@ -121,7 +123,7 @@ export default function PersonaSection() {
 
       {profiles.length === 0 && !personality?.content && (
         <div className="bg-white/3 backdrop-blur border border-white/5 rounded-2xl p-5 text-center">
-          <p className="text-sm text-text-tertiary">No personality profiles configured</p>
+          <p className="text-sm text-text-tertiary">{t('persona.noProfiles')}</p>
         </div>
       )}
     </div>
