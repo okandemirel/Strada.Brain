@@ -127,6 +127,7 @@ function DependencyStatusCard({
   source,
   installStatus,
   installError,
+  installButtonLabel,
   onInstall,
 }: {
   projectPath: string
@@ -137,6 +138,7 @@ function DependencyStatusCard({
   source?: StradaDepInstallSource | null
   installStatus?: 'idle' | 'installing' | 'success' | 'error'
   installError?: string | null
+  installButtonLabel?: string
   onInstall?: () => void
 }) {
   const sourceLabel = formatSourceLabel(source)
@@ -161,7 +163,7 @@ function DependencyStatusCard({
       <div className="mcp-dependency-meta-label">
         {installed ? 'Location' : 'Status'}
       </div>
-      <div className="mcp-dependency-path mono">{displayPath}</div>
+      <div className="mcp-dependency-path mono" title={displayPath}>{displayPath}</div>
 
       {!installed && onInstall && (
         <div className="mcp-dependency-install">
@@ -169,7 +171,7 @@ function DependencyStatusCard({
             <span className="mcp-dependency-install-status working">Installing...</span>
           )}
           {installStatus === 'success' && (
-            <span className="mcp-dependency-install-status success">Installed</span>
+            <span className="mcp-dependency-install-status success">Installed successfully</span>
           )}
           {installStatus === 'error' && (
             <span className="mcp-dependency-install-status error">{installError ?? 'Install failed'}</span>
@@ -177,10 +179,10 @@ function DependencyStatusCard({
           {(!installStatus || installStatus === 'idle' || installStatus === 'error') && (
             <button
               type="button"
-              className="btn btn-sm btn-secondary"
+              className="btn btn-secondary mcp-card-action"
               onClick={onInstall}
             >
-              Install as git submodule
+              {installButtonLabel ?? 'Install'}
             </button>
           )}
         </div>
@@ -224,9 +226,6 @@ export default function McpInstallPanel({
   ].filter(Boolean).length
   const showInstallFlow = !stradaDeps.mcpInstalled && mcpRecommendation
   const showInstallFeedback = mcpInstallStatus !== 'idle'
-  const installButtonText = mcpInstallStatus === 'installing'
-    ? 'Installing Strada.MCP...'
-    : installButtonLabel
   const runtimeSourceLabel = formatSourceLabel(stradaDeps.mcpSource)
   const runtimeSourceCopy = formatMcpSourceCopy(stradaDeps.mcpSource)
 
@@ -309,6 +308,10 @@ export default function McpInstallPanel({
           path={stradaDeps.mcpPath}
           version={stradaDeps.mcpVersion}
           source={stradaDeps.mcpSource}
+          installStatus={mcpInstallStatus}
+          installError={mcpInstallError}
+          installButtonLabel={installButtonLabel}
+          onInstall={showInstallFlow ? () => onInstall(installTarget) : undefined}
         />
       </div>
 
@@ -382,16 +385,6 @@ export default function McpInstallPanel({
             })}
           </div>
 
-          <div className="mcp-install-actions">
-            <button
-              type="button"
-              className="btn btn-primary"
-              disabled={mcpInstallStatus === 'installing' || projectPath.trim().length === 0}
-              onClick={() => onInstall(installTarget)}
-            >
-              {installButtonText}
-            </button>
-          </div>
         </>
       )}
 

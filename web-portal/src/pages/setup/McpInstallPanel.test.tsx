@@ -116,12 +116,12 @@ describe('McpInstallPanel', () => {
       />,
     )
 
-    expect(html).toContain('Install as git submodule')
     expect(html).toContain('Strada.Core')
     expect(html).toContain('Strada.Modules')
+    expect(html).toContain('Install Strada.MCP')
   })
 
-  it('does not show install buttons when onInstallDep is not provided', () => {
+  it('does not show dep install buttons when onInstallDep is not provided but MCP still has its own', () => {
     const html = renderToStaticMarkup(
       <McpInstallPanel
         projectPath="/Users/test/GameProject"
@@ -149,7 +149,9 @@ describe('McpInstallPanel', () => {
       />,
     )
 
-    expect(html).not.toContain('Install as git submodule')
+    expect(html).toContain('Install Strada.MCP')
+    const installBtnMatches = html.match(/mcp-card-action/g)
+    expect(installBtnMatches?.length).toBe(1)
   })
 
   it('renders install results as structured runtime details', () => {
