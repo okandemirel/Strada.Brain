@@ -56,7 +56,7 @@ describe("DEFAULT_BUDGET_CONFIG", () => {
     expect(DEFAULT_BUDGET_CONFIG.subLimits.agentDefaultUsd).toBe(5.0);
   });
 
-  it("has verificationPct=15", () => {
-    expect(DEFAULT_BUDGET_CONFIG.subLimits.verificationPct).toBe(15);
+  it("has verificationPct=0.15", () => {
+    expect(DEFAULT_BUDGET_CONFIG.subLimits.verificationPct).toBe(0.15);
   });
 });

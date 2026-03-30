@@ -227,7 +227,7 @@ describe("UnifiedBudgetManager", () => {
     });
 
     it("reports daemonExceeded when daemon sub-limit is set and hit", () => {
-      mgr.updateConfig({ subLimits: { daemonDailyUsd: 1.0, agentDefaultUsd: 5.0, verificationPct: 15 } });
+      mgr.updateConfig({ subLimits: { daemonDailyUsd: 1.0, agentDefaultUsd: 5.0, verificationPct: 0.15 } });
       mgr.recordCost(1.5, "daemon", {});
       const snap = mgr.getSnapshot();
       expect(snap.subLimitStatus.daemonExceeded).toBe(true);
@@ -332,31 +332,31 @@ describe("UnifiedBudgetManager", () => {
     });
 
     it("returns true for daemon when sub-limit hit", () => {
-      mgr.updateConfig({ subLimits: { daemonDailyUsd: 2.0, agentDefaultUsd: 5.0, verificationPct: 15 } });
+      mgr.updateConfig({ subLimits: { daemonDailyUsd: 2.0, agentDefaultUsd: 5.0, verificationPct: 0.15 } });
       mgr.recordCost(2.5, "daemon", {});
       expect(mgr.isSourceExceeded("daemon")).toBe(true);
     });
 
     it("returns false for daemon when under sub-limit", () => {
-      mgr.updateConfig({ subLimits: { daemonDailyUsd: 10.0, agentDefaultUsd: 5.0, verificationPct: 15 } });
+      mgr.updateConfig({ subLimits: { daemonDailyUsd: 10.0, agentDefaultUsd: 5.0, verificationPct: 0.15 } });
       mgr.recordCost(3.0, "daemon", {});
       expect(mgr.isSourceExceeded("daemon")).toBe(false);
     });
 
     it("returns true for agent when per-agent sub-limit hit", () => {
-      mgr.updateConfig({ subLimits: { daemonDailyUsd: 0, agentDefaultUsd: 5.0, verificationPct: 15 } });
+      mgr.updateConfig({ subLimits: { daemonDailyUsd: 0, agentDefaultUsd: 5.0, verificationPct: 0.15 } });
       mgr.recordCost(6.0, "agent", { agentId: "bot-1" });
       expect(mgr.isSourceExceeded("agent", "bot-1")).toBe(true);
     });
 
     it("returns false for agent when under per-agent sub-limit", () => {
-      mgr.updateConfig({ subLimits: { daemonDailyUsd: 0, agentDefaultUsd: 5.0, verificationPct: 15 } });
+      mgr.updateConfig({ subLimits: { daemonDailyUsd: 0, agentDefaultUsd: 5.0, verificationPct: 0.15 } });
       mgr.recordCost(2.0, "agent", { agentId: "bot-1" });
       expect(mgr.isSourceExceeded("agent", "bot-1")).toBe(false);
     });
 
     it("returns false for agent when agentDefaultUsd is 0", () => {
-      mgr.updateConfig({ subLimits: { daemonDailyUsd: 0, agentDefaultUsd: 0, verificationPct: 15 } });
+      mgr.updateConfig({ subLimits: { daemonDailyUsd: 0, agentDefaultUsd: 0, verificationPct: 0.15 } });
       mgr.recordCost(50.0, "agent", { agentId: "bot-2" });
       expect(mgr.isSourceExceeded("agent", "bot-2")).toBe(false);
     });
@@ -388,13 +388,13 @@ describe("UnifiedBudgetManager", () => {
     });
 
     it("returns false when source sub-limit exceeded", () => {
-      mgr.updateConfig({ subLimits: { daemonDailyUsd: 1.0, agentDefaultUsd: 5.0, verificationPct: 15 } });
+      mgr.updateConfig({ subLimits: { daemonDailyUsd: 1.0, agentDefaultUsd: 5.0, verificationPct: 0.15 } });
       mgr.recordCost(1.5, "daemon", {});
       expect(mgr.canSpend(0.01, "daemon")).toBe(false);
     });
 
     it("returns false when both global and source limits exceeded", () => {
-      mgr.updateConfig({ dailyLimitUsd: 1.0, subLimits: { daemonDailyUsd: 0.5, agentDefaultUsd: 5.0, verificationPct: 15 } });
+      mgr.updateConfig({ dailyLimitUsd: 1.0, subLimits: { daemonDailyUsd: 0.5, agentDefaultUsd: 5.0, verificationPct: 0.15 } });
       mgr.recordCost(2.0, "daemon", {});
       expect(mgr.canSpend(0.01, "daemon")).toBe(false);
     });

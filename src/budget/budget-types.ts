@@ -79,7 +79,7 @@ export const DEFAULT_BUDGET_CONFIG: UnifiedBudgetConfig = {
   subLimits: {
     daemonDailyUsd: 0,
     agentDefaultUsd: 5.0,
-    verificationPct: 15,
+    verificationPct: 0.15,
   },
 };
 
