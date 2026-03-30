@@ -114,25 +114,31 @@ export default function TaskInspectModal() {
     })),
   )
 
+  const taskId = task?.id
+  const taskNodeId = task?.nodeId
   const taskActivities = useMemo(() => {
-    if (!task) return []
-    return allActivities.filter((a) => a.taskId === task.id || a.taskId === task.nodeId)
-  }, [allActivities, task?.id, task?.nodeId])
+    if (!taskId) return []
+    return allActivities.filter((a) => a.taskId === taskId || a.taskId === taskNodeId)
+  }, [allActivities, taskId, taskNodeId])
 
+  const taskSubsteps = task?.substeps
   const { sortedSubsteps, doneCount } = useMemo(() => {
-    if (!task?.substeps?.length) return { sortedSubsteps: [], doneCount: 0 }
+    if (!taskSubsteps?.length) return { sortedSubsteps: [], doneCount: 0 }
     return {
-      sortedSubsteps: [...task.substeps].sort((a, b) => a.order - b.order),
-      doneCount: task.substeps.filter((s) => s.status === 'done').length,
+      sortedSubsteps: [...taskSubsteps].sort((a, b) => a.order - b.order),
+      doneCount: taskSubsteps.filter((s) => s.status === 'done').length,
     }
-  }, [task?.substeps])
+  }, [taskSubsteps])
 
+  const implResult = task?.implementationResult
+  const specResult = task?.specReviewResult
+  const qualityResult = task?.qualityReviewResult
   const resultEntries = useMemo(() => {
-    if (!task) return []
+    const results = { implementationResult: implResult, specReviewResult: specResult, qualityReviewResult: qualityResult }
     return RESULT_SECTIONS
-      .map(({ key, label }) => ({ label, text: resultToString(task[key]) }))
+      .map(({ key, label }) => ({ label, text: resultToString(results[key as keyof typeof results]) }))
       .filter((r): r is { label: string; text: string } => r.text !== null)
-  }, [task?.implementationResult, task?.specReviewResult, task?.qualityReviewResult])
+  }, [implResult, specResult, qualityResult])
 
   const progressPercent =
     task?.progress && task.progress.total > 0
