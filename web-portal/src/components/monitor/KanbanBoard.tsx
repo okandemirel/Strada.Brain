@@ -1,4 +1,4 @@
-import { useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import {
   DndContext,
   closestCenter,
@@ -36,7 +36,9 @@ const COLUMNS = [
     id: 'review',
     label: 'Review',
     filter: (task: MonitorTask) =>
-      task.reviewStatus === 'spec_review' || task.reviewStatus === 'quality_review',
+      task.status === 'verifying' ||
+      task.reviewStatus === 'spec_review' ||
+      task.reviewStatus === 'quality_review',
   },
   {
     id: 'done',
@@ -164,9 +166,11 @@ export default function KanbanBoard() {
 
   // Refs so handleDragEnd reads latest values without being in deps
   const tasksRef = useRef(tasks)
-  tasksRef.current = tasks
   const activeRootIdRef = useRef(activeRootId)
-  activeRootIdRef.current = activeRootId
+  useEffect(() => {
+    tasksRef.current = tasks
+    activeRootIdRef.current = activeRootId
+  })
 
   const sensors = useSensors(useSensor(PointerSensor, POINTER_SENSOR_OPTIONS))
 
