@@ -1,6 +1,7 @@
 import { useMemo } from 'react'
 import { diffLines, type Change } from 'diff'
 import { useShiki, resolveLanguage } from './useShiki'
+import { type Token, splitLines, makeTokenRenderer } from './diff-shared'
 
 interface DiffViewerProps {
   original: string
@@ -8,7 +9,6 @@ interface DiffViewerProps {
   language: string
 }
 
-type Token = { content: string; color?: string }
 type SideType = 'added' | 'removed' | 'unchanged' | 'empty'
 
 interface DiffCell {
@@ -20,12 +20,6 @@ interface DiffCell {
 interface DiffRow {
   left: DiffCell
   right: DiffCell
-}
-
-function splitLines(value: string): string[] {
-  const trimmed = value.replace(/\n$/, '')
-  if (trimmed.length === 0) return ['']
-  return trimmed.split('\n')
 }
 
 function emptyCell(): DiffCell {
@@ -54,20 +48,11 @@ function lineMarker(type: SideType): string {
 export default function DiffViewer({ original, modified, language }: DiffViewerProps) {
   const { highlighter, isLoading } = useShiki()
 
-  const changes = useMemo(() => diffLines(original, modified), [original, modified])
-
   const diffData = useMemo(() => {
     if (!highlighter) return null
 
-    const lang = resolveLanguage(language)
-    const renderTokens = (line: string): Token[] => {
-      try {
-        const tokenized = highlighter.codeToTokens(line, { lang, theme: 'vitesse-dark' })
-        return tokenized.tokens[0]?.length ? tokenized.tokens[0] : [{ content: line || ' ' }]
-      } catch {
-        return [{ content: line || ' ' }]
-      }
-    }
+    const renderTokens = makeTokenRenderer(highlighter, resolveLanguage(language))
+    const changes = diffLines(original, modified)
 
     const rows: DiffRow[] = []
     let oldLine = 1
@@ -184,7 +169,7 @@ export default function DiffViewer({ original, modified, language }: DiffViewerP
     }
 
     return { rows, addedCount, removedCount }
-  }, [changes, highlighter, language])
+  }, [original, modified, highlighter, language])
 
   if (isLoading || !diffData) {
     return (

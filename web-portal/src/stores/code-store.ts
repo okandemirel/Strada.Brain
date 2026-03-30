@@ -60,14 +60,7 @@ export const useCodeStore = create<CodeState>()((set) => ({
 
   closeFile: (path) =>
     set((s) => {
-      const closing = s.tabs.find((t) => t.path === path)
-      // Auto-accept diff on close — file is already written on disk
-      const resolved = closing?.isDiff && closing.modifiedContent
-        ? { ...closing, content: closing.modifiedContent, isDiff: false, diffContent: undefined, originalContent: undefined, modifiedContent: undefined }
-        : closing
-      const newTabs = s.tabs
-        .map((t) => (t.path === path && resolved ? resolved : t))
-        .filter((t) => t.path !== path)
+      const newTabs = s.tabs.filter((t) => t.path !== path)
       let newActive = s.activeTab
       if (s.activeTab === path) {
         const idx = s.tabs.findIndex((t) => t.path === path)
