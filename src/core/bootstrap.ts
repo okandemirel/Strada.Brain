@@ -80,6 +80,7 @@ import type { DaemonEventMap } from "../daemon/daemon-events.js";
 // Workspace / monitor bridge imports
 import { createWorkspaceBus, type WorkspaceBus } from "../dashboard/workspace-bus.js";
 import { createLearningWorkspaceBridge } from "../dashboard/learning-workspace-bridge.js";
+import { createTaskWorkspaceBridge } from "../dashboard/task-workspace-bridge.js";
 import { createMonitorBridge } from "../dashboard/monitor-bridge.js";
 import { createWorkspaceRuntimeBridge } from "../dashboard/workspace-runtime-bridge.js";
 import { CanvasStorage } from "../dashboard/canvas-storage.js";
@@ -1092,6 +1093,11 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   });
   workspaceRuntimeBridge.start();
   stoppableServers.push(workspaceRuntimeBridge);
+
+  // Task lifecycle → workspace bus (dashboard receives task created/completed/failed/blocked)
+  const taskWorkspaceBridge = createTaskWorkspaceBridge(taskManager, workspaceBus);
+  taskWorkspaceBridge.start();
+  stoppableServers.push(taskWorkspaceBridge);
 
   const bootReport = await finalizeChannelStartupStage({
     beforeChannelConnect,
