@@ -22,7 +22,7 @@ import { loadConfigSafe } from "../../config/config.js";
 import { validateMediaAttachment, validateMagicBytes, normalizeMimeType } from "../../utils/media-processor.js";
 import { SETUP_QUERY_PARAM, type PostSetupBootstrapContext } from "../../common/setup-contract.js";
 import { WebIdentityStore, type WebIdentity } from "./web-identity-store.js";
-import { getLogger } from "../../utils/logger.js";
+import { getLoggerSafe } from "../../utils/logger.js";
 import type {
   IChannelAdapter,
   IChannelStreaming,
@@ -603,7 +603,7 @@ export class WebChannel
     client.profileId = identity.profileId;
     const cfgResult = loadConfigSafe();
     if (cfgResult.kind === "err") {
-      getLogger().warn("Failed to load config for language preference, defaulting to en", { error: cfgResult.error });
+      getLoggerSafe().warn("Failed to load config for language preference, defaulting to en", { error: cfgResult.error });
     }
     const language = cfgResult.kind === "ok" ? cfgResult.value.language : "en";
     this.sendJson(ws, {
@@ -845,7 +845,7 @@ export class WebChannel
     const client = this.clients.get(chatId);
     if (!client || client.ws.readyState !== 1) {
       if (!client) {
-        getLogger().debug("sendToClient: no active WS client for chatId, response may be lost", { chatId, type: data.type });
+        getLoggerSafe().debug("sendToClient: no active WS client for chatId, response may be lost", { chatId, type: data.type });
       }
       return;
     }
