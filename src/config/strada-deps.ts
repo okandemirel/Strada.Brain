@@ -233,6 +233,10 @@ export async function installStradaDep(
   const fullTargetPath = join(unityProjectPath, targetPath);
   const fullManifestPath = join(unityProjectPath, "Packages", "manifest.json");
 
+  if (existsSync(fullTargetPath)) {
+    return err(`Target path already exists: ${fullTargetPath}`);
+  }
+
   try {
     await runExecFile("git", ["submodule", "add", repoUrl, targetPath], unityProjectPath);
   } catch (error) {
