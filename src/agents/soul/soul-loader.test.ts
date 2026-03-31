@@ -106,7 +106,7 @@ describe("SoulLoader", () => {
   });
 
   describe("switchProfile", () => {
-    it("switches to a profile from profiles/ directory", async () => {
+    it("switches to a profile from profiles/ directory without mutating default", async () => {
       await writeFile(join(testDir, "soul.md"), "default personality");
       await mkdir(join(testDir, "profiles"), { recursive: true });
       await writeFile(join(testDir, "profiles", "casual.md"), "casual personality");
@@ -116,7 +116,10 @@ describe("SoulLoader", () => {
 
       const success = await loader.switchProfile("casual");
       expect(success).toBe(true);
-      expect(loader.getContent()).toBe("casual personality");
+      expect(loader.getActiveProfile()).toBe("casual");
+      // Default content must NOT be mutated — per-user persona is read via getProfileContent
+      expect(loader.getContent()).toBe("default personality");
+      expect(await loader.getProfileContent("casual")).toBe("casual personality");
     });
 
     it("switches back to default profile", async () => {
@@ -127,10 +130,13 @@ describe("SoulLoader", () => {
       await loader.initialize();
 
       await loader.switchProfile("formal");
-      expect(loader.getContent()).toBe("formal personality");
+      expect(loader.getActiveProfile()).toBe("formal");
+      // Default content must NOT be mutated
+      expect(loader.getContent()).toBe("default personality");
 
       const success = await loader.switchProfile("default");
       expect(success).toBe(true);
+      expect(loader.getActiveProfile()).toBe("default");
       expect(loader.getContent()).toBe("default personality");
     });
 

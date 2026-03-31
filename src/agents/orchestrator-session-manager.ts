@@ -259,19 +259,17 @@ export class SessionManager {
 
     const overflow = session.messages.length - maxMessages;
     const trimMessages = (count: number): ConversationMessage[] => {
-      const removed = session.messages.splice(0, count);
-      if (removed.length === 0) {
-        return removed;
+      const allRemoved = session.messages.splice(0, count);
+      if (allRemoved.length === 0) {
+        return allRemoved;
       }
-      if (!session.visibleMessages?.length) {
-        return [];
+      if (session.visibleMessages?.length) {
+        const removedSet = new Set(allRemoved);
+        session.visibleMessages = session.visibleMessages.filter(
+          (message) => !removedSet.has(message),
+        );
       }
-      const removedSet = new Set(removed);
-      const removedVisible = session.visibleMessages.filter((message) => removedSet.has(message));
-      session.visibleMessages = session.visibleMessages.filter(
-        (message) => !removedSet.has(message),
-      );
-      return removedVisible;
+      return allRemoved;
     };
 
     // Find a safe trim boundary that does NOT orphan tool_call/tool_result pairs.
@@ -632,9 +630,11 @@ export class SessionManager {
 
   /**
    * Clean up expired sessions (call periodically).
+   * Returns the list of expired chatIds so callers can clean up associated state.
    */
-  cleanupSessions(maxAgeMs: number = 3600_000): void {
+  cleanupSessions(maxAgeMs: number = 3600_000): string[] {
     const now = Date.now();
+    const expired: string[] = [];
     for (const [chatId, session] of this.sessions) {
       if (now - session.lastActivity.getTime() > maxAgeMs) {
         // Skip sessions with active locks — they are currently being processed
@@ -654,7 +654,9 @@ export class SessionManager {
         this.lastPersistTime.delete(chatId);
         this.sessions.delete(chatId);
         this.deps.activeGoalTrees.delete(session.conversationScope ?? chatId);
+        expired.push(chatId);
       }
     }
+    return expired;
   }
 }

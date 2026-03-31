@@ -1429,7 +1429,10 @@ export class DashboardServer {
 
         let activeProfile = this.soulLoader.getActiveProfile();
 
-        // Per-user overlay: if chatId provided, check UserProfileStore
+        // Per-user overlay: if chatId provided, check UserProfileStore.
+        // LIMITATION: The web portal sends profileId as chatId, which usually works
+        // but may fail for cross-channel linked identities where the identityKey
+        // differs from the chatId. A future fix should accept identityKey directly.
         const chatId = new URL(url, "http://localhost").searchParams.get("chatId");
         if (chatId && this.userProfileStore?.getProfile) {
           const profile = this.userProfileStore.getProfile(chatId);

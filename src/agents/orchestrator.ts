@@ -228,6 +228,7 @@ import {
 } from "./orchestrator-intervention-pipeline.js";
 import {
   buildSystemPromptWithContext as buildSystemPromptWithContextHelper,
+  injectSoulPersonality,
   type ContextBuilderDeps,
 } from "./orchestrator-context-builder.js";
 import {
@@ -1611,8 +1612,10 @@ export class Orchestrator {
     ].join("\n");
 
     try {
+      // Use the full prompt with personality (soul) instead of the base systemPrompt
+      const soulEnrichedPrompt = injectSoulPersonality(this.getContextBuilderDeps(), this.systemPrompt, params.channelType);
       const synthesisResponse = await synthesisProvider.chat(
-        `${this.systemPrompt}\n\n${SUPERVISOR_SYNTHESIS_SYSTEM_PROMPT}${this.buildSupervisorRolePrompt(strategy, strategy.synthesizer)}`,
+        `${soulEnrichedPrompt}\n\n${SUPERVISOR_SYNTHESIS_SYSTEM_PROMPT}${this.buildSupervisorRolePrompt(strategy, strategy.synthesizer)}`,
         [{ role: "user", content: synthesisRequest }],
         [],
       );
@@ -2354,6 +2357,13 @@ export class Orchestrator {
           }
         }
 
+        // Per-user persona override (from profile, not global SoulLoader mutation)
+        let bgPersonaContent: string | undefined;
+        if (profile?.activePersona && profile.activePersona !== "default" && this.soulLoader) {
+          bgPersonaContent =
+            (await this.soulLoader.getProfileContent(profile.activePersona)) ?? undefined;
+        }
+
         // Build system prompt with all context layers (DRY: shared with runAgentLoop)
         const {
           systemPrompt: builtPrompt,
@@ -2366,6 +2376,7 @@ export class Orchestrator {
           identityKey,
           channelType: options.channelType,
           prompt,
+          personaContent: bgPersonaContent,
           profile,
           preComputedEmbedding: bgEmbedding,
         });
@@ -5628,9 +5639,11 @@ export class Orchestrator {
    * Clean up expired sessions (call periodically).
    */
   cleanupSessions(maxAgeMs: number = 3_600_000): void {
-    this.sessionManager.cleanupSessions(maxAgeMs);
-    // Prune stale ask_user block counters alongside expired sessions
-    this.askUserBlockCounts.clear();
+    const expired = this.sessionManager.cleanupSessions(maxAgeMs);
+    // Only clear block counts for expired sessions, not all active ones
+    for (const chatId of expired) {
+      this.askUserBlockCounts.delete(chatId);
+    }
   }
 
   private async maybeUpdateUserProfileFromPrompt(

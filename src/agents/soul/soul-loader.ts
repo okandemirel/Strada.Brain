@@ -239,17 +239,20 @@ export class SoulLoader {
 
     this.switchInFlight = true;
     try {
-      const previous = this.cache.get("default") ?? null;
-      const fileName = this.resolveProfilePath(profileName);
+      if (profileName === "default") {
+        // Switching back to default — no cache mutation needed, just update tracking
+        this.activeProfileName = "default";
+        logger.info("Personality profile switched", { profile: profileName });
+        return true;
+      }
 
-      const success = await this.loadFile("default", fileName);
-      if (!success) {
-        if (previous !== null) {
-          this.cache.set("default", previous);
-        } else {
-          this.cache.delete("default");
-        }
-      } else {
+      // Validate the profile exists and is readable without mutating the "default" cache key.
+      // Per-user persona content is read on demand via getProfileContent(), so we only
+      // need to verify the file is loadable and update the active tracking name.
+      const fileName = this.resolveProfilePath(profileName);
+      const cacheKey = `profile:${profileName}`;
+      const success = await this.loadFile(cacheKey, fileName);
+      if (success) {
         this.activeProfileName = profileName;
         logger.info("Personality profile switched", { profile: profileName });
       }
@@ -324,7 +327,8 @@ export class SoulLoader {
         this.profileNames.push(name);
       }
 
-      this.watchFile(`custom-profile:${name}`, `.strada-memory/profiles/${name}.md`);
+      // Hot-reload for custom profiles is not needed — getProfileContent reads from disk on demand.
+      // Watching and caching under `custom-profile:${name}` would write to a key never read.
       logger.info("Custom profile saved", { name, size: content.length });
       return true;
     } catch (err) {

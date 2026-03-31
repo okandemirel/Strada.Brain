@@ -455,6 +455,7 @@ export async function buildSystemPromptWithContext(
       contextSummary?: string;
     } | null;
     preComputedEmbedding?: number[];
+    providerContextWindow?: number;
   },
 ): Promise<{
   systemPrompt: string;
@@ -505,16 +506,24 @@ export async function buildSystemPromptWithContext(
   systemPrompt += contextLayers;
   const initialContentHashes: string[] = [...contentHashes];
 
+  // Context window budget (used by RAG and total-size cap)
+  const effectiveContextWindow = params.providerContextWindow ?? 128_000;
+
   // 5. RAG injection
   if (ctx.ragPipeline && params.prompt) {
     try {
+      const ragBudget = Math.min(4000, Math.floor(effectiveContextWindow * 0.05));
       const ragResults = await ctx.ragPipeline.search(params.prompt, {
         topK: 6,
         minScore: 0.2,
         queryEmbedding: params.preComputedEmbedding,
       });
       if (ragResults.length > 0) {
-        const ragFormatted = ctx.ragPipeline.formatContext(ragResults);
+        const ragFormatted = ctx.ragPipeline.formatContext(ragResults, {
+          maxTokens: ragBudget,
+          truncationStrategy: "drop_lowest",
+          contextLines: 3,
+        });
         systemPrompt += `\n\n<!-- re-retrieval:rag:start -->\n${ragFormatted}\n<!-- re-retrieval:rag:end -->\n`;
         for (const r of ragResults) initialContentHashes.push(r.chunk.content);
         logger.debug("Injected RAG context", {
@@ -526,6 +535,16 @@ export async function buildSystemPromptWithContext(
     } catch {
       // RAG failure is non-fatal
     }
+  }
+
+  // 6. Total system prompt budget — cap to leave room for conversation messages
+  const maxSystemPromptChars = effectiveContextWindow * 3; // ~3 chars per token, reserve 25% for messages
+  if (systemPrompt.length > maxSystemPromptChars) {
+    logger.warn("System prompt exceeds budget, truncating", {
+      length: systemPrompt.length,
+      limit: maxSystemPromptChars,
+    });
+    systemPrompt = systemPrompt.slice(0, maxSystemPromptChars);
   }
 
   return { systemPrompt, initialContentHashes, projectWorldSummary, projectWorldFingerprint };

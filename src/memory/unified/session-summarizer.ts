@@ -88,7 +88,11 @@ export class SessionSummarizer {
     }
 
     try {
-      const formattedTranscript = this.formatMessages(messages);
+      const MAX_SUMMARY_CHARS = 50_000; // ~12K tokens
+      let formattedTranscript = this.formatMessages(messages);
+      if (formattedTranscript.length > MAX_SUMMARY_CHARS) {
+        formattedTranscript = formattedTranscript.slice(-MAX_SUMMARY_CHARS); // Keep most recent
+      }
       const userMessage: ConversationMessage = {
         role: "user",
         content: formattedTranscript,
