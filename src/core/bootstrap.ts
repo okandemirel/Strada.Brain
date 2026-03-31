@@ -18,7 +18,7 @@ import { MetricsCollector } from "../dashboard/metrics.js";
 import { CachedEmbeddingProvider } from "../rag/embeddings/embedding-cache.js";
 import { RAGPipeline } from "../rag/rag-pipeline.js";
 import { FileVectorStore } from "../rag/vector-store.js";
-import type { DIContainer } from "./di-container.js";
+import { type DIContainer, createContainer } from "./di-container.js";
 import { ToolRegistry } from "./tool-registry.js";
 import { checkStradaDeps } from "../config/strada-deps.js";
 import type { FrameworkKnowledgeStore } from "../intelligence/framework/framework-knowledge-store.js";
@@ -354,7 +354,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       ...options.config,
       unityProjectPath: runtimeProjectResolution.effectiveProjectPath,
     };
-  const container = customContainer!; // We ensure container exists below
+  const container = customContainer ?? createContainer();
 
   const logger = createLogger(config.logLevel, config.logFile);
   logger.info("Bootstrapping Strada Brain", {
@@ -405,6 +405,8 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
 
   let frameworkStore: FrameworkKnowledgeStore | null = null;
   let frameworkSyncPipeline: FrameworkSyncPipeline | null = null;
+  // Callback set after orchestrator is constructed; the IIFE calls it when sync completes
+  let onFrameworkStoreReady: ((store: FrameworkKnowledgeStore) => void) | null = null;
 
   if (frameworkSyncConfig.bootSync) {
     void (async () => {
@@ -434,6 +436,11 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
         logger.info("Framework Knowledge Layer synced", {
           packages: syncResult.reports.map((r) => `${r.packageId}:v${r.currentVersion ?? "?"}`).join(", "),
         });
+
+        // Notify the orchestrator (if already constructed) that framework store is ready
+        if (onFrameworkStoreReady && frameworkStore) {
+          onFrameworkStoreReady(frameworkStore);
+        }
 
         if (frameworkSyncConfig.watchEnabled) {
           await frameworkSyncPipeline.startWatcher();
@@ -691,6 +698,29 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     progressAssessmentEnabled: config.progressAssessmentEnabled,
   });
 
+  // Wire FrameworkPromptGenerator to the orchestrator (deferred: IIFE may complete before or after)
+  const wireFrameworkPromptGenerator = async (store: FrameworkKnowledgeStore) => {
+    try {
+      const { FrameworkPromptGenerator } = await import("../intelligence/framework/framework-prompt-generator.js");
+      const generator = new FrameworkPromptGenerator(store);
+      orchestrator.setFrameworkPromptGenerator(generator);
+      logger.debug("FrameworkPromptGenerator wired to orchestrator");
+    } catch (fwErr) {
+      logger.debug("FrameworkPromptGenerator wiring failed (non-fatal)", {
+        reason: fwErr instanceof Error ? fwErr.message : String(fwErr),
+      });
+    }
+  };
+  if (frameworkStore) {
+    // IIFE already completed synchronously (unlikely but possible)
+    await wireFrameworkPromptGenerator(frameworkStore);
+  } else {
+    // Set callback for when the async IIFE completes
+    onFrameworkStoreReady = (store) => {
+      wireFrameworkPromptGenerator(store).catch(() => {});
+    };
+  }
+
   const { chainManager } = await initializeToolChainStage({
     config,
     logger,
@@ -891,6 +921,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
         dashboard,
         stradaDeps,
         supervisorBrain,
+        goalStorage,
       });
       agentManager = multiAgentStage.agentManager;
       agentManager?.setUnifiedBudgetManager?.(unifiedBudgetManager);

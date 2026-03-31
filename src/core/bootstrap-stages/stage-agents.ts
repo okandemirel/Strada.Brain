@@ -67,6 +67,7 @@ export async function initializeMultiAgentDelegationStage(
     dashboard?: Pick<DashboardServer, "registerDelegationServices">;
     stradaDeps: StradaDepsStatus;
     supervisorBrain?: SupervisorBrain;
+    goalStorage?: import("../../goals/goal-storage.js").GoalStorage;
   },
   deps: MultiAgentDelegationStageDeps = {},
 ): Promise<MultiAgentDelegationStageResult> {
@@ -119,6 +120,7 @@ export async function initializeMultiAgentDelegationStage(
     messageBurstWindowMs: params.config.tasks.messageBurstWindowMs,
     maxBurstMessages: params.config.tasks.messageBurstMaxMessages,
     supervisorBrain: params.supervisorBrain,
+    goalStorage: params.goalStorage,
   } satisfies ConstructorParameters<typeof AgentManager>[0];
 
   const agentManager = deps.createAgentManager?.(agentManagerOptions)

@@ -106,6 +106,7 @@ export interface AgentManagerOptions {
   readonly messageBurstWindowMs?: number;
   readonly maxBurstMessages?: number;
   readonly supervisorBrain?: SupervisorBrain;
+  readonly goalStorage?: import("../../goals/goal-storage.js").GoalStorage;
 }
 
 /** In-memory representation of a running agent with its resources */
@@ -610,6 +611,9 @@ export class AgentManager {
     }
     if (this.monitorLifecycle) {
       orchestrator.setMonitorLifecycle(this.monitorLifecycle);
+    }
+    if (this.opts.goalStorage) {
+      orchestrator.setGoalStorage(this.opts.goalStorage);
     }
 
     // Inject delegation tools if factory is available (Phase 24)

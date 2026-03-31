@@ -15,12 +15,12 @@
     ],
     "openai": [
       {
-        "url": "https://developers.openai.com/api/docs/models",
+        "url": "https://platform.openai.com/docs/models",
         "label": "OpenAI models",
         "kind": "html"
       },
       {
-        "url": "https://developers.openai.com/",
+        "url": "https://platform.openai.com/docs/overview",
         "label": "OpenAI developer updates",
         "kind": "html"
       }

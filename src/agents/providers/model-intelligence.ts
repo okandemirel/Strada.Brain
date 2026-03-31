@@ -214,7 +214,7 @@ export const HARDCODED_MODELS: Map<string, ModelInfo> = buildHardcoded();
 // ---------------------------------------------------------------------------
 
 /** Best-effort mapping from a model id to a canonical provider name. */
-function inferProvider(modelId: string): string {
+function inferProvider(modelId: string, originalKey?: string): string {
   const id = modelId.toLowerCase();
   if (id.includes("claude")) return "claude";
   if (id.includes("gpt") || id.includes("o1") || id.includes("o3") || id.includes("o4")) return "openai";
@@ -223,6 +223,8 @@ function inferProvider(modelId: string): string {
   if (id.includes("qwen")) return "qwen";
   if (id.includes("kimi") || id.includes("moonshot")) return "kimi";
   if (id.includes("mistral") || id.includes("codestral") || id.includes("pixtral")) return "mistral";
+  // If the original key starts with "ollama/", preserve "ollama" as provider
+  if (originalKey && originalKey.toLowerCase().startsWith("ollama/")) return "ollama";
   if (id.includes("llama")) return "meta";
   if (id.includes("minimax")) return "minimax";
   if (id.includes("groq")) return "groq";
@@ -352,7 +354,7 @@ async function fetchLiteLLM(): Promise<Map<string, ModelInfo>> {
 
     for (const [key, entry] of Object.entries(data)) {
       // Skip metadata keys (e.g. "sample_spec")
-      if (!entry || typeof entry !== "object" || !entry.max_tokens) continue;
+      if (!entry || typeof entry !== "object" || (!entry.max_tokens && !entry.max_input_tokens && !entry.max_output_tokens)) continue;
 
       const contextWindow = entry.max_input_tokens ?? entry.max_tokens ?? 0;
       const maxOutputTokens = entry.max_output_tokens ?? entry.max_tokens ?? 0;
@@ -368,7 +370,9 @@ async function fetchLiteLLM(): Promise<Map<string, ModelInfo>> {
       const id = slashIdx >= 0 ? key.slice(slashIdx + 1) : key;
 
       const provider =
-        entry.litellm_provider?.toLowerCase() ?? inferProvider(id);
+        entry.litellm_provider?.toLowerCase() ?? inferProvider(id, key);
+
+      if (map.has(id)) continue;
 
       map.set(id, {
         id,
@@ -378,7 +382,7 @@ async function fetchLiteLLM(): Promise<Map<string, ModelInfo>> {
         inputPricePerMillion: Math.round(inputPricePerMillion * 100) / 100,
         outputPricePerMillion: Math.round(outputPricePerMillion * 100) / 100,
         supportsVision: entry.supports_vision ?? false,
-        supportsThinking: false, // LiteLLM doesn't track this
+        supportsThinking: /claude-(opus|sonnet)|deepseek|kimi-k2|o[34]-|qwen.*thinking/i.test(id),
         supportsToolCalling:
           entry.supports_function_calling ?? entry.supports_tool_choice ?? false,
         supportsStreaming: true, // Assume true for API-based models
@@ -592,7 +596,7 @@ export class ModelIntelligenceService {
   }
 
   private needsRefresh(): boolean {
-    return this.isStale() || this.providerSnapshots.size === 0;
+    return this.isStale();
   }
 
   /**
@@ -744,6 +748,8 @@ export class ModelIntelligenceService {
 
     // 6. No cache either — use hardcoded
     this.models = new Map(HARDCODED_MODELS);
+    this.setLastRefresh(Date.now());
+    this.saveToDb();
     logger.warn("ModelIntelligence using hardcoded fallback", { errors });
 
     return { modelsUpdated: HARDCODED_MODELS.size, source: "hardcoded", errors };

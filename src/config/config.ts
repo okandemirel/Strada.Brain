@@ -881,7 +881,8 @@ const portSchema = z
 const boolFromString = (defaultValue: boolean) =>
   z
     .string()
-    .transform((s) => s === "true")
+    .transform((s) => s.toLowerCase().trim())
+    .transform((s) => s === "true" || s === "1" || s === "yes")
     .default(String(defaultValue));
 
 /** Comma-separated list schema */
@@ -3203,31 +3204,36 @@ export function loadConfig(): Config {
   }
 
   // Update with resolved path + preset overrides
+  // Preset overrides must be applied to the correct nested config paths
+  const presetRagOverrides = preset ? {
+    ...(!process.env["EMBEDDING_PROVIDER"] ? { provider: preset.embeddingProvider } : {}),
+    ...(!process.env["EMBEDDING_MODEL"] ? { model: preset.embeddingModel } : {}),
+    ...(!process.env["EMBEDDING_BASE_URL"] && preset.embeddingBaseUrl ? { baseUrl: preset.embeddingBaseUrl } : {}),
+  } : {};
+  const presetDelegationTierOverrides = preset ? {
+    ...(!process.env["DELEGATION_TIER_LOCAL"] ? { local: preset.delegationTierLocal } : {}),
+    ...(!process.env["DELEGATION_TIER_CHEAP"] ? { cheap: preset.delegationTierCheap } : {}),
+    ...(!process.env["DELEGATION_TIER_STANDARD"] ? { standard: preset.delegationTierStandard } : {}),
+    ...(!process.env["DELEGATION_TIER_PREMIUM"] ? { premium: preset.delegationTierPremium } : {}),
+  } : {};
+
   cachedConfig = {
     ...config,
     unityProjectPath: pathResult.value,
     providerModels,
     // Preset fills in defaults; explicit env vars take precedence (already parsed by Zod above)
     ...(preset && !process.env["PROVIDER_CHAIN"] ? { providerChain: preset.providerChain } : {}),
-    ...(preset && !process.env["EMBEDDING_PROVIDER"]
-      ? { embeddingProvider: preset.embeddingProvider }
-      : {}),
-    ...(preset && !process.env["EMBEDDING_MODEL"] ? { embeddingModel: preset.embeddingModel } : {}),
-    ...(preset && !process.env["EMBEDDING_BASE_URL"] && preset.embeddingBaseUrl
-      ? { embeddingBaseUrl: preset.embeddingBaseUrl }
-      : {}),
-    ...(preset && !process.env["DELEGATION_TIER_LOCAL"]
-      ? { delegationTierLocal: preset.delegationTierLocal }
-      : {}),
-    ...(preset && !process.env["DELEGATION_TIER_CHEAP"]
-      ? { delegationTierCheap: preset.delegationTierCheap }
-      : {}),
-    ...(preset && !process.env["DELEGATION_TIER_STANDARD"]
-      ? { delegationTierStandard: preset.delegationTierStandard }
-      : {}),
-    ...(preset && !process.env["DELEGATION_TIER_PREMIUM"]
-      ? { delegationTierPremium: preset.delegationTierPremium }
-      : {}),
+    // Apply embedding overrides to the nested rag config
+    ...(Object.keys(presetRagOverrides).length > 0 ? {
+      rag: { ...config.rag, ...presetRagOverrides },
+    } : {}),
+    // Apply delegation tier overrides to the nested delegation.tiers config
+    ...(Object.keys(presetDelegationTierOverrides).length > 0 ? {
+      delegation: {
+        ...config.delegation,
+        tiers: { ...config.delegation.tiers, ...presetDelegationTierOverrides },
+      },
+    } : {}),
   };
 
   return cachedConfig;
