@@ -332,6 +332,10 @@ export function checkPendingBlocks(deps: {
   return { blocked: false };
 }
 
+/** Gate injected when a provider returns `max_tokens` and the loop auto-continues. */
+export const MAX_TOKENS_CONTINUATION_GATE =
+  "Your previous response was cut off due to output length limits. Continue exactly where you left off.";
+
 /**
  * Appends the current assistant response (if any) and a user continuation gate
  * into the session message list.

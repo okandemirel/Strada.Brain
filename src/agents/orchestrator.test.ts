@@ -7943,12 +7943,13 @@ DONE`,
 
       // Should NOT have terminated on the truncated first response
       expect(mockProvider.chat).toHaveBeenCalledTimes(2);
-      // The continuation prompt should have been injected
-      const secondCallMessages = mockProvider.chat.mock.calls[1]![1] as any[];
-      const continuationMsg = secondCallMessages.find(
-        (m: any) => m.role === "user" && typeof m.content === "string" && m.content.includes("cut off"),
+      // Verify the continuation pair was injected (array is a live reference, check contents)
+      const msgs = mockProvider.chat.mock.calls[1]![1] as any[];
+      const assistantIdx = msgs.findIndex(
+        (m: any) => m.role === "assistant" && typeof m.content === "string" && m.content.includes("cut off mid-sen"),
       );
-      expect(continuationMsg).toBeDefined();
+      expect(assistantIdx).toBeGreaterThan(0);
+      expect(msgs[assistantIdx + 1]).toMatchObject({ role: "user", content: expect.stringContaining("cut off") });
       // Final result should be from the second (completed) response
       expect(result).toContain("conclusion");
     });
@@ -7982,12 +7983,13 @@ DONE`,
 
       // Should have made two provider calls, not one
       expect(mockProvider.chat).toHaveBeenCalledTimes(2);
-      // The continuation prompt should have been injected into the second call
-      const secondCallMessages = mockProvider.chat.mock.calls[1]![1] as any[];
-      const continuationMsg = secondCallMessages.find(
-        (m: any) => m.role === "user" && typeof m.content === "string" && m.content.includes("cut off"),
+      // Verify the continuation pair was injected (array is a live reference, check contents)
+      const msgs = mockProvider.chat.mock.calls[1]![1] as any[];
+      const assistantIdx = msgs.findIndex(
+        (m: any) => m.role === "assistant" && typeof m.content === "string" && m.content.includes("truncated mid-"),
       );
-      expect(continuationMsg).toBeDefined();
+      expect(assistantIdx).toBeGreaterThan(0);
+      expect(msgs[assistantIdx + 1]).toMatchObject({ role: "user", content: expect.stringContaining("cut off") });
     });
 
     it("P1 reflection override prevents premature DONE when steps have failures", async () => {
