@@ -184,6 +184,8 @@ export class SupervisorDispatcher {
   private readonly rootId?: string;
   private readonly taskDescription?: string;
   private readonly displayTaskLabels?: ReadonlyMap<string, string>;
+  /** Node IDs that have been terminated (failed/aborted/skipped) — suppress stale events */
+  private readonly terminatedNodes = new Set<string>();
 
   constructor(options: DispatcherOptions) {
     this.executeNode = options.executeNode;
@@ -223,6 +225,15 @@ export class SupervisorDispatcher {
     if (!this.rootId) {
       return;
     }
+    // Suppress stale events from nodes that have already terminated
+    const nodeId = String(node.id);
+    if (this.terminatedNodes.has(nodeId) && status === "executing") {
+      return;
+    }
+    // Track terminal states so background-running promises can't re-emit
+    if (status === "failed" || status === "completed" || status === "skipped") {
+      this.terminatedNodes.add(nodeId);
+    }
 
     this.emitter?.emit("monitor:task_update", {
       rootId: this.rootId,
@@ -242,6 +253,10 @@ export class SupervisorDispatcher {
     status: "pending" | "running" | "verifying" | "done" | "failed" | "skipped",
     reason?: string,
   ): void {
+    // Suppress stale narratives from nodes that already terminated
+    if (this.terminatedNodes.has(String(node.id)) && status === "running") {
+      return;
+    }
     const taskDescription = this.taskDescription;
     if (!taskDescription) {
       return;
