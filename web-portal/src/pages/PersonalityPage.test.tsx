@@ -11,7 +11,7 @@ vi.mock('../hooks/use-api', () => ({
 }))
 
 vi.mock('../hooks/useWS', () => ({
-  useWS: () => ({ sessionId: 'test-session', sendRawJSON: vi.fn() }),
+  useWS: () => ({ profileId: 'test-session', sendRawJSON: vi.fn() }),
 }))
 
 // Mock fetch for mutations

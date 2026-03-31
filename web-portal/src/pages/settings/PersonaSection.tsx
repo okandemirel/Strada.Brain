@@ -7,8 +7,8 @@ import { useWS } from '../../hooks/useWS'
 
 export default function PersonaSection() {
   const { t } = useTranslation('settings')
-  const { sessionId } = useWS()
-  const { data, isLoading } = usePersonality(sessionId)
+  const { profileId } = useWS()
+  const { data, isLoading } = usePersonality(profileId)
   const queryClient = useQueryClient()
   const [switching, setSwitching] = useState<string | null>(null)
 
@@ -18,7 +18,7 @@ export default function PersonaSection() {
       const res = await fetch('/api/personality/switch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ profile, chatId: sessionId }),
+        body: JSON.stringify({ profile, chatId: profileId }),
       })
       if (!res.ok) throw new Error('Failed to switch profile')
       toast.success(t('persona.toastSwitched', { profile }))

@@ -225,8 +225,9 @@ export class SupervisorDispatcher {
     if (!this.rootId) {
       return;
     }
-    // Suppress stale events from nodes that have already terminated
     const nodeId = String(node.id);
+
+    // Suppress stale events from nodes that have already terminated
     if (this.terminatedNodes.has(nodeId) && status === "executing") {
       return;
     }
@@ -237,7 +238,7 @@ export class SupervisorDispatcher {
 
     this.emitter?.emit("monitor:task_update", {
       rootId: this.rootId,
-      nodeId: String(node.id),
+      nodeId,
       status,
       agentId: node.assignedProvider ?? "unknown",
       phase: status === "executing" ? "acting" : "observing",

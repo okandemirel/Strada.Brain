@@ -87,7 +87,9 @@ function shouldSynthesize(
   }
 
   // Trivial/simple tasks with clean short responses → no rewriting needed
-  if (classification && (classification.complexity === "trivial" || classification.complexity === "simple") && draft.length < 2000) {
+  const isLowComplexity =
+    classification?.complexity === "trivial" || classification?.complexity === "simple";
+  if (isLowComplexity && draft.length < 2000) {
     return false;
   }
 
@@ -125,7 +127,7 @@ export interface EndTurnCoreContext {
 }
 
 export interface BgEndTurnContext extends EndTurnCoreContext {
-  readonly taskClassification?: import("../agent-core/routing/routing-types.js").TaskClassification;
+  readonly taskClassification?: TaskClassification;
   readonly progressAssessmentEnabled?: boolean;
   readonly controlLoopTracker: ControlLoopTracker;
   readonly workerCollector: WorkerRunCollector | undefined;

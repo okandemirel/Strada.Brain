@@ -2564,6 +2564,7 @@ export class Orchestrator {
                 activePrompt,
                 session.messages,
                 currentToolDefinitions,
+                { signal },
               );
               this.recordExecutionTrace({
                 chatId,
@@ -3612,7 +3613,7 @@ export class Orchestrator {
             activePrompt,
             session.messages,
             currentToolDefinitions,
-          );
+          ); // Interactive path — no abort signal (user is actively connected)
         }
         this.recordExecutionTrace({
           chatId,

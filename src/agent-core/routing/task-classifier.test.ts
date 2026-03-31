@@ -8,13 +8,19 @@ describe("TaskClassifier", () => {
   /*  Prompt classification — type                                    */
   /* ---------------------------------------------------------------- */
 
-  it("classifies short prompts as conversational (< 40 chars)", () => {
-    expect(classifier.classify("What is a monad?").type).toBe("conversational");
+  it("classifies trivially short prompts as conversational (< 20 chars)", () => {
     expect(classifier.classify("merhaba").type).toBe("conversational");
-    expect(classifier.classify("fix the bug").type).toBe("conversational");
+    expect(classifier.classify("hello").type).toBe("conversational");
+    expect(classifier.classify("Hi there").type).toBe("conversational");
   });
 
-  it("classifies medium questions as simple-question (40-60 chars with ?)", () => {
+  it("classifies short code tasks normally (>= 20 chars)", () => {
+    // These are real tasks, not conversational — should NOT be classified as conversational
+    expect(classifier.classify("fix the bug in main.cs").type).not.toBe("conversational");
+    expect(classifier.classify("What is a monad in FP?").type).toBe("simple-question");
+  });
+
+  it("classifies medium questions as simple-question (20-60 chars with ?)", () => {
     expect(classifier.classify("What is the purpose of this authentication module?").type).toBe("simple-question");
   });
 
@@ -72,8 +78,9 @@ describe("TaskClassifier", () => {
   /*  Non-English prompts → code-generation (most permissive)         */
   /* ---------------------------------------------------------------- */
 
-  it("classifies short non-English prompts as conversational (< 40 chars)", () => {
-    expect(classifier.classify("Yeni bir servis ekle ve güncelle").type).toBe("conversational");
+  it("classifies short non-English prompts as code-generation (>= 20 chars)", () => {
+    // 32 chars — above conversational threshold, falls through to code-generation
+    expect(classifier.classify("Yeni bir servis ekle ve güncelle").type).toBe("code-generation");
   });
 
   it("classifies longer non-English prompts as code-generation (>= 40 chars)", () => {
@@ -87,11 +94,16 @@ describe("TaskClassifier", () => {
     expect(classifier.classify("Créer un nouveau service d'authentification avec JWT").type).toBe("code-generation");
   });
 
-  it("classifies short non-English questions as conversational (< 40 chars)", () => {
+  it("classifies very short non-English questions as conversational (< 20 chars)", () => {
     expect(classifier.classify("TypeScript nedir?").type).toBe("conversational");
     expect(classifier.classify("これは何ですか？").type).toBe("conversational");
     expect(classifier.classify("Was ist das?").type).toBe("conversational");
     expect(classifier.classify("¿Qué es esto?").type).toBe("conversational");
+  });
+
+  it("classifies longer non-English questions as simple-question (20-60 chars with ?)", () => {
+    expect(classifier.classify("TypeScript nedir ve nereye kullanılır?").type).toBe("simple-question");
+    expect(classifier.classify("このプロジェクトの構造はどうなっていますか？").type).toBe("simple-question");
   });
 
   it("classifies Turkish multi-action prompt as code-generation with full tool access", () => {

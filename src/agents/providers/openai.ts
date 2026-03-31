@@ -120,7 +120,7 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
         method: "POST",
         headers: await this.buildHeaders(),
         body: JSON.stringify(body),
-        ...(options?.signal ? { signal: options.signal } : {}),
+        signal: options?.signal,
       },
     );
 

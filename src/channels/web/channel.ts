@@ -831,12 +831,14 @@ export class WebChannel
       // Chat-context cancel: routes to /cancel command for the active task
       case "cancel_task": {
         if (!this.handler) break;
+        const rawTaskId = typeof data.taskId === "string" ? data.taskId.trim() : "";
+        const safeTaskId = /^[a-zA-Z0-9_-]+$/.test(rawTaskId) ? rawTaskId : "";
         const msg: IncomingMessage = {
           channelType: "web",
           chatId,
           conversationId: client?.profileId ?? chatId,
           userId: client?.profileId ?? chatId,
-          text: typeof data.taskId === "string" ? `/cancel ${data.taskId}` : "/cancel",
+          text: safeTaskId ? `/cancel ${safeTaskId}` : "/cancel",
           timestamp: new Date(),
         };
         this.handler(msg).catch(() => {

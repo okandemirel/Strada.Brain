@@ -6,38 +6,13 @@
 
 import type { ITool, ToolContext, ToolExecutionResult } from "./tool.interface.js";
 import { getLogger } from "../../utils/logger.js";
+import { hasSoulLoaderWithPersistence, hasUserProfileStore } from "./personality-context.js";
 
 /** Reserved profile names that cannot be overwritten by users */
 const RESERVED_NAMES = new Set(["default", "casual", "formal", "minimal"]);
 
 /** Valid name pattern: lowercase alphanumeric, hyphens, underscores */
 const NAME_PATTERN = /^[a-z0-9_-]+$/;
-
-interface SoulLoaderLike {
-  saveProfile(name: string, content: string): Promise<boolean>;
-  getProfileContent(name: string): Promise<string | null>;
-}
-
-interface UserProfileStoreLike {
-  setActivePersona(chatId: string, persona: string): void;
-}
-
-function hasSoulLoader(ctx: ToolContext): ctx is ToolContext & { soulLoader: SoulLoaderLike } {
-  const record = ctx as unknown as Record<string, unknown>;
-  return (
-    record.soulLoader != null &&
-    typeof (record.soulLoader as Record<string, unknown>).saveProfile === "function" &&
-    typeof (record.soulLoader as Record<string, unknown>).getProfileContent === "function"
-  );
-}
-
-function hasUserProfileStore(ctx: ToolContext): ctx is ToolContext & { userProfileStore: UserProfileStoreLike } {
-  const record = ctx as unknown as Record<string, unknown>;
-  return (
-    record.userProfileStore != null &&
-    typeof (record.userProfileStore as Record<string, unknown>).setActivePersona === "function"
-  );
-}
 
 export class CreatePersonalityTool implements ITool {
   readonly name = "create_personality";
@@ -100,7 +75,7 @@ export class CreatePersonalityTool implements ITool {
       };
     }
 
-    if (!hasSoulLoader(context)) {
+    if (!hasSoulLoaderWithPersistence(context)) {
       return {
         content:
           `Custom profile "${name}" created in memory. ` +
@@ -108,12 +83,15 @@ export class CreatePersonalityTool implements ITool {
       };
     }
 
+    // Resolve persistent identity key early so all log paths use the same identifier
+    const persistKey = context.userId ?? context.chatId;
+
     // Save the profile
     const saved = await context.soulLoader.saveProfile(name, content);
     if (!saved) {
       logger.warn("Create personality failed — saveProfile returned false", {
         name,
-        chatId: context.chatId,
+        persistKey,
       });
       return {
         content:
@@ -127,7 +105,7 @@ export class CreatePersonalityTool implements ITool {
     if (!verification) {
       logger.warn("Create personality saved but content not readable", {
         name,
-        chatId: context.chatId,
+        persistKey,
       });
       return {
         content:
@@ -137,17 +115,17 @@ export class CreatePersonalityTool implements ITool {
     }
 
     // Update user profile store if available
-    if (hasUserProfileStore(context) && context.chatId) {
+    if (hasUserProfileStore(context) && persistKey) {
       try {
-        context.userProfileStore.setActivePersona(context.chatId, name);
+        context.userProfileStore.setActivePersona(persistKey, name);
       } catch (err) {
-        logger.warn("Failed to persist persona for custom profile", { chatId: context.chatId, name, err });
+        logger.warn("Failed to persist persona for custom profile", { persistKey, name, err });
       }
     }
 
     logger.info("Custom personality created and activated", {
       name,
-      chatId: context.chatId,
+      persistKey,
     });
 
     return {

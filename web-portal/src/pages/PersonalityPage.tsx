@@ -22,8 +22,8 @@ You are ...
 export default function PersonalityPage() {
   const { t } = useTranslation('pages')
   const queryClient = useQueryClient()
-  const { sessionId } = useWS()
-  const { data: rawData, error: fetchError, isLoading } = usePersonality(sessionId)
+  const { profileId } = useWS()
+  const { data: rawData, error: fetchError, isLoading } = usePersonality(profileId)
   const data = rawData?.personality ?? null
 
   const [error, setError] = useState<string | null>(null)
@@ -34,7 +34,7 @@ export default function PersonalityPage() {
 
   const switchMutation = useMutation({
     mutationFn: async (profile: string) => {
-      const res = await fetch('/api/personality/switch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ profile, chatId: sessionId }) })
+      const res = await fetch('/api/personality/switch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ profile, chatId: profileId }) })
       if (!res.ok) { const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` })); throw new Error((err as { error?: string }).error ?? `HTTP ${res.status}`) }
     },
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['personality'] }) },

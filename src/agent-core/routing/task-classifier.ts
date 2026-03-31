@@ -125,8 +125,10 @@ export class TaskClassifier {
   private detectType(prompt: string): TaskType {
     const trimmed = prompt.trim();
 
-    // Language-agnostic: very short messages are conversational (greetings, typos, chat)
-    if (trimmed.length < 40) {
+    // Language-agnostic: trivially short messages are conversational (greetings, typos)
+    // Threshold set to 20 to avoid false positives on short but real code tasks
+    // like "fix main.cs" or "add a test" which need full processing.
+    if (trimmed.length < 20) {
       return "conversational";
     }
 

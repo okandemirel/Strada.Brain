@@ -7,30 +7,7 @@
 
 import type { ITool, ToolContext, ToolExecutionResult } from "./tool.interface.js";
 import { getLogger } from "../../utils/logger.js";
-
-interface SoulLoaderLike {
-  getProfiles(): string[];
-}
-
-interface UserProfileStoreLike {
-  setActivePersona(chatId: string, persona: string): void;
-}
-
-function hasSoulLoader(ctx: ToolContext): ctx is ToolContext & { soulLoader: SoulLoaderLike } {
-  const record = ctx as unknown as Record<string, unknown>;
-  return (
-    record.soulLoader != null &&
-    typeof (record.soulLoader as Record<string, unknown>).getProfiles === "function"
-  );
-}
-
-function hasUserProfileStore(ctx: ToolContext): ctx is ToolContext & { userProfileStore: UserProfileStoreLike } {
-  const record = ctx as unknown as Record<string, unknown>;
-  return (
-    record.userProfileStore != null &&
-    typeof (record.userProfileStore as Record<string, unknown>).setActivePersona === "function"
-  );
-}
+import { hasSoulLoader, hasUserProfileStore } from "./personality-context.js";
 
 export class SwitchPersonalityTool implements ITool {
   readonly name = "switch_personality";
@@ -80,15 +57,17 @@ export class SwitchPersonalityTool implements ITool {
     }
 
     // Persist per-user via UserProfileStore (SQLite — survives restarts)
-    if (hasUserProfileStore(context) && context.chatId) {
+    // Use userId (persistent profileId) over chatId (transient WebSocket session)
+    const persistKey = context.userId ?? context.chatId;
+    if (hasUserProfileStore(context) && persistKey) {
       try {
-        context.userProfileStore.setActivePersona(context.chatId, profile);
+        context.userProfileStore.setActivePersona(persistKey, profile);
       } catch (err) {
-        logger.warn("Failed to persist persona switch", { chatId: context.chatId, profile, err });
+        logger.warn("Failed to persist persona switch", { persistKey, profile, err });
       }
     }
 
-    logger.info("Personality switched (per-user)", { profile, chatId: context.chatId });
+    logger.info("Personality switched (per-user)", { profile, persistKey });
     return {
       content: `Personality switched to "${profile}" mode. My responses will now reflect this style.`,
     };
