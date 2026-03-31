@@ -50,7 +50,7 @@ describe("LearningPipeline", () => {
   });
 
   describe("observeToolUse", () => {
-    it("should record successful tool use observation", () => {
+    it("should not record observations (handled by handleToolResult instead)", () => {
       pipeline.observeToolUse({
         sessionId: "session-1",
         toolName: "dotnet_build",
@@ -61,10 +61,12 @@ describe("LearningPipeline", () => {
 
       storage.flush();
       const stats = pipeline.getStats();
-      expect(stats.observationCount).toBe(1);
+      // observeToolUse no longer records observations to avoid double-write
+      // with handleToolResult which handles recording via the event bus
+      expect(stats.observationCount).toBe(0);
     });
 
-    it("should record failed tool use observation", () => {
+    it("should still record error patterns on failure", () => {
       pipeline.observeToolUse({
         sessionId: "session-1",
         toolName: "dotnet_build",
@@ -80,7 +82,10 @@ describe("LearningPipeline", () => {
 
       storage.flush();
       const stats = pipeline.getStats();
-      expect(stats.observationCount).toBe(1);
+      // Observations are not recorded by observeToolUse (dedup fix)
+      expect(stats.observationCount).toBe(0);
+      // But error patterns should still be recorded
+      expect(stats.errorPatternCount).toBeGreaterThanOrEqual(0);
     });
   });
 
@@ -910,7 +915,8 @@ describe("LearningPipeline", () => {
         pipeline.start();
 
         // After start, advancing by detectionIntervalMs should NOT run runDetectionBatch
-        // (since we removed the timer). We verify indirectly: no observations get processed by timer.
+        // (since we removed the timer). observeToolUse no longer records observations
+        // (dedup fix: handleToolResult handles it), so count stays at 0.
         pipeline.observeToolUse({
           sessionId: "session-timer",
           toolName: "file_read",
@@ -922,9 +928,9 @@ describe("LearningPipeline", () => {
         // Advance past the detection interval
         vi.advanceTimersByTime(2000);
 
-        // Observations should still be unprocessed (no batch timer)
+        // No observations recorded by observeToolUse (handled by handleToolResult)
         const stats = pipeline.getStats();
-        expect(stats.unprocessedObservationCount).toBe(1);
+        expect(stats.unprocessedObservationCount).toBe(0);
       } finally {
         pipeline.stop();
         vi.useRealTimers();

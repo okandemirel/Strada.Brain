@@ -70,11 +70,17 @@ interface MemoryEntryLike {
   version?: number;
 }
 
+/** Minimal HNSW write mutex interface */
+interface HnswWriteMutexContract {
+  withLock<T>(fn: () => Promise<T>): Promise<T>;
+}
+
 /** Constructor options for MemoryConsolidationEngine */
 export interface ConsolidationEngineOptions {
   sqliteDb: Database.Database;
   entries: Map<string, unknown>;
   hnswStore: unknown;
+  hnswWriteMutex?: HnswWriteMutexContract;
   config: ConsolidationConfig;
   generateEmbedding: (text: string) => Promise<number[]>;
   summarizeWithLLM: (contents: string[]) => Promise<SummarizeResult>;
@@ -92,6 +98,7 @@ export class MemoryConsolidationEngine {
   private readonly db: Database.Database;
   private readonly entries: Map<string, MemoryEntryLike>;
   private readonly hnsw: HnswStoreContract;
+  private readonly hnswMutex: HnswWriteMutexContract | null;
   private readonly config: ConsolidationConfig;
   private readonly generateEmbedding: (text: string) => Promise<number[]>;
   private readonly summarizeWithLLM: (contents: string[]) => Promise<SummarizeResult>;
@@ -104,6 +111,7 @@ export class MemoryConsolidationEngine {
     this.db = opts.sqliteDb;
     this.entries = opts.entries as Map<string, MemoryEntryLike>;
     this.hnsw = opts.hnswStore as HnswStoreContract;
+    this.hnswMutex = opts.hnswWriteMutex ?? null;
     this.config = opts.config;
     this.generateEmbedding = opts.generateEmbedding;
     this.summarizeWithLLM = opts.summarizeWithLLM;
@@ -361,17 +369,25 @@ export class MemoryConsolidationEngine {
     })();
 
     // HNSW cleanup: remove original vectors, add summary vector.
+    // Acquire the HNSW write mutex to prevent interleaved writes.
     // If HNSW fails, roll back the SQLite commit via compensating transaction
     // to prevent SQLite/HNSW divergence on crash or error.
     try {
-      await this.hnsw.remove(cluster.memberIds);
-      await this.hnsw.upsert([{
-        id: summaryId,
-        vector: summaryEmbedding,
-        chunk: { filePath: "", content: llmResult.summary, kind: "generic", language: "text" },
-        addedAt: now,
-        accessCount: 0,
-      }]);
+      const doHnswUpdate = async () => {
+        await this.hnsw.remove(cluster.memberIds);
+        await this.hnsw.upsert([{
+          id: summaryId,
+          vector: summaryEmbedding,
+          chunk: { filePath: "", content: llmResult.summary, kind: "generic", language: "text" },
+          addedAt: now,
+          accessCount: 0,
+        }]);
+      };
+      if (this.hnswMutex) {
+        await this.hnswMutex.withLock(doHnswUpdate);
+      } else {
+        await doHnswUpdate();
+      }
     } catch (hnswError) {
       this.logger.error("[Consolidation] HNSW update failed, rolling back SQLite commit", {
         summaryId,
@@ -608,22 +624,44 @@ export class MemoryConsolidationEngine {
     }
 
     // HNSW updates: remove summary vector, re-add original vectors
+    // Acquire the write mutex to prevent interleaved writes.
     // Use .catch() to log errors (undo is sync but HNSW ops are async)
-    void this.hnsw.remove([summaryEntryId]).catch((err) => {
-      this.logger.warn("[Consolidation] HNSW remove failed during undo", { summaryEntryId, error: String(err) });
-    });
-    if (originalEmbeddings.length > 0) {
-      void this.hnsw.upsert(
-        originalEmbeddings.map((oe) => ({
-          id: oe.id,
-          vector: oe.embedding,
-          chunk: { filePath: "", content: "", kind: "generic", language: "text" },
-          addedAt: now,
-          accessCount: 0,
-        })),
-      ).catch((err) => {
-        this.logger.warn("[Consolidation] HNSW upsert failed during undo", { error: String(err) });
+    const doUndoHnsw = async () => {
+      await this.hnsw.remove([summaryEntryId]);
+      if (originalEmbeddings.length > 0) {
+        await this.hnsw.upsert(
+          originalEmbeddings.map((oe) => ({
+            id: oe.id,
+            vector: oe.embedding,
+            chunk: { filePath: "", content: "", kind: "generic", language: "text" },
+            addedAt: now,
+            accessCount: 0,
+          })),
+        );
+      }
+    };
+    if (this.hnswMutex) {
+      void this.hnswMutex.withLock(doUndoHnsw).catch((err) => {
+        this.logger.warn("[Consolidation] HNSW update failed during undo", { error: String(err) });
       });
+    } else {
+      // No mutex: fire-and-forget individual operations for backward compatibility
+      void this.hnsw.remove([summaryEntryId]).catch((err) => {
+        this.logger.warn("[Consolidation] HNSW remove failed during undo", { summaryEntryId, error: String(err) });
+      });
+      if (originalEmbeddings.length > 0) {
+        void this.hnsw.upsert(
+          originalEmbeddings.map((oe) => ({
+            id: oe.id,
+            vector: oe.embedding,
+            chunk: { filePath: "", content: "", kind: "generic", language: "text" },
+            addedAt: now,
+            accessCount: 0,
+          })),
+        ).catch((err) => {
+          this.logger.warn("[Consolidation] HNSW upsert failed during undo", { error: String(err) });
+        });
+      }
     }
 
     this.logger.info("[Consolidation] Undo completed", { logId, summaryEntryId, restoredCount: sourceEntryIds.length });

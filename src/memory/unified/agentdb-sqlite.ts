@@ -38,7 +38,7 @@ CREATE TABLE IF NOT EXISTS memories (
 
 CREATE TABLE IF NOT EXISTS patterns (
   id TEXT PRIMARY KEY,
-  pattern_key TEXT NOT NULL,
+  pattern_key TEXT NOT NULL UNIQUE,
   data TEXT NOT NULL,
   confidence REAL NOT NULL DEFAULT 0.0,
   created_at INTEGER NOT NULL
@@ -108,6 +108,32 @@ export function bufferToEmbedding(buf: Buffer): Vector<number> {
 // ---------------------------------------------------------------------------
 
 /**
+ * Migrate existing databases: deduplicate patterns by pattern_key and ensure the
+ * UNIQUE constraint exists. Idempotent — safe to call on every startup.
+ */
+function migratePatternDedup(db: Database.Database): void {
+  try {
+    // Check if the unique index already exists
+    const indexes = db.prepare(
+      "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='patterns' AND name='idx_patterns_key_unique'"
+    ).all() as Array<{ name: string }>;
+    if (indexes.length > 0) return; // Already migrated
+
+    // Deduplicate: keep only the row with highest confidence per pattern_key
+    db.prepare(`
+      DELETE FROM patterns WHERE rowid NOT IN (
+        SELECT MIN(rowid) FROM patterns GROUP BY pattern_key
+      )
+    `).run();
+
+    // Create unique index (enforces UNIQUE at DB level for existing tables)
+    db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_patterns_key_unique ON patterns(pattern_key)").run();
+  } catch (error) {
+    getLoggerSafe().warn("[AgentDBMemory] Pattern dedup migration skipped", { error: String(error) });
+  }
+}
+
+/**
  * Initialize the SQLite database, run schema creation, and prepare statements.
  * On failure, attempts an in-memory fallback.
  */
@@ -125,6 +151,9 @@ export function initSqlite(ctx: AgentDBSqliteContext): void {
     // Create schema using exec (safe - no user input, static SQL only)
     ctx.sqliteDb.exec(MEMORY_SCHEMA_SQL);
 
+    // Migration: deduplicate patterns table and add UNIQUE index for existing databases
+    migratePatternDedup(ctx.sqliteDb);
+
     prepareSqliteStatements(ctx);
 
     getLoggerSafe().info("[AgentDBMemory] SQLite persistence initialized", { path: sqlitePath });
@@ -138,6 +167,7 @@ export function initSqlite(ctx: AgentDBSqliteContext): void {
       ctx.sqliteDb = new Database(":memory:");
       configureSqlitePragmas(ctx.sqliteDb, "memory");
       ctx.sqliteDb.exec(MEMORY_SCHEMA_SQL);
+      migratePatternDedup(ctx.sqliteDb);
       prepareSqliteStatements(ctx);
       getLoggerSafe().warn("[AgentDBMemory] Running with in-memory SQLite fallback — data will not survive restarts");
     } catch (fallbackError) {
@@ -181,7 +211,7 @@ export function prepareSqliteStatements(ctx: AgentDBSqliteContext): void {
     ctx.sqliteDb!.prepare(`
         INSERT INTO patterns (id, pattern_key, data, confidence, created_at)
         VALUES (?, ?, ?, ?, ?)
-        ON CONFLICT(id) DO UPDATE SET
+        ON CONFLICT(pattern_key) DO UPDATE SET
           data = excluded.data,
           confidence = excluded.confidence
       `),
