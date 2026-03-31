@@ -10,6 +10,10 @@ vi.mock('../hooks/use-api', () => ({
   usePersonality: () => mockUsePersonality(),
 }))
 
+vi.mock('../hooks/useWS', () => ({
+  useWS: () => ({ sessionId: 'test-session', sendRawJSON: vi.fn() }),
+}))
+
 // Mock fetch for mutations
 const mockFetch = vi.fn()
 vi.stubGlobal('fetch', mockFetch)
