@@ -896,6 +896,8 @@ export class Orchestrator {
   }
 
   private shouldActivateSupervisor(classification: TaskClassification): boolean {
+    // Conversational messages never need supervisor decomposition
+    if (classification.type === "conversational") return false;
     const threshold = this.supervisorComplexityThreshold;
     if (threshold === "moderate") {
       return classification.complexity === "moderate" || classification.complexity === "complex";
@@ -2790,6 +2792,7 @@ export class Orchestrator {
                   chatId,
                   identityKey,
                   prompt,
+                  taskClassification: this.taskClassifier.classify(prompt),
                   responseText: response.text,
                   responseUsage: response.usage,
                   executionStrategy,
@@ -5177,7 +5180,7 @@ export class Orchestrator {
     const goalCtx = options.goalContext;
     let substepOrder = 0;
 
-    const toolContext: ToolContext & { soulLoader?: SoulLoader | null } = {
+    const toolContext: ToolContext & { soulLoader?: SoulLoader | null; userProfileStore?: UserProfileStore } = {
       projectPath,
       workingDirectory,
       readOnly: this.readOnly,
@@ -5185,6 +5188,7 @@ export class Orchestrator {
       chatId,
       channel: this.channel,
       soulLoader: this.soulLoader,
+      userProfileStore: this.userProfileStore,
       // Dynamic tool registration callbacks
       registerDynamicTool: (tool) => this.addTool(tool),
       unregisterDynamicTool: (name) => {

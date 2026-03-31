@@ -10,7 +10,6 @@ import { getLogger } from "../../utils/logger.js";
 
 interface SoulLoaderLike {
   getProfiles(): string[];
-  getProfileContent(name: string): Promise<string | null>;
 }
 
 interface UserProfileStoreLike {
@@ -21,8 +20,7 @@ function hasSoulLoader(ctx: ToolContext): ctx is ToolContext & { soulLoader: Sou
   const record = ctx as unknown as Record<string, unknown>;
   return (
     record.soulLoader != null &&
-    typeof (record.soulLoader as Record<string, unknown>).getProfiles === "function" &&
-    typeof (record.soulLoader as Record<string, unknown>).getProfileContent === "function"
+    typeof (record.soulLoader as Record<string, unknown>).getProfiles === "function"
   );
 }
 
@@ -81,23 +79,12 @@ export class SwitchPersonalityTool implements ITool {
       };
     }
 
-    // Verify the profile content is readable (skip for "default" which is always the base soul.md)
-    if (profile !== "default") {
-      const content = await context.soulLoader.getProfileContent(profile);
-      if (!content) {
-        return {
-          content: `Profile "${profile}" is listed but its content could not be loaded.`,
-          isError: true,
-        };
-      }
-    }
-
     // Persist per-user via UserProfileStore (SQLite — survives restarts)
     if (hasUserProfileStore(context) && context.chatId) {
       try {
         context.userProfileStore.setActivePersona(context.chatId, profile);
-      } catch {
-        // Non-fatal — log and continue
+      } catch (err) {
+        logger.warn("Failed to persist persona switch", { chatId: context.chatId, profile, err });
       }
     }
 

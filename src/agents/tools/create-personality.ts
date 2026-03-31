@@ -140,8 +140,8 @@ export class CreatePersonalityTool implements ITool {
     if (hasUserProfileStore(context) && context.chatId) {
       try {
         context.userProfileStore.setActivePersona(context.chatId, name);
-      } catch {
-        // Non-fatal — profile is saved and active in memory
+      } catch (err) {
+        logger.warn("Failed to persist persona for custom profile", { chatId: context.chatId, name, err });
       }
     }
 

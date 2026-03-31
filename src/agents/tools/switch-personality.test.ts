@@ -35,9 +35,7 @@ describe("SwitchPersonalityTool", () => {
     const result = await tool.execute({ profile: "casual" }, context);
     expect(result.content).toContain("casual");
     expect(result.isError).toBeUndefined();
-    // Should NOT call switchProfile (removed global mutation)
     expect(mockSoulLoader.getProfiles).toHaveBeenCalled();
-    expect(mockSoulLoader.getProfileContent).toHaveBeenCalledWith("casual");
   });
 
   it("handles missing soulLoader gracefully", async () => {
@@ -46,22 +44,21 @@ describe("SwitchPersonalityTool", () => {
     expect(result.isError).toBeUndefined();
   });
 
-  it("skips getProfileContent for 'default' profile", async () => {
+  it("switches to default profile", async () => {
     const mockSoulLoader = {
       getProfiles: vi.fn().mockReturnValue(["casual", "formal", "minimal", "default"]),
-      getProfileContent: vi.fn().mockResolvedValue(null),
+      getProfileContent: vi.fn(),
     };
     const context = { soulLoader: mockSoulLoader } as any;
     const result = await tool.execute({ profile: "default" }, context);
     expect(result.isError).toBeUndefined();
     expect(result.content).toContain("default");
-    expect(mockSoulLoader.getProfileContent).not.toHaveBeenCalled();
   });
 
   it("supports custom profiles dynamically", async () => {
     const mockSoulLoader = {
       getProfiles: vi.fn().mockReturnValue(["casual", "formal", "minimal", "default", "pirate"]),
-      getProfileContent: vi.fn().mockResolvedValue("pirate profile content"),
+      getProfileContent: vi.fn(),
     };
     const context = { soulLoader: mockSoulLoader } as any;
     const result = await tool.execute({ profile: "pirate" }, context);
@@ -91,15 +88,15 @@ describe("SwitchPersonalityTool", () => {
     expect(mockUserProfileStore.setActivePersona).not.toHaveBeenCalled();
   });
 
-  it("returns error when profile content cannot be loaded", async () => {
+  it("returns error when profile is not in available list", async () => {
     const mockSoulLoader = {
-      getProfiles: vi.fn().mockReturnValue(["broken"]),
-      getProfileContent: vi.fn().mockResolvedValue(null),
+      getProfiles: vi.fn().mockReturnValue(["casual", "default"]),
+      getProfileContent: vi.fn(),
     };
     const context = { soulLoader: mockSoulLoader } as any;
-    const result = await tool.execute({ profile: "broken" }, context);
+    const result = await tool.execute({ profile: "nonexistent" }, context);
     expect(result.isError).toBe(true);
-    expect(result.content).toContain("content could not be loaded");
+    expect(result.content).toContain("Unknown profile");
   });
 
   it("returns error for empty profile name", async () => {

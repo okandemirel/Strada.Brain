@@ -1423,15 +1423,11 @@ export class DashboardServer {
         let activeProfile = this.soulLoader.getActiveProfile();
 
         // Per-user overlay: if chatId provided, check UserProfileStore
-        const qIdx = url.indexOf("?");
-        if (qIdx !== -1 && this.userProfileStore?.getProfile) {
-          const params = new URLSearchParams(url.slice(qIdx + 1));
-          const chatId = params.get("chatId");
-          if (chatId) {
-            const profile = this.userProfileStore.getProfile(chatId);
-            if (profile?.activePersona && profile.activePersona !== "default") {
-              activeProfile = profile.activePersona;
-            }
+        const chatId = new URL(url, "http://localhost").searchParams.get("chatId");
+        if (chatId && this.userProfileStore?.getProfile) {
+          const profile = this.userProfileStore.getProfile(chatId);
+          if (profile?.activePersona && profile.activePersona !== "default") {
+            activeProfile = profile.activePersona;
           }
         }
 
@@ -1542,10 +1538,11 @@ export class DashboardServer {
             return;
           }
           try {
-            const success = await this.soulLoader!.switchProfile(profile);
-            if (!success) {
+            // Validate profile exists (no global mutation — per-user only)
+            const available = this.soulLoader!.getProfiles();
+            if (!available.includes(profile)) {
               res.writeHead(400, { "Content-Type": "application/json" });
-              res.end(JSON.stringify({ error: `Failed to switch to profile '${profile}'` }));
+              res.end(JSON.stringify({ error: `Profile '${profile}' not found. Available: ${available.join(", ")}` }));
               return;
             }
             // Persist per-user persona
