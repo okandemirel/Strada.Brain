@@ -372,7 +372,8 @@ interface DashboardTaskManager {
 
 /** Structural interface for user profile store used by dashboard /api/user endpoints */
 interface DashboardUserProfileStore {
-  getProfile?(chatId: string): { preferences: Record<string, unknown> } | null;
+  getProfile?(chatId: string): { preferences: Record<string, unknown>; activePersona?: string } | null;
+  setActivePersona?(chatId: string, persona: string): void;
   setAutonomousMode(chatId: string, enabled: boolean, expiresAt?: number): Promise<void>;
   isAutonomousMode(chatId: string): Promise<{ enabled: boolean; expiresAt?: number; remainingMs?: number }>;
 }
@@ -1411,18 +1412,34 @@ export class DashboardServer {
         return;
       }
 
-      // GET /api/personality -- Soul/personality info
-      if (url === "/api/personality") {
+      // GET /api/personality -- Soul/personality info (supports ?chatId= for per-user overlay)
+      if ((url === "/api/personality" || url.startsWith("/api/personality?")) && req.method === "GET") {
         if (!this.soulLoader) {
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ personality: null }));
           return;
         }
+
+        let activeProfile = this.soulLoader.getActiveProfile();
+
+        // Per-user overlay: if chatId provided, check UserProfileStore
+        const qIdx = url.indexOf("?");
+        if (qIdx !== -1 && this.userProfileStore?.getProfile) {
+          const params = new URLSearchParams(url.slice(qIdx + 1));
+          const chatId = params.get("chatId");
+          if (chatId) {
+            const profile = this.userProfileStore.getProfile(chatId);
+            if (profile?.activePersona && profile.activePersona !== "default") {
+              activeProfile = profile.activePersona;
+            }
+          }
+        }
+
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({
           personality: {
             content: this.soulLoader.getContent(),
-            activeProfile: this.soulLoader.getActiveProfile(),
+            activeProfile,
             profiles: this.soulLoader.getProfiles(),
             channelOverrides: this.soulLoader.getChannelOverrides(),
           },
@@ -1531,13 +1548,10 @@ export class DashboardServer {
               res.end(JSON.stringify({ error: `Failed to switch to profile '${profile}'` }));
               return;
             }
-            // Update user profile store if chatId provided
-            if (parsed.chatId && this.userProfileStore) {
+            // Persist per-user persona
+            if (parsed.chatId && this.userProfileStore?.setActivePersona) {
               try {
-                const store = this.userProfileStore as unknown as { setActivePersona?: (chatId: string, persona: string) => Promise<void> };
-                if (typeof store.setActivePersona === "function") {
-                  await store.setActivePersona(parsed.chatId, profile);
-                }
+                this.userProfileStore.setActivePersona(parsed.chatId, profile);
               } catch { /* non-fatal — persona update is best-effort */ }
             }
             res.writeHead(200, { "Content-Type": "application/json" });
