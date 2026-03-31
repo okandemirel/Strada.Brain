@@ -202,11 +202,21 @@ export function parseGoalBlock(text: string): GoalBlockOutput | null {
 
 export function parseLLMOutput(text: string): LLMDecompositionOutput | null {
   try {
-    // Strip markdown code fences (```json ... ``` or ``` ... ```)
     let cleaned = text.trim();
-    const fenceMatch = cleaned.match(/^```(?:json)?\s*\n?([\s\S]*?)\n?\s*```$/);
+
+    // 1. Strip <reasoning>...</reasoning> blocks (Kimi K2.5 embeds these)
+    cleaned = cleaned.replace(/<reasoning>[\s\S]*?<\/reasoning>\s*/g, "").trim();
+
+    // 2. Extract from markdown code fences anywhere in text (not just start/end)
+    const fenceMatch = cleaned.match(/```(?:json)?\s*\n([\s\S]*?)\n\s*```/);
     if (fenceMatch?.[1]) {
       cleaned = fenceMatch[1].trim();
+    } else {
+      // 3. Fallback: find first JSON object in text
+      const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        cleaned = jsonMatch[0];
+      }
     }
 
     const parsed = JSON.parse(cleaned);

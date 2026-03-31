@@ -13,7 +13,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import type { GoalNode, GoalTree, GoalNodeId, GoalBlockOutput } from "./types.js";
-import { generateGoalNodeId, parseGoalBlock } from "./types.js";
+import { generateGoalNodeId, parseGoalBlock, parseLLMOutput } from "./types.js";
 import { GoalStorage } from "./goal-storage.js";
 import { randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
@@ -174,6 +174,72 @@ Let me know if you want changes.`;
     // Node missing task
     const missingTask = '```goal\n{"isGoal": true, "estimatedMinutes": 5, "nodes": [{"id": "a", "dependsOn": []}]}\n```';
     expect(parseGoalBlock(missingTask)).toBeNull();
+  });
+});
+
+describe("parseLLMOutput", () => {
+  it("parses plain JSON", () => {
+    const json = '{"nodes": [{"id": "s1", "task": "do stuff", "dependsOn": []}]}';
+    const result = parseLLMOutput(json);
+    expect(result).not.toBeNull();
+    expect(result!.nodes).toHaveLength(1);
+    expect(result!.nodes[0]!.task).toBe("do stuff");
+  });
+
+  it("parses JSON wrapped in markdown code fences", () => {
+    const text = '```json\n{"nodes": [{"id": "s1", "task": "do stuff", "dependsOn": []}]}\n```';
+    const result = parseLLMOutput(text);
+    expect(result).not.toBeNull();
+    expect(result!.nodes).toHaveLength(1);
+  });
+
+  it("strips <reasoning> blocks before parsing (Kimi K2.5)", () => {
+    const text = `<reasoning>
+Let me think about how to decompose this task...
+I'll break it into analysis and implementation steps.
+</reasoning>
+
+\`\`\`json
+{"nodes": [{"id": "s1", "task": "Analyze codebase", "dependsOn": []}, {"id": "s2", "task": "Implement fix", "dependsOn": ["s1"]}]}
+\`\`\``;
+    const result = parseLLMOutput(text);
+    expect(result).not.toBeNull();
+    expect(result!.nodes).toHaveLength(2);
+    expect(result!.nodes[0]!.task).toBe("Analyze codebase");
+    expect(result!.nodes[1]!.dependsOn).toEqual(["s1"]);
+  });
+
+  it("extracts JSON from text with surrounding prose", () => {
+    const text = `Here is my decomposition plan:
+
+{"nodes": [{"id": "s1", "task": "Step one", "dependsOn": []}]}
+
+I hope this helps!`;
+    const result = parseLLMOutput(text);
+    expect(result).not.toBeNull();
+    expect(result!.nodes).toHaveLength(1);
+  });
+
+  it("extracts code block from text with surrounding prose (non-anchored)", () => {
+    const text = `Sure, here's the decomposition:
+
+\`\`\`json
+{"nodes": [{"id": "s1", "task": "First step", "dependsOn": []}]}
+\`\`\`
+
+Let me know if you want changes.`;
+    const result = parseLLMOutput(text);
+    expect(result).not.toBeNull();
+    expect(result!.nodes[0]!.task).toBe("First step");
+  });
+
+  it("returns null for invalid JSON", () => {
+    expect(parseLLMOutput("not json at all")).toBeNull();
+  });
+
+  it("returns null for JSON that fails schema validation", () => {
+    expect(parseLLMOutput('{"nodes": []}')).toBeNull(); // min 1 node
+    expect(parseLLMOutput('{"unrelated": true}')).toBeNull();
   });
 });
 

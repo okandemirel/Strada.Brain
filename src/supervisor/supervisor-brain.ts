@@ -126,6 +126,49 @@ export class SupervisorBrain {
     return !!goalTree || this.decomposer.shouldDecompose(task);
   }
 
+  /**
+   * Calculate an adaptive per-node timeout based on actual vs expected workload.
+   *
+   * When decomposition succeeds and produces N nodes, each node has ~1/N of the
+   * total work → the base timeout is sufficient. When decomposition fails or
+   * produces a single fallback node, that node carries the full task → needs a
+   * proportionally longer timeout.
+   *
+   * Estimation heuristic (no hardcoded multipliers):
+   * - estimatedNodeCount: derived from prompt length (longer prompts = more work)
+   *   using the decomposition prompt's own range guidance (2-8 sub-goals)
+   * - scaleFactor: ratio of estimatedNodeCount / actualNodeCount
+   * - Result is clamped to [baseTimeout, baseTimeout * MAX_SCALE_CAP]
+   */
+  private calculateAdaptiveTimeout(
+    actualNodeCount: number,
+    promptLength: number,
+    planSummary?: string,
+  ): number {
+    const base = this.config.nodeTimeoutMs;
+    const MAX_SCALE_CAP = 4;
+
+    // If decomposition succeeded normally, use base timeout
+    const isFallback = planSummary === "Fallback single-step execution";
+    if (!isFallback && actualNodeCount > 1) return base;
+
+    // Estimate how many nodes the task would have produced if decomposition succeeded.
+    // The decomposition prompt says "2-8 sub-goals" — use prompt length to interpolate.
+    // Map [60..600+] chars → [2..8] estimated nodes via linear interpolation.
+    const MIN_NODES = 2;
+    const MAX_NODES = 8;
+    const clampedLength = Math.min(Math.max(promptLength, 60), 600);
+    const estimatedNodes = MIN_NODES + ((clampedLength - 60) / (600 - 60)) * (MAX_NODES - MIN_NODES);
+
+    // Scale timeout: each node needs proportionally more time
+    const scaleFactor = Math.min(
+      Math.ceil(estimatedNodes) / Math.max(1, actualNodeCount),
+      MAX_SCALE_CAP,
+    );
+
+    return Math.round(base * Math.max(1, scaleFactor));
+  }
+
   private emitActivity(detail: string, taskId?: string, action = "supervisor_update"): void {
     this.emitter?.emit("monitor:agent_activity", {
       ...(taskId ? { taskId } : {}),
@@ -304,7 +347,11 @@ export class SupervisorBrain {
           executeNodeFn(node, dispatchContext, nodeSignal),
         config: {
           maxParallelNodes: context.workspaceLease ? 1 : this.config.maxParallelNodes,
-          nodeTimeoutMs: this.config.nodeTimeoutMs,
+          nodeTimeoutMs: this.calculateAdaptiveTimeout(
+            assignedNodes.length,
+            planningTask.length,
+            decomposedGoalTree.planSummary,
+          ),
           maxFailureBudget: this.config.maxFailureBudget,
         },
         eventEmitter: this.emitter,

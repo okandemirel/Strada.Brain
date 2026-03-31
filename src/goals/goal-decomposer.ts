@@ -251,13 +251,31 @@ export class GoalDecomposer {
       );
 
       const parsed = parseLLMOutput(response.text);
-      if (!parsed) return null;
+      if (!parsed) {
+        const { getLoggerSafe } = await import("../utils/logger.js");
+        getLoggerSafe().warn("Goal decomposition LLM output parse failed", {
+          responsePreview: response.text.slice(0, 300),
+          provider: this.provider.name,
+        });
+        return null;
+      }
 
       const validation = validateDAG(parsed.nodes);
-      if (!validation.valid) return null;
+      if (!validation.valid) {
+        const { getLoggerSafe } = await import("../utils/logger.js");
+        getLoggerSafe().warn("Goal decomposition DAG validation failed", {
+          errors: validation.errors,
+          nodeCount: parsed.nodes.length,
+        });
+        return null;
+      }
 
       return parsed;
-    } catch {
+    } catch (err) {
+      const { getLoggerSafe } = await import("../utils/logger.js");
+      getLoggerSafe().warn("Goal decomposition LLM call failed", {
+        error: err instanceof Error ? err.message : String(err),
+      });
       return null;
     }
   }
