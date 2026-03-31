@@ -77,11 +77,11 @@ export class GoalDecomposer {
    */
   shouldDecompose(prompt: string): boolean {
     const trimmed = prompt.trim();
-    // Only skip decomposition for trivially short messages (greetings,
-    // single words, very short questions). The LLM handles everything
-    // else — it returns a single-node tree for simple tasks, multi-node
-    // for complex ones. No language-specific heuristics needed.
-    return trimmed.length >= 30;
+    // Skip decomposition for short messages (greetings, simple questions,
+    // single-sentence requests). Aligned with TaskClassifier's "moderate"
+    // complexity boundary at 60 chars to avoid triggering supervisor
+    // evaluation and workspace lease acquisition for conversational input.
+    return trimmed.length >= 60;
   }
 
   /**

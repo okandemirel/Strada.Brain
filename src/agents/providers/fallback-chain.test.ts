@@ -79,7 +79,7 @@ describe("FallbackChainProvider", () => {
 
     await chain.chat("system-prompt", msgs, tools);
 
-    expect(p1.chat).toHaveBeenCalledWith("system-prompt", msgs, tools);
+    expect(p1.chat).toHaveBeenCalledWith("system-prompt", msgs, tools, undefined);
   });
 
   it("reports healthy when a fallback provider passes healthCheck", async () => {

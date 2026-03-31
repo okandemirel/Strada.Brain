@@ -95,6 +95,7 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
     systemPrompt: string,
     messages: ConversationMessage[],
     tools: ToolDefinition[],
+    options?: { signal?: AbortSignal },
   ): Promise<ProviderResponse> {
     if (this.isChatGptSubscriptionMode()) {
       return this.chatViaChatGptResponses(systemPrompt, messages, tools);
@@ -119,6 +120,7 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
         method: "POST",
         headers: await this.buildHeaders(),
         body: JSON.stringify(body),
+        ...(options?.signal ? { signal: options.signal } : {}),
       },
     );
 

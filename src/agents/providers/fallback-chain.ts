@@ -100,10 +100,11 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
   async chat(
     systemPrompt: string,
     messages: ConversationMessage[],
-    tools: ToolDefinition[]
+    tools: ToolDefinition[],
+    options?: { signal?: AbortSignal },
   ): Promise<ProviderResponse> {
     return this.tryWithFallback("chat", (provider, safeMessages) =>
-      provider.chat(systemPrompt, safeMessages, tools),
+      provider.chat(systemPrompt, safeMessages, tools, options),
       messages,
     );
   }

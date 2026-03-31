@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useWS } from '../hooks/useWS'
 import ChatMessage from './ChatMessage'
 import ChatInput from './ChatInput'
@@ -11,6 +12,7 @@ import { useSessionStore } from '../stores/session-store'
 import { useVoiceSettings } from '../hooks/use-voice-settings'
 
 export default function ChatView() {
+  const { t } = useTranslation()
   const { messages, status, confirmation, isTyping, sendMessage, sendConfirmation, sendRawJSON } = useWS()
   const updateMessage = useSessionStore((s) => s.updateMessage)
   const { voice } = useVoiceSettings()
@@ -69,7 +71,19 @@ export default function ChatView() {
                 voiceOutputEnabled={voice.outputEnabled}
               />
             ))}
-            {isTyping && <TypingIndicator />}
+            {isTyping && (
+              <div className="flex items-center gap-2">
+                <TypingIndicator />
+                <button
+                  onClick={() => sendRawJSON({ type: 'cancel_task' })}
+                  className="shrink-0 rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-text-secondary transition-colors hover:border-rose-400/30 hover:bg-rose-400/10 hover:text-rose-300"
+                  title={t('chat.stopGeneration')}
+                >
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" className="inline mr-1"><rect x="6" y="6" width="12" height="12" rx="2" /></svg>
+                  {t('chat.stop')}
+                </button>
+              </div>
+            )}
           </div>
         )}
         <div ref={messagesEndRef} />

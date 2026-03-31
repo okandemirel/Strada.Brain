@@ -96,26 +96,30 @@ describe("GoalDecomposer", () => {
   describe("shouldDecompose", () => {
     const decomposer = new GoalDecomposer(undefined, 3);
 
-    it("returns false for trivially short prompts (< 30 chars)", () => {
+    it("returns false for short prompts (< 60 chars)", () => {
       expect(decomposer.shouldDecompose("fix the bug")).toBe(false);
       expect(decomposer.shouldDecompose("build it")).toBe(false);
       expect(decomposer.shouldDecompose("hello")).toBe(false);
       expect(decomposer.shouldDecompose("これは何？")).toBe(false);
+      // 44 chars — below threshold, should NOT trigger decomposition
+      expect(decomposer.shouldDecompose("Create a module with tests and documentation")).toBe(false);
+      // 50 chars — still below 60
+      expect(decomposer.shouldDecompose("Level generatorleri ve hatali levelleri analiz et")).toBe(false);
     });
 
-    it("returns true for any prompt >= 30 chars regardless of language", () => {
-      // English
-      expect(decomposer.shouldDecompose("Create a module with tests and documentation")).toBe(true);
-      // Turkish
-      expect(decomposer.shouldDecompose("Level generatorleri ve hatali levelleri analiz et")).toBe(true);
-      // German
-      expect(decomposer.shouldDecompose("Erstelle ein neues Authentifizierungssystem mit JWT")).toBe(true);
-      // Japanese (>= 30 chars)
-      expect(decomposer.shouldDecompose("新しい認証システムを作成し、テストを更新し、ステージング環境にデプロイしてください")).toBe(true);
-      // Chinese (>= 30 chars)
-      expect(decomposer.shouldDecompose("创建一个新的用户认证服务，编写全面的单元测试，并更新项目文档和部署配置")).toBe(true);
-      // Arabic (>= 30 chars)
-      expect(decomposer.shouldDecompose("قم بإنشاء نظام مصادقة جديد مع اختبارات الوحدة وتحديث الوثائق والنشر")).toBe(true);
+    it("returns true for any prompt >= 60 chars regardless of language", () => {
+      // English (>= 60)
+      expect(decomposer.shouldDecompose("Create a comprehensive module with full tests and detailed documentation for the API")).toBe(true);
+      // Turkish (>= 60)
+      expect(decomposer.shouldDecompose("Level generatorleri ve hatali levelleri analiz edip sorunlari coz ve raporla")).toBe(true);
+      // German (>= 60)
+      expect(decomposer.shouldDecompose("Erstelle ein neues Authentifizierungssystem mit JWT-Token und Benutzerverwaltung")).toBe(true);
+      // Japanese (>= 60 chars by byte count, 39 actual chars — CJK chars count as 1 each)
+      expect(decomposer.shouldDecompose("新しい認証システムを作成し、テストを更新し、ステージング環境にデプロイしてください。すべてのエンドポイントを検証してくだ")).toBe(true);
+      // Chinese (>= 60)
+      expect(decomposer.shouldDecompose("创建一个新的用户认证服务，编写全面的单元测试，并更新项目文档和部署配置，同时确保所有接口的安全性和兼容性能通过自动化验证")).toBe(true);
+      // Arabic (>= 60)
+      expect(decomposer.shouldDecompose("قم بإنشاء نظام مصادقة جديد مع اختبارات الوحدة وتحديث الوثائق والنشر في بيئة الإنتاج")).toBe(true);
     });
   });
 

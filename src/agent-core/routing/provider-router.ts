@@ -99,6 +99,7 @@ const TASK_TYPE_TO_WORKLOAD: Record<TaskType, ProviderWorkload> = {
   "code-generation": "implementation",
   "code-review": "review",
   "simple-question": "coordination",
+  conversational: "coordination",
   analysis: "analysis",
   refactoring: "implementation",
   "destructive-operation": "debugging",

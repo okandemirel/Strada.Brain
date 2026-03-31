@@ -7,6 +7,7 @@ export type TaskType =
   | "code-generation"
   | "code-review"
   | "simple-question"
+  | "conversational"
   | "analysis"
   | "refactoring"
   | "destructive-operation"

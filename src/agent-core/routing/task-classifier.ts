@@ -125,6 +125,11 @@ export class TaskClassifier {
   private detectType(prompt: string): TaskType {
     const trimmed = prompt.trim();
 
+    // Language-agnostic: very short messages are conversational (greetings, typos, chat)
+    if (trimmed.length < 40) {
+      return "conversational";
+    }
+
     // Language-agnostic: short prompt ending with ? in any language = simple question
     if (trimmed.length < 60 && /[?？؟]$/.test(trimmed)) {
       return "simple-question";
@@ -162,6 +167,7 @@ export class TaskClassifier {
   ): TaskCriticality {
     if (type === "destructive-operation") return "critical";
     if (type === "planning" && complexity === "complex") return "high";
+    if (type === "conversational") return "low";
     if (type === "simple-question" && complexity === "trivial") return "low";
     return "medium";
   }

@@ -51,6 +51,7 @@ export class ClaudeProvider implements IAIProvider {
     systemPrompt: string,
     messages: ConversationMessage[],
     tools: ToolDefinition[],
+    options?: { signal?: AbortSignal },
   ): Promise<ProviderResponse> {
     const logger = getLogger();
 
@@ -67,13 +68,16 @@ export class ClaudeProvider implements IAIProvider {
       toolCount: anthropicTools.length,
     });
 
-    const response = await this.client.messages.create({
-      model: this.model,
-      max_tokens: this.capabilities.maxTokens,
-      system: systemPrompt,
-      messages: anthropicMessages,
-      tools: anthropicTools.length > 0 ? anthropicTools : undefined,
-    });
+    const response = await this.client.messages.create(
+      {
+        model: this.model,
+        max_tokens: this.capabilities.maxTokens,
+        system: systemPrompt,
+        messages: anthropicMessages,
+        tools: anthropicTools.length > 0 ? anthropicTools : undefined,
+      },
+      options?.signal ? { signal: options.signal } : undefined,
+    );
 
     return this.parseResponse(response);
   }

@@ -30,6 +30,7 @@ export interface IAIProvider {
     systemPrompt: string,
     messages: ConversationMessage[],
     tools: ToolDefinition[],
+    options?: { signal?: AbortSignal },
   ): Promise<ProviderResponse>;
 
   /** Optional health check to verify API connectivity on startup */

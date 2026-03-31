@@ -8,9 +8,14 @@ describe("TaskClassifier", () => {
   /*  Prompt classification — type                                    */
   /* ---------------------------------------------------------------- */
 
-  it("classifies a simple question", () => {
-    const result = classifier.classify("What is a monad?");
-    expect(result.type).toBe("simple-question");
+  it("classifies short prompts as conversational (< 40 chars)", () => {
+    expect(classifier.classify("What is a monad?").type).toBe("conversational");
+    expect(classifier.classify("merhaba").type).toBe("conversational");
+    expect(classifier.classify("fix the bug").type).toBe("conversational");
+  });
+
+  it("classifies medium questions as simple-question (40-60 chars with ?)", () => {
+    expect(classifier.classify("What is the purpose of this authentication module?").type).toBe("simple-question");
   });
 
   it("classifies code generation", () => {
@@ -67,24 +72,26 @@ describe("TaskClassifier", () => {
   /*  Non-English prompts → code-generation (most permissive)         */
   /* ---------------------------------------------------------------- */
 
-  it("classifies non-English prompts as code-generation (all tools available)", () => {
-    // Turkish
-    expect(classifier.classify("Yeni bir servis ekle ve güncelle").type).toBe("code-generation");
-    // German
-    expect(classifier.classify("Erstelle einen neuen Service mit Authentifizierung").type).toBe("code-generation");
-    // Japanese
-    expect(classifier.classify("新しいサービスクラスを作成してください").type).toBe("code-generation");
-    // Chinese
-    expect(classifier.classify("创建一个新的用户认证服务").type).toBe("code-generation");
-    // French
-    expect(classifier.classify("Créer un nouveau service d'authentification").type).toBe("code-generation");
+  it("classifies short non-English prompts as conversational (< 40 chars)", () => {
+    expect(classifier.classify("Yeni bir servis ekle ve güncelle").type).toBe("conversational");
   });
 
-  it("classifies short non-English questions as simple-question", () => {
-    expect(classifier.classify("TypeScript nedir?").type).toBe("simple-question");
-    expect(classifier.classify("これは何ですか？").type).toBe("simple-question");
-    expect(classifier.classify("Was ist das?").type).toBe("simple-question");
-    expect(classifier.classify("¿Qué es esto?").type).toBe("simple-question");
+  it("classifies longer non-English prompts as code-generation (>= 40 chars)", () => {
+    // German (50 chars)
+    expect(classifier.classify("Erstelle einen neuen Service mit Authentifizierung").type).toBe("code-generation");
+    // Japanese (>= 40 chars)
+    expect(classifier.classify("新しいサービスクラスを作成してください、テストも更新してデプロイしてください、ドキュメントも書いてく").type).toBe("code-generation");
+    // Chinese (>= 40 chars)
+    expect(classifier.classify("创建一个新的用户认证服务并编写全面的单元测试然后更新项目文档和部署配置确保安全性通过验证").type).toBe("code-generation");
+    // French (>= 40 chars)
+    expect(classifier.classify("Créer un nouveau service d'authentification avec JWT").type).toBe("code-generation");
+  });
+
+  it("classifies short non-English questions as conversational (< 40 chars)", () => {
+    expect(classifier.classify("TypeScript nedir?").type).toBe("conversational");
+    expect(classifier.classify("これは何ですか？").type).toBe("conversational");
+    expect(classifier.classify("Was ist das?").type).toBe("conversational");
+    expect(classifier.classify("¿Qué es esto?").type).toBe("conversational");
   });
 
   it("classifies Turkish multi-action prompt as code-generation with full tool access", () => {
@@ -148,9 +155,9 @@ describe("TaskClassifier", () => {
   /*  Prompt classification — criticality                             */
   /* ---------------------------------------------------------------- */
 
-  it("assigns low criticality to trivial simple questions", () => {
+  it("assigns low criticality to conversational messages", () => {
     const result = classifier.classify("What is DI?");
-    expect(result.type).toBe("simple-question");
+    expect(result.type).toBe("conversational");
     expect(result.complexity).toBe("trivial");
     expect(result.criticality).toBe("low");
   });

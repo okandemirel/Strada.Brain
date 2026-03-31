@@ -94,7 +94,8 @@ describe("ClaudeProvider", () => {
     await provider.chat("system", [{ role: "user", content: "Hi" }], []);
 
     expect(mockCreate).toHaveBeenCalledWith(
-      expect.objectContaining({ tools: undefined })
+      expect.objectContaining({ tools: undefined }),
+      undefined,
     );
   });
 

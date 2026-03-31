@@ -22,7 +22,7 @@ import type { InteractionBoundaryDecision } from "./autonomy/visibility-boundary
 import type { TaskProgressKind, TaskProgressSignal, TaskProgressUpdate, TaskUsageEvent } from "../tasks/types.js";
 import type { ProgressLanguage } from "../tasks/progress-signals.js";
 import type { WorkspaceLease } from "./supervisor/supervisor-types.js";
-import type { PhaseOutcomeTelemetry } from "../agent-core/routing/routing-types.js";
+import type { PhaseOutcomeTelemetry, TaskClassification } from "../agent-core/routing/routing-types.js";
 import type {
   InterventionDeps,
   LoopRecoveryIntervention,
@@ -54,6 +54,47 @@ import {
 } from "./orchestrator-loop-shared.js";
 import { shouldDeferRawBoundaryForDirectTarget } from "./prompt-targets.js";
 
+// ─── Synthesis Routing ────────────────────────────────────────────────────────
+
+/** Regex for raw tool output artifacts that need human-friendly rewriting */
+const RAW_TOOL_OUTPUT_RE = /```(?:json|xml|diff|patch)|<tool_result>|^\s*\{[\s\S]{200,}/m;
+
+/**
+ * Decides whether the draft response needs a synthesis LLM pass.
+ * Returns false (bypass synthesis) when the response is already user-facing:
+ *   - conversational / simple-question / trivial tasks with no tool usage
+ *   - short, clean responses with no raw tool output
+ *
+ * Returns true (run synthesis) when:
+ *   - tools were used (response may contain raw output needing rewrite)
+ *   - the draft contains code blocks, raw JSON, or tool artifacts
+ *   - the task is complex enough to benefit from response rewriting
+ */
+function shouldSynthesize(
+  draft: string,
+  agentState: AgentState,
+  classification?: TaskClassification,
+): boolean {
+  // Tools were used → synthesis needed to integrate tool output into narrative
+  if (agentState.stepResults.length > 0) return true;
+
+  // Draft contains raw tool output patterns → needs rewriting
+  if (RAW_TOOL_OUTPUT_RE.test(draft)) return true;
+
+  // Conversational / simple-question → direct LLM response is already user-facing
+  if (classification?.type === "conversational" || classification?.type === "simple-question") {
+    return false;
+  }
+
+  // Trivial/simple tasks with clean short responses → no rewriting needed
+  if (classification && (classification.complexity === "trivial" || classification.complexity === "simple") && draft.length < 2000) {
+    return false;
+  }
+
+  // Default: synthesize for safety
+  return true;
+}
+
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
 export type EndTurnLoopAction =
@@ -84,6 +125,7 @@ export interface EndTurnCoreContext {
 }
 
 export interface BgEndTurnContext extends EndTurnCoreContext {
+  readonly taskClassification?: import("../agent-core/routing/routing-types.js").TaskClassification;
   readonly progressAssessmentEnabled?: boolean;
   readonly controlLoopTracker: ControlLoopTracker;
   readonly workerCollector: WorkerRunCollector | undefined;
@@ -473,17 +515,24 @@ export async function handleBgEndTurn(
   }
 
   // 4. Synthesize user-facing response
-  const finalText = await ctx.synthesizeUserFacingResponse({
-    chatId: ctx.chatId,
-    identityKey: ctx.identityKey,
-    prompt: ctx.prompt,
-    draft: ctx.responseText ?? "",
-    agentState,
-    strategy: ctx.executionStrategy,
-    systemPrompt: ctx.systemPrompt,
-    usageHandler: ctx.usageHandler,
-  });
-  if (ctx.workerCollector) {
+  // Intelligent routing: direct LLM responses that are already user-facing
+  // quality bypass the synthesis LLM call. This saves ~10-20s for
+  // conversational, trivial, and simple-question tasks with no tool usage.
+  const draft = ctx.responseText ?? "";
+  const needsSynthesis = shouldSynthesize(draft, agentState, ctx.taskClassification);
+  const finalText = needsSynthesis
+    ? await ctx.synthesizeUserFacingResponse({
+        chatId: ctx.chatId,
+        identityKey: ctx.identityKey,
+        prompt: ctx.prompt,
+        draft,
+        agentState,
+        strategy: ctx.executionStrategy,
+        systemPrompt: ctx.systemPrompt,
+        usageHandler: ctx.usageHandler,
+      })
+    : draft;
+  if (ctx.workerCollector && needsSynthesis) {
     ctx.workerCollector.lastAssignment = ctx.executionStrategy.synthesizer;
   }
 

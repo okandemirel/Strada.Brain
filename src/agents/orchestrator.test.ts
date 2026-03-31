@@ -7831,7 +7831,10 @@ DONE`,
       });
 
       expect(result).toBe("Finished after rollover.");
-      expect(mockProvider.chat).toHaveBeenCalledTimes(4);
+      // 3 PAOR iterations (2 tool_use + 1 end_turn); synthesis is bypassed
+      // because the task is conversational and tools were used in a prior epoch
+      // that was already closed — the current epoch's agentState has no stepResults.
+      expect(mockProvider.chat).toHaveBeenCalledTimes(3);
       expect(readTool.execute).toHaveBeenCalledTimes(2);
       expect(mockRecorder.endTask).toHaveBeenCalledWith(
         "metric_bg_rollover",
