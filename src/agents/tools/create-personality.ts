@@ -15,7 +15,7 @@ const NAME_PATTERN = /^[a-z0-9_-]+$/;
 
 interface SoulLoaderLike {
   saveProfile(name: string, content: string): Promise<boolean>;
-  switchProfile(name: string): Promise<boolean>;
+  getProfileContent(name: string): Promise<string | null>;
 }
 
 interface UserProfileStoreLike {
@@ -27,7 +27,7 @@ function hasSoulLoader(ctx: ToolContext): ctx is ToolContext & { soulLoader: Sou
   return (
     record.soulLoader != null &&
     typeof (record.soulLoader as Record<string, unknown>).saveProfile === "function" &&
-    typeof (record.soulLoader as Record<string, unknown>).switchProfile === "function"
+    typeof (record.soulLoader as Record<string, unknown>).getProfileContent === "function"
   );
 }
 
@@ -122,17 +122,17 @@ export class CreatePersonalityTool implements ITool {
       };
     }
 
-    // Activate immediately
-    const switched = await context.soulLoader.switchProfile(name);
-    if (!switched) {
-      logger.warn("Create personality saved but switch failed", {
+    // Verify the saved profile is readable
+    const verification = await context.soulLoader.getProfileContent(name);
+    if (!verification) {
+      logger.warn("Create personality saved but content not readable", {
         name,
         chatId: context.chatId,
       });
       return {
         content:
-          `Profile "${name}" saved successfully but could not be activated. ` +
-          `Use /persona switch ${name} to activate it later.`,
+          `Profile "${name}" saved but could not be verified. ` +
+          `Try switching to it with: "switch to ${name} persona".`,
       };
     }
 
