@@ -56,8 +56,9 @@ import { shouldDeferRawBoundaryForDirectTarget } from "./prompt-targets.js";
 
 // ─── Synthesis Routing ────────────────────────────────────────────────────────
 
-/** Regex for raw tool output artifacts that need human-friendly rewriting */
-const RAW_TOOL_OUTPUT_RE = /```(?:json|xml|diff|patch)|<tool_result>|^\s*\{[\s\S]{200,}/m;
+/** Regex for raw tool output artifacts that need human-friendly rewriting.
+ * More specific: require { at start of line followed by quoted key. */
+const RAW_TOOL_OUTPUT_RE = /```(?:json|xml|diff|patch)|<tool_result>|^\s*\{"[a-zA-Z]/m;
 
 /**
  * Decides whether the draft response needs a synthesis LLM pass.
@@ -70,13 +71,16 @@ const RAW_TOOL_OUTPUT_RE = /```(?:json|xml|diff|patch)|<tool_result>|^\s*\{[\s\S
  *   - the draft contains code blocks, raw JSON, or tool artifacts
  *   - the task is complex enough to benefit from response rewriting
  */
-function shouldSynthesize(
+export function shouldSynthesize(
   draft: string,
   agentState: AgentState,
   classification?: TaskClassification,
 ): boolean {
-  // Tools were used → synthesis needed to integrate tool output into narrative
-  if (agentState.stepResults.length > 0) return true;
+  // stepResults accumulates across all iterations; approximate "current iteration
+  // had tool use" by checking stepResults.length >= iteration count.
+  const hadToolsThisIteration = agentState.stepResults.length > 0
+    && agentState.stepResults.length >= agentState.iteration;
+  if (hadToolsThisIteration) return true;
 
   // Draft contains raw tool output patterns → needs rewriting
   if (RAW_TOOL_OUTPUT_RE.test(draft)) return true;
@@ -136,6 +140,7 @@ export interface BgEndTurnContext extends EndTurnCoreContext {
   readonly iteration: number;
   readonly workspaceLease: WorkspaceLease | undefined;
   readonly systemPrompt: string;
+  readonly daemonMode?: boolean;
   readonly emitProgress: (message: TaskProgressUpdate) => void;
   readonly buildStructuredProgressSignal: (
     prompt: string,
@@ -258,7 +263,7 @@ async function runBgLoopRecovery(
     session: ctx.session,
     workerCollector: ctx.workerCollector,
     workspaceLease: ctx.workspaceLease,
-    daemonMode: true,
+    daemonMode: ctx.daemonMode ?? false,
     progressAssessmentEnabled: ctx.progressAssessmentEnabled,
     taskStartedAtMs: ctx.taskStartedAtMs,
   }, ctx.interventionDeps);

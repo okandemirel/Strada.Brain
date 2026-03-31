@@ -1757,7 +1757,24 @@ export async function resolveVisibleDraftDecision(
     return rawBoundary;
   }
 
-  const visibleDraft = cleanedDraft
+  // Inline synthesis check (mirrors shouldSynthesize in orchestrator-end-turn-handler.ts
+  // but cannot import due to circular dependency). Skip expensive LLM synthesis when the
+  // draft is already user-facing quality (conversational/simple-question with no tool output).
+  // More conservative than the background path — only skip for explicitly
+  // conversational/simple-question types, since interactive drafts are user-facing.
+  const RAW_TOOL_OUTPUT_RE = /```(?:json|xml|diff|patch)|<tool_result>|^\s*\{"[a-zA-Z]/m;
+  const classification = params.strategy.task;
+  const hadToolsThisIteration = params.agentState.stepResults.length > 0
+    && params.agentState.stepResults.length >= params.agentState.iteration;
+  const isDirectUserFacing =
+    (classification?.type === "conversational" || classification?.type === "simple-question")
+    && cleanedDraft.length < 2000;
+  const needsSynthesis =
+    hadToolsThisIteration
+    || RAW_TOOL_OUTPUT_RE.test(cleanedDraft)
+    || !isDirectUserFacing;
+
+  const visibleDraft = cleanedDraft && needsSynthesis
     ? await deps.synthesizeUserFacingResponse({
         chatId: params.chatId,
         identityKey: params.identityKey,
@@ -1768,7 +1785,7 @@ export async function resolveVisibleDraftDecision(
         systemPrompt: params.systemPrompt,
         usageHandler: params.usageHandler,
       })
-    : "";
+    : cleanedDraft || "";
   return decideUserVisibleBoundaryHelper(deps.clarificationContext, {
     chatId: params.chatId,
     prompt: params.prompt,

@@ -50,6 +50,9 @@ export interface IChannelRichMessaging {
   /** Send a typing/processing indicator */
   sendTypingIndicator(chatId: string): Promise<void>;
 
+  /** Clear the typing/processing indicator */
+  sendTypingStop?(chatId: string): void;
+
   /** Send file attachment */
   sendAttachment(chatId: string, attachment: Attachment): Promise<void>;
 }

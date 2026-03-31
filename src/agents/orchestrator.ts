@@ -2539,6 +2539,7 @@ export class Orchestrator {
           }
 
           let consecutiveMaxTokens = 0;
+          let maxTokensAbort = false;
           while (true) {
             for (
               bgEpochIteration = 0;
@@ -2572,6 +2573,21 @@ export class Orchestrator {
               executionStrategy = iterStrategy;
               if (workerCollector) {
                 workerCollector.lastAssignment = currentAssignment;
+              }
+
+              // Trim session to stay within provider context window limits
+              const maxMessages = getRecommendedMaxMessages(
+                currentAssignment.providerName,
+                currentAssignment.modelId,
+                this.modelIntelligence,
+                this.providerManager.getProviderCapabilities?.(
+                  currentAssignment.providerName,
+                  currentAssignment.modelId,
+                ),
+                currentAssignment.providerName,
+              );
+              if (session.messages.length > maxMessages) {
+                session.messages = session.messages.slice(-maxMessages);
               }
 
               const response = await currentProvider.chat(
@@ -2617,6 +2633,7 @@ export class Orchestrator {
                 consecutiveMaxTokens++;
                 if (consecutiveMaxTokens >= 3) {
                   logger.error("max_tokens on 3 consecutive calls — aborting to prevent runaway accumulation", { chatId });
+                  maxTokensAbort = true;
                   break;
                 }
                 logger.warn("Background LLM response truncated by max_tokens — auto-continuing", {
@@ -2852,6 +2869,7 @@ export class Orchestrator {
                   iteration: bgIteration,
                   workspaceLease: options.workspaceLease,
                   systemPrompt,
+                  daemonMode: true,
                   emitProgress,
                   buildStructuredProgressSignal: (p, t, s, l) => this.buildStructuredProgressSignal(p, t, s, l),
                   getClarificationContext: () => this.getClarificationContext(),
@@ -2873,11 +2891,6 @@ export class Orchestrator {
                     toolCallCount: bgToolCallCount,
                     hitMaxIterations: false,
                   });
-                  await this.sessionManager.persistSessionToMemory(
-                    chatId,
-                    this.sessionManager.getVisibleTranscript(session),
-                    true,
-                  );
                   return finish(
                     bgEndAction.visibleText || "Task completed without output.",
                     bgEndAction.status ?? "completed",
@@ -3033,6 +3046,7 @@ export class Orchestrator {
               }
               // ─────────────────────────────────────────────────────────────────
             }
+            if (maxTokensAbort) break;
             const completedEpochCount = bgEpochCount;
             const continuedAfterBudget = this.canAutoContinueBackgroundEpoch(completedEpochCount);
 
@@ -3054,6 +3068,8 @@ export class Orchestrator {
 
             if (continuedAfterBudget) {
               taskPlanner.resetBudgetWindow();
+              consecutiveMaxTokens = 0;
+              controlLoopTracker.markVerificationClean(bgIteration);
               bgEpochCount++;
               continue;
             }
@@ -3386,6 +3402,10 @@ export class Orchestrator {
     } finally {
       this.monitorLifecycle?.requestEnd(resolveConversationScope(chatId, conversationId));
       clearInterval(typingInterval);
+      // Clear typing indicator on completion/error
+      if (supportsRichMessaging(this.channel)) {
+        this.channel.sendTypingStop?.(chatId);
+      }
       // Persist conversation summary (forced to ensure no messages are lost)
       const visibleMessages = this.sessionManager.getVisibleTranscript(session);
       await this.sessionManager.persistSessionToMemory(chatId, visibleMessages.slice(-10), /* force */ true);

@@ -25,6 +25,7 @@ import type { SupervisorAssignment, SupervisorExecutionStrategy } from "./orches
 import type { ConfidenceEstimator } from "../agent-core/routing/confidence-estimator.js";
 import type { MemoryRefresher } from "./memory-refresher.js";
 import type { ProviderResponse } from "./providers/provider.interface.js";
+import { getLoggerSafe } from "../utils/logger.js";
 
 // =============================================================================
 // Pattern 1: executeAndTrackTools
@@ -169,8 +170,8 @@ export async function refreshMemoryIfNeeded(
         }
       }
     }
-  } catch {
-    // Re-retrieval failure is non-fatal
+  } catch (err) {
+    getLoggerSafe().warn("Memory re-retrieval failed", { error: err instanceof Error ? err.message : String(err) });
   }
 
   return { systemPrompt, agentState };
@@ -257,8 +258,8 @@ export async function runConsensusIfAvailable(
       recordExecutionTrace: ctx.recordExecutionTrace,
       recordPhaseOutcome: ctx.recordPhaseOutcome,
     });
-  } catch {
-    // Consensus failure is non-fatal
+  } catch (err) {
+    getLoggerSafe().warn("Consensus verification failed", { error: err instanceof Error ? err.message : String(err) });
   }
 }
 

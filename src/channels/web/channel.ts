@@ -331,6 +331,10 @@ export class WebChannel
     this.sendToClient(chatId, { type: "typing", active: true });
   }
 
+  sendTypingStop(chatId: string): void {
+    this.sendToClient(chatId, { type: "typing", active: false, messageId: "" });
+  }
+
   async sendAttachment(chatId: string, attachment: Attachment): Promise<void> {
     this.sendToClient(chatId, {
       type: "text",
