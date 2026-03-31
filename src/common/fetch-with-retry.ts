@@ -82,7 +82,7 @@ export async function fetchWithRetry(
     // Calculate delay: prefer Retry-After header if available
     let delay: number;
     if (useRetryAfter && response.headers?.get) {
-      const retryAfterMs = parseInt(response.headers.get("retry-after") ?? "", 10) * 1000;
+      const retryAfterMs = parseFloat(response.headers.get("retry-after") ?? "") * 1000;
       delay = Number.isFinite(retryAfterMs) && retryAfterMs > 0
         ? Math.min(retryAfterMs, maxDelayMs)
         : baseDelayMs * Math.pow(2, attempt) + Math.random() * 100;
