@@ -975,8 +975,8 @@ export class DiscordChannel implements IChannelAdapter {
         if (!v.valid) continue; // Skip unsupported or oversized files
 
         let data: Buffer | undefined;
-        // Download image data for vision support + magic bytes validation
-        if (type === "image" && att.url) {
+        // Download image data for vision + audio data for STT transcription + magic bytes validation
+        if ((type === "image" || type === "audio") && att.url) {
           try {
             const downloaded = await downloadMedia(att.url);
             if (downloaded && validateMagicBytes(downloaded.data, downloaded.mimeType)) {

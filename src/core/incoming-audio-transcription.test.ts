@@ -16,6 +16,8 @@ function makeMessage(overrides: Partial<IncomingMessage> = {}): IncomingMessage 
 
 afterEach(() => {
   delete process.env["OPENAI_API_KEY"];
+  delete process.env["GROQ_API_KEY"];
+  delete process.env["STT_PROVIDER"];
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -105,5 +107,130 @@ describe("transcribeIncomingAudioMessage", () => {
 
     expect(result.shouldDrop).toBe(true);
     expect(result.userWarning).toContain("speech-to-text provider");
+  });
+
+  it("recognises Turkish voice placeholder and replaces it with transcript", async () => {
+    process.env["OPENAI_API_KEY"] = "sk-test";
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ text: "merhaba dünya" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    ));
+
+    const msg = makeMessage({
+      text: "(sesli mesaj)",
+      attachments: [
+        {
+          type: "audio",
+          name: "voice.webm",
+          mimeType: "audio/webm",
+          data: Buffer.from("voice-data"),
+          size: 10,
+        },
+      ],
+    });
+
+    const result = await transcribeIncomingAudioMessage(msg, "/tmp/project");
+
+    expect(result.shouldDrop).toBe(false);
+    expect(result.message.text).toBe("merhaba dünya");
+  });
+
+  it("uses Groq Whisper when OpenAI is unavailable", async () => {
+    process.env["GROQ_API_KEY"] = "gsk-test";
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ text: "hello from groq" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const msg = makeMessage({
+      text: "(voice message)",
+      attachments: [
+        {
+          type: "audio",
+          name: "voice.ogg",
+          mimeType: "audio/ogg",
+          data: Buffer.from("voice-data"),
+          size: 10,
+        },
+      ],
+    });
+
+    const result = await transcribeIncomingAudioMessage(msg, "/tmp/project");
+
+    expect(result.shouldDrop).toBe(false);
+    expect(result.message.text).toBe("hello from groq");
+    // Verify Groq endpoint was called
+    const calledUrl = fetchMock.mock.calls[0]?.[0];
+    expect(calledUrl).toContain("groq.com");
+  });
+
+  it("respects explicit STT_PROVIDER=groq even when OpenAI key is available", async () => {
+    process.env["OPENAI_API_KEY"] = "sk-test";
+    process.env["GROQ_API_KEY"] = "gsk-test";
+    process.env["STT_PROVIDER"] = "groq";
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ text: "groq transcript" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const msg = makeMessage({
+      text: "",
+      attachments: [
+        {
+          type: "audio",
+          name: "voice.ogg",
+          mimeType: "audio/ogg",
+          data: Buffer.from("voice-data"),
+          size: 10,
+        },
+      ],
+    });
+
+    const result = await transcribeIncomingAudioMessage(msg, "/tmp/project");
+
+    expect(result.shouldDrop).toBe(false);
+    expect(result.message.text).toBe("groq transcript");
+    const calledUrl = fetchMock.mock.calls[0]?.[0];
+    expect(calledUrl).toContain("groq.com");
+  });
+
+  it("recognises all i18n voice placeholders as non-meaningful text", async () => {
+    const placeholders = [
+      "(voice message)",
+      "(sesli mesaj)",
+      "(mensaje de voz)",
+      "(Sprachnachricht)",
+      "(음성 메시지)",
+      "(message vocal)",
+      "（语音消息）",
+      "(音声メッセージ)",
+    ];
+
+    for (const placeholder of placeholders) {
+      const msg = makeMessage({
+        text: placeholder,
+        attachments: [
+          {
+            type: "audio",
+            name: "voice.ogg",
+            mimeType: "audio/ogg",
+            data: Buffer.from("voice-data"),
+            size: 10,
+          },
+        ],
+      });
+
+      // Without any API key, voice-only messages with placeholder text should be dropped
+      const result = await transcribeIncomingAudioMessage(msg, "/tmp/project");
+      expect(result.shouldDrop).toBe(true);
+    }
   });
 });

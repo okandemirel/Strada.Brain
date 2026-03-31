@@ -4,16 +4,35 @@ import { SpeechToTextTool } from "../agents/tools/speech-to-text.js";
 import { isUrlSafeToFetch, normalizeMimeType, validateMagicBytes, validateMediaAttachment } from "../utils/media-processor.js";
 import { getLogger } from "../utils/logger.js";
 
+const GROQ_BASE_URL = "https://api.groq.com/openai/v1";
+const GROQ_WHISPER_MODEL = "whisper-large-v3-turbo";
+
 export interface IncomingAudioTranscriptionResult {
   message: IncomingMessage;
   shouldDrop: boolean;
   userWarning?: string;
 }
 
+/** Voice message placeholder texts across all supported languages (EN, TR, JA, KO, ZH, DE, ES, FR). */
 const VOICE_PLACEHOLDER_TEXTS = new Set([
+  // English
   "(voice message)",
   "[voice message]",
   "voice message",
+  // Turkish
+  "(sesli mesaj)",
+  // Spanish
+  "(mensaje de voz)",
+  // German — lowercase for case-insensitive match
+  "(sprachnachricht)",
+  // Korean
+  "(음성 메시지)",
+  // French
+  "(message vocal)",
+  // Chinese (full-width parentheses)
+  "（语音消息）",
+  // Japanese (full-width parentheses)
+  "(音声メッセージ)",
 ]);
 
 function isVoicePlaceholder(text: string): boolean {
@@ -46,6 +65,37 @@ function sliceBufferToArrayBuffer(data: Buffer): ArrayBuffer {
   const copy = new Uint8Array(data.byteLength);
   copy.set(data);
   return copy.buffer;
+}
+
+/**
+ * Resolve the best available STT provider.
+ * Priority: explicit STT_PROVIDER env → OpenAI → Groq → null.
+ */
+function resolveSpeechToTextTool(): SpeechToTextTool | null {
+  const explicitProvider = process.env["STT_PROVIDER"]?.toLowerCase().trim();
+
+  if (explicitProvider === "openai") {
+    const key = process.env["OPENAI_API_KEY"];
+    return key ? new SpeechToTextTool(key) : null;
+  }
+
+  if (explicitProvider === "groq") {
+    const key = process.env["GROQ_API_KEY"];
+    return key ? new SpeechToTextTool(key, GROQ_BASE_URL, GROQ_WHISPER_MODEL) : null;
+  }
+
+  // Auto-detect: try OpenAI first, then Groq
+  const openaiKey = process.env["OPENAI_API_KEY"];
+  if (openaiKey) {
+    return new SpeechToTextTool(openaiKey);
+  }
+
+  const groqKey = process.env["GROQ_API_KEY"];
+  if (groqKey) {
+    return new SpeechToTextTool(groqKey, GROQ_BASE_URL, GROQ_WHISPER_MODEL);
+  }
+
+  return null;
 }
 
 async function transcribeAudioAttachment(
@@ -119,22 +169,23 @@ export async function transcribeIncomingAudioMessage(
   }
 
   const hasText = hasMeaningfulText(msg.text);
-  const openaiKey = process.env["OPENAI_API_KEY"];
-  if (!openaiKey) {
+  const sttTool = resolveSpeechToTextTool();
+  if (!sttTool) {
     return {
       message: msg,
       shouldDrop: !hasText,
       userWarning: !hasText
-        ? "Voice transcription is unavailable because no compatible speech-to-text provider is configured."
+        ? "Voice transcription is unavailable because no compatible speech-to-text provider is configured. Set OPENAI_API_KEY or GROQ_API_KEY to enable voice support."
         : undefined,
     };
   }
 
-  const tool = new SpeechToTextTool(openaiKey);
-  const transcripts = await Promise.all(audioAttachments.map(async (attachment) => {
+  // Cap audio attachments to prevent API budget abuse (max 3 per message)
+  const cappedAttachments = audioAttachments.slice(0, 3);
+  const transcripts = await Promise.all(cappedAttachments.map(async (attachment) => {
     try {
-      const transcript = await transcribeAudioAttachment(tool, attachment, projectPath);
-      return transcript ? formatTranscriptBlock(attachment, transcript, audioAttachments.length) : null;
+      const transcript = await transcribeAudioAttachment(sttTool, attachment, projectPath);
+      return transcript ? formatTranscriptBlock(attachment, transcript, cappedAttachments.length) : null;
     } catch (error) {
       getLogger().warn("Audio attachment transcription threw an error", {
         name: attachment.name,

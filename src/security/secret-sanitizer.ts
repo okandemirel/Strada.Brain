@@ -94,6 +94,9 @@ export const DEFAULT_SECRET_PATTERNS: SecretPattern[] = [
     redaction: "[REDACTED_ANTHROPIC_KEY]",
   },
 
+  // Groq API keys
+  { name: "groq_api_key", pattern: /gsk_[a-zA-Z0-9]{20,}/g, redaction: "[REDACTED_GROQ_KEY]" },
+
   // Google/GCP keys
   { name: "gcp_api_key", pattern: /AIza[0-9A-Za-z_\-]{35}/g, redaction: "[REDACTED_GCP_KEY]" },
 

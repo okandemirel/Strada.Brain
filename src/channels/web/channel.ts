@@ -90,8 +90,24 @@ const PACKAGED_STATIC_DIR = fileURLToPath(new URL("static/", import.meta.url));
 const SOURCE_BUILD_STATIC_DIR = resolve(MODULE_DIR, "../../../web-portal/dist");
 const SETUP_CACHE_BUST_PARAM = "t";
 const WEB_PLACEHOLDER_TEXTS = new Set([
+  // Voice message placeholders (all supported languages)
   "(voice message)",
+  "(sesli mesaj)",
+  "(mensaje de voz)",
+  "(sprachnachricht)",
+  "(음성 메시지)",
+  "(message vocal)",
+  "（语音消息）",
+  "(音声メッセージ)",
+  // File attachment placeholders (all supported languages)
   "(file attachment)",
+  "(dosya eki)",
+  "(archivo adjunto)",
+  "(dateianhang)",
+  "(파일 첨부)",
+  "(piece jointe)",
+  "（文件附件）",
+  "(ファイル添付)",
 ]);
 
 function isFrontendPlaceholderText(text: string): boolean {

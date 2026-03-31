@@ -8,6 +8,13 @@
 import type { ITool, ToolContext, ToolExecutionResult } from "./tool.interface.js";
 import { getLogger } from "../../utils/logger.js";
 import { fetchWithRetry } from "../../common/fetch-with-retry.js";
+import { isUrlSafeToFetch } from "../../utils/media-processor.js";
+import { sanitizeSecrets } from "../../security/secret-sanitizer.js";
+
+/** Strip tokens from Telegram-style bot URLs for safe logging. */
+function sanitizeUrlForLog(url: string): string {
+  return url.replace(/\/bot[^/]+\//, "/bot****/");
+}
 
 const MAX_AUDIO_SIZE_MB = 25; // Whisper API limit
 
@@ -60,15 +67,15 @@ export class SpeechToTextTool implements ITool {
 
       const transcript = await this.transcribe(audioData, language);
       logger.debug("Speech-to-text transcription completed", {
-        audioUrl,
+        audioUrl: sanitizeUrlForLog(audioUrl),
         transcriptLength: transcript.length,
       });
 
       return { content: transcript };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      logger.warn("Speech-to-text failed", { audioUrl, error: msg });
-      return { content: `Transcription failed: ${msg}`, isError: true };
+      logger.warn("Speech-to-text failed", { audioUrl: sanitizeUrlForLog(audioUrl), error: sanitizeSecrets(msg) });
+      return { content: `Transcription failed: ${sanitizeSecrets(msg)}`, isError: true };
     }
   }
 
@@ -101,7 +108,10 @@ export class SpeechToTextTool implements ITool {
     const maxBytes = MAX_AUDIO_SIZE_MB * 1024 * 1024;
 
     if (url.startsWith("http://") || url.startsWith("https://")) {
-      const response = await fetchWithRetry(url, {}, { maxRetries: 2, callerName: "AudioFetch" });
+      if (!isUrlSafeToFetch(url)) {
+        throw new Error("Audio URL blocked by SSRF protection");
+      }
+      const response = await fetchWithRetry(url, { redirect: "error" }, { maxRetries: 2, callerName: "AudioFetch" });
       const contentLength = parseInt(response.headers.get("content-length") ?? "", 10);
       if (contentLength > maxBytes) {
         throw new Error(`Audio file exceeds ${MAX_AUDIO_SIZE_MB}MB limit (${contentLength} bytes)`);
