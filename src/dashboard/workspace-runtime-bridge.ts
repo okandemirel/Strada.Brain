@@ -196,6 +196,9 @@ export function createWorkspaceRuntimeBridge(params: {
           return;
         }
 
+        const newReviewStatus = typeof bag.reviewStatus === "string" ? bag.reviewStatus :
+          (newStatus === "pending" ? "none" : undefined);
+
         goalStorage.updateNodeStatus(
           node.id,
           newStatus as GoalStatus,
@@ -204,6 +207,13 @@ export function createWorkspaceRuntimeBridge(params: {
           node.retryCount,
           node.redecompositionCount,
         );
+
+        workspaceBus.emit("monitor:task_update", {
+          rootId: action.rootId!,
+          nodeId: action.nodeId!,
+          status: newStatus,
+          ...(newReviewStatus ? { reviewStatus: newReviewStatus } : {}),
+        });
 
         emitNotification(
           workspaceBus,

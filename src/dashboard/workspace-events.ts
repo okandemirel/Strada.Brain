@@ -44,6 +44,7 @@ export function goalTreeToDagPayload(goalTree: GoalTree): DagPayload {
 export interface WorkspaceEventMap {
   [key: string]: unknown
   // === Monitor events (Phase 3 — full payloads) ===
+  'monitor:clear': Record<string, never>
   'monitor:dag_init': {
     rootId: string
     nodes: DagNodeShape[]
