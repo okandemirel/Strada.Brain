@@ -58,6 +58,9 @@ interface WsClient {
 interface RecentlyDisconnectedSession {
   disconnectedAt: number;
   reconnectToken: string;
+  /** Carry rate-limit state across reconnects to prevent bypass. */
+  msgCount?: number;
+  windowStart?: number;
 }
 
 interface SessionReclaimResult {
@@ -68,6 +71,8 @@ interface SessionReclaimResult {
 interface PendingConfirmation {
   resolve: (value: string) => void;
   timer: ReturnType<typeof setTimeout>;
+  /** chatId of the session that owns this confirmation. */
+  chatId?: string;
 }
 
 interface WebChannelOptions {
@@ -354,7 +359,7 @@ export class WebChannel
         5 * 60 * 1000,
       );
 
-      this.pendingConfirmations.set(confirmId, { resolve: done, timer });
+      this.pendingConfirmations.set(confirmId, { resolve: done, timer, chatId: req.chatId });
     });
   }
 
@@ -369,6 +374,8 @@ export class WebChannel
     streamId: string,
     accumulatedText: string,
   ): Promise<void> {
+    // TODO: stream_update sends full accumulated text on every update.
+    // For large responses this creates O(n^2) bandwidth. Consider delta protocol.
     this.sendToClient(chatId, { type: "stream_update", streamId, text: accumulatedText });
   }
 
@@ -505,7 +512,8 @@ export class WebChannel
     };
     this.clients.set(chatId, client);
 
-    // Send welcome with chatId
+    // Note: A temporary 'connected' event is sent immediately, then replaced
+    // by the full 'connected' event after session_init with profileId/language.
     this.sendJson(ws, { type: "connected", chatId, reconnectToken: client.reconnectToken });
 
     ws.on("message", (raw) => {
@@ -526,28 +534,22 @@ export class WebChannel
       }
     });
 
-    ws.on("close", () => {
+    const handleDisconnect = () => {
       const current = this.clients.get(chatId);
       if (current && current.ws === ws) {
         this.clients.delete(chatId);
-        // Allow reconnect within TTL window
+        // Allow reconnect within TTL window; carry rate-limit state
         this.recentlyDisconnected.set(chatId, {
           disconnectedAt: Date.now(),
           reconnectToken: current.reconnectToken,
+          msgCount: current.msgCount,
+          windowStart: current.windowStart,
         });
       }
-    });
+    };
 
-    ws.on("error", () => {
-      const current = this.clients.get(chatId);
-      if (current && current.ws === ws) {
-        this.clients.delete(chatId);
-        this.recentlyDisconnected.set(chatId, {
-          disconnectedAt: Date.now(),
-          reconnectToken: current.reconnectToken,
-        });
-      }
-    });
+    ws.on("close", handleDisconnect);
+    ws.on("error", handleDisconnect);
   }
 
   private tryReclaimSession(
@@ -586,6 +588,16 @@ export class WebChannel
       }
     }
 
+    // Restore rate-limit state from disconnected session to prevent bypass via reconnect
+    if (disconnectedSession?.msgCount != null) {
+      const windowStillActive = disconnectedSession.windowStart != null
+        && (now - disconnectedSession.windowStart) < WS_RATE_WINDOW_MS;
+      if (windowStillActive) {
+        client.msgCount = disconnectedSession.msgCount;
+        client.windowStart = disconnectedSession.windowStart!;
+      }
+    }
+
     this.recentlyDisconnected.delete(oldId);
     this.clients.delete(client.chatId);
 
@@ -612,6 +624,10 @@ export class WebChannel
       if (reclaimed) {
         chatId = reclaimed.chatId;
         reconnectToken = reclaimed.reconnectToken;
+        // TODO: DAG replay on reconnect — if there's an active goal tree,
+        // re-emit monitor:dag_init + current node statuses so the portal
+        // can reconstruct the monitor view. Currently the client gets a
+        // blank monitor until the next DAG event arrives.
       }
     }
 
@@ -673,12 +689,6 @@ export class WebChannel
 
         if (!text && (!rawAttachments || rawAttachments.length === 0)) return;
         if (!this.handler) return;
-        if (clientMessageId) {
-          this.sendToClient(chatId, {
-            type: "message_received",
-            clientMessageId,
-          });
-        }
 
         // Convert base64 attachments to Attachment[] with validation
         const attachments: Attachment[] = [];
@@ -723,6 +733,14 @@ export class WebChannel
           }
         }
 
+        // ACK after attachment validation so the client knows the message was accepted
+        if (clientMessageId) {
+          this.sendToClient(chatId, {
+            type: "message_received",
+            clientMessageId,
+          });
+        }
+
         const normalizedText = limitIncomingText(text || "");
         if (!normalizedText && attachments.length === 0) {
           return;
@@ -755,11 +773,19 @@ export class WebChannel
         const confirmId = String(data.confirmId ?? "");
         const option = String(data.option ?? "");
         const pending = this.pendingConfirmations.get(confirmId);
-        if (pending) {
-          clearTimeout(pending.timer);
-          this.pendingConfirmations.delete(confirmId);
-          pending.resolve(option);
+        if (!pending) break;
+        // Verify the confirmation belongs to this client's session
+        if (pending.chatId && pending.chatId !== chatId) {
+          this.sendToClient(chatId, {
+            type: "text",
+            text: "Confirmation does not belong to this session.",
+            messageId: randomUUID(),
+          });
+          break;
         }
+        clearTimeout(pending.timer);
+        this.pendingConfirmations.delete(confirmId);
+        pending.resolve(option);
         break;
       }
 

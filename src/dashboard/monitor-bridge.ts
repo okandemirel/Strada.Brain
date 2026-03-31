@@ -15,6 +15,7 @@ export function createMonitorBridge(
     start() {
       // All workspace events forwarded to connected WS clients
       const FORWARDED_EVENTS = [
+        'monitor:clear',
         'monitor:dag_init',
         'monitor:task_update',
         'monitor:review_result',

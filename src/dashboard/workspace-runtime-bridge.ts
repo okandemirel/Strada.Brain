@@ -196,7 +196,8 @@ export function createWorkspaceRuntimeBridge(params: {
           return;
         }
 
-        const newReviewStatus = newStatus === "pending" ? "none" : undefined;
+        const newReviewStatus = typeof bag.reviewStatus === "string" ? bag.reviewStatus :
+          (newStatus === "pending" ? "none" : undefined);
         goalStorage.updateNodeStatus(
           node.id,
           newStatus as GoalStatus,
@@ -206,11 +207,9 @@ export function createWorkspaceRuntimeBridge(params: {
           node.redecompositionCount,
         );
 
-        // Broadcast the status change back to the frontend so all
-        // connected clients reflect the move (not just the initiator).
         workspaceBus.emit("monitor:task_update", {
-          rootId: action.rootId,
-          nodeId: action.nodeId,
+          rootId: action.rootId!,
+          nodeId: action.nodeId!,
           status: newStatus,
           ...(newReviewStatus ? { reviewStatus: newReviewStatus } : {}),
         });

@@ -269,6 +269,9 @@ export class SupervisorBrain {
     this.activeAbortControllers.add(internalController);
 
     try {
+      // Clear stale monitor state before a new supervisor run
+      this.emitter?.emit("monitor:clear", {});
+
       // Step 2: Emit supervisor:activated
       this.emitter?.emit("supervisor:activated", {
         taskId: context.chatId,

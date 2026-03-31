@@ -19,8 +19,10 @@ export function createLearningWorkspaceBridge(
     start() {
       // tool:result → monitor:agent_activity
       const onToolResult = (event: LearningEventMap['tool:result']) => {
+        // Forward taskId when the event carries one (e.g. from supervisor node execution)
+        const taskId = (event as Record<string, unknown>).taskId;
         workspaceBus.emit('monitor:agent_activity', {
-          taskId: undefined,
+          taskId: typeof taskId === 'string' ? taskId : undefined,
           action: 'tool_execute',
           tool: event.toolName,
           detail: `${event.toolName}: ${event.success ? 'success' : 'failed'}`,
