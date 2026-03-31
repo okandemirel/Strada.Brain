@@ -13,6 +13,7 @@ import { getTaskProgressMessage, toTaskProgressSignal } from "./progress-signals
 import type { TaskStorage } from "./task-storage.js";
 import type { BackgroundExecutor } from "./background-executor.js";
 import { getLogger } from "../utils/logger.js";
+import { sanitizeSecrets } from "../security/secret-sanitizer.js";
 import type { TaskOrigin } from "../daemon/daemon-types.js";
 import type { GoalTree } from "../goals/types.js";
 import type { GoalNodeId } from "../goals/types.js";
@@ -335,7 +336,7 @@ export class TaskManager extends EventEmitter {
    * Mark a task as blocked with a checkpoint summary.
    */
   block(taskId: TaskId, result: string): void {
-    const sanitizedResult = stripVisibleProviderArtifacts(result);
+    const sanitizedResult = sanitizeSecrets(stripVisibleProviderArtifacts(result));
     this.storage.updateBlocked(taskId, sanitizedResult);
     this.abortControllers.delete(taskId);
     this.emit("task:blocked", taskId, sanitizedResult);

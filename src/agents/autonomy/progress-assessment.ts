@@ -1,6 +1,7 @@
 import type { AgentState } from "../agent-state.js";
 import { extractPromptTargets as extractPromptTargetsHelper } from "../prompt-targets.js";
 import { MUTATION_TOOLS, isVerificationToolName } from "./constants.js";
+import { sanitizeSecrets } from "../../security/secret-sanitizer.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -84,7 +85,7 @@ export function buildBehavioralSnapshot(params: BuildBehavioralSnapshotParams): 
     : now - params.taskStartedAtMs;
 
   return {
-    prompt: params.prompt.slice(0, 200),
+    prompt: sanitizeSecrets(params.prompt.slice(0, 200)),
     promptTargets: extractPromptTargets(params.prompt),
     currentPhase: state.phase,
     totalStepCount: state.stepResults.length,
@@ -257,7 +258,7 @@ export function buildStuckCheckpointMessage(
   const lines = [
     "Blocked checkpoint: The agent is stuck in a repeated analysis/clarification loop.",
     "",
-    `Task: ${prompt.slice(0, 200)}`,
+    `Task: ${sanitizeSecrets(prompt.slice(0, 200))}`,
     `Assessment: ${assessment.verdict} (${assessment.confidence} confidence)`,
     assessment.directive ? `Suggested action: ${assessment.directive}` : "",
     "",

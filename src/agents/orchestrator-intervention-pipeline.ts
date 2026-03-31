@@ -92,6 +92,7 @@ import { shouldDeferRawBoundaryForDirectTarget } from "./prompt-targets.js";
 import type { Session } from "./orchestrator-session-manager.js";
 import { toPhaseOutcomeStatus as toPhaseOutcomeStatusModel } from "./orchestrator-phase-telemetry.js";
 import { getLogger, type LogEntry } from "../utils/logger.js";
+import { sanitizeSecrets } from "../security/secret-sanitizer.js";
 import { randomUUID } from "node:crypto";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -353,7 +354,7 @@ export function buildLoopRecoveryCheckpointMessage(params: {
   decision: LoopRecoveryReviewDecision;
   touchedFiles: readonly string[];
 }): string {
-  const title = params.prompt.replace(/\s+/g, " ").trim().slice(0, 80) || "Task checkpoint";
+  const title = sanitizeSecrets(params.prompt.replace(/\s+/g, " ").trim().slice(0, 80) || "Task checkpoint");
   const touched = params.touchedFiles.slice(0, 5).map((file) => `- ${file}`);
   const progress = params.brief.recentUserFacingProgress.slice(-3).map((line) => `- ${line}`);
   return [

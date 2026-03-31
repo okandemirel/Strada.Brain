@@ -53,13 +53,13 @@ const buildEnvPattern = (keys: string[]): RegExp =>
 // ─── Default Patterns ────────────────────────────────────────────────────────
 
 export const DEFAULT_SECRET_PATTERNS: SecretPattern[] = [
-  // API Keys (specific patterns first)
-  { name: "openai_api_key", pattern: buildKeyPattern("sk-"), redaction: "[REDACTED_OPENAI_KEY]" },
+  // API Keys (most specific patterns first to prevent greedy matches)
   {
     name: "openai_project_key",
-    pattern: buildKeyPattern("sk-proj-", "-"),
+    pattern: buildKeyPattern("sk-proj-", "\\-"),
     redaction: "[REDACTED_OPENAI_PROJECT_KEY]",
   },
+  { name: "openai_api_key", pattern: buildKeyPattern("sk-", "\\-"), redaction: "[REDACTED_OPENAI_KEY]" },
   {
     name: "github_token",
     pattern: /gh[pousr]_[a-zA-Z0-9]{20,}/g,
