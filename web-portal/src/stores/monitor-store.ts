@@ -128,8 +128,8 @@ export const useMonitorStore = create<MonitorState>()((set) => ({
         if (idx >= 0) {
           const updatedNodes = [...s.dag.nodes]
           const dagUpdates: Record<string, unknown> = {}
-          if (updates.status) dagUpdates.status = updates.status
-          if (updates.reviewStatus) dagUpdates.reviewStatus = updates.reviewStatus
+          if (updates.status !== undefined) dagUpdates.status = updates.status
+          if (updates.reviewStatus !== undefined) dagUpdates.reviewStatus = updates.reviewStatus
           updatedNodes[idx] = { ...updatedNodes[idx], ...dagUpdates }
           newDag = { ...s.dag, nodes: updatedNodes }
         }

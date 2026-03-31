@@ -3,6 +3,7 @@ import { Outlet } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { WebSocketProvider } from '../../contexts/WebSocketContext'
 import { TooltipProvider } from '../ui/tooltip'
+import ErrorBoundary from '../ErrorBoundary'
 import Sidebar from './Sidebar'
 import PanelLayout from '../workspace/PanelLayout'
 import BottomTabBar from './BottomTabBar'
@@ -16,43 +17,45 @@ const MonitorPanel = lazy(() => import('../monitor/MonitorPanel'))
 const CanvasPanel = lazy(() => import('../canvas/CanvasPanel'))
 const CodePanel = lazy(() => import('../code/CodePanel'))
 
+function PanelFallback({ label }: { label: string }) {
+  return (
+    <div className="flex items-center justify-center h-full text-text-tertiary text-sm">
+      {label}
+    </div>
+  )
+}
+
 function PrimaryContent() {
   const { t } = useTranslation()
   const mode = useWorkspaceStore((s) => s.mode)
 
   if (mode === 'monitor') {
     return (
-      <Suspense
-        fallback={
-          <div className="flex items-center justify-center h-full text-text-tertiary text-sm">
-            {t('workspace.loading.monitor')}
-          </div>
-        }
-      >
-        <MonitorPanel />
-      </Suspense>
+      <ErrorBoundary>
+        <Suspense fallback={<PanelFallback label={t('workspace.loading.monitor')} />}>
+          <MonitorPanel />
+        </Suspense>
+      </ErrorBoundary>
     )
   }
 
   if (mode === 'canvas') {
     return (
-      <Suspense fallback={<div>{t('workspace.loading.canvas')}</div>}>
-        <CanvasPanel />
-      </Suspense>
+      <ErrorBoundary>
+        <Suspense fallback={<PanelFallback label={t('workspace.loading.canvas')} />}>
+          <CanvasPanel />
+        </Suspense>
+      </ErrorBoundary>
     )
   }
 
   if (mode === 'code') {
     return (
-      <Suspense
-        fallback={
-          <div className="flex items-center justify-center h-full text-text-tertiary text-sm">
-            {t('workspace.loading.code')}
-          </div>
-        }
-      >
-        <CodePanel />
-      </Suspense>
+      <ErrorBoundary>
+        <Suspense fallback={<PanelFallback label={t('workspace.loading.code')} />}>
+          <CodePanel />
+        </Suspense>
+      </ErrorBoundary>
     )
   }
 

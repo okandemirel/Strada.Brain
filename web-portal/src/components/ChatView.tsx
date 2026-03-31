@@ -71,9 +71,9 @@ export default function ChatView() {
                 voiceOutputEnabled={voice.outputEnabled}
               />
             ))}
-            {isTyping && (
+            {(isTyping || messages.some(m => m.isStreaming)) && (
               <div className="flex items-center gap-2">
-                <TypingIndicator />
+                {isTyping && <TypingIndicator />}
                 <button
                   onClick={() => sendRawJSON({ type: 'cancel_task' })}
                   className="shrink-0 rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-text-secondary transition-colors hover:border-rose-400/30 hover:bg-rose-400/10 hover:text-rose-300"

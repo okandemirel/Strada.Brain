@@ -7,9 +7,28 @@ export default function ActivityFeed() {
   const { t } = useTranslation('monitor')
   const activities = useMonitorStore((s) => s.activities)
   const bottomRef = useRef<HTMLDivElement>(null)
+  const userScrolledUpRef = useRef(false)
+  const containerRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+    const container = containerRef.current
+    if (!container) return
+
+    const handleScroll = () => {
+      const threshold = 100
+      const atBottom =
+        container.scrollHeight - container.scrollTop - container.clientHeight < threshold
+      userScrolledUpRef.current = !atBottom
+    }
+
+    container.addEventListener('scroll', handleScroll)
+    return () => container.removeEventListener('scroll', handleScroll)
+  }, [])
+
+  useEffect(() => {
+    if (!userScrolledUpRef.current) {
+      bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+    }
   }, [activities.length])
 
   if (activities.length === 0) {
@@ -26,7 +45,7 @@ export default function ActivityFeed() {
   }
 
   return (
-    <div className="flex h-full flex-col overflow-y-auto px-3 pb-3 pt-1 text-xs">
+    <div ref={containerRef} className="flex h-full flex-col overflow-y-auto px-3 pb-3 pt-1 text-xs">
       <div className="sticky top-0 z-[1] mb-3 flex items-center justify-between rounded-xl border border-white/6 bg-bg/80 px-3 py-2 backdrop-blur">
         <div>
           <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-text-tertiary">
