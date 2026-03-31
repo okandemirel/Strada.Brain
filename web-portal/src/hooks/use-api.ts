@@ -510,10 +510,11 @@ export function useMaintenance() {
 }
 
 /** GET /api/personality */
-export function usePersonality() {
+export function usePersonality(chatId?: string | null) {
+  const query = chatId ? `?chatId=${encodeURIComponent(chatId)}` : ''
   return useQuery<PersonalityResponse>({
-    queryKey: ['personality'],
-    queryFn: () => fetchApi<PersonalityResponse>('/api/personality'),
+    queryKey: ['personality', chatId ?? 'global'],
+    queryFn: () => fetchApi<PersonalityResponse>(`/api/personality${query}`),
     refetchInterval: false, // personality rarely changes; mutations will invalidate
     refetchOnMount: 'always', // ensure fresh data after onboarding or profile switch
   })

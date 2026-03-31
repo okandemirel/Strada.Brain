@@ -3,10 +3,12 @@ import { useTranslation } from 'react-i18next'
 import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { usePersonality } from '../../hooks/use-api'
+import { useWS } from '../../hooks/useWS'
 
 export default function PersonaSection() {
   const { t } = useTranslation('settings')
-  const { data, isLoading } = usePersonality()
+  const { sessionId } = useWS()
+  const { data, isLoading } = usePersonality(sessionId)
   const queryClient = useQueryClient()
   const [switching, setSwitching] = useState<string | null>(null)
 
@@ -16,7 +18,7 @@ export default function PersonaSection() {
       const res = await fetch('/api/personality/switch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ profile }),
+        body: JSON.stringify({ profile, chatId: sessionId }),
       })
       if (!res.ok) throw new Error('Failed to switch profile')
       toast.success(t('persona.toastSwitched', { profile }))
