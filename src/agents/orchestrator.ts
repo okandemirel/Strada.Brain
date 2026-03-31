@@ -2598,6 +2598,28 @@ export class Orchestrator {
                 options.onUsage ?? this.onUsage,
               );
 
+              // ─── max_tokens truncation: auto-continue instead of terminating ──
+              // When a provider hits its output token limit the response is
+              // truncated mid-text and `stopReason === "max_tokens"`.  Without
+              // this guard the `toolCalls.length === 0` condition below would
+              // route the incomplete text through the end-turn handler, causing
+              // the background task to finish prematurely — a critical failure in
+              // daemon / autonomous mode where the agent must keep working.
+              if (response.stopReason === "max_tokens" && response.toolCalls.length === 0) {
+                logger.warn("Background LLM response truncated by max_tokens — auto-continuing", {
+                  chatId,
+                  epoch: bgEpochCount,
+                  iteration: bgIteration,
+                  textLength: response.text?.length ?? 0,
+                });
+                session.messages.push(
+                  { role: "assistant", content: response.text ?? "" },
+                  { role: "user", content: "Your previous response was cut off due to output length limits. Continue exactly where you left off." },
+                );
+                continue;
+              }
+              // ────────────────────────────────────────────────────────────────
+
               // ─── PAOR: Handle REFLECTING phase response ─────────────────────
               if (bgAgentState.phase === AgentPhase.REFLECTING) {
                 const { decision } = await processReflectionPreamble({
@@ -3648,6 +3670,25 @@ export class Orchestrator {
           toolTurnAffinity = currentAssignment;
         }
         this.recordProviderUsage(currentAssignment.providerName, response.usage, this.onUsage);
+
+        // ─── max_tokens truncation: auto-continue instead of terminating ──
+        // Mirror of the background loop guard.  In interactive mode a truncated
+        // response is equally wrong to present as "final".  Push it into the
+        // conversation and ask the model to continue.
+        if (response.stopReason === "max_tokens" && response.toolCalls.length === 0) {
+          const logger = getLogger();
+          logger.warn("Interactive LLM response truncated by max_tokens — auto-continuing", {
+            chatId,
+            iteration: agentState.iteration,
+            textLength: response.text?.length ?? 0,
+          });
+          session.messages.push(
+            { role: "assistant", content: response.text ?? "" },
+            { role: "user", content: "Your previous response was cut off due to output length limits. Continue exactly where you left off." },
+          );
+          continue;
+        }
+        // ────────────────────────────────────────────────────────────────
 
         // ─── PAOR: Handle REFLECTING phase response ─────────────────────
         if (agentState.phase === AgentPhase.REFLECTING) {

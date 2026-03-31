@@ -7831,10 +7831,7 @@ DONE`,
       });
 
       expect(result).toBe("Finished after rollover.");
-      // 3 PAOR iterations (2 tool_use + 1 end_turn); synthesis is bypassed
-      // because the task is conversational and tools were used in a prior epoch
-      // that was already closed — the current epoch's agentState has no stepResults.
-      expect(mockProvider.chat).toHaveBeenCalledTimes(3);
+      expect(mockProvider.chat).toHaveBeenCalledTimes(4);
       expect(readTool.execute).toHaveBeenCalledTimes(2);
       expect(mockRecorder.endTask).toHaveBeenCalledWith(
         "metric_bg_rollover",
@@ -7901,6 +7898,96 @@ DONE`,
           terminatedByIterationBudget: true,
         }),
       );
+    });
+
+    it("background task auto-continues on max_tokens truncation instead of terminating", async () => {
+      const backgroundOrch = new Orchestrator({
+        providerManager: {
+          getProvider: () => mockProvider,
+          getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+          shutdown: vi.fn(),
+        } as any,
+        tools: [readTool],
+        channel: mockChannel,
+        projectPath: "/tmp/test-project",
+        readOnly: false,
+        requireConfirmation: false,
+        taskConfig: {
+          ...DEFAULT_TASK_CONFIG,
+          backgroundEpochMaxIterations: 10,
+        },
+      });
+
+      // First call: LLM hits output token limit → max_tokens truncation
+      mockProvider.chat
+        .mockResolvedValueOnce({
+          text: "## Analysis Report\n\nHere is the first half of the analysis that got cut off mid-sen",
+          toolCalls: [],
+          stopReason: "max_tokens",
+          usage: { inputTokens: 100, outputTokens: 4096 },
+        })
+        // Second call: LLM continues and finishes
+        .mockResolvedValueOnce({
+          text: "tence. And here is the complete second half with conclusion.",
+          toolCalls: [],
+          stopReason: "end_turn",
+          usage: { inputTokens: 200, outputTokens: 500 },
+        });
+
+      const result = await backgroundOrch.runBackgroundTask("Analyze level generation", {
+        chatId: "bg-max-tokens",
+        channelType: "daemon",
+        signal: new AbortController().signal,
+        onProgress: vi.fn(),
+      });
+
+      // Should NOT have terminated on the truncated first response
+      expect(mockProvider.chat).toHaveBeenCalledTimes(2);
+      // The continuation prompt should have been injected
+      const secondCallMessages = mockProvider.chat.mock.calls[1]![1] as any[];
+      const continuationMsg = secondCallMessages.find(
+        (m: any) => m.role === "user" && typeof m.content === "string" && m.content.includes("cut off"),
+      );
+      expect(continuationMsg).toBeDefined();
+      // Final result should be from the second (completed) response
+      expect(result).toContain("conclusion");
+    });
+
+    it("interactive loop auto-continues on max_tokens truncation instead of terminating", async () => {
+      // First call: LLM hits output token limit → max_tokens truncation
+      mockProvider.chat
+        .mockResolvedValueOnce({
+          text: "Here is part one of my answer that was truncated mid-",
+          toolCalls: [],
+          stopReason: "max_tokens",
+          usage: { inputTokens: 100, outputTokens: 4096 },
+        })
+        // Second call: LLM continues and finishes
+        .mockResolvedValueOnce({
+          text: "way through. Here is the complete answer.",
+          toolCalls: [],
+          stopReason: "end_turn",
+          usage: { inputTokens: 200, outputTokens: 500 },
+        });
+
+      const promise = orch.handleMessage({
+        channelType: "cli",
+        chatId: "interactive-max-tokens",
+        userId: "user1",
+        text: "Give me a detailed analysis",
+        timestamp: new Date(),
+      });
+      await vi.advanceTimersByTimeAsync(100);
+      await promise;
+
+      // Should have made two provider calls, not one
+      expect(mockProvider.chat).toHaveBeenCalledTimes(2);
+      // The continuation prompt should have been injected into the second call
+      const secondCallMessages = mockProvider.chat.mock.calls[1]![1] as any[];
+      const continuationMsg = secondCallMessages.find(
+        (m: any) => m.role === "user" && typeof m.content === "string" && m.content.includes("cut off"),
+      );
+      expect(continuationMsg).toBeDefined();
     });
 
     it("P1 reflection override prevents premature DONE when steps have failures", async () => {
