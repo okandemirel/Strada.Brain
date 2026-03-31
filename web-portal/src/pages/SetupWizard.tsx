@@ -24,16 +24,18 @@ export default function SetupWizard() {
     return (
       <div className="setup-container">
         <div className="setup-card">
-          <h1>
-            {wiz.setupAvailability === 'checking'
-              ? t('wizard.checking.title')
-              : t('wizard.unavailable.title')}
-          </h1>
-          <p>
-            {wiz.setupAvailability === 'checking'
-              ? t('wizard.checking.description')
-              : wiz.setupUnavailableReason}
-          </p>
+          <div className="setup-card-body">
+            <h1>
+              {wiz.setupAvailability === 'checking'
+                ? t('wizard.checking.title')
+                : t('wizard.unavailable.title')}
+            </h1>
+            <p>
+              {wiz.setupAvailability === 'checking'
+                ? t('wizard.checking.description')
+                : wiz.setupUnavailableReason}
+            </p>
+          </div>
         </div>
       </div>
     )
@@ -42,6 +44,7 @@ export default function SetupWizard() {
   return (
     <div className="setup-container">
       <div className="setup-card">
+        <div className="setup-card-body">
         <ProgressBar step={wiz.step} totalSteps={5} />
 
         {wiz.step === 1 && (
@@ -150,6 +153,7 @@ export default function SetupWizard() {
             onSave={wiz.save}
           />
         )}
+        </div>
       </div>
 
       {browser.isOpen && (
