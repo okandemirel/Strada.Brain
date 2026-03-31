@@ -21,6 +21,7 @@ export class Daemon {
   private readonly entryPoint: string;
   private readonly args: string[];
   private restartTimer: ReturnType<typeof setTimeout> | null = null;
+  private signalHandlersRegistered = false;
 
   constructor(opts: {
     entryPoint?: string;
@@ -157,6 +158,9 @@ export class Daemon {
   }
 
   private setupSignalHandlers(): void {
+    if (this.signalHandlersRegistered) return;
+    this.signalHandlersRegistered = true;
+
     const handleSignal = (signal: string) => {
       const logger = getLogger();
       logger.info(`Daemon received ${signal}`);

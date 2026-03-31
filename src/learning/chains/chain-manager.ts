@@ -94,7 +94,7 @@ export class ChainManager {
   private loadExistingChains(): void {
     const chainInstincts = this.learningStorage
       .getInstincts({ type: "tool_chain" })
-      .filter((i) => i.status === "active" || i.status === "permanent");
+      .filter((i) => i.status === "active" || i.status === "permanent" || i.status === "proposed");
 
     for (const instinct of chainInstincts) {
       try {

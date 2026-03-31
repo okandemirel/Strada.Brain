@@ -25,9 +25,20 @@ export async function readSkillConfig(): Promise<SkillConfig> {
   try {
     const raw = await readFile(skillsJsonPath(), "utf-8");
     const parsed = JSON.parse(raw) as SkillConfig;
-    // Ensure the entries field exists
+    // Basic runtime validation
+    if (!parsed || typeof parsed !== "object") return { entries: {} };
     if (!parsed.entries || typeof parsed.entries !== "object") {
       return { entries: {} };
+    }
+    // Validate each entry has the correct shape
+    for (const [key, entry] of Object.entries(parsed.entries)) {
+      if (typeof entry !== "object" || entry === null) {
+        delete parsed.entries[key];
+        continue;
+      }
+      if (typeof (entry as Record<string, unknown>).enabled !== "boolean") {
+        (entry as Record<string, unknown>).enabled = true; // Default to enabled
+      }
     }
     return parsed;
   } catch {

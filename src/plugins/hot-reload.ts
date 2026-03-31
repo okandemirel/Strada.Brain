@@ -4,11 +4,12 @@ import { getLogger } from "../utils/logger.js";
 /**
  * Hot reload event types
  */
-export type HotReloadEventType = 
-  | "add" 
-  | "change" 
-  | "unlink" 
-  | "reload_success" 
+export type HotReloadEventType =
+  | "add"
+  | "change"
+  | "unlink"
+  | "reload_success"
+  | "reload_detected"
   | "reload_error";
 
 /**
@@ -260,25 +261,21 @@ export class PluginHotReload {
    * Handle the actual reload
    */
   private async handleReload(type: HotReloadEventType, path: string): Promise<void> {
-    this.logger.info(`Reloading plugin: ${path}`, { type });
+    this.logger.info(`Plugin file changed: ${path}`, { type });
 
     try {
-      // Clear module cache for the changed file
-      const modulePath = await import("path");
-      const absolutePath = modulePath.resolve(path);
-      
-      if (require.cache?.[absolutePath]) {
-        delete require.cache[absolutePath];
-      }
+      // ESM modules cannot be invalidated from cache.
+      // Full process restart is required for changes to take effect.
+      // The watcher detects changes for notification purposes only.
 
-      // Emit success event
+      // Emit detected event
       this.emitEvent({
-        type: "reload_success",
+        type: "reload_detected",
         path,
         timestamp: Date.now()
       });
 
-      this.logger.info(`Plugin reloaded successfully: ${path}`);
+      this.logger.info(`Plugin change detected: ${path} (ESM — restart required for reload)`);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       

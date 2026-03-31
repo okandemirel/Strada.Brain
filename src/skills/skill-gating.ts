@@ -22,6 +22,7 @@ export interface GateResult {
 export async function checkGates(
   requires: SkillRequirements | undefined,
   config?: Record<string, unknown>,
+  activeSkillNames?: ReadonlySet<string>,
 ): Promise<GateResult> {
   if (!requires) {
     return { passed: true, reasons: [] };
@@ -59,6 +60,15 @@ export async function checkGates(
     for (const dotPath of requires.config) {
       if (!resolveDotPath(config, dotPath)) {
         reasons.push(`Required config key missing: ${dotPath}`);
+      }
+    }
+  }
+
+  // --- skill dependency checks ---
+  if (requires.skills?.length) {
+    for (const requiredSkill of requires.skills) {
+      if (!activeSkillNames?.has(requiredSkill)) {
+        reasons.push(`Required skill "${requiredSkill}" is not active`);
       }
     }
   }

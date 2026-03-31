@@ -358,7 +358,7 @@ export class AgentManager {
 
     for (const key of toEvict) {
       const liveAgent = this.agents.get(key)!;
-      this.evictAgent(key, liveAgent);
+      void this.evictAgent(key, liveAgent);
     }
   }
 
@@ -780,7 +780,7 @@ export class AgentManager {
 
     if (oldestKey) {
       const liveAgent = this.agents.get(oldestKey)!;
-      this.evictAgent(oldestKey, liveAgent);
+      void this.evictAgent(oldestKey, liveAgent);
     }
     // If no truly idle agent exists, do NOT evict an active agent.
     // The new agent will temporarily exceed maxConcurrent, which is safer
@@ -788,20 +788,20 @@ export class AgentManager {
   }
 
   /** Evict a specific agent: close memory, remove from map, update registry, emit event */
-  private evictAgent(key: string, liveAgent: LiveAgent): void {
-    // Close memory (SQLite auto-persists on close)
-    void liveAgent.memory.shutdown();
-
+  private async evictAgent(key: string, liveAgent: LiveAgent): Promise<void> {
     // Clean up orchestrator sessions
     liveAgent.orchestrator.cleanupSessions();
 
-    // Remove from in-memory map
+    // Remove from in-memory map (synchronous — visible to callers immediately)
     this.agents.delete(key);
 
     // Update registry status
     this.registry.updateStatus(liveAgent.instance.id, "evicted");
 
     this.eventBus.emit("agent:evicted", this.buildLifecycleEvent(liveAgent.instance));
+
+    // Close memory last (awaited so SQLite flushes properly)
+    await liveAgent.memory.shutdown();
   }
 
   // ===========================================================================

@@ -276,6 +276,23 @@ export class HeartbeatLoop {
           this.budgetExceededEmitted = true;
         }
         break;
+      } else if (budgetUsage.limitUsd === undefined && this.unifiedBudgetManager) {
+        // Fall back to unified budget manager when dailyBudgetUsd is undefined
+        const globalExceeded = this.unifiedBudgetManager.isGlobalExceeded();
+        if (globalExceeded) {
+          if (!this.budgetExceededEmitted) {
+            this.eventBus.emit("daemon:budget_exceeded", {
+              usedUsd: budgetUsage.usedUsd,
+              limitUsd: 0,
+              timestamp: now.getTime(),
+            });
+            this.budgetExceededEmitted = true;
+          }
+          break;
+        } else if (this.budgetExceededEmitted) {
+          this.budgetExceededEmitted = false;
+          this.budgetWarningEmitted = false;
+        }
       } else {
         // Budget recovered -- reset flags so events fire again on next breach
         if (this.budgetExceededEmitted) {

@@ -1086,7 +1086,9 @@ export class DashboardServer {
 
         // Rate limit check (per-source by IP)
         const sourceIp = req.socket.remoteAddress ?? "unknown";
-        if (this.webhookRateLimiter && !this.webhookRateLimiter.isAllowed(Date.now(), sourceIp)) {
+        const now = Date.now();
+        this.webhookRateLimiter?.cleanup(now);
+        if (this.webhookRateLimiter && !this.webhookRateLimiter.isAllowed(now, sourceIp)) {
           res.writeHead(429, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ error: "Rate limit exceeded" }));
           return;

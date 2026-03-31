@@ -240,11 +240,11 @@ export class PluginRegistry {
         this.initialized.add(name);
         getLoggerSafe().info("[PluginRegistry] Initialized plugin", { name });
       } catch (error) {
-        getLoggerSafe().error("[PluginRegistry] Failed to initialize plugin", {
+        getLoggerSafe().warn("[PluginRegistry] Failed to initialize plugin", {
           name,
-          error: String(error),
+          error: error instanceof Error ? error.message : String(error),
         });
-        throw new Error(`Failed to initialize plugin '${name}': ${error}`);
+        // Continue with next plugin instead of throwing
       }
     }
   }

@@ -28,7 +28,7 @@ export class ChecklistTrigger implements ITrigger {
   private readonly timezone: string;
   private items: ChecklistItem[];
   private itemCrons: Map<number, Cron>;
-  private lastFiredMinute: Map<number, number>;
+  private lastFiredMinute: Map<number | string, number>;
   private dueItems: ChecklistItem[];
 
   /**
@@ -108,8 +108,10 @@ export class ChecklistTrigger implements ITrigger {
           this.dueItems.push(item);
         }
       } else {
-        // Unscheduled item: always due
-        this.dueItems.push(item);
+        // Unscheduled item: fire once only
+        if (!this.lastFiredMinute.has(item.text)) {
+          this.dueItems.push(item);
+        }
       }
     }
 
@@ -128,6 +130,10 @@ export class ChecklistTrigger implements ITrigger {
       const idx = this.items.indexOf(dueItem);
       if (idx !== -1) {
         this.lastFiredMinute.set(idx, minuteFloor);
+      }
+      // Mark unscheduled items as fired (text key) so they only fire once
+      if (!dueItem.schedule) {
+        this.lastFiredMinute.set(dueItem.text, minuteFloor);
       }
     }
 

@@ -260,6 +260,10 @@ export class DelegationManager {
         throw error;
       }
 
+      // Re-acquire concurrency slot for escalation retry
+      // (the first slot was released in executeSingleDelegation's finally block)
+      this.acquireConcurrencySlot(request.parentAgentId);
+
       // Escalate: retry with next tier
       return this.executeSingleDelegation(request, typeConfig, nextTier, tier);
     }
@@ -348,6 +352,9 @@ export class DelegationManager {
           workerId: subAgentId,
         })
         : undefined;
+      // Note: typeConfig.maxIterations is not currently passed to the Orchestrator
+      // because Orchestrator does not accept an iteration limit parameter.
+      // Sub-agent iteration limits are enforced by the timeout mechanism instead.
       const orchestrator = new Orchestrator({
         providerManager,
         tools: subAgentTools,
