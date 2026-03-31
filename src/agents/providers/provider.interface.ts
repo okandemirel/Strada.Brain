@@ -50,6 +50,7 @@ export interface IStreamingProvider extends IAIProvider {
     messages: ConversationMessage[],
     tools: ToolDefinition[],
     onChunk: StreamCallback,
+    options?: { signal?: AbortSignal },
   ): Promise<ProviderResponse>;
 }
 

@@ -113,13 +113,14 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
     systemPrompt: string,
     messages: ConversationMessage[],
     tools: ToolDefinition[],
-    onChunk: StreamCallback
+    onChunk: StreamCallback,
+    options?: { signal?: AbortSignal },
   ): Promise<ProviderResponse> {
     return this.tryWithFallback("streaming", (provider, safeMessages) => {
       if (supportsStreaming(provider)) {
-        return provider.chatStream(systemPrompt, safeMessages, tools, onChunk);
+        return provider.chatStream(systemPrompt, safeMessages, tools, onChunk, options);
       }
-      return provider.chat(systemPrompt, safeMessages, tools);
+      return provider.chat(systemPrompt, safeMessages, tools, options);
     }, messages);
   }
 
@@ -231,6 +232,9 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
       }
     }
 
-    throw new Error(`All providers failed or unavailable. Last error: ${lastError}`);
+    const detail = attempted === 0
+      ? "All providers are in cooldown. Try again later."
+      : `Last error: ${lastError}`;
+    throw new Error(`All providers failed or unavailable. ${detail}`);
   }
 }

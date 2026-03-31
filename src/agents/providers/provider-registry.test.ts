@@ -139,7 +139,7 @@ describe("createProvider", () => {
 describe("buildProviderChain", () => {
   it("builds single provider", () => {
     const provider = buildProviderChain(["claude"], { claude: { apiKey: "sk-test" } });
-    expect(provider.name).toBe("claude");
+    expect(provider.name).toBe("chain(claude)");
   });
 
   it("builds fallback chain from multiple providers", () => {
@@ -155,8 +155,8 @@ describe("buildProviderChain", () => {
       ["claude", "openai", "deepseek"],
       { claude: { apiKey: "sk-ant" } }, // openai and deepseek keys missing
     );
-    // Only claude should remain (single provider, no chain)
-    expect(provider.name).toBe("claude");
+    // Only claude should remain (wrapped in chain for health tracking)
+    expect(provider.name).toBe("chain(claude)");
   });
 
   it("throws when no valid providers", () => {
@@ -178,7 +178,7 @@ describe("buildProviderChain", () => {
       },
     });
 
-    expect(provider.name).toBe("OpenAI");
+    expect(provider.name).toBe("chain(OpenAI)");
   });
 
   it("builds Claude from subscription token credentials", () => {
@@ -189,6 +189,6 @@ describe("buildProviderChain", () => {
       },
     });
 
-    expect(provider.name).toBe("claude");
+    expect(provider.name).toBe("chain(claude)");
   });
 });

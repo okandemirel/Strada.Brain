@@ -126,6 +126,7 @@ export class GeminiProvider extends OpenAIProvider {
     messages: ConversationMessage[],
     tools: ToolDefinition[],
     onChunk: StreamCallback,
+    options?: { signal?: AbortSignal },
   ): Promise<ProviderResponse> {
     const logger = getLogger();
     const openaiMessages = this.buildMessages(systemPrompt, messages);
@@ -142,7 +143,7 @@ export class GeminiProvider extends OpenAIProvider {
 
     const response = await this.fetchWithRetry(
       `${this.baseUrl}/chat/completions`,
-      { method: "POST", headers: await this.buildHeaders(), body: JSON.stringify(body) },
+      { method: "POST", headers: await this.buildHeaders(), body: JSON.stringify(body), signal: options?.signal },
     );
 
     let text = "";

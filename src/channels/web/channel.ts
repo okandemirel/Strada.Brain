@@ -686,7 +686,7 @@ export class WebChannel
           for (const raw of rawAttachments.slice(0, 5)) { // Max 5 attachments per message
             const mimeType = normalizeMimeType(raw.mimeType || raw.type); // Frontend sends "type", normalize to mimeType
             if (!raw.name || !mimeType) continue;
-            const buf = raw.data ? Buffer.from(raw.data, "base64") : undefined;
+            const buf = typeof raw.data === "string" ? Buffer.from(raw.data, "base64") : undefined;
             const size = buf?.length ?? raw.size ?? 0;
 
             // Validate before accepting

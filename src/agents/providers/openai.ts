@@ -25,6 +25,7 @@ export const OPENAI_CHATGPT_RESPONSES_BASE_URL = "https://chatgpt.com/backend-ap
 export const OPENAI_STOP_REASON_MAP: Record<string, ProviderResponse["stopReason"]> = {
   tool_calls: "tool_use",
   length: "max_tokens",
+  content_filter: "end_turn",
 };
 
 /** Regex to match <reasoning> blocks injected by providers like DeepSeek/MiniMax */
@@ -133,6 +134,7 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
     messages: ConversationMessage[],
     tools: ToolDefinition[],
     onChunk: StreamCallback,
+    options?: { signal?: AbortSignal },
   ): Promise<ProviderResponse> {
     if (this.isChatGptSubscriptionMode()) {
       return this.chatViaChatGptResponses(systemPrompt, messages, tools, onChunk);
@@ -158,6 +160,7 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
         method: "POST",
         headers: await this.buildHeaders(),
         body: JSON.stringify(body),
+        signal: options?.signal,
       },
     );
 
@@ -463,7 +466,7 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
         result.push({
           role: "tool",
           tool_call_id: block.tool_use_id,
-          content: block.content,
+          content: typeof block.content === "string" ? block.content : JSON.stringify(block.content),
         });
       } else if (block.type === "text") {
         contentParts.push({ type: "text", text: block.text });
@@ -584,16 +587,26 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
         await response.body?.cancel();
         return true;
       }
-      const response = await fetch(`${this.baseUrl}/models`, {
-        method: "GET",
-        headers: await this.buildHeaders(),
-        signal: AbortSignal.timeout(10_000),
-      });
-      if (!response.ok) {
-        logger.warn(`${this.name} health check failed: HTTP ${response.status}`);
-        return false;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          const response = await fetch(`${this.baseUrl}/models`, {
+            method: "GET",
+            headers: await this.buildHeaders(),
+            signal: AbortSignal.timeout(10_000),
+          });
+          if (response.ok) return true;
+          if (response.status === 429 && attempt === 0) {
+            await new Promise(r => setTimeout(r, 2000));
+            continue;
+          }
+          logger.warn(`${this.name} health check failed: HTTP ${response.status}`);
+          return false;
+        } catch {
+          if (attempt === 0) { await new Promise(r => setTimeout(r, 2000)); continue; }
+          return false;
+        }
       }
-      return true;
+      return false;
     } catch (err) {
       logger.warn(`${this.name} health check failed`, {
         error: err instanceof Error ? err.message : String(err),

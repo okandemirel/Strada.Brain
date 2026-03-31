@@ -87,6 +87,7 @@ export class ClaudeProvider implements IAIProvider {
     messages: ConversationMessage[],
     tools: ToolDefinition[],
     onChunk: StreamCallback,
+    options?: { signal?: AbortSignal },
   ): Promise<ProviderResponse> {
     const logger = getLogger();
 

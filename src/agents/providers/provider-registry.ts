@@ -293,5 +293,5 @@ export function buildProviderChain(
     throw new Error("No valid providers configured");
   }
 
-  return providers.length === 1 ? providers[0]! : new FallbackChainProvider(providers);
+  return new FallbackChainProvider(providers);
 }

@@ -144,10 +144,10 @@ export class KimiProvider extends OpenAIProvider {
       if (msg.role === "assistant") {
         const rec = msg as unknown as Record<string, unknown>;
         if (typeof msg.content === "string") {
-          const match = msg.content.match(/<reasoning>\s*\n([\s\S]*?)\n\s*<\/reasoning>\s*\n*/);
-          if (match) {
-            rec["reasoning_content"] = match[1];
-            msg.content = msg.content.replace(/<reasoning>\s*\n[\s\S]*?\n\s*<\/reasoning>\s*\n*/g, "");
+          const allMatches = [...msg.content.matchAll(/<reasoning>\s*([\s\S]*?)\s*<\/reasoning>/g)];
+          if (allMatches.length > 0) {
+            rec["reasoning_content"] = allMatches.map(m => m[1]).join("\n");
+            msg.content = msg.content.replace(/<reasoning>\s*[\s\S]*?\s*<\/reasoning>\s*\n*/g, "");
             if (!msg.content.trim()) msg.content = null;
           }
         }
