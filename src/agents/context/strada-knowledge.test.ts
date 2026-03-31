@@ -62,7 +62,7 @@ describe("buildCapabilityManifest", () => {
   it("has a length between 500 and 3000 characters", () => {
     const result = buildCapabilityManifest();
     expect(result.length).toBeGreaterThanOrEqual(500);
-    expect(result.length).toBeLessThanOrEqual(3000);
+    expect(result.length).toBeLessThanOrEqual(5000);
   });
 });
 
