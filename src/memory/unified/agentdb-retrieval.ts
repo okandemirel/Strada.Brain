@@ -33,6 +33,8 @@ export interface AgentDBRetrievalContext {
   readonly hnswStore: HNSWVectorStore | undefined;
   readonly textIndex: TextIndex;
   readonly searchTimes: number[];
+  /** Optional callback to persist an entry after access stats update. */
+  readonly sqlitePersistEntry?: (entry: UnifiedMemoryEntry) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -118,9 +120,9 @@ export async function retrieveSemantic(
       if (now > entry.expiresAt) continue;
     }
 
-    // Update access stats
     entry.accessCount++;
     entry.lastAccessedAt = getNow();
+    ctx.sqlitePersistEntry?.(entry);
 
     results.push({
       entry: entry as unknown as MemoryEntry,
@@ -218,7 +220,7 @@ function mmrCosineSimilarity(a: number[], b: number[]): number {
 /** Apply Maximal Marginal Relevance re-ranking for diverse results. */
 export function applyMMR(
   results: RetrievalResult<MemoryEntry>[],
-  queryEmbedding: number[],
+  _queryEmbedding: number[],
   lambda: number,
   limit: number,
 ): RetrievalResult<MemoryEntry>[] {
@@ -237,15 +239,12 @@ export function applyMMR(
       // Relevance score
       const relevance = result.score;
 
-      // Diversity score (max similarity to already selected) - uses queryEmbedding
+      // Diversity score (max similarity to already selected)
       let maxSim = 0;
       for (const sel of selected) {
         const selEmbedding = (sel.entry as unknown as UnifiedMemoryEntry).embedding;
         const resultEmbedding = (result.entry as unknown as UnifiedMemoryEntry).embedding;
-        // Use queryEmbedding to avoid unused variable warning
-        const sim =
-          mmrCosineSimilarity(queryEmbedding, selEmbedding) * 0.5 +
-          mmrCosineSimilarity(resultEmbedding, selEmbedding) * 0.5;
+        const sim = mmrCosineSimilarity(resultEmbedding, selEmbedding);
         maxSim = Math.max(maxSim, sim);
       }
 

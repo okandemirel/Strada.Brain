@@ -254,7 +254,9 @@ export class MemoryMigrator {
     for (const legacyEntry of entriesToMigrate) {
       try {
         await this.migrateSingleEntry(legacyEntry, textIndex);
-        this.status.entriesMigrated++;
+        if (!this.config.dryRun) {
+          this.status.entriesMigrated++;
+        }
       } catch (error) {
         const errorMsg = `Failed to migrate entry ${legacyEntry.id}: ${error instanceof Error ? error.message : String(error)}`;
         getLoggerSafe().error("[MemoryMigrator] Entry migration failed", { error: errorMsg });
@@ -276,8 +278,7 @@ export class MemoryMigrator {
         id: legacyEntry.id,
         type: legacyEntry.type,
       });
-      // In dry run mode, we still count it as migrated for status tracking
-      // but don't actually write to target memory
+      // Don't count dry-run entries as migrated
       return;
     }
 

@@ -127,8 +127,16 @@ export function isHashBasedEmbedding(_content: string, embedding: number[]): boo
   // Real neural embeddings from any transformer model contain negative
   // components. The hash-based fallback accumulates charCode/255 per
   // dimension bucket then L2-normalizes, producing vectors where every
-  // component is >= 0. If no value is negative, it's hash-based.
-  return !embedding.some((v) => v < -1e-9);
+  // component is >= 0.
+  const isAllPositive = embedding.every((v) => v >= 0);
+  if (!isAllPositive) return false;
+
+  // Short content can produce all-positive neural embeddings by chance.
+  // Hash embeddings have very low variance since they're accumulated charCode/255 values.
+  // Real neural embeddings have significantly higher variance even when all positive.
+  const mean = embedding.reduce((a, b) => a + b, 0) / embedding.length;
+  const variance = embedding.reduce((a, b) => a + (b - mean) ** 2, 0) / embedding.length;
+  return variance < 0.01;
 }
 
 // ---------------------------------------------------------------------------

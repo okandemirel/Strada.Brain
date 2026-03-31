@@ -187,22 +187,8 @@ export class LearningPipeline {
     success: boolean;
     errorDetails?: ErrorDetails;
   }): void {
-    const observation: Observation = {
-      id: `obs_${randomUUID()}` as ObservationId,
-      type: params.success ? "success" : "error",
-      sessionId: createBrand(params.sessionId, "SessionId" as const),
-      toolName: createBrand(params.toolName, "ToolName" as const),
-      input: params.input as JsonObject,
-      output: params.output,
-      success: params.success,
-      errorDetails: params.errorDetails,
-      timestamp: Date.now() as TimestampMs,
-      processed: false,
-    };
-
-    this.storage.recordObservation(observation);
-    this.storage.flush();
-
+    // Note: observation recording is handled by handleToolResult() via the event bus.
+    // Only record error patterns here to avoid double-writing observations.
     if (!params.success && params.errorDetails) {
       this.recordErrorPattern(params.errorDetails, params.toolName);
     }

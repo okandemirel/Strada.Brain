@@ -879,7 +879,7 @@ export class LearningStorage {
         UPDATE solutions SET
           success_count = success_count + ?,
           total_attempts = total_attempts + 1,
-          success_rate = (success_count + ?) * 1.0 / (total_attempts + 1),
+          success_rate = CAST((success_count + ?) AS REAL) / (total_attempts + 1),
           last_used = ?
         WHERE id = ?
       `,
@@ -1252,20 +1252,36 @@ export class LearningStorage {
 
   /**
    * Increment cross-session hit count for an instinct.
-   * Idempotent per session: tracks last counted session in-memory.
-   * Returns the new count.
+   * Idempotent per session: checks both in-memory cache and database
+   * to prevent double-counting even after restart.
    */
   incrementCrossSessionHitCount(instinctId: string, sessionId: string): void {
     this.ensureConnection();
 
-    // Idempotent per session: skip if already counted
+    // Fast path: in-memory dedup (avoids DB round-trip within same process)
     if (this.lastCountedSession.get(instinctId) === sessionId) {
+      return;
+    }
+
+    // Durable dedup: check if this session was already counted in the database.
+    // Uses instinct_scopes with scope_type='session_hit' to persist dedup state.
+    const existing = this.db!.prepare(
+      "SELECT 1 FROM instinct_scopes WHERE instinct_id = ? AND project_path = ? AND scope_type = 'session_hit'"
+    ).get(instinctId, sessionId);
+    if (existing) {
+      // Already counted for this session — update in-memory cache and return
+      this.lastCountedSession.set(instinctId, sessionId);
       return;
     }
 
     this.db!.prepare(
       "UPDATE instincts SET cross_session_hit_count = COALESCE(cross_session_hit_count, 0) + 1 WHERE id = ?"
     ).run(instinctId);
+
+    // Persist dedup marker to instinct_scopes
+    this.db!.prepare(
+      "INSERT OR IGNORE INTO instinct_scopes (instinct_id, project_path, created_at, scope_type) VALUES (?, ?, ?, 'session_hit')"
+    ).run(instinctId, sessionId, Date.now());
 
     this.lastCountedSession.set(instinctId, sessionId);
   }

@@ -14,7 +14,7 @@
 
 import { join } from "node:path";
 import { existsSync, mkdirSync } from "node:fs";
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import type Database from "better-sqlite3";
 import type {
   IUnifiedMemory,
@@ -231,6 +231,7 @@ export class AgentDBMemory implements IUnifiedMemory {
       get hnswStore() { return self.hnswStore; },
       get textIndex() { return self.textIndex; },
       get searchTimes() { return self.searchTimes; },
+      sqlitePersistEntry: (entry: UnifiedMemoryEntry) => sqlitePersistEntry(self.getSqliteCtx(), entry),
     };
   }
 
@@ -1133,17 +1134,19 @@ export class AgentDBMemory implements IUnifiedMemory {
 
   /**
    * Expose internals for the memory consolidation engine (Phase 25).
-   * Returns SQLite DB, entries map, and HNSW store references.
+   * Returns SQLite DB, entries map, HNSW store, and write mutex references.
    */
   getConsolidationInternals(): {
     sqliteDb: import("better-sqlite3").Database | null;
     entries: Map<string, UnifiedMemoryEntry>;
     hnswStore: HNSWVectorStore | undefined;
+    hnswWriteMutex: HnswWriteMutex;
   } {
     return {
       sqliteDb: this.sqliteDb,
       entries: this.entries,
       hnswStore: this.hnswStore,
+      hnswWriteMutex: this.writeMutex,
     };
   }
 
@@ -1386,7 +1389,7 @@ export class AgentDBMemory implements IUnifiedMemory {
       const stmt = this.sqliteStatements.get("upsertPattern");
       if (!stmt) return;
 
-      const id = randomUUID();
+      const id = createHash("sha256").update(patternKey).digest("hex").slice(0, 32);
       stmt.run(id, patternKey, JSON.stringify(data), confidence, Date.now());
     } catch (error) {
       getLoggerSafe().error("[AgentDBMemory] Failed to store pattern", {
