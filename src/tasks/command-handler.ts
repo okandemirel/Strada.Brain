@@ -694,27 +694,26 @@ export class CommandHandler {
         return;
       }
 
-      const success = await this.soulLoader.switchProfile(name);
-      if (success) {
-        // Update user profile store if available
-        if (this.userProfileStore) {
-          try {
-            this.userProfileStore.setActivePersona(identityKey, name);
-          } catch {
-            // Non-fatal
-          }
-        }
-        await this.channel.sendMarkdown(
-          chatId,
-          `Personality switched to \`${name}\`. My responses will now reflect this style.`,
-        );
-      } else {
-        const available = this.soulLoader.getProfiles();
+      const available = this.soulLoader.getProfiles();
+      if (!available.includes(name)) {
         await this.channel.sendText(
           chatId,
           `Profile "${name}" not found. Available: ${available.join(", ")}`,
         );
+        return;
       }
+      // Persist per-user (no global SoulLoader mutation)
+      if (this.userProfileStore) {
+        try {
+          this.userProfileStore.setActivePersona(identityKey, name);
+        } catch {
+          // Non-fatal
+        }
+      }
+      await this.channel.sendMarkdown(
+        chatId,
+        `Personality switched to \`${name}\`. My responses will now reflect this style.`,
+      );
       return;
     }
 
