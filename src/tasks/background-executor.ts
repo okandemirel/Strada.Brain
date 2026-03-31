@@ -28,6 +28,7 @@ import type { GoalStorage } from "../goals/goal-storage.js";
 import { buildGoalNarrativeFeedback } from "../goals/goal-feedback.js";
 import type { IAIProvider } from "../agents/providers/provider.interface.js";
 import type { IChannelAdapter } from "../channels/channel.interface.js";
+import { sanitizeSecrets } from "../security/secret-sanitizer.js";
 import type { IEventEmitter, LearningEventMap } from "../core/event-bus.js";
 import type { DaemonEventMap } from "../daemon/daemon-events.js";
 import { estimateCost } from "../security/rate-limiter.js";
@@ -615,16 +616,17 @@ export class BackgroundExecutor {
       this.executeTask(entry)
         .catch((err) => {
           // Catch any unhandled rejection that escapes executeTask's own try/catch
+          const rawMsg = err instanceof Error ? err.message : String(err);
           logger.error("Unhandled error in executeTask", {
             taskId: entry.task.id,
-            error: err instanceof Error ? err.message : String(err),
+            error: rawMsg,
           });
           // Best-effort: mark task as failed so it doesn't stay orphaned
           if (this.taskManager) {
             try {
               this.taskManager.fail(
                 entry.task.id,
-                err instanceof Error ? err.message : String(err),
+                sanitizeSecrets(rawMsg),
               );
             } catch { /* task may already be in terminal state */ }
           }
@@ -958,9 +960,10 @@ export class BackgroundExecutor {
       }
 
       const errMsg = error instanceof Error ? error.message : String(error);
-      logger.error("Background task execution error", { taskId: task.id, error: errMsg });
+      const sanitizedErrMsg = sanitizeSecrets(errMsg);
+      logger.error("Background task execution error", { taskId: task.id, error: sanitizedErrMsg });
       requestFailed = true;
-      this.taskManager.fail(task.id, errMsg);
+      this.taskManager.fail(task.id, sanitizedErrMsg);
 
       // Emit goal:failed if we have a goal tree context (INT-02 catch path)
       if (activeGoalTree) {

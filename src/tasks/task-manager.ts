@@ -315,7 +315,7 @@ export class TaskManager extends EventEmitter {
    * Mark a task as completed with result.
    */
   complete(taskId: TaskId, result: string): void {
-    const sanitizedResult = stripVisibleProviderArtifacts(result);
+    const sanitizedResult = sanitizeSecrets(stripVisibleProviderArtifacts(result));
     this.storage.updateResult(taskId, sanitizedResult);
     this.abortControllers.delete(taskId);
     this.emit("task:completed", taskId, sanitizedResult);
@@ -326,10 +326,11 @@ export class TaskManager extends EventEmitter {
    * Mark a task as failed with error.
    */
   fail(taskId: TaskId, error: string): void {
-    this.storage.updateError(taskId, error);
+    const sanitizedError = sanitizeSecrets(error);
+    this.storage.updateError(taskId, sanitizedError);
     this.abortControllers.delete(taskId);
-    this.emit("task:failed", taskId, error);
-    getLogger().error("Task failed", { taskId, error });
+    this.emit("task:failed", taskId, sanitizedError);
+    getLogger().error("Task failed", { taskId, error: sanitizedError });
   }
 
   /**
@@ -452,7 +453,7 @@ export class TaskManager extends EventEmitter {
       lines.push("", `Last known checkpoint:\n${task.result}`);
     }
     if (task.error) {
-      lines.push("", `Last known failure:\n${task.error}`);
+      lines.push("", `Last known failure:\n${sanitizeSecrets(task.error)}`);
     }
 
     return lines.join("\n");

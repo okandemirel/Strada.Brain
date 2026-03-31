@@ -103,12 +103,12 @@ export function injectSoulPersonality(
   personaOverride?: string,
 ): string {
   if (personaOverride) {
-    return systemPrompt + `\n\n## Agent Personality\n\n${personaOverride}\n`;
+    return systemPrompt + `\n\n## Agent Personality\n\n${sanitizePromptInjection(personaOverride)}\n`;
   }
   if (!ctx.soulLoader) return systemPrompt;
   const soulContent = ctx.soulLoader.getContent(channelType);
   if (!soulContent) return systemPrompt;
-  return systemPrompt + `\n\n## Agent Personality\n\n${soulContent}\n`;
+  return systemPrompt + `\n\n## Agent Personality\n\n${sanitizePromptInjection(soulContent)}\n`;
 }
 
 function buildTaskExecutionMemoryLayer(

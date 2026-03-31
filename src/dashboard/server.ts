@@ -797,6 +797,11 @@ export class DashboardServer {
         if (!this.requireDashboardAuth(req, res)) return;
       }
 
+      // Without a dashboard token, GET endpoints are intentionally unauthenticated for
+      // localhost-only access (required by the web portal). This is safe because:
+      // 1. The server binds to 127.0.0.1 only — no external network access
+      // 2. All output from /api/logs is sanitized via sanitizeSecrets
+      // 3. Mutating endpoints still require same-origin CSRF protection below
       // Without a dashboard token, mutating dashboard APIs still require a trusted
       // same-origin browser request so local CSRF cannot drive daemon actions.
       if (isMutableDashboardApi && !this.dashboardToken) {
