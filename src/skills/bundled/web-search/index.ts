@@ -21,6 +21,9 @@ const MAX_SEARCH_RESULTS = 5;
 // Helpers
 // ---------------------------------------------------------------------------
 
+/** Hosts that must never be fetched (SSRF prevention). */
+const BLOCKED_HOSTS = /^(localhost|127\.|10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|169\.254\.|0\.0\.0\.0|\[::1\]|::1)$/i;
+
 /**
  * Validate that a URL starts with http:// or https://.
  * Rejects file://, data://, javascript:, and other schemes.
@@ -34,7 +37,11 @@ function validateUrl(url: string): { ok: true; url: string } | { ok: false; erro
     return { ok: false, error: "Only http:// and https:// URLs are allowed." };
   }
   try {
-    new URL(trimmed);
+    const parsed = new URL(trimmed);
+    const hostname = parsed.hostname;
+    if (BLOCKED_HOSTS.test(hostname)) {
+      return { ok: false, error: "Access to internal/private network addresses is blocked." };
+    }
   } catch {
     return { ok: false, error: "Invalid URL format." };
   }

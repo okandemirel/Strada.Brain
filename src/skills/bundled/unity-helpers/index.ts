@@ -15,10 +15,10 @@ import { join, relative, resolve } from "node:path";
  * directory argument supplied by the LLM or user.
  */
 const SENSITIVE_PATH_PATTERNS: RegExp[] = [
-  /[/\\]\.ssh[/\\]?$/i,
-  /[/\\]\.gnupg[/\\]?$/i,
-  /[/\\]\.aws[/\\]?$/i,
-  /[/\\]\.config[/\\]?$/i,
+  /[/\\]\.ssh([/\\]|$)/i,
+  /[/\\]\.gnupg([/\\]|$)/i,
+  /[/\\]\.aws([/\\]|$)/i,
+  /[/\\]\.config([/\\]|$)/i,
   /^\/etc(\/|$)/,
   /^\/root(\/|$)/,
   /^\/proc(\/|$)/,

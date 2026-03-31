@@ -1709,7 +1709,7 @@ export const configSchema = z
       .default("8"),
     progressAssessmentEnabled: boolFromString(true),
     // Daemon Full Autonomy
-    daemonFullAutonomy: boolFromString(true),
+    daemonFullAutonomy: boolFromString(false),
 
     // Interaction Policy
     interactionMode: z.enum(["silent-first", "standard", "phase-driven"]).default("phase-driven"),

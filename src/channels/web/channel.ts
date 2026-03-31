@@ -713,7 +713,9 @@ export class WebChannel
 
             attachments.push({
               type: attachType as Attachment["type"],
-              name: raw.name,
+              name: typeof raw.name === "string"
+                ? raw.name.replace(/[/\\:*?"<>|]/g, "_").slice(0, 255)
+                : "unnamed",
               mimeType,
               data: buf,
               size,

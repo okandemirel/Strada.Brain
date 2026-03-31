@@ -15,10 +15,10 @@ import { join, relative, resolve } from "node:path";
  * directory argument supplied by the LLM or user.
  */
 const SENSITIVE_PATH_PATTERNS: RegExp[] = [
-  /[/\\]\.ssh[/\\]?$/i,
-  /[/\\]\.gnupg[/\\]?$/i,
-  /[/\\]\.aws[/\\]?$/i,
-  /[/\\]\.config[/\\]?$/i,
+  /[/\\]\.ssh([/\\]|$)/i,
+  /[/\\]\.gnupg([/\\]|$)/i,
+  /[/\\]\.aws([/\\]|$)/i,
+  /[/\\]\.config([/\\]|$)/i,
   /^\/etc(\/|$)/,
   /^\/root(\/|$)/,
   /^\/proc(\/|$)/,
@@ -341,9 +341,13 @@ const fileLineSearch: ITool = {
 
     let regex: RegExp;
     try {
+      // Reject obviously dangerous patterns that may cause catastrophic backtracking (ReDoS)
+      if (/(\+\+|\*\*|\{\d{3,}\})/.test(patternStr)) {
+        return { content: "Pattern rejected: potentially unsafe regex", isError: true };
+      }
       regex = new RegExp(patternStr);
-    } catch {
-      return { content: "Error: Invalid regex pattern." };
+    } catch (e) {
+      return { content: `Error: Invalid regex: ${e instanceof Error ? e.message : String(e)}`, isError: true };
     }
 
     const maxResults = 50;
