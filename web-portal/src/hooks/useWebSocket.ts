@@ -80,7 +80,8 @@ export function useWebSocket(): UseWebSocketReturn {
 
   // Initialize store with restored session messages on first mount
   const initializedRef = useRef(false)
-  if (!initializedRef.current) {
+  useEffect(() => {
+    if (initializedRef.current) return
     initializedRef.current = true
     const storedProfileId = readStoredProfileId()
     const storedChatId = readStoredChatId()
@@ -96,7 +97,7 @@ export function useWebSocket(): UseWebSocketReturn {
       )
       useCanvasStore.getState().setSessionId(storedProfileId ?? storedChatId)
     }
-  }
+  }, [])
 
   const wsRef = useRef<WebSocket | null>(null)
   const chatIdRef = useRef<string | null>(readStoredChatId())
@@ -455,8 +456,12 @@ export function useWebSocket(): UseWebSocketReturn {
     connectRef.current = connect
   }, [connect])
 
+  const writeTimeoutRef = useRef<ReturnType<typeof setTimeout>>()
   useEffect(() => {
-    writeSessionMessages(profileIdRef.current ?? chatIdRef.current, messages)
+    clearTimeout(writeTimeoutRef.current)
+    writeTimeoutRef.current = setTimeout(() => {
+      writeSessionMessages(profileIdRef.current ?? chatIdRef.current, messages)
+    }, 1000)
   }, [messages])
 
   useEffect(() => {
@@ -465,6 +470,7 @@ export function useWebSocket(): UseWebSocketReturn {
 
     return () => {
       mountedRef.current = false
+      clearTimeout(writeTimeoutRef.current)
       if (reconnectTimerRef.current) {
         clearTimeout(reconnectTimerRef.current)
       }
@@ -529,11 +535,15 @@ export function useWebSocket(): UseWebSocketReturn {
   }, [deliverOutboundMessage])
 
   const sendConfirmation = useCallback((confirmId: string, option: string) => {
-    const ws = wsRef.current
-    if (!ws || ws.readyState !== WebSocket.OPEN) return
-
-    ws.send(JSON.stringify({ type: 'confirmation_response', confirmId, option }))
-    useSessionStore.getState().setConfirmation(null)
+    try {
+      const ws = wsRef.current
+      if (!ws || ws.readyState !== WebSocket.OPEN) return
+      ws.send(JSON.stringify({ type: 'confirmation_response', confirmId, option }))
+    } catch {
+      // Connection closed between check and send -- silently fail
+    } finally {
+      useSessionStore.getState().setConfirmation(null)
+    }
   }, [])
 
   const switchProvider = useCallback((provider: string, model?: string): boolean => {

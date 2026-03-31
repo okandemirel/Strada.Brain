@@ -90,15 +90,36 @@ export default function DAGView() {
   const dag = useMonitorStore((s) => s.dag)
   const setSelectedTask = useMonitorStore((s) => s.setSelectedTask)
 
+  // Separate structural identity from status so layout only recomputes on topology changes
+  const dagNodes = dag?.nodes ?? []
+  const dagEdges = dag?.edges ?? []
+
+  const nodeIds = useMemo(() => dagNodes.map(n => n.id).sort().join(','), [dagNodes])
+  const edgeKeys = useMemo(() => dagEdges.map(e => `${e.source}-${e.target}`).sort().join(','), [dagEdges])
+  const positions = useMemo(() => layoutNodes(dagNodes, dagEdges), [nodeIds, edgeKeys])
+
   const { nodes, edges } = useMemo(() => {
     if (!dag) return { nodes: [], edges: [] }
 
-    const nodes = layoutNodes(dag.nodes, dag.edges)
+    const nodeMap = new Map(dagNodes.map(n => [n.id, n]))
     const executingIds = new Set(
-      dag.nodes.filter((node) => (node.status as string) === 'executing').map((node) => node.id),
+      dagNodes.filter((node) => (node.status as string) === 'executing').map((node) => node.id),
     )
 
-    const edges: Edge[] = dag.edges.map((edge, index) => ({
+    const nodes: Node[] = positions.map((pos) => {
+      const raw = nodeMap.get(pos.id)
+      return {
+        ...pos,
+        data: {
+          label: (raw?.task as string) || pos.id,
+          status: (raw?.status as string) || 'pending',
+          reviewStatus: (raw?.reviewStatus as string) || undefined,
+          reviewType: (raw?.reviewType as string) || undefined,
+        },
+      }
+    })
+
+    const edges: Edge[] = dagEdges.map((edge, index) => ({
       id: `e-${index}`,
       source: edge.source,
       target: edge.target,
@@ -107,7 +128,7 @@ export default function DAGView() {
     }))
 
     return { nodes, edges }
-  }, [dag])
+  }, [dag, positions, dagNodes, dagEdges])
 
   if (!dag) {
     return (

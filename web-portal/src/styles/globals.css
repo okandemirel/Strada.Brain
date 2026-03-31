@@ -175,7 +175,7 @@
   100% { transform: translateX(200%); }
 }
 
-@keyframes glow-pulse {
+@keyframes glow-pulse-box {
   0%, 100% { box-shadow: 0 0 15px rgba(0, 229, 255, 0.1); }
   50% { box-shadow: 0 0 25px rgba(0, 229, 255, 0.25); }
 }
