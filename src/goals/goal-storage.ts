@@ -42,6 +42,9 @@ CREATE TABLE IF NOT EXISTS goal_nodes (
   started_at INTEGER,
   completed_at INTEGER,
   retry_count INTEGER NOT NULL DEFAULT 0,
+  redecomposition_count INTEGER NOT NULL DEFAULT 0,
+  review_status TEXT DEFAULT 'none',
+  review_iterations INTEGER DEFAULT 0,
   FOREIGN KEY (root_id) REFERENCES goal_trees(root_id) ON DELETE CASCADE
 );
 
@@ -81,6 +84,8 @@ interface GoalNodeRow {
   completed_at: number | null;
   retry_count: number;
   redecomposition_count: number;
+  review_status: string | null;
+  review_iterations: number | null;
 }
 
 // =============================================================================
@@ -131,6 +136,16 @@ export class GoalStorage {
         "ALTER TABLE goal_nodes ADD COLUMN redecomposition_count INTEGER NOT NULL DEFAULT 0",
       );
     }
+    if (!colNames.has("review_status")) {
+      this.db.exec(
+        "ALTER TABLE goal_nodes ADD COLUMN review_status TEXT DEFAULT 'none'",
+      );
+    }
+    if (!colNames.has("review_iterations")) {
+      this.db.exec(
+        "ALTER TABLE goal_nodes ADD COLUMN review_iterations INTEGER DEFAULT 0",
+      );
+    }
 
     // Phase 20: Add plan_summary column if missing (safe migration for pre-Phase-16 DBs)
     const treeCols = this.db.pragma("table_info(goal_trees)") as Array<{
@@ -164,13 +179,13 @@ export class GoalStorage {
         VALUES (?, ?, ?, ?, ?, ?, ?)
       `,
       insertNode: `
-        INSERT INTO goal_nodes (id, root_id, parent_id, task, depends_on, depth, status, result, error, created_at, updated_at, started_at, completed_at, retry_count, redecomposition_count)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO goal_nodes (id, root_id, parent_id, task, depends_on, depth, status, result, error, created_at, updated_at, started_at, completed_at, retry_count, redecomposition_count, review_status, review_iterations)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       getTree: `SELECT * FROM goal_trees WHERE root_id = ?`,
       getNodesByRoot: `SELECT * FROM goal_nodes WHERE root_id = ?`,
       updateNodeStatus: `
-        UPDATE goal_nodes SET status = ?, result = ?, error = ?, updated_at = ?, retry_count = ?, redecomposition_count = ? WHERE id = ?
+        UPDATE goal_nodes SET status = ?, result = ?, error = ?, updated_at = ?, retry_count = ?, redecomposition_count = ?, review_status = ?, review_iterations = ? WHERE id = ?
       `,
       getTreesBySession: `SELECT * FROM goal_trees WHERE session_id = ? ORDER BY created_at DESC LIMIT 50`,
       deleteTree: `DELETE FROM goal_trees WHERE root_id = ?`,
@@ -178,10 +193,14 @@ export class GoalStorage {
         INSERT OR REPLACE INTO goal_trees (root_id, session_id, task_description, status, created_at, updated_at, plan_summary)
         VALUES (?, ?, ?, ?, ?, ?, ?)
       `,
+      upsertNode: `
+        INSERT OR REPLACE INTO goal_nodes (id, root_id, parent_id, task, depends_on, depth, status, result, error, created_at, updated_at, started_at, completed_at, retry_count, redecomposition_count, review_status, review_iterations)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
       deleteNodesByRoot: `DELETE FROM goal_nodes WHERE root_id = ?`,
       getInterruptedTrees: `SELECT * FROM goal_trees WHERE status = 'executing' ORDER BY updated_at DESC LIMIT 20`,
       updateTreeStatus: `UPDATE goal_trees SET status = ?, updated_at = ? WHERE root_id = ?`,
-      pruneOldTrees: `DELETE FROM goal_trees WHERE status IN ('completed', 'failed') AND updated_at < ?`,
+      pruneOldTrees: `DELETE FROM goal_trees WHERE status IN ('completed', 'failed', 'blocked') AND updated_at < ?`,
       setNodeStartedAt: `UPDATE goal_nodes SET started_at = ? WHERE id = ? AND started_at IS NULL`,
       setNodeCompletedAt: `UPDATE goal_nodes SET completed_at = ? WHERE id = ?`,
     };
@@ -241,6 +260,8 @@ export class GoalStorage {
           node.completedAt ?? null,
           node.retryCount ?? 0,
           node.redecompositionCount ?? 0,
+          node.reviewStatus ?? "none",
+          node.reviewIterations ?? 0,
         );
       }
     });
@@ -268,6 +289,8 @@ export class GoalStorage {
     error?: string,
     retryCount?: number,
     redecompositionCount?: number,
+    reviewStatus?: string,
+    reviewIterations?: number,
   ): void {
     this.ensureConnection();
     const now = Date.now();
@@ -280,6 +303,8 @@ export class GoalStorage {
         now,
         retryCount ?? 0,
         redecompositionCount ?? 0,
+        reviewStatus ?? "none",
+        reviewIterations ?? 0,
         nodeId,
       );
       // Update timing columns within the same transaction (using cached statements)
@@ -328,6 +353,8 @@ export class GoalStorage {
       completedAt: row.completed_at ?? undefined,
       retryCount: row.retry_count ?? 0,
       redecompositionCount: row.redecomposition_count ?? 0,
+      reviewStatus: (row.review_status as GoalNode["reviewStatus"]) ?? "none",
+      reviewIterations: row.review_iterations ?? 0,
     };
   }
 
@@ -350,7 +377,7 @@ export class GoalStorage {
 
   // --- Phase 8: New Methods ---
 
-  /** Upsert a complete GoalTree (INSERT OR REPLACE for tree, DELETE+INSERT for nodes) */
+  /** Upsert a complete GoalTree (INSERT OR REPLACE for tree and per-node) */
   upsertTree(tree: GoalTree, treeStatus: string = "pending"): void {
     this.ensureConnection();
     const transaction = this.db!.transaction(() => {
@@ -364,11 +391,10 @@ export class GoalStorage {
         now,
         tree.planSummary ?? null,
       );
-      // Delete existing nodes and re-insert (atomic replacement)
-      this.getStatement("deleteNodesByRoot").run(tree.rootId);
-      const insertNode = this.getStatement("insertNode");
+      // Use INSERT OR REPLACE per node to avoid deleting nodes that are concurrently being updated
+      const upsertNode = this.getStatement("upsertNode");
       for (const [, node] of tree.nodes) {
-        insertNode.run(
+        upsertNode.run(
           node.id,
           tree.rootId,
           node.parentId ?? null,
@@ -384,6 +410,8 @@ export class GoalStorage {
           node.completedAt ?? null,
           node.retryCount ?? 0,
           node.redecompositionCount ?? 0,
+          node.reviewStatus ?? "none",
+          node.reviewIterations ?? 0,
         );
       }
     });

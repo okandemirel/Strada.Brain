@@ -143,7 +143,8 @@ export function createSupervisorNodeVerifier(providerManager: {
     const reviewer = chooseVerificationProvider(providerManager, node.provider, context.chatId);
     if (!reviewer) {
       return {
-        verdict: "approve",
+        verdict: "flag_issues" as const,
+        issues: ["No cross-provider verifier available"],
         verifierProvider: canonicalizeProviderName(node.provider) ?? node.provider,
       };
     }

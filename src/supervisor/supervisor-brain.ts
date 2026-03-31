@@ -402,12 +402,19 @@ export class SupervisorBrain {
       // Emit per-node monitor:task_update for verification-rejected nodes
       for (let i = 0; i < verifiedResults.length; i++) {
         if (results[i]?.status === "ok" && verifiedResults[i]?.status !== "ok") {
+          const rejectedStatus = verifiedResults[i]!.status === "failed" ? "failed" : "skipped";
           this.emitter?.emit("monitor:task_update", {
             rootId: String(decomposedGoalTree.rootId),
             nodeId: String(verifiedResults[i]!.nodeId),
-            status: verifiedResults[i]!.status === "failed" ? "failed" : "skipped",
+            status: rejectedStatus,
             completedAt: Date.now(),
           });
+          // Emit narrative for rejected nodes
+          this.emitNarrative(
+            `Node rejected by verification: ${verifiedResults[i]!.output?.slice(0, 200) || "quality check failed"}`,
+            "en",
+            String(verifiedResults[i]!.nodeId),
+          );
         }
       }
 

@@ -18,6 +18,7 @@ import type {
 } from "./types.js";
 import { generateGoalNodeId, parseLLMOutput } from "./types.js";
 import { validateDAG } from "./goal-validator.js";
+import { getLoggerSafe } from "../utils/logger.js";
 
 // =============================================================================
 // DECOMPOSITION GUARD — minimal, language-agnostic
@@ -254,7 +255,14 @@ export class GoalDecomposer {
       if (!parsed) return null;
 
       const validation = validateDAG(parsed.nodes);
-      if (!validation.valid) return null;
+      if (!validation.valid) {
+        getLoggerSafe().warn("Goal decomposition DAG validation failed", {
+          cycleNodes: validation.cycleNodes,
+          danglingRefs: validation.danglingRefs,
+          nodeCount: parsed.nodes.length,
+        });
+        return null;
+      }
 
       return parsed;
     } catch {

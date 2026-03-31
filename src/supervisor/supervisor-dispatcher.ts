@@ -279,6 +279,10 @@ export class SupervisorDispatcher {
     node: TaggedGoalNode,
     status: "pending" | "running" | "verifying" | "done" | "failed" | "skipped",
   ): void {
+    const nodeId = String(node.id);
+    if (this.terminatedNodes.has(nodeId) && (status === "running" || status === "verifying")) {
+      return;
+    }
     this.emitter?.emit("canvas:agent_draw", buildSupervisorCanvasNodeUpdate({
       node: this.getDisplayNode(node),
       status,
@@ -548,20 +552,22 @@ export class SupervisorDispatcher {
 
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       try {
-        this.emitter?.emit("supervisor:node_start", {
-          nodeId: node.id,
-          provider: node.assignedProvider ?? "unknown",
-          model: node.assignedModel ?? "unknown",
-          wave: waveIndex,
-        });
-        this.emitNodeWorkspaceStatus(node, "executing");
-        this.emitNodeNarrative(node, "running");
-        this.emitNodeCanvasUpdate(node, "running");
-        this.emitActivity(
-          `Started on ${node.assignedProvider ?? "unknown"}`,
-          String(node.id),
-          "supervisor_node_start",
-        );
+        if (attempt === 0) {
+          this.emitter?.emit("supervisor:node_start", {
+            nodeId: node.id,
+            provider: node.assignedProvider ?? "unknown",
+            model: node.assignedModel ?? "unknown",
+            wave: waveIndex,
+          });
+          this.emitNodeWorkspaceStatus(node, "executing");
+          this.emitNodeNarrative(node, "running");
+          this.emitNodeCanvasUpdate(node, "running");
+          this.emitActivity(
+            `Started on ${node.assignedProvider ?? "unknown"}`,
+            String(node.id),
+            "supervisor_node_start",
+          );
+        }
 
         const result = await this.executeWithTimeout(node, externalSignal);
         return result;
