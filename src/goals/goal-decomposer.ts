@@ -18,6 +18,7 @@ import type {
 } from "./types.js";
 import { generateGoalNodeId, parseLLMOutput } from "./types.js";
 import { validateDAG } from "./goal-validator.js";
+import { getLoggerSafe } from "../utils/logger.js";
 
 // =============================================================================
 // DECOMPOSITION GUARD — minimal, language-agnostic
@@ -264,7 +265,8 @@ export class GoalDecomposer {
       if (!validation.valid) {
         const { getLoggerSafe } = await import("../utils/logger.js");
         getLoggerSafe().warn("Goal decomposition DAG validation failed", {
-          errors: validation.errors,
+          cycleNodes: validation.cycleNodes,
+          danglingRefs: validation.danglingRefs,
           nodeCount: parsed.nodes.length,
         });
         return null;

@@ -484,8 +484,6 @@ export function buildSupervisorCanvasSummaryUpdate(params: {
       type: "note-block",
       id: supervisorSummaryShapeId(params.rootId),
       props: {
-        w: 320,
-        h: 180,
         content: params.summary,
         color,
       },
@@ -505,8 +503,7 @@ export function buildSupervisorCanvasNodeUpdate(params: {
       type: "task-card",
       id: supervisorNodeShapeId(String(params.node.id)),
       props: {
-        w: 260,
-        h: 132,
+        ...(params.status === "pending" ? { w: 260, h: 132 } : {}),
         title: formatCanvasTaskTitle(params.node),
         status: params.status,
         priority: mapCanvasPriority(params.node),
