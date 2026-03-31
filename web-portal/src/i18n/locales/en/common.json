@@ -51,6 +51,8 @@
   "chat.badResponse": "Bad response",
   "chat.fileAttachment": "(file attachment)",
   "chat.voiceMessage": "(voice message)",
+  "chat.stop": "Stop",
+  "chat.stopGeneration": "Stop generating",
 
   "chat.empty.title": "Strada.Brain",
   "chat.empty.description": "AI-powered Unity development assistant. Send a message to get started.",

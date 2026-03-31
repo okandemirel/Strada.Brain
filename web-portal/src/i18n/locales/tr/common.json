@@ -51,6 +51,8 @@
   "chat.badResponse": "Kötü yanıt",
   "chat.fileAttachment": "(dosya eki)",
   "chat.voiceMessage": "(sesli mesaj)",
+  "chat.stop": "Durdur",
+  "chat.stopGeneration": "Yanıt üretimini durdur",
 
   "chat.empty.title": "Strada.Brain",
   "chat.empty.description": "Yapay zeka destekli Unity geliştirme asistanı. Başlamak için bir mesaj gönderin.",
