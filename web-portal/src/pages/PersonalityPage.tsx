@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { usePersonality } from '../hooks/use-api'
+import { useWS } from '../hooks/useWS'
 import { PageSkeleton } from '../components/ui/page-skeleton'
 
 const SYSTEM_PROFILES = new Set(['default', 'casual', 'formal', 'minimal'])
@@ -21,7 +22,8 @@ You are ...
 export default function PersonalityPage() {
   const { t } = useTranslation('pages')
   const queryClient = useQueryClient()
-  const { data: rawData, error: fetchError, isLoading } = usePersonality()
+  const { sessionId } = useWS()
+  const { data: rawData, error: fetchError, isLoading } = usePersonality(sessionId)
   const data = rawData?.personality ?? null
 
   const [error, setError] = useState<string | null>(null)
@@ -32,7 +34,7 @@ export default function PersonalityPage() {
 
   const switchMutation = useMutation({
     mutationFn: async (profile: string) => {
-      const res = await fetch('/api/personality/switch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ profile }) })
+      const res = await fetch('/api/personality/switch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ profile, chatId: sessionId }) })
       if (!res.ok) { const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` })); throw new Error((err as { error?: string }).error ?? `HTTP ${res.status}`) }
     },
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['personality'] }) },
