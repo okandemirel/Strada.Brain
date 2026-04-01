@@ -8,6 +8,7 @@ import { ProviderAssigner } from "../../supervisor/provider-assigner.js";
 import type { ProviderDescriptor as SupervisorProviderDescriptor } from "../../supervisor/provider-assigner.js";
 import { SupervisorBrain } from "../../supervisor/supervisor-brain.js";
 import { createSupervisorNodeVerifier } from "../../supervisor/supervisor-verification.js";
+import { getBaselineProfile } from "../../agents/providers/provider-behavioral-profiles.js";
 
 // =============================================================================
 // STAGE RESULT
@@ -97,6 +98,45 @@ function buildProviderDescriptors(providerManager: ProviderManager): SupervisorP
 }
 
 // =============================================================================
+// PROVIDER BEHAVIORAL SUMMARY
+// =============================================================================
+
+/**
+ * Build a language-agnostic summary of the primary provider's behavioral
+ * strengths and weaknesses from its baseline profile.  Returns undefined if
+ * no profile is available (graceful degradation).
+ *
+ * Format: "Primary provider: kimi. Strengths: agent swarm (0.95), cost
+ * efficiency (0.95). Weaknesses: fast execution (0.45), tool reliability (0.50)."
+ */
+function buildProviderStrengthsSummary(providerName: string | undefined): string | undefined {
+  if (!providerName) return undefined;
+  try {
+    const profile = getBaselineProfile(providerName);
+    if (!profile?.scores) return undefined;
+
+    const entries = Object.entries(profile.scores) as Array<[string, number]>;
+    if (entries.length === 0) return undefined;
+
+    // Sort descending by score
+    const sorted = [...entries].sort(([, a], [, b]) => b - a);
+    const top3 = sorted.slice(0, 3);
+    const bottom3 = sorted.slice(-3).reverse(); // worst first
+
+    const fmtDim = ([dim, score]: [string, number]): string =>
+      `${dim} (${score.toFixed(2)})`;
+
+    const strengths = top3.map(fmtDim).join(", ");
+    const weaknesses = bottom3.map(fmtDim).join(", ");
+
+    return `Primary provider: ${providerName}. Strengths: ${strengths}. Weaknesses: ${weaknesses}.`;
+  } catch {
+    // Profile module may not be loaded yet or provider unknown — degrade gracefully
+    return undefined;
+  }
+}
+
+// =============================================================================
 // STAGE FUNCTION
 // =============================================================================
 
@@ -154,9 +194,16 @@ export function initializeSupervisorStage(
     // 5. Inject runtime context into the decomposer so it can make
     //    cost-aware, provider-aware decisions about goal granularity
     //    (OpenClaw-inspired: match decomposition to available resources).
+    const primaryProvider = descriptors[0]?.name;
+    const providerStrengths = buildProviderStrengthsSummary(primaryProvider);
+    const contextWindow = primaryProvider
+      ? params.providerManager.getProviderCapabilities(primaryProvider, descriptors[0]?.model)?.contextWindow
+      : undefined;
     params.goalDecomposer.setDecompositionContext({
       providerCount: descriptors.length,
       maxTotalNodes: descriptors.length <= 1 ? 8 : 12,
+      contextWindow,
+      providerStrengths,
     });
 
     // 6. Create SupervisorBrain

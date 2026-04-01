@@ -7,6 +7,7 @@
  */
 
 import type { ProviderCapabilities } from "./provider.interface.js";
+import { getBaselineProfile, type BehavioralProfile } from "./provider-behavioral-profiles.js";
 
 export type ProviderWorkload =
   | "planning"
@@ -288,7 +289,79 @@ function getSpeedScore(features: ReadonlySet<string>): number {
   return hasAnyFeature(features, ["fast-inference", "latency-sensitive"]) ? 1 : 0.55;
 }
 
+/**
+ * Compute a behavioral profile score for a specific workload type.
+ * Maps ProviderWorkload → weighted combination of BehavioralDimension scores.
+ * Returns undefined for workloads without a behavioral mapping (e.g. documentation).
+ */
+function getBehavioralWorkloadScore(
+  profile: BehavioralProfile,
+  workload: ProviderWorkload,
+): number | undefined {
+  const s = profile.scores;
+  switch (workload) {
+    case "planning":
+      return (
+        s.deepPlanning * 0.35 +
+        s.complexReasoning * 0.25 +
+        s.intentUnderstanding * 0.20 +
+        s.contextManagement * 0.20
+      );
+    case "implementation":
+      return (
+        s.codeRefactoring * 0.30 +
+        s.toolCallReliability * 0.25 +
+        s.fastExecution * 0.20 +
+        s.structuredOutput * 0.15 +
+        s.errorRecovery * 0.10
+      );
+    case "review":
+      return (
+        s.complexReasoning * 0.30 +
+        s.contextManagement * 0.25 +
+        s.intentUnderstanding * 0.20 +
+        s.codeRefactoring * 0.15 +
+        s.errorRecovery * 0.10
+      );
+    case "analysis":
+      return (
+        s.complexReasoning * 0.25 +
+        s.contextManagement * 0.20 +
+        s.deepPlanning * 0.20 +
+        s.multilingualStrength * 0.20 +
+        s.costEfficiency * 0.15
+      );
+    case "debugging":
+      return (
+        s.complexReasoning * 0.30 +
+        s.toolCallReliability * 0.25 +
+        s.codeRefactoring * 0.20 +
+        s.errorRecovery * 0.15 +
+        s.contextManagement * 0.10
+      );
+    case "coordination":
+      return (
+        s.agentSwarm * 0.30 +
+        s.fastExecution * 0.25 +
+        s.toolCallReliability * 0.20 +
+        s.errorRecovery * 0.15 +
+        s.costEfficiency * 0.10
+      );
+    case "documentation":
+      // No behavioral mapping — keep existing feature-flag score only
+      return undefined;
+    default:
+      return undefined;
+  }
+}
+
+/** Weight for existing feature-flag based scores when blending with behavioral profiles. */
+const FEATURE_FLAG_WEIGHT = 0.4;
+/** Weight for behavioral profile scores when blending. */
+const BEHAVIORAL_PROFILE_WEIGHT = 0.6;
+
 function deriveWorkloadScores(snapshot: {
+  providerName?: string;
   contextWindow: number;
   featureTags: readonly string[];
   capabilities: ProviderIntelligenceSnapshot["capabilities"];
@@ -311,7 +384,7 @@ function deriveWorkloadScores(snapshot: {
   );
   const speed = getSpeedScore(features);
 
-  return {
+  const featureFlagScores: Record<ProviderWorkload, number> = {
     planning: clamp(0.35 * thinking + 0.25 * context + 0.15 * toolCalling + 0.15 * search + 0.10 * reviewer),
     implementation: clamp(0.35 * toolCalling + 0.20 * context + 0.20 * coding + 0.15 * thinking + 0.10 * streaming),
     review: clamp(0.30 * thinking + 0.20 * toolCalling + 0.20 * context + 0.20 * reviewer + 0.10 * streaming),
@@ -320,6 +393,29 @@ function deriveWorkloadScores(snapshot: {
     documentation: clamp(0.25 * thinking + 0.20 * context + 0.20 * streaming + 0.20 * cheapness + 0.15 * multilingual),
     coordination: clamp(0.25 * streaming + 0.20 * speed + 0.20 * toolCalling + 0.20 * cheapness + 0.15 * context),
   };
+
+  // Blend with behavioral profile scores when available
+  const profile = snapshot.providerName
+    ? getBaselineProfile(snapshot.providerName)
+    : undefined;
+
+  if (!profile) {
+    return featureFlagScores;
+  }
+
+  const workloads = Object.keys(featureFlagScores) as ProviderWorkload[];
+  const blended = { ...featureFlagScores };
+  for (const workload of workloads) {
+    const behavioralScore = getBehavioralWorkloadScore(profile, workload);
+    if (behavioralScore !== undefined) {
+      blended[workload] = clamp(
+        featureFlagScores[workload] * FEATURE_FLAG_WEIGHT +
+          behavioralScore * BEHAVIORAL_PROFILE_WEIGHT,
+      );
+    }
+  }
+
+  return blended;
 }
 
 /**
@@ -366,13 +462,26 @@ export function getProviderIntelligenceSnapshot(
     outputPricePerMillion: modelInfo?.outputPricePerMillion,
   };
 
+  // Enrich strengths with behavioral profile best workloads
+  const strengths = buildStrengths(contextWindow, capabilities, featureTags);
+  const behavioralProfile = getBaselineProfile(providerName);
+  if (behavioralProfile?.bestWorkloads?.length) {
+    const existingSet = new Set(strengths.map((s) => s.toLowerCase()));
+    for (const workload of behavioralProfile.bestWorkloads) {
+      const label = `Best for ${workload}`;
+      if (!existingSet.has(label.toLowerCase())) {
+        strengths.push(label);
+      }
+    }
+  }
+
   const snapshot: ProviderIntelligenceSnapshot = {
     providerName,
     providerLabel: providerLabel ?? providerName,
     modelId,
     contextWindow,
     maxMessages: resolveMaxMessages(contextWindow),
-    strengths: buildStrengths(contextWindow, capabilities, featureTags),
+    strengths,
     limitations: buildLimitations(contextWindow, capabilities, featureTags),
     behavioralHints: buildBehavioralHints(capabilities, featureTags),
     featureTags,

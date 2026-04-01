@@ -44,6 +44,8 @@ export interface DecompositionContext {
   readonly remainingBudgetUsd?: number;
   /** Total node cap across all depths (default 12) */
   readonly maxTotalNodes?: number;
+  /** Summary of primary provider's behavioral strengths for smart decomposition */
+  readonly providerStrengths?: string;
 }
 
 function buildProactivePrompt(ctx?: DecompositionContext): string {
@@ -55,6 +57,9 @@ function buildProactivePrompt(ctx?: DecompositionContext): string {
   const providerHint = providerCount <= 1
     ? "\n- IMPORTANT: Only 1 AI provider is available. Parallelism is impossible. Prefer a flat, sequential plan with fewer goals. Deep nesting wastes tokens on a single provider."
     : `\n- ${providerCount} providers are available — independent goals can run in parallel`;
+  const behavioralHint = ctx?.providerStrengths
+    ? `\n- Provider behavioral profile: ${ctx.providerStrengths}`
+    : "";
 
   return `You are a goal decomposer for an AI development assistant.
 
@@ -69,7 +74,7 @@ Rules:
 - Sequential sub-goals should depend on their prerequisite
 - Set needsFurtherDecomposition=true ONLY for sub-goals that genuinely require multiple distinct implementation steps — most goals should be false
 - The TOTAL number of goals across all depths must not exceed ${maxNodes}
-- Prefer fewer, well-scoped goals over many granular ones${providerHint}${budgetHint}
+- Prefer fewer, well-scoped goals over many granular ones${providerHint}${budgetHint}${behavioralHint}
 
 Respond ONLY with JSON:
 {"nodes": [{"id": "s1", "task": "description", "dependsOn": [], "needsFurtherDecomposition": false}, ...]}`;
