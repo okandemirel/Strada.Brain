@@ -4394,7 +4394,11 @@ export class Orchestrator {
       const errMsg = err instanceof Error ? err.message : "Unknown streaming error";
       getLogger().error("Silent stream error", { chatId, error: errMsg });
       try {
-        return await provider.chat(systemPrompt, session.messages, toolDefinitions);
+        // Fallback to non-streaming with a timeout so it doesn't hang
+        // indefinitely if the provider is genuinely unresponsive.
+        return await provider.chat(systemPrompt, session.messages, toolDefinitions, {
+          signal: AbortSignal.timeout(this.streamInitialTimeoutMs),
+        });
       } catch (fallbackErr) {
         getLogger().error("Silent stream fallback chat failed", {
           chatId,
