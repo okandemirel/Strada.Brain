@@ -453,7 +453,7 @@ export function useWebSocket(): UseWebSocketReturn {
     connectRef.current = connect
   }, [connect])
 
-  const writeTimeoutRef = useRef<ReturnType<typeof setTimeout>>()
+  const writeTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   useEffect(() => {
     clearTimeout(writeTimeoutRef.current)
     writeTimeoutRef.current = setTimeout(() => {
