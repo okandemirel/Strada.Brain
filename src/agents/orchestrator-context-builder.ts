@@ -137,7 +137,7 @@ function buildTaskExecutionMemoryLayer(
   }
 
   if (taskExecutionMemory && taskExecutionMemory.openItems.length > 0) {
-    lines.push(`Open items: ${taskExecutionMemory.openItems.join("; ")}`);
+    lines.push(`Open items: ${taskExecutionMemory.openItems.map(sanitizePromptInjection).join("; ")}`);
   }
   if (taskExecutionMemory?.branchSummary) {
     lines.push(`Branch recovery: ${sanitizePromptInjection(taskExecutionMemory.branchSummary)}`);
@@ -413,7 +413,7 @@ export async function buildContextLayers(
       if (isOk(memoriesResult)) {
         const memories = memoriesResult.value;
         if (memories.length > 0) {
-          const memoryContext = memories.map((m) => m.entry.content).join("\n---\n");
+          const memoryContext = memories.map((m) => sanitizePromptInjection(m.entry.content)).join("\n---\n");
           layers.push(`## Relevant Memory\n${memoryContext}`);
           for (const m of memories) {
             contentHashes.push(m.entry.content);

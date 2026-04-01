@@ -117,48 +117,36 @@ export class GoalStorage {
     configureSqlitePragmas(this.db, "tasks");
     this.db.exec(SCHEMA_SQL);
 
-    // Phase 8: Add timing columns if missing (safe migration for existing DBs)
-    const cols = this.db.pragma("table_info(goal_nodes)") as Array<{ name: string }>;
-    const colNames = new Set(cols.map((c) => c.name));
-    if (!colNames.has("started_at")) {
-      this.db.exec("ALTER TABLE goal_nodes ADD COLUMN started_at INTEGER");
-    }
-    if (!colNames.has("completed_at")) {
-      this.db.exec("ALTER TABLE goal_nodes ADD COLUMN completed_at INTEGER");
-    }
-    if (!colNames.has("retry_count")) {
-      this.db.exec(
-        "ALTER TABLE goal_nodes ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0",
-      );
-    }
-    if (!colNames.has("redecomposition_count")) {
-      this.db.exec(
-        "ALTER TABLE goal_nodes ADD COLUMN redecomposition_count INTEGER NOT NULL DEFAULT 0",
-      );
-    }
-    if (!colNames.has("review_status")) {
-      this.db.exec(
-        "ALTER TABLE goal_nodes ADD COLUMN review_status TEXT DEFAULT 'none'",
-      );
-    }
-    if (!colNames.has("review_iterations")) {
-      this.db.exec(
-        "ALTER TABLE goal_nodes ADD COLUMN review_iterations INTEGER DEFAULT 0",
-      );
-    }
-
-    // Phase 20: Add plan_summary column if missing (safe migration for pre-Phase-16 DBs)
-    const treeCols = this.db.pragma("table_info(goal_trees)") as Array<{
-      name: string;
-    }>;
-    const treeColNames = new Set(treeCols.map((c) => c.name));
-    if (!treeColNames.has("plan_summary")) {
-      this.db.exec(
-        "ALTER TABLE goal_trees ADD COLUMN plan_summary TEXT",
-      );
-    }
+    // Safe migrations: add columns if missing (idempotent for existing DBs)
+    this.migrateColumns("goal_nodes", [
+      ["started_at", "INTEGER"],
+      ["completed_at", "INTEGER"],
+      ["retry_count", "INTEGER NOT NULL DEFAULT 0"],
+      ["redecomposition_count", "INTEGER NOT NULL DEFAULT 0"],
+      ["review_status", "TEXT DEFAULT 'none'"],
+      ["review_iterations", "INTEGER DEFAULT 0"],
+    ]);
+    this.migrateColumns("goal_trees", [
+      ["plan_summary", "TEXT"],
+    ]);
 
     this.prepareStatements();
+  }
+
+  /** Add missing columns to a table (idempotent). */
+  private migrateColumns(
+    table: string,
+    columns: Array<[name: string, definition: string]>,
+  ): void {
+    const existing = new Set(
+      (this.db!.pragma(`table_info(${table})`) as Array<{ name: string }>)
+        .map((c) => c.name),
+    );
+    for (const [name, definition] of columns) {
+      if (!existing.has(name)) {
+        this.db!.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${definition}`);
+      }
+    }
   }
 
   /** Close the database connection */

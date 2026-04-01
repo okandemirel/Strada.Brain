@@ -244,6 +244,7 @@ export function applyMMR(
       for (const sel of selected) {
         const selEmbedding = (sel.entry as unknown as UnifiedMemoryEntry).embedding;
         const resultEmbedding = (result.entry as unknown as UnifiedMemoryEntry).embedding;
+        if (!selEmbedding?.length || !resultEmbedding?.length) continue;
         const sim = mmrCosineSimilarity(resultEmbedding, selEmbedding);
         maxSim = Math.max(maxSim, sim);
       }

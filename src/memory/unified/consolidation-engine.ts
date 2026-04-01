@@ -623,10 +623,10 @@ export class MemoryConsolidationEngine {
       }
     }
 
-    // HNSW updates: remove summary vector, re-add original vectors
+    // HNSW updates: remove summary vector, re-add original vectors.
     // Acquire the write mutex to prevent interleaved writes.
-    // Use .catch() to log errors (undo is sync but HNSW ops are async)
-    const doUndoHnsw = async () => {
+    // Use .catch() to log errors (undo is sync but HNSW ops are async).
+    const doUndoHnsw = async (): Promise<void> => {
       await this.hnsw.remove([summaryEntryId]);
       if (originalEmbeddings.length > 0) {
         await this.hnsw.upsert(
@@ -640,29 +640,12 @@ export class MemoryConsolidationEngine {
         );
       }
     };
-    if (this.hnswMutex) {
-      void this.hnswMutex.withLock(doUndoHnsw).catch((err) => {
-        this.logger.warn("[Consolidation] HNSW update failed during undo", { error: String(err) });
-      });
-    } else {
-      // No mutex: fire-and-forget individual operations for backward compatibility
-      void this.hnsw.remove([summaryEntryId]).catch((err) => {
-        this.logger.warn("[Consolidation] HNSW remove failed during undo", { summaryEntryId, error: String(err) });
-      });
-      if (originalEmbeddings.length > 0) {
-        void this.hnsw.upsert(
-          originalEmbeddings.map((oe) => ({
-            id: oe.id,
-            vector: oe.embedding,
-            chunk: { filePath: "", content: "", kind: "generic", language: "text" },
-            addedAt: now,
-            accessCount: 0,
-          })),
-        ).catch((err) => {
-          this.logger.warn("[Consolidation] HNSW upsert failed during undo", { error: String(err) });
-        });
-      }
-    }
+    const hnswPromise = this.hnswMutex
+      ? this.hnswMutex.withLock(doUndoHnsw)
+      : doUndoHnsw();
+    void hnswPromise.catch((err) => {
+      this.logger.warn("[Consolidation] HNSW update failed during undo", { error: String(err) });
+    });
 
     this.logger.info("[Consolidation] Undo completed", { logId, summaryEntryId, restoredCount: sourceEntryIds.length });
   }

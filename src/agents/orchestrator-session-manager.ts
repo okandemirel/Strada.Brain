@@ -25,7 +25,7 @@ import type { SessionSummarizer } from "../memory/unified/session-summarizer.js"
 import type { InteractionGateState } from "./autonomy/interaction-policy.js";
 import type { InteractionBoundaryDecision } from "./autonomy/visibility-boundary.js";
 import { writeFile, mkdir } from "node:fs/promises";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { MemoryRefresher } from "./memory-refresher.js";
 import {
@@ -185,7 +185,6 @@ export class SessionManager {
     const dir = this.deps.sessionsDir;
     if (!dir || !existsSync(dir)) return;
     try {
-      const { readdirSync, unlinkSync } = require("node:fs") as typeof import("node:fs");
       for (const file of readdirSync(dir)) {
         if (!file.endsWith(".json")) continue;
         try {

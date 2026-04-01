@@ -11,6 +11,7 @@ import type { MessageContent } from "./provider-core.interface.js";
 import { supportsStreaming } from "./provider.interface.js";
 import { getLogger } from "../../utils/logger.js";
 import { ProviderHealthRegistry } from "./provider-health.js";
+import { sanitizeSecrets } from "../../security/secret-sanitizer.js";
 
 /**
  * Check whether a provider error is likely caused by the request itself
@@ -234,7 +235,7 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
 
     const detail = attempted === 0
       ? "All providers are in cooldown. Try again later."
-      : `Last error: ${lastError}`;
+      : `Last error: ${sanitizeSecrets(lastError)}`;
     throw new Error(`All providers failed or unavailable. ${detail}`);
   }
 }

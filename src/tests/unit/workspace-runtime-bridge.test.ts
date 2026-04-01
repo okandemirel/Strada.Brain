@@ -54,6 +54,8 @@ describe("createWorkspaceRuntimeBridge", () => {
       undefined,
       2,
       1,
+      "none",
+      0,
     );
   });
 
@@ -97,6 +99,8 @@ describe("createWorkspaceRuntimeBridge", () => {
       "checkpoint",
       "Aborted",
       0,
+      0,
+      "none",
       0,
     );
   });
@@ -200,6 +204,8 @@ describe("createWorkspaceRuntimeBridge", () => {
       "data",
       undefined,
       0,
+      0,
+      "none",
       0,
     );
     expect(received).toEqual(expect.arrayContaining([

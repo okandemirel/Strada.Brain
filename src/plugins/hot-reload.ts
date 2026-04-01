@@ -260,35 +260,17 @@ export class PluginHotReload {
   /**
    * Handle the actual reload
    */
-  private async handleReload(type: HotReloadEventType, path: string): Promise<void> {
-    this.logger.info(`Plugin file changed: ${path}`, { type });
+  private handleReload(_type: HotReloadEventType, path: string): void {
+    // ESM modules cannot be invalidated from cache.
+    // Full process restart is required for changes to take effect.
+    // The watcher detects changes for notification purposes only.
+    this.logger.info(`Plugin change detected: ${path} (ESM — restart required for reload)`);
 
-    try {
-      // ESM modules cannot be invalidated from cache.
-      // Full process restart is required for changes to take effect.
-      // The watcher detects changes for notification purposes only.
-
-      // Emit detected event
-      this.emitEvent({
-        type: "reload_detected",
-        path,
-        timestamp: Date.now()
-      });
-
-      this.logger.info(`Plugin change detected: ${path} (ESM — restart required for reload)`);
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      
-      this.logger.error(`Plugin reload failed: ${path}`, { error: errorMessage });
-      
-      // Emit error event
-      this.emitEvent({
-        type: "reload_error",
-        path,
-        timestamp: Date.now(),
-        error: errorMessage
-      });
-    }
+    this.emitEvent({
+      type: "reload_detected",
+      path,
+      timestamp: Date.now(),
+    });
   }
 
   /**

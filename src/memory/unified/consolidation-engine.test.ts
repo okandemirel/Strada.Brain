@@ -752,8 +752,9 @@ describe("MemoryConsolidationEngine", () => {
       mockHnsw.remove.mockClear();
       mockHnsw.upsert.mockClear();
 
-      // Undo it
+      // Undo it (sync call, but HNSW ops are async fire-and-forget)
       engine.undo(logId);
+      await new Promise(r => setTimeout(r, 50)); // Allow async HNSW ops to settle
 
       // Log should be marked as undone
       const updatedLog = db.prepare("SELECT * FROM consolidation_log WHERE id = ?").get(logId) as Record<string, unknown>;

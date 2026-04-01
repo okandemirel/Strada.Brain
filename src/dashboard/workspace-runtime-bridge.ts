@@ -88,6 +88,8 @@ export function createWorkspaceRuntimeBridge(params: {
           typeof bag.error === "string" ? bag.error : node.error,
           node.retryCount,
           node.redecompositionCount,
+          typeof bag.reviewStatus === "string" ? bag.reviewStatus : (node.reviewStatus ?? "none"),
+          node.reviewIterations ?? 0,
         );
       };
 
@@ -205,6 +207,8 @@ export function createWorkspaceRuntimeBridge(params: {
           node.error,
           node.retryCount,
           node.redecompositionCount,
+          newReviewStatus ?? node.reviewStatus ?? "none",
+          node.reviewIterations ?? 0,
         );
 
         workspaceBus.emit("monitor:task_update", {

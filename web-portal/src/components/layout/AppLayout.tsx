@@ -25,41 +25,26 @@ function PanelFallback({ label }: { label: string }) {
   )
 }
 
+const PANEL_MAP: Record<string, React.LazyExoticComponent<React.ComponentType>> = {
+  monitor: MonitorPanel,
+  canvas: CanvasPanel,
+  code: CodePanel,
+}
+
 function PrimaryContent() {
   const { t } = useTranslation()
   const mode = useWorkspaceStore((s) => s.mode)
 
-  if (mode === 'monitor') {
-    return (
-      <ErrorBoundary>
-        <Suspense fallback={<PanelFallback label={t('workspace.loading.monitor')} />}>
-          <MonitorPanel />
-        </Suspense>
-      </ErrorBoundary>
-    )
-  }
+  const Panel = PANEL_MAP[mode]
+  if (!Panel) return <Outlet />
 
-  if (mode === 'canvas') {
-    return (
-      <ErrorBoundary>
-        <Suspense fallback={<PanelFallback label={t('workspace.loading.canvas')} />}>
-          <CanvasPanel />
-        </Suspense>
-      </ErrorBoundary>
-    )
-  }
-
-  if (mode === 'code') {
-    return (
-      <ErrorBoundary>
-        <Suspense fallback={<PanelFallback label={t('workspace.loading.code')} />}>
-          <CodePanel />
-        </Suspense>
-      </ErrorBoundary>
-    )
-  }
-
-  return <Outlet />
+  return (
+    <ErrorBoundary>
+      <Suspense fallback={<PanelFallback label={t(`workspace.loading.${mode}`)} />}>
+        <Panel />
+      </Suspense>
+    </ErrorBoundary>
+  )
 }
 
 function AppLayoutInner() {

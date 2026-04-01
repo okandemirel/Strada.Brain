@@ -732,7 +732,7 @@ export class LearningPipeline {
           triggerPattern: pattern,
           action: JSON.stringify({ description: 'Recurring error: ' + pattern }),
           toolName: obs.toolName,
-        });
+        }).catch(() => {});
       }
     }
 
@@ -750,7 +750,7 @@ export class LearningPipeline {
           type: "workflow_pattern",
           triggerPattern: recent,
           action: JSON.stringify({ description: 'Common workflow: ' + recent }),
-        });
+        }).catch(() => {});
       }
     }
   }

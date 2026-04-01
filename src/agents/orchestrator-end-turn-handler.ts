@@ -54,6 +54,19 @@ import {
 } from "./orchestrator-loop-shared.js";
 import { shouldDeferRawBoundaryForDirectTarget } from "./prompt-targets.js";
 
+// ─── Localized Fallbacks ─────────────────────────────────────────────────────
+
+const EMPTY_RESPONSE_FALLBACKS: Record<string, string> = {
+  en: "I wasn't able to generate a response. Could you rephrase your question?",
+  tr: "Bir yanıt oluşturamadım. Sorunuzu yeniden ifade edebilir misiniz?",
+  ja: "応答を生成できませんでした。質問を言い換えていただけますか？",
+  ko: "응답을 생성할 수 없었습니다. 질문을 다시 표현해 주시겠어요?",
+  zh: "我无法生成回复。您能重新表述您的问题吗？",
+  de: "Ich konnte keine Antwort generieren. Könnten Sie Ihre Frage umformulieren?",
+  es: "No pude generar una respuesta. ¿Podría reformular su pregunta?",
+  fr: "Je n'ai pas pu générer de réponse. Pourriez-vous reformuler votre question ?",
+};
+
 // ─── Synthesis Routing ────────────────────────────────────────────────────────
 
 /** Regex for raw tool output artifacts that need human-friendly rewriting.
@@ -854,22 +867,7 @@ export async function handleInteractiveEndTurn(
 
   // 5. Empty response fallback
   const lang = ctx.profileLanguage ?? ctx.defaultLanguage;
-  const fallback =
-    lang === "tr"
-      ? "Bir yanıt oluşturamadım. Sorunuzu yeniden ifade edebilir misiniz?"
-      : lang === "ja"
-        ? "応答を生成できませんでした。質問を言い換えていただけますか？"
-        : lang === "ko"
-          ? "응답을 생성할 수 없었습니다. 질문을 다시 표현해 주시겠어요?"
-          : lang === "zh"
-            ? "我无法生成回复。您能重新表述您的问题吗？"
-            : lang === "de"
-              ? "Ich konnte keine Antwort generieren. Könnten Sie Ihre Frage umformulieren?"
-              : lang === "es"
-                ? "No pude generar una respuesta. ¿Podría reformular su pregunta?"
-                : lang === "fr"
-                  ? "Je n'ai pas pu générer de réponse. Pourriez-vous reformuler votre question ?"
-                  : "I wasn't able to generate a response. Could you rephrase your question?";
+  const fallback = EMPTY_RESPONSE_FALLBACKS[lang] ?? EMPTY_RESPONSE_FALLBACKS["en"]!;
   logger.warn("LLM returned empty response", {
     chatId: ctx.chatId,
     provider: ctx.currentAssignment.providerName,

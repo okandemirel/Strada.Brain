@@ -879,7 +879,7 @@ export class LearningStorage {
         UPDATE solutions SET
           success_count = success_count + ?,
           total_attempts = total_attempts + 1,
-          success_rate = CAST((success_count + ?) AS REAL) / (total_attempts + 1),
+          success_rate = CAST((success_count + ?) AS REAL) / NULLIF(total_attempts + 1, 0),
           last_used = ?
         WHERE id = ?
       `,

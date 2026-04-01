@@ -314,11 +314,6 @@ export class SupervisorDispatcher {
    * Wave N = nodes whose dependencies all resolve by wave N-1.
    */
   computeWaves(nodes: TaggedGoalNode[]): TaggedGoalNode[][] {
-    const nodeMap = new Map<string, TaggedGoalNode>();
-    for (const node of nodes) {
-      nodeMap.set(node.id as string, node);
-    }
-
     const nodeIds = new Set(nodes.map((n) => n.id as string));
     const assigned = new Set<string>();
     const waves: TaggedGoalNode[][] = [];

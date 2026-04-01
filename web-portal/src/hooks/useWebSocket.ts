@@ -414,21 +414,18 @@ export function useWebSocket(): UseWebSocketReturn {
         case 'stream_end': {
           streamsRef.current.delete(data.streamId)
           const store = useSessionStore.getState()
-          const streamEndInstinctIds = Array.isArray(data.instinctIds)
-            ? (data.instinctIds as unknown[]).filter((id): id is string => typeof id === 'string')
-            : undefined
-          if (data.text) {
-            const streamMsg = store.messages.find((m) => m.streamId === data.streamId)
-            if (streamMsg) {
+          const streamMsg = store.messages.find((m) => m.streamId === data.streamId)
+          if (streamMsg) {
+            if (data.text) {
+              const streamEndInstinctIds = Array.isArray(data.instinctIds)
+                ? (data.instinctIds as unknown[]).filter((id): id is string => typeof id === 'string')
+                : undefined
               store.updateMessage(streamMsg.id, {
                 text: data.text,
                 isStreaming: false,
                 ...(streamEndInstinctIds && streamEndInstinctIds.length > 0 ? { instinctIds: streamEndInstinctIds } : {}),
               })
-            }
-          } else {
-            const streamMsg = store.messages.find((m) => m.streamId === data.streamId)
-            if (streamMsg) {
+            } else {
               store.removeMessage(streamMsg.id)
             }
           }
@@ -488,6 +485,31 @@ export function useWebSocket(): UseWebSocketReturn {
     }
   }, [connect])
 
+  const enqueueOrReconnect = useCallback((outbound: {
+    payload: Record<string, unknown>
+    clientMessageId?: string
+    expectedChatId?: string | null
+  }): boolean => {
+    const delivery = deliverOutboundMessage(outbound)
+    if (delivery === 'sent') return true
+
+    if (delivery === 'defer') {
+      pendingOutboundMessagesRef.current.push(outbound)
+      const ws = wsRef.current
+      if (
+        mountedRef.current &&
+        (!ws || ws.readyState === WebSocket.CLOSED) &&
+        !reconnectTimerRef.current
+      ) {
+        useSessionStore.getState().setStatus('reconnecting')
+        connectRef.current?.()
+      }
+      return true
+    }
+
+    return false
+  }, [deliverOutboundMessage])
+
   const sendMessage = useCallback((text: string, attachments?: Attachment[]): boolean => {
     const clientMessageId = generateId()
 
@@ -511,28 +533,8 @@ export function useWebSocket(): UseWebSocketReturn {
       payload.attachments = attachments
     }
 
-    const outbound = { payload, clientMessageId }
-    const delivery = deliverOutboundMessage(outbound)
-    if (delivery === 'sent') {
-      return true
-    }
-
-    if (delivery === 'defer') {
-      pendingOutboundMessagesRef.current.push(outbound)
-      const ws = wsRef.current
-      if (
-        mountedRef.current &&
-        (!ws || ws.readyState === WebSocket.CLOSED) &&
-        !reconnectTimerRef.current
-      ) {
-        useSessionStore.getState().setStatus('reconnecting')
-        connectRef.current?.()
-      }
-      return true
-    }
-
-    return false
-  }, [deliverOutboundMessage])
+    return enqueueOrReconnect({ payload, clientMessageId })
+  }, [enqueueOrReconnect])
 
   const sendConfirmation = useCallback((confirmId: string, option: string) => {
     try {
@@ -556,31 +558,11 @@ export function useWebSocket(): UseWebSocketReturn {
   }, [sendMessage])
 
   const sendRawJSON = useCallback((payload: Record<string, unknown>): boolean => {
-    const outbound = {
+    return enqueueOrReconnect({
       payload,
       expectedChatId: chatIdRef.current,
-    }
-    const delivery = deliverOutboundMessage(outbound)
-    if (delivery === 'sent') {
-      return true
-    }
-
-    if (delivery === 'defer') {
-      pendingOutboundMessagesRef.current.push(outbound)
-      const ws = wsRef.current
-      if (
-        mountedRef.current &&
-        (!ws || ws.readyState === WebSocket.CLOSED) &&
-        !reconnectTimerRef.current
-      ) {
-        useSessionStore.getState().setStatus('reconnecting')
-        connectRef.current?.()
-      }
-      return true
-    }
-
-    return false
-  }, [deliverOutboundMessage])
+    })
+  }, [enqueueOrReconnect])
 
   return {
     messages,
