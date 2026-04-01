@@ -878,9 +878,9 @@ export async function runTerminalWizard(
     });
     console.log("");
     console.log("  Strada dependency summary:");
-    console.log(`    Core: ${stradaDeps.coreInstalled ? "installed" : "missing"}`);
-    console.log(`    Modules: ${stradaDeps.modulesInstalled ? "installed" : "missing"}`);
-    console.log(`    MCP: ${stradaDeps.mcpInstalled ? "installed" : "missing"}${stradaDeps.mcpInstalled ? "" : " (recommended)"}`);
+    console.log(`    Core: ${stradaDeps.coreInstalled ? `installed (v${stradaDeps.coreVersion ?? "unknown"})` : "missing"}`);
+    console.log(`    Modules: ${stradaDeps.modulesInstalled ? `installed (v${stradaDeps.modulesVersion ?? "unknown"})` : "missing"}`);
+    console.log(`    MCP: ${stradaDeps.mcpInstalled ? `installed (v${stradaDeps.mcpVersion ?? "unknown"})` : "missing (recommended)"}`);
     if (!stradaDeps.coreInstalled) {
       console.log("    Warning: reduced Strada framework awareness until Strada.Core is available.");
     }

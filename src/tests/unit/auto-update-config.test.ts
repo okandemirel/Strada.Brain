@@ -76,11 +76,11 @@ describe("Auto-Update Config", () => {
     expect(config.autoUpdate.channel).toBe("latest");
   });
 
-  it("should default AUTO_UPDATE_CHANNEL to stable", () => {
+  it("should default AUTO_UPDATE_CHANNEL to latest", () => {
     process.env["UNITY_PROJECT_PATH"] = "/tmp/test-project";
     process.env["ANTHROPIC_API_KEY"] = "sk-test-key";
     const config = loadConfig();
-    expect(config.autoUpdate.channel).toBe("stable");
+    expect(config.autoUpdate.channel).toBe("latest");
   });
 
   it("should reject invalid AUTO_UPDATE_CHANNEL", () => {

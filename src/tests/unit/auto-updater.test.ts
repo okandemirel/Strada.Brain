@@ -697,7 +697,7 @@ function mockConfig() {
       enabled: true,
       intervalHours: 6,
       idleTimeoutMin: 5,
-      channel: "stable" as const,
+      channel: "latest" as const,
       notify: true,
       autoRestart: true,
     },

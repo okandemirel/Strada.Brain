@@ -464,6 +464,15 @@ export function buildSetupEnvLines(
     }
   }
 
+  const autoUpdateEnabled = config.AUTO_UPDATE_ENABLED !== "false";
+  const autoUpdateChannel = config.AUTO_UPDATE_CHANNEL === "stable" ? "stable" : "latest";
+  lines.push(
+    "",
+    "# Auto-Update",
+    `AUTO_UPDATE_ENABLED=${autoUpdateEnabled}`,
+    `AUTO_UPDATE_CHANNEL=${autoUpdateChannel}`,
+  );
+
   lines.push(
     "",
     "# Defaults",

@@ -251,7 +251,7 @@ Strada.Brain prueft taeglich automatisch auf Updates und wendet diese an, wenn d
 | `AUTO_UPDATE_ENABLED` | `true` | Aktiviert/deaktiviert automatische Updates |
 | `AUTO_UPDATE_INTERVAL_HOURS` | `24` | Prueffrequenz (Stunden) |
 | `AUTO_UPDATE_IDLE_TIMEOUT_MIN` | `5` | Minuten Untaetigkeit vor Update-Anwendung |
-| `AUTO_UPDATE_CHANNEL` | `stable` | npm dist-tag: `stable` oder `latest` |
+| `AUTO_UPDATE_CHANNEL` | `latest` | npm dist-tag: `stable` oder `latest` |
 | `AUTO_UPDATE_AUTO_RESTART` | `true` | Automatischer Neustart nach Update (`strada daemon` erforderlich) |
 
 ---

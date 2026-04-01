@@ -22,7 +22,7 @@ describe("AutoUpdater Integration", () => {
   }
 
   const mockAutoUpdateConfig = {
-    autoUpdate: { enabled: true, intervalHours: 6, idleTimeoutMin: 5, channel: "stable" as const, notify: true, autoRestart: true },
+    autoUpdate: { enabled: true, intervalHours: 6, idleTimeoutMin: 5, channel: "latest" as const, notify: true, autoRestart: true },
   };
 
   it("should complete full lockfile lifecycle", () => {

@@ -251,7 +251,7 @@ Strada.Brain comprueba automaticamente las actualizaciones diariamente y las apl
 | `AUTO_UPDATE_ENABLED` | `true` | Habilitar/deshabilitar actualizacion automatica |
 | `AUTO_UPDATE_INTERVAL_HOURS` | `24` | Frecuencia de comprobacion (horas) |
 | `AUTO_UPDATE_IDLE_TIMEOUT_MIN` | `5` | Minutos inactivo antes de aplicar actualizacion |
-| `AUTO_UPDATE_CHANNEL` | `stable` | npm dist-tag: `stable` o `latest` |
+| `AUTO_UPDATE_CHANNEL` | `latest` | npm dist-tag: `stable` o `latest` |
 | `AUTO_UPDATE_AUTO_RESTART` | `true` | Reinicio automatico despues de actualizacion (requiere `strada daemon`) |
 
 ---

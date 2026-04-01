@@ -255,7 +255,7 @@ Strada.Brain, her gun otomatik olarak guncellemeleri kontrol eder ve acil oldugu
 | `AUTO_UPDATE_ENABLED` | `true` | Oto-guncellemeyi etkinlestir/devre disi birak |
 | `AUTO_UPDATE_INTERVAL_HOURS` | `24` | Kontrol sikliği (saatler) |
 | `AUTO_UPDATE_IDLE_TIMEOUT_MIN` | `5` | Guncellemeleri uygulamadan onceki bekleme suresi (dakikalar) |
-| `AUTO_UPDATE_CHANNEL` | `stable` | npm dist-tag: `stable` veya `latest` |
+| `AUTO_UPDATE_CHANNEL` | `latest` | npm dist-tag: `stable` veya `latest` |
 | `AUTO_UPDATE_AUTO_RESTART` | `true` | Guncelleme sonrasi otomatik yeniden baslat (`strada daemon` gerektirir) |
 
 ---

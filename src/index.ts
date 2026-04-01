@@ -225,7 +225,7 @@ program
     const configResult = loadConfigSafe();
     const autoUpdateConfig = configResult.kind === "ok"
       ? { autoUpdate: configResult.value.autoUpdate }
-      : { autoUpdate: { enabled: true, intervalHours: 6, idleTimeoutMin: 5, channel: "stable" as const, notify: false, autoRestart: false } };
+      : { autoUpdate: { enabled: true, intervalHours: 6, idleTimeoutMin: 5, channel: "latest" as const, notify: false, autoRestart: false } };
 
     const updater = new AutoUpdater(autoUpdateConfig, new ChannelActivityRegistry(), { hasRunningTasks: () => false });
     const result = await updater.checkForUpdate();
@@ -311,7 +311,7 @@ program
     const configResult = loadConfigSafe();
     const autoUpdateConfig = configResult.kind === "ok"
       ? { autoUpdate: configResult.value.autoUpdate }
-      : { autoUpdate: { enabled: true, intervalHours: 6, idleTimeoutMin: 5, channel: "stable" as const, notify: false, autoRestart: false } };
+      : { autoUpdate: { enabled: true, intervalHours: 6, idleTimeoutMin: 5, channel: "latest" as const, notify: false, autoRestart: false } };
 
     const updater = new AutoUpdater(autoUpdateConfig, new ChannelActivityRegistry(), { hasRunningTasks: () => false });
     const currentVersion = updater.getCurrentVersion();
@@ -687,7 +687,7 @@ async function createCliAutoUpdater(
         enabled: true,
         intervalHours: 6,
         idleTimeoutMin: 5,
-        channel: "stable" as const,
+        channel: "latest" as const,
         notify: false,
         autoRestart: false,
       }

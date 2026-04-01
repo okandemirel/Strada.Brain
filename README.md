@@ -257,7 +257,7 @@ Strada.Brain automatically checks for updates daily and applies them when idle. 
 | `AUTO_UPDATE_ENABLED` | `true` | Enable/disable auto-update |
 | `AUTO_UPDATE_INTERVAL_HOURS` | `24` | Check frequency (hours) |
 | `AUTO_UPDATE_IDLE_TIMEOUT_MIN` | `5` | Minutes idle before applying update |
-| `AUTO_UPDATE_CHANNEL` | `stable` | npm dist-tag: `stable` or `latest` |
+| `AUTO_UPDATE_CHANNEL` | `latest` | npm dist-tag: `stable` or `latest` |
 | `AUTO_UPDATE_NOTIFY` | `true` | Send update notifications when checks or installs occur |
 | `AUTO_UPDATE_AUTO_RESTART` | `true` | Auto-restart after update when idle (requires `strada daemon`) |
 

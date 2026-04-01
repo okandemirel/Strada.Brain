@@ -158,7 +158,7 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
       enabled: true,
       intervalHours: 6,
       idleTimeoutMin: 5,
-      channel: "stable",
+      channel: "latest",
       notify: true,
       autoRestart: true,
     },

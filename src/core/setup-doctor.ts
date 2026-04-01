@@ -119,7 +119,7 @@ export async function collectDoctorReport(options: DoctorOptions = {}): Promise<
         enabled: true,
         intervalHours: 6,
         idleTimeoutMin: 5,
-        channel: "stable",
+        channel: "latest",
         notify: false,
         autoRestart: false,
       },

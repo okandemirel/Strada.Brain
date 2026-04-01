@@ -1790,7 +1790,7 @@ export const configSchema = z
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().positive())
       .default("5"),
-    autoUpdateChannel: z.enum(["stable", "latest"]).default("stable"),
+    autoUpdateChannel: z.enum(["stable", "latest"]).default("latest"),
     autoUpdateNotify: boolFromString(true),
     autoUpdateAutoRestart: boolFromString(true),
 

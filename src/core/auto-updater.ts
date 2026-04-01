@@ -499,12 +499,21 @@ export class AutoUpdater {
         };
       } else {
         const distTag = this.config.channel === "latest" ? "latest" : "stable";
-        const output = await this.runCommand(
+        let output = await this.runCommand(
           "npm",
           ["view", `strada-brain@${distTag}`, "version"],
           VERSION_CHECK_TIMEOUT,
         );
-        const remoteVersion = AutoUpdater.parseVersionFromOutput(output);
+        let remoteVersion = AutoUpdater.parseVersionFromOutput(output);
+        // Fallback: if configured dist-tag doesn't exist, try "latest"
+        if (!remoteVersion && distTag !== "latest") {
+          output = await this.runCommand(
+            "npm",
+            ["view", "strada-brain@latest", "version"],
+            VERSION_CHECK_TIMEOUT,
+          );
+          remoteVersion = AutoUpdater.parseVersionFromOutput(output);
+        }
         if (!remoteVersion) {
           return {
             available: false,
@@ -618,10 +627,21 @@ export class AutoUpdater {
           throw healthErr;
         }
       } else {
-        const args = method === "npm-global"
-          ? ["install", "-g", `strada-brain@${this.config.channel}`]
-          : ["install", `strada-brain@${this.config.channel}`];
-        await this.runCommand("npm", args, UPDATE_TIMEOUT, method === "npm-local" ? this.installRoot : undefined);
+        // Use configured channel, fallback to "latest" if install fails
+        const tag = this.config.channel;
+        const buildArgs = (t: string) => method === "npm-global"
+          ? ["install", "-g", `strada-brain@${t}`]
+          : ["install", `strada-brain@${t}`];
+        const cwd = method === "npm-local" ? this.installRoot : undefined;
+        try {
+          await this.runCommand("npm", buildArgs(tag), UPDATE_TIMEOUT, cwd);
+        } catch {
+          if (tag !== "latest") {
+            await this.runCommand("npm", buildArgs("latest"), UPDATE_TIMEOUT, cwd);
+          } else {
+            throw new Error("npm install failed for strada-brain@latest");
+          }
+        }
       }
 
       return true;
