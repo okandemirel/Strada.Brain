@@ -151,7 +151,15 @@ export function initializeSupervisorStage(
       ?? new ProviderAssigner(descriptors);
     const verifyNode = createSupervisorNodeVerifier(params.providerManager);
 
-    // 5. Create SupervisorBrain
+    // 5. Inject runtime context into the decomposer so it can make
+    //    cost-aware, provider-aware decisions about goal granularity
+    //    (OpenClaw-inspired: match decomposition to available resources).
+    params.goalDecomposer.setDecompositionContext({
+      providerCount: descriptors.length,
+      maxTotalNodes: descriptors.length <= 1 ? 8 : 12,
+    });
+
+    // 6. Create SupervisorBrain
     const supervisorBrain = deps.createSupervisorBrain?.({
       config: params.config.supervisor,
       decomposer: params.goalDecomposer,

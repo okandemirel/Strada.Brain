@@ -26,6 +26,8 @@ export interface AgentState {
   readonly lastReflection: string | null;
   readonly consecutiveErrors: number;
   readonly learnedInsights: readonly string[];
+  /** Number of times PAOR reflection override has forced CONTINUE over DONE. */
+  readonly reflectionOverrideCount: number;
 }
 
 const VALID_TRANSITIONS: ReadonlyMap<AgentPhase, ReadonlySet<AgentPhase>> =
@@ -64,6 +66,7 @@ export function createInitialState(taskDescription: string): AgentState {
     lastReflection: null,
     consecutiveErrors: 0,
     learnedInsights: [],
+    reflectionOverrideCount: 0,
   };
 }
 

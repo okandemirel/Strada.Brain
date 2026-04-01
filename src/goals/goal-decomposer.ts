@@ -31,21 +31,49 @@ import { validateDAG } from "./goal-validator.js";
 // LLM PROMPTS
 // =============================================================================
 
-const PROACTIVE_PROMPT = `You are a goal decomposer for an AI development assistant.
+/**
+ * Runtime context passed to decomposition so the LLM can make
+ * cost-aware, provider-aware decisions about granularity.
+ */
+export interface DecompositionContext {
+  /** Number of healthy providers in the chain */
+  readonly providerCount: number;
+  /** Approximate context window of the primary provider (tokens) */
+  readonly contextWindow?: number;
+  /** Remaining daily budget in USD (0 = unlimited) */
+  readonly remainingBudgetUsd?: number;
+  /** Total node cap across all depths (default 12) */
+  readonly maxTotalNodes?: number;
+}
+
+function buildProactivePrompt(ctx?: DecompositionContext): string {
+  const providerCount = ctx?.providerCount ?? 1;
+  const maxNodes = ctx?.maxTotalNodes ?? 12;
+  const budgetHint = ctx?.remainingBudgetUsd != null && ctx.remainingBudgetUsd > 0
+    ? `\n- Remaining daily budget is ~$${ctx.remainingBudgetUsd.toFixed(2)} — prefer fewer, focused goals to conserve tokens`
+    : "";
+  const providerHint = providerCount <= 1
+    ? "\n- IMPORTANT: Only 1 AI provider is available. Parallelism is impossible. Prefer a flat, sequential plan with fewer goals. Deep nesting wastes tokens on a single provider."
+    : `\n- ${providerCount} providers are available — independent goals can run in parallel`;
+
+  return `You are a goal decomposer for an AI development assistant.
 
 Given a task, decide whether it needs decomposition and break it into sub-goals if appropriate.
 
 Rules:
 - If the task is simple and can be completed in a single execution pass, return exactly 1 sub-goal containing the full task
-- For complex tasks, break into 2-8 sub-goals forming a directed acyclic graph (DAG)
-- Each sub-goal = one logical unit of work
+- For complex tasks, break into sub-goals forming a directed acyclic graph (DAG)
+- Each sub-goal = one logical unit of work that produces a concrete, verifiable output
 - Use dependsOn to express ordering constraints (not a flat list)
 - Independent sub-goals should have empty dependsOn (they can run in parallel)
 - Sequential sub-goals should depend on their prerequisite
-- Set needsFurtherDecomposition=true for sub-goals that are themselves complex
+- Set needsFurtherDecomposition=true ONLY for sub-goals that genuinely require multiple distinct implementation steps — most goals should be false
+- The TOTAL number of goals across all depths must not exceed ${maxNodes}
+- Prefer fewer, well-scoped goals over many granular ones${providerHint}${budgetHint}
 
 Respond ONLY with JSON:
 {"nodes": [{"id": "s1", "task": "description", "dependsOn": [], "needsFurtherDecomposition": false}, ...]}`;
+}
 
 const REACTIVE_PROMPT = `You are a goal decomposer for an AI development assistant.
 
@@ -70,6 +98,13 @@ export class GoalDecomposer {
     private readonly provider: IAIProvider | undefined,
     private readonly maxDepth: number = 3,
   ) {}
+
+  private decompositionContext: DecompositionContext | undefined;
+
+  /** Inject runtime context so the LLM can make cost-aware decisions. */
+  setDecompositionContext(ctx: DecompositionContext): void {
+    this.decompositionContext = ctx;
+  }
 
   /**
    * Heuristic check: should this prompt be decomposed into sub-goals?
@@ -100,16 +135,19 @@ export class GoalDecomposer {
     const rootId = generateGoalNodeId();
     const now = Date.now();
 
+    const proactivePrompt = buildProactivePrompt(this.decompositionContext);
+    const maxTotalNodes = this.decompositionContext?.maxTotalNodes ?? 12;
+
     // Attempt LLM decomposition with one retry
     let llmOutput = await this.callLLMForDecomposition(
-      PROACTIVE_PROMPT,
+      proactivePrompt,
       `Decompose this task into sub-goals:\n\n<task>${taskDescription}</task>`,
     );
 
     // If first attempt fails, retry with error feedback
     if (!llmOutput) {
       llmOutput = await this.callLLMForDecomposition(
-        PROACTIVE_PROMPT,
+        proactivePrompt,
         `Previous attempt failed to produce valid JSON. Please try again.\n\nDecompose this task into sub-goals:\n\n<task>${taskDescription}</task>`,
       );
     }
@@ -139,12 +177,15 @@ export class GoalDecomposer {
       allNodes.set(node.id, node);
     }
 
-    // Recursively decompose flagged nodes (depth-2) if within maxDepth
+    // Recursively decompose flagged nodes (depth-2) if within maxDepth and node cap
     if (this.maxDepth > 1) {
       const flaggedNodes = llmOutput.nodes.filter(
         (n) => n.needsFurtherDecomposition,
       );
       for (const flagged of flaggedNodes) {
+        // Enforce total node cap — stop expanding if we're at/near the limit
+        if (allNodes.size >= maxTotalNodes) break;
+
         // Find the GoalNode we created for this flagged LLM node
         const parentNode = depth1Nodes.find(
           (n) => n.task === flagged.task,
@@ -152,9 +193,16 @@ export class GoalDecomposer {
         if (!parentNode) continue;
         if (parentNode.depth + 1 > this.maxDepth) continue;
 
+        const remainingSlots = maxTotalNodes - allNodes.size;
+        const subPrompt = buildProactivePrompt({
+          ...this.decompositionContext,
+          providerCount: this.decompositionContext?.providerCount ?? 1,
+          maxTotalNodes: remainingSlots,
+        });
+
         const subOutput = await this.callLLMForDecomposition(
-          PROACTIVE_PROMPT,
-          `Further decompose this sub-goal:\n\n<task>${flagged.task}</task>`,
+          subPrompt,
+          `Further decompose this sub-goal (max ${remainingSlots} sub-goals):\n\n<task>${flagged.task}</task>`,
         );
 
         if (subOutput) {
@@ -164,6 +212,7 @@ export class GoalDecomposer {
             parentNode.depth,
           );
           for (const subNode of subNodes) {
+            if (allNodes.size >= maxTotalNodes) break;
             allNodes.set(subNode.id, subNode);
           }
         }

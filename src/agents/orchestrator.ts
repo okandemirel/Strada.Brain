@@ -72,6 +72,14 @@ import {
   type ModelIntelligenceLookup,
 } from "./providers/provider-knowledge.js";
 import {
+  compactSession,
+  estimateTokens,
+  COMPACTION_TRIGGER_RATIO,
+  COMPACTION_TARGET_RATIO,
+  DEFAULT_CONTEXT_WINDOW,
+  type CompactableMessage,
+} from "./session-compaction.js";
+import {
   COMPLETION_REVIEW_SYNTHESIS_SYSTEM_PROMPT,
   buildCompletionReviewStageRequest,
   buildCompletionReviewStageSystemPrompt,
@@ -2590,6 +2598,8 @@ export class Orchestrator {
                 session.messages = session.messages.slice(-maxMessages);
               }
 
+              this.maybeCompactSession(session, currentAssignment.providerName, currentAssignment.modelId);
+
               // Use silent streaming for background tasks when available.
               // Non-streaming calls to providers like Kimi hit gateway timeouts (~5min)
               // because long-running LLM responses are cut off server-side.
@@ -2662,7 +2672,7 @@ export class Orchestrator {
 
               // ─── PAOR: Handle REFLECTING phase response ─────────────────────
               if (bgAgentState.phase === AgentPhase.REFLECTING) {
-                const { decision } = await processReflectionPreamble({
+                const { decision, wasOverride } = await processReflectionPreamble({
                   agentState: bgAgentState,
                   executionJournal,
                   responseText: response.text,
@@ -2670,6 +2680,9 @@ export class Orchestrator {
                   modelId: currentAssignment.modelId,
                   logLabel: "bg",
                 });
+                if (wasOverride) {
+                  bgAgentState = { ...bgAgentState, reflectionOverrideCount: bgAgentState.reflectionOverrideCount + 1 };
+                }
 
                 // Pending checks (tightly coupled to loop return)
                 if (response.toolCalls.length === 0) {
@@ -3651,6 +3664,8 @@ export class Orchestrator {
         });
         executionStrategy = iterStrategy;
 
+        this.maybeCompactSession(session, currentAssignment.providerName, currentAssignment.modelId);
+
         const canStream =
           this.streamingEnabled &&
           "chatStream" in currentProvider &&
@@ -3738,13 +3753,16 @@ export class Orchestrator {
 
         // ─── PAOR: Handle REFLECTING phase response ─────────────────────
         if (agentState.phase === AgentPhase.REFLECTING) {
-          const { decision } = await processReflectionPreamble({
+          const { decision, wasOverride } = await processReflectionPreamble({
             agentState,
             executionJournal,
             responseText: response.text,
             providerName: currentAssignment.providerName,
             modelId: currentAssignment.modelId,
           });
+          if (wasOverride) {
+            agentState = { ...agentState, reflectionOverrideCount: agentState.reflectionOverrideCount + 1 };
+          }
 
           // Pending checks (tightly coupled to loop return)
           if (response.toolCalls.length === 0) {
@@ -4303,6 +4321,38 @@ export class Orchestrator {
   ): void {
     if (metricId) {
       this.metricsRecorder?.endTask(metricId, result);
+    }
+  }
+
+  /**
+   * Compact session messages when approaching the provider's context window.
+   * Uses a 4-stage pipeline (tool result → summarization → sliding window → truncation).
+   */
+  private maybeCompactSession(
+    session: Session,
+    providerName: string,
+    modelId?: string,
+  ): void {
+    const ctxWindow =
+      this.providerManager.getProviderCapabilities?.(providerName, modelId)?.contextWindow
+      ?? DEFAULT_CONTEXT_WINDOW;
+    // Cast: session.messages may contain system-role messages at runtime;
+    // CompactableMessage is a superset of ConversationMessage that includes "system".
+    const msgs = session.messages as unknown as CompactableMessage[];
+    const tokenEstimate = estimateTokens(msgs);
+    if (tokenEstimate <= ctxWindow * COMPACTION_TRIGGER_RATIO) return;
+    const result = compactSession(msgs, {
+      maxTokens: Math.floor(ctxWindow * COMPACTION_TARGET_RATIO),
+      preserveRecent: 4,
+      maxGroups: 20,
+    });
+    if (result.compacted) {
+      session.messages = result.messages as unknown as ConversationMessage[];
+      getLogger().info("Session compacted", {
+        stage: result.stageApplied,
+        originalTokens: result.originalTokens,
+        finalTokens: result.finalTokens,
+      });
     }
   }
 

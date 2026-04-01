@@ -59,6 +59,8 @@ export interface ReflectionPreambleParams extends LoopStepParams {
 
 export interface ReflectionPreambleResult {
   decision: ReflectionDecision;
+  /** True when the original decision was overridden (DONE→CONTINUE or DONE→REPLAN). */
+  wasOverride: boolean;
 }
 
 /**
@@ -92,7 +94,7 @@ export async function processReflectionPreamble(
 
   executionJournal.recordReflection(decision, responseText, providerName, modelId);
 
-  return { decision };
+  return { decision, wasOverride: !!overrideReason };
 }
 
 /**

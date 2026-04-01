@@ -29,6 +29,7 @@ export { GoalStorage } from "./goal-storage.js";
 
 // Decomposer
 export { GoalDecomposer } from "./goal-decomposer.js";
+export type { DecompositionContext } from "./goal-decomposer.js";
 
 // Renderer
 export { renderGoalTree, summarizeTree } from "./goal-renderer.js";

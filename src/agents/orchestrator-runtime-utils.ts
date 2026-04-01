@@ -42,6 +42,13 @@ export function parseReflectionDecision(text: string | null | undefined): Reflec
   return "CONTINUE";
 }
 
+/**
+ * Maximum times the PAOR loop can override DONE→CONTINUE before escalating
+ * to REPLAN. Prevents infinite retry loops that burn tokens without progress
+ * (OpenClaw-inspired: cap retries, then change strategy).
+ */
+const MAX_REFLECTION_OVERRIDES = 2;
+
 export function validateReflectionDecision(
   decision: ReflectionDecision,
   state: AgentState,
@@ -53,9 +60,17 @@ export function validateReflectionDecision(
   const recentSteps = state.stepResults.slice(-3);
   const blockingFailures = recentSteps.filter(isBlockingStepFailure);
   if (blockingFailures.length > 0) {
+    // Cap: after MAX_REFLECTION_OVERRIDES, escalate to REPLAN instead of
+    // CONTINUE to avoid burning tokens on the same failing approach.
+    if (state.reflectionOverrideCount >= MAX_REFLECTION_OVERRIDES) {
+      return {
+        decision: "REPLAN",
+        overrideReason: `DONE overridden→REPLAN: ${blockingFailures.length} blocking failure(s) persist after ${state.reflectionOverrideCount} override(s) — changing strategy`,
+      };
+    }
     return {
       decision: "CONTINUE",
-      overrideReason: `DONE overridden: ${blockingFailures.length} blocking recent step(s) failed`,
+      overrideReason: `DONE overridden: ${blockingFailures.length} blocking recent step(s) failed (override ${state.reflectionOverrideCount + 1}/${MAX_REFLECTION_OVERRIDES})`,
     };
   }
   return { decision };
