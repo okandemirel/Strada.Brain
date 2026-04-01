@@ -7116,7 +7116,7 @@ DONE`,
       expect(streamingProvider.chat).toHaveBeenCalledTimes(1);
     });
 
-    it("propagates error when both stream and fallback chat fail", async () => {
+    it("surfaces error to agent when both stream and fallback chat fail", async () => {
       const streamError = new Error("Stream connection refused");
       const fallbackError = new Error("Fallback also failed");
       const streamingProvider = {
@@ -7143,14 +7143,21 @@ DONE`,
         streamStallTimeoutMs: 50,
       });
 
-      const promise = (timeoutOrch as any).silentStream(
+      const session = { messages: [] as any[], lastActivity: new Date() };
+      const result = await (timeoutOrch as any).silentStream(
         "stream-chat",
         "system",
-        { messages: [], lastActivity: new Date() },
+        session,
         streamingProvider,
       );
 
-      await expect(promise).rejects.toThrow("Fallback also failed");
+      // Returns synthetic empty response instead of throwing
+      expect(result.text).toBe("");
+      expect(result.toolCalls).toEqual([]);
+      // Error is injected into session messages so the agent is aware
+      expect(session.messages).toHaveLength(1);
+      expect(session.messages[0].content).toContain("provider (streaming) failed");
+      expect(session.messages[0].content).toContain("Fallback also failed");
       expect(streamingProvider.chatStream).toHaveBeenCalledTimes(1);
       expect(streamingProvider.chat).toHaveBeenCalledTimes(1);
     });
