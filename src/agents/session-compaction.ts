@@ -99,8 +99,10 @@ function messageChars(msg: CompactableMessage): number {
 
 /** Estimate tokens for a message array using the CJK-aware heuristic. */
 export function estimateTokens(messages: readonly CompactableMessage[]): number {
+  if (messages.length === 0) return 0;
   let totalChars = 0;
   for (const msg of messages) totalChars += messageChars(msg);
+  if (totalChars === 0) return 0;
   return estimateStringTokens("a".repeat(totalChars));
 }
 
