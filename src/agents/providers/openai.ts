@@ -210,6 +210,10 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
             const streamReasoning = this.extractStreamReasoning(delta as Record<string, unknown>);
             if (streamReasoning) {
               reasoning += streamReasoning;
+              // Reasoning activity counts as progress — prevents stall timeouts
+              // during Kimi K2.5 thinking phases where reasoning_content streams
+              // but content is empty.
+              onChunk("");
             }
 
             if (delta?.tool_calls) {
