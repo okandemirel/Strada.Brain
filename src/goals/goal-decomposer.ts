@@ -18,7 +18,6 @@ import type {
 } from "./types.js";
 import { generateGoalNodeId, parseLLMOutput } from "./types.js";
 import { validateDAG } from "./goal-validator.js";
-import { getLoggerSafe } from "../utils/logger.js";
 
 // =============================================================================
 // DECOMPOSITION GUARD — minimal, language-agnostic

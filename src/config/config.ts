@@ -3217,7 +3217,7 @@ export function loadConfig(): Config {
     ...(!process.env["DELEGATION_TIER_PREMIUM"] ? { premium: preset.delegationTierPremium } : {}),
   } : {};
 
-  cachedConfig = {
+  const resolved: Config = {
     ...config,
     unityProjectPath: pathResult.value,
     providerModels,
@@ -3234,9 +3234,10 @@ export function loadConfig(): Config {
         tiers: { ...config.delegation.tiers, ...presetDelegationTierOverrides },
       },
     } : {}),
-  };
+  } as Config;
+  cachedConfig = resolved;
 
-  return cachedConfig;
+  return resolved;
 }
 
 /**

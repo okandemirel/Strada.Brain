@@ -439,7 +439,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
 
         // Notify the orchestrator (if already constructed) that framework store is ready
         if (onFrameworkStoreReady && frameworkStore) {
-          onFrameworkStoreReady(frameworkStore);
+          (onFrameworkStoreReady as (store: FrameworkKnowledgeStore) => void)(frameworkStore);
         }
 
         if (frameworkSyncConfig.watchEnabled) {

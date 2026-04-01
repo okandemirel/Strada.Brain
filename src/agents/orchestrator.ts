@@ -2233,7 +2233,7 @@ export class Orchestrator {
       this.getTaskExecutionContext()?.taskRunId ||
       `taskrun_${randomUUID()}`;
 
-    return await this.withTaskExecutionContext(
+    return await this.withTaskExecutionContext<string>(
       {
         chatId,
         conversationId: options.conversationId,
@@ -2241,7 +2241,7 @@ export class Orchestrator {
         identityKey,
         taskRunId,
       },
-      async () => {
+      async (): Promise<string> => {
         const logger = getLogger();
         const fixedProviderName =
           canonicalizeProviderName(options.assignedProvider)
@@ -3114,6 +3114,7 @@ export class Orchestrator {
             workerCollector.reason = finalReason;
           }
         }
+        return finalVisibleResponse || "Task completed.";
       },
     );
   }
