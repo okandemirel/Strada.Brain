@@ -1807,8 +1807,8 @@ export const configSchema = z
     stradaSupervisorNodeTimeoutMs: z
       .string()
       .transform((s) => parseInt(s, 10))
-      .pipe(z.number().int().min(10000).max(1_800_000))
-      .default("600000"),
+      .pipe(z.number().int().min(10000).max(7_200_000))
+      .default("3600000"),
     stradaSupervisorVerificationMode: z
       .enum(["always", "critical-only", "sampling", "disabled"])
       .default("critical-only"),

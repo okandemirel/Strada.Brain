@@ -140,33 +140,35 @@ export class SupervisorBrain {
    * - scaleFactor: ratio of estimatedNodeCount / actualNodeCount
    * - Result is clamped to [baseTimeout, baseTimeout * MAX_SCALE_CAP]
    */
+  /**
+   * Calculate an adaptive per-node timeout. The timeout is a safety net for
+   * truly stuck operations — it should NEVER interrupt normally-progressing work.
+   *
+   * Strategy:
+   * - Multi-provider with many nodes: base timeout is fine (each node is small)
+   * - Single provider or few nodes: scale up proportionally
+   * - Single-node fallback: use the maximum possible timeout
+   * - The timeout only exists to prevent resource leaks from abandoned operations
+   */
   private calculateAdaptiveTimeout(
     actualNodeCount: number,
     promptLength: number,
     planSummary?: string,
   ): number {
     const base = this.config.nodeTimeoutMs;
-    const MAX_SCALE_CAP = 4;
 
-    // If decomposition succeeded normally, use base timeout
+    // Multi-node decomposition with many nodes: each node is small, base timeout works
     const isFallback = planSummary === "Fallback single-step execution";
-    if (!isFallback && actualNodeCount > 1) return base;
+    if (!isFallback && actualNodeCount > 3) return base;
 
-    // Estimate how many nodes the task would have produced if decomposition succeeded.
-    // The decomposition prompt says "2-8 sub-goals" — use prompt length to interpolate.
-    // Map [60..600+] chars → [2..8] estimated nodes via linear interpolation.
-    const MIN_NODES = 2;
-    const MAX_NODES = 8;
+    // Few nodes or single-node: scale timeout based on work concentration
+    // estimatedNodeCount: how many nodes *would* exist if decomposition produced more
     const clampedLength = Math.min(Math.max(promptLength, 60), 600);
-    const estimatedNodes = MIN_NODES + ((clampedLength - 60) / (600 - 60)) * (MAX_NODES - MIN_NODES);
+    const estimatedNodes = 2 + ((clampedLength - 60) / (600 - 60)) * 6;
+    const workConcentration = Math.ceil(estimatedNodes) / Math.max(1, actualNodeCount);
 
-    // Scale timeout: each node needs proportionally more time
-    const scaleFactor = Math.min(
-      Math.ceil(estimatedNodes) / Math.max(1, actualNodeCount),
-      MAX_SCALE_CAP,
-    );
-
-    return Math.round(base * Math.max(1, scaleFactor));
+    // Scale generously — timeout should never be the reason work fails
+    return Math.round(base * Math.min(workConcentration, 6));
   }
 
   private emitActivity(detail: string, taskId?: string, action = "supervisor_update"): void {
