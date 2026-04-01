@@ -2590,12 +2590,21 @@ export class Orchestrator {
                 session.messages = session.messages.slice(-maxMessages);
               }
 
-              const response = await currentProvider.chat(
-                activePrompt,
-                session.messages,
-                currentToolDefinitions,
-                { signal },
-              );
+              // Use silent streaming for background tasks when available.
+              // Non-streaming calls to providers like Kimi hit gateway timeouts (~5min)
+              // because long-running LLM responses are cut off server-side.
+              const canBgStream =
+                this.streamingEnabled &&
+                "chatStream" in currentProvider &&
+                typeof currentProvider.chatStream === "function";
+              const response = canBgStream
+                ? await this.silentStream(chatId, activePrompt, session, currentProvider, currentToolDefinitions)
+                : await currentProvider.chat(
+                    activePrompt,
+                    session.messages,
+                    currentToolDefinitions,
+                    { signal },
+                  );
               this.recordExecutionTrace({
                 chatId,
                 identityKey,
