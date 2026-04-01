@@ -1051,8 +1051,9 @@ export class DashboardServer {
         }
         const now = Date.now();
         if (now - this._lastUpdateCheckMs < 60_000) {
-          res.writeHead(429, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: "Rate limit exceeded, retry after 60s" }));
+          const retryAfter = Math.ceil((60_000 - (now - this._lastUpdateCheckMs)) / 1000);
+          res.writeHead(429, { "Content-Type": "application/json", "Retry-After": String(retryAfter) });
+          res.end(JSON.stringify({ error: "Rate limit: update check allowed once per 60 seconds", retryAfterSeconds: retryAfter }));
           return;
         }
         this._lastUpdateCheckMs = now;
