@@ -46,11 +46,11 @@ describe("Auto-Update Config", () => {
     expect(config.autoUpdate.intervalHours).toBe(12);
   });
 
-  it("should default AUTO_UPDATE_INTERVAL_HOURS to 24", () => {
+  it("should default AUTO_UPDATE_INTERVAL_HOURS to 6", () => {
     process.env["UNITY_PROJECT_PATH"] = "/tmp/test-project";
     process.env["ANTHROPIC_API_KEY"] = "sk-test-key";
     const config = loadConfig();
-    expect(config.autoUpdate.intervalHours).toBe(24);
+    expect(config.autoUpdate.intervalHours).toBe(6);
   });
 
   it("should parse AUTO_UPDATE_IDLE_TIMEOUT_MIN as number", () => {

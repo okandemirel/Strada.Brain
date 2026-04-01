@@ -695,7 +695,7 @@ function mockConfig() {
   return {
     autoUpdate: {
       enabled: true,
-      intervalHours: 24,
+      intervalHours: 6,
       idleTimeoutMin: 5,
       channel: "stable" as const,
       notify: true,

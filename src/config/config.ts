@@ -1784,7 +1784,7 @@ export const configSchema = z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().positive())
-      .default("24"),
+      .default("6"),
     autoUpdateIdleTimeoutMin: z
       .string()
       .transform((s) => parseInt(s, 10))

@@ -117,7 +117,7 @@ export async function collectDoctorReport(options: DoctorOptions = {}): Promise<
     {
       autoUpdate: {
         enabled: true,
-        intervalHours: 24,
+        intervalHours: 6,
         idleTimeoutMin: 5,
         channel: "stable",
         notify: false,
