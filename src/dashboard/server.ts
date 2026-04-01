@@ -521,6 +521,9 @@ export class DashboardServer {
   /** Timestamp of last /api/models/refresh call (rate limiting). */
   private _lastModelRefreshMs = 0;
 
+  /** Timestamp of last /api/update call (rate limiting, 60s debounce). */
+  private _lastUpdateCheckMs = 0;
+
   constructor(
     port: number,
     metrics: MetricsCollector,
@@ -1046,6 +1049,13 @@ export class DashboardServer {
           res.end(JSON.stringify({ error: "Auto-updater not available" }));
           return;
         }
+        const now = Date.now();
+        if (now - this._lastUpdateCheckMs < 60_000) {
+          res.writeHead(429, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Rate limit exceeded, retry after 60s" }));
+          return;
+        }
+        this._lastUpdateCheckMs = now;
         void this.autoUpdater.requestImmediateCheck().then((result) => {
           if (result.error) {
             res.writeHead(502, { "Content-Type": "application/json" });
