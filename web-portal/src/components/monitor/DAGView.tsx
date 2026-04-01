@@ -91,12 +91,10 @@ export default function DAGView() {
   const setSelectedTask = useMonitorStore((s) => s.setSelectedTask)
 
   // Separate structural identity from status so layout only recomputes on topology changes
-  const dagNodes = dag?.nodes ?? []
-  const dagEdges = dag?.edges ?? []
+  const dagNodes = useMemo(() => dag?.nodes ?? [], [dag?.nodes])
+  const dagEdges = useMemo(() => dag?.edges ?? [], [dag?.edges])
 
-  const nodeIds = useMemo(() => dagNodes.map(n => n.id).sort().join(','), [dagNodes])
-  const edgeKeys = useMemo(() => dagEdges.map(e => `${e.source}-${e.target}`).sort().join(','), [dagEdges])
-  const positions = useMemo(() => layoutNodes(dagNodes, dagEdges), [nodeIds, edgeKeys])
+  const positions = useMemo(() => layoutNodes(dagNodes, dagEdges), [dagNodes, dagEdges])
 
   const { nodes, edges } = useMemo(() => {
     if (!dag) return { nodes: [], edges: [] }
