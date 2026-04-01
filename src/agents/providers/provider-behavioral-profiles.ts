@@ -75,9 +75,11 @@ export type WorkloadType =
 // Workload -> Dimension Weight Mappings
 // ---------------------------------------------------------------------------
 
-type DimensionWeight = readonly [BehavioralDimension, number];
+export type DimensionWeight = readonly [BehavioralDimension, number];
 
-const WORKLOAD_DIMENSION_WEIGHTS: Readonly<Record<WorkloadType, readonly DimensionWeight[]>> = {
+/** Single source of truth for workload→dimension weight mappings. Used by both
+ *  `rankProvidersForWorkload` (this module) and `deriveWorkloadScores` (provider-knowledge). */
+export const WORKLOAD_DIMENSION_WEIGHTS: Readonly<Record<WorkloadType, readonly DimensionWeight[]>> = {
   planning: [
     [BehavioralDimension.deepPlanning, 0.35],
     [BehavioralDimension.complexReasoning, 0.25],

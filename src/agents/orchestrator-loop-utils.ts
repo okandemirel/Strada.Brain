@@ -155,6 +155,8 @@ export function handleReplanDecision(params: ReplanDecisionParams): AgentState {
     ],
     lastReflection: responseText ?? null,
     reflectionCount: agentState.reflectionCount + 1,
+    // Reset override counter so the new plan gets its own retry budget
+    reflectionOverrideCount: 0,
   };
 
   if (autoTransition) {

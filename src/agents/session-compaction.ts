@@ -13,8 +13,6 @@
  * the nominal type doesn't express it — hence the type cast in maybeCompactSession.
  */
 
-import { estimateTokens as estimateStringTokens } from "../rag/rag.interface.js";
-
 // =============================================================================
 // CONSTANTS
 // =============================================================================
@@ -97,13 +95,17 @@ function messageChars(msg: CompactableMessage): number {
   return sum;
 }
 
-/** Estimate tokens for a message array using the CJK-aware heuristic. */
+/**
+ * Estimate tokens for a message array.
+ * Uses a direct chars/4 heuristic rather than allocating a synthetic string —
+ * this runs on every PAOR iteration so memory efficiency matters.
+ */
 export function estimateTokens(messages: readonly CompactableMessage[]): number {
   if (messages.length === 0) return 0;
   let totalChars = 0;
   for (const msg of messages) totalChars += messageChars(msg);
   if (totalChars === 0) return 0;
-  return estimateStringTokens("a".repeat(totalChars));
+  return Math.ceil(totalChars / 4);
 }
 
 // =============================================================================
@@ -252,7 +254,7 @@ function stage4HardTruncation(messages: readonly CompactableMessage[], maxTokens
   const kept: CompactableMessage[] = [];
   for (let i = rest.length - 1; i >= 0; i--) {
     const cost = Math.ceil(messageChars(rest[i]!) / 4);
-    if (cost > budget) break;
+    if (cost > budget) continue; // skip oversized messages, keep smaller ones
     kept.unshift(rest[i]!);
     budget -= cost;
   }

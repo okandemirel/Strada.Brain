@@ -7,7 +7,7 @@
  */
 
 import type { ProviderCapabilities } from "./provider.interface.js";
-import { getBaselineProfile, type BehavioralProfile } from "./provider-behavioral-profiles.js";
+import { getBaselineProfile, WORKLOAD_DIMENSION_WEIGHTS, type BehavioralProfile, type WorkloadType } from "./provider-behavioral-profiles.js";
 
 export type ProviderWorkload =
   | "planning"
@@ -291,68 +291,21 @@ function getSpeedScore(features: ReadonlySet<string>): number {
 
 /**
  * Compute a behavioral profile score for a specific workload type.
- * Maps ProviderWorkload → weighted combination of BehavioralDimension scores.
+ * Uses shared WORKLOAD_DIMENSION_WEIGHTS from provider-behavioral-profiles
+ * as single source of truth — no duplicate weight definitions.
  * Returns undefined for workloads without a behavioral mapping (e.g. documentation).
  */
 function getBehavioralWorkloadScore(
   profile: BehavioralProfile,
   workload: ProviderWorkload,
 ): number | undefined {
-  const s = profile.scores;
-  switch (workload) {
-    case "planning":
-      return (
-        s.deepPlanning * 0.35 +
-        s.complexReasoning * 0.25 +
-        s.intentUnderstanding * 0.20 +
-        s.contextManagement * 0.20
-      );
-    case "implementation":
-      return (
-        s.codeRefactoring * 0.30 +
-        s.toolCallReliability * 0.25 +
-        s.fastExecution * 0.20 +
-        s.structuredOutput * 0.15 +
-        s.errorRecovery * 0.10
-      );
-    case "review":
-      return (
-        s.complexReasoning * 0.30 +
-        s.contextManagement * 0.25 +
-        s.intentUnderstanding * 0.20 +
-        s.codeRefactoring * 0.15 +
-        s.errorRecovery * 0.10
-      );
-    case "analysis":
-      return (
-        s.complexReasoning * 0.25 +
-        s.contextManagement * 0.20 +
-        s.deepPlanning * 0.20 +
-        s.multilingualStrength * 0.20 +
-        s.costEfficiency * 0.15
-      );
-    case "debugging":
-      return (
-        s.complexReasoning * 0.30 +
-        s.toolCallReliability * 0.25 +
-        s.codeRefactoring * 0.20 +
-        s.errorRecovery * 0.15 +
-        s.contextManagement * 0.10
-      );
-    case "coordination":
-      return (
-        s.agentSwarm * 0.30 +
-        s.fastExecution * 0.25 +
-        s.toolCallReliability * 0.20 +
-        s.errorRecovery * 0.15 +
-        s.costEfficiency * 0.10
-      );
-    case "documentation":
-      // No behavioral mapping — keep existing feature-flag score only
-      return undefined;
-    default:
-      return undefined;
+  const weights = WORKLOAD_DIMENSION_WEIGHTS[workload as WorkloadType];
+  if (!weights) return undefined;
+  let score = 0;
+  for (const [dim, weight] of weights) {
+    score += (profile.scores[dim] ?? 0) * weight;
   }
+  return score;
 }
 
 /** Weight for existing feature-flag based scores when blending with behavioral profiles. */
