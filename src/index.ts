@@ -8,7 +8,7 @@
 
 import { Command } from "commander";
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import * as path from "node:path";
 import * as dotenv from "dotenv";
@@ -58,10 +58,19 @@ setupGlobalErrorHandlers(
 const program = new Command();
 program.enablePositionalOptions();
 
+const cliVersion = (() => {
+  try {
+    const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf-8")) as { version?: string };
+    return pkg.version ?? "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
+})();
+
 program
   .name("strada")
   .description("AI-powered Unity development assistant for Strada.Core projects")
-  .version("0.1.0");
+  .version(cliVersion);
 
 program
   .option("--daemon", "Run the selected launch target in daemon mode")
