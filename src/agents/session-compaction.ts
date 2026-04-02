@@ -100,9 +100,12 @@ function messageChars(msg: CompactableMessage): number {
  * Uses a direct chars/4 heuristic rather than allocating a synthetic string —
  * this runs on every PAOR iteration so memory efficiency matters.
  */
-export function estimateTokens(messages: readonly CompactableMessage[]): number {
-  if (messages.length === 0) return 0;
-  let totalChars = 0;
+export function estimateTokens(
+  messages: readonly CompactableMessage[],
+  systemPromptChars = 0,
+): number {
+  if (messages.length === 0 && systemPromptChars === 0) return 0;
+  let totalChars = systemPromptChars;
   for (const msg of messages) totalChars += messageChars(msg);
   if (totalChars === 0) return 0;
   return Math.ceil(totalChars / 4);
