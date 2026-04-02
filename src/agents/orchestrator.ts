@@ -6,6 +6,7 @@ import type {
   ProviderResponse,
   IStreamingProvider,
 } from "./providers/provider.interface.js";
+import { ProviderHealthRegistry } from "./providers/provider-health.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -2547,6 +2548,7 @@ export class Orchestrator {
           }
 
           let consecutiveMaxTokens = 0;
+          let consecutiveProviderFailures = 0;
           let maxTokensAbort = false;
           while (true) {
             for (
@@ -2646,6 +2648,35 @@ export class Orchestrator {
                 response.usage,
                 options.onUsage ?? this.onUsage,
               );
+
+              // Circuit breaker: detect synthetic empty responses from silentStream provider failures.
+              // When both stream and fallback .chat() fail, silentStream returns { text: "", toolCalls: [], usage: { totalTokens: 0 } }.
+              // Without this check, the empty response enters handleBgEndTurn → decideInteractionBoundary → internal_continue,
+              // sending the loop back to call the same dead provider indefinitely.
+              if (response.text === "" && response.toolCalls.length === 0 && response.usage.totalTokens === 0) {
+                consecutiveProviderFailures++;
+                if (consecutiveProviderFailures >= 3) {
+                  logger.error("Provider failed on 3 consecutive calls — aborting to prevent infinite loop", {
+                    chatId,
+                    provider: currentAssignment.providerName,
+                    epoch: bgEpochCount,
+                    iteration: bgIteration,
+                  });
+                  return finish(
+                    "I was unable to complete this task because the AI provider is not responding. Please try again later or switch to a different provider.",
+                    "completed",
+                    "Provider failure circuit breaker triggered after 3 consecutive failures.",
+                  );
+                }
+                logger.warn("Provider returned synthetic empty response — possible failure", {
+                  chatId,
+                  consecutiveProviderFailures,
+                  provider: currentAssignment.providerName,
+                });
+                continue; // skip end-turn handler, go straight to next iteration
+              } else {
+                consecutiveProviderFailures = 0;
+              }
 
               // max_tokens: model output was truncated — push and continue so the model finishes.
               if (response.stopReason === "max_tokens" && response.toolCalls.length === 0) {
@@ -3643,6 +3674,7 @@ export class Orchestrator {
       }
 
       let consecutiveMaxTokens = 0;
+      let consecutiveProviderFailures = 0;
       for (let iteration = 0; iteration < interactiveIterationLimit; iteration++) {
         const {
           executionStrategy: iterStrategy,
@@ -3730,6 +3762,27 @@ export class Orchestrator {
           toolTurnAffinity = currentAssignment;
         }
         this.recordProviderUsage(currentAssignment.providerName, response.usage, this.onUsage);
+
+        // Circuit breaker: detect synthetic empty responses from silentStream provider failures.
+        if (response.text === "" && response.toolCalls.length === 0 && response.usage.totalTokens === 0) {
+          consecutiveProviderFailures++;
+          if (consecutiveProviderFailures >= 3) {
+            logger.error("Provider failed on 3 consecutive calls — aborting to prevent infinite loop", {
+              chatId,
+              provider: currentAssignment.providerName,
+              iteration,
+            });
+            break;
+          }
+          logger.warn("Provider returned synthetic empty response — possible failure", {
+            chatId,
+            consecutiveProviderFailures,
+            provider: currentAssignment.providerName,
+          });
+          continue;
+        } else {
+          consecutiveProviderFailures = 0;
+        }
 
         // max_tokens: model output was truncated — push and continue so the model finishes.
         if (response.stopReason === "max_tokens" && response.toolCalls.length === 0) {
@@ -4388,6 +4441,7 @@ export class Orchestrator {
       );
       const response = await Promise.race([streamPromise, timeoutGuard.timeoutPromise]);
       timeoutGuard.clear();
+      ProviderHealthRegistry.getInstance().recordSuccess(provider.name);
       return response;
     } catch (err) {
       timeoutGuard.clear();
@@ -4396,12 +4450,15 @@ export class Orchestrator {
       try {
         // Fallback to non-streaming with a timeout so it doesn't hang
         // indefinitely if the provider is genuinely unresponsive.
-        return await provider.chat(systemPrompt, session.messages, toolDefinitions, {
+        const fallbackResponse = await provider.chat(systemPrompt, session.messages, toolDefinitions, {
           signal: AbortSignal.timeout(this.streamInitialTimeoutMs),
         });
+        ProviderHealthRegistry.getInstance().recordSuccess(provider.name);
+        return fallbackResponse;
       } catch (fallbackErr) {
         const fallbackMsg = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
         getLogger().error("Silent stream fallback chat failed", { chatId, error: fallbackMsg });
+        ProviderHealthRegistry.getInstance().recordFailure(provider.name, fallbackMsg);
         // Surface the failure to the agent so it can adapt its approach
         // (e.g. simplify the request, reduce tool usage, skip non-critical work).
         // This mirrors Claude Code's behavior of showing errors to the user.
