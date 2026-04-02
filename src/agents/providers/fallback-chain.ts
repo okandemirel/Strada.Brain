@@ -222,7 +222,7 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
             error: errorMsg,
             totalProviders: this.providers.length,
           });
-          throw new Error(`All providers failed. Last error: ${errorMsg}`);
+          throw new Error(`All providers failed. Last error: ${sanitizeSecrets(errorMsg)}`);
         }
 
         logger.warn(`Provider failed (${label}), trying next healthy provider`, {

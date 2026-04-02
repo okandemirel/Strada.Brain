@@ -8184,4 +8184,235 @@ DONE`,
       expect(streamingChannel.sendMarkdown).toHaveBeenCalledWith("paor-e2e-stream-err", "Fallback");
     });
   });
+
+  describe("Provider Failure Circuit Breaker", () => {
+    it("background loop aborts after 3 consecutive synthetic empty responses", async () => {
+      const backgroundOrch = new Orchestrator({
+        providerManager: {
+          getProvider: () => mockProvider,
+          getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+          shutdown: vi.fn(),
+        } as any,
+        tools: [readTool],
+        channel: mockChannel,
+        projectPath: "/tmp/test-project",
+        readOnly: false,
+        requireConfirmation: false,
+        taskConfig: {
+          ...DEFAULT_TASK_CONFIG,
+          backgroundEpochMaxIterations: 20,
+        },
+      });
+
+      // All calls return synthetic empty response (mimicking silentStream double failure)
+      mockProvider.chat.mockResolvedValue({
+        text: "",
+        toolCalls: [],
+        stopReason: "end_turn" as const,
+        usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+      });
+
+      const result = await backgroundOrch.runBackgroundTask("Analyze the codebase", {
+        chatId: "bg-circuit-breaker",
+        channelType: "daemon",
+        signal: new AbortController().signal,
+        onProgress: vi.fn(),
+      });
+
+      // Should abort after exactly 3 failures, not loop indefinitely
+      expect(mockProvider.chat.mock.calls.length).toBe(3);
+      expect(result).toContain("AI provider is not responding");
+    });
+
+    it("provider failure counter resets when a real response comes through", async () => {
+      const backgroundOrch = new Orchestrator({
+        providerManager: {
+          getProvider: () => mockProvider,
+          getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+          shutdown: vi.fn(),
+        } as any,
+        tools: [readTool],
+        channel: mockChannel,
+        projectPath: "/tmp/test-project",
+        readOnly: false,
+        requireConfirmation: false,
+        taskConfig: {
+          ...DEFAULT_TASK_CONFIG,
+          backgroundEpochMaxIterations: 20,
+        },
+      });
+
+      mockProvider.chat
+        // 2 synthetic empty responses (failures)
+        .mockResolvedValueOnce({
+          text: "",
+          toolCalls: [],
+          stopReason: "end_turn" as const,
+          usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+        })
+        .mockResolvedValueOnce({
+          text: "",
+          toolCalls: [],
+          stopReason: "end_turn" as const,
+          usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+        })
+        // Real response — resets the counter
+        .mockResolvedValueOnce({
+          text: "Analysis complete. DONE",
+          toolCalls: [],
+          stopReason: "end_turn" as const,
+          usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
+        })
+        // 2 more synthetic empty responses (should NOT trigger abort since counter was reset)
+        .mockResolvedValueOnce({
+          text: "",
+          toolCalls: [],
+          stopReason: "end_turn" as const,
+          usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+        })
+        .mockResolvedValueOnce({
+          text: "",
+          toolCalls: [],
+          stopReason: "end_turn" as const,
+          usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+        })
+        // Another real response to finish
+        .mockResolvedValueOnce({
+          text: "Final result. DONE",
+          toolCalls: [],
+          stopReason: "end_turn" as const,
+          usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
+        })
+        // Fallback for any remaining calls
+        .mockResolvedValue({
+          text: "Fallback. DONE",
+          toolCalls: [],
+          stopReason: "end_turn" as const,
+          usage: { inputTokens: 10, outputTokens: 10, totalTokens: 20 },
+        });
+
+      const result = await backgroundOrch.runBackgroundTask("Analyze the codebase", {
+        chatId: "bg-circuit-reset",
+        channelType: "daemon",
+        signal: new AbortController().signal,
+        onProgress: vi.fn(),
+      });
+
+      // Should NOT contain the circuit breaker message — real responses reset the counter
+      expect(result).not.toContain("AI provider is not responding");
+      // Should have made more than 3 calls (counter was reset mid-way)
+      expect(mockProvider.chat.mock.calls.length).toBeGreaterThan(3);
+    });
+
+    it("silentStream records failure in ProviderHealthRegistry when both stream and fallback fail", async () => {
+      const { ProviderHealthRegistry } = await import("./providers/provider-health.js");
+      ProviderHealthRegistry.resetInstance();
+
+      const streamingProvider = {
+        name: "failing-provider",
+        capabilities: {
+          maxTokens: 4096,
+          streaming: true,
+          structuredStreaming: false,
+          toolCalling: true,
+          vision: false,
+          systemPrompt: true,
+        },
+        chat: vi.fn().mockRejectedValue(new Error("Connection refused")),
+        chatStream: vi.fn().mockRejectedValue(new Error("Stream timeout")),
+      };
+
+      const streamOrch = new Orchestrator({
+        providerManager: {
+          getProvider: () => streamingProvider,
+          shutdown: vi.fn(),
+        } as any,
+        tools: [],
+        channel: mockChannel,
+        projectPath: "/tmp/test-project",
+        readOnly: false,
+        requireConfirmation: false,
+        streamingEnabled: true,
+        streamInitialTimeoutMs: 50,
+        streamStallTimeoutMs: 50,
+      });
+
+      const session = { messages: [] as any[], lastActivity: new Date() };
+      await (streamOrch as any).silentStream(
+        "health-test",
+        "system",
+        session,
+        streamingProvider,
+        [],
+      );
+
+      const entry = ProviderHealthRegistry.getInstance().getEntry("failing-provider");
+      expect(entry).toBeDefined();
+      expect(entry!.consecutiveFailures).toBeGreaterThanOrEqual(1);
+      expect(entry!.lastError).toContain("Connection refused");
+
+      ProviderHealthRegistry.resetInstance();
+    });
+
+    it("silentStream records success in ProviderHealthRegistry when streaming succeeds", async () => {
+      const { ProviderHealthRegistry } = await import("./providers/provider-health.js");
+      ProviderHealthRegistry.resetInstance();
+
+      const successResponse: ProviderResponse = {
+        text: "Success",
+        toolCalls: [],
+        stopReason: "end_turn" as const,
+        usage: { inputTokens: 10, outputTokens: 10, totalTokens: 20 },
+      };
+
+      const streamingProvider = {
+        name: "healthy-provider",
+        capabilities: {
+          maxTokens: 4096,
+          streaming: true,
+          structuredStreaming: false,
+          toolCalling: true,
+          vision: false,
+          systemPrompt: true,
+        },
+        chat: vi.fn(),
+        chatStream: vi.fn().mockResolvedValue(successResponse),
+      };
+
+      const streamOrch = new Orchestrator({
+        providerManager: {
+          getProvider: () => streamingProvider,
+          shutdown: vi.fn(),
+        } as any,
+        tools: [],
+        channel: mockChannel,
+        projectPath: "/tmp/test-project",
+        readOnly: false,
+        requireConfirmation: false,
+        streamingEnabled: true,
+        streamInitialTimeoutMs: 5000,
+        streamStallTimeoutMs: 5000,
+      });
+
+      // Pre-seed a failure to verify recordSuccess clears it
+      ProviderHealthRegistry.getInstance().recordFailure("healthy-provider", "old error");
+      const entryBefore = ProviderHealthRegistry.getInstance().getEntry("healthy-provider");
+      expect(entryBefore!.consecutiveFailures).toBe(1);
+
+      const session = { messages: [] as any[], lastActivity: new Date() };
+      await (streamOrch as any).silentStream(
+        "health-success-test",
+        "system",
+        session,
+        streamingProvider,
+        [],
+      );
+
+      const entryAfter = ProviderHealthRegistry.getInstance().getEntry("healthy-provider");
+      expect(entryAfter!.consecutiveFailures).toBe(0);
+      expect(entryAfter!.status).toBe("healthy");
+
+      ProviderHealthRegistry.resetInstance();
+    });
+  });
 });

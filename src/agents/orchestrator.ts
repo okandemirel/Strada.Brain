@@ -6,6 +6,7 @@ import type {
   ProviderResponse,
   IStreamingProvider,
 } from "./providers/provider.interface.js";
+import { ProviderHealthRegistry } from "./providers/provider-health.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -167,6 +168,8 @@ import {
   normalizeFailureFingerprint,
   sanitizeEventInput,
   sanitizeToolResult,
+  checkProviderFailureCircuitBreaker,
+  recordProviderHealthFailure,
 } from "./orchestrator-runtime-utils.js";
 import {
   buildPhasePromptSection,
@@ -2295,6 +2298,7 @@ export class Orchestrator {
           taskType,
           parentTaskId: options.parentMetricId,
         });
+        this.metrics?.recordMessage();
         // ────────────────────────────────────────────────────────────────
 
         // Build user content with vision support if attachments present
@@ -2547,6 +2551,7 @@ export class Orchestrator {
           }
 
           let consecutiveMaxTokens = 0;
+          let consecutiveProviderFailures = 0;
           let maxTokensAbort = false;
           while (true) {
             for (
@@ -2598,7 +2603,7 @@ export class Orchestrator {
                 session.messages = session.messages.slice(-maxMessages);
               }
 
-              this.maybeCompactSession(session, currentAssignment.providerName, currentAssignment.modelId);
+              this.maybeCompactSession(session, currentAssignment.providerName, currentAssignment.modelId, activePrompt);
 
               // Use silent streaming for background tasks when available.
               // Non-streaming calls to providers like Kimi hit gateway timeouts (~5min)
@@ -2646,6 +2651,26 @@ export class Orchestrator {
                 response.usage,
                 options.onUsage ?? this.onUsage,
               );
+
+              // Circuit breaker: detect synthetic empty responses from silentStream provider failures.
+              const cbResult = checkProviderFailureCircuitBreaker(response, consecutiveProviderFailures);
+              consecutiveProviderFailures = cbResult.newCount;
+              if (cbResult.action === "abort") {
+                logger.error("Provider failed on consecutive calls — aborting to prevent infinite loop", {
+                  chatId, provider: currentAssignment.providerName, epoch: bgEpochCount, iteration: bgIteration,
+                });
+                return finish(
+                  "I was unable to complete this task because the AI provider is not responding. Please try again later or switch to a different provider.",
+                  "completed",
+                  "Provider failure circuit breaker triggered after consecutive failures.",
+                );
+              }
+              if (cbResult.action === "warn_continue") {
+                logger.warn("Provider returned synthetic empty response — possible failure", {
+                  chatId, consecutiveProviderFailures, provider: currentAssignment.providerName,
+                });
+                continue;
+              }
 
               // max_tokens: model output was truncated — push and continue so the model finishes.
               if (response.stopReason === "max_tokens" && response.toolCalls.length === 0) {
@@ -3643,6 +3668,7 @@ export class Orchestrator {
       }
 
       let consecutiveMaxTokens = 0;
+      let consecutiveProviderFailures = 0;
       for (let iteration = 0; iteration < interactiveIterationLimit; iteration++) {
         const {
           executionStrategy: iterStrategy,
@@ -3664,7 +3690,7 @@ export class Orchestrator {
         });
         executionStrategy = iterStrategy;
 
-        this.maybeCompactSession(session, currentAssignment.providerName, currentAssignment.modelId);
+        this.maybeCompactSession(session, currentAssignment.providerName, currentAssignment.modelId, activePrompt);
 
         const canStream =
           this.streamingEnabled &&
@@ -3730,6 +3756,26 @@ export class Orchestrator {
           toolTurnAffinity = currentAssignment;
         }
         this.recordProviderUsage(currentAssignment.providerName, response.usage, this.onUsage);
+
+        // Circuit breaker: detect synthetic empty responses from silentStream provider failures.
+        const cbResult = checkProviderFailureCircuitBreaker(response, consecutiveProviderFailures);
+        consecutiveProviderFailures = cbResult.newCount;
+        if (cbResult.action === "abort") {
+          logger.error("Provider failed on consecutive calls — aborting to prevent infinite loop", {
+            chatId, provider: currentAssignment.providerName, iteration,
+          });
+          await this.sessionManager.sendVisibleAssistantMarkdown(
+            chatId, session,
+            "I'm unable to continue because the AI provider is not responding. Please try again later or switch to a different provider.",
+          );
+          break;
+        }
+        if (cbResult.action === "warn_continue") {
+          logger.warn("Provider returned synthetic empty response — possible failure", {
+            chatId, consecutiveProviderFailures, provider: currentAssignment.providerName,
+          });
+          continue;
+        }
 
         // max_tokens: model output was truncated — push and continue so the model finishes.
         if (response.stopReason === "max_tokens" && response.toolCalls.length === 0) {
@@ -4332,6 +4378,7 @@ export class Orchestrator {
     session: Session,
     providerName: string,
     modelId?: string,
+    systemPrompt?: string,
   ): void {
     const ctxWindow =
       this.providerManager.getProviderCapabilities?.(providerName, modelId)?.contextWindow
@@ -4339,7 +4386,7 @@ export class Orchestrator {
     // Cast: session.messages may contain system-role messages at runtime;
     // CompactableMessage is a superset of ConversationMessage that includes "system".
     const msgs = session.messages as unknown as CompactableMessage[];
-    const tokenEstimate = estimateTokens(msgs);
+    const tokenEstimate = estimateTokens(msgs, systemPrompt?.length ?? 0);
     if (tokenEstimate <= ctxWindow * COMPACTION_TRIGGER_RATIO) return;
     const result = compactSession(msgs, {
       maxTokens: Math.floor(ctxWindow * COMPACTION_TARGET_RATIO),
@@ -4352,6 +4399,7 @@ export class Orchestrator {
         stage: result.stageApplied,
         originalTokens: result.originalTokens,
         finalTokens: result.finalTokens,
+        systemPromptEstimate: systemPrompt ? Math.ceil(systemPrompt.length / 4) : 0,
       });
     }
   }
@@ -4388,6 +4436,7 @@ export class Orchestrator {
       );
       const response = await Promise.race([streamPromise, timeoutGuard.timeoutPromise]);
       timeoutGuard.clear();
+      ProviderHealthRegistry.getInstance().recordSuccess(provider.name);
       return response;
     } catch (err) {
       timeoutGuard.clear();
@@ -4396,12 +4445,15 @@ export class Orchestrator {
       try {
         // Fallback to non-streaming with a timeout so it doesn't hang
         // indefinitely if the provider is genuinely unresponsive.
-        return await provider.chat(systemPrompt, session.messages, toolDefinitions, {
+        const fallbackResponse = await provider.chat(systemPrompt, session.messages, toolDefinitions, {
           signal: AbortSignal.timeout(this.streamInitialTimeoutMs),
         });
+        ProviderHealthRegistry.getInstance().recordSuccess(provider.name);
+        return fallbackResponse;
       } catch (fallbackErr) {
         const fallbackMsg = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
         getLogger().error("Silent stream fallback chat failed", { chatId, error: fallbackMsg });
+        recordProviderHealthFailure(ProviderHealthRegistry.getInstance(), provider.name, fallbackMsg);
         // Surface the failure to the agent so it can adapt its approach
         // (e.g. simplify the request, reduce tool usage, skip non-critical work).
         // This mirrors Claude Code's behavior of showing errors to the user.
@@ -4411,6 +4463,9 @@ export class Orchestrator {
         } as ConversationMessage);
         // Return a synthetic empty response so the PAOR loop can continue
         // with the agent's awareness of the failure.
+        // IMPORTANT: The circuit breaker in runBackgroundTask / runAgentLoop
+        // detects this exact shape ({ text: "", toolCalls: [], totalTokens: 0 })
+        // to identify provider failures. If you change this, update both loops.
         return {
           text: "",
           toolCalls: [],

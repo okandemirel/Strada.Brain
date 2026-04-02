@@ -56,7 +56,7 @@ describe("delegation-types", () => {
       const an = DEFAULT_DELEGATION_TYPES.find((t) => t.name === "analysis");
       expect(an).toBeDefined();
       expect(an!.tier).toBe("standard");
-      expect(an!.timeoutMs).toBe(90000);
+      expect(an!.timeoutMs).toBe(180_000);
       expect(an!.maxIterations).toBe(15);
     });
 

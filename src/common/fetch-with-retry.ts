@@ -57,6 +57,10 @@ export async function fetchWithRetry(
       const fetchInit = opts.signal ? { ...init, signal: opts.signal } : init;
       response = await fetch(url, fetchInit);
     } catch (err) {
+      // If the signal itself caused the abort, don't retry — propagate immediately
+      if (opts.signal?.aborted) {
+        throw err instanceof Error ? err : new Error(String(err));
+      }
       if (attempt === maxRetries) {
         throw err instanceof Error ? err : new Error(String(err));
       }
@@ -64,7 +68,8 @@ export async function fetchWithRetry(
         attempt: attempt + 1,
         error: err instanceof Error ? err.message : String(err),
       });
-      await sleep(baseDelayMs * Math.pow(2, attempt) + Math.random() * 100, opts.signal);
+      // Don't pass signal to sleep — it may be expired from the fetch timeout
+      await sleep(baseDelayMs * Math.pow(2, attempt) + Math.random() * 100);
       continue;
     }
 
@@ -99,7 +104,7 @@ export async function fetchWithRetry(
       maxRetries,
     });
 
-    await sleep(delay, opts.signal);
+    await sleep(delay);
   }
 
   throw new Error(`${callerName} max retries exceeded`);

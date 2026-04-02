@@ -155,6 +155,49 @@ export function sanitizeEventInput(input: Record<string, unknown>): Record<strin
  * Sanitize tool results before feeding back to LLM.
  * Caps length and strips potential API key patterns.
  */
+// =============================================================================
+// PROVIDER FAILURE CIRCUIT BREAKER
+// =============================================================================
+
+const PROVIDER_FAILURE_LIMIT = 3;
+const QUOTA_LIMIT_RE = /quota|limit|billing|cycle|exceeded|usage/i;
+
+/**
+ * Detect synthetic empty responses from silentStream provider failures.
+ * Returns "abort" when the failure limit is reached, "warn_continue" for
+ * intermediate failures, and "ok" for real responses.
+ */
+export function checkProviderFailureCircuitBreaker(
+  response: ProviderResponse,
+  consecutiveFailures: number,
+): { action: "abort" | "warn_continue" | "ok"; newCount: number } {
+  const isEmpty = response.text === "" && response.toolCalls.length === 0
+    && (response.usage.totalTokens === 0 || response.usage.outputTokens === 0);
+  if (isEmpty) {
+    const newCount = consecutiveFailures + 1;
+    return newCount >= PROVIDER_FAILURE_LIMIT
+      ? { action: "abort", newCount }
+      : { action: "warn_continue", newCount };
+  }
+  return { action: "ok", newCount: 0 };
+}
+
+/**
+ * Route a provider error to the appropriate ProviderHealthRegistry method.
+ * Matches the same quota-detection logic used in fallback-chain.ts.
+ */
+export function recordProviderHealthFailure(
+  registry: { recordFailure(name: string, error: string): void; recordQuotaExhausted(name: string, error: string): void },
+  providerName: string,
+  errorMsg: string,
+): void {
+  if (/\b403\b/.test(errorMsg) && QUOTA_LIMIT_RE.test(errorMsg)) {
+    registry.recordQuotaExhausted(providerName, errorMsg);
+  } else {
+    registry.recordFailure(providerName, errorMsg);
+  }
+}
+
 export function sanitizeToolResult(content: string, maxLength = MAX_TOOL_RESULT_LENGTH): string {
   let result = redactSensitiveText(content);
   if (result.length > maxLength) {
