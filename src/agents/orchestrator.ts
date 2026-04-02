@@ -2296,6 +2296,7 @@ export class Orchestrator {
           taskType,
           parentTaskId: options.parentMetricId,
         });
+        this.metrics?.recordMessage();
         // ────────────────────────────────────────────────────────────────
 
         // Build user content with vision support if attachments present
@@ -2600,7 +2601,7 @@ export class Orchestrator {
                 session.messages = session.messages.slice(-maxMessages);
               }
 
-              this.maybeCompactSession(session, currentAssignment.providerName, currentAssignment.modelId);
+              this.maybeCompactSession(session, currentAssignment.providerName, currentAssignment.modelId, activePrompt);
 
               // Use silent streaming for background tasks when available.
               // Non-streaming calls to providers like Kimi hit gateway timeouts (~5min)
@@ -3696,7 +3697,7 @@ export class Orchestrator {
         });
         executionStrategy = iterStrategy;
 
-        this.maybeCompactSession(session, currentAssignment.providerName, currentAssignment.modelId);
+        this.maybeCompactSession(session, currentAssignment.providerName, currentAssignment.modelId, activePrompt);
 
         const canStream =
           this.streamingEnabled &&
@@ -4390,6 +4391,7 @@ export class Orchestrator {
     session: Session,
     providerName: string,
     modelId?: string,
+    systemPrompt?: string,
   ): void {
     const ctxWindow =
       this.providerManager.getProviderCapabilities?.(providerName, modelId)?.contextWindow
@@ -4397,7 +4399,7 @@ export class Orchestrator {
     // Cast: session.messages may contain system-role messages at runtime;
     // CompactableMessage is a superset of ConversationMessage that includes "system".
     const msgs = session.messages as unknown as CompactableMessage[];
-    const tokenEstimate = estimateTokens(msgs);
+    const tokenEstimate = estimateTokens(msgs, systemPrompt?.length ?? 0);
     if (tokenEstimate <= ctxWindow * COMPACTION_TRIGGER_RATIO) return;
     const result = compactSession(msgs, {
       maxTokens: Math.floor(ctxWindow * COMPACTION_TARGET_RATIO),
@@ -4410,6 +4412,7 @@ export class Orchestrator {
         stage: result.stageApplied,
         originalTokens: result.originalTokens,
         finalTokens: result.finalTokens,
+        systemPromptEstimate: systemPrompt ? Math.ceil(systemPrompt.length / 4) : 0,
       });
     }
   }
