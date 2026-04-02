@@ -12,6 +12,7 @@ import { supportsStreaming } from "./provider.interface.js";
 import { getLogger } from "../../utils/logger.js";
 import { ProviderHealthRegistry } from "./provider-health.js";
 import { sanitizeSecrets } from "../../security/secret-sanitizer.js";
+import { QUOTA_LIMIT_RE } from "../orchestrator-runtime-utils.js";
 
 /**
  * Check whether a provider error is likely caused by the request itself
@@ -23,8 +24,6 @@ import { sanitizeSecrets } from "../../security/secret-sanitizer.js";
 const REASONING_CONTENT_RE = /reasoning_content/i;
 /** Regex for HTTP 400 errors caused by malformed request body or schema */
 const BAD_REQUEST_RE = /bad.?request|invalid|malformed/i;
-/** Regex for quota/rate-limit 403 errors that can be resolved by switching provider */
-const QUOTA_LIMIT_RE = /quota|limit|billing|cycle|exceeded|usage/i;
 /** Regex for invalid tool/schema errors */
 const INVALID_TOOL_RE = /invalid.*tool|tool.*invalid|invalid.*schema/i;
 

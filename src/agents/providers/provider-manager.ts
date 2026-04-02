@@ -674,26 +674,6 @@ export class ProviderManager {
     this.ollamaVerified = verified;
   }
 
-  /**
-   * Build a FallbackChainProvider for streaming with the given primary provider first.
-   * Returns the primary provider directly if no other providers are available.
-   */
-  buildStreamingFallbackChain(
-    primaryProvider: IAIProvider,
-    primaryName: string,
-  ): IAIProvider {
-    const fallbackOrder = this.buildFallbackOrder(primaryName);
-    // If only one provider available (or none besides primary), return as-is
-    if (fallbackOrder.length <= 1) {
-      return primaryProvider;
-    }
-
-    // Build the chain with the primary first, then remaining fallbacks.
-    // buildResilientProvider already does this, so delegate to it.
-    const resilient = this.buildResilientProvider(primaryName);
-    return resilient ?? primaryProvider;
-  }
-
   shutdown(): void {
     this.preferences.close();
   }

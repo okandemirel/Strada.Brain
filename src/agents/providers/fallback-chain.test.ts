@@ -55,7 +55,7 @@ describe("FallbackChainProvider", () => {
     (p3.chat as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("P3 down"));
 
     const chain = new FallbackChainProvider([p1, p2, p3]);
-    await expect(chain.chat("sys", [], [])).rejects.toThrow("P3 down");
+    await expect(chain.chat("sys", [], [])).rejects.toThrow("All providers failed");
 
     expect(p1.chat).toHaveBeenCalledTimes(1);
     expect(p2.chat).toHaveBeenCalledTimes(1);

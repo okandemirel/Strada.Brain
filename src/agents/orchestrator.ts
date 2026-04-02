@@ -2610,10 +2610,7 @@ export class Orchestrator {
               // Use silent streaming for background tasks when available.
               // Non-streaming calls to providers like Kimi hit gateway timeouts (~5min)
               // because long-running LLM responses are cut off server-side.
-              const resilientProvider = this.providerManager.buildStreamingFallbackChain?.(
-                currentProvider,
-                currentAssignment.providerName,
-              ) ?? currentProvider;
+              const resilientProvider = this.providerManager.getProviderByName?.(currentAssignment.providerName) ?? currentProvider;
               const canBgStream =
                 this.streamingEnabled &&
                 "chatStream" in resilientProvider &&
@@ -3736,10 +3733,7 @@ export class Orchestrator {
 
         this.maybeCompactSession(session, currentAssignment.providerName, currentAssignment.modelId, activePrompt);
 
-        const resilientProvider = this.providerManager.buildStreamingFallbackChain?.(
-          currentProvider,
-          currentAssignment.providerName,
-        ) ?? currentProvider;
+        const resilientProvider = this.providerManager.getProviderByName?.(currentAssignment.providerName) ?? currentProvider;
         const canStream =
           this.streamingEnabled &&
           "chatStream" in resilientProvider &&
@@ -3810,6 +3804,24 @@ export class Orchestrator {
         const cbResult = checkProviderFailureCircuitBreaker(response, iterationHealth.getConsecutiveFailures());
         if (cbResult.action !== "ok") {
           const failureAction = iterationHealth.recordFailure(currentAssignment.providerName);
+          const statusLevel = iterationHealth.getStatusLevel();
+
+          // Progressive disclosure — notify user based on severity
+          if (statusLevel === "degraded") {
+            await this.sessionManager.sendVisibleAssistantMarkdown(
+              chatId, session,
+              getResilienceMessage("provider_slow", interactiveLang),
+            );
+          } else if (statusLevel === "critical") {
+            await this.sessionManager.sendVisibleAssistantMarkdown(
+              chatId, session,
+              getResilienceMessage("provider_failing", interactiveLang, {
+                seconds: Math.round((failureAction.kind !== "abort" ? failureAction.backoffMs : 0) / 1000),
+                attempt: iterationHealth.getConsecutiveFailures(),
+                max: 5,
+              }),
+            );
+          }
 
           // Abort if failure rate is critical
           if (failureAction.kind === "abort") {

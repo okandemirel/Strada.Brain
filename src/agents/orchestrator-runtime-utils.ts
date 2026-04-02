@@ -151,16 +151,12 @@ export function sanitizeEventInput(input: Record<string, unknown>): Record<strin
   return JSON.parse(scrubbed) as Record<string, unknown>;
 }
 
-/**
- * Sanitize tool results before feeding back to LLM.
- * Caps length and strips potential API key patterns.
- */
 // =============================================================================
 // PROVIDER FAILURE CIRCUIT BREAKER
 // =============================================================================
 
 const PROVIDER_FAILURE_LIMIT = 3;
-const QUOTA_LIMIT_RE = /quota|limit|billing|cycle|exceeded|usage/i;
+export const QUOTA_LIMIT_RE = /quota|limit|billing|cycle|exceeded|usage/i;
 
 /**
  * Detect synthetic empty responses from silentStream provider failures.
@@ -170,16 +166,16 @@ const QUOTA_LIMIT_RE = /quota|limit|billing|cycle|exceeded|usage/i;
 export function checkProviderFailureCircuitBreaker(
   response: ProviderResponse,
   consecutiveFailures: number,
-): { action: "abort" | "warn_continue" | "ok"; newCount: number } {
+): { action: "abort" | "warn_continue" | "ok" } {
   const isEmpty = response.text === "" && response.toolCalls.length === 0
     && (response.usage.totalTokens === 0 || response.usage.outputTokens === 0);
   if (isEmpty) {
     const newCount = consecutiveFailures + 1;
     return newCount >= PROVIDER_FAILURE_LIMIT
-      ? { action: "abort", newCount }
-      : { action: "warn_continue", newCount };
+      ? { action: "abort" }
+      : { action: "warn_continue" };
   }
-  return { action: "ok", newCount: 0 };
+  return { action: "ok" };
 }
 
 /**
@@ -198,6 +194,10 @@ export function recordProviderHealthFailure(
   }
 }
 
+/**
+ * Sanitize tool results before feeding back to LLM.
+ * Caps length and strips potential API key patterns.
+ */
 export function sanitizeToolResult(content: string, maxLength = MAX_TOOL_RESULT_LENGTH): string {
   let result = redactSensitiveText(content);
   if (result.length > maxLength) {

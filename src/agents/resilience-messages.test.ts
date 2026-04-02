@@ -54,6 +54,16 @@ describe("getResilienceMessage", () => {
     }
   });
 
+  it("interpolates parameters correctly in all languages", () => {
+    const languages = ["en", "tr", "ja", "ko", "zh", "de", "es", "fr"];
+    for (const lang of languages) {
+      const msg = getResilienceMessage("provider_failing", lang, { seconds: 30, attempt: 2, max: 5 });
+      expect(msg).not.toContain("{seconds}");
+      expect(msg).not.toContain("{attempt}");
+      expect(msg).not.toContain("{max}");
+    }
+  });
+
   it("handles case-insensitive language codes", () => {
     const upper = getResilienceMessage("provider_slow", "TR");
     const lower = getResilienceMessage("provider_slow", "tr");
