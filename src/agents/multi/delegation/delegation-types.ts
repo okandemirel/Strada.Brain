@@ -126,7 +126,7 @@ export interface DelegationFailedEvent {
 export const DEFAULT_DELEGATION_TYPES: readonly DelegationTypeConfig[] = [
   { name: "code_review", tier: "cheap", timeoutMs: 60000, maxIterations: 10 },
   { name: "documentation", tier: "cheap", timeoutMs: 45000, maxIterations: 8 },
-  { name: "analysis", tier: "standard", timeoutMs: 90000, maxIterations: 15 },
+  { name: "analysis", tier: "standard", timeoutMs: 180_000, maxIterations: 15 },
   { name: "implementation", tier: "standard", timeoutMs: 120000, maxIterations: 20 },
 ] as const;
 
