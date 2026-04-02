@@ -171,7 +171,9 @@ export function checkProviderFailureCircuitBreaker(
   response: ProviderResponse,
   consecutiveFailures: number,
 ): { action: "abort" | "warn_continue" | "ok"; newCount: number } {
-  if (response.text === "" && response.toolCalls.length === 0 && response.usage.totalTokens === 0) {
+  const isEmpty = response.text === "" && response.toolCalls.length === 0
+    && (response.usage.totalTokens === 0 || response.usage.outputTokens === 0);
+  if (isEmpty) {
     const newCount = consecutiveFailures + 1;
     return newCount >= PROVIDER_FAILURE_LIMIT
       ? { action: "abort", newCount }
