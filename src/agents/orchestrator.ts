@@ -168,6 +168,8 @@ import {
   normalizeFailureFingerprint,
   sanitizeEventInput,
   sanitizeToolResult,
+  checkProviderFailureCircuitBreaker,
+  recordProviderHealthFailure,
 } from "./orchestrator-runtime-utils.js";
 import {
   buildPhasePromptSection,
@@ -2651,32 +2653,23 @@ export class Orchestrator {
               );
 
               // Circuit breaker: detect synthetic empty responses from silentStream provider failures.
-              // When both stream and fallback .chat() fail, silentStream returns { text: "", toolCalls: [], usage: { totalTokens: 0 } }.
-              // Without this check, the empty response enters handleBgEndTurn → decideInteractionBoundary → internal_continue,
-              // sending the loop back to call the same dead provider indefinitely.
-              if (response.text === "" && response.toolCalls.length === 0 && response.usage.totalTokens === 0) {
-                consecutiveProviderFailures++;
-                if (consecutiveProviderFailures >= 3) {
-                  logger.error("Provider failed on 3 consecutive calls — aborting to prevent infinite loop", {
-                    chatId,
-                    provider: currentAssignment.providerName,
-                    epoch: bgEpochCount,
-                    iteration: bgIteration,
-                  });
-                  return finish(
-                    "I was unable to complete this task because the AI provider is not responding. Please try again later or switch to a different provider.",
-                    "completed",
-                    "Provider failure circuit breaker triggered after 3 consecutive failures.",
-                  );
-                }
-                logger.warn("Provider returned synthetic empty response — possible failure", {
-                  chatId,
-                  consecutiveProviderFailures,
-                  provider: currentAssignment.providerName,
+              const cbResult = checkProviderFailureCircuitBreaker(response, consecutiveProviderFailures);
+              consecutiveProviderFailures = cbResult.newCount;
+              if (cbResult.action === "abort") {
+                logger.error("Provider failed on consecutive calls — aborting to prevent infinite loop", {
+                  chatId, provider: currentAssignment.providerName, epoch: bgEpochCount, iteration: bgIteration,
                 });
-                continue; // skip end-turn handler, go straight to next iteration
-              } else {
-                consecutiveProviderFailures = 0;
+                return finish(
+                  "I was unable to complete this task because the AI provider is not responding. Please try again later or switch to a different provider.",
+                  "completed",
+                  "Provider failure circuit breaker triggered after consecutive failures.",
+                );
+              }
+              if (cbResult.action === "warn_continue") {
+                logger.warn("Provider returned synthetic empty response — possible failure", {
+                  chatId, consecutiveProviderFailures, provider: currentAssignment.providerName,
+                });
+                continue;
               }
 
               // max_tokens: model output was truncated — push and continue so the model finishes.
@@ -3765,29 +3758,23 @@ export class Orchestrator {
         this.recordProviderUsage(currentAssignment.providerName, response.usage, this.onUsage);
 
         // Circuit breaker: detect synthetic empty responses from silentStream provider failures.
-        if (response.text === "" && response.toolCalls.length === 0 && response.usage.totalTokens === 0) {
-          consecutiveProviderFailures++;
-          if (consecutiveProviderFailures >= 3) {
-            logger.error("Provider failed on 3 consecutive calls — aborting to prevent infinite loop", {
-              chatId,
-              provider: currentAssignment.providerName,
-              iteration,
-            });
-            await this.sessionManager.sendVisibleAssistantMarkdown(
-              chatId,
-              session,
-              "I'm unable to continue because the AI provider is not responding. Please try again later or switch to a different provider.",
-            );
-            break;
-          }
+        const cbResult = checkProviderFailureCircuitBreaker(response, consecutiveProviderFailures);
+        consecutiveProviderFailures = cbResult.newCount;
+        if (cbResult.action === "abort") {
+          logger.error("Provider failed on consecutive calls — aborting to prevent infinite loop", {
+            chatId, provider: currentAssignment.providerName, iteration,
+          });
+          await this.sessionManager.sendVisibleAssistantMarkdown(
+            chatId, session,
+            "I'm unable to continue because the AI provider is not responding. Please try again later or switch to a different provider.",
+          );
+          break;
+        }
+        if (cbResult.action === "warn_continue") {
           logger.warn("Provider returned synthetic empty response — possible failure", {
-            chatId,
-            consecutiveProviderFailures,
-            provider: currentAssignment.providerName,
+            chatId, consecutiveProviderFailures, provider: currentAssignment.providerName,
           });
           continue;
-        } else {
-          consecutiveProviderFailures = 0;
         }
 
         // max_tokens: model output was truncated — push and continue so the model finishes.
@@ -4466,7 +4453,7 @@ export class Orchestrator {
       } catch (fallbackErr) {
         const fallbackMsg = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
         getLogger().error("Silent stream fallback chat failed", { chatId, error: fallbackMsg });
-        ProviderHealthRegistry.getInstance().recordFailure(provider.name, fallbackMsg);
+        recordProviderHealthFailure(ProviderHealthRegistry.getInstance(), provider.name, fallbackMsg);
         // Surface the failure to the agent so it can adapt its approach
         // (e.g. simplify the request, reduce tool usage, skip non-critical work).
         // This mirrors Claude Code's behavior of showing errors to the user.

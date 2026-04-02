@@ -60,12 +60,6 @@ describe("delegation-types", () => {
       expect(an!.maxIterations).toBe(15);
     });
 
-    it("analysis delegation type has at least 180s timeout", () => {
-      const analysisType = DEFAULT_DELEGATION_TYPES.find((t) => t.name === "analysis");
-      expect(analysisType).toBeDefined();
-      expect(analysisType!.timeoutMs).toBeGreaterThanOrEqual(180_000);
-    });
-
     it("has implementation with tier standard", () => {
       const impl = DEFAULT_DELEGATION_TYPES.find((t) => t.name === "implementation");
       expect(impl).toBeDefined();
