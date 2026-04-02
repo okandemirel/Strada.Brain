@@ -3772,6 +3772,11 @@ export class Orchestrator {
               provider: currentAssignment.providerName,
               iteration,
             });
+            await this.sessionManager.sendVisibleAssistantMarkdown(
+              chatId,
+              session,
+              "I'm unable to continue because the AI provider is not responding. Please try again later or switch to a different provider.",
+            );
             break;
           }
           logger.warn("Provider returned synthetic empty response — possible failure", {
@@ -4468,6 +4473,9 @@ export class Orchestrator {
         } as ConversationMessage);
         // Return a synthetic empty response so the PAOR loop can continue
         // with the agent's awareness of the failure.
+        // IMPORTANT: The circuit breaker in runBackgroundTask / runAgentLoop
+        // detects this exact shape ({ text: "", toolCalls: [], totalTokens: 0 })
+        // to identify provider failures. If you change this, update both loops.
         return {
           text: "",
           toolCalls: [],
