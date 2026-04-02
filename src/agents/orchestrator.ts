@@ -171,6 +171,8 @@ import {
   checkProviderFailureCircuitBreaker,
   recordProviderHealthFailure,
 } from "./orchestrator-runtime-utils.js";
+import { IterationHealthTracker } from "./iteration-health-tracker.js";
+import { getResilienceMessage } from "./resilience-messages.js";
 import {
   buildPhasePromptSection,
   recordStepResultsAndCheckReflection,
@@ -2551,7 +2553,7 @@ export class Orchestrator {
           }
 
           let consecutiveMaxTokens = 0;
-          let consecutiveProviderFailures = 0;
+          const iterationHealth = new IterationHealthTracker();
           let maxTokensAbort = false;
           while (true) {
             for (
@@ -2608,13 +2610,17 @@ export class Orchestrator {
               // Use silent streaming for background tasks when available.
               // Non-streaming calls to providers like Kimi hit gateway timeouts (~5min)
               // because long-running LLM responses are cut off server-side.
+              const resilientProvider = this.providerManager.buildStreamingFallbackChain?.(
+                currentProvider,
+                currentAssignment.providerName,
+              ) ?? currentProvider;
               const canBgStream =
                 this.streamingEnabled &&
-                "chatStream" in currentProvider &&
-                typeof currentProvider.chatStream === "function";
+                "chatStream" in resilientProvider &&
+                typeof resilientProvider.chatStream === "function";
               const response = canBgStream
-                ? await this.silentStream(chatId, activePrompt, session, currentProvider, currentToolDefinitions)
-                : await currentProvider.chat(
+                ? await this.silentStream(chatId, activePrompt, session, resilientProvider, currentToolDefinitions)
+                : await resilientProvider.chat(
                     activePrompt,
                     session.messages,
                     currentToolDefinitions,
@@ -2652,24 +2658,62 @@ export class Orchestrator {
                 options.onUsage ?? this.onUsage,
               );
 
-              // Circuit breaker: detect synthetic empty responses from silentStream provider failures.
-              const cbResult = checkProviderFailureCircuitBreaker(response, consecutiveProviderFailures);
-              consecutiveProviderFailures = cbResult.newCount;
-              if (cbResult.action === "abort") {
-                logger.error("Provider failed on consecutive calls — aborting to prevent infinite loop", {
-                  chatId, provider: currentAssignment.providerName, epoch: bgEpochCount, iteration: bgIteration,
-                });
-                return finish(
-                  "I was unable to complete this task because the AI provider is not responding. Please try again later or switch to a different provider.",
-                  "completed",
-                  "Provider failure circuit breaker triggered after consecutive failures.",
-                );
-              }
-              if (cbResult.action === "warn_continue") {
-                logger.warn("Provider returned synthetic empty response — possible failure", {
-                  chatId, consecutiveProviderFailures, provider: currentAssignment.providerName,
-                });
+              // Intelligent provider resilience: detect synthetic empty responses and adapt
+              const cbResult = checkProviderFailureCircuitBreaker(response, iterationHealth.getConsecutiveFailures());
+              if (cbResult.action !== "ok") {
+                const failureAction = iterationHealth.recordFailure(currentAssignment.providerName);
+                const statusLevel = iterationHealth.getStatusLevel();
+
+                // Progressive disclosure — notify user based on severity
+                if (statusLevel === "degraded") {
+                  emitProgress(this.buildStructuredProgressSignal(
+                    prompt, progressTitle,
+                    { kind: "status", message: getResilienceMessage("provider_slow", progressLanguage ?? "en") },
+                    progressLanguage,
+                  ));
+                } else if (statusLevel === "critical") {
+                  emitProgress(this.buildStructuredProgressSignal(
+                    prompt, progressTitle,
+                    { kind: "status", message: getResilienceMessage("provider_failing", progressLanguage ?? "en", {
+                      seconds: Math.round((failureAction.kind !== "abort" ? failureAction.backoffMs : 0) / 1000),
+                      attempt: iterationHealth.getConsecutiveFailures(),
+                      max: 5,
+                    }) },
+                    progressLanguage,
+                  ));
+                }
+
+                // Abort if failure rate is critical
+                if (failureAction.kind === "abort") {
+                  logger.error("Provider failure rate critical — aborting task", {
+                    chatId,
+                    provider: currentAssignment.providerName,
+                    failureRate: iterationHealth.getFailureRate(),
+                    consecutiveFailures: iterationHealth.getConsecutiveFailures(),
+                    totalFailures: iterationHealth.getTotalFailures(),
+                    taskDurationMs: iterationHealth.getTaskDurationMs(),
+                  });
+                  return finish(
+                    getResilienceMessage("provider_abort", progressLanguage ?? "en"),
+                    "completed",
+                    failureAction.reason,
+                  );
+                }
+
+                // Exponential backoff before retry
+                if (failureAction.backoffMs > 0) {
+                  logger.info("Provider failure backoff", {
+                    chatId,
+                    backoffMs: failureAction.backoffMs,
+                    provider: currentAssignment.providerName,
+                    consecutiveFailures: iterationHealth.getConsecutiveFailures(),
+                  });
+                  await new Promise(resolve => setTimeout(resolve, failureAction.backoffMs));
+                }
+
                 continue;
+              } else {
+                iterationHealth.recordSuccess();
               }
 
               // max_tokens: model output was truncated — push and continue so the model finishes.
@@ -3668,7 +3712,7 @@ export class Orchestrator {
       }
 
       let consecutiveMaxTokens = 0;
-      let consecutiveProviderFailures = 0;
+      const iterationHealth = new IterationHealthTracker();
       for (let iteration = 0; iteration < interactiveIterationLimit; iteration++) {
         const {
           executionStrategy: iterStrategy,
@@ -3692,10 +3736,14 @@ export class Orchestrator {
 
         this.maybeCompactSession(session, currentAssignment.providerName, currentAssignment.modelId, activePrompt);
 
+        const resilientProvider = this.providerManager.buildStreamingFallbackChain?.(
+          currentProvider,
+          currentAssignment.providerName,
+        ) ?? currentProvider;
         const canStream =
           this.streamingEnabled &&
-          "chatStream" in currentProvider &&
-          typeof currentProvider.chatStream === "function" &&
+          "chatStream" in resilientProvider &&
+          typeof resilientProvider.chatStream === "function" &&
           "startStreamingMessage" in this.channel &&
           typeof this.channel.startStreamingMessage === "function";
 
@@ -3713,11 +3761,11 @@ export class Orchestrator {
             chatId,
             activePrompt,
             session,
-            currentProvider,
+            resilientProvider,
             currentToolDefinitions,
           );
         } else {
-          response = await currentProvider.chat(
+          response = await resilientProvider.chat(
             activePrompt,
             session.messages,
             currentToolDefinitions,
@@ -3757,24 +3805,43 @@ export class Orchestrator {
         }
         this.recordProviderUsage(currentAssignment.providerName, response.usage, this.onUsage);
 
-        // Circuit breaker: detect synthetic empty responses from silentStream provider failures.
-        const cbResult = checkProviderFailureCircuitBreaker(response, consecutiveProviderFailures);
-        consecutiveProviderFailures = cbResult.newCount;
-        if (cbResult.action === "abort") {
-          logger.error("Provider failed on consecutive calls — aborting to prevent infinite loop", {
-            chatId, provider: currentAssignment.providerName, iteration,
-          });
-          await this.sessionManager.sendVisibleAssistantMarkdown(
-            chatId, session,
-            "I'm unable to continue because the AI provider is not responding. Please try again later or switch to a different provider.",
-          );
-          break;
-        }
-        if (cbResult.action === "warn_continue") {
-          logger.warn("Provider returned synthetic empty response — possible failure", {
-            chatId, consecutiveProviderFailures, provider: currentAssignment.providerName,
-          });
+        // Intelligent provider resilience: detect synthetic empty responses and adapt
+        const interactiveLang = (profile?.language ?? this.defaultLanguage) as string;
+        const cbResult = checkProviderFailureCircuitBreaker(response, iterationHealth.getConsecutiveFailures());
+        if (cbResult.action !== "ok") {
+          const failureAction = iterationHealth.recordFailure(currentAssignment.providerName);
+
+          // Abort if failure rate is critical
+          if (failureAction.kind === "abort") {
+            logger.error("Provider failure rate critical — aborting interactive loop", {
+              chatId,
+              provider: currentAssignment.providerName,
+              failureRate: iterationHealth.getFailureRate(),
+              consecutiveFailures: iterationHealth.getConsecutiveFailures(),
+              totalFailures: iterationHealth.getTotalFailures(),
+              taskDurationMs: iterationHealth.getTaskDurationMs(),
+            });
+            await this.sessionManager.sendVisibleAssistantMarkdown(
+              chatId, session,
+              getResilienceMessage("provider_abort", interactiveLang),
+            );
+            break;
+          }
+
+          // Exponential backoff before retry
+          if (failureAction.backoffMs > 0) {
+            logger.info("Provider failure backoff", {
+              chatId,
+              backoffMs: failureAction.backoffMs,
+              provider: currentAssignment.providerName,
+              consecutiveFailures: iterationHealth.getConsecutiveFailures(),
+            });
+            await new Promise(resolve => setTimeout(resolve, failureAction.backoffMs));
+          }
+
           continue;
+        } else {
+          iterationHealth.recordSuccess();
         }
 
         // max_tokens: model output was truncated — push and continue so the model finishes.

@@ -67,10 +67,10 @@ export class IterationHealthTracker {
     this.totalFailures++;
     this.results.push({ success: false, timestamp: Date.now(), provider });
 
-    const backoffMs =
+    const backoffMs: number =
       BACKOFF_SCHEDULE_MS[
         Math.min(this.backoffIndex, BACKOFF_SCHEDULE_MS.length - 1)
-      ];
+      ] ?? 0;
     this.backoffIndex++;
 
     if (this.shouldAbort()) {
@@ -105,7 +105,7 @@ export class IterationHealthTracker {
     if (this.consecutiveFailures === 0) return 0;
     return BACKOFF_SCHEDULE_MS[
       Math.min(this.backoffIndex, BACKOFF_SCHEDULE_MS.length - 1)
-    ];
+    ] ?? 0;
   }
 
   getFailureRate(): number {

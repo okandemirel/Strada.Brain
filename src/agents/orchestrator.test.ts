@@ -8186,7 +8186,7 @@ DONE`,
   });
 
   describe("Provider Failure Circuit Breaker", () => {
-    it("background loop aborts after 3 consecutive synthetic empty responses", async () => {
+    it("background loop aborts after sustained provider failures via IterationHealthTracker", async () => {
       const backgroundOrch = new Orchestrator({
         providerManager: {
           getProvider: () => mockProvider,
@@ -8212,15 +8212,26 @@ DONE`,
         usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
       });
 
-      const result = await backgroundOrch.runBackgroundTask("Analyze the codebase", {
+      // IterationHealthTracker requires MIN_WINDOW_FOR_RATE (5) results and
+      // ABORT_FAILURE_RATE (60%) + ABORT_CONSECUTIVE (3) to abort.
+      // With all failures, abort triggers on the 5th consecutive failure.
+      // Backoff delays require timer advancement.
+      const promise = backgroundOrch.runBackgroundTask("Analyze the codebase", {
         chatId: "bg-circuit-breaker",
         channelType: "daemon",
         signal: new AbortController().signal,
         onProgress: vi.fn(),
       });
 
-      // Should abort after exactly 3 failures, not loop indefinitely
-      expect(mockProvider.chat.mock.calls.length).toBe(3);
+      // Advance timers enough for backoff delays (up to 120s schedule)
+      for (let i = 0; i < 10; i++) {
+        await vi.advanceTimersByTimeAsync(130_000);
+      }
+      const result = await promise;
+
+      // Should abort after 5 failures (sliding window threshold), not loop indefinitely
+      expect(mockProvider.chat.mock.calls.length).toBe(5);
+      // Abort message comes from resilience-messages.ts (localized)
       expect(result).toContain("AI provider is not responding");
     });
 
@@ -8256,14 +8267,16 @@ DONE`,
           stopReason: "end_turn" as const,
           usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
         })
-        // Real response — resets the counter
+        // Real response — resets the consecutive counter and backoff index
         .mockResolvedValueOnce({
           text: "Analysis complete. DONE",
           toolCalls: [],
           stopReason: "end_turn" as const,
           usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
         })
-        // 2 more synthetic empty responses (should NOT trigger abort since counter was reset)
+        // 2 more synthetic empty responses (should NOT trigger abort —
+        // consecutive count was reset, and while sliding window has 4/5 failures,
+        // ABORT_CONSECUTIVE requires 3 consecutive, not just 2)
         .mockResolvedValueOnce({
           text: "",
           toolCalls: [],
@@ -8291,15 +8304,21 @@ DONE`,
           usage: { inputTokens: 10, outputTokens: 10, totalTokens: 20 },
         });
 
-      const result = await backgroundOrch.runBackgroundTask("Analyze the codebase", {
+      const promise = backgroundOrch.runBackgroundTask("Analyze the codebase", {
         chatId: "bg-circuit-reset",
         channelType: "daemon",
         signal: new AbortController().signal,
         onProgress: vi.fn(),
       });
 
-      // Should NOT contain the circuit breaker message — real responses reset the counter
-      expect(result).not.toContain("AI provider is not responding");
+      // Advance timers enough for any backoff delays
+      for (let i = 0; i < 10; i++) {
+        await vi.advanceTimersByTimeAsync(130_000);
+      }
+      const result = await promise;
+
+      // Should NOT contain the abort message — real responses reset the consecutive counter
+      expect(result).not.toContain("Unable to complete this task");
       // Should have made more than 3 calls (counter was reset mid-way)
       expect(mockProvider.chat.mock.calls.length).toBeGreaterThan(3);
     });
