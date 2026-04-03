@@ -411,4 +411,64 @@ describe("ProviderManager", () => {
       "reasoning-not-reflected-locally",
     ]));
   });
+
+  it("builds a resilient provider chain with a custom fallback order", () => {
+    const defaultProvider = makeProvider("chain(qwen->kimi)");
+    const manager = new ProviderManager(
+      defaultProvider,
+      {
+        qwen: { apiKey: "q-key" },
+        kimi: { apiKey: "k-key" },
+        minimax: { apiKey: "mm-key" },
+      },
+      undefined,
+      undefined,
+      ["qwen", "kimi"],
+    );
+
+    // Custom order: kimi first, then minimax, then qwen
+    const result = manager.buildResilientProviderWithOrder(["kimi", "minimax", "qwen"]);
+    expect(result).not.toBeNull();
+    expect(buildProviderChainMock).toHaveBeenCalledWith(
+      ["kimi", "minimax", "qwen"],
+      expect.any(Object),
+      expect.any(Object),
+    );
+  });
+
+  it("returns null from buildResilientProviderWithOrder when order is empty", () => {
+    const defaultProvider = makeProvider("chain(qwen->kimi)");
+    const manager = new ProviderManager(
+      defaultProvider,
+      { qwen: { apiKey: "q-key" } },
+      undefined,
+      undefined,
+      ["qwen"],
+    );
+
+    expect(manager.buildResilientProviderWithOrder([])).toBeNull();
+  });
+
+  it("caches providers from buildResilientProviderWithOrder", () => {
+    const defaultProvider = makeProvider("chain(qwen->kimi)");
+    const manager = new ProviderManager(
+      defaultProvider,
+      {
+        qwen: { apiKey: "q-key" },
+        kimi: { apiKey: "k-key" },
+      },
+      undefined,
+      undefined,
+      ["qwen", "kimi"],
+    );
+
+    const first = manager.buildResilientProviderWithOrder(["kimi", "qwen"]);
+    const second = manager.buildResilientProviderWithOrder(["kimi", "qwen"]);
+    expect(first).toBe(second);
+    // buildProviderChain should only be called once due to caching
+    const customOrderCalls = buildProviderChainMock.mock.calls.filter(
+      (call: any[]) => call[0]?.[0] === "kimi" && call[0]?.[1] === "qwen",
+    );
+    expect(customOrderCalls.length).toBe(1);
+  });
 });

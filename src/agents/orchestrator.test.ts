@@ -8373,6 +8373,55 @@ DONE`,
       ProviderHealthRegistry.resetInstance();
     });
 
+    it("background loop emits provider_ask_user message at failure threshold", async () => {
+      const onProgressSpy = vi.fn();
+      const backgroundOrch = new Orchestrator({
+        providerManager: {
+          getProvider: () => mockProvider,
+          getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+          shutdown: vi.fn(),
+        } as any,
+        tools: [readTool],
+        channel: mockChannel,
+        projectPath: "/tmp/test-project",
+        readOnly: false,
+        requireConfirmation: false,
+        taskConfig: {
+          ...DEFAULT_TASK_CONFIG,
+          backgroundEpochMaxIterations: 20,
+        },
+      });
+
+      // All calls return synthetic empty response (triggers circuit breaker)
+      mockProvider.chat.mockResolvedValue({
+        text: "",
+        toolCalls: [],
+        stopReason: "end_turn" as const,
+        usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+      });
+
+      const promise = backgroundOrch.runBackgroundTask("Analyze the codebase", {
+        chatId: "bg-ask-user",
+        channelType: "daemon",
+        signal: new AbortController().signal,
+        onProgress: onProgressSpy,
+      });
+
+      // Advance timers enough for backoff delays
+      for (let i = 0; i < 10; i++) {
+        await vi.advanceTimersByTimeAsync(130_000);
+      }
+      await promise;
+
+      // The ask_user message should appear in progress emissions.
+      // IterationHealthTracker returns ask_user at 3 consecutive failures.
+      const askUserCalls = onProgressSpy.mock.calls.filter((call: any[]) => {
+        const signal = call[0];
+        return signal?.message?.includes?.("unreliable") || signal?.message?.includes?.("switch");
+      });
+      expect(askUserCalls.length).toBeGreaterThanOrEqual(1);
+    });
+
     it("silentStream records success in ProviderHealthRegistry when streaming succeeds", async () => {
       const { ProviderHealthRegistry } = await import("./providers/provider-health.js");
       ProviderHealthRegistry.resetInstance();

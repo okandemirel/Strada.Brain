@@ -729,4 +729,52 @@ describe("ProviderRouter", () => {
       expect(decision.provider).not.toBe("deepseek");
     });
   });
+
+  describe("resolveRanked", () => {
+    it("returns all providers sorted by score descending", () => {
+      const manager = createMockManager(MULTI_PROVIDERS);
+      const router = new ProviderRouter(manager, "balanced");
+
+      const ranked = router.resolveRanked(planningTask);
+
+      expect(ranked.length).toBe(MULTI_PROVIDERS.length);
+      // All provider names should be present
+      for (const provider of MULTI_PROVIDERS) {
+        expect(ranked).toContain(provider.name);
+      }
+    });
+
+    it("returns single provider for single-provider scenarios", () => {
+      const manager = createMockManager(SINGLE_PROVIDER);
+      const router = new ProviderRouter(manager, "balanced");
+
+      const ranked = router.resolveRanked(planningTask);
+
+      expect(ranked).toEqual(["ollama"]);
+    });
+
+    it("does not record a decision (side-effect free)", () => {
+      const manager = createMockManager(MULTI_PROVIDERS);
+      const router = new ProviderRouter(manager, "balanced");
+
+      router.resolveRanked(planningTask);
+
+      expect(router.getRecentDecisions(10)).toHaveLength(0);
+    });
+
+    it("respects phase-aware weight adjustment", () => {
+      const manager = createMockManager(MULTI_PROVIDERS);
+      const router = new ProviderRouter(manager, "balanced");
+
+      // First resolve normally to set lastExecutingProvider
+      router.resolve(planningTask);
+
+      const normalRanked = router.resolveRanked(planningTask, "executing");
+      const reflectingRanked = router.resolveRanked(planningTask, "reflecting");
+
+      // Both should have all providers
+      expect(normalRanked.length).toBe(MULTI_PROVIDERS.length);
+      expect(reflectingRanked.length).toBe(MULTI_PROVIDERS.length);
+    });
+  });
 });

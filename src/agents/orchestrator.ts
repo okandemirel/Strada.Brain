@@ -2610,7 +2610,12 @@ export class Orchestrator {
               // Use silent streaming for background tasks when available.
               // Non-streaming calls to providers like Kimi hit gateway timeouts (~5min)
               // because long-running LLM responses are cut off server-side.
-              const resilientProvider = this.providerManager.getProviderByName?.(currentAssignment.providerName) ?? currentProvider;
+              // Task-aware fallback: use ProviderRouter-ranked order when available
+              const resilientProvider = this.buildTaskAwareProvider(
+                currentAssignment.providerName,
+                executionStrategy.task,
+                bgAgentState.phase,
+              ) ?? currentProvider;
               const canBgStream =
                 this.streamingEnabled &&
                 "chatStream" in resilientProvider &&
@@ -2676,6 +2681,15 @@ export class Orchestrator {
                       attempt: iterationHealth.getConsecutiveFailures(),
                       max: 5,
                     }) },
+                    progressLanguage,
+                  ));
+                }
+
+                // Ask user — provider has been unreliable beyond retry threshold
+                if (failureAction.kind === "ask_user") {
+                  emitProgress(this.buildStructuredProgressSignal(
+                    prompt, progressTitle,
+                    { kind: "status", message: getResilienceMessage("provider_ask_user", progressLanguage ?? "en") },
                     progressLanguage,
                   ));
                 }
@@ -3733,7 +3747,12 @@ export class Orchestrator {
 
         this.maybeCompactSession(session, currentAssignment.providerName, currentAssignment.modelId, activePrompt);
 
-        const resilientProvider = this.providerManager.getProviderByName?.(currentAssignment.providerName) ?? currentProvider;
+        // Task-aware fallback: use ProviderRouter-ranked order when available
+        const resilientProvider = this.buildTaskAwareProvider(
+          currentAssignment.providerName,
+          executionStrategy.task,
+          agentState.phase,
+        ) ?? currentProvider;
         const canStream =
           this.streamingEnabled &&
           "chatStream" in resilientProvider &&
@@ -3820,6 +3839,14 @@ export class Orchestrator {
                 attempt: iterationHealth.getConsecutiveFailures(),
                 max: 5,
               }),
+            );
+          }
+
+          // Ask user — provider has been unreliable beyond retry threshold
+          if (failureAction.kind === "ask_user") {
+            await this.sessionManager.sendVisibleAssistantMarkdown(
+              chatId, session,
+              getResilienceMessage("provider_ask_user", interactiveLang),
             );
           }
 
@@ -4904,6 +4931,40 @@ export class Orchestrator {
       inputTokens: usage.inputTokens,
       outputTokens: usage.outputTokens,
     });
+  }
+
+  /**
+   * Build a resilient provider with fallback order ranked by task fitness.
+   * Uses ProviderRouter scoring when available, falls back to default order.
+   */
+  private buildTaskAwareProvider(
+    primaryName: string,
+    task?: import("../agent-core/routing/routing-types.js").TaskClassification,
+    phase?: string,
+  ): import("./providers/provider.interface.js").IAIProvider | null {
+    if (!this.providerRouter || !task) {
+      return this.providerManager.getProviderByName?.(primaryName) ?? null;
+    }
+
+    try {
+      const rankedOrder = this.providerRouter.resolveRanked(task, phase);
+      if (rankedOrder.length <= 1) {
+        return this.providerManager.getProviderByName?.(primaryName) ?? null;
+      }
+
+      // Ensure primary is first, then fill with router-ranked order
+      const order = [primaryName];
+      for (const name of rankedOrder) {
+        if (!order.includes(name)) {
+          order.push(name);
+        }
+      }
+
+      return this.providerManager.buildResilientProviderWithOrder?.(order) ?? this.providerManager.getProviderByName?.(primaryName) ?? null;
+    } catch {
+      // Fallback to standard resilient provider on any router error
+      return this.providerManager.getProviderByName?.(primaryName) ?? null;
+    }
   }
 
   private buildStructuredProgressSignal(

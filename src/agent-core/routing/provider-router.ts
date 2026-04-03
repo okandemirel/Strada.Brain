@@ -261,6 +261,49 @@ export class ProviderRouter {
   }
 
   /**
+   * Return all available providers ranked by task fitness (descending score).
+   * Unlike resolve(), this does not record a decision or update last-executing state.
+   * Used by the orchestrator to build a fallback chain ordered by suitability.
+   */
+  resolveRanked(
+    task: TaskClassification,
+    phase?: string,
+    options: {
+      identityKey?: string;
+      allowedProviderNames?: readonly string[];
+      taskDescription?: string;
+      projectWorldFingerprint?: string;
+    } = {},
+  ): string[] {
+    const available = this.getAvailableProviders(options);
+    if (available.length <= 1) {
+      return available.map((p) => p.name);
+    }
+
+    const trajectorySignals = this.getTrajectorySignalsForTask(
+      phase,
+      options.taskDescription,
+      options.projectWorldFingerprint,
+    );
+
+    let weights = this.weights;
+    if (phase === "reflecting") {
+      weights = {
+        ...weights,
+        diversityWeight: Math.min(weights.diversityWeight + 0.4, 1.0),
+      };
+    }
+
+    const scored = available.map((entry) => ({
+      name: entry.name,
+      score: this.scoreProvider(entry, task, weights, available, phase, options.identityKey, trajectorySignals),
+    }));
+
+    scored.sort((a, b) => b.score - a.score);
+    return scored.map((s) => s.name);
+  }
+
+  /**
    * Resolve a provider and enrich the decision with catalog assignment metadata.
    * This does not change selection behavior; it only exposes the catalog state
    * that informed the choice.

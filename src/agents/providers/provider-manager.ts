@@ -432,6 +432,41 @@ export class ProviderManager {
     return this.buildResilientProvider(canonicalizeProviderName(name) ?? name, model);
   }
 
+  /**
+   * Build a resilient provider chain with a custom fallback order.
+   * The caller is responsible for providing the order (e.g., ranked by task fitness
+   * via ProviderRouter.resolveRanked). Primary provider model override is applied
+   * to the first entry in the order.
+   */
+  buildResilientProviderWithOrder(order: string[], primaryModel?: string): IAIProvider | null {
+    if (order.length === 0) return null;
+
+    const normalizedOrder = order
+      .map((name) => canonicalizeProviderName(name) ?? name.trim().toLowerCase())
+      .filter(Boolean);
+
+    if (normalizedOrder.length === 0) return null;
+
+    const cacheKey = this.buildCacheKey(normalizedOrder, normalizedOrder[0]!, primaryModel);
+    const cached = this.providerCache.get(cacheKey);
+    if (cached) return cached;
+
+    try {
+      const models = primaryModel
+        ? { ...this.modelOverrides, [normalizedOrder[0]!]: primaryModel }
+        : this.modelOverrides;
+      const provider = buildProviderChain(normalizedOrder, this.providerCredentials, { models });
+      this.providerCache.set(cacheKey, provider);
+      return provider;
+    } catch (error) {
+      getLogger().warn("Failed to create provider chain with custom order", {
+        order: normalizedOrder,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
+  }
+
   getPrimaryProviderByName(name: string, model?: string): IAIProvider | null {
     return this.buildPrimaryProvider(canonicalizeProviderName(name) ?? name, model);
   }
