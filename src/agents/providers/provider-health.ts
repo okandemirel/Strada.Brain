@@ -49,10 +49,13 @@ function resolveDefaultConfig(): ProviderHealthConfig {
   };
 }
 
+const MAX_ADAPTIVE_COOLDOWN_MS = 10 * 60 * 1000; // 10 minutes
+
 export class ProviderHealthRegistry {
   private static instance: ProviderHealthRegistry | null = null;
 
   private readonly entries = new Map<string, ProviderHealthEntry>();
+  private readonly downEpisodes = new Map<string, number>();
   private readonly config: ProviderHealthConfig;
 
   constructor(config: Partial<ProviderHealthConfig> = {}) {
@@ -85,6 +88,7 @@ export class ProviderHealthRegistry {
         lastError: "",
         cooldownUntil: 0,
       });
+      this.downEpisodes.delete(normalized); // Reset escalation on success
     }
   }
 
@@ -100,8 +104,14 @@ export class ProviderHealthRegistry {
     let cooldownUntil = 0;
 
     if (failures >= this.config.downThreshold) {
+      const episodes = this.downEpisodes.get(normalized) ?? 0;
+      const escalatedCooldown = Math.min(
+        this.config.downCooldownMs * Math.pow(2, episodes),
+        MAX_ADAPTIVE_COOLDOWN_MS,
+      );
       status = "down";
-      cooldownUntil = now + this.config.downCooldownMs;
+      cooldownUntil = now + escalatedCooldown;
+      this.downEpisodes.set(normalized, episodes + 1);
     } else if (failures >= this.config.degradedThreshold) {
       status = "degraded";
       cooldownUntil = now + this.config.degradedCooldownMs;
@@ -188,5 +198,24 @@ export class ProviderHealthRegistry {
    */
   isNearRateLimit(providerName: string): boolean {
     return this.getStatus(providerName) === "degraded";
+  }
+
+  /**
+   * Get the number of down episodes for a provider (for testing/observability).
+   */
+  getDownEpisodes(providerName: string): number {
+    return this.downEpisodes.get(providerName.trim().toLowerCase()) ?? 0;
+  }
+
+  /**
+   * Check if a provider is in recovery state (was down, cooldown just expired).
+   * Callers should probe before sending real traffic.
+   */
+  isRecovering(providerName: string): boolean {
+    const normalized = providerName.trim().toLowerCase();
+    const entry = this.entries.get(normalized);
+    if (!entry) return false;
+    // Was down or degraded, cooldown has expired, but hasn't had a success yet
+    return entry.status !== "healthy" && entry.consecutiveFailures > 0 && Date.now() >= entry.cooldownUntil;
   }
 }
