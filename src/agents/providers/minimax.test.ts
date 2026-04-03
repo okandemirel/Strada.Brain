@@ -1,13 +1,10 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { MiniMaxProvider } from "./minimax.js";
 
+const mockLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
 vi.mock("../../utils/logger.js", () => ({
-  getLogger: () => ({
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-    debug: vi.fn(),
-  }),
+  getLogger: () => mockLogger,
+  getLoggerSafe: () => mockLogger,
 }));
 
 describe("MiniMaxProvider", () => {
@@ -17,7 +14,7 @@ describe("MiniMaxProvider", () => {
 
   it("has correct name and capabilities", () => {
     expect(provider.name).toBe("MiniMax");
-    expect(provider.capabilities.maxTokens).toBe(4096);
+    expect(provider.capabilities.maxTokens).toBe(131_072);
     expect(provider.capabilities.vision).toBe(false);
     expect(provider.capabilities.toolCalling).toBe(true);
   });
@@ -111,6 +108,40 @@ describe("MiniMaxProvider", () => {
       expect(result.toolCalls).toHaveLength(1);
       expect(result.toolCalls[0]!.name).toBe("calc");
       expect(result.stopReason).toBe("tool_use");
+    });
+  });
+
+  describe("healthCheck", () => {
+    const mockFetch = vi.fn();
+    beforeEach(() => {
+      vi.stubGlobal("fetch", mockFetch);
+      mockFetch.mockReset();
+    });
+
+    it("returns true on HTTP 200 and cancels response body", async () => {
+      const cancel = vi.fn();
+      mockFetch.mockResolvedValueOnce({ ok: true, body: { cancel } });
+      expect(await provider.healthCheck()).toBe(true);
+      expect(cancel).toHaveBeenCalled();
+      expect(mockFetch.mock.calls[0]![0]).toContain("/chat/completions");
+    });
+
+    it("returns false on non-2xx status", async () => {
+      mockFetch.mockResolvedValueOnce({ ok: false, status: 401 });
+      expect(await provider.healthCheck()).toBe(false);
+    });
+
+    it("returns false on network error", async () => {
+      mockFetch.mockRejectedValueOnce(new Error("network timeout"));
+      expect(await provider.healthCheck()).toBe(false);
+    });
+
+    it("sends minimal payload with max_tokens 1", async () => {
+      mockFetch.mockResolvedValueOnce({ ok: true, body: { cancel: vi.fn() } });
+      await provider.healthCheck();
+      const body = JSON.parse(mockFetch.mock.calls[0]![1].body);
+      expect(body.max_tokens).toBe(1);
+      expect(body.model).toBe("MiniMax-M2.7");
     });
   });
 });

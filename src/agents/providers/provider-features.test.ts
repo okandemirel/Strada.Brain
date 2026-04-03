@@ -108,7 +108,7 @@ describe("Feature: max_tokens from capabilities", () => {
     { name: "Mistral", cls: MistralProvider, args: ["key"], expected: 8192 },
     { name: "Kimi", cls: KimiProvider, args: ["key"], expected: 16384 },
     { name: "Qwen", cls: QwenProvider, args: ["key"], expected: 8192 },
-    { name: "MiniMax", cls: MiniMaxProvider, args: ["key"], expected: 4096 },
+    { name: "MiniMax", cls: MiniMaxProvider, args: ["key"], expected: 131072 },
     { name: "Together", cls: TogetherProvider, args: ["key"], expected: 4096 },
     { name: "Fireworks", cls: FireworksProvider, args: ["key"], expected: 4096 },
   ];

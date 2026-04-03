@@ -7,6 +7,7 @@ import type {
 import { OpenAIProvider } from "./openai.js";
 import type { OpenAIMessage, OpenAIResponse } from "./openai.js";
 import { stripReasoningBlocks, OPENAI_STOP_REASON_MAP } from "./openai.js";
+import { getLoggerSafe } from "../../utils/logger.js";
 
 /**
  * MiniMax extends the OpenAI response with reasoning_details.
@@ -42,18 +43,17 @@ interface MiniMaxResponse {
  *
  * @see https://platform.minimax.io/docs/api-reference/text-openai-api
  */
+const MODEL_SPECS: Record<string, { contextWindow: number; maxTokens: number }> = {
+  "MiniMax-M2.7":           { contextWindow: 204_800, maxTokens: 131_072 },
+  "MiniMax-M2.7-highspeed": { contextWindow: 204_800, maxTokens: 131_072 },
+  "MiniMax-M2.5":           { contextWindow: 196_608, maxTokens: 65_536 },
+  "MiniMax-M2.5-highspeed": { contextWindow: 196_608, maxTokens: 65_536 },
+};
+
+const DEFAULT_SPEC = MODEL_SPECS["MiniMax-M2.7"]!;
+
 export class MiniMaxProvider extends OpenAIProvider {
-  override readonly capabilities: ProviderCapabilities = {
-    maxTokens: 4096,
-    streaming: true,
-    structuredStreaming: false,
-    toolCalling: true,
-    vision: false,
-    systemPrompt: true,
-    contextWindow: 1_000_000,
-    thinkingSupported: true,
-    specialFeatures: ["reasoning_details"],
-  };
+  override readonly capabilities: ProviderCapabilities;
 
   constructor(
     apiKey: string,
@@ -61,6 +61,18 @@ export class MiniMaxProvider extends OpenAIProvider {
     baseUrl = "https://api.minimax.io/v1",
   ) {
     super(apiKey, model, baseUrl, "MiniMax");
+    const spec = MODEL_SPECS[model] ?? DEFAULT_SPEC;
+    this.capabilities = {
+      maxTokens: spec.maxTokens,
+      streaming: true,
+      structuredStreaming: false,
+      toolCalling: true,
+      vision: false,
+      systemPrompt: true,
+      contextWindow: spec.contextWindow,
+      thinkingSupported: true,
+      specialFeatures: ["reasoning_details"],
+    };
   }
 
   protected override buildMessages(systemPrompt: string, messages: ConversationMessage[]): OpenAIMessage[] {
@@ -70,6 +82,36 @@ export class MiniMaxProvider extends OpenAIProvider {
     stripReasoningBlocks(result);
 
     return result;
+  }
+
+  /**
+   * MiniMax does not expose a /models endpoint (returns 404).
+   */
+  override async healthCheck(): Promise<boolean> {
+    const logger = getLoggerSafe();
+    try {
+      const response = await fetch(`${this.baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: await this.buildHeaders(),
+        body: JSON.stringify({
+          model: this.model,
+          messages: [{ role: "user", content: "ping" }],
+          max_tokens: 1,
+        }),
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (response.ok) {
+        await response.body?.cancel();
+        return true;
+      }
+      logger.warn(`${this.name} health check failed: HTTP ${response.status}`);
+      return false;
+    } catch (err) {
+      logger.warn(`${this.name} health check failed`, {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return false;
+    }
   }
 
   protected override parseResponse(data: OpenAIResponse): ProviderResponse {

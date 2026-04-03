@@ -269,7 +269,10 @@ export const PROVIDER_MODEL_OPTIONS: Record<string, Array<{
     { model: "qwen-max", label: "Qwen Max", tier: "standard", inputPer1M: 0.80, outputPer1M: 2.00, contextWindow: "128K", notes: "Top Qwen model. Good multilingual." },
   ],
   minimax: [
-    { model: "MiniMax-M2.5", label: "MiniMax M2.5", tier: "standard", inputPer1M: 0.50, outputPer1M: 1.50, contextWindow: "256K", notes: "Thinking mode. Good reasoning." },
+    { model: "MiniMax-M2.5", label: "M2.5", tier: "budget", inputPer1M: 0.12, outputPer1M: 0.99, contextWindow: "196K", notes: "Budget reasoning. 80.2% SWE-Bench Verified." },
+    { model: "MiniMax-M2.5-highspeed", label: "M2.5 Highspeed", tier: "budget", inputPer1M: 0.12, outputPer1M: 0.99, contextWindow: "196K", notes: "Faster M2.5 variant, identical quality." },
+    { model: "MiniMax-M2.7", label: "M2.7", tier: "standard", inputPer1M: 0.30, outputPer1M: 1.20, contextWindow: "204K", notes: "Latest flagship. Self-evolving, strong agentic." },
+    { model: "MiniMax-M2.7-highspeed", label: "M2.7 Highspeed", tier: "standard", inputPer1M: 0.30, outputPer1M: 1.20, contextWindow: "204K", notes: "Faster M2.7 variant, identical quality." },
   ],
   together: [
     { model: "meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8", label: "Llama 4 Maverick", tier: "budget", inputPer1M: 0.27, outputPer1M: 0.85, contextWindow: "1M", notes: "Open model, 1M context. Good value." },

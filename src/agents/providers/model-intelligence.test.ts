@@ -47,13 +47,17 @@ describe("HARDCODED_MODELS", () => {
     "gemini-3-flash-preview",
     "deepseek-chat",
     "kimi-for-coding",
+    "MiniMax-M2.7",
+    "MiniMax-M2.7-highspeed",
+    "MiniMax-M2.5",
+    "MiniMax-M2.5-highspeed",
     "qwen3.5-plus",
     "mistral-large-3",
     "llama3.3",
   ];
 
-  it("has all 12 default model entries", () => {
-    expect(HARDCODED_MODELS.size).toBe(12);
+  it("has all 16 default model entries", () => {
+    expect(HARDCODED_MODELS.size).toBe(16);
     for (const model of expectedModels) {
       expect(HARDCODED_MODELS.has(model), `missing: ${model}`).toBe(true);
     }
@@ -77,6 +81,10 @@ describe("HARDCODED_MODELS", () => {
       "gemini-3-flash-preview": "gemini",
       "deepseek-chat": "deepseek",
       "kimi-for-coding": "kimi",
+      "MiniMax-M2.7": "minimax",
+      "MiniMax-M2.7-highspeed": "minimax",
+      "MiniMax-M2.5": "minimax",
+      "MiniMax-M2.5-highspeed": "minimax",
       "qwen3.5-plus": "qwen",
       "mistral-large-3": "mistral",
       "llama3.3": "ollama",
