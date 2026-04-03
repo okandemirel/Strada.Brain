@@ -85,6 +85,14 @@ export class MiniMaxProvider extends OpenAIProvider {
   }
 
   /**
+   * MiniMax M2.x streams reasoning as `reasoning_details` delta field.
+   * Without this override the stall guard never resets during thinking.
+   */
+  protected override extractStreamReasoning(delta: Record<string, unknown> | undefined): string | undefined {
+    return (delta?.reasoning_details as string) || undefined;
+  }
+
+  /**
    * MiniMax does not expose a /models endpoint (returns 404).
    */
   override async healthCheck(): Promise<boolean> {

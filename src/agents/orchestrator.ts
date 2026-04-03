@@ -5656,6 +5656,16 @@ export class Orchestrator {
         continue;
       }
 
+      const toolMeta = this.toolMetadataByName.get(activeToolCall.name);
+      if (toolMeta?.available === false) {
+        results.push({
+          toolCallId: activeToolCall.id,
+          content: toolMeta.availabilityReason || `Tool '${activeToolCall.name}' is currently unavailable.`,
+          isError: true,
+        });
+        continue;
+      }
+
       const executionPolicy = this.resolveToolExecutionPolicy(
         chatId,
         activeToolCall.name,
@@ -5832,7 +5842,7 @@ export class Orchestrator {
 
         results.push({
           toolCallId: activeToolCall.id,
-          content: "Tool execution failed",
+          content: `Tool execution failed: ${classifyErrorMessage(error)}`,
           isError: true,
         });
       }

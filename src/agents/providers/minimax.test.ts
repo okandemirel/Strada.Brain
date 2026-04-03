@@ -111,6 +111,23 @@ describe("MiniMaxProvider", () => {
     });
   });
 
+  describe("extractStreamReasoning", () => {
+    const extract = (delta: Record<string, unknown> | undefined) =>
+      (provider as unknown as { extractStreamReasoning: (d: Record<string, unknown> | undefined) => string | undefined }).extractStreamReasoning(delta);
+
+    it("returns reasoning_details from delta", () => {
+      expect(extract({ reasoning_details: "thinking..." })).toBe("thinking...");
+    });
+
+    it("returns undefined when reasoning_details is absent", () => {
+      expect(extract({ content: "hello" })).toBeUndefined();
+    });
+
+    it("returns undefined for empty string", () => {
+      expect(extract({ reasoning_details: "" })).toBeUndefined();
+    });
+  });
+
   describe("healthCheck", () => {
     const mockFetch = vi.fn();
     beforeEach(() => {
