@@ -9,6 +9,8 @@ const REFLECTION_DECISION_RE = /\*\*\s*(DONE_WITH_SUGGESTIONS|DONE|REPLAN|CONTIN
 const BLOCKING_STEP_FAILURE_RE = /\b(?:build|test|check|verify|lint|typecheck|compile|smoke|permission denied|access denied|read-only|validation|security)\b/iu;
 /** Failures caused by external abort signals — these should not block PAOR DONE decisions */
 const ABORT_CAUSED_FAILURE_RE = /\bAborted\b|Task cancelled/i;
+/** Tool unavailability or generic execution failures — not blocking because the agent cannot fix them */
+const NON_BLOCKING_TOOL_FAILURE_RE = /\bunavailable\b|Tool execution failed|\bInvalid argument\b|\bECONNREFUSED\b|bridge.*(disconnect|unavailable)/i;
 
 export type ReflectionDecision = "CONTINUE" | "REPLAN" | "DONE" | "DONE_WITH_SUGGESTIONS";
 
@@ -82,6 +84,10 @@ function isBlockingStepFailure(step: AgentState["stepResults"][number]): boolean
   }
 
   if (ABORT_CAUSED_FAILURE_RE.test(step.summary)) {
+    return false;
+  }
+
+  if (NON_BLOCKING_TOOL_FAILURE_RE.test(step.summary)) {
     return false;
   }
 

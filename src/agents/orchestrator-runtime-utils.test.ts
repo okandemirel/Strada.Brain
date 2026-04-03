@@ -80,6 +80,29 @@ describe("orchestrator-runtime-utils", () => {
     expect(result.decision).toBe("DONE");
   });
 
+  it("does not block DONE for unavailable tool or generic execution failures", () => {
+    const unavailable = validateReflectionDecision("DONE", createState({
+      stepResults: [
+        { toolName: "csharp_symbol_search", success: false, summary: "Tool 'csharp_symbol_search' is currently unavailable.", timestamp: 1 },
+      ],
+    }));
+    expect(unavailable.decision).toBe("DONE");
+
+    const execFailed = validateReflectionDecision("DONE", createState({
+      stepResults: [
+        { toolName: "some_tool", success: false, summary: "Tool execution failed: Invalid argument", timestamp: 2 },
+      ],
+    }));
+    expect(execFailed.decision).toBe("DONE");
+
+    const bridgeDown = validateReflectionDecision("DONE", createState({
+      stepResults: [
+        { toolName: "unity_build", success: false, summary: "bridge disconnected: ECONNREFUSED 127.0.0.1:7691", timestamp: 3 },
+      ],
+    }));
+    expect(bridgeDown.decision).toBe("DONE");
+  });
+
   it("keeps the loop open for blocking mutation or verification failures", () => {
     const mutationFailure = validateReflectionDecision("DONE", createState({
       stepResults: [
