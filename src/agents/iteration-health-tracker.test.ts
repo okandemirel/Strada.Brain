@@ -25,10 +25,19 @@ describe("IterationHealthTracker", () => {
     expect(r2.kind).toBe("retry");
     if (r2.kind === "retry") expect(r2.backoffMs).toBe(10_000);
 
-    // Third consecutive failure triggers ask_user (>= ASK_USER_CONSECUTIVE)
+    // Third consecutive failure is still retry (ASK_USER_CONSECUTIVE is now 5)
     const r3 = tracker.recordFailure("openai");
-    expect(r3.kind).toBe("ask_user");
-    if (r3.kind === "ask_user") expect(r3.backoffMs).toBe(30_000);
+    expect(r3.kind).toBe("retry");
+    if (r3.kind === "retry") expect(r3.backoffMs).toBe(30_000);
+
+    const r4 = tracker.recordFailure("openai");
+    expect(r4.kind).toBe("retry");
+    if (r4.kind === "retry") expect(r4.backoffMs).toBe(60_000);
+
+    // Fifth consecutive failure triggers ask_user (>= ASK_USER_CONSECUTIVE)
+    const r5 = tracker.recordFailure("openai");
+    expect(r5.kind).toBe("ask_user");
+    if (r5.kind === "ask_user") expect(r5.backoffMs).toBe(120_000);
   });
 
   it("resets backoff and consecutive count on success", () => {
@@ -54,22 +63,17 @@ describe("IterationHealthTracker", () => {
   it("returns abort when failure rate exceeds threshold with consecutive failures", () => {
     const tracker = new IterationHealthTracker();
 
-    // Build up enough failures to exceed 60% rate with 3+ consecutive
-    // 6 failures out of 10 => 60%, need all consecutive for abort
-    for (let i = 0; i < 5; i++) {
+    // Build up enough failures to exceed 80% rate with 8+ consecutive
+    // Need: MIN_WINDOW_FOR_RATE (5) results, >=80% failure rate, >=8 consecutive
+    for (let i = 0; i < 7; i++) {
       tracker.recordFailure("openai");
     }
-    // Mix in some successes to approach exactly the window
-    tracker.recordSuccess();
-    // Now: 5 fail + 1 success = 6 results, rate = 5/6 = 83%
-    // But consecutive is reset to 0, need 3 more consecutive
+    // 7 consecutive, rate = 100% — not yet 8 consecutive
+    expect(tracker.getConsecutiveFailures()).toBe(7);
 
-    tracker.recordFailure("anthropic");
-    tracker.recordFailure("anthropic");
-    // 2 consecutive, rate = 7/8 = 87.5% — not yet 3 consecutive
-    const r2 = tracker.recordFailure("anthropic");
-    // 3 consecutive, rate = 8/9 = 88.9% — should abort
-    expect(r2.kind).toBe("abort");
+    // 8th consecutive failure with 100% rate should abort
+    const r = tracker.recordFailure("openai");
+    expect(r.kind).toBe("abort");
   });
 
   it("tracks status levels: ok -> degraded -> critical", () => {
@@ -109,16 +113,18 @@ describe("IterationHealthTracker", () => {
     expect(tracker.getFailureRate()).toBeCloseTo(0.3, 5);
   });
 
-  it("ask_user triggers at 3 consecutive failures", () => {
+  it("ask_user triggers at 5 consecutive failures", () => {
     const tracker = new IterationHealthTracker();
 
-    // First two are retry
+    // First four are retry
+    expect(tracker.recordFailure("openai").kind).toBe("retry");
+    expect(tracker.recordFailure("openai").kind).toBe("retry");
     expect(tracker.recordFailure("openai").kind).toBe("retry");
     expect(tracker.recordFailure("openai").kind).toBe("retry");
 
-    // Third consecutive triggers ask_user
-    const r3 = tracker.recordFailure("openai");
-    expect(r3.kind).toBe("ask_user");
+    // Fifth consecutive triggers ask_user
+    const r5 = tracker.recordFailure("openai");
+    expect(r5.kind).toBe("ask_user");
   });
 
   it("backoff caps at max value (120s)", () => {

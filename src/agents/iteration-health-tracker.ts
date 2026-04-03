@@ -11,9 +11,9 @@
 // ---------------------------------------------------------------------------
 
 export const BACKOFF_SCHEDULE_MS = [0, 10_000, 30_000, 60_000, 120_000] as const;
-export const ABORT_FAILURE_RATE = 0.6;
-export const ASK_USER_CONSECUTIVE = 3;
-export const ABORT_CONSECUTIVE = 3;
+export const ABORT_FAILURE_RATE = 0.8;
+export const ASK_USER_CONSECUTIVE = 5;
+export const ABORT_CONSECUTIVE = 8;
 export const SLIDING_WINDOW_SIZE = 10;
 
 /** Failure rate at which ask_user is suggested (below abort threshold). */

@@ -306,11 +306,15 @@ export type ContentBlock =
 /**
  * Assembles the content blocks for the user message after tool execution:
  * state injection context, reflection prompt (if reflecting), and tool results.
+ *
+ * @param options.providerHealthContext - When provided, injected into the reflection
+ *   prompt so the LLM can reason about provider instability when deciding next steps.
  */
 export function buildToolResultContentBlocks(
   stateCtx: string | null,
   agentState: AgentState,
   toolResults: readonly ToolResult[],
+  options?: { providerHealthContext?: string },
 ): ContentBlock[] {
   const contentBlocks: ContentBlock[] = [];
 
@@ -319,7 +323,12 @@ export function buildToolResultContentBlocks(
   }
 
   if (agentState.phase === AgentPhase.REFLECTING) {
-    contentBlocks.push({ type: "text", text: buildReflectionPrompt(agentState) });
+    contentBlocks.push({
+      type: "text",
+      text: buildReflectionPrompt(agentState, {
+        providerHealthContext: options?.providerHealthContext,
+      }),
+    });
   }
 
   for (const tr of toolResults) {

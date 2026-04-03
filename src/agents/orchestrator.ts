@@ -1379,6 +1379,8 @@ export class Orchestrator {
     projectWorldFingerprint?: string;
     enableGoalDetection: boolean;
     fixedExecutionStrategy?: SupervisorExecutionStrategy;
+    /** Optional: pass IterationHealthTracker to inject health awareness into the prompt when failures have occurred. */
+    iterationHealth?: IterationHealthTracker;
   }): {
     executionStrategy: SupervisorExecutionStrategy;
     activePrompt: string;
@@ -1417,6 +1419,11 @@ export class Orchestrator {
     );
     const currentToolNames = currentToolDefinitions.map((d) => d.name);
     activePrompt += this.buildSupervisorRolePrompt(executionStrategy, currentAssignment);
+
+    // Append provider health awareness when failures have occurred during this task
+    if (params.iterationHealth && params.iterationHealth.getTotalFailures() > 0) {
+      activePrompt += `\n\n## Provider Health Awareness\nThe AI provider has experienced ${params.iterationHealth.getTotalFailures()} failure(s) during this task (current failure rate: ${(params.iterationHealth.getFailureRate() * 100).toFixed(0)}%). If you notice [Provider Health Report] messages in the conversation, this means the provider was temporarily unavailable. Adapt your approach: use fewer tool calls per step, simplify complex operations, and consider providing partial results if the provider remains unstable. Your goal is to deliver the best possible result despite infrastructure challenges.`;
+    }
 
     return {
       executionStrategy,
@@ -2584,6 +2591,7 @@ export class Orchestrator {
                 projectWorldFingerprint: bgProjectWorldFingerprint,
                 enableGoalDetection: false,
                 fixedExecutionStrategy: fixedProviderName && fixedProvider ? executionStrategy : undefined,
+                iterationHealth,
               });
               executionStrategy = iterStrategy;
               if (workerCollector) {
@@ -2665,6 +2673,26 @@ export class Orchestrator {
               if (cbResult.action !== "ok") {
                 const failureAction = iterationHealth.recordFailure(currentAssignment.providerName);
                 const statusLevel = iterationHealth.getStatusLevel();
+
+                // Inject rich health context so the agent can reason about it when provider recovers
+                const healthContext = [
+                  `[Provider Health Report]`,
+                  `Provider: ${currentAssignment.providerName}`,
+                  `Status: ${statusLevel} | Consecutive failures: ${iterationHealth.getConsecutiveFailures()} | Failure rate: ${(iterationHealth.getFailureRate() * 100).toFixed(0)}%`,
+                  `Task duration: ${Math.round(iterationHealth.getTaskDurationMs() / 1000)}s`,
+                  `Action: ${failureAction.kind !== "abort" ? `Backing off ${failureAction.backoffMs / 1000}s before retry` : "Aborting — safety limit reached"}`,
+                  ``,
+                  `When you receive this context after the provider recovers, adapt your approach:`,
+                  `- If multiple failures occurred, simplify your current step`,
+                  `- Reduce the number of tool calls per iteration`,
+                  `- Consider providing a partial result if the task is mostly complete`,
+                  `- Skip non-critical analysis or verification steps`,
+                ].join("\n");
+
+                session.messages.push({
+                  role: "user",
+                  content: healthContext,
+                } as ConversationMessage);
 
                 // Progressive disclosure — notify user based on severity
                 if (statusLevel === "degraded") {
@@ -3126,7 +3154,10 @@ export class Orchestrator {
               // Add tool results
               {
                 const stateCtx = taskPlanner.getStateInjection();
-                const contentBlocks = buildToolResultContentBlocks(stateCtx, bgAgentState, toolResults);
+                const providerHealthContext = iterationHealth.getTotalFailures() > 0
+                  ? `${iterationHealth.getTotalFailures()} failure(s), ${(iterationHealth.getFailureRate() * 100).toFixed(0)}% failure rate, ${iterationHealth.getConsecutiveFailures()} consecutive`
+                  : undefined;
+                const contentBlocks = buildToolResultContentBlocks(stateCtx, bgAgentState, toolResults, { providerHealthContext });
                 session.messages.push({
                   role: "user",
                   content: contentBlocks.length === 1 && stateCtx ? stateCtx : contentBlocks,
@@ -3742,6 +3773,7 @@ export class Orchestrator {
           toolTurnAffinity,
           projectWorldFingerprint,
           enableGoalDetection: !!this.taskManager,
+          iterationHealth,
         });
         executionStrategy = iterStrategy;
 
@@ -3824,6 +3856,26 @@ export class Orchestrator {
         if (cbResult.action !== "ok") {
           const failureAction = iterationHealth.recordFailure(currentAssignment.providerName);
           const statusLevel = iterationHealth.getStatusLevel();
+
+          // Inject rich health context so the agent can reason about it when provider recovers
+          const healthContext = [
+            `[Provider Health Report]`,
+            `Provider: ${currentAssignment.providerName}`,
+            `Status: ${statusLevel} | Consecutive failures: ${iterationHealth.getConsecutiveFailures()} | Failure rate: ${(iterationHealth.getFailureRate() * 100).toFixed(0)}%`,
+            `Task duration: ${Math.round(iterationHealth.getTaskDurationMs() / 1000)}s`,
+            `Action: ${failureAction.kind !== "abort" ? `Backing off ${failureAction.backoffMs / 1000}s before retry` : "Aborting — safety limit reached"}`,
+            ``,
+            `When you receive this context after the provider recovers, adapt your approach:`,
+            `- If multiple failures occurred, simplify your current step`,
+            `- Reduce the number of tool calls per iteration`,
+            `- Consider providing a partial result if the task is mostly complete`,
+            `- Skip non-critical analysis or verification steps`,
+          ].join("\n");
+
+          session.messages.push({
+            role: "user",
+            content: healthContext,
+          } as ConversationMessage);
 
           // Progressive disclosure — notify user based on severity
           if (statusLevel === "degraded") {
@@ -4376,7 +4428,10 @@ export class Orchestrator {
 
         // Add tool results as a user message
         {
-          const contentBlocks = buildToolResultContentBlocks(stateCtx, agentState, toolResults);
+          const providerHealthContext = iterationHealth.getTotalFailures() > 0
+            ? `${iterationHealth.getTotalFailures()} failure(s), ${(iterationHealth.getFailureRate() * 100).toFixed(0)}% failure rate, ${iterationHealth.getConsecutiveFailures()} consecutive`
+            : undefined;
+          const contentBlocks = buildToolResultContentBlocks(stateCtx, agentState, toolResults, { providerHealthContext });
           session.messages.push({
             role: "user",
             content: contentBlocks.length === 1 && stateCtx ? stateCtx : contentBlocks,

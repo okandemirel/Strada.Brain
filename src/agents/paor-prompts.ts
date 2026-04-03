@@ -75,7 +75,10 @@ export function buildPlanningPrompt(
  * Builds a reflection prompt showing recent step results and asking
  * the LLM to decide whether to CONTINUE, REPLAN, or mark DONE.
  */
-export function buildReflectionPrompt(state: AgentState): string {
+export function buildReflectionPrompt(
+  state: AgentState,
+  options?: { providerHealthContext?: string },
+): string {
   const lines: string[] = ["## Reflection Phase", ""];
 
   // Show last 5 step results
@@ -112,6 +115,16 @@ export function buildReflectionPrompt(state: AgentState): string {
     lines.push(
       "**WARNING**: Current approach is not working " +
         `(${state.consecutiveErrors} consecutive errors). Consider replanning.`,
+      "",
+    );
+  }
+
+  // Provider health context — injected when the provider has been unstable
+  if (options?.providerHealthContext) {
+    lines.push(
+      "**PROVIDER HEALTH**: " + options.providerHealthContext,
+      "Consider this when deciding whether to CONTINUE, REPLAN, or mark DONE.",
+      "If the provider has been unstable, simplifying your approach may be more productive than retrying complex operations.",
       "",
     );
   }
