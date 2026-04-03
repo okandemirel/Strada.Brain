@@ -264,6 +264,7 @@ import {
 } from "./orchestrator-end-turn-handler.js";
 import type { SupervisorBrain } from "../supervisor/supervisor-brain.js";
 
+const DIAGNOSTIC_BLOCKED_RE = /^Blocked checkpoint:/i;
 const TYPING_INTERVAL_MS = 4000;
 const STREAM_THROTTLE_MS = 500; // Throttle streaming updates to channels
 const NATURAL_LANGUAGE_BUILTIN_PERSONAS = ["default", "formal", "casual", "minimal"] as const;
@@ -2498,7 +2499,15 @@ export class Orchestrator {
         };
         /** Terminal exit helper — always used with `return` to exit the loop. */
         const bgFinishBlocked = async (text: string): Promise<string> => {
-          this.sessionManager.appendVisibleAssistantMessage(session, text);
+          // Log the internal diagnostic, show user-friendly message
+          const isDiagnostic = DIAGNOSTIC_BLOCKED_RE.test(text);
+          const userText = isDiagnostic
+            ? getResilienceMessage("task_stuck", progressLanguage ?? "en")
+            : text;
+          if (isDiagnostic) {
+            logger.warn("Loop detection blocked task", { chatId, diagnostic: text.slice(0, 500) });
+          }
+          this.sessionManager.appendVisibleAssistantMessage(session, userText);
           this.recordMetricEnd(metricId, {
             agentPhase: AgentPhase.COMPLETE,
             iterations: bgAgentState.iteration,
@@ -2506,7 +2515,7 @@ export class Orchestrator {
             hitMaxIterations: false,
           });
           await this.sessionManager.persistSessionToMemory(chatId, this.sessionManager.getVisibleTranscript(session), true);
-          return finish(text, "blocked", text);
+          return finish(userText, "blocked", userText);
         };
 
         try {
@@ -4045,9 +4054,15 @@ export class Orchestrator {
             });
             return;
           } else {
-            // blocked
-            if (interactiveAction.visibleText) {
-              await this.sessionManager.sendVisibleAssistantMarkdown(chatId, session, interactiveAction.visibleText);
+            // blocked — sanitize diagnostic messages before showing to user
+            const rawBlocked = interactiveAction.visibleText ?? "";
+            const isDiag1 = DIAGNOSTIC_BLOCKED_RE.test(rawBlocked);
+            const safeBlocked = isDiag1
+              ? getResilienceMessage("task_stuck", this.defaultLanguage)
+              : rawBlocked;
+            if (isDiag1) logger.warn("Loop detection blocked task", { chatId, diagnostic: rawBlocked.slice(0, 500) });
+            if (safeBlocked) {
+              await this.sessionManager.sendVisibleAssistantMarkdown(chatId, session, safeBlocked);
             }
             this.recordMetricEnd(metricId, {
               agentPhase: AgentPhase.COMPLETE,
@@ -4278,9 +4293,15 @@ export class Orchestrator {
             });
             return;
           } else {
-            // blocked
-            if (interactiveEndAction.visibleText) {
-              await this.sessionManager.sendVisibleAssistantMarkdown(chatId, session, interactiveEndAction.visibleText);
+            // blocked — sanitize diagnostic messages before showing to user
+            const rawEnd = interactiveEndAction.visibleText ?? "";
+            const isDiag2 = DIAGNOSTIC_BLOCKED_RE.test(rawEnd);
+            const safeEnd = isDiag2
+              ? getResilienceMessage("task_stuck", this.defaultLanguage)
+              : rawEnd;
+            if (isDiag2) logger.warn("Loop detection blocked task", { chatId, diagnostic: rawEnd.slice(0, 500) });
+            if (safeEnd) {
+              await this.sessionManager.sendVisibleAssistantMarkdown(chatId, session, safeEnd);
             }
             this.recordMetricEnd(metricId, {
               agentPhase: AgentPhase.COMPLETE,

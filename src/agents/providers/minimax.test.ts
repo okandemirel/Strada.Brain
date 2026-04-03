@@ -111,20 +111,46 @@ describe("MiniMaxProvider", () => {
     });
   });
 
-  describe("extractStreamReasoning", () => {
-    const extract = (delta: Record<string, unknown> | undefined) =>
+  describe("extractStreamReasoning + extractStreamText (<think> handling)", () => {
+    const extractText = (delta: Record<string, unknown> | undefined) =>
+      (provider as unknown as { extractStreamText: (d: Record<string, unknown> | undefined) => string | undefined }).extractStreamText(delta);
+    const extractReasoning = (delta: Record<string, unknown> | undefined) =>
       (provider as unknown as { extractStreamReasoning: (d: Record<string, unknown> | undefined) => string | undefined }).extractStreamReasoning(delta);
 
     it("returns reasoning_details from delta", () => {
-      expect(extract({ reasoning_details: "thinking..." })).toBe("thinking...");
+      expect(extractReasoning({ reasoning_details: "thinking..." })).toBe("thinking...");
     });
 
-    it("returns undefined when reasoning_details is absent", () => {
-      expect(extract({ content: "hello" })).toBeUndefined();
+    it("returns undefined for empty reasoning_details", () => {
+      expect(extractReasoning({ reasoning_details: "" })).toBeUndefined();
     });
 
-    it("returns undefined for empty string", () => {
-      expect(extract({ reasoning_details: "" })).toBeUndefined();
+    it("passes normal content through extractStreamText", () => {
+      expect(extractText({ content: "hello world" })).toBe("hello world");
+    });
+
+    it("suppresses <think> open tag from text stream", () => {
+      expect(extractText({ content: "<think>" })).toBeUndefined();
+    });
+
+    it("suppresses content inside <think> block from text, routes to reasoning", () => {
+      // Open the think block
+      extractText({ content: "<think>" });
+      // Content inside think block
+      expect(extractText({ content: "I need to analyze..." })).toBeUndefined();
+      expect(extractReasoning({ content: "I need to analyze..." })).toBe("I need to analyze...");
+      // Close the think block
+      extractText({ content: "</think>" });
+      // Content after think block is visible again
+      expect(extractText({ content: "Here is the answer" })).toBe("Here is the answer");
+    });
+
+    it("handles </think> with trailing visible text in same chunk", () => {
+      extractText({ content: "<think>" });
+      extractText({ content: "reasoning..." });
+      // Closing tag + visible text in same delta
+      const visible = extractText({ content: "</think>\nHere is my answer" });
+      expect(visible).toBe("Here is my answer");
     });
   });
 

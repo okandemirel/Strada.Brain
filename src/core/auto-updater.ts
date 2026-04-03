@@ -546,7 +546,7 @@ export class AutoUpdater {
       const method = this.detectInstallMethod();
 
       if (method === "git") {
-        // Check for uncommitted changes before pulling
+        // Stash uncommitted changes before pulling, restore after
         const statusOutput = (
           await this.runCommand(
             "git",
@@ -555,9 +555,13 @@ export class AutoUpdater {
             this.installRoot,
           )
         ).trim();
-        if (statusOutput.length > 0) {
-          throw new Error(
-            "Working tree has uncommitted changes. Please commit or stash your changes before updating.",
+        const hadLocalChanges = statusOutput.length > 0;
+        if (hadLocalChanges) {
+          await this.runCommand(
+            "git",
+            ["stash", "push", "-m", "auto-updater: stash before pull"],
+            VERSION_CHECK_TIMEOUT,
+            this.installRoot,
           );
         }
 
@@ -569,6 +573,17 @@ export class AutoUpdater {
             this.installRoot,
           )
         ).trim();
+        const popStash = async (): Promise<void> => {
+          if (!hadLocalChanges) return;
+          try {
+            await this.runCommand("git", ["stash", "pop"], VERSION_CHECK_TIMEOUT, this.installRoot);
+          } catch {
+            if (this.notifyFn) {
+              this.notifyFn("Update completed but your local changes could not be restored automatically. Run `git stash pop` to recover them.");
+            }
+          }
+        };
+
         try {
           await this.runCommand(
             "git",
@@ -591,6 +606,7 @@ export class AutoUpdater {
           } catch {
             // Rollback failed — nothing we can do
           }
+          await popStash();
           throw buildErr;
         }
 
@@ -624,8 +640,11 @@ export class AutoUpdater {
           } catch {
             // Rollback failed
           }
+          await popStash();
           throw healthErr;
         }
+
+        await popStash();
       } else {
         // Use configured channel, fallback to "latest" if install fails
         const tag = this.config.channel;

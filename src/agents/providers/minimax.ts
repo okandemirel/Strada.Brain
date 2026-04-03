@@ -54,6 +54,7 @@ const DEFAULT_SPEC = MODEL_SPECS["MiniMax-M2.7"]!;
 
 export class MiniMaxProvider extends OpenAIProvider {
   override readonly capabilities: ProviderCapabilities;
+  private inThinkBlock = false;
 
   constructor(
     apiKey: string,
@@ -85,11 +86,56 @@ export class MiniMaxProvider extends OpenAIProvider {
   }
 
   /**
-   * MiniMax M2.x streams reasoning as `reasoning_details` delta field.
-   * Without this override the stall guard never resets during thinking.
+   * MiniMax M2.7 embeds `<think>` blocks inside delta.content.
+   * Suppress them from the user-visible stream; route to reasoning instead.
+   */
+  /**
+   * Compute think-block state transition for the current delta without
+   * mutating `inThinkBlock` yet. Both extract methods read the pre-transition
+   * state; mutation happens once at the end of extractStreamText.
+   */
+  protected override extractStreamText(delta: Record<string, unknown> | undefined): string | undefined {
+    const text = (delta?.content as string) || undefined;
+    if (!text) return undefined;
+
+    const wasInThink = this.inThinkBlock;
+    const opensThink = text.includes("<think>");
+    const closesThink = text.includes("</think>");
+
+    // Update state for next delta
+    if (opensThink) this.inThinkBlock = true;
+    if (closesThink) this.inThinkBlock = false;
+
+    // Suppress everything inside or on the boundary of a think block
+    if (wasInThink && !closesThink) return undefined;
+    if (opensThink) return undefined;
+
+    // Closing tag mid-chunk — extract visible text after </think>
+    if (closesThink) {
+      const afterClose = text.split("</think>").pop()?.trim();
+      return afterClose || undefined;
+    }
+
+    return text;
+  }
+
+  /**
+   * MiniMax M2.x streams reasoning via `reasoning_details` delta field
+   * AND via `<think>` blocks in content. Both reset the stall guard.
    */
   protected override extractStreamReasoning(delta: Record<string, unknown> | undefined): string | undefined {
-    return (delta?.reasoning_details as string) || undefined;
+    // reasoning_details field (older path)
+    const details = (delta?.reasoning_details as string) || undefined;
+    if (details) return details;
+
+    // <think> content inside delta.content (M2.7 path)
+    // inThinkBlock is already updated by extractStreamText (called first),
+    // so check both current state and content for think markers
+    const text = (delta?.content as string) || undefined;
+    if (!text) return undefined;
+    if (this.inThinkBlock || text.includes("<think>")) return text;
+
+    return undefined;
   }
 
   /**
