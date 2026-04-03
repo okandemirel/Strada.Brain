@@ -2675,23 +2675,9 @@ export class Orchestrator {
                 const statusLevel = iterationHealth.getStatusLevel();
 
                 // Inject rich health context so the agent can reason about it when provider recovers
-                const healthContext = [
-                  `[Provider Health Report]`,
-                  `Provider: ${currentAssignment.providerName}`,
-                  `Status: ${statusLevel} | Consecutive failures: ${iterationHealth.getConsecutiveFailures()} | Failure rate: ${(iterationHealth.getFailureRate() * 100).toFixed(0)}%`,
-                  `Task duration: ${Math.round(iterationHealth.getTaskDurationMs() / 1000)}s`,
-                  `Action: ${failureAction.kind !== "abort" ? `Backing off ${failureAction.backoffMs / 1000}s before retry` : "Aborting — safety limit reached"}`,
-                  ``,
-                  `When you receive this context after the provider recovers, adapt your approach:`,
-                  `- If multiple failures occurred, simplify your current step`,
-                  `- Reduce the number of tool calls per iteration`,
-                  `- Consider providing a partial result if the task is mostly complete`,
-                  `- Skip non-critical analysis or verification steps`,
-                ].join("\n");
-
                 session.messages.push({
                   role: "user",
-                  content: healthContext,
+                  content: iterationHealth.buildSessionHealthContext(currentAssignment.providerName, failureAction),
                 } as ConversationMessage);
 
                 // Progressive disclosure — notify user based on severity
@@ -3858,23 +3844,9 @@ export class Orchestrator {
           const statusLevel = iterationHealth.getStatusLevel();
 
           // Inject rich health context so the agent can reason about it when provider recovers
-          const healthContext = [
-            `[Provider Health Report]`,
-            `Provider: ${currentAssignment.providerName}`,
-            `Status: ${statusLevel} | Consecutive failures: ${iterationHealth.getConsecutiveFailures()} | Failure rate: ${(iterationHealth.getFailureRate() * 100).toFixed(0)}%`,
-            `Task duration: ${Math.round(iterationHealth.getTaskDurationMs() / 1000)}s`,
-            `Action: ${failureAction.kind !== "abort" ? `Backing off ${failureAction.backoffMs / 1000}s before retry` : "Aborting — safety limit reached"}`,
-            ``,
-            `When you receive this context after the provider recovers, adapt your approach:`,
-            `- If multiple failures occurred, simplify your current step`,
-            `- Reduce the number of tool calls per iteration`,
-            `- Consider providing a partial result if the task is mostly complete`,
-            `- Skip non-critical analysis or verification steps`,
-          ].join("\n");
-
           session.messages.push({
             role: "user",
-            content: healthContext,
+            content: iterationHealth.buildSessionHealthContext(currentAssignment.providerName, failureAction),
           } as ConversationMessage);
 
           // Progressive disclosure — notify user based on severity

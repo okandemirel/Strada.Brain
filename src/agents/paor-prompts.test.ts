@@ -115,6 +115,20 @@ describe("buildReflectionPrompt", () => {
     expect(result.toUpperCase()).not.toContain("WARNING");
   });
 
+  it("includes PROVIDER HEALTH section when providerHealthContext is provided", () => {
+    const state = makeState();
+    const result = buildReflectionPrompt(state, { providerHealthContext: "3 failure(s), 75% failure rate, 3 consecutive" });
+    expect(result).toContain("PROVIDER HEALTH");
+    expect(result).toContain("3 failure(s), 75% failure rate");
+    expect(result).toContain("simplifying your approach");
+  });
+
+  it("omits PROVIDER HEALTH section when providerHealthContext is undefined", () => {
+    const state = makeState();
+    const result = buildReflectionPrompt(state);
+    expect(result).not.toContain("PROVIDER HEALTH");
+  });
+
   it("lists failed approaches as do NOT repeat", () => {
     const state = makeState({ failedApproaches: ["brute force", "regex parsing"] });
     const result = buildReflectionPrompt(state);
