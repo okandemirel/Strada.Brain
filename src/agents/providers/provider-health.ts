@@ -215,7 +215,9 @@ export class ProviderHealthRegistry {
     const normalized = providerName.trim().toLowerCase();
     const entry = this.entries.get(normalized);
     if (!entry) return false;
-    // Was down or degraded, cooldown has expired, but hasn't had a success yet
-    return entry.status !== "healthy" && entry.consecutiveFailures > 0 && Date.now() >= entry.cooldownUntil;
+    // Non-healthy entries always have consecutiveFailures > 0 by construction
+    // (recordFailure/recordQuotaExhausted both increment the counter).
+    // When cooldown expires without an explicit recordSuccess, the provider is "recovering".
+    return entry.status !== "healthy" && Date.now() >= entry.cooldownUntil;
   }
 }

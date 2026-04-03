@@ -49,6 +49,8 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
   readonly name: string;
   readonly capabilities: ProviderCapabilities;
   private readonly providers: IAIProvider[];
+  /** Guards against thundering-herd concurrent probes to the same recovering provider. */
+  private readonly probing = new Set<string>();
 
   constructor(providers: IAIProvider[]) {
     if (providers.length === 0) {
@@ -183,8 +185,10 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
         continue;
       }
 
-      // Lightweight probe for providers that just exited cooldown but haven't proven healthy yet
-      if (health.isRecovering(provider.name)) {
+      // Lightweight probe for providers that just exited cooldown but haven't proven healthy yet.
+      // The probing guard prevents thundering-herd concurrent probes to the same provider.
+      if (health.isRecovering(provider.name) && !this.probing.has(provider.name)) {
+        this.probing.add(provider.name);
         try {
           await provider.chat(
             "Reply with OK",
@@ -199,7 +203,13 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
           health.recordFailure(provider.name, probeMsg);
           logger.warn("Provider health probe failed, skipping", { provider: provider.name, error: probeMsg });
           continue;
+        } finally {
+          this.probing.delete(provider.name);
         }
+      } else if (health.isRecovering(provider.name) && this.probing.has(provider.name)) {
+        // Another concurrent call is already probing this provider — skip
+        logger.debug("Skipping provider, probe already in flight", { provider: provider.name });
+        continue;
       }
 
       attempted++;
