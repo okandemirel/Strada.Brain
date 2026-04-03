@@ -269,6 +269,9 @@ describe("AutoUpdater", () => {
       fs.mkdirSync(path.join(dir, ".git"));
 
       const commandRunner = vi.fn(async (cmd: string, args: string[]) => {
+        if (cmd === "git" && args[0] === "rev-parse" && args[1] === "--abbrev-ref") {
+          return "origin/main\n";
+        }
         if (cmd === "git" && args[0] === "rev-parse") {
           return "abc123\n";
         }
@@ -290,6 +293,7 @@ describe("AutoUpdater", () => {
 
       await expect(updater.performUpdate()).resolves.toBe(true);
       expect(commandRunner.mock.calls.map(([cmd, args]) => `${cmd} ${(args as string[]).join(" ")}`)).toEqual([
+        "git rev-parse --abbrev-ref --symbolic-full-name @{upstream}",
         "git status --porcelain",
         "git rev-parse HEAD",
         "git pull origin main",
@@ -299,14 +303,62 @@ describe("AutoUpdater", () => {
       expect(sourceLauncherRefresher).toHaveBeenCalledTimes(1);
     });
 
+    it("uses dynamically resolved upstream remote and branch", async () => {
+      const dir = makeTmpDir();
+      fs.mkdirSync(path.join(dir, ".git"));
+
+      const commandRunner = vi.fn(async (cmd: string, args: string[]) => {
+        if (cmd === "git" && args[0] === "rev-parse" && args[1] === "--abbrev-ref") return "upstream/develop\n";
+        if (cmd === "git" && args[0] === "rev-parse") return "abc123\n";
+        return "";
+      });
+
+      const { AutoUpdater } = await import("../../core/auto-updater.js");
+      const updater = new AutoUpdater(
+        mockConfig(),
+        mockRegistry(),
+        mockExecutor(),
+        { installRoot: dir, commandRunner, sourceLauncherRefresher: vi.fn(async () => {}) },
+      );
+
+      await expect(updater.performUpdate()).resolves.toBe(true);
+      const cmds = commandRunner.mock.calls.map(([cmd, args]) => `${cmd} ${(args as string[]).join(" ")}`);
+      expect(cmds).toContain("git pull upstream develop");
+    });
+
+    it("falls back to origin/main when upstream detection fails", async () => {
+      const dir = makeTmpDir();
+      fs.mkdirSync(path.join(dir, ".git"));
+
+      const commandRunner = vi.fn(async (cmd: string, args: string[]) => {
+        if (cmd === "git" && args[0] === "rev-parse" && args[1] === "--abbrev-ref") throw new Error("no upstream");
+        if (cmd === "git" && args[0] === "rev-parse") return "abc123\n";
+        return "";
+      });
+      const notifyFn = vi.fn();
+
+      const { AutoUpdater } = await import("../../core/auto-updater.js");
+      const updater = new AutoUpdater(
+        mockConfig(),
+        mockRegistry(),
+        mockExecutor(),
+        { installRoot: dir, commandRunner, sourceLauncherRefresher: vi.fn(async () => {}) },
+      );
+      updater.setNotifyFn(notifyFn);
+
+      await expect(updater.performUpdate()).resolves.toBe(true);
+      const cmds = commandRunner.mock.calls.map(([cmd, args]) => `${cmd} ${(args as string[]).join(" ")}`);
+      expect(cmds).toContain("git pull origin main");
+      expect(notifyFn).toHaveBeenCalledWith(expect.stringContaining("falling back to origin/main"));
+    });
+
     it("keeps the update successful when launcher refresh fails", async () => {
       const dir = makeTmpDir();
       fs.mkdirSync(path.join(dir, ".git"));
 
       const commandRunner = vi.fn(async (cmd: string, args: string[]) => {
-        if (cmd === "git" && args[0] === "rev-parse") {
-          return "abc123\n";
-        }
+        if (cmd === "git" && args[0] === "rev-parse" && args[1] === "--abbrev-ref") return "origin/main\n";
+        if (cmd === "git" && args[0] === "rev-parse") return "abc123\n";
         return "";
       });
       const sourceLauncherRefresher = vi.fn(async () => {
@@ -340,6 +392,7 @@ describe("AutoUpdater", () => {
       fs.writeFileSync(path.join(dir, "web-portal", "package.json"), "{}");
 
       const commandRunner = vi.fn(async (cmd: string, args: string[]) => {
+        if (cmd === "git" && args[0] === "rev-parse" && args[1] === "--abbrev-ref") return "origin/main\n";
         if (cmd === "git" && args[0] === "rev-parse") return "abc123\n";
         return "";
       });
@@ -355,6 +408,7 @@ describe("AutoUpdater", () => {
       await expect(updater.performUpdate()).resolves.toBe(true);
       const cmds = commandRunner.mock.calls.map(([cmd, args]) => `${cmd} ${(args as string[]).join(" ")}`);
       expect(cmds).toEqual([
+        "git rev-parse --abbrev-ref --symbolic-full-name @{upstream}",
         "git status --porcelain",
         "git rev-parse HEAD",
         "git pull origin main",
@@ -363,7 +417,7 @@ describe("AutoUpdater", () => {
         "npm run build",
       ]);
       // Second npm install should target web-portal directory
-      expect(commandRunner.mock.calls[4]![3]).toBe(path.join(dir, "web-portal"));
+      expect(commandRunner.mock.calls[5]![3]).toBe(path.join(dir, "web-portal"));
     });
 
     it("restores web-portal dependencies when rollback follows a build failure", async () => {
@@ -405,6 +459,7 @@ describe("AutoUpdater", () => {
       fs.writeFileSync(path.join(dir, "web-portal", "package.json"), "{}");
 
       const commandRunner = vi.fn(async (cmd: string, args: string[]) => {
+        if (cmd === "git" && args[0] === "rev-parse" && args[1] === "--abbrev-ref") return "origin/main\n";
         if (cmd === "git" && args[0] === "rev-parse") return "abc123\n";
         return "";
       });
@@ -448,6 +503,7 @@ describe("AutoUpdater", () => {
       fs.mkdirSync(path.join(dir, ".git"));
 
       const commandRunner = vi.fn(async (cmd: string, args: string[]) => {
+        if (cmd === "git" && args[0] === "rev-parse" && args[1] === "--abbrev-ref") return "origin/main\n";
         if (cmd === "git" && args[0] === "rev-parse") return "abc123\n";
         return "";
       });

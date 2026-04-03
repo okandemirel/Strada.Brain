@@ -432,15 +432,43 @@ export class AutoUpdater {
     );
   }
 
+  /**
+   * Detect the tracking remote and branch from the current git checkout.
+   * Falls back to origin/main when detection fails.
+   */
+  private async resolveGitUpstream(): Promise<{ remote: string; branch: string }> {
+    try {
+      const ref = (
+        await this.runCommand(
+          "git",
+          ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
+          VERSION_CHECK_TIMEOUT,
+          this.installRoot,
+        )
+      ).trim();
+      const slashIdx = ref.indexOf("/");
+      if (slashIdx > 0) {
+        return { remote: ref.slice(0, slashIdx), branch: ref.slice(slashIdx + 1) };
+      }
+    } catch {
+      if (this.notifyFn) {
+        this.notifyFn("Could not detect git upstream; falling back to origin/main.");
+      }
+    }
+    return { remote: "origin", branch: "main" };
+  }
+
   async checkForUpdate(): Promise<UpdateCheckResult> {
     const currentVersion = this.getCurrentVersion();
     const method = this.detectInstallMethod();
 
     try {
       if (method === "git") {
+        const { remote, branch } = await this.resolveGitUpstream();
+        const remoteRef = `${remote}/${branch}`;
         await this.runCommand(
           "git",
-          ["fetch", "origin", "main"],
+          ["fetch", remote, branch],
           VERSION_CHECK_TIMEOUT,
           this.installRoot,
         );
@@ -449,16 +477,16 @@ export class AutoUpdater {
         const remoteRev = (
           await this.runCommand(
             "git",
-            ["rev-parse", "origin/main"],
+            ["rev-parse", remoteRef],
             VERSION_CHECK_TIMEOUT,
             this.installRoot,
           )
         ).trim();
-        // Check if origin/main has commits we don't have (remote is ahead)
+        // Check if remote has commits we don't have (remote is ahead)
         const behindCount = (
           await this.runCommand(
             "git",
-            ["rev-list", "--count", `HEAD..origin/main`],
+            ["rev-list", "--count", `HEAD..${remoteRef}`],
             VERSION_CHECK_TIMEOUT,
             this.installRoot,
           )
@@ -469,7 +497,7 @@ export class AutoUpdater {
             available: false,
             currentVersion,
             latestVersion: remoteRev.length > 0 ? remoteRev.substring(0, 8) : null,
-            error: "Could not determine whether origin/main is ahead of this checkout.",
+            error: `Could not determine whether ${remoteRef} is ahead of this checkout.`,
           };
         }
 
@@ -479,7 +507,7 @@ export class AutoUpdater {
           const remotePkgJson = (
             await this.runCommand(
               "git",
-              ["show", "origin/main:package.json"],
+              ["show", `${remoteRef}:package.json`],
               VERSION_CHECK_TIMEOUT,
               this.installRoot,
             )
@@ -546,6 +574,8 @@ export class AutoUpdater {
       const method = this.detectInstallMethod();
 
       if (method === "git") {
+        const { remote, branch } = await this.resolveGitUpstream();
+
         // Stash uncommitted changes before pulling, restore after
         const statusOutput = (
           await this.runCommand(
@@ -587,7 +617,7 @@ export class AutoUpdater {
         try {
           await this.runCommand(
             "git",
-            ["pull", "origin", "main"],
+            ["pull", remote, branch],
             UPDATE_TIMEOUT,
             this.installRoot,
           );
