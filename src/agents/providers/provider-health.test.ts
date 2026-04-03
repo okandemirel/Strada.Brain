@@ -208,3 +208,67 @@ describe("ProviderHealthRegistry — adaptive cooldown", () => {
     expect(entry2.cooldownUntil).toBe(time + DEGRADED_COOLDOWN);
   });
 });
+
+describe("ProviderHealthRegistry — isRecovering", () => {
+  afterEach(() => {
+    ProviderHealthRegistry.resetInstance();
+    vi.restoreAllMocks();
+  });
+
+  it("returns true for providers with expired cooldown and failures", () => {
+    const registry = new ProviderHealthRegistry({
+      degradedThreshold: 2,
+      downThreshold: 5,
+      degradedCooldownMs: 30_000,
+      downCooldownMs: 120_000,
+    });
+
+    let time = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => time);
+
+    // Record enough failures to mark as "down"
+    triggerDown(registry, "test-provider", 5);
+    const entry = registry.getEntry("test-provider")!;
+    expect(entry.status).toBe("down");
+    expect(entry.consecutiveFailures).toBe(5);
+
+    // While in cooldown, isRecovering should be false
+    expect(registry.isRecovering("test-provider")).toBe(false);
+
+    // Advance past cooldown
+    time = entry.cooldownUntil + 1;
+
+    expect(registry.isRecovering("test-provider")).toBe(true);
+  });
+
+  it("returns false for healthy providers", () => {
+    const registry = new ProviderHealthRegistry();
+
+    // Never-seen provider
+    expect(registry.isRecovering("unknown-provider")).toBe(false);
+
+    // Provider that had failures but then succeeded
+    registry.recordFailure("good-provider", "transient");
+    registry.recordSuccess("good-provider");
+    expect(registry.isRecovering("good-provider")).toBe(false);
+  });
+
+  it("returns false for providers still in cooldown", () => {
+    const registry = new ProviderHealthRegistry({
+      degradedThreshold: 2,
+      downThreshold: 5,
+      degradedCooldownMs: 30_000,
+      downCooldownMs: 120_000,
+    });
+
+    // Record enough failures to mark as "down"
+    triggerDown(registry, "cooling-provider", 5);
+
+    const entry = registry.getEntry("cooling-provider")!;
+    expect(entry.status).toBe("down");
+    // cooldownUntil is in the future (just set by recordFailure)
+    expect(entry.cooldownUntil).toBeGreaterThan(Date.now());
+
+    expect(registry.isRecovering("cooling-provider")).toBe(false);
+  });
+});

@@ -183,6 +183,25 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
         continue;
       }
 
+      // Lightweight probe for providers that just exited cooldown but haven't proven healthy yet
+      if (health.isRecovering(provider.name)) {
+        try {
+          await provider.chat(
+            "Reply with OK",
+            [{ role: "user", content: "health check" }] as ConversationMessage[],
+            [], // no tools
+            { signal: AbortSignal.timeout(15_000) },
+          );
+          health.recordSuccess(provider.name);
+          logger.info("Provider health probe succeeded", { provider: provider.name });
+        } catch (probeErr) {
+          const probeMsg = probeErr instanceof Error ? probeErr.message : String(probeErr);
+          health.recordFailure(provider.name, probeMsg);
+          logger.warn("Provider health probe failed, skipping", { provider: provider.name, error: probeMsg });
+          continue;
+        }
+      }
+
       attempted++;
       try {
         const safeMessages = this.stripImages(messages, provider);
