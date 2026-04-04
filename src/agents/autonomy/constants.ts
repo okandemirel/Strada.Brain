@@ -22,6 +22,8 @@ export const MUTATION_TOOLS: ReadonlySet<string> = new Set([
 /** Tools that verify correctness. */
 export const VERIFY_TOOLS: ReadonlySet<string> = new Set([
   "dotnet_build", "dotnet_test",
+  "unity_verify_change", "unity_compile_status", "unity_compile_wait",
+  "unity_fix_compile_loop", "unity_test_run", "unity_test_results",
 ]);
 
 const VERIFY_TOOL_NAME_RE =

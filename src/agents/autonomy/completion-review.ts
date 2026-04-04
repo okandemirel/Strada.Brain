@@ -55,14 +55,16 @@ Your review must explicitly cover:
 - code review
 - simplify review
 - recent console/log errors or warnings
+- Unity compile verification: if C# files were modified, check whether unity_verify_change or unity_compile_status was used to confirm compilation succeeds
 - whether the draft is a milestone/status memo that hands the next decision back to the user instead of finishing autonomously
 
 Approve only when:
 1. Remaining failures are either resolved or honestly surfaced as blockers.
 2. Recent console/log issues do not indicate unresolved errors.
-3. The implementation is coherent, safe enough for the task, and not obviously overcomplicated.
-4. The draft does not leave open runtime hypotheses, likely causes, or "remaining potential issues" that Strada should continue investigating internally.
-5. The draft does not ask the user to pick a technical path, approve continuation, or choose the next engineering step unless a real hard blocker exists.
+3. If C# files were modified and Unity bridge is connected, Unity compile verification must have passed (unity_verify_change or equivalent). If bridge is unavailable, dotnet_build or code analysis is acceptable.
+4. The implementation is coherent, safe enough for the task, and not obviously overcomplicated.
+5. The draft does not leave open runtime hypotheses, likely causes, or "remaining potential issues" that Strada should continue investigating internally.
+6. The draft does not ask the user to pick a technical path, approve continuation, or choose the next engineering step unless a real hard blocker exists.
 
 Return JSON only:
 {"decision":"approve"|"continue"|"replan"|"fail","summary":"short summary","findings":["..."],"requiredActions":["..."],"closureStatus":"verified"|"partial"|"unverified","openInvestigations":["..."],"reviews":{"security":"clean|issues|not_applicable","code":"clean|issues|not_applicable","simplify":"clean|issues|not_applicable"},"logStatus":"clean|issues|not_applicable"}

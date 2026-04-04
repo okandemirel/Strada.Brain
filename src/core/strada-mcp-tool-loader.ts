@@ -884,6 +884,18 @@ export async function loadInstalledStradaMcpTools(config: Config): Promise<Strad
   };
 }
 
+function formatZodBrief(err: unknown): string {
+  const issues = (err as { issues?: Array<{ path?: unknown[]; message?: string }> })?.issues;
+  if (!Array.isArray(issues) || issues.length === 0) return "";
+  return issues
+    .slice(0, 3)
+    .map((i) => {
+      const path = Array.isArray(i.path) && i.path.length > 0 ? `"${i.path.join(".")}"` : "input";
+      return `${path}: ${i.message ?? "invalid"}`;
+    })
+    .join("; ");
+}
+
 class StradaMcpToolAdapter implements ITool {
   readonly name: string;
   readonly description: string;
@@ -899,26 +911,41 @@ class StradaMcpToolAdapter implements ITool {
   }
 
   async execute(input: Record<string, unknown>, context: ToolContext): Promise<ToolExecutionResult> {
-    const result = await this.tool.execute(
-      input,
-      this.runtime?.createToolExecutionContext(context) ?? {
-        projectPath: context.projectPath,
-        workingDirectory: context.workingDirectory,
-        readOnly: context.readOnly,
-        unityBridgeConnected: false,
-        allowedPaths: [context.projectPath],
-      },
-    );
-    this.runtime?.refreshIntegrationState();
+    try {
+      const result = await this.tool.execute(
+        input,
+        this.runtime?.createToolExecutionContext(context) ?? {
+          projectPath: context.projectPath,
+          workingDirectory: context.workingDirectory,
+          readOnly: context.readOnly,
+          unityBridgeConnected: false,
+          allowedPaths: [context.projectPath],
+        },
+      );
+      this.runtime?.refreshIntegrationState();
 
-    return {
-      content: result.content,
-      isError: result.isError,
-      metadata: {
-        executionTimeMs: result.metadata?.executionTimeMs,
-        filesAffected: result.metadata?.filesAffected,
-      },
-    };
+      return {
+        content: result.content,
+        isError: result.isError,
+        metadata: {
+          executionTimeMs: result.metadata?.executionTimeMs,
+          filesAffected: result.metadata?.filesAffected,
+        },
+      };
+    } catch (err) {
+      this.runtime?.refreshIntegrationState();
+      const message = err instanceof Error ? err.message : String(err);
+      const brief = formatZodBrief(err);
+      const isValidation = brief !== ""
+        || message.includes("invalid_type") || message.includes("ZodError");
+      const detail = isValidation
+        ? `Invalid argument: the input did not match the expected schema. ${brief}`
+        : `Error in ${this.name}: ${message}`;
+      return {
+        content: detail,
+        isError: true,
+      };
+    }
   }
 }
 

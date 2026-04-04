@@ -313,8 +313,10 @@ When fixing bugs or implementing changes, do not stop at the patch itself:
 - Inspect or reproduce the failing behavior first when possible
 - Apply the fix
 - Run the most relevant verification for the touched surface
+- **For C# file changes**: use the Unity verification tools when the bridge is connected to check compile status and console errors. If the bridge is unavailable, fall back to .NET build tools.
 - If verification fails, return to the bug and keep iterating until it passes or you can clearly explain the blocker
 - Do not declare success while open failures, skipped verification, or contradictory tool output remain
+- Unity console errors are blockers — always check and resolve them before completing
 `;
 }
 
@@ -568,6 +570,16 @@ export function buildDepsContext(status?: StradaDepsStatus): string {
       status.mcpPath
         ? `Primary paths to inspect when needed: ${joinPath(status.mcpPath, "README.md")}, ${joinPath(status.mcpPath, "src/tools")}, ${joinPath(status.mcpPath, "src/resources")}, ${joinPath(status.mcpPath, "src/prompts")}, ${joinPath(status.mcpPath, "src/bridge")}.`
         : "Inspect the installed Strada.MCP package root, especially README.md, src/tools, src/resources, src/prompts, and src/bridge.",
+    );
+    lines.push(
+      `\n### Unity Compile Verification (CRITICAL)`,
+      `When the Unity bridge is connected, you MUST verify compilation after editing .cs files:`,
+      `1. After writing or editing any C# file (.cs, .csproj, .sln), call \`unity_verify_change\` to check compile status and console errors.`,
+      `2. If compile errors are found, use \`unity_fix_compile_loop\` to get diagnostics and fix recommendations, then apply fixes and re-verify.`,
+      `3. Use \`unity_compile_status\` for a quick compile check without full verification.`,
+      `4. NEVER declare a C# task complete without verifying Unity compilation succeeds.`,
+      `5. If the Unity bridge is disconnected, fall back to \`dotnet_build\` or file-level analysis.`,
+      `Unity console error analysis is a CORE function — not optional. Treat compile verification as mandatory as running tests.`,
     );
   }
   return lines.join("\n") + "\n";

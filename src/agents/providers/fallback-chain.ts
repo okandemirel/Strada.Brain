@@ -26,6 +26,10 @@ const REASONING_CONTENT_RE = /reasoning_content/i;
 const BAD_REQUEST_RE = /bad.?request|invalid|malformed/i;
 /** Regex for invalid tool/schema errors */
 const INVALID_TOOL_RE = /invalid.*tool|tool.*invalid|invalid.*schema/i;
+/** Regex patterns for reasoning model timeout detection */
+const ABORT_RE = /abort/i;
+const CANCEL_RE = /cancel/i;
+const TASK_INTERRUPTED_RE = /task\.interrupted/i;
 
 function isNonRetryableRequestError(error: unknown): boolean {
   const msg = error instanceof Error ? error.message : String(error);
@@ -233,6 +237,19 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
           health.recordQuotaExhausted(provider.name, errorMsg);
         } else {
           health.recordFailure(provider.name, errorMsg);
+        }
+
+        // Detect reasoning model timeout pattern: the provider's CDN/proxy
+        // may abort long-running reasoning requests before the model responds.
+        // Guard: only warn if the error looks like an external abort, not a
+        // deliberate cancellation from the Brain's own control plane (task cancel,
+        // stall-abort, user abort).
+        if (ABORT_RE.test(errorMsg) && provider.capabilities.thinkingSupported
+          && !CANCEL_RE.test(errorMsg) && !TASK_INTERRUPTED_RE.test(errorMsg)) {
+          logger.warn(`Possible reasoning model timeout (${label})`, {
+            provider: provider.name,
+            hint: "Reasoning models may need more time than the API proxy allows. Consider adding a faster fallback provider or reducing prompt complexity.",
+          });
         }
 
         if (isNonRetryableRequestError(error)) {

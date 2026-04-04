@@ -128,11 +128,18 @@ export class SelfVerification {
     const files = [...this.pendingFiles];
     const shown = files.slice(0, 8);
     const rest = files.length - shown.length;
+    const hasCsFiles = files.some(f => {
+      const dotIdx = f.lastIndexOf(".");
+      return dotIdx !== -1 && COMPILABLE_EXT.has(f.slice(dotIdx));
+    });
+    const verifyHint = hasCsFiles
+      ? `\nUse unity_verify_change (preferred when bridge is connected) or dotnet_build to verify compilation and check Unity console for errors.`
+      : `\nRun the most relevant verification tool or command before declaring the task complete.`;
     return (
       `[VERIFICATION REQUIRED] You modified compilable files without verifying:\n` +
       shown.map(f => `  - ${f}`).join("\n") +
       (rest > 0 ? `\n  ... and ${rest} more` : "") +
-      `\nRun the most relevant verification tool or command before declaring the task complete.`
+      verifyHint
     );
   }
 
