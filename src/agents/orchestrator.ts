@@ -499,8 +499,10 @@ function createStreamingProgressTimeout(
 ): {
   markProgress: () => void;
   timeoutPromise: Promise<never>;
+  signal: AbortSignal;
   clear: () => void;
 } {
+  const abortController = new AbortController();
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
   let sawProgress = false;
   let rejectTimeout: ((error: Error) => void) | undefined;
@@ -509,10 +511,11 @@ function createStreamingProgressTimeout(
     if (timeoutId) clearTimeout(timeoutId);
     const timeoutMs = sawProgress ? stallTimeoutMs : initialTimeoutMs;
     timeoutId = setTimeout(() => {
-      const message = sawProgress
+      const error = new Error(sawProgress
         ? `Streaming stalled after ${stallTimeoutMs}ms without progress`
-        : `Streaming did not start within ${initialTimeoutMs}ms`;
-      rejectTimeout?.(new Error(message));
+        : `Streaming did not start within ${initialTimeoutMs}ms`);
+      abortController.abort(error);
+      rejectTimeout?.(error);
     }, timeoutMs);
   };
 
@@ -528,8 +531,10 @@ function createStreamingProgressTimeout(
       armTimeout();
     },
     timeoutPromise,
+    signal: abortController.signal,
     clear: () => {
       if (timeoutId) clearTimeout(timeoutId);
+      if (!abortController.signal.aborted) abortController.abort();
     },
   };
 }
@@ -4587,7 +4592,10 @@ export class Orchestrator {
         () => {
           timeoutGuard.markProgress();
         },
+        { signal: timeoutGuard.signal },
       );
+      // Suppress unhandled rejection from abandoned stream when timeout wins the race
+      streamPromise.catch(() => {});
       const response = await Promise.race([streamPromise, timeoutGuard.timeoutPromise]);
       timeoutGuard.clear();
       ProviderHealthRegistry.getInstance().recordSuccess(provider.name);
@@ -4698,7 +4706,11 @@ export class Orchestrator {
           timeoutGuard.markProgress();
           onChunk(chunk);
         },
+        { signal: timeoutGuard.signal },
       );
+
+      // Suppress unhandled rejection from abandoned stream when timeout wins the race
+      streamPromise.catch(() => {});
 
       // Race against abort signal
       response = await Promise.race([streamPromise, timeoutGuard.timeoutPromise]);
@@ -6229,7 +6241,7 @@ export class Orchestrator {
   private emitToolResult(
     chatId: string,
     tc: { name: string; input: unknown },
-    tr: { content: string; isError?: boolean },
+    tr: { content: string; isError?: boolean; metadata?: Record<string, unknown> },
   ): void {
     if (!this.eventEmitter) return;
     this.eventEmitter.emit("tool:result", {
@@ -6337,13 +6349,13 @@ export class Orchestrator {
             // file_edit → emit code:file_update with original + modified for diff view
             try {
               const modified = readFileSync(absoluteFilePath, "utf-8");
-              // Use function replacement to avoid $-pattern interpretation in old_string
-              const oldStr = toolInput.old_string as string;
-              const newStr = toolInput.new_string as string;
-              const original = modified.replace(newStr, () => oldStr);
+              // Prefer pre-edit content from tool metadata (reliable) over reverse-engineering
+              const original = typeof tr.metadata?.originalContent === "string"
+                ? (tr.metadata.originalContent as string)
+                : modified.replace(toolInput.new_string as string, () => toolInput.old_string as string);
               workspaceBus.emit("code:file_update", {
                 path: filePath,
-                diff: `${oldStr.slice(0, 250)} → ${newStr.slice(0, 250)}`,
+                diff: `${(toolInput.old_string as string).slice(0, 250)} → ${(toolInput.new_string as string).slice(0, 250)}`,
                 original: original.slice(0, 500_000),
                 modified: modified.slice(0, 500_000),
                 language,

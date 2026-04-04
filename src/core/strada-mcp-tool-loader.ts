@@ -383,6 +383,8 @@ export class StradaMcpRuntime {
   private editorDiscoveryCount = 0;
   private bridgeCapabilities: StradaMcpBridgeCapabilities | null = null;
   private lastError?: string;
+  private reconnectTimerId: ReturnType<typeof setTimeout> | null = null;
+  private reconnectAttempt = 0;
 
   constructor(
     private readonly config: Config,
@@ -450,6 +452,8 @@ export class StradaMcpRuntime {
     try {
       await this.bridgeManager.connect();
       await this.refreshBridgeCapabilities();
+      this.reconnectAttempt = 0;
+      this.clearReconnectTimer();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.lastError = message;
@@ -458,10 +462,51 @@ export class StradaMcpRuntime {
         error: message,
         sourcePath: this.source.path,
       });
+      this.scheduleReconnect();
+    }
+  }
+
+  private scheduleReconnect(): void {
+    if (!this.bridgeConfigured || !this.bridgeManager || this.bridgeConnected) {
+      return;
+    }
+    this.clearReconnectTimer();
+    const RECONNECT_BASE_DELAY_MS = 15_000;
+    const RECONNECT_MAX_DELAY_MS = 5 * 60_000;
+    const attempt = ++this.reconnectAttempt;
+    const delay = Math.min(
+      RECONNECT_BASE_DELAY_MS * Math.pow(2, attempt - 1),
+      RECONNECT_MAX_DELAY_MS,
+    );
+    this.reconnectTimerId = setTimeout(async () => {
+      if (this.bridgeConnected || !this.bridgeManager) return;
+      getLogger().info("Attempting Unity bridge reconnect", { attempt });
+      this.syncBridgeState(false, "connecting", "Reconnecting to the Unity bridge.");
+      try {
+        await this.bridgeManager.connect();
+        await this.refreshBridgeCapabilities();
+        this.reconnectAttempt = 0;
+        this.reconnectTimerId = null;
+        getLogger().info("Unity bridge reconnected successfully");
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.lastError = msg;
+        this.syncBridgeState(false, "error", msg);
+        getLogger().debug("Unity bridge reconnect failed", { error: msg, attempt });
+        this.scheduleReconnect();
+      }
+    }, delay);
+  }
+
+  private clearReconnectTimer(): void {
+    if (this.reconnectTimerId) {
+      clearTimeout(this.reconnectTimerId);
+      this.reconnectTimerId = null;
     }
   }
 
   shutdown(): void {
+    this.clearReconnectTimer();
     this.bridgeAwareTools.forEach((tool) => tool.setBridgeClient(null));
     this.bridgeAwareResources.forEach((resource) => resource.setBridgeClient(null));
     this.editorRouterAwareTools.forEach((tool) => tool.setEditorRouter(null));
