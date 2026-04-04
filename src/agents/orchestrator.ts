@@ -2504,13 +2504,19 @@ export class Orchestrator {
         };
         /** Terminal exit helper — always used with `return` to exit the loop. */
         const bgFinishBlocked = async (text: string): Promise<string> => {
-          // Log the internal diagnostic, show user-friendly message
+          // Log the internal diagnostic, show user-friendly message with context
           const isDiagnostic = DIAGNOSTIC_BLOCKED_RE.test(text);
-          const userText = isDiagnostic
-            ? getResilienceMessage("task_stuck", progressLanguage ?? "en")
-            : text;
+          let userText: string;
           if (isDiagnostic) {
             logger.warn("Loop detection blocked task", { chatId, diagnostic: text.slice(0, 500) });
+            const stuckMsg = getResilienceMessage("task_stuck", progressLanguage ?? "en");
+            // Extract the suggested action from the diagnostic to give the user actionable context
+            const actionMatch = /Suggested action:\s*(.+?)(?:\nFiles t|$)/is.exec(text);
+            userText = actionMatch?.[1]?.trim()
+              ? `${stuckMsg}\n\n**${actionMatch[1].trim()}**`
+              : stuckMsg;
+          } else {
+            userText = text;
           }
           this.sessionManager.appendVisibleAssistantMessage(session, userText);
           this.recordMetricEnd(metricId, {
@@ -4062,10 +4068,17 @@ export class Orchestrator {
             // blocked — sanitize diagnostic messages before showing to user
             const rawBlocked = interactiveAction.visibleText ?? "";
             const isDiag1 = DIAGNOSTIC_BLOCKED_RE.test(rawBlocked);
-            const safeBlocked = isDiag1
-              ? getResilienceMessage("task_stuck", this.defaultLanguage)
-              : rawBlocked;
-            if (isDiag1) logger.warn("Loop detection blocked task", { chatId, diagnostic: rawBlocked.slice(0, 500) });
+            let safeBlocked: string;
+            if (isDiag1) {
+              logger.warn("Loop detection blocked task", { chatId, diagnostic: rawBlocked.slice(0, 500) });
+              const stuckMsg1 = getResilienceMessage("task_stuck", this.defaultLanguage);
+              const actionMatch1 = /Suggested action:\s*(.+?)(?:\nFiles t|$)/is.exec(rawBlocked);
+              safeBlocked = actionMatch1?.[1]?.trim()
+                ? `${stuckMsg1}\n\n**${actionMatch1[1].trim()}**`
+                : stuckMsg1;
+            } else {
+              safeBlocked = rawBlocked;
+            }
             if (safeBlocked) {
               await this.sessionManager.sendVisibleAssistantMarkdown(chatId, session, safeBlocked);
             }
@@ -4301,10 +4314,17 @@ export class Orchestrator {
             // blocked — sanitize diagnostic messages before showing to user
             const rawEnd = interactiveEndAction.visibleText ?? "";
             const isDiag2 = DIAGNOSTIC_BLOCKED_RE.test(rawEnd);
-            const safeEnd = isDiag2
-              ? getResilienceMessage("task_stuck", this.defaultLanguage)
-              : rawEnd;
-            if (isDiag2) logger.warn("Loop detection blocked task", { chatId, diagnostic: rawEnd.slice(0, 500) });
+            let safeEnd: string;
+            if (isDiag2) {
+              logger.warn("Loop detection blocked task", { chatId, diagnostic: rawEnd.slice(0, 500) });
+              const stuckMsg2 = getResilienceMessage("task_stuck", this.defaultLanguage);
+              const actionMatch2 = /Suggested action:\s*(.+?)(?:\nFiles t|$)/is.exec(rawEnd);
+              safeEnd = actionMatch2?.[1]?.trim()
+                ? `${stuckMsg2}\n\n**${actionMatch2[1].trim()}**`
+                : stuckMsg2;
+            } else {
+              safeEnd = rawEnd;
+            }
             if (safeEnd) {
               await this.sessionManager.sendVisibleAssistantMarkdown(chatId, session, safeEnd);
             }

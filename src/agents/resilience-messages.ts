@@ -7,7 +7,7 @@ const MESSAGES: Record<string, Record<MessageKey, string>> = {
     provider_backoff: "Provider unreliable — backing off for {seconds}s before next attempt ({attempt}/{max}).",
     provider_ask_user: "The AI provider has been unreliable for this task. You can continue waiting, switch to a different provider, or cancel.",
     provider_abort: "Unable to complete this task — the AI provider is not responding. Please try again later or switch to a different provider.",
-    task_stuck: "I wasn't able to complete this task. Please try rephrasing your request or breaking it into smaller steps.",
+    task_stuck: "I got stuck on this task after multiple approaches. I'll share what I tried and where I got blocked so we can move forward together.",
   },
   tr: {
     provider_slow: "Yapay zeka sağlayıcısı gecikme yaşıyor. Yeniden deneniyor...",
@@ -15,7 +15,7 @@ const MESSAGES: Record<string, Record<MessageKey, string>> = {
     provider_backoff: "Sağlayıcı güvenilir değil — sonraki deneme için {seconds}s bekleniyor ({attempt}/{max}).",
     provider_ask_user: "Yapay zeka sağlayıcısı bu görev için güvenilir çalışmıyor. Beklemeye devam edebilir, farklı bir sağlayıcıya geçebilir veya görevi iptal edebilirsiniz.",
     provider_abort: "Bu görev tamamlanamadı — yapay zeka sağlayıcısı yanıt vermiyor. Lütfen daha sonra tekrar deneyin veya farklı bir sağlayıcı kullanın.",
-    task_stuck: "Bu görevi tamamlayamadım. Lütfen isteğinizi farklı şekilde ifade edin veya daha küçük adımlara bölün.",
+    task_stuck: "Bu görevde birden fazla yaklaşım denedikten sonra takıldım. Neler denediğimi ve nerede tıkandığımı paylaşacağım, böylece birlikte ilerleyebiliriz.",
   },
   ja: {
     provider_slow: "AIプロバイダーに遅延が発生しています。再試行中...",
@@ -23,7 +23,7 @@ const MESSAGES: Record<string, Record<MessageKey, string>> = {
     provider_backoff: "プロバイダーが不安定です — 次の試行まで{seconds}秒待機中 ({attempt}/{max})。",
     provider_ask_user: "AIプロバイダーがこのタスクで不安定な状態が続いています。待機を続けるか、別のプロバイダーに切り替えるか、タスクをキャンセルできます。",
     provider_abort: "このタスクを完了できませんでした — AIプロバイダーが応答していません。後でもう一度お試しいただくか、別のプロバイダーをご利用ください。",
-    task_stuck: "このタスクを完了できませんでした。リクエストを言い換えるか、より小さなステップに分けてお試しください。",
+    task_stuck: "複数のアプローチを試みましたが、このタスクで行き詰まりました。試したことと問題点を共有しますので、一緒に進めましょう。",
   },
   ko: {
     provider_slow: "AI 제공업체에서 지연이 발생하고 있습니다. 재시도 중...",
@@ -31,7 +31,7 @@ const MESSAGES: Record<string, Record<MessageKey, string>> = {
     provider_backoff: "제공업체가 불안정합니다 — 다음 시도까지 {seconds}초 대기 중 ({attempt}/{max}).",
     provider_ask_user: "AI 제공업체가 이 작업에 대해 불안정한 상태입니다. 계속 대기하거나, 다른 제공업체로 전환하거나, 작업을 취소할 수 있습니다.",
     provider_abort: "이 작업을 완료할 수 없습니다 — AI 제공업체가 응답하지 않습니다. 나중에 다시 시도하거나 다른 제공업체를 사용해 주세요.",
-    task_stuck: "이 작업을 완료하지 못했습니다. 요청을 다시 표현하거나 더 작은 단계로 나누어 시도해 주세요.",
+    task_stuck: "여러 접근 방식을 시도했지만 이 작업에서 막혔습니다. 시도한 내용과 문제점을 공유하여 함께 진행하겠습니다.",
   },
   zh: {
     provider_slow: "AI提供商正在经历延迟。正在重试...",
@@ -39,7 +39,7 @@ const MESSAGES: Record<string, Record<MessageKey, string>> = {
     provider_backoff: "提供商不稳定 — 等待{seconds}秒后进行下一次尝试 ({attempt}/{max})。",
     provider_ask_user: "AI提供商在此任务中一直不稳定。您可以继续等待、切换到其他提供商或取消任务。",
     provider_abort: "无法完成此任务 — AI提供商未响应。请稍后再试或使用其他提供商。",
-    task_stuck: "无法完成此任务。请尝试重新表述您的请求或将其分解为更小的步骤。",
+    task_stuck: "尝试了多种方法后，我在这个任务上遇到了困难。我会分享我尝试的内容和遇到的问题，以便我们一起推进。",
   },
   de: {
     provider_slow: "Der KI-Anbieter hat Verzögerungen. Wird erneut versucht...",
@@ -47,7 +47,7 @@ const MESSAGES: Record<string, Record<MessageKey, string>> = {
     provider_backoff: "Anbieter unzuverlässig — Wartezeit von {seconds}s vor dem nächsten Versuch ({attempt}/{max}).",
     provider_ask_user: "Der KI-Anbieter war für diese Aufgabe unzuverlässig. Sie können weiter warten, zu einem anderen Anbieter wechseln oder die Aufgabe abbrechen.",
     provider_abort: "Diese Aufgabe konnte nicht abgeschlossen werden — der KI-Anbieter antwortet nicht. Bitte versuchen Sie es später erneut oder verwenden Sie einen anderen Anbieter.",
-    task_stuck: "Diese Aufgabe konnte nicht abgeschlossen werden. Bitte formulieren Sie Ihre Anfrage um oder teilen Sie sie in kleinere Schritte auf.",
+    task_stuck: "Nach mehreren Ansätzen bin ich bei dieser Aufgabe nicht weitergekommen. Ich teile mit, was ich versucht habe und wo ich steckengeblieben bin, damit wir gemeinsam vorankommen.",
   },
   es: {
     provider_slow: "El proveedor de IA está experimentando retrasos. Reintentando...",
@@ -55,7 +55,7 @@ const MESSAGES: Record<string, Record<MessageKey, string>> = {
     provider_backoff: "Proveedor inestable — esperando {seconds}s antes del próximo intento ({attempt}/{max}).",
     provider_ask_user: "El proveedor de IA ha sido inestable para esta tarea. Puede seguir esperando, cambiar a otro proveedor o cancelar la tarea.",
     provider_abort: "No se pudo completar esta tarea — el proveedor de IA no responde. Inténtelo de nuevo más tarde o use otro proveedor.",
-    task_stuck: "No pude completar esta tarea. Intente reformular su solicitud o dividirla en pasos más pequeños.",
+    task_stuck: "Me quedé atascado en esta tarea después de varios intentos. Compartiré lo que probé y dónde me bloqueé para que podamos avanzar juntos.",
   },
   fr: {
     provider_slow: "Le fournisseur d'IA subit des retards. Nouvelle tentative...",
@@ -63,7 +63,7 @@ const MESSAGES: Record<string, Record<MessageKey, string>> = {
     provider_backoff: "Fournisseur instable — attente de {seconds}s avant la prochaine tentative ({attempt}/{max}).",
     provider_ask_user: "Le fournisseur d'IA a été instable pour cette tâche. Vous pouvez continuer à attendre, passer à un autre fournisseur ou annuler la tâche.",
     provider_abort: "Impossible de terminer cette tâche — le fournisseur d'IA ne répond pas. Veuillez réessayer plus tard ou utiliser un autre fournisseur.",
-    task_stuck: "Je n'ai pas pu terminer cette tâche. Veuillez reformuler votre demande ou la diviser en étapes plus petites.",
+    task_stuck: "Je suis resté bloqué sur cette tâche après plusieurs approches. Je vais partager ce que j'ai essayé et où je me suis bloqué afin que nous puissions avancer ensemble.",
   },
 };
 
