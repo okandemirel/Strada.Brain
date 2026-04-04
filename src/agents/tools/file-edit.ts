@@ -106,7 +106,7 @@ export class FileEditTool implements ITool {
 
       return {
         content: `File edited: ${relPath} (${replacementCount} replacement${replacementCount > 1 ? "s" : ""} made)`,
-        metadata: { path: relPath, replacementCount },
+        metadata: { path: relPath, replacementCount, originalContent: content.slice(0, 500_000) },
       };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {

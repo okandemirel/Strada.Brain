@@ -433,6 +433,10 @@ export class StradaMcpRuntime {
       const normalizedState = String(state ?? "unknown");
       const connected = normalizedState.toLowerCase() === "connected"
         || this.bridgeManager?.isConnected === true;
+      if (connected) {
+        this.reconnectAttempt = 0;
+        this.clearReconnectTimer();
+      }
       this.syncBridgeState(connected, normalizedState, connected ? undefined : this.reasonForState(normalizedState));
     });
     this.bridgeManager.on("error", (error) => {
@@ -479,6 +483,7 @@ export class StradaMcpRuntime {
       RECONNECT_MAX_DELAY_MS,
     );
     this.reconnectTimerId = setTimeout(async () => {
+      this.reconnectTimerId = null;
       if (this.bridgeConnected || !this.bridgeManager) return;
       getLogger().info("Attempting Unity bridge reconnect", { attempt });
       this.syncBridgeState(false, "connecting", "Reconnecting to the Unity bridge.");
@@ -486,7 +491,6 @@ export class StradaMcpRuntime {
         await this.bridgeManager.connect();
         await this.refreshBridgeCapabilities();
         this.reconnectAttempt = 0;
-        this.reconnectTimerId = null;
         getLogger().info("Unity bridge reconnected successfully");
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -506,6 +510,7 @@ export class StradaMcpRuntime {
   }
 
   shutdown(): void {
+    this.reconnectAttempt = 0;
     this.clearReconnectTimer();
     this.bridgeAwareTools.forEach((tool) => tool.setBridgeClient(null));
     this.bridgeAwareResources.forEach((resource) => resource.setBridgeClient(null));
