@@ -172,6 +172,8 @@
   "errors.somethingWentWrong": "Something went wrong",
   "errors.unexpectedError": "An unexpected error occurred while rendering the interface. You can try reloading the page.",
   "errors.reload": "Reload",
+  "errors.panelCrash": "This panel encountered an error.",
+  "errors.panelRetry": "Click to reload",
   "errors.notFound.code": "404",
   "errors.notFound.message": "Page not found",
   "errors.notFound.backToChat": "Back to Chat",

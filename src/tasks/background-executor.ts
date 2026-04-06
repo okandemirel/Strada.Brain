@@ -574,7 +574,7 @@ export class BackgroundExecutor {
       const errMsg = `Task queue full (max ${BackgroundExecutor.MAX_QUEUE_SIZE}). Try again later.`;
       logger.error("Task queue overflow", { taskId: task.id, queueSize: this.queue.length });
       if (this.taskManager) {
-        try { this.taskManager.fail(task.id, errMsg); } catch { /* best-effort cleanup */ }
+        try { this.taskManager.fail(task.id, errMsg); } catch (e) { logger.debug("Best-effort task fail", { taskId: task.id, error: e instanceof Error ? e.message : String(e) }); }
       }
       throw new Error(errMsg);
     }
@@ -628,7 +628,7 @@ export class BackgroundExecutor {
                 entry.task.id,
                 sanitizeSecrets(rawMsg),
               );
-            } catch { /* task may already be in terminal state */ }
+            } catch (e) { getLogger().debug("Task fail cleanup", { taskId: entry.task.id, error: e instanceof Error ? e.message : String(e) }); }
           }
         })
         .finally(() => {

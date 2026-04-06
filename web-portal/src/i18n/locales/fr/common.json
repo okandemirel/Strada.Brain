@@ -170,6 +170,8 @@
   "errors.somethingWentWrong": "Une erreur s'est produite",
   "errors.unexpectedError": "Une erreur inattendue s'est produite lors du rendu de l'interface. Vous pouvez essayer de recharger la page.",
   "errors.reload": "Recharger",
+  "errors.panelCrash": "Ce panneau a rencontre une erreur.",
+  "errors.panelRetry": "Cliquer pour recharger",
   "errors.notFound.code": "404",
   "errors.notFound.message": "Page non trouvee",
   "errors.notFound.backToChat": "Retour a la discussion",

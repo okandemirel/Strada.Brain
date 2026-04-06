@@ -926,8 +926,11 @@ export class WebChannel
   private sendJson(ws: WebSocket, data: Record<string, unknown>): void {
     try {
       ws.send(JSON.stringify(data));
-    } catch {
-      // Connection may have closed
+    } catch (err) {
+      getLoggerSafe().debug("WebSocket send failed", {
+        readyState: ws.readyState,
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   }
 

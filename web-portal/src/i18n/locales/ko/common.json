@@ -170,6 +170,8 @@
   "errors.somethingWentWrong": "문제가 발생했습니다",
   "errors.unexpectedError": "인터페이스를 렌더링하는 중 예상치 못한 오류가 발생했습니다. 페이지를 새로고침해 보세요.",
   "errors.reload": "새로고침",
+  "errors.panelCrash": "이 패널에서 오류가 발생했습니다.",
+  "errors.panelRetry": "클릭하여 새로고침",
   "errors.notFound.code": "404",
   "errors.notFound.message": "페이지를 찾을 수 없습니다",
   "errors.notFound.backToChat": "채팅으로 돌아가기",

@@ -170,6 +170,8 @@
   "errors.somethingWentWrong": "Algo salio mal",
   "errors.unexpectedError": "Ocurrio un error inesperado al renderizar la interfaz. Puedes intentar recargar la pagina.",
   "errors.reload": "Recargar",
+  "errors.panelCrash": "Este panel encontro un error.",
+  "errors.panelRetry": "Haz clic para recargar",
   "errors.notFound.code": "404",
   "errors.notFound.message": "Pagina no encontrada",
   "errors.notFound.backToChat": "Volver al Chat",

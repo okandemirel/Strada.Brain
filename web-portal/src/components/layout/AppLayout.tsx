@@ -3,7 +3,7 @@ import { Outlet } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { WebSocketProvider } from '../../contexts/WebSocketContext'
 import { TooltipProvider } from '../ui/tooltip'
-import ErrorBoundary from '../ErrorBoundary'
+import PanelErrorBoundary from '../PanelErrorBoundary'
 import Sidebar from './Sidebar'
 import PanelLayout from '../workspace/PanelLayout'
 import BottomTabBar from './BottomTabBar'
@@ -39,11 +39,11 @@ function PrimaryContent() {
   if (!Panel) return <Outlet />
 
   return (
-    <ErrorBoundary>
+    <PanelErrorBoundary panelName={mode}>
       <Suspense fallback={<PanelFallback label={t(`workspace.loading.${mode}`)} />}>
         <Panel />
       </Suspense>
-    </ErrorBoundary>
+    </PanelErrorBoundary>
   )
 }
 

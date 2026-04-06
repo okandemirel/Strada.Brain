@@ -170,6 +170,8 @@
   "errors.somethingWentWrong": "エラーが発生しました",
   "errors.unexpectedError": "インターフェースのレンダリング中に予期しないエラーが発生しました。ページを再読み込みしてみてください。",
   "errors.reload": "再読み込み",
+  "errors.panelCrash": "このパネルでエラーが発生しました。",
+  "errors.panelRetry": "クリックして再読み込み",
   "errors.notFound.code": "404",
   "errors.notFound.message": "ページが見つかりません",
   "errors.notFound.backToChat": "チャットに戻る",

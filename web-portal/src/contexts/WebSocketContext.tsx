@@ -2,6 +2,10 @@ import { useMemo } from 'react'
 import { useWebSocket, type UseWebSocketReturn } from '../hooks/useWebSocket'
 import { WebSocketContext } from './ws-context'
 
+// Side-effect import: registers sibling store resets as logout hooks
+// so that useSessionStore.getState().logout() cascades to all stores.
+import '../stores/logout-hooks'
+
 export function WebSocketProvider({ children }: { children: React.ReactNode }) {
   const ws = useWebSocket()
   // Read state now comes from the Zustand store (useSessionStore).

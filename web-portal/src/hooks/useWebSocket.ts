@@ -6,7 +6,7 @@ import type {
   ConnectionStatus,
   IncomingMessage,
 } from '../types/messages'
-import { useSessionStore } from '../stores/session-store'
+import { useSessionStore, onLogout } from '../stores/session-store'
 import { useCanvasStore } from '../stores/canvas-store'
 import { mergeSessionMessages, readSessionMessages, writeSessionMessages } from './websocket-storage'
 import { dispatchWorkspaceMessage, isWorkspaceMessage } from './use-dashboard-socket'
@@ -465,7 +465,30 @@ export function useWebSocket(): UseWebSocketReturn {
     mountedRef.current = true
     connectRef.current?.()
 
+    // Register a logout hook so logout() can close the WebSocket
+    const unregisterLogout = onLogout(() => {
+      if (reconnectTimerRef.current) {
+        clearTimeout(reconnectTimerRef.current)
+        reconnectTimerRef.current = null
+      }
+      if (pendingReconnectTimerRef.current) {
+        clearTimeout(pendingReconnectTimerRef.current)
+        pendingReconnectTimerRef.current = null
+      }
+      for (const timer of pendingMessageTimersRef.current.values()) {
+        clearTimeout(timer)
+      }
+      pendingMessageTimersRef.current.clear()
+      pendingOutboundMessagesRef.current = []
+      sessionReadyRef.current = false
+      if (wsRef.current) {
+        wsRef.current.close()
+        wsRef.current = null
+      }
+    })
+
     return () => {
+      unregisterLogout()
       mountedRef.current = false
       clearTimeout(writeTimeoutRef.current)
       if (reconnectTimerRef.current) {

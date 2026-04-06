@@ -170,6 +170,8 @@
   "errors.somethingWentWrong": "出了点问题",
   "errors.unexpectedError": "渲染界面时发生了意外错误。您可以尝试重新加载页面。",
   "errors.reload": "重新加载",
+  "errors.panelCrash": "此面板遇到了错误。",
+  "errors.panelRetry": "点击重新加载",
   "errors.notFound.code": "404",
   "errors.notFound.message": "页面未找到",
   "errors.notFound.backToChat": "返回聊天",

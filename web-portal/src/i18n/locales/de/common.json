@@ -170,6 +170,8 @@
   "errors.somethingWentWrong": "Etwas ist schiefgelaufen",
   "errors.unexpectedError": "Beim Rendern der Oberfläche ist ein unerwarteter Fehler aufgetreten. Du kannst versuchen, die Seite neu zu laden.",
   "errors.reload": "Neu laden",
+  "errors.panelCrash": "In diesem Panel ist ein Fehler aufgetreten.",
+  "errors.panelRetry": "Klicken zum Neuladen",
   "errors.notFound.code": "404",
   "errors.notFound.message": "Seite nicht gefunden",
   "errors.notFound.backToChat": "Zurück zum Chat",

@@ -172,6 +172,8 @@
   "errors.somethingWentWrong": "Bir hata oluştu",
   "errors.unexpectedError": "Arayüz oluşturulurken beklenmeyen bir hata meydana geldi. Sayfayı yeniden yüklemeyi deneyebilirsiniz.",
   "errors.reload": "Yeniden Yükle",
+  "errors.panelCrash": "Bu panelde bir hata oluştu.",
+  "errors.panelRetry": "Yeniden yükle",
   "errors.notFound.code": "404",
   "errors.notFound.message": "Sayfa bulunamadı",
   "errors.notFound.backToChat": "Sohbete Dön",
