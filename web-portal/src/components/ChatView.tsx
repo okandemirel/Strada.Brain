@@ -62,7 +62,7 @@ export default function ChatView() {
             <BlurFade><EmptyState /></BlurFade>
           </div>
         ) : (
-          <div className="w-full max-w-prose mx-auto flex flex-col gap-3">
+          <div className="w-full max-w-prose mx-auto flex flex-col gap-3" aria-live="polite" aria-relevant="additions">
             {messages.map((msg) => (
               <ChatMessage
                 key={msg.id}
@@ -78,6 +78,7 @@ export default function ChatView() {
                   onClick={() => sendRawJSON({ type: 'cancel_task' })}
                   className="shrink-0 rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-text-secondary transition-colors hover:border-rose-400/30 hover:bg-rose-400/10 hover:text-rose-300"
                   title={t('chat.stopGeneration')}
+                  aria-label={t('chat.stopGeneration')}
                 >
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" className="inline mr-1"><rect x="6" y="6" width="12" height="12" rx="2" /></svg>
                   {t('chat.stop')}

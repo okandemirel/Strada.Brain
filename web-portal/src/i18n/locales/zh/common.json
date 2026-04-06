@@ -20,6 +20,8 @@
   "nav.memory": "记忆",
   "nav.settings": "设置",
   "nav.skills": "技能",
+  "nav.sidebar": "侧边栏导航",
+  "nav.bottomTabs": "底部标签导航",
 
   "modes.chat.label": "聊天",
   "modes.chat.description": "与智能体对话，并保持当前会话可见。",
@@ -51,6 +53,8 @@
   "chat.badResponse": "差的回复",
   "chat.fileAttachment": "（文件附件）",
   "chat.voiceMessage": "（语音消息）",
+  "chat.stop": "停止",
+  "chat.stopGeneration": "停止生成",
 
   "chat.empty.title": "Strada.Brain",
   "chat.empty.description": "AI 驱动的 Unity 开发助手。发送一条消息即可开始。",
@@ -190,5 +194,7 @@
   "ui.copied": "已复制！",
   "ui.cancel": "取消",
   "ui.submit": "提交",
-  "ui.file": "文件"
+  "ui.file": "文件",
+
+  "connection.offline": "您已离线。部分功能可能不可用。"
 }

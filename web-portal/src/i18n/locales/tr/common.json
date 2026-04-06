@@ -20,6 +20,8 @@
   "nav.memory": "Bellek",
   "nav.settings": "Ayarlar",
   "nav.skills": "Yetenekler",
+  "nav.sidebar": "Kenar cubugu gezintisi",
+  "nav.bottomTabs": "Alt sekme gezintisi",
 
   "modes.chat.label": "Sohbet",
   "modes.chat.description": "Ajanla konuşun ve mevcut sohbeti görüntüleyin.",
@@ -192,5 +194,7 @@
   "ui.copied": "Kopyalandı!",
   "ui.cancel": "İptal",
   "ui.submit": "Gönder",
-  "ui.file": "DOSYA"
+  "ui.file": "DOSYA",
+
+  "connection.offline": "Çevrimdışısınız. Bazı özellikler kullanılamayabilir."
 }

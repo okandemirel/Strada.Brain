@@ -20,6 +20,8 @@
   "nav.memory": "Memoire",
   "nav.settings": "Parametres",
   "nav.skills": "Competences",
+  "nav.sidebar": "Navigation de la barre laterale",
+  "nav.bottomTabs": "Navigation des onglets inferieurs",
 
   "modes.chat.label": "Discussion",
   "modes.chat.description": "Discutez avec l'agent et gardez la conversation en cours visible.",
@@ -51,6 +53,8 @@
   "chat.badResponse": "Mauvaise reponse",
   "chat.fileAttachment": "(piece jointe)",
   "chat.voiceMessage": "(message vocal)",
+  "chat.stop": "Arrêter",
+  "chat.stopGeneration": "Arrêter la génération",
 
   "chat.empty.title": "Strada.Brain",
   "chat.empty.description": "Assistant de developpement Unity propulse par l'IA. Envoyez un message pour commencer.",
@@ -190,5 +194,7 @@
   "ui.copied": "Copie !",
   "ui.cancel": "Annuler",
   "ui.submit": "Soumettre",
-  "ui.file": "FICHIER"
+  "ui.file": "FICHIER",
+
+  "connection.offline": "Vous \u00eates hors ligne. Certaines fonctionnalit\u00e9s peuvent \u00eatre indisponibles."
 }

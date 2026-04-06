@@ -20,6 +20,8 @@
   "nav.memory": "Memory",
   "nav.settings": "Settings",
   "nav.skills": "Skills",
+  "nav.sidebar": "Sidebar navigation",
+  "nav.bottomTabs": "Bottom tab navigation",
 
   "modes.chat.label": "Chat",
   "modes.chat.description": "Talk to the agent and keep the current conversation in view.",
@@ -192,5 +194,7 @@
   "ui.copied": "Copied!",
   "ui.cancel": "Cancel",
   "ui.submit": "Submit",
-  "ui.file": "FILE"
+  "ui.file": "FILE",
+
+  "connection.offline": "You are offline. Some features may be unavailable."
 }

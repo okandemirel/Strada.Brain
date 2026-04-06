@@ -209,6 +209,7 @@ export default function ChatInput({ onSend, disabled }: ChatInputProps) {
                 className="absolute -top-1.5 -right-1.5 w-[22px] h-[22px] rounded-full border-none bg-bg-elevated text-text-secondary text-sm leading-none cursor-pointer flex items-center justify-center transition-all duration-200 shadow-sm hover:bg-error hover:text-white"
                 onClick={() => removeFile(i)}
                 title={t('chat.removeFile')}
+                aria-label={`${t('chat.removeFile')}: ${fp.file.name}`}
               >
                 &times;
               </button>
@@ -221,6 +222,7 @@ export default function ChatInput({ onSend, disabled }: ChatInputProps) {
           className="flex items-center justify-center relative w-[42px] h-[42px] border border-border rounded-xl bg-bg-tertiary text-text-secondary cursor-pointer shrink-0 transition-all duration-200 hover:text-accent hover:border-accent hover:bg-accent-glow disabled:opacity-40 disabled:cursor-not-allowed"
           onClick={() => fileInputRef.current?.click()}
           title={t('chat.attachFile')}
+          aria-label={t('chat.attachFile')}
           disabled={disabled}
         >
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -238,6 +240,7 @@ export default function ChatInput({ onSend, disabled }: ChatInputProps) {
           onChange={handleTextChange}
           onKeyDown={handleKeyDown}
           placeholder={t('chat.placeholder')}
+          aria-label={t('chat.placeholder')}
           rows={1}
           disabled={disabled}
           className="flex-1 resize-none border-none rounded-[14px] px-4 py-3 font-[inherit] text-[15px] bg-transparent text-text leading-relaxed max-h-[140px] outline-none transition-all duration-200 placeholder:text-text-tertiary disabled:opacity-40"
@@ -253,6 +256,7 @@ export default function ChatInput({ onSend, disabled }: ChatInputProps) {
             shimmerDuration="2.5s"
             className="self-end px-[22px] py-[11px] text-accent border-accent/30 text-[15px] font-semibold whitespace-nowrap shrink-0 tracking-tight hover:scale-105 hover:shadow-[0_0_20px_rgba(0,229,255,0.3)] active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed disabled:scale-100 disabled:shadow-none disabled:hover:scale-100"
             onClick={handleSend}
+            aria-label={t('chat.send')}
             disabled={disabled || (!text.trim() && files.length === 0)}
           >
             {t('chat.send')}
@@ -263,6 +267,7 @@ export default function ChatInput({ onSend, disabled }: ChatInputProps) {
           type="file"
           multiple
           onChange={handleFileChange}
+          aria-hidden="true"
           className="hidden"
         />
       </div>

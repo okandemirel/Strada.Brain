@@ -47,6 +47,8 @@ export default function Sidebar() {
   return (
     <aside
       className={`hidden md:flex flex-col h-screen bg-bg-secondary/80 backdrop-blur-xl border-r border-white/5 transition-all duration-300 ${collapsed ? 'w-14' : 'w-60'} max-md:fixed max-md:z-[1000]`}
+      role="navigation"
+      aria-label={t('nav.sidebar')}
     >
       {/* Logo / Brand */}
       <div className={`flex flex-row items-center gap-3 p-4 border-b border-border bg-gradient-to-b from-transparent to-bg-tertiary/30 shrink-0 ${collapsed ? 'justify-center px-2' : ''}`}>
@@ -154,6 +156,7 @@ export default function Sidebar() {
           className={`flex items-center gap-2.5 px-3 py-2 rounded-[10px] text-text-secondary text-sm font-medium transition-all duration-150 cursor-pointer whitespace-nowrap overflow-hidden select-none bg-transparent border-none font-[inherit] text-left w-full hover:bg-bg-tertiary hover:text-text ${collapsed ? 'justify-center px-2' : ''}`}
           onClick={toggleTheme}
           title={theme === 'dark' ? t('sidebar.lightMode') : t('sidebar.darkMode')}
+          aria-label={theme === 'dark' ? t('sidebar.lightMode') : t('sidebar.darkMode')}
         >
           <span className="w-[22px] text-center text-base shrink-0 leading-none">{theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}</span>
           {!collapsed && <span className="whitespace-nowrap overflow-hidden text-ellipsis">{theme === 'dark' ? t('sidebar.lightMode') : t('sidebar.darkMode')}</span>}
@@ -164,6 +167,7 @@ export default function Sidebar() {
           className={`flex items-center gap-2.5 px-3 py-2 rounded-[10px] text-text-secondary text-sm font-medium transition-all duration-150 cursor-pointer whitespace-nowrap overflow-hidden select-none bg-transparent border-none font-[inherit] text-left w-full hover:bg-bg-tertiary hover:text-text ${collapsed ? 'justify-center px-2' : ''}`}
           onClick={toggle}
           title={collapsed ? t('sidebar.expand') : t('sidebar.collapse')}
+          aria-label={collapsed ? t('sidebar.expand') : t('sidebar.collapse')}
         >
           <span className="w-[22px] text-center text-base shrink-0 leading-none">{collapsed ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}</span>
           {!collapsed && <span className="whitespace-nowrap overflow-hidden text-ellipsis">{t('sidebar.collapse')}</span>}

@@ -20,6 +20,8 @@
   "nav.memory": "Speicher",
   "nav.settings": "Einstellungen",
   "nav.skills": "Skills",
+  "nav.sidebar": "Seitenleisten-Navigation",
+  "nav.bottomTabs": "Untere Tab-Navigation",
 
   "modes.chat.label": "Chat",
   "modes.chat.description": "Sprich mit dem Agenten und behalte die aktuelle Unterhaltung im Blick.",
@@ -51,6 +53,8 @@
   "chat.badResponse": "Schlechte Antwort",
   "chat.fileAttachment": "(Dateianhang)",
   "chat.voiceMessage": "(Sprachnachricht)",
+  "chat.stop": "Stopp",
+  "chat.stopGeneration": "Generierung stoppen",
 
   "chat.empty.title": "Strada.Brain",
   "chat.empty.description": "KI-gestützter Unity-Entwicklungsassistent. Sende eine Nachricht, um loszulegen.",
@@ -190,5 +194,7 @@
   "ui.copied": "Kopiert!",
   "ui.cancel": "Abbrechen",
   "ui.submit": "Absenden",
-  "ui.file": "DATEI"
+  "ui.file": "DATEI",
+
+  "connection.offline": "Sie sind offline. Einige Funktionen sind m\u00f6glicherweise nicht verf\u00fcgbar."
 }

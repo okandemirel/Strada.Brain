@@ -20,6 +20,8 @@
   "nav.memory": "メモリ",
   "nav.settings": "設定",
   "nav.skills": "スキル",
+  "nav.sidebar": "サイドバーナビゲーション",
+  "nav.bottomTabs": "ボトムタブナビゲーション",
 
   "modes.chat.label": "チャット",
   "modes.chat.description": "エージェントと会話し、現在の会話を表示します。",
@@ -51,6 +53,8 @@
   "chat.badResponse": "悪い回答",
   "chat.fileAttachment": "(ファイル添付)",
   "chat.voiceMessage": "(音声メッセージ)",
+  "chat.stop": "停止",
+  "chat.stopGeneration": "生成を停止",
 
   "chat.empty.title": "Strada.Brain",
   "chat.empty.description": "AI搭載のUnity開発アシスタント。メッセージを送信して始めましょう。",
@@ -190,5 +194,7 @@
   "ui.copied": "コピーしました!",
   "ui.cancel": "キャンセル",
   "ui.submit": "送信",
-  "ui.file": "ファイル"
+  "ui.file": "ファイル",
+
+  "connection.offline": "オフラインです。一部の機能が利用できない場合があります。"
 }
