@@ -11,8 +11,31 @@ import { hasSoulLoaderWithPersistence, hasUserProfileStore } from "./personality
 /** Reserved profile names that cannot be overwritten by users */
 const RESERVED_NAMES = new Set(["default", "casual", "formal", "minimal"]);
 
-/** Valid name pattern: lowercase alphanumeric, hyphens, underscores */
-const NAME_PATTERN = /^[a-z0-9_-]+$/;
+/** Valid name pattern: lowercase alphanumeric, hyphens, underscores, max 64 chars */
+const NAME_PATTERN = /^[a-z0-9_-]{1,64}$/;
+
+/** Max personality content size in bytes */
+const MAX_CONTENT_BYTES = 10 * 1024;
+
+/** Patterns that indicate prompt injection attempts */
+const INJECTION_PATTERNS = [
+  /\[.*JAILBREAK.*\]/i,
+  /IGNORE\s+(ALL\s+)?PREVIOUS\s+INSTRUCTIONS/i,
+  /OVERRIDE\s+(ALL\s+)?INSTRUCTIONS/i,
+  /<<\s*SYSTEM\s*>>/i,
+  /\bYOU\s+ARE\s+NOW\b.*\bNEW\s+INSTRUCTIONS\b/i,
+  /\bDO\s+NOT\s+FOLLOW\s+(ANY|YOUR)\s+(PREVIOUS\s+)?INSTRUCTIONS\b/i,
+  /\bACT\s+AS\s+(A\s+)?(?:DAN|DEVELOPER\s+MODE|UNRESTRICTED)\b/i,
+  // Structural markers that could override system prompts
+  /^#{1,3}\s*(SYSTEM|INSTRUCTION|OVERRIDE|IMPORTANT)\b/im,
+  /<\|im_start\|>/i,
+  /<<\s*SYS\s*>>/i,
+  /\[INST\]/i,
+  // Multilingual / rephrased variants
+  /\b(?:FORGET|DISREGARD)\s+(?:ALL|EVERYTHING)\s+(?:ABOVE|PREVIOUS|PRIOR)\b/i,
+  /\bNEW\s+SYSTEM\s+PROMPT\b/i,
+  /\bPRETEND\s+YOU\s+ARE\s+(?:NO\s+LONGER|NOT)\s+BOUND\b/i,
+];
 
 export class CreatePersonalityTool implements ITool {
   readonly name = "create_personality";
@@ -71,6 +94,25 @@ export class CreatePersonalityTool implements ITool {
     if (!content) {
       return {
         content: "Profile content cannot be empty.",
+        isError: true,
+      };
+    }
+
+    // Enforce content size limit
+    if (new TextEncoder().encode(content).byteLength > MAX_CONTENT_BYTES) {
+      return {
+        content: `Profile content exceeds the maximum size limit of ${MAX_CONTENT_BYTES / 1024} KB.`,
+        isError: true,
+      };
+    }
+
+    // Check for prompt injection patterns
+    if (INJECTION_PATTERNS.some((p) => p.test(content))) {
+      logger.warn("Prompt injection attempt blocked in personality creation", { name });
+      return {
+        content:
+          "Profile content contains patterns that could interfere with system instructions. " +
+          "Please rephrase the personality description using natural language.",
         isError: true,
       };
     }

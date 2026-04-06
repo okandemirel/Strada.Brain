@@ -57,12 +57,14 @@ interface QueuedMessage {
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
   retries: number;
+  enqueuedAt: number;
 }
 
 const MAX_RETRIES = 3;
 const RETRY_BASE_DELAY_MS = 1000;
 const QUEUE_PROCESS_INTERVAL_MS = 100;
 const RATE_LIMIT_BACKOFF_MS = 5000;
+const MESSAGE_TIMEOUT_MS = 30_000;
 
 /**
  * Discord channel adapter using discord.js.
@@ -205,7 +207,7 @@ export class DiscordChannel implements IChannelAdapter {
     }, QUEUE_PROCESS_INTERVAL_MS);
   }
 
-  private enqueueMessage(message: Omit<QueuedMessage, 'id' | 'retries' | 'resolve' | 'reject'>): Promise<unknown> {
+  private enqueueMessage(message: Omit<QueuedMessage, 'id' | 'retries' | 'resolve' | 'reject' | 'enqueuedAt'>): Promise<unknown> {
     return new Promise((resolve, reject) => {
       const queuedMessage: QueuedMessage = {
         ...message,
@@ -213,8 +215,9 @@ export class DiscordChannel implements IChannelAdapter {
         retries: 0,
         resolve,
         reject,
+        enqueuedAt: Date.now(),
       };
-      
+
       this.messageQueue.push(queuedMessage);
     });
   }
@@ -227,9 +230,17 @@ export class DiscordChannel implements IChannelAdapter {
     this.rateLimited = false;
 
     try {
-      // Process up to 5 messages per interval (respecting rate limits)
-      const batchSize = Math.min(5, this.messageQueue.length);
+      // Evict timed-out messages before processing
+      const now = Date.now();
+      this.messageQueue = this.messageQueue.filter((msg) => {
+        if (now - msg.enqueuedAt > MESSAGE_TIMEOUT_MS) {
+          msg.reject(new Error(`Message timed out after ${MESSAGE_TIMEOUT_MS}ms`));
+          return false;
+        }
+        return true;
+      });
 
+      const batchSize = Math.min(5, this.messageQueue.length);
       for (let i = 0; i < batchSize; i++) {
         const message = this.messageQueue[0];
         if (!message) break;

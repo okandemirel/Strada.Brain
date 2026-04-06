@@ -39,6 +39,7 @@ export class OllamaProvider implements IAIProvider {
     systemPrompt: string,
     messages: ConversationMessage[],
     tools: ToolDefinition[],
+    options?: { signal?: AbortSignal },
   ): Promise<ProviderResponse> {
     const logger = getLogger();
 
@@ -65,6 +66,7 @@ export class OllamaProvider implements IAIProvider {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
+      signal: options?.signal,
     });
 
     if (!response.ok) {

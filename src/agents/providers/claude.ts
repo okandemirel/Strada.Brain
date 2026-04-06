@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type {
   IAIProvider,
+  IStreamingProvider,
   ConversationMessage,
   ToolDefinition,
   ProviderResponse,
@@ -15,7 +16,7 @@ import { getLogger, getLoggerSafe } from "../../utils/logger.js";
  * Claude AI provider using the Anthropic SDK.
  * Primary provider for Strada Brain.
  */
-export class ClaudeProvider implements IAIProvider {
+export class ClaudeProvider implements IAIProvider, IStreamingProvider {
   readonly name = "claude";
   readonly capabilities: ProviderCapabilities = {
     maxTokens: 8192,
@@ -87,7 +88,7 @@ export class ClaudeProvider implements IAIProvider {
     messages: ConversationMessage[],
     tools: ToolDefinition[],
     onChunk: StreamCallback,
-    _options?: { signal?: AbortSignal },
+    options?: { signal?: AbortSignal },
   ): Promise<ProviderResponse> {
     const logger = getLogger();
 
@@ -103,13 +104,16 @@ export class ClaudeProvider implements IAIProvider {
       messageCount: anthropicMessages.length,
     });
 
-    const stream = this.client.messages.stream({
-      model: this.model,
-      max_tokens: this.capabilities.maxTokens,
-      system: systemPrompt,
-      messages: anthropicMessages,
-      tools: anthropicTools.length > 0 ? anthropicTools : undefined,
-    });
+    const stream = this.client.messages.stream(
+      {
+        model: this.model,
+        max_tokens: this.capabilities.maxTokens,
+        system: systemPrompt,
+        messages: anthropicMessages,
+        tools: anthropicTools.length > 0 ? anthropicTools : undefined,
+      },
+      options?.signal ? { signal: options.signal } : undefined,
+    );
 
     stream.on("text", (text) => {
       onChunk(text);
