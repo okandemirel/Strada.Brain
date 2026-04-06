@@ -3,7 +3,7 @@
  *
  * Hybrid weighted confidence calculation for instincts.
  * The primary scoring model uses a weighted sum across 5 factors:
- *   successRate (0.35), pattern (0.25), recency (0.20), context (0.15), verification (0.05).
+ *   successRate (0.40), pattern (0.15), recency (0.20), context (0.15), verification (0.10).
  * Alpha/beta parameters are maintained for evidence tracking and confidence intervals
  * but are NOT used for the primary confidence computation (no Beta posterior).
  */
@@ -44,8 +44,8 @@ interface ConfidenceScorerConfig extends Partial<ConfidenceWeights> {
 }
 
 const DEFAULT_WEIGHTS: ConfidenceWeights = {
-  patternStrength: 0.2,
-  successRate: 0.35,
+  patternStrength: 0.15,
+  successRate: 0.40,
   recencyScore: 0.2,
   contextMatch: 0.15,
   verificationScore: 0.1,
@@ -104,7 +104,9 @@ export class ConfidenceScorer {
    * (alpha / (alpha + beta)) for storage. The primary confidence score used
    * for lifecycle decisions comes from the weighted 5-factor model (calculate()),
    * not from this posterior. Verdict weights (0.9/0.6/0.2) are applied as
-   * fractional evidence updates. Permanent instincts are frozen (returned unchanged).
+   * fractional evidence updates. A small alpha boost (0–0.15) is added for
+   * instincts with 3+ applications and ≥80% success rate to accelerate
+   * convergence. Permanent instincts are frozen (returned unchanged).
    *
    * @param instinct - The instinct to update
    * @param success - Whether the application was successful
@@ -155,7 +157,15 @@ export class ConfidenceScorer {
       newBeta = currentBeta + 1;
     }
 
-    // Pure posterior mean — no blending, no temporal discount
+    // Success rate boost: 3+ applications with high success rate accelerate evidence
+    if (success && newTimesApplied >= 3) {
+      if (newSuccessRate >= 0.8) {
+        const boost = Math.min(0.15, (newSuccessRate - 0.8) * 0.75);
+        newAlpha += boost;
+      }
+    }
+
+    // Posterior mean (with optional success-rate boost applied above)
     const newConfidence = newAlpha / (newAlpha + newBeta);
 
     // Return new instinct with updated stats and alpha/beta evidence counters
@@ -306,13 +316,13 @@ export class ConfidenceScorer {
     const ageDays = ageMs / (1000 * 60 * 60 * 24);
 
     // Exponential decay based on age
-    // Half-life of 30 days
-    const halfLifeDays = 30;
+    // Half-life of 14 days — recent instincts get much higher weight
+    const halfLifeDays = 14;
     const decay = Math.pow(0.5, ageDays / halfLifeDays);
 
     // Boost for recently used instincts
     const recentUses = Math.min(instinct.stats.timesApplied, 10);
-    const recencyBoost = recentUses / 20; // 0 to 0.5 boost
+    const recencyBoost = recentUses / 15; // 0 to 0.67 boost
 
     return Math.min(1, decay * 0.7 + recencyBoost);
   }

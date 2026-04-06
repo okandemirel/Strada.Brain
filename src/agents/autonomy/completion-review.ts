@@ -232,6 +232,10 @@ export function shouldRunCompletionReview(
   draft: string,
   prompt = "",
 ): boolean {
+  // Always run completion review when Unity console errors exist
+  if (evidence.verificationState.unityConsoleErrors?.length > 0) {
+    return true;
+  }
   if (isLowRiskMutationFootprint(evidence, draft, prompt)) {
     return false;
   }
@@ -313,6 +317,9 @@ export function buildCompletionReviewRequest(params: {
     `Recent unresolved failures:\n${recentFailures}`,
     "",
     `Recent log issues since the latest clean verification:\n${recentLogs}`,
+    "",
+    `Unity console errors: ${(params.evidence.verificationState.unityConsoleErrors?.length ?? 0) > 0 ? params.evidence.verificationState.unityConsoleErrors.slice(0, 5).map(e => `- ${e}`).join("\n") : "(none)"}`,
+    `Unity error resolution attempts: ${params.evidence.verificationState.unityErrorResolutionAttempts ?? 0}`,
     "",
     "Reject unsupported scope claims. If the draft claims broad completion (for example all/everything/full analysis/verified) but the evidence is too thin, force continue or replan.",
     "Reject drafts that ask the user what to do next, ask for screenshots, or defer obvious next investigations back to the user without a real blocker.",

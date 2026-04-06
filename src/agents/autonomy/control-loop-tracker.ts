@@ -45,6 +45,7 @@ export class ControlLoopTracker {
   private readonly seenEvidence = new Set<string>();
   private readonly recoveryEpisodes = new Map<string, number>();
   private consecutiveNoToolGates = 0;
+  private pruneIndex = 0;
 
   private readonly fpThreshold: number;
   private readonly hasCustomFpThreshold: boolean;
@@ -77,19 +78,20 @@ export class ControlLoopTracker {
     this.consecutiveNoToolGates++;
     this.prune(event.iteration);
 
+    const liveEvents = this.pruneIndex > 0 ? this.events.slice(this.pruneIndex) : this.events;
+
     // Stale analysis: consecutive gates without any tool execution
     if (this.consecutiveNoToolGates >= this.staleAnalysisThreshold) {
       return {
         fingerprint: stored.fingerprint,
         sameFingerprintCount: this.consecutiveNoToolGates,
-        recentGateCount: this.events.length,
+        recentGateCount: liveEvents.length,
         recoveryEpisode: this.recoveryEpisodes.get(stored.fingerprint) ?? 0,
         reason: "stale_analysis_loop",
         latestReason: stored.reason,
       };
     }
-
-    const sameFingerprintEvents = this.events.filter((entry) =>
+    const sameFingerprintEvents = liveEvents.filter((entry) =>
       entry.fingerprint === stored.fingerprint &&
       entry.iteration >= event.iteration - this.fpWindow,
     );
@@ -97,14 +99,14 @@ export class ControlLoopTracker {
       return {
         fingerprint: stored.fingerprint,
         sameFingerprintCount: sameFingerprintEvents.length,
-        recentGateCount: this.events.length,
+        recentGateCount: liveEvents.length,
         recoveryEpisode: this.recoveryEpisodes.get(stored.fingerprint) ?? 0,
         reason: "same_fingerprint_repeated",
         latestReason: stored.reason,
       };
     }
 
-    const recentEvents = this.events.filter((entry) => entry.iteration >= event.iteration - this.densityWindow);
+    const recentEvents = liveEvents.filter((entry) => entry.iteration >= event.iteration - this.densityWindow);
     if (recentEvents.length >= this.densityThreshold) {
       return {
         fingerprint: stored.fingerprint,
@@ -138,6 +140,7 @@ export class ControlLoopTracker {
 
   markVerificationClean(_iteration: number): void {
     this.events.length = 0;
+    this.pruneIndex = 0;
     this.consecutiveNoToolGates = 0;
   }
 
@@ -152,6 +155,7 @@ export class ControlLoopTracker {
       this.seenEvidence.add(file);
     }
     this.events.length = 0;
+    this.pruneIndex = 0;
     this.consecutiveNoToolGates = 0;
   }
 
@@ -159,14 +163,24 @@ export class ControlLoopTracker {
     const next = (this.recoveryEpisodes.get(fingerprint) ?? 0) + 1;
     this.recoveryEpisodes.set(fingerprint, next);
     this.events.length = 0;
+    this.pruneIndex = 0;
     this.consecutiveNoToolGates = 0;
     return next;
   }
 
   private prune(currentIteration: number): void {
     const minIteration = currentIteration - this.densityWindow;
-    while (this.events.length > 0 && this.events[0] && this.events[0].iteration < minIteration) {
-      this.events.shift();
+    while (
+      this.pruneIndex < this.events.length &&
+      this.events[this.pruneIndex] &&
+      this.events[this.pruneIndex]!.iteration < minIteration
+    ) {
+      this.pruneIndex++;
+    }
+    // Only splice when dead prefix exceeds half the array to amortize cost
+    if (this.pruneIndex > 0 && this.pruneIndex > this.events.length / 2) {
+      this.events.splice(0, this.pruneIndex);
+      this.pruneIndex = 0;
     }
   }
 

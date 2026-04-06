@@ -1,4 +1,5 @@
 import type { AgentState } from "../agent-state.js";
+import { sanitizePromptInjection } from "../orchestrator-text-utils.js";
 import type { TaskClassification } from "../../agent-core/routing/routing-types.js";
 import type { LogEntry } from "../../utils/logger.js";
 import type {
@@ -21,7 +22,9 @@ export type VerifierName =
   | "targeted-repro"
   | "conformance"
   | "logs"
-  | "completion-review";
+  | "completion-review"
+  | "unity-console"
+  | "same-error-repeat";
 
 export type VerifierCheckStatus = "clean" | "issues" | "not_applicable";
 export type VerifierPipelineDecision = "approve" | "continue" | "replan";
@@ -37,6 +40,8 @@ export interface VerifierPipelineEvidence extends CompletionReviewEvidence {
   readonly task: TaskClassification;
   readonly hasTerminalFailureReport: boolean;
   readonly conformanceRequired: boolean;
+  readonly consecutiveSameErrors: number;
+  readonly repeatedErrorSignature: string | null;
 }
 
 export interface VerifierPipelinePlan {
@@ -104,6 +109,16 @@ export function planVerifierPipeline(params: {
   }
 
   checks.push(buildLogVerifierCheck(evidence));
+
+  const unityCheck = buildUnityConsoleVerifierCheck(params.verificationState);
+  if (unityCheck) {
+    checks.push(unityCheck);
+  }
+
+  const sameErrorCheck = buildSameErrorVerifierCheck(evidence);
+  if (sameErrorCheck) {
+    checks.push(sameErrorCheck);
+  }
 
   const gatingChecks = checks.filter((check) => check.gate);
   if (gatingChecks.length > 0) {
@@ -231,6 +246,32 @@ export function collectVerifierPipelineEvidence(params: {
   draft: string;
   conformanceGate: string | null;
 }): VerifierPipelineEvidence {
+  // Detect consecutive same errors
+  const recentFailureSteps = params.state.stepResults
+    .filter(s => !s.success)
+    .slice(-5);
+
+  let consecutiveSameErrors = 0;
+  let repeatedErrorSignature: string | null = null;
+
+  if (recentFailureSteps.length >= 2) {
+    const signatures = recentFailureSteps.map(
+      s => `${s.toolName}:${s.summary.slice(0, 80).toLowerCase().replace(/\s+/g, " ")}`,
+    );
+    const lastSig = signatures[signatures.length - 1]!;
+    consecutiveSameErrors = 1;
+    for (let i = signatures.length - 2; i >= 0; i--) {
+      if (signatures[i] === lastSig) {
+        consecutiveSameErrors++;
+      } else {
+        break;
+      }
+    }
+    if (consecutiveSameErrors >= 2) {
+      repeatedErrorSignature = lastSig;
+    }
+  }
+
   return {
     ...collectCompletionReviewEvidence({
       state: params.state,
@@ -242,6 +283,8 @@ export function collectVerifierPipelineEvidence(params: {
     task: params.task,
     hasTerminalFailureReport: isTerminalFailureReport(params.draft),
     conformanceRequired: Boolean(params.conformanceGate),
+    consecutiveSameErrors,
+    repeatedErrorSignature,
   };
 }
 
@@ -435,4 +478,57 @@ function buildVerifierPipelineGate(
     logLines.length > 0 ? `Recent log issues:\n${logLines.join("\n")}` : "",
     tail,
   ].filter(Boolean).join("\n\n");
+}
+
+function buildUnityConsoleVerifierCheck(
+  verificationState: VerificationState,
+): VerifierCheck | null {
+  const errors = verificationState.unityConsoleErrors ?? [];
+  const attempts = verificationState.unityErrorResolutionAttempts ?? 0;
+
+  if (errors.length === 0) {
+    return null;
+  }
+
+  const errorList = errors.slice(0, 5).map(e => `  ✗ ${e}`).join("\n");
+  return {
+    name: "unity-console" as VerifierName,
+    status: "issues",
+    summary: `${errors.length} Unity console error(s) remain after ${attempts} attempt(s).`,
+    gate: [
+      `[UNITY CONSOLE ERROR LOOP - Attempt ${attempts}]`,
+      `Unity console still reports ${errors.length} error(s):`,
+      errorList,
+      errors.length > 5 ? `  ... and ${errors.length - 5} more` : "",
+      "",
+      "You MUST fix these errors before completion. Analyze each error, apply fixes, and run unity_verify_change again.",
+      "Do NOT declare DONE or skip this — the task is incomplete until Unity console is clean.",
+    ].filter(Boolean).join("\n"),
+  };
+}
+
+const SAME_ERROR_REPEAT_THRESHOLD = 3;
+
+function buildSameErrorVerifierCheck(
+  evidence: VerifierPipelineEvidence,
+): VerifierCheck | null {
+  if (evidence.consecutiveSameErrors < SAME_ERROR_REPEAT_THRESHOLD) {
+    return null;
+  }
+
+  return {
+    name: "same-error-repeat" as VerifierName,
+    status: "issues",
+    summary: `Same error repeated ${evidence.consecutiveSameErrors} times — current approach is not working.`,
+    gate: [
+      `[REPEATED ERROR DETECTED] The same error has occurred ${evidence.consecutiveSameErrors} consecutive times.`,
+      evidence.repeatedErrorSignature ? `Error pattern: ${sanitizePromptInjection(evidence.repeatedErrorSignature)}` : "",
+      "",
+      "Your current approach is NOT working. You MUST try a fundamentally different strategy:",
+      "1. Re-read the relevant source files to check your assumptions",
+      "2. Consider a completely different implementation approach",
+      "3. If the same fix keeps failing, the root cause is different from what you think",
+      "4. Do NOT retry the same fix again — it will fail for the same reason",
+    ].filter(Boolean).join("\n"),
+  };
 }

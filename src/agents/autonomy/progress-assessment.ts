@@ -22,6 +22,7 @@ export interface BehavioralSnapshot {
   readonly touchedFileCount: number;
   readonly hasActivePlan: boolean;
   readonly lastToolName: string | null;
+  readonly errorVelocity: "decreasing" | "stable" | "increasing" | "unknown";
   readonly timeSinceLastMutationMs: number;
   readonly draftExcerpt: string;
 }
@@ -84,6 +85,25 @@ export function buildBehavioralSnapshot(params: BuildBehavioralSnapshotParams): 
     ? now - lastMutationTs
     : now - params.taskStartedAtMs;
 
+  // Calculate error velocity from recent step results
+  const VELOCITY_WINDOW = 9;
+  const VELOCITY_MIN_SAMPLES = 6;
+  let errorVelocity: "decreasing" | "stable" | "increasing" | "unknown" = "unknown";
+  const recentStepsForVelocity = state.stepResults.slice(-VELOCITY_WINDOW);
+  if (recentStepsForVelocity.length >= VELOCITY_MIN_SAMPLES) {
+    const midpoint = Math.floor(recentStepsForVelocity.length / 2);
+    const firstHalfErrors = recentStepsForVelocity.slice(0, midpoint).filter(s => !s.success).length;
+    const secondHalfErrors = recentStepsForVelocity.slice(midpoint).filter(s => !s.success).length;
+
+    if (secondHalfErrors < firstHalfErrors) {
+      errorVelocity = "decreasing";
+    } else if (secondHalfErrors > firstHalfErrors) {
+      errorVelocity = "increasing";
+    } else {
+      errorVelocity = "stable";
+    }
+  }
+
   return {
     prompt: sanitizeSecrets(params.prompt.slice(0, 200)),
     promptTargets: extractPromptTargets(params.prompt),
@@ -99,6 +119,7 @@ export function buildBehavioralSnapshot(params: BuildBehavioralSnapshotParams): 
     touchedFileCount: params.touchedFileCount,
     hasActivePlan: state.plan !== null,
     lastToolName: state.stepResults.at(-1)?.toolName ?? null,
+    errorVelocity,
     timeSinceLastMutationMs,
     draftExcerpt: params.draftExcerpt.slice(0, 200),
   };
@@ -122,6 +143,7 @@ Given a behavioral snapshot of an executing agent, determine whether it is makin
 
 CRITICAL: An agent that has never used a single tool and has 3+ consecutive text-only gates is STUCK, not "in an early exploration phase". Exploration requires tool calls (file_read, grep_search, etc).
 CRITICAL: An agent that has 8+ inspection steps (file_read, grep_search) but ZERO mutation steps (file_write, file_edit, bash) is STUCK in a read-only analysis loop. It must transition to action.
+CRITICAL: If errorVelocity is "increasing" — errors are getting worse, not better. This is a strong signal the agent should REPLAN rather than continue the failing approach.
 
 If the user goal contains a concrete file name, directory, path fragment, or other explicit target, preserve that target in your directive. Do NOT invent a different absolute OS path unless the user explicitly asked for that path.
 
@@ -141,6 +163,7 @@ export function buildProgressAssessmentRequest(snapshot: BehavioralSnapshot): st
     `Consecutive text-only gates: ${snapshot.consecutiveTextOnlyGates}`,
     `Reflections: ${snapshot.reflectionCount}, Failed approaches: ${snapshot.failedApproachCount}`,
     `Files touched: ${snapshot.touchedFileCount}`,
+    `Error velocity: ${snapshot.errorVelocity}`,
     `Has plan: ${snapshot.hasActivePlan}`,
     `Last tool: ${snapshot.lastToolName ?? "none"}`,
     `Time since last mutation: ${snapshot.timeSinceLastMutationMs}ms`,

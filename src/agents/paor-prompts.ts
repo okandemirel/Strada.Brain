@@ -138,6 +138,18 @@ export function buildReflectionPrompt(
     lines.push("");
   }
 
+  // Meta-cognitive checkpoint for deeper reasoning
+  lines.push(
+    "### Meta-Cognitive Checkpoint",
+    "",
+    "Before deciding, briefly answer these internal checks (1 sentence each):",
+    "1. **Assumptions**: What assumption am I making about the current approach?",
+    "2. **Confidence**: On a scale of 1-10, how confident am I that the current approach will work?",
+    "3. **Fallback**: If this approach fails, what fundamentally different strategy could I try?",
+    "4. **Error velocity**: Are errors decreasing (progress) or increasing/unchanged (stuck)?",
+    "",
+  );
+
   lines.push(
     "**Key insight from this iteration (one sentence):** What is the most important thing you learned?",
     "",

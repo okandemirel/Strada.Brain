@@ -5,6 +5,7 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { sanitizePromptInjection } from "../../agents/orchestrator-text-utils.js";
 import { LearningStorage } from "../storage/learning-storage.js";
 import { ConfidenceScorer, getVerdictScore } from "../scoring/confidence-scorer.js";
 import { PatternMatcher } from "../matching/pattern-matcher.js";
@@ -84,9 +85,20 @@ export class LearningPipeline {
   private periodicTimer?: ReturnType<typeof setInterval>;
   private isRunning = false;
 
+  private static readonly RESOLUTION_LINK_WINDOW_MS = 5 * 60 * 1000;
+  private static readonly STALE_RESOLUTION_THRESHOLD_MS = 10 * 60 * 1000;
+
   private recentObservations: Array<{
     toolName: string; errorPattern?: string; timestamp: number;
   }> = [];
+
+  /** Tracks pending error resolutions: toolName → error observation data */
+  private pendingResolutions = new Map<string, {
+    errorObservation: Observation;
+    toolName: string;
+    errorOutput: string;
+    timestamp: number;
+  }>();
 
   /** Project path for scope-aware instinct creation (Phase 13) */
   private projectPath?: string;
@@ -255,13 +267,36 @@ export class LearningPipeline {
 
     // 2. Persist and process in-memory (skip getUnprocessedObservations read-back)
     this.storage.recordObservation(observation);
-    this.storage.flush();
+
+    // Track error→resolution chains
+    if (!event.success) {
+      // Record this as a pending error
+      this.pendingResolutions.set(event.toolName, {
+        errorObservation: observation,
+        toolName: event.toolName,
+        errorOutput: event.output,
+        timestamp: Date.now(),
+      });
+    } else if (this.pendingResolutions.has(event.toolName)) {
+      // Same tool succeeded after a previous failure — auto-record resolution
+      const pending = this.pendingResolutions.get(event.toolName)!;
+      this.pendingResolutions.delete(event.toolName);
+
+      // Only link if the resolution happened within 5 minutes of the error
+      const elapsed = Date.now() - pending.timestamp;
+      if (elapsed < LearningPipeline.RESOLUTION_LINK_WINDOW_MS) {
+        await this.recordAutoResolution(pending.errorObservation, observation, event.toolName);
+      }
+    }
 
     if (!event.success && event.errorDetails) {
       this.recordErrorPattern(event.errorDetails as ErrorDetails, event.toolName);
     }
 
     await this.processObservation(observation);
+    // Ensure the observation is flushed to DB before marking it processed,
+    // since markObservationsProcessed runs a direct SQL UPDATE.
+    this.storage.flush();
     this.storage.markObservationsProcessed([observation.id]);
 
     // 3. Update confidence for relevant instincts
@@ -764,6 +799,14 @@ export class LearningPipeline {
   // ─── Periodic Trajectory Extraction ─────────────────────────────────────────
 
   private async runPeriodicExtraction(): Promise<void> {
+    // Clean stale pending resolutions (older than 10 minutes)
+    const staleThreshold = Date.now() - LearningPipeline.STALE_RESOLUTION_THRESHOLD_MS;
+    for (const [key, pending] of this.pendingResolutions) {
+      if (pending.timestamp < staleThreshold) {
+        this.pendingResolutions.delete(key);
+      }
+    }
+
     const unprocessed = this.storage.getUnprocessedTrajectories();
     for (const trajectory of unprocessed) {
       // extractInstinctFromTrajectory -> considerInstinctCreation already persists
@@ -881,6 +924,45 @@ export class LearningPipeline {
       /error|Error|failed|Exception/i.test(l)
     );
     return relevantLines.join(" ").slice(0, 500);
+  }
+
+  /**
+   * Automatically record a resolution when a tool succeeds after a prior failure.
+   * Creates a correction observation and considers instinct creation from the pattern.
+   */
+  private async recordAutoResolution(
+    errorObs: Observation,
+    successObs: Observation,
+    toolName: string,
+  ): Promise<void> {
+    const correction = `Auto-resolved: ${toolName} failed with "${(errorObs.output ?? '').slice(0, 100)}" then succeeded with "${(successObs.output ?? '').slice(0, 100)}"`;
+
+    const resolutionObs: Observation = {
+      id: `obs_${randomUUID()}` as ObservationId,
+      type: "correction",
+      sessionId: successObs.sessionId,
+      toolName: successObs.toolName,
+      input: successObs.input,
+      output: successObs.output,
+      correction,
+      timestamp: Date.now() as TimestampMs,
+      processed: false,
+    };
+
+    this.storage.recordObservation(resolutionObs);
+    this.storage.flush();
+
+    // Consider creating an instinct from this error→resolution pattern
+    const errorPattern = this.extractTriggerPattern(errorObs.output ?? '');
+    if (errorPattern) {
+      const rawAction = String((successObs.input as Record<string, unknown>)?.["command"] ?? (successObs.input as Record<string, unknown>)?.["content"] ?? "retrying with corrected input");
+      await this.considerInstinctCreation({
+        type: "error_fix" as InstinctType,
+        triggerPattern: errorPattern,
+        action: `When ${toolName} fails with this pattern, the resolution involved: ${sanitizePromptInjection(rawAction.slice(0, 300))}`,
+        toolName,
+      });
+    }
   }
 
   private sanitizePattern(message: string): string {

@@ -347,8 +347,21 @@ export async function buildContextLayers(
     contentHashes.push(...taskExecutionLayer.contentHashes);
   }
 
+  // Layers 3 + 7 run in parallel: Project/World Memory and Semantic Memory are independent
+  const [projectWorldLayer, semanticMemoryResult] = await Promise.all([
+    buildProjectWorldMemoryLayer(ctx),
+    (ctx.memoryManager && userMessage)
+      ? ctx.memoryManager.retrieve({
+          mode: "semantic",
+          query: userMessage,
+          limit: 5,
+          minScore: 0.15,
+          embedding: preComputedEmbedding,
+        } as import("../memory/memory.interface.js").SemanticRetrievalOptions).catch(() => null)
+      : Promise.resolve(null),
+  ]);
+
   // Layer 3: Project / World Memory
-  const projectWorldLayer = await buildProjectWorldMemoryLayer(ctx);
   if (projectWorldLayer) {
     layers.push(projectWorldLayer.content);
     contentHashes.push(...projectWorldLayer.contentHashes);
@@ -356,7 +369,7 @@ export async function buildContextLayers(
     projectWorldFingerprint = projectWorldLayer.fingerprint;
   }
 
-  // Layer 4: Runtime self-improvement artifacts
+  // Layer 4: Runtime self-improvement artifacts (depends on layer 3's fingerprint)
   const runtimeArtifactLayer = buildRuntimeArtifactMemoryLayer(
     ctx,
     userMessage,
@@ -371,7 +384,7 @@ export async function buildContextLayers(
     contentHashes.push(...runtimeArtifactLayer.contentHashes);
   }
 
-  // Layer 5: Cross-session execution replay
+  // Layer 5: Cross-session execution replay (depends on layer 3's fingerprint)
   const trajectoryReplayLayer = buildTrajectoryReplayMemoryLayer(
     ctx,
     userMessage,
@@ -400,28 +413,15 @@ export async function buildContextLayers(
     }
   }
 
-  // Layer 7: Semantic Memory (real embedding search)
-  if (ctx.memoryManager && userMessage) {
-    try {
-      const memoriesResult = await ctx.memoryManager.retrieve({
-        mode: "semantic",
-        query: userMessage,
-        limit: 5,
-        minScore: 0.15,
-        embedding: preComputedEmbedding,
-      } as import("../memory/memory.interface.js").SemanticRetrievalOptions);
-      if (isOk(memoriesResult)) {
-        const memories = memoriesResult.value;
-        if (memories.length > 0) {
-          const memoryContext = memories.map((m) => sanitizePromptInjection(m.entry.content)).join("\n---\n");
-          layers.push(`## Relevant Memory\n${memoryContext}`);
-          for (const m of memories) {
-            contentHashes.push(m.entry.content);
-          }
-        }
+  // Layer 7: Semantic Memory (result from parallel fetch above)
+  if (semanticMemoryResult && isOk(semanticMemoryResult)) {
+    const memories = semanticMemoryResult.value;
+    if (memories.length > 0) {
+      const memoryContext = memories.map((m) => sanitizePromptInjection(m.entry.content)).join("\n---\n");
+      layers.push(`## Relevant Memory\n${memoryContext}`);
+      for (const m of memories) {
+        contentHashes.push(m.entry.content);
       }
-    } catch {
-      // Memory retrieval failure is non-fatal
     }
   }
 

@@ -17,6 +17,7 @@
  */
 
 import type { ToolResult } from "../providers/provider.interface.js";
+import { sanitizePromptInjection } from "../orchestrator-text-utils.js";
 import type { ErrorLearningHooks } from "../../learning/index.js";
 import type { 
   ErrorCategory as LearningErrorCategory,
@@ -69,6 +70,15 @@ export interface ErrorRecoveryConfig {
   enableLearning?: boolean;
   /** Session ID for learning correlation */
   sessionId?: string;
+}
+
+interface CachedResolution {
+  errorPattern: string;
+  errorCategory: ErrorCategory;
+  resolution: string;
+  toolName: string;
+  timestamp: number;
+  successCount: number;
 }
 
 // ─── O(1) Lookup Tables ─────────────────────────────────────────────────────────
@@ -183,6 +193,8 @@ const RUNTIME_PATTERNS: RegExp[] = [
 export class ErrorRecoveryEngine {
   private learningHooks: ErrorLearningHooks | null = null;
   private config: ErrorRecoveryConfig = {};
+  private recentResolutions: CachedResolution[] = [];
+  private static readonly MAX_CACHED_RESOLUTIONS = 50;
 
   /**
    * Enable learning integration
@@ -239,6 +251,18 @@ export class ErrorRecoveryEngine {
       resolutionTimeMs: params.resolutionTimeMs,
       attempts: params.attempts,
     });
+
+    // Cache successful resolutions for pattern matching
+    if (params.success) {
+      this.cacheResolution({
+        errorPattern: this.extractErrorSignature(params.errorOutput),
+        errorCategory: this.detectCategory(params.errorOutput),
+        resolution: params.action,
+        toolName: params.toolName,
+        timestamp: Date.now(),
+        successCount: 1,
+      });
+    }
   }
 
   /**
@@ -280,6 +304,14 @@ export class ErrorRecoveryEngine {
       analysis.learnedSolutions = learnedSolutions ?? "";
       if (learnedSolutions) {
         analysis.recoveryInjection += "\n" + learnedSolutions;
+      }
+    }
+
+    // Look up similar past resolutions from pattern memory
+    if (analysis) {
+      const patternMemorySuggestions = this.lookupSimilarResolutions(toolName, result.content);
+      if (patternMemorySuggestions) {
+        analysis.recoveryInjection += patternMemorySuggestions;
       }
     }
 
@@ -465,5 +497,78 @@ export class ErrorRecoveryEngine {
     }
 
     return errors;
+  }
+
+  // ─── Pattern Memory ──────────────────────────────────────────────────────────
+
+  /**
+   * Cache a successful resolution for future pattern matching.
+   * Deduplicates by error pattern signature and increments success count.
+   */
+  private cacheResolution(entry: CachedResolution): void {
+    const existing = this.recentResolutions.find(
+      r => r.errorPattern === entry.errorPattern && r.toolName === entry.toolName,
+    );
+    if (existing) {
+      existing.successCount++;
+      existing.resolution = entry.resolution;
+      return;
+    }
+
+    this.recentResolutions.push(entry);
+    if (this.recentResolutions.length > ErrorRecoveryEngine.MAX_CACHED_RESOLUTIONS) {
+      this.recentResolutions.shift();
+    }
+  }
+
+  /**
+   * Look up similar past resolutions for the given error output.
+   */
+  private lookupSimilarResolutions(toolName: string, errorOutput: string): string {
+    const errorSig = this.extractErrorSignature(errorOutput);
+    const errorCat = this.detectCategory(errorOutput);
+
+    const matches = this.recentResolutions.filter(r =>
+      (r.errorPattern === errorSig && r.toolName === toolName) ||
+      (r.errorCategory === errorCat && r.toolName === toolName),
+    );
+
+    if (matches.length === 0) return "";
+
+    matches.sort((a, b) => b.successCount - a.successCount);
+    const suggestions = matches.slice(0, 3).map(
+      m => `  - [${m.successCount}x successful] ${sanitizePromptInjection(m.resolution.slice(0, 200))}`,
+    );
+
+    return [
+      "\n[PATTERN MEMORY] Previously successful resolutions for similar errors:",
+      ...suggestions,
+    ].join("\n");
+  }
+
+  /**
+   * Extract a normalized error signature for matching.
+   * Strips line numbers and file paths to match error patterns across files.
+   */
+  private extractErrorSignature(errorOutput: string): string {
+    const codes = errorOutput.match(/\b(?:CS|MSB|NU)\d{4}\b/g);
+    if (codes && codes.length > 0) {
+      return [...new Set(codes)].sort().join("+");
+    }
+    const firstError = errorOutput.match(/error[:\s]+(.{10,80})/i);
+    return firstError ? firstError[1]!.trim().toLowerCase().replace(/\s+/g, " ").slice(0, 80) : "unknown";
+  }
+
+  /**
+   * Detect error category from raw output (for pattern matching).
+   */
+  private detectCategory(errorOutput: string): ErrorCategory {
+    const codeMatch = errorOutput.match(/\b(CS\d{4}|MSB\d{4}|NU\d{4})\b/);
+    if (codeMatch) {
+      return CODE_CATEGORY.get(codeMatch[1]!) ?? categorizeByPrefix(codeMatch[1]!);
+    }
+    if (/test.*fail|assert/i.test(errorOutput)) return "test_failure";
+    if (/exception|panic|fatal/i.test(errorOutput)) return "runtime";
+    return "unknown";
   }
 }

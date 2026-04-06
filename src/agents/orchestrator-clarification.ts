@@ -172,6 +172,8 @@ export function buildSafeVisibleFallbackFromDraft(
         hasCompilableChanges: false,
         lastBuildOk: null,
         lastVerificationAt: null,
+        unityConsoleErrors: [],
+        unityErrorResolutionAttempts: 0,
       },
     },
   });
