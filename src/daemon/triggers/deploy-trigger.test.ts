@@ -351,5 +351,65 @@ describe("DeployTrigger", () => {
       // After updating cache, shouldFire should return true
       expect(trigger.shouldFire(new Date())).toBe(true);
     });
+
+    it("caches not-ready result so shouldFire returns false", async () => {
+      vi.mocked(readinessChecker.checkReadiness).mockResolvedValueOnce(
+        createReadyResult({ ready: false }),
+      );
+
+      await trigger.triggerReadinessCheck();
+
+      expect(trigger.shouldFire(new Date())).toBe(false);
+    });
+  });
+
+  describe("setCachedReadiness", () => {
+    it("toggles shouldFire based on readiness", () => {
+      trigger.setCachedReadiness(createReadyResult({ ready: true }));
+      expect(trigger.shouldFire(new Date())).toBe(true);
+
+      trigger.setCachedReadiness(createReadyResult({ ready: false }));
+      expect(trigger.shouldFire(new Date())).toBe(false);
+    });
+  });
+
+  describe("shouldFire — proposal expiry cleanup", () => {
+    it("clears pending flag and allows fire when approval expired from queue", () => {
+      trigger.setCachedReadiness(createReadyResult());
+
+      // Fire to set proposalPending
+      trigger.onFired(new Date());
+
+      // Empty queue = proposal expired
+      vi.mocked(approvalQueue.getPending).mockReturnValue([]);
+
+      expect(trigger.shouldFire(new Date())).toBe(true);
+    });
+  });
+
+  describe("onFired — defaults for missing readiness", () => {
+    it("defaults payload fields when cachedReadiness is null", () => {
+      // Do not set cached readiness
+      trigger.onFired(new Date());
+
+      expect(approvalQueue.enqueue).toHaveBeenCalledWith(
+        "deployment",
+        expect.objectContaining({
+          testPassed: false,
+          gitClean: false,
+          branchMatch: false,
+          readinessTimestamp: 0,
+        }),
+        "deploy-readiness",
+      );
+    });
+  });
+
+  describe("onApprovalDecided — executor not called on denial", () => {
+    it("does not invoke executor.execute on denial", async () => {
+      await trigger.onApprovalDecided("denied", "proposal-x", "reviewer");
+
+      expect(executor.execute).not.toHaveBeenCalled();
+    });
   });
 });

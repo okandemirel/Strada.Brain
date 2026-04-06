@@ -324,5 +324,235 @@ describe("NotificationRouter", () => {
       expect(history).toHaveLength(1);
       expect(history[0].title).toBe("Test");
     });
+
+    it("filters by urgency level when provided", async () => {
+      const router = createRouter();
+      const now = Date.now();
+
+      // Send different urgency notifications with enough spread to avoid rate limiting
+      await router.notify({
+        level: "medium",
+        title: "Medium 1",
+        message: "msg",
+        timestamp: now,
+      });
+      await router.notify({
+        level: "high",
+        title: "High 1",
+        message: "msg",
+        timestamp: now + 1,
+      });
+
+      const highOnly = router.getHistory(10, "high");
+      expect(highOnly.every((h) => h.urgency === "high")).toBe(true);
+    });
+  });
+
+  describe("high urgency routing to chat", () => {
+    it("sends markdown to chat channel for high urgency", async () => {
+      const router = createRouter();
+      await router.notify({
+        level: "high",
+        title: "Budget exceeded",
+        message: "Budget exhausted: $15.00 / $10.00",
+        actionHint: "Run: strada daemon budget reset",
+        timestamp: Date.now(),
+      });
+
+      expect(mockSender.sendMarkdown).toHaveBeenCalledWith(
+        "test-chat",
+        expect.stringContaining("Budget exceeded"),
+      );
+    });
+
+    it("formats notification with action hint", async () => {
+      const router = createRouter();
+      await router.notify({
+        level: "high",
+        title: "Alert",
+        message: "Something happened",
+        actionHint: "Do something",
+        timestamp: Date.now(),
+      });
+
+      const markdown = (mockSender.sendMarkdown as ReturnType<typeof vi.fn>).mock.calls[0][1];
+      expect(markdown).toContain("[HIGH]");
+      expect(markdown).toContain("Alert");
+      expect(markdown).toContain("> Do something");
+    });
+  });
+
+  describe("notification without channel sender", () => {
+    it("works when no channelSender is provided", async () => {
+      const router = new NotificationRouter({
+        config: defaultNotifConfig,
+        quietHoursConfig: defaultQuietConfig,
+        eventBus,
+        storage,
+        // No channelSender
+      });
+
+      await router.notify({
+        level: "high",
+        title: "No sender",
+        message: "Should not crash",
+        timestamp: Date.now(),
+      });
+
+      const history = storage.getNotificationHistory(10);
+      expect(history).toHaveLength(1);
+    });
+  });
+
+  describe("event emission", () => {
+    it("emits daemon:notification_routed after delivery", async () => {
+      const routedEvents: unknown[] = [];
+      eventBus.on("daemon:notification_routed", (e) => routedEvents.push(e));
+
+      const router = createRouter();
+      await router.notify({
+        level: "medium",
+        title: "Test event",
+        message: "Check emission",
+        timestamp: Date.now(),
+      });
+
+      expect(routedEvents).toHaveLength(1);
+      expect(routedEvents[0]).toEqual(
+        expect.objectContaining({
+          urgency: "medium",
+          title: "Test event",
+          buffered: false,
+        }),
+      );
+    });
+
+    it("emits buffered=true when notification is buffered during quiet hours", async () => {
+      const routedEvents: unknown[] = [];
+      eventBus.on("daemon:notification_routed", (e) => routedEvents.push(e));
+
+      const router = createRouter({
+        quietConfig: {
+          enabled: true,
+          startHour: 0,
+          endHour: 23,
+        },
+      });
+
+      await router.notify({
+        level: "medium",
+        title: "Quiet notification",
+        message: "buffered",
+        timestamp: Date.now(),
+      });
+
+      expect(routedEvents).toHaveLength(1);
+      expect(routedEvents[0]).toEqual(
+        expect.objectContaining({
+          buffered: true,
+        }),
+      );
+    });
+  });
+
+  describe("grouping window expiry", () => {
+    it("groups rapid-fire same-source events within the window", async () => {
+      const router = createRouter({ config: { groupingWindowMs: 5000 } });
+      const now = Date.now();
+
+      // First notification starts the group window
+      await router.notify({
+        level: "medium",
+        title: "Trigger fired",
+        message: "First",
+        sourceEvent: "daemon:trigger_fired",
+        timestamp: now,
+      });
+
+      // Two more within window (grouped -- not delivered)
+      await router.notify({
+        level: "medium",
+        title: "Trigger fired",
+        message: "Second",
+        sourceEvent: "daemon:trigger_fired",
+        timestamp: now + 100,
+      });
+      await router.notify({
+        level: "medium",
+        title: "Trigger fired",
+        message: "Third",
+        sourceEvent: "daemon:trigger_fired",
+        timestamp: now + 200,
+      });
+
+      const history = storage.getNotificationHistory(10);
+      // Only the first notification should be in history (others grouped)
+      const triggerEntries = history.filter((h) => h.title.includes("Trigger fired"));
+      expect(triggerEntries.length).toBe(1);
+    });
+  });
+
+  describe("medium urgency rate limit", () => {
+    it("allows up to 5 medium notifications per minute", async () => {
+      const router = createRouter();
+      const now = Date.now();
+
+      for (let i = 0; i < 7; i++) {
+        await router.notify({
+          level: "medium",
+          title: `Medium ${i}`,
+          message: `Msg ${i}`,
+          timestamp: now + i,
+        });
+      }
+
+      const history = storage.getNotificationHistory(20, "medium");
+      // Should be capped at 5 per minute for medium
+      expect(history.length).toBeLessThanOrEqual(5);
+    });
+  });
+
+  describe("goal events auto-routing", () => {
+    it("auto-routes goal:failed as high urgency", async () => {
+      const router = createRouter();
+      router.start();
+
+      eventBus.emit("goal:failed", {
+        rootId: "goal-1",
+        error: "timeout",
+        failureCount: 3,
+        timestamp: Date.now(),
+      });
+
+      await new Promise((r) => setTimeout(r, 50));
+
+      const history = storage.getNotificationHistory(10);
+      expect(history.length).toBeGreaterThanOrEqual(1);
+      expect(history[0].urgency).toBe("high");
+
+      router.stop();
+    });
+
+    it("auto-routes goal:complete as low urgency", async () => {
+      const router = createRouter();
+      router.start();
+
+      eventBus.emit("goal:complete", {
+        rootId: "goal-2",
+        taskDescription: "Fix bug",
+        durationMs: 5000,
+        successCount: 1,
+        failureCount: 0,
+        timestamp: Date.now(),
+      });
+
+      await new Promise((r) => setTimeout(r, 50));
+
+      const history = storage.getNotificationHistory(10);
+      expect(history.length).toBeGreaterThanOrEqual(1);
+      expect(history[0].urgency).toBe("low");
+
+      router.stop();
+    });
   });
 });

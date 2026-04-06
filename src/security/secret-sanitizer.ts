@@ -273,10 +273,19 @@ export class SecretSanitizer {
 // ─── Convenience Functions ───────────────────────────────────────────────────
 
 let globalSanitizer: SecretSanitizer | null = null;
+let onSanitized: ((count: number) => void) | null = null;
 
 function getGlobalSanitizer(): SecretSanitizer {
   globalSanitizer ??= new SecretSanitizer();
   return globalSanitizer;
+}
+
+/**
+ * Register a callback invoked whenever sanitizeSecrets redacts secrets.
+ * Used by MetricsCollector to track sanitization events.
+ */
+export function setSanitizationCallback(cb: ((count: number) => void) | null): void {
+  onSanitized = cb;
 }
 
 export function sanitizeError(error: unknown): string {
@@ -286,9 +295,17 @@ export function sanitizeError(error: unknown): string {
 
 export function sanitizeSecrets(content: string, options?: SanitizeOptions): string {
   if (options) {
-    return new SecretSanitizer(options).sanitize(content).content;
+    const result = new SecretSanitizer(options).sanitize(content);
+    if (result.stats.totalMatches > 0) {
+      onSanitized?.(result.stats.totalMatches);
+    }
+    return result.content;
   }
-  return getGlobalSanitizer().sanitize(content).content;
+  const result = getGlobalSanitizer().sanitize(content);
+  if (result.stats.totalMatches > 0) {
+    onSanitized?.(result.stats.totalMatches);
+  }
+  return result.content;
 }
 
 export function hasSecrets(content: string): boolean {

@@ -15,6 +15,7 @@ import { AuthManager } from "../security/auth.js";
 import { configureAuthManager } from "../security/auth-hardened.js";
 import { Orchestrator } from "../agents/orchestrator.js";
 import { MetricsCollector } from "../dashboard/metrics.js";
+import { setSanitizationCallback } from "../security/secret-sanitizer.js";
 import { CachedEmbeddingProvider } from "../rag/embeddings/embedding-cache.js";
 import { RAGPipeline } from "../rag/rag-pipeline.js";
 import { FileVectorStore } from "../rag/vector-store.js";
@@ -527,6 +528,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   const toolRegistry = new ToolRegistry(config.pluginDirs);
 
   const metrics = new MetricsCollector();
+  setSanitizationCallback((count) => metrics.recordSecretSanitized(count));
   const { dashboard, stoppableServers, rateLimiter, metricsStorage, metricsRecorder } =
     await initializeOpsMonitoringStage(
       {

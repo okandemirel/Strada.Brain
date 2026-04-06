@@ -5695,6 +5695,7 @@ export class Orchestrator {
 
       const readOnlyCheck = checkReadOnlyBlock(activeToolCall.name, this.readOnly);
       if (!readOnlyCheck.allowed) {
+        this.metrics?.recordToolBlocked();
         results.push(createReadOnlyToolStub(activeToolCall.name, activeToolCall.id));
         continue;
       }
