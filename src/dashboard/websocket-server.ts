@@ -31,6 +31,8 @@ export interface WSClient extends WebSocket {
   clientId: string;
   lastPing: number;
   remoteIp: string;
+  /** Sliding window message timestamps for rate limiting */
+  msgTimestamps: number[];
 }
 
 export type CommandHandler = (command: string, payload: unknown) => Promise<unknown> | unknown;
@@ -51,6 +53,8 @@ export interface WebSocketDashboardServerOptions {
 const METRICS_INTERVAL_MS = 1_000;
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const HEARTBEAT_TIMEOUT_MS = 60_000;
+const WS_RATE_LIMIT_WINDOW_MS = 60_000;
+const WS_RATE_LIMIT_MAX_MESSAGES = 120;
 const DEFAULT_MAX_AUTH_ATTEMPTS = 5;
 const DEFAULT_AUTH_LOCKOUT_MS = 5 * 60 * 1_000;
 
@@ -233,19 +237,29 @@ export class WebSocketDashboardServer {
     client.clientId = clientId;
     client.lastPing = Date.now();
     client.remoteIp = req.socket.remoteAddress ?? "unknown";
+    client.msgTimestamps = [];
 
     this.clients.set(clientId, client);
     this.logger.info("WebSocket client connected", { clientId, ip: client.remoteIp });
 
     this.send(client, {
       type: "auth",
-      payload: { 
+      payload: {
         requiresAuth: true,
         message: "Please authenticate",
       }
     });
 
     client.on("message", (data: Buffer) => {
+      // Per-client rate limiting (sliding window)
+      const now = Date.now();
+      client.msgTimestamps = client.msgTimestamps.filter((t) => now - t < WS_RATE_LIMIT_WINDOW_MS);
+      if (client.msgTimestamps.length >= WS_RATE_LIMIT_MAX_MESSAGES) {
+        this.sendError(client, "Rate limit exceeded. Try again later.");
+        return;
+      }
+      client.msgTimestamps.push(now);
+
       try {
         this.handleMessage(client, JSON.parse(data.toString()) as WSMessage);
       } catch {
