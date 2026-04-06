@@ -55,6 +55,7 @@
   "chat.voiceMessage": "(mensaje de voz)",
   "chat.stop": "Detener",
   "chat.stopGeneration": "Detener generación",
+  "chat.loadEarlier": "Cargar {{count}} mensajes anteriores",
 
   "chat.empty.title": "Strada.Brain",
   "chat.empty.description": "Asistente de desarrollo Unity impulsado por IA. Envia un mensaje para comenzar.",

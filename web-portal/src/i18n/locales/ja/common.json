@@ -55,6 +55,7 @@
   "chat.voiceMessage": "(音声メッセージ)",
   "chat.stop": "停止",
   "chat.stopGeneration": "生成を停止",
+  "chat.loadEarlier": "{{count}} 件の以前のメッセージを読み込む",
 
   "chat.empty.title": "Strada.Brain",
   "chat.empty.description": "AI搭載のUnity開発アシスタント。メッセージを送信して始めましょう。",

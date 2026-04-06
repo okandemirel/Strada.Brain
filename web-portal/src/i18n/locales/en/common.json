@@ -55,6 +55,7 @@
   "chat.voiceMessage": "(voice message)",
   "chat.stop": "Stop",
   "chat.stopGeneration": "Stop generating",
+  "chat.loadEarlier": "Load {{count}} earlier messages",
 
   "chat.empty.title": "Strada.Brain",
   "chat.empty.description": "AI-powered Unity development assistant. Send a message to get started.",

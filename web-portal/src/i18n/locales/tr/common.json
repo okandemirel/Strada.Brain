@@ -55,6 +55,7 @@
   "chat.voiceMessage": "(sesli mesaj)",
   "chat.stop": "Durdur",
   "chat.stopGeneration": "Yanıt üretimini durdur",
+  "chat.loadEarlier": "{{count}} eski mesajı yükle",
 
   "chat.empty.title": "Strada.Brain",
   "chat.empty.description": "Yapay zeka destekli Unity geliştirme asistanı. Başlamak için bir mesaj gönderin.",

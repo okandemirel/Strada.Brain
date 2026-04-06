@@ -2,6 +2,9 @@ import { useRef, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useMonitorStore } from '../../stores/monitor-store'
 import { normalizeLabel } from './monitor-utils'
+import { useVirtualScroll } from '../../hooks/useVirtualScroll'
+
+const ACTIVITY_ITEM_HEIGHT = 80
 
 export default function ActivityFeed() {
   const { t } = useTranslation('monitor')
@@ -21,7 +24,7 @@ export default function ActivityFeed() {
       userScrolledUpRef.current = !atBottom
     }
 
-    container.addEventListener('scroll', handleScroll)
+    container.addEventListener('scroll', handleScroll, { passive: true })
     return () => container.removeEventListener('scroll', handleScroll)
   }, [])
 
@@ -30,6 +33,12 @@ export default function ActivityFeed() {
       bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
     }
   }, [activities.length])
+
+  const { startIndex, endIndex, totalHeight, offsetTop } = useVirtualScroll({
+    itemCount: activities.length,
+    itemHeight: ACTIVITY_ITEM_HEIGHT,
+    containerRef,
+  })
 
   if (activities.length === 0) {
     return (
@@ -43,6 +52,8 @@ export default function ActivityFeed() {
       </div>
     )
   }
+
+  const visibleActivities = activities.slice(startIndex, endIndex)
 
   return (
     <div ref={containerRef} className="flex h-full flex-col overflow-y-auto px-3 pb-3 pt-1 text-xs">
@@ -60,33 +71,38 @@ export default function ActivityFeed() {
         </span>
       </div>
 
-      <div className="relative ml-2 border-l border-white/8">
-        {activities.map((entry, index) => (
-          <div key={`${entry.timestamp}-${index}`} className="relative pl-5">
-            <span className="absolute -left-[5px] top-6 h-2.5 w-2.5 rounded-full border border-accent/30 bg-accent shadow-[0_0_10px_rgba(0,229,255,0.4)]" />
-            <div className="mb-2 rounded-2xl border border-white/8 bg-white/[0.03] px-3 py-3 shadow-[0_16px_34px_rgba(0,0,0,0.12)]">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-text-tertiary">
-                  {new Date(entry.timestamp).toLocaleTimeString()}
-                </span>
-                <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-text-secondary">
-                  {normalizeLabel(entry.action)}
-                </span>
-                {entry.tool && (
-                  <span className="rounded-full border border-accent/10 bg-accent/10 px-2 py-0.5 font-mono text-[10px] text-accent">
-                    {entry.tool}
-                  </span>
-                )}
-                {entry.taskId && (
-                  <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 font-mono text-[10px] text-text-secondary">
-                    {entry.taskId}
-                  </span>
-                )}
+      <div className="relative ml-2 border-l border-white/8" style={{ height: totalHeight }}>
+        <div style={{ transform: `translateY(${offsetTop}px)` }}>
+          {visibleActivities.map((entry, i) => {
+            const index = startIndex + i
+            return (
+              <div key={`${entry.timestamp}-${index}`} className="relative pl-5" style={{ height: ACTIVITY_ITEM_HEIGHT }}>
+                <span className="absolute -left-[5px] top-6 h-2.5 w-2.5 rounded-full border border-accent/30 bg-accent shadow-[0_0_10px_rgba(0,229,255,0.4)]" />
+                <div className="mb-2 rounded-2xl border border-white/8 bg-white/[0.03] px-3 py-3 shadow-[0_16px_34px_rgba(0,0,0,0.12)]">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-text-tertiary">
+                      {new Date(entry.timestamp).toLocaleTimeString()}
+                    </span>
+                    <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-text-secondary">
+                      {normalizeLabel(entry.action)}
+                    </span>
+                    {entry.tool && (
+                      <span className="rounded-full border border-accent/10 bg-accent/10 px-2 py-0.5 font-mono text-[10px] text-accent">
+                        {entry.tool}
+                      </span>
+                    )}
+                    {entry.taskId && (
+                      <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 font-mono text-[10px] text-text-secondary">
+                        {entry.taskId}
+                      </span>
+                    )}
+                  </div>
+                  <div className="mt-2 text-sm leading-5 text-text-secondary line-clamp-2">{entry.detail}</div>
+                </div>
               </div>
-              <div className="mt-2 text-sm leading-5 text-text-secondary">{entry.detail}</div>
-            </div>
-          </div>
-        ))}
+            )
+          })}
+        </div>
       </div>
 
       <div ref={bottomRef} />

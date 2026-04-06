@@ -55,6 +55,7 @@
   "chat.voiceMessage": "(Sprachnachricht)",
   "chat.stop": "Stopp",
   "chat.stopGeneration": "Generierung stoppen",
+  "chat.loadEarlier": "{{count}} fruhere Nachrichten laden",
 
   "chat.empty.title": "Strada.Brain",
   "chat.empty.description": "KI-gestützter Unity-Entwicklungsassistent. Sende eine Nachricht, um loszulegen.",

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useWS } from '../hooks/useWS'
 import ChatMessage from './ChatMessage'
@@ -19,6 +19,39 @@ export default function ChatView() {
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const messagesContainerRef = useRef<HTMLDivElement>(null)
   const userScrolledUpRef = useRef(false)
+
+  const VISIBLE_BATCH_SIZE = 50
+  const [visibleCount, setVisibleCount] = useState(VISIBLE_BATCH_SIZE)
+  const prevScrollHeightRef = useRef<number | null>(null)
+
+  const hasHiddenMessages = messages.length > visibleCount
+  const visibleMessages = useMemo(
+    () => hasHiddenMessages ? messages.slice(messages.length - visibleCount) : messages,
+    [messages, visibleCount, hasHiddenMessages],
+  )
+
+  const loadMore = useCallback(() => {
+    // Capture scroll height before React re-renders with more messages
+    prevScrollHeightRef.current = messagesContainerRef.current?.scrollHeight ?? null
+    setVisibleCount((prev) => Math.min(prev + VISIBLE_BATCH_SIZE, messages.length))
+  }, [messages.length])
+
+  // Preserve scroll position after DOM update from loading older messages
+  useLayoutEffect(() => {
+    const container = messagesContainerRef.current
+    const prevHeight = prevScrollHeightRef.current
+    if (container && prevHeight !== null) {
+      container.scrollTop += container.scrollHeight - prevHeight
+      prevScrollHeightRef.current = null
+    }
+  }, [visibleCount])
+
+  // Reset visible count when messages are cleared (new conversation)
+  useEffect(() => {
+    if (messages.length === 0) {
+      setVisibleCount(VISIBLE_BATCH_SIZE)
+    }
+  }, [messages.length])
 
   useEffect(() => {
     const container = messagesContainerRef.current
@@ -63,7 +96,15 @@ export default function ChatView() {
           </div>
         ) : (
           <div className="w-full max-w-prose mx-auto flex flex-col gap-3" aria-live="polite" aria-relevant="additions">
-            {messages.map((msg) => (
+            {hasHiddenMessages && (
+              <button
+                onClick={loadMore}
+                className="self-center rounded-lg border border-white/10 bg-white/5 px-4 py-2 text-xs text-text-secondary transition-colors hover:border-accent/30 hover:bg-accent/10 hover:text-accent"
+              >
+                {t('chat.loadEarlier', { count: messages.length - visibleCount })}
+              </button>
+            )}
+            {visibleMessages.map((msg) => (
               <ChatMessage
                 key={msg.id}
                 message={msg}
