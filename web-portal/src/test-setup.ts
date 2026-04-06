@@ -14,3 +14,27 @@ Object.defineProperty(window, 'IntersectionObserver', {
   configurable: true,
   value: MockIntersectionObserver,
 })
+
+// ResizeObserver is not available in jsdom — mock it for useVirtualScroll.
+// Immediately invoke the callback with a fake contentRect so virtual-scroll
+// hooks see a non-zero container height and render items.
+class MockResizeObserver {
+  private callback: ResizeObserverCallback
+  constructor(callback: ResizeObserverCallback) {
+    this.callback = callback
+  }
+  observe(target: Element) {
+    this.callback(
+      [{ target, contentRect: { height: 600, width: 400 } } as unknown as ResizeObserverEntry],
+      this,
+    )
+  }
+  unobserve() {}
+  disconnect() {}
+}
+
+Object.defineProperty(window, 'ResizeObserver', {
+  writable: true,
+  configurable: true,
+  value: MockResizeObserver,
+})
