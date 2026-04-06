@@ -46,13 +46,6 @@ export default function ChatView() {
     }
   }, [visibleCount])
 
-  // Reset visible count when messages are cleared (new conversation)
-  useEffect(() => {
-    if (messages.length === 0) {
-      setVisibleCount(VISIBLE_BATCH_SIZE)
-    }
-  }, [messages.length])
-
   useEffect(() => {
     const container = messagesContainerRef.current
     if (!container) return

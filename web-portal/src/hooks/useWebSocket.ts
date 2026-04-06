@@ -487,6 +487,7 @@ export function useWebSocket(): UseWebSocketReturn {
       }
     })
 
+    const pendingTimers = pendingMessageTimersRef.current
     return () => {
       unregisterLogout()
       mountedRef.current = false
@@ -497,10 +498,10 @@ export function useWebSocket(): UseWebSocketReturn {
       if (pendingReconnectTimerRef.current) {
         clearTimeout(pendingReconnectTimerRef.current)
       }
-      for (const timer of pendingMessageTimersRef.current.values()) {
+      for (const timer of pendingTimers.values()) {
         clearTimeout(timer)
       }
-      pendingMessageTimersRef.current.clear()
+      pendingTimers.clear()
       pendingOutboundMessagesRef.current = []
       if (wsRef.current) {
         wsRef.current.close()
