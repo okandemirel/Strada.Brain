@@ -350,7 +350,7 @@ export async function buildContextLayers(
   // Layers 3 + 7 run in parallel: Project/World Memory and Semantic Memory are independent
   const [projectWorldLayer, semanticMemoryResult] = await Promise.all([
     buildProjectWorldMemoryLayer(ctx),
-    (ctx.memoryManager && userMessage)
+    (ctx.memoryManager && typeof ctx.memoryManager.retrieve === "function" && userMessage)
       ? ctx.memoryManager.retrieve({
           mode: "semantic",
           query: userMessage,
