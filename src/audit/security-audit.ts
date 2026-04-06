@@ -619,11 +619,26 @@ export class AlertManager {
     }
   }
 
-  private async sendToSiem(event: SecurityEvent, alert: SecurityAlert): Promise<void> {
+  private sendToSiem(event: SecurityEvent, alert: SecurityAlert): void {
     if (!this.siemConfig?.enabled) return;
 
-    // Prepare SIEM payload (TODO: implement actual sending)
-    void {
+    const { endpoint, apiKey } = this.siemConfig;
+
+    // Validate endpoint URL
+    let parsedUrl: URL;
+    try {
+      parsedUrl = new URL(endpoint);
+    } catch {
+      this.logger.error("Invalid SIEM endpoint URL", { endpoint });
+      return;
+    }
+
+    if (parsedUrl.protocol !== "https:" && parsedUrl.protocol !== "http:") {
+      this.logger.error("SIEM endpoint must use http or https", { endpoint });
+      return;
+    }
+
+    const payload = {
       ...event,
       alert: {
         id: alert.id,
@@ -631,14 +646,45 @@ export class AlertManager {
         severity: alert.severity,
       },
       "@timestamp": new Date(event.timestamp).toISOString(),
+      _index: this.siemConfig.index,
+      _fields: this.siemConfig.fields,
     };
 
-    try {
-      this.logger.debug("Sending to SIEM", { eventId: event.id });
-      // In production: Send to SIEM endpoint
-    } catch (error) {
-      this.logger.error("Failed to send to SIEM", { eventId: event.id, error });
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+
+    if (apiKey) {
+      headers["Authorization"] = `Bearer ${apiKey}`;
     }
+
+    // Fire-and-forget: send asynchronously, log errors without crashing
+    this.logger.debug("Sending to SIEM", { eventId: event.id });
+
+    fetch(endpoint, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(5000),
+    })
+      .then((response) => {
+        if (!response.ok) {
+          this.logger.error("SIEM responded with error", {
+            eventId: event.id,
+            status: response.status,
+          });
+        } else {
+          this.logger.debug("SIEM event delivered", { eventId: event.id });
+        }
+      })
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        this.logger.error("Failed to send to SIEM", {
+          eventId: event.id,
+          error: message,
+        });
+      })
+      .catch(() => { /* swallow logger failures in fire-and-forget path */ });
   }
 
   private generateRuleId(): string {

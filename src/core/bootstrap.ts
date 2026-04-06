@@ -1140,6 +1140,12 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   taskWorkspaceBridge.start();
   stoppableServers.push(taskWorkspaceBridge);
 
+  // Resolve primary provider streaming capability for boot-time config warnings
+  const primaryProviderName = config.providerChain?.split(/[>,\s]+/).filter(Boolean)[0];
+  const primaryProviderStreaming = primaryProviderName
+    ? providerManager.getProviderCapabilities(primaryProviderName)?.streaming
+    : undefined;
+
   const bootReport = await finalizeChannelStartupStage({
     beforeChannelConnect,
     channel,
@@ -1153,6 +1159,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     alertingWired: false,
     backupWired: false,
     stradaMcpRuntime: toolRegistry.getStradaMcpRuntimeStatus(),
+    primaryProviderSupportsStreaming: primaryProviderStreaming,
     startupNotices,
     moduleUrl: import.meta.url,
   });

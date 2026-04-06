@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Config } from "../config/config.js";
-import { buildBootReport, buildCapabilitySnapshot, summarizeCapabilityHealth } from "./boot-report.js";
+import { buildBootReport, buildCapabilitySnapshot, collectConfigWarnings, summarizeCapabilityHealth } from "./boot-report.js";
 
 function makeConfig(overrides: Partial<Config> = {}): Config {
   return {
@@ -235,6 +235,136 @@ describe("boot report", () => {
 
     expect(report.stages.find((stage) => stage.id === "providers")).toMatchObject({
       status: "degraded",
+    });
+  });
+
+  describe("collectConfigWarnings", () => {
+    it("warns when streaming is enabled but primary provider does not support it", () => {
+      const warnings = collectConfigWarnings({
+        config: makeConfig({ streamingEnabled: true }),
+        channelType: "web",
+        primaryProviderSupportsStreaming: false,
+      });
+
+      expect(warnings).toContain(
+        "Streaming enabled but primary provider may not support it — will fall back to non-streaming",
+      );
+    });
+
+    it("does not warn about streaming when provider supports it", () => {
+      const warnings = collectConfigWarnings({
+        config: makeConfig({ streamingEnabled: true }),
+        channelType: "web",
+        primaryProviderSupportsStreaming: true,
+      });
+
+      expect(warnings).not.toContain(
+        "Streaming enabled but primary provider may not support it — will fall back to non-streaming",
+      );
+    });
+
+    it("does not warn about streaming when streaming is disabled", () => {
+      const warnings = collectConfigWarnings({
+        config: makeConfig({ streamingEnabled: false }),
+        channelType: "web",
+        primaryProviderSupportsStreaming: false,
+      });
+
+      expect(warnings).not.toContain(
+        "Streaming enabled but primary provider may not support it — will fall back to non-streaming",
+      );
+    });
+
+    it("warns when RAG is enabled but using hash fallback embeddings", () => {
+      const warnings = collectConfigWarnings({
+        config: makeConfig({ rag: { enabled: true, provider: "auto", contextMaxTokens: 4000 } }),
+        channelType: "web",
+        embeddingStatus: {
+          state: "degraded",
+          verified: false,
+          usingHashFallback: true,
+        },
+      });
+
+      expect(warnings).toContain(
+        "RAG enabled but no embedding provider available — using hash fallback embeddings",
+      );
+    });
+
+    it("does not warn about RAG when embeddings are healthy", () => {
+      const warnings = collectConfigWarnings({
+        config: makeConfig({ rag: { enabled: true, provider: "auto", contextMaxTokens: 4000 } }),
+        channelType: "web",
+        embeddingStatus: {
+          state: "active",
+          verified: true,
+          usingHashFallback: false,
+        },
+      });
+
+      expect(warnings).not.toContain(
+        "RAG enabled but no embedding provider available — using hash fallback embeddings",
+      );
+    });
+
+    it("warns when memory is disabled", () => {
+      const warnings = collectConfigWarnings({
+        config: makeConfig({ memory: { enabled: false, dbPath: ".strada-memory", backend: "agentdb" } as Config["memory"] }),
+        channelType: "web",
+      });
+
+      expect(warnings).toContain(
+        "Memory is disabled — conversations will not be persisted across sessions",
+      );
+    });
+
+    it("does not warn when memory is enabled", () => {
+      const warnings = collectConfigWarnings({
+        config: makeConfig({ memory: { enabled: true, dbPath: ".strada-memory", backend: "agentdb" } as Config["memory"] }),
+        channelType: "web",
+      });
+
+      expect(warnings).not.toContain(
+        "Memory is disabled — conversations will not be persisted across sessions",
+      );
+    });
+
+    it("returns no warnings when config is well-matched", () => {
+      const warnings = collectConfigWarnings({
+        config: makeConfig({ memory: { enabled: true, dbPath: ".strada-memory", backend: "agentdb" } as Config["memory"] }),
+        channelType: "web",
+        primaryProviderSupportsStreaming: true,
+        embeddingStatus: {
+          state: "active",
+          verified: true,
+          usingHashFallback: false,
+        },
+      });
+
+      expect(warnings).toEqual([]);
+    });
+
+    it("includes config warnings in boot report startupNotices", () => {
+      const report = buildBootReport({
+        config: makeConfig({ streamingEnabled: true }),
+        installRoot: process.cwd(),
+        channelType: "web",
+        primaryProviderSupportsStreaming: false,
+        embeddingStatus: {
+          state: "degraded",
+          verified: false,
+          usingHashFallback: true,
+        },
+        startupNotices: ["Existing notice"],
+      });
+
+      expect(report.startupNotices).toContain("Existing notice");
+      expect(report.startupNotices).toContain(
+        "Streaming enabled but primary provider may not support it — will fall back to non-streaming",
+      );
+      expect(report.startupNotices).toContain(
+        "RAG enabled but no embedding provider available — using hash fallback embeddings",
+      );
     });
   });
 });

@@ -50,6 +50,7 @@ export interface CapabilitySnapshotOptions {
   alertingWired?: boolean;
   backupWired?: boolean;
   stradaMcpRuntime?: StradaMcpRuntimeStatusLike;
+  primaryProviderSupportsStreaming?: boolean;
 }
 
 export interface CapabilityHealthSummary {
@@ -458,6 +459,41 @@ function buildOperationsStage(capabilities: CapabilityDescriptor[]): BootStageRe
   };
 }
 
+export function collectConfigWarnings(
+  options: CapabilitySnapshotOptions,
+): string[] {
+  const warnings: string[] = [];
+
+  // Streaming enabled but primary provider may not support it
+  if (
+    options.config.streamingEnabled &&
+    options.primaryProviderSupportsStreaming === false
+  ) {
+    warnings.push(
+      "Streaming enabled but primary provider may not support it — will fall back to non-streaming",
+    );
+  }
+
+  // RAG enabled but no embedding provider available
+  if (
+    options.config.rag.enabled &&
+    options.embeddingStatus?.usingHashFallback === true
+  ) {
+    warnings.push(
+      "RAG enabled but no embedding provider available — using hash fallback embeddings",
+    );
+  }
+
+  // Memory is disabled
+  if (!options.config.memory.enabled) {
+    warnings.push(
+      "Memory is disabled — conversations will not be persisted across sessions",
+    );
+  }
+
+  return warnings;
+}
+
 export function buildBootReport(
   options: CapabilitySnapshotOptions & { startupNotices?: string[] },
 ): BootReport {
@@ -517,7 +553,10 @@ export function buildBootReport(
         "Fresh setup to first chat handoff",
       ],
     },
-    startupNotices: [...new Set((options.startupNotices ?? []).filter(Boolean))],
+    startupNotices: [...new Set([
+      ...(options.startupNotices ?? []),
+      ...collectConfigWarnings(options),
+    ].filter(Boolean))],
   };
 }
 

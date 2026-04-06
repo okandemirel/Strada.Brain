@@ -243,6 +243,7 @@ export async function finalizeChannelStartupStage(params: {
   alertingWired: boolean;
   backupWired: boolean;
   stradaMcpRuntime?: ReturnType<ToolRegistry["getStradaMcpRuntimeStatus"]>;
+  primaryProviderSupportsStreaming?: boolean;
   startupNotices: string[];
   moduleUrl: string;
 }): Promise<BootReport> {
@@ -265,6 +266,7 @@ export async function finalizeChannelStartupStage(params: {
     alertingWired: params.alertingWired,
     backupWired: params.backupWired,
     stradaMcpRuntime: params.stradaMcpRuntime ?? undefined,
+    primaryProviderSupportsStreaming: params.primaryProviderSupportsStreaming,
     startupNotices: params.startupNotices,
   });
 
