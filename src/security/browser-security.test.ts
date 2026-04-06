@@ -180,6 +180,174 @@ describe("BrowserSecurity", () => {
       const result = validateUrlWithConfig("https://example.com/admin", config);
       expect(result.valid).toBe(false);
     });
+
+    // --- Additional edge cases ---
+
+    it("should block .localhost subdomains", () => {
+      const result = validateUrlWithConfig("http://evil.localhost:8080");
+      expect(result.valid).toBe(false);
+      expect(result.reason).toContain("Localhost");
+    });
+
+    it("should block .local suffix", () => {
+      const result = validateUrlWithConfig("http://myapp.local/api");
+      expect(result.valid).toBe(false);
+      expect(result.reason).toContain("Localhost");
+    });
+
+    it("should block link-local IP 169.254.x.x", () => {
+      const result = validateUrlWithConfig("http://169.254.1.1/metadata");
+      expect(result.valid).toBe(false);
+      expect(result.reason).toContain("Private IP");
+    });
+
+    it("should block 172.31.x.x (upper bound of 172.16-31 range)", () => {
+      const result = validateUrlWithConfig("http://172.31.255.255/api");
+      expect(result.valid).toBe(false);
+      expect(result.reason).toContain("Private IP");
+    });
+
+    it("should allow 172.32.x.x (outside private range)", () => {
+      const result = validateUrlWithConfig("http://172.32.0.1/api");
+      expect(result.valid).toBe(true);
+    });
+
+    it("should block DNS rebinding via sslip.io", () => {
+      const result = validateUrlWithConfig("https://10.0.0.1.sslip.io/api");
+      expect(result.valid).toBe(false);
+      expect(result.reason).toContain("DNS rebinding");
+    });
+
+    it("should block DNS rebinding via xip.io", () => {
+      const result = validateUrlWithConfig("https://192.168.1.1.xip.io");
+      expect(result.valid).toBe(false);
+      expect(result.reason).toContain("DNS rebinding");
+    });
+
+    it("should block DNS rebinding via localtest.me", () => {
+      const result = validateUrlWithConfig("http://localtest.me:3000");
+      expect(result.valid).toBe(false);
+      expect(result.reason).toContain("DNS rebinding");
+    });
+
+    it("should block DNS rebinding via localhost.direct", () => {
+      const result = validateUrlWithConfig("http://localhost.direct");
+      expect(result.valid).toBe(false);
+      expect(result.reason).toContain("DNS rebinding");
+    });
+
+    it("should block ftp:// protocol", () => {
+      const result = validateUrlWithConfig("ftp://files.example.com/data");
+      expect(result.valid).toBe(false);
+      expect(result.reason).toContain("not allowed");
+    });
+
+    it("should block unknown protocols", () => {
+      const result = validateUrlWithConfig("custom://something");
+      expect(result.valid).toBe(false);
+      expect(result.reason).toContain("not allowed");
+    });
+
+    it("should block /phpmyadmin paths", () => {
+      const result = validateUrlWithConfig("https://example.com/phpmyadmin/index.php");
+      expect(result.valid).toBe(false);
+      expect(result.reason).toContain("blocked pattern");
+    });
+
+    it("should block /server-status paths", () => {
+      const result = validateUrlWithConfig("https://example.com/server-status");
+      expect(result.valid).toBe(false);
+      expect(result.reason).toContain("blocked pattern");
+    });
+
+    it("should block .ssh paths", () => {
+      const result = validateUrlWithConfig("https://example.com/.ssh/id_rsa");
+      expect(result.valid).toBe(false);
+      expect(result.reason).toContain("blocked pattern");
+    });
+
+    it("should block /etc/ paths", () => {
+      const result = validateUrlWithConfig("https://example.com/etc/passwd");
+      expect(result.valid).toBe(false);
+      expect(result.reason).toContain("blocked pattern");
+    });
+
+    it("should block /proc/ paths", () => {
+      const result = validateUrlWithConfig("https://example.com/proc/self/environ");
+      expect(result.valid).toBe(false);
+      expect(result.reason).toContain("blocked pattern");
+    });
+
+    it("should block /sys/ paths", () => {
+      const result = validateUrlWithConfig("https://example.com/sys/class");
+      expect(result.valid).toBe(false);
+      expect(result.reason).toContain("blocked pattern");
+    });
+
+    it("should allow data:// when blockDataProtocol is false", () => {
+      const config: Partial<BrowserSecurityConfig> = { blockDataProtocol: false };
+      // data: URLs cannot be parsed by URL constructor for navigation; the protocol check
+      // will pass but it will fail on the http/https-only check
+      const result = validateUrlWithConfig("data:text/html,hello", config);
+      expect(result.valid).toBe(false);
+      expect(result.reason).toContain("not allowed");
+    });
+
+    it("should allow javascript:// when blockJavascriptProtocol is false but still reject non-http", () => {
+      const config: Partial<BrowserSecurityConfig> = { blockJavascriptProtocol: false };
+      const result = validateUrlWithConfig("javascript:void(0)", config);
+      // passes javascript block but fails the http/https-only check
+      expect(result.valid).toBe(false);
+      expect(result.reason).toContain("not allowed");
+    });
+
+    it("should handle URLs with encoded characters", () => {
+      const result = validateUrlWithConfig("https://example.com/page%20test");
+      expect(result.valid).toBe(true);
+    });
+
+    it("should handle URLs with query parameters", () => {
+      const result = validateUrlWithConfig("https://example.com/search?q=test&page=1");
+      expect(result.valid).toBe(true);
+    });
+
+    it("should handle URLs with fragments", () => {
+      const result = validateUrlWithConfig("https://example.com/page#section");
+      expect(result.valid).toBe(true);
+    });
+
+    it("should handle URLs with authentication in URL (userinfo)", () => {
+      const result = validateUrlWithConfig("https://user:pass@example.com/api");
+      expect(result.valid).toBe(true);
+    });
+
+    it("should handle empty blocked and allowed patterns", () => {
+      const config: Partial<BrowserSecurityConfig> = {
+        blockedUrlPatterns: [],
+        allowedUrlPatterns: [],
+      };
+      const result = validateUrlWithConfig("https://example.com/admin", config);
+      expect(result.valid).toBe(true);
+    });
+
+    it("should gracefully handle invalid regex in blocked patterns", () => {
+      const config: Partial<BrowserSecurityConfig> = {
+        blockedUrlPatterns: ["[invalid-regex"],
+      };
+      // Invalid regex is warned and skipped, URL should pass
+      const result = validateUrlWithConfig("https://example.com/page", config);
+      expect(result.valid).toBe(true);
+    });
+
+    it("should gracefully handle invalid regex in allowed patterns", () => {
+      const config: Partial<BrowserSecurityConfig> = {
+        allowedUrlPatterns: ["[invalid-regex"],
+      };
+      // Invalid regex is warned and skipped; no valid patterns match => rejected
+      const result = validateUrlWithConfig("https://example.com/page", config);
+      expect(result.valid).toBe(false);
+      expect(result.reason).toContain("allowed pattern");
+    });
   });
 
   describe("BrowserRateLimiter", () => {

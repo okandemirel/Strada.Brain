@@ -104,6 +104,64 @@ describe("DaemonSecurityPolicy", () => {
       expect(policy.checkPermission("shell_exec")).toBe("queue");
       expect(policy.checkPermission("file_write")).toBe("queue");
     });
+
+    it("disabling autonomous override reverts to normal policy", () => {
+      policy.setAutonomousOverride(true, Date.now() + 60_000);
+      expect(policy.checkPermission("file_write")).toBe("allow");
+
+      policy.setAutonomousOverride(false);
+      expect(policy.checkPermission("file_write")).toBe("queue");
+    });
+
+    it("auto-revokes autonomous override when expiry passes mid-session", () => {
+      const now = Date.now();
+      // Set override to expire 10ms in the future
+      policy.setAutonomousOverride(true, now + 10);
+
+      // Immediately should be allowed
+      expect(policy.checkPermission("shell_exec")).toBe("allow");
+
+      // After expiry passes, should revert
+      vi.spyOn(Date, "now").mockReturnValue(now + 20);
+      expect(policy.checkPermission("shell_exec")).toBe("queue");
+      vi.restoreAllMocks();
+    });
+
+    it("queues all ALWAYS_QUEUE_TOOLS even with metadata and auto-approve", () => {
+      const alwaysQueueTools = [
+        "file_write", "file_create", "file_edit", "file_delete",
+        "file_rename", "file_delete_directory", "shell_exec",
+        "git_commit", "git_push", "git_stash",
+      ];
+      // Create a policy where ALL these tools are auto-approved and have metadata
+      const allApproved = new Set(alwaysQueueTools);
+      const allKnown: Map<string, { readOnly: boolean }> = new Map(
+        alwaysQueueTools.map((t) => [t, { readOnly: false }]),
+      );
+      const permissivePolicy = new DaemonSecurityPolicy(
+        (name) => allKnown.get(name),
+        queue,
+        allApproved,
+      );
+
+      for (const tool of alwaysQueueTools) {
+        expect(permissivePolicy.checkPermission(tool)).toBe("queue");
+      }
+    });
+
+    it("allows read-only tool even if not in auto-approve list", () => {
+      expect(policy.checkPermission("analyze_project")).toBe("allow");
+    });
+
+    it("fails closed when autonomous override expiry equals exactly Date.now()", () => {
+      const exactNow = Date.now();
+      vi.spyOn(Date, "now").mockReturnValue(exactNow);
+
+      // expiresAt === Date.now() means stale (<=), so override should not activate
+      policy.setAutonomousOverride(true, exactNow);
+      expect(policy.checkPermission("shell_exec")).toBe("queue");
+      vi.restoreAllMocks();
+    });
   });
 
   // =========================================================================

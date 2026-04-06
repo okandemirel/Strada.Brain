@@ -3,7 +3,7 @@
  * Used by both the web channel and the dashboard WebSocket server.
  */
 
-const LOCALHOST_HOSTNAMES = ["localhost", "127.0.0.1"];
+const LOCALHOST_HOSTNAMES = ["localhost", "127.0.0.1", "::1", "[::1]"];
 
 /**
  * Validates a WebSocket Origin header against allowed hostnames.
