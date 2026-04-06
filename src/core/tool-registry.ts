@@ -19,11 +19,9 @@ import { execFileSync } from "node:child_process";
 import { PluginLoader } from "../agents/plugins/plugin-loader.js";
 import { getLogger } from "../utils/logger.js";
 import { ValidationError } from "../common/errors.js";
-import {
-  loadInstalledStradaMcpRuntime,
-  registerStradaMcpTools,
-  type StradaMcpRuntime,
-  type StradaMcpRuntimeStatus,
+import type {
+  StradaMcpRuntime,
+  StradaMcpRuntimeStatus,
 } from "./strada-mcp-tool-loader.js";
 
 // Tool category metadata
@@ -175,7 +173,9 @@ export class ToolRegistry {
     this.registerBuiltinTools(options);
 
     // Load Strada.MCP tools as first-class Brain tools when available.
+    // Lazy import to break circular dependency: tool-registry <-> strada-mcp-tool-loader
     try {
+      const { loadInstalledStradaMcpRuntime, registerStradaMcpTools } = await import("./strada-mcp-tool-loader.js");
       const mcpRuntime = await loadInstalledStradaMcpRuntime(_config);
       if (mcpRuntime) {
         this.stradaMcpRuntime = mcpRuntime;

@@ -21,7 +21,10 @@ import {
   type ProviderOfficialSnapshot,
   type ProviderOfficialSource,
 } from "./provider-source-registry.js";
-import type { ProviderCatalogHealth } from "./provider-manager.js";
+import type { ProviderCatalogHealth, RefreshResult } from "./provider-types.js";
+
+// Re-export RefreshResult so existing consumers of this module are unaffected
+export type { RefreshResult } from "./provider-types.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -39,12 +42,6 @@ export interface ModelInfo {
   readonly supportsToolCalling: boolean;
   readonly supportsStreaming: boolean;
   readonly lastUpdated: number;
-}
-
-export interface RefreshResult {
-  readonly modelsUpdated: number;
-  readonly source: "litellm" | "models.dev" | "cache" | "hardcoded";
-  readonly errors: string[];
 }
 
 // ---------------------------------------------------------------------------

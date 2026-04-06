@@ -15,7 +15,7 @@ import { execFileSync } from "node:child_process";
 import { createLogger } from "../utils/logger.js";
 import { StradaCoreExtractor } from "./strada-core-extractor.js";
 import { validateDrift, formatDriftReport } from "./strada-drift-validator.js";
-import { createExtractor } from "./framework/framework-extractor.js";
+import { createExtractor } from "./framework/framework-extractor-factory.js";
 import { FRAMEWORK_PACKAGE_CONFIGS } from "./framework/framework-package-configs.js";
 import { validateFrameworkDrift, formatFrameworkDriftReport } from "./framework/framework-drift.js";
 import type { FrameworkPackageId } from "./framework/framework-types.js";

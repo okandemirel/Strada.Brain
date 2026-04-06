@@ -2,8 +2,8 @@ import type {
   ProviderActiveInfo,
   ProviderDescriptor,
   ProviderExecutionCandidate,
-} from "./provider-manager.js";
-import type { RefreshResult } from "./model-intelligence.js";
+  RefreshResult,
+} from "./provider-types.js";
 import type { ProviderRoutingDecision } from "../../agent-core/routing/routing-types.js";
 
 function normalizeName(value: string): string {

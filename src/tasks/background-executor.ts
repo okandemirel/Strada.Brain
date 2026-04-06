@@ -20,7 +20,7 @@ import type {
 } from "./types.js";
 import { getTaskConversationKey, TaskStatus } from "./types.js";
 import type { TaskManager } from "./task-manager.js";
-import type { Orchestrator, SupervisorAdmissionDecision } from "../agents/orchestrator.js";
+import type { IOrchestrator, SupervisorAdmissionDecision } from "./orchestrator-contract.js";
 import { resolveConversationScope } from "../agents/orchestrator-text-utils.js";
 import type { GoalDecomposer } from "../goals/goal-decomposer.js";
 import type { GoalNode, GoalTree } from "../goals/types.js";
@@ -137,7 +137,7 @@ interface TopLevelAdmissionResult {
 }
 
 export interface BackgroundExecutorOptions {
-  orchestrator: Orchestrator;
+  orchestrator: IOrchestrator;
   concurrencyLimit?: number;
   decomposer?: GoalDecomposer;
   goalStorage?: GoalStorage;
@@ -154,7 +154,7 @@ export class BackgroundExecutor {
   private readonly activeConversations = new Set<string>();
   private running = 0;
   private taskManager: TaskManager | null = null;
-  private readonly orchestrator: Orchestrator;
+  private readonly orchestrator: IOrchestrator;
   private readonly concurrencyLimit: number;
   private readonly decomposer?: GoalDecomposer;
   private readonly goalStorage?: GoalStorage;
@@ -239,7 +239,7 @@ export class BackgroundExecutor {
 
   private async resolveTopLevelAdmission(params: {
     task: Task;
-    taskOrchestrator: Orchestrator;
+    taskOrchestrator: IOrchestrator;
     signal: AbortSignal;
     onProgress: (message: TaskProgressUpdate) => void;
     workspaceLease?: ManagedWorkspaceLease;
@@ -250,7 +250,7 @@ export class BackgroundExecutor {
       reason: "unavailable",
     };
 
-    const supervisorCapableOrchestrator = taskOrchestrator as Orchestrator & {
+    const supervisorCapableOrchestrator = taskOrchestrator as IOrchestrator & {
       evaluateSupervisorAdmission?: (params: {
         prompt: string;
         chatId: string;
@@ -671,7 +671,7 @@ export class BackgroundExecutor {
   }
 
   private async executeWorkerRun(
-    orchestrator: Orchestrator,
+    orchestrator: IOrchestrator,
     params: {
       mode: WorkerRunRequest["mode"];
       prompt: string;
@@ -693,9 +693,9 @@ export class BackgroundExecutor {
       goalContext?: import("./types.js").GoalContext;
     },
   ): Promise<{ output: string; workerResult?: WorkerRunResult }> {
-    if (typeof (orchestrator as Orchestrator & { runWorkerTask?: unknown }).runWorkerTask === "function") {
+    if (typeof (orchestrator as IOrchestrator & { runWorkerTask?: unknown }).runWorkerTask === "function") {
       const workerResult = await (
-        orchestrator as Orchestrator & {
+        orchestrator as IOrchestrator & {
           runWorkerTask: (request: {
             prompt: string;
             mode: WorkerRunRequest["mode"];
@@ -771,7 +771,7 @@ export class BackgroundExecutor {
   }
 
   async runWorkerEnvelope(
-    orchestrator: Orchestrator,
+    orchestrator: IOrchestrator,
     params: {
       mode: WorkerRunRequest["mode"];
       prompt: string;

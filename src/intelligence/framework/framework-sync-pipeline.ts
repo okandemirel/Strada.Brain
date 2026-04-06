@@ -19,7 +19,7 @@ import type {
 } from "./framework-types.js";
 import { FrameworkKnowledgeStore } from "./framework-knowledge-store.js";
 import { FRAMEWORK_PACKAGE_CONFIGS } from "./framework-package-configs.js";
-import { createExtractor } from "./framework-extractor.js";
+import { createExtractor } from "./framework-extractor-factory.js";
 import {
   validateFrameworkDrift,
   formatFrameworkDriftReport,

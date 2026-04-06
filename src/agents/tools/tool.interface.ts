@@ -8,9 +8,7 @@
  */
 
 import type {
-  ToolContext,
-  ToolExecutionResult,
-  ToolInputSchema,
+  IToolBase,
   ToolMetadata,
   ToolCategory,
   ToolRiskLevel,
@@ -18,32 +16,21 @@ import type {
 
 /**
  * Base interface for all tools.
+ * Extends IToolBase (defined in tool-core.interface.ts) with optional metadata.
  */
-export interface ITool {
-  /** Unique tool name (used in function calling) */
-  readonly name: string;
-  
-  /** Human-readable description of what this tool does */
-  readonly description: string;
-  
-  /** JSON Schema for the tool's input parameters */
-  readonly inputSchema: ToolInputSchema | Record<string, unknown>;
-  
-  /** Execute the tool with validated input */
-  execute(input: Record<string, unknown>, context: ToolContext): Promise<ToolExecutionResult>;
-  
-  /** 
+export interface ITool extends IToolBase {
+  /**
    * Whether this tool is loaded from a plugin (optional).
    * @default false
    */
   isPlugin?: boolean;
-  
+
   /**
    * Tool metadata for registration and UI (optional).
    * Can be provided as a property or via getMetadata() method.
    */
   metadata?: ToolMetadata;
-  
+
   /**
    * Get tool metadata (alternative to metadata property).
    */
@@ -92,6 +79,7 @@ export function getToolMetadata(tool: ITool): ToolMetadata | undefined {
 
 // Re-export all types
 export type {
+  IToolBase,
   ToolContext,
   ToolExecutionResult,
   ToolInputSchema,

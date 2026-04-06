@@ -8,9 +8,9 @@
 import { randomBytes } from "node:crypto";
 import type { TaskOrigin } from "../daemon/daemon-types.js";
 import type { GoalTree } from "../goals/types.js";
-import type { Orchestrator } from "../agents/orchestrator.js";
 import type { WorkspaceLease } from "../agents/supervisor/supervisor-types.js";
 import type { MessageContent } from "../agents/providers/provider-core.interface.js";
+import type { IOrchestrator, SupervisorAdmissionDecision } from "./orchestrator-contract.js";
 
 // ─── Task Identity ──────────────────────────────────────────────────────────────
 
@@ -120,7 +120,7 @@ export interface Task {
   /** Attachments forwarded from the incoming message (images, files) */
   attachments?: import("../channels/channel.interface.js").Attachment[];
   /** Optional agent-specific orchestrator for queued execution paths. */
-  orchestrator?: Orchestrator;
+  orchestrator?: IOrchestrator;
 }
 
 // ─── Commands ────────────────────────────────────────────────────────────────────

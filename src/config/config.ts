@@ -15,7 +15,7 @@ import type { SecretPattern } from "../security/secret-sanitizer.js";
 import type { DeepPartial, Result, ValidationResult, ValidationError } from "../types/index.js";
 import { resolveDotenvPath } from "../common/runtime-paths.js";
 import type { BayesianConfig, CrossSessionConfig } from "../learning/types.js";
-import type { ToolChainConfig } from "../learning/chains/index.js";
+import type { ToolChainConfig } from "../learning/chains/chain-types.js";
 import type { DaemonConfig } from "../daemon/daemon-types.js";
 import type {
   NotificationConfig,

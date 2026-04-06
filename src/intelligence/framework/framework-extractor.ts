@@ -1,8 +1,9 @@
 /**
  * Framework Extractor -- Abstract Base
  *
- * Defines the contract for package-specific extractors and provides
- * a factory function that selects the right implementation.
+ * Defines the contract for package-specific extractors.
+ * The factory function lives in framework-extractor-factory.ts to avoid
+ * circular dependencies (base <-> subclass).
  */
 
 import { execFileSync } from "node:child_process";
@@ -45,26 +46,6 @@ export abstract class FrameworkExtractor {
       }).trim();
     } catch {
       return null;
-    }
-  }
-}
-
-/**
- * Factory -- creates the appropriate extractor for a given package config.
- * Uses dynamic imports (ESM) to keep boot cost low.
- */
-export async function createExtractor(
-  sourcePath: string,
-  packageConfig: FrameworkPackageConfig,
-): Promise<FrameworkExtractor> {
-  switch (packageConfig.sourceLanguage) {
-    case "csharp": {
-      const { CSharpFrameworkExtractor } = await import("./framework-extractor-csharp.js");
-      return new CSharpFrameworkExtractor(sourcePath, packageConfig);
-    }
-    case "typescript": {
-      const { MCPFrameworkExtractor } = await import("./framework-extractor-mcp.js");
-      return new MCPFrameworkExtractor(sourcePath, packageConfig);
     }
   }
 }

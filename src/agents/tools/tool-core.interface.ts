@@ -1,8 +1,27 @@
 /**
  * Core Tool Interfaces - Enhanced
- * 
+ *
  * Rich tool interface with metadata and lifecycle hooks.
  */
+
+// ============================================================================
+// Base Tool Shape (avoids circular import with tool.interface.ts)
+// ============================================================================
+
+/**
+ * Minimal tool shape used by ToolContext callbacks.
+ * The full ITool interface in tool.interface.ts extends this.
+ */
+export interface IToolBase {
+  /** Unique tool name (used in function calling) */
+  readonly name: string;
+  /** Human-readable description of what this tool does */
+  readonly description: string;
+  /** JSON Schema for the tool's input parameters */
+  readonly inputSchema: ToolInputSchema | Record<string, unknown>;
+  /** Execute the tool with validated input */
+  execute(input: Record<string, unknown>, context: ToolContext): Promise<ToolExecutionResult>;
+}
 
 // ============================================================================
 // Tool Context
@@ -34,11 +53,11 @@ export interface ToolContext {
   // ── Dynamic tool registration (provided by orchestrator) ─────────────
 
   /** Register a new tool at runtime. Available in next PAOR iteration. */
-  registerDynamicTool?: (tool: import("./tool.interface.js").ITool) => void;
+  registerDynamicTool?: (tool: IToolBase) => void;
   /** Unregister a dynamic tool by name. Returns true if found and removed. */
   unregisterDynamicTool?: (toolName: string) => boolean;
   /** Look up an existing tool by name (for composite tool chaining). */
-  lookupTool?: (toolName: string) => import("./tool.interface.js").ITool | undefined;
+  lookupTool?: (toolName: string) => IToolBase | undefined;
 }
 
 // ============================================================================

@@ -19,7 +19,7 @@ import type { GoalTree } from "../goals/types.js";
 import type { GoalNodeId } from "../goals/types.js";
 import type { GoalStorage } from "../goals/goal-storage.js";
 import { prepareTreeForResume, prepareTreeForRetry } from "../goals/goal-resume.js";
-import type { Orchestrator } from "../agents/orchestrator.js";
+import type { IOrchestrator } from "./orchestrator-contract.js";
 import { stripVisibleProviderArtifacts } from "../agents/orchestrator-text-utils.js";
 import type { MessageContent } from "../agents/providers/provider-core.interface.js";
 
@@ -52,7 +52,7 @@ export class TaskManager extends EventEmitter {
       forceSharedPlanning?: boolean;
       userContent?: string | MessageContent[];
       attachments?: import("../channels/channel.interface.js").Attachment[];
-      orchestrator?: Orchestrator;
+      orchestrator?: IOrchestrator;
       conversationId?: string;
       userId?: string;
       parentId?: TaskId;

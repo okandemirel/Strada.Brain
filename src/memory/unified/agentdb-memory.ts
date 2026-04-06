@@ -158,7 +158,7 @@ export class AgentDBMemory implements IUnifiedMemory {
 
   /** Build the SQLite context from private fields (read-through / write-through). */
   private getSqliteCtx(): AgentDBSqliteContext {
-    // eslint-disable-next-line @typescript-eslint/no-this-alias
+     
     const self = this;
     return {
       get dbPath() { return self.dbPath; },
@@ -173,7 +173,7 @@ export class AgentDBMemory implements IUnifiedMemory {
 
   /** Build the vector context from private fields. */
   private getVectorCtx() {
-    // eslint-disable-next-line @typescript-eslint/no-this-alias
+     
     const self = this;
     return {
       get dbPath() { return self.dbPath; },
@@ -200,7 +200,7 @@ export class AgentDBMemory implements IUnifiedMemory {
 
   /** Build the tiering context from private fields. */
   private getTieringCtx() {
-    // eslint-disable-next-line @typescript-eslint/no-this-alias
+     
     const self = this;
     return {
       get dbPath() { return self.dbPath; },
@@ -223,7 +223,7 @@ export class AgentDBMemory implements IUnifiedMemory {
 
   /** Build the retrieval context from private fields. */
   private getRetrievalCtx() {
-    // eslint-disable-next-line @typescript-eslint/no-this-alias
+     
     const self = this;
     return {
       get config() { return self.config; },

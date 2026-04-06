@@ -29,7 +29,8 @@ export {
 } from "./framework-package-configs.js";
 
 // Extractors
-export { FrameworkExtractor, createExtractor } from "./framework-extractor.js";
+export { FrameworkExtractor } from "./framework-extractor.js";
+export { createExtractor } from "./framework-extractor-factory.js";
 export { CSharpFrameworkExtractor } from "./framework-extractor-csharp.js";
 export { MCPFrameworkExtractor } from "./framework-extractor-mcp.js";
 

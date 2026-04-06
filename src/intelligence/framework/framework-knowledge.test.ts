@@ -553,7 +553,7 @@ describe("formatFrameworkDriftReport", () => {
 
 describe("createExtractor factory", () => {
   it("returns CSharpFrameworkExtractor for csharp language", async () => {
-    const { createExtractor } = await import("./framework-extractor.js");
+    const { createExtractor } = await import("./framework-extractor-factory.js");
     const extractor = await createExtractor("/tmp/Strada.Core", CORE_PACKAGE_CONFIG);
 
     const { CSharpFrameworkExtractor } = await import("./framework-extractor-csharp.js");
@@ -561,7 +561,7 @@ describe("createExtractor factory", () => {
   });
 
   it("returns MCPFrameworkExtractor for typescript language", async () => {
-    const { createExtractor } = await import("./framework-extractor.js");
+    const { createExtractor } = await import("./framework-extractor-factory.js");
     const extractor = await createExtractor("/tmp/Strada.MCP", MCP_PACKAGE_CONFIG);
 
     const { MCPFrameworkExtractor } = await import("./framework-extractor-mcp.js");

@@ -122,10 +122,6 @@ export interface GenericChunk extends BaseChunk {
 /** Discriminated union of all chunk types */
 export type Chunk = CodeChunk | DocumentationChunk | GenericChunk;
 
-/** Re-exported from doc-rag module for convenience */
-export type { FrameworkDocChunk } from "./docs/doc-rag.interface.js";
-export { isFrameworkDocChunk } from "./docs/doc-rag.interface.js";
-
 // =============================================================================
 // TYPE GUARDS
 // =============================================================================

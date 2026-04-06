@@ -16,48 +16,23 @@ import type { ProviderSelectionMode } from "./provider-preferences.js";
 import { getLogger } from "../../utils/logger.js";
 import { LRUCache } from "../../common/lru-cache.js";
 import type { ProviderOfficialSnapshot } from "./provider-source-registry.js";
-import type { RefreshResult } from "./model-intelligence.js";
+import type {
+  RefreshResult,
+  ProviderActiveInfo,
+  ProviderDescriptor,
+  ProviderExecutionCandidate,
+  ProviderCatalogHealth,
+} from "./provider-types.js";
 import { ProviderCatalog, type ProviderCatalogSnapshot } from "./provider-catalog.js";
 import { canonicalizeProviderName } from "./provider-identity.js";
 
-export interface ProviderActiveInfo {
-  providerName: string;
-  model: string;
-  isDefault: boolean;
-  selectionMode: ProviderSelectionMode;
-  executionPolicyNote: string;
-}
-
-export interface ProviderDescriptor {
-  readonly name: string;
-  readonly label: string;
-  readonly defaultModel: string;
-  readonly capabilities: ProviderCapabilities | null;
-  readonly officialSnapshot: ProviderOfficialSnapshot | null;
-}
-
-export interface ProviderExecutionCandidate {
-  readonly name: string;
-  readonly label: string;
-  readonly defaultModel: string;
-  readonly contextWindow?: number;
-  readonly thinkingSupported?: boolean;
-  readonly specialFeatures?: string[];
-  readonly officialSignals?: ProviderOfficialSnapshot["signals"];
-  readonly officialSourceUrls?: string[];
-  readonly catalogUpdatedAt?: number;
-  readonly catalogFreshnessScore?: number;
-  readonly catalogAgeMs?: number;
-  readonly catalogStale?: boolean;
-  readonly officialAlignmentScore?: number;
-  readonly capabilityDriftReasons?: string[];
-}
-
-export interface ProviderCatalogHealth {
-  readonly refreshIntervalMs: number;
-  readonly stale: boolean;
-  readonly snapshotAgeMs?: number;
-}
+// Re-export shared types so existing consumers of this module are unaffected
+export type {
+  ProviderActiveInfo,
+  ProviderDescriptor,
+  ProviderExecutionCandidate,
+  ProviderCatalogHealth,
+} from "./provider-types.js";
 
 interface ProviderModelCatalogLookup {
   getProviderModels(provider: string): Array<{ id: string }>;
