@@ -146,7 +146,6 @@ Generates diff previews (max 50 lines), sends via channel, waits for user respon
 | `filesystem-security.ts` | `ChrootJail` (software chroot), `FileIntegrityMonitor` (SHA-256 change detection), `FileAuditLogger` (10K-entry ring buffer). |
 | `dependency-security.ts` | `npm audit` + Snyk integration for vulnerability scanning. |
 | `secret-rotation.ts` | Watches `.env` file for changes (2s poll), diffs values, calls registered callbacks, updates `process.env` live. |
-| `encryption/data-protection.ts` | AES-256-GCM encryption, scrypt key derivation, data masking (full/partial/email/credit_card/SSN/phone), tokenization with expiry. |
 
 ## Key Files
 

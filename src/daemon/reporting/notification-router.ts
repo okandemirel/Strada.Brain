@@ -15,6 +15,7 @@ import type { DaemonStorage } from "../daemon-storage.js";
 import type { DaemonEventMap } from "../daemon-events.js";
 import type { IChannelSender } from "../../channels/channel-core.interface.js";
 import type { IEventBus } from "../../core/event-bus.js";
+import { getLoggerSafe } from "../../utils/logger.js";
 import { QuietHoursManager } from "./quiet-hours.js";
 import {
   URGENCY_ORDER,
@@ -215,12 +216,30 @@ export class NotificationRouter {
       event: K,
       handler: (payload: DaemonEventMap[K]) => void | Promise<void>,
     ): void => {
-      this.eventBus.on(event, handler);
-      this.listeners.push({ event, fn: handler });
+      const safeHandler = (payload: DaemonEventMap[K]): void => {
+        try {
+          const result = handler(payload);
+          if (result && typeof (result as Promise<void>).catch === "function") {
+            (result as Promise<void>).catch((err) => {
+              getLoggerSafe().warn("Notification handler error", {
+                event,
+                error: err instanceof Error ? err.message : String(err),
+              });
+            });
+          }
+        } catch (err) {
+          getLoggerSafe().warn("Notification handler sync error", {
+            event,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      };
+      this.eventBus.on(event, safeHandler);
+      this.listeners.push({ event, fn: safeHandler });
     };
 
     subscribe("daemon:tick", (e) => {
-      void this.notify({
+      this.notify({
         level: "silent",
         title: "Heartbeat tick",
         message: `Daemon tick at ${new Date(e.timestamp).toISOString()}`,
@@ -230,7 +249,7 @@ export class NotificationRouter {
     });
 
     subscribe("daemon:trigger_fired", (e) => {
-      void this.notify({
+      this.notify({
         level: "low",
         title: `Trigger fired: ${e.triggerName}`,
         message: `Trigger '${e.triggerName}' fired, task ${e.taskId}`,
@@ -240,7 +259,7 @@ export class NotificationRouter {
     });
 
     subscribe("daemon:trigger_failed", (e) => {
-      void this.notify({
+      this.notify({
         level: "medium",
         title: `Trigger failed: ${e.triggerName}`,
         message: `Trigger '${e.triggerName}' failed: ${e.error}`,
@@ -251,7 +270,7 @@ export class NotificationRouter {
     });
 
     subscribe("daemon:budget_warning", (e) => {
-      void this.notify({
+      this.notify({
         level: "medium",
         title: `Budget at ${Math.round(e.pct * 100)}%`,
         message: `Budget usage: $${e.usedUsd.toFixed(2)} / $${e.limitUsd.toFixed(2)}`,
@@ -262,7 +281,7 @@ export class NotificationRouter {
     });
 
     subscribe("daemon:budget_exceeded", (e) => {
-      void this.notify({
+      this.notify({
         level: "high",
         title: "Budget exceeded",
         message: `Budget exhausted: $${e.usedUsd.toFixed(2)} / $${e.limitUsd.toFixed(2)}`,
@@ -273,7 +292,7 @@ export class NotificationRouter {
     });
 
     subscribe("daemon:approval_requested", (e) => {
-      void this.notify({
+      this.notify({
         level: "medium",
         title: `Approval needed: ${e.toolName}`,
         message: `Write operation '${e.toolName}' requires approval (ID: ${e.approvalId})`,
@@ -284,7 +303,7 @@ export class NotificationRouter {
     });
 
     subscribe("daemon:approval_decided", (e) => {
-      void this.notify({
+      this.notify({
         level: "low",
         title: `Approval ${e.decision}: ${e.approvalId}`,
         message: `Approval ${e.approvalId} was ${e.decision}`,
@@ -294,7 +313,7 @@ export class NotificationRouter {
     });
 
     subscribe("goal:failed", (e) => {
-      void this.notify({
+      this.notify({
         level: "high",
         title: `Goal failed: ${e.error}`,
         message: `Goal ${e.rootId} failed after ${e.failureCount} failures: ${e.error}`,
@@ -304,7 +323,7 @@ export class NotificationRouter {
     });
 
     subscribe("goal:complete", (e) => {
-      void this.notify({
+      this.notify({
         level: "low",
         title: `Goal complete: ${e.taskDescription}`,
         message: `Goal '${e.taskDescription}' completed in ${Math.round(e.durationMs / 1000)}s`,

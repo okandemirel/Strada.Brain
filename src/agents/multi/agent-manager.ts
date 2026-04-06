@@ -312,6 +312,13 @@ export class AgentManager {
     const liveAgent = this.findLiveAgentById(id);
     if (!liveAgent) return;
 
+    // Clean up pending background batches for this agent
+    const batch = this.pendingBackgroundBatches.get(liveAgent.instance.key);
+    if (batch) {
+      if (batch.timer) clearTimeout(batch.timer);
+      this.pendingBackgroundBatches.delete(liveAgent.instance.key);
+    }
+
     this.registry.updateStatus(id, "stopped");
     liveAgent.instance = { ...liveAgent.instance, status: "stopped" };
 
