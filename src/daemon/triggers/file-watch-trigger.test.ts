@@ -459,4 +459,101 @@ describe("FileWatchTrigger", () => {
     events.length = 0;
     expect(trigger.shouldFire(new Date())).toBe(true);
   });
+
+  // ===========================================================================
+  // Events after dispose are ignored
+  // ===========================================================================
+
+  it("events arriving after dispose are ignored", async () => {
+    const trigger = new FileWatchTrigger(baseDef);
+    await trigger.dispose();
+
+    // Simulate event arriving after dispose
+    eventHandlers["change"]!("/projects/game/Assets/Player.cs");
+    vi.advanceTimersByTime(150);
+
+    expect(trigger.shouldFire(new Date())).toBe(false);
+  });
+
+  // ===========================================================================
+  // onFired with single file uses singular "file"
+  // ===========================================================================
+
+  it("onFired with single file uses singular 'file' in description", () => {
+    const trigger = new FileWatchTrigger(baseDef);
+
+    eventHandlers["add"]!("/projects/game/Assets/Player.cs");
+    vi.advanceTimersByTime(150);
+
+    trigger.onFired(new Date());
+    expect(trigger.metadata.description).toContain("1 file ");
+    expect(trigger.metadata.description).not.toContain("1 files");
+  });
+
+  it("onFired with multiple files uses plural 'files' in description", () => {
+    const trigger = new FileWatchTrigger(baseDef);
+
+    eventHandlers["add"]!("/projects/game/Assets/A.cs");
+    eventHandlers["change"]!("/projects/game/Assets/B.cs");
+    vi.advanceTimersByTime(150);
+
+    trigger.onFired(new Date());
+    expect(trigger.metadata.description).toContain("2 files");
+  });
+
+  // ===========================================================================
+  // Independent debounce timers per path
+  // ===========================================================================
+
+  it("debounce timers are independent per path", () => {
+    const trigger = new FileWatchTrigger(baseDef);
+
+    eventHandlers["change"]!("/projects/game/Assets/A.cs");
+    vi.advanceTimersByTime(50);
+    eventHandlers["change"]!("/projects/game/Assets/B.cs");
+    vi.advanceTimersByTime(60);
+
+    // A's debounce (100ms) has completed, B's (started 50ms later) has not
+    expect(trigger.shouldFire(new Date())).toBe(true);
+    // Only A should be in the buffer at this point
+    const events = trigger.getPendingEvents();
+    expect(events).toHaveLength(1);
+    expect(events[0]!.path).toBe("/projects/game/Assets/A.cs");
+
+    // Now let B complete its debounce
+    vi.advanceTimersByTime(50);
+    expect(trigger.getPendingEvents()).toHaveLength(2);
+  });
+
+  // ===========================================================================
+  // Debounce replaces event type on same path
+  // ===========================================================================
+
+  it("debounce keeps only the last event type for the same path", () => {
+    const trigger = new FileWatchTrigger(baseDef);
+
+    eventHandlers["add"]!("/projects/game/Assets/Player.cs");
+    vi.advanceTimersByTime(30);
+    // Same file, but now it's a "change" -- debounce resets
+    eventHandlers["change"]!("/projects/game/Assets/Player.cs");
+    vi.advanceTimersByTime(150);
+
+    const events = trigger.getPendingEvents();
+    expect(events).toHaveLength(1);
+    expect(events[0]!.event).toBe("change");
+  });
+
+  // ===========================================================================
+  // onFired includes unlink label
+  // ===========================================================================
+
+  it("onFired description shows 'deleted' for unlinked files", () => {
+    const trigger = new FileWatchTrigger(baseDef);
+
+    eventHandlers["unlink"]!("/projects/game/Assets/OldScript.cs");
+    vi.advanceTimersByTime(150);
+
+    trigger.onFired(new Date());
+    expect(trigger.metadata.description).toContain("OldScript.cs deleted");
+  });
 });

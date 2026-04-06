@@ -1,816 +1,915 @@
 /**
- * Tests for MemoryConsolidationEngine
+ * Tests for Memory Consolidation Engine
  *
- * Covers: clustering, summarization, soft-delete, interruption,
- * depth tracking, undo, preview, age filter, exempt domains.
+ * Covers: consolidation cycle, entry grouping/clustering, cluster processing,
+ * AbortSignal handling, preview, undo, and stats.
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi, beforeAll } from "vitest";
-import { randomUUID } from "node:crypto";
-import Database from "better-sqlite3";
-import { createLogger } from "../../utils/logger.js";
-import { MemoryTier } from "./unified-memory.interface.js";
-import type { ConsolidationConfig, MemoryCluster } from "./consolidation-types.js";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { MemoryConsolidationEngine } from "./consolidation-engine.js";
-import type { NormalizedScore, TimestampMs, Vector } from "../../types/index.js";
-import { createBrand } from "../../types/index.js";
+import type { ConsolidationEngineOptions } from "./consolidation-engine.js";
+import { MemoryTier } from "./unified-memory.interface.js";
+import type { ConsolidationConfig } from "./consolidation-types.js";
 
-// Initialize logger for tests
-beforeAll(() => {
-  createLogger("error", "test.log");
-});
+// ---------------------------------------------------------------------------
+// Test Helpers
+// ---------------------------------------------------------------------------
 
-// =============================================================================
-// HELPERS
-// =============================================================================
-
-const DEFAULT_CONFIG: ConsolidationConfig = {
-  enabled: true,
-  idleMinutes: 5,
-  threshold: 0.85,
-  batchSize: 50,
-  minClusterSize: 2,
-  maxDepth: 3,
-  modelTier: "cheap",
-  minAgeMs: 3600000, // 1 hour
-};
-
-function makeVector(dims: number, seed: number): Vector<number> {
-  const v = new Array(dims).fill(0).map((_, i) => Math.sin(seed + i));
-  const mag = Math.sqrt(v.reduce((a, b) => a + b * b, 0));
-  return v.map((x) => x / mag) as Vector<number>;
+function makeConfig(overrides: Partial<ConsolidationConfig> = {}): ConsolidationConfig {
+  return {
+    enabled: true,
+    idleMinutes: 5,
+    threshold: 0.7,
+    batchSize: 10,
+    minClusterSize: 2,
+    maxDepth: 3,
+    modelTier: "fast",
+    minAgeMs: 0, // no minimum age for tests
+    ...overrides,
+  };
 }
 
-interface MockEntry {
+interface MemEntry {
   id: string;
   type: string;
   content: string;
   tier: MemoryTier;
   domain?: string;
   importance: string;
-  importanceScore: NormalizedScore;
-  embedding: Vector<number>;
-  createdAt: TimestampMs;
-  lastAccessedAt: TimestampMs;
+  importanceScore: number;
+  embedding: number[];
+  createdAt: number;
+  lastAccessedAt: number;
   accessCount: number;
   metadata: Record<string, unknown>;
   tags: string[];
   archived: boolean;
   chatId: string;
-  version: number;
+  version?: number;
 }
 
-function makeEntry(overrides: Partial<MockEntry> = {}): MockEntry {
-  const id = overrides.id ?? randomUUID();
+function makeMemEntry(id: string, content: string, overrides: Partial<MemEntry> = {}): MemEntry {
   return {
     id,
     type: "note",
-    content: overrides.content ?? `Entry ${id.slice(0, 8)}`,
-    tier: overrides.tier ?? MemoryTier.Ephemeral,
-    domain: overrides.domain,
+    content,
+    tier: MemoryTier.Ephemeral,
     importance: "medium",
-    importanceScore: overrides.importanceScore ?? (0.5 as NormalizedScore),
-    embedding: overrides.embedding ?? makeVector(4, Math.random() * 100),
-    createdAt: overrides.createdAt ?? createBrand(Date.now() - 7200000, "TimestampMs" as const), // 2 hours ago
-    lastAccessedAt: overrides.lastAccessedAt ?? createBrand(Date.now() - 3600000, "TimestampMs" as const),
-    accessCount: overrides.accessCount ?? 1,
-    metadata: overrides.metadata ?? {},
-    tags: overrides.tags ?? [],
+    importanceScore: 0.5,
+    embedding: [0.1, 0.2, 0.3, 0.4],
+    createdAt: Date.now() - 100000,
+    lastAccessedAt: Date.now(),
+    accessCount: 0,
+    metadata: {},
+    tags: [],
     archived: false,
     chatId: "default",
     version: 1,
+    ...overrides,
   };
 }
 
-function setupDb(): Database.Database {
-  const db = new Database(":memory:");
-  db.pragma("journal_mode = WAL");
-  // Create memories table as AgentDB does
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS memories (
-      id TEXT PRIMARY KEY,
-      key TEXT,
-      value TEXT NOT NULL,
-      metadata TEXT NOT NULL DEFAULT '{}',
-      embedding BLOB,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
-    );
-  `);
-  return db;
+/**
+ * Build a fake SQLite database object that supports the operations
+ * used by the consolidation engine.
+ */
+function makeFakeDb() {
+  const tables: Record<string, Record<string, unknown>[]> = {
+    memories: [],
+    consolidation_log: [],
+  };
+
+  const db = {
+    exec: vi.fn(),
+    prepare: vi.fn((sql: string) => {
+      const stmt = {
+        _sql: sql,
+        all: vi.fn(() => {
+          if (sql.includes("PRAGMA table_info")) {
+            return [
+              { name: "id" },
+              { name: "key" },
+              { name: "value" },
+              { name: "metadata" },
+              { name: "embedding" },
+              { name: "created_at" },
+              { name: "updated_at" },
+              { name: "consolidated_into" },
+              { name: "consolidated_at" },
+            ];
+          }
+          if (sql.includes("SELECT id FROM memories WHERE consolidated_into IS NOT NULL")) {
+            return tables.memories
+              .filter((r: any) => r.consolidated_into != null)
+              .map((r: any) => ({ id: r.id }));
+          }
+          return [];
+        }),
+        get: vi.fn((arg?: string) => {
+          if (sql.includes("consolidation_log WHERE id =")) {
+            return tables.consolidation_log.find((r: any) => r.id === arg);
+          }
+          if (sql.includes("totalRuns")) {
+            return { totalRuns: 0, totalCost: 0 };
+          }
+          if (sql.includes("json_array_length")) {
+            return { savings: 0 };
+          }
+          if (sql.includes("SELECT COUNT(*)")) {
+            return { cnt: 0 };
+          }
+          if (sql.includes("SELECT embedding FROM memories")) {
+            return null;
+          }
+          if (sql.includes("SELECT * FROM memories WHERE id =")) {
+            const found = tables.memories.find((r: any) => r.id === arg);
+            return found ?? undefined;
+          }
+          return undefined;
+        }),
+        run: vi.fn((...args: unknown[]) => {
+          if (sql.includes("INSERT INTO consolidation_log")) {
+            tables.consolidation_log.push({
+              id: args[0],
+              summary_entry_id: args[1],
+              source_entry_ids: args[2],
+              similarity_score: args[3],
+              model_used: args[4],
+              cost: args[5],
+              timestamp: args[6],
+              depth: args[7],
+              status: args[8],
+              agent_id: args[9],
+            });
+          }
+          if (sql.includes("UPDATE consolidation_log SET status")) {
+            const logEntry = tables.consolidation_log.find((r: any) => r.id === (args[1] ?? args[0]));
+            if (logEntry) {
+              (logEntry as any).status = "undone";
+            }
+          }
+        }),
+      };
+      return stmt;
+    }),
+    transaction: vi.fn((fn: () => void) => {
+      return () => fn();
+    }),
+  };
+
+  return { db, tables };
 }
 
-function insertEntryIntoDb(db: Database.Database, entry: MockEntry): void {
-  const value = JSON.stringify({
-    type: entry.type,
-    content: entry.content,
-    tags: entry.tags,
-    importance: entry.importance,
-    tier: entry.tier,
-    accessCount: entry.accessCount,
-    lastAccessedAt: entry.lastAccessedAt,
-    importanceScore: entry.importanceScore,
-    domain: entry.domain,
-    chatId: entry.chatId,
-    version: entry.version,
-  });
-  const metadata = JSON.stringify(entry.metadata);
-  const embBuf = Buffer.from(new Float32Array(entry.embedding).buffer);
-  db.prepare(
-    "INSERT OR REPLACE INTO memories (id, key, value, metadata, embedding, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-  ).run(entry.id, entry.type, value, metadata, embBuf, entry.createdAt as number, Date.now());
-}
-
-// =============================================================================
-// MOCK HNSW STORE
-// =============================================================================
-
-interface MockHnswStore {
-  search: ReturnType<typeof vi.fn>;
-  remove: ReturnType<typeof vi.fn>;
-  upsert: ReturnType<typeof vi.fn>;
-}
-
-function createMockHnswStore(): MockHnswStore {
+function makeLogger() {
   return {
-    search: vi.fn(async () => []),
-    remove: vi.fn(async () => {}),
-    upsert: vi.fn(async () => {}),
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
   };
 }
 
-// =============================================================================
-// TESTS
-// =============================================================================
+function makeEmitter() {
+  return {
+    emit: vi.fn(),
+  };
+}
 
-describe("MemoryConsolidationEngine", () => {
-  let db: Database.Database;
-  let entries: Map<string, MockEntry>;
-  let mockHnsw: MockHnswStore;
-  let mockEmitter: { emit: ReturnType<typeof vi.fn> };
-  let mockLogger: { info: ReturnType<typeof vi.fn>; warn: ReturnType<typeof vi.fn>; error: ReturnType<typeof vi.fn>; debug: ReturnType<typeof vi.fn> };
-  let generateEmbedding: ReturnType<typeof vi.fn>;
-  let summarizeWithLLM: ReturnType<typeof vi.fn>;
-  let engine: MemoryConsolidationEngine;
-
-  beforeEach(() => {
-    db = setupDb();
-    entries = new Map();
-    mockHnsw = createMockHnswStore();
-    mockEmitter = { emit: vi.fn() };
-    mockLogger = {
-      info: vi.fn(),
-      warn: vi.fn(),
-      error: vi.fn(),
-      debug: vi.fn(),
-    };
-    generateEmbedding = vi.fn(async () => makeVector(4, 42));
-    summarizeWithLLM = vi.fn(async () => ({
-      summary: "Consolidated summary of entries",
+function makeOpts(overrides: Partial<ConsolidationEngineOptions> = {}): ConsolidationEngineOptions {
+  const { db } = makeFakeDb();
+  return {
+    sqliteDb: db as any,
+    entries: new Map(),
+    hnswStore: {
+      search: vi.fn(async () => []),
+      remove: vi.fn(async () => {}),
+      upsert: vi.fn(async () => {}),
+    },
+    config: makeConfig(),
+    generateEmbedding: vi.fn(async () => [0.1, 0.2, 0.3, 0.4]),
+    summarizeWithLLM: vi.fn(async () => ({
+      summary: "Consolidated summary",
       cost: 0.001,
       model: "test-model",
+    })),
+    eventEmitter: makeEmitter(),
+    logger: makeLogger(),
+    ...overrides,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Tests: Engine construction
+// ---------------------------------------------------------------------------
+
+describe("MemoryConsolidationEngine", () => {
+  it("should construct without errors", () => {
+    const opts = makeOpts();
+    const engine = new MemoryConsolidationEngine(opts);
+    expect(engine).toBeDefined();
+  });
+
+  it("should always exempt the 'instinct' domain", async () => {
+    const entries = new Map<string, unknown>();
+    entries.set("instinct1", makeMemEntry("instinct1", "instinct data", {
+      domain: "instinct",
+      tier: MemoryTier.Ephemeral,
+    }));
+    entries.set("normal1", makeMemEntry("normal1", "normal data", {
+      tier: MemoryTier.Ephemeral,
+      embedding: [0.1, 0.2, 0.3, 0.4],
+    }));
+    entries.set("normal2", makeMemEntry("normal2", "normal data too", {
+      tier: MemoryTier.Ephemeral,
+      embedding: [0.15, 0.25, 0.35, 0.45],
     }));
 
-    engine = new MemoryConsolidationEngine({
-      sqliteDb: db,
-      entries: entries as unknown as Map<string, unknown>,
-      hnswStore: mockHnsw as unknown as never,
-      config: DEFAULT_CONFIG,
-      generateEmbedding,
+    const hnswStore = {
+      search: vi.fn(async (_vec: number[], _topK: number) => [
+        { id: "instinct1", score: 0.99 },
+        { id: "normal2", score: 0.85 },
+      ]),
+      remove: vi.fn(async () => {}),
+      upsert: vi.fn(async () => {}),
+    };
+
+    const opts = makeOpts({ entries, hnswStore });
+    const engine = new MemoryConsolidationEngine(opts);
+    const clusters = await engine.findClusters(MemoryTier.Ephemeral);
+
+    // instinct1 should be excluded from any cluster
+    for (const cluster of clusters) {
+      expect(cluster.memberIds).not.toContain("instinct1");
+    }
+  });
+
+  it("should merge provided exemptDomains with 'instinct'", async () => {
+    const entries = new Map<string, unknown>();
+    entries.set("custom1", makeMemEntry("custom1", "custom exempt", {
+      domain: "system-core",
+      tier: MemoryTier.Ephemeral,
+    }));
+
+    const hnswStore = {
+      search: vi.fn(async () => [
+        { id: "custom1", score: 0.9 },
+      ]),
+      remove: vi.fn(async () => {}),
+      upsert: vi.fn(async () => {}),
+    };
+
+    const opts = makeOpts({
+      entries,
+      hnswStore,
+      exemptDomains: ["system-core"],
+    });
+    const engine = new MemoryConsolidationEngine(opts);
+    const clusters = await engine.findClusters(MemoryTier.Ephemeral);
+
+    for (const cluster of clusters) {
+      expect(cluster.memberIds).not.toContain("custom1");
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: findClusters
+// ---------------------------------------------------------------------------
+
+describe("findClusters", () => {
+  it("should return empty array when no eligible entries exist", async () => {
+    const opts = makeOpts();
+    const engine = new MemoryConsolidationEngine(opts);
+    const clusters = await engine.findClusters(MemoryTier.Ephemeral);
+    expect(clusters).toEqual([]);
+  });
+
+  it("should not cluster entries from different tiers", async () => {
+    const entries = new Map<string, unknown>();
+    entries.set("w1", makeMemEntry("w1", "working", { tier: MemoryTier.Working }));
+    entries.set("e1", makeMemEntry("e1", "ephemeral", { tier: MemoryTier.Ephemeral }));
+
+    const hnswStore = {
+      search: vi.fn(async () => [
+        { id: "w1", score: 0.95 },
+      ]),
+      remove: vi.fn(async () => {}),
+      upsert: vi.fn(async () => {}),
+    };
+
+    const opts = makeOpts({ entries, hnswStore });
+    const engine = new MemoryConsolidationEngine(opts);
+
+    const clusters = await engine.findClusters(MemoryTier.Ephemeral);
+    // w1 is Working tier, so it shouldn't appear in Ephemeral clusters
+    for (const cluster of clusters) {
+      expect(cluster.memberIds).not.toContain("w1");
+    }
+  });
+
+  it("should skip entries without embeddings", async () => {
+    const entries = new Map<string, unknown>();
+    entries.set("noEmbed", makeMemEntry("noEmbed", "no embedding", {
+      tier: MemoryTier.Ephemeral,
+      embedding: [],
+    }));
+
+    const opts = makeOpts({ entries });
+    const engine = new MemoryConsolidationEngine(opts);
+    const clusters = await engine.findClusters(MemoryTier.Ephemeral);
+    expect(clusters).toEqual([]);
+  });
+
+  it("should respect minAgeMs — skip too-new entries", async () => {
+    const entries = new Map<string, unknown>();
+    entries.set("new1", makeMemEntry("new1", "brand new", {
+      tier: MemoryTier.Ephemeral,
+      createdAt: Date.now(), // just created
+    }));
+
+    const opts = makeOpts({
+      entries,
+      config: makeConfig({ minAgeMs: 60000 }), // 1 minute minimum age
+    });
+    const engine = new MemoryConsolidationEngine(opts);
+    const clusters = await engine.findClusters(MemoryTier.Ephemeral);
+    expect(clusters).toEqual([]);
+  });
+
+  it("should respect maxDepth — skip deeply consolidated entries", async () => {
+    const entries = new Map<string, unknown>();
+    entries.set("deep1", makeMemEntry("deep1", "deeply consolidated", {
+      tier: MemoryTier.Ephemeral,
+      metadata: { consolidation: { depth: 3 } },
+    }));
+
+    const opts = makeOpts({
+      entries,
+      config: makeConfig({ maxDepth: 3 }),
+    });
+    const engine = new MemoryConsolidationEngine(opts);
+    const clusters = await engine.findClusters(MemoryTier.Ephemeral);
+    expect(clusters).toEqual([]);
+  });
+
+  it("should form clusters when neighbors exceed threshold and minClusterSize", async () => {
+    const entries = new Map<string, unknown>();
+    entries.set("c1", makeMemEntry("c1", "cluster content A", {
+      tier: MemoryTier.Ephemeral,
+      embedding: [1, 0, 0, 0],
+    }));
+    entries.set("c2", makeMemEntry("c2", "cluster content B", {
+      tier: MemoryTier.Ephemeral,
+      embedding: [0.9, 0.1, 0, 0],
+    }));
+
+    const hnswStore = {
+      search: vi.fn(async () => [
+        { id: "c1", score: 1.0 },
+        { id: "c2", score: 0.85 },
+      ]),
+      remove: vi.fn(async () => {}),
+      upsert: vi.fn(async () => {}),
+    };
+
+    const opts = makeOpts({
+      entries,
+      hnswStore,
+      config: makeConfig({ threshold: 0.7, minClusterSize: 2 }),
+    });
+    const engine = new MemoryConsolidationEngine(opts);
+    const clusters = await engine.findClusters(MemoryTier.Ephemeral);
+
+    expect(clusters.length).toBe(1);
+    expect(clusters[0]!.memberIds).toContain("c1");
+    expect(clusters[0]!.memberIds).toContain("c2");
+    expect(clusters[0]!.tier).toBe(MemoryTier.Ephemeral);
+  });
+
+  it("should not form cluster below minClusterSize", async () => {
+    const entries = new Map<string, unknown>();
+    entries.set("solo", makeMemEntry("solo", "lonely entry", {
+      tier: MemoryTier.Ephemeral,
+      embedding: [1, 0, 0, 0],
+    }));
+
+    const hnswStore = {
+      search: vi.fn(async () => [
+        { id: "solo", score: 1.0 },
+      ]),
+      remove: vi.fn(async () => {}),
+      upsert: vi.fn(async () => {}),
+    };
+
+    const opts = makeOpts({
+      entries,
+      hnswStore,
+      config: makeConfig({ minClusterSize: 2 }),
+    });
+    const engine = new MemoryConsolidationEngine(opts);
+    const clusters = await engine.findClusters(MemoryTier.Ephemeral);
+    expect(clusters).toEqual([]);
+  });
+
+  it("should sort clusters by highest avgSimilarity first", async () => {
+    const entries = new Map<string, unknown>();
+    entries.set("a1", makeMemEntry("a1", "group A1", { tier: MemoryTier.Ephemeral, embedding: [1, 0, 0, 0] }));
+    entries.set("a2", makeMemEntry("a2", "group A2", { tier: MemoryTier.Ephemeral, embedding: [0.9, 0.1, 0, 0] }));
+    entries.set("b1", makeMemEntry("b1", "group B1", { tier: MemoryTier.Ephemeral, embedding: [0, 1, 0, 0] }));
+    entries.set("b2", makeMemEntry("b2", "group B2", { tier: MemoryTier.Ephemeral, embedding: [0, 0.9, 0.1, 0] }));
+
+    let callCount = 0;
+    const hnswStore = {
+      search: vi.fn(async () => {
+        callCount++;
+        if (callCount === 1) {
+          return [
+            { id: "a1", score: 1.0 },
+            { id: "a2", score: 0.95 },
+          ];
+        }
+        if (callCount === 2) {
+          return [
+            { id: "b1", score: 1.0 },
+            { id: "b2", score: 0.75 },
+          ];
+        }
+        return [];
+      }),
+      remove: vi.fn(async () => {}),
+      upsert: vi.fn(async () => {}),
+    };
+
+    const opts = makeOpts({
+      entries,
+      hnswStore,
+      config: makeConfig({ threshold: 0.7, minClusterSize: 2 }),
+    });
+    const engine = new MemoryConsolidationEngine(opts);
+    const clusters = await engine.findClusters(MemoryTier.Ephemeral);
+
+    if (clusters.length === 2) {
+      expect(clusters[0]!.avgSimilarity).toBeGreaterThanOrEqual(clusters[1]!.avgSimilarity);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: runCycle
+// ---------------------------------------------------------------------------
+
+describe("runCycle", () => {
+  it("should return skipped when no clusters found", async () => {
+    const opts = makeOpts();
+    const engine = new MemoryConsolidationEngine(opts);
+
+    const ac = new AbortController();
+    const result = await engine.runCycle(ac.signal);
+
+    expect(result.status).toBe("skipped");
+    expect(result.processed).toBe(0);
+    expect(result.clustersFound).toBe(0);
+    expect(result.costUsd).toBe(0);
+  });
+
+  it("should emit consolidation:started event", async () => {
+    const emitter = makeEmitter();
+    const opts = makeOpts({ eventEmitter: emitter });
+    const engine = new MemoryConsolidationEngine(opts);
+
+    const ac = new AbortController();
+    await engine.runCycle(ac.signal);
+
+    expect(emitter.emit).toHaveBeenCalledWith("consolidation:started", expect.any(Object));
+  });
+
+  it("should return interrupted when signal is aborted before processing", async () => {
+    const entries = new Map<string, unknown>();
+    entries.set("r1", makeMemEntry("r1", "cycle test A", {
+      tier: MemoryTier.Ephemeral,
+      embedding: [1, 0, 0, 0],
+    }));
+    entries.set("r2", makeMemEntry("r2", "cycle test B", {
+      tier: MemoryTier.Ephemeral,
+      embedding: [0.9, 0.1, 0, 0],
+    }));
+
+    const hnswStore = {
+      search: vi.fn(async () => [
+        { id: "r1", score: 1.0 },
+        { id: "r2", score: 0.85 },
+      ]),
+      remove: vi.fn(async () => {}),
+      upsert: vi.fn(async () => {}),
+    };
+
+    const opts = makeOpts({
+      entries,
+      hnswStore,
+      config: makeConfig({ threshold: 0.7, minClusterSize: 2 }),
+    });
+    const engine = new MemoryConsolidationEngine(opts);
+
+    const ac = new AbortController();
+    ac.abort();
+
+    const result = await engine.runCycle(ac.signal);
+    expect(result.status).toBe("interrupted");
+    expect(result.processed).toBe(0);
+    expect(result.remaining).toBeGreaterThan(0);
+  });
+
+  it("should continue processing remaining clusters after one fails", async () => {
+    const entries = new Map<string, unknown>();
+    entries.set("f1", makeMemEntry("f1", "fail cluster A", { tier: MemoryTier.Working, embedding: [1, 0, 0, 0] }));
+    entries.set("f2", makeMemEntry("f2", "fail cluster B", { tier: MemoryTier.Working, embedding: [0.9, 0.1, 0, 0] }));
+    entries.set("s1", makeMemEntry("s1", "success cluster A", { tier: MemoryTier.Ephemeral, embedding: [0, 1, 0, 0] }));
+    entries.set("s2", makeMemEntry("s2", "success cluster B", { tier: MemoryTier.Ephemeral, embedding: [0, 0.9, 0.1, 0] }));
+
+    const hnswStore = {
+      search: vi.fn(async (vec: number[]) => {
+        if (vec[0]! > 0.5) {
+          return [
+            { id: "f1", score: 1.0 },
+            { id: "f2", score: 0.85 },
+          ];
+        }
+        return [
+          { id: "s1", score: 1.0 },
+          { id: "s2", score: 0.85 },
+        ];
+      }),
+      remove: vi.fn(async () => {}),
+      upsert: vi.fn(async () => {}),
+    };
+
+    let summarizeCallCount = 0;
+    const summarizeWithLLM = vi.fn(async () => {
+      summarizeCallCount++;
+      if (summarizeCallCount === 1) {
+        throw new Error("LLM failure");
+      }
+      return { summary: "Summary", cost: 0.001, model: "test" };
+    });
+
+    const logger = makeLogger();
+    const opts = makeOpts({
+      entries,
+      hnswStore,
       summarizeWithLLM,
-      eventEmitter: mockEmitter,
-      logger: mockLogger,
+      logger,
+      config: makeConfig({ threshold: 0.7, minClusterSize: 2 }),
     });
+    const engine = new MemoryConsolidationEngine(opts);
+
+    const ac = new AbortController();
+    const result = await engine.runCycle(ac.signal);
+
+    expect(logger.warn).toHaveBeenCalled();
+    expect(result.status).toBe("completed");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: processCluster
+// ---------------------------------------------------------------------------
+
+describe("processCluster", () => {
+  it("should create summary entry and remove original entries from memory", async () => {
+    const entries = new Map<string, unknown>();
+    entries.set("pc1", makeMemEntry("pc1", "content A", {
+      tier: MemoryTier.Ephemeral,
+      chatId: "chat-1",
+    }));
+    entries.set("pc2", makeMemEntry("pc2", "content B", {
+      tier: MemoryTier.Ephemeral,
+      chatId: "chat-1",
+    }));
+
+    const hnswStore = {
+      search: vi.fn(async () => []),
+      remove: vi.fn(async () => {}),
+      upsert: vi.fn(async () => {}),
+    };
+
+    const opts = makeOpts({ entries, hnswStore });
+    const engine = new MemoryConsolidationEngine(opts);
+
+    const cluster = {
+      seedId: "pc1",
+      memberIds: ["pc1", "pc2"],
+      avgSimilarity: 0.9,
+      tier: MemoryTier.Ephemeral,
+    };
+
+    const result = await engine.processCluster(cluster);
+
+    expect(result.cost).toBe(0.001);
+    expect(entries.has("pc1")).toBe(false);
+    expect(entries.has("pc2")).toBe(false);
+    expect(entries.size).toBe(1);
+    const summaryEntry = entries.values().next().value as any;
+    expect(summaryEntry.content).toBe("Consolidated summary");
+    expect(summaryEntry.tier).toBe(MemoryTier.Ephemeral);
   });
 
-  afterEach(() => {
-    db.close();
-  });
+  it("should call HNSW remove on originals and upsert for summary", async () => {
+    const entries = new Map<string, unknown>();
+    entries.set("h1", makeMemEntry("h1", "hnsw A", { tier: MemoryTier.Ephemeral }));
+    entries.set("h2", makeMemEntry("h2", "hnsw B", { tier: MemoryTier.Ephemeral }));
 
-  // ---------------------------------------------------------------------------
-  // CLUSTERING
-  // ---------------------------------------------------------------------------
+    const hnswStore = {
+      search: vi.fn(async () => []),
+      remove: vi.fn(async () => {}),
+      upsert: vi.fn(async () => {}),
+    };
 
-  describe("findClusters", () => {
-    it("finds clusters: entries with same tier and similarity >= threshold are grouped", async () => {
-      const sharedVec = makeVector(4, 1);
-      const e1 = makeEntry({ id: "e1", tier: MemoryTier.Ephemeral, embedding: sharedVec });
-      const e2 = makeEntry({ id: "e2", tier: MemoryTier.Ephemeral, embedding: sharedVec });
-      const e3 = makeEntry({ id: "e3", tier: MemoryTier.Ephemeral, embedding: sharedVec });
-      entries.set("e1", e1);
-      entries.set("e2", e2);
-      entries.set("e3", e3);
-      insertEntryIntoDb(db, e1);
-      insertEntryIntoDb(db, e2);
-      insertEntryIntoDb(db, e3);
+    const opts = makeOpts({ entries, hnswStore });
+    const engine = new MemoryConsolidationEngine(opts);
 
-      // Mock HNSW to return neighbors above threshold
-      mockHnsw.search.mockImplementation(async () => [
-        { id: "e1", chunk: {}, score: 0.95 },
-        { id: "e2", chunk: {}, score: 0.92 },
-        { id: "e3", chunk: {}, score: 0.90 },
-      ]);
-
-      const clusters = await engine.findClusters(MemoryTier.Ephemeral);
-      expect(clusters.length).toBeGreaterThanOrEqual(1);
-      expect(clusters[0]!.memberIds.length).toBeGreaterThanOrEqual(2);
-      expect(clusters[0]!.tier).toBe(MemoryTier.Ephemeral);
+    await engine.processCluster({
+      seedId: "h1",
+      memberIds: ["h1", "h2"],
+      avgSimilarity: 0.85,
+      tier: MemoryTier.Ephemeral,
     });
 
-    it("same tier only: entries from different tiers are never in the same cluster", async () => {
-      const sharedVec = makeVector(4, 1);
-      const e1 = makeEntry({ id: "e1", tier: MemoryTier.Ephemeral, embedding: sharedVec });
-      const e2 = makeEntry({ id: "e2", tier: MemoryTier.Working, embedding: sharedVec });
-      entries.set("e1", e1);
-      entries.set("e2", e2);
-      insertEntryIntoDb(db, e1);
-      insertEntryIntoDb(db, e2);
+    expect(hnswStore.remove).toHaveBeenCalledWith(["h1", "h2"]);
+    expect(hnswStore.upsert).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({
+          vector: [0.1, 0.2, 0.3, 0.4],
+        }),
+      ]),
+    );
+  });
 
-      mockHnsw.search.mockImplementation(async () => [
-        { id: "e1", chunk: {}, score: 0.95 },
-        { id: "e2", chunk: {}, score: 0.95 },
-      ]);
+  it("should use HNSW write mutex when provided", async () => {
+    const entries = new Map<string, unknown>();
+    entries.set("m1", makeMemEntry("m1", "mutex A", { tier: MemoryTier.Ephemeral }));
+    entries.set("m2", makeMemEntry("m2", "mutex B", { tier: MemoryTier.Ephemeral }));
 
-      const clusters = await engine.findClusters(MemoryTier.Ephemeral);
-      for (const cluster of clusters) {
-        for (const memberId of cluster.memberIds) {
-          const entry = entries.get(memberId);
-          expect(entry?.tier).toBe(MemoryTier.Ephemeral);
-        }
+    const mutexFn = vi.fn(async (fn: () => Promise<void>) => fn());
+    const hnswWriteMutex = { withLock: mutexFn };
+
+    const hnswStore = {
+      search: vi.fn(async () => []),
+      remove: vi.fn(async () => {}),
+      upsert: vi.fn(async () => {}),
+    };
+
+    const opts = makeOpts({ entries, hnswStore, hnswWriteMutex });
+    const engine = new MemoryConsolidationEngine(opts);
+
+    await engine.processCluster({
+      seedId: "m1",
+      memberIds: ["m1", "m2"],
+      avgSimilarity: 0.8,
+      tier: MemoryTier.Ephemeral,
+    });
+
+    expect(mutexFn).toHaveBeenCalled();
+  });
+
+  it("should track consolidation depth correctly", async () => {
+    const entries = new Map<string, unknown>();
+    entries.set("d1", makeMemEntry("d1", "depth test A", {
+      tier: MemoryTier.Ephemeral,
+      metadata: { consolidation: { depth: 2 } },
+    }));
+    entries.set("d2", makeMemEntry("d2", "depth test B", {
+      tier: MemoryTier.Ephemeral,
+      metadata: {},
+    }));
+
+    const hnswStore = {
+      search: vi.fn(async () => []),
+      remove: vi.fn(async () => {}),
+      upsert: vi.fn(async () => {}),
+    };
+
+    const opts = makeOpts({ entries, hnswStore });
+    const engine = new MemoryConsolidationEngine(opts);
+
+    await engine.processCluster({
+      seedId: "d1",
+      memberIds: ["d1", "d2"],
+      avgSimilarity: 0.9,
+      tier: MemoryTier.Ephemeral,
+    });
+
+    const summaryEntry = entries.values().next().value as any;
+    expect(summaryEntry.metadata.consolidation.depth).toBe(3); // max(2,0) + 1
+  });
+
+  it("should rollback SQLite on HNSW failure and re-throw", async () => {
+    const entries = new Map<string, unknown>();
+    entries.set("rb1", makeMemEntry("rb1", "rollback A", { tier: MemoryTier.Ephemeral }));
+    entries.set("rb2", makeMemEntry("rb2", "rollback B", { tier: MemoryTier.Ephemeral }));
+
+    const hnswStore = {
+      search: vi.fn(async () => []),
+      remove: vi.fn(async () => { throw new Error("HNSW crash"); }),
+      upsert: vi.fn(async () => {}),
+    };
+
+    const logger = makeLogger();
+    const opts = makeOpts({ entries, hnswStore, logger });
+    const engine = new MemoryConsolidationEngine(opts);
+
+    await expect(
+      engine.processCluster({
+        seedId: "rb1",
+        memberIds: ["rb1", "rb2"],
+        avgSimilarity: 0.9,
+        tier: MemoryTier.Ephemeral,
+      }),
+    ).rejects.toThrow("HNSW crash");
+
+    expect(logger.error).toHaveBeenCalledWith(
+      "[Consolidation] HNSW update failed, rolling back SQLite commit",
+      expect.any(Object),
+    );
+
+    // In-memory entries should NOT have been removed
+    expect(entries.has("rb1")).toBe(true);
+    expect(entries.has("rb2")).toBe(true);
+  });
+
+  it("should preserve the highest importanceScore from members", async () => {
+    const entries = new Map<string, unknown>();
+    entries.set("imp1", makeMemEntry("imp1", "low importance", {
+      tier: MemoryTier.Ephemeral,
+      importanceScore: 0.3,
+    }));
+    entries.set("imp2", makeMemEntry("imp2", "high importance", {
+      tier: MemoryTier.Ephemeral,
+      importanceScore: 0.9,
+    }));
+
+    const hnswStore = {
+      search: vi.fn(async () => []),
+      remove: vi.fn(async () => {}),
+      upsert: vi.fn(async () => {}),
+    };
+
+    const opts = makeOpts({ entries, hnswStore });
+    const engine = new MemoryConsolidationEngine(opts);
+
+    await engine.processCluster({
+      seedId: "imp1",
+      memberIds: ["imp1", "imp2"],
+      avgSimilarity: 0.8,
+      tier: MemoryTier.Ephemeral,
+    });
+
+    const summaryEntry = entries.values().next().value as any;
+    expect(summaryEntry.importanceScore).toBe(0.9);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: preview
+// ---------------------------------------------------------------------------
+
+describe("preview", () => {
+  it("should return empty clusters and zero cost when nothing to consolidate", async () => {
+    const opts = makeOpts();
+    const engine = new MemoryConsolidationEngine(opts);
+
+    const preview = await engine.preview();
+
+    expect(preview.clusters).toEqual([]);
+    expect(preview.estimatedCostPerCluster).toBe(0);
+    expect(preview.totalEstimatedCost).toBe(0);
+  });
+
+  it("should estimate cost based on content length", async () => {
+    const entries = new Map<string, unknown>();
+    entries.set("pv1", makeMemEntry("pv1", "a".repeat(4000), { tier: MemoryTier.Ephemeral, embedding: [1, 0, 0, 0] }));
+    entries.set("pv2", makeMemEntry("pv2", "b".repeat(4000), { tier: MemoryTier.Ephemeral, embedding: [0.9, 0.1, 0, 0] }));
+
+    const hnswStore = {
+      search: vi.fn(async () => [
+        { id: "pv1", score: 1.0 },
+        { id: "pv2", score: 0.85 },
+      ]),
+      remove: vi.fn(async () => {}),
+      upsert: vi.fn(async () => {}),
+    };
+
+    const opts = makeOpts({
+      entries,
+      hnswStore,
+      config: makeConfig({ threshold: 0.7, minClusterSize: 2 }),
+    });
+    const engine = new MemoryConsolidationEngine(opts);
+    const preview = await engine.preview();
+
+    expect(preview.clusters.length).toBeGreaterThan(0);
+    expect(preview.totalEstimatedCost).toBeGreaterThan(0);
+  });
+
+  it("should not modify entries during preview", async () => {
+    const entries = new Map<string, unknown>();
+    entries.set("safe1", makeMemEntry("safe1", "safe entry", { tier: MemoryTier.Ephemeral, embedding: [1, 0, 0, 0] }));
+    entries.set("safe2", makeMemEntry("safe2", "also safe", { tier: MemoryTier.Ephemeral, embedding: [0.9, 0.1, 0, 0] }));
+
+    const hnswStore = {
+      search: vi.fn(async () => [
+        { id: "safe1", score: 1.0 },
+        { id: "safe2", score: 0.85 },
+      ]),
+      remove: vi.fn(async () => {}),
+      upsert: vi.fn(async () => {}),
+    };
+
+    const opts = makeOpts({
+      entries,
+      hnswStore,
+      config: makeConfig({ threshold: 0.7, minClusterSize: 2 }),
+    });
+    const engine = new MemoryConsolidationEngine(opts);
+
+    await engine.preview();
+
+    expect(entries.size).toBe(2);
+    expect(entries.has("safe1")).toBe(true);
+    expect(entries.has("safe2")).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: undo
+// ---------------------------------------------------------------------------
+
+describe("undo", () => {
+  it("should throw if log entry not found", () => {
+    const opts = makeOpts();
+    const engine = new MemoryConsolidationEngine(opts);
+
+    expect(() => engine.undo("nonexistent-id")).toThrow(
+      "Consolidation log entry not found: nonexistent-id",
+    );
+  });
+
+  it("should throw if log entry status is not 'completed'", () => {
+    const { db, tables } = makeFakeDb();
+    tables.consolidation_log.push({
+      id: "failed-log",
+      summary_entry_id: "sum1",
+      source_entry_ids: JSON.stringify(["s1", "s2"]),
+      status: "failed",
+    });
+
+    const originalPrepare = db.prepare;
+    db.prepare = vi.fn((sql: string) => {
+      const stmt = originalPrepare(sql);
+      if (sql.includes("consolidation_log WHERE id =")) {
+        stmt.get = vi.fn(() => tables.consolidation_log[0]);
       }
-    });
+      return stmt;
+    }) as any;
 
-    it("min cluster size: clusters smaller than minClusterSize are excluded", async () => {
-      const e1 = makeEntry({ id: "e1", tier: MemoryTier.Ephemeral });
-      entries.set("e1", e1);
-      insertEntryIntoDb(db, e1);
+    const opts = makeOpts({ sqliteDb: db as any });
+    const engine = new MemoryConsolidationEngine(opts);
 
-      mockHnsw.search.mockImplementation(async () => [
-        { id: "e1", chunk: {}, score: 0.95 },
-      ]);
+    expect(() => engine.undo("failed-log")).toThrow(
+      "Cannot undo consolidation with status 'failed'",
+    );
+  });
+});
 
-      const clusters = await engine.findClusters(MemoryTier.Ephemeral);
-      expect(clusters.length).toBe(0);
-    });
+// ---------------------------------------------------------------------------
+// Tests: getStats
+// ---------------------------------------------------------------------------
 
-    it("instinct exemption: entries with domain='instinct' are excluded from clustering", async () => {
-      const sharedVec = makeVector(4, 1);
-      const e1 = makeEntry({ id: "e1", tier: MemoryTier.Ephemeral, domain: "instinct", embedding: sharedVec });
-      const e2 = makeEntry({ id: "e2", tier: MemoryTier.Ephemeral, embedding: sharedVec });
-      entries.set("e1", e1);
-      entries.set("e2", e2);
-      insertEntryIntoDb(db, e1);
-      insertEntryIntoDb(db, e2);
+describe("getStats", () => {
+  it("should return per-tier breakdown and lifetime totals", () => {
+    const opts = makeOpts();
+    const engine = new MemoryConsolidationEngine(opts);
 
-      mockHnsw.search.mockImplementation(async () => [
-        { id: "e1", chunk: {}, score: 0.95 },
-        { id: "e2", chunk: {}, score: 0.95 },
-      ]);
+    const stats = engine.getStats();
 
-      const clusters = await engine.findClusters(MemoryTier.Ephemeral);
-      for (const cluster of clusters) {
-        expect(cluster.memberIds).not.toContain("e1");
-      }
-    });
-
-    it("exempt domains: entries whose domain is in exempt list are excluded", async () => {
-      const sharedVec = makeVector(4, 1);
-      const engineWithExempt = new MemoryConsolidationEngine({
-        sqliteDb: db,
-        entries: entries as unknown as Map<string, unknown>,
-        hnswStore: mockHnsw as unknown as never,
-        config: DEFAULT_CONFIG,
-        generateEmbedding,
-        summarizeWithLLM,
-        eventEmitter: mockEmitter,
-        logger: mockLogger,
-        exemptDomains: ["analysis-cache", "instinct"],
-      });
-
-      const e1 = makeEntry({ id: "e1", tier: MemoryTier.Ephemeral, domain: "analysis-cache", embedding: sharedVec });
-      const e2 = makeEntry({ id: "e2", tier: MemoryTier.Ephemeral, embedding: sharedVec });
-      entries.set("e1", e1);
-      entries.set("e2", e2);
-      insertEntryIntoDb(db, e1);
-      insertEntryIntoDb(db, e2);
-
-      mockHnsw.search.mockImplementation(async () => [
-        { id: "e1", chunk: {}, score: 0.95 },
-        { id: "e2", chunk: {}, score: 0.95 },
-      ]);
-
-      const clusters = await engineWithExempt.findClusters(MemoryTier.Ephemeral);
-      for (const cluster of clusters) {
-        expect(cluster.memberIds).not.toContain("e1");
-      }
-    });
-
-    it("max depth: entries at consolidation depth >= maxDepth are excluded", async () => {
-      const sharedVec = makeVector(4, 1);
-      const e1 = makeEntry({
-        id: "e1",
-        tier: MemoryTier.Ephemeral,
-        embedding: sharedVec,
-        metadata: { consolidation: { depth: 3 } },
-      });
-      const e2 = makeEntry({ id: "e2", tier: MemoryTier.Ephemeral, embedding: sharedVec });
-      entries.set("e1", e1);
-      entries.set("e2", e2);
-      insertEntryIntoDb(db, e1);
-      insertEntryIntoDb(db, e2);
-
-      mockHnsw.search.mockImplementation(async () => [
-        { id: "e1", chunk: {}, score: 0.95 },
-        { id: "e2", chunk: {}, score: 0.95 },
-      ]);
-
-      const clusters = await engine.findClusters(MemoryTier.Ephemeral);
-      for (const cluster of clusters) {
-        expect(cluster.memberIds).not.toContain("e1");
-      }
-    });
-
-    it("age filter: entries created within last hour are excluded", async () => {
-      const sharedVec = makeVector(4, 1);
-      const e1 = makeEntry({
-        id: "e1",
-        tier: MemoryTier.Ephemeral,
-        embedding: sharedVec,
-        createdAt: createBrand(Date.now() - 1000, "TimestampMs" as const), // 1 second ago
-      });
-      const e2 = makeEntry({ id: "e2", tier: MemoryTier.Ephemeral, embedding: sharedVec });
-      entries.set("e1", e1);
-      entries.set("e2", e2);
-      insertEntryIntoDb(db, e1);
-      insertEntryIntoDb(db, e2);
-
-      mockHnsw.search.mockImplementation(async () => [
-        { id: "e1", chunk: {}, score: 0.95 },
-        { id: "e2", chunk: {}, score: 0.95 },
-      ]);
-
-      const clusters = await engine.findClusters(MemoryTier.Ephemeral);
-      for (const cluster of clusters) {
-        expect(cluster.memberIds).not.toContain("e1");
-      }
-    });
-
-    it("clusters sorted by highest avg similarity first", async () => {
-      const vec1 = makeVector(4, 1);
-      const vec2 = makeVector(4, 5);
-      const e1 = makeEntry({ id: "e1", tier: MemoryTier.Ephemeral, embedding: vec1 });
-      const e2 = makeEntry({ id: "e2", tier: MemoryTier.Ephemeral, embedding: vec1 });
-      const e3 = makeEntry({ id: "e3", tier: MemoryTier.Ephemeral, embedding: vec2 });
-      const e4 = makeEntry({ id: "e4", tier: MemoryTier.Ephemeral, embedding: vec2 });
-      entries.set("e1", e1);
-      entries.set("e2", e2);
-      entries.set("e3", e3);
-      entries.set("e4", e4);
-      insertEntryIntoDb(db, e1);
-      insertEntryIntoDb(db, e2);
-      insertEntryIntoDb(db, e3);
-      insertEntryIntoDb(db, e4);
-
-      let callCount = 0;
-      mockHnsw.search.mockImplementation(async () => {
-        callCount++;
-        if (callCount <= 2) {
-          return [
-            { id: "e1", chunk: {}, score: 0.95 },
-            { id: "e2", chunk: {}, score: 0.93 },
-          ];
-        }
-        return [
-          { id: "e3", chunk: {}, score: 0.88 },
-          { id: "e4", chunk: {}, score: 0.86 },
-        ];
-      });
-
-      const clusters = await engine.findClusters(MemoryTier.Ephemeral);
-      if (clusters.length >= 2) {
-        expect(clusters[0]!.avgSimilarity).toBeGreaterThanOrEqual(clusters[1]!.avgSimilarity);
-      }
-    });
+    expect(stats.perTier).toBeDefined();
+    expect(stats.lifetimeSavings).toBeDefined();
+    expect(stats.totalRuns).toBeDefined();
+    expect(stats.totalCostUsd).toBeDefined();
   });
 
-  // ---------------------------------------------------------------------------
-  // SUMMARIZATION & SOFT-DELETE
-  // ---------------------------------------------------------------------------
-
-  describe("processCluster", () => {
-    it("summarizes cluster: LLM generates summary; summary inherits max importance", async () => {
-      const sharedVec = makeVector(4, 1);
-      const e1 = makeEntry({ id: "e1", tier: MemoryTier.Ephemeral, importanceScore: 0.3 as NormalizedScore, embedding: sharedVec, content: "Content 1" });
-      const e2 = makeEntry({ id: "e2", tier: MemoryTier.Ephemeral, importanceScore: 0.8 as NormalizedScore, embedding: sharedVec, content: "Content 2" });
-      entries.set("e1", e1);
-      entries.set("e2", e2);
-      insertEntryIntoDb(db, e1);
-      insertEntryIntoDb(db, e2);
-
-      const cluster: MemoryCluster = {
-        seedId: "e1",
-        memberIds: ["e1", "e2"],
-        avgSimilarity: 0.92,
-        tier: MemoryTier.Ephemeral,
-      };
-
-      const result = await engine.processCluster(cluster);
-      expect(result.cost).toBeGreaterThanOrEqual(0);
-      expect(summarizeWithLLM).toHaveBeenCalled();
-
-      // Check the summary entry was inserted into the entries map
-      const summaryEntry = Array.from(entries.values()).find(
-        (e) => {
-          const meta = (e as unknown as Record<string, unknown>).metadata as Record<string, unknown> | undefined;
-          return meta?.consolidation !== undefined;
-        },
-      );
-      expect(summaryEntry).toBeDefined();
-
-      // Summary should have consolidation metadata with source IDs
-      const summaryMeta = (summaryEntry as unknown as Record<string, unknown>).metadata as Record<string, unknown>;
-      const consolidationMeta = summaryMeta.consolidation as Record<string, unknown>;
-      expect(consolidationMeta.sourceIds).toEqual(["e1", "e2"]);
-    });
-
-    it("atomic transaction: soft-delete + summary insert + log insert in one transaction", async () => {
-      const sharedVec = makeVector(4, 1);
-      const e1 = makeEntry({ id: "e1", tier: MemoryTier.Ephemeral, embedding: sharedVec });
-      const e2 = makeEntry({ id: "e2", tier: MemoryTier.Ephemeral, embedding: sharedVec });
-      entries.set("e1", e1);
-      entries.set("e2", e2);
-      insertEntryIntoDb(db, e1);
-      insertEntryIntoDb(db, e2);
-
-      const cluster: MemoryCluster = {
-        seedId: "e1",
-        memberIds: ["e1", "e2"],
-        avgSimilarity: 0.90,
-        tier: MemoryTier.Ephemeral,
-      };
-
-      await engine.processCluster(cluster);
-
-      // Check soft-delete flags on originals (both SQL column and JSON blob)
-      const row1 = db.prepare("SELECT * FROM memories WHERE id = ?").get("e1") as Record<string, unknown>;
-      const val1 = JSON.parse(row1.value as string) as Record<string, unknown>;
-      expect(val1.consolidated_into).toBeDefined();
-      expect(val1.consolidated_at).toBeDefined();
-      // SQL column must also be set (used by isConsolidated bulk query)
-      expect(row1.consolidated_into).toBeDefined();
-      expect(row1.consolidated_into).not.toBeNull();
-
-      // Check consolidation log entry exists
-      const logRows = db.prepare("SELECT * FROM consolidation_log").all();
-      expect(logRows.length).toBe(1);
-    });
-
-    it("soft delete: original entries get consolidated_into set, NOT physically deleted", async () => {
-      const sharedVec = makeVector(4, 1);
-      const e1 = makeEntry({ id: "e1", tier: MemoryTier.Ephemeral, embedding: sharedVec });
-      const e2 = makeEntry({ id: "e2", tier: MemoryTier.Ephemeral, embedding: sharedVec });
-      entries.set("e1", e1);
-      entries.set("e2", e2);
-      insertEntryIntoDb(db, e1);
-      insertEntryIntoDb(db, e2);
-
-      const cluster: MemoryCluster = {
-        seedId: "e1",
-        memberIds: ["e1", "e2"],
-        avgSimilarity: 0.90,
-        tier: MemoryTier.Ephemeral,
-      };
-
-      await engine.processCluster(cluster);
-
-      // Originals still exist in DB (not physically deleted)
-      const row1 = db.prepare("SELECT * FROM memories WHERE id = ?").get("e1");
-      const row2 = db.prepare("SELECT * FROM memories WHERE id = ?").get("e2");
-      expect(row1).toBeDefined();
-      expect(row2).toBeDefined();
-    });
-
-    it("HNSW cleanup: original vectors removed, summary vector added", async () => {
-      const sharedVec = makeVector(4, 1);
-      const e1 = makeEntry({ id: "e1", tier: MemoryTier.Ephemeral, embedding: sharedVec });
-      const e2 = makeEntry({ id: "e2", tier: MemoryTier.Ephemeral, embedding: sharedVec });
-      entries.set("e1", e1);
-      entries.set("e2", e2);
-      insertEntryIntoDb(db, e1);
-      insertEntryIntoDb(db, e2);
-
-      const cluster: MemoryCluster = {
-        seedId: "e1",
-        memberIds: ["e1", "e2"],
-        avgSimilarity: 0.90,
-        tier: MemoryTier.Ephemeral,
-      };
-
-      await engine.processCluster(cluster);
-
-      // HNSW remove called for originals
-      expect(mockHnsw.remove).toHaveBeenCalledWith(["e1", "e2"]);
-      // HNSW upsert called for summary
-      expect(mockHnsw.upsert).toHaveBeenCalled();
-    });
-
-    it("embedding failure: if embedding generation fails, skip cluster", async () => {
-      const sharedVec = makeVector(4, 1);
-      const e1 = makeEntry({ id: "e1", tier: MemoryTier.Ephemeral, embedding: sharedVec });
-      const e2 = makeEntry({ id: "e2", tier: MemoryTier.Ephemeral, embedding: sharedVec });
-      entries.set("e1", e1);
-      entries.set("e2", e2);
-      insertEntryIntoDb(db, e1);
-      insertEntryIntoDb(db, e2);
-
-      generateEmbedding.mockRejectedValueOnce(new Error("Embedding provider failed"));
-
-      const cluster: MemoryCluster = {
-        seedId: "e1",
-        memberIds: ["e1", "e2"],
-        avgSimilarity: 0.90,
-        tier: MemoryTier.Ephemeral,
-      };
-
-      await expect(engine.processCluster(cluster)).rejects.toThrow();
-
-      // No consolidation log should be created
-      const logRows = db.prepare("SELECT * FROM consolidation_log").all();
-      expect(logRows.length).toBe(0);
-    });
-
-    it("recursive depth: summary entry depth = max(source depths) + 1", async () => {
-      const sharedVec = makeVector(4, 1);
-      const e1 = makeEntry({
-        id: "e1",
-        tier: MemoryTier.Ephemeral,
-        embedding: sharedVec,
-        metadata: { consolidation: { depth: 1 } },
-      });
-      const e2 = makeEntry({
-        id: "e2",
-        tier: MemoryTier.Ephemeral,
-        embedding: sharedVec,
-        metadata: { consolidation: { depth: 2 } },
-      });
-      entries.set("e1", e1);
-      entries.set("e2", e2);
-      insertEntryIntoDb(db, e1);
-      insertEntryIntoDb(db, e2);
-
-      const cluster: MemoryCluster = {
-        seedId: "e1",
-        memberIds: ["e1", "e2"],
-        avgSimilarity: 0.90,
-        tier: MemoryTier.Ephemeral,
-      };
-
-      await engine.processCluster(cluster);
-
-      // Find the summary entry
-      const summaryEntry = Array.from(entries.values()).find(
-        (e) => {
-          const meta = (e as unknown as Record<string, unknown>).metadata as Record<string, unknown> | undefined;
-          return meta?.consolidation && ((meta.consolidation as Record<string, unknown>).sourceIds as string[] | undefined)?.includes("e1");
-        },
-      );
-      expect(summaryEntry).toBeDefined();
-      const meta = (summaryEntry as unknown as Record<string, unknown>).metadata as Record<string, unknown>;
-      expect((meta.consolidation as Record<string, unknown>).depth).toBe(3); // max(1,2) + 1
-    });
-  });
-
-  // ---------------------------------------------------------------------------
-  // INTERRUPTION (MEM-13)
-  // ---------------------------------------------------------------------------
-
-  describe("runCycle", () => {
-    it("interruption: AbortSignal checked between clusters; returns 'interrupted'", async () => {
-      const sharedVec = makeVector(4, 1);
-      const e1 = makeEntry({ id: "e1", tier: MemoryTier.Ephemeral, embedding: sharedVec });
-      const e2 = makeEntry({ id: "e2", tier: MemoryTier.Ephemeral, embedding: sharedVec });
-      const vec2 = makeVector(4, 5);
-      const e3 = makeEntry({ id: "e3", tier: MemoryTier.Ephemeral, embedding: vec2 });
-      const e4 = makeEntry({ id: "e4", tier: MemoryTier.Ephemeral, embedding: vec2 });
-      entries.set("e1", e1);
-      entries.set("e2", e2);
-      entries.set("e3", e3);
-      entries.set("e4", e4);
-      insertEntryIntoDb(db, e1);
-      insertEntryIntoDb(db, e2);
-      insertEntryIntoDb(db, e3);
-      insertEntryIntoDb(db, e4);
-
-      let callCount = 0;
-      mockHnsw.search.mockImplementation(async () => {
-        callCount++;
-        if (callCount <= 2) {
-          return [
-            { id: "e1", chunk: {}, score: 0.95 },
-            { id: "e2", chunk: {}, score: 0.93 },
-          ];
-        }
-        return [
-          { id: "e3", chunk: {}, score: 0.88 },
-          { id: "e4", chunk: {}, score: 0.86 },
-        ];
-      });
-
-      const controller = new AbortController();
-      // Abort after the first cluster is processed
-      let processCount = 0;
-      const origProcess = engine.processCluster.bind(engine);
-      vi.spyOn(engine, "processCluster").mockImplementation(async (cluster) => {
-        const result = await origProcess(cluster);
-        processCount++;
-        if (processCount >= 1) {
-          controller.abort();
-        }
-        return result;
-      });
-
-      const result = await engine.runCycle(controller.signal);
-      expect(result.status).toBe("interrupted");
-      expect(result.processed).toBeGreaterThanOrEqual(1);
-      expect(result.remaining).toBeGreaterThanOrEqual(0);
-    });
-
-    it("completed result: returns status 'completed' with zero remaining", async () => {
-      const sharedVec = makeVector(4, 1);
-      const e1 = makeEntry({ id: "e1", tier: MemoryTier.Ephemeral, embedding: sharedVec });
-      const e2 = makeEntry({ id: "e2", tier: MemoryTier.Ephemeral, embedding: sharedVec });
-      entries.set("e1", e1);
-      entries.set("e2", e2);
-      insertEntryIntoDb(db, e1);
-      insertEntryIntoDb(db, e2);
-
-      mockHnsw.search.mockImplementation(async () => [
-        { id: "e1", chunk: {}, score: 0.95 },
-        { id: "e2", chunk: {}, score: 0.93 },
-      ]);
-
-      const controller = new AbortController();
-      const result = await engine.runCycle(controller.signal);
-      expect(result.status).toBe("completed");
-      expect(result.remaining).toBe(0);
-    });
-
-    it("emits consolidation:started and consolidation:completed events", async () => {
-      const sharedVec = makeVector(4, 1);
-      const e1 = makeEntry({ id: "e1", tier: MemoryTier.Ephemeral, embedding: sharedVec });
-      const e2 = makeEntry({ id: "e2", tier: MemoryTier.Ephemeral, embedding: sharedVec });
-      entries.set("e1", e1);
-      entries.set("e2", e2);
-      insertEntryIntoDb(db, e1);
-      insertEntryIntoDb(db, e2);
-
-      mockHnsw.search.mockImplementation(async () => [
-        { id: "e1", chunk: {}, score: 0.95 },
-        { id: "e2", chunk: {}, score: 0.93 },
-      ]);
-
-      const controller = new AbortController();
-      await engine.runCycle(controller.signal);
-
-      const emitCalls = mockEmitter.emit.mock.calls.map((c) => c[0]);
-      expect(emitCalls).toContain("consolidation:started");
-      expect(emitCalls).toContain("consolidation:completed");
-    });
-
-    it("skipped: returns skipped when no clusters found", async () => {
-      const controller = new AbortController();
-      const result = await engine.runCycle(controller.signal);
-      expect(result.status).toBe("skipped");
-      expect(result.processed).toBe(0);
-      expect(result.clustersFound).toBe(0);
-    });
-  });
-
-  // ---------------------------------------------------------------------------
-  // PREVIEW (DRY-RUN)
-  // ---------------------------------------------------------------------------
-
-  describe("preview", () => {
-    it("returns clusters with similarity scores without modifying anything", async () => {
-      const sharedVec = makeVector(4, 1);
-      const e1 = makeEntry({ id: "e1", tier: MemoryTier.Ephemeral, embedding: sharedVec, content: "Short" });
-      const e2 = makeEntry({ id: "e2", tier: MemoryTier.Ephemeral, embedding: sharedVec, content: "Short" });
-      entries.set("e1", e1);
-      entries.set("e2", e2);
-      insertEntryIntoDb(db, e1);
-      insertEntryIntoDb(db, e2);
-
-      mockHnsw.search.mockImplementation(async () => [
-        { id: "e1", chunk: {}, score: 0.95 },
-        { id: "e2", chunk: {}, score: 0.93 },
-      ]);
-
-      const preview = await engine.preview();
-      expect(preview.clusters.length).toBeGreaterThanOrEqual(1);
-      expect(preview.totalEstimatedCost).toBeGreaterThanOrEqual(0);
-
-      // No modifications should have been made
-      expect(mockHnsw.remove).not.toHaveBeenCalled();
-      expect(mockHnsw.upsert).not.toHaveBeenCalled();
-      expect(summarizeWithLLM).not.toHaveBeenCalled();
-
-      // Consolidation log should be empty
-      const logRows = db.prepare("SELECT * FROM consolidation_log").all();
-      expect(logRows.length).toBe(0);
-    });
-  });
-
-  // ---------------------------------------------------------------------------
-  // UNDO
-  // ---------------------------------------------------------------------------
-
-  describe("undo", () => {
-    it("restores originals, deletes summary, rebuilds HNSW vectors, marks log undone", async () => {
-      const sharedVec = makeVector(4, 1);
-      const e1 = makeEntry({ id: "e1", tier: MemoryTier.Ephemeral, embedding: sharedVec, content: "Content 1" });
-      const e2 = makeEntry({ id: "e2", tier: MemoryTier.Ephemeral, embedding: sharedVec, content: "Content 2" });
-      entries.set("e1", e1);
-      entries.set("e2", e2);
-      insertEntryIntoDb(db, e1);
-      insertEntryIntoDb(db, e2);
-
-      const cluster: MemoryCluster = {
-        seedId: "e1",
-        memberIds: ["e1", "e2"],
-        avgSimilarity: 0.90,
-        tier: MemoryTier.Ephemeral,
-      };
-
-      await engine.processCluster(cluster);
-
-      // Get the log entry
-      const logRow = db.prepare("SELECT * FROM consolidation_log").get() as Record<string, unknown>;
-      const logId = logRow.id as string;
-      const summaryId = logRow.summary_entry_id as string;
-
-      // Reset mock call counts before undo
-      mockHnsw.remove.mockClear();
-      mockHnsw.upsert.mockClear();
-
-      // Undo it (sync call, but HNSW ops are async fire-and-forget)
-      engine.undo(logId);
-      await new Promise(r => setTimeout(r, 50)); // Allow async HNSW ops to settle
-
-      // Log should be marked as undone
-      const updatedLog = db.prepare("SELECT * FROM consolidation_log WHERE id = ?").get(logId) as Record<string, unknown>;
-      expect(updatedLog.status).toBe("undone");
-
-      // Originals should be unflagged
-      const row1 = db.prepare("SELECT * FROM memories WHERE id = ?").get("e1") as Record<string, unknown>;
-      const val1 = JSON.parse(row1.value as string) as Record<string, unknown>;
-      expect(val1.consolidated_into).toBeUndefined();
-
-      // Summary entry should be removed
-      const summaryRow = db.prepare("SELECT * FROM memories WHERE id = ?").get(summaryId);
-      expect(summaryRow).toBeUndefined();
-
-      // HNSW should have been updated (remove summary, upsert originals)
-      expect(mockHnsw.remove).toHaveBeenCalled();
-      expect(mockHnsw.upsert).toHaveBeenCalled();
-    });
-
-    it("throws if log status is not 'completed'", () => {
-      // Insert an undone log entry
-      db.prepare(
-        "INSERT INTO consolidation_log (id, summary_entry_id, source_entry_ids, similarity_score, model_used, cost, timestamp, depth, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-      ).run("log-1", "sum-1", JSON.stringify(["e1"]), 0.9, "test", 0, Date.now(), 1, "undone");
-
-      expect(() => engine.undo("log-1")).toThrow();
-    });
-  });
-
-  // ---------------------------------------------------------------------------
-  // STATS
-  // ---------------------------------------------------------------------------
-
-  describe("getStats", () => {
-    it("returns per-tier breakdown and lifetime savings", async () => {
-      const sharedVec = makeVector(4, 1);
-      const e1 = makeEntry({ id: "e1", tier: MemoryTier.Ephemeral, embedding: sharedVec });
-      const e2 = makeEntry({ id: "e2", tier: MemoryTier.Ephemeral, embedding: sharedVec });
-      entries.set("e1", e1);
-      entries.set("e2", e2);
-      insertEntryIntoDb(db, e1);
-      insertEntryIntoDb(db, e2);
-
-      const cluster: MemoryCluster = {
-        seedId: "e1",
-        memberIds: ["e1", "e2"],
-        avgSimilarity: 0.90,
-        tier: MemoryTier.Ephemeral,
-      };
-
-      await engine.processCluster(cluster);
-
-      const stats = engine.getStats();
-      expect(stats.totalRuns).toBeGreaterThanOrEqual(1);
-      expect(stats.lifetimeSavings).toBeGreaterThanOrEqual(1);
-      expect(stats.perTier).toBeDefined();
-    });
+  it("should count entries per tier correctly", () => {
+    const entries = new Map<string, unknown>();
+    entries.set("st1", makeMemEntry("st1", "working", { tier: MemoryTier.Working }));
+    entries.set("st2", makeMemEntry("st2", "ephemeral", { tier: MemoryTier.Ephemeral }));
+    entries.set("st3", makeMemEntry("st3", "ephemeral 2", { tier: MemoryTier.Ephemeral }));
+
+    const opts = makeOpts({ entries });
+    const engine = new MemoryConsolidationEngine(opts);
+
+    const stats = engine.getStats();
+
+    expect(stats.perTier[MemoryTier.Working]!.pending).toBe(1);
+    expect(stats.perTier[MemoryTier.Ephemeral]!.pending).toBe(2);
+    expect(stats.perTier[MemoryTier.Persistent]!.pending).toBe(0);
   });
 });

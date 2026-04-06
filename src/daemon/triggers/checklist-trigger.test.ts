@@ -431,4 +431,99 @@ describe("ChecklistTrigger", () => {
     trigger.shouldFire(new Date());
     expect(trigger.getDueItems()).toHaveLength(0);
   });
+
+  // ===========================================================================
+  // Unscheduled items fire only once (text-key dedup)
+  // ===========================================================================
+
+  it("unscheduled items fire only once even across different minutes", () => {
+    vi.setSystemTime(new Date("2026-03-09T10:00:00Z"));
+
+    const trigger = new ChecklistTrigger(
+      makeDef([makeItem("One-shot task")]),
+      "UTC",
+    );
+
+    expect(trigger.shouldFire(new Date())).toBe(true);
+    trigger.onFired(new Date());
+
+    // Move to next minute -- unscheduled items should NOT fire again
+    vi.setSystemTime(new Date("2026-03-09T10:01:00Z"));
+    expect(trigger.shouldFire(new Date())).toBe(false);
+  });
+
+  it("unscheduled items fire again after updateItems resets tracking", () => {
+    vi.setSystemTime(new Date("2026-03-09T10:00:00Z"));
+
+    const trigger = new ChecklistTrigger(
+      makeDef([makeItem("Repeatable after update")]),
+      "UTC",
+    );
+
+    expect(trigger.shouldFire(new Date())).toBe(true);
+    trigger.onFired(new Date());
+
+    // Move to next minute
+    vi.setSystemTime(new Date("2026-03-09T10:01:00Z"));
+    expect(trigger.shouldFire(new Date())).toBe(false);
+
+    // updateItems resets tracking, so the item fires again
+    trigger.updateItems([makeItem("Repeatable after update")]);
+    expect(trigger.shouldFire(new Date())).toBe(true);
+  });
+
+  // ===========================================================================
+  // onFired with no due items is a no-op
+  // ===========================================================================
+
+  it("onFired with no due items does not change description", () => {
+    vi.setSystemTime(new Date("2026-03-09T10:00:00Z"));
+
+    const trigger = new ChecklistTrigger(
+      makeDef([makeItem("Not due", { schedule: "0 9 * * *" })]),
+      "UTC",
+    );
+
+    const descBefore = trigger.metadata.description;
+    trigger.shouldFire(new Date());
+    trigger.onFired(new Date());
+    expect(trigger.metadata.description).toBe(descBefore);
+  });
+
+  // ===========================================================================
+  // updateItems clears dueItems
+  // ===========================================================================
+
+  it("updateItems resets dueItems to empty", () => {
+    vi.setSystemTime(new Date("2026-03-09T09:00:00Z"));
+
+    const trigger = new ChecklistTrigger(
+      makeDef([makeItem("Task", { schedule: "0 9 * * *" })]),
+      "UTC",
+    );
+
+    trigger.shouldFire(new Date());
+    expect(trigger.getDueItems()).toHaveLength(1);
+
+    trigger.updateItems([]);
+    expect(trigger.getDueItems()).toHaveLength(0);
+  });
+
+  // ===========================================================================
+  // getNextRun with all items checked returns null
+  // ===========================================================================
+
+  it("getNextRun returns null when all scheduled items are checked", () => {
+    vi.setSystemTime(new Date("2026-03-09T08:30:00Z"));
+
+    const trigger = new ChecklistTrigger(
+      makeDef([
+        makeItem("Done A", { checked: true, schedule: "0 9 * * *" }),
+        makeItem("Done B", { checked: true, schedule: "0 10 * * *" }),
+      ]),
+      "UTC",
+    );
+
+    expect(trigger.getNextRun()).toBeNull();
+  });
 });

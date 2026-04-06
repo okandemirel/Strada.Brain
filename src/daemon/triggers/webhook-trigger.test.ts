@@ -164,6 +164,42 @@ describe("WebhookTrigger", () => {
     const events = trigger.getPendingEvents();
     expect(events[0]!.context).toEqual({ branch: "main", sha: "abc123" });
   });
+
+  // ===========================================================================
+  // Buffer overflow protection (MAX_PENDING)
+  // ===========================================================================
+
+  it("drops events when buffer reaches MAX_PENDING (1000)", () => {
+    for (let i = 0; i < 1001; i++) {
+      trigger.pushEvent(`event-${i}`);
+    }
+    expect(trigger.getPendingEvents()).toHaveLength(1000);
+    // The 1001st event should be dropped
+    const events = trigger.getPendingEvents();
+    expect(events[events.length - 1]!.action).toBe("event-999");
+  });
+
+  it("accepts events again after drain (onFired) when buffer was full", () => {
+    for (let i = 0; i < 1000; i++) {
+      trigger.pushEvent(`event-${i}`);
+    }
+    trigger.onFired(new Date());
+    trigger.pushEvent("new-event");
+    expect(trigger.getPendingEvents()).toHaveLength(1);
+    expect(trigger.getPendingEvents()[0]!.action).toBe("new-event");
+  });
+
+  // ===========================================================================
+  // onFired description with no source
+  // ===========================================================================
+
+  it("onFired description omits source when source is undefined", () => {
+    trigger.pushEvent("deploy");
+    trigger.onFired(new Date());
+
+    expect(trigger.metadata.description).toContain("deploy");
+    expect(trigger.metadata.description).not.toContain("from ");
+  });
 });
 
 // =============================================================================
@@ -241,6 +277,67 @@ describe("WebhookRateLimiter", () => {
 
     // After now+500 also expires (at now+1501), we have room again
     expect(limiter.isAllowed(now + 1502)).toBe(true);
+  });
+
+  it("parseRateLimit parses '5/sec' correctly", () => {
+    const result = parseRateLimit("5/sec");
+    expect(result.maxRequests).toBe(5);
+    expect(result.windowMs).toBe(1_000);
+  });
+
+  it("per-source isolation: one source cannot exhaust another's limit", () => {
+    const limiter = new WebhookRateLimiter(2, 60_000);
+    const now = Date.now();
+
+    // Source A exhausts its limit
+    limiter.isAllowed(now, "source-a");
+    limiter.isAllowed(now + 1, "source-a");
+    expect(limiter.isAllowed(now + 2, "source-a")).toBe(false);
+
+    // Source B should still be allowed
+    expect(limiter.isAllowed(now + 3, "source-b")).toBe(true);
+  });
+
+  it("cleanup removes stale per-source windows", () => {
+    const limiter = new WebhookRateLimiter(10, 1000);
+    const now = Date.now();
+
+    limiter.isAllowed(now, "stale-source");
+    limiter.isAllowed(now, "fresh-source");
+
+    // After the window expires, cleanup should remove stale-source
+    limiter.cleanup(now + 1001);
+
+    // Fresh-source should also be cleaned since its timestamp also expired
+    // After cleanup, both are removed (all timestamps expired)
+    // Adding a new request should work for both
+    expect(limiter.isAllowed(now + 1001, "stale-source")).toBe(true);
+    expect(limiter.isAllowed(now + 1001, "fresh-source")).toBe(true);
+  });
+
+  it("cleanup does not remove sources with recent timestamps", () => {
+    const limiter = new WebhookRateLimiter(2, 1000);
+    const now = Date.now();
+
+    limiter.isAllowed(now, "active");
+    limiter.isAllowed(now, "active");
+
+    // Cleanup before window expires should keep the source
+    limiter.cleanup(now + 500);
+
+    // Source still has its timestamps, so should be at limit
+    expect(limiter.isAllowed(now + 500, "active")).toBe(false);
+  });
+
+  it("default source is 'global' when not specified", () => {
+    const limiter = new WebhookRateLimiter(1, 60_000);
+    const now = Date.now();
+
+    limiter.isAllowed(now); // Uses "global"
+    expect(limiter.isAllowed(now + 1)).toBe(false); // "global" at limit
+
+    // Named source should be independent
+    expect(limiter.isAllowed(now + 2, "other")).toBe(true);
   });
 });
 
@@ -331,5 +428,36 @@ describe("webhookAuth", () => {
     );
     expect(result.valid).toBe(false);
     expect(result.status).toBe(401);
+  });
+
+  it("authorization header without Bearer prefix is accepted as raw token", () => {
+    const result = validateWebhookAuth(
+      { authorization: "dash-token" },
+      undefined,
+      "dash-token",
+    );
+    expect(result.valid).toBe(true);
+  });
+
+  it("returns 401 when auth is configured but no credentials provided", () => {
+    const result = validateWebhookAuth(
+      {},
+      "my-secret",
+      undefined,
+    );
+    expect(result.valid).toBe(false);
+    expect(result.status).toBe(401);
+    expect(result.message).toBe("Authentication required");
+  });
+
+  it("returns 401 when dashboard token configured but no auth header", () => {
+    const result = validateWebhookAuth(
+      {},
+      undefined,
+      "dash-token",
+    );
+    expect(result.valid).toBe(false);
+    expect(result.status).toBe(401);
+    expect(result.message).toBe("Authentication required");
   });
 });
