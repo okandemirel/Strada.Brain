@@ -6,6 +6,17 @@
  * All initialization logic has been moved to bootstrap.ts
  */
 
+// Early Node.js version guard — must run before any ESM imports that rely on 20+ features
+const _nodeParts = process.versions.node.split(".").map(Number);
+const _major = _nodeParts[0] ?? 0;
+const _minor = _nodeParts[1] ?? 0;
+if ((_major === 20 && _minor < 19) || _major === 21 || (_major === 22 && _minor < 12) || _major < 20) {
+  console.error(
+    `Strada Brain requires Node.js 20.19+ or 22.12+. Current: ${process.versions.node}`,
+  );
+  process.exit(1);
+}
+
 import { Command } from "commander";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";

@@ -80,6 +80,7 @@ export class LearningPipeline {
   private readonly feedbackHandler: FeedbackHandler;
   private embeddingQueue: EmbeddingQueue | null = null;
   private evolutionTimer: ReturnType<typeof setInterval> | null = null;
+  private feedbackReactionListener: ((event: FeedbackReactionEvent) => void) | null = null;
   private periodicTimer?: ReturnType<typeof setInterval>;
   private isRunning = false;
 
@@ -114,7 +115,7 @@ export class LearningPipeline {
 
     // Subscribe to feedback:reaction events from channel adapters
     if (this.eventBus) {
-      this.eventBus.on("feedback:reaction", (event: FeedbackReactionEvent) => {
+      this.feedbackReactionListener = (event: FeedbackReactionEvent) => {
         if (event.type === "thumbs_up") {
           this.feedbackHandler.handleThumbsUp({
             instinctIds: event.instinctIds,
@@ -128,7 +129,8 @@ export class LearningPipeline {
             source: event.source,
           });
         }
-      });
+      };
+      this.eventBus.on("feedback:reaction", this.feedbackReactionListener);
     }
   }
 
@@ -174,6 +176,10 @@ export class LearningPipeline {
     if (this.periodicTimer) {
       clearInterval(this.periodicTimer);
       this.periodicTimer = undefined;
+    }
+    if (this.eventBus && this.feedbackReactionListener) {
+      this.eventBus.off("feedback:reaction", this.feedbackReactionListener);
+      this.feedbackReactionListener = null;
     }
   }
 

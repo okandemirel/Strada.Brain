@@ -680,19 +680,27 @@ export class DiscordChannel implements IChannelAdapter {
     });
 
     this.client.on(Events.MessageCreate, async (message) => {
-      if (message.author.bot) return;
+      try {
+        if (message.author.bot) return;
 
-      const userId = message.author.id;
-      if (!this.auth.isDiscordUserAllowed(userId, this.extractRoleIds(message))) {
-        await message.reply(
-          "You are not authorized to use Strada Brain. Contact the administrator."
-        );
-        return;
+        const userId = message.author.id;
+        if (!this.auth.isDiscordUserAllowed(userId, this.extractRoleIds(message))) {
+          await message.reply(
+            "You are not authorized to use Strada Brain. Contact the administrator."
+          );
+          return;
+        }
+
+        if (message.content.startsWith("/")) return;
+
+        await this.handleRegularMessage(message);
+      } catch (error) {
+        logger.error("Error handling Discord message", {
+          error: error instanceof Error ? error.message : String(error),
+          userId: message.author?.id,
+          channelId: message.channelId,
+        });
       }
-
-      if (message.content.startsWith("/")) return;
-
-      await this.handleRegularMessage(message);
     });
 
     // Feedback via emoji reactions (thumbs up/down)

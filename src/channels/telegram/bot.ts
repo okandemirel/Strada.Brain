@@ -441,44 +441,50 @@ export class TelegramChannel implements IChannelAdapter {
   private setupHandlers(): void {
     // Handle callback queries (confirmations)
     this.bot.on("callback_query:data", async (ctx) => {
-      // H3: Auth check on callback queries
-      const userId = ctx.from?.id;
-      if (!userId || !this.auth.isTelegramUserAllowed(userId)) {
-        await ctx.answerCallbackQuery({ text: "Unauthorized" });
-        return;
-      }
-
-      const data = ctx.callbackQuery.data;
-      const separatorIndex = data.indexOf(":");
-      if (separatorIndex === -1) return;
-
-      const confirmId = data.substring(0, separatorIndex);
-      const selectedOption = data.substring(separatorIndex + 1);
-
-      // Handle regular confirmations
-      const pending = this.pendingConfirmations.get(confirmId);
-      if (pending) {
-        if (String(ctx.chat?.id ?? "") !== pending.chatId) {
-          await ctx.answerCallbackQuery({ text: "Confirmation is no longer valid." });
+      try {
+        // H3: Auth check on callback queries
+        const userId = ctx.from?.id;
+        if (!userId || !this.auth.isTelegramUserAllowed(userId)) {
+          await ctx.answerCallbackQuery({ text: "Unauthorized" });
           return;
         }
 
-        if (pending.userId && String(userId) !== pending.userId) {
-          await ctx.answerCallbackQuery({ text: "Only the original requester can respond." });
+        const data = ctx.callbackQuery.data;
+        const separatorIndex = data.indexOf(":");
+        if (separatorIndex === -1) return;
+
+        const confirmId = data.substring(0, separatorIndex);
+        const selectedOption = data.substring(separatorIndex + 1);
+
+        // Handle regular confirmations
+        const pending = this.pendingConfirmations.get(confirmId);
+        if (pending) {
+          if (String(ctx.chat?.id ?? "") !== pending.chatId) {
+            await ctx.answerCallbackQuery({ text: "Confirmation is no longer valid." });
+            return;
+          }
+
+          if (pending.userId && String(userId) !== pending.userId) {
+            await ctx.answerCallbackQuery({ text: "Only the original requester can respond." });
+            return;
+          }
+
+          clearTimeout(pending.timeout);
+          this.pendingConfirmations.delete(confirmId);
+          pending.resolve(selectedOption);
+          await ctx.answerCallbackQuery({ text: `Selected: ${selectedOption}` });
           return;
         }
 
-        clearTimeout(pending.timeout);
-        this.pendingConfirmations.delete(confirmId);
-        pending.resolve(selectedOption);
-        await ctx.answerCallbackQuery({ text: `Selected: ${selectedOption}` });
-        return;
-      }
-
-      // Handle diff confirmations
-      const diffPending = this.pendingDiffConfirmations.get(confirmId);
-      if (diffPending) {
-        await this.handleDiffCallback(ctx, confirmId, selectedOption, diffPending);
+        // Handle diff confirmations
+        const diffPending = this.pendingDiffConfirmations.get(confirmId);
+        if (diffPending) {
+          await this.handleDiffCallback(ctx, confirmId, selectedOption, diffPending);
+        }
+      } catch (error) {
+        getLogger().error("Telegram callback query handler error", {
+          error: error instanceof Error ? error.message : String(error),
+        });
       }
     });
 
@@ -546,33 +552,25 @@ export class TelegramChannel implements IChannelAdapter {
       await ctx.reply(feedbackType === "thumbs_up" ? "Thanks for the positive feedback!" : "Thanks for the feedback. I'll try to improve.");
     });
 
-    // Handle photo messages
-    this.bot.on("message:photo", async (ctx) => {
-      await this.routeMediaMessage(ctx, "image");
-    });
-
-    // Handle document messages
-    this.bot.on("message:document", async (ctx) => {
-      await this.routeMediaMessage(ctx, "document");
-    });
-
-    // Handle video messages
-    this.bot.on("message:video", async (ctx) => {
-      await this.routeMediaMessage(ctx, "video");
-    });
-
-    // Handle voice/audio messages
-    this.bot.on("message:voice", async (ctx) => {
-      await this.routeMediaMessage(ctx, "audio");
-    });
-
-    this.bot.on("message:audio", async (ctx) => {
-      await this.routeMediaMessage(ctx, "audio");
-    });
+    // Media handlers — each routes to the media pipeline with a defensive catch
+    const mediaEvents = [
+      { event: "message:photo" as const, type: "image" as const },
+      { event: "message:document" as const, type: "document" as const },
+      { event: "message:video" as const, type: "video" as const },
+      { event: "message:voice" as const, type: "audio" as const },
+      { event: "message:audio" as const, type: "audio" as const },
+    ];
+    for (const { event, type } of mediaEvents) {
+      this.bot.on(event, async (ctx) => {
+        try { await this.routeMediaMessage(ctx, type); }
+        catch (e) { getLogger().error(`Telegram ${type} handler error`, { error: e instanceof Error ? e.message : String(e) }); }
+      });
+    }
 
     // Handle all text messages -> route to orchestrator
     this.bot.on("message:text", async (ctx) => {
-      await this.routeMessage(ctx);
+      try { await this.routeMessage(ctx); }
+      catch (e) { getLogger().error("Telegram text handler error", { error: e instanceof Error ? e.message : String(e) }); }
     });
   }
 

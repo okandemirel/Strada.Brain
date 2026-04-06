@@ -688,7 +688,13 @@ export class SlackChannel implements IChannelAdapter {
     if (!this.app) return;
 
     this.app.message(async ({ message, say }) => {
-      await this.handleIncomingMessage(message as SlackMessageEvent, say);
+      try {
+        await this.handleIncomingMessage(message as SlackMessageEvent, say);
+      } catch (error) {
+        this.logger.error("Error handling Slack message", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     });
 
     // directMention handler removed — the general message handler above already
@@ -698,57 +704,63 @@ export class SlackChannel implements IChannelAdapter {
     this.app.action(/confirm_.*/, async ({ ack, body, action }) => {
       await ack();
 
-      const actionId = (action as { action_id: string }).action_id;
-      const value = (action as { value: string }).value;
+      try {
+        const actionId = (action as { action_id: string }).action_id;
+        const value = (action as { value: string }).value;
 
-      const prefix = actionId.replace(/_(approve|deny)$/, "");
-      const pending = this.pendingConfirmations.get(prefix);
+        const prefix = actionId.replace(/_(approve|deny)$/, "");
+        const pending = this.pendingConfirmations.get(prefix);
 
-      if (pending) {
-        const actionBody = body as {
-          channel?: { id?: string };
-          user?: { id?: string };
-          message?: { ts?: string };
-        };
-        const channelId = actionBody.channel?.id;
-        const actorUserId = actionBody.user?.id;
+        if (pending) {
+          const actionBody = body as {
+            channel?: { id?: string };
+            user?: { id?: string };
+            message?: { ts?: string };
+          };
+          const channelId = actionBody.channel?.id;
+          const actorUserId = actionBody.user?.id;
 
-        if ((channelId && channelId !== pending.chatId) || (pending.userId && actorUserId !== pending.userId)) {
-          if (this.app?.client && channelId && actorUserId) {
-            await this.app.client.chat.postEphemeral({
+          if ((channelId && channelId !== pending.chatId) || (pending.userId && actorUserId !== pending.userId)) {
+            if (this.app?.client && channelId && actorUserId) {
+              await this.app.client.chat.postEphemeral({
+                channel: channelId,
+                user: actorUserId,
+                text: "Only the original requester can respond to this confirmation.",
+              });
+            }
+            return;
+          }
+
+          this.pendingConfirmations.delete(prefix);
+          pending.resolve(value === "approve" ? "approve" : "deny");
+
+          if (this.app?.client && "channel" in body && "message" in body) {
+            const channelId = (body as { channel: { id: string } }).channel.id;
+            const ts = (body as { message: { ts: string } }).message.ts;
+
+            await this.app.client.chat.update({
               channel: channelId,
-              user: actorUserId,
-              text: "Only the original requester can respond to this confirmation.",
+              ts,
+              text: value === "approve" ? "✅ Approved" : "❌ Denied",
+              blocks: [
+                {
+                  type: "section",
+                  text: {
+                    type: "mrkdwn",
+                    text:
+                      value === "approve"
+                        ? "✅ *Approved* - The operation will proceed."
+                        : "❌ *Denied* - The operation was cancelled.",
+                  },
+                },
+              ],
             });
           }
-          return;
         }
-
-        this.pendingConfirmations.delete(prefix);
-        pending.resolve(value === "approve" ? "approve" : "deny");
-
-        if (this.app?.client && "channel" in body && "message" in body) {
-          const channelId = (body as { channel: { id: string } }).channel.id;
-          const ts = (body as { message: { ts: string } }).message.ts;
-
-          await this.app.client.chat.update({
-            channel: channelId,
-            ts,
-            text: value === "approve" ? "✅ Approved" : "❌ Denied",
-            blocks: [
-              {
-                type: "section",
-                text: {
-                  type: "mrkdwn",
-                  text:
-                    value === "approve"
-                      ? "✅ *Approved* - The operation will proceed."
-                      : "❌ *Denied* - The operation was cancelled.",
-                },
-              },
-            ],
-          });
-        }
+      } catch (error) {
+        this.logger.error("Error handling Slack confirmation action", {
+          error: error instanceof Error ? error.message : String(error),
+        });
       }
     });
 
