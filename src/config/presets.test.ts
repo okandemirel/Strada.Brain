@@ -34,7 +34,6 @@ describe("SYSTEM_PRESETS", () => {
   describe.each(ALL_PRESET_NAMES)("preset '%s'", (name) => {
     let preset: SystemPreset;
 
-    // eslint-disable-next-line vitest/no-hooks -- shared setup is fine
     beforeAll(() => {
       preset = SYSTEM_PRESETS[name];
     });
