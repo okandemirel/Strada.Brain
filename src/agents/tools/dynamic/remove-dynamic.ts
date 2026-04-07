@@ -3,7 +3,16 @@
 // ---------------------------------------------------------------------------
 
 import type { ITool, ToolContext, ToolExecutionResult } from "../tool.interface.js";
+import { DynamicToolFactory } from "./dynamic-tool-factory.js";
 import { getFactory } from "./create-tool.js";
+
+/** Resolve the factory to use: per-orchestrator from context, or the default singleton. */
+function resolveFactory(context: ToolContext): DynamicToolFactory {
+  if (context.dynamicToolFactory instanceof DynamicToolFactory) {
+    return context.dynamicToolFactory;
+  }
+  return getFactory();
+}
 
 export class RemoveDynamicToolTool implements ITool {
   readonly name = "remove_dynamic_tool";
@@ -39,7 +48,7 @@ export class RemoveDynamicToolTool implements ITool {
       };
     }
 
-    const factory = getFactory();
+    const factory = resolveFactory(context);
     const record = factory.getRecord(toolName);
     if (!record) {
       return {

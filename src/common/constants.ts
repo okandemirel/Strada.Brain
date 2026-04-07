@@ -201,10 +201,9 @@ export const WRITE_OPERATIONS = new Set([
   "strada_create_component",
   "strada_create_mediator",
   "strada_create_system",
-  // Dynamic tool/skill creation
-  "create_tool",
-  "create_skill",
-  "remove_dynamic_tool",
+  // NOTE: create_tool, create_skill, remove_dynamic_tool are intentionally
+  // excluded from WRITE_OPERATIONS. They use internal read-only guards instead
+  // to allow granular control (e.g. composite-only in read-only mode).
 ]);
 
 // ============================================================================

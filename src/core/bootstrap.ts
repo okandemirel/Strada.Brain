@@ -698,6 +698,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     loopHardCapReplan: config.loopHardCapReplan,
     loopHardCapBlock: config.loopHardCapBlock,
     progressAssessmentEnabled: config.progressAssessmentEnabled,
+    onSkillCreated: async (skillPath) => { await skillManager.loadSingle(skillPath); },
   });
 
   // Wire FrameworkPromptGenerator to the orchestrator (deferred: IIFE may complete before or after)

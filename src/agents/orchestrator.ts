@@ -7,6 +7,7 @@ import type {
   IStreamingProvider,
 } from "./providers/provider.interface.js";
 import { ProviderHealthRegistry } from "./providers/provider-health.js";
+import { DynamicToolFactory } from "./tools/dynamic/dynamic-tool-factory.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -271,6 +272,10 @@ import {
 } from "./orchestrator-goal-decomposition.js";
 
 const DIAGNOSTIC_BLOCKED_RE = /^Blocked checkpoint:/i;
+/** Self-improvement tools bypass phase-based write filtering — they have their own guards. */
+const SELF_IMPROVEMENT_TOOLS: ReadonlySet<string> = new Set([
+  "create_tool", "create_skill", "remove_dynamic_tool",
+]);
 const TYPING_INTERVAL_MS = 4000;
 const STREAM_THROTTLE_MS = 500; // Throttle streaming updates to channels
 const NATURAL_LANGUAGE_BUILTIN_PERSONAS = ["default", "formal", "casual", "minimal"] as const;
@@ -717,6 +722,10 @@ export class Orchestrator {
   >();
   /** Framework Knowledge Layer prompt generator (injected by bootstrap when available) */
   private frameworkPromptGenerator: FrameworkPromptGenerator | null = null;
+  /** Callback to hot-reload a newly created skill */
+  private onSkillCreated?: (skillPath: string) => Promise<void>;
+  /** Per-orchestrator DynamicToolFactory (avoids module-level singleton leaks in multi-agent setups) */
+  private readonly dynamicToolFactory = new DynamicToolFactory();
 
   constructor(opts: {
     providerManager: ProviderManager;
@@ -780,6 +789,7 @@ export class Orchestrator {
     loopHardCapReplan?: number;
     loopHardCapBlock?: number;
     progressAssessmentEnabled?: boolean;
+    onSkillCreated?: (skillPath: string) => Promise<void>;
   }) {
     this.providerManager = opts.providerManager;
     this.channel = opts.channel;
@@ -851,6 +861,7 @@ export class Orchestrator {
     this.progressAssessmentEnabled = opts.progressAssessmentEnabled ?? true;
     this.getIdentityState = opts.getIdentityState;
     this.crashRecoveryContext = opts.crashRecoveryContext;
+    this.onSkillCreated = opts.onSkillCreated;
 
     // Build tool registry
     this.tools = new Map();
@@ -1875,6 +1886,10 @@ export class Orchestrator {
         return false;
       }
       if (!allowWriteTools && metadata?.readOnly === false) {
+        // Allow self-improvement tools in all phases
+        if (SELF_IMPROVEMENT_TOOLS.has(definition.name)) {
+          return true;
+        }
         return false;
       }
       return true;
@@ -5681,6 +5696,8 @@ export class Orchestrator {
         return false;
       },
       lookupTool: (name) => this.tools.get(name),
+      onSkillCreated: this.onSkillCreated,
+      dynamicToolFactory: this.dynamicToolFactory,
     };
 
     for (const tc of toolCalls) {

@@ -52,6 +52,14 @@ export class CreateSkillTool implements ITool {
     input: Record<string, unknown>,
     context: ToolContext,
   ): Promise<ToolExecutionResult> {
+    // Block in read-only mode — skill creation writes to disk
+    if (context.readOnly) {
+      return {
+        content: "Skill creation is blocked in read-only mode (writes to disk).",
+        isError: true,
+      };
+    }
+
     const spec: DynamicSkillSpec = {
       name: String(input["name"] ?? "").trim(),
       version: String(input["version"] ?? "1.0.0").trim(),
@@ -123,6 +131,17 @@ export class CreateSkillTool implements ITool {
       };
     }
 
+    // Hot-reload: make the skill available in the current session
+    let hotReloaded = false;
+    if (context.onSkillCreated) {
+      try {
+        await context.onSkillCreated(skillsDir);
+        hotReloaded = true;
+      } catch {
+        // Non-fatal — skill is on disk and will load next session
+      }
+    }
+
     const preview = spec.content.length > 200
       ? spec.content.slice(0, 200) + "..."
       : spec.content;
@@ -130,8 +149,9 @@ export class CreateSkillTool implements ITool {
     return {
       content:
         `Skill '${spec.name}' created at ${filePath}\n\n` +
-        `This skill will be discovered automatically in future sessions.\n` +
-        `To make it available in the current session, a restart is needed.\n\n` +
+        (hotReloaded
+          ? `The skill has been hot-loaded and is available in the current session.\n\n`
+          : `This skill will be discovered automatically in future sessions.\n\n`) +
         `Skill content preview (first 200 chars):\n${preview}`,
     };
   }

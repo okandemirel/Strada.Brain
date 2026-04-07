@@ -5,8 +5,11 @@
 // registration into the PluginRegistry with correct ordering.
 // ---------------------------------------------------------------------------
 
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { PluginRegistry, type Plugin, type PluginMetadata } from "../plugins/registry.js";
 import { SkillEnvInjector } from "./skill-env-injector.js";
+import { parseFrontmatter } from "./frontmatter-parser.js";
 import { discoverSkills, loadSkillTools, type DiscoveredSkill } from "./skill-loader.js";
 import { checkGates } from "./skill-gating.js";
 import { readSkillConfig } from "./skill-config.js";
@@ -161,6 +164,97 @@ export class SkillManager {
     });
 
     return [...this.entries.values()];
+  }
+
+  /**
+   * Hot-load a single skill from its directory path.
+   * Used by create_skill to make newly created skills available in the current session.
+   */
+  async loadSingle(skillPath: string): Promise<SkillEntry | null> {
+    const logger = getLoggerSafe();
+
+    const skillMdPath = join(skillPath, "SKILL.md");
+    let raw: string;
+    try {
+      raw = await readFile(skillMdPath, "utf-8");
+    } catch {
+      logger.warn(`loadSingle: no SKILL.md at ${skillPath}`);
+      return null;
+    }
+
+    const { data } = parseFrontmatter(raw);
+    const name = data["name"] as string | undefined;
+    if (!name) {
+      logger.warn(`loadSingle: missing name in ${skillMdPath}`);
+      return null;
+    }
+
+    // Skip if already loaded
+    if (this.entries.has(name)) {
+      logger.debug(`loadSingle: skill "${name}" already loaded, skipping`);
+      return this.entries.get(name) ?? null;
+    }
+
+    // Build a DiscoveredSkill and load tools
+    const manifest = {
+      name,
+      version: String(data["version"] ?? "1.0.0"),
+      description: String(data["description"] ?? ""),
+      ...(typeof data["author"] === "string" ? { author: data["author"] } : {}),
+      ...(Array.isArray(data["capabilities"])
+        ? { capabilities: data["capabilities"] as string[] }
+        : {}),
+    };
+
+    const requires = data["requires"] && typeof data["requires"] === "object"
+      ? data["requires"] as Parameters<typeof checkGates>[0]
+      : undefined;
+    const gateResult = await checkGates(requires);
+    if (!gateResult.passed) {
+      const entry: SkillEntry = {
+        manifest: manifest as SkillEntry["manifest"],
+        status: "gated",
+        tier: "workspace",
+        path: skillPath,
+        gateReason: gateResult.reasons.join("; "),
+      };
+      this.entries.set(name, entry);
+      return entry;
+    }
+
+    let tools: ITool[];
+    try {
+      tools = await loadSkillTools({
+        manifest: manifest as SkillEntry["manifest"],
+        tier: "workspace",
+        path: skillPath,
+      });
+    } catch (err) {
+      const entry: SkillEntry = {
+        manifest: manifest as SkillEntry["manifest"],
+        status: "error",
+        tier: "workspace",
+        path: skillPath,
+        gateReason: `Tool loading failed: ${err instanceof Error ? err.message : String(err)}`,
+      };
+      this.entries.set(name, entry);
+      return entry;
+    }
+
+    // Register tools immediately
+    if (this.toolRegistrar && tools.length > 0) {
+      this.toolRegistrar(tools);
+    }
+
+    const entry: SkillEntry = {
+      manifest: manifest as SkillEntry["manifest"],
+      status: "active",
+      tier: "workspace",
+      path: skillPath,
+    };
+    this.entries.set(name, entry);
+    logger.info(`Hot-loaded skill "${name}" with ${tools.length} tool(s)`);
+    return entry;
   }
 
   /** Return all loaded skill entries. */

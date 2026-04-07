@@ -34,10 +34,9 @@ const WRITE_TOOLS: ReadonlySet<string> = new Set([
   "dotnet_add_package",
   "dotnet_remove_package",
   "dotnet_new",
-  // Dynamic tool/skill creation
-  "create_tool",
-  "create_skill",
-  "remove_dynamic_tool",
+  // NOTE: create_tool and remove_dynamic_tool are runtime-only and reversible.
+  // They use internal guards instead. create_skill writes to disk but also
+  // uses its own read-only check for a better error message.
 ]);
 
 const READ_TOOLS: ReadonlySet<string> = new Set([
@@ -110,14 +109,10 @@ export function checkReadOnlyBlock(toolName: string, readOnlyMode: boolean): Rea
     };
   }
 
-  // Block all dynamic tools in read-only mode (they can execute shell commands)
-  if (normalizedName.startsWith("dynamic_")) {
-    return {
-      allowed: false,
-      error: `Dynamic tool '${toolName}' is disabled in read-only mode.`,
-      suggestion: "Dynamic tools cannot run in read-only mode.",
-    };
-  }
+  // Dynamic tools (dynamic_*) are NOT blanket-blocked here.
+  // Shell-strategy dynamic tools check context.readOnly in their executor.
+  // Composite-strategy dynamic tools are safe (they only chain existing tools).
+  // This allows composite dynamic tools to work in read-only mode.
 
   return { allowed: true };
 }

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useCallback, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useCanvasStore } from '../../stores/canvas-store'
 import { getDefaultDimensions, type ResolvedShape } from './canvas-types'
@@ -42,7 +42,7 @@ export default function CanvasToolbar({ viewportCenter }: CanvasToolbarProps) {
   const toggleGridSnap = useCanvasStore((s) => s.toggleGridSnap)
   const [showMore, setShowMore] = useState(false)
 
-  function addCardAtCenter(type: string): void {
+  const addCardAtCenter = useCallback((type: string): void => {
     const dims = getDefaultDimensions(type)
     const shape: ResolvedShape = {
       id: `user-${type}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -58,7 +58,7 @@ export default function CanvasToolbar({ viewportCenter }: CanvasToolbarProps) {
     addShape(shape)
     setDirty(true)
     setShowMore(false)
-  }
+  }, [viewportCenter, pushUndo, addShape, setDirty])
 
   return (
     <div className="flex items-center gap-1 rounded-xl border border-white/6 bg-black/50 px-2 py-1 backdrop-blur-xl">

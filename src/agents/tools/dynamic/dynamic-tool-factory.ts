@@ -13,6 +13,13 @@ import type { DynamicToolSpec, DynamicToolRecord } from "./types.js";
 // before interpolation, preventing command injection.
 const execAsync = promisify(exec);
 
+/** Tools that are too dangerous to allow inside composite chains (bypass confirmation). */
+const COMPOSITE_BLOCKED_TOOLS: ReadonlySet<string> = new Set([
+  "shell_exec", "file_write", "file_edit",
+  "file_delete", "file_rename", "file_delete_directory",
+  "git_commit", "git_push", "git_reset", "git_rebase",
+]);
+
 /** Maximum number of dynamic tools allowed per session. */
 const MAX_DYNAMIC_TOOLS = 50;
 /** Default shell command timeout. */
@@ -246,6 +253,14 @@ export class DynamicToolFactory {
     const commandTemplate = spec.command!;
 
     return async (input, context) => {
+      // Block shell execution in read-only mode
+      if (context.readOnly) {
+        return {
+          content: "Shell-strategy dynamic tools are blocked in read-only mode.",
+          isError: true,
+        };
+      }
+
       const command = interpolateCommand(commandTemplate, input);
 
       try {
@@ -293,11 +308,9 @@ export class DynamicToolFactory {
           };
         }
 
-        // Block dangerous tools from being called via composite (policy bypass prevention)
-        const toolMeta = tool.metadata ?? (typeof tool.getMetadata === "function" ? tool.getMetadata() : undefined);
-        if (toolMeta && "requiresConfirmation" in toolMeta && toolMeta.requiresConfirmation) {
+        if (COMPOSITE_BLOCKED_TOOLS.has(step.tool)) {
           return {
-            content: `Composite step ${i} blocked: tool '${step.tool}' requires confirmation and cannot be called from a composite tool.`,
+            content: `Composite step ${i} blocked: tool '${step.tool}' is too dangerous for composite chains.`,
             isError: true,
           };
         }

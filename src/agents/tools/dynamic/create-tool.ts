@@ -6,12 +6,20 @@ import type { ITool, ToolContext, ToolExecutionResult } from "../tool.interface.
 import { DynamicToolFactory } from "./dynamic-tool-factory.js";
 import type { DynamicToolSpec } from "./types.js";
 
-/** Shared factory instance — tracks all dynamic tools created in this process. */
-const factory = new DynamicToolFactory();
+/** Fallback factory instance — used when no per-orchestrator factory is in context. */
+const defaultFactory = new DynamicToolFactory();
 
-/** Expose the factory for testing and for remove_dynamic_tool. */
+/** Expose the default factory for testing and for remove_dynamic_tool. */
 export function getFactory(): DynamicToolFactory {
-  return factory;
+  return defaultFactory;
+}
+
+/** Resolve the factory to use: per-orchestrator from context, or the default singleton. */
+function resolveFactory(context: ToolContext): DynamicToolFactory {
+  if (context.dynamicToolFactory instanceof DynamicToolFactory) {
+    return context.dynamicToolFactory;
+  }
+  return defaultFactory;
 }
 
 export class CreateToolTool implements ITool {
@@ -89,6 +97,17 @@ export class CreateToolTool implements ITool {
     input: Record<string, unknown>,
     context: ToolContext,
   ): Promise<ToolExecutionResult> {
+    // Block shell-strategy tools in read-only mode (composite-only is safe)
+    const strategy = String(input["strategy"] ?? "shell");
+    if (context.readOnly && strategy === "shell") {
+      return {
+        content:
+          "Shell-strategy dynamic tools are blocked in read-only mode. " +
+          "Use 'composite' strategy to chain existing read-only tools instead.",
+        isError: true,
+      };
+    }
+
     // Check that the orchestrator provided the dynamic registration callback
     if (!context.registerDynamicTool) {
       return {
@@ -111,6 +130,7 @@ export class CreateToolTool implements ITool {
     };
 
     // Create the tool via factory (factory checks for duplicates internally)
+    const factory = resolveFactory(context);
     const prefixedName = `dynamic_${spec.name}`;
     let tool: ITool;
     try {

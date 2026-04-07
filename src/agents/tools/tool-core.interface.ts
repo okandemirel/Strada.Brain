@@ -58,6 +58,10 @@ export interface ToolContext {
   unregisterDynamicTool?: (toolName: string) => boolean;
   /** Look up an existing tool by name (for composite tool chaining). */
   lookupTool?: (toolName: string) => IToolBase | undefined;
+  /** Called after a skill is created on disk — triggers hot-reload in current session. */
+  onSkillCreated?: (skillPath: string) => Promise<void>;
+  /** Per-orchestrator DynamicToolFactory instance (avoids module-level singleton leaks). */
+  dynamicToolFactory?: unknown;
 }
 
 // ============================================================================
