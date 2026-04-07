@@ -441,6 +441,7 @@ export class DashboardServer {
    * This provides a snapshot of the current server state and utility methods.
    */
   private buildRouteContext(): RouteContext {
+    const self = this; // eslint-disable-line @typescript-eslint/no-this-alias
     return {
       // Core services
       memoryManager: this.memoryManager,
@@ -515,11 +516,11 @@ export class DashboardServer {
       unifiedBudgetManager: this.unifiedBudgetManager,
       wsServer: this.wsServer,
 
-      // Rate limiting state (pass as getter/setter for mutability)
-      lastModelRefreshMs: this._lastModelRefreshMs,
-      setLastModelRefreshMs: (ms: number) => { this._lastModelRefreshMs = ms; },
-      lastUpdateCheckMs: this._lastUpdateCheckMs,
-      setLastUpdateCheckMs: (ms: number) => { this._lastUpdateCheckMs = ms; },
+      // Rate limiting state — use getters to avoid stale snapshots on concurrent requests
+      get lastModelRefreshMs() { return self._lastModelRefreshMs; },
+      setLastModelRefreshMs: (ms: number) => { self._lastModelRefreshMs = ms; },
+      get lastUpdateCheckMs() { return self._lastUpdateCheckMs; },
+      setLastUpdateCheckMs: (ms: number) => { self._lastUpdateCheckMs = ms; },
 
       // Utility methods
       readJsonBody: <T>(req: import("node:http").IncomingMessage, res: import("node:http").ServerResponse, maxBytes?: number) =>
@@ -569,7 +570,38 @@ export class DashboardServer {
         if (!this.requireTrustedDashboardMutation(req, res)) return;
       }
 
-      // Build the route context for delegated route handlers
+      // --- Non-API routes (before building heavy route context) ---
+
+      if (url === "/health") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            status: "ok",
+            timestamp: new Date().toISOString(),
+            channel: "dashboard",
+            uptime: process.uptime(),
+            clients: 0,
+          }),
+        );
+        return;
+      }
+
+      if (url === "/ready") {
+        const readiness = this.checkReadiness();
+        const httpStatus =
+          readiness.status === "not_ready" ? 503 : readiness.status === "degraded" ? 207 : 200;
+        res.writeHead(httpStatus, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(readiness));
+        return;
+      }
+
+      if (!isDashboardApi && url === "/") {
+        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+        res.end(DASHBOARD_HTML);
+        return;
+      }
+
+      // Build the route context for delegated API route handlers
       const ctx = this.buildRouteContext();
 
       // --- Delegated route handlers (largest groups first) ---
@@ -624,37 +656,7 @@ export class DashboardServer {
         if (handled) return;
       }
 
-      // --- Non-API routes ---
-
-      if (url === "/health") {
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(
-          JSON.stringify({
-            status: "ok",
-            timestamp: new Date().toISOString(),
-            channel: "dashboard",
-            uptime: process.uptime(),
-            clients: 0,
-          }),
-        );
-        return;
-      }
-
-      if (url === "/ready") {
-        const readiness = this.checkReadiness();
-        const httpStatus =
-          readiness.status === "not_ready" ? 503 : readiness.status === "degraded" ? 207 : 200;
-        res.writeHead(httpStatus, { "Content-Type": "application/json" });
-        res.end(JSON.stringify(readiness));
-        return;
-      }
-
-      if (url === "/") {
-        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-        res.end(DASHBOARD_HTML);
-        return;
-      }
-
+      // SPA fallback (non-API, non-root paths that weren't handled above)
       res.writeHead(404, { "Content-Type": "text/plain" });
       res.end("Not Found");
     });

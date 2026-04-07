@@ -26,6 +26,8 @@ import {
   type RouteContext,
 } from "./server-types.js";
 
+const MODEL_NAME_RE = /^[a-zA-Z0-9._:\-/]{1,128}$/;
+
 /**
  * Try to handle provider-related routes. Returns true if the route was handled.
  */
@@ -139,7 +141,6 @@ export function handleProviderRoutes(
         return;
       }
       // Validate model name format
-      const MODEL_NAME_RE = /^[a-zA-Z0-9._:\-/]{1,128}$/;
       if (parsed.model && !MODEL_NAME_RE.test(parsed.model)) {
         sendJsonError(res, 400, "Invalid model name");
         return;
