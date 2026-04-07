@@ -98,6 +98,7 @@
   "voice.messageFailed": "Voice message failed",
   "voice.recordingFailed": "Audio recording failed",
   "voice.micPermissionDenied": "Microphone permission denied",
+  "voice.transcribing": "Transcribing...",
   "voice.stopSpeaking": "Stop speaking",
   "voice.readAloud": "Read aloud",
 

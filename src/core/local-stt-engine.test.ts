@@ -36,6 +36,7 @@ describe("local-stt-engine", () => {
     });
 
     it("returns null when @huggingface/transformers is not installed", async () => {
+      vi.doMock("@huggingface/transformers", () => { throw new Error("not installed"); });
       const { transcribeLocal } = await import("./local-stt-engine.js");
       const result = await transcribeLocal(Buffer.from("audio"), "audio/webm");
       expect(result).toBeNull();
@@ -56,6 +57,7 @@ describe("local-stt-engine", () => {
     });
 
     it("returns false when @huggingface/transformers is not available", async () => {
+      vi.doMock("@huggingface/transformers", () => { throw new Error("not installed"); });
       const { isLocalSttAvailable } = await import("./local-stt-engine.js");
       expect(await isLocalSttAvailable()).toBe(false);
     });

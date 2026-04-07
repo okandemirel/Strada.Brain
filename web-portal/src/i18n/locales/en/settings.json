@@ -184,6 +184,8 @@
   "voice.voiceOutputDescUnsupported": "Not available in this browser",
   "voice.toastInputUnsupported": "Voice input is not supported by this browser",
   "voice.toastOutputUnsupported": "Voice output is not supported by this browser",
+  "voice.browserStt": "Browser Transcription",
+  "voice.browserSttDesc": "Transcribe voice locally in the browser using Whisper AI (no server needed)",
 
   "advanced.title": "Advanced",
   "advanced.description": "System configuration and diagnostics",

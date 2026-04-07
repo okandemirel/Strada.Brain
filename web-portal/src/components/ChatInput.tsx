@@ -258,6 +258,14 @@ export default function ChatInput({ onSend, disabled }: ChatInputProps) {
     return true
   }, [onSend, t])
 
+  const handleVoiceText = useCallback((text: string) => {
+    const sent = onSend(text)
+    if (sent === false) return false
+
+    useWorkspaceStore.getState().resetOverride()
+    return true
+  }, [onSend])
+
   return (
     <div
       className={`relative flex flex-col px-6 pt-3.5 pb-[18px] bg-bg-secondary backdrop-blur-[40px] backdrop-saturate-[180%] border-t border-border shrink-0 transition-all duration-200 ${isDragOver ? 'border-t-accent bg-bg-tertiary shadow-[inset_0_2px_0_0_var(--color-accent)]' : ''}`}
@@ -342,7 +350,7 @@ export default function ChatInput({ onSend, disabled }: ChatInputProps) {
           className="flex-1 resize-none border-none rounded-[14px] px-4 py-3 font-[inherit] text-[15px] bg-transparent text-text leading-relaxed max-h-[140px] outline-none transition-all duration-200 placeholder:text-text-tertiary disabled:opacity-40"
         />
         {voice.inputEnabled && (
-          <VoiceRecorder onVoiceMessage={handleVoiceMessage} disabled={disabled} />
+          <VoiceRecorder onVoiceMessage={handleVoiceMessage} onTextMessage={handleVoiceText} disabled={disabled} />
         )}
         <CoolMode options={{ particle: '✦', particleCount: 8, speedUp: 18 }}>
           <ShimmerButton

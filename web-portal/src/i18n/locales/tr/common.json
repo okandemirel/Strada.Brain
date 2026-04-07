@@ -98,6 +98,7 @@
   "voice.messageFailed": "Sesli mesaj başarısız oldu",
   "voice.recordingFailed": "Ses kaydı başarısız oldu",
   "voice.micPermissionDenied": "Mikrofon izni reddedildi",
+  "voice.transcribing": "Yazıya dönüştürülüyor...",
   "voice.stopSpeaking": "Konuşmayı durdur",
   "voice.readAloud": "Sesli oku",
 

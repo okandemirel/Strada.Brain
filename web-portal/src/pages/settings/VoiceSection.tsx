@@ -89,6 +89,13 @@ export default function VoiceSection() {
     [outputSupported, updateVoiceSettings, syncToBackend, t],
   )
 
+  const handleBrowserSttToggle = useCallback(
+    (next: boolean) => {
+      updateVoiceSettings((prev) => ({ ...prev, browserSttEnabled: next }))
+    },
+    [updateVoiceSettings],
+  )
+
   return (
     <div>
       <h2 className="text-lg font-semibold text-text mb-1">{t('voice.title')}</h2>
@@ -128,6 +135,12 @@ export default function VoiceSection() {
         enabled={voice.outputEnabled && outputSupported}
         disabled={!outputSupported}
         onChange={handleOutputToggle}
+      />
+      <Toggle
+        label={t('voice.browserStt')}
+        description={t('voice.browserSttDesc')}
+        enabled={voice.browserSttEnabled}
+        onChange={handleBrowserSttToggle}
       />
     </div>
   )

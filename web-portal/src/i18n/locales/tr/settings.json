@@ -184,6 +184,8 @@
   "voice.voiceOutputDescUnsupported": "Bu tarayıcıda kullanılamıyor",
   "voice.toastInputUnsupported": "Sesli giriş bu tarayıcı tarafından desteklenmiyor",
   "voice.toastOutputUnsupported": "Sesli çıkış bu tarayıcı tarafından desteklenmiyor",
+  "voice.browserStt": "Tarayıcı Transkripsiyon",
+  "voice.browserSttDesc": "Sesi tarayıcıda Whisper AI ile yerel olarak yazıya dönüştür (sunucu gerekmez)",
 
   "advanced.title": "Gelişmiş",
   "advanced.description": "Sistem yapılandırması ve tanılama",
