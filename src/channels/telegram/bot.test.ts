@@ -32,20 +32,22 @@ const mockMiddlewares: Array<(ctx: any, next: () => Promise<void>) => Promise<vo
 const mockHandlers = new Map<string, (ctx: any) => Promise<void>>();
 
 vi.mock("grammy", () => ({
-  Bot: vi.fn().mockImplementation(() => ({
-    token: "test-token",
-    api: mockBotApi,
-    use: vi.fn((middleware: any) => mockMiddlewares.push(middleware)),
-    on: vi.fn((event: string, handler: any) => mockHandlers.set(event, handler)),
-    command: vi.fn((name: string, handler: any) => mockHandlers.set(`command:${name}`, handler)),
-    start: vi.fn(),
-    stop: vi.fn(),
-    catch: vi.fn(),
-    isInited: vi.fn().mockReturnValue(true),
-  })),
-  InlineKeyboard: vi.fn().mockImplementation(() => ({
-    text: vi.fn().mockReturnThis(),
-  })),
+  Bot: vi.fn().mockImplementation(function () {
+    return {
+      token: "test-token",
+      api: mockBotApi,
+      use: vi.fn((middleware: any) => mockMiddlewares.push(middleware)),
+      on: vi.fn((event: string, handler: any) => mockHandlers.set(event, handler)),
+      command: vi.fn((name: string, handler: any) => mockHandlers.set(`command:${name}`, handler)),
+      start: vi.fn(),
+      stop: vi.fn(),
+      catch: vi.fn(),
+      isInited: vi.fn().mockReturnValue(true),
+    };
+  }),
+  InlineKeyboard: vi.fn().mockImplementation(function () {
+    return { text: vi.fn().mockReturnThis() };
+  }),
 }));
 
 vi.mock("node:crypto", () => ({

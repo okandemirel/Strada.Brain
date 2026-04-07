@@ -16,7 +16,7 @@ vi.mock("better-sqlite3", () => {
     prepare: vi.fn().mockReturnValue({ get: vi.fn() }),
     close: vi.fn(),
   };
-  return { default: vi.fn(() => mockDb) };
+  return { default: vi.fn(function () { return mockDb; }) };
 });
 
 const mockAgentDBInitialize = vi.fn();
@@ -24,18 +24,19 @@ const mockStartAutoTiering = vi.fn();
 const mockSetDecayConfig = vi.fn();
 
 vi.mock("../memory/unified/agentdb-memory.js", () => ({
-  AgentDBMemory: vi.fn().mockImplementation(() => ({
-    initialize: mockAgentDBInitialize,
-    startAutoTiering: mockStartAutoTiering,
-    setDecayConfig: mockSetDecayConfig,
-  })),
+  AgentDBMemory: vi.fn().mockImplementation(function () {
+    return {
+      initialize: mockAgentDBInitialize,
+      startAutoTiering: mockStartAutoTiering,
+      setDecayConfig: mockSetDecayConfig,
+    };
+  }),
 }));
 
 vi.mock("../memory/unified/agentdb-adapter.js", () => ({
-  AgentDBAdapter: vi.fn().mockImplementation((agentdb: unknown) => ({
-    _tag: "agentdb-adapter",
-    _inner: agentdb,
-  })),
+  AgentDBAdapter: vi.fn().mockImplementation(function (agentdb: unknown) {
+    return { _tag: "agentdb-adapter", _inner: agentdb };
+  }),
 }));
 
 const mockRunAutomaticMigration = vi.fn();
@@ -45,10 +46,12 @@ vi.mock("../memory/unified/migration.js", () => ({
 
 const mockFileMemoryInitialize = vi.fn();
 vi.mock("../memory/file-memory-manager.js", () => ({
-  FileMemoryManager: vi.fn().mockImplementation(() => ({
-    initialize: mockFileMemoryInitialize,
-    _tag: "file-memory-manager",
-  })),
+  FileMemoryManager: vi.fn().mockImplementation(function () {
+    return {
+      initialize: mockFileMemoryInitialize,
+      _tag: "file-memory-manager",
+    };
+  }),
 }));
 
 // ---------------------------------------------------------------------------
@@ -275,7 +278,7 @@ describe("bootstrap-memory", () => {
         }),
         close: vi.fn(),
       };
-      vi.mocked(Database).mockReturnValueOnce(mockDb as any);
+      vi.mocked(Database).mockImplementationOnce(function () { return mockDb as any; });
 
       const result = await attemptSchemaRepair("/tmp/test-db", logger);
       expect(result).toBe(true);
@@ -286,7 +289,7 @@ describe("bootstrap-memory", () => {
 
     it("returns false when Database constructor throws", async () => {
       vi.mocked(existsSync).mockReturnValue(true);
-      vi.mocked(Database).mockImplementationOnce(() => {
+      vi.mocked(Database).mockImplementationOnce(function () {
         throw new Error("database is locked");
       });
 

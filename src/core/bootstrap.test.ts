@@ -31,36 +31,41 @@ const {
 
 // Mock modules before imports
 vi.mock("../memory/unified/agentdb-memory.js", () => {
-  const MockAgentDBMemory = vi.fn().mockImplementation(() => ({
-    initialize: vi.fn().mockResolvedValue({ kind: "ok", value: undefined }),
-    shutdown: vi.fn(),
-    setDecayConfig: vi.fn(),
-  }));
+  const MockAgentDBMemory = vi.fn().mockImplementation(function () {
+    return {
+      initialize: vi.fn().mockResolvedValue({ kind: "ok", value: undefined }),
+      shutdown: vi.fn(),
+      setDecayConfig: vi.fn(),
+    };
+  });
   return { AgentDBMemory: MockAgentDBMemory };
 });
 
 vi.mock("../memory/unified/agentdb-adapter.js", () => {
-  const MockAgentDBAdapter = vi.fn().mockImplementation((agentdb: unknown) => ({
-    _agentdb: agentdb,
-    _isAdapter: true,
-  }));
+  const MockAgentDBAdapter = vi.fn().mockImplementation(function (agentdb: unknown) {
+    return { _agentdb: agentdb, _isAdapter: true };
+  });
   return { AgentDBAdapter: MockAgentDBAdapter };
 });
 
 vi.mock("../memory/file-memory-manager.js", () => {
-  const MockFileMemoryManager = vi.fn().mockImplementation(() => ({
-    initialize: vi.fn().mockResolvedValue(undefined),
-    _isFileManager: true,
-  }));
+  const MockFileMemoryManager = vi.fn().mockImplementation(function () {
+    return {
+      initialize: vi.fn().mockResolvedValue(undefined),
+      _isFileManager: true,
+    };
+  });
   return { FileMemoryManager: MockFileMemoryManager };
 });
 
 vi.mock("better-sqlite3", () => {
-  const MockDatabase = vi.fn().mockImplementation(() => ({
-    pragma: vi.fn(),
-    prepare: vi.fn().mockReturnValue({ get: vi.fn() }),
-    close: vi.fn(),
-  }));
+  const MockDatabase = vi.fn().mockImplementation(function () {
+    return {
+      pragma: vi.fn(),
+      prepare: vi.fn().mockReturnValue({ get: vi.fn() }),
+      close: vi.fn(),
+    };
+  });
   return { default: MockDatabase };
 });
 
@@ -84,19 +89,23 @@ vi.mock("../agents/providers/provider-registry.js", () => {
 });
 
 vi.mock("../agents/providers/provider-manager.js", () => {
-  const MockProviderManager = vi.fn().mockImplementation((defaultProvider: unknown) => ({
-    defaultProvider,
-    getProvider: vi.fn().mockReturnValue(defaultProvider),
-    shutdown: vi.fn(),
-  }));
+  const MockProviderManager = vi.fn().mockImplementation(function (defaultProvider: unknown) {
+    return {
+      defaultProvider,
+      getProvider: vi.fn().mockReturnValue(defaultProvider),
+      shutdown: vi.fn(),
+    };
+  });
   return { ProviderManager: MockProviderManager };
 });
 
 vi.mock("../agents/providers/claude.js", () => {
-  const MockClaudeProvider = vi.fn().mockImplementation(() => ({
-    name: "claude",
-    healthCheck: vi.fn().mockResolvedValue(true),
-  }));
+  const MockClaudeProvider = vi.fn().mockImplementation(function () {
+    return {
+      name: "claude",
+      healthCheck: vi.fn().mockResolvedValue(true),
+    };
+  });
   return { ClaudeProvider: MockClaudeProvider };
 });
 
@@ -109,12 +118,14 @@ vi.mock("../rag/embeddings/embedding-resolver.js", async (importOriginal) => {
 });
 
 vi.mock("../rag/embeddings/embedding-cache.js", () => {
-  const MockCachedEmbeddingProvider = vi.fn().mockImplementation((provider: { name: string; dimensions?: number }) => ({
-    name: provider.name,
-    dimensions: provider.dimensions ?? 3072,
-    initialize: cachedEmbeddingInitializeMock,
-    embed: cachedEmbeddingEmbedMock,
-  }));
+  const MockCachedEmbeddingProvider = vi.fn().mockImplementation(function (provider: { name: string; dimensions?: number }) {
+    return {
+      name: provider.name,
+      dimensions: provider.dimensions ?? 3072,
+      initialize: cachedEmbeddingInitializeMock,
+      embed: cachedEmbeddingEmbedMock,
+    };
+  });
   return { CachedEmbeddingProvider: MockCachedEmbeddingProvider };
 });
 
@@ -207,21 +218,27 @@ function createTestConfig(overrides: {
 
 // Helper to reset mocks to default successful behavior
 function resetMocksToDefaults(): void {
-  vi.mocked(AgentDBMemory).mockImplementation(() => ({
-    initialize: vi.fn().mockResolvedValue({ kind: "ok", value: undefined }),
-    shutdown: vi.fn(),
-    setDecayConfig: vi.fn(),
-  }) as unknown as InstanceType<typeof AgentDBMemory>);
+  vi.mocked(AgentDBMemory).mockImplementation(function () {
+    return {
+      initialize: vi.fn().mockResolvedValue({ kind: "ok", value: undefined }),
+      shutdown: vi.fn(),
+      setDecayConfig: vi.fn(),
+    } as unknown as InstanceType<typeof AgentDBMemory>;
+  });
 
-  vi.mocked(AgentDBAdapter).mockImplementation((agentdb: unknown) => ({
-    _agentdb: agentdb,
-    _isAdapter: true,
-  }) as unknown as InstanceType<typeof AgentDBAdapter>);
+  vi.mocked(AgentDBAdapter).mockImplementation(function (agentdb: unknown) {
+    return {
+      _agentdb: agentdb,
+      _isAdapter: true,
+    } as unknown as InstanceType<typeof AgentDBAdapter>;
+  });
 
-  vi.mocked(FileMemoryManager).mockImplementation(() => ({
-    initialize: vi.fn().mockResolvedValue(undefined),
-    _isFileManager: true,
-  }) as unknown as InstanceType<typeof FileMemoryManager>);
+  vi.mocked(FileMemoryManager).mockImplementation(function () {
+    return {
+      initialize: vi.fn().mockResolvedValue(undefined),
+      _isFileManager: true,
+    } as unknown as InstanceType<typeof FileMemoryManager>;
+  });
 }
 
 describe("initializeMemory", () => {
@@ -267,17 +284,19 @@ describe("initializeMemory", () => {
 
   it("should attempt schema repair and retry when AgentDB init fails", async () => {
     let callCount = 0;
-    vi.mocked(AgentDBMemory).mockImplementation(() => ({
-      initialize: vi.fn().mockImplementation(async () => {
-        callCount++;
-        if (callCount === 1) {
-          return { kind: "err", error: new Error("init failed") };
-        }
-        return { kind: "ok", value: undefined };
-      }),
-      shutdown: vi.fn(),
-      setDecayConfig: vi.fn(),
-    }) as unknown as InstanceType<typeof AgentDBMemory>);
+    vi.mocked(AgentDBMemory).mockImplementation(function () {
+      return {
+        initialize: vi.fn().mockImplementation(async () => {
+          callCount++;
+          if (callCount === 1) {
+            return { kind: "err", error: new Error("init failed") };
+          }
+          return { kind: "ok", value: undefined };
+        }),
+        shutdown: vi.fn(),
+        setDecayConfig: vi.fn(),
+      } as unknown as InstanceType<typeof AgentDBMemory>;
+    });
 
     const config = createTestConfig({ backend: "agentdb" });
     const result = await initializeMemory(config, logger);
@@ -295,11 +314,13 @@ describe("initializeMemory", () => {
   });
 
   it("should fall back to FileMemoryManager when AgentDB init fails and repair fails", async () => {
-    vi.mocked(AgentDBMemory).mockImplementation(() => ({
-      initialize: vi.fn().mockResolvedValue({ kind: "err", error: new Error("init failed") }),
-      shutdown: vi.fn(),
-      setDecayConfig: vi.fn(),
-    }) as unknown as InstanceType<typeof AgentDBMemory>);
+    vi.mocked(AgentDBMemory).mockImplementation(function () {
+      return {
+        initialize: vi.fn().mockResolvedValue({ kind: "err", error: new Error("init failed") }),
+        shutdown: vi.fn(),
+        setDecayConfig: vi.fn(),
+      } as unknown as InstanceType<typeof AgentDBMemory>;
+    });
 
     const config = createTestConfig({ backend: "agentdb" });
     const result = await initializeMemory(config, logger);
@@ -345,10 +366,12 @@ describe("initializeMemory", () => {
   });
 
   it("should return undefined when FileMemoryManager init fails on file backend", async () => {
-    vi.mocked(FileMemoryManager).mockImplementation(() => ({
-      initialize: vi.fn().mockRejectedValue(new Error("file init failed")),
-      _isFileManager: true,
-    }) as unknown as InstanceType<typeof FileMemoryManager>);
+    vi.mocked(FileMemoryManager).mockImplementation(function () {
+      return {
+        initialize: vi.fn().mockRejectedValue(new Error("file init failed")),
+        _isFileManager: true,
+      } as unknown as InstanceType<typeof FileMemoryManager>;
+    });
 
     const config = createTestConfig({ backend: "file" });
     const result = await initializeMemory(config, logger);
@@ -489,17 +512,19 @@ describe("initializeMemory", () => {
 
     it("should call migration after AgentDB init in repair path", async () => {
       let callCount = 0;
-      vi.mocked(AgentDBMemory).mockImplementation(() => ({
-        initialize: vi.fn().mockImplementation(async () => {
-          callCount++;
-          if (callCount === 1) {
-            return { kind: "err", error: new Error("init failed") };
-          }
-          return { kind: "ok", value: undefined };
-        }),
-        shutdown: vi.fn(),
-        setDecayConfig: vi.fn(),
-      }) as unknown as InstanceType<typeof AgentDBMemory>);
+      vi.mocked(AgentDBMemory).mockImplementation(function () {
+        return {
+          initialize: vi.fn().mockImplementation(async () => {
+            callCount++;
+            if (callCount === 1) {
+              return { kind: "err", error: new Error("init failed") };
+            }
+            return { kind: "ok", value: undefined };
+          }),
+          shutdown: vi.fn(),
+          setDecayConfig: vi.fn(),
+        } as unknown as InstanceType<typeof AgentDBMemory>;
+      });
 
       const config = createTestConfig({ backend: "agentdb" });
       await initializeMemory(config, logger);

@@ -4,15 +4,17 @@ import type { ConversationMessage, MessageContent } from "./provider-core.interf
 
 vi.mock("@anthropic-ai/sdk", () => {
   return {
-    default: vi.fn().mockImplementation(() => ({
-      messages: {
-        create: vi.fn().mockResolvedValue({
-          content: [{ type: "text", text: "I can see the image." }],
-          stop_reason: "end_turn",
-          usage: { input_tokens: 100, output_tokens: 10 },
-        }),
-      },
-    })),
+    default: vi.fn().mockImplementation(function () {
+      return {
+        messages: {
+          create: vi.fn().mockResolvedValue({
+            content: [{ type: "text", text: "I can see the image." }],
+            stop_reason: "end_turn",
+            usage: { input_tokens: 100, output_tokens: 10 },
+          }),
+        },
+      };
+    }),
   };
 });
 

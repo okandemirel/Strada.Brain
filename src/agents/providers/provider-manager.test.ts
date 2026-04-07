@@ -53,22 +53,24 @@ vi.mock("./provider-registry.js", () => ({
 }));
 
 vi.mock("./provider-preferences.js", () => ({
-  ProviderPreferenceStore: vi.fn().mockImplementation(() => ({
-    initialize: vi.fn(),
-    get: vi.fn((chatId: string) => preferenceState.get(chatId)),
-    set: vi.fn((
-      chatId: string,
-      providerName: string,
-      model?: string,
-      selectionMode: "strada-preference-bias" | "strada-hard-pin" = "strada-preference-bias",
-    ) => {
-      preferenceState.set(chatId, { providerName, model, selectionMode });
-    }),
-    delete: vi.fn((chatId: string) => {
-      preferenceState.delete(chatId);
-    }),
-    close: vi.fn(),
-  })),
+  ProviderPreferenceStore: vi.fn().mockImplementation(function () {
+    return {
+      initialize: vi.fn(),
+      get: vi.fn((chatId: string) => preferenceState.get(chatId)),
+      set: vi.fn((
+        chatId: string,
+        providerName: string,
+        model?: string,
+        selectionMode: "strada-preference-bias" | "strada-hard-pin" = "strada-preference-bias",
+      ) => {
+        preferenceState.set(chatId, { providerName, model, selectionMode });
+      }),
+      delete: vi.fn((chatId: string) => {
+        preferenceState.delete(chatId);
+      }),
+      close: vi.fn(),
+    };
+  }),
 }));
 
 vi.mock("../../utils/logger.js", () => ({

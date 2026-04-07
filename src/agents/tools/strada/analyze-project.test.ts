@@ -15,9 +15,9 @@ const mockAnalysis = {
 };
 
 vi.mock("../../../intelligence/strada-analyzer.js", () => {
-  const MockClass = vi.fn().mockImplementation(() => ({
-    analyze: vi.fn().mockResolvedValue(mockAnalysis),
-  }));
+  const MockClass = vi.fn().mockImplementation(function () {
+    return { analyze: vi.fn().mockResolvedValue(mockAnalysis) };
+  });
   // Static method on the class
   (MockClass as any).formatAnalysis = vi.fn().mockReturnValue("Strada Project Analysis\nMocked output");
   return { StradaAnalyzer: MockClass };

@@ -7,11 +7,13 @@ import type * as winston from "winston";
 // ---------------------------------------------------------------------------
 
 vi.mock("../agents/providers/claude.js", () => ({
-  ClaudeProvider: vi.fn().mockImplementation((keyOrConfig: unknown) => ({
-    name: "claude",
-    _key: keyOrConfig,
-    healthCheck: vi.fn().mockResolvedValue(true),
-  })),
+  ClaudeProvider: vi.fn().mockImplementation(function (keyOrConfig: unknown) {
+    return {
+      name: "claude",
+      _key: keyOrConfig,
+      healthCheck: vi.fn().mockResolvedValue(true),
+    };
+  }),
 }));
 
 const mockBuildProviderChain = vi.fn();
@@ -24,16 +26,18 @@ const mockProviderManagerInstance = {
   _tag: "provider-manager",
 };
 vi.mock("../agents/providers/provider-manager.js", () => ({
-  ProviderManager: vi.fn().mockImplementation(() => mockProviderManagerInstance),
+  ProviderManager: vi.fn().mockImplementation(function () { return mockProviderManagerInstance; }),
 }));
 
 vi.mock("../rag/embeddings/embedding-cache.js", () => ({
-  CachedEmbeddingProvider: vi.fn().mockImplementation((provider: unknown, opts: unknown) => ({
-    _tag: "cached-embedding",
-    _provider: provider,
-    _opts: opts,
-    initialize: vi.fn().mockResolvedValue(undefined),
-  })),
+  CachedEmbeddingProvider: vi.fn().mockImplementation(function (provider: unknown, opts: unknown) {
+    return {
+      _tag: "cached-embedding",
+      _provider: provider,
+      _opts: opts,
+      initialize: vi.fn().mockResolvedValue(undefined),
+    };
+  }),
 }));
 
 const mockResolveEmbeddingProvider = vi.fn();

@@ -20,12 +20,14 @@ vi.mock("better-sqlite3", () => {
     get: vi.fn(),
     all: vi.fn().mockReturnValue([]),
   });
-  const MockDb = vi.fn().mockImplementation(() => ({
-    exec: vi.fn(),
-    prepare,
-    pragma: vi.fn(),
-    close: vi.fn(),
-  }));
+  const MockDb = vi.fn().mockImplementation(function () {
+    return {
+      exec: vi.fn(),
+      prepare,
+      pragma: vi.fn(),
+      close: vi.fn(),
+    };
+  });
   return { default: MockDb };
 });
 

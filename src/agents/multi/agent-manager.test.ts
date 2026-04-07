@@ -36,56 +36,60 @@ let mockMemoryTotalEntries = 0;
 // We mock it to return a string for test verification of correct routing
 vi.mock("../orchestrator.js", () => {
   return {
-    Orchestrator: vi.fn().mockImplementation((opts?: { onUsage?: (usage: TaskUsageEvent) => void }) => ({
-      handleMessage: vi.fn().mockImplementation(async () => {
-        if (mockUsageEvent) {
-          opts?.onUsage?.(mockUsageEvent);
-        }
-        return "mock response";
-      }),
-      cleanupSessions: vi.fn(),
-      setTaskManager: vi.fn(),
-      setWorkspaceBus: vi.fn(),
-      setMonitorLifecycle: vi.fn(),
-    })),
+    Orchestrator: vi.fn().mockImplementation(function (opts?: { onUsage?: (usage: TaskUsageEvent) => void }) {
+      return {
+        handleMessage: vi.fn().mockImplementation(async () => {
+          if (mockUsageEvent) {
+            opts?.onUsage?.(mockUsageEvent);
+          }
+          return "mock response";
+        }),
+        cleanupSessions: vi.fn(),
+        setTaskManager: vi.fn(),
+        setWorkspaceBus: vi.fn(),
+        setMonitorLifecycle: vi.fn(),
+      };
+    }),
   };
 });
 
 // Mock AgentDBMemory: avoid real SQLite + HNSW
 vi.mock("../../memory/unified/agentdb-memory.js", () => {
   return {
-    AgentDBMemory: vi.fn().mockImplementation(() => ({
-      initialize: vi.fn().mockResolvedValue({ ok: true, value: undefined }),
-      shutdown: vi.fn().mockResolvedValue({ ok: true, value: undefined }),
-      close: vi.fn().mockResolvedValue(undefined),
-      getUserProfileStore: vi.fn().mockReturnValue(null),
-      getStats: vi.fn(() => ({ totalEntries: mockMemoryTotalEntries })),
-    })),
+    AgentDBMemory: vi.fn().mockImplementation(function () {
+      return {
+        initialize: vi.fn().mockResolvedValue({ ok: true, value: undefined }),
+        shutdown: vi.fn().mockResolvedValue({ ok: true, value: undefined }),
+        close: vi.fn().mockResolvedValue(undefined),
+        getUserProfileStore: vi.fn().mockReturnValue(null),
+        getStats: vi.fn(() => ({ totalEntries: mockMemoryTotalEntries })),
+      };
+    }),
   };
 });
 
 // Mock MessageRouter
 vi.mock("../../tasks/message-router.js", () => {
   return {
-    MessageRouter: vi.fn().mockImplementation(() => ({
-      route: vi.fn().mockResolvedValue(undefined),
-    })),
+    MessageRouter: vi.fn().mockImplementation(function () {
+      return { route: vi.fn().mockResolvedValue(undefined) };
+    }),
   };
 });
 
 // Mock CommandHandler
 vi.mock("../../tasks/command-handler.js", () => {
   return {
-    CommandHandler: vi.fn().mockImplementation(() => ({})),
+    CommandHandler: vi.fn().mockImplementation(function () { return {}; }),
   };
 });
 
 // Mock TaskManager
 vi.mock("../../tasks/task-manager.js", () => {
   return {
-    TaskManager: vi.fn().mockImplementation(() => ({
-      submit: vi.fn(),
-    })),
+    TaskManager: vi.fn().mockImplementation(function () {
+      return { submit: vi.fn() };
+    }),
   };
 });
 

@@ -22,32 +22,34 @@ vi.mock("../commands.js", () => ({
   registerSlashCommands: vi.fn(),
 }));
 
-// Mock @slack/bolt
+// Mock @slack/bolt — use regular function (not arrow) so `new App(...)` works
 vi.mock("@slack/bolt", () => ({
-  App: vi.fn().mockImplementation(() => ({
-    start: vi.fn().mockResolvedValue(undefined),
-    message: vi.fn(),
-    action: vi.fn(),
-    event: vi.fn(),
-    error: vi.fn(),
-    command: vi.fn(),
-    client: {
-      auth: {
-        test: vi.fn().mockResolvedValue({ user_id: "U123" }),
+  App: vi.fn().mockImplementation(function () {
+    return {
+      start: vi.fn().mockResolvedValue(undefined),
+      message: vi.fn(),
+      action: vi.fn(),
+      event: vi.fn(),
+      error: vi.fn(),
+      command: vi.fn(),
+      client: {
+        auth: {
+          test: vi.fn().mockResolvedValue({ user_id: "U123" }),
+        },
+        chat: {
+          postMessage: vi.fn().mockResolvedValue({ ts: "1234567890.123456" }),
+          postEphemeral: vi.fn().mockResolvedValue({}),
+          update: vi.fn().mockResolvedValue({}),
+        },
+        views: {
+          open: vi.fn().mockResolvedValue({}),
+        },
+        files: {
+          uploadV2: vi.fn().mockResolvedValue({}),
+        },
       },
-      chat: {
-        postMessage: vi.fn().mockResolvedValue({ ts: "1234567890.123456" }),
-        postEphemeral: vi.fn().mockResolvedValue({}),
-        update: vi.fn().mockResolvedValue({}),
-      },
-      views: {
-        open: vi.fn().mockResolvedValue({}),
-      },
-      files: {
-        uploadV2: vi.fn().mockResolvedValue({}),
-      },
-    },
-  })),
+    };
+  }),
   directMention: vi.fn().mockReturnValue("directMention"),
 }));
 
@@ -104,7 +106,7 @@ describe("SlackChannel", () => {
 
     it("should handle connection errors", async () => {
       const { App } = await import("@slack/bolt");
-      vi.mocked(App).mockImplementationOnce(() => {
+      vi.mocked(App).mockImplementationOnce(function () {
         throw new Error("Connection failed");
       });
 
@@ -489,7 +491,7 @@ describe("SlackChannel file extraction", () => {
 
     // Re-mock App to capture the message handler
     const { App } = await import("@slack/bolt");
-    vi.mocked(App).mockImplementation(() => {
+    vi.mocked(App).mockImplementation(function () {
       const messageHandlers: Array<(...args: any[]) => any> = [];
       return {
         start: vi.fn().mockResolvedValue(undefined),

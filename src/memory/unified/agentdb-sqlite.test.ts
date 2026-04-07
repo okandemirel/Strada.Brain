@@ -38,12 +38,14 @@ const mockTransaction = vi.fn((fn: any) => {
 
 vi.mock("better-sqlite3", () => {
   return {
-    default: vi.fn().mockImplementation(() => ({
-      prepare: mockPrepare,
-      exec: mockExec,
-      close: mockClose,
-      transaction: mockTransaction,
-    })),
+    default: vi.fn().mockImplementation(function () {
+      return {
+        prepare: mockPrepare,
+        exec: mockExec,
+        close: mockClose,
+        transaction: mockTransaction,
+      };
+    }),
   };
 });
 
@@ -210,7 +212,7 @@ describe("initSqlite", () => {
     const MockedDb = vi.mocked(Database);
     // First call (file-based) throws, second call (in-memory) succeeds
     let callCount = 0;
-    MockedDb.mockImplementation((() => {
+    MockedDb.mockImplementation(function () {
       callCount++;
       if (callCount === 1) throw new Error("disk full");
       return {
@@ -219,7 +221,7 @@ describe("initSqlite", () => {
         close: mockClose,
         transaction: mockTransaction,
       };
-    }) as any);
+    } as any);
 
     const ctx = makeContext();
     initSqlite(ctx);
@@ -230,9 +232,9 @@ describe("initSqlite", () => {
 
   it("should set sqliteInitFailed when both file and memory fail", () => {
     const MockedDb = vi.mocked(Database);
-    MockedDb.mockImplementation((() => {
+    MockedDb.mockImplementation(function () {
       throw new Error("catastrophic failure");
-    }) as any);
+    } as any);
 
     const ctx = makeContext();
     initSqlite(ctx);

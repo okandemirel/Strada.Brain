@@ -12,23 +12,21 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // ---------------------------------------------------------------------------
 
 vi.mock("../channels/telegram/bot.js", () => ({
-  TelegramChannel: vi.fn().mockImplementation((...args: unknown[]) => ({
-    name: "telegram",
-    _args: args,
-  })),
+  TelegramChannel: vi.fn().mockImplementation(function (...args: unknown[]) {
+    return { name: "telegram", _args: args };
+  }),
 }));
 
 vi.mock("../channels/cli/repl.js", () => ({
-  CLIChannel: vi.fn().mockImplementation(() => ({
-    name: "cli",
-  })),
+  CLIChannel: vi.fn().mockImplementation(function () {
+    return { name: "cli" };
+  }),
 }));
 
 vi.mock("../channels/discord/bot.js", () => ({
-  DiscordChannel: vi.fn().mockImplementation((...args: unknown[]) => ({
-    name: "discord",
-    _args: args,
-  })),
+  DiscordChannel: vi.fn().mockImplementation(function (...args: unknown[]) {
+    return { name: "discord", _args: args };
+  }),
 }));
 
 vi.mock("../channels/discord/commands.js", () => ({
@@ -36,17 +34,15 @@ vi.mock("../channels/discord/commands.js", () => ({
 }));
 
 vi.mock("../channels/whatsapp/client.js", () => ({
-  WhatsAppChannel: vi.fn().mockImplementation((...args: unknown[]) => ({
-    name: "whatsapp",
-    _args: args,
-  })),
+  WhatsAppChannel: vi.fn().mockImplementation(function (...args: unknown[]) {
+    return { name: "whatsapp", _args: args };
+  }),
 }));
 
 vi.mock("../channels/web/channel.js", () => ({
-  WebChannel: vi.fn().mockImplementation((...args: unknown[]) => ({
-    name: "web",
-    _args: args,
-  })),
+  WebChannel: vi.fn().mockImplementation(function (...args: unknown[]) {
+    return { name: "web", _args: args };
+  }),
 }));
 
 vi.mock("../security/auth.js", () => ({
@@ -58,16 +54,18 @@ vi.mock("../dashboard/metrics.js", () => ({
 }));
 
 vi.mock("../dashboard/server.js", () => ({
-  DashboardServer: vi.fn().mockImplementation(() => ({
-    start: vi.fn(async () => {}),
-    stop: vi.fn(async () => {}),
-  })),
+  DashboardServer: vi.fn().mockImplementation(function () {
+    return {
+      start: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
+    };
+  }),
 }));
 
 vi.mock("../security/rate-limiter.js", () => ({
-  RateLimiter: vi.fn().mockImplementation((opts: unknown) => ({
-    _opts: opts,
-  })),
+  RateLimiter: vi.fn().mockImplementation(function (opts: unknown) {
+    return { _opts: opts };
+  }),
 }));
 
 // ---------------------------------------------------------------------------
@@ -237,12 +235,14 @@ describe("initializeDashboard", () => {
   });
 
   it("should return undefined and log warn when dashboard start fails", async () => {
-    vi.mocked(DashboardServer).mockImplementationOnce(() => ({
-      start: vi.fn(async () => {
-        throw new Error("port in use");
-      }),
-      stop: vi.fn(async () => {}),
-    }) as any);
+    vi.mocked(DashboardServer).mockImplementationOnce(function () {
+      return {
+        start: vi.fn(async () => {
+          throw new Error("port in use");
+        }),
+        stop: vi.fn(async () => {}),
+      } as any;
+    });
 
     const config = makeConfig({ dashboard: { enabled: true, port: 9090 } });
     const result = await initializeDashboard(config, {} as any, undefined, logger);

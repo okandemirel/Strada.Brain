@@ -29,25 +29,27 @@ vi.mock("discord.js", async () => {
   const actual = await vi.importActual("discord.js");
   return {
     ...actual,
-    Client: vi.fn().mockImplementation(() => ({
-      login: vi.fn().mockResolvedValue(undefined),
-      destroy: vi.fn().mockResolvedValue(undefined),
-      isReady: vi.fn().mockReturnValue(true),
-      user: { tag: "TestBot#1234", id: "123456789" },
-      ws: { ping: 50 },
-      on: vi.fn(),
-      once: vi.fn(),
-      channels: {
-        fetch: vi.fn().mockResolvedValue({
-          isTextBased: () => true,
-          send: vi.fn().mockResolvedValue({ id: "msg123", edit: vi.fn() }),
-          sendTyping: vi.fn(),
-          threads: {
-            create: vi.fn().mockResolvedValue({ id: "thread123" }),
-          },
-        }),
-      },
-    })),
+    Client: vi.fn().mockImplementation(function () {
+      return {
+        login: vi.fn().mockResolvedValue(undefined),
+        destroy: vi.fn().mockResolvedValue(undefined),
+        isReady: vi.fn().mockReturnValue(true),
+        user: { tag: "TestBot#1234", id: "123456789" },
+        ws: { ping: 50 },
+        on: vi.fn(),
+        once: vi.fn(),
+        channels: {
+          fetch: vi.fn().mockResolvedValue({
+            isTextBased: () => true,
+            send: vi.fn().mockResolvedValue({ id: "msg123", edit: vi.fn() }),
+            sendTyping: vi.fn(),
+            threads: {
+              create: vi.fn().mockResolvedValue({ id: "thread123" }),
+            },
+          }),
+        },
+      };
+    }),
   };
 });
 
