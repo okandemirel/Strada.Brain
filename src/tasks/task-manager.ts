@@ -11,7 +11,7 @@ import type { Task, TaskId, TaskProgressUpdate } from "./types.js";
 import { TaskStatus, ACTIVE_STATUSES, TERMINAL_STATUSES, generateTaskId } from "./types.js";
 import { getTaskProgressMessage, toTaskProgressSignal } from "./progress-signals.js";
 import type { TaskStorage } from "./task-storage.js";
-import type { BackgroundExecutor } from "./background-executor.js";
+import type { IBackgroundExecutor, IOrchestrator } from "./orchestrator-contract.js";
 import { getLogger } from "../utils/logger.js";
 import { sanitizeSecrets } from "../security/secret-sanitizer.js";
 import type { TaskOrigin } from "../daemon/daemon-types.js";
@@ -19,7 +19,6 @@ import type { GoalTree } from "../goals/types.js";
 import type { GoalNodeId } from "../goals/types.js";
 import type { GoalStorage } from "../goals/goal-storage.js";
 import { prepareTreeForResume, prepareTreeForRetry } from "../goals/goal-resume.js";
-import type { IOrchestrator } from "./orchestrator-contract.js";
 import { stripVisibleProviderArtifacts } from "../agents/orchestrator-text-utils.js";
 import type { MessageContent } from "../agents/providers/provider-core.interface.js";
 
@@ -28,7 +27,7 @@ export class TaskManager extends EventEmitter {
 
   constructor(
     private readonly storage: TaskStorage,
-    private readonly executor: BackgroundExecutor,
+    private readonly executor: IBackgroundExecutor,
     private readonly goalStorage?: GoalStorage,
   ) {
     super();

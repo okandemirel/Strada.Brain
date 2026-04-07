@@ -19,8 +19,7 @@ import type {
   TaskProgressUpdate,
 } from "./types.js";
 import { getTaskConversationKey, TaskStatus } from "./types.js";
-import type { TaskManager } from "./task-manager.js";
-import type { IOrchestrator, SupervisorAdmissionDecision } from "./orchestrator-contract.js";
+import type { ITaskManager, IOrchestrator, SupervisorAdmissionDecision } from "./orchestrator-contract.js";
 import { resolveConversationScope } from "../agents/orchestrator-text-utils.js";
 import type { GoalDecomposer } from "../goals/goal-decomposer.js";
 import type { GoalNode, GoalTree } from "../goals/types.js";
@@ -153,7 +152,7 @@ export class BackgroundExecutor {
   private readonly queue: QueueEntry[] = [];
   private readonly activeConversations = new Set<string>();
   private running = 0;
-  private taskManager: TaskManager | null = null;
+  private taskManager: ITaskManager | null = null;
   private readonly orchestrator: IOrchestrator;
   private readonly concurrencyLimit: number;
   private readonly decomposer?: GoalDecomposer;
@@ -178,7 +177,7 @@ export class BackgroundExecutor {
   /**
    * Set the task manager reference (avoids circular dependency).
    */
-  setTaskManager(manager: TaskManager): void {
+  setTaskManager(manager: ITaskManager): void {
     this.taskManager = manager;
   }
 

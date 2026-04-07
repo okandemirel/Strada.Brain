@@ -7,17 +7,46 @@
  *
  * The concrete Orchestrator class satisfies this interface structurally
  * (duck-typing) — no explicit `implements` clause is required.
+ *
+ * IMPORTANT: This file must NOT import from ./types.ts to avoid an
+ * intra-package cycle (types.ts already imports from this file).
  */
 
-import type { BackgroundTaskOptions } from "./types.js";
 import type { SupervisorResult } from "../supervisor/supervisor-types.js";
+
+// ─── Task System Interfaces ─────────────────────────────────────────────────
+// Minimal contracts to break the task-manager <-> background-executor cycle.
+
+/** Minimal contract that BackgroundExecutor needs from TaskManager. */
+export interface ITaskManager {
+  updateStatus(id: string, status: string): void;
+  complete(id: string, result: string): void;
+  fail(id: string, error: string): void;
+  block(id: string, reason: string): void;
+  attachGoalRoot(taskId: string, goalRootId: string): void;
+  hasActiveForegroundTasks(excludedChatIds?: readonly string[]): boolean;
+}
+
+/** Minimal contract that TaskManager needs from BackgroundExecutor. */
+export interface IBackgroundExecutor {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  enqueue(task: any, signal: AbortSignal, onProgress: (message: any) => void): void;
+}
 
 // ─── Orchestrator Interface ──────────────────────────────────────────────────
 
 /** Minimal contract the task system needs from an Orchestrator instance. */
 export interface IOrchestrator {
-  /** Execute a task in background mode and return the visible response. */
-  runBackgroundTask(prompt: string, options: BackgroundTaskOptions): Promise<string>;
+  /**
+   * Execute a task in background mode and return the visible response.
+   *
+   * The `options` parameter uses a broad signature here to avoid importing
+   * BackgroundTaskOptions (which lives in ./types.ts and would create an
+   * intra-package cycle). Callers in background-executor.ts always pass a
+   * properly-typed BackgroundTaskOptions object.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  runBackgroundTask(prompt: string, options: any): Promise<string>;
 }
 
 // ─── Supervisor Admission Types ──────────────────────────────────────────────

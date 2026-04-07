@@ -10,7 +10,7 @@ import type { TaskOrigin } from "../daemon/daemon-types.js";
 import type { GoalTree } from "../goals/types.js";
 import type { WorkspaceLease } from "../agents/supervisor/supervisor-types.js";
 import type { MessageContent } from "../agents/providers/provider-core.interface.js";
-import type { IOrchestrator, SupervisorAdmissionDecision } from "./orchestrator-contract.js";
+import type { IOrchestrator } from "./orchestrator-contract.js";
 
 // ─── Task Identity ──────────────────────────────────────────────────────────────
 

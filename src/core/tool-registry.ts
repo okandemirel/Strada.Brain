@@ -19,48 +19,9 @@ import { execFileSync } from "node:child_process";
 import { PluginLoader } from "../agents/plugins/plugin-loader.js";
 import { getLogger } from "../utils/logger.js";
 import { ValidationError } from "../common/errors.js";
-import type {
-  StradaMcpRuntime,
-  StradaMcpRuntimeStatus,
-} from "./strada-mcp-tool-loader.js";
-
-// Tool category metadata
-export const ToolCategories = {
-  FILE: "file",
-  CODE: "code",
-  SEARCH: "search",
-  STRADA: "strada",
-  SHELL: "shell",
-  GIT: "git",
-  DOTNET: "dotnet",
-  MEMORY: "memory",
-  BROWSER: "browser",
-  COMPOSITE: "composite",
-  INTROSPECTION: "introspection",
-  CUSTOM: "custom",
-} as const;
-
-export type ToolCategory = (typeof ToolCategories)[keyof typeof ToolCategories];
-
-// Tool metadata decorator
-export interface ToolMetadata {
-  name: string;
-  description: string;
-  category: ToolCategory;
-  dangerous: boolean;
-  requiresConfirmation: boolean;
-  readOnly: boolean;
-  dependencies?: string[];
-  controlPlaneOnly?: boolean;
-  requiresBridge?: boolean;
-  installed?: boolean;
-  available?: boolean;
-  availabilityReason?: string;
-}
-
-export interface ToolInventoryEntry extends ToolMetadata {
-  type: string;
-}
+// Re-export shared types from tool-registry-types.ts (extracted to break circular deps)
+export { ToolCategories, type ToolCategory, type ToolMetadata, type ToolInventoryEntry } from "./tool-registry-types.js";
+import { ToolCategories, type ToolCategory, type ToolMetadata, type ToolInventoryEntry } from "./tool-registry-types.js";
 
 // ============================================================================
 // Built-in Tool Imports
@@ -149,7 +110,7 @@ export class ToolRegistry {
   private readonly metadata = new Map<string, ToolMetadata>();
   private readonly categories = new Map<ToolCategory, Set<string>>();
   private readonly pluginLoader?: PluginLoader;
-  private stradaMcpRuntime: StradaMcpRuntime | null = null;
+  private stradaMcpRuntime: import("./strada-mcp-tool-loader.js").StradaMcpRuntime | null = null;
   private initialized = false;
 
   constructor(pluginDirs?: string[]) {
@@ -382,7 +343,7 @@ export class ToolRegistry {
     });
   }
 
-  getStradaMcpRuntimeStatus(): StradaMcpRuntimeStatus | null {
+  getStradaMcpRuntimeStatus(): import("./strada-mcp-tool-loader.js").StradaMcpRuntimeStatus | null {
     return this.stradaMcpRuntime?.getStatus() ?? null;
   }
 

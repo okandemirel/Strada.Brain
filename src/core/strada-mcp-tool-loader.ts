@@ -4,7 +4,7 @@ import { pathToFileURL } from "node:url";
 import type { Config } from "../config/config.js";
 import { detectStradaMcp, type StradaMcpInstall } from "../config/strada-deps.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "../agents/tools/tool.interface.js";
-import type { ToolCategory as BrainToolCategory, ToolMetadata as BrainToolMetadata } from "./tool-registry.js";
+import type { ToolCategory as BrainToolCategory, ToolMetadata as BrainToolMetadata } from "./tool-registry-types.js";
 import { getLogger } from "../utils/logger.js";
 
 interface StradaMcpToolResult {
