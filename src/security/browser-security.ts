@@ -183,8 +183,17 @@ export function validateUrlWithConfig(
 
 /**
  * Check if an IP address is in a private range.
+ * Also detects IPv4-mapped IPv6 addresses (e.g., ::ffff:127.0.0.1).
  */
 function isPrivateIp(ip: string): boolean {
+  let ipToCheck = ip;
+
+  // Handle IPv4-mapped IPv6 addresses (::ffff:x.x.x.x)
+  const v4MappedMatch = ip.match(/^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/i);
+  if (v4MappedMatch) {
+    ipToCheck = v4MappedMatch[1]!;
+  }
+
   // IPv4 private ranges
   const privateRanges = [
     /^10\./, // 10.0.0.0/8
@@ -192,10 +201,11 @@ function isPrivateIp(ip: string): boolean {
     /^192\.168\./, // 192.168.0.0/16
     /^169\.254\./, // Link-local
     /^127\./, // Loopback
+    /^0\./, // 0.0.0.0/8
   ];
 
   for (const range of privateRanges) {
-    if (range.test(ip)) {
+    if (range.test(ipToCheck)) {
       return true;
     }
   }
@@ -203,9 +213,11 @@ function isPrivateIp(ip: string): boolean {
   // IPv6 loopback and unique local
   if (
     ip === "::1" ||
+    ip === "::" ||
     ip.startsWith("fc") ||
     ip.startsWith("fd") ||
-    ip.startsWith("fe80:")
+    ip.startsWith("fe80:") ||
+    ip.toLowerCase().startsWith("::ffff:")
   ) {
     return true;
   }
@@ -296,6 +308,7 @@ export class BrowserRateLimiter {
         }
       }
     }, 300_000);
+    this.cleanupInterval.unref();
   }
 }
 

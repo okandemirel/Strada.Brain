@@ -227,6 +227,7 @@ export class SecretSanitizer {
     const originalLength = content.length;
 
     for (const pattern of this.patterns) {
+      pattern.pattern.lastIndex = 0;
       const matches = result.match(pattern.pattern);
       if (!matches) continue;
 
@@ -262,7 +263,10 @@ export class SecretSanitizer {
   }
 
   containsSecrets(content: string): boolean {
-    return this.patterns.some((p) => p.pattern.test(content));
+    return this.patterns.some((p) => {
+      p.pattern.lastIndex = 0;
+      return p.pattern.test(content);
+    });
   }
 
   getActivePatterns(): string[] {

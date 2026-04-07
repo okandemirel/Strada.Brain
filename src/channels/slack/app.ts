@@ -808,7 +808,7 @@ export class SlackChannel implements IChannelAdapter {
     const workspaceAllowed = isAllowedBySingleIdPolicy(
       teamId,
       this.config.allowedWorkspaces ?? [],
-      "open",
+      "closed",
     );
     if (!workspaceAllowed) {
       this.logger.warn("Unauthorized workspace", { teamId, userId });
@@ -820,7 +820,7 @@ export class SlackChannel implements IChannelAdapter {
     const userAllowed = isAllowedBySingleIdPolicy(
       normalizedUserId,
       this.config.allowedUserIds ?? [],
-      "open",
+      "closed",
     );
     if (!userAllowed) {
       this.logger.warn("Unauthorized user", { userId, teamId });

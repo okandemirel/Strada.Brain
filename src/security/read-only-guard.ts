@@ -217,7 +217,7 @@ export class ReadOnlyGuard {
   }
 
   canExecute(toolName: string): boolean {
-    return !this.enabled || !this.blockedTools.has(toolName);
+    return !this.enabled || !this.blockedTools.has(toolName.toLowerCase().trim());
   }
 
   check(toolName: string): ReadOnlyCheckResult {

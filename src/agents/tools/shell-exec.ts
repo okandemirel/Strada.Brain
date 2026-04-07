@@ -38,6 +38,37 @@ const DANGEROUS_PIPE_PATTERNS = [
   />\s*\/dev\/nvme/i,
 ];
 
+/**
+ * Patterns that detect command substitution, inline script execution,
+ * and other shell injection vectors that bypass the simple blocklist.
+ */
+const INJECTION_PATTERNS: [RegExp, string][] = [
+  // Command substitution
+  [/\$\(/, "command substitution $()"],
+  [/`[^`]+`/, "command substitution via backticks"],
+
+  // Inline script execution via interpreters
+  [/\bpython[23]?\s+-c\b/i, "inline Python execution"],
+  [/\bnode\s+-e\b/i, "inline Node.js execution"],
+  [/\bperl\s+-e\b/i, "inline Perl execution"],
+  [/\bruby\s+-e\b/i, "inline Ruby execution"],
+  [/\bphp\s+-r\b/i, "inline PHP execution"],
+
+  // Dangerous binaries with broad targets
+  [/\brm\s+(-[a-zA-Z]*f|-[a-zA-Z]*r){2}\b/, "recursive force remove"],
+  [/\bchmod\s+(-R\s+)?[0-7]{3,4}\s+\/(?!app\b)/i, "chmod on system path"],
+  [/\bchown\s+-R\b/i, "recursive chown"],
+
+  // Process/network manipulation
+  [/\bkill\s+-9\s+-1\b/, "kill all processes"],
+  [/\bnc\s+-[a-zA-Z]*l/i, "netcat listener"],
+  [/\bncat\s+-[a-zA-Z]*l/i, "ncat listener"],
+
+  // Encoding-based bypass attempts
+  [/\bbase64\s.*\|\s*(sh|bash|zsh)\b/i, "base64-decoded shell execution"],
+  [/\bprintf\s.*\|\s*(sh|bash|zsh)\b/i, "printf-to-shell execution"],
+];
+
 export class ShellExecTool implements ITool {
   readonly name = "shell_exec";
   readonly description =
@@ -167,6 +198,12 @@ function checkCommandSafety(command: string): { safe: boolean; reason?: string }
   for (const pattern of DANGEROUS_PIPE_PATTERNS) {
     if (pattern.test(command)) {
       return { safe: false, reason: "dangerous pipe pattern detected" };
+    }
+  }
+
+  for (const [pattern, label] of INJECTION_PATTERNS) {
+    if (pattern.test(command)) {
+      return { safe: false, reason: `blocked: ${label}` };
     }
   }
 

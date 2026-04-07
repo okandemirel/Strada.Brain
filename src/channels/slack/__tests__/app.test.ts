@@ -421,9 +421,10 @@ describe("SlackChannel", () => {
       expect(restrictedChannel).toBeDefined();
     });
 
-    it("allows inbound Slack messages when no workspace or user allowlists are configured", async () => {
+    it("denies inbound Slack messages when no workspace or user allowlists are configured (closed by default)", async () => {
       const handler = vi.fn().mockResolvedValue(undefined);
       channel.onMessage(handler);
+      const say = vi.fn().mockResolvedValue(undefined);
 
       await (channel as unknown as {
         handleIncomingMessage: (message: Record<string, unknown>, say: ReturnType<typeof vi.fn>) => Promise<void>;
@@ -436,10 +437,10 @@ describe("SlackChannel", () => {
           text: "hello",
           ts: "123.456",
         },
-        vi.fn(),
+        say,
       );
 
-      expect(handler).toHaveBeenCalledTimes(1);
+      expect(handler).not.toHaveBeenCalled();
     });
 
     it("rejects Slack messages from unauthorized workspaces", async () => {
@@ -478,6 +479,8 @@ describe("SlackChannel file extraction", () => {
     signingSecret: "test-secret",
     appToken: "xapp-test-token",
     socketMode: true,
+    allowedWorkspaces: ["T123", "T001"],
+    allowedUserIds: ["U123", "U456"],
   };
 
   beforeEach(async () => {

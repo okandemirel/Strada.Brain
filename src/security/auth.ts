@@ -55,9 +55,10 @@ export class AuthManager {
 
   /**
    * Check if a Slack user is authorized to use the bot.
+   * Default: closed (deny-all when no allowlist configured).
    */
   isSlackUserAllowed(userId: string): boolean {
-    const allowed = isAllowedBySingleIdPolicy(userId, this.allowedSlackIds, "open");
+    const allowed = isAllowedBySingleIdPolicy(userId, this.allowedSlackIds, "closed");
     if (!allowed) {
       warnUnauthorized("slack", { userId });
     }
@@ -66,9 +67,10 @@ export class AuthManager {
 
   /**
    * Check if a Slack workspace is authorized.
+   * Default: closed (deny-all when no allowlist configured).
    */
   isSlackWorkspaceAllowed(workspaceId: string): boolean {
-    const allowed = isAllowedBySingleIdPolicy(workspaceId, this.allowedSlackWorkspaces, "open");
+    const allowed = isAllowedBySingleIdPolicy(workspaceId, this.allowedSlackWorkspaces, "closed");
     if (!allowed) {
       warnUnauthorized("slack-workspace", { workspaceId });
     }

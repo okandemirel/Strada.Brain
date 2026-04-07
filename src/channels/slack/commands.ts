@@ -527,16 +527,16 @@ function escapeText(text: string): string {
 
 /**
  * Validate workspace membership.
- * Empty allowlists mean "no restriction" to match the Slack message handler path.
+ * Default: closed (deny-all when no allowlist configured).
  */
 export function isValidWorkspace(teamId: string, allowedWorkspaces: string[]): boolean {
-  return isAllowedBySingleIdPolicy(teamId, allowedWorkspaces, "open");
+  return isAllowedBySingleIdPolicy(teamId, allowedWorkspaces, "closed");
 }
 
 /**
  * Validate user access.
- * Empty allowlists mean "no restriction" to match the Slack message handler path.
+ * Default: closed (deny-all when no allowlist configured).
  */
 export function isValidUser(userId: string, allowedUsers: string[]): boolean {
-  return isAllowedBySingleIdPolicy(userId, allowedUsers, "open");
+  return isAllowedBySingleIdPolicy(userId, allowedUsers, "closed");
 }

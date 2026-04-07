@@ -43,6 +43,9 @@ jobs:
       - name: Validate Strada.Core extraction
         run: npm run sync:check -- --core-path /tmp/Strada.Core-ci
 
+      - name: Security Audit
+        run: npm audit --audit-level=high
+
       - name: Typecheck
         run: npm run typecheck
 
