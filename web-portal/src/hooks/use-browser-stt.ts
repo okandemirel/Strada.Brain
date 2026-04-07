@@ -39,7 +39,7 @@ export function useBrowserStt() {
   const statusRef = useRef<BrowserSttStatus>('idle')
 
   // Keep ref in sync so async callbacks read current value
-  statusRef.current = status
+  useEffect(() => { statusRef.current = status }, [status])
 
   // Reactive settings (Fix #3: use hook, not plain function)
   const { voice } = useVoiceSettings()
@@ -192,16 +192,17 @@ export function useBrowserStt() {
 
   // Cleanup on unmount
   useEffect(() => {
+    const pending = pendingRef.current
     return () => {
       const worker = workerRef.current
       if (worker) {
         worker.terminate()
         workerRef.current = null
       }
-      for (const [, pending] of pendingRef.current) {
-        clearTimeout(pending.timer)
+      for (const [, p] of pending) {
+        clearTimeout(p.timer)
       }
-      pendingRef.current.clear()
+      pending.clear()
     }
   }, [])
 
