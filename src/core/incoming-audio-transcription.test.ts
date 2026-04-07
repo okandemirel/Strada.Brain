@@ -106,7 +106,7 @@ describe("transcribeIncomingAudioMessage", () => {
     const result = await transcribeIncomingAudioMessage(msg, "/tmp/project");
 
     expect(result.shouldDrop).toBe(true);
-    expect(result.userWarning).toContain("speech-to-text provider");
+    expect(result.userWarning).toContain("transcription");
   });
 
   it("recognises Turkish voice placeholder and replaces it with transcript", async () => {

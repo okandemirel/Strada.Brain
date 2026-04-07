@@ -94,7 +94,9 @@
     "zod": "^3.25.76"
   },
   "optionalDependencies": {
-    "hnswlib-node": "^3.0.0"
+    "@huggingface/transformers": "^3.4.0",
+    "hnswlib-node": "^3.0.0",
+    "wavefile": "^11.0.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
