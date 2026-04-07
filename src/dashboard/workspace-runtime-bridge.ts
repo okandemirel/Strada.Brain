@@ -198,7 +198,8 @@ export function createWorkspaceRuntimeBridge(params: {
           return;
         }
 
-        const newReviewStatus = typeof bag.reviewStatus === "string" ? bag.reviewStatus :
+        const newReviewStatus = typeof bag.newReviewStatus === "string" ? bag.newReviewStatus :
+          typeof bag.reviewStatus === "string" ? bag.reviewStatus :
           (newStatus === "pending" ? "none" : undefined);
         goalStorage.updateNodeStatus(
           node.id,

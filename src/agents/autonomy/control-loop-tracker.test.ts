@@ -384,4 +384,141 @@ describe("ControlLoopTracker", () => {
 
     expect(trigger?.reason).toBe("stale_analysis_loop");
   });
+
+  // ─── Read-Only Stall Detection (Fix A1) ─────────────────────────────────
+
+  it("triggers read_only_stall after consecutive read-only tool calls without mutations", () => {
+    const tracker = new ControlLoopTracker({ staleAnalysisThreshold: 100 });
+
+    // Simulate 8 consecutive read-only tool calls (threshold is 8)
+    for (let i = 0; i < ControlLoopTracker.READ_ONLY_STALL_THRESHOLD; i++) {
+      tracker.markToolExecution("file_read");
+    }
+
+    // Recording a gate should detect the read-only stall
+    const trigger = tracker.recordGate({
+      kind: "verifier_continue",
+      reason: "Still checking files",
+      iteration: 10,
+    });
+
+    expect(trigger).not.toBeNull();
+    expect(trigger?.fingerprint).toBe("read_only_stall");
+    expect(trigger?.sameFingerprintCount).toBe(ControlLoopTracker.READ_ONLY_STALL_THRESHOLD);
+    expect(trigger?.reason).toContain("read-only/verification tool calls");
+  });
+
+  it("does NOT trigger read_only_stall below threshold", () => {
+    const tracker = new ControlLoopTracker({ staleAnalysisThreshold: 100 });
+
+    // 7 read-only calls (one below threshold of 8)
+    for (let i = 0; i < ControlLoopTracker.READ_ONLY_STALL_THRESHOLD - 1; i++) {
+      tracker.markToolExecution("file_read");
+    }
+
+    const trigger = tracker.recordGate({
+      kind: "verifier_continue",
+      reason: "test",
+      iteration: 10,
+    });
+
+    // Should not trigger read_only_stall (only 7 < 8)
+    expect(trigger?.fingerprint).not.toBe("read_only_stall");
+  });
+
+  it("resets read-only counter on mutation tool execution", () => {
+    const tracker = new ControlLoopTracker({ staleAnalysisThreshold: 100 });
+
+    // Accumulate read-only calls
+    for (let i = 0; i < 6; i++) {
+      tracker.markToolExecution("grep_search");
+    }
+    expect(tracker.getConsecutiveReadOnlyToolCalls()).toBe(6);
+
+    // Mutation resets both counters
+    tracker.markToolExecution("file_write");
+    expect(tracker.getConsecutiveReadOnlyToolCalls()).toBe(0);
+  });
+
+  it("resets read-only counter on markVerificationClean", () => {
+    const tracker = new ControlLoopTracker();
+    for (let i = 0; i < 5; i++) {
+      tracker.markToolExecution("file_read");
+    }
+    expect(tracker.getConsecutiveReadOnlyToolCalls()).toBe(5);
+
+    tracker.markVerificationClean(10);
+    expect(tracker.getConsecutiveReadOnlyToolCalls()).toBe(0);
+  });
+
+  it("resets read-only counter on markMeaningfulFileEvidence with new files", () => {
+    const tracker = new ControlLoopTracker();
+    for (let i = 0; i < 5; i++) {
+      tracker.markToolExecution("list_directory");
+    }
+    expect(tracker.getConsecutiveReadOnlyToolCalls()).toBe(5);
+
+    tracker.markMeaningfulFileEvidence(["src/new.ts"], 10);
+    expect(tracker.getConsecutiveReadOnlyToolCalls()).toBe(0);
+  });
+
+  it("resets read-only counter on markRecoveryAttempt", () => {
+    const tracker = new ControlLoopTracker();
+    for (let i = 0; i < 5; i++) {
+      tracker.markToolExecution("file_read");
+    }
+    expect(tracker.getConsecutiveReadOnlyToolCalls()).toBe(5);
+
+    tracker.markRecoveryAttempt("read_only_stall");
+    expect(tracker.getConsecutiveReadOnlyToolCalls()).toBe(0);
+  });
+
+  // ─── Mutation Tracking (Fix A2 support) ─────────────────────────────────
+
+  it("hadMutationsSinceLastReset returns false initially", () => {
+    const tracker = new ControlLoopTracker();
+    expect(tracker.hadMutationsSinceLastReset()).toBe(false);
+  });
+
+  it("hadMutationsSinceLastReset returns true after mutation tool", () => {
+    const tracker = new ControlLoopTracker();
+    tracker.markToolExecution("file_edit");
+    expect(tracker.hadMutationsSinceLastReset()).toBe(true);
+  });
+
+  it("hadMutationsSinceLastReset stays false after read-only tool", () => {
+    const tracker = new ControlLoopTracker();
+    tracker.markToolExecution("file_read");
+    tracker.markToolExecution("grep_search");
+    expect(tracker.hadMutationsSinceLastReset()).toBe(false);
+  });
+
+  it("hadMutationsSinceLastReset resets on markVerificationClean", () => {
+    const tracker = new ControlLoopTracker();
+    tracker.markToolExecution("file_write");
+    expect(tracker.hadMutationsSinceLastReset()).toBe(true);
+
+    tracker.markVerificationClean(10);
+    expect(tracker.hadMutationsSinceLastReset()).toBe(false);
+  });
+
+  it("hadMutationsSinceLastReset true even after read-only calls follow a mutation", () => {
+    const tracker = new ControlLoopTracker();
+    tracker.markToolExecution("file_write");
+    tracker.markToolExecution("file_read");
+    tracker.markToolExecution("grep_search");
+    // The mutation flag should still be true
+    expect(tracker.hadMutationsSinceLastReset()).toBe(true);
+  });
+
+  it("getConsecutiveReadOnlyToolCalls returns current counter value", () => {
+    const tracker = new ControlLoopTracker();
+    expect(tracker.getConsecutiveReadOnlyToolCalls()).toBe(0);
+    tracker.markToolExecution("file_read");
+    expect(tracker.getConsecutiveReadOnlyToolCalls()).toBe(1);
+    tracker.markToolExecution("grep_search");
+    expect(tracker.getConsecutiveReadOnlyToolCalls()).toBe(2);
+    tracker.markToolExecution("shell_exec");
+    expect(tracker.getConsecutiveReadOnlyToolCalls()).toBe(0);
+  });
 });

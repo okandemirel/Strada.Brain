@@ -2580,6 +2580,7 @@ export class Orchestrator {
           }
 
           let consecutiveMaxTokens = 0;
+          let consecutiveProviderFailures = 0;
           const iterationHealth = new IterationHealthTracker();
           let maxTokensAbort = false;
           while (true) {
@@ -2648,14 +2649,49 @@ export class Orchestrator {
                 this.streamingEnabled &&
                 "chatStream" in resilientProvider &&
                 typeof resilientProvider.chatStream === "function";
-              const response = canBgStream
-                ? await this.silentStream(chatId, activePrompt, session, resilientProvider, currentToolDefinitions)
-                : await resilientProvider.chat(
-                    activePrompt,
-                    session.messages,
-                    currentToolDefinitions,
-                    { signal },
-                  );
+              let response;
+              try {
+                response = canBgStream
+                  ? await this.silentStream(chatId, activePrompt, session, resilientProvider, currentToolDefinitions)
+                  : await resilientProvider.chat(
+                      activePrompt,
+                      session.messages,
+                      currentToolDefinitions,
+                      { signal },
+                    );
+              } catch (providerError) {
+                const errMsg = providerError instanceof Error ? providerError.message : String(providerError);
+                const isTimeoutOrAbort = /aborted|timeout|ETIMEDOUT|stall/i.test(errMsg);
+                // Don't swallow cancellation — let the outer catch handle it
+                if (signal.aborted) throw providerError;
+
+                consecutiveProviderFailures++;
+                logger.warn("Provider call failed in background loop", {
+                  chatId,
+                  epoch: bgEpochCount,
+                  iteration: bgIteration,
+                  provider: currentAssignment.providerName,
+                  error: errMsg,
+                  consecutiveProviderFailures,
+                  isTimeoutOrAbort,
+                });
+
+                if (isTimeoutOrAbort) {
+                  // Give back the iteration — timeouts produce no progress
+                  bgEpochIteration--;
+                  bgIteration--;
+                }
+
+                if (consecutiveProviderFailures >= 3) {
+                  session.messages.push({
+                    role: "user",
+                    content: `[System] Provider has failed ${consecutiveProviderFailures} consecutive times (${errMsg}). Consider: 1) Simplifying the current step 2) Breaking the task into smaller steps 3) Using a different approach.`,
+                  } as ConversationMessage);
+                }
+
+                continue;
+              }
+              consecutiveProviderFailures = 0;
               this.recordExecutionTrace({
                 chatId,
                 identityKey,
@@ -3208,7 +3244,18 @@ export class Orchestrator {
             if (continuedAfterBudget) {
               taskPlanner.resetBudgetWindow();
               consecutiveMaxTokens = 0;
-              controlLoopTracker.markVerificationClean(bgIteration);
+              // Only amnesty loop detection state if the epoch produced mutations.
+              // Without mutations, the agent is stalling and the loop detector should
+              // carry its accumulated state across the epoch boundary.
+              if (controlLoopTracker.hadMutationsSinceLastReset()) {
+                controlLoopTracker.markVerificationClean(bgIteration);
+              } else {
+                logger.warn("Epoch rolled without mutations — preserving loop detection state", {
+                  chatId,
+                  epoch: bgEpochCount,
+                  readOnlyToolCalls: controlLoopTracker.getConsecutiveReadOnlyToolCalls(),
+                });
+              }
               bgEpochCount++;
               continue;
             }

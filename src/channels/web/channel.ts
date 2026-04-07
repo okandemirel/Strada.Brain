@@ -942,13 +942,23 @@ export class WebChannel
       }
 
       // Workspace monitor commands from frontend
-      case "monitor:pause":
-      case "monitor:resume":
+      case "monitor:move_task":
       case "monitor:retry_task":
       case "monitor:resume_task":
+      case "monitor:cancel_task": {
+        if (!this.workspaceBusEmitter) {
+          this.sendToClient(chatId, {
+            type: "text",
+            text: "Monitor bridge is not available. Please try again.",
+          });
+          break;
+        }
+        this.workspaceBusEmitter(data.type as string, data);
+        break;
+      }
+      case "monitor:pause":
+      case "monitor:resume":
       case "monitor:skip_task":
-      case "monitor:move_task":
-      case "monitor:cancel_task":
       case "monitor:approve_gate":
       case "monitor:reject_gate":
       // Canvas commands from frontend (Phase 4)

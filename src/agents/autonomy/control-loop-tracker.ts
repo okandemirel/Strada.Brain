@@ -45,7 +45,11 @@ export class ControlLoopTracker {
   private readonly seenEvidence = new Set<string>();
   private readonly recoveryEpisodes = new Map<string, number>();
   private consecutiveNoToolGates = 0;
+  private consecutiveReadOnlyToolCalls = 0;
+  private mutationsSinceLastReset = false;
   private pruneIndex = 0;
+
+  static readonly READ_ONLY_STALL_THRESHOLD = 8;
 
   private readonly fpThreshold: number;
   private readonly hasCustomFpThreshold: boolean;
@@ -91,6 +95,18 @@ export class ControlLoopTracker {
         latestReason: stored.reason,
       };
     }
+
+    // Read-only stall: agent executes many verification/read tools without any mutations
+    if (this.consecutiveReadOnlyToolCalls >= ControlLoopTracker.READ_ONLY_STALL_THRESHOLD) {
+      return {
+        fingerprint: "read_only_stall",
+        sameFingerprintCount: this.consecutiveReadOnlyToolCalls,
+        recentGateCount: liveEvents.length,
+        recoveryEpisode: this.recoveryEpisodes.get("read_only_stall") ?? 0,
+        reason: `Agent executed ${this.consecutiveReadOnlyToolCalls} consecutive read-only/verification tool calls without any file mutations. This suggests the agent is stuck analyzing without making progress.`,
+      };
+    }
+
     const sameFingerprintEvents = liveEvents.filter((entry) =>
       entry.fingerprint === stored.fingerprint &&
       entry.iteration >= event.iteration - this.fpWindow,
@@ -129,12 +145,24 @@ export class ControlLoopTracker {
     return this.consecutiveNoToolGates;
   }
 
+  getConsecutiveReadOnlyToolCalls(): number {
+    return this.consecutiveReadOnlyToolCalls;
+  }
+
+  hadMutationsSinceLastReset(): boolean {
+    return this.mutationsSinceLastReset;
+  }
+
   markToolExecution(toolName?: string): void {
     // Only reset stale analysis counter on mutation tools, not read-only tools
     // like file_read, grep_search, list_directory. When no toolName is provided
     // (backward compat), assume mutation to preserve existing behavior.
     if (!toolName || MUTATION_TOOLS.has(toolName)) {
       this.consecutiveNoToolGates = 0;
+      this.consecutiveReadOnlyToolCalls = 0;
+      this.mutationsSinceLastReset = true;
+    } else {
+      this.consecutiveReadOnlyToolCalls++;
     }
   }
 
@@ -142,6 +170,8 @@ export class ControlLoopTracker {
     this.events.length = 0;
     this.pruneIndex = 0;
     this.consecutiveNoToolGates = 0;
+    this.consecutiveReadOnlyToolCalls = 0;
+    this.mutationsSinceLastReset = false;
   }
 
   markMeaningfulFileEvidence(files: readonly string[], _iteration: number): void {
@@ -157,6 +187,7 @@ export class ControlLoopTracker {
     this.events.length = 0;
     this.pruneIndex = 0;
     this.consecutiveNoToolGates = 0;
+    this.consecutiveReadOnlyToolCalls = 0;
   }
 
   markRecoveryAttempt(fingerprint: string): number {
@@ -165,6 +196,7 @@ export class ControlLoopTracker {
     this.events.length = 0;
     this.pruneIndex = 0;
     this.consecutiveNoToolGates = 0;
+    this.consecutiveReadOnlyToolCalls = 0;
     return next;
   }
 

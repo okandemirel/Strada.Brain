@@ -1,13 +1,15 @@
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   DndContext,
+  DragOverlay,
   closestCenter,
   PointerSensor,
   useSensor,
   useSensors,
   useDroppable,
   type DragEndEvent,
+  type DragStartEvent,
 } from '@dnd-kit/core'
 import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
@@ -77,7 +79,7 @@ function TaskCard({ task }: { task: MonitorTask }) {
   const style = {
     transform: CSS.Transform.toString(transform),
     transition,
-    opacity: isDragging ? 0.5 : undefined,
+    opacity: isDragging ? 0 : undefined,
     zIndex: isDragging ? 50 : undefined,
   }
   const setSelectedTask = useMonitorStore((s) => s.setSelectedTask)
@@ -182,8 +184,15 @@ export default function KanbanBoard() {
     return COLUMNS.map((column) => ({ ...column, label: t(column.labelKey), tasks: taskList.filter(column.filter) }))
   }, [tasks, t])
 
+  const [activeDragId, setActiveDragId] = useState<string | null>(null)
+
+  const onDragStart = (event: DragStartEvent) => {
+    setActiveDragId(event.active.id as string)
+  }
+
   // Stable callback — only depends on store actions and WS sender (both stable refs)
   const handleDragEnd = (event: DragEndEvent) => {
+    setActiveDragId(null)
     const { active, over } = event
     if (!over) return
 
@@ -201,6 +210,12 @@ export default function KanbanBoard() {
     } else {
       const overTask = tasksRef.current[over.id as string]
       targetColumnId = overTask ? resolveColumnId(overTask) : null
+    }
+    if (!targetColumnId) {
+      const containerId = over.data?.current?.sortable?.containerId
+      if (typeof containerId === 'string' && COLUMN_STATUS_MAP[containerId]) {
+        targetColumnId = containerId
+      }
     }
     if (!targetColumnId) return
 
@@ -242,6 +257,21 @@ export default function KanbanBoard() {
 
     if (!sent) {
       updateTask(taskId, { status: prevStatus, reviewStatus: prevReviewStatus })
+    } else {
+      // Rollback if no server confirmation within 5s
+      const rollbackTimer = setTimeout(() => {
+        const current = tasksRef.current[taskId]
+        if (current && current.status === newStatus && current.reviewStatus === newReviewStatus) {
+          updateTask(taskId, { status: prevStatus, reviewStatus: prevReviewStatus })
+        }
+      }, 5000)
+      const unsub = useMonitorStore.subscribe((state) => {
+        const t = state.tasks[taskId]
+        if (t && (t.status !== prevStatus || t.reviewStatus !== prevReviewStatus)) {
+          clearTimeout(rollbackTimer)
+          unsub()
+        }
+      })
     }
   }
 
@@ -250,6 +280,7 @@ export default function KanbanBoard() {
       <DndContext
         sensors={sensors}
         collisionDetection={closestCenter}
+        onDragStart={onDragStart}
         onDragEnd={handleDragEnd}
       >
         <div className="grid h-full min-h-0 auto-cols-[minmax(220px,1fr)] grid-flow-col gap-3 overflow-x-auto pb-1">
@@ -262,6 +293,18 @@ export default function KanbanBoard() {
             />
           ))}
         </div>
+        <DragOverlay dropAnimation={null}>
+          {activeDragId && tasks[activeDragId] ? (
+            <div className="rounded-xl border border-accent/30 bg-bg-secondary/95 backdrop-blur-xl px-3 py-2.5 text-xs shadow-[0_12px_24px_rgba(0,0,0,0.3)] scale-[1.02]">
+              <div className="truncate text-sm font-medium text-text">{tasks[activeDragId].title}</div>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                <span className="rounded-full border border-white/10 bg-black/20 px-2 py-0.5 text-[10px] uppercase tracking-wide text-text-secondary">
+                  {normalizeLabel(tasks[activeDragId].status)}
+                </span>
+              </div>
+            </div>
+          ) : null}
+        </DragOverlay>
       </DndContext>
     </div>
   )
