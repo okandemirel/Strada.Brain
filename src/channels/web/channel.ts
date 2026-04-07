@@ -170,9 +170,25 @@ export class WebChannel
   private readonly identityStore: WebIdentityStore;
   /** Optional emitter for workspace bus events from frontend monitor commands. */
   private workspaceBusEmitter: ((event: string, payload: unknown) => void) | null = null;
+  /** Cached monitor state for replaying to reconnecting clients. */
+  private lastMonitorSnapshot: string[] = [];
 
   private static readonly UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   private static readonly RECONNECT_TTL_MS = 5 * 60 * 1000;
+  private static readonly MAX_MONITOR_SNAPSHOT_MESSAGES = 200;
+  private static readonly CACHEABLE_MONITOR_TYPES = new Set([
+    "monitor:task_update",
+    "monitor:substep",
+    "monitor:review_result",
+    "monitor:agent_activity",
+    "progress:narrative",
+    "supervisor:activated",
+    "supervisor:plan_ready",
+    "supervisor:wave_start",
+    "supervisor:node_start",
+    "supervisor:node_complete",
+    "supervisor:complete",
+  ]);
 
   constructor(
     private readonly port: number = 3000,
@@ -266,6 +282,7 @@ export class WebChannel
       clearInterval(this._reconnectCleanupInterval);
     }
     this.recentlyDisconnected.clear();
+    this.lastMonitorSnapshot = [];
 
     for (const [, pending] of this.pendingConfirmations) {
       clearTimeout(pending.timer);
@@ -298,6 +315,26 @@ export class WebChannel
    * Used by the monitor bridge to fan-out workspace events.
    */
   broadcastRaw(message: string): void {
+    // Cache monitor messages for replay on reconnect
+    try {
+      const parsed = JSON.parse(message);
+      const type = parsed?.type;
+      if (type === "monitor:dag_init" || type === "monitor:dag_restructure") {
+        // DAG init/restructure replaces all previous monitor state
+        this.lastMonitorSnapshot = [message];
+      } else if (type === "monitor:clear") {
+        this.lastMonitorSnapshot = [];
+      } else if (typeof type === "string" && WebChannel.CACHEABLE_MONITOR_TYPES.has(type)) {
+        if (this.lastMonitorSnapshot.length >= WebChannel.MAX_MONITOR_SNAPSHOT_MESSAGES) {
+          // Evict the oldest incremental message (preserve index 0 = dag_init/restructure)
+          this.lastMonitorSnapshot.splice(1, 1);
+        }
+        this.lastMonitorSnapshot.push(message);
+      }
+    } catch {
+      // Not JSON — don't cache
+    }
+
     for (const [, client] of this.clients) {
       if (client.ws.readyState === 1) {
         try {
@@ -305,6 +342,22 @@ export class WebChannel
         } catch {
           // Connection may have closed between readyState check and send
         }
+      }
+    }
+  }
+
+  /**
+   * Replay cached monitor state to a single WebSocket client.
+   * Called after session init so reconnecting clients see the current DAG.
+   */
+  private replayMonitorState(ws: WebSocket): void {
+    for (const msg of this.lastMonitorSnapshot) {
+      try {
+        if (ws.readyState === 1) {
+          ws.send(msg);
+        }
+      } catch {
+        break; // Connection lost during replay
       }
     }
   }
@@ -634,10 +687,6 @@ export class WebChannel
       if (reclaimed) {
         chatId = reclaimed.chatId;
         reconnectToken = reclaimed.reconnectToken;
-        // TODO: DAG replay on reconnect — if there's an active goal tree,
-        // re-emit monitor:dag_init + current node statuses so the portal
-        // can reconstruct the monitor view. Currently the client gets a
-        // blank monitor until the next DAG event arrives.
       }
     }
 
@@ -656,6 +705,9 @@ export class WebChannel
       profileToken: identity.profileToken,
       language,
     });
+
+    // Replay cached monitor state so reconnecting clients see the current DAG
+    this.replayMonitorState(ws);
 
     void this.consumePostSetupBootstrap({ chatId, profileId: identity.profileId, profileToken: identity.profileToken });
 

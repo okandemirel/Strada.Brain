@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type ChangeEvent, type DragEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ChangeEvent, type DragEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { Attachment } from '../types/messages'
 import { useWorkspaceStore } from '../stores/workspace-store'
@@ -6,6 +6,12 @@ import VoiceRecorder from './VoiceRecorder'
 import { ShimmerButton } from './ui/shimmer-button'
 import { CoolMode } from './ui/cool-mode'
 import { useVoiceSettings } from '../hooks/use-voice-settings'
+
+const SLASH_COMMANDS = [
+  { command: '/model', description: 'Switch AI model/provider', usage: '/model <provider>[/<model>]' },
+  { command: '/autonomous', description: 'Toggle autonomous mode', usage: '/autonomous on|off [hours]' },
+  { command: '/cancel', description: 'Cancel current task', usage: '/cancel [taskId]' },
+] as const
 
 interface ChatInputProps {
   onSend: (text: string, attachments?: Attachment[]) => boolean | void
@@ -51,10 +57,26 @@ export default function ChatInput({ onSend, disabled }: ChatInputProps) {
   const [text, setText] = useState('')
   const [files, setFiles] = useState<FilePreview[]>([])
   const [isDragOver, setIsDragOver] = useState(false)
+  const [showCommands, setShowCommands] = useState(false)
+  const [commandFilter, setCommandFilter] = useState('')
+  const [selectedCommandIndex, setSelectedCommandIndex] = useState(0)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const sendingRef = useRef(false)
   const { voice } = useVoiceSettings()
+
+  const filteredCommands = useMemo(() => {
+    if (!showCommands) return []
+    return SLASH_COMMANDS.filter(cmd =>
+      cmd.command.toLowerCase().includes(commandFilter.toLowerCase())
+    )
+  }, [showCommands, commandFilter])
+
+  const selectCommand = useCallback((command: string) => {
+    setText(command + ' ')
+    setShowCommands(false)
+    textareaRef.current?.focus()
+  }, [])
 
   const filesRef = useRef(files)
   filesRef.current = files
@@ -128,16 +150,49 @@ export default function ChatInput({ onSend, disabled }: ChatInputProps) {
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
+      if (showCommands && filteredCommands.length > 0) {
+        if (e.key === 'ArrowUp') {
+          e.preventDefault()
+          setSelectedCommandIndex(i => Math.max(0, i - 1))
+          return
+        }
+        if (e.key === 'ArrowDown') {
+          e.preventDefault()
+          setSelectedCommandIndex(i => Math.min(filteredCommands.length - 1, i + 1))
+          return
+        }
+        if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) {
+          e.preventDefault()
+          selectCommand(filteredCommands[selectedCommandIndex].command)
+          return
+        }
+        if (e.key === 'Escape') {
+          e.preventDefault()
+          setShowCommands(false)
+          return
+        }
+      }
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault()
         handleSend()
       }
     },
-    [handleSend],
+    [handleSend, showCommands, filteredCommands, selectedCommandIndex, selectCommand],
   )
 
   const handleTextChange = useCallback((e: ChangeEvent<HTMLTextAreaElement>) => {
-    setText(e.target.value)
+    const val = e.target.value
+    setText(val)
+
+    if (val.startsWith('/')) {
+      const filter = val.slice(1).split(' ')[0] ?? ''
+      setCommandFilter(filter)
+      setShowCommands(!val.includes(' '))
+      setSelectedCommandIndex(0)
+    } else {
+      setShowCommands(false)
+    }
+
     const el = e.target
     el.style.height = 'auto'
     el.style.height = `${Math.min(el.scrollHeight, 120)}px`
@@ -205,12 +260,33 @@ export default function ChatInput({ onSend, disabled }: ChatInputProps) {
 
   return (
     <div
-      className={`flex flex-col px-6 pt-3.5 pb-[18px] bg-bg-secondary backdrop-blur-[40px] backdrop-saturate-[180%] border-t border-border shrink-0 transition-all duration-200 ${isDragOver ? 'border-t-accent bg-bg-tertiary shadow-[inset_0_2px_0_0_var(--color-accent)]' : ''}`}
+      className={`relative flex flex-col px-6 pt-3.5 pb-[18px] bg-bg-secondary backdrop-blur-[40px] backdrop-saturate-[180%] border-t border-border shrink-0 transition-all duration-200 ${isDragOver ? 'border-t-accent bg-bg-tertiary shadow-[inset_0_2px_0_0_var(--color-accent)]' : ''}`}
       onDragEnter={handleDragOver}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
+      {showCommands && filteredCommands.length > 0 && (
+        <div className="absolute bottom-full left-6 right-6 mb-1 rounded-xl border border-white/10 bg-bg-secondary/95 backdrop-blur-xl shadow-lg overflow-hidden z-10">
+          {filteredCommands.map((cmd, i) => (
+            <button
+              key={cmd.command}
+              type="button"
+              onClick={() => selectCommand(cmd.command)}
+              onMouseEnter={() => setSelectedCommandIndex(i)}
+              className={`w-full text-left px-3 py-2 flex flex-col gap-0.5 transition-colors ${
+                i === selectedCommandIndex ? 'bg-accent/10' : 'hover:bg-white/5'
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-mono font-semibold text-accent">{cmd.command}</span>
+                <span className="text-xs text-text-tertiary">{cmd.description}</span>
+              </div>
+              <span className="text-[10px] font-mono text-text-tertiary/70">{cmd.usage}</span>
+            </button>
+          ))}
+        </div>
+      )}
       {files.length > 0 && (
         <div className="flex gap-2 py-2.5 overflow-x-auto flex-wrap">
           {files.map((fp, i) => (
