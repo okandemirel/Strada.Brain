@@ -159,4 +159,21 @@ describe("CreateSkillTool", () => {
       expect(result.content).toContain("...");
     });
   });
+
+  it("blocks skill creation in read-only mode", async () => {
+    const ctx = createToolContext({ readOnly: true });
+
+    const result = await tool.execute(
+      {
+        name: "blocked-skill",
+        version: "1.0.0",
+        description: "should be blocked",
+        content: "This should not be written.",
+      },
+      ctx,
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain("Skill creation is blocked in read-only mode");
+  });
 });

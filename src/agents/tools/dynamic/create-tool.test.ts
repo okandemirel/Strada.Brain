@@ -161,4 +161,53 @@ describe("CreateToolTool", () => {
     expect(result.content).toContain("b (number)");
     expect(result.content).toContain("*required*");
   });
+
+  it("blocks shell strategy in read-only mode", async () => {
+    const ctx = createToolContext({
+      readOnly: true,
+      registerDynamicTool: () => {},
+      lookupTool: () => undefined,
+    });
+
+    const result = await tool.execute(
+      {
+        name: "ro_shell",
+        description: "test",
+        strategy: "shell",
+        command: "echo hello",
+      },
+      ctx,
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain("Shell-strategy dynamic tools are blocked in read-only mode");
+  });
+
+  it("allows composite strategy in read-only mode", async () => {
+    const registeredTools: Array<{ name: string }> = [];
+    const mockRead = createMockTool("file_read");
+    const ctx = createToolContext({
+      readOnly: true,
+      registerDynamicTool: (t) => registeredTools.push(t),
+      lookupTool: (name) => (name === "file_read" ? mockRead : undefined),
+    });
+
+    const result = await tool.execute(
+      {
+        name: "ro_composite",
+        description: "Read-only composite wrapper",
+        strategy: "composite",
+        parameters: [{ name: "path", type: "string", description: "Path" }],
+        steps: [
+          { tool: "file_read", params: { path: "{{path}}" } },
+        ],
+      },
+      ctx,
+    );
+
+    expect(result.isError).toBeUndefined();
+    expect(result.content).toContain("dynamic_ro_composite");
+    expect(result.content).toContain("created and registered");
+    expect(registeredTools).toHaveLength(1);
+  });
 });

@@ -338,4 +338,28 @@ describe("DynamicToolFactory", () => {
     expect(tool.metadata!.riskLevel).toBe("safe");
     expect(tool.metadata!.requiresConfirmation).toBe(false);
   });
+
+  it("shell executor blocks execution in read-only mode", async () => {
+    const factory = new DynamicToolFactory();
+    const tool = factory.create(
+      {
+        name: "ro_shell_block",
+        description: "Should be blocked in read-only",
+        parameters: [],
+        strategy: "shell",
+        command: "echo should-not-run",
+      },
+      new Set(),
+    );
+
+    const ctx = createToolContext({
+      readOnly: true,
+      projectPath: tmpdir(),
+      workingDirectory: tmpdir(),
+    });
+
+    const result = await tool.execute({}, ctx);
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain("Shell-strategy dynamic tools are blocked in read-only mode");
+  });
 });
