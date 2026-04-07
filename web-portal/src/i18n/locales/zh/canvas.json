@@ -4,7 +4,8 @@
     "loading": "加载画布中...",
     "agentVisuals": "智能体可视化 {{count}}",
     "agentSync": "智能体同步 {{time}}",
-    "queue": "队列 {{count}}"
+    "queue": "队列 {{count}}",
+    "selected": "已选择{{count}}个"
   },
   "cards": {
     "aiBadge": "AI",
@@ -75,6 +76,44 @@
       "badge": "指标",
       "defaultLabel": "指标"
     }
+  },
+  "toolbar": {
+    "note-block": "笔记",
+    "code-block": "代码",
+    "task-card": "任务",
+    "diagram-node": "图表",
+    "file-card": "文件",
+    "terminal-block": "终端",
+    "more": "更多...",
+    "undo": "撤销",
+    "redo": "重做",
+    "gridSnap": "网格对齐",
+    "addNoteBlock": "添加笔记",
+    "addCodeBlock": "添加代码",
+    "addTaskCard": "添加任务",
+    "addDiagramNode": "添加图表",
+    "addFileCard": "添加文件",
+    "addTerminalBlock": "添加终端"
+  },
+  "contextMenu": {
+    "edit": "编辑",
+    "duplicate": "复制",
+    "delete": "删除",
+    "connectTo": "连接到...",
+    "bringToFront": "置于顶层",
+    "sendToBack": "置于底层",
+    "addNoteHere": "在此添加笔记",
+    "addCodeHere": "在此添加代码",
+    "selectAll": "全选"
+  },
+  "editing": {
+    "title": "编辑中",
+    "save": "保存",
+    "cancel": "取消"
+  },
+  "connecting": {
+    "hint": "点击卡片进行连接",
+    "cancel": "取消"
   },
   "controls": {
     "zoomOut": "缩小",

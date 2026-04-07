@@ -4,7 +4,8 @@
     "loading": "Loading canvas...",
     "agentVisuals": "Agent visuals {{count}}",
     "agentSync": "Agent sync {{time}}",
-    "queue": "Queue {{count}}"
+    "queue": "Queue {{count}}",
+    "selected": "{{count}} selected"
   },
   "cards": {
     "aiBadge": "AI",
@@ -75,6 +76,44 @@
       "badge": "Metric",
       "defaultLabel": "Metric"
     }
+  },
+  "toolbar": {
+    "note-block": "Note",
+    "code-block": "Code",
+    "task-card": "Task",
+    "diagram-node": "Diagram",
+    "file-card": "File",
+    "terminal-block": "Terminal",
+    "more": "More...",
+    "undo": "Undo",
+    "redo": "Redo",
+    "gridSnap": "Grid Snap",
+    "addNoteBlock": "Add Note",
+    "addCodeBlock": "Add Code",
+    "addTaskCard": "Add Task",
+    "addDiagramNode": "Add Diagram",
+    "addFileCard": "Add File",
+    "addTerminalBlock": "Add Terminal"
+  },
+  "contextMenu": {
+    "edit": "Edit",
+    "duplicate": "Duplicate",
+    "delete": "Delete",
+    "connectTo": "Connect to...",
+    "bringToFront": "Bring to Front",
+    "sendToBack": "Send to Back",
+    "addNoteHere": "Add Note Here",
+    "addCodeHere": "Add Code Here",
+    "selectAll": "Select All"
+  },
+  "editing": {
+    "title": "Editing",
+    "save": "Save",
+    "cancel": "Cancel"
+  },
+  "connecting": {
+    "hint": "Click a card to connect",
+    "cancel": "to cancel"
   },
   "controls": {
     "zoomOut": "Zoom out",

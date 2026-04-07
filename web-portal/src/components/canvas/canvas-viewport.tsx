@@ -6,6 +6,7 @@ interface CanvasViewportProps {
   zoom: number
   onPan: (dx: number, dy: number) => void
   onZoom: (nextZoom: number, cx: number, cy: number) => void
+  onClick?: () => void
   children: ReactNode
 }
 
@@ -13,7 +14,7 @@ const MIN_ZOOM = 0.1
 const MAX_ZOOM = 3.0
 const ZOOM_SENSITIVITY = 0.001
 
-export default function CanvasViewport({ x, y, zoom, onPan, onZoom, children }: CanvasViewportProps) {
+export default function CanvasViewport({ x, y, zoom, onPan, onZoom, onClick, children }: CanvasViewportProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const isPanning = useRef(false)
   const lastPointer = useRef({ x: 0, y: 0 })
@@ -36,10 +37,13 @@ export default function CanvasViewport({ x, y, zoom, onPan, onZoom, children }: 
     return () => el.removeEventListener('wheel', handleWheel)
   }, [handleWheel])
 
+  const didPan = useRef(false)
+
   const handlePointerDown = useCallback((e: React.PointerEvent) => {
     // Only pan on background click (not on cards) or middle mouse
     if (e.button === 1 || (e.button === 0 && (e.target as HTMLElement).dataset.canvasBg !== undefined)) {
       isPanning.current = true
+      didPan.current = false
       lastPointer.current = { x: e.clientX, y: e.clientY }
       ;(e.target as HTMLElement).setPointerCapture(e.pointerId)
     }
@@ -49,13 +53,19 @@ export default function CanvasViewport({ x, y, zoom, onPan, onZoom, children }: 
     if (!isPanning.current) return
     const dx = e.clientX - lastPointer.current.x
     const dy = e.clientY - lastPointer.current.y
+    if (Math.abs(dx) > 2 || Math.abs(dy) > 2) didPan.current = true
     lastPointer.current = { x: e.clientX, y: e.clientY }
     onPan(dx, dy)
   }, [onPan])
 
-  const handlePointerUp = useCallback(() => {
+  const handlePointerUp = useCallback((e: React.PointerEvent) => {
+    const wasPanning = isPanning.current
     isPanning.current = false
-  }, [])
+    // Fire onClick only on clean background click (no drag)
+    if (wasPanning && !didPan.current && (e.target as HTMLElement).dataset.canvasBg !== undefined) {
+      onClick?.()
+    }
+  }, [onClick])
 
   return (
     <div

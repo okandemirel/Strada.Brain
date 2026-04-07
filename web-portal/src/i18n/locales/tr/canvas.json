@@ -4,7 +4,8 @@
     "loading": "Canvas yükleniyor...",
     "agentVisuals": "Ajan görselleri {{count}}",
     "agentSync": "Ajan senkronizasyonu {{time}}",
-    "queue": "Kuyruk {{count}}"
+    "queue": "Kuyruk {{count}}",
+    "selected": "{{count}} seçili"
   },
   "cards": {
     "aiBadge": "AI",
@@ -75,6 +76,44 @@
       "badge": "Metrik",
       "defaultLabel": "Metrik"
     }
+  },
+  "toolbar": {
+    "note-block": "Not",
+    "code-block": "Kod",
+    "task-card": "Görev",
+    "diagram-node": "Diyagram",
+    "file-card": "Dosya",
+    "terminal-block": "Terminal",
+    "more": "Diğer...",
+    "undo": "Geri Al",
+    "redo": "İleri Al",
+    "gridSnap": "Izgara Yapış",
+    "addNoteBlock": "Not Ekle",
+    "addCodeBlock": "Kod Ekle",
+    "addTaskCard": "Görev Ekle",
+    "addDiagramNode": "Diyagram Ekle",
+    "addFileCard": "Dosya Ekle",
+    "addTerminalBlock": "Terminal Ekle"
+  },
+  "contextMenu": {
+    "edit": "Düzenle",
+    "duplicate": "Kopyala",
+    "delete": "Sil",
+    "connectTo": "Bağla...",
+    "bringToFront": "Öne Getir",
+    "sendToBack": "Arkaya Gönder",
+    "addNoteHere": "Buraya Not Ekle",
+    "addCodeHere": "Buraya Kod Ekle",
+    "selectAll": "Tümünü Seç"
+  },
+  "editing": {
+    "title": "Düzenleme",
+    "save": "Kaydet",
+    "cancel": "İptal"
+  },
+  "connecting": {
+    "hint": "Bağlamak için bir karta tıklayın",
+    "cancel": "iptal etmek için"
   },
   "controls": {
     "zoomOut": "Uzaklaştır",

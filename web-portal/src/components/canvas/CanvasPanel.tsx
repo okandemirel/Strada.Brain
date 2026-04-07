@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { DndContext, useDraggable, type DragEndEvent } from '@dnd-kit/core'
-import { useCanvasStore, type CanvasShape } from '../../stores/canvas-store'
+import { useCanvasStore, isValidResolvedShape, type CanvasShape } from '../../stores/canvas-store'
 import { useMonitorStore } from '../../stores/monitor-store'
 import { useSessionStore } from '../../stores/session-store'
 import { normalizeCanvasIncomingShape } from './canvas-shape-normalizer'
@@ -10,14 +10,19 @@ import { getDefaultDimensions, type ResolvedShape } from './canvas-types'
 import CanvasViewport from './canvas-viewport'
 import CanvasControls from './canvas-controls'
 import CanvasMinimap from './canvas-minimap'
-import CanvasConnections from './canvas-connections'
+import CanvasConnections, { TempConnection } from './canvas-connections'
 import CanvasEmptyState from './canvas-empty-state'
+import CanvasToolbar from './canvas-toolbar'
+import CanvasContextMenu from './canvas-context-menu'
+import SelectionOverlay, { LassoOverlay } from './selection-overlay'
+import EditableCard from './editable-card'
 import {
   formatLastSync,
   formatSessionLabel,
   canvasShapeToResolved,
   buildMonitorFallbackShapes,
   buildFallbackConnections,
+  snapToGrid,
 } from './canvas-helpers'
 
 /* ── Style constants ───────────────────────────────────────────────── */
@@ -28,10 +33,31 @@ const toolbarCls =
   'relative overflow-hidden border-b border-white/6 bg-[#0b1018]/92 px-4 py-3 backdrop-blur-2xl'
 
 const SAVE_DEBOUNCE_MS = 5_000
+const MIN_SHAPE_SIZE = 120
 
 /* ── Draggable card wrapper ────────────────────────────────────────── */
 
-function DraggableCard({ shape, zoom }: { shape: ResolvedShape; zoom: number }) {
+interface DraggableCardProps {
+  shape: ResolvedShape
+  zoom: number
+  isSelected: boolean
+  isConnecting: boolean
+  onSelect: (id: string, multi: boolean) => void
+  onDoubleClick: (id: string) => void
+  onContextMenu: (id: string, e: React.MouseEvent) => void
+  onConnectTarget: (id: string) => void
+}
+
+function DraggableCard({
+  shape,
+  zoom,
+  isSelected,
+  isConnecting,
+  onSelect,
+  onDoubleClick,
+  onContextMenu,
+  onConnectTarget,
+}: DraggableCardProps) {
   const { attributes, listeners, setNodeRef, transform } = useDraggable({ id: shape.id })
   const CardComponent = CARD_COMPONENTS[shape.type]
   if (!CardComponent) return null
@@ -42,15 +68,32 @@ function DraggableCard({ shape, zoom }: { shape: ResolvedShape; zoom: number }) 
   return (
     <div
       ref={setNodeRef}
-      className="absolute touch-none"
+      className={`absolute touch-none ${isConnecting ? 'cursor-crosshair' : ''}`}
       style={{
         left: shape.x + tx,
         top: shape.y + ty,
         width: shape.w,
-        zIndex: transform ? 50 : 1,
+        zIndex: transform ? 50 : isSelected ? 10 : 1,
       }}
       {...listeners}
       {...attributes}
+      onClick={(e) => {
+        e.stopPropagation()
+        if (isConnecting) {
+          onConnectTarget(shape.id)
+        } else {
+          onSelect(shape.id, e.shiftKey)
+        }
+      }}
+      onDoubleClick={(e) => {
+        e.stopPropagation()
+        onDoubleClick(shape.id)
+      }}
+      onContextMenu={(e) => {
+        e.preventDefault()
+        e.stopPropagation()
+        onContextMenu(shape.id, e)
+      }}
     >
       <CardComponent shape={shape} />
     </div>
@@ -71,6 +114,11 @@ export default function CanvasPanel() {
   const pendingViewport = useCanvasStore((s) => s.pendingViewport)
   const pendingLayout = useCanvasStore((s) => s.pendingLayout)
   const isDirty = useCanvasStore((s) => s.isDirty)
+  const selectedIds = useCanvasStore((s) => s.selectedIds)
+  const editingShapeId = useCanvasStore((s) => s.editingShapeId)
+  const connectingFromId = useCanvasStore((s) => s.connectingFromId)
+  const gridSnap = useCanvasStore((s) => s.gridSnap)
+
   const setShapes = useCanvasStore((s) => s.setShapes)
   const setViewport = useCanvasStore((s) => s.setViewport)
   const addShape = useCanvasStore((s) => s.addShape)
@@ -82,6 +130,20 @@ export default function CanvasPanel() {
   const clearPendingRemovals = useCanvasStore((s) => s.clearPendingRemovals)
   const clearPendingViewport = useCanvasStore((s) => s.clearPendingViewport)
   const clearPendingLayout = useCanvasStore((s) => s.clearPendingLayout)
+  const selectShape = useCanvasStore((s) => s.selectShape)
+  const deselectAll = useCanvasStore((s) => s.deselectAll)
+  const selectAll = useCanvasStore((s) => s.selectAll)
+  const setEditingShape = useCanvasStore((s) => s.setEditingShape)
+  const startConnecting = useCanvasStore((s) => s.startConnecting)
+  const finishConnecting = useCanvasStore((s) => s.finishConnecting)
+  const cancelConnecting = useCanvasStore((s) => s.cancelConnecting)
+  const pushUndo = useCanvasStore((s) => s.pushUndo)
+  const undo = useCanvasStore((s) => s.undo)
+  const redo = useCanvasStore((s) => s.redo)
+  const deleteSelected = useCanvasStore((s) => s.deleteSelected)
+  const duplicateSelected = useCanvasStore((s) => s.duplicateSelected)
+  const bringToFront = useCanvasStore((s) => s.bringToFront)
+  const sendToBack = useCanvasStore((s) => s.sendToBack)
 
   const sessionId = useSessionStore((s) => s.sessionId)
   const tasks = useMonitorStore((s) => s.tasks)
@@ -92,12 +154,31 @@ export default function CanvasPanel() {
   const [loading, setLoading] = useState(false)
   const [agentVisualCount, setAgentVisualCount] = useState(0)
   const [lastAgentSyncAt, setLastAgentSyncAt] = useState<number | null>(null)
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; shapeId: string | null } | null>(null)
+  const [mouseWorldPos, setMouseWorldPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 })
+  const [lassoRect, setLassoRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
+  const [resizing, setResizing] = useState<{ id: string; handle: string; startX: number; startY: number; origShape: ResolvedShape } | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const lassoStartRef = useRef<{ x: number; y: number } | null>(null)
 
   const pendingMutationCount =
     pendingShapes.length + pendingUpdates.length + pendingRemovals.length +
     (pendingViewport ? 1 : 0) + (pendingLayout ? 1 : 0)
+
+  const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds])
+
+  /* ── Viewport center (for toolbar add) ───────────────────────── */
+
+  const getViewportCenter = useCallback((): { x: number; y: number } => {
+    const el = containerRef.current
+    if (!el) return { x: 400, y: 300 }
+    const rect = el.getBoundingClientRect()
+    return {
+      x: (rect.width / 2 - viewport.x) / viewport.zoom,
+      y: (rect.height / 2 - viewport.y) / viewport.zoom,
+    }
+  }, [viewport])
 
   /* ── Apply pending mutations ──────────────────────────────────── */
 
@@ -137,7 +218,6 @@ export default function CanvasPanel() {
     }
 
     if (pendingLayout) {
-      // Read shapes from store to avoid stale closure
       const currentShapes = useCanvasStore.getState().shapes
       if (currentShapes.length > 0 && containerRef.current) {
         const rect = containerRef.current.getBoundingClientRect()
@@ -206,14 +286,19 @@ export default function CanvasPanel() {
             }
             if (migrated.length > 0) setShapes(migrated)
           } else if (Array.isArray(parsed) && parsed.length > 0) {
-            setShapes(parsed as ResolvedShape[])
+            const validated = parsed.filter(isValidResolvedShape)
+            if (validated.length > 0) setShapes(validated)
           }
         } catch { /* invalid JSON */ }
 
         try {
           if (data.canvas.viewport) {
             const vp = JSON.parse(data.canvas.viewport)
-            if (vp && typeof vp.x === 'number') setViewport(vp)
+            if (vp && typeof vp.x === 'number' && Number.isFinite(vp.x) &&
+                typeof vp.y === 'number' && Number.isFinite(vp.y) &&
+                typeof vp.zoom === 'number' && Number.isFinite(vp.zoom) && vp.zoom > 0) {
+              setViewport({ x: vp.x, y: vp.y, zoom: vp.zoom })
+            }
           }
         } catch { /* ignore */ }
       })
@@ -301,17 +386,288 @@ export default function CanvasPanel() {
     const id = String(active.id)
     const shape = shapes.find((s) => s.id === id)
     if (!shape) return
-    updateShape(id, { x: shape.x + delta.x / viewport.zoom, y: shape.y + delta.y / viewport.zoom })
+    pushUndo()
+    let nx = shape.x + delta.x / viewport.zoom
+    let ny = shape.y + delta.y / viewport.zoom
+    if (gridSnap) {
+      const snapped = snapToGrid(nx, ny)
+      nx = snapped.x
+      ny = snapped.y
+    }
+    updateShape(id, { x: nx, y: ny })
     setDirty(true)
-  }, [shapes, viewport.zoom, updateShape, setDirty])
+  }, [shapes, viewport.zoom, updateShape, setDirty, pushUndo, gridSnap])
+
+  /* ── Selection handlers ──────────────────────────────────────── */
+
+  const handleDoubleClick = useCallback((id: string) => {
+    pushUndo()
+    setEditingShape(id)
+  }, [setEditingShape, pushUndo])
+
+  const handleBackgroundClick = useCallback(() => {
+    if (connectingFromId) {
+      cancelConnecting()
+    } else {
+      deselectAll()
+    }
+    setContextMenu(null)
+  }, [connectingFromId, cancelConnecting, deselectAll])
+
+  /* ── Context menu ────────────────────────────────────────────── */
+
+  const handleCardContextMenu = useCallback((id: string, e: React.MouseEvent) => {
+    selectShape(id)
+    setContextMenu({ x: e.clientX, y: e.clientY, shapeId: id })
+  }, [selectShape])
+
+  const handleBgContextMenu = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    setContextMenu({ x: e.clientX, y: e.clientY, shapeId: null })
+  }, [])
+
+  const getContextMenuActions = useCallback(() => {
+    if (!contextMenu) return []
+    const { shapeId } = contextMenu
+
+    if (shapeId) {
+      return [
+        { label: t('contextMenu.edit'), icon: '\u270E', action: () => { pushUndo(); setEditingShape(shapeId) } },
+        { label: t('contextMenu.duplicate'), icon: '\u2398', action: () => { pushUndo(); duplicateSelected() } },
+        { label: t('contextMenu.connectTo'), icon: '\u2192', action: () => startConnecting(shapeId) },
+        { label: t('contextMenu.bringToFront'), icon: '\u2191', action: () => bringToFront(shapeId), divider: true },
+        { label: t('contextMenu.sendToBack'), icon: '\u2193', action: () => sendToBack(shapeId) },
+        { label: t('contextMenu.delete'), icon: '\u2717', action: () => { pushUndo(); deleteSelected() }, danger: true, divider: true },
+      ]
+    }
+
+    // Background context menu -- compute world position
+    const el = containerRef.current
+    const rect = el?.getBoundingClientRect()
+    const worldX = rect ? (contextMenu.x - rect.left - viewport.x) / viewport.zoom : 0
+    const worldY = rect ? (contextMenu.y - rect.top - viewport.y) / viewport.zoom : 0
+
+    return [
+      {
+        label: t('contextMenu.addNoteHere'), icon: 'M',
+        action: () => {
+          pushUndo()
+          const dims = getDefaultDimensions('note-block')
+          addShape({
+            id: `user-note-block-${Date.now()}`, type: 'note-block',
+            x: worldX - dims.w / 2, y: worldY - dims.h / 2,
+            w: dims.w, h: dims.h, props: { content: '', color: '#fbbf24' }, source: 'user',
+          })
+          setDirty(true)
+        },
+      },
+      {
+        label: t('contextMenu.addCodeHere'), icon: '<>',
+        action: () => {
+          pushUndo()
+          const dims = getDefaultDimensions('code-block')
+          addShape({
+            id: `user-code-block-${Date.now()}`, type: 'code-block',
+            x: worldX - dims.w / 2, y: worldY - dims.h / 2,
+            w: dims.w, h: dims.h, props: { code: '', language: 'text', title: '' }, source: 'user',
+          })
+          setDirty(true)
+        },
+      },
+      { label: t('contextMenu.selectAll'), icon: '\u2610', action: selectAll, divider: true },
+    ]
+  }, [contextMenu, t, pushUndo, setEditingShape, duplicateSelected, startConnecting, bringToFront, sendToBack, deleteSelected, addShape, setDirty, selectAll, viewport])
+
+  /* ── Connection target click ─────────────────────────────────── */
+
+  const handleConnectTarget = useCallback((toId: string) => {
+    if (!connectingFromId) return
+    pushUndo()
+    finishConnecting(toId)
+    setDirty(true)
+  }, [connectingFromId, pushUndo, finishConnecting, setDirty])
+
+  /* ── Inline editing save ─────────────────────────────────────── */
+
+  const handleEditSave = useCallback((id: string, props: Record<string, unknown>) => {
+    updateShape(id, { props })
+    setEditingShape(null)
+    setDirty(true)
+  }, [updateShape, setEditingShape, setDirty])
+
+  const handleEditCancel = useCallback(() => {
+    setEditingShape(null)
+  }, [setEditingShape])
+
+  /* ── Resize handlers ─────────────────────────────────────────── */
+
+  const handleResizeStart = useCallback((id: string, handle: string, e: React.PointerEvent) => {
+    const shape = shapes.find((s) => s.id === id)
+    if (!shape) return
+    pushUndo()
+    setResizing({ id, handle, startX: e.clientX, startY: e.clientY, origShape: { ...shape } })
+  }, [shapes, pushUndo])
+
+  useEffect(() => {
+    if (!resizing) return
+    function handleMove(e: PointerEvent): void {
+      const dx = (e.clientX - resizing!.startX) / viewport.zoom
+      const dy = (e.clientY - resizing!.startY) / viewport.zoom
+      const { origShape, handle } = resizing!
+
+      let nx = origShape.x, ny = origShape.y
+      let nw = origShape.w, nh = origShape.h
+
+      if (handle.includes('e')) nw = Math.max(MIN_SHAPE_SIZE, origShape.w + dx)
+      if (handle.includes('s')) nh = Math.max(80, origShape.h + dy)
+      if (handle.includes('w')) {
+        const delta = Math.min(dx, origShape.w - MIN_SHAPE_SIZE)
+        nx = origShape.x + delta
+        nw = origShape.w - delta
+      }
+      if (handle.includes('n')) {
+        const delta = Math.min(dy, origShape.h - 80)
+        ny = origShape.y + delta
+        nh = origShape.h - delta
+      }
+
+      if (gridSnap) {
+        const snapped = snapToGrid(nx, ny)
+        nx = snapped.x
+        ny = snapped.y
+      }
+
+      updateShape(resizing!.id, { x: nx, y: ny, w: nw, h: nh })
+    }
+    function handleUp(): void {
+      setResizing(null)
+      setDirty(true)
+    }
+    window.addEventListener('pointermove', handleMove)
+    window.addEventListener('pointerup', handleUp)
+    return () => {
+      window.removeEventListener('pointermove', handleMove)
+      window.removeEventListener('pointerup', handleUp)
+    }
+  }, [resizing, viewport.zoom, updateShape, setDirty, gridSnap])
+
+  /* ── Mouse tracking for temp connection line ─────────────────── */
+
+  const handleMouseMove = useCallback((e: React.MouseEvent) => {
+    if (!connectingFromId) return
+    const rect = containerRef.current?.getBoundingClientRect()
+    if (!rect) return
+    setMouseWorldPos({
+      x: (e.clientX - rect.left - viewport.x) / viewport.zoom,
+      y: (e.clientY - rect.top - viewport.y) / viewport.zoom,
+    })
+  }, [connectingFromId, viewport])
+
+  /* ── Lasso select ────────────────────────────────────────────── */
+
+  const handleLassoStart = useCallback((e: React.PointerEvent) => {
+    if (e.button !== 0 || connectingFromId) return
+    const target = e.target as HTMLElement
+    if (target.dataset.canvasBg === undefined) return
+    const rect = containerRef.current?.getBoundingClientRect()
+    if (!rect) return
+    lassoStartRef.current = { x: e.clientX - rect.left, y: e.clientY - rect.top }
+  }, [connectingFromId])
+
+  const handleLassoMove = useCallback((e: React.PointerEvent) => {
+    if (!lassoStartRef.current) return
+    const rect = containerRef.current?.getBoundingClientRect()
+    if (!rect) return
+    const cx = e.clientX - rect.left
+    const cy = e.clientY - rect.top
+    const x = Math.min(lassoStartRef.current.x, cx)
+    const y = Math.min(lassoStartRef.current.y, cy)
+    const w = Math.abs(cx - lassoStartRef.current.x)
+    const h = Math.abs(cy - lassoStartRef.current.y)
+    if (w > 5 || h > 5) setLassoRect({ x, y, w, h })
+  }, [])
+
+  const handleLassoEnd = useCallback(() => {
+    if (lassoRect && lassoRect.w > 5 && lassoRect.h > 5) {
+      const worldX = (lassoRect.x - viewport.x) / viewport.zoom
+      const worldY = (lassoRect.y - viewport.y) / viewport.zoom
+      const worldW = lassoRect.w / viewport.zoom
+      const worldH = lassoRect.h / viewport.zoom
+
+      const selected = shapes.filter((s) => {
+        const cx = s.x + s.w / 2
+        const cy = s.y + s.h / 2
+        return cx >= worldX && cx <= worldX + worldW && cy >= worldY && cy <= worldY + worldH
+      })
+      for (const s of selected) selectShape(s.id, true)
+    }
+    lassoStartRef.current = null
+    setLassoRect(null)
+  }, [lassoRect, viewport, shapes, selectShape])
+
+  /* ── Keyboard shortcuts ──────────────────────────────────────── */
+
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent): void {
+      if (editingShapeId) return
+      const target = e.target as HTMLElement
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT') return
+
+      const isCmd = e.metaKey || e.ctrlKey
+
+      if ((e.key === 'Delete' || e.key === 'Backspace') && selectedIds.length > 0) {
+        e.preventDefault()
+        pushUndo()
+        deleteSelected()
+        return
+      }
+      if (e.key === 'z' && isCmd && !e.shiftKey) {
+        e.preventDefault()
+        undo()
+        return
+      }
+      if ((e.key === 'z' && isCmd && e.shiftKey) || (e.key === 'y' && isCmd)) {
+        e.preventDefault()
+        redo()
+        return
+      }
+      if (e.key === 'a' && isCmd) {
+        e.preventDefault()
+        selectAll()
+        return
+      }
+      if (e.key === 'd' && isCmd) {
+        e.preventDefault()
+        if (selectedIds.length > 0) {
+          pushUndo()
+          duplicateSelected()
+        }
+        return
+      }
+      if (e.key === 'Escape') {
+        if (connectingFromId) cancelConnecting()
+        else deselectAll()
+        setContextMenu(null)
+        return
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [editingShapeId, selectedIds, pushUndo, deleteSelected, undo, redo, selectAll, duplicateSelected, connectingFromId, cancelConnecting, deselectAll])
 
   /* ── Render ───────────────────────────────────────────────────── */
 
   const cw = containerRef.current?.clientWidth ?? 800
   const ch = containerRef.current?.clientHeight ?? 600
+  const connectingFromShape = connectingFromId ? shapes.find((s) => s.id === connectingFromId) : null
+  const editingShape = editingShapeId ? shapes.find((s) => s.id === editingShapeId) : null
 
   return (
-    <div ref={containerRef} className="relative flex h-full w-full flex-col bg-[#060a10]">
+    <div
+      ref={containerRef}
+      className="relative flex h-full w-full flex-col bg-[#060a10]"
+      onMouseMove={handleMouseMove}
+    >
       {/* Toolbar header */}
       <div className={toolbarCls}>
         <div className="flex items-center gap-3">
@@ -320,15 +676,30 @@ export default function CanvasPanel() {
             {t('panel.title')}
           </span>
           <span className="text-[10px] font-medium text-slate-600">{formatSessionLabel(sessionId)}</span>
+
+          {/* Card add toolbar */}
+          {shapes.length > 0 && <CanvasToolbar viewportCenter={getViewportCenter()} />}
+
           <div className="flex-1" />
           {agentVisualCount > 0 && <span className={toolbarBtnCls}>{t('panel.agentVisuals', { count: agentVisualCount })}</span>}
           <span className={toolbarBtnCls}>{t('panel.agentSync', { time: formatLastSync(lastAgentSyncAt) })}</span>
           {pendingMutationCount > 0 && <span className={toolbarBtnCls}>{t('panel.queue', { count: pendingMutationCount })}</span>}
+          {selectedIds.length > 0 && (
+            <span className={toolbarBtnCls}>
+              {t('panel.selected', { count: selectedIds.length })}
+            </span>
+          )}
         </div>
       </div>
 
       {/* Canvas area */}
-      <div className="relative flex-1 overflow-hidden">
+      <div
+        className="relative flex-1 overflow-hidden"
+        onPointerDown={handleLassoStart}
+        onPointerMove={handleLassoMove}
+        onPointerUp={handleLassoEnd}
+        onContextMenu={handleBgContextMenu}
+      >
         {loading ? (
           <div className="absolute inset-0 flex items-center justify-center">
             <div className="flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-slate-500">
@@ -340,12 +711,46 @@ export default function CanvasPanel() {
           <CanvasEmptyState onVisualize={handleVisualize} />
         ) : (
           <DndContext onDragEnd={handleDragEnd}>
-            <CanvasViewport x={viewport.x} y={viewport.y} zoom={viewport.zoom} onPan={onPan} onZoom={onZoom}>
+            <CanvasViewport
+              x={viewport.x}
+              y={viewport.y}
+              zoom={viewport.zoom}
+              onPan={onPan}
+              onZoom={onZoom}
+              onClick={handleBackgroundClick}
+            >
               <CanvasConnections connections={connections} shapes={shapes} />
+              {connectingFromShape && (
+                <TempConnection fromShape={connectingFromShape} mousePos={mouseWorldPos} />
+              )}
               {shapes.map((shape) => (
-                <DraggableCard key={shape.id} shape={shape} zoom={viewport.zoom} />
+                editingShapeId === shape.id ? null : (
+                  <DraggableCard
+                    key={shape.id}
+                    shape={shape}
+                    zoom={viewport.zoom}
+                    isSelected={selectedSet.has(shape.id)}
+                    isConnecting={!!connectingFromId}
+                    onSelect={selectShape}
+                    onDoubleClick={handleDoubleClick}
+                    onContextMenu={handleCardContextMenu}
+                    onConnectTarget={handleConnectTarget}
+                  />
+                )
               ))}
+              {/* Selection overlays */}
+              {selectedIds.map((id) => {
+                const shape = shapes.find((s) => s.id === id)
+                if (!shape || editingShapeId === id) return null
+                return <SelectionOverlay key={`sel-${id}`} shape={shape} onResizeStart={handleResizeStart} />
+              })}
+              {/* Editing card */}
+              {editingShape && (
+                <EditableCard shape={editingShape} onSave={handleEditSave} onCancel={handleEditCancel} />
+              )}
             </CanvasViewport>
+            {/* Lasso overlay (screen space) */}
+            <LassoOverlay rect={lassoRect} />
           </DndContext>
         )}
 
@@ -354,6 +759,20 @@ export default function CanvasPanel() {
           <CanvasMinimap shapes={shapes} viewport={viewport} containerWidth={cw} containerHeight={ch} />
         )}
       </div>
+
+      {/* Context menu */}
+      <CanvasContextMenu
+        position={contextMenu}
+        actions={getContextMenuActions()}
+        onClose={() => setContextMenu(null)}
+      />
+
+      {/* Connecting mode indicator */}
+      {connectingFromId && (
+        <div className="absolute bottom-14 left-1/2 z-30 -translate-x-1/2 rounded-full border border-sky-400/30 bg-sky-400/10 px-4 py-2 text-xs font-medium text-sky-300 backdrop-blur-xl">
+          {t('connecting.hint')} <span className="text-slate-500">ESC {t('connecting.cancel')}</span>
+        </div>
+      )}
     </div>
   )
 }

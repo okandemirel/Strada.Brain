@@ -4,7 +4,8 @@
     "loading": "Cargando canvas...",
     "agentVisuals": "Visuales del agente {{count}}",
     "agentSync": "Sincronizacion del agente {{time}}",
-    "queue": "Cola {{count}}"
+    "queue": "Cola {{count}}",
+    "selected": "{{count}} seleccionados"
   },
   "cards": {
     "aiBadge": "IA",
@@ -75,6 +76,44 @@
       "badge": "Metrica",
       "defaultLabel": "Metrica"
     }
+  },
+  "toolbar": {
+    "note-block": "Nota",
+    "code-block": "Código",
+    "task-card": "Tarea",
+    "diagram-node": "Diagrama",
+    "file-card": "Archivo",
+    "terminal-block": "Terminal",
+    "more": "Más...",
+    "undo": "Deshacer",
+    "redo": "Rehacer",
+    "gridSnap": "Alinear cuadrícula",
+    "addNoteBlock": "Agregar Nota",
+    "addCodeBlock": "Agregar Código",
+    "addTaskCard": "Agregar Tarea",
+    "addDiagramNode": "Agregar Diagrama",
+    "addFileCard": "Agregar Archivo",
+    "addTerminalBlock": "Agregar Terminal"
+  },
+  "contextMenu": {
+    "edit": "Editar",
+    "duplicate": "Duplicar",
+    "delete": "Eliminar",
+    "connectTo": "Conectar a...",
+    "bringToFront": "Traer al frente",
+    "sendToBack": "Enviar atrás",
+    "addNoteHere": "Agregar nota aquí",
+    "addCodeHere": "Agregar código aquí",
+    "selectAll": "Seleccionar todo"
+  },
+  "editing": {
+    "title": "Editando",
+    "save": "Guardar",
+    "cancel": "Cancelar"
+  },
+  "connecting": {
+    "hint": "Haz clic en una carta para conectar",
+    "cancel": "para cancelar"
   },
   "controls": {
     "zoomOut": "Alejar",

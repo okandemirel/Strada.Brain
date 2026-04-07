@@ -4,7 +4,8 @@
     "loading": "Canvas wird geladen...",
     "agentVisuals": "Agenten-Visualisierungen {{count}}",
     "agentSync": "Agenten-Sync {{time}}",
-    "queue": "Warteschlange {{count}}"
+    "queue": "Warteschlange {{count}}",
+    "selected": "{{count}} ausgewählt"
   },
   "cards": {
     "aiBadge": "KI",
@@ -75,6 +76,44 @@
       "badge": "Metrik",
       "defaultLabel": "Metrik"
     }
+  },
+  "toolbar": {
+    "note-block": "Notiz",
+    "code-block": "Code",
+    "task-card": "Aufgabe",
+    "diagram-node": "Diagramm",
+    "file-card": "Datei",
+    "terminal-block": "Terminal",
+    "more": "Mehr...",
+    "undo": "Rückgängig",
+    "redo": "Wiederholen",
+    "gridSnap": "Raster",
+    "addNoteBlock": "Notiz hinzufügen",
+    "addCodeBlock": "Code hinzufügen",
+    "addTaskCard": "Aufgabe hinzufügen",
+    "addDiagramNode": "Diagramm hinzufügen",
+    "addFileCard": "Datei hinzufügen",
+    "addTerminalBlock": "Terminal hinzufügen"
+  },
+  "contextMenu": {
+    "edit": "Bearbeiten",
+    "duplicate": "Duplizieren",
+    "delete": "Löschen",
+    "connectTo": "Verbinden...",
+    "bringToFront": "Nach vorne",
+    "sendToBack": "Nach hinten",
+    "addNoteHere": "Notiz hier einfügen",
+    "addCodeHere": "Code hier einfügen",
+    "selectAll": "Alle auswählen"
+  },
+  "editing": {
+    "title": "Bearbeitung",
+    "save": "Speichern",
+    "cancel": "Abbrechen"
+  },
+  "connecting": {
+    "hint": "Klicken Sie auf eine Karte zum Verbinden",
+    "cancel": "zum Abbrechen"
   },
   "controls": {
     "zoomOut": "Herauszoomen",

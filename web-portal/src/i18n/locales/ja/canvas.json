@@ -4,7 +4,8 @@
     "loading": "キャンバスを読み込み中...",
     "agentVisuals": "エージェントビジュアル {{count}}",
     "agentSync": "エージェント同期 {{time}}",
-    "queue": "キュー {{count}}"
+    "queue": "キュー {{count}}",
+    "selected": "{{count}}個選択中"
   },
   "cards": {
     "aiBadge": "AI",
@@ -75,6 +76,44 @@
       "badge": "メトリック",
       "defaultLabel": "メトリック"
     }
+  },
+  "toolbar": {
+    "note-block": "ノート",
+    "code-block": "コード",
+    "task-card": "タスク",
+    "diagram-node": "ダイアグラム",
+    "file-card": "ファイル",
+    "terminal-block": "ターミナル",
+    "more": "もっと...",
+    "undo": "元に戻す",
+    "redo": "やり直し",
+    "gridSnap": "グリッドスナップ",
+    "addNoteBlock": "ノート追加",
+    "addCodeBlock": "コード追加",
+    "addTaskCard": "タスク追加",
+    "addDiagramNode": "ダイアグラム追加",
+    "addFileCard": "ファイル追加",
+    "addTerminalBlock": "ターミナル追加"
+  },
+  "contextMenu": {
+    "edit": "編集",
+    "duplicate": "複製",
+    "delete": "削除",
+    "connectTo": "接続...",
+    "bringToFront": "前面へ",
+    "sendToBack": "背面へ",
+    "addNoteHere": "ここにノート追加",
+    "addCodeHere": "ここにコード追加",
+    "selectAll": "すべて選択"
+  },
+  "editing": {
+    "title": "編集中",
+    "save": "保存",
+    "cancel": "キャンセル"
+  },
+  "connecting": {
+    "hint": "カードをクリックして接続",
+    "cancel": "キャンセル"
   },
   "controls": {
     "zoomOut": "ズームアウト",

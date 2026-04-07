@@ -4,7 +4,8 @@
     "loading": "캔버스 로딩 중...",
     "agentVisuals": "에이전트 시각화 {{count}}",
     "agentSync": "에이전트 동기화 {{time}}",
-    "queue": "대기열 {{count}}"
+    "queue": "대기열 {{count}}",
+    "selected": "{{count}}개 선택"
   },
   "cards": {
     "aiBadge": "AI",
@@ -75,6 +76,44 @@
       "badge": "메트릭",
       "defaultLabel": "메트릭"
     }
+  },
+  "toolbar": {
+    "note-block": "노트",
+    "code-block": "코드",
+    "task-card": "작업",
+    "diagram-node": "다이어그램",
+    "file-card": "파일",
+    "terminal-block": "터미널",
+    "more": "더보기...",
+    "undo": "실행 취소",
+    "redo": "다시 실행",
+    "gridSnap": "격자 스냅",
+    "addNoteBlock": "노트 추가",
+    "addCodeBlock": "코드 추가",
+    "addTaskCard": "작업 추가",
+    "addDiagramNode": "다이어그램 추가",
+    "addFileCard": "파일 추가",
+    "addTerminalBlock": "터미널 추가"
+  },
+  "contextMenu": {
+    "edit": "편집",
+    "duplicate": "복제",
+    "delete": "삭제",
+    "connectTo": "연결...",
+    "bringToFront": "앞으로 가져오기",
+    "sendToBack": "뒤로 보내기",
+    "addNoteHere": "여기에 노트 추가",
+    "addCodeHere": "여기에 코드 추가",
+    "selectAll": "모두 선택"
+  },
+  "editing": {
+    "title": "편집 중",
+    "save": "저장",
+    "cancel": "취소"
+  },
+  "connecting": {
+    "hint": "카드를 클릭하여 연결",
+    "cancel": "취소"
   },
   "controls": {
     "zoomOut": "축소",

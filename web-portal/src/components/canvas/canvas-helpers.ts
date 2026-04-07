@@ -2,6 +2,17 @@ import type { CanvasShape } from '../../stores/canvas-store'
 import type { DagState, MonitorTask } from '../../stores/monitor-store'
 import { getDefaultDimensions, type ResolvedShape, type CanvasConnection } from './canvas-types'
 
+/* ── Grid snap ────────────────────────────────────────────────────── */
+
+const GRID_SIZE = 20
+
+export function snapToGrid(x: number, y: number, gridSize = GRID_SIZE): { x: number; y: number } {
+  return {
+    x: Math.round(x / gridSize) * gridSize,
+    y: Math.round(y / gridSize) * gridSize,
+  }
+}
+
 /* ── Formatting helpers ────────────────────────────────────────────── */
 
 export function formatLastSync(value: number | null): string {

@@ -30,6 +30,13 @@ interface PersistedCanvasState {
   pendingLayout: CanvasLayout | null
 }
 
+interface UndoSnapshot {
+  shapes: ResolvedShape[]
+  connections: CanvasConnection[]
+}
+
+const MAX_UNDO_DEPTH = 50
+
 interface CanvasState extends PersistedCanvasState {
   sessionId: string | null
   isDirty: boolean
@@ -37,6 +44,14 @@ interface CanvasState extends PersistedCanvasState {
   shapes: ResolvedShape[]
   connections: CanvasConnection[]
   viewport: ViewportState
+
+  /* Interactive state */
+  selectedIds: string[]
+  editingShapeId: string | null
+  connectingFromId: string | null
+  gridSnap: boolean
+  undoStack: UndoSnapshot[]
+  redoStack: UndoSnapshot[]
 
   setSessionId: (id: string | null) => void
   setDirty: (dirty: boolean) => void
@@ -60,6 +75,33 @@ interface CanvasState extends PersistedCanvasState {
   removeShapes: (ids: string[]) => void
   addConnection: (connection: CanvasConnection) => void
   removeConnections: (ids: string[]) => void
+
+  /* Selection */
+  selectShape: (id: string, multi?: boolean) => void
+  deselectAll: () => void
+  selectAll: () => void
+
+  /* Editing */
+  setEditingShape: (id: string | null) => void
+
+  /* Connecting */
+  startConnecting: (fromId: string) => void
+  finishConnecting: (toId: string) => void
+  cancelConnecting: () => void
+
+  /* Undo / Redo */
+  pushUndo: () => void
+  undo: () => void
+  redo: () => void
+
+  /* Bulk operations */
+  deleteSelected: () => void
+  duplicateSelected: () => void
+  bringToFront: (id: string) => void
+  sendToBack: (id: string) => void
+
+  /* Grid */
+  toggleGridSnap: () => void
 }
 
 const CANVAS_STATE_STORAGE_PREFIX = 'strada-canvas-state:'
@@ -82,6 +124,12 @@ const initialState = {
   shapes: [] as ResolvedShape[],
   connections: [] as CanvasConnection[],
   viewport: { ...defaultViewport },
+  selectedIds: [] as string[],
+  editingShapeId: null as string | null,
+  connectingFromId: null as string | null,
+  gridSnap: false,
+  undoStack: [] as UndoSnapshot[],
+  redoStack: [] as UndoSnapshot[],
   ...persistedInitialState,
 }
 
@@ -118,7 +166,7 @@ function readPersistedCanvasState(sessionId: string): PersistedCanvasState | nul
   }
 }
 
-function isValidResolvedShape(s: unknown): s is ResolvedShape {
+export function isValidResolvedShape(s: unknown): s is ResolvedShape {
   if (!s || typeof s !== 'object') return false
   const shape = s as Record<string, unknown>
   return typeof shape.id === 'string' && typeof shape.type === 'string' &&
@@ -223,6 +271,13 @@ type CanvasDataState = Pick<CanvasState, 'sessionId' | 'isDirty'> & PersistedCan
 function withPersistence<T extends CanvasDataState>(nextState: T): T {
   persistCanvasState(nextState)
   return nextState
+}
+
+function takeSnapshot(state: CanvasState): UndoSnapshot {
+  return {
+    shapes: structuredClone(state.shapes),
+    connections: structuredClone(state.connections),
+  }
 }
 
 export const useCanvasStore = create<CanvasState>()((set) => ({
@@ -357,4 +412,152 @@ export const useCanvasStore = create<CanvasState>()((set) => ({
       connections: state.connections.filter((c) => !removeSet.has(c.id)),
     }
   }),
+
+  /* ── Selection ──────────────────────────────────────────────── */
+  selectShape: (id, multi) => set((state) => {
+    if (multi) {
+      const already = state.selectedIds.includes(id)
+      return {
+        ...state,
+        selectedIds: already
+          ? state.selectedIds.filter((s) => s !== id)
+          : [...state.selectedIds, id],
+      }
+    }
+    return { ...state, selectedIds: [id] }
+  }),
+  deselectAll: () => set((state) => ({
+    ...state,
+    selectedIds: [],
+    editingShapeId: null,
+    connectingFromId: null,
+  })),
+  selectAll: () => set((state) => ({
+    ...state,
+    selectedIds: state.shapes.map((s) => s.id),
+  })),
+
+  /* ── Editing ────────────────────────────────────────────────── */
+  setEditingShape: (id) => set((state) => ({
+    ...state,
+    editingShapeId: id,
+    selectedIds: id ? [id] : state.selectedIds,
+  })),
+
+  /* ── Connecting ─────────────────────────────────────────────── */
+  startConnecting: (fromId) => set((state) => ({
+    ...state,
+    connectingFromId: fromId,
+  })),
+  finishConnecting: (toId) => set((state) => {
+    if (!state.connectingFromId || state.connectingFromId === toId) {
+      return { ...state, connectingFromId: null }
+    }
+    const exists = state.connections.some(
+      (c) => c.from === state.connectingFromId && c.to === toId,
+    )
+    if (exists) return { ...state, connectingFromId: null }
+    const newConn: CanvasConnection = {
+      id: `conn-${state.connectingFromId}-${toId}-${Date.now()}`,
+      from: state.connectingFromId,
+      to: toId,
+    }
+    return {
+      ...state,
+      connectingFromId: null,
+      connections: [...state.connections, newConn],
+    }
+  }),
+  cancelConnecting: () => set((state) => ({
+    ...state,
+    connectingFromId: null,
+  })),
+
+  /* ── Undo / Redo ────────────────────────────────────────────── */
+  pushUndo: () => set((state) => ({
+    ...state,
+    undoStack: [
+      ...state.undoStack.slice(-(MAX_UNDO_DEPTH - 1)),
+      takeSnapshot(state),
+    ],
+    redoStack: [],
+  })),
+  undo: () => set((state) => {
+    if (state.undoStack.length === 0) return state
+    const snapshot = state.undoStack[state.undoStack.length - 1]!
+    if (state.sessionId) persistShapes(state.sessionId, snapshot.shapes)
+    return {
+      ...state,
+      shapes: snapshot.shapes,
+      connections: snapshot.connections,
+      undoStack: state.undoStack.slice(0, -1),
+      redoStack: [...state.redoStack, takeSnapshot(state)],
+      selectedIds: [],
+      editingShapeId: null,
+    }
+  }),
+  redo: () => set((state) => {
+    if (state.redoStack.length === 0) return state
+    const snapshot = state.redoStack[state.redoStack.length - 1]!
+    if (state.sessionId) persistShapes(state.sessionId, snapshot.shapes)
+    return {
+      ...state,
+      shapes: snapshot.shapes,
+      connections: snapshot.connections,
+      redoStack: state.redoStack.slice(0, -1),
+      undoStack: [...state.undoStack, takeSnapshot(state)],
+      selectedIds: [],
+      editingShapeId: null,
+    }
+  }),
+
+  /* ── Bulk operations ────────────────────────────────────────── */
+  deleteSelected: () => set((state) => {
+    if (state.selectedIds.length === 0) return state
+    const removeSet = new Set(state.selectedIds)
+    const shapes = state.shapes.filter((s) => !removeSet.has(s.id))
+    const connections = state.connections.filter(
+      (c) => !removeSet.has(c.from) && !removeSet.has(c.to),
+    )
+    if (state.sessionId) persistShapes(state.sessionId, shapes)
+    return {
+      ...state,
+      shapes,
+      connections,
+      selectedIds: [],
+      editingShapeId: null,
+    }
+  }),
+  duplicateSelected: () => set((state) => {
+    if (state.selectedIds.length === 0) return state
+    const selectedSet = new Set(state.selectedIds)
+    const newShapes: ResolvedShape[] = []
+    const newIds: string[] = []
+    for (const s of state.shapes) {
+      if (!selectedSet.has(s.id)) continue
+      const newId = `${s.id}-dup-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+      newShapes.push({ ...s, id: newId, x: s.x + 20, y: s.y + 20, source: 'user' })
+      newIds.push(newId)
+    }
+    const shapes = [...state.shapes, ...newShapes]
+    if (state.sessionId) persistShapes(state.sessionId, shapes)
+    return { ...state, shapes, selectedIds: newIds }
+  }),
+  bringToFront: (id) => set((state) => {
+    const idx = state.shapes.findIndex((s) => s.id === id)
+    if (idx < 0 || idx === state.shapes.length - 1) return state
+    const shapes = [...state.shapes.filter((s) => s.id !== id), state.shapes[idx]!]
+    if (state.sessionId) persistShapes(state.sessionId, shapes)
+    return { ...state, shapes }
+  }),
+  sendToBack: (id) => set((state) => {
+    const idx = state.shapes.findIndex((s) => s.id === id)
+    if (idx <= 0) return state
+    const shapes = [state.shapes[idx]!, ...state.shapes.filter((s) => s.id !== id)]
+    if (state.sessionId) persistShapes(state.sessionId, shapes)
+    return { ...state, shapes }
+  }),
+
+  /* ── Grid ───────────────────────────────────────────────────── */
+  toggleGridSnap: () => set((state) => ({ ...state, gridSnap: !state.gridSnap })),
 }))

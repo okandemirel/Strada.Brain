@@ -38,6 +38,36 @@ function getEdgePoint(shape: ResolvedShape, targetCenter: { x: number; y: number
   return { x: cx + ix, y: cy + iy }
 }
 
+/* ── Temporary connection line while connecting ──────────────────── */
+
+interface TempConnectionProps {
+  fromShape: ResolvedShape
+  mousePos: { x: number; y: number }
+}
+
+export function TempConnection({ fromShape, mousePos }: TempConnectionProps) {
+  const start = getShapeCenter(fromShape)
+  const dx = mousePos.x - start.x
+  const cx1 = start.x + dx * 0.4
+  const cy1 = start.y
+  const cx2 = mousePos.x - dx * 0.4
+  const cy2 = mousePos.y
+  return (
+    <svg className="absolute inset-0 pointer-events-none" style={{ width: '100%', height: '100%', overflow: 'visible' }}>
+      <path
+        d={`M ${start.x} ${start.y} C ${cx1} ${cy1}, ${cx2} ${cy2}, ${mousePos.x} ${mousePos.y}`}
+        stroke="rgba(56, 189, 248, 0.5)"
+        strokeWidth={2}
+        fill="none"
+        strokeDasharray="6 4"
+      />
+      <circle cx={mousePos.x} cy={mousePos.y} r={4} fill="rgba(56, 189, 248, 0.6)" />
+    </svg>
+  )
+}
+
+/* ── Main connections renderer ───────────────────────────────────── */
+
 export default function CanvasConnections({ connections, shapes }: CanvasConnectionsProps) {
   const gradientId = useId()
   if (connections.length === 0) return null
