@@ -35,8 +35,19 @@ interface ToolsResponse {
     readOnly?: boolean
     availabilityReason?: string
     paramCount?: number
+    dangerous?: boolean
+    requiresConfirmation?: boolean
+    category?: string
+    dependencies?: string[]
+    controlPlaneOnly?: boolean
   }>
+  count?: number
+  callCounts?: Record<string, number>
+  errorCounts?: Record<string, number>
+  recentErrors?: Record<string, Array<{ message: string; timestamp: number }>>
+  /** @deprecated Use callCounts/errorCounts from the enriched response instead */
   toolCallCounts?: Record<string, number>
+  /** @deprecated Use callCounts/errorCounts from the enriched response instead */
   toolErrorCounts?: Record<string, number>
 }
 

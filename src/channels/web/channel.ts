@@ -164,6 +164,8 @@ export class WebChannel
   private feedbackReactionCallback: FeedbackReactionCallback | null = null;
   /** Per-chatId applied instinct IDs so responses can carry them for feedback attribution. */
   private readonly appliedInstinctIds = new Map<string, string[]>();
+  /** Tracks the length of text already sent for each active stream to enable delta protocol. */
+  private readonly streamSentLengths = new Map<string, number>();
   private readonly staticDir = resolveStaticDir();
   private readonly identityStore: WebIdentityStore;
   /** Optional emitter for workspace bus events from frontend monitor commands. */
@@ -369,6 +371,7 @@ export class WebChannel
 
   async startStreamingMessage(chatId: string): Promise<string | undefined> {
     const streamId = randomUUID();
+    this.streamSentLengths.set(streamId, 0);
     this.sendToClient(chatId, { type: "stream_start", streamId, text: "" });
     return streamId;
   }
@@ -378,9 +381,11 @@ export class WebChannel
     streamId: string,
     accumulatedText: string,
   ): Promise<void> {
-    // TODO: stream_update sends full accumulated text on every update.
-    // For large responses this creates O(n^2) bandwidth. Consider delta protocol.
-    this.sendToClient(chatId, { type: "stream_update", streamId, text: accumulatedText });
+    const lastLen = this.streamSentLengths.get(streamId) ?? 0;
+    const delta = accumulatedText.slice(lastLen);
+    if (delta.length === 0) return; // Nothing new to send
+    this.streamSentLengths.set(streamId, accumulatedText.length);
+    this.sendToClient(chatId, { type: "stream_update", streamId, delta });
   }
 
   async finalizeStreamingMessage(
@@ -388,6 +393,7 @@ export class WebChannel
     streamId: string,
     finalText: string,
   ): Promise<void> {
+    this.streamSentLengths.delete(streamId);
     const instinctIds = this.appliedInstinctIds.get(chatId);
     this.sendToClient(chatId, {
       type: "stream_end",
@@ -1056,7 +1062,19 @@ export class WebChannel
       return isAllowedOrigin(referer);
     }
 
-    return this.getSingleHeader(req.headers.authorization) !== undefined;
+    // Only trust Authorization header if a dashboard token is configured
+    // and the header value matches it — prevents CSRF bypass via arbitrary auth headers.
+    if (this.options.dashboardAuthToken) {
+      const authHeader = this.getSingleHeader(req.headers.authorization);
+      if (authHeader) {
+        const token = authHeader.startsWith("Bearer ")
+          ? authHeader.slice(7)
+          : authHeader;
+        return this.safeTokenEquals(token, this.options.dashboardAuthToken);
+      }
+    }
+
+    return false;
   }
 
   /**

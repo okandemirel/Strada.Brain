@@ -196,7 +196,7 @@ Default port is 3000. Server binds to `127.0.0.1:3000` (localhost).
 { type: "typing", active: boolean }
 { type: "confirmation", confirmId: string, question: string, options: string[], details?: string }
 { type: "stream_start", streamId: string, text: string }
-{ type: "stream_update", streamId: string, text: string }
+{ type: "stream_update", streamId: string, delta: string }
 { type: "stream_end", streamId: string, text: string }
 ```
 

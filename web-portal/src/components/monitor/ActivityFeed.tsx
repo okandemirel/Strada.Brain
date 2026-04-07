@@ -4,7 +4,7 @@ import { useMonitorStore } from '../../stores/monitor-store'
 import { normalizeLabel } from './monitor-utils'
 import { useVirtualScroll } from '../../hooks/useVirtualScroll'
 
-const ACTIVITY_ITEM_HEIGHT = 80
+const ACTIVITY_ITEM_HEIGHT = 120
 
 export default function ActivityFeed() {
   const { t } = useTranslation('monitor')
@@ -76,9 +76,9 @@ export default function ActivityFeed() {
           {visibleActivities.map((entry, i) => {
             const index = startIndex + i
             return (
-              <div key={`${entry.timestamp}-${index}`} className="relative pl-5" style={{ height: ACTIVITY_ITEM_HEIGHT }}>
+              <div key={`${entry.timestamp}-${index}`} className="relative overflow-hidden pl-5" style={{ height: ACTIVITY_ITEM_HEIGHT }}>
                 <span className="absolute -left-[5px] top-6 h-2.5 w-2.5 rounded-full border border-accent/30 bg-accent shadow-[0_0_10px_rgba(0,229,255,0.4)]" />
-                <div className="mb-2 rounded-2xl border border-white/8 bg-white/[0.03] px-3 py-3 shadow-[0_16px_34px_rgba(0,0,0,0.12)]">
+                <div className="mb-1 rounded-2xl border border-white/8 bg-white/[0.03] px-3 py-3 shadow-[0_16px_34px_rgba(0,0,0,0.12)]">
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-text-tertiary">
                       {new Date(entry.timestamp).toLocaleTimeString()}

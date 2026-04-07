@@ -13,6 +13,7 @@ import { useKeyboardShortcuts } from '../../hooks/use-keyboard-shortcuts'
 import { useWorkspaceStore } from '../../stores/workspace-store'
 import { useSidebarStore } from '../../stores/sidebar-store'
 import { useOnlineStatus } from '../../hooks/useOnlineStatus'
+import { useSessionStore } from '../../stores/session-store'
 
 const MonitorPanel = lazy(() => import('../monitor/MonitorPanel'))
 const CanvasPanel = lazy(() => import('../canvas/CanvasPanel'))
@@ -78,6 +79,35 @@ function OfflineBanner() {
   )
 }
 
+function DisconnectBanner() {
+  const { t } = useTranslation()
+  const reconnectExhausted = useSessionStore((s) => s.reconnectExhausted)
+  const status = useSessionStore((s) => s.status)
+
+  if (!reconnectExhausted || status === 'connected') return null
+
+  const handleReload = () => window.location.reload()
+
+  return (
+    <div
+      role="alert"
+      aria-live="assertive"
+      className="fixed bottom-14 md:bottom-0 inset-x-0 z-50 flex items-center justify-center gap-3 px-4 py-2.5 text-sm font-medium bg-error/90 text-white backdrop-blur-sm"
+    >
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4 shrink-0" aria-hidden="true">
+        <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-8-5a.75.75 0 01.75.75v4.5a.75.75 0 01-1.5 0v-4.5A.75.75 0 0110 5zm0 10a1 1 0 100-2 1 1 0 000 2z" clipRule="evenodd" />
+      </svg>
+      {t('connection.lost', 'Connection lost. Unable to reconnect.')}
+      <button
+        onClick={handleReload}
+        className="ml-2 rounded-md border border-white/30 bg-white/10 px-3 py-1 text-xs font-semibold transition-colors hover:bg-white/20"
+      >
+        {t('connection.reload', 'Reload')}
+      </button>
+    </div>
+  )
+}
+
 function AppLayoutInner() {
   const setMode = useWorkspaceStore((s) => s.setMode)
   const toggleSecondary = useWorkspaceStore((s) => s.toggleSecondary)
@@ -96,6 +126,7 @@ function AppLayoutInner() {
       </div>
       <BottomTabBar />
       <OfflineBanner />
+      <DisconnectBanner />
       <Toaster
         position="bottom-right"
         toastOptions={{

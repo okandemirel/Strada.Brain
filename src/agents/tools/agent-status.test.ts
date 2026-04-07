@@ -17,6 +17,7 @@ function createMockMetrics(overrides?: Partial<DashboardSnapshot>) {
     recentTokenUsage: [],
     toolCallCounts: { file_read: 10, grep_search: 5 },
     toolErrorCounts: {},
+    recentToolErrors: {},
     securityStats: { secretsSanitized: 0, toolsBlocked: 0 },
     ...overrides,
   };

@@ -18,6 +18,20 @@ interface ChatMessageProps {
   voiceOutputEnabled?: boolean
 }
 
+function formatRelativeTime(timestamp: number): string {
+  const now = Date.now()
+  const diff = now - timestamp
+  const seconds = Math.floor(diff / 1000)
+  if (seconds < 60) return 'just now'
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `${minutes}m ago`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours}h ago`
+  const days = Math.floor(hours / 24)
+  if (days < 7) return `${days}d ago`
+  return new Date(timestamp).toLocaleDateString()
+}
+
 const SAFE_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp'])
 
 function isImageType(type: string): boolean {
@@ -71,11 +85,10 @@ function hasTextContent(text: string): boolean {
 function makeComponents(isUser: boolean): Components {
   return {
     pre({ children, ...props }) {
-      // Extract raw text from the code element inside pre
-      const codeEl = (children as React.ReactElement | null)
+      const codeEl = children as React.ReactElement | null
       const rawText: string = (() => {
         try {
-          const el = codeEl as React.ReactElement<{ children?: React.ReactNode }>
+          const el = codeEl as React.ReactElement<{ children?: React.ReactNode; className?: string }>
           const inner = el?.props?.children
           if (typeof inner === 'string') return inner
           return ''
@@ -83,10 +96,34 @@ function makeComponents(isUser: boolean): Components {
           return ''
         }
       })()
+
+      // Extract language from className (e.g. "hljs language-typescript" -> "typescript")
+      const language: string | null = (() => {
+        try {
+          const el = codeEl as React.ReactElement<{ className?: string }>
+          const cls = el?.props?.className ?? ''
+          const match = cls.match(/language-(\S+)/)
+          return match ? match[1] : null
+        } catch {
+          return null
+        }
+      })()
+
       return (
         <div className="relative group/code">
+          {language && (
+            <div className="flex items-center justify-between px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-text-tertiary bg-white/[0.04] border-b border-white/5 rounded-t-lg">
+              {language}
+              {!isUser && rawText && (
+                <CopyButton
+                  text={rawText}
+                  className="opacity-0 group-hover/code:opacity-100 transition-opacity"
+                />
+              )}
+            </div>
+          )}
           <pre {...props}>{children}</pre>
-          {!isUser && rawText && (
+          {!language && !isUser && rawText && (
             <CopyButton
               text={rawText}
               className="absolute top-2 right-2 opacity-0 group-hover/code:opacity-100 transition-opacity"
@@ -148,13 +185,14 @@ function ChatMessageComponent({ message, onFeedback, voiceOutputEnabled = true }
   const isUser = message.sender === 'user'
   const showVoiceOutput = voiceOutputEnabled && !isUser && !message.isStreaming && hasTextContent(message.text)
   const showFeedback = !isUser && !message.isStreaming && onFeedback
-  const deliveryLabel = isUser
-    ? message.deliveryState === 'pending'
-      ? t('chat.sending')
-      : message.deliveryState === 'failed'
-        ? t('chat.notDelivered')
-        : null
-    : null
+  let deliveryLabel: string | null = null
+  if (isUser) {
+    if (message.deliveryState === 'pending') {
+      deliveryLabel = t('chat.sending')
+    } else if (message.deliveryState === 'failed') {
+      deliveryLabel = t('chat.notDelivered')
+    }
+  }
 
   return (
     <div
@@ -181,6 +219,11 @@ function ChatMessageComponent({ message, onFeedback, voiceOutputEnabled = true }
       )}
       {message.isStreaming && (
         <span className="inline-block w-0.5 h-[1em] bg-accent ml-0.5 align-text-bottom animate-[blink_1s_step-end_infinite] rounded-[1px]" />
+      )}
+      {message.timestamp && (
+        <div className="mt-1.5 text-[10px] text-text-tertiary opacity-0 transition-opacity duration-200 group-hover:opacity-60 select-none" title={new Date(message.timestamp).toLocaleString()}>
+          {formatRelativeTime(message.timestamp)}
+        </div>
       )}
       {deliveryLabel && (
         <div

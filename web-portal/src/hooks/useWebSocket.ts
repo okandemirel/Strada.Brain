@@ -244,6 +244,7 @@ export function useWebSocket(): UseWebSocketReturn {
     ws.addEventListener('open', () => {
       if (!mountedRef.current) return
       useSessionStore.getState().setStatus('connected')
+      useSessionStore.getState().setReconnectExhausted(false)
       reconnectDelayRef.current = 1000
       reconnectAttemptsRef.current = 0
 
@@ -292,6 +293,7 @@ export function useWebSocket(): UseWebSocketReturn {
       reconnectAttemptsRef.current += 1
       if (reconnectAttemptsRef.current > MAX_RECONNECT_ATTEMPTS) {
         markAllPendingMessagesFailed()
+        useSessionStore.getState().setReconnectExhausted(true)
         return
       }
 
@@ -402,11 +404,12 @@ export function useWebSocket(): UseWebSocketReturn {
           break
 
         case 'stream_update': {
-          streamsRef.current.set(data.streamId, data.text)
           const store = useSessionStore.getState()
           const streamMsg = store.messages.find((m) => m.streamId === data.streamId)
           if (streamMsg) {
-            store.updateMessage(streamMsg.id, { text: data.text })
+            const newText = streamMsg.text + data.delta
+            streamsRef.current.set(data.streamId, newText)
+            store.updateMessage(streamMsg.id, { text: newText })
           }
           break
         }

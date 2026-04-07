@@ -5872,7 +5872,7 @@ export class Orchestrator {
 
       try {
         const result = await tool.execute(activeToolCall.input, toolContext);
-        this.metrics?.recordToolCall(activeToolCall.name, Date.now() - toolStart, !result.isError);
+        this.metrics?.recordToolCall(activeToolCall.name, Date.now() - toolStart, !result.isError, result.isError ? String(result.content).slice(0, 200) : undefined);
         if (!result.isError && activeToolCall.name !== "ask_user") {
           this.askUserBlockCounts.delete(chatId);
         }
@@ -5885,8 +5885,8 @@ export class Orchestrator {
           metadata: result.metadata,
         });
       } catch (error) {
-        this.metrics?.recordToolCall(activeToolCall.name, Date.now() - toolStart, false);
         const errMsg = error instanceof Error ? error.message : "Unknown error";
+        this.metrics?.recordToolCall(activeToolCall.name, Date.now() - toolStart, false, errMsg.slice(0, 200));
         logger.error("Tool execution error", {
           chatId,
           tool: activeToolCall.name,

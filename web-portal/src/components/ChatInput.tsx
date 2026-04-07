@@ -85,7 +85,7 @@ export default function ChatInput({ onSend, disabled }: ChatInputProps) {
   const removeFile = useCallback((index: number) => {
     setFiles((prev) => {
       const removed = prev[index]
-      if (removed.previewUrl) URL.revokeObjectURL(removed.previewUrl)
+      if (removed?.previewUrl) URL.revokeObjectURL(removed.previewUrl)
       return prev.filter((_, i) => i !== index)
     })
   }, [])
@@ -176,6 +176,25 @@ export default function ChatInput({ onSend, disabled }: ChatInputProps) {
     [addFiles],
   )
 
+  const handlePaste = useCallback((e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = e.clipboardData?.items
+    if (!items) return
+
+    const imageFiles: File[] = []
+    for (const item of items) {
+      if (item.kind === 'file' && item.type.startsWith('image/')) {
+        const file = item.getAsFile()
+        if (file) imageFiles.push(file)
+      }
+    }
+
+    if (imageFiles.length > 0) {
+      e.preventDefault() // Prevent pasting image as text
+      addFiles(imageFiles)
+    }
+    // If no images, let the default paste behavior handle text
+  }, [addFiles])
+
   const handleVoiceMessage = useCallback((attachment: Attachment) => {
     const sent = onSend(t('chat.voiceMessage'), [attachment])
     if (sent === false) return false
@@ -239,6 +258,7 @@ export default function ChatInput({ onSend, disabled }: ChatInputProps) {
           value={text}
           onChange={handleTextChange}
           onKeyDown={handleKeyDown}
+          onPaste={handlePaste}
           placeholder={t('chat.placeholder')}
           aria-label={t('chat.placeholder')}
           rows={1}

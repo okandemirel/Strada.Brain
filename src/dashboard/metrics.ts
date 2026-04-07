@@ -31,6 +31,7 @@ export interface DashboardSnapshot {
   recentTokenUsage: TokenUsage[];
   toolCallCounts: Record<string, number>;
   toolErrorCounts: Record<string, number>;
+  recentToolErrors: Record<string, Array<{ message: string; timestamp: number }>>;
   providerName: string;
   memoryStats: { totalEntries: number; hasAnalysisCache: boolean } | null;
   readOnlyMode: boolean;
@@ -53,8 +54,10 @@ export class MetricsCollector {
   private readonly recentTokenUsage: TokenUsage[] = [];
   private readonly toolCallCounts = new Map<string, number>();
   private readonly toolErrorCounts = new Map<string, number>();
+  private readonly recentToolErrors = new Map<string, Array<{ message: string; timestamp: number }>>();
 
   private static readonly MAX_RECENT_TOKENS = 100;
+  private static readonly MAX_RECENT_ERRORS_PER_TOOL = 20;
 
   /** Get the start time in epoch milliseconds. */
   getStartTime(): number {
@@ -84,11 +87,26 @@ export class MetricsCollector {
     }
   }
 
-  recordToolCall(name: string, _durationMs: number, success: boolean): void {
+  recordToolCall(name: string, _durationMs: number, success: boolean, errorMessage?: string): void {
     this.toolCallCounts.set(name, (this.toolCallCounts.get(name) ?? 0) + 1);
     if (!success) {
       this.toolErrorCounts.set(name, (this.toolErrorCounts.get(name) ?? 0) + 1);
+      if (errorMessage) {
+        const errors = this.recentToolErrors.get(name) ?? [];
+        errors.push({ message: errorMessage, timestamp: Date.now() });
+        if (errors.length > MetricsCollector.MAX_RECENT_ERRORS_PER_TOOL) {
+          errors.shift();
+        }
+        this.recentToolErrors.set(name, errors);
+      }
     }
+  }
+
+  /**
+   * Get recent error messages grouped by tool name.
+   */
+  getRecentToolErrors(): Record<string, Array<{ message: string; timestamp: number }>> {
+    return Object.fromEntries(this.recentToolErrors);
   }
 
   setActiveSessions(count: number): void {
@@ -131,6 +149,7 @@ export class MetricsCollector {
       recentTokenUsage: [...this.recentTokenUsage],
       toolCallCounts: Object.fromEntries(this.toolCallCounts),
       toolErrorCounts: Object.fromEntries(this.toolErrorCounts),
+      recentToolErrors: Object.fromEntries(this.recentToolErrors),
       providerName: this.providerName,
       memoryStats: memoryStats ?? null,
       readOnlyMode: this.readOnlyMode,

@@ -129,6 +129,11 @@
   to { opacity: 1; transform: translateY(0); }
 }
 
+@keyframes slide-in-right {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}
+
 @keyframes aurora-shift {
   0% { transform: rotate(0deg) scale(1.5); }
   100% { transform: rotate(360deg) scale(1.5); }

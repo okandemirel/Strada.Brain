@@ -47,6 +47,7 @@ export interface SessionState {
   profileId: string | null
   language: SupportedLanguage
   confirmation: ConfirmationState | null
+  reconnectExhausted: boolean
 }
 
 export interface SessionActions {
@@ -59,6 +60,7 @@ export interface SessionActions {
   setLanguage: (language: SupportedLanguage) => void
   setTyping: (isTyping: boolean) => void
   setConfirmation: (confirmation: ConfirmationState | null) => void
+  setReconnectExhausted: (exhausted: boolean) => void
   reset: () => void
   /**
    * Full session logout: clears auth-related localStorage keys,
@@ -76,6 +78,7 @@ const initialState: SessionState = {
   profileId: null,
   language: getInitialLanguage(),
   confirmation: null,
+  reconnectExhausted: false,
 }
 
 export const useSessionStore = create<SessionState & SessionActions>()((set) => ({
@@ -112,6 +115,8 @@ export const useSessionStore = create<SessionState & SessionActions>()((set) => 
   setTyping: (isTyping) => set({ isTyping }),
 
   setConfirmation: (confirmation) => set({ confirmation }),
+
+  setReconnectExhausted: (reconnectExhausted) => set({ reconnectExhausted }),
 
   reset: () => set(initialState),
 

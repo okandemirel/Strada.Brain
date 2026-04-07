@@ -241,10 +241,17 @@ export function handleSystemRoutes(
     return true;
   }
 
-  // GET /api/tools -- Registered tools list
+  // GET /api/tools -- Registered tools list with call/error metrics
   if (url === "/api/tools") {
     const tools = ctx.toolRegistry?.getAllTools() ?? [];
-    sendJson(res, { tools, count: tools.length });
+    const snapshot = ctx.metrics.getSnapshot(ctx.getMemoryStats());
+    sendJson(res, {
+      tools,
+      count: tools.length,
+      callCounts: snapshot.toolCallCounts,
+      errorCounts: snapshot.toolErrorCounts,
+      recentErrors: sanitizeToolErrors(ctx.metrics.getRecentToolErrors()),
+    });
     return true;
   }
 
@@ -672,4 +679,22 @@ function getDeploymentData(ctx: Pick<RouteContext, "deploymentExecutor">): Recor
   } catch {
     return { enabled: true, stats: {}, history: [] };
   }
+}
+
+/**
+ * Sanitize tool error messages before exposing them via the API.
+ * Tool errors may contain API keys, connection strings, or other secrets
+ * that leaked through exception messages during tool execution.
+ */
+function sanitizeToolErrors(
+  errors: Record<string, Array<{ message: string; timestamp: number }>>,
+): Record<string, Array<{ message: string; timestamp: number }>> {
+  const result: Record<string, Array<{ message: string; timestamp: number }>> = {};
+  for (const [tool, entries] of Object.entries(errors)) {
+    result[tool] = entries.map((e) => ({
+      message: sanitizeSecrets(e.message),
+      timestamp: e.timestamp,
+    }));
+  }
+  return result;
 }

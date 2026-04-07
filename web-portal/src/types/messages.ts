@@ -32,7 +32,8 @@ export interface StreamStartMessage {
 export interface StreamUpdateMessage {
   type: 'stream_update'
   streamId: string
-  text: string
+  /** The new text delta (not the full accumulated text). */
+  delta: string
 }
 
 export interface StreamEndMessage {
