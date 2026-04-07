@@ -24,7 +24,7 @@ import { supportsInteractivity, supportsRichMessaging } from "../channels/channe
 import { isVisionCompatible, toBase64ImageSource } from "../utils/media-processor.js";
 import type { MessageContent } from "./providers/provider-core.interface.js";
 import type { IMemoryManager } from "../memory/memory.interface.js";
-import { isOk, isSome } from "../types/index.js";
+// isOk, isSome moved to orchestrator-trajectory-replay.ts
 import type { MetricsCollector } from "../dashboard/metrics.js";
 import {
   STRADA_SYSTEM_PROMPT,
@@ -34,7 +34,6 @@ import {
   buildCapabilityManifest,
   buildIdentitySection,
   buildCrashNotificationSection,
-  buildProjectWorldMemorySection,
 } from "./context/strada-knowledge.js";
 import type { FrameworkPromptGenerator } from "../intelligence/framework/framework-prompt-generator.js";
 import type { IdentityState } from "../identity/identity-state.js";
@@ -112,12 +111,12 @@ import type { IEventEmitter, LearningEventMap } from "../core/event-bus.js";
 import type { MetricsRecorder } from "../metrics/metrics-recorder.js";
 import type { GoalDecomposer } from "../goals/goal-decomposer.js";
 import { summarizeTree } from "../goals/goal-renderer.js";
-import { formatGoalPlanMarkdown } from "../goals/goal-feedback.js";
+// formatGoalPlanMarkdown moved to orchestrator-goal-decomposition.ts
 import { formatResumePrompt, prepareTreeForResume } from "../goals/goal-resume.js";
-import type { GoalTree, GoalNodeId, GoalStatus } from "../goals/types.js";
+import type { GoalTree } from "../goals/types.js";
 import type { GoalStorage } from "../goals/goal-storage.js";
 import type { WorkspaceBus } from "../dashboard/workspace-bus.js";
-import { goalTreeToDagPayload } from "../dashboard/workspace-events.js";
+// goalTreeToDagPayload moved to orchestrator-goal-decomposition.ts
 import type { MonitorLifecycle } from '../dashboard/monitor-lifecycle.js';
 import { parseGoalBlock, buildGoalTreeFromBlock } from "../goals/types.js";
 import type { TaskManager } from "../tasks/task-manager.js";
@@ -132,17 +131,14 @@ import type {
 } from "../memory/unified/task-execution-store.js";
 import type {
   RuntimeArtifactManager,
-  TrajectoryPhaseReplay,
   TrajectoryReplayContext,
 } from "../learning/index.js";
 import { classifyErrorMessage } from "../utils/error-messages.js";
 import { TaskClassifier } from "../agent-core/routing/task-classifier.js";
 import type {
   TaskClassification,
-  ExecutionTrace,
   ExecutionPhase,
   ExecutionTraceSource,
-  PhaseOutcome,
   PhaseOutcomeStatus,
   PhaseOutcomeTelemetry,
   VerifierDecision,
@@ -263,6 +259,16 @@ import {
   type EndTurnLoopAction,
 } from "./orchestrator-end-turn-handler.js";
 import type { SupervisorBrain } from "../supervisor/supervisor-brain.js";
+import { requestWriteConfirmation as requestWriteConfirmationHelper } from "./orchestrator-write-gate.js";
+import {
+  buildTrajectoryReplayContext as buildTrajectoryReplayContextHelper,
+  type TrajectoryReplayDeps,
+} from "./orchestrator-trajectory-replay.js";
+import {
+  runProactiveGoalDecomposition as runProactiveGoalDecompositionHelper,
+  runReactiveGoalDecomposition as runReactiveGoalDecompositionHelper,
+  type GoalDecompositionDeps,
+} from "./orchestrator-goal-decomposition.js";
 
 const DIAGNOSTIC_BLOCKED_RE = /^Blocked checkpoint:/i;
 const TYPING_INTERVAL_MS = 4000;
@@ -6004,60 +6010,7 @@ export class Orchestrator {
     toolName: string,
     input: Record<string, unknown>,
   ): Promise<boolean> {
-    let question: string;
-    let details: string;
-
-    switch (toolName) {
-      case "file_delete":
-        question = `Confirm delete: \`${input["path"]}\`?`;
-        details = `Permanently deleting ${input["path"]}`;
-        break;
-      case "file_rename":
-        question = `Confirm rename: \`${input["old_path"]}\` → \`${input["new_path"]}\`?`;
-        details = `Moving ${input["old_path"]} to ${input["new_path"]}`;
-        break;
-      case "file_delete_directory":
-        question = `Confirm DELETE directory: \`${input["path"]}\`?`;
-        details = `Recursively deleting ${input["path"]} and ALL contents`;
-        break;
-      case "shell_exec":
-        question = `Confirm shell command: \`${String(input["command"]).slice(0, 100)}\`?`;
-        details = `Running: ${input["command"]}`;
-        break;
-      case "git_commit":
-        question = `Confirm git commit: "${String(input["message"]).slice(0, 80)}"?`;
-        details = `Creating git commit`;
-        break;
-      case "git_push":
-        question = "Confirm git push to remote?";
-        details = `Pushing to ${input["remote"] ?? "origin"}`;
-        break;
-      default: {
-        const path = String(input["path"] ?? "unknown");
-        question = `Confirm file ${toolName === "file_write" ? "create/overwrite" : "edit"}: \`${path}\`?`;
-        details = toolName === "file_edit" ? `Replacing text in ${path}` : `Writing to ${path}`;
-      }
-    }
-
-    const response = await (
-      this.channel as unknown as {
-        requestConfirmation: (req: {
-          chatId: string;
-          userId?: string;
-          question: string;
-          options: string[];
-          details?: string;
-        }) => Promise<string>;
-      }
-    ).requestConfirmation({
-      chatId,
-      userId,
-      question,
-      options: ["Yes", "No"],
-      details,
-    });
-
-    return response === "Yes";
+    return requestWriteConfirmationHelper(this.channel, chatId, userId, toolName, input);
   }
 
   getProviderManager(): ProviderManager {
@@ -6186,124 +6139,6 @@ export class Orchestrator {
     if (params.decision === "approve") {
       this.runtimeArtifactMatches.delete(key);
     }
-  }
-
-  private async buildProjectWorldMemoryLayer(): Promise<{
-    content: string;
-    contentHashes: string[];
-    summary: string;
-    fingerprint: string;
-  } | null> {
-    if (!this.memoryManager) {
-      return buildProjectWorldMemorySection({
-        projectPath: this.projectPath,
-        analysis: null,
-      });
-    }
-
-    try {
-      const analysisResult = await this.memoryManager.getCachedAnalysis(this.projectPath);
-      const analysis =
-        isOk(analysisResult) && isSome(analysisResult.value) ? analysisResult.value.value : null;
-      return buildProjectWorldMemorySection({
-        projectPath: this.projectPath,
-        analysis,
-      });
-    } catch {
-      return buildProjectWorldMemorySection({
-        projectPath: this.projectPath,
-        analysis: null,
-      });
-    }
-  }
-
-  private buildTrajectoryPhaseReplayTelemetry(
-    chatId: string,
-    identityKey: string,
-    sinceTimestamp?: number,
-    taskRunId?: string,
-  ): TrajectoryPhaseReplay[] {
-    if (!this.providerRouter) {
-      return [];
-    }
-
-    const correlatedTaskRunId = this.resolveTaskRunId(chatId, taskRunId);
-    const traces = (this.providerRouter.getRecentExecutionTraces?.(100, identityKey) ?? [])
-      .filter((trace) => trace.chatId === chatId)
-      .filter((trace) => (correlatedTaskRunId ? trace.taskRunId === correlatedTaskRunId : true))
-      .filter(
-        (trace) =>
-          correlatedTaskRunId || sinceTimestamp === undefined || trace.timestamp >= sinceTimestamp,
-      );
-    const outcomes = (this.providerRouter.getRecentPhaseOutcomes?.(100, identityKey) ?? [])
-      .filter((outcome) => outcome.chatId === chatId)
-      .filter((outcome) => (correlatedTaskRunId ? outcome.taskRunId === correlatedTaskRunId : true))
-      .filter(
-        (outcome) =>
-          correlatedTaskRunId ||
-          sinceTimestamp === undefined ||
-          outcome.timestamp >= sinceTimestamp,
-      );
-    if (traces.length === 0 && outcomes.length === 0) {
-      return [];
-    }
-
-    const keyed = new Map<string, TrajectoryPhaseReplay>();
-    const makeKey = (event: ExecutionTrace | PhaseOutcome) =>
-      [event.phase, event.role, event.provider, event.model ?? "", event.source].join(":");
-
-    for (const trace of traces) {
-      const key = makeKey(trace);
-      const existing = keyed.get(key);
-      if (existing && existing.timestamp > trace.timestamp) {
-        continue;
-      }
-      keyed.set(key, this.toTrajectoryPhaseReplay(trace));
-    }
-
-    for (const outcome of outcomes) {
-      const key = makeKey(outcome);
-      const existing = keyed.get(key);
-      if (!existing || outcome.timestamp >= existing.timestamp) {
-        keyed.set(key, this.toTrajectoryPhaseReplay(outcome));
-        continue;
-      }
-      keyed.set(key, this.mergeReplayOutcome(existing, outcome));
-    }
-
-    return [...keyed.values()].sort((left, right) => left.timestamp - right.timestamp).slice(-12);
-  }
-
-  private toTrajectoryPhaseReplay(event: ExecutionTrace | PhaseOutcome): TrajectoryPhaseReplay {
-    return {
-      phase: event.phase,
-      role: event.role,
-      provider: event.provider,
-      model: event.model,
-      source: event.source,
-      status: "status" in event ? event.status : undefined,
-      verifierDecision: "telemetry" in event ? event.telemetry?.verifierDecision : undefined,
-      phaseVerdict: "telemetry" in event ? event.telemetry?.phaseVerdict : undefined,
-      phaseVerdictScore: "telemetry" in event ? event.telemetry?.phaseVerdictScore : undefined,
-      retryCount: "telemetry" in event ? event.telemetry?.retryCount : undefined,
-      rollbackDepth: "telemetry" in event ? event.telemetry?.rollbackDepth : undefined,
-      timestamp: event.timestamp,
-    };
-  }
-
-  private mergeReplayOutcome(
-    existing: TrajectoryPhaseReplay,
-    outcome: PhaseOutcome,
-  ): TrajectoryPhaseReplay {
-    return {
-      ...existing,
-      status: outcome.status,
-      verifierDecision: outcome.telemetry?.verifierDecision,
-      phaseVerdict: outcome.telemetry?.phaseVerdict,
-      phaseVerdictScore: outcome.telemetry?.phaseVerdictScore,
-      retryCount: outcome.telemetry?.retryCount,
-      rollbackDepth: outcome.telemetry?.rollbackDepth,
-    };
   }
 
   private emitToolResult(
@@ -6457,94 +6292,31 @@ export class Orchestrator {
     sinceTimestamp?: number;
     taskRunId?: string;
   }): Promise<TrajectoryReplayContext | null> {
-    const identityKey = resolveIdentityKey(params.chatId, params.userId, params.conversationId, this.userProfileStore, params.channelType);
-    const taskExecutionMemory = this.taskExecutionStore?.getMemory(identityKey) ?? null;
-    const exactReplayMatch = params.taskRunId
-      ? (this.trajectoryReplayRetriever?.getReplayContextForTaskRun({
-          taskRunId: params.taskRunId,
-          chatId: params.chatId,
-        }) ?? null)
-      : null;
-    const exactReplayContext = exactReplayMatch?.replayContext ?? null;
-    const hasExactReplayMatch = exactReplayMatch?.found ?? false;
-    const projectWorldLayer = await this.buildProjectWorldMemoryLayer();
-    const phaseTelemetry = this.buildTrajectoryPhaseReplayTelemetry(
-      params.chatId,
-      identityKey,
-      params.sinceTimestamp,
-      params.taskRunId,
-    );
-
-    const learnedInsightsSource = hasExactReplayMatch
-      ? (exactReplayContext?.learnedInsights ?? [])
-      : (exactReplayContext?.learnedInsights ?? taskExecutionMemory?.learnedInsights ?? []);
-    const learnedInsights = learnedInsightsSource.slice(0, 4);
-    const branchSummary = hasExactReplayMatch
-      ? exactReplayContext?.branchSummary
-      : (exactReplayContext?.branchSummary ?? taskExecutionMemory?.branchSummary);
-    const verifierSummary = hasExactReplayMatch
-      ? exactReplayContext?.verifierSummary
-      : (exactReplayContext?.verifierSummary ?? taskExecutionMemory?.verifierSummary);
-    if (
-      !projectWorldLayer &&
-      !exactReplayContext?.projectWorldFingerprint &&
-      !branchSummary &&
-      !verifierSummary &&
-      learnedInsights.length === 0 &&
-      phaseTelemetry.length === 0 &&
-      !exactReplayContext?.phaseTelemetry?.length
-    ) {
-      return null;
-    }
-
-    return {
-      projectWorldFingerprint:
-        exactReplayContext?.projectWorldFingerprint ?? projectWorldLayer?.fingerprint,
-      projectWorldSummary: exactReplayContext?.projectWorldSummary ?? projectWorldLayer?.summary,
-      branchSummary,
-      verifierSummary,
-      learnedInsights,
-      phaseTelemetry:
-        phaseTelemetry.length > 0 ? phaseTelemetry : (exactReplayContext?.phaseTelemetry ?? []),
+    const deps: TrajectoryReplayDeps = {
+      trajectoryReplayRetriever: this.trajectoryReplayRetriever,
+      taskExecutionStore: this.taskExecutionStore,
+      userProfileStore: this.userProfileStore,
+      memoryManager: this.memoryManager,
+      projectPath: this.projectPath,
+      providerRouter: this.providerRouter,
+      resolveTaskRunId: (chatId, taskRunId) => this.resolveTaskRunId(chatId, taskRunId),
     };
-  }
-
-  /** Emit a goal lifecycle event on the event bus */
-  private emitGoalEvent(
-    rootId: GoalNodeId | string,
-    nodeId: GoalNodeId | string,
-    status: GoalStatus,
-    depth: number,
-  ): void {
-    if (!this.eventEmitter) return;
-    this.eventEmitter.emit("goal:status-changed", {
-      rootId: rootId as GoalNodeId,
-      nodeId: nodeId as GoalNodeId,
-      status,
-      depth,
-      timestamp: Date.now(),
-    });
-    // monitor:task_update is emitted by learning-workspace-bridge
-    // reacting to goal:status-changed — no direct emit here to avoid duplicates.
-  }
-
-  /** Emit a DAG lifecycle event so the web portal DAG/Kanban views populate */
-  private emitDagEvent(
-    eventName: "monitor:dag_init" | "monitor:dag_restructure",
-    goalTree: GoalTree,
-  ): void {
-    if (!this.workspaceBus) return;
-    this.workspaceBus.emit(eventName, goalTreeToDagPayload(goalTree));
+    return buildTrajectoryReplayContextHelper(deps, params);
   }
 
   // ─── Goal decomposition helpers ───────────────────────────────────────────
 
-  /**
-   * Run proactive goal decomposition if the decomposer is available and the
-   * message qualifies. Returns an updated agentState with plan augmented by
-   * the goal tree summary. Non-fatal: errors are logged and the original
-   * agentState is returned unchanged.
-   */
+  private get goalDecompositionDeps(): GoalDecompositionDeps {
+    return {
+      goalDecomposer: this.goalDecomposer,
+      activeGoalTrees: this.activeGoalTrees,
+      sessionManager: this.sessionManager,
+      monitorLifecycle: this.monitorLifecycle,
+      eventEmitter: this.eventEmitter,
+      workspaceBus: this.workspaceBus,
+    };
+  }
+
   private async runProactiveGoalDecomposition(opts: {
     conversationScope: string;
     userMessage: string;
@@ -6552,107 +6324,16 @@ export class Orchestrator {
     session: Session;
     agentState: AgentState;
   }): Promise<AgentState> {
-    if (!this.goalDecomposer || !this.goalDecomposer.shouldDecompose(opts.userMessage)) {
-      return opts.agentState;
-    }
-    try {
-      const goalTree = await this.goalDecomposer.decomposeProactive(
-        opts.conversationScope,
-        opts.userMessage,
-      );
-      this.activeGoalTrees.set(opts.conversationScope, goalTree);
-      this.emitGoalEvent(goalTree.rootId, goalTree.rootId, "pending", 0);
-      if (this.monitorLifecycle) {
-        this.monitorLifecycle.goalDecomposed(opts.conversationScope, goalTree);
-      } else {
-        this.emitDagEvent("monitor:dag_init", goalTree);
-      }
-      await this.sessionManager.sendVisibleAssistantMarkdown(
-        opts.chatId,
-        opts.session,
-        formatGoalPlanMarkdown(goalTree, { seedText: opts.userMessage }),
-      );
-      const treeSummary = summarizeTree(goalTree);
-      return {
-        ...opts.agentState,
-        plan: (opts.agentState.plan ?? "") + "\n\n[Goal Tree: " + treeSummary + "]",
-      };
-    } catch (decompError) {
-      getLogger().warn("Proactive goal decomposition failed", {
-        chatId: opts.chatId,
-        error: decompError instanceof Error ? decompError.message : String(decompError),
-      });
-      return opts.agentState;
-    }
+    return runProactiveGoalDecompositionHelper(this.goalDecompositionDeps, opts);
   }
 
-  /**
-   * Run reactive goal decomposition when the REFLECTING phase decides to REPLAN.
-   * Finds the currently-executing node, marks it failed, and attempts to
-   * decompose reactively. Non-fatal: errors are logged and swallowed.
-   */
   private async runReactiveGoalDecomposition(opts: {
     conversationScope: string;
     chatId: string;
     session: Session;
     responseText: string;
   }): Promise<void> {
-    if (!this.goalDecomposer || !this.activeGoalTrees.has(opts.conversationScope)) {
-      return;
-    }
-    try {
-      const goalTree = this.activeGoalTrees.get(opts.conversationScope)!;
-      // Find the currently-executing node
-      let executingNodeId: GoalNodeId | null = null;
-      for (const [, node] of goalTree.nodes) {
-        if (node.status === "executing") {
-          executingNodeId = node.id;
-          break;
-        }
-      }
-      if (executingNodeId) {
-        const executingNode = goalTree.nodes.get(executingNodeId)!;
-        this.emitGoalEvent(
-          goalTree.rootId,
-          executingNodeId,
-          "failed",
-          executingNode.depth,
-        );
-        const updatedTree = await this.goalDecomposer.decomposeReactive(
-          goalTree,
-          executingNodeId,
-          opts.responseText,
-        );
-        if (updatedTree) {
-          this.activeGoalTrees.set(opts.conversationScope, updatedTree);
-          if (this.monitorLifecycle) {
-            this.monitorLifecycle.goalRestructured(opts.conversationScope, updatedTree);
-          } else {
-            this.emitDagEvent("monitor:dag_restructure", updatedTree);
-          }
-          await this.sessionManager.sendVisibleAssistantMarkdown(
-            opts.chatId,
-            opts.session,
-            formatGoalPlanMarkdown(updatedTree, {
-              seedText: updatedTree.taskDescription,
-              updated: true,
-            }),
-          );
-        } else {
-          getLogger().info("Reactive decomposition skipped (depth limit reached)", {
-            chatId: opts.chatId,
-            nodeId: executingNodeId,
-          });
-        }
-      }
-    } catch (reactiveError) {
-      // Reactive decomposition failure is non-fatal
-      getLogger().warn("Reactive goal decomposition failed", {
-        chatId: opts.chatId,
-        error:
-          reactiveError instanceof Error ? reactiveError.message : String(reactiveError),
-      });
-    }
+    return runReactiveGoalDecompositionHelper(this.goalDecompositionDeps, opts);
   }
 
 }
