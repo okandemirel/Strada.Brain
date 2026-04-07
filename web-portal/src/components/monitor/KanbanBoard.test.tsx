@@ -32,6 +32,7 @@ vi.mock('@dnd-kit/core', () => ({
     capturedOnDragEnd = onDragEnd
     return <div data-testid="dnd-context">{children}</div>
   },
+  DragOverlay: ({ children }: { children?: React.ReactNode }) => <div data-testid="drag-overlay">{children}</div>,
   closestCenter: vi.fn(),
   PointerSensor: vi.fn(),
   useSensor: vi.fn(),

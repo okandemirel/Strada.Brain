@@ -26,6 +26,17 @@ vi.mock('./ui/blur-fade', () => ({
   BlurFade: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }))
 
+// Mock virtualizer — jsdom has no layout so useVirtualizer returns no items
+vi.mock('@tanstack/react-virtual', () => ({
+  useVirtualizer: ({ count }: { count: number }) => ({
+    getVirtualItems: () =>
+      Array.from({ length: count }, (_, i) => ({ index: i, start: i * 80, size: 80, key: i })),
+    getTotalSize: () => count * 80,
+    measureElement: () => {},
+    scrollToIndex: () => {},
+  }),
+}))
+
 import ChatView from './ChatView'
 
 function createMockWS(overrides: {
