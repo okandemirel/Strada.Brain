@@ -54,7 +54,7 @@ describe('workspace integration — auto-switch flow', () => {
       type: 'canvas:shapes_add',
       payload: {
         shapes: [
-          { type: 'Rectangle', id: 'r1', props: { width: 100, height: 50 } },
+          { type: 'note-block', id: 'r1', props: { content: 'hello', color: '#fbbf24' } },
         ],
       },
     })
@@ -71,14 +71,19 @@ describe('workspace integration — auto-switch flow', () => {
       type: 'canvas:shapes_update',
       payload: {
         shapes: [
-          { id: 'r2', props: { width: 120, status: 'active' } },
+          { id: 'r2', type: 'task-card', props: { title: 'Active task', status: 'active' } },
         ],
       },
     })
 
     const canvas = useCanvasStore.getState()
     expect(canvas.pendingUpdates).toEqual([
-      { id: 'r2', props: { source: 'agent', status: 'active', width: 120 }, source: 'agent' },
+      {
+        id: 'r2',
+        type: 'task-card',
+        props: { w: 240, h: 130, title: 'Active task', status: 'active', priority: 'medium', source: 'agent' },
+        source: 'agent',
+      },
     ])
   })
 

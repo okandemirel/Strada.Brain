@@ -115,7 +115,7 @@ describe('dispatchWorkspaceMessage', () => {
       type: 'canvas:shapes_add',
       payload: {
         shapes: [
-          { type: 'Rectangle', id: 'shape-1', props: { width: 100 } },
+          { type: 'note-block', id: 'shape-1', props: { content: 'hello' } },
         ],
       },
     })
@@ -129,13 +129,18 @@ describe('dispatchWorkspaceMessage', () => {
       type: 'canvas:shapes_update',
       payload: {
         shapes: [
-          { id: 'shape-2', props: { width: 220 } },
+          { id: 'shape-2', type: 'note-block', props: { content: 'updated note', color: '#fbbf24' } },
         ],
       },
     })
 
     expect(useCanvasStore.getState().pendingUpdates).toEqual([
-      { id: 'shape-2', props: { width: 220, source: 'agent' }, source: 'agent' },
+      {
+        id: 'shape-2',
+        type: 'note-block',
+        props: { w: 280, h: 160, content: 'updated note', color: '#fbbf24', source: 'agent' },
+        source: 'agent',
+      },
     ])
   })
 
@@ -229,14 +234,19 @@ describe('dispatchWorkspaceMessage', () => {
         action: 'update',
         autoSwitch: false,
         shapes: [
-          { id: 'shape-5', props: { label: 'Background sync' } },
+          { id: 'shape-5', type: 'diagram-node', props: { label: 'Background sync' } },
         ],
       },
     })
 
     expect(useWorkspaceStore.getState().mode).toBe('chat')
     expect(useCanvasStore.getState().pendingUpdates).toEqual([
-      { id: 'shape-5', props: { label: 'Background sync', source: 'agent' }, source: 'agent' },
+      {
+        id: 'shape-5',
+        type: 'diagram-node',
+        props: { w: 200, h: 100, label: 'Background sync', nodeType: 'diagram', status: 'active', source: 'agent' },
+        source: 'agent',
+      },
     ])
   })
 

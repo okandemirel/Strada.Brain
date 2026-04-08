@@ -103,7 +103,7 @@ describe('workspace performance benchmarks', () => {
     for (let i = 0; i < 100; i++) {
       dispatchWorkspaceMessage({
         type: 'canvas:shapes_add',
-        shapes: [{ type: 'CodeBlock', id: `shape-${i}`, props: { code: `console.log(${i})` } }],
+        shapes: [{ type: 'code-block', id: `shape-${i}`, props: { code: `console.log(${i})` } }],
       })
     }
     const elapsed = performance.now() - start
