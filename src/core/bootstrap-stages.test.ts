@@ -296,10 +296,7 @@ describe("bootstrap-stages", () => {
       }),
     );
     expect(logger.warn).toHaveBeenCalledWith(
-      "Startup capability notices",
-      expect.objectContaining({
-        notices: ["provider warning"],
-      }),
+      "Startup notice: provider warning",
     );
   });
 

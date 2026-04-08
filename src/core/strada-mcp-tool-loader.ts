@@ -231,6 +231,8 @@ interface ToolRegistryLike {
 
 const STRADA_MCP_PACKAGE_NAME = "strada-mcp";
 const DEFAULT_BRIDGE_UNAVAILABLE_REASON = "Requires a live Unity bridge connection.";
+/** Connection refused means Unity Editor is not running — no point retrying. */
+const CONN_REFUSED_RE = /ECONNREFUSED|connection\s+refused/i;
 
 function mapCategory(category: StradaMcpToolMetadata["category"]): BrainToolCategory {
   switch (category) {
@@ -466,12 +468,21 @@ export class StradaMcpRuntime {
         error: message,
         sourcePath: this.source.path,
       });
-      this.scheduleReconnect();
+      this.scheduleReconnect(message);
     }
   }
 
-  private scheduleReconnect(): void {
+  private scheduleReconnect(lastError?: string): void {
     if (!this.bridgeConfigured || !this.bridgeManager || this.bridgeConnected) {
+      return;
+    }
+    // Unity Editor not running — go dormant instead of retrying
+    if (lastError && CONN_REFUSED_RE.test(lastError)) {
+      getLogger().info(
+        "Unity Editor not running — bridge dormant. Restart the Brain to retry.",
+        { port: this.source.path },
+      );
+      this.syncBridgeState(false, "dormant", "Unity Editor not running. Restart to retry.");
       return;
     }
     this.clearReconnectTimer();
@@ -497,7 +508,7 @@ export class StradaMcpRuntime {
         this.lastError = msg;
         this.syncBridgeState(false, "error", msg);
         getLogger().debug("Unity bridge reconnect failed", { error: msg, attempt });
-        this.scheduleReconnect();
+        this.scheduleReconnect(msg);
       }
     }, delay);
   }

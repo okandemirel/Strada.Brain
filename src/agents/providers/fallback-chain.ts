@@ -244,8 +244,12 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
         // Guard: only warn if the error looks like an external abort, not a
         // deliberate cancellation from the Brain's own control plane (task cancel,
         // stall-abort, user abort).
-        if (ABORT_RE.test(errorMsg) && provider.capabilities.thinkingSupported
-          && !CANCEL_RE.test(errorMsg) && !TASK_INTERRUPTED_RE.test(errorMsg)) {
+        const isReasoningTimeout = ABORT_RE.test(errorMsg)
+          && provider.capabilities.thinkingSupported
+          && !CANCEL_RE.test(errorMsg)
+          && !TASK_INTERRUPTED_RE.test(errorMsg);
+
+        if (isReasoningTimeout) {
           logger.warn(`Possible reasoning model timeout (${label})`, {
             provider: provider.name,
             hint: "Reasoning models may need more time than the API proxy allows. Consider adding a faster fallback provider or reducing prompt complexity.",
@@ -262,6 +266,21 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
 
         const remaining = this.providers.slice(i + 1).filter((p) => health.isAvailable(p.name));
         if (remaining.length === 0) {
+          if (isReasoningTimeout && this.providers.length === 1) {
+            const hint = "Reasoning models (e.g. MiniMax) may exceed the API proxy timeout during extended thinking. "
+              + "To fix: (1) configure a fallback provider via STRADA_FALLBACK_PROVIDERS, or "
+              + "(2) increase the provider's timeout/proxy limit.";
+            logger.error(`Reasoning model timeout with no fallback (${label})`, {
+              provider: provider.name,
+              error: errorMsg,
+              hint,
+            });
+            throw new Error(
+              `Provider "${provider.name}" timed out during reasoning with no fallback available. ${hint} `
+              + `Original error: ${sanitizeSecrets(errorMsg)}`,
+            );
+          }
+
           logger.error(`All providers failed (${label})`, {
             provider: provider.name,
             error: errorMsg,

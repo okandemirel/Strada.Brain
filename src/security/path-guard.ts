@@ -1,5 +1,5 @@
 import { realpath } from "node:fs/promises";
-import { resolve, sep } from "node:path";
+import { resolve, sep, normalize, isAbsolute } from "node:path";
 
 /**
  * Sensitive file patterns that should never be accessed through tools,
@@ -47,6 +47,31 @@ const realRootCache = new Map<string, string>();
  *  2. Trailing separator check — prevents prefix collision (/project vs /project-evil)
  *  3. Sensitive file blocklist — prevents access to .env, .git/config, credentials, etc.
  */
+
+/**
+ * Normalize a tool-supplied path to be relative to the project root.
+ * Handles absolute paths that fall inside the project (strips prefix)
+ * and cleans up redundant separators / `.` segments.
+ * Returns `{ ok: true, relativePath }` or `{ ok: false, error }`.
+ */
+export function normalizeToolPathInput(
+  projectPath: string,
+  rawInput: string,
+): { ok: true; relativePath: string } | { ok: false; error: string } {
+  let cleaned = normalize(rawInput);
+
+  if (isAbsolute(cleaned)) {
+    const root = projectPath.endsWith("/") ? projectPath : projectPath + "/";
+    if (cleaned === projectPath || cleaned.startsWith(root)) {
+      cleaned = cleaned.slice(projectPath.length).replace(/^\/+/, "") || ".";
+    } else {
+      return { ok: false, error: "Absolute path is outside the project directory" };
+    }
+  }
+
+  return { ok: true, relativePath: cleaned };
+}
+
 export async function validatePath(
   projectRoot: string,
   relativePath: string

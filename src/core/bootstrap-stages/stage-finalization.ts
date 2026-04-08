@@ -278,9 +278,10 @@ export async function finalizeChannelStartupStage(params: {
     })),
   });
   if (params.startupNotices.length > 0) {
-    params.logger.warn("Startup capability notices", {
-      notices: [...new Set(params.startupNotices)],
-    });
+    const uniqueNotices = [...new Set(params.startupNotices)];
+    for (const notice of uniqueNotices) {
+      params.logger.warn(`Startup notice: ${notice}`);
+    }
   }
 
   return bootReport;

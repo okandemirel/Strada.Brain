@@ -1,5 +1,5 @@
 import { runProcess } from "../../utils/process-runner.js";
-import { validatePath } from "../../security/path-guard.js";
+import { validatePath, normalizeToolPathInput } from "../../security/path-guard.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "./tool.interface.js";
 
 const BUILD_TIMEOUT_MS = 120_000; // 2 minutes
@@ -97,7 +97,11 @@ export class DotnetBuildTool implements ITool {
     const args = ["build"];
 
     if (input["project"]) {
-      const pathCheck = await validatePath(context.projectPath, String(input["project"]));
+      const normalized = normalizeToolPathInput(context.projectPath, String(input["project"]));
+      if (!normalized.ok) {
+        return { content: `Error: ${normalized.error}`, isError: true };
+      }
+      const pathCheck = await validatePath(context.projectPath, normalized.relativePath);
       if (!pathCheck.valid) {
         return { content: `Error: ${pathCheck.error}`, isError: true };
       }
@@ -272,7 +276,11 @@ export class DotnetTestTool implements ITool {
     const args = ["test"];
 
     if (input["project"]) {
-      const pathCheck = await validatePath(context.projectPath, String(input["project"]));
+      const normalized = normalizeToolPathInput(context.projectPath, String(input["project"]));
+      if (!normalized.ok) {
+        return { content: `Error: ${normalized.error}`, isError: true };
+      }
+      const pathCheck = await validatePath(context.projectPath, normalized.relativePath);
       if (!pathCheck.valid) {
         return { content: `Error: ${pathCheck.error}`, isError: true };
       }
