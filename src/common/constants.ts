@@ -197,6 +197,7 @@ export const WRITE_OPERATIONS = new Set([
   "shell_exec",
   "git_commit",
   "git_push",
+  "git_stash",
   "strada_create_module",
   "strada_create_component",
   "strada_create_mediator",
