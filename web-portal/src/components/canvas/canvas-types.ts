@@ -45,3 +45,26 @@ export function getDefaultDimensions(type: string): { w: number; h: number } {
   }
   return defaults[type] ?? { w: 240, h: 120 }
 }
+
+import type { Node, Edge } from '@xyflow/react'
+
+/** ReactFlow node carrying a canvas shape's data. */
+export interface CanvasNode extends Node {
+  type: 'baseCard'
+  data: {
+    cardType: string
+    props: Record<string, unknown>
+    source?: 'agent' | 'user'
+  }
+}
+
+/** ReactFlow edge carrying a canvas connection's data. */
+export interface CanvasEdge extends Edge {
+  type: 'gradientBezier'
+  data?: {
+    label?: string
+  }
+}
+
+/** Layout modes for the canvas workspace. */
+export type LayoutMode = 'flow' | 'kanban' | 'freeform'
