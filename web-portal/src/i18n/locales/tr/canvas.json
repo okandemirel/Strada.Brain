@@ -101,7 +101,10 @@
     "addTaskCard": "Görev Ekle",
     "addDiagramNode": "Diyagram Ekle",
     "addFileCard": "Dosya Ekle",
-    "addTerminalBlock": "Terminal Ekle"
+    "addTerminalBlock": "Terminal Ekle",
+    "freeform": "Serbest",
+    "flow": "Akış",
+    "kanban": "Pano"
   },
   "contextMenu": {
     "edit": "Düzenle",

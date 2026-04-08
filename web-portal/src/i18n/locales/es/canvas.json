@@ -101,7 +101,10 @@
     "addTaskCard": "Agregar Tarea",
     "addDiagramNode": "Agregar Diagrama",
     "addFileCard": "Agregar Archivo",
-    "addTerminalBlock": "Agregar Terminal"
+    "addTerminalBlock": "Agregar Terminal",
+    "freeform": "Libre",
+    "flow": "Flujo",
+    "kanban": "Tablero"
   },
   "contextMenu": {
     "edit": "Editar",

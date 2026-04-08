@@ -101,7 +101,10 @@
     "addTaskCard": "Aufgabe hinzufügen",
     "addDiagramNode": "Diagramm hinzufügen",
     "addFileCard": "Datei hinzufügen",
-    "addTerminalBlock": "Terminal hinzufügen"
+    "addTerminalBlock": "Terminal hinzufügen",
+    "freeform": "Frei",
+    "flow": "Fluss",
+    "kanban": "Board"
   },
   "contextMenu": {
     "edit": "Bearbeiten",

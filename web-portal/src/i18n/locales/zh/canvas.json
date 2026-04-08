@@ -101,7 +101,10 @@
     "addTaskCard": "添加任务",
     "addDiagramNode": "添加图表",
     "addFileCard": "添加文件",
-    "addTerminalBlock": "添加终端"
+    "addTerminalBlock": "添加终端",
+    "freeform": "自由",
+    "flow": "流程",
+    "kanban": "看板"
   },
   "contextMenu": {
     "edit": "编辑",

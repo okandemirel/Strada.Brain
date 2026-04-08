@@ -1,7 +1,7 @@
 import { useCallback, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useCanvasStore } from '../../stores/canvas-store'
-import { getDefaultDimensions, type ResolvedShape } from './canvas-types'
+import { getDefaultDimensions, type LayoutMode, type ResolvedShape } from './canvas-types'
 
 const QUICK_TYPES = [
   { type: 'note-block', icon: 'M', colorCls: 'text-amber-400' },
@@ -40,7 +40,15 @@ export default function CanvasToolbar({ viewportCenter }: CanvasToolbarProps) {
   const redoStack = useCanvasStore((s) => s.redoStack)
   const gridSnap = useCanvasStore((s) => s.gridSnap)
   const toggleGridSnap = useCanvasStore((s) => s.toggleGridSnap)
+  const layoutMode = useCanvasStore((s) => s.layoutMode)
+  const setLayoutMode = useCanvasStore((s) => s.setLayoutMode)
   const [showMore, setShowMore] = useState(false)
+
+  const LAYOUT_OPTIONS: { mode: LayoutMode; label: string }[] = [
+    { mode: 'freeform', label: t('toolbar.freeform', 'Free') },
+    { mode: 'flow', label: t('toolbar.flow', 'Flow') },
+    { mode: 'kanban', label: t('toolbar.kanban', 'Board') },
+  ]
 
   const addCardAtCenter = useCallback((type: string): void => {
     const dims = getDefaultDimensions(type)
@@ -128,6 +136,24 @@ export default function CanvasToolbar({ viewportCenter }: CanvasToolbarProps) {
       >
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M3 3v18h18M7 3v18M11 3v18M15 3v18M19 3v18M3 7h18M3 11h18M3 15h18M3 19h18" /></svg>
       </button>
+
+      <div className="mx-1 h-4 w-px bg-white/8" />
+
+      {/* Layout mode selector */}
+      <div className="flex items-center gap-0.5 bg-white/5 rounded-lg p-0.5">
+        {LAYOUT_OPTIONS.map(({ mode, label }) => (
+          <button
+            key={mode}
+            type="button"
+            onClick={() => setLayoutMode(mode)}
+            className={`px-2 py-1 text-[10px] font-medium rounded-md transition-colors
+              ${layoutMode === mode ? 'bg-accent/20 text-accent' : 'text-text-tertiary hover:text-text-secondary'}`}
+            aria-label={`Switch to ${label} layout`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
     </div>
   )
 }

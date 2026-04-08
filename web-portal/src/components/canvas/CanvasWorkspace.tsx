@@ -17,9 +17,10 @@ import { useMonitorStore } from '../../stores/monitor-store'
 import { useSessionStore } from '../../stores/session-store'
 import { normalizeCanvasIncomingShape } from './canvas-shape-normalizer'
 import { getDefaultDimensions, type ResolvedShape } from './canvas-types'
-import { useCanvasBridge } from '../../hooks/use-canvas-bridge'
+import { useCanvasBridge, shapesToNodes, connectionsToEdges } from '../../hooks/use-canvas-bridge'
 import { useCanvasShortcuts } from '../../hooks/use-canvas-shortcuts'
 import {
+  applyLayout,
   canvasShapeToResolved,
   buildMonitorFallbackShapes,
   buildFallbackConnections,
@@ -51,6 +52,7 @@ function CanvasWorkspaceInner() {
   const pendingViewport = useCanvasStore((s) => s.pendingViewport)
   const pendingLayout = useCanvasStore((s) => s.pendingLayout)
   const isDirty = useCanvasStore((s) => s.isDirty)
+  const layoutMode = useCanvasStore((s) => s.layoutMode)
 
   const addShape = useCanvasStore((s) => s.addShape)
   const updateShape = useCanvasStore((s) => s.updateShape)
@@ -137,6 +139,20 @@ function CanvasWorkspaceInner() {
     setDirty(true)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingMutationCount])
+
+  /* ── Apply layout when layoutMode changes ─────────────────────── */
+
+  useEffect(() => {
+    if (shapes.length === 0 || layoutMode === 'freeform') return
+    const currentNodes = shapesToNodes(shapes)
+    const currentEdges = connectionsToEdges(useCanvasStore.getState().connections)
+    const { nodes: layoutedNodes } = applyLayout(currentNodes, currentEdges, layoutMode)
+    for (const node of layoutedNodes) {
+      updateShape(node.id, { x: node.position.x, y: node.position.y })
+    }
+    requestAnimationFrame(() => fitView({ padding: 0.15 }))
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layoutMode])
 
   /* ── Load saved canvas on session change ──────────────────────── */
 

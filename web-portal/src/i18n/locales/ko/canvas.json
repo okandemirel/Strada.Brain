@@ -101,7 +101,10 @@
     "addTaskCard": "작업 추가",
     "addDiagramNode": "다이어그램 추가",
     "addFileCard": "파일 추가",
-    "addTerminalBlock": "터미널 추가"
+    "addTerminalBlock": "터미널 추가",
+    "freeform": "자유",
+    "flow": "플로우",
+    "kanban": "보드"
   },
   "contextMenu": {
     "edit": "편집",

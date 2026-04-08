@@ -159,4 +159,11 @@ describe('useCanvasStore', () => {
     store.setLayoutMode('flow')
     expect(useCanvasStore.getState().layoutMode).toBe('flow')
   })
+
+  it('tracks userLayoutOverride on manual layout change', () => {
+    const store = useCanvasStore.getState()
+    expect(store.userLayoutOverride).toBe(false)
+    store.setLayoutMode('flow')
+    expect(useCanvasStore.getState().userLayoutOverride).toBe(true)
+  })
 })

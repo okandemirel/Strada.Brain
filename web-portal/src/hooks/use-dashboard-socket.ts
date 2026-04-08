@@ -257,6 +257,17 @@ export function dispatchWorkspaceMessage(data: { type: string; [key: string]: un
         useCanvasStore.getState().addPendingShapes(shapes)
       }
 
+      // Only auto-select if user hasn't manually chosen a layout
+      const canvasState = useCanvasStore.getState()
+      if (!canvasState.userLayoutOverride) {
+        const intent = payload.intent as string | undefined
+        if (intent?.includes('plan') || intent?.includes('supervisor')) {
+          canvasState.setLayoutMode('flow')
+          // Reset override since this was auto-set, not user-set
+          useCanvasStore.setState({ userLayoutOverride: false })
+        }
+      }
+
       if (payload.viewport) {
         useCanvasStore.getState().setPendingViewport(payload.viewport as unknown as CanvasViewport)
       }

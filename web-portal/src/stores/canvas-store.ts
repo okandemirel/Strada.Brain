@@ -106,6 +106,7 @@ interface CanvasState extends PersistedCanvasState {
   /* Layout */
   layoutMode: LayoutMode
   setLayoutMode: (mode: LayoutMode) => void
+  userLayoutOverride: boolean
 }
 
 const CANVAS_STATE_STORAGE_PREFIX = 'strada-canvas-state:'
@@ -133,6 +134,7 @@ const initialState = {
   connectingFromId: null as string | null,
   gridSnap: false,
   layoutMode: 'freeform' as LayoutMode,
+  userLayoutOverride: false,
   undoStack: [] as UndoSnapshot[],
   redoStack: [] as UndoSnapshot[],
   ...persistedInitialState,
@@ -567,5 +569,5 @@ export const useCanvasStore = create<CanvasState>()((set) => ({
   toggleGridSnap: () => set((state) => ({ ...state, gridSnap: !state.gridSnap })),
 
   /* ── Layout ─────────────────────────────────────────────────── */
-  setLayoutMode: (mode) => set({ layoutMode: mode }),
+  setLayoutMode: (mode) => set({ layoutMode: mode, userLayoutOverride: true }),
 }))

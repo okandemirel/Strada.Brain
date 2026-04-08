@@ -101,7 +101,10 @@
     "addTaskCard": "Add Task",
     "addDiagramNode": "Add Diagram",
     "addFileCard": "Add File",
-    "addTerminalBlock": "Add Terminal"
+    "addTerminalBlock": "Add Terminal",
+    "freeform": "Free",
+    "flow": "Flow",
+    "kanban": "Board"
   },
   "contextMenu": {
     "edit": "Edit",
