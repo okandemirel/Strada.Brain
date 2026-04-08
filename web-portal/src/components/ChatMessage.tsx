@@ -8,6 +8,7 @@ import type { Attachment, ChatMessage as ChatMessageType } from '../types/messag
 import VoiceOutput from './VoiceOutput'
 import { cn } from '@/lib/utils'
 import { CopyButton } from './ui/copy-button'
+import { formatTimeAgo } from '../utils/format'
 
 const REMARK_PLUGINS = [remarkGfm]
 const REHYPE_PLUGINS = [rehypeHighlight]
@@ -19,17 +20,9 @@ interface ChatMessageProps {
 }
 
 function formatRelativeTime(timestamp: number): string {
-  const now = Date.now()
-  const diff = now - timestamp
-  const seconds = Math.floor(diff / 1000)
-  if (seconds < 60) return 'just now'
-  const minutes = Math.floor(seconds / 60)
-  if (minutes < 60) return `${minutes}m ago`
-  const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `${hours}h ago`
-  const days = Math.floor(hours / 24)
-  if (days < 7) return `${days}d ago`
-  return new Date(timestamp).toLocaleDateString()
+  const diff = Date.now() - timestamp
+  if (diff >= 7 * 86_400_000) return new Date(timestamp).toLocaleDateString()
+  return formatTimeAgo(timestamp)
 }
 
 const SAFE_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp'])
@@ -183,6 +176,15 @@ const FeedbackToolbar = memo(function FeedbackToolbar({
 function ChatMessageComponent({ message, onFeedback, voiceOutputEnabled = true }: ChatMessageProps) {
   const { t } = useTranslation()
   const isUser = message.sender === 'user'
+
+  if (message.sender === 'system') {
+    return (
+      <div className="self-center w-full max-w-[90%] text-center py-2 px-4 text-[11px] text-text-tertiary bg-white/[0.02] border border-white/5 rounded-lg">
+        {message.text}
+      </div>
+    )
+  }
+
   const showVoiceOutput = voiceOutputEnabled && !isUser && !message.isStreaming && hasTextContent(message.text)
   const showFeedback = !isUser && !message.isStreaming && onFeedback
   let deliveryLabel: string | null = null

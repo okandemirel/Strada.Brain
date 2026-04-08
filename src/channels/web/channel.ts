@@ -382,6 +382,14 @@ export class WebChannel
     });
   }
 
+  async sendSystemMessage(chatId: string, text: string): Promise<void> {
+    this.sendToClient(chatId, {
+      type: "system",
+      text,
+      messageId: randomUUID(),
+    });
+  }
+
   async sendTypingIndicator(chatId: string): Promise<void> {
     this.sendToClient(chatId, { type: "typing", active: true });
   }

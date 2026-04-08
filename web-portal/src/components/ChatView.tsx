@@ -267,7 +267,7 @@ export default function ChatView() {
                       transform: `translateY(${virtualRow.start}px)`,
                     }}
                   >
-                    <div className="pb-3">
+                    <div className="pb-3 flex flex-col">
                       <ChatMessage
                         message={msg}
                         onFeedback={handleFeedback}

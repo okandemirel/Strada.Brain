@@ -90,7 +90,7 @@ export default function Sidebar() {
             }
 
             return (
-              <Tooltip key={btn.mode}>
+              <Tooltip key={btn.mode} open={collapsed ? undefined : false}>
                 <TooltipTrigger asChild>
                   <button
                     onClick={() => handleModeClick(btn.mode)}

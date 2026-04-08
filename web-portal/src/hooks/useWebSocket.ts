@@ -367,6 +367,19 @@ export function useWebSocket(): UseWebSocketReturn {
           break
         }
 
+        case 'system': {
+          const sysText = typeof data.text === 'string' ? data.text.slice(0, 500) : ''
+          if (!sysText) break
+          useSessionStore.getState().addMessage({
+            id: typeof data.messageId === 'string' ? data.messageId : generateId(),
+            sender: 'system',
+            text: sysText,
+            isMarkdown: false,
+            timestamp: Date.now(),
+          })
+          break
+        }
+
         case 'text':
         case 'markdown': {
           const store = useSessionStore.getState()

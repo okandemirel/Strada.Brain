@@ -41,6 +41,9 @@ export interface IChannelSender {
 
   /** Send a markdown-formatted message */
   sendMarkdown(chatId: string, markdown: string): Promise<void>;
+
+  /** Send a system notification message (renders differently from assistant messages) */
+  sendSystemMessage?(chatId: string, text: string): Promise<void>;
 }
 
 /**

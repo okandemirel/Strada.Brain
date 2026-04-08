@@ -61,6 +61,12 @@ export interface MessageReceivedMessage {
   clientMessageId: string
 }
 
+export interface SystemMessage {
+  type: 'system'
+  text: string
+  messageId?: string
+}
+
 export type IncomingMessage =
   | ConnectedMessage
   | TextMessage
@@ -71,6 +77,7 @@ export type IncomingMessage =
   | ConfirmationMessage
   | MessageReceivedMessage
   | TypingMessage
+  | SystemMessage
 
 /** Outgoing message types to the WebSocket server */
 
@@ -133,7 +140,7 @@ export interface Attachment {
 /** Chat message for display */
 export interface ChatMessage {
   id: string
-  sender: 'user' | 'assistant'
+  sender: 'user' | 'assistant' | 'system'
   text: string
   isMarkdown: boolean
   isStreaming?: boolean

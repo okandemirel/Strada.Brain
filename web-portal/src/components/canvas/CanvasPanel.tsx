@@ -73,6 +73,7 @@ function DraggableCard({
         left: shape.x + tx,
         top: shape.y + ty,
         width: shape.w,
+        height: shape.h,
         zIndex: transform ? 50 : isSelected ? 10 : 1,
       }}
       {...listeners}
@@ -187,10 +188,12 @@ export default function CanvasPanel() {
     let agentAdded = 0
 
     if (pendingShapes.length > 0) {
+      let placementIdx = shapes.length
       for (const raw of pendingShapes) {
         const normalized = normalizeCanvasIncomingShape(raw)
         if (!normalized) continue
-        addShape(canvasShapeToResolved(normalized))
+        addShape(canvasShapeToResolved(normalized, placementIdx))
+        placementIdx++
         if (normalized.source === 'agent') agentAdded++
       }
       clearPendingShapes()

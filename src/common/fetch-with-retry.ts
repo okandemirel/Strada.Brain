@@ -76,7 +76,9 @@ export async function fetchWithRetry(
     if (response.ok) return response;
 
     const status = response.status;
-    const isRetryable = status === 429 || (status >= 500 && status < 600);
+    // 529 = server overloaded — don't retry internally, let FallbackChain circuit-break
+    const isOverloaded = status === 529;
+    const isRetryable = !isOverloaded && (status === 429 || (status >= 500 && status < 600));
 
     if (!isRetryable || attempt === maxRetries) {
       const rawText = (await response.text().catch(() => "(unreadable)")).slice(0, 200);

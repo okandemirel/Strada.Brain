@@ -31,15 +31,30 @@ export function formatSessionLabel(sessionId: string | null): string {
 
 /* ── Shape conversion ──────────────────────────────────────────────── */
 
-export function canvasShapeToResolved(raw: CanvasShape): ResolvedShape {
+const CASCADE_GAP_X = 40
+const CASCADE_GAP_Y = 40
+
+export function canvasShapeToResolved(raw: CanvasShape, placementIndex = 0): ResolvedShape {
   const dims = getDefaultDimensions(raw.type ?? 'note-block')
   const w = typeof raw.props?.w === 'number' ? raw.props.w as number : dims.w
   const h = typeof raw.props?.h === 'number' ? raw.props.h as number : dims.h
+
+  let x = raw.position?.x ?? -1
+  let y = raw.position?.y ?? -1
+
+  if (x < 0 || y < 0) {
+    const cols = 4
+    const col = placementIndex % cols
+    const row = Math.floor(placementIndex / cols)
+    x = 80 + col * (w + CASCADE_GAP_X)
+    y = 80 + row * (h + CASCADE_GAP_Y)
+  }
+
   return {
     id: raw.id,
     type: raw.type ?? 'note-block',
-    x: raw.position?.x ?? 0,
-    y: raw.position?.y ?? 0,
+    x,
+    y,
     w,
     h,
     props: raw.props,

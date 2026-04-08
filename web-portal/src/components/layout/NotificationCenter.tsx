@@ -1,3 +1,4 @@
+import { useState, useRef, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '../ui/sheet'
 import { useWorkspaceStore } from '../../stores/workspace-store'
@@ -20,22 +21,78 @@ interface NotificationEntry {
   timestamp: number
 }
 
+const SWIPE_THRESHOLD = 80
+
 function NotificationItem({ n, onDismiss }: { n: NotificationEntry; onDismiss: (id: string) => void }) {
   const { t } = useTranslation()
+  const [expanded, setExpanded] = useState(false)
+  const [offsetX, setOffsetX] = useState(0)
+  const draggingRef = useRef(false)
+  const startXRef = useRef(0)
+  const offsetXRef = useRef(0)
+
+  const onTouchStart = useCallback((e: React.TouchEvent) => {
+    startXRef.current = e.touches[0]!.clientX
+    draggingRef.current = true
+  }, [])
+
+  const onTouchMove = useCallback((e: React.TouchEvent) => {
+    if (!draggingRef.current) return
+    const dx = e.touches[0]!.clientX - startXRef.current
+    const clamped = Math.max(dx, -200)
+    offsetXRef.current = clamped
+    setOffsetX(clamped)
+  }, [])
+
+  const onTouchEnd = useCallback(() => {
+    draggingRef.current = false
+    if (offsetXRef.current < -SWIPE_THRESHOLD) {
+      onDismiss(n.id)
+    } else {
+      offsetXRef.current = 0
+      setOffsetX(0)
+    }
+  }, [onDismiss, n.id])
+
   return (
-    <div className="flex items-start gap-2 px-2 py-2 rounded-lg hover:bg-bg-tertiary transition-colors group">
-      <span className={`mt-1.5 w-1.5 h-1.5 rounded-full shrink-0 ${SEVERITY_DOT[n.severity] ?? SEVERITY_DOT.info}`} />
-      <div className="flex-1 min-w-0">
-        <div className="text-xs font-medium text-text truncate">{n.title}</div>
-        <div className="text-[11px] text-text-secondary truncate">{n.message}</div>
-      </div>
-      <button
-        onClick={() => onDismiss(n.id)}
-        className="shrink-0 opacity-0 group-hover:opacity-70 hover:!opacity-100 text-text-tertiary transition-opacity cursor-pointer bg-transparent border-none p-0.5"
-        aria-label={t('notifications.dismiss')}
+    <div
+      className="relative overflow-hidden rounded-lg"
+      onTouchStart={onTouchStart}
+      onTouchMove={onTouchMove}
+      onTouchEnd={onTouchEnd}
+    >
+      {/* Swipe dismiss background */}
+      {offsetX < 0 && (
+        <div className="absolute inset-0 flex items-center justify-end pr-4 bg-error/20 rounded-lg">
+          <X size={16} className="text-error" />
+        </div>
+      )}
+      <div
+        className="flex items-start gap-2 px-2 py-2 rounded-lg hover:bg-bg-tertiary transition-colors group cursor-pointer bg-bg-secondary/80"
+        style={{ transform: `translateX(${offsetX}px)`, transition: draggingRef.current ? 'none' : 'transform 0.2s ease-out' }}
+        onClick={() => setExpanded(!expanded)}
       >
-        <X size={12} />
-      </button>
+        <span className={`mt-1.5 w-1.5 h-1.5 rounded-full shrink-0 ${SEVERITY_DOT[n.severity] ?? SEVERITY_DOT.info}`} />
+        <div className="flex-1 min-w-0">
+          <div className="text-xs font-medium text-text truncate">{n.title}</div>
+          <div className={`text-[11px] text-text-secondary ${expanded ? '' : 'line-clamp-2'}`}>{n.message}</div>
+          {n.message.length > 80 && (
+            <button
+              onClick={(e) => { e.stopPropagation(); setExpanded(!expanded) }}
+              className="text-[10px] text-accent/70 hover:text-accent mt-0.5 bg-transparent border-none p-0 cursor-pointer"
+            >
+              {expanded ? t('notifications.showLess', 'Show less') : t('notifications.showMore', 'Show more')}
+            </button>
+          )}
+        </div>
+        <button
+          onClick={(e) => { e.stopPropagation(); onDismiss(n.id) }}
+          className="shrink-0 opacity-70 hover:opacity-100 text-text-tertiary transition-opacity cursor-pointer bg-transparent border-none p-0.5"
+          aria-label={t('notifications.dismiss')}
+        >
+          <X size={14} />
+        </button>
+      </div>
     </div>
   )
 }

@@ -14,6 +14,7 @@ import type { ScopeContext } from "../../learning/matching/pattern-matcher.js";
 import { SoulLoader } from "../../agents/soul/index.js";
 import { AgentDBAdapter } from "../../memory/unified/agentdb-adapter.js";
 import { DMPolicy } from "../../security/dm-policy.js";
+import { sanitizeSecrets } from "../../security/secret-sanitizer.js";
 import { resolveRuntimePaths } from "../../common/runtime-paths.js";
 import type {
   LearningResult,
@@ -304,9 +305,13 @@ export async function initializeTaskRuntimeStage(
       backgroundExecutor,
     ) ?? new AutoUpdater(params.config, params.activityRegistry, backgroundExecutor);
     autoUpdater.setNotifyFn((msg: string) => {
+      const safe = sanitizeSecrets(msg);
       const chats = params.activityRegistry.getActiveChatIds();
       for (const { chatId } of chats) {
-        params.channel.sendMarkdown(chatId, msg).catch(() => {});
+        const send = params.channel.sendSystemMessage
+          ? params.channel.sendSystemMessage.bind(params.channel)
+          : params.channel.sendMarkdown.bind(params.channel);
+        send(chatId, safe).catch(() => {});
       }
     });
     await autoUpdater.init();
