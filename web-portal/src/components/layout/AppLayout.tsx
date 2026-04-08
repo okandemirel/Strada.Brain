@@ -16,7 +16,7 @@ import { useOnlineStatus } from '../../hooks/useOnlineStatus'
 import { useSessionStore } from '../../stores/session-store'
 
 const MonitorPanel = lazy(() => import('../monitor/MonitorPanel'))
-const CanvasPanel = lazy(() => import('../canvas/CanvasPanel'))
+const CanvasWorkspace = lazy(() => import('../canvas/CanvasWorkspace'))
 const CodePanel = lazy(() => import('../code/CodePanel'))
 
 function PanelFallback({ label }: { label: string }) {
@@ -29,7 +29,7 @@ function PanelFallback({ label }: { label: string }) {
 
 const PANEL_MAP: Record<string, React.LazyExoticComponent<React.ComponentType>> = {
   monitor: MonitorPanel,
-  canvas: CanvasPanel,
+  canvas: CanvasWorkspace,
   code: CodePanel,
 }
 
