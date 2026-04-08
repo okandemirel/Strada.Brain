@@ -23,7 +23,7 @@ import {
   canvasShapeToResolved,
   buildMonitorFallbackShapes,
   buildFallbackConnections,
-} from './canvas-helpers'
+} from './layout-engine'
 import BaseCard from './BaseCard'
 import GradientBezierEdge from './GradientBezierEdge'
 import CanvasToolbar from './canvas-toolbar'
