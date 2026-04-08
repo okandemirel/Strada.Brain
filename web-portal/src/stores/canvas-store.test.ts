@@ -150,4 +150,13 @@ describe('useCanvasStore', () => {
     expect(useCanvasStore.getState().pendingUpdates).toEqual([])
     expect(useCanvasStore.getState().pendingRemovals).toEqual([])
   })
+
+  it('manages layoutMode with default freeform', () => {
+    const store = useCanvasStore.getState()
+    expect(store.layoutMode).toBe('freeform')
+    store.setLayoutMode('kanban')
+    expect(useCanvasStore.getState().layoutMode).toBe('kanban')
+    store.setLayoutMode('flow')
+    expect(useCanvasStore.getState().layoutMode).toBe('flow')
+  })
 })

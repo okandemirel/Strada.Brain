@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { ResolvedShape, CanvasConnection, ViewportState } from '../components/canvas/canvas-types'
+import type { ResolvedShape, CanvasConnection, ViewportState, LayoutMode } from '../components/canvas/canvas-types'
 
 export interface CanvasShape {
   type?: string
@@ -102,6 +102,10 @@ interface CanvasState extends PersistedCanvasState {
 
   /* Grid */
   toggleGridSnap: () => void
+
+  /* Layout */
+  layoutMode: LayoutMode
+  setLayoutMode: (mode: LayoutMode) => void
 }
 
 const CANVAS_STATE_STORAGE_PREFIX = 'strada-canvas-state:'
@@ -128,6 +132,7 @@ const initialState = {
   editingShapeId: null as string | null,
   connectingFromId: null as string | null,
   gridSnap: false,
+  layoutMode: 'freeform' as LayoutMode,
   undoStack: [] as UndoSnapshot[],
   redoStack: [] as UndoSnapshot[],
   ...persistedInitialState,
@@ -560,4 +565,7 @@ export const useCanvasStore = create<CanvasState>()((set) => ({
 
   /* ── Grid ───────────────────────────────────────────────────── */
   toggleGridSnap: () => set((state) => ({ ...state, gridSnap: !state.gridSnap })),
+
+  /* ── Layout ─────────────────────────────────────────────────── */
+  setLayoutMode: (mode) => set({ layoutMode: mode }),
 }))
