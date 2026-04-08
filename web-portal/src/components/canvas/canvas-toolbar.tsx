@@ -69,7 +69,7 @@ export default function CanvasToolbar({ viewportCenter }: CanvasToolbarProps) {
   }, [viewportCenter, pushUndo, addShape, setDirty])
 
   return (
-    <div className="flex items-center gap-1 rounded-xl border border-white/6 bg-black/50 px-2 py-1 backdrop-blur-xl">
+    <div role="toolbar" aria-label={t('toolbar.label', 'Canvas toolbar')} className="flex items-center gap-1 rounded-xl border border-white/6 bg-black/50 px-2 py-1 backdrop-blur-xl">
       {/* Quick add buttons */}
       {QUICK_TYPES.map((qt) => (
         <button
@@ -78,6 +78,7 @@ export default function CanvasToolbar({ viewportCenter }: CanvasToolbarProps) {
           className={btnCls}
           onClick={() => addCardAtCenter(qt.type)}
           title={t(`toolbar.add${qt.type.split('-').map((w) => w[0]!.toUpperCase() + w.slice(1)).join('')}` as string)}
+          aria-label={t(`toolbar.add${qt.type.split('-').map((w) => w[0]!.toUpperCase() + w.slice(1)).join('')}` as string)}
         >
           <span className={`text-xs font-bold ${qt.colorCls}`}>{qt.icon}</span>
           <span className="hidden sm:inline">{t(`toolbar.${qt.type}` as string)}</span>
@@ -86,7 +87,7 @@ export default function CanvasToolbar({ viewportCenter }: CanvasToolbarProps) {
 
       {/* More dropdown */}
       <div className="relative">
-        <button type="button" className={btnCls} onClick={() => setShowMore(!showMore)}>
+        <button type="button" className={btnCls} onClick={() => setShowMore(!showMore)} aria-label={t('toolbar.more', 'More card types')} aria-expanded={showMore} aria-haspopup="true">
           {t('toolbar.more')}
         </button>
         {showMore && (
@@ -97,6 +98,7 @@ export default function CanvasToolbar({ viewportCenter }: CanvasToolbarProps) {
                 type="button"
                 className="w-full px-3 py-1.5 text-left text-[11px] text-slate-400 hover:bg-white/[0.06] hover:text-white transition-colors"
                 onClick={() => addCardAtCenter(mt.type)}
+                aria-label={`Add ${mt.label} card`}
               >
                 {mt.label}
               </button>
@@ -113,6 +115,8 @@ export default function CanvasToolbar({ viewportCenter }: CanvasToolbarProps) {
         className={`${btnCls} ${undoStack.length === 0 ? 'opacity-30 pointer-events-none' : ''}`}
         onClick={undo}
         title={t('toolbar.undo')}
+        aria-label={t('toolbar.undo', 'Undo')}
+        aria-disabled={undoStack.length === 0}
       >
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 10h13a4 4 0 0 1 0 8H7" /><path d="m3 10 4-4M3 10l4 4" /></svg>
       </button>
@@ -121,6 +125,8 @@ export default function CanvasToolbar({ viewportCenter }: CanvasToolbarProps) {
         className={`${btnCls} ${redoStack.length === 0 ? 'opacity-30 pointer-events-none' : ''}`}
         onClick={redo}
         title={t('toolbar.redo')}
+        aria-label={t('toolbar.redo', 'Redo')}
+        aria-disabled={redoStack.length === 0}
       >
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 10H8a4 4 0 0 0 0 8h9" /><path d="m21 10-4-4m4 4-4 4" /></svg>
       </button>
@@ -133,6 +139,8 @@ export default function CanvasToolbar({ viewportCenter }: CanvasToolbarProps) {
         className={`${btnCls} ${gridSnap ? 'border-sky-400/30 bg-sky-400/10 text-sky-300' : ''}`}
         onClick={toggleGridSnap}
         title={t('toolbar.gridSnap')}
+        aria-label={t('toolbar.gridSnap', 'Toggle grid snap')}
+        aria-pressed={gridSnap}
       >
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M3 3v18h18M7 3v18M11 3v18M15 3v18M19 3v18M3 7h18M3 11h18M3 15h18M3 19h18" /></svg>
       </button>

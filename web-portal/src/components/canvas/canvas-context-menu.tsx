@@ -44,6 +44,8 @@ export default function CanvasContextMenu({ position, actions, onClose }: Canvas
   return (
     <div
       ref={ref}
+      role="menu"
+      aria-label="Canvas context menu"
       className="fixed z-[100] min-w-[160px] rounded-lg border border-white/10 bg-[#0b1018]/95 py-1 backdrop-blur-xl shadow-2xl"
       style={{ left: position.x, top: position.y }}
     >
@@ -52,7 +54,10 @@ export default function CanvasContextMenu({ position, actions, onClose }: Canvas
           {item.divider && <div className="my-1 h-px bg-white/6" />}
           <button
             type="button"
+            role="menuitem"
             disabled={item.disabled}
+            aria-disabled={item.disabled}
+            aria-label={item.label}
             className={`w-full flex items-center gap-2.5 px-3 py-1.5 text-left text-[11px] transition-colors ${
               item.danger
                 ? 'text-red-400 hover:bg-red-400/10 hover:text-red-300'

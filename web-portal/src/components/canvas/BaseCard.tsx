@@ -34,8 +34,8 @@ function BaseCardInner({ data, selected }: NodeProps<CanvasNode>) {
         lineClassName="!border-accent/40"
         handleClassName="!w-2.5 !h-2.5 !bg-accent/60 !border-accent"
       />
-      <Handle type="target" position={Position.Left} className="!w-2 !h-2 !bg-accent/50 !border-0" />
-      <Handle type="source" position={Position.Right} className="!w-2 !h-2 !bg-accent/50 !border-0" />
+      <Handle type="target" position={Position.Left} className="!w-2 !h-2 !bg-accent/50 !border-0" aria-label="Connect to this card" />
+      <Handle type="source" position={Position.Right} className="!w-2 !h-2 !bg-accent/50 !border-0" aria-label="Connect from this card" />
 
       <div
         className={cn(
