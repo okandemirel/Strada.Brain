@@ -90,7 +90,9 @@ export class SelfVerification {
       if (
         executedTool.toolName === "unity_verify_change" ||
         executedTool.toolName === "unity_compile_status" ||
-        executedTool.toolName === "unity_compile_wait"
+        executedTool.toolName === "unity_compile_wait" ||
+        executedTool.toolName === "unity_console_read" ||
+        executedTool.toolName === "unity_console_analyze"
       ) {
         const content = typeof result.content === "string" ? result.content : "";
         this.parseUnityConsoleErrors(content);

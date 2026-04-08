@@ -22,12 +22,14 @@ export const MUTATION_TOOLS: ReadonlySet<string> = new Set([
 /** Tools that verify correctness. */
 export const VERIFY_TOOLS: ReadonlySet<string> = new Set([
   "dotnet_build", "dotnet_test",
+  "csharp_symbol_search",
   "unity_verify_change", "unity_compile_status", "unity_compile_wait",
   "unity_fix_compile_loop", "unity_test_run", "unity_test_results",
+  "unity_playmode_test", "unity_editmode_test",
 ]);
 
 const VERIFY_TOOL_NAME_RE =
-  /(?:^|[_-])(build|test|check|verify|lint|typecheck|compile|playmode|editmode|smoke)(?:$|[_-])/iu;
+  /(?:^|[_-])(build|test|check|verify|lint|typecheck|compile|playmode|editmode|smoke|console)(?:$|[_-])/iu;
 
 /** File extensions that affect .NET compilation. */
 export const COMPILABLE_EXT: ReadonlySet<string> = new Set([
