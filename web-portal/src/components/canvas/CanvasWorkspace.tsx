@@ -98,7 +98,7 @@ function CanvasWorkspaceInner() {
     if (pendingMutationCount === 0) return
 
     if (pendingShapes.length > 0) {
-      let placementIdx = shapes.length
+      let placementIdx = useCanvasStore.getState().shapes.length
       for (const raw of pendingShapes) {
         const normalized = normalizeCanvasIncomingShape(raw)
         if (!normalized) continue
@@ -253,7 +253,10 @@ function CanvasWorkspaceInner() {
 
   const getViewportCenter = useCallback(() => {
     const vp = getViewport()
-    return { x: -vp.x / vp.zoom + 400, y: -vp.y / vp.zoom + 300 }
+    const container = document.querySelector('.react-flow')
+    const w = container?.clientWidth ?? 800
+    const h = container?.clientHeight ?? 600
+    return { x: -vp.x / vp.zoom + w / 2, y: -vp.y / vp.zoom + h / 2 }
   }, [getViewport])
 
   /* ── Connection handler ──────────────────────────────────────── */

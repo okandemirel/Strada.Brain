@@ -108,7 +108,7 @@ export function normalizeCanvasIncomingShape(shape: RawCanvasShape): CanvasShape
         w: asNumber(props.w, dims.w),
         h: asNumber(props.h, dims.h),
         content: asString(props.content, ''),
-        color: asString(props.color, '#7dd3fc'),
+        color: asString(props.color, '#fbbf24'),
       }, source)
       break
 
@@ -208,8 +208,7 @@ export function normalizeCanvasIncomingShape(shape: RawCanvasShape): CanvasShape
       break
 
     default:
-      normalizedProps = withSource(props, source)
-      break
+      return null
   }
 
   return {

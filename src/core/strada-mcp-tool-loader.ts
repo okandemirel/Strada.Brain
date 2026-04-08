@@ -537,10 +537,12 @@ export class StradaMcpRuntime {
   }
 
   /** On-demand reconnect attempt for bridge-dependent tool calls. */
+  private lazyReconnectInProgress = false;
   async tryLazyReconnect(): Promise<boolean> {
-    if (this.bridgeState !== "dormant" || !this.bridgeManager || this.bridgeConnected) {
+    if (this.bridgeState !== "dormant" || !this.bridgeManager || this.bridgeConnected || this.lazyReconnectInProgress) {
       return this.bridgeConnected;
     }
+    this.lazyReconnectInProgress = true;
     try {
       getLogger().info("Attempting on-demand bridge reconnect");
       this.syncBridgeState(false, "connecting", "Reconnecting on demand...");
@@ -554,7 +556,10 @@ export class StradaMcpRuntime {
       const msg = err instanceof Error ? err.message : String(err);
       this.syncBridgeState(false, "dormant", "Unity Editor not running. Will auto-connect when available.");
       getLogger().debug("On-demand bridge reconnect failed", { error: msg });
+      this.scheduleDormantProbe();
       return false;
+    } finally {
+      this.lazyReconnectInProgress = false;
     }
   }
 
@@ -974,7 +979,10 @@ class StradaMcpToolAdapter implements ITool {
   async execute(input: Record<string, unknown>, context: ToolContext): Promise<ToolExecutionResult> {
     // Lazy reconnect: if bridge is dormant and this tool needs it, try once before failing
     if (this.tool.metadata?.requiresBridge && this.runtime?.isDormant()) {
-      await this.runtime.tryLazyReconnect();
+      const connected = await this.runtime.tryLazyReconnect();
+      if (!connected) {
+        return { content: "Unity bridge unavailable. Start Unity Editor to use this tool.", isError: true };
+      }
     }
     try {
       const result = await this.tool.execute(

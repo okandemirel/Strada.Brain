@@ -101,6 +101,12 @@ export function useCanvasBridge() {
         if (change.type === 'select') {
           if (change.selected) {
             selectShape(change.id, true)
+          } else {
+            // Remove specific node from selection without wiping editing/connecting state
+            const current = useCanvasStore.getState().selectedIds
+            if (current.includes(change.id)) {
+              useCanvasStore.setState({ selectedIds: current.filter((sid) => sid !== change.id) })
+            }
           }
           continue
         }

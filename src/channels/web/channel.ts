@@ -970,7 +970,14 @@ export class WebChannel
       case "monitor:approve_gate":
       case "monitor:reject_gate":
       // Canvas commands from frontend (Phase 4)
-      case "canvas:user_shapes":
+      case "canvas:user_shapes": {
+        const snapshot = typeof data.snapshot === "string" ? data.snapshot : "";
+        if (snapshot.length > 256_000) break;
+        if (this.workspaceBusEmitter) {
+          this.workspaceBusEmitter(data.type as string, data);
+        }
+        break;
+      }
       case "canvas:save":
       // Code commands from frontend (Phase 5)
       case "code:accept_diff":

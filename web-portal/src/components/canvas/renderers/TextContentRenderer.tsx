@@ -4,7 +4,9 @@ export default function TextContentRenderer({ type, props }: RendererProps) {
   const title = String(props.title ?? props.name ?? '')
   const content = String(props.content ?? props.text ?? props.description ?? '')
   const url = type === 'link-card' ? String(props.url ?? '') : undefined
-  const progress = type === 'goal-summary' ? Number(props.progress ?? 0) : undefined
+  const progress = type === 'goal-summary' && typeof props.taskCount === 'number' && props.taskCount > 0
+    ? ((Number(props.completedCount ?? 0) / props.taskCount) * 100)
+    : undefined
 
   return (
     <div className="space-y-1.5">
