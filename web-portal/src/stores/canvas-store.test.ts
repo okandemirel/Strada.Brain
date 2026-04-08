@@ -166,4 +166,337 @@ describe('useCanvasStore', () => {
     store.setLayoutMode('flow')
     expect(useCanvasStore.getState().userLayoutOverride).toBe(true)
   })
+
+  // ── Helpers ──────────────────────────────────────────────────────────────
+
+  function makeShape(id: string, x = 0, y = 0): import('./canvas-store').CanvasShape & { type: string; x: number; y: number; w: number; h: number } {
+    return { id, type: 'code-block', x, y, w: 200, h: 100, props: {} }
+  }
+
+  // ── selectShape ───────────────────────────────────────────────────────────
+
+  describe('selectShape', () => {
+    it('selects a single shape, replacing prior selection', () => {
+      useCanvasStore.getState().addShape(makeShape('a'))
+      useCanvasStore.getState().addShape(makeShape('b'))
+      useCanvasStore.getState().selectShape('a')
+      useCanvasStore.getState().selectShape('b')
+      expect(useCanvasStore.getState().selectedIds).toEqual(['b'])
+    })
+
+    it('adds to selection in multi-select mode', () => {
+      useCanvasStore.getState().addShape(makeShape('a'))
+      useCanvasStore.getState().addShape(makeShape('b'))
+      useCanvasStore.getState().selectShape('a')
+      useCanvasStore.getState().selectShape('b', true)
+      expect(useCanvasStore.getState().selectedIds).toEqual(['a', 'b'])
+    })
+
+    it('deselects an already-selected shape in multi-select mode', () => {
+      useCanvasStore.getState().addShape(makeShape('a'))
+      useCanvasStore.getState().selectShape('a')
+      useCanvasStore.getState().selectShape('a', true)
+      expect(useCanvasStore.getState().selectedIds).toEqual([])
+    })
+  })
+
+  // ── deselectAll ───────────────────────────────────────────────────────────
+
+  describe('deselectAll', () => {
+    it('clears selectedIds', () => {
+      useCanvasStore.getState().addShape(makeShape('a'))
+      useCanvasStore.getState().selectShape('a')
+      useCanvasStore.getState().deselectAll()
+      expect(useCanvasStore.getState().selectedIds).toEqual([])
+    })
+
+    it('clears editingShapeId and connectingFromId', () => {
+      useCanvasStore.getState().setEditingShape('a')
+      useCanvasStore.getState().startConnecting('b')
+      useCanvasStore.getState().deselectAll()
+      const s = useCanvasStore.getState()
+      expect(s.editingShapeId).toBeNull()
+      expect(s.connectingFromId).toBeNull()
+    })
+  })
+
+  // ── selectAll ────────────────────────────────────────────────────────────
+
+  describe('selectAll', () => {
+    it('selects every shape on the canvas', () => {
+      useCanvasStore.getState().addShape(makeShape('a'))
+      useCanvasStore.getState().addShape(makeShape('b'))
+      useCanvasStore.getState().addShape(makeShape('c'))
+      useCanvasStore.getState().selectAll()
+      expect(useCanvasStore.getState().selectedIds).toEqual(['a', 'b', 'c'])
+    })
+
+    it('returns empty selection when canvas is empty', () => {
+      useCanvasStore.getState().selectAll()
+      expect(useCanvasStore.getState().selectedIds).toEqual([])
+    })
+  })
+
+  // ── deleteSelected ────────────────────────────────────────────────────────
+
+  describe('deleteSelected', () => {
+    it('removes selected shapes from the canvas', () => {
+      useCanvasStore.getState().addShape(makeShape('a'))
+      useCanvasStore.getState().addShape(makeShape('b'))
+      useCanvasStore.getState().selectShape('a')
+      useCanvasStore.getState().deleteSelected()
+      const ids = useCanvasStore.getState().shapes.map((s) => s.id)
+      expect(ids).toEqual(['b'])
+    })
+
+    it('clears selectedIds after deletion', () => {
+      useCanvasStore.getState().addShape(makeShape('a'))
+      useCanvasStore.getState().selectShape('a')
+      useCanvasStore.getState().deleteSelected()
+      expect(useCanvasStore.getState().selectedIds).toEqual([])
+    })
+
+    it('also removes connections touching deleted shapes', () => {
+      useCanvasStore.getState().addShape(makeShape('a'))
+      useCanvasStore.getState().addShape(makeShape('b'))
+      useCanvasStore.getState().addShape(makeShape('c'))
+      useCanvasStore.getState().addConnection({ id: 'c1', from: 'a', to: 'b' })
+      useCanvasStore.getState().addConnection({ id: 'c2', from: 'b', to: 'c' })
+      useCanvasStore.getState().selectShape('a')
+      useCanvasStore.getState().deleteSelected()
+      const connIds = useCanvasStore.getState().connections.map((c) => c.id)
+      // c1 touched 'a', c2 did not — only c2 survives
+      expect(connIds).toEqual(['c2'])
+    })
+
+    it('does nothing when nothing is selected', () => {
+      useCanvasStore.getState().addShape(makeShape('a'))
+      useCanvasStore.getState().deleteSelected()
+      expect(useCanvasStore.getState().shapes).toHaveLength(1)
+    })
+  })
+
+  // ── duplicateSelected ─────────────────────────────────────────────────────
+
+  describe('duplicateSelected', () => {
+    it('creates a copy with +20px offset on both axes', () => {
+      useCanvasStore.getState().addShape(makeShape('a', 100, 50))
+      useCanvasStore.getState().selectShape('a')
+      useCanvasStore.getState().duplicateSelected()
+      const shapes = useCanvasStore.getState().shapes
+      expect(shapes).toHaveLength(2)
+      const dup = shapes[1]!
+      expect(dup.x).toBe(120)
+      expect(dup.y).toBe(70)
+    })
+
+    it('selects only the newly duplicated shape(s)', () => {
+      useCanvasStore.getState().addShape(makeShape('a'))
+      useCanvasStore.getState().selectShape('a')
+      useCanvasStore.getState().duplicateSelected()
+      const selectedIds = useCanvasStore.getState().selectedIds
+      expect(selectedIds).toHaveLength(1)
+      expect(selectedIds[0]).not.toBe('a')
+    })
+
+    it('marks duplicated shapes as user-sourced', () => {
+      useCanvasStore.getState().addShape({ ...makeShape('a'), source: 'agent' } as never)
+      useCanvasStore.getState().selectShape('a')
+      useCanvasStore.getState().duplicateSelected()
+      const dup = useCanvasStore.getState().shapes[1]!
+      expect((dup as { source?: string }).source).toBe('user')
+    })
+
+    it('does nothing when nothing is selected', () => {
+      useCanvasStore.getState().addShape(makeShape('a'))
+      useCanvasStore.getState().duplicateSelected()
+      expect(useCanvasStore.getState().shapes).toHaveLength(1)
+    })
+  })
+
+  // ── bringToFront / sendToBack ─────────────────────────────────────────────
+
+  describe('bringToFront', () => {
+    it('moves shape to the end of the array (highest z-order)', () => {
+      useCanvasStore.getState().addShape(makeShape('a'))
+      useCanvasStore.getState().addShape(makeShape('b'))
+      useCanvasStore.getState().addShape(makeShape('c'))
+      useCanvasStore.getState().bringToFront('a')
+      const ids = useCanvasStore.getState().shapes.map((s) => s.id)
+      expect(ids).toEqual(['b', 'c', 'a'])
+    })
+
+    it('is a no-op when the shape is already at the front', () => {
+      useCanvasStore.getState().addShape(makeShape('a'))
+      useCanvasStore.getState().addShape(makeShape('b'))
+      const before = useCanvasStore.getState().shapes.map((s) => s.id)
+      useCanvasStore.getState().bringToFront('b')
+      expect(useCanvasStore.getState().shapes.map((s) => s.id)).toEqual(before)
+    })
+  })
+
+  describe('sendToBack', () => {
+    it('moves shape to the beginning of the array (lowest z-order)', () => {
+      useCanvasStore.getState().addShape(makeShape('a'))
+      useCanvasStore.getState().addShape(makeShape('b'))
+      useCanvasStore.getState().addShape(makeShape('c'))
+      useCanvasStore.getState().sendToBack('c')
+      const ids = useCanvasStore.getState().shapes.map((s) => s.id)
+      expect(ids).toEqual(['c', 'a', 'b'])
+    })
+
+    it('is a no-op when the shape is already at the back', () => {
+      useCanvasStore.getState().addShape(makeShape('a'))
+      useCanvasStore.getState().addShape(makeShape('b'))
+      const before = useCanvasStore.getState().shapes.map((s) => s.id)
+      useCanvasStore.getState().sendToBack('a')
+      expect(useCanvasStore.getState().shapes.map((s) => s.id)).toEqual(before)
+    })
+  })
+
+  // ── pushUndo / undo / redo ────────────────────────────────────────────────
+
+  describe('undo / redo / pushUndo', () => {
+    it('pushUndo snapshots current state onto the undo stack', () => {
+      useCanvasStore.getState().addShape(makeShape('a'))
+      useCanvasStore.getState().pushUndo()
+      expect(useCanvasStore.getState().undoStack).toHaveLength(1)
+    })
+
+    it('undo restores shapes to the previous snapshot', () => {
+      useCanvasStore.getState().addShape(makeShape('a'))
+      useCanvasStore.getState().pushUndo()
+      useCanvasStore.getState().addShape(makeShape('b'))
+      useCanvasStore.getState().undo()
+      const ids = useCanvasStore.getState().shapes.map((s) => s.id)
+      expect(ids).toEqual(['a'])
+    })
+
+    it('undo clears selectedIds and editingShapeId', () => {
+      useCanvasStore.getState().addShape(makeShape('a'))
+      useCanvasStore.getState().pushUndo()
+      useCanvasStore.getState().selectShape('a')
+      useCanvasStore.getState().setEditingShape('a')
+      useCanvasStore.getState().undo()
+      expect(useCanvasStore.getState().selectedIds).toEqual([])
+      expect(useCanvasStore.getState().editingShapeId).toBeNull()
+    })
+
+    it('redo restores shapes after an undo', () => {
+      useCanvasStore.getState().addShape(makeShape('a'))
+      useCanvasStore.getState().pushUndo()
+      useCanvasStore.getState().addShape(makeShape('b'))
+      useCanvasStore.getState().undo()
+      useCanvasStore.getState().redo()
+      const ids = useCanvasStore.getState().shapes.map((s) => s.id)
+      expect(ids).toEqual(['a', 'b'])
+    })
+
+    it('pushUndo clears the redo stack', () => {
+      useCanvasStore.getState().addShape(makeShape('a'))
+      useCanvasStore.getState().pushUndo()
+      useCanvasStore.getState().addShape(makeShape('b'))
+      useCanvasStore.getState().undo()
+      // redo stack now has one entry; a new pushUndo should clear it
+      useCanvasStore.getState().pushUndo()
+      expect(useCanvasStore.getState().redoStack).toHaveLength(0)
+    })
+
+    it('undo is a no-op when the stack is empty', () => {
+      useCanvasStore.getState().addShape(makeShape('a'))
+      useCanvasStore.getState().undo()
+      expect(useCanvasStore.getState().shapes).toHaveLength(1)
+    })
+
+    it('redo is a no-op when the stack is empty', () => {
+      useCanvasStore.getState().addShape(makeShape('a'))
+      useCanvasStore.getState().redo()
+      expect(useCanvasStore.getState().shapes).toHaveLength(1)
+    })
+  })
+
+  // ── toggleGridSnap ────────────────────────────────────────────────────────
+
+  describe('toggleGridSnap', () => {
+    it('starts as false', () => {
+      expect(useCanvasStore.getState().gridSnap).toBe(false)
+    })
+
+    it('toggles gridSnap from false to true', () => {
+      useCanvasStore.getState().toggleGridSnap()
+      expect(useCanvasStore.getState().gridSnap).toBe(true)
+    })
+
+    it('toggles gridSnap back to false on second call', () => {
+      useCanvasStore.getState().toggleGridSnap()
+      useCanvasStore.getState().toggleGridSnap()
+      expect(useCanvasStore.getState().gridSnap).toBe(false)
+    })
+  })
+
+  // ── addConnection / removeConnections ─────────────────────────────────────
+
+  describe('addConnection / removeConnections', () => {
+    it('adds a connection between two shapes', () => {
+      useCanvasStore.getState().addConnection({ id: 'c1', from: 'a', to: 'b' })
+      expect(useCanvasStore.getState().connections).toHaveLength(1)
+      expect(useCanvasStore.getState().connections[0]).toMatchObject({ id: 'c1', from: 'a', to: 'b' })
+    })
+
+    it('removes connections by id', () => {
+      useCanvasStore.getState().addConnection({ id: 'c1', from: 'a', to: 'b' })
+      useCanvasStore.getState().addConnection({ id: 'c2', from: 'b', to: 'c' })
+      useCanvasStore.getState().removeConnections(['c1'])
+      const ids = useCanvasStore.getState().connections.map((c) => c.id)
+      expect(ids).toEqual(['c2'])
+    })
+
+    it('is a no-op when removing a non-existent connection id', () => {
+      useCanvasStore.getState().addConnection({ id: 'c1', from: 'a', to: 'b' })
+      useCanvasStore.getState().removeConnections(['nope'])
+      expect(useCanvasStore.getState().connections).toHaveLength(1)
+    })
+  })
+
+  // ── startConnecting / finishConnecting / cancelConnecting ─────────────────
+
+  describe('connection drawing flow', () => {
+    it('startConnecting sets connectingFromId', () => {
+      useCanvasStore.getState().startConnecting('shape-a')
+      expect(useCanvasStore.getState().connectingFromId).toBe('shape-a')
+    })
+
+    it('finishConnecting creates a new connection and clears connectingFromId', () => {
+      useCanvasStore.getState().startConnecting('shape-a')
+      useCanvasStore.getState().finishConnecting('shape-b')
+      const s = useCanvasStore.getState()
+      expect(s.connectingFromId).toBeNull()
+      expect(s.connections).toHaveLength(1)
+      expect(s.connections[0]).toMatchObject({ from: 'shape-a', to: 'shape-b' })
+    })
+
+    it('finishConnecting does not create a duplicate connection', () => {
+      useCanvasStore.getState().startConnecting('shape-a')
+      useCanvasStore.getState().finishConnecting('shape-b')
+      useCanvasStore.getState().startConnecting('shape-a')
+      useCanvasStore.getState().finishConnecting('shape-b')
+      expect(useCanvasStore.getState().connections).toHaveLength(1)
+    })
+
+    it('finishConnecting with the same source and target cancels the connection', () => {
+      useCanvasStore.getState().startConnecting('shape-a')
+      useCanvasStore.getState().finishConnecting('shape-a')
+      const s = useCanvasStore.getState()
+      expect(s.connectingFromId).toBeNull()
+      expect(s.connections).toHaveLength(0)
+    })
+
+    it('cancelConnecting clears connectingFromId without creating a connection', () => {
+      useCanvasStore.getState().startConnecting('shape-a')
+      useCanvasStore.getState().cancelConnecting()
+      const s = useCanvasStore.getState()
+      expect(s.connectingFromId).toBeNull()
+      expect(s.connections).toHaveLength(0)
+    })
+  })
 })
