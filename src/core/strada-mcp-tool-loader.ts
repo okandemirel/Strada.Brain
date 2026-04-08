@@ -231,8 +231,10 @@ interface ToolRegistryLike {
 
 const STRADA_MCP_PACKAGE_NAME = "strada-mcp";
 const DEFAULT_BRIDGE_UNAVAILABLE_REASON = "Requires a live Unity bridge connection.";
-/** Connection refused means Unity Editor is not running — no point retrying. */
+/** Connection refused means Unity Editor is not running — switch to slow probe. */
 const CONN_REFUSED_RE = /ECONNREFUSED|connection\s+refused/i;
+/** Slow probe interval while dormant — check if Unity became available. */
+const DORMANT_PROBE_INTERVAL_MS = 60_000;
 
 function mapCategory(category: StradaMcpToolMetadata["category"]): BrainToolCategory {
   switch (category) {
@@ -476,13 +478,14 @@ export class StradaMcpRuntime {
     if (!this.bridgeConfigured || !this.bridgeManager || this.bridgeConnected) {
       return;
     }
-    // Unity Editor not running — go dormant instead of retrying
+    // Unity Editor not running — switch to slow probe instead of aggressive retry
     if (lastError && CONN_REFUSED_RE.test(lastError)) {
       getLogger().info(
-        "Unity Editor not running — bridge dormant. Restart the Brain to retry.",
+        "Unity Editor not running — switching to slow probe (60s interval).",
         { port: this.source.path },
       );
-      this.syncBridgeState(false, "dormant", "Unity Editor not running. Restart to retry.");
+      this.syncBridgeState(false, "dormant", "Unity Editor not running. Will auto-connect when available.");
+      this.scheduleDormantProbe();
       return;
     }
     this.clearReconnectTimer();
@@ -511,6 +514,53 @@ export class StradaMcpRuntime {
         this.scheduleReconnect(msg);
       }
     }, delay);
+  }
+
+  /** Slow periodic probe while dormant — auto-connects when Unity becomes available. */
+  private scheduleDormantProbe(): void {
+    this.clearReconnectTimer();
+    this.reconnectTimerId = setTimeout(async () => {
+      this.reconnectTimerId = null;
+      if (this.bridgeConnected || !this.bridgeManager) return;
+      try {
+        await this.bridgeManager.connect();
+        await this.refreshBridgeCapabilities();
+        this.reconnectAttempt = 0;
+        getLogger().info("Unity bridge connected (dormant probe succeeded)");
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        getLogger().debug("Unity bridge dormant probe — still waiting", { error: msg });
+        this.syncBridgeState(false, "dormant", "Unity Editor not running. Will auto-connect when available.");
+        this.scheduleDormantProbe();
+      }
+    }, DORMANT_PROBE_INTERVAL_MS);
+  }
+
+  /** On-demand reconnect attempt for bridge-dependent tool calls. */
+  async tryLazyReconnect(): Promise<boolean> {
+    if (this.bridgeState !== "dormant" || !this.bridgeManager || this.bridgeConnected) {
+      return this.bridgeConnected;
+    }
+    try {
+      getLogger().info("Attempting on-demand bridge reconnect");
+      this.syncBridgeState(false, "connecting", "Reconnecting on demand...");
+      await this.bridgeManager.connect();
+      await this.refreshBridgeCapabilities();
+      this.reconnectAttempt = 0;
+      this.clearReconnectTimer();
+      getLogger().info("On-demand bridge reconnect succeeded");
+      return true;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.syncBridgeState(false, "dormant", "Unity Editor not running. Will auto-connect when available.");
+      getLogger().debug("On-demand bridge reconnect failed", { error: msg });
+      return false;
+    }
+  }
+
+  /** Check if bridge is in dormant state. */
+  isDormant(): boolean {
+    return this.bridgeState === "dormant";
   }
 
   private clearReconnectTimer(): void {
@@ -922,6 +972,10 @@ class StradaMcpToolAdapter implements ITool {
   }
 
   async execute(input: Record<string, unknown>, context: ToolContext): Promise<ToolExecutionResult> {
+    // Lazy reconnect: if bridge is dormant and this tool needs it, try once before failing
+    if (this.tool.metadata?.requiresBridge && this.runtime?.isDormant()) {
+      await this.runtime.tryLazyReconnect();
+    }
     try {
       const result = await this.tool.execute(
         input,
