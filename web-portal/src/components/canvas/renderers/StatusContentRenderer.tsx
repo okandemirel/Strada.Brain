@@ -25,7 +25,7 @@ export default function StatusContentRenderer({ type, props }: RendererProps) {
         {status && <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded-full ${colorClass}`}>{status}</span>}
         {priority && priority !== 'undefined' && <span className="text-[9px] text-text-tertiary">{priority}</span>}
       </div>
-      {type === 'error-card' && props.stack && (
+      {type === 'error-card' && props.stack != null && (
         <pre className="text-[9px] font-mono text-red-300/70 line-clamp-3 overflow-hidden">{String(props.stack)}</pre>
       )}
       {type === 'test-result' && (

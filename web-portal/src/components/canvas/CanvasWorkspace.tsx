@@ -286,7 +286,7 @@ function CanvasWorkspaceInner() {
 
   /* ── Context menu ────────────────────────────────────────────── */
 
-  const handlePaneContextMenu = useCallback((event: React.MouseEvent) => {
+  const handlePaneContextMenu = useCallback((event: MouseEvent | React.MouseEvent) => {
     event.preventDefault()
     setContextMenu({ x: event.clientX, y: event.clientY })
   }, [])

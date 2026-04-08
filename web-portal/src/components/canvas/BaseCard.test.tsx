@@ -32,6 +32,10 @@ const defaultProps = {
   positionAbsoluteY: 0,
   isConnectable: true,
   zIndex: 1,
+  draggable: true,
+  dragging: false,
+  selectable: true,
+  deletable: true,
 }
 
 describe('BaseCard', () => {

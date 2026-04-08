@@ -8,6 +8,10 @@ const makeNode = (id: string, w = 240, h = 130, data: Record<string, unknown> = 
   position: { x: 0, y: 0 },
   style: { width: w, height: h },
   data: { cardType: 'task-card', props: {}, ...data },
+  draggable: true,
+  dragging: false,
+  selectable: true,
+  deletable: true,
 })
 
 const makeEdge = (id: string, source: string, target: string): Edge => ({
