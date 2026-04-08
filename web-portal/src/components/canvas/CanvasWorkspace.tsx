@@ -19,6 +19,7 @@ import { normalizeCanvasIncomingShape } from './canvas-shape-normalizer'
 import { getDefaultDimensions, type ResolvedShape } from './canvas-types'
 import { useCanvasBridge, shapesToNodes, connectionsToEdges } from '../../hooks/use-canvas-bridge'
 import { useCanvasShortcuts } from '../../hooks/use-canvas-shortcuts'
+import { useWS } from '../../hooks/useWS'
 import {
   applyLayout,
   canvasShapeToResolved,
@@ -83,6 +84,9 @@ function CanvasWorkspaceInner() {
   const [loading, setLoading] = useState(false)
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null)
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const prevShapeCountRef = useRef(0)
+
+  const { sendRawJSON } = useWS()
 
   const pendingMutationCount =
     pendingShapes.length + pendingUpdates.length + pendingRemovals.length +
@@ -233,6 +237,21 @@ function CanvasWorkspaceInner() {
     return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current) }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isDirty, sessionId, shapes])
+
+  /* ── Emit canvas:user_shapes when user adds shapes ───────────── */
+
+  useEffect(() => {
+    const prevCount = prevShapeCountRef.current
+    prevShapeCountRef.current = shapes.length
+    if (shapes.length <= prevCount) return
+
+    const newUserShapes = shapes.slice(prevCount).filter((s) => s.source === 'user')
+    if (newUserShapes.length === 0) return
+
+    sendRawJSON({ type: 'canvas:user_shapes', snapshot: JSON.stringify(newUserShapes) })
+  // sendRawJSON is stable (useCallback) — omitting it avoids spurious re-runs
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shapes.length])
 
   /* ── Connection handler ──────────────────────────────────────── */
 
