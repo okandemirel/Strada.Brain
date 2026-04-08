@@ -1,6 +1,8 @@
 import { memo } from 'react'
 import { getBezierPath, type EdgeProps } from '@xyflow/react'
 
+const GRADIENT_ID = 'canvas-edge-gradient'
+
 function GradientBezierEdgeInner({
   id, sourceX, sourceY, targetX, targetY,
   sourcePosition, targetPosition, data,
@@ -10,7 +12,7 @@ function GradientBezierEdgeInner({
     sourcePosition, targetPosition,
   })
 
-  const gradientId = `edge-gradient-${id}`
+  const gradientId = GRADIENT_ID
   const label = data?.label as string | undefined
 
   return (

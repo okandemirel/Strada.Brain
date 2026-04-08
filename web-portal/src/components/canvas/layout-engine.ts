@@ -2,9 +2,7 @@ import dagre from '@dagrejs/dagre'
 import type { Node, Edge } from '@xyflow/react'
 import type { CanvasShape } from '../../stores/canvas-store'
 import type { DagState, MonitorTask } from '../../stores/monitor-store'
-import { getDefaultDimensions, type ResolvedShape, type CanvasConnection } from './canvas-types'
-
-type LayoutMode = 'flow' | 'kanban' | 'freeform'
+import { getDefaultDimensions, type ResolvedShape, type CanvasConnection, type LayoutMode } from './canvas-types'
 
 const RANK_SEP = 200
 const NODE_SEP = 80
@@ -62,14 +60,15 @@ function applyKanbanLayout(nodes: Node[]): Node[] {
   let colIndex = 0
   for (const colName of KANBAN_COLUMNS) {
     const colNodes = columns.get(colName)
-    if (!colNodes?.length) continue
-    for (let row = 0; row < colNodes.length; row++) {
-      result.push({
-        ...colNodes[row]!,
-        position: { x: 80 + colIndex * KANBAN_COL_WIDTH, y: 80 + row * KANBAN_ROW_HEIGHT },
-      })
+    if (colNodes?.length) {
+      for (let row = 0; row < colNodes.length; row++) {
+        result.push({
+          ...colNodes[row]!,
+          position: { x: 80 + colIndex * KANBAN_COL_WIDTH, y: 80 + row * KANBAN_ROW_HEIGHT },
+        })
+      }
     }
-    colIndex++
+    colIndex++ // always advance, even for empty columns
   }
 
   const placed = new Set(result.map((n) => n.id))
@@ -213,7 +212,10 @@ export function buildMonitorFallbackShapes(
     .filter((t) => (incoming.get(t.id)?.size ?? 0) === 0)
     .map((t) => t.id)
   const depth = new Map<string, number>(queue.map((id) => [id, 0]))
-  while (queue.length > 0) {
+  const MAX_BFS_ITERATIONS = scopedTasks.length * scopedTasks.length + scopedTasks.length
+  let bfsIterations = 0
+  while (queue.length > 0 && bfsIterations < MAX_BFS_ITERATIONS) {
+    bfsIterations++
     const cur = queue.shift()!
     const curD = depth.get(cur) ?? 0
     for (const child of outgoing.get(cur) ?? []) {

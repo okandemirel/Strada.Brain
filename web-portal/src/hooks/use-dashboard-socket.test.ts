@@ -193,8 +193,8 @@ describe('dispatchWorkspaceMessage', () => {
         id: 'shape-4',
         type: 'diagram-node',
         props: {
-          w: 220,
-          h: 120,
+          w: 200,
+          h: 100,
           label: 'Updated',
           nodeType: 'diagram',
           status: 'active',

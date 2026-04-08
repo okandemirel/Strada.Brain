@@ -1,5 +1,6 @@
 import type { CanvasShape } from '../../stores/canvas-store'
 import type { CanvasConnection } from './canvas-types'
+import { getDefaultDimensions } from './canvas-types'
 
 type RawCanvasShape = {
   type?: string
@@ -48,13 +49,16 @@ export function normalizeCanvasIncomingShape(shape: RawCanvasShape): CanvasShape
   let type = shape.type
   let normalizedProps: Record<string, unknown>
 
+  const dims = getDefaultDimensions(shape.type ?? 'note-block')
+
   switch (shape.type) {
     case 'diagram-node':
       if (typeof props.content === 'string' && !('label' in props)) {
         type = 'code-block'
+        const codeDims = getDefaultDimensions('code-block')
         normalizedProps = withSource({
-          w: asNumber(props.w, 420),
-          h: asNumber(props.h, 260),
+          w: asNumber(props.w, codeDims.w),
+          h: asNumber(props.h, codeDims.h),
           code: props.content,
           language: asString(props.language, 'mermaid'),
           title: asString(props.title, 'Generated diagram'),
@@ -62,8 +66,8 @@ export function normalizeCanvasIncomingShape(shape: RawCanvasShape): CanvasShape
         break
       }
       normalizedProps = withSource({
-        w: asNumber(props.w, 220),
-        h: asNumber(props.h, 120),
+        w: asNumber(props.w, dims.w),
+        h: asNumber(props.h, dims.h),
         label: asString(props.label, asString(props.title, 'Diagram')),
         nodeType: asString(props.nodeType, 'diagram'),
         status: asString(props.status, 'active'),
@@ -72,8 +76,8 @@ export function normalizeCanvasIncomingShape(shape: RawCanvasShape): CanvasShape
 
     case 'diff-block':
       normalizedProps = withSource({
-        w: asNumber(props.w, 420),
-        h: asNumber(props.h, 260),
+        w: asNumber(props.w, dims.w),
+        h: asNumber(props.h, dims.h),
         diff: asString(props.diff, asString(props.content, '')),
         filePath: asString(props.filePath, asString(props.title, 'Generated diff')),
       }, source)
@@ -81,8 +85,8 @@ export function normalizeCanvasIncomingShape(shape: RawCanvasShape): CanvasShape
 
     case 'code-block':
       normalizedProps = withSource({
-        w: asNumber(props.w, 420),
-        h: asNumber(props.h, 260),
+        w: asNumber(props.w, dims.w),
+        h: asNumber(props.h, dims.h),
         code: asString(props.code, asString(props.content, '')),
         language: asString(props.language, 'text'),
         title: asString(props.title, 'Snippet'),
@@ -91,8 +95,8 @@ export function normalizeCanvasIncomingShape(shape: RawCanvasShape): CanvasShape
 
     case 'task-card':
       normalizedProps = withSource({
-        w: asNumber(props.w, 220),
-        h: asNumber(props.h, 120),
+        w: asNumber(props.w, dims.w),
+        h: asNumber(props.h, dims.h),
         title: asString(props.title, 'Task'),
         status: asString(props.status, 'pending'),
         priority: asString(props.priority, 'medium'),
@@ -101,8 +105,8 @@ export function normalizeCanvasIncomingShape(shape: RawCanvasShape): CanvasShape
 
     case 'note-block':
       normalizedProps = withSource({
-        w: asNumber(props.w, 320),
-        h: asNumber(props.h, 180),
+        w: asNumber(props.w, dims.w),
+        h: asNumber(props.h, dims.h),
         content: asString(props.content, ''),
         color: asString(props.color, '#7dd3fc'),
       }, source)
@@ -110,8 +114,8 @@ export function normalizeCanvasIncomingShape(shape: RawCanvasShape): CanvasShape
 
     case 'terminal-block':
       normalizedProps = withSource({
-        w: asNumber(props.w, 420),
-        h: asNumber(props.h, 240),
+        w: asNumber(props.w, dims.w),
+        h: asNumber(props.h, dims.h),
         command: asString(props.command, asString(props.title, 'Command')),
         output: asString(props.output, asString(props.content, '')),
       }, source)
@@ -119,8 +123,8 @@ export function normalizeCanvasIncomingShape(shape: RawCanvasShape): CanvasShape
 
     case 'file-card':
       normalizedProps = withSource({
-        w: asNumber(props.w, 260),
-        h: asNumber(props.h, 120),
+        w: asNumber(props.w, dims.w),
+        h: asNumber(props.h, dims.h),
         filePath: asString(props.filePath, asString(props.title, 'Unknown file')),
         language: asString(props.language, 'text'),
         lineCount: asNumber(props.lineCount, 0),
@@ -129,8 +133,8 @@ export function normalizeCanvasIncomingShape(shape: RawCanvasShape): CanvasShape
 
     case 'image-block':
       normalizedProps = withSource({
-        w: asNumber(props.w, 280),
-        h: asNumber(props.h, 200),
+        w: asNumber(props.w, dims.w),
+        h: asNumber(props.h, dims.h),
         src: asString(props.src, ''),
         alt: asString(props.alt, 'Image'),
       }, source)
@@ -138,8 +142,8 @@ export function normalizeCanvasIncomingShape(shape: RawCanvasShape): CanvasShape
 
     case 'goal-summary':
       normalizedProps = withSource({
-        w: asNumber(props.w, 340),
-        h: asNumber(props.h, 200),
+        w: asNumber(props.w, dims.w),
+        h: asNumber(props.h, dims.h),
         title: asString(props.title, 'Goal'),
         taskCount: asNumber(props.taskCount, 0),
         completedCount: asNumber(props.completedCount, 0),
@@ -151,8 +155,8 @@ export function normalizeCanvasIncomingShape(shape: RawCanvasShape): CanvasShape
 
     case 'error-card':
       normalizedProps = withSource({
-        w: asNumber(props.w, 400),
-        h: asNumber(props.h, 220),
+        w: asNumber(props.w, dims.w),
+        h: asNumber(props.h, dims.h),
         message: asString(props.message, asString(props.title, 'Error')),
         stack: asString(props.stack, asString(props.content, '')),
         severity: asString(props.severity, 'error'),
@@ -161,8 +165,8 @@ export function normalizeCanvasIncomingShape(shape: RawCanvasShape): CanvasShape
 
     case 'test-result':
       normalizedProps = withSource({
-        w: asNumber(props.w, 300),
-        h: asNumber(props.h, 180),
+        w: asNumber(props.w, dims.w),
+        h: asNumber(props.h, dims.h),
         passed: asNumber(props.passed, 0),
         failed: asNumber(props.failed, 0),
         skipped: asNumber(props.skipped, 0),
@@ -171,20 +175,23 @@ export function normalizeCanvasIncomingShape(shape: RawCanvasShape): CanvasShape
       }, source)
       break
 
-    case 'link-card':
+    case 'link-card': {
+      const rawUrl = asString(props.url, '')
+      const safeUrl = /^https?:\/\//i.test(rawUrl) ? rawUrl : ''
       normalizedProps = withSource({
-        w: asNumber(props.w, 300),
-        h: asNumber(props.h, 120),
-        url: asString(props.url, ''),
+        w: asNumber(props.w, dims.w),
+        h: asNumber(props.h, dims.h),
+        url: safeUrl,
         title: asString(props.title, 'Link'),
         description: asString(props.description, ''),
       }, source)
       break
+    }
 
     case 'metric-card':
       normalizedProps = withSource({
-        w: asNumber(props.w, 200),
-        h: asNumber(props.h, 140),
+        w: asNumber(props.w, dims.w),
+        h: asNumber(props.h, dims.h),
         label: asString(props.label, 'Metric'),
         value: typeof props.value === 'number' ? props.value : asNumber(props.value, 0),
         unit: asString(props.unit, ''),
@@ -194,8 +201,8 @@ export function normalizeCanvasIncomingShape(shape: RawCanvasShape): CanvasShape
 
     case 'connection-arrow':
       normalizedProps = withSource({
-        w: asNumber(props.w, 160),
-        h: asNumber(props.h, 24),
+        w: asNumber(props.w, dims.w),
+        h: asNumber(props.h, dims.h),
         label: asString(props.label, ''),
       }, source)
       break

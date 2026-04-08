@@ -84,20 +84,13 @@ function CanvasWorkspaceInner() {
   const [loading, setLoading] = useState(false)
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null)
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const prevShapeCountRef = useRef(0)
+  const prevShapeIdsRef = useRef(new Set<string>())
 
   const { sendRawJSON } = useWS()
 
   const pendingMutationCount =
     pendingShapes.length + pendingUpdates.length + pendingRemovals.length +
     (pendingViewport ? 1 : 0) + (pendingLayout ? 1 : 0)
-
-  /* ── Viewport center for toolbar ──────────────────────────────── */
-  const viewportCenter = useMemo(() => {
-    const vp = getViewport()
-    return { x: -vp.x / vp.zoom + 400, y: -vp.y / vp.zoom + 300 }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nodes.length])
 
   /* ── Apply pending mutations ──────────────────────────────────── */
 
@@ -241,17 +234,27 @@ function CanvasWorkspaceInner() {
   /* ── Emit canvas:user_shapes when user adds shapes ───────────── */
 
   useEffect(() => {
-    const prevCount = prevShapeCountRef.current
-    prevShapeCountRef.current = shapes.length
-    if (shapes.length <= prevCount) return
+    const currentIds = new Set(shapes.map((s) => s.id))
+    const newUserShapes = shapes.filter(
+      (s) => s.source === 'user' && !prevShapeIdsRef.current.has(s.id),
+    )
+    prevShapeIdsRef.current = currentIds
 
-    const newUserShapes = shapes.slice(prevCount).filter((s) => s.source === 'user')
     if (newUserShapes.length === 0) return
 
-    sendRawJSON({ type: 'canvas:user_shapes', snapshot: JSON.stringify(newUserShapes) })
+    const payload = JSON.stringify(newUserShapes)
+    if (payload.length > 256_000) return // drop oversized snapshots
+    sendRawJSON({ type: 'canvas:user_shapes', snapshot: payload })
   // sendRawJSON is stable (useCallback) — omitting it avoids spurious re-runs
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [shapes.length])
+  }, [shapes])
+
+  /* ── Viewport center computed on demand (no stale closure) ──── */
+
+  const getViewportCenter = useCallback(() => {
+    const vp = getViewport()
+    return { x: -vp.x / vp.zoom + 400, y: -vp.y / vp.zoom + 300 }
+  }, [getViewport])
 
   /* ── Connection handler ──────────────────────────────────────── */
 
@@ -343,7 +346,7 @@ function CanvasWorkspaceInner() {
     <div className="relative flex h-full w-full flex-col bg-[#060a10]">
       {/* Floating toolbar */}
       <div className="absolute top-3 left-1/2 z-10 -translate-x-1/2">
-        <CanvasToolbar viewportCenter={viewportCenter} />
+        <CanvasToolbar getViewportCenter={getViewportCenter} />
       </div>
 
       <ReactFlow

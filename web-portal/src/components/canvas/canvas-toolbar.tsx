@@ -26,10 +26,10 @@ const btnCls =
   'flex items-center gap-1.5 rounded-lg border border-white/8 bg-white/[0.03] px-2.5 py-1.5 text-[11px] font-medium text-slate-400 transition-all hover:border-white/15 hover:bg-white/[0.07] hover:text-slate-200'
 
 interface CanvasToolbarProps {
-  viewportCenter: { x: number; y: number }
+  getViewportCenter: () => { x: number; y: number }
 }
 
-export default function CanvasToolbar({ viewportCenter }: CanvasToolbarProps) {
+export default function CanvasToolbar({ getViewportCenter }: CanvasToolbarProps) {
   const { t } = useTranslation('canvas')
   const addShape = useCanvasStore((s) => s.addShape)
   const pushUndo = useCanvasStore((s) => s.pushUndo)
@@ -51,12 +51,13 @@ export default function CanvasToolbar({ viewportCenter }: CanvasToolbarProps) {
   ]
 
   const addCardAtCenter = useCallback((type: string): void => {
+    const center = getViewportCenter()
     const dims = getDefaultDimensions(type)
     const shape: ResolvedShape = {
       id: `user-${type}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       type,
-      x: viewportCenter.x - dims.w / 2,
-      y: viewportCenter.y - dims.h / 2,
+      x: center.x - dims.w / 2,
+      y: center.y - dims.h / 2,
       w: dims.w,
       h: dims.h,
       props: getDefaultProps(type),
@@ -66,7 +67,7 @@ export default function CanvasToolbar({ viewportCenter }: CanvasToolbarProps) {
     addShape(shape)
     setDirty(true)
     setShowMore(false)
-  }, [viewportCenter, pushUndo, addShape, setDirty])
+  }, [getViewportCenter, pushUndo, addShape, setDirty])
 
   return (
     <div role="toolbar" aria-label={t('toolbar.label', 'Canvas toolbar')} className="flex items-center gap-1 rounded-xl border border-white/6 bg-black/50 px-2 py-1 backdrop-blur-xl">

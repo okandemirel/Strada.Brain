@@ -87,7 +87,6 @@ export function useCanvasBridge() {
   const connections = useCanvasStore((s) => s.connections)
   const updateShape = useCanvasStore((s) => s.updateShape)
   const selectShape = useCanvasStore((s) => s.selectShape)
-  const deselectAll = useCanvasStore((s) => s.deselectAll)
   const removeShapes = useCanvasStore((s) => s.removeShapes)
   const pushUndo = useCanvasStore((s) => s.pushUndo)
 
@@ -96,30 +95,34 @@ export function useCanvasBridge() {
 
   const onNodesChange = useCallback(
     (changes: NodeChange[]) => {
+      let undoPushed = false
       for (const change of changes) {
+        // Handle select changes (no undo needed)
         if (change.type === 'select') {
           if (change.selected) {
             selectShape(change.id, true)
-          } else {
-            deselectAll()
           }
           continue
         }
-
-        if (change.type === 'remove') {
+        // Push undo once for the entire batch
+        if (!undoPushed) {
           pushUndo()
+          undoPushed = true
+        }
+        if (change.type === 'remove') {
           removeShapes([change.id])
           continue
         }
-
-        const update = nodeChangeToStoreUpdate(change)
-        if (update !== null) {
-          pushUndo()
-          updateShape(update.id, update as Partial<ResolvedShape>)
+        // Position/dimensions updates
+        if (change.type === 'position' && change.dragging === false && change.position) {
+          updateShape(change.id, { x: change.position.x, y: change.position.y })
+        }
+        if (change.type === 'dimensions' && change.resizing === false && change.dimensions) {
+          updateShape(change.id, { w: change.dimensions.width, h: change.dimensions.height })
         }
       }
     },
-    [updateShape, selectShape, deselectAll, removeShapes, pushUndo],
+    [pushUndo, updateShape, selectShape, removeShapes],
   )
 
   const onEdgesChange = useCallback(
