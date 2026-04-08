@@ -131,7 +131,7 @@ describe('handleCanvasRoute', () => {
   // -- PUT /api/canvas/:sessionId -------------------------------------------
 
   it('PUT saves a new canvas state', async () => {
-    const req = fakeReq('PUT', { shapes: '[{"type":"circle"}]', viewport: '{}' })
+    const req = fakeReq('PUT', { shapes: '[{"id":"s1","type":"circle"}]', viewport: '{}' })
     const res = fakeRes()
     handleCanvasRoute('/api/canvas/sess-put', 'PUT', req, res, storage)
 
@@ -142,7 +142,7 @@ describe('handleCanvasRoute', () => {
 
     const saved = storage.getBySession('sess-put')
     expect(saved).not.toBeNull()
-    expect(saved!.shapes).toBe('[{"type":"circle"}]')
+    expect(saved!.shapes).toBe('[{"id":"s1","type":"circle"}]')
   })
 
   it('PUT upserts existing canvas state', async () => {
@@ -155,7 +155,7 @@ describe('handleCanvasRoute', () => {
       updatedAt: now,
     })
 
-    const req = fakeReq('PUT', { id: 'sess-up', shapes: '[{"new":true}]' })
+    const req = fakeReq('PUT', { id: 'sess-up', shapes: '[{"id":"s1","type":"note","new":true}]' })
     const res = fakeRes()
     handleCanvasRoute('/api/canvas/sess-up', 'PUT', req, res, storage)
 
@@ -163,7 +163,7 @@ describe('handleCanvasRoute', () => {
 
     expect(res._status).toBe(200)
     const saved = storage.getBySession('sess-up')
-    expect(saved!.shapes).toBe('[{"new":true}]')
+    expect(saved!.shapes).toBe('[{"id":"s1","type":"note","new":true}]')
   })
 
   it('PUT rejects invalid sessionId', async () => {

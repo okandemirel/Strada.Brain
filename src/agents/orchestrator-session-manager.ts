@@ -92,9 +92,22 @@ export class SessionManager {
   readonly sessionLocks = new Map<string, Promise<void>>();
   private readonly lastPersistTime = new Map<string, number>();
   private readonly deps: SessionManagerDeps;
+  private staleSessionCleanupInterval: ReturnType<typeof setInterval> | undefined;
 
   constructor(deps: SessionManagerDeps) {
     this.deps = deps;
+
+    // Clean up stale sessions on startup and every 6 hours
+    this.cleanupStaleSessions();
+    this.staleSessionCleanupInterval = setInterval(() => this.cleanupStaleSessions(), 6 * 60 * 60 * 1000);
+  }
+
+  /** Stop the periodic stale session cleanup. */
+  dispose(): void {
+    if (this.staleSessionCleanupInterval) {
+      clearInterval(this.staleSessionCleanupInterval);
+      this.staleSessionCleanupInterval = undefined;
+    }
   }
 
   // ── Serialization ─────────────────────────────────────────────────────────

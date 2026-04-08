@@ -24,7 +24,7 @@ interface CodeState {
   activeTab: string | null
   terminalOutput: string[]
   annotations: Annotation[]
-  touchedFiles: Map<string, TouchedStatus>
+  touchedFiles: Record<string, TouchedStatus>
 
   openFile: (tab: CodeTab) => void
   closeFile: (path: string) => void
@@ -43,7 +43,7 @@ const initialState = {
   activeTab: null as string | null,
   terminalOutput: [] as string[],
   annotations: [] as Annotation[],
-  touchedFiles: new Map<string, TouchedStatus>(),
+  touchedFiles: {} as Record<string, TouchedStatus>,
 }
 
 export const useCodeStore = create<CodeState>()((set) => ({
@@ -84,11 +84,9 @@ export const useCodeStore = create<CodeState>()((set) => ({
   clearAnnotations: (path) => set((s) => ({ annotations: s.annotations.filter((a) => a.path !== path) })),
 
   markTouched: (path, status) =>
-    set((s) => {
-      const next = new Map(s.touchedFiles)
-      next.set(path, status)
-      return { touchedFiles: next }
-    }),
+    set((s) => ({
+      touchedFiles: { ...s.touchedFiles, [path]: status },
+    })),
 
   resolveDiff: (path, accepted) =>
     set((s) => ({
@@ -106,5 +104,5 @@ export const useCodeStore = create<CodeState>()((set) => ({
       ),
     })),
 
-  reset: () => set({ tabs: [], activeTab: null, terminalOutput: [], annotations: [], touchedFiles: new Map() }),
+  reset: () => set({ tabs: [], activeTab: null, terminalOutput: [], annotations: [], touchedFiles: {} }),
 }))

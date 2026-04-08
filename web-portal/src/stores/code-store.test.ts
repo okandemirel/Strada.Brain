@@ -94,29 +94,29 @@ describe('useCodeStore — touchedFiles', () => {
 
   it('touchedFiles starts empty', () => {
     const state = useCodeStore.getState()
-    expect(state.touchedFiles.size).toBe(0)
+    expect(Object.keys(state.touchedFiles).length).toBe(0)
   })
 
   it('markTouched sets file status', () => {
     useCodeStore.getState().markTouched('src/index.ts', 'modified')
-    expect(useCodeStore.getState().touchedFiles.get('src/index.ts')).toBe('modified')
+    expect(useCodeStore.getState().touchedFiles['src/index.ts']).toBe('modified')
   })
 
   it('markTouched overwrites previous status', () => {
     useCodeStore.getState().markTouched('src/app.ts', 'new')
-    expect(useCodeStore.getState().touchedFiles.get('src/app.ts')).toBe('new')
+    expect(useCodeStore.getState().touchedFiles['src/app.ts']).toBe('new')
 
     useCodeStore.getState().markTouched('src/app.ts', 'deleted')
-    expect(useCodeStore.getState().touchedFiles.get('src/app.ts')).toBe('deleted')
+    expect(useCodeStore.getState().touchedFiles['src/app.ts']).toBe('deleted')
   })
 
   it('reset clears touchedFiles', () => {
     useCodeStore.getState().markTouched('a.ts', 'modified')
     useCodeStore.getState().markTouched('b.ts', 'new')
-    expect(useCodeStore.getState().touchedFiles.size).toBe(2)
+    expect(Object.keys(useCodeStore.getState().touchedFiles).length).toBe(2)
 
     useCodeStore.getState().reset()
-    expect(useCodeStore.getState().touchedFiles.size).toBe(0)
+    expect(Object.keys(useCodeStore.getState().touchedFiles).length).toBe(0)
   })
 })
 

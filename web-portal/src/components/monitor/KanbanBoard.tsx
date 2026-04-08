@@ -177,6 +177,18 @@ export default function KanbanBoard() {
     activeRootIdRef.current = activeRootId
   })
 
+  // Track rollback timers and subscriptions for cleanup on unmount
+  const rollbackCleanupRef = useRef<Array<{ timer: ReturnType<typeof setTimeout>; unsub: () => void }>>([])
+  useEffect(() => {
+    return () => {
+      for (const entry of rollbackCleanupRef.current) {
+        clearTimeout(entry.timer)
+        entry.unsub()
+      }
+      rollbackCleanupRef.current = []
+    }
+  }, [])
+
   const sensors = useSensors(useSensor(PointerSensor, POINTER_SENSOR_OPTIONS))
 
   const columns = useMemo(() => {
@@ -264,14 +276,19 @@ export default function KanbanBoard() {
         if (current && current.status === newStatus && current.reviewStatus === newReviewStatus) {
           updateTask(taskId, { status: prevStatus, reviewStatus: prevReviewStatus })
         }
+        // Remove from cleanup list once fired
+        rollbackCleanupRef.current = rollbackCleanupRef.current.filter((e) => e.timer !== rollbackTimer)
       }, 5000)
       const unsub = useMonitorStore.subscribe((state) => {
         const t = state.tasks[taskId]
         if (t && (t.status !== prevStatus || t.reviewStatus !== prevReviewStatus)) {
           clearTimeout(rollbackTimer)
           unsub()
+          // Remove from cleanup list once resolved
+          rollbackCleanupRef.current = rollbackCleanupRef.current.filter((e) => e.timer !== rollbackTimer)
         }
       })
+      rollbackCleanupRef.current.push({ timer: rollbackTimer, unsub })
     }
   }
 

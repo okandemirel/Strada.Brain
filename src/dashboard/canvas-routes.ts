@@ -13,6 +13,7 @@
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { CanvasStorage, CanvasState } from "./canvas-storage.js";
+import { getLogger } from "../utils/logger.js";
 
 // =============================================================================
 // HELPERS
@@ -118,8 +119,10 @@ export function handleCanvasRoute(
       let shapes: unknown;
       try {
         shapes = JSON.parse(state.shapes);
-      } catch {
-        shapes = [];
+      } catch (parseError) {
+        getLogger().error("Corrupted canvas state", { sessionId, error: String(parseError) });
+        jsonResponse(res, 500, { error: "Corrupted canvas state", sessionId });
+        return true;
       }
       jsonResponse(res, 200, {
         sessionId: state.sessionId,
@@ -147,7 +150,7 @@ export function handleCanvasRoute(
         jsonResponse(res, 200, { canvas: null });
         return true;
       }
-      jsonResponse(res, 200, { canvas: state });
+      jsonResponse(res, 200, { canvas: { ...state, version: state.version ?? 1 } });
     } catch {
       jsonResponse(res, 500, { error: "Failed to retrieve canvas" });
     }
@@ -165,19 +168,41 @@ export function handleCanvasRoute(
       if (!parsed) return;
 
       const now = Date.now();
+
+      // Validate shapes: each must have at minimum id (string) and type (string)
+      const rawShapes = typeof parsed.shapes === "string"
+        ? (() => { try { return JSON.parse(parsed.shapes) as unknown; } catch { return []; } })()
+        : (parsed.shapes ?? []);
+      const validShapes = Array.isArray(rawShapes)
+        ? rawShapes.filter((s: unknown) => {
+            if (!s || typeof s !== "object") return false;
+            const shape = s as Record<string, unknown>;
+            if (typeof shape.id !== "string" || typeof shape.type !== "string") {
+              getLogger().warn("Filtered invalid canvas shape", { sessionId, shape });
+              return false;
+            }
+            return true;
+          })
+        : [];
+
       const state: CanvasState = {
         id: parsed.id ?? sessionId,
         sessionId,
         userId: parsed.userId,
         projectFingerprint: parsed.projectFingerprint,
-        shapes: typeof parsed.shapes === "string" ? parsed.shapes : JSON.stringify(parsed.shapes ?? []),
+        shapes: JSON.stringify(validShapes),
         viewport: typeof parsed.viewport === "string" ? parsed.viewport : (parsed.viewport ? JSON.stringify(parsed.viewport) : undefined),
+        version: parsed.version,
         createdAt: parsed.createdAt ?? now,
         updatedAt: now,
       };
 
       try {
-        canvasStorage.save(state);
+        const saved = canvasStorage.save(state);
+        if (!saved) {
+          jsonResponse(res, 409, { error: "Version conflict", sessionId });
+          return;
+        }
         jsonResponse(res, 200, { status: "saved", sessionId });
       } catch {
         jsonResponse(res, 500, { error: "Failed to save canvas" });

@@ -94,6 +94,7 @@ const MODULE_DIR = fileURLToPath(new URL(".", import.meta.url));
 const PACKAGED_STATIC_DIR = fileURLToPath(new URL("static/", import.meta.url));
 const SOURCE_BUILD_STATIC_DIR = resolve(MODULE_DIR, "../../../web-portal/dist");
 const SETUP_CACHE_BUST_PARAM = "t";
+const MAX_CONTROL_MESSAGE_BYTES = 64 * 1024;
 const WEB_PLACEHOLDER_TEXTS = new Set([
   // Voice message placeholders (all supported languages)
   "(voice message)",
@@ -227,7 +228,15 @@ export class WebChannel
   }
 
   async connect(): Promise<void> {
-    this.server = createServer((req, res) => this.handleHttp(req, res));
+    this.server = createServer((req, res) => {
+      this.handleHttp(req, res).catch((err) => {
+        if (!res.headersSent) {
+          res.writeHead(500, { 'Content-Type': 'text/plain' });
+          res.end('Internal Server Error');
+        }
+        getLoggerSafe().error('Unhandled HTTP error', { error: String(err) });
+      });
+    });
 
     // maxPayload: 25 MiB accommodates the 20 MB media validation limit with
     // room for base64 overhead (~33% inflation).
@@ -430,6 +439,10 @@ export class WebChannel
     });
   }
 
+  // NOTE: streamSentLengths entries are only cleaned in finalizeStreamingMessage.
+  // If a stream is abandoned (e.g. provider error before finalize), the entry
+  // will leak until the next server restart. A periodic cleanup timer could be
+  // added if this becomes a measurable issue in long-running instances.
   async startStreamingMessage(chatId: string): Promise<string | undefined> {
     const streamId = randomUUID();
     this.streamSentLengths.set(streamId, 0);
@@ -616,6 +629,15 @@ export class WebChannel
           msgCount: current.msgCount,
           windowStart: current.windowStart,
         });
+
+        // Clean up per-session state that would otherwise leak
+        this.appliedInstinctIds.delete(chatId);
+        const pending = this.pendingConfirmations.get(chatId);
+        if (pending) {
+          clearTimeout(pending.timer);
+          pending.resolve("timeout");
+          this.pendingConfirmations.delete(chatId);
+        }
       }
     };
 
@@ -863,8 +885,10 @@ export class WebChannel
         const provider = String(data.provider ?? "").trim();
         if (!provider || !this.handler) break;
         const model = typeof data.model === "string" ? data.model.trim() : "";
+        const safeProvider = provider.replace(/[^a-zA-Z0-9._\-]/g, '');
+        const safeModel = model.replace(/[^a-zA-Z0-9._:\-\/]/g, '');
         const hardPin = data.hardPin === true || data.selectionMode === "strada-hard-pin";
-        const selection = `${provider}${model ? "/" + model : ""}`;
+        const selection = `${safeProvider}${safeModel ? "/" + safeModel : ""}`;
         const text = hardPin ? `/model pin ${selection}` : `/model ${selection}`;
         const msg: IncomingMessage = {
           channelType: "web",
@@ -888,7 +912,7 @@ export class WebChannel
         const feedbackType = String(data.feedbackType ?? "");
         const instinctIds = Array.isArray(data.instinctIds) ? data.instinctIds.filter(
           (id: unknown): id is string => typeof id === "string",
-        ) : [];
+        ).slice(0, 50) : [];
         if (
           (feedbackType === "thumbs_up" || feedbackType === "thumbs_down") &&
           this.feedbackReactionCallback
@@ -968,7 +992,14 @@ export class WebChannel
       case "monitor:resume":
       case "monitor:skip_task":
       case "monitor:approve_gate":
-      case "monitor:reject_gate":
+      case "monitor:reject_gate": {
+        const payloadSize = JSON.stringify(data).length;
+        if (payloadSize > MAX_CONTROL_MESSAGE_BYTES) break;
+        if (this.workspaceBusEmitter) {
+          this.workspaceBusEmitter(data.type as string, data);
+        }
+        break;
+      }
       // Canvas commands from frontend (Phase 4)
       case "canvas:user_shapes": {
         const snapshot = typeof data.snapshot === "string" ? data.snapshot : "";

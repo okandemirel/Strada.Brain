@@ -15,6 +15,7 @@ export interface CanvasState {
   projectFingerprint?: string;
   shapes: string; // JSON array of shape objects
   viewport?: string; // JSON { x, y, zoom }
+  version?: number; // optimistic locking version, auto-incremented on update
   createdAt: number;
   updatedAt: number;
 }
@@ -22,6 +23,7 @@ export interface CanvasState {
 export class CanvasStorage {
   private readonly stmtGetBySession: Database.Statement;
   private readonly stmtUpsert: Database.Statement;
+  private readonly stmtUpsertVersioned: Database.Statement;
   private readonly stmtDelete: Database.Statement;
   private readonly stmtListByProject: Database.Statement;
 
@@ -29,18 +31,30 @@ export class CanvasStorage {
     this.initialize();
 
     this.stmtGetBySession = this.db.prepare(
-      "SELECT id, session_id, user_id, project_fingerprint, shapes, viewport, created_at, updated_at FROM canvas_states WHERE session_id = ?",
+      "SELECT id, session_id, user_id, project_fingerprint, shapes, viewport, version, created_at, updated_at FROM canvas_states WHERE session_id = ?",
     );
 
     this.stmtUpsert = this.db.prepare(`
-      INSERT INTO canvas_states (id, session_id, user_id, project_fingerprint, shapes, viewport, created_at, updated_at)
-      VALUES (@id, @sessionId, @userId, @projectFingerprint, @shapes, @viewport, @createdAt, @updatedAt)
+      INSERT INTO canvas_states (id, session_id, user_id, project_fingerprint, shapes, viewport, version, created_at, updated_at)
+      VALUES (@id, @sessionId, @userId, @projectFingerprint, @shapes, @viewport, 1, @createdAt, @updatedAt)
       ON CONFLICT(id) DO UPDATE SET
         shapes = @shapes,
         viewport = @viewport,
         user_id = @userId,
         project_fingerprint = @projectFingerprint,
+        version = version + 1,
         updated_at = @updatedAt
+    `);
+
+    this.stmtUpsertVersioned = this.db.prepare(`
+      UPDATE canvas_states SET
+        shapes = @shapes,
+        viewport = @viewport,
+        user_id = @userId,
+        project_fingerprint = @projectFingerprint,
+        version = version + 1,
+        updated_at = @updatedAt
+      WHERE id = @id AND version = @version
     `);
 
     this.stmtDelete = this.db.prepare(
@@ -48,7 +62,7 @@ export class CanvasStorage {
     );
 
     this.stmtListByProject = this.db.prepare(
-      "SELECT id, session_id, user_id, project_fingerprint, shapes, viewport, created_at, updated_at FROM canvas_states WHERE project_fingerprint = ? ORDER BY updated_at DESC LIMIT 100",
+      "SELECT id, session_id, user_id, project_fingerprint, shapes, viewport, version, created_at, updated_at FROM canvas_states WHERE project_fingerprint = ? ORDER BY updated_at DESC LIMIT 100",
     );
   }
 
@@ -61,10 +75,17 @@ export class CanvasStorage {
         project_fingerprint TEXT,
         shapes TEXT NOT NULL DEFAULT '[]',
         viewport TEXT,
+        version INTEGER NOT NULL DEFAULT 1,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       )
     `);
+    // Migration: add version column to existing tables
+    try {
+      this.db.exec("ALTER TABLE canvas_states ADD COLUMN version INTEGER NOT NULL DEFAULT 1");
+    } catch {
+      // Column already exists — ignore
+    }
     this.db.exec(
       "CREATE INDEX IF NOT EXISTS idx_canvas_session ON canvas_states(session_id)",
     );
@@ -82,6 +103,7 @@ export class CanvasStorage {
           project_fingerprint: string | null;
           shapes: string;
           viewport: string | null;
+          version: number;
           created_at: number;
           updated_at: number;
         }
@@ -96,13 +118,15 @@ export class CanvasStorage {
       projectFingerprint: row.project_fingerprint ?? undefined,
       shapes: row.shapes,
       viewport: row.viewport ?? undefined,
+      version: row.version,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };
   }
 
-  save(state: CanvasState): void {
-    this.stmtUpsert.run({
+  /** Save canvas state. Returns false if optimistic locking version conflict detected. */
+  save(state: CanvasState): boolean {
+    const params = {
       id: state.id,
       sessionId: state.sessionId,
       userId: state.userId ?? null,
@@ -111,7 +135,23 @@ export class CanvasStorage {
       viewport: state.viewport ?? null,
       createdAt: state.createdAt,
       updatedAt: state.updatedAt,
-    });
+    };
+
+    // If client provides a version, use optimistic locking
+    if (state.version != null) {
+      const result = this.stmtUpsertVersioned.run({ ...params, version: state.version });
+      if (result.changes === 0) {
+        // Check if it's a new row (no conflict) vs version mismatch
+        const exists = this.stmtGetBySession.get(state.sessionId);
+        if (exists) return false; // version conflict
+        this.stmtUpsert.run(params); // new row — safe to insert
+      }
+      return true;
+    }
+
+    // No version provided — unconditional upsert
+    this.stmtUpsert.run(params);
+    return true;
   }
 
   delete(sessionId: string): boolean {
@@ -127,6 +167,7 @@ export class CanvasStorage {
       project_fingerprint: string | null;
       shapes: string;
       viewport: string | null;
+      version: number;
       created_at: number;
       updated_at: number;
     }>;
@@ -138,6 +179,7 @@ export class CanvasStorage {
       projectFingerprint: row.project_fingerprint ?? undefined,
       shapes: row.shapes,
       viewport: row.viewport ?? undefined,
+      version: row.version,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     }));

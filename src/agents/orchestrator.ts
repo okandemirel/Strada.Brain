@@ -278,6 +278,7 @@ const SELF_IMPROVEMENT_TOOLS: ReadonlySet<string> = new Set([
 ]);
 const TYPING_INTERVAL_MS = 4000;
 const STREAM_THROTTLE_MS = 500; // Throttle streaming updates to channels
+const MAX_CONSECUTIVE_PROVIDER_FAILURES = 5;
 const NATURAL_LANGUAGE_BUILTIN_PERSONAS = ["default", "formal", "casual", "minimal"] as const;
 const SUPERVISOR_SYNTHESIS_SYSTEM_PROMPT = `You are a synthesis worker inside Strada Brain's orchestrator.
 The orchestrator remains the primary intelligence and the user-facing agent.
@@ -2673,7 +2674,7 @@ export class Orchestrator {
               let response;
               try {
                 response = canBgStream
-                  ? await this.silentStream(chatId, activePrompt, session, resilientProvider, currentToolDefinitions)
+                  ? await this.silentStream(chatId, activePrompt, session, resilientProvider, currentToolDefinitions, signal)
                   : await resilientProvider.chat(
                       activePrompt,
                       session.messages,
@@ -2696,6 +2697,15 @@ export class Orchestrator {
                   consecutiveProviderFailures,
                   isTimeoutOrAbort,
                 });
+
+                if (consecutiveProviderFailures >= MAX_CONSECUTIVE_PROVIDER_FAILURES) {
+                  logger.error("Background task aborting: too many consecutive provider failures", {
+                    consecutiveProviderFailures,
+                    chatId,
+                    provider: currentAssignment.providerName,
+                  });
+                  break;
+                }
 
                 if (isTimeoutOrAbort) {
                   // Give back the iteration — timeouts produce no progress
@@ -4667,6 +4677,7 @@ export class Orchestrator {
       description: string;
       input_schema: import("../types/index.js").JsonObject;
     }>,
+    externalSignal?: AbortSignal,
   ): Promise<ProviderResponse> => {
     const timeoutGuard = createStreamingProgressTimeout(
       this.streamInitialTimeoutMs,
@@ -4695,8 +4706,12 @@ export class Orchestrator {
       try {
         // Fallback to non-streaming with a timeout so it doesn't hang
         // indefinitely if the provider is genuinely unresponsive.
+        const timeoutSignal = AbortSignal.timeout(this.streamInitialTimeoutMs);
+        const fallbackSignal = externalSignal
+          ? AbortSignal.any([externalSignal, timeoutSignal])
+          : timeoutSignal;
         const fallbackResponse = await provider.chat(systemPrompt, session.messages, toolDefinitions, {
-          signal: AbortSignal.timeout(this.streamInitialTimeoutMs),
+          signal: fallbackSignal,
         });
         ProviderHealthRegistry.getInstance().recordSuccess(provider.name);
         return fallbackResponse;

@@ -12,6 +12,8 @@
  * - Graceful shutdown: awaits the current in-flight item, discards remaining
  */
 
+import { getLoggerSafe } from "../../utils/logger.js";
+
 const DEFAULT_MAX_QUEUE_SIZE = 1000;
 
 export class LearningQueue {
@@ -33,6 +35,11 @@ export class LearningQueue {
     if (this.stopped) return;
 
     if (this.queue.length >= this.maxQueueSize) {
+      try {
+        getLoggerSafe().warn('Learning queue overflow: dropping oldest item', { queueSize: this.queue.length });
+      } catch {
+        // Logger may not be available in test environments
+      }
       this.queue.shift(); // Drop oldest to prevent unbounded growth
     }
 

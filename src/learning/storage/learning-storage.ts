@@ -2108,7 +2108,7 @@ export class LearningStorage {
     if (!(LearningStorage.FACTOR_COLUMNS as readonly string[]).includes(factor)) {
       throw new Error(`Invalid factor: ${factor}`);
     }
-    this.db!.prepare(`UPDATE instincts SET ${factor} = ? WHERE id = ?`).run(value, instinctId);
+    this.db!.prepare(`UPDATE instincts SET ${factor} = MIN(MAX(COALESCE(${factor}, 0.5) + ?, 0.0), 1.0) WHERE id = ?`).run(value, instinctId);
   }
 
   /** Get instincts by scope (joins instincts with instinct_scopes) */

@@ -275,15 +275,18 @@ function persistViewport(sessionId: string, viewport: ViewportState): void {
 
 type CanvasDataState = Pick<CanvasState, 'sessionId' | 'isDirty'> & PersistedCanvasState
 
+let persistTimer: ReturnType<typeof setTimeout> | null = null
+
 function withPersistence<T extends CanvasDataState>(nextState: T): T {
-  persistCanvasState(nextState)
+  if (persistTimer) clearTimeout(persistTimer)
+  persistTimer = setTimeout(() => { persistCanvasState(useCanvasStore.getState()) }, 500)
   return nextState
 }
 
 function takeSnapshot(state: CanvasState): UndoSnapshot {
   return {
-    shapes: structuredClone(state.shapes),
-    connections: structuredClone(state.connections),
+    shapes: [...state.shapes.map(s => ({ ...s }))],
+    connections: [...state.connections.map(c => ({ ...c }))],
   }
 }
 

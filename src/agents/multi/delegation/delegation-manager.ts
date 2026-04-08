@@ -264,8 +264,18 @@ export class DelegationManager {
       // (the first slot was released in executeSingleDelegation's finally block)
       this.acquireConcurrencySlot(request.parentAgentId);
 
-      // Escalate: retry with next tier
-      return this.executeSingleDelegation(request, typeConfig, nextTier, tier);
+      // Escalate: retry with next tier — guarantee slot release on failure
+      try {
+        return await this.executeSingleDelegation(request, typeConfig, nextTier, tier);
+      } catch (escalationError) {
+        // executeSingleDelegation's finally block handles cleanup for its own
+        // activeDelegations entry, but if it throws before registering we must
+        // still release the concurrency slot we just acquired.
+        if (!this.hasActiveForParent(request.parentAgentId)) {
+          this.decrementConcurrency(request.parentAgentId);
+        }
+        throw escalationError;
+      }
     }
   }
 

@@ -2,30 +2,32 @@ import { useCallback, useEffect, useRef, useState, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { useWS } from '../hooks/useWS'
-import ChatMessage from './ChatMessage'
+import ChatMessageComponent from './ChatMessage'
 import ChatInput from './ChatInput'
 import ConfirmDialog from './ConfirmDialog'
 import TypingIndicator from './TypingIndicator'
 import EmptyState from './EmptyState'
 import PrimaryWorkerSelector from './PrimaryWorkerSelector'
 import { BlurFade } from './ui/blur-fade'
-import { useSessionStore } from '../stores/session-store'
+import { useSessionStore, type ChatMessage as ChatMessageType } from '../stores/session-store'
 import { useVoiceSettings } from '../hooks/use-voice-settings'
 import { useSessionHistory } from '../hooks/use-session-history'
-import { readSessionMessages } from '../hooks/websocket-storage'
+import { readSessionMessages, writeSessionMessages } from '../hooks/websocket-storage'
 
 const VISIBLE_BATCH_SIZE = 50
 
 /* ------------------------------------------------------------------ */
-/*  SessionPicker                                                      */
+/*  SessionPicker — module-level state survives unmount/remount        */
 /* ------------------------------------------------------------------ */
+let savedMessages: ChatMessageType[] | null = null
+let historicalIds = new Set<string>()
 
 function SessionPicker() {
   const { t } = useTranslation()
   const sessions = useSessionHistory()
   const profileId = useSessionStore((s) => s.profileId)
+  const viewingHistorical = useSessionStore((s) => s.viewingHistorical)
   const [open, setOpen] = useState(false)
-  const [viewingHistorical, setViewingHistorical] = useState(false)
   const dropdownRef = useRef<HTMLDivElement>(null)
 
   // Close dropdown on outside click
@@ -40,20 +42,41 @@ function SessionPicker() {
     return () => document.removeEventListener('mousedown', handler)
   }, [open])
 
-  const loadSession = useCallback((sessionKey: string) => {
-    const messages = readSessionMessages(sessionKey)
-    useSessionStore.getState().setMessages(messages)
-    setViewingHistorical(sessionKey !== profileId)
-    setOpen(false)
-  }, [profileId])
-
   const returnToCurrent = useCallback(() => {
-    if (profileId) {
-      const messages = readSessionMessages(profileId)
-      useSessionStore.getState().setMessages(messages)
+    const store = useSessionStore.getState()
+    if (savedMessages) {
+      const savedIds = new Set(savedMessages.map((m) => m.id))
+      const newFromBackend = store.messages.filter(
+        (m) => !savedIds.has(m.id) && !historicalIds.has(m.id),
+      )
+      store.setMessages([...savedMessages, ...newFromBackend])
+      savedMessages = null
+      historicalIds = new Set()
+    } else {
+      const currentProfileId = store.profileId
+      if (currentProfileId) store.setMessages(readSessionMessages(currentProfileId))
     }
-    setViewingHistorical(false)
-  }, [profileId])
+    store.setViewingHistorical(false)
+  }, [])
+
+  const loadSession = useCallback((sessionKey: string) => {
+    if (sessionKey === profileId) {
+      returnToCurrent()
+      setOpen(false)
+      return
+    }
+    const store = useSessionStore.getState()
+    if (!store.viewingHistorical) {
+      savedMessages = store.messages
+      if (profileId) writeSessionMessages(profileId, store.messages)
+      historicalIds = new Set()
+    }
+    const messages = readSessionMessages(sessionKey)
+    for (const m of messages) historicalIds.add(m.id)
+    store.setMessages(messages)
+    store.setViewingHistorical(true)
+    setOpen(false)
+  }, [profileId, returnToCurrent])
 
   if (sessions.length <= 1) return null
 
@@ -194,6 +217,7 @@ export default function ChatView() {
   }, [sendRawJSON, updateMessage])
 
   const isDisconnected = status !== 'connected'
+  const viewingHistorical = useSessionStore((s) => s.viewingHistorical)
 
   return (
     <div className="flex flex-col h-full overflow-hidden min-w-0">
@@ -269,7 +293,7 @@ export default function ChatView() {
                     }}
                   >
                     <div className="pb-3 flex flex-col">
-                      <ChatMessage
+                      <ChatMessageComponent
                         message={msg}
                         onFeedback={handleFeedback}
                         voiceOutputEnabled={voice.outputEnabled}
@@ -279,7 +303,7 @@ export default function ChatView() {
                 )
               })}
             </div>
-            {(isTyping || hasStreamingMessage) && (
+            {!viewingHistorical && (isTyping || hasStreamingMessage) && (
               <div className="flex items-center gap-2 pt-3">
                 {isTyping && <TypingIndicator />}
                 <button
@@ -301,7 +325,7 @@ export default function ChatView() {
         <ConfirmDialog confirmation={confirmation} onRespond={sendConfirmation} />
       )}
 
-      <ChatInput onSend={sendMessage} disabled={isDisconnected} />
+      <ChatInput onSend={sendMessage} disabled={isDisconnected || viewingHistorical} />
     </div>
   )
 }

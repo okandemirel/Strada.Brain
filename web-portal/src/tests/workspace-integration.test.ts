@@ -323,7 +323,7 @@ describe('workspace integration — code event integration', () => {
     expect(state.tabs[0].content).toBe('export default {}')
     expect(state.tabs[0].language).toBe('typescript')
     expect(state.activeTab).toBe('src/main.ts')
-    expect(state.touchedFiles.get('src/main.ts')).toBe('new')
+    expect(state.touchedFiles['src/main.ts']).toBe('new')
     expect(useWorkspaceStore.getState().mode).toBe('code')
   })
 
@@ -366,7 +366,7 @@ describe('workspace integration — code event integration', () => {
       touchedStatus: 'new',
     })
 
-    expect(useCodeStore.getState().touchedFiles.get('src/utils.ts')).toBe('new')
+    expect(useCodeStore.getState().touchedFiles['src/utils.ts']).toBe('new')
 
     // Then update it with a diff
     const diff = '--- a/src/utils.ts\n+++ b/src/utils.ts\n@@ -1 +1 @@\n-old\n+new'
@@ -383,7 +383,7 @@ describe('workspace integration — code event integration', () => {
     expect(state.tabs[0].diffContent).toBe(diff)
     // Content should be preserved from the original open
     expect(state.tabs[0].content).toBe('export function add(a: number, b: number) { return a + b }')
-    expect(state.touchedFiles.get('src/utils.ts')).toBe('modified')
+    expect(state.touchedFiles['src/utils.ts']).toBe('modified')
   })
 
   it('code:file_open without touchedStatus opens the tab without marking a change', () => {
@@ -397,7 +397,7 @@ describe('workspace integration — code event integration', () => {
     const state = useCodeStore.getState()
     expect(state.tabs).toHaveLength(1)
     expect(state.activeTab).toBe('src/read.ts')
-    expect(state.touchedFiles.size).toBe(0)
+    expect(Object.keys(state.touchedFiles).length).toBe(0)
     expect(useWorkspaceStore.getState().mode).toBe('code')
   })
 

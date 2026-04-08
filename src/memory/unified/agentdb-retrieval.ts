@@ -120,6 +120,12 @@ export async function retrieveSemantic(
       if (now > entry.expiresAt) continue;
     }
 
+    // NOTE: Race condition — in-memory read-modify-write is not atomic.
+    // The retrieval context does not expose direct DB access, so an atomic
+    // SQL increment (access_count = access_count + 1) is not possible here.
+    // Under concurrent retrievals the count may drift, but this is acceptable
+    // for access-frequency heuristics.  A future refactor could add a
+    // dedicated `sqliteIncrementAccessCount` callback to AgentDBRetrievalContext.
     entry.accessCount++;
     entry.lastAccessedAt = getNow();
     ctx.sqlitePersistEntry?.(entry);

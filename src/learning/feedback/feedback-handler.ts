@@ -9,9 +9,6 @@ import { randomBytes } from "node:crypto";
 import type { LearningStorage } from "../storage/learning-storage.js";
 import type { FeedbackSource, FeedbackType, ScopeType, CorrectionRecord } from "../types.js";
 
-/** Default factorUserValidation when not yet set on an instinct */
-const DEFAULT_FACTOR = 0.5;
-
 /** Thumbs-up boost amount */
 const THUMBS_UP_DELTA = 0.1;
 
@@ -54,9 +51,7 @@ export class FeedbackHandler {
       const instinct = this.storage.getInstinct(instinctId);
       if (!instinct) continue;
 
-      const current = instinct.factorUserValidation ?? DEFAULT_FACTOR;
-      const updated = Math.max(0.0, Math.min(current + delta, 1.0));
-      this.storage.updateInstinctFactor(instinctId, 'factor_user_validation', updated);
+      this.storage.updateInstinctFactor(instinctId, 'factor_user_validation', delta);
     }
 
     this.storage.storeFeedback({

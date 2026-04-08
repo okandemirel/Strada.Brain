@@ -443,7 +443,7 @@ describe('dispatchWorkspaceMessage — code:* events', () => {
     expect(state.tabs[0].content).toBe('console.log("hi")')
     expect(state.tabs[0].language).toBe('typescript')
     expect(state.activeTab).toBe('src/index.ts')
-    expect(state.touchedFiles.get('src/index.ts')).toBe('new')
+    expect(state.touchedFiles['src/index.ts']).toBe('new')
     expect(useWorkspaceStore.getState().mode).toBe('code')
   })
 
@@ -464,7 +464,7 @@ describe('dispatchWorkspaceMessage — code:* events', () => {
     expect(state.tabs[0].originalContent).toBe('old')
     expect(state.tabs[0].modifiedContent).toBe('new')
     expect(state.activeTab).toBe('src/app.ts')
-    expect(state.touchedFiles.get('src/app.ts')).toBe('modified')
+    expect(state.touchedFiles['src/app.ts']).toBe('modified')
   })
 
   it('code:terminal_output appends to terminal with command prefix', () => {
@@ -535,7 +535,7 @@ describe('dispatchWorkspaceMessage — code:* events', () => {
     expect(state.tabs[0].path).toBe('src/wrapped.ts')
     expect(state.tabs[0].content).toBe('wrapped content')
     expect(state.activeTab).toBe('src/wrapped.ts')
-    expect(state.touchedFiles.get('src/wrapped.ts')).toBe('new')
+    expect(state.touchedFiles['src/wrapped.ts']).toBe('new')
   })
 
   it('code:file_open without touchedStatus leaves changed-files list untouched', () => {
@@ -548,7 +548,7 @@ describe('dispatchWorkspaceMessage — code:* events', () => {
 
     const state = useCodeStore.getState()
     expect(state.tabs).toHaveLength(1)
-    expect(state.touchedFiles.size).toBe(0)
+    expect(Object.keys(state.touchedFiles).length).toBe(0)
     expect(useWorkspaceStore.getState().mode).toBe('code')
   })
 })

@@ -1044,9 +1044,9 @@ describe("LearningStorage", () => {
       const instinct = createTestInstinct();
       storage.createInstinct(instinct);
 
-      storage.updateInstinctFactor(instinct.id, "factor_recency", 0.95);
+      storage.updateInstinctFactor(instinct.id, "factor_recency", 0.3);
       const retrieved = storage.getInstinct(instinct.id);
-      expect(retrieved?.factorRecency).toBe(0.95);
+      expect(retrieved?.factorRecency).toBeCloseTo(0.8); // 0.5 (default) + 0.3 delta
     });
 
     it("should reject invalid factor names to prevent SQL injection", () => {

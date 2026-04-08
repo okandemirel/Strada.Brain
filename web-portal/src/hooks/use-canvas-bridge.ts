@@ -19,6 +19,8 @@ export function shapesToNodes(shapes: ResolvedShape[]): CanvasNode[] {
       type: 'baseCard' as const,
       position: { x: shape.x, y: shape.y },
       style: { width: shape.w, height: shape.h },
+      width: shape.w,
+      height: shape.h,
       data: {
         cardType: shape.type,
         props: shape.props,

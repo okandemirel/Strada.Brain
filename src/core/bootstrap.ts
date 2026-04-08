@@ -406,8 +406,10 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
 
   let frameworkStore: FrameworkKnowledgeStore | null = null;
   let frameworkSyncPipeline: FrameworkSyncPipeline | null = null;
-  // Callback set after orchestrator is constructed; the IIFE calls it when sync completes
+  // Callback set after orchestrator is constructed; the IIFE calls it when sync completes.
+  // deferredFrameworkStore buffers the result if the IIFE finishes before the callback is assigned.
   let onFrameworkStoreReady: ((store: FrameworkKnowledgeStore) => void) | null = null;
+  let deferredFrameworkStore: FrameworkKnowledgeStore | null = null;
 
   if (frameworkSyncConfig.bootSync) {
     void (async () => {
@@ -441,6 +443,9 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
         // Notify the orchestrator (if already constructed) that framework store is ready
         if (onFrameworkStoreReady && frameworkStore) {
           (onFrameworkStoreReady as (store: FrameworkKnowledgeStore) => void)(frameworkStore);
+        } else if (frameworkStore) {
+          // IIFE completed before callback was assigned -- buffer the result
+          deferredFrameworkStore = frameworkStore;
         }
 
         if (frameworkSyncConfig.watchEnabled) {
@@ -722,6 +727,11 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     onFrameworkStoreReady = (store) => {
       wireFrameworkPromptGenerator(store).catch(() => {});
     };
+    // If the IIFE already completed before we got here, apply the buffered result
+    if (deferredFrameworkStore) {
+      onFrameworkStoreReady(deferredFrameworkStore);
+      deferredFrameworkStore = null;
+    }
   }
 
   const { chainManager } = await initializeToolChainStage({

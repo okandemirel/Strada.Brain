@@ -32,7 +32,7 @@ describe("FeedbackHandler", () => {
       expect(mockStorage.updateInstinctFactor).toHaveBeenCalledWith(
         "instinct_test_1",
         "factor_user_validation",
-        0.6, // 0.5 + 0.1
+        0.1, // delta passed to atomic SQL increment
       );
     });
 
@@ -50,7 +50,7 @@ describe("FeedbackHandler", () => {
       expect(mockStorage.updateInstinctFactor).toHaveBeenCalledWith(
         "instinct_test_1",
         "factor_user_validation",
-        1.0,
+        0.1, // delta — clamping now handled by SQL
       );
     });
 
@@ -93,7 +93,7 @@ describe("FeedbackHandler", () => {
       expect(mockStorage.updateInstinctFactor).toHaveBeenCalledWith(
         "instinct_test_1",
         "factor_user_validation",
-        0.6, // 0.5 (default) + 0.1
+        0.1, // delta — default factor no longer needed client-side
       );
     });
 
@@ -119,7 +119,7 @@ describe("FeedbackHandler", () => {
       expect(mockStorage.updateInstinctFactor).toHaveBeenCalledWith(
         "instinct_test_1",
         "factor_user_validation",
-        0.3, // 0.5 - 0.2
+        -0.2, // delta — negative for thumbs down
       );
     });
 
@@ -137,7 +137,7 @@ describe("FeedbackHandler", () => {
       expect(mockStorage.updateInstinctFactor).toHaveBeenCalledWith(
         "instinct_test_1",
         "factor_user_validation",
-        0.0,
+        -0.2, // delta — clamping now handled by SQL
       );
     });
 

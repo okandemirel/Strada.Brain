@@ -18,7 +18,7 @@ interface TreeNodeState {
 
 interface FileTreeProps {
   /** Set of file paths the agent has touched (for highlighting) */
-  touchedFiles?: Map<string, TouchedStatus>
+  touchedFiles?: Record<string, TouchedStatus>
   /** Called when user clicks a file */
   onFileSelect?: (path: string) => void
   /** Base API URL (defaults to '') */
@@ -59,7 +59,7 @@ function TreeNode({
   name: string
   type: 'file' | 'directory'
   depth: number
-  touchedFiles: Map<string, TouchedStatus>
+  touchedFiles: Record<string, TouchedStatus>
   onFileSelect: (path: string) => void
   baseUrl: string
 }) {
@@ -103,7 +103,7 @@ function TreeNode({
     }
   }, [type, path, baseUrl, state.expanded, state.entries.length])
 
-  const highlight = touchedFiles.get(path)
+  const highlight = touchedFiles[path]
   const highlightClass = highlight ? HIGHLIGHT_CLASSES[highlight] ?? '' : ''
 
   if (type === 'file') {
@@ -174,22 +174,22 @@ function TreeNode({
   )
 }
 
-const EMPTY_MAP = new Map<string, TouchedStatus>()
+const EMPTY_RECORD: Record<string, TouchedStatus> = {}
 const NOOP = () => {}
 
 export default function FileTree({ touchedFiles, onFileSelect, baseUrl = '' }: FileTreeProps) {
   const { t } = useTranslation('code')
-  const files = touchedFiles ?? EMPTY_MAP
+  const files = touchedFiles ?? EMPTY_RECORD
   const handleSelect = onFileSelect ?? NOOP
 
   return (
     <div className="h-full overflow-y-auto bg-bg-secondary p-1">
-      {files.size > 0 && (
+      {Object.keys(files).length > 0 && (
         <>
           <div className="text-[10px] uppercase tracking-wider text-text-tertiary px-2 py-1 font-semibold">
-            {t('fileTree.changedFiles', { count: files.size })}
+            {t('fileTree.changedFiles', { count: Object.keys(files).length })}
           </div>
-          {Array.from(files.entries()).map(([filePath, status]) => (
+          {Object.entries(files).map(([filePath, status]) => (
             <button
               key={filePath}
               onClick={() => handleSelect(filePath)}

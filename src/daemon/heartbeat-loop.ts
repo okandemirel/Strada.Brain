@@ -103,20 +103,24 @@ export class HeartbeatLoop {
     // Load persisted circuit breaker states
     const savedStates = this.storage.getAllCircuitStates();
     for (const [name, data] of savedStates) {
-      this.circuitBreakers.set(
-        name,
-        CircuitBreaker.deserialize(
-          {
-            state: data.state as "CLOSED" | "OPEN" | "HALF_OPEN",
-            consecutiveFailures: data.consecutiveFailures,
-            lastFailureTime: data.lastFailureTime ?? 0,
-            cooldownMs: data.cooldownMs,
-          },
-          this.config.backoff.failureThreshold,
-          this.config.backoff.baseCooldownMs,
-          this.config.backoff.maxCooldownMs,
-        ),
-      );
+      try {
+        this.circuitBreakers.set(
+          name,
+          CircuitBreaker.deserialize(
+            {
+              state: data.state as "CLOSED" | "OPEN" | "HALF_OPEN",
+              consecutiveFailures: data.consecutiveFailures,
+              lastFailureTime: data.lastFailureTime ?? 0,
+              cooldownMs: data.cooldownMs,
+            },
+            this.config.backoff.failureThreshold,
+            this.config.backoff.baseCooldownMs,
+            this.config.backoff.maxCooldownMs,
+          ),
+        );
+      } catch (err) {
+        this.logger.warn("Failed to deserialize circuit breaker, using fresh state", { name, error: String(err) });
+      }
     }
 
     // Persist daemon running state for crash recovery
@@ -248,6 +252,7 @@ export class HeartbeatLoop {
     if (this.unifiedBudgetManager) {
       this.unifiedBudgetManager.checkAndEmitEvents();
       if (this.unifiedBudgetManager.isGlobalExceeded()) {
+        this.eventBus.emit("daemon:budget_exceeded", { source: "unified", timestamp: now.getTime() } as never);
         this.lastTick = now;
         return; // Skip all triggers this tick
       }
@@ -321,12 +326,16 @@ export class HeartbeatLoop {
             trigger: name,
             taskId: existingTaskId,
           });
-          this.storage.insertTriggerFireHistory({
-            triggerName: name,
-            result: "deduplicated",
-            taskId: existingTaskId,
-            timestamp: now.getTime(),
-          });
+          try {
+            this.storage.insertTriggerFireHistory({
+              triggerName: name,
+              result: "deduplicated",
+              taskId: existingTaskId,
+              timestamp: now.getTime(),
+            });
+          } catch (err) {
+            this.logger.warn("Failed to record trigger fire history", { trigger: name, error: String(err) });
+          }
           continue;
         }
         // Task is done -- clean up
@@ -356,11 +365,15 @@ export class HeartbeatLoop {
                 reason: reason ?? "cooldown",
                 timestamp: now.getTime(),
               });
-              this.storage.insertTriggerFireHistory({
-                triggerName: name,
-                result: "deduplicated",
-                timestamp: now.getTime(),
-              });
+              try {
+                this.storage.insertTriggerFireHistory({
+                  triggerName: name,
+                  result: "deduplicated",
+                  timestamp: now.getTime(),
+                });
+              } catch (err) {
+                this.logger.warn("Failed to record trigger fire history", { trigger: name, error: String(err) });
+              }
               this.logger.debug("Trigger deduplicated", { trigger: name, reason });
               continue;
             }
@@ -370,6 +383,10 @@ export class HeartbeatLoop {
           this.emitTypedTriggerEvent(trigger, name, now);
 
           trigger.onFired(now);
+
+          // Mark trigger as in-flight BEFORE submission to prevent
+          // duplicate fires if the next tick runs before submit returns.
+          this.activeTriggerTasks.set(name, "pending" as TaskId);
 
           // Submit task via TaskManager with daemon origin
           const task = this.taskManager.submit(
@@ -384,7 +401,7 @@ export class HeartbeatLoop {
             this.deduplicator.recordFired(name, trigger.metadata.description, now.getTime());
           }
 
-          // Track active task for overlap suppression
+          // Update with real task ID now that submission succeeded
           this.activeTriggerTasks.set(name, task.id);
 
           // Record circuit breaker success
@@ -400,12 +417,16 @@ export class HeartbeatLoop {
             taskId: task.id,
             timestamp: now.getTime(),
           });
-          this.storage.insertTriggerFireHistory({
-            triggerName: name,
-            result: "success",
-            taskId: task.id,
-            timestamp: now.getTime(),
-          });
+          try {
+            this.storage.insertTriggerFireHistory({
+              triggerName: name,
+              result: "success",
+              taskId: task.id,
+              timestamp: now.getTime(),
+            });
+          } catch (err) {
+            this.logger.warn("Failed to record trigger fire history", { trigger: name, error: String(err) });
+          }
 
           this.logger.info("Trigger fired", {
             trigger: name,

@@ -2369,6 +2369,22 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
     },
   };
 
+  // Cross-field validation: dashboardPort and websocketDashboardPort must differ when both enabled
+  if (
+    config.dashboard.enabled &&
+    config.websocketDashboard.enabled &&
+    config.dashboard.port === config.websocketDashboard.port
+  ) {
+    return {
+      kind: "invalid",
+      errors: [{
+        path: "websocketDashboardPort",
+        message: "dashboardPort and websocketDashboardPort must be different when both are enabled",
+        code: "custom",
+      }],
+    };
+  }
+
   return { kind: "valid", value: config };
 }
 

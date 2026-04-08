@@ -125,7 +125,8 @@ export async function autoTieringSweep(
     const exemptDomains = ctx.decayConfig.exemptDomains;
     const decayedEntryIds: string[] = [];
 
-    for (const entry of ctx.entries.values()) {
+    const decaySnapshot = Array.from(ctx.entries.values());
+    for (const entry of decaySnapshot) {
       // Skip exempt domains
       if (entry.domain && exemptDomains.includes(entry.domain)) continue;
 
@@ -149,7 +150,8 @@ export async function autoTieringSweep(
     }
   }
 
-  for (const entry of ctx.entries.values()) {
+  const tieringSnapshot = Array.from(ctx.entries.values());
+  for (const entry of tieringSnapshot) {
     const daysSinceAccess = (now - (entry.lastAccessedAt as number)) / MS_PER_DAY;
     const currentTier = entry.tier;
     let targetTier = currentTier;

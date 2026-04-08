@@ -115,10 +115,8 @@ export class InstinctRetriever {
     const instinct = this.storage.getInstinct(instinctId);
     if (!instinct || instinct.status === "permanent") return;
 
-    const current = instinct.factorConsistency ?? 0.5;
     const delta = success ? 0.05 : -0.10;
-    const updated = Math.max(0.0, Math.min(1.0, current + delta));
-    this.storage.updateInstinctFactor(instinctId, "factor_consistency", updated);
+    this.storage.updateInstinctFactor(instinctId, "factor_consistency", delta);
   }
 
   async getMatchedInstincts(taskDescription: string, maxInstincts: number = 5): Promise<Instinct[]> {

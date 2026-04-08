@@ -39,7 +39,7 @@ function BaseCardInner({ data, selected }: NodeProps<CanvasNode>) {
 
       <div
         className={cn(
-          'rounded-2xl border backdrop-blur-2xl shadow-lg overflow-hidden bg-gradient-to-b from-white/[0.06] to-[#0a0e16]/95',
+          'w-full h-full rounded-2xl border backdrop-blur-2xl shadow-lg overflow-hidden bg-gradient-to-b from-white/[0.06] to-[#0a0e16]/95',
           accentBorder,
           selected && 'ring-1 ring-accent/40',
         )}

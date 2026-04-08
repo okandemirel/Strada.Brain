@@ -140,8 +140,8 @@ function CanvasWorkspaceInner() {
   /* ── Apply layout when layoutMode changes ─────────────────────── */
 
   useEffect(() => {
-    if (shapes.length === 0 || layoutMode === 'freeform') return
-    const currentNodes = shapesToNodes(shapes)
+    if (shapes.length === 0) return
+    const currentNodes = shapesToNodes(useCanvasStore.getState().shapes)
     const currentEdges = connectionsToEdges(useCanvasStore.getState().connections)
     const { nodes: layoutedNodes } = applyLayout(currentNodes, currentEdges, layoutMode)
     for (const node of layoutedNodes) {
@@ -372,11 +372,11 @@ function CanvasWorkspaceInner() {
           showInteractive={false}
           className="!bg-black/50 !border-white/10 !backdrop-blur-xl [&>button]:!bg-transparent [&>button]:!border-white/6 [&>button]:!text-slate-400 [&>button:hover]:!bg-white/[0.06]"
         />
-        <MiniMap
+        {shapes.length > 0 && <MiniMap
           nodeColor={() => 'rgba(125,211,252,0.3)'}
           maskColor="rgba(0,0,0,0.7)"
           className="!bg-black/60 !border-white/8 !backdrop-blur-xl"
-        />
+        />}
       </ReactFlow>
 
       {/* Empty state overlay when no shapes */}

@@ -48,6 +48,7 @@ export interface SessionState {
   language: SupportedLanguage
   confirmation: ConfirmationState | null
   reconnectExhausted: boolean
+  viewingHistorical: boolean
 }
 
 export interface SessionActions {
@@ -61,6 +62,7 @@ export interface SessionActions {
   setTyping: (isTyping: boolean) => void
   setConfirmation: (confirmation: ConfirmationState | null) => void
   setReconnectExhausted: (exhausted: boolean) => void
+  setViewingHistorical: (viewing: boolean) => void
   reset: () => void
   /**
    * Full session logout: clears auth-related localStorage keys,
@@ -79,6 +81,7 @@ const initialState: SessionState = {
   language: getInitialLanguage(),
   confirmation: null,
   reconnectExhausted: false,
+  viewingHistorical: false,
 }
 
 export const useSessionStore = create<SessionState & SessionActions>()((set) => ({
@@ -117,6 +120,8 @@ export const useSessionStore = create<SessionState & SessionActions>()((set) => 
   setConfirmation: (confirmation) => set({ confirmation }),
 
   setReconnectExhausted: (reconnectExhausted) => set({ reconnectExhausted }),
+
+  setViewingHistorical: (viewingHistorical) => set({ viewingHistorical }),
 
   reset: () => set(initialState),
 

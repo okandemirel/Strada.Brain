@@ -159,11 +159,11 @@ describe('FileTree', () => {
       { name: 'removed.ts', type: 'file' },
     ])
 
-    const touched = new Map<string, 'modified' | 'new' | 'deleted'>([
-      ['./changed.ts', 'modified'],
-      ['./added.ts', 'new'],
-      ['./removed.ts', 'deleted'],
-    ])
+    const touched: Record<string, 'modified' | 'new' | 'deleted'> = {
+      './changed.ts': 'modified',
+      './added.ts': 'new',
+      './removed.ts': 'deleted',
+    }
 
     render(<FileTree touchedFiles={touched} />)
     fireEvent.click(screen.getByText('Project Root'))
@@ -263,9 +263,9 @@ describe('FileTree', () => {
 
   // 11
   it('renders Changed Files section when touchedFiles is non-empty', () => {
-    const touched = new Map<string, 'modified' | 'new' | 'deleted'>([
-      ['src/test.cs', 'modified'],
-    ])
+    const touched: Record<string, 'modified' | 'new' | 'deleted'> = {
+      'src/test.cs': 'modified',
+    }
 
     render(<FileTree touchedFiles={touched} />)
 
@@ -274,7 +274,7 @@ describe('FileTree', () => {
 
   // 12
   it('hides Changed Files section when touchedFiles is empty', () => {
-    const touched = new Map<string, 'modified' | 'new' | 'deleted'>()
+    const touched: Record<string, 'modified' | 'new' | 'deleted'> = {}
 
     render(<FileTree touchedFiles={touched} />)
 

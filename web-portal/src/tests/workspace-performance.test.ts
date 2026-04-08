@@ -83,7 +83,7 @@ describe('workspace performance benchmarks', () => {
 
     expect(elapsed).toBeLessThan(50)
     expect(useCodeStore.getState().tabs).toHaveLength(50)
-    expect(useCodeStore.getState().touchedFiles.size).toBe(50)
+    expect(Object.keys(useCodeStore.getState().touchedFiles).length).toBe(50)
   })
 
   it('5000 terminal output lines stay within cap', () => {

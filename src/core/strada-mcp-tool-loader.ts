@@ -299,7 +299,7 @@ async function importFirstAvailable<T>(paths: string[]): Promise<T> {
     throw lastError;
   }
 
-  throw new Error(`No loadable module found. Tried: ${paths.join(", ")}`);
+  throw new Error(`No loadable module found for: ${paths.map(p => p.split("/").pop()).join(", ")}`);
 }
 
 async function importOptionalFirstAvailable<T>(paths: string[]): Promise<T | null> {

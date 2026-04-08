@@ -4,6 +4,15 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { handleCanvasRoute } from "./canvas-routes.js";
 import type { CanvasStorage, CanvasState } from "./canvas-storage.js";
 
+vi.mock("../utils/logger.js", () => ({
+  getLogger: () => ({
+    error: vi.fn(),
+    warn: vi.fn(),
+    info: vi.fn(),
+    debug: vi.fn(),
+  }),
+}));
+
 // =============================================================================
 // HELPERS — lightweight mocks for IncomingMessage / ServerResponse
 // =============================================================================
@@ -58,7 +67,7 @@ function createMockReq(body?: string): IncomingMessage {
 function createMockStorage(): CanvasStorage {
   return {
     getBySession: vi.fn(),
-    save: vi.fn(),
+    save: vi.fn().mockReturnValue(true),
     delete: vi.fn(),
     listByProject: vi.fn(),
   } as unknown as CanvasStorage;
@@ -73,8 +82,9 @@ const sampleCanvas: CanvasState = {
   sessionId: "session-abc",
   userId: "user-1",
   projectFingerprint: "proj-xyz",
-  shapes: JSON.stringify([{ type: "rect", x: 0, y: 0, w: 100, h: 100 }]),
+  shapes: JSON.stringify([{ id: "shape-1", type: "rect", x: 0, y: 0, w: 100, h: 100 }]),
   viewport: JSON.stringify({ x: 0, y: 0, zoom: 1 }),
+  version: 1,
   createdAt: 1000,
   updatedAt: 2000,
 };
@@ -143,7 +153,7 @@ describe("handleCanvasRoute", () => {
       handleCanvasRoute("/api/canvas/session-abc", "GET", req, res, storage);
 
       expect(res.statusCode).toBe(200);
-      expect(responseJson()).toEqual({ canvas: sampleCanvas });
+      expect(responseJson()).toEqual({ canvas: { ...sampleCanvas, version: 1 } });
       expect(storage.getBySession).toHaveBeenCalledWith("session-abc");
     });
 
@@ -196,7 +206,7 @@ describe("handleCanvasRoute", () => {
   describe("PUT /api/canvas/:sessionId", () => {
     it("saves canvas state and returns success", async () => {
       const body = JSON.stringify({
-        shapes: [{ type: "circle", cx: 50, cy: 50, r: 25 }],
+        shapes: [{ id: "s1", type: "circle", cx: 50, cy: 50, r: 25 }],
         viewport: { x: 10, y: 20, zoom: 1.5 },
         userId: "user-1",
         projectFingerprint: "proj-xyz",
@@ -224,11 +234,12 @@ describe("handleCanvasRoute", () => {
       // Verify shapes are stored as a JSON string
       const savedState = (storage.save as ReturnType<typeof vi.fn>).mock.calls[0]![0] as CanvasState;
       expect(typeof savedState.shapes).toBe("string");
-      expect(JSON.parse(savedState.shapes)).toEqual([{ type: "circle", cx: 50, cy: 50, r: 25 }]);
+      expect(JSON.parse(savedState.shapes)).toEqual([{ id: "s1", type: "circle", cx: 50, cy: 50, r: 25 }]);
     });
 
     it("handles shapes already as a string", async () => {
-      const shapesStr = JSON.stringify([{ type: "rect" }]);
+      const shapesArr = [{ id: "r1", type: "rect" }];
+      const shapesStr = JSON.stringify(shapesArr);
       const body = JSON.stringify({ shapes: shapesStr });
 
       const req = createMockReq(body);
@@ -240,7 +251,8 @@ describe("handleCanvasRoute", () => {
 
       expect(res.statusCode).toBe(200);
       const savedState = (storage.save as ReturnType<typeof vi.fn>).mock.calls[0]![0] as CanvasState;
-      expect(savedState.shapes).toBe(shapesStr);
+      // After validation, shapes are re-serialized
+      expect(JSON.parse(savedState.shapes)).toEqual(shapesArr);
     });
 
     it("handles viewport already as a string", async () => {
@@ -499,7 +511,7 @@ describe("handleCanvasRoute", () => {
 
       const data = responseJson() as Record<string, unknown>;
       expect(data.sessionId).toBe("session-abc");
-      expect(data.shapes).toEqual([{ type: "rect", x: 0, y: 0, w: 100, h: 100 }]);
+      expect(data.shapes).toEqual([{ id: "shape-1", type: "rect", x: 0, y: 0, w: 100, h: 100 }]);
       expect(data.viewport).toEqual({ x: 0, y: 0, zoom: 1 });
       expect(typeof data.exportedAt).toBe("number");
     });
@@ -514,7 +526,7 @@ describe("handleCanvasRoute", () => {
       expect(responseJson()).toEqual({ error: "Canvas not found" });
     });
 
-    it("handles corrupted shapes JSON gracefully", () => {
+    it("returns 500 for corrupted shapes JSON", () => {
       const canvasWithBadShapes: CanvasState = {
         ...sampleCanvas,
         shapes: "not-valid-json{{{",
@@ -524,10 +536,10 @@ describe("handleCanvasRoute", () => {
       const req = createMockReq();
       handleCanvasRoute("/api/canvas/session-abc/export", "POST", req, res, storage);
 
-      expect(res.statusCode).toBe(200);
+      expect(res.statusCode).toBe(500);
       const data = responseJson() as Record<string, unknown>;
-      // Falls back to empty array on parse failure
-      expect(data.shapes).toEqual([]);
+      expect(data.error).toBe("Corrupted canvas state");
+      expect(data.sessionId).toBe("session-abc");
     });
 
     it("returns null viewport when viewport is undefined", () => {
@@ -690,7 +702,7 @@ describe("handleCanvasRoute", () => {
     it("safely handles XSS in stored canvas data", () => {
       const xssCanvas: CanvasState = {
         ...sampleCanvas,
-        shapes: JSON.stringify([{ label: "<script>alert('xss')</script>" }]),
+        shapes: JSON.stringify([{ id: "xss-1", type: "text", label: "<script>alert('xss')</script>" }]),
       };
       (storage.getBySession as ReturnType<typeof vi.fn>).mockReturnValue(xssCanvas);
 

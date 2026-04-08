@@ -385,6 +385,7 @@ export class SupervisorDispatcher {
         waveIndex,
         nodes: wave.map((n) => ({ nodeId: n.id, provider: n.assignedProvider ?? "unknown" })),
       });
+      if (signal?.aborted) break;
       if (this.rootId && this.taskDescription) {
         const displayNodes = wave.map((node) => this.getDisplayNode(node));
         const feedback = buildSupervisorWaveNarrative({
@@ -423,7 +424,18 @@ export class SupervisorDispatcher {
           continue;
         }
 
-        const reservedBudget = await budget.acquire(signal);
+        let reservedBudget: boolean;
+        try {
+          reservedBudget = await budget.acquire(signal);
+        } catch (acquireError) {
+          this.emitActivity(
+            `Budget acquire failed for node ${String(node.id)}: ${String(acquireError)}`,
+            String(node.id),
+            "supervisor_node_failed",
+          );
+          results.push(this.emitSkippedNode(node, "Skipped: budget acquire failed"));
+          continue;
+        }
         if (!reservedBudget) {
           budgetExhausted = true;
           results.push(this.emitSkippedNode(node, "Skipped: budget exhausted"));

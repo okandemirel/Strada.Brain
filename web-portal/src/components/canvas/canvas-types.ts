@@ -26,8 +26,7 @@ export interface ViewportState {
 }
 
 /** Get default dimensions for a card type */
-export function getDefaultDimensions(type: string): { w: number; h: number } {
-  const defaults: Record<string, { w: number; h: number }> = {
+const DEFAULT_DIMENSIONS: Record<string, { w: number; h: number }> = {
     'code-block': { w: 400, h: 240 },
     'diff-block': { w: 420, h: 260 },
     'file-card': { w: 240, h: 100 },
@@ -41,9 +40,11 @@ export function getDefaultDimensions(type: string): { w: number; h: number } {
     'test-result': { w: 300, h: 180 },
     'link-card': { w: 300, h: 120 },
     'metric-card': { w: 200, h: 140 },
-    'connection-arrow': { w: 120, h: 40 },
-  }
-  return defaults[type] ?? { w: 240, h: 120 }
+  'connection-arrow': { w: 120, h: 40 },
+}
+
+export function getDefaultDimensions(type: string): { w: number; h: number } {
+  return DEFAULT_DIMENSIONS[type] ?? { w: 240, h: 120 }
 }
 
 import type { Node, Edge } from '@xyflow/react'

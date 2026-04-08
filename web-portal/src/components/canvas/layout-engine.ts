@@ -13,10 +13,10 @@ const GRID_GAP = 40
 const KANBAN_COLUMNS = ['planned', 'pending', 'executing', 'verifying', 'completed', 'failed'] as const
 
 function nodeWidth(node: Node): number {
-  return (node.style?.width as number) ?? 240
+  return (node.style?.width as number) ?? getDefaultDimensions((node.data?.cardType as string) ?? '').w
 }
 function nodeHeight(node: Node): number {
-  return (node.style?.height as number) ?? 130
+  return (node.style?.height as number) ?? getDefaultDimensions((node.data?.cardType as string) ?? '').h
 }
 
 function applyDagreLayout(nodes: Node[], edges: Edge[], direction: 'LR' | 'TB'): Node[] {
@@ -46,8 +46,14 @@ function applyDagreLayout(nodes: Node[], edges: Edge[], direction: 'LR' | 'TB'):
 
 function applyKanbanLayout(nodes: Node[]): Node[] {
   const columns = new Map<string, Node[]>()
+  const otherNodes: Node[] = []
 
   for (const node of nodes) {
+    // Non-task cards go to the 'other' column
+    if ((node.data as Record<string, unknown>)?.cardType !== 'task-card') {
+      otherNodes.push(node)
+      continue
+    }
     const status = String((node.data as Record<string, unknown>)?.props !== undefined
       ? ((node.data as Record<string, Record<string, unknown>>).props?.status ?? 'pending')
       : 'pending')
@@ -71,11 +77,10 @@ function applyKanbanLayout(nodes: Node[]): Node[] {
     colIndex++ // always advance, even for empty columns
   }
 
-  const placed = new Set(result.map((n) => n.id))
-  const nonTask = nodes.filter((n) => !placed.has(n.id))
-  for (let row = 0; row < nonTask.length; row++) {
+  // Place non-task cards in an 'other' column after all kanban columns
+  for (let row = 0; row < otherNodes.length; row++) {
     result.push({
-      ...nonTask[row]!,
+      ...otherNodes[row]!,
       position: { x: 80 + colIndex * KANBAN_COL_WIDTH, y: 80 + row * KANBAN_ROW_HEIGHT },
     })
   }

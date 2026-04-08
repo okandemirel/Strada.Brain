@@ -22,7 +22,7 @@ const RECONNECT_TOKEN_STORAGE_KEY = 'strada-reconnectToken'
 const SESSION_RECLAIM_GRACE_MS = 1500
 
 function generateId(): string {
-  return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
+  return crypto.randomUUID()
 }
 
 function readStoredChatId(): string | null {
@@ -122,6 +122,9 @@ export function useWebSocket(): UseWebSocketReturn {
   // on their own -- we update `messages` state explicitly when streams change.
   const streamsRef = useRef<Map<string, string>>(new Map())
 
+  // O(1) lookup for stream_update: maps streamId → message index in store.messages
+  const streamIdToIndexRef = useRef(new Map<string, number>())
+
   const acceptConnectedSession = useCallback((
     chatId: string,
     reconnectToken: string,
@@ -153,7 +156,9 @@ export function useWebSocket(): UseWebSocketReturn {
 
     if (previousChatId !== chatId) {
       const store = useSessionStore.getState()
-      store.setMessages(mergeSessionMessages(readSessionMessages(nextProfileId), store.messages))
+      if (!store.viewingHistorical) {
+        store.setMessages(mergeSessionMessages(readSessionMessages(nextProfileId), store.messages))
+      }
     }
   }, [])
 
@@ -402,7 +407,7 @@ export function useWebSocket(): UseWebSocketReturn {
           useSessionStore.getState().setTyping(data.active)
           break
 
-        case 'stream_start':
+        case 'stream_start': {
           useSessionStore.getState().setTyping(false)
           streamsRef.current.set(data.streamId, data.text || '')
           useSessionStore.getState().addMessage({
@@ -414,12 +419,23 @@ export function useWebSocket(): UseWebSocketReturn {
             streamId: data.streamId,
             timestamp: Date.now(),
           })
+          // Store index for O(1) lookup in stream_update
+          const storeAfterAdd = useSessionStore.getState()
+          streamIdToIndexRef.current.set(data.streamId, storeAfterAdd.messages.length - 1)
           break
+        }
 
         case 'stream_update': {
           const store = useSessionStore.getState()
-          const streamMsg = store.messages.find((m) => m.streamId === data.streamId)
+          const msgIndex = streamIdToIndexRef.current.get(data.streamId)
+          const streamMsg = (msgIndex !== undefined && store.messages[msgIndex]?.streamId === data.streamId)
+            ? store.messages[msgIndex]
+            : store.messages.find((m) => m.streamId === data.streamId)
           if (streamMsg) {
+            if (msgIndex === undefined || store.messages[msgIndex]?.streamId !== data.streamId) {
+              const correctIndex = store.messages.findIndex((m) => m.id === streamMsg.id)
+              if (correctIndex >= 0) streamIdToIndexRef.current.set(data.streamId, correctIndex)
+            }
             const newText = streamMsg.text + data.delta
             streamsRef.current.set(data.streamId, newText)
             store.updateMessage(streamMsg.id, { text: newText })
@@ -428,9 +444,13 @@ export function useWebSocket(): UseWebSocketReturn {
         }
 
         case 'stream_end': {
+          const endIndex = streamIdToIndexRef.current.get(data.streamId)
+          streamIdToIndexRef.current.delete(data.streamId)
           streamsRef.current.delete(data.streamId)
           const store = useSessionStore.getState()
-          const streamMsg = store.messages.find((m) => m.streamId === data.streamId)
+          const streamMsg = (endIndex !== undefined && store.messages[endIndex]?.streamId === data.streamId)
+            ? store.messages[endIndex]
+            : store.messages.find((m) => m.streamId === data.streamId)
           if (streamMsg) {
             if (data.text) {
               const streamEndInstinctIds = Array.isArray(data.instinctIds)
@@ -473,6 +493,7 @@ export function useWebSocket(): UseWebSocketReturn {
   useEffect(() => {
     clearTimeout(writeTimeoutRef.current)
     writeTimeoutRef.current = setTimeout(() => {
+      if (useSessionStore.getState().viewingHistorical) return
       writeSessionMessages(profileIdRef.current ?? chatIdRef.current, messages)
     }, 1000)
   }, [messages])
@@ -534,6 +555,11 @@ export function useWebSocket(): UseWebSocketReturn {
     if (delivery === 'sent') return true
 
     if (delivery === 'defer') {
+      const MAX_PENDING_OUTBOUND = 100
+      if (pendingOutboundMessagesRef.current.length >= MAX_PENDING_OUTBOUND) {
+        console.warn('Outbound message queue full, dropping oldest message')
+        pendingOutboundMessagesRef.current.shift()
+      }
       pendingOutboundMessagesRef.current.push(outbound)
       const ws = wsRef.current
       if (
@@ -551,6 +577,7 @@ export function useWebSocket(): UseWebSocketReturn {
   }, [deliverOutboundMessage])
 
   const sendMessage = useCallback((text: string, attachments?: Attachment[]): boolean => {
+    if (useSessionStore.getState().viewingHistorical) return false
     const clientMessageId = generateId()
 
     // Add user message to display
