@@ -27,6 +27,7 @@ function NotificationItem({ n, onDismiss }: { n: NotificationEntry; onDismiss: (
   const { t } = useTranslation()
   const [expanded, setExpanded] = useState(false)
   const [offsetX, setOffsetX] = useState(0)
+  const [isDragging, setIsDragging] = useState(false)
   const draggingRef = useRef(false)
   const startXRef = useRef(0)
   const offsetXRef = useRef(0)
@@ -34,6 +35,7 @@ function NotificationItem({ n, onDismiss }: { n: NotificationEntry; onDismiss: (
   const onTouchStart = useCallback((e: React.TouchEvent) => {
     startXRef.current = e.touches[0]!.clientX
     draggingRef.current = true
+    setIsDragging(true)
   }, [])
 
   const onTouchMove = useCallback((e: React.TouchEvent) => {
@@ -46,6 +48,7 @@ function NotificationItem({ n, onDismiss }: { n: NotificationEntry; onDismiss: (
 
   const onTouchEnd = useCallback(() => {
     draggingRef.current = false
+    setIsDragging(false)
     if (offsetXRef.current < -SWIPE_THRESHOLD) {
       onDismiss(n.id)
     } else {
@@ -69,7 +72,7 @@ function NotificationItem({ n, onDismiss }: { n: NotificationEntry; onDismiss: (
       )}
       <div
         className="flex items-start gap-2 px-2 py-2 rounded-lg hover:bg-bg-tertiary transition-colors group cursor-pointer bg-bg-secondary/80"
-        style={{ transform: `translateX(${offsetX}px)`, transition: draggingRef.current ? 'none' : 'transform 0.2s ease-out' }}
+        style={{ transform: `translateX(${offsetX}px)`, transition: isDragging ? 'none' : 'transform 0.2s ease-out' }}
         onClick={() => setExpanded(!expanded)}
       >
         <span className={`mt-1.5 w-1.5 h-1.5 rounded-full shrink-0 ${SEVERITY_DOT[n.severity] ?? SEVERITY_DOT.info}`} />

@@ -139,6 +139,7 @@ export default function ChatView() {
     [messages],
   )
 
+  // eslint-disable-next-line react-hooks/incompatible-library
   const virtualizer = useVirtualizer({
     count: searchFilteredMessages.length,
     getScrollElement: () => messagesContainerRef.current,
