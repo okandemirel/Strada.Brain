@@ -248,6 +248,85 @@ describe("GoalDecomposer", () => {
   });
 
   // ===========================================================================
+  // Provider Health Check Tests
+  // ===========================================================================
+
+  describe("provider health check", () => {
+    it("skips LLM decomposition and returns single-node tree when provider is in cooldown", async () => {
+      const provider = createMockProvider([
+        JSON.stringify({
+          nodes: [
+            { id: "s1", task: "Step 1", dependsOn: [] },
+            { id: "s2", task: "Step 2", dependsOn: ["s1"] },
+          ],
+        }),
+      ]);
+
+      // Mock ProviderHealthRegistry to report provider as unavailable
+      const mockIsAvailable = vi.fn().mockReturnValue(false);
+      vi.doMock("../agents/providers/provider-health.js", () => ({
+        ProviderHealthRegistry: {
+          getInstance: () => ({
+            isAvailable: mockIsAvailable,
+          }),
+        },
+      }));
+
+      // Re-import to pick up the mock
+      const { GoalDecomposer: MockedGoalDecomposer } = await import("./goal-decomposer.js");
+
+      const decomposer = new MockedGoalDecomposer(provider, 3);
+      const tree = await decomposer.decomposeProactive("test-session", "Build a complex auth system with multiple steps");
+
+      // Should fall back to single-node tree (root + 1 child)
+      expect(tree.nodes.size).toBe(2);
+      const childNodes = Array.from(tree.nodes.values()).filter((node) => node.depth === 1);
+      expect(childNodes).toHaveLength(1);
+      expect(childNodes[0]?.task).toBe("Build a complex auth system with multiple steps");
+
+      // LLM should NOT have been called
+      expect(provider.chat).not.toHaveBeenCalled();
+
+      // Health registry should have been consulted with the provider name
+      expect(mockIsAvailable).toHaveBeenCalledWith("mock");
+
+      vi.doUnmock("../agents/providers/provider-health.js");
+    });
+
+    it("proceeds with LLM decomposition when provider is healthy", async () => {
+      const provider = createMockProvider([
+        JSON.stringify({
+          nodes: [
+            { id: "s1", task: "Step 1", dependsOn: [] },
+            { id: "s2", task: "Step 2", dependsOn: ["s1"] },
+          ],
+        }),
+      ]);
+
+      // Mock ProviderHealthRegistry to report provider as available
+      const mockIsAvailable = vi.fn().mockReturnValue(true);
+      vi.doMock("../agents/providers/provider-health.js", () => ({
+        ProviderHealthRegistry: {
+          getInstance: () => ({
+            isAvailable: mockIsAvailable,
+          }),
+        },
+      }));
+
+      const { GoalDecomposer: MockedGoalDecomposer } = await import("./goal-decomposer.js");
+
+      const decomposer = new MockedGoalDecomposer(provider, 3);
+      const tree = await decomposer.decomposeProactive("test-session", "Build a complex system with tests");
+
+      // Should have used LLM decomposition (root + 2 children)
+      expect(tree.nodes.size).toBe(3);
+      expect(provider.chat).toHaveBeenCalled();
+
+      vi.doUnmock("../agents/providers/provider-health.js");
+    });
+  });
+
+  // ===========================================================================
   // decomposeReactive Tests
   // ===========================================================================
 
