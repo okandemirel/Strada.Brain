@@ -4,6 +4,7 @@ import {
   mergeLearnedInsights,
   normalizeFailureFingerprint,
   parseReflectionDecision,
+  recordProviderHealthFailure,
   replaceSection,
   sanitizeEventInput,
   sanitizeToolResult,
@@ -183,5 +184,57 @@ describe("classifyStepErrorCategory", () => {
 
   it("handles empty/falsy input", () => {
     expect(classifyStepErrorCategory("")).toBe("unknown");
+  });
+});
+
+describe("recordProviderHealthFailure", () => {
+  function createMockRegistry() {
+    return {
+      recordFailure: (_name: string, _error: string) => {},
+      recordQuotaExhausted: (_name: string, _error: string) => {},
+      recordOverloaded: (_name: string, _error: string) => {},
+    };
+  }
+
+  it("routes 403 quota errors to recordQuotaExhausted", () => {
+    const reg = createMockRegistry();
+    const spy = { called: "" };
+    reg.recordQuotaExhausted = (name: string) => { spy.called = name; };
+    recordProviderHealthFailure(reg, "openai", "403 quota exceeded");
+    expect(spy.called).toBe("openai");
+  });
+
+  it("routes HTTP 529 errors to recordOverloaded", () => {
+    const reg = createMockRegistry();
+    const spy = { called: "" };
+    reg.recordOverloaded = (name: string) => { spy.called = name; };
+    recordProviderHealthFailure(reg, "minimax", "Request failed with status 529");
+    expect(spy.called).toBe("minimax");
+  });
+
+  it("routes HTTP 503 errors to recordOverloaded", () => {
+    const reg = createMockRegistry();
+    const spy = { called: "" };
+    reg.recordOverloaded = (name: string) => { spy.called = name; };
+    recordProviderHealthFailure(reg, "anthropic", "Service Unavailable 503");
+    expect(spy.called).toBe("anthropic");
+  });
+
+  it("routes generic errors to recordFailure", () => {
+    const reg = createMockRegistry();
+    const spy = { called: "" };
+    reg.recordFailure = (name: string) => { spy.called = name; };
+    recordProviderHealthFailure(reg, "openai", "Connection timeout");
+    expect(spy.called).toBe("openai");
+  });
+
+  it("does not treat 403 without quota keywords as quota exhaustion", () => {
+    const reg = createMockRegistry();
+    const spy = { failure: false, quota: false };
+    reg.recordFailure = () => { spy.failure = true; };
+    reg.recordQuotaExhausted = () => { spy.quota = true; };
+    recordProviderHealthFailure(reg, "openai", "403 Forbidden");
+    expect(spy.failure).toBe(true);
+    expect(spy.quota).toBe(false);
   });
 });
