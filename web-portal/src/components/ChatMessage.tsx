@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
+import rehypeSanitize from 'rehype-sanitize'
 import type { Components } from 'react-markdown'
 import type { Attachment, ChatMessage as ChatMessageType } from '../types/messages'
 import VoiceOutput from './VoiceOutput'
@@ -11,7 +12,7 @@ import { CopyButton } from './ui/copy-button'
 import { formatTimeAgo } from '../utils/format'
 
 const REMARK_PLUGINS = [remarkGfm]
-const REHYPE_PLUGINS = [rehypeHighlight]
+const REHYPE_PLUGINS = [rehypeHighlight, rehypeSanitize]
 
 interface ChatMessageProps {
   message: ChatMessageType
