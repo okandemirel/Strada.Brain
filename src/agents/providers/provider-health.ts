@@ -154,6 +154,29 @@ export class ProviderHealthRegistry {
   }
 
   /**
+   * Record an overloaded response (HTTP 529/503) — sets a moderate cooldown
+   * (5 minutes) so the provider has time to recover from load.
+   */
+  recordOverloaded(providerName: string, error: string): void {
+    const normalized = providerName.trim().toLowerCase();
+    const existing = this.entries.get(normalized);
+    const now = Date.now();
+    const OVERLOAD_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
+
+    // Don't extend an existing active cooldown — keep the original expiry
+    const existingCooldown = existing?.cooldownUntil ?? 0;
+    const cooldownUntil = existingCooldown > now ? existingCooldown : now + OVERLOAD_COOLDOWN_MS;
+
+    this.entries.set(normalized, {
+      status: "down",
+      consecutiveFailures: this.nextFailureCount(normalized),
+      lastFailureAt: now,
+      lastError: error.slice(0, 200),
+      cooldownUntil,
+    });
+  }
+
+  /**
    * Record a quota/billing exhaustion — sets a long cooldown (8 hours)
    * so the provider is not retried until the quota resets.
    */

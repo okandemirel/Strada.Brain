@@ -236,12 +236,14 @@ export function checkProviderFailureCircuitBreaker(
  * Matches the same quota-detection logic used in fallback-chain.ts.
  */
 export function recordProviderHealthFailure(
-  registry: { recordFailure(name: string, error: string): void; recordQuotaExhausted(name: string, error: string): void },
+  registry: { recordFailure(name: string, error: string): void; recordQuotaExhausted(name: string, error: string): void; recordOverloaded(name: string, error: string): void },
   providerName: string,
   errorMsg: string,
 ): void {
   if (/\b403\b/.test(errorMsg) && QUOTA_LIMIT_RE.test(errorMsg)) {
     registry.recordQuotaExhausted(providerName, errorMsg);
+  } else if (/\b(?:529|503)\b/.test(errorMsg)) {
+    registry.recordOverloaded(providerName, errorMsg);
   } else {
     registry.recordFailure(providerName, errorMsg);
   }
