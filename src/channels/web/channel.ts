@@ -974,9 +974,92 @@ export class WebChannel
       }
 
       // Workspace monitor commands from frontend
-      case "monitor:move_task":
-      case "monitor:retry_task":
-      case "monitor:resume_task":
+      case "monitor:move_task": {
+        if (!this.workspaceBusEmitter) {
+          this.sendToClient(chatId, {
+            type: "text",
+            text: "Monitor bridge is not available. Please try again.",
+          });
+          break;
+        }
+        const moveTaskId = String(data.taskId ?? "");
+        const safeMove = /^[a-zA-Z0-9_-]+$/.test(moveTaskId) ? moveTaskId : "";
+        const moveRootId = String(data.rootId ?? "");
+        const safeRootMove = /^[a-zA-Z0-9_-]+$/.test(moveRootId) ? moveRootId : "";
+        const moveNodeId = String(data.nodeId ?? "");
+        const safeNodeMove = /^[a-zA-Z0-9_-]+$/.test(moveNodeId) ? moveNodeId : "";
+        const toColumn = typeof data.toColumn === "string" ? data.toColumn.slice(0, 64) : "";
+        const fromColumn = typeof data.fromColumn === "string" ? data.fromColumn.slice(0, 64) : "";
+        const newStatus = typeof data.newStatus === "string" ? data.newStatus.slice(0, 64) : "";
+        const newReviewStatus = typeof data.newReviewStatus === "string" ? data.newReviewStatus.slice(0, 64) : "";
+        if (!safeMove) {
+          getLoggerSafe().warn("monitor:move_task rejected — invalid taskId", { raw: moveTaskId });
+          break;
+        }
+        this.workspaceBusEmitter("monitor:move_task", {
+          type: "monitor:move_task",
+          taskId: safeMove,
+          ...(safeRootMove && { rootId: safeRootMove }),
+          ...(safeNodeMove && { nodeId: safeNodeMove }),
+          ...(toColumn && { toColumn }),
+          ...(fromColumn && { fromColumn }),
+          ...(newStatus && { newStatus }),
+          ...(newReviewStatus && { newReviewStatus }),
+        });
+        break;
+      }
+      case "monitor:retry_task": {
+        if (!this.workspaceBusEmitter) {
+          this.sendToClient(chatId, {
+            type: "text",
+            text: "Monitor bridge is not available. Please try again.",
+          });
+          break;
+        }
+        const retryTaskId = String(data.taskId ?? "");
+        const safeRetry = /^[a-zA-Z0-9_-]+$/.test(retryTaskId) ? retryTaskId : "";
+        if (!safeRetry) {
+          getLoggerSafe().warn("monitor:retry_task rejected — invalid taskId", { raw: retryTaskId });
+          break;
+        }
+        const retryRootId = String(data.rootId ?? "");
+        const safeRetryRoot = /^[a-zA-Z0-9_-]+$/.test(retryRootId) ? retryRootId : "";
+        const retryNodeId = String(data.nodeId ?? "");
+        const safeRetryNode = /^[a-zA-Z0-9_-]+$/.test(retryNodeId) ? retryNodeId : "";
+        this.workspaceBusEmitter("monitor:retry_task", {
+          type: "monitor:retry_task",
+          taskId: safeRetry,
+          ...(safeRetryRoot && { rootId: safeRetryRoot }),
+          ...(safeRetryNode && { nodeId: safeRetryNode }),
+        });
+        break;
+      }
+      case "monitor:resume_task": {
+        if (!this.workspaceBusEmitter) {
+          this.sendToClient(chatId, {
+            type: "text",
+            text: "Monitor bridge is not available. Please try again.",
+          });
+          break;
+        }
+        const resumeTaskId = String(data.taskId ?? "");
+        const safeResume = /^[a-zA-Z0-9_-]+$/.test(resumeTaskId) ? resumeTaskId : "";
+        if (!safeResume) {
+          getLoggerSafe().warn("monitor:resume_task rejected — invalid taskId", { raw: resumeTaskId });
+          break;
+        }
+        const resumeRootId = String(data.rootId ?? "");
+        const safeResumeRoot = /^[a-zA-Z0-9_-]+$/.test(resumeRootId) ? resumeRootId : "";
+        const resumeNodeId = String(data.nodeId ?? "");
+        const safeResumeNode = /^[a-zA-Z0-9_-]+$/.test(resumeNodeId) ? resumeNodeId : "";
+        this.workspaceBusEmitter("monitor:resume_task", {
+          type: "monitor:resume_task",
+          taskId: safeResume,
+          ...(safeResumeRoot && { rootId: safeResumeRoot }),
+          ...(safeResumeNode && { nodeId: safeResumeNode }),
+        });
+        break;
+      }
       case "monitor:cancel_task": {
         if (!this.workspaceBusEmitter) {
           this.sendToClient(chatId, {
@@ -985,7 +1068,22 @@ export class WebChannel
           });
           break;
         }
-        this.workspaceBusEmitter(data.type as string, data);
+        const cancelBusTaskId = String(data.taskId ?? "");
+        const safeCancelBus = /^[a-zA-Z0-9_-]+$/.test(cancelBusTaskId) ? cancelBusTaskId : "";
+        if (!safeCancelBus) {
+          getLoggerSafe().warn("monitor:cancel_task rejected — invalid taskId", { raw: cancelBusTaskId });
+          break;
+        }
+        const cancelRootId = String(data.rootId ?? "");
+        const safeCancelRoot = /^[a-zA-Z0-9_-]+$/.test(cancelRootId) ? cancelRootId : "";
+        const cancelNodeId = String(data.nodeId ?? "");
+        const safeCancelNode = /^[a-zA-Z0-9_-]+$/.test(cancelNodeId) ? cancelNodeId : "";
+        this.workspaceBusEmitter("monitor:cancel_task", {
+          type: "monitor:cancel_task",
+          taskId: safeCancelBus,
+          ...(safeCancelRoot && { rootId: safeCancelRoot }),
+          ...(safeCancelNode && { nodeId: safeCancelNode }),
+        });
         break;
       }
       case "monitor:pause":
@@ -1003,19 +1101,79 @@ export class WebChannel
       // Canvas commands from frontend (Phase 4)
       case "canvas:user_shapes": {
         const snapshot = typeof data.snapshot === "string" ? data.snapshot : "";
-        if (snapshot.length > 256_000) break;
+        if (!snapshot || snapshot.length > 256_000) {
+          if (!snapshot) getLoggerSafe().warn("canvas:user_shapes rejected — missing or invalid snapshot");
+          break;
+        }
         if (this.workspaceBusEmitter) {
-          this.workspaceBusEmitter(data.type as string, data);
+          this.workspaceBusEmitter("canvas:user_shapes", {
+            type: "canvas:user_shapes",
+            snapshot,
+          });
         }
         break;
       }
-      case "canvas:save":
-      // Code commands from frontend (Phase 5)
-      case "code:accept_diff":
-      case "code:reject_diff":
-      case "code:request_file": {
+      case "canvas:save": {
+        const saveSessionId = typeof data.sessionId === "string" ? data.sessionId : "";
+        const safeSaveSession = /^[a-zA-Z0-9_-]+$/.test(saveSessionId) ? saveSessionId : "";
+        if (!safeSaveSession) {
+          getLoggerSafe().warn("canvas:save rejected — invalid sessionId", { raw: saveSessionId });
+          break;
+        }
         if (this.workspaceBusEmitter) {
-          this.workspaceBusEmitter(data.type as string, data);
+          this.workspaceBusEmitter("canvas:save", {
+            type: "canvas:save",
+            sessionId: safeSaveSession,
+          });
+        }
+        break;
+      }
+      // Code commands from frontend (Phase 5)
+      case "code:accept_diff": {
+        const acceptPath = typeof data.path === "string" ? data.path : "";
+        const acceptHunk = typeof data.hunkIndex === "number" && Number.isFinite(data.hunkIndex)
+          ? Math.floor(data.hunkIndex) : -1;
+        if (!acceptPath || acceptHunk < 0) {
+          getLoggerSafe().warn("code:accept_diff rejected — invalid path or hunkIndex", { path: acceptPath, hunkIndex: data.hunkIndex });
+          break;
+        }
+        if (this.workspaceBusEmitter) {
+          this.workspaceBusEmitter("code:accept_diff", {
+            type: "code:accept_diff",
+            path: acceptPath,
+            hunkIndex: acceptHunk,
+          });
+        }
+        break;
+      }
+      case "code:reject_diff": {
+        const rejectPath = typeof data.path === "string" ? data.path : "";
+        const rejectHunk = typeof data.hunkIndex === "number" && Number.isFinite(data.hunkIndex)
+          ? Math.floor(data.hunkIndex) : -1;
+        if (!rejectPath || rejectHunk < 0) {
+          getLoggerSafe().warn("code:reject_diff rejected — invalid path or hunkIndex", { path: rejectPath, hunkIndex: data.hunkIndex });
+          break;
+        }
+        if (this.workspaceBusEmitter) {
+          this.workspaceBusEmitter("code:reject_diff", {
+            type: "code:reject_diff",
+            path: rejectPath,
+            hunkIndex: rejectHunk,
+          });
+        }
+        break;
+      }
+      case "code:request_file": {
+        const reqFilePath = typeof data.path === "string" ? data.path : "";
+        if (!reqFilePath) {
+          getLoggerSafe().warn("code:request_file rejected — missing path");
+          break;
+        }
+        if (this.workspaceBusEmitter) {
+          this.workspaceBusEmitter("code:request_file", {
+            type: "code:request_file",
+            path: reqFilePath,
+          });
         }
         break;
       }
