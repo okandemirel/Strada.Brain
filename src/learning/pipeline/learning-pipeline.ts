@@ -168,7 +168,10 @@ export class LearningPipeline {
       // Seed errors are non-fatal — conventions will be seeded on next boot
     });
 
-    // Detection timer removed -- event-driven processing via handleToolResult() replaces it
+    // Detection timer removed -- event-driven processing via handleToolResult() replaces it.
+    // Drain any leftover unprocessed observations from previous sessions on startup.
+    void this.runDetectionBatch().catch(() => { /* non-critical startup drain */ });
+
     this.evolutionTimer = setInterval(() => this.runEvolution(), this.config.evolutionIntervalMs);
 
     // Periodic trajectory extraction — use detection interval from config

@@ -24,6 +24,8 @@ function makeState(overrides: Partial<AgentState> = {}): AgentState {
     lastReflection: null,
     consecutiveErrors: 0,
     learnedInsights: [],
+    reflectionOverrideCount: 0,
+    loopDetectionBlocked: false,
     ...overrides,
   };
 }
@@ -322,6 +324,42 @@ describe("PAOR integration", () => {
     it("should allow DONE when no step results exist", () => {
       const state = createInitialState("test task");
       expect(validateReflectionDecision("DONE", state).decision).toBe("DONE");
+    });
+
+    it("should respect DONE when loopDetectionBlocked is true even with blocking failures", () => {
+      const state = makeState({
+        stepResults: [
+          { toolName: "file_write", success: false, summary: "permission denied", timestamp: 1 },
+        ],
+        loopDetectionBlocked: true,
+      });
+      const result = validateReflectionDecision("DONE", state);
+      expect(result.decision).toBe("DONE");
+      expect(result.overrideReason).toBeUndefined();
+    });
+
+    it("should respect DONE_WITH_SUGGESTIONS when loopDetectionBlocked is true", () => {
+      const state = makeState({
+        stepResults: [
+          { toolName: "shell_test", success: false, summary: "build failed", timestamp: 1 },
+        ],
+        loopDetectionBlocked: true,
+      });
+      const result = validateReflectionDecision("DONE_WITH_SUGGESTIONS", state);
+      expect(result.decision).toBe("DONE_WITH_SUGGESTIONS");
+      expect(result.overrideReason).toBeUndefined();
+    });
+
+    it("should still override DONE when loopDetectionBlocked is false with failures", () => {
+      const state = makeState({
+        stepResults: [
+          { toolName: "file_write", success: false, summary: "compile error", timestamp: 1 },
+        ],
+        loopDetectionBlocked: false,
+      });
+      const result = validateReflectionDecision("DONE", state);
+      expect(result.decision).toBe("CONTINUE");
+      expect(result.overrideReason).toBeDefined();
     });
   });
 

@@ -28,6 +28,8 @@ export interface AgentState {
   readonly learnedInsights: readonly string[];
   /** Number of times PAOR reflection override has forced CONTINUE over DONE. */
   readonly reflectionOverrideCount: number;
+  /** Set to true when loop detection has blocked this task. Prevents PAOR from overriding DONE. */
+  readonly loopDetectionBlocked: boolean;
 }
 
 const VALID_TRANSITIONS: ReadonlyMap<AgentPhase, ReadonlySet<AgentPhase>> =
@@ -67,6 +69,7 @@ export function createInitialState(taskDescription: string): AgentState {
     consecutiveErrors: 0,
     learnedInsights: [],
     reflectionOverrideCount: 0,
+    loopDetectionBlocked: false,
   };
 }
 

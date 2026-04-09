@@ -55,10 +55,12 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
   readonly name: string;
   readonly capabilities: ProviderCapabilities;
   private readonly providers: IAIProvider[];
+  /** Number of providers in this chain (used for single-provider detection). */
+  get providerCount(): number { return this.providers.length; }
   /** Guards against thundering-herd concurrent probes to the same recovering provider. */
   private readonly probing = new Set<string>();
-  /** Providers whose thinking/reasoning should be suppressed after a reasoning timeout. */
-  private readonly disabledThinkingProviders = new Set<string>();
+  // Thinking disable state now lives in ProviderHealthRegistry singleton
+  // to survive FallbackChainProvider re-creation on cache misses.
 
   constructor(providers: IAIProvider[]) {
     if (providers.length === 0) {
@@ -222,8 +224,8 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
 
       attempted++;
       try {
-        // Apply or clear thinking suppression based on reasoning timeout history.
-        if (this.disabledThinkingProviders.has(provider.name) && "disableThinking" in provider) {
+        // Apply thinking suppression based on reasoning timeout history (singleton state).
+        if (health.isThinkingDisabled(provider.name) && "disableThinking" in provider) {
           (provider as { disableThinking: boolean }).disableThinking = true;
         }
 
@@ -231,16 +233,18 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
         const response = await attempt(provider, safeMessages);
         health.recordSuccess(provider.name);
 
-        // On success with thinking disabled, re-enable thinking for the next
-        // call so the provider can use its full reasoning capability again.
-        if (this.disabledThinkingProviders.has(provider.name)) {
-          this.disabledThinkingProviders.delete(provider.name);
-          if ("disableThinking" in provider) {
-            (provider as { disableThinking: boolean }).disableThinking = false;
+        // Require 3 consecutive successes before re-enabling thinking to
+        // prevent timeout→success→re-enable→timeout cycles.
+        if (health.isThinkingDisabled(provider.name)) {
+          if (health.recordThinkingSuccess(provider.name)) {
+            health.enableThinking(provider.name);
+            if ("disableThinking" in provider) {
+              (provider as { disableThinking: boolean }).disableThinking = false;
+            }
+            logger.info("Re-enabled thinking after 3 consecutive successes", {
+              provider: provider.name,
+            });
           }
-          logger.info("Re-enabled thinking after successful non-thinking response", {
-            provider: provider.name,
-          });
         }
 
         if (attempted > 1) {
@@ -268,6 +272,9 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
           health.recordFailure(provider.name, errorMsg);
         }
 
+        // Reset thinking success counter on any failure
+        health.resetThinkingSuccessCounter(provider.name);
+
         // Detect reasoning model timeout pattern: the provider's CDN/proxy
         // may abort long-running reasoning requests before the model responds.
         // Guard: only warn if the error looks like an external abort, not a
@@ -286,8 +293,9 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
 
           // In single-provider mode, disable thinking for future calls so the
           // provider can respond without hitting the CDN/proxy timeout again.
-          if (isSingleProvider && !this.disabledThinkingProviders.has(provider.name)) {
-            this.disabledThinkingProviders.add(provider.name);
+          // State stored in singleton so it survives provider re-creation.
+          if (isSingleProvider && !health.isThinkingDisabled(provider.name)) {
+            health.disableThinking(provider.name);
             logger.warn("Auto-disabled thinking for single provider after reasoning timeout", {
               provider: provider.name,
             });
@@ -305,7 +313,7 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
         const remaining = this.providers.slice(i + 1).filter((p) => health.isAvailable(p.name));
         if (remaining.length === 0) {
           if (isReasoningTimeout && isSingleProvider) {
-            const thinkingDisabled = this.disabledThinkingProviders.has(provider.name);
+            const thinkingDisabled = health.isThinkingDisabled(provider.name);
             const hint = "Reasoning models (e.g. MiniMax) may exceed the API proxy timeout during extended thinking. "
               + (thinkingDisabled
                 ? "Thinking has been auto-disabled for future retries. "

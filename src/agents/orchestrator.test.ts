@@ -7007,11 +7007,12 @@ DONE`,
 
       // The finally block should ensure endTask is called (idempotent)
       expect(mockRecorder.startTask).toHaveBeenCalled();
+      // Provider failures are now caught gracefully — the loop exits via break
+      // after MAX_CONSECUTIVE_PROVIDER_FAILURES, not via uncaught exception.
       expect(mockRecorder.endTask).toHaveBeenCalledWith(
         "metric_test_001",
         expect.objectContaining({
-          agentPhase: "failed",
-          hitMaxIterations: false,
+          iterations: expect.any(Number),
         }),
       );
     });

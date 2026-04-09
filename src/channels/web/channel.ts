@@ -519,7 +519,7 @@ export class WebChannel
     }
 
     // Health endpoint for Docker/K8s liveness probes
-    if (url === "/health") {
+    if (url === "/health" || url === "/api/health") {
       const body = JSON.stringify({
         status: this.healthy ? "ok" : "degraded",
         timestamp: new Date().toISOString(),
@@ -1297,11 +1297,21 @@ export class WebChannel
     "/api/user/autonomous",
     "/api/rag/status",
     "/api/system/boot",
-    "/api/health",
-    "/api/status",
-    "/api/providers",
-    "/api/tasks",
+    "/api/providers/available",
+    "/api/providers/active",
+    "/api/deployment/check",
   ]);
+
+  /** Prefix-based proxy allowlist — any path starting with these is proxied. */
+  private static readonly ALLOWED_PROXY_PREFIXES: readonly string[] = [
+    "/api/goals", "/api/agent-metrics", "/api/triggers",
+    "/api/personality/profiles/",
+    "/api/canvas", "/api/workspace", "/api/skills",
+    "/api/providers/intelligence/",
+    "/api/chat/",
+    "/api/monitor/", "/api/settings/",
+    "/api/daemon/approvals/",
+  ];
 
   /** Paths that accept POST or DELETE in addition to GET. */
   private static readonly MUTABLE_PROXY_PATHS = new Set([
@@ -1313,7 +1323,16 @@ export class WebChannel
     "/api/daemon/stop",
     "/api/routing/preset",
     "/api/budget/config",
+    "/api/deployment/check",
+    "/api/models/refresh",
   ]);
+
+  /** Prefix-based mutable allowlist — POST/DELETE/PUT allowed for paths starting with these. */
+  private static readonly MUTABLE_PROXY_PREFIXES: readonly string[] = [
+    "/api/personality/profiles/",
+    "/api/canvas", "/api/skills/",
+    "/api/settings/", "/api/monitor/",
+  ];
 
   private getSingleHeader(
     header: string | string[] | undefined,
@@ -1358,17 +1377,9 @@ export class WebChannel
     const pathOnly = url.split("?")[0]!;
     const isAllowed =
       WebChannel.ALLOWED_PROXY_PATHS.has(pathOnly) ||
-      pathOnly === "/api/goals" || pathOnly.startsWith("/api/goals/") ||
-      pathOnly === "/api/agent-metrics" || pathOnly.startsWith("/api/agent-metrics/") ||
-      pathOnly === "/api/triggers" || pathOnly.startsWith("/api/triggers/") ||
-      pathOnly.startsWith("/api/personality/profiles/") ||
-      pathOnly === "/api/canvas" || pathOnly.startsWith("/api/canvas/") ||
-      pathOnly === "/api/workspace" || pathOnly.startsWith("/api/workspace/") ||
-      pathOnly === "/api/skills" || pathOnly.startsWith("/api/skills/") ||
-      pathOnly === "/api/providers/available" ||
-      pathOnly === "/api/providers/active" ||
-      pathOnly.startsWith("/api/providers/intelligence/") ||
-      pathOnly.startsWith("/api/chat/");
+      WebChannel.ALLOWED_PROXY_PREFIXES.some((p) =>
+        p.endsWith("/") ? pathOnly.startsWith(p) : (pathOnly === p || pathOnly.startsWith(p + "/")),
+      );
 
     if (!isAllowed) {
       res.writeHead(403, { ...WebChannel.SECURITY_HEADERS, "Content-Type": "application/json" });
@@ -1379,10 +1390,9 @@ export class WebChannel
     // Method check: GET always allowed, POST/DELETE/PUT only for mutable paths
     const isMutable =
       WebChannel.MUTABLE_PROXY_PATHS.has(pathOnly) ||
-      pathOnly.startsWith("/api/personality/profiles/") ||
-      pathOnly === "/api/canvas" || pathOnly.startsWith("/api/canvas/") ||
-      pathOnly.startsWith("/api/skills/") ||
-      pathOnly === "/api/models/refresh";
+      WebChannel.MUTABLE_PROXY_PREFIXES.some((p) =>
+        p.endsWith("/") ? pathOnly.startsWith(p) : (pathOnly === p || pathOnly.startsWith(p + "/")),
+      );
     if (method !== "GET" && !(isMutable && (method === "POST" || method === "DELETE" || method === "PUT"))) {
       res.writeHead(405, { ...WebChannel.SECURITY_HEADERS, "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: "Method Not Allowed" }));

@@ -61,6 +61,12 @@ export class ProviderHealthRegistry {
   private readonly downEpisodes = new Map<string, number>();
   private readonly config: ProviderHealthConfig;
 
+  /** Providers whose thinking/reasoning is suppressed after a reasoning timeout. */
+  private readonly thinkingDisabledProviders = new Set<string>();
+  /** Consecutive successes with thinking disabled — re-enable after threshold. */
+  private readonly thinkingReEnableCounters = new Map<string, number>();
+  private static readonly THINKING_RE_ENABLE_THRESHOLD = 3;
+
   private norm(name: string): string { return name.trim().toLowerCase(); }
 
   constructor(config: Partial<ProviderHealthConfig> = {}) {
@@ -224,6 +230,45 @@ export class ProviderHealthRegistry {
 
   private nextFailureCount(normalizedName: string): number {
     return (this.entries.get(normalizedName)?.consecutiveFailures ?? 0) + 1;
+  }
+
+  // ── Thinking disable state (singleton-owned) ──────────────────────────
+
+  disableThinking(providerName: string): void {
+    const normalized = this.norm(providerName);
+    this.thinkingDisabledProviders.add(normalized);
+    this.thinkingReEnableCounters.set(normalized, 0);
+  }
+
+  isThinkingDisabled(providerName: string): boolean {
+    return this.thinkingDisabledProviders.has(this.norm(providerName));
+  }
+
+  enableThinking(providerName: string): void {
+    const normalized = this.norm(providerName);
+    this.thinkingDisabledProviders.delete(normalized);
+    this.thinkingReEnableCounters.delete(normalized);
+  }
+
+  /** Returns true when consecutive success count reaches threshold (3). */
+  recordThinkingSuccess(providerName: string): boolean {
+    const normalized = this.norm(providerName);
+    const count = (this.thinkingReEnableCounters.get(normalized) ?? 0) + 1;
+    this.thinkingReEnableCounters.set(normalized, count);
+    return count >= ProviderHealthRegistry.THINKING_RE_ENABLE_THRESHOLD;
+  }
+
+  resetThinkingSuccessCounter(providerName: string): void {
+    this.thinkingReEnableCounters.set(this.norm(providerName), 0);
+  }
+
+  /** Remove all state for a provider (health, episodes, thinking). */
+  clearProviderState(providerName: string): void {
+    const normalized = this.norm(providerName);
+    this.entries.delete(normalized);
+    this.downEpisodes.delete(normalized);
+    this.thinkingDisabledProviders.delete(normalized);
+    this.thinkingReEnableCounters.delete(normalized);
   }
 
   /**

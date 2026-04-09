@@ -476,3 +476,43 @@ describe("ProviderHealthRegistry — isRecovering", () => {
     expect(registry.isRecovering("cooling-provider")).toBe(false);
   });
 });
+
+describe("Thinking disable state", () => {
+  it("disableThinking / isThinkingDisabled / enableThinking lifecycle", () => {
+    const registry = new ProviderHealthRegistry();
+    expect(registry.isThinkingDisabled("MiniMax")).toBe(false);
+    registry.disableThinking("MiniMax");
+    expect(registry.isThinkingDisabled("MiniMax")).toBe(true);
+    expect(registry.isThinkingDisabled("minimax")).toBe(true); // normalized
+    registry.enableThinking("MiniMax");
+    expect(registry.isThinkingDisabled("MiniMax")).toBe(false);
+  });
+
+  it("requires 3 consecutive successes to re-enable", () => {
+    const registry = new ProviderHealthRegistry();
+    registry.disableThinking("test");
+    expect(registry.recordThinkingSuccess("test")).toBe(false); // 1
+    expect(registry.recordThinkingSuccess("test")).toBe(false); // 2
+    expect(registry.recordThinkingSuccess("test")).toBe(true);  // 3 — threshold reached
+  });
+
+  it("resets success counter on failure", () => {
+    const registry = new ProviderHealthRegistry();
+    registry.disableThinking("test");
+    registry.recordThinkingSuccess("test"); // 1
+    registry.recordThinkingSuccess("test"); // 2
+    registry.resetThinkingSuccessCounter("test"); // reset
+    expect(registry.recordThinkingSuccess("test")).toBe(false); // back to 1
+    expect(registry.recordThinkingSuccess("test")).toBe(false); // 2
+    expect(registry.recordThinkingSuccess("test")).toBe(true);  // 3
+  });
+
+  it("clearProviderState removes all state including thinking", () => {
+    const registry = new ProviderHealthRegistry();
+    registry.disableThinking("test");
+    registry.recordFailure("test", "some error");
+    registry.clearProviderState("test");
+    expect(registry.isThinkingDisabled("test")).toBe(false);
+    expect(registry.isAvailable("test")).toBe(true);
+  });
+});

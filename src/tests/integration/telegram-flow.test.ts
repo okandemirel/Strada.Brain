@@ -312,8 +312,10 @@ describe("Telegram Flow Integration", () => {
 
   describe("Error Handling", () => {
     it("should handle provider errors gracefully", async () => {
-      // Simulate provider error
-      mockProvider.chatSpy.mockRejectedValueOnce(new Error("Provider API error"));
+      // Simulate repeated provider errors to trigger abort with user notification
+      for (let i = 0; i < 5; i++) {
+        mockProvider.chatSpy.mockRejectedValueOnce(new Error("Provider API error"));
+      }
 
       await telegramChannel.simulateIncomingMessage("chat-error", "Trigger error");
 

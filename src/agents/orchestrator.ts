@@ -168,6 +168,7 @@ import {
   sanitizeToolResult,
   checkProviderFailureCircuitBreaker,
   recordProviderHealthFailure,
+  evaluateProviderFailure,
 } from "./orchestrator-runtime-utils.js";
 import { IterationHealthTracker } from "./iteration-health-tracker.js";
 import { getResilienceMessage } from "./resilience-messages.js";
@@ -2565,6 +2566,7 @@ export class Orchestrator {
           let userText: string;
           if (isDiagnostic) {
             logger.warn("Loop detection blocked task", { chatId, diagnostic: text.slice(0, 500) });
+            bgAgentState = { ...bgAgentState, loopDetectionBlocked: true };
             const stuckMsg = getResilienceMessage("task_stuck", progressLanguage ?? "en");
             // Extract the suggested action from the diagnostic to give the user actionable context
             const actionMatch = /Suggested action:\s*(.+?)(?:\nFiles t|$)/is.exec(text);
@@ -2639,6 +2641,8 @@ export class Orchestrator {
           let consecutiveProviderFailures = 0;
           const iterationHealth = new IterationHealthTracker();
           let maxTokensAbort = false;
+          let bgCumulativeInputTokens = 0;
+          const bgTokenBudget = this.taskConfig.interactiveTokenBudget;
           while (true) {
             for (
               bgEpochIteration = 0;
@@ -2649,6 +2653,7 @@ export class Orchestrator {
               if (signal.aborted) {
                 throw new Error("Task cancelled");
               }
+              const bgIterationStartMs = Date.now();
 
               const {
                 executionStrategy: iterStrategy,
@@ -2732,11 +2737,13 @@ export class Orchestrator {
                   isTimeoutOrAbort,
                 });
 
-                if (consecutiveProviderFailures >= MAX_CONSECUTIVE_PROVIDER_FAILURES) {
+                const bgFailureEval = evaluateProviderFailure(
+                  consecutiveProviderFailures, MAX_CONSECUTIVE_PROVIDER_FAILURES,
+                  currentAssignment.providerName, errMsg,
+                );
+                if (bgFailureEval.action === "abort") {
                   logger.error("Background task aborting: too many consecutive provider failures", {
-                    consecutiveProviderFailures,
-                    chatId,
-                    provider: currentAssignment.providerName,
+                    consecutiveProviderFailures, chatId, provider: currentAssignment.providerName,
                   });
                   break;
                 }
@@ -2747,10 +2754,10 @@ export class Orchestrator {
                   bgIteration--;
                 }
 
-                if (consecutiveProviderFailures >= 3) {
+                if (bgFailureEval.guidanceMessage) {
                   session.messages.push({
                     role: "user",
-                    content: `[System] Provider has failed ${consecutiveProviderFailures} consecutive times (${errMsg}). Consider: 1) Simplifying the current step 2) Breaking the task into smaller steps 3) Using a different approach.`,
+                    content: bgFailureEval.guidanceMessage,
                   } as ConversationMessage);
                 }
 
@@ -2788,6 +2795,30 @@ export class Orchestrator {
                 response.usage,
                 options.onUsage ?? this.onUsage,
               );
+
+              // Token budget enforcement — prevent runaway token consumption in background tasks
+              bgCumulativeInputTokens += response.usage?.inputTokens ?? 0;
+              if (bgCumulativeInputTokens >= bgTokenBudget) {
+                logger.warn("Background token budget exceeded", {
+                  chatId, bgCumulativeInputTokens, bgTokenBudget,
+                  iteration: bgIteration, provider: currentAssignment.providerName,
+                });
+                return finish(
+                  getResilienceMessage("token_budget_exceeded", progressLanguage ?? "en"),
+                  "completed",
+                  "Background token budget exceeded",
+                );
+              }
+
+              // Per-iteration observability log
+              logger.debug("Iteration complete (bg)", {
+                iteration: bgIteration + 1, chatId,
+                tokens: response.usage?.totalTokens ?? 0,
+                inputTokens: response.usage?.inputTokens ?? 0,
+                toolCalls: response.toolCalls?.length ?? 0,
+                cumulativeInputTokens: bgCumulativeInputTokens,
+                durationMs: Date.now() - bgIterationStartMs,
+              });
 
               // Intelligent provider resilience: detect synthetic empty responses and adapt
               const cbResult = checkProviderFailureCircuitBreaker(response, iterationHealth.getConsecutiveFailures());
@@ -3872,10 +3903,12 @@ export class Orchestrator {
       }
 
       let consecutiveMaxTokens = 0;
+      let consecutiveProviderFailures = 0;
       let cumulativeInputTokens = 0;
       const tokenBudget = this.taskConfig.interactiveTokenBudget;
       const iterationHealth = new IterationHealthTracker();
       for (let iteration = 0; iteration < interactiveIterationLimit; iteration++) {
+        const iterationStartMs = Date.now();
         const {
           executionStrategy: iterStrategy,
           activePrompt,
@@ -3919,23 +3952,62 @@ export class Orchestrator {
           iteration,
         });
         let response;
-        if (canStream) {
-          // Silent streaming: use streaming internally (SSE parsing, timeout, reasoning_content)
-          // but don't create visible messages. User sees only the final response via sendMarkdown.
-          response = await this.silentStream(
-            chatId,
-            activePrompt,
-            session,
-            resilientProvider,
-            currentToolDefinitions,
+        try {
+          if (canStream) {
+            // Silent streaming: use streaming internally (SSE parsing, timeout, reasoning_content)
+            // but don't create visible messages. User sees only the final response via sendMarkdown.
+            response = await this.silentStream(
+              chatId,
+              activePrompt,
+              session,
+              resilientProvider,
+              currentToolDefinitions,
+            );
+          } else {
+            response = await resilientProvider.chat(
+              activePrompt,
+              session.messages,
+              currentToolDefinitions,
+            ); // Interactive path — no abort signal (user is actively connected)
+          }
+        } catch (providerError) {
+          const errMsg = providerError instanceof Error ? providerError.message : String(providerError);
+          consecutiveProviderFailures++;
+          logger.warn("Provider call failed in interactive loop", {
+            chatId, iteration,
+            provider: currentAssignment.providerName,
+            error: errMsg, consecutiveProviderFailures,
+          });
+          const failureEval = evaluateProviderFailure(
+            consecutiveProviderFailures, MAX_CONSECUTIVE_PROVIDER_FAILURES,
+            currentAssignment.providerName, errMsg,
           );
-        } else {
-          response = await resilientProvider.chat(
-            activePrompt,
-            session.messages,
-            currentToolDefinitions,
-          ); // Interactive path — no abort signal (user is actively connected)
+          // Always notify the user of provider errors in interactive mode
+          const interactiveLang = (profile?.language ?? this.defaultLanguage) as string;
+          if (failureEval.action === "abort") {
+            logger.error("Interactive loop aborting: too many consecutive provider failures", {
+              consecutiveProviderFailures, chatId, provider: currentAssignment.providerName,
+            });
+            await this.sessionManager.sendVisibleAssistantMarkdown(
+              chatId, session,
+              getResilienceMessage("provider_abort", interactiveLang),
+            );
+            break;
+          }
+          // Send a user-visible retry notice so the user knows something went wrong
+          await this.sessionManager.sendVisibleAssistantMarkdown(
+            chatId, session,
+            getResilienceMessage("provider_slow", interactiveLang),
+          );
+          if (failureEval.guidanceMessage) {
+            session.messages.push({
+              role: "user",
+              content: failureEval.guidanceMessage,
+            } as ConversationMessage);
+          }
+          continue;
         }
+        consecutiveProviderFailures = 0;
         this.recordExecutionTrace({
           chatId,
           identityKey,
@@ -3972,6 +4044,16 @@ export class Orchestrator {
 
         // Token budget enforcement — prevent runaway token consumption
         cumulativeInputTokens += response.usage?.inputTokens ?? 0;
+
+        // Per-iteration observability log
+        logger.debug("Iteration complete (interactive)", {
+          iteration: iteration + 1, chatId,
+          tokens: response.usage?.totalTokens ?? 0,
+          inputTokens: response.usage?.inputTokens ?? 0,
+          toolCalls: response.toolCalls?.length ?? 0,
+          cumulativeInputTokens,
+          durationMs: Date.now() - iterationStartMs,
+        });
         if (cumulativeInputTokens >= tokenBudget) {
           logger.warn("Interactive token budget exceeded — aborting loop", {
             chatId,
@@ -4205,6 +4287,7 @@ export class Orchestrator {
             let safeBlocked: string;
             if (isDiag1) {
               logger.warn("Loop detection blocked task", { chatId, diagnostic: rawBlocked.slice(0, 500) });
+              agentState = { ...agentState, loopDetectionBlocked: true };
               const stuckMsg1 = getResilienceMessage("task_stuck", this.defaultLanguage);
               const actionMatch1 = /Suggested action:\s*(.+?)(?:\nFiles t|$)/is.exec(rawBlocked);
               safeBlocked = actionMatch1?.[1]?.trim()
@@ -4451,6 +4534,7 @@ export class Orchestrator {
             let safeEnd: string;
             if (isDiag2) {
               logger.warn("Loop detection blocked task", { chatId, diagnostic: rawEnd.slice(0, 500) });
+              agentState = { ...agentState, loopDetectionBlocked: true };
               const stuckMsg2 = getResilienceMessage("task_stuck", this.defaultLanguage);
               const actionMatch2 = /Suggested action:\s*(.+?)(?:\nFiles t|$)/is.exec(rawEnd);
               safeEnd = actionMatch2?.[1]?.trim()
@@ -4785,7 +4869,9 @@ export class Orchestrator {
       } catch (fallbackErr) {
         const fallbackMsg = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
         getLogger().error("Silent stream fallback chat failed", { chatId, error: fallbackMsg });
-        recordProviderHealthFailure(ProviderHealthRegistry.getInstance(), provider.name, fallbackMsg);
+        recordProviderHealthFailure(ProviderHealthRegistry.getInstance(), provider.name, fallbackMsg, {
+          isSingleProvider: "providerCount" in provider ? (provider as { providerCount: number }).providerCount === 1 : true,
+        });
         // Surface the failure to the agent so it can adapt its approach
         // (e.g. simplify the request, reduce tool usage, skip non-critical work).
         // This mirrors Claude Code's behavior of showing errors to the user.

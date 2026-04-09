@@ -104,6 +104,12 @@ export function validateReflectionDecision(
   if (decision !== "DONE" && decision !== "DONE_WITH_SUGGESTIONS") {
     return { decision };
   }
+  // Guard: when loop detection has already blocked this task, respect the DONE
+  // verdict unconditionally. Overriding would restart execution and fight the
+  // loop detector, causing infinite cycles (3h27m runaway session bug).
+  if (state.loopDetectionBlocked) {
+    return { decision };
+  }
   // Evidence-based override: only blocking recent failures should keep the loop open.
   const recentSteps = state.stepResults.slice(-3);
   const blockingFailures = recentSteps.filter(isBlockingStepFailure);
@@ -236,17 +242,56 @@ export function checkProviderFailureCircuitBreaker(
  * Matches the same quota-detection logic used in fallback-chain.ts.
  */
 export function recordProviderHealthFailure(
-  registry: { recordFailure(name: string, error: string): void; recordQuotaExhausted(name: string, error: string): void; recordOverloaded(name: string, error: string): void },
+  registry: {
+    recordFailure(name: string, error: string): void;
+    recordQuotaExhausted(name: string, error: string): void;
+    recordQuotaExhaustedShort?(name: string, error: string): void;
+    recordOverloaded(name: string, error: string): void;
+    recordOverloadedShort?(name: string, error: string): void;
+  },
   providerName: string,
   errorMsg: string,
+  options?: { isSingleProvider?: boolean },
 ): void {
+  const single = options?.isSingleProvider ?? false;
   if (/\b403\b/.test(errorMsg) && QUOTA_LIMIT_RE.test(errorMsg)) {
-    registry.recordQuotaExhausted(providerName, errorMsg);
+    if (single && registry.recordQuotaExhaustedShort) {
+      registry.recordQuotaExhaustedShort(providerName, errorMsg);
+    } else {
+      registry.recordQuotaExhausted(providerName, errorMsg);
+    }
   } else if (/\b(?:529|503)\b/.test(errorMsg)) {
-    registry.recordOverloaded(providerName, errorMsg);
+    if (single && registry.recordOverloadedShort) {
+      registry.recordOverloadedShort(providerName, errorMsg);
+    } else {
+      registry.recordOverloaded(providerName, errorMsg);
+    }
   } else {
     registry.recordFailure(providerName, errorMsg);
   }
+}
+
+/**
+ * Evaluate a consecutive provider failure and return the action the loop should take.
+ * Shared by both background and interactive loops to avoid divergence.
+ */
+export function evaluateProviderFailure(
+  consecutiveFailures: number,
+  limit: number,
+  providerName: string,
+  errorMsg: string,
+): { action: "abort" | "guidance" | "continue"; guidanceMessage?: string } {
+  if (consecutiveFailures >= limit) {
+    return { action: "abort" };
+  }
+  if (consecutiveFailures >= 3) {
+    const safeErr = redactSensitiveText(errorMsg).slice(0, 200);
+    return {
+      action: "guidance",
+      guidanceMessage: `[System] Provider "${providerName}" has failed ${consecutiveFailures} consecutive times (${safeErr}). Consider: 1) Simplifying the current step 2) Breaking the task into smaller steps 3) Using a different approach.`,
+    };
+  }
+  return { action: "continue" };
 }
 
 /**
