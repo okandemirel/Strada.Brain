@@ -160,7 +160,7 @@ describe("loadConfig", () => {
       requireMfa: false,
     });
     expect(config.llmStreamInitialTimeoutMs).toBe(600000);
-    expect(config.llmStreamStallTimeoutMs).toBe(120000);
+    expect(config.llmStreamStallTimeoutMs).toBe(300000);
     expect(config.interaction).toEqual({
       mode: "phase-driven",
       heartbeatAfterMs: 120000,
