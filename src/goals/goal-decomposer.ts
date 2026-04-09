@@ -137,6 +137,18 @@ export class GoalDecomposer {
       return this.buildSingleNodeTree(sessionId, taskDescription);
     }
 
+    // Skip LLM decomposition if provider is overloaded — use single-node fallback
+    const providerName = this.provider.name;
+    if (providerName) {
+      const { ProviderHealthRegistry } = await import("../agents/providers/provider-health.js");
+      const healthRegistry = ProviderHealthRegistry.getInstance();
+      if (!healthRegistry.isAvailable(providerName)) {
+        const { getLoggerSafe } = await import("../utils/logger.js");
+        getLoggerSafe().info("Skipping goal decomposition — provider is in cooldown", { provider: providerName });
+        return this.buildSingleNodeTree(sessionId, taskDescription);
+      }
+    }
+
     const rootId = generateGoalNodeId();
     const now = Date.now();
 
