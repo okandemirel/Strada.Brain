@@ -115,6 +115,7 @@ import { summarizeTree } from "../goals/goal-renderer.js";
 // formatGoalPlanMarkdown moved to orchestrator-goal-decomposition.ts
 import { formatResumePrompt, prepareTreeForResume } from "../goals/goal-resume.js";
 import type { GoalTree } from "../goals/types.js";
+import type { SkillEntry } from "../skills/types.js";
 import type { GoalStorage } from "../goals/goal-storage.js";
 import type { WorkspaceBus } from "../dashboard/workspace-bus.js";
 // goalTreeToDagPayload moved to orchestrator-goal-decomposition.ts
@@ -508,6 +509,8 @@ interface SelfManagedWriteReview {
 function createStreamingProgressTimeout(
   initialTimeoutMs: number,
   stallTimeoutMs: number,
+  /** Extended stall timeout for reasoning models during silent thinking phases. */
+  thinkingStallTimeoutMs?: number,
 ): {
   markProgress: () => void;
   timeoutPromise: Promise<never>;
@@ -521,11 +524,17 @@ function createStreamingProgressTimeout(
 
   const armTimeout = () => {
     if (timeoutId) clearTimeout(timeoutId);
-    const timeoutMs = sawProgress ? stallTimeoutMs : initialTimeoutMs;
+    // Pre-first-token: use extended thinking timeout (silent reasoning phase).
+    // Post-first-token: always use normal stall timeout — if tokens were flowing
+    // and stopped, the connection is likely dead, not thinking.
+    const timeoutMs = sawProgress
+      ? stallTimeoutMs
+      : (thinkingStallTimeoutMs ?? initialTimeoutMs);
     timeoutId = setTimeout(() => {
+      const thinkingHint = !sawProgress && thinkingStallTimeoutMs ? " (thinking model)" : "";
       const error = new Error(sawProgress
-        ? `Streaming stalled after ${stallTimeoutMs}ms without progress`
-        : `Streaming did not start within ${initialTimeoutMs}ms`);
+        ? `Streaming stalled after ${timeoutMs}ms without progress`
+        : `Streaming did not start within ${timeoutMs}ms${thinkingHint}`);
       abortController.abort(error);
       rejectTimeout?.(error);
     }, timeoutMs);
@@ -725,6 +734,7 @@ export class Orchestrator {
   private frameworkPromptGenerator: FrameworkPromptGenerator | null = null;
   /** Callback to hot-reload a newly created skill */
   private onSkillCreated?: (skillPath: string) => Promise<void>;
+  private getSkillEntries?: () => readonly SkillEntry[];
   /** Per-orchestrator DynamicToolFactory (avoids module-level singleton leaks in multi-agent setups) */
   private readonly dynamicToolFactory = new DynamicToolFactory();
 
@@ -791,6 +801,7 @@ export class Orchestrator {
     loopHardCapBlock?: number;
     progressAssessmentEnabled?: boolean;
     onSkillCreated?: (skillPath: string) => Promise<void>;
+    getSkillEntries?: () => readonly SkillEntry[];
   }) {
     this.providerManager = opts.providerManager;
     this.channel = opts.channel;
@@ -863,6 +874,7 @@ export class Orchestrator {
     this.getIdentityState = opts.getIdentityState;
     this.crashRecoveryContext = opts.crashRecoveryContext;
     this.onSkillCreated = opts.onSkillCreated;
+    this.getSkillEntries = opts.getSkillEntries;
 
     // Build tool registry
     this.tools = new Map();
@@ -2027,6 +2039,7 @@ export class Orchestrator {
       runtimeArtifactMatches: this.runtimeArtifactMatches,
       buildWorkerToolDefinitions: (task, phase, role) =>
         this.buildWorkerToolDefinitions(task, phase, role as SupervisorAssignment["role"]),
+      skillEntries: this.getSkillEntries?.(),
     };
   }
 
@@ -4679,10 +4692,21 @@ export class Orchestrator {
     }>,
     externalSignal?: AbortSignal,
   ): Promise<ProviderResponse> => {
+    // Reasoning models get an extended stall window equal to the initial timeout
+    // because they may enter long silent thinking phases with no SSE events.
+    const thinkingStall = provider.capabilities.thinkingSupported
+      ? this.streamInitialTimeoutMs
+      : undefined;
     const timeoutGuard = createStreamingProgressTimeout(
       this.streamInitialTimeoutMs,
       this.streamStallTimeoutMs,
+      thinkingStall,
     );
+    // Compose external signal (task cancellation) with watchdog signal so
+    // both can abort the fetch — prevents stale requests when user cancels.
+    const composedSignal = externalSignal
+      ? AbortSignal.any([timeoutGuard.signal, externalSignal])
+      : timeoutGuard.signal;
     try {
       const streamPromise = (provider as IStreamingProvider).chatStream(
         systemPrompt,
@@ -4691,7 +4715,7 @@ export class Orchestrator {
         () => {
           timeoutGuard.markProgress();
         },
-        { signal: timeoutGuard.signal },
+        { signal: composedSignal },
       );
       // Suppress unhandled rejection from abandoned stream when timeout wins the race
       streamPromise.catch(() => {});
@@ -4796,9 +4820,13 @@ export class Orchestrator {
       ).startStreamingMessage?.(chatId)) ?? undefined;
 
     let response: ProviderResponse;
+    const thinkingStall = provider.capabilities.thinkingSupported
+      ? this.streamInitialTimeoutMs
+      : undefined;
     const timeoutGuard = createStreamingProgressTimeout(
       this.streamInitialTimeoutMs,
       this.streamStallTimeoutMs,
+      thinkingStall,
     );
     try {
       const streamPromise = (provider as IStreamingProvider).chatStream(

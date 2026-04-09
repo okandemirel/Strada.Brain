@@ -26,7 +26,7 @@ export interface SkillManifest {
 }
 
 /** Runtime status of a loaded skill. */
-export type SkillStatus = "active" | "disabled" | "gated" | "error";
+export type SkillStatus = "active" | "disabled" | "gated" | "error" | "incomplete";
 
 /** A fully-resolved skill entry held by the SkillLoader. */
 export interface SkillEntry {
@@ -36,6 +36,8 @@ export interface SkillEntry {
   path: string;
   /** Present when status is "gated" — explains why the skill cannot activate. */
   gateReason?: string;
+  /** Markdown body content from SKILL.md — knowledge/instructions for the agent. */
+  body?: string;
 }
 
 /** One entry in the remote skill registry index. */

@@ -242,6 +242,8 @@ export interface AdaptiveCapContext {
   readonly totalStepCount: number;
   readonly hasActivePlan: boolean;
   readonly failedApproachCount: number;
+  /** Number of times PAOR override forced DONE→CONTINUE/REPLAN. */
+  readonly reflectionOverrideCount?: number;
 }
 
 /**
@@ -285,6 +287,16 @@ export function computeAdaptiveHardCap(
   if (ctx.failedApproachCount >= 2) {
     replan += 1;
     block += 1;
+  }
+
+  // PAOR override pressure: if the reflection system already forced retries,
+  // tighten the caps — the agent is likely stuck on an external failure
+  // that retrying cannot fix.
+  // Cap override pressure to prevent erasing all context-aware headroom
+  const overrides = Math.min(ctx.reflectionOverrideCount ?? 0, 3);
+  if (overrides >= 1) {
+    replan = Math.max(baseReplan, replan - overrides);
+    block = Math.max(replan + 2, block - overrides);
   }
 
   // Ensure block > replan with enough gap for replan to take effect

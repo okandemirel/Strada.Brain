@@ -665,6 +665,7 @@ export async function handleBackgroundLoopRecovery(
       totalStepCount: params.state.stepResults.length,
       hasActivePlan: params.state.plan !== null,
       failedApproachCount: params.state.failedApproaches.length,
+      reflectionOverrideCount: params.state.reflectionOverrideCount,
     },
   );
 

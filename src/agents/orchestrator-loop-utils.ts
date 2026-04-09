@@ -11,6 +11,7 @@ import {
   mergeLearnedInsights,
   parseReflectionDecision,
   validateReflectionDecision,
+  classifyStepErrorCategory,
   type ReflectionDecision,
 } from "./orchestrator-runtime-utils.js";
 import { shouldForceReplan } from "./failure-classifier.js";
@@ -268,11 +269,14 @@ export function recordStepResultsAndCheckReflection(
   for (let i = 0; i < toolCalls.length; i++) {
     const tc = toolCalls[i]!;
     const tr = toolResults[i]!;
+    const isError = tr.isError ?? false;
+    const summary = tr.content.slice(0, 200);
     newSteps.push({
       toolName: tc.name,
-      success: !(tr.isError ?? false),
-      summary: tr.content.slice(0, 200),
+      success: !isError,
+      summary,
       timestamp: Date.now(),
+      ...(isError ? { errorCategory: classifyStepErrorCategory(summary) } : {}),
     });
     consecutiveErrors = tr.isError ? consecutiveErrors + 1 : 0;
   }

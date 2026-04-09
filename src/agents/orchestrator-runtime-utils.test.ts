@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  classifyStepErrorCategory,
   mergeLearnedInsights,
   normalizeFailureFingerprint,
   parseReflectionDecision,
@@ -117,5 +118,70 @@ describe("orchestrator-runtime-utils", () => {
       ],
     }));
     expect(verificationFailure.decision).toBe("CONTINUE");
+  });
+});
+
+describe("classifyStepErrorCategory", () => {
+  it("classifies timeout errors", () => {
+    expect(classifyStepErrorCategory("Streaming stalled after 300000ms without progress")).toBe("provider_timeout");
+    expect(classifyStepErrorCategory("Request timed out")).toBe("provider_timeout");
+    expect(classifyStepErrorCategory("DeadlineExceeded: upstream timeout")).toBe("provider_timeout");
+    expect(classifyStepErrorCategory("This operation was aborted")).toBe("provider_timeout");
+    expect(classifyStepErrorCategory("Timeout waiting for response")).toBe("provider_timeout");
+  });
+
+  it("classifies abort as timeout when it contains timeout signals", () => {
+    // "operation was aborted" from stall timeouts should be timeout, not abort
+    expect(classifyStepErrorCategory("The operation was aborted due to timeout")).toBe("provider_timeout");
+  });
+
+  it("classifies pure task abort (no timeout signal)", () => {
+    expect(classifyStepErrorCategory("Task cancelled by user")).toBe("abort");
+    expect(classifyStepErrorCategory("Aborted: task interrupted")).toBe("abort");
+  });
+
+  it("classifies network errors", () => {
+    expect(classifyStepErrorCategory("connect ECONNREFUSED 127.0.0.1:443")).toBe("network");
+    expect(classifyStepErrorCategory("getaddrinfo ENOTFOUND api.example.com")).toBe("network");
+    expect(classifyStepErrorCategory("fetch failed: socket hang up")).toBe("network");
+    expect(classifyStepErrorCategory("ECONNRESET: connection was reset")).toBe("network");
+  });
+
+  it("classifies tool unavailability", () => {
+    expect(classifyStepErrorCategory("Tool is unavailable")).toBe("tool_unavailable");
+    expect(classifyStepErrorCategory("bridge disconnected")).toBe("tool_unavailable");
+    expect(classifyStepErrorCategory("Tool execution failed")).toBe("tool_unavailable");
+  });
+
+  it("classifies build failures", () => {
+    expect(classifyStepErrorCategory("Build failed with 3 errors")).toBe("build_failure");
+    expect(classifyStepErrorCategory("error CS1002: ; expected")).toBe("build_failure");
+    expect(classifyStepErrorCategory("error MSB4018: The task failed")).toBe("build_failure");
+    expect(classifyStepErrorCategory("typecheck failed on 2 files")).toBe("build_failure");
+  });
+
+  it("classifies test failures", () => {
+    expect(classifyStepErrorCategory("3 tests failed")).toBe("test_failure");
+    expect(classifyStepErrorCategory("AssertionError: assert failed")).toBe("test_failure");
+    expect(classifyStepErrorCategory("expect(received).toBe(expected)")).toBe("test_failure");
+  });
+
+  it("classifies validation errors", () => {
+    expect(classifyStepErrorCategory("Schema validation error")).toBe("validation");
+    expect(classifyStepErrorCategory("Invalid argument: expected number")).toBe("validation");
+  });
+
+  it("classifies auth errors", () => {
+    expect(classifyStepErrorCategory("HTTP 401 Unauthorized")).toBe("auth");
+    expect(classifyStepErrorCategory("Error 403: Forbidden")).toBe("auth");
+  });
+
+  it("returns unknown for unrecognized errors", () => {
+    expect(classifyStepErrorCategory("Something went wrong")).toBe("unknown");
+    expect(classifyStepErrorCategory("")).toBe("unknown");
+  });
+
+  it("handles empty/falsy input", () => {
+    expect(classifyStepErrorCategory("")).toBe("unknown");
   });
 });

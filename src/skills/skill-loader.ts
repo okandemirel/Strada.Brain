@@ -8,7 +8,7 @@
 //   4. extra      — any additional directories passed in
 // ---------------------------------------------------------------------------
 
-import { readdir, readFile, stat } from "node:fs/promises";
+import { readdir, readFile, stat, lstat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { homedir } from "node:os";
@@ -26,6 +26,8 @@ export interface DiscoveredSkill {
   manifest: SkillManifest;
   tier: SkillEntry["tier"];
   path: string;
+  /** Markdown body content from SKILL.md (below frontmatter). */
+  body?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -96,8 +98,8 @@ export async function discoverSkills(
     for (const entry of entries) {
       const skillDir = join(dir, entry);
       try {
-        const skillStat = await stat(skillDir);
-        if (!skillStat.isDirectory()) continue;
+        const skillStat = await lstat(skillDir);
+        if (skillStat.isSymbolicLink() || !skillStat.isDirectory()) continue;
 
         const skillMdPath = join(skillDir, "SKILL.md");
         let raw: string;
@@ -108,7 +110,7 @@ export async function discoverSkills(
           continue;
         }
 
-        const { data } = parseFrontmatter(raw);
+        const { data, content: bodyContent } = parseFrontmatter(raw);
         const name = data["name"];
         const version = data["version"];
         const description = data["description"];
@@ -146,7 +148,8 @@ export async function discoverSkills(
             : {}),
         };
 
-        byName.set(name, { manifest, tier, path: skillDir });
+        const trimmedBody = bodyContent?.trim();
+        byName.set(name, { manifest, tier, path: skillDir, ...(trimmedBody ? { body: trimmedBody } : {}) });
       } catch (err) {
         logger.warn(`Error scanning skill directory ${skillDir}: ${err instanceof Error ? err.message : err}`);
       }

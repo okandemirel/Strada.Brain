@@ -120,7 +120,7 @@ export interface DashboardReadinessChecker {
 
 /** Structural interface for SkillManager used by dashboard /api/skills endpoints */
 export interface DashboardSkillManager {
-  getEntries(): SkillEntry[];
+  getEntries(): readonly SkillEntry[];
 }
 
 /** Structural interface for tool registry used by dashboard /api/tools endpoint */

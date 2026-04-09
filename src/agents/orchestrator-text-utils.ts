@@ -350,6 +350,7 @@ export function buildProfileParts(profile: {
 
 /** Strip prompt injection patterns from stored text before injecting into system prompts. */
 export function sanitizePromptInjection(text: string): string {
+  if (!text || text.length < 10) return text;
   return redactSensitiveText(text)
     .replace(/^(#{1,3}\s*(SYSTEM|IMPORTANT|INSTRUCTION|OVERRIDE|IGNORE))[:\s]/gim, "[filtered] ")
     .replace(/\r/g, "");

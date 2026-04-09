@@ -12,7 +12,7 @@ export interface StepResult {
   readonly success: boolean;
   readonly summary: string;
   readonly timestamp: number;
-  readonly errorCategory?: string;
+  readonly errorCategory?: import("./orchestrator-runtime-utils.js").StepErrorCategory;
 }
 
 export interface AgentState {

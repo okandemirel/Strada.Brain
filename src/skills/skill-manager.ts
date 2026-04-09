@@ -25,6 +25,7 @@ export class SkillManager {
   private readonly registry = new PluginRegistry();
   private readonly envInjector = new SkillEnvInjector();
   private readonly entries = new Map<string, SkillEntry>();
+  private entriesCache: SkillEntry[] | null = null;
 
   /** Callback to register tools into the app-level ToolRegistry. */
   private toolRegistrar?: (tools: ITool[]) => void;
@@ -130,6 +131,7 @@ export class SkillManager {
           status: "active",
           tier: skill.tier,
           path: skill.path,
+          ...(skill.body ? { body: skill.body } : {}),
         };
         this.entries.set(name, entry);
       } catch (err) {
@@ -163,6 +165,7 @@ export class SkillManager {
       error: [...this.entries.values()].filter((e) => e.status === "error").length,
     });
 
+    this.entriesCache = null;
     return [...this.entries.values()];
   }
 
@@ -182,7 +185,7 @@ export class SkillManager {
       return null;
     }
 
-    const { data } = parseFrontmatter(raw);
+    const { data, content: bodyContent } = parseFrontmatter(raw);
     const name = data["name"] as string | undefined;
     if (!name) {
       logger.warn(`loadSingle: missing name in ${skillMdPath}`);
@@ -246,20 +249,32 @@ export class SkillManager {
       this.toolRegistrar(tools);
     }
 
+    const trimmedBody = bodyContent?.trim();
+    const status: SkillEntry["status"] = (tools.length > 0 || trimmedBody) ? "active" : "incomplete";
     const entry: SkillEntry = {
       manifest: manifest as SkillEntry["manifest"],
-      status: "active",
+      status,
       tier: "workspace",
       path: skillPath,
+      ...(tools.length === 0 && !trimmedBody ? { gateReason: "No entry point (index.ts/index.js) — skill has no tools or knowledge" } : {}),
+      ...(trimmedBody ? { body: trimmedBody } : {}),
     };
     this.entries.set(name, entry);
-    logger.info(`Hot-loaded skill "${name}" with ${tools.length} tool(s)`);
+    this.entriesCache = null;
+    if (tools.length > 0) {
+      logger.info(`Hot-loaded skill "${name}" with ${tools.length} tool(s)`);
+    } else {
+      logger.warn(`Skill "${name}" loaded without tools — missing entry point`);
+    }
     return entry;
   }
 
-  /** Return all loaded skill entries. */
-  getEntries(): SkillEntry[] {
-    return [...this.entries.values()];
+  /** Return all loaded skill entries (cached — invalidated on load/dispose). */
+  getEntries(): readonly SkillEntry[] {
+    if (!this.entriesCache) {
+      this.entriesCache = [...this.entries.values()];
+    }
+    return this.entriesCache;
   }
 
   /** Dispose all skills, restore env, and clear state. */
@@ -286,6 +301,7 @@ export class SkillManager {
     }
 
     this.entries.clear();
+    this.entriesCache = null;
   }
 }
 

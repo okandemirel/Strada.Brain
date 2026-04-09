@@ -630,7 +630,7 @@ export const DEFAULT_STRADA_CORE_REPO_URL = "https://github.com/okandemirel/Stra
 export const DEFAULT_STRADA_MODULES_REPO_URL = "https://github.com/okandemirel/Strada.Modules.git";
 export const DEFAULT_STRADA_MCP_REPO_URL = "https://github.com/okandemirel/Strada.MCP.git";
 export const DEFAULT_LLM_STREAM_INITIAL_TIMEOUT_MS = 10 * 60 * 1000;
-export const DEFAULT_LLM_STREAM_STALL_TIMEOUT_MS = 2 * 60 * 1000;
+export const DEFAULT_LLM_STREAM_STALL_TIMEOUT_MS = 5 * 60 * 1000;
 export const DEFAULT_INTERACTION_CONFIG: InteractionConfig = {
   mode: "phase-driven",
   heartbeatAfterMs: 120_000,

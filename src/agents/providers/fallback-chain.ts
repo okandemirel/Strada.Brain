@@ -205,7 +205,7 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
         } catch (probeErr) {
           const probeMsg = probeErr instanceof Error ? probeErr.message : String(probeErr);
           health.recordFailure(provider.name, probeMsg);
-          logger.warn("Provider health probe failed, skipping", { provider: provider.name, error: probeMsg });
+          logger.warn("Provider health probe failed, skipping", { provider: provider.name, error: sanitizeSecrets(probeMsg) });
           continue;
         } finally {
           this.probing.delete(provider.name);
@@ -259,7 +259,7 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
         if (isNonRetryableRequestError(error)) {
           logger.error(`Non-retryable provider error (${label}), not trying fallbacks`, {
             provider: provider.name,
-            error: errorMsg,
+            error: sanitizeSecrets(errorMsg),
           });
           throw error;
         }
@@ -268,11 +268,11 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
         if (remaining.length === 0) {
           if (isReasoningTimeout && this.providers.length === 1) {
             const hint = "Reasoning models (e.g. MiniMax) may exceed the API proxy timeout during extended thinking. "
-              + "To fix: (1) configure a fallback provider via STRADA_FALLBACK_PROVIDERS, or "
+              + "To fix: (1) configure a fallback provider via PROVIDER_CHAIN (e.g. PROVIDER_CHAIN=minimax,openai), or "
               + "(2) increase the provider's timeout/proxy limit.";
             logger.error(`Reasoning model timeout with no fallback (${label})`, {
               provider: provider.name,
-              error: errorMsg,
+              error: sanitizeSecrets(errorMsg),
               hint,
             });
             throw new Error(
@@ -283,7 +283,7 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
 
           logger.error(`All providers failed (${label})`, {
             provider: provider.name,
-            error: errorMsg,
+            error: sanitizeSecrets(errorMsg),
             totalProviders: this.providers.length,
           });
           throw new Error(`All providers failed. Last error: ${sanitizeSecrets(errorMsg)}`);

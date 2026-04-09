@@ -9,12 +9,14 @@ const fsMock = {
   readdir: vi.fn(),
   readFile: vi.fn(),
   stat: vi.fn(),
+  lstat: vi.fn(),
 };
 
 vi.mock("node:fs/promises", () => ({
   readdir: (...args: unknown[]) => fsMock.readdir(...args),
   readFile: (...args: unknown[]) => fsMock.readFile(...args),
   stat: (...args: unknown[]) => fsMock.stat(...args),
+  lstat: (...args: unknown[]) => fsMock.lstat(...args),
 }));
 
 vi.mock("node:os", () => ({
@@ -34,6 +36,9 @@ beforeEach(() => {
   fsMock.readdir.mockReset();
   fsMock.readFile.mockReset();
   fsMock.stat.mockReset();
+  fsMock.lstat.mockReset();
+  // lstat delegates to stat by default — tests override only when testing symlink behavior
+  fsMock.lstat.mockImplementation((...args: unknown[]) => fsMock.stat(...args));
 });
 
 // ---------------------------------------------------------------------------
@@ -53,8 +58,8 @@ function makeSkillMd(fields: Record<string, string | string[]>): string {
   return lines.join("\n");
 }
 
-const dirStat = { isDirectory: () => true, isFile: () => false };
-const fileStat = { isDirectory: () => false, isFile: () => true };
+const dirStat = { isDirectory: () => true, isFile: () => false, isSymbolicLink: () => false };
+const fileStat = { isDirectory: () => false, isFile: () => true, isSymbolicLink: () => false };
 
 // ---------------------------------------------------------------------------
 // discoverSkills

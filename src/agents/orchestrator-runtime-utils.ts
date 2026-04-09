@@ -9,8 +9,54 @@ const REFLECTION_DECISION_RE = /\*\*\s*(DONE_WITH_SUGGESTIONS|DONE|REPLAN|CONTIN
 const BLOCKING_STEP_FAILURE_RE = /\b(?:build|test|check|verify|lint|typecheck|compile|smoke|permission denied|access denied|read-only|validation|security)\b/iu;
 /** Failures caused by external abort signals — these should not block PAOR DONE decisions */
 const ABORT_CAUSED_FAILURE_RE = /\bAborted\b|Task cancelled/i;
-/** Tool unavailability or generic execution failures — not blocking because the agent cannot fix them */
-const NON_BLOCKING_TOOL_FAILURE_RE = /\bunavailable\b|Tool execution failed|\bInvalid argument\b|\bECONNREFUSED\b|bridge.*(disconnect|unavailable)/i;
+
+/** Error categories for StepResult classification. */
+export type StepErrorCategory =
+  | "provider_timeout"
+  | "network"
+  | "tool_unavailable"
+  | "build_failure"
+  | "test_failure"
+  | "validation"
+  | "auth"
+  | "abort"
+  | "unknown";
+
+const TIMEOUT_RE = /\btimed?\s*out\b|\bTimeout\b|\bDeadlineExceeded\b|stalled after \d+ms|operation was aborted/i;
+const NETWORK_RE = /\bECONNREFUSED\b|\bECONNRESET\b|\bENOTFOUND\b|\bfetch failed\b|\bDNS\b|\bsocket hang up\b/i;
+const TOOL_UNAVAIL_RE = /\bunavailable\b|bridge.*(disconnect|unavailable)|Tool execution failed/i;
+export const BUILD_FAILURE_RE = /\b(?:build|compile|typecheck|lint)\b.*\b(?:fail|error)\w*\b|\b(?:fail|error)\w*\b.*\b(?:build|compile|typecheck|lint)\b|\bCS\d{4}\b|\bMSB\d{4}\b/i;
+export const TEST_FAILURE_RE = /\btest\w*.*fail\w*\b|\bassert\w*.*fail\w*\b|\bexpect\b.*\breceived\b/i;
+const VALIDATION_RE = /\bvalidation\b|\bschema\b.*\berror\b|\bInvalid argument\b/i;
+const AUTH_RE = /\b401\b|\b403\b|\bunauthorized\b|\bforbidden\b/i;
+
+/** Tool unavailability or generic execution failures — not blocking because the agent cannot fix them.
+ * Composed from named constants to stay in sync with classifyStepErrorCategory.
+ * NOTE: "aborted" strings are handled by ABORT_CAUSED_FAILURE_RE (checked first in isBlockingStepFailure).
+ * CONSTRAINT: Source regexes must not use capturing groups — `|` join would break alternation. */
+const NON_BLOCKING_TOOL_FAILURE_RE = new RegExp(
+  [TIMEOUT_RE.source, NETWORK_RE.source, TOOL_UNAVAIL_RE.source, String.raw`\bInvalid argument\b`, String.raw`\bstatus[:\s]+52[24]\b`, String.raw`\bHTTP\s+52[24]\b`].join("|"),
+  "i",
+);
+
+/**
+ * Classify a failed step's error category from its summary text.
+ * Used to populate StepResult.errorCategory at creation time.
+ */
+export function classifyStepErrorCategory(summary: string): StepErrorCategory {
+  if (!summary) return "unknown";
+  // Check timeout before abort — "operation was aborted" from stall timeouts
+  // should classify as timeout, not task cancellation.
+  if (TIMEOUT_RE.test(summary)) return "provider_timeout";
+  if (ABORT_CAUSED_FAILURE_RE.test(summary)) return "abort";
+  if (NETWORK_RE.test(summary)) return "network";
+  if (TOOL_UNAVAIL_RE.test(summary)) return "tool_unavailable";
+  if (BUILD_FAILURE_RE.test(summary)) return "build_failure";
+  if (TEST_FAILURE_RE.test(summary)) return "test_failure";
+  if (VALIDATION_RE.test(summary)) return "validation";
+  if (AUTH_RE.test(summary)) return "auth";
+  return "unknown";
+}
 
 export type ReflectionDecision = "CONTINUE" | "REPLAN" | "DONE" | "DONE_WITH_SUGGESTIONS";
 
@@ -95,7 +141,8 @@ function isBlockingStepFailure(step: AgentState["stepResults"][number]): boolean
     return true;
   }
 
-  if (step.errorCategory && BLOCKING_STEP_FAILURE_RE.test(step.errorCategory)) {
+  const BLOCKING_CATEGORIES: ReadonlySet<StepErrorCategory> = new Set(["build_failure", "test_failure", "validation", "auth"]);
+  if (step.errorCategory && BLOCKING_CATEGORIES.has(step.errorCategory)) {
     return true;
   }
 

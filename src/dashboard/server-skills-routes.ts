@@ -31,7 +31,7 @@ export function handleSkillsRoutes(
 
   // GET /api/skills -- list all skill entries
   if (url === "/api/skills" && method === "GET") {
-    const entries: SkillEntry[] = ctx.skillManager
+    const entries: readonly SkillEntry[] = ctx.skillManager
       ? ctx.skillManager.getEntries()
       : [];
     sendJson(res, { skills: entries });

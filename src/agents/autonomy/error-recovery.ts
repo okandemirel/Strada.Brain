@@ -18,6 +18,7 @@
 
 import type { ToolResult } from "../providers/provider.interface.js";
 import { sanitizePromptInjection } from "../orchestrator-text-utils.js";
+import { TEST_FAILURE_RE } from "../orchestrator-runtime-utils.js";
 import type { ErrorLearningHooks } from "../../learning/index.js";
 import type { 
   ErrorCategory as LearningErrorCategory,
@@ -567,7 +568,7 @@ export class ErrorRecoveryEngine {
     if (codeMatch) {
       return CODE_CATEGORY.get(codeMatch[1]!) ?? categorizeByPrefix(codeMatch[1]!);
     }
-    if (/test.*fail|assert/i.test(errorOutput)) return "test_failure";
+    if (TEST_FAILURE_RE.test(errorOutput)) return "test_failure";
     if (/exception|panic|fatal/i.test(errorOutput)) return "runtime";
     return "unknown";
   }

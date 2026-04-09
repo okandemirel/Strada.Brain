@@ -3,6 +3,7 @@ import type { IRAGPipeline, IEmbeddingProvider } from "../rag/rag.interface.js";
 import type { TaskExecutionMemory, TaskExecutionStore } from "../memory/unified/task-execution-store.js";
 import type { UserProfile } from "../memory/unified/user-profile-store.js";
 import type { SoulLoader } from "./soul/index.js";
+import type { SkillEntry } from "../skills/types.js";
 import type { DMPolicy } from "../security/dm-policy.js";
 import type { GoalTree } from "../goals/types.js";
 import type { TaskClassification } from "../agent-core/routing/routing-types.js";
@@ -91,6 +92,8 @@ export interface ContextBuilderDeps {
     phase: AgentPhase,
     role: string,
   ) => Array<{ name: string }>;
+  /** Active skill entries with optional knowledge body from SKILL.md. */
+  readonly skillEntries?: ReadonlyArray<Pick<SkillEntry, "manifest" | "status" | "body">>;
 }
 
 // ─── Functions ────────────────────────────────────────────────────────────────
@@ -422,6 +425,28 @@ export async function buildContextLayers(
       for (const m of memories) {
         contentHashes.push(m.entry.content);
       }
+    }
+  }
+
+  // Layer 8: Active Skill Knowledge
+  if (ctx.skillEntries) {
+    const MAX_SKILL_BODY_CHARS = 8_000;
+    const MAX_TOTAL_SKILL_CHARS = 40_000;
+    const knowledgeParts: string[] = [];
+    let totalChars = 0;
+    for (const skill of ctx.skillEntries) {
+      if (skill.status === "active" && skill.body) {
+        if (totalChars >= MAX_TOTAL_SKILL_CHARS) break;
+        const bodyText = skill.body.length > MAX_SKILL_BODY_CHARS
+          ? skill.body.slice(0, MAX_SKILL_BODY_CHARS) + "\n[truncated]"
+          : skill.body;
+        const safeName = sanitizePromptInjection(skill.manifest.name);
+        knowledgeParts.push(`### ${safeName}\n${sanitizePromptInjection(bodyText)}`);
+        totalChars += bodyText.length;
+      }
+    }
+    if (knowledgeParts.length > 0) {
+      layers.push(`## Skill Knowledge\n${knowledgeParts.join("\n\n")}`);
     }
   }
 

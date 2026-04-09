@@ -288,7 +288,9 @@ describe("SkillManager", () => {
 
         expect(entry).not.toBeNull();
         expect(entry!.manifest.name).toBe("my-skill");
+        // 0 tools but has body content → "active" (knowledge-only skill)
         expect(entry!.status).toBe("active");
+        expect(entry!.body).toBe("# My Skill Content");
         expect(entry!.tier).toBe("workspace");
         expect(entry!.path).toBe(skillDir);
       });
