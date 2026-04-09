@@ -11,6 +11,7 @@ import type { DelegationManagerOptions } from "./delegation-manager.js";
 import { DelegationLog } from "./delegation-log.js";
 import { TierRouter } from "./tier-router.js";
 import { createProvider } from "../../providers/provider-registry.js";
+import { ProviderHealthRegistry } from "../../providers/provider-health.js";
 import type {
   DelegationConfig,
   DelegationRequest,
@@ -756,6 +757,102 @@ describe("DelegationManager", () => {
       };
 
       await expect(manager.delegate(request)).rejects.toThrow("Unknown delegation type");
+    });
+  });
+
+  describe("provider health gate", () => {
+    let healthRegistry: InstanceType<typeof ProviderHealthRegistry>;
+
+    beforeEach(() => {
+      ProviderHealthRegistry.resetInstance();
+      healthRegistry = ProviderHealthRegistry.getInstance();
+    });
+
+    afterEach(() => {
+      ProviderHealthRegistry.resetInstance();
+    });
+
+    it("rejects delegation when all tracked providers are down", async () => {
+      // Mark two providers as down — requires 5 consecutive failures (default downThreshold)
+      for (let i = 0; i < 5; i++) {
+        healthRegistry.recordFailure("deepseek", "HTTP 529 overloaded");
+        healthRegistry.recordFailure("claude", "HTTP 529 overloaded");
+      }
+
+      const request: DelegationRequest = {
+        type: "code_review",
+        task: "Review this code",
+        parentAgentId: PARENT_AGENT_ID,
+        depth: 0,
+        mode: "sync",
+        toolContext: TEST_TOOL_CONTEXT,
+      };
+
+      await expect(manager.delegate(request)).rejects.toThrow(
+        "All providers are in cooldown",
+      );
+    });
+
+    it("allows delegation when at least one provider is healthy", async () => {
+      // Mark one provider as down (5 failures)
+      for (let i = 0; i < 5; i++) {
+        healthRegistry.recordFailure("deepseek", "HTTP 529 overloaded");
+      }
+      // Give claude a failure then recover it — ensures it has an entry with healthy status
+      healthRegistry.recordFailure("claude", "transient error");
+      healthRegistry.recordSuccess("claude");
+
+      const request: DelegationRequest = {
+        type: "code_review",
+        task: "Review this code",
+        parentAgentId: PARENT_AGENT_ID,
+        depth: 0,
+        mode: "sync",
+        toolContext: TEST_TOOL_CONTEXT,
+      };
+
+      // Should NOT throw the health gate error (may throw other errors since it's a test mock, that's fine)
+      await expect(manager.delegate(request)).resolves.toBeDefined();
+    });
+
+    it("allows delegation when no providers are tracked yet", async () => {
+      // Fresh registry with zero entries — should not block
+      const request: DelegationRequest = {
+        type: "code_review",
+        task: "Review this code",
+        parentAgentId: PARENT_AGENT_ID,
+        depth: 0,
+        mode: "sync",
+        toolContext: TEST_TOOL_CONTEXT,
+      };
+
+      await expect(manager.delegate(request)).resolves.toBeDefined();
+    });
+
+    it("isDelegationProviderAvailable returns false for down providers", async () => {
+      // Mark deepseek as down — requires 5 consecutive failures (default downThreshold)
+      for (let i = 0; i < 5; i++) {
+        healthRegistry.recordFailure("deepseek", "HTTP 529 overloaded");
+      }
+
+      // Build a manager with only deepseek key — deepseek should be unavailable
+      const healthOpts = buildManagerOpts({
+        delegationLog,
+        apiKeys: { deepseek: "test-key" },
+      });
+      const healthManager = new DelegationManager(healthOpts);
+
+      const request: DelegationRequest = {
+        type: "code_review",
+        task: "Review this code",
+        parentAgentId: PARENT_AGENT_ID,
+        depth: 0,
+        mode: "sync",
+        toolContext: TEST_TOOL_CONTEXT,
+      };
+
+      // The provider resolution should fail because deepseek is down and no other provider has a key
+      await expect(healthManager.delegate(request)).rejects.toThrow();
     });
   });
 });
