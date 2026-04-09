@@ -209,6 +209,210 @@ describe("ProviderHealthRegistry — adaptive cooldown", () => {
   });
 });
 
+describe("ProviderHealthRegistry — probe vs real success", () => {
+  afterEach(() => {
+    ProviderHealthRegistry.resetInstance();
+    vi.restoreAllMocks();
+  });
+
+  it("probe success downgrades to degraded instead of fully resetting", () => {
+    const registry = new ProviderHealthRegistry({
+      degradedThreshold: 2,
+      downThreshold: 3,
+      degradedCooldownMs: 30_000,
+      downCooldownMs: 120_000,
+    });
+
+    triggerDown(registry, "prov", 3);
+    expect(registry.getEntry("prov")!.status).toBe("down");
+    expect(registry.getDownEpisodes("prov")).toBe(1);
+
+    registry.recordSuccess("prov", "probe");
+    const entry = registry.getEntry("prov")!;
+    expect(entry.status).toBe("degraded");
+    expect(entry.consecutiveFailures).toBe(2); // decremented from 3, not reset to 0
+    expect(entry.cooldownUntil).toBe(0); // allows traffic
+    expect(registry.getDownEpisodes("prov")).toBe(1); // NOT reset
+  });
+
+  it("real success fully resets to healthy", () => {
+    const registry = new ProviderHealthRegistry({
+      degradedThreshold: 2,
+      downThreshold: 3,
+      degradedCooldownMs: 30_000,
+      downCooldownMs: 120_000,
+    });
+
+    triggerDown(registry, "prov", 3);
+    expect(registry.getDownEpisodes("prov")).toBe(1);
+
+    registry.recordSuccess("prov", "real");
+    const entry = registry.getEntry("prov")!;
+    expect(entry.status).toBe("healthy");
+    expect(entry.consecutiveFailures).toBe(0);
+    expect(registry.getDownEpisodes("prov")).toBe(0);
+  });
+
+  it("default recordSuccess kind is real", () => {
+    const registry = new ProviderHealthRegistry({
+      degradedThreshold: 2,
+      downThreshold: 3,
+      degradedCooldownMs: 30_000,
+      downCooldownMs: 120_000,
+    });
+
+    triggerDown(registry, "prov", 3);
+    registry.recordSuccess("prov"); // no kind = "real"
+    expect(registry.getEntry("prov")!.status).toBe("healthy");
+    expect(registry.getDownEpisodes("prov")).toBe(0);
+  });
+
+  it("probe after real failure with 1 consecutive failure keeps at degraded", () => {
+    const registry = new ProviderHealthRegistry({
+      degradedThreshold: 2,
+      downThreshold: 5,
+      degradedCooldownMs: 30_000,
+      downCooldownMs: 120_000,
+    });
+
+    registry.recordFailure("prov", "err");
+    expect(registry.getEntry("prov")!.consecutiveFailures).toBe(1);
+
+    registry.recordSuccess("prov", "probe");
+    const entry = registry.getEntry("prov")!;
+    expect(entry.status).toBe("degraded");
+    expect(entry.consecutiveFailures).toBe(1); // max(1, 1-1) = 1
+  });
+});
+
+describe("ProviderHealthRegistry — recordOverloaded", () => {
+  afterEach(() => {
+    ProviderHealthRegistry.resetInstance();
+    vi.restoreAllMocks();
+  });
+
+  it("sets status to down with 5-minute base cooldown", () => {
+    const registry = new ProviderHealthRegistry();
+    const now = 1_000_000;
+    vi.spyOn(Date, "now").mockReturnValue(now);
+
+    registry.recordOverloaded("minimax", "HTTP 529 overloaded");
+    const entry = registry.getEntry("minimax")!;
+    expect(entry.status).toBe("down");
+    expect(entry.cooldownUntil).toBe(now + 5 * 60 * 1000); // 5 minutes
+    expect(entry.consecutiveFailures).toBe(1);
+    expect(registry.getDownEpisodes("minimax")).toBe(1);
+  });
+
+  it("escalates cooldown on repeated overloads", () => {
+    const registry = new ProviderHealthRegistry();
+    let time = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => time);
+
+    // Episode 0: 5 min
+    registry.recordOverloaded("minimax", "529");
+    expect(registry.getEntry("minimax")!.cooldownUntil).toBe(time + 5 * 60_000);
+
+    time += 5 * 60_000 + 1;
+
+    // Episode 1: 10 min
+    registry.recordOverloaded("minimax", "529");
+    expect(registry.getEntry("minimax")!.cooldownUntil).toBe(time + 10 * 60_000);
+    expect(registry.getDownEpisodes("minimax")).toBe(2);
+  });
+
+  it("caps at MAX_ADAPTIVE_COOLDOWN_MS", () => {
+    const registry = new ProviderHealthRegistry();
+    const MAX = 10 * 60 * 1000;
+    let time = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => time);
+
+    // Force many episodes
+    for (let i = 0; i < 10; i++) {
+      registry.recordOverloaded("prov", "529");
+      time += MAX + 1;
+    }
+
+    // Last episode cooldown should be capped
+    const entry = registry.getEntry("prov")!;
+    expect(entry.cooldownUntil).toBeLessThanOrEqual(time + MAX);
+  });
+
+  it("probe does not fully reset overload episode escalation", () => {
+    const registry = new ProviderHealthRegistry();
+    let time = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => time);
+
+    registry.recordOverloaded("prov", "529"); // episode 0
+    expect(registry.getDownEpisodes("prov")).toBe(1);
+
+    time += 5 * 60_000 + 1;
+    registry.recordSuccess("prov", "probe"); // probe success
+    expect(registry.getDownEpisodes("prov")).toBe(1); // still 1
+
+    registry.recordOverloaded("prov", "529"); // episode 1 (escalated)
+    expect(registry.getDownEpisodes("prov")).toBe(2);
+    // Cooldown should be 10 min (5 * 2^1), not 5 min (5 * 2^0)
+    expect(registry.getEntry("prov")!.cooldownUntil).toBe(time + 10 * 60_000);
+  });
+});
+
+describe("ProviderHealthRegistry — areAllUnavailable", () => {
+  afterEach(() => {
+    ProviderHealthRegistry.resetInstance();
+    vi.restoreAllMocks();
+  });
+
+  it("returns false when no providers are tracked", () => {
+    const registry = new ProviderHealthRegistry();
+    expect(registry.areAllUnavailable()).toBe(false);
+  });
+
+  it("returns false when at least one provider is available", () => {
+    const registry = new ProviderHealthRegistry({ degradedThreshold: 2, downThreshold: 3, degradedCooldownMs: 30_000, downCooldownMs: 120_000 });
+    triggerDown(registry, "prov-a", 3);
+    // prov-a is down, but prov-b has never been seen (treated as healthy)
+    registry.recordFailure("prov-b", "transient");
+    registry.recordSuccess("prov-b");
+    expect(registry.areAllUnavailable()).toBe(false);
+  });
+
+  it("returns true when all tracked providers are in cooldown", () => {
+    const registry = new ProviderHealthRegistry({ degradedThreshold: 2, downThreshold: 3, degradedCooldownMs: 30_000, downCooldownMs: 120_000 });
+    triggerDown(registry, "prov-a", 3);
+    triggerDown(registry, "prov-b", 3);
+    expect(registry.areAllUnavailable()).toBe(true);
+  });
+
+  it("returns false when cooldown has expired", () => {
+    const registry = new ProviderHealthRegistry({ degradedThreshold: 2, downThreshold: 3, degradedCooldownMs: 30_000, downCooldownMs: 120_000 });
+    let time = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => time);
+    triggerDown(registry, "prov", 3);
+    expect(registry.areAllUnavailable()).toBe(true);
+    time += 120_001; // past cooldown
+    expect(registry.areAllUnavailable()).toBe(false);
+  });
+
+  it("returns true when provider is degraded with active cooldown", () => {
+    const registry = new ProviderHealthRegistry({ degradedThreshold: 2, downThreshold: 5, degradedCooldownMs: 30_000, downCooldownMs: 120_000 });
+    registry.recordFailure("prov", "err");
+    registry.recordFailure("prov", "err"); // degraded with 30s cooldown
+    expect(registry.areAllUnavailable()).toBe(true); // in cooldown = unavailable
+  });
+
+  it("returns false when degraded cooldown has expired", () => {
+    const registry = new ProviderHealthRegistry({ degradedThreshold: 2, downThreshold: 5, degradedCooldownMs: 30_000, downCooldownMs: 120_000 });
+    let time = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => time);
+    registry.recordFailure("prov", "err");
+    registry.recordFailure("prov", "err"); // degraded
+    expect(registry.areAllUnavailable()).toBe(true);
+    time += 30_001; // past degraded cooldown
+    expect(registry.areAllUnavailable()).toBe(false);
+  });
+});
+
 describe("ProviderHealthRegistry — isRecovering", () => {
   afterEach(() => {
     ProviderHealthRegistry.resetInstance();

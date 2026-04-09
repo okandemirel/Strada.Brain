@@ -53,6 +53,8 @@
   "chat.badResponse": "悪い回答",
   "chat.fileAttachment": "(ファイル添付)",
   "chat.voiceMessage": "(音声メッセージ)",
+  "chat.thinking": "考え中...",
+  "chat.thinkingSlow": "応答に予想以上の時間がかかっています ({{seconds}}秒)",
   "chat.stop": "停止",
   "chat.stopGeneration": "生成を停止",
   "chat.loadEarlier": "{{count}} 件の以前のメッセージを読み込む",

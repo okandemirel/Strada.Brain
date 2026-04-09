@@ -53,6 +53,8 @@
   "chat.badResponse": "Mauvaise reponse",
   "chat.fileAttachment": "(piece jointe)",
   "chat.voiceMessage": "(message vocal)",
+  "chat.thinking": "Réflexion en cours...",
+  "chat.thinkingSlow": "La réponse prend plus de temps que prévu ({{seconds}}s)",
   "chat.stop": "Arrêter",
   "chat.stopGeneration": "Arrêter la génération",
   "chat.loadEarlier": "Charger {{count}} messages precedents",

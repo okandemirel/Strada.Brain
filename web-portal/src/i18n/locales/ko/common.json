@@ -53,6 +53,8 @@
   "chat.badResponse": "나쁜 응답",
   "chat.fileAttachment": "(파일 첨부)",
   "chat.voiceMessage": "(음성 메시지)",
+  "chat.thinking": "생각 중...",
+  "chat.thinkingSlow": "응답이 예상보다 오래 걸리고 있습니다 ({{seconds}}초)",
   "chat.stop": "중지",
   "chat.stopGeneration": "생성 중지",
   "chat.loadEarlier": "이전 메시지 {{count}}개 불러오기",

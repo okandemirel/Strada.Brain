@@ -53,6 +53,8 @@
   "chat.badResponse": "Kötü yanıt",
   "chat.fileAttachment": "(dosya eki)",
   "chat.voiceMessage": "(sesli mesaj)",
+  "chat.thinking": "Düşünüyor...",
+  "chat.thinkingSlow": "Yanıt beklenenden uzun sürüyor ({{seconds}}s)",
   "chat.stop": "Durdur",
   "chat.stopGeneration": "Yanıt üretimini durdur",
   "chat.loadEarlier": "{{count}} eski mesajı yükle",

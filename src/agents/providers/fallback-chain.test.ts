@@ -237,4 +237,45 @@ describe("FallbackChainProvider", () => {
     expect((p1.chat as ReturnType<typeof vi.fn>).mock.calls[0]![0]).toBe("sys");
     expect(result.text).toBe("from-p1");
   });
+
+  it("records overloaded for 529 errors with extended cooldown", async () => {
+    const p1 = { ...createMockProvider(), name: "overloaded-prov" };
+    (p1.chat as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error("MiniMax API error 529: server overloaded")
+    );
+    const p2 = { ...createMockProvider({ text: "backup-ok" }), name: "backup" };
+    const chain = new FallbackChainProvider([p1, p2]);
+
+    const result = await chain.chat("sys", [], []);
+    expect(result.text).toBe("backup-ok");
+
+    const health = ProviderHealthRegistry.getInstance();
+    const entry = health.getEntry("overloaded-prov");
+    expect(entry?.status).toBe("down");
+    // Overload cooldown should be at least 5 minutes (300_000ms)
+    expect(entry!.cooldownUntil).toBeGreaterThan(Date.now() + 4 * 60 * 1000);
+  });
+
+  it("probe success records as probe kind (degraded, not full reset)", async () => {
+    const health = ProviderHealthRegistry.getInstance();
+
+    const p1 = { ...createMockProvider({ text: "recovered" }), name: "recovering-prov" };
+    const chain = new FallbackChainProvider([p1]);
+
+    // Simulate: provider was down, cooldown expired
+    health.recordFailure("recovering-prov", "timeout");
+    health.recordFailure("recovering-prov", "timeout");
+    health.recordFailure("recovering-prov", "timeout");
+    health.recordFailure("recovering-prov", "timeout");
+    health.recordFailure("recovering-prov", "timeout");
+    const entry = health.getEntry("recovering-prov")!;
+    Object.assign(entry, { cooldownUntil: Date.now() - 1000 });
+
+    await chain.chat("sys", [], []);
+
+    // After probe + real success: status should be healthy (real success after probe)
+    // The probe sets degraded, then the real request sets healthy
+    const afterEntry = health.getEntry("recovering-prov")!;
+    expect(afterEntry.status).toBe("healthy");
+  });
 });

@@ -43,6 +43,8 @@ export interface SessionState {
   messages: ChatMessage[]
   status: ConnectionStatus
   isTyping: boolean
+  /** Timestamp when typing started — used for timeout display */
+  typingStartedAt: number | null
   sessionId: string | null
   profileId: string | null
   language: SupportedLanguage
@@ -76,6 +78,7 @@ const initialState: SessionState = {
   messages: [],
   status: 'disconnected',
   isTyping: false,
+  typingStartedAt: null,
   sessionId: null,
   profileId: null,
   language: getInitialLanguage(),
@@ -115,7 +118,7 @@ export const useSessionStore = create<SessionState & SessionActions>()((set) => 
 
   setLanguage: (language) => set({ language }),
 
-  setTyping: (isTyping) => set({ isTyping }),
+  setTyping: (isTyping) => set({ isTyping, typingStartedAt: isTyping ? Date.now() : null }),
 
   setConfirmation: (confirmation) => set({ confirmation }),
 

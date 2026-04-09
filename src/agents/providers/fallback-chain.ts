@@ -30,6 +30,8 @@ const INVALID_TOOL_RE = /invalid.*tool|tool.*invalid|invalid.*schema/i;
 const ABORT_RE = /abort/i;
 const CANCEL_RE = /cancel/i;
 const TASK_INTERRUPTED_RE = /task\.interrupted/i;
+/** Regex for server overload errors (HTTP 529, 503) — triggers extended cooldown */
+const OVERLOAD_RE = /\b(?:529|503)\b/;
 
 function isNonRetryableRequestError(error: unknown): boolean {
   const msg = error instanceof Error ? error.message : String(error);
@@ -200,8 +202,8 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
             [], // no tools
             { signal: AbortSignal.timeout(15_000) },
           );
-          health.recordSuccess(provider.name);
-          logger.info("Provider health probe succeeded", { provider: provider.name });
+          health.recordSuccess(provider.name, "probe");
+          logger.info("Provider health probe succeeded (probe-only recovery)", { provider: provider.name });
         } catch (probeErr) {
           const probeMsg = probeErr instanceof Error ? probeErr.message : String(probeErr);
           health.recordFailure(provider.name, probeMsg);
@@ -232,9 +234,12 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
         const errorMsg = error instanceof Error ? error.message : String(error);
         lastError = errorMsg;
 
-        // Quota/billing errors get a long cooldown so the provider is skipped for hours
+        // Quota/billing errors get a long cooldown so the provider is skipped for hours.
+        // Overload errors (529/503) get a medium cooldown to let the server recover.
         if (/\b403\b/.test(errorMsg) && QUOTA_LIMIT_RE.test(errorMsg)) {
           health.recordQuotaExhausted(provider.name, errorMsg);
+        } else if (OVERLOAD_RE.test(errorMsg)) {
+          health.recordOverloaded(provider.name, errorMsg);
         } else {
           health.recordFailure(provider.name, errorMsg);
         }

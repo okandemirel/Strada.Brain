@@ -18,6 +18,7 @@
  * Requirements: DAEMON-01, DAEMON-02, DAEMON-04, DAEMON-05
  */
 
+import { ProviderHealthRegistry } from "../agents/providers/provider-health.js";
 import type { TriggerRegistry } from "./trigger-registry.js";
 import type { TaskManager } from "../tasks/task-manager.js";
 import type { BudgetTracker } from "./budget/budget-tracker.js";
@@ -202,10 +203,12 @@ export class HeartbeatLoop {
     }
 
     // Idle-driven memory consolidation (Phase 25, MEM-12, MEM-13)
+    // Skip if all providers are in cooldown — consolidation requires LLM calls
+    // and attempting them against overloaded providers just adds log noise.
     if (this.consolidationEngine && this.consolidationConfig && !this.consolidationRunning) {
       const idleMs = now.getTime() - this.lastUserActivity;
       const idleThresholdMs = this.consolidationConfig.idleMinutes * 60000;
-      if (idleMs >= idleThresholdMs) {
+      if (idleMs >= idleThresholdMs && !ProviderHealthRegistry.getInstance().areAllUnavailable()) {
         this.consolidationRunning = true;
         this.consolidationAbort = new AbortController();
         const signal = this.consolidationAbort.signal;
