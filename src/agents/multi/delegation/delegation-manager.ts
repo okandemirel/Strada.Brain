@@ -35,6 +35,7 @@ import { createProvider, PROVIDER_PRESETS } from "../../providers/provider-regis
 import { ProviderManager } from "../../providers/provider-manager.js";
 import { Orchestrator } from "../../orchestrator.js";
 import { getProviderIntelligenceSnapshot, type ProviderWorkload } from "../../providers/provider-knowledge.js";
+import { ProviderHealthRegistry } from "../../providers/provider-health.js";
 import { WorkspaceLeaseManager } from "../workspace-lease-manager.js";
 
 // =============================================================================
@@ -224,6 +225,20 @@ export class DelegationManager {
     effectiveTier: ModelTier;
   } {
     const typeConfig = this.resolveTypeConfig(request.type);
+
+    // Health gate: prevent thundering herd against overloaded providers
+    const healthRegistry = ProviderHealthRegistry.getInstance();
+    const allEntries = healthRegistry.getAllEntries();
+    if (allEntries.size > 0) {
+      const now = Date.now();
+      const allDown = [...allEntries.values()].every(
+        (e) => e.status === "down" && now < e.cooldownUntil,
+      );
+      if (allDown) {
+        throw new Error("All providers are in cooldown — delegation skipped to prevent thundering herd");
+      }
+    }
+
     // Atomically check + reserve concurrency slot to prevent TOCTOU race
     this.acquireConcurrencySlot(request.parentAgentId);
 
@@ -668,6 +683,11 @@ export class DelegationManager {
   private isDelegationProviderAvailable(name: string): boolean {
     if (this.isVerifiedLocalProvider(name)) {
       return true;
+    }
+
+    // Skip providers in health cooldown to avoid hammering overloaded endpoints
+    if (!ProviderHealthRegistry.getInstance().isAvailable(name)) {
+      return false;
     }
     if (name === "claude" || name === "anthropic") {
       return Boolean(
