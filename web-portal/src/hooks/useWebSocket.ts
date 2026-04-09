@@ -334,9 +334,16 @@ export function useWebSocket(): UseWebSocketReturn {
 
       switch (data.type) {
         case 'connected': {
+          const connChatId = typeof data.chatId === 'string' ? data.chatId : ''
+          const connReconnectToken = typeof data.reconnectToken === 'string' ? data.reconnectToken : ''
+          const connProfileId = typeof data.profileId === 'string' ? data.profileId : undefined
+          const connProfileToken = typeof data.profileToken === 'string' ? data.profileToken : undefined
+          const connLanguage = typeof data.language === 'string' ? data.language : undefined
+          if (!connChatId || !connReconnectToken) break
+
           if (
             pendingReconnectChatIdRef.current &&
-            data.chatId !== pendingReconnectChatIdRef.current
+            connChatId !== pendingReconnectChatIdRef.current
           ) {
             if (pendingReconnectTimerRef.current) {
               clearTimeout(pendingReconnectTimerRef.current)
@@ -345,7 +352,7 @@ export function useWebSocket(): UseWebSocketReturn {
             pendingReconnectTimerRef.current = setTimeout(() => {
               pendingReconnectTimerRef.current = null
               pendingReconnectChatIdRef.current = null
-              acceptConnectedSession(data.chatId, data.reconnectToken, data.profileId, data.profileToken, data.language)
+              acceptConnectedSession(connChatId, connReconnectToken, connProfileId, connProfileToken, connLanguage)
               sessionReadyRef.current = true
               flushPendingOutboundMessages()
             }, SESSION_RECLAIM_GRACE_MS)
@@ -358,15 +365,17 @@ export function useWebSocket(): UseWebSocketReturn {
           }
 
           pendingReconnectChatIdRef.current = null
-          acceptConnectedSession(data.chatId, data.reconnectToken, data.profileId, data.profileToken, data.language)
+          acceptConnectedSession(connChatId, connReconnectToken, connProfileId, connProfileToken, connLanguage)
           sessionReadyRef.current = true
           flushPendingOutboundMessages()
           break
         }
 
         case 'message_received': {
-          clearPendingMessageTimer(data.clientMessageId)
-          useSessionStore.getState().updateMessage(data.clientMessageId, {
+          const rcvClientMsgId = typeof data.clientMessageId === 'string' ? data.clientMessageId : ''
+          if (!rcvClientMsgId) break
+          clearPendingMessageTimer(rcvClientMsgId)
+          useSessionStore.getState().updateMessage(rcvClientMsgId, {
             deliveryState: undefined,
           })
           break
@@ -389,13 +398,15 @@ export function useWebSocket(): UseWebSocketReturn {
         case 'markdown': {
           const store = useSessionStore.getState()
           store.setTyping(false)
+          const msgText = typeof data.text === 'string' ? data.text : ''
+          const msgId = typeof data.messageId === 'string' ? data.messageId : generateId()
           const instinctIds = Array.isArray(data.instinctIds)
             ? (data.instinctIds as unknown[]).filter((id): id is string => typeof id === 'string')
             : undefined
           store.addMessage({
-            id: data.messageId || generateId(),
+            id: msgId,
             sender: 'assistant',
-            text: data.text,
+            text: msgText,
             isMarkdown: data.type === 'markdown',
             timestamp: Date.now(),
             ...(instinctIds && instinctIds.length > 0 ? { instinctIds } : {}),
@@ -404,60 +415,69 @@ export function useWebSocket(): UseWebSocketReturn {
         }
 
         case 'typing':
-          useSessionStore.getState().setTyping(data.active)
+          useSessionStore.getState().setTyping(typeof data.active === 'boolean' ? data.active : false)
           break
 
         case 'stream_start': {
+          const ssStreamId = typeof data.streamId === 'string' ? data.streamId : ''
+          if (!ssStreamId) break
+          const ssText = typeof data.text === 'string' ? data.text : ''
           useSessionStore.getState().setTyping(false)
-          streamsRef.current.set(data.streamId, data.text || '')
+          streamsRef.current.set(ssStreamId, ssText)
           useSessionStore.getState().addMessage({
             id: generateId(),
             sender: 'assistant',
-            text: data.text || '',
+            text: ssText,
             isMarkdown: true,
             isStreaming: true,
-            streamId: data.streamId,
+            streamId: ssStreamId,
             timestamp: Date.now(),
           })
           // Store index for O(1) lookup in stream_update
           const storeAfterAdd = useSessionStore.getState()
-          streamIdToIndexRef.current.set(data.streamId, storeAfterAdd.messages.length - 1)
+          streamIdToIndexRef.current.set(ssStreamId, storeAfterAdd.messages.length - 1)
           break
         }
 
         case 'stream_update': {
+          const suStreamId = typeof data.streamId === 'string' ? data.streamId : ''
+          const suDelta = typeof data.delta === 'string' ? data.delta : ''
+          if (!suStreamId) break
           const store = useSessionStore.getState()
-          const msgIndex = streamIdToIndexRef.current.get(data.streamId)
-          const streamMsg = (msgIndex !== undefined && store.messages[msgIndex]?.streamId === data.streamId)
+          const msgIndex = streamIdToIndexRef.current.get(suStreamId)
+          const streamMsg = (msgIndex !== undefined && store.messages[msgIndex]?.streamId === suStreamId)
             ? store.messages[msgIndex]
-            : store.messages.find((m) => m.streamId === data.streamId)
+            : store.messages.find((m) => m.streamId === suStreamId)
           if (streamMsg) {
-            if (msgIndex === undefined || store.messages[msgIndex]?.streamId !== data.streamId) {
+            if (msgIndex === undefined || store.messages[msgIndex]?.streamId !== suStreamId) {
               const correctIndex = store.messages.findIndex((m) => m.id === streamMsg.id)
-              if (correctIndex >= 0) streamIdToIndexRef.current.set(data.streamId, correctIndex)
+              if (correctIndex >= 0) streamIdToIndexRef.current.set(suStreamId, correctIndex)
             }
-            const newText = streamMsg.text + data.delta
-            streamsRef.current.set(data.streamId, newText)
+            const newText = streamMsg.text + suDelta
+            streamsRef.current.set(suStreamId, newText)
             store.updateMessage(streamMsg.id, { text: newText })
           }
           break
         }
 
         case 'stream_end': {
-          const endIndex = streamIdToIndexRef.current.get(data.streamId)
-          streamIdToIndexRef.current.delete(data.streamId)
-          streamsRef.current.delete(data.streamId)
+          const seStreamId = typeof data.streamId === 'string' ? data.streamId : ''
+          if (!seStreamId) break
+          const seText = typeof data.text === 'string' ? data.text : ''
+          const endIndex = streamIdToIndexRef.current.get(seStreamId)
+          streamIdToIndexRef.current.delete(seStreamId)
+          streamsRef.current.delete(seStreamId)
           const store = useSessionStore.getState()
-          const streamMsg = (endIndex !== undefined && store.messages[endIndex]?.streamId === data.streamId)
+          const streamMsg = (endIndex !== undefined && store.messages[endIndex]?.streamId === seStreamId)
             ? store.messages[endIndex]
-            : store.messages.find((m) => m.streamId === data.streamId)
+            : store.messages.find((m) => m.streamId === seStreamId)
           if (streamMsg) {
-            if (data.text) {
+            if (seText) {
               const streamEndInstinctIds = Array.isArray(data.instinctIds)
                 ? (data.instinctIds as unknown[]).filter((id): id is string => typeof id === 'string')
                 : undefined
               store.updateMessage(streamMsg.id, {
-                text: data.text,
+                text: seText,
                 isStreaming: false,
                 ...(streamEndInstinctIds && streamEndInstinctIds.length > 0 ? { instinctIds: streamEndInstinctIds } : {}),
               })
@@ -468,14 +488,22 @@ export function useWebSocket(): UseWebSocketReturn {
           break
         }
 
-        case 'confirmation':
+        case 'confirmation': {
+          const cfConfirmId = typeof data.confirmId === 'string' ? data.confirmId : ''
+          const cfQuestion = typeof data.question === 'string' ? data.question : ''
+          const cfOptions = Array.isArray(data.options)
+            ? (data.options as unknown[]).filter((o): o is string => typeof o === 'string')
+            : []
+          const cfDetails = typeof data.details === 'string' ? data.details : undefined
+          if (!cfConfirmId || !cfQuestion || cfOptions.length === 0) break
           useSessionStore.getState().setConfirmation({
-            confirmId: data.confirmId,
-            question: data.question,
-            options: data.options,
-            details: data.details,
+            confirmId: cfConfirmId,
+            question: cfQuestion,
+            options: cfOptions,
+            details: cfDetails,
           })
           break
+        }
       }
     })
   }, [
