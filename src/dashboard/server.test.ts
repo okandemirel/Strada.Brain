@@ -156,7 +156,7 @@ describe("DashboardServer", () => {
             chatId: "chat-2",
             channelType: "telegram",
             title: "Standalone task",
-            status: "pending",
+            status: "executing",
             createdAt: 1_500,
             updatedAt: 2_500,
           },

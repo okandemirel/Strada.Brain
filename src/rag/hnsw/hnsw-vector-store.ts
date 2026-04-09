@@ -488,6 +488,19 @@ export class HNSWVectorStore implements IHNSWVectorStore {
 
     const memoryUsage = this.getMemoryUsage();
 
+    let quantization: { type: QuantizationType; compressionRatio: number } | undefined;
+    if (this.config.quantization) {
+      const originalBytes = this.chunks.size * this.config.dimensions * 4;
+      let compressedBytes = 0;
+      for (const qv of this.quantizedVectors.values()) {
+        compressedBytes += qv.data.length;
+      }
+      quantization = {
+        type: this.config.quantization,
+        compressionRatio: compressedBytes > 0 ? originalBytes / compressedBytes : 1,
+      };
+    }
+
     return {
       elementCount: this.chunks.size,
       maxElements: this.config.maxElements,
@@ -495,9 +508,7 @@ export class HNSWVectorStore implements IHNSWVectorStore {
       avgSearchTimeMs: avgSearchTime,
       totalSearches: this.searchTimes.length,
       memoryUsageBytes: memoryUsage,
-      quantization: this.config.quantization
-        ? { type: this.config.quantization, compressionRatio: 4 }
-        : undefined,
+      quantization,
     };
   }
 

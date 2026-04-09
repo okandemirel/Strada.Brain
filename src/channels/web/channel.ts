@@ -1297,6 +1297,10 @@ export class WebChannel
     "/api/user/autonomous",
     "/api/rag/status",
     "/api/system/boot",
+    "/api/health",
+    "/api/status",
+    "/api/providers",
+    "/api/tasks",
   ]);
 
   /** Paths that accept POST or DELETE in addition to GET. */
@@ -1363,7 +1367,8 @@ export class WebChannel
       pathOnly === "/api/skills" || pathOnly.startsWith("/api/skills/") ||
       pathOnly === "/api/providers/available" ||
       pathOnly === "/api/providers/active" ||
-      pathOnly.startsWith("/api/providers/intelligence/");
+      pathOnly.startsWith("/api/providers/intelligence/") ||
+      pathOnly.startsWith("/api/chat/");
 
     if (!isAllowed) {
       res.writeHead(403, { ...WebChannel.SECURITY_HEADERS, "Content-Type": "application/json" });

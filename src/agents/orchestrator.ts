@@ -688,6 +688,9 @@ export class Orchestrator {
   private monitorLifecycle: MonitorLifecycle | null = null;
   /** Tracks consecutive ask_user blocks per conversation to break clarification loops. */
   private readonly askUserBlockCounts = new Map<string, number>();
+  /** Tracks consecutive errors per tool per chat to auto-disable repeatedly failing tools. */
+  private readonly toolConsecutiveErrors = new Map<string, Map<string, number>>();
+  private static readonly MAX_CONSECUTIVE_TOOL_ERRORS = 3;
   private readonly soulLoader: SoulLoader | null;
   private readonly dmPolicy: DMPolicy;
   private readonly sessionSummarizer?: SessionSummarizer;
@@ -723,6 +726,8 @@ export class Orchestrator {
   private readonly loopHardCapReplan?: number;
   private readonly loopHardCapBlock?: number;
   private readonly progressAssessmentEnabled: boolean;
+  /** Hard cap on iterations for delegated sub-agents (overrides config if lower). */
+  private readonly maxIterations?: number;
   private readonly runtimeArtifactMatches = new Map<
     string,
     {
@@ -802,6 +807,8 @@ export class Orchestrator {
     progressAssessmentEnabled?: boolean;
     onSkillCreated?: (skillPath: string) => Promise<void>;
     getSkillEntries?: () => readonly SkillEntry[];
+    /** Hard cap on iterations for delegated sub-agents (overrides config if lower). */
+    maxIterations?: number;
   }) {
     this.providerManager = opts.providerManager;
     this.channel = opts.channel;
@@ -871,6 +878,7 @@ export class Orchestrator {
     this.loopHardCapReplan = opts.loopHardCapReplan;
     this.loopHardCapBlock = opts.loopHardCapBlock;
     this.progressAssessmentEnabled = opts.progressAssessmentEnabled ?? true;
+    this.maxIterations = opts.maxIterations;
     this.getIdentityState = opts.getIdentityState;
     this.crashRecoveryContext = opts.crashRecoveryContext;
     this.onSkillCreated = opts.onSkillCreated;
@@ -930,12 +938,25 @@ export class Orchestrator {
     return undefined;
   }
 
+  /** Update consecutive error counter for a tool in a given chat. Resets on success. */
+  private trackToolError(chatId: string, toolName: string, isError: boolean): void {
+    if (isError) {
+      if (!this.toolConsecutiveErrors.has(chatId)) this.toolConsecutiveErrors.set(chatId, new Map());
+      const errs = this.toolConsecutiveErrors.get(chatId)!;
+      errs.set(toolName, (errs.get(toolName) ?? 0) + 1);
+    } else {
+      this.toolConsecutiveErrors.get(chatId)?.delete(toolName);
+    }
+  }
+
   private getInteractiveIterationLimit(): number {
-    return Math.max(1, this.taskConfig.interactiveMaxIterations);
+    const configLimit = Math.max(1, this.taskConfig.interactiveMaxIterations);
+    return this.maxIterations ? Math.min(this.maxIterations, configLimit) : configLimit;
   }
 
   private getBackgroundEpochIterationLimit(): number {
-    return Math.max(1, this.taskConfig.backgroundEpochMaxIterations);
+    const configLimit = Math.max(1, this.taskConfig.backgroundEpochMaxIterations);
+    return this.maxIterations ? Math.min(this.maxIterations, configLimit) : configLimit;
   }
 
   private canAutoContinueBackgroundEpoch(completedEpochCount: number): boolean {
@@ -3851,6 +3872,8 @@ export class Orchestrator {
       }
 
       let consecutiveMaxTokens = 0;
+      let cumulativeInputTokens = 0;
+      const tokenBudget = this.taskConfig.interactiveTokenBudget;
       const iterationHealth = new IterationHealthTracker();
       for (let iteration = 0; iteration < interactiveIterationLimit; iteration++) {
         const {
@@ -3946,6 +3969,26 @@ export class Orchestrator {
           toolTurnAffinity = currentAssignment;
         }
         this.recordProviderUsage(currentAssignment.providerName, response.usage, this.onUsage);
+
+        // Token budget enforcement — prevent runaway token consumption
+        cumulativeInputTokens += response.usage?.inputTokens ?? 0;
+        if (cumulativeInputTokens >= tokenBudget) {
+          logger.warn("Interactive token budget exceeded — aborting loop", {
+            chatId,
+            cumulativeInputTokens,
+            tokenBudget,
+            iteration,
+            provider: currentAssignment.providerName,
+          });
+          await this.sessionManager.sendVisibleAssistantMarkdown(
+            chatId, session,
+            getResilienceMessage("token_budget_exceeded", (profile?.language ?? this.defaultLanguage) as string, {
+              used: Math.round(cumulativeInputTokens / 1000),
+              budget: Math.round(tokenBudget / 1000),
+            }),
+          );
+          break;
+        }
 
         // Intelligent provider resilience: detect synthetic empty responses and adapt
         const interactiveLang = (profile?.language ?? this.defaultLanguage) as string;
@@ -5823,6 +5866,18 @@ export class Orchestrator {
         continue;
       }
 
+      // Auto-disable tools that have failed repeatedly in this chat
+      const chatToolErrors = this.toolConsecutiveErrors.get(chatId);
+      const toolErrorCount = chatToolErrors?.get(activeToolCall.name) ?? 0;
+      if (toolErrorCount >= Orchestrator.MAX_CONSECUTIVE_TOOL_ERRORS) {
+        results.push({
+          toolCallId: activeToolCall.id,
+          content: `Tool '${activeToolCall.name}' has failed ${toolErrorCount} consecutive times and is temporarily disabled for this conversation. Use a different approach or tool.`,
+          isError: true,
+        });
+        continue;
+      }
+
       const toolMeta = this.toolMetadataByName.get(activeToolCall.name);
       if (toolMeta?.available === false) {
         results.push({
@@ -5991,6 +6046,8 @@ export class Orchestrator {
         }
         emitSubstep(result.isError ? "skipped" : "done");
 
+        this.trackToolError(chatId, activeToolCall.name, !!result.isError);
+
         results.push({
           toolCallId: activeToolCall.id,
           content: sanitizeToolResult(result.content),
@@ -6006,6 +6063,8 @@ export class Orchestrator {
           error: errMsg,
         });
         emitSubstep("skipped");
+
+        this.trackToolError(chatId, activeToolCall.name, true);
 
         results.push({
           toolCallId: activeToolCall.id,
@@ -6085,6 +6144,7 @@ export class Orchestrator {
     // Only clear block counts for expired sessions, not all active ones
     for (const chatId of expired) {
       this.askUserBlockCounts.delete(chatId);
+      this.toolConsecutiveErrors.delete(chatId);
     }
   }
 

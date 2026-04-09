@@ -208,7 +208,7 @@ export function sanitizeEventInput(input: Record<string, unknown>): Record<strin
 // PROVIDER FAILURE CIRCUIT BREAKER
 // =============================================================================
 
-const PROVIDER_FAILURE_LIMIT = 8;
+const PROVIDER_FAILURE_LIMIT = 5;
 export const QUOTA_LIMIT_RE = /quota|limit|billing|cycle|exceeded|usage/i;
 
 /**

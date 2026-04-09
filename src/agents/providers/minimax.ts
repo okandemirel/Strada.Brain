@@ -56,6 +56,13 @@ export class MiniMaxProvider extends OpenAIProvider {
   override readonly capabilities: ProviderCapabilities;
   private inThinkBlock = false;
 
+  /**
+   * When true, suppresses reasoning/thinking by capping max_tokens to 4096
+   * and prepending an instruction to skip extended reasoning.
+   * Set by FallbackChain after a reasoning timeout when no fallback providers are available.
+   */
+  disableThinking = false;
+
   constructor(
     apiKey: string,
     model = "MiniMax-M2.7",
@@ -77,12 +84,33 @@ export class MiniMaxProvider extends OpenAIProvider {
   }
 
   protected override buildMessages(systemPrompt: string, messages: ConversationMessage[]): OpenAIMessage[] {
-    const result = super.buildMessages(systemPrompt, messages);
+    const effectivePrompt = this.disableThinking
+      ? `${systemPrompt}\n\n[IMPORTANT: Respond directly and concisely. Do NOT use extended thinking or reasoning. Keep your answer brief.]`
+      : systemPrompt;
+
+    const result = super.buildMessages(effectivePrompt, messages);
 
     // MiniMax M2.5 reasoning_details must not be sent back in subsequent requests.
     stripReasoningBlocks(result);
 
     return result;
+  }
+
+  protected override buildRequestBody(
+    messages: OpenAIMessage[],
+    tools: unknown,
+  ): Record<string, unknown> {
+    const body = super.buildRequestBody(messages, tools);
+    if (this.disableThinking) {
+      // Cap output tokens to discourage extended internal reasoning that
+      // caused the previous timeout.  4096 is enough for a useful answer
+      // but short enough to avoid CDN/proxy timeout on long reasoning chains.
+      body["max_tokens"] = Math.min(
+        (body["max_tokens"] as number) ?? this.capabilities.maxTokens,
+        4096,
+      );
+    }
+    return body;
   }
 
   /**

@@ -253,6 +253,7 @@ export type EnvVarName =
   | "DELEGATION_TYPES"
   | "DELEGATION_MAX_ITERATIONS_PER_TYPE"
   | "TASK_INTERACTIVE_MAX_ITERATIONS"
+  | "TASK_INTERACTIVE_TOKEN_BUDGET"
   | "TASK_BACKGROUND_EPOCH_MAX_ITERATIONS"
   | "TASK_BACKGROUND_AUTO_CONTINUE"
   | "TASK_BACKGROUND_MAX_EPOCHS"
@@ -589,6 +590,7 @@ export interface TaskConfig {
   readonly messageBurstWindowMs: number;
   readonly messageBurstMaxMessages: number;
   readonly interactiveMaxIterations: number;
+  readonly interactiveTokenBudget: number;
   readonly backgroundEpochMaxIterations: number;
   readonly backgroundAutoContinue: boolean;
   readonly backgroundMaxEpochs: number;
@@ -643,7 +645,8 @@ export const DEFAULT_TASK_CONFIG: TaskConfig = {
   concurrencyLimit: 3,
   messageBurstWindowMs: 350,
   messageBurstMaxMessages: 8,
-  interactiveMaxIterations: 50,
+  interactiveMaxIterations: 25,
+  interactiveTokenBudget: 500_000,
   backgroundEpochMaxIterations: 50,
   backgroundAutoContinue: true,
   backgroundMaxEpochs: 3,
@@ -1748,7 +1751,12 @@ export const configSchema = z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(1).max(10_000))
-      .default("50"),
+      .default("25"),
+    taskInteractiveTokenBudget: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(10_000).max(10_000_000))
+      .default("500000"),
     taskBackgroundEpochMaxIterations: z
       .string()
       .transform((s) => parseInt(s, 10))
@@ -2020,6 +2028,7 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
       messageBurstWindowMs: rawConfig.taskMessageBurstWindowMs,
       messageBurstMaxMessages: rawConfig.taskMessageBurstMaxMessages,
       interactiveMaxIterations: rawConfig.taskInteractiveMaxIterations,
+      interactiveTokenBudget: rawConfig.taskInteractiveTokenBudget,
       backgroundEpochMaxIterations: rawConfig.taskBackgroundEpochMaxIterations,
       backgroundAutoContinue: rawConfig.taskBackgroundAutoContinue,
       backgroundMaxEpochs: rawConfig.taskBackgroundMaxEpochs,
@@ -2810,6 +2819,7 @@ interface EnvVars {
   taskMessageBurstWindowMs: string | undefined;
   taskMessageBurstMaxMessages: string | undefined;
   taskInteractiveMaxIterations: string | undefined;
+  taskInteractiveTokenBudget: string | undefined;
   taskBackgroundEpochMaxIterations: string | undefined;
   taskBackgroundAutoContinue: string | undefined;
   taskBackgroundMaxEpochs: string | undefined;
@@ -3102,6 +3112,7 @@ function loadFromEnv(): EnvVars {
     taskMessageBurstWindowMs: process.env["TASK_MESSAGE_BURST_WINDOW_MS"],
     taskMessageBurstMaxMessages: process.env["TASK_MESSAGE_BURST_MAX_MESSAGES"],
     taskInteractiveMaxIterations: process.env["TASK_INTERACTIVE_MAX_ITERATIONS"],
+    taskInteractiveTokenBudget: process.env["TASK_INTERACTIVE_TOKEN_BUDGET"],
     taskBackgroundEpochMaxIterations: process.env["TASK_BACKGROUND_EPOCH_MAX_ITERATIONS"],
     taskBackgroundAutoContinue: process.env["TASK_BACKGROUND_AUTO_CONTINUE"],
     taskBackgroundMaxEpochs: process.env["TASK_BACKGROUND_MAX_EPOCHS"],

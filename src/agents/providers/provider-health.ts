@@ -52,6 +52,7 @@ function resolveDefaultConfig(): ProviderHealthConfig {
 const MAX_ADAPTIVE_COOLDOWN_MS = 10 * 60 * 1000; // 10 minutes
 const OVERLOAD_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
 const QUOTA_COOLDOWN_MS = 8 * 60 * 60 * 1000; // 8 hours
+const SINGLE_PROVIDER_QUOTA_COOLDOWN_MS = 15 * 60 * 1000; // 15 minutes (when no fallbacks exist)
 
 export class ProviderHealthRegistry {
   private static instance: ProviderHealthRegistry | null = null;
@@ -154,6 +155,14 @@ export class ProviderHealthRegistry {
   }
 
   /**
+   * Record a server overload for a single-provider setup — uses a shorter
+   * cooldown (30 seconds, non-escalating) so the lone provider retries sooner.
+   */
+  recordOverloadedShort(providerName: string, error: string): void {
+    this.markDown(this.norm(providerName), 30_000, error, false);
+  }
+
+  /**
    * Record a quota/billing exhaustion — sets a long cooldown (8 hours)
    * so the provider is not retried until the quota resets.
    */
@@ -164,6 +173,27 @@ export class ProviderHealthRegistry {
     // Don't extend an existing active cooldown — keep the original expiry
     const existingCooldown = existing?.cooldownUntil ?? 0;
     const cooldownUntil = existingCooldown > now ? existingCooldown : now + QUOTA_COOLDOWN_MS;
+
+    this.entries.set(normalized, {
+      status: "down",
+      consecutiveFailures: this.nextFailureCount(normalized),
+      lastFailureAt: now,
+      lastError: error.slice(0, 200),
+      cooldownUntil,
+    });
+  }
+
+  /**
+   * Record a quota exhaustion for a single-provider setup — uses a shorter
+   * cooldown (15 min) so the lone provider recovers sooner instead of being
+   * locked out for 8 hours with no fallback available.
+   */
+  recordQuotaExhaustedShort(providerName: string, error: string): void {
+    const normalized = this.norm(providerName);
+    const existing = this.entries.get(normalized);
+    const now = Date.now();
+    const existingCooldown = existing?.cooldownUntil ?? 0;
+    const cooldownUntil = existingCooldown > now ? existingCooldown : now + SINGLE_PROVIDER_QUOTA_COOLDOWN_MS;
 
     this.entries.set(normalized, {
       status: "down",

@@ -8,6 +8,8 @@ const ALL_KEYS: MessageKey[] = [
   "provider_backoff",
   "provider_ask_user",
   "provider_abort",
+  "task_stuck",
+  "token_budget_exceeded",
 ];
 
 const ALL_LANGUAGES = ["en", "tr", "ja", "ko", "zh", "de", "es", "fr"];

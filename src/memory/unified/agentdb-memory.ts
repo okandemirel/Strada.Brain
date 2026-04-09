@@ -133,6 +133,8 @@ export class AgentDBMemory implements IUnifiedMemory {
   private userProfileStore: UserProfileStore | null = null;
   private taskExecutionStore: TaskExecutionStore | null = null;
   private rebuildInProgress = false;
+  private cacheHits = 0;
+  private cacheMisses = 0;
 
   constructor(config: Partial<UnifiedMemoryConfig> = {}) {
     this.config = { ...DEFAULT_MEMORY_CONFIG, ...config };
@@ -483,12 +485,22 @@ export class AgentDBMemory implements IUnifiedMemory {
     projectPath: string,
     maxAgeMs: DurationMs = createBrand(24 * 60 * 60 * 1000, "DurationMs" as const),
   ): Promise<StradaProjectAnalysis | null> {
-    if (!this.cachedAnalysis) return null;
-    if (this.cachedAnalysis.projectPath !== projectPath) return null;
+    if (!this.cachedAnalysis) {
+      this.cacheMisses++;
+      return null;
+    }
+    if (this.cachedAnalysis.projectPath !== projectPath) {
+      this.cacheMisses++;
+      return null;
+    }
 
     const age = Date.now() - this.cachedAnalysis.analysis.analyzedAt.getTime();
-    if (age > maxAgeMs) return null;
+    if (age > maxAgeMs) {
+      this.cacheMisses++;
+      return null;
+    }
 
+    this.cacheHits++;
     return this.cachedAnalysis.analysis;
   }
 
@@ -793,7 +805,12 @@ export class AgentDBMemory implements IUnifiedMemory {
   ): Promise<Result<Option<import("../memory.interface.js").MemoryEntry>, Error>> {
     try {
       const entry = this.entries.get(id as string);
-      if (!entry) return ok(none());
+      if (!entry) {
+        this.cacheMisses++;
+        return ok(none());
+      }
+
+      this.cacheHits++;
 
       // Update access stats
       entry.accessCount++;
@@ -1016,6 +1033,9 @@ export class AgentDBMemory implements IUnifiedMemory {
       }
     }
 
+    const quantOriginalBytes = entries.length * this.config.dimensions * 4;
+    const quantCompressedBytes = hnswStats?.memoryUsageBytes ?? quantOriginalBytes;
+
     return {
       totalEntries: entries.length,
       entriesByType: {
@@ -1053,10 +1073,9 @@ export class AgentDBMemory implements IUnifiedMemory {
       },
       quantizationStats: {
         type: this.config.quantizationType,
-        originalSizeBytes: entries.length * this.config.dimensions * 4,
-        compressedSizeBytes:
-          hnswStats?.memoryUsageBytes ?? entries.length * this.config.dimensions * 4,
-        compressionRatio: 4,
+        originalSizeBytes: quantOriginalBytes,
+        compressedSizeBytes: quantCompressedBytes,
+        compressionRatio: quantCompressedBytes > 0 ? quantOriginalBytes / quantCompressedBytes : 1,
         bitsPerDimension: this.config.quantizationType === "scalar" ? 8 : 32,
       },
       performance: {
@@ -1068,12 +1087,12 @@ export class AgentDBMemory implements IUnifiedMemory {
         memoryUsageBytes: entries.length * this.config.dimensions * 4,
       },
       cacheStats: {
-        hits: 0,
-        misses: 0,
+        hits: this.cacheHits,
+        misses: this.cacheMisses,
         evictions: 0,
         currentSize: this.entries.size,
         maxSize: Object.values(this.config.maxEntriesPerTier).reduce((a, b) => a + b, 0),
-        hitRate: 0,
+        hitRate: this.cacheHits / Math.max(1, this.cacheHits + this.cacheMisses),
       },
       tierStats: tierStats as unknown as Record<
         MemoryTier,

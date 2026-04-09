@@ -8213,8 +8213,8 @@ DONE`,
       });
 
       // IterationHealthTracker requires MIN_WINDOW_FOR_RATE (5) results and
-      // ABORT_FAILURE_RATE (80%) + ABORT_CONSECUTIVE (8) to abort.
-      // With all failures, abort triggers on the 8th consecutive failure.
+      // ABORT_FAILURE_RATE (80%) + ABORT_CONSECUTIVE (5) to abort.
+      // With all failures, abort triggers on the 5th consecutive failure.
       // Backoff delays require timer advancement.
       const promise = backgroundOrch.runBackgroundTask("Analyze the codebase", {
         chatId: "bg-circuit-breaker",
@@ -8229,8 +8229,8 @@ DONE`,
       }
       const result = await promise;
 
-      // Should abort after 8 failures (raised safety limits), not loop indefinitely
-      expect(mockProvider.chat.mock.calls.length).toBe(8);
+      // Should abort after 5 failures (raised safety limits), not loop indefinitely
+      expect(mockProvider.chat.mock.calls.length).toBe(5);
       // Abort message comes from resilience-messages.ts (localized)
       expect(result).toContain("AI provider is not responding");
     });

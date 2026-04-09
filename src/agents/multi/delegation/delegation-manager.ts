@@ -377,9 +377,6 @@ export class DelegationManager {
           workerId: subAgentId,
         })
         : undefined;
-      // Note: typeConfig.maxIterations is not currently passed to the Orchestrator
-      // because Orchestrator does not accept an iteration limit parameter.
-      // Sub-agent iteration limits are enforced by the timeout mechanism instead.
       const orchestrator = new Orchestrator({
         providerManager,
         tools: subAgentTools,
@@ -394,6 +391,7 @@ export class DelegationManager {
         stradaDeps: this.opts.stradaDeps,
         stradaConfig: this.opts.stradaConfig,
         providerRouter: this.opts.providerRouter,
+        maxIterations: typeConfig.maxIterations,
       });
 
       const message: IncomingMessage = {

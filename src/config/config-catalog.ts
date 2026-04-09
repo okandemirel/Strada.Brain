@@ -71,6 +71,11 @@ const EXACT_RULES: Record<string, ConfigDescriptor> = {
     tier: "advanced",
     description: "Interactive PAOR loop budget before Strada asks for a follow-up message.",
   },
+  "tasks.interactiveTokenBudget": {
+    category: "Execution",
+    tier: "advanced",
+    description: "Maximum total input tokens per interactive task. Aborts the loop when exceeded to prevent runaway token consumption.",
+  },
   "tasks.backgroundEpochMaxIterations": {
     category: "Execution",
     tier: "advanced",

@@ -44,6 +44,9 @@ import type { MemoryHealth } from "../memory/memory.interface.js";
 import { sendJson, sendJsonError } from "./server-types.js";
 import type { RouteContext } from "./server-types.js";
 
+/** Only truly running statuses count toward activeTaskCount. */
+const RUNNING_STATUSES = new Set(["executing", "planning"]);
+
 /**
  * Try to handle system information routes. Returns true if the route was handled.
  */
@@ -293,17 +296,21 @@ export function handleSystemRoutes(
         startedAt: lastActivity,
         lastActivity,
         messageCount: s.messageCount,
+        activeTaskCount: 0,
       });
     }
 
     for (const task of ctx.taskManager?.listAllActiveTasks() ?? []) {
       if (task.channelType === "daemon") continue;
+      const isRunning = RUNNING_STATUSES.has(task.status);
       const existing = merged.get(task.chatId);
       if (existing) {
         existing.startedAt = Math.min(existing.startedAt, task.createdAt);
         existing.lastActivity = Math.max(existing.lastActivity, task.updatedAt);
         existing.messageCount = Math.max(existing.messageCount, 1);
-        existing.activeTaskCount = (existing.activeTaskCount ?? 0) + 1;
+        if (isRunning) {
+          existing.activeTaskCount = (existing.activeTaskCount ?? 0) + 1;
+        }
         continue;
       }
 
@@ -313,7 +320,7 @@ export function handleSystemRoutes(
         startedAt: task.createdAt,
         lastActivity: task.updatedAt,
         messageCount: 1,
-        activeTaskCount: 1,
+        activeTaskCount: isRunning ? 1 : 0,
       });
     }
 

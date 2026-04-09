@@ -57,6 +57,8 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
   private readonly providers: IAIProvider[];
   /** Guards against thundering-herd concurrent probes to the same recovering provider. */
   private readonly probing = new Set<string>();
+  /** Providers whose thinking/reasoning should be suppressed after a reasoning timeout. */
+  private readonly disabledThinkingProviders = new Set<string>();
 
   constructor(providers: IAIProvider[]) {
     if (providers.length === 0) {
@@ -220,9 +222,27 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
 
       attempted++;
       try {
+        // Apply or clear thinking suppression based on reasoning timeout history.
+        if (this.disabledThinkingProviders.has(provider.name) && "disableThinking" in provider) {
+          (provider as { disableThinking: boolean }).disableThinking = true;
+        }
+
         const safeMessages = this.stripImages(messages, provider);
         const response = await attempt(provider, safeMessages);
         health.recordSuccess(provider.name);
+
+        // On success with thinking disabled, re-enable thinking for the next
+        // call so the provider can use its full reasoning capability again.
+        if (this.disabledThinkingProviders.has(provider.name)) {
+          this.disabledThinkingProviders.delete(provider.name);
+          if ("disableThinking" in provider) {
+            (provider as { disableThinking: boolean }).disableThinking = false;
+          }
+          logger.info("Re-enabled thinking after successful non-thinking response", {
+            provider: provider.name,
+          });
+        }
+
         if (attempted > 1) {
           logger.info("Fallback provider succeeded", {
             provider: provider.name,
@@ -236,10 +256,14 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
 
         // Quota/billing errors get a long cooldown so the provider is skipped for hours.
         // Overload errors (529/503) get a medium cooldown to let the server recover.
+        // Single-provider setups use shorter cooldowns since there is no fallback.
+        const isSingleProvider = this.providers.length === 1;
         if (/\b403\b/.test(errorMsg) && QUOTA_LIMIT_RE.test(errorMsg)) {
-          health.recordQuotaExhausted(provider.name, errorMsg);
+          const method = isSingleProvider ? "recordQuotaExhaustedShort" : "recordQuotaExhausted";
+          health[method](provider.name, errorMsg);
         } else if (OVERLOAD_RE.test(errorMsg)) {
-          health.recordOverloaded(provider.name, errorMsg);
+          const method = isSingleProvider ? "recordOverloadedShort" : "recordOverloaded";
+          health[method](provider.name, errorMsg);
         } else {
           health.recordFailure(provider.name, errorMsg);
         }
@@ -259,6 +283,15 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
             provider: provider.name,
             hint: "Reasoning models may need more time than the API proxy allows. Consider adding a faster fallback provider or reducing prompt complexity.",
           });
+
+          // In single-provider mode, disable thinking for future calls so the
+          // provider can respond without hitting the CDN/proxy timeout again.
+          if (isSingleProvider && !this.disabledThinkingProviders.has(provider.name)) {
+            this.disabledThinkingProviders.add(provider.name);
+            logger.warn("Auto-disabled thinking for single provider after reasoning timeout", {
+              provider: provider.name,
+            });
+          }
         }
 
         if (isNonRetryableRequestError(error)) {
@@ -271,14 +304,19 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
 
         const remaining = this.providers.slice(i + 1).filter((p) => health.isAvailable(p.name));
         if (remaining.length === 0) {
-          if (isReasoningTimeout && this.providers.length === 1) {
+          if (isReasoningTimeout && isSingleProvider) {
+            const thinkingDisabled = this.disabledThinkingProviders.has(provider.name);
             const hint = "Reasoning models (e.g. MiniMax) may exceed the API proxy timeout during extended thinking. "
+              + (thinkingDisabled
+                ? "Thinking has been auto-disabled for future retries. "
+                : "")
               + "To fix: (1) configure a fallback provider via PROVIDER_CHAIN (e.g. PROVIDER_CHAIN=minimax,openai), or "
               + "(2) increase the provider's timeout/proxy limit.";
             logger.error(`Reasoning model timeout with no fallback (${label})`, {
               provider: provider.name,
               error: sanitizeSecrets(errorMsg),
               hint,
+              thinkingDisabled,
             });
             throw new Error(
               `Provider "${provider.name}" timed out during reasoning with no fallback available. ${hint} `
