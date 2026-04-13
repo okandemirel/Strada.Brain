@@ -23,6 +23,7 @@ export function xxhash64Hex(input: string | Buffer): string {
 }
 
 export function chunkIdFor(path: string, offset: number, body: string): string {
+  // Truncate sha256 to 32 hex chars (16 bytes) — sufficient identity for chunk PKs, halves SQLite key space.
   return createHash('sha256')
     .update(path)
     .update('\x00')
