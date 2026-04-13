@@ -40,6 +40,15 @@ const PREFIX_COMMANDS: Record<string, TaskCommand> = {
   "/ajan": "agent",
   "/routing": "routing",
   "/yonlendirme": "routing",
+  "/token": "token",
+  "/budget": "token",
+  "/butce": "token",
+  "/bütçe": "token",
+  "/retry": "retry",
+  "/dene": "retry",
+  "/continue": "continue",
+  "/surdur": "continue",
+  "/sürdür": "continue",
 };
 
 // ─── Keyword Patterns (bilingual TR/EN) ──────────────────────────────────────────

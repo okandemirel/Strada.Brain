@@ -3,7 +3,8 @@ import { runProcess } from "../../utils/process-runner.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "./tool.interface.js";
 
 const DEFAULT_TIMEOUT_MS = 30_000; // 30 seconds
-const MAX_TIMEOUT_MS = 300_000; // 5 minutes
+const MIN_TIMEOUT_MS = 100; // 100 ms minimum
+const MAX_TIMEOUT_MS = 600_000; // 10 minutes maximum
 
 /**
  * Commands that are always blocked for safety.
@@ -110,23 +111,56 @@ export class ShellExecTool implements ITool {
       };
     }
 
-    const command = String(input["command"] ?? "").trim();
-    if (!command) {
+    // Explicit validation BEFORE String() coercion — String(undefined) yields
+    // "undefined" which looks like a valid non-empty command to naive checks.
+    const rawCommand = input["command"];
+    if (rawCommand === undefined || rawCommand === null) {
       return { content: "Error: 'command' is required", isError: true };
+    }
+    if (typeof rawCommand !== "string") {
+      return {
+        content: `Error: 'command' must be a string, got ${typeof rawCommand}`,
+        isError: true,
+      };
+    }
+    const command = rawCommand.trim();
+    if (!command) {
+      return {
+        content: "Error: 'command' is required (must be a non-empty string)",
+        isError: true,
+      };
     }
 
     const safety = checkCommandSafety(command);
     if (!safety.safe) {
       return {
-        content: `Error: command blocked for safety — ${safety.reason}`,
+        content: `Error: command blocked for safety — ${safety.reason} (command="${command.slice(0, 200)}")`,
         isError: true,
       };
     }
 
-    const timeoutMs = Math.min(
-      Math.max(1000, Number(input["timeout_ms"] ?? DEFAULT_TIMEOUT_MS)),
-      MAX_TIMEOUT_MS,
-    );
+    // Explicit timeout validation — surface out-of-range errors instead of
+    // silently clamping, so callers can correct their input.
+    const rawTimeout = input["timeout_ms"];
+    let timeoutMs = DEFAULT_TIMEOUT_MS;
+    if (rawTimeout !== undefined && rawTimeout !== null) {
+      const parsed = Number(rawTimeout);
+      if (!Number.isFinite(parsed)) {
+        return {
+          content: `Error: 'timeout_ms' must be a finite number, got ${String(rawTimeout)}`,
+          isError: true,
+        };
+      }
+      if (parsed < MIN_TIMEOUT_MS || parsed > MAX_TIMEOUT_MS) {
+        return {
+          content:
+            `Error: 'timeout_ms' out of range — got ${parsed}ms, must be between ` +
+            `${MIN_TIMEOUT_MS}ms and ${MAX_TIMEOUT_MS}ms (10 min max)`,
+          isError: true,
+        };
+      }
+      timeoutMs = Math.floor(parsed);
+    }
 
     // Resolve and validate working directory using path-guard
     const relWd = String(input["working_directory"] ?? "");
@@ -135,13 +169,14 @@ export class ShellExecTool implements ITool {
       const pathCheck = await validatePath(context.projectPath, relWd);
       if (!pathCheck.valid) {
         return {
-          content: "Error: working directory must be within the project",
+          content: `Error: working directory must be within the project (working_directory="${relWd}", reason=${pathCheck.error ?? "validation failed"})`,
           isError: true,
         };
       }
       cwd = pathCheck.fullPath;
     }
 
+    const startedAt = Date.now();
     try {
       const result = await runProcess({
         command: "/bin/bash",
@@ -159,8 +194,26 @@ export class ShellExecTool implements ITool {
         },
       };
     } catch (error) {
+      const elapsed = Date.now() - startedAt;
+      const errObj = error as NodeJS.ErrnoException & {
+        exitCode?: number;
+        stderr?: string;
+        code?: string;
+      };
+      const msg = error instanceof Error ? error.message : String(error);
+      const exitCode = typeof errObj.exitCode === "number" ? errObj.exitCode : null;
+      const stderr = typeof errObj.stderr === "string" ? errObj.stderr : "";
+      const stderrTail = stderr.length > 500 ? stderr.slice(-500) : stderr;
+      const parts: string[] = [
+        `Error: failed to execute command — ${msg}`,
+        `  command: ${command.slice(0, 200)}`,
+        `  elapsed: ${elapsed}ms`,
+      ];
+      if (exitCode !== null) parts.push(`  exit code: ${exitCode}`);
+      if (errObj.code) parts.push(`  code: ${errObj.code}`);
+      if (stderrTail) parts.push(`  stderr (tail): ${stderrTail}`);
       return {
-        content: `Error: failed to execute command — ${error instanceof Error ? error.message : "unknown error"}`,
+        content: parts.join("\n"),
         isError: true,
       };
     }

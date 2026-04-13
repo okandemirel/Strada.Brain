@@ -2,7 +2,9 @@ import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useShallow } from 'zustand/shallow'
 import { useMonitorStore, type ActivityEntry } from '../../stores/monitor-store'
+import { useWS } from '../../hooks/useWS'
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from '../ui/dialog'
+import { Button } from '../ui/button'
 import { cn } from '@/lib/utils'
 import {
   STATUS_STYLES,
@@ -12,6 +14,7 @@ import {
   normalizeLabel,
   resultToString,
 } from './monitor-utils'
+import VerificationEditor from './VerificationEditor'
 
 const STATUS_BANNER: Record<string, { bg: string; border: string; icon: string; labelKey: string }> = {
   completed: { bg: 'bg-emerald-500/10', border: 'border-emerald-500/20', icon: '\u2713', labelKey: 'inspect.bannerCompleted' },
@@ -108,12 +111,26 @@ function TaskActivityTimeline({ entries }: { entries: ActivityEntry[] }) {
 
 export default function TaskInspectModal() {
   const { t } = useTranslation('monitor')
-  const { task, tasks, allActivities, setSelectedTask } = useMonitorStore(
+  const { sendRawJSON } = useWS()
+  const {
+    task,
+    tasks,
+    allActivities,
+    setSelectedTask,
+    verifierActive,
+    verifierTaskId,
+    openVerifier,
+    closeVerifier,
+  } = useMonitorStore(
     useShallow((s) => ({
       task: s.selectedTaskId ? s.tasks[s.selectedTaskId] ?? null : null,
       tasks: s.tasks,
       allActivities: s.activities,
       setSelectedTask: s.setSelectedTask,
+      verifierActive: s.verification.active,
+      verifierTaskId: s.verification.taskId,
+      openVerifier: s.openVerifier,
+      closeVerifier: s.closeVerifier,
     })),
   )
 
@@ -156,6 +173,7 @@ export default function TaskInspectModal() {
   const handleClose = () => setSelectedTask(null)
 
   return (
+    <>
     <Dialog open={!!task} onOpenChange={(open) => { if (!open) handleClose() }}>
       <DialogContent className="!max-w-2xl !w-[90vw] !max-h-[85vh] flex flex-col !p-0 overflow-hidden">
         {task && (
@@ -323,9 +341,28 @@ export default function TaskInspectModal() {
                 <TaskActivityTimeline entries={taskActivities} />
               </Section>
             </div>
+
+            <div className="shrink-0 border-t border-white/8 px-5 py-3 flex justify-end gap-2">
+              <Button
+                variant="outline"
+                onClick={() => { if (task) openVerifier(task.id) }}
+              >
+                Open Verifier
+              </Button>
+            </div>
           </>
         )}
       </DialogContent>
     </Dialog>
+
+    {verifierActive && verifierTaskId && (
+      <VerificationEditor
+        taskId={verifierTaskId}
+        open={verifierActive}
+        onClose={closeVerifier}
+        send={sendRawJSON}
+      />
+    )}
+    </>
   )
 }

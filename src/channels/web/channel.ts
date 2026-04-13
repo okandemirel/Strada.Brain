@@ -284,6 +284,52 @@ export class WebChannel
 
   private _reconnectCleanupInterval: ReturnType<typeof setInterval> | undefined;
 
+  /**
+   * Per-chat in-flight `verify:check_criterion` spawn guard. Each chatId may
+   * have at most one concurrent npm child process for build/test checks.
+   * Prevents a malicious or buggy client from fan-out spawning unbounded
+   * `npm run build` processes (DoS — CPU/disk/fd exhaustion).
+   */
+  private readonly inflightVerifyByChat = new Map<string, { checkType: string; startedAt: number }>();
+  private static readonly MAX_CONCURRENT_VERIFY_PER_PROCESS = 4;
+
+  /**
+   * Build a scrubbed environment for `verify:*` npm child processes.
+   * Strips env vars that match known provider-secret patterns so a compromised
+   * build/test script (or a rogue postinstall) can't exfiltrate API keys.
+   * Whitelisting PATH/HOME/USER/LANG/NODE_ENV is enough for `npm run build|test`.
+   */
+  private buildVerifySpawnEnv(): NodeJS.ProcessEnv {
+    const allowPrefixes = ["PATH", "HOME", "USER", "LANG", "LC_", "TZ", "NODE_", "npm_", "TERM"];
+    const blockPatterns = [
+      /_API_KEY$/i,
+      /_TOKEN$/i,
+      /_SECRET$/i,
+      /^OPENAI/i,
+      /^ANTHROPIC/i,
+      /^GEMINI/i,
+      /^GOOGLE/i,
+      /^KIMI/i,
+      /^GROQ/i,
+      /^MISTRAL/i,
+      /^COHERE/i,
+      /^DEEPSEEK/i,
+      /^XAI/i,
+      /^HF_/i,
+      /PASSWORD/i,
+      /CREDENTIAL/i,
+    ];
+    const out: NodeJS.ProcessEnv = {};
+    for (const [k, v] of Object.entries(process.env)) {
+      if (v === undefined) continue;
+      if (blockPatterns.some((re) => re.test(k))) continue;
+      if (allowPrefixes.some((p) => k.startsWith(p))) {
+        out[k] = v;
+      }
+    }
+    return out;
+  }
+
   async disconnect(): Promise<void> {
     this.healthy = false;
 
@@ -291,6 +337,7 @@ export class WebChannel
       clearInterval(this._reconnectCleanupInterval);
     }
     this.recentlyDisconnected.clear();
+    this.inflightVerifyByChat.clear();
     this.lastMonitorSnapshot = [];
 
     for (const [, pending] of this.pendingConfirmations) {
@@ -1096,6 +1143,211 @@ export class WebChannel
         if (this.workspaceBusEmitter) {
           this.workspaceBusEmitter(data.type as string, data);
         }
+        break;
+      }
+
+      // Level Completion Verifier — run acceptance-criteria check for a task
+      case "verify:check_criterion": {
+        const payloadSize = JSON.stringify(data).length;
+        if (payloadSize > MAX_CONTROL_MESSAGE_BYTES) break;
+        const rawTaskId = typeof data.taskId === "string" ? data.taskId.trim() : "";
+        const safeTaskId = /^[a-zA-Z0-9_-]+$/.test(rawTaskId) ? rawTaskId : "";
+        const rawCriterionId = typeof data.criterionId === "string" ? data.criterionId.trim() : "";
+        const safeCriterionId = /^[a-zA-Z0-9_-]+$/.test(rawCriterionId) ? rawCriterionId : "";
+        const checkType = typeof data.checkType === "string" ? data.checkType : "";
+        if (!safeTaskId || !safeCriterionId || !["build", "test", "manual"].includes(checkType)) {
+          getLoggerSafe().warn("verify:check_criterion rejected — invalid payload", {
+            taskId: rawTaskId,
+            criterionId: rawCriterionId,
+            checkType,
+          });
+          this.sendToClient(chatId, {
+            type: "verify:check_result",
+            taskId: safeTaskId || rawTaskId,
+            criterionId: safeCriterionId || rawCriterionId,
+            status: "fail",
+            error: "Invalid verification request",
+          });
+          break;
+        }
+
+        if (checkType === "manual") {
+          // Manual criteria are user-driven — instant pass ack
+          this.sendToClient(chatId, {
+            type: "verify:check_result",
+            taskId: safeTaskId,
+            criterionId: safeCriterionId,
+            status: "pass",
+            evidence: "Manual check acknowledged.",
+          });
+          break;
+        }
+
+        // DoS guard: at most one in-flight verify spawn per chat, and bounded
+        // total concurrent spawns across the process. Reject fast with a
+        // user-visible error instead of fan-out spawning npm processes.
+        const existing = this.inflightVerifyByChat.get(chatId);
+        if (existing) {
+          this.sendToClient(chatId, {
+            type: "verify:check_result",
+            taskId: safeTaskId,
+            criterionId: safeCriterionId,
+            status: "fail",
+            error: `Another verification (${existing.checkType}) is already running for this session. Wait for it to finish.`,
+          });
+          break;
+        }
+        if (this.inflightVerifyByChat.size >= WebChannel.MAX_CONCURRENT_VERIFY_PER_PROCESS) {
+          this.sendToClient(chatId, {
+            type: "verify:check_result",
+            taskId: safeTaskId,
+            criterionId: safeCriterionId,
+            status: "fail",
+            error: "Server is busy running other verifications. Try again shortly.",
+          });
+          break;
+        }
+        this.inflightVerifyByChat.set(chatId, { checkType, startedAt: Date.now() });
+
+        // Spawn npm with a constrained allowlist (build/test), 30s timeout.
+        // Resolve cwd once up-front and verify package.json exists — refuses
+        // to spawn if the process was launched from an unexpected directory,
+        // which would otherwise execute an unrelated project's npm scripts.
+        const spawnCwd = process.cwd();
+        Promise.all([
+          import("node:child_process"),
+          import("node:fs/promises"),
+          import("node:path"),
+        ]).then(async ([cp, fsp, pathMod]) => {
+          try {
+            await fsp.access(pathMod.join(spawnCwd, "package.json"));
+          } catch {
+            this.inflightVerifyByChat.delete(chatId);
+            this.sendToClient(chatId, {
+              type: "verify:check_result",
+              taskId: safeTaskId,
+              criterionId: safeCriterionId,
+              status: "fail",
+              error: "No package.json at server cwd — cannot run build/test.",
+            });
+            return;
+          }
+          const args = checkType === "build" ? ["run", "build"] : ["run", "test"];
+          let stdoutBuf = "";
+          let stderrBuf = "";
+          const MAX_OUTPUT = 32 * 1024;
+          let settled = false;
+
+          const finish = (status: "pass" | "warn" | "fail", evidence?: string, error?: string) => {
+            if (settled) return;
+            settled = true;
+            // Release the per-chat in-flight slot so the next verify request
+            // can proceed. Must fire on every terminal branch (pass/warn/fail/
+            // spawn-error/timeout) — hence single source of truth here.
+            this.inflightVerifyByChat.delete(chatId);
+            this.sendToClient(chatId, {
+              type: "verify:check_result",
+              taskId: safeTaskId,
+              criterionId: safeCriterionId,
+              status,
+              ...(evidence ? { evidence: evidence.slice(0, 4000) } : {}),
+              ...(error ? { error: error.slice(0, 2000) } : {}),
+            });
+          };
+
+          try {
+            const child = cp.spawn("npm", args, {
+              shell: false,
+              cwd: spawnCwd,
+              timeout: 30_000,
+              killSignal: "SIGTERM",
+              stdio: ["ignore", "pipe", "pipe"],
+              // Pass through env minus inherited secrets we don't need for npm scripts.
+              // npm requires PATH + HOME + USER; we drop API keys by default.
+              env: this.buildVerifySpawnEnv(),
+            });
+
+            child.stdout?.on("data", (chunk: Buffer) => {
+              if (stdoutBuf.length < MAX_OUTPUT) {
+                stdoutBuf += chunk.toString().slice(0, MAX_OUTPUT - stdoutBuf.length);
+              }
+            });
+            child.stderr?.on("data", (chunk: Buffer) => {
+              if (stderrBuf.length < MAX_OUTPUT) {
+                stderrBuf += chunk.toString().slice(0, MAX_OUTPUT - stderrBuf.length);
+              }
+            });
+            child.on("error", (err) => {
+              finish("fail", undefined, `spawn error: ${err.message}`);
+            });
+            child.on("close", (code, signal) => {
+              if (signal === "SIGTERM") {
+                finish("fail", undefined, `Check timed out after 30s (${checkType})`);
+                return;
+              }
+              const tail = (s: string) => s.split(/\r?\n/).slice(-20).join("\n");
+              if (code === 0) {
+                finish("pass", tail(stdoutBuf) || `${checkType} passed`);
+              } else {
+                finish("fail", tail(stdoutBuf), tail(stderrBuf) || `Exit code ${code}`);
+              }
+            });
+          } catch (err) {
+            finish("fail", undefined, err instanceof Error ? err.message : String(err));
+          }
+        }).catch((err) => {
+          // Import failed — release slot before replying so the chat isn't wedged.
+          this.inflightVerifyByChat.delete(chatId);
+          getLoggerSafe().warn("verify:check_criterion import failed", { error: String(err) });
+          this.sendToClient(chatId, {
+            type: "verify:check_result",
+            taskId: safeTaskId,
+            criterionId: safeCriterionId,
+            status: "fail",
+            error: "Spawn subsystem unavailable",
+          });
+        });
+        break;
+      }
+
+      case "verify:gate_decision": {
+        const payloadSize = JSON.stringify(data).length;
+        if (payloadSize > MAX_CONTROL_MESSAGE_BYTES) break;
+        const rawTaskId = typeof data.taskId === "string" ? data.taskId.trim() : "";
+        const safeTaskId = /^[a-zA-Z0-9_-]+$/.test(rawTaskId) ? rawTaskId : "";
+        const verdict = typeof data.verdict === "string" ? data.verdict : "";
+        const allowedVerdicts = ["approve", "request_changes", "escalate"];
+        const note = typeof data.note === "string" ? data.note.slice(0, 2000) : "";
+        if (!safeTaskId || !allowedVerdicts.includes(verdict)) {
+          getLoggerSafe().warn("verify:gate_decision rejected — invalid payload", {
+            taskId: rawTaskId,
+            verdict,
+          });
+          this.sendToClient(chatId, {
+            type: "verify:gate_ack",
+            taskId: safeTaskId || rawTaskId,
+            accepted: false,
+            supervisorVerdict: "invalid_request",
+          });
+          break;
+        }
+        getLoggerSafe().info("verify:gate_decision received", {
+          taskId: safeTaskId,
+          verdict,
+          noteLength: note.length,
+        });
+        // TODO: Integrate with src/supervisor/supervisor-verification.ts when reachable
+        // from this context. For MVP we acknowledge receipt so the frontend state
+        // transitions out of the pending banner.
+        this.sendToClient(chatId, {
+          type: "verify:gate_ack",
+          taskId: safeTaskId,
+          // Only an explicit "approve" verdict is an acceptance — "request_changes"
+          // and "escalate" must surface as a non-green banner so operators aren't
+          // misled into thinking an escalation was auto-approved.
+          accepted: verdict === "approve",
+          supervisorVerdict: verdict,
+        });
         break;
       }
       // Canvas commands from frontend (Phase 4)

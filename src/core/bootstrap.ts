@@ -776,6 +776,30 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     startupNotices,
   });
 
+  // Task checkpoint store — persists in-flight context for budget / provider
+  // aborts so we can resume rather than silently drop the user's work.
+  // Lives next to tasks.db under the memory db dir.
+  try {
+    const { join: pathJoin } = await import("node:path");
+    const { TaskCheckpointStore } = await import("../tasks/task-checkpoint-store.js");
+    const checkpointDbPath = pathJoin(config.memory.dbPath, "task-checkpoints.db");
+    const checkpointStore = new TaskCheckpointStore(checkpointDbPath);
+    checkpointStore.initialize();
+    orchestrator.setTaskCheckpointStore(checkpointStore);
+    commandHandler.setTaskCheckpointStore(checkpointStore);
+    // Wire the orchestrator into the command handler so /retry, /continue,
+    // and implicit recovery intents can trigger real checkpoint replays
+    // (not just metadata display). Safe late-binding setter — avoids the
+    // circular import that would arise from declaring the dependency in
+    // the command-handler constructor.
+    commandHandler.setOrchestrator(orchestrator);
+    logger.info("Task checkpoint store initialized", { dbPath: checkpointDbPath });
+  } catch (err) {
+    logger.warn("Task checkpoint store failed to initialize — continuing without checkpointing", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
   // Register services for deep readiness checks and agent metrics endpoint
   if (dashboard) {
     dashboard.registerServices({
@@ -939,6 +963,11 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       });
       agentManager = multiAgentStage.agentManager;
       agentManager?.setUnifiedBudgetManager?.(unifiedBudgetManager);
+      // Wire the live budget manager into the orchestrator so the token-budget
+      // loop reads fresh values (portal POST /api/budget/config + env overrides).
+      orchestrator.setUnifiedBudgetManager(unifiedBudgetManager);
+      // Also wire into the command handler so /token can update the live budget.
+      commandHandler.setUnifiedBudgetManager(unifiedBudgetManager);
       agentBudgetTrackerOuter = multiAgentStage.agentBudgetTracker;
       delegationManager = multiAgentStage.delegationManager;
 

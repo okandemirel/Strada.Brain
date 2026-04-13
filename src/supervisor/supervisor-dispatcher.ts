@@ -604,60 +604,81 @@ export class SupervisorDispatcher {
     externalSignal?: AbortSignal,
   ): Promise<NodeResult> {
     const nodeController = new AbortController();
+    const startedAt = Date.now();
+    const timeoutMs = this.config.nodeTimeoutMs;
+    const nodeLabel = node.task?.slice(0, 80) ?? node.id ?? "unknown-node";
 
     // Link external signal to node controller
     const onExternalAbort = (): void => nodeController.abort();
     if (externalSignal) {
       if (externalSignal.aborted) {
-        throw new Error("Aborted");
+        throw new Error(
+          `Aborted before execution (node="${nodeLabel}", externally signalled)`,
+        );
       }
       externalSignal.addEventListener("abort", onExternalAbort, { once: true });
     }
 
-    // Set per-node timeout
-    const timer = setTimeout(
-      () => nodeController.abort(),
-      this.config.nodeTimeoutMs,
-    );
+    // Explicit timeout promise: rejects with context-rich error (no silent suppression)
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        nodeController.abort();
+        const elapsed = Date.now() - startedAt;
+        reject(
+          new Error(
+            `Tool timeout after ${timeoutMs}ms (node="${nodeLabel}", elapsed=${elapsed}ms, reason=per-node-timeout)`,
+          ),
+        );
+      }, timeoutMs);
+    });
+
+    // Abort-reject leg: fires when the node controller is aborted — either
+    // externally (user cancel) or internally (timeout above). Needed because
+    // executeNode may not honour its signal immediately; this ensures
+    // Promise.race resolves as soon as the abort is observed.
+    const abortPromise = new Promise<never>((_, reject) => {
+      const sig = nodeController.signal;
+      if (sig.aborted) {
+        reject(new Error(`Aborted (node="${nodeLabel}")`));
+        return;
+      }
+      sig.addEventListener(
+        "abort",
+        () => reject(new Error(`Aborted (node="${nodeLabel}")`)),
+        { once: true },
+      );
+    });
+
+    // Defuse the losing legs' rejections so they never bubble up as
+    // unhandled rejections. The winner's error is still surfaced via
+    // Promise.race below.
+    const nodePromise = this.executeNode(node, nodeController.signal);
+    nodePromise.catch(() => { /* swallowed for race-loser only */ });
+    abortPromise.catch(() => { /* swallowed for race-loser only */ });
 
     try {
-      const nodePromise = this.executeNode(node, nodeController.signal);
-      // Suppress eventual rejection from the losing leg of the race
-      // to prevent unhandled-rejection crashes when abort wins.
-      nodePromise.catch(() => {});
-      const result = await Promise.race([
-        nodePromise,
-        this.waitForAbort(nodeController.signal),
-      ]);
+      const result = await Promise.race([nodePromise, timeoutPromise, abortPromise]);
       return result;
     } catch (err) {
+      const elapsed = Date.now() - startedAt;
+      const baseMsg = err instanceof Error ? err.message : String(err);
       // Abort the node controller so in-flight fetch() calls are cancelled
       nodeController.abort();
-      throw err;
+      const aborted = nodeController.signal.aborted
+        ? (externalSignal?.aborted ? "external-abort" : "timeout-or-node-abort")
+        : "node-error";
+      throw new Error(
+        `${baseMsg} [node="${nodeLabel}", elapsed=${elapsed}ms, reason=${aborted}]`,
+      );
     } finally {
-      clearTimeout(timer);
+      if (timer !== undefined) {
+        clearTimeout(timer);
+      }
       if (externalSignal) {
         externalSignal.removeEventListener("abort", onExternalAbort);
       }
     }
-  }
-
-  /**
-   * Returns a promise that rejects when the signal is aborted.
-   * Used in Promise.race to implement timeout/cancellation.
-   */
-  private waitForAbort(signal: AbortSignal): Promise<never> {
-    return new Promise<never>((_resolve, reject) => {
-      if (signal.aborted) {
-        reject(new Error("Aborted"));
-        return;
-      }
-      signal.addEventListener(
-        "abort",
-        () => reject(new Error("Aborted")),
-        { once: true },
-      );
-    });
   }
 
   private delay(ms: number): Promise<void> {

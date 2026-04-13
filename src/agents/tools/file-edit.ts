@@ -43,28 +43,36 @@ export class FileEditTool implements ITool {
       };
     }
 
-    const relPath = String(input["path"] ?? "");
-    const oldString = String(input["old_string"] ?? "");
-    const newString = String(input["new_string"] ?? "");
-    const replaceAll = Boolean(input["replace_all"] ?? false);
+    // Input context for error messages (truncated to first 200 chars)
+    const inputPreview = summarizeInput(input);
 
-    if (!relPath || !oldString) {
-      return {
-        content: "Error: 'path' and 'old_string' are required",
-        isError: true,
-      };
-    }
+    // Explicit type + presence validation BEFORE String() coercion.
+    // String(undefined) silently yields "undefined" which masks missing fields.
+    const pathResult = requireNonEmptyString(input, "path", inputPreview);
+    if (!pathResult.ok) return pathResult.error;
+    const oldResult = requireNonEmptyString(input, "old_string", inputPreview);
+    if (!oldResult.ok) return oldResult.error;
+    const newResult = requireString(input, "new_string", inputPreview);
+    if (!newResult.ok) return newResult.error;
+
+    const relPath = pathResult.value;
+    const oldString = oldResult.value;
+    const newString = newResult.value;
+    const replaceAll = Boolean(input["replace_all"] ?? false);
 
     if (oldString === newString) {
       return {
-        content: "Error: old_string and new_string are identical",
+        content: `Error: old_string and new_string are identical. Received input: ${inputPreview}`,
         isError: true,
       };
     }
 
     const pathCheck = await validatePath(context.projectPath, relPath);
     if (!pathCheck.valid) {
-      return { content: `Error: ${pathCheck.error}`, isError: true };
+      return {
+        content: `Error: ${pathCheck.error} (path="${relPath}")`,
+        isError: true,
+      };
     }
 
     try {
@@ -72,7 +80,9 @@ export class FileEditTool implements ITool {
 
       if (!content.includes(oldString)) {
         return {
-          content: "Error: old_string not found in file. Make sure it matches exactly (including whitespace).",
+          content:
+            `Error: old_string not found in ${relPath}. Make sure it matches exactly (including whitespace). ` +
+            `First 80 chars of old_string: "${oldString.slice(0, 80).replace(/\n/g, "\\n")}"`,
           isError: true,
         };
       }
@@ -83,7 +93,7 @@ export class FileEditTool implements ITool {
         if (secondIndex !== -1) {
           return {
             content:
-              "Error: old_string appears multiple times in the file. " +
+              `Error: old_string appears multiple times in ${relPath}. ` +
               "Provide more surrounding context to make it unique, or use replace_all: true.",
             isError: true,
           };
@@ -109,10 +119,83 @@ export class FileEditTool implements ITool {
         metadata: { path: relPath, replacementCount, originalContent: content.slice(0, 500_000) },
       };
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        return { content: "Error: file not found", isError: true };
+      const err = error as NodeJS.ErrnoException;
+      if (err.code === "ENOENT") {
+        return {
+          content: `Error: file not found (path="${relPath}", fullPath="${pathCheck.fullPath}")`,
+          isError: true,
+        };
       }
-      return { content: "Error: could not edit file", isError: true };
+      const msg = err instanceof Error ? err.message : String(err);
+      return {
+        content: `Error: could not edit file (path="${relPath}", code=${err.code ?? "unknown"}): ${msg}`,
+        isError: true,
+      };
     }
   }
+}
+
+// ─── Input validation helpers ─────────────────────────────────────────────────
+
+const INPUT_PREVIEW_MAX = 200;
+
+type FieldResult<T> =
+  | { ok: true; value: T }
+  | { ok: false; error: ToolExecutionResult };
+
+function summarizeInput(input: Record<string, unknown>): string {
+  try {
+    const s = JSON.stringify(input);
+    return s.length > INPUT_PREVIEW_MAX ? `${s.slice(0, INPUT_PREVIEW_MAX)}…(truncated)` : s;
+  } catch {
+    return "[unserializable input]";
+  }
+}
+
+/** Require the field to be present AND a string (may be empty). */
+function requireString(
+  input: Record<string, unknown>,
+  field: string,
+  preview: string,
+): FieldResult<string> {
+  const raw = input[field];
+  if (raw === undefined || raw === null) {
+    return {
+      ok: false,
+      error: {
+        content: `Error: '${field}' is required. Received input: ${preview}`,
+        isError: true,
+      },
+    };
+  }
+  if (typeof raw !== "string") {
+    return {
+      ok: false,
+      error: {
+        content: `Error: '${field}' must be a string, got ${typeof raw}. Received input: ${preview}`,
+        isError: true,
+      },
+    };
+  }
+  return { ok: true, value: raw };
+}
+
+/** Like requireString but also rejects empty strings. */
+function requireNonEmptyString(
+  input: Record<string, unknown>,
+  field: string,
+  preview: string,
+): FieldResult<string> {
+  const result = requireString(input, field, preview);
+  if (!result.ok) return result;
+  if (result.value.length === 0) {
+    return {
+      ok: false,
+      error: {
+        content: `Error: '${field}' is required (must be a non-empty string). Received input: ${preview}`,
+        isError: true,
+      },
+    };
+  }
+  return result;
 }

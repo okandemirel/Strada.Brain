@@ -112,6 +112,13 @@ export class ToolRegistry {
   private readonly pluginLoader?: PluginLoader;
   private stradaMcpRuntime: import("./strada-mcp-tool-loader.js").StradaMcpRuntime | null = null;
   private initialized = false;
+  /**
+   * Pending async tool registrations (dynamic imports for heavy optional deps
+   * like Playwright or OpenAI speech tools). Tracked so callers can await
+   * completion and import failures surface via `waitForRegistrations()`
+   * instead of being silently swallowed.
+   */
+  private pendingToolRegistrations: Promise<void>[] = [];
 
   constructor(pluginDirs?: string[]) {
     if (pluginDirs && pluginDirs.length > 0) {
@@ -379,12 +386,44 @@ export class ToolRegistry {
   ): Promise<ToolExecutionResult> {
     const tool = this.tools.get(name);
     if (!tool) {
+      // Build context-rich error: show caller-provided name verbatim + first 10
+      // registered tools (alphabetical) so the caller can diagnose typos.
+      const available = Array.from(this.tools.keys()).sort();
+      const sample = available.slice(0, 10).join(", ");
+      const more = available.length > 10 ? ` (… +${available.length - 10} more)` : "";
+      const totalCount = available.length;
       return {
-        content: `Error: Tool '${name}' not found`,
+        content:
+          `Error: Tool '${name}' not found. ` +
+          `Registry has ${totalCount} tool${totalCount === 1 ? "" : "s"}. ` +
+          `Available (first 10 alphabetical): ${sample || "<none>"}${more}`,
         isError: true,
       };
     }
     return tool.execute(input, context);
+  }
+
+  /**
+   * Wait for all in-flight async tool registrations (heavy optional imports)
+   * to settle. Logs any rejections but does not throw — callers get a chance
+   * to see which tools failed to load without crashing startup.
+   */
+  async waitForRegistrations(): Promise<void> {
+    if (this.pendingToolRegistrations.length === 0) return;
+    const results = await Promise.allSettled(this.pendingToolRegistrations);
+    const logger = getLogger();
+    const rejected = results.filter((r) => r.status === "rejected");
+    if (rejected.length > 0) {
+      for (const r of rejected) {
+        if (r.status === "rejected") {
+          logger.warn("Deferred tool registration failed", {
+            reason: r.reason instanceof Error ? r.reason.message : String(r.reason),
+          });
+        }
+      }
+    }
+    // Clear — further calls are no-ops unless more registrations are queued.
+    this.pendingToolRegistrations = [];
   }
 
   /**
@@ -691,35 +730,50 @@ export class ToolRegistry {
     });
 
     // Browser automation (Playwright-based, 11 actions, session management)
-    // Dynamic import to avoid pulling heavy playwright dependency at startup
-    void (async () => {
-      try {
-        const { BrowserAutomationTool } = await import("../agents/tools/browser-automation.js");
-        this.register(new BrowserAutomationTool(), {
-          category: ToolCategories.BROWSER,
-          dangerous: true,
-          readOnly: false,
-        });
-      } catch {
-        // Playwright not installed — browser tool unavailable
-      }
-    })();
+    // Dynamic import to avoid pulling heavy playwright dependency at startup.
+    // Track the promise so `waitForRegistrations()` can surface import
+    // failures instead of silently swallowing them.
+    this.pendingToolRegistrations.push(
+      (async () => {
+        try {
+          const { BrowserAutomationTool } = await import("../agents/tools/browser-automation.js");
+          this.register(new BrowserAutomationTool(), {
+            category: ToolCategories.BROWSER,
+            dangerous: true,
+            readOnly: false,
+          });
+        } catch (e) {
+          // Playwright not installed is expected; anything else is a real error.
+          const msg = e instanceof Error ? e.message : String(e);
+          const isMissingDep = /Cannot find (module|package)|MODULE_NOT_FOUND/i.test(msg);
+          if (!isMissingDep) {
+            getLogger().error("Browser automation tool registration failed", {
+              error: msg,
+            });
+          }
+        }
+      })(),
+    );
 
     // Speech-to-text (Whisper API) — requires OpenAI API key
     const openaiKey = process.env["OPENAI_API_KEY"];
     if (openaiKey) {
-      void (async () => {
-        try {
-          const { SpeechToTextTool } = await import("../agents/tools/speech-to-text.js");
-          this.register(new SpeechToTextTool(openaiKey), {
-            category: ToolCategories.CUSTOM,
-            dangerous: false,
-            readOnly: true,
-          });
-        } catch {
-          // Speech-to-text tool loading failed
-        }
-      })();
+      this.pendingToolRegistrations.push(
+        (async () => {
+          try {
+            const { SpeechToTextTool } = await import("../agents/tools/speech-to-text.js");
+            this.register(new SpeechToTextTool(openaiKey), {
+              category: ToolCategories.CUSTOM,
+              dangerous: false,
+              readOnly: true,
+            });
+          } catch (e) {
+            getLogger().error("Speech-to-text tool registration failed", {
+              error: e instanceof Error ? e.message : String(e),
+            });
+          }
+        })(),
+      );
     }
   }
 }

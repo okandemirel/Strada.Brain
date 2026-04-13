@@ -61,6 +61,16 @@ export class BudgetConfigStore {
         this.storage.setBudgetConfig("subLimits.verificationPct", String(sl.verificationPct));
       }
     }
+    if (partial.interactiveTokenBudget !== undefined) {
+      if (
+        typeof partial.interactiveTokenBudget !== "number" ||
+        !Number.isFinite(partial.interactiveTokenBudget) ||
+        partial.interactiveTokenBudget < 0
+      ) {
+        throw new Error("interactiveTokenBudget must be a finite number >= 0");
+      }
+      this.storage.setBudgetConfig("interactiveTokenBudget", String(partial.interactiveTokenBudget));
+    }
     this.cached = null; // Invalidate cache
   }
 
@@ -68,6 +78,12 @@ export class BudgetConfigStore {
     const overrides = this.storage.getAllBudgetConfig();
     const val = (key: string, envKey: string, fallback: number): number =>
       parseNum(overrides[key]) ?? parseNum(process.env[envKey]) ?? fallback;
+
+    // Optional live-override for interactive token budget. Unset → leave undefined
+    // so consumers fall back to their static config (TaskConfig.interactiveTokenBudget).
+    const interactiveOverride =
+      parseNum(overrides["interactiveTokenBudget"]) ??
+      parseNum(process.env["STRADA_INTERACTIVE_TOKEN_BUDGET"]);
 
     return {
       dailyLimitUsd: val("dailyLimitUsd", "STRADA_BUDGET_DAILY_USD", DEFAULT_BUDGET_CONFIG.dailyLimitUsd),
@@ -78,6 +94,9 @@ export class BudgetConfigStore {
         agentDefaultUsd: val("subLimits.agentDefaultUsd", "AGENT_DEFAULT_BUDGET_USD", DEFAULT_BUDGET_CONFIG.subLimits.agentDefaultUsd),
         verificationPct: val("subLimits.verificationPct", "SUPERVISOR_VERIFICATION_BUDGET_PCT", DEFAULT_BUDGET_CONFIG.subLimits.verificationPct),
       },
+      ...(interactiveOverride !== undefined && interactiveOverride > 0
+        ? { interactiveTokenBudget: interactiveOverride }
+        : {}),
     };
   }
 }

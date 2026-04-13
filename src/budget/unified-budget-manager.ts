@@ -23,6 +23,8 @@ interface BudgetEventBus {
   emit(event: string, payload: unknown): void;
 }
 
+type BudgetConfigListener = (config: UnifiedBudgetConfig) => void;
+
 interface BudgetStorageAdapter {
   insertBudgetEntry(entry: { costUsd: number; model?: string | null; tokensIn?: number | null; tokensOut?: number | null; triggerName?: string | null; timestamp: number; source?: string }): void;
   insertBudgetEntryWithAgent(entry: { costUsd: number; model?: string | null; tokensIn?: number | null; tokensOut?: number | null; triggerName?: string | null; timestamp: number; agentId: string }): void;
@@ -43,11 +45,24 @@ export class UnifiedBudgetManager {
   private readonly eventBus: BudgetEventBus;
   private warningEmitted = false;
   private exceededEmitted = false;
+  private readonly configListeners = new Set<BudgetConfigListener>();
 
   constructor(storage: BudgetStorageAdapter, eventBus: BudgetEventBus) {
     this.storage = storage;
     this.configStore = new BudgetConfigStore(storage);
     this.eventBus = eventBus;
+  }
+
+  /**
+   * Subscribe to `budget:config_updated` events. Returns an unsubscribe function.
+   * Listeners receive the freshly-resolved config snapshot. Throwing listeners
+   * are swallowed to protect the event bus.
+   */
+  onConfigUpdated(listener: BudgetConfigListener): () => void {
+    this.configListeners.add(listener);
+    return () => {
+      this.configListeners.delete(listener);
+    };
   }
 
   recordCost(amount: number, source: BudgetSource, metadata: CostMetadata): void {
@@ -164,7 +179,15 @@ export class UnifiedBudgetManager {
     this.configStore.updateConfig(partial);
     this.warningEmitted = false;
     this.exceededEmitted = false;
-    this.eventBus.emit("budget:config_updated", { config: this.configStore.getConfig() });
+    const fresh = this.configStore.getConfig();
+    this.eventBus.emit("budget:config_updated", { config: fresh });
+    for (const listener of this.configListeners) {
+      try {
+        listener(fresh);
+      } catch {
+        // swallow — listener errors must not break the update path
+      }
+    }
   }
 
   getConfig(): UnifiedBudgetConfig { return this.configStore.getConfig(); }

@@ -951,29 +951,70 @@ export async function loadInstalledStradaMcpTools(config: Config): Promise<Strad
 }
 
 function formatZodBrief(err: unknown): string {
-  const issues = (err as { issues?: Array<{ path?: unknown[]; message?: string }> })?.issues;
+  const issues = (
+    err as {
+      issues?: Array<{
+        path?: unknown[];
+        message?: string;
+        code?: string;
+        expected?: string;
+        received?: string;
+      }>;
+    }
+  )?.issues;
   if (!Array.isArray(issues) || issues.length === 0) return "";
-  return issues
-    .slice(0, 3)
+  const MAX = 5;
+  const shown = issues
+    .slice(0, MAX)
     .map((i) => {
-      const path = Array.isArray(i.path) && i.path.length > 0 ? `"${i.path.join(".")}"` : "input";
-      return `${path}: ${i.message ?? "invalid"}`;
+      const path =
+        Array.isArray(i.path) && i.path.length > 0 ? `"${i.path.join(".")}"` : "input";
+      const parts: string[] = [`${path}: ${i.message ?? "invalid"}`];
+      if (i.code) parts.push(`code=${i.code}`);
+      if (i.expected !== undefined) parts.push(`expected=${i.expected}`);
+      if (i.received !== undefined) parts.push(`received=${i.received}`);
+      return parts.join(", ");
     })
     .join("; ");
+  const more = issues.length > MAX ? ` … ${issues.length - MAX} more` : "";
+  return `${shown}${more}`;
+}
+
+const DEFAULT_STRADA_MCP_TOOL_TIMEOUT_MS = 30_000;
+const JSON_SNIPPET_MAX = 500;
+
+/**
+ * Serialize a value for inclusion in an error message. Truncates to
+ * `JSON_SNIPPET_MAX` chars and surfaces the original length; returns a
+ * sentinel string if serialization fails (e.g. circular refs).
+ */
+function truncateJsonForError(value: unknown, label: "input" | "schema"): string {
+  try {
+    const serialized = JSON.stringify(value);
+    if (serialized.length > JSON_SNIPPET_MAX) {
+      return `${serialized.slice(0, JSON_SNIPPET_MAX)}…(truncated, total=${serialized.length})`;
+    }
+    return serialized;
+  } catch {
+    return `[unserializable ${label}]`;
+  }
 }
 
 class StradaMcpToolAdapter implements ITool {
   readonly name: string;
   readonly description: string;
   readonly inputSchema: Record<string, unknown>;
+  private readonly timeoutMs: number;
 
   constructor(
     private readonly tool: StradaMcpToolLike,
     private readonly runtime?: StradaMcpRuntime,
+    timeoutMs: number = DEFAULT_STRADA_MCP_TOOL_TIMEOUT_MS,
   ) {
     this.name = tool.name;
     this.description = tool.description;
     this.inputSchema = tool.inputSchema;
+    this.timeoutMs = timeoutMs;
   }
 
   async execute(input: Record<string, unknown>, context: ToolContext): Promise<ToolExecutionResult> {
@@ -984,8 +1025,42 @@ class StradaMcpToolAdapter implements ITool {
         return { content: "Unity bridge unavailable. Start Unity Editor to use this tool.", isError: true };
       }
     }
+
+    // Runtime availability check — registration-time availability can go stale
+    // (bridge disconnected, capability lost). Re-check at execute() to fail fast
+    // with an explanatory error instead of calling a broken bridge.
+    if (this.tool.metadata && this.runtime) {
+      const availability = this.runtime.getToolAvailability(this.tool.metadata);
+      if (availability.available === false) {
+        const required = [
+          ...(this.tool.metadata.requiredBridgeMethods ?? []),
+          ...(this.tool.metadata.requiredBridgeCapabilities ?? []),
+        ];
+        const reqDesc = required.length > 0 ? ` required=[${required.join(", ")}]` : "";
+        return {
+          content:
+            `Unity bridge unavailable: ${availability.availabilityReason ?? "tool dependencies not satisfied"}.${reqDesc}`,
+          isError: true,
+        };
+      }
+    }
+
+    // Wrap tool invocation with a timeout so misbehaving bridges cannot hang
+    // the orchestrator indefinitely.
+    const startedAt = Date.now();
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutHandle = setTimeout(() => {
+        reject(
+          new Error(
+            `StradaMCP tool '${this.name}' timed out after ${this.timeoutMs}ms`,
+          ),
+        );
+      }, this.timeoutMs);
+    });
+
     try {
-      const result = await this.tool.execute(
+      const exec = this.tool.execute(
         input,
         this.runtime?.createToolExecutionContext(context) ?? {
           projectPath: context.projectPath,
@@ -995,6 +1070,11 @@ class StradaMcpToolAdapter implements ITool {
           allowedPaths: [context.projectPath],
         },
       );
+      // Defuse losing leg: the rejected promise from the race loser must not
+      // bubble up as an unhandled rejection.
+      exec.catch(() => { /* swallow for race; winner reports via Promise.race */ });
+
+      const result = await Promise.race([exec, timeoutPromise]);
       this.runtime?.refreshIntegrationState();
 
       return {
@@ -1007,17 +1087,27 @@ class StradaMcpToolAdapter implements ITool {
       };
     } catch (err) {
       this.runtime?.refreshIntegrationState();
+      const elapsed = Date.now() - startedAt;
       const message = err instanceof Error ? err.message : String(err);
       const brief = formatZodBrief(err);
       const isValidation = brief !== ""
         || message.includes("invalid_type") || message.includes("ZodError");
+
+      const inputSnippet = truncateJsonForError(input, "input");
+      const schemaSnippet = truncateJsonForError(this.inputSchema, "schema");
+
       const detail = isValidation
-        ? `Invalid argument: the input did not match the expected schema. ${brief}`
-        : `Error in ${this.name}: ${message}`;
+        ? `Invalid argument for '${this.name}': input did not match expected schema. ` +
+          `Validation issues: ${brief || "(none parsed)"}. ` +
+          `Input received: ${inputSnippet}. Expected schema: ${schemaSnippet}`
+        : `Error in ${this.name} (elapsed=${elapsed}ms): ${message}. ` +
+          `Input received: ${inputSnippet}`;
       return {
         content: detail,
         isError: true,
       };
+    } finally {
+      if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
     }
   }
 }

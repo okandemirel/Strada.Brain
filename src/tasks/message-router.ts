@@ -93,6 +93,38 @@ export class MessageRouter {
       return;
     }
 
+    // Implicit recovery intent detection — only fires when there is a pending
+    // checkpoint for this chat AND the user's message expresses a high-
+    // confidence retry/resume/budget-update intent. Conservative on purpose:
+    // a false positive here would route the user's actual request into a
+    // stale checkpoint resume. The parser + checkpoint guard inside
+    // `tryHandleImplicitRecovery` keep the trigger rate very low.
+    //
+    // Ordering note: flushPendingChat runs AFTER implicit recovery resolves
+    // (inside the `handled` branch only) — flushing eagerly before the probe
+    // would break the burst-batching invariant for normal task messages,
+    // which is covered by the "batches consecutive follow-ups" tests.
+    // Race with the resumed PAOR loop is already bounded by the per-session
+    // lock in SessionManager and by `resumeInFlight` in Orchestrator.
+    try {
+      const handled = await this.commandHandler.tryHandleImplicitRecovery(
+        chatId,
+        text,
+        msg.userId,
+      );
+      if (handled) {
+        await this.flushPendingChat(getTaskConversationKey(chatId, msg.channelType, msg.conversationId));
+        logger.info("Message classified as implicit recovery intent", { chatId });
+        return;
+      }
+    } catch (err) {
+      // Never let implicit recovery break normal routing — log and fall through.
+      logger.warn("Implicit recovery probe failed; falling back to task submission", {
+        chatId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+
     this.bufferTaskSubmission(msg);
   }
 

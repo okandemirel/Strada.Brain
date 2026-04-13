@@ -107,6 +107,8 @@ import {
   getReadOnlySystemPrompt,
 } from "../security/read-only-guard.js";
 import type { BackgroundTaskOptions, TaskProgressSignal, TaskProgressUpdate, TaskUsageEvent } from "../tasks/types.js";
+import type { UnifiedBudgetManager } from "../budget/unified-budget-manager.js";
+import type { TaskCheckpointStore, PendingTaskCheckpoint } from "../tasks/task-checkpoint-store.js";
 import { buildTaskProgressSummary, type ProgressLanguage } from "../tasks/progress-signals.js";
 import type { IEventEmitter, LearningEventMap } from "../core/event-bus.js";
 import type { MetricsRecorder } from "../metrics/metrics-recorder.js";
@@ -700,6 +702,37 @@ export class Orchestrator {
   private readonly autonomousDefaultHours: number;
   private readonly interactionConfig: InteractionConfig;
   private readonly taskConfig: TaskConfig;
+  /**
+   * Optional live budget source. When wired (post-bootstrap), overrides
+   * the static {@link taskConfig}.interactiveTokenBudget via
+   * {@link getLiveInteractiveTokenBudget} so portal edits take effect
+   * without a process restart.
+   */
+  private unifiedBudgetManager?: UnifiedBudgetManager;
+  /** Unsubscribe handle for the active budget-config listener (prevents leaks on re-wire). */
+  private budgetConfigUnsubscribe?: () => void;
+  /** Optional checkpoint persistence for budget/provider aborts. */
+  private checkpointStore?: TaskCheckpointStore;
+  /**
+   * Last seen channelType/userId per chat. Populated on every handleMessage
+   * entry so that {@link continueFromCheckpoint} can synthesize an
+   * {@link IncomingMessage} with the correct routing metadata without
+   * forcing the caller (CommandHandler) to plumb it through.
+   * Bounded at MAX_LAST_ROUTING_ENTRIES to avoid unbounded growth.
+   */
+  private readonly lastRoutingByChat = new Map<
+    string,
+    { channelType: IncomingMessage["channelType"]; userId: string; conversationId?: string }
+  >();
+  private static readonly MAX_LAST_ROUTING_ENTRIES = 1000;
+  /**
+   * In-flight resume set. Gates {@link continueFromCheckpoint} so the same
+   * chat cannot trigger two concurrent checkpoint replays (e.g. /retry spam
+   * or two implicit recovery intents landing in parallel). Keyed by chatId
+   * because the first successful call clears the checkpoint — the second
+   * caller should see a not_found instead of racing the first. (CWE-362)
+   */
+  private readonly resumeInFlight = new Set<string>();
   private readonly taskExecutionStore?: TaskExecutionStore;
   private readonly runtimeArtifactManager?: RuntimeArtifactManager;
   /** Multi-provider routing: selects best provider per task/phase. */
@@ -1897,6 +1930,245 @@ export class Orchestrator {
     this.goalStorage = storage;
   }
 
+  /**
+   * Wire a live budget manager so the orchestrator reads the freshest
+   * `interactiveTokenBudget` from the unified config store (e.g. after a
+   * POST /api/budget/config update) instead of the static TaskConfig value
+   * captured at construction time.
+   */
+  setUnifiedBudgetManager(manager: UnifiedBudgetManager): void {
+    // Detach any previous listener before re-wiring to avoid accumulating
+    // duplicate callbacks across repeated setUnifiedBudgetManager calls
+    // (tests, hot-reload, multi-manager scenarios).
+    this.budgetConfigUnsubscribe?.();
+    this.budgetConfigUnsubscribe = undefined;
+    this.unifiedBudgetManager = manager;
+    // No local cache — getLiveInteractiveTokenBudget() reads through on every
+    // tick. Logging here only aids observability.
+    this.budgetConfigUnsubscribe = manager.onConfigUpdated?.((config) => {
+      getLogger().info("Budget config updated — orchestrator will read fresh interactive token budget", {
+        interactiveTokenBudget: config.interactiveTokenBudget ?? null,
+      });
+    });
+  }
+
+  /**
+   * Wire a persistent checkpoint store so budget/provider aborts can be
+   * replayed later. Optional — when unset, save calls are silent no-ops.
+   */
+  setTaskCheckpointStore(store: TaskCheckpointStore): void {
+    this.checkpointStore = store;
+  }
+
+  /**
+   * Record the most recent routing metadata (channelType, userId, conversationId)
+   * for a chat. Used by {@link continueFromCheckpoint} to synthesize an
+   * {@link IncomingMessage} on a checkpoint-driven resume.
+   */
+  private rememberRouting(chatId: string, msg: IncomingMessage): void {
+    this.lastRoutingByChat.set(chatId, {
+      channelType: msg.channelType,
+      userId: msg.userId,
+      conversationId: msg.conversationId,
+    });
+    // Trim the oldest entries when we exceed the bound. Map preserves insertion
+    // order, so we can drop the first key cheaply.
+    if (this.lastRoutingByChat.size > Orchestrator.MAX_LAST_ROUTING_ENTRIES) {
+      const firstKey = this.lastRoutingByChat.keys().next().value;
+      if (typeof firstKey === "string") {
+        this.lastRoutingByChat.delete(firstKey);
+      }
+    }
+  }
+
+  /**
+   * Rehydrate a pending task from its checkpoint and re-enter the interactive
+   * PAOR loop using the current (possibly updated) budget. Safe to call even
+   * if no checkpoint exists — returns a not-found hint in that case. The
+   * checkpoint is cleared on successful trigger so the same checkpoint is not
+   * re-resumed a second time. On exception the checkpoint is preserved so the
+   * user can try again.
+   */
+  async continueFromCheckpoint(
+    chatId: string,
+    options?: { taskId?: string },
+  ): Promise<{
+    status: "resumed" | "not_found" | "error";
+    reason?: string;
+    checkpoint?: PendingTaskCheckpoint;
+  }> {
+    if (!this.checkpointStore) {
+      return { status: "error", reason: "no_store" };
+    }
+
+    // Concurrent-resume guard. Prevents /retry + implicit recovery (or two
+    // /retry in rapid succession) from racing on the same checkpoint. The
+    // checkpoint clear happens async below, so without this guard both
+    // callers could enter handleMessage with stale state. (CWE-362)
+    if (this.resumeInFlight.has(chatId)) {
+      return { status: "error", reason: "resume_in_flight" };
+    }
+    this.resumeInFlight.add(chatId);
+
+    let cp: PendingTaskCheckpoint | null = null;
+    try {
+      cp = options?.taskId
+        ? await this.checkpointStore.loadByTaskId(options.taskId)
+        : await this.checkpointStore.loadLatest(chatId);
+    } catch (e) {
+      this.resumeInFlight.delete(chatId);
+      return { status: "error", reason: e instanceof Error ? e.message : String(e) };
+    }
+
+    if (!cp) {
+      this.resumeInFlight.delete(chatId);
+      return { status: "not_found" };
+    }
+
+    // Safety: the checkpoint must belong to this chat. loadByTaskId can
+    // otherwise cross-resume foreign sessions if the caller passes a stale
+    // taskId — the UI uses chatId as the primary isolation key, so honour it.
+    // (CWE-639 Authorization Bypass via User-Controlled Key)
+    if (cp.chatId !== chatId) {
+      this.resumeInFlight.delete(chatId);
+      return { status: "error", reason: "chat_mismatch" };
+    }
+
+    const text = (cp.lastUserMessage ?? "").trim();
+    if (!text) {
+      this.resumeInFlight.delete(chatId);
+      return { status: "error", reason: "empty_last_user_message" };
+    }
+
+    try {
+      const session = this.sessionManager.getOrCreateSession(chatId);
+      const liveBudget = this.getLiveInteractiveTokenBudget();
+      const budgetK = Math.round(liveBudget / 1000);
+      const abbrev = text.length > 80 ? `${text.slice(0, 80)}...` : text;
+      const confirmation = [
+        `▶️ **Resuming previous task from**: _${abbrev}_`,
+        `▶️ **Önceki görevden devam**: _${abbrev}_`,
+        "",
+        `New budget: **${budgetK}K** tokens / Yeni bütçe: **${budgetK}K** token.`,
+      ].join("\n");
+      await this.sessionManager.sendVisibleAssistantMarkdown(chatId, session, confirmation);
+
+      // Resolve routing metadata. Prefer the last recorded entry so we stay on
+      // the user's active channel; fall back to "web" (the default per the
+      // project configuration) when nothing is known.
+      const routing = this.lastRoutingByChat.get(chatId);
+      const synthesized: IncomingMessage = {
+        channelType: routing?.channelType ?? "web",
+        chatId,
+        conversationId: routing?.conversationId,
+        userId: routing?.userId ?? chatId,
+        text,
+        timestamp: new Date(),
+      };
+
+      // Clear the checkpoint BEFORE re-dispatching so a crash/duplicate does
+      // not leave us in an infinite resume loop. The user's session state
+      // preserves enough context to recover if handleMessage throws.
+      try {
+        await this.checkpointStore.clear(cp.taskId);
+      } catch (clearErr) {
+        getLogger().warn("Failed to clear checkpoint after resume trigger", {
+          taskId: cp.taskId,
+          error: clearErr instanceof Error ? clearErr.message : String(clearErr),
+        });
+      }
+
+      // Fire-and-forget through the normal interactive entry point. We do not
+      // await so the command handler's acknowledgement can stream first; the
+      // agent loop will surface its own visible output via the session. The
+      // in-flight flag is cleared when the dispatched handleMessage settles so
+      // a second /retry while the first resume is still running is rejected
+      // with `resume_in_flight` (CWE-362 concurrency guard).
+      const restoredCheckpoint = cp;
+      void this.handleMessage(synthesized)
+        .catch(async (err) => {
+          getLogger().error("continueFromCheckpoint: handleMessage failed", {
+            chatId,
+            taskId: restoredCheckpoint.taskId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          // Restore the checkpoint so the user can /retry again. The JSDoc
+          // invariant "on exception the checkpoint is preserved" must hold
+          // even for the async-dispatched path — otherwise a transient
+          // provider failure permanently loses the resume context.
+          await this.persistCheckpoint(restoredCheckpoint).catch((saveErr) => {
+            getLogger().warn(
+              "continueFromCheckpoint: failed to restore checkpoint after handleMessage error",
+              {
+                taskId: restoredCheckpoint.taskId,
+                error: saveErr instanceof Error ? saveErr.message : String(saveErr),
+              },
+            );
+          });
+        })
+        .finally(() => {
+          this.resumeInFlight.delete(chatId);
+        });
+
+      return { status: "resumed", checkpoint: cp };
+    } catch (e) {
+      this.resumeInFlight.delete(chatId);
+      return {
+        status: "error",
+        reason: e instanceof Error ? e.message : String(e),
+        checkpoint: cp,
+      };
+    }
+  }
+
+  /**
+   * Resolve the live input-token budget per interactive/background loop.
+   * Prefers the UnifiedBudgetManager override when positive; falls back to
+   * the static TaskConfig value otherwise.
+   */
+  private getLiveInteractiveTokenBudget(): number {
+    const live = this.unifiedBudgetManager?.getConfig()?.interactiveTokenBudget;
+    if (typeof live === "number" && live > 0) return live;
+    return this.taskConfig.interactiveTokenBudget;
+  }
+
+  /**
+   * Best-effort checkpoint save. Never throws — failures are logged and swallowed
+   * so the main abort path is not impacted.
+   */
+  private async persistCheckpoint(cp: PendingTaskCheckpoint): Promise<void> {
+    const store = this.checkpointStore;
+    if (!store) return;
+    try {
+      await store.save(cp);
+    } catch (err) {
+      getLogger().warn("Task checkpoint save failed", { error: String(err), taskId: cp.taskId });
+    }
+  }
+
+  /**
+   * Persist a "budget_exceeded" checkpoint with the current iteration's
+   * usage/limit. Shared by both the background and foreground token-budget
+   * branches so the payload shape stays consistent.
+   */
+  private async saveBudgetExceededCheckpoint(params: {
+    taskId: string;
+    chatId: string;
+    lastUserMessage: string;
+    used: number;
+    budget: number;
+  }): Promise<void> {
+    await this.persistCheckpoint({
+      taskId: params.taskId,
+      chatId: params.chatId,
+      timestamp: Date.now(),
+      stage: "budget_exceeded",
+      lastUserMessage: params.lastUserMessage,
+      touchedFiles: [],
+      budgetState: { used: params.used, budget: params.budget },
+    });
+  }
+
   private buildWorkerToolDefinitions(
     _task: TaskClassification,
     phase: AgentPhase,
@@ -2153,6 +2425,10 @@ export class Orchestrator {
    */
   async handleMessage(msg: IncomingMessage): Promise<void> {
     const { chatId } = msg;
+    // Remember the most recent routing metadata so that checkpoint-driven
+    // resumes (continueFromCheckpoint) can reissue a message via the same
+    // channel/user without the caller plumbing it through.
+    this.rememberRouting(chatId, msg);
     const identityKey = resolveIdentityKey(chatId, msg.userId, msg.conversationId, this.userProfileStore, msg.channelType);
     const existingTaskContext = this.getTaskExecutionContext();
     const taskRunId = existingTaskContext?.taskRunId ?? `taskrun_${randomUUID()}`;
@@ -2642,7 +2918,7 @@ export class Orchestrator {
           const iterationHealth = new IterationHealthTracker();
           let maxTokensAbort = false;
           let bgCumulativeInputTokens = 0;
-          const bgTokenBudget = this.taskConfig.interactiveTokenBudget;
+          const bgTokenBudget = this.getLiveInteractiveTokenBudget();
           while (true) {
             for (
               bgEpochIteration = 0;
@@ -2803,8 +3079,18 @@ export class Orchestrator {
                   chatId, bgCumulativeInputTokens, bgTokenBudget,
                   iteration: bgIteration, provider: currentAssignment.providerName,
                 });
+                await this.saveBudgetExceededCheckpoint({
+                  taskId: options.taskRunId ?? `${chatId}-bg-${Date.now()}`,
+                  chatId,
+                  lastUserMessage: typeof prompt === "string" ? prompt : "",
+                  used: bgCumulativeInputTokens,
+                  budget: bgTokenBudget,
+                });
                 return finish(
-                  getResilienceMessage("token_budget_exceeded", progressLanguage ?? "en"),
+                  getResilienceMessage("token_budget_exceeded", progressLanguage ?? "en", {
+                    used: Math.round(bgCumulativeInputTokens / 1000),
+                    budget: Math.round(bgTokenBudget / 1000),
+                  }),
                   "completed",
                   "Background token budget exceeded",
                 );
@@ -3905,7 +4191,7 @@ export class Orchestrator {
       let consecutiveMaxTokens = 0;
       let consecutiveProviderFailures = 0;
       let cumulativeInputTokens = 0;
-      const tokenBudget = this.taskConfig.interactiveTokenBudget;
+      const tokenBudget = this.getLiveInteractiveTokenBudget();
       const iterationHealth = new IterationHealthTracker();
       for (let iteration = 0; iteration < interactiveIterationLimit; iteration++) {
         const iterationStartMs = Date.now();
@@ -4061,6 +4347,13 @@ export class Orchestrator {
             tokenBudget,
             iteration,
             provider: currentAssignment.providerName,
+          });
+          await this.saveBudgetExceededCheckpoint({
+            taskId: conversationId ?? `${chatId}-fg-${Date.now()}`,
+            chatId,
+            lastUserMessage,
+            used: cumulativeInputTokens,
+            budget: tokenBudget,
           });
           await this.sessionManager.sendVisibleAssistantMarkdown(
             chatId, session,

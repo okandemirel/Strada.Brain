@@ -15,6 +15,12 @@ vi.mock('../../stores/monitor-store', () => ({
       dag: null,
       setSelectedTask: vi.fn(),
       updateTask: vi.fn(),
+      verification: { active: false, criteria: [], results: [] },
+      openVerifier: vi.fn(),
+      closeVerifier: vi.fn(),
+      recordCheck: vi.fn(),
+      submitGateDecision: vi.fn(),
+      acknowledgeGate: vi.fn(),
     }
     return selector ? selector(state) : state
   },

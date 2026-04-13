@@ -121,6 +121,42 @@ export interface AutonomousToggleMessage {
   hours?: number
 }
 
+// --- Level Completion Verifier messages ---
+
+export type VerifyCheckType = 'build' | 'test' | 'manual'
+export type VerifyCheckStatus = 'pass' | 'warn' | 'fail' | 'pending'
+export type VerifyGateVerdict = 'approve' | 'request_changes' | 'escalate'
+
+export interface VerifyCheckCriterionMessage {
+  type: 'verify:check_criterion'
+  taskId: string
+  criterionId: string
+  checkType: VerifyCheckType
+}
+
+export interface VerifyCheckResultMessage {
+  type: 'verify:check_result'
+  taskId: string
+  criterionId: string
+  status: VerifyCheckStatus
+  evidence?: string
+  error?: string
+}
+
+export interface VerifyGateDecisionMessage {
+  type: 'verify:gate_decision'
+  taskId: string
+  verdict: VerifyGateVerdict
+  note?: string
+}
+
+export interface VerifyGateAckMessage {
+  type: 'verify:gate_ack'
+  taskId: string
+  accepted: boolean
+  supervisorVerdict?: string
+}
+
 export type OutgoingMessage =
   | SendMessage
   | SessionInitMessage
@@ -128,6 +164,8 @@ export type OutgoingMessage =
   | ReconnectMessage
   | ProviderSwitchMessage
   | AutonomousToggleMessage
+  | VerifyCheckCriterionMessage
+  | VerifyGateDecisionMessage
 
 /** Attachment for file uploads */
 export interface Attachment {

@@ -520,6 +520,28 @@ export function dispatchWorkspaceMessage(data: { type: string; [key: string]: un
       break
     }
 
+    case 'verify:check_result': {
+      const criterionId = payload.criterionId as string | undefined
+      const status = payload.status as 'pass' | 'warn' | 'fail' | 'pending' | undefined
+      if (criterionId && status) {
+        useMonitorStore.getState().recordCheck(criterionId, {
+          status,
+          evidence: typeof payload.evidence === 'string' ? payload.evidence : undefined,
+          error: typeof payload.error === 'string' ? payload.error : undefined,
+        })
+      }
+      break
+    }
+
+    case 'verify:gate_ack': {
+      const accepted = payload.accepted === true
+      const supervisorVerdict = typeof payload.supervisorVerdict === 'string'
+        ? payload.supervisorVerdict
+        : undefined
+      useMonitorStore.getState().acknowledgeGate(accepted, supervisorVerdict)
+      break
+    }
+
     case 'notification': {
       const notifType = payload.type as string | undefined
       if (notifType === 'budget:warning') {
@@ -556,5 +578,6 @@ export function isWorkspaceMessage(type: string): boolean {
     || type.startsWith('supervisor:')
     || type.startsWith('progress:')
     || type.startsWith('budget:')
+    || type.startsWith('verify:')
     || type === 'notification'
 }

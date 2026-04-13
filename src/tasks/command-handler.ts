@@ -17,6 +17,9 @@ import type { UserProfileStore } from "../memory/unified/user-profile-store.js";
 import { resolveAutonomousModeWithDefault } from "../memory/unified/user-profile-store.js";
 import type { SoulLoader } from "../agents/soul/index.js";
 import type { ExecutionTrace, PhaseOutcome, PhaseScore, RoutingDecision } from "../agent-core/routing/routing-types.js";
+import type { UnifiedBudgetManager } from "../budget/unified-budget-manager.js";
+import type { TaskCheckpointStore, PendingTaskCheckpoint } from "./task-checkpoint-store.js";
+import { parseRecoveryIntent } from "./orchestrator-intent-parser.js";
 
 /** Structural interface for ProviderRouter to avoid circular dependency */
 interface ProviderRouterRef {
@@ -37,6 +40,21 @@ interface HeartbeatLoopRef {
   getSecurityPolicy?(): { setAutonomousOverride(enabled: boolean, expiresAt?: number): void } | undefined;
 }
 
+/**
+ * Structural interface for Orchestrator to avoid circular dependency.
+ * Only the checkpoint-resume entry point is used from the command handler.
+ */
+interface OrchestratorRef {
+  continueFromCheckpoint(
+    chatId: string,
+    options?: { taskId?: string },
+  ): Promise<{
+    status: "resumed" | "not_found" | "error";
+    reason?: string;
+    checkpoint?: PendingTaskCheckpoint;
+  }>;
+}
+
 interface CommandHandlerOptions {
   autonomousDefaultEnabled?: boolean;
   autonomousDefaultHours?: number;
@@ -44,6 +62,9 @@ interface CommandHandlerOptions {
 
 export class CommandHandler {
   private providerRouter?: ProviderRouterRef;
+  private unifiedBudgetManager?: UnifiedBudgetManager;
+  private checkpointStore?: TaskCheckpointStore;
+  private orchestratorRef?: OrchestratorRef;
   private readonly autonomousDefaultEnabled: boolean;
   private readonly autonomousDefaultHours: number;
 
@@ -71,6 +92,25 @@ export class CommandHandler {
   /** Set ProviderRouter reference for /routing command (set after construction due to init order) */
   setProviderRouter(router: ProviderRouterRef): void {
     this.providerRouter = router;
+  }
+
+  /** Set UnifiedBudgetManager reference for /token command (set after construction due to init order) */
+  setUnifiedBudgetManager(manager: UnifiedBudgetManager): void {
+    this.unifiedBudgetManager = manager;
+  }
+
+  /** Set TaskCheckpointStore reference for /retry and /continue commands (set after construction due to init order) */
+  setTaskCheckpointStore(store: TaskCheckpointStore): void {
+    this.checkpointStore = store;
+  }
+
+  /**
+   * Set the Orchestrator reference so /retry and /continue can trigger an
+   * actual PAOR re-entry instead of just displaying checkpoint metadata.
+   * Set after construction to avoid a circular import through bootstrap.
+   */
+  setOrchestrator(orchestrator: OrchestratorRef): void {
+    this.orchestratorRef = orchestrator;
   }
 
   private getIdentityKey(chatId: string, userId?: string): string {
@@ -121,6 +161,15 @@ export class CommandHandler {
         break;
       case "routing":
         await this.handleRouting(chatId, args, userId);
+        break;
+      case "token":
+        await this.handleToken(chatId, args);
+        break;
+      case "retry":
+        await this.handleRetry(chatId);
+        break;
+      case "continue":
+        await this.handleContinue(chatId);
         break;
     }
   }
@@ -281,7 +330,13 @@ export class CommandHandler {
       "`/routing preset <name>` - Switch routing preset (budget/balanced/performance)",
       "`/routing info` - Show recent routing decisions",
       "",
-      "Turkish: /durum, /iptal, /gorevler, /detay, /yardim, /hedef, /kisilik, /ajan, /yonlendirme, /model listele, /model bilgi, /model sıfırla",
+      "*Recovery*",
+      "",
+      "`/token <value>` - Set interactive token budget (e.g. /token 500k). Alias: /budget",
+      "`/retry` - Replay the most recent pending checkpoint (budget_exceeded / provider_failed)",
+      "`/continue` - Session-level resume from the latest checkpoint (alias of /retry)",
+      "",
+      "Turkish: /durum, /iptal, /gorevler, /detay, /yardim, /hedef, /kisilik, /ajan, /yonlendirme, /model listele, /model bilgi, /model sıfırla, /butce, /dene, /surdur",
       "",
       "Send any other message to start a new background task.",
     ].join("\n");
@@ -970,6 +1025,267 @@ export class CommandHandler {
     await this.channel.sendText(chatId, "Usage: /routing | /routing preset <name> | /routing info");
   }
 
+  // ─── Recovery Commands ──────────────────────────────────────────────────────
+
+  /**
+   * /token <value> | /token <value>k
+   * Update the interactive token budget at runtime.
+   *   /token 500      → 500 tokens
+   *   /token 500k     → 500_000 tokens
+   *   /token 500_000  → 500_000 tokens
+   */
+  private async handleToken(chatId: string, args: string[]): Promise<void> {
+    if (!this.unifiedBudgetManager) {
+      await this.channel.sendText(
+        chatId,
+        "Token budget manager is not available in this runtime.",
+      );
+      return;
+    }
+
+    const raw = args[0]?.trim();
+    if (!raw) {
+      await this.channel.sendText(
+        chatId,
+        "Usage: /token <value> (e.g. /token 500k, /token 1_000_000)",
+      );
+      return;
+    }
+
+    const parsed = parseTokenBudgetInput(raw);
+    if (parsed === null) {
+      await this.channel.sendText(
+        chatId,
+        `Could not parse "${raw}" as a token count. Examples: 500, 500k, 500_000.`,
+      );
+      return;
+    }
+
+    if (parsed < TOKEN_BUDGET_MIN || parsed > TOKEN_BUDGET_MAX) {
+      await this.channel.sendText(
+        chatId,
+        `Token budget must be between ${TOKEN_BUDGET_MIN.toLocaleString()} and ${TOKEN_BUDGET_MAX.toLocaleString()}.`,
+      );
+      return;
+    }
+
+    try {
+      this.unifiedBudgetManager.updateConfig({ interactiveTokenBudget: parsed });
+    } catch (err) {
+      await this.channel.sendText(
+        chatId,
+        `Failed to update token budget: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return;
+    }
+
+    await this.channel.sendMarkdown(
+      chatId,
+      [
+        "*Token budget updated*",
+        "",
+        `Interactive budget: \`${parsed.toLocaleString()}\` tokens`,
+        "",
+        "Use `/retry` or `/continue` to resume the last interrupted task.",
+        "Türkçe: Son duraklatılan görevi sürdürmek için `/retry` veya `/continue` komutunu kullanın.",
+      ].join("\n"),
+    );
+  }
+
+  /**
+   * /retry — resume the most recent pending checkpoint for this chat.
+   * When an orchestrator is wired via {@link setOrchestrator}, this re-enters
+   * the PAOR loop; otherwise it falls back to a metadata-only summary.
+   */
+  private async handleRetry(chatId: string): Promise<void> {
+    await this.replayLastCheckpoint(chatId, "retry");
+  }
+
+  /**
+   * /continue — alias of /retry that reads as "session-level resume".
+   * Kept distinct from /resume so the existing paused-task semantics of
+   * `handleResume` remain untouched.
+   */
+  private async handleContinue(chatId: string): Promise<void> {
+    await this.replayLastCheckpoint(chatId, "continue");
+  }
+
+  private async replayLastCheckpoint(
+    chatId: string,
+    verb: "retry" | "continue",
+  ): Promise<void> {
+    if (!this.checkpointStore) {
+      await this.channel.sendText(
+        chatId,
+        "Checkpoint store is not available in this runtime.",
+      );
+      return;
+    }
+
+    let cp: PendingTaskCheckpoint | null = null;
+    try {
+      cp = await this.checkpointStore.loadLatest(chatId);
+    } catch (err) {
+      await this.channel.sendText(
+        chatId,
+        `Failed to read checkpoint: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return;
+    }
+
+    if (!cp) {
+      await this.channel.sendText(
+        chatId,
+        "No pending checkpoint found. Use /tasks to see recent activity.",
+      );
+      return;
+    }
+
+    const stageLabel = formatCheckpointStage(cp.stage);
+    const touched = cp.touchedFiles.length > 0
+      ? cp.touchedFiles.slice(0, 5).map((f) => `\`${f}\``).join(", ")
+      : "(none)";
+    const budgetLine = cp.budgetState
+      ? `Budget: \`${cp.budgetState.used.toLocaleString()}\` / \`${cp.budgetState.budget.toLocaleString()}\` tokens used`
+      : "";
+    const intentLine = cp.inferredIntent
+      ? `Inferred intent: ${cp.inferredIntent}`
+      : "";
+
+    const verbLabel = verb === "retry" ? "Retrying" : "Resuming";
+
+    const headerLines = [
+      `*${verbLabel} from checkpoint*`,
+      "",
+      `Task: \`${cp.taskId}\``,
+      `Stage: ${stageLabel}`,
+      `Last user message: ${truncate(cp.lastUserMessage, 240)}`,
+      `Touched files: ${touched}`,
+      budgetLine,
+      intentLine,
+    ].filter(Boolean);
+
+    // If an orchestrator is wired, ask it to rehydrate the checkpoint and
+    // re-enter the interactive loop. Otherwise fall back to the previous
+    // "metadata-only" behaviour so older deployments still get value from
+    // /retry and /continue.
+    let footer = "_No orchestrator wired in this runtime — resend the original request to retry manually._";
+
+    if (this.orchestratorRef) {
+      try {
+        const result = await this.orchestratorRef.continueFromCheckpoint(chatId, {
+          taskId: cp.taskId,
+        });
+        if (result.status === "resumed") {
+          footer = "▶️ Resumed. Watching for new activity...";
+        } else if (result.status === "not_found") {
+          footer = "No pending checkpoint found. Use /tasks to see recent activity.";
+        } else {
+          footer = `Failed to resume checkpoint: ${result.reason ?? "unknown"}`;
+        }
+      } catch (err) {
+        footer = `Failed to resume checkpoint: ${err instanceof Error ? err.message : String(err)}`;
+      }
+    }
+
+    const message = [...headerLines, "", footer].join("\n");
+    await this.channel.sendMarkdown(chatId, message);
+  }
+
+  /**
+   * Classify a non-command user message as an implicit recovery intent
+   * (retry / resume / budget update) and execute it if confidence is high
+   * enough. Returns true when the message was handled and normal routing
+   * should stop. Safe to call from MessageRouter / channel-level hooks.
+   *
+   * Conservative by design:
+   *   - Requires a pending checkpoint (otherwise returns false immediately).
+   *   - Requires confidence >= 0.8 to auto-trigger anything.
+   *   - For update_budget we additionally require a resolved tokenK.
+   */
+  async tryHandleImplicitRecovery(
+    chatId: string,
+    text: string,
+    // NOTE: checkpoint isolation is chatId-only. In multi-user channels
+    // (e.g. Telegram groups, Discord servers) any participant sharing the
+    // chat can trigger a resume of another user's checkpoint. Per-user
+    // isolation requires a schema migration in TaskCheckpointStore —
+    // tracked as a separate hardening item.
+    _userId?: string,
+  ): Promise<boolean> {
+    if (!this.checkpointStore || !this.orchestratorRef) return false;
+    const trimmed = (text ?? "").trim();
+    if (!trimmed) return false;
+
+    let cp: PendingTaskCheckpoint | null = null;
+    try {
+      cp = await this.checkpointStore.loadLatest(chatId);
+    } catch {
+      return false;
+    }
+    if (!cp) return false;
+
+    const intent = parseRecoveryIntent({
+      message: trimmed,
+      hasPendingCheckpoint: true,
+      lastCheckpointStage: cp.stage,
+    });
+
+    const MIN_CONFIDENCE = 0.8;
+
+    if (intent.kind === "update_budget" && intent.confidence >= MIN_CONFIDENCE && typeof intent.tokenK === "number" && intent.tokenK > 0) {
+      if (!this.unifiedBudgetManager) return false;
+      // Validate + clamp. Mirrors the explicit `/token` range so a user cannot
+      // escalate the interactive budget beyond TOKEN_BUDGET_MAX (or below
+      // TOKEN_BUDGET_MIN) through natural-language recovery. CWE-20.
+      const newBudget = validateTokenBudget(intent.tokenK * 1000);
+      if (newBudget === null) {
+        await this.channel.sendMarkdown(
+          chatId,
+          `Ignoring implicit budget change — value out of range (must be ${TOKEN_BUDGET_MIN.toLocaleString()}..${TOKEN_BUDGET_MAX.toLocaleString()} tokens). Use \`/token <value>\` to set explicitly.`,
+        );
+        return true; // handled: we responded to the user; do not fall through to task submission
+      }
+      try {
+        this.unifiedBudgetManager.updateConfig({ interactiveTokenBudget: newBudget });
+      } catch {
+        return false;
+      }
+      await this.channel.sendMarkdown(
+        chatId,
+        `✓ Token budget updated to **${Math.round(newBudget / 1000)}K**. Resuming last task...`,
+      );
+      await this.triggerCheckpointResume(chatId, cp.taskId);
+      return true;
+    }
+
+    if ((intent.kind === "retry" || intent.kind === "resume") && intent.confidence >= MIN_CONFIDENCE) {
+      await this.channel.sendMarkdown(chatId, "▶️ Resuming last task...");
+      await this.triggerCheckpointResume(chatId, cp.taskId);
+      return true;
+    }
+
+    return false;
+  }
+
+  /**
+   * Shared "resume via orchestrator + report failure" helper used by
+   * {@link tryHandleImplicitRecovery} branches. Assumes the caller has
+   * already verified `this.orchestratorRef` is set.
+   */
+  private async triggerCheckpointResume(chatId: string, taskId: string): Promise<void> {
+    const orchestrator = this.orchestratorRef;
+    if (!orchestrator) return;
+    const resumeRes = await orchestrator.continueFromCheckpoint(chatId, { taskId });
+    if (resumeRes.status !== "resumed") {
+      const suffix = resumeRes.reason ? `: ${resumeRes.reason}` : "";
+      await this.channel.sendMarkdown(
+        chatId,
+        `Could not resume automatically (${resumeRes.status}${suffix}). Type /retry to try again.`,
+      );
+    }
+  }
+
   // ─── Formatting ─────────────────────────────────────────────────────────────
 
   private formatTaskBrief(task: Task): string {
@@ -1059,4 +1375,68 @@ export class CommandHandler {
     if (elapsed < 3600_000) return `${Math.round(elapsed / 60_000)}m ago`;
     return `${Math.round(elapsed / 3600_000)}h ago`;
   }
+}
+
+// ─── Module-level helpers ─────────────────────────────────────────────────────
+
+/** Lower bound for /token budget input (absolute tokens). */
+const TOKEN_BUDGET_MIN = 1_000;
+/** Upper bound for /token budget input (absolute tokens). */
+const TOKEN_BUDGET_MAX = 100_000_000;
+
+/**
+ * Validate + clamp a token budget value (absolute tokens). Returns the
+ * rounded integer on success or `null` when the input is out of range or
+ * not a positive finite number. Shared by both the explicit `/token`
+ * command and the implicit-recovery intent path so the two can never
+ * diverge (CWE-20 input validation; prevents budget-escalation via
+ * natural-language recovery e.g. "raised the budget to 1 trillion k").
+ */
+function validateTokenBudget(tokens: number): number | null {
+  if (!Number.isFinite(tokens) || tokens <= 0) return null;
+  const rounded = Math.round(tokens);
+  if (rounded < TOKEN_BUDGET_MIN || rounded > TOKEN_BUDGET_MAX) return null;
+  return rounded;
+}
+
+/**
+ * Parse a token budget value like `"500"`, `"500k"`, `"500_000"`, `"1,000,000"`.
+ * Returns the absolute token count (e.g. `500000`) or `null` on parse failure.
+ */
+function parseTokenBudgetInput(raw: string): number | null {
+  const cleaned = raw.trim().toLowerCase().replace(/[_,]/g, "");
+  // <number>k shorthand
+  const kMatch = cleaned.match(/^(\d+(?:\.\d+)?)k$/);
+  if (kMatch?.[1]) {
+    const n = parseFloat(kMatch[1]);
+    if (!Number.isFinite(n) || n <= 0) return null;
+    return Math.round(n * 1000);
+  }
+  // Plain integer
+  const intMatch = cleaned.match(/^\d+$/);
+  if (intMatch) {
+    const n = parseInt(cleaned, 10);
+    if (!Number.isFinite(n) || n <= 0) return null;
+    return n;
+  }
+  return null;
+}
+
+function formatCheckpointStage(stage: string): string {
+  switch (stage) {
+    case "budget_exceeded":
+      return "Budget exceeded (bütçe aşıldı)";
+    case "provider_failed":
+      return "Provider failed (sağlayıcı hatası)";
+    case "manual_pause":
+      return "Manual pause (manuel duraklatma)";
+    default:
+      return stage;
+  }
+}
+
+function truncate(s: string, max: number): string {
+  if (!s) return "";
+  if (s.length <= max) return s;
+  return `${s.slice(0, max - 3)}...`;
 }
