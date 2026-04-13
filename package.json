@@ -91,6 +91,7 @@
     "winston": "^3.17.0",
     "winston-transport": "^4.9.0",
     "ws": "^8.19.0",
+    "xxhashjs": "^0.2.2",
     "zod": "^3.25.76"
   },
   "optionalDependencies": {
