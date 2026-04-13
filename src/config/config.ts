@@ -359,7 +359,8 @@ export type EnvVarName =
   // Codebase Memory Vault
   | "STRADA_VAULT_ENABLED"
   | "STRADA_VAULT_WRITE_HOOK_BUDGET_MS"
-  | "STRADA_VAULT_DEBOUNCE_MS";
+  | "STRADA_VAULT_DEBOUNCE_MS"
+  | "STRADA_VAULT_EMBEDDING_FALLBACK";
 
 /** Environment variable map type */
 export type EnvVarMap = Record<EnvVarName, string | undefined>;
@@ -1234,8 +1235,8 @@ export const configSchema = z
     // Codebase Memory Vault
     vault: z.object({
       enabled: z.coerce.boolean().default(false),
-      writeHookBudgetMs: z.coerce.number().int().positive().default(200),
-      debounceMs: z.coerce.number().int().positive().default(800),
+      writeHookBudgetMs: z.coerce.number().int().positive().default(200),  // sync reindex p95 target
+      debounceMs: z.coerce.number().int().positive().default(800),         // watcher drain interval
       embeddingFallback: z.enum(["none", "local"]).default("local"),
     }).default({}),
 
@@ -3231,90 +3232,90 @@ export function loadConfig(envOverride?: Record<string, string | undefined>): Co
   _env = envOverride ?? process.env;
   try {
     const raw = loadFromEnv();
-  const validation = validateConfig(raw);
+    const validation = validateConfig(raw);
 
-  if (validation.kind === "invalid") {
-    const errors = validation.errors.map((e) => `  - ${e.path}: ${e.message}`).join("\n");
-    throw new Error(`Invalid configuration:\n${errors}`);
-  }
+    if (validation.kind === "invalid") {
+      const errors = validation.errors.map((e) => `  - ${e.path}: ${e.message}`).join("\n");
+      throw new Error(`Invalid configuration:\n${errors}`);
+    }
 
-  const config = validation.value;
+    const config = validation.value;
 
-  // Validate project path
-  const pathResult = validateProjectPath(config.unityProjectPath);
-  if (pathResult.kind === "err") {
-    throw new Error(pathResult.error);
-  }
+    // Validate project path
+    const pathResult = validateProjectPath(config.unityProjectPath);
+    if (pathResult.kind === "err") {
+      throw new Error(pathResult.error);
+    }
 
-  // Apply system preset if configured (env vars override preset values)
-  const presetName = _env["SYSTEM_PRESET"];
-  const preset = presetName ? getPreset(presetName) : undefined;
-  if (presetName && !preset) {
-    throw new Error(
-      `Invalid SYSTEM_PRESET "${presetName}". Valid values: free, budget, balanced, performance, premium`,
-    );
-  }
+    // Apply system preset if configured (env vars override preset values)
+    const presetName = _env["SYSTEM_PRESET"];
+    const preset = presetName ? getPreset(presetName) : undefined;
+    if (presetName && !preset) {
+      throw new Error(
+        `Invalid SYSTEM_PRESET "${presetName}". Valid values: free, budget, balanced, performance, premium`,
+      );
+    }
 
-  // Parse per-provider model overrides (manual env > preset > defaults)
-  const providerModels: Record<string, string> = {};
-  if (preset) {
-    Object.assign(providerModels, preset.providerModels);
-  }
-  for (const p of [
-    "openai",
-    "deepseek",
-    "qwen",
-    "kimi",
-    "minimax",
-    "groq",
-    "mistral",
-    "together",
-    "fireworks",
-    "gemini",
-    "claude",
-    "ollama",
-  ]) {
-    const val = _env[`${p.toUpperCase()}_MODEL`];
-    if (val) providerModels[p] = val;
-  }
+    // Parse per-provider model overrides (manual env > preset > defaults)
+    const providerModels: Record<string, string> = {};
+    if (preset) {
+      Object.assign(providerModels, preset.providerModels);
+    }
+    for (const p of [
+      "openai",
+      "deepseek",
+      "qwen",
+      "kimi",
+      "minimax",
+      "groq",
+      "mistral",
+      "together",
+      "fireworks",
+      "gemini",
+      "claude",
+      "ollama",
+    ]) {
+      const val = _env[`${p.toUpperCase()}_MODEL`];
+      if (val) providerModels[p] = val;
+    }
 
-  // Update with resolved path + preset overrides
-  // Preset overrides must be applied to the correct nested config paths
-  const presetRagOverrides = preset ? {
-    ...(!_env["EMBEDDING_PROVIDER"] ? { provider: preset.embeddingProvider } : {}),
-    ...(!_env["EMBEDDING_MODEL"] ? { model: preset.embeddingModel } : {}),
-    ...(!_env["EMBEDDING_BASE_URL"] && preset.embeddingBaseUrl ? { baseUrl: preset.embeddingBaseUrl } : {}),
-  } : {};
-  const presetDelegationTierOverrides = preset ? {
-    ...(!_env["DELEGATION_TIER_LOCAL"] ? { local: preset.delegationTierLocal } : {}),
-    ...(!_env["DELEGATION_TIER_CHEAP"] ? { cheap: preset.delegationTierCheap } : {}),
-    ...(!_env["DELEGATION_TIER_STANDARD"] ? { standard: preset.delegationTierStandard } : {}),
-    ...(!_env["DELEGATION_TIER_PREMIUM"] ? { premium: preset.delegationTierPremium } : {}),
-  } : {};
+    // Update with resolved path + preset overrides
+    // Preset overrides must be applied to the correct nested config paths
+    const presetRagOverrides = preset ? {
+      ...(!_env["EMBEDDING_PROVIDER"] ? { provider: preset.embeddingProvider } : {}),
+      ...(!_env["EMBEDDING_MODEL"] ? { model: preset.embeddingModel } : {}),
+      ...(!_env["EMBEDDING_BASE_URL"] && preset.embeddingBaseUrl ? { baseUrl: preset.embeddingBaseUrl } : {}),
+    } : {};
+    const presetDelegationTierOverrides = preset ? {
+      ...(!_env["DELEGATION_TIER_LOCAL"] ? { local: preset.delegationTierLocal } : {}),
+      ...(!_env["DELEGATION_TIER_CHEAP"] ? { cheap: preset.delegationTierCheap } : {}),
+      ...(!_env["DELEGATION_TIER_STANDARD"] ? { standard: preset.delegationTierStandard } : {}),
+      ...(!_env["DELEGATION_TIER_PREMIUM"] ? { premium: preset.delegationTierPremium } : {}),
+    } : {};
 
-  const resolved: Config = {
-    ...config,
-    unityProjectPath: pathResult.value,
-    providerModels,
-    // Preset fills in defaults; explicit env vars take precedence (already parsed by Zod above)
-    ...(preset && !_env["PROVIDER_CHAIN"] ? { providerChain: preset.providerChain } : {}),
-    // Apply embedding overrides to the nested rag config
-    ...(Object.keys(presetRagOverrides).length > 0 ? {
-      rag: { ...config.rag, ...presetRagOverrides },
-    } : {}),
-    // Apply delegation tier overrides to the nested delegation.tiers config
-    ...(Object.keys(presetDelegationTierOverrides).length > 0 ? {
-      delegation: {
-        ...config.delegation,
-        tiers: { ...config.delegation.tiers, ...presetDelegationTierOverrides },
-      },
-    } : {}),
-  } as Config;
-  if (!envOverride) {
-    cachedConfig = resolved;
-  }
+    const resolved: Config = {
+      ...config,
+      unityProjectPath: pathResult.value,
+      providerModels,
+      // Preset fills in defaults; explicit env vars take precedence (already parsed by Zod above)
+      ...(preset && !_env["PROVIDER_CHAIN"] ? { providerChain: preset.providerChain } : {}),
+      // Apply embedding overrides to the nested rag config
+      ...(Object.keys(presetRagOverrides).length > 0 ? {
+        rag: { ...config.rag, ...presetRagOverrides },
+      } : {}),
+      // Apply delegation tier overrides to the nested delegation.tiers config
+      ...(Object.keys(presetDelegationTierOverrides).length > 0 ? {
+        delegation: {
+          ...config.delegation,
+          tiers: { ...config.delegation.tiers, ...presetDelegationTierOverrides },
+        },
+      } : {}),
+    } as Config;
+    if (!envOverride) {
+      cachedConfig = resolved;
+    }
 
-  return resolved;
+    return resolved;
   } finally {
     _env = prevEnv;
   }

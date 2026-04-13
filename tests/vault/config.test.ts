@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { realpathSync, statSync } from 'node:fs';
-import { loadConfig } from '../../src/config/config.js';
+import { loadConfig, resetConfigCache } from '../../src/config/config.js';
 
 vi.mock('node:fs', () => ({
   existsSync: vi.fn(() => true),
@@ -25,6 +25,7 @@ function makeEnv(overrides: Record<string, string> = {}): Record<string, string 
 
 describe('vault config', () => {
   beforeEach(() => {
+    resetConfigCache();
     vi.mocked(realpathSync).mockImplementation((p) => String(p));
     vi.mocked(statSync).mockReturnValue({ isDirectory: () => true } as ReturnType<typeof statSync>);
   });
