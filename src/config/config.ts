@@ -1232,20 +1232,12 @@ export const configSchema = z
       .pipe(z.number().min(0.1).max(0.99)),
 
     // Codebase Memory Vault
-    vaultEnabled: z.string().optional().default("false").transform((s) => s === "true" || s === "1"),
-    vaultWriteHookBudgetMs: z
-      .string()
-      .optional()
-      .default("200")
-      .transform((s) => parseInt(s, 10))
-      .pipe(z.number().int().positive()),
-    vaultDebounceMs: z
-      .string()
-      .optional()
-      .default("800")
-      .transform((s) => parseInt(s, 10))
-      .pipe(z.number().int().positive()),
-    vaultEmbeddingFallback: z.enum(["none", "local"]).default("local"),
+    vault: z.object({
+      enabled: z.coerce.boolean().default(false),
+      writeHookBudgetMs: z.coerce.number().int().positive().default(200),
+      debounceMs: z.coerce.number().int().positive().default(800),
+      embeddingFallback: z.enum(["none", "local"]).default("local"),
+    }).default({}),
 
     // Logging
     logLevel: logLevelSchema.default("info"),
@@ -2409,12 +2401,7 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
       warnPct: rawConfig.stradaBudgetWarnPct,
     },
 
-    vault: {
-      enabled: rawConfig.vaultEnabled,
-      writeHookBudgetMs: rawConfig.vaultWriteHookBudgetMs,
-      debounceMs: rawConfig.vaultDebounceMs,
-      embeddingFallback: rawConfig.vaultEmbeddingFallback,
-    },
+    vault: rawConfig.vault,
   };
 
   // Cross-field validation: dashboardPort and websocketDashboardPort must differ when both enabled
@@ -2733,11 +2720,13 @@ interface EnvVars {
   stradaBudgetDailyUsd: string | undefined;
   stradaBudgetMonthlyUsd: string | undefined;
   stradaBudgetWarnPct: string | undefined;
-  // Codebase Memory Vault
-  vaultEnabled: string | undefined;
-  vaultWriteHookBudgetMs: string | undefined;
-  vaultDebounceMs: string | undefined;
-  vaultEmbeddingFallback: string | undefined;
+  // Codebase Memory Vault (nested object assembled from individual env vars before schema parse)
+  vault: {
+    enabled: string | undefined;
+    writeHookBudgetMs: string | undefined;
+    debounceMs: string | undefined;
+    embeddingFallback: string | undefined;
+  };
   logLevel: string | undefined;
   logFile: string | undefined;
   webChannelPort: string | undefined;
@@ -3033,10 +3022,12 @@ function loadFromEnv(): EnvVars {
     stradaBudgetMonthlyUsd: _env["STRADA_BUDGET_MONTHLY_USD"],
     stradaBudgetWarnPct: _env["STRADA_BUDGET_WARN_PCT"],
     // Codebase Memory Vault
-    vaultEnabled: _env["STRADA_VAULT_ENABLED"],
-    vaultWriteHookBudgetMs: _env["STRADA_VAULT_WRITE_HOOK_BUDGET_MS"],
-    vaultDebounceMs: _env["STRADA_VAULT_DEBOUNCE_MS"],
-    vaultEmbeddingFallback: _env["STRADA_VAULT_EMBEDDING_FALLBACK"],
+    vault: {
+      enabled: _env["STRADA_VAULT_ENABLED"],
+      writeHookBudgetMs: _env["STRADA_VAULT_WRITE_HOOK_BUDGET_MS"],
+      debounceMs: _env["STRADA_VAULT_DEBOUNCE_MS"],
+      embeddingFallback: _env["STRADA_VAULT_EMBEDDING_FALLBACK"],
+    },
     logLevel: _env["LOG_LEVEL"],
     logFile: _env["LOG_FILE"],
     webChannelPort: _env["WEB_CHANNEL_PORT"],
