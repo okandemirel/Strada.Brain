@@ -8,7 +8,7 @@ export default defineConfig({
     clearMocks: true,
     // Native addons and long-running integration suites are more stable in forked workers.
     pool: "forks",
-    include: ["src/**/*.test.ts"],
+    include: ["src/**/*.test.ts", "tests/**/*.test.ts"],
     coverage: {
       provider: "v8",
       include: ["src/**/*.ts"],
