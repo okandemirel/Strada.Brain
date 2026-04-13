@@ -1,0 +1,39 @@
+CREATE TABLE IF NOT EXISTS vault_files (
+  path        TEXT PRIMARY KEY,
+  blob_hash   TEXT NOT NULL,
+  mtime_ms    INTEGER NOT NULL,
+  size        INTEGER NOT NULL,
+  lang        TEXT NOT NULL,
+  kind        TEXT NOT NULL,
+  indexed_at  INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS vault_chunks (
+  chunk_id    TEXT PRIMARY KEY,
+  path        TEXT NOT NULL REFERENCES vault_files(path) ON DELETE CASCADE,
+  start_line  INTEGER NOT NULL,
+  end_line    INTEGER NOT NULL,
+  content     TEXT NOT NULL,
+  token_count INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_chunks_path ON vault_chunks(path);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS vault_chunks_fts USING fts5(
+  content,
+  chunk_id UNINDEXED,
+  path UNINDEXED,
+  tokenize = 'porter unicode61'
+);
+
+CREATE TABLE IF NOT EXISTS vault_embeddings (
+  chunk_id   TEXT PRIMARY KEY REFERENCES vault_chunks(chunk_id) ON DELETE CASCADE,
+  hnsw_id    INTEGER NOT NULL,
+  dim        INTEGER NOT NULL,
+  model      TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS vault_meta (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
