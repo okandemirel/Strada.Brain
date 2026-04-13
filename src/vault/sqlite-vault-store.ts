@@ -17,6 +17,20 @@ function applyDdl(db: Database.Database, sql: string): void {
 export class SqliteVaultStore {
   private db: Database.Database;
 
+  // Cached prepared statements (lazily initialized after migrate() ensures tables exist).
+  private _stmtUpsertFile: Database.Statement | null = null;
+  private _stmtGetFile: Database.Statement | null = null;
+  private _stmtListFilesAll: Database.Statement | null = null;
+  private _stmtDeleteFts: Database.Statement | null = null;
+  private _stmtDeleteChunksByPath: Database.Statement | null = null;
+  private _stmtDeleteFile: Database.Statement | null = null;
+  private _stmtUpsertChunk: Database.Statement | null = null;
+  private _stmtDeleteFtsById: Database.Statement | null = null;
+  private _stmtInsertFts: Database.Statement | null = null;
+  private _stmtGetChunk: Database.Statement | null = null;
+  private _stmtChunkCount: Database.Statement | null = null;
+  private _stmtSearchFts: Database.Statement | null = null;
+
   constructor(dbPath: string) {
     this.db = new Database(dbPath);
     this.db.pragma('journal_mode = WAL');
@@ -26,10 +40,8 @@ export class SqliteVaultStore {
   migrate(): void {
     const ddl = readFileSync(SCHEMA_PATH, 'utf8');
     applyDdl(this.db, ddl);
-  }
-
-  upsertFile(f: VaultFile): void {
-    this.db.prepare(`
+    // Prepare cached statements now that tables exist.
+    this._stmtUpsertFile = this.db.prepare(`
       INSERT INTO vault_files (path, blob_hash, mtime_ms, size, lang, kind, indexed_at)
       VALUES (@path, @blobHash, @mtimeMs, @size, @lang, @kind, @indexedAt)
       ON CONFLICT(path) DO UPDATE SET
@@ -39,55 +51,76 @@ export class SqliteVaultStore {
         lang=excluded.lang,
         kind=excluded.kind,
         indexed_at=excluded.indexed_at
-    `).run(f);
+    `);
+    this._stmtGetFile = this.db.prepare('SELECT * FROM vault_files WHERE path = ?');
+    this._stmtListFilesAll = this.db.prepare('SELECT * FROM vault_files ORDER BY path');
+    this._stmtDeleteFts = this.db.prepare('DELETE FROM vault_chunks_fts WHERE chunk_id = ?');
+    this._stmtDeleteChunksByPath = this.db.prepare('SELECT chunk_id FROM vault_chunks WHERE path = ?');
+    this._stmtDeleteFile = this.db.prepare('DELETE FROM vault_files WHERE path = ?');
+    this._stmtUpsertChunk = this.db.prepare(`
+      INSERT INTO vault_chunks (chunk_id, path, start_line, end_line, content, token_count)
+      VALUES (@chunkId, @path, @startLine, @endLine, @content, @tokenCount)
+      ON CONFLICT(chunk_id) DO UPDATE SET
+        start_line=excluded.start_line,
+        end_line=excluded.end_line,
+        content=excluded.content,
+        token_count=excluded.token_count
+    `);
+    this._stmtDeleteFtsById = this.db.prepare('DELETE FROM vault_chunks_fts WHERE chunk_id = ?');
+    this._stmtInsertFts = this.db.prepare('INSERT INTO vault_chunks_fts (content, chunk_id, path) VALUES (?, ?, ?)');
+    this._stmtGetChunk = this.db.prepare('SELECT * FROM vault_chunks WHERE chunk_id = ?');
+    this._stmtChunkCount = this.db.prepare('SELECT COUNT(*) AS n FROM vault_chunks');
+    this._stmtSearchFts = this.db.prepare(`
+      SELECT chunk_id, bm25(vault_chunks_fts) AS raw
+      FROM vault_chunks_fts
+      WHERE vault_chunks_fts MATCH ?
+      ORDER BY raw
+      LIMIT ?
+    `);
+  }
+
+  upsertFile(f: VaultFile): void {
+    this._stmtUpsertFile!.run(f);
   }
 
   getFile(path: string): VaultFile | null {
-    const row = this.db.prepare('SELECT * FROM vault_files WHERE path = ?').get(path) as Record<string, unknown> | undefined;
+    const row = this._stmtGetFile!.get(path) as Record<string, unknown> | undefined;
     return row ? this.mapFile(row) : null;
   }
 
   listFiles(filter?: { lang?: VaultFile['lang'][] }): VaultFile[] {
     if (filter?.lang?.length) {
+      // Statement varies by # of placeholders; keep inline (acceptable variance per design).
       const placeholders = filter.lang.map(() => '?').join(',');
       const rows = this.db.prepare(`SELECT * FROM vault_files WHERE lang IN (${placeholders}) ORDER BY path`)
         .all(...filter.lang) as Record<string, unknown>[];
       return rows.map((r) => this.mapFile(r));
     }
-    const rows = this.db.prepare('SELECT * FROM vault_files ORDER BY path').all() as Record<string, unknown>[];
+    const rows = this._stmtListFilesAll!.all() as Record<string, unknown>[];
     return rows.map((r) => this.mapFile(r));
   }
 
   deleteFile(path: string): void {
-    const chunkIds = this.db.prepare('SELECT chunk_id FROM vault_chunks WHERE path = ?').all(path) as { chunk_id: string }[];
-    const deleteFts = this.db.prepare('DELETE FROM vault_chunks_fts WHERE chunk_id = ?');
+    // Fix 1 (TOCTOU): SELECT chunk_ids inside the transaction so it sees the same snapshot as the writes.
     const txn = this.db.transaction(() => {
-      for (const { chunk_id } of chunkIds) deleteFts.run(chunk_id);
-      this.db.prepare('DELETE FROM vault_files WHERE path = ?').run(path);
+      const chunkIds = this._stmtDeleteChunksByPath!.all(path) as { chunk_id: string }[];
+      for (const { chunk_id } of chunkIds) this._stmtDeleteFts!.run(chunk_id);
+      this._stmtDeleteFile!.run(path);
     });
     txn();
   }
 
   upsertChunk(c: VaultChunk): void {
     const txn = this.db.transaction(() => {
-      this.db.prepare(`
-        INSERT INTO vault_chunks (chunk_id, path, start_line, end_line, content, token_count)
-        VALUES (@chunkId, @path, @startLine, @endLine, @content, @tokenCount)
-        ON CONFLICT(chunk_id) DO UPDATE SET
-          start_line=excluded.start_line,
-          end_line=excluded.end_line,
-          content=excluded.content,
-          token_count=excluded.token_count
-      `).run(c);
-      this.db.prepare('DELETE FROM vault_chunks_fts WHERE chunk_id = ?').run(c.chunkId);
-      this.db.prepare('INSERT INTO vault_chunks_fts (content, chunk_id, path) VALUES (?, ?, ?)')
-        .run(c.content, c.chunkId, c.path);
+      this._stmtUpsertChunk!.run(c);
+      this._stmtDeleteFtsById!.run(c.chunkId);
+      this._stmtInsertFts!.run(c.content, c.chunkId, c.path);
     });
     txn();
   }
 
   getChunk(chunkId: string): VaultChunk | null {
-    const row = this.db.prepare('SELECT * FROM vault_chunks WHERE chunk_id = ?').get(chunkId) as Record<string, unknown> | undefined;
+    const row = this._stmtGetChunk!.get(chunkId) as Record<string, unknown> | undefined;
     if (!row) return null;
     return {
       chunkId: row['chunk_id'] as string,
@@ -100,17 +133,16 @@ export class SqliteVaultStore {
   }
 
   chunkCount(): number {
-    return (this.db.prepare('SELECT COUNT(*) AS n FROM vault_chunks').get() as { n: number }).n;
+    return (this._stmtChunkCount!.get() as { n: number }).n;
   }
 
+  /**
+   * Full-text search via FTS5 BM25.
+   * @returns hits sorted by relevance, with `score > 0` where higher = more relevant
+   *          (raw BM25 returns negative-where-best; we negate so callers can sort descending).
+   */
   searchFts(query: string, topK: number): Array<{ chunkId: string; score: number }> {
-    const rows = this.db.prepare(`
-      SELECT chunk_id, bm25(vault_chunks_fts) AS raw
-      FROM vault_chunks_fts
-      WHERE vault_chunks_fts MATCH ?
-      ORDER BY raw
-      LIMIT ?
-    `).all(query, topK) as { chunk_id: string; raw: number }[];
+    const rows = this._stmtSearchFts!.all(query, topK) as { chunk_id: string; raw: number }[];
     return rows.map((r) => ({ chunkId: r['chunk_id'], score: -r['raw'] }));
   }
 
@@ -126,5 +158,8 @@ export class SqliteVaultStore {
     };
   }
 
-  close(): void { this.db.close(); }
+  // Fix 4: idempotent close — no-op if already closed.
+  close(): void {
+    if (this.db.open) this.db.close();
+  }
 }

@@ -52,4 +52,9 @@ describe('SqliteVaultStore', () => {
     store.upsertChunk({ chunkId: 'c2', path: 'A.cs', startLine: 3, endLine: 4, content: 'y', tokenCount: 1 });
     expect(store.chunkCount()).toBe(2);
   });
+
+  it('migrate is idempotent (safe to call twice)', () => {
+    // Already called once in beforeEach; calling again must not throw.
+    expect(() => store.migrate()).not.toThrow();
+  });
 });

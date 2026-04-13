@@ -1,3 +1,7 @@
+-- WARNING: applyDdl in sqlite-vault-store.ts splits this file by `;\s*(?=\n|$)`.
+-- Do NOT include semicolons inside quoted string literals or multi-line comments —
+-- they will silently break the statement parser. Use a literal '\u003B' if needed.
+
 CREATE TABLE IF NOT EXISTS vault_files (
   path        TEXT PRIMARY KEY,
   blob_hash   TEXT NOT NULL,
