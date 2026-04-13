@@ -776,6 +776,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     startupNotices,
   });
 
+  let outerCheckpointStore: { close(): void } | undefined;
   // Task checkpoint store — persists in-flight context for budget / provider
   // aborts so we can resume rather than silently drop the user's work.
   // Lives next to tasks.db under the memory db dir.
@@ -785,6 +786,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     const checkpointDbPath = pathJoin(config.memory.dbPath, "task-checkpoints.db");
     const checkpointStore = new TaskCheckpointStore(checkpointDbPath);
     checkpointStore.initialize();
+    outerCheckpointStore = checkpointStore;
     orchestrator.setTaskCheckpointStore(checkpointStore);
     commandHandler.setTaskCheckpointStore(checkpointStore);
     // Wire the orchestrator into the command handler so /retry, /continue,
@@ -793,6 +795,31 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     // circular import that would arise from declaring the dependency in
     // the command-handler constructor.
     commandHandler.setOrchestrator(orchestrator);
+    // Wire the web channel's `verify:*` ownership resolver so cross-chat
+    // spawn attempts (CWE-639) are rejected when a persistent checkpoint
+    // for the taskId exists. Duck-typed so non-web channels (Telegram,
+    // Discord, CLI, …) that don't implement the API are simply skipped —
+    // keeps bootstrap free of a hard WebChannel import.
+    type OwnerResolver = (
+      taskId: string,
+    ) => string | null | undefined | Promise<string | null | undefined>;
+    const channelWithResolver = channel as unknown as {
+      setTaskOwnerResolver?: (fn: OwnerResolver) => void;
+    };
+    if (typeof channelWithResolver.setTaskOwnerResolver === "function") {
+      channelWithResolver.setTaskOwnerResolver(async (taskId) => {
+        // Resolver must NEVER throw into the WS handler (WebChannel
+        // already allow-and-logs on throw, but returning null on failure
+        // keeps the fast path clean).
+        try {
+          const cp = await checkpointStore.loadByTaskId(taskId);
+          return cp?.chatId ?? null;
+        } catch {
+          return null;
+        }
+      });
+      logger.info("Task ownership resolver wired into web channel");
+    }
     logger.info("Task checkpoint store initialized", { dbPath: checkpointDbPath });
   } catch (err) {
     logger.warn("Task checkpoint store failed to initialize — continuing without checkpointing", {
@@ -1303,6 +1330,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       stoppableServers,
       soulLoader,
       autoUpdater,
+      checkpointStore: outerCheckpointStore,
     }),
   };
 }

@@ -37,6 +37,16 @@ import { hasSecrets } from "../../security/secret-sanitizer.js";
 
 type MessageHandler = (msg: IncomingMessage) => Promise<void>;
 
+/**
+ * Resolves a `taskId` → owning `chatId`, or null/undefined when the task is
+ * unknown (ephemeral / transient). May be sync (in-memory Map lookup) or
+ * async (SQLite checkpoint lookup). Used by `verify:*` WS handlers to
+ * reject cross-chat spawn triggers (CWE-639).
+ */
+export type TaskOwnerResolver = (
+  taskId: string,
+) => string | null | undefined | Promise<string | null | undefined>;
+
 /** Callback for feedback reactions (thumbs up/down) from channel adapters. */
 export type FeedbackReactionCallback = (
   type: "thumbs_up" | "thumbs_down",
@@ -305,14 +315,19 @@ export class WebChannel
    * task ids that may never hit a persistent store, so strict rejection
    * would regress the MVP flow.
    */
-  private taskOwnerResolver: ((taskId: string) => string | null | undefined) | null = null;
+  private taskOwnerResolver: TaskOwnerResolver | null = null;
 
   /**
-   * Wire a task → chatId ownership resolver. Optional. Called synchronously
-   * from the WS handler path, so implementations must be O(1) (e.g. a Map
-   * lookup or in-memory cache) — do not reach into SQLite on the hot path.
+   * Wire a task → chatId ownership resolver. Optional. The resolver MAY be
+   * async (returns a Promise) — bootstrap typically wires it to an SQLite
+   * checkpoint lookup. Implementations should still aim for O(1) / short
+   * latency because this sits on the hot `verify:*` WS handler path.
+   *
+   * NOTE: we intentionally accept both sync and async variants so the
+   * existing sync in-memory cache pattern keeps working while the
+   * bootstrap-wired TaskCheckpointStore lookup (async) is also supported.
    */
-  setTaskOwnerResolver(resolver: ((taskId: string) => string | null | undefined) | null): void {
+  setTaskOwnerResolver(resolver: TaskOwnerResolver | null): void {
     this.taskOwnerResolver = resolver;
   }
 
@@ -323,14 +338,18 @@ export class WebChannel
    * - known task owned by a DIFFERENT chat: reject.
    * - known task owned by THIS chat: allow.
    */
-  private checkVerifyTaskOwnership(
+  private async checkVerifyTaskOwnership(
     taskId: string,
     chatId: string,
-  ): { allowed: boolean; owner: string | null } {
+  ): Promise<{ allowed: boolean; owner: string | null }> {
     if (!this.taskOwnerResolver) return { allowed: true, owner: null };
     let owner: string | null | undefined;
     try {
-      owner = this.taskOwnerResolver(taskId);
+      // `await` transparently unwraps both sync return values and Promises,
+      // and catches both synchronous throws from the resolver and rejected
+      // promises. The WS handler must stay live even when the persistent
+      // store is down, so any failure falls through to allow-and-log.
+      owner = await this.taskOwnerResolver(taskId);
     } catch (err) {
       getLoggerSafe().warn("verify ownership resolver threw — allowing and logging", {
         taskId,
@@ -740,7 +759,7 @@ export class WebChannel
     // by the full 'connected' event after session_init with profileId/language.
     this.sendJson(ws, { type: "connected", chatId, reconnectToken: client.reconnectToken });
 
-    ws.on("message", (raw) => {
+    ws.on("message", async (raw) => {
       try {
         const data = JSON.parse(raw.toString()) as Record<string, unknown>;
 
@@ -752,9 +771,18 @@ export class WebChannel
         }
         assignedId = true;
 
-        this.handleWsMessage(chatId, data);
-      } catch {
-        // Ignore malformed messages
+        await this.handleWsMessage(chatId, data);
+      } catch (err) {
+        // SyntaxError = truly malformed JSON — ignore silently (was the
+        // original intent). Anything else is an async throw from
+        // handleWsMessage (ownership check, verify handler, etc.) and
+        // must be visible so silent failures stop being silent.
+        if (!(err instanceof SyntaxError)) {
+          getLoggerSafe().warn("WebSocket message handler error", {
+            chatId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
       }
     });
 
@@ -884,7 +912,7 @@ export class WebChannel
     return { chatId, reconnectToken };
   }
 
-  private handleWsMessage(chatId: string, data: Record<string, unknown>): void {
+  private async handleWsMessage(chatId: string, data: Record<string, unknown>): Promise<void> {
     const client = this.clients.get(chatId);
     if (client) {
       const now = Date.now();
@@ -1279,7 +1307,7 @@ export class WebChannel
         // Task ↔ chat ownership check. Blocks cross-chat spawn triggers
         // (CWE-639). Unknown/transient tasks allow-and-log so the portal's
         // ephemeral-task flow keeps working. Precedent: 6660012 fix(ws+monitor).
-        const ownershipCheck = this.checkVerifyTaskOwnership(safeTaskId, chatId);
+        const ownershipCheck = await this.checkVerifyTaskOwnership(safeTaskId, chatId);
         if (!ownershipCheck.allowed) {
           this.sendToClient(chatId, {
             type: "verify:check_result",
@@ -1443,7 +1471,7 @@ export class WebChannel
         // Task ↔ chat ownership check — see verify:check_criterion above.
         // Reject cross-chat gate decisions so a hostile client can't approve
         // another user's pending supervisor gate (CWE-639).
-        const gateOwnership = this.checkVerifyTaskOwnership(safeTaskId, chatId);
+        const gateOwnership = await this.checkVerifyTaskOwnership(safeTaskId, chatId);
         if (!gateOwnership.allowed) {
           this.sendToClient(chatId, {
             type: "verify:gate_ack",

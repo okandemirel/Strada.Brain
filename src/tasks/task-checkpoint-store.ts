@@ -83,8 +83,11 @@ CREATE TABLE IF NOT EXISTS task_checkpoints (
 );
 CREATE INDEX IF NOT EXISTS idx_checkpoints_chat_ts
   ON task_checkpoints(chat_id, timestamp DESC);
-CREATE INDEX IF NOT EXISTS idx_checkpoints_chat_user_ts
-  ON task_checkpoints(chat_id, user_id, timestamp DESC);
+-- The composite (chat_id, user_id, timestamp) index is created in
+-- migrate() AFTER the ALTER TABLE guarantees the user_id column exists.
+-- Creating it here would crash startup on legacy databases (pre-v4.2.66)
+-- that do not yet have the user_id column, because SQLite raises
+-- "no such column: user_id" during index creation even with IF NOT EXISTS.
 `;
 
 // Store
@@ -151,6 +154,14 @@ export class TaskCheckpointStore {
     // DoS/PII amplifier (full user prompts persisted forever).
     const clamped: PendingTaskCheckpoint = {
       ...cp,
+      taskId:
+        typeof cp.taskId === "string"
+          ? cp.taskId.slice(0, TaskCheckpointStore.MAX_TASK_ID_CHARS)
+          : cp.taskId,
+      chatId:
+        typeof cp.chatId === "string"
+          ? cp.chatId.slice(0, TaskCheckpointStore.MAX_CHAT_ID_CHARS)
+          : cp.chatId,
       lastUserMessage:
         typeof cp.lastUserMessage === "string"
           ? cp.lastUserMessage.slice(0, TaskCheckpointStore.MAX_USER_MESSAGE_CHARS)
@@ -167,11 +178,15 @@ export class TaskCheckpointStore {
     // Persist userId as a dedicated column (nullable for back-compat). When
     // absent, NULL is stored so legacy chatId-only paths still read the row.
     const userIdCol = typeof cp.userId === "string" && cp.userId.length > 0 ? cp.userId : null;
+    // Column writes go through the already-clamped copy so size limits
+    // apply to the indexed columns (task_id / chat_id / stage), not just
+    // to the JSON payload. Without this, a runaway caller could balloon
+    // index entries even though the payload was bounded.
     this.getStmt("upsert").run(
-      cp.taskId,
-      cp.chatId,
-      cp.timestamp,
-      cp.stage,
+      clamped.taskId,
+      clamped.chatId,
+      clamped.timestamp,
+      clamped.stage,
       payload,
       userIdCol,
     );
@@ -182,6 +197,8 @@ export class TaskCheckpointStore {
   private static readonly MAX_USER_MESSAGE_CHARS = 8_000;
   private static readonly MAX_TOUCHED_FILES = 200;
   private static readonly MAX_INTENT_CHARS = 2_000;
+  private static readonly MAX_TASK_ID_CHARS = 256;
+  private static readonly MAX_CHAT_ID_CHARS = 256;
 
   /**
    * Return the most recent checkpoint for a chat, optionally scoped to the

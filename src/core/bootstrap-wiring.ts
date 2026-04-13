@@ -153,6 +153,8 @@ export interface ShutdownOptions {
   soulLoader?: SoulLoader;
   autoUpdater?: AutoUpdater;
   taskManager?: TaskManager;
+  /** Persistent task checkpoint store — closed on shutdown to release SQLite fd. */
+  checkpointStore?: { close(): void };
 }
 
 function failIncompleteTasksInStorage(
@@ -292,6 +294,16 @@ export function createShutdownHandler(options: ShutdownOptions): () => Promise<v
       if (options.identityManager) {
         options.identityManager.recordShutdown();
         options.identityManager.close();
+      }
+
+      if (options.checkpointStore) {
+        try {
+          options.checkpointStore.close();
+        } catch (err) {
+          logger.warn("Failed to close task checkpoint store on shutdown", {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
       }
 
       await channel.disconnect();
