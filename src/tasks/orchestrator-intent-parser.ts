@@ -159,7 +159,15 @@ function containsAny(haystack: string, needles: readonly string[]): string[] {
   return hits;
 }
 
-/** Extract a token count from phrases like "500k", "500 k tokens", "500_000". */
+/**
+ * Extract a token count from budget phrases. Only explicit markers
+ * ("k"/"K" suffix, or bare digits immediately followed by "token"/"tok"/
+ * "tk") count — otherwise an innocuous phrase like "I only have 1234
+ * tokens left" or "fix the 2024 task" would match a bare 4-digit number
+ * and silently downgrade the interactive budget via the implicit-
+ * recovery NL path. The anchored form ("1234 tokens") is intentionally
+ * kept because it is unambiguous.
+ */
 function extractTokenK(message: string): number | undefined {
   // "500k" / "500 k" / "500K tokens" / "500k tokens"
   const kMatch = message.match(/(\d+(?:[.,]\d+)?)\s*k\b/i);
@@ -167,10 +175,11 @@ function extractTokenK(message: string): number | undefined {
     const raw = parseFloat(kMatch[1].replace(",", "."));
     if (Number.isFinite(raw) && raw > 0) return raw;
   }
-  // "500000" / "500_000" / "500,000"
-  const rawMatch = message.match(/(\d[\d_,]{2,})/);
-  if (rawMatch?.[1]) {
-    const raw = parseInt(rawMatch[1].replace(/[_,]/g, ""), 10);
+  // Bare digits are only accepted when immediately followed by an
+  // explicit token anchor — prevents stray-number false positives.
+  const tokenAnchored = message.match(/(\d[\d_,]{2,})\s*(?:token|tok|tk)\b/i);
+  if (tokenAnchored?.[1]) {
+    const raw = parseInt(tokenAnchored[1].replace(/[_,]/g, ""), 10);
     if (Number.isFinite(raw) && raw >= 1000) {
       return raw / 1000;
     }

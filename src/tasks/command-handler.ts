@@ -1061,7 +1061,11 @@ export class CommandHandler {
       return;
     }
 
-    if (parsed < TOKEN_BUDGET_MIN || parsed > TOKEN_BUDGET_MAX) {
+    // Route through the shared validateTokenBudget so /token and the
+    // implicit-recovery NL path cannot diverge on the accepted range
+    // (CWE-20). Any future tightening lands in one place.
+    const validated = validateTokenBudget(parsed);
+    if (validated === null) {
       await this.channel.sendText(
         chatId,
         `Token budget must be between ${TOKEN_BUDGET_MIN.toLocaleString()} and ${TOKEN_BUDGET_MAX.toLocaleString()}.`,
@@ -1070,7 +1074,7 @@ export class CommandHandler {
     }
 
     try {
-      this.unifiedBudgetManager.updateConfig({ interactiveTokenBudget: parsed });
+      this.unifiedBudgetManager.updateConfig({ interactiveTokenBudget: validated });
     } catch (err) {
       await this.channel.sendText(
         chatId,

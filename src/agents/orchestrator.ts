@@ -2918,7 +2918,10 @@ export class Orchestrator {
           const iterationHealth = new IterationHealthTracker();
           let maxTokensAbort = false;
           let bgCumulativeInputTokens = 0;
-          const bgTokenBudget = this.getLiveInteractiveTokenBudget();
+          // Re-read every iteration so a mid-task budget raise (via /token
+          // or the portal budget editor) actually takes effect without
+          // requiring the user to hit the checkpoint limit and /retry.
+          let bgTokenBudget = this.getLiveInteractiveTokenBudget();
           while (true) {
             for (
               bgEpochIteration = 0;
@@ -4191,7 +4194,10 @@ export class Orchestrator {
       let consecutiveMaxTokens = 0;
       let consecutiveProviderFailures = 0;
       let cumulativeInputTokens = 0;
-      const tokenBudget = this.getLiveInteractiveTokenBudget();
+      // Re-read every iteration so a mid-task budget raise (via /token
+      // or the portal budget editor) actually takes effect without
+      // requiring the user to hit the checkpoint limit and /retry.
+      let tokenBudget = this.getLiveInteractiveTokenBudget();
       const iterationHealth = new IterationHealthTracker();
       for (let iteration = 0; iteration < interactiveIterationLimit; iteration++) {
         const iterationStartMs = Date.now();
