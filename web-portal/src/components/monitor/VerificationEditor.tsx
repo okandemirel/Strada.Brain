@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useShallow } from 'zustand/shallow'
 import { useMonitorStore, type CriterionState, type VerifyGateVerdict } from '../../stores/monitor-store'
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from '../ui/dialog'
@@ -68,11 +68,12 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 }
 
 export default function VerificationEditor({ taskId, open, onClose, send }: VerificationEditorProps) {
-  const { verification, recordCheck, submitGateDecision } = useMonitorStore(
+  const { verification, recordCheck, submitGateDecision, acknowledgeGate } = useMonitorStore(
     useShallow((s) => ({
       verification: s.verification,
       recordCheck: s.recordCheck,
       submitGateDecision: s.submitGateDecision,
+      acknowledgeGate: s.acknowledgeGate,
     })),
   )
 
@@ -108,20 +109,65 @@ export default function VerificationEditor({ taskId, open, onClose, send }: Veri
     }
   }, [verification.criteria, running])
 
+  // Track per-criterion fallback timers so we can clear them on unmount,
+  // on repeated clicks, and when the backend result arrives early — the
+  // previous fire-and-forget setTimeout leaked handles and could update
+  // state on an unmounted component.
+  const fallbackTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
+  useEffect(() => {
+    const timers = fallbackTimers.current
+    return () => {
+      timers.forEach((handle) => clearTimeout(handle))
+      timers.clear()
+    }
+  }, [])
+
+  // When the backend result lands and the spinner-clearing effect above
+  // fires, also drop the fallback timer so it cannot later update state
+  // for a criterion that already resolved.
+  useEffect(() => {
+    verification.criteria.forEach((c) => {
+      if (c.status !== 'pending') {
+        const handle = fallbackTimers.current.get(c.id)
+        if (handle !== undefined) {
+          clearTimeout(handle)
+          fallbackTimers.current.delete(c.id)
+        }
+      }
+    })
+  }, [verification.criteria])
+
   const runCheck = (checkType: 'build' | 'test' | 'manual') => {
     const criterion = verification.criteria.find((c) => c.checkType === checkType)
     if (!criterion) return
-    // Optimistic UI: mark pending while waiting (backend will send verify:check_result)
-    recordCheck(criterion.id, { status: 'pending' })
-    setRunning(criterion.id)
-    send({
+    // Guard against the WebSocket being closed — without this, the
+    // optimistic "pending" state would stick forever because the backend
+    // never sees the request. send() returns false when the socket is
+    // not open.
+    const delivered = send({
       type: 'verify:check_criterion',
       taskId,
       criterionId: criterion.id,
       checkType,
     })
-    // Auto-clear running flag after 35s in case backend misses response
-    setTimeout(() => setRunning((r) => (r === criterion.id ? null : r)), 35_000)
+    if (!delivered) {
+      recordCheck(criterion.id, {
+        status: 'fail',
+        error: 'Cannot reach server (WebSocket disconnected). Check your connection and retry.',
+      })
+      return
+    }
+    // Optimistic UI: mark pending while waiting (backend will send verify:check_result)
+    recordCheck(criterion.id, { status: 'pending' })
+    setRunning(criterion.id)
+    // Replace any stale fallback timer for this criterion before starting a new one.
+    const prev = fallbackTimers.current.get(criterion.id)
+    if (prev !== undefined) clearTimeout(prev)
+    const handle = setTimeout(() => {
+      setRunning((r) => (r === criterion.id ? null : r))
+      fallbackTimers.current.delete(criterion.id)
+    }, 35_000)
+    fallbackTimers.current.set(criterion.id, handle)
   }
 
   const markManual = (status: 'pass' | 'fail') => {
@@ -134,13 +180,24 @@ export default function VerificationEditor({ taskId, open, onClose, send }: Veri
   }
 
   const handleGate = (verdict: VerifyGateVerdict) => {
-    submitGateDecision(verdict, note || undefined)
-    send({
+    const delivered = send({
       type: 'verify:gate_decision',
       taskId,
       verdict,
       ...(note ? { note } : {}),
     })
+    if (!delivered) {
+      // WebSocket closed — don't record an optimistic "pending" decision
+      // that will never be acknowledged. Surface the connection problem
+      // directly via the gate-decision slot.
+      submitGateDecision(verdict, note || undefined)
+      // The banner will render the decision as pending. Follow up with an
+      // immediate local ack carrying an error so the operator knows the
+      // submission did not reach the server.
+      acknowledgeGate(false, 'disconnected')
+      return
+    }
+    submitGateDecision(verdict, note || undefined)
   }
 
   const gateDecision = verification.gateDecision

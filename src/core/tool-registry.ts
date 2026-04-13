@@ -412,15 +412,28 @@ export class ToolRegistry {
     if (this.pendingToolRegistrations.length === 0) return;
     const results = await Promise.allSettled(this.pendingToolRegistrations);
     const logger = getLogger();
-    const rejected = results.filter((r) => r.status === "rejected");
+    const rejected = results.filter(
+      (r): r is PromiseRejectedResult => r.status === "rejected",
+    );
     if (rejected.length > 0) {
+      // Emit per-failure warnings (keyed by the registration tag baked into
+      // the error message by each IIFE) so operators can see exactly which
+      // tools dropped.
+      const reasons: string[] = [];
       for (const r of rejected) {
-        if (r.status === "rejected") {
-          logger.warn("Deferred tool registration failed", {
-            reason: r.reason instanceof Error ? r.reason.message : String(r.reason),
-          });
-        }
+        const reason = r.reason instanceof Error ? r.reason.message : String(r.reason);
+        reasons.push(reason);
+        logger.warn("Deferred tool registration failed", { reason });
       }
+      // And a single summary at error level so it is hard to miss in log
+      // aggregation (previously every rejection was swallowed inside each
+      // IIFE, so `Promise.allSettled` never observed them — this is the
+      // documented fix for that visibility gap).
+      logger.error("One or more deferred tool registrations failed", {
+        failures: rejected.length,
+        total: results.length,
+        reasons,
+      });
     }
     // Clear — further calls are no-ops unless more registrations are queued.
     this.pendingToolRegistrations = [];
@@ -733,6 +746,14 @@ export class ToolRegistry {
     // Dynamic import to avoid pulling heavy playwright dependency at startup.
     // Track the promise so `waitForRegistrations()` can surface import
     // failures instead of silently swallowing them.
+    //
+    // Visibility contract: expected "Playwright not installed" failures are
+    // absorbed here (silent return) because that is the documented flow
+    // for dev machines without optional deps. Any other failure (broken
+    // ESM, bad export shape, register() throwing) is re-thrown so the
+    // outer `waitForRegistrations()` → `Promise.allSettled` pipeline can
+    // log them as a single startup summary, per the design goal of the
+    // pending-registrations machinery.
     this.pendingToolRegistrations.push(
       (async () => {
         try {
@@ -743,14 +764,18 @@ export class ToolRegistry {
             readOnly: false,
           });
         } catch (e) {
-          // Playwright not installed is expected; anything else is a real error.
           const msg = e instanceof Error ? e.message : String(e);
           const isMissingDep = /Cannot find (module|package)|MODULE_NOT_FOUND/i.test(msg);
-          if (!isMissingDep) {
-            getLogger().error("Browser automation tool registration failed", {
-              error: msg,
-            });
+          if (isMissingDep) {
+            // Expected on dev machines without Playwright — swallow.
+            return;
           }
+          // Tag the error with its registration so the summary in
+          // waitForRegistrations can attribute it. Re-throw so the outer
+          // Promise.allSettled surfaces this as a rejected result.
+          const tagged = e instanceof Error ? e : new Error(msg);
+          tagged.message = `browser-automation: ${tagged.message}`;
+          throw tagged;
         }
       })(),
     );
@@ -768,9 +793,11 @@ export class ToolRegistry {
               readOnly: true,
             });
           } catch (e) {
-            getLogger().error("Speech-to-text tool registration failed", {
-              error: e instanceof Error ? e.message : String(e),
-            });
+            // Re-throw so `waitForRegistrations()` catches + summarises.
+            const msg = e instanceof Error ? e.message : String(e);
+            const tagged = e instanceof Error ? e : new Error(msg);
+            tagged.message = `speech-to-text: ${tagged.message}`;
+            throw tagged;
           }
         })(),
       );

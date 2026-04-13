@@ -432,13 +432,19 @@ export class DelegationManager {
             userId: message.userId ?? "sub-agent",
             workspaceLease,
           }),
-          this.waitForAbort(abortController.signal),
+          this.waitForAbort(
+            abortController.signal,
+            `delegation(${request.type}, sub=${subAgentId}, timeoutMs=${typeConfig.timeoutMs})`,
+          ),
         ]);
       } else {
         // Execute with abort awareness
         await Promise.race([
           orchestrator.handleMessage(message),
-          this.waitForAbort(abortController.signal),
+          this.waitForAbort(
+            abortController.signal,
+            `delegation(${request.type}, sub=${subAgentId}, timeoutMs=${typeConfig.timeoutMs})`,
+          ),
         ]);
       }
 
@@ -859,17 +865,32 @@ export class DelegationManager {
 
   /**
    * Returns a promise that rejects when the AbortSignal fires.
+   *
    * Uses { once: true } to avoid listener leaks on normal completion.
+   * Mirrors the enriched error-context pattern used in
+   * `supervisor-dispatcher.executeWithTimeout`: the rejection message
+   * includes the caller-supplied label and the AbortSignal.reason when
+   * available, so Promise.race timeouts produce actionable diagnostics
+   * instead of a bare "Delegation aborted" string.
    */
-  private waitForAbort(signal: AbortSignal): Promise<never> {
+  private waitForAbort(signal: AbortSignal, label = "delegation"): Promise<never> {
+    const describe = (reason: unknown): string => {
+      if (reason instanceof Error) return reason.message;
+      if (typeof reason === "string" && reason.length > 0) return reason;
+      return "aborted";
+    };
     return new Promise((_resolve, reject) => {
       if (signal.aborted) {
-        reject(new Error("Delegation aborted"));
+        reject(new Error(`Aborted: ${label} (${describe(signal.reason)})`));
         return;
       }
-      signal.addEventListener("abort", () => {
-        reject(new Error("Delegation aborted"));
-      }, { once: true });
+      signal.addEventListener(
+        "abort",
+        () => {
+          reject(new Error(`Aborted: ${label} (${describe(signal.reason)})`));
+        },
+        { once: true },
+      );
     });
   }
 }

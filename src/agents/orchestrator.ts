@@ -1984,14 +1984,28 @@ export class Orchestrator {
   /**
    * Rehydrate a pending task from its checkpoint and re-enter the interactive
    * PAOR loop using the current (possibly updated) budget. Safe to call even
-   * if no checkpoint exists — returns a not-found hint in that case. The
-   * checkpoint is cleared on successful trigger so the same checkpoint is not
-   * re-resumed a second time. On exception the checkpoint is preserved so the
-   * user can try again.
+   * if no checkpoint exists — returns a not-found hint in that case.
+   *
+   * Checkpoint lifecycle invariant:
+   *   - On synchronous setup failure (missing store, concurrent resume,
+   *     unknown chat, chat/user mismatch, empty user message) the
+   *     checkpoint is preserved — it is cleared only just before async
+   *     dispatch via `checkpointStore.clear(cp.taskId)`.
+   *   - On async `handleMessage` failure the checkpoint is best-effort
+   *     re-persisted via {@link persistCheckpoint} with a bumped
+   *     `timestamp` so it beats any older BG/FG failure row in
+   *     `loadLatest` (timestamp DESC). If that save itself fails (rare),
+   *     the resume context is lost and the user must re-issue the
+   *     original request.
+   *
+   * `options.userId` (optional) enables per-user ownership enforcement in
+   * multi-user channels — if supplied AND the checkpoint was written with a
+   * userId, the two must match or the call returns `user_mismatch`. Legacy
+   * checkpoints (no userId) remain resumable for back-compat.
    */
   async continueFromCheckpoint(
     chatId: string,
-    options?: { taskId?: string },
+    options?: { taskId?: string; userId?: string },
   ): Promise<{
     status: "resumed" | "not_found" | "error";
     reason?: string;
@@ -2032,6 +2046,25 @@ export class Orchestrator {
     if (cp.chatId !== chatId) {
       this.resumeInFlight.delete(chatId);
       return { status: "error", reason: "chat_mismatch" };
+    }
+
+    // Per-user ownership guard. When the caller supplies a userId AND the
+    // checkpoint was written with one, they must match. Legacy checkpoints
+    // (cp.userId undefined/empty) stay resumable for back-compat so older
+    // rows written before the multi-user isolation migration are not
+    // stranded. When the caller does not supply a userId (legacy entry
+    // point) we fall back to the prior chatId-only behaviour. This keeps
+    // `/retry` in private/single-user chats working while preventing a
+    // user B in a shared channel from resuming user A's pending task
+    // (CWE-639 Authorization Bypass via User-Controlled Key).
+    if (
+      options?.userId &&
+      typeof cp.userId === "string" &&
+      cp.userId.length > 0 &&
+      cp.userId !== options.userId
+    ) {
+      this.resumeInFlight.delete(chatId);
+      return { status: "error", reason: "user_mismatch" };
     }
 
     const text = (cp.lastUserMessage ?? "").trim();
@@ -2096,7 +2129,14 @@ export class Orchestrator {
           // invariant "on exception the checkpoint is preserved" must hold
           // even for the async-dispatched path — otherwise a transient
           // provider failure permanently loses the resume context.
-          await this.persistCheckpoint(restoredCheckpoint).catch((saveErr) => {
+          //
+          // Timestamp BUMP: `checkpointStore.loadLatest` orders by
+          // `timestamp DESC`. If a concurrent BG/FG failure writes a fresh
+          // checkpoint while this async handler is settling, reviving with
+          // the original `cp.timestamp` would silently be shadowed by that
+          // newer row. Bump to `Date.now()` so the restored checkpoint is
+          // always the winner for the *next* `/retry`.
+          await this.persistCheckpoint({ ...restoredCheckpoint, timestamp: Date.now() }).catch((saveErr) => {
             getLogger().warn(
               "continueFromCheckpoint: failed to restore checkpoint after handleMessage error",
               {

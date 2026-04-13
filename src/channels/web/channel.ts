@@ -33,6 +33,7 @@ import type {
 } from "../channel.interface.js";
 import { limitIncomingText, type IncomingMessage } from "../channel-messages.interface.js";
 import { classifyErrorMessage } from "../../utils/error-messages.js";
+import { hasSecrets } from "../../security/secret-sanitizer.js";
 
 type MessageHandler = (msg: IncomingMessage) => Promise<void>;
 
@@ -294,10 +295,80 @@ export class WebChannel
   private static readonly MAX_CONCURRENT_VERIFY_PER_PROCESS = 4;
 
   /**
+   * Optional resolver mapping a taskId to its owning chatId. Used by the
+   * `verify:check_criterion` / `verify:gate_decision` handlers to reject
+   * cross-chat spawn/decision attempts (CWE-639; precedent: the
+   * `confirmation_response` ownership check at commit 6660012).
+   *
+   * When unset or when the resolver returns `null`/`undefined` for an
+   * unknown/transient task we allow-and-log — the portal uses ephemeral
+   * task ids that may never hit a persistent store, so strict rejection
+   * would regress the MVP flow.
+   */
+  private taskOwnerResolver: ((taskId: string) => string | null | undefined) | null = null;
+
+  /**
+   * Wire a task → chatId ownership resolver. Optional. Called synchronously
+   * from the WS handler path, so implementations must be O(1) (e.g. a Map
+   * lookup or in-memory cache) — do not reach into SQLite on the hot path.
+   */
+  setTaskOwnerResolver(resolver: ((taskId: string) => string | null | undefined) | null): void {
+    this.taskOwnerResolver = resolver;
+  }
+
+  /**
+   * Task ↔ chat ownership check for `verify:*` handlers.
+   * - unknown task (resolver unwired or returns null/undefined): allow, log
+   *   at info level (portal fires verify on ephemeral tasks).
+   * - known task owned by a DIFFERENT chat: reject.
+   * - known task owned by THIS chat: allow.
+   */
+  private checkVerifyTaskOwnership(
+    taskId: string,
+    chatId: string,
+  ): { allowed: boolean; owner: string | null } {
+    if (!this.taskOwnerResolver) return { allowed: true, owner: null };
+    let owner: string | null | undefined;
+    try {
+      owner = this.taskOwnerResolver(taskId);
+    } catch (err) {
+      getLoggerSafe().warn("verify ownership resolver threw — allowing and logging", {
+        taskId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return { allowed: true, owner: null };
+    }
+    if (owner == null) {
+      getLoggerSafe().info("verify ownership unknown — allowing (transient/portal-only task)", {
+        taskId,
+        chatId,
+      });
+      return { allowed: true, owner: null };
+    }
+    if (owner !== chatId) {
+      getLoggerSafe().warn("verify ownership mismatch — cross-chat spawn rejected", {
+        taskId,
+        chatId,
+        owner,
+      });
+      return { allowed: false, owner };
+    }
+    return { allowed: true, owner };
+  }
+
+  /**
    * Build a scrubbed environment for `verify:*` npm child processes.
    * Strips env vars that match known provider-secret patterns so a compromised
    * build/test script (or a rogue postinstall) can't exfiltrate API keys.
    * Whitelisting PATH/HOME/USER/LANG/NODE_ENV is enough for `npm run build|test`.
+   *
+   * Defense-in-depth:
+   *   1. Local block patterns (fast, provider-focused) catch obvious keys.
+   *   2. Canonical `hasSecrets` from `security/secret-sanitizer` inspects
+   *      `KEY=VALUE` and catches GH_/GHP_/GHO_, XOX*, AWS_*, DATABASE_URL,
+   *      JWT, Anthropic sk-ant-, GCP AIza*, Telegram, Discord, etc.
+   *   Either gate positive ⇒ drop the variable. A canonical-sanitizer
+   *   failure cannot WIDEN the allowlist; it degrades to "drop".
    */
   private buildVerifySpawnEnv(): NodeJS.ProcessEnv {
     const allowPrefixes = ["PATH", "HOME", "USER", "LANG", "LC_", "TZ", "NODE_", "npm_", "TERM"];
@@ -316,16 +387,32 @@ export class WebChannel
       /^DEEPSEEK/i,
       /^XAI/i,
       /^HF_/i,
+      /^GH[POUSR]_/i,
+      /^AWS_/i,
+      /^DATABASE_URL$/i,
+      /^JWT_/i,
+      /^XOX[BPAS]_?/i,
       /PASSWORD/i,
       /CREDENTIAL/i,
     ];
     const out: NodeJS.ProcessEnv = {};
     for (const [k, v] of Object.entries(process.env)) {
       if (v === undefined) continue;
+      // Local fast-path block (provider + common creds).
       if (blockPatterns.some((re) => re.test(k))) continue;
-      if (allowPrefixes.some((p) => k.startsWith(p))) {
-        out[k] = v;
+      // Allowlist prefix gate — drops everything we don't explicitly want.
+      if (!allowPrefixes.some((p) => k.startsWith(p))) continue;
+      // Canonical secret scrubber as defense-in-depth. Catches values that
+      // look like API keys / JWTs / connection strings even when the name
+      // slipped past the allowlist prefix (e.g. npm_package_config_* that
+      // a malicious package.json could set).
+      try {
+        if (hasSecrets(`${k}=${v}`)) continue;
+      } catch {
+        // Sanitizer errors must never widen the allowlist — drop on failure.
+        continue;
       }
+      out[k] = v;
     }
     return out;
   }
@@ -337,7 +424,13 @@ export class WebChannel
       clearInterval(this._reconnectCleanupInterval);
     }
     this.recentlyDisconnected.clear();
-    this.inflightVerifyByChat.clear();
+    // Intentionally NOT clearing inflightVerifyByChat here. Each spawn owns
+    // its own slot and releases it in the terminal `finish()` callback
+    // (pass/warn/fail/timeout/spawn-error/import-error). Clearing on
+    // disconnect would allow a reconnect to trigger a second concurrent
+    // child process while the first is still running — a DoS/rate-limit
+    // bypass (precedent: fix commit 6660012). Slot lifetime is
+    // process-level, not chat-level.
     this.lastMonitorSnapshot = [];
 
     for (const [, pending] of this.pendingConfirmations) {
@@ -1183,6 +1276,21 @@ export class WebChannel
           break;
         }
 
+        // Task ↔ chat ownership check. Blocks cross-chat spawn triggers
+        // (CWE-639). Unknown/transient tasks allow-and-log so the portal's
+        // ephemeral-task flow keeps working. Precedent: 6660012 fix(ws+monitor).
+        const ownershipCheck = this.checkVerifyTaskOwnership(safeTaskId, chatId);
+        if (!ownershipCheck.allowed) {
+          this.sendToClient(chatId, {
+            type: "verify:check_result",
+            taskId: safeTaskId,
+            criterionId: safeCriterionId,
+            status: "fail",
+            error: "Task does not belong to this chat",
+          });
+          break;
+        }
+
         // DoS guard: at most one in-flight verify spawn per chat, and bounded
         // total concurrent spawns across the process. Reject fast with a
         // user-visible error instead of fan-out spawning npm processes.
@@ -1331,6 +1439,21 @@ export class WebChannel
           });
           break;
         }
+
+        // Task ↔ chat ownership check — see verify:check_criterion above.
+        // Reject cross-chat gate decisions so a hostile client can't approve
+        // another user's pending supervisor gate (CWE-639).
+        const gateOwnership = this.checkVerifyTaskOwnership(safeTaskId, chatId);
+        if (!gateOwnership.allowed) {
+          this.sendToClient(chatId, {
+            type: "verify:gate_ack",
+            taskId: safeTaskId,
+            accepted: false,
+            supervisorVerdict: "invalid_request",
+          });
+          break;
+        }
+
         getLoggerSafe().info("verify:gate_decision received", {
           taskId: safeTaskId,
           verdict,

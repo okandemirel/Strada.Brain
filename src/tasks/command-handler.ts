@@ -43,11 +43,16 @@ interface HeartbeatLoopRef {
 /**
  * Structural interface for Orchestrator to avoid circular dependency.
  * Only the checkpoint-resume entry point is used from the command handler.
+ *
+ * `userId` is forwarded so the orchestrator can guard against cross-user
+ * resume in multi-user channels (the checkpoint owner must match the
+ * caller). Kept optional for callers that do not have a resolved user
+ * identity and for back-compat with legacy (NULL-userId) checkpoints.
  */
 interface OrchestratorRef {
   continueFromCheckpoint(
     chatId: string,
-    options?: { taskId?: string },
+    options?: { taskId?: string; userId?: string },
   ): Promise<{
     status: "resumed" | "not_found" | "error";
     reason?: string;
@@ -166,10 +171,10 @@ export class CommandHandler {
         await this.handleToken(chatId, args);
         break;
       case "retry":
-        await this.handleRetry(chatId);
+        await this.handleRetry(chatId, userId);
         break;
       case "continue":
-        await this.handleContinue(chatId);
+        await this.handleContinue(chatId, userId);
         break;
     }
   }
@@ -1101,8 +1106,8 @@ export class CommandHandler {
    * When an orchestrator is wired via {@link setOrchestrator}, this re-enters
    * the PAOR loop; otherwise it falls back to a metadata-only summary.
    */
-  private async handleRetry(chatId: string): Promise<void> {
-    await this.replayLastCheckpoint(chatId, "retry");
+  private async handleRetry(chatId: string, userId?: string): Promise<void> {
+    await this.replayLastCheckpoint(chatId, "retry", userId);
   }
 
   /**
@@ -1110,13 +1115,14 @@ export class CommandHandler {
    * Kept distinct from /resume so the existing paused-task semantics of
    * `handleResume` remain untouched.
    */
-  private async handleContinue(chatId: string): Promise<void> {
-    await this.replayLastCheckpoint(chatId, "continue");
+  private async handleContinue(chatId: string, userId?: string): Promise<void> {
+    await this.replayLastCheckpoint(chatId, "continue", userId);
   }
 
   private async replayLastCheckpoint(
     chatId: string,
     verb: "retry" | "continue",
+    userId?: string,
   ): Promise<void> {
     if (!this.checkpointStore) {
       await this.channel.sendText(
@@ -1128,7 +1134,15 @@ export class CommandHandler {
 
     let cp: PendingTaskCheckpoint | null = null;
     try {
-      cp = await this.checkpointStore.loadLatest(chatId);
+      // Scope the lookup to the calling user when available. Legacy rows
+      // (user_id IS NULL) are still returned by loadLatest(chatId, userId)
+      // via the OR-legacy path so pre-migration checkpoints remain
+      // reachable. Strict matches happen in continueFromCheckpoint via
+      // the userId we forward below.
+      cp =
+        typeof userId === "string" && userId.length > 0
+          ? await this.checkpointStore.loadLatest(chatId, userId)
+          : await this.checkpointStore.loadLatest(chatId);
     } catch (err) {
       await this.channel.sendText(
         chatId,
@@ -1177,18 +1191,27 @@ export class CommandHandler {
 
     if (this.orchestratorRef) {
       try {
+        // Forward userId so the orchestrator's checkpoint ownership guard
+        // can reject cross-user resumes. If userId is undefined we pass
+        // it through as-is, which preserves legacy behaviour for single
+        // -user channels and pre-migration checkpoints.
         const result = await this.orchestratorRef.continueFromCheckpoint(chatId, {
           taskId: cp.taskId,
+          userId,
         });
         if (result.status === "resumed") {
           footer = "▶️ Resumed. Watching for new activity...";
         } else if (result.status === "not_found") {
-          footer = "No pending checkpoint found. Use /tasks to see recent activity.";
+          footer = describeResumeFailure("not_found");
         } else {
-          footer = `Failed to resume checkpoint: ${result.reason ?? "unknown"}`;
+          footer = describeResumeFailure(result.reason);
         }
       } catch (err) {
-        footer = `Failed to resume checkpoint: ${err instanceof Error ? err.message : String(err)}`;
+        // Log the raw error for operators but do not expose the stack / internal
+        // state name to the user — describeResumeFailure gives them a generic
+        // actionable message. `getLoggerSafe` is not imported here; rely on the
+        // channel-side logger instead.
+        footer = describeResumeFailure(err instanceof Error ? err.message : String(err));
       }
     }
 
@@ -1210,12 +1233,13 @@ export class CommandHandler {
   async tryHandleImplicitRecovery(
     chatId: string,
     text: string,
-    // NOTE: checkpoint isolation is chatId-only. In multi-user channels
-    // (e.g. Telegram groups, Discord servers) any participant sharing the
-    // chat can trigger a resume of another user's checkpoint. Per-user
-    // isolation requires a schema migration in TaskCheckpointStore —
-    // tracked as a separate hardening item.
-    _userId?: string,
+    // Per-user checkpoint isolation is enforced via `loadLatestForUser`
+    // when a userId is supplied (strict match). Legacy NULL-userId rows
+    // stay reachable through the non-strict `loadLatest(chatId, userId)`
+    // fallback for back-compat, and the userId is forwarded to the
+    // orchestrator so ownership is re-checked inside
+    // `continueFromCheckpoint`. See TaskCheckpointStore migration notes.
+    userId?: string,
   ): Promise<boolean> {
     if (!this.checkpointStore || !this.orchestratorRef) return false;
     const trimmed = (text ?? "").trim();
@@ -1223,7 +1247,13 @@ export class CommandHandler {
 
     let cp: PendingTaskCheckpoint | null = null;
     try {
-      cp = await this.checkpointStore.loadLatest(chatId);
+      // Prefer per-user scope to keep user B from implicitly resuming
+      // user A's pending task in shared channels. The OR-legacy branch
+      // inside loadLatest preserves access to pre-migration rows.
+      cp =
+        typeof userId === "string" && userId.length > 0
+          ? await this.checkpointStore.loadLatest(chatId, userId)
+          : await this.checkpointStore.loadLatest(chatId);
     } catch {
       return false;
     }
@@ -1252,20 +1282,30 @@ export class CommandHandler {
       }
       try {
         this.unifiedBudgetManager.updateConfig({ interactiveTokenBudget: newBudget });
-      } catch {
-        return false;
+      } catch (err) {
+        // Surface the failure instead of returning false — returning false
+        // here would fall through to the normal task-submission path and
+        // silently drop the user's natural-language budget request. Tell
+        // the user why it failed and how to retry explicitly, then claim
+        // the message as handled so the router does not double-process it.
+        const reason = err instanceof Error ? err.message : String(err);
+        await this.channel.sendMarkdown(
+          chatId,
+          `⚠️ Budget update failed: ${reason}. Use \`/token <value>\` to retry.`,
+        );
+        return true;
       }
       await this.channel.sendMarkdown(
         chatId,
         `✓ Token budget updated to **${Math.round(newBudget / 1000)}K**. Resuming last task...`,
       );
-      await this.triggerCheckpointResume(chatId, cp.taskId);
+      await this.triggerCheckpointResume(chatId, cp.taskId, userId);
       return true;
     }
 
     if ((intent.kind === "retry" || intent.kind === "resume") && intent.confidence >= MIN_CONFIDENCE) {
       await this.channel.sendMarkdown(chatId, "▶️ Resuming last task...");
-      await this.triggerCheckpointResume(chatId, cp.taskId);
+      await this.triggerCheckpointResume(chatId, cp.taskId, userId);
       return true;
     }
 
@@ -1277,15 +1317,23 @@ export class CommandHandler {
    * {@link tryHandleImplicitRecovery} branches. Assumes the caller has
    * already verified `this.orchestratorRef` is set.
    */
-  private async triggerCheckpointResume(chatId: string, taskId: string): Promise<void> {
+  private async triggerCheckpointResume(
+    chatId: string,
+    taskId: string,
+    userId?: string,
+  ): Promise<void> {
     const orchestrator = this.orchestratorRef;
     if (!orchestrator) return;
-    const resumeRes = await orchestrator.continueFromCheckpoint(chatId, { taskId });
+    // Forward userId for the orchestrator's ownership guard. Undefined is
+    // passed through verbatim so legacy / unknown-caller paths still work.
+    const resumeRes = await orchestrator.continueFromCheckpoint(chatId, { taskId, userId });
     if (resumeRes.status !== "resumed") {
-      const suffix = resumeRes.reason ? `: ${resumeRes.reason}` : "";
+      // Use the canonical bilingual reason mapper instead of leaking the raw
+      // internal state name (e.g. `resume_in_flight`) to the portal.
+      const mapped = describeResumeFailure(resumeRes.reason);
       await this.channel.sendMarkdown(
         chatId,
-        `Could not resume automatically (${resumeRes.status}${suffix}). Type /retry to try again.`,
+        `Could not resume automatically. ${mapped} Type /retry to try again.`,
       );
     }
   }
@@ -1436,6 +1484,38 @@ function formatCheckpointStage(stage: string): string {
       return "Manual pause (manuel duraklatma)";
     default:
       return stage;
+  }
+}
+
+/**
+ * Map an orchestrator resume-failure reason to a user-facing bilingual
+ * (TR + EN) message. Keeps internal state names (e.g. `resume_in_flight`,
+ * `chat_mismatch`) out of portal UI — they are engineering artefacts, not
+ * anything the end user can action on.
+ *
+ * Unknown reasons fall through to a generic label so a future internal
+ * reason cannot silently regress UX.
+ */
+function describeResumeFailure(reason: string | undefined): string {
+  switch (reason) {
+    case "resume_in_flight":
+      return "Another resume is already in progress — please wait a moment. / Başka bir devam işlemi sürüyor — lütfen biraz bekleyin.";
+    case "not_found":
+      return "No pending checkpoint found. Use /tasks to see recent activity. / Bekleyen checkpoint bulunamadı. Son aktivite için /tasks kullanın.";
+    case "chat_mismatch":
+      return "Checkpoint belongs to a different chat. / Checkpoint farklı bir sohbete ait.";
+    case "user_mismatch":
+      return "Checkpoint belongs to a different user. / Checkpoint farklı bir kullanıcıya ait.";
+    case "empty_last_user_message":
+      return "Checkpoint has no message to replay. / Checkpoint tekrar oynatılacak bir mesaj içermiyor.";
+    case "no_store":
+      return "Checkpoint store is not available in this runtime. / Bu çalışma sürecinde checkpoint deposu etkin değil.";
+    case undefined:
+    case "":
+      return "Failed to resume checkpoint (unknown reason). / Checkpoint devam ettirilemedi (bilinmeyen sebep).";
+    default:
+      // Unknown/generic: do NOT leak the raw reason token to the UI.
+      return "Failed to resume checkpoint. Please try again. / Checkpoint devam ettirilemedi. Lütfen tekrar deneyin.";
   }
 }
 
