@@ -21,6 +21,9 @@ export class EmbeddingAdapter {
   async upsertBatch(chunks: ChunkToEmbed[]): Promise<Record<string, number>> {
     if (chunks.length === 0) return {};
     const vectors = await this.provider.embed(chunks.map((c) => c.content));
+    if (vectors.length !== chunks.length) {
+      throw new Error(`EmbeddingProvider contract violation: got ${vectors.length} vectors for ${chunks.length} chunks`);
+    }
     const out: Record<string, number> = {};
     for (let i = 0; i < chunks.length; i++) {
       const id = this.store.add(vectors[i]!, { chunkId: chunks[i]!.chunkId });
