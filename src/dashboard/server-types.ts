@@ -455,6 +455,9 @@ export interface RouteContext {
   // Skills
   skillManager?: DashboardSkillManager;
 
+  // Vault (Phase 1)
+  vaultRegistry?: import("../vault/vault-registry.js").VaultRegistry;
+
   // Budget
   unifiedBudgetManager?: UnifiedBudgetManager;
   wsServer?: WebSocketDashboardServer;

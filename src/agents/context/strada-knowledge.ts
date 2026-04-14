@@ -397,17 +397,62 @@ export function buildCrashNotificationSection(context: CrashRecoveryContext): st
 }
 
 /**
- * Build a project-specific context section to append to the system prompt.
+ * Vault-aware input shape for the async overload of buildProjectContext.
  */
-export function buildProjectContext(projectPath: string): string {
-  return `
+export interface BuildProjectContextInput {
+  config: { vault: { enabled: boolean } };
+  vaultRegistry?: { list(): Array<{ query: (q: { text: string; topK?: number; budgetTokens?: number }) => Promise<{ hits: Array<{ chunk: { path: string; content: string } }> }> }> };
+  userMessage: string;
+  recentlyTouched?: string[];
+  contextBudget?: number;
+  legacyBuildProjectContext?: () => Promise<string>;
+}
+
+function renderVaultContext(results: Array<{ hits: Array<{ chunk: { path: string; content: string } }> }>): string {
+  const lines: string[] = [];
+  for (const r of results) {
+    for (const h of r.hits) {
+      lines.push(`\n### ${h.chunk.path}\n\`\`\`\n${h.chunk.content}\n\`\`\``);
+    }
+  }
+  return lines.join('\n');
+}
+
+/**
+ * Build a project-specific context section to append to the system prompt.
+ *
+ * Overload 1 (legacy, synchronous): pass a projectPath string.
+ * Overload 2 (vault-aware, async): pass a BuildProjectContextInput with config + vaultRegistry.
+ */
+export function buildProjectContext(projectPath: string): string;
+export function buildProjectContext(input: BuildProjectContextInput): Promise<string>;
+export function buildProjectContext(arg: string | BuildProjectContextInput): string | Promise<string> {
+  if (typeof arg === 'string') {
+    return `
 ## Current Project
-Project path: ${projectPath}
+Project path: ${arg}
 - Treat this path as the active project root unless the user explicitly switches projects.
 - For exact file facts (for example version numbers, package names, ports, line counts, env keys), verify by reading/searching the file instead of inferring from nearby files.
 - If the exact file/path does not exist, say that clearly instead of guessing from the closest match.
 - If multiple files could match the request, say that and disambiguate before stating a precise fact.
 `;
+  }
+  // TS narrows arg to BuildProjectContextInput here (string branch returned above).
+  return (async () => {
+    if (!arg.config.vault?.enabled) {
+      return arg.legacyBuildProjectContext ? await arg.legacyBuildProjectContext() : '';
+    }
+    const vaults = arg.vaultRegistry?.list() ?? [];
+    if (vaults.length === 0) {
+      return arg.legacyBuildProjectContext ? await arg.legacyBuildProjectContext() : '';
+    }
+    const results = await Promise.all(vaults.map((v) => v.query({
+      text: arg.userMessage,
+      topK: 20,
+      budgetTokens: arg.contextBudget,
+    })));
+    return renderVaultContext(results);
+  })();
 }
 
 /**

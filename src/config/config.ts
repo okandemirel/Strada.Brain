@@ -354,7 +354,13 @@ export type EnvVarName =
   // Unified Budget System
   | "STRADA_BUDGET_DAILY_USD"
   | "STRADA_BUDGET_MONTHLY_USD"
-  | "STRADA_BUDGET_WARN_PCT";
+  | "STRADA_BUDGET_WARN_PCT"
+
+  // Codebase Memory Vault
+  | "STRADA_VAULT_ENABLED"
+  | "STRADA_VAULT_WRITE_HOOK_BUDGET_MS"
+  | "STRADA_VAULT_DEBOUNCE_MS"
+  | "STRADA_VAULT_EMBEDDING_FALLBACK";
 
 /** Environment variable map type */
 export type EnvVarMap = Record<EnvVarName, string | undefined>;
@@ -663,6 +669,14 @@ export interface BudgetConfig {
   readonly warnPct: number;
 }
 
+/** Codebase Memory Vault configuration */
+export interface VaultConfig {
+  readonly enabled: boolean;
+  readonly writeHookBudgetMs: number;
+  readonly debounceMs: number;
+  readonly embeddingFallback: 'none' | 'local';
+}
+
 /** Complete application configuration */
 export interface Config {
   // AI Providers
@@ -849,6 +863,9 @@ export interface Config {
 
   // Unified Budget System
   readonly budget: BudgetConfig;
+
+  // Codebase Memory Vault
+  readonly vault: VaultConfig;
 }
 
 /** Partial config for updates */
@@ -1214,6 +1231,14 @@ export const configSchema = z
       .default("0.8")
       .transform((s) => parseFloat(s))
       .pipe(z.number().min(0.1).max(0.99)),
+
+    // Codebase Memory Vault
+    vault: z.object({
+      enabled: z.coerce.boolean().default(false),
+      writeHookBudgetMs: z.coerce.number().int().positive().default(200),  // sync reindex p95 target
+      debounceMs: z.coerce.number().int().positive().default(800),         // watcher drain interval
+      embeddingFallback: z.enum(["none", "local"]).default("local"),
+    }).default({}),
 
     // Logging
     logLevel: logLevelSchema.default("info"),
@@ -2376,6 +2401,8 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
       monthlyLimitUsd: rawConfig.stradaBudgetMonthlyUsd,
       warnPct: rawConfig.stradaBudgetWarnPct,
     },
+
+    vault: rawConfig.vault,
   };
 
   // Cross-field validation: dashboardPort and websocketDashboardPort must differ when both enabled
@@ -2694,6 +2721,13 @@ interface EnvVars {
   stradaBudgetDailyUsd: string | undefined;
   stradaBudgetMonthlyUsd: string | undefined;
   stradaBudgetWarnPct: string | undefined;
+  // Codebase Memory Vault (nested object assembled from individual env vars before schema parse)
+  vault: {
+    enabled: string | undefined;
+    writeHookBudgetMs: string | undefined;
+    debounceMs: string | undefined;
+    embeddingFallback: string | undefined;
+  };
   logLevel: string | undefined;
   logFile: string | undefined;
   webChannelPort: string | undefined;
@@ -2882,291 +2916,298 @@ interface EnvVars {
  */
 function loadFromEnv(): EnvVars {
   return {
-    anthropicApiKey: process.env["ANTHROPIC_API_KEY"],
-    anthropicAuthMode: process.env["ANTHROPIC_AUTH_MODE"],
-    anthropicAuthToken: process.env["ANTHROPIC_AUTH_TOKEN"],
-    openaiApiKey: process.env["OPENAI_API_KEY"],
-    openaiAuthMode: process.env["OPENAI_AUTH_MODE"],
-    openaiChatgptAuthFile: process.env["OPENAI_CHATGPT_AUTH_FILE"],
-    openaiSubscriptionAccessToken: process.env["OPENAI_SUBSCRIPTION_ACCESS_TOKEN"],
-    openaiSubscriptionAccountId: process.env["OPENAI_SUBSCRIPTION_ACCOUNT_ID"],
-    deepseekApiKey: process.env["DEEPSEEK_API_KEY"],
-    qwenApiKey: process.env["QWEN_API_KEY"],
-    kimiApiKey: process.env["KIMI_API_KEY"],
-    minimaxApiKey: process.env["MINIMAX_API_KEY"],
-    groqApiKey: process.env["GROQ_API_KEY"],
-    mistralApiKey: process.env["MISTRAL_API_KEY"],
-    togetherApiKey: process.env["TOGETHER_API_KEY"],
-    fireworksApiKey: process.env["FIREWORKS_API_KEY"],
-    geminiApiKey: process.env["GEMINI_API_KEY"],
-    providerChain: process.env["PROVIDER_CHAIN"],
-    telegramBotToken: process.env["TELEGRAM_BOT_TOKEN"],
-    allowedTelegramUserIds: process.env["ALLOWED_TELEGRAM_USER_IDS"],
-    discordBotToken: process.env["DISCORD_BOT_TOKEN"],
-    discordGuildId: process.env["DISCORD_GUILD_ID"],
-    allowedDiscordUserIds: process.env["ALLOWED_DISCORD_USER_IDS"],
-    allowedDiscordRoleIds: process.env["ALLOWED_DISCORD_ROLE_IDS"],
-    slackBotToken: process.env["SLACK_BOT_TOKEN"],
-    slackSigningSecret: process.env["SLACK_SIGNING_SECRET"],
-    slackAppToken: process.env["SLACK_APP_TOKEN"],
-    slackSocketMode: process.env["SLACK_SOCKET_MODE"],
-    allowedSlackWorkspaces: process.env["ALLOWED_SLACK_WORKSPACES"],
-    allowedSlackUserIds: process.env["ALLOWED_SLACK_USER_IDS"],
-    whatsappSessionPath: process.env["WHATSAPP_SESSION_PATH"],
-    whatsappAllowedNumbers: process.env["WHATSAPP_ALLOWED_NUMBERS"],
-    matrixHomeserver: process.env["MATRIX_HOMESERVER"],
-    matrixAccessToken: process.env["MATRIX_ACCESS_TOKEN"],
-    matrixUserId: process.env["MATRIX_USER_ID"],
-    matrixAllowedUserIds: process.env["MATRIX_ALLOWED_USER_IDS"],
-    matrixAllowedRoomIds: process.env["MATRIX_ALLOWED_ROOM_IDS"],
-    matrixAllowOpenAccess: process.env["MATRIX_ALLOW_OPEN_ACCESS"],
-    ircServer: process.env["IRC_SERVER"],
-    ircNick: process.env["IRC_NICK"],
-    ircChannels: process.env["IRC_CHANNELS"],
-    ircAllowedUsers: process.env["IRC_ALLOWED_USERS"],
-    ircAllowOpenAccess: process.env["IRC_ALLOW_OPEN_ACCESS"],
-    teamsAppId: process.env["TEAMS_APP_ID"],
-    teamsAppPassword: process.env["TEAMS_APP_PASSWORD"],
-    teamsAllowedUserIds: process.env["TEAMS_ALLOWED_USER_IDS"],
-    teamsAllowOpenAccess: process.env["TEAMS_ALLOW_OPEN_ACCESS"],
-    jwtSecret: process.env["JWT_SECRET"],
-    requireMfa: process.env["REQUIRE_MFA"],
-    requireEditConfirmation: process.env["REQUIRE_EDIT_CONFIRMATION"],
-    readOnlyMode: process.env["READ_ONLY_MODE"],
-    unityProjectPath: process.env["UNITY_PROJECT_PATH"],
-    unityBridgePort: process.env["UNITY_BRIDGE_PORT"],
-    unityBridgeAutoConnect: process.env["UNITY_BRIDGE_AUTO_CONNECT"],
-    unityBridgeTimeout: process.env["UNITY_BRIDGE_TIMEOUT"],
-    unityEditorPath: process.env["UNITY_EDITOR_PATH"] ?? process.env["UNITY_PATH"],
-    stradaCoreRepoUrl: process.env["STRADA_CORE_REPO_URL"],
-    stradaModulesRepoUrl: process.env["STRADA_MODULES_REPO_URL"],
-    stradaMcpRepoUrl: process.env["STRADA_MCP_REPO_URL"],
-    stradaMcpPath: process.env["STRADA_MCP_PATH"],
-    scriptExecuteEnabled: process.env["SCRIPT_EXECUTE_ENABLED"],
-    reflectionInvokeEnabled: process.env["REFLECTION_INVOKE_ENABLED"],
-    dashboardEnabled: process.env["DASHBOARD_ENABLED"],
-    dashboardPort: process.env["DASHBOARD_PORT"],
-    websocketDashboardEnabled: process.env["ENABLE_WEBSOCKET_DASHBOARD"],
-    websocketDashboardPort: process.env["WEBSOCKET_DASHBOARD_PORT"],
-    websocketDashboardAuthToken: process.env["WEBSOCKET_DASHBOARD_AUTH_TOKEN"],
-    websocketDashboardAllowedOrigins: process.env["WEBSOCKET_DASHBOARD_ALLOWED_ORIGINS"],
-    prometheusEnabled: process.env["ENABLE_PROMETHEUS"],
-    prometheusPort: process.env["PROMETHEUS_PORT"],
-    modelIntelligenceEnabled: process.env["MODEL_INTELLIGENCE_ENABLED"],
-    modelIntelligenceRefreshHours: process.env["MODEL_INTELLIGENCE_REFRESH_HOURS"],
-    modelIntelligenceDbPath: process.env["MODEL_INTELLIGENCE_DB_PATH"],
-    modelIntelligenceProviderSourcesPath: process.env["MODEL_INTELLIGENCE_PROVIDER_SOURCES_PATH"],
-    memoryEnabled: process.env["MEMORY_ENABLED"],
-    memoryDbPath: process.env["MEMORY_DB_PATH"],
-    memoryBackend: process.env["MEMORY_BACKEND"],
-    memoryDimensions: process.env["MEMORY_DIMENSIONS"],
-    memoryAutoTiering: process.env["MEMORY_AUTO_TIERING"],
-    memoryAutoTieringIntervalMs: process.env["MEMORY_AUTO_TIERING_INTERVAL_MS"],
-    memoryPromotionThreshold: process.env["MEMORY_PROMOTION_THRESHOLD"],
-    memoryDemotionTimeoutDays: process.env["MEMORY_DEMOTION_TIMEOUT_DAYS"],
-    memoryTierWorkingMax: process.env["MEMORY_TIER_WORKING_MAX"],
-    memoryTierEphemeralMax: process.env["MEMORY_TIER_EPHEMERAL_MAX"],
-    memoryTierPersistentMax: process.env["MEMORY_TIER_PERSISTENT_MAX"],
-    memoryEphemeralTtlHours: process.env["MEMORY_EPHEMERAL_TTL_HOURS"],
-    ragEnabled: process.env["RAG_ENABLED"],
-    embeddingProvider: process.env["EMBEDDING_PROVIDER"],
-    embeddingModel: process.env["EMBEDDING_MODEL"],
-    embeddingBaseUrl: process.env["EMBEDDING_BASE_URL"],
-    embeddingDimensions: process.env["EMBEDDING_DIMENSIONS"],
-    ragContextMaxTokens: process.env["RAG_CONTEXT_MAX_TOKENS"],
-    streamingEnabled: process.env["STREAMING_ENABLED"],
-    shellEnabled: process.env["SHELL_ENABLED"],
-    llmStreamInitialTimeoutMs: process.env["LLM_STREAM_INITIAL_TIMEOUT_MS"],
-    llmStreamStallTimeoutMs: process.env["LLM_STREAM_STALL_TIMEOUT_MS"],
-    rateLimitEnabled: process.env["RATE_LIMIT_ENABLED"],
-    rateLimitMessagesPerMinute: process.env["RATE_LIMIT_MESSAGES_PER_MINUTE"],
-    rateLimitMessagesPerHour: process.env["RATE_LIMIT_MESSAGES_PER_HOUR"],
-    rateLimitTokensPerDay: process.env["RATE_LIMIT_TOKENS_PER_DAY"],
-    rateLimitDailyBudgetUsd: process.env["RATE_LIMIT_DAILY_BUDGET_USD"],
-    rateLimitMonthlyBudgetUsd: process.env["RATE_LIMIT_MONTHLY_BUDGET_USD"],
+    anthropicApiKey: _env["ANTHROPIC_API_KEY"],
+    anthropicAuthMode: _env["ANTHROPIC_AUTH_MODE"],
+    anthropicAuthToken: _env["ANTHROPIC_AUTH_TOKEN"],
+    openaiApiKey: _env["OPENAI_API_KEY"],
+    openaiAuthMode: _env["OPENAI_AUTH_MODE"],
+    openaiChatgptAuthFile: _env["OPENAI_CHATGPT_AUTH_FILE"],
+    openaiSubscriptionAccessToken: _env["OPENAI_SUBSCRIPTION_ACCESS_TOKEN"],
+    openaiSubscriptionAccountId: _env["OPENAI_SUBSCRIPTION_ACCOUNT_ID"],
+    deepseekApiKey: _env["DEEPSEEK_API_KEY"],
+    qwenApiKey: _env["QWEN_API_KEY"],
+    kimiApiKey: _env["KIMI_API_KEY"],
+    minimaxApiKey: _env["MINIMAX_API_KEY"],
+    groqApiKey: _env["GROQ_API_KEY"],
+    mistralApiKey: _env["MISTRAL_API_KEY"],
+    togetherApiKey: _env["TOGETHER_API_KEY"],
+    fireworksApiKey: _env["FIREWORKS_API_KEY"],
+    geminiApiKey: _env["GEMINI_API_KEY"],
+    providerChain: _env["PROVIDER_CHAIN"],
+    telegramBotToken: _env["TELEGRAM_BOT_TOKEN"],
+    allowedTelegramUserIds: _env["ALLOWED_TELEGRAM_USER_IDS"],
+    discordBotToken: _env["DISCORD_BOT_TOKEN"],
+    discordGuildId: _env["DISCORD_GUILD_ID"],
+    allowedDiscordUserIds: _env["ALLOWED_DISCORD_USER_IDS"],
+    allowedDiscordRoleIds: _env["ALLOWED_DISCORD_ROLE_IDS"],
+    slackBotToken: _env["SLACK_BOT_TOKEN"],
+    slackSigningSecret: _env["SLACK_SIGNING_SECRET"],
+    slackAppToken: _env["SLACK_APP_TOKEN"],
+    slackSocketMode: _env["SLACK_SOCKET_MODE"],
+    allowedSlackWorkspaces: _env["ALLOWED_SLACK_WORKSPACES"],
+    allowedSlackUserIds: _env["ALLOWED_SLACK_USER_IDS"],
+    whatsappSessionPath: _env["WHATSAPP_SESSION_PATH"],
+    whatsappAllowedNumbers: _env["WHATSAPP_ALLOWED_NUMBERS"],
+    matrixHomeserver: _env["MATRIX_HOMESERVER"],
+    matrixAccessToken: _env["MATRIX_ACCESS_TOKEN"],
+    matrixUserId: _env["MATRIX_USER_ID"],
+    matrixAllowedUserIds: _env["MATRIX_ALLOWED_USER_IDS"],
+    matrixAllowedRoomIds: _env["MATRIX_ALLOWED_ROOM_IDS"],
+    matrixAllowOpenAccess: _env["MATRIX_ALLOW_OPEN_ACCESS"],
+    ircServer: _env["IRC_SERVER"],
+    ircNick: _env["IRC_NICK"],
+    ircChannels: _env["IRC_CHANNELS"],
+    ircAllowedUsers: _env["IRC_ALLOWED_USERS"],
+    ircAllowOpenAccess: _env["IRC_ALLOW_OPEN_ACCESS"],
+    teamsAppId: _env["TEAMS_APP_ID"],
+    teamsAppPassword: _env["TEAMS_APP_PASSWORD"],
+    teamsAllowedUserIds: _env["TEAMS_ALLOWED_USER_IDS"],
+    teamsAllowOpenAccess: _env["TEAMS_ALLOW_OPEN_ACCESS"],
+    jwtSecret: _env["JWT_SECRET"],
+    requireMfa: _env["REQUIRE_MFA"],
+    requireEditConfirmation: _env["REQUIRE_EDIT_CONFIRMATION"],
+    readOnlyMode: _env["READ_ONLY_MODE"],
+    unityProjectPath: _env["UNITY_PROJECT_PATH"],
+    unityBridgePort: _env["UNITY_BRIDGE_PORT"],
+    unityBridgeAutoConnect: _env["UNITY_BRIDGE_AUTO_CONNECT"],
+    unityBridgeTimeout: _env["UNITY_BRIDGE_TIMEOUT"],
+    unityEditorPath: _env["UNITY_EDITOR_PATH"] ?? _env["UNITY_PATH"],
+    stradaCoreRepoUrl: _env["STRADA_CORE_REPO_URL"],
+    stradaModulesRepoUrl: _env["STRADA_MODULES_REPO_URL"],
+    stradaMcpRepoUrl: _env["STRADA_MCP_REPO_URL"],
+    stradaMcpPath: _env["STRADA_MCP_PATH"],
+    scriptExecuteEnabled: _env["SCRIPT_EXECUTE_ENABLED"],
+    reflectionInvokeEnabled: _env["REFLECTION_INVOKE_ENABLED"],
+    dashboardEnabled: _env["DASHBOARD_ENABLED"],
+    dashboardPort: _env["DASHBOARD_PORT"],
+    websocketDashboardEnabled: _env["ENABLE_WEBSOCKET_DASHBOARD"],
+    websocketDashboardPort: _env["WEBSOCKET_DASHBOARD_PORT"],
+    websocketDashboardAuthToken: _env["WEBSOCKET_DASHBOARD_AUTH_TOKEN"],
+    websocketDashboardAllowedOrigins: _env["WEBSOCKET_DASHBOARD_ALLOWED_ORIGINS"],
+    prometheusEnabled: _env["ENABLE_PROMETHEUS"],
+    prometheusPort: _env["PROMETHEUS_PORT"],
+    modelIntelligenceEnabled: _env["MODEL_INTELLIGENCE_ENABLED"],
+    modelIntelligenceRefreshHours: _env["MODEL_INTELLIGENCE_REFRESH_HOURS"],
+    modelIntelligenceDbPath: _env["MODEL_INTELLIGENCE_DB_PATH"],
+    modelIntelligenceProviderSourcesPath: _env["MODEL_INTELLIGENCE_PROVIDER_SOURCES_PATH"],
+    memoryEnabled: _env["MEMORY_ENABLED"],
+    memoryDbPath: _env["MEMORY_DB_PATH"],
+    memoryBackend: _env["MEMORY_BACKEND"],
+    memoryDimensions: _env["MEMORY_DIMENSIONS"],
+    memoryAutoTiering: _env["MEMORY_AUTO_TIERING"],
+    memoryAutoTieringIntervalMs: _env["MEMORY_AUTO_TIERING_INTERVAL_MS"],
+    memoryPromotionThreshold: _env["MEMORY_PROMOTION_THRESHOLD"],
+    memoryDemotionTimeoutDays: _env["MEMORY_DEMOTION_TIMEOUT_DAYS"],
+    memoryTierWorkingMax: _env["MEMORY_TIER_WORKING_MAX"],
+    memoryTierEphemeralMax: _env["MEMORY_TIER_EPHEMERAL_MAX"],
+    memoryTierPersistentMax: _env["MEMORY_TIER_PERSISTENT_MAX"],
+    memoryEphemeralTtlHours: _env["MEMORY_EPHEMERAL_TTL_HOURS"],
+    ragEnabled: _env["RAG_ENABLED"],
+    embeddingProvider: _env["EMBEDDING_PROVIDER"],
+    embeddingModel: _env["EMBEDDING_MODEL"],
+    embeddingBaseUrl: _env["EMBEDDING_BASE_URL"],
+    embeddingDimensions: _env["EMBEDDING_DIMENSIONS"],
+    ragContextMaxTokens: _env["RAG_CONTEXT_MAX_TOKENS"],
+    streamingEnabled: _env["STREAMING_ENABLED"],
+    shellEnabled: _env["SHELL_ENABLED"],
+    llmStreamInitialTimeoutMs: _env["LLM_STREAM_INITIAL_TIMEOUT_MS"],
+    llmStreamStallTimeoutMs: _env["LLM_STREAM_STALL_TIMEOUT_MS"],
+    rateLimitEnabled: _env["RATE_LIMIT_ENABLED"],
+    rateLimitMessagesPerMinute: _env["RATE_LIMIT_MESSAGES_PER_MINUTE"],
+    rateLimitMessagesPerHour: _env["RATE_LIMIT_MESSAGES_PER_HOUR"],
+    rateLimitTokensPerDay: _env["RATE_LIMIT_TOKENS_PER_DAY"],
+    rateLimitDailyBudgetUsd: _env["RATE_LIMIT_DAILY_BUDGET_USD"],
+    rateLimitMonthlyBudgetUsd: _env["RATE_LIMIT_MONTHLY_BUDGET_USD"],
     // Unified Budget System
-    stradaBudgetDailyUsd: process.env["STRADA_BUDGET_DAILY_USD"],
-    stradaBudgetMonthlyUsd: process.env["STRADA_BUDGET_MONTHLY_USD"],
-    stradaBudgetWarnPct: process.env["STRADA_BUDGET_WARN_PCT"],
-    logLevel: process.env["LOG_LEVEL"],
-    logFile: process.env["LOG_FILE"],
-    webChannelPort: process.env["WEB_CHANNEL_PORT"],
-    pluginDirs: process.env["PLUGIN_DIRS"],
-    bayesianEnabled: process.env["BAYESIAN_ENABLED"],
-    bayesianDeprecatedThreshold: process.env["BAYESIAN_DEPRECATED_THRESHOLD"],
-    bayesianActiveThreshold: process.env["BAYESIAN_ACTIVE_THRESHOLD"],
-    bayesianEvolutionThreshold: process.env["BAYESIAN_EVOLUTION_THRESHOLD"],
-    bayesianAutoEvolveThreshold: process.env["BAYESIAN_AUTO_EVOLVE_THRESHOLD"],
-    bayesianMaxInitial: process.env["BAYESIAN_MAX_INITIAL"],
-    bayesianCoolingPeriodDays: process.env["BAYESIAN_COOLING_PERIOD_DAYS"],
-    bayesianCoolingMinObservations: process.env["BAYESIAN_COOLING_MIN_OBSERVATIONS"],
-    bayesianCoolingMaxFailures: process.env["BAYESIAN_COOLING_MAX_FAILURES"],
-    bayesianPromotionMinObservations: process.env["BAYESIAN_PROMOTION_MIN_OBSERVATIONS"],
-    bayesianVerdictCleanSuccess: process.env["BAYESIAN_VERDICT_CLEAN_SUCCESS"],
-    bayesianVerdictRetrySuccess: process.env["BAYESIAN_VERDICT_RETRY_SUCCESS"],
-    bayesianVerdictFailure: process.env["BAYESIAN_VERDICT_FAILURE"],
-    goalMaxDepth: process.env["GOAL_MAX_DEPTH"],
-    goalMaxRetries: process.env["GOAL_MAX_RETRIES"],
-    goalMaxFailures: process.env["GOAL_MAX_FAILURES"],
-    goalParallelExecution: process.env["GOAL_PARALLEL_EXECUTION"],
-    goalMaxParallel: process.env["GOAL_MAX_PARALLEL"],
-    stradaGoalEscalationTimeoutMinutes: process.env["STRADA_GOAL_ESCALATION_TIMEOUT_MINUTES"],
-    stradaGoalMaxRedecompositions: process.env["STRADA_GOAL_MAX_REDECOMPOSITIONS"],
-    toolChainEnabled: process.env["TOOL_CHAIN_ENABLED"],
-    toolChainMinOccurrences: process.env["TOOL_CHAIN_MIN_OCCURRENCES"],
-    toolChainSuccessRateThreshold: process.env["TOOL_CHAIN_SUCCESS_RATE_THRESHOLD"],
-    toolChainMaxActive: process.env["TOOL_CHAIN_MAX_ACTIVE"],
-    toolChainMaxAgeDays: process.env["TOOL_CHAIN_MAX_AGE_DAYS"],
-    toolChainLlmBudgetPerCycle: process.env["TOOL_CHAIN_LLM_BUDGET_PER_CYCLE"],
-    toolChainMinChainLength: process.env["TOOL_CHAIN_MIN_CHAIN_LENGTH"],
-    toolChainMaxChainLength: process.env["TOOL_CHAIN_MAX_CHAIN_LENGTH"],
-    toolChainDetectionIntervalMs: process.env["TOOL_CHAIN_DETECTION_INTERVAL_MS"],
-    crossSessionEnabled: process.env["STRADA_CROSS_SESSION_ENABLED"],
-    crossSessionMaxAgeDays: process.env["STRADA_INSTINCT_MAX_AGE_DAYS"],
-    crossSessionScopeFilter: process.env["STRADA_INSTINCT_SCOPE_FILTER"],
-    crossSessionRecencyBoost: process.env["STRADA_INSTINCT_RECENCY_BOOST"],
-    crossSessionScopeBoost: process.env["STRADA_INSTINCT_SCOPE_BOOST"],
-    crossSessionPromotionThreshold: process.env["STRADA_INSTINCT_PROMOTION_THRESHOLD"],
-    agentName: process.env["STRADA_AGENT_NAME"],
-    language: process.env["LANGUAGE_PREFERENCE"],
-    daemonIntervalMs: process.env["STRADA_DAEMON_INTERVAL_MS"],
-    daemonTimezone: process.env["STRADA_DAEMON_TIMEZONE"],
-    daemonHeartbeatFile: process.env["STRADA_DAEMON_HEARTBEAT_FILE"],
-    daemonDailyBudget: process.env["STRADA_DAEMON_DAILY_BUDGET"],
-    daemonBudgetWarnPct: process.env["STRADA_DAEMON_BUDGET_WARN_PCT"],
-    daemonApprovalTimeoutMin: process.env["STRADA_DAEMON_APPROVAL_TIMEOUT_MINUTES"],
-    daemonAutoApproveTools: process.env["STRADA_DAEMON_AUTO_APPROVE_TOOLS"],
-    daemonBackoffBase: process.env["STRADA_DAEMON_BACKOFF_BASE"],
-    daemonBackoffMax: process.env["STRADA_DAEMON_BACKOFF_MAX"],
-    daemonFailureThreshold: process.env["STRADA_DAEMON_FAILURE_THRESHOLD"],
-    daemonIdlePause: process.env["STRADA_DAEMON_IDLE_PAUSE"],
-    webhookSecret: process.env["STRADA_WEBHOOK_SECRET"],
-    webhookRateLimit: process.env["STRADA_WEBHOOK_RATE_LIMIT"],
-    daemonDedupWindowMs: process.env["STRADA_DAEMON_DEDUP_WINDOW_MS"],
-    daemonDefaultDebounceMs: process.env["STRADA_DAEMON_DEFAULT_DEBOUNCE_MS"],
-    checklistMorningHour: process.env["STRADA_CHECKLIST_MORNING_HOUR"],
-    checklistAfternoonHour: process.env["STRADA_CHECKLIST_AFTERNOON_HOUR"],
-    checklistEveningHour: process.env["STRADA_CHECKLIST_EVENING_HOUR"],
+    stradaBudgetDailyUsd: _env["STRADA_BUDGET_DAILY_USD"],
+    stradaBudgetMonthlyUsd: _env["STRADA_BUDGET_MONTHLY_USD"],
+    stradaBudgetWarnPct: _env["STRADA_BUDGET_WARN_PCT"],
+    // Codebase Memory Vault
+    vault: {
+      enabled: _env["STRADA_VAULT_ENABLED"],
+      writeHookBudgetMs: _env["STRADA_VAULT_WRITE_HOOK_BUDGET_MS"],
+      debounceMs: _env["STRADA_VAULT_DEBOUNCE_MS"],
+      embeddingFallback: _env["STRADA_VAULT_EMBEDDING_FALLBACK"],
+    },
+    logLevel: _env["LOG_LEVEL"],
+    logFile: _env["LOG_FILE"],
+    webChannelPort: _env["WEB_CHANNEL_PORT"],
+    pluginDirs: _env["PLUGIN_DIRS"],
+    bayesianEnabled: _env["BAYESIAN_ENABLED"],
+    bayesianDeprecatedThreshold: _env["BAYESIAN_DEPRECATED_THRESHOLD"],
+    bayesianActiveThreshold: _env["BAYESIAN_ACTIVE_THRESHOLD"],
+    bayesianEvolutionThreshold: _env["BAYESIAN_EVOLUTION_THRESHOLD"],
+    bayesianAutoEvolveThreshold: _env["BAYESIAN_AUTO_EVOLVE_THRESHOLD"],
+    bayesianMaxInitial: _env["BAYESIAN_MAX_INITIAL"],
+    bayesianCoolingPeriodDays: _env["BAYESIAN_COOLING_PERIOD_DAYS"],
+    bayesianCoolingMinObservations: _env["BAYESIAN_COOLING_MIN_OBSERVATIONS"],
+    bayesianCoolingMaxFailures: _env["BAYESIAN_COOLING_MAX_FAILURES"],
+    bayesianPromotionMinObservations: _env["BAYESIAN_PROMOTION_MIN_OBSERVATIONS"],
+    bayesianVerdictCleanSuccess: _env["BAYESIAN_VERDICT_CLEAN_SUCCESS"],
+    bayesianVerdictRetrySuccess: _env["BAYESIAN_VERDICT_RETRY_SUCCESS"],
+    bayesianVerdictFailure: _env["BAYESIAN_VERDICT_FAILURE"],
+    goalMaxDepth: _env["GOAL_MAX_DEPTH"],
+    goalMaxRetries: _env["GOAL_MAX_RETRIES"],
+    goalMaxFailures: _env["GOAL_MAX_FAILURES"],
+    goalParallelExecution: _env["GOAL_PARALLEL_EXECUTION"],
+    goalMaxParallel: _env["GOAL_MAX_PARALLEL"],
+    stradaGoalEscalationTimeoutMinutes: _env["STRADA_GOAL_ESCALATION_TIMEOUT_MINUTES"],
+    stradaGoalMaxRedecompositions: _env["STRADA_GOAL_MAX_REDECOMPOSITIONS"],
+    toolChainEnabled: _env["TOOL_CHAIN_ENABLED"],
+    toolChainMinOccurrences: _env["TOOL_CHAIN_MIN_OCCURRENCES"],
+    toolChainSuccessRateThreshold: _env["TOOL_CHAIN_SUCCESS_RATE_THRESHOLD"],
+    toolChainMaxActive: _env["TOOL_CHAIN_MAX_ACTIVE"],
+    toolChainMaxAgeDays: _env["TOOL_CHAIN_MAX_AGE_DAYS"],
+    toolChainLlmBudgetPerCycle: _env["TOOL_CHAIN_LLM_BUDGET_PER_CYCLE"],
+    toolChainMinChainLength: _env["TOOL_CHAIN_MIN_CHAIN_LENGTH"],
+    toolChainMaxChainLength: _env["TOOL_CHAIN_MAX_CHAIN_LENGTH"],
+    toolChainDetectionIntervalMs: _env["TOOL_CHAIN_DETECTION_INTERVAL_MS"],
+    crossSessionEnabled: _env["STRADA_CROSS_SESSION_ENABLED"],
+    crossSessionMaxAgeDays: _env["STRADA_INSTINCT_MAX_AGE_DAYS"],
+    crossSessionScopeFilter: _env["STRADA_INSTINCT_SCOPE_FILTER"],
+    crossSessionRecencyBoost: _env["STRADA_INSTINCT_RECENCY_BOOST"],
+    crossSessionScopeBoost: _env["STRADA_INSTINCT_SCOPE_BOOST"],
+    crossSessionPromotionThreshold: _env["STRADA_INSTINCT_PROMOTION_THRESHOLD"],
+    agentName: _env["STRADA_AGENT_NAME"],
+    language: _env["LANGUAGE_PREFERENCE"],
+    daemonIntervalMs: _env["STRADA_DAEMON_INTERVAL_MS"],
+    daemonTimezone: _env["STRADA_DAEMON_TIMEZONE"],
+    daemonHeartbeatFile: _env["STRADA_DAEMON_HEARTBEAT_FILE"],
+    daemonDailyBudget: _env["STRADA_DAEMON_DAILY_BUDGET"],
+    daemonBudgetWarnPct: _env["STRADA_DAEMON_BUDGET_WARN_PCT"],
+    daemonApprovalTimeoutMin: _env["STRADA_DAEMON_APPROVAL_TIMEOUT_MINUTES"],
+    daemonAutoApproveTools: _env["STRADA_DAEMON_AUTO_APPROVE_TOOLS"],
+    daemonBackoffBase: _env["STRADA_DAEMON_BACKOFF_BASE"],
+    daemonBackoffMax: _env["STRADA_DAEMON_BACKOFF_MAX"],
+    daemonFailureThreshold: _env["STRADA_DAEMON_FAILURE_THRESHOLD"],
+    daemonIdlePause: _env["STRADA_DAEMON_IDLE_PAUSE"],
+    webhookSecret: _env["STRADA_WEBHOOK_SECRET"],
+    webhookRateLimit: _env["STRADA_WEBHOOK_RATE_LIMIT"],
+    daemonDedupWindowMs: _env["STRADA_DAEMON_DEDUP_WINDOW_MS"],
+    daemonDefaultDebounceMs: _env["STRADA_DAEMON_DEFAULT_DEBOUNCE_MS"],
+    checklistMorningHour: _env["STRADA_CHECKLIST_MORNING_HOUR"],
+    checklistAfternoonHour: _env["STRADA_CHECKLIST_AFTERNOON_HOUR"],
+    checklistEveningHour: _env["STRADA_CHECKLIST_EVENING_HOUR"],
     // Trigger Fire History Pruning (Phase 21)
-    triggerFireRetentionDays: process.env["TRIGGER_FIRE_RETENTION_DAYS"],
+    triggerFireRetentionDays: _env["TRIGGER_FIRE_RETENTION_DAYS"],
     // Notification, Quiet Hours, Digest (Phase 18)
-    stradaDigestEnabled: process.env["STRADA_DIGEST_ENABLED"],
-    stradaDigestSchedule: process.env["STRADA_DIGEST_SCHEDULE"],
-    stradaNotifyMinLevel: process.env["STRADA_NOTIFY_MIN_LEVEL"],
-    stradaNotifySilent: process.env["STRADA_NOTIFY_SILENT"],
-    stradaNotifyLow: process.env["STRADA_NOTIFY_LOW"],
-    stradaNotifyMedium: process.env["STRADA_NOTIFY_MEDIUM"],
-    stradaNotifyHigh: process.env["STRADA_NOTIFY_HIGH"],
-    stradaNotifyCritical: process.env["STRADA_NOTIFY_CRITICAL"],
-    stradaQuietStart: process.env["STRADA_QUIET_START"],
-    stradaQuietEnd: process.env["STRADA_QUIET_END"],
-    stradaQuietBufferMax: process.env["STRADA_QUIET_BUFFER_MAX"],
-    stradaDashboardHistoryDepth: process.env["STRADA_DASHBOARD_HISTORY_DEPTH"],
+    stradaDigestEnabled: _env["STRADA_DIGEST_ENABLED"],
+    stradaDigestSchedule: _env["STRADA_DIGEST_SCHEDULE"],
+    stradaNotifyMinLevel: _env["STRADA_NOTIFY_MIN_LEVEL"],
+    stradaNotifySilent: _env["STRADA_NOTIFY_SILENT"],
+    stradaNotifyLow: _env["STRADA_NOTIFY_LOW"],
+    stradaNotifyMedium: _env["STRADA_NOTIFY_MEDIUM"],
+    stradaNotifyHigh: _env["STRADA_NOTIFY_HIGH"],
+    stradaNotifyCritical: _env["STRADA_NOTIFY_CRITICAL"],
+    stradaQuietStart: _env["STRADA_QUIET_START"],
+    stradaQuietEnd: _env["STRADA_QUIET_END"],
+    stradaQuietBufferMax: _env["STRADA_QUIET_BUFFER_MAX"],
+    stradaDashboardHistoryDepth: _env["STRADA_DASHBOARD_HISTORY_DEPTH"],
     // Memory Re-Retrieval (Phase 17)
-    stradaMemoryReRetrievalEnabled: process.env["STRADA_MEMORY_RERETRIEVAL_ENABLED"],
-    stradaMemoryReRetrievalInterval: process.env["STRADA_MEMORY_RERETRIEVAL_INTERVAL"],
-    stradaMemoryTopicShiftEnabled: process.env["STRADA_MEMORY_TOPIC_SHIFT_ENABLED"],
-    stradaMemoryTopicShiftThreshold: process.env["STRADA_MEMORY_TOPIC_SHIFT_THRESHOLD"],
-    stradaMemoryMaxReRetrievals: process.env["STRADA_MEMORY_MAX_RERETRIEVALS"],
-    stradaMemoryReRetrievalTimeoutMs: process.env["STRADA_MEMORY_RERETRIEVAL_TIMEOUT_MS"],
-    stradaMemoryReRetrievalMemoryLimit: process.env["STRADA_MEMORY_RERETRIEVAL_MEMORY_LIMIT"],
-    stradaMemoryReRetrievalRagTopK: process.env["STRADA_MEMORY_RERETRIEVAL_RAG_TOPK"],
+    stradaMemoryReRetrievalEnabled: _env["STRADA_MEMORY_RERETRIEVAL_ENABLED"],
+    stradaMemoryReRetrievalInterval: _env["STRADA_MEMORY_RERETRIEVAL_INTERVAL"],
+    stradaMemoryTopicShiftEnabled: _env["STRADA_MEMORY_TOPIC_SHIFT_ENABLED"],
+    stradaMemoryTopicShiftThreshold: _env["STRADA_MEMORY_TOPIC_SHIFT_THRESHOLD"],
+    stradaMemoryMaxReRetrievals: _env["STRADA_MEMORY_MAX_RERETRIEVALS"],
+    stradaMemoryReRetrievalTimeoutMs: _env["STRADA_MEMORY_RERETRIEVAL_TIMEOUT_MS"],
+    stradaMemoryReRetrievalMemoryLimit: _env["STRADA_MEMORY_RERETRIEVAL_MEMORY_LIMIT"],
+    stradaMemoryReRetrievalRagTopK: _env["STRADA_MEMORY_RERETRIEVAL_RAG_TOPK"],
     // Memory Decay (Phase 21)
-    memoryDecayEnabled: process.env["MEMORY_DECAY_ENABLED"],
-    memoryDecayLambdaWorking: process.env["MEMORY_DECAY_LAMBDA_WORKING"],
-    memoryDecayLambdaEphemeral: process.env["MEMORY_DECAY_LAMBDA_EPHEMERAL"],
-    memoryDecayLambdaPersistent: process.env["MEMORY_DECAY_LAMBDA_PERSISTENT"],
-    memoryDecayExemptDomains: process.env["MEMORY_DECAY_EXEMPT_DOMAINS"],
-    memoryDecayTimeoutMs: process.env["MEMORY_DECAY_TIMEOUT_MS"],
+    memoryDecayEnabled: _env["MEMORY_DECAY_ENABLED"],
+    memoryDecayLambdaWorking: _env["MEMORY_DECAY_LAMBDA_WORKING"],
+    memoryDecayLambdaEphemeral: _env["MEMORY_DECAY_LAMBDA_EPHEMERAL"],
+    memoryDecayLambdaPersistent: _env["MEMORY_DECAY_LAMBDA_PERSISTENT"],
+    memoryDecayExemptDomains: _env["MEMORY_DECAY_EXEMPT_DOMAINS"],
+    memoryDecayTimeoutMs: _env["MEMORY_DECAY_TIMEOUT_MS"],
     // Memory Consolidation (Phase 25)
-    memoryConsolidationEnabled: process.env["MEMORY_CONSOLIDATION_ENABLED"],
-    memoryConsolidationIdleMinutes: process.env["MEMORY_CONSOLIDATION_IDLE_MINUTES"],
-    memoryConsolidationThreshold: process.env["MEMORY_CONSOLIDATION_THRESHOLD"],
-    memoryConsolidationBatchSize: process.env["MEMORY_CONSOLIDATION_BATCH_SIZE"],
-    memoryConsolidationMinClusterSize: process.env["MEMORY_CONSOLIDATION_MIN_CLUSTER_SIZE"],
-    memoryConsolidationMaxDepth: process.env["MEMORY_CONSOLIDATION_MAX_DEPTH"],
-    memoryConsolidationModelTier: process.env["MEMORY_CONSOLIDATION_MODEL_TIER"],
+    memoryConsolidationEnabled: _env["MEMORY_CONSOLIDATION_ENABLED"],
+    memoryConsolidationIdleMinutes: _env["MEMORY_CONSOLIDATION_IDLE_MINUTES"],
+    memoryConsolidationThreshold: _env["MEMORY_CONSOLIDATION_THRESHOLD"],
+    memoryConsolidationBatchSize: _env["MEMORY_CONSOLIDATION_BATCH_SIZE"],
+    memoryConsolidationMinClusterSize: _env["MEMORY_CONSOLIDATION_MIN_CLUSTER_SIZE"],
+    memoryConsolidationMaxDepth: _env["MEMORY_CONSOLIDATION_MAX_DEPTH"],
+    memoryConsolidationModelTier: _env["MEMORY_CONSOLIDATION_MODEL_TIER"],
     // Chain Resilience (Phase 22)
-    chainRollbackEnabled: process.env["CHAIN_ROLLBACK_ENABLED"],
-    chainParallelEnabled: process.env["CHAIN_PARALLEL_ENABLED"],
-    chainMaxParallelBranches: process.env["CHAIN_MAX_PARALLEL_BRANCHES"],
-    chainCompensationTimeoutMs: process.env["CHAIN_COMPENSATION_TIMEOUT_MS"],
+    chainRollbackEnabled: _env["CHAIN_ROLLBACK_ENABLED"],
+    chainParallelEnabled: _env["CHAIN_PARALLEL_ENABLED"],
+    chainMaxParallelBranches: _env["CHAIN_MAX_PARALLEL_BRANCHES"],
+    chainCompensationTimeoutMs: _env["CHAIN_COMPENSATION_TIMEOUT_MS"],
     // Multi-Agent (Phase 23)
-    multiAgentEnabled: process.env["MULTI_AGENT_ENABLED"],
-    agentDefaultBudgetUsd: process.env["AGENT_DEFAULT_BUDGET_USD"],
-    agentMaxConcurrent: process.env["AGENT_MAX_CONCURRENT"],
-    agentIdleTimeoutMs: process.env["AGENT_IDLE_TIMEOUT_MS"],
-    agentMaxMemoryEntries: process.env["AGENT_MAX_MEMORY_ENTRIES"],
+    multiAgentEnabled: _env["MULTI_AGENT_ENABLED"],
+    agentDefaultBudgetUsd: _env["AGENT_DEFAULT_BUDGET_USD"],
+    agentMaxConcurrent: _env["AGENT_MAX_CONCURRENT"],
+    agentIdleTimeoutMs: _env["AGENT_IDLE_TIMEOUT_MS"],
+    agentMaxMemoryEntries: _env["AGENT_MAX_MEMORY_ENTRIES"],
     // Task Delegation (Phase 24)
-    taskDelegationEnabled: process.env["TASK_DELEGATION_ENABLED"],
-    agentMaxDelegationDepth: process.env["AGENT_MAX_DELEGATION_DEPTH"],
-    agentMaxConcurrentDelegations: process.env["AGENT_MAX_CONCURRENT_DELEGATIONS"],
-    delegationTierLocal: process.env["DELEGATION_TIER_LOCAL"],
-    delegationTierCheap: process.env["DELEGATION_TIER_CHEAP"],
-    delegationTierStandard: process.env["DELEGATION_TIER_STANDARD"],
-    delegationTierPremium: process.env["DELEGATION_TIER_PREMIUM"],
-    delegationVerbosity: process.env["DELEGATION_VERBOSITY"],
-    delegationTypes: process.env["DELEGATION_TYPES"],
-    delegationMaxIterationsPerType: process.env["DELEGATION_MAX_ITERATIONS_PER_TYPE"],
-    taskMaxConcurrent: process.env["TASK_MAX_CONCURRENT"],
-    taskMessageBurstWindowMs: process.env["TASK_MESSAGE_BURST_WINDOW_MS"],
-    taskMessageBurstMaxMessages: process.env["TASK_MESSAGE_BURST_MAX_MESSAGES"],
-    taskInteractiveMaxIterations: process.env["TASK_INTERACTIVE_MAX_ITERATIONS"],
-    taskInteractiveTokenBudget: process.env["TASK_INTERACTIVE_TOKEN_BUDGET"],
-    taskBackgroundEpochMaxIterations: process.env["TASK_BACKGROUND_EPOCH_MAX_ITERATIONS"],
-    taskBackgroundAutoContinue: process.env["TASK_BACKGROUND_AUTO_CONTINUE"],
-    taskBackgroundMaxEpochs: process.env["TASK_BACKGROUND_MAX_EPOCHS"],
-    interactionMode: process.env["INTERACTION_MODE"],
-    interactionHeartbeatAfterMs: process.env["INTERACTION_HEARTBEAT_AFTER_MS"],
-    interactionHeartbeatIntervalMs: process.env["INTERACTION_HEARTBEAT_INTERVAL_MS"],
-    interactionEscalationPolicy: process.env["INTERACTION_ESCALATION_POLICY"],
+    taskDelegationEnabled: _env["TASK_DELEGATION_ENABLED"],
+    agentMaxDelegationDepth: _env["AGENT_MAX_DELEGATION_DEPTH"],
+    agentMaxConcurrentDelegations: _env["AGENT_MAX_CONCURRENT_DELEGATIONS"],
+    delegationTierLocal: _env["DELEGATION_TIER_LOCAL"],
+    delegationTierCheap: _env["DELEGATION_TIER_CHEAP"],
+    delegationTierStandard: _env["DELEGATION_TIER_STANDARD"],
+    delegationTierPremium: _env["DELEGATION_TIER_PREMIUM"],
+    delegationVerbosity: _env["DELEGATION_VERBOSITY"],
+    delegationTypes: _env["DELEGATION_TYPES"],
+    delegationMaxIterationsPerType: _env["DELEGATION_MAX_ITERATIONS_PER_TYPE"],
+    taskMaxConcurrent: _env["TASK_MAX_CONCURRENT"],
+    taskMessageBurstWindowMs: _env["TASK_MESSAGE_BURST_WINDOW_MS"],
+    taskMessageBurstMaxMessages: _env["TASK_MESSAGE_BURST_MAX_MESSAGES"],
+    taskInteractiveMaxIterations: _env["TASK_INTERACTIVE_MAX_ITERATIONS"],
+    taskInteractiveTokenBudget: _env["TASK_INTERACTIVE_TOKEN_BUDGET"],
+    taskBackgroundEpochMaxIterations: _env["TASK_BACKGROUND_EPOCH_MAX_ITERATIONS"],
+    taskBackgroundAutoContinue: _env["TASK_BACKGROUND_AUTO_CONTINUE"],
+    taskBackgroundMaxEpochs: _env["TASK_BACKGROUND_MAX_EPOCHS"],
+    interactionMode: _env["INTERACTION_MODE"],
+    interactionHeartbeatAfterMs: _env["INTERACTION_HEARTBEAT_AFTER_MS"],
+    interactionHeartbeatIntervalMs: _env["INTERACTION_HEARTBEAT_INTERVAL_MS"],
+    interactionEscalationPolicy: _env["INTERACTION_ESCALATION_POLICY"],
     // Autonomous Mode
-    autonomousDefaultEnabled: process.env["AUTONOMOUS_DEFAULT_ENABLED"],
-    autonomousDefaultHours: process.env["AUTONOMOUS_DEFAULT_HOURS"],
+    autonomousDefaultEnabled: _env["AUTONOMOUS_DEFAULT_ENABLED"],
+    autonomousDefaultHours: _env["AUTONOMOUS_DEFAULT_HOURS"],
     // Conformance Guard
-    conformanceEnabled: process.env["STRADA_CONFORMANCE_ENABLED"],
-    conformanceFrameworkPathsOnly: process.env["STRADA_CONFORMANCE_FRAMEWORK_PATHS_ONLY"],
+    conformanceEnabled: _env["STRADA_CONFORMANCE_ENABLED"],
+    conformanceFrameworkPathsOnly: _env["STRADA_CONFORMANCE_FRAMEWORK_PATHS_ONLY"],
     // Control Loop
-    loopFingerprintThreshold: process.env["STRADA_LOOP_FINGERPRINT_THRESHOLD"],
-    loopFingerprintWindow: process.env["STRADA_LOOP_FINGERPRINT_WINDOW"],
-    loopDensityThreshold: process.env["STRADA_LOOP_DENSITY_THRESHOLD"],
-    loopDensityWindow: process.env["STRADA_LOOP_DENSITY_WINDOW"],
-    loopMaxRecoveryEpisodes: process.env["STRADA_LOOP_MAX_RECOVERY_EPISODES"],
-    loopStaleAnalysisThreshold: process.env["STRADA_LOOP_STALE_ANALYSIS_THRESHOLD"],
-    loopHardCapReplan: process.env["STRADA_LOOP_HARD_CAP_REPLAN"],
-    loopHardCapBlock: process.env["STRADA_LOOP_HARD_CAP_BLOCK"],
-    progressAssessmentEnabled: process.env["STRADA_PROGRESS_ASSESSMENT_ENABLED"],
+    loopFingerprintThreshold: _env["STRADA_LOOP_FINGERPRINT_THRESHOLD"],
+    loopFingerprintWindow: _env["STRADA_LOOP_FINGERPRINT_WINDOW"],
+    loopDensityThreshold: _env["STRADA_LOOP_DENSITY_THRESHOLD"],
+    loopDensityWindow: _env["STRADA_LOOP_DENSITY_WINDOW"],
+    loopMaxRecoveryEpisodes: _env["STRADA_LOOP_MAX_RECOVERY_EPISODES"],
+    loopStaleAnalysisThreshold: _env["STRADA_LOOP_STALE_ANALYSIS_THRESHOLD"],
+    loopHardCapReplan: _env["STRADA_LOOP_HARD_CAP_REPLAN"],
+    loopHardCapBlock: _env["STRADA_LOOP_HARD_CAP_BLOCK"],
+    progressAssessmentEnabled: _env["STRADA_PROGRESS_ASSESSMENT_ENABLED"],
     // Daemon Full Autonomy
-    daemonFullAutonomy: process.env["STRADA_DAEMON_FULL_AUTONOMY"],
+    daemonFullAutonomy: _env["STRADA_DAEMON_FULL_AUTONOMY"],
     // Provider Routing
-    routingPreset: process.env["ROUTING_PRESET"],
-    routingPhaseSwitching: process.env["ROUTING_PHASE_SWITCHING"],
+    routingPreset: _env["ROUTING_PRESET"],
+    routingPhaseSwitching: _env["ROUTING_PHASE_SWITCHING"],
     // Consensus
-    consensusMode: process.env["CONSENSUS_MODE"],
-    consensusThreshold: process.env["CONSENSUS_THRESHOLD"],
-    consensusMaxProviders: process.env["CONSENSUS_MAX_PROVIDERS"],
+    consensusMode: _env["CONSENSUS_MODE"],
+    consensusThreshold: _env["CONSENSUS_THRESHOLD"],
+    consensusMaxProviders: _env["CONSENSUS_MAX_PROVIDERS"],
     // Auto-Update
-    autoUpdateEnabled: process.env["AUTO_UPDATE_ENABLED"],
-    autoUpdateIntervalHours: process.env["AUTO_UPDATE_INTERVAL_HOURS"],
-    autoUpdateIdleTimeoutMin: process.env["AUTO_UPDATE_IDLE_TIMEOUT_MIN"],
-    autoUpdateChannel: process.env["AUTO_UPDATE_CHANNEL"],
-    autoUpdateNotify: process.env["AUTO_UPDATE_NOTIFY"],
-    autoUpdateAutoRestart: process.env["AUTO_UPDATE_AUTO_RESTART"],
+    autoUpdateEnabled: _env["AUTO_UPDATE_ENABLED"],
+    autoUpdateIntervalHours: _env["AUTO_UPDATE_INTERVAL_HOURS"],
+    autoUpdateIdleTimeoutMin: _env["AUTO_UPDATE_IDLE_TIMEOUT_MIN"],
+    autoUpdateChannel: _env["AUTO_UPDATE_CHANNEL"],
+    autoUpdateNotify: _env["AUTO_UPDATE_NOTIFY"],
+    autoUpdateAutoRestart: _env["AUTO_UPDATE_AUTO_RESTART"],
     // Learning Pipeline v2
-    stradaConfidenceWeights: process.env["STRADA_CONFIDENCE_WEIGHTS"],
-    stradaMaxInstincts: process.env["STRADA_MAX_INSTINCTS"],
-    stradaDetectionWindowSize: process.env["STRADA_DETECTION_WINDOW_SIZE"],
-    stradaPeriodicExtractionInterval: process.env["STRADA_PERIODIC_EXTRACTION_INTERVAL"],
+    stradaConfidenceWeights: _env["STRADA_CONFIDENCE_WEIGHTS"],
+    stradaMaxInstincts: _env["STRADA_MAX_INSTINCTS"],
+    stradaDetectionWindowSize: _env["STRADA_DETECTION_WINDOW_SIZE"],
+    stradaPeriodicExtractionInterval: _env["STRADA_PERIODIC_EXTRACTION_INTERVAL"],
     // Supervisor Brain
-    stradaSupervisorEnabled: process.env["SUPERVISOR_ENABLED"],
-    stradaSupervisorComplexityThreshold: process.env["SUPERVISOR_COMPLEXITY_THRESHOLD"],
-    stradaSupervisorMaxParallelNodes: process.env["SUPERVISOR_MAX_PARALLEL_NODES"],
-    stradaSupervisorNodeTimeoutMs: process.env["SUPERVISOR_NODE_TIMEOUT_MS"],
-    stradaSupervisorVerificationMode: process.env["SUPERVISOR_VERIFICATION_MODE"],
-    stradaSupervisorVerificationBudgetPct: process.env["SUPERVISOR_VERIFICATION_BUDGET_PCT"],
-    stradaSupervisorTriageProvider: process.env["SUPERVISOR_TRIAGE_PROVIDER"],
-    stradaSupervisorMaxFailureBudget: process.env["SUPERVISOR_MAX_FAILURE_BUDGET"],
-    stradaSupervisorDiversityCap: process.env["SUPERVISOR_DIVERSITY_CAP"],
+    stradaSupervisorEnabled: _env["SUPERVISOR_ENABLED"],
+    stradaSupervisorComplexityThreshold: _env["SUPERVISOR_COMPLEXITY_THRESHOLD"],
+    stradaSupervisorMaxParallelNodes: _env["SUPERVISOR_MAX_PARALLEL_NODES"],
+    stradaSupervisorNodeTimeoutMs: _env["SUPERVISOR_NODE_TIMEOUT_MS"],
+    stradaSupervisorVerificationMode: _env["SUPERVISOR_VERIFICATION_MODE"],
+    stradaSupervisorVerificationBudgetPct: _env["SUPERVISOR_VERIFICATION_BUDGET_PCT"],
+    stradaSupervisorTriageProvider: _env["SUPERVISOR_TRIAGE_PROVIDER"],
+    stradaSupervisorMaxFailureBudget: _env["SUPERVISOR_MAX_FAILURE_BUDGET"],
+    stradaSupervisorDiversityCap: _env["SUPERVISOR_DIVERSITY_CAP"],
   };
 }
 
@@ -3176,95 +3217,108 @@ function loadFromEnv(): EnvVars {
 
 let cachedConfig: Config | null = null;
 
+/** Active env source — overridable for testing via loadConfig(envOverride) */
+let _env: Record<string, string | undefined> = process.env;
+
 /**
- * Load and validate configuration from environment
+ * Load and validate configuration from environment.
+ * Pass an env override map (e.g. in tests) to read from that map instead of process.env.
+ * When an override is provided the result is NOT cached.
  */
-export function loadConfig(): Config {
-  if (cachedConfig) return cachedConfig;
+export function loadConfig(envOverride?: Record<string, string | undefined>): Config {
+  if (!envOverride && cachedConfig) return cachedConfig;
 
-  const raw = loadFromEnv();
-  const validation = validateConfig(raw);
+  const prevEnv = _env;
+  _env = envOverride ?? process.env;
+  try {
+    const raw = loadFromEnv();
+    const validation = validateConfig(raw);
 
-  if (validation.kind === "invalid") {
-    const errors = validation.errors.map((e) => `  - ${e.path}: ${e.message}`).join("\n");
-    throw new Error(`Invalid configuration:\n${errors}`);
+    if (validation.kind === "invalid") {
+      const errors = validation.errors.map((e) => `  - ${e.path}: ${e.message}`).join("\n");
+      throw new Error(`Invalid configuration:\n${errors}`);
+    }
+
+    const config = validation.value;
+
+    // Validate project path
+    const pathResult = validateProjectPath(config.unityProjectPath);
+    if (pathResult.kind === "err") {
+      throw new Error(pathResult.error);
+    }
+
+    // Apply system preset if configured (env vars override preset values)
+    const presetName = _env["SYSTEM_PRESET"];
+    const preset = presetName ? getPreset(presetName) : undefined;
+    if (presetName && !preset) {
+      throw new Error(
+        `Invalid SYSTEM_PRESET "${presetName}". Valid values: free, budget, balanced, performance, premium`,
+      );
+    }
+
+    // Parse per-provider model overrides (manual env > preset > defaults)
+    const providerModels: Record<string, string> = {};
+    if (preset) {
+      Object.assign(providerModels, preset.providerModels);
+    }
+    for (const p of [
+      "openai",
+      "deepseek",
+      "qwen",
+      "kimi",
+      "minimax",
+      "groq",
+      "mistral",
+      "together",
+      "fireworks",
+      "gemini",
+      "claude",
+      "ollama",
+    ]) {
+      const val = _env[`${p.toUpperCase()}_MODEL`];
+      if (val) providerModels[p] = val;
+    }
+
+    // Update with resolved path + preset overrides
+    // Preset overrides must be applied to the correct nested config paths
+    const presetRagOverrides = preset ? {
+      ...(!_env["EMBEDDING_PROVIDER"] ? { provider: preset.embeddingProvider } : {}),
+      ...(!_env["EMBEDDING_MODEL"] ? { model: preset.embeddingModel } : {}),
+      ...(!_env["EMBEDDING_BASE_URL"] && preset.embeddingBaseUrl ? { baseUrl: preset.embeddingBaseUrl } : {}),
+    } : {};
+    const presetDelegationTierOverrides = preset ? {
+      ...(!_env["DELEGATION_TIER_LOCAL"] ? { local: preset.delegationTierLocal } : {}),
+      ...(!_env["DELEGATION_TIER_CHEAP"] ? { cheap: preset.delegationTierCheap } : {}),
+      ...(!_env["DELEGATION_TIER_STANDARD"] ? { standard: preset.delegationTierStandard } : {}),
+      ...(!_env["DELEGATION_TIER_PREMIUM"] ? { premium: preset.delegationTierPremium } : {}),
+    } : {};
+
+    const resolved: Config = {
+      ...config,
+      unityProjectPath: pathResult.value,
+      providerModels,
+      // Preset fills in defaults; explicit env vars take precedence (already parsed by Zod above)
+      ...(preset && !_env["PROVIDER_CHAIN"] ? { providerChain: preset.providerChain } : {}),
+      // Apply embedding overrides to the nested rag config
+      ...(Object.keys(presetRagOverrides).length > 0 ? {
+        rag: { ...config.rag, ...presetRagOverrides },
+      } : {}),
+      // Apply delegation tier overrides to the nested delegation.tiers config
+      ...(Object.keys(presetDelegationTierOverrides).length > 0 ? {
+        delegation: {
+          ...config.delegation,
+          tiers: { ...config.delegation.tiers, ...presetDelegationTierOverrides },
+        },
+      } : {}),
+    } as Config;
+    if (!envOverride) {
+      cachedConfig = resolved;
+    }
+
+    return resolved;
+  } finally {
+    _env = prevEnv;
   }
-
-  const config = validation.value;
-
-  // Validate project path
-  const pathResult = validateProjectPath(config.unityProjectPath);
-  if (pathResult.kind === "err") {
-    throw new Error(pathResult.error);
-  }
-
-  // Apply system preset if configured (env vars override preset values)
-  const presetName = process.env["SYSTEM_PRESET"];
-  const preset = presetName ? getPreset(presetName) : undefined;
-  if (presetName && !preset) {
-    throw new Error(
-      `Invalid SYSTEM_PRESET "${presetName}". Valid values: free, budget, balanced, performance, premium`,
-    );
-  }
-
-  // Parse per-provider model overrides (manual env > preset > defaults)
-  const providerModels: Record<string, string> = {};
-  if (preset) {
-    Object.assign(providerModels, preset.providerModels);
-  }
-  for (const p of [
-    "openai",
-    "deepseek",
-    "qwen",
-    "kimi",
-    "minimax",
-    "groq",
-    "mistral",
-    "together",
-    "fireworks",
-    "gemini",
-    "claude",
-    "ollama",
-  ]) {
-    const val = process.env[`${p.toUpperCase()}_MODEL`];
-    if (val) providerModels[p] = val;
-  }
-
-  // Update with resolved path + preset overrides
-  // Preset overrides must be applied to the correct nested config paths
-  const presetRagOverrides = preset ? {
-    ...(!process.env["EMBEDDING_PROVIDER"] ? { provider: preset.embeddingProvider } : {}),
-    ...(!process.env["EMBEDDING_MODEL"] ? { model: preset.embeddingModel } : {}),
-    ...(!process.env["EMBEDDING_BASE_URL"] && preset.embeddingBaseUrl ? { baseUrl: preset.embeddingBaseUrl } : {}),
-  } : {};
-  const presetDelegationTierOverrides = preset ? {
-    ...(!process.env["DELEGATION_TIER_LOCAL"] ? { local: preset.delegationTierLocal } : {}),
-    ...(!process.env["DELEGATION_TIER_CHEAP"] ? { cheap: preset.delegationTierCheap } : {}),
-    ...(!process.env["DELEGATION_TIER_STANDARD"] ? { standard: preset.delegationTierStandard } : {}),
-    ...(!process.env["DELEGATION_TIER_PREMIUM"] ? { premium: preset.delegationTierPremium } : {}),
-  } : {};
-
-  const resolved: Config = {
-    ...config,
-    unityProjectPath: pathResult.value,
-    providerModels,
-    // Preset fills in defaults; explicit env vars take precedence (already parsed by Zod above)
-    ...(preset && !process.env["PROVIDER_CHAIN"] ? { providerChain: preset.providerChain } : {}),
-    // Apply embedding overrides to the nested rag config
-    ...(Object.keys(presetRagOverrides).length > 0 ? {
-      rag: { ...config.rag, ...presetRagOverrides },
-    } : {}),
-    // Apply delegation tier overrides to the nested delegation.tiers config
-    ...(Object.keys(presetDelegationTierOverrides).length > 0 ? {
-      delegation: {
-        ...config.delegation,
-        tiers: { ...config.delegation.tiers, ...presetDelegationTierOverrides },
-      },
-    } : {}),
-  } as Config;
-  cachedConfig = resolved;
-
-  return resolved;
 }
 
 /**

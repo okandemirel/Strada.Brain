@@ -117,3 +117,71 @@ export async function initializeOpsMonitoringStage(
     metricsRecorder,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Vault bootstrap helper — wires a UnityProjectVault into the vault registry.
+// Standalone: invoke from the bootstrap orchestrator when ready.
+// ---------------------------------------------------------------------------
+
+import { createHash } from "node:crypto";
+import { UnityProjectVault } from "../../vault/unity-project-vault.js";
+import { discoverUnityRoots } from "../../vault/discovery.js";
+import type { VaultRegistry } from "../../vault/vault-registry.js";
+import type { EmbeddingProvider, VectorStore } from "../../vault/embedding-adapter.js";
+
+export interface InitVaultsInput {
+  config: {
+    vault?: { enabled: boolean; debounceMs?: number; writeHookBudgetMs?: number };
+    unityProjectPath?: string;
+  };
+  vaultRegistry: VaultRegistry;
+  embedding: EmbeddingProvider;
+  vectorStore: VectorStore;
+}
+
+export async function initVaultsFromBootstrap(input: InitVaultsInput): Promise<void> {
+  if (!input.config.vault?.enabled) return;
+  const projectPath = input.config.unityProjectPath;
+  if (!projectPath) return;
+  const roots = await discoverUnityRoots(projectPath);
+  if (!roots) return;
+  const hash = createHash("sha1").update(projectPath).digest("hex").slice(0, 8);
+  const vault = new UnityProjectVault({
+    id: `unity:${hash}`,
+    rootPath: projectPath,
+    embedding: input.embedding,
+    vectorStore: input.vectorStore,
+  });
+  await vault.init();
+  await vault.startWatch(input.config.vault.debounceMs ?? 800);
+  input.vaultRegistry.register(vault);
+}
+
+import { SelfVault } from "../../vault/self-vault.js";
+
+export interface InitSelfVaultInput {
+  config: {
+    vault?: {
+      enabled: boolean;
+      self?: { enabled?: boolean };
+    };
+  };
+  vaultRegistry: VaultRegistry;
+  embedding: EmbeddingProvider;
+  vectorStore: VectorStore;
+  /** Absolute path to the Strada.Brain repo root. */
+  repoRoot: string;
+}
+
+export async function initSelfVaultFromBootstrap(input: InitSelfVaultInput): Promise<void> {
+  if (!input.config.vault?.enabled) return;
+  if (input.config.vault.self?.enabled === false) return;  // explicit opt-out
+  const vault = new SelfVault({
+    id: "self:strada-brain",
+    rootPath: input.repoRoot,
+    embedding: input.embedding,
+    vectorStore: input.vectorStore,
+  });
+  await vault.init();
+  input.vaultRegistry.register(vault);
+}

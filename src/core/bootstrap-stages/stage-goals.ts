@@ -107,6 +107,7 @@ export async function initializeToolRegistryStage(params: {
   metrics: MetricsCollector;
   learningStorage?: LearningStorage;
   metricsStorage?: MetricsStorage;
+  vaultRegistry?: import("../../vault/vault-registry.js").VaultRegistry;
   getIdentityState?: () => import("../../identity/identity-state.js").IdentityState;
 }, deps: ToolRegistryStageDeps = {}): Promise<void> {
   await params.toolRegistry.initialize(params.config, {
@@ -115,6 +116,7 @@ export async function initializeToolRegistryStage(params: {
     metricsCollector: params.metrics,
     learningStorage: params.learningStorage,
     metricsStorage: params.metricsStorage,
+    vaultRegistry: params.vaultRegistry,
     getIdentityState: params.getIdentityState,
     getDaemonStatus: deps.getDaemonStatus,
   });

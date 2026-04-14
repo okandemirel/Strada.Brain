@@ -99,6 +99,7 @@ export interface ToolRegistryOptions {
   metricsCollector?: MetricsCollector;
   learningStorage?: LearningStorage;
   metricsStorage?: MetricsStorage;
+  vaultRegistry?: import("../vault/vault-registry.js").VaultRegistry;
   getIdentityState?: () => import("../identity/identity-state.js").IdentityState;
   getDaemonStatus?: () =>
     | import("../daemon/daemon-types.js").DaemonStatusSnapshot
@@ -461,7 +462,26 @@ export class ToolRegistry {
   // ============================================================================
 
   private registerBuiltinTools(options: ToolRegistryOptions): void {
-    const { memoryManager, ragPipeline, metricsCollector, learningStorage, metricsStorage } = options;
+    const { memoryManager, ragPipeline, metricsCollector, learningStorage, metricsStorage, vaultRegistry } = options;
+
+    // Vault tools (gated on registry presence; bootstrap supplies it when vault.enabled).
+    if (vaultRegistry) {
+      // Lazy-import to avoid a hard dep on the vault module when the feature is disabled.
+      void (async () => {
+        const { VaultInitTool } = await import("../agents/tools/vault-init-tool.js");
+        const { VaultSyncTool } = await import("../agents/tools/vault-sync-tool.js");
+        const { VaultStatusTool } = await import("../agents/tools/vault-status-tool.js");
+        this.register(new VaultInitTool(vaultRegistry) as unknown as ITool, {
+          category: ToolCategories.MEMORY, dangerous: false, readOnly: false,
+        });
+        this.register(new VaultSyncTool(vaultRegistry) as unknown as ITool, {
+          category: ToolCategories.MEMORY, dangerous: false, readOnly: false,
+        });
+        this.register(new VaultStatusTool(vaultRegistry) as unknown as ITool, {
+          category: ToolCategories.MEMORY, dangerous: false, readOnly: true,
+        });
+      })().catch((err) => getLogger().warn("vault tools registration failed", { err }));
+    }
 
     // File operations
     this.register(new FileReadTool(), {
