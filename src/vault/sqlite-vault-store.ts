@@ -142,8 +142,14 @@ export class SqliteVaultStore {
    *          (raw BM25 returns negative-where-best; we negate so callers can sort descending).
    */
   searchFts(query: string, topK: number): Array<{ chunkId: string; score: number }> {
-    const rows = this._stmtSearchFts!.all(query, topK) as { chunk_id: string; raw: number }[];
-    return rows.map((r) => ({ chunkId: r['chunk_id'], score: -r['raw'] }));
+    // CodeRevC2: FTS5 throws on malformed queries — swallow and return [] so the wider
+    // hybrid query() path doesn't unwind on a user's odd search input.
+    try {
+      const rows = this._stmtSearchFts!.all(query, topK) as { chunk_id: string; raw: number }[];
+      return rows.map((r) => ({ chunkId: r['chunk_id'], score: -r['raw'] }));
+    } catch {
+      return [];
+    }
   }
 
   private mapFile(row: Record<string, unknown>): VaultFile {

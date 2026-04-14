@@ -25,6 +25,8 @@ export class VaultWatcher {
     const pollInterval = this.opts.pollIntervalMs ?? 100;
     this.watcher = chokidar.watch(this.opts.root, {
       ignoreInitial: true,
+      // Fix SecH1: symlinks can point outside the vault root; never follow them.
+      followSymlinks: false,
       usePolling: pollInterval > 0,
       interval: pollInterval > 0 ? pollInterval : undefined,
       ignored: (path) => IGNORE_REGEX.test(path.replaceAll('\\', '/')),

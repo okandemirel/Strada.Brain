@@ -408,10 +408,6 @@ export interface BuildProjectContextInput {
   legacyBuildProjectContext?: () => Promise<string>;
 }
 
-function isVaultInput(v: unknown): v is BuildProjectContextInput {
-  return typeof v === 'object' && v !== null && 'config' in v && 'userMessage' in v;
-}
-
 function renderVaultContext(results: Array<{ hits: Array<{ chunk: { path: string; content: string } }> }>): string {
   const lines: string[] = [];
   for (const r of results) {
@@ -441,7 +437,7 @@ Project path: ${arg}
 - If multiple files could match the request, say that and disambiguate before stating a precise fact.
 `;
   }
-  if (!isVaultInput(arg)) throw new Error('buildProjectContext: invalid input');
+  // TS narrows arg to BuildProjectContextInput here (string branch returned above).
   return (async () => {
     if (!arg.config.vault?.enabled) {
       return arg.legacyBuildProjectContext ? await arg.legacyBuildProjectContext() : '';

@@ -16,7 +16,6 @@ export function installWriteHook(opts: WriteHookOptions): InstalledWriteHook {
       const abs = isAbsolute(absOrRelPath) ? absOrRelPath : resolve(opts.vault.rootPath, absOrRelPath);
       const rel = relative(opts.vault.rootPath, abs).replaceAll('\\', '/');
       if (rel.startsWith('..')) return null;
-      const started = Date.now();
       const timeoutPromise = new Promise<'timeout'>((r) => setTimeout(() => r('timeout'), opts.budgetMs));
       const workPromise = opts.vault.reindexFile(rel).then(() => 'ok' as const);
       const outcome = await Promise.race([workPromise, timeoutPromise]);
@@ -24,8 +23,6 @@ export function installWriteHook(opts: WriteHookOptions): InstalledWriteHook {
         void workPromise.catch(() => undefined);
         return `vault may be stale for ${rel} (reindex exceeded ${opts.budgetMs}ms)`;
       }
-      const took = Date.now() - started;
-      if (took > opts.budgetMs) return `vault reindex took ${took}ms for ${rel}`;
       return null;
     },
   };

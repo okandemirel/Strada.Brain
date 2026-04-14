@@ -5,11 +5,11 @@ describe('vault-store', () => {
   beforeEach(() => { useVaultStore.setState({ vaults: [], selected: null, searchResults: [] }); });
 
   it('setVaults replaces the list', () => {
-    useVaultStore.getState().setVaults([{ id: 'a', kind: 'unity-project', rootPath: '/p' }]);
+    useVaultStore.getState().setVaults([{ id: 'a', kind: 'unity-project' }]);
     expect(useVaultStore.getState().vaults).toHaveLength(1);
   });
   it('select picks a vault', () => {
-    useVaultStore.getState().setVaults([{ id: 'a', kind: 'unity-project', rootPath: '/p' }]);
+    useVaultStore.getState().setVaults([{ id: 'a', kind: 'unity-project' }]);
     useVaultStore.getState().select('a');
     expect(useVaultStore.getState().selected).toBe('a');
   });

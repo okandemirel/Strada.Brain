@@ -1,13 +1,13 @@
 import { mkdir, readFile, stat, unlink } from 'node:fs/promises';
 import { mkdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { isAbsolute, join, relative } from 'node:path';
 import { EventEmitter } from 'node:events';
 import { SqliteVaultStore } from './sqlite-vault-store.js';
 import { chunkFile } from './chunker.js';
 import { xxhash64Hex } from './hash.js';
 import { EmbeddingAdapter, type EmbeddingProvider, type VectorStore } from './embedding-adapter.js';
 import { rrfFuse, packByBudget } from './query-pipeline.js';
-import { listIndexableFiles } from './discovery.js';
+import { EXT_LANG, listIndexableFiles } from './discovery.js';
 import type {
   IVault, VaultFile, VaultQuery, VaultQueryResult, VaultStats, VaultId, VaultChunk,
 } from './vault.interface.js';
@@ -25,19 +25,17 @@ interface IVaultWatcher {
   stop(): Promise<void>;
 }
 
+// Strip FTS5 special operators AND boolean keywords that could confuse the parser.
 function escapeFtsQuery(q: string): string {
-  const safe = q.replace(/["*:()]/g, ' ').trim();
-  if (!safe) return '""';
-  return `"${safe}"`;
+  const stripped = q.replace(/["*:()^+\-]/g, ' ').replace(/\b(NOT|AND|OR|NEAR)\b/g, ' ').trim();
+  if (!stripped) return '""';
+  return `"${stripped}"`;
 }
 
 function inferLang(path: string): VaultFile['lang'] {
-  if (path.endsWith('.cs')) return 'csharp';
-  if (path.endsWith('.ts') || path.endsWith('.tsx')) return 'typescript';
-  if (path.endsWith('.md')) return 'markdown';
-  if (path.endsWith('.json')) return 'json';
-  if (path.endsWith('.hlsl') || path.endsWith('.shader') || path.endsWith('.cginc')) return 'hlsl';
-  return 'unknown';
+  const dot = path.lastIndexOf('.');
+  const ext = dot >= 0 ? path.slice(dot).toLowerCase() : '';
+  return EXT_LANG[ext] ?? 'unknown';
 }
 
 function globToRegex(glob: string): RegExp {
@@ -145,15 +143,20 @@ export class UnityProjectVault implements IVault {
     for (const f of files) {
       if (lastIndexedAt === null || f.indexedAt > lastIndexedAt) lastIndexedAt = f.indexedAt;
     }
-    const fsMod = await import('node:fs/promises');
-    const st = await fsMod.stat(this.dbPath).catch(() => null);
+    const st = await stat(this.dbPath).catch(() => null);
     return { fileCount: files.length, chunkCount, lastIndexedAt, dbBytes: st?.size ?? 0 };
   }
 
   listFiles(): VaultFile[] { return this.store.listFiles(); }
 
   async readFile(relPath: string): Promise<string> {
-    return await readFile(join(this.rootPath, relPath), 'utf8');
+    // Fix SecC1: confine to vault root — reject anything that resolves outside.
+    const abs = join(this.rootPath, relPath);
+    const rel = relative(this.rootPath, abs);
+    if (rel.startsWith('..') || isAbsolute(rel)) {
+      throw new Error(`path escapes vault root: ${relPath}`);
+    }
+    return await readFile(abs, 'utf8');
   }
 
   onUpdate(listener: (p: { vaultId: VaultId; changedPaths: string[] }) => void): () => void {
@@ -230,16 +233,16 @@ export class UnityProjectVault implements IVault {
   }
 
   private async reindexChanged(): Promise<number> {
-    // Fix C2: delegate to reindexFile (which has the hash short-circuit from Fix C1),
-    // eliminating the duplicate file read that existed in the old implementation.
+    // Fix CodeRevC1: capture the pre-scan state of the DB BEFORE we reindex,
+    // so deletion detection compares apples to apples even if reindexFile mutates store mid-loop.
+    const before = new Set(this.store.listFiles().map((f) => f.path));
     const files = await listIndexableFiles(this.rootPath);
     const changed: string[] = [];
     for (const f of files) {
       if (await this.reindexFile(f.path)) changed.push(f.path);
     }
-    const existing = new Set(this.store.listFiles().map((f) => f.path));
     const present = new Set(files.map((f) => f.path));
-    for (const p of existing) {
+    for (const p of before) {
       if (!present.has(p)) { this.store.deleteFile(p); changed.push(p); }
     }
     if (changed.length) this.emitter.emit('update', { vaultId: this.id, changedPaths: changed });

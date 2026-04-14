@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 
-export interface VaultSummary { id: string; kind: string; rootPath: string; }
+export interface VaultSummary { id: string; kind: string; }
 export interface SearchHit {
   chunk: { chunkId: string; path: string; startLine: number; endLine: number; content: string; tokenCount: number };
   scores: { fts: number | null; hnsw: number | null; rrf: number };

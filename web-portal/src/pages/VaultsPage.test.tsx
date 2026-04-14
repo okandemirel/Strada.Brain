@@ -17,7 +17,7 @@ describe('VaultsPage', () => {
 
   it('lists registered vaults', () => {
     useVaultStore.setState({
-      vaults: [{ id: 'unity:abc', kind: 'unity-project', rootPath: '/p' }],
+      vaults: [{ id: 'unity:abc', kind: 'unity-project' }],
       selected: null,
       searchResults: [],
     });

@@ -9,11 +9,19 @@ export interface UnityRoots {
 }
 
 const IGNORE = new Set(['Library', 'Temp', 'Logs', 'obj', 'bin', '.git', 'node_modules', '.strada']);
-const EXT_LANG: Record<string, VaultFile['lang']> = {
+
+export const EXT_LANG: Record<string, VaultFile['lang']> = {
   '.cs': 'csharp', '.ts': 'typescript', '.tsx': 'typescript',
   '.md': 'markdown', '.json': 'json',
   '.hlsl': 'hlsl', '.shader': 'hlsl', '.cginc': 'hlsl',
 };
+
+// SecH4: block .json files that typically contain secrets. Checked against the basename (case-insensitive).
+const JSON_SECRET_BASENAME = /^(appsettings.*|\.env.*|secrets?.*|credentials?.*|.*\.secrets\..*|.*\.credentials\..*)\.json$/i;
+
+export function isSecretLikeJson(basename: string): boolean {
+  return JSON_SECRET_BASENAME.test(basename);
+}
 
 export async function discoverUnityRoots(root: string): Promise<UnityRoots | null> {
   const required = ['Assets', 'ProjectSettings/ProjectVersion.txt', 'Packages/manifest.json'];
@@ -40,6 +48,7 @@ async function walk(root: string, dir: string, out: VaultFile[]): Promise<void> 
     } else if (e.isFile()) {
       const lang = EXT_LANG[extname(e.name).toLowerCase()];
       if (!lang) continue;
+      if (lang === 'json' && isSecretLikeJson(e.name)) continue;
       const st = await stat(full);
       out.push({
         path: relative(root, full).replaceAll('\\', '/'),

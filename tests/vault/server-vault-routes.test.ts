@@ -21,11 +21,37 @@ const fakeVault = {
 const reg = { list: () => [fakeVault], get: (id: string) => id === 'unity:abc' ? fakeVault : undefined } as any;
 
 describe('vault routes', () => {
-  it('GET /api/vaults lists vaults', async () => {
+  it('GET /api/vaults lists vaults (without rootPath)', async () => {
     const app = makeFakeApp();
     registerVaultRoutes(app as any, reg);
     const r = await app.routes['GET /api/vaults']({}, {});
     expect(r.items[0]).toMatchObject({ id: 'unity:abc', kind: 'unity-project' });
+    // SecC2: rootPath MUST NOT leak to clients
+    expect(r.items[0]).not.toHaveProperty('rootPath');
+  });
+
+  it('POST /search rejects non-string text', async () => {
+    const app = makeFakeApp();
+    registerVaultRoutes(app as any, reg);
+    const r = await app.routes['POST /api/vaults/:id/search']({ params: { id: 'unity:abc' }, body: { text: 123 } }, {});
+    expect(r.error).toMatch(/invalid text/i);
+  });
+
+  it('POST /search caps topK at 100', async () => {
+    const app = makeFakeApp();
+    const recorded: any[] = [];
+    const vault = { ...fakeVault, query: async (q: any) => { recorded.push(q); return { hits: [], budgetUsed: 0, truncated: false }; } };
+    const localReg = { get: () => vault } as any;
+    registerVaultRoutes(app as any, localReg);
+    await app.routes['POST /api/vaults/:id/search']({ params: { id: 'unity:abc' }, body: { text: 'x', topK: 9999 } }, {});
+    expect(recorded[0].topK).toBeLessThanOrEqual(100);
+  });
+
+  it('file: URL-encoded traversal blocked', async () => {
+    const app = makeFakeApp();
+    registerVaultRoutes(app as any, reg);
+    const r = await app.routes['GET /api/vaults/:id/file']({ params: { id: 'unity:abc' }, query: { path: '%2e%2e/etc' } }, {});
+    expect(r.error).toMatch(/invalid/i);
   });
 
   it('GET /api/vaults/:id/tree returns files', async () => {
