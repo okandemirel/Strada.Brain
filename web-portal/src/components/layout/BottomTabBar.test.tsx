@@ -32,10 +32,10 @@ describe('BottomTabBar', () => {
     vi.clearAllMocks()
   })
 
-  it('renders 4 mode tabs', () => {
+  it('renders 5 mode tabs', () => {
     renderWithRouter()
     const buttons = screen.getAllByRole('button')
-    expect(buttons).toHaveLength(4)
+    expect(buttons).toHaveLength(5)
   })
 
   it('Chat tab label is visible', () => {
