@@ -570,6 +570,45 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   let agentManager: AgentManagerType | undefined;
   let agentBudgetTrackerOuter: AgentBudgetTrackerType | undefined;
   let delegationManager: DelegationManagerType | undefined;
+  // Vault (Phase 1): create registry + initialize UnityProjectVault when enabled.
+  // The vault tools are wired into the tool registry below via the same options object.
+  const { VaultRegistry } = await import("../vault/vault-registry.js");
+  const vaultRegistry = new VaultRegistry();
+  if (config.vault?.enabled && cachedEmbeddingProvider) {
+    try {
+      const { initVaultsFromBootstrap } = await import("./bootstrap-stages/stage-knowledge.js");
+      // Bridge CachedEmbeddingProvider (returns {embeddings, usage}) → vault EmbeddingProvider (returns Float32Array[])
+      const vaultEmbedding = {
+        model: "cached", dim: cachedEmbeddingProvider.dimensions,
+        async embed(texts: string[]) {
+          const result = await cachedEmbeddingProvider.embed(texts);
+          return result.embeddings.map((e: number[]) => Float32Array.from(e));
+        },
+      };
+      // In-memory VectorStore for Phase 1; Phase 2 wires the real HNSW backing store.
+      let nextId = 1;
+      const vaultStore = new Map<number, { v: Float32Array; payload: unknown }>();
+      const vaultVectorStore = {
+        add(v: Float32Array, payload: unknown): number { const id = nextId++; vaultStore.set(id, { v, payload }); return id; },
+        remove(id: number): void { vaultStore.delete(id); },
+        search(_q: Float32Array, k: number) {
+          return [...vaultStore.entries()].slice(0, k).map(([id, r]) => ({ id, score: 1, payload: r.payload }));
+        },
+      };
+      await initVaultsFromBootstrap({
+        config: { vault: config.vault, unityProjectPath: config.unityProjectPath },
+        vaultRegistry,
+        embedding: vaultEmbedding,
+        vectorStore: vaultVectorStore,
+      });
+    } catch (err) {
+      logger.warn("[vault] bootstrap initialization failed", { err });
+    }
+  }
+
+  // Hand the vault registry to the dashboard server so HTTP routes can resolve it.
+  if (dashboard) dashboard.registerVaultRegistry(vaultRegistry);
+
   await initializeToolRegistryStage(
     {
       toolRegistry,
@@ -579,6 +618,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       metrics,
       learningStorage: learningResult.storage,
       metricsStorage,
+      vaultRegistry,
       getIdentityState: identityManager ? () => identityManager!.getState() : undefined,
     },
     {
@@ -684,6 +724,8 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     taskExecutionStore,
     runtimeArtifactManager,
     toolMetadataByName: toolRegistry.getMetadataMap(),
+    vaultRegistry,
+    vaultWriteHookBudgetMs: config.vault?.writeHookBudgetMs,
     providerRouter,
     modelIntelligence,
     consensusManager,

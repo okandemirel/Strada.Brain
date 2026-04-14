@@ -58,6 +58,7 @@ import { handlePersonalityRoutes } from "./server-personality-routes.js";
 import { handleSettingsRoutes } from "./server-settings-routes.js";
 import { handleSkillsRoutes } from "./server-skills-routes.js";
 import { handleSystemRoutes } from "./server-system-routes.js";
+import { handleVaultRoutes } from "./server-vault-routes.js";
 
 
 // Re-export types that external consumers depend on
@@ -181,6 +182,7 @@ export class DashboardServer {
 
   // Skill management context
   private skillManager?: DashboardSkillManager;
+  private vaultRegistry?: import("../vault/vault-registry.js").VaultRegistry;
 
   // Budget management context
   private unifiedBudgetManager?: UnifiedBudgetManager;
@@ -401,6 +403,14 @@ export class DashboardServer {
   }
 
   /**
+   * Register the vault registry for /api/vaults/* endpoints.
+   * Call from bootstrap after VaultRegistry is constructed (vault.enabled gate).
+   */
+  registerVaultRegistry(registry: import("../vault/vault-registry.js").VaultRegistry): void {
+    this.vaultRegistry = registry;
+  }
+
+  /**
    * Register the WebSocket dashboard server for real-time event push.
    * Call after WebSocketDashboardServer is initialized to enable budget event forwarding.
    */
@@ -511,6 +521,7 @@ export class DashboardServer {
 
       // Skills
       skillManager: this.skillManager,
+      vaultRegistry: this.vaultRegistry,
 
       // Budget
       unifiedBudgetManager: this.unifiedBudgetManager,
@@ -621,6 +632,9 @@ export class DashboardServer {
       // Personality and user routes: personality, personality/profiles, personality/switch,
       // user/autonomous
       if (handlePersonalityRoutes(url, method, req, res, ctx)) return;
+
+      // Vault routes (Phase 1): /api/vaults/* — no-op when registry not in ctx.
+      if (handleVaultRoutes(url, method, req, res, ctx)) return;
 
       // Skills routes: skills, skills/registry, skills/install, skills/:name/enable|disable
       if (handleSkillsRoutes(url, method, req, res, ctx)) return;

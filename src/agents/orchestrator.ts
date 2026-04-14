@@ -637,6 +637,9 @@ export function buildUserContent(
  * Manages conversation sessions per chat and routes tool calls.
  */
 export class Orchestrator {
+  private readonly vaultRegistry?: import("../vault/vault-registry.js").VaultRegistry;
+  private readonly vaultWriteHookBudgetMs: number = 200;
+  private vaultWriteHook: import("../vault/write-hook.js").InstalledWriteHook | null = null;
   private readonly providerManager: ProviderManager;
   private readonly tools: Map<string, ITool>;
   private readonly toolDefinitions: Array<{
@@ -843,8 +846,15 @@ export class Orchestrator {
     getSkillEntries?: () => readonly SkillEntry[];
     /** Hard cap on iterations for delegated sub-agents (overrides config if lower). */
     maxIterations?: number;
+    /** Vault registry — when present, file-write tools trigger a budget-aware reindex of the touched file. */
+    vaultRegistry?: import("../vault/vault-registry.js").VaultRegistry;
+    /** Vault write-hook budget in ms (Phase 1 default 200). */
+    vaultWriteHookBudgetMs?: number;
   }) {
     this.providerManager = opts.providerManager;
+    // Vault write-hook lazy-binds when the first Edit/Write tool runs.
+    this.vaultRegistry = opts.vaultRegistry;
+    this.vaultWriteHookBudgetMs = opts.vaultWriteHookBudgetMs ?? 200;
     this.channel = opts.channel;
     this.projectPath = opts.projectPath;
     this.readOnly = opts.readOnly;
@@ -6466,6 +6476,12 @@ export class Orchestrator {
       try {
         const result = await tool.execute(activeToolCall.input, toolContext);
         this.metrics?.recordToolCall(activeToolCall.name, Date.now() - toolStart, !result.isError, result.isError ? String(result.content).slice(0, 200) : undefined);
+        // Vault write-hook (Phase 1): on successful Edit/Write tool calls,
+        // trigger a budget-aware reindex of the touched file so the next turn's
+        // vault-backed context reflects the just-written change.
+        if (!result.isError && this.vaultRegistry) {
+          await this.maybeFireVaultWriteHook(activeToolCall.name, activeToolCall.input);
+        }
         if (!result.isError && activeToolCall.name !== "ask_user") {
           this.askUserBlockCounts.delete(chatId);
         }
@@ -6879,6 +6895,43 @@ export class Orchestrator {
     responseText: string;
   }): Promise<void> {
     return runReactiveGoalDecompositionHelper(this.goalDecompositionDeps, opts);
+  }
+
+  /**
+   * Best-effort vault write-hook trigger after an Edit/Write tool succeeds.
+   * Lazily binds to the first registered unity-project vault. Failures are
+   * non-fatal — the orchestrator must not block on vault staleness.
+   */
+  private async maybeFireVaultWriteHook(
+    toolName: string,
+    input: unknown,
+  ): Promise<void> {
+    if (!this.vaultRegistry) return;
+    if (!/^(Edit|Write|file_edit|file_write)$/i.test(toolName)) return;
+    const path = this.extractWriteToolPath(input);
+    if (!path) return;
+    if (!this.vaultWriteHook) {
+      const target = this.vaultRegistry.list().find((v) => v.kind === 'unity-project');
+      if (!target) return;
+      const { installWriteHook } = await import("../vault/write-hook.js");
+      this.vaultWriteHook = installWriteHook({
+        vault: target as Parameters<typeof installWriteHook>[0]['vault'],
+        budgetMs: this.vaultWriteHookBudgetMs,
+      });
+    }
+    try { await this.vaultWriteHook.afterWrite(path); }
+    catch { /* swallow — staleness is recoverable on next watcher tick */ }
+  }
+
+  private extractWriteToolPath(input: unknown): string | null {
+    if (!input || typeof input !== 'object') return null;
+    const o = input as Record<string, unknown>;
+    const candidates = ['file_path', 'path', 'filePath', 'filename'];
+    for (const k of candidates) {
+      const v = o[k];
+      if (typeof v === 'string' && v.length > 0) return v;
+    }
+    return null;
   }
 
 }

@@ -1,5 +1,7 @@
+import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { VaultRegistry } from '../vault/vault-registry.js';
 import { getLoggerSafe } from '../utils/logger.js';
+import { sendJson, sendJsonError, type RouteContext } from './server-types.js';
 
 export interface RouteApp {
   get(path: string, handler: (req: any, res: any) => any): void;
@@ -73,6 +75,83 @@ export function registerVaultRoutes(app: RouteApp, registry: VaultRegistry): voi
     const v = registry.get(req.params.id);
     return v ? await v.sync() : { error: 'not found' };
   });
+}
+
+/**
+ * DashboardServer handler-pattern adapter for the vault routes.
+ * Mirrors handleSkillsRoutes / handleSystemRoutes shape so it can be wired
+ * the same way from server.ts. Returns true when the route matched.
+ */
+export function handleVaultRoutes(
+  url: string,
+  method: string,
+  req: IncomingMessage,
+  res: ServerResponse,
+  ctx: RouteContext,
+): boolean {
+  if (!url.startsWith('/api/vaults')) return false;
+  const registry = ctx.vaultRegistry;
+  if (!registry) {
+    sendJsonError(res, 503, 'vault subsystem not enabled');
+    return true;
+  }
+
+  const pathOnly = url.split('?')[0]!;
+  const u = new URL(url, 'http://localhost');
+
+  // GET /api/vaults
+  if (pathOnly === '/api/vaults' && method === 'GET') {
+    sendJson(res, { items: registry.list().map((v) => ({ id: v.id, kind: v.kind })) });
+    return true;
+  }
+
+  // /api/vaults/:id/{stats,tree,file,search,sync}
+  const m = pathOnly.match(/^\/api\/vaults\/([^/]+)\/(stats|tree|file|search|sync)$/);
+  if (!m) return false;
+  const [, id, op] = m;
+  const vault = registry.get(decodeURIComponent(id!));
+  if (!vault) { sendJsonError(res, 404, 'vault not found'); return true; }
+
+  if (op === 'stats' && method === 'GET') {
+    void vault.stats().then((s) => sendJson(res, s)).catch(() => sendJsonError(res, 500, 'stats failed'));
+    return true;
+  }
+  if (op === 'tree' && method === 'GET') {
+    sendJson(res, { items: vault.listFiles().map((f) => ({ path: f.path, lang: f.lang })) });
+    return true;
+  }
+  if (op === 'file' && method === 'GET') {
+    const p = u.searchParams.get('path');
+    if (isUnsafePath(p)) { sendJsonError(res, 400, 'invalid path'); return true; }
+    void vault.readFile(p!).then((body) => sendJson(res, { body }))
+      .catch(() => sendJsonError(res, 400, 'invalid path'));
+    return true;
+  }
+  if (op === 'search' && method === 'POST') {
+    void readJsonBody(req).then(async (body: { text?: unknown; topK?: unknown }) => {
+      const rawText = body?.text;
+      if (typeof rawText !== 'string') { sendJsonError(res, 400, 'invalid text'); return; }
+      const text = rawText.slice(0, MAX_QUERY_TEXT_CHARS);
+      const topK = coerceTopK(body?.topK);
+      const result = await vault.query({ text, topK });
+      sendJson(res, result);
+    }).catch(() => sendJsonError(res, 500, 'search failed'));
+    return true;
+  }
+  if (op === 'sync' && method === 'POST') {
+    void vault.sync().then((r) => sendJson(res, r)).catch(() => sendJsonError(res, 500, 'sync failed'));
+    return true;
+  }
+
+  return false;
+}
+
+async function readJsonBody(req: IncomingMessage): Promise<any> {
+  const chunks: Buffer[] = [];
+  for await (const c of req) chunks.push(c as Buffer);
+  const raw = Buffer.concat(chunks).toString('utf8');
+  if (!raw) return {};
+  try { return JSON.parse(raw); } catch { return {}; }
 }
 
 export interface WsBroadcaster { broadcast(msg: string): void; }
