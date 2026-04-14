@@ -8,6 +8,7 @@ import { xxhash64Hex } from './hash.js';
 import { EmbeddingAdapter, type EmbeddingProvider, type VectorStore } from './embedding-adapter.js';
 import { rrfFuse, packByBudget } from './query-pipeline.js';
 import { EXT_LANG, listIndexableFiles } from './discovery.js';
+import { getLoggerSafe } from '../utils/logger.js';
 import type {
   IVault, VaultFile, VaultQuery, VaultQueryResult, VaultStats, VaultId, VaultChunk,
 } from './vault.interface.js';
@@ -186,7 +187,7 @@ export class UnityProjectVault implements IVault {
           try {
             if (await this.reindexFile(p)) changed.push(p);
           } catch (err) {
-            console.warn(`[vault ${this.id}] reindexFile failed for ${p}:`, err);
+            getLoggerSafe().warn(`[vault ${this.id}] reindexFile failed for ${p}`, { err });
           }
         }
         if (changed.length) this.emitter.emit('update', { vaultId: this.id, changedPaths: changed });

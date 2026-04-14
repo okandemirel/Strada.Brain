@@ -11,6 +11,9 @@ export default function VaultFilesTab() {
   const [body, setBody] = useState<string>('');
 
   useEffect(() => {
+    // M3: reset selection when switching vaults so stale path from previous vault isn't re-fetched.
+    setPath(null);
+    setBody('');
     if (!selected) return;
     fetch(`/api/vaults/${encodeURIComponent(selected)}/tree`)
       .then((r) => r.json()).then((d) => setFiles(d.items ?? [])).catch(() => setFiles([]));

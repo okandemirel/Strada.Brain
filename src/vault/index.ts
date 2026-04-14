@@ -1,1 +1,11 @@
 export * from './vault.interface.js';
+export { VaultRegistry } from './vault-registry.js';
+export { UnityProjectVault, type UnityVaultDeps } from './unity-project-vault.js';
+export { SqliteVaultStore } from './sqlite-vault-store.js';
+export { EmbeddingAdapter, type EmbeddingProvider, type VectorStore, type ChunkToEmbed } from './embedding-adapter.js';
+export { VaultWatcher, type VaultWatcherOptions } from './watcher.js';
+export { installWriteHook, type WriteHookOptions, type InstalledWriteHook } from './write-hook.js';
+export { discoverUnityRoots, listIndexableFiles, EXT_LANG, type UnityRoots } from './discovery.js';
+export { chunkFile } from './chunker.js';
+export { xxhash64Hex, chunkIdFor } from './hash.js';
+export { rrfFuse, packByBudget, type Ranked, type Fused } from './query-pipeline.js';

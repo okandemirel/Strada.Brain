@@ -9,7 +9,8 @@ CREATE TABLE IF NOT EXISTS vault_files (
   size        INTEGER NOT NULL,
   lang        TEXT NOT NULL,
   kind        TEXT NOT NULL,
-  indexed_at  INTEGER NOT NULL
+  indexed_at  INTEGER NOT NULL,
+  merkle_dir  TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS vault_chunks (

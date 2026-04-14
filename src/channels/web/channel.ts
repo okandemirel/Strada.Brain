@@ -1714,6 +1714,7 @@ export class WebChannel
     "/api/chat/",
     "/api/monitor/", "/api/settings/",
     "/api/daemon/approvals/",
+    "/api/vaults", // vault feature (Phase 1)
   ];
 
   /** Paths that accept POST or DELETE in addition to GET. */
@@ -1735,6 +1736,10 @@ export class WebChannel
     "/api/personality/profiles/",
     "/api/canvas", "/api/skills/",
     "/api/settings/", "/api/monitor/",
+    // Vault POSTs are scoped under /api/vaults/:id/{search,sync}. They mutate nothing
+    // in the user's project — search is read-only; sync is an agent-initiated
+    // reindex that only rewrites the internal SQLite index. No CSRF amplification.
+    "/api/vaults/",
   ];
 
   private getSingleHeader(

@@ -1,4 +1,5 @@
 import type { VaultRegistry } from '../vault/vault-registry.js';
+import { getLoggerSafe } from '../utils/logger.js';
 
 export interface RouteApp {
   get(path: string, handler: (req: any, res: any) => any): void;
@@ -84,7 +85,7 @@ export function wireVaultUpdatesToWs(registry: VaultRegistry, wss: WsBroadcaster
       try {
         wss.broadcast(JSON.stringify({ type: 'vault:update', payload }));
       } catch (err) {
-        console.warn('[vault] WS broadcast failed:', err);
+        getLoggerSafe().warn('[vault] WS broadcast failed', { err });
       }
     });
     offs.push(off);
