@@ -196,6 +196,8 @@ export class FrameworkSyncPipeline {
         return this.stradaDeps.modulesPath;
       case "mcp":
         return this.stradaDeps.mcpPath;
+      default:
+        return null;
     }
   }
 

@@ -18,7 +18,7 @@ import { validateDrift, formatDriftReport } from "./strada-drift-validator.js";
 import { createExtractor } from "./framework/framework-extractor-factory.js";
 import { FRAMEWORK_PACKAGE_CONFIGS } from "./framework/framework-package-configs.js";
 import { validateFrameworkDrift, formatFrameworkDriftReport } from "./framework/framework-drift.js";
-import type { FrameworkPackageId } from "./framework/framework-types.js";
+import type { FrameworkPackageId, LegacyFrameworkPackageId } from "./framework/framework-types.js";
 
 interface SyncOptions {
   corePath: string;
@@ -32,8 +32,8 @@ interface SyncOptions {
   gitFallback?: boolean;
 }
 
-/** Map of env vars / default sibling paths for each package */
-const PACKAGE_PATH_ENV: Record<FrameworkPackageId, string> = {
+/** Map of env vars / default sibling paths for each legacy Strada package */
+const PACKAGE_PATH_ENV: Record<LegacyFrameworkPackageId, string> = {
   core: "STRADA_CORE_PATH",
   modules: "STRADA_MODULES_PATH",
   mcp: "STRADA_MCP_PATH",
@@ -213,7 +213,8 @@ function resolvePackagePath(
   pkgId: FrameworkPackageId,
   corePathOpt: string,
 ): string | null {
-  // 1. Environment variable
+  // 1. Environment variable (only defined for legacy Strada packages)
+  if (pkgId !== "core" && pkgId !== "modules" && pkgId !== "mcp") return null;
   const envVar = PACKAGE_PATH_ENV[pkgId];
   const envValue = process.env[envVar];
   if (envValue) {
