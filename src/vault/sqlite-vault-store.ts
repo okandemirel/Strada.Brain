@@ -164,6 +164,16 @@ export class SqliteVaultStore {
     };
   }
 
+  listTableNamesForTest(): string[] {
+    const rows = this.db.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all() as { name: string }[];
+    return rows.map((r) => r.name);
+  }
+
+  getMeta(key: string): string | null {
+    const row = this.db.prepare('SELECT value FROM vault_meta WHERE key = ?').get(key) as { value: string } | undefined;
+    return row?.value ?? null;
+  }
+
   // Fix 4: idempotent close — no-op if already closed.
   close(): void {
     if (this.db.open) this.db.close();
