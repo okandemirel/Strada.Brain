@@ -27,6 +27,7 @@ vi.mock("./agents/context/strada-knowledge.js", () => ({
   })),
   buildDepsContext: vi.fn().mockReturnValue(""),
   buildCapabilityManifest: vi.fn().mockReturnValue(""),
+  buildToolUsageHints: vi.fn().mockReturnValue(""),
 }));
 
 const defaultCapabilities = {

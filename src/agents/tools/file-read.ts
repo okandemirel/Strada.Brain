@@ -4,6 +4,7 @@ import { validatePath } from "../../security/path-guard.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "./tool.interface.js";
 import { FILE_LIMITS } from "../../common/constants.js";
 import type { IVault, VaultChunk } from "../../vault/vault.interface.js";
+import { getLoggerSafe } from "../../utils/logger.js";
 
 const MAX_FILE_SIZE = FILE_LIMITS.MAX_FILE_SIZE;
 const MAX_LINES = FILE_LIMITS.MAX_LINES;
@@ -363,7 +364,7 @@ function scheduleReindex(vault: IVault, vaultRelPath: string): void {
     // sec-L3: previously swallowed silently. Staleness is recoverable on the
     // next watcher tick, but we still want operators to see the failure.
     const msg = err instanceof Error ? err.message : String(err);
-    console.warn(`[vault] reindex failed for ${vaultRelPath} (vault=${vault.id}): ${msg}`);
+    getLoggerSafe().warn(`[vault] reindex failed for ${vaultRelPath} (vault=${vault.id}): ${msg}`);
   });
 }
 
