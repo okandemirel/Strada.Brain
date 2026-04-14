@@ -5,8 +5,11 @@
  * from Strada.Core, Strada.Modules, and Strada.MCP packages.
  */
 
-/** Identifies which Strada package a snapshot belongs to */
-export type FrameworkPackageId = "core" | "modules" | "mcp";
+/** Legacy union of known Strada package identifiers (kept for exhaustive-switch sites) */
+export type LegacyFrameworkPackageId = "core" | "modules" | "mcp";
+
+/** Identifies which Strada package a snapshot belongs to (open-ended string for extensibility into user Unity vaults) */
+export type FrameworkPackageId = string;
 
 /** Source language determines which parser to use */
 export type SourceLanguage = "csharp" | "typescript";
