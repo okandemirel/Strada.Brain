@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, cpSync, rmSync } from 'node:fs';
+import { mkdtempSync, cpSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { UnityProjectVault } from '../../src/vault/unity-project-vault.js';
@@ -73,5 +73,16 @@ describe('UnityProjectVault', () => {
     await vault.init();
     const r = await vault.sync();
     expect(r.changed).toBe(0);
+  });
+
+  it('reindexes files added after startWatch', async () => {
+    await vault.init();
+    await vault.startWatch(150);
+    writeFileSync(join(dir, 'Assets/Scripts/Boss.cs'), 'namespace Game { public class Boss : MonoBehaviour { public void Roar() {} } }');
+    // Polling + debounce + FS settle = generous wait
+    await new Promise((r) => setTimeout(r, 1500));
+    const res = await vault.query({ text: 'Boss', topK: 5 });
+    expect(res.hits.some((h) => h.chunk.path.endsWith('Boss.cs'))).toBe(true);
+    await vault.stopWatch();
   });
 });
