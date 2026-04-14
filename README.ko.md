@@ -322,6 +322,49 @@ strada skill search <쿼리>            # 레지스트리 검색
 
 ---
 
+## 코드베이스 메모리 Vault (Codebase Memory Vault)
+
+**요청마다 파일을 다시 읽지 않습니다.** Codebase Memory Vault는 프로젝트별 영구 코드베이스 메모리 계층으로, **하이브리드 검색(BM25 + 벡터)** + **심볼릭 검색(호출/임포트 그래프 위의 PPR)** 을 결합해 가장 관련 있는 코드 조각만 토큰 예산 안에 담아 에이전트에 전달합니다. Unity 프로젝트와 Strada.Brain 자체 소스(SelfVault) 모두를 이해하며, **토큰 사용량을 극적으로 줄입니다**.
+
+**왜 중요한가요?** 전통적인 방식은 매 요청마다 수백 개 파일을 새로 읽습니다. Vault는 한 번 색인하고, 변경분만 증분 갱신하며(chokidar 800ms debounce + 쓰기 후크 200ms), `xxhash64` 해시로 내용이 같은 파일은 재임베딩조차 하지 않습니다. 결과적으로 대규모 프로젝트에서도 응답이 빠르고 저렴합니다.
+
+**Phase 1 — 하이브리드 검색:**
+- 프로젝트별 SQLite: `<project>/.strada/vault/index.db` (better-sqlite3, WAL + FK)
+- 테이블: `vault_files`, `vault_chunks`, `vault_chunks_fts` (FTS5/BM25), `vault_embeddings` (HNSW 포인터), `vault_meta`
+- **Reciprocal Rank Fusion** (k=60) 으로 BM25와 벡터 결과를 융합
+- `packByBudget` 으로 토큰 예산에 맞춰 청크 그리디 패킹
+- 3가지 갱신 경로: chokidar watcher, write-hook, 수동 `/vault sync`
+
+**Phase 2 — 심볼 그래프, PPR, SelfVault, Graph UI:**
+- TypeScript · C# 용 Tree-sitter WASM 추출기 + 마크다운 wikilink 파서 (`src/vault/symbol-extractor/`)
+- 심볼 ID: `<lang>::<relPath>::<qualifiedName>` (예: `csharp::Assets/Scripts/Player.cs::Game.Player.Move`)
+- `.strada/vault/graph.canvas` — JSON Canvas 1.0, 콜드 스타트/sync/watcher drain 시 재생성
+- **Personalized PageRank** — `focusFiles` 가 주어지면 PPR 로 호출/임포트 그래프 위에서 재순위
+- **SelfVault** — Strada.Brain 자신의 `src/`, `web-portal/src/`, `tests/`, `docs/`, `AGENTS.md`, `CLAUDE.md` 를 색인
+- 포털 **Graph** 탭: `@xyflow/react` + `@dagrejs/dagre` 기반 인터랙티브 호출 그래프
+
+**빠른 시작:**
+
+```bash
+export STRADA_VAULT_ENABLED=true
+npm start
+
+/vault init /path/to/unity/project   # Vault 등록 및 초기 색인
+/vault sync                           # 수동 전체 재색인
+/vault status                         # 파일 · 청크 · 심볼 수 확인
+```
+
+**설정 (`config.vault`):**
+- `enabled: false` (env: `STRADA_VAULT_ENABLED=true`)
+- `writeHookBudgetMs: 200`, `debounceMs: 800`, `embeddingFallback: 'local'`
+- `self.enabled: true` — SelfVault 활성 여부
+
+**포털 UI** (`/admin/vaults`): **Files** 탭(트리 + 미리보기), **Search** 탭(하이브리드 쿼리), **Graph** 탭(심볼 그래프 시각화).
+
+**전체 가이드:** [docs/vault.ko.md](docs/vault.ko.md) · [docs/vault.md](docs/vault.md) (영문)
+
+---
+
 ## 아키텍처
 
 ```

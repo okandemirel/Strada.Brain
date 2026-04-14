@@ -40,6 +40,16 @@ npm run doctor             # Diagnose setup issues
 - **Channel Isolation**: Each channel adapter implements a common interface, sessions are isolated per-channel
 - **Provider Agnostic**: LLM calls go through a unified provider layer supporting 6+ providers
 
+## Codebase Memory Vault
+
+When `config.vault.enabled=true`, the **Codebase Memory Vault** is how agents should search the codebase — do not re-read files per request. The vault provides persistent hybrid (BM25 + vector) and symbolic (PPR over a call/import graph) retrieval backed by SQLite (`<project>/.strada/vault/index.db`), auto-maintained by a chokidar watcher, a write-hook, and manual sync.
+
+- Use `vault_init` to attach a project path and build its vault
+- Use `vault_sync` to force a full reindex after large external changes
+- Use `vault_status` to confirm a vault is healthy and up to date before relying on its results
+
+**SelfVault** is bootstrapped automatically at startup and indexes Strada.Brain's own source (`src/`, `web-portal/src/`, `tests/`, `docs/`, `AGENTS.md`, `CLAUDE.md`), so agents can search their own code with the same tools. Prefer vault queries over repeated `Read`/`Grep` cycles on the same files. See [docs/vault.md](docs/vault.md) for the full reference.
+
 ## Code Style & Conventions
 
 - TypeScript strict mode, ESM imports only (no CommonJS `require`)

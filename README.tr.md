@@ -329,6 +329,61 @@ Web portal `/admin/skills` adresinde bir **Market** sekmesi icerir. Topluluk kay
 
 ---
 
+## Codebase Memory Vault
+
+Proje basina kalici kod tabani bellegi. Her istekte dosyalari bastan okumak yerine Strada.Brain sizin Unity projenizi (ve kendi kaynak kodunu) **hatirlar**: hibrit (BM25 + vector) ve sembolik (call / import grafigi uzerinde Personalized PageRank) arama saglar, watcher ve write-hook ile canli tutar, bagli parcalari token butcesine gore paketler. Sonuc: daha az token, daha isabetli baglam, oturumlar arasinda kaybolmayan proje bilgisi.
+
+v4.2.69 (PR #11) ile iki fazda geldi:
+
+**Phase 1 — Hibrit geri getirim:**
+- Proje basina SQLite: `<proje>/.strada/vault/index.db` (WAL + foreign keys)
+- `vault_files`, `vault_chunks`, `vault_chunks_fts` (FTS5 BM25), `vault_embeddings` (HNSW), `vault_meta`
+- Hibrit retrieval: BM25 + HNSW vector, **Reciprocal Rank Fusion (k=60)**, `packByBudget` ile token farkindalikli paketleme
+- Uc guncelleme yolu: chokidar watcher (800ms debounce), write-hook (200ms senkron butce), manuel `/vault sync`
+- **Hash short-circuit** (xxhash64) — degismemis dosyalar yeniden embed edilmez
+- Agent araclari: `vault_init`, `vault_sync`, `vault_status`
+
+**Phase 2 — Sembol grafigi, PPR, SelfVault, Graph UI:**
+- Yeni tablolar: `vault_symbols`, `vault_edges`, `vault_wikilinks` (`vault_meta.indexer_version='phase2.v1'`)
+- Tree-sitter WASM extractor'lari: **TypeScript, C#, Markdown** (wikilinks)
+- Sembol ID formati: `<lang>::<relPath>::<qualifiedName>` (orn. `csharp::Assets/Scripts/Player.cs::Game.Player.Move`)
+- `.strada/vault/graph.canvas` — JSON Canvas 1.0, atomik (temp + rename) yaziliyor
+- **Personalized PageRank** — `focusFiles` verildiginde hibrit sonuclari grafta yeniden siralar
+- **SelfVault** — Strada.Brain kendi kaynagini indeksler (`src/`, `web-portal/src/`, `tests/`, `docs/`, `AGENTS.md`, `CLAUDE.md`); symlink'ler guvenlik icin atlanir
+- Yeni HTTP uc noktalar: `GET /api/vaults/:id/canvas`, `/symbols/by-name?q=X`, `/symbols/:id/callers`
+- Portal `/admin/vaults` uzerinde **Graph** sekmesi (`@xyflow/react` + `@dagrejs/dagre`)
+
+### Hizli baslangic
+
+```bash
+export STRADA_VAULT_ENABLED=true
+npm start
+```
+
+Sohbette (hangi kanali kullaniyorsaniz):
+
+```
+/vault init /unity/projenin/yolu
+/vault sync
+/vault status
+```
+
+`vault.enabled=true` ise **SelfVault** baslangicta otomatik yuklenir.
+
+### Yapilandirma
+
+| Alan | Varsayilan | Env | Aciklama |
+|------|-----------|-----|----------|
+| `vault.enabled` | `false` | `STRADA_VAULT_ENABLED` | Vault alt sistemini ac/kapat |
+| `vault.writeHookBudgetMs` | `200` | `STRADA_VAULT_WRITE_HOOK_BUDGET_MS` | Write-hook senkron butcesi |
+| `vault.debounceMs` | `800` | `STRADA_VAULT_DEBOUNCE_MS` | Watcher debounce |
+| `vault.embeddingFallback` | `'local'` | — | `'none'` veya `'local'` |
+| `vault.self.enabled` | `true` | — | SelfVault'u kapatmak icin `false` |
+
+Detayli referans: [docs/vault.tr.md](docs/vault.tr.md) (Ingilizce: [docs/vault.md](docs/vault.md)). Kaynak kod: [`src/vault/`](src/vault/).
+
+---
+
 ## Mimari
 
 ```

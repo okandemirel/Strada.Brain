@@ -422,6 +422,48 @@ Das aktive Speicher-Backend ist `AgentDBMemory` -- SQLite mit HNSW-Vektorindizie
 
 ---
 
+## Codebase Memory Vault
+
+Der **Codebase Memory Vault** ist eine persistente, projektspezifische Gedaechtnisschicht, die das wiederholte Einlesen derselben Dateien pro Anfrage durch eine vorindexierte hybride (BM25 + Vektor) und symbolische (PPR ueber Call-/Import-Graph) Suche ersetzt. Der Vault versteht sowohl Unity-Projekte als auch Strada.Brains eigenen Quellcode (**SelfVault**) und liefert damit **massive Token-Einsparungen** bei gleichzeitig besserer Code-Navigation.
+
+Ausfuehrliche Doku: [docs/vault.de.md](docs/vault.de.md) — vollstaendige deutsche Anleitung mit Architektur, HTTP-API, Portal-UI und Sicherheits-Hardening.
+
+**Highlights:**
+
+- **Hybrid-Suche (Phase 1)** — BM25 (FTS5) + HNSW-Vektoren fusioniert via Reciprocal Rank Fusion (k = 60), token-budgetiertes Chunk-Packing, xxhash64-Short-Circuit.
+- **Symbolgraph (Phase 2)** — Tree-sitter WASM-Extraktoren fuer TypeScript, C# und Markdown-Wikilinks; Personalized PageRank re-ranked Ergebnisse entlang des Call-/Import-Graphs, wenn `focusFiles` gesetzt ist.
+- **SelfVault** — Strada.Brain indexiert seinen eigenen Quellcode (`src/`, `web-portal/src/`, `tests/`, `docs/`), um sich selbst besser zu erweitern und zu debuggen.
+- **Drei Update-Pfade** — chokidar-Watcher (800 ms Debounce) fuer FS-Aenderungen, Write-Hook (200 ms Budget) fuer Agent-Writes, manueller `/vault sync` fuer Full-Reindex.
+- **Storage pro Projekt** — `<project>/.strada/vault/index.db` (SQLite, WAL + FK) plus `graph.canvas` (JSON Canvas 1.0).
+- **Portal-UI** — `/admin/vaults` mit **Files**-, **Search**- und **Graph**-Tab (via `@xyflow/react` + `@dagrejs/dagre`, keine neuen Frontend-Abhaengigkeiten).
+- **Security-Hardened** — atomare Canvas-Writes, Symlink-Skip, Request-Body-DoS-Cap, orphaned-Edge-GC, normalized PPR-Damping, 2 MB Extraktions-Cap, bounded `findCallers`.
+
+**Schnellstart:**
+
+```bash
+export STRADA_VAULT_ENABLED=true
+npm start
+
+# Im Chat
+/vault init /path/to/unity/project
+/vault sync
+/vault status
+```
+
+**Konfiguration** (`config.vault`, Default aus):
+
+| Schluessel | Default | Zweck |
+|------------|---------|-------|
+| `enabled` | `false` | Master-Schalter (`STRADA_VAULT_ENABLED=true`) |
+| `writeHookBudgetMs` | `200` | Max. synchroner Write-Hook in ms |
+| `debounceMs` | `800` | chokidar-Debounce in ms |
+| `embeddingFallback` | `'local'` | Lokaler Fallback, wenn Provider fehlschlaegt |
+| `self.enabled` | `true` | SelfVault aktivieren |
+
+**Phase 3 (in Planung):** Haiku-basierte Rolling Summaries, FrameworkVault-Upgrade mit semantischer Suche + Docstring-Extraktion, bidirektionale Kopplung mit der Lernpipeline.
+
+---
+
 ## Lernsystem
 
 Das Lernsystem beobachtet das Agentenverhalten und lernt aus Fehlern durch eine ereignisgesteuerte Pipeline.

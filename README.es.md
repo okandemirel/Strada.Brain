@@ -423,6 +423,55 @@ El backend de memoria activo es `AgentDBMemory` -- SQLite con indexacion vectori
 
 ---
 
+## Codebase Memory Vault
+
+El **Codebase Memory Vault** es memoria de codebase persistente y por proyecto que reemplaza la relectura de archivos en cada solicitud con busqueda hibrida (BM25 + vectorial) y simbolica (Personalized PageRank sobre el grafo de llamadas/imports). Entiende proyectos Unity y el propio codigo de Strada.Brain via **SelfVault**. Ahorros de tokens dramaticos en cada turno.
+
+Introducido en **v4.2.69** (PR #11, 2026-04-14). Guia completa: [docs/vault.es.md](docs/vault.es.md).
+
+**Fase 1 — Recuperacion hibrida:**
+- SQLite por vault en `<proyecto>/.strada/vault/index.db` (better-sqlite3, WAL + FK)
+- Tablas: `vault_files`, `vault_chunks`, `vault_chunks_fts` (FTS5/BM25), `vault_embeddings` (puntero HNSW), `vault_meta`
+- BM25 + vectores fusionados via Reciprocal Rank Fusion (k = 60)
+- Packing por presupuesto de tokens (`packByBudget`)
+- Tres caminos de actualizacion: watcher chokidar (debounce 800 ms), write-hook (presupuesto 200 ms), `/vault sync` manual
+- Short-circuit por hash xxhash64 — archivos sin cambios nunca se re-embeden
+- Herramientas: `vault_init`, `vault_sync`, `vault_status`
+- Portal `/admin/vaults`: pestanas Files y Search
+- HTTP `/api/vaults/*`, evento WS `vault:update`
+
+**Fase 2 — Grafo de simbolos, PPR, SelfVault, Graph UI:**
+- Nuevas tablas `vault_symbols`, `vault_edges`, `vault_wikilinks`; `vault_meta.indexer_version = 'phase2.v1'`
+- Extractores Tree-sitter WASM para TypeScript y C#; regex para wikilinks Markdown
+- Formato de Symbol ID: `<lang>::<relPath>::<qualifiedName>` (externs: `<lang>::unresolved::<label>`)
+- `.strada/vault/graph.canvas` (JSON Canvas 1.0), regenerado en cold start / `/vault sync` / drain del watcher
+- **Personalized PageRank** re-rankea cuando `VaultQuery.focusFiles` esta presente
+- **SelfVault** indexa `src/`, `web-portal/src/`, `tests/`, `docs/`, `AGENTS.md`, `CLAUDE.md` (omite symlinks)
+- Endpoints nuevos: `GET /api/vaults/:id/canvas`, `GET /api/vaults/:id/symbols/by-name?q=X`, `GET /api/vaults/:id/symbols/:symbolId/callers`
+- Portal gana pestana Graph via `@xyflow/react` + `@dagrejs/dagre`
+
+**Configuracion (`config.vault`):**
+- `enabled: false` por defecto — activa con `STRADA_VAULT_ENABLED=true`
+- `writeHookBudgetMs: 200`, `debounceMs: 800`, `embeddingFallback: 'local'`, `self.enabled: true`
+
+**Inicio rapido:**
+
+```bash
+export STRADA_VAULT_ENABLED=true
+npm start
+
+# En el chat:
+/vault init /ruta/a/tu/proyecto/unity
+/vault sync
+/vault status
+```
+
+**Endurecimiento de seguridad (commit `5563d48`):** escrituras atomicas del canvas, skip de symlinks, parser fresco por llamada, cap del body de request (DoS), GC de aristas huerfanas, damping PPR normalizado, cap 2 MB en extraccion de simbolos, invalidacion de cache de aristas, cota superior en `findCallers`.
+
+**Hoja de ruta Fase 3:** resumenes rolling con Haiku, upgrade de FrameworkVault (busqueda semantica + extraccion de docstrings), acoplamiento bidireccional con el pipeline de Learning.
+
+---
+
 ## Sistema de Aprendizaje
 
 El sistema de aprendizaje observa el comportamiento del agente y aprende de los errores a traves de un pipeline orientado a eventos.

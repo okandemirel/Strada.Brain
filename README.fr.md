@@ -322,6 +322,56 @@ Le portail web inclut un onglet **Marketplace** dans `/admin/skills` pour parcou
 
 ---
 
+## Codebase Memory Vault
+
+Le **Codebase Memory Vault** est une memoire de code persistante, par projet, qui remplace la relecture des fichiers a chaque requete par une recuperation hybride (BM25 + vecteurs) et symbolique (Personalized PageRank sur un graphe d'appels / imports). Resultat : des economies massives de tokens et un raisonnement cross-fichier (appelants, imports, wikilinks) sans re-grep. Le vault comprend a la fois les projets Unity et la source de Strada.Brain elle-meme via le **SelfVault**.
+
+Le vault est opt-in (`STRADA_VAULT_ENABLED=true`) et vit dans `<project>/.strada/vault/index.db` (SQLite en WAL, `better-sqlite3`).
+
+### Phase 1 — Recuperation hybride
+
+- SQLite par vault : `vault_files`, `vault_chunks`, `vault_chunks_fts` (FTS5 / BM25), `vault_embeddings` (pointeur HNSW), `vault_meta`.
+- Fusion BM25 + vecteurs par **Reciprocal Rank Fusion** (k = 60), puis packing par budget de tokens (`packByBudget`).
+- Trois chemins de mise a jour : watcher chokidar (debounce 800 ms), write-hook (budget 200 ms), `/vault sync` manuel.
+- Court-circuit xxhash64 pour les fichiers inchanges (pas de re-embedding).
+- Outils exposes a l'agent : `vault_init`, `vault_sync`, `vault_status`.
+
+### Phase 2 — Graphe de symboles, PPR, SelfVault, Graph UI
+
+- Nouvelles tables : `vault_symbols`, `vault_edges`, `vault_wikilinks` ; `vault_meta.indexer_version='phase2.v1'`.
+- Extracteurs Tree-sitter WASM (TypeScript, C#, Markdown wikilinks) dans `src/vault/symbol-extractor/`, avec une nouvelle instance `Parser` par appel.
+- Identifiants de symboles `<lang>::<relPath>::<qualifiedName>` ; les externes non resolus utilisent `<lang>::unresolved::<label>`.
+- **graph.canvas** (JSON Canvas 1.0) regenere au cold start, sur `/vault sync` et a la purge du watcher ; ecritures atomiques.
+- **Personalized PageRank** (`src/vault/ppr.ts`) re-classe les resultats quand `VaultQuery.focusFiles` est defini.
+- **SelfVault** (`src/vault/self-vault.ts`) indexe la source de Strada.Brain (`src/`, `web-portal/src/`, `tests/`, `docs/`, `AGENTS.md`, `CLAUDE.md`) ; les liens symboliques sont ignores.
+- Onglet **Graph** dans `/admin/vaults` via `@xyflow/react` + `@dagrejs/dagre` (sans nouvelle dependance frontend).
+- Nouveaux endpoints : `GET /api/vaults/:id/canvas`, `GET /api/vaults/:id/symbols/by-name?q=X`, `GET /api/vaults/:id/symbols/:symbolId/callers`, evenement WS `vault:update`.
+
+### Demarrage rapide
+
+```bash
+export STRADA_VAULT_ENABLED=true
+npm start
+```
+
+Dans n'importe quel canal :
+
+```
+/vault init /chemin/vers/projet/unity
+/vault sync
+/vault status
+```
+
+Le portail expose Files / Search / Graph sur `/admin/vaults`.
+
+### Feuille de route
+
+La Phase 3 prevoit des resumes deroulants Haiku, la montee en puissance du FrameworkVault et un couplage bidirectionnel avec le pipeline Learning.
+
+Documentation complete : [`docs/vault.fr.md`](docs/vault.fr.md) (version anglaise canonique : [`docs/vault.md`](docs/vault.md)). Source : [`src/vault/`](src/vault/).
+
+---
+
 ## Architecture
 
 ```

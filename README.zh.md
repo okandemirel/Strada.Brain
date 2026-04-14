@@ -612,6 +612,53 @@ Strada.Brain 检测 [Strada.MCP](https://github.com/okandemirel/Strada.MCP)（Un
 
 ---
 
+## Codebase Memory Vault / 代码库内存 Vault
+
+**代码库内存 Vault** 是 Strada.Brain 的持久化、按项目粒度的代码库记忆子系统。它用**混合检索**（BM25 + 向量）+ **符号图检索**（基于调用/导入图的 Personalized PageRank）取代了每次请求时重新阅读整个项目的做法，可以显著降低 token 消耗。同时支持 Unity 项目和 Strada.Brain 自身源码（SelfVault）。
+
+**Phase 1 — 混合检索**
+- 每个 Vault 独立的 SQLite 索引：`<project>/.strada/vault/index.db`（better-sqlite3，WAL + 外键）
+- 表：`vault_files`、`vault_chunks`、`vault_chunks_fts`（FTS5/BM25）、`vault_embeddings`（HNSW 指针）、`vault_meta`
+- BM25 + 向量通过 **Reciprocal Rank Fusion**（k = 60）融合
+- `packByBudget` 按 token 预算贪心打包 chunk
+- 三条更新路径：chokidar watcher（800 ms debounce）、write-hook（200 ms 预算）、手动 `/vault sync`
+- xxhash64 内容哈希短路：未变更的文件不会重新 embed
+- 工具：`vault_init`、`vault_sync`、`vault_status`
+- 门户 `/admin/vaults`：Files 标签、Search 标签
+- HTTP `/api/vaults/*`，WebSocket 事件 `vault:update`
+
+**Phase 2 — 符号图、PPR、SelfVault、Graph UI**
+- 新增表：`vault_symbols`、`vault_edges`、`vault_wikilinks`；`vault_meta.indexer_version = 'phase2.v1'`
+- Tree-sitter WASM 抽取器：TypeScript、C#、Markdown wikilink（`src/vault/symbol-extractor/`）
+- 符号 ID：`<lang>::<relPath>::<qualifiedName>`（例如 `csharp::Assets/Scripts/Player.cs::Game.Player.Move`）；无法解析的外部引用使用 `<lang>::unresolved::<label>`
+- `.strada/vault/graph.canvas` — JSON Canvas 1.0，在冷启动、`/vault sync` 和 watcher drain 时重新生成（原子写入）
+- Personalized PageRank（`src/vault/ppr.ts`）：当 `VaultQuery.focusFiles` 提供时重排结果；未提供时保留纯 RRF 行为
+- **SelfVault**（`src/vault/self-vault.ts`）：索引 Strada.Brain 本体源代码；跳过符号链接
+- 新增 HTTP 接口：`GET /api/vaults/:id/canvas`、`GET /api/vaults/:id/symbols/by-name?q=X`、`GET /api/vaults/:id/symbols/:symbolId/callers`
+- 门户 Graph 标签页使用 `@xyflow/react` + `@dagrejs/dagre`（无新增前端依赖）
+
+**配置**（`config.vault`）：`enabled` 默认 `false`（通过 `STRADA_VAULT_ENABLED=true` 启用）；`writeHookBudgetMs: 200`、`debounceMs: 800`、`embeddingFallback: 'local'`、`self.enabled: true`。
+
+**快速开始：**
+
+```bash
+export STRADA_VAULT_ENABLED=true
+npm start
+
+# 在代理会话里：
+/vault init /path/to/unity/project
+/vault sync
+/vault status
+```
+
+**安全加固**（commit `5563d48`）：canvas 原子写入、跳过符号链接、每次调用全新 Parser、请求体 DoS 上限、孤立边 GC、归一化 PPR 阻尼、2 MB 符号抽取上限、边缓存失效、有界 `findCallers`。
+
+**Phase 3 路线图**：Haiku 滚动摘要、FrameworkVault 语义检索升级、与 Learning pipeline 的双向耦合。
+
+详细文档见 [docs/vault.zh.md](docs/vault.zh.md)（英文：[docs/vault.md](docs/vault.md)）；源代码位于 [`src/vault/`](src/vault/)。
+
+---
+
 ## 守护进程模式
 
 守护进程提供 24/7 自主运行，采用心跳驱动的触发系统。当守护进程模式激活时，**Agent Core OODA 循环** 在守护进程的心跳周期内运行，在用户交互之间观察环境并主动采取行动。`/autonomous on` 命令现在会传播到 DaemonSecurityPolicy，启用完全自主运行而无需逐操作审批提示。

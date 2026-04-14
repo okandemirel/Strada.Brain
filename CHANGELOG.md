@@ -139,6 +139,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - README tool descriptions now reflect `BurstSystem` scaffolding instead of the old `SystemGroup` wording
 - Intelligence documentation now describes the deep-parser-based analyzer and the Strada API drift pipeline
 
+---
+
+## [4.2.69] - 2026-04-14 — Codebase Memory Vault (Phase 1 + Phase 2)
+
+### Added
+- **Codebase Memory Vault — Phase 1 (Hybrid Retrieval)**: Persistent per-project codebase memory at `<project>/.strada/vault/index.db` (`better-sqlite3`, WAL + foreign_keys). Tables: `vault_files`, `vault_chunks`, `vault_chunks_fts` (FTS5/BM25), `vault_embeddings` (HNSW pointer), `vault_meta`. Hybrid retrieval fuses BM25 and vector recall via Reciprocal Rank Fusion (k=60), with token-budget-aware greedy packing (`packByBudget`). Three update paths: chokidar watcher (default 800ms debounce), write-hook (`installWriteHook`, 200ms sync budget) for Strada.Brain's own tool writes, and manual `/vault sync` for full reindex. xxhash64 content hashes short-circuit unchanged files (no re-embed). Language-aware chunking via `chunker.ts`, per-file kind detection via `discovery.ts`. Tools `vault_init`, `vault_sync`, and `vault_status` registered with the agent tool registry. Portal `/admin/vaults` exposes Files (tree + markdown/raw preview) and Search (hybrid query) tabs. HTTP surface at `/api/vaults/*`; WebSocket event `vault:update` broadcasts dirty-set batches
+- **Codebase Memory Vault — Phase 2 (Symbol Graph + PPR + SelfVault + Graph UI)**: Adds a deterministic L2 symbol layer on top of Phase 1's L3 hybrid search. New tables `vault_symbols`, `vault_edges`, `vault_wikilinks` in `schema.sql`; `vault_meta.indexer_version='phase2.v1'`. Tree-sitter WASM extractors for TypeScript and C# (`src/vault/symbol-extractor/`) plus a regex wikilink extractor for markdown. Symbol IDs use `<lang>::<relPath>::<qualifiedName>` (e.g. `csharp::Assets/Scripts/Player.cs::Game.Player.Move`); unresolved externs use `<lang>::unresolved::<label>`. `.strada/vault/graph.canvas` (JSON Canvas 1.0) regenerated atomically on cold start, `/vault sync`, and watcher drain. Personalized PageRank (`src/vault/ppr.ts`) re-ranks hybrid results when `VaultQuery.focusFiles` is set; the RRF-only path is preserved when omitted. **SelfVault** (`src/vault/self-vault.ts`) indexes Strada.Brain's own source automatically (`src/`, `web-portal/src/`, `tests/`, `docs/`, `AGENTS.md`, `CLAUDE.md`); symlinks are skipped. Three new HTTP endpoints: `GET /api/vaults/:id/canvas`, `GET /api/vaults/:id/symbols/by-name?q=X`, `GET /api/vaults/:id/symbols/:symbolId/callers`. Portal `/admin/vaults` gains a **Graph** tab rendering `graph.canvas` via `@xyflow/react` + `@dagrejs/dagre` (no new frontend dependencies)
+- **Vault Configuration**: `config.vault.enabled` (default `false`, env `STRADA_VAULT_ENABLED`), `config.vault.writeHookBudgetMs` (default 200, env `STRADA_VAULT_WRITE_HOOK_BUDGET_MS`), `config.vault.debounceMs` (default 800, env `STRADA_VAULT_DEBOUNCE_MS`), `config.vault.embeddingFallback` (`'none' | 'local'`, default `'local'`), `config.vault.self.enabled` (default `true`, opt out of SelfVault)
+- **Vault Documentation**: New authoritative reference at `docs/vault.md` covering overview, quick start, three-layer architecture (L1 file metadata → L2 symbol graph → L3 hybrid chunks), Phase 1 and Phase 2 details, configuration reference, HTTP API shapes, portal UI guide, security posture, and Phase 3 roadmap
+
+### Security
+- **Atomic canvas writes**: `graph.canvas` is written via temp file + rename; no partial-write reads
+- **Symlink-skip in SelfVault discovery**: prevents directory escape via symlinks pointing outside the repo
+- **Fresh tree-sitter Parser per call**: concurrency safety; no shared parser state
+- **Search endpoint maxBytes cap**: request body capped to prevent DoS
+- **Orphaned edge GC**: edges referencing deleted files are removed on reindex
+- **PPR damping normalization**: stationary distribution sums to 1 (no drift or bias)
+- **2 MB cap on symbol extraction per file**: bounds memory/CPU per parse
+- **Edge cache invalidation on `reindexFile`**: prevents stale graph state
+- **Bounded `findCallers` results**: no unbounded graph walks
+
 ## [4.1.0] - 2026-03-13 — Deep Audit & Embedding Upgrade
 
 ### Added

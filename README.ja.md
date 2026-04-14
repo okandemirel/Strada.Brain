@@ -285,6 +285,78 @@ Webポータルは、shadcn/ui および [21st.dev](https://21st.dev) と [Magic
 
 ---
 
+## Codebase Memory Vault / コードベース メモリ Vault
+
+**プロジェクト単位の永続的なコードベースメモリ**。Strada.Brain はこれまで、タスクごとに必要なファイルを毎回読み直していました。Vault は「毎ターン読み直す」モデルを、**一度だけインデックスし、以降は hybrid + symbolic 検索で問い合わせる**モデルに置き換え、大幅なトークン削減とレイテンシ改善をもたらします。
+
+Unity プロジェクトと Strada.Brain 自身のソースコードを同じ抽象の下で扱えます。
+
+### 仕組み
+
+Vault は **3 層構造のコードベースメモリ**として動作します。
+
+- **L1 — ファイル metadata**: パス、xxhash64 ハッシュ、mtime、言語、kind
+- **L2 — シンボルグラフ**: シンボル定義、call / import / wikilink エッジ、Personalized PageRank による focus-aware re-rank
+- **L3 — Hybrid chunks**: BM25 (FTS5) + 密ベクトル (HNSW) を Reciprocal Rank Fusion (k = 60) で融合した chunk レベル検索
+
+各 vault は `<project>/.strada/vault/index.db`（better-sqlite3、WAL + FK 有効）に永続化され、**chokidar watcher（800 ms デバウンス） + write-hook（200 ms 予算） + 手動 `/vault sync`** の 3 経路で最新状態に保たれます。xxhash64 のコンテンツハッシュにより、変更のないファイルは short-circuit で再 embedding をスキップします。
+
+### Phase 1: ハイブリッド検索
+
+- SQLite テーブル: `vault_files`、`vault_chunks`、`vault_chunks_fts`（FTS5/BM25）、`vault_embeddings`（HNSW ポインタ）、`vault_meta`
+- RRF 融合 + トークン予算配慮の `packByBudget` による greedy pack
+- Tools: `vault_init`、`vault_sync`、`vault_status`（agent tool registry に登録）
+- ポータル `/admin/vaults` に **Files タブ / Search タブ**
+- HTTP `/api/vaults/*`、WebSocket イベント `vault:update`
+
+### Phase 2: シンボルグラフ + PPR + SelfVault + Graph UI
+
+- 新テーブル: `vault_symbols`、`vault_edges`、`vault_wikilinks`、`vault_meta.indexer_version = 'phase2.v1'`
+- tree-sitter WASM 抽出器: TypeScript、C#、Markdown wikilinks（`src/vault/symbol-extractor/`）
+- Symbol ID 形式: `<lang>::<relPath>::<qualifiedName>`（例: `csharp::Assets/Scripts/Player.cs::Game.Player.Move`）。未解決 extern は `<lang>::unresolved::<label>`
+- `.strada/vault/graph.canvas` — **JSON Canvas 1.0** 形式のグラフファイル。cold start / `/vault sync` / watcher drain で再生成
+- **Personalized PageRank** (`src/vault/ppr.ts`) — `VaultQuery.focusFiles` 指定時に edge graph 上で re-rank。未指定時は RRF-only パス（ゼロオーバーヘッド）
+- **SelfVault** (`src/vault/self-vault.ts`) — Strada.Brain 自身のソース（`src/`、`web-portal/src/`、`tests/`、`docs/`、`AGENTS.md`、`CLAUDE.md`）を自動 index。symlink はスキップ
+- 新エンドポイント: `GET /api/vaults/:id/canvas`、`/symbols/by-name?q=X`、`/symbols/:symbolId/callers`
+- ポータル **Graph タブ** — `graph.canvas` を `@xyflow/react` + `@dagrejs/dagre` でレンダリング（新規フロント依存ゼロ）
+
+### クイックスタート
+
+```bash
+# Vault サブシステムを有効化
+export STRADA_VAULT_ENABLED=true
+npm start
+
+# Unity プロジェクトを登録
+/vault init /path/to/unity/project
+/vault sync
+/vault status
+```
+
+SelfVault は `vault.enabled=true` のとき自動で bootstrap されます。
+
+### 設定 (`config.vault`)
+
+| キー | デフォルト | 環境変数 |
+|------|-----------|----------|
+| `enabled` | `false` | `STRADA_VAULT_ENABLED` |
+| `writeHookBudgetMs` | `200` | `STRADA_VAULT_WRITE_HOOK_BUDGET_MS` |
+| `debounceMs` | `800` | `STRADA_VAULT_DEBOUNCE_MS` |
+| `embeddingFallback` | `'local'` | — |
+| `self.enabled` | `true` | — |
+
+### セキュリティハードニング（Phase 2 レビュー、commit `5563d48`）
+
+Atomic canvas writes（tmpfile → rename）、SelfVault の symlink スキップ、呼び出しごとに fresh な tree-sitter Parser、リクエストボディ maxBytes DoS cap、orphaned edge GC、正規化済み PPR damping、2MB シンボル抽出 cap、edge cache invalidation、`findCallers` の探索上限。
+
+### ロードマップ（Phase 3）
+
+Claude Haiku による rolling summary、FrameworkVault アップグレード（semantic 検索 + docstring 抽出）、Learning pipeline との双方向連携。
+
+詳細は [docs/vault.ja.md](docs/vault.ja.md)（日本語）または [docs/vault.md](docs/vault.md)（英語正本）を参照してください。
+
+---
+
 ## スキルエコシステム
 
 スキルはStrada.Brainに追加できるオプションの機能パッケージです。各スキルは`SKILL.md`マニフェストとツール実装を含むディレクトリです。

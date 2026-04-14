@@ -399,6 +399,49 @@ The web portal includes a **Marketplace** tab at `/admin/skills` where you can b
 
 ---
 
+## Codebase Memory Vault
+
+Persistent, per-project codebase memory that replaces per-request file re-reading with hybrid (BM25 + vector) and symbolic (Personalized PageRank over a call/import graph) retrieval. The vault lets Strada.Brain "know" a Unity project — or its own source — without streaming files into every turn. Massive token savings on large projects.
+
+The vault is opt-in: set `STRADA_VAULT_ENABLED=true`. Once enabled, it boots alongside the agent, indexes Strada.Brain's own source via **SelfVault**, and exposes tools, HTTP APIs, and a portal page.
+
+```bash
+# Enable
+export STRADA_VAULT_ENABLED=true
+npm start
+
+# In any channel
+/vault init /path/to/unity/project
+/vault sync
+/vault status
+```
+
+**Two phases shipped:**
+
+- **Phase 1 — Hybrid retrieval**: SQLite per-vault at `<project>/.strada/vault/index.db` (`better-sqlite3`, WAL + foreign_keys). FTS5 BM25 + HNSW vectors fused via Reciprocal Rank Fusion (k=60). Token-budget-aware greedy packing. Three update paths: chokidar watcher (800ms debounce), write-hook (200ms budget), manual `/vault sync`. xxhash64 short-circuit skips unchanged files.
+- **Phase 2 — Symbol graph + PPR**: Tree-sitter WASM extractors for TypeScript, C#, and Markdown wikilinks. New tables `vault_symbols`, `vault_edges`, `vault_wikilinks`. Symbol IDs in `<lang>::<relPath>::<qualifiedName>` form. Personalized PageRank re-ranks results when `focusFiles` is set. `graph.canvas` (JSON Canvas 1.0) regenerated atomically on cold start, `/vault sync`, and watcher drain. **SelfVault** indexes Strada.Brain's own source (`src/`, `web-portal/src/`, `tests/`, `docs/`, `AGENTS.md`, `CLAUDE.md`); symlinks are skipped for security.
+
+**Tools** registered with the agent: `vault_init`, `vault_sync`, `vault_status`.
+
+**HTTP surface** at `/api/vaults/*`:
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/vaults/:id/canvas` | Serve `graph.canvas` |
+| GET | `/api/vaults/:id/symbols/by-name?q=X` | Find symbols by short name |
+| GET | `/api/vaults/:id/symbols/:symbolId/callers` | List incoming call edges |
+| POST | `/api/vaults/:id/search` | Hybrid search (request body capped) |
+
+WebSocket `vault:update` broadcasts dirty-set batches.
+
+**Portal**: [`/admin/vaults`](http://localhost:3000/admin/vaults) — Files (tree + markdown/raw preview), Search (hybrid query), Graph (renders `graph.canvas` via `@xyflow/react` + `@dagrejs/dagre`).
+
+**Configuration**: `config.vault.enabled` (env `STRADA_VAULT_ENABLED`), `config.vault.writeHookBudgetMs` (default 200ms), `config.vault.debounceMs` (default 800ms), `config.vault.embeddingFallback` (`'none' | 'local'`), `config.vault.self.enabled` (set to `false` to opt out of SelfVault).
+
+See **[docs/vault.md](docs/vault.md)** for the full reference (architecture, query pipeline, HTTP API shapes, security posture, Phase 3 roadmap).
+
+---
+
 ## Architecture
 
 ```
