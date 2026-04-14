@@ -1,5 +1,6 @@
 import chokidar, { type FSWatcher } from 'chokidar';
 import { relative } from 'node:path';
+import { getLoggerSafe } from '../utils/logger.js';
 
 export interface VaultWatcherOptions {
   root: string;
@@ -61,7 +62,7 @@ export class VaultWatcher {
     try {
       await this.opts.onBatch(batch);
     } catch (err) {
-      console.warn('[VaultWatcher] onBatch threw:', err);
+      getLoggerSafe().warn('[VaultWatcher] onBatch threw', { error: err instanceof Error ? err.message : String(err) });
     }
   }
 

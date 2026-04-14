@@ -47,6 +47,7 @@ vi.mock("./context/strada-knowledge.js", () => ({
   buildDepsContext: () => "",
   buildCapabilityManifest: () =>
     "\n## Agent Capability Manifest\nGoal Decomposition\nLearning Pipeline\nIntrospection\n",
+  buildToolUsageHints: () => "",
 }));
 
 // ─── Helpers (mirrors orchestrator.test.ts) ──────────────────────────────────

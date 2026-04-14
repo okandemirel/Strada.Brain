@@ -4,9 +4,19 @@ import { getVaultFileReadStats } from '../agents/tools/file-read.js';
 import { getLoggerSafe } from '../utils/logger.js';
 import { sendJson, sendJsonError, type RouteContext } from './server-types.js';
 
+/**
+ * Express-shaped req/res for `registerVaultRoutes` (dev-server adapter only; production
+ * uses the raw Node http path via `handleVaultRoutes`). Typed loosely because the
+ * adapter surface intentionally mirrors Express's `any`-shaped request object.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type ExpressLikeReq = any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type ExpressLikeRes = any;
+
 export interface RouteApp {
-  get(path: string, handler: (req: any, res: any) => any): void;
-  post(path: string, handler: (req: any, res: any) => any): void;
+  get(path: string, handler: (req: ExpressLikeReq, res: ExpressLikeRes) => unknown): void;
+  post(path: string, handler: (req: ExpressLikeReq, res: ExpressLikeRes) => unknown): void;
 }
 
 const MAX_QUERY_TEXT_CHARS = 4096;
@@ -256,7 +266,7 @@ export function handleVaultRoutes(
 // Mirrors DashboardServer.readJsonBody default (4 KiB is enough for a search query).
 const MAX_BODY_BYTES = 4096;
 
-async function readJsonBody(req: IncomingMessage): Promise<any> {
+async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
   let total = 0;
   for await (const c of req) {
