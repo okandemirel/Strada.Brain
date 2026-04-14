@@ -9,11 +9,17 @@ export default function VaultFilesTab() {
   const [files, setFiles] = useState<TreeEntry[]>([]);
   const [path, setPath] = useState<string | null>(null);
   const [body, setBody] = useState<string>('');
+  const [prevSelected, setPrevSelected] = useState(selected);
 
-  useEffect(() => {
-    // M3: reset selection when switching vaults so stale path from previous vault isn't re-fetched.
+  // M3: reset selection when switching vaults so stale path from previous vault isn't re-fetched.
+  // React-idiomatic "setting state during render" — avoids the setState-in-effect lint rule.
+  if (selected !== prevSelected) {
+    setPrevSelected(selected);
     setPath(null);
     setBody('');
+  }
+
+  useEffect(() => {
     if (!selected) return;
     fetch(`/api/vaults/${encodeURIComponent(selected)}/tree`)
       .then((r) => r.json()).then((d) => setFiles(d.items ?? [])).catch(() => setFiles([]));

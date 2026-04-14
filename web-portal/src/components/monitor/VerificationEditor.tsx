@@ -101,10 +101,13 @@ export default function VerificationEditor({ taskId, open, onClose, send }: Veri
 
   // Clear the running spinner when the backend result arrives (status leaves 'pending').
   // Without this the 35s fallback would keep the button label stale after every check.
+  // setState-in-effect is intentional: we mirror external (backend) state into UI state,
+  // which is a documented valid use of useEffect.
   useEffect(() => {
     if (!running) return
     const criterion = verification.criteria.find((c) => c.id === running)
     if (criterion && criterion.status !== 'pending') {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setRunning(null)
     }
   }, [verification.criteria, running])

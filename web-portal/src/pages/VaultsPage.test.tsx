@@ -6,7 +6,10 @@ import VaultsPage from './VaultsPage';
 
 beforeEach(() => {
   useVaultStore.setState({ vaults: [], selected: null, searchResults: [] });
-  vi.stubGlobal('fetch', vi.fn(async () => ({ json: async () => ({ items: [] }) } as any)));
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () => ({ json: async () => ({ items: [] }) }) as unknown as Response),
+  );
 });
 
 describe('VaultsPage', () => {
