@@ -10,6 +10,7 @@ import { rrfFuse, packByBudget } from './query-pipeline.js';
 import { EXT_LANG, listIndexableFiles } from './discovery.js';
 import { getExtractorFor } from './symbol-extractor/index.js';
 import { buildCanvas } from './canvas-generator.js';
+import { runPpr } from './ppr.js';
 import { getLoggerSafe } from '../utils/logger.js';
 import type {
   IVault, VaultFile, VaultQuery, VaultQueryResult, VaultStats, VaultId, VaultChunk,
@@ -102,8 +103,30 @@ export class UnityProjectVault implements IVault {
       .map((h) => ({ chunkId: payloadChunkId(h), score: h.score }))
       .filter((r): r is { chunkId: string; score: number } => r.chunkId !== null);
     const fused = rrfFuse(fts, hnswRanked, 60).slice(0, topK);
-    let chunks = fused
-      .map((f) => this.store.getChunk(f.chunkId))
+
+    // Phase 2: optional Personalized PageRank re-rank when focusFiles is provided.
+    let rankedChunkIds = fused.map((f) => f.chunkId);
+    if (q.focusFiles?.length) {
+      const seeds: string[] = [];
+      for (const path of q.focusFiles) {
+        for (const s of this.store.listSymbolsForPath(path)) seeds.push(s.symbolId);
+      }
+      if (seeds.length) {
+        const pprScores = runPpr(this.store.listEdges(), seeds, { damping: 0.15, iterations: 10, epsilon: 1e-6 });
+        const boosted = fused.map((f) => {
+          const chunk = this.store.getChunk(f.chunkId);
+          if (!chunk) return { id: f.chunkId, score: f.rrf };
+          const syms = this.store.listSymbolsForPath(chunk.path)
+            .filter((s) => s.startLine <= chunk.endLine && s.endLine >= chunk.startLine);
+          const pprBoost = syms.reduce((max, s) => Math.max(max, pprScores.get(s.symbolId) ?? 0), 0);
+          return { id: f.chunkId, score: f.rrf + 0.5 * pprBoost };
+        }).sort((a, b) => b.score - a.score);
+        rankedChunkIds = boosted.map((b) => b.id);
+      }
+    }
+
+    let chunks = rankedChunkIds
+      .map((id) => this.store.getChunk(id))
       .filter((c): c is VaultChunk => c !== null);
 
     // Fix I1: apply langFilter

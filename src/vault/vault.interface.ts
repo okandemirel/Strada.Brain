@@ -31,6 +31,8 @@ export interface VaultQuery {
   langFilter?: VaultFile['lang'][];
   pathGlob?: string;
   budgetTokens?: number;
+  /** Vault-relative paths whose symbols seed Personalized PageRank re-ranking. */
+  focusFiles?: string[];
 }
 
 export interface VaultQueryResult {
