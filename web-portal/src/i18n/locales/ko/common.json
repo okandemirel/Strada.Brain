@@ -31,6 +31,8 @@
   "modes.canvas.description": "아키텍처, 노트 및 에이전트 시각화를 공유 보드에 배치하세요.",
   "modes.code.label": "코드",
   "modes.code.description": "파일, diff 및 터미널 출력을 하나의 작업 공간에서 검사하세요.",
+  "modes.vaults.label": "볼트",
+  "modes.vaults.description": "코드베이스 메모리 볼트를 탐색하고, 색인된 콘텐츠를 검색하며, 의존성 그래프를 확인하세요.",
 
   "connection.connected": "연결됨",
   "connection.connecting": "연결 중...",
@@ -79,6 +81,7 @@
   "workspace.loading.monitor": "모니터 로딩 중...",
   "workspace.loading.canvas": "캔버스 로딩 중...",
   "workspace.loading.code": "코드 에디터 로딩 중...",
+  "workspace.loading.vaults": "볼트 로딩 중...",
   "workspace.loading.portal": "Strada 포털 로딩 중",
   "workspace.loading.portalSubtitle": "다음 화면을 준비하고 있습니다.",
 

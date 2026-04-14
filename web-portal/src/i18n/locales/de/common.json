@@ -31,6 +31,8 @@
   "modes.canvas.description": "Ordne Architektur, Notizen und Agenten-Visualisierungen auf einem gemeinsamen Board an.",
   "modes.code.label": "Code",
   "modes.code.description": "Untersuche Dateien, Diffs und Terminal-Ausgaben in einem Arbeitsbereich.",
+  "modes.vaults.label": "Tresore",
+  "modes.vaults.description": "Durchsuche Codebasis-Speichertresore, durchsuche indexierte Inhalte und untersuche Abhängigkeitsgraphen.",
 
   "connection.connected": "Verbunden",
   "connection.connecting": "Verbinde...",
@@ -79,6 +81,7 @@
   "workspace.loading.monitor": "Monitor wird geladen...",
   "workspace.loading.canvas": "Canvas wird geladen...",
   "workspace.loading.code": "Code-Editor wird geladen...",
+  "workspace.loading.vaults": "Tresore werden geladen...",
   "workspace.loading.portal": "Strada-Portal wird geladen",
   "workspace.loading.portalSubtitle": "Der nächste Bildschirm wird vorbereitet.",
 

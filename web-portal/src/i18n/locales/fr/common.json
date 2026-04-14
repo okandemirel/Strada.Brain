@@ -31,6 +31,8 @@
   "modes.canvas.description": "Organisez l'architecture, les notes et les visuels de l'agent sur un tableau partage.",
   "modes.code.label": "Code",
   "modes.code.description": "Inspectez les fichiers, les diffs et la sortie du terminal dans un seul espace de travail.",
+  "modes.vaults.label": "Coffres",
+  "modes.vaults.description": "Parcourez les coffres de memoire du code, recherchez du contenu indexe et inspectez les graphes de dependances.",
 
   "connection.connected": "Connecte",
   "connection.connecting": "Connexion en cours...",
@@ -79,6 +81,7 @@
   "workspace.loading.monitor": "Chargement du moniteur...",
   "workspace.loading.canvas": "Chargement du Canvas...",
   "workspace.loading.code": "Chargement de l'editeur de code...",
+  "workspace.loading.vaults": "Chargement des coffres...",
   "workspace.loading.portal": "Chargement du portail Strada",
   "workspace.loading.portalSubtitle": "Preparation de l'ecran suivant.",
 

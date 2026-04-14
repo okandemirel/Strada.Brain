@@ -320,6 +320,24 @@ When fixing bugs or implementing changes, do not stop at the patch itself:
 `;
 }
 
+/**
+ * Build the tool-usage guidance section injected into the base system prompt.
+ * Intentionally separate from buildCapabilityManifest() so tool-name hints live
+ * outside the capability manifest (which must stay tool-agnostic — see tests).
+ *
+ * review-F8: the vault_search hint is only emitted when a VaultRegistry is
+ * attached to the orchestrator. Recommending a tool the model cannot call
+ * is actively harmful — it wastes turns on "tool not found" errors.
+ */
+export function buildToolUsageHints(hasVault = false): string {
+  if (!hasVault) return "";
+  return (
+    "\n## Tool Usage Hints\n" +
+    "- For code/symbol lookup, prefer `vault_search` over `file_read`. " +
+    "Only use `file_read` when you need exact bytes or a file not in the vault.\n"
+  );
+}
+
 import type { IdentityState } from "../../identity/identity-state.js";
 import type { CrashRecoveryContext } from "../../identity/crash-recovery.js";
 import { formatDowntime } from "../../identity/crash-recovery.js";

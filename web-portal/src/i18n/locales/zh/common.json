@@ -31,6 +31,8 @@
   "modes.canvas.description": "在共享面板上排列架构、笔记和智能体可视化内容。",
   "modes.code.label": "代码",
   "modes.code.description": "在一个工作区中查看文件、差异和终端输出。",
+  "modes.vaults.label": "知识库",
+  "modes.vaults.description": "浏览代码库记忆知识库、搜索索引内容并查看依赖关系图。",
 
   "connection.connected": "已连接",
   "connection.connecting": "连接中...",
@@ -79,6 +81,7 @@
   "workspace.loading.monitor": "加载监控中...",
   "workspace.loading.canvas": "加载画布中...",
   "workspace.loading.code": "加载代码编辑器中...",
+  "workspace.loading.vaults": "加载知识库中...",
   "workspace.loading.portal": "加载 Strada 门户",
   "workspace.loading.portalSubtitle": "正在准备下一个页面。",
 

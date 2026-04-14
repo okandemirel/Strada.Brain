@@ -18,6 +18,7 @@ import { useSessionStore } from '../../stores/session-store'
 const MonitorPanel = lazy(() => import('../monitor/MonitorPanel'))
 const CanvasWorkspace = lazy(() => import('../canvas/CanvasWorkspace'))
 const CodePanel = lazy(() => import('../code/CodePanel'))
+const VaultsPage = lazy(() => import('../../pages/VaultsPage'))
 
 function PanelFallback({ label }: { label: string }) {
   return (
@@ -31,6 +32,7 @@ const PANEL_MAP: Record<string, React.LazyExoticComponent<React.ComponentType>> 
   monitor: MonitorPanel,
   canvas: CanvasWorkspace,
   code: CodePanel,
+  vaults: VaultsPage,
 }
 
 function PrimaryContent() {

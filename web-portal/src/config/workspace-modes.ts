@@ -1,4 +1,4 @@
-import { MessageSquare, Activity, Paintbrush, Code, type LucideIcon } from 'lucide-react'
+import { MessageSquare, Activity, Paintbrush, Code, Database, type LucideIcon } from 'lucide-react'
 import type { WorkspaceMode } from '../stores/workspace-store'
 
 export interface ModeConfig {
@@ -36,6 +36,13 @@ export const WORKSPACE_MODES: ModeConfig[] = [
     icon: Code,
     label: 'Code',
     description: 'Inspect files, diffs, and terminal output in one workspace.',
+    enabled: true,
+  },
+  {
+    mode: 'vaults',
+    icon: Database,
+    label: 'Vaults',
+    description: 'Browse codebase memory vaults, search indexed content, and inspect dependency graphs.',
     enabled: true,
   },
 ]

@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 
-export type WorkspaceMode = 'chat' | 'monitor' | 'canvas' | 'code'
+export type WorkspaceMode = 'chat' | 'monitor' | 'canvas' | 'code' | 'vaults'
 
 export interface WorkspaceNotification {
   id: string

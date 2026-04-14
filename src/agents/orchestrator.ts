@@ -33,6 +33,7 @@ import {
   buildProjectContext,
   buildDepsContext,
   buildCapabilityManifest,
+  buildToolUsageHints,
   buildIdentitySection,
   buildCrashNotificationSection,
 } from "./context/strada-knowledge.js";
@@ -1256,6 +1257,7 @@ export class Orchestrator {
       buildProjectContext(this.projectPath) +
       buildDepsContext(this.stradaDeps) +
       buildCapabilityManifest() +
+      buildToolUsageHints(!!this.vaultRegistry) +
       (this.readOnly ? getReadOnlySystemPrompt() : "") +
       (this.getIdentityState ? buildIdentitySection(this.getIdentityState()) : "") +
       (this.crashRecoveryContext ? buildCrashNotificationSection(this.crashRecoveryContext) : "");
@@ -6219,6 +6221,7 @@ export class Orchestrator {
       lookupTool: (name) => this.tools.get(name),
       onSkillCreated: this.onSkillCreated,
       dynamicToolFactory: this.dynamicToolFactory,
+      vaultRegistry: this.vaultRegistry,
     };
 
     for (const tc of toolCalls) {

@@ -31,6 +31,8 @@
   "modes.canvas.description": "アーキテクチャ、メモ、エージェントのビジュアルを共有ボード上に配置します。",
   "modes.code.label": "コード",
   "modes.code.description": "ファイル、差分、ターミナル出力を一つのワークスペースで確認します。",
+  "modes.vaults.label": "ボルト",
+  "modes.vaults.description": "コードベースのメモリボルトを閲覧し、インデックス化されたコンテンツを検索し、依存関係グラフを確認します。",
 
   "connection.connected": "接続済み",
   "connection.connecting": "接続中...",
@@ -79,6 +81,7 @@
   "workspace.loading.monitor": "モニターを読み込み中...",
   "workspace.loading.canvas": "キャンバスを読み込み中...",
   "workspace.loading.code": "コードエディタを読み込み中...",
+  "workspace.loading.vaults": "ボルトを読み込み中...",
   "workspace.loading.portal": "Stradaポータルを読み込み中",
   "workspace.loading.portalSubtitle": "次の画面を準備しています。",
 

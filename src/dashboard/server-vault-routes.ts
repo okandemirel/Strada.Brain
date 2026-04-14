@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { VaultRegistry } from '../vault/vault-registry.js';
+import { getVaultFileReadStats } from '../agents/tools/file-read.js';
 import { getLoggerSafe } from '../utils/logger.js';
 import { sendJson, sendJsonError, type RouteContext } from './server-types.js';
 
@@ -31,11 +32,46 @@ function coerceTopK(raw: unknown): number {
   return Math.min(Math.floor(n), MAX_TOP_K);
 }
 
+/**
+ * Point-in-time snapshot of vault retrieval telemetry.
+ * Backs `GET /api/vaults/stats` — see Round 2 of the Codebase Memory Vault plan.
+ */
+export interface VaultRetrievalStatsSnapshot {
+  fileRead: {
+    hits: number;
+    misses: number;
+    stale: number;
+    hitRatePct: number;
+  };
+  timestamp: string;
+}
+
+export function buildVaultRetrievalStatsSnapshot(
+  stats: Readonly<{ hits: number; misses: number; stale: number }> = getVaultFileReadStats(),
+  now: Date = new Date(),
+): VaultRetrievalStatsSnapshot {
+  const denom = stats.hits + stats.misses;
+  const hitRatePct = denom === 0 ? 0 : (stats.hits / denom) * 100;
+  return {
+    fileRead: {
+      hits: stats.hits,
+      misses: stats.misses,
+      stale: stats.stale,
+      // Round to 2 decimals so clients get stable, display-friendly values.
+      hitRatePct: Math.round(hitRatePct * 100) / 100,
+    },
+    timestamp: now.toISOString(),
+  };
+}
+
 export function registerVaultRoutes(app: RouteApp, registry: VaultRegistry): void {
   // Fix SecC2: do NOT expose absolute rootPath. Clients get id + kind only.
   app.get('/api/vaults', () => ({
     items: registry.list().map((v) => ({ id: v.id, kind: v.kind })),
   }));
+
+  // Round 2: expose vault_search vs file_read retrieval telemetry.
+  app.get('/api/vaults/stats', () => buildVaultRetrievalStatsSnapshot());
 
   app.get('/api/vaults/:id/stats', async (req) => {
     const v = registry.get(req.params.id);
@@ -127,6 +163,14 @@ export function handleVaultRoutes(
   // GET /api/vaults
   if (pathOnly === '/api/vaults' && method === 'GET') {
     sendJson(res, { items: registry.list().map((v) => ({ id: v.id, kind: v.kind })) });
+    return true;
+  }
+
+  // Round 2: GET /api/vaults/stats — retrieval telemetry snapshot.
+  // sec-M2: unauth GET is intentional, matches other /api/vaults/* GETs;
+  // server is 127.0.0.1 bound.
+  if (pathOnly === '/api/vaults/stats' && method === 'GET') {
+    sendJson(res, buildVaultRetrievalStatsSnapshot());
     return true;
   }
 

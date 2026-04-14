@@ -31,6 +31,8 @@
   "modes.canvas.description": "Organiza arquitectura, notas y elementos visuales del agente en un tablero compartido.",
   "modes.code.label": "Codigo",
   "modes.code.description": "Inspecciona archivos, diffs y salida de terminal en un solo espacio de trabajo.",
+  "modes.vaults.label": "Bovedas",
+  "modes.vaults.description": "Explora bovedas de memoria del codigo, busca contenido indexado e inspecciona grafos de dependencias.",
 
   "connection.connected": "Conectado",
   "connection.connecting": "Conectando...",
@@ -79,6 +81,7 @@
   "workspace.loading.monitor": "Cargando monitor...",
   "workspace.loading.canvas": "Cargando Canvas...",
   "workspace.loading.code": "Cargando editor de codigo...",
+  "workspace.loading.vaults": "Cargando bovedas...",
   "workspace.loading.portal": "Cargando portal de Strada",
   "workspace.loading.portalSubtitle": "Preparando la siguiente pantalla.",
 

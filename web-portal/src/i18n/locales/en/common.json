@@ -31,6 +31,8 @@
   "modes.canvas.description": "Arrange architecture, notes, and agent visuals on a shared board.",
   "modes.code.label": "Code",
   "modes.code.description": "Inspect files, diffs, and terminal output in one workspace.",
+  "modes.vaults.label": "Vaults",
+  "modes.vaults.description": "Browse codebase memory vaults, search indexed content, and inspect dependency graphs.",
 
   "connection.connected": "Connected",
   "connection.connecting": "Connecting...",
@@ -79,6 +81,7 @@
   "workspace.loading.monitor": "Loading monitor...",
   "workspace.loading.canvas": "Loading Canvas...",
   "workspace.loading.code": "Loading code editor...",
+  "workspace.loading.vaults": "Loading vaults...",
   "workspace.loading.portal": "Loading Strada portal",
   "workspace.loading.portalSubtitle": "Preparing the next screen.",
 

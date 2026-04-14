@@ -1,13 +1,39 @@
 import { readdir, lstat } from 'node:fs/promises';
-import { join, relative, extname } from 'node:path';
+import { join, relative, extname, basename, sep as pathSep } from 'node:path';
 import { UnityProjectVault, type UnityVaultDeps } from './unity-project-vault.js';
 import { EXT_LANG } from './discovery.js';
 import type { VaultFile } from './vault.interface.js';
 
+/** Directory names skipped unconditionally during SelfVault walks. */
 const SELF_IGNORE = new Set([
   'node_modules', '.git', 'dist', 'build', 'coverage', '.strada',
   '.next', '.turbo', 'tmp', 'temp',
 ]);
+
+/**
+ * sec-H4: file/path patterns that must never be indexed into the SelfVault,
+ * even when their directory survived the SELF_IGNORE filter. These cover
+ * common credential/secret shapes and test fixtures that intentionally hold
+ * fake secrets.
+ *
+ * Matched against the vault-relative POSIX path (never the absolute path).
+ */
+const SENSITIVE_EXTS = new Set(['.pem', '.key', '.p12', '.cert']);
+
+function isSensitiveSelfPath(relPosix: string, fileName: string): boolean {
+  const lowerName = fileName.toLowerCase();
+  const lowerRel = relPosix.toLowerCase();
+  // .env, .env.local, .env.production, etc.
+  if (lowerName === '.env' || lowerName.startsWith('.env.')) return true;
+  // credentials.* (credentials.json, credentials.yml, credentials.yaml, ...)
+  if (lowerName === 'credentials' || lowerName.startsWith('credentials.')) return true;
+  // PEM / KEY / P12 / CERT files anywhere in the tree.
+  if (SENSITIVE_EXTS.has(extname(lowerName))) return true;
+  // Test fixtures that intentionally hold fake/synthetic secrets.
+  if (lowerRel.startsWith('tests/fixtures/secrets/')) return true;
+  if (lowerRel.startsWith('tests/fixtures/') && lowerName.startsWith('credentials')) return true;
+  return false;
+}
 
 const SELF_INCLUDE_ROOTS = [
   'src',
@@ -41,8 +67,11 @@ async function walk(root: string, dir: string, out: VaultFile[]): Promise<void> 
     if (!lang) continue;
     const st = await lstat(full).catch(() => null);
     if (!st || st.isSymbolicLink()) continue;
+    const relPosix = relative(root, full).replaceAll(pathSep, '/');
+    // sec-H4: block sensitive file shapes regardless of parent directory.
+    if (isSensitiveSelfPath(relPosix, e.name)) continue;
     out.push({
-      path: relative(root, full).replaceAll('\\', '/'),
+      path: relPosix,
       blobHash: '',
       mtimeMs: st.mtimeMs,
       size: st.size,
@@ -75,8 +104,11 @@ export class SelfVault extends UnityProjectVault {
       if (st.isFile()) {
         const lang = EXT_LANG[extname(abs).toLowerCase()];
         if (!lang) continue;
+        const relPosix = relative(this.rootPath, abs).replaceAll(pathSep, '/');
+        // sec-H4: honor the sensitive-path ignore list at the root-file level too.
+        if (isSensitiveSelfPath(relPosix, basename(abs))) continue;
         found.push({
-          path: relative(this.rootPath, abs).replaceAll('\\', '/'),
+          path: relPosix,
           blobHash: '',
           mtimeMs: st.mtimeMs,
           size: st.size,

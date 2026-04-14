@@ -62,6 +62,14 @@ export interface ToolContext {
   onSkillCreated?: (skillPath: string) => Promise<void>;
   /** Per-orchestrator DynamicToolFactory instance (avoids module-level singleton leaks). */
   dynamicToolFactory?: unknown;
+
+  // ── Codebase Memory Vault (optional; provided when vault.enabled) ─────
+
+  /**
+   * Vault registry for semantic/FTS retrieval against indexed code.
+   * Optional — tools MUST degrade gracefully when undefined.
+   */
+  vaultRegistry?: import("../../vault/vault-registry.js").VaultRegistry;
 }
 
 // ============================================================================

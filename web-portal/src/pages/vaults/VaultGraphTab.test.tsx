@@ -1,7 +1,26 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
-import VaultGraphTab from './VaultGraphTab';
 import { useVaultStore } from '../../stores/vault-store';
+
+// Mock ReactFlow: jsdom has no canvas/SVG layout engine; render labels as plain divs
+// so `fetches canvas and renders node labels` can assert on node text without crashing.
+interface MockFlowNode { id: string; data?: { label?: string } }
+vi.mock('@xyflow/react', () => ({
+  ReactFlow: ({ nodes, edges, children }: { nodes: MockFlowNode[]; edges: unknown[]; children?: React.ReactNode }) => (
+    <div data-testid="reactflow">
+      <span data-testid="node-count">{nodes.length}</span>
+      <span data-testid="edge-count">{edges.length}</span>
+      {nodes.map((n) => (
+        <div key={n.id} data-testid={`node-${n.id}`}>{n.data?.label}</div>
+      ))}
+      {children}
+    </div>
+  ),
+  Background: () => <div data-testid="background" />,
+  Controls: () => <div data-testid="controls" />,
+}));
+
+import VaultGraphTab from './VaultGraphTab';
 
 const fetchMock = vi.fn();
 (globalThis as { fetch: typeof fetch }).fetch = fetchMock as unknown as typeof fetch;

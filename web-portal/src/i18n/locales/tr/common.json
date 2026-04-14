@@ -31,6 +31,8 @@
   "modes.canvas.description": "Mimari, notlar ve ajan görsellerini paylaşımlı bir panoda düzenleyin.",
   "modes.code.label": "Kod",
   "modes.code.description": "Dosyaları, farkları ve terminal çıktısını tek bir çalışma alanında inceleyin.",
+  "modes.vaults.label": "Kasalar",
+  "modes.vaults.description": "Kod tabanı bellek kasalarına göz atın, dizinlenmiş içerikte arama yapın ve bağımlılık grafiklerini inceleyin.",
 
   "connection.connected": "Bağlı",
   "connection.connecting": "Bağlanıyor...",
@@ -79,6 +81,7 @@
   "workspace.loading.monitor": "Monitör yükleniyor...",
   "workspace.loading.canvas": "Canvas yükleniyor...",
   "workspace.loading.code": "Kod editörü yükleniyor...",
+  "workspace.loading.vaults": "Kasalar yükleniyor...",
   "workspace.loading.portal": "Strada portalı yükleniyor",
   "workspace.loading.portalSubtitle": "Sonraki ekran hazırlanıyor.",
 

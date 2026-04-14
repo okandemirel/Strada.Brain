@@ -471,6 +471,7 @@ export class ToolRegistry {
         const { VaultInitTool } = await import("../agents/tools/vault-init-tool.js");
         const { VaultSyncTool } = await import("../agents/tools/vault-sync-tool.js");
         const { VaultStatusTool } = await import("../agents/tools/vault-status-tool.js");
+        const { VaultSearchTool } = await import("../agents/tools/vault-search-tool.js");
         this.register(new VaultInitTool(vaultRegistry) as unknown as ITool, {
           category: ToolCategories.MEMORY, dangerous: false, readOnly: false,
         });
@@ -478,6 +479,9 @@ export class ToolRegistry {
           category: ToolCategories.MEMORY, dangerous: false, readOnly: false,
         });
         this.register(new VaultStatusTool(vaultRegistry) as unknown as ITool, {
+          category: ToolCategories.MEMORY, dangerous: false, readOnly: true,
+        });
+        this.register(new VaultSearchTool() as unknown as ITool, {
           category: ToolCategories.MEMORY, dangerous: false, readOnly: true,
         });
       })().catch((err) => getLogger().warn("vault tools registration failed", { err }));
