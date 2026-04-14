@@ -75,6 +75,31 @@ export function registerVaultRoutes(app: RouteApp, registry: VaultRegistry): voi
     const v = registry.get(req.params.id);
     return v ? await v.sync() : { error: 'not found' };
   });
+
+  // Phase 2: graph + symbol endpoints.
+  app.get('/api/vaults/:id/canvas', async (req) => {
+    const v = registry.get(req.params.id);
+    if (!v) return { error: 'not found' };
+    return (await v.readCanvas?.()) ?? { nodes: [], edges: [] };
+  });
+
+  app.get('/api/vaults/:id/symbols/by-name', async (req) => {
+    const v = registry.get(req.params.id);
+    if (!v) return { error: 'not found' };
+    const q = typeof req.query?.q === 'string' ? req.query.q : '';
+    if (!q || q.length > 200) return { error: 'invalid q' };
+    const items = (await v.findSymbolsByName?.(q, 20)) ?? [];
+    return { items };
+  });
+
+  app.get('/api/vaults/:id/symbols/:symbolId/callers', async (req) => {
+    const v = registry.get(req.params.id);
+    if (!v) return { error: 'not found' };
+    const sid = String(req.params.symbolId ?? '');
+    if (!sid || sid.length > 1024) return { error: 'invalid symbol id' };
+    const items = (await v.findCallers?.(sid)) ?? [];
+    return { items };
+  });
 }
 
 /**
@@ -102,6 +127,43 @@ export function handleVaultRoutes(
   // GET /api/vaults
   if (pathOnly === '/api/vaults' && method === 'GET') {
     sendJson(res, { items: registry.list().map((v) => ({ id: v.id, kind: v.kind })) });
+    return true;
+  }
+
+  // Phase 2: /api/vaults/:id/canvas
+  const canvasMatch = pathOnly.match(/^\/api\/vaults\/([^/]+)\/canvas$/);
+  if (canvasMatch && method === 'GET') {
+    const vv = registry.get(decodeURIComponent(canvasMatch[1]!));
+    if (!vv) { sendJsonError(res, 404, 'vault not found'); return true; }
+    void Promise.resolve(vv.readCanvas?.() ?? { nodes: [], edges: [] })
+      .then((c) => sendJson(res, c))
+      .catch(() => sendJsonError(res, 500, 'canvas unavailable'));
+    return true;
+  }
+
+  // Phase 2: /api/vaults/:id/symbols/by-name?q=…
+  const byNameMatch = pathOnly.match(/^\/api\/vaults\/([^/]+)\/symbols\/by-name$/);
+  if (byNameMatch && method === 'GET') {
+    const vv = registry.get(decodeURIComponent(byNameMatch[1]!));
+    if (!vv) { sendJsonError(res, 404, 'vault not found'); return true; }
+    const q = u.searchParams.get('q') ?? '';
+    if (!q || q.length > 200) { sendJsonError(res, 400, 'invalid q'); return true; }
+    void Promise.resolve(vv.findSymbolsByName?.(q, 20) ?? [])
+      .then((items) => sendJson(res, { items }))
+      .catch(() => sendJsonError(res, 500, 'by-name failed'));
+    return true;
+  }
+
+  // Phase 2: /api/vaults/:id/symbols/:symbolId/callers
+  const callersMatch = pathOnly.match(/^\/api\/vaults\/([^/]+)\/symbols\/([^/]+)\/callers$/);
+  if (callersMatch && method === 'GET') {
+    const vv = registry.get(decodeURIComponent(callersMatch[1]!));
+    if (!vv) { sendJsonError(res, 404, 'vault not found'); return true; }
+    const sid = decodeURIComponent(callersMatch[2]!);
+    if (!sid || sid.length > 1024) { sendJsonError(res, 400, 'invalid symbol id'); return true; }
+    void Promise.resolve(vv.findCallers?.(sid) ?? [])
+      .then((items) => sendJson(res, { items }))
+      .catch(() => sendJsonError(res, 500, 'callers failed'));
     return true;
   }
 
