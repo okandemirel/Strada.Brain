@@ -14,9 +14,13 @@ describe('tree-sitter-loader', () => {
     expect(tree?.rootNode.type).toBe('compilation_unit');
   }, 20_000);
 
-  it('caches parsers across calls', async () => {
+  it('returns a FRESH parser per call (concurrency safety)', async () => {
     const p1 = await loadLanguageParser('typescript');
     const p2 = await loadLanguageParser('typescript');
-    expect(p1).toBe(p2);
-  });
+    // phase2-review I4: must NOT be shared — sharing corrupts concurrent parses.
+    expect(p1).not.toBe(p2);
+    // Both should parse independently.
+    expect(p1.parse('const a = 1;')?.rootNode.type).toBe('program');
+    expect(p2.parse('const b = 2;')?.rootNode.type).toBe('program');
+  }, 20_000);
 });

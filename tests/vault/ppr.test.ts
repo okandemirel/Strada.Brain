@@ -28,4 +28,15 @@ describe('runPpr', () => {
     const scores = runPpr(edges, ['a']);
     expect((scores.get('a') ?? 0) + (scores.get('b') ?? 0)).toBeGreaterThan(0.99);
   });
+
+  it('scores sum to 1 even when graph contains dangling nodes (phase2-review I5 regression)', () => {
+    // b and c are dangling (no outgoing edges). Mass redistribution must teleport to seed.
+    const edges = [
+      { fromSymbol: 'a', toSymbol: 'b', kind: 'calls' as const, atLine: 0 },
+      { fromSymbol: 'a', toSymbol: 'c', kind: 'calls' as const, atLine: 0 },
+    ];
+    const scores = runPpr(edges, ['a'], { damping: 0.15, iterations: 30, epsilon: 1e-8 });
+    const sum = [...scores.values()].reduce((s, v) => s + v, 0);
+    expect(sum).toBeCloseTo(1, 3);
+  });
 });

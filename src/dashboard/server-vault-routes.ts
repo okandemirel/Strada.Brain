@@ -208,9 +208,22 @@ export function handleVaultRoutes(
   return false;
 }
 
+// Fix phase2-review C1: cap body bytes to prevent DoS via unbounded POST bodies.
+// Mirrors DashboardServer.readJsonBody default (4 KiB is enough for a search query).
+const MAX_BODY_BYTES = 4096;
+
 async function readJsonBody(req: IncomingMessage): Promise<any> {
   const chunks: Buffer[] = [];
-  for await (const c of req) chunks.push(c as Buffer);
+  let total = 0;
+  for await (const c of req) {
+    const buf = c as Buffer;
+    total += buf.length;
+    if (total > MAX_BODY_BYTES) {
+      req.destroy();
+      return {};
+    }
+    chunks.push(buf);
+  }
   const raw = Buffer.concat(chunks).toString('utf8');
   if (!raw) return {};
   try { return JSON.parse(raw); } catch { return {}; }

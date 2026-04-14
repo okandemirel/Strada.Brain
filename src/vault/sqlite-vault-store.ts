@@ -109,6 +109,7 @@ export class SqliteVaultStore {
     this._stmtDeleteEdgesByPath = this.db.prepare(`
       DELETE FROM vault_edges
       WHERE from_symbol IN (SELECT symbol_id FROM vault_symbols WHERE path = ?)
+         OR to_symbol   IN (SELECT symbol_id FROM vault_symbols WHERE path = ?)
     `);
     this._stmtUpsertWikilink = this.db.prepare(`
       INSERT INTO vault_wikilinks (from_note, target, resolved)
@@ -144,10 +145,10 @@ export class SqliteVaultStore {
   deleteFile(path: string): void {
     // Fix 1 (TOCTOU): SELECT chunk_ids inside the transaction so it sees the same snapshot as the writes.
     const txn = this.db.transaction(() => {
-      // Phase 2: edges have a non-FK to_symbol — drop edges originating in this file first,
-      // then symbols (FK CASCADE on vault_files would also drop them, but we do it explicitly
-      // so the order is stable). vault_wikilinks has no FK; clear by from_note path equivalence.
-      this._stmtDeleteEdgesByPath!.run(path);
+      // Phase 2: edges have a non-FK to_symbol — drop edges originating in OR pointing AT this
+      // file's symbols before removing the symbols themselves, so other files' edges can't
+      // orphan-reference a removed target (phase2-review C2).
+      this._stmtDeleteEdgesByPath!.run(path, path);
       this._stmtDeleteSymbolsByPath!.run(path);
       this._stmtDeleteWikilinksFromNote!.run(path);
       const chunkIds = this._stmtDeleteChunksByPath!.all(path) as { chunk_id: string }[];

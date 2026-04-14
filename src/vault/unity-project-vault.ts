@@ -112,7 +112,7 @@ export class UnityProjectVault implements IVault {
         for (const s of this.store.listSymbolsForPath(path)) seeds.push(s.symbolId);
       }
       if (seeds.length) {
-        const pprScores = runPpr(this.store.listEdges(), seeds, { damping: 0.15, iterations: 10, epsilon: 1e-6 });
+        const pprScores = runPpr(this.getCachedEdges(), seeds, { damping: 0.15, iterations: 10, epsilon: 1e-6 });
         const boosted = fused.map((f) => {
           const chunk = this.store.getChunk(f.chunkId);
           if (!chunk) return { id: f.chunkId, score: f.rrf };
@@ -254,8 +254,10 @@ export class UnityProjectVault implements IVault {
     await this.adapter.upsertBatch(chunks.map((c) => ({ chunkId: c.chunkId, content: c.content })));
 
     // Phase 2: symbol + edge + wikilink extraction. Best-effort — must not block indexing.
+    // phase2-review M2: cap content size to prevent extractor DoS via huge files.
+    const EXTRACT_MAX_BYTES = 2 * 1024 * 1024;
     const extractor = getExtractorFor(lang);
-    if (extractor) {
+    if (extractor && body.length <= EXTRACT_MAX_BYTES) {
       try {
         const out = await extractor.extract({
           path: relPath, content: body,
@@ -267,20 +269,41 @@ export class UnityProjectVault implements IVault {
       } catch (err) {
         getLoggerSafe().warn(`[vault ${this.id}] symbol extraction failed for ${relPath}`, { err });
       }
+    } else if (extractor) {
+      getLoggerSafe().debug(`[vault ${this.id}] skipping symbol extraction for ${relPath} (${body.length} bytes > cap)`);
     }
+    this.invalidateEdgesCache();
     return true;
   }
 
   async findCallers(symbolId: string): Promise<VaultEdge[]> {
     const direct = this.store.findCallersOf(symbolId);
     if (direct.length) return direct;
-    // Name-tail fallback: match unresolved edges whose label ends with the short name.
+    // Name-tail fallback for unresolved externs. Cap matches to avoid accidental fan-out
+    // when the short name is common (phase2-review I6).
     const short = symbolId.split('::').at(-1)?.split('.').at(-1) ?? '';
     if (!short) return [];
-    return this.store.listEdges().filter(
-      (e) => e.kind === 'calls' && (e.toSymbol.endsWith(`::${short}`) || e.toSymbol.endsWith(`.${short}`)),
-    );
+    const FALLBACK_LIMIT = 50;
+    const out: VaultEdge[] = [];
+    for (const e of this.getCachedEdges()) {
+      if (e.kind !== 'calls') continue;
+      if (e.toSymbol.endsWith(`::${short}`) || e.toSymbol.endsWith(`.${short}`)) {
+        out.push(e);
+        if (out.length >= FALLBACK_LIMIT) break;
+      }
+    }
+    return out;
   }
+
+  // Phase2-review I3: cache listEdges for query/PPR/findCallers hot paths, invalidated
+  // whenever reindexFile changes anything. For 50k-edge projects, the full scan per query
+  // was a measurable hit; caching is safe because edge mutations all flow through reindexFile.
+  private _edgesCache: VaultEdge[] | null = null;
+  private getCachedEdges(): VaultEdge[] {
+    if (this._edgesCache === null) this._edgesCache = this.store.listEdges();
+    return this._edgesCache;
+  }
+  private invalidateEdgesCache(): void { this._edgesCache = null; }
 
   async findSymbolsByName(name: string, limit = 20): Promise<VaultSymbol[]> {
     return this.store.findSymbolsByName(name, limit);
@@ -296,11 +319,13 @@ export class UnityProjectVault implements IVault {
       const symbols = this.store.listFiles().flatMap((f) => this.store.listSymbolsForPath(f.path));
       const edges = this.store.listEdges();
       const canvas = buildCanvas({ symbols, edges });
-      await writeFile(
-        join(this.rootPath, '.strada/vault/graph.canvas'),
-        JSON.stringify(canvas, null, 2),
-        'utf8',
-      );
+      // phase2-review L1: atomic write via temp + rename so readCanvas/GET /canvas
+      // never observes a partial JSON document mid-write.
+      const finalPath = join(this.rootPath, '.strada/vault/graph.canvas');
+      const tmpPath = `${finalPath}.tmp`;
+      await writeFile(tmpPath, JSON.stringify(canvas, null, 2), 'utf8');
+      const { rename } = await import('node:fs/promises');
+      await rename(tmpPath, finalPath);
     } catch (err) {
       getLoggerSafe().warn(`[vault ${this.id}] canvas regen failed`, { err });
     }

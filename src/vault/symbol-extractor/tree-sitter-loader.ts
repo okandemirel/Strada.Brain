@@ -9,9 +9,12 @@ const require = createRequire(import.meta.url);
 export type TreeSitterLang = 'typescript' | 'csharp';
 
 let parserModulePromise: Promise<typeof import('web-tree-sitter')> | null = null;
-const parserCache = new Map<TreeSitterLang, TSParser>();
 const langCache = new Map<TreeSitterLang, TSLanguage>();
 
+// Phase2-review I4: cache language (expensive WASM load) but hand out a FRESH Parser per call.
+// web-tree-sitter's Parser instances are stateful — sharing one between concurrent `extract()`
+// calls corrupts parse trees. Grammar loading is amortised via `langCache` so fresh parsers
+// are cheap (constructor only).
 const WASM_PATHS: Record<TreeSitterLang, () => string> = {
   typescript: () => join(dirname(require.resolve('tree-sitter-typescript/package.json')), 'tree-sitter-typescript.wasm'),
   csharp:     () => join(dirname(require.resolve('tree-sitter-c-sharp/package.json')), 'tree-sitter-c_sharp.wasm'),
@@ -39,18 +42,14 @@ async function getLang(lang: TreeSitterLang): Promise<TSLanguage> {
 }
 
 export async function loadLanguageParser(lang: TreeSitterLang): Promise<TSParser> {
-  const cached = parserCache.get(lang);
-  if (cached) return cached;
   const mod = await getModule();
   const parser = new mod.Parser();
   const language = await getLang(lang);
   parser.setLanguage(language);
-  parserCache.set(lang, parser);
   return parser;
 }
 
 export function resetForTests(): void {
   parserModulePromise = null;
-  parserCache.clear();
   langCache.clear();
 }

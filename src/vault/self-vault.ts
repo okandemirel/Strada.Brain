@@ -1,4 +1,4 @@
-import { readdir, stat } from 'node:fs/promises';
+import { readdir, lstat } from 'node:fs/promises';
 import { join, relative, extname } from 'node:path';
 import { UnityProjectVault, type UnityVaultDeps } from './unity-project-vault.js';
 import { EXT_LANG } from './discovery.js';
@@ -27,6 +27,10 @@ async function walk(root: string, dir: string, out: VaultFile[]): Promise<void> 
   }
   for (const e of entries) {
     if (SELF_IGNORE.has(e.name)) continue;
+    // phase2-review M1: Dirent fields don't follow symlinks, but we still lstat and skip
+    // symlinked files/dirs outright so a hostile `tests/fixtures/evil → /etc/...` entry
+    // can never be indexed or broadcast via the graph canvas.
+    if (e.isSymbolicLink()) continue;
     const full = join(dir, e.name);
     if (e.isDirectory()) {
       await walk(root, full, out);
@@ -35,8 +39,8 @@ async function walk(root: string, dir: string, out: VaultFile[]): Promise<void> 
     if (!e.isFile()) continue;
     const lang = EXT_LANG[extname(e.name).toLowerCase()];
     if (!lang) continue;
-    const st = await stat(full).catch(() => null);
-    if (!st) continue;
+    const st = await lstat(full).catch(() => null);
+    if (!st || st.isSymbolicLink()) continue;
     out.push({
       path: relative(root, full).replaceAll('\\', '/'),
       blobHash: '',
@@ -65,8 +69,9 @@ export class SelfVault extends UnityProjectVault {
     const found: VaultFile[] = [];
     for (const r of SELF_INCLUDE_ROOTS) {
       const abs = join(this.rootPath, r);
-      const st = await stat(abs).catch(() => null);
-      if (!st) continue;
+      // phase2-review M1: lstat (don't follow symlinks even at the root level).
+      const st = await lstat(abs).catch(() => null);
+      if (!st || st.isSymbolicLink()) continue;
       if (st.isFile()) {
         const lang = EXT_LANG[extname(abs).toLowerCase()];
         if (!lang) continue;

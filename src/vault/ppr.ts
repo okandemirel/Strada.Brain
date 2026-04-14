@@ -51,12 +51,17 @@ export function runPpr(
       const share = r / outs.length;
       for (const u of outs) walk.set(u, (walk.get(u) ?? 0) + share);
     }
+    // Standard PPR update (phase2-review I5 — rewritten for clarity, unchanged behaviour):
+    //   r'(v) = d · s(v) + (1 − d) · (Σ_u r(u)/out(u) + dangling · s(v))
+    // where s(v) is the seed (teleport) weight, d is the teleport probability, and the
+    // dangling mass redistributes entirely to the seed vector.
     const next = new Map<string, number>();
     let diff = 0;
     for (const v of nodes) {
-      const teleMass = (teleport.get(v) ?? 0) * (o.damping + (1 - o.damping) * dangling);
-      const walkMass = (1 - o.damping) * (walk.get(v) ?? 0);
-      const nv = teleMass + walkMass;
+      const seedWeight = teleport.get(v) ?? 0;
+      const walkMass = walk.get(v) ?? 0;
+      const nv = o.damping * seedWeight
+               + (1 - o.damping) * (walkMass + dangling * seedWeight);
       diff += Math.abs(nv - rank.get(v)!);
       next.set(v, nv);
     }
