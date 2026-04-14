@@ -5,9 +5,11 @@ import { getLoggerSafe } from '../utils/logger.js';
 import { sendJson, sendJsonError, type RouteContext } from './server-types.js';
 
 /**
- * Express-shaped req/res for `registerVaultRoutes` (dev-server adapter only; production
- * uses the raw Node http path via `handleVaultRoutes`). Typed loosely because the
- * adapter surface intentionally mirrors Express's `any`-shaped request object.
+ * Express-shaped req/res for `registerVaultRoutes` (dev-server/test adapter; production
+ * uses the raw Node http path via `handleVaultRoutes`). A full `IncomingMessage &
+ * { params; query; body }` typing fights noUncheckedIndexedAccess on every handler
+ * access; the tradeoff isn't worth a lint-only win. The raw-http `handleVaultRoutes`
+ * path (production) IS strictly typed.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type ExpressLikeReq = any;
@@ -244,7 +246,7 @@ export function handleVaultRoutes(
     return true;
   }
   if (op === 'search' && method === 'POST') {
-    void readJsonBody(req).then(async (body: { text?: unknown; topK?: unknown }) => {
+    void readJsonBody(req).then(async (body) => {
       const rawText = body?.text;
       if (typeof rawText !== 'string') { sendJsonError(res, 400, 'invalid text'); return; }
       const text = rawText.slice(0, MAX_QUERY_TEXT_CHARS);
@@ -280,7 +282,16 @@ async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknow
   }
   const raw = Buffer.concat(chunks).toString('utf8');
   if (!raw) return {};
-  try { return JSON.parse(raw); } catch { return {}; }
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    // sec-L1: JSON.parse can return null/primitives/arrays; narrow to plain object
+    // so the Promise<Record<string, unknown>> return type is honest at runtime.
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
 }
 
 export interface WsBroadcaster { broadcast(msg: string): void; }

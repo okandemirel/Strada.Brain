@@ -364,7 +364,11 @@ function scheduleReindex(vault: IVault, vaultRelPath: string): void {
     // sec-L3: previously swallowed silently. Staleness is recoverable on the
     // next watcher tick, but we still want operators to see the failure.
     const msg = err instanceof Error ? err.message : String(err);
-    getLoggerSafe().warn(`[vault] reindex failed for ${vaultRelPath} (vault=${vault.id}): ${msg}`);
+    getLoggerSafe().warn('[vault] reindex failed', {
+      path: vaultRelPath,
+      vaultId: vault.id,
+      error: msg,
+    });
   });
 }
 
