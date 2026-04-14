@@ -1,4 +1,4 @@
-import { mkdir, readFile, stat, unlink } from 'node:fs/promises';
+import { mkdir, readFile, stat, unlink, writeFile } from 'node:fs/promises';
 import { mkdirSync } from 'node:fs';
 import { isAbsolute, join, relative } from 'node:path';
 import { EventEmitter } from 'node:events';
@@ -9,6 +9,7 @@ import { EmbeddingAdapter, type EmbeddingProvider, type VectorStore } from './em
 import { rrfFuse, packByBudget } from './query-pipeline.js';
 import { EXT_LANG, listIndexableFiles } from './discovery.js';
 import { getExtractorFor } from './symbol-extractor/index.js';
+import { buildCanvas } from './canvas-generator.js';
 import { getLoggerSafe } from '../utils/logger.js';
 import type {
   IVault, VaultFile, VaultQuery, VaultQueryResult, VaultStats, VaultId, VaultChunk,
@@ -192,7 +193,10 @@ export class UnityProjectVault implements IVault {
             getLoggerSafe().warn(`[vault ${this.id}] reindexFile failed for ${p}`, { err });
           }
         }
-        if (changed.length) this.emitter.emit('update', { vaultId: this.id, changedPaths: changed });
+        if (changed.length) {
+          await this.regenerateCanvas();
+          this.emitter.emit('update', { vaultId: this.id, changedPaths: changed });
+        }
       },
     });
     await this.watcher.start();
@@ -264,10 +268,33 @@ export class UnityProjectVault implements IVault {
     return this.store.listSymbolsForPath(path);
   }
 
-  private async fullIndex(): Promise<void> {
+  protected async regenerateCanvas(): Promise<void> {
+    try {
+      const symbols = this.store.listFiles().flatMap((f) => this.store.listSymbolsForPath(f.path));
+      const edges = this.store.listEdges();
+      const canvas = buildCanvas({ symbols, edges });
+      await writeFile(
+        join(this.rootPath, '.strada/vault/graph.canvas'),
+        JSON.stringify(canvas, null, 2),
+        'utf8',
+      );
+    } catch (err) {
+      getLoggerSafe().warn(`[vault ${this.id}] canvas regen failed`, { err });
+    }
+  }
+
+  async readCanvas(): Promise<unknown> {
+    try {
+      const raw = await readFile(join(this.rootPath, '.strada/vault/graph.canvas'), 'utf8');
+      return JSON.parse(raw);
+    } catch { return { nodes: [], edges: [] }; }
+  }
+
+  protected async fullIndex(): Promise<void> {
     const files = await listIndexableFiles(this.rootPath);
     const changed: string[] = [];
     for (const f of files) if (await this.reindexFile(f.path)) changed.push(f.path);
+    await this.regenerateCanvas();
     if (changed.length) this.emitter.emit('update', { vaultId: this.id, changedPaths: changed });
   }
 
@@ -284,6 +311,7 @@ export class UnityProjectVault implements IVault {
     for (const p of before) {
       if (!present.has(p)) { this.store.deleteFile(p); changed.push(p); }
     }
+    await this.regenerateCanvas();
     if (changed.length) this.emitter.emit('update', { vaultId: this.id, changedPaths: changed });
     return changed.length;
   }
