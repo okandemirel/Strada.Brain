@@ -6882,3 +6882,23 @@ export class Orchestrator {
   }
 
 }
+
+/**
+ * Vault write-hook bridge. Called after an Edit/Write tool completes; if the tool
+ * produced a file path and a hook is available, asks the hook to reindex and
+ * appends a stale-warning string to `result.warnings` when the hook reports one.
+ */
+export async function applyWriteHookToToolResult(
+  result: { toolName: string; output?: { path?: string }; warnings?: string[] },
+  hook: { afterWrite: (p: string) => Promise<string | null> } | null,
+): Promise<void> {
+  if (!hook) return;
+  if (!(result.toolName === 'Edit' || result.toolName === 'Write')) return;
+  const path = result.output?.path;
+  if (!path) return;
+  const warning = await hook.afterWrite(path);
+  if (warning) {
+    result.warnings = result.warnings ?? [];
+    result.warnings.push(warning);
+  }
+}
