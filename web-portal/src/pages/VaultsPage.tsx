@@ -2,9 +2,10 @@ import { useEffect, useState } from 'react';
 import VaultList from './vaults/VaultList';
 import VaultFilesTab from './vaults/VaultFilesTab';
 import VaultSearchTab from './vaults/VaultSearchTab';
+import VaultGraphTab from './vaults/VaultGraphTab';
 import { useVaultStore } from '../stores/vault-store';
 
-type Tab = 'files' | 'search';
+type Tab = 'files' | 'search' | 'graph';
 
 export default function VaultsPage() {
   const [tab, setTab] = useState<Tab>('files');
@@ -26,9 +27,10 @@ export default function VaultsPage() {
         <nav className="border-b p-2 flex gap-2">
           <button onClick={() => setTab('files')} className={`px-3 py-1 ${tab === 'files' ? 'border-b-2 border-accent' : ''}`}>Files</button>
           <button onClick={() => setTab('search')} className={`px-3 py-1 ${tab === 'search' ? 'border-b-2 border-accent' : ''}`}>Search</button>
+          <button onClick={() => setTab('graph')} className={`px-3 py-1 ${tab === 'graph' ? 'border-b-2 border-accent' : ''}`}>Graph</button>
         </nav>
         <section className="flex-1 overflow-hidden">
-          {tab === 'files' ? <VaultFilesTab /> : <VaultSearchTab />}
+          {tab === 'files' ? <VaultFilesTab /> : tab === 'search' ? <VaultSearchTab /> : <VaultGraphTab />}
         </section>
       </main>
     </div>
