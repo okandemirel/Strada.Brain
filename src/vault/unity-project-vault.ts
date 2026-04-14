@@ -8,9 +8,11 @@ import { xxhash64Hex } from './hash.js';
 import { EmbeddingAdapter, type EmbeddingProvider, type VectorStore } from './embedding-adapter.js';
 import { rrfFuse, packByBudget } from './query-pipeline.js';
 import { EXT_LANG, listIndexableFiles } from './discovery.js';
+import { getExtractorFor } from './symbol-extractor/index.js';
 import { getLoggerSafe } from '../utils/logger.js';
 import type {
   IVault, VaultFile, VaultQuery, VaultQueryResult, VaultStats, VaultId, VaultChunk,
+  VaultSymbol, VaultEdge,
 } from './vault.interface.js';
 
 export interface UnityVaultDeps {
@@ -54,12 +56,12 @@ function payloadChunkId(hit: { payload?: unknown }): string | null {
 
 export class UnityProjectVault implements IVault {
   readonly id: VaultId;
-  readonly kind = 'unity-project' as const;
+  readonly kind: 'unity-project' | 'self' = 'unity-project';
   readonly rootPath: string;
-  private store: SqliteVaultStore;
-  private adapter: EmbeddingAdapter;
-  private emitter = new EventEmitter();
-  private dbPath: string;
+  protected store: SqliteVaultStore;
+  protected adapter: EmbeddingAdapter;
+  protected emitter = new EventEmitter();
+  protected dbPath: string;
   private watcher: IVaultWatcher | null = null;
 
   constructor(deps: UnityVaultDeps) {
@@ -223,7 +225,43 @@ export class UnityProjectVault implements IVault {
     const chunks = chunkFile({ path: relPath, content: body, lang });
     for (const c of chunks) this.store.upsertChunk(c);
     await this.adapter.upsertBatch(chunks.map((c) => ({ chunkId: c.chunkId, content: c.content })));
+
+    // Phase 2: symbol + edge + wikilink extraction. Best-effort — must not block indexing.
+    const extractor = getExtractorFor(lang);
+    if (extractor) {
+      try {
+        const out = await extractor.extract({
+          path: relPath, content: body,
+          lang: lang as 'typescript' | 'csharp' | 'markdown',
+        });
+        for (const s of out.symbols) this.store.upsertSymbol(s);
+        for (const e of out.edges) this.store.upsertEdge(e);
+        for (const w of out.wikilinks) this.store.upsertWikilink(w);
+      } catch (err) {
+        getLoggerSafe().warn(`[vault ${this.id}] symbol extraction failed for ${relPath}`, { err });
+      }
+    }
     return true;
+  }
+
+  async findCallers(symbolId: string): Promise<VaultEdge[]> {
+    const direct = this.store.findCallersOf(symbolId);
+    if (direct.length) return direct;
+    // Name-tail fallback: match unresolved edges whose label ends with the short name.
+    const short = symbolId.split('::').at(-1)?.split('.').at(-1) ?? '';
+    if (!short) return [];
+    return this.store.listEdges().filter(
+      (e) => e.kind === 'calls' && (e.toSymbol.endsWith(`::${short}`) || e.toSymbol.endsWith(`.${short}`)),
+    );
+  }
+
+  async findSymbolsByName(name: string, limit = 20): Promise<VaultSymbol[]> {
+    return this.store.findSymbolsByName(name, limit);
+  }
+
+  /** Test hook — avoids exposing the store directly to consumers. */
+  listSymbolsForTest(path: string): VaultSymbol[] {
+    return this.store.listSymbolsForPath(path);
   }
 
   private async fullIndex(): Promise<void> {
