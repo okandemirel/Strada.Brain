@@ -168,9 +168,6 @@ export class UnityProjectVault implements IVault {
       root: string; debounceMs: number; onBatch: (paths: string[]) => Promise<void>;
     }) => IVaultWatcher;
     try {
-      // watcher.ts is a Task 9 file not yet created — suppress missing-module error intentionally.
-      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-      // @ts-expect-error Task 9 file not yet created
       const mod = await import('./watcher.js') as { VaultWatcher: typeof WatcherCtor };
       WatcherCtor = mod.VaultWatcher;
     } catch {
