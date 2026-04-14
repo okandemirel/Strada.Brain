@@ -40,6 +40,12 @@ function inferLang(path: string): VaultFile['lang'] {
   return 'unknown';
 }
 
+function globToRegex(glob: string): RegExp {
+  const escaped = glob.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+  const pattern = escaped.replace(/\*\*/g, '.*').replace(/\*/g, '[^/]*').replace(/\?/g, '.');
+  return new RegExp(`^${pattern}$`);
+}
+
 function payloadChunkId(hit: { payload?: unknown }): string | null {
   if (hit.payload && typeof hit.payload === 'object' && 'chunkId' in hit.payload) {
     return (hit.payload as { chunkId: string }).chunkId;
@@ -94,11 +100,27 @@ export class UnityProjectVault implements IVault {
       .map((h) => ({ chunkId: payloadChunkId(h), score: h.score }))
       .filter((r): r is { chunkId: string; score: number } => r.chunkId !== null);
     const fused = rrfFuse(fts, hnswRanked, 60).slice(0, topK);
-    const chunks = fused
+    let chunks = fused
       .map((f) => this.store.getChunk(f.chunkId))
       .filter((c): c is VaultChunk => c !== null);
+
+    // Fix I1: apply langFilter
+    if (q.langFilter?.length) {
+      const allowed = new Set(q.langFilter);
+      chunks = chunks.filter((c) => {
+        const file = this.store.getFile(c.path);
+        return file !== null && allowed.has(file.lang);
+      });
+    }
+
+    // Fix I1: apply pathGlob
+    if (q.pathGlob) {
+      const re = globToRegex(q.pathGlob);
+      chunks = chunks.filter((c) => re.test(c.path));
+    }
+
     const budget = q.budgetTokens ?? Number.POSITIVE_INFINITY;
-    const { kept } = packByBudget(chunks, budget);
+    const { kept, dropped } = packByBudget(chunks, budget);
     return {
       hits: kept.map((chunk) => {
         const f = fused.find((x) => x.chunkId === chunk.chunkId)!;
@@ -112,7 +134,7 @@ export class UnityProjectVault implements IVault {
         };
       }),
       budgetUsed: kept.reduce((a, c) => a + c.tokenCount, 0),
-      truncated: kept.length < chunks.length,
+      truncated: dropped.length > 0,  // Fix I2: use dropped from packByBudget
     };
   }
 
@@ -158,8 +180,15 @@ export class UnityProjectVault implements IVault {
       root: this.rootPath,
       debounceMs,
       onBatch: async (paths) => {
+        // Fix I3: wrap each reindex call so one failing file doesn't abort the batch.
         const changed: string[] = [];
-        for (const p of paths) if (await this.reindexFile(p)) changed.push(p);
+        for (const p of paths) {
+          try {
+            if (await this.reindexFile(p)) changed.push(p);
+          } catch (err) {
+            console.warn(`[vault ${this.id}] reindexFile failed for ${p}:`, err);
+          }
+        }
         if (changed.length) this.emitter.emit('update', { vaultId: this.id, changedPaths: changed });
       },
     });
@@ -179,8 +208,10 @@ export class UnityProjectVault implements IVault {
     const abs = join(this.rootPath, relPath);
     const body = await readFile(abs, 'utf8').catch(() => null);
     if (body === null) { this.store.deleteFile(relPath); return true; }
-    const st = await stat(abs);
     const hash = xxhash64Hex(body);
+    const existing = this.store.getFile(relPath);
+    if (existing?.blobHash === hash) return false;  // Fix C1: short-circuit on unchanged hash
+    const st = await stat(abs);
     const lang = inferLang(relPath);
     this.store.deleteFile(relPath);
     this.store.upsertFile({
@@ -202,20 +233,17 @@ export class UnityProjectVault implements IVault {
   }
 
   private async reindexChanged(): Promise<number> {
+    // Fix C2: delegate to reindexFile (which has the hash short-circuit from Fix C1),
+    // eliminating the duplicate file read that existed in the old implementation.
     const files = await listIndexableFiles(this.rootPath);
     const changed: string[] = [];
     for (const f of files) {
-      const body = await readFile(join(this.rootPath, f.path), 'utf8');
-      const hash = xxhash64Hex(body);
-      const existing = this.store.getFile(f.path);
-      if (existing?.blobHash === hash) continue;
-      await this.reindexFile(f.path);
-      changed.push(f.path);
+      if (await this.reindexFile(f.path)) changed.push(f.path);
     }
-    const existingPaths = new Set(this.store.listFiles().map((f) => f.path));
-    const presentPaths = new Set(files.map((f) => f.path));
-    for (const p of existingPaths) {
-      if (!presentPaths.has(p)) { this.store.deleteFile(p); changed.push(p); }
+    const existing = new Set(this.store.listFiles().map((f) => f.path));
+    const present = new Set(files.map((f) => f.path));
+    for (const p of existing) {
+      if (!present.has(p)) { this.store.deleteFile(p); changed.push(p); }
     }
     if (changed.length) this.emitter.emit('update', { vaultId: this.id, changedPaths: changed });
     return changed.length;

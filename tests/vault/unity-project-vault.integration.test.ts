@@ -46,10 +46,27 @@ describe('UnityProjectVault', () => {
     expect(stats.chunkCount).toBeGreaterThanOrEqual(2);
   });
 
-  it('query finds chunks by keyword', async () => {
+  it('query finds chunks by keyword via FTS', async () => {
     await vault.init();
     const res = await vault.query({ text: 'Attack', topK: 5 });
-    expect(res.hits.some((h) => h.chunk.path.endsWith('Enemy.cs'))).toBe(true);
+    const enemyHit = res.hits.find((h) => h.chunk.path.endsWith('Enemy.cs'));
+    expect(enemyHit).toBeDefined();
+    // Must come via FTS, not just because the stub HNSW returned all items
+    expect(enemyHit!.scores.fts).not.toBeNull();
+  });
+
+  it('query respects langFilter', async () => {
+    await vault.init();
+    const res = await vault.query({ text: 'Attack', topK: 10, langFilter: ['markdown'] });
+    // Fixture has NO markdown files → result must be empty
+    expect(res.hits).toHaveLength(0);
+  });
+
+  it('query sets truncated=true when budget drops results', async () => {
+    await vault.init();
+    // Budget of 1 token will drop all real chunks (each chunk has many tokens).
+    const res = await vault.query({ text: 'attack OR move OR player', topK: 10, budgetTokens: 1 });
+    expect(res.truncated).toBe(true);
   });
 
   it('sync with no changes reports 0 changed', async () => {
