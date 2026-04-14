@@ -156,3 +156,32 @@ export async function initVaultsFromBootstrap(input: InitVaultsInput): Promise<v
   await vault.startWatch(input.config.vault.debounceMs ?? 800);
   input.vaultRegistry.register(vault);
 }
+
+import { SelfVault } from "../../vault/self-vault.js";
+
+export interface InitSelfVaultInput {
+  config: {
+    vault?: {
+      enabled: boolean;
+      self?: { enabled?: boolean };
+    };
+  };
+  vaultRegistry: VaultRegistry;
+  embedding: EmbeddingProvider;
+  vectorStore: VectorStore;
+  /** Absolute path to the Strada.Brain repo root. */
+  repoRoot: string;
+}
+
+export async function initSelfVaultFromBootstrap(input: InitSelfVaultInput): Promise<void> {
+  if (!input.config.vault?.enabled) return;
+  if (input.config.vault.self?.enabled === false) return;  // explicit opt-out
+  const vault = new SelfVault({
+    id: "self:strada-brain",
+    rootPath: input.repoRoot,
+    embedding: input.embedding,
+    vectorStore: input.vectorStore,
+  });
+  await vault.init();
+  input.vaultRegistry.register(vault);
+}
