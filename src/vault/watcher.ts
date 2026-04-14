@@ -5,9 +5,14 @@ export interface VaultWatcherOptions {
   root: string;
   debounceMs: number;
   onBatch: (paths: string[]) => Promise<void> | void;
+  /** Poll interval in ms. Defaults to 100 for test-runner reliability on macOS FSEvents. Set 0 to use native events. */
+  pollIntervalMs?: number;
 }
 
 const IGNORE_REGEX = /(^|\/)(Library|Temp|Logs|obj|bin|\.git|node_modules|\.strada)(\/|$)/;
+// Chokidar's 'ready' fires once the initial scan settles, but the polling backend needs a short window
+// to install stat callbacks before subsequent writes register reliably.
+const POLLING_SETTLE_MS = 50;
 
 export class VaultWatcher {
   private watcher: FSWatcher | null = null;
@@ -16,10 +21,12 @@ export class VaultWatcher {
   constructor(private opts: VaultWatcherOptions) {}
 
   async start(): Promise<void> {
+    if (this.watcher) return;
+    const pollInterval = this.opts.pollIntervalMs ?? 100;
     this.watcher = chokidar.watch(this.opts.root, {
       ignoreInitial: true,
-      usePolling: true,
-      interval: 100,
+      usePolling: pollInterval > 0,
+      interval: pollInterval > 0 ? pollInterval : undefined,
       ignored: (path) => IGNORE_REGEX.test(path.replaceAll('\\', '/')),
     });
     const enqueue = (absPath: string) => {
@@ -31,25 +38,29 @@ export class VaultWatcher {
     this.watcher.on('add', enqueue);
     this.watcher.on('change', enqueue);
     this.watcher.on('unlink', enqueue);
-    // Wait for the watcher to finish its initial scan and settle so subsequent writes are detected.
     await new Promise<void>((resolve) => {
       this.watcher!.on('ready', () => {
-        // Brief settle to ensure the polling loop is active before callers write files.
-        setTimeout(resolve, 50);
+        if (pollInterval > 0) setTimeout(resolve, POLLING_SETTLE_MS);
+        else resolve();
       });
     });
   }
 
   private scheduleDrain(): void {
     if (this.timer) clearTimeout(this.timer);
-    this.timer = setTimeout(() => this.drain(), this.opts.debounceMs);
+    this.timer = setTimeout(() => void this.drain(), this.opts.debounceMs);
   }
 
   private async drain(): Promise<void> {
     const batch = [...this.dirty].sort();
     this.dirty.clear();
     this.timer = null;
-    if (batch.length) await this.opts.onBatch(batch);
+    if (batch.length === 0) return;
+    try {
+      await this.opts.onBatch(batch);
+    } catch (err) {
+      console.warn('[VaultWatcher] onBatch threw:', err);
+    }
   }
 
   async stop(): Promise<void> {
