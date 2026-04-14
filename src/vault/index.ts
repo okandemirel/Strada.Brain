@@ -9,3 +9,8 @@ export { discoverUnityRoots, listIndexableFiles, EXT_LANG, type UnityRoots } fro
 export { chunkFile } from './chunker.js';
 export { xxhash64Hex, chunkIdFor } from './hash.js';
 export { rrfFuse, packByBudget, type Ranked, type Fused } from './query-pipeline.js';
+export { SelfVault } from './self-vault.js';
+export { getExtractorFor } from './symbol-extractor/index.js';
+export { runPpr, type PprOptions } from './ppr.js';
+export { buildCanvas, type Canvas, type CanvasNode, type CanvasEdge } from './canvas-generator.js';
+export type { ISymbolExtractor, ExtractInput, ExtractOutput } from './symbol-extractor/index.js';

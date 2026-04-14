@@ -601,6 +601,19 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
         embedding: vaultEmbedding,
         vectorStore: vaultVectorStore,
       });
+      // Phase 2: also register SelfVault for Strada.Brain's own source (opt-out via config.vault.self.enabled = false).
+      try {
+        const { initSelfVaultFromBootstrap } = await import("./bootstrap-stages/stage-knowledge.js");
+        await initSelfVaultFromBootstrap({
+          config: { vault: config.vault },
+          vaultRegistry,
+          embedding: vaultEmbedding,
+          vectorStore: vaultVectorStore,
+          repoRoot: process.cwd(),
+        });
+      } catch (err) {
+        logger.warn("[vault] SelfVault initialization failed", { err });
+      }
     } catch (err) {
       logger.warn("[vault] bootstrap initialization failed", { err });
     }

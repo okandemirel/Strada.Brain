@@ -1,4 +1,4 @@
-# Vault Subsystem (Phase 1)
+# Vault Subsystem (Phase 1 + Phase 2)
 
 Persistent, per-project codebase memory that replaces per-request file re-reading.
 
@@ -54,7 +54,35 @@ Env: `STRADA_VAULT_ENABLED`, `STRADA_VAULT_WRITE_HOOK_BUDGET_MS`, `STRADA_VAULT_
 
 `vault_init`, `vault_sync`, `vault_status` are registered with the agent tool registry at bootstrap (bootstrap integration lands via `initVaultsFromBootstrap` helper in `stage-knowledge.ts`).
 
+## Phase 2 — Symbol Graph & PPR
+
+Phase 2 adds a deterministic L2 symbol layer on top of Phase 1's L3 hybrid search.
+
+### What's new
+
+- `vault_symbols`, `vault_edges`, `vault_wikilinks` tables in `schema.sql`. `vault_meta.indexer_version = 'phase2.v1'`.
+- Tree-sitter WASM extractors for TypeScript and C# (`src/vault/symbol-extractor/`); regex wikilink extractor for markdown.
+- `.strada/vault/graph.canvas` — JSON Canvas 1.0, regenerated on every cold start, `/vault sync`, and watcher drain.
+- `VaultQuery.focusFiles` triggers Personalized PageRank re-rank (`src/vault/ppr.ts`) over the edge graph; RRF-only path preserved when omitted.
+- `SelfVault` (`src/vault/self-vault.ts`) — indexes Strada.Brain's own source (`src/`, `web-portal/src/`, `tests/`, `docs/`, `AGENTS.md`, `CLAUDE.md`).
+- Portal `/vaults` gains a **Graph** tab rendering the canvas via `@xyflow/react` + `@dagrejs/dagre` (no new frontend deps).
+
+### New HTTP endpoints
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/vaults/:id/canvas` | Serve `graph.canvas` |
+| GET | `/api/vaults/:id/symbols/by-name?q=X` | Find symbols by short name |
+| GET | `/api/vaults/:id/symbols/:symbolId/callers` | List incoming call edges |
+
+### Symbol ID format
+
+`<lang>::<relPath>::<qualifiedName>` — e.g. `csharp::Assets/Scripts/Player.cs::Game.Player.Move` or `typescript::src/foo.ts::Foo.bar`. Unresolved externs use `<lang>::unresolved::<label>`.
+
+### Feature flag
+
+`config.vault.enabled` activates the subsystem; `config.vault.self.enabled = false` opts out of SelfVault specifically.
+
 ## Next phases
 
-- **Phase 2**: tree-sitter symbol graph, personalized PageRank, Graph tab, SelfVault.
 - **Phase 3**: Haiku rolling summaries, FrameworkVault upgrade (semantic search + docstring extraction), bidirectional Learning pipeline coupling.
