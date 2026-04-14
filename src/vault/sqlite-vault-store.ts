@@ -2,7 +2,7 @@ import Database from 'better-sqlite3';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import type { VaultFile, VaultChunk } from './vault.interface.js';
+import type { VaultFile, VaultChunk, VaultSymbol, VaultEdge, VaultWikilink } from './vault.interface.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SCHEMA_PATH = join(__dirname, 'schema.sql');
@@ -30,6 +30,18 @@ export class SqliteVaultStore {
   private _stmtGetChunk: Database.Statement | null = null;
   private _stmtChunkCount: Database.Statement | null = null;
   private _stmtSearchFts: Database.Statement | null = null;
+  private _stmtUpsertSymbol: Database.Statement | null = null;
+  private _stmtListSymbolsByPath: Database.Statement | null = null;
+  private _stmtFindSymbolsByName: Database.Statement | null = null;
+  private _stmtDeleteSymbolsByPath: Database.Statement | null = null;
+  private _stmtUpsertEdge: Database.Statement | null = null;
+  private _stmtFindCallers: Database.Statement | null = null;
+  private _stmtListEdgesAll: Database.Statement | null = null;
+  private _stmtDeleteEdgesByPath: Database.Statement | null = null;
+  private _stmtUpsertWikilink: Database.Statement | null = null;
+  private _stmtListWikilinksTo: Database.Statement | null = null;
+  private _stmtMarkWikilinkResolved: Database.Statement | null = null;
+  private _stmtDeleteWikilinksFromNote: Database.Statement | null = null;
 
   constructor(dbPath: string) {
     this.db = new Database(dbPath);
@@ -77,6 +89,35 @@ export class SqliteVaultStore {
       ORDER BY raw
       LIMIT ?
     `);
+    this._stmtUpsertSymbol = this.db.prepare(`
+      INSERT INTO vault_symbols (symbol_id, path, kind, name, display, start_line, end_line, doc)
+      VALUES (@symbolId, @path, @kind, @name, @display, @startLine, @endLine, @doc)
+      ON CONFLICT(symbol_id) DO UPDATE SET
+        path=excluded.path, kind=excluded.kind, name=excluded.name, display=excluded.display,
+        start_line=excluded.start_line, end_line=excluded.end_line, doc=excluded.doc
+    `);
+    this._stmtListSymbolsByPath = this.db.prepare('SELECT * FROM vault_symbols WHERE path = ? ORDER BY start_line');
+    this._stmtFindSymbolsByName = this.db.prepare('SELECT * FROM vault_symbols WHERE name = ? ORDER BY path LIMIT ?');
+    this._stmtDeleteSymbolsByPath = this.db.prepare('DELETE FROM vault_symbols WHERE path = ?');
+    this._stmtUpsertEdge = this.db.prepare(`
+      INSERT INTO vault_edges (from_symbol, to_symbol, kind, at_line)
+      VALUES (@fromSymbol, @toSymbol, @kind, @atLine)
+      ON CONFLICT(from_symbol, to_symbol, kind, at_line) DO NOTHING
+    `);
+    this._stmtFindCallers = this.db.prepare('SELECT * FROM vault_edges WHERE to_symbol = ?');
+    this._stmtListEdgesAll = this.db.prepare('SELECT * FROM vault_edges');
+    this._stmtDeleteEdgesByPath = this.db.prepare(`
+      DELETE FROM vault_edges
+      WHERE from_symbol IN (SELECT symbol_id FROM vault_symbols WHERE path = ?)
+    `);
+    this._stmtUpsertWikilink = this.db.prepare(`
+      INSERT INTO vault_wikilinks (from_note, target, resolved)
+      VALUES (@fromNote, @target, @resolved)
+      ON CONFLICT(from_note, target) DO UPDATE SET resolved = excluded.resolved
+    `);
+    this._stmtListWikilinksTo = this.db.prepare('SELECT * FROM vault_wikilinks WHERE target = ?');
+    this._stmtMarkWikilinkResolved = this.db.prepare('UPDATE vault_wikilinks SET resolved = 1 WHERE from_note = ? AND target = ?');
+    this._stmtDeleteWikilinksFromNote = this.db.prepare('DELETE FROM vault_wikilinks WHERE from_note = ?');
   }
 
   upsertFile(f: VaultFile): void {
@@ -103,6 +144,12 @@ export class SqliteVaultStore {
   deleteFile(path: string): void {
     // Fix 1 (TOCTOU): SELECT chunk_ids inside the transaction so it sees the same snapshot as the writes.
     const txn = this.db.transaction(() => {
+      // Phase 2: edges have a non-FK to_symbol — drop edges originating in this file first,
+      // then symbols (FK CASCADE on vault_files would also drop them, but we do it explicitly
+      // so the order is stable). vault_wikilinks has no FK; clear by from_note path equivalence.
+      this._stmtDeleteEdgesByPath!.run(path);
+      this._stmtDeleteSymbolsByPath!.run(path);
+      this._stmtDeleteWikilinksFromNote!.run(path);
       const chunkIds = this._stmtDeleteChunksByPath!.all(path) as { chunk_id: string }[];
       for (const { chunk_id } of chunkIds) this._stmtDeleteFts!.run(chunk_id);
       this._stmtDeleteFile!.run(path);
@@ -163,6 +210,65 @@ export class SqliteVaultStore {
       indexedAt: row['indexed_at'] as number,
     };
   }
+
+  upsertSymbol(s: VaultSymbol): void { this._stmtUpsertSymbol!.run(s); }
+
+  listSymbolsForPath(path: string): VaultSymbol[] {
+    const rows = this._stmtListSymbolsByPath!.all(path) as Record<string, unknown>[];
+    return rows.map(this.mapSymbol);
+  }
+
+  findSymbolsByName(name: string, limit = 20): VaultSymbol[] {
+    const rows = this._stmtFindSymbolsByName!.all(name, limit) as Record<string, unknown>[];
+    return rows.map(this.mapSymbol);
+  }
+
+  upsertEdge(e: VaultEdge): void { this._stmtUpsertEdge!.run(e); }
+
+  findCallersOf(symbolId: string): VaultEdge[] {
+    const rows = this._stmtFindCallers!.all(symbolId) as Record<string, unknown>[];
+    return rows.map(this.mapEdge);
+  }
+
+  listEdges(): VaultEdge[] {
+    const rows = this._stmtListEdgesAll!.all() as Record<string, unknown>[];
+    return rows.map(this.mapEdge);
+  }
+
+  upsertWikilink(w: VaultWikilink): void {
+    this._stmtUpsertWikilink!.run({ ...w, resolved: w.resolved ? 1 : 0 });
+  }
+
+  listWikilinksTo(target: string): VaultWikilink[] {
+    const rows = this._stmtListWikilinksTo!.all(target) as Record<string, unknown>[];
+    return rows.map((r) => ({
+      fromNote: r['from_note'] as string,
+      target: r['target'] as string,
+      resolved: (r['resolved'] as number) === 1,
+    }));
+  }
+
+  markWikilinkResolved(fromNote: string, target: string): void {
+    this._stmtMarkWikilinkResolved!.run(fromNote, target);
+  }
+
+  private mapSymbol = (row: Record<string, unknown>): VaultSymbol => ({
+    symbolId: row['symbol_id'] as string,
+    path: row['path'] as string,
+    kind: row['kind'] as VaultSymbol['kind'],
+    name: row['name'] as string,
+    display: row['display'] as string,
+    startLine: row['start_line'] as number,
+    endLine: row['end_line'] as number,
+    doc: (row['doc'] as string | null) ?? null,
+  });
+
+  private mapEdge = (row: Record<string, unknown>): VaultEdge => ({
+    fromSymbol: row['from_symbol'] as string,
+    toSymbol: row['to_symbol'] as string,
+    kind: row['kind'] as VaultEdge['kind'],
+    atLine: row['at_line'] as number,
+  });
 
   listTableNamesForTest(): string[] {
     const rows = this.db.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all() as { name: string }[];

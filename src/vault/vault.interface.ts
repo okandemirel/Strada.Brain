@@ -46,6 +46,33 @@ export interface VaultStats {
   dbBytes: number;
 }
 
+export type EdgeKind = 'calls' | 'references' | 'inherits' | 'implements' | 'imports' | 'embeds';
+export type SymbolKind = 'class' | 'method' | 'field' | 'namespace' | 'function' | 'interface' | 'note';
+
+export interface VaultSymbol {
+  symbolId: string;
+  path: string;
+  kind: SymbolKind;
+  name: string;
+  display: string;
+  startLine: number;
+  endLine: number;
+  doc: string | null;
+}
+
+export interface VaultEdge {
+  fromSymbol: string;
+  toSymbol: string;
+  kind: EdgeKind;
+  atLine: number;
+}
+
+export interface VaultWikilink {
+  fromNote: string;
+  target: string;
+  resolved: boolean;
+}
+
 export interface IVault {
   readonly id: VaultId;
   readonly kind: VaultKind;
@@ -59,4 +86,7 @@ export interface IVault {
   listFiles(): VaultFile[];
   readFile(path: string): Promise<string>;
   onUpdate(listener: (p: { vaultId: VaultId; changedPaths: string[] }) => void): () => void;
+  findCallers?(symbolId: string): Promise<VaultEdge[]>;
+  findSymbolsByName?(name: string, limit?: number): Promise<VaultSymbol[]>;
+  readCanvas?(): Promise<unknown>;
 }
