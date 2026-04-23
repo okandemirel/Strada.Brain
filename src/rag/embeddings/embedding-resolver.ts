@@ -200,11 +200,11 @@ export function resolveEmbeddingProvider(config: Config): EmbeddingResolution | 
 
   // 3. Fallback -- use any configured embedding-capable provider, even if the
   // response chain itself contains only non-embedding models like Kimi/Claude.
+  // Ollama is always considered (last in AUTO_FALLBACK_ORDER) so that a local
+  // installation is used when no cloud embedding credential is available.
   const triedProviders = new Set(chainNames);
   const fallbackSourcePrefix = chainNames.length > 0 ? "auto-fallback" : "auto";
-  const fallbackCandidates = chainNames.length > 0
-    ? AUTO_FALLBACK_ORDER.filter((name) => name !== "ollama")
-    : AUTO_FALLBACK_ORDER;
+  const fallbackCandidates = AUTO_FALLBACK_ORDER;
 
   for (const name of fallbackCandidates) {
     if (triedProviders.has(name)) continue;

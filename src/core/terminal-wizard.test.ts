@@ -11,7 +11,6 @@ import {
   resolveNodeUpgradeStrategy,
   getSuggestedNodeUpgradeCommand,
   nodeSupportsWebPortalBuild,
-  validateUnityPath,
   resolveNvmDir,
 } from "./terminal-wizard.js";
 
@@ -371,32 +370,3 @@ describe("launchWebSetupWizard", () => {
   });
 });
 
-describe("validateUnityPath", () => {
-  it("accepts temp paths when HOME resolves through a symlinked tmp directory", () => {
-    const tempHome = mkdtempSync(path.join(os.tmpdir(), "strada-home-"));
-    const projectDir = path.join(tempHome, "Projects", "MyGame");
-    mkdirSync(projectDir, { recursive: true });
-
-    try {
-      expect(validateUnityPath(projectDir, tempHome)).toEqual({ valid: true });
-    } finally {
-      rmSync(tempHome, { recursive: true, force: true });
-    }
-  });
-
-  it("accepts Windows-style project paths inside the user profile", () => {
-    if (process.platform !== "win32") {
-      return;
-    }
-
-    const tempHome = mkdtempSync(path.join(os.tmpdir(), "strada-home-win-"));
-    const projectDir = path.join(tempHome, "Projects", "MyGame");
-    mkdirSync(projectDir, { recursive: true });
-
-    try {
-      expect(validateUnityPath(projectDir, tempHome)).toEqual({ valid: true });
-    } finally {
-      rmSync(tempHome, { recursive: true, force: true });
-    }
-  });
-});

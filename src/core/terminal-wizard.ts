@@ -101,10 +101,9 @@ export interface ValidationResult {
 }
 
 /**
- * Validate that a Unity project path is absolute, exists, is a directory,
- * and resides inside the user's home directory.
+ * Validate that a Unity project path is absolute, exists, and is a directory.
  */
-export function validateUnityPath(inputPath: string, homeDir: string = os.homedir()): ValidationResult {
+export function validateUnityPath(inputPath: string): ValidationResult {
   if (!inputPath || inputPath.trim() === "") {
     return { valid: false, error: "Path cannot be empty." };
   }
@@ -120,22 +119,6 @@ export function validateUnityPath(inputPath: string, homeDir: string = os.homedi
     resolved = fs.realpathSync(trimmed);
   } catch {
     return { valid: false, error: `Path does not exist: ${trimmed}` };
-  }
-
-  const homedir = homeDir;
-  let resolvedHome = homedir;
-  try {
-    resolvedHome = fs.realpathSync(homedir);
-  } catch {
-    resolvedHome = homedir;
-  }
-
-  const relativeToHome = path.relative(resolvedHome, resolved);
-  const isInsideHome = relativeToHome === ""
-    || (!relativeToHome.startsWith("..") && !path.isAbsolute(relativeToHome));
-
-  if (!isInsideHome) {
-    return { valid: false, error: `Path must be inside your home directory (${homedir}).` };
   }
 
   if (!fs.statSync(resolved).isDirectory()) {

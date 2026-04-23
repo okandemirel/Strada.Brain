@@ -70,7 +70,9 @@ describe("resolveEmbeddingProvider", () => {
     expect(result!.provider.name).toContain("OpenAI");
   });
 
-  it("auto mode: returns null when chain has only unsupported providers and no fallback key", () => {
+  it("auto mode: falls back to Ollama when chain has only unsupported providers and no cloud key", () => {
+    // Ollama is the local/no-credential fallback, so it is always considered
+    // in auto mode when no cloud embedding credential is configured.
     const config = makeConfig({
       providerChain: "kimi,groq,minimax",
       kimiApiKey: "kimi-key",
@@ -79,7 +81,9 @@ describe("resolveEmbeddingProvider", () => {
     });
 
     const result = resolveEmbeddingProvider(config);
-    expect(result).toBeNull();
+    expect(result).not.toBeNull();
+    expect(result!.source).toBe("auto-fallback:ollama");
+    expect(result!.provider).toBeInstanceOf(OllamaEmbeddingProvider);
   });
 
   it("auto mode: falls back to configured embedding provider outside the response chain", () => {

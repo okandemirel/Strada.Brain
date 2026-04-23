@@ -5,6 +5,11 @@ const KNOWN_MODELS: Record<string, number> = {
   "nomic-embed-text": 768,
   "mxbai-embed-large": 1024,
   "all-minilm": 384,
+  "bge-m3": 1024,
+  "bge-large": 1024,
+  "snowflake-arctic-embed": 1024,
+  "snowflake-arctic-embed2": 1024,
+  "granite-embedding": 384,
 };
 
 interface OllamaEmbeddingOptions {
@@ -33,7 +38,11 @@ export class OllamaEmbeddingProvider implements IEmbeddingProvider {
   constructor(opts: OllamaEmbeddingOptions = {}) {
     this.model = opts.model ?? "nomic-embed-text";
     this.baseUrl = opts.baseUrl ?? "http://localhost:11434";
-    this.dimensions = KNOWN_MODELS[this.model] ?? 768;
+    // Ollama models may carry a ":tag" suffix (e.g. "bge-m3:latest"). Strip the
+    // tag when looking up known dimensions so tagged and untagged names resolve
+    // to the same entry.
+    const baseName = this.model.split(":")[0] ?? this.model;
+    this.dimensions = KNOWN_MODELS[this.model] ?? KNOWN_MODELS[baseName] ?? 768;
     this.name = `ollama:${this.model}`;
   }
 

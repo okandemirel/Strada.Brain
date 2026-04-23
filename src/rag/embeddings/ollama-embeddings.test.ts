@@ -81,6 +81,17 @@ describe("OllamaEmbeddingProvider", () => {
     expect(provider.dimensions).toBe(384);
   });
 
+  it("resolves dimensions for bge-m3", () => {
+    const provider = new OllamaEmbeddingProvider({ model: "bge-m3" });
+    expect(provider.dimensions).toBe(1024);
+  });
+
+  it("strips ':tag' suffix when resolving dimensions (e.g. bge-m3:latest)", () => {
+    const provider = new OllamaEmbeddingProvider({ model: "bge-m3:latest" });
+    expect(provider.dimensions).toBe(1024);
+    expect(provider.name).toBe("ollama:bge-m3:latest");
+  });
+
   it("falls back to 768 dimensions for an unknown model", () => {
     const provider = new OllamaEmbeddingProvider({ model: "custom-llm" });
     expect(provider.dimensions).toBe(768);

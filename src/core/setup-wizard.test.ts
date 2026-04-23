@@ -124,19 +124,18 @@ describe("SetupWizard path validation", () => {
     expect(result).toEqual({ valid: true, resolved: homedir() });
   });
 
-  it("rejects project paths outside the home directory at save time", async () => {
+  it("accepts project paths outside the home directory at save time", async () => {
     const wizard = new SetupWizard();
+
+    const rawPath = process.platform === "win32" ? "C:\\Windows" : "/tmp";
 
     const result = await (wizard as unknown as {
       validateProjectPathForSave: (
         rawPath: string,
       ) => Promise<{ valid: true; resolved: string } | { valid: false; error: string }>;
-    }).validateProjectPathForSave(process.platform === "win32" ? "C:\\Windows" : "/tmp");
+    }).validateProjectPathForSave(rawPath);
 
-    expect(result).toEqual({
-      valid: false,
-      error: "Path must be inside your home directory",
-    });
+    expect(result.valid).toBe(true);
   });
 
   it("detects when RAG lacks an embedding-capable provider", () => {

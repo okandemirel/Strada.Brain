@@ -23,10 +23,15 @@ describe("TerminalWizard", () => {
       expect(result.error).toContain("absolute");
     });
 
-    it("should reject path outside home directory", async () => {
+    it("should reject non-existent path", async () => {
       const { validateUnityPath } = await import("../../core/terminal-wizard.js");
-      const result = validateUnityPath("/etc/passwd");
+      const result = validateUnityPath(
+        process.platform === "win32"
+          ? "Z:\\this\\path\\does\\not\\exist\\hopefully"
+          : "/this/path/does/not/exist/hopefully",
+      );
       expect(result.valid).toBe(false);
+      expect(result.error).toContain("does not exist");
     });
 
     it("should accept valid absolute path inside home directory", async () => {
@@ -34,6 +39,13 @@ describe("TerminalWizard", () => {
       const homedir = os.homedir();
       const { validateUnityPath } = await import("../../core/terminal-wizard.js");
       const result = validateUnityPath(homedir);
+      expect(result.valid).toBe(true);
+    });
+
+    it("should accept valid absolute path outside home directory", async () => {
+      const { validateUnityPath } = await import("../../core/terminal-wizard.js");
+      const outsideHome = process.platform === "win32" ? "C:\\Windows" : "/tmp";
+      const result = validateUnityPath(outsideHome);
       expect(result.valid).toBe(true);
     });
   });

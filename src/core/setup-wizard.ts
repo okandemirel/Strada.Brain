@@ -794,11 +794,6 @@ export class SetupWizard {
       return { valid: false, error: "Path does not exist" };
     }
 
-    const home = homedir();
-    if (resolved !== home && !resolved.startsWith(home + sep)) {
-      return { valid: false, error: "Path must be inside your home directory" };
-    }
-
     try {
       const stats = await stat(resolved);
       if (!stats.isDirectory()) {
@@ -976,12 +971,6 @@ export class SetupWizard {
         isUnityProject: false,
         error: "Path does not exist",
       });
-      return;
-    }
-
-    const home = homedir();
-    if (resolved !== home && !resolved.startsWith(home + sep)) {
-      this.json(res, 403, { error: "Browsing outside your home directory is not permitted" });
       return;
     }
 
