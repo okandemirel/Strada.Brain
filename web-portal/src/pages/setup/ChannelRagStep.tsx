@@ -12,6 +12,8 @@ interface ChannelRagStepProps {
   setRagEnabled: (enabled: boolean) => void
   embeddingProvider: string
   setEmbeddingProvider: (provider: string) => void
+  embeddingModel: string
+  setEmbeddingModel: (model: string) => void
   checkedProviders: Set<string>
   providerKeys: Record<string, string>
   providerAuthModes: Record<string, string>
@@ -41,6 +43,8 @@ export default function ChannelRagStep({
   setRagEnabled,
   embeddingProvider,
   setEmbeddingProvider,
+  embeddingModel,
+  setEmbeddingModel,
   checkedProviders,
   providerKeys,
   providerAuthModes,
@@ -179,6 +183,24 @@ export default function ChannelRagStep({
             <p className="rag-info" style={{ marginTop: '0.65rem' }}>
               {t('channels.rag.embeddingProviderInfo')}
             </p>
+            {embeddingProvider !== 'auto' && (
+              <div className="channel-field" style={{ marginTop: '0.85rem' }}>
+                <label htmlFor="embeddingModel">{t('channels.rag.embeddingModel')}</label>
+                <input
+                  id="embeddingModel"
+                  type="text"
+                  placeholder={embeddingProvider === 'ollama' ? 'bge-m3' : t('channels.rag.embeddingModelPlaceholderAuto')}
+                  value={embeddingModel}
+                  onChange={(e) => setEmbeddingModel(e.target.value)}
+                  autoComplete="off"
+                />
+                <p className="rag-info" style={{ marginTop: '0.45rem' }}>
+                  {embeddingProvider === 'ollama'
+                    ? t('channels.rag.embeddingModelOllamaInfo')
+                    : t('channels.rag.embeddingModelInfo')}
+                </p>
+              </div>
+            )}
             {ragEnabled && !embeddingProviderName && (
               <p className="rag-info warning" style={{ marginTop: '0.55rem' }}>
                 {t('channels.rag.blockedInfo')}

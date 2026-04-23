@@ -299,6 +299,7 @@ export function useSetupWizard() {
   const [language, setLanguageState] = useState('en')
   const [ragEnabled, setRagEnabledState] = useState(true)
   const [embeddingProvider, setEmbeddingProviderState] = useState('auto')
+  const [embeddingModel, setEmbeddingModelState] = useState('')
   const [daemonEnabled, setDaemonEnabledState] = useState(false)
   const [autonomyEnabled, setAutonomyEnabledState] = useState(false)
   const [autonomyHours, setAutonomyHoursState] = useState(4)
@@ -635,6 +636,10 @@ export function useSetupWizard() {
     setEmbeddingProviderState(provider)
   }, [])
 
+  const setEmbeddingModel = useCallback((model: string) => {
+    setEmbeddingModelState(model)
+  }, [])
+
   const setDaemonEnabled = useCallback((enabled: boolean) => {
     setDaemonEnabledState(enabled)
   }, [])
@@ -711,6 +716,10 @@ export function useSetupWizard() {
 
     if (embeddingProvider && embeddingProvider !== 'auto') {
       config.EMBEDDING_PROVIDER = embeddingProvider
+      const trimmedEmbeddingModel = embeddingModel.trim()
+      if (trimmedEmbeddingModel) {
+        config.EMBEDDING_MODEL = trimmedEmbeddingModel
+      }
     }
 
     if (selectedPreset) {
@@ -918,7 +927,7 @@ export function useSetupWizard() {
       setSaveStatus('error')
       setSaveError(err instanceof Error ? err.message : 'Save failed')
     }
-  }, [projectPath, ragEnabled, embeddingProvider, language, channel, selectedPreset, checkedProviders, providerKeys, providerAuthModes, providerModels, channelConfig, daemonEnabled, autonomyEnabled, autonomyHours, daemonBudget, globalDailyBudget, reviewBlockingReason, applySetupBootstrapStatus, rememberReadyUrl, stopBootstrapPolling, isBootstrapPollingActive])
+  }, [projectPath, ragEnabled, embeddingProvider, embeddingModel, language, channel, selectedPreset, checkedProviders, providerKeys, providerAuthModes, providerModels, channelConfig, daemonEnabled, autonomyEnabled, autonomyHours, daemonBudget, globalDailyBudget, reviewBlockingReason, applySetupBootstrapStatus, rememberReadyUrl, stopBootstrapPolling, isBootstrapPollingActive])
 
   return {
     // State
@@ -948,6 +957,7 @@ export function useSetupWizard() {
     language,
     ragEnabled,
     embeddingProvider,
+    embeddingModel,
     daemonEnabled,
     autonomyEnabled,
     autonomyHours,
@@ -980,6 +990,7 @@ export function useSetupWizard() {
     setLanguage,
     setRagEnabled,
     setEmbeddingProvider,
+    setEmbeddingModel,
     setDaemonEnabled,
     setAutonomyEnabled,
     setAutonomyHours,

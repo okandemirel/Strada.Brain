@@ -178,6 +178,37 @@ describe("SetupWizard path validation", () => {
     expect(buildSetupReadyUrl(3000)).toBe("http://127.0.0.1:3000/");
   });
 
+  it("writes EMBEDDING_MODEL when provided with explicit provider", () => {
+    const lines = buildSetupEnvLines({
+      PROVIDER_CHAIN: "ollama",
+      EMBEDDING_PROVIDER: "ollama",
+      EMBEDDING_MODEL: "bge-m3",
+    }, homedir(), 3000);
+
+    expect(lines).toContain('EMBEDDING_PROVIDER="ollama"');
+    expect(lines).toContain('EMBEDDING_MODEL="bge-m3"');
+  });
+
+  it("omits EMBEDDING_MODEL when provider is auto", () => {
+    const lines = buildSetupEnvLines({
+      PROVIDER_CHAIN: "claude",
+      ANTHROPIC_API_KEY: "sk-ant",
+      GEMINI_API_KEY: "sk-gem",
+      EMBEDDING_MODEL: "ignored-because-auto",
+    }, homedir(), 3000);
+
+    expect(lines.some((line) => line.startsWith("EMBEDDING_MODEL="))).toBe(false);
+  });
+
+  it("enables the Codebase Memory Vault by default during setup", () => {
+    const lines = buildSetupEnvLines({
+      PROVIDER_CHAIN: "claude",
+      ANTHROPIC_API_KEY: "sk-ant",
+    }, homedir(), 3000);
+
+    expect(lines).toContain("STRADA_VAULT_ENABLED=true");
+  });
+
   it("writes autonomy defaults only when setup enabled autonomy", () => {
     const enabledLines = buildSetupEnvLines({
       PROVIDER_CHAIN: "claude",
@@ -240,6 +271,22 @@ describe("SetupWizard path validation", () => {
     expect(JSON.parse(response.read().body)).toEqual({
       success: false,
       error: "Unsupported OPENAI_MODEL selection",
+    });
+  });
+
+  it("rejects EMBEDDING_MODEL values with unsafe characters during setup save", async () => {
+    const wizard = new SetupWizard({ port: 0 });
+    const response = await saveWizard(wizard, {
+      UNITY_PROJECT_PATH: homedir(),
+      PROVIDER_CHAIN: "ollama",
+      EMBEDDING_PROVIDER: "ollama",
+      EMBEDDING_MODEL: "bad value; rm -rf /",
+    });
+
+    expect(response.read().statusCode).toBe(400);
+    expect(JSON.parse(response.read().body)).toEqual({
+      success: false,
+      error: "Invalid EMBEDDING_MODEL value",
     });
   });
 

@@ -93,6 +93,10 @@
   "channels.rag.dedicatedEmbeddingKeyLabel": "{{provider}} Embedding API Key",
   "channels.rag.dedicatedEmbeddingKeyInfo": "This key is used only for embeddings. It does not add {{provider}} to the response provider chain.",
   "channels.rag.subscriptionNotUsedForEmbedding": "Subscription login is not used for this embedding request path.",
+  "channels.rag.embeddingModel": "Embedding Model (optional)",
+  "channels.rag.embeddingModelInfo": "Leave blank to use the provider default. Set only if you need a specific model.",
+  "channels.rag.embeddingModelOllamaInfo": "Enter the exact Ollama model name you have pulled (e.g. bge-m3, nomic-embed-text, mxbai-embed-large). Leave blank to use nomic-embed-text.",
+  "channels.rag.embeddingModelPlaceholderAuto": "provider default",
 
   "channels.budget.title": "Global Daily Budget",
   "channels.budget.description": "Maximum daily spend across all systems (daemon, agents, chat). Set to $0 for unlimited.",

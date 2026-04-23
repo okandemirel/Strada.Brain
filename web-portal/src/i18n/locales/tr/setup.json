@@ -93,6 +93,10 @@
   "channels.rag.dedicatedEmbeddingKeyLabel": "{{provider}} Gömme Vektörü API Anahtarı",
   "channels.rag.dedicatedEmbeddingKeyInfo": "Bu anahtar yalnızca gömme vektörleri için kullanılır. {{provider}}'ı yanıt sağlayıcı zincirine eklemez.",
   "channels.rag.subscriptionNotUsedForEmbedding": "Abonelik girişi bu gömme vektörü istek yolu için kullanılmaz.",
+  "channels.rag.embeddingModel": "Gömme Modeli (opsiyonel)",
+  "channels.rag.embeddingModelInfo": "Sağlayıcının varsayılanını kullanmak için boş bırakın. Sadece belirli bir modele ihtiyacınız varsa doldurun.",
+  "channels.rag.embeddingModelOllamaInfo": "Ollama'da çektiğiniz modelin tam adını girin (örn. bge-m3, nomic-embed-text, mxbai-embed-large). Varsayılan (nomic-embed-text) için boş bırakın.",
+  "channels.rag.embeddingModelPlaceholderAuto": "sağlayıcı varsayılanı",
 
   "channels.budget.title": "Günlük Küresel Bütçe",
   "channels.budget.description": "Tüm sistemlerdeki (daemon, ajanlar, sohbet) maksimum günlük harcama. Sınırsız için $0 ayarlayın.",

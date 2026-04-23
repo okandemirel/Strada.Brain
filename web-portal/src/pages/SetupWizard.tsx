@@ -105,6 +105,8 @@ export default function SetupWizard() {
             setRagEnabled={wiz.setRagEnabled}
             embeddingProvider={wiz.embeddingProvider}
             setEmbeddingProvider={wiz.setEmbeddingProvider}
+            embeddingModel={wiz.embeddingModel}
+            setEmbeddingModel={wiz.setEmbeddingModel}
             checkedProviders={wiz.checkedProviders}
             providerKeys={wiz.providerKeys}
             providerAuthModes={wiz.providerAuthModes}

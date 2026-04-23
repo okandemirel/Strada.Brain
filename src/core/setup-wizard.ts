@@ -402,6 +402,10 @@ export function buildSetupEnvLines(
     lines.push("", "# RAG (Code Search)", "RAG_ENABLED=false");
   } else if (config.EMBEDDING_PROVIDER && config.EMBEDDING_PROVIDER !== "auto") {
     lines.push("", "# RAG (Code Search)", `EMBEDDING_PROVIDER=${sanitizeEnvValue(config.EMBEDDING_PROVIDER)}`);
+    const embeddingModel = typeof config.EMBEDDING_MODEL === "string" ? config.EMBEDDING_MODEL.trim() : "";
+    if (embeddingModel) {
+      lines.push(`EMBEDDING_MODEL=${sanitizeEnvValue(embeddingModel)}`);
+    }
   }
 
   const lang = config.LANGUAGE_PREFERENCE && KNOWN_LANGUAGES.has(String(config.LANGUAGE_PREFERENCE))
@@ -482,6 +486,12 @@ export function buildSetupEnvLines(
     "MULTI_AGENT_ENABLED=true",
     "TASK_DELEGATION_ENABLED=true",
     "LOG_LEVEL=info",
+  );
+
+  lines.push(
+    "",
+    "# Codebase Memory Vault",
+    "STRADA_VAULT_ENABLED=true",
   );
 
   return lines;
@@ -1107,6 +1117,12 @@ export class SetupWizard {
         this.json(res, 400, { success: false, error: "Invalid EMBEDDING_PROVIDER value" });
         return;
       }
+    }
+
+    const embeddingModel = typeof config.EMBEDDING_MODEL === "string" ? config.EMBEDDING_MODEL.trim() : "";
+    if (embeddingModel && !MODEL_NAME_RE.test(embeddingModel)) {
+      this.json(res, 400, { success: false, error: "Invalid EMBEDDING_MODEL value" });
+      return;
     }
 
     if (config.RAG_ENABLED !== "false" && !hasConfiguredEmbeddingCandidate(config)) {
