@@ -1729,6 +1729,11 @@ export class WebChannel
     "/api/budget/config",
     "/api/deployment/check",
     "/api/models/refresh",
+    // Vault register endpoint — POST creates a new codebase vault at runtime.
+    // CSRF-protected via the same origin/referer/bearer check as other mutable
+    // paths (isTrustedMutableProxyRequest). Dashboard layer then re-validates
+    // name/path/realpath before touching disk.
+    "/api/vaults",
   ]);
 
   /** Prefix-based mutable allowlist — POST/DELETE/PUT allowed for paths starting with these. */
@@ -1736,9 +1741,11 @@ export class WebChannel
     "/api/personality/profiles/",
     "/api/canvas", "/api/skills/",
     "/api/settings/", "/api/monitor/",
-    // Vault POSTs are scoped under /api/vaults/:id/{search,sync}. They mutate nothing
-    // in the user's project — search is read-only; sync is an agent-initiated
-    // reindex that only rewrites the internal SQLite index. No CSRF amplification.
+    // Vault mutations: POST /api/vaults/:id/{search,sync} and DELETE /api/vaults/:id.
+    // search is read-only; sync re-indexes the internal SQLite store; DELETE
+    // removes a registration but does NOT touch user files. No CSRF amplification
+    // against the user's project. Root POST /api/vaults (register) is handled via
+    // MUTABLE_PROXY_PATHS above.
     "/api/vaults/",
   ];
 

@@ -154,7 +154,11 @@ export function registerVaultRoutes(app: RouteApp, registry: VaultRegistry, fact
   }));
 
   app.post('/api/vaults', async (req) => {
-    if (!factory) return { error: 'vault registration unavailable' };
+    if (!factory) {
+      return {
+        error: 'VaultFactory not installed (bootstrap ordering issue or embedding provider missing)',
+      };
+    }
     const body = (req.body ?? {}) as Record<string, unknown>;
     const parsed = validateVaultRegisterBody(body);
     if (!parsed.ok) return { error: parsed.error };
@@ -279,7 +283,15 @@ export function handleVaultRoutes(
   if (pathOnly === '/api/vaults' && method === 'POST') {
     const factory = ctx.vaultFactory;
     if (!factory) {
-      sendJsonError(res, 503, 'vault registration unavailable');
+      // More diagnostic than the old "vault registration unavailable" — a 503 here
+      // almost always means the bootstrap ran before cachedEmbeddingProvider was
+      // ready, or ran with no embedding provider at all. Surface that to the
+      // caller so ops doesn't have to grep logs to figure out which branch failed.
+      sendJsonError(
+        res,
+        503,
+        'VaultFactory not installed (bootstrap ordering issue or embedding provider missing)',
+      );
       return true;
     }
     void readJsonBody(req).then(async (body) => {

@@ -570,13 +570,27 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   let agentManager: AgentManagerType | undefined;
   let agentBudgetTrackerOuter: AgentBudgetTrackerType | undefined;
   let delegationManager: DelegationManagerType | undefined;
-  // Vault (Phase 1): create registry + initialize UnityProjectVault when enabled.
-  // The vault tools are wired into the tool registry below via the same options object.
+  // Vault (Phase 1+): create registry, wire the VaultFactory, and auto-register
+  // a codebase vault whenever an embedding provider is available.
+  //
+  // IMPORTANT: we intentionally do NOT gate factory install / auto-register on
+  // `config.vault?.enabled`. That flag historically toggled the *feature*, but
+  // the HTTP surface (POST /api/vaults, GET /api/vaults, portal vault UI) and
+  // the runtime factory are always present in the binary. Gating them behind
+  // `vault.enabled=false` (the default) meant the dashboard returned
+  // 503 "vault registration unavailable" for every user who hadn't explicitly
+  // opted in — even though the portal UI is shipped unconditionally.
+  //
+  // `cachedEmbeddingProvider` is the real dependency: without it we can't build
+  // a UnityProjectVault, so that's the only hard gate.
   const { VaultRegistry } = await import("../vault/vault-registry.js");
   const vaultRegistry = new VaultRegistry();
-  if (config.vault?.enabled && cachedEmbeddingProvider) {
+  if (cachedEmbeddingProvider) {
     try {
-      const { initVaultsFromBootstrap } = await import("./bootstrap-stages/stage-knowledge.js");
+      logger.info("[vault] initializing vault subsystem", {
+        hasUnityProjectPath: Boolean(config.unityProjectPath),
+        vaultConfigEnabled: Boolean(config.vault?.enabled),
+      });
       // Bridge CachedEmbeddingProvider (returns {embeddings, usage}) → vault EmbeddingProvider (returns Float32Array[])
       const vaultEmbedding = {
         model: "cached", dim: cachedEmbeddingProvider.dimensions,
@@ -595,31 +609,40 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
           return [...vaultStore.entries()].slice(0, k).map(([id, r]) => ({ id, score: 1, payload: r.payload }));
         },
       };
-      await initVaultsFromBootstrap({
-        config: { vault: config.vault, unityProjectPath: config.unityProjectPath },
-        vaultRegistry,
-        embedding: vaultEmbedding,
-        vectorStore: vaultVectorStore,
-      });
-      // Phase 2: also register SelfVault for Strada.Brain's own source (opt-out via config.vault.self.enabled = false).
-      try {
-        const { initSelfVaultFromBootstrap } = await import("./bootstrap-stages/stage-knowledge.js");
-        await initSelfVaultFromBootstrap({
-          config: { vault: config.vault },
-          vaultRegistry,
-          embedding: vaultEmbedding,
-          vectorStore: vaultVectorStore,
-          repoRoot: process.cwd(),
-        });
-      } catch (err) {
-        logger.warn("[vault] SelfVault initialization failed", { err });
+
+      // Unity-specific discovery (only runs when vault.enabled is on — preserves
+      // old behavior for users who explicitly opted in to Unity indexing).
+      if (config.vault?.enabled) {
+        try {
+          const { initVaultsFromBootstrap } = await import("./bootstrap-stages/stage-knowledge.js");
+          await initVaultsFromBootstrap({
+            config: { vault: config.vault, unityProjectPath: config.unityProjectPath },
+            vaultRegistry,
+            embedding: vaultEmbedding,
+            vectorStore: vaultVectorStore,
+          });
+        } catch (err) {
+          logger.warn("[vault] Unity auto-discovery failed", { err });
+        }
+        // Phase 2: SelfVault for Strada.Brain's own source.
+        try {
+          const { initSelfVaultFromBootstrap } = await import("./bootstrap-stages/stage-knowledge.js");
+          await initSelfVaultFromBootstrap({
+            config: { vault: config.vault },
+            vaultRegistry,
+            embedding: vaultEmbedding,
+            vectorStore: vaultVectorStore,
+            repoRoot: process.cwd(),
+          });
+        } catch (err) {
+          logger.warn("[vault] SelfVault initialization failed", { err });
+        }
       }
-      // Generic auto-register fallback: if unityProjectPath is configured but
-      // Unity-specific discovery didn't recognize it (e.g. user pointed Strada
-      // at a non-Unity codebase during setup), register a plain-codebase vault
-      // so the portal shows indexed content instead of "No vaults registered".
-      // initVaultsFromBootstrap already handles the strict Unity case; this only
-      // runs when the registry is still empty but a project path exists.
+
+      // Generic auto-register: when a project path is configured but no vault
+      // was picked up by Unity discovery (typical case: vault.enabled=false,
+      // or non-Unity project), register a plain-codebase vault so the portal
+      // shows indexed content instead of "No vaults registered".
       try {
         if (config.unityProjectPath && vaultRegistry.list().length === 0) {
           const { UnityProjectVault } = await import("../vault/unity-project-vault.js");
@@ -634,8 +657,10 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
             vectorStore: vaultVectorStore,
           });
           vaultRegistry.register(vault);
-          logger.info("[vault] auto-registered codebase vault from setup config", {
-            id: vault.id, name: basename(rootPath),
+          logger.info("[vault] auto-registered generic vault from setup config", {
+            id: vault.id,
+            name: basename(rootPath),
+            rootPath,
           });
           // Fire-and-log init + watcher so bootstrap never blocks on indexing
           // a potentially large directory.
@@ -643,18 +668,27 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
             try {
               await vault.init();
               await vault.startWatch(config.vault?.debounceMs ?? 800);
+              logger.info(`[vault] async init complete for ${vault.id}`);
             } catch (err) {
               logger.warn(`[vault] async init failed for ${vault.id}`, { err });
             }
           })();
+        } else if (!config.unityProjectPath) {
+          logger.info("[vault] skipping auto-register: no unityProjectPath configured");
+        } else {
+          logger.info("[vault] skipping auto-register: registry already populated", {
+            count: vaultRegistry.list().length,
+          });
         }
       } catch (err) {
         logger.warn("[vault] generic auto-register failed", { err });
       }
 
-      // Hand a factory to the dashboard so POST /api/vaults can create new vaults
-      // at runtime using the same embedding + vector-store deps wired above.
+      // Hand a factory to the dashboard so POST /api/vaults (and the web
+      // channel's proxy to it) can create new vaults at runtime using the
+      // same embedding + vector-store deps wired above.
       if (dashboard) {
+        logger.info("[vault] installing VaultFactory on dashboard");
         const { UnityProjectVault } = await import("../vault/unity-project-vault.js");
         dashboard.registerVaultFactory({
           watchDebounceMs: config.vault?.debounceMs ?? 800,
@@ -667,14 +701,24 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
             });
           },
         });
+        logger.info("[vault] VaultFactory installed — POST /api/vaults ready");
+      } else {
+        logger.warn("[vault] dashboard unavailable at factory-install time — POST /api/vaults will return 503");
       }
     } catch (err) {
       logger.warn("[vault] bootstrap initialization failed", { err });
     }
+  } else {
+    logger.warn("[vault] skipping vault bootstrap: no embedding provider available");
   }
 
   // Hand the vault registry to the dashboard server so HTTP routes can resolve it.
-  if (dashboard) dashboard.registerVaultRegistry(vaultRegistry);
+  if (dashboard) {
+    dashboard.registerVaultRegistry(vaultRegistry);
+    logger.info("[vault] VaultRegistry installed on dashboard", {
+      vaultCount: vaultRegistry.list().length,
+    });
+  }
 
   await initializeToolRegistryStage(
     {

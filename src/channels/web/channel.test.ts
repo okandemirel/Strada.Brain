@@ -338,6 +338,93 @@ describe("WebChannel dashboard proxy", () => {
     });
     expect(res.statusCode).toBe(200);
   });
+
+  it("proxies POST /api/vaults (register) for trusted origins", async () => {
+    const channel = new WebChannel();
+    const req = createMockRequest({
+      method: "POST",
+      url: "/api/vaults",
+      headers: {
+        origin: "http://127.0.0.1:3000",
+        referer: "http://127.0.0.1:3000/vaults",
+      },
+      body: JSON.stringify({
+        name: "demo",
+        rootPath: "/tmp/demo",
+        kind: "generic",
+      }),
+    });
+    const res = createMockResponse();
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ id: "generic:abc", status: "indexing" }), {
+        status: 201,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    const promise = (channel as unknown as {
+      proxyToDashboard: (req: unknown, res: unknown, url: string) => Promise<void>;
+    }).proxyToDashboard(req, res, "/api/vaults");
+    req.emitBody();
+    await promise;
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ method: "POST" });
+    expect(res.statusCode).toBe(201);
+  });
+
+  it("proxies DELETE /api/vaults/:id (unregister) for trusted origins", async () => {
+    const channel = new WebChannel();
+    const req = createMockRequest({
+      method: "DELETE",
+      url: "/api/vaults/generic:abc",
+      headers: {
+        origin: "http://127.0.0.1:3000",
+      },
+    });
+    const res = createMockResponse();
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ok: true, id: "generic:abc" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    const promise = (channel as unknown as {
+      proxyToDashboard: (req: unknown, res: unknown, url: string) => Promise<void>;
+    }).proxyToDashboard(req, res, "/api/vaults/generic:abc");
+    req.emitBody();
+    await promise;
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ method: "DELETE" });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it("rejects POST /api/vaults from untrusted origins", async () => {
+    const channel = new WebChannel();
+    const req = createMockRequest({
+      method: "POST",
+      url: "/api/vaults",
+      headers: { origin: "https://evil.example" },
+      body: JSON.stringify({ name: "demo", rootPath: "/tmp/demo" }),
+    });
+    const res = createMockResponse();
+    const fetchMock = vi.fn();
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    await (channel as unknown as {
+      proxyToDashboard: (req: unknown, res: unknown, url: string) => Promise<void>;
+    }).proxyToDashboard(req, res, "/api/vaults");
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(403);
+  });
 });
 
 describe("WebChannel inbound message limits", () => {

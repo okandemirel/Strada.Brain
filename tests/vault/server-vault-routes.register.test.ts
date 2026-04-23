@@ -122,7 +122,7 @@ describe('POST /api/vaults (register)', () => {
     const resp = (await app.routes['POST /api/vaults']({
       body: { name: 'Proj', rootPath: tmpDir, kind: 'generic' },
     }, {})) as { error?: string };
-    expect(resp.error).toMatch(/unavailable/i);
+    expect(resp.error).toMatch(/VaultFactory not installed/i);
   });
 });
 
