@@ -106,5 +106,23 @@
   "breadcrumb.separator": "/",
 
   "panel.toggleLeft": "왼쪽 패널 토글",
-  "panel.toggleRight": "오른쪽 패널 토글"
+  "panel.toggleRight": "오른쪽 패널 토글",
+
+  "register.button": "Vault 등록",
+  "register.newVault": "새 Vault",
+  "register.title": "새 Vault 등록",
+  "register.description": "Unity 프로젝트 또는 일반 코드베이스를 색인화하여 의미 기반 검색과 그래프를 활성화합니다.",
+  "register.nameLabel": "이름",
+  "register.namePlaceholder": "내 프로젝트",
+  "register.pathLabel": "프로젝트 루트 경로",
+  "register.pathPlaceholder": "/절대/프로젝트/경로",
+  "register.kindLabel": "유형",
+  "register.kindUnity": "Unity",
+  "register.kindGeneric": "일반",
+  "register.submit": "등록 및 색인화",
+  "register.indexing": "등록 중…",
+  "register.cancel": "취소",
+  "register.error.invalidPath": "경로가 존재하지 않거나 접근할 수 없습니다",
+  "register.error.generic": "Vault 등록에 실패했습니다",
+  "register.success": "Vault가 등록되었으며 색인화가 시작되었습니다"
 }

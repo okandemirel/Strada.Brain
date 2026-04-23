@@ -106,5 +106,23 @@
   "breadcrumb.separator": "/",
 
   "panel.toggleLeft": "左パネルを切り替え",
-  "panel.toggleRight": "右パネルを切り替え"
+  "panel.toggleRight": "右パネルを切り替え",
+
+  "register.button": "Vaultを登録",
+  "register.newVault": "新しいVault",
+  "register.title": "新しいVaultを登録",
+  "register.description": "Unityプロジェクトまたは汎用コードベースをインデックス化し、セマンティック検索とグラフを有効にします。",
+  "register.nameLabel": "名前",
+  "register.namePlaceholder": "マイプロジェクト",
+  "register.pathLabel": "プロジェクトのルートパス",
+  "register.pathPlaceholder": "/絶対/プロジェクト/パス",
+  "register.kindLabel": "種類",
+  "register.kindUnity": "Unity",
+  "register.kindGeneric": "汎用",
+  "register.submit": "登録してインデックス化",
+  "register.indexing": "登録中…",
+  "register.cancel": "キャンセル",
+  "register.error.invalidPath": "パスが存在しないか、アクセスできません",
+  "register.error.generic": "Vaultの登録に失敗しました",
+  "register.success": "Vaultを登録しました。インデックス化を開始します"
 }

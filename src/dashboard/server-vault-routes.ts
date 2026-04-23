@@ -1,8 +1,79 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { createHash } from 'node:crypto';
+import { isAbsolute as isAbsolutePath, resolve as pathResolve } from 'node:path';
+import { stat as fsStat, realpath as fsRealpath } from 'node:fs/promises';
 import type { VaultRegistry } from '../vault/vault-registry.js';
+import type { IVault } from '../vault/vault.interface.js';
 import { getVaultFileReadStats } from '../agents/tools/file-read.js';
 import { getLoggerSafe } from '../utils/logger.js';
 import { sendJson, sendJsonError, type RouteContext } from './server-types.js';
+
+/**
+ * Factory injected by bootstrap so the HTTP layer can create a new vault
+ * instance on POST /api/vaults without reaching into VaultRegistry internals.
+ * Captures the `embedding` + `vectorStore` deps that were otherwise bootstrap-local.
+ */
+export interface VaultFactory {
+  create(spec: { id: string; rootPath: string; kind: 'unity' | 'generic' }): Promise<IVault>;
+  /** Optional: default debounce in ms passed to `startWatch`. */
+  watchDebounceMs?: number;
+}
+
+const VAULT_NAME_RE = /^[A-Za-z0-9 _\-.]{1,64}$/;
+const MAX_ROOT_PATH_LEN = 1024;
+
+function validateVaultRegisterBody(body: Record<string, unknown>): {
+  ok: true; name: string; rootPath: string; kind: 'unity' | 'generic';
+} | { ok: false; error: string } {
+  const rawName = body.name;
+  const rawPath = body.rootPath;
+  const rawKind = body.kind ?? 'generic';
+  if (typeof rawName !== 'string' || !VAULT_NAME_RE.test(rawName)) {
+    return { ok: false, error: 'invalid name' };
+  }
+  if (typeof rawPath !== 'string' || rawPath.length === 0 || rawPath.length > MAX_ROOT_PATH_LEN) {
+    return { ok: false, error: 'invalid rootPath' };
+  }
+  if (!isAbsolutePath(rawPath)) {
+    return { ok: false, error: 'rootPath must be absolute' };
+  }
+  if (rawPath.includes('\x00')) {
+    return { ok: false, error: 'invalid rootPath' };
+  }
+  if (rawKind !== 'unity' && rawKind !== 'generic') {
+    return { ok: false, error: 'invalid kind' };
+  }
+  return { ok: true, name: rawName.trim(), rootPath: rawPath, kind: rawKind };
+}
+
+/**
+ * Resolve + validate that `rootPath` exists as a directory. Returns canonical
+ * realpath on success. Rejects any path whose realpath cannot be resolved
+ * (non-existent, unreadable, or symlink loop).
+ */
+async function resolveExistingDirectory(rootPath: string): Promise<
+  { ok: true; realPath: string } | { ok: false; error: string }
+> {
+  const resolved = pathResolve(rootPath);
+  let real: string;
+  try {
+    real = await fsRealpath(resolved);
+  } catch {
+    return { ok: false, error: 'path does not exist' };
+  }
+  try {
+    const st = await fsStat(real);
+    if (!st.isDirectory()) return { ok: false, error: 'path is not a directory' };
+  } catch {
+    return { ok: false, error: 'path is not accessible' };
+  }
+  return { ok: true, realPath: real };
+}
+
+function makeVaultId(kind: 'unity' | 'generic', rootPath: string): string {
+  const hash = createHash('sha1').update(rootPath).digest('hex').slice(0, 8);
+  return `${kind}:${hash}`;
+}
 
 /**
  * Express-shaped req/res for `registerVaultRoutes` (dev-server/test adapter; production
@@ -76,11 +147,29 @@ export function buildVaultRetrievalStatsSnapshot(
   };
 }
 
-export function registerVaultRoutes(app: RouteApp, registry: VaultRegistry): void {
+export function registerVaultRoutes(app: RouteApp, registry: VaultRegistry, factory?: VaultFactory): void {
   // Fix SecC2: do NOT expose absolute rootPath. Clients get id + kind only.
   app.get('/api/vaults', () => ({
     items: registry.list().map((v) => ({ id: v.id, kind: v.kind })),
   }));
+
+  app.post('/api/vaults', async (req) => {
+    if (!factory) return { error: 'vault registration unavailable' };
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const parsed = validateVaultRegisterBody(body);
+    if (!parsed.ok) return { error: parsed.error };
+    const dirCheck = await resolveExistingDirectory(parsed.rootPath);
+    if (!dirCheck.ok) return { error: dirCheck.error };
+    const id = makeVaultId(parsed.kind, dirCheck.realPath);
+    if (registry.get(id)) return { error: 'vault already registered' };
+    const vault = await factory.create({ id, rootPath: dirCheck.realPath, kind: parsed.kind });
+    registry.register(vault);
+    void vault.init().catch((err) => getLoggerSafe().warn('[vault] async init failed', { err }));
+    return {
+      id: vault.id, name: parsed.name, rootPath: dirCheck.realPath,
+      kind: vault.kind, status: 'indexing', symbolCount: 0,
+    };
+  });
 
   // Round 2: expose vault_search vs file_read retrieval telemetry.
   app.get('/api/vaults/stats', () => buildVaultRetrievalStatsSnapshot());
@@ -174,7 +263,76 @@ export function handleVaultRoutes(
 
   // GET /api/vaults
   if (pathOnly === '/api/vaults' && method === 'GET') {
-    sendJson(res, { items: registry.list().map((v) => ({ id: v.id, kind: v.kind })) });
+    sendJson(res, {
+      items: registry.list().map((v) => ({
+        id: v.id,
+        kind: v.kind,
+        // Intentionally do NOT expose v.rootPath — callers only need the id.
+      })),
+    });
+    return true;
+  }
+
+  // POST /api/vaults — register + index a new vault at runtime.
+  // Guarded by the VaultFactory that bootstrap installs; without one the subsystem
+  // wasn't primed with an embedding provider, so we can't build a vault.
+  if (pathOnly === '/api/vaults' && method === 'POST') {
+    const factory = ctx.vaultFactory;
+    if (!factory) {
+      sendJsonError(res, 503, 'vault registration unavailable');
+      return true;
+    }
+    void readJsonBody(req).then(async (body) => {
+      const parsed = validateVaultRegisterBody(body);
+      if (!parsed.ok) { sendJsonError(res, 400, parsed.error); return; }
+      const dirCheck = await resolveExistingDirectory(parsed.rootPath);
+      if (!dirCheck.ok) { sendJsonError(res, 400, dirCheck.error); return; }
+      const id = makeVaultId(parsed.kind, dirCheck.realPath);
+      if (registry.get(id)) { sendJsonError(res, 409, 'vault already registered'); return; }
+      try {
+        const vault = await factory.create({ id, rootPath: dirCheck.realPath, kind: parsed.kind });
+        // Register synchronously so the vault appears in GET /api/vaults immediately,
+        // then kick off indexing in the background — init() can take a while on large repos.
+        registry.register(vault);
+        sendJson(res, {
+          id: vault.id,
+          name: parsed.name,
+          rootPath: dirCheck.realPath,
+          kind: vault.kind,
+          status: 'indexing',
+          symbolCount: 0,
+        }, 201);
+        // Fire-and-log init + watch so we don't block the HTTP response.
+        void (async () => {
+          try {
+            await vault.init();
+            // Best-effort watcher start; UnityProjectVault exposes startWatch,
+            // SelfVault does not, so duck-type the call.
+            const maybeWatcher = (vault as unknown as { startWatch?: (ms: number) => Promise<void> });
+            if (typeof maybeWatcher.startWatch === 'function') {
+              await maybeWatcher.startWatch(factory.watchDebounceMs ?? 800);
+            }
+          } catch (err) {
+            getLoggerSafe().warn(`[vault] async init failed for ${id}`, { err });
+          }
+        })();
+      } catch (err) {
+        getLoggerSafe().warn('[vault] registration failed', { err });
+        sendJsonError(res, 500, 'registration failed');
+      }
+    }).catch(() => sendJsonError(res, 500, 'registration failed'));
+    return true;
+  }
+
+  // DELETE /api/vaults/:id — unregister + dispose a vault.
+  const deleteMatch = pathOnly.match(/^\/api\/vaults\/([^/]+)$/);
+  if (deleteMatch && method === 'DELETE') {
+    const id = decodeURIComponent(deleteMatch[1]!);
+    const vault = registry.get(id);
+    if (!vault) { sendJsonError(res, 404, 'vault not found'); return true; }
+    registry.unregister(id);
+    void vault.dispose().catch((err) => getLoggerSafe().warn(`[vault] dispose failed for ${id}`, { err }));
+    sendJson(res, { ok: true, id });
     return true;
   }
 

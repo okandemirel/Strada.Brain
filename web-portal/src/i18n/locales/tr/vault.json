@@ -106,5 +106,23 @@
   "breadcrumb.separator": "/",
 
   "panel.toggleLeft": "Sol paneli aç/kapat",
-  "panel.toggleRight": "Sağ paneli aç/kapat"
+  "panel.toggleRight": "Sağ paneli aç/kapat",
+
+  "register.button": "Vault Ekle",
+  "register.newVault": "Yeni Vault",
+  "register.title": "Yeni Vault Kaydet",
+  "register.description": "Semantik arama ve grafik için bir Unity projesini veya genel kod tabanını indeksle.",
+  "register.nameLabel": "Ad",
+  "register.namePlaceholder": "Projem",
+  "register.pathLabel": "Proje Kök Dizini",
+  "register.pathPlaceholder": "/mutlak/proje/yolu",
+  "register.kindLabel": "Tür",
+  "register.kindUnity": "Unity",
+  "register.kindGeneric": "Genel",
+  "register.submit": "Kaydet ve İndeksle",
+  "register.indexing": "Kaydediliyor…",
+  "register.cancel": "İptal",
+  "register.error.invalidPath": "Yol mevcut değil veya erişilemiyor",
+  "register.error.generic": "Vault kaydedilemedi",
+  "register.success": "Vault kaydedildi, indeksleme başladı"
 }

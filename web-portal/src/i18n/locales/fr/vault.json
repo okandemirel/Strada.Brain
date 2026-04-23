@@ -106,5 +106,23 @@
   "breadcrumb.separator": "/",
 
   "panel.toggleLeft": "Basculer le panneau gauche",
-  "panel.toggleRight": "Basculer le panneau droit"
+  "panel.toggleRight": "Basculer le panneau droit",
+
+  "register.button": "Enregistrer un vault",
+  "register.newVault": "Nouveau vault",
+  "register.title": "Enregistrer un nouveau vault",
+  "register.description": "Indexez un projet Unity ou une base de code générique pour activer la recherche sémantique et le graphe.",
+  "register.nameLabel": "Nom",
+  "register.namePlaceholder": "Mon projet",
+  "register.pathLabel": "Chemin racine du projet",
+  "register.pathPlaceholder": "/chemin/absolu/vers/le/projet",
+  "register.kindLabel": "Type",
+  "register.kindUnity": "Unity",
+  "register.kindGeneric": "Générique",
+  "register.submit": "Enregistrer et indexer",
+  "register.indexing": "Enregistrement…",
+  "register.cancel": "Annuler",
+  "register.error.invalidPath": "Le chemin n'existe pas ou n'est pas accessible",
+  "register.error.generic": "Échec de l'enregistrement du vault",
+  "register.success": "Vault enregistré, indexation démarrée"
 }

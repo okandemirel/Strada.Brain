@@ -614,6 +614,60 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       } catch (err) {
         logger.warn("[vault] SelfVault initialization failed", { err });
       }
+      // Generic auto-register fallback: if unityProjectPath is configured but
+      // Unity-specific discovery didn't recognize it (e.g. user pointed Strada
+      // at a non-Unity codebase during setup), register a plain-codebase vault
+      // so the portal shows indexed content instead of "No vaults registered".
+      // initVaultsFromBootstrap already handles the strict Unity case; this only
+      // runs when the registry is still empty but a project path exists.
+      try {
+        if (config.unityProjectPath && vaultRegistry.list().length === 0) {
+          const { UnityProjectVault } = await import("../vault/unity-project-vault.js");
+          const { createHash } = await import("node:crypto");
+          const { basename } = await import("node:path");
+          const rootPath = config.unityProjectPath;
+          const hash = createHash("sha1").update(rootPath).digest("hex").slice(0, 8);
+          const vault = new UnityProjectVault({
+            id: `generic:${hash}`,
+            rootPath,
+            embedding: vaultEmbedding,
+            vectorStore: vaultVectorStore,
+          });
+          vaultRegistry.register(vault);
+          logger.info("[vault] auto-registered codebase vault from setup config", {
+            id: vault.id, name: basename(rootPath),
+          });
+          // Fire-and-log init + watcher so bootstrap never blocks on indexing
+          // a potentially large directory.
+          void (async () => {
+            try {
+              await vault.init();
+              await vault.startWatch(config.vault?.debounceMs ?? 800);
+            } catch (err) {
+              logger.warn(`[vault] async init failed for ${vault.id}`, { err });
+            }
+          })();
+        }
+      } catch (err) {
+        logger.warn("[vault] generic auto-register failed", { err });
+      }
+
+      // Hand a factory to the dashboard so POST /api/vaults can create new vaults
+      // at runtime using the same embedding + vector-store deps wired above.
+      if (dashboard) {
+        const { UnityProjectVault } = await import("../vault/unity-project-vault.js");
+        dashboard.registerVaultFactory({
+          watchDebounceMs: config.vault?.debounceMs ?? 800,
+          async create(spec) {
+            return new UnityProjectVault({
+              id: spec.id,
+              rootPath: spec.rootPath,
+              embedding: vaultEmbedding,
+              vectorStore: vaultVectorStore,
+            });
+          },
+        });
+      }
     } catch (err) {
       logger.warn("[vault] bootstrap initialization failed", { err });
     }

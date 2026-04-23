@@ -183,6 +183,7 @@ export class DashboardServer {
   // Skill management context
   private skillManager?: DashboardSkillManager;
   private vaultRegistry?: import("../vault/vault-registry.js").VaultRegistry;
+  private vaultFactory?: import("./server-vault-routes.js").VaultFactory;
 
   // Budget management context
   private unifiedBudgetManager?: UnifiedBudgetManager;
@@ -411,6 +412,16 @@ export class DashboardServer {
   }
 
   /**
+   * Register the vault factory used by POST /api/vaults. Without this the
+   * endpoint responds 503; the factory carries the embedding + vector-store
+   * deps that are only available once bootstrap has initialized the vault
+   * subsystem.
+   */
+  registerVaultFactory(factory: import("./server-vault-routes.js").VaultFactory): void {
+    this.vaultFactory = factory;
+  }
+
+  /**
    * Register the WebSocket dashboard server for real-time event push.
    * Call after WebSocketDashboardServer is initialized to enable budget event forwarding.
    */
@@ -522,6 +533,7 @@ export class DashboardServer {
       // Skills
       skillManager: this.skillManager,
       vaultRegistry: this.vaultRegistry,
+      vaultFactory: this.vaultFactory,
 
       // Budget
       unifiedBudgetManager: this.unifiedBudgetManager,

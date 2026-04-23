@@ -106,5 +106,23 @@
   "breadcrumb.separator": "/",
 
   "panel.toggleLeft": "Linkes Panel umschalten",
-  "panel.toggleRight": "Rechtes Panel umschalten"
+  "panel.toggleRight": "Rechtes Panel umschalten",
+
+  "register.button": "Vault registrieren",
+  "register.newVault": "Neuer Vault",
+  "register.title": "Neuen Vault registrieren",
+  "register.description": "Indexiere ein Unity-Projekt oder eine generische Codebasis, um semantische Suche und Graph zu aktivieren.",
+  "register.nameLabel": "Name",
+  "register.namePlaceholder": "Mein Projekt",
+  "register.pathLabel": "Projekt-Stammpfad",
+  "register.pathPlaceholder": "/absoluter/projekt/pfad",
+  "register.kindLabel": "Typ",
+  "register.kindUnity": "Unity",
+  "register.kindGeneric": "Generisch",
+  "register.submit": "Registrieren & indizieren",
+  "register.indexing": "Registriere…",
+  "register.cancel": "Abbrechen",
+  "register.error.invalidPath": "Pfad existiert nicht oder ist nicht zugänglich",
+  "register.error.generic": "Vault-Registrierung fehlgeschlagen",
+  "register.success": "Vault registriert, Indizierung gestartet"
 }

@@ -1,9 +1,17 @@
 import { useTranslation } from 'react-i18next';
-import { Database, Package } from 'lucide-react';
+import { Database, Package, Plus } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useVaultStore } from '../../stores/vault-store';
 
-export default function VaultList() {
+export interface VaultListProps {
+  /**
+   * Opens the register-vault dialog. When omitted, the CTA button in the
+   * empty state is hidden (used by tests and storybook fixtures).
+   */
+  onRegisterClick?: () => void;
+}
+
+export default function VaultList({ onRegisterClick }: VaultListProps) {
   const { t } = useTranslation('vault');
   const vaults = useVaultStore((s) => s.vaults);
   const selected = useVaultStore((s) => s.selected);
@@ -11,11 +19,26 @@ export default function VaultList() {
 
   if (vaults.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center gap-2 h-full p-6 text-center">
+      <div className="flex flex-col items-center justify-center gap-3 h-full p-6 text-center">
         <Database className="w-7 h-7 text-[var(--color-text-tertiary)] opacity-50" />
         <div className="text-xs text-[var(--color-text-tertiary)]">
           {t('vaultList.empty')}
         </div>
+        {onRegisterClick && (
+          <button
+            type="button"
+            onClick={onRegisterClick}
+            className={cn(
+              'inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium',
+              'bg-[var(--color-accent)] text-[var(--color-on-accent,white)] hover:bg-[var(--color-accent)]/90',
+              'focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]/60',
+              'transition-colors',
+            )}
+          >
+            <Plus className="w-3.5 h-3.5" />
+            {t('register.button')}
+          </button>
+        )}
       </div>
     );
   }

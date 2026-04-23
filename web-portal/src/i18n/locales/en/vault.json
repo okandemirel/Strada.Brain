@@ -106,5 +106,23 @@
   "breadcrumb.separator": "/",
 
   "panel.toggleLeft": "Toggle left panel",
-  "panel.toggleRight": "Toggle right panel"
+  "panel.toggleRight": "Toggle right panel",
+
+  "register.button": "Register Vault",
+  "register.newVault": "New Vault",
+  "register.title": "Register a New Vault",
+  "register.description": "Index a Unity project or generic codebase to enable semantic search and graph.",
+  "register.nameLabel": "Name",
+  "register.namePlaceholder": "My Project",
+  "register.pathLabel": "Project Root Path",
+  "register.pathPlaceholder": "/absolute/path/to/project",
+  "register.kindLabel": "Type",
+  "register.kindUnity": "Unity",
+  "register.kindGeneric": "Generic",
+  "register.submit": "Register & Index",
+  "register.indexing": "Registering…",
+  "register.cancel": "Cancel",
+  "register.error.invalidPath": "Path does not exist or is not accessible",
+  "register.error.generic": "Failed to register vault",
+  "register.success": "Vault registered, indexing started"
 }

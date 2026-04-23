@@ -106,5 +106,23 @@
   "breadcrumb.separator": "/",
 
   "panel.toggleLeft": "切换左面板",
-  "panel.toggleRight": "切换右面板"
+  "panel.toggleRight": "切换右面板",
+
+  "register.button": "注册 Vault",
+  "register.newVault": "新建 Vault",
+  "register.title": "注册新的 Vault",
+  "register.description": "索引 Unity 项目或通用代码库,以启用语义搜索和关系图。",
+  "register.nameLabel": "名称",
+  "register.namePlaceholder": "我的项目",
+  "register.pathLabel": "项目根路径",
+  "register.pathPlaceholder": "/绝对/项目/路径",
+  "register.kindLabel": "类型",
+  "register.kindUnity": "Unity",
+  "register.kindGeneric": "通用",
+  "register.submit": "注册并索引",
+  "register.indexing": "注册中…",
+  "register.cancel": "取消",
+  "register.error.invalidPath": "路径不存在或无法访问",
+  "register.error.generic": "注册 Vault 失败",
+  "register.success": "Vault 已注册,索引已开始"
 }

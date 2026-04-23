@@ -106,5 +106,23 @@
   "breadcrumb.separator": "/",
 
   "panel.toggleLeft": "Alternar panel izquierdo",
-  "panel.toggleRight": "Alternar panel derecho"
+  "panel.toggleRight": "Alternar panel derecho",
+
+  "register.button": "Registrar vault",
+  "register.newVault": "Nuevo vault",
+  "register.title": "Registrar un nuevo vault",
+  "register.description": "Indexa un proyecto Unity o una base de código genérica para habilitar búsqueda semántica y grafo.",
+  "register.nameLabel": "Nombre",
+  "register.namePlaceholder": "Mi proyecto",
+  "register.pathLabel": "Ruta raíz del proyecto",
+  "register.pathPlaceholder": "/ruta/absoluta/al/proyecto",
+  "register.kindLabel": "Tipo",
+  "register.kindUnity": "Unity",
+  "register.kindGeneric": "Genérico",
+  "register.submit": "Registrar e indexar",
+  "register.indexing": "Registrando…",
+  "register.cancel": "Cancelar",
+  "register.error.invalidPath": "La ruta no existe o no es accesible",
+  "register.error.generic": "No se pudo registrar el vault",
+  "register.success": "Vault registrado, indexación iniciada"
 }

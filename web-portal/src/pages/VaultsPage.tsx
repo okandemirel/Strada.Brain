@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useCallback, type ReactNode } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useCallback, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   FolderOpen,
@@ -12,6 +12,7 @@ import {
   PanelRightClose,
   PanelRightOpen,
   ChevronRight,
+  Plus,
   type LucideIcon,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -21,6 +22,7 @@ import {
   ResizablePanelGroup,
 } from '@/components/ui/resizable';
 import VaultList from './vaults/VaultList';
+import { RegisterVaultDialog } from './vaults/RegisterVaultDialog';
 import VaultFilesTab from './vaults/VaultFilesTab';
 import VaultSearchTab from './vaults/VaultSearchTab';
 import { FileTreeSidebar } from './vaults/FileTreeSidebar';
@@ -90,12 +92,22 @@ export default function VaultsPage() {
     data: vaultList,
     loading: vaultListLoading,
     error: vaultListError,
+    retry: retryVaultList,
   } = useVaultFetch<{ items?: { id: string; kind: string }[] }>('/api/vaults');
   useEffect(() => {
     if (vaultListLoading) return;
     if (vaultList) setVaults(vaultList.items ?? []);
     else if (vaultListError) setVaults([]);
   }, [vaultList, vaultListLoading, vaultListError, setVaults]);
+
+  const [registerDialogOpen, setRegisterDialogOpen] = useState(false);
+  const handleOpenRegister = useCallback(() => setRegisterDialogOpen(true), []);
+  const handleRegistered = useCallback(() => {
+    // The server returns 201 the moment the vault is registered, but indexing
+    // continues in the background — re-fetch the list so the new entry is
+    // visible while indexing is still in flight.
+    retryVaultList();
+  }, [retryVaultList]);
 
   // Auto-collapse right panel on narrow viewports on first mount.
   useEffect(() => {
@@ -253,9 +265,25 @@ export default function VaultsPage() {
                       <h2 className="text-[11px] font-semibold uppercase tracking-wider text-[var(--color-text-secondary)]">
                         {t('vaultList.title')}
                       </h2>
+                      <button
+                        type="button"
+                        onClick={handleOpenRegister}
+                        title={t('register.newVault')}
+                        aria-label={t('register.newVault')}
+                        className={cn(
+                          'inline-flex items-center gap-1 px-1.5 py-0.5 rounded',
+                          'text-[10px] text-[var(--color-text-secondary)]',
+                          'hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text)]',
+                          'focus:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent)]/60',
+                          'transition-colors',
+                        )}
+                      >
+                        <Plus className="w-3 h-3" />
+                        <span>{t('register.newVault')}</span>
+                      </button>
                     </div>
                     <div className="max-h-[40%] overflow-auto border-b border-[var(--color-border-subtle)]">
-                      <VaultList />
+                      <VaultList onRegisterClick={handleOpenRegister} />
                     </div>
                     <div className="flex-1 min-h-0">{leftPanelByTab[activeTab]}</div>
                   </div>
@@ -410,6 +438,15 @@ export default function VaultsPage() {
       <Suspense fallback={null}>
         <CommandPalette />
       </Suspense>
+
+      {/* Register-vault dialog — mounted unconditionally so the open/close
+          transition is instantaneous; the form is cheap and `Dialog` itself
+          only renders its portal when `open` is true. */}
+      <RegisterVaultDialog
+        open={registerDialogOpen}
+        onOpenChange={setRegisterDialogOpen}
+        onRegistered={handleRegistered}
+      />
     </div>
   );
 }

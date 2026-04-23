@@ -457,6 +457,9 @@ export interface RouteContext {
 
   // Vault (Phase 1)
   vaultRegistry?: import("../vault/vault-registry.js").VaultRegistry;
+  // Vault registration factory — optional; only set when bootstrap has primed
+  // the vault subsystem with an embedding provider + vector store.
+  vaultFactory?: import("./server-vault-routes.js").VaultFactory;
 
   // Budget
   unifiedBudgetManager?: UnifiedBudgetManager;
