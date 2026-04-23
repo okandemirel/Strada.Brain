@@ -53,6 +53,14 @@ export interface Session {
   mixedParticipants?: boolean;
   postSetupBootstrapDelivered?: boolean;
   lastJournalSnapshot?: import("./autonomy/execution-journal.js").ExecutionJournalSnapshot;
+  /**
+   * Persisted cross-task tally of PAOR reflection overrides (CONTINUE forced
+   * over DONE). Mirrors {@link import("./agent-state.js").AgentState.reflectionOverrideCount}
+   * so the counter survives session serialize/deserialize. Optional for
+   * backward compatibility with legacy session files written before this
+   * field existed — those default to 0 on restore.
+   */
+  reflectionOverrideCount?: number;
 }
 
 /**
@@ -120,6 +128,7 @@ export class SessionManager {
       conversationScope: session.conversationScope,
       profileKey: session.profileKey,
       lastJournalSnapshot: session.lastJournalSnapshot,
+      reflectionOverrideCount: session.reflectionOverrideCount,
     });
   }
 
@@ -142,6 +151,14 @@ export class SessionManager {
            (m as Record<string, unknown>).content === null ||
            Array.isArray((m as Record<string, unknown>).content)),
       );
+      // Migration: legacy session files (pre-reflectionOverrideCount) default to 0.
+      const rawOverrideCount = (data as Record<string, unknown>).reflectionOverrideCount;
+      const reflectionOverrideCount =
+        typeof rawOverrideCount === "number" &&
+        Number.isFinite(rawOverrideCount) &&
+        rawOverrideCount >= 0
+          ? rawOverrideCount
+          : 0;
       return {
         messages,
         visibleMessages: [],
@@ -149,6 +166,7 @@ export class SessionManager {
         conversationScope: data.conversationScope,
         profileKey: data.profileKey,
         lastJournalSnapshot: data.lastJournalSnapshot,
+        reflectionOverrideCount,
       };
     } catch {
       return null;

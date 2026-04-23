@@ -16,6 +16,7 @@ import {
   cosineSimilarity,
 } from "./text-index.js";
 import { getLogger } from "../utils/logger.js";
+import { sanitizeSecrets } from "../security/secret-sanitizer.js";
 import type { 
   Result, 
   Option, 
@@ -436,15 +437,23 @@ export class FileMemoryManager implements IMemoryManager {
   ): Promise<Result<MemoryId, Error>> {
     try {
       const id = createBrand(randomUUID(), "MemoryId" as const);
-      
+
+      // Security: sanitize free-form user/assistant text before storing.
+      // chatId and turnNumber are non-sensitive identifiers — passthrough.
+      const safeSummary = sanitizeSecrets(summary);
+      const safeUserMessage = sanitizeSecrets(options?.userMessage ?? summary);
+      const safeAssistantMessage = options?.assistantMessage !== undefined
+        ? sanitizeSecrets(options.assistantMessage)
+        : undefined;
+
       // Create mutable entry first
       const mutableEntry = {
         id,
         type: "conversation" as const,
         chatId,
-        content: summary,
-        userMessage: options?.userMessage ?? summary,
-        assistantMessage: options?.assistantMessage,
+        content: safeSummary,
+        userMessage: safeUserMessage,
+        assistantMessage: safeAssistantMessage,
         turnNumber: options?.turnNumber,
         createdAt: getNow(),
         tags: options?.tags ?? [],
@@ -505,11 +514,14 @@ export class FileMemoryManager implements IMemoryManager {
   ): Promise<Result<MemoryId, Error>> {
     try {
       const id = createBrand(randomUUID(), "MemoryId" as const);
-      
+
+      // Security: sanitize note content before persisting.
+      const safeContent = sanitizeSecrets(content);
+
       const mutableEntry = {
         id,
         type: "note" as const,
-        content,
+        content: safeContent,
         createdAt: getNow(),
         tags: options?.tags ?? [],
         importance: options?.importance ?? "low",
@@ -547,11 +559,14 @@ export class FileMemoryManager implements IMemoryManager {
   ): Promise<Result<MemoryId, Error>> {
     try {
       const id = createBrand(randomUUID(), "MemoryId" as const);
-      
+
+      // Security: sanitize the raw error message (may include provider tokens / URLs with keys).
+      const safeErrorMessage = sanitizeSecrets(error.message);
+
       const mutableEntry = {
         id,
         type: "error" as const,
-        content: error.message,
+        content: safeErrorMessage,
         createdAt: getNow(),
         tags: [...(options?.tags ?? []), "error", context.category],
         importance: "high" as const,
@@ -608,8 +623,13 @@ export class FileMemoryManager implements IMemoryManager {
   ): Promise<Result<T, Error>> {
     try {
       const id = createBrand(randomUUID(), "MemoryId" as const);
+      // Security: sanitize free-form content — catches arbitrary text flowing in
+      // via generic storeEntry() callers that bypass typed helpers.
+      const entryWithSafeContent = typeof (entry as { content?: unknown }).content === "string"
+        ? { ...entry, content: sanitizeSecrets((entry as { content: string }).content) }
+        : entry;
       const newEntry = {
-        ...entry,
+        ...entryWithSafeContent,
         id,
         createdAt: getNow(),
         accessCount: 0,

@@ -23,6 +23,21 @@ import { MemoryTier } from "./unified-memory.interface.js";
 // TYPES FOR CONSTRUCTOR DEPENDENCIES
 // =============================================================================
 
+// =============================================================================
+// CONSOLIDATION STATUS ENUM
+// =============================================================================
+
+/**
+ * Lifecycle states for a row in the `consolidation_log` table.
+ * Exported so callers/tests and dashboard code do not recreate the literal
+ * union at each site. Keep in sync with the `status` column default in
+ * `ensureSchema()` and the SQL CHECK logic around it.
+ */
+export type ConsolidationStatus = "pending" | "completed" | "failed" | "undone";
+
+const STATUS_PENDING: ConsolidationStatus = "pending";
+const STATUS_COMPLETED: ConsolidationStatus = "completed";
+
 /** Minimal HNSW store interface used by the consolidation engine */
 interface HnswStoreContract {
   search(queryVector: number[], topK: number): Promise<Array<{ id: string; score: number }>>;
@@ -107,6 +122,22 @@ export class MemoryConsolidationEngine {
   private readonly agentId?: string;
   private readonly exemptDomains: Set<string>;
 
+  // Prepared statements — hoisted from processCluster() so we re-use the
+  // compiled plan across every cluster. `ensureSchema()` populates them
+  // once, right after the schema is guaranteed.
+  private softDeleteStmt!: Database.Statement;
+  private insertMemoryStmt!: Database.Statement;
+  private insertPendingLogStmt!: Database.Statement;
+  private markLogCompletedStmt!: Database.Statement;
+  private markLogFailedStmt!: Database.Statement;
+  private unflagStmt!: Database.Statement;
+  private deleteSummaryStmt!: Database.Statement;
+  // NOTE: `db.transaction()` wrappers are intentionally NOT hoisted. The
+  // better-sqlite3 runtime already caches transaction plans internally per
+  // call site, and hoisting them here would force test mocks (which expose
+  // `db.transaction` as a `vi.fn`) to re-implement the "returns a forwarder
+  // fn" semantics. The prepared statements alone give us the biggest win.
+
   constructor(opts: ConsolidationEngineOptions) {
     this.db = opts.sqliteDb;
     this.entries = opts.entries as Map<string, MemoryEntryLike>;
@@ -122,6 +153,54 @@ export class MemoryConsolidationEngine {
     this.exemptDomains = new Set(["instinct", ...(opts.exemptDomains ?? [])]);
 
     this.ensureSchema();
+    // Startup janitor — fail orphan 'pending' rows from a prior crash so they
+    // are never confused with an in-flight consolidation (see
+    // `markStalePendingFailed`). Runs inline during construction because
+    // callers always instantiate through `new MemoryConsolidationEngine(...)`
+    // before the heartbeat loop kicks in.
+    this.markStalePendingFailed();
+  }
+
+  // ---------------------------------------------------------------------------
+  // STARTUP JANITOR
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Two-phase commit protection: Phase 1 writes a `pending` row BEFORE Phase 2
+   * mutations. If the process crashes between Phase 1 and Phase 2/3 completion,
+   * the `pending` row is orphaned and there is no in-flight cluster to finalize.
+   *
+   * Flip all `pending` rows older than 1h to `failed` so downstream tooling
+   * (dashboards, `getStats()`, undo listings) do not treat them as live.
+   *
+   * Returns the count of rows transitioned for logging/tests.
+   */
+  markStalePendingFailed(staleWindowMs: number = 60 * 60 * 1000): number {
+    try {
+      const cutoff = Date.now() - staleWindowMs;
+      const rows = this.db
+        .prepare("SELECT id FROM consolidation_log WHERE status = 'pending' AND timestamp < ?")
+        .all(cutoff) as Array<{ id: string }>;
+      if (rows.length === 0) return 0;
+
+      const updateStmt = this.db.prepare(
+        "UPDATE consolidation_log SET status = 'failed' WHERE id = ? AND status = 'pending'",
+      );
+      for (const row of rows) {
+        updateStmt.run(row.id);
+      }
+
+      this.logger.warn("[Consolidation] Marked stale pending log rows as failed", {
+        count: rows.length,
+        cutoff,
+      });
+      return rows.length;
+    } catch (error) {
+      this.logger.error("[Consolidation] Startup janitor failed", {
+        error: String(error),
+      });
+      return 0;
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -162,6 +241,29 @@ export class MemoryConsolidationEngine {
 
     // Index on memories.consolidated_into for fast filtering in findClusters
     this.db.exec("CREATE INDEX IF NOT EXISTS idx_consolidated_into ON memories(consolidated_into);");
+
+    // Prepared statements — one-shot compile, reused per processCluster call.
+    this.softDeleteStmt = this.db.prepare(
+      "UPDATE memories SET consolidated_into = ?, consolidated_at = ?, value = json_set(value, '$.consolidated_into', ?, '$.consolidated_at', ?), updated_at = ? WHERE id = ?",
+    );
+    this.insertMemoryStmt = this.db.prepare(
+      "INSERT OR REPLACE INTO memories (id, key, value, metadata, embedding, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    );
+    this.insertPendingLogStmt = this.db.prepare(
+      "INSERT INTO consolidation_log (id, summary_entry_id, source_entry_ids, similarity_score, model_used, cost, timestamp, depth, status, agent_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    );
+    this.markLogCompletedStmt = this.db.prepare(
+      "UPDATE consolidation_log SET status = 'completed' WHERE id = ?",
+    );
+    this.markLogFailedStmt = this.db.prepare(
+      "UPDATE consolidation_log SET status = 'failed' WHERE id = ?",
+    );
+    this.unflagStmt = this.db.prepare(
+      "UPDATE memories SET consolidated_into = NULL, consolidated_at = NULL, value = json_remove(value, '$.consolidated_into', '$.consolidated_at'), updated_at = ? WHERE id = ?",
+    );
+    this.deleteSummaryStmt = this.db.prepare(
+      "DELETE FROM memories WHERE id = ?",
+    );
   }
 
   // ---------------------------------------------------------------------------
@@ -307,18 +409,33 @@ export class MemoryConsolidationEngine {
       chatId: memberEntries[0]?.chatId ?? "default",
     };
 
-    // Atomic SQLite transaction: soft-delete originals + insert summary + insert log
-    const softDeleteStmt = this.db.prepare(
-      "UPDATE memories SET consolidated_into = ?, consolidated_at = ?, value = json_set(value, '$.consolidated_into', ?, '$.consolidated_at', ?), updated_at = ? WHERE id = ?",
-    );
-
-    const insertStmt = this.db.prepare(
-      "INSERT OR REPLACE INTO memories (id, key, value, metadata, embedding, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-    );
-
-    const logStmt = this.db.prepare(
-      "INSERT INTO consolidation_log (id, summary_entry_id, source_entry_ids, similarity_score, model_used, cost, timestamp, depth, status, agent_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-    );
+    // =========================================================================
+    // TWO-PHASE COMMIT
+    // =========================================================================
+    // Atomicity strategy (prevents orphan summary + stale HNSW vectors):
+    //   Phase 1 (Intent):   Insert consolidation_log row with status='pending'
+    //                       BEFORE mutating memories. Serves as crash-recovery
+    //                       marker + persistent transaction log.
+    //   Phase 2 (SQL):      Single SQLite transaction: soft-delete members +
+    //                       insert summary. Atomic by SQLite guarantee.
+    //   Phase 3 (HNSW):     Under writeMutex, perform HNSW.remove(members) +
+    //                       HNSW.upsert(summary). On success -> log status
+    //                       transitions 'pending' -> 'completed'. On failure ->
+    //                       compensating SQL transaction unflags members +
+    //                       deletes summary + marks log status='failed'.
+    //   Phase 3 runs INSIDE the mutex so concurrent storeEntry() writes to
+    //   HNSW are FIFO-ordered relative to the consolidation HNSW mutation
+    //   AND the compensating SQL rollback.
+    // =========================================================================
+    // Prepared statements live on the instance (see ensureSchema()) so the
+    // compile/plan cost is paid once, not per-cluster.
+    const softDeleteStmt = this.softDeleteStmt;
+    const insertStmt = this.insertMemoryStmt;
+    const insertPendingLogStmt = this.insertPendingLogStmt;
+    const markLogCompletedStmt = this.markLogCompletedStmt;
+    const markLogFailedStmt = this.markLogFailedStmt;
+    const unflagStmt = this.unflagStmt;
+    const deleteSummaryStmt = this.deleteSummaryStmt;
 
     const summaryValue = JSON.stringify({
       type: summaryEntry.type,
@@ -336,6 +453,22 @@ export class MemoryConsolidationEngine {
     const summaryMetaStr = JSON.stringify(summaryMetadata);
     const summaryEmbBuf = Buffer.from(new Float32Array(summaryEmbedding).buffer);
 
+    // Phase 1: persistent intent log (status='pending') — written BEFORE
+    // any memory mutation so crashes leave a recoverable trace.
+    insertPendingLogStmt.run(
+      logId,
+      summaryId,
+      JSON.stringify(cluster.memberIds),
+      cluster.avgSimilarity,
+      llmResult.model,
+      llmResult.cost,
+      now,
+      newDepth,
+      STATUS_PENDING,
+      this.agentId ?? null,
+    );
+
+    // Phase 2: atomic SQLite transaction — soft-delete + insert summary.
     this.db.transaction(() => {
       // Soft-delete originals (SQL columns + JSON blob for audit trail)
       for (const id of cluster.memberIds) {
@@ -352,28 +485,14 @@ export class MemoryConsolidationEngine {
         now,
         now,
       );
-
-      // Insert consolidation log
-      logStmt.run(
-        logId,
-        summaryId,
-        JSON.stringify(cluster.memberIds),
-        cluster.avgSimilarity,
-        llmResult.model,
-        llmResult.cost,
-        now,
-        newDepth,
-        "completed",
-        this.agentId ?? null,
-      );
     })();
 
-    // HNSW cleanup: remove original vectors, add summary vector.
-    // Acquire the HNSW write mutex to prevent interleaved writes.
-    // If HNSW fails, roll back the SQLite commit via compensating transaction
-    // to prevent SQLite/HNSW divergence on crash or error.
-    try {
-      const doHnswUpdate = async () => {
+    // Phase 3: HNSW mutation + log finalization — wrapped in the write
+    // mutex. On HNSW failure, compensating SQL transaction rolls back the
+    // Phase 2 mutations and marks the log 'failed'. The mutex guarantees
+    // FIFO ordering against concurrent storeEntry() callers.
+    const doHnswAndFinalize = async (): Promise<void> => {
+      try {
         await this.hnsw.remove(cluster.memberIds);
         await this.hnsw.upsert([{
           id: summaryId,
@@ -382,34 +501,37 @@ export class MemoryConsolidationEngine {
           addedAt: now,
           accessCount: 0,
         }]);
-      };
-      if (this.hnswMutex) {
-        await this.hnswMutex.withLock(doHnswUpdate);
-      } else {
-        await doHnswUpdate();
+        // Transition 'pending' -> 'completed' only after HNSW succeeded.
+        markLogCompletedStmt.run(logId);
+      } catch (hnswError) {
+        this.logger.error(
+          "[Consolidation] HNSW update failed, rolling back SQLite commit",
+          {
+            summaryId,
+            memberIds: cluster.memberIds,
+            error: String(hnswError),
+          },
+        );
+
+        // Compensating transaction: reverse Phase 2 + mark log 'failed'.
+        // Runs inside the mutex so no concurrent writer observes a
+        // partial rollback state on the HNSW side.
+        this.db.transaction(() => {
+          for (const id of cluster.memberIds) {
+            unflagStmt.run(now, id);
+          }
+          deleteSummaryStmt.run(summaryId);
+          markLogFailedStmt.run(logId);
+        })();
+
+        throw hnswError;
       }
-    } catch (hnswError) {
-      this.logger.error("[Consolidation] HNSW update failed, rolling back SQLite commit", {
-        summaryId,
-        memberIds: cluster.memberIds,
-        error: String(hnswError),
-      });
+    };
 
-      // Compensating transaction: undo the SQLite changes
-      this.db.transaction(() => {
-        // Unflag soft-deleted originals
-        for (const id of cluster.memberIds) {
-          this.db.prepare(
-            "UPDATE memories SET consolidated_into = NULL, consolidated_at = NULL, value = json_remove(value, '$.consolidated_into', '$.consolidated_at'), updated_at = ? WHERE id = ?",
-          ).run(now, id);
-        }
-        // Remove the summary entry
-        this.db.prepare("DELETE FROM memories WHERE id = ?").run(summaryId);
-        // Mark log entry as failed
-        this.db.prepare("UPDATE consolidation_log SET status = 'failed' WHERE id = ?").run(logId);
-      })();
-
-      throw hnswError;
+    if (this.hnswMutex) {
+      await this.hnswMutex.withLock(doHnswAndFinalize);
+    } else {
+      await doHnswAndFinalize();
     }
 
     // Update in-memory entries only after both SQLite and HNSW succeed
@@ -546,8 +668,8 @@ export class MemoryConsolidationEngine {
     if (!logRow) {
       throw new Error(`Consolidation log entry not found: ${logId}`);
     }
-    if (logRow.status !== "completed") {
-      throw new Error(`Cannot undo consolidation with status '${logRow.status}'. Only 'completed' entries can be undone.`);
+    if (logRow.status !== STATUS_COMPLETED) {
+      throw new Error(`Cannot undo consolidation with status '${logRow.status}'. Only '${STATUS_COMPLETED}' entries can be undone.`);
     }
 
     const summaryEntryId = logRow.summary_entry_id as string;

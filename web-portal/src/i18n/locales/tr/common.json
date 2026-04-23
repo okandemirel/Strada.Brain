@@ -211,5 +211,14 @@
   "ui.submit": "Gönder",
   "ui.file": "DOSYA",
 
-  "connection.offline": "Çevrimdışısınız. Bazı özellikler kullanılamayabilir."
+  "connection.offline": "Çevrimdışısınız. Bazı özellikler kullanılamayabilir.",
+
+  "time.xSecondsAgo_one": "{{count}} sn önce",
+  "time.xSecondsAgo_other": "{{count}} sn önce",
+  "time.xMinutesAgo_one": "{{count}} dk önce",
+  "time.xMinutesAgo_other": "{{count}} dk önce",
+  "time.xHoursAgo_one": "{{count}} sa önce",
+  "time.xHoursAgo_other": "{{count}} sa önce",
+  "time.xDaysAgo_one": "{{count}} gün önce",
+  "time.xDaysAgo_other": "{{count}} gün önce"
 }

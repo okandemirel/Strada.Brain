@@ -316,6 +316,48 @@ export function hasSecrets(content: string): boolean {
   return getGlobalSanitizer().containsSecrets(content);
 }
 
+/**
+ * Recursively walk an arbitrary value, sanitizing every string leaf via
+ * {@link sanitizeSecrets}. Preserves object/array shape, pass-through for
+ * numbers / booleans / null / bigint. Functions and symbols are dropped to
+ * `undefined` rather than leaking (matches the policy of the former private
+ * `sanitizeDeep` helper in `agentdb-memory.ts`).
+ *
+ * Protects against cyclic references via a WeakSet guard — cycles resolve to
+ * `"[Circular]"` strings rather than blowing the stack. Callers should treat
+ * the returned value as a *new* tree (primitive leaves may alias the input,
+ * but every container is freshly allocated).
+ *
+ * Exported so memory-write paths can share one canonical deep-sanitize policy
+ * (see review finding #3: DRY extraction).
+ */
+export function sanitizeSecretsDeep<T>(value: T): T {
+  const seen = new WeakSet<object>();
+  return walk(value, seen) as T;
+}
+
+function walk(value: unknown, seen: WeakSet<object>): unknown {
+  if (typeof value === "string") return sanitizeSecrets(value);
+  if (value === null || value === undefined) return value;
+  const t = typeof value;
+  if (t === "number" || t === "boolean" || t === "bigint") return value;
+  if (t === "function" || t === "symbol") return undefined;
+  if (t !== "object") return value;
+
+  // Object / array path — guard against cycles.
+  if (seen.has(value as object)) return "[Circular]";
+  seen.add(value as object);
+
+  if (Array.isArray(value)) {
+    return value.map((v) => walk(v, seen));
+  }
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    out[k] = walk(v, seen);
+  }
+  return out;
+}
+
 export function createSanitizationReport(
   results: SanitizeResult[],
   context: string,

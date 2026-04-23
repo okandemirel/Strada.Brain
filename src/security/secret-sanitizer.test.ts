@@ -3,6 +3,7 @@ import {
   SecretSanitizer,
   DEFAULT_SECRET_PATTERNS,
   sanitizeSecrets,
+  sanitizeSecretsDeep,
   hasSecrets,
   createSanitizationReport,
   type SanitizeOptions,
@@ -451,8 +452,66 @@ DB_PASSWORD=supersecret`;
     it("should handle secrets at boundaries", () => {
       const content = `start sk-abc123def456ghi789jkl012mno345pqr678stu end`;
       const result = sanitizer.sanitize(content);
-      
+
       expect(result.content).toContain("[REDACTED_OPENAI_KEY]");
+    });
+  });
+
+  describe("sanitizeSecretsDeep", () => {
+    it("redacts strings inside nested objects while preserving structure", () => {
+      const input = {
+        user: {
+          id: 42,
+          name: "okan",
+          apiKey: "sk-abcdefghijklmnopqrstuvwxyz123456",
+        },
+        active: true,
+        quota: null,
+      };
+      const out = sanitizeSecretsDeep(input) as typeof input;
+
+      expect(out.user.id).toBe(42);
+      expect(out.user.name).toBe("okan");
+      expect(out.user.apiKey).not.toContain("sk-abcdefghijklmnopqrstuvwxyz");
+      expect(out.user.apiKey).toContain("[REDACTED");
+      expect(out.active).toBe(true);
+      expect(out.quota).toBeNull();
+    });
+
+    it("walks arrays and redacts string elements in place", () => {
+      const input = [
+        "plain text",
+        "key=sk-abcdefghijklmnopqrstuvwxyz999",
+        { nested: "Bearer abcdefghijklmnopqrstuvwxyz123" },
+        123,
+        null,
+      ];
+      const out = sanitizeSecretsDeep(input) as typeof input;
+
+      expect(out[0]).toBe("plain text");
+      expect(out[1]).not.toContain("sk-abcdefghijklmnopqrstuvwxyz");
+      expect((out[2] as { nested: string }).nested).toContain("[REDACTED]");
+      expect(out[3]).toBe(123);
+      expect(out[4]).toBeNull();
+    });
+
+    it("passes through primitives unchanged", () => {
+      expect(sanitizeSecretsDeep(0)).toBe(0);
+      expect(sanitizeSecretsDeep(false)).toBe(false);
+      expect(sanitizeSecretsDeep(null)).toBeNull();
+      expect(sanitizeSecretsDeep(undefined)).toBeUndefined();
+      expect(sanitizeSecretsDeep(42n)).toBe(42n);
+    });
+
+    it("tolerates cyclic references without exploding the stack", () => {
+      interface Node { name: string; next?: Node }
+      const a: Node = { name: "leaked sk-abcdefghijklmnopqrstuvwxyz1234" };
+      a.next = a; // cycle back to self
+
+      const out = sanitizeSecretsDeep(a) as Node;
+      expect(out.name).toContain("[REDACTED");
+      // Cycle is resolved to a sentinel rather than throwing.
+      expect(out.next).toBe("[Circular]");
     });
   });
 });

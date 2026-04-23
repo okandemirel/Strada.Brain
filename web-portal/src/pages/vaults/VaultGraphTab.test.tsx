@@ -2,8 +2,12 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import { useVaultStore } from '../../stores/vault-store';
 
-// Mock ReactFlow: jsdom has no canvas/SVG layout engine; render labels as plain divs
-// so `fetches canvas and renders node labels` can assert on node text without crashing.
+// Mock @xyflow/react: jsdom has no canvas/SVG layout engine. The mock renders
+// labels as plain divs so `renders node labels` can assert on node text without
+// crashing. Additional symbols (MiniMap, ReactFlowProvider, BaseEdge, Handle, …)
+// are stubbed either as no-op components or passthroughs so module-level imports
+// in GraphNode/GraphEdge/GraphMiniMap don't break. Custom nodeTypes/edgeTypes
+// are never invoked in tests because the mocked ReactFlow doesn't call them.
 interface MockFlowNode { id: string; data?: { label?: string } }
 vi.mock('@xyflow/react', () => ({
   ReactFlow: ({ nodes, edges, children }: { nodes: MockFlowNode[]; edges: unknown[]; children?: React.ReactNode }) => (
@@ -16,8 +20,16 @@ vi.mock('@xyflow/react', () => ({
       {children}
     </div>
   ),
+  ReactFlowProvider: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
   Background: () => <div data-testid="background" />,
+  BackgroundVariant: { Dots: 'dots', Lines: 'lines', Cross: 'cross' },
   Controls: () => <div data-testid="controls" />,
+  MiniMap: () => <div data-testid="minimap" />,
+  BaseEdge: () => null,
+  EdgeLabelRenderer: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
+  Handle: () => null,
+  Position: { Top: 'top', Right: 'right', Bottom: 'bottom', Left: 'left' },
+  getSmoothStepPath: () => ['M0,0', 0, 0],
 }));
 
 import VaultGraphTab from './VaultGraphTab';
@@ -33,6 +45,8 @@ describe('VaultGraphTab', () => {
       vaults: [{ id: 'v1', kind: 'unity-project' }],
       searchResults: [],
       graphCache: {},
+      activeFilePath: null,
+      selectedSymbolId: null,
     });
   });
 

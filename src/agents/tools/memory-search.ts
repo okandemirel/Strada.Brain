@@ -1,5 +1,6 @@
 import type { ITool, ToolContext, ToolExecutionResult } from "./tool.interface.js";
 import type { IMemoryManager } from "../../memory/memory.interface.js";
+import { sanitizeRetrievalContent } from "../orchestrator-text-utils.js";
 
 /**
  * Tool that allows the AI to search its persistent memory.
@@ -87,9 +88,13 @@ export class MemorySearchTool implements ITool {
         const typeLabel = entry.type.toUpperCase();
         const chatLabel = "chatId" in entry && entry.chatId ? ` [chat: ${entry.chatId}]` : "";
         const tags = entry.tags.length > 0 ? ` tags: ${entry.tags.join(", ")}` : "";
-        const preview = entry.content.length > 300
-          ? entry.content.substring(0, 300) + "..."
-          : entry.content;
+        // sec-H1: stored memory content is untrusted user input re-injected
+        // into the agent context. Strip prompt-injection carriers before
+        // preview so retrieval cannot be used to escalate system prompts.
+        const safeContent = sanitizeRetrievalContent(entry.content, "memory-search-tool");
+        const preview = safeContent.length > 300
+          ? safeContent.substring(0, 300) + "..."
+          : safeContent;
 
         return `${i + 1}. [${typeLabel}] (${score}% match, ${date}${chatLabel}${tags})\n${preview}`;
       });

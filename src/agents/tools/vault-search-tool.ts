@@ -1,6 +1,7 @@
 import type { VaultRegistry } from '../../vault/vault-registry.js';
 import type { IVault, VaultHit } from '../../vault/vault.interface.js';
 import type { ToolContext, ToolExecutionResult } from './tool.interface.js';
+import { sanitizeRetrievalContent } from '../orchestrator-text-utils.js';
 
 type VaultSearchMode = 'semantic' | 'fts' | 'hybrid';
 
@@ -221,7 +222,10 @@ function projectHit(hit: VaultHit, vaultId: string, mode: VaultSearchMode): Vaul
     filePath: hit.chunk.path,
     startLine: hit.chunk.startLine,
     endLine: hit.chunk.endLine,
-    content: hit.chunk.content,
+    // sec-H1: vault chunks feed directly into the LLM context, so strip
+    // prompt-injection carriers (envelopes, zero-width, "ignore previous",
+    // base64 smuggles) before the agent ever sees them.
+    content: sanitizeRetrievalContent(hit.chunk.content, "vault-search-tool"),
     score,
     source,
     vaultId,

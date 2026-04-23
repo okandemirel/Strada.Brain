@@ -210,5 +210,14 @@
   "ui.submit": "제출",
   "ui.file": "파일",
 
-  "connection.offline": "오프라인 상태입니다. 일부 기능을 사용할 수 없습니다."
+  "connection.offline": "오프라인 상태입니다. 일부 기능을 사용할 수 없습니다.",
+
+  "time.xSecondsAgo_one": "{{count}}초 전",
+  "time.xSecondsAgo_other": "{{count}}초 전",
+  "time.xMinutesAgo_one": "{{count}}분 전",
+  "time.xMinutesAgo_other": "{{count}}분 전",
+  "time.xHoursAgo_one": "{{count}}시간 전",
+  "time.xHoursAgo_other": "{{count}}시간 전",
+  "time.xDaysAgo_one": "{{count}}일 전",
+  "time.xDaysAgo_other": "{{count}}일 전"
 }

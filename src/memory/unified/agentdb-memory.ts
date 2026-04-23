@@ -84,6 +84,7 @@ import {
 } from "./agentdb-retrieval.js";
 
 import { getNow, _setNowFn, _resetNowFn } from "./agentdb-time.js";
+import { sanitizeSecrets, sanitizeSecretsDeep } from "../../security/secret-sanitizer.js";
 
 // Re-export clock utilities for test compatibility
 export { _setNowFn, _resetNowFn };
@@ -99,6 +100,11 @@ function getLoggerSafe() {
     return console;
   }
 }
+
+// ---------------------------------------------------------------------------
+// Metadata sanitization — delegates to the shared `sanitizeSecretsDeep` helper
+// in secret-sanitizer.ts so every memory-write path uses the same policy.
+// ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
 // AgentDBMemory Class
@@ -575,6 +581,18 @@ export class AgentDBMemory implements IUnifiedMemory {
       if (!this.isInitialized) {
         return err(new Error("AgentDBMemory not initialized"));
       }
+
+      // Security: sanitize free-form text BEFORE embedding / indexing / storage.
+      // This ensures the in-memory cache, HNSW embeddings, text index, and
+      // SQLite all hold redacted content. IDs, tier, and metadata keys pass through.
+      // agentdb-sqlite.upsertEntryRow relies on this — it does NOT re-sanitize.
+      const sanitizedContent = typeof entry.content === "string"
+        ? sanitizeSecrets(entry.content)
+        : entry.content;
+      const sanitizedMetadata = entry.metadata
+        ? sanitizeSecretsDeep(entry.metadata)
+        : entry.metadata;
+      entry = { ...entry, content: sanitizedContent, metadata: sanitizedMetadata };
 
       const id = createBrand(randomUUID(), "MemoryId" as const);
       const now = getNow();
@@ -1409,7 +1427,10 @@ export class AgentDBMemory implements IUnifiedMemory {
       if (!stmt) return;
 
       const id = createHash("sha256").update(patternKey).digest("hex").slice(0, 32);
-      stmt.run(id, patternKey, JSON.stringify(data), confidence, Date.now());
+      // Security: sanitize pattern data (may contain captured prompts / outputs) before writing.
+      // patternKey is an identifier — passthrough.
+      const sanitizedData = sanitizeSecrets(JSON.stringify(data));
+      stmt.run(id, patternKey, sanitizedData, confidence, Date.now());
     } catch (error) {
       getLoggerSafe().error("[AgentDBMemory] Failed to store pattern", {
         patternKey,

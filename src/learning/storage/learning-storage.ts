@@ -41,6 +41,7 @@ import { MS_PER_DAY } from "../types.js";
 import type { ChatId, SessionId, TimestampMs, JsonObject } from "../../types/index.js";
 import { createBrand } from "../../types/index.js";
 import type { IEventBus } from "../../core/event-bus.js";
+import { sanitizeSecrets } from "../../security/secret-sanitizer.js";
 
 // ─── Database Schema ────────────────────────────────────────────────────────────
 
@@ -936,20 +937,23 @@ export class LearningStorage {
 
   private flushObservationBatch(): void {
     if (this.observationBuffer.length === 0 || !this.db) return;
-    
+
     const insert = this.getStatement('insertObservation');
     const insertMany = this.db.transaction((items: typeof this.observationBuffer) => {
       for (const item of items) {
+        // Security: scrub provider raw output / tool inputs / correction text
+        // before persisting — may contain API keys or prompts with secrets.
+        // ID / sessionId / toolName / numeric fields are pass-through.
         insert.run(
           item.id,
           item.type,
           item.sessionId,
           item.toolName ?? null,
-          item.input ? JSON.stringify(item.input) : null,
-          item.output ?? null,
+          item.input ? sanitizeSecrets(JSON.stringify(item.input)) : null,
+          item.output ? sanitizeSecrets(item.output) : null,
           item.success !== undefined ? (item.success ? 1 : 0) : null,
-          item.errorDetails ? JSON.stringify(item.errorDetails) : null,
-          item.correction ?? null,
+          item.errorDetails ? sanitizeSecrets(JSON.stringify(item.errorDetails)) : null,
+          item.correction ? sanitizeSecrets(item.correction) : null,
           item.timestamp,
           item.processed ? 1 : 0
         );
@@ -968,19 +972,22 @@ export class LearningStorage {
     
     const insertMany = this.db.transaction((items: typeof this.trajectoryBuffer) => {
       for (const item of items) {
+        // Security: task descriptions, step payloads, and outcomes carry
+        // user prompts + provider output — sanitize before DB insert.
+        // IDs and numeric fields pass through.
         insert.run(
           item.id,
           item.sessionId,
           item.chatId ?? null,
           item.taskRunId ?? null,
-          item.taskDescription,
-          JSON.stringify(item.steps),
-          JSON.stringify(item.outcome),
+          sanitizeSecrets(item.taskDescription),
+          sanitizeSecrets(JSON.stringify(item.steps)),
+          sanitizeSecrets(JSON.stringify(item.outcome)),
           JSON.stringify(item.appliedInstinctIds),
           item.createdAt,
           item.processed ? 1 : 0
         );
-        
+
         for (const instinctId of item.appliedInstinctIds) {
           insertJunction.run(item.id, instinctId);
         }
@@ -1324,20 +1331,22 @@ export class LearningStorage {
     this.ensureConnection();
     const insert = this.getStatement('insertTrajectory');
     const insertJunction = this.getStatement('insertJunction');
-    
+
+    // Security: sanitize free-form trajectory text (task + steps + outcome)
+    // before writing; IDs pass through.
     insert.run(
       trajectory.id,
       trajectory.sessionId,
       trajectory.chatId ?? null,
       trajectory.taskRunId ?? null,
-      trajectory.taskDescription,
-      JSON.stringify(trajectory.steps),
-      JSON.stringify(trajectory.outcome),
+      sanitizeSecrets(trajectory.taskDescription),
+      sanitizeSecrets(JSON.stringify(trajectory.steps)),
+      sanitizeSecrets(JSON.stringify(trajectory.outcome)),
       JSON.stringify(trajectory.appliedInstinctIds),
       trajectory.createdAt,
       trajectory.processed ? 1 : 0
     );
-    
+
     for (const instinctId of trajectory.appliedInstinctIds) {
       insertJunction.run(trajectory.id, instinctId);
     }
@@ -1564,16 +1573,17 @@ export class LearningStorage {
   recordObservationImmediate(obs: Observation): void {
     this.ensureConnection();
     const insert = this.getStatement('insertObservation');
+    // Security: sanitize tool input/output/correction/errorDetails before insert.
     insert.run(
       obs.id,
       obs.type,
       obs.sessionId,
       obs.toolName ?? null,
-      obs.input ? JSON.stringify(obs.input) : null,
-      obs.output ?? null,
+      obs.input ? sanitizeSecrets(JSON.stringify(obs.input)) : null,
+      obs.output ? sanitizeSecrets(obs.output) : null,
       obs.success !== undefined ? (obs.success ? 1 : 0) : null,
-      obs.errorDetails ? JSON.stringify(obs.errorDetails) : null,
-      obs.correction ?? null,
+      obs.errorDetails ? sanitizeSecrets(JSON.stringify(obs.errorDetails)) : null,
+      obs.correction ? sanitizeSecrets(obs.correction) : null,
       obs.timestamp,
       obs.processed ? 1 : 0
     );
@@ -1602,14 +1612,17 @@ export class LearningStorage {
   recordVerdict(verdict: Verdict): void {
     this.ensureConnection();
     const stmt = this.getStatement('insertVerdict');
-    
+
+    // Security: verdict feedback is free-form judge text — sanitize before insert.
+    // dimensions is a structured numeric map but JSON-stringified value might still
+    // contain quoted text; sanitize the serialized form.
     stmt.run(
       verdict.id,
       verdict.trajectoryId,
       verdict.judgeType,
       verdict.score,
-      JSON.stringify(verdict.dimensions),
-      verdict.feedback ?? null,
+      sanitizeSecrets(JSON.stringify(verdict.dimensions)),
+      verdict.feedback ? sanitizeSecrets(verdict.feedback) : null,
       verdict.createdAt
     );
   }

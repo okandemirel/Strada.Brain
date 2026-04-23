@@ -210,5 +210,14 @@
   "ui.submit": "送信",
   "ui.file": "ファイル",
 
-  "connection.offline": "オフラインです。一部の機能が利用できない場合があります。"
+  "connection.offline": "オフラインです。一部の機能が利用できない場合があります。",
+
+  "time.xSecondsAgo_one": "{{count}}秒前",
+  "time.xSecondsAgo_other": "{{count}}秒前",
+  "time.xMinutesAgo_one": "{{count}}分前",
+  "time.xMinutesAgo_other": "{{count}}分前",
+  "time.xHoursAgo_one": "{{count}}時間前",
+  "time.xHoursAgo_other": "{{count}}時間前",
+  "time.xDaysAgo_one": "{{count}}日前",
+  "time.xDaysAgo_other": "{{count}}日前"
 }

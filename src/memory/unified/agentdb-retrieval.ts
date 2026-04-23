@@ -16,6 +16,7 @@ import type { NormalizedScore } from "../../types/index.js";
 import { MemoryTier } from "./unified-memory.interface.js";
 import { TextIndex, extractTerms, cosineSimilarity } from "../text-index.js";
 import { getLogger } from "../../utils/logger.js";
+import { sanitizeRetrievalContent } from "../../agents/orchestrator-text-utils.js";
 
 function getLoggerSafe() {
   try { return getLogger(); } catch { return console; }
@@ -35,6 +36,38 @@ export interface AgentDBRetrievalContext {
   readonly searchTimes: number[];
   /** Optional callback to persist an entry after access stats update. */
   readonly sqlitePersistEntry?: (entry: UnifiedMemoryEntry) => void;
+}
+
+// ---------------------------------------------------------------------------
+// Prompt-injection defense for retrieved content
+// ---------------------------------------------------------------------------
+// sec-H1: Entries loaded from AgentDB are untrusted content that ultimately
+// gets concatenated into the agent's system/user context. Returning a
+// sanitized shallow copy means callers get defense-in-depth without mutating
+// the underlying store (which would corrupt pattern-store / learning
+// write paths owned by other subsystems).
+//
+// Perf: `sanitizePromptInjection` runs a handful of regex and unicode
+// normalization passes. For tight retrieval loops (TF-IDF + semantic both
+// call `.map(sanitizeResult)`), skip the heavy path on short, structurally
+// benign content — strings under 200 chars that contain no envelope-carrier
+// markers (`<` tag starts, `@`/`#` directive prefixes, or URL schemes) are
+// statistically safe and not worth the cost to run through the full engine.
+const BENIGN_CONTENT_THRESHOLD = 200;
+const INJECTION_CARRIER_RE = /[<@#]|https?:/i;
+
+function sanitizeResult(hit: RetrievalResult<MemoryEntry>): RetrievalResult<MemoryEntry> {
+  const content = (hit.entry as { content?: unknown }).content;
+  if (typeof content !== "string") return hit;
+  if (content.length < BENIGN_CONTENT_THRESHOLD && !INJECTION_CARRIER_RE.test(content)) {
+    return hit;
+  }
+  const safeContent = sanitizeRetrievalContent(content, "agentdb-retrieval");
+  if (safeContent === content) return hit;
+  return {
+    ...hit,
+    entry: { ...hit.entry, content: safeContent } as MemoryEntry,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -73,7 +106,7 @@ export function retrieveTFIDF(
   }
 
   scored.sort((a, b) => b.score - a.score);
-  return scored.slice(0, limit);
+  return scored.slice(0, limit).map(sanitizeResult);
 }
 
 // ---------------------------------------------------------------------------
@@ -143,10 +176,12 @@ export async function retrieveSemantic(
 
   // Apply MMR if requested
   if (options.useMMR) {
-    return applyMMR(results, queryEmbedding, options.mmrLambda ?? 0.5, options.limit ?? 5);
+    return applyMMR(results, queryEmbedding, options.mmrLambda ?? 0.5, options.limit ?? 5).map(
+      sanitizeResult,
+    );
   }
 
-  return results.slice(0, options.limit ?? 5);
+  return results.slice(0, options.limit ?? 5).map(sanitizeResult);
 }
 
 // ---------------------------------------------------------------------------

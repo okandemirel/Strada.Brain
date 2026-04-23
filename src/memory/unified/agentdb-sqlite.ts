@@ -259,8 +259,16 @@ export function closeSqlite(ctx: AgentDBSqliteContext): void {
 /**
  * Serialize an entry and run the upsert prepared statement.
  * Shared by persistEntry and persistDecayedEntries to avoid duplication.
+ *
+ * SECURITY: content + metadata are assumed to have been sanitized by the caller
+ * (see `agentdb-memory.ts#storeEntry` — it sanitizes BEFORE writing to the in-memory
+ * cache so the cache, HNSW embeddings, text index, and SQLite all see the same
+ * redacted form). Duplicating the sanitization here would redact already-redacted
+ * markers (e.g. `[REDACTED_OPENAI_KEY]`) a second time and also double the CPU cost.
+ * ID / tier / numeric fields are pass-through regardless.
  */
 export function upsertEntryRow(stmt: Database.Statement, entry: UnifiedMemoryEntry): void {
+  // already sanitized by caller (agentdb-memory.storeEntry)
   const value = JSON.stringify({
     type: entry.type,
     content: entry.content,
@@ -277,6 +285,8 @@ export function upsertEntryRow(stmt: Database.Statement, entry: UnifiedMemoryEnt
     domain: entry.domain,
     chatId: entry.chatId,
   });
+  // already sanitized by caller (agentdb-memory.storeEntry) — metadata values were
+  // scrubbed via sanitizeSecretsDeep before being assigned onto the entry.
   const metadata = JSON.stringify(entry.metadata ?? {});
   const embeddingBuf = entry.embedding ? embeddingToBuffer(entry.embedding) : null;
 

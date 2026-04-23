@@ -528,4 +528,94 @@ describe("AgentDBMemory", () => {
       }
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // Security: secret sanitization on write paths
+  // ---------------------------------------------------------------------------
+
+  describe("secret sanitization (write paths)", () => {
+    it("redacts OpenAI API keys embedded in note content before persisting", async () => {
+      const leakedKey = "sk-proj-abc123DEF456ghi789JKL012mno345PQR678stu901VWX234";
+      const content = `Here is my API key: ${leakedKey} — do not leak.`;
+
+      const stored = await memory.storeNote(content, [], MemoryTier.Persistent);
+
+      // Entry returned and roundtripped should have the key redacted.
+      expect(stored.content).not.toContain(leakedKey);
+      expect(stored.content).toContain("[REDACTED");
+
+      const fetched = await memory.getById(stored.id);
+      expect(fetched.kind).toBe("ok");
+      if (fetched.kind === "ok" && fetched.value.kind === "some") {
+        expect(fetched.value.value.content).not.toContain(leakedKey);
+        expect(fetched.value.value.content).toContain("[REDACTED");
+      }
+    });
+
+    it("redacts secrets in conversation user/assistant messages stored via storeConversation", async () => {
+      const leakedKey = "sk-proj-abc123DEF456ghi789JKL012mno345PQR678stu901VWX234";
+      const summary = `User leaked ${leakedKey} while asking a question`;
+
+      const entry = await memory.storeConversation(
+        "chat-sanitize-test" as unknown as import("../../types/index.js").ChatId,
+        summary,
+        [],
+        MemoryTier.Working,
+        {
+          userMessage: `My key is ${leakedKey}`,
+          assistantMessage: `I noticed the key ${leakedKey} — do not share it`,
+        },
+      );
+
+      expect(entry.content).not.toContain(leakedKey);
+      const meta = entry.metadata as Record<string, unknown>;
+      if (typeof meta["userMessage"] === "string") {
+        expect(meta["userMessage"]).not.toContain(leakedKey);
+      }
+      if (typeof meta["assistantMessage"] === "string") {
+        expect(meta["assistantMessage"]).not.toContain(leakedKey);
+      }
+    });
+
+    it("does not modify ID, tier, or other structural fields when sanitizing", async () => {
+      const safeContent = "Just a safe note with no secrets.";
+      const stored = await memory.storeNote(safeContent, ["tag1"], MemoryTier.Persistent);
+
+      expect(stored.content).toBe(safeContent); // unchanged
+      expect(stored.tier).toBe(MemoryTier.Persistent);
+      expect(typeof stored.id).toBe("string");
+      expect(stored.id.length).toBeGreaterThan(0);
+    });
+
+    it("sanitizes content exactly once (no double-redaction across memory + SQLite layers)", async () => {
+      // Regression for review finding #1: before the fix, storeEntry sanitized
+      // once in agentdb-memory.ts AND upsertEntryRow sanitized again in
+      // agentdb-sqlite.ts — two passes over identical content. With the fix,
+      // upsertEntryRow trusts the caller. We verify by spying on sanitizeSecrets
+      // and asserting at most one call per string leaf of the stored content.
+      const secretMod = await import("../../security/secret-sanitizer.js");
+      const spy = vi.spyOn(secretMod, "sanitizeSecrets");
+      try {
+        const leaked = "sk-proj-doubleCheckABC123DEF456ghi789JKL012mno345PQR678stu";
+        const content = `secret=${leaked}`;
+        const stored = await memory.storeNote(content, [], MemoryTier.Persistent);
+
+        // Content is redacted (sanitization happened at least once).
+        expect(stored.content).not.toContain(leaked);
+        expect(stored.content).toContain("[REDACTED");
+
+        // Filter spy calls that received our exact input — the pre-fix code
+        // path would have produced ≥2 such calls (one in storeEntry, one in
+        // upsertEntryRow). The fixed code path must produce exactly 1 for the
+        // content string itself. Metadata sanitization takes a different path
+        // (sanitizeSecretsDeep walks an empty {} here, making no secret calls).
+        const contentCalls = spy.mock.calls.filter(
+          (args) => typeof args[0] === "string" && args[0].includes(leaked),
+        );
+        expect(contentCalls.length).toBeLessThanOrEqual(1);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+  });
 });

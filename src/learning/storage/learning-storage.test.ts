@@ -1124,4 +1124,154 @@ describe("LearningStorage", () => {
       expect(retrieved?.trustLevel).toBe("auto_enabled");
     });
   });
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // Security: secret sanitization on write paths
+  // ───────────────────────────────────────────────────────────────────────────
+
+  describe("secret sanitization (write paths)", () => {
+    const leakedOpenAIKey = "sk-proj-abc123DEF456ghi789JKL012mno345PQR678stu901VWX234";
+
+    it("redacts API keys from observation input/output/correction on immediate write", () => {
+      const obs: Observation = {
+        id: `obs_${randomUUID()}` as any,
+        type: "tool_use",
+        sessionId: "sess-sec-1" as any,
+        toolName: "provider_chat",
+        input: { prompt: `Use ${leakedOpenAIKey} for auth` } as any,
+        output: `Response mentions ${leakedOpenAIKey} leaking again`,
+        success: true,
+        correction: `Do not pass ${leakedOpenAIKey} via prompt`,
+        timestamp: Date.now() as any,
+        processed: false,
+      };
+      storage.recordObservationImmediate(obs);
+
+      const rows = storage.getDatabase()!
+        .prepare("SELECT input, output, correction FROM observations WHERE id = ?")
+        .get(obs.id) as { input: string; output: string; correction: string };
+
+      expect(rows.input).not.toContain(leakedOpenAIKey);
+      expect(rows.output).not.toContain(leakedOpenAIKey);
+      expect(rows.correction).not.toContain(leakedOpenAIKey);
+      expect(rows.output).toContain("[REDACTED");
+    });
+
+    it("redacts API keys from batched observations", () => {
+      const obs: Observation = {
+        id: `obs_${randomUUID()}` as any,
+        type: "tool_use",
+        sessionId: "sess-sec-2" as any,
+        toolName: "provider_chat",
+        input: { prompt: `Another leak: ${leakedOpenAIKey}` } as any,
+        output: `raw ${leakedOpenAIKey} appears in output`,
+        success: true,
+        timestamp: Date.now() as any,
+        processed: false,
+      };
+      storage.recordObservation(obs);
+      storage.flush();
+
+      const row = storage.getDatabase()!
+        .prepare("SELECT input, output FROM observations WHERE id = ?")
+        .get(obs.id) as { input: string; output: string };
+
+      expect(row.input).not.toContain(leakedOpenAIKey);
+      expect(row.output).not.toContain(leakedOpenAIKey);
+    });
+
+    it("redacts API keys from trajectory task description and steps", () => {
+      const trajectory: Trajectory = {
+        id: `traj_${randomUUID()}` as any,
+        sessionId: "sess-sec-3" as any,
+        taskDescription: `Build with key ${leakedOpenAIKey} leaked`,
+        steps: [
+          {
+            stepNumber: 1,
+            toolName: "provider_chat",
+            input: { prompt: leakedOpenAIKey } as any,
+            output: `fail: ${leakedOpenAIKey}`,
+            isError: true,
+            timestamp: Date.now(),
+          },
+        ],
+        outcome: {
+          success: false,
+          totalSteps: 1,
+          hadErrors: true,
+          errorCount: 1,
+          durationMs: 100,
+          errorSummary: `provider rejected ${leakedOpenAIKey}`,
+        } as any,
+        appliedInstinctIds: [],
+        createdAt: Date.now() as any,
+        processed: false,
+      };
+      storage.createTrajectoryImmediate(trajectory);
+
+      const row = storage.getDatabase()!
+        .prepare("SELECT task_description, steps, outcome FROM trajectories WHERE id = ?")
+        .get(trajectory.id) as { task_description: string; steps: string; outcome: string };
+
+      expect(row.task_description).not.toContain(leakedOpenAIKey);
+      expect(row.steps).not.toContain(leakedOpenAIKey);
+      expect(row.outcome).not.toContain(leakedOpenAIKey);
+      expect(row.task_description).toContain("[REDACTED");
+    });
+
+    it("redacts API keys from verdict feedback", () => {
+      const trajectory: Trajectory = {
+        id: `traj_${randomUUID()}` as any,
+        sessionId: "sess-sec-4" as any,
+        taskDescription: "clean task",
+        steps: [],
+        outcome: { success: true, totalSteps: 0, hadErrors: false, errorCount: 0, durationMs: 0 } as any,
+        appliedInstinctIds: [],
+        createdAt: Date.now() as any,
+        processed: false,
+      };
+      storage.createTrajectoryImmediate(trajectory);
+
+      storage.recordVerdict({
+        id: `verdict_${randomUUID()}` as any,
+        trajectoryId: trajectory.id,
+        judgeType: "self",
+        judgeId: "judge-sec",
+        score: 0.5,
+        dimensions: {} as any,
+        feedback: `observed leaked key: ${leakedOpenAIKey}`,
+        createdAt: Date.now() as any,
+      } as any);
+
+      const row = storage.getDatabase()!
+        .prepare("SELECT feedback FROM verdicts WHERE trajectory_id = ?")
+        .get(trajectory.id) as { feedback: string };
+
+      expect(row.feedback).not.toContain(leakedOpenAIKey);
+      expect(row.feedback).toContain("[REDACTED");
+    });
+
+    it("does not mutate non-sensitive IDs or sessionId fields", () => {
+      const obs: Observation = {
+        id: `obs_${randomUUID()}` as any,
+        type: "tool_use",
+        sessionId: "sess-keep-me" as any,
+        toolName: "tool_a",
+        input: { prompt: "safe prompt" } as any,
+        output: "safe output",
+        success: true,
+        timestamp: Date.now() as any,
+        processed: false,
+      };
+      storage.recordObservationImmediate(obs);
+
+      const row = storage.getDatabase()!
+        .prepare("SELECT id, session_id, tool_name FROM observations WHERE id = ?")
+        .get(obs.id) as { id: string; session_id: string; tool_name: string };
+
+      expect(row.id).toBe(obs.id);
+      expect(row.session_id).toBe("sess-keep-me");
+      expect(row.tool_name).toBe("tool_a");
+    });
+  });
 });

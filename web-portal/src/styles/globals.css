@@ -40,7 +40,15 @@
 /* ===== Shadcn/UI CSS Variable Bridge ===== */
 @layer base {
   :root,
-  :root[data-theme="dark"] {
+  :root[data-theme="dark"],
+  .dark {
+    /* Semantic status tokens — explicitly bridged into :root / .dark scopes
+     * so consumers like VaultStatusBar can reference var(--color-success / warning / error)
+     * without depending on Tailwind @theme->:root promotion behavior. */
+    --color-success: #22c55e;
+    --color-warning: #f59e0b;
+    --color-error: #ef4444;
+
     --background: var(--color-bg);
     --foreground: var(--color-text);
     --card: rgba(255, 255, 255, 0.03);
@@ -64,6 +72,11 @@
   }
 
   :root[data-theme="light"] {
+    /* Light-mode status tokens (darker shades for AA contrast on light bg). */
+    --color-success: #15803d;
+    --color-warning: #b45309;
+    --color-error: #b91c1c;
+
     --background: var(--color-bg);
     --foreground: var(--color-text);
     --card: #ffffff;
@@ -84,6 +97,44 @@
     --input: var(--color-border);
     --ring: var(--color-accent);
     --radius: 0.75rem;
+  }
+}
+
+/* ===== Vault Graph Tokens (dark default, light override) ===== */
+@layer base {
+  :root,
+  :root[data-theme="dark"] {
+    --graph-bg: var(--color-bg);
+    --graph-grid: rgba(255, 255, 255, 0.05);
+    --graph-edge: rgba(255, 255, 255, 0.25);
+    --graph-edge-active: var(--color-accent);
+    --graph-node-border: rgba(255, 255, 255, 0.12);
+    --graph-node-border-hover: rgba(255, 255, 255, 0.35);
+    --graph-node-selected-ring: var(--color-accent);
+    --graph-node-surface: rgba(255, 255, 255, 0.04);
+    --graph-node-surface-hover: rgba(255, 255, 255, 0.08);
+    --graph-minimap-bg: rgba(12, 12, 18, 0.85);
+    --graph-minimap-mask: rgba(0, 0, 0, 0.55);
+    --graph-panel-bg: rgba(16, 16, 22, 0.92);
+    --graph-panel-border: var(--color-border);
+    --graph-glow: 0 0 12px rgba(0, 229, 255, 0.35);
+  }
+
+  :root[data-theme="light"] {
+    --graph-bg: #fafafa;
+    --graph-grid: rgba(0, 0, 0, 0.05);
+    --graph-edge: rgba(0, 0, 0, 0.3);
+    --graph-edge-active: #0891b2;
+    --graph-node-border: rgba(0, 0, 0, 0.12);
+    --graph-node-border-hover: rgba(0, 0, 0, 0.35);
+    --graph-node-selected-ring: #0891b2;
+    --graph-node-surface: #ffffff;
+    --graph-node-surface-hover: #f4f4f5;
+    --graph-minimap-bg: rgba(255, 255, 255, 0.92);
+    --graph-minimap-mask: rgba(0, 0, 0, 0.1);
+    --graph-panel-bg: rgba(255, 255, 255, 0.95);
+    --graph-panel-border: rgba(0, 0, 0, 0.12);
+    --graph-glow: 0 0 12px rgba(8, 145, 178, 0.35);
   }
 }
 

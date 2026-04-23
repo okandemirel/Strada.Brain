@@ -211,5 +211,14 @@
   "ui.submit": "Submit",
   "ui.file": "FILE",
 
-  "connection.offline": "You are offline. Some features may be unavailable."
+  "connection.offline": "You are offline. Some features may be unavailable.",
+
+  "time.xSecondsAgo_one": "{{count}}s ago",
+  "time.xSecondsAgo_other": "{{count}}s ago",
+  "time.xMinutesAgo_one": "{{count}}m ago",
+  "time.xMinutesAgo_other": "{{count}}m ago",
+  "time.xHoursAgo_one": "{{count}}h ago",
+  "time.xHoursAgo_other": "{{count}}h ago",
+  "time.xDaysAgo_one": "{{count}}d ago",
+  "time.xDaysAgo_other": "{{count}}d ago"
 }

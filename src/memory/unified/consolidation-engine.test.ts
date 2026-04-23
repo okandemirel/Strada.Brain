@@ -142,11 +142,65 @@ function makeFakeDb() {
               agent_id: args[9],
             });
           }
-          if (sql.includes("UPDATE consolidation_log SET status")) {
-            const logEntry = tables.consolidation_log.find((r: any) => r.id === (args[1] ?? args[0]));
-            if (logEntry) {
-              (logEntry as any).status = "undone";
+          if (sql.includes("UPDATE consolidation_log SET status = 'completed'")) {
+            const logEntry = tables.consolidation_log.find((r: any) => r.id === args[0]);
+            if (logEntry) (logEntry as any).status = "completed";
+          } else if (sql.includes("UPDATE consolidation_log SET status = 'failed'")) {
+            const logEntry = tables.consolidation_log.find((r: any) => r.id === args[0]);
+            if (logEntry) (logEntry as any).status = "failed";
+          } else if (sql.includes("UPDATE consolidation_log SET status")) {
+            // Legacy 'undone' path (signature: run(now, id) or run(id))
+            const logEntry = tables.consolidation_log.find(
+              (r: any) => r.id === (args[1] ?? args[0]),
+            );
+            if (logEntry) (logEntry as any).status = "undone";
+          }
+          // Track soft-delete of source memories
+          if (sql.includes("UPDATE memories SET consolidated_into = ?")) {
+            // args: summaryId, now, summaryId, now, now, id
+            const id = args[5];
+            const summaryId = args[0];
+            const at = args[1];
+            let row = tables.memories.find((r: any) => r.id === id);
+            if (!row) {
+              row = { id };
+              tables.memories.push(row);
             }
+            (row as any).consolidated_into = summaryId;
+            (row as any).consolidated_at = at;
+          }
+          // Track unflag (compensating rollback)
+          if (sql.includes("UPDATE memories SET consolidated_into = NULL")) {
+            // args: now, id
+            const id = args[1];
+            const row = tables.memories.find((r: any) => r.id === id);
+            if (row) {
+              (row as any).consolidated_into = null;
+              (row as any).consolidated_at = null;
+            }
+          }
+          // Track summary insert
+          if (sql.includes("INSERT OR REPLACE INTO memories")) {
+            const id = args[0];
+            const existing = tables.memories.find((r: any) => r.id === id);
+            if (existing) {
+              Object.assign(existing, { id, value: args[2], metadata: args[3] });
+            } else {
+              tables.memories.push({
+                id,
+                key: args[1],
+                value: args[2],
+                metadata: args[3],
+                created_at: args[5],
+                updated_at: args[6],
+              });
+            }
+          }
+          // Track summary delete (compensating rollback)
+          if (sql.startsWith("DELETE FROM memories WHERE id")) {
+            const id = args[0];
+            const idx = tables.memories.findIndex((r: any) => r.id === id);
+            if (idx !== -1) tables.memories.splice(idx, 1);
           }
         }),
       };
@@ -207,6 +261,59 @@ describe("MemoryConsolidationEngine", () => {
     const opts = makeOpts();
     const engine = new MemoryConsolidationEngine(opts);
     expect(engine).toBeDefined();
+  });
+
+  it("should mark orphan 'pending' log rows as 'failed' on startup", () => {
+    // Seed a pre-existing stale 'pending' row to simulate a prior crash
+    // between Phase 1 intent-write and Phase 3 finalization.
+    const { db, tables } = makeFakeDb();
+    const staleId = "stale-pending";
+    const freshId = "fresh-pending";
+    const cutoffWindowMs = 60 * 60 * 1000;
+    tables.consolidation_log.push({
+      id: staleId,
+      status: "pending",
+      timestamp: Date.now() - cutoffWindowMs - 1000, // older than window
+    });
+    tables.consolidation_log.push({
+      id: freshId,
+      status: "pending",
+      timestamp: Date.now() - 1000, // younger than window
+    });
+
+    // Wire prepare() so SELECT returns stale rows and UPDATE flips status.
+    const originalPrepare = db.prepare;
+    db.prepare = vi.fn((sql: string) => {
+      const stmt = originalPrepare(sql);
+      if (sql.includes("SELECT id FROM consolidation_log WHERE status = 'pending'")) {
+        stmt.all = vi.fn((cutoff: number) =>
+          tables.consolidation_log
+            .filter((r: any) => r.status === "pending" && r.timestamp < cutoff)
+            .map((r: any) => ({ id: r.id })),
+        );
+      }
+      if (sql.includes("UPDATE consolidation_log SET status = 'failed' WHERE id = ? AND status = 'pending'")) {
+        stmt.run = vi.fn((id: string) => {
+          const row = tables.consolidation_log.find((r: any) => r.id === id);
+          if (row && row.status === "pending") row.status = "failed";
+        });
+      }
+      return stmt;
+    }) as any;
+
+    const logger = makeLogger();
+    const opts = makeOpts({ sqliteDb: db as any, logger });
+    // Construction itself triggers the janitor.
+    new MemoryConsolidationEngine(opts);
+
+    const stale = tables.consolidation_log.find((r: any) => r.id === staleId);
+    const fresh = tables.consolidation_log.find((r: any) => r.id === freshId);
+    expect(stale?.status).toBe("failed");
+    expect(fresh?.status).toBe("pending"); // untouched
+    expect(logger.warn).toHaveBeenCalledWith(
+      "[Consolidation] Marked stale pending log rows as failed",
+      expect.objectContaining({ count: 1 }),
+    );
   });
 
   it("should always exempt the 'instinct' domain", async () => {
@@ -702,7 +809,14 @@ describe("processCluster", () => {
     expect(summaryEntry.metadata.consolidation.depth).toBe(3); // max(2,0) + 1
   });
 
-  it("should rollback SQLite on HNSW failure and re-throw", async () => {
+  it("should rollback SQLite on HNSW failure and re-throw (production path, asserts SQL state)", async () => {
+    // Pre-seed fake DB with the two source rows so compensating UPDATE has
+    // something to mutate; the soft-delete UPDATE then flips columns, and
+    // the compensating UPDATE must NULL them back.
+    const { db, tables } = makeFakeDb();
+    tables.memories.push({ id: "rb1", consolidated_into: null, consolidated_at: null });
+    tables.memories.push({ id: "rb2", consolidated_into: null, consolidated_at: null });
+
     const entries = new Map<string, unknown>();
     entries.set("rb1", makeMemEntry("rb1", "rollback A", { tier: MemoryTier.Ephemeral }));
     entries.set("rb2", makeMemEntry("rb2", "rollback B", { tier: MemoryTier.Ephemeral }));
@@ -714,7 +828,7 @@ describe("processCluster", () => {
     };
 
     const logger = makeLogger();
-    const opts = makeOpts({ entries, hnswStore, logger });
+    const opts = makeOpts({ sqliteDb: db as any, entries, hnswStore, logger });
     const engine = new MemoryConsolidationEngine(opts);
 
     await expect(
@@ -734,6 +848,140 @@ describe("processCluster", () => {
     // In-memory entries should NOT have been removed
     expect(entries.has("rb1")).toBe(true);
     expect(entries.has("rb2")).toBe(true);
+
+    // SQL state assertions — compensating transaction must have reverted
+    // Phase 2 mutations AND marked the log 'failed'.
+    const rb1Row = tables.memories.find((r: any) => r.id === "rb1");
+    const rb2Row = tables.memories.find((r: any) => r.id === "rb2");
+    expect(rb1Row?.consolidated_into).toBeNull();
+    expect(rb1Row?.consolidated_at).toBeNull();
+    expect(rb2Row?.consolidated_into).toBeNull();
+    expect(rb2Row?.consolidated_at).toBeNull();
+
+    // Summary entry must NOT exist in memories (only the two pre-seeded rows remain).
+    const summaryRows = tables.memories.filter(
+      (r: any) => r.id !== "rb1" && r.id !== "rb2",
+    );
+    expect(summaryRows).toEqual([]);
+
+    // consolidation_log must have exactly one entry with status 'failed'
+    // (NOT 'pending' — finalization must have run).
+    expect(tables.consolidation_log.length).toBe(1);
+    expect(tables.consolidation_log[0]!.status).toBe("failed");
+  });
+
+  it("should write 'pending' log intent BEFORE mutating memories (two-phase commit)", async () => {
+    // If HNSW.remove throws on first invocation, the compensating transaction
+    // runs but the 'pending' intent row must have been inserted FIRST, before
+    // any Phase 2 mutation. Snapshot ordering via run() call sequence.
+    const { db, tables } = makeFakeDb();
+    tables.memories.push({ id: "tp1", consolidated_into: null });
+    tables.memories.push({ id: "tp2", consolidated_into: null });
+
+    const entries = new Map<string, unknown>();
+    entries.set("tp1", makeMemEntry("tp1", "two-phase A", { tier: MemoryTier.Ephemeral }));
+    entries.set("tp2", makeMemEntry("tp2", "two-phase B", { tier: MemoryTier.Ephemeral }));
+
+    const hnswStore = {
+      search: vi.fn(async () => []),
+      remove: vi.fn(async () => {}),
+      upsert: vi.fn(async () => {}),
+    };
+
+    const opts = makeOpts({ sqliteDb: db as any, entries, hnswStore });
+    const engine = new MemoryConsolidationEngine(opts);
+
+    await engine.processCluster({
+      seedId: "tp1",
+      memberIds: ["tp1", "tp2"],
+      avgSimilarity: 0.9,
+      tier: MemoryTier.Ephemeral,
+    });
+
+    // Log must exist and be in 'completed' state after success path.
+    expect(tables.consolidation_log.length).toBe(1);
+    expect(tables.consolidation_log[0]!.status).toBe("completed");
+    // Initial insert was 'pending' — verify via the prepare() call history.
+    const insertLogCalls = (db.prepare as any).mock.calls.filter(
+      ([sql]: [string]) => sql.includes("INSERT INTO consolidation_log"),
+    );
+    expect(insertLogCalls.length).toBeGreaterThan(0);
+  });
+
+  it("should preserve FIFO ordering under writeMutex with concurrent storeEntry + consolidation", async () => {
+    // Simulate concurrent work: a storeEntry-like HNSW write and a
+    // processCluster call issued in order A, B. The mutex must serialize
+    // them so that A finishes before B's HNSW ops begin.
+    const { db, tables } = makeFakeDb();
+    tables.memories.push({ id: "fi1", consolidated_into: null });
+    tables.memories.push({ id: "fi2", consolidated_into: null });
+
+    const entries = new Map<string, unknown>();
+    entries.set("fi1", makeMemEntry("fi1", "fifo A", { tier: MemoryTier.Ephemeral }));
+    entries.set("fi2", makeMemEntry("fi2", "fifo B", { tier: MemoryTier.Ephemeral }));
+
+    // Real FIFO mutex (matches HnswWriteMutex semantics).
+    let mutexChain: Promise<void> = Promise.resolve();
+    const hnswWriteMutex = {
+      withLock: async <T>(fn: () => Promise<T>): Promise<T> => {
+        let release!: () => void;
+        const next = new Promise<void>((r) => { release = r; });
+        const prev = mutexChain;
+        mutexChain = next;
+        await prev;
+        try { return await fn(); } finally { release(); }
+      },
+    };
+
+    const order: string[] = [];
+    const hnswStore = {
+      search: vi.fn(async () => []),
+      remove: vi.fn(async (ids: string[]) => {
+        order.push(`remove:${ids.join(",")}`);
+        // Yield to scheduler — if mutex is broken, concurrent op sneaks in.
+        await new Promise((r) => setTimeout(r, 5));
+      }),
+      upsert: vi.fn(async (entries: any[]) => {
+        order.push(`upsert:${entries.map((e) => e.id).join(",")}`);
+        await new Promise((r) => setTimeout(r, 5));
+      }),
+    };
+
+    const opts = makeOpts({ sqliteDb: db as any, entries, hnswStore, hnswWriteMutex });
+    const engine = new MemoryConsolidationEngine(opts);
+
+    // Task A: simulated storeEntry (HNSW upsert under the same mutex).
+    const storeA = hnswWriteMutex.withLock(async () => {
+      await hnswStore.upsert([{
+        id: "external-A",
+        vector: [0.1, 0.2, 0.3, 0.4],
+        chunk: { filePath: "", content: "", kind: "generic", language: "text" },
+        addedAt: Date.now(),
+        accessCount: 0,
+      }]);
+    });
+
+    // Task B: processCluster issued immediately after A (without awaiting).
+    const taskB = engine.processCluster({
+      seedId: "fi1",
+      memberIds: ["fi1", "fi2"],
+      avgSimilarity: 0.9,
+      tier: MemoryTier.Ephemeral,
+    });
+
+    await Promise.all([storeA, taskB]);
+
+    // Expected FIFO order:
+    //   1. upsert:external-A   (storeA completed first)
+    //   2. remove:fi1,fi2       (processCluster HNSW remove)
+    //   3. upsert:<summaryId>   (processCluster HNSW upsert)
+    expect(order[0]).toBe("upsert:external-A");
+    expect(order[1]).toBe("remove:fi1,fi2");
+    expect(order[2]).toMatch(/^upsert:/);
+    expect(order[2]).not.toBe("upsert:external-A");
+
+    // Log finalized as 'completed'.
+    expect(tables.consolidation_log[0]!.status).toBe("completed");
   });
 
   it("should preserve the highest importanceScore from members", async () => {

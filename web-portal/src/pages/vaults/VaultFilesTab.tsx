@@ -1,59 +1,73 @@
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import { FileCode2 } from 'lucide-react';
 import { useVaultStore } from '../../stores/vault-store';
 import MarkdownPreview from './MarkdownPreview';
 
-interface TreeEntry { path: string; lang: string; }
-
+/**
+ * Center reader for the Files tab. Reads `selected` + `activeFilePath` from
+ * the vault store; the file tree lives in the left sidebar (FileTreeSidebar).
+ */
 export default function VaultFilesTab() {
+  const { t } = useTranslation('vault');
   const selected = useVaultStore((s) => s.selected);
-  const [files, setFiles] = useState<TreeEntry[]>([]);
-  const [path, setPath] = useState<string | null>(null);
-  const [body, setBody] = useState<string>('');
-  const [prevSelected, setPrevSelected] = useState(selected);
+  const path = useVaultStore((s) => s.activeFilePath);
 
-  // M3: reset selection when switching vaults so stale path from previous vault isn't re-fetched.
-  // React-idiomatic "setting state during render" — avoids the setState-in-effect lint rule.
-  if (selected !== prevSelected) {
-    setPrevSelected(selected);
-    setPath(null);
+  const [body, setBody] = useState<string>('');
+  const [loading, setLoading] = useState(false);
+
+  // Reset body during render when the open file changes — gives an immediate
+  // blank-then-loading flash instead of flashing the previous file.
+  const [prevKey, setPrevKey] = useState<string>(`${selected ?? ''}::${path ?? ''}`);
+  const key = `${selected ?? ''}::${path ?? ''}`;
+  if (key !== prevKey) {
+    setPrevKey(key);
     setBody('');
+    setLoading(Boolean(selected && path));
   }
 
   useEffect(() => {
-    if (!selected) return;
-    fetch(`/api/vaults/${encodeURIComponent(selected)}/tree`)
-      .then((r) => r.json()).then((d) => setFiles(d.items ?? [])).catch(() => setFiles([]));
-  }, [selected]);
-
-  useEffect(() => {
     if (!selected || !path) return;
-    fetch(`/api/vaults/${encodeURIComponent(selected)}/file?path=${encodeURIComponent(path)}`)
-      .then((r) => r.json()).then((d) => setBody(d.body ?? '')).catch(() => setBody(''));
+    const ctrl = new AbortController();
+    fetch(`/api/vaults/${encodeURIComponent(selected)}/file?path=${encodeURIComponent(path)}`, { signal: ctrl.signal })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .then((d: { body?: string }) => setBody(d.body ?? ''))
+      .catch((err) => {
+        if ((err as Error).name !== 'AbortError') setBody('');
+      })
+      .finally(() => setLoading(false));
+    return () => ctrl.abort();
   }, [selected, path]);
 
-  if (!selected) return <div className="p-4 text-sm text-muted-foreground">Select a vault</div>;
+  if (!selected) {
+    return (
+      <div className="h-full flex items-center justify-center text-sm text-[var(--color-text-tertiary)]">
+        {t('files.selectVault')}
+      </div>
+    );
+  }
+  if (!path) {
+    return (
+      <div className="h-full flex flex-col items-center justify-center gap-2 text-[var(--color-text-tertiary)]">
+        <FileCode2 className="w-8 h-8 opacity-40" />
+        <div className="text-sm">{t('files.pickFile')}</div>
+      </div>
+    );
+  }
 
   return (
-    <div className="grid grid-cols-[300px_1fr] h-full">
-      <ul className="border-r overflow-auto">
-        {files.map((f) => (
-          <li key={f.path}>
-            <button
-              className={`w-full text-left px-2 py-1 text-sm ${path === f.path ? 'bg-accent' : ''}`}
-              onClick={() => setPath(f.path)}
-            >
-              {f.path}
-            </button>
-          </li>
-        ))}
-      </ul>
-      <div className="overflow-auto p-4">
-        {path
-          ? (path.endsWith('.md')
-              ? <MarkdownPreview source={body} />
-              : <pre className="text-xs whitespace-pre-wrap">{body}</pre>)
-          : <div className="text-sm text-muted-foreground">Pick a file</div>}
-      </div>
+    <div className="h-full overflow-auto">
+      {loading ? (
+        <div className="p-6 text-sm text-[var(--color-text-tertiary)] animate-pulse">…</div>
+      ) : path.endsWith('.md') ? (
+        <div className="p-6 max-w-4xl mx-auto">
+          <MarkdownPreview source={body} />
+        </div>
+      ) : (
+        <pre className="p-6 text-[13px] whitespace-pre-wrap font-mono text-[var(--color-text-secondary)] leading-relaxed">
+          {body}
+        </pre>
+      )}
     </div>
   );
 }

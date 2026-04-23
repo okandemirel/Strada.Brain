@@ -255,6 +255,42 @@ describe("SessionManager", () => {
       expect(restored).toBeNull();
     });
 
+    it("round-trips reflectionOverrideCount through serialize/deserialize", () => {
+      const session: Session = {
+        messages: [{ role: "user", content: "hi" }],
+        lastActivity: new Date(Date.now() - 60_000),
+        visibleMessages: [],
+        reflectionOverrideCount: 3,
+      };
+      const json = SessionManager.serializeSession(session);
+      const restored = SessionManager.deserializeSession(json);
+      expect(restored).not.toBeNull();
+      expect(restored!.reflectionOverrideCount).toBe(3);
+    });
+
+    it("defaults reflectionOverrideCount to 0 for legacy sessions missing the field", () => {
+      // Legacy session payload written before the field was introduced.
+      const legacyJson = JSON.stringify({
+        messages: [{ role: "user", content: "legacy" }],
+        lastActivity: new Date().toISOString(),
+        conversationScope: "legacy-scope",
+      });
+      const restored = SessionManager.deserializeSession(legacyJson);
+      expect(restored).not.toBeNull();
+      expect(restored!.reflectionOverrideCount).toBe(0);
+    });
+
+    it("coerces invalid reflectionOverrideCount values to 0", () => {
+      const malformedJson = JSON.stringify({
+        messages: [{ role: "user", content: "hi" }],
+        lastActivity: new Date().toISOString(),
+        reflectionOverrideCount: "not-a-number",
+      });
+      const restored = SessionManager.deserializeSession(malformedJson);
+      expect(restored).not.toBeNull();
+      expect(restored!.reflectionOverrideCount).toBe(0);
+    });
+
     it("filters out messages with invalid roles", () => {
       const json = JSON.stringify({
         messages: [

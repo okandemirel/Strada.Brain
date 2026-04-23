@@ -1,6 +1,5 @@
 {
   "brand.name": "Strada.Brain",
-
   "sidebar.notifications": "Notifications",
   "sidebar.lightMode": "Mode clair",
   "sidebar.darkMode": "Mode sombre",
@@ -8,7 +7,6 @@
   "sidebar.expand": "Agrandir",
   "sidebar.comingSoon": "Bientot disponible",
   "sidebar.admin": "Admin",
-
   "nav.dashboard": "Tableau de bord",
   "nav.config": "Configuration",
   "nav.tools": "Outils",
@@ -22,7 +20,6 @@
   "nav.skills": "Competences",
   "nav.sidebar": "Navigation de la barre laterale",
   "nav.bottomTabs": "Navigation des onglets inferieurs",
-
   "modes.chat.label": "Discussion",
   "modes.chat.description": "Discutez avec l'agent et gardez la conversation en cours visible.",
   "modes.monitor.label": "Moniteur",
@@ -33,18 +30,15 @@
   "modes.code.description": "Inspectez les fichiers, les diffs et la sortie du terminal dans un seul espace de travail.",
   "modes.vaults.label": "Coffres",
   "modes.vaults.description": "Parcourez les coffres de memoire du code, recherchez du contenu indexe et inspectez les graphes de dependances.",
-
   "connection.connected": "Connecte",
   "connection.connecting": "Connexion en cours...",
   "connection.reconnecting": "Reconnexion en cours...",
   "connection.disconnected": "Deconnecte",
-
   "notifications.title": "Notifications",
   "notifications.empty": "Aucune notification",
   "notifications.today": "Aujourd'hui",
   "notifications.earlier": "Plus tot",
   "notifications.dismiss": "Ignorer",
-
   "chat.placeholder": "Envoyer un message... (Entree pour envoyer, Maj+Entree pour une nouvelle ligne)",
   "chat.send": "Envoyer",
   "chat.attachFile": "Joindre un fichier",
@@ -68,23 +62,19 @@
   "chat.searchMessages": "Rechercher des messages...",
   "chat.search": "Rechercher",
   "chat.results": "resultats",
-
   "chat.empty.title": "Strada.Brain",
   "chat.empty.description": "Assistant de developpement Unity propulse par l'IA. Envoyez un message pour commencer.",
-
   "workspace.topBar.label": "{{label}}",
   "workspace.topBar.description": "{{description}}",
   "workspace.miniChat.placeholder": "Message rapide...",
   "workspace.miniChat.sendLabel": "Envoyer",
   "workspace.miniChat.inputLabel": "Message rapide",
-
   "workspace.loading.monitor": "Chargement du moniteur...",
   "workspace.loading.canvas": "Chargement du Canvas...",
   "workspace.loading.code": "Chargement de l'editeur de code...",
   "workspace.loading.vaults": "Chargement des coffres...",
   "workspace.loading.portal": "Chargement du portail Strada",
   "workspace.loading.portalSubtitle": "Preparation de l'ecran suivant.",
-
   "worker.defaultLabel": "Worker",
   "worker.title": "Definir le worker d'execution principal de Strada",
   "worker.description": "Strada garde le controle.",
@@ -93,7 +83,6 @@
   "worker.liveSignals": "{{count}} signaux en direct",
   "worker.think": "Reflexion",
   "worker.live": "En direct",
-
   "voice.stopRecording": "Arreter l'enregistrement",
   "voice.sendingVoice": "Envoi du message vocal",
   "voice.voiceInput": "Entree vocale",
@@ -105,7 +94,6 @@
   "voice.micPermissionDenied": "Permission du microphone refusee",
   "voice.stopSpeaking": "Arreter la lecture",
   "voice.readAloud": "Lire a voix haute",
-
   "confirm.reviewPlan": "Examinez les etapes du plan ci-dessous",
   "confirm.chooseOption": "Choisissez une option",
   "confirm.modifyPlaceholder": "Decrivez votre modification...",
@@ -113,20 +101,17 @@
   "confirm.submit": "Soumettre",
   "confirm.recommended": "Recommande",
   "confirm.planPrefix": "Plan :",
-
   "dashboard.title": "Tableau de bord systeme",
   "dashboard.unavailable": "Tableau de bord indisponible",
   "dashboard.unavailableMessage": "Impossible de se connecter au tableau de bord ou au canal web. Assurez-vous que le serveur est en cours d'execution.",
   "dashboard.notEnabledUnreachable": "Tableau de bord non active et canal web inaccessible",
   "dashboard.apiOffline": "API du tableau de bord hors ligne",
   "dashboard.updated": "Mis a jour {{time}}",
-
   "dashboard.health.title": "Sante du systeme",
   "dashboard.health.status": "Statut",
   "dashboard.health.uptime": "Temps de fonctionnement",
   "dashboard.health.connectedClients": "Clients connectes",
   "dashboard.health.activeSessions": "Sessions actives",
-
   "dashboard.metrics.title": "Metriques",
   "dashboard.metrics.messages": "Messages",
   "dashboard.metrics.msgPerMin": "{{rate}} msg/min",
@@ -135,42 +120,34 @@
   "dashboard.metrics.estCost": "Cout estime",
   "dashboard.metrics.totalTokens": "{{count}} tokens au total",
   "dashboard.metrics.tokenTrend": "Tendance des tokens",
-
   "dashboard.tools.title": "Utilisation des outils",
   "dashboard.tools.errorRate": "{{rate}}% taux d'erreur",
-
   "dashboard.agent.title": "Performance de l'agent",
   "dashboard.agent.totalToolCalls": "Total des appels d'outils",
   "dashboard.agent.toolErrorRate": "Taux d'erreur des outils",
   "dashboard.agent.provider": "Fournisseur",
   "dashboard.agent.memoryEntries": "Entrees memoire",
-
   "dashboard.triggers.title": "Declencheurs du daemon",
   "dashboard.triggers.active": "Declencheurs actifs",
   "dashboard.triggers.totalSuffix": "{{count}} au total",
   "dashboard.triggers.fires": "{{count}} declenchements",
-
   "dashboard.multiAgent.title": "Multi-Agent",
   "dashboard.multiAgent.activeAgents": "Agents actifs",
   "dashboard.multiAgent.budgetUsed": "Budget utilise",
   "dashboard.multiAgent.budgetPercent": "{{percent}}% de la limite",
-
   "dashboard.delegations.title": "Delegations",
   "dashboard.delegations.active": "Actives",
   "dashboard.delegations.successRate": "{{rate}}% de reussite",
-
   "dashboard.consolidation.title": "Consolidation de la memoire",
   "dashboard.consolidation.totalRuns": "Executions totales",
   "dashboard.consolidation.lifetimeSavings": "Economies totales",
   "dashboard.consolidation.savingsUnit": "{{count}} entrees",
   "dashboard.consolidation.cost": "Cout de consolidation",
-
   "dashboard.deployments.title": "Deploiements",
   "dashboard.deployments.total": "Total",
   "dashboard.deployments.successful": "Reussis",
   "dashboard.deployments.failed": "Echoues",
   "dashboard.deployments.circuitBreaker": "Disjoncteur",
-
   "dashboard.maintenance.title": "Maintenance",
   "dashboard.maintenance.memoryDecay": "Degradation de la memoire",
   "dashboard.maintenance.memoryDecayActive": "Active",
@@ -179,12 +156,10 @@
   "dashboard.maintenance.triggerPruning": "Elagage des declencheurs",
   "dashboard.maintenance.retentionDays": "{{days}}j de retention",
   "dashboard.maintenance.lastPruned": "{{count}} derniers elagues",
-
   "dashboard.security.title": "Securite",
   "dashboard.security.secretsSanitized": "Secrets assainis",
   "dashboard.security.toolsBlocked": "Outils bloques",
   "dashboard.security.readOnlyMode": "Mode lecture seule",
-
   "errors.somethingWentWrong": "Une erreur s'est produite",
   "errors.unexpectedError": "Une erreur inattendue s'est produite lors du rendu de l'interface. Vous pouvez essayer de recharger la page.",
   "errors.reload": "Recharger",
@@ -193,7 +168,6 @@
   "errors.notFound.code": "404",
   "errors.notFound.message": "Page non trouvee",
   "errors.notFound.backToChat": "Retour a la discussion",
-
   "shortcuts.title": "Raccourcis clavier",
   "shortcuts.description": "Raccourcis clavier disponibles pour l'espace de travail.",
   "shortcuts.switchChat": "Basculer en mode Discussion",
@@ -203,12 +177,18 @@
   "shortcuts.toggleSidebar": "Afficher/masquer la barre laterale",
   "shortcuts.toggleSecondaryPanel": "Afficher/masquer le panneau secondaire",
   "shortcuts.showShortcuts": "Afficher les raccourcis clavier",
-
   "ui.copy": "Copier",
   "ui.copied": "Copie !",
   "ui.cancel": "Annuler",
   "ui.submit": "Soumettre",
   "ui.file": "FICHIER",
-
-  "connection.offline": "Vous \u00eates hors ligne. Certaines fonctionnalit\u00e9s peuvent \u00eatre indisponibles."
+  "connection.offline": "Vous êtes hors ligne. Certaines fonctionnalités peuvent être indisponibles.",
+  "time.xSecondsAgo_one": "il y a {{count}} seconde",
+  "time.xSecondsAgo_other": "il y a {{count}} secondes",
+  "time.xMinutesAgo_one": "il y a {{count}} minute",
+  "time.xMinutesAgo_other": "il y a {{count}} minutes",
+  "time.xHoursAgo_one": "il y a {{count}} heure",
+  "time.xHoursAgo_other": "il y a {{count}} heures",
+  "time.xDaysAgo_one": "il y a {{count}} jour",
+  "time.xDaysAgo_other": "il y a {{count}} jours"
 }

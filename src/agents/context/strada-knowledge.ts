@@ -343,6 +343,7 @@ import type { CrashRecoveryContext } from "../../identity/crash-recovery.js";
 import { formatDowntime } from "../../identity/crash-recovery.js";
 import type { StradaProjectAnalysis } from "../../intelligence/strada-analyzer.js";
 import type { StradaDepsStatus } from "../../config/strada-deps.js";
+import { sanitizeRetrievalContent } from "../orchestrator-text-utils.js";
 
 
 /**
@@ -430,7 +431,12 @@ function renderVaultContext(results: Array<{ hits: Array<{ chunk: { path: string
   const lines: string[] = [];
   for (const r of results) {
     for (const h of r.hits) {
-      lines.push(`\n### ${h.chunk.path}\n\`\`\`\n${h.chunk.content}\n\`\`\``);
+      // sec-H1: vault chunks are user-controlled content being injected into
+      // the system prompt. Strip prompt-injection carriers (envelopes,
+      // "ignore previous", zero-width, base64 smuggles) before the model sees
+      // them. Sanitizer is a no-op on short clean strings.
+      const safeContent = sanitizeRetrievalContent(h.chunk.content, "strada-knowledge-vault");
+      lines.push(`\n### ${h.chunk.path}\n\`\`\`\n${safeContent}\n\`\`\``);
     }
   }
   return lines.join('\n');

@@ -210,5 +210,14 @@
   "ui.submit": "提交",
   "ui.file": "文件",
 
-  "connection.offline": "您已离线。部分功能可能不可用。"
+  "connection.offline": "您已离线。部分功能可能不可用。",
+
+  "time.xSecondsAgo_one": "{{count}} 秒前",
+  "time.xSecondsAgo_other": "{{count}} 秒前",
+  "time.xMinutesAgo_one": "{{count}} 分钟前",
+  "time.xMinutesAgo_other": "{{count}} 分钟前",
+  "time.xHoursAgo_one": "{{count}} 小时前",
+  "time.xHoursAgo_other": "{{count}} 小时前",
+  "time.xDaysAgo_one": "{{count}} 天前",
+  "time.xDaysAgo_other": "{{count}} 天前"
 }

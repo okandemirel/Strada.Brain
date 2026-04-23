@@ -1,6 +1,5 @@
 {
   "brand.name": "Strada.Brain",
-
   "sidebar.notifications": "Benachrichtigungen",
   "sidebar.lightMode": "Heller Modus",
   "sidebar.darkMode": "Dunkler Modus",
@@ -8,7 +7,6 @@
   "sidebar.expand": "Ausklappen",
   "sidebar.comingSoon": "Demnächst verfügbar",
   "sidebar.admin": "Admin",
-
   "nav.dashboard": "Dashboard",
   "nav.config": "Konfiguration",
   "nav.tools": "Werkzeuge",
@@ -22,7 +20,6 @@
   "nav.skills": "Skills",
   "nav.sidebar": "Seitenleisten-Navigation",
   "nav.bottomTabs": "Untere Tab-Navigation",
-
   "modes.chat.label": "Chat",
   "modes.chat.description": "Sprich mit dem Agenten und behalte die aktuelle Unterhaltung im Blick.",
   "modes.monitor.label": "Monitor",
@@ -33,18 +30,15 @@
   "modes.code.description": "Untersuche Dateien, Diffs und Terminal-Ausgaben in einem Arbeitsbereich.",
   "modes.vaults.label": "Tresore",
   "modes.vaults.description": "Durchsuche Codebasis-Speichertresore, durchsuche indexierte Inhalte und untersuche Abhängigkeitsgraphen.",
-
   "connection.connected": "Verbunden",
   "connection.connecting": "Verbinde...",
   "connection.reconnecting": "Verbinde erneut...",
   "connection.disconnected": "Getrennt",
-
   "notifications.title": "Benachrichtigungen",
   "notifications.empty": "Keine Benachrichtigungen",
   "notifications.today": "Heute",
   "notifications.earlier": "Früher",
   "notifications.dismiss": "Verwerfen",
-
   "chat.placeholder": "Nachricht senden... (Enter zum Senden, Umschalt+Enter für neue Zeile)",
   "chat.send": "Senden",
   "chat.attachFile": "Datei anhängen",
@@ -68,23 +62,19 @@
   "chat.searchMessages": "Nachrichten suchen...",
   "chat.search": "Suche",
   "chat.results": "Ergebnisse",
-
   "chat.empty.title": "Strada.Brain",
   "chat.empty.description": "KI-gestützter Unity-Entwicklungsassistent. Sende eine Nachricht, um loszulegen.",
-
   "workspace.topBar.label": "{{label}}",
   "workspace.topBar.description": "{{description}}",
   "workspace.miniChat.placeholder": "Kurznachricht...",
   "workspace.miniChat.sendLabel": "Senden",
   "workspace.miniChat.inputLabel": "Kurznachricht",
-
   "workspace.loading.monitor": "Monitor wird geladen...",
   "workspace.loading.canvas": "Canvas wird geladen...",
   "workspace.loading.code": "Code-Editor wird geladen...",
   "workspace.loading.vaults": "Tresore werden geladen...",
   "workspace.loading.portal": "Strada-Portal wird geladen",
   "workspace.loading.portalSubtitle": "Der nächste Bildschirm wird vorbereitet.",
-
   "worker.defaultLabel": "Worker",
   "worker.title": "Primären Ausführungs-Worker von Strada festlegen",
   "worker.description": "Strada behält die Kontrolle.",
@@ -93,7 +83,6 @@
   "worker.liveSignals": "{{count}} Live-Signale",
   "worker.think": "Denken",
   "worker.live": "Live",
-
   "voice.stopRecording": "Aufnahme stoppen",
   "voice.sendingVoice": "Sprachnachricht wird gesendet",
   "voice.voiceInput": "Spracheingabe",
@@ -105,7 +94,6 @@
   "voice.micPermissionDenied": "Mikrofonberechtigung verweigert",
   "voice.stopSpeaking": "Wiedergabe stoppen",
   "voice.readAloud": "Vorlesen",
-
   "confirm.reviewPlan": "Überprüfe die folgenden Planschritte",
   "confirm.chooseOption": "Wähle eine Option",
   "confirm.modifyPlaceholder": "Beschreibe deine Änderung...",
@@ -113,20 +101,17 @@
   "confirm.submit": "Absenden",
   "confirm.recommended": "Empfohlen",
   "confirm.planPrefix": "Plan:",
-
   "dashboard.title": "System-Dashboard",
   "dashboard.unavailable": "Dashboard nicht verfügbar",
   "dashboard.unavailableMessage": "Verbindung zum Dashboard oder Web-Kanal konnte nicht hergestellt werden. Stelle sicher, dass der Server läuft.",
   "dashboard.notEnabledUnreachable": "Dashboard nicht aktiviert und Web-Kanal nicht erreichbar",
   "dashboard.apiOffline": "Dashboard-API offline",
   "dashboard.updated": "Aktualisiert {{time}}",
-
   "dashboard.health.title": "Systemzustand",
   "dashboard.health.status": "Status",
   "dashboard.health.uptime": "Betriebszeit",
   "dashboard.health.connectedClients": "Verbundene Clients",
   "dashboard.health.activeSessions": "Aktive Sitzungen",
-
   "dashboard.metrics.title": "Metriken",
   "dashboard.metrics.messages": "Nachrichten",
   "dashboard.metrics.msgPerMin": "{{rate}} Nachr./Min.",
@@ -135,42 +120,34 @@
   "dashboard.metrics.estCost": "Gesch. Kosten",
   "dashboard.metrics.totalTokens": "{{count}} Token gesamt",
   "dashboard.metrics.tokenTrend": "Token-Trend",
-
   "dashboard.tools.title": "Werkzeugnutzung",
   "dashboard.tools.errorRate": "{{rate}}% Fehlerrate",
-
   "dashboard.agent.title": "Agentenleistung",
   "dashboard.agent.totalToolCalls": "Werkzeugaufrufe gesamt",
   "dashboard.agent.toolErrorRate": "Werkzeug-Fehlerrate",
   "dashboard.agent.provider": "Anbieter",
   "dashboard.agent.memoryEntries": "Speichereinträge",
-
   "dashboard.triggers.title": "Daemon-Auslöser",
   "dashboard.triggers.active": "Aktive Auslöser",
   "dashboard.triggers.totalSuffix": "{{count}} gesamt",
   "dashboard.triggers.fires": "{{count}} Auslösungen",
-
   "dashboard.multiAgent.title": "Multi-Agent",
   "dashboard.multiAgent.activeAgents": "Aktive Agenten",
   "dashboard.multiAgent.budgetUsed": "Budget verbraucht",
   "dashboard.multiAgent.budgetPercent": "{{percent}}% des Limits",
-
   "dashboard.delegations.title": "Delegierungen",
   "dashboard.delegations.active": "Aktiv",
   "dashboard.delegations.successRate": "{{rate}}% Erfolgsrate",
-
   "dashboard.consolidation.title": "Speicherkonsolidierung",
   "dashboard.consolidation.totalRuns": "Durchläufe gesamt",
   "dashboard.consolidation.lifetimeSavings": "Gesamteinsparungen",
   "dashboard.consolidation.savingsUnit": "{{count}} Einträge",
   "dashboard.consolidation.cost": "Konsolidierungskosten",
-
   "dashboard.deployments.title": "Bereitstellungen",
   "dashboard.deployments.total": "Gesamt",
   "dashboard.deployments.successful": "Erfolgreich",
   "dashboard.deployments.failed": "Fehlgeschlagen",
   "dashboard.deployments.circuitBreaker": "Circuit Breaker",
-
   "dashboard.maintenance.title": "Wartung",
   "dashboard.maintenance.memoryDecay": "Speicherverfall",
   "dashboard.maintenance.memoryDecayActive": "Aktiv",
@@ -179,12 +156,10 @@
   "dashboard.maintenance.triggerPruning": "Auslöser-Bereinigung",
   "dashboard.maintenance.retentionDays": "{{days}} Tage Aufbewahrung",
   "dashboard.maintenance.lastPruned": "{{count}} zuletzt bereinigt",
-
   "dashboard.security.title": "Sicherheit",
   "dashboard.security.secretsSanitized": "Bereingte Geheimnisse",
   "dashboard.security.toolsBlocked": "Blockierte Werkzeuge",
   "dashboard.security.readOnlyMode": "Nur-Lese-Modus",
-
   "errors.somethingWentWrong": "Etwas ist schiefgelaufen",
   "errors.unexpectedError": "Beim Rendern der Oberfläche ist ein unerwarteter Fehler aufgetreten. Du kannst versuchen, die Seite neu zu laden.",
   "errors.reload": "Neu laden",
@@ -193,7 +168,6 @@
   "errors.notFound.code": "404",
   "errors.notFound.message": "Seite nicht gefunden",
   "errors.notFound.backToChat": "Zurück zum Chat",
-
   "shortcuts.title": "Tastaturkürzel",
   "shortcuts.description": "Verfügbare Tastaturkürzel für den Arbeitsbereich.",
   "shortcuts.switchChat": "Zum Chat-Modus wechseln",
@@ -203,12 +177,18 @@
   "shortcuts.toggleSidebar": "Seitenleiste umschalten",
   "shortcuts.toggleSecondaryPanel": "Sekundäres Panel umschalten",
   "shortcuts.showShortcuts": "Tastaturkürzel anzeigen",
-
   "ui.copy": "Kopieren",
   "ui.copied": "Kopiert!",
   "ui.cancel": "Abbrechen",
   "ui.submit": "Absenden",
   "ui.file": "DATEI",
-
-  "connection.offline": "Sie sind offline. Einige Funktionen sind m\u00f6glicherweise nicht verf\u00fcgbar."
+  "connection.offline": "Sie sind offline. Einige Funktionen sind möglicherweise nicht verfügbar.",
+  "time.xSecondsAgo_one": "vor {{count}} Sekunde",
+  "time.xSecondsAgo_other": "vor {{count}} Sekunden",
+  "time.xMinutesAgo_one": "vor {{count}} Minute",
+  "time.xMinutesAgo_other": "vor {{count}} Minuten",
+  "time.xHoursAgo_one": "vor {{count}} Stunde",
+  "time.xHoursAgo_other": "vor {{count}} Stunden",
+  "time.xDaysAgo_one": "vor {{count}} Tag",
+  "time.xDaysAgo_other": "vor {{count}} Tagen"
 }
