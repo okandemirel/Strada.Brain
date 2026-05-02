@@ -2180,7 +2180,7 @@ export class Orchestrator {
    */
   private getLiveInteractiveTokenBudget(): number {
     const live = this.unifiedBudgetManager?.getConfig()?.interactiveTokenBudget;
-    if (typeof live === "number" && live >= 0) return live;
+    if (typeof live === "number" && live >= -1) return live;
     return this.taskConfig.interactiveTokenBudget;
   }
 
