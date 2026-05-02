@@ -62,7 +62,7 @@ describe("ChannelActivityRegistry", () => {
     const { ChannelActivityRegistry } = await import(
       "../../core/channel-activity-registry.js"
     );
-    const registry = new ChannelActivityRegistry();
+    const registry = new ChannelActivityRegistry(0);
     vi.setSystemTime(1000);
     registry.recordActivity("web", "chat-1");
     vi.setSystemTime(1000 + 4 * 60 * 1000);
@@ -75,7 +75,7 @@ describe("ChannelActivityRegistry", () => {
     const { ChannelActivityRegistry } = await import(
       "../../core/channel-activity-registry.js"
     );
-    const registry = new ChannelActivityRegistry();
+    const registry = new ChannelActivityRegistry(0);
     expect(registry.isIdle(5)).toBe(true);
   });
 });

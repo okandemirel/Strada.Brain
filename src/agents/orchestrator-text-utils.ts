@@ -594,10 +594,6 @@ export function sanitizeRetrievalContent(text: string, source: string): string {
           reasons: result.reasons,
           length: text.length,
         });
-      } else if (typeof console !== "undefined" && typeof console.warn === "function") {
-        console.warn(
-          `[sanitizeRetrievalContent] prompt-injection carriers filtered (source=${source}, reasons=${result.reasons.join(",")})`,
-        );
       }
     } catch {
       // Never let logging crash the retrieval path.

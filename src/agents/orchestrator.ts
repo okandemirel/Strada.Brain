@@ -2183,19 +2183,16 @@ export class Orchestrator {
    * the static TaskConfig value otherwise. -1 means unlimited.
    */
   private getLiveInteractiveTokenBudget(): number {
-    const mgrAvailable = !!this.unifiedBudgetManager;
-    const managerConfig = mgrAvailable ? this.unifiedBudgetManager!.getConfig() : null;
-    const live = managerConfig?.interactiveTokenBudget;
-    const usingLive = typeof live === "number" && live >= -1;
-    const fallback = usingLive ? live : this.taskConfig.interactiveTokenBudget;
-    if (!usingLive && live !== undefined && live !== null) {
+    const live = this.unifiedBudgetManager?.getConfig()?.interactiveTokenBudget;
+    if (typeof live === "number" && live >= -1) return live;
+    if (live !== undefined && live !== null) {
       getLogger().warn("getLiveInteractiveTokenBudget: live value out of range", {
-        unifiedBudgetManagerSet: mgrAvailable,
+        unifiedBudgetManagerSet: !!this.unifiedBudgetManager,
         rawConfigValue: live,
         fallbackUsed: this.taskConfig.interactiveTokenBudget,
       });
     }
-    return fallback;
+    return this.taskConfig.interactiveTokenBudget;
   }
 
   /**
