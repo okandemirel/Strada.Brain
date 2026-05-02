@@ -5,7 +5,7 @@ describe("ChannelActivityRegistry", () => {
   let registry: ChannelActivityRegistry;
 
   beforeEach(() => {
-    registry = new ChannelActivityRegistry();
+    registry = new ChannelActivityRegistry(0);
     vi.useFakeTimers();
   });
 

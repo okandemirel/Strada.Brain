@@ -941,7 +941,7 @@ export function useSetupWizard() {
       setSaveStatus('error')
       setSaveError(err instanceof Error ? err.message : 'Save failed')
     }
-  }, [projectPath, ragEnabled, embeddingProvider, embeddingModel, language, channel, selectedPreset, checkedProviders, providerKeys, providerAuthModes, providerModels, channelConfig, daemonEnabled, autonomyEnabled, autonomyHours, daemonBudget, globalDailyBudget, reviewBlockingReason, applySetupBootstrapStatus, rememberReadyUrl, stopBootstrapPolling, isBootstrapPollingActive])
+  }, [projectPath, ragEnabled, embeddingProvider, embeddingModel, language, channel, selectedPreset, checkedProviders, providerKeys, providerAuthModes, providerModels, channelConfig, daemonEnabled, autonomyEnabled, autonomyHours, daemonBudget, globalDailyBudget, reviewBlockingReason, applySetupBootstrapStatus, rememberReadyUrl, stopBootstrapPolling, isBootstrapPollingActive, obsidianEnabled, obsidianVaultPath, obsidianApiKey])
 
   return {
     // State
