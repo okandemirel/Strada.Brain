@@ -1073,7 +1073,7 @@ export class CommandHandler {
     if (parsed === null) {
       await this.channel.sendText(
         chatId,
-        `Could not parse "${raw}" as a token count. Examples: 500, 500k, 500_000.`,
+        `Could not parse "${raw}" as a token count. Examples: 0, unlimited, 500, 500k, 500_000.`,
       );
       return;
     }
@@ -1085,7 +1085,7 @@ export class CommandHandler {
     if (validated === null) {
       await this.channel.sendText(
         chatId,
-        `Token budget must be between ${TOKEN_BUDGET_MIN.toLocaleString()} and ${TOKEN_BUDGET_MAX.toLocaleString()}.`,
+        `Token budget must be 0 (unlimited) or between ${TOKEN_BUDGET_MIN.toLocaleString()} and ${TOKEN_BUDGET_MAX.toLocaleString()}.`,
       );
       return;
     }
@@ -1459,8 +1459,8 @@ const TOKEN_BUDGET_MAX = 100_000_000;
 function validateTokenBudget(tokens: number): number | null {
   if (!Number.isFinite(tokens) || tokens < 0) return null;
   const rounded = Math.round(tokens);
-  if (rounded < TOKEN_BUDGET_MIN || rounded > TOKEN_BUDGET_MAX) return null;
-  return rounded;
+  if (rounded > TOKEN_BUDGET_MAX) return null;
+  return rounded; // 0 = unlimited (no minimum check)
 }
 
 /**
@@ -1469,18 +1469,20 @@ function validateTokenBudget(tokens: number): number | null {
  */
 function parseTokenBudgetInput(raw: string): number | null {
   const cleaned = raw.trim().toLowerCase().replace(/[_,]/g, "");
+  // "0" or "unlimited" = unlimited
+  if (cleaned === "0" || cleaned === "unlimited") return 0;
   // <number>k shorthand
   const kMatch = cleaned.match(/^(\d+(?:\.\d+)?)k$/);
   if (kMatch?.[1]) {
     const n = parseFloat(kMatch[1]);
-    if (!Number.isFinite(n) || n <= 0) return null;
+    if (!Number.isFinite(n) || n < 0) return null;
     return Math.round(n * 1000);
   }
   // Plain integer
   const intMatch = cleaned.match(/^\d+$/);
   if (intMatch) {
     const n = parseInt(cleaned, 10);
-    if (!Number.isFinite(n) || n <= 0) return null;
+    if (!Number.isFinite(n) || n < 0) return null;
     return n;
   }
   return null;
