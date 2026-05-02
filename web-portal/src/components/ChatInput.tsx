@@ -8,9 +8,32 @@ import { CoolMode } from './ui/cool-mode'
 import { useVoiceSettings } from '../hooks/use-voice-settings'
 
 const SLASH_COMMANDS = [
-  { command: '/model', description: 'Switch AI model/provider', usage: '/model <provider>[/<model>]' },
-  { command: '/autonomous', description: 'Toggle autonomous mode', usage: '/autonomous on|off [hours]' },
+  // Core task commands
+  { command: '/status', description: 'Show current task status', usage: '/status [taskId]' },
+  { command: '/tasks', description: 'List all active tasks', usage: '/tasks' },
+  { command: '/detail', description: 'Show task details', usage: '/detail <taskId>' },
   { command: '/cancel', description: 'Cancel current task', usage: '/cancel [taskId]' },
+  { command: '/pause', description: 'Pause current task', usage: '/pause [taskId]' },
+  { command: '/resume', description: 'Resume paused task', usage: '/resume [taskId]' },
+  // Budget & routing
+  { command: '/token', description: 'Set token budget (0=unlimited)', usage: '/token <value|0|unlimited>' },
+  { command: '/budget', description: 'Alias for /token', usage: '/budget <value>' },
+  { command: '/routing', description: 'Show routing status', usage: '/routing [preset <name>|info]' },
+  // Autonomous mode
+  { command: '/autonomous', description: 'Toggle autonomous mode', usage: '/autonomous on|off [hours]' },
+  // Daemon & background
+  { command: '/daemon', description: 'Control daemon mode', usage: '/daemon status|start|stop' },
+  // Agent & persona
+  { command: '/agent', description: 'Control multi-agent mode', usage: '/agent start|stop|status' },
+  { command: '/persona', description: 'Switch persona/profile', usage: '/persona <name>' },
+  // Goals
+  { command: '/goal', description: 'Manage goals', usage: '/goal [list|add|complete]' },
+  // Continuation
+  { command: '/retry', description: 'Retry from last checkpoint', usage: '/retry' },
+  { command: '/continue', description: 'Continue interrupted task', usage: '/continue' },
+  // Utility
+  { command: '/help', description: 'Show available commands', usage: '/help' },
+  { command: '/model', description: 'Switch AI model/provider', usage: '/model <provider>[/<model>]' },
 ] as const
 
 interface ChatInputProps {
