@@ -78,6 +78,8 @@ import { HeartbeatLoop } from "../daemon/heartbeat-loop.js";
 import { NotificationRouter } from "../daemon/reporting/notification-router.js";
 import { DigestReporter } from "../daemon/reporting/digest-reporter.js";
 import type { DaemonEventMap } from "../daemon/daemon-events.js";
+import { DaemonStorage } from "../daemon/daemon-storage.js";
+import { UnifiedBudgetManager } from "../budget/unified-budget-manager.js";
 
 // Workspace / monitor bridge imports
 import { createWorkspaceBus, type WorkspaceBus } from "../dashboard/workspace-bus.js";
@@ -997,6 +999,24 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   }
   // HeartbeatLoop wired to CommandHandler below after daemon init (late binding)
 
+  // Create DaemonStorage + UnifiedBudgetManager unconditionally so /token and
+  // the portal budget editor work even in non-daemon runtimes (CLI, web, …).
+  const daemonDbPath = join(config.memory.dbPath, "daemon.db");
+  const sharedDaemonStorage = new DaemonStorage(daemonDbPath);
+  sharedDaemonStorage.initialize();
+  const sharedUnifiedBudgetManager = new UnifiedBudgetManager(
+    sharedDaemonStorage,
+    daemonEventBus ?? { emit: () => {} },
+  );
+  sharedDaemonStorage.migrateBudgetSource();
+  // Wire immediately — orchestrator loop re-reads every iteration, and
+  // commandHandler.handleToken needs a live manager to update.
+  orchestrator.setUnifiedBudgetManager(sharedUnifiedBudgetManager);
+  commandHandler.setUnifiedBudgetManager(sharedUnifiedBudgetManager);
+  if (dashboard) {
+    dashboard.setUnifiedBudgetManager(sharedUnifiedBudgetManager);
+  }
+
   // Initialize daemon heartbeat loop (if daemon mode enabled)
   if (options.daemonMode) {
     const daemonConfig = config.daemon;
@@ -1027,6 +1047,8 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
         daemonEventBus: daemonBus,
         identityManager,
         crashContext,
+        daemonStorage: sharedDaemonStorage,
+        unifiedBudgetManager: sharedUnifiedBudgetManager,
       });
       heartbeatLoop = activeHeartbeatLoop;
 

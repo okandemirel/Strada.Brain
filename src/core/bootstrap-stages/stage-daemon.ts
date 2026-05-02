@@ -141,21 +141,29 @@ export function initializeDaemonHeartbeatStage(
     daemonEventBus: IEventBus<DaemonEventMap>;
     identityManager?: IdentityStateManager;
     crashContext: CrashRecoveryContext | null;
+    daemonStorage?: DaemonStorage;
+    unifiedBudgetManager?: UnifiedBudgetManager;
   },
   deps: DaemonHeartbeatStageDeps = {},
 ): DaemonHeartbeatStageResult {
   const daemonConfig = params.config.daemon;
   const daemonDbPath = join(params.config.memory.dbPath, "daemon.db");
-  const daemonStorage = deps.createDaemonStorage?.(daemonDbPath) ?? new DaemonStorage(daemonDbPath);
-  daemonStorage.initialize();
+  const daemonStorage = params.daemonStorage
+    ?? (deps.createDaemonStorage?.(daemonDbPath) ?? new DaemonStorage(daemonDbPath));
+  if (!params.daemonStorage) {
+    daemonStorage.initialize();
+  }
 
   const triggerRegistry = deps.createTriggerRegistry?.() ?? new TriggerRegistry();
   const budgetTracker = deps.createBudgetTracker?.(daemonStorage, daemonConfig.budget)
     ?? new BudgetTracker(daemonStorage, daemonConfig.budget);
   params.backgroundExecutor.setDaemonBudgetTracker(budgetTracker);
 
-  const unifiedBudgetManager = new UnifiedBudgetManager(daemonStorage, params.daemonEventBus);
-  daemonStorage.migrateBudgetSource();
+  const unifiedBudgetManager = params.unifiedBudgetManager
+    ?? new UnifiedBudgetManager(daemonStorage, params.daemonEventBus);
+  if (!params.unifiedBudgetManager) {
+    daemonStorage.migrateBudgetSource();
+  }
   params.backgroundExecutor.setUnifiedBudgetManager(unifiedBudgetManager);
 
   const approvalQueue = deps.createApprovalQueue?.(

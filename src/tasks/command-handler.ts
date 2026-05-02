@@ -1464,6 +1464,7 @@ function validateTokenBudget(tokens: number): number | null {
   if (!Number.isFinite(tokens) || tokens < -1) return null;
   const rounded = Math.round(tokens);
   if (rounded > TOKEN_BUDGET_MAX) return null;
+  if (rounded < TOKEN_BUDGET_MIN && rounded !== -1) return null;
   return rounded; // -1 = unlimited, 0+ = specific budget
 }
 

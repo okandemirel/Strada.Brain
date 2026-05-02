@@ -18,17 +18,20 @@ function ProgressBar({ pct, className = '' }: { pct: number; className?: string 
   )
 }
 
-function EditableLimit({ value, onSave, unlimitedLabel, saveLabel, cancelLabel }: { value: number; onSave: (v: number) => void; unlimitedLabel: string; saveLabel: string; cancelLabel: string }) {
+function EditableLimit({ value, onSave, unlimitedLabel, saveLabel, cancelLabel, isUnlimited, format, min = 0, step = 0.01 }: { value: number; onSave: (v: number) => void; unlimitedLabel: string; saveLabel: string; cancelLabel: string; isUnlimited?: (v: number) => boolean; format?: (v: number) => string; min?: number; step?: number }) {
   const [editing, setEditing] = useState(false)
   const [input, setInput] = useState(String(value))
 
   const save = () => {
     const n = parseFloat(input)
-    if (Number.isFinite(n) && n >= 0) {
+    if (Number.isFinite(n) && n >= min) {
       onSave(n)
       setEditing(false)
     }
   }
+
+  const unlimited = isUnlimited ? isUnlimited(value) : value === 0
+  const display = format ? format(value) : `$${value.toFixed(2)}`
 
   if (!editing) {
     return (
@@ -36,7 +39,7 @@ function EditableLimit({ value, onSave, unlimitedLabel, saveLabel, cancelLabel }
         onClick={() => { setInput(String(value)); setEditing(true) }}
         className="px-3 py-1.5 bg-white/5 border border-white/10 rounded-lg text-accent font-mono text-sm hover:border-accent/50 transition-colors"
       >
-        {value === 0 ? unlimitedLabel : `$${value.toFixed(2)}`}
+        {unlimited ? unlimitedLabel : display}
       </button>
     )
   }
@@ -44,8 +47,8 @@ function EditableLimit({ value, onSave, unlimitedLabel, saveLabel, cancelLabel }
     <div className="flex gap-1.5">
       <input
         type="number"
-        min={0}
-        step={0.01}
+        min={min}
+        step={step}
         value={input}
         onChange={(e) => setInput(e.target.value)}
         onKeyDown={(e) => e.key === 'Enter' && save()}
@@ -145,6 +148,27 @@ export default function BudgetSection() {
         <p className="text-xs text-text-secondary">
           {t('budget.usedThisMonth', { amount: `$${global.monthly.usedUsd.toFixed(2)}` })}
           {config.monthlyLimitUsd > 0 && t('budget.ofLimit', { limit: `$${config.monthlyLimitUsd.toFixed(2)}` })}
+        </p>
+      </div>
+
+      {/* Token Budget */}
+      <div className="bg-white/3 backdrop-blur border border-white/5 rounded-2xl p-5 mb-4">
+        <div className="flex items-center justify-between mb-3">
+          <span className="text-sm font-medium text-text">{t('budget.tokenLimit')}</span>
+          <EditableLimit
+            value={config.interactiveTokenBudget ?? -1}
+            onSave={(v) => updateConfig({ interactiveTokenBudget: v })}
+            unlimitedLabel={t('budget.unlimited')}
+            saveLabel={t('budget.save')}
+            cancelLabel={t('budget.cancel')}
+            isUnlimited={(v) => v === -1}
+            format={(v) => `${v.toLocaleString()} tokens`}
+            min={-1}
+            step={1}
+          />
+        </div>
+        <p className="text-xs text-text-secondary">
+          {t('budget.tokenLimitDescription')}
         </p>
       </div>
 

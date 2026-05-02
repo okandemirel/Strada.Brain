@@ -3,6 +3,7 @@ import Database from "better-sqlite3";
 import { CommandHandler } from "./command-handler.js";
 import { DMPolicy } from "../security/dm-policy.js";
 import { UserProfileStore } from "../memory/unified/user-profile-store.js";
+import { UnifiedBudgetManager } from "../budget/unified-budget-manager.js";
 
 describe("CommandHandler /model", () => {
   const sendMarkdown = vi.fn().mockResolvedValue(undefined);
@@ -363,5 +364,80 @@ describe("CommandHandler /autonomous", () => {
       "Autonomous mode is currently disabled.",
     );
     db.close();
+  });
+});
+
+describe("CommandHandler /token", () => {
+  const sendMarkdown = vi.fn().mockResolvedValue(undefined);
+  const sendText = vi.fn().mockResolvedValue(undefined);
+
+  beforeEach(() => {
+    sendMarkdown.mockReset();
+    sendText.mockReset();
+    sendMarkdown.mockResolvedValue(undefined);
+    sendText.mockResolvedValue(undefined);
+  });
+
+  function createHandlerWithBudgetManager(updateConfig: ReturnType<typeof vi.fn>) {
+    const handler = new CommandHandler(
+      {} as never,
+      { sendMarkdown, sendText } as never,
+    );
+    handler.setUnifiedBudgetManager({
+      updateConfig,
+    } as unknown as UnifiedBudgetManager);
+    return handler;
+  }
+
+  it("sets a specific token budget", async () => {
+    const updateConfig = vi.fn();
+    const handler = createHandlerWithBudgetManager(updateConfig);
+
+    await handler.handle("chat-1", "token", ["50000"], "user-42");
+
+    expect(updateConfig).toHaveBeenCalledWith({ interactiveTokenBudget: 50000 });
+    expect(sendMarkdown).toHaveBeenCalledWith(
+      "chat-1",
+      expect.stringContaining("50,000 token"),
+    );
+  });
+
+  it("sets unlimited token budget with -1", async () => {
+    const updateConfig = vi.fn();
+    const handler = createHandlerWithBudgetManager(updateConfig);
+
+    await handler.handle("chat-1", "token", ["-1"], "user-42");
+
+    expect(updateConfig).toHaveBeenCalledWith({ interactiveTokenBudget: -1 });
+    expect(sendMarkdown).toHaveBeenCalledWith(
+      "chat-1",
+      expect.stringContaining("unlimited"),
+    );
+  });
+
+  it("rejects budgets below the minimum threshold", async () => {
+    const updateConfig = vi.fn();
+    const handler = createHandlerWithBudgetManager(updateConfig);
+
+    await handler.handle("chat-1", "token", ["500"], "user-42");
+
+    expect(updateConfig).not.toHaveBeenCalled();
+    expect(sendText).toHaveBeenCalledWith(
+      "chat-1",
+      expect.stringContaining("1,000"),
+    );
+  });
+
+  it("rejects invalid token budget input", async () => {
+    const updateConfig = vi.fn();
+    const handler = createHandlerWithBudgetManager(updateConfig);
+
+    await handler.handle("chat-1", "token", ["abc"], "user-42");
+
+    expect(updateConfig).not.toHaveBeenCalled();
+    expect(sendText).toHaveBeenCalledWith(
+      "chat-1",
+      expect.stringContaining("Could not parse"),
+    );
   });
 });

@@ -207,6 +207,7 @@ interface BudgetResponse {
     monthlyLimitUsd: number
     warnPct: number
     subLimits: { daemonDailyUsd: number; agentDefaultUsd: number; verificationPct: number }
+    interactiveTokenBudget?: number
   }
 }
 
