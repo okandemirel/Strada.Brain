@@ -955,14 +955,10 @@ export class AutoUpdater {
     ];
     for (const backup of backupFiles) {
       try {
-        if (fs.existsSync(backup)) {
-          if (fs.statSync(backup).isDirectory()) {
-            fs.rmSync(backup, { recursive: true });
-          } else {
-            fs.unlinkSync(backup);
-          }
-        }
-      } catch {}
+        fs.rmSync(backup, { recursive: true, force: true });
+      } catch {
+        // Ignore cleanup errors — stale backups are harmless
+      }
     }
   }
 
