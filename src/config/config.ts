@@ -2949,6 +2949,14 @@ interface EnvVars {
   opencodeApiKey: string | undefined;
   opencodeBaseUrl: string | undefined;
   opencodeDefaultModel: string | undefined;
+  // Obsidian Integration
+  obsidian: {
+    enabled: string | undefined;
+    apiUrl: string | undefined;
+    apiKey: string | undefined;
+    vaultPath: string | undefined;
+    certPath: string | undefined;
+  };
 }
 
 /**

@@ -27,7 +27,7 @@ export class ObsidianApiClient {
   private baseUrl: string;
   private headers: Record<string, string>;
 
-  constructor(private config: ObsidianApiConfig) {
+  constructor(config: ObsidianApiConfig) {
     this.baseUrl = config.apiUrl.replace(/\/$/, '');
     this.headers = {
       'Authorization': `Bearer ${config.apiKey}`,
@@ -39,11 +39,12 @@ export class ObsidianApiClient {
     method: string,
     endpoint: string,
     body?: unknown,
+    extraHeaders?: Record<string, string>,
   ): Promise<T> {
     const url = `${this.baseUrl}${endpoint}`;
     const opts: RequestInit = {
       method,
-      headers: this.headers,
+      headers: extraHeaders ? { ...this.headers, ...extraHeaders } : this.headers,
       // For self-signed certs on localhost; in production certPath should be used.
       // Node.js fetch in v18+ doesn't support agent option; we rely on the user
       // having set NODE_TLS_REJECT_UNAUTHORIZED=0 for local dev.
@@ -117,11 +118,9 @@ export class ObsidianApiClient {
   async appendToHeading(path: string, heading: string, content: string): Promise<void> {
     const encoded = encodeURIComponent(path);
     await this.request<void>('POST', `/vault/${encoded}`, content, {
-      headers: {
-        ...this.headers,
-        'Target-Type': 'heading',
-        'Target': heading,
-      },
+      ...this.headers,
+      'Target-Type': 'heading',
+      'Target': heading,
     });
   }
 

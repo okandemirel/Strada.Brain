@@ -10,6 +10,7 @@ function parseFrontmatter(content: string): Record<string, string> | undefined {
   const m = content.match(FRONTMATTER_RE);
   if (!m) return undefined;
   const yaml = m[1];
+  if (!yaml) return undefined;
   const out: Record<string, string> = {};
   for (const line of yaml.split('\n')) {
     const idx = line.indexOf(':');
