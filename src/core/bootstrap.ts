@@ -1199,8 +1199,6 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       });
 
       if (dashboard) {
-        dashboard.setUnifiedBudgetManager(unifiedBudgetManager);
-
         // Wire daemon context into dashboard (Plan 05 + Plan 18-03 enrichment)
         dashboard.setDaemonContext({
           heartbeatLoop,

@@ -36,6 +36,8 @@
   "budget.sevenDaySpending": "7-Day Spending",
   "budget.toastUpdated": "Budget settings updated",
   "budget.toastFailed": "Failed to update budget settings",
+  "budget.tokenLimit": "Token Limit",
+  "budget.tokenLimitDescription": "Maximum input tokens per task. Set to -1 for unlimited.",
 
   "providers.title": "Providers",
   "providers.description": "Configure AI providers and models",

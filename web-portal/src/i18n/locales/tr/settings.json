@@ -36,6 +36,8 @@
   "budget.sevenDaySpending": "7 Günlük Harcama",
   "budget.toastUpdated": "Bütçe ayarları güncellendi",
   "budget.toastFailed": "Bütçe ayarları güncellenemedi",
+  "budget.tokenLimit": "Token Limiti",
+  "budget.tokenLimitDescription": "Görev başına maksimum input token. Sınırsız için -1 girin.",
 
   "providers.title": "Sağlayıcılar",
   "providers.description": "AI sağlayıcılarını ve modelleri yapılandırın",

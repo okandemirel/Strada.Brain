@@ -2175,8 +2175,8 @@ export class Orchestrator {
 
   /**
    * Resolve the live input-token budget per interactive/background loop.
-   * Prefers the UnifiedBudgetManager override when positive; falls back to
-   * the static TaskConfig value otherwise.
+   * Prefers the UnifiedBudgetManager override when set (≥ -1); falls back to
+   * the static TaskConfig value otherwise. -1 means unlimited.
    */
   private getLiveInteractiveTokenBudget(): number {
     const live = this.unifiedBudgetManager?.getConfig()?.interactiveTokenBudget;
@@ -2970,11 +2970,11 @@ export class Orchestrator {
           const iterationHealth = new IterationHealthTracker();
           let maxTokensAbort = false;
           let bgCumulativeInputTokens = 0;
-          // Re-read every iteration so a mid-task budget raise (via /token
-          // or the portal budget editor) actually takes effect without
-          // requiring the user to hit the checkpoint limit and /retry.
-          let bgTokenBudget = this.getLiveInteractiveTokenBudget();
           while (true) {
+            // Re-read every epoch so a mid-task budget raise (via /token
+            // or the portal budget editor) actually takes effect without
+            // requiring the user to hit the checkpoint limit and /retry.
+            const bgTokenBudget = this.getLiveInteractiveTokenBudget();
             for (
               bgEpochIteration = 0;
               bgEpochIteration < bgEpochIterationLimit;
@@ -3129,7 +3129,7 @@ export class Orchestrator {
 
               // Token budget enforcement — prevent runaway token consumption in background tasks
               bgCumulativeInputTokens += response.usage?.inputTokens ?? 0;
-              if (bgTokenBudget > 0 && bgCumulativeInputTokens > bgTokenBudget) {
+              if (bgTokenBudget !== -1 && bgCumulativeInputTokens > bgTokenBudget) {
                 logger.warn("Background token budget exceeded", {
                   chatId, bgCumulativeInputTokens, bgTokenBudget,
                   iteration: bgIteration, provider: currentAssignment.providerName,
@@ -4246,12 +4246,12 @@ export class Orchestrator {
       let consecutiveMaxTokens = 0;
       let consecutiveProviderFailures = 0;
       let cumulativeInputTokens = 0;
-      // Re-read every iteration so a mid-task budget raise (via /token
-      // or the portal budget editor) actually takes effect without
-      // requiring the user to hit the checkpoint limit and /retry.
-      let tokenBudget = this.getLiveInteractiveTokenBudget();
       const iterationHealth = new IterationHealthTracker();
       for (let iteration = 0; iteration < interactiveIterationLimit; iteration++) {
+        // Re-read every iteration so a mid-task budget raise (via /token
+        // or the portal budget editor) actually takes effect without
+        // requiring the user to hit the checkpoint limit and /retry.
+        const tokenBudget = this.getLiveInteractiveTokenBudget();
         const iterationStartMs = Date.now();
         const {
           executionStrategy: iterStrategy,
@@ -4398,7 +4398,7 @@ export class Orchestrator {
           cumulativeInputTokens,
           durationMs: Date.now() - iterationStartMs,
         });
-        if (tokenBudget > 0 && cumulativeInputTokens > tokenBudget) {
+        if (tokenBudget !== -1 && cumulativeInputTokens > tokenBudget) {
           logger.warn("Interactive token budget exceeded — aborting loop", {
             chatId,
             cumulativeInputTokens,
