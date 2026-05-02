@@ -53,6 +53,9 @@ export type EnvVarName =
   | "TOGETHER_API_KEY"
   | "FIREWORKS_API_KEY"
   | "GEMINI_API_KEY"
+  | "OPENCODE_API_KEY"
+  | "OPENCODE_BASE_URL"
+  | "OPENCODE_DEFAULT_MODEL"
   | "SYSTEM_PRESET"
   | "PROVIDER_CHAIN"
   | "TELEGRAM_BOT_TOKEN"
@@ -97,6 +100,11 @@ export type EnvVarName =
   | "STRADA_CORE_REPO_URL"
   | "STRADA_MODULES_REPO_URL"
   | "STRADA_MCP_PATH"
+  | "OBSIDIAN_ENABLED"
+  | "OBSIDIAN_API_URL"
+  | "OBSIDIAN_API_KEY"
+  | "OBSIDIAN_VAULT_PATH"
+  | "OBSIDIAN_CERT_PATH"
   | "SCRIPT_EXECUTE_ENABLED"
   | "REFLECTION_INVOKE_ENABLED"
   | "DASHBOARD_ENABLED"
@@ -677,6 +685,15 @@ export interface VaultConfig {
   readonly embeddingFallback: 'none' | 'local';
 }
 
+/** Obsidian vault integration configuration */
+export interface ObsidianConfig {
+  readonly enabled: boolean;
+  readonly apiUrl: string;
+  readonly apiKey: string;
+  readonly vaultPath: string;
+  readonly certPath?: string;
+}
+
 /** Complete application configuration */
 export interface Config {
   // AI Providers
@@ -697,6 +714,9 @@ export interface Config {
   readonly togetherApiKey?: string;
   readonly fireworksApiKey?: string;
   readonly geminiApiKey?: string;
+  readonly opencodeApiKey?: string;
+  readonly opencodeBaseUrl?: string;
+  readonly opencodeDefaultModel?: string;
   /** Comma-separated provider names for fallback chain */
   readonly providerChain?: string;
   /** Per-provider model overrides (env: {PROVIDER}_MODEL) */
@@ -866,6 +886,9 @@ export interface Config {
 
   // Codebase Memory Vault
   readonly vault: VaultConfig;
+
+  // Obsidian Integration
+  readonly obsidian: ObsidianConfig;
 }
 
 /** Partial config for updates */
@@ -944,6 +967,9 @@ export const configSchema = z
     togetherApiKey: z.string().optional(),
     fireworksApiKey: z.string().optional(),
     geminiApiKey: z.string().optional(),
+    opencodeApiKey: z.string().optional(),
+    opencodeBaseUrl: z.string().optional(),
+    opencodeDefaultModel: z.string().optional(),
     providerChain: z.string().optional(),
 
     // Telegram
@@ -1238,6 +1264,15 @@ export const configSchema = z
       writeHookBudgetMs: z.coerce.number().int().positive().default(200),  // sync reindex p95 target
       debounceMs: z.coerce.number().int().positive().default(800),         // watcher drain interval
       embeddingFallback: z.enum(["none", "local"]).default("local"),
+    }).default({}),
+
+    // Obsidian Integration
+    obsidian: z.object({
+      enabled: z.coerce.boolean().default(false),
+      apiUrl: z.string().default("https://127.0.0.1:27124"),
+      apiKey: z.string().default(""),
+      vaultPath: z.string().default(""),
+      certPath: z.string().optional(),
     }).default({}),
 
     // Logging
@@ -2403,6 +2438,7 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
     },
 
     vault: rawConfig.vault,
+    obsidian: rawConfig.obsidian,
   };
 
   // Cross-field validation: dashboardPort and websocketDashboardPort must differ when both enabled
@@ -2909,6 +2945,10 @@ interface EnvVars {
   stradaSupervisorTriageProvider: string | undefined;
   stradaSupervisorMaxFailureBudget: string | undefined;
   stradaSupervisorDiversityCap: string | undefined;
+  // OpenCode (Zen/Go)
+  opencodeApiKey: string | undefined;
+  opencodeBaseUrl: string | undefined;
+  opencodeDefaultModel: string | undefined;
 }
 
 /**
@@ -2933,6 +2973,9 @@ function loadFromEnv(): EnvVars {
     togetherApiKey: _env["TOGETHER_API_KEY"],
     fireworksApiKey: _env["FIREWORKS_API_KEY"],
     geminiApiKey: _env["GEMINI_API_KEY"],
+    opencodeApiKey: _env["OPENCODE_API_KEY"],
+    opencodeBaseUrl: _env["OPENCODE_BASE_URL"],
+    opencodeDefaultModel: _env["OPENCODE_DEFAULT_MODEL"],
     providerChain: _env["PROVIDER_CHAIN"],
     telegramBotToken: _env["TELEGRAM_BOT_TOKEN"],
     allowedTelegramUserIds: _env["ALLOWED_TELEGRAM_USER_IDS"],
@@ -3028,6 +3071,14 @@ function loadFromEnv(): EnvVars {
       writeHookBudgetMs: _env["STRADA_VAULT_WRITE_HOOK_BUDGET_MS"],
       debounceMs: _env["STRADA_VAULT_DEBOUNCE_MS"],
       embeddingFallback: _env["STRADA_VAULT_EMBEDDING_FALLBACK"],
+    },
+    // Obsidian Integration
+    obsidian: {
+      enabled: _env["OBSIDIAN_ENABLED"],
+      apiUrl: _env["OBSIDIAN_API_URL"],
+      apiKey: _env["OBSIDIAN_API_KEY"],
+      vaultPath: _env["OBSIDIAN_VAULT_PATH"],
+      certPath: _env["OBSIDIAN_CERT_PATH"],
     },
     logLevel: _env["LOG_LEVEL"],
     logFile: _env["LOG_FILE"],
@@ -3379,6 +3430,7 @@ export function hasRequiredApiKeys(config: Config): { valid: boolean; missing: s
       together: config.togetherApiKey,
       fireworks: config.fireworksApiKey,
       gemini: config.geminiApiKey,
+      opencode: config.opencodeApiKey,
     };
     for (const name of names) {
       if (name === "ollama") continue; // no key needed
@@ -3429,6 +3481,7 @@ export function hasRequiredApiKeys(config: Config): { valid: boolean; missing: s
       config.togetherApiKey,
       config.fireworksApiKey,
       config.geminiApiKey,
+      config.opencodeApiKey,
     ].some((k) => k && k.length > 0);
 
     if (!hasAny) {

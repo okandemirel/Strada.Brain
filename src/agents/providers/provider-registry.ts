@@ -13,6 +13,7 @@ import { GroqProvider } from "./groq.js";
 import { MistralProvider } from "./mistral.js";
 import { TogetherProvider } from "./together.js";
 import { FireworksProvider } from "./fireworks.js";
+import { OpencodeProvider } from "./opencode.js";
 import { getLogger } from "../../utils/logger.js";
 
 /**
@@ -35,6 +36,7 @@ const PROVIDER_CLASS_MAP: Record<string, OpenAICompatibleProviderConstructor> = 
   mistral: MistralProvider,
   together: TogetherProvider,
   fireworks: FireworksProvider,
+  opencode: OpencodeProvider,
 };
 
 /**
@@ -94,6 +96,11 @@ export const PROVIDER_PRESETS: Record<
     baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
     defaultModel: "gemini-3-flash-preview",
     label: "Google Gemini",
+  },
+  opencode: {
+    baseUrl: "https://opencode.ai/zen/v1",
+    defaultModel: "opencode/qwen-3-coder-480b",
+    label: "OpenCode (Zen/Go)",
   },
 };
 

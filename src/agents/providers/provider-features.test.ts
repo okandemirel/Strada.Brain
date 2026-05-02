@@ -42,6 +42,7 @@ import { QwenProvider } from "./qwen.js";
 import { MiniMaxProvider } from "./minimax.js";
 import { TogetherProvider } from "./together.js";
 import { FireworksProvider } from "./fireworks.js";
+import { OpencodeProvider } from "./opencode.js";
 import { OllamaProvider } from "./ollama.js";
 import { supportsStreaming } from "./provider.interface.js";
 
@@ -67,6 +68,7 @@ describe("Feature: Streaming (chatStream)", () => {
     { name: "MiniMax", cls: MiniMaxProvider, args: ["key"] },
     { name: "Together", cls: TogetherProvider, args: ["key"] },
     { name: "Fireworks", cls: FireworksProvider, args: ["key"] },
+    { name: "OpenCode", cls: OpencodeProvider, args: ["key"] },
   ] as const;
 
   for (const { name, cls, args } of providers) {
@@ -111,6 +113,7 @@ describe("Feature: max_tokens from capabilities", () => {
     { name: "MiniMax", cls: MiniMaxProvider, args: ["key"], expected: 131072 },
     { name: "Together", cls: TogetherProvider, args: ["key"], expected: 4096 },
     { name: "Fireworks", cls: FireworksProvider, args: ["key"], expected: 4096 },
+    { name: "OpenCode", cls: OpencodeProvider, args: ["key"], expected: 8192 },
   ];
 
   for (const { name, cls, args, expected } of providerConfigs) {
@@ -176,6 +179,24 @@ describe("Feature: buildHeaders (provider-specific headers)", () => {
 
     const headers = mockFetch.mock.calls[0]![1].headers;
     expect(headers["User-Agent"]).toBeUndefined();
+  });
+
+  it("OpenCode sends User-Agent: Strada.Brain/1.0", async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        choices: [{ message: { content: "ok" }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 1, completion_tokens: 1 },
+      }),
+      headers: new Headers(),
+    });
+
+    const opencode = new OpencodeProvider("key");
+    await opencode.chat("system", [{ role: "user", content: "test" }], []);
+
+    const headers = mockFetch.mock.calls[0]![1].headers;
+    expect(headers["User-Agent"]).toBe("Strada.Brain/1.0");
+    expect(headers["Authorization"]).toBe("Bearer key");
   });
 
   it("Mistral sends safe_prompt in body", async () => {
@@ -286,6 +307,7 @@ describe("Feature: Vision capability", () => {
     { name: "Gemini", provider: new GeminiProvider("k") },
     { name: "Kimi", provider: new KimiProvider("k") },
     { name: "Claude", provider: new ClaudeProvider("k") },
+    { name: "OpenCode", provider: new OpencodeProvider("k") },
   ];
 
   const visionDisabled = [
@@ -454,6 +476,7 @@ describe("Feature: Correct endpoint URLs", () => {
     { name: "MiniMax", cls: MiniMaxProvider, expected: "https://api.minimax.io/v1/chat/completions" },
     { name: "Together", cls: TogetherProvider, expected: "https://api.together.xyz/v1/chat/completions" },
     { name: "Fireworks", cls: FireworksProvider, expected: "https://api.fireworks.ai/inference/v1/chat/completions" },
+    { name: "OpenCode", cls: OpencodeProvider, expected: "https://opencode.ai/zen/v1/chat/completions" },
   ];
 
   for (const { name, cls, expected } of endpointTests) {

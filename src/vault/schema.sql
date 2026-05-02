@@ -9,8 +9,7 @@ CREATE TABLE IF NOT EXISTS vault_files (
   size        INTEGER NOT NULL,
   lang        TEXT NOT NULL,
   kind        TEXT NOT NULL,
-  indexed_at  INTEGER NOT NULL,
-  merkle_dir  TEXT NOT NULL DEFAULT ''
+  indexed_at  INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS vault_chunks (
@@ -76,6 +75,21 @@ CREATE TABLE IF NOT EXISTS vault_wikilinks (
 );
 
 CREATE INDEX IF NOT EXISTS idx_wikilinks_target ON vault_wikilinks(target);
+
+CREATE TABLE IF NOT EXISTS vault_frontmatter (
+  path  TEXT NOT NULL REFERENCES vault_files(path) ON DELETE CASCADE,
+  key   TEXT NOT NULL,
+  value TEXT NOT NULL,
+  PRIMARY KEY (path, key)
+);
+
+CREATE TABLE IF NOT EXISTS vault_tags (
+  path  TEXT NOT NULL REFERENCES vault_files(path) ON DELETE CASCADE,
+  tag   TEXT NOT NULL,
+  PRIMARY KEY (path, tag)
+);
+
+CREATE INDEX IF NOT EXISTS idx_tags_tag ON vault_tags(tag);
 
 INSERT INTO vault_meta(key, value) VALUES ('indexer_version', 'phase2.v1')
   ON CONFLICT(key) DO UPDATE SET value = excluded.value;

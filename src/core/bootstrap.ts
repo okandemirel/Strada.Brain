@@ -1013,6 +1013,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   // commandHandler.handleToken needs a live manager to update.
   orchestrator.setUnifiedBudgetManager(sharedUnifiedBudgetManager);
   commandHandler.setUnifiedBudgetManager(sharedUnifiedBudgetManager);
+  backgroundExecutor.setUnifiedBudgetManager(sharedUnifiedBudgetManager);
   if (dashboard) {
     dashboard.setUnifiedBudgetManager(sharedUnifiedBudgetManager);
   }

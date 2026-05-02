@@ -25,6 +25,40 @@ describe('MarkdownSymbolExtractor', () => {
     });
     expect(out.wikilinks.map((w) => w.target)).toEqual(['real']);
   });
+
+  it('extracts YAML frontmatter', async () => {
+    const x = new MarkdownSymbolExtractor();
+    const out = await x.extract({
+      path: 'a.md',
+      content: '---\ntitle: Test Note\ntags: ai,ml\nstatus: draft\n---\n\n# Content',
+      lang: 'markdown',
+    });
+    expect(out.frontmatter).toBeDefined();
+    expect(out.frontmatter!.title).toBe('Test Note');
+    expect(out.frontmatter!.status).toBe('draft');
+  });
+
+  it('extracts inline tags', async () => {
+    const x = new MarkdownSymbolExtractor();
+    const out = await x.extract({
+      path: 'a.md',
+      content: '# Heading\n\nThis is about #ai and #machine-learning.\n\nAlso #devops.',
+      lang: 'markdown',
+    });
+    expect(out.tags).toBeDefined();
+    expect(out.tags!.sort()).toEqual(['#ai', '#devops', '#machine-learning']);
+  });
+
+  it('ignores tags inside code fences', async () => {
+    const x = new MarkdownSymbolExtractor();
+    const out = await x.extract({
+      path: 'a.md',
+      content: 'outside #real\n```\n#fake\n```',
+      lang: 'markdown',
+    });
+    expect(out.tags).toBeDefined();
+    expect(out.tags!).toEqual(['#real']);
+  });
 });
 
 describe('getExtractorFor', () => {

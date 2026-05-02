@@ -121,6 +121,12 @@ export default function SetupWizard() {
             setDaemonBudget={wiz.setDaemonBudget}
             globalDailyBudget={wiz.globalDailyBudget}
             setGlobalDailyBudget={wiz.setGlobalDailyBudget}
+            obsidianEnabled={wiz.obsidianEnabled}
+            setObsidianEnabled={wiz.setObsidianEnabled}
+            obsidianVaultPath={wiz.obsidianVaultPath}
+            setObsidianVaultPath={wiz.setObsidianVaultPath}
+            obsidianApiKey={wiz.obsidianApiKey}
+            setObsidianApiKey={wiz.setObsidianApiKey}
             onNext={wiz.nextStep}
             onBack={wiz.prevStep}
           />

@@ -2089,6 +2089,10 @@ export class Orchestrator {
       const session = this.sessionManager.getOrCreateSession(chatId);
       const liveBudget = this.getLiveInteractiveTokenBudget();
       const budgetK = Math.round(liveBudget / 1000);
+      getLogger().debug("continueFromCheckpoint: resuming with live token budget", {
+        chatId, liveBudget, unlimited: liveBudget === -1,
+        unifiedBudgetManagerSet: !!this.unifiedBudgetManager,
+      });
       const abbrev = text.length > 80 ? `${text.slice(0, 80)}...` : text;
       const confirmation = [
         `▶️ **Resuming previous task from**: _${abbrev}_`,
@@ -2179,9 +2183,19 @@ export class Orchestrator {
    * the static TaskConfig value otherwise. -1 means unlimited.
    */
   private getLiveInteractiveTokenBudget(): number {
-    const live = this.unifiedBudgetManager?.getConfig()?.interactiveTokenBudget;
-    if (typeof live === "number" && live >= -1) return live;
-    return this.taskConfig.interactiveTokenBudget;
+    const mgrAvailable = !!this.unifiedBudgetManager;
+    const managerConfig = mgrAvailable ? this.unifiedBudgetManager!.getConfig() : null;
+    const live = managerConfig?.interactiveTokenBudget;
+    const usingLive = typeof live === "number" && live >= -1;
+    const fallback = usingLive ? live : this.taskConfig.interactiveTokenBudget;
+    if (!usingLive && live !== undefined && live !== null) {
+      getLogger().warn("getLiveInteractiveTokenBudget: live value out of range", {
+        unifiedBudgetManagerSet: mgrAvailable,
+        rawConfigValue: live,
+        fallbackUsed: this.taskConfig.interactiveTokenBudget,
+      });
+    }
+    return fallback;
   }
 
   /**

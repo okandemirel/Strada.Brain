@@ -10,6 +10,8 @@ export interface ExtractOutput {
   symbols: VaultSymbol[];
   edges: VaultEdge[];
   wikilinks: VaultWikilink[];
+  frontmatter?: Record<string, string>;
+  tags?: string[];
 }
 
 export interface ISymbolExtractor {

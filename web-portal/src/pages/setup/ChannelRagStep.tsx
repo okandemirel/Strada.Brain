@@ -28,6 +28,12 @@ interface ChannelRagStepProps {
   setDaemonBudget: (budget: number) => void
   globalDailyBudget: number
   setGlobalDailyBudget: (budget: number) => void
+  obsidianEnabled: boolean
+  setObsidianEnabled: (enabled: boolean) => void
+  obsidianVaultPath: string
+  setObsidianVaultPath: (path: string) => void
+  obsidianApiKey: string
+  setObsidianApiKey: (key: string) => void
   onNext: () => void
   onBack: () => void
 }
@@ -59,6 +65,12 @@ export default function ChannelRagStep({
   setDaemonBudget,
   globalDailyBudget,
   setGlobalDailyBudget,
+  obsidianEnabled,
+  setObsidianEnabled,
+  obsidianVaultPath,
+  setObsidianVaultPath,
+  obsidianApiKey,
+  setObsidianApiKey,
   onNext,
   onBack,
 }: ChannelRagStepProps) {
@@ -340,6 +352,58 @@ export default function ChannelRagStep({
               <span>{t('channels.autonomy.durationMax')}</span>
             </div>
           </div>
+        )}
+      </div>
+
+      <div className="rag-toggle">
+        <h3 className="section-label">{t('channels.obsidian.title')}</h3>
+        <label className="toggle-switch">
+          <input
+            type="checkbox"
+            checked={obsidianEnabled}
+            onChange={(e) => setObsidianEnabled(e.target.checked)}
+          />
+          <span className="toggle-slider" />
+          <span className="toggle-label">
+            {obsidianEnabled ? t('channels.obsidian.enabled') : t('channels.obsidian.disabled')}
+          </span>
+        </label>
+        <p className={`rag-info${!obsidianEnabled ? ' warning' : ''}`}>
+          {obsidianEnabled
+            ? t('channels.obsidian.enabledInfo')
+            : t('channels.obsidian.disabledInfo')}
+        </p>
+        {obsidianEnabled && (
+          <>
+            <div className="channel-field" style={{ marginTop: '0.85rem' }}>
+              <label htmlFor="obsidianVaultPath">{t('channels.obsidian.vaultPath')}</label>
+              <input
+                id="obsidianVaultPath"
+                type="text"
+                placeholder={t('channels.obsidian.vaultPathPlaceholder')}
+                value={obsidianVaultPath}
+                onChange={(e) => setObsidianVaultPath(e.target.value)}
+                autoComplete="off"
+              />
+              <p className="rag-info" style={{ marginTop: '0.45rem' }}>
+                {t('channels.obsidian.vaultPathInfo')}
+              </p>
+            </div>
+            <div className="channel-field" style={{ marginTop: '0.85rem' }}>
+              <label htmlFor="obsidianApiKey">{t('channels.obsidian.apiKey')}</label>
+              <input
+                id="obsidianApiKey"
+                type="password"
+                placeholder={t('channels.obsidian.apiKeyPlaceholder')}
+                value={obsidianApiKey}
+                onChange={(e) => setObsidianApiKey(e.target.value)}
+                autoComplete="off"
+              />
+              <p className="rag-info" style={{ marginTop: '0.45rem' }}>
+                {t('channels.obsidian.apiKeyInfo')}
+              </p>
+            </div>
+          </>
         )}
       </div>
 

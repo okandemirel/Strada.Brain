@@ -305,6 +305,9 @@ export function useSetupWizard() {
   const [autonomyHours, setAutonomyHoursState] = useState(4)
   const [daemonBudget, setDaemonBudgetState] = useState(1.0)
   const [globalDailyBudget, setGlobalDailyBudgetState] = useState(0) // 0 = unlimited
+  const [obsidianEnabled, setObsidianEnabledState] = useState(false)
+  const [obsidianVaultPath, setObsidianVaultPathState] = useState('')
+  const [obsidianApiKey, setObsidianApiKeyState] = useState('')
   const [saveCommitted, setSaveCommitted] = useState(false)
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle')
   const [saveError, setSaveError] = useState<string | null>(null)
@@ -740,6 +743,17 @@ export function useSetupWizard() {
       config.AUTONOMOUS_DEFAULT_HOURS = String(autonomyHours)
     }
 
+    // Obsidian Integration
+    config.OBSIDIAN_ENABLED = obsidianEnabled ? 'true' : 'false'
+    if (obsidianEnabled) {
+      if (obsidianVaultPath.trim()) {
+        config.OBSIDIAN_VAULT_PATH = obsidianVaultPath.trim()
+      }
+      if (obsidianApiKey.trim()) {
+        config.OBSIDIAN_API_KEY = obsidianApiKey.trim()
+      }
+    }
+
     // Build PROVIDER_CHAIN from checked providers
     const chain = Array.from(checkedProviders)
     config.PROVIDER_CHAIN = chain.join(',')
@@ -963,6 +977,9 @@ export function useSetupWizard() {
     autonomyHours,
     daemonBudget,
     globalDailyBudget,
+    obsidianEnabled,
+    obsidianVaultPath,
+    obsidianApiKey,
     saveStatus,
     saveError,
     saveWarning,
@@ -996,6 +1013,9 @@ export function useSetupWizard() {
     setAutonomyHours,
     setDaemonBudget,
     setGlobalDailyBudget,
+    setObsidianEnabled: setObsidianEnabledState,
+    setObsidianVaultPath: setObsidianVaultPathState,
+    setObsidianApiKey: setObsidianApiKeyState,
     save,
     validateCurrentStep,
   }

@@ -42,6 +42,15 @@ export class SqliteVaultStore {
   private _stmtListWikilinksTo: Database.Statement | null = null;
   private _stmtMarkWikilinkResolved: Database.Statement | null = null;
   private _stmtDeleteWikilinksFromNote: Database.Statement | null = null;
+  private _stmtUpsertEmbedding: Database.Statement | null = null;
+  private _stmtListHnswIdsForPath: Database.Statement | null = null;
+  private _stmtUpsertFrontmatter: Database.Statement | null = null;
+  private _stmtDeleteFrontmatterByPath: Database.Statement | null = null;
+  private _stmtListFrontmatterByPath: Database.Statement | null = null;
+  private _stmtUpsertTag: Database.Statement | null = null;
+  private _stmtDeleteTagsByPath: Database.Statement | null = null;
+  private _stmtListTagsByPath: Database.Statement | null = null;
+  private _stmtFindPathsByTag: Database.Statement | null = null;
 
   constructor(dbPath: string) {
     this.db = new Database(dbPath);
@@ -119,6 +128,33 @@ export class SqliteVaultStore {
     this._stmtListWikilinksTo = this.db.prepare('SELECT * FROM vault_wikilinks WHERE target = ?');
     this._stmtMarkWikilinkResolved = this.db.prepare('UPDATE vault_wikilinks SET resolved = 1 WHERE from_note = ? AND target = ?');
     this._stmtDeleteWikilinksFromNote = this.db.prepare('DELETE FROM vault_wikilinks WHERE from_note = ?');
+    this._stmtUpsertEmbedding = this.db.prepare(`
+      INSERT INTO vault_embeddings (chunk_id, hnsw_id, dim, model)
+      VALUES (@chunkId, @hnswId, @dim, @model)
+      ON CONFLICT(chunk_id) DO UPDATE SET
+        hnsw_id=excluded.hnsw_id,
+        dim=excluded.dim,
+        model=excluded.model
+    `);
+    this._stmtListHnswIdsForPath = this.db.prepare(`
+      SELECT hnsw_id FROM vault_embeddings
+      WHERE chunk_id IN (SELECT chunk_id FROM vault_chunks WHERE path = ?)
+    `);
+    this._stmtUpsertFrontmatter = this.db.prepare(`
+      INSERT INTO vault_frontmatter (path, key, value)
+      VALUES (@path, @key, @value)
+      ON CONFLICT(path, key) DO UPDATE SET value = excluded.value
+    `);
+    this._stmtDeleteFrontmatterByPath = this.db.prepare('DELETE FROM vault_frontmatter WHERE path = ?');
+    this._stmtListFrontmatterByPath = this.db.prepare('SELECT key, value FROM vault_frontmatter WHERE path = ?');
+    this._stmtUpsertTag = this.db.prepare(`
+      INSERT INTO vault_tags (path, tag)
+      VALUES (@path, @tag)
+      ON CONFLICT(path, tag) DO NOTHING
+    `);
+    this._stmtDeleteTagsByPath = this.db.prepare('DELETE FROM vault_tags WHERE path = ?');
+    this._stmtListTagsByPath = this.db.prepare('SELECT tag FROM vault_tags WHERE path = ?');
+    this._stmtFindPathsByTag = this.db.prepare('SELECT path FROM vault_tags WHERE tag = ?');
   }
 
   upsertFile(f: VaultFile): void {
@@ -279,6 +315,49 @@ export class SqliteVaultStore {
   getMeta(key: string): string | null {
     const row = this.db.prepare('SELECT value FROM vault_meta WHERE key = ?').get(key) as { value: string } | undefined;
     return row?.value ?? null;
+  }
+
+  upsertEmbedding(chunkId: string, hnswId: number, dim: number, model: string): void {
+    this._stmtUpsertEmbedding!.run({ chunkId, hnswId, dim, model });
+  }
+
+  listHnswIdsForPath(path: string): number[] {
+    const rows = this._stmtListHnswIdsForPath!.all(path) as { hnsw_id: number }[];
+    return rows.map((r) => r.hnsw_id);
+  }
+
+  // Frontmatter & Tags
+  upsertFrontmatter(path: string, key: string, value: string): void {
+    this._stmtUpsertFrontmatter!.run({ path, key, value });
+  }
+
+  deleteFrontmatterByPath(path: string): void {
+    this._stmtDeleteFrontmatterByPath!.run(path);
+  }
+
+  listFrontmatterByPath(path: string): Record<string, string> {
+    const rows = this._stmtListFrontmatterByPath!.all(path) as { key: string; value: string }[];
+    const out: Record<string, string> = {};
+    for (const r of rows) out[r.key] = r.value;
+    return out;
+  }
+
+  upsertTag(path: string, tag: string): void {
+    this._stmtUpsertTag!.run({ path, tag });
+  }
+
+  deleteTagsByPath(path: string): void {
+    this._stmtDeleteTagsByPath!.run(path);
+  }
+
+  listTagsByPath(path: string): string[] {
+    const rows = this._stmtListTagsByPath!.all(path) as { tag: string }[];
+    return rows.map((r) => r.tag);
+  }
+
+  findPathsByTag(tag: string): string[] {
+    const rows = this._stmtFindPathsByTag!.all(tag) as { path: string }[];
+    return rows.map((r) => r.path);
   }
 
   // Fix 4: idempotent close — no-op if already closed.

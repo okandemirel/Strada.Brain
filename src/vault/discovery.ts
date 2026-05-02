@@ -42,6 +42,7 @@ async function walk(root: string, dir: string, out: VaultFile[]): Promise<void> 
   const entries = await readdir(dir, { withFileTypes: true });
   for (const e of entries) {
     if (IGNORE.has(e.name)) continue;
+    if (e.isSymbolicLink()) continue;  // sec-H4: skip symlinks to prevent directory traversal.
     const full = join(dir, e.name);
     if (e.isDirectory()) {
       await walk(root, full, out);

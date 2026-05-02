@@ -1,6 +1,7 @@
 export * from './vault.interface.js';
 export { VaultRegistry } from './vault-registry.js';
 export { UnityProjectVault, type UnityVaultDeps } from './unity-project-vault.js';
+export { ObsidianVault, type ObsidianVaultDeps } from './obsidian-vault.js';
 export { SqliteVaultStore } from './sqlite-vault-store.js';
 export { EmbeddingAdapter, type EmbeddingProvider, type VectorStore, type ChunkToEmbed } from './embedding-adapter.js';
 export { VaultWatcher, type VaultWatcherOptions } from './watcher.js';
@@ -13,4 +14,5 @@ export { SelfVault } from './self-vault.js';
 export { getExtractorFor } from './symbol-extractor/index.js';
 export { runPpr, type PprOptions } from './ppr.js';
 export { buildCanvas, type Canvas, type CanvasNode, type CanvasEdge } from './canvas-generator.js';
+export { ObsidianApiClient, type ObsidianApiConfig, type ObsidianNote, type ObsidianSearchResult } from './obsidian-client.js';
 export type { ISymbolExtractor, ExtractInput, ExtractOutput } from './symbol-extractor/index.js';

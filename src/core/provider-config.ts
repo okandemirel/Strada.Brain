@@ -30,6 +30,9 @@ export function hasUsableProviderConfig(
       || (config ? hasConfiguredAnthropicSubscription(config) : false)
     );
   }
+  if (name === "opencode") {
+    return !!apiKeys["opencode"];
+  }
   return !!apiKeys[name];
 }
 
@@ -61,6 +64,7 @@ export function collectProviderCredentials(config: Config): ProviderCredentialMa
     together: { apiKey: config.togetherApiKey },
     fireworks: { apiKey: config.fireworksApiKey },
     gemini: { apiKey: config.geminiApiKey },
+    opencode: { apiKey: config.opencodeApiKey },
   };
 }
 
@@ -95,6 +99,7 @@ export function detectConfiguredProviderNames(
     "together",
     "fireworks",
     "gemini",
+    "opencode",
   ]) {
     if (apiKeys[name]) {
       names.push(name);

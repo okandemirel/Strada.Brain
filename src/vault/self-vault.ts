@@ -89,6 +89,49 @@ export class SelfVault extends UnityProjectVault {
     super(deps);
   }
 
+  // Override sync: use curated discovery roots (same as init) rather than Unity's file walker.
+  override async sync(): Promise<{ changed: number; durationMs: number }> {
+    const started = Date.now();
+    const found: VaultFile[] = [];
+    for (const r of SELF_INCLUDE_ROOTS) {
+      const abs = join(this.rootPath, r);
+      const st = await lstat(abs).catch(() => null);
+      if (!st || st.isSymbolicLink()) continue;
+      if (st.isFile()) {
+        const lang = EXT_LANG[extname(abs).toLowerCase()];
+        if (!lang) continue;
+        const relPosix = relative(this.rootPath, abs).replaceAll(pathSep, '/');
+        if (isSensitiveSelfPath(relPosix, basename(abs))) continue;
+        found.push({
+          path: relPosix, blobHash: '', mtimeMs: st.mtimeMs, size: st.size,
+          lang, kind: 'doc', indexedAt: 0,
+        });
+      } else {
+        await walk(this.rootPath, abs, found);
+      }
+    }
+
+    const before = new Set(this.store.listFiles().map((f) => f.path));
+    const changed: string[] = [];
+    for (const f of found) {
+      if (await this.reindexFile(f.path)) changed.push(f.path);
+    }
+    const present = new Set(found.map((f) => f.path));
+    for (const p of before) {
+      if (!present.has(p)) {
+        const hnswIds = this.store.listHnswIdsForPath(p);
+        for (const hnswId of hnswIds) this.adapter.remove(hnswId);
+        this.store.deleteFile(p);
+        changed.push(p);
+      }
+    }
+    await this.regenerateCanvas();
+    if (changed.length) {
+      this.emitter.emit('update', { vaultId: this.id, changedPaths: changed });
+    }
+    return { changed: changed.length, durationMs: Date.now() - started };
+  }
+
   // Override init: use curated discovery roots rather than Unity's Assets/Packages layout.
   override async init(): Promise<void> {
     const { mkdir } = await import('node:fs/promises');
