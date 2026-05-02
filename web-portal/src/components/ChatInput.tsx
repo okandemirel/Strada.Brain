@@ -16,7 +16,7 @@ const SLASH_COMMANDS = [
   { command: '/pause', description: 'Pause current task', usage: '/pause [taskId]' },
   { command: '/resume', description: 'Resume paused task', usage: '/resume [taskId]' },
   // Budget & routing
-  { command: '/token', description: 'Set token budget (0=unlimited)', usage: '/token <value|0|unlimited>' },
+  { command: '/token', description: 'Set token budget (-1=unlimited)', usage: '/token <-1|value|unlimited>' },
   { command: '/budget', description: 'Alias for /token', usage: '/budget <value>' },
   { command: '/routing', description: 'Show routing status', usage: '/routing [preset <name>|info]' },
   // Autonomous mode

@@ -65,7 +65,7 @@ export class BudgetConfigStore {
       if (
         typeof partial.interactiveTokenBudget !== "number" ||
         !Number.isFinite(partial.interactiveTokenBudget) ||
-        partial.interactiveTokenBudget < 0
+        partial.interactiveTokenBudget < -1
       ) {
         throw new Error("interactiveTokenBudget must be a finite number >= 0");
       }
@@ -94,7 +94,7 @@ export class BudgetConfigStore {
         agentDefaultUsd: val("subLimits.agentDefaultUsd", "AGENT_DEFAULT_BUDGET_USD", DEFAULT_BUDGET_CONFIG.subLimits.agentDefaultUsd),
         verificationPct: val("subLimits.verificationPct", "SUPERVISOR_VERIFICATION_BUDGET_PCT", DEFAULT_BUDGET_CONFIG.subLimits.verificationPct),
       },
-      ...(interactiveOverride !== undefined && interactiveOverride >= 0
+      ...(interactiveOverride !== undefined && interactiveOverride >= -1
         ? { interactiveTokenBudget: interactiveOverride }
         : {}),
     };

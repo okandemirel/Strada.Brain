@@ -8,7 +8,7 @@ const MESSAGES: Record<string, Record<MessageKey, string>> = {
     provider_ask_user: "The AI provider has been unreliable for this task. You can continue waiting, switch to a different provider, or cancel.",
     provider_abort: "Unable to complete this task — the AI provider is not responding. Please try again later or switch to a different provider.",
     task_stuck: "I got stuck on this task after multiple approaches. I'll share what I tried and where I got blocked so we can move forward together.",
-    token_budget_exceeded: "Token budget exceeded ({used}K / {budget}K input tokens). Use `/token 0` for unlimited.",
+    token_budget_exceeded: "Token budget exceeded ({used}K / {budget}K input tokens). Use `/token -1` for unlimited.",
   },
   tr: {
     provider_slow: "Yapay zeka sağlayıcısı gecikme yaşıyor. Yeniden deneniyor...",
@@ -17,7 +17,7 @@ const MESSAGES: Record<string, Record<MessageKey, string>> = {
     provider_ask_user: "Yapay zeka sağlayıcısı bu görev için güvenilir çalışmıyor. Beklemeye devam edebilir, farklı bir sağlayıcıya geçebilir veya görevi iptal edebilirsiniz.",
     provider_abort: "Bu görev tamamlanamadı — yapay zeka sağlayıcısı yanıt vermiyor. Lütfen daha sonra tekrar deneyin veya farklı bir sağlayıcı kullanın.",
     task_stuck: "Bu görevde birden fazla yaklaşım denedikten sonra takıldım. Neler denediğimi ve nerede tıkandığımı paylaşacağım, böylece birlikte ilerleyebiliriz.",
-    token_budget_exceeded: "Token bütçesi aşıldı ({used}K / {budget}K input token). Sınırsız için `/token 0` kullan.",
+    token_budget_exceeded: "Token bütçesi aşıldı ({used}K / {budget}K input token). Sınırsız için `/token -1` kullan.",
   },
   ja: {
     provider_slow: "AIプロバイダーに遅延が発生しています。再試行中...",

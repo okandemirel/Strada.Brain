@@ -1073,7 +1073,7 @@ export class CommandHandler {
     if (parsed === null) {
       await this.channel.sendText(
         chatId,
-        `Could not parse "${raw}" as a token count. Examples: 0, unlimited, 500, 500k, 500_000.`,
+        `Could not parse "${raw}" as a token count. Examples: -1, unlimited, 500, 500k, 500_000.`,
       );
       return;
     }
@@ -1085,12 +1085,12 @@ export class CommandHandler {
     if (validated === null) {
       await this.channel.sendText(
         chatId,
-        `Token budget must be 0 (unlimited) or between ${TOKEN_BUDGET_MIN.toLocaleString()} and ${TOKEN_BUDGET_MAX.toLocaleString()}.`,
+        `Token budget must be -1 (unlimited) or between ${TOKEN_BUDGET_MIN.toLocaleString()} and ${TOKEN_BUDGET_MAX.toLocaleString()}.`,
       );
       return;
     }
 
-    const budgetLabel = validated === 0
+    const budgetLabel = validated === -1
       ? "sınırsız (unlimited)"
       : `${validated.toLocaleString()} token`;
 
@@ -1450,10 +1450,10 @@ const TOKEN_BUDGET_MAX = 100_000_000;
  * natural-language recovery e.g. "raised the budget to 1 trillion k").
  */
 function validateTokenBudget(tokens: number): number | null {
-  if (!Number.isFinite(tokens) || tokens < 0) return null;
+  if (!Number.isFinite(tokens) || tokens < -1) return null;
   const rounded = Math.round(tokens);
   if (rounded > TOKEN_BUDGET_MAX) return null;
-  return rounded; // 0 = unlimited (no minimum check)
+  return rounded; // -1 = unlimited, 0+ = specific budget
 }
 
 /**
@@ -1463,7 +1463,7 @@ function validateTokenBudget(tokens: number): number | null {
 function parseTokenBudgetInput(raw: string): number | null {
   const cleaned = raw.trim().toLowerCase().replace(/[_,]/g, "");
   // "0" or "unlimited" = unlimited
-  if (cleaned === "0" || cleaned === "unlimited") return 0;
+  if (cleaned === "-1" || cleaned === "unlimited") return -1;
   // <number>k shorthand
   const kMatch = cleaned.match(/^(\d+(?:\.\d+)?)k$/);
   if (kMatch?.[1]) {

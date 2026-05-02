@@ -73,8 +73,8 @@ export interface UnifiedBudgetConfig {
   /**
    * Absolute input-token budget per interactive/background task iteration loop.
    * When set, live-overrides the static TaskConfig.interactiveTokenBudget so
-   * portal users can retune without a process restart. Unset or <= 0 → fall back
-   * to TaskConfig default.
+   * portal users can retune without a process restart. Unset or < 0 → fall back
+   * to TaskConfig default. -1 = unlimited.
    */
   readonly interactiveTokenBudget?: number;
 }
