@@ -94,7 +94,7 @@ export class BudgetConfigStore {
         agentDefaultUsd: val("subLimits.agentDefaultUsd", "AGENT_DEFAULT_BUDGET_USD", DEFAULT_BUDGET_CONFIG.subLimits.agentDefaultUsd),
         verificationPct: val("subLimits.verificationPct", "SUPERVISOR_VERIFICATION_BUDGET_PCT", DEFAULT_BUDGET_CONFIG.subLimits.verificationPct),
       },
-      ...(interactiveOverride !== undefined && interactiveOverride > 0
+      ...(interactiveOverride !== undefined && interactiveOverride >= 0
         ? { interactiveTokenBudget: interactiveOverride }
         : {}),
     };

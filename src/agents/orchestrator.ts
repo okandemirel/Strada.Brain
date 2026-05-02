@@ -2180,7 +2180,7 @@ export class Orchestrator {
    */
   private getLiveInteractiveTokenBudget(): number {
     const live = this.unifiedBudgetManager?.getConfig()?.interactiveTokenBudget;
-    if (typeof live === "number" && live > 0) return live;
+    if (typeof live === "number" && live >= 0) return live;
     return this.taskConfig.interactiveTokenBudget;
   }
 
@@ -3129,7 +3129,7 @@ export class Orchestrator {
 
               // Token budget enforcement — prevent runaway token consumption in background tasks
               bgCumulativeInputTokens += response.usage?.inputTokens ?? 0;
-              if (bgCumulativeInputTokens >= bgTokenBudget) {
+              if (bgCumulativeInputTokens > bgTokenBudget) {
                 logger.warn("Background token budget exceeded", {
                   chatId, bgCumulativeInputTokens, bgTokenBudget,
                   iteration: bgIteration, provider: currentAssignment.providerName,
@@ -4398,7 +4398,7 @@ export class Orchestrator {
           cumulativeInputTokens,
           durationMs: Date.now() - iterationStartMs,
         });
-        if (cumulativeInputTokens >= tokenBudget) {
+        if (cumulativeInputTokens > tokenBudget) {
           logger.warn("Interactive token budget exceeded — aborting loop", {
             chatId,
             cumulativeInputTokens,

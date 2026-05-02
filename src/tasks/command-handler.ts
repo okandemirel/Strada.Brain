@@ -1445,7 +1445,7 @@ const TOKEN_BUDGET_MAX = 100_000_000;
  * natural-language recovery e.g. "raised the budget to 1 trillion k").
  */
 function validateTokenBudget(tokens: number): number | null {
-  if (!Number.isFinite(tokens) || tokens <= 0) return null;
+  if (!Number.isFinite(tokens) || tokens < 0) return null;
   const rounded = Math.round(tokens);
   if (rounded < TOKEN_BUDGET_MIN || rounded > TOKEN_BUDGET_MAX) return null;
   return rounded;
