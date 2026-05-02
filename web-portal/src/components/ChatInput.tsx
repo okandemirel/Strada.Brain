@@ -173,7 +173,7 @@ export default function ChatInput({ onSend, disabled }: ChatInputProps) {
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
-      if (showCommands && filteredCommands.length > 0) {
+      if (showCommands && filteredCommands.length > 0 && !text.includes(' ')) {
         if (e.key === 'ArrowUp') {
           e.preventDefault()
           setSelectedCommandIndex(i => Math.max(0, i - 1))
@@ -200,7 +200,7 @@ export default function ChatInput({ onSend, disabled }: ChatInputProps) {
         handleSend()
       }
     },
-    [handleSend, showCommands, filteredCommands, selectedCommandIndex, selectCommand],
+    [handleSend, showCommands, filteredCommands, selectedCommandIndex, selectCommand, text],
   )
 
   const handleTextChange = useCallback((e: ChangeEvent<HTMLTextAreaElement>) => {
