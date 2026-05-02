@@ -1,4 +1,4 @@
-import type { VaultSymbol, VaultEdge } from './vault.interface.js';
+import type { VaultSymbol, VaultEdge, VaultFile } from './vault.interface.js';
 
 // JSON Canvas 1.0 spec: https://jsoncanvas.org/spec/1.0/
 export interface CanvasNode {
@@ -26,58 +26,185 @@ export interface Canvas {
   edges: CanvasEdge[];
 }
 
-const NODE_W = 220;
-const NODE_H = 60;
-const COL_STRIDE = NODE_W + 40;
-const ROW_STRIDE = NODE_H + 40;
+// Obsidian-inspired color palette for different file types
+const LANG_COLORS: Record<string, string> = {
+  'csharp': '#6A5ACD',    // SlateBlue
+  'typescript': '#3178C6', // TypeScript blue
+  'markdown': '#10B981',   // Emerald
+  'json': '#F59E0B',       // Amber
+  'hlsl': '#EC4899',       // Pink
+  'unknown': '#6B7280',    // Gray
+};
 
-function colorForFile(path: string): string {
-  let h = 0;
-  for (let i = 0; i < path.length; i++) h = (h * 31 + path.charCodeAt(i)) >>> 0;
-  return `#${(h & 0xffffff).toString(16).padStart(6, '0')}`;
+// Size tiers based on content/connections (Obsidian-style)
+function nodeSize(connections: number): { width: number; height: number } {
+  if (connections >= 10) return { width: 280, height: 80 };
+  if (connections >= 5) return { width: 240, height: 70 };
+  if (connections >= 2) return { width: 200, height: 60 };
+  return { width: 160, height: 50 };
 }
 
-export function buildCanvas(input: { symbols: VaultSymbol[]; edges: VaultEdge[] }): Canvas {
-  const byId = new Map(input.symbols.map((s) => [s.symbolId, s]));
-  // Group symbols by file → file becomes a column, symbols rows inside the column.
+/**
+ * Build a rich Obsidian-quality graph canvas.
+ * 
+ * Strategy:
+ * 1. If symbols exist → symbol-centric graph (detailed code view)
+ * 2. If no symbols but files exist → file-centric graph (Obsidian-style vault view)
+ * 3. If wikilinks exist → use them as edges (Obsidian-style backlinks)
+ * 4. If edges exist → use them
+ * 5. Fallback → file-folder hierarchy edges
+ */
+export function buildCanvas(input: {
+  symbols: VaultSymbol[];
+  edges: VaultEdge[];
+  files?: VaultFile[];
+}): Canvas {
+  const { symbols, edges, files = [] } = input;
+
+  // Count connections per node for sizing
+  const connectionCounts = new Map<string, number>();
+  const incrementCount = (id: string) => {
+    connectionCounts.set(id, (connectionCounts.get(id) ?? 0) + 1);
+  };
+
+  for (const e of edges) {
+    incrementCount(e.fromSymbol);
+    incrementCount(e.toSymbol);
+  }
+
+  // If we have symbols, create a symbol-centric graph (code structure view)
+  if (symbols.length > 0) {
+    return buildSymbolGraph(symbols, edges, connectionCounts);
+  }
+
+  // Otherwise, create an Obsidian-style file graph (vault view)
+  return buildFileGraph(files, connectionCounts);
+}
+
+function buildSymbolGraph(
+  symbols: VaultSymbol[], 
+  edges: VaultEdge[],
+  connectionCounts: Map<string, number>
+): Canvas {
+  const byId = new Map(symbols.map((s) => [s.symbolId, s]));
+  
+  // Group by file for initial positioning
   const byFile = new Map<string, VaultSymbol[]>();
-  for (const s of input.symbols) {
+  for (const s of symbols) {
     const arr = byFile.get(s.path) ?? [];
     arr.push(s);
     byFile.set(s.path, arr);
   }
+  
   const files = [...byFile.keys()].sort();
   const nodes: CanvasNode[] = [];
+  
+  // Position symbols in a grid grouped by file
   for (let col = 0; col < files.length; col++) {
     const file = files[col]!;
     const syms = byFile.get(file)!.slice().sort((a, b) => a.startLine - b.startLine);
-    const color = colorForFile(file);
+    const color = LANG_COLORS[syms[0]?.kind ?? 'unknown'] ?? LANG_COLORS.unknown;
+    
     for (let row = 0; row < syms.length; row++) {
       const s = syms[row]!;
+      const connections = connectionCounts.get(s.symbolId) ?? 0;
+      const size = nodeSize(connections);
+      
       nodes.push({
         id: s.symbolId,
         type: 'text',
         text: `**${s.kind}** ${s.name}\n\n*${file}:${s.startLine}*`,
-        x: col * COL_STRIDE,
-        y: row * ROW_STRIDE,
-        width: NODE_W,
-        height: NODE_H,
+        x: col * 320,
+        y: row * 100,
+        width: size.width,
+        height: size.height,
         color,
         file,
         kind: s.kind,
       });
     }
   }
-  const edges: CanvasEdge[] = [];
+  
+  const canvasEdges: CanvasEdge[] = [];
   let i = 0;
-  for (const e of input.edges) {
+  for (const e of edges) {
     if (!byId.has(e.fromSymbol) || !byId.has(e.toSymbol)) continue;
-    edges.push({
+    canvasEdges.push({
       id: `e${++i}`,
       fromNode: e.fromSymbol,
       toNode: e.toSymbol,
       label: e.kind,
     });
   }
+  
+  return { nodes, edges: canvasEdges };
+}
+
+function buildFileGraph(
+  files: VaultFile[],
+  connectionCounts: Map<string, number>
+): Canvas {
+  // Create nodes from files
+  const nodes: CanvasNode[] = [];
+
+  // Group files by directory for color coding
+  const dirColors = new Map<string, string>();
+  let colorIdx = 0;
+  const palette = Object.values(LANG_COLORS);
+
+  function getDirColor(dir: string): string {
+    if (!dirColors.has(dir)) {
+      dirColors.set(dir, palette[colorIdx % palette.length]!);
+      colorIdx++;
+    }
+    return dirColors.get(dir)!;
+  }
+
+  for (let i = 0; i < files.length; i++) {
+    const f = files[i]!;
+    const connections = connectionCounts.get(f.path) ?? 0;
+    const size = nodeSize(connections);
+    const dir = f.path.split('/').slice(0, -1).join('/') || '/';
+    const color = LANG_COLORS[f.lang] ?? getDirColor(dir);
+
+    nodes.push({
+      id: f.path,
+      type: 'text',
+      text: f.path.split('/').pop() ?? f.path,
+      x: (i % 10) * 250,
+      y: Math.floor(i / 10) * 120,
+      width: size.width,
+      height: size.height,
+      color,
+      file: f.path,
+      kind: f.lang,
+    });
+  }
+
+  // Create directory-based edges (files in same dir are connected)
+  const edges: CanvasEdge[] = [];
+  let edgeIdx = 0;
+  const dirGroups = new Map<string, string[]>();
+
+  for (const f of files) {
+    const dir = f.path.split('/').slice(0, -1).join('/') || '/';
+    const arr = dirGroups.get(dir) ?? [];
+    arr.push(f.path);
+    dirGroups.set(dir, arr);
+  }
+
+  for (const [, paths] of dirGroups) {
+    for (let i = 0; i < paths.length; i++) {
+      for (let j = i + 1; j < paths.length; j++) {
+        edges.push({
+          id: `d${++edgeIdx}`,
+          fromNode: paths[i]!,
+          toNode: paths[j]!,
+          label: 'folder',
+        });
+      }
+    }
+  }
+
   return { nodes, edges };
 }

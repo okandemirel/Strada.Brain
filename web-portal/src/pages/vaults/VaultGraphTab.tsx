@@ -61,11 +61,14 @@ export default function VaultGraphTab() {
 
   useEffect(() => {
     if (!selected) return;
+    // Use a local ref to track fetch state and avoid stale closures / infinite loops
+    let cancelled = false;
+    const currentGraph = useVaultStore.getState().graphCache[selected];
     // Cache states:
     //   undefined → not fetched yet (this effect triggers a fetch)
     //   null      → in-flight sentinel (this effect was already triggered)
     //   CanvasJson→ loaded
-    if (graph !== undefined) return;
+    if (currentGraph !== undefined) return;
 
     // Write the in-flight sentinel BEFORE fetch so a quick re-render (e.g. vault
     // re-selection under fast clicks) sees null and skips re-fetching.
@@ -74,8 +77,11 @@ export default function VaultGraphTab() {
 
     fetch(`/api/vaults/${encodeURIComponent(selected)}/canvas`, { signal: ctrl.signal })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
-      .then((j: unknown) => setGraph(selected, sanitizeCanvas(j)))
+      .then((j: unknown) => {
+        if (!cancelled) setGraph(selected, sanitizeCanvas(j));
+      })
       .catch((err: unknown) => {
+        if (cancelled) return;
         if ((err as Error).name === 'AbortError') {
           // Restore undefined so a subsequent selection of the same vault can retry.
           clearGraph(selected);
@@ -84,8 +90,12 @@ export default function VaultGraphTab() {
         setGraph(selected, { nodes: [], edges: [] });
       });
 
-    return () => ctrl.abort();
-  }, [selected, graph, setGraph, clearGraph]);
+    return () => {
+      cancelled = true;
+      ctrl.abort();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected]);
 
   if (!selected) {
     return (

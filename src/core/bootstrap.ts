@@ -672,7 +672,10 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
               await vault.startWatch(config.vault?.debounceMs ?? 800);
               logger.info(`[vault] async init complete for ${vault.id}`);
             } catch (err) {
-              logger.warn(`[vault] async init failed for ${vault.id}`, { err });
+              logger.warn(`[vault] async init failed for ${vault.id}`, {
+                error: err instanceof Error ? err.message : String(err),
+                stack: err instanceof Error ? err.stack : undefined,
+              });
             }
           })();
         } else if (!config.unityProjectPath) {

@@ -39,7 +39,12 @@ export async function listIndexableFiles(root: string): Promise<VaultFile[]> {
 }
 
 async function walk(root: string, dir: string, out: VaultFile[]): Promise<void> {
-  const entries = await readdir(dir, { withFileTypes: true });
+  let entries;
+  try {
+    entries = await readdir(dir, { withFileTypes: true });
+  } catch {
+    return; // Skip directories we can't read (permissions, deleted mid-walk, etc.)
+  }
   for (const e of entries) {
     if (IGNORE.has(e.name)) continue;
     if (e.isSymbolicLink()) continue;  // sec-H4: skip symlinks to prevent directory traversal.

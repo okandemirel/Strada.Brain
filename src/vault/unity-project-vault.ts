@@ -241,7 +241,8 @@ export class UnityProjectVault implements IVault {
     const hash = xxhash64Hex(body);
     const existing = this.store.getFile(relPath);
     if (existing?.blobHash === hash) return false;  // Fix C1: short-circuit on unchanged hash
-    const st = await stat(abs);
+    const st = await stat(abs).catch(() => null);
+    if (!st) { this.store.deleteFile(relPath); return true; }
     const lang = inferLang(relPath);
 
     // Fix HNSW leak: remove old vectors before deleting SQLite chunks.
@@ -256,10 +257,18 @@ export class UnityProjectVault implements IVault {
     });
     const chunks = chunkFile({ path: relPath, content: body, lang });
     for (const c of chunks) this.store.upsertChunk(c);
-    const embeddingMap = await this.adapter.upsertBatch(chunks.map((c) => ({ chunkId: c.chunkId, content: c.content })));
-    // Persist chunk_id → hnsw_id mapping for future vector lifecycle management.
-    for (const [chunkId, hnswId] of Object.entries(embeddingMap)) {
-      this.store.upsertEmbedding(chunkId, hnswId, this.adapter.provider.dim, this.adapter.provider.model);
+    
+    // Embedding is best-effort — if the provider fails, continue with indexing.
+    try {
+      const embeddingMap = await this.adapter.upsertBatch(chunks.map((c) => ({ chunkId: c.chunkId, content: c.content })));
+      // Persist chunk_id → hnsw_id mapping for future vector lifecycle management.
+      for (const [chunkId, hnswId] of Object.entries(embeddingMap)) {
+        this.store.upsertEmbedding(chunkId, hnswId, this.adapter.provider.dim, this.adapter.provider.model);
+      }
+    } catch (embedErr) {
+      getLoggerSafe().warn(`[vault ${this.id}] embedding failed for ${relPath}, continuing without vectors`, {
+        error: embedErr instanceof Error ? embedErr.message : String(embedErr),
+      });
     }
 
     // Phase 2: symbol + edge + wikilink extraction. Best-effort — must not block indexing.
@@ -338,9 +347,10 @@ export class UnityProjectVault implements IVault {
 
   protected async regenerateCanvas(): Promise<void> {
     try {
-      const symbols = this.store.listFiles().flatMap((f) => this.store.listSymbolsForPath(f.path));
+      const files = this.store.listFiles();
+      const symbols = files.flatMap((f) => this.store.listSymbolsForPath(f.path));
       const edges = this.store.listEdges();
-      const canvas = buildCanvas({ symbols, edges });
+      const canvas = buildCanvas({ symbols, edges, files });
       // phase2-review L1: atomic write via temp + rename so readCanvas/GET /canvas
       // never observes a partial JSON document mid-write.
       const finalPath = join(this.rootPath, '.strada/vault/graph.canvas');
@@ -349,7 +359,9 @@ export class UnityProjectVault implements IVault {
       const { rename } = await import('node:fs/promises');
       await rename(tmpPath, finalPath);
     } catch (err) {
-      getLoggerSafe().warn(`[vault ${this.id}] canvas regen failed`, { err });
+      getLoggerSafe().warn(`[vault ${this.id}] canvas regen failed`, {
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   }
 
@@ -363,7 +375,15 @@ export class UnityProjectVault implements IVault {
   protected async fullIndex(): Promise<void> {
     const files = await listIndexableFiles(this.rootPath);
     const changed: string[] = [];
-    for (const f of files) if (await this.reindexFile(f.path)) changed.push(f.path);
+    for (const f of files) {
+      try {
+        if (await this.reindexFile(f.path)) changed.push(f.path);
+      } catch (err) {
+        getLoggerSafe().warn(`[vault ${this.id}] skipping ${f.path} during fullIndex`, {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
     await this.regenerateCanvas();
     if (changed.length) this.emitter.emit('update', { vaultId: this.id, changedPaths: changed });
   }
@@ -375,7 +395,13 @@ export class UnityProjectVault implements IVault {
     const files = await listIndexableFiles(this.rootPath);
     const changed: string[] = [];
     for (const f of files) {
-      if (await this.reindexFile(f.path)) changed.push(f.path);
+      try {
+        if (await this.reindexFile(f.path)) changed.push(f.path);
+      } catch (err) {
+        getLoggerSafe().warn(`[vault ${this.id}] skipping ${f.path} during reindexChanged`, {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
     }
     const present = new Set(files.map((f) => f.path));
     for (const p of before) {
