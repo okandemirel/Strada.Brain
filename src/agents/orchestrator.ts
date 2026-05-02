@@ -3129,7 +3129,7 @@ export class Orchestrator {
 
               // Token budget enforcement — prevent runaway token consumption in background tasks
               bgCumulativeInputTokens += response.usage?.inputTokens ?? 0;
-              if (bgCumulativeInputTokens > bgTokenBudget) {
+              if (bgTokenBudget > 0 && bgCumulativeInputTokens > bgTokenBudget) {
                 logger.warn("Background token budget exceeded", {
                   chatId, bgCumulativeInputTokens, bgTokenBudget,
                   iteration: bgIteration, provider: currentAssignment.providerName,
@@ -4398,7 +4398,7 @@ export class Orchestrator {
           cumulativeInputTokens,
           durationMs: Date.now() - iterationStartMs,
         });
-        if (cumulativeInputTokens > tokenBudget) {
+        if (tokenBudget > 0 && cumulativeInputTokens > tokenBudget) {
           logger.warn("Interactive token budget exceeded — aborting loop", {
             chatId,
             cumulativeInputTokens,
