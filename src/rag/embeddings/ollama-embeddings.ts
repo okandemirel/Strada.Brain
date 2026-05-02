@@ -1,6 +1,5 @@
 import type { IEmbeddingProvider, EmbeddingBatch } from "../rag.interface.js";
 import { getLogger } from "../../utils/logger.js";
-import { fetchWithRetry } from "../../common/fetch-with-retry.js";
 
 const KNOWN_MODELS: Record<string, number> = {
   "nomic-embed-text": 768,
@@ -74,19 +73,18 @@ export class OllamaEmbeddingProvider implements IEmbeddingProvider {
 
   private async embedViaBatchEndpoint(texts: string[]): Promise<EmbeddingBatch> {
     const url = `${this.baseUrl}/api/embed`;
-    const response = await fetchWithRetry(
-      url,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model: this.model, input: texts }),
-      },
-      {
-        callerName: "OllamaEmbedding",
-        maxRetries: 3,
-        baseDelayMs: 500,
-      }
-    );
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: this.model, input: texts }),
+    });
+
+    if (!response.ok) {
+      const body = await response.text().catch(() => "(unreadable)");
+      throw new Error(
+        `Ollama /api/embed failed: HTTP ${response.status} — ${body}`
+      );
+    }
 
     const data = (await response.json()) as OllamaEmbedBatchResponse;
     const totalTokens = data.prompt_eval_count ?? 0;
@@ -106,19 +104,18 @@ export class OllamaEmbeddingProvider implements IEmbeddingProvider {
         total: texts.length,
       });
 
-      const response = await fetchWithRetry(
-        url,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ model: this.model, prompt: text }),
-        },
-        {
-          callerName: "OllamaEmbedding",
-          maxRetries: 2,
-          baseDelayMs: 300,
-        }
-      );
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model: this.model, prompt: text }),
+      });
+
+      if (!response.ok) {
+        const body = await response.text().catch(() => "(unreadable)");
+        throw new Error(
+          `Ollama /api/embeddings failed for text[${i}]: HTTP ${response.status} — ${body}`
+        );
+      }
 
       const data = (await response.json()) as OllamaEmbeddingsSingleResponse;
       embeddings.push(data.embedding);
