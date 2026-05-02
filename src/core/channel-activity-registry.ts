@@ -6,6 +6,12 @@ export interface ChatActivity {
 
 export class ChannelActivityRegistry {
   private readonly activities = new Map<string, ChatActivity>();
+  private readonly startupTime: number;
+  private readonly startupGracePeriodMs = 5 * 60 * 1000; // 5 minutes
+
+  constructor(startupTime?: number) {
+    this.startupTime = startupTime ?? Date.now();
+  }
 
   recordActivity(channelName: string, chatId: string): void {
     const key = `${channelName}:${chatId}`;
@@ -31,6 +37,12 @@ export class ChannelActivityRegistry {
   }
 
   isIdle(timeoutMinutes: number): boolean {
+    // Block updates during startup grace period to prevent immediate restart loops
+    const timeSinceStartup = Date.now() - this.startupTime;
+    if (timeSinceStartup < this.startupGracePeriodMs) {
+      return false;
+    }
+
     const lastActivity = this.getLastActivityTime();
     if (lastActivity === 0) return true;
     const elapsed = Date.now() - lastActivity;

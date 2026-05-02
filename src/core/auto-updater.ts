@@ -17,6 +17,7 @@ export interface AutoUpdateConfig {
   channel: "stable" | "latest";
   notify: boolean;
   autoRestart: boolean;
+  autoRestartDelayMs?: number;
 }
 
 export interface UpdateCheckResult {
@@ -45,6 +46,11 @@ interface BackgroundExecutorLike {
 interface LockContent {
   pid: number;
   timestamp: number;
+  startTime: number;
+}
+
+function getProcessStartTime(): number {
+  return Date.now() - process.uptime() * 1000;
 }
 
 interface AutoUpdaterOptions {
@@ -83,6 +89,48 @@ export class AutoUpdater {
   private pendingVersion: string | null = null;
   private idleCheckHandle: ReturnType<typeof setInterval> | null = null;
   private notifyFn: ((msg: string) => void) | null = null;
+
+  private getPendingUpdatePath(): string {
+    return path.join(this.installRoot, ".strada", "pending-update");
+  }
+
+  private savePendingVersion(): void {
+    try {
+      const pendingPath = this.getPendingUpdatePath();
+      const pendingDir = path.dirname(pendingPath);
+      if (!fs.existsSync(pendingDir)) {
+        fs.mkdirSync(pendingDir, { recursive: true });
+      }
+      if (this.pendingVersion) {
+        fs.writeFileSync(pendingPath, this.pendingVersion, "utf-8");
+      } else {
+        if (fs.existsSync(pendingPath)) {
+          fs.unlinkSync(pendingPath);
+        }
+      }
+    } catch {
+      // Best-effort persistence
+    }
+  }
+
+  private loadPendingVersion(): void {
+    try {
+      const pendingPath = this.getPendingUpdatePath();
+      if (fs.existsSync(pendingPath)) {
+        this.pendingVersion = fs.readFileSync(pendingPath, "utf-8").trim();
+        if (this.pendingVersion.length === 0) {
+          this.pendingVersion = null;
+        }
+      }
+    } catch {
+      this.pendingVersion = null;
+    }
+  }
+
+  private clearPendingVersion(): void {
+    this.pendingVersion = null;
+    this.savePendingVersion();
+  }
 
   constructor(
     config: { autoUpdate: AutoUpdateConfig },
@@ -198,6 +246,33 @@ export class AutoUpdater {
       .filter((entry) => /(?:src[\\/]+index\.ts|dist[\\/]+index\.js)\s+(?:start|cli|supervise)(?:\s|$)/.test(entry.command));
   }
 
+  static parseWindowsRuntimeProcesses(output: string): Array<{ pid: number; command: string }> {
+    try {
+      const data = JSON.parse(output) as
+        | Array<{ pid: number | string; command: string }>
+        | { pid: number | string; command: string }
+        | null;
+
+      if (!data) return [];
+
+      const entries = Array.isArray(data) ? data : [data];
+
+      return entries
+        .map((entry) => {
+          const pid = typeof entry.pid === "string" ? Number.parseInt(entry.pid, 10) : entry.pid;
+          const command = entry.command?.trim() ?? "";
+          if (!Number.isFinite(pid) || command.length === 0) {
+            return null;
+          }
+          return { pid, command };
+        })
+        .filter((entry): entry is { pid: number; command: string } => entry !== null)
+        .filter((entry) => /(?:src[\\/]+index\.ts|dist[\\/]+index\.js)\s+(?:start|cli|supervise)(?:\s|$)/.test(entry.command));
+    } catch {
+      return [];
+    }
+  }
+
   static parseLsofCwd(output: string): string | null {
     for (const line of output.split(/\r?\n/)) {
       if (line.startsWith("n")) {
@@ -229,7 +304,8 @@ export class AutoUpdater {
     cwd?: string,
   ): Promise<string> {
     return new Promise((resolve, reject) => {
-      const proc = spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"], cwd });
+      const shell = process.platform === "win32" && (cmd === "npm" || cmd.endsWith(".cmd") || cmd.endsWith(".bat"));
+      const proc = spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"], cwd, shell });
       let stdoutData = "";
       let stderrData = "";
 
@@ -314,6 +390,24 @@ export class AutoUpdater {
   }
 
   private async resolveProcessCwd(pid: number): Promise<string | null> {
+    if (process.platform === "win32") {
+      try {
+        const output = await this.runCommand(
+          "powershell",
+          [
+            "-Command",
+            `try { (Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}").WorkingDirectory } catch { '' }`,
+          ],
+          5_000,
+        );
+        const cwd = output.trim();
+        return cwd.length > 0 ? cwd : null;
+      } catch {
+        // Best-effort only.
+      }
+      return null;
+    }
+
     try {
       const output = await this.runCommand("lsof", ["-a", "-p", String(pid), "-d", "cwd", "-Fn"], 5_000);
       const cwd = AutoUpdater.parseLsofCwd(output);
@@ -343,14 +437,26 @@ export class AutoUpdater {
       return this.runtimeInspector();
     }
 
-    if (process.platform === "win32") {
-      return [];
-    }
-
     try {
-      const output = await this.runCommand("ps", ["-Ao", "pid=,command="], 5_000);
-      const candidates = AutoUpdater.parsePsRuntimeProcesses(output)
-        .filter((entry) => entry.pid !== process.pid);
+      let candidates: Array<{ pid: number; command: string }> = [];
+
+      if (process.platform === "win32") {
+        const output = await this.runCommand(
+          "powershell",
+          [
+            "-Command",
+            "Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'node.exe' -or $_.Name -eq 'node' } | Select-Object @{Name='pid';Expression={$_.ProcessId}},@{Name='command';Expression={$_.CommandLine}} | ConvertTo-Json -Depth 1",
+          ],
+          10_000,
+        );
+        candidates = AutoUpdater.parseWindowsRuntimeProcesses(output)
+          .filter((entry) => entry.pid !== process.pid);
+      } else {
+        const output = await this.runCommand("ps", ["-Ao", "pid=,command="], 5_000);
+        candidates = AutoUpdater.parsePsRuntimeProcesses(output)
+          .filter((entry) => entry.pid !== process.pid);
+      }
+
       const runtimes: RuntimeProcessInfo[] = [];
 
       for (const candidate of candidates) {
@@ -589,7 +695,7 @@ export class AutoUpdater {
         if (hadLocalChanges) {
           await this.runCommand(
             "git",
-            ["stash", "push", "-m", "auto-updater: stash before pull"],
+            ["stash", "push", "-u", "-m", "auto-updater: stash before pull"],
             VERSION_CHECK_TIMEOUT,
             this.installRoot,
           );
@@ -608,6 +714,24 @@ export class AutoUpdater {
           try {
             await this.runCommand("git", ["stash", "pop"], VERSION_CHECK_TIMEOUT, this.installRoot);
           } catch {
+            // Check if working tree has conflict markers
+            try {
+              const statusOutput = await this.runCommand(
+                "git",
+                ["status", "--porcelain"],
+                VERSION_CHECK_TIMEOUT,
+                this.installRoot,
+              );
+              const hasConflicts = statusOutput.split("\n").some((line) => line.startsWith("UU "));
+              if (hasConflicts && this.notifyFn) {
+                this.notifyFn(
+                  "Update completed but your local changes conflict with the updated code. " +
+                  "Conflict markers are present in the working tree. " +
+                  "Run `git stash pop` manually to resolve conflicts.",
+                );
+                return;
+              }
+            } catch {}
             if (this.notifyFn) {
               this.notifyFn("Update completed but your local changes could not be restored automatically. Run `git stash pop` to recover them.");
             }
@@ -676,20 +800,154 @@ export class AutoUpdater {
 
         await popStash();
       } else {
-        // Use configured channel, fallback to "latest" if install fails
         const tag = this.config.channel;
         const buildArgs = (t: string) => method === "npm-global"
           ? ["install", "-g", `strada-brain@${t}`]
           : ["install", `strada-brain@${t}`];
         const cwd = method === "npm-local" ? this.installRoot : undefined;
+
+        let rollbackCommand: (() => Promise<void>) | null = null;
+
+        if (method === "npm-local") {
+          const pkgBackup = path.join(this.installRoot, ".strada-update-backup-package.json");
+          const lockBackup = path.join(this.installRoot, ".strada-update-backup-package-lock.json");
+          const nmBackup = path.join(this.installRoot, ".strada-update-backup-node_modules");
+          const pkgPath = path.join(this.installRoot, "package.json");
+          const lockPath = path.join(this.installRoot, "package-lock.json");
+          const nmPath = path.join(this.installRoot, "node_modules", "strada-brain");
+
+          if (fs.existsSync(pkgPath)) {
+            fs.copyFileSync(pkgPath, pkgBackup);
+          }
+          if (fs.existsSync(lockPath)) {
+            fs.copyFileSync(lockPath, lockBackup);
+          }
+          if (fs.existsSync(nmPath)) {
+            fs.renameSync(nmPath, nmBackup);
+          }
+
+          rollbackCommand = async (): Promise<void> => {
+            try {
+              if (fs.existsSync(pkgBackup)) {
+                fs.renameSync(pkgBackup, pkgPath);
+              }
+              if (fs.existsSync(lockBackup)) {
+                fs.renameSync(lockBackup, lockPath);
+              }
+              if (fs.existsSync(nmBackup)) {
+                if (fs.existsSync(nmPath)) {
+                  fs.rmSync(nmPath, { recursive: true });
+                }
+                fs.renameSync(nmBackup, nmPath);
+              }
+              await this.runCommand("npm", ["install"], UPDATE_TIMEOUT, this.installRoot);
+            } catch (rollbackErr) {
+              if (this.notifyFn) {
+                this.notifyFn(`Rollback failed: ${(rollbackErr as Error).message}`);
+              }
+              throw rollbackErr;
+            } finally {
+              for (const backup of [pkgBackup, lockBackup, nmBackup]) {
+                try {
+                  if (fs.existsSync(backup)) {
+                    if (fs.statSync(backup).isDirectory()) {
+                      fs.rmSync(backup, { recursive: true });
+                    } else {
+                      fs.unlinkSync(backup);
+                    }
+                  }
+                } catch {}
+              }
+            }
+          };
+        } else {
+          let currentGlobalVersion: string | null = null;
+          try {
+            const listOutput = await this.runCommand(
+              "npm",
+              ["list", "-g", "strada-brain", "--json"],
+              VERSION_CHECK_TIMEOUT,
+            );
+            const listData = JSON.parse(listOutput) as { dependencies?: Record<string, { version?: string }> };
+            currentGlobalVersion = listData.dependencies?.["strada-brain"]?.version ?? null;
+          } catch {
+            // Best effort only
+          }
+
+          if (currentGlobalVersion) {
+            rollbackCommand = async (): Promise<void> => {
+              try {
+                await this.runCommand(
+                  "npm",
+                  ["install", "-g", `strada-brain@${currentGlobalVersion}`],
+                  UPDATE_TIMEOUT,
+                );
+              } catch (rollbackErr) {
+                if (this.notifyFn) {
+                  this.notifyFn(`Global rollback failed: ${(rollbackErr as Error).message}`);
+                }
+                throw rollbackErr;
+              }
+            };
+          }
+        }
+
         try {
           await this.runCommand("npm", buildArgs(tag), UPDATE_TIMEOUT, cwd);
-        } catch {
+        } catch (installErr) {
           if (tag !== "latest") {
-            await this.runCommand("npm", buildArgs("latest"), UPDATE_TIMEOUT, cwd);
+            try {
+              await this.runCommand("npm", buildArgs("latest"), UPDATE_TIMEOUT, cwd);
+            } catch {
+              if (rollbackCommand) {
+                await rollbackCommand();
+              }
+              throw installErr;
+            }
           } else {
+            if (rollbackCommand) {
+              await rollbackCommand();
+            }
             throw new Error("npm install failed for strada-brain@latest");
           }
+        }
+
+        try {
+          await this.runPostUpdateHealthCheck();
+        } catch (healthErr) {
+          if (this.notifyFn) {
+            this.notifyFn(
+              `Update installed but health check failed: ${(healthErr as Error).message}. Rolling back...`,
+            );
+          }
+          if (rollbackCommand) {
+            try {
+              await rollbackCommand();
+            } catch (rollbackErr) {
+              if (this.notifyFn) {
+                this.notifyFn(`Rollback failed: ${(rollbackErr as Error).message}`);
+              }
+            }
+          }
+          throw healthErr;
+        }
+
+        // Cleanup backup files after successful update
+        const backupFiles = method === "npm-local" ? [
+          path.join(this.installRoot, ".strada-update-backup-package.json"),
+          path.join(this.installRoot, ".strada-update-backup-package-lock.json"),
+          path.join(this.installRoot, ".strada-update-backup-node_modules"),
+        ] : [];
+        for (const backup of backupFiles) {
+          try {
+            if (fs.existsSync(backup)) {
+              if (fs.statSync(backup).isDirectory()) {
+                fs.rmSync(backup, { recursive: true });
+              } else {
+                fs.unlinkSync(backup);
+              }
+            }
+          } catch {}
         }
       }
 
@@ -706,42 +964,65 @@ export class AutoUpdater {
   acquireLock(): boolean {
     const lockPath = this.getLockPath();
 
-    if (fs.existsSync(lockPath)) {
-      try {
-        const content: LockContent = JSON.parse(
-          fs.readFileSync(lockPath, "utf-8"),
-        ) as LockContent;
-
-        if (Date.now() - content.timestamp > STALE_LOCK_MAX_AGE) {
-          fs.unlinkSync(lockPath);
-        } else {
-          try {
-            process.kill(content.pid, 0);
-            return false;
-          } catch {
-            fs.unlinkSync(lockPath);
-          }
-        }
-      } catch {
-        try {
-          fs.unlinkSync(lockPath);
-        } catch {
-          // Lock file unreadable and undeletable
-        }
-      }
-    }
-
+    // Atomic write attempt first — eliminates TOCTOU race
     try {
       fs.writeFileSync(
         lockPath,
-        JSON.stringify({ pid: process.pid, timestamp: Date.now() }),
+        JSON.stringify({ pid: process.pid, timestamp: Date.now(), startTime: getProcessStartTime() }),
         { encoding: "utf-8", flag: "wx" },
       );
       return true;
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "EEXIST") {
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") {
         return false;
       }
+    }
+
+    // Lock exists — check if it's stale
+    try {
+      const content: LockContent = JSON.parse(
+        fs.readFileSync(lockPath, "utf-8"),
+      ) as LockContent;
+
+      if (Date.now() - content.timestamp > STALE_LOCK_MAX_AGE) {
+        fs.unlinkSync(lockPath);
+      } else {
+        try {
+          process.kill(content.pid, 0);
+          // PID exists; check startTime to detect PID reuse
+          if (content.startTime) {
+            const currentStartTime = getProcessStartTime();
+            if (Math.abs(currentStartTime - content.startTime) > 5000) {
+              // Different process with reused PID
+              fs.unlinkSync(lockPath);
+            } else {
+              return false;
+            }
+          } else {
+            return false;
+          }
+        } catch {
+          fs.unlinkSync(lockPath);
+        }
+      }
+    } catch {
+      try {
+        fs.unlinkSync(lockPath);
+      } catch {
+        // Lock file unreadable and undeletable
+        return false;
+      }
+    }
+
+    // Retry after removing stale lock
+    try {
+      fs.writeFileSync(
+        lockPath,
+        JSON.stringify({ pid: process.pid, timestamp: Date.now(), startTime: getProcessStartTime() }),
+        { encoding: "utf-8", flag: "wx" },
+      );
+      return true;
+    } catch {
       return false;
     }
   }
@@ -758,6 +1039,15 @@ export class AutoUpdater {
   async init(): Promise<void> {
     if (!this.config.enabled) return;
     this.detectInstallMethod();
+    this.loadPendingVersion();
+    if (this.pendingVersion) {
+      if (this.config.notify && this.notifyFn) {
+        this.notifyFn(
+          `Resuming pending update to Strada Brain ${this.pendingVersion}. Will update when idle.`,
+        );
+      }
+      this.startIdleMonitoring();
+    }
     this.runUpdateCheck().catch(() => {});
   }
 
@@ -774,6 +1064,7 @@ export class AutoUpdater {
     const result = await this.checkForUpdate();
     if (!result.error && result.available && result.latestVersion) {
       this.pendingVersion = result.latestVersion;
+      this.savePendingVersion();
       if (this.config.notify && this.notifyFn) {
         this.notifyFn(
           `Update available: Strada Brain ${result.latestVersion} (triggered by webhook). Will update when idle.`,
@@ -795,6 +1086,7 @@ export class AutoUpdater {
     if (!result.available || !result.latestVersion) return;
 
     this.pendingVersion = result.latestVersion;
+    this.savePendingVersion();
 
     if (this.config.notify && this.notifyFn) {
       this.notifyFn(
@@ -833,14 +1125,15 @@ export class AutoUpdater {
             // Send SIGTERM to self so setupShutdownHandlers triggers graceful
             // shutdown (DB flush, connection close, etc.) before exit.
             // The daemon wrapper will detect the clean exit and restart.
-            setTimeout(() => process.kill(process.pid, "SIGTERM"), 2000);
+            const restartDelay = this.config.autoRestartDelayMs ?? 2000;
+            setTimeout(() => process.kill(process.pid, "SIGTERM"), restartDelay);
           } else {
             this.notifyFn(
               `Updated to ${this.pendingVersion}. Please restart with \`strada start\`${!this.isDaemonProcess() ? " (auto-restart requires `strada daemon`)" : ""}.`,
             );
           }
         }
-        this.pendingVersion = null;
+        this.clearPendingVersion();
       } catch (err) {
         if (this.notifyFn) {
           this.notifyFn(
@@ -863,5 +1156,6 @@ export class AutoUpdater {
       clearInterval(this.idleCheckHandle);
       this.idleCheckHandle = null;
     }
+    this.savePendingVersion();
   }
 }

@@ -38,7 +38,8 @@ describe("AutoUpdater Integration", () => {
   });
 
   it("should integrate ChannelActivityRegistry for idle detection", () => {
-    const registry = new ChannelActivityRegistry();
+    // Use past startup time to bypass grace period in tests
+    const registry = new ChannelActivityRegistry(Date.now() - 6 * 60 * 1000);
     expect(registry.isIdle(5)).toBe(true);
     registry.recordActivity("web", "chat-1");
     expect(registry.isIdle(5)).toBe(false);

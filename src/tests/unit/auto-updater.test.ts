@@ -126,6 +126,38 @@ describe("AutoUpdater", () => {
     });
   });
 
+  describe("parseWindowsRuntimeProcesses", () => {
+    it("should parse Windows PowerShell JSON output", async () => {
+      const { AutoUpdater } = await import("../../core/auto-updater.js");
+      const jsonOutput = JSON.stringify([
+        { pid: 1234, command: "node C:\\Users\\test\\Strada.Brain\\src\\index.ts start" },
+        { pid: 5678, command: "node C:\\Users\\test\\Strada.Brain\\dist\\index.js supervise" },
+        { pid: 9999, command: "node C:\\Users\\test\\other-app\\src\\index.ts start" },
+      ]);
+
+      const candidates = AutoUpdater.parseWindowsRuntimeProcesses(jsonOutput);
+      // All 3 match the regex (which doesn't filter by path); filtering by install root happens later
+      expect(candidates).toHaveLength(3);
+      expect(candidates[0].pid).toBe(1234);
+      expect(candidates[1].pid).toBe(5678);
+      expect(candidates[2].pid).toBe(9999);
+    });
+
+    it("should handle single process output", async () => {
+      const { AutoUpdater } = await import("../../core/auto-updater.js");
+      const jsonOutput = JSON.stringify({ pid: 1234, command: "node src\\index.ts start" });
+
+      const candidates = AutoUpdater.parseWindowsRuntimeProcesses(jsonOutput);
+      expect(candidates).toHaveLength(1);
+      expect(candidates[0].pid).toBe(1234);
+    });
+
+    it("should handle invalid JSON gracefully", async () => {
+      const { AutoUpdater } = await import("../../core/auto-updater.js");
+      expect(AutoUpdater.parseWindowsRuntimeProcesses("not json")).toEqual([]);
+    });
+  });
+
   describe("isNewerVersion", () => {
     it("should correctly compare semver versions", async () => {
       const { AutoUpdater } = await import("../../core/auto-updater.js");
@@ -218,6 +250,31 @@ describe("AutoUpdater", () => {
       expect(updater.acquireLock()).toBe(true);
       updater.releaseLock();
     });
+
+    it("should detect PID reuse and remove stale lock", async () => {
+      const dir = makeTmpDir();
+      const lockPath = path.join(dir, ".strada-update.lock");
+      // Create lock with current PID but old startTime (simulating PID reuse)
+      const oldStartTime = Date.now() - 3600000; // 1 hour ago
+      fs.writeFileSync(
+        lockPath,
+        JSON.stringify({
+          pid: process.pid,
+          timestamp: Date.now(),
+          startTime: oldStartTime,
+        }),
+      );
+
+      const { AutoUpdater } = await import("../../core/auto-updater.js");
+      const updater = new AutoUpdater(
+        mockConfig(),
+        mockRegistry(),
+        mockExecutor(),
+        { installRoot: dir },
+      );
+      expect(updater.acquireLock()).toBe(true);
+      updater.releaseLock();
+    });
   });
 
   describe("shutdown", () => {
@@ -231,6 +288,62 @@ describe("AutoUpdater", () => {
         { installRoot: dir },
       );
       expect(() => updater.shutdown()).not.toThrow();
+    });
+  });
+
+  describe("pending update persistence", () => {
+    it("should persist pending version across restarts", async () => {
+      const dir = makeTmpDir();
+      fs.mkdirSync(path.join(dir, ".strada"), { recursive: true });
+
+      const { AutoUpdater } = await import("../../core/auto-updater.js");
+      const updater1 = new AutoUpdater(
+        mockConfig(),
+        mockRegistry(),
+        mockExecutor(),
+        { installRoot: dir },
+      );
+
+      // Simulate setting pending version and shutdown
+      (updater1 as any).pendingVersion = "1.2.3";
+      updater1.shutdown();
+
+      // Verify file was written
+      const pendingPath = path.join(dir, ".strada", "pending-update");
+      expect(fs.existsSync(pendingPath)).toBe(true);
+      expect(fs.readFileSync(pendingPath, "utf-8")).toBe("1.2.3");
+
+      // Create new updater instance and verify it loads the pending version
+      const updater2 = new AutoUpdater(
+        mockConfig(),
+        mockRegistry(),
+        mockExecutor(),
+        { installRoot: dir },
+      );
+      await updater2.init();
+      expect((updater2 as any).pendingVersion).toBe("1.2.3");
+      updater2.shutdown();
+    });
+
+    it("should clear pending version file after successful update", async () => {
+      const dir = makeTmpDir();
+      fs.mkdirSync(path.join(dir, ".strada"), { recursive: true });
+      const pendingPath = path.join(dir, ".strada", "pending-update");
+      fs.writeFileSync(pendingPath, "1.2.3", "utf-8");
+
+      const { AutoUpdater } = await import("../../core/auto-updater.js");
+      const updater = new AutoUpdater(
+        mockConfig(),
+        mockRegistry(),
+        mockExecutor(),
+        { installRoot: dir },
+      );
+      await updater.init();
+
+      // Clear pending version
+      (updater as any).clearPendingVersion();
+
+      expect(fs.existsSync(pendingPath)).toBe(false);
     });
   });
 
@@ -647,6 +760,127 @@ describe("AutoUpdater", () => {
       // The daemon check is in the idle monitoring callback, tested indirectly
       expect(exitSpy).not.toHaveBeenCalled();
       exitSpy.mockRestore();
+    });
+
+    it("uses configurable restart delay when autoRestartDelayMs is set", async () => {
+      const dir = makeTmpDir();
+      fs.mkdirSync(path.join(dir, ".git"));
+
+      vi.useFakeTimers();
+      try {
+        const { AutoUpdater } = await import("../../core/auto-updater.js");
+        const config = mockConfig();
+        (config.autoUpdate as any).autoRestartDelayMs = 5000;
+        const updater = new AutoUpdater(
+          config,
+          mockRegistry(),
+          mockExecutor(),
+          {
+            installRoot: dir,
+            commandRunner: vi.fn(async () => ""),
+            isDaemonProcess: () => true,
+          },
+        );
+
+        const notifyFn = vi.fn();
+        updater.setNotifyFn(notifyFn);
+        (updater as any).pendingVersion = "1.2.3";
+
+        // Simulate idle check triggering update
+        const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+        (updater as any).registry = { isIdle: () => true };
+        (updater as any).executor = { hasRunningTasks: () => false };
+
+        // Trigger the idle monitoring callback
+        await (updater as any).startIdleMonitoring();
+        await vi.advanceTimersByTimeAsync(30_000);
+
+        // Should not have called kill yet (5s delay)
+        expect(killSpy).not.toHaveBeenCalled();
+
+        // Advance to 5s
+        await vi.advanceTimersByTimeAsync(5_000);
+        expect(killSpy).toHaveBeenCalledWith(process.pid, "SIGTERM");
+
+        killSpy.mockRestore();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  describe("npm path rollback", () => {
+    it("rolls back npm-local install on failure and restores package files", async () => {
+      const dir = makeTmpDir();
+      const pkgContent = JSON.stringify({ name: "strada-brain", version: "1.0.0" });
+      fs.writeFileSync(path.join(dir, "package.json"), pkgContent);
+      fs.writeFileSync(path.join(dir, "package-lock.json"), "{\"lockfileVersion\": 3}");
+      fs.mkdirSync(path.join(dir, "node_modules", "strada-brain"), { recursive: true });
+      fs.writeFileSync(path.join(dir, "node_modules", "strada-brain", "index.js"), "old");
+
+      const commandRunner = vi.fn(async (cmd: string, args: string[]) => {
+        if (cmd === "npm" && args[0] === "install" && args[1]?.startsWith("strada-brain@")) {
+          throw new Error("npm install failed");
+        }
+        return "";
+      });
+
+      const { AutoUpdater } = await import("../../core/auto-updater.js");
+      const updater = new AutoUpdater(
+        mockConfig(),
+        mockRegistry(),
+        mockExecutor(),
+        {
+          installRoot: dir,
+          commandRunner,
+          globalNpmRootResolver: () => path.join(dir, "global"),
+        },
+      );
+
+      await expect(updater.performUpdate()).rejects.toThrow("npm install failed for strada-brain@latest");
+      // Verify package.json was restored
+      expect(fs.readFileSync(path.join(dir, "package.json"), "utf-8")).toBe(pkgContent);
+      // Verify node_modules/strada-brain was restored
+      expect(fs.existsSync(path.join(dir, "node_modules", "strada-brain"))).toBe(true);
+      expect(fs.readFileSync(path.join(dir, "node_modules", "strada-brain", "index.js"), "utf-8")).toBe("old");
+      // Verify backup files were cleaned up
+      expect(fs.existsSync(path.join(dir, ".strada-update-backup-package.json"))).toBe(false);
+    });
+
+    it("performs health check after npm update and rolls back on failure", async () => {
+      const dir = makeTmpDir();
+      fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name: "strada-brain", version: "1.0.0" }));
+      fs.writeFileSync(path.join(dir, "package-lock.json"), "{\"lockfileVersion\": 3}");
+      fs.mkdirSync(path.join(dir, "node_modules", "strada-brain"), { recursive: true });
+      fs.writeFileSync(path.join(dir, "node_modules", "strada-brain", "index.js"), "old");
+
+      const commandRunner = vi.fn(async (cmd: string, args: string[]) => {
+        if (cmd === "npm" && args[0] === "install" && args[1]?.startsWith("strada-brain@")) {
+          return "";
+        }
+        return "";
+      });
+      const healthChecker = vi.fn(async () => {
+        throw new Error("health check failed");
+      });
+      const notifyFn = vi.fn();
+
+      const { AutoUpdater } = await import("../../core/auto-updater.js");
+      const updater = new AutoUpdater(
+        mockConfig(),
+        mockRegistry(),
+        mockExecutor(),
+        {
+          installRoot: dir,
+          commandRunner,
+          globalNpmRootResolver: () => path.join(dir, "global"),
+          healthChecker,
+        },
+      );
+      updater.setNotifyFn(notifyFn);
+
+      await expect(updater.performUpdate()).rejects.toThrow("health check failed");
+      expect(notifyFn).toHaveBeenCalledWith(expect.stringContaining("health check failed"));
     });
   });
 
