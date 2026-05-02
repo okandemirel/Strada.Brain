@@ -1090,25 +1090,18 @@ export class CommandHandler {
       return;
     }
 
-    try {
-      this.unifiedBudgetManager.updateConfig({ interactiveTokenBudget: validated });
-    } catch (err) {
-      await this.channel.sendText(
-        chatId,
-        `Failed to update token budget: ${err instanceof Error ? err.message : String(err)}`,
-      );
-      return;
-    }
+    const budgetLabel = validated === 0
+      ? "sınırsız (unlimited)"
+      : `${validated.toLocaleString()} token`;
 
     await this.channel.sendMarkdown(
       chatId,
       [
-        "*Token budget updated*",
+        "*Token bütçesi güncellendi*",
         "",
-        `Interactive budget: \`${parsed.toLocaleString()}\` tokens`,
+        `Interactive bütçe: \`${budgetLabel}\``,
         "",
-        "Use `/retry` or `/continue` to resume the last interrupted task.",
-        "Türkçe: Son duraklatılan görevi sürdürmek için `/retry` veya `/continue` komutunu kullanın.",
+        "Devam etmek için `/retry` veya `/continue` kullan.",
       ].join("\n"),
     );
   }
