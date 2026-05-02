@@ -210,7 +210,7 @@ export default function ChatInput({ onSend, disabled }: ChatInputProps) {
     if (val.startsWith('/')) {
       const filter = val.slice(1).split(' ')[0] ?? ''
       setCommandFilter(filter)
-      setShowCommands(!val.includes(' '))
+      setShowCommands(true)
       setSelectedCommandIndex(0)
     } else {
       setShowCommands(false)
