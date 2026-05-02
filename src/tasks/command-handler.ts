@@ -359,8 +359,15 @@ export class CommandHandler {
       taskId = running.id;
     }
 
-    // Pause is a Phase 2 feature - acknowledge but don't implement yet
-    await this.channel.sendText(chatId, `Pause is not yet supported. Use /cancel ${taskId} to stop the task.`);
+    const success = this.taskManager.pauseTask(taskId);
+    if (success) {
+      await this.channel.sendText(chatId, `Task ${taskId} paused. Resuming automatically...`);
+      setTimeout(() => {
+        void this.taskManager.resumeTask(taskId!);
+      }, 500);
+    } else {
+      await this.channel.sendText(chatId, `Could not pause task ${taskId}. It may not be running.`);
+    }
   }
 
   private async handleResume(chatId: string, taskId?: TaskId): Promise<void> {
@@ -374,7 +381,12 @@ export class CommandHandler {
       taskId = paused.id;
     }
 
-    await this.channel.sendText(chatId, `Resume is not yet supported. Please start a new task.`);
+    const result = this.taskManager.resumeTask(taskId);
+    if (result) {
+      await this.channel.sendText(chatId, `Task ${taskId} resumed.`);
+    } else {
+      await this.channel.sendText(chatId, `Could not resume task ${taskId}. It may not be paused.`);
+    }
   }
 
   private async handleModel(chatId: string, args: string[], userId?: string): Promise<void> {

@@ -8,7 +8,7 @@
 
 import { EventEmitter } from "node:events";
 import type { Task, TaskId, TaskProgressUpdate } from "./types.js";
-import { TaskStatus, ACTIVE_STATUSES, TERMINAL_STATUSES, generateTaskId } from "./types.js";
+import { TaskStatus, ACTIVE_STATUSES, TERMINAL_STATUSES, generateTaskId, getTaskConversationKey } from "./types.js";
 import { getTaskProgressMessage, toTaskProgressSignal } from "./progress-signals.js";
 import type { TaskStorage } from "./task-storage.js";
 import type { IBackgroundExecutor, IOrchestrator } from "./orchestrator-contract.js";
@@ -21,9 +21,11 @@ import type { GoalStorage } from "../goals/goal-storage.js";
 import { prepareTreeForResume, prepareTreeForRetry } from "../goals/goal-resume.js";
 import { stripVisibleProviderArtifacts } from "../agents/orchestrator-text-utils.js";
 import type { MessageContent } from "../agents/providers/provider-core.interface.js";
+import type { PendingTaskCheckpoint, TaskCheckpointStore } from "./task-checkpoint-store.js";
 
 export class TaskManager extends EventEmitter {
   private readonly abortControllers = new Map<TaskId, AbortController>();
+  private checkpointStore?: TaskCheckpointStore;
 
   constructor(
     private readonly storage: TaskStorage,
@@ -32,6 +34,10 @@ export class TaskManager extends EventEmitter {
   ) {
     super();
     this.setMaxListeners(20);
+  }
+
+  setCheckpointStore(store: TaskCheckpointStore): void {
+    this.checkpointStore = store;
   }
 
   /**
@@ -133,6 +139,80 @@ export class TaskManager extends EventEmitter {
   }
 
   /**
+   * Pause a running task. The task is stopped in the executor but its
+   * state is preserved so it can be resumed later.
+   */
+  pauseTask(taskId: TaskId): boolean {
+    const task = this.storage.load(taskId);
+    if (!task || task.status !== TaskStatus.executing) {
+      return false;
+    }
+
+    const ac = this.abortControllers.get(taskId);
+    if (ac) {
+      ac.abort();
+      this.abortControllers.delete(taskId);
+    }
+
+    const conversationKey = getTaskConversationKey(
+      task.chatId,
+      task.channelType,
+      task.conversationId,
+    );
+    this.executor.pauseConversation(conversationKey);
+    this.storage.updateStatus(taskId, TaskStatus.paused);
+    this.emit("task:paused", taskId);
+
+    if (this.checkpointStore) {
+      const cp: PendingTaskCheckpoint = {
+        taskId,
+        chatId: task.chatId,
+        timestamp: Date.now(),
+        stage: "manual_pause",
+        lastUserMessage: task.prompt,
+        touchedFiles: [],
+        userId: task.userId,
+      };
+      void this.checkpointStore.save(cp);
+    }
+
+    getLogger().info("Task paused", { taskId });
+    return true;
+  }
+
+  /**
+   * Resume a paused task.
+   */
+  resumeTask(taskId: TaskId): Task | null {
+    const task = this.storage.load(taskId);
+    if (!task || task.status !== TaskStatus.paused) {
+      return null;
+    }
+
+    const conversationKey = getTaskConversationKey(
+      task.chatId,
+      task.channelType,
+      task.conversationId,
+    );
+    this.executor.resumeConversation(conversationKey);
+
+    if (task.goalRootId) {
+      return this.resumeGoalRoot(task.goalRootId);
+    }
+
+    return this.submit(task.chatId, task.channelType, this.buildReplayPrompt(task, "resume"), {
+      origin: task.origin ?? "user",
+      triggerName: task.triggerName,
+      conversationId: task.conversationId,
+      userId: task.userId,
+      orchestrator: task.orchestrator,
+      userContent: task.userContent,
+      attachments: task.attachments,
+      parentId: task.id,
+    });
+  }
+
+  /**
    * Get current status of a task.
    */
   getStatus(taskId: TaskId): Task | null {
@@ -150,28 +230,6 @@ export class TaskManager extends EventEmitter {
     }
 
     return this.submit(task.chatId, task.channelType, this.buildReplayPrompt(task, "retry"), {
-      origin: task.origin ?? "user",
-      triggerName: task.triggerName,
-      conversationId: task.conversationId,
-      userId: task.userId,
-      orchestrator: task.orchestrator,
-      userContent: task.userContent,
-      attachments: task.attachments,
-      parentId: task.id,
-    });
-  }
-
-  resumeTask(taskId: TaskId): Task | null {
-    const task = this.storage.load(taskId);
-    if (!task || ACTIVE_STATUSES.has(task.status) || task.status === TaskStatus.completed) {
-      return null;
-    }
-
-    if (task.goalRootId) {
-      return this.resumeGoalRoot(task.goalRootId);
-    }
-
-    return this.submit(task.chatId, task.channelType, this.buildReplayPrompt(task, "resume"), {
       origin: task.origin ?? "user",
       triggerName: task.triggerName,
       conversationId: task.conversationId,

@@ -942,6 +942,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     outerCheckpointStore = checkpointStore;
     orchestrator.setTaskCheckpointStore(checkpointStore);
     commandHandler.setTaskCheckpointStore(checkpointStore);
+    taskManager.setCheckpointStore(checkpointStore);
     // Wire the orchestrator into the command handler so /retry, /continue,
     // and implicit recovery intents can trigger real checkpoint replays
     // (not just metadata display). Safe late-binding setter — avoids the

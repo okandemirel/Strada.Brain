@@ -151,6 +151,7 @@ export interface BackgroundExecutorOptions {
 export class BackgroundExecutor {
   private readonly queue: QueueEntry[] = [];
   private readonly activeConversations = new Set<string>();
+  private readonly pausedConversations = new Set<string>();
   private running = 0;
   private taskManager: ITaskManager | null = null;
   private readonly orchestrator: IOrchestrator;
@@ -561,6 +562,30 @@ export class BackgroundExecutor {
     return this.running > 0 || this.queue.length > 0;
   }
 
+  /**
+   * Pause a conversation so its tasks are not picked up by processQueue.
+   * Running tasks continue until they naturally complete or abort.
+   */
+  pauseConversation(conversationKey: string): void {
+    this.pausedConversations.add(conversationKey);
+  }
+
+  /**
+   * Resume a previously paused conversation, allowing its queued tasks
+   * to be picked up again.
+   */
+  resumeConversation(conversationKey: string): void {
+    this.pausedConversations.delete(conversationKey);
+    this.processQueue();
+  }
+
+  /**
+   * Returns true if the conversation is currently paused.
+   */
+  isConversationPaused(conversationKey: string): boolean {
+    return this.pausedConversations.has(conversationKey);
+  }
+
   private static readonly MAX_QUEUE_SIZE = 100;
 
   /**
@@ -657,6 +682,9 @@ export class BackgroundExecutor {
         entry.task.channelType,
         entry.task.conversationId,
       );
+      if (this.pausedConversations.has(conversationKey)) {
+        continue;
+      }
       if (!this.activeConversations.has(conversationKey)) {
         if (entry.task.origin !== "daemon") {
           return index;

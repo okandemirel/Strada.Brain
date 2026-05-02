@@ -31,6 +31,9 @@ export interface ITaskManager {
 export interface IBackgroundExecutor {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   enqueue(task: any, signal: AbortSignal, onProgress: (message: any) => void): void;
+  pauseConversation(conversationKey: string): void;
+  resumeConversation(conversationKey: string): void;
+  isConversationPaused(conversationKey: string): boolean;
 }
 
 // ─── Orchestrator Interface ──────────────────────────────────────────────────
