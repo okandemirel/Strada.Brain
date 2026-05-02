@@ -10,7 +10,7 @@ interface BudgetStorage {
 function parseNum(s: string | undefined): number | undefined {
   if (s === undefined) return undefined;
   const n = parseFloat(s);
-  return Number.isFinite(n) && n >= 0 ? n : undefined;
+  return Number.isFinite(n) && n >= -1 ? n : undefined;  // -1 = unlimited
 }
 
 export class BudgetConfigStore {
@@ -67,7 +67,7 @@ export class BudgetConfigStore {
         !Number.isFinite(partial.interactiveTokenBudget) ||
         partial.interactiveTokenBudget < -1
       ) {
-        throw new Error("interactiveTokenBudget must be a finite number >= 0");
+        throw new Error("interactiveTokenBudget must be -1 (unlimited) or a finite number >= 0");
       }
       this.storage.setBudgetConfig("interactiveTokenBudget", String(partial.interactiveTokenBudget));
     }

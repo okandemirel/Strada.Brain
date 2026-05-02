@@ -1090,6 +1090,17 @@ export class CommandHandler {
       return;
     }
 
+    try {
+      this.unifiedBudgetManager.updateConfig({ interactiveTokenBudget: validated });
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      await this.channel.sendMarkdown(
+        chatId,
+        `⚠️ Budget update failed: ${reason}. Use \`/token <value>\` to retry.`,
+      );
+      return;
+    }
+
     const budgetLabel = validated === -1
       ? "sınırsız (unlimited)"
       : `${validated.toLocaleString()} token`;
