@@ -6,7 +6,7 @@ import {
   type CanvasNode,
   type CanvasEdge,
 } from '../../stores/vault-store';
-import { GraphCanvas } from './graph/GraphCanvas';
+import { VaultForceGraph } from './graph/VaultForceGraph';
 
 /**
  * Coerce unknown backend payload to a safe CanvasJson. Guards against malformed
@@ -32,6 +32,8 @@ function sanitizeCanvas(raw: unknown): CanvasJson {
       color: typeof n.color === 'string' ? n.color : undefined,
       file: typeof n.file === 'string' ? n.file : undefined,
       kind: typeof n.kind === 'string' ? n.kind : undefined,
+      weight: typeof n.weight === 'number' ? n.weight : undefined,
+      group: typeof n.group === 'string' ? n.group : undefined,
     });
   }
   const ids = new Set(nodes.map((n) => n.id));
@@ -120,5 +122,5 @@ export default function VaultGraphTab() {
     );
   }
 
-  return <GraphCanvas graph={graph} />;
+  return <VaultForceGraph canvas={graph} />;
 }

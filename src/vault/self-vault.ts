@@ -1,5 +1,6 @@
 import { readdir, lstat } from 'node:fs/promises';
 import { join, relative, extname, basename, sep as pathSep } from 'node:path';
+import { getLoggerSafe } from '../utils/logger.js';
 import { UnityProjectVault, type UnityVaultDeps } from './unity-project-vault.js';
 import { EXT_LANG } from './discovery.js';
 import type { VaultFile } from './vault.interface.js';
@@ -89,6 +90,58 @@ export class SelfVault extends UnityProjectVault {
     super(deps);
   }
 
+  /**
+   * Start a file watcher on the curated SELF_INCLUDE_ROOTS directories.
+   * Unlike UnityProjectVault which watches the entire rootPath, SelfVault
+   * only watches the source/test/doc directories that matter.
+   */
+  override async startWatch(debounceMs = 800): Promise<void> {
+    if (this.watcher) return;
+    const { VaultWatcher } = await import('./watcher.js');
+    // SelfVault watches multiple roots; we create one watcher per root
+    // and merge their updates through a shared emitter.
+    const watchers: Array<{ start(): Promise<void>; stop(): Promise<void> }> = [];
+    
+    for (const root of SELF_INCLUDE_ROOTS) {
+      const absRoot = join(this.rootPath, root);
+      const st = await lstat(absRoot).catch(() => null);
+      if (!st || st.isSymbolicLink()) continue;
+      
+      const watcher = new VaultWatcher({
+        root: absRoot,
+        debounceMs,
+        onBatch: async (paths) => {
+          // Convert absolute paths to vault-relative paths
+          const relPaths = paths.map((p) => relative(this.rootPath, p).replaceAll(pathSep, '/'));
+          const changed: string[] = [];
+          for (const p of relPaths) {
+            try {
+              if (await this.reindexFile(p)) changed.push(p);
+            } catch (err) {
+              getLoggerSafe().warn(`[vault ${this.id}] reindexFile failed for ${p}`, { err });
+            }
+          }
+          if (changed.length) {
+            await this.regenerateCanvas();
+            this.emitter.emit('update', { vaultId: this.id, changedPaths: changed });
+          }
+        },
+      });
+      watchers.push(watcher);
+    }
+    
+    // Composite watcher that starts/stops all underlying watchers
+    this.watcher = {
+      start: async () => {
+        await Promise.all(watchers.map((w) => w.start()));
+      },
+      stop: async () => {
+        await Promise.all(watchers.map((w) => w.stop()));
+      },
+    };
+    await this.watcher.start();
+  }
+
   // Override sync: use curated discovery roots (same as init) rather than Unity's file walker.
   override async sync(): Promise<{ changed: number; durationMs: number }> {
     const started = Date.now();
@@ -114,7 +167,11 @@ export class SelfVault extends UnityProjectVault {
     const before = new Set(this.store.listFiles().map((f) => f.path));
     const changed: string[] = [];
     for (const f of found) {
-      if (await this.reindexFile(f.path)) changed.push(f.path);
+      try {
+        if (await this.reindexFile(f.path)) changed.push(f.path);
+      } catch (err) {
+        getLoggerSafe().warn(`[vault ${this.id}] skipping ${f.path} during sync`, { err });
+      }
     }
     const present = new Set(found.map((f) => f.path));
     for (const p of before) {
@@ -166,7 +223,11 @@ export class SelfVault extends UnityProjectVault {
 
     const changed: string[] = [];
     for (const f of found) {
-      if (await this.reindexFile(f.path)) changed.push(f.path);
+      try {
+        if (await this.reindexFile(f.path)) changed.push(f.path);
+      } catch (err) {
+        getLoggerSafe().warn(`[vault ${this.id}] skipping ${f.path} during init`, { err });
+      }
     }
     await this.regenerateCanvas();
     if (changed.length) {

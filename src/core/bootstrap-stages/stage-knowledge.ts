@@ -174,8 +174,10 @@ export interface InitSelfVaultInput {
 }
 
 export async function initSelfVaultFromBootstrap(input: InitSelfVaultInput): Promise<void> {
-  if (!input.config.vault?.enabled) return;
-  if (input.config.vault.self?.enabled === false) return;  // explicit opt-out
+  // SelfVault is always initialized regardless of vault.enabled flag,
+  // because it indexes Strada.Brain's own source code which is always useful.
+  // Only explicit opt-out via self.enabled === false skips it.
+  if (input.config.vault?.self?.enabled === false) return;
   const vault = new SelfVault({
     id: "self:strada-brain",
     rootPath: input.repoRoot,

@@ -1260,7 +1260,7 @@ export const configSchema = z
 
     // Codebase Memory Vault
     vault: z.object({
-      enabled: z.coerce.boolean().default(false),
+      enabled: z.coerce.boolean().default(true),
       writeHookBudgetMs: z.coerce.number().int().positive().default(200),  // sync reindex p95 target
       debounceMs: z.coerce.number().int().positive().default(800),         // watcher drain interval
       embeddingFallback: z.enum(["none", "local"]).default("local"),

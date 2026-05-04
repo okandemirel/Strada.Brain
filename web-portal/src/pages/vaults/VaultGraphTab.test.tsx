@@ -2,34 +2,17 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import { useVaultStore } from '../../stores/vault-store';
 
-// Mock @xyflow/react: jsdom has no canvas/SVG layout engine. The mock renders
-// labels as plain divs so `renders node labels` can assert on node text without
-// crashing. Additional symbols (MiniMap, ReactFlowProvider, BaseEdge, Handle, …)
-// are stubbed either as no-op components or passthroughs so module-level imports
-// in GraphNode/GraphEdge/GraphMiniMap don't break. Custom nodeTypes/edgeTypes
-// are never invoked in tests because the mocked ReactFlow doesn't call them.
-interface MockFlowNode { id: string; data?: { label?: string } }
-vi.mock('@xyflow/react', () => ({
-  ReactFlow: ({ nodes, edges, children }: { nodes: MockFlowNode[]; edges: unknown[]; children?: React.ReactNode }) => (
-    <div data-testid="reactflow">
-      <span data-testid="node-count">{nodes.length}</span>
-      <span data-testid="edge-count">{edges.length}</span>
-      {nodes.map((n) => (
-        <div key={n.id} data-testid={`node-${n.id}`}>{n.data?.label}</div>
+// Mock react-force-graph-2d: jsdom has no canvas support. The mock renders
+// a simple div so tests can assert on presence without crashing.
+vi.mock('react-force-graph-2d', () => ({
+  default: ({ graphData }: { graphData: { nodes: Array<{ id: string; label: string }> } }) => (
+    <div data-testid="force-graph">
+      <span data-testid="node-count">{graphData.nodes.length}</span>
+      {graphData.nodes.map((n) => (
+        <div key={n.id} data-testid={`node-${n.id}`}>{n.label}</div>
       ))}
-      {children}
     </div>
   ),
-  ReactFlowProvider: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
-  Background: () => <div data-testid="background" />,
-  BackgroundVariant: { Dots: 'dots', Lines: 'lines', Cross: 'cross' },
-  Controls: () => <div data-testid="controls" />,
-  MiniMap: () => <div data-testid="minimap" />,
-  BaseEdge: () => null,
-  EdgeLabelRenderer: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
-  Handle: () => null,
-  Position: { Top: 'top', Right: 'right', Bottom: 'bottom', Left: 'left' },
-  getSmoothStepPath: () => ['M0,0', 0, 0],
 }));
 
 import VaultGraphTab from './VaultGraphTab';

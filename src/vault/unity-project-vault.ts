@@ -64,7 +64,7 @@ export class UnityProjectVault implements IVault {
   protected adapter: EmbeddingAdapter;
   protected emitter = new EventEmitter();
   protected dbPath: string;
-  private watcher: IVaultWatcher | null = null;
+  protected watcher: IVaultWatcher | null = null;
 
   constructor(deps: UnityVaultDeps) {
     this.id = deps.id;

@@ -12,6 +12,8 @@ export interface CanvasNode {
   color?: string;
   file?: string;
   kind?: string;
+  weight?: number;      // 0-1 normalized connection count
+  group?: string;       // folder path or category
 }
 
 export interface CanvasEdge {
@@ -88,6 +90,9 @@ function buildSymbolGraph(
 ): Canvas {
   const byId = new Map(symbols.map((s) => [s.symbolId, s]));
   
+  // Calculate max connections for normalization
+  const maxConnections = Math.max(1, ...connectionCounts.values());
+  
   // Group by file for initial positioning
   const byFile = new Map<string, VaultSymbol[]>();
   for (const s of symbols) {
@@ -104,11 +109,13 @@ function buildSymbolGraph(
     const file = files[col]!;
     const syms = byFile.get(file)!.slice().sort((a, b) => a.startLine - b.startLine);
     const color = LANG_COLORS[syms[0]?.kind ?? 'unknown'] ?? LANG_COLORS.unknown;
+    const group = file.split('/').slice(0, 2).join('/'); // e.g., "src/agents"
     
     for (let row = 0; row < syms.length; row++) {
       const s = syms[row]!;
       const connections = connectionCounts.get(s.symbolId) ?? 0;
       const size = nodeSize(connections);
+      const weight = connections / maxConnections;
       
       nodes.push({
         id: s.symbolId,
@@ -121,6 +128,8 @@ function buildSymbolGraph(
         color,
         file,
         kind: s.kind,
+        weight,
+        group,
       });
     }
   }
@@ -147,6 +156,9 @@ function buildFileGraph(
   // Create nodes from files
   const nodes: CanvasNode[] = [];
 
+  // Calculate max connections for normalization
+  const maxConnections = Math.max(1, ...connectionCounts.values());
+
   // Group files by directory for color coding
   const dirColors = new Map<string, string>();
   let colorIdx = 0;
@@ -166,6 +178,8 @@ function buildFileGraph(
     const size = nodeSize(connections);
     const dir = f.path.split('/').slice(0, -1).join('/') || '/';
     const color = LANG_COLORS[f.lang] ?? getDirColor(dir);
+    const weight = connections / maxConnections;
+    const group = dir;
 
     nodes.push({
       id: f.path,
@@ -178,6 +192,8 @@ function buildFileGraph(
       color,
       file: f.path,
       kind: f.lang,
+      weight,
+      group,
     });
   }
 
