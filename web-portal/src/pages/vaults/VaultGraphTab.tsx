@@ -1,11 +1,15 @@
-import { useEffect } from 'react';
+import { useEffect, Suspense, lazy } from 'react';
 import {
   useVaultStore,
   type CanvasJson,
   type CanvasNode,
   type CanvasEdge,
 } from '../../stores/vault-store';
-import { VaultForceGraph } from './graph/VaultForceGraph';
+
+// GraphCanvas pulls in @xyflow/react + d3-force; defer to keep initial bundle lean.
+const GraphCanvas = lazy(() =>
+  import('./graph/GraphCanvas').then((m) => ({ default: m.GraphCanvas })),
+);
 
 function sanitizeCanvas(raw: unknown): CanvasJson {
   const src = (raw ?? {}) as Partial<CanvasJson>;
@@ -45,12 +49,23 @@ export default function VaultGraphTab() {
       .then((r) => r.json())
       .then((j) => setGraph(selected, sanitizeCanvas(j)))
       .catch(() => setGraph(selected, { nodes: [], edges: [] }));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected]);
+  }, [selected, graph, setGraph]);
 
-  if (!graph?.nodes.length) {
-    return <div className="p-4 text-sm text-muted-foreground">Vault seçiniz</div>;
+  if (!graph) {
+    return <div className="p-4 text-sm text-muted-foreground">Yükleniyor...</div>;
   }
 
-  return <VaultForceGraph canvas={graph} />;
+  if (graph.nodes.length === 0) {
+    return <div className="p-4 text-sm text-muted-foreground">Graf verisi yok</div>;
+  }
+
+  return (
+    <Suspense
+      fallback={
+        <div className="p-4 text-sm text-muted-foreground">Graf yükleniyor...</div>
+      }
+    >
+      <GraphCanvas graph={graph} />
+    </Suspense>
+  );
 }

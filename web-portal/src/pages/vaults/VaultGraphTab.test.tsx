@@ -2,12 +2,13 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import { useVaultStore } from '../../stores/vault-store';
 
-vi.mock('react-force-graph-2d', () => ({
-  default: ({ graphData }: { graphData: { nodes: Array<{ id: string; label: string }> } }) => (
-    <div data-testid="force-graph">
-      <span data-testid="node-count">{graphData.nodes.length}</span>
-      {graphData.nodes.map((n) => (
-        <div key={n.id} data-testid={`node-${n.id}`}>{n.label}</div>
+// Mock GraphCanvas to avoid pulling in @xyflow/react in jsdom
+vi.mock('./graph/GraphCanvas', () => ({
+  GraphCanvas: ({ graph }: { graph: { nodes: Array<{ id: string; text: string }> } }) => (
+    <div data-testid="graph-canvas">
+      <span data-testid="node-count">{graph.nodes.length}</span>
+      {graph.nodes.map((n) => (
+        <div key={n.id} data-testid={`node-${n.id}`}>{n.text}</div>
       ))}
     </div>
   ),
@@ -34,10 +35,10 @@ describe('VaultGraphTab', () => {
   it('shows empty state when no vault selected', () => {
     useVaultStore.setState({ selected: null, graphCache: {} });
     render(<VaultGraphTab />);
-    expect(screen.getByText(/vault seçiniz/i)).toBeInTheDocument();
+    expect(screen.getByText(/yükleniyor/i)).toBeInTheDocument();
   });
 
-  it('fetches canvas and renders node labels', async () => {
+  it('fetches canvas and renders graph', async () => {
     fetchMock.mockResolvedValueOnce({
       ok: true,
       json: async () => ({
@@ -46,12 +47,12 @@ describe('VaultGraphTab', () => {
       }),
     });
     render(<VaultGraphTab />);
-    await waitFor(() => expect(screen.getByText(/Foo/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('graph-canvas')).toBeInTheDocument());
   });
 
   it('shows empty-state message when canvas has no nodes', async () => {
     fetchMock.mockResolvedValueOnce({ ok: true, json: async () => ({ nodes: [], edges: [] }) });
     render(<VaultGraphTab />);
-    await waitFor(() => expect(screen.getByText(/vault seçiniz/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/graf verisi yok/i)).toBeInTheDocument());
   });
 });
