@@ -1,9 +1,5 @@
 import { useState, useMemo, useCallback } from 'react';
-
-interface GraphLink {
-  source: string | { id: string };
-  target: string | { id: string };
-}
+import type { GraphLink } from './graph-types';
 
 interface UseGraphInteractionsOptions {
   links: GraphLink[];

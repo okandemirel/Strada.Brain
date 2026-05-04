@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ForceGraph2D from 'react-force-graph-2d';
 import type { ForceGraphMethods } from 'react-force-graph-2d';
 
@@ -9,26 +9,12 @@ import {
 import { useGraphInteractions, extractNodeId } from './useGraphInteractions';
 import { parseNodeText } from './node-style';
 import { GraphNodeOverlay } from './GraphNodeOverlay';
+import { GraphNodeTooltip } from './GraphNodeTooltip';
+import type { GraphNode, GraphLink } from './graph-types';
 
 interface Props {
   graph: CanvasJson;
 }
-
-interface GraphNode {
-  id: string;
-  label: string;
-  kind: string | null;
-  color: string;
-  val: number;
-  file: string | null;
-  line: number | null;
-  x?: number;
-  y?: number;
-}
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type GraphLink = any;
-
 
 const FOLDER_PALETTE = [
   '#8B7AB8', '#5B8DB8', '#7AB88B', '#B8A87A', '#B87A9B', '#888888',
@@ -40,6 +26,8 @@ function buildGraphData(
   showOrphans: boolean,
   groupBy: 'lang' | 'folder',
   nodeSizeMode: 'connections' | 'uniform',
+  localGraphMode: boolean,
+  localGraphCenter: string | null,
 ) {
   const connectionCounts = new Map<string, number>();
   for (const e of graph.edges) {
@@ -87,6 +75,24 @@ function buildGraphData(
       target: e.toNode,
       label: e.label,
     }));
+
+  if (localGraphMode && localGraphCenter) {
+    const neighborIds = new Set<string>([localGraphCenter]);
+    for (const link of links) {
+      const s = extractNodeId(link.source);
+      const t = extractNodeId(link.target);
+      if (s === localGraphCenter) neighborIds.add(t);
+      if (t === localGraphCenter) neighborIds.add(s);
+    }
+    const filteredNodes = nodes.filter((n) => neighborIds.has(n.id));
+    const filteredNodeIds = new Set(filteredNodes.map((n) => n.id));
+    const filteredLinks = links.filter((l) => {
+      const s = extractNodeId(l.source);
+      const t = extractNodeId(l.target);
+      return filteredNodeIds.has(s) && filteredNodeIds.has(t);
+    });
+    return { nodes: filteredNodes, links: filteredLinks, connectionCounts };
+  }
 
   return { nodes, links, connectionCounts };
 }
@@ -151,7 +157,7 @@ function drawNodeLabel(
   globalScale: number,
   opacity: number,
 ) {
-  const fontSize = Math.max(10 / globalScale, 5);
+  const fontSize = Math.max(12 / globalScale, 6);
   ctx.font = `400 ${fontSize}px -apple-system, BlinkMacSystemFont, system-ui, sans-serif`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
@@ -180,17 +186,24 @@ export default function GraphCanvas({ graph }: Props) {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const fgRef = useRef<ForceGraphMethods<any, any> | undefined>(undefined);
+  const containerRef = useRef<HTMLDivElement>(null);
+
   const [searchQuery, setSearchQuery] = useState('');
   const [showSettings, setShowSettings] = useState(false);
   const [showOrphans, setShowOrphans] = useState(true);
   const [groupBy, setGroupBy] = useState<'lang' | 'folder'>('lang');
   const [nodeSizeMode, setNodeSizeMode] = useState<'connections' | 'uniform'>('connections');
+  const [localGraphMode, setLocalGraphMode] = useState(false);
+  const [localGraphCenter, setLocalGraphCenter] = useState<string | null>(null);
+  const [tooltipNode, setTooltipNode] = useState<GraphNode | null>(null);
+  const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
+  const lastClickRef = useRef<{ nodeId: string; time: number } | null>(null);
 
   const searchLower = searchQuery.trim().toLowerCase();
 
   const { nodes, links, connectionCounts } = useMemo(
-    () => buildGraphData(graph, showOrphans, groupBy, nodeSizeMode),
-    [graph, showOrphans, groupBy, nodeSizeMode],
+    () => buildGraphData(graph, showOrphans, groupBy, nodeSizeMode, localGraphMode, localGraphCenter),
+    [graph, showOrphans, groupBy, nodeSizeMode, localGraphMode, localGraphCenter],
   );
 
   const matchingIds = useMemo(() => {
@@ -201,6 +214,47 @@ export default function GraphCanvas({ graph }: Props) {
   }, [nodes, searchLower]);
 
   const interactions = useGraphInteractions({ links });
+
+  // Physics tuning
+  useEffect(() => {
+    const fg = fgRef.current;
+    if (!fg) return;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const linkForce = fg.d3Force('link') as any;
+    if (linkForce && typeof linkForce.distance === 'function') {
+      linkForce.distance(100);
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const chargeForce = fg.d3Force('charge') as any;
+    if (chargeForce && typeof chargeForce.strength === 'function') {
+      chargeForce.strength(-100);
+    }
+    fg.d3ReheatSimulation();
+  }, [nodes, links]);
+
+  // Escape to exit local graph mode
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && localGraphMode) {
+        setLocalGraphMode(false);
+        setLocalGraphCenter(null);
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [localGraphMode]);
+
+  // Track mouse position for tooltip
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const handler = (e: MouseEvent) => {
+      const rect = el.getBoundingClientRect();
+      setMousePos({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+    };
+    el.addEventListener('mousemove', handler);
+    return () => el.removeEventListener('mousemove', handler);
+  }, []);
 
   const nodeCanvasObject = useCallback(
     (node: GraphNode, ctx: CanvasRenderingContext2D, globalScale: number) => {
@@ -229,7 +283,7 @@ export default function GraphCanvas({ graph }: Props) {
       }
 
       const showLabel = globalScale > 0.5 || baseRadius > 6;
-      if (showLabel && highlighted) {
+      if (showLabel) {
         drawNodeLabel(ctx, node, x, y, baseRadius, globalScale, opacity);
       }
 
@@ -240,6 +294,15 @@ export default function GraphCanvas({ graph }: Props) {
 
   const handleNodeClick = useCallback(
     (node: GraphNode) => {
+      const now = Date.now();
+      if (lastClickRef.current?.nodeId === node.id && now - lastClickRef.current.time < 300) {
+        // Double-click detected
+        setLocalGraphMode(true);
+        setLocalGraphCenter(node.id);
+        lastClickRef.current = null;
+        return;
+      }
+      lastClickRef.current = { nodeId: node.id, time: now };
       setSelectedSymbol(node.id);
     },
     [setSelectedSymbol],
@@ -280,7 +343,7 @@ export default function GraphCanvas({ graph }: Props) {
   const isolatedCount = Math.max(0, nodes.length - connectionCounts.size);
 
   return (
-    <div className="h-full w-full relative" style={{ background: '#0d0d0d' }} data-testid="graph-canvas">
+    <div ref={containerRef} className="h-full w-full relative" style={{ background: '#0d0d0d' }} data-testid="graph-canvas">
       {/* Search bar — top left */}
       <div className="absolute top-4 left-4 z-10 flex items-center gap-2">
         <div className="relative">
@@ -343,6 +406,34 @@ export default function GraphCanvas({ graph }: Props) {
                 />
                 <span className="text-[11px] text-white/50">Show orphan nodes</span>
               </label>
+
+              {/* Local graph toggle */}
+              <button
+                type="button"
+                onClick={() => {
+                  if (localGraphMode) {
+                    setLocalGraphMode(false);
+                    setLocalGraphCenter(null);
+                  } else if (selectedSymbolId) {
+                    setLocalGraphMode(true);
+                    setLocalGraphCenter(selectedSymbolId);
+                  }
+                }}
+                disabled={!localGraphMode && !selectedSymbolId}
+                className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-md transition-colors text-left
+                  ${localGraphMode || selectedSymbolId
+                    ? 'hover:bg-white/5 cursor-pointer'
+                    : 'opacity-40 cursor-not-allowed'
+                  }`}
+              >
+                <span className={`w-3 h-3 rounded-full border border-white/20 flex items-center justify-center
+                  ${localGraphMode ? 'bg-white/20' : 'bg-transparent'}`}>
+                  {localGraphMode && <span className="w-1.5 h-1.5 rounded-full bg-white/70" />}
+                </span>
+                <span className="text-[11px] text-white/50">
+                  {localGraphMode ? 'Full Graph' : 'Local Graph'}
+                </span>
+              </button>
 
               {/* Group by */}
               <div className="px-2 py-1">
@@ -409,7 +500,8 @@ export default function GraphCanvas({ graph }: Props) {
       {/* Force Graph */}
       <ForceGraph2D
         ref={fgRef}
-        graphData={{ nodes, links }}
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        graphData={{ nodes, links: links as any[] }}
         backgroundColor="transparent"
         warmupTicks={60}
         cooldownTicks={30}
@@ -422,10 +514,13 @@ export default function GraphCanvas({ graph }: Props) {
         linkDirectionalArrowLength={3}
         linkDirectionalArrowRelPos={1}
         linkDirectionalArrowColor={() => 'rgba(51,51,51,0.3)'}
-        onNodeHover={(node) =>
-          interactions.setHoverNode(node ? (node as GraphNode).id : null)
-        }
+        onNodeHover={(node) => {
+          const n = node ? (node as GraphNode) : null;
+          interactions.setHoverNode(n?.id ?? null);
+          setTooltipNode(n);
+        }}
         onNodeClick={(node) => handleNodeClick(node as GraphNode)}
+
         onBackgroundClick={handleBackgroundClick}
         enableNodeDrag={true}
         enableZoomInteraction={true}
@@ -442,6 +537,7 @@ export default function GraphCanvas({ graph }: Props) {
           </div>
           {fileCount > 0 && <div>{fileCount} files</div>}
           {isolatedCount > 0 && <div>{isolatedCount} isolated</div>}
+          {localGraphMode && <div className="text-white/50">Local view</div>}
         </div>
       </div>
 
@@ -457,6 +553,16 @@ export default function GraphCanvas({ graph }: Props) {
           Fit
         </button>
       </div>
+
+      {/* Node tooltip */}
+      {tooltipNode && (
+        <GraphNodeTooltip
+          node={tooltipNode}
+          x={mousePos.x}
+          y={mousePos.y}
+          connectionCount={connectionCounts.get(tooltipNode.id) ?? 0}
+        />
+      )}
 
       {/* Node detail overlay */}
       <GraphNodeOverlay nodeId={selectedSymbolId} onClose={handleBackgroundClick} />

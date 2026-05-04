@@ -1,6 +1,6 @@
 import { useEffect, useReducer } from 'react';
 import { useTranslation } from 'react-i18next';
-import { X, FileCode, ExternalLink, ArrowLeft } from 'lucide-react';
+import { X, FileCode, ExternalLink, ArrowLeft, Link2 } from 'lucide-react';
 import { useVaultStore } from '../../../stores/vault-store';
 
 interface VaultEdgeResponseItem {
@@ -10,6 +10,10 @@ interface VaultEdgeResponseItem {
   atLine: number;
 }
 
+interface BacklinkItem {
+  fromNote: string;
+}
+
 interface Props {
   nodeId: string | null;
   onClose: () => void;
@@ -17,23 +21,39 @@ interface Props {
 
 type State = {
   callers: VaultEdgeResponseItem[] | null;
-  loading: boolean;
-  error: boolean;
+  backlinks: BacklinkItem[] | null;
+  loadingCallers: boolean;
+  loadingBacklinks: boolean;
+  errorCallers: boolean;
+  errorBacklinks: boolean;
 };
 
 type Action =
   | { type: 'reset'; loading: boolean }
-  | { type: 'success'; callers: VaultEdgeResponseItem[] }
-  | { type: 'error' };
+  | { type: 'callersSuccess'; callers: VaultEdgeResponseItem[] }
+  | { type: 'callersError' }
+  | { type: 'backlinksSuccess'; backlinks: BacklinkItem[] }
+  | { type: 'backlinksError' };
 
 function reducer(state: State, action: Action): State {
   switch (action.type) {
     case 'reset':
-      return { callers: null, loading: action.loading, error: false };
-    case 'success':
-      return { callers: action.callers, loading: false, error: false };
-    case 'error':
-      return { callers: [], loading: false, error: true };
+      return {
+        callers: null,
+        backlinks: null,
+        loadingCallers: action.loading,
+        loadingBacklinks: action.loading,
+        errorCallers: false,
+        errorBacklinks: false,
+      };
+    case 'callersSuccess':
+      return { ...state, callers: action.callers, loadingCallers: false, errorCallers: false };
+    case 'callersError':
+      return { ...state, callers: [], loadingCallers: false, errorCallers: true };
+    case 'backlinksSuccess':
+      return { ...state, backlinks: action.backlinks, loadingBacklinks: false, errorBacklinks: false };
+    case 'backlinksError':
+      return { ...state, backlinks: [], loadingBacklinks: false, errorBacklinks: true };
     default:
       return state;
   }
@@ -47,30 +67,59 @@ export function GraphNodeOverlay({ nodeId, onClose }: Props) {
   const setSelectedSymbol = useVaultStore((s) => s.setSelectedSymbol);
   const [state, dispatch] = useReducer(reducer, {
     callers: null,
-    loading: false,
-    error: false,
+    backlinks: null,
+    loadingCallers: false,
+    loadingBacklinks: false,
+    errorCallers: false,
+    errorBacklinks: false,
   });
 
   useEffect(() => {
     dispatch({ type: 'reset', loading: Boolean(nodeId && vaultId) });
     if (!nodeId || !vaultId) return;
+
     const ctrl = new AbortController();
+
+    // Fetch callers
     fetch(
       `/api/vaults/${encodeURIComponent(vaultId)}/symbols/${encodeURIComponent(nodeId)}/callers`,
       { signal: ctrl.signal },
     )
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then((j: { items?: VaultEdgeResponseItem[] }) => {
-        dispatch({ type: 'success', callers: j.items ?? [] });
+        dispatch({ type: 'callersSuccess', callers: j.items ?? [] });
       })
       .catch((err) => {
         if ((err as Error).name === 'AbortError') return;
-        dispatch({ type: 'error' });
+        dispatch({ type: 'callersError' });
       });
+
+    // Fetch backlinks (wikilinks)
+    fetch(
+      `/api/vaults/${encodeURIComponent(vaultId)}/notes/${encodeURIComponent(nodeId)}/backlinks`,
+      { signal: ctrl.signal },
+    )
+      .then((r) => {
+        if (r.status === 404) {
+          // Endpoint not ready yet — graceful fallback
+          dispatch({ type: 'backlinksSuccess', backlinks: [] });
+          return null;
+        }
+        return r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`));
+      })
+      .then((j: { items?: BacklinkItem[] } | null) => {
+        if (j) {
+          dispatch({ type: 'backlinksSuccess', backlinks: j.items ?? [] });
+        }
+      })
+      .catch((err) => {
+        if ((err as Error).name === 'AbortError') return;
+        dispatch({ type: 'backlinksError' });
+      });
+
     return () => ctrl.abort();
   }, [nodeId, vaultId]);
 
-  // Parse nodeId as file path for display
   const fileName = nodeId ? nodeId.split('/').pop() ?? nodeId : '';
   const filePath = nodeId ?? '';
 
@@ -85,6 +134,10 @@ export function GraphNodeOverlay({ nodeId, onClose }: Props) {
   const handleClose = () => {
     setSelectedSymbol(null);
     onClose();
+  };
+
+  const handleSelectBacklink = (fromNote: string) => {
+    setSelectedSymbol(fromNote);
   };
 
   const isOpen = Boolean(nodeId);
@@ -142,39 +195,72 @@ export function GraphNodeOverlay({ nodeId, onClose }: Props) {
               </button>
             </div>
 
-            {/* Backlinks / Callers */}
-            <div className="flex-1 overflow-y-auto px-4 py-3">
-              <div className="text-[10px] uppercase tracking-wider text-white/20 mb-2">
-                {t('detail.incoming')}
-              </div>
+            {/* Scrollable content */}
+            <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4">
+              {/* Incoming / Callers */}
+              <section>
+                <div className="text-[10px] uppercase tracking-wider text-white/20 mb-2">
+                  {t('detail.incoming')}
+                </div>
 
-              {state.loading ? (
-                <div className="text-xs text-white/30 animate-pulse">…</div>
-              ) : state.error ? (
-                <div className="text-xs text-red-400/70">{t('detail.loadError')}</div>
-              ) : !state.callers || state.callers.length === 0 ? (
-                <div className="text-xs text-white/20">{t('detail.noIncoming')}</div>
-              ) : (
-                <ul className="space-y-1.5">
-                  {state.callers.map((edge) => (
-                    <li
-                      key={`${edge.fromSymbol}:${edge.kind}:${edge.atLine}`}
-                      className="flex items-start gap-1.5 text-xs group"
-                    >
-                      <ArrowLeft className="w-3 h-3 text-white/20 flex-shrink-0 mt-0.5 group-hover:text-white/40 transition-colors" />
-                      <div className="min-w-0">
-                        <span className="text-white/40 font-medium">{edge.kind}</span>{' '}
-                        <span className="text-white/60 font-mono truncate block">
-                          {edge.fromSymbol}
-                        </span>
-                        <span className="text-white/20 font-mono text-[10px]">
-                          :{edge.atLine}
-                        </span>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              )}
+                {state.loadingCallers ? (
+                  <div className="text-xs text-white/30 animate-pulse">…</div>
+                ) : state.errorCallers ? (
+                  <div className="text-xs text-red-400/70">{t('detail.loadError')}</div>
+                ) : !state.callers || state.callers.length === 0 ? (
+                  <div className="text-xs text-white/20">{t('detail.noIncoming')}</div>
+                ) : (
+                  <ul className="space-y-1.5">
+                    {state.callers.map((edge) => (
+                      <li
+                        key={`${edge.fromSymbol}:${edge.kind}:${edge.atLine}`}
+                        className="flex items-start gap-1.5 text-xs group"
+                      >
+                        <ArrowLeft className="w-3 h-3 text-white/20 flex-shrink-0 mt-0.5 group-hover:text-white/40 transition-colors" />
+                        <div className="min-w-0">
+                          <span className="text-white/40 font-medium">{edge.kind}</span>{' '}
+                          <span className="text-white/60 font-mono truncate block">
+                            {edge.fromSymbol}
+                          </span>
+                          <span className="text-white/20 font-mono text-[10px]">
+                            :{edge.atLine}
+                          </span>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </section>
+
+              {/* Backlinks (wikilinks) */}
+              <section>
+                <div className="text-[10px] uppercase tracking-wider text-white/20 mb-2">
+                  Backlinks
+                </div>
+
+                {state.loadingBacklinks ? (
+                  <div className="text-xs text-white/30 animate-pulse">…</div>
+                ) : state.errorBacklinks ? (
+                  <div className="text-xs text-red-400/70">{t('detail.loadError')}</div>
+                ) : !state.backlinks || state.backlinks.length === 0 ? (
+                  <div className="text-xs text-white/20">No backlinks</div>
+                ) : (
+                  <ul className="space-y-1.5">
+                    {state.backlinks.map((bl) => (
+                      <li key={bl.fromNote} className="flex items-start gap-1.5 text-xs group">
+                        <Link2 className="w-3 h-3 text-white/20 flex-shrink-0 mt-0.5 group-hover:text-white/40 transition-colors" />
+                        <button
+                          type="button"
+                          onClick={() => handleSelectBacklink(bl.fromNote)}
+                          className="text-white/60 hover:text-white/90 font-mono truncate text-left transition-colors"
+                        >
+                          {bl.fromNote}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </section>
             </div>
           </>
         )}
