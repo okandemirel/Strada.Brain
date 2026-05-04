@@ -241,6 +241,14 @@ export function registerVaultRoutes(app: RouteApp, registry: VaultRegistry, fact
     const items = (await v.findCallers?.(sid)) ?? [];
     return { items };
   });
+
+  app.get('/api/vaults/:id/notes/:path/backlinks', async (req) => {
+    const v = registry.get(req.params.id);
+    if (!v) return { error: 'not found' };
+    const notePath = String(req.params.path ?? '');
+    if (isUnsafePath(notePath)) return { error: 'invalid path' };
+    return (await v.listBacklinks?.(notePath)) ?? { wikilinks: [], callers: [] };
+  });
 }
 
 /**
@@ -401,6 +409,19 @@ export function handleVaultRoutes(
     void Promise.resolve(vv.findCallers?.(sid) ?? [])
       .then((items) => sendJson(res, { items }))
       .catch(() => sendJsonError(res, 500, 'callers failed'));
+    return true;
+  }
+
+  // Wikilink backlinks: /api/vaults/:id/notes/:path/backlinks
+  const backlinksMatch = pathOnly.match(/^\/api\/vaults\/([^/]+)\/notes\/(.+)\/backlinks$/);
+  if (backlinksMatch && method === 'GET') {
+    const vv = registry.get(decodeURIComponent(backlinksMatch[1]!));
+    if (!vv) { sendJsonError(res, 404, 'vault not found'); return true; }
+    const notePath = decodeURIComponent(backlinksMatch[2]!);
+    if (isUnsafePath(notePath)) { sendJsonError(res, 400, 'invalid path'); return true; }
+    void Promise.resolve(vv.listBacklinks?.(notePath) ?? { wikilinks: [], callers: [] })
+      .then((result) => sendJson(res, result))
+      .catch(() => sendJsonError(res, 500, 'backlinks failed'));
     return true;
   }
 

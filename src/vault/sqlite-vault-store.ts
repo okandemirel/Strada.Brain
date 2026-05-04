@@ -42,6 +42,7 @@ export class SqliteVaultStore {
   private _stmtListWikilinksAll: Database.Statement | null = null;
   private _stmtListWikilinksTo: Database.Statement | null = null;
   private _stmtMarkWikilinkResolved: Database.Statement | null = null;
+  private _stmtDeleteWikilink: Database.Statement | null = null;
   private _stmtDeleteWikilinksFromNote: Database.Statement | null = null;
   private _stmtUpsertEmbedding: Database.Statement | null = null;
   private _stmtListHnswIdsForPath: Database.Statement | null = null;
@@ -129,6 +130,7 @@ export class SqliteVaultStore {
     this._stmtListWikilinksAll = this.db.prepare('SELECT * FROM vault_wikilinks');
     this._stmtListWikilinksTo = this.db.prepare('SELECT * FROM vault_wikilinks WHERE target = ?');
     this._stmtMarkWikilinkResolved = this.db.prepare('UPDATE vault_wikilinks SET resolved = 1 WHERE from_note = ? AND target = ?');
+    this._stmtDeleteWikilink = this.db.prepare('DELETE FROM vault_wikilinks WHERE from_note = ? AND target = ?');
     this._stmtDeleteWikilinksFromNote = this.db.prepare('DELETE FROM vault_wikilinks WHERE from_note = ?');
     this._stmtUpsertEmbedding = this.db.prepare(`
       INSERT INTO vault_embeddings (chunk_id, hnsw_id, dim, model)
@@ -298,6 +300,14 @@ export class SqliteVaultStore {
 
   markWikilinkResolved(fromNote: string, target: string): void {
     this._stmtMarkWikilinkResolved!.run(fromNote, target);
+  }
+
+  updateWikilinkTarget(fromNote: string, oldTarget: string, newTarget: string): void {
+    const txn = this.db.transaction(() => {
+      this._stmtDeleteWikilink!.run(fromNote, oldTarget);
+      this._stmtUpsertWikilink!.run({ fromNote, target: newTarget, resolved: 1 });
+    });
+    txn();
   }
 
   private mapSymbol = (row: Record<string, unknown>): VaultSymbol => ({

@@ -33,6 +33,12 @@ export interface VaultQuery {
   budgetTokens?: number;
   /** Vault-relative paths whose symbols seed Personalized PageRank re-ranking. */
   focusFiles?: string[];
+  /** Include only notes that have ALL of these tags (e.g. ['#architecture']). */
+  tagFilter?: string[];
+  /** Include only notes whose frontmatter contains ALL key/value pairs. */
+  frontmatterFilter?: Record<string, string>;
+  /** If set, return only the center note and its 1-degree neighbours (local graph). */
+  localGraphCenter?: string;
 }
 
 export interface VaultQueryResult {
@@ -73,6 +79,8 @@ export interface VaultWikilink {
   fromNote: string;
   target: string;
   resolved: boolean;
+  /** Populated after wikilink resolution — the actual vault-relative path the target resolves to. */
+  resolvedTarget?: string;
 }
 
 export interface IVault {
@@ -90,6 +98,10 @@ export interface IVault {
   onUpdate(listener: (p: { vaultId: VaultId; changedPaths: string[] }) => void): () => void;
   findCallers?(symbolId: string): Promise<VaultEdge[]>;
   findSymbolsByName?(name: string, limit?: number): Promise<VaultSymbol[]>;
+  /** Return wikilinks that point TO the given note path (bidirectional linking). */
+  findBacklinks?(path: string): Promise<VaultWikilink[]>;
+  /** Return bidirectional links: wikilinks pointing to path + code callers of its symbols. */
+  listBacklinks?(path: string): Promise<{ wikilinks: VaultWikilink[]; callers: VaultEdge[] }>;
   readCanvas?(): Promise<unknown>;
   regenerateCanvas?(): Promise<void>;
 }

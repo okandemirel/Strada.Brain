@@ -62,4 +62,14 @@ describe('SqliteVaultStore — Phase 2 tables', () => {
     store.markWikilinkResolved('n1.md', 'n2.md');
     expect(store.listWikilinksTo('n2.md')[0]!.resolved).toBe(true);
   });
+
+  it('updateWikilinkTarget changes target and marks resolved', () => {
+    store.upsertWikilink({ fromNote: 'n1.md', target: 'n2', resolved: false });
+    store.updateWikilinkTarget('n1.md', 'n2', 'folder/n2.md');
+    expect(store.listWikilinksTo('n2')).toHaveLength(0);
+    const resolved = store.listWikilinksTo('folder/n2.md');
+    expect(resolved).toHaveLength(1);
+    expect(resolved[0]!.target).toBe('folder/n2.md');
+    expect(resolved[0]!.resolved).toBe(true);
+  });
 });

@@ -14,7 +14,7 @@ import { runPpr } from './ppr.js';
 import { getLoggerSafe } from '../utils/logger.js';
 import type {
   IVault, VaultFile, VaultQuery, VaultQueryResult, VaultStats, VaultId, VaultChunk,
-  VaultSymbol, VaultEdge,
+  VaultSymbol, VaultEdge, VaultWikilink,
 } from './vault.interface.js';
 
 export interface UnityVaultDeps {
@@ -338,6 +338,17 @@ export class UnityProjectVault implements IVault {
 
   async findSymbolsByName(name: string, limit = 20): Promise<VaultSymbol[]> {
     return this.store.findSymbolsByName(name, limit);
+  }
+
+  async listBacklinks(path: string): Promise<{ wikilinks: VaultWikilink[]; callers: VaultEdge[] }> {
+    const wikilinks = this.store.listWikilinksTo(path);
+    const symbols = this.store.listSymbolsForPath(path);
+    const callers: VaultEdge[] = [];
+    for (const s of symbols) {
+      const c = await this.findCallers(s.symbolId);
+      callers.push(...c);
+    }
+    return { wikilinks, callers };
   }
 
   /** Test hook — avoids exposing the store directly to consumers. */

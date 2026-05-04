@@ -15,7 +15,7 @@ import { getLoggerSafe } from '../utils/logger.js';
 import { ObsidianApiClient, type ObsidianApiConfig } from './obsidian-client.js';
 import type {
   IVault, VaultFile, VaultQuery, VaultQueryResult, VaultStats, VaultId, VaultChunk,
-  VaultSymbol, VaultEdge,
+  VaultSymbol, VaultEdge, VaultWikilink,
 } from './vault.interface.js';
 
 export interface ObsidianVaultDeps {
@@ -95,6 +95,11 @@ export class ObsidianVault implements IVault {
   async sync(): Promise<{ changed: number; durationMs: number }> {
     const started = Date.now();
     const changed = await this.reindexChanged();
+    if (changed > 0) {
+      await this.resolveWikilinks();
+      await this.regenerateCanvas();
+      this.emitter.emit('update', { vaultId: this.id, changedPaths: [] });
+    }
     return { changed, durationMs: Date.now() - started };
   }
 
@@ -241,6 +246,42 @@ export class ObsidianVault implements IVault {
     return this.store.findSymbolsByName(name, limit);
   }
 
+  async listBacklinks(path: string): Promise<{ wikilinks: VaultWikilink[]; callers: VaultEdge[] }> {
+    const wikilinks = this.store.listWikilinksTo(path);
+    const symbols = this.store.listSymbolsForPath(path);
+    const callers: VaultEdge[] = [];
+    for (const s of symbols) {
+      const c = await this.findCallers(s.symbolId);
+      callers.push(...c);
+    }
+    return { wikilinks, callers };
+  }
+
+  private async resolveWikilinks(): Promise<void> {
+    const files = this.store.listFiles();
+    const basenameMap = new Map<string, string>();
+    for (const f of files) {
+      const base = f.path.split('/').pop() ?? f.path;
+      const key = base.toLowerCase();
+      basenameMap.set(key, f.path);
+      const keyNoExt = key.replace(/\.[^.]+$/, '');
+      if (keyNoExt !== key) {
+        basenameMap.set(keyNoExt, f.path);
+      }
+    }
+
+    const wikilinks = this.store.listWikilinks();
+    for (const w of wikilinks) {
+      if (w.resolved) continue;
+      const targetBase = w.target.split('/').pop() ?? w.target;
+      const filePart = targetBase.split('#')[0] ?? targetBase;
+      const resolvedPath = basenameMap.get(filePart.toLowerCase());
+      if (resolvedPath) {
+        this.store.updateWikilinkTarget(w.fromNote, w.target, resolvedPath);
+      }
+    }
+  }
+
   private async reindexFile(relPath: string): Promise<boolean> {
     const abs = join(this.rootPath, relPath);
     const body = await readFile(abs, 'utf8').catch(() => null);
@@ -362,6 +403,7 @@ export class ObsidianVault implements IVault {
     for (const f of files) {
       if (await this.reindexFile(f.path)) changed.push(f.path);
     }
+    await this.resolveWikilinks();
     await this.regenerateCanvas();
     if (changed.length) {
       this.emitter.emit('update', { vaultId: this.id, changedPaths: changed });
@@ -409,10 +451,6 @@ export class ObsidianVault implements IVault {
         this.store.deleteFile(p);
         changed.push(p);
       }
-    }
-    await this.regenerateCanvas();
-    if (changed.length) {
-      this.emitter.emit('update', { vaultId: this.id, changedPaths: changed });
     }
     return changed.length;
   }

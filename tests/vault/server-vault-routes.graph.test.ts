@@ -26,6 +26,10 @@ const fakeVault = {
     name === 'Move'
       ? [{ symbolId: 'x', name: 'Move', path: 'a.cs', kind: 'method', display: 'Move', startLine: 1, endLine: 1, doc: null }]
       : [],
+  listBacklinks: async (path: string) =>
+    path === 'n1.md'
+      ? { wikilinks: [{ fromNote: 'n2.md', target: 'n1.md', resolved: true }], callers: [] }
+      : { wikilinks: [], callers: [] },
   stats: async () => ({ fileCount: 0, chunkCount: 0, lastIndexedAt: null, dbBytes: 0 }),
   listFiles: () => [],
   readFile: async () => '',
@@ -67,5 +71,21 @@ describe('vault routes — graph endpoints', () => {
     registerVaultRoutes(app as never, reg);
     const r = await app.routes['GET /api/vaults/:id/symbols/by-name']!({ params: { id: 'v' }, query: {} }, {});
     expect(r.error).toMatch(/invalid q/i);
+  });
+
+  it('GET /api/vaults/:id/notes/:path/backlinks returns wikilinks + callers', async () => {
+    const app = makeFakeApp();
+    registerVaultRoutes(app as never, reg);
+    const r = await app.routes['GET /api/vaults/:id/notes/:path/backlinks']!({ params: { id: 'v', path: 'n1.md' } }, {});
+    expect(r.wikilinks).toHaveLength(1);
+    expect(r.wikilinks[0].target).toBe('n1.md');
+    expect(r.callers).toHaveLength(0);
+  });
+
+  it('GET /api/vaults/:id/notes/:path/backlinks blocks unsafe paths', async () => {
+    const app = makeFakeApp();
+    registerVaultRoutes(app as never, reg);
+    const r = await app.routes['GET /api/vaults/:id/notes/:path/backlinks']!({ params: { id: 'v', path: '../etc/passwd' } }, {});
+    expect(r.error).toMatch(/invalid/i);
   });
 });
