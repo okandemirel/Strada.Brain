@@ -7,7 +7,8 @@ import {
   type CanvasJson,
 } from '../../../stores/vault-store';
 import { useGraphInteractions } from './useGraphInteractions';
-import { getKindStyle, parseNodeText } from './node-style';
+import { parseNodeText } from './node-style';
+import { GraphNodeOverlay } from './GraphNodeOverlay';
 
 interface Props {
   graph: CanvasJson;
@@ -34,36 +35,39 @@ function extractNodeId(raw: string | { id: string } | unknown): string {
   return String(raw);
 }
 
-function buildGraphData(graph: CanvasJson) {
-  // Compute connection counts first (on full set)
+function buildGraphData(graph: CanvasJson, showOrphans: boolean) {
   const connectionCounts = new Map<string, number>();
   for (const e of graph.edges) {
     connectionCounts.set(e.fromNode, (connectionCounts.get(e.fromNode) ?? 0) + 1);
     connectionCounts.set(e.toNode, (connectionCounts.get(e.toNode) ?? 0) + 1);
   }
 
-  const nodes: GraphNode[] = graph.nodes.map((n) => {
-    const parsed = parseNodeText(n.text);
-    const kind = n.kind ?? parsed.kind;
-    const style = getKindStyle(kind);
-    const connCount = connectionCounts.get(n.id) ?? 0;
+  const nodes: GraphNode[] = graph.nodes
+    .filter((n) => showOrphans || (connectionCounts.get(n.id) ?? 0) > 0)
+    .map((n) => {
+      const parsed = parseNodeText(n.text);
+      const kind = n.kind ?? parsed.kind;
+      const connCount = connectionCounts.get(n.id) ?? 0;
 
-    return {
-      id: n.id,
-      label: parsed.name || n.text.split('/').pop() || n.id,
-      kind,
-      color: n.color ?? style.color,
-      val: Math.max(connCount, 1),
-      file: n.file ?? parsed.file ?? null,
-      line: parsed.line ?? null,
-    };
-  });
+      return {
+        id: n.id,
+        label: parsed.name || n.text.split('/').pop() || n.id,
+        kind,
+        color: n.color ?? '#888888',
+        val: Math.max(connCount, 1),
+        file: n.file ?? parsed.file ?? null,
+        line: parsed.line ?? null,
+      };
+    });
 
-  const links: GraphLink[] = graph.edges.map((e) => ({
-    source: e.fromNode,
-    target: e.toNode,
-    label: e.label,
-  }));
+  const nodeIds = new Set(nodes.map((n) => n.id));
+  const links: GraphLink[] = graph.edges
+    .filter((e) => nodeIds.has(e.fromNode) && nodeIds.has(e.toNode))
+    .map((e) => ({
+      source: e.fromNode,
+      target: e.toNode,
+      label: e.label,
+    }));
 
   return { nodes, links, connectionCounts };
 }
@@ -77,9 +81,9 @@ function drawNodeGlow(
   opacity: number,
 ) {
   ctx.beginPath();
-  ctx.arc(x, y, radius + 4, 0, 2 * Math.PI);
+  ctx.arc(x, y, radius + 6, 0, 2 * Math.PI);
   ctx.fillStyle = color;
-  ctx.globalAlpha = 0.2;
+  ctx.globalAlpha = 0.15;
   ctx.fill();
   ctx.globalAlpha = opacity;
 }
@@ -90,11 +94,18 @@ function drawNodeCircle(
   y: number,
   radius: number,
   color: string,
+  isMatching: boolean,
+  time: number,
 ) {
   ctx.beginPath();
   ctx.arc(x, y, radius, 0, 2 * Math.PI);
+  if (isMatching) {
+    const pulse = 0.7 + 0.3 * Math.sin(time * 0.008);
+    ctx.globalAlpha = pulse;
+  }
   ctx.fillStyle = color;
   ctx.fill();
+  ctx.globalAlpha = 1;
 }
 
 function drawNodeBorder(
@@ -107,8 +118,8 @@ function drawNodeBorder(
 ) {
   ctx.beginPath();
   ctx.arc(x, y, radius, 0, 2 * Math.PI);
-  ctx.strokeStyle = isSelected ? '#ffffff' : 'rgba(255,255,255,0.8)';
-  ctx.lineWidth = isSelected ? 2.0 / globalScale : 1.5 / globalScale;
+  ctx.strokeStyle = isSelected ? '#ffffff' : 'rgba(255,255,255,0.6)';
+  ctx.lineWidth = isSelected ? 2.0 / globalScale : 1.2 / globalScale;
   ctx.stroke();
 }
 
@@ -128,15 +139,14 @@ function drawNodeLabel(
   ctx.fillStyle = '#a0a0a0';
   ctx.globalAlpha = opacity;
 
-  const truncated = node.label.length > 22 ? node.label.slice(0, 20) + '…' : node.label;
+  const truncated = node.label.length > 24 ? node.label.slice(0, 22) + '…' : node.label;
   ctx.fillText(truncated, x, y + radius + 3 / globalScale);
 
-  // File:line on large zoom
   if (globalScale > 2.5 && node.file) {
     const fileName = node.file.split('/').pop() ?? node.file;
     const detailFontSize = Math.max(8 / globalScale, 4);
     ctx.font = `400 ${detailFontSize}px ui-monospace, SFMono-Regular, monospace`;
-    ctx.fillStyle = '#666666';
+    ctx.fillStyle = '#555555';
     ctx.fillText(
       `${fileName}${node.line ? ':' + node.line : ''}`,
       x,
@@ -145,70 +155,70 @@ function drawNodeLabel(
   }
 }
 
-function nodeCanvasObjectFn(
-  interactions: ReturnType<typeof useGraphInteractions>,
-  selectedSymbolId: string | null,
-) {
-  return (node: GraphNode, ctx: CanvasRenderingContext2D, globalScale: number) => {
-    const highlighted = interactions.isHighlighted(node.id);
-    const opacity = interactions.highlightedOpacity(highlighted);
-    const isSelected = node.id === selectedSymbolId;
-    const isHovered = node.id === interactions.hoverNode;
-
-    // Base radius from val (connection count)
-    const baseRadius = Math.sqrt(node.val) * 3 + 4;
-    const x = node.x ?? 0;
-    const y = node.y ?? 0;
-
-    ctx.save();
-    ctx.globalAlpha = opacity;
-
-    if (isSelected) {
-      drawNodeGlow(ctx, x, y, baseRadius, node.color, opacity);
-    }
-
-    drawNodeCircle(ctx, x, y, baseRadius, node.color);
-
-    if (isHovered || isSelected) {
-      drawNodeBorder(ctx, x, y, baseRadius, globalScale, isSelected);
-    }
-
-    const showLabel = globalScale > 0.8 || baseRadius > 8;
-    if (showLabel && highlighted) {
-      drawNodeLabel(ctx, node, x, y, baseRadius, globalScale, opacity);
-    }
-
-    ctx.restore();
-  };
-}
-
 export default function GraphCanvas({ graph }: Props) {
   const selectedSymbolId = useVaultStore((s) => s.selectedSymbolId);
   const setSelectedSymbol = useVaultStore((s) => s.setSelectedSymbol);
 
   const fgRef = useRef<ForceGraphMethods<any, any> | undefined>(undefined);
   const [searchQuery, setSearchQuery] = useState('');
+  const [showSettings, setShowSettings] = useState(false);
+  const [showOrphans, setShowOrphans] = useState(true);
+
+  const searchLower = searchQuery.trim().toLowerCase();
 
   const { nodes, links, connectionCounts } = useMemo(
-    () => buildGraphData(graph),
-    [graph],
+    () => buildGraphData(graph, showOrphans),
+    [graph, showOrphans],
   );
+
+  const matchingIds = useMemo(() => {
+    if (!searchLower) return new Set<string>();
+    return new Set(
+      nodes.filter((n) => n.label.toLowerCase().includes(searchLower)).map((n) => n.id),
+    );
+  }, [nodes, searchLower]);
 
   const interactions = useGraphInteractions({ links });
 
-  const nodeCanvasObject = useMemo(
-    () => nodeCanvasObjectFn(interactions, selectedSymbolId),
-    [interactions, selectedSymbolId],
+  const nodeCanvasObject = useCallback(
+    (node: GraphNode, ctx: CanvasRenderingContext2D, globalScale: number) => {
+      const highlighted = interactions.isHighlighted(node.id);
+      const opacity = interactions.highlightedOpacity(highlighted);
+      const isSelected = node.id === selectedSymbolId;
+      const isHovered = node.id === interactions.hoverNode;
+      const isMatching = matchingIds.has(node.id);
+
+      const baseRadius = Math.sqrt(node.val) * 3 + 4;
+      const x = node.x ?? 0;
+      const y = node.y ?? 0;
+      const time = Date.now();
+
+      ctx.save();
+      ctx.globalAlpha = opacity;
+
+      if (isSelected || isMatching) {
+        drawNodeGlow(ctx, x, y, baseRadius, node.color, opacity);
+      }
+
+      drawNodeCircle(ctx, x, y, baseRadius, node.color, isMatching, time);
+
+      if (isHovered || isSelected) {
+        drawNodeBorder(ctx, x, y, baseRadius, globalScale, isSelected);
+      }
+
+      const showLabel = globalScale > 0.8 || baseRadius > 8;
+      if (showLabel && highlighted) {
+        drawNodeLabel(ctx, node, x, y, baseRadius, globalScale, opacity);
+      }
+
+      ctx.restore();
+    },
+    [interactions, selectedSymbolId, matchingIds],
   );
 
   const handleNodeClick = useCallback(
     (node: GraphNode) => {
       setSelectedSymbol(node.id);
-      const fg = fgRef.current;
-      if (fg) {
-        fg.centerAt(node.x ?? 0, node.y ?? 0, 400);
-        fg.zoom(2.5, 400);
-      }
     },
     [setSelectedSymbol],
   );
@@ -245,8 +255,6 @@ export default function GraphCanvas({ graph }: Props) {
     return files.size;
   }, [nodes]);
 
-
-
   const isolatedCount = Math.max(0, nodes.length - connectionCounts.size);
 
   return (
@@ -279,6 +287,7 @@ export default function GraphCanvas({ graph }: Props) {
       <div className="absolute top-4 right-4 z-10">
         <button
           type="button"
+          onClick={() => setShowSettings((s) => !s)}
           className="w-8 h-8 rounded-full bg-black/40 backdrop-blur-sm border border-white/10
                      flex items-center justify-center text-white/40 hover:text-white/70
                      hover:border-white/20 transition-all"
@@ -291,6 +300,29 @@ export default function GraphCanvas({ graph }: Props) {
               d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
           </svg>
         </button>
+
+        {/* Settings dropdown */}
+        {showSettings && (
+          <div className="absolute top-10 right-0 w-48 rounded-xl bg-[#1a1a1a]/95 backdrop-blur-md
+                          border border-white/10 shadow-2xl overflow-hidden">
+            <div className="px-3 py-2.5 border-b border-white/5">
+              <div className="text-[10px] uppercase tracking-wider text-white/20 font-medium">
+                Display
+              </div>
+            </div>
+            <div className="p-2 space-y-1">
+              <label className="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-white/5 cursor-pointer transition-colors">
+                <input
+                  type="checkbox"
+                  checked={showOrphans}
+                  onChange={(e) => setShowOrphans(e.target.checked)}
+                  className="w-3 h-3 rounded border-white/20 bg-transparent accent-white"
+                />
+                <span className="text-[11px] text-white/50">Show orphan nodes</span>
+              </label>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Force Graph */}
@@ -344,6 +376,9 @@ export default function GraphCanvas({ graph }: Props) {
           Fit
         </button>
       </div>
+
+      {/* Node detail overlay */}
+      <GraphNodeOverlay nodeId={selectedSymbolId} onClose={handleBackgroundClick} />
     </div>
   );
 }

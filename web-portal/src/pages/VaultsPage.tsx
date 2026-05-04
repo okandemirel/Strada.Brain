@@ -81,6 +81,7 @@ export default function VaultsPage() {
   const rightPanelOpen = useVaultStore((s) => s.rightPanelOpen);
   const toggleLeftPanel = useVaultStore((s) => s.toggleLeftPanel);
   const toggleRightPanel = useVaultStore((s) => s.toggleRightPanel);
+  const setLeftPanelOpen = useVaultStore((s) => s.setLeftPanelOpen);
   const setRightPanelOpen = useVaultStore((s) => s.setRightPanelOpen);
   const setCommandPaletteOpen = useVaultStore((s) => s.setCommandPaletteOpen);
 
@@ -116,6 +117,14 @@ export default function VaultsPage() {
     // intentionally run once
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Auto-close side panels when entering graph mode for fullscreen experience.
+  useEffect(() => {
+    if (activeTab === 'graph') {
+      setLeftPanelOpen(false);
+      setRightPanelOpen(false);
+    }
+  }, [activeTab, setLeftPanelOpen, setRightPanelOpen]);
 
   // Global keyboard shortcuts.
   useEffect(() => {
