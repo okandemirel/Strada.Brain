@@ -6,7 +6,9 @@ import type { VaultRegistry } from '../vault/vault-registry.js';
 import type { IVault } from '../vault/vault.interface.js';
 import { getVaultFileReadStats } from '../agents/tools/file-read.js';
 import { getLoggerSafe } from '../utils/logger.js';
+import type { IAIProvider } from '../agents/providers/provider.interface.js';
 import { sendJson, sendJsonError, type RouteContext } from './server-types.js';
+import { summarizeSymbol } from '../vault/symbol-summarizer.js';
 
 /**
  * Factory injected by bootstrap so the HTTP layer can create a new vault
@@ -147,7 +149,7 @@ export function buildVaultRetrievalStatsSnapshot(
   };
 }
 
-export function registerVaultRoutes(app: RouteApp, registry: VaultRegistry, factory?: VaultFactory): void {
+export function registerVaultRoutes(app: RouteApp, registry: VaultRegistry, factory?: VaultFactory, llmProvider?: IAIProvider): void {
   // Fix SecC2: do NOT expose absolute rootPath. Clients get id + kind only.
   app.get('/api/vaults', () => ({
     items: registry.list().map((v) => ({ id: v.id, kind: v.kind })),
@@ -248,6 +250,25 @@ export function registerVaultRoutes(app: RouteApp, registry: VaultRegistry, fact
     const notePath = String(req.params.path ?? '');
     if (isUnsafePath(notePath)) return { error: 'invalid path' };
     return (await v.listBacklinks?.(notePath)) ?? { wikilinks: [], callers: [] };
+  });
+
+  app.post('/api/vaults/:id/symbols/:symbolId/summarize', async (req) => {
+    const v = registry.get(req.params.id);
+    if (!v) return { error: 'not found' };
+    const symbolId = String(req.params.symbolId ?? '');
+    if (!symbolId || symbolId.length > 1024) return { error: 'invalid symbol id' };
+    if (!llmProvider) return { error: 'LLM provider not available' };
+
+    const symbols = await v.findSymbolsByName?.(symbolId.split('::').pop() ?? symbolId, 20) ?? [];
+    const symbol = symbols.find((s) => s.symbolId === symbolId);
+    if (!symbol) return { error: 'symbol not found' };
+
+    const summary = await summarizeSymbol(
+      { provider: llmProvider },
+      symbol,
+      (path) => v.readFile!(path),
+    );
+    return { summary };
   });
 }
 
@@ -409,6 +430,31 @@ export function handleVaultRoutes(
     void Promise.resolve(vv.findCallers?.(sid) ?? [])
       .then((items) => sendJson(res, { items }))
       .catch(() => sendJsonError(res, 500, 'callers failed'));
+    return true;
+  }
+
+  // Symbol summary: /api/vaults/:id/symbols/:symbolId/summarize
+  const summarizeMatch = pathOnly.match(/^\/api\/vaults\/([^/]+)\/symbols\/(.+)\/summarize$/);
+  if (summarizeMatch && method === 'POST') {
+    const vv = registry.get(decodeURIComponent(summarizeMatch[1]!));
+    if (!vv) { sendJsonError(res, 404, 'vault not found'); return true; }
+    const symbolId = decodeURIComponent(summarizeMatch[2]!);
+    if (!symbolId || symbolId.length > 1024) { sendJsonError(res, 400, 'invalid symbol id'); return true; }
+    if (!ctx.llmProvider) { sendJsonError(res, 503, 'LLM provider not available'); return true; }
+
+    void Promise.resolve(vv.findSymbolsByName?.(symbolId.split('::').pop() ?? symbolId, 20) ?? [])
+      .then(async (symbols) => {
+        const symbol = symbols.find((s) => s.symbolId === symbolId);
+        if (!symbol) { sendJsonError(res, 404, 'symbol not found'); return; }
+
+        const summary = await summarizeSymbol(
+          { provider: ctx.llmProvider! },
+          symbol,
+          (path) => vv.readFile!(path),
+        );
+        sendJson(res, { summary });
+      })
+      .catch(() => sendJsonError(res, 500, 'summarize failed'));
     return true;
   }
 

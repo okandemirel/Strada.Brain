@@ -1,4 +1,4 @@
-import { useEffect, useReducer } from 'react';
+import { useEffect, useReducer, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { X, FileCode, ExternalLink, ArrowLeft, Link2 } from 'lucide-react';
 import { useVaultStore } from '../../../stores/vault-store';
@@ -73,6 +73,33 @@ export function GraphNodeOverlay({ nodeId, onClose }: Props) {
     errorCallers: false,
     errorBacklinks: false,
   });
+  const [summary, setSummary] = useState<string | null>(null);
+  const [loadingSummary, setLoadingSummary] = useState(false);
+  const [summaryError, setSummaryError] = useState(false);
+
+  useEffect(() => {
+    setSummary(null);
+    setSummaryError(false);
+  }, [nodeId]);
+
+  const handleSummarize = async () => {
+    if (!nodeId || !vaultId) return;
+    setLoadingSummary(true);
+    setSummaryError(false);
+    try {
+      const res = await fetch(
+        `/api/vaults/${encodeURIComponent(vaultId)}/symbols/${encodeURIComponent(nodeId)}/summarize`,
+        { method: 'POST' },
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      setSummary(data.summary ?? null);
+    } catch {
+      setSummaryError(true);
+    } finally {
+      setLoadingSummary(false);
+    }
+  };
 
   useEffect(() => {
     dispatch({ type: 'reset', loading: Boolean(nodeId && vaultId) });
@@ -259,6 +286,29 @@ export function GraphNodeOverlay({ nodeId, onClose }: Props) {
                       </li>
                     ))}
                   </ul>
+                )}
+              </section>
+
+              {/* AI Summary */}
+              <section>
+                <div className="text-[10px] uppercase tracking-wider text-white/20 mb-2">
+                  AI Summary
+                </div>
+
+                {loadingSummary ? (
+                  <div className="text-xs text-white/30 animate-pulse">Generating…</div>
+                ) : summaryError ? (
+                  <div className="text-xs text-red-400/70">Unable to generate summary</div>
+                ) : summary ? (
+                  <p className="text-xs text-white/60 leading-relaxed">{summary}</p>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={handleSummarize}
+                    className="text-xs text-white/40 hover:text-white/80 transition-colors"
+                  >
+                    ✨ Summarize
+                  </button>
                 )}
               </section>
             </div>

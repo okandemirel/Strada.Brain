@@ -119,4 +119,58 @@ describe('GraphNodeOverlay', () => {
     fireEvent.click(backdrop!);
     expect(onClose).toHaveBeenCalled();
   });
+
+  it('shows AI Summary button and fetches summary on click', async () => {
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes('/callers')) {
+        return Promise.resolve({ ok: true, json: async () => ({ items: [] }) });
+      }
+      if (url.includes('/backlinks')) {
+        return Promise.resolve({ status: 404 });
+      }
+      if (url.includes('/summarize')) {
+        return Promise.resolve({ ok: true, json: async () => ({ summary: 'Manages player input.' }) });
+      }
+      return Promise.resolve({ ok: false, status: 500 });
+    });
+
+    render(<GraphNodeOverlay nodeId="a" onClose={() => {}} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('✨ Summarize')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByText('✨ Summarize'));
+
+    await waitFor(() => {
+      expect(screen.getByText('Manages player input.')).toBeInTheDocument();
+    });
+  });
+
+  it('shows error when summary generation fails', async () => {
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes('/callers')) {
+        return Promise.resolve({ ok: true, json: async () => ({ items: [] }) });
+      }
+      if (url.includes('/backlinks')) {
+        return Promise.resolve({ status: 404 });
+      }
+      if (url.includes('/summarize')) {
+        return Promise.resolve({ ok: false, status: 500 });
+      }
+      return Promise.resolve({ ok: false, status: 500 });
+    });
+
+    render(<GraphNodeOverlay nodeId="a" onClose={() => {}} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('✨ Summarize')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByText('✨ Summarize'));
+
+    await waitFor(() => {
+      expect(screen.getByText('Unable to generate summary')).toBeInTheDocument();
+    });
+  });
 });

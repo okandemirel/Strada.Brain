@@ -1145,6 +1145,7 @@ describe("bootstrap-stages", () => {
       getActiveInfo: vi.fn().mockReturnValue(null),
       setPreference: vi.fn(),
       refreshModelCatalog: vi.fn(),
+      getProvider: vi.fn().mockReturnValue({ name: 'mock', chat: vi.fn() }),
     } as any;
 
     registerDashboardPostBootStage({

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { registerVaultRoutes } from '../../src/dashboard/server-vault-routes.js';
+import type { IAIProvider } from '../../src/agents/providers/provider.interface.js';
 
 function makeFakeApp() {
   const routes: Record<string, (req: any, res: any) => any> = {};
@@ -15,6 +16,12 @@ const canvas = {
   edges: [],
 };
 
+const fakeLLMProvider = {
+  name: 'mock',
+  capabilities: { contextWindow: 128000, vision: false, thinkingSupported: false, toolCalling: false, streaming: false },
+  chat: async () => ({ text: 'Manages player movement.', toolCalls: [], stopReason: 'stop', usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 } }),
+} as unknown as IAIProvider;
+
 const fakeVault = {
   id: 'v', kind: 'unity-project', rootPath: '/tmp',
   readCanvas: async () => canvas,
@@ -24,7 +31,7 @@ const fakeVault = {
       : [{ fromSymbol: 'csharp::a.cs::Caller', toSymbol: id, kind: 'calls' as const, atLine: 7 }],
   findSymbolsByName: async (name: string) =>
     name === 'Move'
-      ? [{ symbolId: 'x', name: 'Move', path: 'a.cs', kind: 'method', display: 'Move', startLine: 1, endLine: 1, doc: null }]
+      ? [{ symbolId: 'csharp::a.cs::Move', name: 'Move', path: 'a.cs', kind: 'method', display: 'Move', startLine: 1, endLine: 1, doc: null }]
       : [],
   listBacklinks: async (path: string) =>
     path === 'n1.md'
@@ -32,7 +39,7 @@ const fakeVault = {
       : { wikilinks: [], callers: [] },
   stats: async () => ({ fileCount: 0, chunkCount: 0, lastIndexedAt: null, dbBytes: 0 }),
   listFiles: () => [],
-  readFile: async () => '',
+  readFile: async (path: string) => path === 'a.cs' ? 'public class Move { }' : '',
   query: async () => ({ hits: [], budgetUsed: 0, truncated: false }),
   sync: async () => ({ changed: 0, durationMs: 0 }),
 };
@@ -87,5 +94,19 @@ describe('vault routes — graph endpoints', () => {
     registerVaultRoutes(app as never, reg);
     const r = await app.routes['GET /api/vaults/:id/notes/:path/backlinks']!({ params: { id: 'v', path: '../etc/passwd' } }, {});
     expect(r.error).toMatch(/invalid/i);
+  });
+
+  it('POST /api/vaults/:id/symbols/:symbolId/summarize returns AI summary', async () => {
+    const app = makeFakeApp();
+    registerVaultRoutes(app as never, reg, undefined, fakeLLMProvider);
+    const r = await app.routes['POST /api/vaults/:id/symbols/:symbolId/summarize']!({ params: { id: 'v', symbolId: 'csharp::a.cs::Move' } }, {});
+    expect(r.summary).toBe('Manages player movement.');
+  });
+
+  it('POST /api/vaults/:id/symbols/:symbolId/summarize returns 503 without LLM provider', async () => {
+    const app = makeFakeApp();
+    registerVaultRoutes(app as never, reg);
+    const r = await app.routes['POST /api/vaults/:id/symbols/:symbolId/summarize']!({ params: { id: 'v', symbolId: 'csharp::a.cs::Move' } }, {});
+    expect(r.error).toMatch(/LLM provider not available/);
   });
 });

@@ -173,6 +173,7 @@ export function registerDashboardPostBootStage(
     orchestratorSessions: params.orchestrator,
     soulLoader: params.soulLoader,
     configSnapshot: () => flatConfig,
+    llmProvider: params.providerManager.getProvider(''),
     providerManager: {
       listAvailable: () => params.providerManager.listAvailable().map((provider) => ({
         ...provider,

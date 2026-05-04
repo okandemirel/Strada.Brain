@@ -3,6 +3,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { getLogger } from "../utils/logger.js";
 import { sanitizeSecrets } from "../security/secret-sanitizer.js";
 import { isAllowedOrigin } from "../security/origin-validation.js";
+import type { IAIProvider } from "../agents/providers/provider.interface.js";
 import type { MetricsCollector } from "./metrics.js";
 import type { IMemoryManager, MemoryHealth } from "../memory/memory.interface.js";
 import type { IChannelAdapter } from "../channels/channel.interface.js";
@@ -160,6 +161,7 @@ export class DashboardServer {
 
   // Provider and user profile services (autonomous mode + provider switching)
   private providerManager?: DashboardProviderManager;
+  private llmProvider?: IAIProvider;
   private userProfileStore?: DashboardUserProfileStore;
   private embeddingStatusProvider?: DashboardEmbeddingStatusProvider;
   private taskManager?: DashboardTaskManager;
@@ -278,6 +280,7 @@ export class DashboardServer {
     soulLoader?: DashboardSoulLoader;
     configSnapshot?: () => Record<string, unknown>;
     providerManager?: DashboardProviderManager;
+    llmProvider?: IAIProvider;
     userProfileStore?: DashboardUserProfileStore;
     embeddingStatusProvider?: DashboardEmbeddingStatusProvider;
     taskManager?: DashboardTaskManager;
@@ -289,6 +292,7 @@ export class DashboardServer {
     this.soulLoader = services.soulLoader ?? this.soulLoader;
     this.configSnapshot = services.configSnapshot ?? this.configSnapshot;
     this.providerManager = services.providerManager ?? this.providerManager;
+    this.llmProvider = services.llmProvider ?? this.llmProvider;
     this.userProfileStore = services.userProfileStore ?? this.userProfileStore;
     this.embeddingStatusProvider = services.embeddingStatusProvider ?? this.embeddingStatusProvider;
     this.taskManager = services.taskManager ?? this.taskManager;
@@ -523,6 +527,7 @@ export class DashboardServer {
       embeddingStatusProvider: this.embeddingStatusProvider,
       taskManager: this.taskManager,
       providerRouter: this.providerRouter,
+      llmProvider: this.llmProvider,
 
       // Workspace
       workspaceBus: this.workspaceBus,

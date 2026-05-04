@@ -26,6 +26,7 @@ export interface ReadinessResponse {
   };
   timestamp: string;
 }
+import type { IAIProvider } from "../agents/providers/provider.interface.js";
 import type { ProviderOfficialSnapshot } from "../agents/providers/provider-source-registry.js";
 import type { BootReport } from "../common/capability-contract.js";
 import type { IMemoryManager, MemoryHealth } from "../memory/memory.interface.js";
@@ -441,6 +442,7 @@ export interface RouteContext {
 
   // Provider and user profile
   providerManager?: DashboardProviderManager;
+  llmProvider?: IAIProvider;
   userProfileStore?: DashboardUserProfileStore;
   embeddingStatusProvider?: DashboardEmbeddingStatusProvider;
   taskManager?: DashboardTaskManager;
