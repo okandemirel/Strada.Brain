@@ -32,7 +32,7 @@ import { TABLET_BREAKPOINT_PX } from './vaults/constants';
 import { useVaultFetch } from '../hooks/useVaultFetch';
 import { useVaultStore, type VaultTab } from '../stores/vault-store';
 
-// Graph tab pulls in @xyflow/react + d3-force; defer to keep initial bundle lean.
+// Graph tab pulls in react-force-graph-2d; defer to keep initial bundle lean.
 const VaultGraphTab = lazy(() => import('./vaults/VaultGraphTab'));
 // RightPanel + CommandPalette are only visible once the user has interacted
 // with the workspace. Defer both to keep the initial Vaults route chunk lean

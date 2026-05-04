@@ -9,7 +9,7 @@ interface UseGraphInteractionsOptions {
   links: GraphLink[];
 }
 
-function extractNodeId(raw: string | { id: string } | unknown): string {
+export function extractNodeId(raw: string | { id: string } | unknown): string {
   if (typeof raw === 'string') return raw;
   if (raw && typeof raw === 'object' && 'id' in raw) return (raw as { id: string }).id;
   return String(raw);

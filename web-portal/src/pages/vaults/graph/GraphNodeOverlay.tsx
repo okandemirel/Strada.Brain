@@ -25,16 +25,10 @@ export function GraphNodeOverlay({ nodeId, onClose }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
 
-  // Reset state when nodeId changes
-  const [prevNodeId, setPrevNodeId] = useState<string | null>(nodeId);
-  if (nodeId !== prevNodeId) {
-    setPrevNodeId(nodeId);
+  useEffect(() => {
     setCallers(null);
     setError(false);
     setLoading(Boolean(nodeId && vaultId));
-  }
-
-  useEffect(() => {
     if (!nodeId || !vaultId) return;
     const ctrl = new AbortController();
     fetch(

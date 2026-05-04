@@ -304,11 +304,14 @@ function guessFileFromUnresolved(unresolvedId: string, files: VaultFile[]): stri
   // unresolved IDs look like: "typescript::unresolved::someMethod" or "csharp::unresolved::SomeClass"
   const parts = unresolvedId.split('::');
   const name = parts.pop() ?? unresolvedId;
-  // Try exact basename match (case-insensitive)
+  // Try exact basename match (case-insensitive), stripping test/spec/d suffixes
   const lowerName = name.toLowerCase();
   for (const f of files) {
     const base = f.path.split('/').pop() ?? f.path;
-    const baseNoExt = base.replace(/\.[^.]+$/, '');
+    const baseNoExt = base
+      .replace(/\.(test|spec)\.[^.]+$/, '')   // Foo.test.ts  → Foo
+      .replace(/\.d\.ts$/, '')                // Foo.d.ts     → Foo
+      .replace(/\.[^.]+$/, '');               // Foo.ts       → Foo
     if (baseNoExt.toLowerCase() === lowerName) return f.path;
   }
   return undefined;

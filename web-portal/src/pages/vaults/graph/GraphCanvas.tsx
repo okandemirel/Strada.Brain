@@ -6,7 +6,7 @@ import {
   useVaultStore,
   type CanvasJson,
 } from '../../../stores/vault-store';
-import { useGraphInteractions } from './useGraphInteractions';
+import { useGraphInteractions, extractNodeId } from './useGraphInteractions';
 import { parseNodeText } from './node-style';
 import { GraphNodeOverlay } from './GraphNodeOverlay';
 
@@ -29,17 +29,32 @@ interface GraphNode {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type GraphLink = any;
 
-function extractNodeId(raw: string | { id: string } | unknown): string {
-  if (typeof raw === 'string') return raw;
-  if (raw && typeof raw === 'object' && 'id' in raw) return (raw as { id: string }).id;
-  return String(raw);
-}
 
-function buildGraphData(graph: CanvasJson, showOrphans: boolean) {
+const FOLDER_PALETTE = [
+  '#8B7AB8', '#5B8DB8', '#7AB88B', '#B8A87A', '#B87A9B', '#888888',
+  '#7A8BB8', '#B87A7A', '#7AB8B8', '#B8B87A',
+];
+
+function buildGraphData(
+  graph: CanvasJson,
+  showOrphans: boolean,
+  groupBy: 'lang' | 'folder',
+  nodeSizeMode: 'connections' | 'uniform',
+) {
   const connectionCounts = new Map<string, number>();
   for (const e of graph.edges) {
     connectionCounts.set(e.fromNode, (connectionCounts.get(e.fromNode) ?? 0) + 1);
     connectionCounts.set(e.toNode, (connectionCounts.get(e.toNode) ?? 0) + 1);
+  }
+
+  const folderColorMap = new Map<string, string>();
+  let folderColorIdx = 0;
+  function getFolderColor(dir: string): string {
+    if (!folderColorMap.has(dir)) {
+      folderColorMap.set(dir, FOLDER_PALETTE[folderColorIdx % FOLDER_PALETTE.length]!);
+      folderColorIdx++;
+    }
+    return folderColorMap.get(dir)!;
   }
 
   const nodes: GraphNode[] = graph.nodes
@@ -48,13 +63,17 @@ function buildGraphData(graph: CanvasJson, showOrphans: boolean) {
       const parsed = parseNodeText(n.text);
       const kind = n.kind ?? parsed.kind;
       const connCount = connectionCounts.get(n.id) ?? 0;
+      const color = groupBy === 'folder' && n.group
+        ? getFolderColor(n.group)
+        : (n.color ?? '#888888');
+      const val = nodeSizeMode === 'uniform' ? 1 : Math.max(connCount, 1);
 
       return {
         id: n.id,
         label: parsed.name || n.text.split('/').pop() || n.id,
         kind,
-        color: n.color ?? '#888888',
-        val: Math.max(connCount, 1),
+        color,
+        val,
         file: n.file ?? parsed.file ?? null,
         line: parsed.line ?? null,
       };
@@ -163,12 +182,14 @@ export default function GraphCanvas({ graph }: Props) {
   const [searchQuery, setSearchQuery] = useState('');
   const [showSettings, setShowSettings] = useState(false);
   const [showOrphans, setShowOrphans] = useState(true);
+  const [groupBy, setGroupBy] = useState<'lang' | 'folder'>('lang');
+  const [nodeSizeMode, setNodeSizeMode] = useState<'connections' | 'uniform'>('connections');
 
   const searchLower = searchQuery.trim().toLowerCase();
 
   const { nodes, links, connectionCounts } = useMemo(
-    () => buildGraphData(graph, showOrphans),
-    [graph, showOrphans],
+    () => buildGraphData(graph, showOrphans, groupBy, nodeSizeMode),
+    [graph, showOrphans, groupBy, nodeSizeMode],
   );
 
   const matchingIds = useMemo(() => {
@@ -303,14 +324,15 @@ export default function GraphCanvas({ graph }: Props) {
 
         {/* Settings dropdown */}
         {showSettings && (
-          <div className="absolute top-10 right-0 w-48 rounded-xl bg-[#1a1a1a]/95 backdrop-blur-md
+          <div className="absolute top-10 right-0 w-52 rounded-xl bg-[#1a1a1a]/95 backdrop-blur-md
                           border border-white/10 shadow-2xl overflow-hidden">
             <div className="px-3 py-2.5 border-b border-white/5">
               <div className="text-[10px] uppercase tracking-wider text-white/20 font-medium">
                 Display
               </div>
             </div>
-            <div className="p-2 space-y-1">
+            <div className="p-2 space-y-2">
+              {/* Orphan nodes */}
               <label className="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-white/5 cursor-pointer transition-colors">
                 <input
                   type="checkbox"
@@ -320,6 +342,64 @@ export default function GraphCanvas({ graph }: Props) {
                 />
                 <span className="text-[11px] text-white/50">Show orphan nodes</span>
               </label>
+
+              {/* Group by */}
+              <div className="px-2 py-1">
+                <div className="text-[10px] text-white/30 mb-1">Group by</div>
+                <div className="flex gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setGroupBy('lang')}
+                    className={`flex-1 px-2 py-1 rounded text-[10px] transition-colors ${
+                      groupBy === 'lang'
+                        ? 'bg-white/10 text-white/70'
+                        : 'text-white/30 hover:bg-white/5 hover:text-white/50'
+                    }`}
+                  >
+                    Language
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setGroupBy('folder')}
+                    className={`flex-1 px-2 py-1 rounded text-[10px] transition-colors ${
+                      groupBy === 'folder'
+                        ? 'bg-white/10 text-white/70'
+                        : 'text-white/30 hover:bg-white/5 hover:text-white/50'
+                    }`}
+                  >
+                    Folder
+                  </button>
+                </div>
+              </div>
+
+              {/* Node size */}
+              <div className="px-2 py-1">
+                <div className="text-[10px] text-white/30 mb-1">Node size</div>
+                <div className="flex gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setNodeSizeMode('connections')}
+                    className={`flex-1 px-2 py-1 rounded text-[10px] transition-colors ${
+                      nodeSizeMode === 'connections'
+                        ? 'bg-white/10 text-white/70'
+                        : 'text-white/30 hover:bg-white/5 hover:text-white/50'
+                    }`}
+                  >
+                    Connections
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setNodeSizeMode('uniform')}
+                    className={`flex-1 px-2 py-1 rounded text-[10px] transition-colors ${
+                      nodeSizeMode === 'uniform'
+                        ? 'bg-white/10 text-white/70'
+                        : 'text-white/30 hover:bg-white/5 hover:text-white/50'
+                    }`}
+                  >
+                    Uniform
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         )}
@@ -349,7 +429,7 @@ export default function GraphCanvas({ graph }: Props) {
         enableNodeDrag={true}
         enableZoomInteraction={true}
         enablePanInteraction={true}
-        autoPauseRedraw={false}
+        autoPauseRedraw={searchLower.length === 0}
       />
 
       {/* Stats — bottom left */}
