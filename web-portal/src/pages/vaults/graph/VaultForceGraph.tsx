@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useMemo, useState } from 'react';
 import ForceGraph2D from 'react-force-graph-2d';
 import type { CanvasJson } from '../../../stores/vault-store';
 
@@ -11,6 +11,8 @@ interface GraphNode {
   label: string;
   color: string;
   val: number;
+  x: number;
+  y: number;
 }
 
 interface GraphLink {
@@ -20,15 +22,16 @@ interface GraphLink {
 }
 
 export function VaultForceGraph({ canvas }: Props) {
-  const fgRef = useRef<any>(null);
   const [hoverNode, setHoverNode] = useState<string | null>(null);
 
   const { graphData, adjacency } = useMemo(() => {
-    const nodes: GraphNode[] = canvas.nodes.map((n) => ({
+    const nodes = canvas.nodes.map((n) => ({
       id: n.id,
       label: n.text,
       color: n.color ?? '#6B7280',
       val: Math.max(n.weight ?? 0.3, 0.1) * 5 + 1,
+      x: 0,
+      y: 0,
     }));
 
     const links: GraphLink[] = canvas.edges.map((e) => ({
@@ -45,7 +48,7 @@ export function VaultForceGraph({ canvas }: Props) {
       adj.get(link.target)!.add(link.source);
     }
 
-    return { graphData: { nodes, links }, adjacency: adj };
+      return { graphData: { nodes, links }, adjacency: adj };
   }, [canvas]);
 
   const isHighlighted = (nodeId: string) => {
@@ -59,14 +62,16 @@ export function VaultForceGraph({ canvas }: Props) {
     return source === hoverNode || target === hoverNode;
   };
 
-  const nodeCanvasObject = (node: any, ctx: CanvasRenderingContext2D, globalScale: number) => {
+  const nodeCanvasObject = (node: GraphNode, ctx: CanvasRenderingContext2D, globalScale: number) => {
     const highlighted = isHighlighted(node.id);
     const opacity = !hoverNode || highlighted ? 0.9 : 0.15;
     const radius = Math.sqrt(node.val) * 3;
+    const x = node.x ?? 0;
+    const y = node.y ?? 0;
 
     // Draw circle
     ctx.beginPath();
-    ctx.arc(node.x, node.y, radius, 0, 2 * Math.PI);
+    ctx.arc(x, y, radius, 0, 2 * Math.PI);
     ctx.fillStyle = node.color;
     ctx.globalAlpha = opacity;
     ctx.fill();
@@ -89,7 +94,7 @@ export function VaultForceGraph({ canvas }: Props) {
       ctx.textBaseline = 'top';
       ctx.fillStyle = '#e2e8f0';
       ctx.globalAlpha = opacity;
-      ctx.fillText(node.label || node.id, node.x, node.y + radius + 2);
+      ctx.fillText(node.label || node.id, x, y + radius + 2);
       ctx.globalAlpha = 1;
     }
   };
@@ -97,7 +102,6 @@ export function VaultForceGraph({ canvas }: Props) {
   return (
     <div className="w-full h-full relative">
       <ForceGraph2D
-        ref={fgRef}
         graphData={graphData}
         backgroundColor="transparent"
         nodeRelSize={1}
@@ -112,7 +116,7 @@ export function VaultForceGraph({ canvas }: Props) {
           const highlighted = isLinkHighlighted(link.source, link.target);
           return highlighted ? 1.5 : 0.5;
         }}
-        onNodeHover={(node: any) => setHoverNode(node ? node.id : null)}
+        onNodeHover={(node: GraphNode | null) => setHoverNode(node ? node.id : null)}
         autoPauseRedraw={false}
       />
     </div>
