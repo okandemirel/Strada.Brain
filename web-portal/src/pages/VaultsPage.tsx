@@ -1,10 +1,10 @@
 import { useState, useEffect, useCallback } from 'react';
-import { useVaultStore } from '../stores/vault-store';
+import { useVaultStore, type CanvasJson } from '../stores/vault-store';
 import { VaultForceGraph } from './vaults/graph/VaultForceGraph';
 
 function SimpleVaultGraph() {
   const selected = useVaultStore((s) => s.selected);
-  const [canvas, setCanvas] = useState<{ nodes: any[]; edges: any[] } | null>(null);
+  const [canvas, setCanvas] = useState<CanvasJson | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
