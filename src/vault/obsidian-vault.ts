@@ -305,7 +305,7 @@ export class ObsidianVault implements IVault {
   }
   private invalidateEdgesCache(): void { this._edgesCache = null; }
 
-  private async regenerateCanvas(): Promise<void> {
+  async regenerateCanvas(): Promise<void> {
     try {
       const symbols = this.store.listFiles().flatMap((f) => this.store.listSymbolsForPath(f.path));
       const edges = this.store.listEdges();

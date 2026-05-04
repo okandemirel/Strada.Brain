@@ -367,6 +367,17 @@ export function handleVaultRoutes(
     return true;
   }
 
+  // POST /api/vaults/:id/regenerate-canvas — force canvas rebuild
+  const regenCanvasMatch = pathOnly.match(/^\/api\/vaults\/([^/]+)\/regenerate-canvas$/);
+  if (regenCanvasMatch && method === 'POST') {
+    const vv = registry.get(decodeURIComponent(regenCanvasMatch[1]!));
+    if (!vv) { sendJsonError(res, 404, 'vault not found'); return true; }
+    void Promise.resolve(vv.regenerateCanvas?.())
+      .then(() => sendJson(res, { ok: true }))
+      .catch(() => sendJsonError(res, 500, 'regenerate failed'));
+    return true;
+  }
+
   // Phase 2: /api/vaults/:id/symbols/by-name?q=…
   const byNameMatch = pathOnly.match(/^\/api\/vaults\/([^/]+)\/symbols\/by-name$/);
   if (byNameMatch && method === 'GET') {

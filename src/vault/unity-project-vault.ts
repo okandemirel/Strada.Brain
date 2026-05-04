@@ -345,7 +345,7 @@ export class UnityProjectVault implements IVault {
     return this.store.listSymbolsForPath(path);
   }
 
-  protected async regenerateCanvas(): Promise<void> {
+  async regenerateCanvas(): Promise<void> {
     try {
       const files = this.store.listFiles();
       const symbols = files.flatMap((f) => this.store.listSymbolsForPath(f.path));

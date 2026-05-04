@@ -91,4 +91,5 @@ export interface IVault {
   findCallers?(symbolId: string): Promise<VaultEdge[]>;
   findSymbolsByName?(name: string, limit?: number): Promise<VaultSymbol[]>;
   readCanvas?(): Promise<unknown>;
+  regenerateCanvas?(): Promise<void>;
 }
