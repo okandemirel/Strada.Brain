@@ -210,7 +210,7 @@ export default function GraphCanvas({ graph }: Props) {
       const isHovered = node.id === interactions.hoverNode;
       const isMatching = matchingIds.has(node.id);
 
-      const baseRadius = Math.sqrt(node.val) * 3 + 4;
+      const baseRadius = Math.sqrt(node.val) * 4 + 5;
       const x = node.x ?? 0;
       const y = node.y ?? 0;
       const time = Date.now();
@@ -228,7 +228,7 @@ export default function GraphCanvas({ graph }: Props) {
         drawNodeBorder(ctx, x, y, baseRadius, globalScale, isSelected);
       }
 
-      const showLabel = globalScale > 0.8 || baseRadius > 8;
+      const showLabel = globalScale > 0.5 || baseRadius > 6;
       if (showLabel && highlighted) {
         drawNodeLabel(ctx, node, x, y, baseRadius, globalScale, opacity);
       }
@@ -413,7 +413,7 @@ export default function GraphCanvas({ graph }: Props) {
         backgroundColor="transparent"
         warmupTicks={60}
         cooldownTicks={30}
-        nodeRelSize={1}
+        nodeRelSize={4}
         nodeVal="val"
         nodeCanvasObject={nodeCanvasObject}
         nodeCanvasObjectMode={() => 'replace'}

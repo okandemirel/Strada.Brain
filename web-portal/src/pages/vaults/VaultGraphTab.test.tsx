@@ -37,7 +37,7 @@ describe('VaultGraphTab', () => {
   it('shows empty state when no vault selected', () => {
     useVaultStore.setState({ selected: null, graphCache: {} });
     render(<VaultGraphTab />);
-    expect(screen.getByText(/yükleniyor/i)).toBeInTheDocument();
+    expect(screen.getByText(/bir vault seçin/i)).toBeInTheDocument();
   });
 
   it('fetches canvas and renders graph', async () => {

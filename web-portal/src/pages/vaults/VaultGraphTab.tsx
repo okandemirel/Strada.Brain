@@ -23,14 +23,17 @@ function sanitizeCanvas(raw: unknown): CanvasJson {
       width: n.width ?? 220,
       height: n.height ?? 60,
       color: n.color,
+      file: n.file,
+      kind: n.kind,
       weight: n.weight,
+      group: n.group,
     });
   }
   const ids = new Set(nodes.map((n) => n.id));
   const edges: CanvasEdge[] = [];
   for (const e of (src.edges ?? []) as Partial<CanvasEdge>[]) {
     if (!e?.id || !ids.has(e.fromNode!) || !ids.has(e.toNode!)) continue;
-    edges.push({ id: e.id, fromNode: e.fromNode!, toNode: e.toNode! });
+    edges.push({ id: e.id, fromNode: e.fromNode!, toNode: e.toNode!, label: e.label });
   }
   return { nodes, edges };
 }
@@ -48,6 +51,10 @@ export default function VaultGraphTab() {
       .then((j) => setGraph(selected, sanitizeCanvas(j)))
       .catch(() => setGraph(selected, { nodes: [], edges: [] }));
   }, [selected, graph, setGraph]);
+
+  if (!selected) {
+    return <div className="p-4 text-sm text-muted-foreground">Bir vault seçin</div>;
+  }
 
   if (!graph) {
     return <div className="p-4 text-sm text-muted-foreground">Yükleniyor...</div>;
