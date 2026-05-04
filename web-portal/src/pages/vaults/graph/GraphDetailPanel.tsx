@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { X } from 'lucide-react';
+import { X, FileCode, ArrowLeft } from 'lucide-react';
 import { useVaultStore } from '../../../stores/vault-store';
 import { getKindStyle, parseNodeText } from './node-style';
 
@@ -28,14 +28,14 @@ export function GraphDetailPanel({ target }: Props) {
   const { t } = useTranslation('vault');
   const vaultId = useVaultStore((s) => s.selected);
   const setSelectedSymbol = useVaultStore((s) => s.setSelectedSymbol);
+  const setActiveFilePath = useVaultStore((s) => s.setActiveFilePath);
+  const setActiveTab = useVaultStore((s) => s.setActiveTab);
   const [callers, setCallers] = useState<VaultEdgeResponseItem[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
 
   // Reset transient state during render when the target/vault key changes so
-  // the UI shows a fresh "loading" on the first render after the swap. This
-  // mirrors the pattern used by RightPanel.tsx and VaultFilesTab.tsx and
-  // avoids violating react-hooks/set-state-in-effect.
+  // the UI shows a fresh "loading" on the first render after the swap.
   const key = `${vaultId ?? ''}::${target?.id ?? ''}`;
   const [prevKey, setPrevKey] = useState<string>(key);
   if (key !== prevKey) {
@@ -58,8 +58,6 @@ export function GraphDetailPanel({ target }: Props) {
         setLoading(false);
       })
       .catch((err) => {
-        // Don't touch state when the fetch was aborted — component may be
-        // unmounting or the target may have already changed.
         if ((err as Error).name === 'AbortError') return;
         setCallers([]);
         setError(true);
@@ -81,6 +79,13 @@ export function GraphDetailPanel({ target }: Props) {
   const style = getKindStyle(kind);
   const Icon = style.icon;
 
+  const handleGoToFile = () => {
+    if (parsed.file) {
+      setActiveFilePath(parsed.file);
+      setActiveTab('files');
+    }
+  };
+
   return (
     <aside
       className="h-full flex flex-col overflow-y-auto bg-[var(--graph-panel-bg)] border-l border-[var(--graph-panel-border)]"
@@ -89,7 +94,7 @@ export function GraphDetailPanel({ target }: Props) {
       <header className="flex items-start justify-between p-3 border-b border-[var(--graph-panel-border)] gap-2">
         <div className="flex items-start gap-2 min-w-0 flex-1">
           <div
-            className="mt-0.5 w-5 h-5 rounded flex items-center justify-center flex-shrink-0"
+            className="mt-0.5 w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0"
             style={{ background: style.color }}
           >
             <Icon className="w-3 h-3" style={{ color: '#000' }} />
@@ -116,10 +121,20 @@ export function GraphDetailPanel({ target }: Props) {
           <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">
             {t('detail.location')}
           </div>
-          <code className="block text-xs font-mono text-foreground break-all">
+          <code className="block text-xs font-mono text-foreground break-all mb-2">
             {parsed.file}
             {parsed.line != null && <span className="text-muted-foreground">:{parsed.line}</span>}
           </code>
+          <button
+            type="button"
+            onClick={handleGoToFile}
+            className="inline-flex items-center gap-1.5 px-2 py-1 rounded text-[11px] font-medium
+                       bg-[var(--graph-node-surface)] hover:bg-[var(--graph-node-surface-hover)]
+                       text-foreground border border-[var(--graph-panel-border)] transition-colors"
+          >
+            <FileCode className="w-3 h-3" />
+            {t('detail.goToFile', { defaultValue: 'Go to file' })}
+          </button>
         </section>
       )}
 
@@ -134,15 +149,16 @@ export function GraphDetailPanel({ target }: Props) {
         ) : !callers || callers.length === 0 ? (
           <div className="text-xs text-muted-foreground">{t('detail.noIncoming')}</div>
         ) : (
-          <ul className="space-y-0.5">
+          <ul className="space-y-1">
             {callers.map((edge) => (
               <li
                 key={`${edge.fromSymbol}:${edge.kind}:${edge.atLine}`}
-                className="text-xs font-mono truncate"
+                className="flex items-center gap-1.5 text-xs"
               >
-                <span className="text-[var(--graph-edge-active)]">{edge.kind}</span>{' '}
-                <span className="text-foreground">{edge.fromSymbol}</span>
-                <span className="text-muted-foreground">:{edge.atLine}</span>
+                <ArrowLeft className="w-2.5 h-2.5 text-[var(--graph-edge-active)] flex-shrink-0" />
+                <span className="text-[var(--graph-edge-active)] font-medium">{edge.kind}</span>
+                <span className="font-mono text-foreground truncate">{edge.fromSymbol}</span>
+                <span className="text-muted-foreground font-mono">:{edge.atLine}</span>
               </li>
             ))}
           </ul>

@@ -6,10 +6,8 @@ import {
   type CanvasEdge,
 } from '../../stores/vault-store';
 
-// GraphCanvas pulls in @xyflow/react + d3-force; defer to keep initial bundle lean.
-const GraphCanvas = lazy(() =>
-  import('./graph/GraphCanvas').then((m) => ({ default: m.GraphCanvas })),
-);
+// GraphCanvas pulls in react-force-graph-2d; defer to keep initial bundle lean.
+const GraphCanvas = lazy(() => import('./graph/GraphCanvas'));
 
 function sanitizeCanvas(raw: unknown): CanvasJson {
   const src = (raw ?? {}) as Partial<CanvasJson>;

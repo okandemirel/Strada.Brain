@@ -24,6 +24,11 @@ export function GraphFilterPanel({ visibleCount, totalCount }: Props) {
   const setFileFilter = useVaultStore((s) => s.setGraphFileFilter);
   const reset = useVaultStore((s) => s.resetGraphFilters);
 
+  const hasActiveFilters =
+    filters.search.trim().length > 0 ||
+    filters.fileFilter.trim().length > 0 ||
+    Object.values(filters.kinds).some((v) => !v);
+
   return (
     <aside
       className="h-full flex flex-col gap-3 p-3 overflow-y-auto text-sm bg-[var(--graph-panel-bg)] border-r border-[var(--graph-panel-border)]"
@@ -36,7 +41,13 @@ export function GraphFilterPanel({ visibleCount, totalCount }: Props) {
         <button
           type="button"
           onClick={reset}
-          className="flex items-center gap-1 text-[10px] uppercase tracking-wider text-muted-foreground hover:text-foreground transition"
+          disabled={!hasActiveFilters}
+          className={cn(
+            'flex items-center gap-1 text-[10px] uppercase tracking-wider transition',
+            hasActiveFilters
+              ? 'text-muted-foreground hover:text-foreground'
+              : 'text-muted-foreground/30 cursor-not-allowed',
+          )}
           aria-label={t('filter.reset')}
         >
           <RotateCcw className="w-3 h-3" />
@@ -87,7 +98,7 @@ export function GraphFilterPanel({ visibleCount, totalCount }: Props) {
                   className={cn(
                     'group w-full flex items-center gap-2 px-1.5 py-1 rounded transition-all',
                     'hover:bg-[var(--graph-node-surface-hover)]',
-                    !enabled && 'opacity-50 grayscale',
+                    !enabled && 'opacity-40 grayscale',
                   )}
                   aria-pressed={enabled}
                 >
@@ -96,6 +107,7 @@ export function GraphFilterPanel({ visibleCount, totalCount }: Props) {
                     style={{
                       backgroundColor: enabled ? style.color : 'transparent',
                       border: `1.5px solid ${style.color}`,
+                      boxShadow: enabled ? `0 0 6px ${style.color}40` : 'none',
                     }}
                   >
                     {enabled && <Icon className="w-2.5 h-2.5" style={{ color: '#000' }} />}
@@ -110,8 +122,15 @@ export function GraphFilterPanel({ visibleCount, totalCount }: Props) {
         </ul>
       </div>
 
-      <div className="mt-auto pt-2 border-t border-[var(--graph-panel-border)] text-[10px] text-muted-foreground">
-        {t('filter.resultCount', { visible: visibleCount, total: totalCount })}
+      <div className="mt-auto pt-2 border-t border-[var(--graph-panel-border)]">
+        <div className="text-[10px] text-muted-foreground">
+          {t('filter.resultCount', { visible: visibleCount, total: totalCount })}
+        </div>
+        {hasActiveFilters && visibleCount === 0 && (
+          <div className="mt-1 text-[10px] text-[var(--color-error,#f87171)]">
+            {t('filter.noResults', { defaultValue: 'No nodes match filters' })}
+          </div>
+        )}
       </div>
     </aside>
   );

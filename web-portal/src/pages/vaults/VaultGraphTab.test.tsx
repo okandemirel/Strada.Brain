@@ -2,16 +2,18 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import { useVaultStore } from '../../stores/vault-store';
 
-// Mock GraphCanvas to avoid pulling in @xyflow/react in jsdom
+// Mock GraphCanvas to avoid pulling in react-force-graph-2d in jsdom
 vi.mock('./graph/GraphCanvas', () => ({
-  GraphCanvas: ({ graph }: { graph: { nodes: Array<{ id: string; text: string }> } }) => (
-    <div data-testid="graph-canvas">
-      <span data-testid="node-count">{graph.nodes.length}</span>
-      {graph.nodes.map((n) => (
-        <div key={n.id} data-testid={`node-${n.id}`}>{n.text}</div>
-      ))}
-    </div>
-  ),
+  default: function MockGraphCanvas({ graph }: { graph: { nodes: Array<{ id: string; text: string }> } }) {
+    return (
+      <div data-testid="graph-canvas">
+        <span data-testid="node-count">{graph.nodes.length}</span>
+        {graph.nodes.map((n) => (
+          <div key={n.id} data-testid={`node-${n.id}`}>{n.text}</div>
+        ))}
+      </div>
+    );
+  },
 }));
 
 import VaultGraphTab from './VaultGraphTab';
