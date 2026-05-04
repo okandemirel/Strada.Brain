@@ -178,6 +178,7 @@ export default function GraphCanvas({ graph }: Props) {
   const selectedSymbolId = useVaultStore((s) => s.selectedSymbolId);
   const setSelectedSymbol = useVaultStore((s) => s.setSelectedSymbol);
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const fgRef = useRef<ForceGraphMethods<any, any> | undefined>(undefined);
   const [searchQuery, setSearchQuery] = useState('');
   const [showSettings, setShowSettings] = useState(false);
