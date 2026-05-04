@@ -3,13 +3,12 @@ import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { useVaultStore } from '../../../stores/vault-store';
 
 const fetchMock = vi.fn();
-(globalThis as { fetch: typeof fetch }).fetch = fetchMock as unknown as typeof fetch;
 
 import { GraphNodeOverlay } from './GraphNodeOverlay';
 
 describe('GraphNodeOverlay', () => {
   beforeEach(() => {
-    fetchMock.mockReset();
+    vi.stubGlobal('fetch', fetchMock);
     useVaultStore.setState({
       selected: 'v1',
       vaults: [{ id: 'v1', kind: 'unity-project' }],
@@ -18,6 +17,10 @@ describe('GraphNodeOverlay', () => {
       activeFilePath: null,
       selectedSymbolId: null,
     });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it('renders nothing when nodeId is null', () => {

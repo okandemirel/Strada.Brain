@@ -94,13 +94,13 @@ export class ObsidianVault implements IVault {
 
   async sync(): Promise<{ changed: number; durationMs: number }> {
     const started = Date.now();
-    const changed = await this.reindexChanged();
-    if (changed > 0) {
+    const { count, paths } = await this.reindexChanged();
+    if (count > 0) {
       await this.resolveWikilinks();
       await this.regenerateCanvas();
-      this.emitter.emit('update', { vaultId: this.id, changedPaths: [] });
+      this.emitter.emit('update', { vaultId: this.id, changedPaths: paths });
     }
-    return { changed, durationMs: Date.now() - started };
+    return { changed: count, durationMs: Date.now() - started };
   }
 
   async rebuild(): Promise<void> {
@@ -410,7 +410,7 @@ export class ObsidianVault implements IVault {
     }
   }
 
-  private async reindexChanged(): Promise<number> {
+  private async reindexChanged(): Promise<{ count: number; paths: string[] }> {
     const before = new Set(this.store.listFiles().map((f) => f.path));
     const { readdir, lstat } = await import('node:fs/promises');
     const files: VaultFile[] = [];
@@ -452,6 +452,6 @@ export class ObsidianVault implements IVault {
         changed.push(p);
       }
     }
-    return changed.length;
+    return { count: changed.length, paths: changed };
   }
 }
