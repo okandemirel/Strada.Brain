@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState } from 'react'
 export type Theme = 'dark' | 'light'
 
 // Set theme attribute before first render to prevent flash
-const savedTheme = typeof window !== 'undefined'
+const savedTheme = typeof window !== 'undefined' && typeof localStorage?.getItem === 'function'
   ? localStorage.getItem('strada-theme') ?? 'dark'
   : 'dark'
 if (typeof document !== 'undefined') {
@@ -12,8 +12,11 @@ if (typeof document !== 'undefined') {
 
 export function useTheme() {
   const [theme, setThemeState] = useState<Theme>(() => {
-    const saved = localStorage.getItem('strada-theme')
-    return saved === 'light' ? 'light' : 'dark'
+    if (typeof window !== 'undefined' && typeof localStorage?.getItem === 'function') {
+      const saved = localStorage.getItem('strada-theme')
+      return saved === 'light' ? 'light' : 'dark'
+    }
+    return 'dark'
   })
 
   useEffect(() => {

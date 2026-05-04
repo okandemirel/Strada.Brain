@@ -80,7 +80,7 @@ export function buildCanvas(input: {
   const resolvedEdges = edges.filter(
     (e) => symbolIds.has(e.fromSymbol) && symbolIds.has(e.toSymbol),
   );
-  const useFileGraph = symbols.length > 500 || resolvedEdges.length < edges.length * 0.3;
+  const useFileGraph = files.length > 0 && symbols.length > 500;
 
   // Count connections per node for sizing (use resolved edges + wikilinks)
   const connectionCounts = new Map<string, number>();
