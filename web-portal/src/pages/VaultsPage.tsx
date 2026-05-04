@@ -250,7 +250,7 @@ export default function VaultsPage() {
         {/* Resizable tri-panel */}
         <div className="flex-1 min-w-0">
           <ResizablePanelGroup direction="horizontal" className="h-full w-full">
-            {leftPanelOpen && (
+            {leftPanelOpen && activeTab !== 'graph' && (
               <>
                 <ResizablePanel
                   id="vault-left"
@@ -294,7 +294,8 @@ export default function VaultsPage() {
 
             <ResizablePanel id="vault-center" order={2} defaultSize={rightPanelOpen ? 55 : 80} minSize={30}>
               <div className="h-full flex flex-col min-w-0 bg-[var(--color-bg)]">
-                {/* Tab bar */}
+                {/* Tab bar — hidden in graph mode for fullscreen experience */}
+                {activeTab !== 'graph' && (
                 <div className="flex items-stretch border-b border-[var(--color-border-subtle)] bg-[var(--color-bg-secondary)]">
                   <div className="flex-1 flex items-stretch overflow-x-auto">
                     {openTabs.map((ot) => {
@@ -377,9 +378,10 @@ export default function VaultsPage() {
                     </button>
                   </div>
                 </div>
+                )}
 
-                {/* Breadcrumbs */}
-                {breadcrumbs.length > 0 && (
+                {/* Breadcrumbs — hidden in graph mode */}
+                {activeTab !== 'graph' && breadcrumbs.length > 0 && (
                   <div className="flex items-center gap-1 px-3 py-1.5 text-[11px] text-[var(--color-text-tertiary)] border-b border-[var(--color-border-subtle)] bg-[var(--color-bg)] overflow-x-auto">
                     <span className="text-[var(--color-text-secondary)]">{t('breadcrumb.root')}</span>
                     {breadcrumbs.map((p, i) => (
@@ -407,7 +409,7 @@ export default function VaultsPage() {
               </div>
             </ResizablePanel>
 
-            {rightPanelOpen && (
+            {rightPanelOpen && activeTab !== 'graph' && (
               <>
                 <ResizableHandle className="w-px bg-[var(--color-border-subtle)]" />
                 <ResizablePanel

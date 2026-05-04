@@ -39,6 +39,7 @@ export class SqliteVaultStore {
   private _stmtListEdgesAll: Database.Statement | null = null;
   private _stmtDeleteEdgesByPath: Database.Statement | null = null;
   private _stmtUpsertWikilink: Database.Statement | null = null;
+  private _stmtListWikilinksAll: Database.Statement | null = null;
   private _stmtListWikilinksTo: Database.Statement | null = null;
   private _stmtMarkWikilinkResolved: Database.Statement | null = null;
   private _stmtDeleteWikilinksFromNote: Database.Statement | null = null;
@@ -125,6 +126,7 @@ export class SqliteVaultStore {
       VALUES (@fromNote, @target, @resolved)
       ON CONFLICT(from_note, target) DO UPDATE SET resolved = excluded.resolved
     `);
+    this._stmtListWikilinksAll = this.db.prepare('SELECT * FROM vault_wikilinks');
     this._stmtListWikilinksTo = this.db.prepare('SELECT * FROM vault_wikilinks WHERE target = ?');
     this._stmtMarkWikilinkResolved = this.db.prepare('UPDATE vault_wikilinks SET resolved = 1 WHERE from_note = ? AND target = ?');
     this._stmtDeleteWikilinksFromNote = this.db.prepare('DELETE FROM vault_wikilinks WHERE from_note = ?');
@@ -274,6 +276,15 @@ export class SqliteVaultStore {
 
   upsertWikilink(w: VaultWikilink): void {
     this._stmtUpsertWikilink!.run({ ...w, resolved: w.resolved ? 1 : 0 });
+  }
+
+  listWikilinks(): VaultWikilink[] {
+    const rows = this._stmtListWikilinksAll!.all() as Record<string, unknown>[];
+    return rows.map((r) => ({
+      fromNote: r['from_note'] as string,
+      target: r['target'] as string,
+      resolved: (r['resolved'] as number) === 1,
+    }));
   }
 
   listWikilinksTo(target: string): VaultWikilink[] {

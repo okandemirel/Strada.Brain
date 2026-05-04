@@ -1,20 +1,11 @@
-import { useCallback, useMemo, useRef } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import ForceGraph2D from 'react-force-graph-2d';
 import type { ForceGraphMethods } from 'react-force-graph-2d';
-
-import {
-  ResizableHandle,
-  ResizablePanel,
-  ResizablePanelGroup,
-} from '@/components/ui/resizable';
 
 import {
   useVaultStore,
   type CanvasJson,
 } from '../../../stores/vault-store';
-import { GraphFilterPanel } from './GraphFilterPanel';
-import { GraphDetailPanel, type GraphDetailTarget } from './GraphDetailPanel';
-import { GraphStatsOverlay } from './GraphStatsOverlay';
 import { useGraphInteractions } from './useGraphInteractions';
 import { getKindStyle, parseNodeText } from './node-style';
 
@@ -34,8 +25,6 @@ interface GraphNode {
   y?: number;
 }
 
-// react-force-graph-2d mutates link source/target into node references at runtime.
-// We keep the initial shape as strings but accept any at the boundary.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type GraphLink = any;
 
@@ -45,13 +34,7 @@ function extractNodeId(raw: string | { id: string } | unknown): string {
   return String(raw);
 }
 
-function buildGraphData(
-  graph: CanvasJson,
-  filters: { kinds: Record<string, boolean>; search: string; fileFilter: string },
-) {
-  const searchLower = filters.search.trim().toLowerCase();
-  const fileLower = filters.fileFilter.trim().toLowerCase();
-
+function buildGraphData(graph: CanvasJson) {
   // Compute connection counts first (on full set)
   const connectionCounts = new Map<string, number>();
   for (const e of graph.edges) {
@@ -59,41 +42,28 @@ function buildGraphData(
     connectionCounts.set(e.toNode, (connectionCounts.get(e.toNode) ?? 0) + 1);
   }
 
-  const enabledKinds = filters.kinds;
-  const nodes: GraphNode[] = [];
-  for (const n of graph.nodes) {
+  const nodes: GraphNode[] = graph.nodes.map((n) => {
     const parsed = parseNodeText(n.text);
     const kind = n.kind ?? parsed.kind;
-    const labelLower = parsed.name.toLowerCase();
-    const fileStr = (n.file ?? parsed.file ?? '').toLowerCase();
-
-    const passKind = kind ? (enabledKinds as Record<string, boolean>)[kind] ?? true : true;
-    const passSearch = !searchLower || labelLower.includes(searchLower);
-    const passFile = !fileLower || fileStr.includes(fileLower);
-    if (!passKind || !passSearch || !passFile) continue;
-
     const style = getKindStyle(kind);
     const connCount = connectionCounts.get(n.id) ?? 0;
 
-    nodes.push({
+    return {
       id: n.id,
-      label: parsed.name,
+      label: parsed.name || n.text.split('/').pop() || n.id,
       kind,
-      color: style.color,
+      color: n.color ?? style.color,
       val: Math.max(connCount, 1),
-      file: parsed.file ?? null,
+      file: n.file ?? parsed.file ?? null,
       line: parsed.line ?? null,
-    });
-  }
+    };
+  });
 
-  const visibleIds = new Set(nodes.map((n) => n.id));
-  const links: GraphLink[] = graph.edges
-    .filter((e) => visibleIds.has(e.fromNode) && visibleIds.has(e.toNode))
-    .map((e) => ({
-      source: e.fromNode,
-      target: e.toNode,
-      label: e.label,
-    }));
+  const links: GraphLink[] = graph.edges.map((e) => ({
+    source: e.fromNode,
+    target: e.toNode,
+    label: e.label,
+  }));
 
   return { nodes, links, connectionCounts };
 }
@@ -152,10 +122,10 @@ function drawNodeLabel(
   opacity: number,
 ) {
   const fontSize = Math.max(10 / globalScale, 5);
-  ctx.font = `500 ${fontSize}px system-ui, -apple-system, sans-serif`;
+  ctx.font = `400 ${fontSize}px -apple-system, BlinkMacSystemFont, system-ui, sans-serif`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
-  ctx.fillStyle = '#e2e8f0';
+  ctx.fillStyle = '#a0a0a0';
   ctx.globalAlpha = opacity;
 
   const truncated = node.label.length > 22 ? node.label.slice(0, 20) + '…' : node.label;
@@ -166,7 +136,7 @@ function drawNodeLabel(
     const fileName = node.file.split('/').pop() ?? node.file;
     const detailFontSize = Math.max(8 / globalScale, 4);
     ctx.font = `400 ${detailFontSize}px ui-monospace, SFMono-Regular, monospace`;
-    ctx.fillStyle = '#94a3b8';
+    ctx.fillStyle = '#666666';
     ctx.fillText(
       `${fileName}${node.line ? ':' + node.line : ''}`,
       x,
@@ -186,7 +156,7 @@ function nodeCanvasObjectFn(
     const isHovered = node.id === interactions.hoverNode;
 
     // Base radius from val (connection count)
-    const baseRadius = Math.sqrt(node.val) * 2.5 + 2;
+    const baseRadius = Math.sqrt(node.val) * 3 + 4;
     const x = node.x ?? 0;
     const y = node.y ?? 0;
 
@@ -203,7 +173,7 @@ function nodeCanvasObjectFn(
       drawNodeBorder(ctx, x, y, baseRadius, globalScale, isSelected);
     }
 
-    const showLabel = globalScale > 1.2 || baseRadius > 6;
+    const showLabel = globalScale > 0.8 || baseRadius > 8;
     if (showLabel && highlighted) {
       drawNodeLabel(ctx, node, x, y, baseRadius, globalScale, opacity);
     }
@@ -213,16 +183,15 @@ function nodeCanvasObjectFn(
 }
 
 export default function GraphCanvas({ graph }: Props) {
-  const filters = useVaultStore((s) => s.graphFilters);
   const selectedSymbolId = useVaultStore((s) => s.selectedSymbolId);
   const setSelectedSymbol = useVaultStore((s) => s.setSelectedSymbol);
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const fgRef = useRef<ForceGraphMethods<any, any> | undefined>(undefined);
+  const [searchQuery, setSearchQuery] = useState('');
 
-  const { nodes, links } = useMemo(
-    () => buildGraphData(graph, filters),
-    [graph, filters],
+  const { nodes, links, connectionCounts } = useMemo(
+    () => buildGraphData(graph),
+    [graph],
   );
 
   const interactions = useGraphInteractions({ links });
@@ -235,7 +204,6 @@ export default function GraphCanvas({ graph }: Props) {
   const handleNodeClick = useCallback(
     (node: GraphNode) => {
       setSelectedSymbol(node.id);
-      // Center view on selected node with animation
       const fg = fgRef.current;
       if (fg) {
         fg.centerAt(node.x ?? 0, node.y ?? 0, 400);
@@ -254,7 +222,7 @@ export default function GraphCanvas({ graph }: Props) {
       const s = extractNodeId(link.source);
       const t = extractNodeId(link.target);
       const highlighted = interactions.isLinkHighlighted(s, t);
-      return highlighted ? 'rgba(148, 163, 184, 0.45)' : 'rgba(148, 163, 184, 0.08)';
+      return highlighted ? 'rgba(148, 163, 184, 0.45)' : 'rgba(51, 51, 51, 0.25)';
     },
     [interactions],
   );
@@ -269,17 +237,6 @@ export default function GraphCanvas({ graph }: Props) {
     [interactions],
   );
 
-  const detailTarget: GraphDetailTarget | null = useMemo(() => {
-    if (!selectedSymbolId) return null;
-    const n = nodes.find((nn) => nn.id === selectedSymbolId);
-    if (!n) return null;
-    return {
-      id: n.id,
-      label: n.label,
-      kind: n.kind,
-    };
-  }, [nodes, selectedSymbolId]);
-
   const fileCount = useMemo(() => {
     const files = new Set<string>();
     for (const n of nodes) {
@@ -288,55 +245,105 @@ export default function GraphCanvas({ graph }: Props) {
     return files.size;
   }, [nodes]);
 
+
+
+  const isolatedCount = Math.max(0, nodes.length - connectionCounts.size);
+
   return (
-    <ResizablePanelGroup direction="horizontal" className="h-full w-full">
-      <ResizablePanel defaultSize={18} minSize={12} maxSize={30}>
-        <GraphFilterPanel visibleCount={nodes.length} totalCount={graph.nodes.length} />
-      </ResizablePanel>
-      <ResizableHandle />
-      <ResizablePanel defaultSize={56} minSize={30}>
-        <div
-          className="h-full w-full relative"
-          style={{ background: 'var(--graph-bg)' }}
-          data-testid="graph-canvas"
-        >
-          <ForceGraph2D
-            ref={fgRef}
-            graphData={{ nodes, links }}
-            backgroundColor="transparent"
-            warmupTicks={60}
-            cooldownTicks={30}
-            nodeRelSize={1}
-            nodeVal="val"
-            nodeCanvasObject={nodeCanvasObject}
-            nodeCanvasObjectMode={() => 'replace'}
-            linkColor={linkColor}
-            linkWidth={linkWidth}
-            linkDirectionalArrowLength={3}
-            linkDirectionalArrowRelPos={1}
-            linkDirectionalArrowColor={() => 'rgba(148,163,184,0.3)'}
-            onNodeHover={(node) =>
-              interactions.setHoverNode(node ? (node as GraphNode).id : null)
-            }
-            onNodeClick={(node) => handleNodeClick(node as GraphNode)}
-            onBackgroundClick={handleBackgroundClick}
-            enableNodeDrag={true}
-            enableZoomInteraction={true}
-            enablePanInteraction={true}
-            autoPauseRedraw={false}
-          />
-          <GraphStatsOverlay
-            nodeCount={nodes.length}
-            edgeCount={links.length}
-            fileCount={fileCount}
-            connectionCounts={interactions.connectionCounts}
+    <div className="h-full w-full relative" style={{ background: '#0d0d0d' }} data-testid="graph-canvas">
+      {/* Search bar — top left */}
+      <div className="absolute top-4 left-4 z-10 flex items-center gap-2">
+        <div className="relative">
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search nodes..."
+            className="w-56 h-8 pl-3 pr-3 rounded-full text-xs bg-black/40 backdrop-blur-sm
+                       border border-white/10 text-white placeholder:text-white/30
+                       focus:outline-none focus:border-white/30 transition-colors"
           />
         </div>
-      </ResizablePanel>
-      <ResizableHandle />
-      <ResizablePanel defaultSize={26} minSize={16} maxSize={40}>
-        <GraphDetailPanel target={detailTarget} />
-      </ResizablePanel>
-    </ResizablePanelGroup>
+        {searchQuery && (
+          <button
+            type="button"
+            onClick={() => setSearchQuery('')}
+            className="text-[10px] text-white/40 hover:text-white/70 transition-colors"
+          >
+            Clear
+          </button>
+        )}
+      </div>
+
+      {/* Settings toggle — top right */}
+      <div className="absolute top-4 right-4 z-10">
+        <button
+          type="button"
+          className="w-8 h-8 rounded-full bg-black/40 backdrop-blur-sm border border-white/10
+                     flex items-center justify-center text-white/40 hover:text-white/70
+                     hover:border-white/20 transition-all"
+          title="Display settings"
+        >
+          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+              d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+              d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+          </svg>
+        </button>
+      </div>
+
+      {/* Force Graph */}
+      <ForceGraph2D
+        ref={fgRef}
+        graphData={{ nodes, links }}
+        backgroundColor="transparent"
+        warmupTicks={60}
+        cooldownTicks={30}
+        nodeRelSize={1}
+        nodeVal="val"
+        nodeCanvasObject={nodeCanvasObject}
+        nodeCanvasObjectMode={() => 'replace'}
+        linkColor={linkColor}
+        linkWidth={linkWidth}
+        linkDirectionalArrowLength={3}
+        linkDirectionalArrowRelPos={1}
+        linkDirectionalArrowColor={() => 'rgba(51,51,51,0.3)'}
+        onNodeHover={(node) =>
+          interactions.setHoverNode(node ? (node as GraphNode).id : null)
+        }
+        onNodeClick={(node) => handleNodeClick(node as GraphNode)}
+        onBackgroundClick={handleBackgroundClick}
+        enableNodeDrag={true}
+        enableZoomInteraction={true}
+        enablePanInteraction={true}
+        autoPauseRedraw={false}
+      />
+
+      {/* Stats — bottom left */}
+      <div className="absolute bottom-4 left-4 z-10 pointer-events-none select-none">
+        <div className="text-[10px] text-white/30 leading-relaxed">
+          <div>
+            {nodes.length} {nodes.length === 1 ? 'node' : 'nodes'} · {links.length}{' '}
+            {links.length === 1 ? 'link' : 'links'}
+          </div>
+          {fileCount > 0 && <div>{fileCount} files</div>}
+          {isolatedCount > 0 && <div>{isolatedCount} isolated</div>}
+        </div>
+      </div>
+
+      {/* Zoom controls — bottom right */}
+      <div className="absolute bottom-4 right-4 z-10 flex items-center gap-1">
+        <button
+          type="button"
+          onClick={() => fgRef.current?.zoomToFit(400)}
+          className="px-2 h-7 rounded-full bg-black/40 backdrop-blur-sm border border-white/10
+                     text-[10px] text-white/40 hover:text-white/70 hover:border-white/20
+                     transition-all"
+        >
+          Fit
+        </button>
+      </div>
+    </div>
   );
 }

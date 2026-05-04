@@ -350,7 +350,8 @@ export class UnityProjectVault implements IVault {
       const files = this.store.listFiles();
       const symbols = files.flatMap((f) => this.store.listSymbolsForPath(f.path));
       const edges = this.store.listEdges();
-      const canvas = buildCanvas({ symbols, edges, files });
+      const wikilinks = this.store.listWikilinks();
+      const canvas = buildCanvas({ symbols, edges, files, wikilinks });
       // phase2-review L1: atomic write via temp + rename so readCanvas/GET /canvas
       // never observes a partial JSON document mid-write.
       const finalPath = join(this.rootPath, '.strada/vault/graph.canvas');

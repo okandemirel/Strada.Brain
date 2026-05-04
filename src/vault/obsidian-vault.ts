@@ -307,9 +307,11 @@ export class ObsidianVault implements IVault {
 
   async regenerateCanvas(): Promise<void> {
     try {
-      const symbols = this.store.listFiles().flatMap((f) => this.store.listSymbolsForPath(f.path));
+      const files = this.store.listFiles();
+      const symbols = files.flatMap((f) => this.store.listSymbolsForPath(f.path));
       const edges = this.store.listEdges();
-      const canvas = buildCanvas({ symbols, edges });
+      const wikilinks = this.store.listWikilinks();
+      const canvas = buildCanvas({ symbols, edges, files, wikilinks });
       const finalPath = join(this.rootPath, '.strada/vault/graph.canvas');
       const tmpPath = `${finalPath}.tmp`;
       await writeFile(tmpPath, JSON.stringify(canvas, null, 2), 'utf8');
