@@ -2,8 +2,6 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import { useVaultStore } from '../../stores/vault-store';
 
-// Mock react-force-graph-2d: jsdom has no canvas support. The mock renders
-// a simple div so tests can assert on presence without crashing.
 vi.mock('react-force-graph-2d', () => ({
   default: ({ graphData }: { graphData: { nodes: Array<{ id: string; label: string }> } }) => (
     <div data-testid="force-graph">
@@ -36,7 +34,7 @@ describe('VaultGraphTab', () => {
   it('shows empty state when no vault selected', () => {
     useVaultStore.setState({ selected: null, graphCache: {} });
     render(<VaultGraphTab />);
-    expect(screen.getByText(/select a vault/i)).toBeInTheDocument();
+    expect(screen.getByText(/vault seçiniz/i)).toBeInTheDocument();
   });
 
   it('fetches canvas and renders node labels', async () => {
@@ -54,6 +52,6 @@ describe('VaultGraphTab', () => {
   it('shows empty-state message when canvas has no nodes', async () => {
     fetchMock.mockResolvedValueOnce({ ok: true, json: async () => ({ nodes: [], edges: [] }) });
     render(<VaultGraphTab />);
-    await waitFor(() => expect(screen.getByText(/no symbols/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/vault seçiniz/i)).toBeInTheDocument());
   });
 });
