@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useReducer } from 'react';
 import { useTranslation } from 'react-i18next';
 import { X, FileCode, ExternalLink, ArrowLeft } from 'lucide-react';
 import { useVaultStore } from '../../../stores/vault-store';
@@ -15,20 +15,44 @@ interface Props {
   onClose: () => void;
 }
 
+type State = {
+  callers: VaultEdgeResponseItem[] | null;
+  loading: boolean;
+  error: boolean;
+};
+
+type Action =
+  | { type: 'reset'; loading: boolean }
+  | { type: 'success'; callers: VaultEdgeResponseItem[] }
+  | { type: 'error' };
+
+function reducer(state: State, action: Action): State {
+  switch (action.type) {
+    case 'reset':
+      return { callers: null, loading: action.loading, error: false };
+    case 'success':
+      return { callers: action.callers, loading: false, error: false };
+    case 'error':
+      return { callers: [], loading: false, error: true };
+    default:
+      return state;
+  }
+}
+
 export function GraphNodeOverlay({ nodeId, onClose }: Props) {
   const { t } = useTranslation('vault');
   const vaultId = useVaultStore((s) => s.selected);
   const setActiveFilePath = useVaultStore((s) => s.setActiveFilePath);
   const setActiveTab = useVaultStore((s) => s.setActiveTab);
   const setSelectedSymbol = useVaultStore((s) => s.setSelectedSymbol);
-  const [callers, setCallers] = useState<VaultEdgeResponseItem[] | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(false);
+  const [state, dispatch] = useReducer(reducer, {
+    callers: null,
+    loading: false,
+    error: false,
+  });
 
   useEffect(() => {
-    setCallers(null);
-    setError(false);
-    setLoading(Boolean(nodeId && vaultId));
+    dispatch({ type: 'reset', loading: Boolean(nodeId && vaultId) });
     if (!nodeId || !vaultId) return;
     const ctrl = new AbortController();
     fetch(
@@ -37,14 +61,11 @@ export function GraphNodeOverlay({ nodeId, onClose }: Props) {
     )
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then((j: { items?: VaultEdgeResponseItem[] }) => {
-        setCallers(j.items ?? []);
-        setLoading(false);
+        dispatch({ type: 'success', callers: j.items ?? [] });
       })
       .catch((err) => {
         if ((err as Error).name === 'AbortError') return;
-        setCallers([]);
-        setError(true);
-        setLoading(false);
+        dispatch({ type: 'error' });
       });
     return () => ctrl.abort();
   }, [nodeId, vaultId]);
@@ -127,15 +148,15 @@ export function GraphNodeOverlay({ nodeId, onClose }: Props) {
                 {t('detail.incoming')}
               </div>
 
-              {loading ? (
+              {state.loading ? (
                 <div className="text-xs text-white/30 animate-pulse">…</div>
-              ) : error ? (
+              ) : state.error ? (
                 <div className="text-xs text-red-400/70">{t('detail.loadError')}</div>
-              ) : !callers || callers.length === 0 ? (
+              ) : !state.callers || state.callers.length === 0 ? (
                 <div className="text-xs text-white/20">{t('detail.noIncoming')}</div>
               ) : (
                 <ul className="space-y-1.5">
-                  {callers.map((edge) => (
+                  {state.callers.map((edge) => (
                     <li
                       key={`${edge.fromSymbol}:${edge.kind}:${edge.atLine}`}
                       className="flex items-start gap-1.5 text-xs group"
