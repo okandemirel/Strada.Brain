@@ -98,6 +98,8 @@ export class SelfVault extends UnityProjectVault {
   override async startWatch(debounceMs = 800): Promise<void> {
     if (this.watcher) return;
     const { VaultWatcher } = await import('./watcher.js');
+    // Double-check after async import to prevent race conditions
+    if (this.watcher) return;
     // SelfVault watches multiple roots; we create one watcher per root
     // and merge their updates through a shared emitter.
     const watchers: Array<{ start(): Promise<void>; stop(): Promise<void> }> = [];
@@ -145,6 +147,24 @@ export class SelfVault extends UnityProjectVault {
   // Override sync: use curated discovery roots (same as init) rather than Unity's file walker.
   override async sync(): Promise<{ changed: number; durationMs: number }> {
     const started = Date.now();
+    const found = await this.discoverFiles();
+    const before = new Set(this.store.listFiles().map((f) => f.path));
+    const changed = await this.processFiles(found, before, 'sync');
+    return { changed: changed.length, durationMs: Date.now() - started };
+  }
+
+  // Override init: use curated discovery roots rather than Unity's Assets/Packages layout.
+  override async init(): Promise<void> {
+    const { mkdir } = await import('node:fs/promises');
+    await mkdir(join(this.rootPath, '.strada/vault/codebase'), { recursive: true });
+    this.store.migrate();
+
+    const found = await this.discoverFiles();
+    await this.processFiles(found, new Set(), 'init');
+  }
+
+  /** Discover files from SELF_INCLUDE_ROOTS. */
+  private async discoverFiles(): Promise<VaultFile[]> {
     const found: VaultFile[] = [];
     for (const r of SELF_INCLUDE_ROOTS) {
       const abs = join(this.rootPath, r);
@@ -163,75 +183,40 @@ export class SelfVault extends UnityProjectVault {
         await walk(this.rootPath, abs, found);
       }
     }
-
-    const before = new Set(this.store.listFiles().map((f) => f.path));
-    const changed: string[] = [];
-    for (const f of found) {
-      try {
-        if (await this.reindexFile(f.path)) changed.push(f.path);
-      } catch (err) {
-        getLoggerSafe().warn(`[vault ${this.id}] skipping ${f.path} during sync`, { err });
-      }
-    }
-    const present = new Set(found.map((f) => f.path));
-    for (const p of before) {
-      if (!present.has(p)) {
-        const hnswIds = this.store.listHnswIdsForPath(p);
-        for (const hnswId of hnswIds) this.adapter.remove(hnswId);
-        this.store.deleteFile(p);
-        changed.push(p);
-      }
-    }
-    await this.regenerateCanvas();
-    if (changed.length) {
-      this.emitter.emit('update', { vaultId: this.id, changedPaths: changed });
-    }
-    return { changed: changed.length, durationMs: Date.now() - started };
+    return found;
   }
 
-  // Override init: use curated discovery roots rather than Unity's Assets/Packages layout.
-  override async init(): Promise<void> {
-    const { mkdir } = await import('node:fs/promises');
-    await mkdir(join(this.rootPath, '.strada/vault/codebase'), { recursive: true });
-    this.store.migrate();
-
-    const found: VaultFile[] = [];
-    for (const r of SELF_INCLUDE_ROOTS) {
-      const abs = join(this.rootPath, r);
-      // phase2-review M1: lstat (don't follow symlinks even at the root level).
-      const st = await lstat(abs).catch(() => null);
-      if (!st || st.isSymbolicLink()) continue;
-      if (st.isFile()) {
-        const lang = EXT_LANG[extname(abs).toLowerCase()];
-        if (!lang) continue;
-        const relPosix = relative(this.rootPath, abs).replaceAll(pathSep, '/');
-        // sec-H4: honor the sensitive-path ignore list at the root-file level too.
-        if (isSensitiveSelfPath(relPosix, basename(abs))) continue;
-        found.push({
-          path: relPosix,
-          blobHash: '',
-          mtimeMs: st.mtimeMs,
-          size: st.size,
-          lang,
-          kind: 'doc',
-          indexedAt: 0,
-        });
-      } else {
-        await walk(this.rootPath, abs, found);
-      }
-    }
-
+  /** Index discovered files and optionally remove deleted ones. */
+  private async processFiles(
+    found: VaultFile[],
+    before: Set<string>,
+    phase: 'init' | 'sync',
+  ): Promise<string[]> {
     const changed: string[] = [];
     for (const f of found) {
       try {
         if (await this.reindexFile(f.path)) changed.push(f.path);
       } catch (err) {
-        getLoggerSafe().warn(`[vault ${this.id}] skipping ${f.path} during init`, { err });
+        getLoggerSafe().warn(`[vault ${this.id}] skipping ${f.path} during ${phase}`, { err });
       }
     }
+
+    if (phase === 'sync') {
+      const present = new Set(found.map((f) => f.path));
+      for (const p of before) {
+        if (!present.has(p)) {
+          const hnswIds = this.store.listHnswIdsForPath(p);
+          for (const hnswId of hnswIds) this.adapter.remove(hnswId);
+          this.store.deleteFile(p);
+          changed.push(p);
+        }
+      }
+    }
+
     await this.regenerateCanvas();
     if (changed.length) {
       this.emitter.emit('update', { vaultId: this.id, changedPaths: changed });
     }
+    return changed;
   }
 }
