@@ -48,7 +48,7 @@ function SimpleVaultGraph() {
 
   if (!selected) {
     return (
-      <div className="flex items-center justify-center h-full text-gray-500">
+      <div className="flex items-center justify-center h-full text-[var(--color-text-tertiary)]">
         Soldaki listeden bir vault seçin
       </div>
     );
@@ -56,7 +56,7 @@ function SimpleVaultGraph() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-full text-gray-500">
+      <div className="flex items-center justify-center h-full text-[var(--color-text-tertiary)]">
         Yükleniyor...
       </div>
     );
@@ -65,10 +65,10 @@ function SimpleVaultGraph() {
   if (error) {
     return (
       <div className="flex flex-col items-center justify-center h-full gap-4">
-        <div className="text-red-500">Hata: {error}</div>
+        <div className="text-[var(--color-error)]">Hata: {error}</div>
         <button
           onClick={fetchCanvas}
-          className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+          className="px-4 py-2 bg-[var(--color-accent)] text-[var(--color-on-accent)] rounded hover:opacity-90 transition-opacity"
         >
           Tekrar Dene
         </button>
@@ -79,10 +79,10 @@ function SimpleVaultGraph() {
   if (!canvas || !canvas.nodes || canvas.nodes.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center h-full gap-4">
-        <div className="text-gray-500">Graph verisi bulunamadı</div>
+        <div className="text-[var(--color-text-tertiary)]">Graph verisi bulunamadı</div>
         <button
           onClick={regenerateCanvas}
-          className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+          className="px-4 py-2 bg-[var(--color-accent)] text-[var(--color-on-accent)] rounded hover:opacity-90 transition-opacity"
         >
           Graph Oluştur
         </button>
@@ -108,26 +108,26 @@ export default function VaultsPage() {
   }, [setVaults]);
 
   return (
-    <div className="h-full flex bg-gray-900 text-white">
+    <div className="h-full flex bg-[var(--color-bg)] text-[var(--color-text)]">
       {/* Sol panel - Vault Listesi */}
-      <div className="w-64 border-r border-gray-700 flex flex-col">
-        <div className="p-3 border-b border-gray-700 font-semibold text-sm">
+      <div className="w-64 border-r border-[var(--color-border-subtle)] flex flex-col bg-[var(--color-bg-secondary)]">
+        <div className="p-3 border-b border-[var(--color-border-subtle)] font-semibold text-sm text-[var(--color-text-secondary)]">
           Vaults
         </div>
         <div className="flex-1 overflow-auto">
           {vaults.length === 0 ? (
-            <div className="p-3 text-gray-500 text-sm">Vault bulunamadı</div>
+            <div className="p-3 text-[var(--color-text-tertiary)] text-sm">Vault bulunamadı</div>
           ) : (
             vaults.map((v) => (
               <button
                 key={v.id}
                 onClick={() => select(v.id)}
-                className={`w-full text-left px-3 py-2 text-sm hover:bg-gray-800 transition-colors ${
-                  selected === v.id ? 'bg-gray-800 text-blue-400' : 'text-gray-300'
+                className={`w-full text-left px-3 py-2 text-sm hover:bg-[var(--color-surface-hover)] transition-colors ${
+                  selected === v.id ? 'bg-[var(--color-surface-hover)] text-[var(--color-accent)]' : 'text-[var(--color-text-secondary)]'
                 }`}
               >
                 <div className="font-medium truncate">{v.id}</div>
-                <div className="text-xs text-gray-500">{v.kind}</div>
+                <div className="text-xs text-[var(--color-text-tertiary)]">{v.kind}</div>
               </button>
             ))
           )}

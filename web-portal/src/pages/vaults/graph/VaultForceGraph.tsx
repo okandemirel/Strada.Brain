@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import ForceGraph2D from 'react-force-graph-2d';
 import type { CanvasJson } from '../../../stores/vault-store';
 
@@ -6,31 +6,114 @@ interface Props {
   canvas: CanvasJson;
 }
 
+interface GraphNode {
+  id: string;
+  label: string;
+  color: string;
+  val: number;
+}
+
+interface GraphLink {
+  source: string;
+  target: string;
+  label?: string;
+}
+
 export function VaultForceGraph({ canvas }: Props) {
-  const graphData = useMemo(() => ({
-    nodes: canvas.nodes.map((n) => ({
+  const fgRef = useRef<any>(null);
+  const [hoverNode, setHoverNode] = useState<string | null>(null);
+
+  const { graphData, adjacency } = useMemo(() => {
+    const nodes: GraphNode[] = canvas.nodes.map((n) => ({
       id: n.id,
       label: n.text,
       color: n.color ?? '#6B7280',
       val: Math.max(n.weight ?? 0.3, 0.1) * 5 + 1,
-    })),
-    links: canvas.edges.map((e) => ({
+    }));
+
+    const links: GraphLink[] = canvas.edges.map((e) => ({
       source: e.fromNode,
       target: e.toNode,
-    })),
-  }), [canvas]);
+      label: e.label,
+    }));
+
+    const adj = new Map<string, Set<string>>();
+    for (const link of links) {
+      if (!adj.has(link.source)) adj.set(link.source, new Set());
+      if (!adj.has(link.target)) adj.set(link.target, new Set());
+      adj.get(link.source)!.add(link.target);
+      adj.get(link.target)!.add(link.source);
+    }
+
+    return { graphData: { nodes, links }, adjacency: adj };
+  }, [canvas]);
+
+  const isHighlighted = (nodeId: string) => {
+    if (!hoverNode) return true;
+    if (nodeId === hoverNode) return true;
+    return adjacency.get(hoverNode)?.has(nodeId) ?? false;
+  };
+
+  const isLinkHighlighted = (source: string, target: string) => {
+    if (!hoverNode) return true;
+    return source === hoverNode || target === hoverNode;
+  };
+
+  const nodeCanvasObject = (node: any, ctx: CanvasRenderingContext2D, globalScale: number) => {
+    const highlighted = isHighlighted(node.id);
+    const opacity = !hoverNode || highlighted ? 0.9 : 0.15;
+    const radius = Math.sqrt(node.val) * 3;
+
+    // Draw circle
+    ctx.beginPath();
+    ctx.arc(node.x, node.y, radius, 0, 2 * Math.PI);
+    ctx.fillStyle = node.color;
+    ctx.globalAlpha = opacity;
+    ctx.fill();
+
+    // Draw border for highlighted nodes
+    if (highlighted && hoverNode) {
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 1.5 / globalScale;
+      ctx.stroke();
+    }
+
+    ctx.globalAlpha = 1;
+
+    // Draw label when zoomed in or node is large
+    const showLabel = globalScale > 1.2 || node.val > 2;
+    if (showLabel && highlighted) {
+      const fontSize = Math.max(10 / globalScale, 4);
+      ctx.font = `${fontSize}px system-ui, -apple-system, sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'top';
+      ctx.fillStyle = '#e2e8f0';
+      ctx.globalAlpha = opacity;
+      ctx.fillText(node.label || node.id, node.x, node.y + radius + 2);
+      ctx.globalAlpha = 1;
+    }
+  };
 
   return (
-    <div className="w-full h-full">
+    <div className="w-full h-full relative">
       <ForceGraph2D
+        ref={fgRef}
         graphData={graphData}
         backgroundColor="transparent"
         nodeRelSize={1}
         nodeVal="val"
-        nodeLabel="label"
-        nodeColor="color"
-        linkColor={() => 'rgba(75, 85, 99, 0.2)'}
-        linkWidth={0.5}
+        nodeCanvasObject={nodeCanvasObject}
+        nodeCanvasObjectMode={() => 'replace'}
+        linkColor={(link: GraphLink) => {
+          const highlighted = isLinkHighlighted(link.source, link.target);
+          return highlighted ? 'rgba(75, 85, 99, 0.4)' : 'rgba(75, 85, 99, 0.05)';
+        }}
+        linkWidth={(link: GraphLink) => {
+          const highlighted = isLinkHighlighted(link.source, link.target);
+          return highlighted ? 1.5 : 0.5;
+        }}
+        onNodeHover={(node: any) => setHoverNode(node ? node.id : null)}
+        autoPauseRedraw={false}
       />
     </div>
   );
