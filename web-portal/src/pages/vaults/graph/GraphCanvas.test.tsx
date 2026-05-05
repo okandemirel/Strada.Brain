@@ -3,6 +3,39 @@ import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { useVaultStore } from '../../../stores/vault-store';
 import type { CanvasJson } from '../../../stores/vault-store';
 
+// Mock useTheme
+vi.mock('../../../hooks/useTheme', () => ({
+  useTheme: () => ({ theme: 'dark', toggleTheme: vi.fn() }),
+}));
+
+// Mock getComputedStyle for CSS vars
+const originalGetComputedStyle = window.getComputedStyle;
+// @ts-expect-error overriding for tests
+window.getComputedStyle = (elt: Element) => {
+  const style = originalGetComputedStyle(elt);
+  return {
+    ...style,
+    getPropertyValue: (prop: string) => {
+      const map: Record<string, string> = {
+        '--graph-bg': '#0a0a0f',
+        '--graph-edge': 'rgba(255,255,255,0.35)',
+        '--graph-edge-active': '#00e5ff',
+        '--graph-node-border': 'rgba(255,255,255,0.12)',
+        '--graph-node-border-hover': 'rgba(255,255,255,0.35)',
+        '--graph-node-selected-ring': '#00e5ff',
+        '--graph-label': '#a0a0b0',
+        '--graph-label-detail': '#6a6a7a',
+        '--graph-panel-bg': 'rgba(16,16,22,0.92)',
+        '--graph-panel-border': '#1f1f2f',
+        '--color-text': '#e8e8ed',
+        '--color-text-secondary': '#a0a0b0',
+        '--color-text-tertiary': '#6a6a7a',
+      };
+      return map[prop] ?? '';
+    },
+  };
+};
+
 // Mock react-force-graph-2d
 let capturedProps: Record<string, unknown> = {};
 
@@ -160,8 +193,15 @@ describe('GraphCanvas', () => {
 
   it('passes correct physics props', () => {
     render(<GraphCanvas graph={makeGraph()} />);
-    expect(capturedProps.warmupTicks).toBe(60);
-    expect(capturedProps.cooldownTicks).toBe(30);
+    expect(capturedProps.warmupTicks).toBe(100);
+    expect(capturedProps.cooldownTicks).toBe(50);
     expect(capturedProps.nodeRelSize).toBe(4);
+  });
+
+  it('renders zoom in, zoom out, and fit controls', () => {
+    render(<GraphCanvas graph={makeGraph()} />);
+    expect(screen.getByTitle('Zoom in')).toBeInTheDocument();
+    expect(screen.getByTitle('Zoom out')).toBeInTheDocument();
+    expect(screen.getByText('Fit')).toBeInTheDocument();
   });
 });

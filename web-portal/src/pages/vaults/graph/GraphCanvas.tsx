@@ -6,6 +6,7 @@ import {
   useVaultStore,
   type CanvasJson,
 } from '../../../stores/vault-store';
+import { useTheme } from '../../../hooks/useTheme';
 import { useGraphInteractions, extractNodeId } from './useGraphInteractions';
 import { parseNodeText } from './node-style';
 import { GraphNodeOverlay } from './GraphNodeOverlay';
@@ -97,6 +98,35 @@ function buildGraphData(
   return { nodes, links, connectionCounts };
 }
 
+function readCssVar(name: string, fallback: string): string {
+  if (typeof document === 'undefined') return fallback;
+  const val = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return val || fallback;
+}
+
+function useGraphColors() {
+  const { theme } = useTheme();
+  return useMemo(() => {
+    const isDark = theme === 'dark';
+    return {
+      bg: readCssVar('--graph-bg', isDark ? '#0a0a0f' : '#fafafa'),
+      edge: readCssVar('--graph-edge', isDark ? 'rgba(255,255,255,0.35)' : 'rgba(0,0,0,0.35)'),
+      edgeActive: readCssVar('--graph-edge-active', isDark ? '#00e5ff' : '#0891b2'),
+      edgeArrow: readCssVar('--graph-edge', isDark ? 'rgba(255,255,255,0.35)' : 'rgba(0,0,0,0.35)'),
+      nodeBorder: readCssVar('--graph-node-border', isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.12)'),
+      nodeBorderHover: readCssVar('--graph-node-border-hover', isDark ? 'rgba(255,255,255,0.35)' : 'rgba(0,0,0,0.35)'),
+      nodeSelectedRing: readCssVar('--graph-node-selected-ring', isDark ? '#00e5ff' : '#0891b2'),
+      label: readCssVar('--graph-label', isDark ? '#a0a0b0' : '#4a4a5a'),
+      labelDetail: readCssVar('--graph-label-detail', isDark ? '#6a6a7a' : '#8a8a9a'),
+      panelBg: readCssVar('--graph-panel-bg', isDark ? 'rgba(16,16,22,0.92)' : 'rgba(255,255,255,0.95)'),
+      panelBorder: readCssVar('--graph-panel-border', isDark ? '#1f1f2f' : 'rgba(0,0,0,0.12)'),
+      textPrimary: readCssVar('--color-text', isDark ? '#e8e8ed' : '#1a1a2e'),
+      textSecondary: readCssVar('--color-text-secondary', isDark ? '#a0a0b0' : '#4a4a5a'),
+      textTertiary: readCssVar('--color-text-tertiary', isDark ? '#6a6a7a' : '#8a8a9a'),
+    };
+  }, [theme]);
+}
+
 function drawNodeGlow(
   ctx: CanvasRenderingContext2D,
   x: number,
@@ -140,10 +170,11 @@ function drawNodeBorder(
   radius: number,
   globalScale: number,
   isSelected: boolean,
+  colors: ReturnType<typeof useGraphColors>,
 ) {
   ctx.beginPath();
   ctx.arc(x, y, radius, 0, 2 * Math.PI);
-  ctx.strokeStyle = isSelected ? '#ffffff' : 'rgba(255,255,255,0.6)';
+  ctx.strokeStyle = isSelected ? colors.nodeSelectedRing : colors.nodeBorderHover;
   ctx.lineWidth = isSelected ? 2.0 / globalScale : 1.2 / globalScale;
   ctx.stroke();
 }
@@ -156,12 +187,13 @@ function drawNodeLabel(
   radius: number,
   globalScale: number,
   opacity: number,
+  colors: ReturnType<typeof useGraphColors>,
 ) {
   const fontSize = Math.max(12 / globalScale, 6);
   ctx.font = `400 ${fontSize}px -apple-system, BlinkMacSystemFont, system-ui, sans-serif`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
-  ctx.fillStyle = '#a0a0a0';
+  ctx.fillStyle = colors.label;
   ctx.globalAlpha = opacity;
 
   const truncated = node.label.length > 24 ? node.label.slice(0, 22) + '…' : node.label;
@@ -171,7 +203,7 @@ function drawNodeLabel(
     const fileName = node.file.split('/').pop() ?? node.file;
     const detailFontSize = Math.max(8 / globalScale, 4);
     ctx.font = `400 ${detailFontSize}px ui-monospace, SFMono-Regular, monospace`;
-    ctx.fillStyle = '#555555';
+    ctx.fillStyle = colors.labelDetail;
     ctx.fillText(
       `${fileName}${node.line ? ':' + node.line : ''}`,
       x,
@@ -183,10 +215,12 @@ function drawNodeLabel(
 export default function GraphCanvas({ graph }: Props) {
   const selectedSymbolId = useVaultStore((s) => s.selectedSymbolId);
   const setSelectedSymbol = useVaultStore((s) => s.setSelectedSymbol);
+  const colors = useGraphColors();
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const fgRef = useRef<ForceGraphMethods<any, any> | undefined>(undefined);
   const containerRef = useRef<HTMLDivElement>(null);
+  const hasAutoFitRef = useRef(false);
 
   const [searchQuery, setSearchQuery] = useState('');
   const [showSettings, setShowSettings] = useState(false);
@@ -215,7 +249,23 @@ export default function GraphCanvas({ graph }: Props) {
 
   const interactions = useGraphInteractions({ links });
 
-  // Physics tuning
+  // Auto-fit on first meaningful data
+  useEffect(() => {
+    if (nodes.length > 0 && !hasAutoFitRef.current) {
+      hasAutoFitRef.current = true;
+      const timer = setTimeout(() => {
+        fgRef.current?.zoomToFit(600, 20);
+      }, 100);
+      return () => clearTimeout(timer);
+    }
+  }, [nodes]);
+
+  // Reset auto-fit when graph source changes
+  useEffect(() => {
+    hasAutoFitRef.current = false;
+  }, [graph]);
+
+  // Physics tuning — only when graph prop changes, not every nodes/links memo change
   useEffect(() => {
     const fg = fgRef.current;
     if (!fg) return;
@@ -230,7 +280,7 @@ export default function GraphCanvas({ graph }: Props) {
       chargeForce.strength(-100);
     }
     fg.d3ReheatSimulation();
-  }, [nodes, links]);
+  }, [graph]);
 
   // Escape to exit local graph mode
   useEffect(() => {
@@ -279,17 +329,17 @@ export default function GraphCanvas({ graph }: Props) {
       drawNodeCircle(ctx, x, y, baseRadius, node.color, isMatching, time);
 
       if (isHovered || isSelected) {
-        drawNodeBorder(ctx, x, y, baseRadius, globalScale, isSelected);
+        drawNodeBorder(ctx, x, y, baseRadius, globalScale, isSelected, colors);
       }
 
       const showLabel = globalScale > 0.5 || baseRadius > 6;
       if (showLabel) {
-        drawNodeLabel(ctx, node, x, y, baseRadius, globalScale, opacity);
+        drawNodeLabel(ctx, node, x, y, baseRadius, globalScale, opacity, colors);
       }
 
       ctx.restore();
     },
-    [interactions, selectedSymbolId, matchingIds],
+    [interactions, selectedSymbolId, matchingIds, colors],
   );
 
   const handleNodeClick = useCallback(
@@ -317,9 +367,9 @@ export default function GraphCanvas({ graph }: Props) {
       const s = extractNodeId(link.source);
       const t = extractNodeId(link.target);
       const highlighted = interactions.isLinkHighlighted(s, t);
-      return highlighted ? 'rgba(148, 163, 184, 0.45)' : 'rgba(51, 51, 51, 0.25)';
+      return highlighted ? colors.edgeActive : colors.edge;
     },
-    [interactions],
+    [interactions, colors],
   );
 
   const linkWidth = useCallback(
@@ -327,7 +377,7 @@ export default function GraphCanvas({ graph }: Props) {
       const s = extractNodeId(link.source);
       const t = extractNodeId(link.target);
       const highlighted = interactions.isLinkHighlighted(s, t);
-      return highlighted ? 1.2 : 0.4;
+      return highlighted ? 2.0 : 0.8;
     },
     [interactions],
   );
@@ -343,7 +393,7 @@ export default function GraphCanvas({ graph }: Props) {
   const isolatedCount = Math.max(0, nodes.length - connectionCounts.size);
 
   return (
-    <div ref={containerRef} className="h-full w-full relative" style={{ background: '#0d0d0d' }} data-testid="graph-canvas">
+    <div ref={containerRef} className="h-full w-full relative" style={{ background: colors.bg }} data-testid="graph-canvas">
       {/* Search bar — top left */}
       <div className="absolute top-4 left-4 z-10 flex items-center gap-2">
         <div className="relative">
@@ -352,16 +402,23 @@ export default function GraphCanvas({ graph }: Props) {
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Search nodes..."
-            className="w-56 h-8 pl-3 pr-3 rounded-full text-xs bg-black/40 backdrop-blur-sm
-                       border border-white/10 text-white placeholder:text-white/30
-                       focus:outline-none focus:border-white/30 transition-colors"
+            className="w-56 h-8 pl-3 pr-3 rounded-full text-xs backdrop-blur-sm
+                       border focus:outline-none focus:border-[var(--color-border-hover)] transition-colors"
+            style={{
+              background: colors.panelBg,
+              borderColor: colors.panelBorder,
+              color: colors.textPrimary,
+            }}
           />
         </div>
         {searchQuery && (
           <button
             type="button"
             onClick={() => setSearchQuery('')}
-            className="text-[10px] text-white/40 hover:text-white/70 transition-colors"
+            className="text-[10px] transition-colors"
+            style={{ color: colors.textTertiary }}
+            onMouseEnter={(e) => (e.currentTarget.style.color = colors.textSecondary)}
+            onMouseLeave={(e) => (e.currentTarget.style.color = colors.textTertiary)}
           >
             Clear
           </button>
@@ -373,9 +430,21 @@ export default function GraphCanvas({ graph }: Props) {
         <button
           type="button"
           onClick={() => setShowSettings((s) => !s)}
-          className="w-8 h-8 rounded-full bg-black/40 backdrop-blur-sm border border-white/10
-                     flex items-center justify-center text-white/40 hover:text-white/70
-                     hover:border-white/20 transition-all"
+          className="w-8 h-8 rounded-full backdrop-blur-sm border
+                     flex items-center justify-center transition-all"
+          style={{
+            background: colors.panelBg,
+            borderColor: colors.panelBorder,
+            color: colors.textTertiary,
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.color = colors.textSecondary;
+            e.currentTarget.style.borderColor = colors.nodeBorderHover;
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.color = colors.textTertiary;
+            e.currentTarget.style.borderColor = colors.panelBorder;
+          }}
           title="Display settings"
         >
           <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -388,23 +457,25 @@ export default function GraphCanvas({ graph }: Props) {
 
         {/* Settings dropdown */}
         {showSettings && (
-          <div className="absolute top-10 right-0 w-52 rounded-xl bg-[#1a1a1a]/95 backdrop-blur-md
-                          border border-white/10 shadow-2xl overflow-hidden">
-            <div className="px-3 py-2.5 border-b border-white/5">
-              <div className="text-[10px] uppercase tracking-wider text-white/20 font-medium">
+          <div className="absolute top-10 right-0 w-52 rounded-xl backdrop-blur-md
+                          border shadow-2xl overflow-hidden"
+               style={{ background: colors.panelBg, borderColor: colors.panelBorder }}>
+            <div className="px-3 py-2.5 border-b" style={{ borderColor: colors.panelBorder }}>
+              <div className="text-[10px] uppercase tracking-wider font-medium" style={{ color: colors.textTertiary }}>
                 Display
               </div>
             </div>
             <div className="p-2 space-y-2">
               {/* Orphan nodes */}
-              <label className="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-white/5 cursor-pointer transition-colors">
+              <label className="flex items-center gap-2 px-2 py-1.5 rounded-md cursor-pointer transition-colors hover:bg-[var(--color-surface-hover)]">
                 <input
                   type="checkbox"
                   checked={showOrphans}
                   onChange={(e) => setShowOrphans(e.target.checked)}
-                  className="w-3 h-3 rounded border-white/20 bg-transparent accent-white"
+                  className="w-3 h-3 rounded border bg-transparent accent-[var(--color-accent)]"
+                  style={{ borderColor: colors.nodeBorder }}
                 />
-                <span className="text-[11px] text-white/50">Show orphan nodes</span>
+                <span className="text-[11px]" style={{ color: colors.textSecondary }}>Show orphan nodes</span>
               </label>
 
               {/* Local graph toggle */}
@@ -422,42 +493,42 @@ export default function GraphCanvas({ graph }: Props) {
                 disabled={!localGraphMode && !selectedSymbolId}
                 className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-md transition-colors text-left
                   ${localGraphMode || selectedSymbolId
-                    ? 'hover:bg-white/5 cursor-pointer'
+                    ? 'hover:bg-[var(--color-surface-hover)] cursor-pointer'
                     : 'opacity-40 cursor-not-allowed'
                   }`}
               >
-                <span className={`w-3 h-3 rounded-full border border-white/20 flex items-center justify-center
-                  ${localGraphMode ? 'bg-white/20' : 'bg-transparent'}`}>
-                  {localGraphMode && <span className="w-1.5 h-1.5 rounded-full bg-white/70" />}
+                <span className="w-3 h-3 rounded-full border flex items-center justify-center"
+                      style={{ borderColor: colors.nodeBorder, background: localGraphMode ? colors.nodeBorderHover : 'transparent' }}>
+                  {localGraphMode && <span className="w-1.5 h-1.5 rounded-full" style={{ background: colors.textSecondary }} />}
                 </span>
-                <span className="text-[11px] text-white/50">
+                <span className="text-[11px]" style={{ color: colors.textSecondary }}>
                   {localGraphMode ? 'Full Graph' : 'Local Graph'}
                 </span>
               </button>
 
               {/* Group by */}
               <div className="px-2 py-1">
-                <div className="text-[10px] text-white/30 mb-1">Group by</div>
+                <div className="text-[10px] mb-1" style={{ color: colors.textTertiary }}>Group by</div>
                 <div className="flex gap-1">
                   <button
                     type="button"
                     onClick={() => setGroupBy('lang')}
-                    className={`flex-1 px-2 py-1 rounded text-[10px] transition-colors ${
-                      groupBy === 'lang'
-                        ? 'bg-white/10 text-white/70'
-                        : 'text-white/30 hover:bg-white/5 hover:text-white/50'
-                    }`}
+                    className="flex-1 px-2 py-1 rounded text-[10px] transition-colors"
+                    style={{
+                      background: groupBy === 'lang' ? 'var(--color-surface-hover)' : 'transparent',
+                      color: groupBy === 'lang' ? colors.textPrimary : colors.textTertiary,
+                    }}
                   >
                     Language
                   </button>
                   <button
                     type="button"
                     onClick={() => setGroupBy('folder')}
-                    className={`flex-1 px-2 py-1 rounded text-[10px] transition-colors ${
-                      groupBy === 'folder'
-                        ? 'bg-white/10 text-white/70'
-                        : 'text-white/30 hover:bg-white/5 hover:text-white/50'
-                    }`}
+                    className="flex-1 px-2 py-1 rounded text-[10px] transition-colors"
+                    style={{
+                      background: groupBy === 'folder' ? 'var(--color-surface-hover)' : 'transparent',
+                      color: groupBy === 'folder' ? colors.textPrimary : colors.textTertiary,
+                    }}
                   >
                     Folder
                   </button>
@@ -466,27 +537,27 @@ export default function GraphCanvas({ graph }: Props) {
 
               {/* Node size */}
               <div className="px-2 py-1">
-                <div className="text-[10px] text-white/30 mb-1">Node size</div>
+                <div className="text-[10px] mb-1" style={{ color: colors.textTertiary }}>Node size</div>
                 <div className="flex gap-1">
                   <button
                     type="button"
                     onClick={() => setNodeSizeMode('connections')}
-                    className={`flex-1 px-2 py-1 rounded text-[10px] transition-colors ${
-                      nodeSizeMode === 'connections'
-                        ? 'bg-white/10 text-white/70'
-                        : 'text-white/30 hover:bg-white/5 hover:text-white/50'
-                    }`}
+                    className="flex-1 px-2 py-1 rounded text-[10px] transition-colors"
+                    style={{
+                      background: nodeSizeMode === 'connections' ? 'var(--color-surface-hover)' : 'transparent',
+                      color: nodeSizeMode === 'connections' ? colors.textPrimary : colors.textTertiary,
+                    }}
                   >
                     Connections
                   </button>
                   <button
                     type="button"
                     onClick={() => setNodeSizeMode('uniform')}
-                    className={`flex-1 px-2 py-1 rounded text-[10px] transition-colors ${
-                      nodeSizeMode === 'uniform'
-                        ? 'bg-white/10 text-white/70'
-                        : 'text-white/30 hover:bg-white/5 hover:text-white/50'
-                    }`}
+                    className="flex-1 px-2 py-1 rounded text-[10px] transition-colors"
+                    style={{
+                      background: nodeSizeMode === 'uniform' ? 'var(--color-surface-hover)' : 'transparent',
+                      color: nodeSizeMode === 'uniform' ? colors.textPrimary : colors.textTertiary,
+                    }}
                   >
                     Uniform
                   </button>
@@ -503,17 +574,17 @@ export default function GraphCanvas({ graph }: Props) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         graphData={{ nodes, links: links as any[] }}
         backgroundColor="transparent"
-        warmupTicks={60}
-        cooldownTicks={30}
+        warmupTicks={100}
+        cooldownTicks={50}
         nodeRelSize={4}
         nodeVal="val"
         nodeCanvasObject={nodeCanvasObject}
         nodeCanvasObjectMode={() => 'replace'}
         linkColor={linkColor}
         linkWidth={linkWidth}
-        linkDirectionalArrowLength={3}
+        linkDirectionalArrowLength={6}
         linkDirectionalArrowRelPos={1}
-        linkDirectionalArrowColor={() => 'rgba(51,51,51,0.3)'}
+        linkDirectionalArrowColor={() => colors.edgeArrow}
         onNodeHover={(node) => {
           const n = node ? (node as GraphNode) : null;
           interactions.setHoverNode(n?.id ?? null);
@@ -530,14 +601,14 @@ export default function GraphCanvas({ graph }: Props) {
 
       {/* Stats — bottom left */}
       <div className="absolute bottom-4 left-4 z-10 pointer-events-none select-none">
-        <div className="text-[10px] text-white/30 leading-relaxed">
+        <div className="text-[10px] leading-relaxed" style={{ color: colors.textTertiary }}>
           <div>
             {nodes.length} {nodes.length === 1 ? 'node' : 'nodes'} · {links.length}{' '}
             {links.length === 1 ? 'link' : 'links'}
           </div>
           {fileCount > 0 && <div>{fileCount} files</div>}
           {isolatedCount > 0 && <div>{isolatedCount} isolated</div>}
-          {localGraphMode && <div className="text-white/50">Local view</div>}
+          {localGraphMode && <div style={{ color: colors.textSecondary }}>Local view</div>}
         </div>
       </div>
 
@@ -545,10 +616,53 @@ export default function GraphCanvas({ graph }: Props) {
       <div className="absolute bottom-4 right-4 z-10 flex items-center gap-1">
         <button
           type="button"
-          onClick={() => fgRef.current?.zoomToFit(400)}
-          className="px-2 h-7 rounded-full bg-black/40 backdrop-blur-sm border border-white/10
-                     text-[10px] text-white/40 hover:text-white/70 hover:border-white/20
-                     transition-all"
+          onClick={() => fgRef.current?.zoom(0.8, 400)}
+          className="w-8 h-7 rounded-full backdrop-blur-sm border flex items-center justify-center text-[10px] transition-all"
+          style={{ background: colors.panelBg, borderColor: colors.panelBorder, color: colors.textTertiary }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.color = colors.textSecondary;
+            e.currentTarget.style.borderColor = colors.nodeBorderHover;
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.color = colors.textTertiary;
+            e.currentTarget.style.borderColor = colors.panelBorder;
+          }}
+          title="Zoom out"
+          aria-label="Zoom out"
+        >
+          −
+        </button>
+        <button
+          type="button"
+          onClick={() => fgRef.current?.zoom(1.2, 400)}
+          className="w-8 h-7 rounded-full backdrop-blur-sm border flex items-center justify-center text-[10px] transition-all"
+          style={{ background: colors.panelBg, borderColor: colors.panelBorder, color: colors.textTertiary }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.color = colors.textSecondary;
+            e.currentTarget.style.borderColor = colors.nodeBorderHover;
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.color = colors.textTertiary;
+            e.currentTarget.style.borderColor = colors.panelBorder;
+          }}
+          title="Zoom in"
+          aria-label="Zoom in"
+        >
+          +
+        </button>
+        <button
+          type="button"
+          onClick={() => fgRef.current?.zoomToFit(400, 20)}
+          className="px-2 h-7 rounded-full backdrop-blur-sm border text-[10px] transition-all"
+          style={{ background: colors.panelBg, borderColor: colors.panelBorder, color: colors.textTertiary }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.color = colors.textSecondary;
+            e.currentTarget.style.borderColor = colors.nodeBorderHover;
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.color = colors.textTertiary;
+            e.currentTarget.style.borderColor = colors.panelBorder;
+          }}
         >
           Fit
         </button>
