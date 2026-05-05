@@ -87,6 +87,7 @@ export interface IVault {
   dispose(): Promise<void>;
   listFiles(): VaultFile[];
   readFile(path: string): Promise<string>;
+  writeFile?(path: string, content: string): Promise<void>;
   onUpdate(listener: (p: { vaultId: VaultId; changedPaths: string[] }) => void): () => void;
   findCallers?(symbolId: string): Promise<VaultEdge[]>;
   findSymbolsByName?(name: string, limit?: number): Promise<VaultSymbol[]>;

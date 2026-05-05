@@ -198,6 +198,17 @@ export class ObsidianVault implements IVault {
     return await readFile(abs, 'utf8');
   }
 
+  async writeFile(relPath: string, content: string): Promise<void> {
+    if (this.client) {
+      await this.client.putNote(relPath, content);
+      return;
+    }
+    const abs = join(this.rootPath, relPath);
+    const dir = abs.split('/').slice(0, -1).join('/');
+    await mkdir(dir, { recursive: true });
+    await writeFile(abs, content, 'utf8');
+  }
+
   onUpdate(listener: (p: { vaultId: VaultId; changedPaths: string[] }) => void): () => void {
     this.emitter.on('update', listener);
     return () => { this.emitter.off('update', listener); };
