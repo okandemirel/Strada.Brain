@@ -6,7 +6,8 @@ export class VaultWriteNoteTool {
     'Write a note or markdown file into a vault. ' +
     'Use this to persist agent analysis, summaries, decisions, or incident reports ' +
     'so they appear in the vault graph and Obsidian. ' +
-    'The path should use forward slashes and include the .md extension.';
+    'The path should use forward slashes and include the .md extension. ' +
+    'Notes written via this tool are immediately searchable in the vault and visible in the graph.';
 
   readonly inputSchema = {
     type: 'object' as const,

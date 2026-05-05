@@ -44,8 +44,9 @@ const MAX_QUERY_LEN = 4096;
 export class VaultSearchTool {
   readonly name = 'vault_search';
   readonly description =
-    'Semantic + FTS search across indexed vaults (Unity project, Strada self). ' +
-    'Prefer this over file_read when you only need a snippet or do not know the exact path. ' +
+    'PRIMARY retrieval tool — semantic + FTS search across indexed vaults (Unity project, Strada self). ' +
+    'Always use this BEFORE `file_read` when looking for code, symbols, or documentation. ' +
+    'Only fall back to `file_read` when you need exact byte-level content or the vault has no results. ' +
     'Returns ranked code chunks with file path and line range for precise citation.';
   readonly inputSchema = {
     type: 'object' as const,

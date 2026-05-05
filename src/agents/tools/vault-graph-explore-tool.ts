@@ -38,7 +38,7 @@ export class VaultGraphExploreTool {
     'Performs semantic search, locates the matching nodes in the vault graph, ' +
     'and returns a 1-degree neighbourhood subgraph (nodes + edges). ' +
     'Use this when the user asks about relationships, dependencies, or wants to ' +
-    '"show everything related to X".';
+    '"show everything related to X". Prefer this over `file_read` for discovery tasks.';
 
   readonly inputSchema = {
     type: 'object' as const,

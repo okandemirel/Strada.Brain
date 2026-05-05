@@ -427,7 +427,7 @@ export interface BuildProjectContextInput {
   legacyBuildProjectContext?: () => Promise<string>;
 }
 
-function renderVaultContext(results: Array<{ hits: Array<{ chunk: { path: string; content: string } }> }>): string {
+export function renderVaultContext(results: Array<{ hits: Array<{ chunk: { path: string; content: string } }> }>): string {
   const lines: string[] = [];
   for (const r of results) {
     for (const h of r.hits) {
@@ -440,6 +440,31 @@ function renderVaultContext(results: Array<{ hits: Array<{ chunk: { path: string
     }
   }
   return lines.join('\n');
+}
+
+/**
+ * Build vault-derived project context for injection into the system prompt.
+ */
+export interface VaultProjectContextInput {
+  vaultRegistry: {
+    list(): Array<{
+      id: string;
+      query(q: { text: string; topK?: number; budgetTokens?: number }): Promise<{ hits: Array<{ chunk: { path: string; content: string } }> }>;
+    }>;
+  };
+  userMessage: string;
+  contextBudget?: number;
+}
+
+export async function buildVaultProjectContext(input: VaultProjectContextInput): Promise<string> {
+  const vaults = input.vaultRegistry.list();
+  if (vaults.length === 0) return '';
+  const results = await Promise.all(vaults.map((v) => v.query({
+    text: input.userMessage,
+    topK: 20,
+    budgetTokens: input.contextBudget ?? 4000,
+  })));
+  return renderVaultContext(results);
 }
 
 /**

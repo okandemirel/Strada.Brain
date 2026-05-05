@@ -11,7 +11,7 @@ import { DynamicToolFactory } from "./tools/dynamic/dynamic-tool-factory.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { isAbsolute, join } from "node:path";
+import { isAbsolute, join, relative as pathRelative } from "node:path";
 import { detectLanguage } from "../dashboard/workspace-routes.js";
 import type { ProviderManager } from "./providers/provider-manager.js";
 import { canonicalizeProviderName } from "./providers/provider-identity.js";
@@ -31,12 +31,16 @@ import {
   STRADA_SYSTEM_PROMPT,
   STRADA_AGENT_PREAMBLE,
   buildProjectContext,
+  buildVaultProjectContext,
   buildDepsContext,
   buildCapabilityManifest,
   buildToolUsageHints,
   buildIdentitySection,
   buildCrashNotificationSection,
 } from "./context/strada-knowledge.js";
+import { validatePath } from "../security/path-guard.js";
+import { vaultFileRead } from "./tools/file-read.js";
+import { FILE_LIMITS } from "../common/constants.js";
 import type { FrameworkPromptGenerator } from "../intelligence/framework/framework-prompt-generator.js";
 import type { IdentityState } from "../identity/identity-state.js";
 import type { CrashRecoveryContext } from "../identity/crash-recovery.js";
@@ -640,6 +644,7 @@ export function buildUserContent(
 export class Orchestrator {
   private readonly vaultRegistry?: import("../vault/vault-registry.js").VaultRegistry;
   private readonly vaultWriteHookBudgetMs: number = 200;
+  private vaultContext: string = "";
   private vaultWriteHook: import("../vault/write-hook.js").InstalledWriteHook | null = null;
   private readonly providerManager: ProviderManager;
   private readonly tools: Map<string, ITool>;
@@ -1255,6 +1260,7 @@ export class Orchestrator {
     this.systemPrompt =
       knowledgeBase +
       buildProjectContext(this.projectPath) +
+      this.vaultContext +
       buildDepsContext(this.stradaDeps) +
       buildCapabilityManifest() +
       buildToolUsageHints(!!this.vaultRegistry) +
@@ -3912,6 +3918,24 @@ export class Orchestrator {
 
     this.metrics?.recordMessage();
     this.metrics?.setActiveSessions(this.sessionManager.sessions.size);
+
+    // Pre-request vault context enrichment: query vaults with the user message
+    // so semantically relevant chunks are injected into the system prompt.
+    if (this.vaultRegistry) {
+      try {
+        this.vaultContext = await buildVaultProjectContext({
+          vaultRegistry: this.vaultRegistry,
+          userMessage: text,
+          contextBudget: 4000,
+        });
+      } catch (err) {
+        logger.warn("Vault context enrichment failed", { err });
+        this.vaultContext = "";
+      }
+    } else {
+      this.vaultContext = "";
+    }
+
     const identityKey = resolveIdentityKey(chatId, userId, conversationId, this.userProfileStore, msg.channelType);
     const clearedPlanReview = this.interactionPolicy.noteUserMessage(chatId, text);
     if (clearedPlanReview) {
@@ -6313,6 +6337,39 @@ export class Orchestrator {
           isError: true,
         });
         continue;
+      }
+
+      // Vault-first interceptor: bypass file_read tool execution when vault has fresh data.
+      if (activeToolCall.name === "file_read" && this.vaultRegistry && toolContext.projectPath) {
+        const input = activeToolCall.input as Record<string, unknown>;
+        const rawPath = input["path"];
+        if (typeof rawPath === "string") {
+          const pathCheck = await validatePath(toolContext.projectPath, rawPath);
+          if (pathCheck.valid) {
+            const vault = this.vaultRegistry.resolveVaultForPath(pathCheck.fullPath, toolContext.projectPath);
+            if (vault) {
+              const vaultRel = pathRelative(vault.rootPath, pathCheck.fullPath).replaceAll("\\", "/");
+              const intercepted = await vaultFileRead({
+                vault,
+                vaultRelPath: vaultRel,
+                absPath: pathCheck.fullPath,
+                displayPath: rawPath,
+                offset: input["offset"] !== undefined ? Math.max(1, Number(input["offset"])) : undefined,
+                limit: input["limit"] !== undefined ? Math.min(FILE_LIMITS.MAX_LINES, Math.max(1, Number(input["limit"]))) : undefined,
+                symbol: typeof input["symbol"] === "string" && input["symbol"].length > 0 ? input["symbol"] : undefined,
+              });
+              if (intercepted) {
+                results.push({
+                  toolCallId: activeToolCall.id,
+                  content: intercepted.content,
+                  isError: false,
+                  metadata: intercepted.metadata,
+                });
+                continue;
+              }
+            }
+          }
+        }
       }
 
       // Auto-disable tools that have failed repeatedly in this chat

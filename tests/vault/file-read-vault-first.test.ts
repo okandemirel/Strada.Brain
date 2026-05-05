@@ -110,18 +110,14 @@ describe('FileReadTool vault-first integration', () => {
     expect(stats.stale).toBe(0);
   });
 
-  it('full-file reads (no offset/limit) skip the vault branch and do not touch counters', async () => {
+  it('full-file reads are served from the vault when indexed and fresh', async () => {
     const result = await tool.execute({ path: 'src/a.ts' }, ctx);
     expect(result.isError).toBeUndefined();
-    // No vault marker — disk read.
-    expect(result.content).not.toMatch(/vault-cached/);
+    // Vault serves full-file reads via readFile fallback.
+    expect(result.content).toMatch(/vault-cached/);
 
     const stats = getVaultFileReadStats();
-    // rangeScoped=false → vault branch skipped entirely.
-    // However the disk fallback still increments miss when vaultRegistry is attached.
-    // The contract is that full-file reads neither hit the vault nor pretend to —
-    // they count as a miss so operators can see cache-avoidance volume.
-    expect(stats.hits).toBe(0);
+    expect(stats.hits).toBe(1);
     expect(stats.stale).toBe(0);
   });
 
@@ -171,23 +167,21 @@ describe('FileReadTool vault-first integration', () => {
     expect(stats.misses).toBe(1);
   });
 
-  it('review-F3: partial-range coverage falls back to disk (no silent truncation)', async () => {
-    // src/a.ts is 5 lines. Requesting 1..100 is a partial-coverage case — the
-    // vault only covers lines 1..5, so we must NOT silently return 5 lines to
-    // the caller who asked for 100. Fall back to disk instead.
+  it('range reads beyond file length are served from vault readFile (no silent truncation)', async () => {
+    // src/a.ts is 6 lines. Requesting 1..100 is clamped to the actual file length
+    // because vaultFileRead uses vault.readFile which returns the full file.
     const r = await tool.execute(
       { path: 'src/a.ts', offset: 1, limit: 100 },
       ctx,
     );
     expect(r.isError).toBeUndefined();
-    // Vault returned null (partial coverage) → disk served the read.
-    expect(r.content).not.toMatch(/vault-cached/);
+    // Vault readFile serves the whole file; limit is clamped to actual line count.
+    expect(r.content).toMatch(/vault-cached/);
+    expect(r.content).toMatch(/showing 1-6/);
 
     const stats = getVaultFileReadStats();
-    expect(stats.hits).toBe(0);
-    // Disk fallback with a vault present → miss counter bumps once.
-    expect(stats.misses).toBe(1);
-    // Staleness was not the reason we bailed; staleness counter stays clean.
+    expect(stats.hits).toBe(1);
+    expect(stats.misses).toBe(0);
     expect(stats.stale).toBe(0);
   });
 

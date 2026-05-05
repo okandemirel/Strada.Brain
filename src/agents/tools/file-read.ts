@@ -3,7 +3,7 @@ import { relative as pathRelative, resolve as pathResolve, sep as pathSep } from
 import { validatePath } from "../../security/path-guard.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "./tool.interface.js";
 import { FILE_LIMITS } from "../../common/constants.js";
-import type { IVault, VaultChunk } from "../../vault/vault.interface.js";
+import type { IVault } from "../../vault/vault.interface.js";
 import { getLoggerSafe } from "../../utils/logger.js";
 
 const MAX_FILE_SIZE = FILE_LIMITS.MAX_FILE_SIZE;
@@ -47,8 +47,9 @@ export class FileReadTool implements ITool {
   readonly description =
     "Read the contents of a file in the Unity project. Returns the file content with line numbers. " +
     "Use this to understand existing code before making changes. " +
-    "When offset/limit or symbol is provided and a Codebase Memory Vault is active, " +
-    "this tool serves the requested range from the vault cache without touching disk.";
+    "For code/symbol lookup, prefer `vault_search` or `vault_graph_explore`. " +
+    "Only use `file_read` when you need exact byte-level content or the file is not yet indexed in the vault. " +
+    "When a Codebase Memory Vault is active, this tool serves from the vault cache whenever possible.";
 
   readonly inputSchema = {
     type: "object",
@@ -107,22 +108,17 @@ export class FileReadTool implements ITool {
       return { content: `Error: ${pathCheck.error}`, isError: true };
     }
 
-    const rangeScoped = offsetProvided || limitProvided || !!symbol;
-
-    // ── Vault-first read path (range-scoped only) ────────────────────────
-    // Full-file reads still go to disk — vault chunks would fragment output.
-    if (rangeScoped && context.vaultRegistry) {
+    // ── Vault-first read path ────────────────────────────────────────────
+    if (context.vaultRegistry) {
       const vault = context.vaultRegistry.resolveVaultForPath(
         pathCheck.fullPath,
         context.projectPath,
       );
       // sec-H2: cross-vault containment invariant. Even if a vault owns the
       // resolved path, we must confine file_read to the session's projectPath.
-      // If the matched vault's root is outside projectPath, fall through to
-      // disk (path-guard already validated fullPath against projectPath above).
       if (vault && isVaultInsideProject(vault, context.projectPath)) {
         const vaultRel = toVaultRelative(vault, pathCheck.fullPath);
-        const vaultResult = await this.tryVaultRead({
+        const vaultResult = await vaultFileRead({
           vault,
           vaultRelPath: vaultRel,
           absPath: pathCheck.fullPath,
@@ -183,106 +179,95 @@ export class FileReadTool implements ITool {
     }
   }
 
-  /**
-   * Attempt to satisfy a range-scoped read from the vault.
-   * Returns `null` if the vault has no indexed data for the file, or if the
-   * indexed data is stale — callers then fall back to disk.
-   */
-  private async tryVaultRead(params: {
-    vault: IVault;
-    vaultRelPath: string;
-    absPath: string;
-    displayPath: string;
-    offset?: number;
-    limit?: number;
-    symbol?: string;
-  }): Promise<ToolExecutionResult | null> {
-    const { vault, vaultRelPath, absPath, displayPath, offset, limit, symbol } = params;
+}
 
-    const indexed = vault.listFiles().find((f) => f.path === vaultRelPath);
-    if (!indexed) return null;
+/**
+ * Attempt to satisfy a file read from the vault.
+ * Returns `null` if the vault has no indexed data for the file, or if the
+ * indexed data is stale — callers then fall back to disk.
+ *
+ * Works for both full-file and range-scoped reads (offset/limit/symbol).
+ */
+export async function vaultFileRead(params: {
+  vault: IVault;
+  vaultRelPath: string;
+  absPath: string;
+  displayPath: string;
+  offset?: number;
+  limit?: number;
+  symbol?: string;
+}): Promise<ToolExecutionResult | null> {
+  const { vault, vaultRelPath, absPath, displayPath, offset, limit, symbol } = params;
 
-    // Staleness check: mtime or size drift → bail to disk, kick off reindex.
-    let diskStat: { mtimeMs: number; size: number };
+  const indexed = vault.listFiles().find((f) => f.path === vaultRelPath);
+  if (!indexed) return null;
+
+  // Staleness check: mtime or size drift → bail to disk.
+  let diskStat: { mtimeMs: number; size: number };
+  try {
+    const st = await stat(absPath);
+    if (!st.isFile()) return null;
+    diskStat = { mtimeMs: st.mtimeMs, size: st.size };
+  } catch {
+    return null;
+  }
+
+  const mtimeDelta = Math.abs(diskStat.mtimeMs - indexed.mtimeMs);
+  const stale = mtimeDelta > VAULT_MTIME_TOLERANCE_MS || diskStat.size !== indexed.size;
+  if (stale) {
+    vaultStaleCount += 1;
+    return null;
+  }
+
+  // Resolve the desired [startLine, endLine] range.
+  let wantedStart = offset ?? 1;
+  let wantedEnd: number | null = null;
+
+  if (symbol && typeof vault.findSymbolsByName === "function") {
     try {
-      const st = await stat(absPath);
-      if (!st.isFile()) return null;
-      diskStat = { mtimeMs: st.mtimeMs, size: st.size };
-    } catch {
-      return null;
-    }
-
-    // Staleness is recounted by the disk-fallback path via scheduleReindexIfStale —
-    // we only bail here and mark the stale counter; reindex scheduling is single-sourced below.
-    const mtimeDelta = Math.abs(diskStat.mtimeMs - indexed.mtimeMs);
-    const stale = mtimeDelta > VAULT_MTIME_TOLERANCE_MS || diskStat.size !== indexed.size;
-    if (stale) {
-      vaultStaleCount += 1;
-      return null;
-    }
-
-    // Resolve the desired [startLine, endLine] range.
-    let wantedStart: number | null = null;
-    let wantedEnd: number | null = null;
-
-    if (symbol && typeof vault.findSymbolsByName === "function") {
       const matches = await vault.findSymbolsByName(symbol, VAULT_CHUNK_FETCH_LIMIT);
       const sameFile = matches.find((s) => s.path === vaultRelPath);
       if (sameFile) {
         wantedStart = sameFile.startLine;
         wantedEnd = sameFile.endLine;
       }
+    } catch {
+      // Symbol resolution failed — fall back to offset/limit or full file.
     }
-    if (wantedStart === null || wantedEnd === null) {
-      if (offset !== undefined) {
-        wantedStart = offset;
-        const lim = limit ?? MAX_LINES;
-        wantedEnd = offset + lim - 1;
-      } else {
-        return null;
-      }
-    }
-
-    // Pull chunks covering the range. VaultRegistry.query handles merge/rank
-    // across all vaults; we target a single vault by id for precision.
-    const queryText = symbol ?? `${vaultRelPath}:${wantedStart}-${wantedEnd}`;
-    const qr = await vault.query({
-      text: queryText,
-      topK: VAULT_CHUNK_FETCH_LIMIT,
-      pathGlob: vaultRelPath,
-    });
-
-    const coveringChunks = qr.hits
-      .map((h) => h.chunk)
-      .filter((c) => c.path === vaultRelPath)
-      .filter((c) => c.endLine >= (wantedStart as number) && c.startLine <= (wantedEnd as number))
-      .sort((a, b) => a.startLine - b.startLine);
-
-    if (!coveringChunks.length) {
-      // Indexed but no chunks overlap — treat as miss.
-      return null;
-    }
-
-    const merged = mergeChunkContent(coveringChunks, wantedStart as number, wantedEnd as number);
-    if (!merged) return null;
-
-    const header =
-      `File: ${displayPath} (vault-cached, ${merged.startLine}-${merged.endLine}` +
-      (symbol ? `, symbol="${symbol}"` : "") +
-      `, source=vault:${vault.id})`;
-
-    const numbered = merged.lines
-      .map((line, i) => `${String(merged.startLine + i).padStart(5)} | ${line}`)
-      .join("\n");
-
-    return {
-      content: `${header}\n${numbered}`,
-      metadata: {
-        executionTimeMs: 0,
-        source: `vault:${vault.id}`,
-      },
-    };
   }
+
+  // Read file from vault (uses vault's readFile which may be FS-backed or API-backed).
+  let content: string;
+  try {
+    content = await vault.readFile(vaultRelPath);
+  } catch {
+    return null;
+  }
+  const lines = content.split("\n");
+  const totalLines = lines.length;
+
+  if (wantedEnd === null) {
+    const lim = limit ?? MAX_LINES;
+    wantedEnd = Math.min(wantedStart + lim - 1, totalLines);
+  }
+
+  const selectedLines = lines.slice(wantedStart - 1, wantedEnd);
+  const numbered = selectedLines
+    .map((line, i) => `${String(wantedStart + i).padStart(5)} | ${line}`)
+    .join("\n");
+
+  const header =
+    `File: ${displayPath} (vault-cached, ${totalLines} lines total, showing ${wantedStart}-${Math.min(wantedEnd, totalLines)}` +
+    (symbol ? `, symbol="${symbol}"` : "") +
+    `, source=vault:${vault.id})`;
+
+  return {
+    content: `${header}\n${numbered}`,
+    metadata: {
+      executionTimeMs: 0,
+      source: `vault:${vault.id}`,
+    },
+  };
 }
 
 /** Convert absolute disk path to vault-relative (POSIX-style), using the vault's rootPath. */
@@ -302,44 +287,6 @@ function isVaultInsideProject(vault: IVault, projectPath: string): boolean {
   if (root === project) return true;
   const projectWithSep = project.endsWith(pathSep) ? project : project + pathSep;
   return root.startsWith(projectWithSep);
-}
-
-/**
- * Merge ordered chunks into a single contiguous line slice clipped to
- * [wantedStart, wantedEnd]. Returns null if the chunks do not cover the
- * wanted start line (partial-coverage case).
- */
-function mergeChunkContent(
-  chunks: VaultChunk[],
-  wantedStart: number,
-  wantedEnd: number,
-): { lines: string[]; startLine: number; endLine: number } | null {
-  if (!chunks.length) return null;
-
-  // Collapse overlapping chunks into a line map keyed by 1-based line number.
-  const lineMap = new Map<number, string>();
-  for (const c of chunks) {
-    const chunkLines = c.content.split("\n");
-    for (let i = 0; i < chunkLines.length; i++) {
-      const ln = c.startLine + i;
-      if (!lineMap.has(ln)) lineMap.set(ln, chunkLines[i] ?? "");
-    }
-  }
-
-  const effectiveStart = Math.max(wantedStart, chunks[0]!.startLine);
-  const effectiveEnd = Math.min(wantedEnd, chunks[chunks.length - 1]!.endLine);
-  if (effectiveEnd < effectiveStart) return null;
-  if (!lineMap.has(effectiveStart)) return null;
-  // review-F3: if the vault only partially covers the caller's requested
-  // range, fall back to disk rather than silently truncating. The model
-  // expects the full wantedStart..wantedEnd slice or a clear miss.
-  if (effectiveStart > wantedStart || effectiveEnd < wantedEnd) return null;
-
-  const out: string[] = [];
-  for (let ln = effectiveStart; ln <= effectiveEnd; ln++) {
-    out.push(lineMap.get(ln) ?? "");
-  }
-  return { lines: out, startLine: effectiveStart, endLine: effectiveEnd };
 }
 
 /** Fire-and-forget reindex when a file drifts from the vault snapshot. */
