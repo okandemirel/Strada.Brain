@@ -1,6 +1,6 @@
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { mkdirSync } from 'node:fs';
-import { isAbsolute, join, relative } from 'node:path';
+import { dirname, isAbsolute, join, relative } from 'node:path';
 import { EventEmitter } from 'node:events';
 import { SqliteVaultStore } from './sqlite-vault-store.js';
 import { chunkFile } from './chunker.js';
@@ -199,12 +199,18 @@ export class ObsidianVault implements IVault {
   }
 
   async writeFile(relPath: string, content: string): Promise<void> {
-    if (this.client) {
+    const abs = join(this.rootPath, relPath);
+    const rel = relative(this.rootPath, abs);
+    if (rel.startsWith('..') || isAbsolute(rel)) {
+      throw new Error(`path escapes vault root: ${relPath}`);
+    }
+    try {
       await this.client.putNote(relPath, content);
       return;
+    } catch (err) {
+      getLoggerSafe().warn(`[obsidian-vault ${this.id}] Obsidian API write failed, falling back to FS`, { err });
     }
-    const abs = join(this.rootPath, relPath);
-    const dir = abs.split('/').slice(0, -1).join('/');
+    const dir = dirname(abs);
     await mkdir(dir, { recursive: true });
     await writeFile(abs, content, 'utf8');
   }

@@ -1,6 +1,6 @@
 import { mkdir, readFile, stat, unlink, writeFile } from 'node:fs/promises';
 import { mkdirSync } from 'node:fs';
-import { isAbsolute, join, relative } from 'node:path';
+import { dirname, isAbsolute, join, relative } from 'node:path';
 import { EventEmitter } from 'node:events';
 import { SqliteVaultStore } from './sqlite-vault-store.js';
 import { chunkFile } from './chunker.js';
@@ -192,7 +192,7 @@ export class UnityProjectVault implements IVault {
     if (rel.startsWith('..') || isAbsolute(rel)) {
       throw new Error(`path escapes vault root: ${relPath}`);
     }
-    const dir = abs.split('/').slice(0, -1).join('/');
+    const dir = dirname(abs);
     await mkdir(dir, { recursive: true });
     await writeFile(abs, content, 'utf8');
   }
