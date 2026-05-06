@@ -69,9 +69,13 @@ export class VaultRegistry {
     const targets = vaultIds?.length
       ? vaultIds.map((id) => this.vaults.get(id)).filter((v): v is IVault => !!v)
       : [...this.vaults.values()];
-    const results = await Promise.all(targets.map((v) => v.query(q)));
+    const settled = await Promise.allSettled(targets.map((v) => v.query(q)));
     const merged: VaultHit[] = [];
-    for (const r of results) merged.push(...r.hits);
+    for (const s of settled) {
+      if (s.status === "fulfilled") {
+        merged.push(...s.value.hits);
+      }
+    }
     merged.sort((a, b) => b.scores.rrf - a.scores.rrf);
     const capped = q.topK ? merged.slice(0, q.topK) : merged;
     return {

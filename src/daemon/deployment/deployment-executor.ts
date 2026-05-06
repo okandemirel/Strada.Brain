@@ -250,6 +250,7 @@ export class DeploymentExecutor {
         killSignal: "SIGTERM",
         stdio: ["ignore", "pipe", "pipe"],
       });
+      const killTimer = setTimeout(() => child.kill("SIGKILL"), this.config.executionTimeoutMs + 5000);
 
       this.activeProcess = child;
 
@@ -269,6 +270,7 @@ export class DeploymentExecutor {
       });
 
       child.on("error", (err) => {
+        clearTimeout(killTimer);
         resolve({
           success: false,
           exitCode: null,
@@ -279,6 +281,7 @@ export class DeploymentExecutor {
       });
 
       child.on("close", (code, signal) => {
+        clearTimeout(killTimer);
         resolve({
           success: code === 0 && signal === null,
           exitCode: code,

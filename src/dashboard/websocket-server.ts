@@ -6,7 +6,8 @@
  */
 
 import { createServer, type Server } from "node:http";
-import { randomBytes, timingSafeEqual } from "node:crypto";
+import { randomBytes, timingSafeEqual, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { WebSocketServer, WebSocket } from "ws";
 import { getLogger } from "../utils/logger.js";
 import { BruteForceProtection } from "../security/auth-hardened.js";
@@ -427,7 +428,7 @@ export class WebSocketDashboardServer {
   }
 
   private generateClientId(): string {
-    return `client_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+    return `client_${randomUUID()}`;
   }
 }
 

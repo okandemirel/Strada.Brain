@@ -5,6 +5,7 @@
  * Contains message handler wiring, shutdown logic, session cleanup, and session ID generation.
  */
 
+import { randomUUID } from "node:crypto";
 import { getLogger } from "../utils/logger.js";
 import { Orchestrator } from "../agents/orchestrator.js";
 import { DashboardServer } from "../dashboard/server.js";
@@ -155,6 +156,8 @@ export interface ShutdownOptions {
   taskManager?: TaskManager;
   /** Persistent task checkpoint store — closed on shutdown to release SQLite fd. */
   checkpointStore?: { close(): void };
+  /** Canvas storage for dashboard — closed on shutdown to release SQLite fd. */
+  canvasStorage?: { close(): void };
 }
 
 function failIncompleteTasksInStorage(
@@ -328,5 +331,5 @@ export function createShutdownHandler(options: ShutdownOptions): () => Promise<v
 }
 
 export function generateSessionId(): string {
-  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return `${randomUUID()}`;
 }

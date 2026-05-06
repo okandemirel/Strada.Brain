@@ -7,6 +7,7 @@
  * - Brand types for IDs
  */
 
+import { randomUUID } from "node:crypto";
 import type { 
   StradaProjectAnalysis 
 } from "../intelligence/strada-analyzer.js";
@@ -594,7 +595,7 @@ export function isMoreImportant(a: MemoryImportance, b: MemoryImportance): boole
  * Create a memory ID
  */
 export function createMemoryId(): MemoryId {
-  return `mem_${Date.now()}_${Math.random().toString(36).slice(2, 9)}` as MemoryId;
+  return `mem_${randomUUID().replaceAll("-", "")}` as MemoryId;
 }
 
 /**

@@ -491,13 +491,15 @@ export function wrapError(
   }
 
   if (error instanceof Error) {
-    return new AppError(
+    const wrapped = new AppError(
       error.message || defaultMessage,
       "WRAPPED_ERROR",
       500,
       { originalError: error.name, stack: error.stack },
       false
     );
+    (wrapped as Error).cause = error;
+    return wrapped;
   }
 
   return new AppError(
@@ -510,24 +512,12 @@ export function wrapError(
 }
 
 /**
- * Global error handler for uncaught exceptions
- */
-export function setupGlobalErrorHandlers(
+ * Global error handler for unhandled rejections.
+ * uncaughtException is handled by setupShutdownHandlers() in index.ts
+ * to drive the full graceful shutdown sequence.
   onError?: (error: Error) => void,
 ): void {
   const logger = console;
-
-  process.on("uncaughtException", (error: Error) => {
-    logger.error("Uncaught Exception:", error);
-    onError?.(error);
-    // setupShutdownHandlers() in index.ts registers a second uncaughtException
-    // handler that drives graceful shutdown + process.exit(). If that handler
-    // hasn't been registered yet (e.g. crash during bootstrap), exit immediately
-    // so the process doesn't hang in a broken state.
-    if (process.listenerCount("uncaughtException") <= 1) {
-      process.exit(1);
-    }
-  });
 
   process.on("unhandledRejection", (reason: unknown) => {
     const error = reason instanceof Error ? reason : new Error(String(reason));
@@ -555,54 +545,3 @@ export function asyncHandler<T extends (...args: unknown[]) => Promise<unknown>>
   };
 }
 
-/**
- * Retry a function with exponential backoff
- */
-export async function withRetry<T>(
-  fn: () => Promise<T>,
-  options: {
-    maxRetries?: number;
-    baseDelayMs?: number;
-    maxDelayMs?: number;
-    onRetry?: (error: Error, attempt: number) => void;
-    retryableErrors?: string[];
-  } = {}
-): Promise<T> {
-  const {
-    maxRetries = 3,
-    baseDelayMs = 1000,
-    maxDelayMs = 30000,
-    onRetry,
-    retryableErrors = ["ETIMEDOUT", "ECONNRESET", "ECONNREFUSED", "ENOTFOUND"],
-  } = options;
-
-  let lastError: Error;
-
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      return await fn();
-    } catch (error) {
-      lastError = error instanceof Error ? error : new Error(String(error));
-
-      // Don't retry if not a retryable error
-      const shouldRetry = retryableErrors.some((code) =>
-        lastError.message?.includes(code)
-      );
-
-      if (attempt === maxRetries || !shouldRetry) {
-        throw lastError;
-      }
-
-      // Calculate delay with exponential backoff
-      const delay = Math.min(
-        baseDelayMs * Math.pow(2, attempt),
-        maxDelayMs
-      );
-
-      onRetry?.(lastError, attempt + 1);
-      await new Promise((resolve) => setTimeout(resolve, delay));
-    }
-  }
-
-  throw lastError!;
-}

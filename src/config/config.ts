@@ -1044,7 +1044,7 @@ export const configSchema = z
 
     // WebSocket Dashboard
     websocketDashboardEnabled: boolFromString(false),
-    websocketDashboardPort: portSchema.default("3100"),
+    websocketDashboardPort: portSchema.default("3101"),
     websocketDashboardAuthToken: z.string().optional(),
     websocketDashboardAllowedOrigins: commaSeparatedList.optional(),
 
@@ -1260,7 +1260,7 @@ export const configSchema = z
 
     // Codebase Memory Vault
     vault: z.object({
-      enabled: z.coerce.boolean().default(false),
+      enabled: boolFromString(false),
       writeHookBudgetMs: z.coerce.number().int().positive().default(200),  // sync reindex p95 target
       debounceMs: z.coerce.number().int().positive().default(800),         // watcher drain interval
       embeddingFallback: z.enum(["none", "local"]).default("local"),
@@ -1268,7 +1268,7 @@ export const configSchema = z
 
     // Obsidian Integration
     obsidian: z.object({
-      enabled: z.coerce.boolean().default(false),
+      enabled: boolFromString(false),
       apiUrl: z.string().default("https://127.0.0.1:27124"),
       apiKey: z.string().default(""),
       vaultPath: z.string().default(""),

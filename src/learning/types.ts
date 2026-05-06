@@ -907,28 +907,28 @@ export function isHighConfidenceMatch(match: PatternMatch, threshold = 0.8): boo
  * Create a new instinct ID
  */
 export function createInstinctId(): InstinctId {
-  return `instinct_${Date.now()}_${Math.random().toString(36).slice(2, 9)}` as InstinctId;
+  return `instinct_${randomUUID()}` as InstinctId;
 }
 
 /**
  * Create a new trajectory ID
  */
 export function createTrajectoryId(): TrajectoryId {
-  return `traj_${Date.now()}_${Math.random().toString(36).slice(2, 9)}` as TrajectoryId;
+  return `traj_${randomUUID()}` as TrajectoryId;
 }
 
 /**
  * Create a new verdict ID
  */
 export function createVerdictId(): VerdictId {
-  return `verdict_${Date.now()}_${Math.random().toString(36).slice(2, 9)}` as VerdictId;
+  return `verdict_${randomUUID()}` as VerdictId;
 }
 
 /**
  * Create a new runtime artifact ID.
  */
 export function createRuntimeArtifactId(): RuntimeArtifactId {
-  return `artifact_${Date.now()}_${Math.random().toString(36).slice(2, 9)}` as RuntimeArtifactId;
+  return `artifact_${randomUUID()}` as RuntimeArtifactId;
 }
 
 /**

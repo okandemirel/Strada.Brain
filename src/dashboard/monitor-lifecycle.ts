@@ -27,10 +27,12 @@ export interface MonitorLifecycle {
   requestEnd(conversationScope: string, failed?: boolean): void
 }
 
+import { randomUUID } from "node:crypto";
+
 const MAX_TASK_LABEL = 200
 
 function generateTaskId(): string {
-  return `req-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
+  return `req-${randomUUID()}`
 }
 
 function truncate(text: string, max: number): string {

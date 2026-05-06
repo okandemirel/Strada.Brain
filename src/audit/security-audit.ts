@@ -9,6 +9,7 @@
  * - Anomaly detection
  */
 
+import { randomUUID } from "node:crypto";
 import { getLogger } from "../utils/logger.js";
 
 // =============================================================================
@@ -376,7 +377,7 @@ export class SecurityAuditLogger {
   }
 
   private generateEventId(): string {
-    return `sec-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    return `sec-${randomUUID()}`;
   }
 
   private getLogMethod(severity: SecuritySeverity): "debug" | "info" | "warn" | "error" {
@@ -688,11 +689,11 @@ export class AlertManager {
   }
 
   private generateRuleId(): string {
-    return `rule-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    return `rule-${randomUUID()}`;
   }
 
   private generateAlertId(): string {
-    return `alert-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    return `alert-${randomUUID()}`;
   }
 }
 

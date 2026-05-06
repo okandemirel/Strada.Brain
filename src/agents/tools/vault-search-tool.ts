@@ -151,7 +151,7 @@ export class VaultSearchTool {
     }
 
     const started = Date.now();
-    const perVault = await Promise.all(
+    const perVault = await Promise.allSettled(
       targetVaults.map(async (v) => {
         const result = await v.query({ text: query, topK });
         return { vaultId: v.id, result };
@@ -159,7 +159,9 @@ export class VaultSearchTool {
     );
 
     const merged: VaultSearchHit[] = [];
-    for (const { vaultId: vid, result } of perVault) {
+    for (const s of perVault) {
+      if (s.status === "rejected") continue;
+      const { vaultId: vid, result } = s.value;
       for (const hit of result.hits) {
         const projected = projectHit(hit, vid, mode);
         if (projected) merged.push(projected);

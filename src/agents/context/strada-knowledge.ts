@@ -459,11 +459,14 @@ export interface VaultProjectContextInput {
 export async function buildVaultProjectContext(input: VaultProjectContextInput): Promise<string> {
   const vaults = input.vaultRegistry.list();
   if (vaults.length === 0) return '';
-  const results = await Promise.all(vaults.map((v) => v.query({
+  const settled = await Promise.allSettled(vaults.map((v) => v.query({
     text: input.userMessage,
     topK: 20,
     budgetTokens: input.contextBudget ?? 4000,
   })));
+  const results = settled
+    .filter((s): s is PromiseFulfilledResult<Awaited<ReturnType<typeof v.query>>[]> => s.status === "fulfilled")
+    .map((s) => s.value);
   return renderVaultContext(results);
 }
 
@@ -495,11 +498,14 @@ Project path: ${arg}
     if (vaults.length === 0) {
       return arg.legacyBuildProjectContext ? await arg.legacyBuildProjectContext() : '';
     }
-    const results = await Promise.all(vaults.map((v) => v.query({
+    const settled = await Promise.allSettled(vaults.map((v) => v.query({
       text: arg.userMessage,
       topK: 20,
       budgetTokens: arg.contextBudget,
     })));
+    const results = settled
+      .filter((s): s is PromiseFulfilledResult<Awaited<ReturnType<typeof v.query>>[]> => s.status === "fulfilled")
+      .map((s) => s.value);
     return renderVaultContext(results);
   })();
 }

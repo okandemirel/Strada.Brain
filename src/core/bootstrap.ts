@@ -1441,14 +1441,17 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   });
 
   // Wire canvas storage into dashboard for canvas REST endpoints (Phase 4)
+  let canvasStorage: CanvasStorage | undefined;
   if (dashboard) {
+    let canvasDb: Database.Database | undefined;
     try {
       const canvasDbPath = join(config.memory.dbPath, "canvas.db");
-      const canvasDb = new Database(canvasDbPath);
-      const canvasStorage = new CanvasStorage(canvasDb);
+      canvasDb = new Database(canvasDbPath);
+      canvasStorage = new CanvasStorage(canvasDb);
       dashboard.setCanvasStorage(canvasStorage);
       logger.info("Canvas storage initialized", { path: canvasDbPath });
     } catch (error) {
+      canvasDb?.close();
       logger.warn("Canvas storage initialization failed, canvas endpoints degraded", {
         error: error instanceof Error ? error.message : String(error),
       });
@@ -1483,6 +1486,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     workspaceBus,
     shutdown: createShutdownHandler({
       dashboard,
+      canvasStorage,
       ragPipeline,
       memoryManager,
       channel,

@@ -5,6 +5,7 @@
  */
 
 import { App, type SayFn } from "@slack/bolt";
+import { randomUUID } from "node:crypto";
 import type { WebClient } from "@slack/web-api";
 import type { KnownBlock } from "@slack/types";
 import type {
@@ -279,7 +280,7 @@ export class SlackChannel implements IChannelAdapter {
     return new Promise((resolve, reject) => {
       const message: QueuedMessage = {
         ...data,
-        id: `msg_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
+        id: `msg_${randomUUID().replaceAll("-", "").slice(0, 12)}`,
         type,
         channelId,
         priority,
@@ -497,7 +498,7 @@ export class SlackChannel implements IChannelAdapter {
   async requestConfirmation(req: ConfirmationRequest): Promise<string> {
     if (!this.app?.client) throw new Error("Slack client not initialized");
 
-    const actionIdPrefix = `confirm_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+    const actionIdPrefix = `confirm_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
     const blocks = createConfirmationBlocks(req.question, req.details, actionIdPrefix);
 
     await this.rateLimiter.acquire("chat.postMessage", 1);
@@ -569,7 +570,7 @@ export class SlackChannel implements IChannelAdapter {
   async startStreamingMessage(chatId: string): Promise<string> {
     if (!this.app?.client) throw new Error("Slack client not initialized");
 
-    const streamId = `stream_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+    const streamId = `stream_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
 
     await this.rateLimiter.acquire("chat.postMessage", 1);
 

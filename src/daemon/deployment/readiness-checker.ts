@@ -125,6 +125,7 @@ export class ReadinessChecker {
         killSignal: "SIGTERM",
         stdio: ["ignore", "pipe", "pipe"],
       });
+      const killTimer = setTimeout(() => child.kill("SIGKILL"), this.config.testTimeoutMs + 5000);
 
       let stderr = "";
       child.stderr?.on("data", (chunk: Buffer) => {
@@ -137,6 +138,7 @@ export class ReadinessChecker {
       });
 
       child.on("close", (code, signal) => {
+        clearTimeout(killTimer);
         if (signal) {
           this.logger.warn(`Test command killed by signal: ${signal}`);
           resolve(false);

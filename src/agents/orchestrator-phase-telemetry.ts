@@ -83,10 +83,7 @@ export function transitionToVerifierReplan(
     );
   }
 
-  return {
-    ...enrichedState,
-    phase: AgentPhase.REPLANNING,
-  };
+  return transitionPhase(enrichedState, AgentPhase.REPLANNING);
 }
 
 export function resolveExecutionTraceSource(

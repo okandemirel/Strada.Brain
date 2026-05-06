@@ -315,8 +315,10 @@ export class AutoUpdater {
       let stdoutData = "";
       let stderrData = "";
 
+      let killTimer: ReturnType<typeof setTimeout> | undefined;
       const timer = setTimeout(() => {
         proc.kill("SIGTERM");
+        killTimer = setTimeout(() => proc.kill("SIGKILL"), 5000);
         reject(new Error(`Command timed out: ${cmd} ${args.join(" ")}`));
       }, timeoutMs);
 
@@ -329,6 +331,7 @@ export class AutoUpdater {
 
       proc.on("close", (code) => {
         clearTimeout(timer);
+        if (killTimer) clearTimeout(killTimer);
         if (code === 0) resolve(stdoutData);
         else reject(new Error(`${cmd} exited with code ${code}: ${stderrData}`));
       });

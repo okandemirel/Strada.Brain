@@ -184,4 +184,8 @@ export class CanvasStorage {
       updatedAt: row.updated_at,
     }));
   }
+
+  close(): void {
+    this.db.close();
+  }
 }

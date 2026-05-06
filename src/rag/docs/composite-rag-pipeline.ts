@@ -42,11 +42,11 @@ export class CompositeRAGPipeline implements IRAGPipeline {
   // ---------------------------------------------------------------------------
 
   async initialize(): Promise<void> {
-    await Promise.all([this.codePipeline.initialize(), this.docPipeline.initialize()]);
+    await Promise.allSettled([this.codePipeline.initialize(), this.docPipeline.initialize()]);
   }
 
   async shutdown(): Promise<void> {
-    await Promise.all([this.codePipeline.shutdown(), this.docPipeline.shutdown()]);
+    await Promise.allSettled([this.codePipeline.shutdown(), this.docPipeline.shutdown()]);
   }
 
   // ---------------------------------------------------------------------------

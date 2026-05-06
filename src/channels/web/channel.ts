@@ -457,6 +457,7 @@ export class WebChannel
       pending.resolve("timeout");
     }
     this.pendingConfirmations.clear();
+    this.streamSentLengths.clear();
 
     for (const [, client] of this.clients) {
       client.ws.close(1000, "Server shutting down");
@@ -800,11 +801,12 @@ export class WebChannel
 
         // Clean up per-session state that would otherwise leak
         this.appliedInstinctIds.delete(chatId);
-        const pending = this.pendingConfirmations.get(chatId);
-        if (pending) {
-          clearTimeout(pending.timer);
-          pending.resolve("timeout");
-          this.pendingConfirmations.delete(chatId);
+        for (const [id, pending] of this.pendingConfirmations) {
+          if (pending.chatId === chatId) {
+            clearTimeout(pending.timer);
+            pending.resolve("timeout");
+            this.pendingConfirmations.delete(id);
+          }
         }
       }
     };
@@ -1402,6 +1404,7 @@ export class WebChannel
               // npm requires PATH + HOME + USER; we drop API keys by default.
               env: this.buildVerifySpawnEnv(),
             });
+            const killTimer = setTimeout(() => child.kill("SIGKILL"), 35_000);
 
             child.stdout?.on("data", (chunk: Buffer) => {
               if (stdoutBuf.length < MAX_OUTPUT) {
@@ -1417,6 +1420,7 @@ export class WebChannel
               finish("fail", undefined, `spawn error: ${err.message}`);
             });
             child.on("close", (code, signal) => {
+              clearTimeout(killTimer);
               if (signal === "SIGTERM") {
                 finish("fail", undefined, `Check timed out after 30s (${checkType})`);
                 return;

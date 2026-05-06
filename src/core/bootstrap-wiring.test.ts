@@ -363,10 +363,9 @@ describe("generateSessionId", () => {
     expect(id.length).toBeGreaterThan(0);
   });
 
-  it("contains a numeric timestamp prefix", () => {
+  it("returns a valid UUID format", () => {
     const id = generateSessionId();
-    const parts = id.split("-");
-    expect(Number.isFinite(Number(parts[0]))).toBe(true);
+    expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
   });
 
   it("generates unique IDs", () => {
