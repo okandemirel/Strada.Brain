@@ -2,7 +2,7 @@ import type { AgentState } from "./agent-state.js";
 import { MUTATION_TOOLS, isVerificationToolName } from "./autonomy/constants.js";
 import { isTerminalFailureReport } from "./autonomy/index.js";
 import type { ProviderResponse } from "./providers/provider.interface.js";
-import { redactSensitiveText } from "./orchestrator-text-utils.js";
+import { redactSensitiveText, sanitizePromptInjection } from "./orchestrator-text-utils.js";
 
 const MAX_TOOL_RESULT_LENGTH = 8192;
 const REFLECTION_DECISION_RE = /\*\*\s*(DONE_WITH_SUGGESTIONS|DONE|REPLAN|CONTINUE)\s*\*\*/;
@@ -299,7 +299,8 @@ export function evaluateProviderFailure(
  * Caps length and strips potential API key patterns.
  */
 export function sanitizeToolResult(content: string, maxLength = MAX_TOOL_RESULT_LENGTH): string {
-  let result = redactSensitiveText(content);
+  let result = sanitizePromptInjection(content);
+  result = redactSensitiveText(result);
   if (result.length > maxLength) {
     result = result.substring(0, maxLength) + "\n... (truncated)";
   }

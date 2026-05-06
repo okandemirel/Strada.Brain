@@ -22,6 +22,7 @@ import { getDefaultSlashCommands } from "../channels/discord/commands.js";
 import { WhatsAppChannel } from "../channels/whatsapp/client.js";
 import { WebChannel } from "../channels/web/channel.js";
 
+
 import type { IChannelAdapter } from "../channels/channel.interface.js";
 import type { IMemoryManager } from "../memory/memory.interface.js";
 import type * as winston from "winston";
@@ -63,6 +64,14 @@ export async function initializeChannel(
         dashboardAuthToken: config.websocketDashboard.authToken,
         identityDbPath: join(config.memory.dbPath, "web-identities.db"),
       });
+
+    case "slack": {
+      const { SlackChannel } = await import("../channels/slack/app.js");
+      if (!config.slack.botToken) {
+        throw new AppError("SLACK_BOT_TOKEN is required for Slack channel", "MISSING_SLACK_CONFIG");
+      }
+      return new SlackChannel(config.slack as { botToken: string; signingSecret: string; appToken?: string; socketMode?: boolean; allowedWorkspaces?: string[]; allowedUserIds?: string[] });
+    }
 
     case "matrix": {
       const { MatrixChannel } = await import("../channels/matrix/channel.js");

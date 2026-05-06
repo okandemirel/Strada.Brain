@@ -168,6 +168,7 @@ import {
   extractNaturalLanguageDirectiveUpdates,
   resolveConversationScope,
   resolveIdentityKey,
+  sanitizePromptInjection,
 } from "./orchestrator-text-utils.js";
 import {
   normalizeFailureFingerprint,
@@ -3859,7 +3860,8 @@ export class Orchestrator {
 
   private async processMessage(msg: IncomingMessage): Promise<void> {
     const logger = getLogger();
-    const { chatId, text, userId: msgUserId, conversationId } = msg;
+    const { chatId, text: rawText, userId: msgUserId, conversationId } = msg;
+    const text = sanitizePromptInjection(rawText);
     const userId = msgUserId;
     const conversationScope = resolveConversationScope(chatId, conversationId);
 

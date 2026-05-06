@@ -525,7 +525,7 @@ export class SlackChannel implements IChannelAdapter {
       setTimeout(() => {
         if (this.pendingConfirmations.has(actionIdPrefix)) {
           this.pendingConfirmations.delete(actionIdPrefix);
-          reject(new Error("Confirmation timeout"));
+          resolve("timeout");
         }
       }, this.CONFIRMATION_TIMEOUT_MS);
     });

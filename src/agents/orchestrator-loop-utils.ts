@@ -280,9 +280,13 @@ export function recordStepResultsAndCheckReflection(
     });
     consecutiveErrors = tr.isError ? consecutiveErrors + 1 : 0;
   }
+  const combinedSteps = [...agentState.stepResults, ...newSteps];
+  const MAX_STEP_RESULTS = 50;
   agentState = {
     ...agentState,
-    stepResults: [...agentState.stepResults, ...newSteps],
+    stepResults: combinedSteps.length > MAX_STEP_RESULTS
+      ? combinedSteps.slice(-MAX_STEP_RESULTS)
+      : combinedSteps,
     iteration: agentState.iteration + toolCalls.length,
     consecutiveErrors,
   };

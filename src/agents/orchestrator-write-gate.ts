@@ -6,18 +6,7 @@
  */
 
 import type { IChannelAdapter } from "../channels/channel.interface.js";
-
-// ─── Types ────────────────────────────────────────────────────────────────────
-
-interface ConfirmableChannel {
-  requestConfirmation: (req: {
-    chatId: string;
-    userId?: string;
-    question: string;
-    options: string[];
-    details?: string;
-  }) => Promise<string>;
-}
+import { supportsInteractivity } from "../channels/channel-core.interface.js";
 
 // ─── Functions ────────────────────────────────────────────────────────────────
 
@@ -28,6 +17,10 @@ export async function requestWriteConfirmation(
   toolName: string,
   input: Record<string, unknown>,
 ): Promise<boolean> {
+  if (!supportsInteractivity(channel)) {
+    return false;
+  }
+
   let question: string;
   let details: string;
 
@@ -63,9 +56,7 @@ export async function requestWriteConfirmation(
     }
   }
 
-  const response = await (
-    channel as unknown as ConfirmableChannel
-  ).requestConfirmation({
+  const response = await channel.requestConfirmation({
     chatId,
     userId,
     question,
