@@ -15,10 +15,12 @@ function parseNum(s: string | undefined): number | undefined {
 
 export class BudgetConfigStore {
   private readonly storage: BudgetStorage;
+  private readonly env: NodeJS.ProcessEnv;
   private cached: UnifiedBudgetConfig | null = null;
 
-  constructor(storage: BudgetStorage) {
+  constructor(storage: BudgetStorage, env: NodeJS.ProcessEnv = process.env) {
     this.storage = storage;
+    this.env = env;
   }
 
   getConfig(): UnifiedBudgetConfig {
@@ -77,13 +79,13 @@ export class BudgetConfigStore {
   private resolve(): UnifiedBudgetConfig {
     const overrides = this.storage.getAllBudgetConfig();
     const val = (key: string, envKey: string, fallback: number): number =>
-      parseNum(overrides[key]) ?? parseNum(process.env[envKey]) ?? fallback;
+      parseNum(overrides[key]) ?? parseNum(this.env[envKey]) ?? fallback;
 
     // Optional live-override for interactive token budget. Unset → leave undefined
     // so consumers fall back to their static config (TaskConfig.interactiveTokenBudget).
     const interactiveOverride =
       parseNum(overrides["interactiveTokenBudget"]) ??
-      parseNum(process.env["STRADA_INTERACTIVE_TOKEN_BUDGET"]);
+      parseNum(this.env["STRADA_INTERACTIVE_TOKEN_BUDGET"]);
 
     return {
       dailyLimitUsd: val("dailyLimitUsd", "STRADA_BUDGET_DAILY_USD", DEFAULT_BUDGET_CONFIG.dailyLimitUsd),

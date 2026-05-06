@@ -47,9 +47,9 @@ export class UnifiedBudgetManager {
   private exceededEmitted = false;
   private readonly configListeners = new Set<BudgetConfigListener>();
 
-  constructor(storage: BudgetStorageAdapter, eventBus: BudgetEventBus) {
+  constructor(storage: BudgetStorageAdapter, eventBus: BudgetEventBus, env?: NodeJS.ProcessEnv) {
     this.storage = storage;
-    this.configStore = new BudgetConfigStore(storage);
+    this.configStore = new BudgetConfigStore(storage, env);
     this.eventBus = eventBus;
   }
 

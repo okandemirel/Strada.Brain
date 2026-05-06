@@ -9,6 +9,8 @@
  * Singleton — shared across the entire process.
  */
 
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+
 export type ProviderHealthStatus = "healthy" | "degraded" | "down";
 
 export interface ProviderHealthEntry {
@@ -349,5 +351,48 @@ export class ProviderHealthRegistry {
     // (recordFailure/recordQuotaExhausted both increment the counter).
     // When cooldown expires without an explicit recordSuccess, the provider is "recovering".
     return entry.status !== "healthy" && Date.now() >= entry.cooldownUntil;
+  }
+
+  /** Persist health state to disk so it survives process restarts. */
+  save(path: string): void {
+    try {
+      const data = {
+        entries: Array.from(this.entries.entries()),
+        thinkingDisabled: Array.from(this.thinkingDisabledProviders),
+        thinkingCounters: Array.from(this.thinkingReEnableCounters.entries()),
+      };
+      writeFileSync(path, JSON.stringify(data, null, 2));
+    } catch {
+      // Persistence is best-effort
+    }
+  }
+
+  /** Load health state from disk (idempotent — safe to call multiple times). */
+  load(path: string): void {
+    try {
+      if (!existsSync(path)) return;
+      const raw = JSON.parse(readFileSync(path, "utf8")) as {
+        entries?: Array<[string, ProviderHealthEntry]>;
+        thinkingDisabled?: string[];
+        thinkingCounters?: Array<[string, number]>;
+      };
+      if (raw.entries) {
+        for (const [k, v] of raw.entries) {
+          this.entries.set(k, v);
+        }
+      }
+      if (raw.thinkingDisabled) {
+        for (const p of raw.thinkingDisabled) {
+          this.thinkingDisabledProviders.add(p);
+        }
+      }
+      if (raw.thinkingCounters) {
+        for (const [k, v] of raw.thinkingCounters) {
+          this.thinkingReEnableCounters.set(k, v);
+        }
+      }
+    } catch {
+      // Ignore corrupt or missing persistence file
+    }
   }
 }

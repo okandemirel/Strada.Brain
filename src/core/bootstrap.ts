@@ -80,6 +80,7 @@ import { DigestReporter } from "../daemon/reporting/digest-reporter.js";
 import type { DaemonEventMap } from "../daemon/daemon-events.js";
 import { DaemonStorage } from "../daemon/daemon-storage.js";
 import { UnifiedBudgetManager } from "../budget/unified-budget-manager.js";
+import { ProviderHealthRegistry } from "../agents/providers/provider-health.js";
 
 // Workspace / monitor bridge imports
 import { createWorkspaceBus, type WorkspaceBus } from "../dashboard/workspace-bus.js";
@@ -365,6 +366,10 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     projectPath: config.unityProjectPath,
     readOnly: config.security.readOnlyMode,
   });
+
+  // Restore provider health state from previous run
+  const providerHealthPath = join(config.memory.dbPath, "provider-health.json");
+  ProviderHealthRegistry.getInstance().load(providerHealthPath);
   if (runtimeProjectResolution.notice) {
     logger.warn("Runtime Unity project path mismatch detected", {
       configuredProjectPath: runtimeProjectResolution.configuredProjectPath,
@@ -1013,6 +1018,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   const sharedUnifiedBudgetManager = new UnifiedBudgetManager(
     sharedDaemonStorage,
     daemonEventBus ?? { emit: () => {} },
+    process.env,
   );
   sharedDaemonStorage.migrateBudgetSource();
   // Wire immediately — orchestrator loop re-reads every iteration, and
@@ -1514,11 +1520,14 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       agentManager,
       messageRouter,
       vaultRegistry,
+      backgroundExecutor,
       delegationManager,
       stoppableServers,
       soulLoader,
       autoUpdater,
       checkpointStore: outerCheckpointStore,
+      providerHealthRegistry: ProviderHealthRegistry.getInstance(),
+      providerHealthPersistencePath: providerHealthPath,
     }),
   };
 }

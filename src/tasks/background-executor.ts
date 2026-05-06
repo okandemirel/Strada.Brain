@@ -198,6 +198,31 @@ export class BackgroundExecutor {
     this.monitorLifecycle = lifecycle;
   }
 
+  /** Shut down the executor: clear queue and release all workspace leases. */
+  async shutdown(): Promise<void> {
+    const logger = getLogger();
+    logger.info("[BackgroundExecutor] Shutting down", {
+      queueSize: this.queue.length,
+      activeConversations: this.activeConversations.size,
+    });
+
+    // Clear pending queue
+    this.queue.length = 0;
+    this.activeConversations.clear();
+    this.pausedConversations.clear();
+
+    // Release workspace leases
+    if (this.workspaceLeaseManager) {
+      try {
+        await this.workspaceLeaseManager.dispose();
+      } catch (err) {
+        logger.error("[BackgroundExecutor] Failed to dispose workspace leases", {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+  }
+
   private emitGoalNarrative(task: Task, tree: GoalTree, nodeId?: string): void {
     if (!this.workspaceBus) {
       return;

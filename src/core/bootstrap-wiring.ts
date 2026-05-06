@@ -28,6 +28,7 @@ import type { ChainManager } from "../learning/chains/index.js";
 import type { GoalStorage } from "../goals/index.js";
 import type { IdentityStateManager } from "../identity/identity-state.js";
 import type { VaultRegistry } from "../vault/vault-registry.js";
+import type { ProviderHealthRegistry } from "../agents/providers/provider-health.js";
 import type { IEventBus, LearningEventMap } from "./event-bus.js";
 import type { IChannelAdapter } from "../channels/channel.interface.js";
 import type { IMemoryManager } from "../memory/memory.interface.js";
@@ -165,6 +166,12 @@ export interface ShutdownOptions {
   messageRouter?: MessageRouter;
   /** Vault registry — disposes all vaults on shutdown to release SQLite fds and stop watchers. */
   vaultRegistry?: VaultRegistry;
+  /** Background executor — shuts down to clear queue and release workspace leases. */
+  backgroundExecutor?: { shutdown(): Promise<void> };
+  /** Provider health registry — persisted on shutdown to survive restarts. */
+  providerHealthRegistry?: ProviderHealthRegistry;
+  /** Path to persist provider health registry state across restarts. */
+  providerHealthPersistencePath?: string;
 }
 
 function failIncompleteTasksInStorage(
@@ -194,7 +201,7 @@ export function createShutdownHandler(options: ShutdownOptions): () => Promise<v
   const shutdownTaskReason = "Task interrupted by system shutdown. Resume is available after restart.";
 
   return async (): Promise<void> => {
-    const SHUTDOWN_TIMEOUT_MS = 30_000;
+    const SHUTDOWN_TIMEOUT_MS = 60_000;
 
     const gracefulShutdown = async (): Promise<void> => {
       logger.info("Shutting down Strada Brain...");
@@ -242,6 +249,11 @@ export function createShutdownHandler(options: ShutdownOptions): () => Promise<v
       // Stop chain detection timer before draining events
       if (options.chainManager) {
         options.chainManager.stop();
+      }
+
+      // Shut down background executor before failing tasks
+      if (options.backgroundExecutor) {
+        await options.backgroundExecutor.shutdown();
       }
 
       if (options.taskManager) {
@@ -341,6 +353,17 @@ export function createShutdownHandler(options: ShutdownOptions): () => Promise<v
         }
       }
 
+      // Persist provider health state so cooldowns survive restarts
+      if (options.providerHealthRegistry && options.providerHealthPersistencePath) {
+        try {
+          options.providerHealthRegistry.save(options.providerHealthPersistencePath);
+        } catch (err) {
+          logger.warn("Failed to persist provider health registry", {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+
       await channel.disconnect();
       logger.info("Strada Brain stopped.");
     };
@@ -354,7 +377,7 @@ export function createShutdownHandler(options: ShutdownOptions): () => Promise<v
       ]);
     } catch (err) {
       if (err instanceof Error && err.message === "Shutdown timeout exceeded") {
-        logger.error("Forced shutdown: graceful shutdown took longer than 30s");
+        logger.error("Forced shutdown: graceful shutdown took longer than 60s; pending I/O may be interrupted");
         process.exit(1);
       }
       throw err;

@@ -89,6 +89,7 @@ export class WorkspaceLeaseManager {
   private readonly commandRunner: WorkspaceCommandRunner;
   private readonly worktreeTimeoutMs: number;
   private readonly fallbackExcludes: Set<string>;
+  private readonly activeLeases = new Map<string, WorkspaceLease>();
 
   constructor(options: WorkspaceLeaseManagerOptions) {
     if (!options.projectRoot.trim()) {
@@ -162,7 +163,7 @@ export class WorkspaceLeaseManager {
     }
 
     let released = false;
-    return {
+    const lease: WorkspaceLease = {
       id,
       kind,
       sourceRoot,
@@ -176,9 +177,23 @@ export class WorkspaceLeaseManager {
           return;
         }
         released = true;
+        this.activeLeases.delete(id);
         await releaseImpl();
       },
     };
+    this.activeLeases.set(id, lease);
+    return lease;
+  }
+
+  /** Release all active leases (call on shutdown). */
+  async dispose(): Promise<void> {
+    const leases = Array.from(this.activeLeases.values());
+    this.activeLeases.clear();
+    await Promise.allSettled(leases.map((l) => l.release()));
+  }
+
+  getActiveLeaseCount(): number {
+    return this.activeLeases.size;
   }
 
   private async canUseGitWorktree(): Promise<boolean> {
