@@ -100,12 +100,14 @@ export function checkReadOnlyBlock(toolName: string, readOnlyMode: boolean): Rea
   }
 
   const normalizedName = toolName.toLowerCase().trim();
+  // Handle namespaced tools (e.g. "tools:file_write", "namespace:shell_exec")
+  const baseName = normalizedName.includes(":") ? normalizedName.split(":").pop()! : normalizedName;
 
-  if (WRITE_TOOLS.has(normalizedName)) {
+  if (WRITE_TOOLS.has(baseName)) {
     return {
       allowed: false,
       error: `Tool '${toolName}' is disabled in read-only mode.`,
-      suggestion: SUGGESTIONS[normalizedName] ?? "Use read-only tools to explore the codebase.",
+      suggestion: SUGGESTIONS[baseName] ?? "Use read-only tools to explore the codebase.",
     };
   }
 
@@ -175,7 +177,11 @@ export function filterToolsForReadOnly<T extends { name: string }>(
   tools: T[],
   readOnlyMode: boolean,
 ): T[] {
-  return readOnlyMode ? tools.filter((t) => !WRITE_TOOLS.has(t.name)) : tools;
+  if (!readOnlyMode) return tools;
+  return tools.filter((t) => {
+    const base = t.name.includes(":") ? t.name.split(":").pop()! : t.name;
+    return !WRITE_TOOLS.has(base);
+  });
 }
 
 export function wrapToolForReadOnly(tool: ITool, readOnlyMode: boolean): ITool {
@@ -212,7 +218,10 @@ export class ReadOnlyGuard {
   }
 
   canExecute(toolName: string): boolean {
-    return !this.enabled || !this.blockedTools.has(toolName.toLowerCase().trim());
+    if (!this.enabled) return true;
+    const normalized = toolName.toLowerCase().trim();
+    const base = normalized.includes(":") ? normalized.split(":").pop()! : normalized;
+    return !this.blockedTools.has(base);
   }
 
   check(toolName: string): ReadOnlyCheckResult {

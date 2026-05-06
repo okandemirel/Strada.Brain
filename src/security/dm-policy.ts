@@ -526,7 +526,8 @@ export function createDMPolicy(
 }
 
 export function isDestructiveOperation(toolName: string, input: Record<string, unknown>): boolean {
-  if (!DESTRUCTIVE_TOOLS.includes(toolName)) return false;
+  const baseName = toolName.includes(":") ? toolName.split(":").pop()! : toolName;
+  if (!DESTRUCTIVE_TOOLS.includes(baseName)) return false;
 
   if (toolName === "shell_exec") {
     const command = String(input["command"] || "").toLowerCase();

@@ -925,7 +925,7 @@ export class SlackChannel implements IChannelAdapter {
       const now = Date.now();
       for (const [key, pending] of this.pendingConfirmations) {
         if (now - pending.timestamp > this.CONFIRMATION_TIMEOUT_MS) {
-          pending.reject(new Error("Confirmation timeout"));
+          pending.resolve("timeout");
           this.pendingConfirmations.delete(key);
         }
       }
