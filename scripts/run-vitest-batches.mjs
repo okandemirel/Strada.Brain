@@ -6,6 +6,7 @@ import { spawn } from "node:child_process";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = dirname(__dirname);
 const srcRoot = join(repoRoot, "src");
+const testsRoot = join(repoRoot, "tests");
 const vitestCli = join(repoRoot, "node_modules", "vitest", "vitest.mjs");
 const TARGET_FILES_PER_BATCH = 40;
 const BASE_ARGS = ["run", "--disableConsoleIntercept"];
@@ -72,7 +73,14 @@ async function main() {
     process.exit(exitCode);
   }
 
-  const files = (await collectTestFiles(srcRoot)).sort();
+  const srcFiles = await collectTestFiles(srcRoot);
+  let testsFiles = [];
+  try {
+    testsFiles = await collectTestFiles(testsRoot);
+  } catch {
+    // tests/ directory may not exist
+  }
+  const files = [...srcFiles, ...testsFiles].sort();
   const batches = partitionFiles(files);
 
   for (const [index, batch] of batches.entries()) {
