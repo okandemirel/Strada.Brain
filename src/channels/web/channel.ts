@@ -12,7 +12,6 @@ import {
   type ServerResponse,
 } from "node:http";
 import { existsSync, createReadStream } from "node:fs";
-import { readFile } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
 import { join, extname, resolve, sep } from "node:path";
 import { randomBytes, timingSafeEqual, randomUUID } from "node:crypto";
