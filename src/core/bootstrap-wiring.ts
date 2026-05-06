@@ -316,16 +316,6 @@ export function createShutdownHandler(options: ShutdownOptions): () => Promise<v
         }
       }
 
-      if (options.canvasStorage) {
-        try {
-          options.canvasStorage.close();
-        } catch (err) {
-          logger.warn("Failed to close canvas storage on shutdown", {
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
-      }
-
       if (options.learningStorage) {
         try {
           options.learningStorage.close();
