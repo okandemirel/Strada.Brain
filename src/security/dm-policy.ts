@@ -69,6 +69,7 @@ interface PendingConfirmation {
   batchDiff?: BatchDiff;
   resolve: (result: ApprovalResult) => void;
   operation: string;
+  timer: ReturnType<typeof setTimeout> | null;
 }
 
 // ─── Default Config ──────────────────────────────────────────────────────────
@@ -288,6 +289,7 @@ export class DMPolicy {
         ...("files" in diff ? { batchDiff: diff } : { fileDiff: diff }),
         resolve,
         operation,
+        timer: null,
       };
 
       this.pendingConfirmations.set(confirmationId, confirmation);
@@ -299,7 +301,7 @@ export class DMPolicy {
         },
       );
 
-      setTimeout(() => this.handleTimeout(confirmationId), this.config.defaultTimeoutMs);
+      confirmation.timer = setTimeout(() => this.handleTimeout(confirmationId), this.config.defaultTimeoutMs);
     });
   }
 
@@ -499,6 +501,7 @@ export class DMPolicy {
     if (!confirmation) return;
 
     this.pendingConfirmations.delete(confirmationId);
+    if (confirmation.timer) clearTimeout(confirmation.timer);
     confirmation.resolve(result);
   }
 

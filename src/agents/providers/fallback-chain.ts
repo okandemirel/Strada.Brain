@@ -180,7 +180,7 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
   ): Promise<ProviderResponse> {
     const logger = getLogger();
     const health = ProviderHealthRegistry.getInstance();
-    let lastError = "";
+    let lastError: Error | null = null;
     let attempted = 0;
 
     for (let i = 0; i < this.providers.length; i++) {
@@ -256,7 +256,7 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
         return response;
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);
-        lastError = errorMsg;
+        lastError = error instanceof Error ? error : new Error(String(error));
 
         // Quota/billing errors get a long cooldown so the provider is skipped for hours.
         // Overload errors (529/503) get a medium cooldown to let the server recover.
@@ -329,6 +329,7 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
             throw new Error(
               `Provider "${provider.name}" timed out during reasoning with no fallback available. ${hint} `
               + `Original error: ${sanitizeSecrets(errorMsg)}`,
+              { cause: error instanceof Error ? error : undefined },
             );
           }
 
@@ -337,7 +338,7 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
             error: sanitizeSecrets(errorMsg),
             totalProviders: this.providers.length,
           });
-          throw new Error(`All providers failed. Last error: ${sanitizeSecrets(errorMsg)}`);
+          throw new Error(`All providers failed. Last error: ${sanitizeSecrets(errorMsg)}`, { cause: error instanceof Error ? error : undefined });
         }
 
         logger.warn(`Provider failed (${label}), trying next healthy provider`, {
@@ -350,7 +351,7 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
 
     const detail = attempted === 0
       ? "All providers are in cooldown. Try again later."
-      : `Last error: ${sanitizeSecrets(lastError)}`;
-    throw new Error(`All providers failed or unavailable. ${detail}`);
+      : `Last error: ${sanitizeSecrets(lastError?.message ?? "")}`;
+    throw new Error(`All providers failed or unavailable. ${detail}`, { cause: lastError ?? undefined });
   }
 }

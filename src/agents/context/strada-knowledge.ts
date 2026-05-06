@@ -465,7 +465,7 @@ export async function buildVaultProjectContext(input: VaultProjectContextInput):
     budgetTokens: input.contextBudget ?? 4000,
   })));
   const results = settled
-    .filter((s): s is PromiseFulfilledResult<Awaited<ReturnType<typeof v.query>>[]> => s.status === "fulfilled")
+    .filter((s): s is PromiseFulfilledResult<{ hits: { chunk: { path: string; content: string } }[] }> => s.status === "fulfilled")
     .map((s) => s.value);
   return renderVaultContext(results);
 }
@@ -504,7 +504,7 @@ Project path: ${arg}
       budgetTokens: arg.contextBudget,
     })));
     const results = settled
-      .filter((s): s is PromiseFulfilledResult<Awaited<ReturnType<typeof v.query>>[]> => s.status === "fulfilled")
+      .filter((s): s is PromiseFulfilledResult<{ hits: { chunk: { path: string; content: string } }[] }> => s.status === "fulfilled")
       .map((s) => s.value);
     return renderVaultContext(results);
   })();

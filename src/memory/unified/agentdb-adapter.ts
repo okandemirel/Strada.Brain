@@ -394,17 +394,13 @@ export class AgentDBAdapter implements IMemoryManager {
         return err(new Error(`Error entry not found: ${id}`));
       }
 
-      const entry = rawEntry.value.value;
-      if (entry.type !== "error") {
+      const original = rawEntry.value.value;
+      if (original.type !== "error") {
         return err(new Error(`Entry is not an error: ${id}`));
       }
 
-      const metadata = toMutableMetadata(entry.metadata);
-      metadata["resolved"] = true;
-      metadata["resolution"] = resolution;
-      entry.metadata = metadata;
-      entry.resolved = true;
-      entry.resolution = resolution;
+      const metadata = { ...toMutableMetadata(original.metadata), resolved: true, resolution };
+      const entry: AdapterInternalEntry = { ...original, metadata, resolved: true, resolution };
       this.persistMutableEntry(entry);
 
       return ok(undefined);
@@ -461,8 +457,9 @@ export class AgentDBAdapter implements IMemoryManager {
         return err(new Error(`Entry not found: ${id}`));
       }
 
-      const entry = rawEntry.value.value;
-      const metadata = toMutableMetadata(entry.metadata);
+      const original = rawEntry.value.value;
+      const entry: AdapterInternalEntry = { ...original };
+      const metadata = { ...toMutableMetadata(original.metadata) };
       const typedUpdates = updates as Record<string, unknown>;
 
       if (typedUpdates["tags"] !== undefined && Array.isArray(typedUpdates["tags"])) {
@@ -715,9 +712,9 @@ export class AgentDBAdapter implements IMemoryManager {
   async archiveOldEntries(before: TimestampMs): Promise<Result<number, Error>> {
     try {
       let archived = 0;
-      for (const entry of await this.listRawEntries()) {
-        if ((entry.createdAt as number) < (before as number) && !entry.archived) {
-          entry.archived = true;
+      for (const original of await this.listRawEntries()) {
+        if ((original.createdAt as number) < (before as number) && !original.archived) {
+          const entry: AdapterInternalEntry = { ...original, archived: true };
           this.persistMutableEntry(entry);
           archived++;
         }

@@ -1494,6 +1494,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       channel,
       cleanupInterval,
       learningPipeline: learningResult.pipeline,
+      learningStorage: learningResult.storage,
       taskStorage,
       taskManager,
       providerManager,

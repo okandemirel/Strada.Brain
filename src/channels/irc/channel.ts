@@ -111,7 +111,7 @@ export class IRCChannel implements IChannelAdapter {
       };
 
       this.handler?.(msg).catch((err) => {
-        this.logger.warn("Message handler failed", { error: err instanceof Error ? err.message : String(err) });
+        getLogger().warn("Message handler failed", { error: err instanceof Error ? err.message : String(err) });
       });
     }) as (...args: unknown[]) => void);
 

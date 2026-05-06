@@ -7,7 +7,6 @@
 
 import { createServer, type Server } from "node:http";
 import { randomBytes, timingSafeEqual, randomUUID } from "node:crypto";
-import { randomUUID } from "node:crypto";
 import { WebSocketServer, WebSocket } from "ws";
 import { getLogger } from "../utils/logger.js";
 import { BruteForceProtection } from "../security/auth-hardened.js";

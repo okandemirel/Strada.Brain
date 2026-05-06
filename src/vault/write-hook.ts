@@ -4,6 +4,7 @@ import type { IVault } from './vault.interface.js';
 export interface WriteHookOptions {
   vault: IVault & { reindexFile: (relPath: string) => Promise<boolean> };
   budgetMs: number;
+  logger?: { debug(message: string, meta?: Record<string, unknown>): void };
 }
 
 export interface InstalledWriteHook {

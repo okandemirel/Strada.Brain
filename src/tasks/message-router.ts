@@ -41,6 +41,15 @@ export class MessageRouter {
   private readonly burstWindowMs: number;
   private readonly maxBurstMessages: number;
 
+  dispose(): void {
+    for (const [, batch] of this.pendingTaskBatches) {
+      if (batch.timer) {
+        clearTimeout(batch.timer);
+      }
+    }
+    this.pendingTaskBatches.clear();
+  }
+
   constructor(
     private readonly taskManager: TaskManager,
     private readonly commandHandler: CommandHandler,

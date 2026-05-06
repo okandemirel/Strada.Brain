@@ -158,6 +158,8 @@ export interface ShutdownOptions {
   checkpointStore?: { close(): void };
   /** Canvas storage for dashboard — closed on shutdown to release SQLite fd. */
   canvasStorage?: { close(): void };
+  /** Learning storage — closed on shutdown to release SQLite fd. */
+  learningStorage?: { close(): void };
 }
 
 function failIncompleteTasksInStorage(
@@ -304,6 +306,26 @@ export function createShutdownHandler(options: ShutdownOptions): () => Promise<v
           options.checkpointStore.close();
         } catch (err) {
           logger.warn("Failed to close task checkpoint store on shutdown", {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+
+      if (options.canvasStorage) {
+        try {
+          options.canvasStorage.close();
+        } catch (err) {
+          logger.warn("Failed to close canvas storage on shutdown", {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+
+      if (options.learningStorage) {
+        try {
+          options.learningStorage.close();
+        } catch (err) {
+          logger.warn("Failed to close learning storage on shutdown", {
             error: err instanceof Error ? err.message : String(err),
           });
         }

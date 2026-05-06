@@ -515,6 +515,8 @@ export function wrapError(
  * Global error handler for unhandled rejections.
  * uncaughtException is handled by setupShutdownHandlers() in index.ts
  * to drive the full graceful shutdown sequence.
+ */
+export function setupGlobalErrorHandlers(
   onError?: (error: Error) => void,
 ): void {
   const logger = console;

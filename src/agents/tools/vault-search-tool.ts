@@ -171,7 +171,7 @@ export class VaultSearchTool {
     const capped = merged.slice(0, topK);
 
     const tokensUsed = capped.reduce((acc, h) => acc + estimateTokens(h.content), 0);
-    const truncated = merged.length > capped.length || perVault.some((p) => p.result.truncated);
+    const truncated = merged.length > capped.length || perVault.some((p) => p.status === "fulfilled" && p.value.result.truncated);
 
     const payload: VaultSearchResultPayload = {
       hits: capped,

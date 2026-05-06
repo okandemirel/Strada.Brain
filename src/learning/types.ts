@@ -6,6 +6,7 @@
  * Updated for type safety with branded types and discriminated unions.
  */
 
+import { randomUUID } from "node:crypto";
 import type {
   SessionId,
   ToolName,
