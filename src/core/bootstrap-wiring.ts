@@ -292,6 +292,11 @@ export function createShutdownHandler(options: ShutdownOptions): () => Promise<v
         await memoryManager.shutdown();
       }
 
+      // Close canvas storage to release SQLite fd
+      if (options.canvasStorage) {
+        options.canvasStorage.close();
+      }
+
       // Identity shutdown: record clean shutdown and flush uptime (before DB closes)
       if (options.uptimeInterval) {
         clearInterval(options.uptimeInterval);

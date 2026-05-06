@@ -811,8 +811,8 @@ export class WebChannel
         for (const [id, pending] of this.pendingConfirmations) {
           if (pending.chatId === chatId) {
             clearTimeout(pending.timer);
-            pending.resolve("timeout");
             this.pendingConfirmations.delete(id);
+            pending.resolve("timeout");
           }
         }
       }
