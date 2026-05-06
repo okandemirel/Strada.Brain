@@ -278,16 +278,18 @@ describe("DashboardServer", () => {
     expect(res.status).toBe(200);
 
     const data = await res.json();
-    expect(data).toEqual([
-      expect.objectContaining({
-        id: "nightly-scan",
-        name: "nightly-scan",
-        type: "cron",
-        enabled: true,
-        state: "active",
-        fireCount: 0,
-      }),
-    ]);
+    expect(data).toEqual({
+      triggers: [
+        expect.objectContaining({
+          id: "nightly-scan",
+          name: "nightly-scan",
+          type: "cron",
+          enabled: true,
+          state: "active",
+          fireCount: 0,
+        }),
+      ],
+    });
   });
 
   it("returns provider payloads compatible with both settings page and model selector", async () => {
