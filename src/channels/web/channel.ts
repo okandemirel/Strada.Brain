@@ -178,6 +178,8 @@ export class WebChannel
   private readonly appliedInstinctIds = new Map<string, string[]>();
   /** Tracks the length of text already sent for each active stream to enable delta protocol. */
   private readonly streamSentLengths = new Map<string, number>();
+  /** Maps streamId → chatId so abandoned streams can be cleaned up on disconnect. */
+  private readonly streamChatIds = new Map<string, string>();
   private readonly staticDir = resolveStaticDir();
   private readonly identityStore: WebIdentityStore;
   /** Optional emitter for workspace bus events from frontend monitor commands. */
@@ -458,6 +460,7 @@ export class WebChannel
     }
     this.pendingConfirmations.clear();
     this.streamSentLengths.clear();
+    this.streamChatIds.clear();
 
     for (const [, client] of this.clients) {
       client.ws.close(1000, "Server shutting down");
@@ -599,13 +602,10 @@ export class WebChannel
     });
   }
 
-  // NOTE: streamSentLengths entries are only cleaned in finalizeStreamingMessage.
-  // If a stream is abandoned (e.g. provider error before finalize), the entry
-  // will leak until the next server restart. A periodic cleanup timer could be
-  // added if this becomes a measurable issue in long-running instances.
   async startStreamingMessage(chatId: string): Promise<string | undefined> {
     const streamId = randomUUID();
     this.streamSentLengths.set(streamId, 0);
+    this.streamChatIds.set(streamId, chatId);
     this.sendToClient(chatId, { type: "stream_start", streamId, text: "" });
     return streamId;
   }
@@ -628,6 +628,7 @@ export class WebChannel
     finalText: string,
   ): Promise<void> {
     this.streamSentLengths.delete(streamId);
+    this.streamChatIds.delete(streamId);
     const instinctIds = this.appliedInstinctIds.get(chatId);
     this.sendToClient(chatId, {
       type: "stream_end",
@@ -801,6 +802,12 @@ export class WebChannel
 
         // Clean up per-session state that would otherwise leak
         this.appliedInstinctIds.delete(chatId);
+        for (const [sid, cid] of this.streamChatIds) {
+          if (cid === chatId) {
+            this.streamSentLengths.delete(sid);
+            this.streamChatIds.delete(sid);
+          }
+        }
         for (const [id, pending] of this.pendingConfirmations) {
           if (pending.chatId === chatId) {
             clearTimeout(pending.timer);

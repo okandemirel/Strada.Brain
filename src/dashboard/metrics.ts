@@ -118,6 +118,10 @@ export class MetricsCollector {
     this.activeSessions = count;
   }
 
+  getActiveSessions(): number {
+    return this.activeSessions;
+  }
+
   /**
    * Set read-only mode status for dashboard display.
    */

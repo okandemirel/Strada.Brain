@@ -608,7 +608,7 @@ export class DashboardServer {
             timestamp: new Date().toISOString(),
             channel: "dashboard",
             uptime: process.uptime(),
-            clients: 0,
+            clients: this.metrics.getActiveSessions(),
           }),
         );
         return;

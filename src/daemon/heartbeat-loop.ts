@@ -52,7 +52,7 @@ interface DeployTriggerContract {
 }
 
 export class HeartbeatLoop {
-  private intervalId: ReturnType<typeof setInterval> | undefined;
+  private intervalId: ReturnType<typeof setTimeout> | undefined;
   private running = false;
   private lastTick: Date | null = null;
   private readonly activeTriggerTasks = new Map<string, TaskId>();
@@ -135,11 +135,29 @@ export class HeartbeatLoop {
         : "unlimited",
     });
 
-    // Create interval -- unref so it doesn't prevent process exit
-    this.intervalId = setInterval(() => {
-      void this.tick();
-    }, this.config.heartbeat.intervalMs);
-    this.intervalId.unref();
+    // Schedule first tick -- uses recursive setTimeout to prevent drift and
+    // overlap when a tick() run exceeds the interval duration.
+    this.scheduleNextTick();
+  }
+
+  private scheduleNextTick(): void {
+    const intervalMs = this.config.heartbeat.intervalMs;
+    this.intervalId = setTimeout(async () => {
+      const start = Date.now();
+      try {
+        await this.tick();
+      } catch (err) {
+        this.logger.error("Heartbeat tick failed", {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+      if (!this.running) return;
+      const elapsed = Date.now() - start;
+      const delay = Math.max(0, intervalMs - elapsed);
+      this.intervalId = setTimeout(() => this.scheduleNextTick(), delay);
+      this.intervalId.unref?.();
+    }, intervalMs);
+    this.intervalId.unref?.();
   }
 
   /**
@@ -151,7 +169,7 @@ export class HeartbeatLoop {
     this.running = false;
 
     if (this.intervalId) {
-      clearInterval(this.intervalId);
+      clearTimeout(this.intervalId);
       this.intervalId = undefined;
     }
 

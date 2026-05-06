@@ -637,7 +637,20 @@ export class BackgroundExecutor {
 
       this.activeConversations.add(conversationKey);
       this.running++;
-      this.executeTask(entry)
+
+      // Combine external cancel signal with a task-level timeout so hung tasks
+      // cannot block the conversation forever.
+      const TASK_TIMEOUT_MS = 300_000;
+      const timeoutController = new AbortController();
+      const onAbort = () => timeoutController.abort();
+      entry.signal.addEventListener("abort", onAbort, { once: true });
+      const timeoutTimer = setTimeout(
+        () => timeoutController.abort(new Error(`Task timed out after ${TASK_TIMEOUT_MS}ms`)),
+        TASK_TIMEOUT_MS,
+      );
+      const timedEntry: QueueEntry = { ...entry, signal: timeoutController.signal };
+
+      this.executeTask(timedEntry)
         .catch((err) => {
           // Catch any unhandled rejection that escapes executeTask's own try/catch
           const rawMsg = err instanceof Error ? err.message : String(err);
@@ -656,6 +669,8 @@ export class BackgroundExecutor {
           }
         })
         .finally(() => {
+          clearTimeout(timeoutTimer);
+          entry.signal.removeEventListener("abort", onAbort);
           this.activeConversations.delete(conversationKey);
           this.running--;
           try {
