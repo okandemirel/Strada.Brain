@@ -291,6 +291,7 @@ export type EnvVarName =
   | "DEPLOY_COOLDOWN_MINUTES"
   | "DEPLOY_NOTIFICATION_URGENCY"
   | "DEPLOY_POST_SCRIPT_PATH"
+  | "DEPLOY_ROLLBACK_SCRIPT_PATH"
 
   // Language Preference
   | "LANGUAGE_PREFERENCE"
@@ -1721,6 +1722,7 @@ export const configSchema = z
       .default("30"),
     deployNotificationUrgency: z.enum(["low", "medium", "high", "critical"]).default("high"),
     deployPostScriptPath: z.string().optional(),
+    deployRollbackScriptPath: z.string().optional(),
 
     // Autonomous Mode
     autonomousDefaultEnabled: boolFromString(false),
@@ -2385,6 +2387,7 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
       cooldownMinutes: rawConfig.deployCooldownMinutes,
       notificationUrgency: rawConfig.deployNotificationUrgency,
       postScriptPath: rawConfig.deployPostScriptPath,
+      rollbackScriptPath: rawConfig.deployRollbackScriptPath,
     },
 
     autonomousDefaultEnabled: rawConfig.autonomousDefaultEnabled,

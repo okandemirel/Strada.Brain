@@ -276,7 +276,7 @@ export function handleDaemonRoutes(
       };
     });
 
-    sendJson(res, triggerList);
+    sendJson(res, { triggers: triggerList });
     return true;
   }
 

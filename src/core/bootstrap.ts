@@ -610,6 +610,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
         search(_q: Float32Array, k: number) {
           return [...vaultStore.entries()].slice(0, k).map(([id, r]) => ({ id, score: 1, payload: r.payload }));
         },
+        clear(): void { vaultStore.clear(); nextId = 1; },
       };
 
       // Unity-specific discovery (only runs when vault.enabled is on — preserves

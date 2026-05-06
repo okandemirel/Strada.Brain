@@ -10,6 +10,8 @@ const CACHE_FILENAME = "embedding-cache.json";
 
 interface PersistedCache {
   version: number;
+  providerName: string;
+  dimensions: number;
   entries: Array<{ key: string; embedding: number[] }>;
 }
 
@@ -68,6 +70,16 @@ export class CachedEmbeddingProvider implements IEmbeddingProvider {
     try {
       const raw = await readFile(filePath, "utf8");
       const persisted = JSON.parse(raw) as PersistedCache;
+      // Invalidate cache if provider or dimensions changed (model swap)
+      if (persisted.providerName !== this.inner.name || persisted.dimensions !== this.inner.dimensions) {
+        logger.info("EmbeddingCache: provider/dimensions mismatch, discarding stale cache", {
+          cachedProvider: persisted.providerName,
+          currentProvider: this.inner.name,
+          cachedDimensions: persisted.dimensions,
+          currentDimensions: this.inner.dimensions,
+        });
+        return;
+      }
       for (const { key, embedding } of persisted.entries) {
         if (this.cache.size >= this.maxCacheSize) break;
         this.cache.set(key, embedding);
@@ -100,7 +112,7 @@ export class CachedEmbeddingProvider implements IEmbeddingProvider {
         key,
         embedding,
       }));
-      const persisted: PersistedCache = { version: 1, entries };
+      const persisted: PersistedCache = { version: 1, providerName: this.inner.name, dimensions: this.inner.dimensions, entries };
       await writeFile(filePath, JSON.stringify(persisted), "utf8");
       this.dirty = false;
       logger.debug("EmbeddingCache: persisted to disk", {

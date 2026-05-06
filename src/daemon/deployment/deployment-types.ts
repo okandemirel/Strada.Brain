@@ -36,6 +36,8 @@ export interface DeploymentConfig {
   readonly notificationUrgency: "low" | "medium" | "high" | "critical";
   /** Optional post-deploy verification script path */
   readonly postScriptPath?: string;
+  /** Optional rollback script path executed when deployment fails */
+  readonly rollbackScriptPath?: string;
 }
 
 // =============================================================================
@@ -91,6 +93,8 @@ export type DeploymentStatus =
   | "executing"
   | "completed"
   | "failed"
+  | "rollback_completed"
+  | "rollback_failed"
   | "cancelled"
   | "post_verify_failed";
 

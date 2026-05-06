@@ -210,6 +210,24 @@ export class HNSWVectorStore implements IHNSWVectorStore {
     }
   }
 
+  clear(): void {
+    this.chunks.clear();
+    this.idToIndex.clear();
+    this.indexToId.clear();
+    this.deletedIndices.clear();
+    this.quantizedVectors.clear();
+    this.nextIndex = 0;
+    this.searchTimes = [];
+    if (this.hnswIndex) {
+      try {
+        this.hnswIndex = null;
+      } catch {
+        // ignore
+      }
+    }
+    this.isInitialized = false;
+  }
+
   async shutdown(): Promise<void> {
     if (!this.isInitialized) return;
 

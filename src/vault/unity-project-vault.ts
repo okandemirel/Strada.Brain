@@ -92,6 +92,8 @@ export class UnityProjectVault implements IVault {
     this.store.close();
     await unlink(this.dbPath).catch(() => undefined);
     this.store = new SqliteVaultStore(this.dbPath);
+    // Clear stale HNSW state so old hnsw_id pointers don't leak into the new index
+    this.adapter.store.clear();
     await this.init();
   }
 

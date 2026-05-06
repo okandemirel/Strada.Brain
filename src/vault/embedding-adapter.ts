@@ -8,6 +8,7 @@ export interface VectorStore {
   add(vector: Float32Array, payload: unknown): number;
   remove(id: number): void;
   search(vector: Float32Array, k: number): Array<{ id: number; score: number; payload?: unknown }>;
+  clear(): void;
 }
 
 export interface ChunkToEmbed {

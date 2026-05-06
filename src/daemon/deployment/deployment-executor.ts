@@ -132,6 +132,30 @@ export class DeploymentExecutor {
           exitCode: deployResult.exitCode,
           signal: deployResult.signal,
         });
+
+        // Automatic rollback if configured
+        if (this.config.rollbackScriptPath) {
+          try {
+            const rollbackPath = this.validateScript(this.config.rollbackScriptPath);
+            this.logger.info("Running rollback script", { proposalId: proposal.id, rollbackPath });
+            const rollbackResult = await this.runScript(rollbackPath, proposal);
+            if (rollbackResult.success) {
+              this.logger.info("Rollback completed", { proposalId: proposal.id });
+              this.updateLogEntry(proposal.id, "rollback_completed", rollbackResult.stdout, durationMs);
+            } else {
+              this.logger.error("Rollback failed", {
+                proposalId: proposal.id,
+                stderr: rollbackResult.stderr,
+              });
+              this.updateLogEntry(proposal.id, "rollback_failed", rollbackResult.stderr, durationMs);
+            }
+          } catch (rollbackErr) {
+            this.logger.error("Rollback script error", {
+              proposalId: proposal.id,
+              error: rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr),
+            });
+          }
+        }
       }
 
       return deployResult;
