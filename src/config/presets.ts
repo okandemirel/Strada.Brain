@@ -281,6 +281,14 @@ export const PROVIDER_MODEL_OPTIONS: Record<string, Array<{
   fireworks: [
     { model: "accounts/fireworks/models/llama4-maverick-instruct-basic", label: "Llama 4 Maverick", tier: "budget", inputPer1M: 0.22, outputPer1M: 0.88, contextWindow: "1M", notes: "Fast Fireworks inference. Competitive pricing." },
   ],
+  opencode: [
+    { model: "opencode/qwen-3-coder-480b", label: "Qwen 3 Coder 480B", tier: "standard", inputPer1M: 0.60, outputPer1M: 3.00, contextWindow: "128K", notes: "Zen flagship. Best for coding via OpenCode." },
+    { model: "opencode/gpt-5.5", label: "GPT 5.5", tier: "standard", inputPer1M: 1.75, outputPer1M: 14.00, contextWindow: "128K", notes: "OpenAI model via OpenCode Zen." },
+    { model: "opencode/claude-sonnet-4", label: "Claude Sonnet 4", tier: "standard", inputPer1M: 3.00, outputPer1M: 15.00, contextWindow: "128K", notes: "Claude model via OpenCode Zen." },
+    { model: "opencode/deepseek-v4-pro", label: "DeepSeek V4 Pro", tier: "budget", inputPer1M: 0.50, outputPer1M: 2.00, contextWindow: "128K", notes: "DeepSeek via OpenCode Zen/Go." },
+    { model: "opencode/glm-5.1", label: "GLM 5.1", tier: "budget", inputPer1M: 0.30, outputPer1M: 1.20, contextWindow: "128K", notes: "Go tier. Fast and cheap." },
+    { model: "opencode/kimi-k2.6", label: "Kimi K2.6", tier: "standard", inputPer1M: 0.60, outputPer1M: 3.00, contextWindow: "128K", notes: "Kimi via OpenCode Go." },
+  ],
 };
 
 /**

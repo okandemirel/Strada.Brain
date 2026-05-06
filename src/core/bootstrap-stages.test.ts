@@ -1055,7 +1055,7 @@ describe("bootstrap-stages", () => {
 
     expect(modelIntelligence.initialize).toHaveBeenCalledWith(
       ".strada-memory/model-intelligence.db",
-      { refreshOnInitialize: false },
+      { refreshOnInitialize: true },
     );
     expect(providerManager.setModelCatalog).toHaveBeenCalledWith(modelIntelligence);
     expect(result.modelIntelligence).toBe(modelIntelligence);

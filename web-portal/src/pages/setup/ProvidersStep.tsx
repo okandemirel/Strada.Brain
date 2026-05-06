@@ -1,9 +1,11 @@
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   PRESETS,
   PROVIDERS,
   getDefaultProviderModel,
   getProviderModelOptions,
+  type ProviderModelOption,
 } from '../../types/setup-constants'
 
 interface ProvidersStepProps {
@@ -101,6 +103,44 @@ export default function ProvidersStep({
   onBack,
 }: ProvidersStepProps) {
   const { t } = useTranslation('setup')
+  const [liveModels, setLiveModels] = useState<Map<string, ProviderModelOption[]>>(new Map())
+
+  useEffect(() => {
+    fetch('/api/providers/models')
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        return res.json()
+      })
+      .then((data: { providers: Array<{ name: string; models: string[] }> }) => {
+        const map = new Map<string, ProviderModelOption[]>()
+        for (const p of data.providers) {
+          const staticOptions = getProviderModelOptions(p.name)
+          const merged: ProviderModelOption[] = p.models.map((modelId) => {
+            const staticOpt = staticOptions.find((o) => o.model === modelId)
+            if (staticOpt) return staticOpt
+            return {
+              model: modelId,
+              label: modelId.split('/').pop() ?? modelId,
+              tier: 'standard' as const,
+              inputPer1M: 0,
+              outputPer1M: 0,
+              contextWindow: 'unknown',
+              notes: 'Auto-discovered model',
+            }
+          })
+          map.set(p.name, merged)
+        }
+        setLiveModels(map)
+      })
+      .catch(() => {
+        // Silently fall back to static model lists
+      })
+  }, [])
+
+  const getModelsForProvider = (providerId: string): ProviderModelOption[] => {
+    return liveModels.get(providerId) ?? getProviderModelOptions(providerId)
+  }
+
   const providerSettingsProviders = PROVIDERS.filter((p) => checkedProviders.has(p.id))
 
   return (
@@ -122,7 +162,7 @@ export default function ProvidersStep({
         <div className="provider-keys">
           <h3 className="section-label">{t('providers.sectionAccess')}</h3>
           {providerSettingsProviders.map((provider) => {
-            const modelOptions = getProviderModelOptions(provider.id)
+            const modelOptions = getModelsForProvider(provider.id)
             const selectedAuthMode = providerAuthModes[provider.id] ?? provider.authModes?.[0]?.id ?? 'api-key'
             const selectedAuthModeDef = provider.authModes?.find((mode) => mode.id === selectedAuthMode)
             const usingOpenAISubscription = provider.id === 'openai' && selectedAuthMode === 'chatgpt-subscription'

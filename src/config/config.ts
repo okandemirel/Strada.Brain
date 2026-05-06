@@ -413,6 +413,7 @@ export type AIProviderName =
   | "together"
   | "fireworks"
   | "gemini"
+  | "opencode"
   | "ollama";
 
 /** Goal interactive execution configuration (Phase 16) */

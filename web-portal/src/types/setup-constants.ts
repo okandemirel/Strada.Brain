@@ -78,6 +78,7 @@ export const PROVIDERS: ProviderDef[] = [
   { id: 'together', name: 'Together', envKey: 'TOGETHER_API_KEY', placeholder: '...', helpUrl: 'https://api.together.xyz/settings/api-keys' },
   { id: 'fireworks', name: 'Fireworks', envKey: 'FIREWORKS_API_KEY', placeholder: '...', helpUrl: 'https://fireworks.ai/account/api-keys' },
   { id: 'minimax', name: 'MiniMax', envKey: 'MINIMAX_API_KEY', placeholder: '...', helpUrl: 'https://www.minimaxi.com' },
+  { id: 'opencode', name: 'OpenCode', envKey: 'OPENCODE_API_KEY', placeholder: 'sk-...', helpUrl: 'https://opencode.ai' },
   { id: 'ollama', name: 'Ollama', envKey: null, placeholder: null, helpUrl: 'https://ollama.com' },
 ]
 

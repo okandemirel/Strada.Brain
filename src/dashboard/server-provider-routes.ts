@@ -64,6 +64,38 @@ export function handleProviderRoutes(
     return true;
   }
 
+  // GET /api/providers/models -- Get model lists for all or specific providers
+  if (method === "GET" && (url === "/api/providers/models" || url.startsWith("/api/providers/models?"))) {
+    if (!ctx.providerManager) {
+      sendJsonError(res, 501, "Provider manager not available");
+      return true;
+    }
+    try {
+      const params = new URL(url, "http://localhost").searchParams;
+      const providerFilter = params.get("provider");
+
+      if (ctx.providerManager.listAvailableWithModels) {
+        void ctx.providerManager.listAvailableWithModels().then((providers) => {
+          const filtered = providerFilter
+            ? providers.filter((p) => p.name === providerFilter)
+            : providers;
+          sendJson(res, { providers: filtered });
+        }).catch((err) => {
+          sendJsonError(res, 500, err instanceof Error ? err.message : String(err));
+        });
+      } else {
+        const available = ctx.providerManager.listAvailable();
+        const filtered = providerFilter
+          ? available.filter((p) => p.name === providerFilter)
+          : available;
+        sendJson(res, { providers: filtered });
+      }
+    } catch (err) {
+      sendJsonError(res, 500, err instanceof Error ? err.message : String(err));
+    }
+    return true;
+  }
+
   // GET /api/providers/active -- Get active provider for a chat
   if (method === "GET" && url.startsWith("/api/providers/active")) {
     if (!ctx.providerManager) {

@@ -90,6 +90,18 @@
         "label": "DeepSeek API docs",
         "kind": "html"
       }
+    ],
+    "opencode": [
+      {
+        "url": "https://opencode.ai/zen",
+        "label": "OpenCode Zen models",
+        "kind": "html"
+      },
+      {
+        "url": "https://opencode.ai/go",
+        "label": "OpenCode Go models",
+        "kind": "html"
+      }
     ]
   }
 }

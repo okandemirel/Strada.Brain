@@ -39,7 +39,7 @@ export async function initializeRuntimeIntelligenceStage(
         providerSourcesPath: params.config.modelIntelligence.providerSourcesPath,
       });
       await modelIntelligence.initialize(params.config.modelIntelligence.dbPath, {
-        refreshOnInitialize: false,
+        refreshOnInitialize: true,
       });
       params.providerManager.setModelCatalog?.(modelIntelligence);
       params.logger.info("ModelIntelligenceService initialized", {

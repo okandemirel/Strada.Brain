@@ -54,10 +54,16 @@ describe("HARDCODED_MODELS", () => {
     "qwen3.5-plus",
     "mistral-large-3",
     "llama3.3",
+    "opencode/qwen-3-coder-480b",
+    "opencode/gpt-5.5",
+    "opencode/claude-sonnet-4",
+    "opencode/deepseek-v4-pro",
+    "opencode/glm-5.1",
+    "opencode/kimi-k2.6",
   ];
 
-  it("has all 16 default model entries", () => {
-    expect(HARDCODED_MODELS.size).toBe(16);
+  it("has all 22 default model entries", () => {
+    expect(HARDCODED_MODELS.size).toBe(22);
     for (const model of expectedModels) {
       expect(HARDCODED_MODELS.has(model), `missing: ${model}`).toBe(true);
     }
@@ -88,6 +94,12 @@ describe("HARDCODED_MODELS", () => {
       "qwen3.5-plus": "qwen",
       "mistral-large-3": "mistral",
       "llama3.3": "ollama",
+      "opencode/qwen-3-coder-480b": "opencode",
+      "opencode/gpt-5.5": "opencode",
+      "opencode/claude-sonnet-4": "opencode",
+      "opencode/deepseek-v4-pro": "opencode",
+      "opencode/glm-5.1": "opencode",
+      "opencode/kimi-k2.6": "opencode",
     };
 
     for (const [id, expectedProvider] of Object.entries(providerMap)) {

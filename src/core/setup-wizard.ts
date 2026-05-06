@@ -162,7 +162,7 @@ const KNOWN_LANGUAGES = new Set(["en", "tr", "ja", "ko", "zh", "de", "es", "fr"]
 
 const KNOWN_PROVIDERS = new Set([
   "claude", "openai", "deepseek", "kimi", "qwen", "gemini",
-  "groq", "mistral", "together", "fireworks", "minimax", "ollama",
+  "groq", "mistral", "together", "fireworks", "minimax", "opencode", "ollama",
 ]);
 
 const KNOWN_EMBEDDING_PROVIDERS = new Set([
@@ -198,7 +198,7 @@ const PROVIDER_ENV_KEYS = [
   "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "OPENAI_API_KEY", "DEEPSEEK_API_KEY",
   "QWEN_API_KEY", "KIMI_API_KEY", "MINIMAX_API_KEY",
   "GROQ_API_KEY", "MISTRAL_API_KEY", "TOGETHER_API_KEY",
-  "FIREWORKS_API_KEY", "GEMINI_API_KEY",
+  "FIREWORKS_API_KEY", "GEMINI_API_KEY", "OPENCODE_API_KEY",
 ] as const;
 
 const PROVIDER_ID_TO_ENV_KEY: Record<string, typeof PROVIDER_ENV_KEYS[number] | undefined> = {
@@ -213,6 +213,7 @@ const PROVIDER_ID_TO_ENV_KEY: Record<string, typeof PROVIDER_ENV_KEYS[number] | 
   together: "TOGETHER_API_KEY",
   fireworks: "FIREWORKS_API_KEY",
   minimax: "MINIMAX_API_KEY",
+  opencode: "OPENCODE_API_KEY",
 };
 
 const CHANNEL_ENV_KEYS = [
