@@ -1,4 +1,5 @@
 import { unlink, rename, stat, readdir, rm } from "node:fs/promises";
+import { resolve } from "node:path";
 import { validatePath } from "../../security/path-guard.js";
 import { checkSafeToDelete } from "../../intelligence/unity-guid-resolver.js";
 import { metaPathFor, shouldGenerateMeta } from "./unity/meta-file-utils.js";
@@ -242,13 +243,17 @@ export class FileDeleteDirectoryTool implements ITool {
   }
 }
 
-async function countFiles(dir: string, count = 0): Promise<number> {
+async function countFiles(dir: string, count = 0, visited = new Set<string>()): Promise<number> {
+  const resolved = resolve(dir);
+  if (visited.has(resolved)) return count; // Symlink cycle guard
+  visited.add(resolved);
+
   const entries = await readdir(dir, { withFileTypes: true });
   let total = count;
   for (const entry of entries) {
     if (total > 50) return total; // Short-circuit at limit
     if (entry.isDirectory()) {
-      total = await countFiles(`${dir}/${entry.name}`, total);
+      total = await countFiles(`${dir}/${entry.name}`, total, visited);
     } else {
       total++;
     }
