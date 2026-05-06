@@ -11,8 +11,9 @@ import {
   type IncomingMessage as HttpReq,
   type ServerResponse,
 } from "node:http";
-import { existsSync } from "node:fs";
+import { existsSync, createReadStream } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { pipeline } from "node:stream/promises";
 import { join, extname, resolve, sep } from "node:path";
 import { randomBytes, timingSafeEqual, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
@@ -718,11 +719,11 @@ export class WebChannel
         return;
       }
       try {
-        const data = await readFile(candidate);
+        const stream = createReadStream(candidate);
         const ext = extname(candidate);
         const contentType = MIME_TYPES[ext] ?? "application/octet-stream";
         res.writeHead(200, { ...WebChannel.SECURITY_HEADERS, "Content-Type": contentType });
-        res.end(data);
+        await pipeline(stream, res).catch(() => undefined);
         return;
       } catch {
         // File not found — fall through to SPA fallback
@@ -731,9 +732,9 @@ export class WebChannel
 
     // SPA fallback: serve index.html for all non-file routes (client-side routing)
     try {
-      const data = await readFile(join(this.staticDir, "index.html"));
+      const stream = createReadStream(join(this.staticDir, "index.html"));
       res.writeHead(200, { ...WebChannel.SECURITY_HEADERS, "Content-Type": "text/html; charset=utf-8" });
-      res.end(data);
+      await pipeline(stream, res).catch(() => undefined);
     } catch {
       res.writeHead(404, WebChannel.SECURITY_HEADERS);
       res.end("Not Found");
