@@ -58,7 +58,8 @@
   "providers.providerNames.together": "Together",
   "providers.providerNames.fireworks": "Fireworks",
   "providers.providerNames.minimax": "MiniMax",
-  "providers.providerNames.ollama": "Ollama",
+  "providers.providerNames.opencode": "OpenCode",
+    "providers.providerNames.ollama": "Ollama",
 
   "providers.authModes.claude.apiKey.label": "API Anahtarı",
   "providers.authModes.claude.apiKey.description": "Standart bir API anahtarıyla Anthropic API faturalandırmasını kullanın.",

@@ -58,7 +58,8 @@
   "providers.providerNames.together": "Together",
   "providers.providerNames.fireworks": "Fireworks",
   "providers.providerNames.minimax": "MiniMax",
-  "providers.providerNames.ollama": "Ollama",
+  "providers.providerNames.opencode": "OpenCode",
+    "providers.providerNames.ollama": "Ollama",
 
   "providers.authModes.claude.apiKey.label": "API 密钥",
   "providers.authModes.claude.apiKey.description": "使用 Anthropic API 计费，通过标准 API 密钥。",
