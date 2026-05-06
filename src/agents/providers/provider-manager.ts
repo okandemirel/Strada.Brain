@@ -367,7 +367,7 @@ export class ProviderManager {
     }>
   > {
     const available = this.listAvailable();
-    const AGGREGATE_TIMEOUT = 8_000;
+    const AGGREGATE_TIMEOUT = 30_000;
     const settled = await Promise.race([
       Promise.allSettled(
         available.map(async (p) => {

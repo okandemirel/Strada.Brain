@@ -225,8 +225,9 @@ export default function PrimaryWorkerSelector() {
         setProviders(enriched)
         setModelsLoaded(true)
       }
-    } catch {
-      // Keep existing provider data without model details.
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[PrimaryWorkerSelector] fetchModels failed:', err)
     } finally {
       setModelsLoading(false)
     }

@@ -234,4 +234,5 @@ export class MiniMaxProvider extends OpenAIProvider {
       },
     };
   }
+
 }
