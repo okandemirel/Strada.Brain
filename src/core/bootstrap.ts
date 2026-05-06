@@ -1512,6 +1512,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       digestReporter: digestReporterInstance,
       notificationRouter: notificationRouterInstance,
       agentManager,
+      messageRouter,
       delegationManager,
       stoppableServers,
       soulLoader,

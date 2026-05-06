@@ -160,6 +160,8 @@ export interface ShutdownOptions {
   canvasStorage?: { close(): void };
   /** Learning storage — closed on shutdown to release SQLite fd. */
   learningStorage?: { close(): void };
+  /** Message router — disposed on shutdown to clear pending batches and timers. */
+  messageRouter?: MessageRouter;
 }
 
 function failIncompleteTasksInStorage(
@@ -195,6 +197,11 @@ export function createShutdownHandler(options: ShutdownOptions): () => Promise<v
       logger.info("Shutting down Strada Brain...");
 
       clearInterval(cleanupInterval);
+
+      // Dispose message router (clears pending batches and timers)
+      if (options.messageRouter) {
+        options.messageRouter.dispose();
+      }
 
       // Stop auto-updater timers
       if (options.autoUpdater) {
