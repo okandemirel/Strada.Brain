@@ -251,7 +251,7 @@ export class PasswordHasher {
    */
   async hash(password: string): Promise<string> {
     const salt = randomBytes(this.saltLength);
-    const derived = scryptSync(password, salt, 64, { N: 32768, r: 8, p: 1 });
+    const derived = scryptSync(password, salt, 64, { N: 32768, r: 8, p: 1, maxmem: 64 * 1024 * 1024 });
     return `scrypt:${salt.toString("hex")}:${derived.toString("hex")}`;
   }
 
@@ -262,7 +262,7 @@ export class PasswordHasher {
     const [algo, saltHex, hashHex] = storedHash.split(":");
     if (algo !== "scrypt" || !saltHex || !hashHex) return false;
     const salt = Buffer.from(saltHex, "hex");
-    const derived = scryptSync(password, salt, 64, { N: 32768, r: 8, p: 1 });
+    const derived = scryptSync(password, salt, 64, { N: 32768, r: 8, p: 1, maxmem: 64 * 1024 * 1024 });
     return timingSafeEqual(derived, Buffer.from(hashHex, "hex"));
   }
 }
