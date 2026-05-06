@@ -99,12 +99,12 @@ describe("createMonitorLifecycle", () => {
       expect(node.dependsOn).toEqual([]);
     });
 
-    it("generates task IDs matching the req-<timestamp>-<random> pattern", () => {
+    it("generates task IDs matching the req-<uuid> pattern", () => {
       const lc = createMonitorLifecycle(bus);
       lc.requestStart("scope-1", "msg");
 
       const p = bus.calls[0]!.payload as { rootId: string };
-      expect(p.rootId).toMatch(/^req-\d+-[a-z0-9]{5}$/);
+      expect(p.rootId).toMatch(/^req-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
     });
 
     it("truncates messages longer than 200 characters and appends ellipsis", () => {
