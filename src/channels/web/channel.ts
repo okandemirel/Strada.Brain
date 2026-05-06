@@ -1912,7 +1912,12 @@ export class WebChannel
         "Content-Type": response.headers.get("content-type") ?? "application/json",
       });
       res.end(body);
-    } catch {
+    } catch (error) {
+      getLoggerSafe().warn("[WebChannel] proxyToDashboard failed", {
+        url,
+        dashboardPort: this.dashboardPort,
+        error: error instanceof Error ? error.message : String(error),
+      });
       res.writeHead(503, {
         ...WebChannel.SECURITY_HEADERS,
         ...WebChannel.NO_CACHE_HEADERS,
