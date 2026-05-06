@@ -191,7 +191,7 @@ export async function initializeAIProvider(
   );
 
   // Verify Ollama reachability before marking it available for routing
-  const ollamaBaseUrl = process.env["OLLAMA_BASE_URL"] ?? "http://localhost:11434";
+  const ollamaBaseUrl = config.ollamaBaseUrl ?? "http://localhost:11434";
   try {
     const ollamaRes = await fetch(`${ollamaBaseUrl}/api/tags`, {
       signal: AbortSignal.timeout(3_000),

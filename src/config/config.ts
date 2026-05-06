@@ -156,6 +156,7 @@ export type EnvVarName =
   | "GEMINI_MODEL"
   | "CLAUDE_MODEL"
   | "OLLAMA_MODEL"
+  | "OLLAMA_BASE_URL"
   | "BAYESIAN_ENABLED"
   | "BAYESIAN_DEPRECATED_THRESHOLD"
   | "BAYESIAN_ACTIVE_THRESHOLD"
@@ -971,6 +972,7 @@ export const configSchema = z
     opencodeBaseUrl: z.string().optional(),
     opencodeDefaultModel: z.string().optional(),
     providerChain: z.string().optional(),
+    ollamaBaseUrl: z.string().optional(),
 
     // Telegram
     telegramBotToken: z.string().optional(),
@@ -2719,6 +2721,7 @@ interface EnvVars {
   websocketDashboardPort: string | undefined;
   websocketDashboardAuthToken: string | undefined;
   websocketDashboardAllowedOrigins: string | undefined;
+  ollamaBaseUrl: string | undefined;
   prometheusEnabled: string | undefined;
   prometheusPort: string | undefined;
   modelIntelligenceEnabled: string | undefined;
@@ -3035,6 +3038,7 @@ function loadFromEnv(): EnvVars {
     websocketDashboardPort: _env["WEBSOCKET_DASHBOARD_PORT"],
     websocketDashboardAuthToken: _env["WEBSOCKET_DASHBOARD_AUTH_TOKEN"],
     websocketDashboardAllowedOrigins: _env["WEBSOCKET_DASHBOARD_ALLOWED_ORIGINS"],
+    ollamaBaseUrl: _env["OLLAMA_BASE_URL"],
     prometheusEnabled: _env["ENABLE_PROMETHEUS"],
     prometheusPort: _env["PROMETHEUS_PORT"],
     modelIntelligenceEnabled: _env["MODEL_INTELLIGENCE_ENABLED"],

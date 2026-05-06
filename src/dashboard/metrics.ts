@@ -106,7 +106,12 @@ export class MetricsCollector {
    * Get recent error messages grouped by tool name.
    */
   getRecentToolErrors(): Record<string, Array<{ message: string; timestamp: number }>> {
-    return Object.fromEntries(this.recentToolErrors);
+    return Object.fromEntries(
+      Array.from(this.recentToolErrors.entries()).map(([name, errors]) => [
+        name,
+        errors.map((e) => ({ ...e })),
+      ]),
+    );
   }
 
   setActiveSessions(count: number): void {
