@@ -27,14 +27,14 @@ describe("Auto-Update Config", () => {
     process.env["AUTO_UPDATE_ENABLED"] = "false";
     process.env["UNITY_PROJECT_PATH"] = "/tmp/test-project";
     process.env["ANTHROPIC_API_KEY"] = "sk-test-key";
-    const config = loadConfig();
+    const config = loadConfig(process.env);
     expect(config.autoUpdate.enabled).toBe(false);
   });
 
   it("should default AUTO_UPDATE_ENABLED to true", () => {
     process.env["UNITY_PROJECT_PATH"] = "/tmp/test-project";
     process.env["ANTHROPIC_API_KEY"] = "sk-test-key";
-    const config = loadConfig();
+    const config = loadConfig(process.env);
     expect(config.autoUpdate.enabled).toBe(true);
   });
 
@@ -42,14 +42,14 @@ describe("Auto-Update Config", () => {
     process.env["UNITY_PROJECT_PATH"] = "/tmp/test-project";
     process.env["ANTHROPIC_API_KEY"] = "sk-test-key";
     process.env["AUTO_UPDATE_INTERVAL_HOURS"] = "12";
-    const config = loadConfig();
+    const config = loadConfig(process.env);
     expect(config.autoUpdate.intervalHours).toBe(12);
   });
 
   it("should default AUTO_UPDATE_INTERVAL_HOURS to 6", () => {
     process.env["UNITY_PROJECT_PATH"] = "/tmp/test-project";
     process.env["ANTHROPIC_API_KEY"] = "sk-test-key";
-    const config = loadConfig();
+    const config = loadConfig(process.env);
     expect(config.autoUpdate.intervalHours).toBe(6);
   });
 
@@ -57,14 +57,14 @@ describe("Auto-Update Config", () => {
     process.env["UNITY_PROJECT_PATH"] = "/tmp/test-project";
     process.env["ANTHROPIC_API_KEY"] = "sk-test-key";
     process.env["AUTO_UPDATE_IDLE_TIMEOUT_MIN"] = "10";
-    const config = loadConfig();
+    const config = loadConfig(process.env);
     expect(config.autoUpdate.idleTimeoutMin).toBe(10);
   });
 
   it("should default AUTO_UPDATE_IDLE_TIMEOUT_MIN to 5", () => {
     process.env["UNITY_PROJECT_PATH"] = "/tmp/test-project";
     process.env["ANTHROPIC_API_KEY"] = "sk-test-key";
-    const config = loadConfig();
+    const config = loadConfig(process.env);
     expect(config.autoUpdate.idleTimeoutMin).toBe(5);
   });
 
@@ -72,14 +72,14 @@ describe("Auto-Update Config", () => {
     process.env["UNITY_PROJECT_PATH"] = "/tmp/test-project";
     process.env["ANTHROPIC_API_KEY"] = "sk-test-key";
     process.env["AUTO_UPDATE_CHANNEL"] = "latest";
-    const config = loadConfig();
+    const config = loadConfig(process.env);
     expect(config.autoUpdate.channel).toBe("latest");
   });
 
   it("should default AUTO_UPDATE_CHANNEL to latest", () => {
     process.env["UNITY_PROJECT_PATH"] = "/tmp/test-project";
     process.env["ANTHROPIC_API_KEY"] = "sk-test-key";
-    const config = loadConfig();
+    const config = loadConfig(process.env);
     expect(config.autoUpdate.channel).toBe("latest");
   });
 
@@ -87,14 +87,14 @@ describe("Auto-Update Config", () => {
     process.env["UNITY_PROJECT_PATH"] = "/tmp/test-project";
     process.env["ANTHROPIC_API_KEY"] = "sk-test-key";
     process.env["AUTO_UPDATE_CHANNEL"] = "nightly";
-    expect(() => loadConfig()).toThrow();
+    expect(() => loadConfig(process.env)).toThrow();
   });
 
   it("should parse AUTO_UPDATE_NOTIFY as boolean", () => {
     process.env["UNITY_PROJECT_PATH"] = "/tmp/test-project";
     process.env["ANTHROPIC_API_KEY"] = "sk-test-key";
     process.env["AUTO_UPDATE_NOTIFY"] = "false";
-    const config = loadConfig();
+    const config = loadConfig(process.env);
     expect(config.autoUpdate.notify).toBe(false);
   });
 
@@ -102,21 +102,21 @@ describe("Auto-Update Config", () => {
     process.env["UNITY_PROJECT_PATH"] = "/tmp/test-project";
     process.env["ANTHROPIC_API_KEY"] = "sk-test-key";
     process.env["AUTO_UPDATE_AUTO_RESTART"] = "false";
-    const config = loadConfig();
+    const config = loadConfig(process.env);
     expect(config.autoUpdate.autoRestart).toBe(false);
   });
 
   it("should default AUTO_UPDATE_NOTIFY to true", () => {
     process.env["UNITY_PROJECT_PATH"] = "/tmp/test-project";
     process.env["ANTHROPIC_API_KEY"] = "sk-test-key";
-    const config = loadConfig();
+    const config = loadConfig(process.env);
     expect(config.autoUpdate.notify).toBe(true);
   });
 
   it("should default AUTO_UPDATE_AUTO_RESTART to true", () => {
     process.env["UNITY_PROJECT_PATH"] = "/tmp/test-project";
     process.env["ANTHROPIC_API_KEY"] = "sk-test-key";
-    const config = loadConfig();
+    const config = loadConfig(process.env);
     expect(config.autoUpdate.autoRestart).toBe(true);
   });
 });
