@@ -1712,6 +1712,7 @@ export class WebChannel
     "/api/rag/status",
     "/api/system/boot",
     "/api/providers/available",
+    "/api/providers/models",
     "/api/providers/active",
     "/api/deployment/check",
   ]);
