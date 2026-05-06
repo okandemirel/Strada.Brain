@@ -235,22 +235,25 @@ describe("TaskManager", () => {
     });
     const storage = {
       loadIncomplete: vi.fn().mockReturnValue([interruptedTask]),
-      updateBlocked: vi.fn(),
+      updateStatus: vi.fn(),
       updateError: vi.fn(),
     } as any;
     const goalStorage = { updateTreeStatus: vi.fn() } as any;
     const manager = new TaskManager(storage, {} as any, goalStorage);
-    const blockedListener = vi.fn();
-    manager.on("task:blocked", blockedListener);
+    const pausedListener = vi.fn();
+    manager.on("task:paused", pausedListener);
 
     manager.recoverOnStartup();
 
-    expect(storage.updateBlocked).toHaveBeenCalledWith(
+    expect(storage.updateStatus).toHaveBeenCalledWith(
+      interruptedTask.id,
+      TaskStatus.paused,
+    );
+    expect(storage.updateError).toHaveBeenCalledWith(
       interruptedTask.id,
       expect.stringContaining("Resume is available"),
-    )
-    expect(storage.updateError).not.toHaveBeenCalled()
-    expect(goalStorage.updateTreeStatus).toHaveBeenCalledWith("goal_root", "blocked")
-    expect(blockedListener).toHaveBeenCalled()
+    );
+    expect(goalStorage.updateTreeStatus).toHaveBeenCalledWith("goal_root", "paused");
+    expect(pausedListener).toHaveBeenCalled()
   });
 });

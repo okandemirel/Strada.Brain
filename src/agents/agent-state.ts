@@ -34,7 +34,7 @@ export interface AgentState {
 
 const VALID_TRANSITIONS: ReadonlyMap<AgentPhase, ReadonlySet<AgentPhase>> =
   new Map([
-    [AgentPhase.PLANNING, new Set([AgentPhase.EXECUTING, AgentPhase.FAILED])],
+    [AgentPhase.PLANNING, new Set([AgentPhase.EXECUTING, AgentPhase.REPLANNING, AgentPhase.FAILED])],
     [
       AgentPhase.EXECUTING,
       new Set([AgentPhase.REFLECTING, AgentPhase.COMPLETE, AgentPhase.FAILED]),

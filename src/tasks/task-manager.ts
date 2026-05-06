@@ -438,15 +438,16 @@ export class TaskManager extends EventEmitter {
         continue;
       }
 
-      const blockedReason = task.goalRootId
+      const pausedReason = task.goalRootId
         ? "Task interrupted by system restart. Resume is available from the monitor and will continue from the saved plan."
         : "Task interrupted by system restart. Resume is available and will continue from the strongest checkpoint.";
-      this.storage.updateBlocked(task.id, blockedReason);
+      this.storage.updateStatus(task.id, TaskStatus.paused);
+      this.storage.updateError(task.id, pausedReason);
       if (task.goalRootId && this.goalStorage) {
-        this.goalStorage.updateTreeStatus(task.goalRootId as GoalNodeId, "blocked");
+        this.goalStorage.updateTreeStatus(task.goalRootId as GoalNodeId, "paused");
       }
-      this.emit("task:blocked", task.id, blockedReason);
-      logger.warn("Task marked as blocked on recovery", {
+      this.emit("task:paused", task.id);
+      logger.warn("Task marked as paused on recovery", {
         taskId: task.id,
         previousStatus: task.status,
         recoverable: true,

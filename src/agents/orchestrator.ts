@@ -3459,7 +3459,9 @@ export class Orchestrator {
               }
 
               // Final response — return text (extracted to orchestrator-end-turn-handler.ts)
-              if (response.stopReason === "end_turn" || response.toolCalls.length === 0) {
+              // If tool calls are present we must execute them even when the
+              // provider signals end_turn (some providers emit both).
+              if (response.toolCalls.length === 0) {
                 const pending = checkPendingBlocks({
                   getPendingPlanReviewVisibleText: (c) => this.sessionManager.getPendingPlanReviewVisibleText(c),
                   getPendingSelfManagedWriteRejectionVisibleText: (s, d) => this.sessionManager.getPendingSelfManagedWriteRejectionVisibleText(s as Session, d),
@@ -4831,7 +4833,9 @@ export class Orchestrator {
 
         // If no tool calls, send the final text response (extracted to orchestrator-end-turn-handler.ts)
         // (streaming already sent it, so skip for streamed end_turn)
-        if (response.stopReason === "end_turn" || response.toolCalls.length === 0) {
+        // If tool calls are present we must execute them even when the
+        // provider signals end_turn (some providers emit both).
+        if (response.toolCalls.length === 0) {
           const pending = checkPendingBlocks({
             getPendingPlanReviewVisibleText: (c) => this.sessionManager.getPendingPlanReviewVisibleText(c),
             getPendingSelfManagedWriteRejectionVisibleText: (s, d) => this.sessionManager.getPendingSelfManagedWriteRejectionVisibleText(s as Session, d),

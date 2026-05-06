@@ -677,9 +677,6 @@ export class AgentDBMemory implements IUnifiedMemory {
         unifiedEntry = baseEntry as unknown as UnifiedMemoryEntry;
       }
 
-      // Store in memory
-      this.entries.set(id as string, unifiedEntry);
-
       // Add to HNSW index (mutex-serialized to prevent interleaved writes)
       if (this.hnswStore && embedding.length === this.config.dimensions) {
         const store = this.hnswStore;
@@ -715,15 +712,16 @@ export class AgentDBMemory implements IUnifiedMemory {
         );
       }
 
-      // Add to text index for backward compatibility
-      const terms = extractTerms(entry.content);
-      this.textIndex.addDocument(terms);
-
       // Persist to SQLite
       sqlitePersistEntry(this.getSqliteCtx(), unifiedEntry);
 
       // Enforce tier limits
       await this.enforceTierLimits(entry.tier);
+
+      // Update in-memory indexes only after persistent stores succeed
+      this.entries.set(id as string, unifiedEntry);
+      const terms = extractTerms(entry.content);
+      this.textIndex.addDocument(terms);
 
       getLoggerSafe().debug("[AgentDBMemory] Stored entry", {
         id: id as string,
@@ -765,6 +763,9 @@ export class AgentDBMemory implements IUnifiedMemory {
     query: string,
     options: RetrievalOptions,
   ): Promise<RetrievalResult<import("../memory.interface.js").MemoryEntry>[]> {
+    if (options.mode === "semantic") {
+      return retrieveSemanticHelper(this.getRetrievalCtx(), query, options);
+    }
     return retrieveTFIDF(this.getRetrievalCtx(), query, options);
   }
 
