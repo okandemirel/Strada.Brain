@@ -10,7 +10,7 @@ import { existsSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node
 import type { IVectorStore, VectorEntry, VectorSearchHit, CodeChunk } from "../rag.interface.js";
 import { getLogger } from "../../utils/logger.js";
 import { createRequire } from "node:module";
-import type { QuantizationType, QuantizedVector } from "./quantization.js";
+import { dequantizeBatch, type QuantizationType, type QuantizedVector } from "./quantization.js";
 
 // hnswlib-node is an optional native dependency that requires Python + C++ build
 // tools to compile.  We load it lazily so that the rest of Strada works even when
@@ -366,6 +366,22 @@ export class HNSWVectorStore implements IHNSWVectorStore {
       }
     }
 
+    // Background compaction when deleted ratio exceeds threshold
+    const total = this.chunks.size + this.deletedIndices.size;
+    if (total > 0 && this.deletedIndices.size / total > 0.3) {
+      getLoggerSafe().info("[HNSWVectorStore] Deleted ratio exceeded threshold, scheduling compaction", {
+        deleted: this.deletedIndices.size,
+        total,
+      });
+      setImmediate(() => {
+        this.rebuildIndex().catch((err) => {
+          getLoggerSafe().error("[HNSWVectorStore] Background compaction failed", {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
+      });
+    }
+
     getLoggerSafe().debug("[HNSWVectorStore] Removed entries", { count: ids.length });
   }
 
@@ -562,16 +578,34 @@ export class HNSWVectorStore implements IHNSWVectorStore {
 
     getLoggerSafe().info("[HNSWVectorStore] Rebuilding index");
 
-    // Get all current entries
+    // Collect all current entries from live chunks
     const entries: VectorEntry[] = [];
-    for (const [index] of this.chunks) {
+    for (const [index, chunk] of this.chunks) {
       const id = this.indexToId.get(index);
       if (!id) continue;
 
-      // Get vector from storage - we need to store vectors separately for rebuild
-      // For now, we skip rebuild if we don't have the original vectors
-      getLoggerSafe().warn("[HNSWVectorStore] Rebuild not fully implemented - vectors not stored");
-      return;
+      const qv = this.quantizedVectors.get(index);
+      if (!qv) {
+        getLoggerSafe().warn("[HNSWVectorStore] Missing quantized vector for rebuild", { id, index });
+        continue;
+      }
+
+      const dequantized = dequantizeBatch([qv]);
+      entries.push({
+        id,
+        vector: Array.from(dequantized[0]!),
+        chunk,
+        addedAt: Date.now(),
+        accessCount: 0,
+      });
+    }
+
+    getLoggerSafe().info("[HNSWVectorStore] Rebuilding with entries", { count: entries.length });
+
+    // Recreate index and re-insert (this clears all internal maps)
+    this.recreateIndex(Math.max(this.config.maxElements, entries.length || 1));
+    if (entries.length > 0) {
+      await this.upsertBatch(entries);
     }
 
     getLoggerSafe().info("[HNSWVectorStore] Index rebuilt", { count: entries.length });

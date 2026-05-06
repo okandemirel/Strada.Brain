@@ -288,11 +288,14 @@ export class RAGPipeline implements IRAGPipeline {
     const startTime = Date.now();
     const logger = getLogger();
 
-    const files = await glob("**/*.cs", {
-      cwd: projectPath,
-      absolute: true,
-      ignore: ["**/Library/**", "**/Temp/**", "**/node_modules/**"],
-    });
+    const files = await glob(
+      ["**/*.cs", "**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.mjs", "**/*.cjs", "**/*.md", "**/*.mdx", "**/*.json", "**/*.yaml", "**/*.yml"],
+      {
+        cwd: projectPath,
+        absolute: true,
+        ignore: ["**/Library/**", "**/Temp/**", "**/node_modules/**", "**/.git/**", "**/dist/**", "**/build/**"],
+      },
+    );
 
     logger.info("[RAGPipeline] Indexing project", {
       projectPath,
