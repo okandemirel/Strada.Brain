@@ -160,7 +160,9 @@ export class MatrixChannel implements IChannelAdapter, IChannelRichMessaging {
 
     const msg = await this.toIncomingMessage(event, client);
     if (!msg) return;
-    this.handler?.(msg).catch(() => {});
+    this.handler?.(msg).catch((err) => {
+      this.logger.warn("Message handler failed", { error: err instanceof Error ? err.message : String(err) });
+    });
   }
 
   private async toIncomingMessage(

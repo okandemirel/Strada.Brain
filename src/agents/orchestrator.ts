@@ -5231,7 +5231,9 @@ export class Orchestrator {
         { signal: composedSignal },
       );
       // Suppress unhandled rejection from abandoned stream when timeout wins the race
-      streamPromise.catch(() => {});
+      streamPromise.catch((err) => {
+        getLogger().debug("Stream abandoned after timeout race", { error: err instanceof Error ? err.message : String(err) });
+      });
       const response = await Promise.race([streamPromise, timeoutGuard.timeoutPromise]);
       timeoutGuard.clear();
       ProviderHealthRegistry.getInstance().recordSuccess(provider.name);
@@ -5356,7 +5358,9 @@ export class Orchestrator {
       );
 
       // Suppress unhandled rejection from abandoned stream when timeout wins the race
-      streamPromise.catch(() => {});
+      streamPromise.catch((err) => {
+        getLogger().debug("Stream abandoned after timeout race", { error: err instanceof Error ? err.message : String(err) });
+      });
 
       // Race against abort signal
       response = await Promise.race([streamPromise, timeoutGuard.timeoutPromise]);

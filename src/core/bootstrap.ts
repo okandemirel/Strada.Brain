@@ -884,7 +884,9 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   } else {
     // Set callback for when the async IIFE completes
     onFrameworkStoreReady = (store) => {
-      wireFrameworkPromptGenerator(store).catch(() => {});
+      wireFrameworkPromptGenerator(store).catch((err) => {
+        logger.warn("FrameworkPromptGenerator wiring failed", { error: err instanceof Error ? err.message : String(err) });
+      });
     };
     // If the IIFE already completed before we got here, apply the buffered result
     if (deferredFrameworkStore) {

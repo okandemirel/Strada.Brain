@@ -842,7 +842,9 @@ export class BackgroundExecutor {
       });
     } finally {
       if (shouldReleaseLease) {
-        await managedWorkspaceLease?.release().catch(() => {});
+        await managedWorkspaceLease?.release().catch((err) => {
+          getLogger().warn("Workspace lease release failed", { error: err instanceof Error ? err.message : String(err) });
+        });
       }
     }
   }
@@ -999,7 +1001,9 @@ export class BackgroundExecutor {
         this.failGoalExecution(task, task.goalTree, errMsg, 0);
       }
     } finally {
-      await taskWorkspaceLease?.release().catch(() => {});
+      await taskWorkspaceLease?.release().catch((err) => {
+        getLogger().warn("Task workspace lease release failed", { error: err instanceof Error ? err.message : String(err) });
+      });
       this.monitorLifecycle?.requestEnd(conversationScope, requestFailed);
     }
   }

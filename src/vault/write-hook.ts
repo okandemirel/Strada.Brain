@@ -20,7 +20,9 @@ export function installWriteHook(opts: WriteHookOptions): InstalledWriteHook {
       const workPromise = opts.vault.reindexFile(rel).then(() => 'ok' as const);
       const outcome = await Promise.race([workPromise, timeoutPromise]);
       if (outcome === 'timeout') {
-        void workPromise.catch(() => undefined);
+        void workPromise.catch((err) => {
+          opts.logger?.debug("Vault write-hook async work failed", { error: err instanceof Error ? err.message : String(err) });
+        });
         return `vault may be stale for ${rel} (reindex exceeded ${opts.budgetMs}ms)`;
       }
       return null;

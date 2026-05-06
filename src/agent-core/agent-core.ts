@@ -347,7 +347,9 @@ export class AgentCore {
 
         if (this.instinctRetriever?.recordOutcome) {
           for (const id of entry.instinctIds) {
-            this.instinctRetriever.recordOutcome(id, success).catch(() => {});
+            this.instinctRetriever.recordOutcome(id, success).catch((err) => {
+              getLogger().debug("Instinct outcome recording failed", { error: err instanceof Error ? err.message : String(err) });
+            });
           }
         }
 

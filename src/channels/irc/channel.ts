@@ -110,7 +110,9 @@ export class IRCChannel implements IChannelAdapter {
         timestamp: new Date(),
       };
 
-      this.handler?.(msg).catch(() => {});
+      this.handler?.(msg).catch((err) => {
+        this.logger.warn("Message handler failed", { error: err instanceof Error ? err.message : String(err) });
+      });
     }) as (...args: unknown[]) => void);
 
     this.client.addListener("registered", () => {
