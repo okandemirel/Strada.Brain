@@ -242,6 +242,10 @@ export class UnityProjectVault implements IVault {
     if (this.watcher) { await this.watcher.stop(); this.watcher = null; }
   }
 
+  async stop(): Promise<void> {
+    await this.dispose();
+  }
+
   async dispose(): Promise<void> {
     await this.stopWatch();
     this.store.close();

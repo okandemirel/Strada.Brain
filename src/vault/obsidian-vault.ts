@@ -220,6 +220,10 @@ export class ObsidianVault implements IVault {
     return () => { this.emitter.off('update', listener); };
   }
 
+  async stop(): Promise<void> {
+    await this.dispose();
+  }
+
   async dispose(): Promise<void> {
     this.store.close();
   }

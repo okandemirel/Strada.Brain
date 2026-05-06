@@ -27,6 +27,7 @@ import type { TaskManager } from "../tasks/task-manager.js";
 import type { ChainManager } from "../learning/chains/index.js";
 import type { GoalStorage } from "../goals/index.js";
 import type { IdentityStateManager } from "../identity/identity-state.js";
+import type { VaultRegistry } from "../vault/vault-registry.js";
 import type { IEventBus, LearningEventMap } from "./event-bus.js";
 import type { IChannelAdapter } from "../channels/channel.interface.js";
 import type { IMemoryManager } from "../memory/memory.interface.js";
@@ -162,6 +163,8 @@ export interface ShutdownOptions {
   learningStorage?: { close(): void };
   /** Message router — disposed on shutdown to clear pending batches and timers. */
   messageRouter?: MessageRouter;
+  /** Vault registry — disposes all vaults on shutdown to release SQLite fds and stop watchers. */
+  vaultRegistry?: VaultRegistry;
 }
 
 function failIncompleteTasksInStorage(
@@ -297,6 +300,11 @@ export function createShutdownHandler(options: ShutdownOptions): () => Promise<v
 
       if (memoryManager) {
         await memoryManager.shutdown();
+      }
+
+      // Dispose all vaults (stops watchers and closes SQLite stores)
+      if (options.vaultRegistry) {
+        await options.vaultRegistry.disposeAll();
       }
 
       // Close canvas storage to release SQLite fd
