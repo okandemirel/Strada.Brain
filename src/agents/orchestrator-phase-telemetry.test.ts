@@ -34,6 +34,17 @@ describe("orchestrator-phase-telemetry", () => {
     expect(updated.lastReflection).toBe("Need another pass");
   });
 
+  it("transitions verifier replans from PLANNING phase", () => {
+    const state = createInitialState("planning task");
+
+    const updated = transitionToVerifierReplan(state, "Plan rejected");
+
+    expect(updated.phase).toBe(AgentPhase.REPLANNING);
+    expect(updated.reflectionCount).toBe(1);
+    expect(updated.failedApproaches).toHaveLength(1);
+    expect(updated.lastReflection).toBe("Plan rejected");
+  });
+
   it("builds execution and outcome telemetry records", () => {
     const state = {
       ...createInitialState(),

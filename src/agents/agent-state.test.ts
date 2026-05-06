@@ -113,8 +113,8 @@ describe("AgentState", () => {
       expect(canTransition(AgentPhase.PLANNING, AgentPhase.COMPLETE)).toBe(false);
     });
 
-    it("should reject PLANNING -> REPLANNING", () => {
-      expect(canTransition(AgentPhase.PLANNING, AgentPhase.REPLANNING)).toBe(false);
+    it("should allow PLANNING -> REPLANNING", () => {
+      expect(canTransition(AgentPhase.PLANNING, AgentPhase.REPLANNING)).toBe(true);
     });
 
     it("should reject COMPLETE -> any phase", () => {
