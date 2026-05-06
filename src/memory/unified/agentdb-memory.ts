@@ -715,13 +715,13 @@ export class AgentDBMemory implements IUnifiedMemory {
       // Persist to SQLite
       sqlitePersistEntry(this.getSqliteCtx(), unifiedEntry);
 
-      // Enforce tier limits
-      await this.enforceTierLimits(entry.tier);
-
       // Update in-memory indexes only after persistent stores succeed
       this.entries.set(id as string, unifiedEntry);
       const terms = extractTerms(entry.content);
       this.textIndex.addDocument(terms);
+
+      // Enforce tier limits (must run after in-memory cache is updated)
+      await this.enforceTierLimits(entry.tier);
 
       getLoggerSafe().debug("[AgentDBMemory] Stored entry", {
         id: id as string,

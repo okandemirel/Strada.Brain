@@ -158,8 +158,8 @@ describe("PAOR integration", () => {
       expect(canTransition(AgentPhase.PLANNING, AgentPhase.REFLECTING)).toBe(false);
     });
 
-    it("canTransition returns false for PLANNING -> REPLANNING", () => {
-      expect(canTransition(AgentPhase.PLANNING, AgentPhase.REPLANNING)).toBe(false);
+    it("canTransition returns true for PLANNING -> REPLANNING", () => {
+      expect(canTransition(AgentPhase.PLANNING, AgentPhase.REPLANNING)).toBe(true);
     });
 
     it("canTransition returns false for EXECUTING -> REPLANNING", () => {
