@@ -649,7 +649,7 @@ export class WebChannel
     "Referrer-Policy": "no-referrer",
     "Content-Security-Policy":
       "default-src 'self'; " +
-      "script-src 'self' https://cdn.jsdelivr.net blob:; " +
+      "script-src 'self' https://cdn.jsdelivr.net blob: 'unsafe-inline'; " +
       "style-src 'self' 'unsafe-inline'; " +
       "connect-src 'self' ws://localhost:* ws://127.0.0.1:* wss://localhost:* wss://127.0.0.1:*; " +
       "img-src 'self' data: blob:; " +
@@ -667,6 +667,7 @@ export class WebChannel
 
   private async handleHttp(req: HttpReq, res: ServerResponse): Promise<void> {
     const url = req.url ?? "/";
+    getLoggerSafe().debug("[WebChannel] handleHttp", { url, method: req.method });
     const canonicalRedirectTarget = getCanonicalWebRedirectTarget(url);
 
     if (req.method === "GET" && canonicalRedirectTarget) {
@@ -1799,6 +1800,7 @@ export class WebChannel
    */
   private async proxyToDashboard(req: HttpReq, res: ServerResponse, url: string): Promise<void> {
     const method = req.method ?? "GET";
+    getLoggerSafe().debug("[WebChannel] proxyToDashboard", { url, method, dashboardPort: this.dashboardPort });
 
     // Allowlist check (strip query string for matching)
     const pathOnly = url.split("?")[0]!;
