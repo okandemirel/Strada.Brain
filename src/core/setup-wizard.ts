@@ -6,7 +6,7 @@
  */
 
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from "node:http";
-import { existsSync } from "node:fs";
+// import { existsSync } from "node/fs"; // unused after resolveStaticDir refactor
 import { readFile, writeFile, stat, readdir, realpath } from "node:fs/promises";
 import { join, extname, resolve, sep, isAbsolute } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -42,9 +42,7 @@ import {
 } from "../common/setup-state.js";
 import { resolveDotenvPath } from "../common/runtime-paths.js";
 
-const MODULE_DIR = fileURLToPath(new URL(".", import.meta.url));
 const PACKAGED_STATIC_DIR = fileURLToPath(new URL("../channels/web/static/", import.meta.url));
-const SOURCE_BUILD_STATIC_DIR = resolve(MODULE_DIR, "../../web-portal/dist");
 const SETUP_HOST = "127.0.0.1";
 
 interface SetupPathDependencyPayload {
@@ -72,9 +70,7 @@ function logSetupLifecycle(event: string, detail: Record<string, unknown>): void
 }
 
 function resolveStaticDir(): string {
-  if (existsSync(SOURCE_BUILD_STATIC_DIR)) {
-    return SOURCE_BUILD_STATIC_DIR;
-  }
+  // Always use packaged static/ so web-portal/dist never shadows it.
   return PACKAGED_STATIC_DIR;
 }
 
@@ -241,8 +237,8 @@ const SECURITY_HEADERS: Record<string, string> = {
   "Referrer-Policy": "no-referrer",
   "Content-Security-Policy":
     "default-src 'self'; " +
-    "script-src 'self'; " +
-    "style-src 'self'; " +
+    "script-src 'self' 'unsafe-inline'; " +
+    "style-src 'self' 'unsafe-inline'; " +
     "img-src 'self' data:; " +
     "connect-src 'self'; " +
     "object-src 'none'; " +
@@ -633,6 +629,18 @@ export class SetupWizard {
       // API endpoints
       if (url.startsWith("/api/setup/browse") && method === "GET") {
         await this.handleBrowse(url, res);
+        return;
+      }
+
+      // During setup, provider API isn't available yet — return 503 so the UI
+      // can fall back to static model lists instead of getting HTML.
+      if (url.startsWith("/api/providers/") && method === "GET") {
+        res.writeHead(503, {
+          ...SECURITY_HEADERS,
+          "Content-Type": "application/json",
+          "Cache-Control": "no-store",
+        });
+        res.end(JSON.stringify({ error: "Provider API unavailable during setup", hint: "Use static model list" }));
         return;
       }
 
