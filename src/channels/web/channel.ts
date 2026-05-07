@@ -132,9 +132,8 @@ function isFrontendPlaceholderText(text: string): boolean {
 }
 
 function resolveStaticDir(): string {
-  if (existsSync(SOURCE_BUILD_STATIC_DIR)) {
-    return SOURCE_BUILD_STATIC_DIR;
-  }
+  // Always use packaged static/ so web-portal/dist never shadows it.
+  // The build script already copies web-portal/dist into static/.
   return PACKAGED_STATIC_DIR;
 }
 
