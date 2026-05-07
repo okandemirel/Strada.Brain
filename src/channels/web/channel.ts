@@ -11,7 +11,7 @@ import {
   type IncomingMessage as HttpReq,
   type ServerResponse,
 } from "node:http";
-import { existsSync, createReadStream } from "node:fs";
+import { createReadStream } from "node:fs";
 import { pipeline } from "node:stream/promises";
 import { join, extname, resolve, sep } from "node:path";
 import { randomBytes, timingSafeEqual, randomUUID } from "node:crypto";
@@ -101,9 +101,8 @@ const MIME_TYPES: Record<string, string> = {
   ".ico": "image/x-icon",
 };
 
-const MODULE_DIR = fileURLToPath(new URL(".", import.meta.url));
 const PACKAGED_STATIC_DIR = fileURLToPath(new URL("static/", import.meta.url));
-const SOURCE_BUILD_STATIC_DIR = resolve(MODULE_DIR, "../../../web-portal/dist");
+
 const SETUP_CACHE_BUST_PARAM = "t";
 const MAX_CONTROL_MESSAGE_BYTES = 64 * 1024;
 const WEB_PLACEHOLDER_TEXTS = new Set([
