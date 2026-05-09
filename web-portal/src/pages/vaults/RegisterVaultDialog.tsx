@@ -11,7 +11,7 @@ import { cn } from '@/lib/utils';
 
 /**
  * POST /api/vaults — register + index a new vault. On success the server
- * returns {id, name, rootPath, kind, status: 'indexing'}; the caller refreshes
+ * returns {id, name, kind, status: 'indexing'}; the caller refreshes
  * the vault list so the new entry appears even while background indexing is
  * still in flight.
  */

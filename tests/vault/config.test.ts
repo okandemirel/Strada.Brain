@@ -46,4 +46,12 @@ describe('vault config', () => {
     expect(cfg.vault.writeHookBudgetMs).toBe(200);
     expect(cfg.vault.debounceMs).toBe(800);
   });
+
+  it('enables SelfVault by default and supports explicit opt-out', () => {
+    expect(loadConfig(makeEnv()).vault.self.enabled).toBe(true);
+
+    resetConfigCache();
+    const cfg = loadConfig(makeEnv({ STRADA_VAULT_SELF_ENABLED: 'false' }));
+    expect(cfg.vault.self.enabled).toBe(false);
+  });
 });

@@ -228,6 +228,26 @@ describe("LearningStorage", () => {
       });
     });
 
+    it("accepts hybrid verdicts in the SQLite schema", () => {
+      const trajectory = createTestTrajectory();
+      storage.createTrajectoryImmediate(trajectory);
+
+      expect(() => storage.recordVerdict({
+        id: "verdict_hybrid" as any,
+        trajectoryId: trajectory.id as any,
+        judgeType: "hybrid",
+        judgeId: "system",
+        score: 0.75 as any,
+        dimensions: {
+          efficiency: 0.75 as any,
+          correctness: 0.75 as any,
+          quality: 0.75 as any,
+          bestPractices: 0.75 as any,
+        },
+        createdAt: 1500 as any,
+      })).not.toThrow();
+    });
+
     it("breaks verdict ties deterministically when timestamps match", () => {
       const trajectory = createTestTrajectory();
       storage.createTrajectoryImmediate(trajectory);

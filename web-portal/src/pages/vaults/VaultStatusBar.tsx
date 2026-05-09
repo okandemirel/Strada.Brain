@@ -64,7 +64,7 @@ export function VaultStatusBar() {
     // indicator — silent failures previously hid 404/500 responses entirely.
     try {
       const res = await fetch(
-        `/api/vaults/${encodeURIComponent(vaultId)}/reindex`,
+        `/api/vaults/${encodeURIComponent(vaultId)}/sync`,
         { method: 'POST' },
       );
       if (!res.ok) {

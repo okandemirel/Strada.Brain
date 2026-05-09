@@ -1,6 +1,8 @@
 import chokidar, { type FSWatcher } from 'chokidar';
-import { relative } from 'node:path';
+import { basename, relative } from 'node:path';
+import { lstat } from 'node:fs/promises';
 import { getLoggerSafe } from '../utils/logger.js';
+import { isIgnoredVaultPath, isPotentiallyIndexableVaultPath } from './path-policy.js';
 
 export interface VaultWatcherOptions {
   root: string;
@@ -10,7 +12,7 @@ export interface VaultWatcherOptions {
   pollIntervalMs?: number;
 }
 
-const IGNORE_REGEX = /(^|\/)(Library|Temp|Logs|obj|bin|\.git|node_modules|\.strada)(\/|$)/;
+const IGNORE_REGEX = /(^|\/)(Library|Temp|Logs|obj|bin|\.git|node_modules|\.strada|\.obsidian)(\/|$)/;
 // Chokidar's 'ready' fires once the initial scan settles, but the polling backend needs a short window
 // to install stat callbacks before subsequent writes register reliably.
 const POLLING_SETTLE_MS = 50;
@@ -24,6 +26,8 @@ export class VaultWatcher {
   async start(): Promise<void> {
     if (this.watcher) return;
     const pollInterval = this.opts.pollIntervalMs ?? 100;
+    const rootStats = await lstat(this.opts.root).catch(() => null);
+    const rootIsFile = Boolean(rootStats?.isFile());
     this.watcher = chokidar.watch(this.opts.root, {
       ignoreInitial: true,
       // Fix SecH1: symlinks can point outside the vault root; never follow them.
@@ -33,8 +37,10 @@ export class VaultWatcher {
       ignored: (path) => IGNORE_REGEX.test(path.replaceAll('\\', '/')),
     });
     const enqueue = (absPath: string) => {
-      const rel = relative(this.opts.root, absPath).replaceAll('\\', '/');
-      if (IGNORE_REGEX.test('/' + rel)) return;
+      const rel = rootIsFile
+        ? basename(this.opts.root)
+        : relative(this.opts.root, absPath).replaceAll('\\', '/');
+      if (IGNORE_REGEX.test('/' + rel) || isIgnoredVaultPath(rel) || !isPotentiallyIndexableVaultPath(rel)) return;
       this.dirty.add(rel);
       this.scheduleDrain();
     };

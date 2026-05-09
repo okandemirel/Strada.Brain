@@ -314,6 +314,7 @@ export function useSetupWizard() {
   const [saveWarning, setSaveWarning] = useState<string | null>(null)
   const [bootstrapDetail, setBootstrapDetail] = useState<string | null>(null)
   const [readyUrl, setReadyUrl] = useState<string | null>(typeof window !== 'undefined' ? `${window.location.origin}/` : null)
+  const [csrfToken, setCsrfToken] = useState('')
 
   const csrfTokenRef = useRef<string>('')
   const readyUrlRef = useRef<string | null>(typeof window !== 'undefined' ? `${window.location.origin}/` : null)
@@ -363,6 +364,7 @@ export function useSetupWizard() {
 
       if (result.kind === 'available') {
         csrfTokenRef.current = result.token
+        setCsrfToken(result.token)
         setSetupAvailability('available')
         setSetupUnavailableReason(null)
         return
@@ -513,7 +515,9 @@ export function useSetupWizard() {
       return
     }
     try {
-      const res = await fetch(`/api/setup/validate-path?path=${encodeURIComponent(projectPath)}`)
+      const res = await fetch(`/api/setup/validate-path?path=${encodeURIComponent(projectPath)}`, {
+        headers: csrfTokenRef.current ? { 'X-CSRF-Token': csrfTokenRef.current } : {},
+      })
       const data = await res.json() as PathValidationResult
       setPathValid(data.valid ?? false)
       setPathError(data.error ?? null)
@@ -947,6 +951,7 @@ export function useSetupWizard() {
     // State
     setupAvailability,
     setupUnavailableReason,
+    csrfToken,
     step,
     selectedPreset,
     checkedProviders,

@@ -137,6 +137,7 @@ export class HNSWVectorStore implements IHNSWVectorStore {
   private indexToId: Map<number, string> = new Map();
   private nextIndex: number = 0;
   private searchTimes: number[] = [];
+  private vectorsByIndex: Map<number, number[]> = new Map();
   private quantizedVectors: Map<number, QuantizedVector> = new Map();
   private isInitialized: boolean = false;
   private deletedIndices: Set<number> = new Set();
@@ -215,6 +216,7 @@ export class HNSWVectorStore implements IHNSWVectorStore {
     this.idToIndex.clear();
     this.indexToId.clear();
     this.deletedIndices.clear();
+    this.vectorsByIndex.clear();
     this.quantizedVectors.clear();
     this.nextIndex = 0;
     this.searchTimes = [];
@@ -274,6 +276,7 @@ export class HNSWVectorStore implements IHNSWVectorStore {
       this.hnswIndex.markDelete(oldIndex);
       this.deletedIndices.add(oldIndex);
       this.chunks.delete(oldIndex);
+      this.vectorsByIndex.delete(oldIndex);
       this.quantizedVectors.delete(oldIndex);
 
       // Insert as new
@@ -283,6 +286,7 @@ export class HNSWVectorStore implements IHNSWVectorStore {
       this.chunks.set(newIndex, entry.chunk as CodeChunk);
       this.idToIndex.set(entry.id, newIndex);
       this.indexToId.set(newIndex, entry.id);
+      this.vectorsByIndex.set(newIndex, Array.from(normalizedVector));
 
       // Store quantized version if enabled
       if (this.config.quantization && this.config.quantization !== "none") {
@@ -324,6 +328,7 @@ export class HNSWVectorStore implements IHNSWVectorStore {
       this.chunks.set(index, entry.chunk as CodeChunk);
       this.idToIndex.set(entry.id, index);
       this.indexToId.set(index, entry.id);
+      this.vectorsByIndex.set(index, Array.from(normalizedVector));
     }
 
     // Quantize if enabled
@@ -360,6 +365,7 @@ export class HNSWVectorStore implements IHNSWVectorStore {
         this.hnswIndex.markDelete(index);
         this.deletedIndices.add(index);
         this.chunks.delete(index);
+        this.vectorsByIndex.delete(index);
         this.quantizedVectors.delete(index);
         this.idToIndex.delete(id);
         this.indexToId.delete(index);
@@ -584,16 +590,19 @@ export class HNSWVectorStore implements IHNSWVectorStore {
       const id = this.indexToId.get(index);
       if (!id) continue;
 
+      let vector = this.vectorsByIndex.get(index);
       const qv = this.quantizedVectors.get(index);
-      if (!qv) {
-        getLoggerSafe().warn("[HNSWVectorStore] Missing quantized vector for rebuild", { id, index });
+      if (!vector && qv) {
+        vector = Array.from(dequantizeBatch([qv])[0]!);
+      }
+      if (!vector) {
+        getLoggerSafe().warn("[HNSWVectorStore] Missing vector for rebuild", { id, index });
         continue;
       }
 
-      const dequantized = dequantizeBatch([qv]);
       entries.push({
         id,
-        vector: Array.from(dequantized[0]!),
+        vector,
         chunk,
         addedAt: Date.now(),
         accessCount: 0,
@@ -635,6 +644,7 @@ export class HNSWVectorStore implements IHNSWVectorStore {
       idToIndex: Array.from(this.idToIndex.entries()),
       indexToId: Array.from(this.indexToId.entries()),
       deletedIndices: Array.from(this.deletedIndices),
+      vectorsByIndex: Array.from(this.vectorsByIndex.entries()),
       quantizedVectors: this.config.quantization ? Array.from(this.quantizedVectors.entries()) : [],
     };
 
@@ -668,6 +678,7 @@ export class HNSWVectorStore implements IHNSWVectorStore {
     this.chunks = new Map(metadata.chunks);
     this.idToIndex = new Map(metadata.idToIndex);
     this.indexToId = new Map(metadata.indexToId);
+    this.vectorsByIndex = new Map(metadata.vectorsByIndex ?? []);
 
     if (metadata.deletedIndices) {
       this.deletedIndices = new Set(metadata.deletedIndices);
@@ -774,6 +785,7 @@ export class HNSWVectorStore implements IHNSWVectorStore {
         this.chunks.set(index, chunk);
         this.idToIndex.set(chunk.id, index);
         this.indexToId.set(index, chunk.id);
+        this.vectorsByIndex.set(index, Array.from(normalizedVector));
       }
 
       // Save migrated index
@@ -840,6 +852,7 @@ export class HNSWVectorStore implements IHNSWVectorStore {
     this.idToIndex = new Map();
     this.indexToId = new Map();
     this.deletedIndices = new Set();
+    this.vectorsByIndex = new Map();
     this.quantizedVectors = new Map();
     this.nextIndex = 0;
   }

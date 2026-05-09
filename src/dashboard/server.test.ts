@@ -2,12 +2,19 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import Database from "better-sqlite3";
 import { DashboardServer } from "./server.js";
 import { MetricsCollector } from "./metrics.js";
+import { VaultRegistry } from "../vault/vault-registry.js";
 import type { MetricsAggregation } from "../metrics/metrics-types.js";
 import type { MetricsStorage } from "../metrics/metrics-storage.js";
 import { UserProfileStore } from "../memory/unified/user-profile-store.js";
 
 vi.mock("../utils/logger.js", () => ({
   getLogger: () => ({
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+  }),
+  getLoggerSafe: () => ({
     info: vi.fn(),
     warn: vi.fn(),
     error: vi.fn(),
@@ -253,6 +260,47 @@ describe("DashboardServer", () => {
       403,
       { "Content-Type": "application/json" },
     );
+  });
+
+  it("forwards vault update events from runtime-registered vaults to the WebSocket dashboard", () => {
+    const metrics = new MetricsCollector();
+    server = new DashboardServer(0, metrics, () => undefined);
+    const registry = new VaultRegistry();
+    const ws = {
+      broadcastAuthenticated: vi.fn(),
+      setGetBudgetSnapshot: vi.fn(),
+    };
+
+    server.setWsServer(ws as unknown as import("./websocket-server.js").WebSocketDashboardServer);
+    server.registerVaultRegistry(registry);
+
+    const listeners = new Set<(payload: { vaultId: string; changedPaths: string[] }) => void>();
+    registry.register({
+      id: "generic:late",
+      kind: "unity-project",
+      rootPath: "/tmp/late",
+      init: vi.fn(),
+      sync: vi.fn(),
+      rebuild: vi.fn(),
+      query: vi.fn(),
+      stats: vi.fn(),
+      dispose: vi.fn(),
+      listFiles: () => [],
+      readFile: vi.fn(),
+      onUpdate: (listener) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    } as unknown as import("../vault/vault.interface.js").IVault);
+
+    for (const listener of listeners) {
+      listener({ vaultId: "generic:late", changedPaths: ["Assets/Late.cs"] });
+    }
+
+    expect(ws.broadcastAuthenticated).toHaveBeenCalledWith({
+      type: "vault:update",
+      payload: { vaultId: "generic:late", changedPaths: ["Assets/Late.cs"] },
+    });
   });
 
   it("returns trigger objects compatible with dashboard view contracts", async () => {

@@ -140,7 +140,7 @@ CREATE TABLE IF NOT EXISTS observations (
 CREATE TABLE IF NOT EXISTS verdicts (
   id TEXT PRIMARY KEY,
   trajectory_id TEXT NOT NULL,
-  judge_type TEXT NOT NULL CHECK(judge_type IN ('human', 'automated', 'self')),
+  judge_type TEXT NOT NULL CHECK(judge_type IN ('human', 'automated', 'self', 'hybrid')),
   score REAL NOT NULL CHECK(score >= 0.0 AND score <= 1.0),
   dimensions TEXT NOT NULL, -- JSON
   feedback TEXT,
@@ -374,6 +374,7 @@ export class LearningStorage {
       // Column already exists — expected after first migration
     }
     this.migrateEvolutionTargetConstraint();
+    this.migrateVerdictJudgeTypeConstraint();
 
     // Phase 6: Derive alpha/beta from existing stats for migrated instincts
     try {
@@ -814,6 +815,38 @@ export class LearningStorage {
 
       DROP TABLE IF EXISTS temp.trajectory_instincts_backup;
     `);
+  }
+
+  private migrateVerdictJudgeTypeConstraint(): void {
+    if (!this.db) return;
+    const row = this.db.prepare(
+      "SELECT sql FROM sqlite_master WHERE type='table' AND name='verdicts'",
+    ).get() as { sql?: string } | undefined;
+    if (row?.sql?.includes("'hybrid'")) return;
+
+    const migrate = this.db.transaction(() => {
+      this.db!.prepare("ALTER TABLE verdicts RENAME TO verdicts_old").run();
+      this.db!.exec(`
+        CREATE TABLE verdicts (
+          id TEXT PRIMARY KEY,
+          trajectory_id TEXT NOT NULL,
+          judge_type TEXT NOT NULL CHECK(judge_type IN ('human', 'automated', 'self', 'hybrid')),
+          score REAL NOT NULL CHECK(score >= 0.0 AND score <= 1.0),
+          dimensions TEXT NOT NULL,
+          feedback TEXT,
+          created_at INTEGER NOT NULL,
+          FOREIGN KEY (trajectory_id) REFERENCES trajectories(id) ON DELETE CASCADE
+        )
+      `);
+      this.db!.prepare(`
+        INSERT INTO verdicts (id, trajectory_id, judge_type, score, dimensions, feedback, created_at)
+        SELECT id, trajectory_id, judge_type, score, dimensions, feedback, created_at
+        FROM verdicts_old
+      `).run();
+      this.db!.prepare("DROP TABLE verdicts_old").run();
+      this.db!.prepare("CREATE INDEX IF NOT EXISTS idx_verdicts_trajectory ON verdicts(trajectory_id)").run();
+    });
+    migrate();
   }
 
   /** Get the underlying database instance (for migration runner access) */

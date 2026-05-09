@@ -107,6 +107,8 @@ export interface AgentManagerOptions {
   readonly maxBurstMessages?: number;
   readonly supervisorBrain?: SupervisorBrain;
   readonly goalStorage?: import("../../goals/goal-storage.js").GoalStorage;
+  readonly vaultRegistry?: import("../../vault/vault-registry.js").VaultRegistry;
+  readonly vaultWriteHookBudgetMs?: number;
 }
 
 /** In-memory representation of a running agent with its resources */
@@ -592,6 +594,8 @@ export class AgentManager {
       soulLoader: this.opts.soulLoader,
       dmPolicy: this.opts.dmPolicy,
       supervisorBrain: this.opts.supervisorBrain,
+      vaultRegistry: this.opts.vaultRegistry,
+      vaultWriteHookBudgetMs: this.opts.vaultWriteHookBudgetMs,
       onUsage: (usage) => {
         const costUsd = estimateCost(usage.inputTokens, usage.outputTokens, usage.provider);
         if (costUsd <= 0) {

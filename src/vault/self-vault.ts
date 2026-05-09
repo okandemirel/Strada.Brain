@@ -108,13 +108,19 @@ export class SelfVault extends UnityProjectVault {
       const absRoot = join(this.rootPath, root);
       const st = await lstat(absRoot).catch(() => null);
       if (!st || st.isSymbolicLink()) continue;
+      const isFileRoot = st.isFile();
       
       const watcher = new VaultWatcher({
         root: absRoot,
         debounceMs,
         onBatch: async (paths) => {
-          // Convert absolute paths to vault-relative paths
-          const relPaths = paths.map((p) => relative(this.rootPath, p).replaceAll(pathSep, '/'));
+          const rootPrefix = root.replaceAll(pathSep, '/');
+          const relPaths = isFileRoot
+            ? [rootPrefix]
+            : paths.map((p) => {
+              const child = p.replaceAll(pathSep, '/').replace(/^\/+/, '');
+              return child ? `${rootPrefix}/${child}` : rootPrefix;
+            });
           const changed: string[] = [];
           for (const p of relPaths) {
             try {

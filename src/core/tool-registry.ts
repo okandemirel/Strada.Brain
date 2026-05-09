@@ -77,6 +77,14 @@ import { MemorySearchTool } from "../agents/tools/memory-search.js";
 // Introspection tools
 import { AgentStatusTool } from "../agents/tools/agent-status.js";
 import { LearningStatsTool } from "../agents/tools/learning-stats.js";
+import { VaultInitTool } from "../agents/tools/vault-init-tool.js";
+import { VaultSyncTool } from "../agents/tools/vault-sync-tool.js";
+import { VaultStatusTool } from "../agents/tools/vault-status-tool.js";
+import { VaultSearchTool } from "../agents/tools/vault-search-tool.js";
+import { VaultGraphExploreTool } from "../agents/tools/vault-graph-explore-tool.js";
+import { VaultWriteNoteTool } from "../agents/tools/vault-write-note-tool.js";
+import { ObsidianSearchTool } from "../agents/tools/obsidian-search-tool.js";
+import { ObsidianAppendTool } from "../agents/tools/obsidian-append-tool.js";
 
 // Interactive tools
 import { AskUserTool } from "../agents/tools/ask-user.js";
@@ -464,35 +472,32 @@ export class ToolRegistry {
   private registerBuiltinTools(options: ToolRegistryOptions): void {
     const { memoryManager, ragPipeline, metricsCollector, learningStorage, metricsStorage, vaultRegistry } = options;
 
-    // Vault tools (gated on registry presence; bootstrap supplies it when vault.enabled).
+    // Vault tools (gated on registry presence; bootstrap supplies it when vaults are available).
     if (vaultRegistry) {
-      // Lazy-import to avoid a hard dep on the vault module when the feature is disabled.
-      void (async () => {
-        const { VaultInitTool } = await import("../agents/tools/vault-init-tool.js");
-        const { VaultSyncTool } = await import("../agents/tools/vault-sync-tool.js");
-        const { VaultStatusTool } = await import("../agents/tools/vault-status-tool.js");
-        const { VaultSearchTool } = await import("../agents/tools/vault-search-tool.js");
-        const { VaultGraphExploreTool } = await import("../agents/tools/vault-graph-explore-tool.js");
-        const { VaultWriteNoteTool } = await import("../agents/tools/vault-write-note-tool.js");
-        this.register(new VaultInitTool(vaultRegistry) as unknown as ITool, {
-          category: ToolCategories.MEMORY, dangerous: false, readOnly: false,
-        });
-        this.register(new VaultSyncTool(vaultRegistry) as unknown as ITool, {
-          category: ToolCategories.MEMORY, dangerous: false, readOnly: false,
-        });
-        this.register(new VaultStatusTool(vaultRegistry) as unknown as ITool, {
-          category: ToolCategories.MEMORY, dangerous: false, readOnly: true,
-        });
-        this.register(new VaultSearchTool() as unknown as ITool, {
-          category: ToolCategories.MEMORY, dangerous: false, readOnly: true,
-        });
-        this.register(new VaultGraphExploreTool() as unknown as ITool, {
-          category: ToolCategories.MEMORY, dangerous: false, readOnly: true,
-        });
-        this.register(new VaultWriteNoteTool() as unknown as ITool, {
-          category: ToolCategories.MEMORY, dangerous: false, readOnly: false,
-        });
-      })().catch((err) => getLogger().warn("vault tools registration failed", { err }));
+      this.register(new VaultInitTool(vaultRegistry) as unknown as ITool, {
+        category: ToolCategories.MEMORY, dangerous: true, requiresConfirmation: true, readOnly: false,
+      });
+      this.register(new VaultSyncTool(vaultRegistry) as unknown as ITool, {
+        category: ToolCategories.MEMORY, dangerous: true, requiresConfirmation: true, readOnly: false,
+      });
+      this.register(new VaultStatusTool(vaultRegistry) as unknown as ITool, {
+        category: ToolCategories.MEMORY, dangerous: false, readOnly: true,
+      });
+      this.register(new VaultSearchTool() as unknown as ITool, {
+        category: ToolCategories.MEMORY, dangerous: false, readOnly: true,
+      });
+      this.register(new VaultGraphExploreTool() as unknown as ITool, {
+        category: ToolCategories.MEMORY, dangerous: false, readOnly: true,
+      });
+      this.register(new VaultWriteNoteTool() as unknown as ITool, {
+        category: ToolCategories.MEMORY, dangerous: true, requiresConfirmation: true, readOnly: false,
+      });
+      this.register(new ObsidianSearchTool(vaultRegistry) as unknown as ITool, {
+        category: ToolCategories.MEMORY, dangerous: false, readOnly: true,
+      });
+      this.register(new ObsidianAppendTool(vaultRegistry) as unknown as ITool, {
+        category: ToolCategories.MEMORY, dangerous: true, requiresConfirmation: true, readOnly: false,
+      });
     }
 
     // File operations

@@ -678,6 +678,7 @@ export class AgentDBMemory implements IUnifiedMemory {
       }
 
       // Add to HNSW index (mutex-serialized to prevent interleaved writes)
+      let hnswInserted = false;
       if (this.hnswStore && embedding.length === this.config.dimensions) {
         const store = this.hnswStore;
         const vectorEntry = toVectorEntry({
@@ -690,6 +691,7 @@ export class AgentDBMemory implements IUnifiedMemory {
         });
         try {
           await this.writeMutex.withLock(() => store.upsert([vectorEntry]));
+          hnswInserted = true;
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           if (message.includes("exceeds the specified limit") || message.includes("Index capacity exceeded")) {
@@ -713,7 +715,15 @@ export class AgentDBMemory implements IUnifiedMemory {
       }
 
       // Persist to SQLite
-      sqlitePersistEntry(this.getSqliteCtx(), unifiedEntry);
+      try {
+        sqlitePersistEntry(this.getSqliteCtx(), unifiedEntry);
+      } catch (error) {
+        if (hnswInserted && this.hnswStore) {
+          const store = this.hnswStore;
+          await this.writeMutex.withLock(() => store.remove([id as string]));
+        }
+        return err(error instanceof Error ? error : new Error(String(error)));
+      }
 
       // Update in-memory indexes only after persistent stores succeed
       this.entries.set(id as string, unifiedEntry);

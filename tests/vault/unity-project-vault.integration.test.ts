@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, cpSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, cpSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { UnityProjectVault } from '../../src/vault/unity-project-vault.js';
@@ -75,6 +75,15 @@ describe('UnityProjectVault', () => {
     expect(r.changed).toBe(0);
   });
 
+  it('init reconciles files deleted while the vault was offline', async () => {
+    await vault.init();
+    unlinkSync(join(dir, 'Assets/Scripts/Enemy.cs'));
+
+    await vault.init();
+
+    expect(vault.listFiles().map((f) => f.path)).not.toContain('Assets/Scripts/Enemy.cs');
+  });
+
   it('reindexes files added after startWatch', async () => {
     await vault.init();
     await vault.startWatch(150);
@@ -84,5 +93,49 @@ describe('UnityProjectVault', () => {
     const res = await vault.query({ text: 'Boss', topK: 5 });
     expect(res.hits.some((h) => h.chunk.path.endsWith('Boss.cs'))).toBe(true);
     await vault.stopWatch();
+  });
+
+  it('does not index unsupported or secret-like files reported by watcher hooks', async () => {
+    await vault.init();
+    writeFileSync(join(dir, '.env'), 'VAULT_SECRET=hidden');
+    writeFileSync(join(dir, 'Assets/Scripts/credentials.json'), '{"token":"hidden"}');
+
+    expect(await vault.reindexFile('.env')).toBe(false);
+    expect(await vault.reindexFile('Assets/Scripts/credentials.json')).toBe(false);
+
+    const indexedPaths = vault.listFiles().map((f) => f.path);
+    expect(indexedPaths).not.toContain('.env');
+    expect(indexedPaths).not.toContain('Assets/Scripts/credentials.json');
+  });
+
+  it('rejects reads through symlinks that escape the vault root', async () => {
+    const outside = mkdtempSync(join(tmpdir(), 'vault-outside-'));
+    try {
+      writeFileSync(join(outside, 'Leak.cs'), 'public class Leak {}');
+      symlinkSync(join(outside, 'Leak.cs'), join(dir, 'Assets/Scripts/Leak.cs'));
+
+      await expect(vault.readFile('Assets/Scripts/Leak.cs')).rejects.toThrow(/vault root|symlink|not allowed/i);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects writes through existing symlinks', async () => {
+    const outside = mkdtempSync(join(tmpdir(), 'vault-outside-'));
+    const outsideFile = join(outside, 'Note.md');
+    try {
+      writeFileSync(outsideFile, 'original');
+      symlinkSync(outsideFile, join(dir, 'Note.md'));
+
+      await expect(vault.writeFile('Note.md', 'changed')).rejects.toThrow(/symlink|vault root|not allowed/i);
+      expect(await vault.readFile('ProjectSettings/ProjectVersion.txt')).toContain('m_EditorVersion');
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects absolute read and write paths instead of treating them as relative', async () => {
+    await expect(vault.readFile(join(dir, 'Assets/Scripts/Player.cs'))).rejects.toThrow(/path escapes vault root/i);
+    await expect(vault.writeFile('/Note.md', 'changed')).rejects.toThrow(/path escapes vault root/i);
   });
 });

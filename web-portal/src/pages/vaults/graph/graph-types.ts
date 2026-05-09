@@ -11,7 +11,7 @@ export interface GraphNode {
 }
 
 export interface GraphLink {
-  source: string | { id: string };
-  target: string | { id: string };
+  source: string | GraphNode;
+  target: string | GraphNode;
   label?: string;
 }

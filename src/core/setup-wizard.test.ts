@@ -310,6 +310,62 @@ describe("SetupWizard path validation", () => {
     expect(page.read().body).toContain('http-equiv="refresh" content="1;url=http://127.0.0.1:0/"');
   });
 
+  it("requires CSRF for setup path validation reads", async () => {
+    const wizard = new SetupWizard({ port: 0 });
+
+    const missing = makeResponse();
+    await (wizard as unknown as {
+      handleRequest: (req: { url: string; method: string; headers?: Record<string, string> }, res: unknown) => Promise<void>;
+    }).handleRequest({
+      url: `/api/setup/validate-path?path=${encodeURIComponent(homedir())}`,
+      method: "GET",
+      headers: {},
+    }, missing.response);
+    expect(missing.read().statusCode).toBe(403);
+
+    const ok = makeResponse();
+    await (wizard as unknown as {
+      csrfToken: string;
+      handleRequest: (req: { url: string; method: string; headers?: Record<string, string> }, res: unknown) => Promise<void>;
+    }).handleRequest({
+      url: `/api/setup/validate-path?path=${encodeURIComponent(homedir())}`,
+      method: "GET",
+      headers: {
+        "x-csrf-token": (wizard as unknown as { csrfToken: string }).csrfToken,
+      },
+    }, ok.response);
+    expect(ok.read().statusCode).toBe(200);
+    expect(JSON.parse(ok.read().body)).toMatchObject({ valid: true });
+  });
+
+  it("requires CSRF for setup directory browsing reads", async () => {
+    const wizard = new SetupWizard({ port: 0 });
+
+    const missing = makeResponse();
+    await (wizard as unknown as {
+      handleRequest: (req: { url: string; method: string; headers?: Record<string, string> }, res: unknown) => Promise<void>;
+    }).handleRequest({
+      url: `/api/setup/browse?path=${encodeURIComponent(homedir())}`,
+      method: "GET",
+      headers: {},
+    }, missing.response);
+    expect(missing.read().statusCode).toBe(403);
+
+    const ok = makeResponse();
+    await (wizard as unknown as {
+      csrfToken: string;
+      handleRequest: (req: { url: string; method: string; headers?: Record<string, string> }, res: unknown) => Promise<void>;
+    }).handleRequest({
+      url: `/api/setup/browse?path=${encodeURIComponent(homedir())}`,
+      method: "GET",
+      headers: {
+        "x-csrf-token": (wizard as unknown as { csrfToken: string }).csrfToken,
+      },
+    }, ok.response);
+    expect(ok.read().statusCode).toBe(200);
+    expect(JSON.parse(ok.read().body)).toMatchObject({ path: homedir() });
+  });
+
   it("exposes explicit setup bootstrap status and allows retry after failure", async () => {
     const wizard = new SetupWizard({ port: 0 });
     wizard.markBootstrapFailed("OpenAI preflight failed.");

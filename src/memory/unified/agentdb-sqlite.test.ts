@@ -339,13 +339,13 @@ describe("persistEntry", () => {
     expect(embeddingArg).toBeNull();
   });
 
-  it("should not throw when statement.run throws", () => {
+  it("throws when statement.run fails so callers can roll back in-memory indexes", () => {
     const stmt = { run: vi.fn(() => { throw new Error("SQL error"); }) } as any;
     const ctx = makeContext({ sqliteDb: {} as any });
     ctx.sqliteStatements.set("upsertMemory", stmt);
 
     const entry = makeEntry("e1");
-    expect(() => persistEntry(ctx, entry)).not.toThrow();
+    expect(() => persistEntry(ctx, entry)).toThrow("SQL error");
   });
 });
 

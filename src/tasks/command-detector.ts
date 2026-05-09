@@ -49,6 +49,7 @@ const PREFIX_COMMANDS: Record<string, TaskCommand> = {
   "/continue": "continue",
   "/surdur": "continue",
   "/sürdür": "continue",
+  "/vault": "vault",
 };
 
 // ─── Keyword Patterns (bilingual TR/EN) ──────────────────────────────────────────

@@ -66,10 +66,11 @@ describe('POST /api/vaults (register)', () => {
     registerVaultRoutes(app as never, registry, factory);
     const resp = (await app.routes['POST /api/vaults']({
       body: { name: 'My Project', rootPath: tmpDir, kind: 'generic' },
-    }, {})) as { id?: string; status?: string; error?: string; kind?: string };
+    }, {})) as { id?: string; status?: string; error?: string; kind?: string; rootPath?: string };
     expect(resp.error).toBeUndefined();
     expect(resp.id).toMatch(/^generic:[a-f0-9]{8}$/);
     expect(resp.status).toBe('indexing');
+    expect(resp.rootPath).toBeUndefined();
     expect(factoryCalls).toHaveLength(1);
     expect(registry.list()).toHaveLength(1);
   });
@@ -125,4 +126,3 @@ describe('POST /api/vaults (register)', () => {
     expect(resp.error).toMatch(/VaultFactory not installed/i);
   });
 });
-

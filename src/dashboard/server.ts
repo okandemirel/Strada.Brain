@@ -59,7 +59,7 @@ import { handlePersonalityRoutes } from "./server-personality-routes.js";
 import { handleSettingsRoutes } from "./server-settings-routes.js";
 import { handleSkillsRoutes } from "./server-skills-routes.js";
 import { handleSystemRoutes } from "./server-system-routes.js";
-import { handleVaultRoutes } from "./server-vault-routes.js";
+import { handleVaultRoutes, wireVaultUpdatesToWs } from "./server-vault-routes.js";
 
 
 // Re-export types that external consumers depend on
@@ -186,6 +186,7 @@ export class DashboardServer {
   private skillManager?: DashboardSkillManager;
   private vaultRegistry?: import("../vault/vault-registry.js").VaultRegistry;
   private vaultFactory?: import("./server-vault-routes.js").VaultFactory;
+  private vaultWsUnsubscribe?: () => void;
 
   // Budget management context
   private unifiedBudgetManager?: UnifiedBudgetManager;
@@ -413,6 +414,7 @@ export class DashboardServer {
    */
   registerVaultRegistry(registry: import("../vault/vault-registry.js").VaultRegistry): void {
     this.vaultRegistry = registry;
+    this.wireVaultWsUpdates();
   }
 
   /**
@@ -434,6 +436,19 @@ export class DashboardServer {
     if (this.unifiedBudgetManager) {
       this.wsServer.setGetBudgetSnapshot(() => this.unifiedBudgetManager!.getSnapshot());
     }
+    this.wireVaultWsUpdates();
+  }
+
+  private wireVaultWsUpdates(): void {
+    this.vaultWsUnsubscribe?.();
+    this.vaultWsUnsubscribe = undefined;
+    if (!this.vaultRegistry || !this.wsServer) return;
+    this.vaultWsUnsubscribe = wireVaultUpdatesToWs(this.vaultRegistry, {
+      broadcast: (raw) => {
+        const msg = JSON.parse(raw) as { type: "vault:update"; payload: unknown };
+        this.wsServer?.broadcastAuthenticated({ type: msg.type, payload: msg.payload });
+      },
+    });
   }
 
   /**
@@ -466,7 +481,7 @@ export class DashboardServer {
    * This provides a snapshot of the current server state and utility methods.
    */
   private buildRouteContext(): RouteContext {
-    const self = this; // eslint-disable-line @typescript-eslint/no-this-alias
+    const self = this;
     return {
       // Core services
       memoryManager: this.memoryManager,
@@ -897,6 +912,8 @@ export class DashboardServer {
   // server-daemon-routes.ts as standalone functions.
 
   async stop(): Promise<void> {
+    this.vaultWsUnsubscribe?.();
+    this.vaultWsUnsubscribe = undefined;
     if (!this.server) return;
     return new Promise((resolve) => {
       this.server!.close(() => resolve());

@@ -283,6 +283,53 @@ describe("LearningPipeline", () => {
       expect(result.instinctsCreated).toBe(0);
       expect(result.patternsDetected).toBe(0);
     });
+
+    it("does not double-insert instincts extracted from trajectories", async () => {
+      const permissivePipeline = new LearningPipeline(storage, {
+        enabled: true,
+        minConfidenceForCreation: 0,
+        batchSize: 5,
+      });
+      permissivePipeline.recordTrajectory({
+        sessionId: "session-double-insert",
+        taskDescription: "Fix compile error",
+        steps: [
+          {
+            stepNumber: 1,
+            toolName: "dotnet_build" as ToolName,
+            input: {},
+            result: {
+              kind: "error",
+              error: { message: "CS0246 Missing Foo", code: "CS0246" },
+            },
+            timestamp: Date.now() as TimestampMs,
+          },
+          {
+            stepNumber: 2,
+            toolName: "file_edit" as ToolName,
+            input: {},
+            result: {
+              kind: "success",
+              output: "Added using Foo;",
+            },
+            timestamp: Date.now() as TimestampMs,
+          },
+        ],
+        outcome: {
+          success: true,
+          totalSteps: 2,
+          hadErrors: true,
+          errorCount: 1,
+          durationMs: 1000,
+        },
+      });
+
+      const result = await permissivePipeline.runDetectionBatch();
+
+      expect(result.instinctsCreated).toBe(1);
+      expect(storage.countInstincts()).toBe(1);
+      permissivePipeline.stop();
+    });
   });
 
   describe("considerInstinctCreation", () => {

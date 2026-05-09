@@ -17,7 +17,7 @@ import type { MetricsCollector } from "./metrics.js";
 
 export type WSMessageType =
   | "auth" | "auth_success" | "auth_error" | "metrics" | "command" | "command_result"
-  | "error" | "ping" | "pong" | "notification";
+  | "error" | "ping" | "pong" | "notification" | "vault:update";
 
 export interface WSMessage {
   type: WSMessageType;
@@ -28,6 +28,7 @@ export interface WSMessage {
 
 export interface WSClient extends WebSocket {
   isAuthenticated: boolean;
+  canExecuteCommands: boolean;
   clientId: string;
   lastPing: number;
   remoteIp: string;
@@ -63,7 +64,7 @@ const DEFAULT_AUTH_LOCKOUT_MS = 5 * 60 * 1_000;
 export class WebSocketDashboardServer {
   private readonly port: number;
   private readonly authToken: string;
-  private readonly usesGeneratedAuthToken: boolean;
+  private readonly commandAuthEnabled: boolean;
   private readonly metrics: MetricsCollector;
   private readonly getMemoryStats: () => { totalEntries: number; hasAnalysisCache: boolean } | undefined;
   private readonly getPluginsStats: (() => { loaded: number; directories: string[] } | undefined) | undefined;
@@ -80,10 +81,10 @@ export class WebSocketDashboardServer {
   private getBudgetSnapshot?: () => unknown;
 
   constructor(opts: WebSocketDashboardServerOptions) {
-    const configuredAuthToken = opts.authToken?.trim();
+    const configuredAuthToken = opts.authToken?.trim() || undefined;
     this.port = opts.port;
     this.authToken = configuredAuthToken ?? randomBytes(32).toString("hex");
-    this.usesGeneratedAuthToken = !configuredAuthToken;
+    this.commandAuthEnabled = configuredAuthToken !== undefined;
     this.metrics = opts.metrics;
     this.getMemoryStats = opts.getMemoryStats;
     this.getPluginsStats = opts.getPluginsStats;
@@ -123,8 +124,8 @@ export class WebSocketDashboardServer {
         httpServer.off("error", onError);
         this.logger.info(`WebSocket Dashboard running at http://localhost:${this.port}`);
         this.logger.info(`WebSocket endpoint: ws://localhost:${this.port}/ws`);
-        if (this.usesGeneratedAuthToken) {
-          this.logger.info("WebSocket dashboard using generated same-process auth token");
+        if (!this.commandAuthEnabled) {
+          this.logger.info("WebSocket dashboard command mode disabled because DASHBOARD_AUTH_TOKEN is not configured");
         }
         this.startMetricsPush();
         this.startHeartbeat();
@@ -233,7 +234,8 @@ export class WebSocketDashboardServer {
   private handleWsConnection(ws: WebSocket, req: import("http").IncomingMessage): void {
     const clientId = this.generateClientId();
     const client = ws as WSClient;
-    client.isAuthenticated = false;
+    client.isAuthenticated = !this.commandAuthEnabled;
+    client.canExecuteCommands = false;
     client.clientId = clientId;
     client.lastPing = Date.now();
     client.remoteIp = req.socket.remoteAddress ?? "unknown";
@@ -245,8 +247,10 @@ export class WebSocketDashboardServer {
     this.send(client, {
       type: "auth",
       payload: {
-        requiresAuth: true,
-        message: "Please authenticate",
+        requiresAuth: this.commandAuthEnabled,
+        commandMode: this.commandAuthEnabled,
+        readOnly: !this.commandAuthEnabled,
+        message: this.commandAuthEnabled ? "Please authenticate" : "Read-only dashboard",
       }
     });
 
@@ -292,8 +296,10 @@ export class WebSocketDashboardServer {
         client.lastPing = Date.now();
         break;
       case "command":
-        if (!client.isAuthenticated) {
-          this.sendError(client, "Not authenticated");
+        if (!client.isAuthenticated || !client.canExecuteCommands) {
+          this.sendError(client, this.commandAuthEnabled
+            ? "Not authenticated"
+            : "Dashboard command mode requires DASHBOARD_AUTH_TOKEN");
           return;
         }
         void this.handleCommand(client, message);
@@ -304,6 +310,16 @@ export class WebSocketDashboardServer {
   }
 
   private handleAuth(client: WSClient, payload: { token?: string }): void {
+    if (!this.commandAuthEnabled) {
+      client.isAuthenticated = true;
+      client.canExecuteCommands = false;
+      this.send(client, {
+        type: "auth_success",
+        payload: { message: "Read-only dashboard", readOnly: true },
+      });
+      return;
+    }
+
     // Check brute-force protection
     const check = this.bruteForce.canAttempt(client.remoteIp);
     if (!check.allowed) {
@@ -321,6 +337,7 @@ export class WebSocketDashboardServer {
       timingSafeEqual(tokenBuffer, authBuffer);
     if (tokenMatch) {
       client.isAuthenticated = true;
+      client.canExecuteCommands = true;
       this.bruteForce.recordSuccess(client.remoteIp);
       this.send(client, { type: "auth_success", payload: { message: "Authenticated successfully" } });
       this.logger.info("Client authenticated", { clientId: client.clientId });
@@ -334,6 +351,13 @@ export class WebSocketDashboardServer {
 
   private async handleCommand(client: WSClient, message: WSMessage): Promise<void> {
     const { id, payload } = message;
+
+    if (!client.canExecuteCommands) {
+      this.sendError(client, this.commandAuthEnabled
+        ? "Not authenticated"
+        : "Dashboard command mode requires DASHBOARD_AUTH_TOKEN", id);
+      return;
+    }
 
     if (!payload || typeof payload !== "object") {
       this.sendError(client, "Command payload must be an object", id);
@@ -377,10 +401,11 @@ export class WebSocketDashboardServer {
   }
 
   private renderDashboardHtml(): string {
-    const bootstrapAuthToken = this.usesGeneratedAuthToken ? this.authToken : null;
+    const bootstrapAuthToken = null;
+    const commands = this.commandAuthEnabled ? [...this.commandHandlers.keys()].sort() : [];
     return WEBSOCKET_DASHBOARD_HTML
       .replace("__BOOTSTRAP_AUTH_TOKEN__", JSON.stringify(bootstrapAuthToken))
-      .replace("__BOOTSTRAP_COMMANDS__", JSON.stringify([...this.commandHandlers.keys()].sort()));
+      .replace("__BOOTSTRAP_COMMANDS__", JSON.stringify(commands));
   }
 
   private startMetricsPush(): void {

@@ -12,7 +12,6 @@ interface XXHashLib {
   h64(seed: number): XXHashH64;
 }
 
-// eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
 const XXH: XXHashLib = _require('xxhashjs');
 
 const XX_SEED = 0xc0ffee;

@@ -686,6 +686,9 @@ export interface VaultConfig {
   readonly writeHookBudgetMs: number;
   readonly debounceMs: number;
   readonly embeddingFallback: 'none' | 'local';
+  readonly self: {
+    readonly enabled: boolean;
+  };
 }
 
 /** Obsidian vault integration configuration */
@@ -1269,6 +1272,9 @@ export const configSchema = z
       writeHookBudgetMs: z.coerce.number().int().positive().default(200),  // sync reindex p95 target
       debounceMs: z.coerce.number().int().positive().default(800),         // watcher drain interval
       embeddingFallback: z.enum(["none", "local"]).default("local"),
+      self: z.object({
+        enabled: boolFromString(true),
+      }).default({}),
     }).default({}),
 
     // Obsidian Integration
@@ -2772,6 +2778,9 @@ interface EnvVars {
     writeHookBudgetMs: string | undefined;
     debounceMs: string | undefined;
     embeddingFallback: string | undefined;
+    self: {
+      enabled: string | undefined;
+    };
   };
   logLevel: string | undefined;
   logFile: string | undefined;
@@ -3089,6 +3098,9 @@ function loadFromEnv(env: Record<string, string | undefined>): EnvVars {
       writeHookBudgetMs: env["STRADA_VAULT_WRITE_HOOK_BUDGET_MS"],
       debounceMs: env["STRADA_VAULT_DEBOUNCE_MS"],
       embeddingFallback: env["STRADA_VAULT_EMBEDDING_FALLBACK"],
+      self: {
+        enabled: env["STRADA_VAULT_SELF_ENABLED"],
+      },
     },
     // Obsidian Integration
     obsidian: {

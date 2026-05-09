@@ -39,6 +39,7 @@ function extractBootstrapCommands(html: string): string[] {
 
 function createClient(remoteIp = "127.0.0.1"): {
   isAuthenticated: boolean;
+  canExecuteCommands: boolean;
   clientId: string;
   lastPing: number;
   remoteIp: string;
@@ -47,6 +48,7 @@ function createClient(remoteIp = "127.0.0.1"): {
 } {
   return {
     isAuthenticated: false,
+    canExecuteCommands: false,
     clientId: "client-1",
     lastPing: Date.now(),
     remoteIp,
@@ -56,16 +58,13 @@ function createClient(remoteIp = "127.0.0.1"): {
 }
 
 describe("WebSocketDashboardServer auth bootstrap", () => {
-  it("embeds a generated bootstrap token when no static token is configured", () => {
+  it("does not embed a generated bootstrap token when command auth is not configured", () => {
     const server = createServer();
     const html = (server as unknown as {
       renderDashboardHtml(): string;
     }).renderDashboardHtml();
 
-    const bootstrapToken = extractBootstrapToken(html);
-
-    expect(typeof bootstrapToken).toBe("string");
-    expect(bootstrapToken).toHaveLength(64);
+    expect(extractBootstrapToken(html)).toBeNull();
   });
 
   it("does not embed configured auth tokens into the dashboard HTML", () => {
@@ -78,8 +77,37 @@ describe("WebSocketDashboardServer auth bootstrap", () => {
     expect(html).not.toContain("secret-token");
   });
 
-  it("embeds registered command handlers into the dashboard HTML", () => {
+  it("does not expose command handlers unless an explicit auth token is configured", () => {
     const server = createServer();
+    server.registerCommandHandler("reload_plugin", vi.fn());
+    server.registerCommandHandler("clear_cache", vi.fn());
+
+    const html = (server as unknown as {
+      renderDashboardHtml(): string;
+    }).renderDashboardHtml();
+
+    expect(extractBootstrapCommands(html)).toEqual([]);
+  });
+
+  it("treats empty auth tokens as unconfigured read-only mode", () => {
+    const server = createServer("   ");
+    server.registerCommandHandler("clear_cache", vi.fn());
+    const html = (server as unknown as {
+      renderDashboardHtml(): string;
+    }).renderDashboardHtml();
+    const client = createClient();
+
+    (server as unknown as {
+      handleAuth(clientArg: typeof client, payload: { token?: string }): void;
+    }).handleAuth(client, { token: "" });
+
+    expect(extractBootstrapCommands(html)).toEqual([]);
+    expect(client.isAuthenticated).toBe(true);
+    expect(client.canExecuteCommands).toBe(false);
+  });
+
+  it("embeds registered command handlers when an explicit auth token is configured", () => {
+    const server = createServer("secret-token");
     server.registerCommandHandler("reload_plugin", vi.fn());
     server.registerCommandHandler("clear_cache", vi.fn());
 
@@ -90,26 +118,21 @@ describe("WebSocketDashboardServer auth bootstrap", () => {
     expect(extractBootstrapCommands(html)).toEqual(["clear_cache", "reload_plugin"]);
   });
 
-  it("authenticates a client with the generated bootstrap token", () => {
-    const server = createServer();
-    const html = (server as unknown as {
-      renderDashboardHtml(): string;
-    }).renderDashboardHtml();
-    const bootstrapToken = extractBootstrapToken(html);
+  it("authenticates command mode only with the configured token", () => {
+    const server = createServer("secret-token");
     const client = createClient();
-
-    expect(bootstrapToken).not.toBeNull();
 
     (server as unknown as {
       handleAuth(clientArg: typeof client, payload: { token?: string }): void;
-    }).handleAuth(client, { token: bootstrapToken! });
+    }).handleAuth(client, { token: "secret-token" });
 
     expect(client.isAuthenticated).toBe(true);
+    expect(client.canExecuteCommands).toBe(true);
     expect(client.send).toHaveBeenCalledWith(expect.stringContaining("\"auth_success\""));
   });
 
-  it("rejects invalid tokens even when using a generated bootstrap token", () => {
-    const server = createServer();
+  it("rejects invalid tokens when command mode is configured", () => {
+    const server = createServer("secret-token");
     const client = createClient();
 
     (server as unknown as {
@@ -118,5 +141,39 @@ describe("WebSocketDashboardServer auth bootstrap", () => {
 
     expect(client.isAuthenticated).toBe(false);
     expect(client.send).toHaveBeenCalledWith(expect.stringContaining("\"auth_error\""));
+  });
+
+  it("keeps command execution read-only when no explicit token is configured", async () => {
+    const server = createServer();
+    server.registerCommandHandler("clear_cache", vi.fn());
+    const client = createClient();
+    client.isAuthenticated = true;
+
+    await (server as unknown as {
+      handleCommand(clientArg: typeof client, message: { type: string; id: string; payload: { command: string } }): Promise<void>;
+    }).handleCommand(client, {
+      type: "command",
+      id: "cmd-1",
+      payload: { command: "clear_cache" },
+    });
+
+    expect(client.send).toHaveBeenCalledWith(expect.stringContaining("DASHBOARD_AUTH_TOKEN"));
+  });
+
+  it("broadcastAuthenticated excludes unauthenticated clients", () => {
+    const server = createServer("secret-token");
+    const unauthenticated = createClient();
+    const authenticated = createClient();
+    authenticated.isAuthenticated = true;
+    const clients = new Map([
+      ["unauthenticated", unauthenticated],
+      ["authenticated", authenticated],
+    ]);
+
+    (server as unknown as { clients: typeof clients }).clients = clients;
+    server.broadcastAuthenticated({ type: "vault:update", payload: { vaultId: "v1" } });
+
+    expect(unauthenticated.send).not.toHaveBeenCalled();
+    expect(authenticated.send).toHaveBeenCalledWith(expect.stringContaining("\"vault:update\""));
   });
 });

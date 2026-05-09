@@ -170,3 +170,23 @@ describe("detectCommand existing commands still work", () => {
     });
   });
 });
+
+describe("detectCommand /vault", () => {
+  it('"/vault init /tmp/project" returns vault command with args', () => {
+    const result = detectCommand("/vault init /tmp/project");
+    expect(result).toEqual({
+      type: "command",
+      command: "vault",
+      args: ["init", "/tmp/project"],
+    });
+  });
+
+  it('"/vault sync" returns vault command with no vaultId requirement', () => {
+    const result = detectCommand("/vault sync");
+    expect(result).toEqual({
+      type: "command",
+      command: "vault",
+      args: ["sync"],
+    });
+  });
+});

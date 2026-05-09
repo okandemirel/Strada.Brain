@@ -64,7 +64,7 @@ describe('VaultStatusBar', () => {
       expect(screen.getByLabelText(/reindex failed/i)).toBeInTheDocument();
     });
     expect(fetchMock).toHaveBeenCalledWith(
-      expect.stringContaining('/api/vaults/v1/reindex'),
+      expect.stringContaining('/api/vaults/v1/sync'),
       expect.objectContaining({ method: 'POST' }),
     );
   });

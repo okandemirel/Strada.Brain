@@ -13,7 +13,7 @@ import DirectoryBrowser from './setup/DirectoryBrowser'
 export default function SetupWizard() {
   const { t } = useTranslation('setup')
   const wiz = useSetupWizard()
-  const browser = useDirectoryBrowser()
+  const browser = useDirectoryBrowser(wiz.csrfToken)
 
   const handleBrowserSelect = () => {
     const selected = browser.selectFolder()

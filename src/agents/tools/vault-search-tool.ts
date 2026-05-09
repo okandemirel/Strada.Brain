@@ -1,5 +1,5 @@
 import type { VaultRegistry } from '../../vault/vault-registry.js';
-import type { IVault, VaultHit } from '../../vault/vault.interface.js';
+import type { IVault, VaultFile, VaultHit, VaultQuery } from '../../vault/vault.interface.js';
 import type { ToolContext, ToolExecutionResult } from './tool.interface.js';
 import { sanitizeRetrievalContent } from '../orchestrator-text-utils.js';
 
@@ -69,6 +69,24 @@ export class VaultSearchTool {
         type: 'string',
         description: "Retrieval mode: 'semantic' | 'fts' | 'hybrid' (default 'hybrid').",
       },
+      budgetTokens: {
+        type: 'number',
+        description: 'Maximum chunk token budget to return from each vault query.',
+      },
+      langFilter: {
+        type: 'array',
+        items: { type: 'string' },
+        description: "Restrict results by language, e.g. ['typescript', 'markdown'].",
+      },
+      pathGlob: {
+        type: 'string',
+        description: "Restrict results to a vault-relative glob, e.g. 'src/**/*.ts'.",
+      },
+      focusFiles: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'Vault-relative files whose symbols seed graph/PPR reranking.',
+      },
     },
     required: ['query'],
   };
@@ -104,6 +122,12 @@ export class VaultSearchTool {
 
     const rawTopK = Number(input['topK'] ?? DEFAULT_TOP_K);
     const topK = Math.max(1, Math.min(MAX_TOP_K, Number.isFinite(rawTopK) ? rawTopK : DEFAULT_TOP_K));
+    const budgetTokens = coercePositiveInteger(input['budgetTokens']);
+    const langFilter = coerceStringArray(input['langFilter']);
+    const pathGlob = typeof input['pathGlob'] === 'string' && input['pathGlob'].trim().length > 0
+      ? input['pathGlob'].trim()
+      : undefined;
+    const focusFiles = coerceStringArray(input['focusFiles']);
 
     const modeRaw = typeof input['mode'] === 'string' ? (input['mode'] as string).toLowerCase() : 'hybrid';
     const mode: VaultSearchMode =
@@ -150,10 +174,19 @@ export class VaultSearchTool {
       };
     }
 
+    const searchQuery: VaultQuery = {
+      text: query,
+      topK,
+      ...(budgetTokens !== undefined ? { budgetTokens } : {}),
+      ...(langFilter !== undefined ? { langFilter: langFilter as VaultFile['lang'][] } : {}),
+      ...(pathGlob !== undefined ? { pathGlob } : {}),
+      ...(focusFiles !== undefined ? { focusFiles } : {}),
+    };
+
     const started = Date.now();
     const perVault = await Promise.allSettled(
       targetVaults.map(async (v) => {
-        const result = await v.query({ text: query, topK });
+        const result = await v.query(searchQuery);
         return { vaultId: v.id, result };
       }),
     );
@@ -238,6 +271,19 @@ function projectHit(hit: VaultHit, vaultId: string, mode: VaultSearchMode): Vaul
 /** Cheap token estimate: 4 chars/token heuristic, matches chunker.ts budgeting. */
 function estimateTokens(text: string): number {
   return Math.max(1, Math.ceil(text.length / 4));
+}
+
+function coercePositiveInteger(v: unknown): number | undefined {
+  if (typeof v !== 'number' || !Number.isFinite(v)) return undefined;
+  return Math.max(1, Math.floor(v));
+}
+
+function coerceStringArray(v: unknown): string[] | undefined {
+  if (!Array.isArray(v)) return undefined;
+  const values = v
+    .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    .map((item) => item.trim());
+  return values.length > 0 ? values : undefined;
 }
 
 function formatHitsForAgent(payload: VaultSearchResultPayload): string {

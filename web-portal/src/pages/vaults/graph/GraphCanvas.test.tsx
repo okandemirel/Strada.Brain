@@ -38,10 +38,12 @@ window.getComputedStyle = (elt: Element) => {
 
 // Mock react-force-graph-2d
 let capturedProps: Record<string, unknown> = {};
+let graphDataProps: unknown[] = [];
 
 vi.mock('react-force-graph-2d', () => ({
   default: function MockForceGraph2D(props: Record<string, unknown>) {
     capturedProps = props;
+    graphDataProps.push(props.graphData);
     return (
       <div data-testid="force-graph-2d">
         <div data-testid="node-count">{(props.graphData as { nodes: unknown[] })?.nodes?.length ?? 0}</div>
@@ -72,6 +74,7 @@ function makeGraph(): CanvasJson {
 describe('GraphCanvas', () => {
   beforeEach(() => {
     capturedProps = {};
+    graphDataProps = [];
     useVaultStore.setState({
       selectedSymbolId: null,
       selected: 'v1',
@@ -203,5 +206,17 @@ describe('GraphCanvas', () => {
     expect(screen.getByTitle('Zoom in')).toBeInTheDocument();
     expect(screen.getByTitle('Zoom out')).toBeInTheDocument();
     expect(screen.getByText('Fit')).toBeInTheDocument();
+  });
+
+  it('keeps force graph data identity stable across local UI rerenders', async () => {
+    render(<GraphCanvas graph={makeGraph()} />);
+    const initialGraphData = graphDataProps[0];
+
+    fireEvent.mouseMove(screen.getByTestId('graph-canvas'), { clientX: 24, clientY: 40 });
+
+    await waitFor(() => {
+      expect(graphDataProps.length).toBeGreaterThan(1);
+    });
+    expect(graphDataProps.at(-1)).toBe(initialGraphData);
   });
 });

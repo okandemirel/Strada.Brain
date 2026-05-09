@@ -146,6 +146,29 @@ describe('VaultSearchTool', () => {
       // Hybrid mode keeps the hit regardless of channel presence.
       expect(r.content).toContain('hybrid-chunk');
     });
+
+    it('passes documented search filters through to the vault query', async () => {
+      const tool = new VaultSearchTool();
+      const vault = makeFakeVault({ id: 'v1', hits: [] });
+      registry.register(vault);
+
+      await tool.execute({
+        query: 'hello',
+        budgetTokens: 1200,
+        langFilter: ['typescript', 'markdown'],
+        pathGlob: 'src/**/*.ts',
+        focusFiles: ['src/a.ts'],
+      }, ctx);
+
+      expect(vault.queryMock).toHaveBeenCalledWith({
+        text: 'hello',
+        topK: 8,
+        budgetTokens: 1200,
+        langFilter: ['typescript', 'markdown'],
+        pathGlob: 'src/**/*.ts',
+        focusFiles: ['src/a.ts'],
+      });
+    });
   });
 
   describe('delegation', () => {

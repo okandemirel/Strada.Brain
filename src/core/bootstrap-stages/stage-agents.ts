@@ -68,6 +68,8 @@ export async function initializeMultiAgentDelegationStage(
     stradaDeps: StradaDepsStatus;
     supervisorBrain?: SupervisorBrain;
     goalStorage?: import("../../goals/goal-storage.js").GoalStorage;
+    vaultRegistry?: import("../../vault/vault-registry.js").VaultRegistry;
+    vaultWriteHookBudgetMs?: number;
   },
   deps: MultiAgentDelegationStageDeps = {},
 ): Promise<MultiAgentDelegationStageResult> {
@@ -121,6 +123,8 @@ export async function initializeMultiAgentDelegationStage(
     maxBurstMessages: params.config.tasks.messageBurstMaxMessages,
     supervisorBrain: params.supervisorBrain,
     goalStorage: params.goalStorage,
+    vaultRegistry: params.vaultRegistry,
+    vaultWriteHookBudgetMs: params.vaultWriteHookBudgetMs,
   } satisfies ConstructorParameters<typeof AgentManager>[0];
 
   const agentManager = deps.createAgentManager?.(agentManagerOptions)
@@ -206,6 +210,8 @@ export async function initializeMultiAgentDelegationStage(
       verifiedLocalProviders: params.providerManager.isAvailable("ollama") ? ["ollama"] : [],
       workspaceLeaseManager,
       providerRouter: params.providerRouter as ConstructorParameters<typeof DelegationManager>[0]["providerRouter"],
+      vaultRegistry: params.vaultRegistry,
+      vaultWriteHookBudgetMs: params.vaultWriteHookBudgetMs,
     };
     delegationManager = deps.createDelegationManager?.(delegationManagerOptions)
       ?? new DelegationManager(delegationManagerOptions);

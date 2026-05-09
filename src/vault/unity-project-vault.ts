@@ -1,13 +1,18 @@
 import { mkdir, readFile, stat, unlink, writeFile } from 'node:fs/promises';
 import { mkdirSync } from 'node:fs';
-import { dirname, isAbsolute, join, relative } from 'node:path';
+import { join } from 'node:path';
 import { EventEmitter } from 'node:events';
 import { SqliteVaultStore } from './sqlite-vault-store.js';
 import { chunkFile } from './chunker.js';
 import { xxhash64Hex } from './hash.js';
 import { EmbeddingAdapter, type EmbeddingProvider, type VectorStore } from './embedding-adapter.js';
 import { rrfFuse, packByBudget } from './query-pipeline.js';
-import { EXT_LANG, listIndexableFiles } from './discovery.js';
+import { listIndexableFiles } from './discovery.js';
+import {
+  getIndexableFileInfo,
+  prepareSafeVaultWritePath,
+  resolveSafeVaultReadPath,
+} from './path-policy.js';
 import { getExtractorFor } from './symbol-extractor/index.js';
 import { buildCanvas } from './canvas-generator.js';
 import { runPpr } from './ppr.js';
@@ -35,12 +40,6 @@ function escapeFtsQuery(q: string): string {
   const stripped = q.replace(/["*:()^+\-]/g, ' ').replace(/\b(NOT|AND|OR|NEAR)\b/g, ' ').trim();
   if (!stripped) return '""';
   return `"${stripped}"`;
-}
-
-function inferLang(path: string): VaultFile['lang'] {
-  const dot = path.lastIndexOf('.');
-  const ext = dot >= 0 ? path.slice(dot).toLowerCase() : '';
-  return EXT_LANG[ext] ?? 'unknown';
 }
 
 function globToRegex(glob: string): RegExp {
@@ -179,23 +178,12 @@ export class UnityProjectVault implements IVault {
   listFiles(): VaultFile[] { return this.store.listFiles(); }
 
   async readFile(relPath: string): Promise<string> {
-    // Fix SecC1: confine to vault root — reject anything that resolves outside.
-    const abs = join(this.rootPath, relPath);
-    const rel = relative(this.rootPath, abs);
-    if (rel.startsWith('..') || isAbsolute(rel)) {
-      throw new Error(`path escapes vault root: ${relPath}`);
-    }
+    const abs = await resolveSafeVaultReadPath(this.rootPath, relPath);
     return await readFile(abs, 'utf8');
   }
 
   async writeFile(relPath: string, content: string): Promise<void> {
-    const abs = join(this.rootPath, relPath);
-    const rel = relative(this.rootPath, abs);
-    if (rel.startsWith('..') || isAbsolute(rel)) {
-      throw new Error(`path escapes vault root: ${relPath}`);
-    }
-    const dir = dirname(abs);
-    await mkdir(dir, { recursive: true });
+    const abs = await prepareSafeVaultWritePath(this.rootPath, relPath, Buffer.byteLength(content, 'utf8'));
     await writeFile(abs, content, 'utf8');
   }
 
@@ -252,15 +240,18 @@ export class UnityProjectVault implements IVault {
   }
 
   async reindexFile(relPath: string): Promise<boolean> {
-    const abs = join(this.rootPath, relPath);
+    const fileInfo = await getIndexableFileInfo(this.rootPath, relPath);
+    if (!fileInfo.ok) {
+      return this.deleteIndexedFile(fileInfo.relPath);
+    }
+    const abs = fileInfo.absPath;
+    relPath = fileInfo.relPath;
     const body = await readFile(abs, 'utf8').catch(() => null);
     if (body === null) { this.store.deleteFile(relPath); return true; }
     const hash = xxhash64Hex(body);
     const existing = this.store.getFile(relPath);
     if (existing?.blobHash === hash) return false;  // Fix C1: short-circuit on unchanged hash
-    const st = await stat(abs).catch(() => null);
-    if (!st) { this.store.deleteFile(relPath); return true; }
-    const lang = inferLang(relPath);
+    const lang = fileInfo.lang;
 
     // Fix HNSW leak: remove old vectors before deleting SQLite chunks.
     const oldHnswIds = this.store.listHnswIdsForPath(relPath);
@@ -268,7 +259,7 @@ export class UnityProjectVault implements IVault {
 
     this.store.deleteFile(relPath);
     this.store.upsertFile({
-      path: relPath, blobHash: hash, mtimeMs: st.mtimeMs, size: st.size,
+      path: relPath, blobHash: hash, mtimeMs: fileInfo.mtimeMs, size: fileInfo.size,
       lang, kind: lang === 'markdown' ? 'doc' : lang === 'json' ? 'config' : 'source',
       indexedAt: Date.now(),
     });
@@ -402,6 +393,7 @@ export class UnityProjectVault implements IVault {
   }
 
   protected async fullIndex(): Promise<void> {
+    const before = new Set(this.store.listFiles().map((f) => f.path));
     const files = await listIndexableFiles(this.rootPath);
     const changed: string[] = [];
     for (const f of files) {
@@ -412,6 +404,10 @@ export class UnityProjectVault implements IVault {
           error: err instanceof Error ? err.message : String(err),
         });
       }
+    }
+    const present = new Set(files.map((f) => f.path));
+    for (const p of before) {
+      if (!present.has(p) && this.deleteIndexedFile(p)) changed.push(p);
     }
     await this.regenerateCanvas();
     if (changed.length) this.emitter.emit('update', { vaultId: this.id, changedPaths: changed });
@@ -435,15 +431,21 @@ export class UnityProjectVault implements IVault {
     const present = new Set(files.map((f) => f.path));
     for (const p of before) {
       if (!present.has(p)) {
-        // Fix HNSW leak: remove vectors for deleted files before deleting SQLite rows.
-        const hnswIds = this.store.listHnswIdsForPath(p);
-        for (const hnswId of hnswIds) this.adapter.remove(hnswId);
-        this.store.deleteFile(p);
-        changed.push(p);
+        if (this.deleteIndexedFile(p)) changed.push(p);
       }
     }
     await this.regenerateCanvas();
     if (changed.length) this.emitter.emit('update', { vaultId: this.id, changedPaths: changed });
     return changed.length;
+  }
+
+  private deleteIndexedFile(relPath: string): boolean {
+    const existing = this.store.getFile(relPath);
+    if (!existing) return false;
+    // Fix HNSW leak: remove vectors for deleted files before deleting SQLite rows.
+    const hnswIds = this.store.listHnswIdsForPath(relPath);
+    for (const hnswId of hnswIds) this.adapter.remove(hnswId);
+    this.store.deleteFile(relPath);
+    return true;
   }
 }

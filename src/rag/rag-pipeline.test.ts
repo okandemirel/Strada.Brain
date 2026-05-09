@@ -295,6 +295,14 @@ describe("RAGPipeline", () => {
   // -------------------------------------------------------------------------
 
   describe("indexFile", () => {
+    it("skips non-C# files instead of feeding them through the C# chunker", async () => {
+      mockChunks.push(makeChunk({ id: "ts-1", filePath: "src/a.ts" }));
+
+      const count = await pipeline.indexFile("src/a.ts", "export const a = 1;");
+
+      expect(count).toBe(0);
+    });
+
     it("skips indexing when the file content has not changed (same hash)", async () => {
       const content = "public class Foo {}";
 

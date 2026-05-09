@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { VaultWriteNoteTool } from './vault-write-note-tool.js';
 import type { ToolContext } from './tool.interface.js';
 
-function makeVault(overrides: { id?: string; supportsWrite?: boolean; failWrite?: boolean } = {}) {
+function makeVault(overrides: { id?: string; supportsWrite?: boolean; failWrite?: boolean; supportsRefresh?: boolean } = {}) {
   return {
     id: overrides.id ?? 'v1',
     writeFile: overrides.supportsWrite !== false
@@ -10,6 +10,8 @@ function makeVault(overrides: { id?: string; supportsWrite?: boolean; failWrite?
         ? vi.fn().mockRejectedValue(new Error('disk full'))
         : vi.fn().mockResolvedValue(undefined)
       : undefined,
+    reindexFile: overrides.supportsRefresh === true ? vi.fn().mockResolvedValue(true) : undefined,
+    regenerateCanvas: overrides.supportsRefresh === true ? vi.fn().mockResolvedValue(undefined) : undefined,
   } as never;
 }
 
@@ -36,6 +38,18 @@ describe('VaultWriteNoteTool', () => {
     expect(result.isError).toBeFalsy();
     expect(result.content).toContain('written to v1');
     expect(vault.writeFile).toHaveBeenCalledWith('notes/test.md', '# Hello');
+  });
+
+  it('refreshes index and canvas after writing when the vault supports it', async () => {
+    const vault = makeVault({ supportsWrite: true, supportsRefresh: true });
+    const result = await tool.execute(
+      { path: 'notes/test.md', content: '# Hello' },
+      makeContext([vault]),
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(vault.reindexFile).toHaveBeenCalledWith('notes/test.md');
+    expect(vault.regenerateCanvas).toHaveBeenCalled();
   });
 
   it('returns error when no vaults registered', async () => {

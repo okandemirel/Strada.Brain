@@ -1,18 +1,24 @@
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { mkdirSync } from 'node:fs';
-import { dirname, isAbsolute, join, relative } from 'node:path';
+import { join } from 'node:path';
 import { EventEmitter } from 'node:events';
 import { SqliteVaultStore } from './sqlite-vault-store.js';
 import { chunkFile } from './chunker.js';
 import { xxhash64Hex } from './hash.js';
 import { EmbeddingAdapter, type EmbeddingProvider, type VectorStore } from './embedding-adapter.js';
 import { rrfFuse, packByBudget } from './query-pipeline.js';
-import { EXT_LANG } from './discovery.js';
+import { listIndexableFiles } from './discovery.js';
 import { getExtractorFor } from './symbol-extractor/index.js';
 import { buildCanvas } from './canvas-generator.js';
 import { runPpr } from './ppr.js';
 import { getLoggerSafe } from '../utils/logger.js';
 import { ObsidianApiClient, type ObsidianApiConfig } from './obsidian-client.js';
+import {
+  getIndexableFileInfo,
+  prepareSafeVaultWritePath,
+  resolveSafeVaultReadPath,
+  validateSafeVaultWriteRelPath,
+} from './path-policy.js';
 import type {
   IVault, VaultFile, VaultQuery, VaultQueryResult, VaultStats, VaultId, VaultChunk,
   VaultSymbol, VaultEdge, VaultWikilink,
@@ -24,12 +30,6 @@ export interface ObsidianVaultDeps {
   embedding: EmbeddingProvider;
   vectorStore: VectorStore;
   obsidian: ObsidianApiConfig;
-}
-
-function inferLang(path: string): VaultFile['lang'] {
-  const dot = path.lastIndexOf('.');
-  const ext = dot >= 0 ? path.slice(dot).toLowerCase() : '';
-  return EXT_LANG[ext] ?? 'unknown';
 }
 
 function escapeFtsQuery(q: string): string {
@@ -190,28 +190,20 @@ export class ObsidianVault implements IVault {
   listFiles(): VaultFile[] { return this.store.listFiles(); }
 
   async readFile(relPath: string): Promise<string> {
-    const abs = join(this.rootPath, relPath);
-    const rel = relative(this.rootPath, abs);
-    if (rel.startsWith('..') || isAbsolute(rel)) {
-      throw new Error(`path escapes vault root: ${relPath}`);
-    }
+    const abs = await resolveSafeVaultReadPath(this.rootPath, relPath);
     return await readFile(abs, 'utf8');
   }
 
   async writeFile(relPath: string, content: string): Promise<void> {
-    const abs = join(this.rootPath, relPath);
-    const rel = relative(this.rootPath, abs);
-    if (rel.startsWith('..') || isAbsolute(rel)) {
-      throw new Error(`path escapes vault root: ${relPath}`);
-    }
+    const bytes = Buffer.byteLength(content, 'utf8');
+    const safeRelPath = validateSafeVaultWriteRelPath(relPath, bytes);
     try {
-      await this.client.putNote(relPath, content);
+      await this.client.putNote(safeRelPath, content);
       return;
     } catch (err) {
       getLoggerSafe().warn(`[obsidian-vault ${this.id}] Obsidian API write failed, falling back to FS`, { err });
     }
-    const dir = dirname(abs);
-    await mkdir(dir, { recursive: true });
+    const abs = await prepareSafeVaultWritePath(this.rootPath, safeRelPath, bytes);
     await writeFile(abs, content, 'utf8');
   }
 
@@ -230,15 +222,17 @@ export class ObsidianVault implements IVault {
 
   /** Write a note to Obsidian via REST API. */
   async writeNote(relPath: string, content: string): Promise<void> {
-    await this.client.putNote(relPath, content);
+    const safeRelPath = validateSafeVaultWriteRelPath(relPath, Buffer.byteLength(content, 'utf8'));
+    await this.client.putNote(safeRelPath, content);
     // Trigger reindex after write so the vault stays in sync.
-    await this.reindexFile(relPath);
+    await this.reindexFile(safeRelPath);
   }
 
   /** Append content to a heading in an Obsidian note. */
   async appendToHeading(relPath: string, heading: string, content: string): Promise<void> {
-    await this.client.appendToHeading(relPath, heading, content);
-    await this.reindexFile(relPath);
+    const safeRelPath = validateSafeVaultWriteRelPath(relPath, Buffer.byteLength(content, 'utf8'));
+    await this.client.appendToHeading(safeRelPath, heading, content);
+    await this.reindexFile(safeRelPath);
   }
 
   /** Search Obsidian's native index. */
@@ -304,21 +298,25 @@ export class ObsidianVault implements IVault {
   }
 
   private async reindexFile(relPath: string): Promise<boolean> {
-    const abs = join(this.rootPath, relPath);
+    const fileInfo = await getIndexableFileInfo(this.rootPath, relPath);
+    if (!fileInfo.ok) {
+      return this.deleteIndexedFile(fileInfo.relPath);
+    }
+    const abs = fileInfo.absPath;
+    relPath = fileInfo.relPath;
     const body = await readFile(abs, 'utf8').catch(() => null);
-    if (body === null) { this.store.deleteFile(relPath); return true; }
+    if (body === null) { return this.deleteIndexedFile(relPath); }
     const hash = xxhash64Hex(body);
     const existing = this.store.getFile(relPath);
     if (existing?.blobHash === hash) return false;
-    const st = await stat(abs);
-    const lang = inferLang(relPath);
+    const lang = fileInfo.lang;
 
     const oldHnswIds = this.store.listHnswIdsForPath(relPath);
     for (const hnswId of oldHnswIds) this.adapter.remove(hnswId);
 
     this.store.deleteFile(relPath);
     this.store.upsertFile({
-      path: relPath, blobHash: hash, mtimeMs: st.mtimeMs, size: st.size,
+      path: relPath, blobHash: hash, mtimeMs: fileInfo.mtimeMs, size: fileInfo.size,
       lang, kind: lang === 'markdown' ? 'doc' : lang === 'json' ? 'config' : 'source',
       indexedAt: Date.now(),
     });
@@ -392,37 +390,16 @@ export class ObsidianVault implements IVault {
   }
 
   private async fullIndex(): Promise<void> {
-    // Walk the Obsidian vault directory directly.
-    const { readdir, lstat } = await import('node:fs/promises');
-    const files: VaultFile[] = [];
-
-    async function walk(dir: string, out: VaultFile[]): Promise<void> {
-      const entries = await readdir(dir, { withFileTypes: true });
-      for (const e of entries) {
-        if (e.name.startsWith('.') || e.name === 'node_modules') continue;
-        if (e.isSymbolicLink()) continue;
-        const full = join(dir, e.name);
-        if (e.isDirectory()) {
-          await walk(full, out);
-        } else if (e.isFile()) {
-          const lang = EXT_LANG[e.name.slice(e.name.lastIndexOf('.')).toLowerCase()];
-          if (!lang) continue;
-          const st = await lstat(full);
-          out.push({
-            path: relative(dir, full).replace(/\\/g, '/'),
-            blobHash: '', mtimeMs: st.mtimeMs, size: st.size,
-            lang, kind: lang === 'markdown' ? 'doc' : lang === 'json' ? 'config' : 'source',
-            indexedAt: 0,
-          });
-        }
-      }
-    }
-
-    await walk(this.rootPath, files);
+    const before = new Set(this.store.listFiles().map((f) => f.path));
+    const files = await listIndexableFiles(this.rootPath);
 
     const changed: string[] = [];
     for (const f of files) {
       if (await this.reindexFile(f.path)) changed.push(f.path);
+    }
+    const present = new Set(files.map((f) => f.path));
+    for (const p of before) {
+      if (!present.has(p) && this.deleteIndexedFile(p)) changed.push(p);
     }
     await this.resolveWikilinks();
     await this.regenerateCanvas();
@@ -433,32 +410,7 @@ export class ObsidianVault implements IVault {
 
   private async reindexChanged(): Promise<{ count: number; paths: string[] }> {
     const before = new Set(this.store.listFiles().map((f) => f.path));
-    const { readdir, lstat } = await import('node:fs/promises');
-    const files: VaultFile[] = [];
-
-    async function walk(dir: string, root: string, out: VaultFile[]): Promise<void> {
-      const entries = await readdir(dir, { withFileTypes: true });
-      for (const e of entries) {
-        if (e.name.startsWith('.') || e.name === 'node_modules') continue;
-        if (e.isSymbolicLink()) continue;
-        const full = join(dir, e.name);
-        if (e.isDirectory()) {
-          await walk(full, root, out);
-        } else if (e.isFile()) {
-          const lang = EXT_LANG[e.name.slice(e.name.lastIndexOf('.')).toLowerCase()];
-          if (!lang) continue;
-          const st = await lstat(full);
-          out.push({
-            path: relative(root, full).replace(/\\/g, '/'),
-            blobHash: '', mtimeMs: st.mtimeMs, size: st.size,
-            lang, kind: lang === 'markdown' ? 'doc' : lang === 'json' ? 'config' : 'source',
-            indexedAt: 0,
-          });
-        }
-      }
-    }
-
-    await walk(this.rootPath, this.rootPath, files);
+    const files = await listIndexableFiles(this.rootPath);
 
     const changed: string[] = [];
     for (const f of files) {
@@ -467,12 +419,18 @@ export class ObsidianVault implements IVault {
     const present = new Set(files.map((f) => f.path));
     for (const p of before) {
       if (!present.has(p)) {
-        const hnswIds = this.store.listHnswIdsForPath(p);
-        for (const hnswId of hnswIds) this.adapter.remove(hnswId);
-        this.store.deleteFile(p);
-        changed.push(p);
+        if (this.deleteIndexedFile(p)) changed.push(p);
       }
     }
     return { count: changed.length, paths: changed };
+  }
+
+  private deleteIndexedFile(relPath: string): boolean {
+    const existing = this.store.getFile(relPath);
+    if (!existing) return false;
+    const hnswIds = this.store.listHnswIdsForPath(relPath);
+    for (const hnswId of hnswIds) this.adapter.remove(hnswId);
+    this.store.deleteFile(relPath);
+    return true;
   }
 }

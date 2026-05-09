@@ -1,14 +1,14 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { createHash } from 'node:crypto';
-import { isAbsolute as isAbsolutePath, resolve as pathResolve } from 'node:path';
-import { stat as fsStat, realpath as fsRealpath } from 'node:fs/promises';
+import { isAbsolute as isAbsolutePath } from 'node:path';
 import type { VaultRegistry } from '../vault/vault-registry.js';
-import type { IVault } from '../vault/vault.interface.js';
+import type { IVault, VaultQuery } from '../vault/vault.interface.js';
 import { getVaultFileReadStats } from '../agents/tools/file-read.js';
 import { getLoggerSafe } from '../utils/logger.js';
 import type { IAIProvider } from '../agents/providers/provider.interface.js';
 import { sendJson, sendJsonError, type RouteContext } from './server-types.js';
 import { summarizeSymbol } from '../vault/symbol-summarizer.js';
+import { resolveExistingVaultRoot } from '../vault/path-policy.js';
 
 /**
  * Factory injected by bootstrap so the HTTP layer can create a new vault
@@ -56,20 +56,7 @@ function validateVaultRegisterBody(body: Record<string, unknown>): {
 async function resolveExistingDirectory(rootPath: string): Promise<
   { ok: true; realPath: string } | { ok: false; error: string }
 > {
-  const resolved = pathResolve(rootPath);
-  let real: string;
-  try {
-    real = await fsRealpath(resolved);
-  } catch {
-    return { ok: false, error: 'path does not exist' };
-  }
-  try {
-    const st = await fsStat(real);
-    if (!st.isDirectory()) return { ok: false, error: 'path is not a directory' };
-  } catch {
-    return { ok: false, error: 'path is not accessible' };
-  }
-  return { ok: true, realPath: real };
+  return resolveExistingVaultRoot(rootPath);
 }
 
 function makeVaultId(kind: 'unity' | 'generic', rootPath: string): string {
@@ -115,6 +102,41 @@ function coerceTopK(raw: unknown): number {
   const n = typeof raw === 'number' ? raw : typeof raw === 'string' ? Number(raw) : NaN;
   if (!Number.isFinite(n) || n <= 0) return DEFAULT_TOP_K;
   return Math.min(Math.floor(n), MAX_TOP_K);
+}
+
+function coercePositiveInteger(raw: unknown): number | undefined {
+  const n = typeof raw === 'number' ? raw : typeof raw === 'string' ? Number(raw) : NaN;
+  if (!Number.isFinite(n) || n <= 0) return undefined;
+  return Math.floor(n);
+}
+
+function coerceStringArray(raw: unknown): string[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const values = raw
+    .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    .map((item) => item.trim());
+  return values.length > 0 ? values : undefined;
+}
+
+function buildVaultSearchQuery(body: Record<string, unknown>): VaultQuery | { error: string } {
+  const rawText = body.text;
+  if (typeof rawText !== 'string') return { error: 'invalid text' };
+  const text = rawText.slice(0, MAX_QUERY_TEXT_CHARS);
+  const topK = coerceTopK(body.topK);
+  const budgetTokens = coercePositiveInteger(body.budgetTokens);
+  const langFilter = coerceStringArray(body.langFilter) as VaultQuery['langFilter'] | undefined;
+  const pathGlob = typeof body.pathGlob === 'string' && body.pathGlob.trim().length > 0
+    ? body.pathGlob.trim()
+    : undefined;
+  const focusFiles = coerceStringArray(body.focusFiles);
+  return {
+    text,
+    topK,
+    ...(budgetTokens !== undefined ? { budgetTokens } : {}),
+    ...(langFilter !== undefined ? { langFilter } : {}),
+    ...(pathGlob !== undefined ? { pathGlob } : {}),
+    ...(focusFiles !== undefined ? { focusFiles } : {}),
+  };
 }
 
 /**
@@ -172,7 +194,7 @@ export function registerVaultRoutes(app: RouteApp, registry: VaultRegistry, fact
     registry.register(vault);
     void vault.init().catch((err) => getLoggerSafe().warn('[vault] async init failed', { err }));
     return {
-      id: vault.id, name: parsed.name, rootPath: dirCheck.realPath,
+      id: vault.id, name: parsed.name,
       kind: vault.kind, status: 'indexing', symbolCount: 0,
     };
   });
@@ -206,12 +228,9 @@ export function registerVaultRoutes(app: RouteApp, registry: VaultRegistry, fact
   app.post('/api/vaults/:id/search', async (req) => {
     const v = registry.get(req.params.id);
     if (!v) return { error: 'not found' };
-    // Fix SecH3: validate text + topK before query.
-    const rawText = req.body?.text;
-    if (typeof rawText !== 'string') return { error: 'invalid text' };
-    const text = rawText.slice(0, MAX_QUERY_TEXT_CHARS);
-    const topK = coerceTopK(req.body?.topK);
-    return await v.query({ text, topK });
+    const query = buildVaultSearchQuery((req.body ?? {}) as Record<string, unknown>);
+    if ('error' in query) return { error: query.error };
+    return await v.query(query);
   });
 
   app.post('/api/vaults/:id/sync', async (req) => {
@@ -338,7 +357,6 @@ export function handleVaultRoutes(
         sendJson(res, {
           id: vault.id,
           name: parsed.name,
-          rootPath: dirCheck.realPath,
           kind: vault.kind,
           status: 'indexing',
           symbolCount: 0,
@@ -497,9 +515,9 @@ export function handleVaultRoutes(
     void readJsonBody(req).then(async (body) => {
       const rawText = body?.text;
       if (typeof rawText !== 'string') { sendJsonError(res, 400, 'invalid text'); return; }
-      const text = rawText.slice(0, MAX_QUERY_TEXT_CHARS);
-      const topK = coerceTopK(body?.topK);
-      const result = await vault.query({ text, topK });
+      const query = buildVaultSearchQuery(body ?? {});
+      if ('error' in query) { sendJsonError(res, 400, query.error); return; }
+      const result = await vault.query(query);
       sendJson(res, result);
     }).catch(() => sendJsonError(res, 500, 'search failed'));
     return true;
@@ -545,8 +563,9 @@ async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknow
 export interface WsBroadcaster { broadcast(msg: string): void; }
 
 export function wireVaultUpdatesToWs(registry: VaultRegistry, wss: WsBroadcaster): () => void {
-  const offs: Array<() => void> = [];
-  for (const v of registry.list()) {
+  const offs = new Map<string, () => void>();
+  const attach = (v: IVault): void => {
+    offs.get(v.id)?.();
     const off = v.onUpdate((payload) => {
       // Fix I2: swallow broadcast errors so a single bad client doesn't break the listener.
       try {
@@ -555,7 +574,15 @@ export function wireVaultUpdatesToWs(registry: VaultRegistry, wss: WsBroadcaster
         getLoggerSafe().warn('[vault] WS broadcast failed', { err });
       }
     });
-    offs.push(off);
-  }
-  return () => { for (const off of offs) off(); };
+    offs.set(v.id, off);
+  };
+  for (const v of registry.list()) attach(v);
+  const offRegister = typeof registry.onRegister === 'function'
+    ? registry.onRegister((vault) => attach(vault))
+    : () => undefined;
+  return () => {
+    offRegister();
+    for (const off of offs.values()) off();
+    offs.clear();
+  };
 }
