@@ -75,7 +75,7 @@ export async function initializeOpsMonitoringStage(
     await wsDashboard.start();
     stoppableServers.push(wsDashboard);
     if (!params.config.websocketDashboard.authToken) {
-      params.logger.info("WebSocket dashboard enabled without static auth token; using generated same-process auth token");
+      params.logger.info("WebSocket dashboard enabled without static auth token; command mode is read-only");
     }
     params.logger.info("WebSocket dashboard started", { port: params.config.websocketDashboard.port });
   }
@@ -158,11 +158,13 @@ export async function initVaultsFromBootstrap(input: InitVaultsInput): Promise<v
 }
 
 import { SelfVault } from "../../vault/self-vault.js";
+import { ObsidianVault } from "../../vault/obsidian-vault.js";
 
 export interface InitSelfVaultInput {
   config: {
     vault?: {
       enabled: boolean;
+      debounceMs?: number;
       self?: { enabled?: boolean };
     };
   };
@@ -183,6 +185,41 @@ export async function initSelfVaultFromBootstrap(input: InitSelfVaultInput): Pro
     rootPath: input.repoRoot,
     embedding: input.embedding,
     vectorStore: input.vectorStore,
+  });
+  await vault.init();
+  await vault.startWatch(input.config.vault?.debounceMs ?? 800);
+  input.vaultRegistry.register(vault);
+}
+
+export interface InitObsidianVaultInput {
+  config: {
+    obsidian?: {
+      enabled: boolean;
+      apiUrl: string;
+      apiKey: string;
+      vaultPath: string;
+      certPath?: string;
+    };
+  };
+  vaultRegistry: VaultRegistry;
+  embedding: EmbeddingProvider;
+  vectorStore: VectorStore;
+}
+
+export async function initObsidianVaultFromBootstrap(input: InitObsidianVaultInput): Promise<void> {
+  const obsidian = input.config.obsidian;
+  if (!obsidian?.enabled || !obsidian.vaultPath) return;
+  const hash = createHash("sha1").update(obsidian.vaultPath).digest("hex").slice(0, 8);
+  const vault = new ObsidianVault({
+    id: `obsidian:${hash}`,
+    rootPath: obsidian.vaultPath,
+    embedding: input.embedding,
+    vectorStore: input.vectorStore,
+    obsidian: {
+      apiUrl: obsidian.apiUrl,
+      apiKey: obsidian.apiKey,
+      certPath: obsidian.certPath,
+    },
   });
   await vault.init();
   input.vaultRegistry.register(vault);

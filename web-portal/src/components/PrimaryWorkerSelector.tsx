@@ -226,7 +226,6 @@ export default function PrimaryWorkerSelector() {
         setModelsLoaded(true)
       }
     } catch (err) {
-      // eslint-disable-next-line no-console
       console.error('[PrimaryWorkerSelector] fetchModels failed:', err)
     } finally {
       setModelsLoading(false)

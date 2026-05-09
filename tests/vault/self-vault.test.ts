@@ -26,6 +26,7 @@ describe('SelfVault', () => {
     mkdirSync(join(dir, 'dist'));
     writeFileSync(join(dir, 'dist/bundle.js'), '// built');
     writeFileSync(join(dir, 'package.json'), '{"name":"strada-brain"}');
+    writeFileSync(join(dir, 'AGENTS.md'), '# Agents\n\nInitial guide');
   });
   afterEach(async () => { if (vault) await vault.dispose(); rmSync(dir, { recursive: true, force: true }); });
 
@@ -47,5 +48,34 @@ describe('SelfVault', () => {
       embedding: new StubEmb() as never, vectorStore: new StubStore() as never,
     });
     expect(vault.kind).toBe('self');
+  });
+
+  it('preserves include-root prefixes for watched files', async () => {
+    vault = new SelfVault({
+      id: 'self:test', rootPath: dir,
+      embedding: new StubEmb() as never, vectorStore: new StubStore() as never,
+    });
+    await vault.init();
+    await vault.startWatch(100);
+    writeFileSync(join(dir, 'src/watched.ts'), 'export const watchedNeedle = 3;');
+
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+
+    expect(vault.listFiles().map((f) => f.path)).toContain('src/watched.ts');
+  });
+
+  it('reindexes watched file roots like AGENTS.md', async () => {
+    vault = new SelfVault({
+      id: 'self:test', rootPath: dir,
+      embedding: new StubEmb() as never, vectorStore: new StubStore() as never,
+    });
+    await vault.init();
+    await vault.startWatch(100);
+    writeFileSync(join(dir, 'AGENTS.md'), '# Agents\n\nwatchedAgentNeedle');
+
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+
+    const result = await vault.query({ text: 'watchedAgentNeedle', topK: 5 });
+    expect(result.hits.some((hit) => hit.chunk.path === 'AGENTS.md')).toBe(true);
   });
 });

@@ -1,4 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
+import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { VaultRegistry } from '../../src/vault/vault-registry.js';
 import type { IVault, VaultQuery, VaultQueryResult, VaultStats, VaultFile } from '../../src/vault/vault.interface.js';
 
@@ -47,5 +50,30 @@ describe('VaultRegistry', () => {
     reg.register(new Spy('b', { hits: [], budgetUsed: 0, truncated: false }));
     await reg.disposeAll();
     expect(count).toBe(2);
+  });
+
+  it('validates runtime-created vault roots against explicit allowed roots', async () => {
+    const allowed = mkdtempSync(join(tmpdir(), 'vault-allowed-'));
+    const outside = mkdtempSync(join(tmpdir(), 'vault-outside-'));
+    try {
+      const factoryCalls: string[] = [];
+      reg.setFactory({
+        allowedRootPaths: [allowed],
+        createVault(rootPath) {
+          factoryCalls.push(rootPath);
+          return new FakeVault('created', { hits: [], budgetUsed: 0, truncated: false });
+        },
+      });
+
+      await expect(reg.createAndRegister('relative/path')).rejects.toThrow(/absolute/i);
+      await expect(reg.createAndRegister(outside)).rejects.toThrow(/allowed project roots/i);
+      await reg.createAndRegister(allowed);
+
+      expect(factoryCalls).toEqual([realpathSync(allowed)]);
+      expect(reg.get('created')).toBeDefined();
+    } finally {
+      rmSync(allowed, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
   });
 });

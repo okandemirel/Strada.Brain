@@ -67,7 +67,22 @@ export class ObsidianSearchTool {
           }
         }
       } catch (err) {
-        results.push(`--- ${vault.id} (error: ${(err as Error).message}) ---`);
+        try {
+          const fallback = await vault.query({ text: query, topK: 10 });
+          if (fallback.hits.length) {
+            results.push(`--- ${vault.id} (local fallback after Obsidian API error: ${(err as Error).message}) ---`);
+            for (const hit of fallback.hits.slice(0, 10)) {
+              results.push(`  ${hit.chunk.path}:${hit.chunk.startLine}-${hit.chunk.endLine} (score=${hit.scores.rrf.toFixed(3)})`);
+              results.push(`    - ${hit.chunk.content.slice(0, 160).replace(/\s+/g, ' ')}`);
+            }
+          } else {
+            results.push(`--- ${vault.id} (error: ${(err as Error).message}; local fallback had no hits) ---`);
+          }
+        } catch (fallbackErr) {
+          results.push(
+            `--- ${vault.id} (error: ${(err as Error).message}; local fallback failed: ${(fallbackErr as Error).message}) ---`,
+          );
+        }
       }
     }
 

@@ -286,6 +286,102 @@ describe("CommandHandler /routing", () => {
   });
 });
 
+describe("CommandHandler /vault", () => {
+  const sendMarkdown = vi.fn().mockResolvedValue(undefined);
+  const sendText = vi.fn().mockResolvedValue(undefined);
+
+  beforeEach(() => {
+    sendMarkdown.mockReset();
+    sendText.mockReset();
+    sendMarkdown.mockResolvedValue(undefined);
+    sendText.mockResolvedValue(undefined);
+  });
+
+  it("reports registered vault status", async () => {
+    const vault = {
+      id: "unity:abc",
+      stats: vi.fn().mockResolvedValue({
+        fileCount: 4,
+        chunkCount: 9,
+        lastIndexedAt: 123,
+        dbBytes: 2048,
+      }),
+    };
+    const handler = new CommandHandler(
+      {} as never,
+      { sendMarkdown, sendText } as never,
+    );
+    handler.setVaultRegistry({
+      list: () => [vault],
+      get: () => vault,
+    } as never);
+
+    await handler.handle("chat-1", "vault" as never, ["status"], "user-1");
+
+    expect(sendMarkdown).toHaveBeenCalledWith(
+      "chat-1",
+      expect.stringContaining("unity:abc: 4 files, 9 chunks"),
+    );
+  });
+
+  it("initializes and registers a vault from a path", async () => {
+    const vault = {
+      id: "unity:new",
+      init: vi.fn().mockResolvedValue(undefined),
+      startWatch: vi.fn().mockResolvedValue(undefined),
+      stats: vi.fn().mockResolvedValue({
+        fileCount: 1,
+        chunkCount: 2,
+        lastIndexedAt: 123,
+        dbBytes: 512,
+      }),
+    };
+    const createAndRegister = vi.fn().mockResolvedValue(vault);
+    const handler = new CommandHandler(
+      {} as never,
+      { sendMarkdown, sendText } as never,
+    );
+    handler.setVaultRegistry({
+      createAndRegister,
+      list: () => [vault],
+      get: (id: string) => id === "unity:new" ? vault : undefined,
+    } as never);
+
+    await handler.handle("chat-1", "vault" as never, ["init", "/tmp/project"], "user-1");
+
+    expect(createAndRegister).toHaveBeenCalledWith("/tmp/project");
+    expect(vault.init).toHaveBeenCalled();
+    expect(vault.startWatch).toHaveBeenCalled();
+    expect(sendText).toHaveBeenCalledWith(
+      "chat-1",
+      expect.stringContaining("vault unity:new initialized"),
+    );
+  });
+
+  it("syncs all registered vaults when no vault id is supplied", async () => {
+    const vault = {
+      id: "unity:abc",
+      sync: vi.fn().mockResolvedValue({ changed: 3, durationMs: 17 }),
+    };
+    const handler = new CommandHandler(
+      {} as never,
+      { sendMarkdown, sendText } as never,
+    );
+    handler.setVaultRegistry({
+      list: () => [vault],
+      get: () => vault,
+    } as never);
+
+    await handler.handle("chat-1", "vault" as never, ["sync"], "user-1");
+
+    expect(vault.sync).toHaveBeenCalled();
+    expect(sendMarkdown).toHaveBeenCalledWith(
+      "chat-1",
+      expect.stringContaining("unity:abc: 3 file(s) reindexed in 17ms"),
+    );
+  });
+});
+
 describe("CommandHandler /autonomous", () => {
   it("uses the configured default hours when none are provided", async () => {
     const db = new Database(":memory:");

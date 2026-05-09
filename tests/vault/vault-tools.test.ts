@@ -19,6 +19,25 @@ describe('vault tools', () => {
     const r = await t.execute({ vaultId: 'unity:abc' });
     expect(r.content).toMatch(/initialized/i);
   });
+  it('VaultInitTool registers and initializes a vault from rootPath', async () => {
+    const vault = {
+      id: 'unity:new',
+      init: vi.fn().mockResolvedValue(undefined),
+      startWatch: vi.fn().mockResolvedValue(undefined),
+    };
+    const createAndRegister = vi.fn().mockResolvedValue(vault);
+    const t = new VaultInitTool({
+      get: vi.fn(() => undefined),
+      createAndRegister,
+    } as any);
+
+    const r = await t.execute({ rootPath: '/tmp/project' });
+
+    expect(createAndRegister).toHaveBeenCalledWith('/tmp/project');
+    expect(vault.init).toHaveBeenCalled();
+    expect(vault.startWatch).toHaveBeenCalled();
+    expect(r.content).toMatch(/unity:new initialized/i);
+  });
   it('VaultSyncTool shows changed-count', async () => {
     const t = new VaultSyncTool(reg);
     const r = await t.execute({ vaultId: 'unity:abc' });

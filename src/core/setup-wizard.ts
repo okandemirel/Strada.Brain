@@ -628,6 +628,7 @@ export class SetupWizard {
     try {
       // API endpoints
       if (url.startsWith("/api/setup/browse") && method === "GET") {
+        if (!this.guardSetupReadRoute(req, res)) return;
         await this.handleBrowse(url, res);
         return;
       }
@@ -645,6 +646,7 @@ export class SetupWizard {
       }
 
       if (url.startsWith("/api/setup/validate-path") && method === "GET") {
+        if (!this.guardSetupReadRoute(req, res)) return;
         await this.handleValidatePath(url, res);
         return;
       }
@@ -780,6 +782,15 @@ export class SetupWizard {
       });
       return false;
     }
+    const token = req.headers["x-csrf-token"];
+    if (token !== this.csrfToken) {
+      this.json(res, 403, { success: false, error: "Invalid CSRF token" });
+      return false;
+    }
+    return true;
+  }
+
+  private guardSetupReadRoute(req: IncomingMessage, res: ServerResponse): boolean {
     const token = req.headers["x-csrf-token"];
     if (token !== this.csrfToken) {
       this.json(res, 403, { success: false, error: "Invalid CSRF token" });

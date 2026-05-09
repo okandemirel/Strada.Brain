@@ -338,9 +338,10 @@ export class WebChannel
    * - known task owned by a DIFFERENT chat: reject.
    * - known task owned by THIS chat: allow.
    */
-  private async checkVerifyTaskOwnership(
+  private async checkTaskOwnership(
     taskId: string,
     chatId: string,
+    context: string,
   ): Promise<{ allowed: boolean; owner: string | null }> {
     if (!this.taskOwnerResolver) return { allowed: true, owner: null };
     let owner: string | null | undefined;
@@ -351,21 +352,24 @@ export class WebChannel
       // store is down, so any failure falls through to allow-and-log.
       owner = await this.taskOwnerResolver(taskId);
     } catch (err) {
-      getLoggerSafe().warn("verify ownership resolver threw — allowing and logging", {
+      getLoggerSafe().warn("task ownership resolver threw — allowing and logging", {
+        context,
         taskId,
         error: err instanceof Error ? err.message : String(err),
       });
       return { allowed: true, owner: null };
     }
     if (owner == null) {
-      getLoggerSafe().info("verify ownership unknown — allowing (transient/portal-only task)", {
+      getLoggerSafe().info("task ownership unknown — allowing (transient/portal-only task)", {
+        context,
         taskId,
         chatId,
       });
       return { allowed: true, owner: null };
     }
     if (owner !== chatId) {
-      getLoggerSafe().warn("verify ownership mismatch — cross-chat spawn rejected", {
+      getLoggerSafe().warn("task ownership mismatch — cross-chat action rejected", {
+        context,
         taskId,
         chatId,
         owner,
@@ -373,6 +377,24 @@ export class WebChannel
       return { allowed: false, owner };
     }
     return { allowed: true, owner };
+  }
+
+  private async checkVerifyTaskOwnership(
+    taskId: string,
+    chatId: string,
+  ): Promise<{ allowed: boolean; owner: string | null }> {
+    return this.checkTaskOwnership(taskId, chatId, "verify");
+  }
+
+  private async checkMonitorTaskOwnership(taskId: string, chatId: string, context: string): Promise<boolean> {
+    const ownership = await this.checkTaskOwnership(taskId, chatId, context);
+    if (ownership.allowed) return true;
+    this.sendToClient(chatId, {
+      type: "text",
+      text: "Task does not belong to this chat.",
+      messageId: randomUUID(),
+    });
+    return false;
   }
 
   /**
@@ -1172,6 +1194,7 @@ export class WebChannel
           getLoggerSafe().warn("monitor:move_task rejected — invalid taskId", { raw: moveTaskId });
           break;
         }
+        if (!await this.checkMonitorTaskOwnership(safeMove, chatId, "monitor:move_task")) break;
         this.workspaceBusEmitter("monitor:move_task", {
           type: "monitor:move_task",
           taskId: safeMove,
@@ -1198,6 +1221,7 @@ export class WebChannel
           getLoggerSafe().warn("monitor:retry_task rejected — invalid taskId", { raw: retryTaskId });
           break;
         }
+        if (!await this.checkMonitorTaskOwnership(safeRetry, chatId, "monitor:retry_task")) break;
         const retryRootId = String(data.rootId ?? "");
         const safeRetryRoot = /^[a-zA-Z0-9_-]+$/.test(retryRootId) ? retryRootId : "";
         const retryNodeId = String(data.nodeId ?? "");
@@ -1224,6 +1248,7 @@ export class WebChannel
           getLoggerSafe().warn("monitor:resume_task rejected — invalid taskId", { raw: resumeTaskId });
           break;
         }
+        if (!await this.checkMonitorTaskOwnership(safeResume, chatId, "monitor:resume_task")) break;
         const resumeRootId = String(data.rootId ?? "");
         const safeResumeRoot = /^[a-zA-Z0-9_-]+$/.test(resumeRootId) ? resumeRootId : "";
         const resumeNodeId = String(data.nodeId ?? "");
@@ -1250,6 +1275,7 @@ export class WebChannel
           getLoggerSafe().warn("monitor:cancel_task rejected — invalid taskId", { raw: cancelBusTaskId });
           break;
         }
+        if (!await this.checkMonitorTaskOwnership(safeCancelBus, chatId, "monitor:cancel_task")) break;
         const cancelRootId = String(data.rootId ?? "");
         const safeCancelRoot = /^[a-zA-Z0-9_-]+$/.test(cancelRootId) ? cancelRootId : "";
         const cancelNodeId = String(data.nodeId ?? "");
@@ -1263,14 +1289,28 @@ export class WebChannel
         break;
       }
       case "monitor:pause":
-      case "monitor:resume":
+      case "monitor:resume": {
+        const payloadSize = JSON.stringify(data).length;
+        if (payloadSize > MAX_CONTROL_MESSAGE_BYTES) break;
+        if (this.workspaceBusEmitter) {
+          this.workspaceBusEmitter(data.type as string, data);
+        }
+        break;
+      }
       case "monitor:skip_task":
       case "monitor:approve_gate":
       case "monitor:reject_gate": {
         const payloadSize = JSON.stringify(data).length;
         if (payloadSize > MAX_CONTROL_MESSAGE_BYTES) break;
+        const rawTaskId = typeof data.taskId === "string" ? data.taskId.trim() : "";
+        const safeTaskId = /^[a-zA-Z0-9_-]+$/.test(rawTaskId) ? rawTaskId : "";
+        if (!safeTaskId) {
+          getLoggerSafe().warn(`${String(data.type)} rejected — invalid taskId`, { raw: rawTaskId });
+          break;
+        }
+        if (!await this.checkMonitorTaskOwnership(safeTaskId, chatId, String(data.type))) break;
         if (this.workspaceBusEmitter) {
-          this.workspaceBusEmitter(data.type as string, data);
+          this.workspaceBusEmitter(data.type as string, { ...data, taskId: safeTaskId });
         }
         break;
       }

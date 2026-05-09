@@ -47,6 +47,33 @@ describe('vault routes', () => {
     expect(recorded[0].topK).toBeLessThanOrEqual(100);
   });
 
+  it('POST /search forwards documented filters', async () => {
+    const app = makeFakeApp();
+    const recorded: any[] = [];
+    const vault = { ...fakeVault, query: async (q: any) => { recorded.push(q); return { hits: [], budgetUsed: 0, truncated: false }; } };
+    const localReg = { get: () => vault } as any;
+    registerVaultRoutes(app as any, localReg);
+    await app.routes['POST /api/vaults/:id/search']({
+      params: { id: 'unity:abc' },
+      body: {
+        text: 'needle',
+        topK: 5,
+        budgetTokens: 1000,
+        langFilter: ['typescript'],
+        pathGlob: 'src/**/*.ts',
+        focusFiles: ['src/a.ts'],
+      },
+    }, {});
+    expect(recorded[0]).toEqual({
+      text: 'needle',
+      topK: 5,
+      budgetTokens: 1000,
+      langFilter: ['typescript'],
+      pathGlob: 'src/**/*.ts',
+      focusFiles: ['src/a.ts'],
+    });
+  });
+
   it('file: URL-encoded traversal blocked', async () => {
     const app = makeFakeApp();
     registerVaultRoutes(app as any, reg);

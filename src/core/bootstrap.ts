@@ -6,6 +6,7 @@
  */
 
 import { existsSync, readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Config } from "../config/config.js";
@@ -617,6 +618,28 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
         },
         clear(): void { vaultStore.clear(); nextId = 1; },
       };
+      const { UnityProjectVault } = await import("../vault/unity-project-vault.js");
+      const runtimeVaultFactory = {
+        watchDebounceMs: config.vault?.debounceMs ?? 800,
+        async create(spec: { id: string; rootPath: string; kind: "unity" | "generic" }) {
+          return new UnityProjectVault({
+            id: spec.id,
+            rootPath: spec.rootPath,
+            embedding: vaultEmbedding,
+            vectorStore: vaultVectorStore,
+          });
+        },
+      };
+      vaultRegistry.setFactory({
+        allowedRootPaths: [
+          process.cwd(),
+          ...(config.unityProjectPath ? [config.unityProjectPath] : []),
+        ],
+        createVault(rootPath: string) {
+          const hash = createHash("sha1").update(rootPath).digest("hex").slice(0, 8);
+          return runtimeVaultFactory.create({ id: `generic:${hash}`, rootPath, kind: "generic" });
+        },
+      });
 
       // Unity-specific discovery (only runs when vault.enabled is on — preserves
       // old behavior for users who explicitly opted in to Unity indexing).
@@ -632,19 +655,33 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
         } catch (err) {
           logger.warn("[vault] Unity auto-discovery failed", { err });
         }
-        // Phase 2: SelfVault for Strada.Brain's own source.
-        try {
-          const { initSelfVaultFromBootstrap } = await import("./bootstrap-stages/stage-knowledge.js");
-          await initSelfVaultFromBootstrap({
-            config: { vault: config.vault },
-            vaultRegistry,
-            embedding: vaultEmbedding,
-            vectorStore: vaultVectorStore,
-            repoRoot: process.cwd(),
-          });
-        } catch (err) {
-          logger.warn("[vault] SelfVault initialization failed", { err });
-        }
+      }
+
+      // Phase 2: SelfVault for Strada.Brain's own source. This is controlled
+      // by vault.self.enabled, not by vault.enabled (which gates project auto-discovery).
+      try {
+        const { initSelfVaultFromBootstrap } = await import("./bootstrap-stages/stage-knowledge.js");
+        await initSelfVaultFromBootstrap({
+          config: { vault: config.vault },
+          vaultRegistry,
+          embedding: vaultEmbedding,
+          vectorStore: vaultVectorStore,
+          repoRoot: process.cwd(),
+        });
+      } catch (err) {
+        logger.warn("[vault] SelfVault initialization failed", { err });
+      }
+
+      try {
+        const { initObsidianVaultFromBootstrap } = await import("./bootstrap-stages/stage-knowledge.js");
+        await initObsidianVaultFromBootstrap({
+          config: { obsidian: config.obsidian },
+          vaultRegistry,
+          embedding: vaultEmbedding,
+          vectorStore: vaultVectorStore,
+        });
+      } catch (err) {
+        logger.warn("[vault] ObsidianVault initialization failed", { err });
       }
 
       // Generic auto-register: when a project path is configured but no vault
@@ -653,16 +690,13 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       // shows indexed content instead of "No vaults registered".
       try {
         if (config.unityProjectPath && vaultRegistry.list().length === 0) {
-          const { UnityProjectVault } = await import("../vault/unity-project-vault.js");
-          const { createHash } = await import("node:crypto");
           const { basename } = await import("node:path");
           const rootPath = config.unityProjectPath;
           const hash = createHash("sha1").update(rootPath).digest("hex").slice(0, 8);
-          const vault = new UnityProjectVault({
+          const vault = await runtimeVaultFactory.create({
             id: `generic:${hash}`,
             rootPath,
-            embedding: vaultEmbedding,
-            vectorStore: vaultVectorStore,
+            kind: "generic",
           });
           vaultRegistry.register(vault);
           logger.info("[vault] auto-registered generic vault from setup config", {
@@ -700,18 +734,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       // same embedding + vector-store deps wired above.
       if (dashboard) {
         logger.info("[vault] installing VaultFactory on dashboard");
-        const { UnityProjectVault } = await import("../vault/unity-project-vault.js");
-        dashboard.registerVaultFactory({
-          watchDebounceMs: config.vault?.debounceMs ?? 800,
-          async create(spec) {
-            return new UnityProjectVault({
-              id: spec.id,
-              rootPath: spec.rootPath,
-              embedding: vaultEmbedding,
-              vectorStore: vaultVectorStore,
-            });
-          },
-        });
+        dashboard.registerVaultFactory(runtimeVaultFactory);
         logger.info("[vault] VaultFactory installed — POST /api/vaults ready");
       } else {
         logger.warn("[vault] dashboard unavailable at factory-install time — POST /api/vaults will return 503");
@@ -941,6 +964,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     providerRouter,
     startupNotices,
   });
+  commandHandler.setVaultRegistry(vaultRegistry);
 
   let outerCheckpointStore: { close(): void } | undefined;
   // Task checkpoint store — persists in-flight context for budget / provider
@@ -1176,6 +1200,8 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
         stradaDeps,
         supervisorBrain,
         goalStorage,
+        vaultRegistry,
+        vaultWriteHookBudgetMs: config.vault?.writeHookBudgetMs,
       });
       agentManager = multiAgentStage.agentManager;
       agentManager?.setUnifiedBudgetManager?.(unifiedBudgetManager);
@@ -1693,11 +1719,11 @@ async function initializeLearning(
       {
         dbPath: learningDbPath,
         enabled: LEARNING_DEFAULTS.enabled,
-        batchSize: LEARNING_DEFAULTS.batchSize,
-        detectionIntervalMs: LEARNING_DEFAULTS.detectionIntervalMs as DurationMs,
+        batchSize: config.learningPipelineV2.detectionWindowSize,
+        detectionIntervalMs: config.learningPipelineV2.periodicExtractionInterval as DurationMs,
         evolutionIntervalMs: LEARNING_DEFAULTS.evolutionIntervalMs as DurationMs,
         minConfidenceForCreation: LEARNING_DEFAULTS.minConfidenceForCreation,
-        maxInstincts: LEARNING_DEFAULTS.maxInstincts,
+        maxInstincts: config.learningPipelineV2.maxInstincts,
       },
       embeddingProvider,
       config.bayesian,
@@ -1710,7 +1736,9 @@ async function initializeLearning(
     const interventionEngine = new InterventionEngine(learningStorage);
 
     const patternMatcher = new PatternMatcher(learningStorage, { eventBus });
-    const confidenceScorer = new ConfidenceScorer();
+    const confidenceScorer = new ConfidenceScorer({
+      confidenceWeights: config.learningPipelineV2.confidenceWeights,
+    });
     const errorLearningHooks = new ErrorLearningHooks(
       pipeline,
       patternMatcher,

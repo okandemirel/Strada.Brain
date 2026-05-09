@@ -156,6 +156,32 @@ describeIfHnsw("HNSWVectorStore", () => {
       expect(store.count()).toBe(1);
       expect(store.has("test-3")).toBe(true);
     });
+
+    it("keeps live non-quantized vectors after background compaction", async () => {
+      const entries: VectorEntry[] = [];
+      for (let i = 0; i < 10; i++) {
+        const vec = new Array(dimensions).fill(0);
+        vec[i] = 1;
+        entries.push({
+          id: `compact-${i}`,
+          vector: vec,
+          chunk: createMockChunk(`compact-${i}`, `Content ${i}`),
+          addedAt: Date.now(),
+          accessCount: 0,
+        });
+      }
+      await store.upsert(entries);
+
+      await store.remove(["compact-0", "compact-1", "compact-2", "compact-3"]);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      expect(store.count()).toBe(6);
+      expect(store.has("compact-9")).toBe(true);
+      const query = new Array(dimensions).fill(0);
+      query[9] = 1;
+      const results = await store.search(query, 3);
+      expect(results.some((hit) => hit.id === "compact-9")).toBe(true);
+    });
   });
 
   describe("search operations", () => {
@@ -481,4 +507,3 @@ describeIfHnsw("HNSWVectorStore", () => {
     });
   });
 });
-

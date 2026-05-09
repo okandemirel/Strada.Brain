@@ -1,6 +1,12 @@
 import { realpathSync } from 'node:fs';
 import { isAbsolute, resolve, sep } from 'node:path';
 import type { IVault, VaultId, VaultQuery, VaultQueryResult, VaultHit } from './vault.interface.js';
+import { isVaultRootAllowed, resolveExistingVaultRoot } from './path-policy.js';
+
+export interface VaultFactory {
+  createVault(rootPath: string): IVault | Promise<IVault>;
+  allowedRootPaths?: readonly string[];
+}
 
 /**
  * Safely resolve a realpath. Falls back to the input when the path does
@@ -17,6 +23,8 @@ function safeRealpath(p: string): string {
 
 export class VaultRegistry {
   private vaults = new Map<VaultId, IVault>();
+  private vaultFactory?: VaultFactory;
+  private readonly registerListeners = new Set<(vault: IVault) => void>();
   /**
    * Cache of realpath(rootPath) keyed by the original rootPath string.
    * Populated at register() time to avoid per-call realpathSync cost.
@@ -26,6 +34,33 @@ export class VaultRegistry {
   register(v: IVault): void {
     this.vaults.set(v.id, v);
     this.rootRealpathCache.set(v.rootPath, safeRealpath(v.rootPath));
+    for (const listener of this.registerListeners) listener(v);
+  }
+  onRegister(listener: (vault: IVault) => void): () => void {
+    this.registerListeners.add(listener);
+    return () => this.registerListeners.delete(listener);
+  }
+  setFactory(factory: VaultFactory): void {
+    this.vaultFactory = factory;
+  }
+  hasFactory(): boolean {
+    return this.vaultFactory !== undefined;
+  }
+  async createAndRegister(rootPath: string): Promise<IVault> {
+    if (!this.vaultFactory) {
+      throw new Error('vault factory unavailable');
+    }
+    const root = await resolveExistingVaultRoot(rootPath);
+    if (!root.ok) {
+      throw new Error(root.error);
+    }
+    const allowedRootPaths = this.vaultFactory.allowedRootPaths ?? [];
+    if (allowedRootPaths.length === 0 || !await isVaultRootAllowed(root.realPath, allowedRootPaths)) {
+      throw new Error('vault root is outside the allowed project roots');
+    }
+    const vault = await this.vaultFactory.createVault(root.realPath);
+    this.register(vault);
+    return vault;
   }
   unregister(id: VaultId): void {
     const v = this.vaults.get(id);
@@ -89,5 +124,6 @@ export class VaultRegistry {
     for (const v of this.vaults.values()) await v.dispose();
     this.vaults.clear();
     this.rootRealpathCache.clear();
+    this.registerListeners.clear();
   }
 }

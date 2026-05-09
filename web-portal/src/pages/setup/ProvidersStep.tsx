@@ -133,7 +133,6 @@ export default function ProvidersStep({
         setLiveModels(map)
       })
       .catch((err) => {
-        // eslint-disable-next-line no-console
         console.error('[ProvidersStep] Failed to fetch live models:', err)
       })
   }, [])

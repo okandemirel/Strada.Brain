@@ -427,6 +427,71 @@ describe("WebChannel dashboard proxy", () => {
   });
 });
 
+describe("WebChannel monitor command ownership", () => {
+  async function sendMonitorMessage(channel: WebChannel, chatId: string, payload: Record<string, unknown>): Promise<void> {
+    await (channel as unknown as {
+      handleWsMessage: (chatId: string, data: Record<string, unknown>) => Promise<void>;
+    }).handleWsMessage(chatId, payload);
+  }
+
+  it("rejects cross-chat monitor retry actions", async () => {
+    const channel = new WebChannel();
+    const emit = vi.fn();
+    channel.setWorkspaceBusEmitter(emit);
+    channel.setTaskOwnerResolver((taskId) => taskId === "task-1" ? "other-chat" : null);
+
+    await sendMonitorMessage(channel, "chat-1", {
+      type: "monitor:retry_task",
+      taskId: "task-1",
+      rootId: "root-1",
+    });
+
+    expect(emit).not.toHaveBeenCalled();
+  });
+
+  it("allows owned monitor retry actions", async () => {
+    const channel = new WebChannel();
+    const emit = vi.fn();
+    channel.setWorkspaceBusEmitter(emit);
+    channel.setTaskOwnerResolver((taskId) => taskId === "task-1" ? "chat-1" : null);
+
+    await sendMonitorMessage(channel, "chat-1", {
+      type: "monitor:retry_task",
+      taskId: "task-1",
+      rootId: "root-1",
+    });
+
+    expect(emit).toHaveBeenCalledWith("monitor:retry_task", expect.objectContaining({
+      taskId: "task-1",
+      rootId: "root-1",
+    }));
+  });
+
+  it.each([
+    "monitor:move_task",
+    "monitor:resume_task",
+    "monitor:cancel_task",
+    "monitor:skip_task",
+    "monitor:approve_gate",
+    "monitor:reject_gate",
+  ])("rejects cross-chat %s actions", async (type) => {
+    const channel = new WebChannel();
+    const emit = vi.fn();
+    channel.setWorkspaceBusEmitter(emit);
+    channel.setTaskOwnerResolver(() => "other-chat");
+
+    await sendMonitorMessage(channel, "chat-1", {
+      type,
+      taskId: "task-1",
+      rootId: "root-1",
+      nodeId: "node-1",
+      newStatus: "blocked",
+    });
+
+    expect(emit).not.toHaveBeenCalled();
+  });
+});
+
 describe("WebChannel inbound message limits", () => {
   it("uses the verified web profile identity as the message user id", async () => {
     const channel = new WebChannel();

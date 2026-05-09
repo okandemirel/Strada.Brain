@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react'
 import type { BrowseEntry, McpRecommendation, StradaDepsStatus } from '../types/setup'
 
-export function useDirectoryBrowser() {
+export function useDirectoryBrowser(csrfToken = '') {
   const [isOpen, setIsOpen] = useState(false)
   const [currentPath, setCurrentPath] = useState('')
   const [entries, setEntries] = useState<BrowseEntry[]>([])
@@ -16,7 +16,9 @@ export function useDirectoryBrowser() {
     setLoading(true)
     setError(null)
     try {
-      const res = await fetch(`/api/setup/browse?path=${encodeURIComponent(path)}`)
+      const res = await fetch(`/api/setup/browse?path=${encodeURIComponent(path)}`, {
+        headers: csrfToken ? { 'X-CSRF-Token': csrfToken } : {},
+      })
       const data = await res.json()
       if (data.error) {
         setError(data.error)
@@ -43,7 +45,7 @@ export function useDirectoryBrowser() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [csrfToken])
 
   const open = useCallback(() => {
     setIsOpen(true)

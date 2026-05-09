@@ -423,7 +423,6 @@ export class LearningPipeline {
     for (const trajectory of trajectories) {
       const instinct = await this.extractInstinctFromTrajectory(trajectory);
       if (instinct) {
-        this.storage.createInstinct(instinct, this.projectPath);
         this.checkScopePromotion(instinct);
         if (this.embeddingQueue) {
           this.embeddingQueue.enqueue(instinct.id, `${instinct.triggerPattern} ${instinct.action}`);

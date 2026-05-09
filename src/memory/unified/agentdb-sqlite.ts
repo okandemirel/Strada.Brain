@@ -314,6 +314,7 @@ export function persistEntry(ctx: AgentDBSqliteContext, entry: UnifiedMemoryEntr
       id: entry.id as string,
       error: String(error),
     });
+    throw error;
   }
 }
 

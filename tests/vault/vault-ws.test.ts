@@ -30,4 +30,36 @@ describe('vault:update WS broadcast', () => {
     vault.emit('update', { vaultId: 'v1', changedPaths: ['x'] });
     expect(send).not.toHaveBeenCalled();
   });
+
+  it('subscribes to vaults registered after wiring', () => {
+    const send = vi.fn();
+    const wss = { broadcast: (m: string) => send(m) };
+    const registry = new (class {
+      private vaults: any[] = [];
+      private listeners: Array<(vault: any) => void> = [];
+      list() { return this.vaults; }
+      onRegister(listener: (vault: any) => void) {
+        this.listeners.push(listener);
+        return () => { this.listeners = this.listeners.filter((l) => l !== listener); };
+      }
+      register(vault: any) {
+        this.vaults.push(vault);
+        for (const listener of this.listeners) listener(vault);
+      }
+    })();
+    wireVaultUpdatesToWs(registry as any, wss);
+
+    const vault: any = new EventEmitter();
+    vault.id = 'late-vault';
+    vault.onUpdate = (cb: any) => { vault.on('update', cb); return () => vault.off('update', cb); };
+    registry.register(vault);
+
+    vault.emit('update', { vaultId: 'late-vault', changedPaths: ['late.md'] });
+
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(send.mock.calls[0][0])).toMatchObject({
+      type: 'vault:update',
+      payload: { vaultId: 'late-vault', changedPaths: ['late.md'] },
+    });
+  });
 });

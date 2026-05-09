@@ -63,6 +63,8 @@ export interface DelegationManagerOptions {
   readonly verifiedLocalProviders?: readonly string[];
   readonly workspaceLeaseManager?: WorkspaceLeaseManager;
   readonly providerRouter?: ConstructorParameters<typeof Orchestrator>[0]["providerRouter"];
+  readonly vaultRegistry?: import("../../../vault/vault-registry.js").VaultRegistry;
+  readonly vaultWriteHookBudgetMs?: number;
 }
 
 // =============================================================================
@@ -391,6 +393,8 @@ export class DelegationManager {
         stradaDeps: this.opts.stradaDeps,
         stradaConfig: this.opts.stradaConfig,
         providerRouter: this.opts.providerRouter,
+        vaultRegistry: this.opts.vaultRegistry,
+        vaultWriteHookBudgetMs: this.opts.vaultWriteHookBudgetMs,
         maxIterations: typeConfig.maxIterations,
       });
 

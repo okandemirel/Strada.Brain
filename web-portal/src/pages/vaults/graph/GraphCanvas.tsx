@@ -220,7 +220,7 @@ export default function GraphCanvas({ graph }: Props) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const fgRef = useRef<ForceGraphMethods<any, any> | undefined>(undefined);
   const containerRef = useRef<HTMLDivElement>(null);
-  const hasAutoFitRef = useRef(false);
+  const autoFitGraphRef = useRef<CanvasJson | null>(null);
 
   const [searchQuery, setSearchQuery] = useState('');
   const [showSettings, setShowSettings] = useState(false);
@@ -239,6 +239,10 @@ export default function GraphCanvas({ graph }: Props) {
     () => buildGraphData(graph, showOrphans, groupBy, nodeSizeMode, localGraphMode, localGraphCenter),
     [graph, showOrphans, groupBy, nodeSizeMode, localGraphMode, localGraphCenter],
   );
+  const graphData = useMemo(
+    (): { nodes: GraphNode[]; links: GraphLink[] } => ({ nodes, links }),
+    [nodes, links],
+  );
 
   const matchingIds = useMemo(() => {
     if (!searchLower) return new Set<string>();
@@ -249,21 +253,17 @@ export default function GraphCanvas({ graph }: Props) {
 
   const interactions = useGraphInteractions({ links });
 
-  // Auto-fit on first meaningful data
+  // Auto-fit exactly once per source graph. Local UI state changes such as
+  // mouse tracking, tooltips, search, or display filters must not replace the
+  // force graph data/viewport lifecycle.
   useEffect(() => {
-    if (nodes.length > 0 && !hasAutoFitRef.current) {
-      hasAutoFitRef.current = true;
-      const timer = setTimeout(() => {
-        fgRef.current?.zoomToFit(600, 20);
-      }, 100);
-      return () => clearTimeout(timer);
-    }
-  }, [nodes]);
-
-  // Reset auto-fit when graph source changes
-  useEffect(() => {
-    hasAutoFitRef.current = false;
-  }, [graph]);
+    if (nodes.length === 0 || autoFitGraphRef.current === graph) return;
+    autoFitGraphRef.current = graph;
+    const timer = setTimeout(() => {
+      fgRef.current?.zoomToFit(300, 20);
+    }, 100);
+    return () => clearTimeout(timer);
+  }, [graph, nodes.length]);
 
   // Physics tuning — only when graph prop changes, not every nodes/links memo change
   useEffect(() => {
@@ -569,10 +569,9 @@ export default function GraphCanvas({ graph }: Props) {
       </div>
 
       {/* Force Graph */}
-      <ForceGraph2D
+      <ForceGraph2D<GraphNode, GraphLink>
         ref={fgRef}
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        graphData={{ nodes, links: links as any[] }}
+        graphData={graphData}
         backgroundColor="transparent"
         warmupTicks={100}
         cooldownTicks={50}

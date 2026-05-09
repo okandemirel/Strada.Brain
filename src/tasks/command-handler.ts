@@ -20,6 +20,8 @@ import type { ExecutionTrace, PhaseOutcome, PhaseScore, RoutingDecision } from "
 import type { UnifiedBudgetManager } from "../budget/unified-budget-manager.js";
 import type { TaskCheckpointStore, PendingTaskCheckpoint } from "./task-checkpoint-store.js";
 import { parseRecoveryIntent } from "./orchestrator-intent-parser.js";
+import type { IVault } from "../vault/vault.interface.js";
+import type { VaultRegistry } from "../vault/vault-registry.js";
 
 /** Structural interface for ProviderRouter to avoid circular dependency */
 interface ProviderRouterRef {
@@ -60,6 +62,14 @@ interface OrchestratorRef {
   }>;
 }
 
+interface WatchableVault extends IVault {
+  startWatch(debounceMs?: number): Promise<void>;
+}
+
+function hasStartWatch(vault: IVault): vault is WatchableVault {
+  return typeof (vault as { startWatch?: unknown }).startWatch === "function";
+}
+
 interface CommandHandlerOptions {
   autonomousDefaultEnabled?: boolean;
   autonomousDefaultHours?: number;
@@ -70,6 +80,7 @@ export class CommandHandler {
   private unifiedBudgetManager?: UnifiedBudgetManager;
   private checkpointStore?: TaskCheckpointStore;
   private orchestratorRef?: OrchestratorRef;
+  private vaultRegistry?: VaultRegistry;
   private readonly autonomousDefaultEnabled: boolean;
   private readonly autonomousDefaultHours: number;
 
@@ -116,6 +127,10 @@ export class CommandHandler {
    */
   setOrchestrator(orchestrator: OrchestratorRef): void {
     this.orchestratorRef = orchestrator;
+  }
+
+  setVaultRegistry(registry: VaultRegistry): void {
+    this.vaultRegistry = registry;
   }
 
   private getIdentityKey(chatId: string, userId?: string): string {
@@ -175,6 +190,9 @@ export class CommandHandler {
         break;
       case "continue":
         await this.handleContinue(chatId, userId);
+        break;
+      case "vault":
+        await this.handleVault(chatId, args);
         break;
     }
   }
@@ -341,11 +359,106 @@ export class CommandHandler {
       "`/retry` - Replay the most recent pending checkpoint (budget_exceeded / provider_failed)",
       "`/continue` - Session-level resume from the latest checkpoint (alias of /retry)",
       "",
+      "*Vault*",
+      "",
+      "`/vault status [id]` - Show registered vault health",
+      "`/vault init <path|id>` - Register and initialize a project path, or initialize an existing vault id",
+      "`/vault sync [id]` - Reindex all vaults, or one vault id",
+      "",
       "Turkish: /durum, /iptal, /gorevler, /detay, /yardim, /hedef, /kisilik, /ajan, /yonlendirme, /model listele, /model bilgi, /model sıfırla, /butce, /dene, /surdur",
       "",
       "Send any other message to start a new background task.",
     ].join("\n");
     await this.channel.sendMarkdown(chatId, help);
+  }
+
+  private async handleVault(chatId: string, args: string[]): Promise<void> {
+    const subcommand = args[0]?.toLowerCase() ?? "status";
+    if (subcommand === "status") {
+      await this.handleVaultStatus(chatId, args[1]);
+      return;
+    }
+    if (subcommand === "sync") {
+      await this.handleVaultSync(chatId, args[1]);
+      return;
+    }
+    if (subcommand === "init") {
+      await this.handleVaultInit(chatId, args.slice(1).join(" ").trim());
+      return;
+    }
+    await this.channel.sendText(chatId, "Usage: /vault status [id] | /vault init <path|id> | /vault sync [id]");
+  }
+
+  private async getVaultRegistryOrNotify(chatId: string): Promise<VaultRegistry | undefined> {
+    if (this.vaultRegistry) {
+      return this.vaultRegistry;
+    }
+    await this.channel.sendText(chatId, "Vault unavailable: no vault registry is attached to this session.");
+    return undefined;
+  }
+
+  private async handleVaultStatus(chatId: string, vaultId?: string): Promise<void> {
+    const registry = await this.getVaultRegistryOrNotify(chatId);
+    if (!registry) return;
+    const vaults = this.selectVaults(registry, vaultId);
+    if (!vaults.length) {
+      await this.channel.sendText(chatId, vaultId ? `vault not found: ${vaultId}` : "no vaults registered");
+      return;
+    }
+    const lines: string[] = [];
+    for (const vault of vaults) {
+      const stats = await vault.stats();
+      lines.push(`${vault.id}: ${stats.fileCount} files, ${stats.chunkCount} chunks, ${stats.dbBytes}B`);
+    }
+    await this.channel.sendMarkdown(chatId, `*Vault Status*\n\n${lines.join("\n")}`);
+  }
+
+  private async handleVaultSync(chatId: string, vaultId?: string): Promise<void> {
+    const registry = await this.getVaultRegistryOrNotify(chatId);
+    if (!registry) return;
+    const vaults = this.selectVaults(registry, vaultId);
+    if (!vaults.length) {
+      await this.channel.sendText(chatId, vaultId ? `vault not found: ${vaultId}` : "no vaults registered");
+      return;
+    }
+    const lines: string[] = [];
+    for (const vault of vaults) {
+      const result = await vault.sync();
+      lines.push(`${vault.id}: ${result.changed} file(s) reindexed in ${result.durationMs}ms`);
+    }
+    await this.channel.sendMarkdown(chatId, `*Vault Sync*\n\n${lines.join("\n")}`);
+  }
+
+  private async handleVaultInit(chatId: string, target: string): Promise<void> {
+    const registry = await this.getVaultRegistryOrNotify(chatId);
+    if (!registry) return;
+    if (!target) {
+      await this.channel.sendText(chatId, "Usage: /vault init <path|id>");
+      return;
+    }
+
+    try {
+      const existing = registry.get(target);
+      const vault = existing ?? await registry.createAndRegister(target);
+      await vault.init();
+      if (hasStartWatch(vault)) {
+        await vault.startWatch();
+      }
+      await this.channel.sendText(chatId, `vault ${vault.id} initialized`);
+    } catch (err) {
+      await this.channel.sendText(
+        chatId,
+        `vault init failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  private selectVaults(registry: VaultRegistry, vaultId?: string): IVault[] {
+    if (vaultId) {
+      const vault = registry.get(vaultId);
+      return vault ? [vault] : [];
+    }
+    return registry.list();
   }
 
   private async handlePause(chatId: string, taskId?: TaskId): Promise<void> {

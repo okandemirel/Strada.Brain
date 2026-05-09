@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { relative } from "node:path";
+import { extname, join, relative } from "node:path";
 import { createHash } from "node:crypto";
 import { glob } from "glob";
 import type {
@@ -21,7 +21,6 @@ import { getLogger } from "../utils/logger.js";
 import { FileVectorStore } from "./vector-store.js";
 import { createHNSWVectorStore, isHnswAvailable, type IHNSWVectorStore } from "./hnsw/hnsw-vector-store.js";
 import { existsSync } from "node:fs";
-import { join } from "node:path";
 
 const DEFAULT_TOP_K = 8;
 const DEFAULT_MIN_SCORE = 0.15;
@@ -197,6 +196,10 @@ export class RAGPipeline implements IRAGPipeline {
   // ---------------------------------------------------------------------------
 
   async indexFile(filePath: string, content: string): Promise<number> {
+    if (extname(filePath).toLowerCase() !== ".cs") {
+      return 0;
+    }
+
     const contentHash = hashContent(content);
 
     // Skip unchanged files.

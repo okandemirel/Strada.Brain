@@ -77,6 +77,12 @@ export class VaultWriteNoteTool {
       }
       try {
         await vault.writeFile(path, content);
+        if (hasReindexFile(vault)) {
+          await vault.reindexFile(path);
+        }
+        if (hasRegenerateCanvas(vault)) {
+          await vault.regenerateCanvas();
+        }
         written.push(vault.id);
       } catch (err) {
         errors.push(`${vault.id}: ${err instanceof Error ? err.message : String(err)}`);
@@ -96,4 +102,12 @@ export class VaultWriteNoteTool {
       metadata: { executionTimeMs: Date.now() - started, vaultsWritten: written.length },
     };
   }
+}
+
+function hasReindexFile(vault: unknown): vault is { reindexFile(path: string): Promise<boolean> } {
+  return typeof (vault as { reindexFile?: unknown }).reindexFile === 'function';
+}
+
+function hasRegenerateCanvas(vault: unknown): vault is { regenerateCanvas(): Promise<void> } {
+  return typeof (vault as { regenerateCanvas?: unknown }).regenerateCanvas === 'function';
 }

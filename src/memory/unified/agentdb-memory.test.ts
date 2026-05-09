@@ -114,6 +114,31 @@ describe("AgentDBMemory", () => {
     });
   });
 
+  describe("SQLite persistence failures", () => {
+    it("returns an error and rolls back HNSW when SQLite persistence fails", async () => {
+      (memory as any).sqliteStatements.set("upsertMemory", {
+        run: vi.fn(() => {
+          throw new Error("SQL write failed");
+        }),
+      });
+
+      const result = await memory.storeEntry({
+        type: "note",
+        content: "rollback target",
+        tags: ["rollback"],
+        importance: "medium",
+        archived: false,
+        metadata: {},
+        tier: MemoryTier.Persistent,
+        importanceScore: 0.5 as never,
+      });
+
+      expect(result.kind).toBe("err");
+      expect((memory as any).hnswStore.count()).toBe(0);
+      expect((memory as any).entries.size).toBe(0);
+    });
+  });
+
   // ---------------------------------------------------------------------------
   // Migration Markers
   // ---------------------------------------------------------------------------

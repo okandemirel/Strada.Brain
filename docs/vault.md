@@ -42,11 +42,13 @@ In any channel:
 
 ```
 /vault init /path/to/unity/project
-/vault sync
-/vault status
+/vault sync [vault-id]
+/vault status [vault-id]
 ```
 
-SelfVault (indexing Strada.Brain's own source) bootstraps automatically at startup when `vault.enabled=true`. Disable it with `config.vault.self.enabled=false`.
+SelfVault (indexing Strada.Brain's own source) bootstraps automatically at startup when `vault.self.enabled=true`. Disable it with `config.vault.self.enabled=false` or `STRADA_VAULT_SELF_ENABLED=false`.
+
+When `config.obsidian.enabled=true` and `config.obsidian.vaultPath` is set, an `obsidian:*` vault is registered at bootstrap. If the Obsidian Local REST API is unavailable, Obsidian search falls back to the local vault index for that vault.
 
 The portal exposes the same functionality at [`/admin/vaults`](http://localhost:3000/admin/vaults): Files / Search / Graph tabs.
 
@@ -112,13 +114,16 @@ All three honor `reindexFile`'s hash short-circuit.
 
 ### Tools
 
-Three tools register with the agent tool registry at bootstrap (`initVaultsFromBootstrap` in `stage-knowledge.ts`):
+Vault and Obsidian tools register synchronously with the agent tool registry before orchestrators snapshot their tool list:
 
 | Tool | Purpose |
 |---|---|
 | `vault_init` | Attach a project path and build its vault |
 | `vault_sync` | Full reindex of an existing vault |
 | `vault_status` | Report vault health, file count, symbol count, last sync |
+| `vault_search` | Hybrid search with token budget, language/path filters, and optional focus files |
+| `obsidian_search` | Search Obsidian via Local REST API, with local-vault fallback |
+| `obsidian_append` | Append to an Obsidian note when the Obsidian API is available |
 
 ---
 
@@ -208,13 +213,23 @@ All flags live under `config.vault` (`src/config/config.ts`).
 | `writeHookBudgetMs` | `200` | `STRADA_VAULT_WRITE_HOOK_BUDGET_MS` | Max ms the write-hook may block tool writes |
 | `debounceMs` | `800` | `STRADA_VAULT_DEBOUNCE_MS` | chokidar debounce for FS change bursts |
 | `embeddingFallback` | `'local'` | — | `'none'` disables fallback; `'local'` uses a local embedder when provider returns null |
-| `self.enabled` | `true` | — | Set to `false` to opt out of SelfVault |
+| `self.enabled` | `true` | `STRADA_VAULT_SELF_ENABLED` | Set to `false` to opt out of SelfVault |
+
+Obsidian flags live under `config.obsidian`:
+
+| Flag | Default | Env var | Description |
+|---|---|---|---|
+| `enabled` | `false` | `OBSIDIAN_ENABLED` | Register an Obsidian vault and tools |
+| `apiUrl` | `https://127.0.0.1:27124` | `OBSIDIAN_API_URL` | Obsidian Local REST API endpoint |
+| `apiKey` | `""` | `OBSIDIAN_API_KEY` | Local REST API key |
+| `vaultPath` | `""` | `OBSIDIAN_VAULT_PATH` | Root path of the Obsidian vault |
+| `certPath` | unset | `OBSIDIAN_CERT_PATH` | Optional TLS certificate path |
 
 ---
 
 ## 7. HTTP API reference
 
-All endpoints live under `/api/vaults/*` and require dashboard auth.
+All endpoints live under `/api/vaults/*`. When `WEBSOCKET_DASHBOARD_AUTH_TOKEN` is set, dashboard APIs require `Authorization: Bearer <token>`. When it is unset, read-only local requests remain available and mutable routes require the trusted same-origin mutation guard used by the web proxy. Registration responses intentionally do not include absolute `rootPath`.
 
 ### `GET /api/vaults`
 
@@ -224,18 +239,38 @@ List vaults.
 [
   {
     "id": "unity-project",
-    "kind": "unity-project",
-    "rootPath": "/absolute/path/to/unity",
-    "fileCount": 1243,
-    "symbolCount": 9128,
-    "lastSyncAt": "2026-04-14T14:02:11.000Z"
+    "kind": "unity-project"
   }
 ]
 ```
 
+### `POST /api/vaults`
+
+Register and asynchronously index a new runtime vault. Request:
+
+```json
+{
+  "name": "My Project",
+  "rootPath": "/absolute/path/to/project",
+  "kind": "generic"
+}
+```
+
+Response:
+
+```json
+{
+  "id": "generic:12ab34cd",
+  "name": "My Project",
+  "kind": "unity-project",
+  "status": "indexing",
+  "symbolCount": 0
+}
+```
+
 ### `POST /api/vaults/:id/search`
 
-Hybrid search. Request body capped at `maxBytes` for DoS protection.
+Hybrid search. Request body capped at 4 KiB for DoS protection.
 
 Request:
 
@@ -243,8 +278,8 @@ Request:
 {
   "text": "damage calculation",
   "topK": 20,
-  "tokenBudget": 4000,
-  "langFilter": "csharp",
+  "budgetTokens": 4000,
+  "langFilter": ["csharp"],
   "pathGlob": "Assets/**",
   "focusFiles": ["Assets/Scripts/Player.cs"]
 }
@@ -265,6 +300,10 @@ Response:
   ]
 }
 ```
+
+### `POST /api/vaults/:id/sync`
+
+Force a full reindex. This is the route used by the portal "sync" action.
 
 ### `GET /api/vaults/:id/files/*`
 
@@ -350,8 +389,13 @@ Hardening applied during Phase 2 review (commit `5563d48`):
 - **2 MB cap on symbol extraction per file** — bounds memory/CPU per parse.
 - **Edge cache invalidation on `reindexFile`** — prevents stale graph state.
 - **Bounded `findCallers` results** — no unbounded graph walks.
+- **Shared vault path policy** — unsupported extensions, secret-like JSON/config paths, oversized files, symlink escapes, and realpath containment failures are rejected before read/write/index.
+- **Deletion reconciliation** — startup indexing removes stale rows for files deleted while the watcher was offline.
+- **Write-note freshness** — `vault_write_note` reindexes the written path and regenerates canvas before reporting visibility.
+- **Dashboard minimization** — vault registration and listing responses do not expose absolute `rootPath`.
+- **Command WebSocket hardening** — WebSocket dashboard commands require an explicit dashboard auth token; without one the dashboard is read-only.
 
-Standard Strada.Brain security applies: the vault respects path sanitization, lives under `<project>/.strada/vault/`, and all portal/HTTP access goes through the dashboard auth layer.
+Standard Strada.Brain security applies: the vault respects path sanitization, lives under `<project>/.strada/vault/`, and portal/HTTP access follows the dashboard auth or same-origin mutation guard described above.
 
 ---
 

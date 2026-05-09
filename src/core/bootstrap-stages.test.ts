@@ -766,6 +766,9 @@ describe("bootstrap-stages", () => {
       registerDelegationServices: vi.fn(),
     } as any;
     const createDelegationTools = vi.fn().mockReturnValue([{ name: "delegate-tool" }] as any);
+    const createAgentManager = vi.fn().mockReturnValue(agentManager);
+    const createDelegationManager = vi.fn().mockReturnValue(delegationManager);
+    const vaultRegistry = { _tag: "vault-registry" } as any;
     const taskManager = {
       submit: vi.fn(),
     } as any;
@@ -827,19 +830,29 @@ describe("bootstrap-stages", () => {
       providerRouter,
       dashboard,
       stradaDeps: { coreInstalled: true, mcpInstalled: false, warnings: [] } as any,
+      vaultRegistry,
+      vaultWriteHookBudgetMs: 123,
     }, {
       createAgentRegistry: vi.fn().mockReturnValue(agentRegistry),
       createAgentBudgetTracker: vi.fn().mockReturnValue(agentBudgetTracker),
-      createAgentManager: vi.fn().mockReturnValue(agentManager),
+      createAgentManager,
       createDelegationLog: vi.fn().mockReturnValue(delegationLog),
       createTierRouter: vi.fn().mockReturnValue(tierRouter),
-      createDelegationManager: vi.fn().mockReturnValue(delegationManager),
+      createDelegationManager,
       createDelegationTools,
       defaultDelegationTypes: [{ name: "delegate_task" }] as any,
     });
 
     expect(agentRegistry.initialize).toHaveBeenCalled();
     expect(agentBudgetTracker.initialize).toHaveBeenCalled();
+    expect(createAgentManager).toHaveBeenCalledWith(expect.objectContaining({
+      vaultRegistry,
+      vaultWriteHookBudgetMs: 123,
+    }));
+    expect(createDelegationManager).toHaveBeenCalledWith(expect.objectContaining({
+      vaultRegistry,
+      vaultWriteHookBudgetMs: 123,
+    }));
     expect(agentManager.setBackgroundTaskSubmitter).toHaveBeenCalledWith(expect.any(Function));
     const submitter = agentManager.setBackgroundTaskSubmitter.mock.calls[0]?.[0];
     expect(typeof submitter).toBe("function");
