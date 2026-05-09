@@ -198,13 +198,16 @@ describe.skipIf(!process.env["LOCAL_SERVER_TESTS"])("WebSocketDashboardServer", 
   });
 
   it("should handle commands", async () => {
-    const port = await safeStart(server);
-    if (port === null) return;
+    const commandServer = createServer({ authToken: "secret-token" });
+    const port = await safeStart(commandServer);
+    if (port === null) {
+      await commandServer.stop();
+      return;
+    }
 
     const commandHandler = vi.fn().mockResolvedValue({ result: "success" });
-    server.registerCommandHandler("test_command", commandHandler);
-    const bootstrapToken = extractBootstrapToken(await fetchDashboardHtml(port));
-    expect(bootstrapToken).not.toBeNull();
+    commandServer.registerCommandHandler("test_command", commandHandler);
+    expect(extractBootstrapToken(await fetchDashboardHtml(port))).toBeNull();
 
     const ws = new WebSocket(`ws://localhost:${port}/ws`);
     const authChallenge = waitForMessage(ws, "auth");
@@ -216,7 +219,7 @@ describe.skipIf(!process.env["LOCAL_SERVER_TESTS"])("WebSocketDashboardServer", 
     await authChallenge;
     ws.send(JSON.stringify({
       type: "auth",
-      payload: { token: bootstrapToken! },
+      payload: { token: "secret-token" },
     }));
     await waitForMessage(ws, "auth_success");
 
@@ -242,6 +245,7 @@ describe.skipIf(!process.env["LOCAL_SERVER_TESTS"])("WebSocketDashboardServer", 
     });
 
     ws.close();
+    await commandServer.stop();
   });
 
   it.skip("should return error for unknown commands", async () => {
@@ -392,7 +396,7 @@ describe.skipIf(!process.env["LOCAL_SERVER_TESTS"])("WebSocketDashboardServer", 
     });
   });
 
-  it("should track authenticated clients separately", async () => {
+  it("should track read-only clients as authenticated when command auth is disabled", async () => {
     const authServer = createServer();
 
     const port = await safeStart(authServer);
@@ -401,8 +405,7 @@ describe.skipIf(!process.env["LOCAL_SERVER_TESTS"])("WebSocketDashboardServer", 
       return;
     }
 
-    const bootstrapToken = extractBootstrapToken(await fetchDashboardHtml(port));
-    expect(bootstrapToken).not.toBeNull();
+    expect(extractBootstrapToken(await fetchDashboardHtml(port))).toBeNull();
 
     const ws = new WebSocket(`ws://localhost:${port}/ws`);
     const authChallenge = waitForMessage(ws, "auth");
@@ -412,45 +415,38 @@ describe.skipIf(!process.env["LOCAL_SERVER_TESTS"])("WebSocketDashboardServer", 
     });
 
     await authChallenge;
-    expect(authServer.getAuthenticatedClientCount()).toBe(0);
-
-    ws.send(JSON.stringify({
-      type: "auth",
-      payload: { token: bootstrapToken! },
-    }));
-
-    await waitForMessage(ws, "auth_success");
-
     expect(authServer.getAuthenticatedClientCount()).toBe(1);
 
     ws.close();
     await authServer.stop();
   });
 
-  it("requires authentication even when no static token is configured", async () => {
+  it("runs read-only when no static token is configured", async () => {
     const port = await safeStart(server);
     if (port === null) return;
 
     const ws = new WebSocket(`ws://localhost:${port}/ws`);
-    const authMessage = await waitForMessage<{ type: string; payload?: { requiresAuth?: boolean } }>(ws, "auth");
+    const authMessage = await waitForMessage<{
+      type: string;
+      payload?: { requiresAuth?: boolean; readOnly?: boolean; commandMode?: boolean };
+    }>(ws, "auth");
 
     expect(authMessage).toMatchObject({
       type: "auth",
-      payload: { requiresAuth: true },
+      payload: { requiresAuth: false, readOnly: true, commandMode: false },
     });
 
     ws.close();
   });
 
-  it("bootstraps a generated auth token into the embedded dashboard page", async () => {
+  it("does not bootstrap a generated auth token into the embedded dashboard page", async () => {
     const port = await safeStart(server);
     if (port === null) return;
 
     const html = await fetchDashboardHtml(port);
     const bootstrapToken = extractBootstrapToken(html);
 
-    expect(typeof bootstrapToken).toBe("string");
-    expect(bootstrapToken).toHaveLength(64);
+    expect(bootstrapToken).toBeNull();
   });
 
   it("does not embed configured auth tokens into the dashboard page", async () => {
