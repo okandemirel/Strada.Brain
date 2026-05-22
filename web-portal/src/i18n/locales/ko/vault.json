@@ -5,7 +5,6 @@
   "filter.search.placeholder": "심볼 검색…",
   "filter.file.placeholder": "파일 경로로 필터…",
   "filter.resultCount": "{{total}}개 중 {{visible}}개 표시",
-
   "filter.kind.namespace": "네임스페이스",
   "filter.kind.class": "클래스",
   "filter.kind.interface": "인터페이스",
@@ -15,9 +14,13 @@
   "filter.kind.note": "노트",
   "filter.kind.file": "파일",
   "filter.kind.unknown": "심볼",
-
   "graph.minimapLabel": "그래프 개요",
-
+  "graph.search.matchCount": "{{count}}개 일치",
+  "graph.search.matchCount_other": "{{count}}개 일치",
+  "graph.search.noMatches": "일치 없음",
+  "graph.minimap.title": "그래프 미니맵",
+  "graph.minimap.toggleHint": "클릭하거나 드래그하여 이동",
+  "graph.minimap.nodeCount": "(노드 {{count}}개)",
   "detail.title": "심볼 세부 정보",
   "detail.empty": "세부 정보를 보려면 노드를 선택하세요.",
   "detail.closeLabel": "세부 정보 닫기",
@@ -27,27 +30,22 @@
   "detail.noIncoming": "들어오는 연결이 없습니다.",
   "detail.noOutgoing": "나가는 연결이 없습니다.",
   "detail.loadError": "호출자를 불러올 수 없습니다.",
-
   "empty.selectVault": "그래프를 보려면 vault를 선택하세요.",
   "empty.loading": "그래프를 불러오는 중…",
   "empty.noSymbols": "아직 색인된 심볼이 없습니다.",
   "empty.noMatches": "현재 필터와 일치하는 심볼이 없습니다.",
-
   "tab.files": "파일",
   "tab.search": "검색",
   "tab.graph": "그래프",
   "tab.bookmarks": "북마크",
   "tab.close": "탭 닫기",
-
   "rail.files": "파일 탐색기",
   "rail.search": "검색",
   "rail.graph": "그래프",
   "rail.bookmarks": "북마크",
   "rail.settings": "Vault 설정",
-
   "vaultList.empty": "등록된 vault 없음",
   "vaultList.title": "Vault 목록",
-
   "tree.empty": "파일 없음",
   "tree.emptyHint": "색인되면 파일이 여기에 표시됩니다.",
   "tree.reveal": "그래프에서 보기",
@@ -55,7 +53,6 @@
   "tree.rename": "이름 변경",
   "tree.previewError": "미리보기 실패",
   "tree.previewRetry": "다시 시도",
-
   "right.backlinks": "백링크",
   "right.outline": "개요",
   "right.metadata": "메타데이터",
@@ -63,16 +60,13 @@
   "right.noBacklinks": "백링크 없음.",
   "right.noOutline": "개요 없음.",
   "right.noMetadata": "메타데이터 없음.",
-
   "search.placeholder": "시맨틱 + 키워드 쿼리",
   "search.run": "검색",
   "search.running": "검색 중…",
   "search.empty": "결과를 보려면 쿼리를 실행하세요.",
   "search.selectVault": "검색하려면 vault를 선택하세요.",
-
   "files.selectVault": "Vault 선택",
   "files.pickFile": "파일 선택",
-
   "palette.title": "명령 팔레트",
   "palette.placeholder": "명령 입력 또는 검색…",
   "palette.empty": "일치하는 명령 없음.",
@@ -88,7 +82,6 @@
   "palette.cmd.toggleLeft": "왼쪽 패널 토글",
   "palette.cmd.toggleRight": "오른쪽 패널 토글",
   "palette.cmd.quickSwitcher": "빠른 전환",
-
   "status.symbols": "심볼 {{count}}개",
   "status.files": "파일 {{count}}개",
   "status.lastSync": "마지막 동기화: {{time}}",
@@ -96,18 +89,14 @@
   "status.reindex": "재색인",
   "status.reindexing": "색인 중…",
   "status.reindexError": "재색인 실패",
-
   "statusBar.xSecondsAgo": "{{count}}초 전",
   "statusBar.xMinutesAgo": "{{count}}분 전",
   "statusBar.xHoursAgo": "{{count}}시간 전",
   "statusBar.xDaysAgo": "{{count}}일 전",
-
   "breadcrumb.root": "Vault",
   "breadcrumb.separator": "/",
-
   "panel.toggleLeft": "왼쪽 패널 토글",
   "panel.toggleRight": "오른쪽 패널 토글",
-
   "register.button": "Vault 등록",
   "register.newVault": "새 Vault",
   "register.title": "새 Vault 등록",
@@ -124,5 +113,52 @@
   "register.cancel": "취소",
   "register.error.invalidPath": "경로가 존재하지 않거나 접근할 수 없습니다",
   "register.error.generic": "Vault 등록에 실패했습니다",
-  "register.success": "Vault가 등록되었으며 색인화가 시작되었습니다"
+  "register.success": "Vault가 등록되었으며 색인화가 시작되었습니다",
+  "graph.a11y.regionLabel": "지식 그래프",
+  "graph.a11y.nodeRole": "그래프 노드",
+  "graph.a11y.nodeCount": "그래프에 {{count}}개 노드",
+  "graph.a11y.selectedHint": "{{label}} 선택됨, 연결 {{count}}개",
+  "graph.a11y.navigationHint": "노드 간 이동은 화살표 키 또는 J/K, 열기는 Enter, 검색은 슬래시, 종료는 Esc",
+  "graph": {
+    "search": {
+      "placeholder": "노드 검색…",
+      "ariaLabel": "그래프 노드 검색",
+      "clear": "지우기"
+    },
+    "filters": {
+      "kinds": {
+        "title": "심볼 종류",
+        "selectAll": "모두 선택",
+        "clearAll": "모두 해제"
+      }
+    },
+    "local": {
+      "hopDepth": {
+        "title": "홉 깊이",
+        "label_one": "{{count}} 홉",
+        "label_other": "{{count}} 홉"
+      }
+    },
+    "edges": {
+      "legendTitle": "엣지 가중치",
+      "legendHint": "얇음 → 굵음 = 1 → {{max}}회 참조"
+    },
+    "physics": {
+      "title": "고급 물리",
+      "linkDistance": "링크 거리",
+      "charge": "전하",
+      "collide": "충돌 반경",
+      "preset": {
+        "sparse": "희소",
+        "balanced": "균형",
+        "dense": "조밀"
+      },
+      "reset": "균형으로 재설정"
+    },
+    "actions": {
+      "exportPng": "PNG로 저장",
+      "exportSuccess": "그래프를 내보냈습니다"
+    },
+    "truncated": "그래프가 {{max}}개 노드로 제한되었습니다 — 큰 보관함에서는 연결이 적은 심볼이 숨겨질 수 있습니다."
+  }
 }

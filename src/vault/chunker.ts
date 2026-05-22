@@ -1,9 +1,22 @@
+import { getLoggerSafe } from '../utils/logger.js';
 import { chunkIdFor } from './hash.js';
+import { parsePositiveIntEnv } from './env-helpers.js';
 import type { VaultChunk } from './vault.interface.js';
 
 const TOKENS_PER_CHUNK = 400;
 const CHARS_PER_TOKEN = 4;
 const MAX_CHARS = TOKENS_PER_CHUNK * CHARS_PER_TOKEN;
+
+const DEFAULT_MAX_CHUNKS_PER_FILE = 200;
+
+/**
+ * Resolves the per-file chunk cap. Files that would exceed this count are
+ * truncated to prevent embedding-quota burn from minified blobs or other
+ * pathological inputs. Configurable via VAULT_MAX_CHUNKS_PER_FILE.
+ */
+function resolveMaxChunksPerFile(): number {
+  return parsePositiveIntEnv('VAULT_MAX_CHUNKS_PER_FILE', DEFAULT_MAX_CHUNKS_PER_FILE);
+}
 
 function countTokens(text: string): number {
   return Math.ceil(text.length / CHARS_PER_TOKEN);
@@ -75,6 +88,18 @@ function makeChunk(path: string, startLine: number, endLine: number, body: strin
 }
 
 export function chunkFile(input: { path: string; content: string; lang: string }): VaultChunk[] {
-  if (input.lang === 'markdown') return chunkMarkdown(input.path, input.content);
-  return splitIfOversized(input.path, input.content, 1);
+  const chunks = input.lang === 'markdown'
+    ? chunkMarkdown(input.path, input.content)
+    : splitIfOversized(input.path, input.content, 1);
+  const cap = resolveMaxChunksPerFile();
+  if (chunks.length > cap) {
+    getLoggerSafe().warn('[chunker] per-file chunk cap exceeded; truncating', {
+      op: 'chunker-cap',
+      path: input.path,
+      attemptedChunks: chunks.length,
+      capped: cap,
+    });
+    return chunks.slice(0, cap);
+  }
+  return chunks;
 }

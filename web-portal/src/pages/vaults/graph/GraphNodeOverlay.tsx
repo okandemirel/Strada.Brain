@@ -179,28 +179,45 @@ export function GraphNodeOverlay({ nodeId, onClose }: Props) {
         onClick={handleClose}
       />
 
-      {/* Slide-over panel */}
+      {/* Slide-over panel — theme-aware via CSS vars (graph-panel-bg / panel-border). */}
       <div
-        className={`absolute top-0 right-0 bottom-0 z-30 w-80 bg-[#0f0f0f]/95 backdrop-blur-md
-                    border-l border-white/5 transition-transform duration-300 ease-out
+        className={`absolute top-0 right-0 bottom-0 z-30 w-80 backdrop-blur-md
+                    border-l transition-transform duration-300 ease-out
                     flex flex-col ${isOpen ? 'translate-x-0' : 'translate-x-full'}`}
+        style={{
+          background: 'var(--graph-panel-bg, rgba(15,15,15,0.95))',
+          borderColor: 'var(--graph-panel-border, rgba(255,255,255,0.05))',
+          color: 'var(--color-text, #e8e8ed)',
+        }}
       >
         {isOpen && (
           <>
             {/* Header */}
-            <header className="flex items-start justify-between p-4 border-b border-white/5">
+            <header
+              className="flex items-start justify-between p-4 border-b"
+              style={{ borderColor: 'var(--graph-panel-border, rgba(255,255,255,0.05))' }}
+            >
               <div className="min-w-0 flex-1">
-                <h3 className="text-sm font-semibold text-white truncate" title={fileName}>
+                <h3
+                  className="text-sm font-semibold truncate"
+                  style={{ color: 'var(--color-text, #e8e8ed)' }}
+                  title={fileName}
+                >
                   {fileName}
                 </h3>
-                <p className="text-[11px] text-white/30 truncate mt-0.5" title={filePath}>
+                <p
+                  className="text-[11px] truncate mt-0.5"
+                  style={{ color: 'var(--color-text-tertiary, rgba(255,255,255,0.3))' }}
+                  title={filePath}
+                >
                   {filePath}
                 </p>
               </div>
               <button
                 type="button"
                 onClick={handleClose}
-                className="ml-2 p-1.5 rounded-md text-white/30 hover:text-white/70 hover:bg-white/5 transition-colors"
+                className="ml-2 p-1.5 rounded-md transition-colors hover:bg-[var(--color-surface-hover)]"
+                style={{ color: 'var(--color-text-tertiary, rgba(255,255,255,0.3))' }}
                 aria-label={t('detail.closeLabel')}
               >
                 <X className="w-4 h-4" />
@@ -208,13 +225,21 @@ export function GraphNodeOverlay({ nodeId, onClose }: Props) {
             </header>
 
             {/* Actions */}
-            <div className="px-4 py-3 border-b border-white/5">
+            <div
+              className="px-4 py-3 border-b"
+              style={{ borderColor: 'var(--graph-panel-border, rgba(255,255,255,0.05))' }}
+            >
               <button
                 type="button"
                 onClick={handleOpenFile}
                 className="w-full inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg
-                           bg-white/5 hover:bg-white/10 text-white/70 hover:text-white
-                           border border-white/10 transition-colors text-xs font-medium"
+                           border transition-colors text-xs font-medium
+                           hover:bg-[var(--color-surface-hover)]"
+                style={{
+                  background: 'var(--color-surface, rgba(255,255,255,0.05))',
+                  borderColor: 'var(--graph-panel-border, rgba(255,255,255,0.1))',
+                  color: 'var(--color-text-secondary, rgba(255,255,255,0.7))',
+                }}
               >
                 <FileCode className="w-3.5 h-3.5" />
                 {t('detail.goToFile', { defaultValue: 'Open in Editor' })}
@@ -226,16 +251,19 @@ export function GraphNodeOverlay({ nodeId, onClose }: Props) {
             <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4">
               {/* Incoming / Callers */}
               <section>
-                <div className="text-[10px] uppercase tracking-wider text-white/20 mb-2">
+                <div
+                  className="text-[10px] uppercase tracking-wider mb-2"
+                  style={{ color: 'var(--color-text-tertiary, rgba(255,255,255,0.3))' }}
+                >
                   {t('detail.incoming')}
                 </div>
 
                 {state.loadingCallers ? (
-                  <div className="text-xs text-white/30 animate-pulse">…</div>
+                  <div className="text-xs animate-pulse" style={{ color: 'var(--color-text-tertiary)' }}>…</div>
                 ) : state.errorCallers ? (
                   <div className="text-xs text-red-400/70">{t('detail.loadError')}</div>
                 ) : !state.callers || state.callers.length === 0 ? (
-                  <div className="text-xs text-white/20">{t('detail.noIncoming')}</div>
+                  <div className="text-xs" style={{ color: 'var(--color-text-tertiary)' }}>{t('detail.noIncoming')}</div>
                 ) : (
                   <ul className="space-y-1.5">
                     {state.callers.map((edge) => (
@@ -243,13 +271,19 @@ export function GraphNodeOverlay({ nodeId, onClose }: Props) {
                         key={`${edge.fromSymbol}:${edge.kind}:${edge.atLine}`}
                         className="flex items-start gap-1.5 text-xs group"
                       >
-                        <ArrowLeft className="w-3 h-3 text-white/20 flex-shrink-0 mt-0.5 group-hover:text-white/40 transition-colors" />
+                        <ArrowLeft
+                          className="w-3 h-3 flex-shrink-0 mt-0.5 transition-colors"
+                          style={{ color: 'var(--color-text-tertiary)' }}
+                        />
                         <div className="min-w-0">
-                          <span className="text-white/40 font-medium">{edge.kind}</span>{' '}
-                          <span className="text-white/60 font-mono truncate block">
+                          <span className="font-medium" style={{ color: 'var(--color-text-tertiary)' }}>{edge.kind}</span>{' '}
+                          <span className="font-mono truncate block" style={{ color: 'var(--color-text-secondary)' }}>
                             {edge.fromSymbol}
                           </span>
-                          <span className="text-white/20 font-mono text-[10px]">
+                          <span
+                            className="font-mono text-[10px]"
+                            style={{ color: 'var(--color-text-tertiary)' }}
+                          >
                             :{edge.atLine}
                           </span>
                         </div>
@@ -261,25 +295,32 @@ export function GraphNodeOverlay({ nodeId, onClose }: Props) {
 
               {/* Backlinks (wikilinks) */}
               <section>
-                <div className="text-[10px] uppercase tracking-wider text-white/20 mb-2">
+                <div
+                  className="text-[10px] uppercase tracking-wider mb-2"
+                  style={{ color: 'var(--color-text-tertiary)' }}
+                >
                   Backlinks
                 </div>
 
                 {state.loadingBacklinks ? (
-                  <div className="text-xs text-white/30 animate-pulse">…</div>
+                  <div className="text-xs animate-pulse" style={{ color: 'var(--color-text-tertiary)' }}>…</div>
                 ) : state.errorBacklinks ? (
                   <div className="text-xs text-red-400/70">{t('detail.loadError')}</div>
                 ) : !state.backlinks || state.backlinks.length === 0 ? (
-                  <div className="text-xs text-white/20">No backlinks</div>
+                  <div className="text-xs" style={{ color: 'var(--color-text-tertiary)' }}>No backlinks</div>
                 ) : (
                   <ul className="space-y-1.5">
                     {state.backlinks.map((bl) => (
                       <li key={bl.fromNote} className="flex items-start gap-1.5 text-xs group">
-                        <Link2 className="w-3 h-3 text-white/20 flex-shrink-0 mt-0.5 group-hover:text-white/40 transition-colors" />
+                        <Link2
+                          className="w-3 h-3 flex-shrink-0 mt-0.5 transition-colors"
+                          style={{ color: 'var(--color-text-tertiary)' }}
+                        />
                         <button
                           type="button"
                           onClick={() => handleSelectBacklink(bl.fromNote)}
-                          className="text-white/60 hover:text-white/90 font-mono truncate text-left transition-colors"
+                          className="font-mono truncate text-left transition-colors"
+                          style={{ color: 'var(--color-text-secondary)' }}
                         >
                           {bl.fromNote}
                         </button>
@@ -291,21 +332,25 @@ export function GraphNodeOverlay({ nodeId, onClose }: Props) {
 
               {/* AI Summary */}
               <section>
-                <div className="text-[10px] uppercase tracking-wider text-white/20 mb-2">
+                <div
+                  className="text-[10px] uppercase tracking-wider mb-2"
+                  style={{ color: 'var(--color-text-tertiary)' }}
+                >
                   AI Summary
                 </div>
 
                 {loadingSummary ? (
-                  <div className="text-xs text-white/30 animate-pulse">Generating…</div>
+                  <div className="text-xs animate-pulse" style={{ color: 'var(--color-text-tertiary)' }}>Generating…</div>
                 ) : summaryError ? (
                   <div className="text-xs text-red-400/70">Unable to generate summary</div>
                 ) : summary ? (
-                  <p className="text-xs text-white/60 leading-relaxed">{summary}</p>
+                  <p className="text-xs leading-relaxed" style={{ color: 'var(--color-text-secondary)' }}>{summary}</p>
                 ) : (
                   <button
                     type="button"
                     onClick={handleSummarize}
-                    className="text-xs text-white/40 hover:text-white/80 transition-colors"
+                    className="text-xs transition-colors"
+                    style={{ color: 'var(--color-text-tertiary)' }}
                   >
                     ✨ Summarize
                   </button>

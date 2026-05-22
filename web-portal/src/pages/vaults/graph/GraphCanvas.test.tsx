@@ -88,8 +88,9 @@ describe('GraphCanvas', () => {
   it('renders graph with correct node and link counts', () => {
     render(<GraphCanvas graph={makeGraph()} />);
     expect(screen.getByTestId('graph-canvas')).toBeInTheDocument();
-    expect(screen.getByText(/4 nodes/)).toBeInTheDocument();
-    expect(screen.getByText(/3 links/)).toBeInTheDocument();
+    // Match the visible stats line (not the sr-only a11y "N nodes in graph"
+    // text). Using a stricter pattern that requires the `·` separator.
+    expect(screen.getByText(/4 nodes · 3 links/)).toBeInTheDocument();
   });
 
   it('toggles orphan nodes visibility', () => {
@@ -131,18 +132,17 @@ describe('GraphCanvas', () => {
     });
 
     // In local mode with center 'a', we should see nodes a, b, c (neighbors) and links between them
-    expect(screen.getByText(/3 nodes/)).toBeInTheDocument();
-    expect(screen.getByText(/3 links/)).toBeInTheDocument();
+    expect(screen.getByText(/3 nodes · 3 links/)).toBeInTheDocument();
 
-    // Exit via Escape
-    fireEvent.keyDown(window, { key: 'Escape' });
+    // Exit via Escape (dispatch from the canvas wrapper since the global
+    // Escape listener was consolidated into useGraphKeyboard).
+    fireEvent.keyDown(screen.getByTestId('graph-canvas'), { key: 'Escape' });
 
     await waitFor(() => {
       expect(screen.queryByText(/Local view/)).not.toBeInTheDocument();
     });
 
-    expect(screen.getByText(/4 nodes/)).toBeInTheDocument();
-    expect(screen.getByText(/3 links/)).toBeInTheDocument();
+    expect(screen.getByText(/4 nodes · 3 links/)).toBeInTheDocument();
   });
 
   it('exits local graph mode when Full Graph is clicked', async () => {
@@ -188,7 +188,12 @@ describe('GraphCanvas', () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByText('Foo')).toBeInTheDocument();
+      // The a11y treeitem also renders "Foo"; match the tooltip variant by
+      // its specific Tailwind class (font-medium + text-white/80).
+      const tooltipTitle = screen
+        .getAllByText('Foo')
+        .find((el) => el.className.includes('font-medium'));
+      expect(tooltipTitle).toBeDefined();
     });
     expect(screen.getByText('class')).toBeInTheDocument();
     expect(screen.getByText(/a\.ts/)).toBeInTheDocument();

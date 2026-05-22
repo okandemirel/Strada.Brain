@@ -5,7 +5,6 @@
   "filter.search.placeholder": "Rechercher des symboles…",
   "filter.file.placeholder": "Filtrer par chemin de fichier…",
   "filter.resultCount": "{{visible}} sur {{total}} visibles",
-
   "filter.kind.namespace": "Espace de noms",
   "filter.kind.class": "Classe",
   "filter.kind.interface": "Interface",
@@ -15,9 +14,13 @@
   "filter.kind.note": "Note",
   "filter.kind.file": "Fichier",
   "filter.kind.unknown": "Symbole",
-
   "graph.minimapLabel": "Vue d'ensemble du graphe",
-
+  "graph.search.matchCount": "{{count}} correspondance",
+  "graph.search.matchCount_other": "{{count}} correspondances",
+  "graph.search.noMatches": "Aucune correspondance",
+  "graph.minimap.title": "Mini-carte du graphe",
+  "graph.minimap.toggleHint": "Cliquer ou glisser pour naviguer",
+  "graph.minimap.nodeCount": "({{count}} nœuds)",
   "detail.title": "Détails du symbole",
   "detail.empty": "Sélectionnez un nœud pour voir les détails.",
   "detail.closeLabel": "Fermer les détails",
@@ -27,27 +30,22 @@
   "detail.noIncoming": "Aucune arête entrante.",
   "detail.noOutgoing": "Aucune arête sortante.",
   "detail.loadError": "Impossible de charger les appelants.",
-
   "empty.selectVault": "Sélectionnez un vault pour afficher le graphe.",
   "empty.loading": "Chargement du graphe…",
   "empty.noSymbols": "Aucun symbole indexé pour l'instant.",
   "empty.noMatches": "Aucun symbole ne correspond aux filtres actuels.",
-
   "tab.files": "Fichiers",
   "tab.search": "Recherche",
   "tab.graph": "Graphe",
   "tab.bookmarks": "Signets",
   "tab.close": "Fermer l'onglet",
-
   "rail.files": "Explorateur de fichiers",
   "rail.search": "Recherche",
   "rail.graph": "Graphe",
   "rail.bookmarks": "Signets",
   "rail.settings": "Paramètres du vault",
-
   "vaultList.empty": "Aucun vault enregistré",
   "vaultList.title": "Vaults",
-
   "tree.empty": "Aucun fichier",
   "tree.emptyHint": "Les fichiers apparaîtront ici une fois indexés.",
   "tree.reveal": "Afficher dans le graphe",
@@ -55,7 +53,6 @@
   "tree.rename": "Renommer",
   "tree.previewError": "Échec de l'aperçu",
   "tree.previewRetry": "Réessayer",
-
   "right.backlinks": "Rétroliens",
   "right.outline": "Plan",
   "right.metadata": "Métadonnées",
@@ -63,16 +60,13 @@
   "right.noBacklinks": "Aucun rétrolien.",
   "right.noOutline": "Aucun plan disponible.",
   "right.noMetadata": "Aucune métadonnée disponible.",
-
   "search.placeholder": "requête sémantique + mot-clé",
   "search.run": "Rechercher",
   "search.running": "Recherche…",
   "search.empty": "Lancez une requête pour voir les résultats.",
   "search.selectVault": "Sélectionnez un vault pour rechercher.",
-
   "files.selectVault": "Sélectionnez un vault",
   "files.pickFile": "Choisissez un fichier",
-
   "palette.title": "Palette de commandes",
   "palette.placeholder": "Tapez une commande ou recherchez…",
   "palette.empty": "Aucune commande ne correspond.",
@@ -88,7 +82,6 @@
   "palette.cmd.toggleLeft": "Basculer le panneau gauche",
   "palette.cmd.toggleRight": "Basculer le panneau droit",
   "palette.cmd.quickSwitcher": "Commutateur rapide",
-
   "status.symbols": "{{count}} symboles",
   "status.files": "{{count}} fichiers",
   "status.lastSync": "Dernière synchronisation : {{time}}",
@@ -96,18 +89,14 @@
   "status.reindex": "Réindexer",
   "status.reindexing": "Réindexation…",
   "status.reindexError": "Échec de la réindexation",
-
   "statusBar.xSecondsAgo": "il y a {{count}} s",
   "statusBar.xMinutesAgo": "il y a {{count}} min",
   "statusBar.xHoursAgo": "il y a {{count}} h",
   "statusBar.xDaysAgo": "il y a {{count}} j",
-
   "breadcrumb.root": "Vault",
   "breadcrumb.separator": "/",
-
   "panel.toggleLeft": "Basculer le panneau gauche",
   "panel.toggleRight": "Basculer le panneau droit",
-
   "register.button": "Enregistrer un vault",
   "register.newVault": "Nouveau vault",
   "register.title": "Enregistrer un nouveau vault",
@@ -124,5 +113,52 @@
   "register.cancel": "Annuler",
   "register.error.invalidPath": "Le chemin n'existe pas ou n'est pas accessible",
   "register.error.generic": "Échec de l'enregistrement du vault",
-  "register.success": "Vault enregistré, indexation démarrée"
+  "register.success": "Vault enregistré, indexation démarrée",
+  "graph.a11y.regionLabel": "Graphe de connaissances",
+  "graph.a11y.nodeRole": "Nœud du graphe",
+  "graph.a11y.nodeCount": "{{count}} nœuds dans le graphe",
+  "graph.a11y.selectedHint": "{{label}} sélectionné, {{count}} connexions",
+  "graph.a11y.navigationHint": "Utilisez les flèches ou J/K pour naviguer entre les nœuds, Entrée pour ouvrir, barre oblique pour rechercher, Échap pour quitter",
+  "graph": {
+    "search": {
+      "placeholder": "Rechercher des nœuds…",
+      "ariaLabel": "Rechercher des nœuds du graphe",
+      "clear": "Effacer"
+    },
+    "filters": {
+      "kinds": {
+        "title": "Types de symboles",
+        "selectAll": "Tout sélectionner",
+        "clearAll": "Tout désélectionner"
+      }
+    },
+    "local": {
+      "hopDepth": {
+        "title": "Profondeur de saut",
+        "label_one": "{{count}} saut",
+        "label_other": "{{count}} sauts"
+      }
+    },
+    "edges": {
+      "legendTitle": "Poids de l'arête",
+      "legendHint": "fin → épais = 1 → {{max}} références"
+    },
+    "physics": {
+      "title": "Physique avancée",
+      "linkDistance": "Distance des liens",
+      "charge": "Charge",
+      "collide": "Rayon de collision",
+      "preset": {
+        "sparse": "Clairsemé",
+        "balanced": "Équilibré",
+        "dense": "Dense"
+      },
+      "reset": "Réinitialiser sur Équilibré"
+    },
+    "actions": {
+      "exportPng": "Enregistrer en PNG",
+      "exportSuccess": "Graphe exporté"
+    },
+    "truncated": "Le graphe a été limité à {{max}} nœuds — dans les grands vaults, les symboles peu connectés peuvent être masqués."
+  }
 }

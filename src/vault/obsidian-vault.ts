@@ -1,5 +1,7 @@
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import * as fsp from 'node:fs/promises';
 import { mkdirSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { EventEmitter } from 'node:events';
 import { SqliteVaultStore } from './sqlite-vault-store.js';
@@ -32,10 +34,101 @@ export interface ObsidianVaultDeps {
   obsidian: ObsidianApiConfig;
 }
 
+/**
+ * Typed error thrown when a vault query is invalid (e.g. empty FTS query).
+ * Route handlers should catch and translate to HTTP 400.
+ */
+export class VaultQueryError extends Error {
+  readonly code: string;
+  constructor(message: string, code = 'invalid_query') {
+    super(message);
+    this.name = 'VaultQueryError';
+    this.code = code;
+  }
+}
+
 function escapeFtsQuery(q: string): string {
   const stripped = q.replace(/["*:()^+\-]/g, ' ').replace(/\b(NOT|AND|OR|NEAR)\b/g, ' ').trim();
-  if (!stripped) return '""';
+  if (!stripped) {
+    // Fix P2: empty query previously returned '""' which matched nothing silently.
+    // Throw typed error so callers can surface a 400 to clients.
+    throw new VaultQueryError('Vault query is empty after sanitization', 'empty_query');
+  }
   return `"${stripped}"`;
+}
+
+/**
+ * Canonicalize a vault-relative path used as wikilink source/target identifier.
+ * Always returns the *stored* path with its original case (matching `vault_files.path`),
+ * but normalizes separator and trims redundant prefixes so equal logical paths compare equal.
+ * NOTE: This does NOT lowercase — case preservation matters for case-sensitive filesystems.
+ */
+function canonicalizePath(path: string): string {
+  // Drop a leading "./" and normalize backslashes; strip leading slash to keep paths vault-root-relative.
+  let p = path.replace(/\\/g, '/');
+  if (p.startsWith('./')) p = p.slice(2);
+  if (p.startsWith('/')) p = p.slice(1);
+  return p;
+}
+
+/**
+ * Tiny FIFO async lock — serializes async sections per vault instance.
+ * Used to prevent concurrent sync()/reindexFile() interleaving from
+ * desynchronizing the embedding/edge caches.
+ *
+ * Re-entrancy guard (debug-time): the lock is NOT re-entrant. If the same
+ * call chain tries to acquire the lock while already holding it the result
+ * is a deadlock. The `held` flag lets us detect that synchronously and
+ * throw a useful error instead of hanging. The check is always on — its
+ * cost is a boolean read/write — and only fires for the misuse case.
+ */
+class AsyncLock {
+  private tail: Promise<void> = Promise.resolve();
+  private held = false;
+  async run<T>(fn: () => Promise<T>): Promise<T> {
+    if (this.held) {
+      throw new Error(
+        'AsyncLock re-entrancy detected: call chain tried to acquire the vault writeLock ' +
+          'while already holding it — this would deadlock. Refactor the inner call site to ' +
+          'use the internal (`*Internal`) helper that assumes the lock is already held.',
+      );
+    }
+    const prev = this.tail;
+    let release!: () => void;
+    this.tail = new Promise<void>((res) => { release = res; });
+    try {
+      await prev;
+      this.held = true;
+      return await fn();
+    } finally {
+      this.held = false;
+      release();
+    }
+  }
+}
+
+/**
+ * Redact absolute filesystem paths from an error message before it crosses a
+ * trust boundary. Replaces occurrences of the vault root and the user's home
+ * directory with `<vault>` / `<home>` so HTTP / WS clients never see local
+ * directory layout. The redaction is best-effort (it cannot catch every
+ * conceivable absolute path), so callers should additionally coerce the
+ * outgoing field to a generic string for non-debug responses.
+ */
+export function redactPathsInMessage(msg: string, rootPath: string): string {
+  if (!msg) return msg;
+  let out = msg;
+  if (rootPath) {
+    // Escape regex special chars before splitting.
+    const escaped = rootPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    out = out.replace(new RegExp(escaped, 'g'), '<vault>');
+  }
+  const home = homedir();
+  if (home && home !== '/' && home !== rootPath) {
+    const escapedHome = home.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    out = out.replace(new RegExp(escapedHome, 'g'), '<home>');
+  }
+  return out;
 }
 
 function globToRegex(glob: string): RegExp {
@@ -67,6 +160,12 @@ export class ObsidianVault implements IVault {
   private emitter = new EventEmitter();
   private dbPath: string;
   private client: ObsidianApiClient;
+  /**
+   * Per-vault async lock serializing reindexFile() / sync() / fullIndex().
+   * Prevents concurrent calls from racing on edge-cache invalidation and
+   * HNSW upsert/delete sequencing (which can otherwise leak orphan HNSW IDs).
+   */
+  private writeLock = new AsyncLock();
 
   constructor(deps: ObsidianVaultDeps) {
     this.id = deps.id;
@@ -92,27 +191,41 @@ export class ObsidianVault implements IVault {
     await this.fullIndex();
   }
 
-  async sync(): Promise<{ changed: number; durationMs: number }> {
-    const started = Date.now();
-    const { count, paths } = await this.reindexChanged();
-    if (count > 0) {
-      await this.resolveWikilinks();
-      await this.regenerateCanvas();
-      this.emitter.emit('update', { vaultId: this.id, changedPaths: paths });
-    }
-    return { changed: count, durationMs: Date.now() - started };
+  async sync(): Promise<{ changed: number; durationMs: number; canvas?: { ok: boolean; error?: string } }> {
+    return this.writeLock.run(async () => {
+      const started = Date.now();
+      const { count, paths } = await this.reindexChangedInternal();
+      let canvasStatus: { ok: boolean; error?: string } | undefined;
+      if (count > 0) {
+        // Fix P1: first resolution pass.
+        await this.resolveWikilinks();
+        // Fix P1: second pass scoped to files touched in this sync — captures
+        // wikilinks pointing at files that only appeared mid-sync.
+        const touched = new Set(paths.map(canonicalizePath));
+        await this.resolveWikilinks((p) => touched.has(p));
+        canvasStatus = await this.regenerateCanvasWithStatus();
+        if (!canvasStatus.ok) {
+          getLoggerSafe().warn('[obsidian-vault] sync: canvas regen failed', {
+            vaultId: this.id, op: 'sync', error: canvasStatus.error,
+          });
+        }
+        this.emitter.emit('update', { vaultId: this.id, changedPaths: paths });
+      }
+      return { changed: count, durationMs: Date.now() - started, ...(canvasStatus ? { canvas: canvasStatus } : {}) };
+    });
   }
 
   async rebuild(): Promise<void> {
     this.store.close();
-    const { unlink } = await import('node:fs/promises');
-    await unlink(this.dbPath).catch(() => undefined);
+    await fsp.unlink(this.dbPath).catch(() => undefined);
     this.store = new SqliteVaultStore(this.dbPath);
     await this.init();
   }
 
   async query(q: VaultQuery): Promise<VaultQueryResult> {
     const topK = q.topK ?? 20;
+    // Fix P2: escapeFtsQuery throws VaultQueryError on whitespace-only input;
+    // bubble it up so the route handler can return HTTP 400.
     const fts = this.store.searchFts(escapeFtsQuery(q.text), topK);
     const hnsw = await this.adapter.search(q.text, topK);
     const hnswRanked = hnsw
@@ -272,88 +385,236 @@ export class ObsidianVault implements IVault {
     return { wikilinks, callers };
   }
 
-  private async resolveWikilinks(): Promise<void> {
+  /**
+   * Build the wikilink basename→canonical-path lookup map.
+   * Lookup is case-insensitive (matches Obsidian semantics) but the stored
+   * value is always the file's original-case canonical path.
+   * If two files differ only by case (e.g. `Note.md` and `note.md` on a
+   * case-sensitive FS), the first one wins deterministically because
+   * vault_files.listFiles() returns rows sorted by path.
+   */
+  private buildWikilinkBasenameMap(): Map<string, string> {
     const files = this.store.listFiles();
     const basenameMap = new Map<string, string>();
+    // First-write-wins helper: matches the deterministic ordering of
+    // listFiles() ORDER BY path. Pulled out to keep the loop body declarative.
+    const tryAdd = (key: string, value: string): void => {
+      if (!basenameMap.has(key)) basenameMap.set(key, value);
+    };
     for (const f of files) {
-      const base = f.path.split('/').pop() ?? f.path;
+      const canonical = canonicalizePath(f.path);
+      const base = canonical.split('/').pop() ?? canonical;
       const key = base.toLowerCase();
-      basenameMap.set(key, f.path);
+      tryAdd(key, canonical);
       const keyNoExt = key.replace(/\.[^.]+$/, '');
-      if (keyNoExt !== key) {
-        basenameMap.set(keyNoExt, f.path);
-      }
+      if (keyNoExt !== key) tryAdd(keyNoExt, canonical);
+      // Also index by the canonical path itself (for fully-qualified wikilinks like [[folder/Note]]).
+      const canonKey = canonical.toLowerCase();
+      tryAdd(canonKey, canonical);
+      const canonKeyNoExt = canonKey.replace(/\.[^.]+$/, '');
+      if (canonKeyNoExt !== canonKey) tryAdd(canonKeyNoExt, canonical);
     }
+    return basenameMap;
+  }
 
+  /**
+   * Resolve a single wikilink target token to a canonical stored path, or null.
+   * Case-insensitive match (Obsidian-compatible) but the result preserves
+   * the file's original case.
+   */
+  private resolveWikilinkTarget(target: string, basenameMap: Map<string, string>): string | null {
+    // Strip in-page anchor (#heading) first; lookups operate on the file portion only.
+    const filePart = (target.split('#')[0] ?? target).trim();
+    if (!filePart) return null;
+    const canonical = canonicalizePath(filePart);
+    // Try fully-qualified path first, then bare basename.
+    const directHit = basenameMap.get(canonical.toLowerCase());
+    if (directHit) return directHit;
+    const base = canonical.split('/').pop() ?? canonical;
+    return basenameMap.get(base.toLowerCase()) ?? null;
+  }
+
+  /**
+   * Resolve unresolved wikilinks to canonical stored paths.
+   *
+   * Pass-mode is controlled by the optional `predicate`:
+   *   - omitted → first-pass: resolves every unresolved row.
+   *   - provided → second-pass: only rows where `predicate(fromNote)` or
+   *     `predicate(resolvedTarget)` returns true. Used after a sync to catch
+   *     wikilinks pointing at files that only appeared mid-sync (P1 fix).
+   */
+  private async resolveWikilinks(
+    predicate?: (canonicalPath: string) => boolean,
+  ): Promise<void> {
+    const basenameMap = this.buildWikilinkBasenameMap();
     const wikilinks = this.store.listWikilinks();
     for (const w of wikilinks) {
       if (w.resolved) continue;
-      const targetBase = w.target.split('/').pop() ?? w.target;
-      const filePart = targetBase.split('#')[0] ?? targetBase;
-      const resolvedPath = basenameMap.get(filePart.toLowerCase());
-      if (resolvedPath) {
-        this.store.updateWikilinkTarget(w.fromNote, w.target, resolvedPath);
+      const resolvedPath = this.resolveWikilinkTarget(w.target, basenameMap);
+      if (!resolvedPath) continue;
+      const fromNote = canonicalizePath(w.fromNote);
+      if (predicate && !(predicate(fromNote) || predicate(canonicalizePath(resolvedPath)))) {
+        continue;
       }
+      this.store.updateWikilinkTarget(fromNote, w.target, resolvedPath);
     }
   }
 
+  /**
+   * Public reindex — serializes through the per-vault write lock so concurrent
+   * callers (e.g. several writeNote() + sync()) can't interleave HNSW + edge state.
+   */
   private async reindexFile(relPath: string): Promise<boolean> {
+    return this.writeLock.run(() => this.reindexFileInternal(relPath));
+  }
+
+  /**
+   * Actual reindex. MUST be called from within the writeLock.
+   *
+   * Ordering (P1 fix — revised May 2026):
+   *   Step 1. Extract chunks + symbols/edges/wikilinks from disk (no DB write).
+   *   Step 2. SQL transaction (atomic): delete old chunks/symbols/edges, upsert
+   *           new ones, write file row with new hash.
+   *   Step 3. AFTER txn commit, embed + HNSW upsert.
+   *           - Track every HNSW id returned across sub-batches so a partial
+   *             failure can clean up the just-inserted vectors.
+   *           - If embedding fails, the file row's hash is correct on disk;
+   *             we still clear vault_embeddings rows + the newly-inserted
+   *             HNSW vectors so the next sync retries cleanly.
+   *   Step 4. ONLY after HNSW commit succeeds do we remove the OLD HNSW
+   *           vectors — keeps the external index alive until the new ones
+   *           replace it. (Previously old vectors were removed BEFORE the
+   *           SQL txn, which left a window where a failure could lose the
+   *           file's embeddings without clearing its hash.)
+   */
+  private async reindexFileInternal(relPath: string): Promise<boolean> {
     const fileInfo = await getIndexableFileInfo(this.rootPath, relPath);
     if (!fileInfo.ok) {
-      return this.deleteIndexedFile(fileInfo.relPath);
+      return this.deleteIndexedFileInternal(fileInfo.relPath);
     }
     const abs = fileInfo.absPath;
-    relPath = fileInfo.relPath;
+    relPath = canonicalizePath(fileInfo.relPath);
     const body = await readFile(abs, 'utf8').catch(() => null);
-    if (body === null) { return this.deleteIndexedFile(relPath); }
+    if (body === null) { return this.deleteIndexedFileInternal(relPath); }
     const hash = xxhash64Hex(body);
     const existing = this.store.getFile(relPath);
     if (existing?.blobHash === hash) return false;
     const lang = fileInfo.lang;
 
+    // Snapshot the OLD HNSW ids — we keep them alive until the new vectors
+    // commit successfully, then remove them in Step 4. If anything before
+    // that fails, the old vectors remain (still consistent with whatever
+    // SQL state we roll back to or leave untouched).
     const oldHnswIds = this.store.listHnswIdsForPath(relPath);
-    for (const hnswId of oldHnswIds) this.adapter.remove(hnswId);
 
-    this.store.deleteFile(relPath);
-    this.store.upsertFile({
-      path: relPath, blobHash: hash, mtimeMs: fileInfo.mtimeMs, size: fileInfo.size,
-      lang, kind: lang === 'markdown' ? 'doc' : lang === 'json' ? 'config' : 'source',
-      indexedAt: Date.now(),
-    });
+    // Step 1: extract everything from the file body. No DB writes yet so any
+    // extractor exception is a clean no-op (P1 atomicity invariant).
     const chunks = chunkFile({ path: relPath, content: body, lang });
-    for (const c of chunks) this.store.upsertChunk(c);
-    const embeddingMap = await this.adapter.upsertBatch(chunks.map((c) => ({ chunkId: c.chunkId, content: c.content })));
-    for (const [chunkId, hnswId] of Object.entries(embeddingMap)) {
-      this.store.upsertEmbedding(chunkId, hnswId, this.adapter.provider.dim, this.adapter.provider.model);
-    }
-
     const EXTRACT_MAX_BYTES = 2 * 1024 * 1024;
     const extractor = getExtractorFor(lang);
+    let extracted: {
+      symbols: VaultSymbol[];
+      edges: VaultEdge[];
+      wikilinks: VaultWikilink[];
+      frontmatter: Record<string, string> | null;
+      tags: string[] | null;
+    } | null = null;
     if (extractor && body.length <= EXTRACT_MAX_BYTES) {
       try {
         const out = await extractor.extract({
           path: relPath, content: body,
           lang: lang as 'typescript' | 'csharp' | 'markdown',
         });
-        for (const s of out.symbols) this.store.upsertSymbol(s);
-        for (const e of out.edges) this.store.upsertEdge(e);
-        for (const w of out.wikilinks) this.store.upsertWikilink(w);
-        if (out.frontmatter) {
-          this.store.deleteFrontmatterByPath(relPath);
-          for (const [key, value] of Object.entries(out.frontmatter)) {
-            this.store.upsertFrontmatter(relPath, key, value);
-          }
-        }
-        if (out.tags) {
-          this.store.deleteTagsByPath(relPath);
-          for (const tag of out.tags) {
-            this.store.upsertTag(relPath, tag);
-          }
-        }
+        extracted = {
+          symbols: out.symbols,
+          edges: out.edges,
+          wikilinks: out.wikilinks,
+          frontmatter: out.frontmatter ?? null,
+          tags: out.tags ?? null,
+        };
       } catch (err) {
-        getLoggerSafe().warn(`[obsidian-vault ${this.id}] symbol extraction failed for ${relPath}`, { err });
+        getLoggerSafe().warn('[obsidian-vault] symbol extraction failed; rolling back reindex', {
+          vaultId: this.id, path: relPath, op: 'reindexFile', err,
+        });
+        throw err;
       }
     }
+
+    // Step 2: SQL transaction — file + chunks + symbols + edges + wikilinks + frontmatter + tags.
+    // Embeddings (HNSW external) are committed AFTER this txn succeeds.
+    const txn = this.store.runReindexTxn({
+      path: relPath,
+      file: {
+        path: relPath, blobHash: hash, mtimeMs: fileInfo.mtimeMs, size: fileInfo.size,
+        lang, kind: lang === 'markdown' ? 'doc' : lang === 'json' ? 'config' : 'source',
+        indexedAt: Date.now(),
+      },
+      chunks,
+      symbols: extracted?.symbols ?? [],
+      edges: extracted?.edges ?? [],
+      wikilinks: (extracted?.wikilinks ?? []).map((w) => ({
+        ...w,
+        fromNote: canonicalizePath(w.fromNote),
+        // Target may be a wikilink token (e.g. "Note" / "Note.md") — leave as-is here;
+        // canonicalization to a real stored path happens in resolveWikilinks().
+      })),
+      frontmatter: extracted?.frontmatter ?? null,
+      tags: extracted?.tags ?? null,
+    });
+    if (!txn.ok) {
+      // SQL rollback already happened inside runReindexTxn — old HNSW vectors
+      // are still in the index and still referenced by the (unchanged) SQL
+      // rows, so the two indexes remain consistent.
+      getLoggerSafe().warn('[obsidian-vault] reindex SQL txn failed', {
+        vaultId: this.id, path: relPath, op: 'reindexFile', error: txn.error,
+      });
+      this.invalidateEdgesCache();
+      return false;
+    }
+
+    // Step 3: embed + HNSW upsert. Track every returned id so we can roll
+    // back partial inserts on failure without touching the OLD ids.
+    const newHnswIds: number[] = [];
+    try {
+      const embeddingMap = await this.adapter.upsertBatch(
+        chunks.map((c) => ({ chunkId: c.chunkId, content: c.content })),
+      );
+      for (const [chunkId, hnswId] of Object.entries(embeddingMap)) {
+        newHnswIds.push(hnswId);
+        this.store.upsertEmbedding(chunkId, hnswId, this.adapter.provider.dim, this.adapter.provider.model);
+      }
+    } catch (err) {
+      getLoggerSafe().warn('[obsidian-vault] HNSW upsert failed; rolling back new vectors', {
+        vaultId: this.id, path: relPath, op: 'reindexFile',
+        newVectorCount: newHnswIds.length, err,
+      });
+      // Remove only the NEW vectors we managed to insert. Wrap in its own
+      // try/catch so a cleanup failure cannot mask the original error.
+      try {
+        for (const id of newHnswIds) {
+          try { this.adapter.remove(id); } catch { /* per-id best effort */ }
+        }
+      } catch (cleanupErr) {
+        getLoggerSafe().warn('[obsidian-vault] HNSW cleanup after failed upsert threw', {
+          vaultId: this.id, path: relPath, op: 'reindexFile', cleanupErr,
+        });
+      }
+      // Drop the file row + chunks so the next sync retries cleanly. The
+      // OLD HNSW vectors are still in the external index but unreferenced
+      // (their SQL rows were just deleted) — a follow-up sync will rebuild
+      // both sides.
+      this.store.deleteFile(relPath);
+      this.invalidateEdgesCache();
+      throw err;
+    }
+
+    // Step 4: new HNSW vectors are live + referenced. Safe to remove the OLD
+    // ones now. Cleanup failure here is logged but non-fatal — orphans don't
+    // affect correctness, only memory.
+    for (const id of oldHnswIds) {
+      try { this.adapter.remove(id); } catch { /* best effort */ }
+    }
+
     this.invalidateEdgesCache();
     return true;
   }
@@ -366,19 +627,59 @@ export class ObsidianVault implements IVault {
   private invalidateEdgesCache(): void { this._edgesCache = null; }
 
   async regenerateCanvas(): Promise<void> {
+    // Public interface signature stays Promise<void>; status callers should use
+    // regenerateCanvasWithStatus() (used internally by sync()).
+    await this.regenerateCanvasWithStatus();
+  }
+
+  /**
+   * Regenerate the .canvas graph atomically:
+   * 1. build canvas in memory
+   * 2. serialize to JSON
+   * 3. PARSE the JSON back (P2 fix: validates the write before clobbering the old file)
+   * 4. write to .tmp + fsync, then atomic rename
+   * On any error, the old canvas file is left intact and a status is returned.
+   */
+  private async regenerateCanvasWithStatus(): Promise<{ ok: boolean; error?: string }> {
+    const finalPath = join(this.rootPath, '.strada/vault/graph.canvas');
+    const tmpPath = `${finalPath}.tmp`;
     try {
       const files = this.store.listFiles();
       const symbols = files.flatMap((f) => this.store.listSymbolsForPath(f.path));
       const edges = this.store.listEdges();
       const wikilinks = this.store.listWikilinks();
       const canvas = buildCanvas({ symbols, edges, files, wikilinks });
-      const finalPath = join(this.rootPath, '.strada/vault/graph.canvas');
-      const tmpPath = `${finalPath}.tmp`;
-      await writeFile(tmpPath, JSON.stringify(canvas, null, 2), 'utf8');
-      const { rename } = await import('node:fs/promises');
-      await rename(tmpPath, finalPath);
+      const serialized = JSON.stringify(canvas, null, 2);
+      // P2 fix: validate round-trip BEFORE touching the live file.
+      try {
+        JSON.parse(serialized);
+      } catch (parseErr) {
+        const msg = parseErr instanceof Error ? parseErr.message : String(parseErr);
+        getLoggerSafe().warn('[obsidian-vault] canvas JSON validation failed; leaving old canvas intact', {
+          vaultId: this.id, op: 'regenerateCanvas', error: msg,
+        });
+        return { ok: false, error: `validation_failed: ${msg}` };
+      }
+      await writeFile(tmpPath, serialized, 'utf8');
+      try {
+        // Use fsp.rename so test code can spy/intercept via the namespace.
+        await fsp.rename(tmpPath, finalPath);
+      } catch (renameErr) {
+        // Rename failed — try to clean up the tmp file so we don't leak.
+        await fsp.unlink(tmpPath).catch(() => undefined);
+        throw renameErr;
+      }
+      return { ok: true };
     } catch (err) {
-      getLoggerSafe().warn(`[obsidian-vault ${this.id}] canvas regen failed`, { err });
+      const rawMsg = err instanceof Error ? err.message : String(err);
+      // SecH1: full err.message often contains absolute filesystem paths.
+      // We log the raw message internally but only ever return a redacted
+      // version so HTTP/WS clients never see local filesystem layout.
+      const redacted = redactPathsInMessage(rawMsg, this.rootPath);
+      getLoggerSafe().warn('[obsidian-vault] canvas regen failed', {
+        vaultId: this.id, op: 'regenerateCanvas', error: rawMsg,
+      });
+      return { ok: false, error: redacted };
     }
   }
 
@@ -389,48 +690,67 @@ export class ObsidianVault implements IVault {
     } catch { return { nodes: [], edges: [] }; }
   }
 
-  private async fullIndex(): Promise<void> {
+  /**
+   * Shared "iterate every discoverable file, reindex changed, prune deletions"
+   * skeleton used by both fullIndex() and reindexChangedInternal().
+   * MUST be called from within the writeLock.
+   *
+   * `op` is purely a log tag.
+   */
+  private async runIndexPass(op: 'fullIndex' | 'sync'): Promise<{ count: number; paths: string[] }> {
     const before = new Set(this.store.listFiles().map((f) => f.path));
     const files = await listIndexableFiles(this.rootPath);
 
     const changed: string[] = [];
     for (const f of files) {
-      if (await this.reindexFile(f.path)) changed.push(f.path);
-    }
-    const present = new Set(files.map((f) => f.path));
-    for (const p of before) {
-      if (!present.has(p) && this.deleteIndexedFile(p)) changed.push(p);
-    }
-    await this.resolveWikilinks();
-    await this.regenerateCanvas();
-    if (changed.length) {
-      this.emitter.emit('update', { vaultId: this.id, changedPaths: changed });
-    }
-  }
-
-  private async reindexChanged(): Promise<{ count: number; paths: string[] }> {
-    const before = new Set(this.store.listFiles().map((f) => f.path));
-    const files = await listIndexableFiles(this.rootPath);
-
-    const changed: string[] = [];
-    for (const f of files) {
-      if (await this.reindexFile(f.path)) changed.push(f.path);
-    }
-    const present = new Set(files.map((f) => f.path));
-    for (const p of before) {
-      if (!present.has(p)) {
-        if (this.deleteIndexedFile(p)) changed.push(p);
+      try {
+        if (await this.reindexFileInternal(f.path)) changed.push(f.path);
+      } catch (err) {
+        // Failure in one file should not poison the whole pass.
+        getLoggerSafe().warn(`[obsidian-vault] reindex failed during ${op}`, {
+          vaultId: this.id, path: f.path, op, err,
+        });
       }
+    }
+    const present = new Set(files.map((f) => f.path));
+    for (const p of before) {
+      if (!present.has(p) && this.deleteIndexedFileInternal(p)) changed.push(p);
     }
     return { count: changed.length, paths: changed };
   }
 
-  private deleteIndexedFile(relPath: string): boolean {
-    const existing = this.store.getFile(relPath);
+  private async fullIndex(): Promise<void> {
+    // Serialize with sync()/reindexFile() — full index can take a while and
+    // must not race with concurrent writes.
+    await this.writeLock.run(async () => {
+      const { paths: changed } = await this.runIndexPass('fullIndex');
+      await this.resolveWikilinks();
+      const touched = new Set(changed.map(canonicalizePath));
+      await this.resolveWikilinks((p) => touched.has(p));
+      await this.regenerateCanvasWithStatus();
+      if (changed.length) {
+        this.emitter.emit('update', { vaultId: this.id, changedPaths: changed });
+      }
+    });
+  }
+
+  /**
+   * Internal reindexChanged — MUST be called from within the writeLock.
+   * Uses `runIndexPass` (which calls `reindexFileInternal`) to avoid
+   * double-lock acquisition.
+   */
+  private async reindexChangedInternal(): Promise<{ count: number; paths: string[] }> {
+    return this.runIndexPass('sync');
+  }
+
+  /** Internal delete — MUST be called from within the writeLock. */
+  private deleteIndexedFileInternal(relPath: string): boolean {
+    const canonical = canonicalizePath(relPath);
+    const existing = this.store.getFile(canonical);
     if (!existing) return false;
-    const hnswIds = this.store.listHnswIdsForPath(relPath);
+    const hnswIds = this.store.listHnswIdsForPath(canonical);
     for (const hnswId of hnswIds) this.adapter.remove(hnswId);
-    this.store.deleteFile(relPath);
+    this.store.deleteFile(canonical);
     return true;
   }
 }

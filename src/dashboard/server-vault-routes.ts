@@ -9,6 +9,7 @@ import type { IAIProvider } from '../agents/providers/provider.interface.js';
 import { sendJson, sendJsonError, type RouteContext } from './server-types.js';
 import { summarizeSymbol } from '../vault/symbol-summarizer.js';
 import { resolveExistingVaultRoot } from '../vault/path-policy.js';
+import { VaultQueryError } from '../vault/obsidian-vault.js';
 
 /**
  * Factory injected by bootstrap so the HTTP layer can create a new vault
@@ -230,12 +231,22 @@ export function registerVaultRoutes(app: RouteApp, registry: VaultRegistry, fact
     if (!v) return { error: 'not found' };
     const query = buildVaultSearchQuery((req.body ?? {}) as Record<string, unknown>);
     if ('error' in query) return { error: query.error };
-    return await v.query(query);
+    try {
+      return await v.query(query);
+    } catch (err) {
+      if (err instanceof VaultQueryError) {
+        // P2 fix: surface typed query errors (e.g. empty FTS) as 4xx-style payloads.
+        return { error: err.message, code: err.code };
+      }
+      throw err;
+    }
   });
 
   app.post('/api/vaults/:id/sync', async (req) => {
     const v = registry.get(req.params.id);
-    return v ? await v.sync() : { error: 'not found' };
+    if (!v) return { error: 'not found' };
+    const result = await v.sync();
+    return sanitizeSyncResponse(result);
   });
 
   // Phase 2: graph + symbol endpoints.
@@ -517,13 +528,24 @@ export function handleVaultRoutes(
       if (typeof rawText !== 'string') { sendJsonError(res, 400, 'invalid text'); return; }
       const query = buildVaultSearchQuery(body ?? {});
       if ('error' in query) { sendJsonError(res, 400, query.error); return; }
-      const result = await vault.query(query);
-      sendJson(res, result);
+      try {
+        const result = await vault.query(query);
+        sendJson(res, result);
+      } catch (err) {
+        if (err instanceof VaultQueryError) {
+          // P2 fix: surface typed query errors as HTTP 400 with code.
+          sendJsonError(res, 400, err.message);
+          return;
+        }
+        throw err;
+      }
     }).catch(() => sendJsonError(res, 500, 'search failed'));
     return true;
   }
   if (op === 'sync' && method === 'POST') {
-    void vault.sync().then((r) => sendJson(res, r)).catch(() => sendJsonError(res, 500, 'sync failed'));
+    void vault.sync()
+      .then((r) => sendJson(res, sanitizeSyncResponse(r)))
+      .catch(() => sendJsonError(res, 500, 'sync failed'));
     return true;
   }
 
@@ -558,6 +580,32 @@ async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknow
   } catch {
     return {};
   }
+}
+
+/**
+ * Defense-in-depth for SecH1: even though the vault layer already redacts
+ * absolute paths from `canvas.error`, the HTTP response should never leak the
+ * raw failure string. We replace it with a stable generic message and keep
+ * only the boolean `ok` flag for clients. Internal logs (which can contain
+ * the original message) are unaffected.
+ *
+ * The shape of `result` mirrors `ObsidianVault.sync` return value but we
+ * accept the looser `unknown` form here because other IVault implementations
+ * may evolve independently.
+ */
+function sanitizeSyncResponse(result: unknown): unknown {
+  if (!result || typeof result !== 'object') return result;
+  const r = result as Record<string, unknown>;
+  const canvas = r.canvas;
+  if (canvas && typeof canvas === 'object' && 'ok' in canvas) {
+    const c = canvas as Record<string, unknown>;
+    if (c.ok === false) {
+      return { ...r, canvas: { ok: false, error: 'canvas regeneration failed' } };
+    }
+    // Successful canvas: strip any stray error field defensively.
+    return { ...r, canvas: { ok: true } };
+  }
+  return r;
 }
 
 export interface WsBroadcaster { broadcast(msg: string): void; }

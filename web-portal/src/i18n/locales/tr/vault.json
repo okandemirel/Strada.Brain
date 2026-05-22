@@ -17,6 +17,12 @@
   "filter.kind.unknown": "Sembol",
 
   "graph.minimapLabel": "Graf genel bakış",
+  "graph.search.matchCount": "{{count}} eşleşme",
+  "graph.search.matchCount_other": "{{count}} eşleşme",
+  "graph.search.noMatches": "Eşleşme yok",
+  "graph.minimap.title": "Graf mini haritası",
+  "graph.minimap.toggleHint": "Gezinmek için tıklayın veya sürükleyin",
+  "graph.minimap.nodeCount": "({{count}} düğüm)",
 
   "detail.title": "Sembol ayrıntıları",
   "detail.empty": "Ayrıntıları görmek için bir düğüm seç.",
@@ -124,5 +130,40 @@
   "register.cancel": "İptal",
   "register.error.invalidPath": "Yol mevcut değil veya erişilemiyor",
   "register.error.generic": "Vault kaydedilemedi",
-  "register.success": "Vault kaydedildi, indeksleme başladı"
+  "register.success": "Vault kaydedildi, indeksleme başladı",
+
+  "graph.a11y.regionLabel": "Bilgi grafiği",
+  "graph.a11y.nodeRole": "Grafik düğümü",
+  "graph.a11y.nodeCount": "Grafikte {{count}} düğüm",
+  "graph.a11y.selectedHint": "{{label}} seçili, {{count}} bağlantı",
+  "graph.a11y.navigationHint": "Düğümler arasında gezinmek için ok tuşlarını veya J/K kullanın, açmak için Enter, arama için bölü işareti, çıkmak için Esc",
+
+  "graph.search.placeholder": "Düğüm ara…",
+  "graph.search.ariaLabel": "Graf düğümlerinde ara",
+  "graph.search.clear": "Temizle",
+
+  "graph.filters.kinds.title": "Sembol türleri",
+  "graph.filters.kinds.selectAll": "Tümünü seç",
+  "graph.filters.kinds.clearAll": "Tümünü temizle",
+
+  "graph.local.hopDepth.title": "Komşuluk derinliği",
+  "graph.local.hopDepth.label_one": "{{count}} adım",
+  "graph.local.hopDepth.label_other": "{{count}} adım",
+
+  "graph.edges.legendTitle": "Bağlantı ağırlığı",
+  "graph.edges.legendHint": "ince → kalın = 1 → {{max}} referans",
+
+  "graph.physics.title": "Gelişmiş fizik",
+  "graph.physics.linkDistance": "Bağlantı uzaklığı",
+  "graph.physics.charge": "İtme kuvveti",
+  "graph.physics.collide": "Çarpışma yarıçapı",
+  "graph.physics.preset.sparse": "Seyrek",
+  "graph.physics.preset.balanced": "Dengeli",
+  "graph.physics.preset.dense": "Yoğun",
+  "graph.physics.reset": "Dengeliye dön",
+
+  "graph.actions.exportPng": "PNG olarak kaydet",
+  "graph.actions.exportSuccess": "Graf dışa aktarıldı",
+
+  "graph.truncated": "Graf {{max}} düğüme kısaltıldı — büyük vault'larda düşük bağlantılı semboller gizlenebilir."
 }

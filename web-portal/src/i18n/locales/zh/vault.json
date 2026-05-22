@@ -5,7 +5,6 @@
   "filter.search.placeholder": "搜索符号…",
   "filter.file.placeholder": "按文件路径筛选…",
   "filter.resultCount": "已显示 {{visible}} / {{total}}",
-
   "filter.kind.namespace": "命名空间",
   "filter.kind.class": "类",
   "filter.kind.interface": "接口",
@@ -15,9 +14,13 @@
   "filter.kind.note": "备注",
   "filter.kind.file": "文件",
   "filter.kind.unknown": "符号",
-
   "graph.minimapLabel": "图概览",
-
+  "graph.search.matchCount": "{{count}} 个匹配",
+  "graph.search.matchCount_other": "{{count}} 个匹配",
+  "graph.search.noMatches": "无匹配",
+  "graph.minimap.title": "图小地图",
+  "graph.minimap.toggleHint": "点击或拖动以导航",
+  "graph.minimap.nodeCount": "({{count}} 个节点)",
   "detail.title": "符号详情",
   "detail.empty": "选择一个节点以查看详情。",
   "detail.closeLabel": "关闭详情",
@@ -27,27 +30,22 @@
   "detail.noIncoming": "没有入边。",
   "detail.noOutgoing": "没有出边。",
   "detail.loadError": "无法加载调用方。",
-
   "empty.selectVault": "请选择一个 vault 以查看图。",
   "empty.loading": "正在加载图…",
   "empty.noSymbols": "尚未索引任何符号。",
   "empty.noMatches": "没有符号匹配当前筛选条件。",
-
   "tab.files": "文件",
   "tab.search": "搜索",
   "tab.graph": "图",
   "tab.bookmarks": "书签",
   "tab.close": "关闭标签",
-
   "rail.files": "文件浏览器",
   "rail.search": "搜索",
   "rail.graph": "图",
   "rail.bookmarks": "书签",
   "rail.settings": "Vault 设置",
-
   "vaultList.empty": "未注册 vault",
   "vaultList.title": "Vault 列表",
-
   "tree.empty": "没有文件",
   "tree.emptyHint": "索引后文件将显示在此。",
   "tree.reveal": "在图中显示",
@@ -55,7 +53,6 @@
   "tree.rename": "重命名",
   "tree.previewError": "预览失败",
   "tree.previewRetry": "重试",
-
   "right.backlinks": "反向链接",
   "right.outline": "大纲",
   "right.metadata": "元数据",
@@ -63,16 +60,13 @@
   "right.noBacklinks": "没有反向链接。",
   "right.noOutline": "没有大纲。",
   "right.noMetadata": "没有元数据。",
-
   "search.placeholder": "语义 + 关键字查询",
   "search.run": "搜索",
   "search.running": "搜索中…",
   "search.empty": "执行查询以查看结果。",
   "search.selectVault": "选择 vault 以搜索。",
-
   "files.selectVault": "选择 vault",
   "files.pickFile": "选择文件",
-
   "palette.title": "命令面板",
   "palette.placeholder": "输入命令或搜索…",
   "palette.empty": "没有匹配的命令。",
@@ -88,7 +82,6 @@
   "palette.cmd.toggleLeft": "切换左面板",
   "palette.cmd.toggleRight": "切换右面板",
   "palette.cmd.quickSwitcher": "快速切换",
-
   "status.symbols": "{{count}} 个符号",
   "status.files": "{{count}} 个文件",
   "status.lastSync": "上次同步: {{time}}",
@@ -96,18 +89,14 @@
   "status.reindex": "重新索引",
   "status.reindexing": "索引中…",
   "status.reindexError": "重新索引失败",
-
   "statusBar.xSecondsAgo": "{{count}} 秒前",
   "statusBar.xMinutesAgo": "{{count}} 分钟前",
   "statusBar.xHoursAgo": "{{count}} 小时前",
   "statusBar.xDaysAgo": "{{count}} 天前",
-
   "breadcrumb.root": "Vault",
   "breadcrumb.separator": "/",
-
   "panel.toggleLeft": "切换左面板",
   "panel.toggleRight": "切换右面板",
-
   "register.button": "注册 Vault",
   "register.newVault": "新建 Vault",
   "register.title": "注册新的 Vault",
@@ -124,5 +113,52 @@
   "register.cancel": "取消",
   "register.error.invalidPath": "路径不存在或无法访问",
   "register.error.generic": "注册 Vault 失败",
-  "register.success": "Vault 已注册,索引已开始"
+  "register.success": "Vault 已注册,索引已开始",
+  "graph.a11y.regionLabel": "知识图谱",
+  "graph.a11y.nodeRole": "图节点",
+  "graph.a11y.nodeCount": "图中有 {{count}} 个节点",
+  "graph.a11y.selectedHint": "已选中 {{label}},{{count}} 个连接",
+  "graph.a11y.navigationHint": "使用方向键或 J/K 在节点间移动,回车打开,斜杠搜索,Esc 退出",
+  "graph": {
+    "search": {
+      "placeholder": "搜索节点…",
+      "ariaLabel": "搜索图节点",
+      "clear": "清除"
+    },
+    "filters": {
+      "kinds": {
+        "title": "符号类型",
+        "selectAll": "全选",
+        "clearAll": "清空"
+      }
+    },
+    "local": {
+      "hopDepth": {
+        "title": "跳数深度",
+        "label_one": "{{count}} 跳",
+        "label_other": "{{count}} 跳"
+      }
+    },
+    "edges": {
+      "legendTitle": "边权重",
+      "legendHint": "细 → 粗 = 1 → {{max}} 次引用"
+    },
+    "physics": {
+      "title": "高级物理",
+      "linkDistance": "链接距离",
+      "charge": "斥力",
+      "collide": "碰撞半径",
+      "preset": {
+        "sparse": "稀疏",
+        "balanced": "平衡",
+        "dense": "密集"
+      },
+      "reset": "重置为平衡"
+    },
+    "actions": {
+      "exportPng": "保存为 PNG",
+      "exportSuccess": "已导出图形"
+    },
+    "truncated": "图已截断至 {{max}} 个节点 — 大型保管库中连接较少的符号可能被隐藏。"
+  }
 }

@@ -5,7 +5,6 @@
   "filter.search.placeholder": "Symbole suchen…",
   "filter.file.placeholder": "Nach Dateipfad filtern…",
   "filter.resultCount": "{{visible}} von {{total}} sichtbar",
-
   "filter.kind.namespace": "Namespace",
   "filter.kind.class": "Klasse",
   "filter.kind.interface": "Interface",
@@ -15,9 +14,13 @@
   "filter.kind.note": "Notiz",
   "filter.kind.file": "Datei",
   "filter.kind.unknown": "Symbol",
-
   "graph.minimapLabel": "Graph-Übersicht",
-
+  "graph.search.matchCount": "{{count}} Treffer",
+  "graph.search.matchCount_other": "{{count}} Treffer",
+  "graph.search.noMatches": "Keine Treffer",
+  "graph.minimap.title": "Graph-Minimap",
+  "graph.minimap.toggleHint": "Klicken oder ziehen zum Navigieren",
+  "graph.minimap.nodeCount": "({{count}} Knoten)",
   "detail.title": "Symboldetails",
   "detail.empty": "Wähle einen Knoten, um Details zu sehen.",
   "detail.closeLabel": "Details schließen",
@@ -27,27 +30,22 @@
   "detail.noIncoming": "Keine eingehenden Kanten.",
   "detail.noOutgoing": "Keine ausgehenden Kanten.",
   "detail.loadError": "Aufrufer konnten nicht geladen werden.",
-
   "empty.selectVault": "Wähle einen Vault, um den Graph anzuzeigen.",
   "empty.loading": "Graph wird geladen…",
   "empty.noSymbols": "Noch keine Symbole indexiert.",
   "empty.noMatches": "Keine Symbole entsprechen den aktuellen Filtern.",
-
   "tab.files": "Dateien",
   "tab.search": "Suche",
   "tab.graph": "Graph",
   "tab.bookmarks": "Lesezeichen",
   "tab.close": "Tab schließen",
-
   "rail.files": "Datei-Explorer",
   "rail.search": "Suche",
   "rail.graph": "Graph",
   "rail.bookmarks": "Lesezeichen",
   "rail.settings": "Vault-Einstellungen",
-
   "vaultList.empty": "Keine Vaults registriert",
   "vaultList.title": "Vaults",
-
   "tree.empty": "Noch keine Dateien",
   "tree.emptyHint": "Dateien erscheinen hier, sobald indexiert.",
   "tree.reveal": "Im Graph anzeigen",
@@ -55,7 +53,6 @@
   "tree.rename": "Umbenennen",
   "tree.previewError": "Vorschau fehlgeschlagen",
   "tree.previewRetry": "Erneut versuchen",
-
   "right.backlinks": "Backlinks",
   "right.outline": "Gliederung",
   "right.metadata": "Metadaten",
@@ -63,16 +60,13 @@
   "right.noBacklinks": "Keine Backlinks.",
   "right.noOutline": "Keine Gliederung verfügbar.",
   "right.noMetadata": "Keine Metadaten verfügbar.",
-
   "search.placeholder": "Semantische + Stichwortabfrage",
   "search.run": "Suchen",
   "search.running": "Suche läuft…",
   "search.empty": "Starte eine Abfrage, um Ergebnisse zu sehen.",
   "search.selectVault": "Wähle einen Vault zum Suchen.",
-
   "files.selectVault": "Vault wählen",
   "files.pickFile": "Datei wählen",
-
   "palette.title": "Befehlspalette",
   "palette.placeholder": "Befehl eingeben oder suchen…",
   "palette.empty": "Keine passenden Befehle.",
@@ -88,7 +82,6 @@
   "palette.cmd.toggleLeft": "Linkes Panel umschalten",
   "palette.cmd.toggleRight": "Rechtes Panel umschalten",
   "palette.cmd.quickSwitcher": "Schnellwechsel",
-
   "status.symbols": "{{count}} Symbole",
   "status.files": "{{count}} Dateien",
   "status.lastSync": "Letzte Synchronisation: {{time}}",
@@ -96,18 +89,14 @@
   "status.reindex": "Neu indexieren",
   "status.reindexing": "Indexierung läuft…",
   "status.reindexError": "Neuindexierung fehlgeschlagen",
-
   "statusBar.xSecondsAgo": "vor {{count}} s",
   "statusBar.xMinutesAgo": "vor {{count}} min",
   "statusBar.xHoursAgo": "vor {{count}} h",
   "statusBar.xDaysAgo": "vor {{count}} d",
-
   "breadcrumb.root": "Vault",
   "breadcrumb.separator": "/",
-
   "panel.toggleLeft": "Linkes Panel umschalten",
   "panel.toggleRight": "Rechtes Panel umschalten",
-
   "register.button": "Vault registrieren",
   "register.newVault": "Neuer Vault",
   "register.title": "Neuen Vault registrieren",
@@ -124,5 +113,52 @@
   "register.cancel": "Abbrechen",
   "register.error.invalidPath": "Pfad existiert nicht oder ist nicht zugänglich",
   "register.error.generic": "Vault-Registrierung fehlgeschlagen",
-  "register.success": "Vault registriert, Indizierung gestartet"
+  "register.success": "Vault registriert, Indizierung gestartet",
+  "graph.a11y.regionLabel": "Wissensgraph",
+  "graph.a11y.nodeRole": "Graphknoten",
+  "graph.a11y.nodeCount": "{{count}} Knoten im Graph",
+  "graph.a11y.selectedHint": "{{label}} ausgewählt, {{count}} Verbindungen",
+  "graph.a11y.navigationHint": "Mit Pfeiltasten oder J/K zwischen Knoten navigieren, Eingabe zum Öffnen, Schrägstrich zum Suchen, Esc zum Beenden",
+  "graph": {
+    "search": {
+      "placeholder": "Knoten suchen…",
+      "ariaLabel": "Graph-Knoten durchsuchen",
+      "clear": "Löschen"
+    },
+    "filters": {
+      "kinds": {
+        "title": "Symbolarten",
+        "selectAll": "Alle auswählen",
+        "clearAll": "Alle abwählen"
+      }
+    },
+    "local": {
+      "hopDepth": {
+        "title": "Hop-Tiefe",
+        "label_one": "{{count}} Hop",
+        "label_other": "{{count}} Hops"
+      }
+    },
+    "edges": {
+      "legendTitle": "Kantengewicht",
+      "legendHint": "dünn → dick = 1 → {{max}} Referenzen"
+    },
+    "physics": {
+      "title": "Erweiterte Physik",
+      "linkDistance": "Verbindungsabstand",
+      "charge": "Ladung",
+      "collide": "Kollisionsradius",
+      "preset": {
+        "sparse": "Dünn",
+        "balanced": "Ausgewogen",
+        "dense": "Dicht"
+      },
+      "reset": "Auf Ausgewogen zurücksetzen"
+    },
+    "actions": {
+      "exportPng": "Als PNG speichern",
+      "exportSuccess": "Graph exportiert"
+    },
+    "truncated": "Graph auf {{max}} Knoten begrenzt — in großen Vaults können schwach verbundene Symbole ausgeblendet werden."
+  }
 }

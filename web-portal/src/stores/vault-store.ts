@@ -3,6 +3,9 @@ import { persist } from 'zustand/middleware';
 import { MAX_RECENT, GRAPH_CACHE_MAX_VAULTS } from '../pages/vaults/constants';
 import { createSafeJSONStorage } from './persist-storage';
 
+/** Cap on persisted per-vault viewport entries; oldest entries are evicted in LRU order. */
+const VAULT_VIEWPORT_CACHE_LIMIT = 20;
+
 export interface VaultSummary { id: string; kind: string; }
 export interface SearchHit {
   chunk: { chunkId: string; path: string; startLine: number; endLine: number; content: string; tokenCount: number };
@@ -59,6 +62,17 @@ export interface VaultLayoutState {
   recentSymbols: string[];
 }
 
+/** Per-vault graph viewport (world-space centre + zoom). Persisted in LRU map. */
+export interface VaultGraphViewport {
+  x: number;
+  y: number;
+  zoom: number;
+  /** Last-selected symbol id at the time the viewport was stored. */
+  selectedNodeId: string | null;
+  /** Insertion timestamp for LRU eviction. */
+  updatedAt: number;
+}
+
 function defaultFilters(): GraphFilters {
   const kinds = Object.fromEntries(ALL_SYMBOL_KINDS.map((k) => [k, true])) as Record<SymbolKind, boolean>;
   return { kinds, search: '', fileFilter: '' };
@@ -76,6 +90,8 @@ interface VaultState extends VaultLayoutState {
   activeFilePath: string | null;
   /** Graph view filters (kinds / search / file). */
   graphFilters: GraphFilters;
+  /** LRU map of vaultId → last-known viewport (centre + zoom). */
+  vaultViewports: Record<string, VaultGraphViewport>;
 
   /** Command palette visibility (not persisted). */
   commandPaletteOpen: boolean;
@@ -91,7 +107,13 @@ interface VaultState extends VaultLayoutState {
   setGraphSearch(value: string): void;
   setGraphFileFilter(value: string): void;
   toggleGraphKind(kind: SymbolKind): void;
+  setGraphKindsAll(value: boolean): void;
   resetGraphFilters(): void;
+
+  /** Persist the graph viewport for a vault; performs LRU eviction. */
+  setVaultViewport(vaultId: string, viewport: Omit<VaultGraphViewport, 'updatedAt'>): void;
+  /** Read a previously-persisted viewport for a vault (no-op if missing). */
+  getVaultViewport(vaultId: string): VaultGraphViewport | undefined;
 
   setActiveTab(tab: VaultTab): void;
   setActiveRightTab(tab: RightPanelTab): void;
@@ -121,7 +143,7 @@ function pushUnique(list: string[], value: string): string[] {
 
 export const useVaultStore = create<VaultState>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       ...DEFAULT_LAYOUT,
       vaults: [],
       selected: null,
@@ -130,6 +152,7 @@ export const useVaultStore = create<VaultState>()(
       selectedSymbolId: null,
       activeFilePath: null,
       graphFilters: defaultFilters(),
+      vaultViewports: {},
       commandPaletteOpen: false,
 
       setVaults: (v) => set({ vaults: v }),
@@ -180,7 +203,36 @@ export const useVaultStore = create<VaultState>()(
           kinds: { ...s.graphFilters.kinds, [kind]: !s.graphFilters.kinds[kind] },
         },
       })),
+      setGraphKindsAll: (value) => set((s) => ({
+        graphFilters: {
+          ...s.graphFilters,
+          kinds: Object.fromEntries(
+            ALL_SYMBOL_KINDS.map((k) => [k, value]),
+          ) as Record<SymbolKind, boolean>,
+        },
+      })),
       resetGraphFilters: () => set({ graphFilters: defaultFilters() }),
+
+      setVaultViewport: (vaultId, viewport) => set((s) => {
+        const next: Record<string, VaultGraphViewport> = { ...s.vaultViewports };
+        next[vaultId] = { ...viewport, updatedAt: Date.now() };
+        // LRU cap: traverse Object.entries once, sort by updatedAt desc, keep
+        // the newest VAULT_VIEWPORT_CACHE_LIMIT entries. Avoids the previous
+        // O(n) key-lookup chain (Object.keys + per-key map lookup) by reading
+        // the value alongside the key in a single pass.
+        const entries = Object.entries(next);
+        if (entries.length > VAULT_VIEWPORT_CACHE_LIMIT) {
+          entries.sort((a, b) => b[1].updatedAt - a[1].updatedAt);
+          const kept: Record<string, VaultGraphViewport> = {};
+          for (let i = 0; i < VAULT_VIEWPORT_CACHE_LIMIT; i += 1) {
+            const e = entries[i];
+            if (e) kept[e[0]] = e[1];
+          }
+          return { vaultViewports: kept };
+        }
+        return { vaultViewports: next };
+      }),
+      getVaultViewport: (vaultId) => get().vaultViewports[vaultId],
 
       setActiveTab: (tab) => set({ activeTab: tab }),
       setActiveRightTab: (tab) => set({ activeRightTab: tab }),
@@ -208,6 +260,7 @@ export const useVaultStore = create<VaultState>()(
         recentFiles: state.recentFiles,
         recentSymbols: state.recentSymbols,
         graphFilters: state.graphFilters,
+        vaultViewports: state.vaultViewports,
       }),
     },
   ),

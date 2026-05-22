@@ -385,4 +385,77 @@ export class SqliteVaultStore {
   close(): void {
     if (this.db.open) this.db.close();
   }
+
+  /**
+   * Atomic reindex transaction (P1 fix).
+   *
+   * Wraps the delete-old + upsert-file + upsert-chunks + upsert-symbols + edges
+   * + wikilinks + frontmatter + tags sequence in a single SQLite transaction so
+   * a partial extractor failure cannot leave half-written data visible to
+   * concurrent readers.
+   *
+   * NOTE: embedding upserts (HNSW external index) are NOT in this transaction —
+   * caller must commit HNSW changes AFTER this returns ok and roll them back
+   * (by deleting the chunks) if HNSW commit fails.
+   */
+  runReindexTxn(input: {
+    path: string;
+    file: VaultFile;
+    chunks: VaultChunk[];
+    symbols: VaultSymbol[];
+    edges: VaultEdge[];
+    wikilinks: VaultWikilink[];
+    frontmatter: Record<string, string> | null;
+    tags: string[] | null;
+  }): { ok: true } | { ok: false; error: string } {
+    try {
+      const txn = this.db.transaction(() => {
+        // 1) Drop the file row (and cascade chunks/symbols/edges/wikilinks via deleteFile).
+        //    Inlined to avoid nested transactions (better-sqlite3 supports nesting but we
+        //    keep it explicit here for clarity).
+        this._stmtDeleteEdgesByPath!.run(input.path, input.path);
+        this._stmtDeleteSymbolsByPath!.run(input.path);
+        this._stmtDeleteWikilinksFromNote!.run(input.path);
+        const chunkIds = this._stmtDeleteChunksByPath!.all(input.path) as { chunk_id: string }[];
+        for (const { chunk_id } of chunkIds) this._stmtDeleteFts!.run(chunk_id);
+        this._stmtDeleteFile!.run(input.path);
+
+        // 2) Upsert file row.
+        this._stmtUpsertFile!.run(input.file);
+
+        // 3) Upsert chunks + FTS.
+        for (const c of input.chunks) {
+          this._stmtUpsertChunk!.run(c);
+          this._stmtDeleteFtsById!.run(c.chunkId);
+          this._stmtInsertFts!.run(c.content, c.chunkId, c.path);
+        }
+
+        // 4) Symbols, edges, wikilinks.
+        for (const s of input.symbols) this._stmtUpsertSymbol!.run(s);
+        for (const e of input.edges) this._stmtUpsertEdge!.run(e);
+        for (const w of input.wikilinks) {
+          this._stmtUpsertWikilink!.run({ ...w, resolved: w.resolved ? 1 : 0 });
+        }
+
+        // 5) Frontmatter & tags (full-replace semantics).
+        if (input.frontmatter) {
+          this._stmtDeleteFrontmatterByPath!.run(input.path);
+          for (const [key, value] of Object.entries(input.frontmatter)) {
+            this._stmtUpsertFrontmatter!.run({ path: input.path, key, value });
+          }
+        }
+        if (input.tags) {
+          this._stmtDeleteTagsByPath!.run(input.path);
+          for (const tag of input.tags) {
+            this._stmtUpsertTag!.run({ path: input.path, tag });
+          }
+        }
+      });
+      txn();
+      return { ok: true };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { ok: false, error: msg };
+    }
+  }
 }

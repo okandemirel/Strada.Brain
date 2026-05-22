@@ -2,7 +2,11 @@ import chokidar, { type FSWatcher } from 'chokidar';
 import { basename, relative } from 'node:path';
 import { lstat } from 'node:fs/promises';
 import { getLoggerSafe } from '../utils/logger.js';
-import { isIgnoredVaultPath, isPotentiallyIndexableVaultPath } from './path-policy.js';
+import {
+  hasSymlinkAncestor,
+  isIgnoredVaultPath,
+  isPotentiallyIndexableVaultPath,
+} from './path-policy.js';
 
 export interface VaultWatcherOptions {
   root: string;
@@ -36,17 +40,48 @@ export class VaultWatcher {
       interval: pollInterval > 0 ? pollInterval : undefined,
       ignored: (path) => IGNORE_REGEX.test(path.replaceAll('\\', '/')),
     });
-    const enqueue = (absPath: string) => {
-      const rel = rootIsFile
+    const computeRel = (absPath: string): string => {
+      return rootIsFile
         ? basename(this.opts.root)
         : relative(this.opts.root, absPath).replaceAll('\\', '/');
-      if (IGNORE_REGEX.test('/' + rel) || isIgnoredVaultPath(rel) || !isPotentiallyIndexableVaultPath(rel)) return;
+    };
+    const shouldIngest = async (rel: string, absPath: string): Promise<boolean> => {
+      if (IGNORE_REGEX.test('/' + rel) || isIgnoredVaultPath(rel) || !isPotentiallyIndexableVaultPath(rel)) {
+        return false;
+      }
+      // followSymlinks:false stops chokidar from descending into symlinked
+      // directories, but events from already-tracked paths may still surface
+      // if a symlinked dir was created after the initial scan. Walk ancestors
+      // explicitly so /vault/secret -> /etc cannot leak files.
+      if (!rootIsFile && (await hasSymlinkAncestor(this.opts.root, absPath))) {
+        getLoggerSafe().warn('[VaultWatcher] skipping event under symlinked directory', {
+          op: 'watcher-skip-symlink',
+          path: rel,
+        });
+        return false;
+      }
+      return true;
+    };
+    const enqueue = async (absPath: string): Promise<void> => {
+      const rel = computeRel(absPath);
+      if (!(await shouldIngest(rel, absPath))) return;
       this.dirty.add(rel);
       this.scheduleDrain();
     };
-    this.watcher.on('add', enqueue);
-    this.watcher.on('change', enqueue);
-    this.watcher.on('unlink', enqueue);
+    const enqueueSafe = (absPath: string): void => {
+      // Surface enqueue rejections in the logs instead of dropping them on
+      // the floor; chokidar otherwise has no visibility into our async work.
+      enqueue(absPath).catch((err) => {
+        getLoggerSafe().warn('[VaultWatcher] enqueue failed', {
+          op: 'watcher-enqueue',
+          path: absPath,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+    };
+    this.watcher.on('add', enqueueSafe);
+    this.watcher.on('change', enqueueSafe);
+    this.watcher.on('unlink', enqueueSafe);
     await new Promise<void>((resolve) => {
       this.watcher!.on('ready', () => {
         if (pollInterval > 0) setTimeout(resolve, POLLING_SETTLE_MS);
@@ -78,3 +113,4 @@ export class VaultWatcher {
     if (this.dirty.size) await this.drain();
   }
 }
+

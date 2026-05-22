@@ -5,7 +5,6 @@
   "filter.search.placeholder": "シンボルを検索…",
   "filter.file.placeholder": "ファイルパスで絞り込み…",
   "filter.resultCount": "{{total}} 件中 {{visible}} 件を表示",
-
   "filter.kind.namespace": "名前空間",
   "filter.kind.class": "クラス",
   "filter.kind.interface": "インターフェース",
@@ -15,9 +14,13 @@
   "filter.kind.note": "ノート",
   "filter.kind.file": "ファイル",
   "filter.kind.unknown": "シンボル",
-
   "graph.minimapLabel": "グラフ概要",
-
+  "graph.search.matchCount": "{{count}} 件一致",
+  "graph.search.matchCount_other": "{{count}} 件一致",
+  "graph.search.noMatches": "一致なし",
+  "graph.minimap.title": "グラフのミニマップ",
+  "graph.minimap.toggleHint": "クリックまたはドラッグで移動",
+  "graph.minimap.nodeCount": "({{count}} ノード)",
   "detail.title": "シンボルの詳細",
   "detail.empty": "詳細を表示するにはノードを選択してください。",
   "detail.closeLabel": "詳細を閉じる",
@@ -27,27 +30,22 @@
   "detail.noIncoming": "着信エッジはありません。",
   "detail.noOutgoing": "発信エッジはありません。",
   "detail.loadError": "呼び出し元を読み込めませんでした。",
-
   "empty.selectVault": "グラフを表示するには vault を選択してください。",
   "empty.loading": "グラフを読み込み中…",
   "empty.noSymbols": "まだインデックス化されたシンボルはありません。",
   "empty.noMatches": "現在のフィルターに一致するシンボルはありません。",
-
   "tab.files": "ファイル",
   "tab.search": "検索",
   "tab.graph": "グラフ",
   "tab.bookmarks": "ブックマーク",
   "tab.close": "タブを閉じる",
-
   "rail.files": "ファイルエクスプローラー",
   "rail.search": "検索",
   "rail.graph": "グラフ",
   "rail.bookmarks": "ブックマーク",
   "rail.settings": "Vault 設定",
-
   "vaultList.empty": "登録された vault はありません",
   "vaultList.title": "Vault 一覧",
-
   "tree.empty": "ファイルがありません",
   "tree.emptyHint": "インデックス後にファイルがここに表示されます。",
   "tree.reveal": "グラフで表示",
@@ -55,7 +53,6 @@
   "tree.rename": "名前を変更",
   "tree.previewError": "プレビューに失敗",
   "tree.previewRetry": "再試行",
-
   "right.backlinks": "バックリンク",
   "right.outline": "アウトライン",
   "right.metadata": "メタデータ",
@@ -63,16 +60,13 @@
   "right.noBacklinks": "バックリンクなし。",
   "right.noOutline": "アウトラインなし。",
   "right.noMetadata": "メタデータなし。",
-
   "search.placeholder": "セマンティック + キーワード検索",
   "search.run": "検索",
   "search.running": "検索中…",
   "search.empty": "結果を見るにはクエリを実行してください。",
   "search.selectVault": "検索するには vault を選択してください。",
-
   "files.selectVault": "Vault を選択",
   "files.pickFile": "ファイルを選択",
-
   "palette.title": "コマンドパレット",
   "palette.placeholder": "コマンドを入力または検索…",
   "palette.empty": "一致するコマンドはありません。",
@@ -88,7 +82,6 @@
   "palette.cmd.toggleLeft": "左パネルを切り替え",
   "palette.cmd.toggleRight": "右パネルを切り替え",
   "palette.cmd.quickSwitcher": "クイックスイッチャー",
-
   "status.symbols": "{{count}} 個のシンボル",
   "status.files": "{{count}} 個のファイル",
   "status.lastSync": "前回同期: {{time}}",
@@ -96,18 +89,14 @@
   "status.reindex": "再インデックス",
   "status.reindexing": "インデックス中…",
   "status.reindexError": "再インデックスに失敗しました",
-
   "statusBar.xSecondsAgo": "{{count}} 秒前",
   "statusBar.xMinutesAgo": "{{count}} 分前",
   "statusBar.xHoursAgo": "{{count}} 時間前",
   "statusBar.xDaysAgo": "{{count}} 日前",
-
   "breadcrumb.root": "Vault",
   "breadcrumb.separator": "/",
-
   "panel.toggleLeft": "左パネルを切り替え",
   "panel.toggleRight": "右パネルを切り替え",
-
   "register.button": "Vaultを登録",
   "register.newVault": "新しいVault",
   "register.title": "新しいVaultを登録",
@@ -124,5 +113,52 @@
   "register.cancel": "キャンセル",
   "register.error.invalidPath": "パスが存在しないか、アクセスできません",
   "register.error.generic": "Vaultの登録に失敗しました",
-  "register.success": "Vaultを登録しました。インデックス化を開始します"
+  "register.success": "Vaultを登録しました。インデックス化を開始します",
+  "graph.a11y.regionLabel": "ナレッジグラフ",
+  "graph.a11y.nodeRole": "グラフノード",
+  "graph.a11y.nodeCount": "グラフ内に {{count}} 個のノード",
+  "graph.a11y.selectedHint": "{{label}} が選択されています、{{count}} 件の接続",
+  "graph.a11y.navigationHint": "矢印キーまたは J/K キーでノード間を移動、Enter で開く、スラッシュで検索、Esc で終了",
+  "graph": {
+    "search": {
+      "placeholder": "ノードを検索…",
+      "ariaLabel": "グラフノードを検索",
+      "clear": "クリア"
+    },
+    "filters": {
+      "kinds": {
+        "title": "シンボルの種類",
+        "selectAll": "すべて選択",
+        "clearAll": "すべて解除"
+      }
+    },
+    "local": {
+      "hopDepth": {
+        "title": "ホップ深度",
+        "label_one": "{{count}} ホップ",
+        "label_other": "{{count}} ホップ"
+      }
+    },
+    "edges": {
+      "legendTitle": "エッジの重み",
+      "legendHint": "細い → 太い = 1 → {{max}} 件の参照"
+    },
+    "physics": {
+      "title": "高度な物理設定",
+      "linkDistance": "リンク距離",
+      "charge": "斥力",
+      "collide": "衝突半径",
+      "preset": {
+        "sparse": "疎",
+        "balanced": "標準",
+        "dense": "密"
+      },
+      "reset": "標準にリセット"
+    },
+    "actions": {
+      "exportPng": "PNG として保存",
+      "exportSuccess": "グラフをエクスポートしました"
+    },
+    "truncated": "グラフは {{max}} ノードに制限されました — 大規模なボールトでは接続が少ないシンボルが非表示になる場合があります。"
+  }
 }

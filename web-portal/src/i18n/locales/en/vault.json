@@ -17,6 +17,12 @@
   "filter.kind.unknown": "Symbol",
 
   "graph.minimapLabel": "Graph overview",
+  "graph.minimap.title": "Graph overview",
+  "graph.minimap.toggleHint": "Click or drag to navigate",
+  "graph.minimap.nodeCount": "({{count}} nodes)",
+  "graph.search.matchCount": "{{count}} match",
+  "graph.search.matchCount_other": "{{count}} matches",
+  "graph.search.noMatches": "No matches",
 
   "detail.title": "Symbol details",
   "detail.empty": "Select a node to see details.",
@@ -124,5 +130,40 @@
   "register.cancel": "Cancel",
   "register.error.invalidPath": "Path does not exist or is not accessible",
   "register.error.generic": "Failed to register vault",
-  "register.success": "Vault registered, indexing started"
+  "register.success": "Vault registered, indexing started",
+
+  "graph.a11y.regionLabel": "Knowledge graph",
+  "graph.a11y.nodeRole": "Graph node",
+  "graph.a11y.nodeCount": "{{count}} nodes in graph",
+  "graph.a11y.selectedHint": "{{label}} selected, {{count}} connections",
+  "graph.a11y.navigationHint": "Use arrow keys or J/K to move between nodes, Enter to open, slash to search, Escape to exit",
+
+  "graph.search.placeholder": "Search nodes…",
+  "graph.search.ariaLabel": "Search graph nodes",
+  "graph.search.clear": "Clear",
+
+  "graph.filters.kinds.title": "Symbol kinds",
+  "graph.filters.kinds.selectAll": "Select all",
+  "graph.filters.kinds.clearAll": "Clear all",
+
+  "graph.local.hopDepth.title": "Hop depth",
+  "graph.local.hopDepth.label_one": "{{count}} hop",
+  "graph.local.hopDepth.label_other": "{{count}} hops",
+
+  "graph.edges.legendTitle": "Edge weight",
+  "graph.edges.legendHint": "thin → thick = 1 → {{max}} references",
+
+  "graph.physics.title": "Advanced physics",
+  "graph.physics.linkDistance": "Link distance",
+  "graph.physics.charge": "Charge",
+  "graph.physics.collide": "Collide radius",
+  "graph.physics.preset.sparse": "Sparse",
+  "graph.physics.preset.balanced": "Balanced",
+  "graph.physics.preset.dense": "Dense",
+  "graph.physics.reset": "Reset to balanced",
+
+  "graph.actions.exportPng": "Save as PNG",
+  "graph.actions.exportSuccess": "Graph exported",
+
+  "graph.truncated": "Graph truncated to {{max}} nodes — large vaults may hide low-connection symbols."
 }

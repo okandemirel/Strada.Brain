@@ -87,13 +87,26 @@ export async function getIndexableFileInfo(
   }
   const absPath = resolveInsideVault(rootPath, normalized);
   try {
+    // Optimization: lstat the leaf FIRST. If the leaf doesn't exist (or isn't
+    // a file) we save N filesystem syscalls for ancestor lstats that would
+    // never matter. Only walk ancestors once we know the leaf is real.
     const linkStats = await lstat(absPath);
     if (linkStats.isSymbolicLink()) return { ok: false, relPath: normalized, reason: 'symlink' };
     if (!linkStats.isFile()) return { ok: false, relPath: normalized, reason: 'not a file' };
     if (!isIndexableVaultPath(normalized, linkStats.size)) {
       return { ok: false, relPath: normalized, reason: 'not indexable' };
     }
+    // Walk ancestors after the leaf check: a symlink directory anywhere
+    // between root and the final file would let an attacker escape the vault
+    // even when the leaf itself is a regular file. lstat() on the leaf alone
+    // cannot catch this.
+    if (await hasSymlinkAncestor(rootPath, absPath)) {
+      return { ok: false, relPath: normalized, reason: 'symlink-ancestor' };
+    }
     await assertRealpathInside(rootPath, absPath);
+    if (await isLikelyBinaryFile(absPath)) {
+      return { ok: false, relPath: normalized, reason: 'binary-content' };
+    }
     const lang = langForVaultPath(normalized);
     if (!lang) return { ok: false, relPath: normalized, reason: 'unsupported extension' };
     return {
@@ -109,6 +122,109 @@ export async function getIndexableFileInfo(
   }
 }
 
+/**
+ * Returns true if any directory between `rootPath` (exclusive) and `absPath`
+ * (exclusive) is a symbolic link. The leaf itself is intentionally not
+ * inspected — callers already lstat() the leaf separately.
+ *
+ * Pre-condition: `absPath` must already be confirmed to live inside
+ * `rootPath` via `resolveInsideVault`.
+ */
+export async function hasSymlinkAncestor(rootPath: string, absPath: string): Promise<boolean> {
+  const rel = relative(rootPath, absPath);
+  if (!rel || rel === '.' || rel.startsWith('..')) return false;
+  const segments = rel.split(sep).filter((s) => s.length > 0);
+  // Drop the leaf; only intermediate directories matter for ancestor checks.
+  segments.pop();
+  let current = rootPath;
+  for (const segment of segments) {
+    current = resolve(current, segment);
+    try {
+      const stats = await lstat(current);
+      if (stats.isSymbolicLink()) return true;
+    } catch {
+      // Missing ancestor cannot leak data; treat as non-symlink and let the
+      // downstream lstat on the leaf fail naturally.
+      return false;
+    }
+  }
+  return false;
+}
+
+const BINARY_SAMPLE_BYTES = 8 * 1024;
+const REPLACEMENT_CHAR_THRESHOLD = 5;
+
+/**
+ * Heuristic binary detector. Reads the first 8KB and flags the file as binary
+ * if it contains any NUL byte OR fails strict UTF-8 decoding OR contains too
+ * many U+FFFD replacement characters after a lossy decode.
+ *
+ * P2 fix: the previous version flagged any sample with >30% bytes >= 0x80 as
+ * binary. UTF-8 Turkish / Japanese / Korean / Chinese markdown comfortably
+ * exceeds 30% high-bytes per sample, and was being silently dropped from
+ * indexing — breaking documented multi-language support. The new logic
+ * (NUL → binary; strict UTF-8 decode → text; replacement chars → binary)
+ * correctly classifies real-world non-ASCII text as text while still
+ * catching minified/obfuscated/binary blobs.
+ *
+ * Note: the last 1–3 bytes of the sample may legitimately be a truncated
+ * UTF-8 sequence. We strip those before strict decoding to avoid false
+ * positives on perfectly valid files that just happen to be longer than 8 KB.
+ */
+export async function isLikelyBinaryFile(absPath: string): Promise<boolean> {
+  const { open } = await import('node:fs/promises');
+  let handle;
+  try {
+    handle = await open(absPath, 'r');
+  } catch {
+    return false;
+  }
+  try {
+    const buf = Buffer.alloc(BINARY_SAMPLE_BYTES);
+    const { bytesRead } = await handle.read(buf, 0, BINARY_SAMPLE_BYTES, 0);
+    if (bytesRead === 0) return false;
+    // Strong binary signal: NUL byte in a text file is exceedingly rare.
+    for (let i = 0; i < bytesRead; i++) {
+      if (buf[i] === 0) return true;
+    }
+    // Strip a partial multi-byte sequence at the tail of the sample. A leading
+    // byte introduces a sequence of length 2 (0xC0-0xDF), 3 (0xE0-0xEF), or
+    // 4 (0xF0-0xF7). If we find one whose declared length runs past `bytesRead`,
+    // truncate to just before it so strict decode doesn't false-positive.
+    let effectiveLen = bytesRead;
+    for (let i = bytesRead - 1; i >= Math.max(0, bytesRead - 3); i--) {
+      const byte = buf[i]!;
+      if ((byte & 0b11000000) === 0b10000000) continue; // continuation byte — keep scanning back
+      let needed = 0;
+      if ((byte & 0b11100000) === 0b11000000) needed = 2;
+      else if ((byte & 0b11110000) === 0b11100000) needed = 3;
+      else if ((byte & 0b11111000) === 0b11110000) needed = 4;
+      if (needed > 0 && i + needed > bytesRead) effectiveLen = i;
+      break;
+    }
+    const slice = buf.subarray(0, effectiveLen);
+    // Step 1: try strict decoding. If it throws, the sample is not valid UTF-8.
+    try {
+      new TextDecoder('utf-8', { fatal: true }).decode(slice);
+      return false;
+    } catch {
+      // fall through to lossy decode + replacement char count
+    }
+    // Step 2: lossy decode and count U+FFFD replacements. A handful can occur
+    // legitimately (e.g. an unusual document author quoting raw bytes), but
+    // a true binary will produce dozens.
+    const lossy = new TextDecoder('utf-8', { fatal: false }).decode(slice);
+    let replacements = 0;
+    for (let i = 0; i < lossy.length; i++) {
+      if (lossy.charCodeAt(i) === 0xfffd) replacements++;
+      if (replacements > REPLACEMENT_CHAR_THRESHOLD) return true;
+    }
+    return false;
+  } finally {
+    await handle.close().catch(() => undefined);
+  }
+}
+
 export async function resolveSafeVaultReadPath(rootPath: string, relPath: string): Promise<string> {
   rejectAbsoluteVaultPath(relPath);
   const normalized = normalizeVaultRelPath(relPath);
@@ -116,6 +232,19 @@ export async function resolveSafeVaultReadPath(rootPath: string, relPath: string
     throw new Error(`vault path is not allowed: ${relPath}`);
   }
   const absPath = resolveInsideVault(rootPath, normalized);
+  // Layered defense against symlink escape:
+  //  1. hasSymlinkAncestor() lstats every intermediate directory between
+  //     rootPath and the leaf — rejects when any ancestor is a symlink.
+  //  2. lstat() on the leaf itself — rejects symlink-to-file.
+  //  3. assertRealpathInside() resolves the full path with realpath() and
+  //     verifies the result still lives inside rootPath — closes the small
+  //     TOCTOU window between the pre-checks above and the caller's open().
+  // We deliberately do NOT use O_NOFOLLOW: Node's fs.open with O_NOFOLLOW
+  // has platform-quirky behavior (symlink-to-dir vs symlink-to-file differs
+  // between Linux/macOS/Windows). Documented follow-up.
+  if (await hasSymlinkAncestor(rootPath, absPath)) {
+    throw new Error(`vault path uses a symlink: ${relPath}`);
+  }
   const linkStats = await lstat(absPath);
   if (linkStats.isSymbolicLink()) {
     throw new Error(`vault path uses a symlink: ${relPath}`);
