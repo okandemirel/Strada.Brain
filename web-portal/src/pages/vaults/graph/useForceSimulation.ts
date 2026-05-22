@@ -10,6 +10,7 @@
  */
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import type { MutableRefObject } from 'react';
 
 import type { GraphLink, GraphNode } from './graph-types';
 import {
@@ -29,8 +30,18 @@ export interface UseForceSimulationOptions {
 }
 
 export interface UseForceSimulationResult {
-  /** Live-updated position map. Mutated in place; pair with `version` for renders. */
-  positions: Map<string, { x: number; y: number }>;
+  /**
+   * Stable lookup for the latest simulated position of a node. Reads the
+   * underlying ref at call time so callers always see the most recent value
+   * without re-rendering on every tick.
+   */
+  getPosition: (id: string) => { x: number; y: number } | undefined;
+  /**
+   * Ref-typed live position map for advanced consumers that need to iterate
+   * (e.g. computing world bounds). Returning the ref object itself — not its
+   * `.current` — keeps the hook compliant with `react-hooks/refs`.
+   */
+  positions: MutableRefObject<Map<string, { x: number; y: number }>>;
   /** Increments each animation frame that receives new positions. */
   version: number;
   /** True while the worker is alive and the simulation has not ended. */
@@ -133,7 +144,6 @@ export function useForceSimulation(
     // positions and silently corrupting the canvas. Bail out with a diagnostic
     // instead — the next worker tick will resync.
     if (ids.length * 2 !== positions.length) {
-      // eslint-disable-next-line no-console
       console.warn(
         '[force-simulation] tick length mismatch',
         { ids: ids.length, positions: positions.length },
@@ -192,7 +202,6 @@ export function useForceSimulation(
         case 'error': {
           // Surface worker errors as console output without breaking the host UI.
           // Consumers can wrap the hook with an error boundary if they want UI signal.
-          // eslint-disable-next-line no-console
           console.error('[force-simulation worker]', msg.message);
           setRunning(false);
           break;
@@ -201,7 +210,6 @@ export function useForceSimulation(
     });
 
     worker.addEventListener('error', (event: ErrorEvent) => {
-      // eslint-disable-next-line no-console
       console.error('[force-simulation worker:onerror]', event.message);
       setRunning(false);
     });
@@ -238,7 +246,10 @@ export function useForceSimulation(
       if (workerRef.current && initializedRef.current) {
         postMessage({ type: 'stop' });
         initializedRef.current = false;
-        setRunning(false);
+        // Defer the state flip out of this effect body to avoid the
+        // react-hooks/set-state-in-effect cascade. The worker will also emit
+        // an `end` message once it settles, which is idempotent with this.
+        queueMicrotask(() => setRunning(false));
       }
       return;
     }
@@ -257,14 +268,15 @@ export function useForceSimulation(
         config: configRef.current,
       });
       initializedRef.current = true;
-      setRunning(true);
+      // Defer state flip; see comment on the stop branch above.
+      queueMicrotask(() => setRunning(true));
     } else {
       postMessage({
         type: 'update-nodes',
         nodes: nodeMsgs,
         links: linkMsgs,
       });
-      setRunning(true);
+      queueMicrotask(() => setRunning(true));
     }
   }, [enabled, payloadSignature, ensureWorker, postMessage]);
 
@@ -306,8 +318,14 @@ export function useForceSimulation(
     teardown();
   }, [teardown]);
 
+  const getPosition = useCallback(
+    (id: string): { x: number; y: number } | undefined => positionsRef.current.get(id),
+    [],
+  );
+
   return {
-    positions: positionsRef.current,
+    getPosition,
+    positions: positionsRef,
     version,
     running,
     reheat,

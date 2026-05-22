@@ -39,11 +39,14 @@ export class ClaudeProvider implements IAIProvider, IStreamingProvider {
       | { mode: "claude-subscription"; authToken: string },
     model = "claude-sonnet-4-6-20250514",
   ) {
-    const normalizedAuth = typeof auth === "string"
-      ? { apiKey: auth }
-      : auth.mode === "claude-subscription"
-        ? { authToken: auth.authToken }
-        : { apiKey: auth.apiKey };
+    let normalizedAuth: { apiKey: string } | { authToken: string };
+    if (typeof auth === "string") {
+      normalizedAuth = { apiKey: auth };
+    } else if (auth.mode === "claude-subscription") {
+      normalizedAuth = { authToken: auth.authToken };
+    } else {
+      normalizedAuth = { apiKey: auth.apiKey };
+    }
     this.client = new Anthropic(normalizedAuth);
     this.model = model;
   }
@@ -170,19 +173,23 @@ export class ClaudeProvider implements IAIProvider, IStreamingProvider {
             if (block.type === "text") {
               content.push({ type: "text", text: block.text });
             } else if (block.type === "image") {
-              content.push({
-                type: "image",
-                source: block.source.type === "base64"
-                  ? {
-                      type: "base64" as const,
-                      media_type: block.source.media_type as "image/jpeg" | "image/png" | "image/gif" | "image/webp",
-                      data: block.source.data,
-                    }
-                  : {
-                      type: "url" as const,
-                      url: block.source.url,
-                    },
-              });
+              let source: Anthropic.Base64ImageSource | Anthropic.URLImageSource;
+              switch (block.source.type) {
+                case "base64":
+                  source = {
+                    type: "base64",
+                    media_type: block.source.media_type as "image/jpeg" | "image/png" | "image/gif" | "image/webp",
+                    data: block.source.data,
+                  };
+                  break;
+                default:
+                  source = {
+                    type: "url",
+                    url: block.source.url,
+                  };
+                  break;
+              }
+              content.push({ type: "image", source });
             } else if (block.type === "tool_result") {
               content.push({
                 type: "tool_result",
@@ -198,7 +205,7 @@ export class ClaudeProvider implements IAIProvider, IStreamingProvider {
         }
       } else if (msg.role === "assistant") {
         if (msg.tool_calls && msg.tool_calls.length > 0) {
-          const content: (Anthropic.TextBlockParam | Anthropic.ToolUseBlockParam)[] = [];
+          const content: Anthropic.ContentBlockParam[] = [];
 
           if (msg.content) {
             content.push({ type: "text", text: msg.content });

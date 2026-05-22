@@ -1,6 +1,6 @@
-import { mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import * as fsp from 'node:fs/promises';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { EventEmitter } from 'node:events';
@@ -114,35 +114,14 @@ class AsyncLock {
 const REDACT_HOMEDIR = homedir();
 
 /**
- * Per-rootPath realpath cache (re-review finding L1). Computed lazily on
- * first redact for a given root and reused thereafter. If realpath throws
- * (root deleted between vault creation and a much later error log) the
- * helper degrades to the lexical root only — never throws back to caller.
- */
-const REDACT_REALPATH_CACHE = new Map<string, string | null>();
-async function getCachedRealpath(rootPath: string): Promise<string | null> {
-  if (REDACT_REALPATH_CACHE.has(rootPath)) {
-    return REDACT_REALPATH_CACHE.get(rootPath)!;
-  }
-  let resolved: string | null;
-  try {
-    const r = await realpath(rootPath);
-    resolved = r === rootPath ? null : r;
-  } catch {
-    resolved = null;
-  }
-  REDACT_REALPATH_CACHE.set(rootPath, resolved);
-  return resolved;
-}
-
-/**
  * Escape a literal path for embedding in a RegExp constructor. Path
  * separators (`/`, `\\`) are intentionally treated as literals, not
  * alternation — sanitizeSyncResponse (server-vault-routes.ts) is the
- * authoritative defense against any new-shape leak.
+ * authoritative defense against any new-shape leak. `-` is escaped too so
+ * the pattern stays safe if it's ever moved inside a character class.
  */
 function escapeForRegExp(literal: string): string {
-  return literal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return literal.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&');
 }
 
 /**
@@ -158,15 +137,19 @@ function escapeForRegExp(literal: string): string {
  * server-vault-routes.ts is the authoritative defense — it replaces
  * `canvas.error` with a stable generic string regardless of content, so any
  * variant this helper misses is still scrubbed at the HTTP boundary.
+ *
+ * Synchronous: `realpathRoot` is resolved once at construction time by
+ * `ObsidianVault`; the standalone export path takes the realpath as an
+ * optional argument so callers (and tests) can pass a value without an
+ * extra fs hit.
  */
-export async function redactPathsInMessage(msg: string, rootPath: string): Promise<string> {
+export function redactPathsInMessage(msg: string, rootPath: string, realpathRoot?: string): string {
   if (!msg) return msg;
   let out = msg;
   if (rootPath) {
     out = out.replace(new RegExp(escapeForRegExp(rootPath), 'g'), '<vault>');
-    const real = await getCachedRealpath(rootPath);
-    if (real) {
-      out = out.replace(new RegExp(escapeForRegExp(real), 'g'), '<vault>');
+    if (realpathRoot && realpathRoot !== rootPath) {
+      out = out.replace(new RegExp(escapeForRegExp(realpathRoot), 'g'), '<vault>');
     }
   }
   if (REDACT_HOMEDIR && REDACT_HOMEDIR !== '/' && REDACT_HOMEDIR !== rootPath) {
@@ -199,6 +182,13 @@ export class ObsidianVault implements IVault {
   readonly id: VaultId;
   readonly kind = 'obsidian' as const;
   readonly rootPath: string;
+  /**
+   * Resolved realpath of `rootPath`, captured once at construction time
+   * for use in `redactPathsInMessage`. Falls back to `rootPath` if
+   * realpath throws (e.g. root deleted between construction and a later
+   * error log) — never throws back to the caller.
+   */
+  private readonly realpathRoot: string;
   private store: SqliteVaultStore;
   private adapter: EmbeddingAdapter;
   private emitter = new EventEmitter();
@@ -214,6 +204,16 @@ export class ObsidianVault implements IVault {
   constructor(deps: ObsidianVaultDeps) {
     this.id = deps.id;
     this.rootPath = deps.rootPath;
+    // Resolve realpath once. If it throws (root deleted, symlink loop, etc.)
+    // fall back to the lexical rootPath — redactPathsInMessage degrades to
+    // matching only the lexical path in that case, which is correct.
+    let resolvedRoot: string;
+    try {
+      resolvedRoot = realpathSync(deps.rootPath);
+    } catch {
+      resolvedRoot = deps.rootPath;
+    }
+    this.realpathRoot = resolvedRoot;
     this.dbPath = join(deps.rootPath, '.strada/vault/index.db');
     mkdirSync(join(deps.rootPath, '.strada/vault'), { recursive: true });
     this.store = new SqliteVaultStore(this.dbPath);
@@ -720,7 +720,7 @@ export class ObsidianVault implements IVault {
       // SecH1: full err.message often contains absolute filesystem paths.
       // We log the raw message internally but only ever return a redacted
       // version so HTTP/WS clients never see local filesystem layout.
-      const redacted = await redactPathsInMessage(rawMsg, this.rootPath);
+      const redacted = redactPathsInMessage(rawMsg, this.rootPath, this.realpathRoot);
       getLoggerSafe().warn('[obsidian-vault] canvas regen failed', {
         vaultId: this.id, op: 'regenerateCanvas', error: rawMsg,
       });

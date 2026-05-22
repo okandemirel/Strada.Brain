@@ -724,7 +724,6 @@ export default function GraphCanvas({ graph }: Props) {
       window.setTimeout(() => setExportStatus(null), 1800);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      // eslint-disable-next-line no-console
       console.error('[graph-canvas] export failed', err);
       setExportStatus({ kind: 'error', message });
       window.setTimeout(() => setExportStatus(null), 2400);

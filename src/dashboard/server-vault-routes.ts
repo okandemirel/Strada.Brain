@@ -582,52 +582,30 @@ async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknow
   }
 }
 
-/**
- * Loosely-shaped input to `sanitizeSyncResponse`. We accept `unknown` and
- * narrow per-field so this stays compatible with future IVault implementors
- * that may add or omit fields beyond the IVault.sync() interface minimum.
- */
-interface SyncResultLike {
-  changed?: unknown;
-  durationMs?: unknown;
-  canvas?: unknown;
-  // Any additional fields are intentionally NOT in this type — the allowlist
-  // below drops them on the floor.
-}
-
-/**
- * Strict-allowlist HTTP shape for /api/vaults/:id/sync responses.
- *
- * ALLOWLIST INVARIANT: any new field added to the vault `sync()` return
- * value MUST be explicitly added here to be returned to clients. Spreading
- * the upstream object (the previous implementation) silently leaked any
- * future top-level field (e.g. an internal `error` or `path`) the moment
- * an IVault implementor introduced it.
- */
-interface SafeSyncResponse {
+// ALLOWLIST: future fields on the vault sync result must be added here AND to
+// `sanitizeSyncResponse` below — spreading the upstream object would silently
+// leak any new top-level field (e.g. an internal `error` or `path`).
+type SafeSyncResponse = {
   changed: number;
   durationMs: number;
   canvas?: { ok: true } | { ok: false; error: 'canvas regeneration failed' };
-}
+};
 
 /**
  * Defense-in-depth for SecH1: even though the vault layer already redacts
  * absolute paths from `canvas.error`, the HTTP response must never leak the
  * raw failure string. We replace it with a stable generic message and keep
  * only the boolean `ok` flag for clients. Internal logs (which can contain
- * the original message) are unaffected.
- *
- * ALLOWLIST: any new field on the vault sync result must be explicitly
- * added to `SafeSyncResponse` and to the body of this function to be
- * returned to clients.
+ * the original message) are unaffected. Returns `null` when the input isn't
+ * a plain object — callers must handle that explicitly.
  */
-function sanitizeSyncResponse(result: unknown): SafeSyncResponse | unknown {
-  if (!result || typeof result !== 'object') return result;
-  const r = result as SyncResultLike;
-  const changed = typeof r.changed === 'number' ? r.changed : 0;
-  const durationMs = typeof r.durationMs === 'number' ? r.durationMs : 0;
+function sanitizeSyncResponse(result: unknown): SafeSyncResponse | null {
+  if (!result || typeof result !== 'object') return null;
+  const x = result as Record<string, unknown>;
+  const changed = typeof x.changed === 'number' ? x.changed : 0;
+  const durationMs = typeof x.durationMs === 'number' ? x.durationMs : 0;
   const out: SafeSyncResponse = { changed, durationMs };
-  const canvas = r.canvas;
+  const canvas = x.canvas;
   if (canvas && typeof canvas === 'object' && 'ok' in canvas) {
     const ok = (canvas as { ok: unknown }).ok;
     out.canvas = ok === false

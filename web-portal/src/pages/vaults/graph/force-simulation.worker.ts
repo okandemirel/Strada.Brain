@@ -108,6 +108,16 @@ function emitTick(force = false): void {
  *     authoritative (e.g. user-drag pin). When a fixed coord is set, mirror it
  *     into `x` / `y` so the rendered position matches immediately.
  *
+ * Finite-value invariant: `fx` / `fy` / `x` / `y` supplied by the host MUST be
+ * finite numbers (or `null` for fx/fy to release a pin). A NaN or Infinity
+ * propagates through d3-force on the next tick and freezes the simulation
+ * unrecoverably — the only escape is a full worker restart. We reject any
+ * non-finite caller input here:
+ *   - Non-finite `n.fx` / `n.fy` → coerced to `null` (releases the pin) rather
+ *     than corrupting the stored value.
+ *   - Non-finite `n.x` / `n.y` for NEW nodes → replaced by a small random
+ *     position around origin so d3-force still has a valid starting point.
+ *
  * Incoming `n.x` / `n.y` are only used to seed brand-new nodes (no prev entry).
  */
 function reconcileNodes(incomingNodes: NodeIn[]): SimNode[] {
@@ -118,24 +128,38 @@ function reconcileNodes(incomingNodes: NodeIn[]): SimNode[] {
 
   const capped = incomingNodes.slice(0, Math.max(0, config.maxNodes));
   return capped.map((n) => {
+    // Sanitize fx/fy: null releases a pin; a finite number sets it; anything
+    // else (NaN, Infinity, undefined) is treated as "not supplied" so we never
+    // poison the simulation with a non-finite fixed coordinate.
+    const fxProvided = n.fx !== undefined;
+    const fyProvided = n.fy !== undefined;
+    const fxSafe: number | null | undefined = fxProvided
+      ? (n.fx === null || Number.isFinite(n.fx) ? n.fx : null)
+      : undefined;
+    const fySafe: number | null | undefined = fyProvided
+      ? (n.fy === null || Number.isFinite(n.fy) ? n.fy : null)
+      : undefined;
+
     const prev = prevById.get(n.id);
     if (prev) {
       // Preserve simulating x/y/vx/vy. Only fixed positions override.
-      if (n.fx !== undefined) {
-        prev.fx = n.fx;
-        if (n.fx !== null) prev.x = n.fx;
+      if (fxSafe !== undefined) {
+        prev.fx = fxSafe;
+        if (fxSafe !== null) prev.x = fxSafe;
       }
-      if (n.fy !== undefined) {
-        prev.fy = n.fy;
-        if (n.fy !== null) prev.y = n.fy;
+      if (fySafe !== undefined) {
+        prev.fy = fySafe;
+        if (fySafe !== null) prev.y = fySafe;
       }
       return prev;
     }
-    const x = n.x ?? (Math.random() - 0.5) * 200;
-    const y = n.y ?? (Math.random() - 0.5) * 200;
-    const node: SimNode = { id: n.id, x, y, vx: 0, vy: 0 };
-    if (n.fx !== undefined) node.fx = n.fx;
-    if (n.fy !== undefined) node.fy = n.fy;
+    // Seed brand-new nodes. Reject non-finite caller-supplied x/y and fall back
+    // to a small random offset around origin so d3-force has a valid start.
+    const seedX = Number.isFinite(n.x) ? (n.x as number) : (Math.random() - 0.5) * 100;
+    const seedY = Number.isFinite(n.y) ? (n.y as number) : (Math.random() - 0.5) * 100;
+    const node: SimNode = { id: n.id, x: seedX, y: seedY, vx: 0, vy: 0 };
+    if (fxSafe !== undefined) node.fx = fxSafe;
+    if (fySafe !== undefined) node.fy = fySafe;
     return node;
   });
 }

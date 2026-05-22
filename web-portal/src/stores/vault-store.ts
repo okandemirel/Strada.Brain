@@ -6,6 +6,14 @@ import { createSafeJSONStorage } from './persist-storage';
 /** Cap on persisted per-vault viewport entries; oldest entries are evicted in LRU order. */
 const VAULT_VIEWPORT_CACHE_LIMIT = 20;
 
+/**
+ * Clock-skew slack for `updatedAt` validation. A tampered `localStorage` entry
+ * with `Number.MAX_VALUE` would otherwise pin itself at the head of the LRU
+ * forever, starving legitimate entries. One minute is enough to absorb honest
+ * client/server clock drift while rejecting absurd future timestamps.
+ */
+const UPDATED_AT_FUTURE_SLACK_MS = 60_000;
+
 export interface VaultSummary { id: string; kind: string; }
 export interface SearchHit {
   chunk: { chunkId: string; path: string; startLine: number; endLine: number; content: string; tokenCount: number };
@@ -148,6 +156,11 @@ function pushUnique(list: string[], value: string): string[] {
  * types. NaN propagates into `d3-zoom` and freezes the canvas; non-finite
  * `updatedAt` breaks LRU ordering. Anything that fails this check is dropped
  * on rehydrate and rejected on write.
+ *
+ * `updatedAt` is additionally bounded by `Date.now() + UPDATED_AT_FUTURE_SLACK_MS`:
+ * a tampered entry with an absurd future timestamp (e.g. `Number.MAX_VALUE`)
+ * would otherwise sort to the head of the LRU forever. The slack absorbs honest
+ * client clock drift without permitting indefinite head-pinning.
  */
 function isValidViewport(v: unknown): v is VaultGraphViewport {
   if (!v || typeof v !== 'object') return false;
@@ -156,6 +169,7 @@ function isValidViewport(v: unknown): v is VaultGraphViewport {
   if (!Number.isFinite(r.y)) return false;
   if (!Number.isFinite(r.zoom)) return false;
   if (!Number.isFinite(r.updatedAt)) return false;
+  if ((r.updatedAt as number) > Date.now() + UPDATED_AT_FUTURE_SLACK_MS) return false;
   if (r.selectedNodeId !== null && typeof r.selectedNodeId !== 'string') return false;
   return true;
 }
@@ -249,18 +263,14 @@ export const useVaultStore = create<VaultState>()(
       setVaultViewport: (vaultId, viewport) => set((s) => {
         // Defensive: reject non-finite numeric inputs from callers. A tampered
         // d3-zoom event or a math bug upstream can produce NaN; persisting it
-        // would freeze the canvas on next mount.
-        if (
-          !vaultId
-          || !Number.isFinite(viewport.x)
-          || !Number.isFinite(viewport.y)
-          || !Number.isFinite(viewport.zoom)
-          || (viewport.selectedNodeId !== null && typeof viewport.selectedNodeId !== 'string')
-        ) {
-          return {};
-        }
+        // would freeze the canvas on next mount. We funnel through the same
+        // `isValidViewport` helper used at persist-merge time so write-side and
+        // rehydrate-side share a single source of truth.
+        if (!vaultId) return {};
+        const candidate: VaultGraphViewport = { ...viewport, updatedAt: Date.now() };
+        if (!isValidViewport(candidate)) return {};
         const next: Record<string, VaultGraphViewport> = { ...s.vaultViewports };
-        next[vaultId] = { ...viewport, updatedAt: Date.now() };
+        next[vaultId] = candidate;
         // LRU cap: traverse Object.entries once, sort by updatedAt desc, keep
         // the newest VAULT_VIEWPORT_CACHE_LIMIT entries. Avoids the previous
         // O(n) key-lookup chain (Object.keys + per-key map lookup) by reading

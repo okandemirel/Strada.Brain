@@ -204,7 +204,8 @@ describe('ObsidianVault — hardening (P0/P1/P2)', () => {
       let backB = await vault.listBacklinks?.('B.md');
       expect(backB?.wikilinks.some((w) => w.resolved && w.fromNote === 'A.md')).toBeFalsy();
 
-      // Add B and run sync — both passes of resolveWikilinks should fire and resolve A→B.
+      // Add B and run sync — the single post-loop resolveWikilinks pass should
+      // resolve forward references created within this sync.
       writeFileSync(join(dir, 'B.md'), '# B\n\nNew note');
       const r = await vault.sync();
       expect(r.changed).toBeGreaterThan(0);
@@ -252,7 +253,7 @@ describe('ObsidianVault — hardening (P0/P1/P2)', () => {
       const home = homedir();
       const raw = `ENOENT: ${root}/.strada/vault/graph.canvas.tmp ` +
         `and home ${home}/Documents/foo`;
-      const out = await redactPathsInMessage(raw, root);
+      const out = redactPathsInMessage(raw, root);
       expect(out).not.toContain(root);
       // Only assert home substitution when homedir() is non-trivial.
       if (home && home !== '/') {
