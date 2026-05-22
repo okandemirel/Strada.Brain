@@ -247,12 +247,12 @@ describe('ObsidianVault — hardening (P0/P1/P2)', () => {
 
   // ─────────────── SecH1: error message path redaction ───────────────
   describe('SecH1: canvas error messages do not leak absolute paths', () => {
-    it('redactPathsInMessage replaces vault root + home dir with placeholders', () => {
+    it('redactPathsInMessage replaces vault root + home dir with placeholders', async () => {
       const root = '/var/folders/abc/Strada.Brain';
       const home = homedir();
       const raw = `ENOENT: ${root}/.strada/vault/graph.canvas.tmp ` +
         `and home ${home}/Documents/foo`;
-      const out = redactPathsInMessage(raw, root);
+      const out = await redactPathsInMessage(raw, root);
       expect(out).not.toContain(root);
       // Only assert home substitution when homedir() is non-trivial.
       if (home && home !== '/') {

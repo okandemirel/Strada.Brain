@@ -141,6 +141,39 @@ function pushUnique(list: string[], value: string): string[] {
   return filtered.slice(0, MAX_RECENT);
 }
 
+/**
+ * Defensive schema check for a persisted viewport entry.
+ *
+ * Tampered or corrupt `localStorage` can inject `NaN`, `Infinity`, or wrong
+ * types. NaN propagates into `d3-zoom` and freezes the canvas; non-finite
+ * `updatedAt` breaks LRU ordering. Anything that fails this check is dropped
+ * on rehydrate and rejected on write.
+ */
+function isValidViewport(v: unknown): v is VaultGraphViewport {
+  if (!v || typeof v !== 'object') return false;
+  const r = v as Record<string, unknown>;
+  if (!Number.isFinite(r.x)) return false;
+  if (!Number.isFinite(r.y)) return false;
+  if (!Number.isFinite(r.zoom)) return false;
+  if (!Number.isFinite(r.updatedAt)) return false;
+  if (r.selectedNodeId !== null && typeof r.selectedNodeId !== 'string') return false;
+  return true;
+}
+
+function sanitizeVaultViewports(
+  raw: unknown,
+): Record<string, VaultGraphViewport> {
+  if (!raw || typeof raw !== 'object') return {};
+  const out: Record<string, VaultGraphViewport> = {};
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof key !== 'string' || key.length === 0) continue;
+    if (isValidViewport(value)) {
+      out[key] = value;
+    }
+  }
+  return out;
+}
+
 export const useVaultStore = create<VaultState>()(
   persist(
     (set, get) => ({
@@ -214,6 +247,18 @@ export const useVaultStore = create<VaultState>()(
       resetGraphFilters: () => set({ graphFilters: defaultFilters() }),
 
       setVaultViewport: (vaultId, viewport) => set((s) => {
+        // Defensive: reject non-finite numeric inputs from callers. A tampered
+        // d3-zoom event or a math bug upstream can produce NaN; persisting it
+        // would freeze the canvas on next mount.
+        if (
+          !vaultId
+          || !Number.isFinite(viewport.x)
+          || !Number.isFinite(viewport.y)
+          || !Number.isFinite(viewport.zoom)
+          || (viewport.selectedNodeId !== null && typeof viewport.selectedNodeId !== 'string')
+        ) {
+          return {};
+        }
         const next: Record<string, VaultGraphViewport> = { ...s.vaultViewports };
         next[vaultId] = { ...viewport, updatedAt: Date.now() };
         // LRU cap: traverse Object.entries once, sort by updatedAt desc, keep
@@ -262,6 +307,19 @@ export const useVaultStore = create<VaultState>()(
         graphFilters: state.graphFilters,
         vaultViewports: state.vaultViewports,
       }),
+      // Sanitize the rehydrated payload: localStorage can be edited by hand or
+      // corrupted by an older app version. Drop any viewport entry whose
+      // x/y/zoom/updatedAt are not finite or whose selectedNodeId is malformed,
+      // since those values would propagate NaN into d3-zoom and freeze the
+      // canvas (and break the LRU sort, which compares updatedAt numerically).
+      merge: (persistedState, currentState) => {
+        const persisted = (persistedState ?? {}) as Partial<VaultState>;
+        const merged: VaultState = { ...currentState, ...persisted };
+        merged.vaultViewports = sanitizeVaultViewports(
+          (persisted as { vaultViewports?: unknown }).vaultViewports,
+        );
+        return merged;
+      },
     },
   ),
 );

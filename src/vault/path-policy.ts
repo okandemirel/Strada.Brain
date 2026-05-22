@@ -167,9 +167,10 @@ const REPLACEMENT_CHAR_THRESHOLD = 5;
  * correctly classifies real-world non-ASCII text as text while still
  * catching minified/obfuscated/binary blobs.
  *
- * Note: the last 1–3 bytes of the sample may legitimately be a truncated
- * UTF-8 sequence. We strip those before strict decoding to avoid false
- * positives on perfectly valid files that just happen to be longer than 8 KB.
+ * Note: a truncated 1–3 byte UTF-8 sequence at the tail of the sample
+ * produces at most 1–3 replacement chars in the lossy step. The
+ * REPLACEMENT_CHAR_THRESHOLD (5) absorbs that noise comfortably, so we
+ * don't need a special-cased trailer trim (re-review finding 6).
  */
 export async function isLikelyBinaryFile(absPath: string): Promise<boolean> {
   const { open } = await import('node:fs/promises');
@@ -187,22 +188,7 @@ export async function isLikelyBinaryFile(absPath: string): Promise<boolean> {
     for (let i = 0; i < bytesRead; i++) {
       if (buf[i] === 0) return true;
     }
-    // Strip a partial multi-byte sequence at the tail of the sample. A leading
-    // byte introduces a sequence of length 2 (0xC0-0xDF), 3 (0xE0-0xEF), or
-    // 4 (0xF0-0xF7). If we find one whose declared length runs past `bytesRead`,
-    // truncate to just before it so strict decode doesn't false-positive.
-    let effectiveLen = bytesRead;
-    for (let i = bytesRead - 1; i >= Math.max(0, bytesRead - 3); i--) {
-      const byte = buf[i]!;
-      if ((byte & 0b11000000) === 0b10000000) continue; // continuation byte — keep scanning back
-      let needed = 0;
-      if ((byte & 0b11100000) === 0b11000000) needed = 2;
-      else if ((byte & 0b11110000) === 0b11100000) needed = 3;
-      else if ((byte & 0b11111000) === 0b11110000) needed = 4;
-      if (needed > 0 && i + needed > bytesRead) effectiveLen = i;
-      break;
-    }
-    const slice = buf.subarray(0, effectiveLen);
+    const slice = buf.subarray(0, bytesRead);
     // Step 1: try strict decoding. If it throws, the sample is not valid UTF-8.
     try {
       new TextDecoder('utf-8', { fatal: true }).decode(slice);
@@ -211,8 +197,8 @@ export async function isLikelyBinaryFile(absPath: string): Promise<boolean> {
       // fall through to lossy decode + replacement char count
     }
     // Step 2: lossy decode and count U+FFFD replacements. A handful can occur
-    // legitimately (e.g. an unusual document author quoting raw bytes), but
-    // a true binary will produce dozens.
+    // legitimately (truncated multi-byte tail, an unusual document quoting
+    // raw bytes), but a true binary will produce dozens.
     const lossy = new TextDecoder('utf-8', { fatal: false }).decode(slice);
     let replacements = 0;
     for (let i = 0; i < lossy.length; i++) {

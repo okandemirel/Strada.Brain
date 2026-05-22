@@ -583,29 +583,58 @@ async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknow
 }
 
 /**
+ * Loosely-shaped input to `sanitizeSyncResponse`. We accept `unknown` and
+ * narrow per-field so this stays compatible with future IVault implementors
+ * that may add or omit fields beyond the IVault.sync() interface minimum.
+ */
+interface SyncResultLike {
+  changed?: unknown;
+  durationMs?: unknown;
+  canvas?: unknown;
+  // Any additional fields are intentionally NOT in this type — the allowlist
+  // below drops them on the floor.
+}
+
+/**
+ * Strict-allowlist HTTP shape for /api/vaults/:id/sync responses.
+ *
+ * ALLOWLIST INVARIANT: any new field added to the vault `sync()` return
+ * value MUST be explicitly added here to be returned to clients. Spreading
+ * the upstream object (the previous implementation) silently leaked any
+ * future top-level field (e.g. an internal `error` or `path`) the moment
+ * an IVault implementor introduced it.
+ */
+interface SafeSyncResponse {
+  changed: number;
+  durationMs: number;
+  canvas?: { ok: true } | { ok: false; error: 'canvas regeneration failed' };
+}
+
+/**
  * Defense-in-depth for SecH1: even though the vault layer already redacts
- * absolute paths from `canvas.error`, the HTTP response should never leak the
+ * absolute paths from `canvas.error`, the HTTP response must never leak the
  * raw failure string. We replace it with a stable generic message and keep
  * only the boolean `ok` flag for clients. Internal logs (which can contain
  * the original message) are unaffected.
  *
- * The shape of `result` mirrors `ObsidianVault.sync` return value but we
- * accept the looser `unknown` form here because other IVault implementations
- * may evolve independently.
+ * ALLOWLIST: any new field on the vault sync result must be explicitly
+ * added to `SafeSyncResponse` and to the body of this function to be
+ * returned to clients.
  */
-function sanitizeSyncResponse(result: unknown): unknown {
+function sanitizeSyncResponse(result: unknown): SafeSyncResponse | unknown {
   if (!result || typeof result !== 'object') return result;
-  const r = result as Record<string, unknown>;
+  const r = result as SyncResultLike;
+  const changed = typeof r.changed === 'number' ? r.changed : 0;
+  const durationMs = typeof r.durationMs === 'number' ? r.durationMs : 0;
+  const out: SafeSyncResponse = { changed, durationMs };
   const canvas = r.canvas;
   if (canvas && typeof canvas === 'object' && 'ok' in canvas) {
-    const c = canvas as Record<string, unknown>;
-    if (c.ok === false) {
-      return { ...r, canvas: { ok: false, error: 'canvas regeneration failed' } };
-    }
-    // Successful canvas: strip any stray error field defensively.
-    return { ...r, canvas: { ok: true } };
+    const ok = (canvas as { ok: unknown }).ok;
+    out.canvas = ok === false
+      ? { ok: false, error: 'canvas regeneration failed' }
+      : { ok: true };
   }
-  return r;
+  return out;
 }
 
 export interface WsBroadcaster { broadcast(msg: string): void; }

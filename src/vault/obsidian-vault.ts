@@ -1,4 +1,4 @@
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
 import * as fsp from 'node:fs/promises';
 import { mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -108,25 +108,69 @@ class AsyncLock {
 }
 
 /**
- * Redact absolute filesystem paths from an error message before it crosses a
- * trust boundary. Replaces occurrences of the vault root and the user's home
- * directory with `<vault>` / `<home>` so HTTP / WS clients never see local
- * directory layout. The redaction is best-effort (it cannot catch every
- * conceivable absolute path), so callers should additionally coerce the
- * outgoing field to a generic string for non-debug responses.
+ * Compute homedir() once at module load — it never changes for the life of
+ * the process, so the lookup belongs out of the hot path.
  */
-export function redactPathsInMessage(msg: string, rootPath: string): string {
+const REDACT_HOMEDIR = homedir();
+
+/**
+ * Per-rootPath realpath cache (re-review finding L1). Computed lazily on
+ * first redact for a given root and reused thereafter. If realpath throws
+ * (root deleted between vault creation and a much later error log) the
+ * helper degrades to the lexical root only — never throws back to caller.
+ */
+const REDACT_REALPATH_CACHE = new Map<string, string | null>();
+async function getCachedRealpath(rootPath: string): Promise<string | null> {
+  if (REDACT_REALPATH_CACHE.has(rootPath)) {
+    return REDACT_REALPATH_CACHE.get(rootPath)!;
+  }
+  let resolved: string | null;
+  try {
+    const r = await realpath(rootPath);
+    resolved = r === rootPath ? null : r;
+  } catch {
+    resolved = null;
+  }
+  REDACT_REALPATH_CACHE.set(rootPath, resolved);
+  return resolved;
+}
+
+/**
+ * Escape a literal path for embedding in a RegExp constructor. Path
+ * separators (`/`, `\\`) are intentionally treated as literals, not
+ * alternation — sanitizeSyncResponse (server-vault-routes.ts) is the
+ * authoritative defense against any new-shape leak.
+ */
+function escapeForRegExp(literal: string): string {
+  return literal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Redact absolute filesystem paths from an error message before it crosses a
+ * trust boundary. Replaces occurrences of:
+ *   - `rootPath` (lexical) → `<vault>`
+ *   - `realpath(rootPath)` when it differs (e.g. /var/folders → /private/var) → `<vault>`
+ *   - `os.homedir()` → `<home>`
+ *
+ * Windows note: this best-effort helper matches the path string exactly as it
+ * appears. It does NOT canonicalize forward-slash vs backslash, the `\\?\`
+ * long-path prefix, or short-name (8.3) variants. `sanitizeSyncResponse` in
+ * server-vault-routes.ts is the authoritative defense — it replaces
+ * `canvas.error` with a stable generic string regardless of content, so any
+ * variant this helper misses is still scrubbed at the HTTP boundary.
+ */
+export async function redactPathsInMessage(msg: string, rootPath: string): Promise<string> {
   if (!msg) return msg;
   let out = msg;
   if (rootPath) {
-    // Escape regex special chars before splitting.
-    const escaped = rootPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    out = out.replace(new RegExp(escaped, 'g'), '<vault>');
+    out = out.replace(new RegExp(escapeForRegExp(rootPath), 'g'), '<vault>');
+    const real = await getCachedRealpath(rootPath);
+    if (real) {
+      out = out.replace(new RegExp(escapeForRegExp(real), 'g'), '<vault>');
+    }
   }
-  const home = homedir();
-  if (home && home !== '/' && home !== rootPath) {
-    const escapedHome = home.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    out = out.replace(new RegExp(escapedHome, 'g'), '<home>');
+  if (REDACT_HOMEDIR && REDACT_HOMEDIR !== '/' && REDACT_HOMEDIR !== rootPath) {
+    out = out.replace(new RegExp(escapeForRegExp(REDACT_HOMEDIR), 'g'), '<home>');
   }
   return out;
 }
@@ -197,12 +241,11 @@ export class ObsidianVault implements IVault {
       const { count, paths } = await this.reindexChangedInternal();
       let canvasStatus: { ok: boolean; error?: string } | undefined;
       if (count > 0) {
-        // Fix P1: first resolution pass.
+        // Resolve wikilinks once: the index pass is sequential, so by the
+        // time we get here every file in this sync has its row in
+        // vault_files. The previous predicate-filtered second pass iterated
+        // an already-empty set of unresolved rows (re-review finding 2).
         await this.resolveWikilinks();
-        // Fix P1: second pass scoped to files touched in this sync — captures
-        // wikilinks pointing at files that only appeared mid-sync.
-        const touched = new Set(paths.map(canonicalizePath));
-        await this.resolveWikilinks((p) => touched.has(p));
         canvasStatus = await this.regenerateCanvasWithStatus();
         if (!canvasStatus.ok) {
           getLoggerSafe().warn('[obsidian-vault] sync: canvas regen failed', {
@@ -435,17 +478,16 @@ export class ObsidianVault implements IVault {
   }
 
   /**
-   * Resolve unresolved wikilinks to canonical stored paths.
+   * Resolve every unresolved wikilink row to a canonical stored path.
    *
-   * Pass-mode is controlled by the optional `predicate`:
-   *   - omitted → first-pass: resolves every unresolved row.
-   *   - provided → second-pass: only rows where `predicate(fromNote)` or
-   *     `predicate(resolvedTarget)` returns true. Used after a sync to catch
-   *     wikilinks pointing at files that only appeared mid-sync (P1 fix).
+   * Single-pass: callers run this once per sync / fullIndex AFTER the
+   * sequential reindex loop has populated vault_files, so every potential
+   * target is already discoverable. An earlier design had a second
+   * predicate-filtered pass to catch "files added mid-sync", but the sync
+   * loop is sequential — there is no concurrent mid-pass insertion — so
+   * the second pass always iterated an empty set (re-review finding 2).
    */
-  private async resolveWikilinks(
-    predicate?: (canonicalPath: string) => boolean,
-  ): Promise<void> {
+  private async resolveWikilinks(): Promise<void> {
     const basenameMap = this.buildWikilinkBasenameMap();
     const wikilinks = this.store.listWikilinks();
     for (const w of wikilinks) {
@@ -453,9 +495,6 @@ export class ObsidianVault implements IVault {
       const resolvedPath = this.resolveWikilinkTarget(w.target, basenameMap);
       if (!resolvedPath) continue;
       const fromNote = canonicalizePath(w.fromNote);
-      if (predicate && !(predicate(fromNote) || predicate(canonicalizePath(resolvedPath)))) {
-        continue;
-      }
       this.store.updateWikilinkTarget(fromNote, w.target, resolvedPath);
     }
   }
@@ -572,15 +611,24 @@ export class ObsidianVault implements IVault {
       return false;
     }
 
-    // Step 3: embed + HNSW upsert. Track every returned id so we can roll
-    // back partial inserts on failure without touching the OLD ids.
+    // Step 3: embed + HNSW upsert.
+    //
+    // Invariant (re-review fix): `upsertBatch` writes ALL new vectors into
+    // HNSW BEFORE returning the chunkId→hnswId map. Therefore as soon as
+    // `upsertBatch` resolves, every value in the map is already live in the
+    // external index. We MUST populate `newHnswIds` immediately from the
+    // returned map — before the SQL upsert loop — so a mid-loop SQLite
+    // failure can still clean up every HNSW vector that was inserted.
+    // (Previously `newHnswIds` was only appended per-SQL-success, which
+    // left the unprocessed-but-already-in-HNSW tail orphaned on failure.)
     const newHnswIds: number[] = [];
     try {
       const embeddingMap = await this.adapter.upsertBatch(
         chunks.map((c) => ({ chunkId: c.chunkId, content: c.content })),
       );
+      // Capture every HNSW id BEFORE the SQL upsert loop — see invariant above.
+      newHnswIds.push(...Object.values(embeddingMap));
       for (const [chunkId, hnswId] of Object.entries(embeddingMap)) {
-        newHnswIds.push(hnswId);
         this.store.upsertEmbedding(chunkId, hnswId, this.adapter.provider.dim, this.adapter.provider.model);
       }
     } catch (err) {
@@ -588,16 +636,13 @@ export class ObsidianVault implements IVault {
         vaultId: this.id, path: relPath, op: 'reindexFile',
         newVectorCount: newHnswIds.length, err,
       });
-      // Remove only the NEW vectors we managed to insert. Wrap in its own
-      // try/catch so a cleanup failure cannot mask the original error.
-      try {
-        for (const id of newHnswIds) {
-          try { this.adapter.remove(id); } catch { /* per-id best effort */ }
-        }
-      } catch (cleanupErr) {
-        getLoggerSafe().warn('[obsidian-vault] HNSW cleanup after failed upsert threw', {
-          vaultId: this.id, path: relPath, op: 'reindexFile', cleanupErr,
-        });
+      // Remove every NEW vector we (or upsertBatch) inserted. Per-id try/catch
+      // so a single cleanup failure cannot mask the original error or stop
+      // subsequent ids from being removed. (Finding 3: removed the outer
+      // try/catch — it was dead because the inner per-id catch already
+      // swallows every throw.)
+      for (const id of newHnswIds) {
+        try { this.adapter.remove(id); } catch { /* per-id best effort */ }
       }
       // Drop the file row + chunks so the next sync retries cleanly. The
       // OLD HNSW vectors are still in the external index but unreferenced
@@ -675,7 +720,7 @@ export class ObsidianVault implements IVault {
       // SecH1: full err.message often contains absolute filesystem paths.
       // We log the raw message internally but only ever return a redacted
       // version so HTTP/WS clients never see local filesystem layout.
-      const redacted = redactPathsInMessage(rawMsg, this.rootPath);
+      const redacted = await redactPathsInMessage(rawMsg, this.rootPath);
       getLoggerSafe().warn('[obsidian-vault] canvas regen failed', {
         vaultId: this.id, op: 'regenerateCanvas', error: rawMsg,
       });
@@ -724,9 +769,11 @@ export class ObsidianVault implements IVault {
     // must not race with concurrent writes.
     await this.writeLock.run(async () => {
       const { paths: changed } = await this.runIndexPass('fullIndex');
+      // Single pass: runIndexPass processes files sequentially, so every
+      // file is in vault_files by the time we resolve wikilinks. A second
+      // predicate-filtered pass would iterate an empty set (re-review
+      // finding 2).
       await this.resolveWikilinks();
-      const touched = new Set(changed.map(canonicalizePath));
-      await this.resolveWikilinks((p) => touched.has(p));
       await this.regenerateCanvasWithStatus();
       if (changed.length) {
         this.emitter.emit('update', { vaultId: this.id, changedPaths: changed });

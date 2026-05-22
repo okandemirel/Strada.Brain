@@ -98,6 +98,17 @@ function emitTick(force = false): void {
  * Build (id-preserving) `SimNode[]` from incoming node messages, reusing
  * previous SimNode instances by id so velocity / fixed-position state survives
  * across `update-nodes` refreshes.
+ *
+ * Invariant for already-simulating nodes (those with a `prev` entry):
+ *   - DO NOT overwrite `prev.x` / `prev.y` / `prev.vx` / `prev.vy` from the
+ *     caller-supplied `n.x` / `n.y`. The worker owns position/velocity once a
+ *     node is in the simulation; snapping back to stale host-provided
+ *     coordinates would defeat velocity continuity and cause visible jitter.
+ *   - DO apply `n.fx` / `n.fy` if the caller passed them — fixed positions are
+ *     authoritative (e.g. user-drag pin). When a fixed coord is set, mirror it
+ *     into `x` / `y` so the rendered position matches immediately.
+ *
+ * Incoming `n.x` / `n.y` are only used to seed brand-new nodes (no prev entry).
  */
 function reconcileNodes(incomingNodes: NodeIn[]): SimNode[] {
   const prevById = new Map<string, SimNode>();
@@ -109,12 +120,15 @@ function reconcileNodes(incomingNodes: NodeIn[]): SimNode[] {
   return capped.map((n) => {
     const prev = prevById.get(n.id);
     if (prev) {
-      // Mutate the existing node in place to preserve d3-force internal
-      // bookkeeping (indices, force-applied velocities, etc.).
-      if (n.x !== undefined) prev.x = n.x;
-      if (n.y !== undefined) prev.y = n.y;
-      if (n.fx !== undefined) prev.fx = n.fx;
-      if (n.fy !== undefined) prev.fy = n.fy;
+      // Preserve simulating x/y/vx/vy. Only fixed positions override.
+      if (n.fx !== undefined) {
+        prev.fx = n.fx;
+        if (n.fx !== null) prev.x = n.fx;
+      }
+      if (n.fy !== undefined) {
+        prev.fy = n.fy;
+        if (n.fy !== null) prev.y = n.fy;
+      }
       return prev;
     }
     const x = n.x ?? (Math.random() - 0.5) * 200;

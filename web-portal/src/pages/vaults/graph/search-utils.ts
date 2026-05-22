@@ -101,6 +101,7 @@ export function fuzzyMatch(query: string, target: string): FuzzyMatch | null {
   // DoS guard: oversize query is rejected outright; oversize target is
   // truncated to the cap before scoring.
   if (query.length > MAX_QUERY_LEN) return null;
+  // NOTE: caps are UTF-16 code units, not Unicode code points. Astral-plane characters may slice mid-surrogate. Acceptable for ASCII-dominant code/path labels.
   const safeTarget = target.length > MAX_TARGET_LEN
     ? target.slice(0, MAX_TARGET_LEN)
     : target;
