@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Strada.Brain</title>
+    <style>
+      :root { color-scheme: dark; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #0d1117;
+        color: #f0f6fc;
+      }
+      main {
+        max-width: 560px;
+        padding: 32px 28px;
+        text-align: center;
+        border: 1px solid rgba(240, 246, 252, 0.12);
+        border-radius: 18px;
+        background: rgba(22, 27, 34, 0.96);
+      }
+      h1 { margin: 0 0 12px; font-size: 26px; line-height: 1.2; }
+      p { margin: 0; color: #8b949e; line-height: 1.6; font-size: 15px; }
+      code { color: #58a6ff; }
+    </style>
+  </head>
+  <body>
+    <!--
+      Placeholder fallback served only when the web portal has not been built.
+      When the portal is built, the servers resolve the real bundle from
+      dist/channels/web/static (see src/common/web-static-dir.ts), so this file
+      is intentionally self-contained and references no hashed /assets/* chunks.
+    -->
+    <main>
+      <h1>Strada.Brain</h1>
+      <p>
+        The web portal has not been built yet. Run <code>npm run build</code>
+        (or restart <code>./strada</code>, which builds automatically) and reload this page.
+      </p>
+    </main>
+    <div id="root"></div>
+  </body>
+</html>

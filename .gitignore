@@ -34,7 +34,10 @@ coverage/
 .augment/
 .aider*
 
-# Build-output mirror for the web portal. The build populates dist/channels/web/static
-# and the servers fall back to it (see src/common/web-static-dir.ts), so nothing here
-# is tracked — a stale committed index.html here used to shadow the real build.
-src/channels/web/static/
+# The web portal build output is mirrored into dist/channels/web/static; the
+# servers fall back to it (see src/common/web-static-dir.ts). Only a self-contained
+# placeholder index.html is tracked here as the unbuilt fallback — built assets
+# (assets/, hashed bundles) are git-ignored so a stale build can never shadow the
+# real one.
+src/channels/web/static/*
+!src/channels/web/static/index.html
