@@ -3054,6 +3054,11 @@ export class Orchestrator {
                 currentAssignment.providerName,
                 executionStrategy.task,
                 bgAgentState.phase,
+                {
+                  modelId: currentAssignment.modelId,
+                  identityKey,
+                  usesMultipleProviders: executionStrategy.usesMultipleProviders,
+                },
               ) ?? currentProvider;
               const canBgStream =
                 this.streamingEnabled &&
@@ -4320,6 +4325,11 @@ export class Orchestrator {
           currentAssignment.providerName,
           executionStrategy.task,
           agentState.phase,
+          {
+            modelId: currentAssignment.modelId,
+            identityKey,
+            usesMultipleProviders: executionStrategy.usesMultipleProviders,
+          },
         ) ?? currentProvider;
         const canStream =
           this.streamingEnabled &&
@@ -5657,15 +5667,26 @@ export class Orchestrator {
     primaryName: string,
     task?: import("../agent-core/routing/routing-types.js").TaskClassification,
     phase?: string,
+    options?: { modelId?: string; identityKey?: string; usesMultipleProviders?: boolean },
   ): import("./providers/provider.interface.js").IAIProvider | null {
-    if (!this.providerRouter || !task) {
-      return this.providerManager.getProviderByName?.(primaryName) ?? null;
+    const modelId = options?.modelId;
+
+    // Honor a single-provider / hard-pinned strategy exactly: materialize the
+    // supervisor-selected provider AND model rather than building a multi-provider
+    // fallback chain, which would both ignore the pin and silently drop the chosen
+    // model (running the provider's static default instead).
+    if (!this.providerRouter || !task || options?.usesMultipleProviders === false) {
+      return this.providerManager.getProviderByName?.(primaryName, modelId) ?? null;
     }
 
     try {
-      const rankedOrder = this.providerRouter.resolveRanked(task, phase);
+      const rankedOrder = this.providerRouter.resolveRanked(
+        task,
+        phase,
+        options?.identityKey ? { identityKey: options.identityKey } : undefined,
+      );
       if (rankedOrder.length <= 1) {
-        return this.providerManager.getProviderByName?.(primaryName) ?? null;
+        return this.providerManager.getProviderByName?.(primaryName, modelId) ?? null;
       }
 
       // Ensure primary is first, then fill with router-ranked order
@@ -5676,10 +5697,12 @@ export class Orchestrator {
         }
       }
 
-      return this.providerManager.buildResilientProviderWithOrder?.(order) ?? this.providerManager.getProviderByName?.(primaryName) ?? null;
+      return this.providerManager.buildResilientProviderWithOrder?.(order, modelId)
+        ?? this.providerManager.getProviderByName?.(primaryName, modelId)
+        ?? null;
     } catch {
-      // Fallback to standard resilient provider on any router error
-      return this.providerManager.getProviderByName?.(primaryName) ?? null;
+      // Fallback to the selected provider + model on any router error
+      return this.providerManager.getProviderByName?.(primaryName, modelId) ?? null;
     }
   }
 
