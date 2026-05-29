@@ -4,12 +4,10 @@
   "wizard.checking.description": "Verifying whether this instance is still in first-run setup mode.",
   "wizard.nav.back": "Back",
   "wizard.nav.next": "Next",
-
   "welcome.title": "Welcome to Strada.Brain",
   "welcome.description": "AI-powered Unity development assistant. Let's configure your environment.",
   "welcome.getStarted": "Get Started",
   "welcome.logoAlt": "Strada.Brain",
-
   "providers.title": "AI Providers",
   "providers.subtitle": "Choose a preset or manually select providers for your AI pipeline.",
   "providers.sectionProviders": "Providers",
@@ -26,11 +24,8 @@
   "providers.tier.premium": "Frontier",
   "providers.modelStats.in": "{{amount}} in",
   "providers.modelStats.out": "{{amount}} out",
-  "providers.openai.subscriptionInfo": "Strada will use the local Codex/ChatGPT subscription session available on this machine for OpenAI conversation turns.",
-  "providers.openai.subscriptionWarning": "This does not grant OpenAI API or embedding quota. If you later choose OpenAI for embeddings, you still need an OpenAI API key.",
   "providers.claude.subscriptionInfo": "Strada will send Claude requests with the subscription token you provide here.",
   "providers.claude.subscriptionWarning": "Anthropic documents claude.ai subscription auth as restricted outside Claude Code and Claude.ai. Strada exposes this mode only if you choose to use it, at your own risk.",
-
   "providers.presets.free.name": "Free",
   "providers.presets.free.cost": "$0/mo",
   "providers.presets.free.desc": "Ollama local only",
@@ -46,7 +41,6 @@
   "providers.presets.premium.name": "Premium",
   "providers.presets.premium.cost": "$50-100/mo",
   "providers.presets.premium.desc": "Claude + OpenAI",
-
   "providers.providerNames.claude": "Claude",
   "providers.providerNames.openai": "OpenAI",
   "providers.providerNames.deepseek": "DeepSeek",
@@ -59,8 +53,7 @@
   "providers.providerNames.fireworks": "Fireworks",
   "providers.providerNames.minimax": "MiniMax",
   "providers.providerNames.opencode": "OpenCode",
-    "providers.providerNames.ollama": "Ollama",
-
+  "providers.providerNames.ollama": "Ollama",
   "providers.authModes.claude.apiKey.label": "API Key",
   "providers.authModes.claude.apiKey.description": "Use Anthropic API billing with a standard API key.",
   "providers.authModes.claude.apiKey.secretLabel": "Claude API Key",
@@ -74,8 +67,7 @@
   "providers.authModes.openai.apiKey.description": "Use OpenAI Platform billing with a standard API key.",
   "providers.authModes.openai.apiKey.secretLabel": "OpenAI API Key",
   "providers.authModes.openai.chatgptSubscription.label": "ChatGPT Subscription",
-  "providers.authModes.openai.chatgptSubscription.description": "Reuse the local Codex/ChatGPT subscription login from this machine for conversation turns. OpenAI embeddings still require an OpenAI API key.",
-
+  "providers.authModes.openai.chatgptSubscription.description": "Sign in with your ChatGPT/Codex subscription — no API key needed for conversations. OpenAI embeddings still require an OpenAI API key.",
   "channels.title": "Channel & Settings",
   "channels.subtitle": "Select your primary communication channel and configure additional settings.",
   "channels.configuration": "{{channel}} Configuration",
@@ -84,9 +76,9 @@
   "channels.rag.enabled": "Enabled",
   "channels.rag.disabled": "Disabled",
   "channels.rag.disabledInfo": "RAG is disabled. Code search will not be available.",
-  "channels.rag.enabledWithProvider": "\u2713 RAG enabled \u2014 will use {{provider}} for embeddings, independently from the response provider chain.",
-  "channels.rag.noEmbeddingProviderWithProviders": "\u26A0 Your current response providers don't support embeddings. Select Gemini, OpenAI, or Ollama as the embedding provider to enable RAG code search.",
-  "channels.rag.noEmbeddingProviderNoProviders": "\u26A0 RAG enabled \u2014 embedding provider will be auto-detected from your providers.",
+  "channels.rag.enabledWithProvider": "✓ RAG enabled — will use {{provider}} for embeddings, independently from the response provider chain.",
+  "channels.rag.noEmbeddingProviderWithProviders": "⚠ Your current response providers don't support embeddings. Select Gemini, OpenAI, or Ollama as the embedding provider to enable RAG code search.",
+  "channels.rag.noEmbeddingProviderNoProviders": "⚠ RAG enabled — embedding provider will be auto-detected from your providers.",
   "channels.rag.embeddingProvider": "Embedding Provider",
   "channels.rag.embeddingProviderInfo": "This is a system-wide memory/RAG choice. It does not change which provider Strada uses for conversation turns.",
   "channels.rag.blockedInfo": "You can still continue to review, but setup will stay blocked until you pick a valid embedding provider or disable RAG.",
@@ -98,7 +90,6 @@
   "channels.rag.embeddingModelInfo": "Leave blank to use the provider default. Set only if you need a specific model.",
   "channels.rag.embeddingModelOllamaInfo": "Enter the exact Ollama model name you have pulled (e.g. bge-m3, nomic-embed-text, mxbai-embed-large). Leave blank to use nomic-embed-text.",
   "channels.rag.embeddingModelPlaceholderAuto": "provider default",
-
   "channels.budget.title": "Global Daily Budget",
   "channels.budget.description": "Maximum daily spend across all systems (daemon, agents, chat). Set to $0 for unlimited.",
   "channels.budget.dailyLimit": "Daily Limit",
@@ -106,27 +97,24 @@
   "channels.budget.valueUnlimited": "Unlimited",
   "channels.budget.valueAmount": "{{amount}}",
   "channels.budget.maxLabel": "$50",
-
   "channels.daemon.title": "Daemon Mode",
   "channels.daemon.enabled": "Enabled",
   "channels.daemon.disabled": "Disabled",
-  "channels.daemon.enabledInfo": "Daemon mode active \u2014 background monitoring with triggers, scheduled tasks, and proactive assistance.",
+  "channels.daemon.enabledInfo": "Daemon mode active — background monitoring with triggers, scheduled tasks, and proactive assistance.",
   "channels.daemon.disabledInfo": "Enable background monitoring with triggers, scheduled tasks, and proactive assistance.",
   "channels.daemon.subLimit": "Daemon Sub-Limit",
   "channels.daemon.subLimitMin": "$0.50",
   "channels.daemon.subLimitMax": "$10.00",
   "channels.daemon.subLimitInfo": "Maximum daily spend for daemon triggers only (within the global budget).",
-
   "channels.autonomy.title": "Autonomy",
   "channels.autonomy.enabled": "Enabled",
   "channels.autonomy.disabled": "Disabled",
-  "channels.autonomy.enabledInfo": "Autonomous mode active \u2014 the agent can execute operations without asking for confirmation.",
+  "channels.autonomy.enabledInfo": "Autonomous mode active — the agent can execute operations without asking for confirmation.",
   "channels.autonomy.disabledInfo": "Enable autonomous mode to let the agent operate without requiring confirmation for each action.",
   "channels.autonomy.duration": "Duration",
   "channels.autonomy.durationMin": "1h",
   "channels.autonomy.durationMax": "168h",
   "channels.autonomy.durationValue": "{{hours}}h",
-
   "channels.names.web": "Web",
   "channels.names.telegram": "Telegram",
   "channels.names.discord": "Discord",
@@ -140,7 +128,6 @@
   "channels.fields.slack.appToken": "App Token",
   "channels.fields.whatsapp.allowedNumbers": "Allowed Numbers",
   "channels.fields.whatsapp.sessionPath": "Session Path",
-
   "channels.languages.en": "English",
   "channels.languages.tr": "Turkish",
   "channels.languages.ja": "Japanese",
@@ -149,7 +136,6 @@
   "channels.languages.de": "German",
   "channels.languages.es": "Spanish",
   "channels.languages.fr": "French",
-
   "channels.embeddingProviders.auto": "Auto (detect from providers)",
   "channels.embeddingProviders.gemini": "Gemini",
   "channels.embeddingProviders.openai": "OpenAI",
@@ -158,7 +144,6 @@
   "channels.embeddingProviders.fireworks": "Fireworks",
   "channels.embeddingProviders.qwen": "Qwen",
   "channels.embeddingProviders.ollama": "Ollama",
-
   "mcp.eyebrow.installed": "Unity runtime connected to Brain",
   "mcp.eyebrow.missing": "Recommended Unity runtime upgrade",
   "mcp.title": "Strada.MCP",
@@ -188,7 +173,6 @@
   "mcp.target.assets.eyebrow": "Alternative",
   "mcp.target.assets.description": "Places the checkout under Assets if your project convention keeps integrations there.",
   "mcp.target.manifestDependency": "Manifest dependency",
-
   "mcp.dependency.installed": "Installed",
   "mcp.dependency.missing": "Missing",
   "mcp.dependency.detected": "Detected",
@@ -201,7 +185,6 @@
   "mcp.dependency.installedSuccessfully": "Installed successfully",
   "mcp.dependency.installFailed": "Install failed",
   "mcp.dependency.installButton": "Install",
-
   "mcp.source.packageDirectory": "Unity package",
   "mcp.source.manifest": "Manifest reference",
   "mcp.source.projectLocal": "This project",
@@ -212,11 +195,9 @@
   "mcp.sourceCopy.configuredPath": "from the configured runtime path",
   "mcp.sourceCopy.siblingCheckout": "from a sibling Strada.MCP checkout",
   "mcp.sourceCopy.globalInstall": "from the global install",
-
   "mcp.labels.stradaCore": "Strada.Core",
   "mcp.labels.stradaModules": "Strada.Modules",
   "mcp.labels.stradaMcp": "Strada.MCP",
-
   "mcp.install.preparing": "Preparing {{path}} and bootstrapping the runtime.",
   "mcp.install.success": "Strada.MCP installed successfully.",
   "mcp.install.error": "Strada.MCP install failed.",
@@ -225,7 +206,6 @@
   "mcp.install.summary.runtimeBootstrap": "Runtime bootstrap",
   "mcp.install.summary.npmCompleted": "npm install completed",
   "mcp.install.summary.pending": "Pending",
-
   "review.title": "Review & Save",
   "review.subtitle": "Verify your configuration before saving.",
   "review.labels.preset": "Preset",
@@ -245,7 +225,6 @@
   "review.labels.autonomy": "Autonomy",
   "review.labels.openaiEmbeddingKey": "OpenAI Embedding Key",
   "review.labels.embeddingKey": "{{provider}} Embedding Key",
-
   "review.values.custom": "Custom",
   "review.values.noneSelected": "None selected",
   "review.values.default": "Default",
@@ -263,9 +242,7 @@
   "review.values.budgetUnlimited": "Unlimited",
   "review.values.daemonEnabledWithBudget": "Enabled (sub-limit: {{amount}}/day)",
   "review.values.autonomyEnabledWithHours": "Enabled ({{hours}}h)",
-
   "review.ragBlockedError": "RAG needs a real embedding-capable provider. Add Gemini, OpenAI API key, Mistral, Together, Fireworks, Qwen, or Ollama before saving.",
-
   "review.save.saving": "Saving...",
   "review.save.button": "Save Configuration",
   "review.save.configAccepted": "Configuration accepted. Starting Strada on this same URL.",
@@ -275,7 +252,6 @@
   "review.save.sourceCheckoutHint": "If this is a source checkout, run `./strada install-command` once before expecting the bare `strada` command to exist globally.",
   "review.save.openMainApp": "Open main app",
   "review.save.reopenSetup": "Re-open setup",
-
   "directory.title": "Browse Directory",
   "directory.unityBadge": "Unity Project",
   "directory.loading": "Loading...",
@@ -283,7 +259,6 @@
   "directory.cancel": "Cancel",
   "directory.select": "Select",
   "directory.installButton": "Install into this project",
-
   "directory.projectPath.title": "Unity Project",
   "directory.projectPath.subtitle": "Point Strada.Brain to your Unity project directory.",
   "directory.projectPath.placeholder": "/path/to/your/UnityProject",
@@ -292,6 +267,17 @@
   "directory.projectPath.valid": "Valid Unity project path",
   "directory.projectPath.validNotUnity": "Valid path, but this is not a Unity project (Assets/ and ProjectSettings/ not found)",
   "directory.projectPath.invalid": "Invalid path",
-
-  "progress.stepLabel": "Step {{step}} of {{total}}"
+  "progress.stepLabel": "Step {{step}} of {{total}}",
+  "providers.openai.signIn": "Sign in with ChatGPT",
+  "providers.openai.signInAgain": "Sign in again",
+  "providers.openai.signedIn": "Signed in with ChatGPT",
+  "providers.openai.notSignedIn": "Not signed in",
+  "providers.openai.checking": "Checking ChatGPT session…",
+  "providers.openai.waitingBrowser": "Waiting for sign-in in your browser…",
+  "providers.openai.validUntil": "valid until",
+  "providers.openai.refresh": "Refresh",
+  "providers.openai.browserHint": "If your browser didn't open, ",
+  "providers.openai.openLink": "open the sign-in page",
+  "providers.openai.embeddingsNote": "OpenAI embeddings still require an OpenAI API key.",
+  "providers.openai.codexMissing": "Codex CLI not found. Install it with `npm install -g @openai/codex`, then sign in."
 }

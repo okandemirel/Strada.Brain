@@ -4,12 +4,10 @@
   "wizard.checking.description": "正在验证此实例是否仍处于首次运行设置模式。",
   "wizard.nav.back": "上一步",
   "wizard.nav.next": "下一步",
-
   "welcome.title": "欢迎使用 Strada.Brain",
   "welcome.description": "AI 驱动的 Unity 开发助手。让我们来配置您的环境。",
   "welcome.getStarted": "开始使用",
   "welcome.logoAlt": "Strada.Brain",
-
   "providers.title": "AI 提供商",
   "providers.subtitle": "选择一个预设方案或手动选择 AI 流水线的提供商。",
   "providers.sectionProviders": "提供商",
@@ -26,11 +24,8 @@
   "providers.tier.premium": "旗舰",
   "providers.modelStats.in": "{{amount}} 输入",
   "providers.modelStats.out": "{{amount}} 输出",
-  "providers.openai.subscriptionInfo": "Strada 将使用此机器上可用的本地 Codex/ChatGPT 订阅会话来处理 OpenAI 对话轮次。",
-  "providers.openai.subscriptionWarning": "这不会授予 OpenAI API 或嵌入配额。如果您后续选择 OpenAI 用于嵌入，仍然需要 OpenAI API 密钥。",
   "providers.claude.subscriptionInfo": "Strada 将使用您在此处提供的订阅令牌发送 Claude 请求。",
   "providers.claude.subscriptionWarning": "Anthropic 文档指出 claude.ai 订阅认证在 Claude Code 和 Claude.ai 之外受到限制。Strada 仅在您选择使用此模式时才会公开它，风险自负。",
-
   "providers.presets.free.name": "免费",
   "providers.presets.free.cost": "$0/月",
   "providers.presets.free.desc": "仅 Ollama 本地",
@@ -46,7 +41,6 @@
   "providers.presets.premium.name": "旗舰",
   "providers.presets.premium.cost": "$50-100/月",
   "providers.presets.premium.desc": "Claude + OpenAI",
-
   "providers.providerNames.claude": "Claude",
   "providers.providerNames.openai": "OpenAI",
   "providers.providerNames.deepseek": "DeepSeek",
@@ -59,8 +53,7 @@
   "providers.providerNames.fireworks": "Fireworks",
   "providers.providerNames.minimax": "MiniMax",
   "providers.providerNames.opencode": "OpenCode",
-    "providers.providerNames.ollama": "Ollama",
-
+  "providers.providerNames.ollama": "Ollama",
   "providers.authModes.claude.apiKey.label": "API 密钥",
   "providers.authModes.claude.apiKey.description": "使用 Anthropic API 计费，通过标准 API 密钥。",
   "providers.authModes.claude.apiKey.secretLabel": "Claude API 密钥",
@@ -75,7 +68,6 @@
   "providers.authModes.openai.apiKey.secretLabel": "OpenAI API 密钥",
   "providers.authModes.openai.chatgptSubscription.label": "ChatGPT 订阅",
   "providers.authModes.openai.chatgptSubscription.description": "复用此机器上的本地 Codex/ChatGPT 订阅登录来处理对话轮次。OpenAI 嵌入仍然需要 OpenAI API 密钥。",
-
   "channels.title": "频道与设置",
   "channels.subtitle": "选择您的主要通信频道并配置其他设置。",
   "channels.configuration": "{{channel}} 配置",
@@ -84,9 +76,9 @@
   "channels.rag.enabled": "已启用",
   "channels.rag.disabled": "已禁用",
   "channels.rag.disabledInfo": "RAG 已禁用。代码搜索将不可用。",
-  "channels.rag.enabledWithProvider": "\u2713 RAG 已启用——将使用 {{provider}} 进行嵌入，独立于响应提供商链。",
-  "channels.rag.noEmbeddingProviderWithProviders": "\u26A0 您当前的响应提供商不支持嵌入。请选择 Gemini、OpenAI 或 Ollama 作为嵌入提供商以启用 RAG 代码搜索。",
-  "channels.rag.noEmbeddingProviderNoProviders": "\u26A0 RAG 已启用——嵌入提供商将从您的提供商中自动检测。",
+  "channels.rag.enabledWithProvider": "✓ RAG 已启用——将使用 {{provider}} 进行嵌入，独立于响应提供商链。",
+  "channels.rag.noEmbeddingProviderWithProviders": "⚠ 您当前的响应提供商不支持嵌入。请选择 Gemini、OpenAI 或 Ollama 作为嵌入提供商以启用 RAG 代码搜索。",
+  "channels.rag.noEmbeddingProviderNoProviders": "⚠ RAG 已启用——嵌入提供商将从您的提供商中自动检测。",
   "channels.rag.embeddingProvider": "嵌入提供商",
   "channels.rag.embeddingProviderInfo": "这是系统范围的记忆/RAG 选择。它不会更改 Strada 用于对话轮次的提供商。",
   "channels.rag.blockedInfo": "您仍然可以继续查看，但在您选择有效的嵌入提供商或禁用 RAG 之前，设置将保持阻塞状态。",
@@ -94,7 +86,6 @@
   "channels.rag.dedicatedEmbeddingKeyLabel": "{{provider}} 嵌入 API 密钥",
   "channels.rag.dedicatedEmbeddingKeyInfo": "此密钥仅用于嵌入。它不会将 {{provider}} 添加到响应提供商链中。",
   "channels.rag.subscriptionNotUsedForEmbedding": "订阅登录不用于此嵌入请求路径。",
-
   "channels.budget.title": "全局每日预算",
   "channels.budget.description": "所有系统（守护进程、智能体、聊天）的最大每日开支。设为 $0 表示无限制。",
   "channels.budget.dailyLimit": "每日限额",
@@ -102,7 +93,6 @@
   "channels.budget.valueUnlimited": "无限制",
   "channels.budget.valueAmount": "{{amount}}",
   "channels.budget.maxLabel": "$50",
-
   "channels.daemon.title": "守护进程模式",
   "channels.daemon.enabled": "已启用",
   "channels.daemon.disabled": "已禁用",
@@ -112,7 +102,6 @@
   "channels.daemon.subLimitMin": "$0.50",
   "channels.daemon.subLimitMax": "$10.00",
   "channels.daemon.subLimitInfo": "仅用于守护进程触发器的最大每日开支（在全局预算范围内）。",
-
   "channels.autonomy.title": "自主模式",
   "channels.autonomy.enabled": "已启用",
   "channels.autonomy.disabled": "已禁用",
@@ -122,7 +111,6 @@
   "channels.autonomy.durationMin": "1小时",
   "channels.autonomy.durationMax": "168小时",
   "channels.autonomy.durationValue": "{{hours}}小时",
-
   "channels.names.web": "Web",
   "channels.names.telegram": "Telegram",
   "channels.names.discord": "Discord",
@@ -136,7 +124,6 @@
   "channels.fields.slack.appToken": "App 令牌",
   "channels.fields.whatsapp.allowedNumbers": "允许的号码",
   "channels.fields.whatsapp.sessionPath": "会话路径",
-
   "channels.languages.en": "英语",
   "channels.languages.tr": "土耳其语",
   "channels.languages.ja": "日语",
@@ -145,7 +132,6 @@
   "channels.languages.de": "德语",
   "channels.languages.es": "西班牙语",
   "channels.languages.fr": "法语",
-
   "channels.embeddingProviders.auto": "自动（从提供商中检测）",
   "channels.embeddingProviders.gemini": "Gemini",
   "channels.embeddingProviders.openai": "OpenAI",
@@ -154,7 +140,6 @@
   "channels.embeddingProviders.fireworks": "Fireworks",
   "channels.embeddingProviders.qwen": "Qwen",
   "channels.embeddingProviders.ollama": "Ollama",
-
   "mcp.eyebrow.installed": "Unity 运行时已连接到 Brain",
   "mcp.eyebrow.missing": "推荐的 Unity 运行时升级",
   "mcp.title": "Strada.MCP",
@@ -184,7 +169,6 @@
   "mcp.target.assets.eyebrow": "备选",
   "mcp.target.assets.description": "如果您的项目惯例将集成放在 Assets 下，则将检出放在那里。",
   "mcp.target.manifestDependency": "Manifest 依赖",
-
   "mcp.dependency.installed": "已安装",
   "mcp.dependency.missing": "缺失",
   "mcp.dependency.detected": "已检测到",
@@ -197,7 +181,6 @@
   "mcp.dependency.installedSuccessfully": "安装成功",
   "mcp.dependency.installFailed": "安装失败",
   "mcp.dependency.installButton": "安装",
-
   "mcp.source.packageDirectory": "Unity 包",
   "mcp.source.manifest": "Manifest 引用",
   "mcp.source.projectLocal": "本项目",
@@ -208,11 +191,9 @@
   "mcp.sourceCopy.configuredPath": "来自配置的运行时路径",
   "mcp.sourceCopy.siblingCheckout": "来自同级 Strada.MCP 检出",
   "mcp.sourceCopy.globalInstall": "来自全局安装",
-
   "mcp.labels.stradaCore": "Strada.Core",
   "mcp.labels.stradaModules": "Strada.Modules",
   "mcp.labels.stradaMcp": "Strada.MCP",
-
   "mcp.install.preparing": "正在准备 {{path}} 并引导运行时。",
   "mcp.install.success": "Strada.MCP 安装成功。",
   "mcp.install.error": "Strada.MCP 安装失败。",
@@ -221,7 +202,6 @@
   "mcp.install.summary.runtimeBootstrap": "运行时引导",
   "mcp.install.summary.npmCompleted": "npm install 已完成",
   "mcp.install.summary.pending": "待处理",
-
   "review.title": "审查并保存",
   "review.subtitle": "在保存前验证您的配置。",
   "review.labels.preset": "预设",
@@ -241,7 +221,6 @@
   "review.labels.autonomy": "自主模式",
   "review.labels.openaiEmbeddingKey": "OpenAI 嵌入密钥",
   "review.labels.embeddingKey": "{{provider}} 嵌入密钥",
-
   "review.values.custom": "自定义",
   "review.values.noneSelected": "未选择",
   "review.values.default": "默认",
@@ -259,9 +238,7 @@
   "review.values.budgetUnlimited": "无限制",
   "review.values.daemonEnabledWithBudget": "已启用（子限额：{{amount}}/天）",
   "review.values.autonomyEnabledWithHours": "已启用（{{hours}}小时）",
-
   "review.ragBlockedError": "RAG 需要一个真正的嵌入能力提供商。请在保存前添加 Gemini、OpenAI API 密钥、Mistral、Together、Fireworks、Qwen 或 Ollama。",
-
   "review.save.saving": "保存中...",
   "review.save.button": "保存配置",
   "review.save.configAccepted": "配置已接受。正在此 URL 启动 Strada。",
@@ -271,7 +248,6 @@
   "review.save.sourceCheckoutHint": "如果这是源码检出，请先运行一次 `./strada install-command`，然后再期望全局 `strada` 命令可用。",
   "review.save.openMainApp": "打开主应用",
   "review.save.reopenSetup": "重新打开设置",
-
   "directory.title": "浏览目录",
   "directory.unityBadge": "Unity 项目",
   "directory.loading": "加载中...",
@@ -279,7 +255,6 @@
   "directory.cancel": "取消",
   "directory.select": "选择",
   "directory.installButton": "安装到此项目",
-
   "directory.projectPath.title": "Unity 项目",
   "directory.projectPath.subtitle": "将 Strada.Brain 指向您的 Unity 项目目录。",
   "directory.projectPath.placeholder": "/path/to/your/UnityProject",
@@ -288,6 +263,5 @@
   "directory.projectPath.valid": "有效的 Unity 项目路径",
   "directory.projectPath.validNotUnity": "路径有效，但这不是 Unity 项目（未找到 Assets/ 和 ProjectSettings/）",
   "directory.projectPath.invalid": "无效路径",
-
   "progress.stepLabel": "第 {{step}} 步，共 {{total}} 步"
 }

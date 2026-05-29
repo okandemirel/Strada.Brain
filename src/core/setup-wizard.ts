@@ -41,6 +41,8 @@ import {
   transitionSetupStatus,
 } from "../common/setup-state.js";
 import { resolveDotenvPath } from "../common/runtime-paths.js";
+import { inspectOpenAiSubscriptionAuth } from "../common/openai-subscription-auth.js";
+import { isCodexCliAvailable, getCodexInstallHint, startCodexLogin } from "../common/openai-codex-login.js";
 
 const PACKAGED_STATIC_DIR = fileURLToPath(new URL("../channels/web/static/", import.meta.url));
 // In a published package the line above resolves to dist/channels/web/static,
@@ -710,6 +712,18 @@ export class SetupWizard {
         return;
       }
 
+      if (url === "/api/setup/openai/status" && method === "GET") {
+        if (!this.guardSetupReadRoute(req, res)) return;
+        this.handleOpenAiSubscriptionStatus(res);
+        return;
+      }
+
+      if (url === "/api/setup/openai/signin" && method === "POST") {
+        if (!this.guardMutatingRoute(req, res)) return;
+        await this.handleOpenAiSubscriptionSignin(res);
+        return;
+      }
+
       // Static files
       if (method === "GET") {
         await this.serveStatic(url, res);
@@ -893,6 +907,34 @@ export class SetupWizard {
     } else {
       this.json(res, 200, { valid: false, error: result.error });
     }
+  }
+
+  /** Reports whether a usable ChatGPT/Codex subscription session is available. */
+  private handleOpenAiSubscriptionStatus(res: ServerResponse): void {
+    const inspection = inspectOpenAiSubscriptionAuth();
+    this.json(res, 200, {
+      ok: inspection.ok,
+      issue: inspection.issue ?? null,
+      detail: inspection.detail,
+      expiresAt: inspection.expiresAt ?? null,
+      authFile: inspection.authFile,
+      codexAvailable: isCodexCliAvailable(),
+    });
+  }
+
+  /** Starts the official `codex login` browser flow so the user can sign in with ChatGPT. */
+  private async handleOpenAiSubscriptionSignin(res: ServerResponse): Promise<void> {
+    if (!isCodexCliAvailable()) {
+      this.json(res, 200, { started: false, codexAvailable: false, error: getCodexInstallHint() });
+      return;
+    }
+    const result = await startCodexLogin();
+    this.json(res, 200, {
+      started: result.started,
+      codexAvailable: true,
+      url: result.url ?? null,
+      error: result.error ?? null,
+    });
   }
 
   private async handleInstallMcp(req: IncomingMessage, res: ServerResponse): Promise<void> {

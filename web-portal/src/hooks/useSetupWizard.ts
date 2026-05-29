@@ -270,6 +270,31 @@ export async function probeSetupSurface(
   return { kind: 'retry' }
 }
 
+export interface OpenAiSubscriptionState {
+  status: 'idle' | 'checking' | 'connected' | 'disconnected' | 'signing-in'
+  detail?: string
+  expiresAt?: string | null
+  codexAvailable?: boolean
+  authUrl?: string | null
+  error?: string | null
+}
+
+interface OpenAiStatusResponse {
+  ok: boolean
+  issue: string | null
+  detail: string
+  expiresAt: string | null
+  authFile: string
+  codexAvailable: boolean
+}
+
+interface OpenAiSigninResponse {
+  started: boolean
+  codexAvailable: boolean
+  url: string | null
+  error: string | null
+}
+
 export function useSetupWizard() {
   const [setupAvailability, setSetupAvailability] = useState<'checking' | 'available' | 'unavailable'>('checking')
   const [setupUnavailableReason, setSetupUnavailableReason] = useState<string | null>(null)
@@ -315,8 +340,11 @@ export function useSetupWizard() {
   const [bootstrapDetail, setBootstrapDetail] = useState<string | null>(null)
   const [readyUrl, setReadyUrl] = useState<string | null>(typeof window !== 'undefined' ? `${window.location.origin}/` : null)
   const [csrfToken, setCsrfToken] = useState('')
+  const [openaiSubscription, setOpenaiSubscription] = useState<OpenAiSubscriptionState>({ status: 'idle' })
 
   const csrfTokenRef = useRef<string>('')
+  const openaiPollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const openaiPollDeadlineRef = useRef<number>(0)
   const readyUrlRef = useRef<string | null>(typeof window !== 'undefined' ? `${window.location.origin}/` : null)
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pollAbortControllerRef = useRef<AbortController | null>(null)
@@ -397,6 +425,9 @@ export function useSetupWizard() {
       if (availabilityTimerRef.current) {
         clearTimeout(availabilityTimerRef.current)
       }
+      if (openaiPollTimerRef.current) {
+        clearTimeout(openaiPollTimerRef.current)
+      }
     }
   }, [stopBootstrapPolling])
 
@@ -474,6 +505,10 @@ export function useSetupWizard() {
 
   const setProviderAuthMode = useCallback((id: string, mode: string) => {
     setProviderAuthModes((prev) => ({ ...prev, [id]: mode }))
+    if (id === 'openai') {
+      // Re-arm the subscription status check for the newly selected OpenAI mode.
+      setOpenaiSubscription({ status: 'idle' })
+    }
   }, [])
 
   const setProjectPath = useCallback((path: string) => {
@@ -618,6 +653,119 @@ export function useSetupWizard() {
       return false
     }
   }, [applyPathAnalysis, projectPath])
+
+  const refreshOpenAiSubscriptionStatus = useCallback(async (): Promise<boolean> => {
+    try {
+      const res = await fetch('/api/setup/openai/status', {
+        headers: csrfTokenRef.current ? { 'X-CSRF-Token': csrfTokenRef.current } : {},
+        cache: 'no-store',
+      })
+      const data = await res.json().catch(() => null) as OpenAiStatusResponse | null
+      if (!data) {
+        setOpenaiSubscription((prev) => ({
+          ...prev,
+          status: prev.status === 'signing-in' ? 'signing-in' : 'disconnected',
+          error: 'Could not read subscription status.',
+        }))
+        return false
+      }
+      setOpenaiSubscription((prev) => ({
+        status: data.ok ? 'connected' : prev.status === 'signing-in' ? 'signing-in' : 'disconnected',
+        detail: data.detail,
+        expiresAt: data.expiresAt,
+        codexAvailable: data.codexAvailable,
+        authUrl: prev.authUrl ?? null,
+        error: data.ok ? null : prev.error ?? null,
+      }))
+      return data.ok
+    } catch {
+      setOpenaiSubscription((prev) => ({
+        ...prev,
+        status: prev.status === 'signing-in' ? 'signing-in' : 'disconnected',
+        error: 'Could not read subscription status.',
+      }))
+      return false
+    }
+  }, [])
+
+  const signInWithChatGpt = useCallback(async () => {
+    if (openaiPollTimerRef.current) {
+      clearTimeout(openaiPollTimerRef.current)
+      openaiPollTimerRef.current = null
+    }
+    setOpenaiSubscription((prev) => ({ ...prev, status: 'signing-in', error: null, authUrl: null }))
+    try {
+      const res = await fetch('/api/setup/openai/signin', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': csrfTokenRef.current,
+        },
+      })
+      const data = await res.json().catch(() => ({})) as Partial<OpenAiSigninResponse>
+      if (!data.started) {
+        setOpenaiSubscription((prev) => ({
+          ...prev,
+          status: 'disconnected',
+          codexAvailable: data.codexAvailable ?? prev.codexAvailable,
+          error: data.error ?? 'Could not start ChatGPT sign-in.',
+        }))
+        return
+      }
+      setOpenaiSubscription((prev) => ({
+        ...prev,
+        status: 'signing-in',
+        codexAvailable: true,
+        authUrl: data.url ?? null,
+        error: null,
+      }))
+
+      openaiPollDeadlineRef.current = Date.now() + 3 * 60_000
+      const poll = async (): Promise<void> => {
+        const ok = await refreshOpenAiSubscriptionStatus()
+        if (!mountedRef.current) return
+        if (ok) {
+          if (openaiPollTimerRef.current) {
+            clearTimeout(openaiPollTimerRef.current)
+            openaiPollTimerRef.current = null
+          }
+          return
+        }
+        if (Date.now() >= openaiPollDeadlineRef.current) {
+          if (openaiPollTimerRef.current) {
+            clearTimeout(openaiPollTimerRef.current)
+            openaiPollTimerRef.current = null
+          }
+          setOpenaiSubscription((prev) => prev.status === 'connected'
+            ? prev
+            : { ...prev, status: 'disconnected', error: prev.error ?? 'Sign-in timed out. Finish it in your browser, then click Refresh.' })
+          return
+        }
+        openaiPollTimerRef.current = setTimeout(() => { void poll() }, 2000)
+      }
+      openaiPollTimerRef.current = setTimeout(() => { void poll() }, 2000)
+    } catch (err) {
+      setOpenaiSubscription((prev) => ({
+        ...prev,
+        status: 'disconnected',
+        error: err instanceof Error ? err.message : 'ChatGPT sign-in failed.',
+      }))
+    }
+  }, [refreshOpenAiSubscriptionStatus])
+
+  // When OpenAI's ChatGPT subscription mode is selected, fetch its live connection
+  // status once so the badge reflects the local ~/.codex/auth.json session.
+  useEffect(() => {
+    if (
+      csrfToken &&
+      checkedProviders.has('openai') &&
+      providerAuthModes.openai === 'chatgpt-subscription' &&
+      openaiSubscription.status === 'idle'
+    ) {
+      setOpenaiSubscription((prev) => ({ ...prev, status: 'checking' }))
+      void refreshOpenAiSubscriptionStatus()
+    }
+  }, [csrfToken, checkedProviders, providerAuthModes, openaiSubscription.status, refreshOpenAiSubscriptionStatus])
 
   const setChannel = useCallback((id: string) => {
     setChannelState(id)
@@ -952,6 +1100,7 @@ export function useSetupWizard() {
     setupAvailability,
     setupUnavailableReason,
     csrfToken,
+    openaiSubscription,
     step,
     selectedPreset,
     checkedProviders,
@@ -1002,6 +1151,8 @@ export function useSetupWizard() {
     toggleProvider,
     setProviderKey,
     setProviderAuthMode,
+    signInWithChatGpt,
+    refreshOpenAiSubscriptionStatus,
     setProviderModel,
     setProjectPath,
     validatePath,

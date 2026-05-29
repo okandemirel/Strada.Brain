@@ -4,12 +4,10 @@
   "wizard.checking.description": "このインスタンスがまだ初回セットアップモードかどうかを確認しています。",
   "wizard.nav.back": "戻る",
   "wizard.nav.next": "次へ",
-
   "welcome.title": "Strada.Brain へようこそ",
   "welcome.description": "AI搭載のUnity開発アシスタント。環境を設定しましょう。",
   "welcome.getStarted": "始める",
   "welcome.logoAlt": "Strada.Brain",
-
   "providers.title": "AIプロバイダー",
   "providers.subtitle": "プリセットを選択するか、AIパイプラインのプロバイダーを手動で選択してください。",
   "providers.sectionProviders": "プロバイダー",
@@ -26,11 +24,8 @@
   "providers.tier.premium": "フロンティア",
   "providers.modelStats.in": "{{amount}} 入力",
   "providers.modelStats.out": "{{amount}} 出力",
-  "providers.openai.subscriptionInfo": "Stradaは、このマシンで利用可能なローカルのCodex/ChatGPTサブスクリプションセッションをOpenAIの会話ターンに使用します。",
-  "providers.openai.subscriptionWarning": "これはOpenAI APIやエンベディングのクォータを付与しません。後でOpenAIをエンベディングに選択する場合、OpenAI APIキーが別途必要です。",
   "providers.claude.subscriptionInfo": "Stradaは、ここで提供するサブスクリプショントークンを使ってClaudeリクエストを送信します。",
   "providers.claude.subscriptionWarning": "Anthropicは、claude.aiサブスクリプション認証をClaude CodeとClaude.ai以外では制限付きとしています。Stradaはこのモードを自己責任でのみ公開しています。",
-
   "providers.presets.free.name": "無料",
   "providers.presets.free.cost": "$0/月",
   "providers.presets.free.desc": "Ollamaローカルのみ",
@@ -46,7 +41,6 @@
   "providers.presets.premium.name": "プレミアム",
   "providers.presets.premium.cost": "$50-100/月",
   "providers.presets.premium.desc": "Claude + OpenAI",
-
   "providers.providerNames.claude": "Claude",
   "providers.providerNames.openai": "OpenAI",
   "providers.providerNames.deepseek": "DeepSeek",
@@ -59,8 +53,7 @@
   "providers.providerNames.fireworks": "Fireworks",
   "providers.providerNames.minimax": "MiniMax",
   "providers.providerNames.opencode": "OpenCode",
-    "providers.providerNames.ollama": "Ollama",
-
+  "providers.providerNames.ollama": "Ollama",
   "providers.authModes.claude.apiKey.label": "APIキー",
   "providers.authModes.claude.apiKey.description": "標準のAPIキーでAnthropic API課金を使用します。",
   "providers.authModes.claude.apiKey.secretLabel": "Claude APIキー",
@@ -75,7 +68,6 @@
   "providers.authModes.openai.apiKey.secretLabel": "OpenAI APIキー",
   "providers.authModes.openai.chatgptSubscription.label": "ChatGPTサブスクリプション",
   "providers.authModes.openai.chatgptSubscription.description": "このマシンのローカルCodex/ChatGPTサブスクリプションログインを会話ターンに再利用します。OpenAIエンベディングには引き続きOpenAI APIキーが必要です。",
-
   "channels.title": "チャンネル & 設定",
   "channels.subtitle": "プライマリ通信チャンネルを選択し、追加設定を行ってください。",
   "channels.configuration": "{{channel}} の設定",
@@ -84,9 +76,9 @@
   "channels.rag.enabled": "有効",
   "channels.rag.disabled": "無効",
   "channels.rag.disabledInfo": "RAGが無効です。コード検索は利用できません。",
-  "channels.rag.enabledWithProvider": "\u2713 RAG有効 \u2014 エンベディングに{{provider}}を使用し、応答プロバイダーチェーンとは独立して動作します。",
-  "channels.rag.noEmbeddingProviderWithProviders": "\u26A0 現在の応答プロバイダーはエンベディングをサポートしていません。RAGコード検索を有効にするには、Gemini、OpenAI、またはOllamaをエンベディングプロバイダーとして選択してください。",
-  "channels.rag.noEmbeddingProviderNoProviders": "\u26A0 RAG有効 \u2014 エンベディングプロバイダーはプロバイダーから自動検出されます。",
+  "channels.rag.enabledWithProvider": "✓ RAG有効 — エンベディングに{{provider}}を使用し、応答プロバイダーチェーンとは独立して動作します。",
+  "channels.rag.noEmbeddingProviderWithProviders": "⚠ 現在の応答プロバイダーはエンベディングをサポートしていません。RAGコード検索を有効にするには、Gemini、OpenAI、またはOllamaをエンベディングプロバイダーとして選択してください。",
+  "channels.rag.noEmbeddingProviderNoProviders": "⚠ RAG有効 — エンベディングプロバイダーはプロバイダーから自動検出されます。",
   "channels.rag.embeddingProvider": "エンベディングプロバイダー",
   "channels.rag.embeddingProviderInfo": "これはシステム全体のメモリ/RAG設定です。Stradaが会話ターンに使用するプロバイダーは変更されません。",
   "channels.rag.blockedInfo": "レビューを続行できますが、有効なエンベディングプロバイダーを選択するかRAGを無効にするまでセットアップはブロックされます。",
@@ -94,7 +86,6 @@
   "channels.rag.dedicatedEmbeddingKeyLabel": "{{provider}} エンベディング APIキー",
   "channels.rag.dedicatedEmbeddingKeyInfo": "このキーはエンベディングのみに使用されます。{{provider}}を応答プロバイダーチェーンに追加することはありません。",
   "channels.rag.subscriptionNotUsedForEmbedding": "サブスクリプションログインはこのエンベディングリクエストパスには使用されません。",
-
   "channels.budget.title": "グローバル日次予算",
   "channels.budget.description": "全システム（デーモン、エージェント、チャット）の最大日次支出。$0で無制限に設定。",
   "channels.budget.dailyLimit": "日次上限",
@@ -102,27 +93,24 @@
   "channels.budget.valueUnlimited": "無制限",
   "channels.budget.valueAmount": "{{amount}}",
   "channels.budget.maxLabel": "$50",
-
   "channels.daemon.title": "デーモンモード",
   "channels.daemon.enabled": "有効",
   "channels.daemon.disabled": "無効",
-  "channels.daemon.enabledInfo": "デーモンモードがアクティブ \u2014 トリガー、スケジュールタスク、プロアクティブアシスタンスによるバックグラウンドモニタリング。",
+  "channels.daemon.enabledInfo": "デーモンモードがアクティブ — トリガー、スケジュールタスク、プロアクティブアシスタンスによるバックグラウンドモニタリング。",
   "channels.daemon.disabledInfo": "トリガー、スケジュールタスク、プロアクティブアシスタンスによるバックグラウンドモニタリングを有効にします。",
   "channels.daemon.subLimit": "デーモンサブリミット",
   "channels.daemon.subLimitMin": "$0.50",
   "channels.daemon.subLimitMax": "$10.00",
   "channels.daemon.subLimitInfo": "デーモントリガーのみの最大日次支出（グローバル予算内）。",
-
   "channels.autonomy.title": "自律性",
   "channels.autonomy.enabled": "有効",
   "channels.autonomy.disabled": "無効",
-  "channels.autonomy.enabledInfo": "自律モードがアクティブ \u2014 エージェントは確認なしで操作を実行できます。",
+  "channels.autonomy.enabledInfo": "自律モードがアクティブ — エージェントは確認なしで操作を実行できます。",
   "channels.autonomy.disabledInfo": "自律モードを有効にすると、エージェントがアクションごとの確認なしで動作できるようになります。",
   "channels.autonomy.duration": "期間",
   "channels.autonomy.durationMin": "1時間",
   "channels.autonomy.durationMax": "168時間",
   "channels.autonomy.durationValue": "{{hours}}時間",
-
   "channels.names.web": "Web",
   "channels.names.telegram": "Telegram",
   "channels.names.discord": "Discord",
@@ -136,7 +124,6 @@
   "channels.fields.slack.appToken": "Appトークン",
   "channels.fields.whatsapp.allowedNumbers": "許可電話番号",
   "channels.fields.whatsapp.sessionPath": "セッションパス",
-
   "channels.languages.en": "英語",
   "channels.languages.tr": "トルコ語",
   "channels.languages.ja": "日本語",
@@ -145,7 +132,6 @@
   "channels.languages.de": "ドイツ語",
   "channels.languages.es": "スペイン語",
   "channels.languages.fr": "フランス語",
-
   "channels.embeddingProviders.auto": "自動（プロバイダーから検出）",
   "channels.embeddingProviders.gemini": "Gemini",
   "channels.embeddingProviders.openai": "OpenAI",
@@ -154,7 +140,6 @@
   "channels.embeddingProviders.fireworks": "Fireworks",
   "channels.embeddingProviders.qwen": "Qwen",
   "channels.embeddingProviders.ollama": "Ollama",
-
   "mcp.eyebrow.installed": "UnityランタイムがBrainに接続済み",
   "mcp.eyebrow.missing": "推奨Unityランタイムアップグレード",
   "mcp.title": "Strada.MCP",
@@ -184,7 +169,6 @@
   "mcp.target.assets.eyebrow": "代替",
   "mcp.target.assets.description": "プロジェクトの慣例でインテグレーションをAssetsに配置している場合、チェックアウトをAssets配下に置きます。",
   "mcp.target.manifestDependency": "マニフェスト依存関係",
-
   "mcp.dependency.installed": "インストール済み",
   "mcp.dependency.missing": "未インストール",
   "mcp.dependency.detected": "検出済み",
@@ -197,7 +181,6 @@
   "mcp.dependency.installedSuccessfully": "正常にインストールされました",
   "mcp.dependency.installFailed": "インストールに失敗しました",
   "mcp.dependency.installButton": "インストール",
-
   "mcp.source.packageDirectory": "Unityパッケージ",
   "mcp.source.manifest": "マニフェスト参照",
   "mcp.source.projectLocal": "このプロジェクト",
@@ -208,11 +191,9 @@
   "mcp.sourceCopy.configuredPath": "設定済みランタイムパスから",
   "mcp.sourceCopy.siblingCheckout": "隣接のStrada.MCPチェックアウトから",
   "mcp.sourceCopy.globalInstall": "グローバルインストールから",
-
   "mcp.labels.stradaCore": "Strada.Core",
   "mcp.labels.stradaModules": "Strada.Modules",
   "mcp.labels.stradaMcp": "Strada.MCP",
-
   "mcp.install.preparing": "{{path}} を準備し、ランタイムをブートストラップしています。",
   "mcp.install.success": "Strada.MCPが正常にインストールされました。",
   "mcp.install.error": "Strada.MCPのインストールに失敗しました。",
@@ -221,7 +202,6 @@
   "mcp.install.summary.runtimeBootstrap": "ランタイムブートストラップ",
   "mcp.install.summary.npmCompleted": "npm install完了",
   "mcp.install.summary.pending": "保留中",
-
   "review.title": "確認 & 保存",
   "review.subtitle": "保存前に設定を確認してください。",
   "review.labels.preset": "プリセット",
@@ -241,7 +221,6 @@
   "review.labels.autonomy": "自律性",
   "review.labels.openaiEmbeddingKey": "OpenAIエンベディングキー",
   "review.labels.embeddingKey": "{{provider}} エンベディングキー",
-
   "review.values.custom": "カスタム",
   "review.values.noneSelected": "未選択",
   "review.values.default": "デフォルト",
@@ -259,9 +238,7 @@
   "review.values.budgetUnlimited": "無制限",
   "review.values.daemonEnabledWithBudget": "有効（サブリミット: {{amount}}/日）",
   "review.values.autonomyEnabledWithHours": "有効（{{hours}}時間）",
-
   "review.ragBlockedError": "RAGには実際のエンベディング対応プロバイダーが必要です。保存前にGemini、OpenAI APIキー、Mistral、Together、Fireworks、Qwen、またはOllamaを追加してください。",
-
   "review.save.saving": "保存中...",
   "review.save.button": "設定を保存",
   "review.save.configAccepted": "設定が受け入れられました。同じURLでStradaを起動しています。",
@@ -271,7 +248,6 @@
   "review.save.sourceCheckoutHint": "ソースチェックアウトの場合、グローバルな `strada` コマンドを使用する前に `./strada install-command` を一度実行してください。",
   "review.save.openMainApp": "メインアプリを開く",
   "review.save.reopenSetup": "セットアップを再度開く",
-
   "directory.title": "ディレクトリを参照",
   "directory.unityBadge": "Unityプロジェクト",
   "directory.loading": "読み込み中...",
@@ -279,7 +255,6 @@
   "directory.cancel": "キャンセル",
   "directory.select": "選択",
   "directory.installButton": "このプロジェクトにインストール",
-
   "directory.projectPath.title": "Unityプロジェクト",
   "directory.projectPath.subtitle": "Strada.BrainをUnityプロジェクトディレクトリに向けてください。",
   "directory.projectPath.placeholder": "/path/to/your/UnityProject",
@@ -288,6 +263,5 @@
   "directory.projectPath.valid": "有効なUnityプロジェクトパス",
   "directory.projectPath.validNotUnity": "有効なパスですが、Unityプロジェクトではありません（Assets/ と ProjectSettings/ が見つかりません）",
   "directory.projectPath.invalid": "無効なパス",
-
   "progress.stepLabel": "ステップ {{step}} / {{total}}"
 }

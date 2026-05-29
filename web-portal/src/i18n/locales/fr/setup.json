@@ -4,12 +4,10 @@
   "wizard.checking.description": "Verification pour savoir si cette instance est encore en mode de premiere configuration.",
   "wizard.nav.back": "Retour",
   "wizard.nav.next": "Suivant",
-
   "welcome.title": "Bienvenue sur Strada.Brain",
   "welcome.description": "Assistant de developpement Unity propulse par l'IA. Configurons votre environnement.",
   "welcome.getStarted": "Commencer",
   "welcome.logoAlt": "Strada.Brain",
-
   "providers.title": "Fournisseurs IA",
   "providers.subtitle": "Choisissez un preset ou selectionnez manuellement les fournisseurs pour votre pipeline IA.",
   "providers.sectionProviders": "Fournisseurs",
@@ -26,11 +24,8 @@
   "providers.tier.premium": "Premium",
   "providers.modelStats.in": "{{amount}} entrant",
   "providers.modelStats.out": "{{amount}} sortant",
-  "providers.openai.subscriptionInfo": "Strada utilisera la session d'abonnement locale Codex/ChatGPT disponible sur cette machine pour les tours de conversation OpenAI.",
-  "providers.openai.subscriptionWarning": "Cela n'accorde pas de quota API ou d'embedding OpenAI. Si vous choisissez plus tard OpenAI pour les embeddings, vous aurez toujours besoin d'une cle API OpenAI.",
   "providers.claude.subscriptionInfo": "Strada enverra les requetes Claude avec le jeton d'abonnement que vous fournissez ici.",
   "providers.claude.subscriptionWarning": "Anthropic documente l'authentification par abonnement claude.ai comme restreinte en dehors de Claude Code et Claude.ai. Strada expose ce mode uniquement si vous choisissez de l'utiliser, a vos propres risques.",
-
   "providers.presets.free.name": "Gratuit",
   "providers.presets.free.cost": "0 $/mois",
   "providers.presets.free.desc": "Ollama local uniquement",
@@ -46,7 +41,6 @@
   "providers.presets.premium.name": "Premium",
   "providers.presets.premium.cost": "50-100 $/mois",
   "providers.presets.premium.desc": "Claude + OpenAI",
-
   "providers.providerNames.claude": "Claude",
   "providers.providerNames.openai": "OpenAI",
   "providers.providerNames.deepseek": "DeepSeek",
@@ -59,8 +53,7 @@
   "providers.providerNames.fireworks": "Fireworks",
   "providers.providerNames.minimax": "MiniMax",
   "providers.providerNames.opencode": "OpenCode",
-    "providers.providerNames.ollama": "Ollama",
-
+  "providers.providerNames.ollama": "Ollama",
   "providers.authModes.claude.apiKey.label": "Cle API",
   "providers.authModes.claude.apiKey.description": "Utilisez la facturation API Anthropic avec une cle API standard.",
   "providers.authModes.claude.apiKey.secretLabel": "Cle API Claude",
@@ -75,7 +68,6 @@
   "providers.authModes.openai.apiKey.secretLabel": "Cle API OpenAI",
   "providers.authModes.openai.chatgptSubscription.label": "Abonnement ChatGPT",
   "providers.authModes.openai.chatgptSubscription.description": "Reutilisez la connexion d'abonnement locale Codex/ChatGPT de cette machine pour les tours de conversation. Les embeddings OpenAI necessitent toujours une cle API OpenAI.",
-
   "channels.title": "Canal et parametres",
   "channels.subtitle": "Selectionnez votre canal de communication principal et configurez les parametres supplementaires.",
   "channels.configuration": "Configuration de {{channel}}",
@@ -84,9 +76,9 @@
   "channels.rag.enabled": "Active",
   "channels.rag.disabled": "Desactive",
   "channels.rag.disabledInfo": "Le RAG est desactive. La recherche de code ne sera pas disponible.",
-  "channels.rag.enabledWithProvider": "\u2713 RAG active \u2014 utilisera {{provider}} pour les embeddings, independamment de la chaine de fournisseurs de reponses.",
-  "channels.rag.noEmbeddingProviderWithProviders": "\u26A0 Vos fournisseurs de reponses actuels ne supportent pas les embeddings. Selectionnez Gemini, OpenAI ou Ollama comme fournisseur d'embedding pour activer la recherche de code RAG.",
-  "channels.rag.noEmbeddingProviderNoProviders": "\u26A0 RAG active \u2014 le fournisseur d'embedding sera detecte automatiquement a partir de vos fournisseurs.",
+  "channels.rag.enabledWithProvider": "✓ RAG active — utilisera {{provider}} pour les embeddings, independamment de la chaine de fournisseurs de reponses.",
+  "channels.rag.noEmbeddingProviderWithProviders": "⚠ Vos fournisseurs de reponses actuels ne supportent pas les embeddings. Selectionnez Gemini, OpenAI ou Ollama comme fournisseur d'embedding pour activer la recherche de code RAG.",
+  "channels.rag.noEmbeddingProviderNoProviders": "⚠ RAG active — le fournisseur d'embedding sera detecte automatiquement a partir de vos fournisseurs.",
   "channels.rag.embeddingProvider": "Fournisseur d'embedding",
   "channels.rag.embeddingProviderInfo": "Il s'agit d'un choix a l'echelle du systeme pour la memoire/RAG. Cela ne change pas le fournisseur utilise par Strada pour les tours de conversation.",
   "channels.rag.blockedInfo": "Vous pouvez toujours continuer a consulter, mais la configuration restera bloquee jusqu'a ce que vous choisissiez un fournisseur d'embedding valide ou desactiviez le RAG.",
@@ -94,7 +86,6 @@
   "channels.rag.dedicatedEmbeddingKeyLabel": "Cle API d'embedding {{provider}}",
   "channels.rag.dedicatedEmbeddingKeyInfo": "Cette cle est utilisee uniquement pour les embeddings. Elle n'ajoute pas {{provider}} a la chaine de fournisseurs de reponses.",
   "channels.rag.subscriptionNotUsedForEmbedding": "La connexion par abonnement n'est pas utilisee pour ce chemin de requete d'embedding.",
-
   "channels.budget.title": "Budget quotidien global",
   "channels.budget.description": "Depense quotidienne maximale pour tous les systemes (daemon, agents, discussion). Definissez a 0 $ pour illimite.",
   "channels.budget.dailyLimit": "Limite quotidienne",
@@ -102,27 +93,24 @@
   "channels.budget.valueUnlimited": "Illimite",
   "channels.budget.valueAmount": "{{amount}}",
   "channels.budget.maxLabel": "50 $",
-
   "channels.daemon.title": "Mode daemon",
   "channels.daemon.enabled": "Active",
   "channels.daemon.disabled": "Desactive",
-  "channels.daemon.enabledInfo": "Mode daemon actif \u2014 surveillance en arriere-plan avec declencheurs, taches planifiees et assistance proactive.",
+  "channels.daemon.enabledInfo": "Mode daemon actif — surveillance en arriere-plan avec declencheurs, taches planifiees et assistance proactive.",
   "channels.daemon.disabledInfo": "Activez la surveillance en arriere-plan avec declencheurs, taches planifiees et assistance proactive.",
   "channels.daemon.subLimit": "Sous-limite du daemon",
   "channels.daemon.subLimitMin": "0,50 $",
   "channels.daemon.subLimitMax": "10,00 $",
   "channels.daemon.subLimitInfo": "Depense quotidienne maximale pour les declencheurs du daemon uniquement (dans le budget global).",
-
   "channels.autonomy.title": "Autonomie",
   "channels.autonomy.enabled": "Activee",
   "channels.autonomy.disabled": "Desactivee",
-  "channels.autonomy.enabledInfo": "Mode autonome actif \u2014 l'agent peut executer des operations sans demander de confirmation.",
+  "channels.autonomy.enabledInfo": "Mode autonome actif — l'agent peut executer des operations sans demander de confirmation.",
   "channels.autonomy.disabledInfo": "Activez le mode autonome pour permettre a l'agent d'operer sans necessiter de confirmation pour chaque action.",
   "channels.autonomy.duration": "Duree",
   "channels.autonomy.durationMin": "1h",
   "channels.autonomy.durationMax": "168h",
   "channels.autonomy.durationValue": "{{hours}}h",
-
   "channels.names.web": "Web",
   "channels.names.telegram": "Telegram",
   "channels.names.discord": "Discord",
@@ -136,7 +124,6 @@
   "channels.fields.slack.appToken": "Jeton de l'application",
   "channels.fields.whatsapp.allowedNumbers": "Numeros autorises",
   "channels.fields.whatsapp.sessionPath": "Chemin de session",
-
   "channels.languages.en": "Anglais",
   "channels.languages.tr": "Turc",
   "channels.languages.ja": "Japonais",
@@ -145,7 +132,6 @@
   "channels.languages.de": "Allemand",
   "channels.languages.es": "Espagnol",
   "channels.languages.fr": "Francais",
-
   "channels.embeddingProviders.auto": "Auto (detecter a partir des fournisseurs)",
   "channels.embeddingProviders.gemini": "Gemini",
   "channels.embeddingProviders.openai": "OpenAI",
@@ -154,7 +140,6 @@
   "channels.embeddingProviders.fireworks": "Fireworks",
   "channels.embeddingProviders.qwen": "Qwen",
   "channels.embeddingProviders.ollama": "Ollama",
-
   "mcp.eyebrow.installed": "Runtime Unity connecte a Brain",
   "mcp.eyebrow.missing": "Mise a niveau recommandee du runtime Unity",
   "mcp.title": "Strada.MCP",
@@ -184,7 +169,6 @@
   "mcp.target.assets.eyebrow": "Alternatif",
   "mcp.target.assets.description": "Place le checkout sous Assets si la convention de votre projet y conserve les integrations.",
   "mcp.target.manifestDependency": "Dependance du manifeste",
-
   "mcp.dependency.installed": "Installe",
   "mcp.dependency.missing": "Manquant",
   "mcp.dependency.detected": "Detecte",
@@ -197,7 +181,6 @@
   "mcp.dependency.installedSuccessfully": "Installe avec succes",
   "mcp.dependency.installFailed": "L'installation a echoue",
   "mcp.dependency.installButton": "Installer",
-
   "mcp.source.packageDirectory": "Paquet Unity",
   "mcp.source.manifest": "Reference du manifeste",
   "mcp.source.projectLocal": "Ce projet",
@@ -208,11 +191,9 @@
   "mcp.sourceCopy.configuredPath": "depuis le chemin de runtime configure",
   "mcp.sourceCopy.siblingCheckout": "depuis un checkout Strada.MCP adjacent",
   "mcp.sourceCopy.globalInstall": "depuis l'installation globale",
-
   "mcp.labels.stradaCore": "Strada.Core",
   "mcp.labels.stradaModules": "Strada.Modules",
   "mcp.labels.stradaMcp": "Strada.MCP",
-
   "mcp.install.preparing": "Preparation de {{path}} et amorce du runtime.",
   "mcp.install.success": "Strada.MCP installe avec succes.",
   "mcp.install.error": "L'installation de Strada.MCP a echoue.",
@@ -221,7 +202,6 @@
   "mcp.install.summary.runtimeBootstrap": "Amorce du runtime",
   "mcp.install.summary.npmCompleted": "npm install termine",
   "mcp.install.summary.pending": "En attente",
-
   "review.title": "Verification et sauvegarde",
   "review.subtitle": "Verifiez votre configuration avant de sauvegarder.",
   "review.labels.preset": "Preset",
@@ -241,7 +221,6 @@
   "review.labels.autonomy": "Autonomie",
   "review.labels.openaiEmbeddingKey": "Cle d'embedding OpenAI",
   "review.labels.embeddingKey": "Cle d'embedding {{provider}}",
-
   "review.values.custom": "Personnalise",
   "review.values.noneSelected": "Aucun selectionne",
   "review.values.default": "Par defaut",
@@ -259,9 +238,7 @@
   "review.values.budgetUnlimited": "Illimite",
   "review.values.daemonEnabledWithBudget": "Active (sous-limite : {{amount}}/jour)",
   "review.values.autonomyEnabledWithHours": "Active ({{hours}}h)",
-
   "review.ragBlockedError": "Le RAG necessite un fournisseur capable de generer des embeddings. Ajoutez Gemini, une cle API OpenAI, Mistral, Together, Fireworks, Qwen ou Ollama avant de sauvegarder.",
-
   "review.save.saving": "Sauvegarde en cours...",
   "review.save.button": "Sauvegarder la configuration",
   "review.save.configAccepted": "Configuration acceptee. Demarrage de Strada sur cette meme URL.",
@@ -271,7 +248,6 @@
   "review.save.sourceCheckoutHint": "S'il s'agit d'un checkout source, executez `./strada install-command` une fois avant d'attendre que la commande `strada` existe globalement.",
   "review.save.openMainApp": "Ouvrir l'application principale",
   "review.save.reopenSetup": "Rouvrir la configuration",
-
   "directory.title": "Parcourir le repertoire",
   "directory.unityBadge": "Projet Unity",
   "directory.loading": "Chargement...",
@@ -279,7 +255,6 @@
   "directory.cancel": "Annuler",
   "directory.select": "Selectionner",
   "directory.installButton": "Installer dans ce projet",
-
   "directory.projectPath.title": "Projet Unity",
   "directory.projectPath.subtitle": "Dirigez Strada.Brain vers le repertoire de votre projet Unity.",
   "directory.projectPath.placeholder": "/chemin/vers/votre/ProjetUnity",
@@ -288,6 +263,5 @@
   "directory.projectPath.valid": "Chemin de projet Unity valide",
   "directory.projectPath.validNotUnity": "Chemin valide, mais ce n'est pas un projet Unity (Assets/ et ProjectSettings/ introuvables)",
   "directory.projectPath.invalid": "Chemin invalide",
-
   "progress.stepLabel": "Etape {{step}} sur {{total}}"
 }

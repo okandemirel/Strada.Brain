@@ -4,12 +4,10 @@
   "wizard.checking.description": "이 인스턴스가 아직 초기 설정 모드인지 확인하고 있습니다.",
   "wizard.nav.back": "뒤로",
   "wizard.nav.next": "다음",
-
   "welcome.title": "Strada.Brain에 오신 것을 환영합니다",
   "welcome.description": "AI 기반 Unity 개발 어시스턴트입니다. 환경을 구성해 봅시다.",
   "welcome.getStarted": "시작하기",
   "welcome.logoAlt": "Strada.Brain",
-
   "providers.title": "AI 프로바이더",
   "providers.subtitle": "프리셋을 선택하거나 AI 파이프라인에 사용할 프로바이더를 수동으로 선택하세요.",
   "providers.sectionProviders": "프로바이더",
@@ -26,11 +24,8 @@
   "providers.tier.premium": "프론티어",
   "providers.modelStats.in": "{{amount}} 입력",
   "providers.modelStats.out": "{{amount}} 출력",
-  "providers.openai.subscriptionInfo": "Strada는 이 머신에서 사용 가능한 로컬 Codex/ChatGPT 구독 세션을 OpenAI 대화 턴에 사용합니다.",
-  "providers.openai.subscriptionWarning": "이것은 OpenAI API 또는 임베딩 할당량을 부여하지 않습니다. 나중에 임베딩에 OpenAI를 선택하려면 OpenAI API 키가 여전히 필요합니다.",
   "providers.claude.subscriptionInfo": "Strada는 여기에 제공하는 구독 토큰으로 Claude 요청을 전송합니다.",
   "providers.claude.subscriptionWarning": "Anthropic은 claude.ai 구독 인증을 Claude Code 및 Claude.ai 외부에서 제한된 것으로 문서화하고 있습니다. Strada는 사용을 선택한 경우에만 이 모드를 노출하며, 사용자 책임하에 사용됩니다.",
-
   "providers.presets.free.name": "무료",
   "providers.presets.free.cost": "$0/월",
   "providers.presets.free.desc": "Ollama 로컬 전용",
@@ -46,7 +41,6 @@
   "providers.presets.premium.name": "프리미엄",
   "providers.presets.premium.cost": "$50-100/월",
   "providers.presets.premium.desc": "Claude + OpenAI",
-
   "providers.providerNames.claude": "Claude",
   "providers.providerNames.openai": "OpenAI",
   "providers.providerNames.deepseek": "DeepSeek",
@@ -59,8 +53,7 @@
   "providers.providerNames.fireworks": "Fireworks",
   "providers.providerNames.minimax": "MiniMax",
   "providers.providerNames.opencode": "OpenCode",
-    "providers.providerNames.ollama": "Ollama",
-
+  "providers.providerNames.ollama": "Ollama",
   "providers.authModes.claude.apiKey.label": "API 키",
   "providers.authModes.claude.apiKey.description": "표준 API 키로 Anthropic API 요금을 사용합니다.",
   "providers.authModes.claude.apiKey.secretLabel": "Claude API 키",
@@ -75,7 +68,6 @@
   "providers.authModes.openai.apiKey.secretLabel": "OpenAI API 키",
   "providers.authModes.openai.chatgptSubscription.label": "ChatGPT 구독",
   "providers.authModes.openai.chatgptSubscription.description": "이 머신에서 로컬 Codex/ChatGPT 구독 로그인을 대화 턴에 재사용합니다. OpenAI 임베딩에는 여전히 OpenAI API 키가 필요합니다.",
-
   "channels.title": "채널 및 설정",
   "channels.subtitle": "기본 통신 채널을 선택하고 추가 설정을 구성하세요.",
   "channels.configuration": "{{channel}} 구성",
@@ -84,9 +76,9 @@
   "channels.rag.enabled": "활성화됨",
   "channels.rag.disabled": "비활성화됨",
   "channels.rag.disabledInfo": "RAG가 비활성화되었습니다. 코드 검색을 사용할 수 없습니다.",
-  "channels.rag.enabledWithProvider": "\u2713 RAG 활성화됨 \u2014 응답 프로바이더 체인과 독립적으로 {{provider}}를 임베딩에 사용합니다.",
-  "channels.rag.noEmbeddingProviderWithProviders": "\u26A0 현재 응답 프로바이더가 임베딩을 지원하지 않습니다. RAG 코드 검색을 활성화하려면 Gemini, OpenAI 또는 Ollama를 임베딩 프로바이더로 선택하세요.",
-  "channels.rag.noEmbeddingProviderNoProviders": "\u26A0 RAG 활성화됨 \u2014 임베딩 프로바이더가 프로바이더에서 자동 감지됩니다.",
+  "channels.rag.enabledWithProvider": "✓ RAG 활성화됨 — 응답 프로바이더 체인과 독립적으로 {{provider}}를 임베딩에 사용합니다.",
+  "channels.rag.noEmbeddingProviderWithProviders": "⚠ 현재 응답 프로바이더가 임베딩을 지원하지 않습니다. RAG 코드 검색을 활성화하려면 Gemini, OpenAI 또는 Ollama를 임베딩 프로바이더로 선택하세요.",
+  "channels.rag.noEmbeddingProviderNoProviders": "⚠ RAG 활성화됨 — 임베딩 프로바이더가 프로바이더에서 자동 감지됩니다.",
   "channels.rag.embeddingProvider": "임베딩 프로바이더",
   "channels.rag.embeddingProviderInfo": "이것은 시스템 전체 메모리/RAG 선택입니다. Strada가 대화 턴에 사용하는 프로바이더를 변경하지 않습니다.",
   "channels.rag.blockedInfo": "계속 검토할 수 있지만, 유효한 임베딩 프로바이더를 선택하거나 RAG를 비활성화할 때까지 설정이 차단됩니다.",
@@ -94,7 +86,6 @@
   "channels.rag.dedicatedEmbeddingKeyLabel": "{{provider}} 임베딩 API 키",
   "channels.rag.dedicatedEmbeddingKeyInfo": "이 키는 임베딩에만 사용됩니다. {{provider}}를 응답 프로바이더 체인에 추가하지 않습니다.",
   "channels.rag.subscriptionNotUsedForEmbedding": "구독 로그인은 이 임베딩 요청 경로에 사용되지 않습니다.",
-
   "channels.budget.title": "글로벌 일일 예산",
   "channels.budget.description": "모든 시스템(데몬, 에이전트, 채팅)의 최대 일일 지출입니다. 무제한으로 설정하려면 $0으로 설정하세요.",
   "channels.budget.dailyLimit": "일일 한도",
@@ -102,27 +93,24 @@
   "channels.budget.valueUnlimited": "무제한",
   "channels.budget.valueAmount": "{{amount}}",
   "channels.budget.maxLabel": "$50",
-
   "channels.daemon.title": "데몬 모드",
   "channels.daemon.enabled": "활성화됨",
   "channels.daemon.disabled": "비활성화됨",
-  "channels.daemon.enabledInfo": "데몬 모드 활성 \u2014 트리거, 예약 작업 및 사전 지원을 통한 백그라운드 모니터링.",
+  "channels.daemon.enabledInfo": "데몬 모드 활성 — 트리거, 예약 작업 및 사전 지원을 통한 백그라운드 모니터링.",
   "channels.daemon.disabledInfo": "트리거, 예약 작업 및 사전 지원을 통한 백그라운드 모니터링을 활성화합니다.",
   "channels.daemon.subLimit": "데몬 하위 한도",
   "channels.daemon.subLimitMin": "$0.50",
   "channels.daemon.subLimitMax": "$10.00",
   "channels.daemon.subLimitInfo": "데몬 트리거에만 적용되는 최대 일일 지출입니다 (글로벌 예산 내).",
-
   "channels.autonomy.title": "자율성",
   "channels.autonomy.enabled": "활성화됨",
   "channels.autonomy.disabled": "비활성화됨",
-  "channels.autonomy.enabledInfo": "자율 모드 활성 \u2014 에이전트가 확인 없이 작업을 실행할 수 있습니다.",
+  "channels.autonomy.enabledInfo": "자율 모드 활성 — 에이전트가 확인 없이 작업을 실행할 수 있습니다.",
   "channels.autonomy.disabledInfo": "자율 모드를 활성화하여 에이전트가 각 작업에 대한 확인 없이 작동하도록 합니다.",
   "channels.autonomy.duration": "기간",
   "channels.autonomy.durationMin": "1시간",
   "channels.autonomy.durationMax": "168시간",
   "channels.autonomy.durationValue": "{{hours}}시간",
-
   "channels.names.web": "웹",
   "channels.names.telegram": "Telegram",
   "channels.names.discord": "Discord",
@@ -136,7 +124,6 @@
   "channels.fields.slack.appToken": "앱 토큰",
   "channels.fields.whatsapp.allowedNumbers": "허용된 번호",
   "channels.fields.whatsapp.sessionPath": "세션 경로",
-
   "channels.languages.en": "영어",
   "channels.languages.tr": "터키어",
   "channels.languages.ja": "일본어",
@@ -145,7 +132,6 @@
   "channels.languages.de": "독일어",
   "channels.languages.es": "스페인어",
   "channels.languages.fr": "프랑스어",
-
   "channels.embeddingProviders.auto": "자동 (프로바이더에서 감지)",
   "channels.embeddingProviders.gemini": "Gemini",
   "channels.embeddingProviders.openai": "OpenAI",
@@ -154,7 +140,6 @@
   "channels.embeddingProviders.fireworks": "Fireworks",
   "channels.embeddingProviders.qwen": "Qwen",
   "channels.embeddingProviders.ollama": "Ollama",
-
   "mcp.eyebrow.installed": "Unity 런타임이 Brain에 연결됨",
   "mcp.eyebrow.missing": "권장 Unity 런타임 업그레이드",
   "mcp.title": "Strada.MCP",
@@ -184,7 +169,6 @@
   "mcp.target.assets.eyebrow": "대안",
   "mcp.target.assets.description": "프로젝트 규칙이 통합을 Assets 아래에 유지하는 경우 체크아웃을 Assets 아래에 배치합니다.",
   "mcp.target.manifestDependency": "매니페스트 의존성",
-
   "mcp.dependency.installed": "설치됨",
   "mcp.dependency.missing": "누락됨",
   "mcp.dependency.detected": "감지됨",
@@ -197,7 +181,6 @@
   "mcp.dependency.installedSuccessfully": "성공적으로 설치됨",
   "mcp.dependency.installFailed": "설치 실패",
   "mcp.dependency.installButton": "설치",
-
   "mcp.source.packageDirectory": "Unity 패키지",
   "mcp.source.manifest": "매니페스트 참조",
   "mcp.source.projectLocal": "이 프로젝트",
@@ -208,11 +191,9 @@
   "mcp.sourceCopy.configuredPath": "구성된 런타임 경로에서",
   "mcp.sourceCopy.siblingCheckout": "형제 Strada.MCP 체크아웃에서",
   "mcp.sourceCopy.globalInstall": "글로벌 설치에서",
-
   "mcp.labels.stradaCore": "Strada.Core",
   "mcp.labels.stradaModules": "Strada.Modules",
   "mcp.labels.stradaMcp": "Strada.MCP",
-
   "mcp.install.preparing": "{{path}}를 준비하고 런타임을 부트스트랩하고 있습니다.",
   "mcp.install.success": "Strada.MCP가 성공적으로 설치되었습니다.",
   "mcp.install.error": "Strada.MCP 설치에 실패했습니다.",
@@ -221,7 +202,6 @@
   "mcp.install.summary.runtimeBootstrap": "런타임 부트스트랩",
   "mcp.install.summary.npmCompleted": "npm install 완료",
   "mcp.install.summary.pending": "대기 중",
-
   "review.title": "검토 및 저장",
   "review.subtitle": "저장하기 전에 구성을 확인하세요.",
   "review.labels.preset": "프리셋",
@@ -241,7 +221,6 @@
   "review.labels.autonomy": "자율성",
   "review.labels.openaiEmbeddingKey": "OpenAI 임베딩 키",
   "review.labels.embeddingKey": "{{provider}} 임베딩 키",
-
   "review.values.custom": "사용자 정의",
   "review.values.noneSelected": "선택 없음",
   "review.values.default": "기본값",
@@ -259,9 +238,7 @@
   "review.values.budgetUnlimited": "무제한",
   "review.values.daemonEnabledWithBudget": "활성화됨 (하위 한도: {{amount}}/일)",
   "review.values.autonomyEnabledWithHours": "활성화됨 ({{hours}}시간)",
-
   "review.ragBlockedError": "RAG에는 실제 임베딩 가능한 프로바이더가 필요합니다. 저장하기 전에 Gemini, OpenAI API 키, Mistral, Together, Fireworks, Qwen 또는 Ollama를 추가하세요.",
-
   "review.save.saving": "저장 중...",
   "review.save.button": "구성 저장",
   "review.save.configAccepted": "구성이 승인되었습니다. 동일한 URL에서 Strada를 시작합니다.",
@@ -271,7 +248,6 @@
   "review.save.sourceCheckoutHint": "소스 체크아웃인 경우, 전역 `strada` 명령이 사용 가능하기 전에 `./strada install-command`를 한 번 실행하세요.",
   "review.save.openMainApp": "메인 앱 열기",
   "review.save.reopenSetup": "설정 다시 열기",
-
   "directory.title": "디렉토리 탐색",
   "directory.unityBadge": "Unity 프로젝트",
   "directory.loading": "로딩 중...",
@@ -279,7 +255,6 @@
   "directory.cancel": "취소",
   "directory.select": "선택",
   "directory.installButton": "이 프로젝트에 설치",
-
   "directory.projectPath.title": "Unity 프로젝트",
   "directory.projectPath.subtitle": "Strada.Brain을 Unity 프로젝트 디렉토리로 지정하세요.",
   "directory.projectPath.placeholder": "/path/to/your/UnityProject",
@@ -288,6 +263,5 @@
   "directory.projectPath.valid": "유효한 Unity 프로젝트 경로",
   "directory.projectPath.validNotUnity": "유효한 경로이지만 Unity 프로젝트가 아닙니다 (Assets/ 및 ProjectSettings/를 찾을 수 없음)",
   "directory.projectPath.invalid": "유효하지 않은 경로",
-
   "progress.stepLabel": "단계 {{step}} / {{total}}"
 }

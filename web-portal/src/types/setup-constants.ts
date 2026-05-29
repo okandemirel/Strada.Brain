@@ -65,7 +65,7 @@ export const PROVIDERS: ProviderDef[] = [
       {
         id: 'chatgpt-subscription',
         label: 'ChatGPT Subscription',
-        description: 'Reuse the local Codex/ChatGPT subscription login from this machine for conversation turns. OpenAI embeddings still require an OpenAI API key.',
+        description: 'Sign in with your ChatGPT/Codex subscription — no API key needed for conversations. OpenAI embeddings still require an OpenAI API key.',
       },
     ],
   },

@@ -7,6 +7,7 @@ import {
   getProviderModelOptions,
   type ProviderModelOption,
 } from '../../types/setup-constants'
+import type { OpenAiSubscriptionState } from '../../hooks/useSetupWizard'
 
 interface ProvidersStepProps {
   selectedPreset: string | null
@@ -19,6 +20,9 @@ interface ProvidersStepProps {
   setProviderKey: (id: string, key: string) => void
   setProviderAuthMode: (id: string, mode: string) => void
   setProviderModel: (id: string, model: string) => void
+  openaiSubscription: OpenAiSubscriptionState
+  signInWithChatGpt: () => Promise<void>
+  refreshOpenAiSubscriptionStatus: () => Promise<boolean>
   onNext: () => void
   onBack: () => void
 }
@@ -99,6 +103,9 @@ export default function ProvidersStep({
   setProviderKey,
   setProviderAuthMode,
   setProviderModel,
+  openaiSubscription,
+  signInWithChatGpt,
+  refreshOpenAiSubscriptionStatus,
   onNext,
   onBack,
 }: ProvidersStepProps) {
@@ -290,13 +297,82 @@ export default function ProvidersStep({
                 )}
 
                 {usingOpenAISubscription && (
-                  <div className="provider-helper-copy">
-                    <p>
-                      {t('providers.openai.subscriptionInfo')}
-                    </p>
-                    <p className="warning">
-                      {t('providers.openai.subscriptionWarning')}
-                    </p>
+                  <div className="provider-helper-copy provider-chatgpt-signin">
+                    {openaiSubscription.codexAvailable === false ? (
+                      <p className="warning">
+                        {openaiSubscription.error
+                          ?? t('providers.openai.codexMissing', {
+                            defaultValue: 'Codex CLI not found. Install it with `npm install -g @openai/codex`, then sign in.',
+                          })}
+                      </p>
+                    ) : (
+                      <>
+                        <div className={`signin-status signin-status-${openaiSubscription.status}`}>
+                          {openaiSubscription.status === 'connected' ? (
+                            <span className="signin-badge connected">
+                              ✓ {t('providers.openai.signedIn', { defaultValue: 'Signed in with ChatGPT' })}
+                              {openaiSubscription.expiresAt
+                                ? ` · ${t('providers.openai.validUntil', { defaultValue: 'valid until' })} ${new Date(openaiSubscription.expiresAt).toLocaleString()}`
+                                : ''}
+                            </span>
+                          ) : openaiSubscription.status === 'checking' ? (
+                            <span className="signin-badge checking">
+                              {t('providers.openai.checking', { defaultValue: 'Checking ChatGPT session…' })}
+                            </span>
+                          ) : openaiSubscription.status === 'signing-in' ? (
+                            <span className="signin-badge signing-in">
+                              {t('providers.openai.waitingBrowser', { defaultValue: 'Waiting for sign-in in your browser…' })}
+                            </span>
+                          ) : (
+                            <span className="signin-badge disconnected">
+                              {t('providers.openai.notSignedIn', { defaultValue: 'Not signed in' })}
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="signin-actions">
+                          <button
+                            type="button"
+                            className="btn btn-primary"
+                            onClick={() => { void signInWithChatGpt() }}
+                            disabled={openaiSubscription.status === 'signing-in' || openaiSubscription.status === 'checking'}
+                          >
+                            {openaiSubscription.status === 'connected'
+                              ? t('providers.openai.signInAgain', { defaultValue: 'Sign in again' })
+                              : t('providers.openai.signIn', { defaultValue: 'Sign in with ChatGPT' })}
+                          </button>
+                          {(openaiSubscription.status === 'signing-in' || openaiSubscription.status === 'disconnected') && (
+                            <button
+                              type="button"
+                              className="btn btn-secondary"
+                              onClick={() => { void refreshOpenAiSubscriptionStatus() }}
+                            >
+                              {t('providers.openai.refresh', { defaultValue: 'Refresh' })}
+                            </button>
+                          )}
+                        </div>
+
+                        {openaiSubscription.status === 'signing-in' && openaiSubscription.authUrl && (
+                          <p className="signin-help">
+                            {t('providers.openai.browserHint', { defaultValue: "If your browser didn't open, " })}
+                            <a href={openaiSubscription.authUrl} target="_blank" rel="noopener noreferrer">
+                              {t('providers.openai.openLink', { defaultValue: 'open the sign-in page' })}
+                            </a>
+                            .
+                          </p>
+                        )}
+
+                        {openaiSubscription.error && openaiSubscription.status !== 'connected' && (
+                          <p className="warning">{openaiSubscription.error}</p>
+                        )}
+
+                        <p className="signin-note">
+                          {t('providers.openai.embeddingsNote', {
+                            defaultValue: 'OpenAI embeddings still require an OpenAI API key.',
+                          })}
+                        </p>
+                      </>
+                    )}
                   </div>
                 )}
 
