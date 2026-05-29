@@ -67,7 +67,7 @@
   "providers.authModes.openai.apiKey.description": "표준 API 키로 OpenAI Platform 요금을 사용합니다.",
   "providers.authModes.openai.apiKey.secretLabel": "OpenAI API 키",
   "providers.authModes.openai.chatgptSubscription.label": "ChatGPT 구독",
-  "providers.authModes.openai.chatgptSubscription.description": "이 머신에서 로컬 Codex/ChatGPT 구독 로그인을 대화 턴에 재사용합니다. OpenAI 임베딩에는 여전히 OpenAI API 키가 필요합니다.",
+  "providers.authModes.openai.chatgptSubscription.description": "ChatGPT/Codex 구독으로 로그인하세요. 대화에는 API 키가 필요하지 않습니다. OpenAI 임베딩에는 여전히 OpenAI API 키가 필요합니다.",
   "channels.title": "채널 및 설정",
   "channels.subtitle": "기본 통신 채널을 선택하고 추가 설정을 구성하세요.",
   "channels.configuration": "{{channel}} 구성",
@@ -263,5 +263,17 @@
   "directory.projectPath.valid": "유효한 Unity 프로젝트 경로",
   "directory.projectPath.validNotUnity": "유효한 경로이지만 Unity 프로젝트가 아닙니다 (Assets/ 및 ProjectSettings/를 찾을 수 없음)",
   "directory.projectPath.invalid": "유효하지 않은 경로",
-  "progress.stepLabel": "단계 {{step}} / {{total}}"
+  "progress.stepLabel": "단계 {{step}} / {{total}}",
+  "providers.openai.signIn": "ChatGPT로 로그인",
+  "providers.openai.signInAgain": "다시 로그인",
+  "providers.openai.signedIn": "ChatGPT로 로그인됨",
+  "providers.openai.notSignedIn": "로그인되지 않음",
+  "providers.openai.checking": "ChatGPT 세션 확인 중…",
+  "providers.openai.waitingBrowser": "브라우저에서 로그인 대기 중…",
+  "providers.openai.validUntil": "유효 기간",
+  "providers.openai.refresh": "새로고침",
+  "providers.openai.browserHint": "브라우저가 열리지 않으면 ",
+  "providers.openai.openLink": "로그인 페이지 열기",
+  "providers.openai.embeddingsNote": "OpenAI 임베딩에는 여전히 OpenAI API 키가 필요합니다.",
+  "providers.openai.codexMissing": "Codex CLI를 찾을 수 없습니다. `npm install -g @openai/codex`로 설치한 후 로그인하세요."
 }

@@ -67,7 +67,7 @@
   "providers.authModes.openai.apiKey.description": "Verwende OpenAI-Plattform-Abrechnung mit einem Standard-API-Schlüssel.",
   "providers.authModes.openai.apiKey.secretLabel": "OpenAI API-Schlüssel",
   "providers.authModes.openai.chatgptSubscription.label": "ChatGPT-Abonnement",
-  "providers.authModes.openai.chatgptSubscription.description": "Nutze die lokale Codex/ChatGPT-Abonnement-Anmeldung dieses Rechners für Gesprächsrunden. OpenAI-Embeddings erfordern weiterhin einen OpenAI API-Schlüssel.",
+  "providers.authModes.openai.chatgptSubscription.description": "Mit Ihrem ChatGPT/Codex-Abo anmelden – für Konversationen ist kein API-Schlüssel nötig. OpenAI-Embeddings erfordern weiterhin einen OpenAI-API-Schlüssel.",
   "channels.title": "Kanal & Einstellungen",
   "channels.subtitle": "Wähle deinen primären Kommunikationskanal und konfiguriere zusätzliche Einstellungen.",
   "channels.configuration": "Konfiguration von {{channel}}",
@@ -263,5 +263,17 @@
   "directory.projectPath.valid": "Gültiger Unity-Projektpfad",
   "directory.projectPath.validNotUnity": "Gültiger Pfad, aber dies ist kein Unity-Projekt (Assets/ und ProjectSettings/ nicht gefunden)",
   "directory.projectPath.invalid": "Ungültiger Pfad",
-  "progress.stepLabel": "Schritt {{step}} von {{total}}"
+  "progress.stepLabel": "Schritt {{step}} von {{total}}",
+  "providers.openai.signIn": "Mit ChatGPT anmelden",
+  "providers.openai.signInAgain": "Erneut anmelden",
+  "providers.openai.signedIn": "Mit ChatGPT angemeldet",
+  "providers.openai.notSignedIn": "Nicht angemeldet",
+  "providers.openai.checking": "ChatGPT-Sitzung wird geprüft…",
+  "providers.openai.waitingBrowser": "Warten auf die Anmeldung im Browser…",
+  "providers.openai.validUntil": "gültig bis",
+  "providers.openai.refresh": "Aktualisieren",
+  "providers.openai.browserHint": "Falls sich Ihr Browser nicht geöffnet hat, ",
+  "providers.openai.openLink": "Anmeldeseite öffnen",
+  "providers.openai.embeddingsNote": "OpenAI-Embeddings erfordern weiterhin einen OpenAI-API-Schlüssel.",
+  "providers.openai.codexMissing": "Codex CLI nicht gefunden. Installieren Sie es mit `npm install -g @openai/codex` und melden Sie sich dann an."
 }

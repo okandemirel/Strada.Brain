@@ -67,7 +67,7 @@
   "providers.authModes.openai.apiKey.description": "Usa la facturacion de la Plataforma OpenAI con una clave API estandar.",
   "providers.authModes.openai.apiKey.secretLabel": "Clave API de OpenAI",
   "providers.authModes.openai.chatgptSubscription.label": "Suscripcion de ChatGPT",
-  "providers.authModes.openai.chatgptSubscription.description": "Reutiliza el inicio de sesion de suscripcion local de Codex/ChatGPT de esta maquina para los turnos de conversacion. Los embeddings de OpenAI aun requieren una clave API de OpenAI.",
+  "providers.authModes.openai.chatgptSubscription.description": "Inicia sesión con tu suscripción de ChatGPT/Codex: no se necesita clave de API para las conversaciones. Los embeddings de OpenAI siguen requiriendo una clave de API de OpenAI.",
   "channels.title": "Canal y Ajustes",
   "channels.subtitle": "Selecciona tu canal de comunicacion principal y configura ajustes adicionales.",
   "channels.configuration": "Configuracion de {{channel}}",
@@ -263,5 +263,17 @@
   "directory.projectPath.valid": "Ruta de proyecto Unity valida",
   "directory.projectPath.validNotUnity": "Ruta valida, pero no es un proyecto Unity (Assets/ y ProjectSettings/ no encontrados)",
   "directory.projectPath.invalid": "Ruta invalida",
-  "progress.stepLabel": "Paso {{step}} de {{total}}"
+  "progress.stepLabel": "Paso {{step}} de {{total}}",
+  "providers.openai.signIn": "Iniciar sesión con ChatGPT",
+  "providers.openai.signInAgain": "Iniciar sesión de nuevo",
+  "providers.openai.signedIn": "Sesión iniciada con ChatGPT",
+  "providers.openai.notSignedIn": "Sin iniciar sesión",
+  "providers.openai.checking": "Comprobando la sesión de ChatGPT…",
+  "providers.openai.waitingBrowser": "Esperando el inicio de sesión en tu navegador…",
+  "providers.openai.validUntil": "válido hasta",
+  "providers.openai.refresh": "Actualizar",
+  "providers.openai.browserHint": "Si tu navegador no se abrió, ",
+  "providers.openai.openLink": "abre la página de inicio de sesión",
+  "providers.openai.embeddingsNote": "Los embeddings de OpenAI siguen requiriendo una clave de API de OpenAI.",
+  "providers.openai.codexMissing": "No se encontró Codex CLI. Instálalo con `npm install -g @openai/codex` y vuelve a iniciar sesión."
 }

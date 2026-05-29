@@ -67,7 +67,7 @@
   "providers.authModes.openai.apiKey.description": "使用 OpenAI Platform 计费，通过标准 API 密钥。",
   "providers.authModes.openai.apiKey.secretLabel": "OpenAI API 密钥",
   "providers.authModes.openai.chatgptSubscription.label": "ChatGPT 订阅",
-  "providers.authModes.openai.chatgptSubscription.description": "复用此机器上的本地 Codex/ChatGPT 订阅登录来处理对话轮次。OpenAI 嵌入仍然需要 OpenAI API 密钥。",
+  "providers.authModes.openai.chatgptSubscription.description": "使用你的 ChatGPT/Codex 订阅登录——对话无需 API 密钥。OpenAI 嵌入仍需要 OpenAI API 密钥。",
   "channels.title": "频道与设置",
   "channels.subtitle": "选择您的主要通信频道并配置其他设置。",
   "channels.configuration": "{{channel}} 配置",
@@ -263,5 +263,17 @@
   "directory.projectPath.valid": "有效的 Unity 项目路径",
   "directory.projectPath.validNotUnity": "路径有效，但这不是 Unity 项目（未找到 Assets/ 和 ProjectSettings/）",
   "directory.projectPath.invalid": "无效路径",
-  "progress.stepLabel": "第 {{step}} 步，共 {{total}} 步"
+  "progress.stepLabel": "第 {{step}} 步，共 {{total}} 步",
+  "providers.openai.signIn": "使用 ChatGPT 登录",
+  "providers.openai.signInAgain": "重新登录",
+  "providers.openai.signedIn": "已使用 ChatGPT 登录",
+  "providers.openai.notSignedIn": "未登录",
+  "providers.openai.checking": "正在检查 ChatGPT 会话…",
+  "providers.openai.waitingBrowser": "正在等待在浏览器中登录…",
+  "providers.openai.validUntil": "有效期至",
+  "providers.openai.refresh": "刷新",
+  "providers.openai.browserHint": "如果浏览器未自动打开，",
+  "providers.openai.openLink": "打开登录页面",
+  "providers.openai.embeddingsNote": "OpenAI 嵌入仍需要 OpenAI API 密钥。",
+  "providers.openai.codexMissing": "未找到 Codex CLI。请使用 `npm install -g @openai/codex` 安装后再登录。"
 }

@@ -67,7 +67,7 @@
   "providers.authModes.openai.apiKey.description": "Utilisez la facturation OpenAI Platform avec une cle API standard.",
   "providers.authModes.openai.apiKey.secretLabel": "Cle API OpenAI",
   "providers.authModes.openai.chatgptSubscription.label": "Abonnement ChatGPT",
-  "providers.authModes.openai.chatgptSubscription.description": "Reutilisez la connexion d'abonnement locale Codex/ChatGPT de cette machine pour les tours de conversation. Les embeddings OpenAI necessitent toujours une cle API OpenAI.",
+  "providers.authModes.openai.chatgptSubscription.description": "Connectez-vous avec votre abonnement ChatGPT/Codex — aucune clé API requise pour les conversations. Les embeddings OpenAI nécessitent toujours une clé API OpenAI.",
   "channels.title": "Canal et parametres",
   "channels.subtitle": "Selectionnez votre canal de communication principal et configurez les parametres supplementaires.",
   "channels.configuration": "Configuration de {{channel}}",
@@ -263,5 +263,17 @@
   "directory.projectPath.valid": "Chemin de projet Unity valide",
   "directory.projectPath.validNotUnity": "Chemin valide, mais ce n'est pas un projet Unity (Assets/ et ProjectSettings/ introuvables)",
   "directory.projectPath.invalid": "Chemin invalide",
-  "progress.stepLabel": "Etape {{step}} sur {{total}}"
+  "progress.stepLabel": "Etape {{step}} sur {{total}}",
+  "providers.openai.signIn": "Se connecter avec ChatGPT",
+  "providers.openai.signInAgain": "Se reconnecter",
+  "providers.openai.signedIn": "Connecté avec ChatGPT",
+  "providers.openai.notSignedIn": "Non connecté",
+  "providers.openai.checking": "Vérification de la session ChatGPT…",
+  "providers.openai.waitingBrowser": "En attente de la connexion dans votre navigateur…",
+  "providers.openai.validUntil": "valable jusqu’au",
+  "providers.openai.refresh": "Actualiser",
+  "providers.openai.browserHint": "Si votre navigateur ne s’est pas ouvert, ",
+  "providers.openai.openLink": "ouvrez la page de connexion",
+  "providers.openai.embeddingsNote": "Les embeddings OpenAI nécessitent toujours une clé API OpenAI.",
+  "providers.openai.codexMissing": "Codex CLI introuvable. Installez-le avec `npm install -g @openai/codex`, puis reconnectez-vous."
 }

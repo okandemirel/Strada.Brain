@@ -67,7 +67,7 @@
   "providers.authModes.openai.apiKey.description": "標準のAPIキーでOpenAI Platform課金を使用します。",
   "providers.authModes.openai.apiKey.secretLabel": "OpenAI APIキー",
   "providers.authModes.openai.chatgptSubscription.label": "ChatGPTサブスクリプション",
-  "providers.authModes.openai.chatgptSubscription.description": "このマシンのローカルCodex/ChatGPTサブスクリプションログインを会話ターンに再利用します。OpenAIエンベディングには引き続きOpenAI APIキーが必要です。",
+  "providers.authModes.openai.chatgptSubscription.description": "ChatGPT/Codex のサブスクリプションでサインインします。会話に API キーは不要です。OpenAI の埋め込みには引き続き OpenAI API キーが必要です。",
   "channels.title": "チャンネル & 設定",
   "channels.subtitle": "プライマリ通信チャンネルを選択し、追加設定を行ってください。",
   "channels.configuration": "{{channel}} の設定",
@@ -263,5 +263,17 @@
   "directory.projectPath.valid": "有効なUnityプロジェクトパス",
   "directory.projectPath.validNotUnity": "有効なパスですが、Unityプロジェクトではありません（Assets/ と ProjectSettings/ が見つかりません）",
   "directory.projectPath.invalid": "無効なパス",
-  "progress.stepLabel": "ステップ {{step}} / {{total}}"
+  "progress.stepLabel": "ステップ {{step}} / {{total}}",
+  "providers.openai.signIn": "ChatGPT でサインイン",
+  "providers.openai.signInAgain": "再度サインイン",
+  "providers.openai.signedIn": "ChatGPT でサインイン済み",
+  "providers.openai.notSignedIn": "サインインしていません",
+  "providers.openai.checking": "ChatGPT セッションを確認中…",
+  "providers.openai.waitingBrowser": "ブラウザでのサインインを待機中…",
+  "providers.openai.validUntil": "有効期限",
+  "providers.openai.refresh": "更新",
+  "providers.openai.browserHint": "ブラウザが開かない場合は、",
+  "providers.openai.openLink": "サインインページを開く",
+  "providers.openai.embeddingsNote": "OpenAI の埋め込みには引き続き OpenAI API キーが必要です。",
+  "providers.openai.codexMissing": "Codex CLI が見つかりません。`npm install -g @openai/codex` でインストールしてからサインインしてください。"
 }
