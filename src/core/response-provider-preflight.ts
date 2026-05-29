@@ -46,7 +46,17 @@ function getClaudeSubscriptionFailureDetail(credential?: ProviderCredential): st
   return "Claude subscription health probe failed. Generate a new Claude auth token or switch Claude to API-key mode.";
 }
 
-function getOpenAiSubscriptionFailureDetail(credential?: ProviderCredential): string {
+function getOpenAiSubscriptionFailureDetail(
+  credential?: ProviderCredential,
+  provider?: { getLastHealthDetail?: () => string | undefined },
+): string {
+  // Prefer the real reason captured by the live health probe (e.g. "the configured
+  // model is not accepted by the Codex endpoint") so we never misdiagnose a model
+  // mismatch as an auth problem.
+  const probeDetail = provider?.getLastHealthDetail?.();
+  if (probeDetail) {
+    return probeDetail;
+  }
   const inspection = inspectOpenAiSubscriptionAuth({
     authFile: credential?.openaiChatgptAuthFile,
     accessToken: credential?.openaiSubscriptionAccessToken,
@@ -56,7 +66,7 @@ function getOpenAiSubscriptionFailureDetail(credential?: ProviderCredential): st
   if (!inspection.ok) {
     return `${inspection.detail} Sign in again on this machine or switch OpenAI to API-key mode.`;
   }
-  return "OpenAI ChatGPT/Codex subscription health probe failed. Sign in again or switch OpenAI to API-key mode.";
+  return "OpenAI ChatGPT/Codex subscription health probe failed. Verify the configured model is Codex-compatible (e.g. gpt-5.2) or switch OpenAI to API-key mode.";
 }
 
 function getGenericFailureDetail(providerId: string, providerName: string): string {
@@ -73,13 +83,14 @@ function getSafeFailureDetail(
   providerId: string,
   providerName: string,
   credential?: ProviderCredential,
+  provider?: { getLastHealthDetail?: () => string | undefined },
 ): string {
   if ((providerId === "claude" || providerId === "anthropic") && isClaudeSubscriptionCredential(credential)) {
     return getClaudeSubscriptionFailureDetail(credential);
   }
 
   if (providerId === "openai" && isOpenAiSubscriptionCredential(credential)) {
-    return getOpenAiSubscriptionFailureDetail(credential);
+    return getOpenAiSubscriptionFailureDetail(credential, provider);
   }
 
   return getGenericFailureDetail(providerId, providerName);
@@ -138,7 +149,12 @@ export async function preflightResponseProviders(
       failures.push({
         providerId,
         providerName: provider.name,
-        detail: getSafeFailureDetail(providerId, provider.name, credential),
+        detail: getSafeFailureDetail(
+          providerId,
+          provider.name,
+          credential,
+          provider as { getLastHealthDetail?: () => string | undefined },
+        ),
       });
     } catch (_error) {
       failures.push({

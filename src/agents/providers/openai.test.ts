@@ -391,6 +391,28 @@ describe("OpenAIProvider", () => {
     await expect(provider.healthCheck()).resolves.toBe(false);
   });
 
+  it("surfaces a model-rejection reason (HTTP 400) instead of a sign-in prompt", async () => {
+    mockFetch.mockResolvedValue({
+      ok: false,
+      status: 400,
+      text: async () => JSON.stringify({
+        detail: "The 'gpt-4.1-mini' model is not supported when using Codex with a ChatGPT account.",
+      }),
+      headers: new Headers(),
+    });
+
+    const provider = new OpenAIProvider(
+      { mode: "chatgpt-subscription", accessToken: "valid-non-jwt-token", accountId: "account-id" },
+      "gpt-4.1-mini",
+    );
+
+    await expect(provider.healthCheck()).resolves.toBe(false);
+    const detail = provider.getLastHealthDetail();
+    expect(detail).toContain("gpt-4.1-mini");
+    expect(detail).toMatch(/not supported|not accepted/i);
+    expect(detail).not.toMatch(/sign in again/i);
+  });
+
   it("fails subscription health check locally when the token is already expired", async () => {
     const provider = new OpenAIProvider({
       mode: "chatgpt-subscription",

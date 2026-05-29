@@ -79,6 +79,13 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
   protected readonly auth: OpenAIProviderAuth;
   protected readonly model: string;
   protected readonly baseUrl: string;
+  /** Human-readable reason the last healthCheck() failed (for accurate preflight diagnostics). */
+  private lastHealthDetail?: string;
+
+  /** Returns the reason the most recent healthCheck() failed, if any. */
+  getLastHealthDetail(): string | undefined {
+    return this.lastHealthDetail;
+  }
 
   constructor(
     auth: string | OpenAIProviderAuth,
@@ -565,6 +572,7 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
 
   async healthCheck(): Promise<boolean> {
     const logger = getLoggerSafe();
+    this.lastHealthDetail = undefined;
     try {
       if (this.isChatGptSubscriptionMode()) {
         const authConfig = this.getChatGptSubscriptionAuth();
@@ -585,7 +593,8 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
           signal: AbortSignal.timeout(10_000),
         });
         if (!response.ok) {
-          logger.warn(`${this.name} health check failed: HTTP ${response.status}`);
+          this.lastHealthDetail = await this.describeChatGptHealthFailure(response);
+          logger.warn(`${this.name} health check failed: ${this.lastHealthDetail}`);
           return false;
         }
         await response.body?.cancel();
@@ -745,6 +754,40 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
     }
 
     return body;
+  }
+
+  /**
+   * Turns a failed ChatGPT/Codex /responses probe into an accurate, actionable
+   * reason. The Codex backend rejects non-Codex models with HTTP 400 and a body
+   * like {"detail":"The 'gpt-4.1-mini' model is not supported when using Codex
+   * with a ChatGPT account."} — so a model mismatch must NOT be reported as an
+   * auth failure ("sign in again").
+   */
+  private async describeChatGptHealthFailure(response: Response): Promise<string> {
+    let backendDetail = "";
+    try {
+      const text = await response.text();
+      try {
+        const parsed = JSON.parse(text) as { detail?: unknown; error?: { message?: unknown } };
+        if (typeof parsed.detail === "string") {
+          backendDetail = parsed.detail;
+        } else if (parsed.error && typeof parsed.error.message === "string") {
+          backendDetail = parsed.error.message;
+        }
+      } catch {
+        backendDetail = text.slice(0, 200).trim();
+      }
+    } catch {
+      // ignore body read errors — status code still informs the message
+    }
+
+    if (response.status === 401 || response.status === 403) {
+      return `ChatGPT/Codex subscription was rejected (HTTP ${response.status}). Sign in again.${backendDetail ? ` ${backendDetail}` : ""}`;
+    }
+    if (response.status === 400 || response.status === 404) {
+      return `The configured model "${this.model}" is not accepted by the ChatGPT/Codex subscription endpoint (HTTP ${response.status}).${backendDetail ? ` ${backendDetail}` : ""} Choose a Codex-compatible model (e.g. gpt-5.2) or switch OpenAI to API-key mode.`;
+    }
+    return `ChatGPT/Codex subscription health probe failed (HTTP ${response.status}).${backendDetail ? ` ${backendDetail}` : ""}`;
   }
 
   private buildChatGptHealthCheckRequest(): Record<string, unknown> {
