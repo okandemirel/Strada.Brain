@@ -2034,6 +2034,9 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
     togetherApiKey: rawConfig.togetherApiKey,
     fireworksApiKey: rawConfig.fireworksApiKey,
     geminiApiKey: rawConfig.geminiApiKey,
+    opencodeApiKey: rawConfig.opencodeApiKey,
+    opencodeBaseUrl: rawConfig.opencodeBaseUrl,
+    opencodeDefaultModel: rawConfig.opencodeDefaultModel,
     ollamaBaseUrl: rawConfig.ollamaBaseUrl,
     providerChain: rawConfig.providerChain,
 

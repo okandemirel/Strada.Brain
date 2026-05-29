@@ -43,6 +43,7 @@ export function collectApiKeys(config: Config): Record<string, string | undefine
     together: config.togetherApiKey,
     fireworks: config.fireworksApiKey,
     gemini: config.geminiApiKey,
+    opencode: config.opencodeApiKey,
   };
 }
 

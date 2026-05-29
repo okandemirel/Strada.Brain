@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { resolveEmbeddingProvider } from "./embedding-resolver.js";
+import { resolveEmbeddingProvider, collectApiKeys } from "./embedding-resolver.js";
 import { OpenAIEmbeddingProvider } from "./openai-embeddings.js";
 import { OllamaEmbeddingProvider } from "./ollama-embeddings.js";
 import type { Config } from "../../config/config.js";
@@ -217,5 +217,23 @@ describe("resolveEmbeddingProvider", () => {
     const result = resolveEmbeddingProvider(config);
     expect(result).not.toBeNull();
     expect(result!.source).toBe("auto:openai");
+  });
+});
+
+describe("collectApiKeys", () => {
+  it("includes opencode so the provider is not dead by omission", () => {
+    const config = makeConfig({ opencodeApiKey: "sk-opencode" });
+    expect(collectApiKeys(config).opencode).toBe("sk-opencode");
+  });
+
+  it("maps every configured provider key", () => {
+    const config = makeConfig({
+      anthropicApiKey: "a",
+      openaiApiKey: "o",
+      geminiApiKey: "g",
+      opencodeApiKey: "oc",
+    });
+    const keys = collectApiKeys(config);
+    expect(keys).toMatchObject({ claude: "a", anthropic: "a", openai: "o", gemini: "g", opencode: "oc" });
   });
 });
