@@ -6,7 +6,7 @@
  */
 
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from "node:http";
-// import { existsSync } from "node/fs"; // unused after resolveStaticDir refactor
+import { existsSync, readdirSync } from "node:fs";
 import { readFile, writeFile, stat, readdir, realpath } from "node:fs/promises";
 import { join, extname, resolve, sep, isAbsolute } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -43,6 +43,16 @@ import {
 import { resolveDotenvPath } from "../common/runtime-paths.js";
 
 const PACKAGED_STATIC_DIR = fileURLToPath(new URL("../channels/web/static/", import.meta.url));
+// In a published package the line above resolves to dist/channels/web/static,
+// which ships the built portal. In a source checkout it resolves to
+// src/channels/web/static, which only holds a placeholder index.html (the built
+// assets are git-ignored there and the build only populates the dist mirror).
+// List the dist mirror and the raw portal build as fallbacks so the wizard UI
+// loads regardless of how or where Strada is installed.
+const STATIC_DIR_FALLBACKS = [
+  fileURLToPath(new URL("../../dist/channels/web/static/", import.meta.url)),
+  fileURLToPath(new URL("../../web-portal/dist/", import.meta.url)),
+];
 const SETUP_HOST = "127.0.0.1";
 
 interface SetupPathDependencyPayload {
@@ -69,9 +79,36 @@ function logSetupLifecycle(event: string, detail: Record<string, unknown>): void
   console.log(`[setup] ${event}`, detail);
 }
 
-function resolveStaticDir(): string {
-  // Always use packaged static/ so web-portal/dist never shadows it.
-  return PACKAGED_STATIC_DIR;
+export function dirHasBuiltAssets(dir: string): boolean {
+  try {
+    if (!existsSync(join(dir, "index.html")) || !existsSync(join(dir, "assets"))) {
+      return false;
+    }
+    return readdirSync(join(dir, "assets")).some(
+      (entry) => entry.endsWith(".js") || entry.endsWith(".css"),
+    );
+  } catch {
+    return false;
+  }
+}
+
+export function resolveStaticDir(
+  candidates: readonly string[] = [PACKAGED_STATIC_DIR, ...STATIC_DIR_FALLBACKS],
+): string {
+  // Return the first candidate that actually contains the built portal. Ordering
+  // matters: the packaged static dir comes first so a stale web-portal/dist can
+  // never shadow a valid packaged build. In a source checkout the packaged dir
+  // only holds a placeholder index.html (assets are git-ignored there and the
+  // build populates the dist mirror), so the wizard falls back to the dist mirror
+  // / portal build that the bootstrap step produces. This keeps the setup wizard
+  // usable no matter where or how Strada is installed.
+  for (const candidate of candidates) {
+    if (dirHasBuiltAssets(candidate)) {
+      return candidate;
+    }
+  }
+  // Nothing is built yet — keep the previous placeholder/404 behavior.
+  return candidates[0] ?? PACKAGED_STATIC_DIR;
 }
 
 export function buildSetupReadyUrl(port: number): string {

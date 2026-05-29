@@ -33,6 +33,8 @@ import {
   buildSetupReadyUrl,
   hasConfiguredEmbeddingCandidate,
   injectSetupModeMarker,
+  resolveStaticDir,
+  dirHasBuiltAssets,
 } from "./setup-wizard.js";
 
 describe("SetupWizard path validation", () => {
@@ -682,5 +684,62 @@ describe("SetupWizard path validation", () => {
       success: false,
       error: "Invalid package: must be 'core' or 'modules'",
     });
+  });
+});
+
+describe("resolveStaticDir web asset resolution", () => {
+  let tmpRoot: string;
+
+  beforeEach(() => {
+    tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "strada-static-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  });
+
+  function makeDir(name: string, opts: { withAssets: boolean }): string {
+    const dir = path.join(tmpRoot, name);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "index.html"), "<!doctype html><div id=root></div>");
+    if (opts.withAssets) {
+      fs.mkdirSync(path.join(dir, "assets"), { recursive: true });
+      fs.writeFileSync(path.join(dir, "assets", "index-abc123.js"), "console.log(1)");
+    }
+    return dir;
+  }
+
+  it("treats a placeholder dir (index.html only, no built assets) as not built", () => {
+    const placeholder = makeDir("placeholder", { withAssets: false });
+    expect(dirHasBuiltAssets(placeholder)).toBe(false);
+  });
+
+  it("recognizes a dir with built js/css assets", () => {
+    const built = makeDir("built", { withAssets: true });
+    expect(dirHasBuiltAssets(built)).toBe(true);
+  });
+
+  it("falls back to a built dir when the packaged dir only has a placeholder index.html (source checkout)", () => {
+    // Reproduces the setup blank-page bug: the packaged (src) dir has no assets,
+    // so the wizard must serve the dist mirror that the build populates instead.
+    const packaged = makeDir("packaged", { withAssets: false });
+    const distMirror = makeDir("dist-mirror", { withAssets: true });
+    const portalBuild = makeDir("portal", { withAssets: true });
+
+    expect(resolveStaticDir([packaged, distMirror, portalBuild])).toBe(distMirror);
+  });
+
+  it("prefers the packaged dir when it has built assets so a stale portal build cannot shadow it", () => {
+    const packaged = makeDir("packaged", { withAssets: true });
+    const distMirror = makeDir("dist-mirror", { withAssets: true });
+
+    expect(resolveStaticDir([packaged, distMirror])).toBe(packaged);
+  });
+
+  it("returns the first candidate when nothing is built yet (preserves placeholder/404 behavior)", () => {
+    const packaged = makeDir("packaged", { withAssets: false });
+    const distMirror = makeDir("dist-mirror", { withAssets: false });
+
+    expect(resolveStaticDir([packaged, distMirror])).toBe(packaged);
   });
 });
