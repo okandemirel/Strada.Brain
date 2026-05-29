@@ -454,7 +454,17 @@ export class DelegationManager {
 
       // Check if aborted (timeout fired)
       if (abortController.signal.aborted) {
-        delegationLog.timeout(logId);
+        // A timed-out delegation still consumed compute — account for its cost
+        // against the parent's budget and persist the duration/cost, instead of
+        // silently dropping it (which let the parent keep delegating for free).
+        const timedOutMs = Date.now() - startTime;
+        const timedOutCostUsd = this.estimateDelegationCost(tier, timedOutMs);
+        budgetTracker.recordCost(request.parentAgentId as AgentId, timedOutCostUsd, {
+          model: providerConfig.model,
+          tokensIn: 0,
+          tokensOut: 0,
+        });
+        delegationLog.timeout(logId, { durationMs: timedOutMs, costUsd: timedOutCostUsd });
         eventBus.emit("delegation:failed", {
           parentAgentId: request.parentAgentId,
           subAgentId,
