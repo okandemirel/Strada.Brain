@@ -24,6 +24,7 @@ import {
 } from "../config/strada-deps.js";
 import {
   preflightResponseProviders,
+  formatProviderPreflightFailures,
   type ResponseProviderPreflightFailure,
 } from "./response-provider-preflight.js";
 import { getPreset, PROVIDER_MODEL_OPTIONS } from "../config/presets.js";
@@ -1177,11 +1178,39 @@ export class SetupWizard {
         }
       }
 
+      // Preflight the response providers with their CONFIGURED models (not the
+      // provider defaults), so an unusable primary — e.g. an OpenAI model the
+      // ChatGPT/Codex subscription endpoint rejects — is caught HERE with an
+      // accurate reason instead of crashing bootstrap with NO_HEALTHY_AI_PROVIDER.
+      const providerModels: Record<string, string> = {};
+      for (const provider of KNOWN_PROVIDER_MODEL_ORDER) {
+        const model = config[`${provider.toUpperCase()}_MODEL`];
+        if (typeof model === "string" && model.trim()) {
+          providerModels[provider] = model.trim();
+        }
+      }
+
       const preflight = await preflightResponseProviders(
         names,
         this.collectProviderCredentials(config),
+        providerModels,
       );
-      providerWarnings = preflight.failures.length > 0 ? preflight.failures : undefined;
+
+      if (preflight.failures.length > 0) {
+        const primaryName = names[0];
+        const primaryFailed = preflight.failures.some((f) => f.providerId === primaryName);
+        const noneHealthy = preflight.passedProviderIds.length === 0;
+        if (primaryFailed || noneHealthy) {
+          // Block: saving now would only defer the failure to a confusing bootstrap crash.
+          this.json(res, 400, {
+            success: false,
+            error: `Provider preflight failed. ${formatProviderPreflightFailures(preflight.failures)}`,
+          });
+          return;
+        }
+        // A non-primary fallback failed but a usable primary remains — warn, don't block.
+        providerWarnings = preflight.failures;
+      }
     }
 
     // RAG configuration

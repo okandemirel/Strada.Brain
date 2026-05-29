@@ -15,6 +15,9 @@ const { preflightResponseProvidersMock, installStradaMcpSubmoduleMock, installSt
 
 vi.mock("./response-provider-preflight.js", () => ({
   preflightResponseProviders: preflightResponseProvidersMock,
+  formatProviderPreflightFailures: (
+    failures: Array<{ providerName: string; detail: string }>,
+  ) => failures.map((f) => `${f.providerName}: ${f.detail}`).join(" "),
 }));
 
 vi.mock("../config/strada-deps.js", async (importOriginal) => {
@@ -394,20 +397,22 @@ describe("SetupWizard path validation", () => {
     process.env["STRADA_INSTALL_ROOT"] = tempCwd;
     process.env["STRADA_SOURCE_CHECKOUT"] = "true";
 
+    // Primary (kimi) passes preflight; a fallback (deepseek) fails -> non-blocking warning.
     preflightResponseProvidersMock.mockResolvedValue({
-      passedProviderIds: [],
+      passedProviderIds: ["kimi"],
       failures: [{
-        providerId: "kimi",
-        providerName: "Kimi (Moonshot)",
-        detail: "Kimi (Moonshot) health check failed. Verify the credential and network access.",
+        providerId: "deepseek",
+        providerName: "DeepSeek",
+        detail: "DeepSeek health check failed. Verify the credential and network access.",
       }],
     });
 
     const wizard = new SetupWizard({ port: 0 });
     const saveResponse = await saveWizard(wizard, {
       UNITY_PROJECT_PATH: homedir(),
-      PROVIDER_CHAIN: "kimi",
+      PROVIDER_CHAIN: "kimi,deepseek",
       KIMI_API_KEY: "sk-kimi",
+      DEEPSEEK_API_KEY: "sk-deepseek",
       LANGUAGE_PREFERENCE: "tr",
       RAG_ENABLED: "false",
       AUTONOMOUS_DEFAULT_ENABLED: "true",
@@ -419,9 +424,9 @@ describe("SetupWizard path validation", () => {
       success: true,
       readyUrl: "http://127.0.0.1:0/",
       providerWarnings: [{
-        providerId: "kimi",
-        providerName: "Kimi (Moonshot)",
-        detail: "Kimi (Moonshot) health check failed. Verify the credential and network access.",
+        providerId: "deepseek",
+        providerName: "DeepSeek",
+        detail: "DeepSeek health check failed. Verify the credential and network access.",
       }],
       postSetupBootstrap: {
         language: "tr",
@@ -441,12 +446,39 @@ describe("SetupWizard path validation", () => {
     });
 
     const envContent = fs.readFileSync(path.join(tempCwd, ".env"), "utf-8");
-    expect(envContent).toContain('PROVIDER_CHAIN="kimi"');
+    expect(envContent).toContain('PROVIDER_CHAIN="kimi,deepseek"');
     expect(envContent).toContain('KIMI_API_KEY="sk-kimi"');
+    expect(envContent).toContain('DEEPSEEK_API_KEY="sk-deepseek"');
     expect(envContent).toContain("AUTONOMOUS_DEFAULT_ENABLED=true");
     expect(envContent).toContain("AUTONOMOUS_DEFAULT_HOURS=48");
     expect(envContent).toContain("MULTI_AGENT_ENABLED=true");
     expect(envContent).toContain("TASK_DELEGATION_ENABLED=true");
+  });
+
+  it("blocks saving when the only response provider fails preflight (no false success)", async () => {
+    preflightResponseProvidersMock.mockResolvedValue({
+      passedProviderIds: [],
+      failures: [{
+        providerId: "openai",
+        providerName: "OpenAI",
+        detail: 'The configured model "gpt-4.1-mini" is not accepted by the ChatGPT/Codex subscription endpoint (HTTP 400). Choose a Codex-compatible model (e.g. gpt-5.2) or switch OpenAI to API-key mode.',
+      }],
+    });
+
+    const wizard = new SetupWizard({ port: 0 });
+    const response = await saveWizard(wizard, {
+      UNITY_PROJECT_PATH: homedir(),
+      PROVIDER_CHAIN: "openai",
+      OPENAI_AUTH_MODE: "chatgpt-subscription",
+      OPENAI_MODEL: "gpt-4.1-mini",
+      RAG_ENABLED: "false",
+    });
+
+    expect(response.read().statusCode).toBe(400);
+    const body = JSON.parse(response.read().body);
+    expect(body.success).toBe(false);
+    expect(body.error).toContain("gpt-4.1-mini");
+    expect(body.error).not.toMatch(/sign in again/i);
   });
 
   it("resolves setup completion even when waiting starts after save", async () => {
@@ -488,18 +520,25 @@ describe("SetupWizard path validation", () => {
     process.env["STRADA_INSTALL_ROOT"] = tempCwd;
     process.env["STRADA_SOURCE_CHECKOUT"] = "true";
 
+    // Primary (kimi) passes preflight; a fallback (deepseek) fails -> non-blocking warning.
     preflightResponseProvidersMock.mockResolvedValue({
-      passedProviderIds: [],
+      passedProviderIds: ["kimi"],
       failures: [{
-        providerId: "kimi",
-        providerName: "Kimi (Moonshot)",
-        detail: "Kimi (Moonshot) health check failed. Verify the credential and network access.",
+        providerId: "deepseek",
+        providerName: "DeepSeek",
+        detail: "DeepSeek health check failed. Verify the credential and network access.",
       }],
     });
 
     const wizard = new SetupWizard({ port: 0 });
     const completion = wizard.waitForCompletion();
-    await saveWizard(wizard);
+    await saveWizard(wizard, {
+      UNITY_PROJECT_PATH: homedir(),
+      PROVIDER_CHAIN: "kimi,deepseek",
+      KIMI_API_KEY: "sk-kimi",
+      DEEPSEEK_API_KEY: "sk-deepseek",
+      RAG_ENABLED: "false",
+    });
     await completion;
 
     wizard.markBootstrapStarting("Strada is starting the main web app.");
@@ -514,9 +553,9 @@ describe("SetupWizard path validation", () => {
       detail: "Strada is starting the main web app.",
       readyUrl: "http://127.0.0.1:0/",
       providerWarnings: [{
-        providerId: "kimi",
-        providerName: "Kimi (Moonshot)",
-        detail: "Kimi (Moonshot) health check failed. Verify the credential and network access.",
+        providerId: "deepseek",
+        providerName: "DeepSeek",
+        detail: "DeepSeek health check failed. Verify the credential and network access.",
       }],
       postSetupBootstrap: {
         language: "en",
