@@ -21,6 +21,7 @@ import { isAllowedOrigin } from "../../security/origin-validation.js";
 import { loadConfigSafe } from "../../config/config.js";
 import { validateMediaAttachment, validateMagicBytes, normalizeMimeType } from "../../utils/media-processor.js";
 import { SETUP_QUERY_PARAM, type PostSetupBootstrapContext } from "../../common/setup-contract.js";
+import { resolveWebStaticDir } from "../../common/web-static-dir.js";
 import { WebIdentityStore, type WebIdentity } from "./web-identity-store.js";
 import { getLoggerSafe } from "../../utils/logger.js";
 import type {
@@ -102,6 +103,14 @@ const MIME_TYPES: Record<string, string> = {
 };
 
 const PACKAGED_STATIC_DIR = fileURLToPath(new URL("static/", import.meta.url));
+// In a source checkout the line above points at src/channels/web/static, which
+// only holds a placeholder index.html (the built portal is git-ignored there and
+// the build only populates the dist mirror). Fall back to the dist mirror / raw
+// portal build so the web UI loads when Strada runs straight from source.
+const STATIC_DIR_FALLBACKS = [
+  fileURLToPath(new URL("../../../dist/channels/web/static/", import.meta.url)),
+  fileURLToPath(new URL("../../../web-portal/dist/", import.meta.url)),
+];
 
 const SETUP_CACHE_BUST_PARAM = "t";
 const MAX_CONTROL_MESSAGE_BYTES = 64 * 1024;
@@ -131,9 +140,10 @@ function isFrontendPlaceholderText(text: string): boolean {
 }
 
 function resolveStaticDir(): string {
-  // Always use packaged static/ so web-portal/dist never shadows it.
-  // The build script already copies web-portal/dist into static/.
-  return PACKAGED_STATIC_DIR;
+  // Prefer the packaged static/ dir so a stale web-portal/dist can never shadow a
+  // valid packaged build, but fall back to the build output when running from a
+  // source checkout where the packaged dir only holds a placeholder index.html.
+  return resolveWebStaticDir([PACKAGED_STATIC_DIR, ...STATIC_DIR_FALLBACKS]);
 }
 
 export function getCanonicalWebRedirectTarget(url: string): string | null {

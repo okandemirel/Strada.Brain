@@ -15,6 +15,7 @@ coverage/
 .planning/
 .kimi/
 .strada-memory/
+.strada/
 *.tgz
 
 # Local AI/editor agent state and tool metadata
@@ -33,7 +34,7 @@ coverage/
 .augment/
 .aider*
 
-src/channels/web/static/*
-!src/channels/web/static/index.html
-!src/channels/web/static/fallback.css
-!src/channels/web/static/fallback.js
+# Build-output mirror for the web portal. The build populates dist/channels/web/static
+# and the servers fall back to it (see src/common/web-static-dir.ts), so nothing here
+# is tracked — a stale committed index.html here used to shadow the real build.
+src/channels/web/static/
