@@ -13,7 +13,7 @@ import { getLogger, getLoggerSafe } from "../../utils/logger.js";
 import { convertToolDefinitions } from "./openai-compat.js";
 import { fetchWithRetry as sharedFetchWithRetry } from "../../common/fetch-with-retry.js";
 import {
-  inspectOpenAiSubscriptionAuth,
+  ensureOpenAiSubscriptionAuth,
   OPENAI_CHATGPT_AUTH_DEFAULT_FILE,
 } from "../../common/openai-subscription-auth.js";
 
@@ -522,7 +522,7 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
       };
     }
 
-    const auth = this.resolveChatGptAuth();
+    const auth = await this.resolveChatGptAuth();
     return {
       "Content-Type": "application/json",
       Authorization: `Bearer ${auth.accessToken}`,
@@ -568,7 +568,7 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
     try {
       if (this.isChatGptSubscriptionMode()) {
         const authConfig = this.getChatGptSubscriptionAuth();
-        const authInspection = inspectOpenAiSubscriptionAuth({
+        const authInspection = await ensureOpenAiSubscriptionAuth({
           authFile: authConfig.authFile,
           accessToken: authConfig.accessToken,
           accountId: authConfig.accountId,
@@ -693,29 +693,25 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
     return this.auth as ChatGptSubscriptionAuth;
   }
 
-  private resolveChatGptAuth(): ResolvedChatGptAuth {
+  private async resolveChatGptAuth(): Promise<ResolvedChatGptAuth> {
     const authConfig = this.getChatGptSubscriptionAuth();
 
-    if (authConfig.accessToken && authConfig.accountId) {
-      const inspection = inspectOpenAiSubscriptionAuth({
-        accessToken: authConfig.accessToken,
-        accountId: authConfig.accountId,
-        authFile: authConfig.authFile,
-        env: process.env,
-      });
-      if (!inspection.ok || !inspection.accessToken || !inspection.accountId) {
-        throw new Error(`${this.name} ${inspection.detail}`);
-      }
-      return {
-        accessToken: inspection.accessToken,
-        accountId: inspection.accountId,
-      };
-    }
-
-    const inspection = inspectOpenAiSubscriptionAuth({
-      authFile: authConfig.authFile ?? OPENAI_CHATGPT_AUTH_DEFAULT_FILE,
-      env: process.env,
-    });
+    // ensureOpenAiSubscriptionAuth transparently refreshes an expired access token
+    // via the stored refresh_token before failing, so a stale session is renewed
+    // without forcing the user back through sign-in.
+    const inspection = await ensureOpenAiSubscriptionAuth(
+      authConfig.accessToken && authConfig.accountId
+        ? {
+            accessToken: authConfig.accessToken,
+            accountId: authConfig.accountId,
+            authFile: authConfig.authFile,
+            env: process.env,
+          }
+        : {
+            authFile: authConfig.authFile ?? OPENAI_CHATGPT_AUTH_DEFAULT_FILE,
+            env: process.env,
+          },
+    );
     if (!inspection.ok || !inspection.accessToken || !inspection.accountId) {
       throw new Error(`${this.name} ${inspection.detail}`);
     }

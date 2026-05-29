@@ -41,7 +41,7 @@ import {
   transitionSetupStatus,
 } from "../common/setup-state.js";
 import { resolveDotenvPath } from "../common/runtime-paths.js";
-import { inspectOpenAiSubscriptionAuth } from "../common/openai-subscription-auth.js";
+import { ensureOpenAiSubscriptionAuth } from "../common/openai-subscription-auth.js";
 import { isCodexCliAvailable, getCodexInstallHint, startCodexLogin } from "../common/openai-codex-login.js";
 
 const PACKAGED_STATIC_DIR = fileURLToPath(new URL("../channels/web/static/", import.meta.url));
@@ -714,7 +714,7 @@ export class SetupWizard {
 
       if (url === "/api/setup/openai/status" && method === "GET") {
         if (!this.guardSetupReadRoute(req, res)) return;
-        this.handleOpenAiSubscriptionStatus(res);
+        await this.handleOpenAiSubscriptionStatus(res);
         return;
       }
 
@@ -910,8 +910,10 @@ export class SetupWizard {
   }
 
   /** Reports whether a usable ChatGPT/Codex subscription session is available. */
-  private handleOpenAiSubscriptionStatus(res: ServerResponse): void {
-    const inspection = inspectOpenAiSubscriptionAuth();
+  private async handleOpenAiSubscriptionStatus(res: ServerResponse): Promise<void> {
+    // ensure* auto-refreshes an expired token via the stored refresh_token, so the
+    // badge reconnects without a fresh sign-in whenever a refresh succeeds.
+    const inspection = await ensureOpenAiSubscriptionAuth();
     this.json(res, 200, {
       ok: inspection.ok,
       issue: inspection.issue ?? null,
