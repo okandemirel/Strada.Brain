@@ -275,6 +275,99 @@ describe("FileMemoryManager", () => {
     });
   });
 
+  describe("entry-vector cache (IDF-version-gated)", () => {
+    const TEXT = (query: string) =>
+      ({ mode: "text", query, minScore: 0, limit: 100 }) as const;
+
+    // Adding a document shifts every term's IDF, so every previously-cached
+    // entry vector must be recomputed. Warming the cache before the mutation
+    // must yield the SAME scores as a manager built fresh on the final corpus;
+    // a non-version-gated cache would score the older entries against stale IDF.
+    it("invalidates cached entry vectors when the corpus grows", async () => {
+      await withTempDir(async (dir) => {
+        const docs = [
+          "DamageSystem applies combat damage to Health components",
+          "Inventory system stores ItemData ScriptableObjects",
+          "PathfindingSystem computes navigation for combat units",
+        ];
+        const extra = "Combat tuning notes for the damage system pipeline";
+
+        const incremental = new FileMemoryManager(join(dir, "inc"));
+        await incremental.initialize();
+        for (const d of docs) await incremental.storeNote(d);
+        await incremental.retrieve(TEXT("combat damage system")); // warm @ old IDF
+        await incremental.storeNote(extra); // mutates IDF for every term
+        const incResults = unwrap(await incremental.retrieve(TEXT("combat damage system")));
+        await incremental.shutdown();
+
+        const fresh = new FileMemoryManager(join(dir, "fresh"));
+        await fresh.initialize();
+        for (const d of [...docs, extra]) await fresh.storeNote(d);
+        const freshResults = unwrap(await fresh.retrieve(TEXT("combat damage system")));
+        await fresh.shutdown();
+
+        const incMap = new Map(incResults.map((r) => [r.entry.content, r.score]));
+        const freshMap = new Map(freshResults.map((r) => [r.entry.content, r.score]));
+        expect(incMap.size).toBe(freshMap.size);
+        for (const [content, score] of freshMap) {
+          expect(incMap.has(content)).toBe(true);
+          expect(incMap.get(content)!).toBeCloseTo(score, 10);
+        }
+      });
+    });
+
+    // Same guarantee for the removeDocument path (deletion also shifts IDF).
+    it("invalidates cached entry vectors when an entry is deleted", async () => {
+      await withTempDir(async (dir) => {
+        const a = "DamageSystem applies combat damage to units";
+        const b = "Inventory system stores ItemData ScriptableObjects";
+        const c = "Pathfinding navigation for combat squads";
+
+        const incremental = new FileMemoryManager(join(dir, "inc"));
+        await incremental.initialize();
+        await incremental.storeNote(a);
+        const bId = unwrap(await incremental.storeNote(b));
+        await incremental.storeNote(c);
+        await incremental.retrieve(TEXT("combat damage")); // warm @ old IDF
+        await incremental.deleteEntry(bId); // mutates IDF for every term
+        const incResults = unwrap(await incremental.retrieve(TEXT("combat damage")));
+        await incremental.shutdown();
+
+        const fresh = new FileMemoryManager(join(dir, "fresh"));
+        await fresh.initialize();
+        await fresh.storeNote(a);
+        await fresh.storeNote(c);
+        const freshResults = unwrap(await fresh.retrieve(TEXT("combat damage")));
+        await fresh.shutdown();
+
+        const incMap = new Map(incResults.map((r) => [r.entry.content, r.score]));
+        const freshMap = new Map(freshResults.map((r) => [r.entry.content, r.score]));
+        expect(incMap.size).toBe(freshMap.size); // deleted entry is gone
+        for (const [content, score] of freshMap) {
+          expect(incMap.get(content)).toBeCloseTo(score, 10);
+        }
+      });
+    });
+
+    // A cache hit (repeated query, no corpus change) must not alter results.
+    it("returns identical results on repeated queries without corpus change", async () => {
+      await withTempDir(async (dir) => {
+        const mm = new FileMemoryManager(join(dir, "db"));
+        await mm.initialize();
+        await mm.storeNote("DamageSystem combat note with Health component");
+        await mm.storeNote("Inventory ItemData ScriptableObject note");
+
+        const first = unwrap(await mm.retrieve(TEXT("combat damage")));
+        const second = unwrap(await mm.retrieve(TEXT("combat damage"))); // partly cached
+        expect(second.map((r) => [r.entry.content, r.score])).toEqual(
+          first.map((r) => [r.entry.content, r.score]),
+        );
+
+        await mm.shutdown();
+      });
+    });
+  });
+
   describe("analysis cache", () => {
     it("caches and retrieves analysis", async () => {
       await withTempDir(async (dir) => {

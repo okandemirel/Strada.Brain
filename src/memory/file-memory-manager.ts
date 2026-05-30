@@ -54,6 +54,12 @@ class OptimizedTextIndex {
   private idfCache: Map<string, number> = new Map();
   private docFrequency: Map<string, number> = new Map();
   private docCount: number = 0;
+  /**
+   * Monotonic counter bumped on every IDF-affecting corpus mutation
+   * (addDocument/removeDocument). Lets version-gated consumers detect when a
+   * previously computed TF-IDF vector has gone stale without diffing the corpus.
+   */
+  private idfVersion = 0;
 
   /**
    * Optimized TF computation with memoization
@@ -120,8 +126,7 @@ class OptimizedTextIndex {
         this.docFrequency.set(term, (this.docFrequency.get(term) || 0) + 1);
       }
     }
-    // Invalidate IDF cache
-    this.idfCache.clear();
+    this.invalidateIdf();
   }
 
   /**
@@ -152,8 +157,26 @@ class OptimizedTextIndex {
         }
       }
     }
-    // Invalidate IDF cache
+    this.invalidateIdf();
+  }
+
+  /**
+   * Invalidate IDF-derived memoization after a corpus mutation. The per-term
+   * idfCache is dropped (its memoized values are now wrong) and idfVersion is
+   * bumped so version-gated consumers (cached entry vectors) recompute lazily.
+   */
+  private invalidateIdf(): void {
     this.idfCache.clear();
+    this.idfVersion++;
+  }
+
+  /**
+   * Current IDF version — bumped on every addDocument/removeDocument. A TF-IDF
+   * vector computed at version V stays valid only while getIdfVersion() === V
+   * (IDF, and thus every entry vector, changes iff the corpus does).
+   */
+  getIdfVersion(): number {
+    return this.idfVersion;
   }
 
   /**
@@ -226,6 +249,17 @@ export class FileMemoryManager implements IMemoryManager {
    */
   private readonly termsCache = new Map<string, string[]>();
   private static readonly TERMS_CACHE_MAX = 2000;
+  /**
+   * Bounded cache of per-entry TF-IDF vectors for the retrieve() hot path
+   * (previously every query rebuilt every entry's vector). A vector is
+   * TF(content) ⊙ IDF(corpus); the IDF half shifts on every add/removeDocument,
+   * so the cache is version-gated against the index's idfVersion — a hit is
+   * honored only while the corpus IDF state is unchanged since the vector was
+   * computed, otherwise it is recomputed. Keyed by content (extractTerms is
+   * pure), so edited content yields a fresh key. Oldest-evicted at the cap.
+   */
+  private readonly entryVectorCache = new Map<string, { version: number; vector: Record<string, number> }>();
+  private static readonly ENTRY_VECTOR_CACHE_MAX = 2000;
   private cachedAnalysis: { projectPath: string; analysis: StradaProjectAnalysis } | null = null;
   
   // Debounced flush with max wait time
@@ -753,9 +787,8 @@ export class FileMemoryManager implements IMemoryManager {
         if (options.after && entry.createdAt < options.after) continue;
         if (options.before && entry.createdAt > options.before) continue;
 
-        // Compute TF-IDF similarity
-        const entryTerms = this.cachedExtractTerms(entry.content);
-        const entryVector = this.index.computeTFIDFOptimized(entryTerms);
+        // Compute TF-IDF similarity (entry vector cached + IDF-version-gated)
+        const entryVector = this.cachedEntryVector(entry.content);
         const score = cosineSimilarity(queryVector, entryVector);
 
         if (score >= minScore) {
@@ -840,8 +873,7 @@ export class FileMemoryManager implements IMemoryManager {
       const scored: RetrievalResult<ConversationMemoryEntry>[] = [];
       
       for (const entry of chatEntries) {
-        const entryTerms = this.cachedExtractTerms(entry.content);
-        const entryVector = this.index.computeTFIDFOptimized(entryTerms);
+        const entryVector = this.cachedEntryVector(entry.content);
         const score = cosineSimilarity(queryVector, entryVector);
         
         if (score >= (options?.minScore ?? DEFAULT_MIN_SCORE)) {
@@ -1036,6 +1068,34 @@ export class FileMemoryManager implements IMemoryManager {
     }
     this.termsCache.set(content, terms);
     return terms;
+  }
+
+  /**
+   * computeTFIDFOptimized(extractTerms(content)) with a version-gated,
+   * content-keyed cache. Returns a vector identical to a fresh recompute under
+   * the current corpus IDF: a cached entry is reused only while the index's
+   * idfVersion is unchanged, and IDF (hence the vector) changes iff the corpus
+   * does. The returned Record is read-only for callers (cosineSimilarity does
+   * not mutate it), so sharing the cached reference is safe.
+   */
+  private cachedEntryVector(content: string): Record<string, number> {
+    const version = this.index.getIdfVersion();
+    const hit = this.entryVectorCache.get(content);
+    if (hit && hit.version === version) return hit.vector;
+
+    const vector = this.index.computeTFIDFOptimized(this.cachedExtractTerms(content));
+    // Evict oldest only when inserting a genuinely new key; a version-stale
+    // refresh of an existing key just overwrites it (corpus mutations make
+    // every cached key stale at once, so evict-on-refresh would thrash).
+    if (
+      !this.entryVectorCache.has(content) &&
+      this.entryVectorCache.size >= FileMemoryManager.ENTRY_VECTOR_CACHE_MAX
+    ) {
+      const oldest = this.entryVectorCache.keys().next().value;
+      if (oldest !== undefined) this.entryVectorCache.delete(oldest);
+    }
+    this.entryVectorCache.set(content, { version, vector });
+    return vector;
   }
 
   private evictIfNeeded(): void {
