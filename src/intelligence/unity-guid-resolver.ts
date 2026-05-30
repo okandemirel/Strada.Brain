@@ -175,10 +175,19 @@ export async function checkSafeToDelete(
   // Find references to this GUID (limit to 6 for the warning message)
   const references = await findGuidReferences(projectPath, guid, 10, 6);
 
-  // Filter out self-references (the file's own .meta)
-  const externalRefs = references.filter(
-    (ref) => ref.filePath !== filePath && ref.filePath !== filePath + ".meta",
-  );
+  // Filter out self-references (the file's own .meta). Normalize separators
+  // before comparing: `ref.filePath` comes from `path.relative()` (native
+  // separators — `\` on Windows) while `filePath` is the caller-supplied
+  // relative path, which may use `/`. A raw `!==` would fail to match a file's
+  // own `.meta` on Windows, falsely reporting a self-reference and blocking a
+  // safe delete.
+  const normalizeSep = (p: string): string => p.replace(/\\/g, "/");
+  const selfPath = normalizeSep(filePath);
+  const selfMetaPath = selfPath + ".meta";
+  const externalRefs = references.filter((ref) => {
+    const refPath = normalizeSep(ref.filePath);
+    return refPath !== selfPath && refPath !== selfMetaPath;
+  });
 
   if (externalRefs.length > 0) {
     const refList = externalRefs
