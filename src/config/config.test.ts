@@ -267,6 +267,17 @@ describe("loadConfig", () => {
     });
   });
 
+  // Regression (M5): anthropic and claude are aliases for one provider, but the
+  // env var is CLAUDE_MODEL. Both model-map keys must carry the configured model
+  // so PROVIDER_CHAIN=anthropic does not silently downgrade to the provider's
+  // hardcoded default model.
+  it("mirrors CLAUDE_MODEL across the claude and anthropic provider-model keys", () => {
+    setEnv({ CLAUDE_MODEL: "claude-opus-4-6-20250514" });
+    const config = loadConfig();
+    expect(config.providerModels?.claude).toBe("claude-opus-4-6-20250514");
+    expect(config.providerModels?.anthropic).toBe("claude-opus-4-6-20250514");
+  });
+
   it("loads streaming timeout config into runtime config", () => {
     setEnv({
       LLM_STREAM_INITIAL_TIMEOUT_MS: "1500",

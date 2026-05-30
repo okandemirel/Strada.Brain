@@ -3353,6 +3353,18 @@ export function loadConfig(envOverride?: Record<string, string | undefined>): Co
     if (val) providerModels[p] = val;
   }
 
+  // `anthropic` and `claude` are aliases for one provider, but the env var is
+  // CLAUDE_MODEL (→ providerModels.claude). Mirror the value across both keys so
+  // a chain entry written as either alias resolves the configured model — every
+  // consumer (preflight, buildProviderChain, ProviderManager) keys this map by
+  // the raw chain name, so `PROVIDER_CHAIN=anthropic` would otherwise silently
+  // fall back to the provider's hardcoded default model.
+  const claudeAliasModel = providerModels["claude"] ?? providerModels["anthropic"];
+  if (claudeAliasModel) {
+    providerModels["claude"] = claudeAliasModel;
+    providerModels["anthropic"] = claudeAliasModel;
+  }
+
   // Update with resolved path + preset overrides
   // Preset overrides must be applied to the correct nested config paths
   const presetRagOverrides = preset ? {
