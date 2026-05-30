@@ -249,6 +249,42 @@ describe("WhatsAppChannel", () => {
 
       confirmPromise.catch(() => {});
     });
+
+    // Regression (H5): a reconnect timer scheduled before shutdown must not
+    // resurrect a deliberately disconnected channel.
+    it("cancels a pending reconnect timer on disconnect", async () => {
+      vi.useFakeTimers();
+      try {
+        const connectSpy = vi.spyOn(channel, "connect").mockResolvedValue(undefined);
+        (channel as unknown as { scheduleReconnect: (d: number) => void }).scheduleReconnect(1000);
+        expect((channel as unknown as { reconnectTimer: unknown }).reconnectTimer).not.toBeNull();
+
+        await channel.disconnect();
+
+        expect((channel as unknown as { stopped: boolean }).stopped).toBe(true);
+        expect((channel as unknown as { reconnectTimer: unknown }).reconnectTimer).toBeNull();
+        vi.advanceTimersByTime(5000);
+        expect(connectSpy).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("does not reconnect when stopped even if a scheduled reconnect timer fires", () => {
+      vi.useFakeTimers();
+      try {
+        const connectSpy = vi.spyOn(channel, "connect").mockResolvedValue(undefined);
+        (channel as unknown as { scheduleReconnect: (d: number) => void }).scheduleReconnect(1000);
+        (channel as unknown as { stopped: boolean }).stopped = true;
+
+        vi.advanceTimersByTime(1000);
+
+        expect(connectSpy).not.toHaveBeenCalled();
+        expect((channel as unknown as { reconnectTimer: unknown }).reconnectTimer).toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   // ---------------------------------------------------------------------------

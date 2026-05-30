@@ -106,6 +106,12 @@ export class WhatsAppChannel extends EventEmitter implements IChannelAdapter {
 
   // 4.5 Reconnection
   private reconnectAttempts = 0;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * Set true by disconnect() so a reconnect timer scheduled before shutdown
+   * cannot resurrect a deliberately stopped channel. Reset by connect().
+   */
+  private stopped = false;
 
   constructor(
     sessionPath = ".whatsapp-session",
@@ -122,6 +128,8 @@ export class WhatsAppChannel extends EventEmitter implements IChannelAdapter {
   }
 
   async connect(): Promise<void> {
+    // An intentional connect clears the stop flag set by a prior disconnect.
+    this.stopped = false;
     // Clean up previous socket if reconnecting
     if (this.sock) {
       try {
@@ -170,7 +178,7 @@ export class WhatsAppChannel extends EventEmitter implements IChannelAdapter {
               delayMs: delay,
               statusCode,
             });
-            setTimeout(() => void this.connect(), delay);
+            this.scheduleReconnect(delay);
           } else if (!shouldReconnect) {
             logger.error("WhatsApp logged out. Delete session and re-scan QR.");
           } else {
@@ -379,7 +387,27 @@ export class WhatsAppChannel extends EventEmitter implements IChannelAdapter {
     }
   }
 
+  /**
+   * Schedule a reconnect. The timer handle is stored so disconnect() can cancel
+   * it, and the callback re-checks `stopped` so a timer that already fired after
+   * disconnect cannot resurrect a stopped channel.
+   */
+  private scheduleReconnect(delay: number): void {
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      if (this.stopped) return;
+      void this.connect();
+    }, delay);
+  }
+
   async disconnect(): Promise<void> {
+    // Prevent any pending reconnect timer from resurrecting the channel.
+    this.stopped = true;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+
     // Stop session cleanup
     if (this.sessionCleanupInterval) {
       clearInterval(this.sessionCleanupInterval);
