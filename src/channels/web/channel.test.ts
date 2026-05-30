@@ -12,6 +12,8 @@ function createMockSocket() {
   const sent: Array<Record<string, unknown>> = [];
   const closeCalls: Array<{ code?: number; reason?: string }> = [];
   let readyState = 1;
+  let pingCount = 0;
+  let terminated = false;
 
   return {
     get readyState() {
@@ -22,6 +24,14 @@ function createMockSocket() {
     },
     close(code?: number, reason?: string) {
       closeCalls.push({ code, reason });
+      readyState = 3;
+      handlers.get("close")?.();
+    },
+    ping() {
+      pingCount++;
+    },
+    terminate() {
+      terminated = true;
       readyState = 3;
       handlers.get("close")?.();
     },
@@ -36,6 +46,12 @@ function createMockSocket() {
     },
     getCloseCalls() {
       return closeCalls;
+    },
+    getPingCount() {
+      return pingCount;
+    },
+    isTerminated() {
+      return terminated;
     },
   };
 }
@@ -758,5 +774,31 @@ describe("WebChannel HTTP surface", () => {
 
   it("returns null when no stale setup query is present", () => {
     expect(getCanonicalWebRedirectTarget("/dashboard?foo=bar")).toBeNull();
+  });
+});
+
+describe("WebChannel WebSocket heartbeat", () => {
+  it("pings live clients and terminates one that stops responding to pongs", () => {
+    const channel = new WebChannel();
+    const socket = createMockSocket();
+    (channel as unknown as { handleWsConnection: (ws: unknown) => void }).handleWsConnection(socket);
+
+    const tick = () =>
+      (channel as unknown as { wsHeartbeatTick: () => void }).wsHeartbeatTick();
+
+    // Tick 1: client is alive → it gets pinged and isAlive is cleared.
+    tick();
+    expect(socket.getPingCount()).toBe(1);
+    expect(socket.isTerminated()).toBe(false);
+
+    // Client responds with a pong → stays alive through the next tick.
+    socket.emit("pong");
+    tick();
+    expect(socket.getPingCount()).toBe(2);
+    expect(socket.isTerminated()).toBe(false);
+
+    // No pong this round: the next tick finds isAlive=false and terminates it.
+    tick();
+    expect(socket.isTerminated()).toBe(true);
   });
 });

@@ -65,6 +65,8 @@ interface WsClient {
   msgCount: number;
   /** Timestamp (ms) when current rate-limit window started. */
   windowStart: number;
+  /** Heartbeat liveness flag: set true on each pong, cleared on each ping. */
+  isAlive: boolean;
 }
 
 interface RecentlyDisconnectedSession {
@@ -197,6 +199,8 @@ export class WebChannel
 
   private static readonly UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   private static readonly RECONNECT_TTL_MS = 5 * 60 * 1000;
+  /** Interval between WebSocket liveness pings (terminates dead half-open sockets). */
+  private static readonly WS_HEARTBEAT_MS = 30 * 1000;
   private static readonly MAX_MONITOR_SNAPSHOT_MESSAGES = 200;
   private static readonly CACHEABLE_MONITOR_TYPES = new Set([
     "monitor:task_update",
@@ -300,10 +304,34 @@ export class WebChannel
       }
     }, WebChannel.RECONNECT_TTL_MS);
 
+    // Heartbeat: ping each client every tick and terminate any that did not
+    // pong since the previous tick. A half-open TCP socket (client vanished
+    // without FIN/RST) never fires 'close', so without this its WsClient leaks
+    // in this.clients indefinitely. terminate() fires 'close' → handleDisconnect
+    // does the normal map/session cleanup.
+    this._wsHeartbeatInterval = setInterval(() => this.wsHeartbeatTick(), WebChannel.WS_HEARTBEAT_MS);
+
     console.log(`Web channel running at http://127.0.0.1:${this.port}`);
   }
 
   private _reconnectCleanupInterval: ReturnType<typeof setInterval> | undefined;
+  private _wsHeartbeatInterval: ReturnType<typeof setInterval> | undefined;
+
+  /**
+   * One heartbeat round: terminate clients that didn't pong since the last
+   * tick, then ping the rest (clearing isAlive until their pong arrives).
+   * Extracted from the interval so it can be driven deterministically in tests.
+   */
+  private wsHeartbeatTick(): void {
+    for (const [, client] of this.clients) {
+      if (!client.isAlive) {
+        client.ws.terminate();
+        continue;
+      }
+      client.isAlive = false;
+      try { client.ws.ping(); } catch { /* socket already closing */ }
+    }
+  }
 
   /**
    * Per-chat in-flight `verify:check_criterion` spawn guard. Each chatId may
@@ -473,6 +501,9 @@ export class WebChannel
 
     if (this._reconnectCleanupInterval) {
       clearInterval(this._reconnectCleanupInterval);
+    }
+    if (this._wsHeartbeatInterval) {
+      clearInterval(this._wsHeartbeatInterval);
     }
     this.recentlyDisconnected.clear();
     // Intentionally NOT clearing inflightVerifyByChat here. Each spawn owns
@@ -785,8 +816,13 @@ export class WebChannel
       profileId: chatId,
       msgCount: 0,
       windowStart: Date.now(),
+      isAlive: true,
     };
     this.clients.set(chatId, client);
+
+    // Mark live on each pong. Bind to the stable `client` object (not chatId,
+    // which can be reassigned on session_init / reconnect re-keying).
+    ws.on("pong", () => { client.isAlive = true; });
 
     // Note: A temporary 'connected' event is sent immediately, then replaced
     // by the full 'connected' event after session_init with profileId/language.
