@@ -1212,6 +1212,11 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       commandHandler.setUnifiedBudgetManager(unifiedBudgetManager);
       agentBudgetTrackerOuter = multiAgentStage.agentBudgetTracker;
       delegationManager = multiAgentStage.delegationManager;
+      // Activate capability-aware delegation scoring with the live model catalog
+      // (created earlier in bootstrap than the DelegationManager).
+      if (modelIntelligence) {
+        delegationManager?.setModelIntelligence(modelIntelligence);
+      }
 
       await initializeMemoryConsolidationStage({
         config,

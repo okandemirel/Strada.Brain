@@ -140,8 +140,21 @@ export class DelegationManager {
   /** Active delegation count per parent agent */
   private readonly parentConcurrency = new Map<string, number>();
 
+  /**
+   * Live model-intelligence catalog used by candidate scoring. Seeded from opts
+   * but settable post-construction because the ModelIntelligenceService is created
+   * later in bootstrap than the DelegationManager.
+   */
+  private modelIntelligence?: ModelIntelligenceLookup;
+
   constructor(opts: DelegationManagerOptions) {
     this.opts = opts;
+    this.modelIntelligence = opts.modelIntelligence;
+  }
+
+  /** Wire (or refresh) the live model-intelligence catalog used for scoring. */
+  setModelIntelligence(modelIntelligence: ModelIntelligenceLookup | undefined): void {
+    this.modelIntelligence = modelIntelligence;
   }
 
   // ===========================================================================
@@ -775,7 +788,7 @@ export class DelegationManager {
     const snapshot = getProviderIntelligenceSnapshot(
       candidate.name,
       candidate.model,
-      this.opts.modelIntelligence,
+      this.modelIntelligence,
       candidate.provider.capabilities,
       candidate.provider.name,
     );
