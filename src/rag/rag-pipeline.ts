@@ -56,7 +56,6 @@ export class RAGPipeline implements IRAGPipeline {
   private readonly vectorStore: IVectorStore;
   private useHNSW: boolean;
   private hnswStore?: IHNSWVectorStore;
-  private legacyStore?: FileVectorStore;
 
   /** filePath → content hash of the last indexed version */
   private fileHashes: Map<string, string> = new Map();
@@ -162,10 +161,10 @@ export class RAGPipeline implements IRAGPipeline {
         });
       }
 
-      // Keep legacy store as fallback
-      this.legacyStore = this.vectorStore as FileVectorStore;
-      await this.legacyStore.initialize();
-
+      // HNSW is now the source of truth. Any legacy vectors.bin/chunks.json
+      // were migrated into HNSW by createHNSWVectorStore().initialize() above,
+      // so we deliberately do NOT keep mirroring writes to the legacy store
+      // (it was never read for search — only double disk/memory + divergence).
       getLogger().info("[RAGPipeline] HNSW initialized", {
         dimensions: this.embeddingProvider.dimensions,
         storePath: hnswPath,
@@ -182,11 +181,7 @@ export class RAGPipeline implements IRAGPipeline {
   async shutdown(): Promise<void> {
     if (this.hnswStore) {
       await this.hnswStore.shutdown();
-    }
-    if (this.legacyStore) {
-      await this.legacyStore.shutdown();
-    }
-    if (!this.hnswStore && !this.legacyStore) {
+    } else {
       await this.vectorStore.shutdown();
     }
   }
@@ -254,14 +249,10 @@ export class RAGPipeline implements IRAGPipeline {
       });
     }
 
-    // Upsert to both stores for consistency
+    // HNSW is the source of truth when active; otherwise use the legacy store.
     if (this.hnswStore) {
       await this.hnswStore.upsert(entries);
-    }
-    if (this.legacyStore) {
-      await this.legacyStore.upsert(entries);
-    }
-    if (!this.hnswStore && !this.legacyStore) {
+    } else {
       await this.vectorStore.upsert(entries);
     }
     
@@ -278,11 +269,7 @@ export class RAGPipeline implements IRAGPipeline {
   private async removeByFile(filePath: string): Promise<void> {
     if (this.hnswStore) {
       await this.hnswStore.removeByFile(filePath);
-    }
-    if (this.legacyStore) {
-      await this.legacyStore.removeByFile(filePath);
-    }
-    if (!this.hnswStore && !this.legacyStore) {
+    } else {
       await this.vectorStore.removeByFile(filePath);
     }
   }
@@ -323,9 +310,7 @@ export class RAGPipeline implements IRAGPipeline {
     }
 
     // Get count from appropriate store
-    const chunkCount = this.hnswStore?.count() ?? 
-                       this.legacyStore?.count() ?? 
-                       this.vectorStore.count();
+    const chunkCount = this.hnswStore?.count() ?? this.vectorStore.count();
 
     this.stats = {
       totalFiles: files.length,
