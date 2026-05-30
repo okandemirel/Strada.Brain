@@ -154,14 +154,44 @@ export class IRCChannel implements IChannelAdapter {
   }
 
   async sendText(chatId: string, text: string): Promise<void> {
-    if (!this.client) return;
-    // IRC has a ~512 byte message limit, split long messages
-    const lines = text.split("\n");
-    for (const line of lines) {
-      if (line.trim()) {
-        this.client.say(chatId, line.slice(0, 450));
+    const client = this.client;
+    if (!client) return;
+    // IRC enforces a ~512-byte line limit (incl. the PRIVMSG framing + CRLF), so
+    // SPLIT — never truncate — each logical line into byte-bounded chunks. The
+    // previous `line.slice(0, 450)` silently dropped everything past 450 chars.
+    for (const line of text.split("\n")) {
+      if (!line.trim()) continue;
+      for (const chunk of IRCChannel.splitIrcLine(line, IRCChannel.IRC_MAX_BYTES)) {
+        client.say(chatId, chunk);
       }
     }
+  }
+
+  /** IRC's 512-byte line limit minus headroom for PRIVMSG framing + CRLF. */
+  private static readonly IRC_MAX_BYTES = 400;
+
+  /**
+   * Split one logical line into IRC-safe chunks, each within the UTF-8 byte
+   * budget and never breaking a multi-byte code point (iterating by code point
+   * guarantees this). Oversize lines are emitted as multiple say() calls rather
+   * than truncated, so no content is lost.
+   */
+  private static splitIrcLine(line: string, maxBytes: number): string[] {
+    const chunks: string[] = [];
+    let buf = "";
+    let bytes = 0;
+    for (const ch of line) {
+      const chBytes = Buffer.byteLength(ch, "utf8");
+      if (bytes + chBytes > maxBytes && buf.length > 0) {
+        chunks.push(buf);
+        buf = "";
+        bytes = 0;
+      }
+      buf += ch;
+      bytes += chBytes;
+    }
+    if (buf.length > 0) chunks.push(buf);
+    return chunks;
   }
 
   async sendMarkdown(chatId: string, markdown: string): Promise<void> {
