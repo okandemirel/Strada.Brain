@@ -262,7 +262,6 @@ export type EnvVarName =
   | "DELEGATION_TIER_PREMIUM"
   | "DELEGATION_VERBOSITY"
   | "DELEGATION_TYPES"
-  | "DELEGATION_MAX_ITERATIONS_PER_TYPE"
   | "TASK_INTERACTIVE_MAX_ITERATIONS"
   | "TASK_INTERACTIVE_TOKEN_BUDGET"
   | "TASK_BACKGROUND_EPOCH_MAX_ITERATIONS"
@@ -1700,11 +1699,6 @@ export const configSchema = z
     delegationTierPremium: z.string().default("claude:claude-opus-4-6-20250514"),
     delegationVerbosity: z.enum(["quiet", "normal", "verbose"]).default("normal"),
     delegationTypes: z.string().optional(),
-    delegationMaxIterationsPerType: z
-      .string()
-      .transform((s) => parseInt(s, 10))
-      .pipe(z.number().int().min(1).max(50))
-      .default("10"),
 
     // Deployment (Phase 25)
     deployEnabled: boolFromString(false),
@@ -2904,7 +2898,6 @@ interface EnvVars {
   delegationTierPremium: string | undefined;
   delegationVerbosity: string | undefined;
   delegationTypes: string | undefined;
-  delegationMaxIterationsPerType: string | undefined;
   // Task routing
   taskMaxConcurrent: string | undefined;
   taskMessageBurstWindowMs: string | undefined;
@@ -3232,7 +3225,6 @@ function loadFromEnv(env: Record<string, string | undefined>): EnvVars {
     delegationTierPremium: env["DELEGATION_TIER_PREMIUM"],
     delegationVerbosity: env["DELEGATION_VERBOSITY"],
     delegationTypes: env["DELEGATION_TYPES"],
-    delegationMaxIterationsPerType: env["DELEGATION_MAX_ITERATIONS_PER_TYPE"],
     taskMaxConcurrent: env["TASK_MAX_CONCURRENT"],
     taskMessageBurstWindowMs: env["TASK_MESSAGE_BURST_WINDOW_MS"],
     taskMessageBurstMaxMessages: env["TASK_MESSAGE_BURST_MAX_MESSAGES"],

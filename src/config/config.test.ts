@@ -132,7 +132,6 @@ describe("loadConfig", () => {
     delete process.env["DELEGATION_TIER_PREMIUM"];
     delete process.env["DELEGATION_VERBOSITY"];
     delete process.env["DELEGATION_TYPES"];
-    delete process.env["DELEGATION_MAX_ITERATIONS_PER_TYPE"];
     delete process.env["TASK_MAX_CONCURRENT"];
     delete process.env["TASK_MESSAGE_BURST_WINDOW_MS"];
     delete process.env["TASK_MESSAGE_BURST_MAX_MESSAGES"];
@@ -238,7 +237,6 @@ describe("loadConfig", () => {
           maxIterations: 7,
         },
       ]),
-      DELEGATION_MAX_ITERATIONS_PER_TYPE: "7",
     });
 
     const config = loadConfig();
