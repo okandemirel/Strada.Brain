@@ -275,6 +275,56 @@ describe("OpenAIProvider", () => {
     expect(result.usage).toEqual({ inputTokens: 3, outputTokens: 1, totalTokens: 4 });
   });
 
+  // Regression (M2): the subscription /responses path must forward the caller's
+  // AbortSignal so user/task cancel and the orchestrator stall-timeout can stop
+  // the in-flight request instead of leaking the socket.
+  it("forwards the AbortSignal to the subscription /responses fetch", async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(
+          [
+            'event: response.completed',
+            'data: {"response":{"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2},"output":[{"id":"m","type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}]}}',
+            "",
+          ].join("\n"),
+        ));
+        controller.close();
+      },
+    });
+    mockFetch.mockResolvedValue({ ok: true, body: stream, text: async () => "", headers: new Headers() });
+
+    const provider = new OpenAIProvider({
+      mode: "chatgpt-subscription",
+      accessToken: "access-token",
+      accountId: "account-id",
+    });
+    const ac = new AbortController();
+
+    await provider.chatStream("system", [{ role: "user", content: "ping" }], [], () => {}, { signal: ac.signal });
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      "https://chatgpt.com/backend-api/codex/responses",
+      expect.objectContaining({ signal: ac.signal }),
+    );
+  });
+
+  it("rejects the subscription stream when the AbortSignal is already aborted", async () => {
+    const stream = new ReadableStream<Uint8Array>({ start(controller) { controller.close(); } });
+    mockFetch.mockResolvedValue({ ok: true, body: stream, text: async () => "", headers: new Headers() });
+
+    const provider = new OpenAIProvider({
+      mode: "chatgpt-subscription",
+      accessToken: "access-token",
+      accountId: "account-id",
+    });
+    const ac = new AbortController();
+    ac.abort();
+
+    await expect(
+      provider.chatStream("system", [{ role: "user", content: "ping" }], [], () => {}, { signal: ac.signal }),
+    ).rejects.toThrow(/aborted/i);
+  });
+
   it("uses output_text for assistant replay on the subscription responses endpoint", async () => {
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {

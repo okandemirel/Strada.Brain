@@ -106,7 +106,7 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
     options?: { signal?: AbortSignal },
   ): Promise<ProviderResponse> {
     if (this.isChatGptSubscriptionMode()) {
-      return this.chatViaChatGptResponses(systemPrompt, messages, tools);
+      return this.chatViaChatGptResponses(systemPrompt, messages, tools, undefined, options?.signal);
     }
 
     const logger = getLogger();
@@ -144,7 +144,7 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
     options?: { signal?: AbortSignal },
   ): Promise<ProviderResponse> {
     if (this.isChatGptSubscriptionMode()) {
-      return this.chatViaChatGptResponses(systemPrompt, messages, tools, onChunk);
+      return this.chatViaChatGptResponses(systemPrompt, messages, tools, onChunk, options?.signal);
     }
 
     const logger = getLogger();
@@ -296,12 +296,14 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
     messages: ConversationMessage[],
     tools: ToolDefinition[],
     onChunk?: StreamCallback,
+    signal?: AbortSignal,
   ): Promise<ProviderResponse> {
     const logger = getLogger();
     const response = await this.fetchWithRetry(`${this.baseUrl}/responses`, {
       method: "POST",
       headers: await this.buildHeaders(),
       body: JSON.stringify(this.buildChatGptResponsesRequest(systemPrompt, messages, tools)),
+      signal,
     });
 
     logger.debug(`${this.name} ChatGPT/Codex subscription API call`, {
@@ -315,6 +317,14 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
     }
 
     const reader = response.body.getReader();
+    // Honor the caller's AbortSignal (user/task cancel or the orchestrator's
+    // stall-timeout guard): cancel the in-flight read so a stalled stream cannot
+    // block on reader.read() until the server closes the socket (connection leak).
+    const onAbort = (): void => { void reader.cancel().catch(() => {}); };
+    if (signal) {
+      if (signal.aborted) onAbort();
+      else signal.addEventListener("abort", onAbort, { once: true });
+    }
     const decoder = new TextDecoder();
     let buffer = "";
     let text = "";
@@ -392,6 +402,7 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
 
     try {
       while (true) {
+        if (signal?.aborted) break;
         const { done, value } = await reader.read();
         if (done) {
           if (buffer.trim()) {
@@ -414,7 +425,12 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
         }
       }
     } finally {
+      if (signal) signal.removeEventListener("abort", onAbort);
       reader.releaseLock();
+    }
+
+    if (signal?.aborted) {
+      throw new DOMException("ChatGPT subscription stream aborted", "AbortError");
     }
 
     const toolCalls: ToolCall[] = Array.from(toolCallAccumulator.values())
