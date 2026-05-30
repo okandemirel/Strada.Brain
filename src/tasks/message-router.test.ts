@@ -231,4 +231,49 @@ describe("MessageRouter", () => {
       "Son 2 mesajını birlikte kuyruğa aldım. Mevcut işi bitirir bitirmez bunları sırayla işleyeceğim.",
     );
   });
+
+  it("bounds queueNoticeCooldowns and clears it on dispose (leak regression)", async () => {
+    const router = new MessageRouter(
+      createTaskManager(submit) as never,
+      { handle } as unknown as CommandHandler,
+      { sendMarkdown, sendText } as never,
+      [],
+      TEST_ROUTER_OPTIONS,
+    );
+
+    const internal = router as unknown as {
+      queueNoticeCooldowns: Map<string, number>;
+      sendBurstOrQueueNotice: (
+        batch: {
+          conversationKey: string;
+          chatId: string;
+          channelType: string;
+          messages: IncomingMessage[];
+          timer: null;
+        },
+        queuedBehindActiveTask: boolean,
+      ) => Promise<void>;
+    };
+
+    // Insert far more distinct-conversation cooldowns than the cap (500).
+    // Without the prune the map grows to 600; with it, it stays bounded.
+    for (let i = 0; i < 600; i++) {
+      await internal.sendBurstOrQueueNotice(
+        {
+          conversationKey: `conv-${i}`,
+          chatId: "chat-1",
+          channelType: "cli",
+          messages: [createMessage("queued")],
+          timer: null,
+        },
+        true,
+      );
+    }
+
+    expect(internal.queueNoticeCooldowns.size).toBeLessThanOrEqual(500);
+    expect(internal.queueNoticeCooldowns.size).toBeLessThan(600);
+
+    router.dispose();
+    expect(internal.queueNoticeCooldowns.size).toBe(0);
+  });
 });

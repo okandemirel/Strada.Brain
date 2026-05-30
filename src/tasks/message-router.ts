@@ -19,6 +19,12 @@ import { buildBatchedPrompt, buildBurstOrQueueNotice } from "./message-bursting.
 import { getLogger } from "../utils/logger.js";
 
 const QUEUE_NOTICE_COOLDOWN_MS = 15_000;
+/**
+ * Upper bound on tracked per-conversation queue-notice cooldowns. Without a cap
+ * the map grew once per distinct conversation forever. Mirrors the bounded-Map
+ * + oldest-drop idiom used for MAX_SESSIONS in orchestrator-session-manager.
+ */
+const MAX_QUEUE_NOTICE_COOLDOWNS = 500;
 
 export interface MessageRouterOptions {
   readonly burstWindowMs: number;
@@ -48,6 +54,7 @@ export class MessageRouter {
       }
     }
     this.pendingTaskBatches.clear();
+    this.queueNoticeCooldowns.clear();
   }
 
   constructor(
@@ -255,11 +262,13 @@ export class MessageRouter {
     }
 
     if (queuedBehindActiveTask) {
+      const now = Date.now();
       const cooldownUntil = this.queueNoticeCooldowns.get(batch.conversationKey) ?? 0;
-      if (Date.now() < cooldownUntil) {
+      if (now < cooldownUntil) {
         return;
       }
-      this.queueNoticeCooldowns.set(batch.conversationKey, Date.now() + QUEUE_NOTICE_COOLDOWN_MS);
+      this.pruneQueueNoticeCooldowns(now);
+      this.queueNoticeCooldowns.set(batch.conversationKey, now + QUEUE_NOTICE_COOLDOWN_MS);
     }
 
     const notice = this.buildQueueNotice(batch.messages, queuedBehindActiveTask);
@@ -274,6 +283,24 @@ export class MessageRouter {
         chatId: batch.chatId,
         error: error instanceof Error ? error.message : String(error),
       });
+    }
+  }
+
+  /**
+   * Bound `queueNoticeCooldowns`: drop expired entries (already inert), then if
+   * still at/over the cap evict oldest-first (Map preserves insertion order).
+   * Called before inserting a new cooldown so the map can never grow unbounded.
+   */
+  private pruneQueueNoticeCooldowns(now: number): void {
+    for (const [key, until] of this.queueNoticeCooldowns) {
+      if (until <= now) {
+        this.queueNoticeCooldowns.delete(key);
+      }
+    }
+    while (this.queueNoticeCooldowns.size >= MAX_QUEUE_NOTICE_COOLDOWNS) {
+      const oldestKey = this.queueNoticeCooldowns.keys().next().value;
+      if (oldestKey === undefined) break;
+      this.queueNoticeCooldowns.delete(oldestKey);
     }
   }
 }
