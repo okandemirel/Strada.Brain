@@ -55,6 +55,21 @@ describe("MatrixChannel", () => {
     expect((channel as any).isAllowedInboundMessage("@alice:example", "!other:example")).toBe(false);
   });
 
+  it("only treats genuinely live timeline events as live (skips backfill/removed/non-live)", () => {
+    const channel = new MatrixChannel("https://matrix.example", "token", "@bot:example", [], [], true);
+    const isLive = (channel as any).isLiveTimelineEvent.bind(channel);
+
+    // Live: flags absent or explicitly live.
+    expect(isLive(false, false, { liveEvent: true })).toBe(true);
+    expect(isLive(false, false, {})).toBe(true);
+    expect(isLive(undefined, undefined, undefined)).toBe(true);
+
+    // Not live: backfill, removal, or explicit non-live flag.
+    expect(isLive(true, false, {})).toBe(false);
+    expect(isLive(false, true, {})).toBe(false);
+    expect(isLive(false, false, { liveEvent: false })).toBe(false);
+  });
+
   it("converts audio timeline events into incoming messages with attachments", async () => {
     const channel = new MatrixChannel("https://matrix.example", "token", "@bot:example", [], [], true);
 

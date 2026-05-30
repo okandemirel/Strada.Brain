@@ -85,14 +85,28 @@ export class MatrixChannel implements IChannelAdapter, IChannelRichMessaging {
 
     const client = this.client as MatrixClientLike;
 
-    client.on("Room.timeline", (event: MatrixEvent) => {
-      if (event.getType() !== "m.room.message") return;
-      const sender = event.getSender();
-      const roomId = event.getRoomId();
-      if (sender === this.userId) return;
-      if (!this.isAllowedInboundMessage(sender, roomId)) return;
-      void this.handleTimelineEvent(event, client);
-    });
+    client.on(
+      "Room.timeline",
+      (
+        event: MatrixEvent,
+        _room: unknown,
+        toStartOfTimeline?: boolean,
+        removed?: boolean,
+        data?: { liveEvent?: boolean },
+      ) => {
+        // Only process live events. matrix-js-sdk re-emits Room.timeline for
+        // backfilled/paginated history (toStartOfTimeline), redaction/removal
+        // re-emits (removed), and flags non-live events via data.liveEvent.
+        // Without this guard, historical messages get reprocessed as if new.
+        if (!this.isLiveTimelineEvent(toStartOfTimeline, removed, data)) return;
+        if (event.getType() !== "m.room.message") return;
+        const sender = event.getSender();
+        const roomId = event.getRoomId();
+        if (sender === this.userId) return;
+        if (!this.isAllowedInboundMessage(sender, roomId)) return;
+        void this.handleTimelineEvent(event, client);
+      },
+    );
 
     await client.startClient({ initialSyncLimit: 0 });
     this.healthy = true;
@@ -343,11 +357,37 @@ export class MatrixChannel implements IChannelAdapter, IChannelRichMessaging {
       emptyAllowlistMode: this.allowOpenAccess ? "open" : "closed",
     });
   }
+
+  /**
+   * True only for live timeline events. Filters out backfilled/paginated
+   * history (toStartOfTimeline), redaction/removal re-emits (removed), and any
+   * event the SDK explicitly flags non-live (data.liveEvent === false).
+   * Defaults to live when the flags are absent (older SDK / synthetic emits),
+   * so real messages are never dropped.
+   */
+  private isLiveTimelineEvent(
+    toStartOfTimeline?: boolean,
+    removed?: boolean,
+    data?: { liveEvent?: boolean },
+  ): boolean {
+    if (toStartOfTimeline || removed) return false;
+    if (data && data.liveEvent === false) return false;
+    return true;
+  }
 }
 
 // Minimal type stubs to avoid hard matrix-js-sdk type dependency
 interface MatrixClientLike {
-  on(event: string, handler: (event: MatrixEvent) => void): void;
+  on(
+    event: string,
+    handler: (
+      event: MatrixEvent,
+      room: unknown,
+      toStartOfTimeline?: boolean,
+      removed?: boolean,
+      data?: { liveEvent?: boolean },
+    ) => void,
+  ): void;
   startClient(opts: { initialSyncLimit: number }): Promise<void>;
   stopClient(): void;
   sendTextMessage(roomId: string, text: string): Promise<void>;
