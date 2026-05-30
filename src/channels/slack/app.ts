@@ -223,6 +223,14 @@ export class SlackChannel implements IChannelAdapter {
       pending.reject(new Error("Channel disconnected"));
     }
 
+    // Reject any still-queued messages. Their enqueueMessage() promise only
+    // settles inside processMessageQueue, which we just stopped by clearing
+    // queueInterval — without this every awaiting caller hangs forever.
+    const queued = this.messageQueue.splice(0, this.messageQueue.length);
+    for (const message of queued) {
+      message.reject(new Error("Channel disconnected"));
+    }
+
     if (this.app) {
       // @ts-expect-error - accessing internal property
       if (this.app.receiver?.stop) {
