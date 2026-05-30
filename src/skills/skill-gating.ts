@@ -65,9 +65,13 @@ export async function checkGates(
   }
 
   // --- skill dependency checks ---
-  if (requires.skills?.length) {
+  // Only enforce skill-to-skill dependencies when the caller actually tracks
+  // active skills. When activeSkillNames is undefined the dependency is
+  // unevaluable, so we must NOT fail it — otherwise every skill declaring
+  // `requires.skills` is permanently blocked (no caller passes the set today).
+  if (requires.skills?.length && activeSkillNames) {
     for (const requiredSkill of requires.skills) {
-      if (!activeSkillNames?.has(requiredSkill)) {
+      if (!activeSkillNames.has(requiredSkill)) {
         reasons.push(`Required skill "${requiredSkill}" is not active`);
       }
     }
