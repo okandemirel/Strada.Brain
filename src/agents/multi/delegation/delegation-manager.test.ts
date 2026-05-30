@@ -470,6 +470,90 @@ describe("DelegationManager", () => {
     });
   });
 
+  // Regression: per-attempt concurrency-slot ownership. Slots are reserved in
+  // prepareRequest / re-acquired for escalation and released by
+  // executeWithEscalation's per-attempt finally — exactly once, regardless of
+  // setup throws, sibling delegations, or cancellation. A leaked or
+  // double-released slot eventually wedges (or over-admits) a parent's delegation.
+  describe("concurrency slot accounting (Series 3 H13/H14/M17)", () => {
+    const slots = (): Map<string, number> =>
+      (manager as unknown as { parentConcurrency: Map<string, number> }).parentConcurrency;
+    const active = (): Map<string, { parentAgentId: string }> =>
+      (manager as unknown as { activeDelegations: Map<string, { parentAgentId: string }> }).activeDelegations;
+    const addSibling = (id: string): void => {
+      slots().set(PARENT_AGENT_ID, (slots().get(PARENT_AGENT_ID) ?? 0) + 1);
+      active().set(id, {
+        abortController: new AbortController(),
+        logId: 0,
+        parentAgentId: PARENT_AGENT_ID,
+        type: "code_review",
+        startedAt: Date.now(),
+      } as never);
+    };
+    const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
+    const request = (mode: "sync" | "async"): DelegationRequest => ({
+      type: "code_review",
+      task: "x",
+      parentAgentId: PARENT_AGENT_ID,
+      depth: 0,
+      mode,
+      toolContext: TEST_TOOL_CONTEXT,
+    });
+
+    // H13: delegateAsync swallows the rejection; without per-attempt release the
+    // slot reserved before the setup throw leaks.
+    it("releases the slot when delegateAsync setup throws (H13)", async () => {
+      vi.mocked(createProvider).mockImplementation(() => {
+        throw new Error("missing provider credentials");
+      });
+
+      await manager.delegateAsync(request("async"));
+      await flush();
+
+      expect(slots().get(PARENT_AGENT_ID) ?? 0).toBe(0);
+    });
+
+    // H14: a parent-wide existence guard would see the live sibling and skip the
+    // failed delegation's release, leaking its slot.
+    it("releases only its own slot when a setup-throwing delegate has a live sibling (H14)", async () => {
+      addSibling("sibling-1");
+      vi.mocked(createProvider).mockImplementation(() => {
+        throw new Error("missing provider credentials");
+      });
+
+      await expect(manager.delegate(request("sync"))).rejects.toThrow();
+
+      expect(slots().get(PARENT_AGENT_ID)).toBe(1); // sibling slot preserved, no leak
+      expect(active().has("sibling-1")).toBe(true);
+    });
+
+    // M17: cancelDelegation + the unwinding executeSingleDelegation must not both
+    // decrement. With a live sibling, a double release would drop below 1.
+    it("releases a cancelled delegation's slot exactly once, even with a sibling (M17)", async () => {
+      addSibling("sibling-1");
+
+      let rejectExec: (e: Error) => void = () => {};
+      orchestratorHandleMessage.mockImplementation(
+        () => new Promise<void>((_resolve, reject) => {
+          rejectExec = reject;
+        }),
+      );
+
+      await manager.delegateAsync(request("async"));
+      await flush(); // register + reach the hung execution
+
+      const subId = [...active().keys()].find((k) => k !== "sibling-1");
+      expect(subId).toBeDefined();
+      expect(slots().get(PARENT_AGENT_ID)).toBe(2);
+
+      manager.cancelDelegation(subId as string);
+      rejectExec(new Error("aborted")); // the hung execution unwinds on abort
+      await flush();
+
+      expect(slots().get(PARENT_AGENT_ID)).toBe(1); // exactly one release
+    });
+  });
+
   describe("timeout", () => {
     it("times out via AbortController and cleans up sub-agent", async () => {
       // Use a local_task (local tier -- no escalation) with very short timeout

@@ -174,16 +174,10 @@ export class DelegationManager {
    */
   async delegate(request: DelegationRequest): Promise<DelegationResult> {
     const { typeConfig, effectiveTier } = this.prepareRequest(request);
-    try {
-      return await this.executeWithEscalation(request, typeConfig, effectiveTier);
-    } catch (error) {
-      // Release concurrency slot if executeWithEscalation fails before
-      // executeSingleDelegation's finally block handles cleanup
-      if (!this.hasActiveForParent(request.parentAgentId)) {
-        this.decrementConcurrency(request.parentAgentId);
-      }
-      throw error;
-    }
+    // The concurrency slot reserved by prepareRequest is released inside
+    // executeWithEscalation's per-attempt finally, so no compensation is needed
+    // here (and adding any would double-release).
+    return await this.executeWithEscalation(request, typeConfig, effectiveTier);
   }
 
   /**
@@ -208,7 +202,10 @@ export class DelegationManager {
 
     delegation.abortController.abort();
     this.opts.delegationLog.cancel(delegation.logId);
-    this.cleanup(subAgentId, delegation.parentAgentId);
+    // Remove the active entry now; the slot is released when the aborted
+    // executeSingleDelegation unwinds through executeWithEscalation's finally,
+    // so cancelDelegation must NOT decrement (that would double-release).
+    this.cleanup(subAgentId);
   }
 
   /**
@@ -305,8 +302,17 @@ export class DelegationManager {
     typeConfig: DelegationTypeConfig,
     tier: ModelTier,
   ): Promise<DelegationResult> {
+    // Attempt 1 — slot reserved by prepareRequest. The inner finally releases it
+    // exactly once whether the attempt returns, throws during execution, or
+    // throws during setup before executeSingleDelegation's own try is reached —
+    // so no caller (delegate/delegateAsync) and no sibling-sensitive guard is
+    // needed to compensate.
     try {
-      return await this.executeSingleDelegation(request, typeConfig, tier);
+      try {
+        return await this.executeSingleDelegation(request, typeConfig, tier);
+      } finally {
+        this.decrementConcurrency(request.parentAgentId);
+      }
     } catch (error) {
       // Do not escalate aborted/cancelled/timed-out delegations
       if (
@@ -321,21 +327,13 @@ export class DelegationManager {
         throw error;
       }
 
-      // Re-acquire concurrency slot for escalation retry
-      // (the first slot was released in executeSingleDelegation's finally block)
+      // Escalate: retry with the next tier on a freshly reserved slot, released
+      // by its own finally regardless of outcome.
       this.acquireConcurrencySlot(request.parentAgentId);
-
-      // Escalate: retry with next tier — guarantee slot release on failure
       try {
         return await this.executeSingleDelegation(request, typeConfig, nextTier, tier);
-      } catch (escalationError) {
-        // executeSingleDelegation's finally block handles cleanup for its own
-        // activeDelegations entry, but if it throws before registering we must
-        // still release the concurrency slot we just acquired.
-        if (!this.hasActiveForParent(request.parentAgentId)) {
-          this.decrementConcurrency(request.parentAgentId);
-        }
-        throw escalationError;
+      } finally {
+        this.decrementConcurrency(request.parentAgentId);
       }
     }
   }
@@ -592,7 +590,7 @@ export class DelegationManager {
     } finally {
       clearTimeout(timeoutId);
       await workspaceLease?.release().catch(() => {});
-      this.cleanup(subAgentId, request.parentAgentId);
+      this.cleanup(subAgentId);
     }
   }
 
@@ -883,9 +881,11 @@ export class DelegationManager {
     this.parentConcurrency.set(parentAgentId, Math.max(0, current - 1));
   }
 
-  private cleanup(subAgentId: string, parentAgentId: string): void {
+  private cleanup(subAgentId: string): void {
+    // Remove the active-delegation entry only. The concurrency slot is owned and
+    // released by executeWithEscalation's per-attempt finally; releasing it here
+    // too would double-decrement.
     this.activeDelegations.delete(subAgentId);
-    this.decrementConcurrency(parentAgentId);
   }
 
   private buildSubAgentTools(_currentDepth: number): ITool[] {
@@ -893,18 +893,6 @@ export class DelegationManager {
     // parentAgentId and depth. Fresh delegation tools for the sub-agent are
     // created by the delegation factory in AgentManager if depth allows.
     return this.opts.parentTools.filter((t) => !t.name.startsWith("delegate_"));
-  }
-
-  /**
-   * Check if any active delegation exists for the given parent.
-   * Used to avoid double-decrement when prepareRequest reserved a slot
-   * but executeSingleDelegation's cleanup already released it.
-   */
-  private hasActiveForParent(parentAgentId: string): boolean {
-    for (const d of this.activeDelegations.values()) {
-      if (d.parentAgentId === parentAgentId) return true;
-    }
-    return false;
   }
 
   /**
