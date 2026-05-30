@@ -20,6 +20,10 @@ vi.mock("../../utils/media-processor.js", () => ({
   validateMagicBytes: () => true,
 }));
 
+vi.mock("../../utils/logger.js", () => ({
+  getLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
+}));
+
 describe("TeamsChannel", () => {
   it("denies inbound users by default when no allowlist is configured", () => {
     const channel = new TeamsChannel("app-id", "app-password");
@@ -38,6 +42,39 @@ describe("TeamsChannel", () => {
 
     expect((channel as any).isAllowedInboundUser("user-1")).toBe(true);
     expect((channel as any).isAllowedInboundUser("user-3")).toBe(false);
+  });
+
+  // Regression: a throw from adapter.process (auth/JWT failure, malformed
+  // activity on the public /api/messages endpoint) must not escape as an
+  // unhandledRejection — the global handler in src/index.ts would otherwise
+  // shut the whole daemon down (remote DoS).
+  it("swallows an adapter.process rejection and closes the response with 500", async () => {
+    const channel = new TeamsChannel("app-id", "app-password", 3978, [], "127.0.0.1", true);
+    const process = vi.fn().mockRejectedValue(new Error("auth verification failed"));
+    (channel as any).adapter = { process };
+    const writeHead = vi.fn();
+    const end = vi.fn();
+    const res = { headersSent: false, writeHead, end };
+
+    await expect(
+      (channel as any).handleRequest({ method: "POST", url: "/api/messages" }, res),
+    ).resolves.toBeUndefined();
+    expect(process).toHaveBeenCalled();
+    expect(writeHead).toHaveBeenCalledWith(500);
+    expect(end).toHaveBeenCalled();
+  });
+
+  it("responds 404 to non-/api/messages requests", async () => {
+    const channel = new TeamsChannel("app-id", "app-password");
+    const writeHead = vi.fn();
+    const end = vi.fn();
+
+    await (channel as any).handleRequest(
+      { method: "GET", url: "/" },
+      { headersSent: false, writeHead, end },
+    );
+    expect(writeHead).toHaveBeenCalledWith(404);
+    expect(end).toHaveBeenCalled();
   });
 
   it("uses the active Teams turn context to send replies during a conversation", async () => {

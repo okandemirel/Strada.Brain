@@ -80,8 +80,31 @@ export class TeamsChannel implements IChannelAdapter {
 
     // Create HTTP server for Bot Framework messages
     const { createServer } = await import("node:http");
-    this.server = createServer(async (req, res) => {
-      if (req.method === "POST" && req.url === "/api/messages") {
+    this.server = createServer((req, res) => {
+      void this.handleRequest(req, res);
+    });
+
+    await new Promise<void>((resolve) => {
+      this.server!.listen(this.port, this.listenHost, () => resolve());
+    });
+
+    this.healthy = true;
+    logger.info("Teams channel listening", { port: this.port, host: this.listenHost });
+  }
+
+  /**
+   * Handle one inbound Bot Framework HTTP request. A throw from adapter.process
+   * (auth/JWT verification failure, malformed activity) on the public
+   * /api/messages endpoint must NOT escape: an unhandledRejection here trips the
+   * global handler in src/index.ts and shuts the whole daemon down (remote DoS).
+   * Catch it, log, and always close the socket.
+   */
+  private async handleRequest(
+    req: import("node:http").IncomingMessage,
+    res: import("node:http").ServerResponse,
+  ): Promise<void> {
+    if (req.method === "POST" && req.url === "/api/messages") {
+      try {
         await (this.adapter as BotAdapterLike).process(req, res, async (context: TurnContextLike) => {
           if (context.activity.type === "message") {
             if (!this.isAllowedInboundUser(context.activity.from.id)) {
@@ -132,18 +155,19 @@ export class TeamsChannel implements IChannelAdapter {
             }
           }
         });
-      } else {
-        res.writeHead(404);
+      } catch (err) {
+        getLogger().error("Teams request processing failed", {
+          error: err instanceof Error ? err.message : String(err),
+        });
+        if (!res.headersSent) {
+          res.writeHead(500);
+        }
         res.end();
       }
-    });
-
-    await new Promise<void>((resolve) => {
-      this.server!.listen(this.port, this.listenHost, () => resolve());
-    });
-
-    this.healthy = true;
-    logger.info("Teams channel listening", { port: this.port, host: this.listenHost });
+    } else {
+      res.writeHead(404);
+      res.end();
+    }
   }
 
   async disconnect(): Promise<void> {
