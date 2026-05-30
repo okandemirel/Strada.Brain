@@ -3,7 +3,7 @@ import type { VaultSymbol, VaultWikilink } from '../vault.interface.js';
 
 const WIKILINK_RE = /\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g;
 const FENCE_RE = /```[\s\S]*?```/g;
-const FRONTMATTER_RE = /^---\n([\s\S]*?)\n---/;
+const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---/;
 const TAG_RE = /(?:^|\s)(#[\w\-/]+)/g;
 
 function parseFrontmatter(content: string): Record<string, string> | undefined {
