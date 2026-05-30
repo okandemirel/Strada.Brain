@@ -85,3 +85,11 @@ describe("buildCanvas edge/node fidelity", () => {
     expect(JSON.stringify(buildCanvas(args))).toBe(JSON.stringify(buildCanvas(args)));
   });
 });
+
+describe("buildCanvas symbol-graph group is the full parent dir (consistent with file graph)", () => {
+  it("uses the full directory path, not just the first two segments", () => {
+    const symbols: VaultSymbol[] = [symbol(0, "a/b/c/Foo.cs"), symbol(1, "a/b/c/Bar.cs")];
+    const canvas = buildCanvas({ symbols, edges: [], files: [file("a/b/c/Foo.cs"), file("a/b/c/Bar.cs")], wikilinks: [] });
+    expect(canvas.nodes.every((n) => n.group === "a/b/c")).toBe(true);
+  });
+});

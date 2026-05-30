@@ -169,7 +169,9 @@ function buildSymbolGraph(
     const file = files[col]!;
     const syms = byFile.get(file)!.slice().sort((a, b) => a.startLine - b.startLine);
     const color = LANG_COLORS[syms[0]?.kind ?? 'unknown'] ?? LANG_COLORS.unknown;
-    const group = file.split('/').slice(0, 2).join('/');
+    // Full parent dir — same `group` semantics as the file graph (was the first
+    // two segments only), so the folder-color key is consistent across graphs.
+    const group = file.split('/').slice(0, -1).join('/') || '/';
 
     for (let row = 0; row < syms.length; row++) {
       const s = syms[row]!;
