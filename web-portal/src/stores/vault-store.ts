@@ -20,13 +20,17 @@ export interface SearchHit {
   scores: { fts: number | null; hnsw: number | null; rrf: number };
 }
 
+export type CanvasSide = 'top' | 'right' | 'bottom' | 'left';
 export interface CanvasNode {
-  id: string; type: 'text'; text: string;
+  id: string; type: 'text' | 'file'; text: string;
   x: number; y: number; width: number; height: number;
   color?: string; file?: string; kind?: string;
   weight?: number; group?: string;
 }
-export interface CanvasEdge { id: string; fromNode: string; toNode: string; label?: string; }
+export interface CanvasEdge {
+  id: string; fromNode: string; toNode: string;
+  fromSide?: CanvasSide; toSide?: CanvasSide; color?: string; label?: string;
+}
 export interface CanvasJson { nodes: CanvasNode[]; edges: CanvasEdge[]; }
 
 // Mirrors backend src/vault/vault.interface.ts `SymbolKind`.

@@ -17,7 +17,7 @@ function sanitizeCanvas(raw: unknown): CanvasJson {
     if (!n?.id) continue;
     nodes.push({
       id: n.id,
-      type: 'text',
+      type: n.type === 'file' ? 'file' : 'text',
       text: n.text ?? '',
       x: n.x ?? 0,
       y: n.y ?? 0,
@@ -32,9 +32,18 @@ function sanitizeCanvas(raw: unknown): CanvasJson {
   }
   const ids = new Set(nodes.map((n) => n.id));
   const edges: CanvasEdge[] = [];
+  const SIDES = new Set(['top', 'right', 'bottom', 'left']);
   for (const e of (src.edges ?? []) as Partial<CanvasEdge>[]) {
     if (!e?.id || !ids.has(e.fromNode!) || !ids.has(e.toNode!)) continue;
-    edges.push({ id: e.id, fromNode: e.fromNode!, toNode: e.toNode!, label: e.label });
+    edges.push({
+      id: e.id,
+      fromNode: e.fromNode!,
+      toNode: e.toNode!,
+      fromSide: SIDES.has(e.fromSide as string) ? e.fromSide : undefined,
+      toSide: SIDES.has(e.toSide as string) ? e.toSide : undefined,
+      color: typeof e.color === 'string' ? e.color : undefined,
+      label: e.label,
+    });
   }
   return { nodes, edges };
 }
