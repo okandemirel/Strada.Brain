@@ -63,13 +63,27 @@ describe('SqliteVaultStore — Phase 2 tables', () => {
     expect(store.listWikilinksTo('n2.md')[0]!.resolved).toBe(true);
   });
 
-  it('updateWikilinkTarget changes target and marks resolved', () => {
+  it('updateWikilinkTarget changes target, marks resolved, and preserves the original token', () => {
     store.upsertWikilink({ fromNote: 'n1.md', target: 'n2', resolved: false });
-    store.updateWikilinkTarget('n1.md', 'n2', 'folder/n2.md');
+    store.updateWikilinkTarget('n1.md', 'n2', 'folder/n2.md', 'n2');
     expect(store.listWikilinksTo('n2')).toHaveLength(0);
     const resolved = store.listWikilinksTo('folder/n2.md');
     expect(resolved).toHaveLength(1);
     expect(resolved[0]!.target).toBe('folder/n2.md');
     expect(resolved[0]!.resolved).toBe(true);
+    // The raw authored token is preserved so a later rename can re-resolve.
+    expect(resolved[0]!.originalTarget).toBe('n2');
+  });
+
+  it('updateWikilinkTarget re-resolves to a new path while keeping the original token', () => {
+    store.upsertWikilink({ fromNote: 'n1.md', target: 'n2', resolved: false });
+    store.updateWikilinkTarget('n1.md', 'n2', 'folder/n2.md', 'n2');
+    // Target renamed folder/n2.md -> archive/n2.md: re-resolve from the token 'n2'.
+    store.updateWikilinkTarget('n1.md', 'folder/n2.md', 'archive/n2.md', 'n2');
+    expect(store.listWikilinksTo('folder/n2.md')).toHaveLength(0);
+    const reresolved = store.listWikilinksTo('archive/n2.md');
+    expect(reresolved).toHaveLength(1);
+    expect(reresolved[0]!.target).toBe('archive/n2.md');
+    expect(reresolved[0]!.originalTarget).toBe('n2');
   });
 });

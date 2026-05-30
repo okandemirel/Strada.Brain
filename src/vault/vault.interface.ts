@@ -74,6 +74,13 @@ export interface VaultWikilink {
   fromNote: string;
   target: string;
   resolved: boolean;
+  /**
+   * Raw authored token (e.g. "B" for [[B]]). Preserved when `target` is
+   * rewritten to the resolved path so the link can re-resolve after a target
+   * rename. Null/undefined for unresolved links (the token is still `target`)
+   * and for rows written before this column existed.
+   */
+  originalTarget?: string | null;
 }
 
 export interface IVault {

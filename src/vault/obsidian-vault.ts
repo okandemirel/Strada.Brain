@@ -518,11 +518,21 @@ export class ObsidianVault implements IVault {
     const basenameMap = this.buildWikilinkBasenameMap();
     const wikilinks = this.store.listWikilinks();
     for (const w of wikilinks) {
-      if (w.resolved) continue;
-      const resolvedPath = this.resolveWikilinkTarget(w.target, basenameMap);
-      if (!resolvedPath) continue;
       const fromNote = canonicalizePath(w.fromNote);
-      this.store.updateWikilinkTarget(fromNote, w.target, resolvedPath);
+      if (!w.resolved) {
+        // Unresolved: the raw token is still in `target`. Resolve and preserve it.
+        const resolvedPath = this.resolveWikilinkTarget(w.target, basenameMap);
+        if (!resolvedPath) continue;
+        this.store.updateWikilinkTarget(fromNote, w.target, resolvedPath, w.target);
+        continue;
+      }
+      // Resolved: re-resolve from the preserved original token so a target
+      // rename re-points the link. Old rows (no original_target) fall back to
+      // the resolved target, which still re-resolves via the basename map.
+      const originalToken = w.originalTarget ?? w.target;
+      const rePath = this.resolveWikilinkTarget(originalToken, basenameMap);
+      if (!rePath || rePath === w.target) continue; // unresolvable now, or unchanged
+      this.store.updateWikilinkTarget(fromNote, w.target, rePath, originalToken);
     }
   }
 

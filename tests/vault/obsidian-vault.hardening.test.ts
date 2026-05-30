@@ -298,6 +298,38 @@ describe('ObsidianVault — hardening (P0/P1/P2)', () => {
     });
   });
 
+  // ─────────────── wikilink re-resolution after a target rename ───────────────
+  describe('wikilink re-resolution: a renamed target re-points the link via the preserved token', () => {
+    it('moves [[B]] from B.md to sub/B.md after the target is relocated', async () => {
+      writeFileSync(join(dir, 'A.md'), '# A\n\nlink to [[B]] here');
+      writeFileSync(join(dir, 'B.md'), '# B\n\noriginal location');
+      ({ vault, store: vectorStore } = newVault(dir));
+      await vault.init();
+
+      // Initially [[B]] resolves to B.md, with the raw token 'B' preserved.
+      const before = await vault.listBacklinks?.('B.md');
+      const link = before?.wikilinks.find((w) => w.fromNote === 'A.md');
+      expect(link?.resolved).toBe(true);
+      expect(link?.target).toBe('B.md');
+      expect(link?.originalTarget).toBe('B');
+
+      // Relocate the target: delete B.md, create sub/B.md (basename 'B' unchanged).
+      rmSync(join(dir, 'B.md'));
+      mkdirSync(join(dir, 'sub'), { recursive: true });
+      writeFileSync(join(dir, 'sub', 'B.md'), '# B\n\nnew location');
+      await vault.sync();
+
+      // The link re-resolved to sub/B.md using the preserved token — impossible
+      // with the old code, which overwrote the token with the resolved path.
+      expect((await vault.listBacklinks?.('B.md'))?.wikilinks.length ?? 0).toBe(0);
+      const after = await vault.listBacklinks?.('sub/B.md');
+      const moved = after?.wikilinks.find((w) => w.fromNote === 'A.md');
+      expect(moved?.resolved).toBe(true);
+      expect(moved?.target).toBe('sub/B.md');
+      expect(moved?.originalTarget).toBe('B');
+    });
+  });
+
   // ─────────────── deleteNote: incremental index cleanup ───────────────
   describe('deleteNote removes index rows + HNSW vectors without a full sync', () => {
     it('drops the deleted note and its vectors immediately, and a later sync finds nothing to prune', async () => {
