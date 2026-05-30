@@ -1,4 +1,5 @@
 import { useTranslation } from 'react-i18next'
+import { PageEmptyState } from "../components/ui/page-empty-state"
 import { formatTimeAgo } from '../utils/format'
 import { useSessions, useMetrics, useAgents } from '../hooks/use-api'
 import { PageSkeleton } from '../components/ui/page-skeleton'
@@ -64,14 +65,9 @@ export default function SessionsPage() {
       <div className="mb-7">
         <div className="text-xs font-semibold uppercase tracking-[0.04em] text-text-tertiary mb-3.5 flex items-center gap-2">{t('sessions.activeSessionsList', { count: sessions.length })}</div>
         {sessions.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-[200px] gap-2.5 text-text-secondary text-center">
-            <h3 className="text-text text-lg font-semibold">{t('sessions.noActiveTitle')}</h3>
-            <p className="text-sm max-w-[400px]">
-              {metrics
+          <PageEmptyState title={t('sessions.noActiveTitle')} description={metrics
                 ? t('sessions.noActiveWithMetrics')
-                : t('sessions.noActiveNoServer')}
-            </p>
-          </div>
+                : t('sessions.noActiveNoServer')} />
         ) : (
           <div className="flex flex-col gap-2">
             {sessions.map(s => (

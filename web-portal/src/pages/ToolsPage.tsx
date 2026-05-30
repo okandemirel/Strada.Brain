@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { PageEmptyState } from "../components/ui/page-empty-state"
 import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
 import { useTools, useMetrics } from '../hooks/use-api'
@@ -241,10 +242,7 @@ export default function ToolsPage() {
     return (
       <div className="h-full overflow-y-auto p-7 w-full animate-[admin-fade-in_0.3s_ease]">
         <h2 className="text-[22px] font-bold tracking-tight mb-6 text-text">{t('tools.title')}</h2>
-        <div className="flex flex-col items-center justify-center h-[200px] gap-2.5 text-text-secondary text-center">
-          <h3 className="text-text text-lg font-semibold">{t('tools.noToolsTitle')}</h3>
-          <p className="text-sm max-w-[400px]">{t('tools.noToolsDescription')}</p>
-        </div>
+        <PageEmptyState title={t('tools.noToolsTitle')} description={t('tools.noToolsDescription')} />
       </div>
     )
   }

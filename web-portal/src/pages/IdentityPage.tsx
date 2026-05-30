@@ -1,4 +1,5 @@
 import { useTranslation } from 'react-i18next'
+import { PageEmptyState } from "../components/ui/page-empty-state"
 import { formatUptime } from '../utils/format'
 import { useDaemon, useMetrics } from '../hooks/use-api'
 import { PageSkeleton } from '../components/ui/page-skeleton'
@@ -81,10 +82,7 @@ export default function IdentityPage() {
             </div>
           </div>
         ) : (
-          <div className="flex flex-col items-center justify-center h-[200px] gap-2.5 text-text-secondary text-center">
-            <h3 className="text-text text-lg font-semibold">{t_i18n('identity.noIdentityTitle')}</h3>
-            <p className="text-sm max-w-[400px]">{t_i18n('identity.noIdentityDescription')}</p>
-          </div>
+          <PageEmptyState title={t_i18n('identity.noIdentityTitle')} description={t_i18n('identity.noIdentityDescription')} />
         )}
       </div>
 

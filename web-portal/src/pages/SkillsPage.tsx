@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
+import { PageEmptyState } from "../components/ui/page-empty-state"
 import { useTranslation } from 'react-i18next'
 import { useQueryClient } from '@tanstack/react-query'
 import { useSkills, useSkillRegistry } from '../hooks/use-api'
@@ -131,12 +132,7 @@ function InstalledTab() {
 
   if (skills.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center h-[200px] gap-2.5 text-text-secondary text-center">
-        <h3 className="text-text text-lg font-semibold">{t('skills.installed.noSkillsTitle')}</h3>
-        <p className="text-sm max-w-[400px]">
-          {t('skills.installed.noSkillsDescription')}
-        </p>
-      </div>
+      <PageEmptyState title={t('skills.installed.noSkillsTitle')} description={t('skills.installed.noSkillsDescription')} />
     )
   }
 
@@ -323,14 +319,9 @@ function MarketplaceTab() {
       {data && !isLoading && (
         <>
           {data.skills.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-[200px] gap-2.5 text-text-secondary text-center">
-              <h3 className="text-text text-lg font-semibold">{t('skills.marketplace.noSkillsTitle')}</h3>
-              <p className="text-sm max-w-[400px]">
-                {debouncedSearch
+            <PageEmptyState title={t('skills.marketplace.noSkillsTitle')} description={debouncedSearch
                   ? t('skills.marketplace.noSkillsSearchDescription', { query: debouncedSearch })
-                  : t('skills.marketplace.noSkillsEmptyDescription')}
-              </p>
-            </div>
+                  : t('skills.marketplace.noSkillsEmptyDescription')} />
           ) : (
             <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-4">
               {data.skills.map((skill) => (

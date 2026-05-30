@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { PageEmptyState } from "../components/ui/page-empty-state"
 import { useTranslation } from 'react-i18next'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { usePersonality } from '../hooks/use-api'
@@ -88,10 +89,7 @@ export default function PersonalityPage() {
       )}
 
       {fetchError && !data ? (
-        <div className="flex flex-col items-center justify-center h-[200px] gap-2.5 text-text-secondary text-center">
-          <h3 className="text-text text-lg font-semibold">{t('personality.unavailableTitle')}</h3>
-          <p className="text-sm max-w-[400px]">{t('personality.unavailableDescription')}</p>
-        </div>
+        <PageEmptyState title={t('personality.unavailableTitle')} description={t('personality.unavailableDescription')} />
       ) : (
         <>
           <div className="mb-7">
@@ -218,10 +216,7 @@ export default function PersonalityPage() {
           </div>
 
           {!data?.content && !data?.profiles?.length && (
-            <div className="flex flex-col items-center justify-center h-[200px] gap-2.5 text-text-secondary text-center">
-              <h3 className="text-text text-lg font-semibold">{t('personality.noDataTitle')}</h3>
-              <p className="text-sm max-w-[400px]">{t('personality.noDataDescription')}</p>
-            </div>
+            <PageEmptyState title={t('personality.noDataTitle')} description={t('personality.noDataDescription')} />
           )}
         </>
       )}
