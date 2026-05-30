@@ -47,6 +47,38 @@ describe("LearningPipeline", () => {
       expect(() => pipeline.start()).not.toThrow();
       pipeline.stop();
     });
+
+    // Regression: timer-callback errors must never escape to the process. An
+    // unguarded throw/rejection in a setInterval callback triggers the global
+    // uncaughtException/unhandledRejection handler in src/index.ts, which shuts
+    // the whole daemon down.
+    it("isolates async periodic-extraction rejections so a timer tick cannot crash the daemon", async () => {
+      vi.spyOn(
+        pipeline as unknown as { runPeriodicExtraction: () => Promise<void> },
+        "runPeriodicExtraction",
+      ).mockRejectedValue(new Error("boom"));
+
+      // The tick must swallow the rejection: its returned promise resolves, so
+      // the setInterval callback never produces an unhandled rejection (which
+      // would trip the global handler and shut the daemon down). Without the
+      // internal .catch() this promise rejects and the assertion fails.
+      await expect(
+        (pipeline as unknown as { tickPeriodicExtraction: () => Promise<void> }).tickPeriodicExtraction(),
+      ).resolves.toBeUndefined();
+    });
+
+    it("isolates synchronous evolution throws so a timer tick cannot crash the daemon", () => {
+      vi.spyOn(
+        pipeline as unknown as { runEvolution: () => unknown },
+        "runEvolution",
+      ).mockImplementation(() => {
+        throw new Error("boom");
+      });
+
+      expect(() =>
+        (pipeline as unknown as { tickEvolution: () => void }).tickEvolution(),
+      ).not.toThrow();
+    });
   });
 
   describe("observeToolUse", () => {
