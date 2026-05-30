@@ -122,7 +122,23 @@ export class IRCChannel implements IChannelAdapter {
 
     this.client.addListener("error", ((...args: unknown[]) => {
       const err = args[0] as Error;
+      this.healthy = false;
       logger.warn("IRC error", { error: err.message });
+    }) as (...args: unknown[]) => void);
+
+    // Connection-loss events: socket failures (netError) and exhausted reconnect
+    // retries (abort) must flip healthy=false so isHealthy() stops reporting a
+    // dead link as up. A successful reconnect re-emits "registered", which sets
+    // healthy=true again, so health self-heals.
+    this.client.addListener("netError", ((...args: unknown[]) => {
+      const err = args[0] as Error | undefined;
+      this.healthy = false;
+      logger.warn("IRC netError", { error: err?.message ?? "socket error" });
+    }) as (...args: unknown[]) => void);
+
+    this.client.addListener("abort", (() => {
+      this.healthy = false;
+      logger.warn("IRC connection aborted (retries exhausted)");
     }) as (...args: unknown[]) => void);
   }
 
