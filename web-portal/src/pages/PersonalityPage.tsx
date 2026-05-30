@@ -4,6 +4,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { usePersonality } from '../hooks/use-api'
 import { useWS } from '../hooks/useWS'
 import { PageSkeleton } from '../components/ui/page-skeleton'
+import { Dialog, DialogContent, DialogTitle, DialogDescription } from '../components/ui/dialog'
 
 const SYSTEM_PROFILES = new Set(['default', 'casual', 'formal', 'minimal'])
 const PROFILE_NAME_RE = /^[a-zA-Z0-9_-]+$/
@@ -31,6 +32,7 @@ export default function PersonalityPage() {
   const [newName, setNewName] = useState('')
   const [newContent, setNewContent] = useState(PROFILE_TEMPLATE)
   const [createError, setCreateError] = useState<string | null>(null)
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null)
 
   const switchMutation = useMutation({
     mutationFn: async (profile: string) => {
@@ -60,7 +62,7 @@ export default function PersonalityPage() {
   })
 
   const handleSwitch = (profile: string) => { switchMutation.mutate(profile) }
-  const handleDelete = (name: string) => { if (!confirm(t('personality.deleteConfirm', { name }))) return; deleteMutation.mutate(name) }
+  const handleDelete = (name: string) => { setPendingDelete(name) }
 
   const handleCreate = () => {
     setCreateError(null)
@@ -223,6 +225,31 @@ export default function PersonalityPage() {
           )}
         </>
       )}
+
+      <Dialog open={pendingDelete !== null} onOpenChange={(open) => { if (!open) setPendingDelete(null) }}>
+        <DialogContent className="max-w-sm">
+          <DialogTitle className="mb-1">{t('personality.delete')}</DialogTitle>
+          <DialogDescription className="mb-4">
+            {pendingDelete ? t('personality.deleteConfirm', { name: pendingDelete }) : ''}
+          </DialogDescription>
+          <div className="flex items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setPendingDelete(null)}
+              className="px-3 py-1.5 rounded-md text-xs border border-[var(--color-border-subtle)] text-text-secondary hover:bg-[var(--color-surface-hover)]"
+            >
+              {t('ui.cancel', { ns: 'common' })}
+            </button>
+            <button
+              type="button"
+              onClick={() => { const n = pendingDelete; setPendingDelete(null); if (n) deleteMutation.mutate(n) }}
+              className="px-3 py-1.5 rounded-md text-xs font-medium bg-[var(--color-error)] text-white hover:opacity-90"
+            >
+              {t('personality.delete')}
+            </button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
