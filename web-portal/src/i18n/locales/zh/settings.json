@@ -1,4 +1,6 @@
 {
+  "section.errorTitle": "无法加载此部分",
+  "section.errorFallback": "加载时出错，请重试。",
   "hub.title": "设置",
   "hub.loading": "加载中...",
   "hub.tabs.budget": "预算",

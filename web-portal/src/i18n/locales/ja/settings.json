@@ -1,4 +1,6 @@
 {
+  "section.errorTitle": "このセクションを読み込めませんでした",
+  "section.errorFallback": "読み込み中にエラーが発生しました。もう一度お試しください。",
   "hub.title": "設定",
   "hub.loading": "読み込み中...",
   "hub.tabs.budget": "予算",

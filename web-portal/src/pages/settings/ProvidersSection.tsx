@@ -6,12 +6,13 @@ import { useProviders, useRagStatus } from '../../hooks/use-api'
 import { useWS } from '../../hooks/useWS'
 import { resolveSettingsIdentity } from '../settings-identity'
 import PrimaryWorkerSelector from '../../components/PrimaryWorkerSelector'
+import { PageError } from '../../components/ui/page-error'
 
 export default function ProvidersSection() {
   const { t } = useTranslation('settings')
   const { sessionId, profileId } = useWS()
   const identity = resolveSettingsIdentity(sessionId, profileId)
-  const { data: providers } = useProviders(identity?.query ?? null)
+  const { data: providers, error } = useProviders(identity?.query ?? null)
   const { data: ragData } = useRagStatus()
   const queryClient = useQueryClient()
   const [refreshing, setRefreshing] = useState(false)
@@ -33,6 +34,12 @@ export default function ProvidersSection() {
   const ragStatus = ragData?.status
   const active = providers?.active
   const pool = providers?.executionPool ?? []
+
+  // Only surfaced once the query actually runs (it's disabled until a session
+  // identity exists), so a pre-session render still shows the section chrome.
+  if (error) {
+    return <PageError title={t('section.errorTitle')} message={error instanceof Error ? error.message : t('section.errorFallback')} />
+  }
 
   return (
     <div>

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { PageError } from '../../components/ui/page-error'
 
 interface RateLimitConfig {
   messagesPerMinute: number
@@ -48,10 +49,11 @@ export default function RateLimitsSection() {
   })
   const [saving, setSaving] = useState(false)
   const [loaded, setLoaded] = useState(false)
+  const [error, setError] = useState(false)
 
   useEffect(() => {
     fetch('/api/settings/rate-limits')
-      .then((r) => r.ok ? r.json() : null)
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error('request failed'))))
       .then((d) => {
         if (d) {
           setConfig({
@@ -61,7 +63,9 @@ export default function RateLimitsSection() {
           })
         }
       })
-      .catch(() => {/* use defaults */})
+      // Previously swallowed: a failed load silently showed zeroed defaults,
+      // which look like real config. Surface it instead.
+      .catch(() => setError(true))
       .finally(() => setLoaded(true))
   }, [])
 
@@ -80,6 +84,10 @@ export default function RateLimitsSection() {
     } finally {
       setSaving(false)
     }
+  }
+
+  if (error) {
+    return <PageError title={t('section.errorTitle')} message={t('section.errorFallback')} />
   }
 
   if (!loaded) {

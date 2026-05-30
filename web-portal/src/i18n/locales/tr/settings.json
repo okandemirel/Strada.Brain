@@ -1,4 +1,6 @@
 {
+  "section.errorTitle": "Bu bölüm yüklenemedi",
+  "section.errorFallback": "Yüklenirken bir hata oluştu. Lütfen tekrar deneyin.",
   "hub.title": "Ayarlar",
   "hub.loading": "Yükleniyor...",
   "hub.tabs.budget": "Bütçe",

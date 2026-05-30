@@ -1,4 +1,6 @@
 {
+  "section.errorTitle": "Couldn’t load this section",
+  "section.errorFallback": "Something went wrong while loading. Please try again.",
   "hub.title": "Settings",
   "hub.loading": "Loading...",
   "hub.tabs.budget": "Budget",

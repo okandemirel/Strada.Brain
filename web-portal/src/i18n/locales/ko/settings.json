@@ -1,4 +1,6 @@
 {
+  "section.errorTitle": "이 섹션을 불러올 수 없습니다",
+  "section.errorFallback": "불러오는 중 오류가 발생했습니다. 다시 시도해 주세요.",
   "hub.title": "설정",
   "hub.loading": "로딩 중...",
   "hub.tabs.budget": "예산",

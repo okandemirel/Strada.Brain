@@ -1,4 +1,6 @@
 {
+  "section.errorTitle": "Dieser Abschnitt konnte nicht geladen werden",
+  "section.errorFallback": "Beim Laden ist ein Fehler aufgetreten. Bitte versuche es erneut.",
   "hub.title": "Einstellungen",
   "hub.loading": "Wird geladen...",
   "hub.tabs.budget": "Budget",

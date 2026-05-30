@@ -1,4 +1,6 @@
 {
+  "section.errorTitle": "Impossible de charger cette section",
+  "section.errorFallback": "Une erreur s’est produite lors du chargement. Veuillez réessayer.",
   "hub.title": "Parametres",
   "hub.loading": "Chargement...",
   "hub.tabs.budget": "Budget",

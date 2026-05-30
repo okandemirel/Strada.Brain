@@ -4,6 +4,7 @@ import { toast } from 'sonner'
 import { useAgentActivity } from '../../hooks/use-api'
 import { useWS } from '../../hooks/useWS'
 import { resolveSettingsIdentity } from '../settings-identity'
+import { PageError } from '../../components/ui/page-error'
 
 const PRESETS = [
   { id: 'budget', labelKey: 'routing.presetBudget', descKey: 'routing.presetBudgetDesc' },
@@ -24,7 +25,7 @@ export default function RoutingSection() {
   const { t } = useTranslation('settings')
   const { sessionId, profileId } = useWS()
   const identity = resolveSettingsIdentity(sessionId, profileId)
-  const { data: activity } = useAgentActivity(identity?.query ?? null)
+  const { data: activity, error } = useAgentActivity(identity?.query ?? null)
   const [applyingPreset, setApplyingPreset] = useState<PresetId | null>(null)
 
   const activePreset = activity?.preset as PresetId | undefined
@@ -50,6 +51,11 @@ export default function RoutingSection() {
   const execution = activity?.execution?.slice(0, 6) ?? []
   const outcomes = activity?.outcomes?.slice(0, 6) ?? []
   const phaseScores = activity?.phaseScores ?? []
+
+  // Surfaced only once the (identity-gated) query runs and fails.
+  if (error) {
+    return <PageError title={t('section.errorTitle')} message={error instanceof Error ? error.message : t('section.errorFallback')} />
+  }
 
   return (
     <div>
