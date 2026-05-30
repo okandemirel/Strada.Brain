@@ -14,6 +14,7 @@ import { getExtractorFor } from './symbol-extractor/index.js';
 import { buildCanvas } from './canvas-generator.js';
 import { runPpr } from './ppr.js';
 import { getLoggerSafe } from '../utils/logger.js';
+import { AsyncLock } from './async-lock.js';
 import { ObsidianApiClient, type ObsidianApiConfig } from './obsidian-client.js';
 import {
   getIndexableFileInfo,
@@ -69,42 +70,6 @@ function canonicalizePath(path: string): string {
   if (p.startsWith('./')) p = p.slice(2);
   if (p.startsWith('/')) p = p.slice(1);
   return p;
-}
-
-/**
- * Tiny FIFO async lock — serializes async sections per vault instance.
- * Used to prevent concurrent sync()/reindexFile() interleaving from
- * desynchronizing the embedding/edge caches.
- *
- * Re-entrancy guard (debug-time): the lock is NOT re-entrant. If the same
- * call chain tries to acquire the lock while already holding it the result
- * is a deadlock. The `held` flag lets us detect that synchronously and
- * throw a useful error instead of hanging. The check is always on — its
- * cost is a boolean read/write — and only fires for the misuse case.
- */
-class AsyncLock {
-  private tail: Promise<void> = Promise.resolve();
-  private held = false;
-  async run<T>(fn: () => Promise<T>): Promise<T> {
-    if (this.held) {
-      throw new Error(
-        'AsyncLock re-entrancy detected: call chain tried to acquire the vault writeLock ' +
-          'while already holding it — this would deadlock. Refactor the inner call site to ' +
-          'use the internal (`*Internal`) helper that assumes the lock is already held.',
-      );
-    }
-    const prev = this.tail;
-    let release!: () => void;
-    this.tail = new Promise<void>((res) => { release = res; });
-    try {
-      await prev;
-      this.held = true;
-      return await fn();
-    } finally {
-      this.held = false;
-      release();
-    }
-  }
 }
 
 /**

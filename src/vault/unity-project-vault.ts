@@ -17,6 +17,7 @@ import { getExtractorFor } from './symbol-extractor/index.js';
 import { buildCanvas } from './canvas-generator.js';
 import { runPpr } from './ppr.js';
 import { getLoggerSafe } from '../utils/logger.js';
+import { AsyncLock } from './async-lock.js';
 import type {
   IVault, VaultFile, VaultQuery, VaultQueryResult, VaultStats, VaultId, VaultChunk,
   VaultSymbol, VaultEdge, VaultWikilink,
@@ -64,6 +65,8 @@ export class UnityProjectVault implements IVault {
   protected emitter = new EventEmitter();
   protected dbPath: string;
   protected watcher: IVaultWatcher | null = null;
+  /** Serializes reindexFile()/delete passes — mirrors ObsidianVault.writeLock. */
+  protected writeLock = new AsyncLock();
 
   constructor(deps: UnityVaultDeps) {
     this.id = deps.id;
@@ -240,22 +243,36 @@ export class UnityProjectVault implements IVault {
   }
 
   async reindexFile(relPath: string): Promise<boolean> {
+    return this.writeLock.run(() => this.reindexFileInternal(relPath));
+  }
+
+  /**
+   * Actual reindex. MUST be called from within the writeLock.
+   *
+   * Ordering: snapshot the OLD HNSW ids but keep them live; write the SQL rows
+   * + chunks; embed the NEW vectors; ONLY on embed success remove the OLD
+   * vectors. On embed failure, roll back any partial new vectors and reset the
+   * stored hash so the next sync re-embeds — this prevents a transient
+   * embedding failure from permanently losing a file's vectors.
+   */
+  protected async reindexFileInternal(relPath: string): Promise<boolean> {
     const fileInfo = await getIndexableFileInfo(this.rootPath, relPath);
     if (!fileInfo.ok) {
-      return this.deleteIndexedFile(fileInfo.relPath);
+      return this.deleteIndexedFileInternal(fileInfo.relPath);
     }
     const abs = fileInfo.absPath;
     relPath = fileInfo.relPath;
     const body = await readFile(abs, 'utf8').catch(() => null);
-    if (body === null) { this.store.deleteFile(relPath); return true; }
+    if (body === null) { return this.deleteIndexedFileInternal(relPath); }
     const hash = xxhash64Hex(body);
     const existing = this.store.getFile(relPath);
     if (existing?.blobHash === hash) return false;  // Fix C1: short-circuit on unchanged hash
     const lang = fileInfo.lang;
 
-    // Fix HNSW leak: remove old vectors before deleting SQLite chunks.
+    // Snapshot the OLD HNSW ids — keep them alive until the NEW vectors commit
+    // successfully (removed in the embedOk branch below). Removing them up front
+    // would lose the file's vectors if embedding then fails transiently.
     const oldHnswIds = this.store.listHnswIdsForPath(relPath);
-    for (const hnswId of oldHnswIds) this.adapter.remove(hnswId);
 
     this.store.deleteFile(relPath);
     this.store.upsertFile({
@@ -266,17 +283,36 @@ export class UnityProjectVault implements IVault {
     const chunks = chunkFile({ path: relPath, content: body, lang });
     for (const c of chunks) this.store.upsertChunk(c);
     
-    // Embedding is best-effort — if the provider fails, continue with indexing.
+    // Embed the NEW vectors first; only remove the OLD ones after success.
+    // Embedding is best-effort — on failure we keep the prior vectors and
+    // reset the stored hash so the next sync re-attempts embedding.
+    const newHnswIds: number[] = [];
+    let embedOk = false;
     try {
       const embeddingMap = await this.adapter.upsertBatch(chunks.map((c) => ({ chunkId: c.chunkId, content: c.content })));
+      newHnswIds.push(...Object.values(embeddingMap));
       // Persist chunk_id → hnsw_id mapping for future vector lifecycle management.
       for (const [chunkId, hnswId] of Object.entries(embeddingMap)) {
         this.store.upsertEmbedding(chunkId, hnswId, this.adapter.provider.dim, this.adapter.provider.model);
       }
+      embedOk = true;
     } catch (embedErr) {
-      getLoggerSafe().warn(`[vault ${this.id}] embedding failed for ${relPath}, continuing without vectors`, {
+      getLoggerSafe().warn(`[vault ${this.id}] embedding failed for ${relPath}, keeping prior vectors; will retry next sync`, {
         error: embedErr instanceof Error ? embedErr.message : String(embedErr),
       });
+      // Roll back any vectors inserted before the failure.
+      for (const id of newHnswIds) {
+        try { this.adapter.remove(id); } catch { /* per-id best effort */ }
+      }
+      // Reset the stored hash so the next sync re-embeds instead of
+      // short-circuiting on the (now vector-less) up-to-date hash.
+      const f = this.store.getFile(relPath);
+      if (f) this.store.upsertFile({ ...f, blobHash: '' });
+    }
+    if (embedOk) {
+      for (const id of oldHnswIds) {
+        try { this.adapter.remove(id); } catch { /* best effort */ }
+      }
     }
 
     // Phase 2: symbol + edge + wikilink extraction. Best-effort — must not block indexing.
@@ -407,7 +443,7 @@ export class UnityProjectVault implements IVault {
     }
     const present = new Set(files.map((f) => f.path));
     for (const p of before) {
-      if (!present.has(p) && this.deleteIndexedFile(p)) changed.push(p);
+      if (!present.has(p) && await this.writeLock.run(async () => this.deleteIndexedFileInternal(p))) changed.push(p);
     }
     await this.regenerateCanvas();
     if (changed.length) this.emitter.emit('update', { vaultId: this.id, changedPaths: changed });
@@ -431,7 +467,7 @@ export class UnityProjectVault implements IVault {
     const present = new Set(files.map((f) => f.path));
     for (const p of before) {
       if (!present.has(p)) {
-        if (this.deleteIndexedFile(p)) changed.push(p);
+        if (await this.writeLock.run(async () => this.deleteIndexedFileInternal(p))) changed.push(p);
       }
     }
     await this.regenerateCanvas();
@@ -439,7 +475,7 @@ export class UnityProjectVault implements IVault {
     return changed.length;
   }
 
-  private deleteIndexedFile(relPath: string): boolean {
+  protected deleteIndexedFileInternal(relPath: string): boolean {
     const existing = this.store.getFile(relPath);
     if (!existing) return false;
     // Fix HNSW leak: remove vectors for deleted files before deleting SQLite rows.
