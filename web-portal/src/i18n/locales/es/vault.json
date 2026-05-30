@@ -31,6 +31,8 @@
   "detail.noOutgoing": "Sin aristas salientes.",
   "detail.loadError": "No se pudieron cargar los llamadores.",
   "empty.selectVault": "Selecciona un vault para ver el grafo.",
+  "empty.fetching": "Cargando…",
+  "empty.noGraphData": "Sin datos de grafo",
   "empty.loading": "Cargando grafo…",
   "empty.noSymbols": "Aún no hay símbolos indexados.",
   "empty.noMatches": "Ningún símbolo coincide con los filtros actuales.",

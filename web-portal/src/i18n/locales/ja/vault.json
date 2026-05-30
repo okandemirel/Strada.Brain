@@ -31,6 +31,8 @@
   "detail.noOutgoing": "発信エッジはありません。",
   "detail.loadError": "呼び出し元を読み込めませんでした。",
   "empty.selectVault": "グラフを表示するには vault を選択してください。",
+  "empty.fetching": "読み込み中…",
+  "empty.noGraphData": "グラフデータがありません",
   "empty.loading": "グラフを読み込み中…",
   "empty.noSymbols": "まだインデックス化されたシンボルはありません。",
   "empty.noMatches": "現在のフィルターに一致するシンボルはありません。",

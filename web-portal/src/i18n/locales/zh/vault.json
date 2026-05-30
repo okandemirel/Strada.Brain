@@ -31,6 +31,8 @@
   "detail.noOutgoing": "没有出边。",
   "detail.loadError": "无法加载调用方。",
   "empty.selectVault": "请选择一个 vault 以查看图。",
+  "empty.fetching": "加载中…",
+  "empty.noGraphData": "无图表数据",
   "empty.loading": "正在加载图…",
   "empty.noSymbols": "尚未索引任何符号。",
   "empty.noMatches": "没有符号匹配当前筛选条件。",

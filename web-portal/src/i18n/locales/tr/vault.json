@@ -35,6 +35,8 @@
   "detail.loadError": "Çağıranlar yüklenemedi.",
 
   "empty.selectVault": "Graf için bir vault seç.",
+  "empty.fetching": "Yükleniyor…",
+  "empty.noGraphData": "Graf verisi yok",
   "empty.loading": "Graf yükleniyor…",
   "empty.noSymbols": "Henüz indekslenmiş sembol yok.",
   "empty.noMatches": "Mevcut filtrelerle eşleşen sembol yok.",

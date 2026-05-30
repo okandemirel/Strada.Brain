@@ -1,4 +1,5 @@
 import { useEffect, Suspense, lazy } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   useVaultStore,
   type CanvasJson,
@@ -39,6 +40,7 @@ function sanitizeCanvas(raw: unknown): CanvasJson {
 }
 
 export default function VaultGraphTab() {
+  const { t } = useTranslation('vault');
   const selected = useVaultStore((s) => s.selected);
   const graph = useVaultStore((s) => (selected ? s.graphCache[selected] : undefined));
   const setGraph = useVaultStore((s) => s.setGraph);
@@ -53,21 +55,21 @@ export default function VaultGraphTab() {
   }, [selected, graph, setGraph]);
 
   if (!selected) {
-    return <div className="p-4 text-sm text-muted-foreground">Bir vault seçin</div>;
+    return <div className="p-4 text-sm text-muted-foreground">{t('empty.selectVault')}</div>;
   }
 
   if (!graph) {
-    return <div className="p-4 text-sm text-muted-foreground">Yükleniyor...</div>;
+    return <div className="p-4 text-sm text-muted-foreground">{t('empty.fetching')}</div>;
   }
 
   if (graph.nodes.length === 0) {
-    return <div className="p-4 text-sm text-muted-foreground">Graf verisi yok</div>;
+    return <div className="p-4 text-sm text-muted-foreground">{t('empty.noGraphData')}</div>;
   }
 
   return (
     <Suspense
       fallback={
-        <div className="p-4 text-sm text-muted-foreground">Graf yükleniyor...</div>
+        <div className="p-4 text-sm text-muted-foreground">{t('empty.loading')}</div>
       }
     >
       <GraphCanvas graph={graph} />

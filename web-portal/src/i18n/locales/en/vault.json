@@ -35,6 +35,8 @@
   "detail.loadError": "Could not load callers.",
 
   "empty.selectVault": "Select a vault to view the graph.",
+  "empty.fetching": "Loading…",
+  "empty.noGraphData": "No graph data",
   "empty.loading": "Loading graph…",
   "empty.noSymbols": "No symbols indexed yet.",
   "empty.noMatches": "No symbols match the current filters.",
