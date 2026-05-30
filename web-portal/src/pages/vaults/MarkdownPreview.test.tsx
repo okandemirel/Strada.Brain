@@ -59,4 +59,34 @@ describe('MarkdownPreview', () => {
     // rehype-highlight runs after sanitize so its hljs classes survive.
     expect(container.querySelector('code.hljs, .hljs')).not.toBeNull();
   });
+
+  it('renders ==highlight== as <mark>', () => {
+    const { container } = render(<MarkdownPreview source={'a ==hi there== b'} />);
+    const mark = container.querySelector('mark');
+    expect(mark?.textContent).toBe('hi there');
+    expect(container.innerHTML).not.toContain('==');
+  });
+
+  it('renders [[wikilinks]] with alias as styled text, not raw brackets', () => {
+    const { container } = render(<MarkdownPreview source={'See [[Some Note|the alias]] now'} />);
+    const link = container.querySelector('span.obsidian-wikilink');
+    expect(link?.textContent).toBe('the alias');
+    expect(container.innerHTML).not.toContain('[[');
+    expect(container.textContent).toContain('See the alias now');
+  });
+
+  it('renders ![[embeds]] as a labelled placeholder, not raw syntax', () => {
+    const { container } = render(<MarkdownPreview source={'![[diagram.png]]'} />);
+    expect(container.querySelector('span.obsidian-embed')).not.toBeNull();
+    expect(container.innerHTML).not.toContain('![[');
+    expect(container.textContent).toContain('diagram.png');
+  });
+
+  it('strips %%Obsidian comments%% from the output', () => {
+    const { container } = render(<MarkdownPreview source={'before %%hidden note%% after'} />);
+    expect(container.textContent).not.toContain('hidden note');
+    expect(container.textContent).toContain('before');
+    expect(container.textContent).toContain('after');
+    expect(container.innerHTML).not.toContain('%%');
+  });
 });

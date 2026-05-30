@@ -4,6 +4,11 @@ import remarkMath from 'remark-math'
 import rehypeHighlight from 'rehype-highlight'
 import rehypeKatex from 'rehype-katex'
 import rehypeSanitize, { defaultSchema } from 'rehype-sanitize'
+import {
+  remarkObsidianComments,
+  remarkObsidianHighlight,
+  remarkObsidianWikiLinks,
+} from './obsidian-markdown'
 import 'katex/dist/katex.min.css'
 
 /**
@@ -11,7 +16,13 @@ import 'katex/dist/katex.min.css'
  * (chat messages, vault note previews). Consolidated here so feature/parity
  * fixes apply consistently everywhere instead of drifting between copies.
  */
-export const REMARK_PLUGINS: PluggableList = [remarkGfm, remarkMath]
+export const REMARK_PLUGINS: PluggableList = [
+  remarkGfm,
+  remarkMath,
+  remarkObsidianComments,
+  remarkObsidianHighlight,
+  remarkObsidianWikiLinks,
+]
 
 /**
  * Sanitize schema extension.
@@ -27,6 +38,8 @@ export const REMARK_PLUGINS: PluggableList = [remarkGfm, remarkMath]
  */
 const sanitizeSchema = {
   ...defaultSchema,
+  // <mark> (our ==highlight== output) is not in the default allow-list.
+  tagNames: [...(defaultSchema.tagNames ?? []), 'mark'],
   attributes: {
     ...defaultSchema.attributes,
     span: [...(defaultSchema.attributes?.span ?? []), 'className'],
