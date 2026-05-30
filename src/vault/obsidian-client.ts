@@ -42,16 +42,30 @@ export class ObsidianApiClient {
     extraHeaders?: Record<string, string>,
   ): Promise<T> {
     const url = `${this.baseUrl}${endpoint}`;
+    const headers: Record<string, string> = { ...this.headers, ...(extraHeaders ?? {}) };
     const opts: RequestInit = {
       method,
-      headers: extraHeaders ? { ...this.headers, ...extraHeaders } : this.headers,
       // For self-signed certs on localhost; in production certPath should be used.
       // Node.js fetch in v18+ doesn't support agent option; we rely on the user
       // having set NODE_TLS_REJECT_UNAUTHORIZED=0 for local dev.
     };
     if (body !== undefined) {
-      opts.body = JSON.stringify(body);
+      if (typeof body === "string") {
+        // Markdown/plain payloads must be sent verbatim — the Local REST API
+        // writes the request body as the file content. JSON.stringify would
+        // persist a quoted, backslash-escaped blob instead of real markdown.
+        opts.body = body;
+        const callerSetContentType = extraHeaders
+          ? Object.keys(extraHeaders).some((k) => k.toLowerCase() === "content-type")
+          : false;
+        if (!callerSetContentType) {
+          headers["Content-Type"] = "text/markdown";
+        }
+      } else {
+        opts.body = JSON.stringify(body);
+      }
     }
+    opts.headers = headers;
 
     try {
       const res = await fetch(url, opts);
@@ -118,7 +132,6 @@ export class ObsidianApiClient {
   async appendToHeading(path: string, heading: string, content: string): Promise<void> {
     const encoded = encodeURIComponent(path);
     await this.request<void>('POST', `/vault/${encoded}`, content, {
-      ...this.headers,
       'Target-Type': 'heading',
       'Target': heading,
     });
