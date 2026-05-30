@@ -30,12 +30,25 @@ export class VaultRegistry {
    * Populated at register() time to avoid per-call realpathSync cost.
    */
   private rootRealpathCache = new Map<string, string>();
+  /**
+   * User-facing display names keyed by vault id, supplied at register() time
+   * (e.g. the name typed into POST /api/vaults). Vaults registered without a
+   * name — the config-driven self/unity/obsidian vaults — are absent here, and
+   * callers fall back to a kind-derived label. In-memory only: POST-registered
+   * vaults are not persisted, so neither is their name (the vault itself does
+   * not survive a restart either).
+   */
+  private readonly names = new Map<VaultId, string>();
 
-  register(v: IVault): void {
+  register(v: IVault, name?: string): void {
     this.vaults.set(v.id, v);
     this.rootRealpathCache.set(v.rootPath, safeRealpath(v.rootPath));
+    if (name !== undefined) this.names.set(v.id, name);
     for (const listener of this.registerListeners) listener(v);
   }
+
+  /** Display name supplied at register() time, or undefined if none was given. */
+  getName(id: VaultId): string | undefined { return this.names.get(id); }
   onRegister(listener: (vault: IVault) => void): () => void {
     this.registerListeners.add(listener);
     return () => this.registerListeners.delete(listener);
@@ -66,6 +79,7 @@ export class VaultRegistry {
     const v = this.vaults.get(id);
     if (v) this.rootRealpathCache.delete(v.rootPath);
     this.vaults.delete(id);
+    this.names.delete(id);
   }
   get(id: VaultId): IVault | undefined { return this.vaults.get(id); }
   list(): IVault[] { return [...this.vaults.values()]; }
@@ -124,6 +138,7 @@ export class VaultRegistry {
     for (const v of this.vaults.values()) await v.dispose();
     this.vaults.clear();
     this.rootRealpathCache.clear();
+    this.names.clear();
     this.registerListeners.clear();
   }
 }

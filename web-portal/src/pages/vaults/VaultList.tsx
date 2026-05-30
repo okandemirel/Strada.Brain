@@ -52,6 +52,9 @@ export default function VaultList({ onRegisterClick }: VaultListProps) {
             <button
               type="button"
               onClick={() => select(v.id)}
+              // Keep the (hashed) id discoverable on hover even though the
+              // human-friendly name is what we show.
+              title={v.id}
               className={cn(
                 'w-full flex items-start gap-2 px-2 py-1.5 rounded-md text-left transition-colors',
                 'focus:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent)]/60',
@@ -68,7 +71,7 @@ export default function VaultList({ onRegisterClick }: VaultListProps) {
                 )}
               />
               <div className="min-w-0 flex-1">
-                <div className="text-[13px] font-medium truncate">{v.id}</div>
+                <div className="text-[13px] font-medium truncate">{v.name ?? v.id}</div>
                 <div className="text-[10px] text-[var(--color-text-tertiary)] truncate">
                   {v.kind}
                 </div>

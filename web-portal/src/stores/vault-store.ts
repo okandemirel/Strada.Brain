@@ -14,7 +14,7 @@ const VAULT_VIEWPORT_CACHE_LIMIT = 20;
  */
 const UPDATED_AT_FUTURE_SLACK_MS = 60_000;
 
-export interface VaultSummary { id: string; kind: string; }
+export interface VaultSummary { id: string; kind: string; name?: string; }
 export interface SearchHit {
   chunk: { chunkId: string; path: string; startLine: number; endLine: number; content: string; tokenCount: number };
   scores: { fts: number | null; hnsw: number | null; rrf: number };

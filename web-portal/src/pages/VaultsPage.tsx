@@ -94,7 +94,7 @@ export default function VaultsPage() {
     loading: vaultListLoading,
     error: vaultListError,
     retry: retryVaultList,
-  } = useVaultFetch<{ items?: { id: string; kind: string }[] }>('/api/vaults');
+  } = useVaultFetch<{ items?: { id: string; kind: string; name?: string }[] }>('/api/vaults');
   useEffect(() => {
     if (vaultListLoading) return;
     if (vaultList) setVaults(vaultList.items ?? []);

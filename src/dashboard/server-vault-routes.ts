@@ -66,6 +66,23 @@ function makeVaultId(kind: 'unity' | 'generic', rootPath: string): string {
 }
 
 /**
+ * Display label for a vault registered WITHOUT an explicit name — i.e. the
+ * config-driven self/unity/obsidian vaults wired at bootstrap. Derived purely
+ * from `kind` so no filesystem path segment ever leaks into the API response
+ * (preserves the SecC2 fix: `GET /api/vaults` must not expose `rootPath`).
+ * POST-registered vaults always carry the user's name, so they never hit this.
+ */
+function defaultVaultName(kind: string, id: string): string {
+  switch (kind) {
+    case 'self': return 'Strada.Brain (self)';
+    case 'unity-project': return 'Unity Project';
+    case 'obsidian': return 'Obsidian Vault';
+    case 'framework': return 'Framework';
+    default: return id;
+  }
+}
+
+/**
  * Express-shaped req/res for `registerVaultRoutes` (dev-server/test adapter; production
  * uses the raw Node http path via `handleVaultRoutes`). A full `IncomingMessage &
  * { params; query; body }` typing fights noUncheckedIndexedAccess on every handler
@@ -173,9 +190,14 @@ export function buildVaultRetrievalStatsSnapshot(
 }
 
 export function registerVaultRoutes(app: RouteApp, registry: VaultRegistry, factory?: VaultFactory, llmProvider?: IAIProvider): void {
-  // Fix SecC2: do NOT expose absolute rootPath. Clients get id + kind only.
+  // Fix SecC2: do NOT expose absolute rootPath. Clients get id + kind + a
+  // display name (the registered name, or a path-free kind-derived label).
   app.get('/api/vaults', () => ({
-    items: registry.list().map((v) => ({ id: v.id, kind: v.kind })),
+    items: registry.list().map((v) => ({
+      id: v.id,
+      kind: v.kind,
+      name: registry.getName(v.id) ?? defaultVaultName(v.kind, v.id),
+    })),
   }));
 
   app.post('/api/vaults', async (req) => {
@@ -192,7 +214,7 @@ export function registerVaultRoutes(app: RouteApp, registry: VaultRegistry, fact
     const id = makeVaultId(parsed.kind, dirCheck.realPath);
     if (registry.get(id)) return { error: 'vault already registered' };
     const vault = await factory.create({ id, rootPath: dirCheck.realPath, kind: parsed.kind });
-    registry.register(vault);
+    registry.register(vault, parsed.name);
     void vault.init().catch((err) => getLoggerSafe().warn('[vault] async init failed', { err }));
     return {
       id: vault.id, name: parsed.name,
@@ -330,7 +352,9 @@ export function handleVaultRoutes(
       items: registry.list().map((v) => ({
         id: v.id,
         kind: v.kind,
-        // Intentionally do NOT expose v.rootPath — callers only need the id.
+        // Registered name, or a path-free kind-derived label. Intentionally do
+        // NOT expose v.rootPath — callers only need id/kind/name (SecC2).
+        name: registry.getName(v.id) ?? defaultVaultName(v.kind, v.id),
       })),
     });
     return true;
@@ -364,7 +388,7 @@ export function handleVaultRoutes(
         const vault = await factory.create({ id, rootPath: dirCheck.realPath, kind: parsed.kind });
         // Register synchronously so the vault appears in GET /api/vaults immediately,
         // then kick off indexing in the background — init() can take a while on large repos.
-        registry.register(vault);
+        registry.register(vault, parsed.name);
         sendJson(res, {
           id: vault.id,
           name: parsed.name,
