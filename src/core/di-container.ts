@@ -104,11 +104,12 @@ export class DIContainer {
       throw new ServiceNotFoundError(interfaceName);
     }
 
-    // Return existing singleton
+    // Return existing singleton. Use presence (has), not truthiness: a
+    // singleton legitimately resolved/registered as a falsy value (0, "",
+    // false) must not be treated as absent and re-created.
     if (registration.lifecycle === "singleton") {
-      const existing = this.singletons.get(interfaceName);
-      if (existing) {
-        return existing as T;
+      if (this.singletons.has(interfaceName)) {
+        return this.singletons.get(interfaceName) as T;
       }
     }
 
@@ -181,11 +182,10 @@ export class DIContainer {
         scope.registrations.set(name, { ...reg });
       } else {
         scope.registrations.set(name, reg);
-        if (reg.lifecycle === "singleton") {
-          const instance = this.singletons.get(name);
-          if (instance) {
-            scope.singletons.set(name, instance);
-          }
+        // Presence check, not truthiness: copy a falsy singleton (0/""/false)
+        // into the child scope too.
+        if (reg.lifecycle === "singleton" && this.singletons.has(name)) {
+          scope.singletons.set(name, this.singletons.get(name));
         }
       }
     }

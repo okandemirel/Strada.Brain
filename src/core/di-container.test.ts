@@ -119,6 +119,27 @@ describe("DIContainer", () => {
       const resolved = container.resolve<FakeLogger>("FakeLogger");
       expect(resolved).toBe(logger);
     });
+
+    it("returns a falsy registered singleton instance without re-creating it", () => {
+      // Regression: resolve() used `if (existing)` (truthiness) to short-circuit
+      // singletons, so a singleton registered as 0/""/false fell through and was
+      // re-constructed, breaking singleton identity. Presence (Map.has) fixes it.
+      container.registerSingleton("Counter", CountingService);
+      container.registerInstance("Counter", 0 as unknown as CountingService);
+
+      expect(container.resolve<number>("Counter")).toBe(0);
+      // The registered falsy instance must satisfy resolution — never construct.
+      expect(CountingService.instanceCount).toBe(0);
+    });
+
+    it("preserves an empty-string singleton across resolves and scopes", () => {
+      container.registerSingleton("Empty", FakeLogger);
+      container.registerInstance("Empty", "" as unknown as FakeLogger);
+
+      expect(container.resolve("Empty")).toBe("");
+      const scope = container.createScope();
+      expect(scope.resolve("Empty")).toBe("");
+    });
   });
 
   // ========================================================================
