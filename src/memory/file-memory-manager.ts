@@ -10,6 +10,7 @@ import type {
   MemoryImportance,
   MemoryMetadata,
 } from "./memory.interface.js";
+import { getImportanceValue } from "./memory.interface.js";
 import type { StradaProjectAnalysis } from "../intelligence/strada-analyzer.js";
 import {
   extractTerms,
@@ -1017,25 +1018,35 @@ export class FileMemoryManager implements IMemoryManager {
    * LRU eviction based on access patterns
    */
   private evictIfNeeded(): void {
-    while (this.entries.length > this.maxEntries) {
-      let evictIdx = 0;
-      let oldestAccess = Infinity;
+    const overflow = this.entries.length - this.maxEntries;
+    if (overflow <= 0) return;
 
-      // Find least recently accessed entry
-      for (let i = 0; i < this.entries.length; i++) {
-        const entryId = this.entries[i]!.id as string;
-        const lastAccess = this.entryAccessCache.get(entryId) || this.entries[i]!.createdAt as number;
-        
-        if (lastAccess < oldestAccess) {
-          oldestAccess = lastAccess;
-          evictIdx = i;
-        }
-      }
+    const lastAccessOf = (e: MemoryEntry): number =>
+      this.entryAccessCache.get(e.id as string) ?? (e.createdAt as number);
 
-      const removed = this.entries.splice(evictIdx, 1)[0]!;
-      const removedTerms = extractTerms(removed.content);
-      this.index.removeDocument(removedTerms);
-      this.entryAccessCache.delete(removed.id as string);
+    // Rank eviction candidates worst-first: archived entries go before live
+    // ones; among equal archived-state, lower importance is evicted first;
+    // ties broken by least-recently-accessed (LRU). A single O(N log N) sort
+    // replaces the old O(N^2) repeated-min-scan and, unlike it, honors
+    // importance/archived instead of evicting purely by age.
+    const victims = this.entries
+      .map((entry) => ({ entry, lastAccess: lastAccessOf(entry) }))
+      .sort((a, b) => {
+        const archDiff = (a.entry.archived ? 0 : 1) - (b.entry.archived ? 0 : 1);
+        if (archDiff !== 0) return archDiff;
+        const impDiff =
+          getImportanceValue(a.entry.importance) - getImportanceValue(b.entry.importance);
+        if (impDiff !== 0) return impDiff;
+        return a.lastAccess - b.lastAccess;
+      })
+      .slice(0, overflow)
+      .map((r) => r.entry);
+
+    const victimIds = new Set(victims.map((e) => e.id as string));
+    this.entries = this.entries.filter((e) => !victimIds.has(e.id as string));
+    for (const v of victims) {
+      this.index.removeDocument(extractTerms(v.content));
+      this.entryAccessCache.delete(v.id as string);
     }
   }
 

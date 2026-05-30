@@ -399,5 +399,51 @@ describe("FileMemoryManager", () => {
         await mm.shutdown();
       });
     });
+
+    it("keeps a high-importance entry over older low-importance ones", async () => {
+      await withTempDir(async (dir) => {
+        const mm = new FileMemoryManager(join(dir, "db"), 2);
+        await mm.initialize();
+
+        // The critical entry is the OLDEST — a pure-LRU eviction (the old bug)
+        // would drop it. The fix evicts by importance first, so it survives.
+        await mm.storeNote("keep this critical note", { importance: "critical" });
+        await mm.storeNote("drop one low note");
+        await mm.storeNote("drop two low note"); // capacity 2 → one eviction
+
+        expect(mm.getStats().totalEntries).toBe(2);
+
+        const result = await mm.retrieve({ mode: "text", query: "keep drop critical low note", limit: 10, minScore: 0 });
+        const contents = unwrap(result).map((r) => r.entry.content);
+        expect(contents).toContain("keep this critical note");
+
+        await mm.shutdown();
+      });
+    });
+
+    it("evicts an archived entry before a live one (even if the live one is older)", async () => {
+      await withTempDir(async (dir) => {
+        const mm = new FileMemoryManager(join(dir, "db"), 2);
+        await mm.initialize();
+
+        await mm.storeNote("alpha live oldest note");
+        await mm.storeNote("beta note");
+        // Archive the NEWER entry directly (mirrors archiveOldEntries' own cast).
+        // Pure-LRU would evict the older "alpha"; the fix evicts archived first.
+        const entries = (mm as unknown as { entries: Array<{ content: string; archived: boolean }> }).entries;
+        const beta = entries.find((e) => e.content === "beta note");
+        if (beta) beta.archived = true;
+
+        await mm.storeNote("gamma note"); // capacity 2 → one eviction
+
+        // retrieve includes archived entries by default, so absence == evicted.
+        const result = await mm.retrieve({ mode: "text", query: "alpha beta gamma note", limit: 10, minScore: 0 });
+        const contents = unwrap(result).map((r) => r.entry.content);
+        expect(contents).toContain("alpha live oldest note");
+        expect(contents).not.toContain("beta note");
+
+        await mm.shutdown();
+      });
+    });
   });
 });
