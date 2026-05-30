@@ -41,4 +41,22 @@ describe('MarkdownPreview', () => {
     }
     expect(container.innerHTML).not.toContain('alert(1)');
   });
+
+  it('renders inline and block LaTeX math via KaTeX', () => {
+    const { container } = render(
+      <MarkdownPreview source={'Inline $E = mc^2$ and block:\n\n$$\\int_0^1 x\\,dx$$'} />,
+    );
+    // rehype-katex wraps rendered math in `.katex` — survives the sanitize
+    // schema (math markers are preserved) and is no longer raw dollar text.
+    expect(container.querySelectorAll('.katex').length).toBeGreaterThanOrEqual(2);
+    expect(container.textContent).not.toContain('$E = mc^2$');
+  });
+
+  it('still keeps syntax-highlighting classes on fenced code', () => {
+    const { container } = render(
+      <MarkdownPreview source={'```js\nconst x = 1;\n```'} />,
+    );
+    // rehype-highlight runs after sanitize so its hljs classes survive.
+    expect(container.querySelector('code.hljs, .hljs')).not.toBeNull();
+  });
 });
