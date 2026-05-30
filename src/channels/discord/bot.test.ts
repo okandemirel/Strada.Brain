@@ -105,6 +105,40 @@ describe("DiscordChannel", () => {
       await channel.disconnect();
       expect(channel.isHealthy()).toBe(false);
     });
+
+    // Regression (H7): a message still in the queue when the processor stops
+    // must be rejected, or its awaiting caller hangs forever.
+    it("rejects queued messages on disconnect", async () => {
+      const pending = (channel as unknown as {
+        enqueueMessage: (m: { type: string; chatId: string; content: string }) => Promise<unknown>;
+      }).enqueueMessage({ type: "text", chatId: "c1", content: "hi" });
+
+      await channel.disconnect();
+
+      await expect(pending).rejects.toThrow("Discord channel disconnected");
+      expect((channel as unknown as { messageQueue: unknown[] }).messageQueue).toHaveLength(0);
+    });
+
+    // Regression (M6): a retry-backoff timer pending at disconnect must be
+    // cleared and its message rejected — not left to re-push onto a dead queue.
+    it("rejects retry-pending messages and clears their timers on disconnect", async () => {
+      const reject = vi.fn();
+      let firedOntoDeadQueue = false;
+      const timer = setTimeout(() => {
+        firedOntoDeadQueue = true;
+      }, 10_000);
+      (channel as unknown as {
+        retryTimers: Map<ReturnType<typeof setTimeout>, { reject: (e: Error) => void }>;
+      }).retryTimers.set(timer, { reject });
+
+      await channel.disconnect();
+
+      expect(reject).toHaveBeenCalledTimes(1);
+      expect(reject.mock.calls[0]![0]).toBeInstanceOf(Error);
+      expect((channel as unknown as { retryTimers: Map<unknown, unknown> }).retryTimers.size).toBe(0);
+      await new Promise((r) => setTimeout(r, 30));
+      expect(firedOntoDeadQueue).toBe(false);
+    });
   });
 
   describe("sendText", () => {

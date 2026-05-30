@@ -101,6 +101,8 @@ export class DiscordChannel implements IChannelAdapter {
   private messageQueue: QueuedMessage[] = [];
   private queueProcessing = false;
   private queueInterval: NodeJS.Timeout | null = null;
+  /** Pending retry-backoff timers (message kept so disconnect can reject it). */
+  private readonly retryTimers = new Map<NodeJS.Timeout, QueuedMessage>();
   private rateLimited = false;
   private rateLimitResetTime = 0;
   private feedbackReactionCallback: FeedbackReactionCallback | null = null;
@@ -175,6 +177,20 @@ export class DiscordChannel implements IChannelAdapter {
     if (this.queueInterval) {
       clearInterval(this.queueInterval);
       this.queueInterval = null;
+    }
+
+    // Reject every queued and retry-pending message: the queue processor that
+    // would settle their promises is now stopped, so without this every awaiting
+    // caller (sendText/sendMarkdown/...) would hang forever. Mirrors the Slack
+    // channel's disconnect drain.
+    for (const [timer, message] of this.retryTimers) {
+      clearTimeout(timer);
+      message.reject(new Error("Discord channel disconnected"));
+    }
+    this.retryTimers.clear();
+    const queued = this.messageQueue.splice(0, this.messageQueue.length);
+    for (const message of queued) {
+      message.reject(new Error("Discord channel disconnected"));
     }
 
     // Clean up pending confirmations
@@ -268,9 +284,17 @@ export class DiscordChannel implements IChannelAdapter {
             // Move to end of queue with exponential backoff — re-enqueue after delay
             const delay = RETRY_BASE_DELAY_MS * Math.pow(2, message.retries - 1);
             this.messageQueue.shift();
-            setTimeout(() => {
+            const timer = setTimeout(() => {
+              this.retryTimers.delete(timer);
+              // If we were disconnected during the backoff window, reject rather
+              // than re-pushing onto a dead queue (which would never settle).
+              if (!this.isConnected) {
+                message.reject(new Error("Discord channel disconnected"));
+                return;
+              }
               this.messageQueue.push(message);
             }, delay);
+            this.retryTimers.set(timer, message);
           }
         }
       }
