@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { render } from '@testing-library/react';
+import { describe, it, expect, vi } from 'vitest';
+import { render, fireEvent } from '@testing-library/react';
 import MarkdownPreview from './MarkdownPreview';
 
 describe('MarkdownPreview', () => {
@@ -73,6 +73,17 @@ describe('MarkdownPreview', () => {
     expect(link?.textContent).toBe('the alias');
     expect(container.innerHTML).not.toContain('[[');
     expect(container.textContent).toContain('See the alias now');
+  });
+
+  it('carries data-wikilink-target through sanitize and navigates on click', () => {
+    const onWikilink = vi.fn();
+    const { container } = render(<MarkdownPreview source={'Go to [[Some Note]] here'} onWikilink={onWikilink} />);
+    const link = container.querySelector('span.obsidian-wikilink');
+    expect(link).not.toBeNull();
+    // The inert data attribute survived rehype-sanitize.
+    expect(link?.getAttribute('data-wikilink-target')).toBe('Some Note');
+    fireEvent.click(link!);
+    expect(onWikilink).toHaveBeenCalledWith('Some Note');
   });
 
   it('renders ![[embeds]] as a labelled placeholder, not raw syntax', () => {

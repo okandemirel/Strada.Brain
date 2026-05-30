@@ -48,7 +48,9 @@ const sanitizeSchema = {
   tagNames: [...(defaultSchema.tagNames ?? []), 'mark'],
   attributes: {
     ...defaultSchema.attributes,
-    span: [...(defaultSchema.attributes?.span ?? []), 'className'],
+    // `dataWikilinkTarget` is an inert data attribute (the resolved wikilink
+    // target) read by the note viewer's delegated click handler — no URL/handler.
+    span: [...(defaultSchema.attributes?.span ?? []), 'className', 'dataWikilinkTarget'],
     div: [...(defaultSchema.attributes?.div ?? []), 'className'],
     code: [...(defaultSchema.attributes?.code ?? []), 'className'],
     pre: [...(defaultSchema.attributes?.pre ?? []), 'className'],

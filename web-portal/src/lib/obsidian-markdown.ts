@@ -20,11 +20,23 @@ function text(value: string): Text {
   return { type: 'text', value }
 }
 
-function elementCarrier(hName: string, content: string, className?: string): PhrasingContent {
+function elementCarrier(
+  hName: string,
+  content: string,
+  className?: string,
+  extraProps?: Record<string, unknown>,
+): PhrasingContent {
+  const hProperties = {
+    ...(className ? { className: [className] } : {}),
+    ...(extraProps ?? {}),
+  }
   return {
     type: 'emphasis',
     children: [text(content)],
-    data: { hName, ...(className ? { hProperties: { className: [className] } } : {}) },
+    data: {
+      hName,
+      ...(Object.keys(hProperties).length > 0 ? { hProperties } : {}),
+    },
   }
 }
 
@@ -81,7 +93,9 @@ export const remarkObsidianWikiLinks: Plugin<[], Root> = () => (tree) => {
     const alias = (rawAlias ?? rawTarget ?? '').trim()
     if (!target) return null
     if (isEmbed) return elementCarrier('span', `↪ ${alias || target}`, 'obsidian-embed')
-    return elementCarrier('span', alias || target, 'obsidian-wikilink')
+    // Carry the resolved target so the viewer can navigate on click. The
+    // attribute is inert (no URL/handler) — a delegated click handler reads it.
+    return elementCarrier('span', alias || target, 'obsidian-wikilink', { dataWikilinkTarget: target })
   })
 }
 
