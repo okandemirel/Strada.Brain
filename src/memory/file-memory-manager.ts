@@ -218,6 +218,14 @@ export class FileMemoryManager implements IMemoryManager {
   private readonly maxEntries: number;
   private entries: MemoryEntry[] = [];
   private index = new OptimizedTextIndex();
+  /**
+   * Bounded cache of tokenization for the retrieve() hot path: extractTerms ran
+   * for every entry on every query. Keyed by content (extractTerms is a pure
+   * function of it), so updated content yields a fresh key and stale entries
+   * simply age out — no explicit invalidation needed. Oldest-evicted at the cap.
+   */
+  private readonly termsCache = new Map<string, string[]>();
+  private static readonly TERMS_CACHE_MAX = 2000;
   private cachedAnalysis: { projectPath: string; analysis: StradaProjectAnalysis } | null = null;
   
   // Debounced flush with max wait time
@@ -746,7 +754,7 @@ export class FileMemoryManager implements IMemoryManager {
         if (options.before && entry.createdAt > options.before) continue;
 
         // Compute TF-IDF similarity
-        const entryTerms = extractTerms(entry.content);
+        const entryTerms = this.cachedExtractTerms(entry.content);
         const entryVector = this.index.computeTFIDFOptimized(entryTerms);
         const score = cosineSimilarity(queryVector, entryVector);
 
@@ -832,7 +840,7 @@ export class FileMemoryManager implements IMemoryManager {
       const scored: RetrievalResult<ConversationMemoryEntry>[] = [];
       
       for (const entry of chatEntries) {
-        const entryTerms = extractTerms(entry.content);
+        const entryTerms = this.cachedExtractTerms(entry.content);
         const entryVector = this.index.computeTFIDFOptimized(entryTerms);
         const score = cosineSimilarity(queryVector, entryVector);
         
@@ -1017,6 +1025,19 @@ export class FileMemoryManager implements IMemoryManager {
   /**
    * LRU eviction based on access patterns
    */
+  /** extractTerms(content) with a bounded content-keyed cache (retrieve hot path). */
+  private cachedExtractTerms(content: string): string[] {
+    const hit = this.termsCache.get(content);
+    if (hit) return hit;
+    const terms = extractTerms(content);
+    if (this.termsCache.size >= FileMemoryManager.TERMS_CACHE_MAX) {
+      const oldest = this.termsCache.keys().next().value;
+      if (oldest !== undefined) this.termsCache.delete(oldest);
+    }
+    this.termsCache.set(content, terms);
+    return terms;
+  }
+
   private evictIfNeeded(): void {
     const overflow = this.entries.length - this.maxEntries;
     if (overflow <= 0) return;

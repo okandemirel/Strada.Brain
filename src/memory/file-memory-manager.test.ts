@@ -447,3 +447,20 @@ describe("FileMemoryManager", () => {
     });
   });
 });
+
+describe("FileMemoryManager tokenization cache", () => {
+  it("retrieve is consistent across calls and reflects newly stored content (no stale cache)", async () => {
+    await withTempDir(async (dir) => {
+      const mm = new FileMemoryManager(join(dir, "db"));
+      await mm.initialize();
+      await mm.storeNote("alpha combat system note");
+      const r1 = unwrap(await mm.retrieve({ mode: "text", query: "combat system", limit: 10, minScore: 0 }));
+      const r2 = unwrap(await mm.retrieve({ mode: "text", query: "combat system", limit: 10, minScore: 0 }));
+      expect(r1.map((x) => x.entry.content)).toEqual(r2.map((x) => x.entry.content));
+      await mm.storeNote("beta combat system note");
+      const r3 = unwrap(await mm.retrieve({ mode: "text", query: "combat system", limit: 10, minScore: 0 }));
+      expect(r3.some((x) => x.entry.content === "beta combat system note")).toBe(true);
+      await mm.shutdown();
+    });
+  });
+});
