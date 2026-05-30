@@ -212,13 +212,19 @@ function buildFileGraph(
   const fileEdgeMap = new Map<string, { from: string; to: string; kind: string; count: number }>();
   const addFileEdge = (from: string, to: string, kind: string) => {
     if (!filePaths.has(from) || !filePaths.has(to) || from === to) return;
-    const key = from < to ? `${from}|${to}` : `${to}|${from}`;
+    // Dedup bidirectionally: A<->B is one file-level connection regardless of
+    // the direction of the underlying symbol edges. Store the endpoints in the
+    // SAME canonical order as the dedup key so the rendered edge is
+    // deterministic (it previously kept the first-seen order, which flipped the
+    // drawn arrow depending on iteration order).
+    const [a, b] = from < to ? [from, to] : [to, from];
+    const key = `${a}|${b}`;
     const existing = fileEdgeMap.get(key);
     if (existing) {
       existing.count++;
       if (!existing.kind.includes(kind)) existing.kind += `,${kind}`;
     } else {
-      fileEdgeMap.set(key, { from, to, kind, count: 1 });
+      fileEdgeMap.set(key, { from: a, to: b, kind, count: 1 });
     }
   };
 
