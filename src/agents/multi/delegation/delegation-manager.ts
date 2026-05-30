@@ -34,7 +34,7 @@ import type { ProviderCredentialMap } from "../../providers/provider-registry.js
 import { createProvider, PROVIDER_PRESETS } from "../../providers/provider-registry.js";
 import { ProviderManager } from "../../providers/provider-manager.js";
 import { Orchestrator } from "../../orchestrator.js";
-import { getProviderIntelligenceSnapshot, type ProviderWorkload } from "../../providers/provider-knowledge.js";
+import { getProviderIntelligenceSnapshot, type ProviderWorkload, type ModelIntelligenceLookup } from "../../providers/provider-knowledge.js";
 import { ProviderHealthRegistry } from "../../providers/provider-health.js";
 import { WorkspaceLeaseManager } from "../workspace-lease-manager.js";
 
@@ -65,6 +65,12 @@ export interface DelegationManagerOptions {
   readonly providerRouter?: ConstructorParameters<typeof Orchestrator>[0]["providerRouter"];
   readonly vaultRegistry?: import("../../../vault/vault-registry.js").VaultRegistry;
   readonly vaultWriteHookBudgetMs?: number;
+  /**
+   * Live model-intelligence catalog (LiteLLM/models.dev refreshed). When present,
+   * delegation candidate scoring uses fresh per-model capability/cost data instead
+   * of degrading to behavioral-profile + static-capability defaults.
+   */
+  readonly modelIntelligence?: ModelIntelligenceLookup;
 }
 
 // =============================================================================
@@ -769,7 +775,7 @@ export class DelegationManager {
     const snapshot = getProviderIntelligenceSnapshot(
       candidate.name,
       candidate.model,
-      undefined,
+      this.opts.modelIntelligence,
       candidate.provider.capabilities,
       candidate.provider.name,
     );
