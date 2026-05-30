@@ -54,6 +54,22 @@ describe("UnityProjectVault reindex vector lifecycle", () => {
     await rm(dir, { recursive: true, force: true });
   });
 
+  it("throws VaultQueryError on a query that is empty after sanitization (parity with ObsidianVault)", async () => {
+    await expect(vault.query({ text: "   " })).rejects.toMatchObject({
+      name: "VaultQueryError",
+      code: "empty_query",
+    });
+    // Operator/keyword-only queries also sanitize to empty.
+    await expect(vault.query({ text: "AND OR NOT" })).rejects.toMatchObject({
+      code: "empty_query",
+    });
+  });
+
+  it("resolves a normal query without throwing", async () => {
+    const result = await vault.query({ text: "note" });
+    expect(Array.isArray(result.hits)).toBe(true);
+  });
+
   it("keeps prior vectors when re-embedding fails transiently, then rebuilds on retry", async () => {
     // Initial index embedded the note → at least one live vector exists.
     const initialIds = [...store.live.keys()];
