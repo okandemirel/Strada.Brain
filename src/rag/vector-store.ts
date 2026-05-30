@@ -267,6 +267,14 @@ class HNSWIndex {
     this.nodes[idx] = null as unknown as HNSWNode;
   }
 
+  /** First non-removed node index, or -1 if the index is empty. */
+  private firstLiveNode(): number {
+    for (let i = 0; i < this.nodes.length; i++) {
+      if (this.nodes[i]) return i;
+    }
+    return -1;
+  }
+
   /**
    * Search for k nearest neighbors
    */
@@ -275,6 +283,13 @@ class HNSWIndex {
 
     const ef = Math.max(k, this.efSearch);
     let currEp = this.entryPoint;
+    // The entry point may have been soft-removed (remove() nulls the slot but
+    // does not update entryPoint). Fall back to any live node so traversal
+    // never starts from a null reference.
+    if (!this.nodes[currEp]) {
+      currEp = this.firstLiveNode();
+      if (currEp < 0) return [];
+    }
 
     // Search from top layer down to layer 1
     for (let l = this.maxLevel; l > 0; l--) {
@@ -299,21 +314,29 @@ class HNSWIndex {
    */
   private searchLayerClosest(query: Float32Array, entryPoint: number, level: number): number {
     let curr = entryPoint;
-    let currDist = -VectorOps.cosineSimilarity(query, this.nodes[curr]!.vector);
+    const currNode = this.nodes[curr];
+    if (!currNode) return curr; // entry was soft-removed — nothing to traverse
+    let currDist = -VectorOps.cosineSimilarity(query, currNode.vector);
     let changed = true;
 
     const visited = new Set<number>([curr]);
 
     while (changed) {
       changed = false;
-      const connections = this.nodes[curr]!.connections.get(level);
-      if (!connections) continue;
+      const node = this.nodes[curr];
+      if (!node) break;
+      const connections = node.connections.get(level);
+      if (!connections) break;
 
       for (const neighbor of connections) {
         if (visited.has(neighbor)) continue;
         visited.add(neighbor);
 
-        const neighborDist = -VectorOps.cosineSimilarity(query, this.nodes[neighbor]!.vector);
+        // Skip soft-removed neighbors still referenced by this node's edges.
+        const neighborNode = this.nodes[neighbor];
+        if (!neighborNode) continue;
+
+        const neighborDist = -VectorOps.cosineSimilarity(query, neighborNode.vector);
         if (neighborDist < currDist) {
           curr = neighbor;
           currDist = neighborDist;
@@ -334,10 +357,12 @@ class HNSWIndex {
     ef: number,
     level: number
   ): Array<{ idx: number; score: number }> {
+    const entryNode = this.nodes[entryPoint];
+    if (!entryNode) return []; // entry was soft-removed
     const candidates: Array<{ idx: number; score: number }> = [];
     const visited = new Set<number>([entryPoint]);
-    const entryScore = VectorOps.cosineSimilarity(query, this.nodes[entryPoint]!.vector);
-    
+    const entryScore = VectorOps.cosineSimilarity(query, entryNode.vector);
+
     candidates.push({ idx: entryPoint, score: entryScore });
 
     // Simple greedy best-first search
@@ -348,7 +373,9 @@ class HNSWIndex {
       let bestIdx = -1;
       let bestScore = -1;
       for (const idx of unchecked) {
-        const score = VectorOps.cosineSimilarity(query, this.nodes[idx]!.vector);
+        const node = this.nodes[idx];
+        if (!node) { unchecked.delete(idx); continue; }
+        const score = VectorOps.cosineSimilarity(query, node.vector);
         if (score > bestScore) {
           bestScore = score;
           bestIdx = idx;
@@ -359,15 +386,21 @@ class HNSWIndex {
       unchecked.delete(bestIdx);
 
       // Check neighbors
-      const connections = this.nodes[bestIdx]!.connections.get(level);
+      const bestNode = this.nodes[bestIdx];
+      if (!bestNode) continue;
+      const connections = bestNode.connections.get(level);
       if (!connections) continue;
 
       for (const neighbor of connections) {
         if (visited.has(neighbor)) continue;
         visited.add(neighbor);
 
-        const score = VectorOps.cosineSimilarity(query, this.nodes[neighbor]!.vector);
-        
+        // Skip soft-removed neighbors still referenced by this node's edges.
+        const neighborNode = this.nodes[neighbor];
+        if (!neighborNode) continue;
+
+        const score = VectorOps.cosineSimilarity(query, neighborNode.vector);
+
         // Add if better than worst in candidates or if candidates < ef
         if (candidates.length < ef) {
           candidates.push({ idx: neighbor, score });
