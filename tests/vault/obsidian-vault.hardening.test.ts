@@ -267,6 +267,35 @@ describe('ObsidianVault — hardening (P0/P1/P2)', () => {
       const afterBytes = readFileSync(canvasPath, 'utf8');
       expect(afterBytes).toBe(beforeBytes);
     });
+
+    it('self-heals on a later no-change sync once the tmp path is unblocked (canvasDirty latch)', async () => {
+      writeFileSync(join(dir, 'X.md'), '# X');
+      ({ vault, store: vectorStore } = newVault(dir));
+      await vault.init();
+
+      const canvasPath = join(dir, '.strada/vault/graph.canvas');
+      const tmpPath = `${canvasPath}.tmp`;
+
+      // Block the tmp path so the next canvas regen fails.
+      mkdirSync(tmpPath, { recursive: true });
+      writeFileSync(join(tmpPath, 'block.txt'), 'blocker');
+
+      // Edit a file → sync indexes it but the canvas regen fails (latch set).
+      writeFileSync(join(dir, 'Y.md'), '# Y');
+      const failed = await vault.sync();
+      expect(failed.canvas?.ok).toBe(false);
+      const staleBytes = readFileSync(canvasPath, 'utf8');
+
+      // Unblock the tmp path but do NOT touch any source file: with the old
+      // code the count===0 sync skips regen and the canvas stays stale forever.
+      rmSync(tmpPath, { recursive: true, force: true });
+      const healed = await vault.sync();
+
+      expect(healed.changed).toBe(0);        // no files changed this sync
+      expect(healed.canvas?.ok).toBe(true);  // dirty latch forced a regen retry
+      const healedBytes = readFileSync(canvasPath, 'utf8');
+      expect(healedBytes).not.toBe(staleBytes); // canvas actually refreshed
+    });
   });
 
   // ─────────────── SecH1: error message path redaction ───────────────

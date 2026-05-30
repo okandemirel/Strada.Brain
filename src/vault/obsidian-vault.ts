@@ -165,6 +165,15 @@ export class ObsidianVault implements IVault {
    * HNSW upsert/delete sequencing (which can otherwise leak orphan HNSW IDs).
    */
   private writeLock = new AsyncLock();
+  /**
+   * Set when a canvas regeneration fails. Forces the next sync() to retry the
+   * canvas/wikilink derivation even when no source files changed, so a transient
+   * write failure (locked .tmp, ENOSPC, rename error) can self-heal instead of
+   * leaving the `.canvas` permanently stale until an unrelated edit happens to
+   * flip count>0 again. In-memory only: a restart routes through init()→
+   * fullIndex(), which regenerates unconditionally.
+   */
+  private canvasDirty = false;
 
   constructor(deps: ObsidianVaultDeps) {
     this.id = deps.id;
@@ -205,7 +214,11 @@ export class ObsidianVault implements IVault {
       const started = Date.now();
       const { count, paths } = await this.reindexChangedInternal();
       let canvasStatus: { ok: boolean; error?: string } | undefined;
-      if (count > 0) {
+      // Derive wikilinks + canvas when files changed OR when a prior canvas
+      // regen failed (canvasDirty). The dirty latch lets a transient regen
+      // failure self-heal on a later no-change sync instead of leaving the
+      // .canvas permanently stale.
+      if (count > 0 || this.canvasDirty) {
         // Resolve wikilinks once: the index pass is sequential, so by the
         // time we get here every file in this sync has its row in
         // vault_files. The previous predicate-filtered second pass iterated
@@ -213,11 +226,18 @@ export class ObsidianVault implements IVault {
         await this.resolveWikilinks();
         canvasStatus = await this.regenerateCanvasWithStatus();
         if (!canvasStatus.ok) {
+          this.canvasDirty = true;
           getLoggerSafe().warn('[obsidian-vault] sync: canvas regen failed', {
             vaultId: this.id, op: 'sync', error: canvasStatus.error,
           });
+        } else {
+          this.canvasDirty = false;
         }
-        this.emitter.emit('update', { vaultId: this.id, changedPaths: paths });
+        // Only emit when files actually changed — a pure dirty-latch retry
+        // must not fire a spurious update with an empty changedPaths.
+        if (count > 0) {
+          this.emitter.emit('update', { vaultId: this.id, changedPaths: paths });
+        }
       }
       return { changed: count, durationMs: Date.now() - started, ...(canvasStatus ? { canvas: canvasStatus } : {}) };
     });
@@ -762,7 +782,8 @@ export class ObsidianVault implements IVault {
       // predicate-filtered pass would iterate an empty set (re-review
       // finding 2).
       await this.resolveWikilinks();
-      await this.regenerateCanvasWithStatus();
+      // fullIndex regenerates unconditionally; keep the dirty latch authoritative.
+      this.canvasDirty = !(await this.regenerateCanvasWithStatus()).ok;
       if (changed.length) {
         this.emitter.emit('update', { vaultId: this.id, changedPaths: changed });
       }
