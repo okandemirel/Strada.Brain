@@ -15,6 +15,7 @@ export default function VaultFilesTab() {
 
   const [body, setBody] = useState<string>('');
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(false);
 
   // Reset body during render when the open file changes — gives an immediate
   // blank-then-loading flash instead of flashing the previous file.
@@ -23,6 +24,7 @@ export default function VaultFilesTab() {
   if (key !== prevKey) {
     setPrevKey(key);
     setBody('');
+    setError(false);
     setLoading(Boolean(selected && path));
   }
 
@@ -31,9 +33,9 @@ export default function VaultFilesTab() {
     const ctrl = new AbortController();
     fetch(`/api/vaults/${encodeURIComponent(selected)}/file?path=${encodeURIComponent(path)}`, { signal: ctrl.signal })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
-      .then((d: { body?: string }) => setBody(d.body ?? ''))
+      .then((d: { body?: string }) => { setBody(d.body ?? ''); setError(false); })
       .catch((err) => {
-        if ((err as Error).name !== 'AbortError') setBody('');
+        if ((err as Error).name !== 'AbortError') { setBody(''); setError(true); }
       })
       .finally(() => setLoading(false));
     return () => ctrl.abort();
@@ -59,6 +61,10 @@ export default function VaultFilesTab() {
     <div className="h-full overflow-auto">
       {loading ? (
         <div className="p-6 text-sm text-[var(--color-text-tertiary)] animate-pulse">…</div>
+      ) : error ? (
+        <div className="h-full flex flex-col items-center justify-center gap-2 p-6 text-sm text-[var(--color-error)]">
+          {t('errors.somethingWentWrong', { ns: 'common' })}
+        </div>
       ) : path.endsWith('.md') ? (
         <div className="p-6 max-w-4xl mx-auto">
           <MarkdownPreview source={body} />
