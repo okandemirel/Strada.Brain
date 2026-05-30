@@ -29,7 +29,7 @@ import { Daemon } from "./gateway/daemon.js";
 import { bootstrap } from "./core/bootstrap.js";
 import { createContainer } from "./core/di-container.js";
 import { shouldEnableDaemonMode } from "./core/daemon-mode.js";
-import { SetupWizard, buildSetupAccessUrl } from "./core/setup-wizard.js";
+import { SetupWizard, buildSetupAccessUrl, buildSetupReadyUrl } from "./core/setup-wizard.js";
 import { AppError, setupGlobalErrorHandlers } from "./common/errors.js";
 import {
   getSafeCurrentWorkingDirectory,
@@ -558,9 +558,13 @@ async function startApp(
     });
 
     if (activeWizard) {
-      activeWizard.markBootstrapReady("/");
+      // When the wizard ran on a different port than the web channel, a relative
+      // "/" redirect would point the browser back at the (now-closed) wizard port.
+      // Use the absolute web-channel URL so the redirect lands on the running app.
+      const readyUrl = buildSetupReadyUrl(config.web.port);
+      activeWizard.markBootstrapReady(readyUrl);
       logger.info("Setup bootstrap handoff ready", {
-        readyUrl: "/",
+        readyUrl,
         channelType,
       });
       activeWizard = null;

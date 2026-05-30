@@ -181,6 +181,27 @@ describe("SetupWizard path validation", () => {
     expect(buildSetupReadyUrl(3000)).toBe("http://127.0.0.1:3000/");
   });
 
+  it("serves an absolute cross-port ready url when the web channel runs on a different port than the wizard", async () => {
+    // Regression: index.ts must hand markBootstrapReady the absolute web-channel
+    // URL (buildSetupReadyUrl(config.web.port)) instead of a relative "/", or the
+    // browser's refresh redirect would point back at the now-closed wizard port.
+    const wizard = new SetupWizard({ port: 0 });
+    const webChannelReadyUrl = buildSetupReadyUrl(4321);
+    wizard.markBootstrapStarting("Strada is starting the main web app.");
+    wizard.markBootstrapReady(webChannelReadyUrl);
+
+    const status = makeResponse();
+    await (wizard as unknown as {
+      handleRequest: (req: { url: string; method: string; headers?: Record<string, string> }, res: unknown) => Promise<void>;
+    }).handleRequest({ url: "/api/setup/status", method: "GET" }, status.response);
+
+    const parsed = JSON.parse(status.read().body) as { state: string; readyUrl: string };
+    expect(parsed.state).toBe("ready");
+    expect(parsed.readyUrl).toBe(webChannelReadyUrl);
+    expect(parsed.readyUrl).toBe("http://127.0.0.1:4321/");
+    expect(parsed.readyUrl).not.toBe("/");
+  });
+
   it("writes EMBEDDING_MODEL when provided with explicit provider", () => {
     const lines = buildSetupEnvLines({
       PROVIDER_CHAIN: "ollama",
