@@ -139,6 +139,18 @@ export class TaskManager extends EventEmitter {
       this.abortControllers.delete(taskId);
     }
 
+    // If the task was paused, release its conversation lock. pauseTask() added
+    // the conversationKey to BackgroundExecutor.pausedConversations and only
+    // resumeTask() removes it — but resumeTask() bails at its `status === paused`
+    // guard once the task is cancelled, so without this every future task in the
+    // conversation would be skipped forever (e.g. /cancel during the 500ms
+    // auto-resume window, or cancelling a recovery-paused task).
+    if (task.status === TaskStatus.paused) {
+      this.executor.resumeConversation(
+        getTaskConversationKey(task.chatId, task.channelType, task.conversationId),
+      );
+    }
+
     this.storage.updateStatus(taskId, TaskStatus.cancelled);
     this.emit("task:cancelled", taskId);
     getLogger().info("Task cancelled", { taskId });

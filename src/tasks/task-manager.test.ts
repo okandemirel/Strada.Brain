@@ -221,6 +221,31 @@ describe("TaskManager", () => {
       .abortControllers.has(task!.id)).toBe(false);
   });
 
+  // Regression (H1): cancelling a *paused* task must release its conversation
+  // lock — otherwise the conversationKey is stuck in pausedConversations forever
+  // (resumeTask() can no longer remove it once the task is cancelled) and every
+  // future task in that conversation is skipped.
+  it("releases the conversation lock when cancelling a paused task", () => {
+    const pausedTask = buildTask({
+      id: "task_paused1" as Task["id"],
+      status: TaskStatus.paused,
+      chatId: "chat-x",
+      channelType: "cli",
+    });
+    const storage = {
+      load: vi.fn().mockReturnValue(pausedTask),
+      updateStatus: vi.fn(),
+    } as any;
+    const executor = { resumeConversation: vi.fn() } as any;
+    const manager = new TaskManager(storage, executor);
+
+    const cancelled = manager.cancel("task_paused1" as Task["id"]);
+
+    expect(cancelled).toBe(true);
+    expect(executor.resumeConversation).toHaveBeenCalledTimes(1);
+    expect(storage.updateStatus).toHaveBeenCalledWith("task_paused1", TaskStatus.cancelled);
+  });
+
   it("creates a goal retry attempt that preserves completed checkpoints", () => {
     const failedTask = buildTask({
       id: "task_goal123" as Task["id"],
