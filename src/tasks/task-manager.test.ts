@@ -197,6 +197,30 @@ describe("TaskManager", () => {
     expect(executor.enqueue).toHaveBeenCalledOnce()
   });
 
+  // Regression: enqueue() throws on queue overflow. submit() runs fire-and-forget
+  // from MessageRouter.flushPendingChat (`void this.flushPendingChat(...)`), so a
+  // throw escaping submit() becomes an unhandledRejection — which the global
+  // handler in src/index.ts escalates to a full daemon shutdown.
+  it("does not let an enqueue overflow throw escape submit()", () => {
+    const storage = { save: vi.fn() } as any;
+    const executor = {
+      enqueue: vi.fn().mockImplementation(() => {
+        throw new Error("Task queue full (max 100). Try again later.");
+      }),
+    } as any;
+    const manager = new TaskManager(storage, executor);
+
+    let task: Task | undefined;
+    expect(() => {
+      task = manager.submit("chat-1", "cli", "do the thing");
+    }).not.toThrow();
+    expect(executor.enqueue).toHaveBeenCalledOnce();
+    expect(task).toBeDefined();
+    // The unusable abort controller for the rejected task is cleaned up.
+    expect((manager as unknown as { abortControllers: Map<string, AbortController> })
+      .abortControllers.has(task!.id)).toBe(false);
+  });
+
   it("creates a goal retry attempt that preserves completed checkpoints", () => {
     const failedTask = buildTask({
       id: "task_goal123" as Task["id"],
