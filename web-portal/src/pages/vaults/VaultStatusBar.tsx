@@ -20,6 +20,26 @@ export function VaultStatusBar() {
   const [reindexError, setReindexError] = useState(false);
   const [now, setNow] = useState<number>(() => Date.now());
   const prevGraphRef = useRef<typeof graph | undefined>(undefined);
+  // Authoritative index stats from the backend (/stats). Falls back to
+  // graph-derived values when unavailable (before the fetch resolves / errors).
+  const [stats, setStats] = useState<{ symbolCount?: number; fileCount?: number; lastIndexedAt?: number | null } | null>(null);
+  const [statsNonce, setStatsNonce] = useState(0);
+
+  useEffect(() => {
+    if (!vaultId) { setStats(null); return; }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch(`/api/vaults/${encodeURIComponent(vaultId)}/stats`);
+        if (!res.ok) return;
+        const data = (await res.json()) as { symbolCount?: number; fileCount?: number; lastIndexedAt?: number | null };
+        if (!cancelled) setStats(data);
+      } catch {
+        /* fall back to graph-derived values */
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [vaultId, statsNonce]);
 
   // Record a timestamp the first time we see a non-empty graph for each
   // distinct graph object. Writing via useEffect here is intentional — this
@@ -39,20 +59,22 @@ export function VaultStatusBar() {
     return () => clearInterval(id);
   }, []);
 
-  const symbolCount = graph?.nodes.length ?? 0;
+  const symbolCount = stats?.symbolCount ?? graph?.nodes.length ?? 0;
   // Memoize per-graph file count so re-renders (e.g. the 10s tick for the
   // relative timestamp) don't rebuild the Set each time.
-  const fileCount = useMemo(() => {
+  const graphFileCount = useMemo(() => {
     if (!graph) return 0;
     const set = new Set<string>();
     for (const n of graph.nodes) if (n.file) set.add(n.file);
     return set.size;
   }, [graph]);
+  const fileCount = stats?.fileCount ?? graphFileCount;
 
   // `now` is a synced-from-external state; subtraction is pure. The i18n
   // helper reads from the shared `common:time.*` namespace so any component
   // that needs "X units ago" formatting shares one set of keys.
-  const relative = lastSync ? formatRelativeI18n(now - lastSync, t) : null;
+  const effectiveLastSync = stats?.lastIndexedAt ?? lastSync;
+  const relative = effectiveLastSync ? formatRelativeI18n(now - effectiveLastSync, t) : null;
 
   const triggerReindex = async () => {
     if (!vaultId || reindexing) return;
@@ -70,6 +92,8 @@ export function VaultStatusBar() {
       if (!res.ok) {
         throw new Error(`HTTP ${res.status}`);
       }
+      // Refetch authoritative stats after a successful reindex.
+      setStatsNonce((n) => n + 1);
     } catch {
       // Endpoint may not exist; mark error so the AlertCircle indicator shows.
       // Cache clear still causes graph to refetch on next open.
@@ -104,7 +128,7 @@ export function VaultStatusBar() {
                   className="w-3 h-3 text-[var(--color-error)]"
                   aria-label={t('status.reindexError')}
                 />
-              ) : lastSync ? (
+              ) : effectiveLastSync ? (
                 <Check className="w-3 h-3 text-[var(--color-success)]" />
               ) : null}
               {relative

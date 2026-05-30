@@ -305,7 +305,7 @@ export class ObsidianVault implements IVault {
       if (lastIndexedAt === null || f.indexedAt > lastIndexedAt) lastIndexedAt = f.indexedAt;
     }
     const st = await stat(this.dbPath).catch(() => null);
-    return { fileCount: files.length, chunkCount, lastIndexedAt, dbBytes: st?.size ?? 0 };
+    return { fileCount: files.length, symbolCount: this.store.symbolCount(), chunkCount, lastIndexedAt, dbBytes: st?.size ?? 0 };
   }
 
   listFiles(): VaultFile[] { return this.store.listFiles(); }

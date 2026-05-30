@@ -43,6 +43,7 @@ export interface VaultQueryResult {
 
 export interface VaultStats {
   fileCount: number;
+  symbolCount: number;
   chunkCount: number;
   lastIndexedAt: number | null;
   dbBytes: number;

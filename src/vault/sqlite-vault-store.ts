@@ -224,6 +224,10 @@ export class SqliteVaultStore {
     return (this._stmtChunkCount!.get() as { n: number }).n;
   }
 
+  symbolCount(): number {
+    return (this.db.prepare('SELECT COUNT(*) AS n FROM vault_symbols').get() as { n: number }).n;
+  }
+
   /**
    * Full-text search via FTS5 BM25.
    * @returns hits sorted by relevance, with `score > 0` where higher = more relevant

@@ -68,4 +68,31 @@ describe('VaultStatusBar', () => {
       expect.objectContaining({ method: 'POST' }),
     );
   });
+
+  it('prefers authoritative /stats counts over graph-derived values', async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ symbolCount: 42, fileCount: 7, lastIndexedAt: Date.now() }),
+    } as Response));
+    (globalThis as { fetch: typeof fetch }).fetch = fetchMock as unknown as typeof fetch;
+
+    useVaultStore.setState({
+      selected: 'v1',
+      // Graph says 1 symbol / 1 file — /stats (42 / 7) must win.
+      graphCache: {
+        v1: {
+          nodes: [{ id: 'n1', type: 'text', text: '', x: 0, y: 0, width: 0, height: 0, file: 'a.ts' }],
+          edges: [],
+        },
+      },
+    });
+
+    render(<VaultStatusBar />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/42 symbols/i)).toBeInTheDocument();
+    });
+    expect(screen.getByText(/7 files/i)).toBeInTheDocument();
+  });
 });
