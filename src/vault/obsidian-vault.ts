@@ -399,6 +399,25 @@ export class ObsidianVault implements IVault {
     }
   }
 
+  /**
+   * Delete a note via the Obsidian REST API, then incrementally remove its
+   * SQLite rows + HNSW vectors so the index doesn't carry orphans until the
+   * next full sync. Reuses the same removal helper the sync-prune path uses
+   * (deleteIndexedFileInternal), serialized through the write lock to keep
+   * HNSW/edge state consistent with concurrent reindex/sync. On a REST failure
+   * the (path-redacted) error propagates BEFORE any index mutation, so the
+   * note and its index rows stay intact and consistent.
+   */
+  async deleteNote(relPath: string): Promise<void> {
+    const safeRelPath = validateSafeVaultWriteRelPath(relPath, 0);
+    try {
+      await this.client.deleteNote(safeRelPath);
+    } catch (err) {
+      throw this.redactError(err);
+    }
+    await this.writeLock.run(async () => this.deleteIndexedFileInternal(safeRelPath));
+  }
+
   /** Search Obsidian's native index. */
   async searchObsidian(query: string): Promise<import('./obsidian-client.js').ObsidianSearchResult[]> {
     return this.client.search(query);

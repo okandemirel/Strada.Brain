@@ -298,6 +298,38 @@ describe('ObsidianVault — hardening (P0/P1/P2)', () => {
     });
   });
 
+  // ─────────────── deleteNote: incremental index cleanup ───────────────
+  describe('deleteNote removes index rows + HNSW vectors without a full sync', () => {
+    it('drops the deleted note and its vectors immediately, and a later sync finds nothing to prune', async () => {
+      writeFileSync(join(dir, 'A.md'), '# A\n\nalpha body content for chunking');
+      writeFileSync(join(dir, 'B.md'), '# B\n\nbeta body content for chunking');
+      ({ vault, store: vectorStore } = newVault(dir));
+      await vault.init();
+
+      expect(vault.listFiles().length).toBe(2);
+      const sizeBefore = vectorStore.items.size;
+      expect(sizeBefore).toBeGreaterThan(0);
+
+      // REST DELETE succeeds (204 No Content). Also remove A.md from disk so a
+      // later sync wouldn't re-prune it and mask the incremental cleanup.
+      fetchSpy.mockResolvedValue(new Response(null, { status: 204 }) as unknown as Response);
+      rmSync(join(dir, 'A.md'));
+
+      await vault.deleteNote('A.md');
+
+      // Immediately, with NO sync: A.md is gone from the index and its vectors removed.
+      expect(vault.listFiles().some((f) => f.path === 'A.md')).toBe(false);
+      const stats = await vault.stats();
+      expect(stats.fileCount).toBe(1);
+      expect(vectorStore.items.size).toBeLessThan(sizeBefore);
+
+      // A follow-up sync must find nothing to prune — delete already cleaned up.
+      const afterDeleteSize = vectorStore.items.size;
+      await vault.sync();
+      expect(vectorStore.items.size).toBe(afterDeleteSize);
+    });
+  });
+
   // ─────────────── SecH1: error message path redaction ───────────────
   describe('SecH1: canvas error messages do not leak absolute paths', () => {
     it('redactPathsInMessage replaces vault root + home dir with placeholders', async () => {
