@@ -341,6 +341,114 @@ describe("DelegationManager", () => {
     });
   });
 
+  describe("budget gate", () => {
+    it("rejects delegation before spawn when the parent has exceeded its cap", async () => {
+      const budgetTracker = createMockBudgetTracker();
+      budgetTracker.isAgentExceeded.mockReturnValue(true);
+      budgetTracker.getAgentUsage.mockReturnValue({ usedUsd: 12, limitUsd: 10, pct: 1.2 });
+
+      const gatedManager = new DelegationManager(
+        buildManagerOpts({
+          delegationLog,
+          budgetTracker: budgetTracker as never,
+          getAgentBudgetCap: () => 10,
+        }),
+      );
+
+      const request: DelegationRequest = {
+        type: "code_review",
+        task: "Review this code",
+        parentAgentId: PARENT_AGENT_ID,
+        depth: 0,
+        mode: "sync",
+        toolContext: TEST_TOOL_CONTEXT,
+      };
+
+      await expect(gatedManager.delegate(request)).rejects.toThrow(
+        /budget exceeded/i,
+      );
+      // Cap checked against the parent agent; sub-agent never spawned (no cost recorded).
+      expect(budgetTracker.isAgentExceeded).toHaveBeenCalledWith(PARENT_AGENT_ID, 10);
+      expect(budgetTracker.recordCost).not.toHaveBeenCalled();
+      expect(orchestratorHandleMessage).not.toHaveBeenCalled();
+    });
+
+    it("allows delegation when the parent is under its cap", async () => {
+      const budgetTracker = createMockBudgetTracker();
+      budgetTracker.isAgentExceeded.mockReturnValue(false);
+
+      const gatedManager = new DelegationManager(
+        buildManagerOpts({
+          delegationLog,
+          budgetTracker: budgetTracker as never,
+          getAgentBudgetCap: () => 10,
+        }),
+      );
+
+      const request: DelegationRequest = {
+        type: "code_review",
+        task: "Review this code",
+        parentAgentId: PARENT_AGENT_ID,
+        depth: 0,
+        mode: "sync",
+        toolContext: TEST_TOOL_CONTEXT,
+      };
+
+      const result = await gatedManager.delegate(request);
+      expect(result.content).toBe("Sub-agent completed the task successfully.");
+      expect(budgetTracker.isAgentExceeded).toHaveBeenCalledWith(PARENT_AGENT_ID, 10);
+    });
+
+    it("skips the budget gate (no-op) when no cap resolver is wired", async () => {
+      const budgetTracker = createMockBudgetTracker();
+      // Even if the tracker would report exceeded, no resolver => gate must not run.
+      budgetTracker.isAgentExceeded.mockReturnValue(true);
+
+      const ungatedManager = new DelegationManager(
+        buildManagerOpts({ delegationLog, budgetTracker: budgetTracker as never }),
+      );
+
+      const request: DelegationRequest = {
+        type: "code_review",
+        task: "Review this code",
+        parentAgentId: PARENT_AGENT_ID,
+        depth: 0,
+        mode: "sync",
+        toolContext: TEST_TOOL_CONTEXT,
+      };
+
+      const result = await ungatedManager.delegate(request);
+      expect(result.content).toBe("Sub-agent completed the task successfully.");
+      expect(budgetTracker.isAgentExceeded).not.toHaveBeenCalled();
+    });
+
+    it("skips the budget gate when the resolver returns undefined (unknown agent)", async () => {
+      const budgetTracker = createMockBudgetTracker();
+      budgetTracker.isAgentExceeded.mockReturnValue(true);
+
+      const gatedManager = new DelegationManager(
+        buildManagerOpts({
+          delegationLog,
+          budgetTracker: budgetTracker as never,
+          getAgentBudgetCap: () => undefined,
+        }),
+      );
+
+      const request: DelegationRequest = {
+        type: "code_review",
+        task: "Review this code",
+        parentAgentId: PARENT_AGENT_ID,
+        depth: 0,
+        mode: "sync",
+        toolContext: TEST_TOOL_CONTEXT,
+      };
+
+      const result = await gatedManager.delegate(request);
+      expect(result.content).toBe("Sub-agent completed the task successfully.");
+      expect(budgetTracker.isAgentExceeded).not.toHaveBeenCalled();
+    });
+  });
+
   describe("concurrency enforcement", () => {
     it("enforces max concurrent delegations per parent", async () => {
       const requests = Array.from({ length: 4 }, (_, i) => ({

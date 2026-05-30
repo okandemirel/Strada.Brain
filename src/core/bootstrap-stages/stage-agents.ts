@@ -25,6 +25,7 @@ import { ApprovalQueue } from "../../daemon/security/approval-queue.js";
 import { TriggerRegistry } from "../../daemon/trigger-registry.js";
 import { MetricsRecorder } from "../../metrics/metrics-recorder.js";
 import { createAgentId } from "../../agents/multi/agent-types.js";
+import type { AgentId } from "../../agents/multi/agent-types.js";
 import type { StradaDepsStatus } from "../../config/strada-deps.js";
 import { collectApiKeys } from "../../rag/embeddings/embedding-resolver.js";
 import { collectProviderCredentials } from "../provider-config.js";
@@ -212,6 +213,11 @@ export async function initializeMultiAgentDelegationStage(
       providerRouter: params.providerRouter as ConstructorParameters<typeof DelegationManager>[0]["providerRouter"],
       vaultRegistry: params.vaultRegistry,
       vaultWriteHookBudgetMs: params.vaultWriteHookBudgetMs,
+      // Resolve the live per-agent budget cap so DelegationManager can reject a
+      // delegation before spawn when the parent has already exceeded its cap.
+      // Looked up fresh from the registry to honor runtime cap changes; returns
+      // undefined for unknown agents so the budget gate stays a no-op there.
+      getAgentBudgetCap: (agentId: AgentId) => agentRegistry.getById(agentId)?.budgetCapUsd,
     };
     delegationManager = deps.createDelegationManager?.(delegationManagerOptions)
       ?? new DelegationManager(delegationManagerOptions);

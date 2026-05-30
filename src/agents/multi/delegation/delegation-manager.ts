@@ -71,6 +71,14 @@ export interface DelegationManagerOptions {
    * of degrading to behavioral-profile + static-capability defaults.
    */
   readonly modelIntelligence?: ModelIntelligenceLookup;
+  /**
+   * Resolve the live per-agent budget cap (USD) for a parent agent. When present,
+   * delegations are rejected before spawn if the parent has already exceeded its
+   * cap (mirrors AgentManager.isAgentExceeded enforcement). Looked up fresh at
+   * delegation time so runtime cap changes are honored. Returns undefined when the
+   * agent is unknown, in which case the budget gate is skipped (no-op).
+   */
+  readonly getAgentBudgetCap?: (agentId: AgentId) => number | undefined;
 }
 
 // =============================================================================
@@ -258,6 +266,23 @@ export class DelegationManager {
       if (allDown) {
         throw new Error("All providers are in cooldown — delegation skipped to prevent thundering herd");
       }
+    }
+
+    // Budget gate: reject before spawning if the parent has already exceeded its
+    // per-agent cap. Mirrors AgentManager.isAgentExceeded(id, cap). Optional — when
+    // no cap is resolvable (no resolver wired or agent unknown) this is a no-op so
+    // delegation continues unchanged. Runs before acquiring a concurrency slot so a
+    // rejected delegation never reserves a slot.
+    const parentAgentId = request.parentAgentId as AgentId;
+    const budgetCapUsd = this.opts.getAgentBudgetCap?.(parentAgentId);
+    if (
+      budgetCapUsd !== undefined &&
+      this.opts.budgetTracker.isAgentExceeded(parentAgentId, budgetCapUsd)
+    ) {
+      const usage = this.opts.budgetTracker.getAgentUsage(parentAgentId, budgetCapUsd);
+      throw new Error(
+        `Parent agent budget exceeded ($${usage.usedUsd.toFixed(2)} / $${budgetCapUsd.toFixed(2)}) — delegation rejected before spawn.`,
+      );
     }
 
     // Atomically check + reserve concurrency slot to prevent TOCTOU race
