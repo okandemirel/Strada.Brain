@@ -3,11 +3,14 @@ import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 import rehypeHighlight from 'rehype-highlight'
 import rehypeKatex from 'rehype-katex'
+import remarkFrontmatter from 'remark-frontmatter'
 import rehypeSanitize, { defaultSchema } from 'rehype-sanitize'
 import {
   remarkObsidianComments,
   remarkObsidianHighlight,
   remarkObsidianWikiLinks,
+  remarkObsidianCallouts,
+  remarkFrontmatterProperties,
 } from './obsidian-markdown'
 import 'katex/dist/katex.min.css'
 
@@ -17,11 +20,14 @@ import 'katex/dist/katex.min.css'
  * fixes apply consistently everywhere instead of drifting between copies.
  */
 export const REMARK_PLUGINS: PluggableList = [
+  remarkFrontmatter,
   remarkGfm,
   remarkMath,
   remarkObsidianComments,
   remarkObsidianHighlight,
   remarkObsidianWikiLinks,
+  remarkObsidianCallouts,
+  remarkFrontmatterProperties,
 ]
 
 /**

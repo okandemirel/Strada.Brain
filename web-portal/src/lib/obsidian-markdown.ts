@@ -1,6 +1,8 @@
 import { visit, SKIP } from 'unist-util-visit'
 import type { Plugin } from 'unified'
-import type { Root, Text, Parent, PhrasingContent } from 'mdast'
+import type {
+  Root, Text, Parent, PhrasingContent, Blockquote, Paragraph, Table, TableRow, TableCell,
+} from 'mdast'
 
 /**
  * Custom remark plugins that bring Obsidian-flavoured inline syntax to the
@@ -81,4 +83,80 @@ export const remarkObsidianWikiLinks: Plugin<[], Root> = () => (tree) => {
     if (isEmbed) return elementCarrier('span', `↪ ${alias || target}`, 'obsidian-embed')
     return elementCarrier('span', alias || target, 'obsidian-wikilink')
   })
+}
+
+/**
+ * Obsidian callouts: a blockquote whose first line is `[!type] …` becomes a
+ * styled `<div class="obsidian-callout callout-{type}">` with a title row,
+ * instead of rendering the raw `[!type]` text inside a plain blockquote.
+ * (Styling lives in globals.css so it doesn't depend on Tailwind class
+ * scanning of this .ts file.)
+ */
+export const remarkObsidianCallouts: Plugin<[], Root> = () => (tree) => {
+  visit(tree, 'blockquote', (node: Blockquote) => {
+    const firstPara = node.children[0]
+    if (!firstPara || firstPara.type !== 'paragraph') return
+    const firstText = firstPara.children[0]
+    if (!firstText || firstText.type !== 'text') return
+    const marker = /^\[!(\w+)\]([+-]?)[ \t]*/.exec(firstText.value)
+    if (!marker) return
+    const type = (marker[1] ?? 'note').toLowerCase()
+    // Strip only the `[!type]` marker; any custom title text stays in the body.
+    firstText.value = firstText.value.slice(marker[0].length)
+    const titleBlock: Paragraph = {
+      type: 'paragraph',
+      children: [text(type)],
+      data: { hName: 'div', hProperties: { className: ['callout-title'] } },
+    }
+    node.children.unshift(titleBlock)
+    node.data = {
+      hName: 'div',
+      hProperties: { className: ['obsidian-callout', `callout-${type}`] },
+    }
+  })
+}
+
+function parseSimpleFrontmatter(src: string): Array<{ key: string; value: string }> {
+  const rows: Array<{ key: string; value: string }> = []
+  for (const rawLine of src.split('\n')) {
+    // Skip blanks, comments, list items and nested (indented) lines — this is a
+    // lightweight key:value view, not a full YAML parser.
+    if (!rawLine.trim() || rawLine.trimStart().startsWith('#') || rawLine.trimStart().startsWith('-') || /^\s/.test(rawLine)) {
+      continue
+    }
+    const colon = rawLine.indexOf(':')
+    if (colon <= 0) continue
+    const key = rawLine.slice(0, colon).trim()
+    let value = rawLine.slice(colon + 1).trim()
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1)
+    }
+    rows.push({ key, value })
+  }
+  return rows
+}
+
+function cell(value: string): TableCell {
+  return { type: 'tableCell', children: [text(value)] }
+}
+
+/**
+ * Frontmatter handling. remark-frontmatter parses the leading `---…---` block
+ * into a `yaml` node (so it is no longer dumped as a raw `hr`/heading mess).
+ * This transform turns that node into a small Property/Value table, echoing
+ * Obsidian's "properties" panel. Empty/unparseable frontmatter is just removed.
+ */
+export const remarkFrontmatterProperties: Plugin<[], Root> = () => (tree) => {
+  const idx = tree.children.findIndex((n) => (n as { type: string }).type === 'yaml')
+  if (idx === -1) return
+  const yamlNode = tree.children[idx] as unknown as { value?: string }
+  const rows = parseSimpleFrontmatter(yamlNode.value ?? '')
+  if (rows.length === 0) {
+    tree.children.splice(idx, 1)
+    return
+  }
+  const header: TableRow = { type: 'tableRow', children: [cell('Property'), cell('Value')] }
+  const body: TableRow[] = rows.map((r) => ({ type: 'tableRow', children: [cell(r.key), cell(r.value)] }))
+  const table: Table = { type: 'table', align: [null, null], children: [header, ...body] }
+  tree.children.splice(idx, 1, table as unknown as Root['children'][number])
 }

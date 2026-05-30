@@ -89,4 +89,28 @@ describe('MarkdownPreview', () => {
     expect(container.textContent).toContain('after');
     expect(container.innerHTML).not.toContain('%%');
   });
+
+  it('renders a [!type] blockquote as a styled callout, not raw marker text', () => {
+    const { container } = render(
+      <MarkdownPreview source={'> [!warning] Watch out\n> careful now'} />,
+    );
+    const callout = container.querySelector('.obsidian-callout.callout-warning');
+    expect(callout).not.toBeNull();
+    expect(callout?.querySelector('.callout-title')?.textContent).toBe('warning');
+    expect(callout?.textContent).toContain('careful now');
+    expect(container.innerHTML).not.toContain('[!warning]');
+  });
+
+  it('renders YAML frontmatter as a properties table instead of a raw dump', () => {
+    const { container } = render(
+      <MarkdownPreview source={'---\ntitle: My Note\nstatus: draft\n---\n\n# Body'} />,
+    );
+    const table = container.querySelector('table');
+    expect(table).not.toBeNull();
+    expect(table?.textContent).toContain('title');
+    expect(table?.textContent).toContain('My Note');
+    expect(container.querySelector('h1')?.textContent).toBe('Body');
+    // The raw frontmatter delimiters/key lines must not leak as body text.
+    expect(container.innerHTML).not.toContain('title: My Note');
+  });
 });
