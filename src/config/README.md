@@ -120,11 +120,6 @@ Exports a `secretPatterns: SecretPattern[]` array with 15 regex patterns for san
 | `aws_access_key`                   | `AKIA` prefix                                      |
 | `secret_value`                     | Generic `secret/token/password/key` assignments    |
 
-### Config Merging
-
-- `createPartialConfig(env)` builds a `PartialConfig` from a subset of env vars
-- `mergeConfigs(base, partial)` shallow-merges top-level fields and each nested sub-config object
-
 ## Key Files
 
 | File        | Purpose                                                                           |

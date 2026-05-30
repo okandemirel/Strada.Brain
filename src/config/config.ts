@@ -12,7 +12,7 @@ import { realpathSync, statSync } from "node:fs";
 import { z } from "zod";
 import * as dotenv from "dotenv";
 import type { SecretPattern } from "../security/secret-sanitizer.js";
-import type { DeepPartial, Result, ValidationResult, ValidationError } from "../types/index.js";
+import type { Result, ValidationResult, ValidationError } from "../types/index.js";
 import { resolveDotenvPath } from "../common/runtime-paths.js";
 import type { BayesianConfig, CrossSessionConfig } from "../learning/types.js";
 import type { ToolChainConfig } from "../learning/chains/chain-types.js";
@@ -900,9 +900,6 @@ export interface Config {
   // Obsidian Integration
   readonly obsidian: ObsidianConfig;
 }
-
-/** Partial config for updates */
-export type PartialConfig = DeepPartial<Config>;
 
 // =============================================================================
 // ZOD SCHEMAS
@@ -3606,88 +3603,4 @@ export function checkChannelConfig(
   }
 
   return { valid: errors.length === 0, errors };
-}
-
-/**
- * Create a partial config from environment subset
- */
-export function createPartialConfig(env: Partial<EnvVarMap>): PartialConfig {
-  const raw: Record<string, unknown> = {};
-
-  if (env.ANTHROPIC_API_KEY) raw.anthropicApiKey = env.ANTHROPIC_API_KEY;
-  if (env.ANTHROPIC_AUTH_MODE) raw.anthropicAuthMode = env.ANTHROPIC_AUTH_MODE;
-  if (env.ANTHROPIC_AUTH_TOKEN) raw.anthropicAuthToken = env.ANTHROPIC_AUTH_TOKEN;
-  if (env.OPENAI_API_KEY) raw.openaiApiKey = env.OPENAI_API_KEY;
-  if (env.OPENAI_AUTH_MODE) raw.openaiAuthMode = env.OPENAI_AUTH_MODE;
-  if (env.OPENAI_CHATGPT_AUTH_FILE) raw.openaiChatgptAuthFile = env.OPENAI_CHATGPT_AUTH_FILE;
-  if (env.OPENAI_SUBSCRIPTION_ACCESS_TOKEN)
-    raw.openaiSubscriptionAccessToken = env.OPENAI_SUBSCRIPTION_ACCESS_TOKEN;
-  if (env.OPENAI_SUBSCRIPTION_ACCOUNT_ID)
-    raw.openaiSubscriptionAccountId = env.OPENAI_SUBSCRIPTION_ACCOUNT_ID;
-  if (env.LOG_LEVEL) raw.logLevel = env.LOG_LEVEL;
-  if (env.READ_ONLY_MODE) raw.security = { readOnlyMode: env.READ_ONLY_MODE === "true" };
-
-  return raw as PartialConfig;
-}
-
-/**
- * Merge partial configs
- */
-export function mergeConfigs(base: Config, partial: PartialConfig): Config {
-  return {
-    ...base,
-    ...partial,
-    telegram: { ...base.telegram, ...partial.telegram },
-    discord: { ...base.discord, ...partial.discord },
-    slack: { ...base.slack, ...partial.slack },
-    whatsapp: { ...base.whatsapp, ...partial.whatsapp },
-    matrix: { ...base.matrix, ...partial.matrix },
-    irc: { ...base.irc, ...partial.irc },
-    teams: { ...base.teams, ...partial.teams },
-    security: {
-      ...base.security,
-      ...partial.security,
-      systemAuth: {
-        ...base.security.systemAuth,
-        ...(partial.security?.systemAuth ?? {}),
-      },
-    },
-    dashboard: { ...base.dashboard, ...partial.dashboard },
-    websocketDashboard: { ...base.websocketDashboard, ...partial.websocketDashboard },
-    prometheus: { ...base.prometheus, ...partial.prometheus },
-    modelIntelligence: {
-      ...base.modelIntelligence,
-      ...((partial as Partial<Config>).modelIntelligence ?? {}),
-    },
-    memory: {
-      ...base.memory,
-      ...partial.memory,
-      unified: {
-        ...base.memory.unified,
-        ...(partial.memory?.unified ?? {}),
-        tierLimits: {
-          ...base.memory.unified.tierLimits,
-          ...(partial.memory?.unified?.tierLimits ?? {}),
-        },
-      },
-    },
-    rag: { ...base.rag, ...partial.rag },
-    rateLimit: { ...base.rateLimit, ...partial.rateLimit },
-    bayesian: { ...base.bayesian, ...partial.bayesian },
-    goalMaxDepth: (partial as Partial<Config>).goalMaxDepth ?? base.goalMaxDepth,
-    goalMaxRetries: (partial as Partial<Config>).goalMaxRetries ?? base.goalMaxRetries,
-    goalMaxFailures: (partial as Partial<Config>).goalMaxFailures ?? base.goalMaxFailures,
-    goalParallelExecution:
-      (partial as Partial<Config>).goalParallelExecution ?? base.goalParallelExecution,
-    goalMaxParallel: (partial as Partial<Config>).goalMaxParallel ?? base.goalMaxParallel,
-    goal: { ...base.goal, ...((partial as Partial<Config>).goal ?? {}) },
-    tasks: { ...base.tasks, ...((partial as Partial<Config>).tasks ?? {}) },
-    interaction: { ...base.interaction, ...((partial as Partial<Config>).interaction ?? {}) },
-    toolChain: { ...base.toolChain, ...(partial as Partial<Config>).toolChain },
-    crossSession: { ...base.crossSession, ...(partial as Partial<Config>).crossSession },
-    reRetrieval: { ...base.reRetrieval, ...((partial as Partial<Config>).reRetrieval ?? {}) },
-    notification: { ...base.notification, ...((partial as Partial<Config>).notification ?? {}) },
-    quietHours: { ...base.quietHours, ...((partial as Partial<Config>).quietHours ?? {}) },
-    digest: { ...base.digest, ...((partial as Partial<Config>).digest ?? {}) },
-  } as Config;
 }
