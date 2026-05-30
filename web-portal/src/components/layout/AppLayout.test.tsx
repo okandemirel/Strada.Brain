@@ -24,6 +24,10 @@ vi.mock('../ui/tooltip', () => ({
 
 import AppLayout from './AppLayout'
 
+function Boom(): React.ReactNode {
+  throw new Error('admin page boom')
+}
+
 function renderLayout(route = '/') {
   return render(
     <MemoryRouter initialEntries={[route]}>
@@ -31,6 +35,7 @@ function renderLayout(route = '/') {
         <Route element={<AppLayout />}>
           <Route path="/" element={<div data-testid="main-content">Main Page</div>} />
           <Route path="admin/tools" element={<div data-testid="tools-content">Tools Page</div>} />
+          <Route path="admin/boom" element={<Boom />} />
         </Route>
       </Routes>
     </MemoryRouter>,
@@ -62,5 +67,18 @@ describe('AppLayout', () => {
   it('renders admin route content', () => {
     renderLayout('/admin/tools')
     expect(screen.getByTestId('tools-content')).toBeInTheDocument()
+  })
+
+  it('contains a render error in an admin route within the panel boundary, keeping the shell mounted', () => {
+    // React logs the caught error to console.error — silence it for clean output.
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      renderLayout('/admin/boom')
+      // Inline panel fallback shown (NOT the full-screen crash), shell still mounted.
+      expect(screen.getByText('This panel encountered an error.')).toBeInTheDocument()
+      expect(screen.getByTestId('sidebar')).toBeInTheDocument()
+    } finally {
+      spy.mockRestore()
+    }
   })
 })

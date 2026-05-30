@@ -40,7 +40,18 @@ function PrimaryContent() {
   const mode = useWorkspaceStore((s) => s.mode)
 
   const Panel = PANEL_MAP[mode]
-  if (!Panel) return <Outlet />
+  // Admin routes render through the Outlet. Without a boundary here, a render
+  // error in any lazy admin page escapes to the top-level full-screen
+  // ErrorBoundary (which nukes the whole shell + only offers a hard reload).
+  // Wrap the Outlet in the same inline, retryable PanelErrorBoundary the
+  // workspace panels use. (Suspense for these routes lives in App.tsx.)
+  if (!Panel) {
+    return (
+      <PanelErrorBoundary panelName="admin">
+        <Outlet />
+      </PanelErrorBoundary>
+    )
+  }
 
   return (
     <PanelErrorBoundary panelName={mode}>
