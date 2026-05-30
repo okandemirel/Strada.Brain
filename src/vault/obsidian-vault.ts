@@ -315,6 +315,17 @@ export class ObsidianVault implements IVault {
     return await readFile(abs, 'utf8');
   }
 
+  /**
+   * Wrap an error thrown by a write so its message can't leak the absolute
+   * vault path to agent-visible tool output. FS/REST errors routinely embed
+   * `abs`/`rootPath`/homedir; `redactPathsInMessage` rewrites those to
+   * `<vault>`/`<home>` while preserving the vault-relative tail.
+   */
+  private redactError(err: unknown): Error {
+    const msg = err instanceof Error ? err.message : String(err);
+    return new Error(redactPathsInMessage(msg, this.rootPath, this.realpathRoot));
+  }
+
   async writeFile(relPath: string, content: string): Promise<void> {
     const bytes = Buffer.byteLength(content, 'utf8');
     const safeRelPath = validateSafeVaultWriteRelPath(relPath, bytes);
@@ -325,7 +336,11 @@ export class ObsidianVault implements IVault {
       getLoggerSafe().warn(`[obsidian-vault ${this.id}] Obsidian API write failed, falling back to FS`, { err });
     }
     const abs = await prepareSafeVaultWritePath(this.rootPath, safeRelPath, bytes);
-    await writeFile(abs, content, 'utf8');
+    try {
+      await writeFile(abs, content, 'utf8');
+    } catch (err) {
+      throw this.redactError(err);
+    }
   }
 
   onUpdate(listener: (p: { vaultId: VaultId; changedPaths: string[] }) => void): () => void {
@@ -344,16 +359,24 @@ export class ObsidianVault implements IVault {
   /** Write a note to Obsidian via REST API. */
   async writeNote(relPath: string, content: string): Promise<void> {
     const safeRelPath = validateSafeVaultWriteRelPath(relPath, Buffer.byteLength(content, 'utf8'));
-    await this.client.putNote(safeRelPath, content);
-    // Trigger reindex after write so the vault stays in sync.
-    await this.reindexFile(safeRelPath);
+    try {
+      await this.client.putNote(safeRelPath, content);
+      // Trigger reindex after write so the vault stays in sync.
+      await this.reindexFile(safeRelPath);
+    } catch (err) {
+      throw this.redactError(err);
+    }
   }
 
   /** Append content to a heading in an Obsidian note. */
   async appendToHeading(relPath: string, heading: string, content: string): Promise<void> {
     const safeRelPath = validateSafeVaultWriteRelPath(relPath, Buffer.byteLength(content, 'utf8'));
-    await this.client.appendToHeading(safeRelPath, heading, content);
-    await this.reindexFile(safeRelPath);
+    try {
+      await this.client.appendToHeading(safeRelPath, heading, content);
+      await this.reindexFile(safeRelPath);
+    } catch (err) {
+      throw this.redactError(err);
+    }
   }
 
   /** Search Obsidian's native index. */

@@ -116,6 +116,29 @@ describe('ObsidianVault — hardening (P0/P1/P2)', () => {
     });
   });
 
+  // ─────────────── Sec: write errors must not leak absolute vault paths ───────────────
+  describe('Sec: write errors are path-redacted before reaching callers', () => {
+    it('redactPathsInMessage rewrites the vault root to <vault>', () => {
+      const leak = `EACCES: permission denied, open '${join(dir, 'Notes', 'x.md')}'`;
+      const redacted = redactPathsInMessage(leak, dir);
+      expect(redacted).toContain('<vault>');
+      expect(redacted).not.toContain(dir);
+    });
+
+    it('the vault redactError helper scrubs the absolute path from a write error', async () => {
+      writeFileSync(join(dir, 'x.md'), '# x\n\nbody');
+      ({ vault, store: vectorStore } = newVault(dir));
+      await vault.init();
+
+      // writeFile/writeNote/appendToHeading all funnel thrown FS/REST errors
+      // through this helper; verify it redacts the absolute path it embeds.
+      const leaky = new Error(`EACCES: permission denied, open '${join(dir, 'Notes', 'x.md')}'`);
+      const redacted = (vault as unknown as { redactError(e: unknown): Error }).redactError(leaky);
+      expect(redacted.message).toContain('<vault>');
+      expect(redacted.message).not.toContain(dir);
+    });
+  });
+
   // ─────────────── P1: reindexFile transactional rollback ───────────────
   describe('P1: reindex SQL transaction is atomic', () => {
     it('runReindexTxn rollback on bad chunk leaves chunks/files tables untouched', async () => {
