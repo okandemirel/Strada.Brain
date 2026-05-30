@@ -368,6 +368,11 @@ export class ProviderManager {
   > {
     const available = this.listAvailable();
     const AGGREGATE_TIMEOUT = 30_000;
+    // Capture the fallback timer so it can be cleared once the race settles.
+    // Otherwise, whenever allSettled wins (the normal case), the 30s timer stays
+    // ref'd on the event loop — delaying clean shutdown and stacking one timer
+    // per call under bursty dashboard polling.
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
     const settled = await Promise.race([
       Promise.allSettled(
         available.map(async (p) => {
@@ -389,12 +394,15 @@ export class ProviderManager {
         }),
       ),
       new Promise<PromiseSettledResult<{ name: string; label: string; defaultModel: string; models: string[] }>[]>(
-        (resolve) => setTimeout(() => resolve(available.map((p) => ({
-          status: "fulfilled" as const,
-          value: { ...p, models: [p.defaultModel] },
-        }))), AGGREGATE_TIMEOUT),
+        (resolve) => {
+          timeoutId = setTimeout(() => resolve(available.map((p) => ({
+            status: "fulfilled" as const,
+            value: { ...p, models: [p.defaultModel] },
+          }))), AGGREGATE_TIMEOUT);
+        },
       ),
     ]);
+    if (timeoutId !== undefined) clearTimeout(timeoutId);
     return settled.map((r) => r.status === "fulfilled" ? r.value : { name: "", label: "", defaultModel: "", models: [] }).filter(r => r.name);
   }
 

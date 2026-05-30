@@ -368,6 +368,28 @@ describe("ProviderManager", () => {
     ]));
   });
 
+  // Regression (M4): the 30s aggregate-timeout fallback timer must be cleared
+  // once allSettled wins the race; otherwise it stays ref'd on the event loop.
+  it("does not leak the aggregate-timeout timer when models resolve fast", async () => {
+    vi.useFakeTimers();
+    try {
+      const defaultProvider = makeProvider("chain(minimax)");
+      const manager = new ProviderManager(
+        defaultProvider,
+        { minimax: { apiKey: "minimax-key" } },
+        { minimax: "MiniMax-M2.7" },
+        "/tmp/provider-manager-test",
+        ["minimax"],
+      );
+
+      await manager.listAvailableWithModels();
+
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("surfaces catalog freshness and capability drift telemetry for execution candidates", () => {
     const defaultProvider = makeProvider("chain(kimi)");
     const manager = new ProviderManager(
