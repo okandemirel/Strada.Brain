@@ -51,6 +51,7 @@ interface ToggleButtonProps {
 }
 
 function ToggleButton({ skill, onToggle }: ToggleButtonProps) {
+  const { t } = useTranslation('pages')
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const isActive = skill.status === 'active'
@@ -87,7 +88,7 @@ function ToggleButton({ skill, onToggle }: ToggleButtonProps) {
             : 'border-success/40 bg-success/10 text-success hover:bg-success/20'
         }`}
       >
-        {pending ? '...' : isActive ? 'Disable' : 'Enable'}
+        {pending ? '...' : isActive ? t('skills.installed.disable') : t('skills.installed.enable')}
       </button>
     </div>
   )
