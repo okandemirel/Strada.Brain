@@ -3,6 +3,8 @@ import type {
   ProviderResponse,
   ToolCall,
   ProviderCapabilities,
+  ToolDefinition,
+  StreamCallback,
 } from "./provider.interface.js";
 import { OpenAIProvider } from "./openai.js";
 import type { OpenAIMessage, OpenAIResponse } from "./openai.js";
@@ -83,6 +85,22 @@ export class MiniMaxProvider extends OpenAIProvider {
     };
   }
 
+  override async chatStream(
+    systemPrompt: string,
+    messages: ConversationMessage[],
+    tools: ToolDefinition[],
+    onChunk: StreamCallback,
+    options?: { signal?: AbortSignal },
+  ): Promise<ProviderResponse> {
+    // Reset per-stream think-block parse state. `inThinkBlock` is an instance
+    // field reused across requests; if a previous stream aborted or ended inside
+    // a <think> block (no closing </think>), a stale `true` would make
+    // extractStreamText suppress EVERY visible delta of this request — a blank
+    // response that persists until a stray </think> appears.
+    this.inThinkBlock = false;
+    return super.chatStream(systemPrompt, messages, tools, onChunk, options);
+  }
+
   protected override buildMessages(systemPrompt: string, messages: ConversationMessage[]): OpenAIMessage[] {
     const effectivePrompt = this.disableThinking
       ? `${systemPrompt}\n\n[IMPORTANT: Respond directly and concisely. Do NOT use extended thinking or reasoning. Keep your answer brief.]`
@@ -134,15 +152,20 @@ export class MiniMaxProvider extends OpenAIProvider {
     if (opensThink) this.inThinkBlock = true;
     if (closesThink) this.inThinkBlock = false;
 
-    // Suppress everything inside or on the boundary of a think block
+    // Strictly inside a think block with no close in this chunk → suppress.
     if (wasInThink && !closesThink) return undefined;
-    if (opensThink) return undefined;
 
-    // Closing tag mid-chunk — extract visible text after </think>
+    // This chunk closes a think block → emit only the visible text after the
+    // last </think>. Handled BEFORE the opensThink check so a whole
+    // `<think>…</think>visible` block arriving in a single delta still surfaces
+    // its trailing visible text instead of being dropped.
     if (closesThink) {
       const afterClose = text.split("</think>").pop()?.trim();
       return afterClose || undefined;
     }
+
+    // Opens a think block but does not close it this chunk → all reasoning.
+    if (opensThink) return undefined;
 
     return text;
   }
@@ -161,7 +184,16 @@ export class MiniMaxProvider extends OpenAIProvider {
     // so check both current state and content for think markers
     const text = (delta?.content as string) || undefined;
     if (!text) return undefined;
-    if (this.inThinkBlock || text.includes("<think>")) return text;
+    if (this.inThinkBlock || text.includes("<think>")) {
+      // If the think block closes in this same chunk, only the part up to and
+      // including </think> is reasoning; trailing text is visible content and
+      // is already surfaced by extractStreamText — don't double-emit it here.
+      const closeIdx = text.lastIndexOf("</think>");
+      if (closeIdx !== -1) {
+        return text.slice(0, closeIdx + "</think>".length);
+      }
+      return text;
+    }
 
     return undefined;
   }

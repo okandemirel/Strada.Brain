@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { MiniMaxProvider } from "./minimax.js";
+import { OpenAIProvider } from "./openai.js";
 
 const mockLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
 vi.mock("../../utils/logger.js", () => ({
@@ -151,6 +152,45 @@ describe("MiniMaxProvider", () => {
       // Closing tag + visible text in same delta
       const visible = extractText({ content: "</think>\nHere is my answer" });
       expect(visible).toBe("Here is my answer");
+    });
+
+    // Regression (M3): a whole <think>…</think> block plus trailing text in ONE
+    // delta must surface the trailing visible text, not drop it.
+    it("surfaces trailing visible text when a whole think block arrives in one chunk", () => {
+      (provider as unknown as { inThinkBlock: boolean }).inThinkBlock = false;
+      expect(extractText({ content: "<think>reasoning</think>Hello" })).toBe("Hello");
+    });
+
+    it("does not double-emit single-chunk trailing visible text into reasoning", () => {
+      (provider as unknown as { inThinkBlock: boolean }).inThinkBlock = false;
+      const delta = { content: "<think>reasoning</think>Hello" };
+      expect(extractText(delta)).toBe("Hello");
+      // extractStreamReasoning runs after extractStreamText; reasoning must be
+      // only the think portion, not the trailing visible "Hello".
+      expect(extractReasoning(delta)).toBe("<think>reasoning</think>");
+    });
+
+    // Regression (H3): inThinkBlock is an instance field reused across requests;
+    // a stream that ends inside a <think> block leaves it true and blanks the
+    // NEXT request. chatStream must reset it at the start of each stream.
+    it("resets a stale inThinkBlock at the start of a new stream", async () => {
+      (provider as unknown as { inThinkBlock: boolean }).inThinkBlock = true;
+      // Intercept the base stream so we test the reset without any network I/O.
+      const superSpy = vi
+        .spyOn(OpenAIProvider.prototype, "chatStream")
+        .mockResolvedValue({ content: "", toolCalls: [], stopReason: "stop" } as never);
+      try {
+        await (provider.chatStream as (
+          s: string,
+          m: unknown[],
+          t: unknown[],
+          cb: () => void,
+        ) => Promise<unknown>)("sys", [{ role: "user", content: "hi" }], [], () => {});
+        expect((provider as unknown as { inThinkBlock: boolean }).inThinkBlock).toBe(false);
+        expect(superSpy).toHaveBeenCalled();
+      } finally {
+        superSpy.mockRestore();
+      }
     });
   });
 
