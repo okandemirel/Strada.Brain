@@ -213,10 +213,8 @@ export default function ToolsPage() {
   const [typeFilter, setTypeFilter] = useState<string>('all')
   const [selectedTool, setSelectedTool] = useState<string | null>(null)
 
-  const error = toolsQuery.error && metricsQuery.error
-    ? toolsQuery.error.message
-    : null
-  const loading = toolsQuery.isLoading && metricsQuery.isLoading
+  const error = toolsQuery.error?.message ?? metricsQuery.error?.message ?? null
+  const loading = toolsQuery.isLoading || metricsQuery.isLoading
 
   if (error) return <PageError title={t('tools.errorTitle')} message={error} />
   if (loading) return <PageSkeleton />

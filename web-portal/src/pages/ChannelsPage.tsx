@@ -36,10 +36,11 @@ export default function ChannelsPage() {
     return ch.healthy ? t('channels.statusActive') : t('channels.statusDegraded')
   }
 
-  const loading = channelsQuery.isLoading && healthQuery.isLoading
-  const error = channelsQuery.error && healthQuery.error
-    ? channelsQuery.error.message
-    : null
+  // Skeleton until BOTH queries settle, and surface a failure from EITHER —
+  // the previous AND logic skipped the skeleton and hid the error when one
+  // query failed while the other was still loading (broken partial render).
+  const loading = channelsQuery.isLoading || healthQuery.isLoading
+  const error = channelsQuery.error?.message ?? healthQuery.error?.message ?? null
   const health = healthQuery.data ?? null
 
   if (error) return <PageError title={t('channels.errorTitle')} message={error} />

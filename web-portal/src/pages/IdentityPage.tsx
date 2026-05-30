@@ -21,10 +21,8 @@ export default function IdentityPage() {
   const daemonQuery = useDaemon()
   const metricsQuery = useMetrics()
 
-  const loading = daemonQuery.isLoading && metricsQuery.isLoading
-  const error = daemonQuery.error && metricsQuery.error
-    ? daemonQuery.error.message
-    : null
+  const loading = daemonQuery.isLoading || metricsQuery.isLoading
+  const error = daemonQuery.error?.message ?? metricsQuery.error?.message ?? null
 
   if (loading) return <PageSkeleton />
   if (error && !daemonQuery.data) return <PageError title={t_i18n('identity.errorTitle')} message={error} />

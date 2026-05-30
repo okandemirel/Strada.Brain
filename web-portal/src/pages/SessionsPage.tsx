@@ -23,10 +23,8 @@ export default function SessionsPage() {
   const metricsQuery = useMetrics()
   const agentsQuery = useAgents()
 
-  const loading = sessionsQuery.isLoading && metricsQuery.isLoading && agentsQuery.isLoading
-  const error = sessionsQuery.error && metricsQuery.error && agentsQuery.error
-    ? sessionsQuery.error.message
-    : null
+  const loading = sessionsQuery.isLoading || metricsQuery.isLoading || agentsQuery.isLoading
+  const error = sessionsQuery.error?.message ?? metricsQuery.error?.message ?? agentsQuery.error?.message ?? null
   const metrics = metricsQuery.data ?? null
 
   if (error) return <PageError title={t('sessions.errorTitle')} message={error} />

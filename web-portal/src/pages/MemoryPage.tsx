@@ -16,10 +16,8 @@ export default function MemoryPage() {
   const consolidationQuery = useConsolidation()
   const maintenanceQuery = useMaintenance()
 
-  const loading = memoryQuery.isLoading && consolidationQuery.isLoading && maintenanceQuery.isLoading
-  const error = memoryQuery.error && consolidationQuery.error && maintenanceQuery.error
-    ? memoryQuery.error.message
-    : null
+  const loading = memoryQuery.isLoading || consolidationQuery.isLoading || maintenanceQuery.isLoading
+  const error = memoryQuery.error?.message ?? consolidationQuery.error?.message ?? maintenanceQuery.error?.message ?? null
 
   const memoryStats = memoryQuery.data?.memory ?? null
   const consolidation = consolidationQuery.data ?? null
