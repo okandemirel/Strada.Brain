@@ -65,6 +65,13 @@ export function isIndexableVaultPath(relPath: string, sizeBytes: number): boolea
 export function validateSafeVaultWriteRelPath(relPath: string, contentBytes: number): string {
   rejectAbsoluteVaultPath(relPath);
   const normalized = normalizeVaultRelPath(relPath);
+  // Reject parent-directory traversal: a vault-relative write path must never
+  // contain a ".." segment. The FS write path runs through resolveInsideVault
+  // (which also rejects ".."), but writeNote/appendToHeading send this value
+  // straight to the Obsidian REST API, so the guard must live here too.
+  if (normalized.split('/').some((segment) => segment === '..')) {
+    throw new Error(`path escapes vault root: ${relPath}`);
+  }
   if (!isIndexableVaultPath(normalized, contentBytes)) {
     throw new Error(`vault path is not allowed: ${relPath}`);
   }
