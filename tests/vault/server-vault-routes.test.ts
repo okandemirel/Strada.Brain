@@ -117,4 +117,20 @@ describe('vault routes', () => {
     const r = await app.routes['GET /api/vaults/:id/file']({ params: { id: 'unity:abc' }, query: { path: '../etc/passwd' } }, {});
     expect(r.error).toMatch(/invalid/i);
   });
+
+  it('file route truncates the body to maxChars when provided', async () => {
+    const app = makeFakeApp();
+    registerVaultRoutes(app as any, reg);
+    const r = await app.routes['GET /api/vaults/:id/file']({ params: { id: 'unity:abc' }, query: { path: 'a.cs', maxChars: '2' } }, {});
+    expect(r.body).toBe('AL'); // 'ALPHA' truncated to 2 chars
+  });
+
+  it('file route returns the full body when maxChars is absent or invalid', async () => {
+    const app = makeFakeApp();
+    registerVaultRoutes(app as any, reg);
+    const full = await app.routes['GET /api/vaults/:id/file']({ params: { id: 'unity:abc' }, query: { path: 'a.cs' } }, {});
+    expect(full.body).toBe('ALPHA');
+    const bad = await app.routes['GET /api/vaults/:id/file']({ params: { id: 'unity:abc' }, query: { path: 'a.cs', maxChars: '-1' } }, {});
+    expect(bad.body).toBe('ALPHA');
+  });
 });

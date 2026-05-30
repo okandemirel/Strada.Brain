@@ -118,11 +118,14 @@ function FileRow({ node, depth, activePath, vaultId, onSelect, onContextMenu }: 
   // cleanup, retry counters, and error surfacing — previously done inline with
   // a bespoke 4-state machine that lacked an abort on unmount.
   const [open, setOpen] = useState(false);
-  const previewUrl = `/api/vaults/${encodeURIComponent(vaultId)}/file?path=${encodeURIComponent(node.path)}`;
+  // Request only the preview-sized head from the server (maxChars) instead of
+  // downloading the whole file (≤2MB) just to show ~200 chars in the tooltip.
+  const previewUrl = `/api/vaults/${encodeURIComponent(vaultId)}/file?path=${encodeURIComponent(node.path)}&maxChars=${HOVER_CARD_PREVIEW_CHARS}`;
   const { data, loading, error, retry } = useVaultFetch<{ body?: string }>(
     previewUrl,
     { enabled: open },
   );
+  // Defensive client-side cap in case an older server ignores maxChars.
   const previewContent = (data?.body ?? '').slice(0, HOVER_CARD_PREVIEW_CHARS);
 
   return (

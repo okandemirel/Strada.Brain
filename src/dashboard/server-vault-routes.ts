@@ -242,7 +242,11 @@ export function registerVaultRoutes(app: RouteApp, registry: VaultRegistry, fact
     const p = req.query?.path;
     if (isUnsafePath(p)) return { error: 'invalid path' };
     try {
-      return { body: await v.readFile(p as string) };
+      const body = await v.readFile(p as string);
+      // Optional `maxChars` truncates the returned body (e.g. a hover preview
+      // that only needs the first ~200 chars). Omitted/invalid → full body.
+      const max = coercePositiveInteger(req.query?.maxChars);
+      return { body: max !== undefined ? body.slice(0, max) : body };
     } catch {
       return { error: 'invalid path' };
     }
@@ -542,7 +546,12 @@ export function handleVaultRoutes(
   if (op === 'file' && method === 'GET') {
     const p = u.searchParams.get('path');
     if (isUnsafePath(p)) { sendJsonError(res, 400, 'invalid path'); return true; }
-    void vault.readFile(p!).then((body) => sendJson(res, { body }))
+    // Optional `maxChars` truncates the returned body (hover preview needs only
+    // the first ~200 chars; avoids shipping a whole ≤2MB file for a tooltip).
+    const max = coercePositiveInteger(u.searchParams.get('maxChars'));
+    void vault.readFile(p!).then((body) => sendJson(res, {
+      body: max !== undefined ? body.slice(0, max) : body,
+    }))
       .catch(() => sendJsonError(res, 400, 'invalid path'));
     return true;
   }
