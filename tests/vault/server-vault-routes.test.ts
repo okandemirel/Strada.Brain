@@ -18,14 +18,16 @@ const fakeVault = {
   query: async () => ({ hits: [{ chunk: { chunkId: 'c', path: 'a.cs', startLine: 1, endLine: 1, content: 'x', tokenCount: 1 }, scores: { fts: 1, hnsw: 0.9, rrf: 0.1 } }], budgetUsed: 1, truncated: false }),
   sync: async () => ({ changed: 2, durationMs: 50 }),
 };
-const reg = { list: () => [fakeVault], get: (id: string) => id === 'unity:abc' ? fakeVault : undefined } as any;
+const reg = { list: () => [fakeVault], get: (id: string) => id === 'unity:abc' ? fakeVault : undefined, getName: () => undefined } as any;
 
 describe('vault routes', () => {
   it('GET /api/vaults lists vaults (without rootPath)', async () => {
     const app = makeFakeApp();
     registerVaultRoutes(app as any, reg);
     const r = await app.routes['GET /api/vaults']({}, {});
-    expect(r.items[0]).toMatchObject({ id: 'unity:abc', kind: 'unity-project' });
+    // H3: a display name is included; with no registered name it falls back to a
+    // path-free kind label.
+    expect(r.items[0]).toMatchObject({ id: 'unity:abc', kind: 'unity-project', name: 'Unity Project' });
     // SecC2: rootPath MUST NOT leak to clients
     expect(r.items[0]).not.toHaveProperty('rootPath');
   });
