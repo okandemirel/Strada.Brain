@@ -256,4 +256,25 @@ describe("TaskManager", () => {
     expect(goalStorage.updateTreeStatus).toHaveBeenCalledWith("goal_root", "paused");
     expect(pausedListener).toHaveBeenCalled()
   });
+
+  it("leaves a recovered user task paused, not failed (updateError must not clobber paused)", () => {
+    const interruptedTask = buildTask({
+      id: "task_order123" as Task["id"],
+      status: TaskStatus.executing,
+      origin: "user",
+    });
+    // Fake storage mirroring the real SQL: updateError forces status=failed;
+    // updateStatus only changes status. Recovery must end on 'paused'.
+    let status: TaskStatus = interruptedTask.status;
+    const storage = {
+      loadIncomplete: vi.fn().mockReturnValue([interruptedTask]),
+      updateStatus: vi.fn((_id: Task["id"], s: TaskStatus) => { status = s; }),
+      updateError: vi.fn(() => { status = TaskStatus.failed; }),
+    } as any;
+    const manager = new TaskManager(storage, {} as any);
+
+    manager.recoverOnStartup();
+
+    expect(status).toBe(TaskStatus.paused);
+  });
 });

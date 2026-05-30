@@ -441,8 +441,12 @@ export class TaskManager extends EventEmitter {
       const pausedReason = task.goalRootId
         ? "Task interrupted by system restart. Resume is available from the monitor and will continue from the saved plan."
         : "Task interrupted by system restart. Resume is available and will continue from the strongest checkpoint.";
-      this.storage.updateStatus(task.id, TaskStatus.paused);
+      // updateError() also forces status=failed, so it must run BEFORE
+      // updateStatus(paused) — otherwise it clobbers the paused status and the
+      // recoverable task is wrongly left as failed. updateStatus only touches
+      // status/updated_at, leaving the error message intact.
       this.storage.updateError(task.id, pausedReason);
+      this.storage.updateStatus(task.id, TaskStatus.paused);
       if (task.goalRootId && this.goalStorage) {
         this.goalStorage.updateTreeStatus(task.goalRootId as GoalNodeId, "paused");
       }
