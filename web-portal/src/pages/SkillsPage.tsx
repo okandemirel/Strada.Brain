@@ -52,32 +52,44 @@ interface ToggleButtonProps {
 
 function ToggleButton({ skill, onToggle }: ToggleButtonProps) {
   const [pending, setPending] = useState(false)
+  const [error, setError] = useState<string | null>(null)
   const isActive = skill.status === 'active'
   const isGated = skill.status === 'gated'
   const isError = skill.status === 'error'
 
   const handleClick = async () => {
     setPending(true)
+    setError(null)
     try {
       await onToggle(skill.manifest.name, !isActive)
+    } catch (err) {
+      // Surface the failure instead of dropping it as an unhandled rejection.
+      setError(err instanceof Error ? err.message : String(err))
     } finally {
       setPending(false)
     }
   }
 
   return (
-    <button
-      onClick={handleClick}
-      disabled={pending || isGated || isError}
-      aria-label={isActive ? `${skill.manifest.name}` : `${skill.manifest.name}`}
-      className={`px-3 py-1 rounded-lg text-[12px] font-semibold border transition-all duration-150 font-[inherit] cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
-        isActive
-          ? 'border-error/40 bg-error/10 text-error hover:bg-error/20'
-          : 'border-success/40 bg-success/10 text-success hover:bg-success/20'
-      }`}
-    >
-      {pending ? '...' : isActive ? 'Disable' : 'Enable'}
-    </button>
+    <div className="flex items-center gap-2">
+      {error && (
+        <span className="text-[11px] text-error max-w-[180px] truncate" title={error} role="alert">
+          {error}
+        </span>
+      )}
+      <button
+        onClick={handleClick}
+        disabled={pending || isGated || isError}
+        aria-label={skill.manifest.name}
+        className={`px-3 py-1 rounded-lg text-[12px] font-semibold border transition-all duration-150 font-[inherit] cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
+          isActive
+            ? 'border-error/40 bg-error/10 text-error hover:bg-error/20'
+            : 'border-success/40 bg-success/10 text-success hover:bg-success/20'
+        }`}
+      >
+        {pending ? '...' : isActive ? 'Disable' : 'Enable'}
+      </button>
+    </div>
   )
 }
 
