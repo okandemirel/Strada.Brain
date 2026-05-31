@@ -73,9 +73,10 @@ jobs:
 
   windows-verify:
     if: "!contains(github.event.head_commit.message, '[skip ci]')"
-    # Pinned: GitHub is redirecting `windows-latest` to windows-2025 (vs2026) by
-    # 2026-06-15. Pin the explicit GA label to avoid a surprise image flip.
-    runs-on: windows-2025
+    # Pinned: GitHub auto-redirects `windows-2025` to `windows-2025-vs2026` by
+    # 2026-06-15. Pin the explicit target label so the image flip is controlled,
+    # not a surprise.
+    runs-on: windows-2025-vs2026
     timeout-minutes: 30
 
     steps:
