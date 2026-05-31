@@ -46,7 +46,10 @@ vi.mock("grammy", () => ({
     };
   }),
   InlineKeyboard: vi.fn().mockImplementation(function () {
-    return { text: vi.fn().mockReturnThis() };
+    const kb: Record<string, unknown> = {};
+    kb.text = vi.fn().mockReturnValue(kb);
+    kb.row = vi.fn().mockReturnValue(kb);
+    return kb;
   }),
 }));
 
@@ -170,6 +173,27 @@ describe("TelegramChannel", () => {
 
       restoreSendMessage();
     });
+  });
+
+  it("requestDiffConfirmation resolves to false when the send fails (L14)", async () => {
+    mockBotApi.sendMessage.mockReset();
+    mockBotApi.sendMessage.mockRejectedValueOnce(new Error("Bad Request: can't parse entities"));
+    const diff = {
+      oldPath: "src/a.ts",
+      newPath: "src/a.ts",
+      diff: "@@ -1 +1 @@\n-a\n+b",
+      stats: { additions: 1, deletions: 1, modifications: 1, totalChanges: 2, hunks: 1 },
+      isNew: false,
+      isDeleted: false,
+      isRename: false,
+    };
+
+    // TEETH: the unfixed send (before the pending promise is registered, no try/catch)
+    // rejected, so the awaited confirmation never resolved to a clean boolean.
+    await expect(channel.requestDiffConfirmation("42", diff as any, {})).resolves.toBe(false);
+
+    mockBotApi.sendMessage.mockReset();
+    mockBotApi.sendMessage.mockResolvedValue(undefined);
   });
 
   it("onMessage stores handler", () => {

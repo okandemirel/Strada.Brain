@@ -79,7 +79,7 @@ describe("diff-formatter", () => {
     it("should format file diff with markdown", () => {
       const result = formatDiffForTelegram(mockFileDiff);
 
-      expect(result).toContain("📄 *src/test.ts*");
+      expect(result).toContain("📄 *src/test\\.ts*"); // MarkdownV2 escapes the dot
       expect(result).toContain("```diff");
       expect(result).toContain("+  return 2");
       expect(result).toContain("-  return 1");
@@ -118,6 +118,16 @@ describe("diff-formatter", () => {
       expect(result).toContain("\\]");
     });
 
+    it("escapes MarkdownV2 specials without double-escaping or missing dots (L14)", () => {
+      const diff: FileDiff = { ...mockFileDiff, newPath: "src/utils/diff-formatter.ts" };
+      const result = formatDiffForTelegram(diff);
+
+      // TEETH: the unfixed two-pass doubled every inserted backslash.
+      expect(result).not.toContain("\\\\");
+      // TEETH: "-" and "." must both be escaped (the old char class omitted ".").
+      expect(result).toContain("diff\\-formatter\\.ts");
+    });
+
     it("should truncate long diffs", () => {
       const result = formatDiffForTelegram(mockFileDiff, { maxLines: 2 });
 
@@ -131,8 +141,8 @@ describe("diff-formatter", () => {
 
       expect(result).toContain("*📋 Changes Summary*");
       expect(result).toContain("2 files");
-      expect(result).toContain("📄 *src/test.ts*");
-      expect(result).toContain("📄 *src/new.ts*");
+      expect(result).toContain("📄 *src/test\\.ts*"); // MarkdownV2 escapes the dot
+      expect(result).toContain("📄 *src/new\\.ts*");
     });
 
     it("should truncate when exceeding max length", () => {

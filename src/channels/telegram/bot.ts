@@ -296,10 +296,20 @@ export class TelegramChannel implements IChannelAdapter {
       .row()
       .text("📋 View Full", `${confirmId}:view_full`);
 
-    await this.bot.api.sendMessage(chatIdNum, message, {
-      parse_mode: "MarkdownV2",
-      reply_markup: keyboard,
-    });
+    try {
+      await this.bot.api.sendMessage(chatIdNum, message, {
+        parse_mode: "MarkdownV2",
+        reply_markup: keyboard,
+      });
+    } catch (err) {
+      // Send happens before the pending promise is registered; on failure degrade
+      // to a safe rejection (false) instead of leaving the caller hanging.
+      getLogger().warn("Telegram diff confirmation send failed; auto-rejecting", {
+        chatId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return false;
+    }
 
     return new Promise<boolean>((resolve) => {
       const timeout = setTimeout(() => {
@@ -368,10 +378,20 @@ export class TelegramChannel implements IChannelAdapter {
       keyboard.row().text(`📁 View All ${batchDiff.files.length} Files`, `${confirmId}:view_all`);
     }
 
-    await this.bot.api.sendMessage(chatIdNum, message, {
-      parse_mode: "MarkdownV2",
-      reply_markup: keyboard,
-    });
+    try {
+      await this.bot.api.sendMessage(chatIdNum, message, {
+        parse_mode: "MarkdownV2",
+        reply_markup: keyboard,
+      });
+    } catch (err) {
+      // Send happens before the pending promise is registered; on failure degrade
+      // to a safe rejection (false) instead of leaving the caller hanging.
+      getLogger().warn("Telegram diff confirmation send failed; auto-rejecting", {
+        chatId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return false;
+    }
 
     return new Promise<boolean>((resolve) => {
       const timeout = setTimeout(() => {
