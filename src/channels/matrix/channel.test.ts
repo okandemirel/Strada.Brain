@@ -159,4 +159,35 @@ describe("MatrixChannel", () => {
       data: plaintext,
     });
   });
+
+  describe("sendMarkdown HTML rendering (M9)", () => {
+    function withFakeClient() {
+      const channel = new MatrixChannel("https://matrix.example", "token", "@bot:example");
+      const sendHtmlMessage = vi.fn().mockResolvedValue(undefined);
+      (channel as any).client = { sendHtmlMessage };
+      return { channel, sendHtmlMessage };
+    }
+
+    it("renders the markdown subset to HTML instead of passing it through raw", async () => {
+      const { channel, sendHtmlMessage } = withFakeClient();
+      await channel.sendMarkdown("!room:example", "**bold** and *italic* and `code`");
+
+      const [, plain, html] = sendHtmlMessage.mock.calls[0];
+      // TEETH: unfixed code passed the raw markdown verbatim → "**bold** ..." with no tags.
+      expect(html).toBe("<strong>bold</strong> and <em>italic</em> and <code>code</code>");
+      // Plain-text body still strips the markers (guard, unchanged by the fix).
+      expect(plain).toBe("bold and italic and code");
+    });
+
+    it("escapes HTML-significant characters in the formatted body (no injection)", async () => {
+      const { channel, sendHtmlMessage } = withFakeClient();
+      await channel.sendMarkdown("!room:example", "<script>alert(1)</script> & <b>x</b>");
+
+      const html = sendHtmlMessage.mock.calls[0][2];
+      // TEETH: unfixed code injected the raw "<script>" and bare "&" into formatted_body.
+      expect(html).not.toContain("<script>");
+      expect(html).toContain("&lt;script&gt;");
+      expect(html).toContain("&amp;");
+    });
+  });
 });

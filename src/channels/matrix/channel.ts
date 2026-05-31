@@ -35,6 +35,24 @@ type FeedbackReactionCallback = (
 const FEEDBACK_UP_PATTERNS = ["\uD83D\uDC4D", "/feedback up"];
 const FEEDBACK_DOWN_PATTERNS = ["\uD83D\uDC4E", "/feedback down"];
 
+/** Escape HTML-significant characters (order matters: & first). */
+function escapeHtml(text: string): string {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+/**
+ * Render a minimal, dependency-free markdown subset (**bold**, *italic*, `code`)
+ * to Matrix custom HTML. Escapes FIRST so any `<`/`>`/`&` in the content is inert
+ * before markup is applied \u2014 the raw-markdown-as-formatted_body path otherwise
+ * both mis-rendered (literal asterisks) and injected unescaped HTML.
+ */
+function markdownToMatrixHtml(markdown: string): string {
+  return escapeHtml(markdown)
+    .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
+    .replace(/\*(.*?)\*/g, "<em>$1</em>")
+    .replace(/`(.*?)`/g, "<code>$1</code>");
+}
+
 export class MatrixChannel implements IChannelAdapter, IChannelRichMessaging {
   readonly name = "matrix";
 
@@ -138,7 +156,7 @@ export class MatrixChannel implements IChannelAdapter, IChannelRichMessaging {
       .replace(/\*\*(.*?)\*\*/g, "$1")
       .replace(/\*(.*?)\*/g, "$1")
       .replace(/`(.*?)`/g, "$1");
-    await client.sendHtmlMessage(chatId, plainText, markdown);
+    await client.sendHtmlMessage(chatId, plainText, markdownToMatrixHtml(markdown));
   }
 
   async sendTypingIndicator(chatId: string): Promise<void> {
