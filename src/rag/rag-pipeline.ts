@@ -406,6 +406,16 @@ export class RAGPipeline implements IRAGPipeline {
         toInclude.push(result);
         usedChars += chunkChars;
       }
+      // Guarantee at least one chunk: if nothing fit (the top chunk alone exceeds
+      // the budget) we'd otherwise drop ALL context and return "". Include the
+      // highest-scored result truncated to the budget instead.
+      if (toInclude.length === 0 && charBudget > 0) {
+        const top = results[0]!;
+        toInclude.push({
+          ...top,
+          chunk: { ...top.chunk, content: top.chunk.content.slice(0, charBudget) },
+        });
+      }
     } else {
       // truncate_content: include all chunks but truncate the last one.
       for (const result of results) {
