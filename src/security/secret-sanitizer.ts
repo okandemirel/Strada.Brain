@@ -224,6 +224,7 @@ export class SecretSanitizer {
     };
 
     let result = content;
+    let bytesRemoved = 0;
     const originalLength = content.length;
 
     for (const pattern of this.patterns) {
@@ -240,6 +241,7 @@ export class SecretSanitizer {
         );
       }
 
+      const lengthBefore = result.length;
       if (typeof pattern.redaction === "function") {
         // Evaluate the redaction per-match from each match's OWN text. Passing a
         // precomputed string (derived from matches[0]) re-used the first match's
@@ -251,14 +253,20 @@ export class SecretSanitizer {
         // String redactions intentionally keep `$1` back-reference semantics.
         result = result.replace(pattern.pattern, pattern.redaction);
       }
+      // Accumulate per-pattern shrinkage, clamped at 0: a redaction marker longer
+      // than the matched secret counts as 0, never as negative bytesRemoved.
+      bytesRemoved += Math.max(0, lengthBefore - result.length);
     }
 
-    stats.bytesRemoved = originalLength - result.length;
+    stats.bytesRemoved = bytesRemoved;
 
     // Apply length cap
     if (result.length > this.maxLength) {
+      const lengthBeforeTruncation = result.length;
       result = result.substring(0, this.maxLength) + TRUNCATION_MARKER;
-      stats.bytesRemoved += TRUNCATION_MARKER.length;
+      // Count the source bytes actually dropped by truncation — the appended
+      // marker is added output, not removed bytes.
+      stats.bytesRemoved += lengthBeforeTruncation - this.maxLength;
     }
 
     return {

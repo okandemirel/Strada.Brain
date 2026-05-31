@@ -383,9 +383,24 @@ DB_PASSWORD=supersecret`;
     it("should track bytes removed correctly", () => {
       const content = "sk-abcdefghijklmnopqrstuvwxyz123456";
       const result = sanitizer.sanitize(content);
-      
+
       // Original: ~37 chars, Redacted: ~21 chars
       expect(result.stats.bytesRemoved).toBeGreaterThan(0);
+    });
+
+    it("never reports negative bytesRemoved when the marker is longer than the secret (L9)", () => {
+      const result = sanitizer.sanitize("pwd=abcd"); // 8 chars → "password=[REDACTED]" (19 chars)
+      expect(result.content).toContain("[REDACTED]");
+      // TEETH: the unfixed global delta reported 8 - 19 = -11.
+      expect(result.stats.bytesRemoved).toBeGreaterThanOrEqual(0);
+    });
+
+    it("counts truncated source bytes, not the marker length (L9)", () => {
+      const s = new SecretSanitizer({ maxLength: 100 });
+      const result = s.sanitize("x".repeat(160)); // 60 chars over the cap, no secrets
+      expect(result.wasSanitized).toBe(true);
+      // TEETH: the unfixed code reported TRUNCATION_MARKER.length (16), not 60.
+      expect(result.stats.bytesRemoved).toBe(60);
     });
 
     it("should track matches by pattern", () => {
