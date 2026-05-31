@@ -664,21 +664,33 @@ export class SlackChannel implements IChannelAdapter {
 
       for (let i = 1; i < chunks.length; i++) {
         const text = chunks[i] ?? "";
-        await this.rateLimiter.acquire("chat.postMessage", 1);
-        await this.app.client.chat.postMessage({
-          channel: stream.channelId,
-          thread_ts: stream.messageTs,
-          text,
-          attachments: [],
-        });
+        // Isolate each chunk: one failed thread post must not drop the remaining
+        // chunks (the loop previously aborted on the first failure).
+        try {
+          await this.rateLimiter.acquire("chat.postMessage", 1);
+          await this.app.client.chat.postMessage({
+            channel: stream.channelId,
+            thread_ts: stream.messageTs,
+            text,
+            attachments: [],
+          });
+        } catch (chunkError) {
+          this.logger.error("Failed to post streaming message chunk", {
+            error: sanitizeError(chunkError),
+            streamId,
+            chunkIndex: i,
+          });
+        }
       }
-
-      this.streamingMessages.delete(streamId);
     } catch (error) {
       this.logger.error("Failed to finalize streaming message", {
         error: sanitizeError(error),
         streamId,
       });
+    } finally {
+      // Always drop the entry — stream.isFinalized is already true, so a leaked
+      // entry could never be cleaned up by any later call.
+      this.streamingMessages.delete(streamId);
     }
   }
 

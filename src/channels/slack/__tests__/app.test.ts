@@ -291,6 +291,31 @@ describe("SlackChannel", () => {
         channel.finalizeStreamingMessage("C123", streamId, "Final text")
       ).resolves.not.toThrow();
     });
+
+    it("cleans up and keeps posting chunks when a thread post fails (L6)", async () => {
+      await channel.connect();
+      const streamId = await channel.startStreamingMessage("C123");
+
+      const internal = channel as any;
+      const postMessage = internal.app.client.chat.postMessage;
+      // startStreamingMessage already consumed one postMessage (the "Thinking" message).
+      postMessage.mockReset();
+      postMessage.mockRejectedValue(new Error("slack rate limited"));
+
+      // Long enough that splitLongText (2900) yields several chunks → the thread loop
+      // runs multiple times.
+      const longText = "A".repeat(3000) + "\n\n" + "B".repeat(3000) + "\n\n" + "C".repeat(3000);
+
+      await expect(
+        channel.finalizeStreamingMessage("C123", streamId, longText),
+      ).resolves.not.toThrow();
+
+      // TEETH 1 (leak): finally deletes the entry even when a post fails.
+      expect(internal.streamingMessages.has(streamId)).toBe(false);
+      // TEETH 2 (dropped chunks): the loop continues past the first failing post
+      // (pre-fix it aborted after exactly one attempt).
+      expect(postMessage.mock.calls.length).toBeGreaterThan(1);
+    });
   });
 
   describe("requestConfirmation", () => {
