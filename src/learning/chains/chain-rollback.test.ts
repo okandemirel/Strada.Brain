@@ -133,6 +133,39 @@ describe("executeRollback", () => {
     expect(report.rollbackFailures).toHaveLength(0);
   });
 
+  it("clears the per-step compensation timeout timer (no timer leak) (M13)", async () => {
+    const setSpy = vi.spyOn(globalThis, "setTimeout");
+    const clearSpy = vi.spyOn(globalThis, "clearTimeout");
+    try {
+      const stepOutputs = new Map<string, Record<string, unknown>>([
+        ["step_0", { outputPath: "/tmp/file" }],
+        ["step_1", { recordId: "rec_123" }],
+      ]);
+
+      await executeRollback(
+        "test_chain",
+        ["step_0", "step_1"],
+        stepOutputs,
+        metadata,
+        registry,
+        context,
+        30000,
+        eventBus,
+      );
+
+      // One compensation timeout timer is scheduled per compensated step.
+      const handles = setSpy.mock.results.map((r) => r.value);
+      expect(handles.length).toBeGreaterThanOrEqual(2);
+      // TEETH: the unfixed code never cleared these timers, so clearTimeout had 0 calls.
+      for (const h of handles) {
+        expect(clearSpy).toHaveBeenCalledWith(h);
+      }
+    } finally {
+      setSpy.mockRestore();
+      clearSpy.mockRestore();
+    }
+  });
+
   it("should mark step as rollbackFailed on compensation tool error and continue", async () => {
     const failRegistry = makeToolRegistry(async (name: string) => {
       if (name === "undo_b") throw new Error("compensation failed");

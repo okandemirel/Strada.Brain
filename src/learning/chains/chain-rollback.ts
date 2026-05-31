@@ -106,10 +106,20 @@ export async function executeRollback(
         throw new Error(`Compensation tool '${compensatingAction.toolName}' not found`);
       }
 
+      let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
       const timeoutPromise = new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error(`Compensation timed out after ${timeoutMs}ms`)), timeoutMs);
+        timeoutHandle = setTimeout(
+          () => reject(new Error(`Compensation timed out after ${timeoutMs}ms`)),
+          timeoutMs,
+        );
       });
-      await Promise.race([tool.execute(input, context), timeoutPromise]);
+      try {
+        await Promise.race([tool.execute(input, context), timeoutPromise]);
+      } finally {
+        // Cancel the timeout on the success path too — otherwise it leaks and keeps
+        // the event loop alive for up to timeoutMs after the step already settled.
+        clearTimeout(timeoutHandle);
+      }
 
       results.push({
         stepId,
