@@ -120,6 +120,58 @@ describe("TelegramChannel", () => {
     expect(mockBotApi.sendChatAction).toHaveBeenCalledWith(42, "typing");
   });
 
+  describe("sendMarkdown chunking (M8)", () => {
+    function restoreSendMessage() {
+      mockBotApi.sendMessage.mockReset();
+      mockBotApi.sendMessage.mockResolvedValue(undefined);
+    }
+
+    it("chunks messages over 4096 chars so no body is ever oversized", async () => {
+      // Mimic Telegram's real behavior: reject any body longer than 4096.
+      mockBotApi.sendMessage.mockImplementation((_id: number, text: string) =>
+        text.length > 4096
+          ? Promise.reject(new Error("Bad Request: message is too long"))
+          : Promise.resolve(undefined),
+      );
+
+      const long = "x".repeat(10000);
+      // TEETH: unfixed sendMarkdown sends the full 10000-char body, then the
+      // fallback re-sends the same oversized body → both reject → this rejects.
+      await expect(channel.sendMarkdown("42", long)).resolves.toBeUndefined();
+
+      const calls = mockBotApi.sendMessage.mock.calls;
+      expect(calls.length).toBeGreaterThanOrEqual(3);
+      for (const call of calls) {
+        expect((call[1] as string).length).toBeLessThanOrEqual(4096);
+      }
+      expect(calls.map((c) => c[1] as string).join("")).toBe(long);
+
+      restoreSendMessage();
+    });
+
+    it("keeps the plain-text fallback within the 4096 limit", async () => {
+      // Reject every Markdown attempt; resolve plain-text sends.
+      mockBotApi.sendMessage.mockImplementation(
+        (_id: number, _text: string, opts?: { parse_mode?: string }) =>
+          opts?.parse_mode
+            ? Promise.reject(new Error("can't parse entities"))
+            : Promise.resolve(undefined),
+      );
+
+      const long = "y".repeat(10000);
+      await expect(channel.sendMarkdown("42", long)).resolves.toBeUndefined();
+
+      const plainCalls = mockBotApi.sendMessage.mock.calls.filter((c) => c[2] === undefined);
+      expect(plainCalls.length).toBeGreaterThanOrEqual(3);
+      for (const call of plainCalls) {
+        // TEETH: unfixed fallback re-sends the full 10000-char body in one plain call.
+        expect((call[1] as string).length).toBeLessThanOrEqual(4096);
+      }
+
+      restoreSendMessage();
+    });
+  });
+
   it("onMessage stores handler", () => {
     const handler = vi.fn();
     channel.onMessage(handler);

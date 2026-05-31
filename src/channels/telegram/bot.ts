@@ -59,6 +59,38 @@ interface TelegramMediaEnvelope {
 }
 
 /**
+ * Telegram hard-rejects message bodies over 4096 chars ("message is too long");
+ * stay under with headroom for parse_mode entity counting.
+ */
+const TELEGRAM_MAX_CHARS = 4000;
+
+/** Split text into <=TELEGRAM_MAX_CHARS chunks, preferring newline boundaries. */
+function chunkTelegramMessage(text: string): string[] {
+  if (text.length <= TELEGRAM_MAX_CHARS) return [text];
+  const chunks: string[] = [];
+  let buf = "";
+  for (const line of text.split("\n")) {
+    if (line.length > TELEGRAM_MAX_CHARS) {
+      // A single line longer than the cap must be hard-split.
+      if (buf) { chunks.push(buf); buf = ""; }
+      for (let i = 0; i < line.length; i += TELEGRAM_MAX_CHARS) {
+        chunks.push(line.slice(i, i + TELEGRAM_MAX_CHARS));
+      }
+      continue;
+    }
+    const candidate = buf ? `${buf}\n${line}` : line;
+    if (candidate.length > TELEGRAM_MAX_CHARS) {
+      if (buf) chunks.push(buf);
+      buf = line;
+    } else {
+      buf = candidate;
+    }
+  }
+  if (buf) chunks.push(buf);
+  return chunks;
+}
+
+/**
  * Telegram channel adapter using grammy.
  * Handles message routing, auth, and formatting for Telegram.
  */
@@ -155,17 +187,27 @@ export class TelegramChannel implements IChannelAdapter {
   }
 
   async sendText(chatId: string, text: string): Promise<void> {
-    await this.bot.api.sendMessage(parseInt(chatId, 10), text);
+    const id = parseInt(chatId, 10);
+    for (const chunk of chunkTelegramMessage(text)) {
+      await this.bot.api.sendMessage(id, chunk);
+    }
   }
 
   async sendMarkdown(chatId: string, markdown: string): Promise<void> {
-    try {
-      await this.bot.api.sendMessage(parseInt(chatId, 10), markdown, {
-        parse_mode: "Markdown",
-      });
-    } catch {
-      // Fallback to plain text if markdown fails
-      await this.bot.api.sendMessage(parseInt(chatId, 10), markdown);
+    const id = parseInt(chatId, 10);
+    // Chunk BEFORE sending so the plain-text fallback also operates on an
+    // already-bounded chunk — otherwise an oversized answer throws "too long"
+    // on the Markdown send AND again on the fallback, dropping the whole reply.
+    for (const chunk of chunkTelegramMessage(markdown)) {
+      try {
+        await this.bot.api.sendMessage(id, chunk, { parse_mode: "Markdown" });
+      } catch (err) {
+        getLogger().warn("Telegram markdown send failed; retrying chunk as plain text", {
+          chatId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        await this.bot.api.sendMessage(id, chunk);
+      }
     }
   }
 
