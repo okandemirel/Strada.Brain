@@ -824,3 +824,50 @@ describe("WebChannel WebSocket heartbeat", () => {
     expect(socket.isTerminated()).toBe(true);
   });
 });
+
+describe("WebChannel rate-limit cleanup (L8)", () => {
+  it("runs per-chat cleanup (no appliedInstinctIds leak) when a rate-limited client closes", async () => {
+    const channel = new WebChannel();
+
+    // Socket whose close() does NOT synchronously fire the 'close' handler — this
+    // matches production (ws 'close' is async), so the real ordering is exercised:
+    // close() returns, the rate-limit branch runs, then 'close' fires later.
+    const handlers = new Map<string, () => void>();
+    const sent: Array<Record<string, unknown>> = [];
+    const closeCalls: Array<{ code?: number; reason?: string }> = [];
+    let readyState = 1;
+    const socket = {
+      get readyState() { return readyState; },
+      send(p: string) { sent.push(JSON.parse(p) as Record<string, unknown>); },
+      close(code?: number, reason?: string) { closeCalls.push({ code, reason }); readyState = 3; },
+      ping() {},
+      terminate() { readyState = 3; },
+      on(event: string, handler: () => void) { handlers.set(event, handler); },
+    };
+    (channel as unknown as { handleWsConnection: (ws: unknown) => void }).handleWsConnection(socket);
+
+    const chatId = String(sent[0]!.chatId);
+    channel.setAppliedInstinctIds(chatId, ["instinct-A", "instinct-B"]);
+
+    const send21 = (data: Record<string, unknown>) =>
+      (channel as unknown as {
+        handleWsMessage: (c: string, d: Record<string, unknown>) => Promise<void>;
+      }).handleWsMessage(chatId, data);
+    // WS_RATE_LIMIT is 20; the 21st message trips the limit → ws.close(1008).
+    for (let i = 0; i < 21; i++) {
+      await send21({ type: "ping" });
+    }
+    expect(closeCalls).toContainEqual({ code: 1008, reason: "Rate limit exceeded" });
+
+    // Now the async 'close' event arrives (after the rate-limit branch returned).
+    handlers.get("close")?.();
+
+    // TEETH: the manual clients.delete in the rate-limit branch ran BEFORE this
+    // close event, so handleDisconnect's `clients.get(chatId) === ws` guard failed
+    // and skipped cleanup, leaking appliedInstinctIds[chatId].
+    const leaked = (channel as unknown as {
+      appliedInstinctIds: Map<string, string[]>;
+    }).appliedInstinctIds.has(chatId);
+    expect(leaked).toBe(false);
+  });
+});

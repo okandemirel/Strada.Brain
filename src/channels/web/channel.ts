@@ -1003,8 +1003,11 @@ export class WebChannel
           text: "Rate limit exceeded. Please slow down.",
           messageId: randomUUID(),
         });
+        // Let the 'close' handler (handleDisconnect) own teardown — it deletes the
+        // client AND runs per-chat cleanup (appliedInstinctIds, recentlyDisconnected,
+        // streams, pendingConfirmations). Deleting here first made handleDisconnect's
+        // `clients.get(chatId) === ws` guard fail, skipping all of that cleanup.
         client.ws.close(1008, "Rate limit exceeded");
-        this.clients.delete(chatId);
         return;
       }
     }
