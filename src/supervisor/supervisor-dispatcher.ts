@@ -371,6 +371,10 @@ export class SupervisorDispatcher {
     const waves = this.computeWaves(nodes);
     const results: NodeResult[] = [];
     const failedNodeIds = new Set<string>();
+    // A skipped node leaves its dependents unsatisfied just like a failed one,
+    // so track skips too and propagate them transitively (a dependent of a
+    // skipped node must also skip — otherwise it runs with a missing dependency).
+    const skippedNodeIds = new Set<string>();
     let failureCount = 0;
     let budgetExhausted = false;
 
@@ -411,15 +415,17 @@ export class SupervisorDispatcher {
 
       for (const node of wave) {
         // Check if any dependency failed -> skip
-        const hasFailedDep = node.dependsOn.some((depId) =>
-          failedNodeIds.has(depId as string),
+        const hasUnsatisfiedDep = node.dependsOn.some((depId) =>
+          failedNodeIds.has(depId as string) || skippedNodeIds.has(depId as string),
         );
-        if (hasFailedDep) {
+        if (hasUnsatisfiedDep) {
+          skippedNodeIds.add(node.id as string);
           results.push(this.emitSkippedNode(node, "Skipped: dependency failed"));
           continue;
         }
 
         if (budgetExhausted || signal?.aborted) {
+          skippedNodeIds.add(node.id as string);
           results.push(this.emitSkippedNode(node, "Skipped: budget exhausted or aborted"));
           continue;
         }
@@ -433,11 +439,13 @@ export class SupervisorDispatcher {
             String(node.id),
             "supervisor_node_failed",
           );
+          skippedNodeIds.add(node.id as string);
           results.push(this.emitSkippedNode(node, "Skipped: budget acquire failed"));
           continue;
         }
         if (!reservedBudget) {
           budgetExhausted = true;
+          skippedNodeIds.add(node.id as string);
           results.push(this.emitSkippedNode(node, "Skipped: budget exhausted"));
           continue;
         }
@@ -447,6 +455,7 @@ export class SupervisorDispatcher {
         if (budgetExhausted || signal?.aborted || budget.exhausted()) {
           concurrency.release();
           budget.succeed();
+          skippedNodeIds.add(node.id as string);
           results.push(this.emitSkippedNode(node, "Skipped: budget exhausted or aborted"));
           continue;
         }

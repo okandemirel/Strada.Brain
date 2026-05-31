@@ -93,6 +93,35 @@ describe("SupervisorDispatcher", () => {
     expect(results.every((result) => result.status === "ok")).toBe(true);
   });
 
+  // Regression (H12): A fails -> B (deps A) skips -> C (deps B) must ALSO skip.
+  // Without tracking skipped node ids, C would not see B in failedNodeIds (B was
+  // skipped, not failed) and would execute with an unsatisfied dependency.
+  it("transitively skips dependents of a skipped node", async () => {
+    const executed: string[] = [];
+    const executeNode = vi.fn().mockImplementation(async (node: TaggedGoalNode) => {
+      executed.push(String(node.id));
+      return String(node.id) === "A"
+        ? { ...makeOkResult(String(node.id)), status: "failed" as const, output: "boom" }
+        : makeOkResult(String(node.id));
+    });
+    const dispatcher = new SupervisorDispatcher({
+      executeNode,
+      config: { maxParallelNodes: 2, nodeTimeoutMs: 5000, maxFailureBudget: 10 },
+    });
+    const nodes = [
+      makeAssignedNode("A", "a", "claude"),
+      makeAssignedNode("B", "b", "claude", ["A"]),
+      makeAssignedNode("C", "c", "claude", ["B"]),
+    ];
+
+    const results = await dispatcher.dispatch(nodes);
+
+    expect(executed).toEqual(["A"]); // B + C never executed
+    const status = new Map(results.map((r) => [String(r.nodeId), r.status]));
+    expect(status.get("B")).toBe("skipped");
+    expect(status.get("C")).toBe("skipped");
+  });
+
   it("emits failure reasons in monitor task updates", async () => {
     const emit = vi.fn();
     const executeNode = vi.fn().mockResolvedValue({
