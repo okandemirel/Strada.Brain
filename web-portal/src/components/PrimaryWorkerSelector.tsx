@@ -198,7 +198,7 @@ export default function PrimaryWorkerSelector() {
       if (availRes.ok) {
         const data = await availRes.json()
         setProviders(
-          (data.providers as ProviderInfo[]).filter((p) => p.configured),
+          (Array.isArray(data.providers) ? (data.providers as ProviderInfo[]) : []).filter((p) => p.configured),
         )
       }
 
@@ -220,7 +220,7 @@ export default function PrimaryWorkerSelector() {
       const res = await fetch('/api/providers/available?withModels=true')
       if (res.ok) {
         const data = await res.json()
-        const enriched = (data.providers as ProviderInfo[]).filter((p) => p.configured)
+        const enriched = (Array.isArray(data.providers) ? (data.providers as ProviderInfo[]) : []).filter((p) => p.configured)
         modelsCacheRef.current = enriched
         setProviders(enriched)
         setModelsLoaded(true)

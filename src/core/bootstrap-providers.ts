@@ -64,6 +64,10 @@ export async function initializeAIProvider(
   const providerCredentials = collectProviderCredentials(config);
   const notices: string[] = [];
   let healthCheckPassed: boolean | undefined;
+  // Resolved once and reused for the chat-provider base-URL wiring AND the
+  // reachability probe below, so a custom OLLAMA_BASE_URL affects chat too
+  // (previously it only affected the probe and embeddings).
+  const ollamaBaseUrl = config.ollamaBaseUrl ?? "http://localhost:11434";
 
   let defaultProvider: IAIProvider;
   let defaultProviderOrder: string[] = [];
@@ -100,6 +104,7 @@ export async function initializeAIProvider(
     defaultProviderOrder = preflightResult.passedProviderIds;
     defaultProvider = buildProviderChain(preflightResult.passedProviderIds, providerCredentials, {
       models: config.providerModels,
+      baseUrls: { ollama: ollamaBaseUrl },
     });
     logger.info("AI provider chain initialized", { chain: preflightResult.passedProviderIds });
 
@@ -117,6 +122,7 @@ export async function initializeAIProvider(
         defaultProviderOrder = allProviderIds;
         defaultProvider = buildProviderChain(allProviderIds, providerCredentials, {
           models: config.providerModels,
+          baseUrls: { ollama: ollamaBaseUrl },
         });
         notices.push(
           `Auto-appended fallback providers: ${fallbackPreflight.passedProviderIds.join(", ")}`,
@@ -166,6 +172,7 @@ export async function initializeAIProvider(
     defaultProviderOrder = preflightResult.passedProviderIds;
     defaultProvider = buildProviderChain(preflightResult.passedProviderIds, providerCredentials, {
       models: config.providerModels,
+      baseUrls: { ollama: ollamaBaseUrl },
     });
     logger.info("AI provider auto-detected from available keys", {
       chain: preflightResult.passedProviderIds,
@@ -188,20 +195,38 @@ export async function initializeAIProvider(
     config.providerModels,
     config.memory.dbPath,
     defaultProviderOrder,
+    ollamaBaseUrl,
   );
 
-  // Verify Ollama reachability before marking it available for routing
-  const ollamaBaseUrl = config.ollamaBaseUrl ?? "http://localhost:11434";
+  // Verify Ollama reachability before marking it available for routing.
+  // Escalate to a visible notice when Ollama is actually requested (in the
+  // provider chain or as the embedding/RAG provider) so a stopped server or a
+  // wrong OLLAMA_BASE_URL is actionable instead of being silently dropped.
+  const ollamaWanted =
+    (config.providerChain ? normalizeProviderNames(config.providerChain).includes("ollama") : false)
+    || config.rag.provider === "ollama";
   try {
     const ollamaRes = await fetch(`${ollamaBaseUrl}/api/tags`, {
       signal: AbortSignal.timeout(3_000),
     });
     if (ollamaRes.ok) {
       providerManager.setOllamaVerified(true);
-      logger.info("Ollama verified as reachable");
+      logger.info("Ollama verified as reachable", { baseUrl: ollamaBaseUrl });
+    } else if (ollamaWanted) {
+      const notice = `Ollama is configured but returned HTTP ${ollamaRes.status} at ${ollamaBaseUrl}; excluding from routing. Check that Ollama is running.`;
+      notices.push(notice);
+      logger.warn(notice);
+    } else {
+      logger.debug("Ollama not reachable, excluding from routing");
     }
   } catch {
-    logger.debug("Ollama not reachable, excluding from routing");
+    if (ollamaWanted) {
+      const notice = `Ollama is configured but unreachable at ${ollamaBaseUrl}; excluding from routing. Start Ollama ('ollama serve') or fix OLLAMA_BASE_URL.`;
+      notices.push(notice);
+      logger.warn(notice);
+    } else {
+      logger.debug("Ollama not reachable, excluding from routing");
+    }
   }
 
   logger.info("ProviderManager initialized with per-chat switching support");
@@ -308,6 +333,47 @@ export async function resolveAndCacheEmbeddings(
       source: resolution.source,
       dimensions: resolution.provider.dimensions,
     });
+
+    // Health-gate locally-served embedding providers. resolveEmbeddingProvider
+    // can select a local Ollama embedding endpoint in AUTO mode WITHOUT checking
+    // it is reachable. Handing back a live-but-dead provider made every file/
+    // memory embed call throw "fetch failed" (flooding the log with ~1 line per
+    // file). If the local endpoint is unreachable, degrade to the hash fallback
+    // (cachedProvider undefined) with one actionable notice instead.
+    if (/^ollama/i.test(resolution.provider.name)) {
+      const baseUrl = config.rag.baseUrl ?? config.ollamaBaseUrl ?? "http://localhost:11434";
+      let reachable = false;
+      try {
+        const probe = await fetch(`${baseUrl}/api/tags`, { signal: AbortSignal.timeout(3_000) });
+        reachable = probe.ok;
+      } catch {
+        reachable = false;
+      }
+      if (!reachable) {
+        const notice =
+          `Embeddings unavailable for ${consumerLabel}: the local Ollama embedding endpoint at ${baseUrl} is not reachable. ` +
+          "Start Ollama and pull an embedding model (e.g. `ollama pull nomic-embed-text`), or set OPENAI_API_KEY / GEMINI_API_KEY. " +
+          "Falling back to low-quality hash embeddings for now.";
+        logger.warn("Embeddings: Ollama selected but unreachable; using hash fallback", {
+          provider: resolution.provider.name,
+          baseUrl,
+          consumers: embeddingConsumers,
+        });
+        return {
+          notice,
+          status: {
+            state: "degraded",
+            ragEnabled: config.rag.enabled,
+            configuredProvider: config.rag.provider,
+            configuredModel: config.rag.model,
+            configuredDimensions: config.rag.dimensions,
+            verified: false,
+            usingHashFallback: true,
+            notice,
+          },
+        };
+      }
+    }
 
     const cachedProvider = new CachedEmbeddingProvider(resolution.provider, {
       persistPath: join(config.memory.dbPath, "cache"),

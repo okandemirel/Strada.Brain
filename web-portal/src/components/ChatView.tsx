@@ -145,10 +145,14 @@ export default function ChatView() {
   const [searchQuery, setSearchQuery] = useState('')
   const [searchOpen, setSearchOpen] = useState(false)
 
-  const hasHiddenMessages = messages.length > visibleCount
+  // Defensive: the store setter is the authoritative guard, but coerce here too
+  // so a non-array (e.g. a stale cached bundle or corrupt localStorage value)
+  // can never crash the panel via `.filter`/`.slice`/`.some` ("T.filter is not a function").
+  const safeMessages = Array.isArray(messages) ? messages : []
+  const hasHiddenMessages = safeMessages.length > visibleCount
   const visibleMessages = useMemo(
-    () => hasHiddenMessages ? messages.slice(messages.length - visibleCount) : messages,
-    [messages, visibleCount, hasHiddenMessages],
+    () => hasHiddenMessages ? safeMessages.slice(safeMessages.length - visibleCount) : safeMessages,
+    [safeMessages, visibleCount, hasHiddenMessages],
   )
 
   const searchFilteredMessages = useMemo(() => {
@@ -158,8 +162,8 @@ export default function ChatView() {
   }, [visibleMessages, searchQuery])
 
   const hasStreamingMessage = useMemo(
-    () => messages.some((m) => m.isStreaming),
-    [messages],
+    () => safeMessages.some((m) => m.isStreaming),
+    [safeMessages],
   )
 
   // eslint-disable-next-line react-hooks/incompatible-library

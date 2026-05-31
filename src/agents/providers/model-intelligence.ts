@@ -473,10 +473,15 @@ async function fetchLiteLLM(): Promise<Map<string, ModelInfo>> {
       // Skip metadata keys (e.g. "sample_spec")
       if (!entry || typeof entry !== "object" || (!entry.max_tokens && !entry.max_input_tokens && !entry.max_output_tokens)) continue;
 
-      const contextWindow = entry.max_input_tokens ?? entry.max_tokens ?? 0;
       const maxOutputTokens = entry.max_output_tokens ?? entry.max_tokens ?? 0;
-
-      if (contextWindow === 0) continue;
+      // Some catalog entries (often provider aliases) omit context-window
+      // metadata but are still valid, selectable models. Dropping them here
+      // starved the model picker (e.g. only the default OpenAI model showed up
+      // even though the catalog had 2000+ models). Keep them with a
+      // conservative fallback context window instead of discarding them.
+      const contextWindow =
+        (entry.max_input_tokens ?? entry.max_tokens)
+        ?? (maxOutputTokens > 0 ? maxOutputTokens : 8000);
 
       // Prices in LiteLLM are per-token; convert to per-million
       const inputPricePerMillion = (entry.input_cost_per_token ?? 0) * 1_000_000;

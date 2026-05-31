@@ -69,9 +69,14 @@ function createEmbeddingProvider(
   const source = `${options.sourcePrefix}:${name}`;
 
   if (name === "ollama") {
+    // config.rag.model defaults to an OpenAI embedding name (text-embedding-3-small),
+    // which Ollama would 404 on. If the override looks like an OpenAI embedding
+    // model, ignore it and use the Ollama preset model (nomic-embed-text).
+    const override = options.modelOverride;
+    const looksLikeOpenAiEmbed = !!override && /^text-embedding-/i.test(override);
     return {
       provider: new OllamaEmbeddingProvider({
-        model: options.modelOverride ?? preset.model,
+        model: looksLikeOpenAiEmbed ? preset.model : (override ?? preset.model),
         baseUrl: options.baseUrlOverride,
       }),
       source,

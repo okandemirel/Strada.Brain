@@ -73,6 +73,16 @@ export class UnityProjectVault implements IVault {
   protected watcher: IVaultWatcher | null = null;
   /** Serializes reindexFile()/delete passes — mirrors ObsidianVault.writeLock. */
   protected writeLock = new AsyncLock();
+  /**
+   * Throttles the per-file "embedding failed" WARN. When the embedding backend
+   * is down, indexing throws once per file (~1 line per indexed file, e.g. 1500+
+   * identical warnings). We warn at most once per window and demote the rest to
+   * DEBUG so a single dead service can't drown the log. (The bootstrap embedding
+   * health-gate prevents the common dead-Ollama case; this is the safety net for
+   * transient/partial failures.)
+   */
+  private lastEmbedWarnAtMs = 0;
+  private static readonly EMBED_WARN_WINDOW_MS = 60_000;
 
   constructor(deps: UnityVaultDeps) {
     this.id = deps.id;
@@ -303,9 +313,20 @@ export class UnityProjectVault implements IVault {
       }
       embedOk = true;
     } catch (embedErr) {
-      getLoggerSafe().warn(`[vault ${this.id}] embedding failed for ${relPath}, keeping prior vectors; will retry next sync`, {
-        error: embedErr instanceof Error ? embedErr.message : String(embedErr),
-      });
+      const embedErrMsg = embedErr instanceof Error ? embedErr.message : String(embedErr);
+      const nowMs = Date.now();
+      // Warn at most once per window; demote the rest to DEBUG so a dead backend
+      // can't flood the log with one identical line per file.
+      if (nowMs - this.lastEmbedWarnAtMs > UnityProjectVault.EMBED_WARN_WINDOW_MS) {
+        this.lastEmbedWarnAtMs = nowMs;
+        getLoggerSafe().warn(`[vault ${this.id}] embedding failed for ${relPath} (and possibly other files), keeping prior vectors; will retry next sync — fix the embedding backend to enable semantic search`, {
+          error: embedErrMsg,
+        });
+      } else {
+        getLoggerSafe().debug(`[vault ${this.id}] embedding failed for ${relPath}, keeping prior vectors; will retry next sync`, {
+          error: embedErrMsg,
+        });
+      }
       // Roll back any vectors inserted before the failure.
       for (const id of newHnswIds) {
         try { this.adapter.remove(id); } catch { /* per-id best effort */ }

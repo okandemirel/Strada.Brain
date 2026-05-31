@@ -153,6 +153,7 @@ export class ProviderManager {
     private readonly modelOverrides?: Record<string, string>,
     preferencesDbPath?: string,
     private readonly defaultProviderOrder: readonly string[] = [],
+    private readonly ollamaBaseUrl?: string,
   ) {
     const dbPath = preferencesDbPath ?? process.env["MEMORY_DB_PATH"] ?? join(process.cwd(), ".strada-memory");
     this.preferences = new ProviderPreferenceStore(
@@ -218,6 +219,7 @@ export class ProviderManager {
     try {
       const provider = buildProviderChain(order, this.providerCredentials, {
         models: model ? { ...this.modelOverrides, [primaryName]: model } : this.modelOverrides,
+        baseUrls: this.ollamaBaseUrl ? { ollama: this.ollamaBaseUrl } : undefined,
       });
       this.providerCache.set(cacheKey, provider);
       return provider;
@@ -292,6 +294,7 @@ export class ProviderManager {
         openaiSubscriptionAccessToken: this.providerCredentials[normalizedName]?.openaiSubscriptionAccessToken,
         openaiSubscriptionAccountId: this.providerCredentials[normalizedName]?.openaiSubscriptionAccountId,
         model: model ?? this.modelOverrides?.[normalizedName],
+        baseUrl: normalizedName === "ollama" ? this.ollamaBaseUrl : undefined,
       });
       this.primaryProviderCache.set(cacheKey, provider);
       return provider;
@@ -460,7 +463,10 @@ export class ProviderManager {
       const models = primaryModel
         ? { ...this.modelOverrides, [normalizedOrder[0]!]: primaryModel }
         : this.modelOverrides;
-      const provider = buildProviderChain(normalizedOrder, this.providerCredentials, { models });
+      const provider = buildProviderChain(normalizedOrder, this.providerCredentials, {
+        models,
+        baseUrls: this.ollamaBaseUrl ? { ollama: this.ollamaBaseUrl } : undefined,
+      });
       this.providerCache.set(cacheKey, provider);
       return provider;
     } catch (error) {

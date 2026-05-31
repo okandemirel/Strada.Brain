@@ -101,8 +101,12 @@ export function handleSettingsRoutes(
         if (parsed.messagesPerHour !== undefined) {
           storage.setSettingsOverride("rate_limit_messages_per_hour", String(parsed.messagesPerHour));
         }
-        if (parsed.messagesPerDay !== undefined) {
-          storage.setSettingsOverride("rate_limit_messages_per_day", String(parsed.messagesPerDay));
+        if (parsed.tokensPerDay !== undefined) {
+          // Write the SAME key the GET handler reads (rate_limit_tokens_per_day)
+          // and the frontend sends (tokensPerDay). The previous key
+          // (rate_limit_messages_per_day) was never read and the daily field
+          // never round-tripped, so it always reloaded as 0.
+          storage.setSettingsOverride("rate_limit_tokens_per_day", String(parsed.tokensPerDay));
         }
         sendJson(res, { success: true });
       } catch (err) {
