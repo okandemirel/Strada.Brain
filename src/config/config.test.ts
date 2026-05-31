@@ -378,6 +378,19 @@ describe("loadConfig", () => {
     expect(config.telegram.allowedUserIds).toEqual([1, 2, 3]);
   });
 
+  it("ignores trailing comma / blank tokens in CSV user IDs (M14)", () => {
+    setEnv({ ALLOWED_TELEGRAM_USER_IDS: "1,2,," });
+    // TEETH: the unfixed schema parsed the empty tokens to NaN, failed validation,
+    // and loadConfig threw "Invalid configuration" — crashing the whole config load.
+    expect(() => loadConfig()).not.toThrow();
+    expect(loadConfig().telegram.allowedUserIds).toEqual([1, 2]);
+  });
+
+  it("still rejects genuinely non-numeric user IDs (M14 guard)", () => {
+    setEnv({ ALLOWED_TELEGRAM_USER_IDS: "1,abc" });
+    expect(() => loadConfig()).toThrow("Invalid configuration");
+  });
+
   it("loads channel auth configuration into structured runtime config", () => {
     setEnv({
       ALLOWED_DISCORD_USER_IDS: "user-1,user-2",

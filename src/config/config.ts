@@ -948,7 +948,13 @@ const commaSeparatedList = z
 /** Comma-separated number list schema */
 const commaSeparatedNumberList = z
   .string()
-  .transform((s) => s.split(",").map((id) => parseInt(id.trim(), 10)))
+  .transform((s) =>
+    s
+      .split(",")
+      .map((id) => id.trim())
+      .filter(Boolean) // drop empty/whitespace tokens — a trailing comma yielded NaN and crashed config load
+      .map((id) => parseInt(id, 10)),
+  )
   .pipe(z.array(z.number().int()))
   .optional();
 
