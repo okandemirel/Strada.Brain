@@ -2591,7 +2591,9 @@ export const secretPatterns: SecretPattern[] = [
   // Authorization tokens
   {
     name: "bearer_token",
-    pattern: /Bearer\s+[a-zA-Z0_\-\.]{20,}/gi,
+    // [a-zA-Z0_...] only allowed the digit 0 — tokens with digits 1-9 escaped
+    // redaction. Use the full 0-9 range (matches DEFAULT_SECRET_PATTERNS).
+    pattern: /Bearer\s+[a-zA-Z0-9_\-\.]{20,}/gi,
     redaction: "Bearer [REDACTED]",
   },
   {

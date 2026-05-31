@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { loadConfig, resetConfigCache, validateConfig } from "./config.js";
+import { loadConfig, resetConfigCache, validateConfig, secretPatterns } from "./config.js";
 import { realpathSync, statSync } from "node:fs";
 
 vi.mock("node:fs", () => ({
@@ -959,5 +959,21 @@ describe("loadConfig", () => {
       setEnv({ CHAIN_COMPENSATION_TIMEOUT_MS: "500000" });
       expect(() => loadConfig()).toThrow();
     });
+  });
+});
+
+describe("secretPatterns redaction", () => {
+  it("bearer_token matches tokens containing digits 1-9 (L11)", () => {
+    const bearer = secretPatterns.find((p) => p.name === "bearer_token")!;
+
+    const token = "Bearer aB9cD8eF7gH6iJ5kL4mN3oP2qR1s"; // 20+ chars, digits 1-9
+    bearer.pattern.lastIndex = 0; // global regex — reset stateful lastIndex
+    // TEETH: the unfixed class [a-zA-Z0_...] excluded digits 1-9 → no match.
+    expect(bearer.pattern.test(token)).toBe(true);
+
+    const input = `Authorization: ${token}`;
+    bearer.pattern.lastIndex = 0;
+    const out = input.replace(bearer.pattern, bearer.redaction as string);
+    expect(out).toBe("Authorization: Bearer [REDACTED]");
   });
 });
