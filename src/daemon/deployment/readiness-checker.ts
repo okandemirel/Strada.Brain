@@ -133,6 +133,10 @@ export class ReadinessChecker {
       });
 
       child.on("error", (err) => {
+        // Clear the SIGKILL backstop too — on spawn errors (e.g. ENOENT) only
+        // "error" fires, never "close", so the timer would otherwise leak for
+        // ~testTimeoutMs+5s and fire kill() on a process that never started.
+        clearTimeout(killTimer);
         this.logger.warn(`Test command error: ${err.message}`);
         resolve(false);
       });

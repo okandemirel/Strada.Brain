@@ -248,6 +248,36 @@ describe("ReadinessChecker", () => {
       expect(result.testPassed).toBe(false);
     });
 
+    it("clears the SIGKILL backstop timer when the child errors (L12)", async () => {
+      vi.useFakeTimers();
+      try {
+        const config = createDefaultConfig({ testCommand: "nonexistent-bin" });
+        checker = new ReadinessChecker(config, "/project", mockLogger);
+
+        const errorProc = new EventEmitter() as unknown as ChildProcess;
+        (errorProc as Record<string, unknown>).stdout = new EventEmitter();
+        (errorProc as Record<string, unknown>).stderr = new EventEmitter();
+        const kill = vi.fn();
+        (errorProc as Record<string, unknown>).kill = kill;
+        setTimeout(() => errorProc.emit("error", new Error("spawn ENOENT")), 5);
+
+        mockSpawn
+          .mockReturnValueOnce(errorProc)
+          .mockReturnValueOnce(createMockProcessWithStdout(""))
+          .mockReturnValueOnce(createMockProcessWithStdout("main"));
+
+        const promise = checker.checkReadiness();
+        await vi.runAllTimersAsync(); // fire error + git mocks + any leaked killTimer
+        const result = await promise;
+
+        expect(result.testPassed).toBe(false);
+        // TEETH: unfixed code leaves killTimer pending → runAllTimers fires kill("SIGKILL").
+        expect(kill).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("tokenizes quoted test commands without invoking a shell", async () => {
       const config = createDefaultConfig({ testCommand: 'npm run "smoke suite"' });
       checker = new ReadinessChecker(config, "/project", mockLogger);
