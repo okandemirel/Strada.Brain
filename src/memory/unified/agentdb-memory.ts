@@ -287,6 +287,9 @@ export class AgentDBMemory implements IUnifiedMemory {
         metric: "cosine",
         quantization: this.config.quantizationType,
       });
+      // Gate the store's background compaction rebuild behind the same write mutex
+      // that serializes all other HNSW writes (M1).
+      this.hnswStore.setWriteSerializer(this.writeMutex);
 
       // Detect HNSW dimension mismatch (e.g. user switched embedding provider)
       // Writes through to this.hnswStore via proxy if rebuild occurs

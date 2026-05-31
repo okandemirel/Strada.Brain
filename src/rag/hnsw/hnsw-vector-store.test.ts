@@ -184,6 +184,73 @@ describeIfHnsw("HNSWVectorStore", () => {
     });
   });
 
+  describe("background compaction serialization (M1)", () => {
+    function compactionEntries(n: number): VectorEntry[] {
+      const entries: VectorEntry[] = [];
+      for (let i = 0; i < n; i++) {
+        const vec = new Array(dimensions).fill(0);
+        vec[i] = 1;
+        entries.push({
+          id: `m1-${i}`,
+          vector: vec,
+          chunk: createMockChunk(`m1-${i}`, `Content ${i}`),
+          addedAt: Date.now(),
+          accessCount: 0,
+        });
+      }
+      return entries;
+    }
+
+    it("runs the deleted-ratio rebuild through the injected write serializer", async () => {
+      await store.upsert(compactionEntries(5));
+
+      let lockCalls = 0;
+      let lastLock: Promise<unknown> | undefined;
+      store.setWriteSerializer({
+        withLock: (fn: () => Promise<unknown>) => {
+          lockCalls++;
+          lastLock = Promise.resolve().then(fn);
+          return lastLock;
+        },
+      } as any);
+
+      // Remove 2 of 5 → deleted ratio 0.4 > 0.3 triggers background compaction.
+      await store.remove(["m1-0", "m1-1"]);
+      await lastLock; // wait for the fire-and-forget, serializer-gated rebuild
+
+      // TEETH: the unfixed code scheduled the rebuild via setImmediate(rebuildIndex)
+      // and never touched the serializer, so lockCalls would stay 0.
+      expect(lockCalls).toBe(1);
+      expect(store.count()).toBe(3);
+      expect(store.has("m1-4")).toBe(true);
+    });
+
+    it("coalesces concurrent rebuild requests behind the rebuildScheduled guard", async () => {
+      await store.upsert(compactionEntries(5));
+
+      let lockCalls = 0;
+      let release!: () => void;
+      const gate = new Promise<void>((r) => { release = r; });
+      store.setWriteSerializer({
+        withLock: async (fn: () => Promise<unknown>) => {
+          lockCalls++;
+          await gate; // hold the rebuild in-flight so the guard stays set
+          return fn();
+        },
+      } as any);
+
+      await store.remove(["m1-0", "m1-1"]); // ratio 0.4 → schedules rebuild (guard set)
+      await store.remove(["m1-2"]);         // ratio higher, but a rebuild is already pending
+
+      // TEETH: without the rebuildScheduled guard the second remove would schedule
+      // a second rebuild → lockCalls === 2.
+      expect(lockCalls).toBe(1);
+
+      release(); // let the gated rebuild complete before afterEach shutdown
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+  });
+
   describe("search operations", () => {
     beforeEach(async () => {
       // Insert test vectors with known relationships
