@@ -212,6 +212,21 @@ describe("BrowserSecurity", () => {
       expect(result.valid).toBe(true);
     });
 
+    it("should NOT block legitimate domains starting with fc/fd (L10)", () => {
+      // TEETH: unfixed isPrivateIp prefix-matched "fc"/"fd" on plain hostnames.
+      for (const url of ["https://fcbarcelona.com/news", "https://fdomain.com", "https://fcc.gov"]) {
+        expect(validateUrlWithConfig(url).valid).toBe(true);
+      }
+    });
+
+    it("should still block IPv6 unique-local / link-local literals (L10 guard)", () => {
+      for (const url of ["http://[fc00::1]/admin", "http://[fd12:3456:789a:1::1]/x", "http://[fe80::1]/x"]) {
+        const result = validateUrlWithConfig(url);
+        expect(result.valid).toBe(false);
+        expect(result.reason).toContain("Private IP");
+      }
+    });
+
     it("should block DNS rebinding via sslip.io", () => {
       const result = validateUrlWithConfig("https://10.0.0.1.sslip.io/api");
       expect(result.valid).toBe(false);

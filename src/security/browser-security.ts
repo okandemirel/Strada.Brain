@@ -210,16 +210,22 @@ function isPrivateIp(ip: string): boolean {
     }
   }
 
-  // IPv6 loopback and unique local
-  if (
-    ip === "::1" ||
-    ip === "::" ||
-    ip.startsWith("fc") ||
-    ip.startsWith("fd") ||
-    ip.startsWith("fe80:") ||
-    ip.toLowerCase().startsWith("::ffff:")
-  ) {
+  // IPv6 loopback, unique-local, link-local, and IPv4-mapped. Only apply the
+  // fc/fd prefix checks to actual IPv6 literals (which always contain ':'), so
+  // legitimate hostnames like "fcbarcelona.com"/"fdomain.com" are not over-blocked.
+  if (ip === "::1" || ip === "::") {
     return true;
+  }
+  if (ip.includes(":")) {
+    const lower = ip.toLowerCase();
+    if (
+      lower.startsWith("fc") || // fc00::/8 (unique local)
+      lower.startsWith("fd") || // fd00::/8 (unique local)
+      lower.startsWith("fe80:") || // link-local
+      lower.startsWith("::ffff:") // IPv4-mapped
+    ) {
+      return true;
+    }
   }
 
   return false;
