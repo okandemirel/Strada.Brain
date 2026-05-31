@@ -1731,7 +1731,13 @@ export class WebChannel
     }
 
     const legacyProfileId = this.resolveLegacyProfileId(data);
-    if (legacyProfileId) {
+    // Only adopt a legacy profileId that is NOT already registered. profileId is
+    // a public value (sent to clients, stored in localStorage), so without this
+    // guard an unauthenticated request supplying a known profileId would
+    // overwrite that profile's token via issue()'s blind upsert — a profile
+    // takeover. An already-claimed id must present a valid token (handled above);
+    // otherwise fall back to a fresh identity.
+    if (legacyProfileId && !this.identityStore.has(legacyProfileId)) {
       return this.identityStore.issue(legacyProfileId);
     }
 

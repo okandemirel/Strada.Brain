@@ -112,6 +112,28 @@ afterEach(() => {
 });
 
 describe("WebChannel reconnect security", () => {
+  // Regression (H4): an unauthenticated WS request supplying a known (public)
+  // profileId via the legacy path must NOT overwrite that profile's auth token.
+  it("does not let an unauthenticated legacy request take over an existing profile", () => {
+    const channel = new WebChannel();
+    const store = (channel as unknown as {
+      identityStore: {
+        issue: (id?: string) => { profileId: string; profileToken: string };
+        verify: (id: string, token: string) => boolean;
+      };
+    }).identityStore;
+    const victim = store.issue();
+
+    const result = (channel as unknown as {
+      resolveWebIdentity: (d: Record<string, unknown>) => { profileId: string };
+    }).resolveWebIdentity({ legacyProfileChatId: victim.profileId });
+
+    // Attacker gets a fresh identity, not the victim's profile…
+    expect(result.profileId).not.toBe(victim.profileId);
+    // …and the victim's original token still verifies (was not overwritten).
+    expect(store.verify(victim.profileId, victim.profileToken)).toBe(true);
+  });
+
   it("requires the reconnect token to reclaim a recently disconnected chatId", () => {
     const channel = new WebChannel();
     const firstSocket = createMockSocket();
