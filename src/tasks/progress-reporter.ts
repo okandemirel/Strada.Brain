@@ -93,6 +93,13 @@ export class ProgressReporter {
         this.reportCancelled(task);
       }
     });
+
+    // Resume mints a NEW task id, so no terminal event ever arrives for a paused
+    // id — clear its heartbeat here or the Map entry + timers leak per pause and a
+    // pending heartbeat could fire a stale "working" status after pause.
+    taskManager.on("task:paused", (taskId: TaskId) => {
+      this.clearHeartbeat(taskId, true);
+    });
   }
 
   private reportCreated(task: Task): void {
