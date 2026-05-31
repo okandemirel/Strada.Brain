@@ -110,17 +110,21 @@ export class ResultAggregator {
         toVerify = [];
     }
 
-    // Run verification on selected nodes
+    // Run verification on selected nodes, cheapest first so the budget covers the
+    // most nodes possible.
     const updatedResults = [...results];
     let verificationSpend = 0;
-    for (const node of toVerify) {
+    const ordered = [...toVerify].sort((a, b) => Math.max(a.cost, 0) - Math.max(b.cost, 0));
+    for (const node of ordered) {
       const estimatedVerificationCost = Math.max(node.cost, 0) * 0.1;
       const projectedSpend = verificationSpend + estimatedVerificationCost;
       if (
         Number.isFinite(this.verificationConfig.maxVerificationCost) &&
         projectedSpend > this.verificationConfig.maxVerificationCost
       ) {
-        break;
+        // Skip this node but keep checking the rest — `break` abandoned ALL
+        // remaining verification after the first node that didn't fit the budget.
+        continue;
       }
       verificationSpend = projectedSpend;
       const verdict = await this.verifyFn(node);

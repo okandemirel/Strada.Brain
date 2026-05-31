@@ -171,5 +171,24 @@ describe("ResultAggregator", () => {
       expect(verifyFn).toHaveBeenCalledTimes(1);
       expect(verifyFn).toHaveBeenCalledWith(expect.objectContaining({ nodeId: "A" }));
     });
+
+    it("continues verifying cheaper nodes after one node exceeds the budget (M16)", async () => {
+      const verifyFn = vi.fn().mockResolvedValue({ verdict: "approve", verifierProvider: "deepseek" });
+      const agg = new ResultAggregator(
+        { mode: "always", samplingRate: 0, preferDifferentProvider: true, maxVerificationCost: 0.15 },
+        verifyFn,
+      );
+      const results = [
+        { ...makeResult("A", "ok"), cost: 10 }, // est 1.0 — exceeds budget, must NOT abort the loop
+        { ...makeResult("B", "ok"), cost: 0.5 }, // est 0.05 — fits
+      ];
+
+      await agg.verify(results);
+
+      // TEETH: the unfixed `break` aborted at A (iterated first), so verifyFn was never called.
+      expect(verifyFn).toHaveBeenCalledTimes(1);
+      expect(verifyFn).toHaveBeenCalledWith(expect.objectContaining({ nodeId: "B" }));
+      expect(verifyFn).not.toHaveBeenCalledWith(expect.objectContaining({ nodeId: "A" }));
+    });
   });
 });
