@@ -240,11 +240,17 @@ export class SecretSanitizer {
         );
       }
 
-      const redaction =
-        typeof pattern.redaction === "function"
-          ? pattern.redaction(matches[0] ?? "")
-          : pattern.redaction;
-      result = result.replace(pattern.pattern, redaction);
+      if (typeof pattern.redaction === "function") {
+        // Evaluate the redaction per-match from each match's OWN text. Passing a
+        // precomputed string (derived from matches[0]) re-used the first match's
+        // scheme/host for every later match, and any `$&`/`$1` in a matched host
+        // re-injected the plaintext via String.replace's pattern semantics.
+        const fn = pattern.redaction;
+        result = result.replace(pattern.pattern, (match) => fn(match));
+      } else {
+        // String redactions intentionally keep `$1` back-reference semantics.
+        result = result.replace(pattern.pattern, pattern.redaction);
+      }
     }
 
     stats.bytesRemoved = originalLength - result.length;
