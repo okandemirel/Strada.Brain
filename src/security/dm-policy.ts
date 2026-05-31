@@ -128,9 +128,12 @@ export class DMPolicy {
     let prefs = this.sessionPrefs.get(resolvedKey);
 
     if (!prefs || this.isExpired(prefs)) {
-      prefs = this.buildPrefs(userId, this.config.defaultLevel);
-      this.sessionPrefs.set(primaryKey, prefs);
-      return prefs;
+      // Do NOT persist the synthetic default on read. Persisting it grew
+      // sessionPrefs unbounded across ephemeral chats: defaults carry no
+      // expiresAt, so cleanupExpiredPrefs could never reclaim them. Callers
+      // (orchestrator user_confirm, requestApproval) only read this value;
+      // setSessionPrefs is the sole writer of persisted prefs.
+      return this.buildPrefs(userId, this.config.defaultLevel);
     }
 
     if (resolvedKey !== primaryKey) {

@@ -345,6 +345,21 @@ describe("DMPolicy", () => {
       // user2 should keep their prefs
       expect(policy.getSessionPrefs("user2", "chat1").level).toBe(ApprovalLevel.ALWAYS);
     });
+
+    it("does not retain default prefs from read-only access of ephemeral sessions (M11)", () => {
+      const sessionPrefs = (policy as unknown as {
+        sessionPrefs: Map<string, SessionApprovalPrefs>;
+      }).sessionPrefs;
+
+      for (let i = 0; i < 100; i++) {
+        policy.getSessionPrefs(`user${i}`, `chat${i}`); // read-only — never setSessionPrefs
+      }
+      policy.cleanupExpiredPrefs();
+
+      // TEETH: the unfixed getSessionPrefs persisted a default (no expiresAt) on every
+      // read, so size would be 100 and cleanupExpiredPrefs could never reclaim them.
+      expect(sessionPrefs.size).toBe(0);
+    });
   });
 
   describe("resetSessionPrefs", () => {
