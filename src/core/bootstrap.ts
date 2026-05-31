@@ -121,6 +121,7 @@ import {
   initializeRateLimiter as _initializeRateLimiter,
 } from "./bootstrap-channels.js";
 import {
+  BootstrapDisposables,
   wireMessageHandler as _wireMessageHandler,
   setupCleanup as _setupCleanup,
   createShutdownHandler as _createShutdownHandler,
@@ -348,9 +349,30 @@ export interface BootstrapResult {
 const POST_SETUP_BOOTSTRAP_DELAY_MS = 1200;
 
 /**
- * Bootstrap the application with all services
+ * Bootstrap the application with all services.
+ *
+ * Thin wrapper that owns mid-bootstrap failure cleanup (H11). `bootstrapImpl`
+ * registers a disposer on the {@link BootstrapDisposables} stack immediately
+ * after each resource is allocated; if any later step throws, we tear those
+ * resources down here (releasing SQLite fds, clearing timers, stopping
+ * servers/ports) before rethrowing instead of leaking them. On the success
+ * path nothing is torn down here — the returned `shutdown` handler owns the
+ * full lifecycle exactly as before.
  */
 export async function bootstrap(options: BootstrapOptions): Promise<BootstrapResult> {
+  const disposables = new BootstrapDisposables();
+  try {
+    return await bootstrapImpl(options, disposables);
+  } catch (error) {
+    await disposables.teardown();
+    throw error;
+  }
+}
+
+async function bootstrapImpl(
+  options: BootstrapOptions,
+  disposables: BootstrapDisposables,
+): Promise<BootstrapResult> {
   const { channelType, container: customContainer, beforeChannelConnect } = options;
   const runtimeProjectResolution = resolveRuntimeUnityProjectPath(options.config.unityProjectPath);
   const config = runtimeProjectResolution.effectiveProjectPath === options.config.unityProjectPath
@@ -495,6 +517,16 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   const providerManager = providerInit.manager;
   const activityRegistry = new ChannelActivityRegistry();
 
+  // H11: from here on, register a failure-cleanup disposer immediately after each
+  // resource comes online (mirrors createShutdownHandler). If a later bootstrap
+  // step throws, the bootstrap() wrapper runs these in LIFO order before rethrowing
+  // so a mid-bootstrap failure can't leak SQLite fds, timers, or server ports.
+  if (memoryManager) {
+    disposables.push("memoryManager", async () => { await memoryManager.shutdown(); });
+  }
+  disposables.push("channel", () => channel.disconnect());
+  disposables.push("providerManager", () => providerManager.shutdown());
+
   const { ragPipeline: codeRagPipeline, learningResult, startupNotices } = await initializeKnowledgeStage(
     {
       config,
@@ -507,6 +539,10 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       initializeLearning,
     },
   );
+  disposables.push("learningEventBus", () => learningResult.eventBus?.shutdown());
+  disposables.push("learningQueue", () => learningResult.learningQueue?.shutdown());
+  disposables.push("learningPipeline", () => learningResult.pipeline?.stop());
+  disposables.push("learningStorage", () => learningResult.storage?.close());
 
   // DocRAG + CompositeRAG: wrap code RAG with documentation search when available
   let ragPipeline = codeRagPipeline;
@@ -536,9 +572,14 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       // ragPipeline remains the code-only pipeline
     }
   }
+  // Dispose the FINAL ragPipeline (composite when DocRAG wrapped the code pipeline).
+  if (ragPipeline) {
+    disposables.push("ragPipeline", () => ragPipeline?.shutdown());
+  }
 
   // Initialize tools (registry created here, initialized after metricsStorage below)
   const toolRegistry = new ToolRegistry(config.pluginDirs);
+  disposables.push("toolRegistry", () => toolRegistry.shutdown());
 
   const metrics = new MetricsCollector();
   setSanitizationCallback((count) => metrics.recordSecretSanitized(count));
@@ -555,6 +596,17 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
         initializeRateLimiter,
       },
     );
+  if (dashboard) {
+    disposables.push("dashboard", () => dashboard.stop());
+  }
+  if (stoppableServers) {
+    disposables.push("stoppableServers", async () => {
+      await Promise.all(stoppableServers.map((s) => s.stop()));
+    });
+  }
+  if (metricsStorage) {
+    disposables.push("metricsStorage", () => metricsStorage.close());
+  }
   const {
     identityManager,
     uptimeInterval,
@@ -568,6 +620,15 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     metricsStorage,
     metricsRecorder,
   });
+  if (uptimeInterval) {
+    disposables.push("uptimeInterval", () => clearInterval(uptimeInterval));
+  }
+  if (identityManager) {
+    disposables.push("identityManager", () => {
+      identityManager.recordShutdown();
+      identityManager.close();
+    });
+  }
 
   // Initialize tool registry now that all deps are available
   // getDaemonStatus closure captures heartbeatLoop (declared below) via late binding
@@ -593,6 +654,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   // a UnityProjectVault, so that's the only hard gate.
   const { VaultRegistry } = await import("../vault/vault-registry.js");
   const vaultRegistry = new VaultRegistry();
+  disposables.push("vaultRegistry", () => vaultRegistry.disposeAll());
   if (cachedEmbeddingProvider) {
     try {
       logger.info("[vault] initializing vault subsystem", {
@@ -805,6 +867,9 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       provider: providerManager.getProvider(""),
       identityManager,
     });
+  if (goalStorage) {
+    disposables.push("goalStorage", () => goalStorage.close());
+  }
 
   const { soulLoader, sessionSummarizer, userProfileStore, taskExecutionStore, dmPolicy } =
     await initializeSessionRuntimeStage({
@@ -814,6 +879,9 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       providerManager,
       channel,
     });
+  if (soulLoader) {
+    disposables.push("soulLoader", () => soulLoader.shutdown());
+  }
 
   const { modelIntelligence, providerRouter, consensusManager, confidenceEstimator } =
     await initializeRuntimeIntelligenceStage({
@@ -822,6 +890,9 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       providerManager,
       learningStorage: learningResult.storage,
     });
+  if (modelIntelligence) {
+    disposables.push("modelIntelligence", () => modelIntelligence.shutdown());
+  }
 
   const { supervisorBrain } = initializeSupervisorStage({
     config,
@@ -935,6 +1006,9 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     providerManager,
     orchestrator,
   });
+  if (chainManager) {
+    disposables.push("chainManager", () => chainManager.stop());
+  }
 
   const {
     daemonEventBus,
@@ -965,6 +1039,18 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     startupNotices,
   });
   commandHandler.setVaultRegistry(vaultRegistry);
+  if (taskStorage) {
+    disposables.push("taskStorage", () => taskStorage.close());
+  }
+  if (backgroundExecutor) {
+    disposables.push("backgroundExecutor", () => backgroundExecutor.shutdown());
+  }
+  if (autoUpdater) {
+    disposables.push("autoUpdater", () => autoUpdater.shutdown());
+  }
+  if (messageRouter) {
+    disposables.push("messageRouter", () => messageRouter.dispose());
+  }
 
   let outerCheckpointStore: { close(): void } | undefined;
   // Task checkpoint store — persists in-flight context for budget / provider
@@ -977,6 +1063,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
     const checkpointStore = new TaskCheckpointStore(checkpointDbPath);
     checkpointStore.initialize();
     outerCheckpointStore = checkpointStore;
+    disposables.push("checkpointStore", () => checkpointStore.close());
     orchestrator.setTaskCheckpointStore(checkpointStore);
     commandHandler.setTaskCheckpointStore(checkpointStore);
     taskManager.setCheckpointStore(checkpointStore);
@@ -1039,6 +1126,10 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   const daemonDbPath = join(config.memory.dbPath, "daemon.db");
   const sharedDaemonStorage = new DaemonStorage(daemonDbPath);
   sharedDaemonStorage.initialize();
+  // Opened unconditionally and (by design) kept open for the daemon's lifetime on
+  // success; close it only on the failure path so a mid-bootstrap throw can't leak
+  // the daemon.db SQLite fd.
+  disposables.push("daemonStorage", () => sharedDaemonStorage.close());
   const sharedUnifiedBudgetManager = new UnifiedBudgetManager(
     sharedDaemonStorage,
     daemonEventBus ?? { emit: () => {} },
@@ -1088,6 +1179,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
         unifiedBudgetManager: sharedUnifiedBudgetManager,
       });
       heartbeatLoop = activeHeartbeatLoop;
+      disposables.push("heartbeatLoop", () => heartbeatLoop?.stop());
 
       // Agent Core: autonomous OODA reasoning loop (Phase 4)
       try {
@@ -1139,6 +1231,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
         chatId: undefined, // Will be set on first message
       });
       notificationRouterInstance.start();
+      disposables.push("notificationRouter", () => notificationRouterInstance?.stop());
 
       // Create DigestReporter (RPT-01)
       digestReporterInstance = new DigestReporter({
@@ -1156,6 +1249,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
         logger,
       });
       digestReporterInstance.start();
+      disposables.push("digestReporter", () => digestReporterInstance?.stop());
 
       // Build daemon context for CLI commands (Plan 05 + Plan 18-02 reporting + Plan 21-03 decay stats + Plan 22-04 chain resilience)
       daemonContext = {
@@ -1212,6 +1306,8 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       commandHandler.setUnifiedBudgetManager(unifiedBudgetManager);
       agentBudgetTrackerOuter = multiAgentStage.agentBudgetTracker;
       delegationManager = multiAgentStage.delegationManager;
+      disposables.push("agentManager", () => agentManager?.shutdown());
+      disposables.push("delegationManager", () => delegationManager?.shutdown());
       // Activate capability-aware delegation scoring with the live model catalog
       // (created earlier in bootstrap than the DelegationManager).
       if (modelIntelligence) {
@@ -1397,6 +1493,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
 
   // Setup cleanup
   const cleanupInterval = setupCleanup(orchestrator);
+  disposables.push("cleanupInterval", () => clearInterval(cleanupInterval));
 
   // Workspace/monitor runtime must be wired before channel.connect() so the
   // first inbound supervisor request cannot race ahead of executeNode setup.
@@ -1488,6 +1585,7 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
       const canvasDbPath = join(config.memory.dbPath, "canvas.db");
       canvasDb = new Database(canvasDbPath);
       canvasStorage = new CanvasStorage(canvasDb);
+      disposables.push("canvasStorage", () => canvasStorage?.close());
       dashboard.setCanvasStorage(canvasStorage);
       logger.info("Canvas storage initialized", { path: canvasDbPath });
     } catch (error) {

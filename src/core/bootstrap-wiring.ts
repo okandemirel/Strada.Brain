@@ -385,6 +385,61 @@ export function createShutdownHandler(options: ShutdownOptions): () => Promise<v
   };
 }
 
+/**
+ * Tracks resources allocated during bootstrap so a mid-bootstrap failure can
+ * tear them down (release SQLite fds, clear timers, stop servers/ports) instead
+ * of leaking them. This is the failure-path analogue of {@link createShutdownHandler}:
+ * `bootstrap()` registers a disposer immediately after each resource is created,
+ * and if any later step throws the wrapper runs {@link teardown} before rethrowing.
+ *
+ * Disposers run in reverse (LIFO) registration order — newest resource first —
+ * mirroring conventional teardown. Each disposer is isolated in its own
+ * try/catch so one failure cannot strand the rest, and `teardown()` is idempotent
+ * (it snapshots-and-clears the list) so it can never double-dispose. On the
+ * success path nothing is torn down here; the returned `shutdown` handler owns
+ * the full lifecycle as before.
+ */
+export class BootstrapDisposables {
+  private readonly disposers: Array<{ name: string; dispose: () => void | Promise<void> }> = [];
+
+  /** Register a teardown callback. Call immediately after the resource is allocated. */
+  push(name: string, dispose: () => void | Promise<void>): void {
+    this.disposers.push({ name, dispose });
+  }
+
+  /** Number of registered disposers (observability / tests). */
+  get size(): number {
+    return this.disposers.length;
+  }
+
+  /**
+   * Run all registered disposers in reverse (LIFO) order. Each runs in its own
+   * try/catch; a throwing disposer is logged and does not abort the remaining
+   * teardown. Snapshots-and-clears the list first, so repeated calls are no-ops.
+   */
+  async teardown(): Promise<void> {
+    // Snapshot + clear up-front so a re-entrant call cannot double-dispose.
+    const pending = this.disposers.splice(0).reverse();
+    if (pending.length === 0) {
+      return;
+    }
+    const logger = getLogger();
+    logger.warn("Bootstrap failed mid-initialization — tearing down allocated resources", {
+      count: pending.length,
+    });
+    for (const { name, dispose } of pending) {
+      try {
+        await dispose();
+      } catch (err) {
+        logger.warn("Bootstrap cleanup failed for a resource (continuing)", {
+          resource: name,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+  }
+}
+
 export function generateSessionId(): string {
   return `${randomUUID()}`;
 }

@@ -1,5 +1,6 @@
 import { beforeAll, afterEach, describe, expect, it, vi } from "vitest";
 import {
+  BootstrapDisposables,
   createShutdownHandler,
   setupCleanup,
   generateSessionId,
@@ -244,6 +245,91 @@ describe("createShutdownHandler", () => {
     expect(s1.stop).toHaveBeenCalledTimes(1);
     expect(s2.stop).toHaveBeenCalledTimes(1);
     clearInterval(interval);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: BootstrapDisposables (H11 — mid-bootstrap failure cleanup)
+// ---------------------------------------------------------------------------
+
+describe("BootstrapDisposables", () => {
+  beforeAll(() => {
+    try { createLogger("error", "/tmp/strada-bootstrap-wiring-test.log"); } catch { /* already initialized */ }
+  });
+
+  it("starts empty and tracks pushes via size", () => {
+    const d = new BootstrapDisposables();
+    expect(d.size).toBe(0);
+    d.push("a", vi.fn());
+    d.push("b", vi.fn());
+    expect(d.size).toBe(2);
+  });
+
+  it("runs disposers in reverse (LIFO) registration order", async () => {
+    const order: string[] = [];
+    const d = new BootstrapDisposables();
+    d.push("first", () => { order.push("first"); });
+    d.push("second", () => { order.push("second"); });
+    d.push("third", () => { order.push("third"); });
+
+    await d.teardown();
+
+    expect(order).toEqual(["third", "second", "first"]);
+  });
+
+  it("awaits async disposers before resolving", async () => {
+    let asyncDone = false;
+    const d = new BootstrapDisposables();
+    d.push("async", async () => {
+      await new Promise((r) => setTimeout(r, 5));
+      asyncDone = true;
+    });
+
+    await d.teardown();
+
+    expect(asyncDone).toBe(true);
+  });
+
+  it("isolates a throwing disposer so the rest still run", async () => {
+    const ran: string[] = [];
+    const d = new BootstrapDisposables();
+    d.push("ok-1", () => { ran.push("ok-1"); });
+    d.push("boom", () => { throw new Error("dispose failed"); });
+    d.push("ok-2", () => { ran.push("ok-2"); });
+
+    // teardown itself must not reject even though a disposer threw
+    await expect(d.teardown()).resolves.toBeUndefined();
+
+    // LIFO: ok-2 (last pushed) runs first, boom is swallowed, ok-1 still runs
+    expect(ran).toEqual(["ok-2", "ok-1"]);
+  });
+
+  it("isolates a rejecting async disposer so the rest still run", async () => {
+    const ran: string[] = [];
+    const d = new BootstrapDisposables();
+    d.push("ok", () => { ran.push("ok"); });
+    d.push("reject", async () => { throw new Error("async dispose failed"); });
+
+    await expect(d.teardown()).resolves.toBeUndefined();
+
+    expect(ran).toEqual(["ok"]);
+  });
+
+  it("is idempotent — a second teardown is a no-op", async () => {
+    const dispose = vi.fn();
+    const d = new BootstrapDisposables();
+    d.push("once", dispose);
+
+    await d.teardown();
+    await d.teardown();
+
+    expect(dispose).toHaveBeenCalledTimes(1);
+    expect(d.size).toBe(0);
+  });
+
+  it("teardown on an empty stack resolves without error", async () => {
+    const d = new BootstrapDisposables();
+    await expect(d.teardown()).resolves.toBeUndefined();
   });
 });
 
