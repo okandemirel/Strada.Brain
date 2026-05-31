@@ -241,6 +241,36 @@ describe("RuntimeArtifactManager", () => {
     expect(manager.getRecentArtifactsForIdentity("user-beta", { limit: 5 })).toEqual([]);
   });
 
+  it("evicts least-recently-used identities beyond the cap (M12)", () => {
+    const instinct = createInstinct({
+      id: "instinct_m12",
+      type: "tool_usage",
+      triggerPattern: "m12 identity cap loop",
+      action: "Run read -> patch -> build loop",
+    });
+    storage.createInstinct(instinct);
+    const { artifact } = manager.materializeShadowArtifact(instinct);
+
+    // 257 distinct identities = MAX_TRACKED_IDENTITIES (256) + 1. identity-0 is
+    // touched first and never again, so it is the LRU once the cap is exceeded.
+    for (let i = 0; i < 257; i++) {
+      manager.recordEvaluation({
+        artifactIds: [artifact.id],
+        identityKey: `identity-${i}`,
+        verdict: "clean",
+        blocker: false,
+        reason: "Verifier clean.",
+      });
+    }
+
+    // TEETH: without the LRU bound the map keeps every identity, so identity-0
+    // still has history and this returns [objectContaining(...)] instead of [].
+    expect(manager.getRecentArtifactsForIdentity("identity-0", { limit: 5 })).toEqual([]);
+    expect(manager.getRecentArtifactsForIdentity("identity-256", { limit: 5 })).toEqual([
+      expect.objectContaining({ id: artifact.id }),
+    ]);
+  });
+
   it("retires active artifacts after sustained low clean rate", () => {
     const artifact: RuntimeArtifact = {
       id: "artifact_retire" as RuntimeArtifact["id"],
