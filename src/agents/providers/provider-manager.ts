@@ -14,6 +14,7 @@ import type { ProviderCredentialMap } from "./provider-registry.js";
 import { ProviderPreferenceStore } from "./provider-preferences.js";
 import type { ProviderSelectionMode } from "./provider-preferences.js";
 import { getLogger } from "../../utils/logger.js";
+import { ProviderError } from "../../common/errors.js";
 import { LRUCache } from "../../common/lru-cache.js";
 import type { ProviderOfficialSnapshot } from "./provider-source-registry.js";
 import type {
@@ -165,9 +166,28 @@ export class ProviderManager {
     const pref = this.preferences.get(chatId);
     if (!pref) return this.defaultProvider;
 
-    const provider = pref.selectionMode === "strada-hard-pin"
-      ? this.buildPrimaryProvider(pref.providerName, pref.model)
-      : this.buildResilientProvider(pref.providerName, pref.model);
+    if (pref.selectionMode === "strada-hard-pin") {
+      const pinned = this.buildPrimaryProvider(pref.providerName, pref.model);
+      if (pinned) {
+        return pinned;
+      }
+      // A hard pin is a contract: never silently downgrade to the default chain
+      // (the previous behavior). Surface the failure so the caller/user can clear
+      // the pin or restore credentials instead of unknowingly running elsewhere.
+      getLogger().error("Hard-pinned provider could not be built; refusing to silently fall back", {
+        chatId,
+        provider: pref.providerName,
+        model: pref.model,
+      });
+      throw new ProviderError(
+        pref.providerName,
+        `Chat ${chatId} is hard-pinned to '${pref.providerName}' but the provider could not be built (credentials removed/rotated after pinning). Clear the pin or restore credentials.`,
+        "HARD_PIN_UNAVAILABLE",
+        { chatId, model: pref.model },
+      );
+    }
+
+    const provider = this.buildResilientProvider(pref.providerName, pref.model);
     if (provider) {
       return provider;
     }

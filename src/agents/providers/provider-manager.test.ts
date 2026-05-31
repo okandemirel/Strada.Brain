@@ -339,6 +339,31 @@ describe("ProviderManager", () => {
     expect(manager.getActiveInfo("chat-claude").model).toBe("claude-sonnet-4-6-20250514");
   });
 
+  it("throws instead of silently falling back when a hard-pinned provider cannot be built (L4)", async () => {
+    const defaultProvider = makeProvider("chain(qwen->kimi)");
+    preferenceState.set("chat-1", {
+      providerName: "kimi",
+      model: "kimi-long-context",
+      selectionMode: "strada-hard-pin",
+    });
+    const registry = await import("./provider-registry.js");
+    // Simulate creds removed/rotated after the pin: the pinned build throws.
+    (registry.createProvider as any).mockImplementationOnce(() => {
+      throw new Error("Kimi (Moonshot) provider requires an API key");
+    });
+
+    const manager = new ProviderManager(
+      defaultProvider,
+      { qwen: { apiKey: "qwen-key" }, kimi: { apiKey: "kimi-key" } },
+      { qwen: "qwen-max", kimi: "kimi-for-coding" },
+      "/tmp/provider-manager-test",
+      ["qwen", "kimi"],
+    );
+
+    // TEETH: the unfixed code caught the build failure and returned defaultProvider.
+    expect(() => manager.getProvider("chat-1")).toThrow(/hard-pinned/i);
+  });
+
   it("surfaces official model signals in the provider model list when the shared catalog lags", async () => {
     const defaultProvider = makeProvider("chain(minimax)");
     const manager = new ProviderManager(
