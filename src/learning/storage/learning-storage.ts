@@ -1285,7 +1285,11 @@ export class LearningStorage {
   getInstinctScopeCount(instinctId: string): number {
     this.ensureConnection();
     const row = this.db!.prepare(
-      "SELECT COUNT(DISTINCT project_path) as cnt FROM instinct_scopes WHERE instinct_id = ? AND project_path != '*'"
+      // Exclude scope_type='session_hit' rows — those are cross-session dedup
+      // markers (keyed by session id, not project) written by
+      // incrementCrossSessionHitCount. Counting them inflates the project count
+      // and falsely promotes the instinct to universal scope.
+      "SELECT COUNT(DISTINCT project_path) as cnt FROM instinct_scopes WHERE instinct_id = ? AND project_path != '*' AND scope_type != 'session_hit'"
     ).get(instinctId) as { cnt: number };
     return row.cnt;
   }
