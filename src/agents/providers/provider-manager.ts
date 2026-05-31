@@ -299,10 +299,12 @@ export class ProviderManager {
     }
 
     const providerName = canonicalizeProviderName(pref.providerName) ?? pref.providerName;
-    const preset = PROVIDER_PRESETS[providerName];
     return {
       providerName,
-      model: pref.model ?? this.modelOverrides?.[providerName] ?? preset?.defaultModel ?? "default",
+      // Route through getDefaultModelForProvider (as the no-preference branch
+      // does) so providers without a PROVIDER_PRESETS entry — claude/anthropic/
+      // ollama — report their real default instead of the literal "default".
+      model: pref.model ?? this.getDefaultModelForProvider(providerName),
       isDefault: false,
       selectionMode: pref.selectionMode,
       executionPolicyNote: pref.selectionMode === "strada-hard-pin"

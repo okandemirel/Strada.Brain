@@ -320,6 +320,25 @@ describe("ProviderManager", () => {
     expect(manager.listExecutionCandidates("chat-1").map((entry) => entry.name)).toEqual(["kimi"]);
   });
 
+  it("reports the real default model for a claude-pinned chat instead of \"default\" (L3)", () => {
+    const defaultProvider = makeProvider("chain(qwen->kimi)");
+    preferenceState.set("chat-claude", {
+      providerName: "claude",
+      selectionMode: "strada-hard-pin",
+      // intentionally NO model
+    });
+    const manager = new ProviderManager(
+      defaultProvider,
+      { qwen: { apiKey: "qwen-key" }, kimi: { apiKey: "kimi-key" } },
+      { qwen: "qwen-max", kimi: "kimi-for-coding" }, // no claude override
+      "/tmp/provider-manager-test",
+      ["qwen", "kimi"],
+    );
+
+    // TEETH: unfixed code returns "default" (no PROVIDER_PRESETS["claude"] entry).
+    expect(manager.getActiveInfo("chat-claude").model).toBe("claude-sonnet-4-6-20250514");
+  });
+
   it("surfaces official model signals in the provider model list when the shared catalog lags", async () => {
     const defaultProvider = makeProvider("chain(minimax)");
     const manager = new ProviderManager(
