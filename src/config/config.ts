@@ -3373,10 +3373,14 @@ export function loadConfig(envOverride?: Record<string, string | undefined>): Co
 
   // Update with resolved path + preset overrides
   // Preset overrides must be applied to the correct nested config paths
+  // Only adopt the preset's embedding model/baseUrl when the provider also comes
+  // from the preset. A user-supplied EMBEDDING_PROVIDER must not be paired with a
+  // preset model/baseUrl that belongs to a different provider (provider/model mismatch).
+  const presetProvidesEmbeddingProvider = !activeEnv["EMBEDDING_PROVIDER"];
   const presetRagOverrides = preset ? {
-    ...(!activeEnv["EMBEDDING_PROVIDER"] ? { provider: preset.embeddingProvider } : {}),
-    ...(!activeEnv["EMBEDDING_MODEL"] ? { model: preset.embeddingModel } : {}),
-    ...(!activeEnv["EMBEDDING_BASE_URL"] && preset.embeddingBaseUrl ? { baseUrl: preset.embeddingBaseUrl } : {}),
+    ...(presetProvidesEmbeddingProvider ? { provider: preset.embeddingProvider } : {}),
+    ...(presetProvidesEmbeddingProvider && !activeEnv["EMBEDDING_MODEL"] ? { model: preset.embeddingModel } : {}),
+    ...(presetProvidesEmbeddingProvider && !activeEnv["EMBEDDING_BASE_URL"] && preset.embeddingBaseUrl ? { baseUrl: preset.embeddingBaseUrl } : {}),
   } : {};
   const presetDelegationTierOverrides = preset ? {
     ...(!activeEnv["DELEGATION_TIER_LOCAL"] ? { local: preset.delegationTierLocal } : {}),

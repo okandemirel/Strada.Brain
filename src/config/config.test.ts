@@ -391,6 +391,30 @@ describe("loadConfig", () => {
     expect(() => loadConfig()).toThrow("Invalid configuration");
   });
 
+  it("does not pair a user EMBEDDING_PROVIDER with the preset embedding model/baseUrl (M15)", () => {
+    const config = loadConfig({
+      ANTHROPIC_API_KEY: "sk-test-key-123",
+      UNITY_PROJECT_PATH: "/test/project",
+      SYSTEM_PRESET: "budget", // preset embeds via gemini + gemini model + gemini baseUrl
+      EMBEDDING_PROVIDER: "ollama", // user override — provider is NOT from the preset
+    });
+    expect(config.rag.provider).toBe("ollama");
+    // TEETH: pre-fix the preset's model+baseUrl were grafted onto the user's provider.
+    expect(config.rag.model).not.toBe("gemini-embedding-exp-03-07");
+    expect(config.rag.baseUrl).not.toBe("https://generativelanguage.googleapis.com/v1beta/openai");
+  });
+
+  it("applies preset embedding provider/model/baseUrl when no EMBEDDING_PROVIDER override (M15 guard)", () => {
+    const config = loadConfig({
+      ANTHROPIC_API_KEY: "sk-test-key-123",
+      UNITY_PROJECT_PATH: "/test/project",
+      SYSTEM_PRESET: "budget",
+    });
+    expect(config.rag.provider).toBe("gemini");
+    expect(config.rag.model).toBe("gemini-embedding-exp-03-07");
+    expect(config.rag.baseUrl).toBe("https://generativelanguage.googleapis.com/v1beta/openai");
+  });
+
   it("loads channel auth configuration into structured runtime config", () => {
     setEnv({
       ALLOWED_DISCORD_USER_IDS: "user-1,user-2",
