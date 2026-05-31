@@ -316,18 +316,23 @@ export class SlackChannel implements IChannelAdapter {
 
     // Process batch of messages
     const now = Date.now();
-    const batchSize = Math.min(MESSAGE_BATCH_SIZE, this.messageQueue.length);
     const processedIds: string[] = [];
+    let processedCount = 0;
 
-    for (let i = 0; i < batchSize; i++) {
-      const message = this.messageQueue[i];
-      if (!message) break;
+    // Process up to MESSAGE_BATCH_SIZE *ready* messages, advancing past backed-off
+    // entries instead of burning a fixed front slot on them — a run of backed-off
+    // heads otherwise starves ready messages behind them (head-of-line blocking).
+    // Iterate a snapshot so a concurrent enqueue/disconnect can't disturb the walk;
+    // the removal below keys off message id.
+    for (const message of [...this.messageQueue]) {
+      if (processedCount >= MESSAGE_BATCH_SIZE) break;
 
-      // Skip messages waiting for exponential backoff retry
+      // Skip messages waiting for exponential backoff retry — advance to the next.
       if (message.retryAfter && now < message.retryAfter) {
         continue;
       }
 
+      processedCount++;
       try {
         await this.processQueuedMessage(message);
         processedIds.push(message.id);

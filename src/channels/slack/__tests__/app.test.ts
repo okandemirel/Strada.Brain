@@ -722,4 +722,46 @@ describe("SlackChannel file extraction", () => {
     expect(incoming.attachments).toHaveLength(1);
     expect(incoming.attachments[0].name).toBe("valid.png");
   });
+
+  describe("processMessageQueue head-of-line blocking (M7)", () => {
+    type QM = {
+      id: string; type: string; priority: number; channelId: string;
+      retries: number; retryAfter?: number;
+      resolve: (v: unknown) => void; reject: (e: Error) => void;
+    };
+    function backoffMsg(id: string): QM {
+      return {
+        id, type: "text", priority: 5, channelId: "C1", retries: 0,
+        retryAfter: Date.now() + 60_000, resolve: vi.fn(), reject: vi.fn(),
+      };
+    }
+    function readyMsg(id: string, resolve: (v: unknown) => void): QM {
+      return { id, type: "text", priority: 5, channelId: "C1", retries: 0, resolve, reject: vi.fn() };
+    }
+
+    it("advances past backed-off heads to process ready messages behind them", async () => {
+      const internal = channel as any;
+      const worker = vi.fn().mockResolvedValue(undefined);
+      internal.processQueuedMessage = worker;
+
+      const resolveB = vi.fn();
+      // Five backed-off heads fill all MESSAGE_BATCH_SIZE=5 front slots; "B" is ready behind them.
+      internal.messageQueue = [
+        backoffMsg("b0"), backoffMsg("b1"), backoffMsg("b2"),
+        backoffMsg("b3"), backoffMsg("b4"), readyMsg("B", resolveB),
+      ];
+
+      await internal.processMessageQueue();
+
+      // TEETH: the unfixed fixed-index loop visits only indices 0..4 (all in backoff),
+      // never reaching "B" — worker(B) is never called and B stays queued.
+      expect(worker).toHaveBeenCalledWith(expect.objectContaining({ id: "B" }));
+      expect(resolveB).toHaveBeenCalled();
+      expect(internal.messageQueue.find((m: QM) => m.id === "B")).toBeUndefined();
+
+      // Backed-off heads are skipped (not processed) and remain queued.
+      expect(worker).not.toHaveBeenCalledWith(expect.objectContaining({ id: "b0" }));
+      expect(internal.messageQueue.find((m: QM) => m.id === "b0")).toBeDefined();
+    });
+  });
 });
