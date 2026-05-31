@@ -34,6 +34,33 @@ describe("SlackRateLimiter", () => {
       expect(rateLimiter.getMethodTier("views.open")).toBe(3);
       expect(rateLimiter.getMethodTier("unknown.method")).toBe(4);
     });
+
+    it("does not phantom-consume a slot after acquisition timeout (L7)", async () => {
+      vi.useFakeTimers();
+      try {
+        const limiter = new SlackRateLimiter({ tier1: { requestsPerMinute: 1, burstAllowance: 1 } });
+        const internal = limiter as any;
+        const recordSpy = vi.spyOn(internal, "recordRequest");
+
+        await limiter.acquire("first", 1); // fills the single tier-1 slot
+        const p2 = limiter.acquire("phantom", 1); // capacity exhausted → queues
+        p2.catch(() => { /* expected timeout rejection */ });
+
+        await vi.advanceTimersByTimeAsync(31_000); // fire the 30s acquisition timeout
+        await expect(p2).rejects.toThrow(/timeout/);
+
+        // Free capacity and drain the queue: the orphaned (cancelled) closure must
+        // be skipped instead of consuming a real slot.
+        internal.requestHistory = [];
+        recordSpy.mockClear();
+        internal.processQueue(1);
+
+        // TEETH: the unfixed closure ran recordRequest("phantom", 1) here.
+        expect(recordSpy).not.toHaveBeenCalledWith("phantom", 1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   describe("getStatus", () => {
