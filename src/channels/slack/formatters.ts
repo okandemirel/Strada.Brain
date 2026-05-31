@@ -122,8 +122,11 @@ export function formatFilePath(path: string, maxLength = 100): string {
  * Format code for Slack with optional language.
  */
 export function formatCodeBlock(code: string, language?: string): string {
+  // Break triple-backtick sequences (backslash between backticks) so the embedded
+  // content can't close the surrounding ``` fence. The old replacement string
+  // collapsed to three literal backticks — a no-op.
   const escaped = code
-    .replace(/```/g, "\`\`\`");
+    .replace(/```/g, "`\\`\\`");
   
   return `
 \`\`\`${language || ""}

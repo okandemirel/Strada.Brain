@@ -117,6 +117,13 @@ describe("Slack Formatters", () => {
       const result = formatCodeBlock("const x = 1;", "javascript");
       expect(result).toContain("```javascript");
     });
+
+    it("escapes embedded triple backticks (L5)", () => {
+      const result = formatCodeBlock("a```b");
+      // TEETH: the unfixed no-op left the raw ``` intact inside the fence.
+      expect(result).toContain("a`\\`\\`b");
+      expect(result).not.toContain("a```b");
+    });
   });
 
   describe("formatErrorMessage", () => {

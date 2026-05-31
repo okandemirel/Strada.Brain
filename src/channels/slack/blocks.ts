@@ -435,8 +435,10 @@ function escapeMarkdown(text: string): string {
  * Escape code block content.
  */
 function escapeCodeBlock(text: string): string {
-  // Don't escape inside code blocks, just handle backticks
-  return text.replace(/```/g, "`\`\`");
+  // Break triple-backtick sequences (backslash between the backticks) so untrusted
+  // content can't close the surrounding ``` code fence. The previous replacement
+  // string collapsed to three literal backticks — a no-op.
+  return text.replace(/```/g, "`\\`\\`");
 }
 
 /**

@@ -65,6 +65,14 @@ describe("Slack Blocks", () => {
       
       expect(blocks.length).toBe(1);
     });
+
+    it("escapes embedded triple backticks so content can't break out of the fence (L5)", () => {
+      const blocks = createCodeBlockSection("a```b", "csharp");
+      const section = blocks[blocks.length - 1] as { text: { text: string } };
+      // TEETH: the unfixed no-op left the raw ``` intact, letting content close the fence.
+      expect(section.text.text).not.toContain("a```b");
+      expect(section.text.text).toContain("a`\\`\\`b");
+    });
   });
 
   describe("createSuccessBlock", () => {
