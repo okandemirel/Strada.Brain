@@ -94,11 +94,28 @@ export async function initializeAIProvider(
       providerCredentials,
       config.providerModels,
     );
+    // Graceful degradation: only abort boot if NOTHING healthy remains, or if the
+    // PRIMARY (first) provider in the chain failed. A non-primary fallback failing
+    // preflight (e.g. an expired Kimi key) must NOT take the whole app down — boot
+    // on the healthy survivors and surface a notice. (Previously ANY single failure
+    // threw NO_HEALTHY_AI_PROVIDER and aborted boot, so one bad key killed startup.)
     if (preflightResult.failures.length > 0) {
-      throw new AppError(
-        `Configured AI providers failed preflight. ${formatProviderPreflightFailures(preflightResult.failures)}`,
-        "NO_HEALTHY_AI_PROVIDER",
-      );
+      const primaryName = configuredNames[0]?.trim().toLowerCase();
+      const primaryHealthy = primaryName
+        ? preflightResult.passedProviderIds.includes(primaryName)
+        : preflightResult.passedProviderIds.length > 0;
+      if (preflightResult.passedProviderIds.length === 0 || !primaryHealthy) {
+        throw new AppError(
+          `Configured AI providers failed preflight. ${formatProviderPreflightFailures(preflightResult.failures)}`,
+          "NO_HEALTHY_AI_PROVIDER",
+        );
+      }
+      const notice = `Some configured AI providers failed preflight and were skipped: ${formatProviderPreflightFailures(preflightResult.failures)}`;
+      notices.push(notice);
+      logger.warn("Some AI providers failed preflight; continuing with healthy providers", {
+        failed: preflightResult.failures.map((f) => f.providerId),
+        healthy: preflightResult.passedProviderIds,
+      });
     }
 
     defaultProviderOrder = preflightResult.passedProviderIds;

@@ -14,6 +14,7 @@ import { convertToolDefinitions } from "./openai-compat.js";
 import { fetchWithRetry as sharedFetchWithRetry } from "../../common/fetch-with-retry.js";
 import {
   ensureOpenAiSubscriptionAuth,
+  refreshOpenAiSubscriptionToken,
   OPENAI_CHATGPT_AUTH_DEFAULT_FILE,
 } from "../../common/openai-subscription-auth.js";
 
@@ -299,12 +300,30 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
     signal?: AbortSignal,
   ): Promise<ProviderResponse> {
     const logger = getLogger();
-    const response = await this.fetchWithRetry(`${this.baseUrl}/responses`, {
+    let response = await this.fetchWithRetry(`${this.baseUrl}/responses`, {
       method: "POST",
       headers: await this.buildHeaders(),
       body: JSON.stringify(this.buildChatGptResponsesRequest(systemPrompt, messages, tools)),
       signal,
     });
+
+    // Refresh-on-401: a server-invalidated/rotated subscription token (whose local
+    // JWT is not yet expired, so ensureOpenAiSubscriptionAuth won't have refreshed
+    // it) returns 401/403 here. Force a refresh via the stored refresh_token and
+    // retry once before surfacing an auth error.
+    if ((response.status === 401 || response.status === 403) && await this.tryRefreshChatGptToken()) {
+      await response.body?.cancel().catch(() => {});
+      response = await this.fetchWithRetry(`${this.baseUrl}/responses`, {
+        method: "POST",
+        headers: await this.buildHeaders(),
+        body: JSON.stringify(this.buildChatGptResponsesRequest(systemPrompt, messages, tools)),
+        signal,
+      });
+    }
+    if (!response.ok) {
+      const detail = await this.describeChatGptHealthFailure(response);
+      throw new Error(`${this.name} ${detail}`);
+    }
 
     logger.debug(`${this.name} ChatGPT/Codex subscription API call`, {
       model: this.model,
@@ -602,12 +621,24 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
           logger.warn(`${this.name} health check failed: ${authInspection.detail}`);
           return false;
         }
-        const response = await fetch(`${this.baseUrl}/responses`, {
+        let response = await fetch(`${this.baseUrl}/responses`, {
           method: "POST",
           headers: await this.buildHeaders(),
           body: JSON.stringify(this.buildChatGptHealthCheckRequest()),
           signal: AbortSignal.timeout(10_000),
         });
+        // Refresh-on-401: the server can invalidate/rotate a token whose local JWT
+        // is not yet expired, so the ensureOpenAiSubscriptionAuth above won't have
+        // refreshed it. Force a refresh via the stored refresh_token and retry once.
+        if ((response.status === 401 || response.status === 403) && await this.tryRefreshChatGptToken()) {
+          await response.body?.cancel().catch(() => {});
+          response = await fetch(`${this.baseUrl}/responses`, {
+            method: "POST",
+            headers: await this.buildHeaders(),
+            body: JSON.stringify(this.buildChatGptHealthCheckRequest()),
+            signal: AbortSignal.timeout(10_000),
+          });
+        }
         if (!response.ok) {
           this.lastHealthDetail = await this.describeChatGptHealthFailure(response);
           logger.warn(`${this.name} health check failed: ${this.lastHealthDetail}`);
@@ -744,6 +775,39 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
       accessToken: inspection.accessToken,
       accountId: inspection.accountId,
     };
+  }
+
+  /**
+   * Force-refresh the ChatGPT/Codex subscription access token via the stored
+   * refresh_token. Used after a live 401/403 from a server-invalidated token
+   * whose local JWT has not yet expired (the expiry-driven refresh in
+   * ensureOpenAiSubscriptionAuth does not cover that case). The refresh primitive
+   * writes the new token to the auth file, so a subsequent buildHeaders() picks it
+   * up. Returns true when a refresh succeeded so the caller can retry once.
+   */
+  private async tryRefreshChatGptToken(): Promise<boolean> {
+    if (!this.isChatGptSubscriptionMode()) return false;
+    const authConfig = this.getChatGptSubscriptionAuth();
+    // Refresh only works against the file-based refresh_token; an explicit
+    // in-memory access token has nothing to refresh against.
+    if (authConfig.accessToken) return false;
+    try {
+      const result = await refreshOpenAiSubscriptionToken({
+        authFile: authConfig.authFile ?? OPENAI_CHATGPT_AUTH_DEFAULT_FILE,
+        env: process.env,
+      });
+      if (result.ok) {
+        getLoggerSafe().info(`${this.name} subscription token refreshed after a 401; retrying once`);
+        return true;
+      }
+      getLoggerSafe().warn(`${this.name} subscription token refresh failed: ${result.error ?? "unknown error"}`);
+      return false;
+    } catch (err) {
+      getLoggerSafe().warn(`${this.name} subscription token refresh threw`, {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return false;
+    }
   }
 
   private buildChatGptResponsesRequest(
