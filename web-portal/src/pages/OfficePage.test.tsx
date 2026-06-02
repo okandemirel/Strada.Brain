@@ -13,17 +13,12 @@ vi.mock('../office/webgl', () => ({
   isOffice3DEnabled: () => mockIsOffice3DEnabled(),
 }))
 
-// Guard against jsdom ever importing react-three-fiber / drei (no WebGL).
-// If the page tries to render the 3D scene during a test, this stub renders
-// instead of a real <Canvas>.
-vi.mock('@react-three/fiber', () => ({
-  Canvas: ({ children }: { children?: React.ReactNode }) => (
-    <div data-testid="r3f-canvas">{children}</div>
-  ),
-}))
-vi.mock('@react-three/drei', () => ({
-  OrbitControls: () => null,
-  Html: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
+// OfficePage's only responsibility on the 3D path is to lazy-render
+// <OfficeScene/> and show the List view toggle. The scene's WebGL internals
+// (useGLTF / useFrame / Clone) are covered by OfficeScene.test.tsx, so stub the
+// whole module here — jsdom never touches react-three-fiber / drei this way.
+vi.mock('../office/OfficeScene', () => ({
+  OfficeScene: () => <div data-testid="r3f-canvas" />,
 }))
 
 import OfficePage from './OfficePage'
