@@ -3,7 +3,7 @@ import { NavLink, useLocation } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import {
   BarChart3, Settings, SlidersHorizontal, Wrench, Radio, Users,
-  ScrollText, Brain, Theater, Database, Shield, Puzzle, ChevronDown,
+  ScrollText, Brain, Theater, Database, Shield, Puzzle, Building2, ChevronDown,
   type LucideIcon,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -27,6 +27,7 @@ const ADMIN_PAGES: AdminPage[] = [
   { to: '/admin/memory', icon: Database, labelKey: 'nav.memory' },
   { to: '/admin/settings', icon: Settings, labelKey: 'nav.settings' },
   { to: '/admin/skills', icon: Puzzle, labelKey: 'nav.skills' },
+  { to: '/admin/office', icon: Building2, labelKey: 'nav.office' },
 ]
 
 interface AdminNavProps {
