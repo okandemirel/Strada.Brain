@@ -148,7 +148,10 @@ export default function ChatView() {
   // Defensive: the store setter is the authoritative guard, but coerce here too
   // so a non-array (e.g. a stale cached bundle or corrupt localStorage value)
   // can never crash the panel via `.filter`/`.slice`/`.some` ("T.filter is not a function").
-  const safeMessages = Array.isArray(messages) ? messages : []
+  const safeMessages = useMemo(
+    () => (Array.isArray(messages) ? messages : []),
+    [messages],
+  )
   const hasHiddenMessages = safeMessages.length > visibleCount
   const visibleMessages = useMemo(
     () => hasHiddenMessages ? safeMessages.slice(safeMessages.length - visibleCount) : safeMessages,
