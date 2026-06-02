@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import type { JSX } from 'react'
 import { Canvas } from '@react-three/fiber'
 import { OrbitControls, Html } from '@react-three/drei'
@@ -15,11 +15,15 @@ interface StationMeshProps {
 
 /**
  * One interactive desk per station. Hovering lifts + highlights it and shows
- * a drei <Html> label; clicking navigates to the station's admin route.
+ * a drei <Html> label; clicking calls onSelect(route).
  */
 function StationMesh({ station, onSelect }: StationMeshProps): JSX.Element {
   const [hovered, setHovered] = useState(false)
   const [x, y, z] = station.position
+
+  // The pointer handlers set document.body.style.cursor imperatively; reset it
+  // if this mesh unmounts while still hovered so the cursor never sticks.
+  useEffect(() => () => { document.body.style.cursor = 'auto' }, [])
 
   return (
     <group position={[x, y, z]}>
@@ -75,19 +79,23 @@ function StationMesh({ station, onSelect }: StationMeshProps): JSX.Element {
 }
 
 /**
- * Low-poly 3D virtual office. A floor + two back walls frame a ring of
- * interactive station desks. WebGL only — the page guards this behind
- * isOffice3DEnabled() so jsdom never instantiates a <Canvas>.
+ * The contents of the office scene — everything that lives *inside* the
+ * <Canvas>. Extracted from OfficeScene for two reasons:
+ *  1. Testability: @react-three/test-renderer provides its own renderer, so it
+ *     can mount this directly (no real WebGL) and fire a click on a station mesh
+ *     to verify the onClick -> onSelect(route) wiring.
+ *  2. Context boundary: react-router's useNavigate() relies on React context,
+ *     which does NOT cross the <Canvas> reconciler boundary. Navigation is
+ *     therefore injected as a plain `onSelect` callback prop (props DO cross),
+ *     resolved by OfficeScene which calls useNavigate() OUTSIDE the Canvas.
  */
-export function OfficeScene(): JSX.Element {
-  const navigate = useNavigate()
-
+export function OfficeSceneContents({
+  onSelect,
+}: {
+  onSelect: (route: string) => void
+}): JSX.Element {
   return (
-    <Canvas
-      shadows
-      camera={{ position: [0, 9, 12], fov: 50 }}
-      style={{ width: '100%', height: '100%' }}
-    >
+    <>
       <color attach="background" args={['#0b1020']} />
       <ambientLight intensity={0.5} />
       <directionalLight
@@ -122,11 +130,7 @@ export function OfficeScene(): JSX.Element {
       </mesh>
 
       {OFFICE_STATIONS.map((station) => (
-        <StationMesh
-          key={station.id}
-          station={station}
-          onSelect={(route) => navigate(route)}
-        />
+        <StationMesh key={station.id} station={station} onSelect={onSelect} />
       ))}
 
       <OrbitControls
@@ -135,6 +139,25 @@ export function OfficeScene(): JSX.Element {
         maxDistance={22}
         maxPolarAngle={Math.PI / 2.1}
       />
+    </>
+  )
+}
+
+/**
+ * Low-poly 3D virtual office. A floor + two back walls frame a ring of
+ * interactive station desks. WebGL only — the page guards this behind
+ * isOffice3DEnabled() so jsdom never instantiates a <Canvas>.
+ */
+export function OfficeScene(): JSX.Element {
+  const navigate = useNavigate()
+
+  return (
+    <Canvas
+      shadows
+      camera={{ position: [0, 9, 12], fov: 50 }}
+      style={{ width: '100%', height: '100%' }}
+    >
+      <OfficeSceneContents onSelect={(route) => navigate(route)} />
     </Canvas>
   )
 }

@@ -101,14 +101,35 @@ describe('OfficePage (2D fallback)', () => {
 describe('OfficePage (3D path)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockIsOffice3DEnabled.mockReturnValue(true)
   })
 
-  it('renders the 3D scene (mocked canvas) when 3D is enabled', async () => {
-    mockIsOffice3DEnabled.mockReturnValue(true)
+  it('renders the 3D scene (mocked canvas) with a List view toggle when 3D is enabled', async () => {
     renderPage()
     // The scene is lazy-loaded; wait for the mocked <Canvas> to appear.
     expect(await screen.findByTestId('r3f-canvas')).toBeInTheDocument()
-    // No 2D fallback buttons in the 3D path (drei Html label has no role=button).
-    expect(screen.queryByRole('button')).not.toBeInTheDocument()
+    // The only control in 3D mode is the accessible "List view" toggle; station
+    // navigation happens via the 3D meshes (covered by OfficeScene.test.tsx).
+    const buttons = screen.getAllByRole('button')
+    expect(buttons).toHaveLength(1)
+    expect(screen.getByRole('button', { name: /list view/i })).toBeInTheDocument()
+  })
+
+  it('lets keyboard/screen-reader users switch to the accessible 2D list and back', async () => {
+    const user = userEvent.setup()
+    renderPage()
+    await screen.findByTestId('r3f-canvas')
+
+    // Switch to the 2D list (the accessible, keyboard-navigable view).
+    await user.click(screen.getByRole('button', { name: /list view/i }))
+    expect(screen.queryByTestId('r3f-canvas')).not.toBeInTheDocument()
+    // All station cards are now present, plus a "3D view" toggle to return.
+    expect(screen.getAllByRole('button')).toHaveLength(OFFICE_STATIONS.length + 1)
+    expect(screen.getByRole('button', { name: /3d view/i })).toBeInTheDocument()
+    expect(screen.getByText(OFFICE_STATIONS[0].label)).toBeInTheDocument()
+
+    // Switch back to the 3D scene.
+    await user.click(screen.getByRole('button', { name: /3d view/i }))
+    expect(await screen.findByTestId('r3f-canvas')).toBeInTheDocument()
   })
 })
