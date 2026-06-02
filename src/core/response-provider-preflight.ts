@@ -127,8 +127,13 @@ export async function preflightResponseProviders(
     const credential = credentials[providerId];
     const providerName = getProviderLabel(providerId);
 
+    // Throwaway provider instances are created purely to run healthCheck(). They
+    // must be released after the probe so any future provider that holds a
+    // long-lived handle (socket/timer) does not leak across preflight. Capture
+    // the instance outside the try so it can be disposed in finally.
+    let provider: ReturnType<typeof createProvider> | undefined;
     try {
-      const provider = createProvider({
+      provider = createProvider({
         name: providerId,
         apiKey: credential?.apiKey,
         anthropicAuthMode: credential?.anthropicAuthMode,
@@ -162,6 +167,19 @@ export async function preflightResponseProviders(
         providerName,
         detail: getSafeFailureDetail(providerId, providerName, credential),
       });
+    } finally {
+      const disposable = provider as
+        | { dispose?: () => void | Promise<void>; close?: () => void | Promise<void> }
+        | undefined;
+      try {
+        if (typeof disposable?.dispose === "function") {
+          await disposable.dispose();
+        } else if (typeof disposable?.close === "function") {
+          await disposable.close();
+        }
+      } catch {
+        // Disposal of a throwaway preflight provider must never mask the probe result.
+      }
     }
   }
 

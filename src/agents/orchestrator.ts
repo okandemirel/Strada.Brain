@@ -645,7 +645,6 @@ export function buildUserContent(
 export class Orchestrator {
   private readonly vaultRegistry?: import("../vault/vault-registry.js").VaultRegistry;
   private readonly vaultWriteHookBudgetMs: number = 200;
-  private vaultContext: string = "";
   private vaultWriteHook: import("../vault/write-hook.js").InstalledWriteHook | null = null;
   private readonly providerManager: ProviderManager;
   private readonly tools: Map<string, ITool>;
@@ -1258,10 +1257,13 @@ export class Orchestrator {
       ? STRADA_AGENT_PREAMBLE + frameworkSection
       : STRADA_SYSTEM_PROMPT; // fallback to static knowledge
 
+    // Note: vault context is intentionally NOT folded in here. It is
+    // request-specific (depends on the current user message) and is injected
+    // per-request via buildSystemPromptWithContext({ vaultContext }) so that
+    // concurrent chats / background tasks do not race on a shared field.
     this.systemPrompt =
       knowledgeBase +
       buildProjectContext(this.projectPath) +
-      this.vaultContext +
       buildDepsContext(this.stradaDeps) +
       buildCapabilityManifest() +
       buildToolUsageHints(!!this.vaultRegistry) +
@@ -2280,12 +2282,24 @@ export class Orchestrator {
     };
   }
 
-  private buildInterventionDeps(): InterventionDeps {
+  /**
+   * Build the dependency bundle consumed by the intervention/clarification/review
+   * pipeline. The clarification and review stages prepend the system prompt, so
+   * they must see the LIVE per-request prompt (which the PAOR loops mutate via
+   * memory re-retrieval) rather than the static base `this.systemPrompt`. Callers
+   * inside a loop pass a `getSystemPrompt` thunk closing over their local
+   * `systemPrompt` variable so updates are reflected without rebuilding deps.
+   */
+  private buildInterventionDeps(getSystemPrompt?: () => string): InterventionDeps {
+    // Fallback to the static base prompt when no live thunk is supplied.
+    const resolveSystemPrompt = getSystemPrompt ?? (() => this.systemPrompt);
     return {
       getReviewerAssignment: (id, s) => this.getClarificationReviewAssignment(id, s),
       classifyTask: (p) => this.taskClassifier.classify(p),
       buildSupervisorRolePrompt: (s, a) => this.buildSupervisorRolePrompt(s, a),
-      systemPrompt: this.systemPrompt,
+      get systemPrompt(): string {
+        return resolveSystemPrompt();
+      },
       projectPath: this.projectPath,
       clarificationContext: this.getClarificationContext(),
       stripInternalDecisionMarkers: (t) => stripInternalDecisionMarkersHelper(t),
@@ -2419,6 +2433,7 @@ export class Orchestrator {
     channelType?: string;
     prompt: string;
     personaContent?: string;
+    vaultContext?: string;
     profile: {
       displayName?: string;
       language: string;
@@ -2434,6 +2449,25 @@ export class Orchestrator {
     projectWorldFingerprint?: string;
   }> {
     return buildSystemPromptWithContextHelper(this.getContextBuilderDeps(), params);
+  }
+
+  /**
+   * Compute request-scoped vault context enrichment for a user message.
+   * Returns "" when no vault registry is configured or on failure, so the
+   * value can be passed directly into buildSystemPromptWithContext.
+   */
+  private async computeVaultContext(userMessage: string): Promise<string> {
+    if (!this.vaultRegistry) return "";
+    try {
+      return await buildVaultProjectContext({
+        vaultRegistry: this.vaultRegistry,
+        userMessage,
+        contextBudget: 4000,
+      });
+    } catch (err) {
+      getLogger().warn("Vault context enrichment failed", { err });
+      return "";
+    }
   }
 
   /**
@@ -2795,6 +2829,8 @@ export class Orchestrator {
         }
 
         // Build system prompt with all context layers (DRY: shared with runAgentLoop)
+        // Per-request vault context enrichment (request-scoped, not a shared field).
+        const bgVaultContext = await this.computeVaultContext(prompt);
         const {
           systemPrompt: builtPrompt,
           initialContentHashes: bgInitialContentHashes,
@@ -2807,6 +2843,7 @@ export class Orchestrator {
           channelType: options.channelType,
           prompt,
           personaContent: bgPersonaContent,
+          vaultContext: bgVaultContext,
           profile,
           preComputedEmbedding: bgEmbedding,
         });
@@ -2865,7 +2902,9 @@ export class Orchestrator {
           progressAssessmentEnabled: this.progressAssessmentEnabled,
         });
         const controlLoopTracker = controlLoopTrackerOrNull!;
-        const interventionDeps = this.buildInterventionDeps();
+        // Pass a live thunk so clarification/review stages see the per-request
+        // prompt (updated by memory re-retrieval), not the static base prompt.
+        const interventionDeps = this.buildInterventionDeps(() => systemPrompt);
         const progressTitle = prompt.replace(/\s+/g, " ").trim().slice(0, 80) || "Task";
         const progressLanguage = (profile?.language ?? this.defaultLanguage) as ProgressLanguage;
         const taskStartedAtMs = Date.now();
@@ -2987,6 +3026,8 @@ export class Orchestrator {
           let consecutiveProviderFailures = 0;
           const iterationHealth = new IterationHealthTracker();
           let maxTokensAbort = false;
+          let providerAbort = false;
+          let providerAbortReason: string | undefined;
           let bgCumulativeInputTokens = 0;
           while (true) {
             // Re-read every epoch so a mid-task budget raise (via /token
@@ -3099,6 +3140,8 @@ export class Orchestrator {
                   logger.error("Background task aborting: too many consecutive provider failures", {
                     consecutiveProviderFailures, chatId, provider: currentAssignment.providerName,
                   });
+                  providerAbort = true;
+                  providerAbortReason = `Too many consecutive provider failures (${consecutiveProviderFailures}).`;
                   break;
                 }
 
@@ -3683,7 +3726,20 @@ export class Orchestrator {
               }
               // ─────────────────────────────────────────────────────────────────
             }
-            if (maxTokensAbort) break;
+            if (providerAbort) {
+              return finish(
+                getResilienceMessage("provider_abort", progressLanguage ?? "en"),
+                "failed",
+                providerAbortReason ?? "Too many consecutive provider failures.",
+              );
+            }
+            if (maxTokensAbort) {
+              return finish(
+                getResilienceMessage("task_stuck", progressLanguage ?? "en"),
+                "failed",
+                "Background task aborted after repeated max_tokens truncations (runaway output).",
+              );
+            }
             const completedEpochCount = bgEpochCount;
             const continuedAfterBudget = this.canAutoContinueBackgroundEpoch(completedEpochCount);
 
@@ -3928,22 +3984,10 @@ export class Orchestrator {
     this.metrics?.recordMessage();
     this.metrics?.setActiveSessions(this.sessionManager.sessions.size);
 
-    // Pre-request vault context enrichment: query vaults with the user message
-    // so semantically relevant chunks are injected into the system prompt.
-    if (this.vaultRegistry) {
-      try {
-        this.vaultContext = await buildVaultProjectContext({
-          vaultRegistry: this.vaultRegistry,
-          userMessage: text,
-          contextBudget: 4000,
-        });
-      } catch (err) {
-        logger.warn("Vault context enrichment failed", { err });
-        this.vaultContext = "";
-      }
-    } else {
-      this.vaultContext = "";
-    }
+    // Vault context enrichment is computed per-request inside runAgentLoop /
+    // runBackgroundTask (see computeVaultContext) and injected via
+    // buildSystemPromptWithContext, so it stays request-scoped rather than
+    // living on a shared instance field that concurrent turns would race on.
 
     const identityKey = resolveIdentityKey(chatId, userId, conversationId, this.userProfileStore, msg.channelType);
     const clearedPlanReview = this.interactionPolicy.noteUserMessage(chatId, text);
@@ -4148,6 +4192,8 @@ export class Orchestrator {
 
     // Build system prompt with all context layers (DRY: shared with runBackgroundTask)
     logger.debug("Building system prompt", { chatId });
+    // Per-request vault context enrichment (request-scoped, not a shared field).
+    const vaultContext = await this.computeVaultContext(queryText);
     const {
       systemPrompt: builtSystemPrompt,
       initialContentHashes,
@@ -4161,6 +4207,7 @@ export class Orchestrator {
       channelType,
       prompt: queryText,
       personaContent,
+      vaultContext,
       profile,
       preComputedEmbedding,
     });
@@ -4195,7 +4242,9 @@ export class Orchestrator {
       loopHardCapBlock: this.loopHardCapBlock,
       progressAssessmentEnabled: this.progressAssessmentEnabled,
     });
-    const interventionDeps = this.buildInterventionDeps();
+    // Pass a live thunk so clarification/review stages see the per-request
+    // prompt (updated by memory re-retrieval), not the static base prompt.
+    const interventionDeps = this.buildInterventionDeps(() => systemPrompt);
     const taskStartedAtMs = Date.now();
     const buildInteractivePhaseOutcomeTelemetry = (params: {
       state?: AgentState;

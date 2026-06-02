@@ -107,17 +107,24 @@ describe("DIContainer", () => {
   describe("registerInstance", () => {
     it("returns the exact pre-built instance", () => {
       const logger = new FakeLogger();
-      // registerInstance bypasses the registrations map, so we also need a registration
-      // for resolve() to work. However, looking at the code, registerInstance only sets
-      // singletons — resolve still requires a registration entry. Let's verify behavior:
-      // If there's no registration, resolve throws. registerInstance is meant for
-      // pre-populating singletons alongside a registration.
-
-      container.registerSingleton("FakeLogger", FakeLogger);
+      // registerInstance now also creates a registration entry, so it resolves
+      // without a separate class registration. (Previously it wrote only the
+      // singletons map and resolve() — which checks registrations first — threw
+      // ServiceNotFoundError for an instance-only registration.)
       container.registerInstance("FakeLogger", logger);
 
       const resolved = container.resolve<FakeLogger>("FakeLogger");
       expect(resolved).toBe(logger);
+    });
+
+    it("resolves an instance-only registration without a class registration", () => {
+      // Regression: this is exactly what index.ts does for Logger/Config.
+      const logger = new FakeLogger();
+      container.registerInstance("Logger", logger);
+
+      expect(container.isRegistered("Logger")).toBe(true);
+      expect(container.resolve<FakeLogger>("Logger")).toBe(logger);
+      expect(container.tryResolve<FakeLogger>("Logger")).toBe(logger);
     });
 
     it("returns a falsy registered singleton instance without re-creating it", () => {
@@ -285,8 +292,21 @@ describe("DIContainer", () => {
       // Both are CountingService instances but from separate scopes
       expect(a).toBeInstanceOf(CountingService);
       expect(b).toBeInstanceOf(CountingService);
-      // transient-like across scopes since scoped does not cache in this implementation
+      // Different scopes get distinct instances (scoped cache is per-scope).
       expect(a).not.toBe(b);
+    });
+
+    it("returns the same instance for repeated resolves within one scope", () => {
+      // Honors the documented 'scoped' contract: same instance within a scope.
+      // (Previously resolve() only cached singletons, so scoped behaved as
+      // transient and constructed a fresh instance on every resolve.)
+      container.registerScoped("Counter", CountingService);
+
+      const scope = container.createScope();
+      const a = scope.resolve<CountingService>("Counter");
+      const b = scope.resolve<CountingService>("Counter");
+
+      expect(a).toBe(b);
     });
 
     it("child scope shares singleton instances from parent", () => {

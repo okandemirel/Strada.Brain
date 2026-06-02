@@ -1105,6 +1105,36 @@ describe("DashboardServer", () => {
       expect(data.identity.cleanShutdown).toBe(true);
     });
 
+    it("preserves heartbeatLoop/registry on a later partial setDaemonContext call", async () => {
+      const metrics = new MetricsCollector();
+      server = new DashboardServer(0, metrics, () => undefined);
+
+      const mockIdentity = createMockIdentityManager();
+      const mockLoop = createMockHeartbeatLoop();
+      const mockRegistry = createMockTriggerRegistry();
+
+      // First call wires the daemon heartbeat loop + registry.
+      server.setDaemonContext({
+        heartbeatLoop: mockLoop as never,
+        registry: mockRegistry as never,
+      });
+      // Second (non-daemon) call wires only the identity manager — it must NOT
+      // null out the previously-set heartbeat loop / registry.
+      server.setDaemonContext({ identityManager: mockIdentity as never });
+      if (!await safeStart(server)) return;
+
+      const port = getPort(server);
+      const res = await fetch(`http://localhost:${port}/api/daemon`);
+      expect(res.status).toBe(200);
+
+      const data = await res.json();
+      // identity merged in by the second call …
+      expect(data.identity).toBeDefined();
+      expect(data.identity.agentName).toBe("TestAgent");
+      // … and the heartbeat-loop-backed daemon status survived (not nulled).
+      expect(data.triggerHistory).toBeDefined();
+    });
+
     it("includes capabilityManifest string when set", async () => {
       const metrics = new MetricsCollector();
       server = new DashboardServer(0, metrics, () => undefined);

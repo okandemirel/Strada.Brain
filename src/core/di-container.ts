@@ -11,7 +11,7 @@
 export type Lifecycle = "singleton" | "transient" | "scoped";
 
 export interface Registration<T> {
-  implementation: new (...args: unknown[]) => T;
+  implementation?: new (...args: unknown[]) => T;
   lifecycle: Lifecycle;
   instance?: T;
   factory?: () => T;
@@ -58,7 +58,6 @@ export class DIContainer {
     factory: () => T
   ): this {
     this.registrations.set(interfaceName, {
-      implementation: class {} as new (...args: unknown[]) => T,
       lifecycle: "singleton",
       factory,
     });
@@ -83,6 +82,10 @@ export class DIContainer {
    * Register an existing instance (useful for testing)
    */
   registerInstance<T>(interfaceName: string, instance: T): this {
+    // Also create a registration entry so resolve() (which checks
+    // `registrations` first and throws ServiceNotFoundError if absent) can find
+    // the pre-built instance without requiring a separate class registration.
+    this.registrations.set(interfaceName, { lifecycle: "singleton" });
     this.singletons.set(interfaceName, instance);
     return this;
   }
@@ -104,10 +107,16 @@ export class DIContainer {
       throw new ServiceNotFoundError(interfaceName);
     }
 
-    // Return existing singleton. Use presence (has), not truthiness: a
-    // singleton legitimately resolved/registered as a falsy value (0, "",
-    // false) must not be treated as absent and re-created.
-    if (registration.lifecycle === "singleton") {
+    // Return existing singleton or scoped instance. Use presence (has), not
+    // truthiness: an instance legitimately resolved/registered as a falsy value
+    // (0, "", false) must not be treated as absent and re-created. Scoped
+    // instances are cached per-container (createScope copies registrations into
+    // a fresh container), so caching them here honors the documented
+    // "same instance within scope" contract.
+    if (
+      registration.lifecycle === "singleton" ||
+      registration.lifecycle === "scoped"
+    ) {
       if (this.singletons.has(interfaceName)) {
         return this.singletons.get(interfaceName) as T;
       }
@@ -121,12 +130,18 @@ export class DIContainer {
 
       if (registration.factory) {
         instance = registration.factory() as T;
-      } else {
+      } else if (registration.implementation) {
         instance = new registration.implementation() as T;
+      } else {
+        throw new ServiceNotFoundError(interfaceName);
       }
 
-      // Cache singletons
-      if (registration.lifecycle === "singleton") {
+      // Cache singletons and scoped instances (scoped is cached within this
+      // container/scope only).
+      if (
+        registration.lifecycle === "singleton" ||
+        registration.lifecycle === "scoped"
+      ) {
         this.singletons.set(interfaceName, instance);
       }
 

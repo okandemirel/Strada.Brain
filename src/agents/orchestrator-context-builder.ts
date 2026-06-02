@@ -472,6 +472,13 @@ export async function buildSystemPromptWithContext(
     channelType?: string;
     prompt: string;
     personaContent?: string;
+    /**
+     * Per-request vault context enrichment (semantically relevant vault chunks
+     * for the current user message). Passed as a request-scoped value instead of
+     * a shared instance field so concurrent chats / background tasks do not race
+     * on each other's vault context.
+     */
+    vaultContext?: string;
     profile: {
       displayName?: string;
       language: string;
@@ -500,6 +507,11 @@ export async function buildSystemPromptWithContext(
   let systemPrompt =
     langDirective +
     injectSoulPersonality(ctx, ctx.systemPrompt, params.channelType, params.personaContent);
+
+  // 2.1. Per-request vault context enrichment (request-scoped, not a shared field)
+  if (params.vaultContext) {
+    systemPrompt += params.vaultContext;
+  }
 
   // 2.5. Exact literal-output requests need a hard response contract.
   systemPrompt += buildExactResponseDirective(params.prompt);

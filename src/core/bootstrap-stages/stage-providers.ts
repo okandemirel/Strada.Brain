@@ -80,7 +80,13 @@ export async function initializeProviderRuntimeStage(
     deps.isTransientEmbeddingVerificationError,
   );
 
-  const [providerInit, memoryManager, channel] = await Promise.all([
+  // Each of these acquires real OS/SQLite/socket resources in its constructor
+  // (provider preferences DB, AgentDBMemory SQLite + HNSW + tiering timer,
+  // channel sockets). With a bare Promise.all a single rejection would leave the
+  // other two resolved resources leaked, because no failure disposer is wired up
+  // yet at this stage. Use allSettled and, on any rejection, dispose whatever
+  // managed to come online before re-throwing.
+  const settled = await Promise.allSettled([
     deps.initializeAIProvider(params.config, params.logger),
     deps.initializeMemory(
       params.config,
@@ -88,11 +94,68 @@ export async function initializeProviderRuntimeStage(
       verifiedEmbedding.cachedEmbeddingProvider,
     ),
     deps.initializeChannel(params.channelType, params.config, auth, params.logger),
-  ]);
+  ] as const);
+
+  const [providerSettled, memorySettled, channelSettled] = settled;
+
+  if (settled.some((result) => result.status === "rejected")) {
+    const providerInitValue =
+      providerSettled.status === "fulfilled" ? providerSettled.value : undefined;
+    const memoryManagerValue =
+      memorySettled.status === "fulfilled" ? memorySettled.value : undefined;
+    const channelValue =
+      channelSettled.status === "fulfilled" ? channelSettled.value : undefined;
+
+    if (memoryManagerValue) {
+      try {
+        await memoryManagerValue.shutdown();
+      } catch (disposeError) {
+        params.logger.warn("Failed to dispose memory after provider-runtime stage error", {
+          error: disposeError instanceof Error ? disposeError.message : String(disposeError),
+        });
+      }
+    }
+    if (channelValue) {
+      try {
+        await channelValue.disconnect();
+      } catch (disposeError) {
+        params.logger.warn("Failed to disconnect channel after provider-runtime stage error", {
+          error: disposeError instanceof Error ? disposeError.message : String(disposeError),
+        });
+      }
+    }
+    if (providerInitValue) {
+      try {
+        providerInitValue.manager.shutdown();
+      } catch (disposeError) {
+        params.logger.warn("Failed to shut down provider manager after provider-runtime stage error", {
+          error: disposeError instanceof Error ? disposeError.message : String(disposeError),
+        });
+      }
+    }
+
+    const firstRejection = settled.find(
+      (result): result is PromiseRejectedResult => result.status === "rejected",
+    );
+    throw firstRejection?.reason ?? new Error("Provider runtime stage initialization failed");
+  }
+
+  const providerInit = (providerSettled as PromiseFulfilledResult<ProviderRuntimeStageResult["providerInit"]>).value;
+  const memoryManager = (memorySettled as PromiseFulfilledResult<ProviderRuntimeStageResult["memoryManager"]>).value;
+  const channel = (channelSettled as PromiseFulfilledResult<ProviderRuntimeStageResult["channel"]>).value;
 
   const startupNotices = [...providerInit.notices];
   if (embeddingResult.notice) {
     startupNotices.push(embeddingResult.notice);
+  }
+  // Surface the transient embedding-verification notice (live embeddings kept
+  // enabled, retrying on demand) at startup so the unverified-but-not-degraded
+  // state is visible instead of silently passing as plain "wired".
+  if (
+    verifiedEmbedding.embeddingStatus.notice
+    && verifiedEmbedding.embeddingStatus.notice !== embeddingResult.notice
+  ) {
+    startupNotices.push(verifiedEmbedding.embeddingStatus.notice);
   }
 
   return {

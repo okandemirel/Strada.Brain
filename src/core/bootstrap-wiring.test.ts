@@ -246,6 +246,88 @@ describe("createShutdownHandler", () => {
     expect(s2.stop).toHaveBeenCalledTimes(1);
     clearInterval(interval);
   });
+
+  it("stops eventBus-subscribed servers before draining the eventBus", async () => {
+    const channel = makeChannel();
+    const callOrder: string[] = [];
+    const bridge = { stop: vi.fn(async () => { callOrder.push("stoppableServers"); }) };
+    const eventBus = { shutdown: vi.fn(async () => { callOrder.push("eventBus"); }) } as any;
+    const interval = setInterval(() => {}, 99999);
+    const shutdown = createShutdownHandler({
+      channel, cleanupInterval: interval,
+      stoppableServers: [bridge], eventBus,
+    } as any);
+
+    await shutdown();
+
+    expect(callOrder.indexOf("stoppableServers")).toBeLessThan(callOrder.indexOf("eventBus"));
+    clearInterval(interval);
+  });
+
+  it("closes shared daemon storage on a clean shutdown", async () => {
+    const channel = makeChannel();
+    const daemonStorage = { close: vi.fn() };
+    const interval = setInterval(() => {}, 99999);
+    const shutdown = createShutdownHandler({
+      channel, cleanupInterval: interval, daemonStorage,
+    } as any);
+
+    await shutdown();
+
+    expect(daemonStorage.close).toHaveBeenCalledTimes(1);
+    clearInterval(interval);
+  });
+
+  it("stops the framework sync watcher and closes the framework store on shutdown", async () => {
+    const channel = makeChannel();
+    const frameworkSyncPipeline = { stop: vi.fn(async () => {}) };
+    const frameworkStore = { close: vi.fn() };
+    const interval = setInterval(() => {}, 99999);
+    const shutdown = createShutdownHandler({
+      channel, cleanupInterval: interval, frameworkSyncPipeline, frameworkStore,
+    } as any);
+
+    await shutdown();
+
+    expect(frameworkSyncPipeline.stop).toHaveBeenCalledTimes(1);
+    expect(frameworkStore.close).toHaveBeenCalledTimes(1);
+    clearInterval(interval);
+  });
+
+  it("continues remaining cleanup when one disposal step throws", async () => {
+    const channel = makeChannel();
+    const memoryManager = {
+      shutdown: vi.fn(async () => { throw new Error("memory boom"); }),
+    } as any;
+    const daemonStorage = { close: vi.fn() };
+    const interval = setInterval(() => {}, 99999);
+    const shutdown = createShutdownHandler({
+      channel, cleanupInterval: interval, memoryManager, daemonStorage,
+    } as any);
+
+    // Must not reject even though memoryManager.shutdown throws.
+    await expect(shutdown()).resolves.toBeUndefined();
+    // Later steps (daemonStorage.close, channel.disconnect) still ran.
+    expect(daemonStorage.close).toHaveBeenCalledTimes(1);
+    expect(channel.disconnect).toHaveBeenCalledTimes(1);
+    clearInterval(interval);
+  });
+
+  it("is idempotent — a second invocation does not re-run disposers", async () => {
+    const channel = makeChannel();
+    const memoryManager = { shutdown: vi.fn(async () => {}) } as any;
+    const interval = setInterval(() => {}, 99999);
+    const shutdown = createShutdownHandler({
+      channel, cleanupInterval: interval, memoryManager,
+    } as any);
+
+    await shutdown();
+    await shutdown();
+
+    expect(memoryManager.shutdown).toHaveBeenCalledTimes(1);
+    expect(channel.disconnect).toHaveBeenCalledTimes(1);
+    clearInterval(interval);
+  });
 });
 
 // ---------------------------------------------------------------------------

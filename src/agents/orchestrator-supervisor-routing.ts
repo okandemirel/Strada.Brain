@@ -198,20 +198,37 @@ export function resolveSupervisorAssignment(
   const canonicalFallbackName = canonicalizeProviderName(fallbackName) ?? fallbackName.trim().toLowerCase();
   if (activeInfo?.selectionMode === "strada-hard-pin") {
     const pinnedProviderName = canonicalizeProviderName(activeInfo.providerName) ?? activeInfo.providerName;
-    return buildStaticSupervisorAssignment(
-      role,
-      pinnedProviderName,
-      activeInfo.model,
-      ctx.providerManager.getProvider(identityKey),
-      `honored the explicit user hard pin for ${role}`,
-      "supervisor-strategy",
-      buildCatalogAssignmentMetadata(
-        ctx,
+    // getProvider() throws ProviderError(HARD_PIN_UNAVAILABLE) when the pinned
+    // provider can no longer be built (e.g. rotated/removed credentials). That
+    // throw must not escape resolveSupervisorAssignment — degrade to the fallback
+    // worker with an explanatory reason instead.
+    try {
+      return buildStaticSupervisorAssignment(
+        role,
         pinnedProviderName,
         activeInfo.model,
-        identityKey,
-      ),
-    );
+        ctx.providerManager.getProvider(identityKey),
+        `honored the explicit user hard pin for ${role}`,
+        "supervisor-strategy",
+        buildCatalogAssignmentMetadata(
+          ctx,
+          pinnedProviderName,
+          activeInfo.model,
+          identityKey,
+        ),
+      );
+    } catch {
+      const modelId = resolveProviderModelId(ctx, fallbackName, identityKey);
+      return buildStaticSupervisorAssignment(
+        role,
+        canonicalFallbackName,
+        modelId,
+        fallbackProvider,
+        "hard-pinned provider unavailable, reusing the current worker",
+        undefined,
+        buildCatalogAssignmentMetadata(ctx, canonicalFallbackName, modelId, identityKey),
+      );
+    }
   }
 
   if (!ctx.providerRouter) {
@@ -459,7 +476,7 @@ export function buildSupervisorExecutionStrategy(
   };
 }
 
-export function getSupervisorAssignmentForPhase(
+function getSupervisorAssignmentForPhase(
   strategy: SupervisorExecutionStrategy,
   phase: AgentPhase,
 ): SupervisorAssignment {

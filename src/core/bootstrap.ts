@@ -450,8 +450,14 @@ async function bootstrapImpl(
         const dbPath = join(config.memory?.dbPath ?? join(homedir(), ".strada-memory"), "framework-knowledge.db");
         frameworkStore = new FrameworkKnowledgeStore(dbPath);
         frameworkStore.initialize();
+        // Register failure-path disposers immediately so a mid-bootstrap throw
+        // (in a later stage) releases the SQLite fd and stops the watcher even
+        // though this IIFE runs detached. The success-path shutdown handler also
+        // closes these (via daemonStorage-style wiring below).
+        disposables.push("frameworkStore", () => frameworkStore?.close());
 
         frameworkSyncPipeline = new FrameworkSyncPipeline(frameworkStore, frameworkSyncConfig, stradaDeps);
+        disposables.push("frameworkSyncPipeline", () => frameworkSyncPipeline?.stop());
         const syncResult = await frameworkSyncPipeline.bootSync();
 
         initializeFrameworkSchemaProvider(frameworkStore);
@@ -841,8 +847,19 @@ async function bootstrapImpl(
       for (const tool of tools) {
         try {
           toolRegistry.register(tool, { category: "custom", dangerous: false, readOnly: true });
-        } catch {
-          // Duplicate tool name — skip silently (already registered)
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          // Only a duplicate-name collision is expected/benign here; anything
+          // else (malformed schema, validation/internal registry error) means
+          // the skill tool was silently dropped — surface it so it's debuggable.
+          if (message.includes("is already registered")) {
+            // Duplicate tool name — skip silently (already registered)
+            continue;
+          }
+          logger.warn("Skill tool registration failed", {
+            tool: tool.name,
+            error: message,
+          });
         }
       }
     },
@@ -1075,17 +1092,11 @@ async function bootstrapImpl(
     commandHandler.setOrchestrator(orchestrator);
     // Wire the web channel's `verify:*` ownership resolver so cross-chat
     // spawn attempts (CWE-639) are rejected when a persistent checkpoint
-    // for the taskId exists. Duck-typed so non-web channels (Telegram,
-    // Discord, CLI, …) that don't implement the API are simply skipped —
-    // keeps bootstrap free of a hard WebChannel import.
-    type OwnerResolver = (
-      taskId: string,
-    ) => string | null | undefined | Promise<string | null | undefined>;
-    const channelWithResolver = channel as unknown as {
-      setTaskOwnerResolver?: (fn: OwnerResolver) => void;
-    };
-    if (typeof channelWithResolver.setTaskOwnerResolver === "function") {
-      channelWithResolver.setTaskOwnerResolver(async (taskId) => {
+    // for the taskId exists. Non-web channels (Telegram, Discord, CLI, …) that
+    // don't implement the optional API are simply skipped via `?.` — keeps
+    // bootstrap free of a hard WebChannel import.
+    if (typeof channel.setTaskOwnerResolver === "function") {
+      channel.setTaskOwnerResolver(async (taskId) => {
         // Resolver must NEVER throw into the WS handler (WebChannel
         // already allow-and-logs on throw, but returning null on failure
         // keeps the fast path clean).
@@ -1465,8 +1476,8 @@ async function bootstrapImpl(
         timestamp: Date.now(),
       });
     };
-    if ("setFeedbackHandler" in channel && typeof channel.setFeedbackHandler === "function") {
-      (channel as { setFeedbackHandler: (cb: typeof feedbackCallback) => void }).setFeedbackHandler(feedbackCallback);
+    if (typeof channel.setFeedbackHandler === "function") {
+      channel.setFeedbackHandler(feedbackCallback);
     }
   }
 
@@ -1602,9 +1613,8 @@ async function bootstrapImpl(
   }
 
   // Wire incoming workspace commands from the frontend into the workspace bus
-  const channelWithBus = channel as { setWorkspaceBusEmitter?: (emitter: ((event: string, payload: unknown) => void) | null) => void };
-  if (typeof channelWithBus.setWorkspaceBusEmitter === "function") {
-    channelWithBus.setWorkspaceBusEmitter((event: string, payload: unknown) => {
+  if (typeof channel.setWorkspaceBusEmitter === "function") {
+    channel.setWorkspaceBusEmitter((event: string, payload: unknown) => {
       workspaceBus.emit(event as keyof import("../dashboard/workspace-events.js").WorkspaceEventMap & string, payload as never);
     });
   }
@@ -1657,6 +1667,15 @@ async function bootstrapImpl(
       checkpointStore: outerCheckpointStore,
       providerHealthRegistry: ProviderHealthRegistry.getInstance(),
       providerHealthPersistencePath: providerHealthPath,
+      // Close daemon.db on a clean shutdown too — it is opened unconditionally
+      // and otherwise leaks its fd/WAL across restarts (failure path already
+      // closes it via the disposables stack).
+      daemonStorage: sharedDaemonStorage,
+      // Framework store/pipeline are assigned by a detached IIFE that may finish
+      // after this point; adapter objects read the live refs at shutdown time so
+      // the watcher + SQLite fd are released on a clean stop, not just on failure.
+      frameworkStore: { close: () => frameworkStore?.close() },
+      frameworkSyncPipeline: { stop: async () => { await frameworkSyncPipeline?.stop(); } },
     }),
   };
 }
