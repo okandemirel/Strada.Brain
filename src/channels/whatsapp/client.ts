@@ -120,6 +120,13 @@ export class WhatsAppChannel extends EventEmitter implements IChannelAdapter {
   // 4.3 Rate limiting
   private readonly rateLimiter: RateLimiter;
 
+  // Baileys JID helpers captured from the dynamic import at connect time.
+  // They are optional (older builds may not export them, and unit tests mock
+  // baileys without them), so every use must be guarded — the allowlist check
+  // degrades gracefully to a plain string strip when they are unavailable.
+  private jidNormalizedUser?: (jid: string) => string;
+  private jidDecode?: (jid: string) => { user?: string; server?: string } | undefined;
+
   // 4.5 Reconnection
   private reconnectAttempts = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -163,6 +170,13 @@ export class WhatsAppChannel extends EventEmitter implements IChannelAdapter {
       // @ts-expect-error -- baileys is an optional peer dependency
       const baileys = await import("@whiskeysockets/baileys");
       const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = baileys;
+
+      // Capture Baileys' JID utilities (best-effort) so the allowlist check can
+      // normalize device-suffixed and '<lid>@lid' senders to a comparable
+      // identity. Guarded everywhere they are used so a build/mock without them
+      // still works.
+      this.jidNormalizedUser = baileys.jidNormalizedUser;
+      this.jidDecode = baileys.jidDecode;
 
       const { state, saveCreds } = await useMultiFileAuthState(this.sessionPath);
 
@@ -245,11 +259,16 @@ export class WhatsAppChannel extends EventEmitter implements IChannelAdapter {
 
           // Auth check — empty allowlist means no restriction, matching Slack-style open access
           {
-            // Strip both the device suffix (':12') and the domain ('@...') so a
-            // device-suffixed JID like '5511999990000:12@s.whatsapp.net'
-            // normalizes to the bare number the allowlist is keyed by.
-            const normalized = senderId.replace(/[:@].*$/, "");
-            const allowed = isAllowedBySingleIdPolicy(normalized, this.allowedNumbers, "open");
+            // A sender JID can arrive in several shapes: a plain number, a
+            // device-suffixed phone JID ('5511999990000:12@s.whatsapp.net'), or
+            // the newer LID addressing ('<lid>@lid'). Build the set of identities
+            // a single allowlist entry could legitimately match against, then
+            // accept if ANY of them is allowed. This lets operators store either
+            // bare numbers or raw LIDs in the allowlist.
+            const candidates = this.allowlistCandidates(senderId);
+            const allowed = candidates.some((candidate) =>
+              isAllowedBySingleIdPolicy(candidate, this.allowedNumbers, "open"),
+            );
             if (!allowed) {
               logger.warn("WhatsApp: unauthorized number", { senderId });
               this.safeSend(chatId, "Unauthorized. Contact the admin.");
@@ -496,6 +515,49 @@ export class WhatsAppChannel extends EventEmitter implements IChannelAdapter {
     this.streamingMessages.clear();
     this.seenMessageIds.clear();
     this.sessions.clear();
+  }
+
+  /**
+   * Produce the set of comparable identities a sender JID could match in the
+   * allowlist. Best-effort and order-stable:
+   *   1. The bare local part — strips the device suffix (':12') and domain
+   *      ('@...') so '5511999990000:12@s.whatsapp.net' -> '5511999990000'.
+   *      For a LID this yields the numeric lid (e.g. '12345' from '12345@lid').
+   *   2. Baileys' jidNormalizedUser(jid) — collapses a device-suffixed JID to a
+   *      canonical user JID; helps when operators store full JIDs.
+   *   3. Baileys' jidDecode(jid).user — the decoded user part for either the
+   *      's.whatsapp.net' or 'lid' server, so a raw LID stored in the allowlist
+   *      still matches.
+   *   4. The raw senderId — so an allowlist entry kept verbatim (e.g. the exact
+   *      '<lid>@lid' string) matches too.
+   * Duplicates are removed while preserving order; Baileys helpers are guarded
+   * since they may be absent (older builds / test mocks).
+   */
+  private allowlistCandidates(senderId: string): string[] {
+    const candidates: string[] = [];
+    const add = (value: string | undefined | null): void => {
+      if (value && !candidates.includes(value)) candidates.push(value);
+    };
+
+    // Plain strip — device suffix (':') and domain ('@') removed.
+    add(senderId.replace(/[:@].*$/, ""));
+
+    // Baileys normalization (best-effort; guard against missing util / throws).
+    try {
+      add(this.jidNormalizedUser?.(senderId));
+    } catch {
+      // Ignore — fall back to the other candidates.
+    }
+    try {
+      add(this.jidDecode?.(senderId)?.user);
+    } catch {
+      // Ignore — fall back to the other candidates.
+    }
+
+    // Raw JID last, so a verbatim allowlist entry (e.g. '<lid>@lid') matches.
+    add(senderId);
+
+    return candidates;
   }
 
   onMessage(handler: (msg: IncomingMessage) => Promise<void>): void {

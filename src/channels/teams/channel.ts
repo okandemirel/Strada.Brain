@@ -2,9 +2,12 @@
  * Microsoft Teams Channel - Bot Framework adapter
  *
  * Requires: botframework-connector, botbuilder (npm install botbuilder)
- * Config: TEAMS_APP_ID, TEAMS_APP_PASSWORD, TEAMS_ALLOWED_USER_IDS, TEAMS_ALLOW_OPEN_ACCESS
+ * Config: TEAMS_APP_ID, TEAMS_APP_PASSWORD, TEAMS_APP_TYPE (MultiTenant|SingleTenant),
+ *         TEAMS_APP_TENANT_ID, TEAMS_ALLOWED_USER_IDS, TEAMS_ALLOW_OPEN_ACCESS
  */
 
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import type { IChannelAdapter } from "../channel.interface.js";
 import { limitIncomingText, type Attachment, type IncomingMessage } from "../channel-messages.interface.js";
 import { chunkText } from "../chunk-text.js";
@@ -25,6 +28,16 @@ type MessageHandler = (msg: IncomingMessage) => Promise<void>;
  * split well under that to leave headroom for UTF-16/UTF-8 expansion and markup.
  */
 const TEAMS_MAX_MESSAGE_LENGTH = 18_000;
+
+/** Bot Framework app tenancy model. Single-tenant bots need their tenant id. */
+type TeamsAppType = "MultiTenant" | "SingleTenant";
+
+/**
+ * On-disk location for persisted conversation references. The in-memory map is
+ * lost on restart, which silently drops any reply produced after a restart; we
+ * mirror it to a tiny JSON file under `.strada` so proactive delivery survives.
+ */
+const CONVERSATION_REFERENCES_FILE = join(".strada", "teams-conversation-references.json");
 
 /** Callback for feedback reactions (thumbs up/down) from channel adapters. */
 type FeedbackReactionCallback = (
@@ -62,6 +75,8 @@ export class TeamsChannel implements IChannelAdapter {
     private readonly allowedUserIds: readonly string[] = [],
     private readonly listenHost: string = "127.0.0.1",
     private readonly allowOpenAccess: boolean = false,
+    private readonly appType: TeamsAppType = "MultiTenant",
+    private readonly appTenantId?: string,
   ) {}
 
   onMessage(handler: MessageHandler): void {
@@ -87,14 +102,22 @@ export class TeamsChannel implements IChannelAdapter {
     const { CloudAdapter, ConfigurationBotFrameworkAuthentication, TurnContext } =
       await import("botbuilder" as string);
 
+    // Single-tenant bots are issued tokens scoped to their home tenant, so the
+    // adapter must be told the tenancy + tenant id or proactive
+    // (continueConversationAsync) sends fail. Multi-tenant remains the default.
     const botFrameworkAuth = new ConfigurationBotFrameworkAuthentication({
       MicrosoftAppId: this.appId,
       MicrosoftAppPassword: this.appPassword,
-      MicrosoftAppType: "MultiTenant",
+      MicrosoftAppType: this.appType,
+      ...(this.appTenantId ? { MicrosoftAppTenantId: this.appTenantId } : {}),
     });
 
     this.adapter = new CloudAdapter(botFrameworkAuth) as unknown as BotAdapterLike;
     this.turnContextClass = TurnContext as unknown as TurnContextStaticLike;
+
+    // Restore conversation references persisted before the last shutdown so a
+    // reply produced after a restart can still be delivered proactively.
+    this.restoreConversationReferences();
 
     // Create HTTP server for Bot Framework messages
     const { createServer } = await import("node:http");
@@ -255,6 +278,12 @@ export class TeamsChannel implements IChannelAdapter {
     const reference = this.conversationReferences.get(chatId);
 
     if (!context && !reference) {
+      // Make the dropped delivery loud: with neither a live turn context nor a
+      // persisted reference there is no way to reach the user, so surface it
+      // clearly instead of letting the reply vanish silently.
+      getLogger().warn("Teams cannot deliver reply: no active turn context or stored conversation reference", {
+        chatId,
+      });
       throw new Error(`No active Teams conversation for: ${chatId}`);
     }
 
@@ -287,8 +316,58 @@ export class TeamsChannel implements IChannelAdapter {
     try {
       const reference = this.turnContextClass.getConversationReference(activity);
       this.conversationReferences.set(chatId, reference);
+      // Mirror to disk so the reference survives a restart and a later
+      // fire-and-forget reply can still be delivered proactively.
+      this.persistConversationReferences();
     } catch (err) {
       getLogger().warn("Teams failed to capture conversation reference", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  /**
+   * Persist the in-memory conversation references to a small JSON file under
+   * `.strada`. Best-effort: a write failure must not break inbound handling, so
+   * it is logged and swallowed. Bot Framework conversation references are plain
+   * JSON-serialisable objects, so a JSON round-trip is lossless.
+   */
+  private persistConversationReferences(): void {
+    try {
+      mkdirSync(dirname(CONVERSATION_REFERENCES_FILE), { recursive: true });
+      const serialisable = Object.fromEntries(this.conversationReferences);
+      writeFileSync(CONVERSATION_REFERENCES_FILE, JSON.stringify(serialisable), "utf8");
+    } catch (err) {
+      getLogger().warn("Teams failed to persist conversation references", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  /**
+   * Restore conversation references from disk into the in-memory map. Best-effort:
+   * a missing or malformed file is treated as "no references yet" and logged at
+   * debug level so a fresh install does not warn.
+   */
+  private restoreConversationReferences(): void {
+    let raw: string;
+    try {
+      raw = readFileSync(CONVERSATION_REFERENCES_FILE, "utf8");
+    } catch {
+      // No persisted file yet (first run / never received a message) — nothing to restore.
+      return;
+    }
+    try {
+      const parsed = JSON.parse(raw) as Record<string, ConversationReferenceLike>;
+      if (parsed && typeof parsed === "object") {
+        for (const [chatId, reference] of Object.entries(parsed)) {
+          if (reference && typeof reference === "object") {
+            this.conversationReferences.set(chatId, reference);
+          }
+        }
+      }
+    } catch (err) {
+      getLogger().warn("Teams failed to restore conversation references", {
         error: err instanceof Error ? err.message : String(err),
       });
     }

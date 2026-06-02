@@ -97,34 +97,52 @@ export interface IChannelMessageEditor {
   editMessage(chatId: string, messageId: string, newContent: string): Promise<void>;
 }
 
+/** Narrow unknown to a non-null object so member access is safe. */
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
 /**
  * Type guard for streaming support
  */
 export function supportsStreaming(channel: unknown): channel is IChannelStreaming {
   return (
-    typeof (channel as IChannelStreaming).startStreamingMessage === "function" &&
-    typeof (channel as IChannelStreaming).updateStreamingMessage === "function" &&
-    typeof (channel as IChannelStreaming).finalizeStreamingMessage === "function"
+    isObject(channel) &&
+    typeof channel.startStreamingMessage === "function" &&
+    typeof channel.updateStreamingMessage === "function" &&
+    typeof channel.finalizeStreamingMessage === "function"
   );
 }
 
 /**
- * Type guard for rich messaging
+ * Type guard for rich messaging.
+ *
+ * Verifies BOTH required methods of IChannelRichMessaging (sendTypingIndicator
+ * AND sendAttachment) so the narrowing is sound. sendTypingStop is optional and
+ * intentionally not checked.
  */
 export function supportsRichMessaging(channel: unknown): channel is IChannelRichMessaging {
-  return typeof (channel as IChannelRichMessaging).sendTypingIndicator === "function";
+  return (
+    isObject(channel) &&
+    typeof channel.sendTypingIndicator === "function" &&
+    typeof channel.sendAttachment === "function"
+  );
 }
 
 /**
  * Type guard for interactive features
  */
 export function supportsInteractivity(channel: unknown): channel is IChannelInteractive {
-  return typeof (channel as IChannelInteractive).requestConfirmation === "function";
+  return (
+    isObject(channel) && typeof channel.requestConfirmation === "function"
+  );
 }
 
 /**
  * Type guard for message editing
  */
 export function supportsMessageEditing(channel: unknown): channel is IChannelMessageEditor {
-  return typeof (channel as IChannelMessageEditor).editMessage === "function";
+  return (
+    isObject(channel) && typeof channel.editMessage === "function"
+  );
 }

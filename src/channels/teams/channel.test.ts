@@ -26,13 +26,41 @@ vi.mock("node:http", () => ({
   },
 }));
 
+// Captures the options the channel passes to
+// ConfigurationBotFrameworkAuthentication so tests can assert tenancy wiring.
+let lastBotFrameworkAuthOptions: Record<string, unknown> | null = null;
+
 vi.mock("botbuilder", () => ({
   CloudAdapter: class {},
-  ConfigurationBotFrameworkAuthentication: class {},
+  ConfigurationBotFrameworkAuthentication: class {
+    constructor(options: Record<string, unknown>) {
+      lastBotFrameworkAuthOptions = options;
+    }
+  },
   TurnContext: {
     getConversationReference: (activity: { conversation: { id: string } }) => ({
       conversation: { id: activity.conversation.id },
     }),
+  },
+}));
+
+// In-memory stand-in for the .strada conversation-reference store so the
+// persistence round-trip can be tested without touching the real filesystem.
+const fakeFs = new Map<string, string>();
+
+vi.mock("node:fs", () => ({
+  mkdirSync: vi.fn(),
+  readFileSync: (path: string) => {
+    const value = fakeFs.get(path);
+    if (value === undefined) {
+      const err = new Error(`ENOENT: no such file ${path}`) as NodeJS.ErrnoException;
+      err.code = "ENOENT";
+      throw err;
+    }
+    return value;
+  },
+  writeFileSync: (path: string, data: string) => {
+    fakeFs.set(path, data);
   },
 }));
 
@@ -318,5 +346,103 @@ describe("TeamsChannel", () => {
     expect(channel.isHealthy()).toBe(false);
 
     listenBehavior = "ok";
+  });
+
+  // Tenancy wiring: by default the adapter is configured MultiTenant and no
+  // tenant id is sent (multi-tenant tokens are not tenant-scoped).
+  it("configures Bot Framework auth as MultiTenant by default", async () => {
+    listenBehavior = "ok";
+    lastBotFrameworkAuthOptions = null;
+    const channel = new TeamsChannel("app-id", "app-password");
+
+    await channel.connect();
+    await channel.disconnect();
+
+    expect(lastBotFrameworkAuthOptions).toEqual({
+      MicrosoftAppId: "app-id",
+      MicrosoftAppPassword: "app-password",
+      MicrosoftAppType: "MultiTenant",
+    });
+  });
+
+  // Single-tenant bots are issued tenant-scoped tokens, so the adapter must
+  // receive MicrosoftAppType=SingleTenant *and* the tenant id or proactive
+  // (continueConversationAsync) sends fail.
+  it("wires single-tenant app type and tenant id into Bot Framework auth", async () => {
+    listenBehavior = "ok";
+    lastBotFrameworkAuthOptions = null;
+    const channel = new TeamsChannel(
+      "app-id",
+      "app-password",
+      3978,
+      [],
+      "127.0.0.1",
+      false,
+      "SingleTenant",
+      "tenant-123",
+    );
+
+    await channel.connect();
+    await channel.disconnect();
+
+    expect(lastBotFrameworkAuthOptions).toEqual({
+      MicrosoftAppId: "app-id",
+      MicrosoftAppPassword: "app-password",
+      MicrosoftAppType: "SingleTenant",
+      MicrosoftAppTenantId: "tenant-123",
+    });
+  });
+
+  // Regression: the in-memory conversation-reference map is lost on restart,
+  // silently dropping any reply produced afterwards. References are mirrored to
+  // a .strada JSON file on capture and restored on connect(), so a post-restart
+  // reply is still delivered proactively.
+  it("persists conversation references and restores them across a restart", async () => {
+    listenBehavior = "ok";
+    fakeFs.clear();
+
+    // First "process lifetime": capture a reference (mirrors it to disk).
+    const channel1 = new TeamsChannel("app-id", "app-password");
+    await channel1.connect();
+    (channel1 as any).captureConversationReference("chat-1", {
+      type: "message",
+      conversation: { id: "chat-1" },
+      from: { id: "user-1" },
+    });
+    await channel1.disconnect();
+
+    // In-memory map is gone after disconnect; the disk file remains.
+    expect(
+      (channel1 as unknown as { conversationReferences: Map<string, unknown> }).conversationReferences.size,
+    ).toBe(0);
+
+    // Second "process lifetime": a fresh instance restores from disk on connect.
+    const channel2 = new TeamsChannel("app-id", "app-password");
+    await channel2.connect();
+
+    const proactiveSend = vi.fn().mockResolvedValue(undefined);
+    const continueConversationAsync = vi
+      .fn()
+      .mockImplementation(async (_appId: string, _ref: unknown, logic: (ctx: unknown) => Promise<void>) => {
+        await logic({ sendActivity: proactiveSend });
+      });
+    (channel2 as any).adapter = { continueConversationAsync };
+
+    // A reply produced after the restart still reaches the user via the
+    // restored reference rather than throwing "No active Teams conversation".
+    await channel2.sendText("chat-1", "delivered after restart");
+
+    expect(continueConversationAsync).toHaveBeenCalledWith(
+      "app-id",
+      { conversation: { id: "chat-1" } },
+      expect.any(Function),
+    );
+    expect(proactiveSend).toHaveBeenCalledWith({
+      type: "message",
+      text: "delivered after restart",
+      textFormat: "plain",
+    });
+
+    await channel2.disconnect();
   });
 });

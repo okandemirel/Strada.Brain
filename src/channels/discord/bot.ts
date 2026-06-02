@@ -104,7 +104,15 @@ export class DiscordChannel implements IChannelAdapter {
     }
   >();
   private readonly streamingMessages = new Map<string, StreamingMessageState>();
+  /** Pending slash-command reply callbacks keyed by a unique per-interaction token
+   * (the interaction id), falling back to chatId when no token is present. Keying
+   * by token prevents concurrent slash commands in the same channel from
+   * overwriting each other's callback (which would route a response to the wrong
+   * interaction). */
   private readonly pendingReplyCallbacks = new Map<string, (response: string) => Promise<void>>();
+  /** chatId -> FIFO-ordered list of pending reply tokens, so the send path (which
+   * only knows chatId) can resolve the oldest waiting interaction for a channel. */
+  private readonly replyTokensByChatId = new Map<string, string[]>();
   private isConnected = false;
   private slashCommands: SlashCommand[] = [];
   /** Set true once disconnect() runs so reconnection backoff stops. */
@@ -245,6 +253,12 @@ export class DiscordChannel implements IChannelAdapter {
       }
     }
     this.streamingMessages.clear();
+
+    // Drop any pending slash-command reply callbacks; the awaiting interactions
+    // will fall through to their own deferReply timeout rather than hang on a
+    // callback that can no longer be invoked against the destroyed client.
+    this.pendingReplyCallbacks.clear();
+    this.replyTokensByChatId.clear();
 
     // Clear the rate limiter's pending cooldown timer and flush its waiters so
     // no timer fires against the destroyed client and no acquire() hangs.
@@ -458,10 +472,10 @@ export class DiscordChannel implements IChannelAdapter {
     const chunks = chunkText(text, DISCORD_MAX_MESSAGE_LENGTH);
     if (chunks.length === 0) return; // Nothing to send (empty/whitespace input)
 
-    // If a slash command is awaiting a reply for this channel, route through its callback
-    const replyCallback = this.pendingReplyCallbacks.get(chatId);
+    // If a slash command is awaiting a reply for this channel, route through its
+    // callback (oldest waiting interaction first; resolved+removed atomically).
+    const replyCallback = this.takeReplyCallback(chatId);
     if (replyCallback) {
-      this.pendingReplyCallbacks.delete(chatId);
       // The interaction reply takes the first chunk; any overflow is delivered
       // as follow-up channel messages so no content is dropped.
       await replyCallback(chunks[0]!);
@@ -499,10 +513,10 @@ export class DiscordChannel implements IChannelAdapter {
     const chunks = chunkText(formatted, DISCORD_MAX_MESSAGE_LENGTH);
     if (chunks.length === 0) return; // Nothing to send (empty/whitespace input)
 
-    // If a slash command is awaiting a reply for this channel, route through its callback
-    const replyCallback = this.pendingReplyCallbacks.get(chatId);
+    // If a slash command is awaiting a reply for this channel, route through its
+    // callback (oldest waiting interaction first; resolved+removed atomically).
+    const replyCallback = this.takeReplyCallback(chatId);
     if (replyCallback) {
-      this.pendingReplyCallbacks.delete(chatId);
       // The interaction reply takes the first chunk; any overflow is delivered
       // as follow-up channel messages so no content is dropped.
       await replyCallback(chunks[0]!);
@@ -1056,6 +1070,9 @@ export class DiscordChannel implements IChannelAdapter {
         const msg: IncomingMessage = {
           channelType: "discord",
           chatId: interaction.channelId,
+          // Unique per-interaction token so concurrent slash commands in the same
+          // channel each get their own pending reply slot (avoids cross-routing).
+          replyToken: interaction.id,
           userId: interaction.user.id,
           text: limitIncomingText(question),
           timestamp: new Date(),
@@ -1073,6 +1090,9 @@ export class DiscordChannel implements IChannelAdapter {
         const msg: IncomingMessage = {
           channelType: "discord",
           chatId: interaction.channelId,
+          // Unique per-interaction token so concurrent slash commands in the same
+          // channel each get their own pending reply slot (avoids cross-routing).
+          replyToken: interaction.id,
           userId: interaction.user.id,
           text: limitIncomingText("Analyze project structure"),
           timestamp: new Date(),
@@ -1094,6 +1114,9 @@ export class DiscordChannel implements IChannelAdapter {
         const msg: IncomingMessage = {
           channelType: "discord",
           chatId: interaction.channelId,
+          // Unique per-interaction token so concurrent slash commands in the same
+          // channel each get their own pending reply slot (avoids cross-routing).
+          replyToken: interaction.id,
           userId: interaction.user.id,
           text: limitIncomingText(`Create ${type} named "${name}"${description ? `: ${description}` : ""}`),
           timestamp: new Date(),
@@ -1153,6 +1176,9 @@ export class DiscordChannel implements IChannelAdapter {
         const msg: IncomingMessage = {
           channelType: "discord",
           chatId: interaction.channelId,
+          // Unique per-interaction token so concurrent slash commands in the same
+          // channel each get their own pending reply slot (avoids cross-routing).
+          replyToken: interaction.id,
           userId: interaction.user.id,
           text: limitIncomingText(autonomousText),
           timestamp: new Date(),
@@ -1177,6 +1203,9 @@ export class DiscordChannel implements IChannelAdapter {
         const msg: IncomingMessage = {
           channelType: "discord",
           chatId: interaction.channelId,
+          // Unique per-interaction token so concurrent slash commands in the same
+          // channel each get their own pending reply slot (avoids cross-routing).
+          replyToken: interaction.id,
           userId: interaction.user.id,
           text: limitIncomingText(modelText),
           timestamp: new Date(),
@@ -1197,6 +1226,9 @@ export class DiscordChannel implements IChannelAdapter {
         const msg: IncomingMessage = {
           channelType: "discord",
           chatId: interaction.channelId,
+          // Unique per-interaction token so concurrent slash commands in the same
+          // channel each get their own pending reply slot (avoids cross-routing).
+          replyToken: interaction.id,
           userId: interaction.user.id,
           text: limitIncomingText(`Search ${type}: ${query}`),
           timestamp: new Date(),
@@ -1353,18 +1385,68 @@ export class DiscordChannel implements IChannelAdapter {
       return;
     }
 
+    // Key the pending callback by the unique per-interaction token (falling back
+    // to chatId when none is present) so concurrent slash commands in the same
+    // channel do not overwrite each other's callback and misroute the response.
+    const replyKey = msg.replyToken ?? msg.chatId;
+
     // Register the callback so sendText/sendMarkdown can route the response
     // back to the slash command interaction instead of sending a new channel message
     if (replyCallback) {
-      this.pendingReplyCallbacks.set(msg.chatId, replyCallback);
+      this.registerReplyCallback(msg.chatId, replyKey, replyCallback);
     }
 
     try {
       await this.handler(msg);
     } finally {
       // Clean up if the callback was never consumed (e.g. handler error or no response)
-      this.pendingReplyCallbacks.delete(msg.chatId);
+      if (replyCallback) {
+        this.removeReplyCallback(msg.chatId, replyKey);
+      }
     }
+  }
+
+  /** Register a pending slash-command reply callback under its unique key and
+   * track the key in the chatId index so the send path can resolve it. */
+  private registerReplyCallback(
+    chatId: string,
+    key: string,
+    callback: (response: string) => Promise<void>,
+  ): void {
+    this.pendingReplyCallbacks.set(key, callback);
+    const tokens = this.replyTokensByChatId.get(chatId);
+    if (tokens) {
+      tokens.push(key);
+    } else {
+      this.replyTokensByChatId.set(chatId, [key]);
+    }
+  }
+
+  /** Resolve the oldest pending reply callback for a channel (FIFO) and remove it,
+   * so the send path can deliver a response to the correct waiting interaction. */
+  private takeReplyCallback(
+    chatId: string,
+  ): ((response: string) => Promise<void>) | undefined {
+    const tokens = this.replyTokensByChatId.get(chatId);
+    if (!tokens || tokens.length === 0) return undefined;
+
+    const key = tokens.shift()!;
+    if (tokens.length === 0) this.replyTokensByChatId.delete(chatId);
+
+    const callback = this.pendingReplyCallbacks.get(key);
+    this.pendingReplyCallbacks.delete(key);
+    return callback;
+  }
+
+  /** Remove a still-pending reply callback by its key (e.g. handler error or no
+   * response), keeping the chatId index in sync. */
+  private removeReplyCallback(chatId: string, key: string): void {
+    if (!this.pendingReplyCallbacks.delete(key)) return;
+    const tokens = this.replyTokensByChatId.get(chatId);
+    if (!tokens) return;
+    const idx = tokens.indexOf(key);
+    if (idx !== -1) tokens.splice(idx, 1);
+    if (tokens.length === 0) this.replyTokensByChatId.delete(chatId);
   }
 
   private async registerSlashCommands(): Promise<void> {

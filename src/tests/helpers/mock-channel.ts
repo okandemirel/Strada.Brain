@@ -83,6 +83,25 @@ export class MockChannelAdapter
     this.supportsRichMessaging = config.supportsRichMessaging ?? true;
     this.supportsInteractivity = config.supportsInteractivity ?? true;
     this.autoConfirm = config.autoConfirm ?? true;
+
+    // Honor capability flags so the production type-guards (supportsStreaming/
+    // supportsRichMessaging/supportsInteractivity) reflect them. The capability
+    // methods live on the prototype, so shadow them with own `undefined`
+    // properties to remove them when the corresponding flag is false — matching
+    // real adapters that only expose methods for the capabilities they support.
+    const self = this as Record<string, unknown>;
+    if (!this.supportsStreaming) {
+      self.startStreamingMessage = undefined;
+      self.updateStreamingMessage = undefined;
+      self.finalizeStreamingMessage = undefined;
+    }
+    if (!this.supportsRichMessaging) {
+      self.sendTypingIndicator = undefined;
+      self.sendAttachment = undefined;
+    }
+    if (!this.supportsInteractivity) {
+      self.requestConfirmation = undefined;
+    }
   }
 
   // --------------------------------------------------------------------------
@@ -91,10 +110,13 @@ export class MockChannelAdapter
 
   async connect(): Promise<void> {
     // Connection established
+    this._healthy = true;
   }
 
   async disconnect(): Promise<void> {
     this.messageHandler = undefined;
+    // Match real adapters: a disconnected channel is no longer healthy.
+    this._healthy = false;
   }
 
   isHealthy(): boolean {

@@ -231,4 +231,190 @@ describe("IRCChannel", () => {
       expect(received[0].userId).toBe("ALICE");
     });
   });
+
+  // requestConfirmation is a text flow on IRC: send question + numbered options,
+  // correlate the next inbound reply from the same nick/chatId to resolve.
+  describe("requestConfirmation text flow", () => {
+    afterEach(() => {
+      vi.doUnmock("irc");
+      vi.resetModules();
+    });
+
+    async function connectWithFake(): Promise<{
+      channel: IRCChannel;
+      emit: (from: string, to: string, text: string) => void;
+      say: ReturnType<typeof vi.fn>;
+    }> {
+      const listeners = new Map<string, (...args: unknown[]) => void>();
+      const say = vi.fn();
+      const fakeClient = {
+        addListener: (event: string, handler: (...args: unknown[]) => void) => {
+          listeners.set(event, handler);
+        },
+        say,
+        disconnect: (_msg: string, cb: () => void) => cb(),
+        removeAllListeners: vi.fn(),
+      };
+      function MockClient(): unknown {
+        return fakeClient;
+      }
+      vi.doMock("irc", () => ({ Client: MockClient }));
+
+      const channel = new IRCChannel("irc.example.org", "Strada", ["#general"], [], true);
+      await channel.connect();
+      listeners.get("registered")?.();
+      return {
+        channel,
+        emit: (from, to, text) => listeners.get("message")?.(from, to, text),
+        say,
+      };
+    }
+
+    it("sends the question + numbered options and resolves with the picked number", async () => {
+      const { channel, emit, say } = await connectWithFake();
+      const pending = channel.requestConfirmation({
+        chatId: "alice",
+        userId: "alice",
+        question: "Proceed?",
+        options: ["Yes", "No"],
+      });
+      await Promise.resolve();
+
+      // Question and both numbered options were sent.
+      const sent = say.mock.calls.map((c) => c[1] as string);
+      expect(sent).toContain("Proceed?");
+      expect(sent).toContain("1) Yes");
+      expect(sent).toContain("2) No");
+
+      // Reply with the option number resolves to the option text.
+      emit("alice", "strada", "2");
+      await expect(pending).resolves.toBe("No");
+    });
+
+    it("accepts the literal option text case-insensitively", async () => {
+      const { channel, emit } = await connectWithFake();
+      const pending = channel.requestConfirmation({
+        chatId: "alice",
+        userId: "alice",
+        question: "Proceed?",
+        options: ["Yes", "No"],
+      });
+      await Promise.resolve();
+
+      emit("alice", "strada", "yes");
+      await expect(pending).resolves.toBe("Yes");
+    });
+
+    it("correlates the reply by nick case-insensitively and ignores other nicks", async () => {
+      const { channel, emit, say } = await connectWithFake();
+      const received: import("../channel-messages.interface.js").IncomingMessage[] = [];
+      channel.onMessage(async (m) => {
+        received.push(m);
+      });
+      const pending = channel.requestConfirmation({
+        chatId: "alice",
+        userId: "alice",
+        question: "Proceed?",
+        options: ["Yes", "No"],
+      });
+      await Promise.resolve();
+      say.mockClear();
+
+      // A different nick must NOT resolve the confirmation; it routes normally.
+      emit("bob", "strada", "1");
+      await Promise.resolve();
+      expect(received).toHaveLength(1);
+      expect(received[0].userId).toBe("bob");
+
+      // The original nick (different case) resolves it and is consumed (not routed).
+      emit("ALICE", "strada", "Yes");
+      await expect(pending).resolves.toBe("Yes");
+      expect(received).toHaveLength(1);
+    });
+
+    it("resolves 'timeout' on an unrecognised reply", async () => {
+      const { channel, emit } = await connectWithFake();
+      const pending = channel.requestConfirmation({
+        chatId: "alice",
+        userId: "alice",
+        question: "Proceed?",
+        options: ["Yes", "No"],
+      });
+      await Promise.resolve();
+
+      emit("alice", "strada", "maybe");
+      await expect(pending).resolves.toBe("timeout");
+    });
+
+    it("resolves 'timeout' when the no-reply timer fires", async () => {
+      vi.useFakeTimers();
+      try {
+        const { channel } = await connectWithFake();
+        const pending = channel.requestConfirmation({
+          chatId: "alice",
+          userId: "alice",
+          question: "Proceed?",
+          options: ["Yes", "No"],
+        });
+        await vi.runAllTimersAsync();
+        await expect(pending).resolves.toBe("timeout");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("returns 'timeout' immediately when the link is down", async () => {
+      const channel = new IRCChannel("irc.example.org", "Strada", ["#general"]);
+      // No client / not healthy: cannot ask.
+      await expect(
+        channel.requestConfirmation({
+          chatId: "alice",
+          question: "Proceed?",
+          options: ["Yes", "No"],
+        }),
+      ).resolves.toBe("timeout");
+    });
+
+    it("resolves an open confirmation as 'timeout' on disconnect", async () => {
+      const { channel } = await connectWithFake();
+      const pending = channel.requestConfirmation({
+        chatId: "alice",
+        userId: "alice",
+        question: "Proceed?",
+        options: ["Yes", "No"],
+      });
+      await Promise.resolve();
+      await channel.disconnect();
+      await expect(pending).resolves.toBe("timeout");
+    });
+  });
+
+  // Capability honesty: sendTypingIndicator is a no-op (IRC has no typing
+  // notification) but must exist so supportsRichMessaging() reports truthfully.
+  describe("rich-messaging capability", () => {
+    it("exposes a no-op sendTypingIndicator that does not throw", async () => {
+      const channel = new IRCChannel("irc.example.org", "strada", ["#general"]);
+      await expect(channel.sendTypingIndicator("#general")).resolves.toBeUndefined();
+    });
+  });
+
+  // Regression: blank lines were silently dropped, collapsing paragraph breaks.
+  // sendText now emits a single space for whitespace-only lines.
+  describe("sendText paragraph-break preservation", () => {
+    function channelWithSay(): { channel: IRCChannel; say: ReturnType<typeof vi.fn> } {
+      const say = vi.fn();
+      const channel = new IRCChannel("irc.example.org", "strada", ["#general"]);
+      (channel as unknown as { client: { say: typeof say } }).client = { say };
+      (channel as unknown as { healthy: boolean }).healthy = true;
+      return { channel, say };
+    }
+
+    it("emits a single space for blank lines instead of dropping them", async () => {
+      const { channel, say } = channelWithSay();
+      await channel.sendText("#general", "para one\n\npara two");
+
+      const sent = say.mock.calls.map((c) => c[1] as string);
+      expect(sent).toEqual(["para one", " ", "para two"]);
+    });
+  });
 });

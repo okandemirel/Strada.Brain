@@ -53,23 +53,18 @@ interface UserBucket {
   hourTimestamps: number[];
 }
 
-interface TokenRecord {
-  inputTokens: number;
-  outputTokens: number;
-  provider: string;
-  timestamp: number;
-}
-
 // ---------- Implementation ----------
 
 export class RateLimiter {
   private readonly config: RateLimitConfig;
   private readonly userBuckets = new Map<string, UserBucket>();
 
-  /** Token usage records for the current day. */
-  private dailyTokenRecords: TokenRecord[] = [];
-  /** Token usage records for the current month. */
-  private monthlyTokenRecords: TokenRecord[] = [];
+  /** Running token total for the current day. */
+  private dailyTokens = 0;
+  /** Running estimated cost for the current day (USD). */
+  private dailyCost = 0;
+  /** Running estimated cost for the current month (USD). */
+  private monthlyCost = 0;
   /** Start of the current day (midnight UTC). */
   private dayStart: number;
   /** Start of the current month (first day UTC). */
@@ -106,6 +101,12 @@ export class RateLimiter {
 
     bucket.minuteTimestamps = bucket.minuteTimestamps.filter((t) => t > oneMinuteAgo);
     bucket.hourTimestamps = bucket.hourTimestamps.filter((t) => t > oneHourAgo);
+
+    // Evict drained buckets immediately rather than waiting for the UTC day
+    // rollover, so userBuckets does not leak entries for idle users.
+    if (bucket.minuteTimestamps.length === 0 && bucket.hourTimestamps.length === 0) {
+      this.userBuckets.delete(userId);
+    }
 
     // Check per-minute limit
     if (
@@ -168,9 +169,11 @@ export class RateLimiter {
       }
     }
 
-    // Allowed — record the message
+    // Allowed — record the message. The bucket may have been evicted above
+    // when it drained to empty, so re-register it before recording.
     bucket.minuteTimestamps.push(now);
     bucket.hourTimestamps.push(now);
+    this.userBuckets.set(userId, bucket);
     this.messagesToday++;
 
     return { allowed: true };
@@ -187,11 +190,13 @@ export class RateLimiter {
     const now = Date.now();
     this.rotatePeriods(now);
 
-    const record: TokenRecord = { inputTokens, outputTokens, provider, timestamp: now };
-    this.dailyTokenRecords.push(record);
-    this.monthlyTokenRecords.push(record);
-
     const cost = estimateCost(inputTokens, outputTokens, provider);
+
+    // Maintain running aggregates instead of unbounded per-call record arrays.
+    this.dailyTokens += inputTokens + outputTokens;
+    this.dailyCost += cost;
+    this.monthlyCost += cost;
+
     const logger = getLogger();
     logger.debug("Token usage recorded", {
       inputTokens,
@@ -219,24 +224,15 @@ export class RateLimiter {
   // ---------- Internal helpers ----------
 
   private getDailyTokens(): number {
-    return this.dailyTokenRecords.reduce(
-      (sum, r) => sum + r.inputTokens + r.outputTokens,
-      0
-    );
+    return this.dailyTokens;
   }
 
   private getDailyCost(): number {
-    return this.dailyTokenRecords.reduce(
-      (sum, r) => sum + estimateCost(r.inputTokens, r.outputTokens, r.provider),
-      0
-    );
+    return this.dailyCost;
   }
 
   private getMonthlyCost(): number {
-    return this.monthlyTokenRecords.reduce(
-      (sum, r) => sum + estimateCost(r.inputTokens, r.outputTokens, r.provider),
-      0
-    );
+    return this.monthlyCost;
   }
 
   private getOrCreateBucket(userId: string): UserBucket {
@@ -254,16 +250,22 @@ export class RateLimiter {
   private rotatePeriods(now: number): void {
     const currentDayStart = startOfDayUTC(new Date(now));
     if (currentDayStart > this.dayStart) {
-      this.dailyTokenRecords = [];
+      this.dailyTokens = 0;
+      this.dailyCost = 0;
       this.messagesToday = 0;
       this.dayStart = currentDayStart;
       // Prune user buckets older than 1 hour
       for (const [userId, bucket] of this.userBuckets) {
-        bucket.minuteTimestamps = [];
+        bucket.minuteTimestamps = bucket.minuteTimestamps.filter(
+          (t) => t > now - 60_000
+        );
         bucket.hourTimestamps = bucket.hourTimestamps.filter(
           (t) => t > now - 3_600_000
         );
-        if (bucket.hourTimestamps.length === 0) {
+        if (
+          bucket.minuteTimestamps.length === 0 &&
+          bucket.hourTimestamps.length === 0
+        ) {
           this.userBuckets.delete(userId);
         }
       }
@@ -271,7 +273,7 @@ export class RateLimiter {
 
     const currentMonthStart = startOfMonthUTC(new Date(now));
     if (currentMonthStart > this.monthStart) {
-      this.monthlyTokenRecords = [];
+      this.monthlyCost = 0;
       this.monthStart = currentMonthStart;
     }
   }

@@ -261,57 +261,6 @@ describe("TelegramChannel", () => {
     mockBotApi.sendMessage.mockResolvedValue(undefined);
   });
 
-  it("escapes MarkdownV2 special chars in the diff-confirmation operation label", async () => {
-    mockBotApi.sendMessage.mockReset();
-    mockBotApi.sendMessage.mockResolvedValue(undefined);
-    const diff = {
-      oldPath: "src/a.ts",
-      newPath: "src/a.ts",
-      diff: "@@ -1 +1 @@\n-a\n+b",
-      stats: { additions: 1, deletions: 1, modifications: 1, totalChanges: 2, hunks: 1 },
-      isNew: false,
-      isDeleted: false,
-      isRename: false,
-    };
-
-    // Don't await — the promise only settles when the user responds/times out.
-    void channel.requestDiffConfirmation("42", diff as any, {
-      operation: "Update foo.ts (3 files)",
-    });
-    await Promise.resolve();
-
-    const sentBody = mockBotApi.sendMessage.mock.calls[0]?.[1] as string;
-    // Raw '.', '(', ')' from the operation would 400 MarkdownV2; they must be escaped.
-    expect(sentBody).toContain("Update foo\\.ts \\(3 files\\)");
-    expect(mockBotApi.sendMessage.mock.calls[0]?.[2]).toMatchObject({ parse_mode: "MarkdownV2" });
-
-    // Clear the registered 5-minute diff-confirmation timer.
-    await channel.disconnect();
-    mockBotApi.sendMessage.mockReset();
-    mockBotApi.sendMessage.mockResolvedValue(undefined);
-  });
-
-  it("requestDiffConfirmation resolves to false when the send fails (L14)", async () => {
-    mockBotApi.sendMessage.mockReset();
-    mockBotApi.sendMessage.mockRejectedValueOnce(new Error("Bad Request: can't parse entities"));
-    const diff = {
-      oldPath: "src/a.ts",
-      newPath: "src/a.ts",
-      diff: "@@ -1 +1 @@\n-a\n+b",
-      stats: { additions: 1, deletions: 1, modifications: 1, totalChanges: 2, hunks: 1 },
-      isNew: false,
-      isDeleted: false,
-      isRename: false,
-    };
-
-    // TEETH: the unfixed send (before the pending promise is registered, no try/catch)
-    // rejected, so the awaited confirmation never resolved to a clean boolean.
-    await expect(channel.requestDiffConfirmation("42", diff as any, {})).resolves.toBe(false);
-
-    mockBotApi.sendMessage.mockReset();
-    mockBotApi.sendMessage.mockResolvedValue(undefined);
-  });
-
   it("onMessage stores handler", () => {
     const handler = vi.fn();
     channel.onMessage(handler);
