@@ -97,14 +97,26 @@ describe("WhatsAppChannel", () => {
       expect(capturedText).toBe("This is *bold* text");
     });
 
-    it("should convert `code` to ```code```", async () => {
+    it("should leave inline `code` as-is (not force a fenced block)", async () => {
       let capturedText = "";
       channel.sendText = vi.fn().mockImplementation(async (_chatId: string, text: string) => {
         capturedText = text;
       });
 
       await channel.sendMarkdown("chat1", "Run `npm install` now");
-      expect(capturedText).toBe("Run ```npm install``` now");
+      // Inline single-backtick code must NOT become a ```fenced``` multiline block.
+      expect(capturedText).toBe("Run `npm install` now");
+    });
+
+    it("should preserve existing fenced code blocks without malformed nesting", async () => {
+      let capturedText = "";
+      channel.sendText = vi.fn().mockImplementation(async (_chatId: string, text: string) => {
+        capturedText = text;
+      });
+
+      const fenced = "```\nconst x = 1;\n```";
+      await channel.sendMarkdown("chat1", fenced);
+      expect(capturedText).toBe(fenced);
     });
 
     it("should convert # headers to *Header*", async () => {
@@ -136,7 +148,8 @@ describe("WhatsAppChannel", () => {
       await channel.sendMarkdown("chat1", "# Title\nThis is **bold** and `code`.");
       expect(capturedText).toContain("*Title*");
       expect(capturedText).toContain("*bold*");
-      expect(capturedText).toContain("```code```");
+      expect(capturedText).toContain("`code`");
+      expect(capturedText).not.toContain("```code```");
     });
   });
 
@@ -325,11 +338,17 @@ describe("WhatsAppChannel", () => {
   describe("media attachment detection", () => {
     let eventHandlers: Record<string, (...args: unknown[]) => void>;
     let connectedChannel: WhatsAppChannel;
+    let mockSock: {
+      ev: { on: ReturnType<typeof vi.fn> };
+      sendMessage: ReturnType<typeof vi.fn>;
+      sendPresenceUpdate: ReturnType<typeof vi.fn>;
+      end: ReturnType<typeof vi.fn>;
+    };
 
     beforeEach(async () => {
       eventHandlers = {};
 
-      const mockSock = {
+      mockSock = {
         ev: {
           on: vi.fn().mockImplementation((event: string, handler: (...args: unknown[]) => void) => {
             eventHandlers[event] = handler;
@@ -669,6 +688,80 @@ describe("WhatsAppChannel", () => {
       await connectedChannel.disconnect();
       await expect(confirmPromise).resolves.toBe("cancelled");
       vi.useRealTimers();
+    });
+
+    // Regression: long outbound text must be split into multiple messages
+    // (chunked, never truncated/dropped).
+    it("splits an oversize outbound message into multiple chunks", async () => {
+      mockSock.sendMessage.mockClear();
+      // Two lines, each well over the 4096-char cap, so they cannot share a chunk.
+      const longLine = "a".repeat(5000);
+      await connectedChannel.sendText("chat1@s.whatsapp.net", `${longLine}\n${longLine}`);
+
+      expect(mockSock.sendMessage.mock.calls.length).toBeGreaterThan(1);
+      // No single chunk may exceed the cap, and concatenation must lose no content.
+      let total = 0;
+      for (const call of mockSock.sendMessage.mock.calls) {
+        const sent = (call[1] as { text: string }).text;
+        expect(sent.length).toBeLessThanOrEqual(4096);
+        total += sent.length;
+      }
+      // 10000 content chars survive (newlines/boundary spaces may be reflowed).
+      expect(total).toBeGreaterThanOrEqual(10000);
+    });
+
+    it("sends a normal-length message as a single chunk", async () => {
+      mockSock.sendMessage.mockClear();
+      await connectedChannel.sendText("chat1@s.whatsapp.net", "hello world");
+      expect(mockSock.sendMessage).toHaveBeenCalledTimes(1);
+      expect(mockSock.sendMessage).toHaveBeenCalledWith(
+        "chat1@s.whatsapp.net",
+        { text: "hello world" },
+      );
+    });
+
+    // Regression: a duplicate inbound id (e.g. history-sync replay) is routed once.
+    it("dedupes inbound messages with a repeated key id", async () => {
+      const handler = vi.fn().mockResolvedValue(undefined);
+      connectedChannel.onMessage(handler);
+
+      const upsert = {
+        type: "notify",
+        messages: [
+          {
+            key: { remoteJid: "chat1@s.whatsapp.net", id: "dup-1", fromMe: false },
+            message: { conversation: "hello once" },
+            messageTimestamp: Math.floor(Date.now() / 1000),
+          },
+        ],
+      };
+
+      await eventHandlers["messages.upsert"]!(upsert);
+      // Same id redelivered (history-sync / retransmit) — must be ignored.
+      await eventHandlers["messages.upsert"]!(upsert);
+
+      expect(handler).toHaveBeenCalledTimes(1);
+    });
+
+    // Regression: history-sync 'append' batches must not be re-routed.
+    it("ignores 'append' upsert batches (history-sync replays)", async () => {
+      const handler = vi.fn().mockResolvedValue(undefined);
+      connectedChannel.onMessage(handler);
+
+      const upsert = {
+        type: "append",
+        messages: [
+          {
+            key: { remoteJid: "chat1@s.whatsapp.net", id: "old-1", fromMe: false },
+            message: { conversation: "an old offline message" },
+            messageTimestamp: Math.floor(Date.now() / 1000),
+          },
+        ],
+      };
+
+      await eventHandlers["messages.upsert"]!(upsert);
+
+      expect(handler).not.toHaveBeenCalled();
     });
   });
 });

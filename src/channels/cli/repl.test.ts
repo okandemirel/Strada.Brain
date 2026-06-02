@@ -81,13 +81,16 @@ describe("CLIChannel", () => {
     await channel.sendTypingIndicator("cli");
   });
 
-  it("requestConfirmation returns first option when rl is null", async () => {
+  it("requestConfirmation returns 'timeout' (never auto-approves) when rl is null", async () => {
+    // When readline is unavailable (e.g. after EOF/shutdown) the channel must
+    // NOT return the first option ("Yes"), which the write-gate would treat as
+    // approval and silently auto-confirm destructive writes/pushes.
     const result = await channel.requestConfirmation({
       chatId: "cli",
       question: "Confirm?",
       options: ["Yes", "No"],
     });
-    expect(result).toBe("Yes");
+    expect(result).toBe("timeout");
   });
 
   it("requestConfirmation returns selected option", async () => {
@@ -111,7 +114,30 @@ describe("CLIChannel", () => {
     expect(result).toBe("No");
   });
 
-  it("requestConfirmation defaults to first option for invalid input", async () => {
+  it("requestConfirmation passes free-form text through verbatim", async () => {
+    // ask_user tells the user they can "write your own answer", so a non-numeric
+    // answer must be returned as-is rather than coerced to the first option.
+    await channel.connect();
+    const rl = getMockRl()!;
+    const handlers = new Map<string, (input: string) => void>();
+    rl.on.mockImplementation((event: string, handler: (input: string) => void) => {
+      handlers.set(event, handler);
+      return rl as never;
+    });
+    await channel.disconnect();
+    await channel.connect();
+
+    const resultPromise = channel.requestConfirmation({
+      chatId: "cli",
+      question: "Which database?",
+      options: ["sqlite", "mysql"],
+    });
+    handlers.get("line")?.("use postgres");
+    const result = await resultPromise;
+    expect(result).toBe("use postgres");
+  });
+
+  it("requestConfirmation falls back to 'timeout' for empty confirmation input", async () => {
     await channel.connect();
     const rl = getMockRl()!;
     const handlers = new Map<string, (input: string) => void>();
@@ -127,9 +153,9 @@ describe("CLIChannel", () => {
       question: "Confirm?",
       options: ["Yes", "No"],
     });
-    handlers.get("line")?.("invalid");
+    handlers.get("line")?.("   ");
     const result = await resultPromise;
-    expect(result).toBe("Yes");
+    expect(result).toBe("timeout");
   });
 
   it("routes user input to handler", async () => {
@@ -252,5 +278,40 @@ describe("CLIChannel", () => {
     expect(handler.mock.calls[1]?.[0]).toEqual(
       expect.objectContaining({ text: "second" }),
     );
+  });
+
+  it("does not route queued input after disconnect", async () => {
+    let releaseFirst: (() => void) | undefined;
+    const handler = vi.fn()
+      .mockImplementationOnce(() => new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      }))
+      .mockResolvedValue(undefined);
+
+    channel.onMessage(handler);
+    await channel.connect();
+    const rl = getMockRl()!;
+    const handlers = new Map<string, (input: string) => void>();
+    rl.on.mockImplementation((event: string, handler: (input: string) => void) => {
+      handlers.set(event, handler);
+      return rl as never;
+    });
+    await channel.disconnect();
+    channel.onMessage(handler);
+    await channel.connect();
+
+    // First input starts processing (handler pending); second input queues.
+    handlers.get("line")?.("first");
+    handlers.get("line")?.("second");
+    expect(handler).toHaveBeenCalledTimes(1);
+
+    // Shut down while the second input is still queued, then let the first
+    // handler resolve. The queued "second" input must NOT be routed.
+    await channel.disconnect();
+    releaseFirst?.();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(handler).toHaveBeenCalledTimes(1);
   });
 });

@@ -90,6 +90,12 @@ export function truncateForDiscord(
   }
 
   const ellipsis = addEllipsis ? "..." : "";
+  // Guard against maxLength values too small to hold the ellipsis: returning
+  // the ellipsis alone would exceed maxLength. Clamp to a plain hard cut so the
+  // result never exceeds maxLength.
+  if (maxLength <= ellipsis.length) {
+    return text.substring(0, Math.max(0, maxLength));
+  }
   const truncateLength = maxLength - ellipsis.length;
 
   return text.substring(0, truncateLength) + ellipsis;

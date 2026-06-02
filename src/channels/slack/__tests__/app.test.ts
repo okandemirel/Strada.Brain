@@ -318,6 +318,41 @@ describe("SlackChannel", () => {
     });
   });
 
+  describe("oversized text splitting", () => {
+    it("splits oversized text into multiple postMessage calls instead of truncating", async () => {
+      await channel.connect();
+      const internal = channel as any;
+      const postMessage = internal.app.client.chat.postMessage;
+      postMessage.mockClear();
+
+      // Two newline-separated lines, each well over the per-message limit, force
+      // multiple chunks via chunkText.
+      const longText = "A".repeat(39000) + "\n" + "B".repeat(39000);
+
+      await internal.processQueuedMessage({
+        id: "m1",
+        type: "text",
+        priority: 5,
+        channelId: "C123",
+        content: longText,
+        retries: 0,
+        resolve: vi.fn(),
+        reject: vi.fn(),
+      });
+
+      // TEETH: pre-fix this truncated to one message; now every chunk is sent.
+      expect(postMessage.mock.calls.length).toBeGreaterThan(1);
+      const sentTexts: string[] = postMessage.mock.calls.map((c: any[]) => c[0].text);
+      // No chunk carries the truncation marker; the tail is preserved.
+      for (const t of sentTexts) {
+        expect(t).not.toContain("...(truncated)");
+        expect(t.length).toBeLessThanOrEqual(39000);
+      }
+      // The second line's content is present in some chunk (tail not dropped).
+      expect(sentTexts.some((t) => t.includes("B"))).toBe(true);
+    });
+  });
+
   describe("requestConfirmation", () => {
     it("should throw if not connected", async () => {
       await expect(
@@ -393,8 +428,8 @@ describe("SlackChannel", () => {
           message: { ts: "1234567890.123456" },
         },
         action: {
-          action_id: `${confirmId}_approve`,
-          value: "approve",
+          action_id: `${confirmId}_opt0`,
+          value: "Yes",
         },
       });
 
@@ -411,6 +446,85 @@ describe("SlackChannel", () => {
 
       await channel.disconnect();
       await expect(guardedPromise).resolves.toBeInstanceOf(Error);
+    });
+
+    it("resolves with the exact option label the user selected (honors req.options)", async () => {
+      await channel.connect();
+
+      const promise = channel.requestConfirmation({
+        chatId: "C123",
+        userId: "U123",
+        question: "Pick one",
+        options: ["Modify", "Reject"],
+      });
+      await new Promise((resolve) => setTimeout(resolve, 25));
+
+      const app = (channel as unknown as {
+        app: { action: ReturnType<typeof vi.fn> };
+        pendingConfirmations: Map<string, unknown>;
+      }).app;
+      const actionHandler = app.action.mock.calls[0]?.[1] as
+        | ((payload: unknown) => Promise<void>)
+        | undefined;
+      const [confirmId] = Array.from(
+        (channel as unknown as {
+          pendingConfirmations: Map<string, unknown>;
+        }).pendingConfirmations.keys(),
+      );
+
+      // Second option ("Reject") => index 1 => action_id suffix `_opt1`, value = label.
+      await actionHandler!({
+        ack: vi.fn().mockResolvedValue(undefined),
+        body: {
+          channel: { id: "C123" },
+          user: { id: "U123" },
+          message: { ts: "1234567890.123456" },
+        },
+        action: {
+          action_id: `${confirmId}_opt1`,
+          value: "Reject",
+        },
+      });
+
+      // TEETH: pre-fix this resolved "deny" (never matching the caller's "Reject").
+      await expect(promise).resolves.toBe("Reject");
+    });
+
+    it("clears the timeout timer when the confirmation is answered (no leak)", async () => {
+      await channel.connect();
+
+      const promise = channel.requestConfirmation({
+        chatId: "C123",
+        userId: "U123",
+        question: "Confirm?",
+        options: ["Yes", "No"],
+      });
+      await new Promise((resolve) => setTimeout(resolve, 25));
+
+      const internal = channel as unknown as {
+        app: { action: ReturnType<typeof vi.fn> };
+        pendingConfirmations: Map<string, { timeout?: ReturnType<typeof setTimeout> }>;
+      };
+      const [confirmId, pending] = Array.from(internal.pendingConfirmations.entries())[0]!;
+      expect(pending.timeout).toBeDefined();
+      const clearSpy = vi.spyOn(globalThis, "clearTimeout");
+
+      const actionHandler = internal.app.action.mock.calls[0]?.[1] as (
+        payload: unknown,
+      ) => Promise<void>;
+      await actionHandler({
+        ack: vi.fn().mockResolvedValue(undefined),
+        body: {
+          channel: { id: "C123" },
+          user: { id: "U123" },
+          message: { ts: "1234567890.123456" },
+        },
+        action: { action_id: `${confirmId}_opt0`, value: "Yes" },
+      });
+
+      expect(clearSpy).toHaveBeenCalledWith(pending.timeout);
+      await expect(promise).resolves.toBe("Yes");
+      clearSpy.mockRestore();
     });
   });
 
@@ -722,6 +836,40 @@ describe("SlackChannel file extraction", () => {
     expect(incoming.attachments[0].name).toBe("broken.png");
     expect(incoming.attachments[0].url).toBe("https://files.slack.com/broken");
     expect(incoming.attachments[0].data).toBeUndefined();
+  });
+
+  it("ignores edited messages (subtype message_changed) instead of processing them as new", async () => {
+    const message = {
+      type: "message",
+      subtype: "message_changed",
+      channel: "C789",
+      team: "T001",
+      ts: "1234567890.000010",
+      message: { user: "U456", text: "edited text", ts: "1234567890.000009" },
+    };
+
+    const say = vi.fn();
+    await capturedMessageCallback!({ message, say });
+
+    // TEETH: pre-fix only "bot_message" was filtered, so an edit fell through.
+    expect(messageHandlerFn).not.toHaveBeenCalled();
+  });
+
+  it("ignores messages carrying a bot_id (other bots) even without the bot_message subtype", async () => {
+    const message = {
+      type: "message",
+      bot_id: "B999",
+      user: "U456",
+      channel: "C789",
+      team: "T001",
+      text: "from another bot",
+      ts: "1234567890.000011",
+    };
+
+    const say = vi.fn();
+    await capturedMessageCallback!({ message, say });
+
+    expect(messageHandlerFn).not.toHaveBeenCalled();
   });
 
   it("should skip files without name or mimetype", async () => {

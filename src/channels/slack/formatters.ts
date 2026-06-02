@@ -13,7 +13,13 @@ const TRUNCATION_MARKER = "\n\n...(truncated)";
  * Handles common differences between standard Markdown and Slack's mrkdwn.
  */
 export function formatToSlackMrkdwn(markdown: string): string {
-  let text = markdown;
+  // Escape the three mrkdwn-significant HTML characters up front so any
+  // user-controlled substring in the input cannot inject Slack control syntax
+  // (e.g. raw <...> link/mention sequences). The conversions below synthesize
+  // their own <...> link/mention markup AFTER this escape, so legitimate
+  // formatting is unaffected while literal user angle brackets/ampersands are
+  // neutralized.
+  let text = escapeSlackText(markdown);
 
   // Convert headers (### → *bold* for Slack)
   text = text.replace(/^#{1,6}\s+(.+)$/gm, (_, content) => `*${content.trim()}*`);

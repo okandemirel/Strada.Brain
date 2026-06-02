@@ -1,5 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { TelegramChannel } from "./bot.js";
+import { GrammyError } from "grammy";
 
 vi.mock("../../utils/logger.js", () => ({
   getLogger: () => ({
@@ -51,6 +52,17 @@ vi.mock("grammy", () => ({
     kb.row = vi.fn().mockReturnValue(kb);
     return kb;
   }),
+  // Minimal stand-in so `err instanceof GrammyError` works under the mock and the
+  // 429 flood-control retry path can be exercised.
+  GrammyError: class GrammyError extends Error {
+    error_code: number;
+    parameters: { retry_after?: number };
+    constructor(message: string, error_code: number, retry_after?: number) {
+      super(message);
+      this.error_code = error_code;
+      this.parameters = retry_after !== undefined ? { retry_after } : {};
+    }
+  },
 }));
 
 vi.mock("node:crypto", () => ({
@@ -173,6 +185,110 @@ describe("TelegramChannel", () => {
 
       restoreSendMessage();
     });
+  });
+
+  describe("outbound flood-control / 429 retry", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+      mockBotApi.sendMessage.mockReset();
+      mockBotApi.sendMessage.mockResolvedValue(undefined);
+    });
+
+    it("retries a throttled chunk honoring retry_after instead of aborting the message", async () => {
+      vi.useFakeTimers();
+      mockBotApi.sendMessage.mockReset();
+      // First send is 429 (retry_after 2s); the retry succeeds.
+      mockBotApi.sendMessage
+        .mockRejectedValueOnce(new (GrammyError as any)("Too Many Requests", 429, 2))
+        .mockResolvedValue(undefined);
+
+      const sendPromise = channel.sendText("42", "hello");
+      // Flush microtasks so the first (rejected) attempt runs and schedules its
+      // retry timer, then advance past retry_after to trigger the retry.
+      await vi.advanceTimersByTimeAsync(2100);
+      await sendPromise;
+
+      // Both the failed attempt and the successful retry were issued.
+      expect(mockBotApi.sendMessage).toHaveBeenCalledTimes(2);
+      expect(mockBotApi.sendMessage).toHaveBeenNthCalledWith(2, 42, "hello");
+    });
+
+    it("propagates non-429 errors without retrying", async () => {
+      mockBotApi.sendMessage.mockReset();
+      mockBotApi.sendMessage.mockRejectedValue(new (GrammyError as any)("Forbidden", 403));
+
+      await expect(channel.sendText("42", "hello")).rejects.toBeInstanceOf(GrammyError);
+      expect(mockBotApi.sendMessage).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("serializes concurrent sends to the same chat in order", async () => {
+    mockBotApi.sendMessage.mockReset();
+    const order: string[] = [];
+    let resolveFirst: (() => void) | undefined;
+    mockBotApi.sendMessage
+      // First message: block until we release it.
+      .mockImplementationOnce((_id: number, text: string) => {
+        order.push(`start:${text}`);
+        return new Promise<void>((resolve) => {
+          resolveFirst = () => {
+            order.push(`end:${text}`);
+            resolve();
+          };
+        });
+      })
+      // Subsequent messages: resolve immediately.
+      .mockImplementation((_id: number, text: string) => {
+        order.push(`start:${text}`);
+        order.push(`end:${text}`);
+        return Promise.resolve(undefined);
+      });
+
+    const p1 = channel.sendText("42", "A");
+    const p2 = channel.sendText("42", "B");
+    // Wait until A's send has actually started (chained via microtasks).
+    while (!resolveFirst) {
+      await Promise.resolve();
+    }
+    // At this point B must NOT have started yet (serialized behind A).
+    expect(order).toEqual(["start:A"]);
+    // B must not start until A finished — release A now.
+    resolveFirst();
+    await Promise.all([p1, p2]);
+
+    expect(order).toEqual(["start:A", "end:A", "start:B", "end:B"]);
+    mockBotApi.sendMessage.mockReset();
+    mockBotApi.sendMessage.mockResolvedValue(undefined);
+  });
+
+  it("escapes MarkdownV2 special chars in the diff-confirmation operation label", async () => {
+    mockBotApi.sendMessage.mockReset();
+    mockBotApi.sendMessage.mockResolvedValue(undefined);
+    const diff = {
+      oldPath: "src/a.ts",
+      newPath: "src/a.ts",
+      diff: "@@ -1 +1 @@\n-a\n+b",
+      stats: { additions: 1, deletions: 1, modifications: 1, totalChanges: 2, hunks: 1 },
+      isNew: false,
+      isDeleted: false,
+      isRename: false,
+    };
+
+    // Don't await — the promise only settles when the user responds/times out.
+    void channel.requestDiffConfirmation("42", diff as any, {
+      operation: "Update foo.ts (3 files)",
+    });
+    await Promise.resolve();
+
+    const sentBody = mockBotApi.sendMessage.mock.calls[0]?.[1] as string;
+    // Raw '.', '(', ')' from the operation would 400 MarkdownV2; they must be escaped.
+    expect(sentBody).toContain("Update foo\\.ts \\(3 files\\)");
+    expect(mockBotApi.sendMessage.mock.calls[0]?.[2]).toMatchObject({ parse_mode: "MarkdownV2" });
+
+    // Clear the registered 5-minute diff-confirmation timer.
+    await channel.disconnect();
+    mockBotApi.sendMessage.mockReset();
+    mockBotApi.sendMessage.mockResolvedValue(undefined);
   });
 
   it("requestDiffConfirmation resolves to false when the send fails (L14)", async () => {

@@ -825,6 +825,151 @@ describe("WebChannel WebSocket heartbeat", () => {
   });
 });
 
+describe("WebChannel confirmation send-failure", () => {
+  it("resolves immediately as timeout when no live socket exists (does not block for 5 min)", async () => {
+    const channel = new WebChannel();
+
+    // No client was ever connected for this chatId, so the prompt cannot be
+    // delivered. requestConfirmation must resolve with the non-approving
+    // "timeout" sentinel right away instead of registering a 5-minute pending
+    // entry that would block the awaiting orchestrator.
+    const result = await channel.requestConfirmation({
+      chatId: "ghost-chat",
+      question: "Apply changes?",
+      options: ["Yes", "No"],
+    });
+
+    expect(result).toBe("timeout");
+
+    // No pending confirmation should have been registered.
+    const pending = (channel as unknown as {
+      pendingConfirmations: Map<string, unknown>;
+    }).pendingConfirmations;
+    expect(pending.size).toBe(0);
+  });
+
+  it("registers a pending confirmation when a live socket is present", async () => {
+    const channel = new WebChannel();
+    const socket = createMockSocket();
+    (channel as unknown as { handleWsConnection: (ws: unknown) => void }).handleWsConnection(socket);
+    const chatId = String(socket.getSentMessages()[0]!.chatId);
+
+    // Live socket → the prompt is delivered and a pending entry is registered
+    // (the promise stays unresolved until the user answers or it times out).
+    void channel.requestConfirmation({
+      chatId,
+      question: "Apply changes?",
+      options: ["Yes", "No"],
+    });
+
+    await Promise.resolve();
+
+    const pending = (channel as unknown as {
+      pendingConfirmations: Map<string, unknown>;
+    }).pendingConfirmations;
+    expect(pending.size).toBe(1);
+    expect(
+      socket.getSentMessages().some((m) => m.type === "confirmation"),
+    ).toBe(true);
+
+    await channel.disconnect();
+  });
+});
+
+describe("WebChannel verify:gate_decision enforcement", () => {
+  async function sendGate(channel: WebChannel, chatId: string, payload: Record<string, unknown>): Promise<void> {
+    await (channel as unknown as {
+      handleWsMessage: (chatId: string, data: Record<string, unknown>) => Promise<void>;
+    }).handleWsMessage(chatId, payload);
+  }
+
+  it("forwards an owned gate decision onto the workspace bus and acks it as enforced", async () => {
+    const channel = new WebChannel();
+    const emit = vi.fn();
+    channel.setWorkspaceBusEmitter(emit);
+    channel.setTaskOwnerResolver((taskId) => (taskId === "task-1" ? "chat-1" : null));
+
+    const socket = createMockSocket();
+    (channel as unknown as { clients: Map<string, unknown> }).clients.set("chat-1", {
+      ws: socket,
+    });
+
+    await sendGate(channel, "chat-1", {
+      type: "verify:gate_decision",
+      taskId: "task-1",
+      verdict: "approve",
+      note: "looks good",
+    });
+
+    expect(emit).toHaveBeenCalledWith(
+      "verify:gate_decision",
+      expect.objectContaining({ taskId: "task-1", verdict: "approve", note: "looks good" }),
+    );
+    const ack = socket.getSentMessages().find((m) => m.type === "verify:gate_ack");
+    expect(ack).toMatchObject({ accepted: true, supervisorVerdict: "approve", enforced: true });
+  });
+
+  it("does not ack an approve as accepted when no bus consumer is wired (not yet enforced)", async () => {
+    const channel = new WebChannel();
+    channel.setTaskOwnerResolver((taskId) => (taskId === "task-1" ? "chat-1" : null));
+
+    const socket = createMockSocket();
+    (channel as unknown as { clients: Map<string, unknown> }).clients.set("chat-1", {
+      ws: socket,
+    });
+
+    await sendGate(channel, "chat-1", {
+      type: "verify:gate_decision",
+      taskId: "task-1",
+      verdict: "approve",
+    });
+
+    const ack = socket.getSentMessages().find((m) => m.type === "verify:gate_ack");
+    expect(ack).toMatchObject({ accepted: false, supervisorVerdict: "approve", enforced: false });
+  });
+});
+
+describe("WebChannel attachment data validation", () => {
+  it("rejects an attachment that declares mimeType/name but carries no data (no raw.size trust)", async () => {
+    const channel = new WebChannel();
+    const socket = createMockSocket();
+    const handler = vi.fn().mockResolvedValue(undefined);
+
+    channel.onMessage(handler);
+    (channel as unknown as { handleWsConnection: (ws: unknown) => void }).handleWsConnection(socket);
+
+    socket.emit(
+      "message",
+      Buffer.from(JSON.stringify({
+        type: "message",
+        clientMessageId: "client-msg-nodata",
+        text: "(voice message)",
+        attachments: [
+          {
+            name: "fake.png",
+            type: "image/png",
+            // No `data` field; a tiny claimed size used to slip past validation.
+            size: 1,
+          },
+        ],
+      })),
+    );
+
+    await Promise.resolve();
+
+    // Placeholder-only text plus a rejected attachment → nothing routed.
+    expect(handler).not.toHaveBeenCalled();
+    expect(socket.getSentMessages()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "text",
+          text: 'File "fake.png" was rejected: unsupported format or invalid content.',
+        }),
+      ]),
+    );
+  });
+});
+
 describe("WebChannel rate-limit cleanup (L8)", () => {
   it("runs per-chat cleanup (no appliedInstinctIds leak) when a rate-limited client closes", async () => {
     const channel = new WebChannel();
@@ -869,5 +1014,37 @@ describe("WebChannel rate-limit cleanup (L8)", () => {
       appliedInstinctIds: Map<string, string[]>;
     }).appliedInstinctIds.has(chatId);
     expect(leaked).toBe(false);
+  });
+});
+
+describe("WebChannel shutdown teardown", () => {
+  it("does not repopulate recentlyDisconnected when an async ws 'close' fires after disconnect()", async () => {
+    const channel = new WebChannel();
+
+    // ws 'close' is async in production: close() does NOT synchronously fire the
+    // 'close' handler. So disconnect() returns first, then the deferred close
+    // event arrives and runs handleDisconnect.
+    const handlers = new Map<string, () => void>();
+    const sent: Array<Record<string, unknown>> = [];
+    let readyState = 1;
+    const socket = {
+      get readyState() { return readyState; },
+      send(p: string) { sent.push(JSON.parse(p) as Record<string, unknown>); },
+      close() { readyState = 3; },
+      ping() {},
+      terminate() { readyState = 3; },
+      on(event: string, handler: () => void) { handlers.set(event, handler); },
+    };
+    (channel as unknown as { handleWsConnection: (ws: unknown) => void }).handleWsConnection(socket);
+
+    await channel.disconnect();
+
+    // Deferred async close event arrives AFTER disconnect() cleared the maps.
+    handlers.get("close")?.();
+
+    const recentlyDisconnected = (channel as unknown as {
+      recentlyDisconnected: Map<string, unknown>;
+    }).recentlyDisconnected;
+    expect(recentlyDisconnected.size).toBe(0);
   });
 });

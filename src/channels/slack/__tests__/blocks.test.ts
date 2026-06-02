@@ -39,8 +39,38 @@ describe("Slack Blocks", () => {
 
     it("should create confirmation blocks without details", () => {
       const blocks = createConfirmationBlocks("Delete this file?", undefined, "action_123");
-      
+
       expect(blocks.length).toBe(2);
+    });
+
+    it("renders one button per caller-supplied option with the option as the value", () => {
+      const blocks = createConfirmationBlocks(
+        "Pick one",
+        undefined,
+        "confirm_abc",
+        ["Modify", "Reject", "Skip"],
+      );
+      const actions = blocks[blocks.length - 1] as {
+        type: string;
+        elements: Array<{ value: string; action_id: string; text: { text: string } }>;
+      };
+      expect(actions.type).toBe("actions");
+      expect(actions.elements).toHaveLength(3);
+      // TEETH: pre-fix this hardcoded approve/deny and ignored req.options.
+      expect(actions.elements.map((e) => e.value)).toEqual(["Modify", "Reject", "Skip"]);
+      expect(actions.elements.map((e) => e.action_id)).toEqual([
+        "confirm_abc_opt0",
+        "confirm_abc_opt1",
+        "confirm_abc_opt2",
+      ]);
+    });
+
+    it("defaults to Approve/Deny when no options are supplied", () => {
+      const blocks = createConfirmationBlocks("Confirm?", undefined, "confirm_abc");
+      const actions = blocks[blocks.length - 1] as {
+        elements: Array<{ value: string }>;
+      };
+      expect(actions.elements.map((e) => e.value)).toEqual(["Approve", "Deny"]);
     });
   });
 

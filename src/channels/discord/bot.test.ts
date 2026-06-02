@@ -150,6 +150,35 @@ describe("DiscordChannel", () => {
     });
   });
 
+  describe("long message splitting", () => {
+    // Regression (HIGH/message-length): long messages must be split into chunks
+    // and every chunk sent, not truncated to 2000 chars (which dropped content).
+    it("splits a >2000-char text message into multiple chunks instead of truncating", async () => {
+      await channel.connect();
+
+      const client = channel.getClient();
+      const channelObj = await client.channels.fetch("channel123");
+      const sendMock = (channelObj as unknown as { send: ReturnType<typeof vi.fn> }).send;
+      sendMock.mockClear();
+
+      // 5000 single-line chars (no newlines) forces hard word/length splitting.
+      const long = "x".repeat(5000);
+      await channel.sendText("channel123", long);
+
+      expect(sendMock.mock.calls.length).toBeGreaterThan(1);
+
+      let total = 0;
+      for (const call of sendMock.mock.calls) {
+        const sent = call[0] as string;
+        expect(typeof sent).toBe("string");
+        expect(sent.length).toBeLessThanOrEqual(2000);
+        total += sent.length;
+      }
+      // No content dropped: the concatenated chunks reconstruct the full input.
+      expect(total).toBe(long.length);
+    });
+  });
+
   describe("sendMarkdown", () => {
     it("should send markdown message", async () => {
       await channel.connect();
@@ -209,15 +238,10 @@ describe("DiscordChannel", () => {
 
       await boundChannel.connect();
 
-      const promise = (boundChannel as unknown as {
-        requestConfirmationImmediate: (req: {
-          chatId: string;
-          userId?: string;
-          question: string;
-          options: string[];
-          details?: string;
-        }) => Promise<string>;
-      }).requestConfirmationImmediate({
+      // requestConfirmation now decouples the long-lived response promise from
+      // the send queue: the pending confirmation is registered immediately and
+      // only the embed+buttons are dispatched through the queue.
+      const promise = boundChannel.requestConfirmation({
         chatId: "channel123",
         userId: "allowed123",
         question: "Confirm?",

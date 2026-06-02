@@ -1,5 +1,5 @@
 import { createCipheriv, createHash, randomBytes } from "node:crypto";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MatrixChannel } from "./channel.js";
 
 const mockDownloadMedia = vi.fn().mockResolvedValue({
@@ -188,6 +188,180 @@ describe("MatrixChannel", () => {
       expect(html).not.toContain("<script>");
       expect(html).toContain("&lt;script&gt;");
       expect(html).toContain("&amp;");
+    });
+
+    it("converts newlines to <br/> so multi-line replies keep their line breaks", async () => {
+      const { channel, sendHtmlMessage } = withFakeClient();
+      await channel.sendMarkdown("!room:example", "line one\nline two");
+
+      const html = sendHtmlMessage.mock.calls[0][2];
+      // TEETH: unfixed renderer left raw "\n" which Matrix clients collapse to whitespace.
+      expect(html).toBe("line one<br/>line two");
+    });
+  });
+
+  describe("send chunking (M-message-length)", () => {
+    it("splits an oversized sendText payload into multiple chunked sends", async () => {
+      const channel = new MatrixChannel("https://matrix.example", "token", "@bot:example");
+      const sendTextMessage = vi.fn().mockResolvedValue(undefined);
+      (channel as any).client = { sendTextMessage };
+
+      // Two ~32000-char lines force >1 chunk (MATRIX_MAX_CHARS === 32000).
+      const longText = `${"a".repeat(32000)}\n${"b".repeat(32000)}`;
+      await channel.sendText("!room:example", longText);
+
+      // TEETH: unfixed code made a single unbounded send that the homeserver rejects.
+      expect(sendTextMessage.mock.calls.length).toBeGreaterThan(1);
+      for (const [, chunk] of sendTextMessage.mock.calls) {
+        expect((chunk as string).length).toBeLessThanOrEqual(32000);
+      }
+      // No content dropped: reassembled chunks contain every original character.
+      const reassembled = sendTextMessage.mock.calls.map(([, c]) => c as string).join("");
+      expect(reassembled.replace(/\n/g, "")).toBe("a".repeat(32000) + "b".repeat(32000));
+    });
+
+    it("skips empty sendText input (never posts a blank event)", async () => {
+      const channel = new MatrixChannel("https://matrix.example", "token", "@bot:example");
+      const sendTextMessage = vi.fn().mockResolvedValue(undefined);
+      (channel as any).client = { sendTextMessage };
+
+      await channel.sendText("!room:example", "");
+
+      expect(sendTextMessage).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("send retry / rate-limit (M-rate-limit)", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("retries a 429 send honoring retry_after_ms and eventually succeeds", async () => {
+      const channel = new MatrixChannel("https://matrix.example", "token", "@bot:example");
+      const sendTextMessage = vi
+        .fn()
+        .mockRejectedValueOnce(
+          Object.assign(new Error("rate limited"), {
+            errcode: "M_LIMIT_EXCEEDED",
+            httpStatus: 429,
+            data: { retry_after_ms: 1000 },
+          }),
+        )
+        .mockResolvedValueOnce(undefined);
+      (channel as any).client = { sendTextMessage };
+
+      const promise = channel.sendText("!room:example", "hello");
+      // Let the first (rejecting) attempt settle, then advance past retry_after_ms.
+      await vi.advanceTimersByTimeAsync(1000);
+      await promise;
+
+      // TEETH: unfixed code threw the 429 straight to the caller (reply dropped).
+      expect(sendTextMessage).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe("inbound m.notice / m.emote (M-error-handling)", () => {
+    it("routes m.notice body as text instead of dropping it", async () => {
+      const channel = new MatrixChannel("https://matrix.example", "token", "@bot:example", [], [], true);
+
+      const msg = await (channel as any).toIncomingMessage(
+        {
+          getType: () => "m.room.message",
+          getSender: () => "@alice:example",
+          getRoomId: () => "!room:example",
+          getTs: () => 123,
+          getContent: () => ({ msgtype: "m.notice", body: "bridged notice text" }),
+        },
+        {},
+      );
+
+      // TEETH: unfixed code only read m.text, so m.notice yielded text="" → null.
+      expect(msg).toMatchObject({ text: "bridged notice text", chatId: "!room:example" });
+    });
+
+    it("drops events with undefined sender/roomId", async () => {
+      const channel = new MatrixChannel("https://matrix.example", "token", "@bot:example", [], [], true);
+
+      const msg = await (channel as any).toIncomingMessage(
+        {
+          getType: () => "m.room.message",
+          getSender: () => undefined,
+          getRoomId: () => undefined,
+          getTs: () => 123,
+          getContent: () => ({ msgtype: "m.text", body: "orphan" }),
+        },
+        {},
+      );
+
+      expect(msg).toBeNull();
+    });
+  });
+
+  describe("sendAttachment (M-unimplemented)", () => {
+    it("uploads the file and sends a media message with the mxc:// uri", async () => {
+      const channel = new MatrixChannel("https://matrix.example", "token", "@bot:example");
+      const uploadContent = vi.fn().mockResolvedValue({ content_uri: "mxc://example.org/abc" });
+      const sendMessage = vi.fn().mockResolvedValue(undefined);
+      (channel as any).client = { uploadContent, sendMessage };
+
+      await channel.sendAttachment("!room:example", {
+        type: "image",
+        name: "pic.png",
+        data: Buffer.from("imgbytes"),
+        mimeType: "image/png",
+        size: 8,
+      });
+
+      // TEETH: unfixed stub ignored the bytes and only posted "[Attachment: pic.png]".
+      expect(uploadContent).toHaveBeenCalledTimes(1);
+      expect(sendMessage).toHaveBeenCalledTimes(1);
+      const [roomId, content] = sendMessage.mock.calls[0];
+      expect(roomId).toBe("!room:example");
+      expect(content).toMatchObject({
+        msgtype: "m.image",
+        body: "pic.png",
+        url: "mxc://example.org/abc",
+      });
+    });
+
+    it("falls back to a text placeholder when no bytes are available", async () => {
+      const channel = new MatrixChannel("https://matrix.example", "token", "@bot:example");
+      const sendTextMessage = vi.fn().mockResolvedValue(undefined);
+      const uploadContent = vi.fn();
+      (channel as any).client = { sendTextMessage, uploadContent };
+
+      await channel.sendAttachment("!room:example", { type: "file", name: "data.bin" });
+
+      expect(uploadContent).not.toHaveBeenCalled();
+      expect(sendTextMessage).toHaveBeenCalledWith("!room:example", "[Attachment: data.bin]");
+    });
+  });
+
+  describe("disconnect cleanup (M-leak)", () => {
+    it("removes the timeline + sync listeners, nulls the client, and clears instinct state", async () => {
+      const channel = new MatrixChannel("https://matrix.example", "token", "@bot:example");
+      const removeListener = vi.fn();
+      const stopClient = vi.fn();
+      const timelineHandler = () => {};
+      const syncHandler = () => {};
+      (channel as any).client = { removeListener, stopClient };
+      (channel as any).timelineHandler = timelineHandler;
+      (channel as any).syncHandler = syncHandler;
+      channel.setAppliedInstinctIds("!room:example", ["instinct-1"]);
+
+      await channel.disconnect();
+
+      // TEETH: unfixed disconnect only called stopClient(), leaking the listener.
+      expect(removeListener).toHaveBeenCalledWith("Room.timeline", timelineHandler);
+      expect(removeListener).toHaveBeenCalledWith("sync", syncHandler);
+      expect(stopClient).toHaveBeenCalledTimes(1);
+      expect((channel as any).client).toBeNull();
+      expect((channel as any).timelineHandler).toBeNull();
+      expect((channel as any).appliedInstinctIds.size).toBe(0);
+      expect(channel.isHealthy()).toBe(false);
     });
   });
 });

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { Bot, Context, InlineKeyboard } from "grammy";
+import { Bot, Context, InlineKeyboard, GrammyError } from "grammy";
 import type {
   IChannelAdapter,
   IncomingMessage,
@@ -13,7 +13,7 @@ import { getLogger } from "../../utils/logger.js";
 import { RateLimiter } from "../../security/rate-limiter.js";
 import type { RateLimitConfig } from "../../security/rate-limiter.js";
 import type { FileDiff, BatchDiff } from "../../utils/diff-generator.js";
-import { formatDiffForTelegram, formatBatchDiffForTelegram } from "../../utils/diff-formatter.js";
+import { formatDiffForTelegram, formatBatchDiffForTelegram, escapeMarkdownV2 } from "../../utils/diff-formatter.js";
 import { classifyErrorMessage } from "../../utils/error-messages.js";
 
 /**
@@ -114,6 +114,12 @@ export class TelegramChannel implements IChannelAdapter {
   private feedbackReactionCallback: FeedbackReactionCallback | null = null;
   /** Per-chatId applied instinct IDs for feedback attribution via /feedback command. */
   private readonly appliedInstinctIds = new Map<string, string[]>();
+  /**
+   * Per-chatId outbound serialization tail-chain. Concurrent sends to the SAME
+   * chat are queued so their (possibly multi-chunk) bodies arrive in order; sends
+   * to different chats still run in parallel.
+   */
+  private readonly sendChains = new Map<string, Promise<void>>();
 
   constructor(token: string, auth: AuthManager, rateLimitConfig?: Partial<RateLimitConfig>) {
     this.bot = new Bot(token);
@@ -159,11 +165,29 @@ export class TelegramChannel implements IChannelAdapter {
       { command: "help", description: "Show help" },
     ]);
 
-    this.bot.start({
+    // Initialize BEFORE returning so isHealthy() (which reads bot.isInited())
+    // reports the real ready state to the boot report instead of racing the
+    // un-awaited start() below. init() performs the getMe handshake start() would
+    // otherwise do asynchronously; a bad token is surfaced here as a rejection.
+    if (typeof this.bot.init === "function" && !this.bot.isInited()) {
+      await this.bot.init();
+    }
+
+    // start() returns a Promise that only settles when polling stops; we don't
+    // await it (it would never resolve), but a fatal poll error (e.g. 409 Conflict
+    // from a duplicate poller, or a revoked token) rejects it. bot.catch only
+    // covers middleware errors, so without this .catch the rejection would float
+    // as an unhandled rejection and the bot would silently stop.
+    const startResult = this.bot.start({
       onStart: (info) => {
         logger.info(`Telegram bot started: @${info.username}`);
       },
       drop_pending_updates: true,
+    });
+    void Promise.resolve(startResult).catch((err: unknown) => {
+      logger.error("Telegram long-polling stopped with a fatal error", {
+        error: err instanceof Error ? err.message : String(err),
+      });
     });
   }
 
@@ -184,31 +208,101 @@ export class TelegramChannel implements IChannelAdapter {
       pending.resolve(false);
     }
     this.pendingDiffConfirmations.clear();
+
+    // Drop per-chat send-chain tails (the underlying sends are already settled or
+    // self-clean; this just releases references on shutdown).
+    this.sendChains.clear();
+  }
+
+  /**
+   * Queue an outbound operation onto the per-chat tail-chain so concurrent sends
+   * to the same chat keep their chunks in order; failures don't poison the chain.
+   */
+  private enqueueSend(chatId: string, op: () => Promise<void>): Promise<void> {
+    const prev = this.sendChains.get(chatId) ?? Promise.resolve();
+    // Run op after the previous send settles (success OR failure) so one failed
+    // send never poisons the chat's chain. The caller still observes op's result.
+    const result = prev.then(op, op);
+    // The stored tail swallows rejections so the next link always runs; once this
+    // is the current tail and it has settled, drop it to avoid unbounded growth.
+    const tail = result.catch(() => {});
+    this.sendChains.set(chatId, tail);
+    void tail.then(() => {
+      if (this.sendChains.get(chatId) === tail) {
+        this.sendChains.delete(chatId);
+      }
+    });
+    return result;
+  }
+
+  /**
+   * Send one chunk, retrying on Telegram flood-control (429) and honoring the
+   * server-provided retry_after so a throttled chunk no longer aborts the rest of
+   * a multi-part message.
+   */
+  private async sendChunkWithRetry(
+    id: number,
+    chunk: string,
+    options?: { parse_mode: "Markdown" | "MarkdownV2" },
+  ): Promise<void> {
+    const maxAttempts = 4;
+    for (let attempt = 1; ; attempt++) {
+      try {
+        // Avoid passing a 3rd `undefined` arg on the plain-text path so callers/
+        // tests observing the exact argument list still see a 2-arg sendMessage.
+        if (options) {
+          await this.bot.api.sendMessage(id, chunk, options);
+        } else {
+          await this.bot.api.sendMessage(id, chunk);
+        }
+        return;
+      } catch (err) {
+        if (
+          err instanceof GrammyError &&
+          err.error_code === 429 &&
+          attempt < maxAttempts
+        ) {
+          const retryAfter = err.parameters?.retry_after ?? attempt;
+          getLogger().warn("Telegram flood control; retrying after delay", {
+            chatId: String(id),
+            retryAfter,
+            attempt,
+          });
+          await new Promise((r) => setTimeout(r, retryAfter * 1000));
+          continue;
+        }
+        throw err;
+      }
+    }
   }
 
   async sendText(chatId: string, text: string): Promise<void> {
     const id = parseInt(chatId, 10);
-    for (const chunk of chunkTelegramMessage(text)) {
-      await this.bot.api.sendMessage(id, chunk);
-    }
+    return this.enqueueSend(chatId, async () => {
+      for (const chunk of chunkTelegramMessage(text)) {
+        await this.sendChunkWithRetry(id, chunk);
+      }
+    });
   }
 
   async sendMarkdown(chatId: string, markdown: string): Promise<void> {
     const id = parseInt(chatId, 10);
-    // Chunk BEFORE sending so the plain-text fallback also operates on an
-    // already-bounded chunk — otherwise an oversized answer throws "too long"
-    // on the Markdown send AND again on the fallback, dropping the whole reply.
-    for (const chunk of chunkTelegramMessage(markdown)) {
-      try {
-        await this.bot.api.sendMessage(id, chunk, { parse_mode: "Markdown" });
-      } catch (err) {
-        getLogger().warn("Telegram markdown send failed; retrying chunk as plain text", {
-          chatId,
-          error: err instanceof Error ? err.message : String(err),
-        });
-        await this.bot.api.sendMessage(id, chunk);
+    return this.enqueueSend(chatId, async () => {
+      // Chunk BEFORE sending so the plain-text fallback also operates on an
+      // already-bounded chunk — otherwise an oversized answer throws "too long"
+      // on the Markdown send AND again on the fallback, dropping the whole reply.
+      for (const chunk of chunkTelegramMessage(markdown)) {
+        try {
+          await this.sendChunkWithRetry(id, chunk, { parse_mode: "Markdown" });
+        } catch (err) {
+          getLogger().warn("Telegram markdown send failed; retrying chunk as plain text", {
+            chatId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          await this.sendChunkWithRetry(id, chunk);
+        }
       }
-    }
+    });
   }
 
   async sendTypingIndicator(chatId: string): Promise<void> {
@@ -278,15 +372,17 @@ export class TelegramChannel implements IChannelAdapter {
     // Store full diff for "view full" functionality
     const fullDiff = formatDiffForTelegram(diff, { maxLines: 500 });
 
-    // Build message
+    // Build message. The body is sent with parse_mode MarkdownV2, so caller-supplied
+    // text MUST be escaped — an unescaped '.', '-', '(', etc. (ubiquitous in labels
+    // like "Apply changes (3 files)" or "Update foo.ts") would 400 the whole send.
     let message = "";
     if (isDestructive) {
       message += "⚠️ *Destructive Operation*\n\n";
     }
     if (contextMessage) {
-      message += `${contextMessage}\n\n`;
+      message += `${escapeMarkdownV2(contextMessage)}\n\n`;
     }
-    message += `*${operation}*\n\n`;
+    message += `*${escapeMarkdownV2(operation)}*\n\n`;
     message += formattedDiff;
 
     // Create inline keyboard with diff-specific actions
@@ -351,15 +447,16 @@ export class TelegramChannel implements IChannelAdapter {
       maxLines: maxPreviewLines,
     });
 
-    // Build message
+    // Build message. Sent with parse_mode MarkdownV2 — escape caller-supplied text
+    // so MarkdownV2 special chars don't 400 the send (see requestDiffConfirmation).
     let message = "";
     if (isDestructive) {
       message += "⚠️ *Batch Operation*\n\n";
     }
     if (contextMessage) {
-      message += `${contextMessage}\n\n`;
+      message += `${escapeMarkdownV2(contextMessage)}\n\n`;
     }
-    message += `*${operation}*\n\n`;
+    message += `*${escapeMarkdownV2(operation)}*\n\n`;
     message += formattedBatch;
 
     // For batches, add options to view individual files
@@ -649,7 +746,12 @@ export class TelegramChannel implements IChannelAdapter {
         pending.resolve(true);
         await ctx.answerCallbackQuery({ text: "✅ Approved" });
         await ctx.editMessageReplyMarkup({ reply_markup: new InlineKeyboard() });
-        await ctx.editMessageText(`✅ *${pending.operation}* approved\.`);
+        // The body uses MarkdownV2 markup ('*...*' and an escaped '.'), so it must
+        // be edited with parse_mode MarkdownV2; operation is caller-supplied and
+        // escaped so its special chars don't break the parse.
+        await ctx.editMessageText(`✅ *${escapeMarkdownV2(pending.operation ?? "Operation")}* approved\\.`, {
+          parse_mode: "MarkdownV2",
+        });
         break;
 
       case "reject":
@@ -658,7 +760,9 @@ export class TelegramChannel implements IChannelAdapter {
         pending.resolve(false);
         await ctx.answerCallbackQuery({ text: "❌ Rejected" });
         await ctx.editMessageReplyMarkup({ reply_markup: new InlineKeyboard() });
-        await ctx.editMessageText(`❌ *${pending.operation}* rejected\.`);
+        await ctx.editMessageText(`❌ *${escapeMarkdownV2(pending.operation ?? "Operation")}* rejected\\.`, {
+          parse_mode: "MarkdownV2",
+        });
         break;
 
       case "view_full":

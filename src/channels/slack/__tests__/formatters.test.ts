@@ -50,6 +50,14 @@ describe("Slack Formatters", () => {
       expect(result).toContain("```");
       expect(result).toContain("code");
     });
+
+    it("escapes literal angle brackets and ampersands so content can't inject mrkdwn control syntax", () => {
+      const result = formatToSlackMrkdwn("a <b> & c");
+      // The raw < > & are neutralized; no unescaped control characters remain.
+      expect(result).toContain("&lt;b&gt;");
+      expect(result).toContain("&amp;");
+      expect(result).not.toContain("<b>");
+    });
   });
 
   describe("truncateForSlack", () => {

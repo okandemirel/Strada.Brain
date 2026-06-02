@@ -67,13 +67,29 @@ export function createHelpBlocks(botName = "Strada Brain"): KnownBlock[] {
   ];
 }
 
+/** Heuristic: classify an option label as positive/negative for button styling. */
+function classifyOptionStyle(option: string): "primary" | "danger" | undefined {
+  const normalized = option.trim().toLowerCase();
+  if (/^(yes|approve|confirm|accept|ok|okay|allow|proceed|continue)\b/.test(normalized)) {
+    return "primary";
+  }
+  if (/^(no|deny|reject|cancel|decline|abort|stop)\b/.test(normalized)) {
+    return "danger";
+  }
+  return undefined;
+}
+
 /**
- * Create confirmation blocks with approve/deny buttons.
+ * Create confirmation blocks. One button is rendered per caller-supplied option,
+ * each carrying the exact option string as its value so the action handler can
+ * resolve with the precise label the user selected (honoring the cross-channel
+ * `requestConfirmation` contract instead of a hardcoded approve/deny pair).
  */
 export function createConfirmationBlocks(
   question: string,
   details: string | undefined,
-  actionIdPrefix: string
+  actionIdPrefix: string,
+  options: string[] = ["Approve", "Deny"]
 ): KnownBlock[] {
   const blocks: KnownBlock[] = [
     {
@@ -97,32 +113,30 @@ ${escapeMarkdown(details.substring(0, 2900))}${details.length > 2900 ? "..." : "
     } as SectionBlock);
   }
 
+  // Slack allows at most 25 elements per actions block; one button per option.
+  const elements: Button[] = options.slice(0, 25).map((option, index) => {
+    const style = classifyOptionStyle(option);
+    const button: Button = {
+      type: "button",
+      text: {
+        type: "plain_text",
+        // Button text is capped at 75 chars by Slack.
+        text: option.substring(0, 75),
+        emoji: true,
+      },
+      // The value carries the exact option string so the handler resolves with it.
+      value: option,
+      // Suffix with the index so the shared prefix stays recoverable regardless of
+      // arbitrary option labels (which may themselves contain underscores).
+      action_id: `${actionIdPrefix}_opt${index}`,
+    };
+    if (style) button.style = style;
+    return button;
+  });
+
   blocks.push({
     type: "actions",
-    elements: [
-      {
-        type: "button",
-        text: {
-          type: "plain_text",
-          text: "✅ Approve",
-          emoji: true,
-        },
-        style: "primary",
-        value: "approve",
-        action_id: `${actionIdPrefix}_approve`,
-      } as Button,
-      {
-        type: "button",
-        text: {
-          type: "plain_text",
-          text: "❌ Deny",
-          emoji: true,
-        },
-        style: "danger",
-        value: "deny",
-        action_id: `${actionIdPrefix}_deny`,
-      } as Button,
-    ],
+    elements,
   } as ActionsBlock);
 
   return blocks;

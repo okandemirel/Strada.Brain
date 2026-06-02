@@ -57,6 +57,9 @@ export class DiscordRateLimiter {
   private readonly queue: Array<() => void> = [];
   private processing = false;
   private consecutiveErrors = 0;
+  /** Pending cooldown refill timer, tracked so it can be cleared on dispose. */
+  private cooldownTimer: ReturnType<typeof setTimeout> | null = null;
+  private disposed = false;
 
   constructor(config?: Partial<RateLimitConfig>) {
     this.config = { ...DEFAULT_CONFIG, ...config };
@@ -106,12 +109,38 @@ export class DiscordRateLimiter {
     // Drain tokens to force a wait
     this.tokens = 0;
 
-    // Schedule token refill after cooldown
-    setTimeout(() => {
+    // Schedule token refill after cooldown. Track the handle so dispose() can
+    // clear it — otherwise a long retryAfter keeps the event loop alive and can
+    // fire against a destroyed client after disconnect.
+    if (this.cooldownTimer) {
+      clearTimeout(this.cooldownTimer);
+    }
+    this.cooldownTimer = setTimeout(() => {
+      this.cooldownTimer = null;
+      if (this.disposed) return;
       this.tokens = this.config.burstSize;
       this.consecutiveErrors = Math.max(0, this.consecutiveErrors - 1);
       void this.processQueue();
     }, cooldown);
+  }
+
+  /**
+   * Dispose the rate limiter: clear the pending cooldown timer and flush any
+   * queued acquire() waiters so callers awaiting permission do not hang after
+   * the channel disconnects.
+   */
+  dispose(): void {
+    this.disposed = true;
+    if (this.cooldownTimer) {
+      clearTimeout(this.cooldownTimer);
+      this.cooldownTimer = null;
+    }
+    // Resolve every queued waiter so awaiting sends settle (they will then fail
+    // fast against the destroyed client rather than blocking the event loop).
+    const waiters = this.queue.splice(0, this.queue.length);
+    for (const resolve of waiters) {
+      resolve();
+    }
   }
 
   /**

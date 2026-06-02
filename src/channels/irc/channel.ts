@@ -33,14 +33,24 @@ export class IRCChannel implements IChannelAdapter {
   private feedbackReactionCallback: FeedbackReactionCallback | null = null;
   /** Per-chatId applied instinct IDs for feedback attribution. */
   private readonly appliedInstinctIds = new Map<string, string[]>();
+  /**
+   * Allowlist lowercased once at construction. IRC nicks are case-insensitive
+   * (RFC 2812; the underlying lib compares nicks via toUpperCase()), so the
+   * exact-case Set lookup in isAllowedBySingleIdPolicy would otherwise reject a
+   * legitimate nick — or let allowlist enforcement be bypassed — on mere case
+   * difference. Normalize both the stored allowlist and the inbound nick.
+   */
+  private readonly normalizedAllowedUsers: readonly string[];
 
   constructor(
     private readonly server: string,
     private readonly nick: string,
     private readonly channels: string[],
-    private readonly allowedUsers: readonly string[] = [],
+    allowedUsers: readonly string[] = [],
     private readonly allowOpenAccess: boolean = false,
-  ) {}
+  ) {
+    this.normalizedAllowedUsers = allowedUsers.map((u) => u.toLowerCase());
+  }
 
   onMessage(handler: MessageHandler): void {
     this.handler = handler;
@@ -73,14 +83,22 @@ export class IRCChannel implements IChannelAdapter {
 
     this.client.addListener("message", ((...args: unknown[]) => {
       const [from, to, text] = args as [string, string, string];
-      // Only respond to messages directed at the bot (mention or PM)
-      const isDirectMessage = to === this.nick;
-      const isMention = text.startsWith(`${this.nick}:`);
+      // Only respond to messages directed at the bot (mention or PM). IRC nicks
+      // are case-insensitive (RFC 2812), so compare case-insensitively: the
+      // server may echo the nick in a different case than configured, which
+      // would otherwise drop legitimate PMs and channel mentions.
+      const isDirectMessage = to.toLowerCase() === this.nick.toLowerCase();
+      // IRC has no protocol-level mentions; addressing the bot is convention.
+      // Recognise the common highlight forms 'nick:', 'nick,', and 'nick '
+      // case-insensitively, and strip the matched prefix.
+      const mentionMatch = isDirectMessage ? null : text.match(IRCChannel.buildMentionRegex(this.nick));
+      const isMention = mentionMatch !== null;
 
       if (!isDirectMessage && !isMention) return;
       if (!this.isAllowedInboundUser(from)) return;
 
-      const cleanText = limitIncomingText((isMention ? text.slice(this.nick.length + 1).trim() : text).slice(0, 4096));
+      const stripped = mentionMatch ? text.slice(mentionMatch[0].length).trim() : text;
+      const cleanText = limitIncomingText(stripped.slice(0, 4096));
       const chatId = isDirectMessage ? from : to;
 
       // Feedback detection — intercept standalone emoji or !feedback commands
@@ -144,8 +162,13 @@ export class IRCChannel implements IChannelAdapter {
 
   async disconnect(): Promise<void> {
     this.healthy = false;
-    if (this.client) {
-      this.client.disconnect("Shutting down", () => {});
+    const client = this.client;
+    if (client) {
+      // Remove the listeners added in connect() and drop the client reference so
+      // a subsequent connect() can't double-register handlers on a stale client.
+      client.disconnect("Shutting down", () => {});
+      client.removeAllListeners?.();
+      this.client = null;
     }
   }
 
@@ -155,7 +178,13 @@ export class IRCChannel implements IChannelAdapter {
 
   async sendText(chatId: string, text: string): Promise<void> {
     const client = this.client;
-    if (!client) return;
+    // client.say() in node-irc is fire-and-forget: send() silently skips the
+    // socket write when the link is unavailable and never throws, so a "success"
+    // here would otherwise mask total non-delivery. Gate on the connection being
+    // live and surface a failure to the caller (which can retry) when it is not.
+    if (!client || !this.healthy) {
+      throw new Error("IRC link down: cannot send message (not connected)");
+    }
     // IRC enforces a ~512-byte line limit (incl. the PRIVMSG framing + CRLF), so
     // SPLIT — never truncate — each logical line into byte-bounded chunks. The
     // previous `line.slice(0, 450)` silently dropped everything past 450 chars.
@@ -169,6 +198,17 @@ export class IRCChannel implements IChannelAdapter {
 
   /** IRC's 512-byte line limit minus headroom for PRIVMSG framing + CRLF. */
   private static readonly IRC_MAX_BYTES = 400;
+
+  /**
+   * Build a case-insensitive regex matching the leading "nick" highlight prefix
+   * in a channel message. Recognises the conventional separators ':' , ',' or a
+   * bare space (e.g. 'nick: hi', 'nick, hi', 'NICK hi'). The nick is escaped so
+   * regex metacharacters in a nick (IRC allows e.g. []\\`^{}|) are literal.
+   */
+  private static buildMentionRegex(nick: string): RegExp {
+    const escaped = nick.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return new RegExp(`^\\s*${escaped}\\s*[:,]?\\s+`, "i");
+  }
 
   /**
    * Split one logical line into IRC-safe chunks, each within the UTF-8 byte
@@ -206,8 +246,8 @@ export class IRCChannel implements IChannelAdapter {
 
   private isAllowedInboundUser(userId: string): boolean {
     return isAllowedBySingleIdPolicy(
-      userId,
-      this.allowedUsers,
+      userId.toLowerCase(),
+      this.normalizedAllowedUsers,
       this.allowOpenAccess ? "open" : "closed",
     );
   }
@@ -216,6 +256,7 @@ export class IRCChannel implements IChannelAdapter {
 // Minimal type stubs
 interface IRCClientLike {
   addListener(event: string, handler: (...args: unknown[]) => void): void;
+  removeAllListeners?(): void;
   say(target: string, message: string): void;
   disconnect(message: string, callback: () => void): void;
 }

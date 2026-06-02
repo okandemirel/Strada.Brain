@@ -261,7 +261,7 @@ export function formatCompactSummary(
 
 // ─── Escaping & Coloring ─────────────────────────────────────────────────────
 
-function escapeMarkdownV2(text: string): string {
+export function escapeMarkdownV2(text: string): string {
   // Single pass over the FULL MarkdownV2 special-char set (backslash FIRST so it's
   // escaped exactly once). The old two-pass form re-doubled the backslashes it had
   // just inserted (e.g. "*" → "\\*" with a raw "*") and omitted "." and "!", both
@@ -270,7 +270,11 @@ function escapeMarkdownV2(text: string): string {
 }
 
 function escapeCodeBlock(text: string): string {
-  return text.replace(/`/g, "\\`").replace(/\\/g, "\\\\");
+  // Escape backslashes FIRST, then backticks — same ordering as escapeMarkdownV2.
+  // The old order ('`' → '\`', then '\' → '\\') re-doubled the backslash it had
+  // just inserted, rendering a literal backslash before each backtick in the
+  // Telegram code block and mangling any genuine backslash in the diff.
+  return text.replace(/\\/g, "\\\\").replace(/`/g, "\\`");
 }
 
 function colorizeDiff(diff: string): string {

@@ -177,6 +177,12 @@ export class WebChannel
   private wss: WebSocketServer | null = null;
   private handler: MessageHandler | null = null;
   private healthy = false;
+  /**
+   * Set true at the start of disconnect() so the asynchronous ws 'close'/'error'
+   * events (which the real ws library fires AFTER disconnect() returns) cannot
+   * repopulate per-instance maps (e.g. recentlyDisconnected) after teardown.
+   */
+  private shuttingDown = false;
   private clients = new Map<string, WsClient>();
   private pendingConfirmations = new Map<string, PendingConfirmation>();
   /** Recently disconnected chatIds eligible for reconnect (5 min TTL) */
@@ -498,6 +504,11 @@ export class WebChannel
 
   async disconnect(): Promise<void> {
     this.healthy = false;
+    // Signal teardown BEFORE closing sockets so the async ws 'close'/'error'
+    // events (which fire after this method returns with the real ws library)
+    // early-return in handleDisconnect instead of repopulating recentlyDisconnected
+    // (and other per-instance maps) after they have been cleared below.
+    this.shuttingDown = true;
 
     if (this._reconnectCleanupInterval) {
       clearInterval(this._reconnectCleanupInterval);
@@ -628,7 +639,10 @@ export class WebChannel
   }
 
   sendTypingStop(chatId: string): void {
-    this.sendToClient(chatId, { type: "typing", active: false, messageId: "" });
+    // Mirror sendTypingIndicator's shape exactly (apart from the active flag);
+    // the previous `messageId: ""` was meaningless noise and a latent footgun
+    // for any client that dedupes/routes off messageId.
+    this.sendToClient(chatId, { type: "typing", active: false });
   }
 
   async sendAttachment(chatId: string, attachment: Attachment): Promise<void> {
@@ -642,13 +656,25 @@ export class WebChannel
   async requestConfirmation(req: ConfirmationRequest): Promise<string> {
     const confirmId = randomUUID();
 
-    this.sendToClient(req.chatId, {
+    const delivered = this.sendToClient(req.chatId, {
       type: "confirmation",
       confirmId,
       question: req.question,
       options: req.options,
       details: req.details,
     });
+
+    // If there is no live socket the confirmation prompt was never delivered;
+    // registering a 5-minute pending entry would block the awaiting orchestrator
+    // for the full timeout with no way for the (absent) user to respond. Resolve
+    // immediately with the non-approving "timeout" sentinel that callers already
+    // treat as "do not proceed".
+    if (!delivered) {
+      getLoggerSafe().debug("requestConfirmation: no live client; resolving as timeout", {
+        chatId: req.chatId,
+      });
+      return "timeout";
+    }
 
     return new Promise<string>((done) => {
       const timer = setTimeout(
@@ -856,6 +882,9 @@ export class WebChannel
     });
 
     const handleDisconnect = () => {
+      // During shutdown the maps have already been cleared by disconnect();
+      // skip so a late async 'close'/'error' can't repopulate recentlyDisconnected.
+      if (this.shuttingDown) return;
       const current = this.clients.get(chatId);
       if (current && current.ws === ws) {
         this.clients.delete(chatId);
@@ -1036,7 +1065,21 @@ export class WebChannel
             const mimeType = normalizeMimeType(raw.mimeType || raw.type); // Frontend sends "type", normalize to mimeType
             if (!raw.name || !mimeType) continue;
             const buf = typeof raw.data === "string" ? Buffer.from(raw.data, "base64") : undefined;
-            const size = buf?.length ?? raw.size ?? 0;
+
+            // Require decodable bytes for every non-URL attachment. An object
+            // declaring name/mimeType with no `data` field would otherwise fall
+            // back to a client-claimed `raw.size` and skip the magic-byte check,
+            // letting an unvalidated/spoofed attachment through. Derive size
+            // ONLY from the decoded bytes — never trust raw.size.
+            if (!buf || buf.length === 0) {
+              this.sendToClient(chatId, {
+                type: "text",
+                text: `File "${raw.name || 'attachment'}" was rejected: unsupported format or invalid content.`,
+                messageId: randomUUID(),
+              });
+              continue;
+            }
+            const size = buf.length;
 
             // Validate before accepting
             const attachType = mimeType.startsWith("image/") ? "image"
@@ -1051,7 +1094,7 @@ export class WebChannel
               });
               continue;
             }
-            if (buf && !validateMagicBytes(buf, mimeType)) {
+            if (!validateMagicBytes(buf, mimeType)) {
               this.sendToClient(chatId, {
                 type: "text",
                 text: `File "${raw.name || 'attachment'}" was rejected: unsupported format or invalid content.`,
@@ -1586,17 +1629,34 @@ export class WebChannel
           verdict,
           noteLength: note.length,
         });
-        // TODO: Integrate with src/supervisor/supervisor-verification.ts when reachable
-        // from this context. For MVP we acknowledge receipt so the frontend state
-        // transitions out of the pending banner.
+        // Forward the operator's verdict onto the workspace bus so the supervisor
+        // verification subsystem (src/supervisor/supervisor-verification.ts) can
+        // resolve the pending gate by taskId and apply it. The wiring of that
+        // consumer lives outside this channel; when no consumer is attached the
+        // decision is NOT enforced, so we must not pretend it was.
+        const gateForwarded = Boolean(this.workspaceBusEmitter);
+        if (this.workspaceBusEmitter) {
+          this.workspaceBusEmitter("verify:gate_decision", {
+            type: "verify:gate_decision",
+            taskId: safeTaskId,
+            verdict,
+            note,
+          });
+        }
         this.sendToClient(chatId, {
           type: "verify:gate_ack",
           taskId: safeTaskId,
-          // Only an explicit "approve" verdict is an acceptance — "request_changes"
-          // and "escalate" must surface as a non-green banner so operators aren't
-          // misled into thinking an escalation was auto-approved.
-          accepted: verdict === "approve",
+          // Only an explicit "approve" verdict that was actually forwarded for
+          // enforcement is an acceptance — "request_changes"/"escalate" must
+          // surface as a non-green banner, and an unforwarded decision must NOT
+          // clear the pending banner as if it took effect.
+          accepted: gateForwarded && verdict === "approve",
           supervisorVerdict: verdict,
+          // Tells the frontend whether the verdict was actually routed for
+          // enforcement; when false the pending gate is unresolved (no consumer
+          // wired) and the UI should keep an explicit "not yet enforced" state
+          // rather than transitioning out of the pending banner.
+          enforced: gateForwarded,
         });
         break;
       }
@@ -1686,15 +1746,22 @@ export class WebChannel
   // Helpers
   // ===========================================================================
 
-  private sendToClient(chatId: string, data: Record<string, unknown>): void {
+  /**
+   * Send a JSON frame to the connected client for `chatId`.
+   * Returns `false` when no live socket is available (client gone, never
+   * connected, or socket not OPEN) so callers that need a delivery guarantee
+   * — e.g. requestConfirmation — can react instead of silently blocking.
+   */
+  private sendToClient(chatId: string, data: Record<string, unknown>): boolean {
     const client = this.clients.get(chatId);
     if (!client || client.ws.readyState !== 1) {
       if (!client) {
         getLoggerSafe().debug("sendToClient: no active WS client for chatId, response may be lost", { chatId, type: data.type });
       }
-      return;
+      return false;
     }
     this.sendJson(client.ws, data);
+    return true;
   }
 
   private sendJson(ws: WebSocket, data: Record<string, unknown>): void {
@@ -1888,6 +1955,27 @@ export class WebChannel
   }
 
   /**
+   * Gate for read-only (GET) proxy requests. Rejects only when a browser
+   * supplies an Origin/Referer header that is NOT an allowed origin — blocking
+   * cross-origin GETs from a hostile same-browser page while still allowing the
+   * header-less non-browser case (e.g. curl, server-to-server reads).
+   */
+  private isAllowedGetProxyRequest(req: HttpReq): boolean {
+    const origin = this.getSingleHeader(req.headers.origin);
+    if (origin !== undefined) {
+      return isAllowedOrigin(origin);
+    }
+
+    const referer = this.getSingleHeader(req.headers.referer);
+    if (referer !== undefined) {
+      return isAllowedOrigin(referer);
+    }
+
+    // No Origin/Referer header — not a browser cross-origin request; allow.
+    return true;
+  }
+
+  /**
    * Proxy /api/* requests to the dashboard server (same-origin solution).
    * GET is allowed for all allowlisted paths; POST/DELETE only for mutable paths.
    */
@@ -1922,6 +2010,17 @@ export class WebChannel
     }
 
     if (method !== "GET" && !this.isTrustedMutableProxyRequest(req)) {
+      res.writeHead(403, { ...WebChannel.SECURITY_HEADERS, "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Forbidden" }));
+      return;
+    }
+
+    // GET requests are read-only but still browser-reachable, so a cross-origin
+    // page could trigger them (CSRF-style). When an Origin/Referer header IS
+    // present it must be an allowed origin; the genuinely header-less case
+    // (non-browser clients like curl) is still permitted so server-to-server
+    // reads keep working.
+    if (method === "GET" && !this.isAllowedGetProxyRequest(req)) {
       res.writeHead(403, { ...WebChannel.SECURITY_HEADERS, "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: "Forbidden" }));
       return;

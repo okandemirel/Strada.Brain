@@ -19,7 +19,8 @@ import { getLogger } from "../../utils/logger.js";
 import { SlackRateLimiter, StreamingRateLimiter } from "./rate-limiter.js";
 import { registerSlashCommands } from "./commands.js";
 import { createConfirmationBlocks, createStreamingBlock, splitLongText } from "./blocks.js";
-import { formatToSlackMrkdwn, truncateForSlack } from "./formatters.js";
+import { formatToSlackMrkdwn, truncateForSlack, escapeSlackText } from "./formatters.js";
+import { chunkText } from "../chunk-text.js";
 import { sanitizeError } from "../../security/secret-sanitizer.js";
 import { downloadMedia, mimeToAttachmentType, validateMediaAttachment, validateMagicBytes } from "../../utils/media-processor.js";
 import { isAllowedBySingleIdPolicy } from "../../security/access-policy.js";
@@ -29,6 +30,8 @@ interface SlackConfig {
   signingSecret: string;
   appToken?: string;
   socketMode?: boolean;
+  /** HTTP port for non-socket (HTTP receiver) mode. Defaults to 3000. */
+  port?: number;
   allowedWorkspaces?: string[];
   allowedUserIds?: string[];
 }
@@ -39,6 +42,10 @@ interface PendingConfirmation {
   timestamp: number;
   chatId: string;
   userId?: string;
+  /** Caller-supplied option labels; the resolved value must be one of these. */
+  options: string[];
+  /** Handle for the timeout timer so it can be cleared once answered/disconnected. */
+  timeout?: ReturnType<typeof setTimeout>;
 }
 
 interface StreamingMessage {
@@ -103,6 +110,10 @@ const MAX_RETRY_DELAY_MS = 30000;
 const QUEUE_PROCESS_INTERVAL_MS = 50;
 const RATE_LIMIT_BACKOFF_MS = 5000;
 const MESSAGE_BATCH_SIZE = 5;
+// Slack's chat.postMessage text limit is ~40000 chars; stay conservatively under
+// it so oversized assistant text is split into continuation messages rather than
+// silently truncated (the tail dropped).
+const MAX_SLACK_TEXT_CHUNK = 39000;
 
 /** Callback for feedback reactions (thumbs up/down) from channel adapters. */
 type FeedbackReactionCallback = (
@@ -145,6 +156,11 @@ export class SlackChannel implements IChannelAdapter {
   private healthCheckInterval: ReturnType<typeof setInterval> | null = null;
   private botUserId: string | null = null;
 
+  // Bounded de-dup of processed reaction events (keyed by user:item:reaction) so a
+  // toggled-off-and-on reaction or a redelivered event does not re-fire feedback.
+  private readonly seenReactions = new Set<string>();
+  private static readonly MAX_SEEN_REACTIONS = 500;
+
   constructor(config: SlackConfig) {
     this.config = config;
     this.rateLimiter = new SlackRateLimiter();
@@ -164,7 +180,9 @@ export class SlackChannel implements IChannelAdapter {
         signingSecret: this.config.signingSecret,
         appToken: this.config.appToken,
         socketMode: this.config.socketMode ?? true,
-        port: this.config.socketMode ? undefined : 3000,
+        // In HTTP receiver mode the port is configurable (defaults to 3000);
+        // socket mode does not bind an HTTP port.
+        port: this.config.socketMode ?? true ? undefined : (this.config.port ?? 3000),
       });
 
       this.registerEventHandlers();
@@ -216,10 +234,13 @@ export class SlackChannel implements IChannelAdapter {
       this.healthCheckInterval = null;
     }
 
-    // Clean up pending confirmations
+    // Clean up pending confirmations. Clear each timeout timer so the 5-minute
+    // setTimeout does not keep firing (and keeping the event loop alive) after the
+    // promise has already been rejected.
     const pendingConfirmations = Array.from(this.pendingConfirmations.entries());
     this.pendingConfirmations.clear();
     for (const [, pending] of pendingConfirmations) {
+      if (pending.timeout) clearTimeout(pending.timeout);
       pending.reject(new Error("Channel disconnected"));
     }
 
@@ -372,22 +393,34 @@ export class SlackChannel implements IChannelAdapter {
     if (!this.app?.client) throw new Error("Slack client not initialized");
 
     switch (msg.type) {
-      case "text":
-        await this.rateLimiter.acquire("chat.postMessage", 1);
-        await this.app.client.chat.postMessage({
-          channel: msg.channelId,
-          text: truncateForSlack(msg.content!),
-        });
+      case "text": {
+        // Split oversized text into multiple messages instead of truncating and
+        // dropping the tail; send each non-empty chunk in order.
+        const chunks = chunkText(msg.content ?? "", MAX_SLACK_TEXT_CHUNK);
+        for (const chunk of chunks) {
+          if (!chunk) continue;
+          await this.rateLimiter.acquire("chat.postMessage", 1);
+          await this.app.client.chat.postMessage({
+            channel: msg.channelId,
+            text: chunk,
+          });
+        }
         break;
+      }
 
-      case "markdown":
-        await this.rateLimiter.acquire("chat.postMessage", 1);
-        await this.app.client.chat.postMessage({
-          channel: msg.channelId,
-          text: truncateForSlack(msg.content!),
-          mrkdwn: true,
-        });
+      case "markdown": {
+        const chunks = chunkText(msg.content ?? "", MAX_SLACK_TEXT_CHUNK);
+        for (const chunk of chunks) {
+          if (!chunk) continue;
+          await this.rateLimiter.acquire("chat.postMessage", 1);
+          await this.app.client.chat.postMessage({
+            channel: msg.channelId,
+            text: chunk,
+            mrkdwn: true,
+          });
+        }
         break;
+      }
 
       case "blocks":
         await this.rateLimiter.acquire("chat.postMessage", 1);
@@ -465,6 +498,32 @@ export class SlackChannel implements IChannelAdapter {
     return null;
   }
 
+  /**
+   * Run a Slack API call that bypasses the message queue (confirmations,
+   * streaming) with the same 429 handling the queue uses: on a rate-limit error
+   * wait the server-provided (or default) backoff and retry, up to MAX_RETRIES.
+   * Non-rate-limit errors propagate immediately.
+   */
+  private async callWithRateLimitRetry<T>(fn: () => Promise<T>): Promise<T> {
+    let attempt = 0;
+    for (;;) {
+      try {
+        return await fn();
+      } catch (error) {
+        if (!this.isRateLimitError(error) || attempt >= MAX_RETRIES) {
+          throw error;
+        }
+        attempt++;
+        const delay = this.extractRetryAfter(error) ?? RATE_LIMIT_BACKOFF_MS;
+        this.logger.warn("Slack rate limited (out-of-queue call), retrying", {
+          retryAfter: delay,
+          attempt,
+        });
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    }
+  }
+
   // ---- Public API ----
 
   async sendText(chatId: string, text: string): Promise<void> {
@@ -512,14 +571,17 @@ export class SlackChannel implements IChannelAdapter {
     if (!this.app?.client) throw new Error("Slack client not initialized");
 
     const actionIdPrefix = `confirm_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
-    const blocks = createConfirmationBlocks(req.question, req.details, actionIdPrefix);
+    const options =
+      req.options && req.options.length > 0 ? req.options : ["Approve", "Deny"];
+    const blocks = createConfirmationBlocks(req.question, req.details, actionIdPrefix, options);
 
-    await this.rateLimiter.acquire("chat.postMessage", 1);
-
-    const result = await this.app.client.chat.postMessage({
-      channel: req.chatId,
-      blocks,
-      text: `Confirmation required: ${req.question}`,
+    const result = await this.callWithRateLimitRetry(async () => {
+      await this.rateLimiter.acquire("chat.postMessage", 1);
+      return this.app!.client.chat.postMessage({
+        channel: req.chatId,
+        blocks,
+        text: `Confirmation required: ${req.question}`,
+      });
     });
 
     if (!result.ts) throw new Error("Failed to send confirmation message");
@@ -531,16 +593,20 @@ export class SlackChannel implements IChannelAdapter {
         timestamp: Date.now(),
         chatId: req.chatId,
         userId: req.userId,
+        options,
       };
 
-      this.pendingConfirmations.set(actionIdPrefix, confirmation);
-
-      setTimeout(() => {
+      // Capture the timer handle so it can be cleared once the button is clicked or
+      // the channel disconnects — otherwise it always fires after the timeout and
+      // the unref'd timers accumulate, keeping the event loop alive.
+      confirmation.timeout = setTimeout(() => {
         if (this.pendingConfirmations.has(actionIdPrefix)) {
           this.pendingConfirmations.delete(actionIdPrefix);
           resolve("timeout");
         }
       }, this.CONFIRMATION_TIMEOUT_MS);
+
+      this.pendingConfirmations.set(actionIdPrefix, confirmation);
     });
   }
 
@@ -585,12 +651,13 @@ export class SlackChannel implements IChannelAdapter {
 
     const streamId = `stream_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
 
-    await this.rateLimiter.acquire("chat.postMessage", 1);
-
-    const result = await this.app.client.chat.postMessage({
-      channel: chatId,
-      blocks: createStreamingBlock("⏳ Thinking..."),
-      text: "⏳ Thinking...",
+    const result = await this.callWithRateLimitRetry(async () => {
+      await this.rateLimiter.acquire("chat.postMessage", 1);
+      return this.app!.client.chat.postMessage({
+        channel: chatId,
+        blocks: createStreamingBlock("⏳ Thinking..."),
+        text: "⏳ Thinking...",
+      });
     });
 
     if (!result.ts) throw new Error("Failed to start streaming message");
@@ -624,12 +691,14 @@ export class SlackChannel implements IChannelAdapter {
     stream.accumulatedText = accumulatedText;
 
     try {
-      await this.app.client.chat.update({
-        channel: stream.channelId,
-        ts: stream.messageTs,
-        blocks: createStreamingBlock(accumulatedText),
-        text: accumulatedText.substring(0, 100) || "Streaming...",
-      });
+      await this.callWithRateLimitRetry(() =>
+        this.app!.client.chat.update({
+          channel: stream.channelId,
+          ts: stream.messageTs,
+          blocks: createStreamingBlock(accumulatedText),
+          text: accumulatedText.substring(0, 100) || "Streaming...",
+        }),
+      );
     } catch (error) {
       this.logger.warn("Failed to update streaming message", {
         error: sanitizeError(error),
@@ -655,24 +724,28 @@ export class SlackChannel implements IChannelAdapter {
     const chunks = splitLongText(formattedText, 2900);
 
     try {
-      await this.app.client.chat.update({
-        channel: stream.channelId,
-        ts: stream.messageTs,
-        text: chunks[0] || finalText.substring(0, 2900),
-        blocks: undefined,
-      });
+      await this.callWithRateLimitRetry(() =>
+        this.app!.client.chat.update({
+          channel: stream.channelId,
+          ts: stream.messageTs,
+          text: chunks[0] || finalText.substring(0, 2900),
+          blocks: undefined,
+        }),
+      );
 
       for (let i = 1; i < chunks.length; i++) {
         const text = chunks[i] ?? "";
         // Isolate each chunk: one failed thread post must not drop the remaining
         // chunks (the loop previously aborted on the first failure).
         try {
-          await this.rateLimiter.acquire("chat.postMessage", 1);
-          await this.app.client.chat.postMessage({
-            channel: stream.channelId,
-            thread_ts: stream.messageTs,
-            text,
-            attachments: [],
+          await this.callWithRateLimitRetry(async () => {
+            await this.rateLimiter.acquire("chat.postMessage", 1);
+            return this.app!.client.chat.postMessage({
+              channel: stream.channelId,
+              thread_ts: stream.messageTs,
+              text,
+              attachments: [],
+            });
           });
         } catch (chunkError) {
           this.logger.error("Failed to post streaming message chunk", {
@@ -699,6 +772,15 @@ export class SlackChannel implements IChannelAdapter {
   }
 
   // ---- Private Methods ----
+
+  /** Record a processed reaction key, evicting the oldest when over the cap. */
+  private rememberReaction(key: string): void {
+    this.seenReactions.add(key);
+    if (this.seenReactions.size > SlackChannel.MAX_SEEN_REACTIONS) {
+      const oldest = this.seenReactions.values().next().value;
+      if (oldest !== undefined) this.seenReactions.delete(oldest);
+    }
+  }
 
   private async refreshBotUserId(): Promise<void> {
     if (!this.app?.client) return;
@@ -734,7 +816,10 @@ export class SlackChannel implements IChannelAdapter {
         const actionId = (action as { action_id: string }).action_id;
         const value = (action as { value: string }).value;
 
-        const prefix = actionId.replace(/_(approve|deny)$/, "");
+        // action_id is `${prefix}_opt<index>`; strip the suffix to recover the
+        // shared prefix (option labels may contain underscores, so the index
+        // suffix keeps the prefix unambiguous).
+        const prefix = actionId.replace(/_opt\d+$/, "");
         const pending = this.pendingConfirmations.get(prefix);
 
         if (pending) {
@@ -758,7 +843,14 @@ export class SlackChannel implements IChannelAdapter {
           }
 
           this.pendingConfirmations.delete(prefix);
-          pending.resolve(value === "approve" ? "approve" : "deny");
+          if (pending.timeout) clearTimeout(pending.timeout);
+
+          // Resolve with the exact option string the user selected (honoring the
+          // requestConfirmation contract). Fall back to the first option if Slack
+          // ever delivers an unexpected value.
+          const selected =
+            pending.options.includes(value) ? value : (pending.options[0] ?? value);
+          pending.resolve(selected);
 
           if (this.app?.client && "channel" in body && "message" in body) {
             const channelId = (body as { channel: { id: string } }).channel.id;
@@ -767,16 +859,13 @@ export class SlackChannel implements IChannelAdapter {
             await this.app.client.chat.update({
               channel: channelId,
               ts,
-              text: value === "approve" ? "✅ Approved" : "❌ Denied",
+              text: `Selected: ${selected}`,
               blocks: [
                 {
                   type: "section",
                   text: {
                     type: "mrkdwn",
-                    text:
-                      value === "approve"
-                        ? "✅ *Approved* - The operation will proceed."
-                        : "❌ *Denied* - The operation was cancelled.",
+                    text: `✅ *Selected:* ${escapeSlackText(selected)}`,
                   },
                 },
               ],
@@ -795,6 +884,9 @@ export class SlackChannel implements IChannelAdapter {
       try {
         if (!this.feedbackReactionCallback) return;
 
+        // Skip the bot's own reactions so it never self-attributes feedback.
+        if (this.botUserId && event.user === this.botUserId) return;
+
         const reaction = event.reaction;
         let feedbackType: "thumbs_up" | "thumbs_down" | null = null;
         if (reaction === "+1" || reaction === "thumbsup") {
@@ -804,8 +896,16 @@ export class SlackChannel implements IChannelAdapter {
         }
         if (!feedbackType) return;
 
-        const channelId = (event.item as { channel?: string }).channel;
+        const item = event.item as { channel?: string; ts?: string };
+        const channelId = item.channel;
         if (!channelId) return;
+
+        // Idempotency: ignore duplicate/redelivered reaction events for the same
+        // (user, message, reaction) tuple so feedback fires at most once until the
+        // reaction is removed.
+        const dedupKey = `${event.user}:${item.ts ?? ""}:${reaction}`;
+        if (this.seenReactions.has(dedupKey)) return;
+        this.rememberReaction(dedupKey);
 
         const instinctIds = this.appliedInstinctIds.get(channelId);
         if (!instinctIds || instinctIds.length === 0) return;
@@ -813,6 +913,20 @@ export class SlackChannel implements IChannelAdapter {
         this.feedbackReactionCallback(feedbackType, instinctIds, event.user, "reaction");
       } catch (error) {
         this.logger.debug("Error handling reaction feedback", {
+          error: sanitizeError(error),
+        });
+      }
+    });
+
+    // Clear the dedup entry when a reaction is removed so toggling it off and on
+    // again is treated as fresh feedback.
+    this.app.event("reaction_removed", async ({ event }) => {
+      try {
+        const item = event.item as { ts?: string };
+        const dedupKey = `${event.user}:${item.ts ?? ""}:${event.reaction}`;
+        this.seenReactions.delete(dedupKey);
+      } catch (error) {
+        this.logger.debug("Error handling reaction removal", {
           error: sanitizeError(error),
         });
       }
@@ -826,7 +940,17 @@ export class SlackChannel implements IChannelAdapter {
   }
 
   private async handleIncomingMessage(message: SlackMessageEvent, say: SayFn): Promise<void> {
-    if (message.subtype === "bot_message") return;
+    // Ignore any message originating from a bot (including this bot) — bot_id is
+    // set even for subtypes other than "bot_message".
+    if (message.bot_id) return;
+
+    // Only process genuine new user messages. Edits/deletes/joins and other
+    // subtypes carry their payload differently (e.g. message_changed nests the new
+    // text under a `message` sub-object), so reading top-level text/user here would
+    // mis-handle them. Allow only undefined (normal) and "file_share" subtypes.
+    if (message.subtype !== undefined && message.subtype !== "file_share") {
+      return;
+    }
 
     const userId = message.user;
     const teamId = message.team || "";
@@ -950,6 +1074,7 @@ export class SlackChannel implements IChannelAdapter {
       const now = Date.now();
       for (const [key, pending] of this.pendingConfirmations) {
         if (now - pending.timestamp > this.CONFIRMATION_TIMEOUT_MS) {
+          if (pending.timeout) clearTimeout(pending.timeout);
           pending.resolve("timeout");
           this.pendingConfirmations.delete(key);
         }
