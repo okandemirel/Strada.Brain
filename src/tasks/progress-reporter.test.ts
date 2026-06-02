@@ -99,6 +99,7 @@ describe("ProgressReporter", () => {
       sendText: vi.fn().mockResolvedValue(undefined),
       sendMarkdown: vi.fn().mockResolvedValue(undefined),
       sendTypingIndicator: vi.fn().mockResolvedValue(undefined),
+      sendAttachment: vi.fn().mockResolvedValue(undefined),
     };
     const taskManager = new MockTaskManager();
     new ProgressReporter(channel as any, taskManager as any);
@@ -126,6 +127,7 @@ describe("ProgressReporter", () => {
       sendText: vi.fn().mockResolvedValue(undefined),
       sendMarkdown: vi.fn().mockResolvedValue(undefined),
       sendTypingIndicator: vi.fn().mockResolvedValue(undefined),
+      sendAttachment: vi.fn().mockResolvedValue(undefined),
     };
     const taskManager = new MockTaskManager();
     new ProgressReporter(channel as any, taskManager as any);
@@ -146,6 +148,7 @@ describe("ProgressReporter", () => {
       sendText: vi.fn().mockResolvedValue(undefined),
       sendMarkdown: vi.fn().mockResolvedValue(undefined),
       sendTypingIndicator: vi.fn().mockResolvedValue(undefined),
+      sendAttachment: vi.fn().mockResolvedValue(undefined),
     };
     const taskManager = new MockTaskManager();
     new ProgressReporter(channel as any, taskManager as any);
@@ -272,6 +275,7 @@ describe("ProgressReporter", () => {
       sendText: vi.fn().mockResolvedValue(undefined),
       sendMarkdown: vi.fn().mockResolvedValue(undefined),
       sendTypingIndicator: vi.fn().mockResolvedValue(undefined),
+      sendAttachment: vi.fn().mockResolvedValue(undefined),
     };
     const taskManager = new MockTaskManager();
     new ProgressReporter(channel as any, taskManager as any, {
@@ -285,5 +289,49 @@ describe("ProgressReporter", () => {
     await vi.advanceTimersByTimeAsync(10_000);
 
     expect(channel.sendText).not.toHaveBeenCalled();
+  });
+
+  it("dispose() removes taskManager listeners and clears pending heartbeat timers", async () => {
+    const channel = {
+      sendText: vi.fn().mockResolvedValue(undefined),
+      sendMarkdown: vi.fn().mockResolvedValue(undefined),
+      sendTypingIndicator: vi.fn().mockResolvedValue(undefined),
+      sendAttachment: vi.fn().mockResolvedValue(undefined),
+    };
+    const taskManager = new MockTaskManager();
+    const reporter = new ProgressReporter(channel as any, taskManager as any);
+
+    taskManager.emitCreated(createTask());
+    expect(taskManager.listenerCount("task:created")).toBeGreaterThan(0);
+
+    reporter.dispose();
+
+    // All listeners removed.
+    expect(taskManager.listenerCount("task:created")).toBe(0);
+    expect(taskManager.listenerCount("task:completed")).toBe(0);
+    expect(taskManager.listenerCount("task:paused")).toBe(0);
+
+    // The pending heartbeat timer scheduled at task:created must not fire after dispose.
+    await vi.advanceTimersByTimeAsync(300_000);
+    expect(channel.sendText).not.toHaveBeenCalled();
+
+    // Post-dispose events are ignored (no listeners), so nothing is sent.
+    taskManager.emitCompleted("task_heartbeat", "**Done**");
+    expect(channel.sendMarkdown).not.toHaveBeenCalled();
+  });
+
+  it("stop() is an alias for dispose()", () => {
+    const channel = {
+      sendText: vi.fn().mockResolvedValue(undefined),
+      sendMarkdown: vi.fn().mockResolvedValue(undefined),
+      sendTypingIndicator: vi.fn().mockResolvedValue(undefined),
+      sendAttachment: vi.fn().mockResolvedValue(undefined),
+    };
+    const taskManager = new MockTaskManager();
+    const reporter = new ProgressReporter(channel as any, taskManager as any);
+    expect(taskManager.listenerCount("task:created")).toBeGreaterThan(0);
+
+    reporter.stop();
+    expect(taskManager.listenerCount("task:created")).toBe(0);
   });
 });

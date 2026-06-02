@@ -1387,6 +1387,13 @@ async function bootstrapImpl(
       }
       const normalizedMsg = audioResult.message;
 
+      // Bind daemon notification delivery to the first real inbound chat so
+      // quiet-hours drains, grouped summaries, and high/critical alerts have a
+      // concrete chat target (the router is constructed with chatId=undefined).
+      if (normalizedMsg.chatId) {
+        notificationRouterInstance?.setChatId(normalizedMsg.chatId);
+      }
+
       activityRegistry.recordActivity(channelType, normalizedMsg.chatId);
       // Interrupt consolidation on user activity (MEM-13)
       heartbeatLoop?.onUserActivity();

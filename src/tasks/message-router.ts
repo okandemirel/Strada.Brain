@@ -46,13 +46,28 @@ export class MessageRouter {
   private readonly queueNoticeCooldowns = new Map<string, number>();
   private readonly burstWindowMs: number;
   private readonly maxBurstMessages: number;
+  private startupNoticeTimer: ReturnType<typeof setTimeout> | null = null;
 
   dispose(): void {
+    // Cancel the one-shot startup-notice reset timer so it can't keep `this`
+    // (and its Maps) alive — or keep the Node event loop running — on a fast
+    // shutdown that happens within the 60s window.
+    if (this.startupNoticeTimer) {
+      clearTimeout(this.startupNoticeTimer);
+      this.startupNoticeTimer = null;
+    }
+
     for (const [, batch] of this.pendingTaskBatches) {
       if (batch.timer) {
         clearTimeout(batch.timer);
       }
     }
+    // Buffered (un-flushed) burst messages are intentionally DROPPED on dispose
+    // rather than flushed. Flushing here would call taskManager.submit() during
+    // shutdown — after the task pipeline / channel may already be torn down — so
+    // the result could never be delivered and could throw mid-teardown. Dropping
+    // is the lower-risk choice: dispose() only runs on shutdown, and any task
+    // not yet flushed has not been acknowledged to the user.
     this.pendingTaskBatches.clear();
     this.queueNoticeCooldowns.clear();
   }
@@ -76,11 +91,15 @@ export class MessageRouter {
     this.burstWindowMs = options.burstWindowMs;
     this.maxBurstMessages = options.maxBurstMessages;
 
-    // Auto-clear startup notice state after 60s — no need to track chats forever
-    setTimeout(() => {
+    // Auto-clear startup notice state after 60s — no need to track chats forever.
+    // Store the handle so dispose() can cancel it; unref() so this one-shot timer
+    // never keeps the Node process alive on its own.
+    this.startupNoticeTimer = setTimeout(() => {
       this.notifiedChats = null;
       this.startupNoticeMarkdown = undefined;
+      this.startupNoticeTimer = null;
     }, 60_000);
+    this.startupNoticeTimer.unref?.();
   }
 
   /**

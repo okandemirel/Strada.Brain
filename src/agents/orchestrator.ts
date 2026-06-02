@@ -4093,17 +4093,19 @@ export class Orchestrator {
     const conversationScopeForMonitor = resolveConversationScope(chatId, conversationId);
     this.monitorLifecycle?.requestStart(conversationScopeForMonitor, text);
 
-    // Start typing indicator loop
-    const typingInterval = setInterval(() => {
-      if (supportsRichMessaging(this.channel)) {
-        this.channel.sendTypingIndicator(chatId as string).catch((err) =>
-          getLogger().error("Failed to send typing indicator", {
-            chatId,
-            error: err instanceof Error ? err.message : String(err),
-          }),
-        );
-      }
-    }, TYPING_INTERVAL_MS);
+    // Start typing indicator loop (only on channels that support rich messaging;
+    // check the capability once here rather than on every interval tick)
+    const richChannel = supportsRichMessaging(this.channel) ? this.channel : undefined;
+    const typingInterval = richChannel
+      ? setInterval(() => {
+          richChannel.sendTypingIndicator(chatId as string).catch((err) =>
+            getLogger().error("Failed to send typing indicator", {
+              chatId,
+              error: err instanceof Error ? err.message : String(err),
+            }),
+          );
+        }, TYPING_INTERVAL_MS)
+      : undefined;
 
     try {
       await this.runAgentLoop(chatId, session, msg.channelType, userId, conversationId, msg.attachments);
@@ -4113,7 +4115,9 @@ export class Orchestrator {
       await this.sessionManager.sendVisibleAssistantText(chatId, session, classifyErrorMessage(error));
     } finally {
       this.monitorLifecycle?.requestEnd(resolveConversationScope(chatId, conversationId));
-      clearInterval(typingInterval);
+      if (typingInterval) {
+        clearInterval(typingInterval);
+      }
       // Clear typing indicator on completion/error
       if (supportsRichMessaging(this.channel)) {
         this.channel.sendTypingStop?.(chatId);

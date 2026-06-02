@@ -23,6 +23,7 @@ import { ToolRegistry } from "./tool-registry.js";
 import { SoulLoader } from "../agents/soul/index.js";
 import { SESSION_CLEANUP_INTERVAL_MS } from "../common/constants.js";
 import { MessageRouter, TaskStorage } from "../tasks/index.js";
+import type { ProgressReporter } from "../tasks/index.js";
 import type { TaskManager } from "../tasks/task-manager.js";
 import type { ChainManager } from "../learning/chains/index.js";
 import type { GoalStorage } from "../goals/index.js";
@@ -164,6 +165,8 @@ export interface ShutdownOptions {
   learningStorage?: { close(): void };
   /** Message router — disposed on shutdown to clear pending batches and timers. */
   messageRouter?: MessageRouter;
+  /** Progress reporter — disposed on shutdown to remove taskManager listeners and clear timers. */
+  progressReporter?: ProgressReporter;
   /** Vault registry — disposes all vaults on shutdown to release SQLite fds and stop watchers. */
   vaultRegistry?: VaultRegistry;
   /** Background executor — shuts down to clear queue and release workspace leases. */
@@ -236,6 +239,11 @@ export function createShutdownHandler(options: ShutdownOptions): () => Promise<v
       // Dispose message router (clears pending batches and timers)
       if (options.messageRouter) {
         await runStep("messageRouter", () => options.messageRouter!.dispose());
+      }
+
+      // Dispose progress reporter (removes taskManager listeners and clears timers)
+      if (options.progressReporter) {
+        await runStep("progressReporter", () => options.progressReporter!.dispose());
       }
 
       // Stop auto-updater timers

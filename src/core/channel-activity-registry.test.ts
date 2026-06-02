@@ -133,6 +133,68 @@ describe("ChannelActivityRegistry", () => {
       expect(first).not.toBe(second);
       expect(first).toEqual(second);
     });
+
+    it("filters out entries older than the explicit recency window", () => {
+      vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+      registry.recordActivity("web", "chat-old");
+
+      vi.setSystemTime(new Date("2026-01-01T00:10:00Z"));
+      registry.recordActivity("web", "chat-new");
+
+      // Window of 5 minutes — only chat-new (recorded 0 min ago) is active.
+      const active = registry.getActiveChatIds(5 * 60 * 1000);
+      expect(active).toHaveLength(1);
+      expect(active[0]!.chatId).toBe("chat-new");
+    });
+
+    it("drops entries older than the default activity window", () => {
+      // Small window registry: 1 minute recency, default cap.
+      const windowed = new ChannelActivityRegistry(0, 60 * 1000);
+      vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+      windowed.recordActivity("web", "chat-1");
+
+      // 2 minutes later, the entry is outside the 1-minute window.
+      vi.setSystemTime(new Date("2026-01-01T00:02:00Z"));
+      expect(windowed.getActiveChatIds()).toEqual([]);
+    });
+  });
+
+  // ========================================================================
+  // eviction / size cap
+  // ========================================================================
+
+  describe("eviction", () => {
+    it("prunes stale entries on recordActivity so the Map stays bounded", () => {
+      const windowed = new ChannelActivityRegistry(0, 60 * 1000);
+      vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+      windowed.recordActivity("web", "chat-1");
+
+      // Recording again after the window elapses prunes the stale entry.
+      vi.setSystemTime(new Date("2026-01-01T00:05:00Z"));
+      windowed.recordActivity("web", "chat-2");
+
+      const chats = windowed.getActiveChatIds();
+      expect(chats).toHaveLength(1);
+      expect(chats[0]!.chatId).toBe("chat-2");
+    });
+
+    it("enforces the max-entries cap by evicting oldest-first", () => {
+      // Large window so nothing is dropped by recency; cap of 2 entries.
+      const capped = new ChannelActivityRegistry(0, 24 * 60 * 60 * 1000, 2);
+      vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+      capped.recordActivity("web", "chat-1");
+      vi.setSystemTime(new Date("2026-01-01T00:00:01Z"));
+      capped.recordActivity("web", "chat-2");
+      vi.setSystemTime(new Date("2026-01-01T00:00:02Z"));
+      capped.recordActivity("web", "chat-3");
+
+      const chats = capped.getActiveChatIds();
+      expect(chats).toHaveLength(2);
+      const ids = chats.map((c) => c.chatId);
+      expect(ids).not.toContain("chat-1"); // oldest evicted
+      expect(ids).toContain("chat-2");
+      expect(ids).toContain("chat-3");
+    });
   });
 
   // ========================================================================

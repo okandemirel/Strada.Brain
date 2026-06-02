@@ -6,7 +6,6 @@ import {
   getContainer,
   resetContainer,
   createContainer,
-  Services,
 } from "./di-container.js";
 
 // ---------------------------------------------------------------------------
@@ -396,19 +395,6 @@ describe("DIContainer", () => {
       const c2 = createContainer();
       expect(c1).not.toBe(c2);
       expect(c1).toBeInstanceOf(DIContainer);
-    });
-  });
-
-  // ========================================================================
-  // Services constants
-  // ========================================================================
-
-  describe("Services constants", () => {
-    it("contains expected service keys", () => {
-      expect(Services.Logger).toBe("Logger");
-      expect(Services.Config).toBe("Config");
-      expect(Services.ToolRegistry).toBe("ToolRegistry");
-      expect(Services.Orchestrator).toBe("Orchestrator");
     });
   });
 });

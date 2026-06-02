@@ -1,11 +1,17 @@
 /**
  * Simple Dependency Injection Container
- * 
+ *
  * Provides:
  * - Interface-based registration
  * - Singleton and Transient lifecycles
  * - Lazy initialization
  * - Circular dependency detection
+ *
+ * NOTE: This container is currently RESERVED / UNUSED in production wiring —
+ * `bootstrap.ts` constructs services explicitly rather than resolving them
+ * through this container. It is retained (with its internal bugs already fixed
+ * and covered by tests) for future migration to container-based DI. Do not
+ * assume it participates in the live dependency graph.
  */
 
 export type Lifecycle = "singleton" | "transient" | "scoped";
@@ -252,49 +258,3 @@ export function resetContainer(): void {
 export function createContainer(): DIContainer {
   return new DIContainer();
 }
-
-// ============================================================================
-// Service Keys (for type-safe resolution)
-// ============================================================================
-
-export const Services = {
-  // Core
-  Logger: "Logger",
-  Config: "Config",
-  
-  // Security
-  AuthManager: "AuthManager",
-  RateLimiter: "RateLimiter",
-  PathGuard: "PathGuard",
-  SecretSanitizer: "SecretSanitizer",
-  ReadOnlyGuard: "ReadOnlyGuard",
-  DMPolicy: "DMPolicy",
-  
-  // AI
-  AIProvider: "AIProvider",
-  
-  // Memory
-  MemoryManager: "MemoryManager",
-  RAGPipeline: "RAGPipeline",
-  EmbeddingProvider: "EmbeddingProvider",
-  
-  // Tools
-  ToolRegistry: "ToolRegistry",
-  
-  // Channels
-  ChannelAdapter: "ChannelAdapter",
-  
-  // Orchestration
-  Orchestrator: "Orchestrator",
-  
-  // Learning
-  LearningPipeline: "LearningPipeline",
-  ErrorRecovery: "ErrorRecovery",
-  TaskPlanner: "TaskPlanner",
-  
-  // Dashboard
-  MetricsCollector: "MetricsCollector",
-  DashboardServer: "DashboardServer",
-} as const;
-
-export type ServiceKey = (typeof Services)[keyof typeof Services];

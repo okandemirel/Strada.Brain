@@ -84,6 +84,8 @@ export type EnvVarName =
   | "IRC_ALLOW_OPEN_ACCESS"
   | "TEAMS_APP_ID"
   | "TEAMS_APP_PASSWORD"
+  | "TEAMS_APP_TYPE"
+  | "TEAMS_APP_TENANT_ID"
   | "TEAMS_ALLOWED_USER_IDS"
   | "TEAMS_ALLOW_OPEN_ACCESS"
   | "ALLOWED_TELEGRAM_USER_IDS"
@@ -582,10 +584,21 @@ export interface IRCConfig {
   readonly allowOpenAccess: boolean;
 }
 
+/** Microsoft Teams / Bot Framework app tenancy model */
+export type TeamsAppType = "MultiTenant" | "SingleTenant";
+
 /** Teams configuration */
 export interface TeamsConfig {
   readonly appId?: string;
   readonly appPassword?: string;
+  /**
+   * Bot Framework app tenancy. Single-tenant bots must be issued tokens scoped
+   * to their home tenant, so proactive (continueConversationAsync) sends fail
+   * unless the adapter is told the tenancy + tenant id. Defaults to MultiTenant.
+   */
+  readonly appType?: TeamsAppType;
+  /** Home tenant id, required for single-tenant proactive sends. */
+  readonly appTenantId?: string;
   readonly allowedUserIds: string[];
   readonly allowOpenAccess: boolean;
 }
@@ -1025,6 +1038,8 @@ export const configSchema = z
     // Teams
     teamsAppId: z.string().optional(),
     teamsAppPassword: z.string().optional(),
+    teamsAppType: z.enum(["MultiTenant", "SingleTenant"]).optional(),
+    teamsAppTenantId: z.string().optional(),
     teamsAllowedUserIds: commaSeparatedList,
     teamsAllowOpenAccess: boolFromString(false),
 
@@ -2086,6 +2101,11 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
     teams: {
       appId: rawConfig.teamsAppId,
       appPassword: rawConfig.teamsAppPassword,
+      // Only surface tenancy fields when explicitly configured so the default
+      // (MultiTenant) behaviour is decided downstream and untouched configs stay
+      // shaped exactly as before.
+      ...(rawConfig.teamsAppType ? { appType: rawConfig.teamsAppType } : {}),
+      ...(rawConfig.teamsAppTenantId ? { appTenantId: rawConfig.teamsAppTenantId } : {}),
       allowedUserIds: rawConfig.teamsAllowedUserIds ?? [],
       allowOpenAccess: rawConfig.teamsAllowOpenAccess,
     },
@@ -2715,6 +2735,8 @@ interface EnvVars {
   ircAllowOpenAccess: string | undefined;
   teamsAppId: string | undefined;
   teamsAppPassword: string | undefined;
+  teamsAppType: string | undefined;
+  teamsAppTenantId: string | undefined;
   teamsAllowedUserIds: string | undefined;
   teamsAllowOpenAccess: string | undefined;
   jwtSecret: string | undefined;
@@ -3034,6 +3056,8 @@ function loadFromEnv(env: Record<string, string | undefined>): EnvVars {
     ircAllowOpenAccess: env["IRC_ALLOW_OPEN_ACCESS"],
     teamsAppId: env["TEAMS_APP_ID"],
     teamsAppPassword: env["TEAMS_APP_PASSWORD"],
+    teamsAppType: env["TEAMS_APP_TYPE"],
+    teamsAppTenantId: env["TEAMS_APP_TENANT_ID"],
     teamsAllowedUserIds: env["TEAMS_ALLOWED_USER_IDS"],
     teamsAllowOpenAccess: env["TEAMS_ALLOW_OPEN_ACCESS"],
     jwtSecret: env["JWT_SECRET"],

@@ -99,6 +99,8 @@
   },
   "optionalDependencies": {
     "@huggingface/transformers": "^3.4.0",
+    "botbuilder": "^4.23.0",
+    "botframework-connector": "^4.23.0",
     "hnswlib-node": "^3.0.0",
     "wavefile": "^11.0.0"
   },
