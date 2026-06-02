@@ -280,6 +280,42 @@ describe("loadConfig", () => {
     expect(config.providerModels?.anthropic).toBe("claude-opus-4-6-20250514");
   });
 
+  it("loads OPENROUTER_API_KEY and OPENROUTER_MODEL into runtime config", () => {
+    setEnv({
+      OPENROUTER_API_KEY: "sk-or-test-key-123",
+      OPENROUTER_MODEL: "anthropic/claude-sonnet-4",
+    });
+
+    const config = loadConfig();
+
+    try {
+      expect(config.openrouterApiKey).toBe("sk-or-test-key-123");
+      expect(config.providerModels?.openrouter).toBe("anthropic/claude-sonnet-4");
+    } finally {
+      delete process.env["OPENROUTER_API_KEY"];
+      delete process.env["OPENROUTER_MODEL"];
+    }
+  });
+
+  it("accepts OpenRouter as the sole provider key (no Anthropic key required)", () => {
+    setEnv({
+      ANTHROPIC_API_KEY: undefined,
+      OPENROUTER_API_KEY: "sk-or-test-key-123",
+      PROVIDER_CHAIN: "openrouter",
+    });
+    delete process.env["ANTHROPIC_API_KEY"];
+
+    const config = loadConfig();
+
+    try {
+      expect(config.openrouterApiKey).toBe("sk-or-test-key-123");
+      expect(config.anthropicApiKey).toBeUndefined();
+    } finally {
+      delete process.env["OPENROUTER_API_KEY"];
+      delete process.env["PROVIDER_CHAIN"];
+    }
+  });
+
   it("loads streaming timeout config into runtime config", () => {
     setEnv({
       LLM_STREAM_INITIAL_TIMEOUT_MS: "1500",

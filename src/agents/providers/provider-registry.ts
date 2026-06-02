@@ -14,6 +14,7 @@ import { MistralProvider } from "./mistral.js";
 import { TogetherProvider } from "./together.js";
 import { FireworksProvider } from "./fireworks.js";
 import { OpencodeProvider } from "./opencode.js";
+import { OpenRouterProvider } from "./openrouter.js";
 import { getLogger } from "../../utils/logger.js";
 
 /**
@@ -37,6 +38,7 @@ const PROVIDER_CLASS_MAP: Record<string, OpenAICompatibleProviderConstructor> = 
   together: TogetherProvider,
   fireworks: FireworksProvider,
   opencode: OpencodeProvider,
+  openrouter: OpenRouterProvider,
 };
 
 /**
@@ -101,6 +103,11 @@ export const PROVIDER_PRESETS: Record<
     baseUrl: "https://opencode.ai/zen/v1",
     defaultModel: "opencode/qwen-3-coder-480b",
     label: "OpenCode (Zen/Go)",
+  },
+  openrouter: {
+    baseUrl: "https://openrouter.ai/api/v1",
+    defaultModel: "openai/gpt-5.2",
+    label: "OpenRouter",
   },
 };
 

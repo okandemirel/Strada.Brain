@@ -56,6 +56,7 @@ export type EnvVarName =
   | "OPENCODE_API_KEY"
   | "OPENCODE_BASE_URL"
   | "OPENCODE_DEFAULT_MODEL"
+  | "OPENROUTER_API_KEY"
   | "SYSTEM_PRESET"
   | "PROVIDER_CHAIN"
   | "TELEGRAM_BOT_TOKEN"
@@ -158,6 +159,7 @@ export type EnvVarName =
   | "TOGETHER_MODEL"
   | "FIREWORKS_MODEL"
   | "GEMINI_MODEL"
+  | "OPENROUTER_MODEL"
   | "CLAUDE_MODEL"
   | "OLLAMA_MODEL"
   | "OLLAMA_BASE_URL"
@@ -418,6 +420,7 @@ export type AIProviderName =
   | "fireworks"
   | "gemini"
   | "opencode"
+  | "openrouter"
   | "ollama";
 
 /** Goal interactive execution configuration (Phase 16) */
@@ -738,6 +741,7 @@ export interface Config {
   readonly opencodeApiKey?: string;
   readonly opencodeBaseUrl?: string;
   readonly opencodeDefaultModel?: string;
+  readonly openrouterApiKey?: string;
   readonly ollamaBaseUrl?: string;
   /** Comma-separated provider names for fallback chain */
   readonly providerChain?: string;
@@ -995,6 +999,7 @@ export const configSchema = z
     opencodeApiKey: z.string().optional(),
     opencodeBaseUrl: z.string().optional(),
     opencodeDefaultModel: z.string().optional(),
+    openrouterApiKey: z.string().optional(),
     providerChain: z.string().optional(),
     ollamaBaseUrl: z.string().optional(),
 
@@ -1969,6 +1974,8 @@ export const configSchema = z
       data.togetherApiKey,
       data.fireworksApiKey,
       data.geminiApiKey,
+      data.opencodeApiKey,
+      data.openrouterApiKey,
     ].some((k) => k && k.length > 0);
     const hasAnthropicSubscription =
       data.anthropicAuthMode === "claude-subscription"
@@ -2052,6 +2059,7 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
     opencodeApiKey: rawConfig.opencodeApiKey,
     opencodeBaseUrl: rawConfig.opencodeBaseUrl,
     opencodeDefaultModel: rawConfig.opencodeDefaultModel,
+    openrouterApiKey: rawConfig.openrouterApiKey,
     ollamaBaseUrl: rawConfig.ollamaBaseUrl,
     providerChain: rawConfig.providerChain,
 
@@ -2993,6 +3001,8 @@ interface EnvVars {
   opencodeApiKey: string | undefined;
   opencodeBaseUrl: string | undefined;
   opencodeDefaultModel: string | undefined;
+  // OpenRouter
+  openrouterApiKey: string | undefined;
   // Obsidian Integration
   obsidian: {
     enabled: string | undefined;
@@ -3028,6 +3038,7 @@ function loadFromEnv(env: Record<string, string | undefined>): EnvVars {
     opencodeApiKey: env["OPENCODE_API_KEY"],
     opencodeBaseUrl: env["OPENCODE_BASE_URL"],
     opencodeDefaultModel: env["OPENCODE_DEFAULT_MODEL"],
+    openrouterApiKey: env["OPENROUTER_API_KEY"],
     providerChain: env["PROVIDER_CHAIN"],
     telegramBotToken: env["TELEGRAM_BOT_TOKEN"],
     allowedTelegramUserIds: env["ALLOWED_TELEGRAM_USER_IDS"],
@@ -3378,6 +3389,7 @@ export function loadConfig(envOverride?: Record<string, string | undefined>): Co
     "together",
     "fireworks",
     "gemini",
+    "openrouter",
     "claude",
     "ollama",
   ]) {
@@ -3499,6 +3511,7 @@ export function hasRequiredApiKeys(config: Config): { valid: boolean; missing: s
       fireworks: config.fireworksApiKey,
       gemini: config.geminiApiKey,
       opencode: config.opencodeApiKey,
+      openrouter: config.openrouterApiKey,
     };
     for (const name of names) {
       if (name === "ollama") continue; // no key needed
@@ -3550,6 +3563,7 @@ export function hasRequiredApiKeys(config: Config): { valid: boolean; missing: s
       config.fireworksApiKey,
       config.geminiApiKey,
       config.opencodeApiKey,
+      config.openrouterApiKey,
     ].some((k) => k && k.length > 0);
 
     if (!hasAny) {

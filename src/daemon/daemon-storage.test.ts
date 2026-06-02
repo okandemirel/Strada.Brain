@@ -586,4 +586,95 @@ describe("DaemonStorage", () => {
       expect(storage.getDaemonState("digest:task_count")).toBe("8");
     });
   });
+
+  // =========================================================================
+  // Settings Overrides (Key-Value with Scope)
+  // =========================================================================
+
+  describe("settings overrides", () => {
+    it("setSettingsOverride + getSettingsOverride round-trips a value", () => {
+      storage.setSettingsOverride("rate_limit_messages_per_minute", "30");
+      expect(storage.getSettingsOverride("rate_limit_messages_per_minute")).toBe("30");
+    });
+
+    it("getSettingsOverride returns undefined for an unset key", () => {
+      expect(storage.getSettingsOverride("never_written")).toBeUndefined();
+    });
+
+    it("setSettingsOverride overwrites an existing value for the same key+scope", () => {
+      storage.setSettingsOverride("rate_limit_tokens_per_day", "1000");
+      storage.setSettingsOverride("rate_limit_tokens_per_day", "5000");
+      expect(storage.getSettingsOverride("rate_limit_tokens_per_day")).toBe("5000");
+    });
+
+    it("defaults to the 'global' scope when none is supplied", () => {
+      storage.setSettingsOverride("voice_language", "en");
+      // Explicit global scope reads the same row written by the default-scope call
+      expect(storage.getSettingsOverride("voice_language", "global")).toBe("en");
+      // And the default-scope read matches too
+      expect(storage.getSettingsOverride("voice_language")).toBe("en");
+    });
+
+    it("isolates values per scope (chatId) for the same key", () => {
+      storage.setSettingsOverride("voice_enabled", "true", "chat-alice");
+      storage.setSettingsOverride("voice_enabled", "false", "chat-bob");
+
+      expect(storage.getSettingsOverride("voice_enabled", "chat-alice")).toBe("true");
+      expect(storage.getSettingsOverride("voice_enabled", "chat-bob")).toBe("false");
+      // A scope that was never written stays undefined
+      expect(storage.getSettingsOverride("voice_enabled", "chat-carol")).toBeUndefined();
+      // The global scope is independent of the per-chat scopes
+      expect(storage.getSettingsOverride("voice_enabled")).toBeUndefined();
+    });
+
+    it("overwriting one scope does not affect another scope's value", () => {
+      storage.setSettingsOverride("voice_speed", "1.0", "chat-alice");
+      storage.setSettingsOverride("voice_speed", "1.5", "chat-bob");
+      // Overwrite alice only
+      storage.setSettingsOverride("voice_speed", "2.0", "chat-alice");
+
+      expect(storage.getSettingsOverride("voice_speed", "chat-alice")).toBe("2.0");
+      expect(storage.getSettingsOverride("voice_speed", "chat-bob")).toBe("1.5");
+    });
+  });
+
+  // =========================================================================
+  // Durability across "process restart" (close + reopen same DB file)
+  // =========================================================================
+
+  describe("settings durability across restart", () => {
+    it("persists settings overrides after closing and reopening the same DB file", () => {
+      // This block manages its own DaemonStorage lifecycle on a dedicated temp
+      // file, independent of the shared beforeEach/afterEach instance, so we can
+      // genuinely close one connection and open a brand-new one on the SAME file.
+      const restartDir = mkdtempSync(join(tmpdir(), "daemon-storage-restart-"));
+      const dbPath = join(restartDir, "daemon.db");
+      try {
+        const first = new DaemonStorage(dbPath);
+        first.initialize();
+        first.setSettingsOverride("rate_limit_messages_per_minute", "42");
+        first.setSettingsOverride("rate_limit_tokens_per_day", "123456");
+        first.setSettingsOverride("voice_enabled", "true", "chat-alice");
+        first.setSettingsOverride("voice_language", "tr", "chat-alice");
+        // Close the connection — simulates the daemon process shutting down.
+        first.close();
+
+        // Open a NEW DaemonStorage on the same file — simulates a restart.
+        const second = new DaemonStorage(dbPath);
+        second.initialize();
+        try {
+          expect(second.getSettingsOverride("rate_limit_messages_per_minute")).toBe("42");
+          expect(second.getSettingsOverride("rate_limit_tokens_per_day")).toBe("123456");
+          expect(second.getSettingsOverride("voice_enabled", "chat-alice")).toBe("true");
+          expect(second.getSettingsOverride("voice_language", "chat-alice")).toBe("tr");
+          // Per-scope isolation survives the restart too.
+          expect(second.getSettingsOverride("voice_enabled")).toBeUndefined();
+        } finally {
+          second.close();
+        }
+      } finally {
+        rmSync(restartDir, { recursive: true, force: true });
+      }
+    });
+  });
 });
