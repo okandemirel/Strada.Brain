@@ -49,6 +49,8 @@ export function wireMessageHandler(
   heartbeatLoopRef?: HeartbeatLoop,
   activityRegistryRef?: ChannelActivityRegistry,
   channelTypeName?: string,
+  notificationRouter?: NotificationRouter,
+  digestReporter?: DigestReporter,
 ): void {
   channel.onMessage(async (msg) => {
     const audioResult = await transcribeIncomingAudioMessage(msg, projectPath);
@@ -59,6 +61,15 @@ export function wireMessageHandler(
       return;
     }
     const normalizedMsg = audioResult.message;
+
+    // Bind daemon notification + digest delivery to the first real inbound chat
+    // (both routers are constructed with chatId=undefined). Mirrors the
+    // multi-agent path in bootstrap.ts so non-daemon notifications and scheduled
+    // digests have a concrete chat target.
+    if (normalizedMsg.chatId) {
+      notificationRouter?.setChatId(normalizedMsg.chatId);
+      digestReporter?.setChatId(normalizedMsg.chatId);
+    }
 
     if (activityRegistryRef && channelTypeName) {
       activityRegistryRef.recordActivity(channelTypeName, normalizedMsg.chatId);

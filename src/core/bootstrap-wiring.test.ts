@@ -489,6 +489,38 @@ describe("wireMessageHandler", () => {
       expect.objectContaining({ success: false, hadErrors: true }),
     );
   });
+
+  it("binds notification + digest delivery to the first inbound chat", async () => {
+    const channel = makeChannel();
+    const notificationRouter = { setChatId: vi.fn() } as any;
+    const digestReporter = { setChatId: vi.fn() } as any;
+    wireMessageHandler(
+      channel, makeMessageRouter(), makeOrchestrator(), makeTaskPlanner(),
+      undefined, "/tmp", undefined, undefined, undefined, undefined,
+      notificationRouter, digestReporter,
+    );
+
+    await channel._emit({ chatId: "c1", text: "hi", userId: "u1" });
+
+    expect(notificationRouter.setChatId).toHaveBeenCalledWith("c1");
+    expect(digestReporter.setChatId).toHaveBeenCalledWith("c1");
+  });
+
+  it("does not bind chat delivery when the inbound message has no chatId", async () => {
+    const channel = makeChannel();
+    const notificationRouter = { setChatId: vi.fn() } as any;
+    const digestReporter = { setChatId: vi.fn() } as any;
+    wireMessageHandler(
+      channel, makeMessageRouter(), makeOrchestrator(), makeTaskPlanner(),
+      undefined, "/tmp", undefined, undefined, undefined, undefined,
+      notificationRouter, digestReporter,
+    );
+
+    await channel._emit({ text: "hi", userId: "u1" });
+
+    expect(notificationRouter.setChatId).not.toHaveBeenCalled();
+    expect(digestReporter.setChatId).not.toHaveBeenCalled();
+  });
 });
 
 // ---------------------------------------------------------------------------

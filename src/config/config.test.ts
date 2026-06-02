@@ -60,6 +60,8 @@ describe("loadConfig", () => {
     delete process.env["IRC_ALLOW_OPEN_ACCESS"];
     delete process.env["TEAMS_APP_ID"];
     delete process.env["TEAMS_APP_PASSWORD"];
+    delete process.env["TEAMS_APP_TYPE"];
+    delete process.env["TEAMS_APP_TENANT_ID"];
     delete process.env["TEAMS_ALLOWED_USER_IDS"];
     delete process.env["TEAMS_ALLOW_OPEN_ACCESS"];
     delete process.env["JWT_SECRET"];
@@ -434,6 +436,8 @@ describe("loadConfig", () => {
       IRC_ALLOW_OPEN_ACCESS: "true",
       TEAMS_APP_ID: "teams-app-id",
       TEAMS_APP_PASSWORD: "teams-app-password",
+      TEAMS_APP_TYPE: "SingleTenant",
+      TEAMS_APP_TENANT_ID: "tenant-abc",
       TEAMS_ALLOWED_USER_IDS: "user-a,user-b",
       TEAMS_ALLOW_OPEN_ACCESS: "true",
     });
@@ -464,6 +468,8 @@ describe("loadConfig", () => {
     expect(config.teams).toEqual({
       appId: "teams-app-id",
       appPassword: "teams-app-password",
+      appType: "SingleTenant",
+      appTenantId: "tenant-abc",
       allowedUserIds: ["user-a", "user-b"],
       allowOpenAccess: true,
     });

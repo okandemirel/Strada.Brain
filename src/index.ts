@@ -573,7 +573,10 @@ async function startApp(
     // Store bootstrap result for daemon CLI context access
     appResult = app;
 
-    // Register container services after bootstrap creates them
+    // Register container services after bootstrap creates them. The DIContainer
+    // is intentionally RESERVED — not used for resolution in production (services
+    // are wired manually); these registrations stage Logger/Config for a future
+    // opt-in DI-resolution migration. See src/core/README.md.
     container.registerInstance("Logger", logger);
     container.registerInstance("Config", config);
 

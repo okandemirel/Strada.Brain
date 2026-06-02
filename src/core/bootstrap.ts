@@ -1392,6 +1392,7 @@ async function bootstrapImpl(
       // concrete chat target (the router is constructed with chatId=undefined).
       if (normalizedMsg.chatId) {
         notificationRouterInstance?.setChatId(normalizedMsg.chatId);
+        digestReporterInstance?.setChatId(normalizedMsg.chatId);
       }
 
       activityRegistry.recordActivity(channelType, normalizedMsg.chatId);
@@ -1462,6 +1463,8 @@ async function bootstrapImpl(
       heartbeatLoop,
       activityRegistry,
       channelType,
+      notificationRouterInstance,
+      digestReporterInstance,
     );
   }
 

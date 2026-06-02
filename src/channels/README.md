@@ -98,7 +98,7 @@ Two distinct systems coexist intentionally:
 - **WhatsApp:** Full per-channel session tracking. `Map<string, SessionState>` with 30-minute timeout, 5-minute cleanup interval.
 - **Web:** Uses `WebIdentityStore` plus reconnect tokens so a browser refresh can reclaim the live conversation until the reconnect TTL expires or the user clears the browser session.
 - **Other channels:** Session tracking is primarily handled by the orchestrator, not the channel adapter.
-- **Interactive channels only:** Telegram, Discord, Slack, WhatsApp, Web, and CLI track pending confirmations with timeout cleanup. Matrix, IRC, and Teams do not implement confirmation dialogs.
+- **Interactive channels only:** Telegram, Discord, Slack, WhatsApp, Web, and CLI track pending confirmations with timeout cleanup. IRC implements a text-based confirmation flow (the question plus numbered options; the next reply from the same nick/channel resolves it, with a no-reply timeout). Matrix and Teams do not implement confirmation dialogs.
 
 ## Capability Matrix
 
@@ -110,6 +110,7 @@ Two distinct systems coexist intentionally:
 | WhatsApp | Yes (edit-in-place) | Yes (composing/paused) | Yes (numbered reply) | Yes (sendImage/sendDocument) | No |
 | Web | Yes (stream_update) | Yes (typing) | Yes (JSON dialog) | Yes (metadata) | No |
 | CLI | Yes (stdout rewrite) | No | Yes (readline) | No | No |
+| IRC | No | No | Yes (numbered reply) | No (text placeholder) | No |
 
 ## Web Channel
 
