@@ -24,7 +24,9 @@ describe("OpenRouterProvider", () => {
 
   it("uses default model and base URL", () => {
     const provider = new OpenRouterProvider("test-key");
-    expect(provider.name).toBe("OpenRouter");
+    const internals = provider as unknown as { model: string; baseUrl: string };
+    expect(internals.model).toBe("openai/gpt-5.2");
+    expect(internals.baseUrl).toBe("https://openrouter.ai/api/v1");
   });
 
   it("accepts custom model and base URL", () => {
@@ -33,7 +35,9 @@ describe("OpenRouterProvider", () => {
       "anthropic/claude-sonnet-4",
       "https://custom.openrouter.ai/v1",
     );
-    expect(provider.name).toBe("OpenRouter");
+    const internals = provider as unknown as { model: string; baseUrl: string };
+    expect(internals.model).toBe("anthropic/claude-sonnet-4");
+    expect(internals.baseUrl).toBe("https://custom.openrouter.ai/v1");
   });
 
   describe("buildHeaders", () => {

@@ -68,7 +68,7 @@ credentials not present for most providers in this deployment.
 | Provider | Implemented? | Test level | Live-verified here? | Notes / degradation |
 |---|---|---|---|---|
 | OpenAI | Yes | unit-mock | Partially (subscription chat works per logs) | Running in **subscription** auth (`OPENAI_AUTH_MODE`, `gpt-5.2`). Chat-only: **cannot do embeddings or enumerate `/v1/models`** → root cause of embedding + model-picker degradation. Refresh-on-401 landed. |
-| **OpenRouter** (newly added) | Yes (`openrouter.ts`, extends `OpenAIProvider`) | unit-mock (constructor, capabilities, header build — see `openrouter.test.ts`) | **No** | Registered in `provider-registry.ts`; config wired (`OPENROUTER_API_KEY`/`OPENROUTER_MODEL` → `openrouterApiKey`). **No `OPENROUTER_API_KEY` set in this `.env`, so it is inert here.** Source-only: the OpenRouter class is **not yet in `dist/`** — a `npm run build` is required before the running daemon can use it. Tests prove header/auth construction, **not** that a real OpenRouter request succeeds. |
+| **OpenRouter** (newly added) | Yes (`openrouter.ts`, extends `OpenAIProvider`) | unit-mock (constructor, capabilities, header build — see `openrouter.test.ts`) | **No** | Registered in `provider-registry.ts`; config wired (`OPENROUTER_API_KEY`/`OPENROUTER_MODEL` → `openrouterApiKey`). **No `OPENROUTER_API_KEY` set in this `.env`, so it is inert here.** It compiles into `dist/` on `npm run build`; the running daemon picks it up after a rebuild + restart (this deployment serves from `dist/`, as with any backend change). Tests prove model/baseUrl/header/auth construction, **not** that a real OpenRouter request succeeds. |
 | Claude (Anthropic) | Yes | unit-mock | No | No `ANTHROPIC_API_KEY` in this deployment. |
 | Gemini | Yes | unit-mock | No | No `GEMINI_API_KEY`. |
 | Kimi (Moonshot) | Yes | unit-mock | No | `KIMI_API_KEY` present but **per prior diagnosis possibly expired**; non-primary, so a failure no longer aborts boot (graceful degradation landed). |
@@ -218,9 +218,10 @@ rebuild) is what would populate it.
    learning recall (§5), and the thin model picker (§9).
 2. **No `OPENAI_API_KEY` / `GEMINI_API_KEY`; Ollama off.** Any feature requiring
    a real embedder or a local model is degraded or non-functional here.
-3. **OpenRouter is added in source but not in `dist/` and has no key set.** It is
-   **inert** in this deployment until both a key is configured **and** the
-   package is rebuilt (`npm run build`).
+3. **OpenRouter is wired in source + registered, but has no key set.** It
+   compiles into `dist/` on `npm run build`; the running daemon needs a
+   rebuild + restart to pick it up. Either way it stays **inert** here until
+   `OPENROUTER_API_KEY` is configured.
 4. **All external integrations are mock-tested, not live.** Channels (esp.
    Teams), Obsidian REST, and every remote LLM provider have **no live
    automated coverage**. Do not equate a green unit suite with a working
@@ -238,6 +239,6 @@ rebuild) is what would populate it.
 |---|---|---|
 | Hash-fallback embeddings / weak semantic search | Subscription token can't embed; no key; Ollama off | Add `OPENAI_API_KEY`/`GEMINI_API_KEY`, **or** run Ollama (`SYSTEM_PRESET=free`). |
 | Model picker shows ~1 model | Subscription `listModels()` returns one | Add provider API keys (incl. OpenRouter) **and** `npm run build`. |
-| OpenRouter does nothing | No `OPENROUTER_API_KEY`; class not in `dist/` | Set `OPENROUTER_API_KEY` (+ `OPENROUTER_MODEL`) and rebuild. |
+| OpenRouter does nothing | No `OPENROUTER_API_KEY` set (and a long-running daemon may predate the rebuild) | Set `OPENROUTER_API_KEY` (+ `OPENROUTER_MODEL`), `npm run build`, restart. |
 | Kimi failures at boot | `KIMI_API_KEY` possibly expired | Refresh the key (non-primary, so boot is unaffected). |
 | Teams async replies unconfirmed | No live tenant tested | Run [`deployment/teams-verification.md`](deployment/teams-verification.md). |

@@ -75,6 +75,9 @@ describe("loadConfig", () => {
     delete process.env["OPENAI_CHATGPT_AUTH_FILE"];
     delete process.env["OPENAI_SUBSCRIPTION_ACCESS_TOKEN"];
     delete process.env["OPENAI_SUBSCRIPTION_ACCOUNT_ID"];
+    delete process.env["PROVIDER_CHAIN"];
+    delete process.env["OPENROUTER_API_KEY"];
+    delete process.env["OPENROUTER_MODEL"];
     delete process.env["STRADA_CORE_REPO_URL"];
     delete process.env["STRADA_MODULES_REPO_URL"];
     delete process.env["STRADA_MCP_PATH"];
