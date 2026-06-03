@@ -70,6 +70,8 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
   get providerCount(): number { return this.providers.length; }
   /** Guards against thundering-herd concurrent probes to the same recovering provider. */
   private readonly probing = new Set<string>();
+  /** Throttle flag so the single-point-of-failure warning fires once per collapse. */
+  private spofWarned = false;
   // Thinking disable state now lives in ProviderHealthRegistry singleton
   // to survive FallbackChainProvider re-creation on cache misses.
 
@@ -295,6 +297,26 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
 
         // Reset thinking success counter on any failure
         health.resetThinkingSuccessCounter(provider.name);
+
+        // SPOF guard: warn (once per collapse) when this failure leaves the chain
+        // with at most one working provider, so a dead fallback (expired key,
+        // unsupported model) is surfaced instead of silently leaving a single point
+        // of failure — health membership != real availability (audit #19).
+        if (this.providers.length > 1) {
+          const availableCount = this.providers.filter((p) => health.isAvailable(p.name)).length;
+          if (availableCount <= 1 && !this.spofWarned) {
+            this.spofWarned = true;
+            const live = this.providers.find((p) => health.isAvailable(p.name));
+            logger.warn("Provider chain collapsed to a single working provider — no real fallback remains", {
+              configured: this.providers.length,
+              available: availableCount,
+              liveProvider: live?.name ?? "none",
+              hint: "A configured fallback is failing health (e.g. expired key or unsupported model). Fix it via PROVIDER_CHAIN / credentials so the chain keeps redundancy.",
+            });
+          } else if (availableCount > 1 && this.spofWarned) {
+            this.spofWarned = false; // chain recovered redundancy
+          }
+        }
 
         // Detect reasoning model timeout pattern: the provider's CDN/proxy
         // may abort long-running reasoning requests before the model responds.
