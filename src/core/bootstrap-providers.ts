@@ -12,6 +12,7 @@ import { buildProviderChain } from "../agents/providers/provider-registry.js";
 import { ProviderManager } from "../agents/providers/provider-manager.js";
 import { ProviderModelCatalog } from "../agents/providers/provider-model-catalog.js";
 import { createProviderModelCatalogStore } from "../agents/providers/provider-model-catalog-store.js";
+import { validateConfiguredModel } from "../agents/providers/validate-configured-model.js";
 import { CachedEmbeddingProvider } from "../rag/embeddings/embedding-cache.js";
 import {
   resolveEmbeddingProvider,
@@ -264,8 +265,32 @@ export async function initializeAIProvider(
   });
   providerManager.setModelCatalog(modelCatalog);
   // Non-blocking: must NOT block startup and must NOT break boot if it fails.
+  // After the live refresh resolves, validate each active provider's CONFIGURED
+  // model against the now-live catalog and WARN (only) if it's stale — a model
+  // the provider no longer offers fails silently at runtime, so we surface a
+  // startup warning + a suggested current model. We never mutate runtime config.
   void providerManager
     .refreshModelCatalog()
+    .then(() => {
+      // listAvailable() yields each active provider's canonical `name` (the same
+      // key the catalog normalizes on) and its `defaultModel` — the configured
+      // model id (config.providerModels override, else the preset default).
+      for (const { name, defaultModel } of providerManager.listAvailable()) {
+        const live = modelCatalog.getProviderModels(name).map((model) => model.id);
+        const result = validateConfiguredModel(name, defaultModel, live);
+        if (!result.ok) {
+          logger.warn(
+            "Configured model not offered by provider — it may fail; pick a current model",
+            {
+              provider: name,
+              configuredModel: defaultModel,
+              suggestion: result.corrected,
+              reason: result.reason,
+            },
+          );
+        }
+      }
+    })
     .catch((error) =>
       logger.warn("Initial provider model catalog refresh failed", {
         error: error instanceof Error ? error.message : String(error),
