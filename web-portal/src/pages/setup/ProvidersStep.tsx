@@ -178,6 +178,9 @@ export default function ProvidersStep({
             return res.json()
           })
           .then((data: { providers?: Array<{ name: string; models: string[] }> }) => {
+            // Ignore a stale response: a newer probe (different key/baseUrl) for
+            // this provider has since superseded this one, so don't clobber it.
+            if (probeKeyRef.current[providerId] !== probeSignature) return
             const match = data.providers?.find((p) => p.name === providerId)
             setLiveModels((prev) => {
               const next = new Map(prev)
@@ -191,6 +194,9 @@ export default function ProvidersStep({
             })
           })
           .catch((err) => {
+            // Ignore a stale failure: a newer probe has superseded this one, so
+            // don't reset its signature or drop its (possibly good) live list.
+            if (probeKeyRef.current[providerId] !== probeSignature) return
             console.error(`[ProvidersStep] live model probe failed for ${providerId}:`, err)
             // Allow a later retry after a transient failure.
             delete probeKeyRef.current[providerId]
