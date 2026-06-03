@@ -10,6 +10,8 @@ import type { Config } from "../config/config.js";
 import { ClaudeProvider } from "../agents/providers/claude.js";
 import { buildProviderChain } from "../agents/providers/provider-registry.js";
 import { ProviderManager } from "../agents/providers/provider-manager.js";
+import { ProviderModelCatalog } from "../agents/providers/provider-model-catalog.js";
+import { createProviderModelCatalogStore } from "../agents/providers/provider-model-catalog-store.js";
 import { CachedEmbeddingProvider } from "../rag/embeddings/embedding-cache.js";
 import {
   resolveEmbeddingProvider,
@@ -245,6 +247,30 @@ export async function initializeAIProvider(
       logger.debug("Ollama not reachable, excluding from routing");
     }
   }
+
+  // Wire the dynamic model catalog: warm-seed from the on-disk snapshot (so the
+  // first model list is populated even before a live refresh), then kick a
+  // non-blocking refresh once providers are ready. The 6h TTL keeps live
+  // `listModels()` results fresh without hammering provider APIs. This runs only
+  // in the normal app boot path (initializeAIProvider is never invoked by the
+  // setup wizard), so the wizard is unaffected.
+  const CATALOG_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
+  const catalogStore = createProviderModelCatalogStore(config.memory.dbPath);
+  const modelCatalog = await ProviderModelCatalog.create({
+    load: () => providerManager.listAvailableWithModels(),
+    now: Date.now,
+    ttlMs: CATALOG_TTL_MS,
+    persist: catalogStore,
+  });
+  providerManager.setModelCatalog(modelCatalog);
+  // Non-blocking: must NOT block startup and must NOT break boot if it fails.
+  void providerManager
+    .refreshModelCatalog()
+    .catch((error) =>
+      logger.warn("Initial provider model catalog refresh failed", {
+        error: error instanceof Error ? error.message : String(error),
+      }),
+    );
 
   logger.info("ProviderManager initialized with per-chat switching support");
 
