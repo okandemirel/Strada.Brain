@@ -22,6 +22,8 @@ export interface CollectedResults {
   readonly failed: NodeResult[];
   readonly blocked: NodeResult[];
   readonly skipped: NodeResult[];
+  /** Nodes stopped by a control-plane abort — excluded from the success/failure gate. */
+  readonly cancelled: NodeResult[];
 }
 
 // =============================================================================
@@ -50,6 +52,7 @@ export class ResultAggregator {
     const failed: NodeResult[] = [];
     const blocked: NodeResult[] = [];
     const skipped: NodeResult[] = [];
+    const cancelled: NodeResult[] = [];
 
     for (const r of results) {
       switch (r.status) {
@@ -66,10 +69,13 @@ export class ResultAggregator {
         case "skipped":
           skipped.push(r);
           break;
+        case "cancelled":
+          cancelled.push(r);
+          break;
       }
     }
 
-    return { succeeded, failed, blocked, skipped };
+    return { succeeded, failed, blocked, skipped, cancelled };
   }
 
   // ---------------------------------------------------------------------------
@@ -175,17 +181,37 @@ export class ResultAggregator {
 
   /** Generate a SupervisorResult from collected node results. */
   synthesize(results: NodeResult[]): SupervisorResult {
-    const { succeeded, failed, blocked, skipped } = this.collect(results);
+    const { succeeded, failed, blocked, skipped, cancelled } = this.collect(results);
     const totalNodes = results.length;
     const totalCost = results.reduce((sum, r) => sum + r.cost, 0);
     const totalDuration = results.reduce((max, r) => Math.max(max, r.duration), 0);
 
     // Full success: all ok
-    if (failed.length === 0 && blocked.length === 0 && skipped.length === 0) {
+    if (failed.length === 0 && blocked.length === 0 && skipped.length === 0 && cancelled.length === 0) {
       const output = succeeded.map((r) => r.output).join("\n\n");
       return {
         success: true,
         partial: false,
+        output,
+        totalNodes,
+        succeeded: succeeded.length,
+        failed: 0,
+        skipped: 0,
+        totalCost,
+        totalDuration,
+        nodeResults: results,
+      };
+    }
+
+    // Success-with-cancellations: no failures or blocks, but some nodes were
+    // cancelled by a control-plane abort (e.g. a benign sibling winddown). Cancelled
+    // nodes are excluded from the failure gate so they do NOT downgrade an otherwise
+    // -successful task to blocked/failed (audit #13).
+    if (failed.length === 0 && blocked.length === 0 && skipped.length === 0 && cancelled.length > 0) {
+      const output = succeeded.map((r) => r.output).join("\n\n");
+      return {
+        success: true,
+        partial: true,
         output,
         totalNodes,
         succeeded: succeeded.length,

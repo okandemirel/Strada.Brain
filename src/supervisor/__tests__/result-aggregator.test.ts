@@ -46,6 +46,31 @@ describe("ResultAggregator", () => {
       expect(output.totalCost).toBeCloseTo(0.002);
     });
 
+    it("does not let a cancelled sibling downgrade an otherwise-successful task (audit #13)", () => {
+      const agg = new ResultAggregator({ mode: "disabled", samplingRate: 0, preferDifferentProvider: true, maxVerificationCost: 15 });
+      const results = [
+        makeResult("A", "ok", "Implemented the feature"),
+        { ...makeResult("B", "ok", "was cut short"), status: "cancelled" as const },
+      ];
+      const output = agg.synthesize(results);
+      expect(output.success).toBe(true);   // NOT downgraded to blocked/failed
+      expect(output.partial).toBe(true);   // but flagged partial (a node was cancelled)
+      expect(output.failed).toBe(0);       // cancelled is NOT counted as a failure
+      expect(output.output).toContain("Implemented the feature");
+    });
+
+    it("excludes cancelled nodes from the failure count in a mixed result", () => {
+      const agg = new ResultAggregator({ mode: "disabled", samplingRate: 0, preferDifferentProvider: true, maxVerificationCost: 15 });
+      const results = [
+        makeResult("A", "ok", "done"),
+        makeResult("B", "failed", "real error"),
+        { ...makeResult("C", "ok", "cut short"), status: "cancelled" as const },
+      ];
+      const output = agg.synthesize(results);
+      expect(output.failed).toBe(1);       // only the genuinely-failed node
+      expect(output.succeeded).toBe(1);
+    });
+
     it("produces partial success output", () => {
       const agg = new ResultAggregator({ mode: "disabled", samplingRate: 0, preferDifferentProvider: true, maxVerificationCost: 15 });
       const results = [

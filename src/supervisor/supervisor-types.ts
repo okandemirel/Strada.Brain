@@ -69,7 +69,10 @@ export interface ProviderScore {
 /** Result of executing a single goal node */
 export interface NodeResult {
   readonly nodeId: GoalNodeId;
-  readonly status: "ok" | "failed" | "skipped";
+  // "cancelled" = the node was stopped by a control-plane abort (sibling winddown,
+  // task cancel) rather than failing — excluded from the success/failure gate so a
+  // benign cancel cannot downgrade an otherwise-successful task (audit #13).
+  readonly status: "ok" | "failed" | "skipped" | "cancelled";
   readonly output: string;
   readonly blockedReason?: string;
   readonly artifacts: FileChange[];
