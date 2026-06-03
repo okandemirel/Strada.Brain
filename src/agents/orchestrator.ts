@@ -3038,7 +3038,8 @@ export class Orchestrator {
           let maxTokensAbort = false;
           let providerAbort = false;
           let providerAbortReason: string | undefined;
-          let bgCumulativeInputTokens = 0;
+          let bgCumulativeInputTokens = 0; // observability only
+          let bgCumulativeOutputTokens = 0; // the budget-gating metric (audit #3)
           while (true) {
             // Re-read every epoch so a mid-task budget raise (via /token
             // or the portal budget editor) actually takes effect without
@@ -3208,23 +3209,31 @@ export class Orchestrator {
                 options.onUsage ?? this.onUsage,
               );
 
-              // Token budget enforcement — prevent runaway token consumption in background tasks
+              // Token budget enforcement. Gate on cumulative OUTPUT tokens ("fresh
+              // work" the model generated) — NOT cumulative input. Cumulative input
+              // re-counts the whole growing context every iteration, so a task with
+              // a stable working set was killed for RE-SENDING rather than for doing
+              // new work (it hit 500K "input" by ~iteration 13 while the real context
+              // was a fraction of that). Output tokens don't re-count re-sent context
+              // and remain a real runaway/cost bound (audit #3). Cumulative input is
+              // kept for observability only.
               bgCumulativeInputTokens += response.usage?.inputTokens ?? 0;
-              if (bgTokenBudget !== -1 && bgCumulativeInputTokens > bgTokenBudget) {
+              bgCumulativeOutputTokens += response.usage?.outputTokens ?? 0;
+              if (bgTokenBudget !== -1 && bgCumulativeOutputTokens > bgTokenBudget) {
                 logger.warn("Background token budget exceeded", {
-                  chatId, bgCumulativeInputTokens, bgTokenBudget,
+                  chatId, bgCumulativeOutputTokens, bgCumulativeInputTokens, bgTokenBudget,
                   iteration: bgIteration, provider: currentAssignment.providerName,
                 });
                 await this.saveBudgetExceededCheckpoint({
                   taskId: options.taskRunId ?? `${chatId}-bg-${Date.now()}`,
                   chatId,
                   lastUserMessage: typeof prompt === "string" ? prompt : "",
-                  used: bgCumulativeInputTokens,
+                  used: bgCumulativeOutputTokens,
                   budget: bgTokenBudget,
                 });
                 return finish(
                   getResilienceMessage("token_budget_exceeded", progressLanguage ?? "en", {
-                    used: Math.round(bgCumulativeInputTokens / 1000),
+                    used: Math.round(bgCumulativeOutputTokens / 1000),
                     budget: Math.round(bgTokenBudget / 1000),
                   }),
                   "completed",
@@ -4357,7 +4366,8 @@ export class Orchestrator {
 
       let consecutiveMaxTokens = 0;
       let consecutiveProviderFailures = 0;
-      let cumulativeInputTokens = 0;
+      let cumulativeInputTokens = 0; // observability only
+      let cumulativeOutputTokens = 0; // the budget-gating metric (audit #3)
       const iterationHealth = new IterationHealthTracker();
       for (let iteration = 0; iteration < interactiveIterationLimit; iteration++) {
         // Re-read every iteration so a mid-task budget raise (via /token
@@ -4503,8 +4513,12 @@ export class Orchestrator {
         }
         this.recordProviderUsage(currentAssignment.providerName, response.usage, this.onUsage);
 
-        // Token budget enforcement — prevent runaway token consumption
+        // Token budget enforcement. Gate on cumulative OUTPUT tokens ("fresh work"),
+        // NOT cumulative input — cumulative input re-counts the growing context each
+        // iteration and kills a stable-working-set task for re-sending (audit #3).
+        // Cumulative input is retained for observability only.
         cumulativeInputTokens += response.usage?.inputTokens ?? 0;
+        cumulativeOutputTokens += response.usage?.outputTokens ?? 0;
 
         // Per-iteration observability log
         logger.debug("Iteration complete (interactive)", {
@@ -4513,11 +4527,13 @@ export class Orchestrator {
           inputTokens: response.usage?.inputTokens ?? 0,
           toolCalls: response.toolCalls?.length ?? 0,
           cumulativeInputTokens,
+          cumulativeOutputTokens,
           durationMs: Date.now() - iterationStartMs,
         });
-        if (tokenBudget !== -1 && cumulativeInputTokens > tokenBudget) {
+        if (tokenBudget !== -1 && cumulativeOutputTokens > tokenBudget) {
           logger.warn("Interactive token budget exceeded — aborting loop", {
             chatId,
+            cumulativeOutputTokens,
             cumulativeInputTokens,
             tokenBudget,
             iteration,
@@ -4527,13 +4543,13 @@ export class Orchestrator {
             taskId: conversationId ?? `${chatId}-fg-${Date.now()}`,
             chatId,
             lastUserMessage,
-            used: cumulativeInputTokens,
+            used: cumulativeOutputTokens,
             budget: tokenBudget,
           });
           await this.sessionManager.sendVisibleAssistantMarkdown(
             chatId, session,
             getResilienceMessage("token_budget_exceeded", (profile?.language ?? this.defaultLanguage) as string, {
-              used: Math.round(cumulativeInputTokens / 1000),
+              used: Math.round(cumulativeOutputTokens / 1000),
               budget: Math.round(tokenBudget / 1000),
             }),
           );
