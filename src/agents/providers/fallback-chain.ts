@@ -44,6 +44,17 @@ function isNonRetryableRequestError(error: unknown): boolean {
 }
 
 /**
+ * A provider response that produced no usable output: no visible text AND no tool
+ * calls. Detection is by CONTENT only — the token count is intentionally ignored so
+ * a dropped/absent usage frame is never mistaken for an empty answer (audit #18).
+ */
+function isEmptyProviderResponse(response: ProviderResponse): boolean {
+  const hasText = typeof response.text === "string" && response.text.trim().length > 0;
+  const hasToolCalls = Array.isArray(response.toolCalls) && response.toolCalls.length > 0;
+  return !hasText && !hasToolCalls;
+}
+
+/**
  * Provider that chains multiple AI providers with automatic fallback.
  *
  * Tries providers in order. If one fails, falls through to the next.
@@ -231,6 +242,16 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
 
         const safeMessages = this.stripImages(messages, provider);
         const response = await attempt(provider, safeMessages);
+        // A resolved-but-empty response (no text AND no tool calls) is NOT a
+        // success: a silently-empty provider must not short-circuit the chain and
+        // heal its own health while the loop's circuit breaker simultaneously
+        // counts it as a failure (audit #1/#2). Treat it as a retryable failure so
+        // the next healthy provider is tried. Detection is by content only — the
+        // token count is deliberately ignored (a dropped usage frame must not be
+        // mistaken for an empty answer; audit #18).
+        if (isEmptyProviderResponse(response)) {
+          throw new Error(`Provider "${provider.name}" returned an empty response (no text or tool calls)`);
+        }
         health.recordSuccess(provider.name);
 
         // Require 3 consecutive successes before re-enabling thinking to

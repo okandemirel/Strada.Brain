@@ -46,6 +46,47 @@ describe("FallbackChainProvider", () => {
     expect(p2.chat).toHaveBeenCalledTimes(1);
   });
 
+  // Audit #1/#2: a resolved-but-empty response must NOT short-circuit the chain as
+  // a success — a silently-empty provider should fail over to the next healthy one.
+  it("falls over to the next provider when a provider returns an empty response", async () => {
+    const p1 = { ...createMockProvider(), name: "empty-provider" };
+    (p1.chat as ReturnType<typeof vi.fn>).mockResolvedValue({
+      text: "",
+      toolCalls: [],
+      stopReason: "end_turn",
+      usage: { inputTokens: 1, outputTokens: 0, totalTokens: 1 }, // non-zero tokens: detection is by content, not the token heuristic
+    });
+    const p2 = { ...createMockProvider({ text: "real-answer" }), name: "real-provider" };
+
+    const chain = new FallbackChainProvider([p1, p2]);
+    const result = await chain.chat("sys", [], []);
+
+    expect(result.text).toBe("real-answer");
+    expect(p1.chat).toHaveBeenCalledTimes(1);
+    expect(p2.chat).toHaveBeenCalledTimes(1);
+  });
+
+  // A response WITH tool calls (even with empty text) is NOT empty — it must be returned, not failed over.
+  it("returns a tool-call response with empty text without failing over", async () => {
+    const p1 = {
+      ...createMockProvider(),
+      name: "toolcall-provider",
+    };
+    (p1.chat as ReturnType<typeof vi.fn>).mockResolvedValue({
+      text: "",
+      toolCalls: [{ id: "t1", name: "do_thing", input: {} }],
+      stopReason: "tool_use",
+      usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+    });
+    const p2 = { ...createMockProvider({ text: "should-not-reach" }), name: "p2" };
+
+    const chain = new FallbackChainProvider([p1, p2]);
+    const result = await chain.chat("sys", [], []);
+
+    expect(result.toolCalls).toHaveLength(1);
+    expect(p2.chat).not.toHaveBeenCalled();
+  });
+
   it("tries all providers and throws when all fail", async () => {
     const p1 = { ...createMockProvider(), name: "provider-1" };
     (p1.chat as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("P1 down"));
