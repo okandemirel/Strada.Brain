@@ -57,7 +57,14 @@ export interface ProviderModelCatalogOptions {
   readonly ttlMs: number;
   /** Optional persistence boundary (disk impl is a later phase). */
   readonly persist?: CatalogPersist;
+  /** Injectable for tests; defaults to the global `setInterval`. */
+  readonly setIntervalFn?: (callback: () => void, ms: number) => IntervalHandle;
+  /** Injectable for tests; defaults to the global `clearInterval`. */
+  readonly clearIntervalFn?: (handle: IntervalHandle) => void;
 }
+
+/** Opaque interval handle; Node's timer exposes `.unref()`, the browser's does not. */
+type IntervalHandle = { unref?: () => void };
 
 interface CacheEntry {
   models: ModelInfo[];
@@ -74,12 +81,50 @@ export class ProviderModelCatalog {
   private readonly ttlMs: number;
   private readonly persist?: CatalogPersist;
   private readonly cache = new Map<string, CacheEntry>();
+  private readonly setIntervalFn: (callback: () => void, ms: number) => IntervalHandle;
+  private readonly clearIntervalFn: (handle: IntervalHandle) => void;
+  private autoRefreshTimer?: IntervalHandle;
+  private refreshInFlight = false;
 
   constructor(options: ProviderModelCatalogOptions) {
     this.load = options.load;
     this.now = options.now;
     this.ttlMs = options.ttlMs;
     this.persist = options.persist;
+    this.setIntervalFn =
+      options.setIntervalFn ?? ((cb, ms) => setInterval(cb, ms) as unknown as IntervalHandle);
+    this.clearIntervalFn =
+      options.clearIntervalFn ??
+      ((handle) => clearInterval(handle as unknown as ReturnType<typeof setInterval>));
+  }
+
+  /**
+   * Begin refreshing the catalog every `intervalMs` so model lists stay current
+   * without a manual trigger. The interval is `unref`'d so it never keeps the
+   * process alive, and overlapping ticks are skipped while a prior refresh is
+   * still in flight. Calling again first stops any existing timer.
+   */
+  startAutoRefresh(intervalMs: number): void {
+    this.stopAutoRefresh();
+    const timer = this.setIntervalFn(() => {
+      if (this.refreshInFlight) {
+        return;
+      }
+      this.refreshInFlight = true;
+      void this.refresh().finally(() => {
+        this.refreshInFlight = false;
+      });
+    }, intervalMs);
+    timer.unref?.();
+    this.autoRefreshTimer = timer;
+  }
+
+  /** Stop the periodic refresh started by `startAutoRefresh`. Safe to call when not running. */
+  stopAutoRefresh(): void {
+    if (this.autoRefreshTimer) {
+      this.clearIntervalFn(this.autoRefreshTimer);
+      this.autoRefreshTimer = undefined;
+    }
   }
 
   /**

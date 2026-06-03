@@ -265,6 +265,7 @@ export async function initializeAIProvider(
   // in the normal app boot path (initializeAIProvider is never invoked by the
   // setup wizard), so the wizard is unaffected.
   const CATALOG_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
+  const CATALOG_AUTO_REFRESH_MS = 30 * 60 * 1000; // 30 minutes
   const catalogStore = createProviderModelCatalogStore(config.memory.dbPath);
   const modelCatalog = await ProviderModelCatalog.create({
     load: () => providerManager.listAvailableWithModels(),
@@ -305,6 +306,13 @@ export async function initializeAIProvider(
         error: error instanceof Error ? error.message : String(error),
       }),
     );
+
+  // Keep the catalog continuously fresh so the setup wizard, admin panel, and
+  // chat model picker reflect newly available models (e.g. a new Codex slug)
+  // without a manual refresh. The timer is unref'd, so it never holds the
+  // process open, and overlapping ticks are skipped internally — non-blocking
+  // and cannot break boot.
+  modelCatalog.startAutoRefresh(CATALOG_AUTO_REFRESH_MS);
 
   logger.info("ProviderManager initialized with per-chat switching support");
 

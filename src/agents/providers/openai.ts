@@ -15,8 +15,11 @@ import { fetchWithRetry as sharedFetchWithRetry } from "../../common/fetch-with-
 import {
   ensureOpenAiSubscriptionAuth,
   refreshOpenAiSubscriptionToken,
+  expandHomePath,
   OPENAI_CHATGPT_AUTH_DEFAULT_FILE,
 } from "../../common/openai-subscription-auth.js";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 const MAX_RETRIES = 3;
 export const MAX_SSE_BUFFER_BYTES = 1 * 1024 * 1024; // 1 MB
@@ -678,7 +681,7 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
   async listModels(): Promise<string[]> {
     try {
       if (this.isChatGptSubscriptionMode()) {
-        return [this.model];
+        return this.listChatGptSubscriptionModels();
       }
       const response = await fetch(`${this.baseUrl}/models`, {
         method: "GET",
@@ -690,6 +693,38 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
       return (data.data || []).map((m) => m.id).sort();
     } catch {
       return [this.model];
+    }
+  }
+
+  /**
+   * Discover the available Codex models for a ChatGPT/Codex subscription. The
+   * subscription /responses endpoint exposes no live /models list, but the Codex
+   * CLI writes the available models to `models_cache.json` next to the auth file
+   * (e.g. `~/.codex/models_cache.json`). We read the cached `slug` values so the
+   * model catalog/picker can offer the full Codex set instead of just the one
+   * configured model. Any failure (missing/unparseable/empty) degrades to
+   * `[this.model]` and never throws — this is a best-effort local read.
+   */
+  private listChatGptSubscriptionModels(): string[] {
+    const fallback = [this.model];
+    try {
+      const authConfig = this.getChatGptSubscriptionAuth();
+      const authFile = expandHomePath(
+        authConfig.authFile ?? OPENAI_CHATGPT_AUTH_DEFAULT_FILE,
+        process.env,
+      );
+      const cacheFile = join(dirname(authFile), "models_cache.json");
+      const parsed = JSON.parse(readFileSync(cacheFile, "utf8")) as {
+        models?: Array<{ slug?: unknown }>;
+      };
+      const slugs = (parsed.models ?? [])
+        .map((entry) => entry?.slug)
+        .filter((slug): slug is string => typeof slug === "string" && slug.length > 0);
+      if (slugs.length === 0) return fallback;
+      // Ensure the configured model is present, then dedupe (preserving order).
+      return Array.from(new Set([this.model, ...slugs]));
+    } catch {
+      return fallback;
     }
   }
 

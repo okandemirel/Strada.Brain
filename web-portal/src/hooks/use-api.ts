@@ -599,7 +599,10 @@ export function useProviderModels() {
   return useQuery<ProviderModelsResponse>({
     queryKey: ['provider-models'],
     queryFn: () => fetchApi<ProviderModelsResponse>('/api/providers/models'),
-    refetchInterval: false,
+    // Keep the setup wizard, admin panel, and chat model picker in sync with the
+    // server-side catalog (which itself auto-refreshes) without a manual refetch.
+    refetchInterval: 5 * 60_000,
+    refetchOnWindowFocus: true,
   })
 }
 

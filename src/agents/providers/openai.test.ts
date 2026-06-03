@@ -1,4 +1,7 @@
-import { vi, beforeEach } from "vitest";
+import { vi, beforeEach, afterEach } from "vitest";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { OpenAIProvider } from "./openai.js";
 
 vi.mock("../../utils/logger.js", () => ({
@@ -472,5 +475,62 @@ describe("OpenAIProvider", () => {
 
     await expect(provider.healthCheck()).resolves.toBe(false);
     expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  describe("subscription listModels() reads the Codex models cache", () => {
+    let dir: string;
+
+    beforeEach(() => {
+      dir = mkdtempSync(join(tmpdir(), "codex-models-"));
+    });
+
+    function provider(authFile: string): OpenAIProvider {
+      return new OpenAIProvider(
+        { mode: "chatgpt-subscription", accessToken: "tok", accountId: "acct", authFile },
+        "gpt-5.4",
+      );
+    }
+
+    it("returns the slugs from the sibling models_cache.json (incl. this.model, deduped)", async () => {
+      const authFile = join(dir, "auth.json");
+      writeFileSync(
+        join(dir, "models_cache.json"),
+        JSON.stringify({
+          fetched_at: "now",
+          models: [
+            { slug: "gpt-5.5", display_name: "GPT 5.5" },
+            { slug: "gpt-5.4", display_name: "GPT 5.4" },
+            { slug: "gpt-5.4-mini", display_name: "GPT 5.4 mini" },
+            { slug: "gpt-5.3-codex-spark" },
+          ],
+        }),
+      );
+
+      const models = await provider(authFile).listModels();
+
+      expect(models).toContain("gpt-5.5");
+      expect(models).toContain("gpt-5.4-mini");
+      expect(models).toContain("gpt-5.3-codex-spark");
+      // this.model ("gpt-5.4") is present exactly once (deduped).
+      expect(models.filter((m) => m === "gpt-5.4")).toHaveLength(1);
+      // Did NOT hit the live /models endpoint.
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it("falls back to [this.model] when the cache file is missing", async () => {
+      const models = await provider(join(dir, "auth.json")).listModels();
+      expect(models).toEqual(["gpt-5.4"]);
+    });
+
+    it("falls back to [this.model] when the cache file is unparseable", async () => {
+      const authFile = join(dir, "auth.json");
+      writeFileSync(join(dir, "models_cache.json"), "{ not json");
+      const models = await provider(authFile).listModels();
+      expect(models).toEqual(["gpt-5.4"]);
+    });
+
+    afterEach(() => {
+      rmSync(dir, { recursive: true, force: true });
+    });
   });
 });

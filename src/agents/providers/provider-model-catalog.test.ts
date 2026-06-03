@@ -108,4 +108,79 @@ describe("ProviderModelCatalog", () => {
     // Seeded entry honors its persisted fetchedAt for staleness.
     expect(catalog.isStale("openai")).toBe(false);
   });
+
+  describe("startAutoRefresh / stopAutoRefresh", () => {
+    function makeTimerHarness() {
+      let tick: (() => void) | undefined;
+      const unref = vi.fn();
+      const setIntervalFn = vi.fn((cb: () => void, _ms: number) => {
+        tick = cb;
+        return { unref } as unknown as ReturnType<typeof setInterval>;
+      });
+      const clearIntervalFn = vi.fn();
+      return {
+        setIntervalFn,
+        clearIntervalFn,
+        unref,
+        async fire() {
+          tick?.();
+          // Let the (async) refresh settle.
+          await Promise.resolve();
+          await Promise.resolve();
+        },
+      };
+    }
+
+    it("ticks call refresh() and the timer is unref'd; stop clears it", async () => {
+      const load = vi.fn<[], Promise<LoadedProviders>>().mockResolvedValue(makeLoaded());
+      const t = makeTimerHarness();
+      const catalog = new ProviderModelCatalog({
+        load,
+        now: () => 1_000,
+        ttlMs: 60_000,
+        setIntervalFn: t.setIntervalFn,
+        clearIntervalFn: t.clearIntervalFn,
+      });
+
+      catalog.startAutoRefresh(30_000);
+      expect(t.setIntervalFn).toHaveBeenCalledWith(expect.any(Function), 30_000);
+      expect(t.unref).toHaveBeenCalled();
+
+      await t.fire();
+      expect(load).toHaveBeenCalledTimes(1);
+      await t.fire();
+      expect(load).toHaveBeenCalledTimes(2);
+
+      catalog.stopAutoRefresh();
+      expect(t.clearIntervalFn).toHaveBeenCalledTimes(1);
+    });
+
+    it("skips a tick when a refresh is still in flight (no overlap)", async () => {
+      let resolveLoad: (v: LoadedProviders) => void = () => {};
+      const load = vi.fn<[], Promise<LoadedProviders>>().mockImplementation(
+        () => new Promise<LoadedProviders>((r) => { resolveLoad = r; }),
+      );
+      const t = makeTimerHarness();
+      const catalog = new ProviderModelCatalog({
+        load,
+        now: () => 1_000,
+        ttlMs: 60_000,
+        setIntervalFn: t.setIntervalFn,
+        clearIntervalFn: t.clearIntervalFn,
+      });
+
+      catalog.startAutoRefresh(30_000);
+      await t.fire(); // starts refresh #1 (still pending)
+      expect(load).toHaveBeenCalledTimes(1);
+      await t.fire(); // overlapping tick -> skipped
+      expect(load).toHaveBeenCalledTimes(1);
+
+      resolveLoad(makeLoaded());
+      await Promise.resolve();
+      await Promise.resolve();
+
+      await t.fire(); // in-flight cleared -> refresh runs again
+      expect(load).toHaveBeenCalledTimes(2);
+    });
+  });
 });
