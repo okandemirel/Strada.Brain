@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   advanceSetupPollSession,
+  applyOpencodeConfig,
   buildProviderModelDefaults,
   getSetupReviewBlockingReason,
   hasAutoEmbeddingCandidate,
@@ -11,6 +12,7 @@ import {
   readSetupHealthStatus,
   readSetupBootstrapStatus,
 } from './useSetupWizard'
+import { OPENCODE_PLATFORM_BASE_URLS } from '../types/setup-constants'
 
 describe('useSetupWizard helpers', () => {
   afterEach(() => {
@@ -57,6 +59,30 @@ describe('useSetupWizard helpers', () => {
     expect(
       getSetupReviewBlockingReason(true, 'gemini', new Set(['kimi']), {}, {}),
     ).toContain('Gemini embeddings need a usable API key')
+  })
+
+  it('threads the chosen OpenCode platform base URL and model into the config', () => {
+    const config: Record<string, string> = {}
+    applyOpencodeConfig(config, new Set(['opencode']), 'go', { opencode: 'opencode/qwen-3-coder-480b' })
+
+    expect(config.OPENCODE_BASE_URL).toBe(OPENCODE_PLATFORM_BASE_URLS.go)
+    expect(config.OPENCODE_DEFAULT_MODEL).toBe('opencode/qwen-3-coder-480b')
+  })
+
+  it('uses the Zen base URL by default for OpenCode', () => {
+    const config: Record<string, string> = {}
+    applyOpencodeConfig(config, new Set(['opencode']), 'zen', { opencode: 'opencode/qwen-3-coder-480b' })
+
+    expect(config.OPENCODE_BASE_URL).toBe(OPENCODE_PLATFORM_BASE_URLS.zen)
+    expect(config.OPENCODE_DEFAULT_MODEL).toBe('opencode/qwen-3-coder-480b')
+  })
+
+  it('does not write OpenCode env vars when OpenCode is not enabled', () => {
+    const config: Record<string, string> = {}
+    applyOpencodeConfig(config, new Set(['claude']), 'go', { claude: 'claude-sonnet-4-6-20250514' })
+
+    expect(config.OPENCODE_BASE_URL).toBeUndefined()
+    expect(config.OPENCODE_DEFAULT_MODEL).toBeUndefined()
   })
 
   it('detects a live setup surface from the csrf endpoint', async () => {

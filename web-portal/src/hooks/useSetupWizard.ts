@@ -18,8 +18,11 @@ import {
   PROVIDER_MAP,
   CHANNELS,
   EMBEDDING_CAPABLE,
+  DEFAULT_OPENCODE_PLATFORM,
   getDefaultProviderModel,
+  getOpencodeBaseUrl,
   getPresetProviderModel,
+  type OpencodePlatform,
 } from '../types/setup-constants'
 import { isSetupStatusResponse } from '../../../src/common/setup-contract.ts'
 import { deriveSetupBootstrapView, transitionSetupStatus } from '../../../src/common/setup-state.ts'
@@ -106,6 +109,26 @@ export function getSetupReviewBlockingReason(
 
   const providerName = PROVIDER_MAP[embeddingProvider]?.name ?? embeddingProvider
   return `${providerName} embeddings need a usable API key before setup can be saved.`
+}
+
+/**
+ * Thread the chosen OpenCode hosted platform (Zen/Go) into the generated config
+ * so saving setup writes `OPENCODE_BASE_URL` (the platform's base URL) and
+ * `OPENCODE_DEFAULT_MODEL` (the selected OpenCode model). No-ops when OpenCode is
+ * not in the provider chain.
+ */
+export function applyOpencodeConfig(
+  config: Record<string, string>,
+  checkedProviders: Set<string>,
+  opencodePlatform: OpencodePlatform,
+  providerModels: Record<string, string>,
+): void {
+  if (!checkedProviders.has('opencode')) return
+  config.OPENCODE_BASE_URL = getOpencodeBaseUrl(opencodePlatform)
+  const model = (providerModels.opencode ?? '').trim()
+  if (model) {
+    config.OPENCODE_DEFAULT_MODEL = model
+  }
 }
 
 export function buildProviderModelDefaults(
@@ -306,6 +329,7 @@ export function useSetupWizard() {
   const [providerModels, setProviderModels] = useState<Record<string, string>>(() =>
     buildProviderModelDefaults(['claude'], null),
   )
+  const [opencodePlatform, setOpencodePlatformState] = useState<OpencodePlatform>(DEFAULT_OPENCODE_PLATFORM)
   const [projectPath, setProjectPathState] = useState('')
   const [pathValid, setPathValid] = useState<boolean | null>(null)
   const [pathError, setPathError] = useState<string | null>(null)
@@ -819,6 +843,10 @@ export function useSetupWizard() {
     setProviderModels((prev) => ({ ...prev, [id]: model }))
   }, [])
 
+  const setOpencodePlatform = useCallback((platform: OpencodePlatform) => {
+    setOpencodePlatformState(platform)
+  }, [])
+
   const applySetupBootstrapStatus = useCallback((status: SetupStatusResponse) => {
     rememberReadyUrl(status.readyUrl)
     const bootstrapView = deriveSetupBootstrapView(status)
@@ -916,6 +944,11 @@ export function useSetupWizard() {
         config[`${id.toUpperCase()}_MODEL`] = model
       }
     }
+
+    // Thread the OpenCode platform (Zen/Go) base URL + chosen model into .env so
+    // the backend configures OpenCode's platform via OPENCODE_BASE_URL /
+    // OPENCODE_DEFAULT_MODEL.
+    applyOpencodeConfig(config, checkedProviders, opencodePlatform, providerModels)
 
     // Add provider API keys
     for (const id of chain) {
@@ -1093,7 +1126,7 @@ export function useSetupWizard() {
       setSaveStatus('error')
       setSaveError(err instanceof Error ? err.message : 'Save failed')
     }
-  }, [projectPath, ragEnabled, embeddingProvider, embeddingModel, language, channel, selectedPreset, checkedProviders, providerKeys, providerAuthModes, providerModels, channelConfig, daemonEnabled, autonomyEnabled, autonomyHours, daemonBudget, globalDailyBudget, reviewBlockingReason, applySetupBootstrapStatus, rememberReadyUrl, stopBootstrapPolling, isBootstrapPollingActive, obsidianEnabled, obsidianVaultPath, obsidianApiKey])
+  }, [projectPath, ragEnabled, embeddingProvider, embeddingModel, language, channel, selectedPreset, checkedProviders, providerKeys, providerAuthModes, providerModels, opencodePlatform, channelConfig, daemonEnabled, autonomyEnabled, autonomyHours, daemonBudget, globalDailyBudget, reviewBlockingReason, applySetupBootstrapStatus, rememberReadyUrl, stopBootstrapPolling, isBootstrapPollingActive, obsidianEnabled, obsidianVaultPath, obsidianApiKey])
 
   return {
     // State
@@ -1107,6 +1140,7 @@ export function useSetupWizard() {
     providerKeys,
     providerAuthModes,
     providerModels,
+    opencodePlatform,
     projectPath,
     pathValid,
     pathError,
@@ -1154,6 +1188,7 @@ export function useSetupWizard() {
     signInWithChatGpt,
     refreshOpenAiSubscriptionStatus,
     setProviderModel,
+    setOpencodePlatform,
     setProjectPath,
     validatePath,
     installMcp,

@@ -63,6 +63,8 @@ export default function SetupWizard() {
             setProviderKey={wiz.setProviderKey}
             setProviderAuthMode={wiz.setProviderAuthMode}
             setProviderModel={wiz.setProviderModel}
+            opencodePlatform={wiz.opencodePlatform}
+            setOpencodePlatform={wiz.setOpencodePlatform}
             openaiSubscription={wiz.openaiSubscription}
             signInWithChatGpt={wiz.signInWithChatGpt}
             refreshOpenAiSubscriptionStatus={wiz.refreshOpenAiSubscriptionStatus}
