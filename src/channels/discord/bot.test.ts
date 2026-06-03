@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import { ThreadChannel } from "discord.js";
 import { DiscordChannel } from "./bot.js";
 import { AuthManager } from "../../security/auth.js";
 
@@ -331,20 +332,35 @@ describe("DiscordChannel", () => {
       expect(threadId).toBeDefined();
     });
 
-    it.skip("should send in thread", async () => {
-      // Skipped: requires ThreadChannel mock
+    // sendInThread() rejects anything that is not a ThreadChannel instance, so
+    // these resolve the thread id to a ThreadChannel-prototyped mock (real
+    // ThreadChannel from the partially-mocked discord.js) just for this test.
+    function stubThreadFetch(): { send: ReturnType<typeof vi.fn> } {
+      const thread = Object.assign(Object.create(ThreadChannel.prototype) as object, {
+        id: "thread123",
+        send: vi.fn().mockResolvedValue({ id: "threadmsg123" }),
+      }) as { send: ReturnType<typeof vi.fn> };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (channel as any).client.channels.fetch = vi.fn().mockResolvedValue(thread);
+      return thread;
+    }
+
+    it("should send in thread", async () => {
       await channel.connect();
+      const thread = stubThreadFetch();
       await expect(
         channel.sendInThread("thread123", "Thread message")
       ).resolves.not.toThrow();
+      expect(thread.send).toHaveBeenCalledWith("Thread message");
     });
 
-    it.skip("should send markdown in thread", async () => {
-      // Skipped: requires ThreadChannel mock
+    it("should send markdown in thread", async () => {
       await channel.connect();
+      const thread = stubThreadFetch();
       await expect(
         channel.sendInThread("thread123", "**Bold**", { markdown: true })
       ).resolves.not.toThrow();
+      expect(thread.send).toHaveBeenCalled();
     });
   });
 
