@@ -304,6 +304,29 @@ export class SupervisorDispatcher {
     return result;
   }
 
+  /**
+   * Emit a node terminated by a control-plane abort (sibling winddown / task cancel).
+   * Twin of {@link emitSkippedNode} but reports the first-class "cancelled" status so
+   * the ResultAggregator excludes it from the failure gate (audit #13). It surfaces
+   * through the benign "skipped" UI path — a control-plane cancel is NOT an error, so
+   * it must not flow through the node_failed path that produces "All providers failed"
+   * log-noise.
+   */
+  private emitCancelledNode(node: TaggedGoalNode, reason: string): NodeResult {
+    const result = this.makeCancelledResult(node, reason);
+    this.emitNodeWorkspaceStatus(node, "skipped", result);
+    this.emitNodeNarrative(node, "skipped", reason);
+    this.emitNodeCanvasUpdate(node, "skipped");
+    this.emitActivity(reason, String(node.id), "supervisor_node_cancelled");
+    this.emitter?.emit("supervisor:node_complete", {
+      nodeId: node.id,
+      status: result.status,
+      duration: result.duration ?? 0,
+      cost: result.cost ?? 0,
+    });
+    return result;
+  }
+
   // ---------------------------------------------------------------------------
   // WAVE COMPUTATION
   // ---------------------------------------------------------------------------
@@ -425,8 +448,15 @@ export class SupervisorDispatcher {
         }
 
         if (budgetExhausted || signal?.aborted) {
-          skippedNodeIds.add(node.id as string);
-          results.push(this.emitSkippedNode(node, "Skipped: budget exhausted or aborted"));
+          // A control-plane abort is a benign cancel, not a skip: emit "cancelled"
+          // (excluded from the failure gate). Only a budget-exhausted node is skipped,
+          // and a skip leaves dependents unsatisfied so it must propagate transitively.
+          if (signal?.aborted) {
+            results.push(this.emitCancelledNode(node, "Cancelled: control-plane abort"));
+          } else {
+            skippedNodeIds.add(node.id as string);
+            results.push(this.emitSkippedNode(node, "Skipped: budget exhausted"));
+          }
           continue;
         }
 
@@ -455,8 +485,14 @@ export class SupervisorDispatcher {
         if (budgetExhausted || signal?.aborted || budget.exhausted()) {
           concurrency.release();
           budget.succeed();
-          skippedNodeIds.add(node.id as string);
-          results.push(this.emitSkippedNode(node, "Skipped: budget exhausted or aborted"));
+          // Same split as the pre-budget guard: a control-plane abort cancels (benign,
+          // excluded from the failure gate); budget exhaustion skips (and propagates).
+          if (signal?.aborted) {
+            results.push(this.emitCancelledNode(node, "Cancelled: control-plane abort"));
+          } else {
+            skippedNodeIds.add(node.id as string);
+            results.push(this.emitSkippedNode(node, "Skipped: budget exhausted"));
+          }
           continue;
         }
 
@@ -555,6 +591,10 @@ export class SupervisorDispatcher {
     return this.makeResult(node, "skipped", reason);
   }
 
+  private makeCancelledResult(node: TaggedGoalNode, reason: string): NodeResult {
+    return this.makeResult(node, "cancelled", reason);
+  }
+
   // ---------------------------------------------------------------------------
   // EXECUTE WITH RETRY + TIMEOUT
   // ---------------------------------------------------------------------------
@@ -588,6 +628,16 @@ export class SupervisorDispatcher {
         const result = await this.executeWithTimeout(node, externalSignal);
         return result;
       } catch (err: unknown) {
+        // Control-plane cancellation: the external (dispatch) signal aborted this node
+        // in-flight (sibling winddown / task cancel). That is a benign cancel, NOT a
+        // failure — return a first-class "cancelled" result so it is excluded from the
+        // failure gate and skips the node_failed error-noise (audit #13). Checked before
+        // the transient-retry branch so a real cancel never burns a retry. A per-node
+        // *timeout* (externalSignal NOT aborted) still falls through to "failed".
+        if (externalSignal?.aborted) {
+          return this.makeCancelledResult(node, "Cancelled: control-plane abort");
+        }
+
         // On first attempt, retry if transient
         if (attempt === 0 && isTransientError(err)) {
           // 2s backoff before retry

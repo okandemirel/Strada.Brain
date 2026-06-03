@@ -188,7 +188,11 @@ describe("SupervisorDispatcher", () => {
     );
   });
 
-  it("supports external abort signal", async () => {
+  // audit #13 (PRODUCING-HALF): a control-plane abort of an IN-FLIGHT node is a
+  // benign cancel, not a failure. It must yield a first-class "cancelled" status
+  // (excluded from the failure gate) instead of "failed" — otherwise a user/sibling
+  // cancel floods logs with "All providers failed" error-noise.
+  it("marks an in-flight node cancelled (not failed) on control-plane abort", async () => {
     const controller = new AbortController();
     const executeNode = vi.fn().mockImplementation(async () => {
       await new Promise(resolve => setTimeout(resolve, 5000));
@@ -201,10 +205,81 @@ describe("SupervisorDispatcher", () => {
       config: { maxParallelNodes: 4, nodeTimeoutMs: 60000, maxFailureBudget: 3 },
     });
 
-    // Abort after 50ms
+    // Abort after 50ms (external/control-plane cancel while the node is running)
     setTimeout(() => controller.abort(), 50);
     const results = await dispatcher.dispatch(nodes, controller.signal);
-    expect(results[0].status).toBe("failed");
+    expect(results[0].status).toBe("cancelled");
+  });
+
+  // audit #13: a node that has NOT yet launched when the control-plane signal aborts
+  // mid-wave must also be "cancelled", not "skipped" (skipped is reserved for budget
+  // exhaustion / failed-dependency). Covers the first pre-launch guard.
+  it("marks not-yet-launched nodes cancelled when the control-plane signal aborts mid-wave", async () => {
+    const controller = new AbortController();
+    const started: string[] = [];
+    const executeNode = vi.fn().mockImplementation(async (node: TaggedGoalNode) => {
+      started.push(String(node.id));
+      if (String(node.id) === "A") {
+        controller.abort(); // abort synchronously while the wave is being iterated
+        return makeOkResult("A");
+      }
+      return makeOkResult(String(node.id));
+    });
+
+    const dispatcher = new SupervisorDispatcher({
+      executeNode,
+      config: { maxParallelNodes: 1, nodeTimeoutMs: 60000, maxFailureBudget: 5 },
+    });
+    const nodes = [
+      makeAssignedNode("A", "a", "claude"),
+      makeAssignedNode("B", "b", "claude"),
+      makeAssignedNode("C", "c", "claude"),
+    ];
+
+    const results = await dispatcher.dispatch(nodes, controller.signal);
+    const status = new Map(results.map((r) => [String(r.nodeId), r.status]));
+    expect(status.get("B")).toBe("cancelled");
+    expect(status.get("C")).toBe("cancelled");
+    expect(started).not.toContain("B"); // never launched
+    expect(started).not.toContain("C");
+  });
+
+  // audit #13: a node waiting on a concurrency slot when the abort lands (the second
+  // pre-launch guard, after concurrency.acquire) is likewise cancelled, not skipped.
+  it("marks a node waiting for a concurrency slot cancelled when aborted mid-wait", async () => {
+    const controller = new AbortController();
+    let releaseA: () => void = () => {};
+    const aGate = new Promise<void>((resolve) => { releaseA = resolve; });
+    const started: string[] = [];
+    const executeNode = vi.fn().mockImplementation(async (node: TaggedGoalNode) => {
+      started.push(String(node.id));
+      if (String(node.id) === "A") {
+        await aGate; // hold the only slot until the test releases it
+        return makeOkResult("A");
+      }
+      return makeOkResult(String(node.id));
+    });
+
+    const dispatcher = new SupervisorDispatcher({
+      executeNode,
+      config: { maxParallelNodes: 1, nodeTimeoutMs: 60000, maxFailureBudget: 5 },
+    });
+    const nodes = [
+      makeAssignedNode("A", "a", "claude"),
+      makeAssignedNode("B", "b", "claude"),
+    ];
+
+    const resultsPromise = dispatcher.dispatch(nodes, controller.signal);
+    // Let A take the only slot and B queue on concurrency.acquire(), then abort and
+    // release A so B resumes from the queue straight into the post-acquire guard.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    controller.abort();
+    releaseA();
+
+    const results = await resultsPromise;
+    const status = new Map(results.map((r) => [String(r.nodeId), r.status]));
+    expect(status.get("B")).toBe("cancelled");
+    expect(started).not.toContain("B"); // never launched
   });
 
   it("retries once on transient failure (L1)", async () => {
