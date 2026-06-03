@@ -278,6 +278,56 @@ describe("OpenAIProvider", () => {
     expect(result.usage).toEqual({ inputTokens: 3, outputTokens: 1, totalTokens: 4 });
   });
 
+  // Regression: the Codex/ChatGPT subscription backend emits `keepalive` heartbeat
+  // frames (~every 30s) during long silent reasoning phases (gpt-5.x models think
+  // for tens of seconds to minutes producing no output_text). These prove the
+  // connection is alive and must be surfaced as stream progress (an empty onChunk)
+  // so the orchestrator's stall-timeout watchdog does not abort a model that is
+  // still reasoning. Without this the whole provider chain fails ("This operation
+  // was aborted"). Mirrors the reasoning_content progress signal in the
+  // OpenAI-compatible streaming path.
+  it("treats subscription keepalive heartbeats as stream progress", async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(
+          [
+            "event: keepalive",
+            'data: {"type":"keepalive","sequence_number":3}',
+            "",
+            "event: response.output_text.delta",
+            'data: {"delta":"hi"}',
+            "",
+            "event: response.completed",
+            'data: {"response":{"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2},"output":[{"id":"m","type":"message","role":"assistant","content":[{"type":"output_text","text":"hi"}]}]}}',
+            "",
+          ].join("\n"),
+        ));
+        controller.close();
+      },
+    });
+    mockFetch.mockResolvedValue({ ok: true, body: stream, text: async () => "", headers: new Headers() });
+
+    const provider = new OpenAIProvider({
+      mode: "chatgpt-subscription",
+      accessToken: "access-token",
+      accountId: "account-id",
+    });
+
+    const chunks: string[] = [];
+    const result = await provider.chatStream(
+      "system",
+      [{ role: "user", content: "ping" }],
+      [],
+      (c) => chunks.push(c),
+    );
+
+    // The keepalive must produce a progress signal (an empty-string chunk) so the
+    // stall watchdog's markProgress fires; visible text must still stream too.
+    expect(chunks).toContain("");
+    expect(chunks).toContain("hi");
+    expect(result.text).toBe("hi");
+  });
+
   // Regression (M2): the subscription /responses path must forward the caller's
   // AbortSignal so user/task cancel and the orchestrator stall-timeout can stop
   // the in-flight request instead of leaking the socket.

@@ -146,7 +146,24 @@ export interface BackgroundExecutorOptions {
   learningEventBus?: IEventEmitter<LearningEventMap>;
   workspaceLeaseManager?: WorkspaceLeaseManager;
   workspaceBus?: WorkspaceBus;
+  /**
+   * Per-task INACTIVITY timeout (ms). A task is aborted only after it produces no
+   * progress for this long; every progress update resets the window. Defaults to
+   * {@link DEFAULT_TASK_INACTIVITY_TIMEOUT_MS}. Reasoning models (gpt-5.x) can
+   * "think" for minutes on a single step, so this must NOT be a hard wall-clock cap.
+   */
+  taskInactivityTimeoutMs?: number;
 }
+
+/**
+ * Default per-task inactivity window. A background task is aborted only after it
+ * has produced NO progress update for this long (not a hard wall-clock cap), so a
+ * reasoning model that legitimately spends minutes on a single step is not killed
+ * mid-flight, while a genuinely hung task still cannot block the conversation
+ * forever. The streaming stall watchdog (LLM_STREAM_STALL_TIMEOUT_MS) independently
+ * detects dead provider connections during a single LLM call.
+ */
+export const DEFAULT_TASK_INACTIVITY_TIMEOUT_MS = 10 * 60 * 1000;
 
 export class BackgroundExecutor {
   private readonly queue: QueueEntry[] = [];
@@ -156,6 +173,7 @@ export class BackgroundExecutor {
   private taskManager: ITaskManager | null = null;
   private readonly orchestrator: IOrchestrator;
   private readonly concurrencyLimit: number;
+  private readonly taskInactivityTimeoutMs: number;
   private readonly decomposer?: GoalDecomposer;
   private readonly goalStorage?: GoalStorage;
   private readonly daemonEventBus?: IEventEmitter<DaemonEventMap>;
@@ -168,6 +186,7 @@ export class BackgroundExecutor {
   constructor(opts: BackgroundExecutorOptions) {
     this.orchestrator = opts.orchestrator;
     this.concurrencyLimit = opts.concurrencyLimit ?? 3;
+    this.taskInactivityTimeoutMs = opts.taskInactivityTimeoutMs ?? DEFAULT_TASK_INACTIVITY_TIMEOUT_MS;
     this.decomposer = opts.decomposer;
     this.goalStorage = opts.goalStorage;
     this.daemonEventBus = opts.daemonEventBus;
@@ -663,17 +682,38 @@ export class BackgroundExecutor {
       this.activeConversations.add(conversationKey);
       this.running++;
 
-      // Combine external cancel signal with a task-level timeout so hung tasks
-      // cannot block the conversation forever.
-      const TASK_TIMEOUT_MS = 300_000;
+      // Combine the external cancel signal with a per-task INACTIVITY watchdog so a
+      // hung task cannot block the conversation forever — WITHOUT killing a task
+      // that is actively working. A reasoning model (gpt-5.x) can legitimately
+      // spend minutes "thinking" on a single step; the previous hard 5-min
+      // wall-clock cap aborted such tasks mid-flight ("This operation was aborted")
+      // and collapsed the whole provider chain. Instead, abort only after the task
+      // has produced NO progress for the inactivity window; every progress update
+      // resets the timer. (The streaming stall watchdog independently catches a
+      // genuinely dead provider connection during a single LLM call.)
+      const inactivityTimeoutMs = this.taskInactivityTimeoutMs;
       const timeoutController = new AbortController();
-      const onAbort = () => timeoutController.abort();
-      entry.signal.addEventListener("abort", onAbort, { once: true });
-      const timeoutTimer = setTimeout(
-        () => timeoutController.abort(new Error(`Task timed out after ${TASK_TIMEOUT_MS}ms`)),
-        TASK_TIMEOUT_MS,
-      );
-      const timedEntry: QueueEntry = { ...entry, signal: timeoutController.signal };
+      const onExternalAbort = () => timeoutController.abort();
+      entry.signal.addEventListener("abort", onExternalAbort, { once: true });
+      let inactivityTimer: ReturnType<typeof setTimeout> | undefined;
+      const armInactivityTimer = (): void => {
+        if (inactivityTimer) clearTimeout(inactivityTimer);
+        inactivityTimer = setTimeout(
+          () => timeoutController.abort(new Error(`Task made no progress for ${inactivityTimeoutMs}ms`)),
+          inactivityTimeoutMs,
+        );
+      };
+      armInactivityTimer();
+      // Wrap onProgress so every progress update the task emits resets the window.
+      const progressAwareOnProgress = (update: TaskProgressUpdate): void => {
+        armInactivityTimer();
+        entry.onProgress(update);
+      };
+      const timedEntry: QueueEntry = {
+        ...entry,
+        signal: timeoutController.signal,
+        onProgress: progressAwareOnProgress,
+      };
 
       this.executeTask(timedEntry)
         .catch((err) => {
@@ -694,8 +734,8 @@ export class BackgroundExecutor {
           }
         })
         .finally(() => {
-          clearTimeout(timeoutTimer);
-          entry.signal.removeEventListener("abort", onAbort);
+          if (inactivityTimer) clearTimeout(inactivityTimer);
+          entry.signal.removeEventListener("abort", onExternalAbort);
           this.activeConversations.delete(conversationKey);
           this.running--;
           try {

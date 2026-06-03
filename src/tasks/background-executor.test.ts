@@ -1462,3 +1462,63 @@ describe("BackgroundExecutor - goal:failed event emission (INT-02)", () => {
   });
 });
 
+// Regression: gpt-5.x reasoning models can spend several minutes "thinking" on a
+// single step with no visible output. The task watchdog must NOT be a hard
+// wall-clock cap (the old fixed 5-min TASK_TIMEOUT_MS aborted them mid-reasoning
+// and collapsed the provider chain). It must be an INACTIVITY timeout that any
+// progress update resets, so an actively-working task never trips it while a
+// genuinely hung task still cannot block the conversation forever.
+describe("BackgroundExecutor - task inactivity timeout", () => {
+  it("aborts a task that reports no progress within the inactivity window", async () => {
+    const mockOrch = createMockOrchestrator();
+    let sawAbort = false;
+    mockOrch.runBackgroundTask = vi.fn(async (_prompt: string, opts: { signal: AbortSignal }) => {
+      await new Promise<void>((_resolve, reject) => {
+        opts.signal.addEventListener("abort", () => { sawAbort = true; reject(new Error("aborted")); }, { once: true });
+      });
+      return "done";
+    });
+
+    const executor = new BackgroundExecutor({
+      orchestrator: mockOrch as any,
+      taskInactivityTimeoutMs: 120,
+    });
+    executor.setTaskManager({ updateStatus: vi.fn(), complete: vi.fn(), fail: vi.fn(), block: vi.fn() } as any);
+
+    executor.enqueue(createTestTask(), new AbortController().signal, vi.fn());
+
+    await vi.waitFor(() => { expect(sawAbort).toBe(true); }, { timeout: 3000 });
+  });
+
+  it("does not abort a long-running task that keeps reporting progress (inactivity resets)", async () => {
+    const mockOrch = createMockOrchestrator();
+    let aborted = false;
+    let progressTicks = 0;
+    mockOrch.runBackgroundTask = vi.fn(async (
+      _prompt: string,
+      opts: { signal: AbortSignal; onProgress: (u: unknown) => void },
+    ) => {
+      opts.signal.addEventListener("abort", () => { aborted = true; }, { once: true });
+      // Run for ~360ms (3x the 120ms window) but report progress every 60ms so
+      // the inactivity timer is reset before it can ever fire.
+      for (let i = 0; i < 6 && !opts.signal.aborted; i++) {
+        await new Promise((r) => setTimeout(r, 60));
+        opts.onProgress("working");
+        progressTicks++;
+      }
+      return "done";
+    });
+
+    const executor = new BackgroundExecutor({
+      orchestrator: mockOrch as any,
+      taskInactivityTimeoutMs: 120,
+    });
+    executor.setTaskManager({ updateStatus: vi.fn(), complete: vi.fn(), fail: vi.fn(), block: vi.fn() } as any);
+
+    executor.enqueue(createTestTask(), new AbortController().signal, vi.fn());
+
+    await vi.waitFor(() => { expect(progressTicks).toBeGreaterThanOrEqual(6); }, { timeout: 3000 });
+    expect(aborted).toBe(false);
+  });
+});
+

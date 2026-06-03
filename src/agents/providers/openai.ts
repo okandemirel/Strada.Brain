@@ -358,6 +358,20 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
       if (!parsed) return;
 
       const { eventName, data } = parsed;
+
+      // The Codex/ChatGPT subscription backend emits `keepalive` heartbeat frames
+      // (~every 30s) during the model's silent reasoning phase — gpt-5.x models can
+      // "think" for tens of seconds to minutes producing no output_text, broken only
+      // by these heartbeats. Surface them as stream progress (an empty chunk) so the
+      // orchestrator's stall-timeout watchdog (markProgress) treats the model as
+      // alive instead of aborting it mid-reasoning. Without this the request is
+      // wrongly killed as a stall and the whole provider chain collapses. Mirrors the
+      // reasoning_content progress signal in the OpenAI-compatible streaming path.
+      if (eventName === "keepalive") {
+        onChunk?.("");
+        return;
+      }
+
       if (eventName === "response.output_text.delta" && typeof data.delta === "string") {
         text += data.delta;
         onChunk?.(data.delta);
