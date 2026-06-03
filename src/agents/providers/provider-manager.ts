@@ -167,7 +167,7 @@ export class ProviderManager {
   }
 
   getProvider(chatId: string): IAIProvider {
-    const pref = this.preferences.get(chatId);
+    const pref = this.resolveEffectivePreference(chatId);
     if (!pref) return this.defaultProvider;
 
     if (pref.selectionMode === "strada-hard-pin") {
@@ -326,7 +326,7 @@ export class ProviderManager {
   }
 
   getActiveInfo(chatId: string): ProviderActiveInfo {
-    const pref = this.preferences.get(chatId);
+    const pref = this.resolveEffectivePreference(chatId);
     if (!pref) {
       const defaultProviderName = this.getDefaultPrimaryName();
       return {
@@ -353,6 +353,28 @@ export class ProviderManager {
     };
   }
 
+  /**
+   * Stable, identity-independent key that mirrors the most recent explicit selection
+   * as a brain-wide default. Per-provider/model preferences were keyed by the EPHEMERAL
+   * web profileId; when that churned (page reload / new browser / lost token → a fresh
+   * `issue()`), the per-profile row was orphaned and getActiveInfo/getProvider silently
+   * reverted to the SYSTEM DEFAULT — the chronic "no matter what I pick it reverts". The
+   * mirror lets a brand-new profile inherit the last selection instead of reverting. An
+   * explicit per-chat preference still takes precedence. The sentinel cannot collide with
+   * a real chatId/profileId (those are UUIDs / channel-scoped ids).
+   */
+  private static readonly GLOBAL_PREFERENCE_KEY = "__strada_global_default__";
+
+  /**
+   * Resolve the effective preference for a chat: the explicit per-chat row if present,
+   * otherwise the brain-wide global default (mirror). Centralised so every read path
+   * (getActiveInfo, getProvider, listExecutionCandidates) resolves identically.
+   */
+  private resolveEffectivePreference(chatId: string) {
+    return this.preferences.get(chatId)
+      ?? this.preferences.get(ProviderManager.GLOBAL_PREFERENCE_KEY);
+  }
+
   setPreference(
     chatId: string,
     providerName: string,
@@ -361,6 +383,11 @@ export class ProviderManager {
   ): void {
     const canonicalName = canonicalizeProviderName(providerName) ?? providerName.trim().toLowerCase();
     this.preferences.set(chatId, canonicalName, model, selectionMode);
+    // Mirror to the stable global key so the selection survives web-profileId churn.
+    // Guard against recursing on the sentinel itself.
+    if (chatId !== ProviderManager.GLOBAL_PREFERENCE_KEY) {
+      this.preferences.set(ProviderManager.GLOBAL_PREFERENCE_KEY, canonicalName, model, selectionMode);
+    }
     getLogger().info("Provider preference set", {
       chatId,
       providerName: canonicalName,
@@ -639,7 +666,7 @@ export class ProviderManager {
   }
 
   private resolveExecutionPoolNames(chatId?: string): string[] {
-    const preferred = chatId ? this.preferences.get(chatId) : undefined;
+    const preferred = chatId ? this.resolveEffectivePreference(chatId) : undefined;
     const preferredProvider = preferred?.providerName;
     const primaryName = canonicalizeProviderName(preferredProvider) || this.getDefaultPrimaryName();
     if (preferred?.selectionMode === "strada-hard-pin") {
@@ -655,7 +682,7 @@ export class ProviderManager {
   }
 
   listExecutionCandidates(chatId?: string): ProviderExecutionCandidate[] {
-    const preferred = chatId ? this.preferences.get(chatId) : undefined;
+    const preferred = chatId ? this.resolveEffectivePreference(chatId) : undefined;
 
     return this.resolveExecutionPoolNames(chatId).map((name) => {
       const model =

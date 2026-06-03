@@ -226,6 +226,53 @@ describe("ProviderManager", () => {
     expect(manager.getProviderByName("Kimi (Moonshot)")?.name).toBe("chain(kimi->qwen)");
   });
 
+  // Model-revert root cause: per-provider preferences were keyed by the ephemeral web
+  // profileId, so when the profileId churned (reload / new browser / lost token / a
+  // fresh `issue()`), the per-profile row was orphaned and getActiveInfo silently fell
+  // back to the SYSTEM DEFAULT — the chronic "no matter what I pick it reverts". The
+  // most recent explicit selection is now mirrored to a stable global key so a new
+  // profile inherits it instead of reverting.
+  it("inherits the most recent selection as a global default so it survives profileId churn", () => {
+    const defaultProvider = makeProvider("chain(qwen->kimi)");
+    const manager = new ProviderManager(
+      defaultProvider,
+      { qwen: { apiKey: "qwen-key" }, kimi: { apiKey: "kimi-key" } },
+      { qwen: "qwen-max", kimi: "kimi-for-coding" },
+      "/tmp/provider-manager-test",
+      ["qwen", "kimi"],
+    );
+
+    // User selects under their current web profile.
+    manager.setPreference("profile-A", "Kimi (Moonshot)", "kimi-long-context");
+
+    // The web session churns → a brand-new profileId with no per-profile row. It must
+    // STILL see the selection (global fallback), not the system default.
+    const active = manager.getActiveInfo("profile-B-new");
+    expect(active.providerName).toBe("kimi");
+    expect(active.model).toBe("kimi-long-context");
+    expect(active.isDefault).toBe(false);
+  });
+
+  it("lets an explicit per-chat preference override the inherited global default", () => {
+    const defaultProvider = makeProvider("chain(qwen->kimi)");
+    const manager = new ProviderManager(
+      defaultProvider,
+      { qwen: { apiKey: "qwen-key" }, kimi: { apiKey: "kimi-key" } },
+      { qwen: "qwen-max", kimi: "kimi-for-coding" },
+      "/tmp/provider-manager-test",
+      ["qwen", "kimi"],
+    );
+
+    manager.setPreference("profile-A", "Kimi (Moonshot)", "kimi-for-coding");
+    manager.setPreference("profile-B", "qwen", "qwen-max"); // global is now qwen
+
+    // A keeps its own explicit pref (kimi) even though the global default is qwen.
+    expect(manager.getActiveInfo("profile-A").providerName).toBe("kimi");
+    expect(manager.getActiveInfo("profile-B").providerName).toBe("qwen");
+    // A churned-in new profile inherits the latest global (qwen).
+    expect(manager.getActiveInfo("profile-C-fresh").providerName).toBe("qwen");
+  });
+
   it("limits execution candidates to the configured default chain", () => {
     const defaultProvider = makeProvider("chain(qwen->kimi)");
     const manager = new ProviderManager(
