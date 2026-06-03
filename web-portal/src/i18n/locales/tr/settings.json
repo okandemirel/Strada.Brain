@@ -13,7 +13,6 @@
   "hub.tabs.rateLimits": "Hız Limitleri",
   "hub.tabs.routing": "Yönlendirme",
   "hub.tabs.advanced": "Gelişmiş",
-
   "budget.title": "Bütçe",
   "budget.description": "Tüm sistemlerdeki harcama limitlerini yönetin",
   "budget.loading": "Yükleniyor...",
@@ -40,7 +39,6 @@
   "budget.toastFailed": "Bütçe ayarları güncellenemedi",
   "budget.tokenLimit": "Token Limiti",
   "budget.tokenLimitDescription": "Görev başına maksimum input token. Sınırsız için -1 girin.",
-
   "providers.title": "Sağlayıcılar",
   "providers.description": "AI sağlayıcılarını ve modelleri yapılandırın",
   "providers.primaryWorker": "Birincil Worker",
@@ -57,7 +55,10 @@
   "providers.refreshing": "Yenileniyor...",
   "providers.toastRefreshed": "Modeller yenilendi",
   "providers.toastRefreshFailed": "Modeller yenilenemedi",
-
+  "providers.availableModels": "Kullanilabilir Modeller",
+  "providers.modelsLive": "Canli",
+  "providers.modelsStale": "Eski",
+  "providers.modelsCurated": "Secilmis",
   "agents.title": "Ajanlar",
   "agents.description": "Çoklu ajan sistem yapılandırması",
   "agents.loading": "Yükleniyor...",
@@ -77,7 +78,6 @@
   "agents.timeMinutesAgo": "{{count}}dk önce",
   "agents.timeHoursAgo": "{{count}}sa önce",
   "agents.timeDaysAgo": "{{count}}g önce",
-
   "daemon.title": "Daemon",
   "daemon.description": "Arka plan görev otomasyonu",
   "daemon.loading": "Yükleniyor...",
@@ -101,7 +101,6 @@
   "daemon.toastStarted": "Daemon başlatıldı",
   "daemon.toastStopped": "Daemon durduruldu",
   "daemon.toastFailed": "Daemon {{action}} işlemi başarısız oldu",
-
   "learning.title": "Öğrenme",
   "learning.description": "Kendini geliştirme tanılamaları ve son kararlar",
   "learning.loading": "Yükleniyor...",
@@ -126,7 +125,6 @@
   "learning.outcomes": "Sonuçlar",
   "learning.recentDecisions": "Son Kararlar",
   "learning.noRecentDecisions": "Kaydedilmiş son karar yok",
-
   "persona.title": "Kişilik",
   "persona.description": "Kişilik profilleri ve kanal geçersiz kılmaları",
   "persona.loading": "Yükleniyor...",
@@ -135,12 +133,11 @@
   "persona.availableProfiles": "Mevcut Profiller",
   "persona.active": "(aktif)",
   "persona.switch": "Değiştir",
-  "persona.switching": "Değiştiriliyor\u2026",
+  "persona.switching": "Değiştiriliyor…",
   "persona.channelOverrides": "Kanal Geçersiz Kılmaları",
   "persona.noProfiles": "Yapılandırılmış kişilik profili yok",
   "persona.toastSwitched": "Profil değiştirildi: {{profile}}",
   "persona.toastSwitchFailed": "Profil değiştirilemedi",
-
   "rateLimits.title": "Hız Limitleri",
   "rateLimits.description": "Mesaj ve token hız sınırlama — sınırsız için 0 ayarlayın",
   "rateLimits.loading": "Yükleniyor...",
@@ -151,10 +148,9 @@
   "rateLimits.tokensPerDay": "Token / Gün",
   "rateLimits.tokensPerDayDesc": "Günde tüketilen maksimum token",
   "rateLimits.saveChanges": "Değişiklikleri Kaydet",
-  "rateLimits.saving": "Kaydediliyor\u2026",
+  "rateLimits.saving": "Kaydediliyor…",
   "rateLimits.toastSaved": "Hız limitleri kaydedildi",
   "rateLimits.toastFailed": "Hız limitleri kaydedilemedi",
-
   "routing.title": "Yönlendirme",
   "routing.description": "Yürütme politikası ve sağlayıcı yönlendirmesi",
   "routing.routingPreset": "Yönlendirme Hazır Ayarı",
@@ -171,7 +167,6 @@
   "routing.noActivity": "Henüz yönlendirme etkinliği yok",
   "routing.toastPresetSet": "Yönlendirme hazır ayarı {{preset}} olarak belirlendi",
   "routing.toastPresetFailed": "Yönlendirme hazır ayarı uygulanamadı",
-
   "voice.title": "Ses",
   "voice.description": "Sesli giriş ve çıkış ayarları",
   "voice.browserSupport": "Tarayıcı Desteği",
@@ -190,7 +185,6 @@
   "voice.toastOutputUnsupported": "Sesli çıkış bu tarayıcı tarafından desteklenmiyor",
   "voice.browserStt": "Tarayıcı Transkripsiyon",
   "voice.browserSttDesc": "Sesi tarayıcıda Whisper AI ile yerel olarak yazıya dönüştür (sunucu gerekmez)",
-
   "advanced.title": "Gelişmiş",
   "advanced.description": "Sistem yapılandırması ve tanılama",
   "advanced.autonomousMode": "Otonom Mod",

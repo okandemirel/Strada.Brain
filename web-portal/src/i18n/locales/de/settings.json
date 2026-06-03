@@ -13,7 +13,6 @@
   "hub.tabs.rateLimits": "Ratenlimits",
   "hub.tabs.routing": "Routing",
   "hub.tabs.advanced": "Erweitert",
-
   "budget.title": "Budget",
   "budget.description": "Ausgabenlimits über alle Systeme hinweg verwalten",
   "budget.loading": "Wird geladen...",
@@ -38,7 +37,6 @@
   "budget.sevenDaySpending": "Ausgaben der letzten 7 Tage",
   "budget.toastUpdated": "Budgeteinstellungen aktualisiert",
   "budget.toastFailed": "Budgeteinstellungen konnten nicht aktualisiert werden",
-
   "providers.title": "Anbieter",
   "providers.description": "KI-Anbieter und Modelle konfigurieren",
   "providers.primaryWorker": "Primärer Worker",
@@ -55,7 +53,10 @@
   "providers.refreshing": "Wird aktualisiert...",
   "providers.toastRefreshed": "Modelle aktualisiert",
   "providers.toastRefreshFailed": "Modelle konnten nicht aktualisiert werden",
-
+  "providers.availableModels": "Verfügbare Modelle",
+  "providers.modelsLive": "Live",
+  "providers.modelsStale": "Veraltet",
+  "providers.modelsCurated": "Kuratiert",
   "agents.title": "Agenten",
   "agents.description": "Multi-Agent-Systemkonfiguration",
   "agents.loading": "Wird geladen...",
@@ -75,7 +76,6 @@
   "agents.timeMinutesAgo": "vor {{count}} Min.",
   "agents.timeHoursAgo": "vor {{count}} Std.",
   "agents.timeDaysAgo": "vor {{count}} Tagen",
-
   "daemon.title": "Daemon",
   "daemon.description": "Automatisierung von Hintergrundaufgaben",
   "daemon.loading": "Wird geladen...",
@@ -99,7 +99,6 @@
   "daemon.toastStarted": "Daemon gestartet",
   "daemon.toastStopped": "Daemon gestoppt",
   "daemon.toastFailed": "Daemon konnte nicht {{action}} werden",
-
   "learning.title": "Lernen",
   "learning.description": "Selbstverbesserungs-Diagnose und aktuelle Entscheidungen",
   "learning.loading": "Wird geladen...",
@@ -124,7 +123,6 @@
   "learning.outcomes": "Ergebnisse",
   "learning.recentDecisions": "Aktuelle Entscheidungen",
   "learning.noRecentDecisions": "Keine aktuellen Entscheidungen aufgezeichnet",
-
   "persona.title": "Persönlichkeit",
   "persona.description": "Persönlichkeitsprofile und Kanal-Überschreibungen",
   "persona.loading": "Wird geladen...",
@@ -133,14 +131,13 @@
   "persona.availableProfiles": "Verfügbare Profile",
   "persona.active": "(aktiv)",
   "persona.switch": "Wechseln",
-  "persona.switching": "Wird gewechselt\u2026",
+  "persona.switching": "Wird gewechselt…",
   "persona.channelOverrides": "Kanal-Überschreibungen",
   "persona.noProfiles": "Keine Persönlichkeitsprofile konfiguriert",
   "persona.toastSwitched": "Zu Profil gewechselt: {{profile}}",
   "persona.toastSwitchFailed": "Profilwechsel fehlgeschlagen",
-
   "rateLimits.title": "Ratenlimits",
-  "rateLimits.description": "Nachrichten- und Token-Ratenbegrenzung \u2014 0 für unbegrenzt setzen",
+  "rateLimits.description": "Nachrichten- und Token-Ratenbegrenzung — 0 für unbegrenzt setzen",
   "rateLimits.loading": "Wird geladen...",
   "rateLimits.messagesPerMinute": "Nachrichten / Minute",
   "rateLimits.messagesPerMinuteDesc": "Max. akzeptierte Nachrichten pro Minute",
@@ -149,10 +146,9 @@
   "rateLimits.tokensPerDay": "Token / Tag",
   "rateLimits.tokensPerDayDesc": "Max. verbrauchte Token pro Tag",
   "rateLimits.saveChanges": "Änderungen speichern",
-  "rateLimits.saving": "Wird gespeichert\u2026",
+  "rateLimits.saving": "Wird gespeichert…",
   "rateLimits.toastSaved": "Ratenlimits gespeichert",
   "rateLimits.toastFailed": "Ratenlimits konnten nicht gespeichert werden",
-
   "routing.title": "Routing",
   "routing.description": "Ausführungsrichtlinie und Anbieter-Routing",
   "routing.routingPreset": "Routing-Preset",
@@ -169,7 +165,6 @@
   "routing.noActivity": "Noch keine Routing-Aktivität",
   "routing.toastPresetSet": "Routing-Preset auf {{preset}} gesetzt",
   "routing.toastPresetFailed": "Routing-Preset konnte nicht angewendet werden",
-
   "voice.title": "Sprache",
   "voice.description": "Spracheingabe- und Sprachausgabe-Einstellungen",
   "voice.browserSupport": "Browser-Unterstützung",
@@ -186,7 +181,6 @@
   "voice.voiceOutputDescUnsupported": "In diesem Browser nicht verfügbar",
   "voice.toastInputUnsupported": "Spracheingabe wird von diesem Browser nicht unterstützt",
   "voice.toastOutputUnsupported": "Sprachausgabe wird von diesem Browser nicht unterstützt",
-
   "advanced.title": "Erweitert",
   "advanced.description": "Systemkonfiguration und Diagnose",
   "advanced.autonomousMode": "Autonomer Modus",
@@ -196,7 +190,7 @@
   "advanced.remainingMinutes": "{{minutes}} Min. verbleibend",
   "advanced.durationWhenEnabling": "Dauer beim Aktivieren",
   "advanced.openChatFirst": "Öffne zuerst eine Chat-Sitzung",
-  "advanced.noActiveSession": "Keine aktive Sitzung \u2014 öffne zuerst einen Chat",
+  "advanced.noActiveSession": "Keine aktive Sitzung — öffne zuerst einen Chat",
   "advanced.toastEnabled": "Autonomer Modus für {{hours}} Std. aktiviert",
   "advanced.toastDisabled": "Autonomer Modus deaktiviert",
   "advanced.toastFailed": "Autonomer Modus konnte nicht aktualisiert werden",

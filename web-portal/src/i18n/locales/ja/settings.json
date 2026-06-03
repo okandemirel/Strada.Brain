@@ -13,7 +13,6 @@
   "hub.tabs.rateLimits": "レート制限",
   "hub.tabs.routing": "ルーティング",
   "hub.tabs.advanced": "詳細設定",
-
   "budget.title": "予算",
   "budget.description": "全システムの支出制限を管理",
   "budget.loading": "読み込み中...",
@@ -38,7 +37,6 @@
   "budget.sevenDaySpending": "7日間の支出",
   "budget.toastUpdated": "予算設定が更新されました",
   "budget.toastFailed": "予算設定の更新に失敗しました",
-
   "providers.title": "プロバイダー",
   "providers.description": "AIプロバイダーとモデルの設定",
   "providers.primaryWorker": "プライマリワーカー",
@@ -55,7 +53,10 @@
   "providers.refreshing": "更新中...",
   "providers.toastRefreshed": "モデルが更新されました",
   "providers.toastRefreshFailed": "モデルの更新に失敗しました",
-
+  "providers.availableModels": "利用可能なモデル",
+  "providers.modelsLive": "ライブ",
+  "providers.modelsStale": "古い",
+  "providers.modelsCurated": "キュレート",
   "agents.title": "エージェント",
   "agents.description": "マルチエージェントシステムの設定",
   "agents.loading": "読み込み中...",
@@ -75,7 +76,6 @@
   "agents.timeMinutesAgo": "{{count}}分前",
   "agents.timeHoursAgo": "{{count}}時間前",
   "agents.timeDaysAgo": "{{count}}日前",
-
   "daemon.title": "デーモン",
   "daemon.description": "バックグラウンドタスクの自動化",
   "daemon.loading": "読み込み中...",
@@ -99,7 +99,6 @@
   "daemon.toastStarted": "デーモンが開始されました",
   "daemon.toastStopped": "デーモンが停止されました",
   "daemon.toastFailed": "デーモンの{{action}}に失敗しました",
-
   "learning.title": "学習",
   "learning.description": "自己改善診断と最近の判断",
   "learning.loading": "読み込み中...",
@@ -124,7 +123,6 @@
   "learning.outcomes": "結果",
   "learning.recentDecisions": "最近の判断",
   "learning.noRecentDecisions": "最近の判断は記録されていません",
-
   "persona.title": "ペルソナ",
   "persona.description": "パーソナリティプロファイルとチャンネルオーバーライド",
   "persona.loading": "読み込み中...",
@@ -133,14 +131,13 @@
   "persona.availableProfiles": "利用可能なプロファイル",
   "persona.active": "（アクティブ）",
   "persona.switch": "切り替え",
-  "persona.switching": "切り替え中\u2026",
+  "persona.switching": "切り替え中…",
   "persona.channelOverrides": "チャンネルオーバーライド",
   "persona.noProfiles": "パーソナリティプロファイルが設定されていません",
   "persona.toastSwitched": "プロファイルに切り替えました: {{profile}}",
   "persona.toastSwitchFailed": "プロファイルの切り替えに失敗しました",
-
   "rateLimits.title": "レート制限",
-  "rateLimits.description": "メッセージとトークンのレート制限 \u2014 0で無制限",
+  "rateLimits.description": "メッセージとトークンのレート制限 — 0で無制限",
   "rateLimits.loading": "読み込み中...",
   "rateLimits.messagesPerMinute": "メッセージ数 / 分",
   "rateLimits.messagesPerMinuteDesc": "1分あたりの最大メッセージ受付数",
@@ -149,10 +146,9 @@
   "rateLimits.tokensPerDay": "トークン数 / 日",
   "rateLimits.tokensPerDayDesc": "1日あたりの最大トークン消費数",
   "rateLimits.saveChanges": "変更を保存",
-  "rateLimits.saving": "保存中\u2026",
+  "rateLimits.saving": "保存中…",
   "rateLimits.toastSaved": "レート制限が保存されました",
   "rateLimits.toastFailed": "レート制限の保存に失敗しました",
-
   "routing.title": "ルーティング",
   "routing.description": "実行ポリシーとプロバイダールーティング",
   "routing.routingPreset": "ルーティングプリセット",
@@ -169,7 +165,6 @@
   "routing.noActivity": "まだルーティングアクティビティはありません",
   "routing.toastPresetSet": "ルーティングプリセットを {{preset}} に設定しました",
   "routing.toastPresetFailed": "ルーティングプリセットの適用に失敗しました",
-
   "voice.title": "音声",
   "voice.description": "音声入出力の設定",
   "voice.browserSupport": "ブラウザサポート",
@@ -186,7 +181,6 @@
   "voice.voiceOutputDescUnsupported": "このブラウザでは利用できません",
   "voice.toastInputUnsupported": "このブラウザでは音声入力がサポートされていません",
   "voice.toastOutputUnsupported": "このブラウザでは音声出力がサポートされていません",
-
   "advanced.title": "詳細設定",
   "advanced.description": "システム設定と診断",
   "advanced.autonomousMode": "自律モード",
@@ -196,7 +190,7 @@
   "advanced.remainingMinutes": "残り {{minutes}}分",
   "advanced.durationWhenEnabling": "有効化時の期間",
   "advanced.openChatFirst": "最初にチャットセッションを開いてください",
-  "advanced.noActiveSession": "アクティブなセッションがありません \u2014 最初にチャットを開いてください",
+  "advanced.noActiveSession": "アクティブなセッションがありません — 最初にチャットを開いてください",
   "advanced.toastEnabled": "自律モードが {{hours}} 時間有効になりました",
   "advanced.toastDisabled": "自律モードが無効になりました",
   "advanced.toastFailed": "自律モードの更新に失敗しました",

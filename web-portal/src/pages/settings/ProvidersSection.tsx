@@ -2,9 +2,10 @@ import { useState, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import { useProviders, useRagStatus } from '../../hooks/use-api'
+import { useProviders, useProviderModels, useRagStatus } from '../../hooks/use-api'
 import { useWS } from '../../hooks/useWS'
 import { resolveSettingsIdentity } from '../settings-identity'
+import { getProviderModelOptions } from '../../types/setup-constants'
 import PrimaryWorkerSelector from '../../components/PrimaryWorkerSelector'
 import { PageError } from '../../components/ui/page-error'
 
@@ -13,6 +14,7 @@ export default function ProvidersSection() {
   const { sessionId, profileId } = useWS()
   const identity = resolveSettingsIdentity(sessionId, profileId)
   const { data: providers, error } = useProviders(identity?.query ?? null)
+  const { data: modelCatalog, refetch: refetchModels } = useProviderModels()
   const { data: ragData } = useRagStatus()
   const queryClient = useQueryClient()
   const [refreshing, setRefreshing] = useState(false)
@@ -20,20 +22,41 @@ export default function ProvidersSection() {
   const refreshModels = useCallback(async () => {
     setRefreshing(true)
     try {
-      const res = await fetch('/api/models/refresh', { method: 'POST' })
+      const res = await fetch('/api/providers/models/refresh', { method: 'POST' })
       if (!res.ok) throw new Error('Failed')
       toast.success(t('providers.toastRefreshed'))
-      setTimeout(() => queryClient.invalidateQueries({ queryKey: ['providers'] }), 500)
+      // Pull the freshly-refreshed catalog, and let the active-provider panel
+      // pick up any changes too.
+      await refetchModels()
+      queryClient.invalidateQueries({ queryKey: ['providers'] })
     } catch {
       toast.error(t('providers.toastRefreshFailed'))
     } finally {
       setRefreshing(false)
     }
-  }, [queryClient, t])
+  }, [queryClient, refetchModels, t])
 
   const ragStatus = ragData?.status
   const active = providers?.active
   const pool = providers?.executionPool ?? []
+
+  // Per-provider available models, sourced from the live catalog. When a
+  // provider's live list is empty/unavailable, fall back to the static curated
+  // catalog so the picker always shows something selectable.
+  const catalogProviders = modelCatalog?.providers ?? []
+  const modelGroups = catalogProviders.map((entry) => {
+    const liveModels = Array.isArray(entry.models) ? entry.models : []
+    const usingLive = liveModels.length > 0
+    const models = usingLive
+      ? liveModels
+      : getProviderModelOptions(entry.name).map((option) => option.model)
+    return {
+      name: entry.name,
+      models,
+      usingLive,
+      stale: usingLive && entry.stale === true,
+    }
+  }).filter((group) => group.models.length > 0)
 
   // Only surfaced once the query actually runs (it's disabled until a session
   // identity exists), so a pre-session render still shows the section chrome.
@@ -131,6 +154,50 @@ export default function ProvidersSection() {
                 {ragStatus.notice}
               </div>
             )}
+          </div>
+        </>
+      )}
+
+      {/* Available Models (live catalog, static fallback) */}
+      {modelGroups.length > 0 && (
+        <>
+          <p className="text-xs font-semibold uppercase tracking-[0.04em] text-text-tertiary mb-3.5">
+            {t('providers.availableModels')}
+          </p>
+          <div className="bg-white/3 backdrop-blur border border-white/5 rounded-2xl mb-4 overflow-hidden">
+            {modelGroups.map((group, i) => (
+              <div
+                key={group.name}
+                className={`px-4 py-3 text-sm ${i < modelGroups.length - 1 ? 'border-b border-white/5' : ''}`}
+              >
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-text font-medium">{group.name}</span>
+                  {group.stale ? (
+                    <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-yellow-500/15 text-yellow-400">
+                      {t('providers.modelsStale')}
+                    </span>
+                  ) : group.usingLive ? (
+                    <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-green-500/15 text-green-400">
+                      {t('providers.modelsLive')}
+                    </span>
+                  ) : (
+                    <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-white/5 text-text-tertiary">
+                      {t('providers.modelsCurated')}
+                    </span>
+                  )}
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {group.models.map((model) => (
+                    <span
+                      key={model}
+                      className="text-text-secondary font-mono text-[11px] px-2 py-0.5 rounded bg-white/3 border border-white/5"
+                    >
+                      {model}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ))}
           </div>
         </>
       )}

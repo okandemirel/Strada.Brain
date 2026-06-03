@@ -299,6 +299,21 @@ interface ProvidersResponse {
   executionPool?: Array<{ name: string; label: string; defaultModel: string }> | null
 }
 
+export interface ProviderModelEntry {
+  name: string
+  models: string[]
+  /** True when the catalog snapshot for this provider is past its freshness window. */
+  stale?: boolean
+  /** Epoch ms the catalog entry was last fetched, when known. */
+  fetchedAt?: number
+  configured?: boolean
+  activeModel?: string
+}
+
+interface ProviderModelsResponse {
+  providers: ProviderModelEntry[]
+}
+
 interface RagStatusResponse {
   status: {
     state: string
@@ -571,6 +586,20 @@ export function useProviders(identityQuery: string | null) {
     queryFn: () => fetchApi<ProvidersResponse>(`/api/providers/active?${identityQuery}`),
     enabled: Boolean(identityQuery),
     refetchInterval: 30_000,
+  })
+}
+
+/**
+ * GET /api/providers/models -- live model catalog (cached) for every provider,
+ * annotated with freshness metadata (`stale`, `fetchedAt`). Used by the admin
+ * providers panel to list available models per provider, falling back to the
+ * static catalog when a provider's live list is empty.
+ */
+export function useProviderModels() {
+  return useQuery<ProviderModelsResponse>({
+    queryKey: ['provider-models'],
+    queryFn: () => fetchApi<ProviderModelsResponse>('/api/providers/models'),
+    refetchInterval: false,
   })
 }
 

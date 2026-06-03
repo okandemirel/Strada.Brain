@@ -13,7 +13,6 @@
   "hub.tabs.rateLimits": "속도 제한",
   "hub.tabs.routing": "라우팅",
   "hub.tabs.advanced": "고급",
-
   "budget.title": "예산",
   "budget.description": "모든 시스템의 지출 한도를 관리합니다",
   "budget.loading": "로딩 중...",
@@ -38,7 +37,6 @@
   "budget.sevenDaySpending": "7일 지출",
   "budget.toastUpdated": "예산 설정이 업데이트되었습니다",
   "budget.toastFailed": "예산 설정 업데이트에 실패했습니다",
-
   "providers.title": "프로바이더",
   "providers.description": "AI 프로바이더 및 모델 구성",
   "providers.primaryWorker": "기본 워커",
@@ -55,7 +53,10 @@
   "providers.refreshing": "새로고침 중...",
   "providers.toastRefreshed": "모델이 새로고침되었습니다",
   "providers.toastRefreshFailed": "모델 새로고침에 실패했습니다",
-
+  "providers.availableModels": "사용 가능한 모델",
+  "providers.modelsLive": "실시간",
+  "providers.modelsStale": "오래됨",
+  "providers.modelsCurated": "큐레이션",
   "agents.title": "에이전트",
   "agents.description": "멀티 에이전트 시스템 구성",
   "agents.loading": "로딩 중...",
@@ -75,7 +76,6 @@
   "agents.timeMinutesAgo": "{{count}}분 전",
   "agents.timeHoursAgo": "{{count}}시간 전",
   "agents.timeDaysAgo": "{{count}}일 전",
-
   "daemon.title": "데몬",
   "daemon.description": "백그라운드 작업 자동화",
   "daemon.loading": "로딩 중...",
@@ -99,7 +99,6 @@
   "daemon.toastStarted": "데몬이 시작되었습니다",
   "daemon.toastStopped": "데몬이 중지되었습니다",
   "daemon.toastFailed": "데몬 {{action}}에 실패했습니다",
-
   "learning.title": "학습",
   "learning.description": "자기 개선 진단 및 최근 결정",
   "learning.loading": "로딩 중...",
@@ -124,7 +123,6 @@
   "learning.outcomes": "결과",
   "learning.recentDecisions": "최근 결정",
   "learning.noRecentDecisions": "최근 기록된 결정이 없습니다",
-
   "persona.title": "페르소나",
   "persona.description": "성격 프로필 및 채널 오버라이드",
   "persona.loading": "로딩 중...",
@@ -133,14 +131,13 @@
   "persona.availableProfiles": "사용 가능한 프로필",
   "persona.active": "(활성)",
   "persona.switch": "전환",
-  "persona.switching": "전환 중\u2026",
+  "persona.switching": "전환 중…",
   "persona.channelOverrides": "채널 오버라이드",
   "persona.noProfiles": "구성된 성격 프로필이 없습니다",
   "persona.toastSwitched": "프로필 전환됨: {{profile}}",
   "persona.toastSwitchFailed": "프로필 전환에 실패했습니다",
-
   "rateLimits.title": "속도 제한",
-  "rateLimits.description": "메시지 및 토큰 속도 제한 \u2014 무제한은 0으로 설정",
+  "rateLimits.description": "메시지 및 토큰 속도 제한 — 무제한은 0으로 설정",
   "rateLimits.loading": "로딩 중...",
   "rateLimits.messagesPerMinute": "메시지 / 분",
   "rateLimits.messagesPerMinuteDesc": "분당 최대 수신 메시지 수",
@@ -149,10 +146,9 @@
   "rateLimits.tokensPerDay": "토큰 / 일",
   "rateLimits.tokensPerDayDesc": "일당 최대 소비 토큰 수",
   "rateLimits.saveChanges": "변경 사항 저장",
-  "rateLimits.saving": "저장 중\u2026",
+  "rateLimits.saving": "저장 중…",
   "rateLimits.toastSaved": "속도 제한이 저장되었습니다",
   "rateLimits.toastFailed": "속도 제한 저장에 실패했습니다",
-
   "routing.title": "라우팅",
   "routing.description": "실행 정책 및 프로바이더 라우팅",
   "routing.routingPreset": "라우팅 프리셋",
@@ -169,7 +165,6 @@
   "routing.noActivity": "아직 라우팅 활동이 없습니다",
   "routing.toastPresetSet": "라우팅 프리셋이 {{preset}}(으)로 설정되었습니다",
   "routing.toastPresetFailed": "라우팅 프리셋 적용에 실패했습니다",
-
   "voice.title": "음성",
   "voice.description": "음성 입력 및 출력 설정",
   "voice.browserSupport": "브라우저 지원",
@@ -186,7 +181,6 @@
   "voice.voiceOutputDescUnsupported": "이 브라우저에서 사용할 수 없습니다",
   "voice.toastInputUnsupported": "이 브라우저에서 음성 입력이 지원되지 않습니다",
   "voice.toastOutputUnsupported": "이 브라우저에서 음성 출력이 지원되지 않습니다",
-
   "advanced.title": "고급",
   "advanced.description": "시스템 구성 및 진단",
   "advanced.autonomousMode": "자율 모드",
@@ -196,7 +190,7 @@
   "advanced.remainingMinutes": "{{minutes}}분 남음",
   "advanced.durationWhenEnabling": "활성화 시 기간",
   "advanced.openChatFirst": "먼저 채팅 세션을 열어주세요",
-  "advanced.noActiveSession": "활성 세션 없음 \u2014 먼저 채팅을 열어주세요",
+  "advanced.noActiveSession": "활성 세션 없음 — 먼저 채팅을 열어주세요",
   "advanced.toastEnabled": "{{hours}}시간 동안 자율 모드가 활성화되었습니다",
   "advanced.toastDisabled": "자율 모드가 비활성화되었습니다",
   "advanced.toastFailed": "자율 모드 업데이트에 실패했습니다",

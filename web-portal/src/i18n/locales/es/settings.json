@@ -13,7 +13,6 @@
   "hub.tabs.rateLimits": "Limites de Tasa",
   "hub.tabs.routing": "Enrutamiento",
   "hub.tabs.advanced": "Avanzado",
-
   "budget.title": "Presupuesto",
   "budget.description": "Gestiona los limites de gasto en todos los sistemas",
   "budget.loading": "Cargando...",
@@ -38,7 +37,6 @@
   "budget.sevenDaySpending": "Gasto de 7 Dias",
   "budget.toastUpdated": "Ajustes de presupuesto actualizados",
   "budget.toastFailed": "Error al actualizar los ajustes de presupuesto",
-
   "providers.title": "Proveedores",
   "providers.description": "Configura proveedores y modelos de IA",
   "providers.primaryWorker": "Worker Principal",
@@ -55,7 +53,10 @@
   "providers.refreshing": "Actualizando...",
   "providers.toastRefreshed": "Modelos actualizados",
   "providers.toastRefreshFailed": "Error al actualizar modelos",
-
+  "providers.availableModels": "Modelos disponibles",
+  "providers.modelsLive": "En vivo",
+  "providers.modelsStale": "Obsoleto",
+  "providers.modelsCurated": "Curado",
   "agents.title": "Agentes",
   "agents.description": "Configuracion del sistema multi-agente",
   "agents.loading": "Cargando...",
@@ -75,7 +76,6 @@
   "agents.timeMinutesAgo": "hace {{count}}m",
   "agents.timeHoursAgo": "hace {{count}}h",
   "agents.timeDaysAgo": "hace {{count}}d",
-
   "daemon.title": "Daemon",
   "daemon.description": "Automatizacion de tareas en segundo plano",
   "daemon.loading": "Cargando...",
@@ -99,7 +99,6 @@
   "daemon.toastStarted": "Daemon iniciado",
   "daemon.toastStopped": "Daemon detenido",
   "daemon.toastFailed": "Error al {{action}} el daemon",
-
   "learning.title": "Aprendizaje",
   "learning.description": "Diagnosticos de auto-mejora y decisiones recientes",
   "learning.loading": "Cargando...",
@@ -124,7 +123,6 @@
   "learning.outcomes": "Resultados",
   "learning.recentDecisions": "Decisiones Recientes",
   "learning.noRecentDecisions": "No se registraron decisiones recientes",
-
   "persona.title": "Persona",
   "persona.description": "Perfiles de personalidad y anulaciones por canal",
   "persona.loading": "Cargando...",
@@ -133,14 +131,13 @@
   "persona.availableProfiles": "Perfiles Disponibles",
   "persona.active": "(activo)",
   "persona.switch": "Cambiar",
-  "persona.switching": "Cambiando\u2026",
+  "persona.switching": "Cambiando…",
   "persona.channelOverrides": "Anulaciones de Canal",
   "persona.noProfiles": "No hay perfiles de personalidad configurados",
   "persona.toastSwitched": "Cambiado al perfil: {{profile}}",
   "persona.toastSwitchFailed": "Error al cambiar de perfil",
-
   "rateLimits.title": "Limites de Tasa",
-  "rateLimits.description": "Limitacion de tasa de mensajes y tokens \u2014 establece 0 para ilimitado",
+  "rateLimits.description": "Limitacion de tasa de mensajes y tokens — establece 0 para ilimitado",
   "rateLimits.loading": "Cargando...",
   "rateLimits.messagesPerMinute": "Mensajes / Minuto",
   "rateLimits.messagesPerMinuteDesc": "Maximo de mensajes aceptados por minuto",
@@ -149,10 +146,9 @@
   "rateLimits.tokensPerDay": "Tokens / Dia",
   "rateLimits.tokensPerDayDesc": "Maximo de tokens consumidos por dia",
   "rateLimits.saveChanges": "Guardar Cambios",
-  "rateLimits.saving": "Guardando\u2026",
+  "rateLimits.saving": "Guardando…",
   "rateLimits.toastSaved": "Limites de tasa guardados",
   "rateLimits.toastFailed": "Error al guardar los limites de tasa",
-
   "routing.title": "Enrutamiento",
   "routing.description": "Politica de ejecucion y enrutamiento de proveedores",
   "routing.routingPreset": "Preset de Enrutamiento",
@@ -169,7 +165,6 @@
   "routing.noActivity": "Sin actividad de enrutamiento aun",
   "routing.toastPresetSet": "Preset de enrutamiento establecido a {{preset}}",
   "routing.toastPresetFailed": "Error al aplicar el preset de enrutamiento",
-
   "voice.title": "Voz",
   "voice.description": "Ajustes de entrada y salida de voz",
   "voice.browserSupport": "Soporte del Navegador",
@@ -186,7 +181,6 @@
   "voice.voiceOutputDescUnsupported": "No disponible en este navegador",
   "voice.toastInputUnsupported": "La entrada de voz no es soportada por este navegador",
   "voice.toastOutputUnsupported": "La salida de voz no es soportada por este navegador",
-
   "advanced.title": "Avanzado",
   "advanced.description": "Configuracion del sistema y diagnosticos",
   "advanced.autonomousMode": "Modo Autonomo",
@@ -196,7 +190,7 @@
   "advanced.remainingMinutes": "{{minutes}}m restantes",
   "advanced.durationWhenEnabling": "Duracion al habilitar",
   "advanced.openChatFirst": "Abre una sesion de chat primero",
-  "advanced.noActiveSession": "Sin sesion activa \u2014 abre un chat primero",
+  "advanced.noActiveSession": "Sin sesion activa — abre un chat primero",
   "advanced.toastEnabled": "Modo autonomo habilitado por {{hours}}h",
   "advanced.toastDisabled": "Modo autonomo deshabilitado",
   "advanced.toastFailed": "Error al actualizar el modo autonomo",
