@@ -727,6 +727,10 @@ export class BackgroundExecutor {
       // Wrap onProgress so every progress update the task emits resets the window.
       const progressAwareOnProgress = (update: TaskProgressUpdate): void => {
         armInactivityTimer();
+        // Liveness heartbeats exist only to re-arm the inactivity window from
+        // intra-call stream activity (keepalive/reasoning); they are NOT user-facing
+        // and must not reach the channel/UI (audit #8).
+        if (typeof update === "object" && update.kind === "heartbeat") return;
         entry.onProgress(update);
       };
       const timedEntry: QueueEntry = {

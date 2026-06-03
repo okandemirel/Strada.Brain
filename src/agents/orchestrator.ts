@@ -3118,7 +3118,12 @@ export class Orchestrator {
               let response;
               try {
                 response = canBgStream
-                  ? await this.silentStream(chatId, activePrompt, session, resilientProvider, currentToolDefinitions, signal)
+                  ? await this.silentStream(
+                      chatId, activePrompt, session, resilientProvider, currentToolDefinitions, signal,
+                      // Re-arm the per-task inactivity watchdog from intra-call
+                      // keepalive/reasoning liveness (audit #8). Non-user-facing.
+                      () => emitProgress({ kind: "heartbeat", message: "" }),
+                    )
                   : await resilientProvider.chat(
                       activePrompt,
                       session.messages,
@@ -5283,12 +5288,17 @@ export class Orchestrator {
       input_schema: import("../types/index.js").JsonObject;
     }>,
     externalSignal?: AbortSignal,
+    onLiveness?: () => void,
   ): Promise<ProviderResponse> => {
     // Reasoning models get an extended stall window equal to the initial timeout
     // because they may enter long silent thinking phases with no SSE events.
     const thinkingStall = provider.capabilities.thinkingSupported
       ? this.streamInitialTimeoutMs
       : undefined;
+    // Throttle for surfacing intra-call liveness to the task-level inactivity
+    // watchdog (which cannot otherwise see keepalive/reasoning heartbeats) — a
+    // dense reasoning-summary stream must not flood it (audit #8).
+    let lastLivenessAt = 0;
     const timeoutGuard = createStreamingProgressTimeout(
       this.streamInitialTimeoutMs,
       this.streamStallTimeoutMs,
@@ -5308,8 +5318,19 @@ export class Orchestrator {
           // Non-empty chunk = real visible content (flip to stall window); empty
           // chunk = liveness heartbeat (keepalive / reasoning summary) that must
           // keep the long thinking window so the model is not cut off mid-reason.
-          if (chunk) timeoutGuard.markProgress();
-          else timeoutGuard.markAlive();
+          if (chunk) {
+            timeoutGuard.markProgress();
+          } else {
+            timeoutGuard.markAlive();
+            // Forward liveness to the task-level inactivity watchdog (throttled).
+            if (onLiveness) {
+              const now = Date.now();
+              if (now - lastLivenessAt >= 20_000) {
+                lastLivenessAt = now;
+                onLiveness();
+              }
+            }
+          }
         },
         { signal: composedSignal },
       );

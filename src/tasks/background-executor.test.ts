@@ -1548,5 +1548,37 @@ describe("BackgroundExecutor - task inactivity timeout", () => {
     await new Promise((r) => setTimeout(r, 380));
     expect(aborted).toBe(false);
   });
+
+  it("re-arms the inactivity window on heartbeat updates without forwarding them to the UI (audit #8)", async () => {
+    const mockOrch = createMockOrchestrator();
+    let aborted = false;
+    let ticks = 0;
+    mockOrch.runBackgroundTask = vi.fn(async (
+      _prompt: string,
+      opts: { signal: AbortSignal; onProgress: (u: unknown) => void },
+    ) => {
+      opts.signal.addEventListener("abort", () => { aborted = true; }, { once: true });
+      // Emit ONLY heartbeats for ~360ms (3x the 120ms window). They must keep the
+      // task alive (re-arm) yet never reach the user-facing onProgress.
+      for (let i = 0; i < 6 && !opts.signal.aborted; i++) {
+        await new Promise((r) => setTimeout(r, 60));
+        opts.onProgress({ kind: "heartbeat", message: "" });
+        ticks++;
+      }
+      return "done";
+    });
+
+    const executor = new BackgroundExecutor({ orchestrator: mockOrch as any, taskInactivityTimeoutMs: 120 });
+    const userProgress = vi.fn();
+    executor.setTaskManager({ updateStatus: vi.fn(), complete: vi.fn(), fail: vi.fn(), block: vi.fn() } as any);
+    executor.enqueue(createTestTask(), new AbortController().signal, userProgress);
+
+    await vi.waitFor(() => { expect(ticks).toBeGreaterThanOrEqual(6); }, { timeout: 3000 });
+    expect(aborted).toBe(false); // heartbeats kept it alive past the 120ms window
+    const heartbeatCalls = userProgress.mock.calls.filter(
+      (c: unknown[]) => typeof c[0] === "object" && c[0] !== null && (c[0] as { kind?: string }).kind === "heartbeat",
+    );
+    expect(heartbeatCalls).toHaveLength(0); // heartbeats are not user-facing
+  });
 });
 

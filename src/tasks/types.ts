@@ -60,6 +60,9 @@ export const TERMINAL_STATUSES = new Set([
 export type TaskProgressKind =
   | "other"
   | "status"
+  // Non-user-facing liveness tick: re-arms the per-task inactivity watchdog from
+  // intra-call stream activity (keepalive/reasoning) without emitting UI (audit #8).
+  | "heartbeat"
   | "editing"
   | "verification"
   | "analysis"
