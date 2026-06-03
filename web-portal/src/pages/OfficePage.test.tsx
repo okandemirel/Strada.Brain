@@ -17,8 +17,8 @@ vi.mock('../office/webgl', () => ({
 // <OfficeScene/> and show the List view toggle. The scene's WebGL internals
 // (useGLTF / useFrame / Clone) are covered by OfficeScene.test.tsx, so stub the
 // whole module here — jsdom never touches react-three-fiber / drei this way.
-vi.mock('../office/OfficeScene', () => ({
-  OfficeScene: () => <div data-testid="r3f-canvas" />,
+vi.mock('../office/retro/RetroOfficeScene', () => ({
+  RetroOfficeScene: () => <div data-testid="r3f-canvas" />,
 }))
 
 import OfficePage from './OfficePage'

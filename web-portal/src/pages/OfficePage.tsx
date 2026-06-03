@@ -7,7 +7,7 @@ import { isOffice3DEnabled } from '../office/webgl'
 // fetched (and only evaluated) when WebGL is actually usable. In jsdom the
 // page never reaches this import because isOffice3DEnabled() is false / mocked.
 const OfficeScene = lazy(() =>
-  import('../office/OfficeScene').then((m) => ({ default: m.OfficeScene })),
+  import('../office/retro/RetroOfficeScene').then((m) => ({ default: m.RetroOfficeScene })),
 )
 
 function SceneFallback() {

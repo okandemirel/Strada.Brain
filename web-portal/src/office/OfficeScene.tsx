@@ -56,13 +56,17 @@ const AGENT_DWELL = 1.6
 /** Pad the agent's bounded area so it never clips into a wall. */
 const AGENT_BOUNDS_PAD = 1
 
-/** Kenney furniture is authored with world-space offsets + kit-scale units;
- * convert kit units to room units. */
-const GLB_FURNITURE_SCALE = 0.8
-
 /** A real GLB prop, deep-cloned so multiple placements don't share a graph.
- * The model is centered on its footprint and sat on the floor so the layout's
- * position places it where intended (Kenney models are NOT origin-centered). */
+ *
+ * Kenney models are authored in KIT UNITS, not meters — e.g. a chair is ~6 units
+ * tall and the rug ~16 units wide in its own space, so dropping them into the
+ * 16-unit room at a flat scale made them dwarf the walls ("giant shapes"). We
+ * instead NORMALIZE each model to fit inside its real-world {@link PRIMITIVE_SIZES}
+ * target box (the same dimensions the primitive fallback uses), with a single
+ * uniform scale so proportions are preserved and a GLB office reads at the same
+ * scale as the primitive one. The model is also centered on its footprint and
+ * sat on the floor so the layout's position places it where intended (Kenney
+ * models are NOT origin-centered). */
 function GltfFurniture({
   url,
   placement,
@@ -71,13 +75,25 @@ function GltfFurniture({
   placement: FurniturePlacement
 }): JSX.Element {
   const { scene } = useGLTF(url)
-  const offset = useMemo<[number, number, number]>(() => {
+  const { offset, fitScale } = useMemo(() => {
     const box = new THREE.Box3().setFromObject(scene)
     const center = box.getCenter(new THREE.Vector3())
-    return [-center.x, -box.min.y, -center.z]
-  }, [scene])
+    const size = box.getSize(new THREE.Vector3())
+    const target = PRIMITIVE_SIZES[placement.modelId] ?? DEFAULT_PRIMITIVE
+    // Uniform scale that fits the native model inside its target box (bind on
+    // the most-constrained axis so nothing pokes past the intended footprint).
+    const fit = Math.min(
+      target[0] / Math.max(size.x, 1e-3),
+      target[1] / Math.max(size.y, 1e-3),
+      target[2] / Math.max(size.z, 1e-3),
+    )
+    return {
+      offset: [-center.x, -box.min.y, -center.z] as [number, number, number],
+      fitScale: Number.isFinite(fit) && fit > 0 ? fit : 1,
+    }
+  }, [scene, placement.modelId])
   const [x, , z] = placement.position
-  const scale = (placement.scale ?? 1) * GLB_FURNITURE_SCALE
+  const scale = (placement.scale ?? 1) * fitScale
   return (
     <group position={[x, 0, z]} rotation={[0, placement.rotationY ?? 0, 0]} scale={scale}>
       <Clone object={scene} position={offset} castShadow receiveShadow />
