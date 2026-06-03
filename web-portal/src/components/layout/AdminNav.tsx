@@ -1,36 +1,10 @@
 import { useState, useEffect } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import {
-  BarChart3, Settings, SlidersHorizontal, Wrench, Radio, Users,
-  ScrollText, Brain, Theater, Database, Library, Shield, Puzzle, ChevronDown,
-  type LucideIcon,
-} from 'lucide-react'
+import { Shield, ChevronDown } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useWorkspaceStore } from '../../stores/workspace-store'
-
-interface AdminPage {
-  to: string
-  icon: LucideIcon
-  labelKey: string
-}
-
-const ADMIN_PAGES: AdminPage[] = [
-  { to: '/admin/dashboard', icon: BarChart3, labelKey: 'nav.dashboard' },
-  { to: '/admin/config', icon: SlidersHorizontal, labelKey: 'nav.config' },
-  { to: '/admin/tools', icon: Wrench, labelKey: 'nav.tools' },
-  { to: '/admin/channels', icon: Radio, labelKey: 'nav.channels' },
-  { to: '/admin/sessions', icon: Users, labelKey: 'nav.sessions' },
-  { to: '/admin/logs', icon: ScrollText, labelKey: 'nav.logs' },
-  { to: '/admin/identity', icon: Brain, labelKey: 'nav.identity' },
-  { to: '/admin/personality', icon: Theater, labelKey: 'nav.personality' },
-  { to: '/admin/memory', icon: Database, labelKey: 'nav.memory' },
-  { to: '/admin/vaults', icon: Library, labelKey: 'nav.vaults' },
-  { to: '/admin/settings', icon: Settings, labelKey: 'nav.settings' },
-  { to: '/admin/skills', icon: Puzzle, labelKey: 'nav.skills' },
-  // Office was promoted to a top-level sidebar tab (see Sidebar.tsx); it is no
-  // longer listed under Admin.
-]
+import { ADMIN_PAGES } from '../../config/admin-pages'
 
 interface AdminNavProps {
   collapsed: boolean
