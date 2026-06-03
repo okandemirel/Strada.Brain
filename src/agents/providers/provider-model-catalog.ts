@@ -141,6 +141,11 @@ export class ProviderModelCatalog {
     return this.now() - entry.fetchedAt > this.ttlMs;
   }
 
+  /** Epoch-ms the provider's cache entry was last refreshed, or `undefined` if absent. */
+  getFetchedAt(provider: string): number | undefined {
+    return this.cache.get(normalizeName(provider))?.fetchedAt;
+  }
+
   /**
    * Calls the injected loader, refreshes the in-memory map (stamping
    * `fetchedAt = now()`), persists the snapshot, and returns a RefreshResult.

@@ -743,4 +743,78 @@ describe("SetupWizard path validation", () => {
       error: "Invalid package: must be 'core' or 'modules'",
     });
   });
+
+  describe("GET /api/providers/models during setup", () => {
+    it("returns 200 with an empty providers array when no key is configured (never 503)", async () => {
+      const wizard = new SetupWizard({ port: 0 });
+
+      const response = makeResponse();
+      await (wizard as unknown as {
+        handleRequest: (req: { url: string; method: string; headers?: Record<string, string> }, res: unknown) => Promise<void>;
+      }).handleRequest({ url: "/api/providers/models", method: "GET" }, response.response);
+
+      expect(response.read().statusCode).toBe(200);
+      expect(JSON.parse(response.read().body)).toEqual({ providers: [] });
+    });
+
+    it("still returns 503 for other /api/providers/* GET routes during setup", async () => {
+      const wizard = new SetupWizard({ port: 0 });
+
+      const response = makeResponse();
+      await (wizard as unknown as {
+        handleRequest: (req: { url: string; method: string; headers?: Record<string, string> }, res: unknown) => Promise<void>;
+      }).handleRequest({ url: "/api/providers/available", method: "GET" }, response.response);
+
+      expect(response.read().statusCode).toBe(503);
+    });
+
+    it("best-effort probes live models when a key is supplied via query param", async () => {
+      const wizard = new SetupWizard({ port: 0 });
+
+      // Inject a fake provider factory so no real network call is attempted.
+      (wizard as unknown as {
+        createProbeProvider: (config: { name: string; apiKey?: string }) => {
+          listModels?: () => Promise<string[]>;
+        };
+      }).createProbeProvider = (config) => {
+        expect(config.name).toBe("openai");
+        expect(config.apiKey).toBe("sk-probe");
+        return { listModels: async () => ["gpt-5.4", "gpt-5.4-mini"] };
+      };
+
+      const response = makeResponse();
+      await (wizard as unknown as {
+        handleRequest: (req: { url: string; method: string; headers?: Record<string, string> }, res: unknown) => Promise<void>;
+      }).handleRequest(
+        { url: "/api/providers/models?provider=openai&key=sk-probe", method: "GET" },
+        response.response,
+      );
+
+      expect(response.read().statusCode).toBe(200);
+      expect(JSON.parse(response.read().body)).toEqual({
+        providers: [{ name: "openai", models: ["gpt-5.4", "gpt-5.4-mini"] }],
+      });
+    });
+
+    it("falls back to 200 empty when the probe throws (never crashes setup)", async () => {
+      const wizard = new SetupWizard({ port: 0 });
+
+      (wizard as unknown as {
+        createProbeProvider: () => { listModels?: () => Promise<string[]> };
+      }).createProbeProvider = () => {
+        throw new Error("boom");
+      };
+
+      const response = makeResponse();
+      await (wizard as unknown as {
+        handleRequest: (req: { url: string; method: string; headers?: Record<string, string> }, res: unknown) => Promise<void>;
+      }).handleRequest(
+        { url: "/api/providers/models?provider=openai&key=sk-probe", method: "GET" },
+        response.response,
+      );
+
+      expect(response.read().statusCode).toBe(200);
+      expect(JSON.parse(response.read().body)).toEqual({ providers: [] });
+    });
+  });
 });

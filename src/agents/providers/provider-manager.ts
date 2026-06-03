@@ -40,6 +40,8 @@ interface ProviderModelCatalogLookup {
   getProviderOfficialSnapshot?(provider: string): ProviderOfficialSnapshot | undefined;
   getCatalogHealth?(provider: string): ProviderCatalogHealth | undefined;
   refresh?(): Promise<RefreshResult>;
+  isStale?(provider: string): boolean;
+  getFetchedAt?(provider: string): number | undefined;
 }
 
 const MAX_CACHED_PROVIDERS = 50;
@@ -367,6 +369,21 @@ export class ProviderManager {
       return null;
     }
     return this.modelCatalog.refresh();
+  }
+
+  /**
+   * Minimal freshness lookup for the dynamic model catalog, surfaced so dashboard
+   * routes can annotate per-provider model lists with staleness without reaching
+   * into the catalog directly. Returns `undefined` when no catalog is wired.
+   */
+  getModelCatalogFreshness(name: string): { stale: boolean; fetchedAt?: number } | undefined {
+    if (!this.modelCatalog) {
+      return undefined;
+    }
+    const canonicalName = canonicalizeProviderName(name) ?? name.trim().toLowerCase();
+    const stale = this.modelCatalog.isStale?.(canonicalName) ?? true;
+    const fetchedAt = this.modelCatalog.getFetchedAt?.(canonicalName);
+    return fetchedAt === undefined ? { stale } : { stale, fetchedAt };
   }
 
   getCatalogSnapshot(identityKey?: string): ProviderCatalogSnapshot {

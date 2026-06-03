@@ -73,22 +73,30 @@ export function handleProviderRoutes(
     try {
       const params = new URL(url, "http://localhost").searchParams;
       const providerFilter = params.get("provider");
+      const manager = ctx.providerManager;
 
-      if (ctx.providerManager.listAvailableWithModels) {
-        void ctx.providerManager.listAvailableWithModels().then((providers) => {
+      // Annotate each provider entry with catalog freshness (stale / fetchedAt)
+      // without disturbing the existing { name, models, ... } fields the UI reads.
+      const withFreshness = <T extends { name: string }>(entry: T): T => {
+        const freshness = manager.getModelCatalogFreshness?.(entry.name);
+        return freshness ? { ...entry, ...freshness } : entry;
+      };
+
+      if (manager.listAvailableWithModels) {
+        void manager.listAvailableWithModels().then((providers) => {
           const filtered = providerFilter
             ? providers.filter((p) => p.name === providerFilter)
             : providers;
-          sendJson(res, { providers: filtered });
+          sendJson(res, { providers: filtered.map(withFreshness) });
         }).catch((err) => {
           sendJsonError(res, 500, err instanceof Error ? err.message : String(err));
         });
       } else {
-        const available = ctx.providerManager.listAvailable();
+        const available = manager.listAvailable();
         const filtered = providerFilter
           ? available.filter((p) => p.name === providerFilter)
           : available;
-        sendJson(res, { providers: filtered });
+        sendJson(res, { providers: filtered.map(withFreshness) });
       }
     } catch (err) {
       sendJsonError(res, 500, err instanceof Error ? err.message : String(err));
@@ -289,8 +297,9 @@ export function handleProviderRoutes(
     return true;
   }
 
-  // POST /api/models/refresh -- Trigger model intelligence refresh
-  if (method === "POST" && url === "/api/models/refresh") {
+  // POST /api/models/refresh (and the catalog-scoped alias
+  // POST /api/providers/models/refresh) -- Trigger model catalog refresh
+  if (method === "POST" && (url === "/api/models/refresh" || url === "/api/providers/models/refresh")) {
     const now = Date.now();
     if (ctx.lastModelRefreshMs && now - ctx.lastModelRefreshMs < 60_000) {
       const retryAfter = Math.ceil((60_000 - (now - ctx.lastModelRefreshMs)) / 1000);

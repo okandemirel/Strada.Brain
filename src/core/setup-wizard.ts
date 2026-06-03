@@ -12,7 +12,7 @@ import { join, extname, resolve, sep, isAbsolute } from "node:path";
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { PROVIDER_PRESETS } from "../agents/providers/provider-registry.js";
+import { PROVIDER_PRESETS, createProvider } from "../agents/providers/provider-registry.js";
 import {
   buildMcpRecommendation,
   checkStradaDeps,
@@ -645,8 +645,17 @@ export class SetupWizard {
         return;
       }
 
-      // During setup, provider API isn't available yet — return 503 so the UI
-      // can fall back to static model lists instead of getting HTML.
+      // During setup most provider routes aren't available yet. The model list,
+      // however, drives the providers step UI, so we carve it out: a best-effort
+      // live probe when a key is supplied, otherwise an EMPTY 200 so the UI falls
+      // back to its static model list WITHOUT a console error. Never 503 here.
+      if ((url === "/api/providers/models" || url.startsWith("/api/providers/models?")) && method === "GET") {
+        await this.handleSetupProviderModels(url, res);
+        return;
+      }
+
+      // Every OTHER provider route stays unavailable during setup — return 503 so
+      // the UI can fall back to static lists instead of getting HTML.
       if (url.startsWith("/api/providers/") && method === "GET") {
         res.writeHead(503, {
           ...SECURITY_HEADERS,
@@ -908,6 +917,66 @@ export class SetupWizard {
     } else {
       this.json(res, 200, { valid: false, error: result.error });
     }
+  }
+
+  /**
+   * Setup-safe handler for `GET /api/providers/models`.
+   *
+   * The setup server holds no server-side credential state — keys live only in
+   * the browser until the final save POST. So this is BEST-EFFORT: when a key is
+   * passed via the query string (`?provider=<name>&key=<apiKey>`) we construct an
+   * ephemeral provider and probe `listModels()` with a short timeout. When no key
+   * is available, or the probe fails/times out, we return an EMPTY 200 so the UI
+   * gracefully falls back to its static model list. This route NEVER returns 503
+   * and NEVER crashes setup.
+   */
+  private async handleSetupProviderModels(url: string, res: ServerResponse): Promise<void> {
+    let providers: Array<{ name: string; models: string[] }> = [];
+    try {
+      const params = new URL(url, "http://localhost").searchParams;
+      const rawProvider = (params.get("provider") ?? "").trim().toLowerCase();
+      const key = params.get("key") ?? params.get("apiKey") ?? "";
+
+      if (rawProvider && rawProvider !== "all" && KNOWN_PROVIDERS.has(rawProvider) && key) {
+        const models = await this.probeProviderModels(rawProvider, key);
+        if (models.length > 0) {
+          providers = [{ name: rawProvider, models }];
+        }
+      }
+    } catch {
+      // Best-effort only: any failure degrades to the empty 200 below.
+      providers = [];
+    }
+    this.json(res, 200, { providers });
+  }
+
+  /**
+   * Best-effort live model probe for a single provider during setup. Returns an
+   * empty array (never throws) on missing `listModels`, errors, or timeout.
+   */
+  private async probeProviderModels(name: string, apiKey: string): Promise<string[]> {
+    const PROBE_TIMEOUT_MS = 8_000;
+    try {
+      const provider = this.createProbeProvider({ name, apiKey });
+      if (typeof provider.listModels !== "function") {
+        return [];
+      }
+      const timeout = new Promise<string[]>((resolve) => {
+        setTimeout(() => resolve([]), PROBE_TIMEOUT_MS).unref?.();
+      });
+      const models = await Promise.race([provider.listModels(), timeout]);
+      return Array.isArray(models) ? models.filter((m): m is string => typeof m === "string") : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Seam over `createProvider` so tests can inject a fake provider without a real
+   * network call. Returns an object exposing the optional `listModels()` method.
+   */
+  private createProbeProvider(config: { name: string; apiKey?: string }): { listModels?: () => Promise<string[]> } {
+    return createProvider(config);
   }
 
   /** Reports whether a usable ChatGPT/Codex subscription session is available. */
