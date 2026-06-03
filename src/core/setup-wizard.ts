@@ -650,7 +650,16 @@ export class SetupWizard {
       // live probe when a key is supplied, otherwise an EMPTY 200 so the UI falls
       // back to its static model list WITHOUT a console error. Never 503 here.
       if ((url === "/api/providers/models" || url.startsWith("/api/providers/models?")) && method === "GET") {
-        await this.handleSetupProviderModels(url, res);
+        await this.handleSetupProviderModels(res);
+        return;
+      }
+
+      // Keyed probe moved to a POST body so the API key never lands in server
+      // access logs / history / Referer (a query-string key would). This is the
+      // ONLY keyed model-list path during setup; like the GET carve-out it is
+      // best-effort and NEVER 503s or crashes.
+      if (url === "/api/providers/models" && method === "POST") {
+        await this.handleSetupProviderModelsProbe(req, res);
         return;
       }
 
@@ -922,23 +931,57 @@ export class SetupWizard {
   /**
    * Setup-safe handler for `GET /api/providers/models`.
    *
-   * The setup server holds no server-side credential state — keys live only in
-   * the browser until the final save POST. So this is BEST-EFFORT: when a key is
-   * passed via the query string (`?provider=<name>&key=<apiKey>`) we construct an
-   * ephemeral provider and probe `listModels()` with a short timeout. When no key
-   * is available, or the probe fails/times out, we return an EMPTY 200 so the UI
-   * gracefully falls back to its static model list. This route NEVER returns 503
-   * and NEVER crashes setup.
+   * This is the NO-KEY path. The setup server holds no server-side credential
+   * state, and we deliberately do NOT read a key from the URL (a query-string
+   * key leaks into access logs / history / Referer). So the GET always returns
+   * an EMPTY 200, which lets the UI gracefully fall back to its static model
+   * list. The keyed probe lives on `POST /api/providers/models` (key in body).
+   * This route NEVER returns 503 and NEVER crashes setup.
    */
-  private async handleSetupProviderModels(url: string, res: ServerResponse): Promise<void> {
+  private async handleSetupProviderModels(res: ServerResponse): Promise<void> {
+    this.json(res, 200, { providers: [] });
+  }
+
+  /**
+   * Setup-safe handler for `POST /api/providers/models`.
+   *
+   * Reads `{ provider, key, baseUrl? }` from the JSON body — the key travels in
+   * the request body, never the URL, so it can't leak into access logs /
+   * history / Referer. When the provider is known and a key is present we run
+   * the BEST-EFFORT `probeProviderModels` seam (with an optional `baseUrl` so
+   * OpenCode Zen/Go can be probed at the chosen base URL). On missing/unknown
+   * provider, missing key, malformed body, or any probe error/timeout we return
+   * an EMPTY 200 so the UI falls back to its static model list. NEVER 503/crash.
+   */
+  private async handleSetupProviderModelsProbe(req: IncomingMessage, res: ServerResponse): Promise<void> {
     let providers: Array<{ name: string; models: string[] }> = [];
     try {
-      const params = new URL(url, "http://localhost").searchParams;
-      const rawProvider = (params.get("provider") ?? "").trim().toLowerCase();
-      const key = params.get("key") ?? params.get("apiKey") ?? "";
+      let body: string;
+      try {
+        body = await this.readBody(req);
+      } catch {
+        body = "";
+      }
+
+      let payload: { provider?: unknown; key?: unknown; baseUrl?: unknown } = {};
+      try {
+        const parsed = body ? JSON.parse(body) : {};
+        if (parsed && typeof parsed === "object") {
+          payload = parsed as { provider?: unknown; key?: unknown; baseUrl?: unknown };
+        }
+      } catch {
+        // Malformed/empty JSON degrades to the empty 200 below.
+        payload = {};
+      }
+
+      const rawProvider = (typeof payload.provider === "string" ? payload.provider : "").trim().toLowerCase();
+      const key = typeof payload.key === "string" ? payload.key : "";
+      const baseUrl = typeof payload.baseUrl === "string" && payload.baseUrl.trim()
+        ? payload.baseUrl.trim()
+        : undefined;
 
       if (rawProvider && rawProvider !== "all" && KNOWN_PROVIDERS.has(rawProvider) && key) {
-        const models = await this.probeProviderModels(rawProvider, key);
+        const models = await this.probeProviderModels(rawProvider, key, baseUrl);
         if (models.length > 0) {
           providers = [{ name: rawProvider, models }];
         }
@@ -952,12 +995,14 @@ export class SetupWizard {
 
   /**
    * Best-effort live model probe for a single provider during setup. Returns an
-   * empty array (never throws) on missing `listModels`, errors, or timeout.
+   * empty array (never throws) on missing `listModels`, errors, or timeout. An
+   * optional `baseUrl` is threaded through so OpenCode Zen/Go can be probed at
+   * the chosen base URL.
    */
-  private async probeProviderModels(name: string, apiKey: string): Promise<string[]> {
+  private async probeProviderModels(name: string, apiKey: string, baseUrl?: string): Promise<string[]> {
     const PROBE_TIMEOUT_MS = 8_000;
     try {
-      const provider = this.createProbeProvider({ name, apiKey });
+      const provider = this.createProbeProvider({ name, apiKey, baseUrl });
       if (typeof provider.listModels !== "function") {
         return [];
       }
@@ -978,8 +1023,9 @@ export class SetupWizard {
   /**
    * Seam over `createProvider` so tests can inject a fake provider without a real
    * network call. Returns an object exposing the optional `listModels()` method.
+   * An optional `baseUrl` (for OpenCode Zen/Go) is forwarded to `createProvider`.
    */
-  private createProbeProvider(config: { name: string; apiKey?: string }): { listModels?: () => Promise<string[]> } {
+  private createProbeProvider(config: { name: string; apiKey?: string; baseUrl?: string }): { listModels?: () => Promise<string[]> } {
     return createProvider(config);
   }
 

@@ -768,17 +768,18 @@ describe("SetupWizard path validation", () => {
       expect(response.read().statusCode).toBe(503);
     });
 
-    it("best-effort probes live models when a key is supplied via query param", async () => {
+    it("IGNORES a key passed via the query param and never probes (key-in-URL is deprecated)", async () => {
       const wizard = new SetupWizard({ port: 0 });
 
-      // Inject a fake provider factory so no real network call is attempted.
+      // The query-param key path is removed for security (keys leak into access
+      // logs / Referer). The GET handler must NOT call the probe seam at all.
+      let probeCalled = false;
       (wizard as unknown as {
         createProbeProvider: (config: { name: string; apiKey?: string }) => {
           listModels?: () => Promise<string[]>;
         };
-      }).createProbeProvider = (config) => {
-        expect(config.name).toBe("openai");
-        expect(config.apiKey).toBe("sk-probe");
+      }).createProbeProvider = () => {
+        probeCalled = true;
         return { listModels: async () => ["gpt-5.4", "gpt-5.4-mini"] };
       };
 
@@ -791,12 +792,112 @@ describe("SetupWizard path validation", () => {
       );
 
       expect(response.read().statusCode).toBe(200);
+      expect(JSON.parse(response.read().body)).toEqual({ providers: [] });
+      expect(probeCalled).toBe(false);
+    });
+  });
+
+  describe("POST /api/providers/models during setup", () => {
+    const postProviderModels = async (
+      wizard: SetupWizard,
+      body: unknown,
+    ) => {
+      (wizard as unknown as {
+        readBody: (req: unknown) => Promise<string>;
+      }).readBody = async () => (typeof body === "string" ? body : JSON.stringify(body));
+
+      const response = makeResponse();
+      await (wizard as unknown as {
+        handleRequest: (req: { url: string; method: string; headers?: Record<string, string> }, res: unknown) => Promise<void>;
+      }).handleRequest({ url: "/api/providers/models", method: "POST" }, response.response);
+      return response;
+    };
+
+    it("probes live models when a key is supplied in the JSON body", async () => {
+      const wizard = new SetupWizard({ port: 0 });
+
+      (wizard as unknown as {
+        createProbeProvider: (config: { name: string; apiKey?: string; baseUrl?: string }) => {
+          listModels?: () => Promise<string[]>;
+        };
+      }).createProbeProvider = (config) => {
+        expect(config.name).toBe("openai");
+        expect(config.apiKey).toBe("sk-x");
+        return { listModels: async () => ["gpt-5.4", "gpt-5.4-mini"] };
+      };
+
+      const response = await postProviderModels(wizard, { provider: "openai", key: "sk-x" });
+
+      expect(response.read().statusCode).toBe(200);
       expect(JSON.parse(response.read().body)).toEqual({
         providers: [{ name: "openai", models: ["gpt-5.4", "gpt-5.4-mini"] }],
       });
     });
 
-    it("falls back to 200 empty when the probe throws (never crashes setup)", async () => {
+    it("threads a baseUrl from the body to the probe (OpenCode Zen/Go)", async () => {
+      const wizard = new SetupWizard({ port: 0 });
+
+      let receivedBaseUrl: string | undefined;
+      (wizard as unknown as {
+        createProbeProvider: (config: { name: string; apiKey?: string; baseUrl?: string }) => {
+          listModels?: () => Promise<string[]>;
+        };
+      }).createProbeProvider = (config) => {
+        receivedBaseUrl = config.baseUrl;
+        expect(config.name).toBe("opencode");
+        return { listModels: async () => ["go-1"] };
+      };
+
+      const response = await postProviderModels(wizard, {
+        provider: "opencode",
+        key: "sk-zen",
+        baseUrl: "https://opencode.ai/zen/v1",
+      });
+
+      expect(response.read().statusCode).toBe(200);
+      expect(receivedBaseUrl).toBe("https://opencode.ai/zen/v1");
+      expect(JSON.parse(response.read().body)).toEqual({
+        providers: [{ name: "opencode", models: ["go-1"] }],
+      });
+    });
+
+    it("returns 200 empty for a missing key", async () => {
+      const wizard = new SetupWizard({ port: 0 });
+
+      let probeCalled = false;
+      (wizard as unknown as {
+        createProbeProvider: () => { listModels?: () => Promise<string[]> };
+      }).createProbeProvider = () => {
+        probeCalled = true;
+        return { listModels: async () => ["x"] };
+      };
+
+      const response = await postProviderModels(wizard, { provider: "openai" });
+
+      expect(response.read().statusCode).toBe(200);
+      expect(JSON.parse(response.read().body)).toEqual({ providers: [] });
+      expect(probeCalled).toBe(false);
+    });
+
+    it("returns 200 empty for an unknown provider", async () => {
+      const wizard = new SetupWizard({ port: 0 });
+
+      let probeCalled = false;
+      (wizard as unknown as {
+        createProbeProvider: () => { listModels?: () => Promise<string[]> };
+      }).createProbeProvider = () => {
+        probeCalled = true;
+        return { listModels: async () => ["x"] };
+      };
+
+      const response = await postProviderModels(wizard, { provider: "not-a-real-provider", key: "sk-x" });
+
+      expect(response.read().statusCode).toBe(200);
+      expect(JSON.parse(response.read().body)).toEqual({ providers: [] });
+      expect(probeCalled).toBe(false);
+    });
+
+    it("returns 200 empty when the probe throws (never crashes setup)", async () => {
       const wizard = new SetupWizard({ port: 0 });
 
       (wizard as unknown as {
@@ -805,16 +906,28 @@ describe("SetupWizard path validation", () => {
         throw new Error("boom");
       };
 
-      const response = makeResponse();
-      await (wizard as unknown as {
-        handleRequest: (req: { url: string; method: string; headers?: Record<string, string> }, res: unknown) => Promise<void>;
-      }).handleRequest(
-        { url: "/api/providers/models?provider=openai&key=sk-probe", method: "GET" },
-        response.response,
-      );
+      const response = await postProviderModels(wizard, { provider: "openai", key: "sk-x" });
 
       expect(response.read().statusCode).toBe(200);
       expect(JSON.parse(response.read().body)).toEqual({ providers: [] });
+    });
+
+    it("returns 200 empty for malformed/empty JSON (never crashes setup)", async () => {
+      const wizard = new SetupWizard({ port: 0 });
+
+      let probeCalled = false;
+      (wizard as unknown as {
+        createProbeProvider: () => { listModels?: () => Promise<string[]> };
+      }).createProbeProvider = () => {
+        probeCalled = true;
+        return { listModels: async () => ["x"] };
+      };
+
+      const response = await postProviderModels(wizard, "{ this is not json");
+
+      expect(response.read().statusCode).toBe(200);
+      expect(JSON.parse(response.read().body)).toEqual({ providers: [] });
+      expect(probeCalled).toBe(false);
     });
   });
 });
