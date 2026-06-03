@@ -46,6 +46,51 @@ describe("FallbackChainProvider", () => {
     expect(p2.chat).toHaveBeenCalledTimes(1);
   });
 
+  // Audit #6: a benign CONTROL-PLANE cancel (the external/un-composed signal aborted —
+  // user cancel / task wind-down) is NOT a provider outage. The chain must NOT poison
+  // provider health and must NOT fall over to the next provider (which would fail
+  // identically on the same aborted signal and surface a false "All providers failed").
+  // It must propagate the cancel. A watchdog stall (externalSignal NOT aborted) still
+  // records the failure and falls over — that path is unchanged.
+  it("does not poison health or fall over when the external signal is aborted (benign cancel)", async () => {
+    const controller = new AbortController();
+    controller.abort(); // control-plane cancel
+
+    const p1 = { ...createMockProvider(), name: "p1" };
+    (p1.chat as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("This operation was aborted"));
+    const p2 = { ...createMockProvider({ text: "should-not-reach" }), name: "p2" };
+
+    const chain = new FallbackChainProvider([p1, p2]);
+    const health = ProviderHealthRegistry.getInstance();
+    const recordFailure = vi.spyOn(health, "recordFailure");
+
+    await expect(
+      chain.chat("sys", [], [], { signal: controller.signal, externalSignal: controller.signal }),
+    ).rejects.toThrow();
+
+    expect(p1.chat).toHaveBeenCalledTimes(1);
+    expect(p2.chat).not.toHaveBeenCalled();      // no failover on a benign cancel
+    expect(recordFailure).not.toHaveBeenCalled(); // health not poisoned
+  });
+
+  // Counterpart guard: a watchdog stall (no external cancel) MUST still fall over +
+  // record failure — proving the fix keys on the external signal, not the message text.
+  it("still falls over and records failure on a stall when the external signal is NOT aborted", async () => {
+    const p1 = { ...createMockProvider(), name: "p1" };
+    (p1.chat as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("Streaming stalled after 60000ms"));
+    const p2 = { ...createMockProvider({ text: "fallback-response" }), name: "p2" };
+
+    const chain = new FallbackChainProvider([p1, p2]);
+    const health = ProviderHealthRegistry.getInstance();
+    const recordFailure = vi.spyOn(health, "recordFailure");
+
+    const result = await chain.chat("sys", [], [], { signal: new AbortController().signal });
+
+    expect(result.text).toBe("fallback-response");
+    expect(p2.chat).toHaveBeenCalledTimes(1);
+    expect(recordFailure).toHaveBeenCalledWith("p1", expect.stringContaining("stalled"));
+  });
+
   // Audit #1/#2: a resolved-but-empty response must NOT short-circuit the chain as
   // a success — a silently-empty provider should fail over to the next healthy one.
   it("falls over to the next provider when a provider returns an empty response", async () => {

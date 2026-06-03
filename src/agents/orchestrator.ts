@@ -3129,7 +3129,12 @@ export class Orchestrator {
                       activePrompt,
                       session.messages,
                       currentToolDefinitions,
-                      { signal },
+                      // Non-streaming sibling of the silentStream path: thread the task
+                      // signal as externalSignal too, so a benign cancel / inactivity
+                      // abort does not poison provider health or fall over the chain —
+                      // keeping streaming and non-streaming cancel behaviour consistent
+                      // (audit #6).
+                      { signal, externalSignal: signal },
                     );
               } catch (providerError) {
                 const errMsg = providerError instanceof Error ? providerError.message : String(providerError);
@@ -5348,7 +5353,10 @@ export class Orchestrator {
             }
           }
         },
-        { signal: composedSignal },
+        // Thread the EXTERNAL (un-composed) signal so the resilient chain can tell a
+        // benign control-plane cancel from a watchdog stall and not poison health /
+        // fall over / emit a false "All providers failed" on cancel (audit #6).
+        { signal: composedSignal, externalSignal },
       );
       // Suppress unhandled rejection from abandoned stream when timeout wins the race
       streamPromise.catch((err) => {
@@ -5360,6 +5368,14 @@ export class Orchestrator {
       return response;
     } catch (err) {
       timeoutGuard.clear();
+      // Control-plane cancellation: the external signal aborted this call (user cancel /
+      // task wind-down). Benign — NOT a provider failure. Do not log an error, do not
+      // attempt the fallback chat (it would re-run the chain on the same aborted signal
+      // → a false "All providers failed"), and do not poison provider health. Rethrow so
+      // the loop's `if (signal.aborted) throw` cancellation path handles it (audit #6).
+      if (externalSignal?.aborted) {
+        throw err;
+      }
       const errMsg = err instanceof Error ? err.message : "Unknown streaming error";
       getLogger().error("Silent stream error", { chatId, error: errMsg });
       try {
@@ -5371,6 +5387,7 @@ export class Orchestrator {
           : timeoutSignal;
         const fallbackResponse = await provider.chat(systemPrompt, session.messages, toolDefinitions, {
           signal: fallbackSignal,
+          externalSignal,
         });
         ProviderHealthRegistry.getInstance().recordSuccess(provider.name);
         return fallbackResponse;

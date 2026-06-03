@@ -7163,6 +7163,51 @@ DONE`,
       expect(streamingProvider.chatStream).toHaveBeenCalledTimes(1);
       expect(streamingProvider.chat).toHaveBeenCalledTimes(1);
     });
+
+    // Audit #6: when the EXTERNAL (control-plane) signal is aborted — user cancel /
+    // task wind-down — a stream failure is a benign cancel, NOT a provider outage.
+    // silentStream must rethrow (so the loop's `if (signal.aborted) throw` path handles
+    // it) instead of attempting the fallback chat, recording a provider health failure,
+    // or pushing a "provider failed" message + synthetic empty (which the circuit
+    // breaker would miscount as an outage). A stall WITHOUT external abort is unchanged.
+    it("rethrows without fallback or failure message when the external signal is aborted", async () => {
+      const controller = new AbortController();
+      controller.abort(); // control-plane cancel
+
+      const streamingProvider = {
+        name: "streaming",
+        capabilities: {
+          maxTokens: 4096,
+          streaming: true,
+          structuredStreaming: false,
+          toolCalling: true,
+          vision: false,
+          systemPrompt: true,
+        },
+        chat: vi.fn().mockRejectedValue(new Error("fallback should not run")),
+        chatStream: vi.fn().mockRejectedValue(new Error("This operation was aborted")),
+      };
+      const timeoutOrch = new Orchestrator({
+        providerManager: { getProvider: () => streamingProvider, shutdown: vi.fn() } as any,
+        tools: [],
+        channel: mockChannel,
+        projectPath: "/tmp/test-project",
+        readOnly: false,
+        requireConfirmation: true,
+        streamInitialTimeoutMs: 50,
+        streamStallTimeoutMs: 50,
+      });
+
+      const session = { messages: [] as any[], lastActivity: new Date() };
+      await expect(
+        (timeoutOrch as any).silentStream(
+          "stream-chat", "system", session, streamingProvider, [], controller.signal,
+        ),
+      ).rejects.toThrow();
+
+      expect(streamingProvider.chat).not.toHaveBeenCalled(); // no fallback attempt on cancel
+      expect(session.messages).toHaveLength(0);              // no "provider failed" message
+    });
   });
 
   describe("Memory Re-retrieval Integration", () => {

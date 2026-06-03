@@ -126,11 +126,12 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
     systemPrompt: string,
     messages: ConversationMessage[],
     tools: ToolDefinition[],
-    options?: { signal?: AbortSignal },
+    options?: { signal?: AbortSignal; externalSignal?: AbortSignal },
   ): Promise<ProviderResponse> {
     return this.tryWithFallback("chat", (provider, safeMessages) =>
       provider.chat(systemPrompt, safeMessages, tools, options),
       messages,
+      options?.externalSignal,
     );
   }
 
@@ -139,14 +140,14 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
     messages: ConversationMessage[],
     tools: ToolDefinition[],
     onChunk: StreamCallback,
-    options?: { signal?: AbortSignal },
+    options?: { signal?: AbortSignal; externalSignal?: AbortSignal },
   ): Promise<ProviderResponse> {
     return this.tryWithFallback("streaming", (provider, safeMessages) => {
       if (supportsStreaming(provider)) {
         return provider.chatStream(systemPrompt, safeMessages, tools, onChunk, options);
       }
       return provider.chat(systemPrompt, safeMessages, tools, options);
-    }, messages);
+    }, messages, options?.externalSignal);
   }
 
   async healthCheck(): Promise<boolean> {
@@ -190,6 +191,7 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
     label: string,
     attempt: (provider: IAIProvider & Partial<IStreamingProvider>, messages: ConversationMessage[]) => Promise<ProviderResponse>,
     messages: ConversationMessage[],
+    externalSignal?: AbortSignal,
   ): Promise<ProviderResponse> {
     const logger = getLogger();
     const health = ProviderHealthRegistry.getInstance();
@@ -280,6 +282,18 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);
         lastError = error instanceof Error ? error : new Error(String(error));
+
+        // Control-plane cancellation: the EXTERNAL (un-composed) signal aborted this
+        // call — a benign cancel (user cancel / task wind-down), NOT a provider outage.
+        // Do NOT poison provider health and do NOT fall over to the next provider (it
+        // would fail identically on the same aborted signal → a false "All providers
+        // failed"). Propagate the cancel so the caller's cancellation path engages.
+        // A watchdog stall (externalSignal NOT aborted) falls through to the normal
+        // failure handling below, so stall recovery is unchanged and the decision keys
+        // on the signal, never the error-message text (audit #6).
+        if (externalSignal?.aborted) {
+          throw lastError;
+        }
 
         // Quota/billing errors get a long cooldown so the provider is skipped for hours.
         // Overload errors (529/503) get a medium cooldown to let the server recover.

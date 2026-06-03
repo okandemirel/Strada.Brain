@@ -30,7 +30,14 @@ export interface IAIProvider {
     systemPrompt: string,
     messages: ConversationMessage[],
     tools: ToolDefinition[],
-    options?: { signal?: AbortSignal },
+    // `signal` aborts the underlying request — it may also carry the per-call streaming
+    // stall watchdog. `externalSignal` is the TASK / CONTROL-PLANE abort signal (user
+    // cancel and/or task-inactivity wind-down — i.e. "stop this task", NOT "this provider
+    // stalled"). FallbackChainProvider treats an aborted externalSignal as a benign cancel:
+    // it does NOT poison provider health and does NOT fall over, so a cancel is never
+    // mistaken for an outage. A genuine provider stall surfaces via `signal` only and
+    // still records failure + falls over (audit #6).
+    options?: { signal?: AbortSignal; externalSignal?: AbortSignal },
   ): Promise<ProviderResponse>;
 
   /** Optional health check to verify API connectivity on startup */
@@ -50,7 +57,8 @@ export interface IStreamingProvider extends IAIProvider {
     messages: ConversationMessage[],
     tools: ToolDefinition[],
     onChunk: StreamCallback,
-    options?: { signal?: AbortSignal },
+    // See `chat` — `externalSignal` is the task/control-plane abort signal (audit #6).
+    options?: { signal?: AbortSignal; externalSignal?: AbortSignal },
   ): Promise<ProviderResponse>;
 }
 
