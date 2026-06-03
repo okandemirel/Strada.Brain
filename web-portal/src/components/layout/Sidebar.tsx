@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { Sun, Moon, ChevronLeft, ChevronRight, Bell } from 'lucide-react'
+import { Sun, Moon, ChevronLeft, ChevronRight, Bell, Building2 } from 'lucide-react'
 import { useWS } from '../../hooks/useWS'
 import { useTheme } from '../../hooks/useTheme'
 import { useSidebarStore } from '../../stores/sidebar-store'
@@ -26,6 +26,16 @@ export default function Sidebar() {
   const navigate = useNavigate()
   const location = useLocation()
   const [notifOpen, setNotifOpen] = useState(false)
+
+  // Office is a top-level tab but, unlike the workspace modes, it is a real
+  // route (/admin/office) rendered through the Outlet. Highlight it by path,
+  // and on click set mode to 'chat' so PrimaryContent shows the Outlet (not a
+  // workspace panel) and navigate to the office route.
+  const officeActive = location.pathname.startsWith('/admin/office')
+  const openOffice = () => {
+    setMode('chat')
+    navigate('/admin/office')
+  }
 
   const handleModeClick = (mode: typeof currentMode) => {
     setMode(mode)
@@ -117,6 +127,34 @@ export default function Sidebar() {
               </Tooltip>
             )
           })}
+
+          {/* Office — top-level tab that opens the /admin/office route. */}
+          <Tooltip open={collapsed ? undefined : false}>
+            <TooltipTrigger asChild>
+              <button
+                onClick={openOffice}
+                aria-label={t('nav.office')}
+                aria-current={officeActive ? 'page' : undefined}
+                className={`flex items-center gap-2.5 px-3 py-2 rounded-[10px] text-sm font-medium transition-all duration-150 cursor-pointer whitespace-nowrap overflow-hidden select-none bg-transparent border-none font-[inherit] text-left w-full ${
+                  collapsed ? 'justify-center px-2' : ''
+                } ${
+                  officeActive
+                    ? 'relative before:absolute before:left-0 before:top-1/2 before:-translate-y-1/2 before:h-5 before:w-0.5 before:bg-accent before:rounded-r bg-accent-glow text-accent font-semibold'
+                    : 'text-text-secondary hover:bg-bg-tertiary hover:text-text hover:translate-x-0.5'
+                }`}
+                title={collapsed ? t('nav.office') : undefined}
+              >
+                <span className="w-[22px] text-center text-base shrink-0 leading-none">
+                  <Building2 size={18} />
+                </span>
+                {!collapsed && <span className="whitespace-nowrap overflow-hidden text-ellipsis">{t('nav.office')}</span>}
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="right" className="max-w-[220px]">
+              <div className="font-medium text-text">{t('nav.office')}</div>
+              <p className="mt-1 text-xs leading-5 text-text-secondary">{t('office.tagline', 'Walk the virtual office and jump to any workspace.')}</p>
+            </TooltipContent>
+          </Tooltip>
         </div>
       </TooltipProvider>
 

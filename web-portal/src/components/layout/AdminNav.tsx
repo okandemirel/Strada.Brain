@@ -3,7 +3,7 @@ import { NavLink, useLocation } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import {
   BarChart3, Settings, SlidersHorizontal, Wrench, Radio, Users,
-  ScrollText, Brain, Theater, Database, Library, Shield, Puzzle, Building2, ChevronDown,
+  ScrollText, Brain, Theater, Database, Library, Shield, Puzzle, ChevronDown,
   type LucideIcon,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -28,7 +28,8 @@ const ADMIN_PAGES: AdminPage[] = [
   { to: '/admin/vaults', icon: Library, labelKey: 'nav.vaults' },
   { to: '/admin/settings', icon: Settings, labelKey: 'nav.settings' },
   { to: '/admin/skills', icon: Puzzle, labelKey: 'nav.skills' },
-  { to: '/admin/office', icon: Building2, labelKey: 'nav.office' },
+  // Office was promoted to a top-level sidebar tab (see Sidebar.tsx); it is no
+  // longer listed under Admin.
 ]
 
 interface AdminNavProps {
