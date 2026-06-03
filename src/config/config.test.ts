@@ -283,6 +283,41 @@ describe("loadConfig", () => {
     expect(config.providerModels?.anthropic).toBe("claude-opus-4-6-20250514");
   });
 
+  // Phase 5: OPENCODE_DEFAULT_MODEL must populate the opencode model override
+  // (opencode uses OPENCODE_DEFAULT_MODEL, not OPENCODE_MODEL, so it was missing
+  // from the generic {PROVIDER}_MODEL loop and never reached providerModels).
+  it("wires OPENCODE_DEFAULT_MODEL into providerModels.opencode", () => {
+    setEnv({ OPENCODE_DEFAULT_MODEL: "opencode/grok-code" });
+    const config = loadConfig();
+    try {
+      expect(config.opencodeDefaultModel).toBe("opencode/grok-code");
+      expect(config.providerModels?.opencode).toBe("opencode/grok-code");
+    } finally {
+      delete process.env["OPENCODE_DEFAULT_MODEL"];
+    }
+  });
+
+  // Phase 5: OPENCODE_BASE_URL must reach a base-URL override map (defaults to
+  // the Zen preset inside createProvider when unset). Phase 6 flips this between
+  // Zen and Go.
+  it("wires OPENCODE_BASE_URL into providerBaseUrls.opencode", () => {
+    setEnv({ OPENCODE_BASE_URL: "https://opencode.ai/go/v1" });
+    const config = loadConfig();
+    try {
+      expect(config.opencodeBaseUrl).toBe("https://opencode.ai/go/v1");
+      expect(config.providerBaseUrls?.opencode).toBe("https://opencode.ai/go/v1");
+    } finally {
+      delete process.env["OPENCODE_BASE_URL"];
+    }
+  });
+
+  it("omits providerBaseUrls.opencode when OPENCODE_BASE_URL is unset", () => {
+    setEnv({ OPENCODE_BASE_URL: undefined });
+    delete process.env["OPENCODE_BASE_URL"];
+    const config = loadConfig();
+    expect(config.providerBaseUrls?.opencode).toBeUndefined();
+  });
+
   it("loads OPENROUTER_API_KEY and OPENROUTER_MODEL into runtime config", () => {
     setEnv({
       OPENROUTER_API_KEY: "sk-or-test-key-123",

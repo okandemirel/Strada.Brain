@@ -156,6 +156,7 @@ export class ProviderManager {
     preferencesDbPath?: string,
     private readonly defaultProviderOrder: readonly string[] = [],
     private readonly ollamaBaseUrl?: string,
+    private readonly baseUrlOverrides?: Record<string, string>,
   ) {
     const dbPath = preferencesDbPath ?? process.env["MEMORY_DB_PATH"] ?? join(process.cwd(), ".strada-memory");
     this.preferences = new ProviderPreferenceStore(
@@ -221,7 +222,7 @@ export class ProviderManager {
     try {
       const provider = buildProviderChain(order, this.providerCredentials, {
         models: model ? { ...this.modelOverrides, [primaryName]: model } : this.modelOverrides,
-        baseUrls: this.ollamaBaseUrl ? { ollama: this.ollamaBaseUrl } : undefined,
+        baseUrls: this.resolveBaseUrlOverrides(),
       });
       this.providerCache.set(cacheKey, provider);
       return provider;
@@ -257,6 +258,20 @@ export class ProviderManager {
 
   private buildCacheKey(order: readonly string[], primaryName: string, model?: string): string {
     return `chain:${order.join(">")}:${primaryName}:${model ?? "(default)"}`;
+  }
+
+  /**
+   * Per-provider base-URL overrides handed to buildProviderChain. Merges the
+   * ollama base URL (threaded separately for backward compatibility) with any
+   * additional overrides (e.g. opencode's OPENCODE_BASE_URL). Returns undefined
+   * when there is nothing to override so the registry uses preset base URLs.
+   */
+  private resolveBaseUrlOverrides(): Record<string, string> | undefined {
+    const merged: Record<string, string> = { ...this.baseUrlOverrides };
+    if (this.ollamaBaseUrl) {
+      merged["ollama"] = this.ollamaBaseUrl;
+    }
+    return Object.keys(merged).length > 0 ? merged : undefined;
   }
 
   private getDefaultPrimaryName(): string {
@@ -296,7 +311,7 @@ export class ProviderManager {
         openaiSubscriptionAccessToken: this.providerCredentials[normalizedName]?.openaiSubscriptionAccessToken,
         openaiSubscriptionAccountId: this.providerCredentials[normalizedName]?.openaiSubscriptionAccountId,
         model: model ?? this.modelOverrides?.[normalizedName],
-        baseUrl: normalizedName === "ollama" ? this.ollamaBaseUrl : undefined,
+        baseUrl: this.resolveBaseUrlOverrides()?.[normalizedName],
       });
       this.primaryProviderCache.set(cacheKey, provider);
       return provider;
@@ -482,7 +497,7 @@ export class ProviderManager {
         : this.modelOverrides;
       const provider = buildProviderChain(normalizedOrder, this.providerCredentials, {
         models,
-        baseUrls: this.ollamaBaseUrl ? { ollama: this.ollamaBaseUrl } : undefined,
+        baseUrls: this.resolveBaseUrlOverrides(),
       });
       this.providerCache.set(cacheKey, provider);
       return provider;

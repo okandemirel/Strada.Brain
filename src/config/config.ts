@@ -747,6 +747,12 @@ export interface Config {
   readonly providerChain?: string;
   /** Per-provider model overrides (env: {PROVIDER}_MODEL) */
   readonly providerModels?: Record<string, string>;
+  /**
+   * Per-provider base-URL overrides applied at provider construction time.
+   * Currently sourced from OPENCODE_BASE_URL (opencode); ollama's base URL is
+   * threaded separately via ollamaBaseUrl. Keyed by canonical provider name.
+   */
+  readonly providerBaseUrls?: Record<string, string>;
 
   // Channels
   readonly telegram: TelegramConfig;
@@ -3397,6 +3403,23 @@ export function loadConfig(envOverride?: Record<string, string | undefined>): Co
     if (val) providerModels[p] = val;
   }
 
+  // OpenCode is the odd one out: its model env var is OPENCODE_DEFAULT_MODEL
+  // (not OPENCODE_MODEL), so it is absent from the generic {PROVIDER}_MODEL loop
+  // above and would otherwise never reach providerModels — leaving the provider
+  // pinned to its hardcoded default. Wire it explicitly. A direct OPENCODE_MODEL
+  // (if ever set) still wins via the loop; this only fills the gap.
+  if (config.opencodeDefaultModel && !providerModels["opencode"]) {
+    providerModels["opencode"] = config.opencodeDefaultModel;
+  }
+
+  // Per-provider base-URL overrides. OpenCode's base URL is the only one driven
+  // by an env var today (OPENCODE_BASE_URL); when unset, createProvider falls
+  // back to the Zen preset. ollama's base URL is threaded separately.
+  const providerBaseUrls: Record<string, string> = {};
+  if (config.opencodeBaseUrl) {
+    providerBaseUrls["opencode"] = config.opencodeBaseUrl;
+  }
+
   // `anthropic` and `claude` are aliases for one provider, but the env var is
   // CLAUDE_MODEL (→ providerModels.claude). Mirror the value across both keys so
   // a chain entry written as either alias resolves the configured model — every
@@ -3431,6 +3454,7 @@ export function loadConfig(envOverride?: Record<string, string | undefined>): Co
     ...config,
     unityProjectPath: pathResult.value,
     providerModels,
+    ...(Object.keys(providerBaseUrls).length > 0 ? { providerBaseUrls } : {}),
     // Preset fills in defaults; explicit env vars take precedence (already parsed by Zod above)
     ...(preset && !activeEnv["PROVIDER_CHAIN"] ? { providerChain: preset.providerChain } : {}),
     // Apply embedding overrides to the nested rag config

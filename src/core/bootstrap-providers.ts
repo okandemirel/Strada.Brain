@@ -72,6 +72,14 @@ export async function initializeAIProvider(
   // (previously it only affected the probe and embeddings).
   const ollamaBaseUrl = config.ollamaBaseUrl ?? "http://localhost:11434";
 
+  // Per-provider base-URL overrides handed to buildProviderChain/ProviderManager.
+  // ollama is always present (resolved above); opencode (and any future provider)
+  // base URLs come from config.providerBaseUrls (sourced from OPENCODE_BASE_URL).
+  const baseUrlOverrides: Record<string, string> = {
+    ...config.providerBaseUrls,
+    ollama: ollamaBaseUrl,
+  };
+
   let defaultProvider: IAIProvider;
   let defaultProviderOrder: string[] = [];
 
@@ -124,7 +132,7 @@ export async function initializeAIProvider(
     defaultProviderOrder = preflightResult.passedProviderIds;
     defaultProvider = buildProviderChain(preflightResult.passedProviderIds, providerCredentials, {
       models: config.providerModels,
-      baseUrls: { ollama: ollamaBaseUrl },
+      baseUrls: baseUrlOverrides,
     });
     logger.info("AI provider chain initialized", { chain: preflightResult.passedProviderIds });
 
@@ -142,7 +150,7 @@ export async function initializeAIProvider(
         defaultProviderOrder = allProviderIds;
         defaultProvider = buildProviderChain(allProviderIds, providerCredentials, {
           models: config.providerModels,
-          baseUrls: { ollama: ollamaBaseUrl },
+          baseUrls: baseUrlOverrides,
         });
         notices.push(
           `Auto-appended fallback providers: ${fallbackPreflight.passedProviderIds.join(", ")}`,
@@ -192,7 +200,7 @@ export async function initializeAIProvider(
     defaultProviderOrder = preflightResult.passedProviderIds;
     defaultProvider = buildProviderChain(preflightResult.passedProviderIds, providerCredentials, {
       models: config.providerModels,
-      baseUrls: { ollama: ollamaBaseUrl },
+      baseUrls: baseUrlOverrides,
     });
     logger.info("AI provider auto-detected from available keys", {
       chain: preflightResult.passedProviderIds,
@@ -216,6 +224,7 @@ export async function initializeAIProvider(
     config.memory.dbPath,
     defaultProviderOrder,
     ollamaBaseUrl,
+    config.providerBaseUrls,
   );
 
   // Verify Ollama reachability before marking it available for routing.

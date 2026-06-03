@@ -179,6 +179,31 @@ describe("ProviderManager", () => {
     expect(provider?.name).toBe("chain(kimi->qwen)");
   });
 
+  it("threads per-provider base-URL overrides (opencode) plus ollama into buildProviderChain", () => {
+    const defaultProvider = makeProvider("chain(opencode)");
+    const manager = new ProviderManager(
+      defaultProvider,
+      { opencode: { apiKey: "opencode-key" }, qwen: { apiKey: "qwen-key" } },
+      { opencode: "opencode/grok-code" },
+      "/tmp/provider-manager-test",
+      // Default order is qwen-first; querying opencode reorders to
+      // ["opencode","qwen"], which differs from the default order and therefore
+      // forces a real buildProviderChain call (not the default-chain short-circuit).
+      ["qwen", "opencode"],
+      "http://localhost:11434",
+      { opencode: "https://opencode.ai/go/v1" },
+    );
+
+    manager.getProviderByName("opencode");
+
+    const lastCall = buildProviderChainMock.mock.calls.at(-1);
+    expect(lastCall?.[2]?.baseUrls).toEqual({
+      opencode: "https://opencode.ai/go/v1",
+      ollama: "http://localhost:11434",
+    });
+    expect(lastCall?.[2]?.models).toMatchObject({ opencode: "opencode/grok-code" });
+  });
+
   it("canonicalizes labeled provider names before preference storage and direct lookup", () => {
     const defaultProvider = makeProvider("chain(qwen->kimi)");
     const manager = new ProviderManager(
