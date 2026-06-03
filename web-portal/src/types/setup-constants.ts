@@ -87,12 +87,11 @@ export const PROVIDER_MAP = Object.fromEntries(PROVIDERS.map((p) => [p.id, p]))
 export type OpencodePlatform = 'zen' | 'go'
 
 // Base URLs for OpenCode's hosted platforms. The Zen URL matches the backend
-// default (OPENCODE_BASE_URL). NOTE: the Go URL is the LIKELY pattern but is
-// UNCONFIRMED — it is intentionally kept as this single named constant so it is
-// trivial to correct in one place if the real Go endpoint differs.
+// default (OPENCODE_BASE_URL). Kept as a single named constant so the endpoints
+// are trivial to adjust in one place.
 export const OPENCODE_PLATFORM_BASE_URLS: Record<OpencodePlatform, string> = {
   zen: 'https://opencode.ai/zen/v1',
-  go: 'https://opencode.ai/go/v1',
+  go: 'https://opencode.ai/go',
 }
 
 export const DEFAULT_OPENCODE_PLATFORM: OpencodePlatform = 'zen'
