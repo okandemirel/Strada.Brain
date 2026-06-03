@@ -24,15 +24,15 @@ import {
   WAYPOINTS,
   DEMO_AGENTS,
   AGENT_SCALE,
-  AGENT_SPEED_PX,
-  AGENT_DWELL,
-  pickTargetWaypoint,
-  stepTowards,
+  NAV_GRID,
+  seedWalkState,
+  advanceWalk,
   mapLiveAgents,
   mapMonitorTasks,
   type FurnitureItem,
   type OfficeWaypoint,
   type OfficeAgent,
+  type WalkState,
 } from './officeModel'
 
 /**
@@ -240,15 +240,9 @@ function makeFaceTexture(skin: string): THREE.CanvasTexture {
   return tex
 }
 
-interface WalkState {
-  position: [number, number]
-  target: [number, number]
-  tickIndex: number
-  dwell: number
-}
-
-/** A walking box-person. Maintains its own canvas-px position + target waypoint
- * and lerps toward it every frame, swinging limbs + bobbing while moving. */
+/** A walking box-person. Holds its own canvas-px walk state (an A* path to the
+ * current station) and advances along it every frame — routing around furniture
+ * — while swinging limbs + bobbing when moving. */
 function AgentAvatar({ agent }: { agent: OfficeAgent }): JSX.Element {
   const groupRef = useRef<THREE.Group>(null)
   const rightLeg = useRef<THREE.Group>(null)
@@ -257,25 +251,10 @@ function AgentAvatar({ agent }: { agent: OfficeAgent }): JSX.Element {
   const leftArm = useRef<THREE.Group>(null)
   const faceTexture = useMemo(() => makeFaceTexture(SKIN), [])
 
-  const home = useMemo(
-    () => WAYPOINTS.find((w) => w.id === agent.homeWaypointId) ?? WAYPOINTS[0],
-    [agent.homeWaypointId],
-  )
-  const active = agent.active ?? true
-  // Active agents roam between waypoints; idle agents rest at their home spot.
-  const first = useMemo(
-    () => (active ? pickTargetWaypoint(agent.id, 0) : home),
-    [active, agent.id, home],
-  )
-
-  // Lazily seed the mutable walk state (no ref read/write during render).
+  // Lazily seed the mutable walk state (no ref read/write during render). The
+  // walk machine (seed/advance) is pure + unit-tested in officeModel.
   const stateRef = useRef<WalkState | null>(null)
-  stateRef.current ??= {
-    position: [home.x, home.y],
-    target: [first.x, first.y],
-    tickIndex: 0,
-    dwell: 0,
-  }
+  stateRef.current ??= seedWalkState(agent, NAV_GRID)
 
   useFrame((state, delta) => {
     const g = groupRef.current
@@ -283,30 +262,19 @@ function AgentAvatar({ agent }: { agent: OfficeAgent }): JSX.Element {
     if (!g || !s) return
     const dt = Math.min(delta, 0.1)
 
-    let moving = false
-    if (s.dwell > 0) {
-      s.dwell = Math.max(0, s.dwell - dt)
-    } else {
-      const { position, arrived } = stepTowards(s.position, s.target, AGENT_SPEED_PX, dt)
-      s.position = position
-      moving = !arrived
-      if (arrived && active) {
-        s.dwell = AGENT_DWELL
-        s.tickIndex += 1
-        const next = pickTargetWaypoint(agent.id, s.tickIndex)
-        s.target = [next.x, next.y]
-      }
-    }
+    const { moving, heading } = advanceWalk(s, agent, NAV_GRID, dt)
 
     const [wx, , wz] = toWorld(s.position[0], s.position[1])
     const phase = state.clock.getElapsedTime() * 9 + agent.id.length
     const bounce = moving ? Math.abs(Math.sin(phase)) * 0.07 : 0
     g.position.set(wx, bounce, wz)
 
-    // Face the direction of travel (canvas dx→world x, canvas dy→world z).
-    const dx = s.target[0] - s.position[0]
-    const dy = s.target[1] - s.position[1]
-    if (moving && dx * dx + dy * dy > 1) g.rotation.y = Math.atan2(dx, dy)
+    // Face the immediate heading node (canvas dx→world x, canvas dy→world z).
+    if (moving && heading) {
+      const dx = heading[0] - s.position[0]
+      const dy = heading[1] - s.position[1]
+      if (dx * dx + dy * dy > 1) g.rotation.y = Math.atan2(dx, dy)
+    }
 
     const legSwing = moving ? Math.sin(phase) * 0.35 : 0
     const armSwing = moving ? Math.sin(phase) * 0.4 : 0

@@ -10,6 +10,14 @@ import {
   RECENT_ACTIVITY_MS,
   OFFICE_W,
   OFFICE_H,
+  FURNITURE,
+  buildNavGrid,
+  findPath,
+  navCellAt,
+  NAV_GRID,
+  seedWalkState,
+  advanceWalk,
+  type OfficeAgent,
 } from './officeModel'
 import { OFFICE_STATIONS } from '../office-stations'
 
@@ -184,5 +192,120 @@ describe('toWorld', () => {
     expect(x).toBeCloseTo(0, 6)
     expect(y).toBe(0)
     expect(z).toBeCloseTo(0, 6)
+  })
+})
+
+describe('buildNavGrid (Hermes A* occupancy grid)', () => {
+  it('marks a blocking desk cubicle as impassable but leaves the open aisle free', () => {
+    const grid = buildNavGrid([{ type: 'desk_cubicle', x: 100, y: 300, id: 'd' }])
+    expect(navCellAt(grid, 150, 320)).toBe(1) // inside the desk footprint → blocked
+    expect(navCellAt(grid, 600, 400)).toBe(0) // far-away open floor → free
+  })
+
+  it('walls off the office border but keeps the interior open', () => {
+    const grid = buildNavGrid([])
+    expect(navCellAt(grid, 2, 2)).toBe(1) // top-left border cell
+    expect(navCellAt(grid, OFFICE_W - 2, OFFICE_H - 2)).toBe(1) // bottom-right border cell
+    expect(navCellAt(grid, OFFICE_W / 2, OFFICE_H / 2)).toBe(0) // centre is walkable
+  })
+
+  it('does not block passable props (chairs and desk computers are walk-through)', () => {
+    const grid = buildNavGrid([
+      { type: 'chair', x: 400, y: 400 },
+      { type: 'computer', x: 410, y: 405 },
+    ])
+    expect(navCellAt(grid, 412, 407)).toBe(0)
+  })
+
+  it('blocks freestanding plants so agents detour around the plant models (Hermes issue #4)', () => {
+    const grid = buildNavGrid([{ type: 'plant', x: 450, y: 450 }])
+    expect(navCellAt(grid, 456, 456)).toBe(1)
+  })
+})
+
+describe('findPath (A* routing around furniture)', () => {
+  it('routes around a blocker without ever stepping on a blocked cell, ending at the target', () => {
+    const grid = buildNavGrid([{ type: 'bookshelf', x: 560, y: 300, w: 80, h: 120 }])
+    const start: [number, number] = [540, 360] // left of the bookshelf
+    const end: [number, number] = [700, 360] // right of the bookshelf
+    const path = findPath(start, end, grid)
+    expect(path.length).toBeGreaterThan(0)
+    expect(path[path.length - 1]).toEqual(end) // arrives exactly at the target pixel
+    for (const [x, y] of path) expect(navCellAt(grid, x, y)).toBe(0) // never clips furniture
+  })
+
+  it('always returns at least the destination so an agent never freezes', () => {
+    const grid = buildNavGrid(FURNITURE)
+    const path = findPath([20, 20], [OFFICE_W - 20, OFFICE_H - 20], grid)
+    expect(path.length).toBeGreaterThan(0)
+    expect(path[path.length - 1]).toEqual([OFFICE_W - 20, OFFICE_H - 20])
+  })
+})
+
+describe('NAV_GRID + waypoint placement', () => {
+  it('places every clickable waypoint on a free (walkable) cell, not on furniture', () => {
+    for (const wp of WAYPOINTS) {
+      expect({ id: wp.id, cell: navCellAt(NAV_GRID, wp.x, wp.y) }).toEqual({ id: wp.id, cell: 0 })
+    }
+  })
+})
+
+describe('seedWalkState + advanceWalk (A* walking behaviour)', () => {
+  const grid = NAV_GRID
+  const active: OfficeAgent = {
+    id: 'aria', name: 'Aria', color: '#6366f1', homeWaypointId: 'dashboard', active: true,
+  }
+  const idle: OfficeAgent = { ...active, id: 'idle', active: false }
+
+  it('seeds an active agent at its home with a planned A* path to its first target', () => {
+    const s = seedWalkState(active, grid)
+    const home = WAYPOINTS.find((w) => w.id === 'dashboard')!
+    expect(s.position).toEqual([home.x, home.y])
+    expect(s.path.length).toBeGreaterThan(0)
+    const first = pickTargetWaypoint('aria', 0)
+    expect(s.path[s.path.length - 1]).toEqual([first.x, first.y]) // destination = first station
+  })
+
+  it('seeds an idle agent standing still at home (no path)', () => {
+    const s = seedWalkState(idle, grid)
+    const home = WAYPOINTS.find((w) => w.id === 'dashboard')!
+    expect(s.position).toEqual([home.x, home.y])
+    expect(s.path).toEqual([])
+  })
+
+  it('advances an active agent along its path, reporting movement + a heading', () => {
+    const s = seedWalkState(active, grid)
+    const before: [number, number] = [...s.position]
+    const { moving, heading } = advanceWalk(s, active, grid, 0.5)
+    expect(moving).toBe(true)
+    expect(heading).not.toBeNull()
+    expect(s.position).not.toEqual(before)
+  })
+
+  it('every node the agent steps onto stays on walkable floor (never clips furniture)', () => {
+    const s = seedWalkState(active, grid)
+    for (let i = 0; i < 400; i++) {
+      advanceWalk(s, active, grid, 0.1)
+      expect(navCellAt(grid, s.position[0], s.position[1])).toBe(0)
+    }
+  })
+
+  it('keeps an idle agent put', () => {
+    const s = seedWalkState(idle, grid)
+    const before: [number, number] = [...s.position]
+    const { moving } = advanceWalk(s, idle, grid, 0.5)
+    expect(moving).toBe(false)
+    expect(s.position).toEqual(before)
+  })
+
+  it('on reaching its destination, dwells then re-plans a route to the next station', () => {
+    const s = seedWalkState(active, grid)
+    let guard = 0
+    while (s.path.length > 0 && guard++ < 5000) advanceWalk(s, active, grid, 0.2)
+    expect(s.path.length).toBe(0) // arrived
+    const next = advanceWalk(s, active, grid, 0.016)
+    expect(next.moving).toBe(false)
+    expect(s.dwell).toBeGreaterThan(0) // pauses at the station
+    expect(s.path.length).toBeGreaterThan(0) // new route planned
   })
 })
