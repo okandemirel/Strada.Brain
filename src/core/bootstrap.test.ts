@@ -94,6 +94,11 @@ vi.mock("../agents/providers/provider-manager.js", () => {
       defaultProvider,
       getProvider: vi.fn().mockReturnValue(defaultProvider),
       shutdown: vi.fn(),
+      // Boot wires the dynamic model catalog + kicks a non-blocking refresh;
+      // keep that inert in unit tests.
+      setModelCatalog: vi.fn(),
+      refreshModelCatalog: vi.fn().mockResolvedValue({ modelsUpdated: 0, source: "cache", errors: [] }),
+      listAvailable: vi.fn().mockReturnValue([]),
     };
   });
   return { ProviderManager: MockProviderManager };

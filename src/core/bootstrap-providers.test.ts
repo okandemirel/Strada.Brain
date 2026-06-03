@@ -23,6 +23,12 @@ vi.mock("../agents/providers/provider-registry.js", () => ({
 
 const mockProviderManagerInstance = {
   setOllamaVerified: vi.fn(),
+  // The boot path wires the dynamic model catalog (setModelCatalog) and kicks a
+  // non-blocking refresh (refreshModelCatalog) whose .then enumerates
+  // listAvailable(); these stubs keep that wiring inert in the unit tests.
+  setModelCatalog: vi.fn(),
+  refreshModelCatalog: vi.fn().mockResolvedValue({ modelsUpdated: 0, source: "cache", errors: [] }),
+  listAvailable: vi.fn().mockReturnValue([]),
   _tag: "provider-manager",
 };
 vi.mock("../agents/providers/provider-manager.js", () => ({
