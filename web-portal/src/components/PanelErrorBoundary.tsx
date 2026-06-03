@@ -22,6 +22,12 @@ export default class PanelErrorBoundary extends Component<Props, State> {
     this.state = { hasError: false, error: null }
   }
 
+  // A lazy chunk failed to load — almost always a STALE bundle (the page was
+  // open across a new deploy, so its index.html references chunk hashes that no
+  // longer exist). A full page reload fetches the current index + chunks.
+  static readonly CHUNK_ERROR =
+    /dynamically imported module|module script failed|Failed to fetch dynamically|Loading chunk/i
+
   static getDerivedStateFromError(error: Error): State {
     return { hasError: true, error }
   }
@@ -32,9 +38,30 @@ export default class PanelErrorBoundary extends Component<Props, State> {
       error,
       info.componentStack,
     )
+    // Auto-heal stale chunks with a single full reload (guarded against loops:
+    // only reload if we haven't already done so in the last 10s).
+    if (PanelErrorBoundary.CHUNK_ERROR.test(error.message)) {
+      try {
+        const key = 'panel-chunk-reload-at'
+        const last = Number(window.sessionStorage.getItem(key) ?? '0')
+        const now = Date.now()
+        if (now - last > 10_000) {
+          window.sessionStorage.setItem(key, String(now))
+          window.location.reload()
+        }
+      } catch {
+        /* sessionStorage unavailable — fall through to the inline error UI */
+      }
+    }
   }
 
   handleRetry = () => {
+    // For a stale-chunk error, retrying the import is futile (the chunk is gone)
+    // — do a full page reload instead so the current bundle is fetched.
+    if (this.state.error && PanelErrorBoundary.CHUNK_ERROR.test(this.state.error.message)) {
+      window.location.reload()
+      return
+    }
     this.setState({ hasError: false, error: null })
   }
 

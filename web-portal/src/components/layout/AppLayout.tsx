@@ -1,5 +1,5 @@
 import { Suspense, lazy, useState, useCallback } from 'react'
-import { Outlet } from 'react-router-dom'
+import { Outlet, useLocation } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { WebSocketProvider } from '../../contexts/WebSocketContext'
 import { TooltipProvider } from '../ui/tooltip'
@@ -38,6 +38,7 @@ const PANEL_MAP: Record<string, React.LazyExoticComponent<React.ComponentType>> 
 function PrimaryContent() {
   const { t } = useTranslation()
   const mode = useWorkspaceStore((s) => s.mode)
+  const { pathname } = useLocation()
 
   const Panel = PANEL_MAP[mode]
   // Admin routes render through the Outlet. Without a boundary here, a render
@@ -45,9 +46,15 @@ function PrimaryContent() {
   // ErrorBoundary (which nukes the whole shell + only offers a hard reload).
   // Wrap the Outlet in the same inline, retryable PanelErrorBoundary the
   // workspace panels use. (Suspense for these routes lives in App.tsx.)
+  //
+  // Key the boundary by pathname: an error boundary does NOT reset itself when
+  // its children change, so without this a crash on one admin route (e.g. a bad
+  // API payload on /admin/dashboard) would keep showing its error on EVERY other
+  // admin route you navigate to next. Re-keying remounts a fresh boundary per
+  // route so each page gets a clean attempt.
   if (!Panel) {
     return (
-      <PanelErrorBoundary panelName="admin">
+      <PanelErrorBoundary key={pathname} panelName="admin">
         <Outlet />
       </PanelErrorBoundary>
     )

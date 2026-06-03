@@ -545,7 +545,13 @@ export function useMemoryStats() {
 export function useTriggers() {
   return useQuery<TriggerItem[]>({
     queryKey: ['triggers'],
-    queryFn: () => fetchApi<TriggerItem[]>('/api/triggers'),
+    // The server responds with `{ triggers: [...] }`, not a bare array. Unwrap
+    // it here so every consumer gets a real TriggerItem[]; tolerate a plain
+    // array too in case the endpoint shape ever changes back.
+    queryFn: async () => {
+      const data = await fetchApi<{ triggers?: TriggerItem[] } | TriggerItem[]>('/api/triggers')
+      return Array.isArray(data) ? data : (data?.triggers ?? [])
+    },
   })
 }
 
