@@ -372,6 +372,15 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
         return;
       }
 
+      // Reasoning-summary deltas (emitted when `reasoning.summary` is requested)
+      // stream densely during the silent think phase. They carry no user-visible
+      // answer text, so surface them as an empty liveness heartbeat — the watchdog
+      // stays alive on the long thinking window without flipping to the stall window.
+      if (eventName === "response.reasoning_summary_text.delta") {
+        onChunk?.("");
+        return;
+      }
+
       if (eventName === "response.output_text.delta" && typeof data.delta === "string") {
         text += data.delta;
         onChunk?.(data.delta);
@@ -379,6 +388,10 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
       }
 
       if (eventName === "response.output_item.added" && data.item?.type === "function_call") {
+        // A tool-call-only turn streams these events but no output_text — without a
+        // heartbeat the watchdog would see no progress while large tool-call JSON
+        // arguments stream. Treat as a liveness heartbeat (no visible answer text).
+        onChunk?.("");
         toolCallAccumulator.set(data.item.id, {
           id: data.item.call_id ?? data.item.id,
           name: data.item.name ?? "",
@@ -392,6 +405,7 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
         && typeof data.item_id === "string"
         && typeof data.delta === "string"
       ) {
+        onChunk?.("");
         const existing = toolCallAccumulator.get(data.item_id);
         if (existing) {
           existing.arguments += data.delta;
@@ -406,6 +420,7 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
       }
 
       if (eventName === "response.output_item.done" && data.item?.type === "function_call") {
+        onChunk?.("");
         toolCallAccumulator.set(data.item.id, {
           id: data.item.call_id ?? data.item.id,
           name: data.item.name ?? "",
@@ -868,6 +883,12 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
       model: this.model,
       instructions: systemPrompt,
       input: this.buildChatGptInput(messages),
+      // Request a reasoning summary so gpt-5.x reasoning models stream
+      // `response.reasoning_summary_text.delta` events during the otherwise-silent
+      // think phase. This gives a dense liveness heartbeat (handled in processFrame)
+      // on top of the ~30s `keepalive`, and surfaces the model's thinking. `summary`
+      // only (no `effort`) keeps the model's default reasoning depth unchanged.
+      reasoning: { summary: "auto" },
       store: false,
       stream: true,
     };

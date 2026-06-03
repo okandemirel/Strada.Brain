@@ -1520,5 +1520,33 @@ describe("BackgroundExecutor - task inactivity timeout", () => {
     await vi.waitFor(() => { expect(progressTicks).toBeGreaterThanOrEqual(6); }, { timeout: 3000 });
     expect(aborted).toBe(false);
   });
+
+  it("enforces the inactivity window >= 2x the stream-initial timeout (ordering invariant)", async () => {
+    const mockOrch = createMockOrchestrator();
+    let aborted = false;
+    mockOrch.runBackgroundTask = vi.fn(async (
+      _prompt: string,
+      opts: { signal: AbortSignal },
+    ) => {
+      opts.signal.addEventListener("abort", () => { aborted = true; }, { once: true });
+      // Stay silent for 300ms — well past the requested 100ms inactivity window, but
+      // far under the enforced floor (2 x 100000ms). Must NOT abort: a long single
+      // LLM call kept alive by keepalive must outlive the task timer.
+      await new Promise((r) => setTimeout(r, 300));
+      return "done";
+    });
+
+    const executor = new BackgroundExecutor({
+      orchestrator: mockOrch as any,
+      taskInactivityTimeoutMs: 100,    // would abort at 100ms on its own...
+      streamInitialTimeoutMs: 100000,  // ...but the 2x floor (200000ms) overrides it
+    });
+    executor.setTaskManager({ updateStatus: vi.fn(), complete: vi.fn(), fail: vi.fn(), block: vi.fn() } as any);
+
+    executor.enqueue(createTestTask(), new AbortController().signal, vi.fn());
+
+    await new Promise((r) => setTimeout(r, 380));
+    expect(aborted).toBe(false);
+  });
 });
 

@@ -153,7 +153,18 @@ export interface BackgroundExecutorOptions {
    * "think" for minutes on a single step, so this must NOT be a hard wall-clock cap.
    */
   taskInactivityTimeoutMs?: number;
+  /**
+   * The per-LLM-call stream initial timeout (ms). Used only to enforce the ordering
+   * invariant {@link MIN_INACTIVITY_OVER_STREAM_RATIO}× so the per-task inactivity
+   * window is always strictly larger than a single legitimately-long LLM call —
+   * otherwise the blind task timer could abort a call the stream watchdog is still
+   * keeping alive (it does not see keepalive liveness; see ARCHITECTURE-AUDIT #8/#9).
+   */
+  streamInitialTimeoutMs?: number;
 }
+
+/** The task inactivity window must be at least this multiple of the per-call stream window. */
+export const MIN_INACTIVITY_OVER_STREAM_RATIO = 2;
 
 /**
  * Default per-task inactivity window. A background task is aborted only after it
@@ -186,7 +197,16 @@ export class BackgroundExecutor {
   constructor(opts: BackgroundExecutorOptions) {
     this.orchestrator = opts.orchestrator;
     this.concurrencyLimit = opts.concurrencyLimit ?? 3;
-    this.taskInactivityTimeoutMs = opts.taskInactivityTimeoutMs ?? DEFAULT_TASK_INACTIVITY_TIMEOUT_MS;
+    // Enforce the ordering invariant: the per-task inactivity window must be at least
+    // MIN_INACTIVITY_OVER_STREAM_RATIO× the per-call stream window, so a single long
+    // (keepalive-kept-alive) LLM call can never trip the task timer before the stream
+    // watchdog would. The task timer cannot observe intra-call keepalive liveness, so
+    // it must give the call strictly more headroom than the per-call watchdog.
+    {
+      const requested = opts.taskInactivityTimeoutMs ?? DEFAULT_TASK_INACTIVITY_TIMEOUT_MS;
+      const floor = (opts.streamInitialTimeoutMs ?? 0) * MIN_INACTIVITY_OVER_STREAM_RATIO;
+      this.taskInactivityTimeoutMs = Math.max(requested, floor);
+    }
     this.decomposer = opts.decomposer;
     this.goalStorage = opts.goalStorage;
     this.daemonEventBus = opts.daemonEventBus;

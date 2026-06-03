@@ -328,6 +328,85 @@ describe("OpenAIProvider", () => {
     expect(result.text).toBe("hi");
   });
 
+  // Request a reasoning summary so gpt-5.x models stream their thinking — a dense
+  // liveness heartbeat on top of keepalive. The summary deltas must surface as
+  // empty progress chunks, NOT as visible answer text.
+  it("requests reasoning summaries and treats summary deltas as progress (not answer text)", async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(
+          [
+            "event: response.reasoning_summary_text.delta",
+            'data: {"delta":"thinking about it"}',
+            "",
+            "event: response.output_text.delta",
+            'data: {"delta":"answer"}',
+            "",
+            "event: response.completed",
+            'data: {"response":{"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2},"output":[{"id":"m","type":"message","role":"assistant","content":[{"type":"output_text","text":"answer"}]}]}}',
+            "",
+          ].join("\n"),
+        ));
+        controller.close();
+      },
+    });
+    mockFetch.mockResolvedValue({ ok: true, body: stream, text: async () => "", headers: new Headers() });
+
+    const provider = new OpenAIProvider({
+      mode: "chatgpt-subscription",
+      accessToken: "access-token",
+      accountId: "account-id",
+    });
+    const chunks: string[] = [];
+    const result = await provider.chatStream("system", [{ role: "user", content: "ping" }], [], (c) => chunks.push(c));
+
+    const body = JSON.parse(mockFetch.mock.calls[0]![1].body);
+    expect(body.reasoning).toEqual({ summary: "auto" });
+    expect(body.reasoning.effort).toBeUndefined(); // default reasoning depth preserved
+    expect(chunks).toContain(""); // reasoning summary surfaced as progress heartbeat
+    expect(result.text).toBe("answer"); // reasoning text NOT leaked into the answer
+  });
+
+  // A tool-call-only turn (no output_text) must still emit progress so the stall
+  // watchdog sees the model is alive while tool-call arguments stream.
+  it("treats subscription function-call argument streaming as stream progress", async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(
+          [
+            'event: response.output_item.added',
+            'data: {"item":{"id":"fc_1","type":"function_call","call_id":"call_1","name":"do_thing","arguments":""}}',
+            "",
+            "event: response.function_call_arguments.delta",
+            'data: {"item_id":"fc_1","delta":"{\\"x\\":1}"}',
+            "",
+            'event: response.output_item.done',
+            'data: {"item":{"id":"fc_1","type":"function_call","call_id":"call_1","name":"do_thing","arguments":"{\\"x\\":1}"}}',
+            "",
+            "event: response.completed",
+            'data: {"response":{"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2},"output":[]}}',
+            "",
+          ].join("\n"),
+        ));
+        controller.close();
+      },
+    });
+    mockFetch.mockResolvedValue({ ok: true, body: stream, text: async () => "", headers: new Headers() });
+
+    const provider = new OpenAIProvider({
+      mode: "chatgpt-subscription",
+      accessToken: "access-token",
+      accountId: "account-id",
+    });
+    const chunks: string[] = [];
+    const result = await provider.chatStream("system", [{ role: "user", content: "ping" }], [], (c) => chunks.push(c));
+
+    expect(chunks).toContain(""); // function-call activity surfaced as progress
+    expect(result.toolCalls).toHaveLength(1);
+    expect(result.toolCalls[0]!.name).toBe("do_thing");
+    expect(result.toolCalls[0]!.input).toEqual({ x: 1 });
+  });
+
   // Regression (M2): the subscription /responses path must forward the caller's
   // AbortSignal so user/task cancel and the orchestrator stall-timeout can stop
   // the in-flight request instead of leaking the socket.

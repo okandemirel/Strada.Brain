@@ -275,6 +275,9 @@ export async function initializeTaskRuntimeStage(
   const backgroundExecutorOptions: ConstructorParameters<typeof BackgroundExecutor>[0] = {
     orchestrator: params.orchestrator,
     concurrencyLimit: params.config.tasks.concurrencyLimit,
+    // Feed the per-call stream timeout so the executor can keep the per-task
+    // inactivity window strictly larger than a single legitimately-long LLM call.
+    streamInitialTimeoutMs: params.config.llmStreamInitialTimeoutMs,
     decomposer: params.goalDecomposer,
     goalStorage: params.goalStorage,
     aiProvider: params.providerManager.getProvider(""),

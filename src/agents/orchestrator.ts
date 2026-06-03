@@ -522,6 +522,7 @@ function createStreamingProgressTimeout(
   thinkingStallTimeoutMs?: number,
 ): {
   markProgress: () => void;
+  markAlive: () => void;
   timeoutPromise: Promise<never>;
   signal: AbortSignal;
   clear: () => void;
@@ -556,8 +557,18 @@ function createStreamingProgressTimeout(
   armTimeout();
 
   return {
+    // Real visible content arrived. Flip to the (shorter) post-first-token stall
+    // window — once tokens are flowing, a long gap means a dead connection.
     markProgress: () => {
       sawProgress = true;
+      armTimeout();
+    },
+    // The stream is alive but produced no visible content (e.g. a `keepalive`
+    // heartbeat or reasoning-summary delta during a silent thinking phase).
+    // Re-arm WITHOUT setting sawProgress so the generous pre-first-token thinking
+    // window is preserved — a keepalive must NOT downgrade the watchdog to the
+    // short stall window mid-reasoning.
+    markAlive: () => {
       armTimeout();
     },
     timeoutPromise,
@@ -5294,8 +5305,12 @@ export class Orchestrator {
         systemPrompt,
         session.messages,
         toolDefinitions,
-        () => {
-          timeoutGuard.markProgress();
+        (chunk) => {
+          // Non-empty chunk = real visible content (flip to stall window); empty
+          // chunk = liveness heartbeat (keepalive / reasoning summary) that must
+          // keep the long thinking window so the model is not cut off mid-reason.
+          if (chunk) timeoutGuard.markProgress();
+          else timeoutGuard.markAlive();
         },
         { signal: composedSignal },
       );
@@ -5420,7 +5435,8 @@ export class Orchestrator {
         session.messages,
         toolDefinitions,
         (chunk) => {
-          timeoutGuard.markProgress();
+          if (chunk) timeoutGuard.markProgress();
+          else timeoutGuard.markAlive();
           onChunk(chunk);
         },
         { signal: timeoutGuard.signal },
