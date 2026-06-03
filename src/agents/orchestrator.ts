@@ -287,7 +287,6 @@ const SELF_IMPROVEMENT_TOOLS: ReadonlySet<string> = new Set([
   "create_tool", "create_skill", "remove_dynamic_tool",
 ]);
 const TYPING_INTERVAL_MS = 4000;
-const STREAM_THROTTLE_MS = 500; // Throttle streaming updates to channels
 const MAX_CONSECUTIVE_PROVIDER_FAILURES = 5;
 const NATURAL_LANGUAGE_BUILTIN_PERSONAS = ["default", "formal", "casual", "minimal"] as const;
 const SUPERVISOR_SYNTHESIS_SYSTEM_PROMPT = `You are a synthesis worker inside Strada Brain's orchestrator.
@@ -5351,148 +5350,20 @@ export class Orchestrator {
           role: "user",
           content: `[System: The AI provider (${provider.name}) failed to respond. Error: ${fallbackMsg}. You may need to: simplify your current step, reduce the number of tool calls, or skip non-critical analysis. Adapt your approach and continue.]`,
         } as ConversationMessage);
-        // Return a synthetic empty response so the PAOR loop can continue
-        // with the agent's awareness of the failure.
-        // IMPORTANT: The circuit breaker in runBackgroundTask / runAgentLoop
-        // detects this exact shape ({ text: "", toolCalls: [], totalTokens: 0 })
-        // to identify provider failures. If you change this, update both loops.
+        // Return a synthetic empty response so the PAOR loop can continue with the
+        // agent's awareness of the failure. The explicit `meta.empty` flag is the
+        // canonical signal the circuit breaker (runBackgroundTask / runAgentLoop)
+        // keys on — more robust than inferring emptiness from the token shape (#18).
         return {
           text: "",
           toolCalls: [],
           stopReason: "end_turn" as const,
           usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+          meta: { empty: true, reason: "provider_failure" },
         };
       }
     }
   };
-
-  /**
-   * Stream a response from the LLM to the channel in real-time.
-   * Sends text chunks as they arrive, then returns the final ProviderResponse.
-   * Reserved for runBackgroundTask visible streaming.
-   */
-  // @ts-expect-error Reserved for background task streaming
-  private async streamResponse(
-    chatId: string,
-    systemPrompt: string,
-    session: Session,
-    provider: IAIProvider,
-    toolDefinitions: Array<{
-      name: string;
-      description: string;
-      input_schema: import("../types/index.js").JsonObject;
-    }>,
-  ): Promise<ProviderResponse> {
-    const channel = this.channel;
-    let streamId: string | undefined;
-    let accumulated = "";
-    let lastUpdate = 0;
-
-    const onChunk = (chunk: string) => {
-      accumulated += chunk;
-
-      // Throttle updates to avoid flooding the channel
-      const now = Date.now();
-      if (now - lastUpdate >= STREAM_THROTTLE_MS && streamId) {
-        lastUpdate = now;
-        (
-          channel as {
-            updateStreamingMessage?: (
-              chatId: string,
-              streamId: string,
-              text: string,
-            ) => Promise<void>;
-          }
-        )
-          .updateStreamingMessage?.(chatId, streamId, accumulated)
-          ?.catch((err) =>
-            getLogger().error("Failed to update streaming message", {
-              chatId,
-              error: err instanceof Error ? err.message : String(err),
-            }),
-          );
-      }
-    };
-
-    // Start the streaming message placeholder
-    streamId =
-      (await (
-        channel as { startStreamingMessage?: (chatId: string) => Promise<string | undefined> }
-      ).startStreamingMessage?.(chatId)) ?? undefined;
-
-    let response: ProviderResponse;
-    const thinkingStall = provider.capabilities.thinkingSupported
-      ? this.streamInitialTimeoutMs
-      : undefined;
-    const timeoutGuard = createStreamingProgressTimeout(
-      this.streamInitialTimeoutMs,
-      this.streamStallTimeoutMs,
-      thinkingStall,
-    );
-    try {
-      const streamPromise = (provider as IStreamingProvider).chatStream(
-        systemPrompt,
-        session.messages,
-        toolDefinitions,
-        (chunk) => {
-          if (chunk) timeoutGuard.markProgress();
-          else timeoutGuard.markAlive();
-          onChunk(chunk);
-        },
-        { signal: timeoutGuard.signal },
-      );
-
-      // Suppress unhandled rejection from abandoned stream when timeout wins the race
-      streamPromise.catch((err) => {
-        getLogger().debug("Stream abandoned after timeout race", { error: err instanceof Error ? err.message : String(err) });
-      });
-
-      // Race against abort signal
-      response = await Promise.race([streamPromise, timeoutGuard.timeoutPromise]);
-
-      timeoutGuard.clear();
-    } catch (streamError) {
-      timeoutGuard.clear();
-      const errMsg = streamError instanceof Error ? streamError.message : "Unknown streaming error";
-      getLogger().error("Streaming error", { chatId, error: errMsg });
-      accumulated = `[Streaming error: ${errMsg}]`;
-
-      // Finalize with error message and return a synthetic response
-      if (streamId) {
-        await (
-          channel as {
-            finalizeStreamingMessage?: (
-              chatId: string,
-              streamId: string,
-              text: string,
-            ) => Promise<void>;
-          }
-        ).finalizeStreamingMessage?.(chatId, streamId, accumulated);
-      }
-
-      return {
-        text: accumulated,
-        toolCalls: [],
-        stopReason: "end_turn" as const,
-        usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-      };
-    }
-
-    // Finalize the streamed message
-    if (streamId) {
-      await (
-        channel as {
-          finalizeStreamingMessage?: (
-            chatId: string,
-            streamId: string,
-            text: string,
-          ) => Promise<void>;
-        }
-      ).finalizeStreamingMessage?.(chatId, streamId, accumulated);
-    }
-
-    return response;
-  }
 
   /**
    * Execute tool calls, handling confirmations for write operations.

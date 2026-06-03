@@ -102,6 +102,14 @@ export interface ProviderResponse {
   readonly toolCalls: ToolCall[];
   readonly stopReason: StopReason;
   readonly usage: TokenUsage;
+  /**
+   * Optional resilience metadata. `empty` is an explicit, typed signal that the
+   * response produced no usable output (no text, no tool calls) — set by the
+   * orchestrator when synthesizing a provider-failure placeholder. The circuit
+   * breaker prefers this over inferring emptiness from a fragile token-count
+   * fingerprint (audit #18).
+   */
+  readonly meta?: { readonly empty?: boolean; readonly reason?: string };
 }
 
 // =============================================================================

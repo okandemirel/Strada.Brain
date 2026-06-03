@@ -226,8 +226,12 @@ export function checkProviderFailureCircuitBreaker(
   response: ProviderResponse,
   consecutiveFailures: number,
 ): { action: "abort" | "warn_continue" | "ok" } {
-  const isEmpty = response.text === "" && response.toolCalls.length === 0
-    && (response.usage.totalTokens === 0 || response.usage.outputTokens === 0);
+  // Prefer the explicit typed signal; otherwise infer emptiness from CONTENT only
+  // (no visible text AND no tool calls). The token count is intentionally NOT used:
+  // a reasoning-only turn reports non-zero tokens yet produces no usable output, and
+  // a dropped usage frame must not be mistaken for an empty answer (audit #18).
+  const isEmpty = response.meta?.empty === true
+    || (response.text.trim() === "" && response.toolCalls.length === 0);
   if (isEmpty) {
     const newCount = consecutiveFailures + 1;
     return newCount >= PROVIDER_FAILURE_LIMIT
