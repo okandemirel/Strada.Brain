@@ -964,7 +964,11 @@ export class SetupWizard {
       const timeout = new Promise<string[]>((resolve) => {
         setTimeout(() => resolve([]), PROBE_TIMEOUT_MS).unref?.();
       });
-      const models = await Promise.race([provider.listModels(), timeout]);
+      // Swallow a late rejection (provider fails AFTER the timeout already won the
+      // race) so it can't surface as an unhandled rejection once Phase 6 activates
+      // real probes.
+      const listing = provider.listModels().catch((): string[] => []);
+      const models = await Promise.race([listing, timeout]);
       return Array.isArray(models) ? models.filter((m): m is string => typeof m === "string") : [];
     } catch {
       return [];
