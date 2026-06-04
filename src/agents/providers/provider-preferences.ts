@@ -25,6 +25,7 @@ export class ProviderPreferenceStore {
   private stmtGet!: Database.Statement;
   private stmtSet!: Database.Statement;
   private stmtDelete!: Database.Statement;
+  private stmtGetMostRecent!: Database.Statement;
 
   constructor(private readonly dbPath: string) {}
 
@@ -64,6 +65,9 @@ export class ProviderPreferenceStore {
       this.stmtDelete = this.db.prepare(
         "DELETE FROM provider_preferences WHERE chat_id = ?",
       );
+      this.stmtGetMostRecent = this.db.prepare(
+        "SELECT chat_id, provider_name, model, selection_mode, updated_at FROM provider_preferences WHERE chat_id != ? ORDER BY updated_at DESC LIMIT 1",
+      );
     } catch (error) {
       this.db?.close();
       this.db = null;
@@ -73,6 +77,33 @@ export class ProviderPreferenceStore {
 
   get(chatId: string): ChatProviderPreference | undefined {
     const row = this.stmtGet.get(chatId) as
+      | {
+        chat_id: string;
+        provider_name: string;
+        model: string | null;
+        selection_mode: string | null;
+        updated_at: number;
+      }
+      | undefined;
+    if (!row) return undefined;
+    return {
+      chatId: row.chat_id,
+      providerName: row.provider_name,
+      model: row.model ?? undefined,
+      selectionMode: row.selection_mode === "strada-hard-pin"
+        ? "strada-hard-pin"
+        : "strada-preference-bias",
+      updatedAt: row.updated_at,
+    };
+  }
+
+  /**
+   * Return the most recently updated preference, optionally excluding one chat id
+   * (used to seed the brain-wide global default from a pre-existing per-profile row
+   * without considering the global key itself).
+   */
+  getMostRecent(excludeChatId = ""): ChatProviderPreference | undefined {
+    const row = this.stmtGetMostRecent.get(excludeChatId) as
       | {
         chat_id: string;
         provider_name: string;

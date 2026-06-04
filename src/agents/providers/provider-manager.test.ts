@@ -68,6 +68,14 @@ vi.mock("./provider-preferences.js", () => ({
       delete: vi.fn((chatId: string) => {
         preferenceState.delete(chatId);
       }),
+      getMostRecent: vi.fn((excludeChatId?: string) => {
+        let last: { chatId: string; providerName: string; model?: string; selectionMode: "strada-preference-bias" | "strada-hard-pin" } | undefined;
+        for (const [chatId, value] of preferenceState) {
+          if (excludeChatId && chatId === excludeChatId) continue;
+          last = { chatId, ...value };
+        }
+        return last;
+      }),
       close: vi.fn(),
     };
   }),
@@ -251,6 +259,56 @@ describe("ProviderManager", () => {
     expect(active.providerName).toBe("kimi");
     expect(active.model).toBe("kimi-long-context");
     expect(active.isDefault).toBe(false);
+  });
+
+  // Retroactive seed: preferences set BEFORE the global-mirror fix existed have no
+  // global row, so a churned profile would still revert. On startup, seed the global
+  // default from the most recent existing selection so pre-fix choices survive churn
+  // without forcing the user to re-select.
+  it("seeds the global default from the most recent existing preference on startup", () => {
+    // Simulate rows written before the fix (no global key present).
+    preferenceState.set("old-profile-A", {
+      providerName: "openai", model: "gpt-5.4", selectionMode: "strada-preference-bias",
+    });
+    preferenceState.set("old-profile-B", {
+      providerName: "kimi", model: "kimi-for-coding", selectionMode: "strada-preference-bias",
+    }); // most recently inserted → the one to inherit
+
+    const defaultProvider = makeProvider("chain(qwen->kimi)");
+    const manager = new ProviderManager(
+      defaultProvider,
+      { qwen: { apiKey: "qwen-key" }, kimi: { apiKey: "kimi-key" } },
+      { qwen: "qwen-max", kimi: "kimi-for-coding" },
+      "/tmp/provider-manager-test",
+      ["qwen", "kimi"],
+    );
+
+    // A brand-new (churned) profile with no row inherits the seeded global default.
+    const active = manager.getActiveInfo("brand-new-profile");
+    expect(active.providerName).toBe("kimi");
+    expect(active.model).toBe("kimi-for-coding");
+    expect(active.isDefault).toBe(false);
+  });
+
+  it("does not overwrite an existing global default when seeding on startup", () => {
+    preferenceState.set("__strada_global_default__", {
+      providerName: "openai", model: "gpt-5.5", selectionMode: "strada-preference-bias",
+    });
+    preferenceState.set("some-profile", {
+      providerName: "kimi", model: "kimi-for-coding", selectionMode: "strada-preference-bias",
+    });
+
+    const defaultProvider = makeProvider("chain(qwen->kimi)");
+    const manager = new ProviderManager(
+      defaultProvider,
+      { qwen: { apiKey: "qwen-key" }, kimi: { apiKey: "kimi-key" } },
+      { qwen: "qwen-max", kimi: "kimi-for-coding" },
+      "/tmp/provider-manager-test",
+      ["qwen", "kimi"],
+    );
+
+    // Existing global default (openai) is preserved, not replaced by "some-profile".
+    expect(manager.getActiveInfo("fresh-profile").providerName).toBe("openai");
   });
 
   it("lets an explicit per-chat preference override the inherited global default", () => {

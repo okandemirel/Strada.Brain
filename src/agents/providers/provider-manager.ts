@@ -163,7 +163,34 @@ export class ProviderManager {
       join(dbPath, "provider-preferences.db"),
     );
     this.preferences.initialize();
+    this.seedGlobalDefaultFromMostRecent();
     this.catalog = new ProviderCatalog(this);
+  }
+
+  /**
+   * One-time migration: preferences set BEFORE the global-mirror existed have no global
+   * row, so a churned profile would still revert. If the global default is absent, seed
+   * it from the most recent existing selection so pre-fix choices survive profileId
+   * churn without forcing the user to re-select. Never overwrites an existing global.
+   */
+  private seedGlobalDefaultFromMostRecent(): void {
+    if (this.preferences.get(ProviderManager.GLOBAL_PREFERENCE_KEY)) {
+      return;
+    }
+    const recent = this.preferences.getMostRecent?.(ProviderManager.GLOBAL_PREFERENCE_KEY);
+    if (!recent) {
+      return;
+    }
+    this.preferences.set(
+      ProviderManager.GLOBAL_PREFERENCE_KEY,
+      recent.providerName,
+      recent.model,
+      recent.selectionMode,
+    );
+    getLogger().info("Seeded brain-wide global provider default from most recent selection", {
+      providerName: recent.providerName,
+      model: recent.model,
+    });
   }
 
   getProvider(chatId: string): IAIProvider {
