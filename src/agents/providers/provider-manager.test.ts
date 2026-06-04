@@ -91,9 +91,11 @@ vi.mock("../../utils/logger.js", () => ({
 }));
 
 import { ProviderManager } from "./provider-manager.js";
+import { ProviderHealthRegistry } from "./provider-health.js";
 
 describe("ProviderManager", () => {
   beforeEach(() => {
+    ProviderHealthRegistry.resetInstance();
     preferenceState.clear();
     buildProviderChainMock.mockReset();
     buildProviderChainMock.mockImplementation((order: string[]) => makeProvider(`chain(${order.join("->")})`));
@@ -329,6 +331,32 @@ describe("ProviderManager", () => {
     expect(manager.getActiveInfo("profile-B").providerName).toBe("qwen");
     // A churned-in new profile inherits the latest global (qwen).
     expect(manager.getActiveInfo("profile-C-fresh").providerName).toBe("qwen");
+  });
+
+  // RC-3: getActiveInfo surfaces live provider health when the selected provider is
+  // unhealthy, so the user/dashboard can see "it's failing" instead of silent reverts.
+  it("attaches health status to getActiveInfo only when the selected provider is unhealthy", () => {
+    const defaultProvider = makeProvider("chain(qwen->kimi)");
+    const manager = new ProviderManager(
+      defaultProvider,
+      { qwen: { apiKey: "qwen-key" }, kimi: { apiKey: "kimi-key" } },
+      { qwen: "qwen-max", kimi: "kimi-for-coding" },
+      "/tmp/provider-manager-test",
+      ["qwen", "kimi"],
+    );
+    manager.setPreference("chat-1", "kimi", "kimi-for-coding");
+
+    // Healthy → no health fields (keeps the common shape minimal).
+    expect(manager.getActiveInfo("chat-1").healthStatus).toBeUndefined();
+
+    // Drive kimi to "down" via repeated failures.
+    const health = ProviderHealthRegistry.getInstance();
+    for (let i = 0; i < 5; i++) health.recordFailure("kimi", "Model kimi-for-coding not supported");
+    expect(health.getStatus("kimi")).toBe("down");
+
+    const active = manager.getActiveInfo("chat-1");
+    expect(active.healthStatus).toBe("down");
+    expect(active.healthError).toContain("not supported");
   });
 
   it("limits execution candidates to the configured default chain", () => {

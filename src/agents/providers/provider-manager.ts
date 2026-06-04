@@ -13,6 +13,7 @@ import { buildProviderChain, createProvider, PROVIDER_PRESETS } from "./provider
 import type { ProviderCredentialMap } from "./provider-registry.js";
 import { ProviderPreferenceStore } from "./provider-preferences.js";
 import type { ProviderSelectionMode } from "./provider-preferences.js";
+import { ProviderHealthRegistry } from "./provider-health.js";
 import { getLogger } from "../../utils/logger.js";
 import { ProviderError } from "../../common/errors.js";
 import { LRUCache } from "../../common/lru-cache.js";
@@ -356,17 +357,17 @@ export class ProviderManager {
     const pref = this.resolveEffectivePreference(chatId);
     if (!pref) {
       const defaultProviderName = this.getDefaultPrimaryName();
-      return {
+      return this.withHealth({
         providerName: defaultProviderName,
         model: this.getDefaultModelForProvider(defaultProviderName),
         isDefault: true,
         selectionMode: "strada-preference-bias",
         executionPolicyNote: EXECUTION_POLICY_NOTE,
-      };
+      });
     }
 
     const providerName = canonicalizeProviderName(pref.providerName) ?? pref.providerName;
-    return {
+    return this.withHealth({
       providerName,
       // Route through getDefaultModelForProvider (as the no-preference branch
       // does) so providers without a PROVIDER_PRESETS entry — claude/anthropic/
@@ -377,6 +378,24 @@ export class ProviderManager {
       executionPolicyNote: pref.selectionMode === "strada-hard-pin"
         ? HARD_PIN_EXECUTION_POLICY_NOTE
         : EXECUTION_POLICY_NOTE,
+    });
+  }
+
+  /**
+   * Attach live provider health to ProviderActiveInfo, but ONLY when the provider is
+   * NOT healthy — so a user/dashboard can see "this provider is degraded/down (last
+   * error: …)" instead of silently discovering it at call time (RC-3). When healthy or
+   * unknown the object is returned unchanged (keeps the common shape minimal).
+   */
+  private withHealth(info: ProviderActiveInfo): ProviderActiveInfo {
+    const entry = ProviderHealthRegistry.getInstance().getEntry(info.providerName);
+    if (!entry || entry.status === "healthy") {
+      return info;
+    }
+    return {
+      ...info,
+      healthStatus: entry.status,
+      ...(entry.lastError ? { healthError: entry.lastError } : {}),
     };
   }
 

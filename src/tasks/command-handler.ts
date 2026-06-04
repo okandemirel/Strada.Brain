@@ -728,13 +728,20 @@ export class CommandHandler {
     const intro = selectionMode === "strada-hard-pin"
       ? `Strada is now hard-pinned to \`${info.providerName}\` (model: \`${info.model}\`).`
       : `Strada will bias routing toward \`${info.providerName}\` (model: \`${info.model}\`).`;
+    // RC-3: if the chosen provider is currently unhealthy, say so up front instead of
+    // letting the user discover it through silent failures / fallback.
+    const healthWarning = info.healthStatus && info.healthStatus !== "healthy"
+      ? `\n\n⚠️ Heads up: \`${info.providerName}\` is currently **${info.healthStatus}**`
+        + `${info.healthError ? ` (last error: ${info.healthError})` : ""}. `
+        + `Strada will fall over to a healthy provider if it keeps failing — pick another provider if this persists.`
+      : "";
     await this.channel.sendMarkdown(
       chatId,
       [
         intro,
         "",
         info.executionPolicyNote,
-      ].join("\n"),
+      ].join("\n") + healthWarning,
     );
   }
 
