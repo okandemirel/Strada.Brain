@@ -155,7 +155,9 @@ describe("createProvider", () => {
       });
       expect(provider).toBeInstanceOf(OpencodeProvider);
       const { model } = readProviderInternals(provider);
-      expect(model).toBe("opencode/grok-code");
+      // The override flows through, but OpencodeProvider strips the "opencode/" namespace
+      // the API rejects — so the bare id reaches .model (not the hardcoded default).
+      expect(model).toBe("grok-code");
       expect(model).not.toBe("opencode/qwen-3-coder-480b");
     });
 
@@ -259,7 +261,8 @@ describe("buildProviderChain", () => {
     const inner = (chain as unknown as { providers: unknown[] }).providers[0];
     expect(inner).toBeInstanceOf(OpencodeProvider);
     const { model, baseUrl } = readProviderInternals(inner);
-    expect(model).toBe("opencode/grok-code");
+    // "opencode/" namespace stripped (API rejects it); bare id threaded through.
+    expect(model).toBe("grok-code");
     expect(baseUrl).toBe("https://opencode.ai/go/v1");
   });
 });

@@ -9,26 +9,18 @@ import { OpenAIProvider } from "./openai.js";
  *
  * Base URL: https://opencode.ai/zen/v1
  *
- * Supported models include (Zen):
- * - opencode/qwen-3-coder-480b (default)
- * - opencode/gpt-5.5
- * - opencode/claude-sonnet-4
- * - opencode/kimi-k2
- * - opencode/deepseek-v4-pro
- * - opencode/gemini-3-flash
+ * IMPORTANT — model id format: the API expects BARE ids (NO "opencode/" namespace).
+ * The constructor strips a leading "opencode/" defensively because presets / saved
+ * preferences / the model catalog historically used the namespaced form, which the API
+ * now rejects ("ModelError: Model opencode/... is not supported"). Verified live via
+ * GET /models. The old "qwen-3-coder-480b" / "deepseek-v4-pro" ids are also no longer
+ * offered — do not reintroduce them.
  *
- * Supported models include (Go):
- * - opencode/glm-5.1
- * - opencode/glm-5
- * - opencode/kimi-k2.5
- * - opencode/kimi-k2.6
- * - opencode/mimo-v2-pro
- * - opencode/qwen-3.5-plus
- * - opencode/qwen-3.6-plus
- * - opencode/minimax-m2.5
- * - opencode/minimax-m2.7
- * - opencode/deepseek-v4-pro
- * - opencode/deepseek-v4-flash
+ * Current model ids (bare), from GET /models:
+ * - Coding/general: qwen3.6-plus (default), qwen3.5-plus, deepseek-v4-flash, glm-5.1, glm-5
+ * - OpenAI: gpt-5.5, gpt-5.5-pro, gpt-5.4, gpt-5.4-mini, gpt-5.2-codex, ...
+ * - Anthropic: claude-opus-4-8, claude-sonnet-4-6, claude-haiku-4-5, ...
+ * - Others: gemini-3.5-flash, kimi-k2.6, kimi-k2.5, minimax-m2.7, minimax-m2.5
  *
  * @see https://opencode.ai/zen
  * @see https://opencode.ai/go
@@ -48,10 +40,19 @@ export class OpencodeProvider extends OpenAIProvider {
 
   constructor(
     apiKey: string,
-    model = "opencode/qwen-3-coder-480b",
+    model = "qwen3.6-plus",
     baseUrl = "https://opencode.ai/zen/v1",
   ) {
-    super(apiKey, model, baseUrl, "OpenCode (Zen/Go)");
+    super(apiKey, OpencodeProvider.toBareModelId(model), baseUrl, "OpenCode (Zen/Go)");
+  }
+
+  /**
+   * OpenCode's API rejects namespaced model ids, so strip a leading "opencode/" — a
+   * preset/preference/catalog value like "opencode/deepseek-v4-flash" becomes the bare
+   * "deepseek-v4-flash" the API accepts. (Verified live via GET /models.)
+   */
+  private static toBareModelId(model: string): string {
+    return model.startsWith("opencode/") ? model.slice("opencode/".length) : model;
   }
 
   /**

@@ -194,6 +194,40 @@ describe("FallbackChainProvider", () => {
     expect(p2.chat).toHaveBeenCalledTimes(1);
   });
 
+  // A "model not supported" / ModelError (some OpenAI-compatible gateways — e.g.
+  // OpenCode/Zen — return it under a 401 status) is a per-provider config mismatch,
+  // NOT an auth failure. It must be RETRYABLE so a healthy sibling provider is tried,
+  // instead of collapsing the whole chain to "All providers failed" (live 09:45 bug).
+  it("falls over on a 'model not supported' / ModelError (even with 401) instead of treating it as fatal", async () => {
+    const p1 = { ...createMockProvider(), name: "opencode" };
+    (p1.chat as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error('OpenCode (Zen/Go) API error 401: {"type":"error","error":{"type":"ModelError","message":"Model opencode/qwen-3-coder-480b is not supported"}}'),
+    );
+    const p2 = { ...createMockProvider({ text: "openai-ok" }), name: "openai" };
+
+    const chain = new FallbackChainProvider([p1, p2]);
+    const result = await chain.chat("sys", [], []);
+
+    expect(result.text).toBe("openai-ok"); // failed over to the healthy sibling
+    expect(p1.chat).toHaveBeenCalledTimes(1);
+    expect(p2.chat).toHaveBeenCalledTimes(1);
+  });
+
+  // Guard: a GENUINE auth 401 stays non-retryable (don't hammer every sibling with a
+  // request that will fail identically). Proves the carve-out is scoped to model errors.
+  it("still treats a genuine auth 401 as non-retryable (rethrows without trying siblings)", async () => {
+    const p1 = { ...createMockProvider(), name: "kimi" };
+    (p1.chat as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error("Kimi API error 401: invalid_authentication: The API key is invalid or expired"),
+    );
+    const p2 = { ...createMockProvider({ text: "should-not-reach" }), name: "openai" };
+
+    const chain = new FallbackChainProvider([p1, p2]);
+
+    await expect(chain.chat("sys", [], [])).rejects.toThrow();
+    expect(p2.chat).not.toHaveBeenCalled();
+  });
+
   it("falls back to a later provider for listModels", async () => {
     const p1 = createMockProvider();
     const p2 = createMockProvider();

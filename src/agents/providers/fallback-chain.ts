@@ -24,6 +24,14 @@ import { QUOTA_LIMIT_RE } from "../orchestrator-runtime-utils.js";
 const REASONING_CONTENT_RE = /reasoning_content/i;
 /** Regex for HTTP 400 errors caused by malformed request body or schema */
 const BAD_REQUEST_RE = /bad.?request|invalid|malformed/i;
+/**
+ * A model-availability error: an OpenAI-compatible gateway reports the configured
+ * model id as unknown/unsupported (OpenCode/Zen returns this under a 401 with a
+ * `ModelError` body). This is a per-provider CONFIG mismatch, NOT an auth failure —
+ * it must remain RETRYABLE so a healthy sibling provider is tried instead of
+ * collapsing the chain to a false "All providers failed".
+ */
+const MODEL_UNSUPPORTED_RE = /ModelError|model[\s\S]{0,80}not supported|unsupported model|no such model|model[\s\S]{0,40}(not found|does not exist)/i;
 /** Regex for invalid tool/schema errors */
 const INVALID_TOOL_RE = /invalid.*tool|tool.*invalid|invalid.*schema/i;
 /** Regex patterns for reasoning model timeout detection */
@@ -36,6 +44,9 @@ const OVERLOAD_RE = /\b(?:529|503)\b/;
 function isNonRetryableRequestError(error: unknown): boolean {
   const msg = error instanceof Error ? error.message : String(error);
   if (REASONING_CONTENT_RE.test(msg)) return false;
+  // Model-not-supported / ModelError is a per-provider config mismatch, not a fatal
+  // auth/request error — retryable so the chain fails over to a healthy sibling.
+  if (MODEL_UNSUPPORTED_RE.test(msg)) return false;
   if (/\b400\b/.test(msg) && BAD_REQUEST_RE.test(msg)) return true;
   if (/\b403\b/.test(msg) && QUOTA_LIMIT_RE.test(msg)) return false;
   if (/\b40[13]\b/.test(msg)) return true;
