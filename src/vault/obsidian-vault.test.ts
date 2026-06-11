@@ -1,50 +1,25 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { homedir, tmpdir } from 'node:os';
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { ObsidianVault, VaultQueryError, redactPathsInMessage } from './obsidian-vault.js';
-import type { EmbeddingProvider, VectorStore } from './embedding-adapter.js';
+import { createFakeEmbedding, createFakeVectorStore, createTempDirTracker } from '../test-helpers.js';
+import type { EmbeddingProvider } from './embedding-adapter.js';
 import type { IVault } from './vault.interface.js';
-
-function fakeEmbedding(overrides?: Partial<EmbeddingProvider>): EmbeddingProvider {
-  return {
-    model: 'fake-embed',
-    dim: 4,
-    embed: async (texts) => texts.map(() => new Float32Array([1, 0, 0, 0])),
-    ...overrides,
-  };
-}
-
-function fakeVectorStore(): VectorStore {
-  let next = 1;
-  const items = new Map<number, { payload: unknown }>();
-  return {
-    add: (_v, payload) => { const id = next++; items.set(id, { payload }); return id; },
-    remove: (id) => { items.delete(id); },
-    search: (_v, k) => [...items.entries()].slice(0, k).map(([id, e]) => ({ id, score: 1, payload: e.payload })),
-    clear: () => items.clear(),
-  };
-}
 
 // Unreachable port → healthCheck/putNote fail fast and exercise FS fallbacks.
 const OFFLINE_OBSIDIAN = { apiUrl: 'http://127.0.0.1:1', apiKey: 'test' };
 
 describe('ObsidianVault', () => {
-  const tempDirs: string[] = [];
+  const tmp = createTempDirTracker('strada-obsidian-vault-');
   const vaults: IVault[] = [];
 
-  function makeRoot(): string {
-    const root = mkdtempSync(join(tmpdir(), 'strada-obsidian-vault-'));
-    tempDirs.push(root);
-    return root;
-  }
-
-  function makeVault(root: string, embedding: EmbeddingProvider = fakeEmbedding()): ObsidianVault {
+  function makeVault(root: string, embedding: EmbeddingProvider = createFakeEmbedding()): ObsidianVault {
     const vault = new ObsidianVault({
       id: 'test-obsidian',
       rootPath: root,
       embedding,
-      vectorStore: fakeVectorStore(),
+      vectorStore: createFakeVectorStore(),
       obsidian: OFFLINE_OBSIDIAN,
     });
     vaults.push(vault);
@@ -52,21 +27,19 @@ describe('ObsidianVault', () => {
   }
 
   afterEach(async () => {
-    // Dispose BEFORE rmSync: better-sqlite3 keeps the db file open.
+    // Dispose BEFORE cleanup: better-sqlite3 keeps the db file open.
     for (const v of vaults.splice(0)) await v.dispose();
-    for (const dir of tempDirs.splice(0)) {
-      rmSync(dir, { recursive: true, force: true });
-    }
+    tmp.cleanup();
   });
 
   it('serializes concurrent sync() calls through the write lock', async () => {
-    const root = makeRoot();
+    const root = tmp.makeDir();
     mkdirSync(join(root, 'notes'));
     writeFileSync(join(root, 'notes', 'a.md'), '# original');
 
     let active = 0;
     let overlapped = false;
-    const vault = makeVault(root, fakeEmbedding({
+    const vault = makeVault(root, createFakeEmbedding({
       embed: async (texts) => {
         active++;
         if (active > 1) overlapped = true;
@@ -88,7 +61,7 @@ describe('ObsidianVault', () => {
   });
 
   it('falls back to a filesystem write when the Obsidian API is unreachable', async () => {
-    const root = makeRoot();
+    const root = tmp.makeDir();
     mkdirSync(join(root, 'notes'));
     writeFileSync(join(root, 'notes', 'a.md'), '# original');
     const vault = makeVault(root);
@@ -102,7 +75,7 @@ describe('ObsidianVault', () => {
   });
 
   it('keeps the old canvas intact and cleans up the tmp file when rename fails', async () => {
-    const root = makeRoot();
+    const root = tmp.makeDir();
     mkdirSync(join(root, 'notes'));
     writeFileSync(join(root, 'notes', 'a.md'), '# original');
     const vault = makeVault(root);
@@ -134,7 +107,7 @@ describe('ObsidianVault', () => {
   });
 
   it('throws VaultQueryError for a whitespace-only query', async () => {
-    const root = makeRoot();
+    const root = tmp.makeDir();
     mkdirSync(join(root, 'notes'));
     writeFileSync(join(root, 'notes', 'a.md'), '# original');
     const vault = makeVault(root);

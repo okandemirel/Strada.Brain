@@ -1,9 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from "vitest";
-import { Readable } from "node:stream";
-import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { IncomingMessage, ServerResponse } from "node:http";
+import type { ServerResponse } from "node:http";
 import {
   handleVaultRoutes,
   registerVaultRoutes,
@@ -14,6 +12,15 @@ import {
   type RouteApp,
   type WsBroadcaster,
 } from "./server-vault-routes.js";
+import {
+  createMockReq,
+  createMockRes,
+  createStreamReq,
+  createStreamReqFrom,
+  responseJson,
+  type MockRes,
+} from "./test-support/mock-http.js";
+import { createFakeVault, createTempDirTracker } from "../test-helpers.js";
 import { VaultRegistry } from "../vault/vault-registry.js";
 import { VaultQueryError } from "../vault/obsidian-vault.js";
 import type { IVault } from "../vault/vault.interface.js";
@@ -32,50 +39,8 @@ beforeEach(() => {
 });
 
 // =============================================================================
-// HELPERS — lightweight mocks for IncomingMessage / ServerResponse
+// HELPERS
 // =============================================================================
-
-/** Capture writeHead + end calls on a mock ServerResponse */
-interface MockRes {
-  statusCode: number;
-  headers: Record<string, string>;
-  body: string;
-  writeHead: ReturnType<typeof vi.fn>;
-  end: ReturnType<typeof vi.fn>;
-}
-
-function createMockRes(): MockRes & ServerResponse {
-  const mock: MockRes = {
-    statusCode: 0,
-    headers: {},
-    body: "",
-    writeHead: vi.fn((status: number, headers?: Record<string, string>) => {
-      mock.statusCode = status;
-      if (headers) Object.assign(mock.headers, headers);
-    }),
-    end: vi.fn((data?: string) => {
-      if (data) mock.body = data;
-    }),
-  };
-  return mock as unknown as MockRes & ServerResponse;
-}
-
-/** Request that is never read (GET/DELETE routes). */
-function createMockReq(): IncomingMessage {
-  return {} as IncomingMessage;
-}
-
-/**
- * Vault POST routes read the body themselves via `for await (const c of req)`,
- * so the mock must be a real async-iterable stream, not a bare EventEmitter.
- */
-function createStreamReq(body: string): IncomingMessage {
-  return Readable.from([Buffer.from(body)]) as unknown as IncomingMessage;
-}
-
-function responseJson(res: MockRes & ServerResponse): Record<string, unknown> {
-  return JSON.parse((res as MockRes).body) as Record<string, unknown>;
-}
 
 function makeCtx(overrides: Partial<RouteContext> = {}): RouteContext {
   return {
@@ -86,24 +51,6 @@ function makeCtx(overrides: Partial<RouteContext> = {}): RouteContext {
   } as unknown as RouteContext;
 }
 
-function fakeVault(overrides: Partial<IVault> = {}): IVault {
-  return {
-    id: "unity:abc12345",
-    kind: "unity-project",
-    rootPath: "/tmp/fake-root",
-    init: vi.fn(async () => {}),
-    sync: vi.fn(async () => ({ changed: 0, durationMs: 1 })),
-    rebuild: vi.fn(async () => {}),
-    query: vi.fn(async () => ({ hits: [], budgetUsed: 0, truncated: false })),
-    stats: vi.fn(async () => ({ fileCount: 1, chunkCount: 2, lastIndexedAt: 123, dbBytes: 10 })),
-    dispose: vi.fn(async () => {}),
-    listFiles: vi.fn(() => []),
-    readFile: vi.fn(async () => "body"),
-    onUpdate: vi.fn(() => () => {}),
-    ...overrides,
-  } as unknown as IVault;
-}
-
 /** Fake vault whose onUpdate listeners can be triggered from the test. */
 function fakeVaultWithUpdates(id: string): {
   vault: IVault;
@@ -112,7 +59,7 @@ function fakeVaultWithUpdates(id: string): {
 } {
   const listeners: Array<(p: { vaultId: string; changedPaths: string[] }) => void> = [];
   const off = vi.fn();
-  const vault = fakeVault({
+  const vault = createFakeVault({
     id,
     onUpdate: vi.fn((listener: (p: { vaultId: string; changedPaths: string[] }) => void) => {
       listeners.push(listener);
@@ -126,16 +73,8 @@ function fakeVaultWithUpdates(id: string): {
   };
 }
 
-const tmpDirs: string[] = [];
-function makeTmpDir(): string {
-  const dir = mkdtempSync(join(tmpdir(), "vault-routes-test-"));
-  tmpDirs.push(dir);
-  return dir;
-}
-
-afterAll(() => {
-  for (const dir of tmpDirs) rmSync(dir, { recursive: true, force: true });
-});
+const tmp = createTempDirTracker("vault-routes-test-");
+afterAll(() => tmp.cleanup());
 
 // =============================================================================
 // TESTS — handleVaultRoutes (production raw-http path)
@@ -172,7 +111,7 @@ describe("handleVaultRoutes — fall-through & guards", () => {
 describe("handleVaultRoutes — GET /api/vaults", () => {
   it("lists vaults without leaking rootPath", () => {
     const registry = new VaultRegistry();
-    registry.register(fakeVault({ rootPath: "/Users/secret/project" }));
+    registry.register(createFakeVault({ rootPath: "/Users/secret/project" }));
     const res = createMockRes();
     const handled = handleVaultRoutes(
       "/api/vaults", "GET", createMockReq(), res, makeCtx({ vaultRegistry: registry }),
@@ -197,7 +136,7 @@ describe("handleVaultRoutes — POST /api/vaults", () => {
     factory = {
       create: vi.fn(async (spec: { id: string; rootPath: string; kind: "unity" | "generic" }) => {
         created.push(spec);
-        return fakeVault({ id: spec.id });
+        return createFakeVault({ id: spec.id });
       }),
     };
   });
@@ -240,7 +179,7 @@ describe("handleVaultRoutes — POST /api/vaults", () => {
   });
 
   it("registers a vault with 201 then rejects a duplicate with 409", async () => {
-    const dir = makeTmpDir();
+    const dir = tmp.makeDir();
     const res = postVault({ name: "My Vault", rootPath: dir, kind: "generic" });
     await vi.waitFor(() => expect(res.end).toHaveBeenCalled());
     expect(res.statusCode).toBe(201);
@@ -276,7 +215,7 @@ describe("handleVaultRoutes — DELETE /api/vaults/:id", () => {
 
   it("unregisters and disposes the vault", () => {
     const registry = new VaultRegistry();
-    const vault = fakeVault();
+    const vault = createFakeVault();
     registry.register(vault);
     const res = createMockRes();
     handleVaultRoutes(
@@ -295,7 +234,7 @@ describe("handleVaultRoutes — GET /api/vaults/:id/file", () => {
 
   beforeEach(() => {
     registry = new VaultRegistry();
-    vault = fakeVault({ id: "v1" });
+    vault = createFakeVault({ id: "v1" });
     registry.register(vault);
   });
 
@@ -312,6 +251,8 @@ describe("handleVaultRoutes — GET /api/vaults/:id/file", () => {
     ["double-encoded dots surviving decode", "/api/vaults/v1/file?path=a%252e%252eb"],
     ["missing path param", "/api/vaults/v1/file"],
     ["path longer than 1024 chars", `/api/vaults/v1/file?path=${"a".repeat(1025)}`],
+    // %2500 decodes once to a literal "%00" in the query value.
+    ["URL-encoded null byte", "/api/vaults/v1/file?path=%2500evil.md"],
   ])("rejects %s with 400 invalid path", (_label, rawUrl) => {
     const res = getFile(rawUrl);
     expect(res.statusCode).toBe(400);
@@ -342,7 +283,7 @@ describe("handleVaultRoutes — POST /api/vaults/:id/search", () => {
 
   beforeEach(() => {
     registry = new VaultRegistry();
-    vault = fakeVault({ id: "v1" });
+    vault = createFakeVault({ id: "v1" });
     registry.register(vault);
   });
 
@@ -386,7 +327,7 @@ describe("handleVaultRoutes — POST /api/vaults/:id/search", () => {
 describe("handleVaultRoutes — POST /api/vaults/:id/sync (response sanitization)", () => {
   function postSync(syncResult: unknown): { res: MockRes & ServerResponse; vault: IVault } {
     const registry = new VaultRegistry();
-    const vault = fakeVault({
+    const vault = createFakeVault({
       id: "v1",
       sync: vi.fn(async () => syncResult as { changed: number; durationMs: number }),
     });
@@ -545,7 +486,7 @@ describe("registerVaultRoutes (fake-app adapter)", () => {
   it("GET /api/vaults returns items without rootPath", () => {
     const { app, routes } = makeFakeApp();
     const registry = new VaultRegistry();
-    registry.register(fakeVault({ rootPath: "/Users/secret/project" }));
+    registry.register(createFakeVault({ rootPath: "/Users/secret/project" }));
     registerVaultRoutes(app, registry);
 
     const result = routes.get("GET /api/vaults")!() as { items: unknown[] };
@@ -567,7 +508,7 @@ describe("registerVaultRoutes (fake-app adapter)", () => {
     ["invalid kind", { name: "ok", rootPath: "/tmp", kind: "weird" }, "invalid kind"],
   ])("POST /api/vaults rejects %s", async (_label, body, expectedError) => {
     const { app, routes } = makeFakeApp();
-    const factory: VaultFactory = { create: vi.fn(async () => fakeVault()) };
+    const factory: VaultFactory = { create: vi.fn(async () => createFakeVault()) };
     registerVaultRoutes(app, new VaultRegistry(), factory);
 
     const result = await routes.get("POST /api/vaults")!({ body });
@@ -576,7 +517,7 @@ describe("registerVaultRoutes (fake-app adapter)", () => {
 
   it("POST /api/vaults rejects a nonexistent directory", async () => {
     const { app, routes } = makeFakeApp();
-    const factory: VaultFactory = { create: vi.fn(async () => fakeVault()) };
+    const factory: VaultFactory = { create: vi.fn(async () => createFakeVault()) };
     registerVaultRoutes(app, new VaultRegistry(), factory);
 
     const result = await routes.get("POST /api/vaults")!({
@@ -589,10 +530,10 @@ describe("registerVaultRoutes (fake-app adapter)", () => {
     const { app, routes } = makeFakeApp();
     const registry = new VaultRegistry();
     const factory: VaultFactory = {
-      create: vi.fn(async (spec: { id: string }) => fakeVault({ id: spec.id })),
+      create: vi.fn(async (spec: { id: string }) => createFakeVault({ id: spec.id })),
     };
     registerVaultRoutes(app, registry, factory);
-    const dir = makeTmpDir();
+    const dir = tmp.makeDir();
 
     const handler = routes.get("POST /api/vaults")!;
     const result = await handler({ body: { name: "My Vault", rootPath: dir, kind: "generic" } }) as Record<string, unknown>;
@@ -605,22 +546,13 @@ describe("registerVaultRoutes (fake-app adapter)", () => {
 });
 
 // =============================================================================
-// TESTS — plan 004 hardening: search rate limiting + encoded-NUL path check
+// TESTS — plan 004 hardening: search rate limiting
 // (merged from the plan-004 executor's test file; adapted to this file's helpers)
 // =============================================================================
 
-/** Stream request carrying a source address, for per-IP rate-limit cases. */
-function createStreamReqFrom(body: unknown, remoteAddress = "127.0.0.1"): IncomingMessage {
-  const stream = Readable.from([Buffer.from(JSON.stringify(body))]);
-  return Object.assign(stream, {
-    socket: { remoteAddress },
-    headers: {},
-  }) as unknown as IncomingMessage;
-}
-
 describe("handleVaultRoutes — POST /api/vaults/:id/search rate limiting", () => {
   function searchCtx(): { ctx: RouteContext; vault: IVault } {
-    const vault = fakeVault({ id: "x" });
+    const vault = createFakeVault({ id: "x" });
     const registry = { get: () => vault, list: () => [vault] };
     return { ctx: { vaultRegistry: registry } as unknown as RouteContext, vault };
   }
@@ -691,13 +623,13 @@ describe("vault init failure surfacing", () => {
     getStats: (id: string) => Promise<Record<string, unknown>>;
   } {
     const registry = new VaultRegistry();
-    const dir = makeTmpDir();
+    const dir = tmp.makeDir();
     const init = deferred();
     let createdSpec: { id: string; rootPath: string } | undefined;
     const factory: VaultFactory = {
       create: vi.fn(async (spec: { id: string; rootPath: string; kind: "unity" | "generic" }) => {
         createdSpec = spec;
-        return fakeVault({
+        return createFakeVault({
           id: spec.id,
           rootPath: spec.rootPath,
           init: vi.fn(() => init.promise),
@@ -749,7 +681,8 @@ describe("vault init failure surfacing", () => {
   it("reports status error with a redacted, capped message when init rejects", async () => {
     const h = setupInitHarness();
     const { id, rootPath } = await h.post();
-    h.init.reject(new Error(`embedding provider down at ${rootPath}/db`));
+    // Pad well past the 200-char cap so the truncation is actually exercised.
+    h.init.reject(new Error(`embedding provider down at ${rootPath}/db ${"x".repeat(300)}`));
     await vi.waitFor(() => expect(h.registry.getInitState(id)?.status).toBe("error"));
 
     const stats = await h.getStats(id);
@@ -758,7 +691,7 @@ describe("vault init failure surfacing", () => {
     const message = stats.error as string;
     expect(message).not.toContain(rootPath);
     expect(message).toContain("<vault>");
-    expect(message.length).toBeLessThanOrEqual(200);
+    expect(message.length).toBe(200);
   });
 
   it("reports status ready with no error field once init resolves", async () => {
@@ -774,7 +707,7 @@ describe("vault init failure surfacing", () => {
 
   it("back-compat: a directly registered vault has no status key in stats", async () => {
     const registry = new VaultRegistry();
-    registry.register(fakeVault({ id: "v1" }));
+    registry.register(createFakeVault({ id: "v1" }));
     const res = createMockRes();
     const handled = handleVaultRoutes(
       "/api/vaults/v1/stats", "GET", createMockReq(), res, makeCtx({ vaultRegistry: registry }),
@@ -801,7 +734,7 @@ describe("vault init failure surfacing", () => {
 
     // Re-register a vault with the same id directly (no POST) — stats must not
     // carry the stale error/status from the failed predecessor.
-    h.registry.register(fakeVault({ id }));
+    h.registry.register(createFakeVault({ id }));
     const stats = await h.getStats(id);
     expect(stats).not.toHaveProperty("status");
     expect(stats).not.toHaveProperty("error");
@@ -815,7 +748,7 @@ describe("vault init failure surfacing", () => {
       create: vi.fn(async (spec: { id: string; rootPath: string; kind: "unity" | "generic" }) => {
         const d = deferred();
         inits.set(spec.id, d);
-        return fakeVault({ id: spec.id, rootPath: spec.rootPath, init: vi.fn(() => d.promise) });
+        return createFakeVault({ id: spec.id, rootPath: spec.rootPath, init: vi.fn(() => d.promise) });
       }),
     };
     registerVaultRoutes(app, registry, factory);
@@ -825,7 +758,7 @@ describe("vault init failure surfacing", () => {
       await statsHandler({ params: { id } }) as Record<string, unknown>;
 
     // Vault A: indexing → ready.
-    const dirA = makeTmpDir();
+    const dirA = tmp.makeDir();
     const a = await postHandler({ body: { name: "A", rootPath: dirA, kind: "generic" } }) as Record<string, unknown>;
     expect(a.status).toBe("indexing");
     const idA = a.id as string;
@@ -837,7 +770,7 @@ describe("vault init failure surfacing", () => {
     expect(readyStats).not.toHaveProperty("error");
 
     // Vault B: indexing → error (redacted).
-    const dirB = makeTmpDir();
+    const dirB = tmp.makeDir();
     const b = await postHandler({ body: { name: "B", rootPath: dirB, kind: "generic" } }) as Record<string, unknown>;
     const idB = b.id as string;
     expect((await getStats(idB)).status).toBe("indexing");
@@ -851,27 +784,3 @@ describe("vault init failure surfacing", () => {
   });
 });
 
-describe("handleVaultRoutes — GET /api/vaults/:id/file encoded-NUL validation", () => {
-  it("rejects URL-encoded null bytes in the path with 400", async () => {
-    const vault = fakeVault({ id: "x" });
-    const ctx = { vaultRegistry: { get: () => vault, list: () => [vault] } } as unknown as RouteContext;
-    const res = createMockRes();
-    // %2500 in the URL decodes to a literal "%00" in the query value.
-    const handled = handleVaultRoutes("/api/vaults/x/file?path=%2500evil.md", "GET", createMockReq(), res, ctx);
-    expect(handled).toBe(true);
-    await new Promise(setImmediate);
-    expect((res as unknown as { statusCode: number }).statusCode).toBe(400);
-    expect(vault.readFile).not.toHaveBeenCalled();
-  });
-
-  it("accepts a normal relative path and reaches the vault", async () => {
-    const vault = fakeVault({ id: "x" });
-    const ctx = { vaultRegistry: { get: () => vault, list: () => [vault] } } as unknown as RouteContext;
-    const res = createMockRes();
-    const handled = handleVaultRoutes("/api/vaults/x/file?path=notes/readme.md", "GET", createMockReq(), res, ctx);
-    expect(handled).toBe(true);
-    await new Promise(setImmediate);
-    expect(vault.readFile).toHaveBeenCalledWith("notes/readme.md");
-    expect((res as unknown as { statusCode: number }).statusCode).toBe(200);
-  });
-});

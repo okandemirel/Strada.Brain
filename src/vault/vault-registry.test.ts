@@ -1,27 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { mkdirSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
 import { VaultRegistry } from './vault-registry.js';
-import type { IVault, VaultHit } from './vault.interface.js';
-
-function makeFakeVault(id: string, rootPath: string, overrides: Partial<IVault> = {}): IVault {
-  return {
-    id,
-    kind: 'unity-project',
-    rootPath,
-    init: vi.fn(async () => undefined),
-    sync: vi.fn(async () => ({ changed: 0, durationMs: 0 })),
-    rebuild: vi.fn(async () => undefined),
-    query: vi.fn(async () => ({ hits: [], budgetUsed: 0, truncated: false })),
-    stats: vi.fn(async () => ({ fileCount: 0, chunkCount: 0, lastIndexedAt: null, dbBytes: 0 })),
-    dispose: vi.fn(async () => undefined),
-    listFiles: vi.fn(() => []),
-    readFile: vi.fn(async () => ''),
-    onUpdate: vi.fn(() => () => undefined),
-    ...overrides,
-  };
-}
+import { createFakeVault, createTempDirTracker } from '../test-helpers.js';
+import type { VaultHit } from './vault.interface.js';
 
 function makeHit(chunkId: string, rrf: number): VaultHit {
   return {
@@ -31,34 +13,28 @@ function makeHit(chunkId: string, rrf: number): VaultHit {
 }
 
 describe('VaultRegistry', () => {
-  const tempDirs: string[] = [];
+  const tmp = createTempDirTracker('strada-registry-');
 
   function makeTempDir(prefix: string): string {
     // realpath immediately: macOS tmpdir lives behind a /var → /private/var
     // symlink and the registry canonicalizes via realpath.
-    const dir = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
-    tempDirs.push(dir);
-    return dir;
+    return realpathSync(tmp.makeDir(prefix));
   }
 
-  afterEach(() => {
-    for (const dir of tempDirs.splice(0)) {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
+  afterEach(() => tmp.cleanup());
 
   it('supports register/get/list/unregister round-trips and onRegister listeners', () => {
     const registry = new VaultRegistry();
     const listener = vi.fn();
     const off = registry.onRegister(listener);
 
-    const a = makeFakeVault('a', '/tmp/vault-a');
+    const a = createFakeVault({ id: 'a', rootPath: '/tmp/vault-a' });
     registry.register(a);
     expect(listener).toHaveBeenCalledTimes(1);
     expect(listener).toHaveBeenCalledWith(a);
 
     off();
-    const b = makeFakeVault('b', '/tmp/vault-b');
+    const b = createFakeVault({ id: 'b', rootPath: '/tmp/vault-b' });
     registry.register(b);
     expect(listener).toHaveBeenCalledTimes(1);
 
@@ -72,11 +48,15 @@ describe('VaultRegistry', () => {
 
   it('query() survives a vault whose query rejects', async () => {
     const registry = new VaultRegistry();
-    registry.register(makeFakeVault('broken', '/tmp/vault-broken', {
+    registry.register(createFakeVault({
+      id: 'broken',
+      rootPath: '/tmp/vault-broken',
       query: vi.fn(async () => { throw new Error('vault exploded'); }),
     }));
     const hit = makeHit('b1', 0.5);
-    registry.register(makeFakeVault('healthy', '/tmp/vault-healthy', {
+    registry.register(createFakeVault({
+      id: 'healthy',
+      rootPath: '/tmp/vault-healthy',
       query: vi.fn(async () => ({ hits: [hit], budgetUsed: 1, truncated: false })),
     }));
 
@@ -92,8 +72,8 @@ describe('VaultRegistry', () => {
     mkdirSync(inner);
 
     const registry = new VaultRegistry();
-    const outerVault = makeFakeVault('outer', root);
-    const innerVault = makeFakeVault('inner', inner);
+    const outerVault = createFakeVault({ id: 'outer', rootPath: root });
+    const innerVault = createFakeVault({ id: 'inner', rootPath: inner });
     registry.register(outerVault);
     registry.register(innerVault);
 
@@ -110,7 +90,7 @@ describe('VaultRegistry', () => {
 
     const registry = new VaultRegistry();
     registry.setFactory({
-      createVault: (rootPath) => makeFakeVault('created', rootPath),
+      createVault: (rootPath) => createFakeVault({ id: 'created', rootPath }),
       allowedRootPaths: [allowed],
     });
 
@@ -126,7 +106,7 @@ describe('VaultRegistry', () => {
     const dir = makeTempDir('strada-registry-');
     const registry = new VaultRegistry();
     registry.setFactory({
-      createVault: (rootPath) => makeFakeVault('created', rootPath),
+      createVault: (rootPath) => createFakeVault({ id: 'created', rootPath }),
       allowedRootPaths: [],
     });
 

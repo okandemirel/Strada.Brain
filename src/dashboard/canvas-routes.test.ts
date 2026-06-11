@@ -2,6 +2,12 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { EventEmitter } from "node:events";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { handleCanvasRoute } from "./canvas-routes.js";
+import {
+  createMockReq,
+  createMockRes,
+  responseJson,
+  type MockRes,
+} from "./test-support/mock-http.js";
 import type { CanvasStorage, CanvasState } from "./canvas-storage.js";
 
 vi.mock("../utils/logger.js", () => ({
@@ -12,53 +18,6 @@ vi.mock("../utils/logger.js", () => ({
     debug: vi.fn(),
   }),
 }));
-
-// =============================================================================
-// HELPERS — lightweight mocks for IncomingMessage / ServerResponse
-// =============================================================================
-
-/** Capture writeHead + end calls on a mock ServerResponse */
-interface MockRes {
-  statusCode: number;
-  headers: Record<string, string>;
-  body: string;
-  writeHead: ReturnType<typeof vi.fn>;
-  end: ReturnType<typeof vi.fn>;
-}
-
-function createMockRes(): MockRes & ServerResponse {
-  const mock: MockRes = {
-    statusCode: 0,
-    headers: {},
-    body: "",
-    writeHead: vi.fn((status: number, headers?: Record<string, string>) => {
-      mock.statusCode = status;
-      if (headers) Object.assign(mock.headers, headers);
-    }),
-    end: vi.fn((data?: string) => {
-      if (data) mock.body = data;
-    }),
-  };
-  return mock as unknown as MockRes & ServerResponse;
-}
-
-/**
- * Create a mock IncomingMessage that emits data/end events.
- * Pass `body` to simulate a request body (for PUT/POST).
- */
-function createMockReq(body?: string): IncomingMessage {
-  const emitter = new EventEmitter();
-  const req = emitter as unknown as IncomingMessage;
-
-  // Schedule body emission on next tick so event listeners can attach
-  if (body !== undefined) {
-    process.nextTick(() => {
-      emitter.emit("data", Buffer.from(body));
-      emitter.emit("end");
-    });
-  }
-  return req;
-}
 
 // =============================================================================
 // MOCK CANVAS STORAGE
@@ -102,11 +61,6 @@ describe("handleCanvasRoute", () => {
     res = createMockRes();
   });
 
-  /** Parse the JSON body written to the mock response */
-  function responseJson(): unknown {
-    return JSON.parse((res as MockRes).body);
-  }
-
   // ---------------------------------------------------------------------------
   // ROUTE MATCHING — fall-through
   // ---------------------------------------------------------------------------
@@ -130,14 +84,14 @@ describe("handleCanvasRoute", () => {
       const handled = handleCanvasRoute("/api/canvas/session-1", "GET", req, res, undefined);
       expect(handled).toBe(true);
       expect(res.statusCode).toBe(503);
-      expect(responseJson()).toEqual({ error: "Canvas storage not available" });
+      expect(responseJson(res)).toEqual({ error: "Canvas storage not available" });
     });
 
     it("returns 404 for unmatched sub-paths within /api/canvas", () => {
       const req = createMockReq();
       handleCanvasRoute("/api/canvas/a/b/c/d", "GET", req, res, storage);
       expect(res.statusCode).toBe(404);
-      expect(responseJson()).toEqual({ error: "Canvas endpoint not found" });
+      expect(responseJson(res)).toEqual({ error: "Canvas endpoint not found" });
     });
   });
 
@@ -153,7 +107,7 @@ describe("handleCanvasRoute", () => {
       handleCanvasRoute("/api/canvas/session-abc", "GET", req, res, storage);
 
       expect(res.statusCode).toBe(200);
-      expect(responseJson()).toEqual({ canvas: { ...sampleCanvas, version: 1 } });
+      expect(responseJson(res)).toEqual({ canvas: { ...sampleCanvas, version: 1 } });
       expect(storage.getBySession).toHaveBeenCalledWith("session-abc");
     });
 
@@ -164,7 +118,7 @@ describe("handleCanvasRoute", () => {
       handleCanvasRoute("/api/canvas/nonexistent", "GET", req, res, storage);
 
       expect(res.statusCode).toBe(200);
-      expect(responseJson()).toEqual({ canvas: null });
+      expect(responseJson(res)).toEqual({ canvas: null });
     });
 
     it("returns 500 when storage throws", () => {
@@ -176,7 +130,7 @@ describe("handleCanvasRoute", () => {
       handleCanvasRoute("/api/canvas/session-abc", "GET", req, res, storage);
 
       expect(res.statusCode).toBe(500);
-      expect(responseJson()).toEqual({ error: "Failed to retrieve canvas" });
+      expect(responseJson(res)).toEqual({ error: "Failed to retrieve canvas" });
     });
 
     it("decodes URL-encoded session IDs", () => {
@@ -222,7 +176,7 @@ describe("handleCanvasRoute", () => {
       });
 
       expect(res.statusCode).toBe(200);
-      expect(responseJson()).toEqual({ status: "saved", sessionId: "session-abc" });
+      expect(responseJson(res)).toEqual({ status: "saved", sessionId: "session-abc" });
       expect(storage.save).toHaveBeenCalledWith(
         expect.objectContaining({
           sessionId: "session-abc",
@@ -336,7 +290,7 @@ describe("handleCanvasRoute", () => {
       });
 
       expect(res.statusCode).toBe(400);
-      expect(responseJson()).toEqual({ error: "Invalid JSON body" });
+      expect(responseJson(res)).toEqual({ error: "Invalid JSON body" });
       expect(storage.save).not.toHaveBeenCalled();
     });
 
@@ -363,7 +317,7 @@ describe("handleCanvasRoute", () => {
       });
 
       expect(res.statusCode).toBe(413);
-      expect(responseJson()).toEqual({ error: "Request body too large" });
+      expect(responseJson(res)).toEqual({ error: "Request body too large" });
       expect(storage.save).not.toHaveBeenCalled();
     });
 
@@ -395,7 +349,7 @@ describe("handleCanvasRoute", () => {
       });
 
       expect(res.statusCode).toBe(500);
-      expect(responseJson()).toEqual({ error: "Failed to save canvas" });
+      expect(responseJson(res)).toEqual({ error: "Failed to save canvas" });
     });
   });
 
@@ -411,7 +365,7 @@ describe("handleCanvasRoute", () => {
       handleCanvasRoute("/api/canvas/session-abc", "DELETE", req, res, storage);
 
       expect(res.statusCode).toBe(200);
-      expect(responseJson()).toEqual({ status: "deleted", sessionId: "session-abc" });
+      expect(responseJson(res)).toEqual({ status: "deleted", sessionId: "session-abc" });
       expect(storage.delete).toHaveBeenCalledWith("session-abc");
     });
 
@@ -422,7 +376,7 @@ describe("handleCanvasRoute", () => {
       handleCanvasRoute("/api/canvas/session-abc", "DELETE", req, res, storage);
 
       expect(res.statusCode).toBe(200);
-      expect(responseJson()).toEqual({ status: "not_found", sessionId: "session-abc" });
+      expect(responseJson(res)).toEqual({ status: "not_found", sessionId: "session-abc" });
     });
 
     it("returns 500 when storage.delete throws", () => {
@@ -434,7 +388,7 @@ describe("handleCanvasRoute", () => {
       handleCanvasRoute("/api/canvas/session-abc", "DELETE", req, res, storage);
 
       expect(res.statusCode).toBe(500);
-      expect(responseJson()).toEqual({ error: "Failed to delete canvas" });
+      expect(responseJson(res)).toEqual({ error: "Failed to delete canvas" });
     });
   });
 
@@ -450,7 +404,7 @@ describe("handleCanvasRoute", () => {
       handleCanvasRoute("/api/canvas/project/proj-xyz", "GET", req, res, storage);
 
       expect(res.statusCode).toBe(200);
-      expect(responseJson()).toEqual({ canvases: [sampleCanvas] });
+      expect(responseJson(res)).toEqual({ canvases: [sampleCanvas] });
       expect(storage.listByProject).toHaveBeenCalledWith("proj-xyz");
     });
 
@@ -461,7 +415,7 @@ describe("handleCanvasRoute", () => {
       handleCanvasRoute("/api/canvas/project/proj-xyz", "GET", req, res, storage);
 
       expect(res.statusCode).toBe(200);
-      expect(responseJson()).toEqual({ canvases: [] });
+      expect(responseJson(res)).toEqual({ canvases: [] });
     });
 
     it("decodes URL-encoded fingerprints", () => {
@@ -492,7 +446,7 @@ describe("handleCanvasRoute", () => {
       handleCanvasRoute("/api/canvas/project/proj-xyz", "GET", req, res, storage);
 
       expect(res.statusCode).toBe(500);
-      expect(responseJson()).toEqual({ error: "Failed to list canvases" });
+      expect(responseJson(res)).toEqual({ error: "Failed to list canvases" });
     });
   });
 
@@ -509,7 +463,7 @@ describe("handleCanvasRoute", () => {
 
       expect(res.statusCode).toBe(200);
 
-      const data = responseJson() as Record<string, unknown>;
+      const data = responseJson(res) as Record<string, unknown>;
       expect(data.sessionId).toBe("session-abc");
       expect(data.shapes).toEqual([{ id: "shape-1", type: "rect", x: 0, y: 0, w: 100, h: 100 }]);
       expect(data.viewport).toEqual({ x: 0, y: 0, zoom: 1 });
@@ -523,7 +477,7 @@ describe("handleCanvasRoute", () => {
       handleCanvasRoute("/api/canvas/session-abc/export", "POST", req, res, storage);
 
       expect(res.statusCode).toBe(404);
-      expect(responseJson()).toEqual({ error: "Canvas not found" });
+      expect(responseJson(res)).toEqual({ error: "Canvas not found" });
     });
 
     it("returns 500 for corrupted shapes JSON", () => {
@@ -537,7 +491,7 @@ describe("handleCanvasRoute", () => {
       handleCanvasRoute("/api/canvas/session-abc/export", "POST", req, res, storage);
 
       expect(res.statusCode).toBe(500);
-      const data = responseJson() as Record<string, unknown>;
+      const data = responseJson(res) as Record<string, unknown>;
       expect(data.error).toBe("Corrupted canvas state");
       expect(data.sessionId).toBe("session-abc");
     });
@@ -553,7 +507,7 @@ describe("handleCanvasRoute", () => {
       handleCanvasRoute("/api/canvas/session-abc/export", "POST", req, res, storage);
 
       expect(res.statusCode).toBe(200);
-      const data = responseJson() as Record<string, unknown>;
+      const data = responseJson(res) as Record<string, unknown>;
       expect(data.viewport).toBeNull();
     });
 
@@ -566,7 +520,7 @@ describe("handleCanvasRoute", () => {
       handleCanvasRoute("/api/canvas/session-abc/export", "POST", req, res, storage);
 
       expect(res.statusCode).toBe(500);
-      expect(responseJson()).toEqual({ error: "Failed to export canvas" });
+      expect(responseJson(res)).toEqual({ error: "Failed to export canvas" });
     });
   });
 
@@ -588,7 +542,7 @@ describe("handleCanvasRoute", () => {
       handleCanvasRoute("/api/canvas/a%2Fb", "GET", req, res, storage);
 
       expect(res.statusCode).toBe(400);
-      expect(responseJson()).toEqual({ error: "Invalid session id" });
+      expect(responseJson(res)).toEqual({ error: "Invalid session id" });
       expect(storage.getBySession).not.toHaveBeenCalled();
     });
 
@@ -597,7 +551,7 @@ describe("handleCanvasRoute", () => {
       handleCanvasRoute("/api/canvas/a%5Cb", "GET", req, res, storage);
 
       expect(res.statusCode).toBe(400);
-      expect(responseJson()).toEqual({ error: "Invalid session id" });
+      expect(responseJson(res)).toEqual({ error: "Invalid session id" });
     });
 
     it("rejects session IDs with null bytes", () => {
@@ -605,7 +559,7 @@ describe("handleCanvasRoute", () => {
       handleCanvasRoute("/api/canvas/session%00abc", "GET", req, res, storage);
 
       expect(res.statusCode).toBe(400);
-      expect(responseJson()).toEqual({ error: "Invalid session id" });
+      expect(responseJson(res)).toEqual({ error: "Invalid session id" });
     });
 
     it("rejects session IDs with encoded path traversal (..)", () => {
@@ -613,7 +567,7 @@ describe("handleCanvasRoute", () => {
       handleCanvasRoute("/api/canvas/foo..bar", "GET", req, res, storage);
 
       expect(res.statusCode).toBe(400);
-      expect(responseJson()).toEqual({ error: "Invalid session id" });
+      expect(responseJson(res)).toEqual({ error: "Invalid session id" });
     });
 
     it("rejects session IDs exceeding 128 characters", () => {
@@ -622,7 +576,7 @@ describe("handleCanvasRoute", () => {
       handleCanvasRoute(`/api/canvas/${longId}`, "GET", req, res, storage);
 
       expect(res.statusCode).toBe(400);
-      expect(responseJson()).toEqual({ error: "Invalid session id" });
+      expect(responseJson(res)).toEqual({ error: "Invalid session id" });
     });
 
     it("accepts session IDs at exactly 128 characters", () => {
@@ -642,7 +596,7 @@ describe("handleCanvasRoute", () => {
       handleCanvasRoute("/api/canvas/foo..bar", "PUT", req, res, storage);
 
       expect(res.statusCode).toBe(400);
-      expect(responseJson()).toEqual({ error: "Invalid session id" });
+      expect(responseJson(res)).toEqual({ error: "Invalid session id" });
       expect(storage.save).not.toHaveBeenCalled();
     });
 
@@ -651,7 +605,7 @@ describe("handleCanvasRoute", () => {
       handleCanvasRoute("/api/canvas/foo%5Cbar", "DELETE", req, res, storage);
 
       expect(res.statusCode).toBe(400);
-      expect(responseJson()).toEqual({ error: "Invalid session id" });
+      expect(responseJson(res)).toEqual({ error: "Invalid session id" });
       expect(storage.delete).not.toHaveBeenCalled();
     });
 
@@ -660,7 +614,7 @@ describe("handleCanvasRoute", () => {
       handleCanvasRoute("/api/canvas/project/foo..bar", "GET", req, res, storage);
 
       expect(res.statusCode).toBe(400);
-      expect(responseJson()).toEqual({ error: "Invalid project fingerprint" });
+      expect(responseJson(res)).toEqual({ error: "Invalid project fingerprint" });
       expect(storage.listByProject).not.toHaveBeenCalled();
     });
 
@@ -669,7 +623,7 @@ describe("handleCanvasRoute", () => {
       handleCanvasRoute("/api/canvas/foo%00bar/export", "POST", req, res, storage);
 
       expect(res.statusCode).toBe(400);
-      expect(responseJson()).toEqual({ error: "Invalid session id" });
+      expect(responseJson(res)).toEqual({ error: "Invalid session id" });
       expect(storage.getBySession).not.toHaveBeenCalled();
     });
   });
@@ -738,7 +692,7 @@ describe("handleCanvasRoute", () => {
       // POST on /api/canvas/:sessionId (without /export) has no handler
       // Falls through to the 404 at the bottom
       expect(res.statusCode).toBe(404);
-      expect(responseJson()).toEqual({ error: "Canvas endpoint not found" });
+      expect(responseJson(res)).toEqual({ error: "Canvas endpoint not found" });
     });
 
     it("does not match DELETE on the project endpoint", () => {
@@ -765,7 +719,7 @@ describe("handleCanvasRoute", () => {
       handleCanvasRoute("/api/canvas/session-abc", "PATCH", req, res, storage);
 
       expect(res.statusCode).toBe(404);
-      expect(responseJson()).toEqual({ error: "Canvas endpoint not found" });
+      expect(responseJson(res)).toEqual({ error: "Canvas endpoint not found" });
     });
   });
 

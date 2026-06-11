@@ -1,7 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { EventEmitter } from "node:events";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { handleMcpRoutes } from "./server-mcp-routes.js";
+import {
+  createMockReq,
+  createMockRes,
+  responseJson,
+  waitForResponse,
+  type MockRes,
+} from "./test-support/mock-http.js";
 import type { RouteContext } from "./server-types.js";
 import type { StradaMcpRuntimeStatus } from "../core/strada-mcp-tool-loader.js";
 
@@ -13,46 +19,6 @@ vi.mock("../utils/logger.js", () => ({
     debug: vi.fn(),
   }),
 }));
-
-// =============================================================================
-// HELPERS — lightweight mocks for IncomingMessage / ServerResponse
-// =============================================================================
-
-/** Capture writeHead + end calls on a mock ServerResponse */
-interface MockRes {
-  statusCode: number;
-  headers: Record<string, string>;
-  body: string;
-  writeHead: ReturnType<typeof vi.fn>;
-  end: ReturnType<typeof vi.fn>;
-}
-
-function createMockRes(): MockRes & ServerResponse {
-  const mock: MockRes = {
-    statusCode: 0,
-    headers: {},
-    body: "",
-    writeHead: vi.fn((status: number, headers?: Record<string, string>) => {
-      mock.statusCode = status;
-      if (headers) Object.assign(mock.headers, headers);
-    }),
-    end: vi.fn((data?: string) => {
-      if (data) mock.body = data;
-    }),
-  };
-  return mock as unknown as MockRes & ServerResponse;
-}
-
-function createMockReq(): IncomingMessage {
-  return new EventEmitter() as unknown as IncomingMessage;
-}
-
-/** Wait until the mock response has been ended (for async POST handlers). */
-async function waitForResponse(res: MockRes & ServerResponse): Promise<void> {
-  for (let i = 0; i < 50 && !(res as MockRes).end.mock.calls.length; i++) {
-    await new Promise((resolve) => setImmediate(resolve));
-  }
-}
 
 // =============================================================================
 // SAMPLE DATA
@@ -94,17 +60,12 @@ describe("handleMcpRoutes", () => {
     req = createMockReq();
   });
 
-  /** Parse the JSON body written to the mock response */
-  function responseJson(): Record<string, unknown> {
-    return JSON.parse((res as MockRes).body) as Record<string, unknown>;
-  }
-
   describe("GET /api/mcp/status", () => {
     it("returns not-installed payload when ctx has no toolRegistry", () => {
       const handled = handleMcpRoutes("/api/mcp/status", "GET", req, res, {} as RouteContext);
       expect(handled).toBe(true);
       expect((res as MockRes).statusCode).toBe(200);
-      expect(responseJson()).toEqual({ installed: false, status: null });
+      expect(responseJson(res)).toEqual({ installed: false, status: null });
     });
 
     it("returns sanitized status without sourcePath or activeEditorInstanceId", () => {
@@ -114,7 +75,7 @@ describe("handleMcpRoutes", () => {
       const handled = handleMcpRoutes("/api/mcp/status", "GET", req, res, ctxWithRegistry(registry));
       expect(handled).toBe(true);
       expect((res as MockRes).statusCode).toBe(200);
-      const body = responseJson();
+      const body = responseJson(res);
       expect(body.installed).toBe(true);
       const status = body.status as Record<string, unknown>;
       expect(status.bridgeState).toBe("connected");
@@ -134,7 +95,7 @@ describe("handleMcpRoutes", () => {
       };
       const handled = handleMcpRoutes("/api/mcp/status", "GET", req, res, ctxWithRegistry(registry));
       expect(handled).toBe(true);
-      expect(responseJson()).toEqual({ installed: false, status: null });
+      expect(responseJson(res)).toEqual({ installed: false, status: null });
     });
   });
 
@@ -149,7 +110,7 @@ describe("handleMcpRoutes", () => {
       expect(handled).toBe(true);
       await waitForResponse(res);
       expect(tryStradaMcpReconnect).toHaveBeenCalledTimes(1);
-      const body = responseJson();
+      const body = responseJson(res);
       expect(body.success).toBe(true);
       expect(body.bridgeConnected).toBe(true);
       expect((body.status as Record<string, unknown>).bridgeState).toBe("connected");

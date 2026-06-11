@@ -1,49 +1,14 @@
 import { describe, it, expect, vi } from "vitest";
-import type { IncomingMessage, ServerResponse } from "node:http";
+import type { ServerResponse } from "node:http";
 import { handleProviderRoutes } from "./server-provider-routes.js";
+import {
+  createMockReq,
+  createMockRes,
+  flushAsync,
+  responseJson,
+  type MockRes,
+} from "./test-support/mock-http.js";
 import type { RouteContext } from "./server-types.js";
-
-// =============================================================================
-// HELPERS — lightweight mocks for IncomingMessage / ServerResponse
-// =============================================================================
-
-/** Capture writeHead + end calls on a mock ServerResponse */
-interface MockRes {
-  statusCode: number;
-  headers: Record<string, string>;
-  body: string;
-  writeHead: ReturnType<typeof vi.fn>;
-  end: ReturnType<typeof vi.fn>;
-}
-
-function createMockRes(): MockRes & ServerResponse {
-  const mock: MockRes = {
-    statusCode: 0,
-    headers: {},
-    body: "",
-    writeHead: vi.fn((status: number, headers?: Record<string, string>) => {
-      mock.statusCode = status;
-      if (headers) Object.assign(mock.headers, headers);
-    }),
-    end: vi.fn((data?: string) => {
-      if (data) mock.body = data;
-    }),
-  };
-  return mock as unknown as MockRes & ServerResponse;
-}
-
-function createMockReq(): IncomingMessage {
-  return {} as IncomingMessage;
-}
-
-function responseJson(res: MockRes & ServerResponse): Record<string, unknown> {
-  return JSON.parse((res as MockRes).body) as Record<string, unknown>;
-}
-
-/** Wait for handlers driven by readJsonBody().then(...) chains to settle */
-async function flushAsync(): Promise<void> {
-  await new Promise((resolve) => setImmediate(resolve));
-}
 
 // =============================================================================
 // FAKES

@@ -1,5 +1,6 @@
 import { vi } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { IChannelAdapter } from "./channels/channel.interface.js";
@@ -8,6 +9,8 @@ import type { ITool, ToolContext, ToolExecutionResult } from "./agents/tools/too
 import type { IdentityState } from "./identity/identity-state.js";
 import type { GoalTree } from "./goals/types.js";
 import type { GoalNodeId } from "./goals/types.js";
+import type { EmbeddingProvider, VectorStore } from "./vault/embedding-adapter.js";
+import type { IVault } from "./vault/vault.interface.js";
 
 /**
  * Create a mock logger matching winston's interface.
@@ -101,6 +104,77 @@ export async function withTempDir(fn: (dir: string) => Promise<void>): Promise<v
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+}
+
+/**
+ * Track temp directories across a suite for deferred cleanup (afterEach /
+ * afterAll). Useful when resources (e.g. sqlite handles) must be disposed
+ * before removal, so per-test withTempDir() does not fit.
+ */
+export function createTempDirTracker(defaultPrefix = "strada-test-"): {
+  makeDir: (prefix?: string) => string;
+  cleanup: () => void;
+} {
+  const dirs: string[] = [];
+  return {
+    makeDir(prefix = defaultPrefix): string {
+      const dir = mkdtempSync(join(tmpdir(), prefix));
+      dirs.push(dir);
+      return dir;
+    },
+    cleanup(): void {
+      for (const dir of dirs.splice(0)) {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  };
+}
+
+/**
+ * Create a fake EmbeddingProvider that returns a constant unit vector.
+ */
+export function createFakeEmbedding(overrides?: Partial<EmbeddingProvider>): EmbeddingProvider {
+  return {
+    model: "fake-embed",
+    dim: 4,
+    embed: async (texts) => texts.map(() => new Float32Array([1, 0, 0, 0])),
+    ...overrides,
+  };
+}
+
+/**
+ * Create an in-memory fake VectorStore.
+ */
+export function createFakeVectorStore(): VectorStore {
+  let next = 1;
+  const items = new Map<number, { payload: unknown }>();
+  return {
+    add: (_v, payload) => { const id = next++; items.set(id, { payload }); return id; },
+    remove: (id) => { items.delete(id); },
+    search: (_v, k) => [...items.entries()].slice(0, k).map(([id, e]) => ({ id, score: 1, payload: e.payload })),
+    clear: () => items.clear(),
+  };
+}
+
+/**
+ * Create a fake IVault with vi.fn() stubs for every required method.
+ */
+export function createFakeVault(overrides: Partial<IVault> = {}): IVault {
+  return {
+    id: "unity:abc12345",
+    kind: "unity-project",
+    rootPath: "/tmp/fake-root",
+    init: vi.fn(async () => undefined),
+    sync: vi.fn(async () => ({ changed: 0, durationMs: 1 })),
+    rebuild: vi.fn(async () => undefined),
+    query: vi.fn(async () => ({ hits: [], budgetUsed: 0, truncated: false })),
+    stats: vi.fn(async () => ({ fileCount: 1, chunkCount: 2, lastIndexedAt: 123, dbBytes: 10 })),
+    dispose: vi.fn(async () => undefined),
+    listFiles: vi.fn(() => []),
+    readFile: vi.fn(async () => "body"),
+    onUpdate: vi.fn(() => () => undefined),
+    ...overrides,
+  };
 }
 
 /**

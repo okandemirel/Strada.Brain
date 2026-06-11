@@ -1,24 +1,18 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
 import { listIndexableFiles } from './discovery.js';
 import { MAX_INDEXABLE_FILE_BYTES } from './path-policy.js';
+import { createTempDirTracker } from '../test-helpers.js';
 
 describe('listIndexableFiles', () => {
-  const tempDirs: string[] = [];
+  const tmp = createTempDirTracker('strada-discovery-');
 
-  afterEach(() => {
-    for (const dir of tempDirs.splice(0)) {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
+  afterEach(() => tmp.cleanup());
 
   function buildFixtureTree(): { root: string } {
-    const root = mkdtempSync(join(tmpdir(), 'strada-discovery-'));
-    tempDirs.push(root);
-    const outside = mkdtempSync(join(tmpdir(), 'strada-discovery-outside-'));
-    tempDirs.push(outside);
+    const root = tmp.makeDir();
+    const outside = tmp.makeDir('strada-discovery-outside-');
 
     writeFileSync(join(root, 'a.md'), '# a');
     mkdirSync(join(root, 'src'));

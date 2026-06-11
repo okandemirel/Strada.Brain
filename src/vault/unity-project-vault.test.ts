@@ -1,62 +1,34 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
 import { UnityProjectVault } from './unity-project-vault.js';
-import type { EmbeddingProvider, VectorStore } from './embedding-adapter.js';
+import { createFakeEmbedding, createFakeVectorStore, createTempDirTracker } from '../test-helpers.js';
+import type { EmbeddingProvider } from './embedding-adapter.js';
 import type { IVault } from './vault.interface.js';
 
-function fakeEmbedding(overrides?: Partial<EmbeddingProvider>): EmbeddingProvider {
-  return {
-    model: 'fake-embed',
-    dim: 4,
-    embed: async (texts) => texts.map(() => new Float32Array([1, 0, 0, 0])),
-    ...overrides,
-  };
-}
-
-function fakeVectorStore(): VectorStore {
-  let next = 1;
-  const items = new Map<number, { payload: unknown }>();
-  return {
-    add: (_v, payload) => { const id = next++; items.set(id, { payload }); return id; },
-    remove: (id) => { items.delete(id); },
-    search: (_v, k) => [...items.entries()].slice(0, k).map(([id, e]) => ({ id, score: 1, payload: e.payload })),
-    clear: () => items.clear(),
-  };
-}
-
 describe('UnityProjectVault', () => {
-  const tempDirs: string[] = [];
+  const tmp = createTempDirTracker('strada-unity-vault-');
   const vaults: IVault[] = [];
 
-  function makeRoot(): string {
-    const root = mkdtempSync(join(tmpdir(), 'strada-unity-vault-'));
-    tempDirs.push(root);
-    return root;
-  }
-
-  function makeVault(root: string, embedding: EmbeddingProvider = fakeEmbedding()): UnityProjectVault {
+  function makeVault(root: string, embedding: EmbeddingProvider = createFakeEmbedding()): UnityProjectVault {
     const vault = new UnityProjectVault({
       id: 'test-unity',
       rootPath: root,
       embedding,
-      vectorStore: fakeVectorStore(),
+      vectorStore: createFakeVectorStore(),
     });
     vaults.push(vault);
     return vault;
   }
 
   afterEach(async () => {
-    // Dispose BEFORE rmSync: better-sqlite3 keeps the db file open.
+    // Dispose BEFORE cleanup: better-sqlite3 keeps the db file open.
     for (const v of vaults.splice(0)) await v.dispose();
-    for (const dir of tempDirs.splice(0)) {
-      rmSync(dir, { recursive: true, force: true });
-    }
+    tmp.cleanup();
   });
 
   it('indexes markdown files on init', async () => {
-    const root = makeRoot();
+    const root = tmp.makeDir();
     mkdirSync(join(root, 'notes'));
     writeFileSync(join(root, 'notes', 'a.md'), '# alpha note\n\nbody text');
     const vault = makeVault(root);
@@ -70,7 +42,7 @@ describe('UnityProjectVault', () => {
   });
 
   it('short-circuits reindexFile on unchanged content hash (Fix C1)', async () => {
-    const root = makeRoot();
+    const root = tmp.makeDir();
     mkdirSync(join(root, 'notes'));
     writeFileSync(join(root, 'notes', 'a.md'), '# alpha note');
     const vault = makeVault(root);
@@ -86,9 +58,8 @@ describe('UnityProjectVault', () => {
   });
 
   it('confines reads to the vault root via the public API', async () => {
-    const root = makeRoot();
-    const outside = mkdtempSync(join(tmpdir(), 'strada-unity-outside-'));
-    tempDirs.push(outside);
+    const root = tmp.makeDir();
+    const outside = tmp.makeDir('strada-unity-outside-');
     mkdirSync(join(root, 'notes'));
     writeFileSync(join(root, 'notes', 'a.md'), '# alpha note');
     const outsideFile = join(outside, 'outside.md');
@@ -104,7 +75,7 @@ describe('UnityProjectVault', () => {
   });
 
   it('confines writes to the vault root', async () => {
-    const root = makeRoot();
+    const root = tmp.makeDir();
     mkdirSync(join(root, 'notes'));
     writeFileSync(join(root, 'notes', 'a.md'), '# alpha note');
     const vault = makeVault(root);
@@ -119,7 +90,7 @@ describe('UnityProjectVault', () => {
   });
 
   it('prunes deleted files on sync', async () => {
-    const root = makeRoot();
+    const root = tmp.makeDir();
     mkdirSync(join(root, 'notes'));
     writeFileSync(join(root, 'notes', 'a.md'), '# alpha');
     writeFileSync(join(root, 'notes', 'b.md'), '# beta');
@@ -135,10 +106,10 @@ describe('UnityProjectVault', () => {
   });
 
   it('keeps FTS indexing when the embedding provider fails (best-effort)', async () => {
-    const root = makeRoot();
+    const root = tmp.makeDir();
     mkdirSync(join(root, 'notes'));
     writeFileSync(join(root, 'notes', 'a.md'), '# alpha note');
-    const vault = makeVault(root, fakeEmbedding({
+    const vault = makeVault(root, createFakeEmbedding({
       embed: async () => { throw new Error('provider down'); },
     }));
 

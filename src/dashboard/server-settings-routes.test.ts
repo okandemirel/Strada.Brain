@@ -1,40 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import type { IncomingMessage, ServerResponse } from "node:http";
+import type { ServerResponse } from "node:http";
 import { handleSettingsRoutes } from "./server-settings-routes.js";
+import {
+  createMockReq,
+  createMockRes,
+  flushAsync,
+  responseJson,
+  type MockRes,
+} from "./test-support/mock-http.js";
 import type { RouteContext } from "./server-types.js";
-
-// =============================================================================
-// HELPERS — lightweight mocks for IncomingMessage / ServerResponse
-// =============================================================================
-
-/** Capture writeHead + end calls on a mock ServerResponse */
-interface MockRes {
-  statusCode: number;
-  headers: Record<string, string>;
-  body: string;
-  writeHead: ReturnType<typeof vi.fn>;
-  end: ReturnType<typeof vi.fn>;
-}
-
-function createMockRes(): MockRes & ServerResponse {
-  const mock: MockRes = {
-    statusCode: 0,
-    headers: {},
-    body: "",
-    writeHead: vi.fn((status: number, headers?: Record<string, string>) => {
-      mock.statusCode = status;
-      if (headers) Object.assign(mock.headers, headers);
-    }),
-    end: vi.fn((data?: string) => {
-      if (data) mock.body = data;
-    }),
-  };
-  return mock as unknown as MockRes & ServerResponse;
-}
-
-function createMockReq(): IncomingMessage {
-  return {} as IncomingMessage;
-}
 
 // =============================================================================
 // MOCK STORAGE — in-memory settings overrides keyed by `${key}::${scope}`
@@ -68,11 +42,6 @@ function createCtx(storage: MockStorage, body?: unknown): RouteContext {
   } as unknown as RouteContext;
 }
 
-/** Wait for the POST handler's readJsonBody().then(...) chain to settle */
-async function flushAsync(): Promise<void> {
-  await new Promise((resolve) => setImmediate(resolve));
-}
-
 // =============================================================================
 // TESTS
 // =============================================================================
@@ -86,16 +55,11 @@ describe("handleSettingsRoutes — /api/settings/voice", () => {
     res = createMockRes();
   });
 
-  /** Parse the JSON body written to the mock response */
-  function responseJson(): Record<string, unknown> {
-    return JSON.parse((res as MockRes).body) as Record<string, unknown>;
-  }
-
   it("GET with empty storage returns null voice fields and global scope", () => {
     const handled = handleSettingsRoutes("/api/settings/voice", "GET", createMockReq(), res, createCtx(storage));
     expect(handled).toBe(true);
     expect(res.statusCode).toBe(200);
-    expect(responseJson()).toEqual({
+    expect(responseJson(res)).toEqual({
       enabled: null,
       language: null,
       speed: null,
@@ -112,7 +76,7 @@ describe("handleSettingsRoutes — /api/settings/voice", () => {
     expect(handled).toBe(true);
     await flushAsync();
 
-    expect(responseJson()).toEqual({ success: true });
+    expect(responseJson(res)).toEqual({ success: true });
     expect(storage.store.get("voice_input_enabled::global")).toBe("false");
     expect(storage.store.get("voice_output_enabled::global")).toBe("true");
     expect(storage.store.get("voice_browser_stt_enabled::global")).toBe("true");
@@ -124,7 +88,7 @@ describe("handleSettingsRoutes — /api/settings/voice", () => {
     await flushAsync();
 
     handleSettingsRoutes("/api/settings/voice", "GET", createMockReq(), res, createCtx(storage));
-    expect(responseJson()).toMatchObject({
+    expect(responseJson(res)).toMatchObject({
       inputEnabled: false,
       outputEnabled: true,
       browserSttEnabled: true,
@@ -142,7 +106,7 @@ describe("handleSettingsRoutes — /api/settings/voice", () => {
 
     // GET with ?chatId=abc reads the scoped values back
     handleSettingsRoutes("/api/settings/voice?chatId=abc", "GET", createMockReq(), res, createCtx(storage));
-    expect(responseJson()).toMatchObject({
+    expect(responseJson(res)).toMatchObject({
       inputEnabled: true,
       outputEnabled: false,
       browserSttEnabled: true,
@@ -152,7 +116,7 @@ describe("handleSettingsRoutes — /api/settings/voice", () => {
     // Plain GET (global scope) still returns nulls
     const globalRes = createMockRes();
     handleSettingsRoutes("/api/settings/voice", "GET", createMockReq(), globalRes, createCtx(storage));
-    expect(JSON.parse((globalRes as MockRes).body)).toMatchObject({
+    expect(responseJson(globalRes)).toMatchObject({
       inputEnabled: null,
       outputEnabled: null,
       browserSttEnabled: null,
@@ -170,7 +134,7 @@ describe("handleSettingsRoutes — /api/settings/voice", () => {
     expect(storage.store.get("voice_speed::global")).toBe("1.25");
 
     handleSettingsRoutes("/api/settings/voice", "GET", createMockReq(), res, createCtx(storage));
-    expect(responseJson()).toMatchObject({
+    expect(responseJson(res)).toMatchObject({
       enabled: true,
       language: "tr",
       speed: 1.25,
@@ -182,7 +146,7 @@ describe("handleSettingsRoutes — /api/settings/voice", () => {
     handleSettingsRoutes("/api/settings/voice", "POST", createMockReq(), res, ctx);
     await flushAsync();
 
-    expect(responseJson()).toEqual({ success: true });
+    expect(responseJson(res)).toEqual({ success: true });
     expect(storage.store.has("voice_input_enabled::global")).toBe(false);
     expect(storage.store.has("voice_output_enabled::global")).toBe(false);
     expect(storage.store.has("voice_browser_stt_enabled::global")).toBe(false);
@@ -192,7 +156,7 @@ describe("handleSettingsRoutes — /api/settings/voice", () => {
     const handled = handleSettingsRoutes("/api/settings/voice", "PUT", createMockReq(), res, createCtx(storage));
     expect(handled).toBe(true);
     expect(res.statusCode).toBe(405);
-    expect(responseJson()).toEqual({ error: "Method not allowed" });
+    expect(responseJson(res)).toEqual({ error: "Method not allowed" });
   });
 
   it("returns 503 when storage is unavailable", () => {
@@ -230,10 +194,6 @@ function budgetCtx(manager?: FakeBudgetManager, body?: unknown): RouteContext {
   } as unknown as RouteContext;
 }
 
-function parseBody(res: MockRes & ServerResponse): Record<string, unknown> {
-  return JSON.parse((res as MockRes).body) as Record<string, unknown>;
-}
-
 // =============================================================================
 // TESTS — fall-through + budget + rate-limits
 // =============================================================================
@@ -253,14 +213,14 @@ describe("handleSettingsRoutes — GET /api/budget", () => {
     const handled = handleSettingsRoutes("/api/budget", "GET", createMockReq(), res, budgetCtx());
     expect(handled).toBe(true);
     expect(res.statusCode).toBe(503);
-    expect(parseBody(res)).toEqual({ error: "Budget manager not available" });
+    expect(responseJson(res)).toEqual({ error: "Budget manager not available" });
   });
 
   it("merges the snapshot with the config", () => {
     const res = createMockRes();
     handleSettingsRoutes("/api/budget", "GET", createMockReq(), res, budgetCtx(createFakeBudgetManager()));
     expect(res.statusCode).toBe(200);
-    expect(parseBody(res)).toEqual({ spentUsd: 1.5, remainingUsd: 8.5, config: { dailyLimitUsd: 10 } });
+    expect(responseJson(res)).toEqual({ spentUsd: 1.5, remainingUsd: 8.5, config: { dailyLimitUsd: 10 } });
   });
 
   it("maps a snapshot failure to 500", () => {
@@ -269,7 +229,7 @@ describe("handleSettingsRoutes — GET /api/budget", () => {
     const res = createMockRes();
     handleSettingsRoutes("/api/budget", "GET", createMockReq(), res, budgetCtx(manager));
     expect(res.statusCode).toBe(500);
-    expect(parseBody(res)).toEqual({ error: "snapshot boom" });
+    expect(responseJson(res)).toEqual({ error: "snapshot boom" });
   });
 });
 
@@ -285,7 +245,7 @@ describe("handleSettingsRoutes — GET /api/budget/history", () => {
     expect(handled).toBe(true);
     expect(res.statusCode).toBe(200);
     expect(manager.getDailyHistory).toHaveBeenCalledWith(expectedDays);
-    expect(parseBody(res)).toEqual({ entries: [] });
+    expect(responseJson(res)).toEqual({ entries: [] });
   });
 });
 
@@ -299,7 +259,7 @@ describe("handleSettingsRoutes — POST /api/budget/config", () => {
     await flushAsync();
     expect(manager.updateConfig).toHaveBeenCalledWith({ dailyLimitUsd: 25 });
     expect(res.statusCode).toBe(200);
-    expect(parseBody(res)).toEqual({ success: true, config: { dailyLimitUsd: 10 } });
+    expect(responseJson(res)).toEqual({ success: true, config: { dailyLimitUsd: 10 } });
   });
 
   it("maps an updateConfig failure to 400", async () => {
@@ -309,7 +269,7 @@ describe("handleSettingsRoutes — POST /api/budget/config", () => {
     handleSettingsRoutes("/api/budget/config", "POST", createMockReq(), res, budgetCtx(manager, {}));
     await flushAsync();
     expect(res.statusCode).toBe(400);
-    expect(parseBody(res)).toEqual({ error: "invalid config" });
+    expect(responseJson(res)).toEqual({ error: "invalid config" });
   });
 });
 
@@ -319,7 +279,7 @@ describe("handleSettingsRoutes — /api/settings/rate-limits", () => {
     const handled = handleSettingsRoutes("/api/settings/rate-limits", "GET", createMockReq(), res, budgetCtx());
     expect(handled).toBe(true);
     expect(res.statusCode).toBe(503);
-    expect(parseBody(res)).toEqual({ error: "Storage not available" });
+    expect(responseJson(res)).toEqual({ error: "Storage not available" });
   });
 
   it("GET returns numeric zero defaults when no overrides exist", () => {
@@ -328,7 +288,7 @@ describe("handleSettingsRoutes — /api/settings/rate-limits", () => {
       "/api/settings/rate-limits", "GET", createMockReq(), res, createCtx(createMockStorage()),
     );
     expect(res.statusCode).toBe(200);
-    expect(parseBody(res)).toEqual({ messagesPerMinute: 0, messagesPerHour: 0, tokensPerDay: 0 });
+    expect(responseJson(res)).toEqual({ messagesPerMinute: 0, messagesPerHour: 0, tokensPerDay: 0 });
   });
 
   it("POST persists only the provided keys", async () => {
@@ -339,7 +299,7 @@ describe("handleSettingsRoutes — /api/settings/rate-limits", () => {
       createCtx(storage, { messagesPerMinute: 5 }),
     );
     await flushAsync();
-    expect(parseBody(res)).toEqual({ success: true });
+    expect(responseJson(res)).toEqual({ success: true });
     expect(storage.store.get("rate_limit_messages_per_minute::global")).toBe("5");
     expect(storage.store.size).toBe(1);
   });

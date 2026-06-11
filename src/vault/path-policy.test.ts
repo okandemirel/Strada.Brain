@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { createTempDirTracker } from '../test-helpers.js';
 import {
   getIndexableFileInfo,
   isLikelyBinaryFile,
@@ -13,19 +13,9 @@ import {
 } from './path-policy.js';
 
 describe('path-policy', () => {
-  const tempDirs: string[] = [];
+  const { makeDir: makeTempDir, cleanup } = createTempDirTracker('strada-path-policy-');
 
-  function makeTempDir(prefix: string): string {
-    const dir = mkdtempSync(join(tmpdir(), prefix));
-    tempDirs.push(dir);
-    return dir;
-  }
-
-  afterEach(() => {
-    for (const dir of tempDirs.splice(0)) {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
+  afterEach(() => cleanup());
 
   describe('resolveSafeVaultReadPath', () => {
     it('resolves a regular file inside the vault root', async () => {
