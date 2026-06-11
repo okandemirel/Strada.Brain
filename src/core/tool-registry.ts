@@ -363,6 +363,11 @@ export class ToolRegistry {
     return this.stradaMcpRuntime?.getStatus() ?? null;
   }
 
+  /** On-demand Unity bridge reconnect; resolves to the resulting connected state. */
+  async tryStradaMcpReconnect(): Promise<boolean> {
+    return (await this.stradaMcpRuntime?.tryLazyReconnect()) ?? false;
+  }
+
   /**
    * Get tool count
    */
