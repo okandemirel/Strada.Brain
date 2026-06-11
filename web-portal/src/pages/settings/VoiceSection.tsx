@@ -1,4 +1,4 @@
-import { useCallback } from 'react'
+import { useCallback, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import {
@@ -6,6 +6,7 @@ import {
   hasVoiceOutputSupport,
   useVoiceSettings,
 } from '../../hooks/use-voice-settings'
+import type { VoiceSettings } from '../../hooks/use-voice-settings'
 
 function Toggle({
   enabled,
@@ -47,7 +48,7 @@ export default function VoiceSection() {
   const inputSupported = hasVoiceInputSupport()
   const outputSupported = hasVoiceOutputSupport()
 
-  const syncToBackend = useCallback(async (next: { inputEnabled: boolean; outputEnabled: boolean }) => {
+  const syncToBackend = useCallback(async (next: VoiceSettings) => {
     try {
       await fetch('/api/settings/voice', {
         method: 'POST',
@@ -58,6 +59,30 @@ export default function VoiceSection() {
       // Best-effort backend sync; local state already saved.
     }
   }, [])
+
+  // Hydrate persisted preferences from the backend on mount (best-effort:
+  // an offline backend or null fields must not clobber local settings).
+  useEffect(() => {
+    let cancelled = false
+    fetch('/api/settings/voice')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (cancelled || !d) return
+        const serverValues: Partial<VoiceSettings> = {}
+        if (typeof d.inputEnabled === 'boolean') serverValues.inputEnabled = d.inputEnabled
+        if (typeof d.outputEnabled === 'boolean') serverValues.outputEnabled = d.outputEnabled
+        if (typeof d.browserSttEnabled === 'boolean') serverValues.browserSttEnabled = d.browserSttEnabled
+        if (Object.keys(serverValues).length > 0) {
+          updateVoiceSettings((prev) => ({ ...prev, ...serverValues }))
+        }
+      })
+      .catch(() => {
+        // Best-effort hydration; keep local settings when the backend is unreachable.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [updateVoiceSettings])
 
   const handleInputToggle = useCallback(
     (next: boolean) => {
@@ -91,9 +116,13 @@ export default function VoiceSection() {
 
   const handleBrowserSttToggle = useCallback(
     (next: boolean) => {
-      updateVoiceSettings((prev) => ({ ...prev, browserSttEnabled: next }))
+      updateVoiceSettings((prev) => {
+        const updated = { ...prev, browserSttEnabled: next }
+        void syncToBackend(updated)
+        return updated
+      })
     },
-    [updateVoiceSettings],
+    [updateVoiceSettings, syncToBackend],
   )
 
   return (
