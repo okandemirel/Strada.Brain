@@ -181,12 +181,15 @@ shell commands and holds provider API keys:
 
 **In scope** (the only files you should modify/create):
 - `src/utils/logger.ts`
-- `src/security/secret-sanitizer.ts` (one registration line + comment)
+- `src/core/bootstrap.ts` (one registration call + comment — see Step 1 rev.2)
 - `src/dashboard/server-vault-routes.ts`
 - `src/dashboard/server.ts`
 - `src/utils/logger.test.ts`
 - `src/dashboard/server.test.ts`
 - `src/dashboard/server-vault-routes.test.ts` (create)
+- Up to 5 existing `*.test.ts` files ONLY to add a missing
+  `setLogRingBufferSanitizer: vi.fn()` line to a `vi.mock("../utils/logger.js")`
+  factory, if the empirical check in Step 1.4 reveals any (rev.2 expects zero).
 
 **Out of scope** (do NOT touch, even though they look related):
 - `src/dashboard/server-system-routes.ts` — its read-time sanitization of
@@ -248,21 +251,50 @@ sanitizer → logger only. Use injection:
      }
      ```
 
-3. In `src/security/secret-sanitizer.ts`, at the very bottom of the file, add
-   the registration (module-load side effect — acceptable because this module
-   already imports the logger and is loaded by config, dashboard routes, and
-   the orchestrator on every real boot path):
+3. **(rev.2 — replaces the original module-scope registration, which a first
+   execution attempt proved breaks 24 test files that mock `../utils/logger.js`
+   with plain object-literal factories; `secret-sanitizer.ts` sits in almost
+   every module graph via `config.ts`, so a side effect there detonates the
+   missing-export check in every one of those mocks.)**
+
+   Register from `src/core/bootstrap.ts` instead — the earliest common boot
+   chokepoint — and use a NAMESPACE import with an optional call so that test
+   files mocking `logger.js` without the new export can never fail at load:
 
    ```ts
-   // Write-time defense-in-depth: ensure ring-buffer log entries are sanitized
-   // the moment they are stored, not only when /api/logs serves them.
-   setLogRingBufferSanitizer(sanitizeSecrets);
+   import * as loggerModule from "../utils/logger.js";
+   import { sanitizeSecrets } from "../security/secret-sanitizer.js";
    ```
 
-   Extend the existing `import { getLogger } from "../utils/logger.js";`
-   (line 9) to also import `setLogRingBufferSanitizer`.
+   Then, at the top of the main bootstrap function (before subsystems start
+   emitting meaningful logs — put it next to the earliest logger/config setup
+   you find there):
 
-**Verify**: `npm run typecheck:src` → exit 0; `NODE_OPTIONS=--max-old-space-size=8192 npx vitest run src/utils/logger.test.ts src/security/secret-sanitizer.test.ts` → all pass (new test added in Test plan item 1).
+   ```ts
+   // Write-time defense-in-depth: sanitize ring-buffer log entries the moment
+   // they are stored, not only when /api/logs serves them. Namespace access +
+   // optional call so logger.js test mocks without this export never break.
+   loggerModule.setLogRingBufferSanitizer?.(sanitizeSecrets);
+   ```
+
+   Check first whether bootstrap.ts already imports from `../utils/logger.js`
+   and/or `../security/secret-sanitizer.js` — if it imports logger via named
+   bindings, ADD a separate namespace import for this call only (do not
+   rewrite existing imports), and reuse any existing sanitizeSecrets import.
+
+4. **Empirical mock check** (this is the rev.2 acceptance gate): run the 24
+   test files that failed in the first execution attempt:
+
+   ```
+   NODE_OPTIONS=--max-old-space-size=8192 npx vitest run src/integration.test.ts src/agents/orchestrator-integration.test.ts src/agents/orchestrator.test.ts src/core/response-provider-preflight.test.ts src/dashboard/server.test.ts src/memory/file-memory-manager.test.ts src/tasks/background-executor.test.ts src/agents/providers/deepseek.test.ts src/agents/providers/fireworks.test.ts src/agents/providers/gemini.test.ts src/agents/providers/groq.test.ts src/agents/providers/kimi.test.ts src/agents/providers/minimax.test.ts src/agents/providers/mistral.test.ts src/agents/providers/openai.test.ts src/agents/providers/opencode.test.ts src/agents/providers/provider-registry.test.ts src/agents/providers/qwen.test.ts src/agents/providers/together.test.ts src/agents/providers/fallback-chain.test.ts src/memory/unified/auto-tiering.test.ts src/learning/chains/chain-manager.test.ts src/learning/chains/chain-synthesizer.test.ts src/metrics/metrics-cli.test.ts
+   ```
+
+   Expected: ALL pass (the namespace+optional-call pattern adds no new named
+   binding to any mocked module). If ≤5 fail with the missing-export error,
+   add `setLogRingBufferSanitizer: vi.fn()` to those mock factories (in-scope
+   allowance). If >5 fail, STOP and report the list.
+
+**Verify**: `npm run typecheck:src` → exit 0; `NODE_OPTIONS=--max-old-space-size=8192 npx vitest run src/utils/logger.test.ts src/security/secret-sanitizer.test.ts` → all pass (new test added in Test plan item 1); the Step 1.4 batch above → all pass.
 
 ### Step 2: Rate-limit `POST /api/vaults/:id/search` (b)
 
@@ -396,7 +428,7 @@ pass, including ≥ 5 new tests across the three test files.
 Machine-checkable. ALL must hold:
 
 - [ ] `npm run typecheck:src` exits 0 and `npm run lint:src` exits 0
-- [ ] `grep -n "setLogRingBufferSanitizer(sanitizeSecrets)" src/security/secret-sanitizer.ts` → 1 match
+- [ ] `grep -n "setLogRingBufferSanitizer" src/core/bootstrap.ts` → 1 match (the optional registration call); `grep -n "setLogRingBufferSanitizer" src/security/secret-sanitizer.ts` → 0 matches
 - [ ] `grep -n "429" src/dashboard/server-vault-routes.ts` → ≥ 1 match in the search branch
 - [ ] `grep -n "WEBSOCKET_DASHBOARD_AUTH_TOKEN" src/dashboard/server.ts` → 1 match (the warning text)
 - [ ] `grep -n "%00" src/dashboard/server-vault-routes.ts` → match on the isUnsafePath line
@@ -408,15 +440,13 @@ Machine-checkable. ALL must hold:
 
 Stop and report back (do not improvise) if:
 
-- `secret-sanitizer.ts` no longer imports `../utils/logger.js` (the
-  circular-dependency reasoning behind the injection pattern would be stale —
-  re-evaluate whether a direct import is now safe, then report, don't decide).
-- Registering the sanitizer at module scope breaks any existing test that
-  mocks `../utils/logger.js` without exporting `setLogRingBufferSanitizer`
-  (several test files mock the logger module — e.g.
-  `src/dashboard/server.test.ts:10`; if vitest reports "No export named
-  setLogRingBufferSanitizer" you must add it to those mocks, but if more than
-  ~5 files need touching, stop and report the list instead).
+- The Step 1.4 empirical batch fails in MORE than 5 files with the
+  missing-export mock error after the rev.2 namespace+optional-call pattern is
+  applied — stop and report the failing list (rev.1 stopped here with 24
+  failures under the old module-scope approach; rev.2 is designed to produce
+  zero).
+- `src/core/bootstrap.ts` has no clear early initialization point before
+  subsystem startup (its structure drifted) — report, don't guess.
 - `src/dashboard/server.test.ts` offers no viable way to invoke `start()`
   (heavy ctx construction) — report; do not refactor `server.ts` to make it
   testable, that's a bigger change than this plan authorizes.
