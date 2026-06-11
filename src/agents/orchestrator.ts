@@ -10,7 +10,7 @@ import { ProviderHealthRegistry } from "./providers/provider-health.js";
 import { DynamicToolFactory } from "./tools/dynamic/dynamic-tool-factory.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { isAbsolute, join, relative as pathRelative } from "node:path";
 import { detectLanguage } from "../dashboard/workspace-routes.js";
 import type { ProviderManager } from "./providers/provider-manager.js";
@@ -698,6 +698,12 @@ export class Orchestrator {
   private taskManager: TaskManager | null = null;
   /** Workspace bus for monitor UI events (lazy setter — bus created after orchestrator) */
   private workspaceBus: WorkspaceBus | null = null;
+  /**
+   * Serializes async workspace code-event emission so events reach the
+   * monitor in the same order the tool results were processed, while
+   * keeping file reads off the event loop.
+   */
+  private workspaceCodeEventQueue: Promise<void> = Promise.resolve();
   private monitorLifecycle: MonitorLifecycle | null = null;
   /** Tracks consecutive ask_user blocks per conversation to break clarification loops. */
   private readonly askUserBlockCounts = new Map<string, number>();
@@ -1939,6 +1945,11 @@ export class Orchestrator {
    */
   setWorkspaceBus(bus: WorkspaceBus): void {
     this.workspaceBus = bus;
+  }
+
+  /** Await any queued workspace code-event emissions (test/shutdown hook). */
+  async drainWorkspaceCodeEvents(): Promise<void> {
+    await this.workspaceCodeEventQueue;
   }
 
   setMonitorLifecycle(lifecycle: MonitorLifecycle): void {
@@ -6856,19 +6867,25 @@ export class Orchestrator {
       const absoluteFilePath = filePath
         ? (isAbsolute(filePath) ? filePath : join(this.projectPath, filePath))
         : "";
-      const emitCodeFileOpen = (
+      const enqueueCodeEvent = (work: () => Promise<void>): void => {
+        this.workspaceCodeEventQueue = this.workspaceCodeEventQueue
+          .then(work)
+          .catch(() => { /* telemetry is best-effort; never propagate */ });
+      };
+
+      const emitCodeFileOpen = async (
         openPath: string,
         options?: {
           content?: string;
           touchedStatus?: "modified" | "new" | "deleted";
         },
-      ) => {
+      ): Promise<void> => {
         const language = detectLanguage(openPath);
         let content = options?.content;
 
         if (content === undefined && absoluteFilePath) {
           try {
-            content = readFileSync(absoluteFilePath, "utf-8");
+            content = await readFile(absoluteFilePath, "utf-8");
           } catch {
             content = undefined;
           }
@@ -6884,39 +6901,42 @@ export class Orchestrator {
 
       if (tc.name === "file_read") {
         if (filePath && !tr.isError) {
-          emitCodeFileOpen(filePath);
+          enqueueCodeEvent(() => emitCodeFileOpen(filePath));
         }
       } else if (tc.name === "file_write" || tc.name === "file_edit") {
         if (filePath && !tr.isError) {
           const language = detectLanguage(filePath);
 
-          if (tc.name === "file_edit" && typeof toolInput.old_string === "string" && typeof toolInput.new_string === "string") {
-            // file_edit → emit code:file_update with original + modified for diff view
-            try {
-              const modified = readFileSync(absoluteFilePath, "utf-8");
-              // Prefer pre-edit content from tool metadata (reliable) over reverse-engineering
-              const original = typeof tr.metadata?.originalContent === "string"
-                ? (tr.metadata.originalContent as string)
-                : modified.replace(toolInput.new_string as string, () => toolInput.old_string as string);
-              workspaceBus.emit("code:file_update", {
-                path: filePath,
-                diff: `${(toolInput.old_string as string).slice(0, 250)} → ${(toolInput.new_string as string).slice(0, 250)}`,
-                original: original.slice(0, 500_000),
-                modified: modified.slice(0, 500_000),
-                language,
-              });
-            } catch {
-              const content = typeof toolInput.new_string === "string" ? toolInput.new_string : output.slice(0, 10_000);
-              emitCodeFileOpen(filePath, { content, touchedStatus: "modified" });
+          enqueueCodeEvent(async () => {
+            if (tc.name === "file_edit" && typeof toolInput.old_string === "string" && typeof toolInput.new_string === "string") {
+              // file_edit → emit code:file_update with original + modified for diff view
+              try {
+                const modified = await readFile(absoluteFilePath, "utf-8");
+                // Prefer pre-edit content from tool metadata (reliable) over reverse-engineering
+                const original = typeof tr.metadata?.originalContent === "string"
+                  ? (tr.metadata.originalContent as string)
+                  : modified.replace(toolInput.new_string as string, () => toolInput.old_string as string);
+                workspaceBus.emit("code:file_update", {
+                  path: filePath,
+                  diff: `${(toolInput.old_string as string).slice(0, 250)} → ${(toolInput.new_string as string).slice(0, 250)}`,
+                  original: original.slice(0, 500_000),
+                  modified: modified.slice(0, 500_000),
+                  language,
+                });
+              } catch {
+                const content = typeof toolInput.new_string === "string" ? toolInput.new_string : output.slice(0, 10_000);
+                await emitCodeFileOpen(filePath, { content, touchedStatus: "modified" });
+              }
+            } else {
+              // file_write → emit code:file_open (new/overwritten file)
+              const content = typeof toolInput.content === "string" ? toolInput.content
+                : typeof toolInput.new_string === "string" ? toolInput.new_string
+                : output.slice(0, 10_000);
+              await emitCodeFileOpen(filePath, { content, touchedStatus: "new" });
             }
-          } else {
-            // file_write → emit code:file_open (new/overwritten file)
-            const content = typeof toolInput.content === "string" ? toolInput.content
-              : typeof toolInput.new_string === "string" ? toolInput.new_string
-              : output.slice(0, 10_000);
-            emitCodeFileOpen(filePath, { content, touchedStatus: "new" });
-          }
-          workspaceBus.emit("workspace:mode_suggest", { mode: "code", reason: "File operation detected" });
+            // Emitted inside the same queued task so it still arrives AFTER the file event.
+            workspaceBus.emit("workspace:mode_suggest", { mode: "code", reason: "File operation detected" });
+          });
         }
       } else if (tc.name === "shell_exec" || tc.name === "dotnet_build" || tc.name === "dotnet_test") {
         const command = typeof toolInput.command === "string" ? toolInput.command : undefined;
