@@ -1,3 +1,4 @@
+import { StrictMode } from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, waitFor, fireEvent } from '@testing-library/react'
 import VoiceSection from './VoiceSection'
@@ -62,6 +63,33 @@ describe('VoiceSection', () => {
       const body = JSON.parse(String(postCall![1]?.body)) as Record<string, unknown>
       expect(body.browserSttEnabled).toBe(true)
     })
+  })
+
+  it('syncs exactly once per toggle under StrictMode', async () => {
+    const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === 'POST') return Promise.resolve(jsonResponse({ success: true }))
+      return Promise.resolve(
+        jsonResponse({ inputEnabled: null, outputEnabled: null, browserSttEnabled: null }),
+      )
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(
+      <StrictMode>
+        <VoiceSection />
+      </StrictMode>,
+    )
+
+    const browserSttToggle = screen.getAllByRole('switch')[2]
+    fireEvent.click(browserSttToggle)
+
+    const postCalls = () => fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST')
+    await waitFor(() => {
+      expect(postCalls()).toHaveLength(1)
+    })
+    // Flush pending microtasks so a StrictMode double-fired sync would surface.
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(postCalls()).toHaveLength(1)
   })
 
   it('keeps local defaults and renders when hydration fails', async () => {

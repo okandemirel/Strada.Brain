@@ -1,77 +1,50 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
+import { useMcpStatus } from '../../hooks/use-api'
+import type { McpStatus } from '../../hooks/use-api'
+import { fetchJson } from '../../utils/api'
+import { glass } from '../../lib/styles'
 
-interface McpStatus {
-  installed: boolean
-  version: string | null
-  toolCount: number
-  resourceCount: number
-  promptCount: number
-  bridgeConfigured: boolean
+interface ReconnectResponse {
   bridgeConnected: boolean
-  bridgeState: string
-  availableToolCount: number
-  unavailableToolCount: number
-  activeEditorPort?: number | null
-  activeEditorProjectName?: string | null
-  editorSelectionSource?: string | null
-  editorDiscoveryCount?: number
-  bridgeUnavailableReason?: string
-  lastError?: string
-  bridgeProtocolVersion?: string
-  bridgeCapabilityMethodCount?: number
-}
-
-interface McpStatusResponse {
-  installed: boolean
   status: McpStatus | null
 }
 
 export default function McpSection() {
   const { t } = useTranslation('settings')
-  const [installed, setInstalled] = useState(false)
-  const [status, setStatus] = useState<McpStatus | null>(null)
-  const [loaded, setLoaded] = useState(false)
+  const { data, isLoading, refetch } = useMcpStatus()
+  const queryClient = useQueryClient()
   const [busy, setBusy] = useState(false)
 
-  const refresh = useCallback((notifyError: boolean) => {
-    setBusy(true)
-    return fetch('/api/mcp/status')
-      .then((r) => (r.ok ? (r.json() as Promise<McpStatusResponse>) : null))
-      .then((d) => {
-        if (!d) throw new Error('Request failed')
-        setInstalled(Boolean(d.installed))
-        setStatus(d.status ?? null)
-      })
-      .catch(() => {
-        if (notifyError) toast.error(t('mcp.toastFailed'))
-      })
-      .finally(() => {
-        setBusy(false)
-        setLoaded(true)
-      })
-  }, [t])
+  const installed = Boolean(data?.installed)
+  const status = data?.status ?? null
 
-  useEffect(() => {
-    void refresh(false)
-  }, [refresh])
+  const refresh = async () => {
+    setBusy(true)
+    try {
+      const result = await refetch()
+      if (result.error) toast.error(t('mcp.toastFailed'))
+    } finally {
+      setBusy(false)
+    }
+  }
 
   const reconnect = async () => {
     setBusy(true)
     try {
-      const res = await fetch('/api/mcp/reconnect', { method: 'POST' })
-      if (!res.ok) throw new Error('Request failed')
-      const d = (await res.json()) as { bridgeConnected: boolean; status: McpStatus | null }
-      if (d.status) {
-        setInstalled(Boolean(d.status.installed))
-        setStatus(d.status)
-      }
-      if (d.bridgeConnected) {
+      const d = await fetchJson<ReconnectResponse>('/api/mcp/reconnect', { method: 'POST' })
+      if (d?.bridgeConnected) {
         toast.success(t('mcp.toastReconnected'))
       } else {
         toast.info(t('mcp.toastStillDisconnected'))
       }
+      // A reconnect changes both the bridge status and tool availability.
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['mcp-status'] }),
+        queryClient.invalidateQueries({ queryKey: ['tools'] }),
+      ])
     } catch {
       toast.error(t('mcp.toastFailed'))
     } finally {
@@ -79,7 +52,7 @@ export default function McpSection() {
     }
   }
 
-  if (!loaded) {
+  if (isLoading) {
     return (
       <div>
         <h2 className="text-lg font-semibold text-text mb-1">{t('mcp.title')}</h2>
@@ -97,7 +70,7 @@ export default function McpSection() {
       <h2 className="text-lg font-semibold text-text mb-1">{t('mcp.title')}</h2>
       <p className="text-sm text-text-tertiary mb-6">{t('mcp.description')}</p>
 
-      <div className="bg-white/3 backdrop-blur border border-white/5 rounded-2xl mb-4 overflow-hidden">
+      <div className={`${glass.section} mb-4 overflow-hidden`}>
         {!installed || !status ? (
           <div className="px-4 py-2.5 text-sm text-text-secondary">{t('mcp.notInstalled')}</div>
         ) : (
@@ -136,7 +109,7 @@ export default function McpSection() {
 
       <div className="flex gap-3">
         <button
-          onClick={() => void refresh(true)}
+          onClick={() => void refresh()}
           disabled={busy}
           className="px-5 py-2 bg-white/5 border border-white/10 text-text-secondary text-sm font-medium rounded-xl hover:bg-white/10 transition-colors disabled:opacity-50"
         >

@@ -288,6 +288,32 @@ interface DaemonResponse {
   capabilityManifest?: Record<string, unknown> | null
 }
 
+export interface McpStatus {
+  installed: boolean
+  version: string | null
+  toolCount: number
+  resourceCount: number
+  promptCount: number
+  bridgeConfigured: boolean
+  bridgeConnected: boolean
+  bridgeState: string
+  availableToolCount: number
+  unavailableToolCount: number
+  activeEditorPort?: number | null
+  activeEditorProjectName?: string | null
+  editorSelectionSource?: string | null
+  editorDiscoveryCount?: number
+  bridgeUnavailableReason?: string
+  lastError?: string
+  bridgeProtocolVersion?: string
+  bridgeCapabilityMethodCount?: number
+}
+
+interface McpStatusResponse {
+  installed: boolean
+  status: McpStatus | null
+}
+
 interface ProvidersResponse {
   active: {
     providerName: string
@@ -555,6 +581,15 @@ export function useDaemon() {
     queryKey: ['daemon'],
     queryFn: () => fetchApi<DaemonResponse>('/api/daemon'),
     refetchInterval: 10_000,
+  })
+}
+
+/** GET /api/mcp/status */
+export function useMcpStatus() {
+  return useQuery<McpStatusResponse>({
+    queryKey: ['mcp-status'],
+    queryFn: () => fetchApi<McpStatusResponse>('/api/mcp/status'),
+    refetchInterval: 30_000,
   })
 }
 

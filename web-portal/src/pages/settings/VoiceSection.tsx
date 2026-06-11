@@ -84,19 +84,27 @@ export default function VoiceSection() {
     }
   }, [updateVoiceSettings])
 
+  // Computes the next settings from the rendered value and fires the backend
+  // sync OUTSIDE the state updater, so StrictMode's double-invoked updaters
+  // cannot double-fire the POST.
+  const setAndSync = useCallback(
+    (patch: Partial<VoiceSettings>) => {
+      const updated = { ...voice, ...patch }
+      updateVoiceSettings(updated)
+      void syncToBackend(updated)
+    },
+    [voice, updateVoiceSettings, syncToBackend],
+  )
+
   const handleInputToggle = useCallback(
     (next: boolean) => {
       if (!inputSupported && next) {
         toast.error(t('voice.toastInputUnsupported'))
         return
       }
-      updateVoiceSettings((prev) => {
-        const updated = { ...prev, inputEnabled: next }
-        void syncToBackend(updated)
-        return updated
-      })
+      setAndSync({ inputEnabled: next })
     },
-    [inputSupported, updateVoiceSettings, syncToBackend, t],
+    [inputSupported, setAndSync, t],
   )
 
   const handleOutputToggle = useCallback(
@@ -105,24 +113,16 @@ export default function VoiceSection() {
         toast.error(t('voice.toastOutputUnsupported'))
         return
       }
-      updateVoiceSettings((prev) => {
-        const updated = { ...prev, outputEnabled: next }
-        void syncToBackend(updated)
-        return updated
-      })
+      setAndSync({ outputEnabled: next })
     },
-    [outputSupported, updateVoiceSettings, syncToBackend, t],
+    [outputSupported, setAndSync, t],
   )
 
   const handleBrowserSttToggle = useCallback(
     (next: boolean) => {
-      updateVoiceSettings((prev) => {
-        const updated = { ...prev, browserSttEnabled: next }
-        void syncToBackend(updated)
-        return updated
-      })
+      setAndSync({ browserSttEnabled: next })
     },
-    [updateVoiceSettings, syncToBackend],
+    [setAndSync],
   )
 
   return (
