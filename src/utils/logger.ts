@@ -1,5 +1,8 @@
 import winston from "winston";
 import TransportStream from "winston-transport";
+// Leaf module with no dependencies of its own — safe to import here without
+// creating a logger <-> security circular dependency.
+import { sanitizeSecrets } from "../security/secret-patterns.js";
 
 // ---------------------------------------------------------------------------
 // Log ring buffer — captures recent entries for the /api/logs dashboard endpoint
@@ -24,37 +27,26 @@ const MAX_META_BYTES = 2048;
 /** Maximum message length stored in the ring buffer. */
 const MAX_MESSAGE_LENGTH = 4096;
 
-type RingBufferSanitizer = (text: string) => string;
-let ringBufferSanitizer: RingBufferSanitizer = (text) => text;
-
-/**
- * Inject the secret sanitizer applied to ring-buffer entries at write time.
- * Injected (rather than imported) because security/secret-sanitizer.ts
- * imports this module — a direct import would be a circular dependency.
- */
-export function setLogRingBufferSanitizer(fn: RingBufferSanitizer): void {
-  ringBufferSanitizer = fn;
-}
-
 class RingBufferTransport extends TransportStream {
   log(info: { timestamp?: string; level: string; message: string; service?: string; [key: string]: unknown }, callback: () => void): void {
     const { timestamp, level, message, service: _service, ...meta } = info;
     let truncatedMeta: Record<string, unknown> | undefined;
+    let metaJson: string | undefined;
     if (Object.keys(meta).length > 0) {
       try {
         const serialized = JSON.stringify(meta);
-        truncatedMeta = serialized.length > MAX_META_BYTES
-          ? { _truncated: true, preview: serialized.slice(0, 256) }
-          : (meta as Record<string, unknown>);
+        metaJson = serialized.length > MAX_META_BYTES
+          ? JSON.stringify({ _truncated: true, preview: serialized.slice(0, 256) })
+          : serialized;
       } catch {
         truncatedMeta = { _truncated: true };
       }
     }
     // Write-time secret sanitization, applied AFTER truncation so the regex
     // cost stays bounded by the MAX_MESSAGE_LENGTH/MAX_META_BYTES caps.
-    if (truncatedMeta !== undefined) {
+    if (metaJson !== undefined) {
       try {
-        truncatedMeta = JSON.parse(ringBufferSanitizer(JSON.stringify(truncatedMeta))) as Record<string, unknown>;
+        truncatedMeta = JSON.parse(sanitizeSecrets(metaJson)) as Record<string, unknown>;
       } catch {
         truncatedMeta = { _sanitizeFailed: true };
       }
@@ -62,7 +54,7 @@ class RingBufferTransport extends TransportStream {
     LOG_RING_BUFFER.push({
       timestamp: String(timestamp ?? new Date().toISOString()),
       level,
-      message: ringBufferSanitizer(String(message).slice(0, MAX_MESSAGE_LENGTH)),
+      message: sanitizeSecrets(String(message).slice(0, MAX_MESSAGE_LENGTH)),
       meta: truncatedMeta,
     });
     if (LOG_RING_BUFFER.length > MAX_LOG_ENTRIES) {

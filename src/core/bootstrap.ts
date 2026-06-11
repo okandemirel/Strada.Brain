@@ -12,12 +12,11 @@ import { join } from "node:path";
 import type { Config } from "../config/config.js";
 import { type DurationMs } from "../types/index.js";
 import { createLogger } from "../utils/logger.js";
-import * as loggerModule from "../utils/logger.js";
 import { AuthManager } from "../security/auth.js";
 import { configureAuthManager } from "../security/auth-hardened.js";
 import { Orchestrator } from "../agents/orchestrator.js";
 import { MetricsCollector } from "../dashboard/metrics.js";
-import { sanitizeSecrets, setSanitizationCallback } from "../security/secret-sanitizer.js";
+import { setSanitizationCallback } from "../security/secret-sanitizer.js";
 import { CachedEmbeddingProvider } from "../rag/embeddings/embedding-cache.js";
 import { RAGPipeline } from "../rag/rag-pipeline.js";
 import { FileVectorStore } from "../rag/vector-store.js";
@@ -363,10 +362,6 @@ export async function bootstrap(options: BootstrapOptions): Promise<BootstrapRes
   const container = customContainer ?? createContainer();
 
   const logger = createLogger(config.logLevel, config.logFile);
-  // Write-time defense-in-depth: sanitize ring-buffer log entries the moment
-  // they are stored, not only when /api/logs serves them. Namespace access +
-  // optional call so logger.js test mocks without this export never break.
-  loggerModule.setLogRingBufferSanitizer?.(sanitizeSecrets);
   logger.info("Bootstrapping Strada Brain", {
     channel: channelType,
     projectPath: config.unityProjectPath,

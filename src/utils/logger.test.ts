@@ -54,11 +54,8 @@ describe("logger", () => {
     expect(logger1).toBe(logger2);
   });
 
-  it("sanitizes secrets in ring-buffer entries at write time once the sanitizer is registered", async () => {
-    const { createLogger, getLogRingBuffer, setLogRingBufferSanitizer } = await import("./logger.js");
-    const { sanitizeSecrets } = await import("../security/secret-sanitizer.js");
-    // bootstrap.ts performs this registration at startup; mirror it here.
-    setLogRingBufferSanitizer(sanitizeSecrets);
+  it("sanitizes secrets in ring-buffer entries at write time", async () => {
+    const { createLogger, getLogRingBuffer } = await import("./logger.js");
     const logger = createLogger("info", "/tmp/test-strada.log");
     const secret = "abc123def456ghi789jkl012";
 
