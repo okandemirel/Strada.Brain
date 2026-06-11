@@ -106,11 +106,12 @@ export function resetVaultSearchRateLimiterForTests(maxRequests = VAULT_SEARCH_R
 function isUnsafePath(p: unknown): boolean {
   if (typeof p !== 'string' || p.length === 0) return true;
   if (p.length > 1024) return true;
-  // Block absolute, parent refs, null bytes, backslashes, URL-encoded dots.
+  // Block absolute, parent refs, null bytes (raw and URL-encoded), backslashes,
+  // URL-encoded dots.
   if (p.startsWith('/') || p.startsWith('\\')) return true;
   if (p.includes('..')) return true;
   if (p.includes('\x00')) return true;
-  if (/%2e%2e/i.test(p) || /%2f/i.test(p) || /%5c/i.test(p)) return true;
+  if (/%2e%2e/i.test(p) || /%2f/i.test(p) || /%5c/i.test(p) || /%00/i.test(p)) return true;
   return false;
 }
 

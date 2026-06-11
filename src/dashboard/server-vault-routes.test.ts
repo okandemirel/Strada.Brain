@@ -86,4 +86,24 @@ describe('handleVaultRoutes', () => {
     });
   });
 
+  describe('GET /api/vaults/:id/file path validation', () => {
+    it('rejects URL-encoded null bytes in the path with 400', async () => {
+      const res = makeRes();
+      // %2500 in the URL decodes to a literal "%00" in the query value.
+      const handled = handleVaultRoutes('/api/vaults/x/file?path=%2500evil.md', 'GET', makeReq(), asRes(res), ctx);
+      expect(handled).toBe(true);
+      await new Promise(setImmediate);
+      expect(res.writeHead).toHaveBeenCalledWith(400, { 'Content-Type': 'application/json' });
+      expect(stubVault.readFile).not.toHaveBeenCalled();
+    });
+
+    it('accepts a normal relative path and reaches the vault', async () => {
+      const res = makeRes();
+      const handled = handleVaultRoutes('/api/vaults/x/file?path=notes/readme.md', 'GET', makeReq(), asRes(res), ctx);
+      expect(handled).toBe(true);
+      await new Promise(setImmediate);
+      expect(stubVault.readFile).toHaveBeenCalledWith('notes/readme.md');
+      expect(res.writeHead).toHaveBeenCalledWith(200, { 'Content-Type': 'application/json' });
+    });
+  });
 });
