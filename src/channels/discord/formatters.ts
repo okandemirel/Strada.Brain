@@ -3,8 +3,32 @@
  * Handles text formatting, truncation, and markdown conversion for Discord.
  */
 
+import {
+  fenceCodeBlock,
+  formatChannelMention as sharedChannelMention,
+  formatUserMention as sharedUserMention,
+  prefixLines,
+  splitAtBoundaries,
+  truncateText,
+  type SplitOptions,
+} from "../../common/text-formatting.js";
+
 const DISCORD_MAX_MESSAGE_LENGTH = 2000;
 const DISCORD_MAX_EMBED_DESCRIPTION = 4096;
+
+/**
+ * Discord's boundary preferences for splitMessage (plan 013): strict ratio
+ * gates, sentence splits keep the "." in the current chunk, chunks trimmed.
+ */
+const DISCORD_SPLIT_OPTIONS: SplitOptions = {
+  paragraphRatio: 0.5,
+  newlineRatio: 0.7,
+  sentenceRatio: 0.8,
+  spaceRatio: 0.8,
+  trimChunks: true,
+  sentenceSplitOffset: 1,
+  keepEmptyInput: true,
+};
 
 /**
  * Convert common markdown formats to Discord-compatible markdown.
@@ -85,14 +109,10 @@ export function truncateForDiscord(
   maxLength: number = DISCORD_MAX_MESSAGE_LENGTH,
   addEllipsis: boolean = true
 ): string {
-  if (text.length <= maxLength) {
-    return text;
-  }
-
-  const ellipsis = addEllipsis ? "..." : "";
-  const truncateLength = maxLength - ellipsis.length;
-
-  return text.substring(0, truncateLength) + ellipsis;
+  return truncateText(text, maxLength, {
+    marker: addEllipsis ? "..." : "",
+    reserveMarkerSpace: true,
+  });
 }
 
 /**
@@ -113,52 +133,7 @@ export function splitMessage(
   text: string,
   maxLength: number = DISCORD_MAX_MESSAGE_LENGTH
 ): string[] {
-  if (text.length <= maxLength) {
-    return [text];
-  }
-
-  const chunks: string[] = [];
-  let remaining = text;
-
-  while (remaining.length > 0) {
-    if (remaining.length <= maxLength) {
-      chunks.push(remaining);
-      break;
-    }
-
-    // Try to find a good split point
-    let splitPoint = maxLength;
-
-    // First, try to split at a double newline (paragraph break)
-    const paragraphBreak = remaining.lastIndexOf("\n\n", maxLength);
-    if (paragraphBreak > maxLength * 0.5) {
-      splitPoint = paragraphBreak;
-    } else {
-      // Try to split at a single newline
-      const lineBreak = remaining.lastIndexOf("\n", maxLength);
-      if (lineBreak > maxLength * 0.7) {
-        splitPoint = lineBreak;
-      } else {
-        // Try to split at a sentence end
-        const sentenceEnd = remaining.lastIndexOf(". ", maxLength);
-        if (sentenceEnd > maxLength * 0.8) {
-          splitPoint = sentenceEnd + 1;
-        } else {
-          // Try to split at a space
-          const space = remaining.lastIndexOf(" ", maxLength);
-          if (space > maxLength * 0.8) {
-            splitPoint = space;
-          }
-          // Otherwise, hard split at maxLength
-        }
-      }
-    }
-
-    chunks.push(remaining.substring(0, splitPoint).trim());
-    remaining = remaining.substring(splitPoint).trim();
-  }
-
-  return chunks;
+  return splitAtBoundaries(text, maxLength, DISCORD_SPLIT_OPTIONS);
 }
 
 /**
@@ -169,9 +144,7 @@ export function formatCodeBlock(
   code: string,
   language?: string
 ): string {
-  const lang = language ?? "";
-  const trimmedCode = code.trim();
-  return "```" + lang + "\n" + trimmedCode + "\n```";
+  return fenceCodeBlock(code, language, { trimCode: true });
 }
 
 /**
@@ -196,7 +169,7 @@ export function formatSpoiler(text: string): string {
  * Create a Discord mention (requires the ID).
  */
 export function formatUserMention(userId: string): string {
-  return "<@" + userId + ">";
+  return sharedUserMention(userId);
 }
 
 export function formatRoleMention(roleId: string): string {
@@ -204,7 +177,7 @@ export function formatRoleMention(roleId: string): string {
 }
 
 export function formatChannelMention(channelId: string): string {
-  return "<#" + channelId + ">";
+  return sharedChannelMention(channelId);
 }
 
 /**
@@ -257,10 +230,7 @@ export function formatDiff(diff: string, filename?: string): string {
  * Format a quote for Discord blockquote.
  */
 export function formatQuote(text: string): string {
-  return text
-    .split("\n")
-    .map((line) => "> " + line)
-    .join("\n");
+  return prefixLines(text, "> ");
 }
 
 /**
