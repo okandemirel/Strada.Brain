@@ -7,6 +7,7 @@ import {
   type ModelIntelligenceLookup,
   type ProviderWorkload,
 } from "./provider-knowledge.js";
+import { rankProvidersForWorkload } from "./provider-behavioral-profiles.js";
 
 const mockModelIntelligence: ModelIntelligenceLookup = {
   getModelInfo(modelId: string) {
@@ -94,9 +95,11 @@ describe("getProviderIntelligenceSnapshot", () => {
   });
 
   it("derives workload scores from generic capabilities", () => {
+    // Uses an unknown provider so the feature-flag heuristics (the fallback
+    // path) are exercised; known providers now use behavioral baselines.
     const snapshot = getProviderIntelligenceSnapshot(
-      "kimi",
-      "kimi-for-coding",
+      "customprovider",
+      "custom-for-coding",
       undefined,
       {
         contextWindow: 262_000,
@@ -105,7 +108,7 @@ describe("getProviderIntelligenceSnapshot", () => {
         streaming: true,
         specialFeatures: ["coding", "reasoning"],
       },
-      "Kimi",
+      "Custom Provider",
     );
 
     expect(snapshot.workloadScores.implementation).toBeGreaterThan(snapshot.workloadScores.documentation);
@@ -164,25 +167,33 @@ describe("workload score characterization", () => {
       .workloadScores;
   }
 
-  // Captured by running the current code (blend: 0.4*featureFlag + 0.6*behavioral
-  // for known providers; documentation has no behavioral mapping so it stays
-  // pure feature-flag for everyone).
+  // INTENTIONAL DRIFT (plan 011, 2026-06-11): scores moved from
+  // 0.4*featureFlag + 0.6*behavioral to pure behavioral for known providers.
+  // Examples (before → after, from the pre-refactor characterization run):
+  //   claude/planning  0.8503 → 0.9365
+  //   gemini/planning  0.8119 → 0.8725
+  //   ollama/planning  0.5704 → 0.4700
+  // documentation has no behavioral mapping, so it stays pure feature-flag
+  // for every provider and is IDENTICAL before/after the refactor (0.7267
+  // for this fixed snapshot).
   const EXPECTED_KNOWN: Record<string, Record<ProviderWorkload, number>> = {
-    claude: { planning: 0.8503, implementation: 0.8153, review: 0.8660, analysis: 0.7786, debugging: 0.8241, documentation: 0.7267, coordination: 0.7580 },
-    openai: { planning: 0.7924, implementation: 0.8441, review: 0.8288, analysis: 0.7492, debugging: 0.8172, documentation: 0.7267, coordination: 0.7925 },
-    kimi: { planning: 0.6979, implementation: 0.6767, review: 0.7097, analysis: 0.7267, debugging: 0.6687, documentation: 0.7267, coordination: 0.7175 },
-    gemini: { planning: 0.8119, implementation: 0.7859, review: 0.8372, analysis: 0.7627, debugging: 0.7980, documentation: 0.7267, coordination: 0.7277 },
-    deepseek: { planning: 0.7459, implementation: 0.6647, review: 0.7427, analysis: 0.7417, debugging: 0.6942, documentation: 0.7267, coordination: 0.6380 },
-    qwen: { planning: 0.7564, implementation: 0.7547, review: 0.7862, analysis: 0.7702, debugging: 0.7527, documentation: 0.7267, coordination: 0.7775 },
-    minimax: { planning: 0.7444, implementation: 0.7517, review: 0.7622, analysis: 0.6922, debugging: 0.7692, documentation: 0.7267, coordination: 0.7445 },
-    mistral: { planning: 0.7264, implementation: 0.7787, review: 0.7652, analysis: 0.7453, debugging: 0.7497, documentation: 0.7267, coordination: 0.7403 },
-    groq: { planning: 0.6379, implementation: 0.6422, review: 0.6512, analysis: 0.6412, debugging: 0.5847, documentation: 0.7267, coordination: 0.6560 },
-    together: { planning: 0.6619, implementation: 0.7172, review: 0.6902, analysis: 0.6892, debugging: 0.6822, documentation: 0.7267, coordination: 0.7415 },
-    fireworks: { planning: 0.6319, implementation: 0.7490, review: 0.6602, analysis: 0.6652, debugging: 0.6672, documentation: 0.7267, coordination: 0.7460 },
-    ollama: { planning: 0.5704, implementation: 0.6212, review: 0.5912, analysis: 0.6052, debugging: 0.5712, documentation: 0.7267, coordination: 0.6305 },
+    claude: { planning: 0.9365, implementation: 0.8410, review: 0.9255, analysis: 0.8465, debugging: 0.8890, documentation: 0.7267, coordination: 0.7350 },
+    openai: { planning: 0.8400, implementation: 0.8890, review: 0.8635, analysis: 0.7975, debugging: 0.8775, documentation: 0.7267, coordination: 0.7925 },
+    kimi: { planning: 0.6825, implementation: 0.6100, review: 0.6650, analysis: 0.7600, debugging: 0.6300, documentation: 0.7267, coordination: 0.6675 },
+    gemini: { planning: 0.8725, implementation: 0.7920, review: 0.8775, analysis: 0.8200, debugging: 0.8455, documentation: 0.7267, coordination: 0.6845 },
+    deepseek: { planning: 0.7625, implementation: 0.5900, review: 0.7200, analysis: 0.7850, debugging: 0.6725, documentation: 0.7267, coordination: 0.5350 },
+    qwen: { planning: 0.7800, implementation: 0.7400, review: 0.7925, analysis: 0.8325, debugging: 0.7700, documentation: 0.7267, coordination: 0.7675 },
+    minimax: { planning: 0.7600, implementation: 0.7350, review: 0.7525, analysis: 0.7025, debugging: 0.7975, documentation: 0.7267, coordination: 0.7125 },
+    mistral: { planning: 0.7300, implementation: 0.7800, review: 0.7575, analysis: 0.7910, debugging: 0.7650, documentation: 0.7267, coordination: 0.7055 },
+    groq: { planning: 0.5825, implementation: 0.5525, review: 0.5675, analysis: 0.6175, debugging: 0.4900, documentation: 0.7267, coordination: 0.5650 },
+    together: { planning: 0.6225, implementation: 0.6775, review: 0.6325, analysis: 0.6975, debugging: 0.6525, documentation: 0.7267, coordination: 0.7075 },
+    fireworks: { planning: 0.5725, implementation: 0.7305, review: 0.5825, analysis: 0.6575, debugging: 0.6275, documentation: 0.7267, coordination: 0.7150 },
+    ollama: { planning: 0.4700, implementation: 0.5175, review: 0.4675, analysis: 0.5575, debugging: 0.4675, documentation: 0.7267, coordination: 0.5225 },
   };
 
   // Unknown provider: pure feature-flag scores (no behavioral profile exists).
+  // These values are IDENTICAL before/after the plan-011 refactor — the
+  // feature-flag fallback path is unchanged.
   const EXPECTED_UNKNOWN: Record<ProviderWorkload, number> = {
     planning: 0.7209,
     implementation: 0.7767,
@@ -217,6 +228,37 @@ describe("workload score characterization", () => {
         expect(scores[workload], `${provider}/${workload}`).toBeLessThanOrEqual(1);
       }
     }
+  });
+
+  describe("score precedence", () => {
+    it("uses the behavioral composite for known providers on mapped workloads", () => {
+      // Cross-system consistency: claude/planning must equal the
+      // rankProvidersForWorkload composite — the point of the unification.
+      const claudeComposite = rankProvidersForWorkload("planning")
+        .find((entry) => entry.providerId === "claude")?.compositeScore;
+      expect(claudeComposite).toBeDefined();
+      expect(Math.abs(scoresFor("claude").planning - claudeComposite!)).toBeLessThan(0.001);
+    });
+
+    it("keeps the feature-flag score for known providers on unmapped workloads", () => {
+      // documentation has no behavioral mapping; with the same fixed
+      // capability snapshot every known provider gets the same feature-flag
+      // value as an unknown provider.
+      const unknownDocumentation = scoresFor("someprovider").documentation;
+      for (const provider of Object.keys(EXPECTED_KNOWN)) {
+        expect(scoresFor(provider).documentation, `${provider}/documentation`).toBeCloseTo(unknownDocumentation, 6);
+      }
+    });
+
+    it("uses pure feature-flag scores for unknown providers", () => {
+      // Two distinct unknown providers with the same capability snapshot
+      // must produce identical scores — nothing provider-specific leaks in.
+      const first = scoresFor("someprovider");
+      const second = scoresFor("another-unknown-provider");
+      for (const workload of ALL_WORKLOADS) {
+        expect(second[workload], `another-unknown-provider/${workload}`).toBe(first[workload]);
+      }
+    });
   });
 });
 
