@@ -7,10 +7,12 @@ import type { MetricsAggregation } from "../metrics/metrics-types.js";
 import type { MetricsStorage } from "../metrics/metrics-storage.js";
 import { UserProfileStore } from "../memory/unified/user-profile-store.js";
 
+const loggerWarnSpy = vi.hoisted(() => vi.fn());
+
 vi.mock("../utils/logger.js", () => ({
   getLogger: () => ({
     info: vi.fn(),
-    warn: vi.fn(),
+    warn: loggerWarnSpy,
     error: vi.fn(),
     debug: vi.fn(),
   }),
@@ -260,6 +262,30 @@ describe("DashboardServer", () => {
       403,
       { "Content-Type": "application/json" },
     );
+  });
+
+  it("warns at startup when no dashboard token is configured", async () => {
+    loggerWarnSpy.mockClear();
+    const metrics = new MetricsCollector();
+    server = new DashboardServer(0, metrics, () => undefined);
+    if (!await safeStart(server)) return;
+
+    expect(loggerWarnSpy).toHaveBeenCalledWith(
+      expect.stringMatching(/WITHOUT an auth token/),
+    );
+  });
+
+  it("does not warn about a missing auth token when a dashboard token is configured", async () => {
+    loggerWarnSpy.mockClear();
+    const metrics = new MetricsCollector();
+    server = new DashboardServer(0, metrics, () => undefined);
+    server.setDaemonContext({ dashboardToken: "test-token" });
+    if (!await safeStart(server)) return;
+
+    const warned = loggerWarnSpy.mock.calls.some(
+      (call) => /WITHOUT an auth token/.test(String(call[0])),
+    );
+    expect(warned).toBe(false);
   });
 
   it("forwards vault update events from runtime-registered vaults to the WebSocket dashboard", () => {

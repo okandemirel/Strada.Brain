@@ -53,4 +53,29 @@ describe("logger", () => {
     const logger2 = createLogger("debug", "/tmp/test-strada-2.log");
     expect(logger1).toBe(logger2);
   });
+
+  it("sanitizes secrets in ring-buffer entries at write time once the sanitizer is registered", async () => {
+    const { createLogger, getLogRingBuffer, setLogRingBufferSanitizer } = await import("./logger.js");
+    const { sanitizeSecrets } = await import("../security/secret-sanitizer.js");
+    // bootstrap.ts performs this registration at startup; mirror it here.
+    setLogRingBufferSanitizer(sanitizeSecrets);
+    const logger = createLogger("info", "/tmp/test-strada.log");
+    const secret = "abc123def456ghi789jkl012";
+
+    logger.info(`auth header was Authorization: Bearer ${secret}`);
+    logger.info("meta-entry", { header: `Authorization: Bearer ${secret}` });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const entries = getLogRingBuffer();
+    const messageEntry = entries.find((e) => e.message.includes("auth header was"));
+    expect(messageEntry).toBeDefined();
+    expect(messageEntry!.message).toContain("[REDACTED]");
+    expect(messageEntry!.message).not.toContain(secret);
+
+    const metaEntry = entries.find((e) => e.message === "meta-entry");
+    expect(metaEntry).toBeDefined();
+    const serializedMeta = JSON.stringify(metaEntry!.meta);
+    expect(serializedMeta).toContain("[REDACTED]");
+    expect(serializedMeta).not.toContain(secret);
+  });
 });
