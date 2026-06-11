@@ -3,10 +3,41 @@
  */
 
 import type { KnownBlock } from "@slack/types";
+import {
+  fenceCodeBlock,
+  formatChannelMention as sharedChannelMention,
+  formatUserMention as sharedUserMention,
+  prefixLines,
+  splitAtBoundaries,
+  truncateText,
+  type SplitOptions,
+} from "../../common/text-formatting.js";
 
 const MAX_SLACK_MESSAGE_LENGTH = 40000;
 const MAX_BLOCK_TEXT_LENGTH = 3000;
 const TRUNCATION_MARKER = "\n\n...(truncated)";
+
+/**
+ * Slack's boundary preferences for chunkText (plan 013): all gates at 50%
+ * (inclusive), no space boundary, chunks left untrimmed.
+ */
+const SLACK_SPLIT_OPTIONS: SplitOptions = {
+  paragraphRatio: 0.5,
+  newlineRatio: 0.5,
+  sentenceRatio: 0.5,
+  trimChunks: false,
+  inclusiveRatioGate: true,
+};
+
+/**
+ * Slack's truncation boundaries (plan 013): paragraph/newline gated at 80%,
+ * a space accepted wherever found, then a hard cut.
+ */
+const SLACK_TRUNCATE_BOUNDARIES = [
+  { marker: "\n\n", minRatio: 0.8 },
+  { marker: "\n", minRatio: 0.8 },
+  { marker: " " },
+] as const;
 
 /**
  * Convert standard Markdown to Slack mrkdwn format.
@@ -69,23 +100,10 @@ export function truncateForSlack(
   text: string,
   maxLength = MAX_SLACK_MESSAGE_LENGTH - TRUNCATION_MARKER.length
 ): string {
-  if (text.length <= maxLength) {
-    return text;
-  }
-
-  // Try to truncate at a natural boundary
-  let truncateAt = text.lastIndexOf("\n\n", maxLength);
-  if (truncateAt === -1 || truncateAt < maxLength * 0.8) {
-    truncateAt = text.lastIndexOf("\n", maxLength);
-  }
-  if (truncateAt === -1 || truncateAt < maxLength * 0.8) {
-    truncateAt = text.lastIndexOf(" ", maxLength);
-  }
-  if (truncateAt === -1) {
-    truncateAt = maxLength;
-  }
-
-  return text.substring(0, truncateAt) + TRUNCATION_MARKER;
+  return truncateText(text, maxLength, {
+    marker: TRUNCATION_MARKER,
+    boundaries: SLACK_TRUNCATE_BOUNDARIES,
+  });
 }
 
 /**
@@ -122,14 +140,7 @@ export function formatFilePath(path: string, maxLength = 100): string {
  * Format code for Slack with optional language.
  */
 export function formatCodeBlock(code: string, language?: string): string {
-  const escaped = code
-    .replace(/```/g, "\`\`\`");
-  
-  return `
-\`\`\`${language || ""}
-${escaped}
-\`\`\`
-`;
+  return fenceCodeBlock(code, language, { surroundingNewlines: true });
 }
 
 /**
@@ -229,32 +240,7 @@ export function splitIntoBlocks(text: string): KnownBlock[] {
  * Chunk text into smaller pieces.
  */
 function chunkText(text: string, maxChunkSize: number): string[] {
-  const chunks: string[] = [];
-  let remaining = text;
-
-  while (remaining.length > 0) {
-    if (remaining.length <= maxChunkSize) {
-      chunks.push(remaining);
-      break;
-    }
-
-    // Find a good break point
-    let breakPoint = remaining.lastIndexOf("\n\n", maxChunkSize);
-    if (breakPoint === -1 || breakPoint < maxChunkSize * 0.5) {
-      breakPoint = remaining.lastIndexOf("\n", maxChunkSize);
-    }
-    if (breakPoint === -1 || breakPoint < maxChunkSize * 0.5) {
-      breakPoint = remaining.lastIndexOf(". ", maxChunkSize);
-    }
-    if (breakPoint === -1 || breakPoint < maxChunkSize * 0.5) {
-      breakPoint = maxChunkSize;
-    }
-
-    chunks.push(remaining.substring(0, breakPoint));
-    remaining = remaining.substring(breakPoint).trim();
-  }
-
-  return chunks;
+  return splitAtBoundaries(text, maxChunkSize, SLACK_SPLIT_OPTIONS);
 }
 
 /**
@@ -273,14 +259,14 @@ export function formatList(items: string[], ordered = false): string {
  * Format user mentions.
  */
 export function formatUserMention(userId: string): string {
-  return `<@${userId}>`;
+  return sharedUserMention(userId);
 }
 
 /**
  * Format channel mentions.
  */
 export function formatChannelMention(channelId: string): string {
-  return `<#${channelId}>`;
+  return sharedChannelMention(channelId);
 }
 
 /**
@@ -297,10 +283,7 @@ export function formatLink(url: string, text?: string): string {
  * Format a quote block.
  */
 export function formatQuote(text: string): string {
-  return text
-    .split("\n")
-    .map((line) => `>${escapeSlackText(line)}`)
-    .join("\n");
+  return prefixLines(text, ">", escapeSlackText);
 }
 
 /**
