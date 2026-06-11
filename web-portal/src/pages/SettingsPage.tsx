@@ -5,6 +5,7 @@ const BudgetSection = lazy(() => import('./settings/BudgetSection'))
 const ProvidersSection = lazy(() => import('./settings/ProvidersSection'))
 const AgentsSection = lazy(() => import('./settings/AgentsSection'))
 const DaemonSection = lazy(() => import('./settings/DaemonSection'))
+const McpSection = lazy(() => import('./settings/McpSection'))
 const VoiceSection = lazy(() => import('./settings/VoiceSection'))
 const PersonaSection = lazy(() => import('./settings/PersonaSection'))
 const LearningSection = lazy(() => import('./settings/LearningSection'))
@@ -23,6 +24,7 @@ const SIDEBAR_ITEMS: SidebarItem[] = [
   { id: 'providers', labelKey: 'hub.tabs.providers', icon: '🔄' },
   { id: 'agents', labelKey: 'hub.tabs.agents', icon: '🤖' },
   { id: 'daemon', labelKey: 'hub.tabs.daemon', icon: '⚡' },
+  { id: 'mcp', labelKey: 'hub.tabs.mcp', icon: '🔌' },
   { id: 'voice', labelKey: 'hub.tabs.voice', icon: '🎤' },
   { id: 'persona', labelKey: 'hub.tabs.persona', icon: '🎭' },
   { id: 'learning', labelKey: 'hub.tabs.learning', icon: '🧠' },
@@ -46,6 +48,7 @@ export default function SettingsPage() {
       case 'providers': return <ProvidersSection />
       case 'agents': return <AgentsSection />
       case 'daemon': return <DaemonSection />
+      case 'mcp': return <McpSection />
       case 'voice': return <VoiceSection />
       case 'persona': return <PersonaSection />
       case 'learning': return <LearningSection />
