@@ -126,10 +126,16 @@ export function handleSettingsRoutes(
       const enabled = storage.getSettingsOverride("voice_enabled", chatId);
       const language = storage.getSettingsOverride("voice_language", chatId);
       const speed = storage.getSettingsOverride("voice_speed", chatId);
+      const inputEnabled = storage.getSettingsOverride("voice_input_enabled", chatId);
+      const outputEnabled = storage.getSettingsOverride("voice_output_enabled", chatId);
+      const browserSttEnabled = storage.getSettingsOverride("voice_browser_stt_enabled", chatId);
       sendJson(res, {
         enabled: enabled !== undefined ? enabled === "true" : null,
         language: language ?? null,
         speed: speed !== undefined ? parseFloat(speed) : null,
+        inputEnabled: inputEnabled !== undefined ? inputEnabled === "true" : null,
+        outputEnabled: outputEnabled !== undefined ? outputEnabled === "true" : null,
+        browserSttEnabled: browserSttEnabled !== undefined ? browserSttEnabled === "true" : null,
         chatId,
       });
       return true;
@@ -148,6 +154,15 @@ export function handleSettingsRoutes(
           }
           if (parsed.speed !== undefined) {
             storage.setSettingsOverride("voice_speed", String(parsed.speed), chatId);
+          }
+          if (typeof parsed.inputEnabled === "boolean") {
+            storage.setSettingsOverride("voice_input_enabled", String(parsed.inputEnabled), chatId);
+          }
+          if (typeof parsed.outputEnabled === "boolean") {
+            storage.setSettingsOverride("voice_output_enabled", String(parsed.outputEnabled), chatId);
+          }
+          if (typeof parsed.browserSttEnabled === "boolean") {
+            storage.setSettingsOverride("voice_browser_stt_enabled", String(parsed.browserSttEnabled), chatId);
           }
           sendJson(res, { success: true });
         } catch (err) {
