@@ -712,6 +712,12 @@ export class DashboardServer {
       this.server!.listen(this.port, "127.0.0.1", () => {
         this.server!.removeListener("error", reject);
         logger.info(`Dashboard running at http://localhost:${this.port}`);
+        if (!this.dashboardToken) {
+          logger.warn(
+            "Dashboard started WITHOUT an auth token: mutable /api/* routes are protected only by same-origin checks. " +
+            "Set WEBSOCKET_DASHBOARD_AUTH_TOKEN to require bearer authentication.",
+          );
+        }
         resolve();
       });
     });
