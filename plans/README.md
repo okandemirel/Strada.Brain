@@ -13,14 +13,14 @@ your row when done.
 | 002  | Create the missing `.env.example` referenced by CONTRIBUTING.md | P1 | S | — | DONE (2026-06-11, merged to improve/audit-fixes) |
 | 003  | Remove synchronous disk reads from tool-result workspace telemetry | P1 | M | — | DONE (2026-06-11, merged to improve/audit-fixes) |
 | 004  | Dashboard defense-in-depth bundle (LLM-prompt log sanitization, vault search rate limit, no-token warning, %00 path check) | P1 | M | — | DONE (2026-06-11, rev.2 merged to improve/audit-fixes) |
-| 005  | Add a fast `verify` script (typecheck + lint + test:fast) | P1 | S | — (run last of 001–005 if serial) | TODO |
+| 005  | Add a fast `verify` script (typecheck + lint + test:fast) | P1 | S | — (run last of 001–005 if serial) | DONE (2026-06-11, verify=12.8s, test:fast=3.5s/805 tests) |
 | 006  | Vault characterization tests (path-policy, hash, discovery, obsidian/unity vaults, registry) | P1 | L | — | DONE (2026-06-11, merged to improve/audit-fixes) |
 | 007  | Dashboard route tests (vault/provider/settings routes) | P2 | M | — | DONE (2026-06-11, merged to improve/audit-fixes) |
-| 008  | Surface vault async-init failures via stats (both POST /api/vaults paths) | P2 | S | 007 (soft — extends its test file if present) | TODO |
+| 008  | Surface vault async-init failures via stats (both POST /api/vaults paths) | P2 | S | 007 (soft — extends its test file if present) | DONE (2026-06-11, reviewer-verified post-crash; full suite green) |
 | 009  | Remove the CompactableMessage double-cast (compaction summary as session field) | P2 | M | — | DONE (2026-06-11, merged to improve/audit-fixes) |
 | 010  | Remove committed root working files (action-items*, analysis-report*, unified-action-items) | P3 | S | — | DONE (2026-06-11, merged to improve/audit-fixes) |
 | 011  | Unify workload scoring (behavioral profiles authoritative; feature-flag formulas as fallback) | P2 | M | — | DONE (2026-06-11, merged to improve/audit-fixes) |
-| 012  | Dependency refresh (Anthropic SDK, tree-sitter set, better-sqlite3, playwright, discord.js patch, vitest, portal TS align) | P2 | M | 001 (lockfile ordering) | TODO |
+| 012  | Dependency refresh (Anthropic SDK, tree-sitter set, better-sqlite3, playwright, discord.js patch, vitest, portal TS align) | P2 | M | 001 (lockfile ordering) | DONE (2026-06-11, 7 gated bumps; discord.js v15 + zod v4 + TS>6.0.x remain deliberate holdbacks) |
 | 013  | Extract shared channel text-formatting core (characterization tests first) | P3 | M | — | DONE (2026-06-11, merged to improve/audit-fixes) |
 | 015  | Fix voice settings persistence (field-name contract mismatch + GET hydration) | P2 | M | — | DONE (2026-06-11, merged to improve/audit-fixes) |
 | 016  | MCP bridge status endpoint + portal section (with reconnect action) | P3 | M | — | DONE (2026-06-11, merged to improve/audit-fixes) |
