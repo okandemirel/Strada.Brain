@@ -61,6 +61,13 @@ export interface Session {
    * field existed — those default to 0 on restore.
    */
   reflectionOverrideCount?: number;
+  /**
+   * Rolling summary produced by session compaction (see session-compaction.ts).
+   * Appended to the system prompt at provider call time instead of being stored
+   * as a system-role message in `messages` (ConversationMessage has no system role).
+   * Optional for backward compatibility with legacy session files.
+   */
+  compactionSummary?: string;
 }
 
 /**
@@ -129,6 +136,7 @@ export class SessionManager {
       profileKey: session.profileKey,
       lastJournalSnapshot: session.lastJournalSnapshot,
       reflectionOverrideCount: session.reflectionOverrideCount,
+      compactionSummary: session.compactionSummary,
     });
   }
 
@@ -159,6 +167,14 @@ export class SessionManager {
         rawOverrideCount >= 0
           ? rawOverrideCount
           : 0;
+      // Migration: legacy session files (pre-compactionSummary) restore as undefined.
+      const rawCompactionSummary = (data as Record<string, unknown>).compactionSummary;
+      const compactionSummary =
+        typeof rawCompactionSummary === "string" &&
+        rawCompactionSummary.length > 0 &&
+        rawCompactionSummary.length <= 50_000
+          ? rawCompactionSummary
+          : undefined;
       return {
         messages,
         visibleMessages: [],
@@ -167,6 +183,7 @@ export class SessionManager {
         profileKey: data.profileKey,
         lastJournalSnapshot: data.lastJournalSnapshot,
         reflectionOverrideCount,
+        compactionSummary,
       };
     } catch {
       return null;

@@ -83,7 +83,6 @@ import {
   COMPACTION_TRIGGER_RATIO,
   COMPACTION_TARGET_RATIO,
   DEFAULT_CONTEXT_WINDOW,
-  type CompactableMessage,
 } from "./session-compaction.js";
 import {
   COMPLETION_REVIEW_SYNTHESIS_SYSTEM_PROMPT,
@@ -3075,7 +3074,7 @@ export class Orchestrator {
                 response = canBgStream
                   ? await this.silentStream(chatId, activePrompt, session, resilientProvider, currentToolDefinitions, signal)
                   : await resilientProvider.chat(
-                      activePrompt,
+                      this.withCompactionSummary(activePrompt, session),
                       session.messages,
                       currentToolDefinitions,
                       { signal },
@@ -4359,7 +4358,7 @@ export class Orchestrator {
             );
           } else {
             response = await resilientProvider.chat(
-              activePrompt,
+              this.withCompactionSummary(activePrompt, session),
               session.messages,
               currentToolDefinitions,
             ); // Interactive path — no abort signal (user is actively connected)
@@ -5183,18 +5182,20 @@ export class Orchestrator {
     const ctxWindow =
       this.providerManager.getProviderCapabilities?.(providerName, modelId)?.contextWindow
       ?? DEFAULT_CONTEXT_WINDOW;
-    // Cast: session.messages may contain system-role messages at runtime;
-    // CompactableMessage is a superset of ConversationMessage that includes "system".
-    const msgs = session.messages as unknown as CompactableMessage[];
-    const tokenEstimate = estimateTokens(msgs, systemPrompt?.length ?? 0);
+    const tokenEstimate = estimateTokens(
+      session.messages,
+      (systemPrompt?.length ?? 0) + (session.compactionSummary?.length ?? 0),
+    );
     if (tokenEstimate <= ctxWindow * COMPACTION_TRIGGER_RATIO) return;
-    const result = compactSession(msgs, {
+    const result = compactSession(session.messages, {
       maxTokens: Math.floor(ctxWindow * COMPACTION_TARGET_RATIO),
       preserveRecent: 4,
       maxGroups: 20,
+      previousSummary: session.compactionSummary,
     });
     if (result.compacted) {
-      session.messages = result.messages as unknown as ConversationMessage[];
+      session.messages = result.messages;
+      if (result.summary) session.compactionSummary = result.summary;
       getLogger().info("Session compacted", {
         stage: result.stageApplied,
         originalTokens: result.originalTokens,
@@ -5202,6 +5203,13 @@ export class Orchestrator {
         systemPromptEstimate: systemPrompt ? Math.ceil(systemPrompt.length / 4) : 0,
       });
     }
+  }
+
+  /** System prompt with the rolling compaction summary appended (if any). */
+  private withCompactionSummary(systemPrompt: string, session: Session): string {
+    return session.compactionSummary
+      ? `${systemPrompt}\n\n## Prior conversation summary (compacted)\n${session.compactionSummary}`
+      : systemPrompt;
   }
 
   /**
@@ -5227,6 +5235,7 @@ export class Orchestrator {
     const thinkingStall = provider.capabilities.thinkingSupported
       ? this.streamInitialTimeoutMs
       : undefined;
+    const effectivePrompt = this.withCompactionSummary(systemPrompt, session);
     const timeoutGuard = createStreamingProgressTimeout(
       this.streamInitialTimeoutMs,
       this.streamStallTimeoutMs,
@@ -5239,7 +5248,7 @@ export class Orchestrator {
       : timeoutGuard.signal;
     try {
       const streamPromise = (provider as IStreamingProvider).chatStream(
-        systemPrompt,
+        effectivePrompt,
         session.messages,
         toolDefinitions,
         () => {
@@ -5266,7 +5275,7 @@ export class Orchestrator {
         const fallbackSignal = externalSignal
           ? AbortSignal.any([externalSignal, timeoutSignal])
           : timeoutSignal;
-        const fallbackResponse = await provider.chat(systemPrompt, session.messages, toolDefinitions, {
+        const fallbackResponse = await provider.chat(effectivePrompt, session.messages, toolDefinitions, {
           signal: fallbackSignal,
         });
         ProviderHealthRegistry.getInstance().recordSuccess(provider.name);
@@ -5364,7 +5373,7 @@ export class Orchestrator {
     );
     try {
       const streamPromise = (provider as IStreamingProvider).chatStream(
-        systemPrompt,
+        this.withCompactionSummary(systemPrompt, session),
         session.messages,
         toolDefinitions,
         (chunk) => {

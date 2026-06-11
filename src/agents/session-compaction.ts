@@ -7,10 +7,11 @@
  *   4. Hard Truncation — emergency newest-first budget fill
  *
  * Note: The project's ConversationMessage type (UserMessage | AssistantMessage)
- * does not include a "system" role. This module uses a broader CompactableMessage
- * type internally to support injecting summary messages. The orchestrator's
- * session.messages array can contain system-role messages at runtime even though
- * the nominal type doesn't express it — hence the type cast in maybeCompactSession.
+ * does not include a "system" role. The pipeline internally represents summary
+ * text as SystemSummaryMessage entries, but they never leak out: compactSession
+ * partitions them off and returns them as CompactionResult.summary, which the
+ * orchestrator stores in Session.compactionSummary and appends to the system
+ * prompt at provider call time.
  */
 
 // =============================================================================
@@ -26,6 +27,8 @@ export const DEFAULT_CONTEXT_WINDOW = 128_000;
 /** Max chars for the extractive summary in stage 2 (~800 tokens). */
 const SUMMARY_MAX_CHARS = 3200;
 
+import type { ConversationMessage } from "./providers/provider-core.interface.js";
+
 // =============================================================================
 // TYPES — broader than provider-core's ConversationMessage to support summaries
 // =============================================================================
@@ -36,15 +39,14 @@ export type ContentBlock =
   | { readonly type: "tool_use"; readonly id: string; readonly name: string; readonly input: unknown }
   | { readonly type: "tool_result"; readonly tool_use_id: string; readonly content: string | readonly ContentBlock[]; readonly is_error?: boolean };
 
-/**
- * Superset of the project's ConversationMessage that also allows "system" role
- * for compaction-generated summary messages.
- */
-export interface CompactableMessage {
-  readonly role: "user" | "assistant" | "system";
-  readonly content: string | readonly ContentBlock[];
-  readonly [key: string]: unknown;
+/** Internal summary message used by the compaction pipeline. */
+export interface SystemSummaryMessage {
+  readonly role: "system";
+  readonly content: string;
 }
+
+/** Union the pipeline operates on internally. ConversationMessage[] is directly assignable. */
+export type CompactableMessage = ConversationMessage | SystemSummaryMessage;
 
 export type MessageGroupKind = "system" | "user" | "assistant_text" | "tool_call";
 
@@ -60,10 +62,15 @@ export interface CompactionOptions {
   readonly preserveRecent?: number;
   /** Maximum groups for sliding window stage. Default: 20. */
   readonly maxGroups?: number;
+  /** Summary produced by a previous compaction; counted and merged into the new summary. */
+  readonly previousSummary?: string;
 }
 
 export interface CompactionResult {
-  readonly messages: CompactableMessage[];
+  /** Compacted conversation — guaranteed free of system-role entries. */
+  readonly messages: ConversationMessage[];
+  /** Merged summary text, if any system/summary content was produced. */
+  readonly summary?: string;
   readonly compacted: boolean;
   readonly stageApplied: string | null;
   readonly originalTokens: number;
@@ -172,7 +179,10 @@ function compactToolGroup(messages: readonly CompactableMessage[]): CompactableM
       if (block.type === "tool_use") return { type: "tool_use", id: block.id, name: block.name, input: "[compacted]" as unknown };
       return block;
     });
-    return { ...msg, content: blocks };
+    // Same-altitude cast as the content reads above: the runtime arrays carry
+    // tool blocks that the nominal UserMessage/AssistantMessage content types
+    // do not express.
+    return { ...msg, content: blocks } as CompactableMessage;
   });
 }
 
@@ -273,25 +283,55 @@ function flattenGroups(groups: readonly MessageGroup[]): CompactableMessage[] {
 }
 
 /**
+ * Splits a flat pipeline result into the system-free conversation and the
+ * merged summary text extracted from system-role entries (front-positioned
+ * by stages 2-4, so ordering is preserved by extraction).
+ */
+function partitionSummary(flat: readonly CompactableMessage[]): {
+  messages: ConversationMessage[];
+  summary: string | undefined;
+} {
+  const messages = flat.filter((m): m is ConversationMessage => m.role !== "system");
+  const summaries = flat
+    .filter((m): m is SystemSummaryMessage => m.role === "system")
+    .map((m) => m.content);
+  return { messages, summary: summaries.length > 0 ? summaries.join("\n\n") : undefined };
+}
+
+/**
  * Runs the 4-stage compaction pipeline on a conversation, stopping as soon
- * as total tokens are within the given budget.
+ * as total tokens are within the given budget. The summary produced by a
+ * previous compaction (options.previousSummary) is counted toward the budget
+ * and merged into the newly returned summary.
  */
 export function compactSession(
-  messages: readonly CompactableMessage[],
+  messages: readonly ConversationMessage[],
   options: CompactionOptions,
 ): CompactionResult {
   const { maxTokens, preserveRecent = 4, maxGroups = 20 } = options;
-  const originalTokens = estimateTokens(messages);
+  const working: CompactableMessage[] = options.previousSummary
+    ? [{ role: "system", content: options.previousSummary }, ...messages]
+    : [...messages];
+  const originalTokens = estimateTokens(working);
 
   if (originalTokens <= maxTokens) {
-    return { messages: [...messages], compacted: false, stageApplied: null, originalTokens, finalTokens: originalTokens };
+    return {
+      messages: [...messages],
+      summary: options.previousSummary,
+      compacted: false,
+      stageApplied: null,
+      originalTokens,
+      finalTokens: originalTokens,
+    };
   }
 
-  let groups = groupMessages(messages);
+  let groups = groupMessages(working);
   const check = (stage: string): CompactionResult | null => {
     const flat = flattenGroups(groups);
     const tokens = estimateTokens(flat);
-    return tokens <= maxTokens ? { messages: flat, compacted: true, stageApplied: stage, originalTokens, finalTokens: tokens } : null;
+    if (tokens > maxTokens) return null;
+    const { messages: rest, summary } = partitionSummary(flat);
+    return { messages: rest, summary, compacted: true, stageApplied: stage, originalTokens, finalTokens: tokens };
   };
 
   groups = stage1ToolResultCompaction(groups);
@@ -308,5 +348,6 @@ export function compactSession(
 
   const flat = stage4HardTruncation(flattenGroups(groups), maxTokens);
   const finalTokens = estimateTokens(flat);
-  return { messages: flat, compacted: true, stageApplied: "hard_truncation", originalTokens, finalTokens };
+  const { messages: rest, summary } = partitionSummary(flat);
+  return { messages: rest, summary, compacted: true, stageApplied: "hard_truncation", originalTokens, finalTokens };
 }

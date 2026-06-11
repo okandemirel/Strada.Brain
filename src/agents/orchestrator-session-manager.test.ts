@@ -291,6 +291,42 @@ describe("SessionManager", () => {
       expect(restored!.reflectionOverrideCount).toBe(0);
     });
 
+    it("round-trips compactionSummary through serialize/deserialize", () => {
+      const session: Session = {
+        messages: [{ role: "user", content: "hi" }],
+        lastActivity: new Date(Date.now() - 60_000),
+        visibleMessages: [],
+        compactionSummary: "[Compacted conversation summary — 12 messages removed]",
+      };
+      const json = SessionManager.serializeSession(session);
+      const restored = SessionManager.deserializeSession(json);
+      expect(restored).not.toBeNull();
+      expect(restored!.compactionSummary).toBe(
+        "[Compacted conversation summary — 12 messages removed]",
+      );
+    });
+
+    it("leaves compactionSummary undefined for legacy sessions missing the field", () => {
+      const legacyJson = JSON.stringify({
+        messages: [{ role: "user", content: "legacy" }],
+        lastActivity: new Date().toISOString(),
+      });
+      const restored = SessionManager.deserializeSession(legacyJson);
+      expect(restored).not.toBeNull();
+      expect(restored!.compactionSummary).toBeUndefined();
+    });
+
+    it("rejects a non-string compactionSummary", () => {
+      const malformedJson = JSON.stringify({
+        messages: [{ role: "user", content: "hi" }],
+        lastActivity: new Date().toISOString(),
+        compactionSummary: 42,
+      });
+      const restored = SessionManager.deserializeSession(malformedJson);
+      expect(restored).not.toBeNull();
+      expect(restored!.compactionSummary).toBeUndefined();
+    });
+
     it("filters out messages with invalid roles", () => {
       const json = JSON.stringify({
         messages: [
