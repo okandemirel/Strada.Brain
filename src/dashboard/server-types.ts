@@ -139,6 +139,10 @@ export interface DashboardToolRegistry {
     dependencies?: string[];
     parameters?: unknown;
   }>;
+  /** Sanitized at the route layer before being sent to clients (strip sourcePath etc.). */
+  getStradaMcpRuntimeStatus?(): import("../core/strada-mcp-tool-loader.js").StradaMcpRuntimeStatus | null;
+  /** On-demand Unity bridge reconnect; resolves to the resulting connected state. */
+  tryStradaMcpReconnect?(): Promise<boolean>;
 }
 
 /** Structural interface for orchestrator sessions used by dashboard /api/sessions endpoint */
