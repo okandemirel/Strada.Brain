@@ -202,3 +202,145 @@ describe("handleSettingsRoutes — /api/settings/voice", () => {
     expect(res.statusCode).toBe(503);
   });
 });
+
+// =============================================================================
+// FAKE BUDGET MANAGER — for /api/budget* routes
+// =============================================================================
+
+interface FakeBudgetManager {
+  getSnapshot: ReturnType<typeof vi.fn>;
+  getConfig: ReturnType<typeof vi.fn>;
+  getDailyHistory: ReturnType<typeof vi.fn>;
+  updateConfig: ReturnType<typeof vi.fn>;
+}
+
+function createFakeBudgetManager(): FakeBudgetManager {
+  return {
+    getSnapshot: vi.fn(() => ({ spentUsd: 1.5, remainingUsd: 8.5 })),
+    getConfig: vi.fn(() => ({ dailyLimitUsd: 10 })),
+    getDailyHistory: vi.fn(() => []),
+    updateConfig: vi.fn(),
+  };
+}
+
+function budgetCtx(manager?: FakeBudgetManager, body?: unknown): RouteContext {
+  return {
+    unifiedBudgetManager: manager,
+    readJsonBody: vi.fn().mockResolvedValue(body ?? null),
+  } as unknown as RouteContext;
+}
+
+function parseBody(res: MockRes & ServerResponse): Record<string, unknown> {
+  return JSON.parse((res as MockRes).body) as Record<string, unknown>;
+}
+
+// =============================================================================
+// TESTS — fall-through + budget + rate-limits
+// =============================================================================
+
+describe("handleSettingsRoutes — fall-through", () => {
+  it("returns false for an unmatched URL", () => {
+    const res = createMockRes();
+    const handled = handleSettingsRoutes("/api/unknown", "GET", createMockReq(), res, budgetCtx());
+    expect(handled).toBe(false);
+    expect(res.end).not.toHaveBeenCalled();
+  });
+});
+
+describe("handleSettingsRoutes — GET /api/budget", () => {
+  it("returns 503 without a budget manager", () => {
+    const res = createMockRes();
+    const handled = handleSettingsRoutes("/api/budget", "GET", createMockReq(), res, budgetCtx());
+    expect(handled).toBe(true);
+    expect(res.statusCode).toBe(503);
+    expect(parseBody(res)).toEqual({ error: "Budget manager not available" });
+  });
+
+  it("merges the snapshot with the config", () => {
+    const res = createMockRes();
+    handleSettingsRoutes("/api/budget", "GET", createMockReq(), res, budgetCtx(createFakeBudgetManager()));
+    expect(res.statusCode).toBe(200);
+    expect(parseBody(res)).toEqual({ spentUsd: 1.5, remainingUsd: 8.5, config: { dailyLimitUsd: 10 } });
+  });
+
+  it("maps a snapshot failure to 500", () => {
+    const manager = createFakeBudgetManager();
+    manager.getSnapshot.mockImplementation(() => { throw new Error("snapshot boom"); });
+    const res = createMockRes();
+    handleSettingsRoutes("/api/budget", "GET", createMockReq(), res, budgetCtx(manager));
+    expect(res.statusCode).toBe(500);
+    expect(parseBody(res)).toEqual({ error: "snapshot boom" });
+  });
+});
+
+describe("handleSettingsRoutes — GET /api/budget/history", () => {
+  it.each([
+    ["clamps ?days=99 to 30", "/api/budget/history?days=99", 30],
+    ["clamps ?days=0 to 1", "/api/budget/history?days=0", 1],
+    ["defaults a missing param to 7", "/api/budget/history", 7],
+  ])("%s", (_label, url, expectedDays) => {
+    const manager = createFakeBudgetManager();
+    const res = createMockRes();
+    const handled = handleSettingsRoutes(url, "GET", createMockReq(), res, budgetCtx(manager));
+    expect(handled).toBe(true);
+    expect(res.statusCode).toBe(200);
+    expect(manager.getDailyHistory).toHaveBeenCalledWith(expectedDays);
+    expect(parseBody(res)).toEqual({ entries: [] });
+  });
+});
+
+describe("handleSettingsRoutes — POST /api/budget/config", () => {
+  it("updates the config and echoes the stored config", async () => {
+    const manager = createFakeBudgetManager();
+    const res = createMockRes();
+    handleSettingsRoutes(
+      "/api/budget/config", "POST", createMockReq(), res, budgetCtx(manager, { dailyLimitUsd: 25 }),
+    );
+    await flushAsync();
+    expect(manager.updateConfig).toHaveBeenCalledWith({ dailyLimitUsd: 25 });
+    expect(res.statusCode).toBe(200);
+    expect(parseBody(res)).toEqual({ success: true, config: { dailyLimitUsd: 10 } });
+  });
+
+  it("maps an updateConfig failure to 400", async () => {
+    const manager = createFakeBudgetManager();
+    manager.updateConfig.mockImplementation(() => { throw new Error("invalid config"); });
+    const res = createMockRes();
+    handleSettingsRoutes("/api/budget/config", "POST", createMockReq(), res, budgetCtx(manager, {}));
+    await flushAsync();
+    expect(res.statusCode).toBe(400);
+    expect(parseBody(res)).toEqual({ error: "invalid config" });
+  });
+});
+
+describe("handleSettingsRoutes — /api/settings/rate-limits", () => {
+  it("GET returns 503 without storage", () => {
+    const res = createMockRes();
+    const handled = handleSettingsRoutes("/api/settings/rate-limits", "GET", createMockReq(), res, budgetCtx());
+    expect(handled).toBe(true);
+    expect(res.statusCode).toBe(503);
+    expect(parseBody(res)).toEqual({ error: "Storage not available" });
+  });
+
+  it("GET returns numeric zero defaults when no overrides exist", () => {
+    const res = createMockRes();
+    handleSettingsRoutes(
+      "/api/settings/rate-limits", "GET", createMockReq(), res, createCtx(createMockStorage()),
+    );
+    expect(res.statusCode).toBe(200);
+    expect(parseBody(res)).toEqual({ messagesPerMinute: 0, messagesPerHour: 0, tokensPerDay: 0 });
+  });
+
+  it("POST persists only the provided keys", async () => {
+    const storage = createMockStorage();
+    const res = createMockRes();
+    handleSettingsRoutes(
+      "/api/settings/rate-limits", "POST", createMockReq(), res,
+      createCtx(storage, { messagesPerMinute: 5 }),
+    );
+    await flushAsync();
+    expect(parseBody(res)).toEqual({ success: true });
+    expect(storage.store.get("rate_limit_messages_per_minute::global")).toBe("5");
+    expect(storage.store.size).toBe(1);
+  });
+});
