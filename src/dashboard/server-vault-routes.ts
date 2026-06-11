@@ -7,6 +7,7 @@ import { getVaultFileReadStats } from '../agents/tools/file-read.js';
 import { getLoggerSafe } from '../utils/logger.js';
 import type { IAIProvider } from '../agents/providers/provider.interface.js';
 import { sendJson, sendJsonError, type RouteContext } from './server-types.js';
+import { WebhookRateLimiter } from '../daemon/triggers/webhook-trigger.js';
 import { summarizeSymbol } from '../vault/symbol-summarizer.js';
 import { resolveExistingVaultRoot } from '../vault/path-policy.js';
 import { VaultQueryError } from '../vault/obsidian-vault.js';
@@ -85,6 +86,20 @@ export interface RouteApp {
 const MAX_QUERY_TEXT_CHARS = 4096;
 const MAX_TOP_K = 100;
 const DEFAULT_TOP_K = 20;
+
+/** Vault search is embedding-backed and comparatively expensive; cap bursts per source IP. */
+const VAULT_SEARCH_RATE_LIMIT_MAX = 30;
+const VAULT_SEARCH_RATE_LIMIT_WINDOW_MS = 10_000;
+// Note: the dashboard binds to 127.0.0.1 (server.ts), so per-IP keying mostly
+// yields one loopback key — effectively a global throttle for local deployments,
+// which is the intended protection (runaway client / CSRF flood), not
+// multi-tenant fairness.
+let vaultSearchRateLimiter = new WebhookRateLimiter(VAULT_SEARCH_RATE_LIMIT_MAX, VAULT_SEARCH_RATE_LIMIT_WINDOW_MS);
+
+/** @internal test hook — restores a fresh limiter (optionally smaller for tests). */
+export function resetVaultSearchRateLimiterForTests(maxRequests = VAULT_SEARCH_RATE_LIMIT_MAX, windowMs = VAULT_SEARCH_RATE_LIMIT_WINDOW_MS): void {
+  vaultSearchRateLimiter = new WebhookRateLimiter(maxRequests, windowMs);
+}
 
 // Fix SecC1 defense-in-depth at the HTTP layer: reject path-traversal attempts
 // before they reach IVault.readFile (which also enforces confinement).
@@ -523,6 +538,12 @@ export function handleVaultRoutes(
     return true;
   }
   if (op === 'search' && method === 'POST') {
+    // Throttle BEFORE reading the body — throttled callers cost no body parsing.
+    const sourceIp = req.socket?.remoteAddress ?? 'unknown';
+    if (!vaultSearchRateLimiter.isAllowed(Date.now(), sourceIp)) {
+      sendJsonError(res, 429, 'rate limit exceeded');
+      return true;
+    }
     void readJsonBody(req).then(async (body) => {
       const rawText = body?.text;
       if (typeof rawText !== 'string') { sendJsonError(res, 400, 'invalid text'); return; }
