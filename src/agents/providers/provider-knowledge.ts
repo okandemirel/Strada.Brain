@@ -294,6 +294,10 @@ function getSpeedScore(features: ReadonlySet<string>): number {
  * Uses shared WORKLOAD_DIMENSION_WEIGHTS from provider-behavioral-profiles
  * as single source of truth — no duplicate weight definitions.
  * Returns undefined for workloads without a behavioral mapping (e.g. documentation).
+ *
+ * The behavioral baseline is authoritative for known providers; the
+ * feature-flag heuristics in `deriveWorkloadScores` are the fallback for
+ * unknown providers and for workloads without a behavioral mapping.
  */
 function getBehavioralWorkloadScore(
   profile: BehavioralProfile,
@@ -308,11 +312,13 @@ function getBehavioralWorkloadScore(
   return score;
 }
 
-/** Weight for existing feature-flag based scores when blending with behavioral profiles. */
-const FEATURE_FLAG_WEIGHT = 0.4;
-/** Weight for behavioral profile scores when blending. */
-const BEHAVIORAL_PROFILE_WEIGHT = 0.6;
-
+/**
+ * Derive per-workload routing scores for a provider snapshot.
+ *
+ * Precedence rule: the behavioral baseline profile is authoritative for
+ * known providers; feature-flag heuristics are the fallback for unknown
+ * providers and for workloads without a behavioral mapping (documentation).
+ */
 function deriveWorkloadScores(snapshot: {
   providerName?: string;
   contextWindow: number;
@@ -347,28 +353,27 @@ function deriveWorkloadScores(snapshot: {
     coordination: clamp(0.25 * streaming + 0.20 * speed + 0.20 * toolCalling + 0.20 * cheapness + 0.15 * context),
   };
 
-  // Blend with behavioral profile scores when available
   const profile = snapshot.providerName
     ? getBaselineProfile(snapshot.providerName)
     : undefined;
 
   if (!profile) {
+    // Fallback: unknown provider — pure feature-flag heuristics.
     return featureFlagScores;
   }
 
-  const workloads = Object.keys(featureFlagScores) as ProviderWorkload[];
-  const blended = { ...featureFlagScores };
-  for (const workload of workloads) {
+  // Known provider: the behavioral baseline is authoritative for every
+  // workload with a behavioral mapping; feature-flag scores remain only for
+  // unmapped workloads (documentation).
+  const scores = { ...featureFlagScores };
+  for (const workload of Object.keys(featureFlagScores) as ProviderWorkload[]) {
     const behavioralScore = getBehavioralWorkloadScore(profile, workload);
     if (behavioralScore !== undefined) {
-      blended[workload] = clamp(
-        featureFlagScores[workload] * FEATURE_FLAG_WEIGHT +
-          behavioralScore * BEHAVIORAL_PROFILE_WEIGHT,
-      );
+      scores[workload] = clamp(behavioralScore);
     }
   }
 
-  return blended;
+  return scores;
 }
 
 /**
