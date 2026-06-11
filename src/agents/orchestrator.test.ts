@@ -18,6 +18,7 @@ import { TrajectoryReplayRetriever } from "./trajectory-replay-retriever.js";
 import type { SessionId, TimestampMs, ToolName } from "../types/index.js";
 import { createInitialState } from "./agent-state.js";
 import { DEFAULT_TASK_CONFIG } from "../config/config.js";
+import { createWorkspaceBus } from "../dashboard/workspace-bus.js";
 
 const mockLogRingBuffer: Array<{
   timestamp: string;
@@ -6026,6 +6027,127 @@ DONE`,
       });
       await vi.advanceTimersByTimeAsync(100);
       await expect(promise).resolves.toBeUndefined();
+    });
+  });
+
+  describe("Workspace code events", () => {
+    function createOrchestratorWithBus() {
+      const mockEmitter: IEventEmitter<LearningEventMap> = {
+        emit: vi.fn(),
+      };
+
+      const orchWithBus = new Orchestrator({
+        providerManager: {
+          getProvider: () => mockProvider,
+          getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+          shutdown: vi.fn(),
+        } as any,
+        tools: [readTool, writeTool],
+        channel: mockChannel,
+        projectPath: "/tmp/test-project",
+        readOnly: false,
+        requireConfirmation: false,
+        eventEmitter: mockEmitter,
+      });
+
+      const bus = createWorkspaceBus();
+      orchWithBus.setWorkspaceBus(bus);
+      return { orchWithBus, bus };
+    }
+
+    it("should emit code:file_open for file_write without reading the disk, then mode_suggest", async () => {
+      const { orchWithBus, bus } = createOrchestratorWithBus();
+
+      const orderedEvents: string[] = [];
+      const fileOpens: Array<{ path: string; content: string; language: string; touchedStatus?: string }> = [];
+      const modeSuggests: Array<{ mode: string; reason: string }> = [];
+      bus.on("code:file_open", (p) => {
+        orderedEvents.push("code:file_open");
+        fileOpens.push(p);
+      });
+      bus.on("workspace:mode_suggest", (p) => {
+        orderedEvents.push("workspace:mode_suggest");
+        modeSuggests.push(p);
+      });
+
+      const toolResponse: ProviderResponse = {
+        text: "",
+        toolCalls: [{ id: "tc1", name: "file_write", input: { path: "test.cs", content: "hello" } }],
+        stopReason: "tool_use",
+        usage: { inputTokens: 10, outputTokens: 10 },
+      };
+      const finalResponse: ProviderResponse = {
+        text: "Done.",
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 10, outputTokens: 10 },
+      };
+
+      mockProvider.chat.mockResolvedValueOnce(toolResponse).mockResolvedValueOnce(finalResponse);
+
+      const promise = orchWithBus.handleMessage({
+        channelType: "cli",
+        chatId: "wscode1",
+        userId: "user1",
+        text: "Write file",
+        timestamp: new Date(),
+      });
+      await vi.advanceTimersByTimeAsync(100);
+      await promise;
+      await orchWithBus.drainWorkspaceCodeEvents();
+
+      expect(fileOpens).toHaveLength(1);
+      expect(fileOpens[0]).toMatchObject({
+        path: "test.cs",
+        content: "hello",
+        touchedStatus: "new",
+      });
+      expect(modeSuggests).toHaveLength(1);
+      expect(modeSuggests[0]).toMatchObject({ mode: "code" });
+      // The file event must reach the monitor before the mode suggestion.
+      expect(orderedEvents).toEqual(["code:file_open", "workspace:mode_suggest"]);
+    });
+
+    it("should fall back to tool output for file_read when the file is unreadable", async () => {
+      const { orchWithBus, bus } = createOrchestratorWithBus();
+
+      const fileOpens: Array<{ path: string; content: string; language: string; touchedStatus?: string }> = [];
+      bus.on("code:file_open", (p) => {
+        fileOpens.push(p);
+      });
+
+      const toolResponse: ProviderResponse = {
+        text: "",
+        toolCalls: [{ id: "tc1", name: "file_read", input: { path: "missing.cs" } }],
+        stopReason: "tool_use",
+        usage: { inputTokens: 10, outputTokens: 10 },
+      };
+      const finalResponse: ProviderResponse = {
+        text: "Done.",
+        toolCalls: [],
+        stopReason: "end_turn",
+        usage: { inputTokens: 10, outputTokens: 10 },
+      };
+
+      mockProvider.chat.mockResolvedValueOnce(toolResponse).mockResolvedValueOnce(finalResponse);
+
+      const promise = orchWithBus.handleMessage({
+        channelType: "cli",
+        chatId: "wscode2",
+        userId: "user1",
+        text: "Read file",
+        timestamp: new Date(),
+      });
+      await vi.advanceTimersByTimeAsync(100);
+      // The async read failure is swallowed and never rejects the message flow.
+      await expect(promise).resolves.toBeUndefined();
+      await orchWithBus.drainWorkspaceCodeEvents();
+
+      expect(fileOpens).toHaveLength(1);
+      expect(fileOpens[0]).toMatchObject({
+        path: "missing.cs",
+        content: "file_read result",
+      });
     });
   });
 
