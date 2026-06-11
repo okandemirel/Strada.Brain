@@ -8,6 +8,13 @@ export interface VaultFactory {
   allowedRootPaths?: readonly string[];
 }
 
+/** Lifecycle state of a vault's async init(), tracked by the registry. */
+export interface VaultInitState {
+  status: 'indexing' | 'ready' | 'error';
+  /** Present only for status 'error'. Pre-redacted, safe for HTTP responses. */
+  error?: string;
+}
+
 /**
  * Safely resolve a realpath. Falls back to the input when the path does
  * not exist or realpath fails for any reason — callers should still get
@@ -30,6 +37,14 @@ export class VaultRegistry {
    * Populated at register() time to avoid per-call realpathSync cost.
    */
   private rootRealpathCache = new Map<string, string>();
+  private initStates = new Map<VaultId, VaultInitState>();
+
+  setInitState(id: VaultId, state: VaultInitState): void {
+    this.initStates.set(id, state);
+  }
+  getInitState(id: VaultId): VaultInitState | undefined {
+    return this.initStates.get(id);
+  }
 
   register(v: IVault): void {
     this.vaults.set(v.id, v);
@@ -66,6 +81,7 @@ export class VaultRegistry {
     const v = this.vaults.get(id);
     if (v) this.rootRealpathCache.delete(v.rootPath);
     this.vaults.delete(id);
+    this.initStates.delete(id);
   }
   get(id: VaultId): IVault | undefined { return this.vaults.get(id); }
   list(): IVault[] { return [...this.vaults.values()]; }
@@ -125,5 +141,6 @@ export class VaultRegistry {
     this.vaults.clear();
     this.rootRealpathCache.clear();
     this.registerListeners.clear();
+    this.initStates.clear();
   }
 }

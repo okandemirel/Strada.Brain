@@ -665,6 +665,192 @@ describe("handleVaultRoutes — POST /api/vaults/:id/search rate limiting", () =
   });
 });
 
+// =============================================================================
+// TESTS — plan 008: surface async vault init failures through the stats endpoint
+// =============================================================================
+
+/** Deferred promise so tests can settle a vault's init() on demand. */
+function deferred(): { promise: Promise<void>; resolve: () => void; reject: (e: unknown) => void } {
+  let resolve!: () => void;
+  let reject!: (e: unknown) => void;
+  const promise = new Promise<void>((res, rej) => { resolve = res; reject = rej; });
+  return { promise, resolve, reject };
+}
+
+describe("vault init failure surfacing", () => {
+  /**
+   * End-to-end harness for handleVaultRoutes: real VaultRegistry, a temp dir
+   * as rootPath, and a factory whose fake vault init() is a deferred promise
+   * the test settles.
+   */
+  function setupInitHarness(): {
+    registry: VaultRegistry;
+    dir: string;
+    init: ReturnType<typeof deferred>;
+    post: () => Promise<{ res: MockRes & ServerResponse; id: string; rootPath: string }>;
+    getStats: (id: string) => Promise<Record<string, unknown>>;
+  } {
+    const registry = new VaultRegistry();
+    const dir = makeTmpDir();
+    const init = deferred();
+    let createdSpec: { id: string; rootPath: string } | undefined;
+    const factory: VaultFactory = {
+      create: vi.fn(async (spec: { id: string; rootPath: string; kind: "unity" | "generic" }) => {
+        createdSpec = spec;
+        return fakeVault({
+          id: spec.id,
+          rootPath: spec.rootPath,
+          init: vi.fn(() => init.promise),
+        });
+      }),
+    };
+    const ctx = makeCtx({ vaultRegistry: registry, vaultFactory: factory });
+    return {
+      registry,
+      dir,
+      init,
+      post: async () => {
+        const res = createMockRes();
+        const handled = handleVaultRoutes(
+          "/api/vaults", "POST",
+          createStreamReq(JSON.stringify({ name: "Init Vault", rootPath: dir, kind: "generic" })),
+          res, ctx,
+        );
+        expect(handled).toBe(true);
+        await vi.waitFor(() => expect(res.end).toHaveBeenCalled());
+        return { res, id: createdSpec!.id, rootPath: createdSpec!.rootPath };
+      },
+      getStats: async (id: string) => {
+        const res = createMockRes();
+        const handled = handleVaultRoutes(
+          `/api/vaults/${id}/stats`, "GET", createMockReq(), res, ctx,
+        );
+        expect(handled).toBe(true);
+        await vi.waitFor(() => expect(res.end).toHaveBeenCalled());
+        expect(res.statusCode).toBe(200);
+        return responseJson(res);
+      },
+    };
+  }
+
+  it("reports status indexing in stats while init is unresolved", async () => {
+    const h = setupInitHarness();
+    const { res, id } = await h.post();
+    expect(res.statusCode).toBe(201);
+    expect(responseJson(res)).toMatchObject({ status: "indexing" });
+
+    const stats = await h.getStats(id);
+    expect(stats).toEqual({
+      fileCount: 1, chunkCount: 2, lastIndexedAt: 123, dbBytes: 10,
+      status: "indexing",
+    });
+  });
+
+  it("reports status error with a redacted, capped message when init rejects", async () => {
+    const h = setupInitHarness();
+    const { id, rootPath } = await h.post();
+    h.init.reject(new Error(`embedding provider down at ${rootPath}/db`));
+    await vi.waitFor(() => expect(h.registry.getInitState(id)?.status).toBe("error"));
+
+    const stats = await h.getStats(id);
+    expect(stats.status).toBe("error");
+    expect(typeof stats.error).toBe("string");
+    const message = stats.error as string;
+    expect(message).not.toContain(rootPath);
+    expect(message).toContain("<vault>");
+    expect(message.length).toBeLessThanOrEqual(200);
+  });
+
+  it("reports status ready with no error field once init resolves", async () => {
+    const h = setupInitHarness();
+    const { id } = await h.post();
+    h.init.resolve();
+    await vi.waitFor(() => expect(h.registry.getInitState(id)?.status).toBe("ready"));
+
+    const stats = await h.getStats(id);
+    expect(stats.status).toBe("ready");
+    expect(stats).not.toHaveProperty("error");
+  });
+
+  it("back-compat: a directly registered vault has no status key in stats", async () => {
+    const registry = new VaultRegistry();
+    registry.register(fakeVault({ id: "v1" }));
+    const res = createMockRes();
+    const handled = handleVaultRoutes(
+      "/api/vaults/v1/stats", "GET", createMockReq(), res, makeCtx({ vaultRegistry: registry }),
+    );
+    expect(handled).toBe(true);
+    await vi.waitFor(() => expect(res.end).toHaveBeenCalled());
+    expect(responseJson(res)).toEqual({ fileCount: 1, chunkCount: 2, lastIndexedAt: 123, dbBytes: 10 });
+    expect(responseJson(res)).not.toHaveProperty("status");
+  });
+
+  it("unregister clears the init state so a reused id has no stale error", async () => {
+    const h = setupInitHarness();
+    const { id, rootPath } = await h.post();
+    h.init.reject(new Error(`init exploded at ${rootPath}`));
+    await vi.waitFor(() => expect(h.registry.getInitState(id)?.status).toBe("error"));
+
+    const delRes = createMockRes();
+    handleVaultRoutes(
+      `/api/vaults/${encodeURIComponent(id)}`, "DELETE", createMockReq(), delRes,
+      makeCtx({ vaultRegistry: h.registry }),
+    );
+    expect(delRes.statusCode).toBe(200);
+    expect(h.registry.getInitState(id)).toBeUndefined();
+
+    // Re-register a vault with the same id directly (no POST) — stats must not
+    // carry the stale error/status from the failed predecessor.
+    h.registry.register(fakeVault({ id }));
+    const stats = await h.getStats(id);
+    expect(stats).not.toHaveProperty("status");
+    expect(stats).not.toHaveProperty("error");
+  });
+
+  it("registerVaultRoutes parity: stats follows the indexing/error/ready progression", async () => {
+    const { app, routes } = makeFakeApp();
+    const registry = new VaultRegistry();
+    const inits = new Map<string, ReturnType<typeof deferred>>();
+    const factory: VaultFactory = {
+      create: vi.fn(async (spec: { id: string; rootPath: string; kind: "unity" | "generic" }) => {
+        const d = deferred();
+        inits.set(spec.id, d);
+        return fakeVault({ id: spec.id, rootPath: spec.rootPath, init: vi.fn(() => d.promise) });
+      }),
+    };
+    registerVaultRoutes(app, registry, factory);
+    const postHandler = routes.get("POST /api/vaults")!;
+    const statsHandler = routes.get("GET /api/vaults/:id/stats")!;
+    const getStats = async (id: string): Promise<Record<string, unknown>> =>
+      await statsHandler({ params: { id } }) as Record<string, unknown>;
+
+    // Vault A: indexing → ready.
+    const dirA = makeTmpDir();
+    const a = await postHandler({ body: { name: "A", rootPath: dirA, kind: "generic" } }) as Record<string, unknown>;
+    expect(a.status).toBe("indexing");
+    const idA = a.id as string;
+    expect((await getStats(idA)).status).toBe("indexing");
+    inits.get(idA)!.resolve();
+    await vi.waitFor(() => expect(registry.getInitState(idA)?.status).toBe("ready"));
+    const readyStats = await getStats(idA);
+    expect(readyStats.status).toBe("ready");
+    expect(readyStats).not.toHaveProperty("error");
+
+    // Vault B: indexing → error (redacted).
+    const dirB = makeTmpDir();
+    const b = await postHandler({ body: { name: "B", rootPath: dirB, kind: "generic" } }) as Record<string, unknown>;
+    const idB = b.id as string;
+    expect((await getStats(idB)).status).toBe("indexing");
+    const rootB = registry.get(idB)!.rootPath;
+    inits.get(idB)!.reject(new Error(`db locked at ${rootB}/index.db`));
+    await vi.waitFor(() => expect(registry.getInitState(idB)?.status).toBe("error"));
+    const errorStats = await getStats(idB);
+    expect(errorStats.status).toBe("error");
+    expect(errorStats.error as string).not.toContain(rootB);
+    expect(errorStats.error as string).toContain("<vault>");
+  });
+});
+
 describe("handleVaultRoutes — GET /api/vaults/:id/file encoded-NUL validation", () => {
   it("rejects URL-encoded null bytes in the path with 400", async () => {
     const vault = fakeVault({ id: "x" });

@@ -10,7 +10,7 @@ import { sendJson, sendJsonError, type RouteContext } from './server-types.js';
 import { WebhookRateLimiter } from '../daemon/triggers/webhook-trigger.js';
 import { summarizeSymbol } from '../vault/symbol-summarizer.js';
 import { resolveExistingVaultRoot } from '../vault/path-policy.js';
-import { VaultQueryError } from '../vault/obsidian-vault.js';
+import { VaultQueryError, redactPathsInMessage } from '../vault/obsidian-vault.js';
 
 /**
  * Factory injected by bootstrap so the HTTP layer can create a new vault
@@ -64,6 +64,36 @@ async function resolveExistingDirectory(rootPath: string): Promise<
 function makeVaultId(kind: 'unity' | 'generic', rootPath: string): string {
   const hash = createHash('sha1').update(rootPath).digest('hex').slice(0, 8);
   return `${kind}:${hash}`;
+}
+
+const MAX_INIT_ERROR_CHARS = 200;
+
+/** Track a fire-and-forget vault init on the registry so stats can report it. */
+function trackVaultInit(registry: VaultRegistry, vault: IVault, init: Promise<unknown>): void {
+  registry.setInitState(vault.id, { status: 'indexing' });
+  init.then(
+    () => registry.setInitState(vault.id, { status: 'ready' }),
+    (err: unknown) => {
+      const raw = err instanceof Error ? err.message : String(err);
+      const safe = redactPathsInMessage(raw, vault.rootPath).slice(0, MAX_INIT_ERROR_CHARS);
+      registry.setInitState(vault.id, { status: 'error', error: safe });
+    },
+  );
+}
+
+/** Merge the registry-tracked init state (if any) into a stats payload. */
+function mergeInitState(
+  registry: VaultRegistry,
+  id: string,
+  stats: import('../vault/vault.interface.js').VaultStats,
+): Record<string, unknown> {
+  const init = registry.getInitState(id);
+  if (!init) return stats as unknown as Record<string, unknown>;
+  return {
+    ...stats,
+    status: init.status,
+    ...(init.status === 'error' && init.error ? { error: init.error } : {}),
+  };
 }
 
 /**
@@ -209,7 +239,9 @@ export function registerVaultRoutes(app: RouteApp, registry: VaultRegistry, fact
     if (registry.get(id)) return { error: 'vault already registered' };
     const vault = await factory.create({ id, rootPath: dirCheck.realPath, kind: parsed.kind });
     registry.register(vault);
-    void vault.init().catch((err) => getLoggerSafe().warn('[vault] async init failed', { err }));
+    const initPromise = vault.init();
+    trackVaultInit(registry, vault, initPromise);
+    void initPromise.catch((err) => getLoggerSafe().warn('[vault] async init failed', { err }));
     return {
       id: vault.id, name: parsed.name,
       kind: vault.kind, status: 'indexing', symbolCount: 0,
@@ -221,7 +253,7 @@ export function registerVaultRoutes(app: RouteApp, registry: VaultRegistry, fact
 
   app.get('/api/vaults/:id/stats', async (req) => {
     const v = registry.get(req.params.id);
-    return v ? await v.stats() : { error: 'not found' };
+    return v ? mergeInitState(registry, v.id, await v.stats()) : { error: 'not found' };
   });
 
   app.get('/api/vaults/:id/tree', (req) => {
@@ -389,9 +421,15 @@ export function handleVaultRoutes(
           symbolCount: 0,
         }, 201);
         // Fire-and-log init + watch so we don't block the HTTP response.
+        // trackVaultInit records init success BEFORE the best-effort startWatch —
+        // a watcher failure must not mark the vault as error (indexing succeeded).
+        // It also attaches its own rejection handler, so initPromise cannot become
+        // an unhandled rejection even though the IIFE below also awaits it.
+        const initPromise = vault.init();
+        trackVaultInit(registry, vault, initPromise);
         void (async () => {
           try {
-            await vault.init();
+            await initPromise;
             // Best-effort watcher start; UnityProjectVault exposes startWatch,
             // SelfVault does not, so duck-type the call.
             const maybeWatcher = (vault as unknown as { startWatch?: (ms: number) => Promise<void> });
@@ -524,7 +562,9 @@ export function handleVaultRoutes(
   if (!vault) { sendJsonError(res, 404, 'vault not found'); return true; }
 
   if (op === 'stats' && method === 'GET') {
-    void vault.stats().then((s) => sendJson(res, s)).catch(() => sendJsonError(res, 500, 'stats failed'));
+    void vault.stats()
+      .then((s) => sendJson(res, mergeInitState(registry, vault.id, s)))
+      .catch(() => sendJsonError(res, 500, 'stats failed'));
     return true;
   }
   if (op === 'tree' && method === 'GET') {
