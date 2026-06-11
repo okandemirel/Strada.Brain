@@ -20,7 +20,7 @@ npm install
 
 # Copy environment config
 cp .env.example .env
-# Fill in at least ANTHROPIC_API_KEY and JWT_SECRET
+# Fill in at least one AI provider key (e.g. ANTHROPIC_API_KEY); see .env.example comments
 
 # Start in development mode (hot-reload via tsx)
 npm run dev -- cli
