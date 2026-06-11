@@ -99,6 +99,10 @@ function timingSafeTokenCompare(a: string, b: string): boolean {
   return timingSafeEqual(bufA, bufB);
 }
 
+/** Vault search is embedding-backed and comparatively expensive; cap bursts per source IP. */
+const VAULT_SEARCH_RATE_LIMIT_MAX = 30;
+const VAULT_SEARCH_RATE_LIMIT_WINDOW_MS = 10_000;
+
 export class DashboardServer {
   private readonly port: number;
   private readonly metrics: MetricsCollector;
@@ -126,6 +130,14 @@ export class DashboardServer {
   private webhookTriggers?: Map<string, WebhookTrigger>;
   private webhookSecret?: string;
   private webhookRateLimiter?: WebhookRateLimiter;
+  // Note: the dashboard binds to 127.0.0.1, so per-IP keying mostly yields one
+  // loopback key — effectively a global throttle for local deployments, which
+  // is the intended protection (runaway client / CSRF flood), not multi-tenant
+  // fairness.
+  private readonly vaultSearchRateLimiter = new WebhookRateLimiter(
+    VAULT_SEARCH_RATE_LIMIT_MAX,
+    VAULT_SEARCH_RATE_LIMIT_WINDOW_MS,
+  );
   private dashboardToken?: string;
 
   // Identity and enrichment context (Plan 18-03)
@@ -502,6 +514,7 @@ export class DashboardServer {
       webhookTriggers: this.webhookTriggers,
       webhookSecret: this.webhookSecret,
       webhookRateLimiter: this.webhookRateLimiter,
+      vaultSearchRateLimiter: this.vaultSearchRateLimiter,
       dashboardToken: this.dashboardToken,
       identityManager: this.identityManager,
       capabilityManifest: this.capabilityManifest,

@@ -7,11 +7,11 @@ import {
   registerVaultRoutes,
   buildVaultRetrievalStatsSnapshot,
   wireVaultUpdatesToWs,
-  resetVaultSearchRateLimiterForTests,
   type VaultFactory,
   type RouteApp,
   type WsBroadcaster,
 } from "./server-vault-routes.js";
+import { WebhookRateLimiter } from "../daemon/triggers/webhook-trigger.js";
 import {
   createMockReq,
   createMockRes,
@@ -30,12 +30,6 @@ vi.mock("../utils/logger.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../utils/logger.js")>();
   const stub = { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() };
   return { ...actual, getLogger: () => stub, getLoggerSafe: () => stub };
-});
-
-// The search endpoint is rate-limited per source IP (plan 004); reset between
-// tests so unrelated search cases never trip a shared bucket.
-beforeEach(() => {
-  resetVaultSearchRateLimiterForTests();
 });
 
 // =============================================================================
@@ -551,14 +545,20 @@ describe("registerVaultRoutes (fake-app adapter)", () => {
 // =============================================================================
 
 describe("handleVaultRoutes — POST /api/vaults/:id/search rate limiting", () => {
+  /** Each call gets a fresh 2-per-10s limiter via ctx, so tests never share a bucket. */
   function searchCtx(): { ctx: RouteContext; vault: IVault } {
     const vault = createFakeVault({ id: "x" });
     const registry = { get: () => vault, list: () => [vault] };
-    return { ctx: { vaultRegistry: registry } as unknown as RouteContext, vault };
+    return {
+      ctx: {
+        vaultRegistry: registry,
+        vaultSearchRateLimiter: new WebhookRateLimiter(2, 10_000),
+      } as unknown as RouteContext,
+      vault,
+    };
   }
 
   it("returns 429 once the per-source limit is exhausted", async () => {
-    resetVaultSearchRateLimiterForTests(2, 10_000);
     const { ctx } = searchCtx();
 
     for (let i = 0; i < 2; i++) {
@@ -578,7 +578,6 @@ describe("handleVaultRoutes — POST /api/vaults/:id/search rate limiting", () =
   });
 
   it("isolates limits per source address", async () => {
-    resetVaultSearchRateLimiterForTests(2, 10_000);
     const { ctx } = searchCtx();
 
     for (let i = 0; i < 2; i++) {

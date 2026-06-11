@@ -1,16 +1,15 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { createHash } from 'node:crypto';
 import { isAbsolute as isAbsolutePath } from 'node:path';
-import type { VaultRegistry } from '../vault/vault-registry.js';
-import type { IVault, VaultQuery } from '../vault/vault.interface.js';
+import type { VaultRegistry, VaultStatsWithInit } from '../vault/vault-registry.js';
+import type { IVault, VaultQuery, VaultStats } from '../vault/vault.interface.js';
 import { getVaultFileReadStats } from '../agents/tools/file-read.js';
 import { getLoggerSafe } from '../utils/logger.js';
 import type { IAIProvider } from '../agents/providers/provider.interface.js';
 import { sendJson, sendJsonError, type RouteContext } from './server-types.js';
-import { WebhookRateLimiter } from '../daemon/triggers/webhook-trigger.js';
 import { summarizeSymbol } from '../vault/symbol-summarizer.js';
 import { resolveExistingVaultRoot } from '../vault/path-policy.js';
-import { VaultQueryError, redactPathsInMessage } from '../vault/obsidian-vault.js';
+import { VaultQueryError } from '../vault/obsidian-vault.js';
 
 /**
  * Factory injected by bootstrap so the HTTP layer can create a new vault
@@ -66,29 +65,14 @@ function makeVaultId(kind: 'unity' | 'generic', rootPath: string): string {
   return `${kind}:${hash}`;
 }
 
-const MAX_INIT_ERROR_CHARS = 200;
-
-/** Track a fire-and-forget vault init on the registry so stats can report it. */
-function trackVaultInit(registry: VaultRegistry, vault: IVault, init: Promise<unknown>): void {
-  registry.setInitState(vault.id, { status: 'indexing' });
-  init.then(
-    () => registry.setInitState(vault.id, { status: 'ready' }),
-    (err: unknown) => {
-      const raw = err instanceof Error ? err.message : String(err);
-      const safe = redactPathsInMessage(raw, vault.rootPath).slice(0, MAX_INIT_ERROR_CHARS);
-      registry.setInitState(vault.id, { status: 'error', error: safe });
-    },
-  );
-}
-
 /** Merge the registry-tracked init state (if any) into a stats payload. */
 function mergeInitState(
   registry: VaultRegistry,
   id: string,
-  stats: import('../vault/vault.interface.js').VaultStats,
-): Record<string, unknown> {
+  stats: VaultStats,
+): VaultStatsWithInit {
   const init = registry.getInitState(id);
-  if (!init) return stats as unknown as Record<string, unknown>;
+  if (!init) return stats;
   return {
     ...stats,
     status: init.status,
@@ -116,20 +100,6 @@ export interface RouteApp {
 const MAX_QUERY_TEXT_CHARS = 4096;
 const MAX_TOP_K = 100;
 const DEFAULT_TOP_K = 20;
-
-/** Vault search is embedding-backed and comparatively expensive; cap bursts per source IP. */
-const VAULT_SEARCH_RATE_LIMIT_MAX = 30;
-const VAULT_SEARCH_RATE_LIMIT_WINDOW_MS = 10_000;
-// Note: the dashboard binds to 127.0.0.1 (server.ts), so per-IP keying mostly
-// yields one loopback key — effectively a global throttle for local deployments,
-// which is the intended protection (runaway client / CSRF flood), not
-// multi-tenant fairness.
-let vaultSearchRateLimiter = new WebhookRateLimiter(VAULT_SEARCH_RATE_LIMIT_MAX, VAULT_SEARCH_RATE_LIMIT_WINDOW_MS);
-
-/** @internal test hook — restores a fresh limiter (optionally smaller for tests). */
-export function resetVaultSearchRateLimiterForTests(maxRequests = VAULT_SEARCH_RATE_LIMIT_MAX, windowMs = VAULT_SEARCH_RATE_LIMIT_WINDOW_MS): void {
-  vaultSearchRateLimiter = new WebhookRateLimiter(maxRequests, windowMs);
-}
 
 // Fix SecC1 defense-in-depth at the HTTP layer: reject path-traversal attempts
 // before they reach IVault.readFile (which also enforces confinement).
@@ -240,7 +210,7 @@ export function registerVaultRoutes(app: RouteApp, registry: VaultRegistry, fact
     const vault = await factory.create({ id, rootPath: dirCheck.realPath, kind: parsed.kind });
     registry.register(vault);
     const initPromise = vault.init();
-    trackVaultInit(registry, vault, initPromise);
+    registry.trackInit(vault, initPromise);
     void initPromise.catch((err) => getLoggerSafe().warn('[vault] async init failed', { err }));
     return {
       id: vault.id, name: parsed.name,
@@ -421,12 +391,12 @@ export function handleVaultRoutes(
           symbolCount: 0,
         }, 201);
         // Fire-and-log init + watch so we don't block the HTTP response.
-        // trackVaultInit records init success BEFORE the best-effort startWatch —
+        // registry.trackInit records init success BEFORE the best-effort startWatch —
         // a watcher failure must not mark the vault as error (indexing succeeded).
         // It also attaches its own rejection handler, so initPromise cannot become
         // an unhandled rejection even though the IIFE below also awaits it.
         const initPromise = vault.init();
-        trackVaultInit(registry, vault, initPromise);
+        registry.trackInit(vault, initPromise);
         void (async () => {
           try {
             await initPromise;
@@ -580,8 +550,11 @@ export function handleVaultRoutes(
   }
   if (op === 'search' && method === 'POST') {
     // Throttle BEFORE reading the body — throttled callers cost no body parsing.
+    // The limiter lives on RouteContext (per-server instance, built by
+    // DashboardServer); when absent (tests that don't provide one), skip limiting.
+    const limiter = ctx.vaultSearchRateLimiter;
     const sourceIp = req.socket?.remoteAddress ?? 'unknown';
-    if (!vaultSearchRateLimiter.isAllowed(Date.now(), sourceIp)) {
+    if (limiter && !limiter.isAllowed(Date.now(), sourceIp)) {
       sendJsonError(res, 429, 'rate limit exceeded');
       return true;
     }

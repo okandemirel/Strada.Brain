@@ -409,6 +409,8 @@ export interface RouteContext {
   webhookTriggers?: Map<string, WebhookTrigger>;
   webhookSecret?: string;
   webhookRateLimiter?: WebhookRateLimiter;
+  /** Per-server limiter for POST /api/vaults/:id/search; absent in tests that skip rate limiting. */
+  vaultSearchRateLimiter?: WebhookRateLimiter;
   dashboardToken?: string;
   identityManager?: IdentityStateManager;
   capabilityManifest?: string;

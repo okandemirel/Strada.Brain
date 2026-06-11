@@ -16,6 +16,17 @@ import { sendJson, sendJsonError } from "./server-types.js";
 import type { RouteContext } from "./server-types.js";
 
 /**
+ * Boolean voice settings shared by GET and POST /api/settings/voice, as
+ * [response/body field, storage override key] pairs. One table drives both
+ * handlers so the field sets cannot drift.
+ */
+const VOICE_BOOL_FIELDS = [
+  ["inputEnabled", "voice_input_enabled"],
+  ["outputEnabled", "voice_output_enabled"],
+  ["browserSttEnabled", "voice_browser_stt_enabled"],
+] as const;
+
+/**
  * Try to handle settings and budget routes. Returns true if the route was handled.
  */
 export function handleSettingsRoutes(
@@ -126,16 +137,17 @@ export function handleSettingsRoutes(
       const enabled = storage.getSettingsOverride("voice_enabled", chatId);
       const language = storage.getSettingsOverride("voice_language", chatId);
       const speed = storage.getSettingsOverride("voice_speed", chatId);
-      const inputEnabled = storage.getSettingsOverride("voice_input_enabled", chatId);
-      const outputEnabled = storage.getSettingsOverride("voice_output_enabled", chatId);
-      const browserSttEnabled = storage.getSettingsOverride("voice_browser_stt_enabled", chatId);
+      const voiceBools = Object.fromEntries(
+        VOICE_BOOL_FIELDS.map(([field, key]) => {
+          const raw = storage.getSettingsOverride(key, chatId);
+          return [field, raw !== undefined ? raw === "true" : null];
+        }),
+      );
       sendJson(res, {
         enabled: enabled !== undefined ? enabled === "true" : null,
         language: language ?? null,
         speed: speed !== undefined ? parseFloat(speed) : null,
-        inputEnabled: inputEnabled !== undefined ? inputEnabled === "true" : null,
-        outputEnabled: outputEnabled !== undefined ? outputEnabled === "true" : null,
-        browserSttEnabled: browserSttEnabled !== undefined ? browserSttEnabled === "true" : null,
+        ...voiceBools,
         chatId,
       });
       return true;
@@ -155,14 +167,11 @@ export function handleSettingsRoutes(
           if (parsed.speed !== undefined) {
             storage.setSettingsOverride("voice_speed", String(parsed.speed), chatId);
           }
-          if (typeof parsed.inputEnabled === "boolean") {
-            storage.setSettingsOverride("voice_input_enabled", String(parsed.inputEnabled), chatId);
-          }
-          if (typeof parsed.outputEnabled === "boolean") {
-            storage.setSettingsOverride("voice_output_enabled", String(parsed.outputEnabled), chatId);
-          }
-          if (typeof parsed.browserSttEnabled === "boolean") {
-            storage.setSettingsOverride("voice_browser_stt_enabled", String(parsed.browserSttEnabled), chatId);
+          for (const [field, key] of VOICE_BOOL_FIELDS) {
+            const value = parsed[field];
+            if (typeof value === "boolean") {
+              storage.setSettingsOverride(key, String(value), chatId);
+            }
           }
           sendJson(res, { success: true });
         } catch (err) {

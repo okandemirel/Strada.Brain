@@ -1,7 +1,8 @@
 import { realpathSync } from 'node:fs';
 import { isAbsolute, resolve, sep } from 'node:path';
-import type { IVault, VaultId, VaultQuery, VaultQueryResult, VaultHit } from './vault.interface.js';
+import type { IVault, VaultId, VaultQuery, VaultQueryResult, VaultHit, VaultStats } from './vault.interface.js';
 import { isVaultRootAllowed, resolveExistingVaultRoot } from './path-policy.js';
+import { redactPathsInMessage } from './obsidian-vault.js';
 
 export interface VaultFactory {
   createVault(rootPath: string): IVault | Promise<IVault>;
@@ -14,6 +15,18 @@ export interface VaultInitState {
   /** Present only for status 'error'. Pre-redacted, safe for HTTP responses. */
   error?: string;
 }
+
+/**
+ * Stats payload surfaced by the dashboard stats routes: base VaultStats plus
+ * the registry-tracked init lifecycle. Vaults with no tracked init (e.g.
+ * directly registered ones) carry neither `status` nor `error`.
+ */
+export type VaultStatsWithInit = VaultStats & {
+  status?: VaultInitState['status'];
+  error?: string;
+};
+
+const MAX_INIT_ERROR_CHARS = 200;
 
 /**
  * Safely resolve a realpath. Falls back to the input when the path does
@@ -39,11 +52,29 @@ export class VaultRegistry {
   private rootRealpathCache = new Map<string, string>();
   private initStates = new Map<VaultId, VaultInitState>();
 
-  setInitState(id: VaultId, state: VaultInitState): void {
+  private setInitState(id: VaultId, state: VaultInitState): void {
     this.initStates.set(id, state);
   }
   getInitState(id: VaultId): VaultInitState | undefined {
     return this.initStates.get(id);
+  }
+
+  /**
+   * Track a fire-and-forget vault init so stats can report its lifecycle.
+   * Attaches its own rejection handler (so `init` can never become an
+   * unhandled rejection) and stores a redacted, length-capped error message
+   * that is safe to surface over HTTP.
+   */
+  trackInit(vault: IVault, init: Promise<unknown>): void {
+    this.setInitState(vault.id, { status: 'indexing' });
+    init.then(
+      () => this.setInitState(vault.id, { status: 'ready' }),
+      (err: unknown) => {
+        const raw = err instanceof Error ? err.message : String(err);
+        const safe = redactPathsInMessage(raw, vault.rootPath).slice(0, MAX_INIT_ERROR_CHARS);
+        this.setInitState(vault.id, { status: 'error', error: safe });
+      },
+    );
   }
 
   register(v: IVault): void {
