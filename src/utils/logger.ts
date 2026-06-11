@@ -24,6 +24,18 @@ const MAX_META_BYTES = 2048;
 /** Maximum message length stored in the ring buffer. */
 const MAX_MESSAGE_LENGTH = 4096;
 
+type RingBufferSanitizer = (text: string) => string;
+let ringBufferSanitizer: RingBufferSanitizer = (text) => text;
+
+/**
+ * Inject the secret sanitizer applied to ring-buffer entries at write time.
+ * Injected (rather than imported) because security/secret-sanitizer.ts
+ * imports this module — a direct import would be a circular dependency.
+ */
+export function setLogRingBufferSanitizer(fn: RingBufferSanitizer): void {
+  ringBufferSanitizer = fn;
+}
+
 class RingBufferTransport extends TransportStream {
   log(info: { timestamp?: string; level: string; message: string; service?: string; [key: string]: unknown }, callback: () => void): void {
     const { timestamp, level, message, service: _service, ...meta } = info;
@@ -38,10 +50,19 @@ class RingBufferTransport extends TransportStream {
         truncatedMeta = { _truncated: true };
       }
     }
+    // Write-time secret sanitization, applied AFTER truncation so the regex
+    // cost stays bounded by the MAX_MESSAGE_LENGTH/MAX_META_BYTES caps.
+    if (truncatedMeta !== undefined) {
+      try {
+        truncatedMeta = JSON.parse(ringBufferSanitizer(JSON.stringify(truncatedMeta))) as Record<string, unknown>;
+      } catch {
+        truncatedMeta = { _sanitizeFailed: true };
+      }
+    }
     LOG_RING_BUFFER.push({
       timestamp: String(timestamp ?? new Date().toISOString()),
       level,
-      message: String(message).slice(0, MAX_MESSAGE_LENGTH),
+      message: ringBufferSanitizer(String(message).slice(0, MAX_MESSAGE_LENGTH)),
       meta: truncatedMeta,
     });
     if (LOG_RING_BUFFER.length > MAX_LOG_ENTRIES) {
