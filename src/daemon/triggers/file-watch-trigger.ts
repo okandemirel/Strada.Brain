@@ -14,7 +14,7 @@
 
 import { basename } from "node:path";
 import { watch, type FSWatcher } from "chokidar";
-// @ts-ignore -- picomatch is a transitive dep via chokidar, no bundled types
+// @ts-ignore -- picomatch is a direct dependency (package.json) but ships no bundled types
 import picomatch from "picomatch";
 import type {
   ITrigger,
