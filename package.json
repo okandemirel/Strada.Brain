@@ -75,7 +75,7 @@
     "@anthropic-ai/sdk": "^0.104.1",
     "@slack/bolt": "^4.6.0",
     "@slack/types": "^2.20.0",
-    "better-sqlite3": "^12.6.2",
+    "better-sqlite3": "^12.10.0",
     "chokidar": "^5.0.0",
     "commander": "^12.1.0",
     "croner": "^10.0.1",
