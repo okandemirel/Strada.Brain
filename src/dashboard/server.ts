@@ -54,6 +54,7 @@ import {
 } from "./server-types.js";
 // SCRIPT_HASH and DASHBOARD_HTML are defined at the bottom of this file
 import { handleDaemonRoutes } from "./server-daemon-routes.js";
+import { handleMcpRoutes } from "./server-mcp-routes.js";
 import { handleProviderRoutes } from "./server-provider-routes.js";
 import { handlePersonalityRoutes } from "./server-personality-routes.js";
 import { handleSettingsRoutes } from "./server-settings-routes.js";
@@ -674,6 +675,9 @@ export class DashboardServer {
       // Settings and budget routes: budget, budget/history, budget/config,
       // settings/rate-limits, settings/voice
       if (handleSettingsRoutes(url, method, req, res, ctx)) return;
+
+      // MCP bridge routes: mcp/status, mcp/reconnect
+      if (handleMcpRoutes(url, method, req, res, ctx)) return;
 
       // Monitor endpoints (Phase 3 — workspace monitor panel)
       if (url.startsWith("/api/monitor")) {
