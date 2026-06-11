@@ -107,6 +107,12 @@ Strada.Brain is organized into these key modules:
 ## Running Tests
 
 ```bash
+# Fast inner-loop check: typecheck + lint + quick high-signal test subset (<90s)
+npm run verify
+
+# Quick test subset only
+npm run test:fast
+
 # Full suite (4,413+ tests)
 npm test
 

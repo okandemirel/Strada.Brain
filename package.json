@@ -48,6 +48,8 @@
     "test:unity-fixture": "LOCAL_UNITY_FIXTURE_TESTS=1 NODE_OPTIONS=--max-old-space-size=8192 vitest run src/tests/integration/strada-unity-fixture.test.ts",
     "test:hnsw-perf": "HNSW_PERF_TESTS=1 NODE_OPTIONS=--max-old-space-size=8192 vitest run src/rag/hnsw/hnsw-performance.test.ts",
     "test:watch": "vitest",
+    "test:fast": "NODE_OPTIONS=--max-old-space-size=8192 vitest run src/config src/security src/utils src/common src/budget",
+    "verify": "npm run typecheck:src && npm run lint:src && npm run test:fast",
     "smoke:cli:release": "node scripts/release/cli-release-smoke.mjs",
     "security:audit": "npm audit --audit-level=high",
     "security:full": "./pentest/scripts/run-all-tests.sh",
