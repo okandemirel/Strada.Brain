@@ -329,16 +329,15 @@ export function handleSystemRoutes(
     return true;
   }
 
-  // GET /api/logs -- Recent log entries from ring buffer
+  // GET /api/logs -- Recent log entries from ring buffer.
+  // Entries are already secret-sanitized at write time (RingBufferTransport,
+  // the buffer's sole writer), so no read-time re-sanitization is needed.
+  // The old read-time `JSON.parse(sanitizeSecrets(JSON.stringify(meta)))` was
+  // both redundant and unsafe: redaction patterns can eat JSON delimiters and
+  // make the blob unparseable, collapsing credential-bearing entries — and it
+  // re-fired the "Secrets Sanitized" metric on every read.
   if (url === "/api/logs") {
-    const rawLogs = getLogRingBuffer();
-    const logs = rawLogs.map((entry) => ({
-      ...entry,
-      message: sanitizeSecrets(entry.message),
-      meta: entry.meta
-        ? JSON.parse(sanitizeSecrets(JSON.stringify(entry.meta))) as Record<string, unknown>
-        : undefined,
-    }));
+    const logs = getLogRingBuffer();
     sendJson(res, { logs, count: logs.length });
     return true;
   }
