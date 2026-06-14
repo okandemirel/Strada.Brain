@@ -112,6 +112,19 @@ describe("splitAtBoundaries", () => {
     ]);
   });
 
+  it("never emits a chunk over maxLength when '. ' sits exactly at maxLength (Discord offset)", () => {
+    // ". " begins at index 2000, so lastIndexOf(". ", 2000) === 2000. With
+    // Discord's sentenceSplitOffset of 1 the unclamped split point would be
+    // 2001, slicing a 2001-char chunk that exceeds Discord's 2000 limit.
+    const maxLength = 2000;
+    const input = "x".repeat(maxLength) + ". " + "y".repeat(500);
+    const chunks = splitAtBoundaries(input, maxLength, DISCORD_SPLIT);
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      expect(chunk.length).toBeLessThanOrEqual(maxLength);
+    }
+  });
+
   it("skips the space boundary entirely when spaceRatio is omitted", () => {
     const input = "w".repeat(85) + " " + "v".repeat(60);
     // Slack has no space boundary and nothing else qualifies -> hard cut at 100
