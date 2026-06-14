@@ -98,7 +98,7 @@ export const useSessionStore = create<SessionState & SessionActions>()((set) => 
       return { messages: [...state.messages, message] }
     }),
 
-  setMessages: (messages) => set({ messages }),
+  setMessages: (messages) => set({ messages: Array.isArray(messages) ? messages : [] }),
 
   updateMessage: (id, updates) =>
     set((state) => ({

@@ -12,7 +12,7 @@ import { realpathSync, statSync } from "node:fs";
 import { z } from "zod";
 import * as dotenv from "dotenv";
 import type { SecretPattern } from "../security/secret-sanitizer.js";
-import type { DeepPartial, Result, ValidationResult, ValidationError } from "../types/index.js";
+import type { Result, ValidationResult, ValidationError } from "../types/index.js";
 import { resolveDotenvPath } from "../common/runtime-paths.js";
 import type { BayesianConfig, CrossSessionConfig } from "../learning/types.js";
 import type { ToolChainConfig } from "../learning/chains/chain-types.js";
@@ -56,6 +56,7 @@ export type EnvVarName =
   | "OPENCODE_API_KEY"
   | "OPENCODE_BASE_URL"
   | "OPENCODE_DEFAULT_MODEL"
+  | "OPENROUTER_API_KEY"
   | "SYSTEM_PRESET"
   | "PROVIDER_CHAIN"
   | "TELEGRAM_BOT_TOKEN"
@@ -84,6 +85,8 @@ export type EnvVarName =
   | "IRC_ALLOW_OPEN_ACCESS"
   | "TEAMS_APP_ID"
   | "TEAMS_APP_PASSWORD"
+  | "TEAMS_APP_TYPE"
+  | "TEAMS_APP_TENANT_ID"
   | "TEAMS_ALLOWED_USER_IDS"
   | "TEAMS_ALLOW_OPEN_ACCESS"
   | "ALLOWED_TELEGRAM_USER_IDS"
@@ -99,6 +102,7 @@ export type EnvVarName =
   | "UNITY_PATH"
   | "STRADA_CORE_REPO_URL"
   | "STRADA_MODULES_REPO_URL"
+  | "STRADA_MCP_REPO_URL"
   | "STRADA_MCP_PATH"
   | "OBSIDIAN_ENABLED"
   | "OBSIDIAN_API_URL"
@@ -143,6 +147,7 @@ export type EnvVarName =
   | "SHELL_ENABLED"
   | "LOG_LEVEL"
   | "LOG_FILE"
+  | "WEB_CHANNEL_PORT"
   | "PLUGIN_DIRS"
   | "OPENAI_MODEL"
   | "DEEPSEEK_MODEL"
@@ -154,6 +159,7 @@ export type EnvVarName =
   | "TOGETHER_MODEL"
   | "FIREWORKS_MODEL"
   | "GEMINI_MODEL"
+  | "OPENROUTER_MODEL"
   | "CLAUDE_MODEL"
   | "OLLAMA_MODEL"
   | "OLLAMA_BASE_URL"
@@ -260,7 +266,6 @@ export type EnvVarName =
   | "DELEGATION_TIER_PREMIUM"
   | "DELEGATION_VERBOSITY"
   | "DELEGATION_TYPES"
-  | "DELEGATION_MAX_ITERATIONS_PER_TYPE"
   | "TASK_INTERACTIVE_MAX_ITERATIONS"
   | "TASK_INTERACTIVE_TOKEN_BUDGET"
   | "TASK_BACKGROUND_EPOCH_MAX_ITERATIONS"
@@ -368,6 +373,7 @@ export type EnvVarName =
 
   // Codebase Memory Vault
   | "STRADA_VAULT_ENABLED"
+  | "STRADA_VAULT_SELF_ENABLED"
   | "STRADA_VAULT_WRITE_HOOK_BUDGET_MS"
   | "STRADA_VAULT_DEBOUNCE_MS"
   | "STRADA_VAULT_EMBEDDING_FALLBACK";
@@ -414,6 +420,7 @@ export type AIProviderName =
   | "fireworks"
   | "gemini"
   | "opencode"
+  | "openrouter"
   | "ollama";
 
 /** Goal interactive execution configuration (Phase 16) */
@@ -580,10 +587,21 @@ export interface IRCConfig {
   readonly allowOpenAccess: boolean;
 }
 
+/** Microsoft Teams / Bot Framework app tenancy model */
+export type TeamsAppType = "MultiTenant" | "SingleTenant";
+
 /** Teams configuration */
 export interface TeamsConfig {
   readonly appId?: string;
   readonly appPassword?: string;
+  /**
+   * Bot Framework app tenancy. Single-tenant bots must be issued tokens scoped
+   * to their home tenant, so proactive (continueConversationAsync) sends fail
+   * unless the adapter is told the tenancy + tenant id. Defaults to MultiTenant.
+   */
+  readonly appType?: TeamsAppType;
+  /** Home tenant id, required for single-tenant proactive sends. */
+  readonly appTenantId?: string;
   readonly allowedUserIds: string[];
   readonly allowOpenAccess: boolean;
 }
@@ -723,11 +741,18 @@ export interface Config {
   readonly opencodeApiKey?: string;
   readonly opencodeBaseUrl?: string;
   readonly opencodeDefaultModel?: string;
+  readonly openrouterApiKey?: string;
   readonly ollamaBaseUrl?: string;
   /** Comma-separated provider names for fallback chain */
   readonly providerChain?: string;
   /** Per-provider model overrides (env: {PROVIDER}_MODEL) */
   readonly providerModels?: Record<string, string>;
+  /**
+   * Per-provider base-URL overrides applied at provider construction time.
+   * Currently sourced from OPENCODE_BASE_URL (opencode); ollama's base URL is
+   * threaded separately via ollamaBaseUrl. Keyed by canonical provider name.
+   */
+  readonly providerBaseUrls?: Record<string, string>;
 
   // Channels
   readonly telegram: TelegramConfig;
@@ -898,9 +923,6 @@ export interface Config {
   readonly obsidian: ObsidianConfig;
 }
 
-/** Partial config for updates */
-export type PartialConfig = DeepPartial<Config>;
-
 // =============================================================================
 // ZOD SCHEMAS
 // =============================================================================
@@ -949,7 +971,13 @@ const commaSeparatedList = z
 /** Comma-separated number list schema */
 const commaSeparatedNumberList = z
   .string()
-  .transform((s) => s.split(",").map((id) => parseInt(id.trim(), 10)))
+  .transform((s) =>
+    s
+      .split(",")
+      .map((id) => id.trim())
+      .filter(Boolean) // drop empty/whitespace tokens — a trailing comma yielded NaN and crashed config load
+      .map((id) => parseInt(id, 10)),
+  )
   .pipe(z.array(z.number().int()))
   .optional();
 
@@ -977,6 +1005,7 @@ export const configSchema = z
     opencodeApiKey: z.string().optional(),
     opencodeBaseUrl: z.string().optional(),
     opencodeDefaultModel: z.string().optional(),
+    openrouterApiKey: z.string().optional(),
     providerChain: z.string().optional(),
     ollamaBaseUrl: z.string().optional(),
 
@@ -1020,6 +1049,8 @@ export const configSchema = z
     // Teams
     teamsAppId: z.string().optional(),
     teamsAppPassword: z.string().optional(),
+    teamsAppType: z.enum(["MultiTenant", "SingleTenant"]).optional(),
+    teamsAppTenantId: z.string().optional(),
     teamsAllowedUserIds: commaSeparatedList,
     teamsAllowOpenAccess: boolFromString(false),
 
@@ -1700,11 +1731,6 @@ export const configSchema = z
     delegationTierPremium: z.string().default("claude:claude-opus-4-6-20250514"),
     delegationVerbosity: z.enum(["quiet", "normal", "verbose"]).default("normal"),
     delegationTypes: z.string().optional(),
-    delegationMaxIterationsPerType: z
-      .string()
-      .transform((s) => parseInt(s, 10))
-      .pipe(z.number().int().min(1).max(50))
-      .default("10"),
 
     // Deployment (Phase 25)
     deployEnabled: boolFromString(false),
@@ -1954,6 +1980,8 @@ export const configSchema = z
       data.togetherApiKey,
       data.fireworksApiKey,
       data.geminiApiKey,
+      data.opencodeApiKey,
+      data.openrouterApiKey,
     ].some((k) => k && k.length > 0);
     const hasAnthropicSubscription =
       data.anthropicAuthMode === "claude-subscription"
@@ -2034,6 +2062,10 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
     togetherApiKey: rawConfig.togetherApiKey,
     fireworksApiKey: rawConfig.fireworksApiKey,
     geminiApiKey: rawConfig.geminiApiKey,
+    opencodeApiKey: rawConfig.opencodeApiKey,
+    opencodeBaseUrl: rawConfig.opencodeBaseUrl,
+    opencodeDefaultModel: rawConfig.opencodeDefaultModel,
+    openrouterApiKey: rawConfig.openrouterApiKey,
     ollamaBaseUrl: rawConfig.ollamaBaseUrl,
     providerChain: rawConfig.providerChain,
 
@@ -2083,6 +2115,11 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
     teams: {
       appId: rawConfig.teamsAppId,
       appPassword: rawConfig.teamsAppPassword,
+      // Only surface tenancy fields when explicitly configured so the default
+      // (MultiTenant) behaviour is decided downstream and untouched configs stay
+      // shaped exactly as before.
+      ...(rawConfig.teamsAppType ? { appType: rawConfig.teamsAppType } : {}),
+      ...(rawConfig.teamsAppTenantId ? { appTenantId: rawConfig.teamsAppTenantId } : {}),
       allowedUserIds: rawConfig.teamsAllowedUserIds ?? [],
       allowOpenAccess: rawConfig.teamsAllowOpenAccess,
     },
@@ -2588,7 +2625,9 @@ export const secretPatterns: SecretPattern[] = [
   // Authorization tokens
   {
     name: "bearer_token",
-    pattern: /Bearer\s+[a-zA-Z0_\-\.]{20,}/gi,
+    // [a-zA-Z0_...] only allowed the digit 0 — tokens with digits 1-9 escaped
+    // redaction. Use the full 0-9 range (matches DEFAULT_SECRET_PATTERNS).
+    pattern: /Bearer\s+[a-zA-Z0-9_\-\.]{20,}/gi,
     redaction: "Bearer [REDACTED]",
   },
   {
@@ -2710,6 +2749,8 @@ interface EnvVars {
   ircAllowOpenAccess: string | undefined;
   teamsAppId: string | undefined;
   teamsAppPassword: string | undefined;
+  teamsAppType: string | undefined;
+  teamsAppTenantId: string | undefined;
   teamsAllowedUserIds: string | undefined;
   teamsAllowOpenAccess: string | undefined;
   jwtSecret: string | undefined;
@@ -2901,7 +2942,6 @@ interface EnvVars {
   delegationTierPremium: string | undefined;
   delegationVerbosity: string | undefined;
   delegationTypes: string | undefined;
-  delegationMaxIterationsPerType: string | undefined;
   // Task routing
   taskMaxConcurrent: string | undefined;
   taskMessageBurstWindowMs: string | undefined;
@@ -2967,6 +3007,8 @@ interface EnvVars {
   opencodeApiKey: string | undefined;
   opencodeBaseUrl: string | undefined;
   opencodeDefaultModel: string | undefined;
+  // OpenRouter
+  openrouterApiKey: string | undefined;
   // Obsidian Integration
   obsidian: {
     enabled: string | undefined;
@@ -3002,6 +3044,7 @@ function loadFromEnv(env: Record<string, string | undefined>): EnvVars {
     opencodeApiKey: env["OPENCODE_API_KEY"],
     opencodeBaseUrl: env["OPENCODE_BASE_URL"],
     opencodeDefaultModel: env["OPENCODE_DEFAULT_MODEL"],
+    openrouterApiKey: env["OPENROUTER_API_KEY"],
     providerChain: env["PROVIDER_CHAIN"],
     telegramBotToken: env["TELEGRAM_BOT_TOKEN"],
     allowedTelegramUserIds: env["ALLOWED_TELEGRAM_USER_IDS"],
@@ -3030,6 +3073,8 @@ function loadFromEnv(env: Record<string, string | undefined>): EnvVars {
     ircAllowOpenAccess: env["IRC_ALLOW_OPEN_ACCESS"],
     teamsAppId: env["TEAMS_APP_ID"],
     teamsAppPassword: env["TEAMS_APP_PASSWORD"],
+    teamsAppType: env["TEAMS_APP_TYPE"],
+    teamsAppTenantId: env["TEAMS_APP_TENANT_ID"],
     teamsAllowedUserIds: env["TEAMS_ALLOWED_USER_IDS"],
     teamsAllowOpenAccess: env["TEAMS_ALLOW_OPEN_ACCESS"],
     jwtSecret: env["JWT_SECRET"],
@@ -3229,7 +3274,6 @@ function loadFromEnv(env: Record<string, string | undefined>): EnvVars {
     delegationTierPremium: env["DELEGATION_TIER_PREMIUM"],
     delegationVerbosity: env["DELEGATION_VERBOSITY"],
     delegationTypes: env["DELEGATION_TYPES"],
-    delegationMaxIterationsPerType: env["DELEGATION_MAX_ITERATIONS_PER_TYPE"],
     taskMaxConcurrent: env["TASK_MAX_CONCURRENT"],
     taskMessageBurstWindowMs: env["TASK_MESSAGE_BURST_WINDOW_MS"],
     taskMessageBurstMaxMessages: env["TASK_MESSAGE_BURST_MAX_MESSAGES"],
@@ -3351,6 +3395,7 @@ export function loadConfig(envOverride?: Record<string, string | undefined>): Co
     "together",
     "fireworks",
     "gemini",
+    "openrouter",
     "claude",
     "ollama",
   ]) {
@@ -3358,12 +3403,45 @@ export function loadConfig(envOverride?: Record<string, string | undefined>): Co
     if (val) providerModels[p] = val;
   }
 
+  // OpenCode is the odd one out: its model env var is OPENCODE_DEFAULT_MODEL
+  // (not OPENCODE_MODEL), so it is absent from the generic {PROVIDER}_MODEL loop
+  // above and would otherwise never reach providerModels — leaving the provider
+  // pinned to its hardcoded default. Wire it explicitly. A direct OPENCODE_MODEL
+  // (if ever set) still wins via the loop; this only fills the gap.
+  if (config.opencodeDefaultModel && !providerModels["opencode"]) {
+    providerModels["opencode"] = config.opencodeDefaultModel;
+  }
+
+  // Per-provider base-URL overrides. OpenCode's base URL is the only one driven
+  // by an env var today (OPENCODE_BASE_URL); when unset, createProvider falls
+  // back to the Zen preset. ollama's base URL is threaded separately.
+  const providerBaseUrls: Record<string, string> = {};
+  if (config.opencodeBaseUrl) {
+    providerBaseUrls["opencode"] = config.opencodeBaseUrl;
+  }
+
+  // `anthropic` and `claude` are aliases for one provider, but the env var is
+  // CLAUDE_MODEL (→ providerModels.claude). Mirror the value across both keys so
+  // a chain entry written as either alias resolves the configured model — every
+  // consumer (preflight, buildProviderChain, ProviderManager) keys this map by
+  // the raw chain name, so `PROVIDER_CHAIN=anthropic` would otherwise silently
+  // fall back to the provider's hardcoded default model.
+  const claudeAliasModel = providerModels["claude"] ?? providerModels["anthropic"];
+  if (claudeAliasModel) {
+    providerModels["claude"] = claudeAliasModel;
+    providerModels["anthropic"] = claudeAliasModel;
+  }
+
   // Update with resolved path + preset overrides
   // Preset overrides must be applied to the correct nested config paths
+  // Only adopt the preset's embedding model/baseUrl when the provider also comes
+  // from the preset. A user-supplied EMBEDDING_PROVIDER must not be paired with a
+  // preset model/baseUrl that belongs to a different provider (provider/model mismatch).
+  const presetProvidesEmbeddingProvider = !activeEnv["EMBEDDING_PROVIDER"];
   const presetRagOverrides = preset ? {
-    ...(!activeEnv["EMBEDDING_PROVIDER"] ? { provider: preset.embeddingProvider } : {}),
-    ...(!activeEnv["EMBEDDING_MODEL"] ? { model: preset.embeddingModel } : {}),
-    ...(!activeEnv["EMBEDDING_BASE_URL"] && preset.embeddingBaseUrl ? { baseUrl: preset.embeddingBaseUrl } : {}),
+    ...(presetProvidesEmbeddingProvider ? { provider: preset.embeddingProvider } : {}),
+    ...(presetProvidesEmbeddingProvider && !activeEnv["EMBEDDING_MODEL"] ? { model: preset.embeddingModel } : {}),
+    ...(presetProvidesEmbeddingProvider && !activeEnv["EMBEDDING_BASE_URL"] && preset.embeddingBaseUrl ? { baseUrl: preset.embeddingBaseUrl } : {}),
   } : {};
   const presetDelegationTierOverrides = preset ? {
     ...(!activeEnv["DELEGATION_TIER_LOCAL"] ? { local: preset.delegationTierLocal } : {}),
@@ -3376,6 +3454,7 @@ export function loadConfig(envOverride?: Record<string, string | undefined>): Co
     ...config,
     unityProjectPath: pathResult.value,
     providerModels,
+    ...(Object.keys(providerBaseUrls).length > 0 ? { providerBaseUrls } : {}),
     // Preset fills in defaults; explicit env vars take precedence (already parsed by Zod above)
     ...(preset && !activeEnv["PROVIDER_CHAIN"] ? { providerChain: preset.providerChain } : {}),
     // Apply embedding overrides to the nested rag config
@@ -3456,6 +3535,7 @@ export function hasRequiredApiKeys(config: Config): { valid: boolean; missing: s
       fireworks: config.fireworksApiKey,
       gemini: config.geminiApiKey,
       opencode: config.opencodeApiKey,
+      openrouter: config.openrouterApiKey,
     };
     for (const name of names) {
       if (name === "ollama") continue; // no key needed
@@ -3507,6 +3587,7 @@ export function hasRequiredApiKeys(config: Config): { valid: boolean; missing: s
       config.fireworksApiKey,
       config.geminiApiKey,
       config.opencodeApiKey,
+      config.openrouterApiKey,
     ].some((k) => k && k.length > 0);
 
     if (!hasAny) {
@@ -3600,88 +3681,4 @@ export function checkChannelConfig(
   }
 
   return { valid: errors.length === 0, errors };
-}
-
-/**
- * Create a partial config from environment subset
- */
-export function createPartialConfig(env: Partial<EnvVarMap>): PartialConfig {
-  const raw: Record<string, unknown> = {};
-
-  if (env.ANTHROPIC_API_KEY) raw.anthropicApiKey = env.ANTHROPIC_API_KEY;
-  if (env.ANTHROPIC_AUTH_MODE) raw.anthropicAuthMode = env.ANTHROPIC_AUTH_MODE;
-  if (env.ANTHROPIC_AUTH_TOKEN) raw.anthropicAuthToken = env.ANTHROPIC_AUTH_TOKEN;
-  if (env.OPENAI_API_KEY) raw.openaiApiKey = env.OPENAI_API_KEY;
-  if (env.OPENAI_AUTH_MODE) raw.openaiAuthMode = env.OPENAI_AUTH_MODE;
-  if (env.OPENAI_CHATGPT_AUTH_FILE) raw.openaiChatgptAuthFile = env.OPENAI_CHATGPT_AUTH_FILE;
-  if (env.OPENAI_SUBSCRIPTION_ACCESS_TOKEN)
-    raw.openaiSubscriptionAccessToken = env.OPENAI_SUBSCRIPTION_ACCESS_TOKEN;
-  if (env.OPENAI_SUBSCRIPTION_ACCOUNT_ID)
-    raw.openaiSubscriptionAccountId = env.OPENAI_SUBSCRIPTION_ACCOUNT_ID;
-  if (env.LOG_LEVEL) raw.logLevel = env.LOG_LEVEL;
-  if (env.READ_ONLY_MODE) raw.security = { readOnlyMode: env.READ_ONLY_MODE === "true" };
-
-  return raw as PartialConfig;
-}
-
-/**
- * Merge partial configs
- */
-export function mergeConfigs(base: Config, partial: PartialConfig): Config {
-  return {
-    ...base,
-    ...partial,
-    telegram: { ...base.telegram, ...partial.telegram },
-    discord: { ...base.discord, ...partial.discord },
-    slack: { ...base.slack, ...partial.slack },
-    whatsapp: { ...base.whatsapp, ...partial.whatsapp },
-    matrix: { ...base.matrix, ...partial.matrix },
-    irc: { ...base.irc, ...partial.irc },
-    teams: { ...base.teams, ...partial.teams },
-    security: {
-      ...base.security,
-      ...partial.security,
-      systemAuth: {
-        ...base.security.systemAuth,
-        ...(partial.security?.systemAuth ?? {}),
-      },
-    },
-    dashboard: { ...base.dashboard, ...partial.dashboard },
-    websocketDashboard: { ...base.websocketDashboard, ...partial.websocketDashboard },
-    prometheus: { ...base.prometheus, ...partial.prometheus },
-    modelIntelligence: {
-      ...base.modelIntelligence,
-      ...((partial as Partial<Config>).modelIntelligence ?? {}),
-    },
-    memory: {
-      ...base.memory,
-      ...partial.memory,
-      unified: {
-        ...base.memory.unified,
-        ...(partial.memory?.unified ?? {}),
-        tierLimits: {
-          ...base.memory.unified.tierLimits,
-          ...(partial.memory?.unified?.tierLimits ?? {}),
-        },
-      },
-    },
-    rag: { ...base.rag, ...partial.rag },
-    rateLimit: { ...base.rateLimit, ...partial.rateLimit },
-    bayesian: { ...base.bayesian, ...partial.bayesian },
-    goalMaxDepth: (partial as Partial<Config>).goalMaxDepth ?? base.goalMaxDepth,
-    goalMaxRetries: (partial as Partial<Config>).goalMaxRetries ?? base.goalMaxRetries,
-    goalMaxFailures: (partial as Partial<Config>).goalMaxFailures ?? base.goalMaxFailures,
-    goalParallelExecution:
-      (partial as Partial<Config>).goalParallelExecution ?? base.goalParallelExecution,
-    goalMaxParallel: (partial as Partial<Config>).goalMaxParallel ?? base.goalMaxParallel,
-    goal: { ...base.goal, ...((partial as Partial<Config>).goal ?? {}) },
-    tasks: { ...base.tasks, ...((partial as Partial<Config>).tasks ?? {}) },
-    interaction: { ...base.interaction, ...((partial as Partial<Config>).interaction ?? {}) },
-    toolChain: { ...base.toolChain, ...(partial as Partial<Config>).toolChain },
-    crossSession: { ...base.crossSession, ...(partial as Partial<Config>).crossSession },
-    reRetrieval: { ...base.reRetrieval, ...((partial as Partial<Config>).reRetrieval ?? {}) },
-    notification: { ...base.notification, ...((partial as Partial<Config>).notification ?? {}) },
-    quietHours: { ...base.quietHours, ...((partial as Partial<Config>).quietHours ?? {}) },
-    digest: { ...base.digest, ...((partial as Partial<Config>).digest ?? {}) },
-  } as Config;
 }

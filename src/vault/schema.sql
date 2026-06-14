@@ -68,9 +68,13 @@ CREATE TABLE IF NOT EXISTS vault_edges (
 CREATE INDEX IF NOT EXISTS idx_edges_to ON vault_edges(to_symbol);
 
 CREATE TABLE IF NOT EXISTS vault_wikilinks (
-  from_note   TEXT NOT NULL,
-  target      TEXT NOT NULL,
-  resolved    INTEGER NOT NULL DEFAULT 0,
+  from_note       TEXT NOT NULL,
+  target          TEXT NOT NULL,
+  -- Raw authored token (e.g. "B" for [[B]]); preserved when `target` is
+  -- rewritten to the resolved path, so a later target rename can re-resolve.
+  -- NULL for unresolved rows (the token is still in `target`).
+  original_target TEXT,
+  resolved        INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (from_note, target)
 );
 

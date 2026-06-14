@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
+import { PageEmptyState } from "../components/ui/page-empty-state"
 import { useTranslation } from 'react-i18next'
 import { useLogs } from '../hooks/use-api'
 import { PageSkeleton } from '../components/ui/page-skeleton'
@@ -113,15 +114,9 @@ export default function LogsPage() {
       </div>
 
       {logsQuery.isError && logs.length === 0 ? (
-        <div className="flex flex-col items-center justify-center h-[200px] gap-2.5 text-text-secondary text-center">
-          <h3 className="text-text text-lg font-semibold">{t('logs.unavailableTitle')}</h3>
-          <p className="text-sm max-w-[400px]">{t('logs.unavailableDescription')}</p>
-        </div>
+        <PageEmptyState title={t('logs.unavailableTitle')} description={t('logs.unavailableDescription')} />
       ) : filtered.length === 0 ? (
-        <div className="flex flex-col items-center justify-center h-[200px] gap-2.5 text-text-secondary text-center">
-          <h3 className="text-text text-lg font-semibold">{t('logs.noMatchingTitle')}</h3>
-          <p className="text-sm max-w-[400px]">{t('logs.noMatchingDescription')}</p>
-        </div>
+        <PageEmptyState title={t('logs.noMatchingTitle')} description={t('logs.noMatchingDescription')} />
       ) : (
         <div className="bg-white/3 backdrop-blur border border-white/5 rounded-2xl overflow-hidden max-h-[calc(100vh-260px)] overflow-y-auto" ref={containerRef}>
           {filtered.map((entry, i) => (

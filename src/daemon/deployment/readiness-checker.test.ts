@@ -248,6 +248,74 @@ describe("ReadinessChecker", () => {
       expect(result.testPassed).toBe(false);
     });
 
+    it("clears the SIGKILL backstop timer when the child errors (L12)", async () => {
+      vi.useFakeTimers();
+      try {
+        const config = createDefaultConfig({ testCommand: "nonexistent-bin" });
+        checker = new ReadinessChecker(config, "/project", mockLogger);
+
+        const errorProc = new EventEmitter() as unknown as ChildProcess;
+        (errorProc as Record<string, unknown>).stdout = new EventEmitter();
+        (errorProc as Record<string, unknown>).stderr = new EventEmitter();
+        const kill = vi.fn();
+        (errorProc as Record<string, unknown>).kill = kill;
+        setTimeout(() => errorProc.emit("error", new Error("spawn ENOENT")), 5);
+
+        mockSpawn
+          .mockReturnValueOnce(errorProc)
+          .mockReturnValueOnce(createMockProcessWithStdout(""))
+          .mockReturnValueOnce(createMockProcessWithStdout("main"));
+
+        const promise = checker.checkReadiness();
+        await vi.runAllTimersAsync(); // fire error + git mocks + any leaked killTimer
+        const result = await promise;
+
+        expect(result.testPassed).toBe(false);
+        // TEETH: unfixed code leaves killTimer pending → runAllTimers fires kill("SIGKILL").
+        expect(kill).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("caps stderr accumulation on a chatty failing command (L13)", async () => {
+      vi.useFakeTimers();
+      try {
+        const config = createDefaultConfig({ testCommand: "noisy-test" });
+        checker = new ReadinessChecker(config, "/project", mockLogger);
+
+        const proc = new EventEmitter() as unknown as ChildProcess;
+        const stdout = new EventEmitter();
+        const stderr = new EventEmitter();
+        (proc as Record<string, unknown>).stdout = stdout;
+        (proc as Record<string, unknown>).stderr = stderr;
+        (proc as Record<string, unknown>).pid = 1;
+
+        // 200 distinct chunks, each 2048 bytes, with a spied toString.
+        const chunks = Array.from({ length: 200 }, () => ({ toString: vi.fn(() => "x".repeat(2048)) }));
+        setTimeout(() => {
+          for (const c of chunks) stderr.emit("data", c);
+          proc.emit("close", 1, null);
+        }, 5);
+
+        mockSpawn
+          .mockReturnValueOnce(proc)
+          .mockReturnValueOnce(createMockProcessWithStdout(""))
+          .mockReturnValueOnce(createMockProcessWithStdout("main"));
+
+        const promise = checker.checkReadiness();
+        await vi.runAllTimersAsync();
+        const result = await promise;
+
+        expect(result.testPassed).toBe(false);
+        const decoded = chunks.filter((c) => c.toString.mock.calls.length > 0).length;
+        // TEETH: unfixed code decoded ALL 200 chunks; the 10KB cap stops after ~5.
+        expect(decoded).toBeLessThanOrEqual(6);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("tokenizes quoted test commands without invoking a shell", async () => {
       const config = createDefaultConfig({ testCommand: 'npm run "smoke suite"' });
       checker = new ReadinessChecker(config, "/project", mockLogger);

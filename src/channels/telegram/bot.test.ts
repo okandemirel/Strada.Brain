@@ -1,5 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { TelegramChannel } from "./bot.js";
+import { GrammyError } from "grammy";
 
 vi.mock("../../utils/logger.js", () => ({
   getLogger: () => ({
@@ -46,8 +47,22 @@ vi.mock("grammy", () => ({
     };
   }),
   InlineKeyboard: vi.fn().mockImplementation(function () {
-    return { text: vi.fn().mockReturnThis() };
+    const kb: Record<string, unknown> = {};
+    kb.text = vi.fn().mockReturnValue(kb);
+    kb.row = vi.fn().mockReturnValue(kb);
+    return kb;
   }),
+  // Minimal stand-in so `err instanceof GrammyError` works under the mock and the
+  // 429 flood-control retry path can be exercised.
+  GrammyError: class GrammyError extends Error {
+    error_code: number;
+    parameters: { retry_after?: number };
+    constructor(message: string, error_code: number, retry_after?: number) {
+      super(message);
+      this.error_code = error_code;
+      this.parameters = retry_after !== undefined ? { retry_after } : {};
+    }
+  },
 }));
 
 vi.mock("node:crypto", () => ({
@@ -118,6 +133,132 @@ describe("TelegramChannel", () => {
   it("sendTypingIndicator sends typing action", async () => {
     await channel.sendTypingIndicator("42");
     expect(mockBotApi.sendChatAction).toHaveBeenCalledWith(42, "typing");
+  });
+
+  describe("sendMarkdown chunking (M8)", () => {
+    function restoreSendMessage() {
+      mockBotApi.sendMessage.mockReset();
+      mockBotApi.sendMessage.mockResolvedValue(undefined);
+    }
+
+    it("chunks messages over 4096 chars so no body is ever oversized", async () => {
+      // Mimic Telegram's real behavior: reject any body longer than 4096.
+      mockBotApi.sendMessage.mockImplementation((_id: number, text: string) =>
+        text.length > 4096
+          ? Promise.reject(new Error("Bad Request: message is too long"))
+          : Promise.resolve(undefined),
+      );
+
+      const long = "x".repeat(10000);
+      // TEETH: unfixed sendMarkdown sends the full 10000-char body, then the
+      // fallback re-sends the same oversized body → both reject → this rejects.
+      await expect(channel.sendMarkdown("42", long)).resolves.toBeUndefined();
+
+      const calls = mockBotApi.sendMessage.mock.calls;
+      expect(calls.length).toBeGreaterThanOrEqual(3);
+      for (const call of calls) {
+        expect((call[1] as string).length).toBeLessThanOrEqual(4096);
+      }
+      expect(calls.map((c) => c[1] as string).join("")).toBe(long);
+
+      restoreSendMessage();
+    });
+
+    it("keeps the plain-text fallback within the 4096 limit", async () => {
+      // Reject every Markdown attempt; resolve plain-text sends.
+      mockBotApi.sendMessage.mockImplementation(
+        (_id: number, _text: string, opts?: { parse_mode?: string }) =>
+          opts?.parse_mode
+            ? Promise.reject(new Error("can't parse entities"))
+            : Promise.resolve(undefined),
+      );
+
+      const long = "y".repeat(10000);
+      await expect(channel.sendMarkdown("42", long)).resolves.toBeUndefined();
+
+      const plainCalls = mockBotApi.sendMessage.mock.calls.filter((c) => c[2] === undefined);
+      expect(plainCalls.length).toBeGreaterThanOrEqual(3);
+      for (const call of plainCalls) {
+        // TEETH: unfixed fallback re-sends the full 10000-char body in one plain call.
+        expect((call[1] as string).length).toBeLessThanOrEqual(4096);
+      }
+
+      restoreSendMessage();
+    });
+  });
+
+  describe("outbound flood-control / 429 retry", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+      mockBotApi.sendMessage.mockReset();
+      mockBotApi.sendMessage.mockResolvedValue(undefined);
+    });
+
+    it("retries a throttled chunk honoring retry_after instead of aborting the message", async () => {
+      vi.useFakeTimers();
+      mockBotApi.sendMessage.mockReset();
+      // First send is 429 (retry_after 2s); the retry succeeds.
+      mockBotApi.sendMessage
+        .mockRejectedValueOnce(new (GrammyError as any)("Too Many Requests", 429, 2))
+        .mockResolvedValue(undefined);
+
+      const sendPromise = channel.sendText("42", "hello");
+      // Flush microtasks so the first (rejected) attempt runs and schedules its
+      // retry timer, then advance past retry_after to trigger the retry.
+      await vi.advanceTimersByTimeAsync(2100);
+      await sendPromise;
+
+      // Both the failed attempt and the successful retry were issued.
+      expect(mockBotApi.sendMessage).toHaveBeenCalledTimes(2);
+      expect(mockBotApi.sendMessage).toHaveBeenNthCalledWith(2, 42, "hello");
+    });
+
+    it("propagates non-429 errors without retrying", async () => {
+      mockBotApi.sendMessage.mockReset();
+      mockBotApi.sendMessage.mockRejectedValue(new (GrammyError as any)("Forbidden", 403));
+
+      await expect(channel.sendText("42", "hello")).rejects.toBeInstanceOf(GrammyError);
+      expect(mockBotApi.sendMessage).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("serializes concurrent sends to the same chat in order", async () => {
+    mockBotApi.sendMessage.mockReset();
+    const order: string[] = [];
+    let resolveFirst: (() => void) | undefined;
+    mockBotApi.sendMessage
+      // First message: block until we release it.
+      .mockImplementationOnce((_id: number, text: string) => {
+        order.push(`start:${text}`);
+        return new Promise<void>((resolve) => {
+          resolveFirst = () => {
+            order.push(`end:${text}`);
+            resolve();
+          };
+        });
+      })
+      // Subsequent messages: resolve immediately.
+      .mockImplementation((_id: number, text: string) => {
+        order.push(`start:${text}`);
+        order.push(`end:${text}`);
+        return Promise.resolve(undefined);
+      });
+
+    const p1 = channel.sendText("42", "A");
+    const p2 = channel.sendText("42", "B");
+    // Wait until A's send has actually started (chained via microtasks).
+    while (!resolveFirst) {
+      await Promise.resolve();
+    }
+    // At this point B must NOT have started yet (serialized behind A).
+    expect(order).toEqual(["start:A"]);
+    // B must not start until A finished — release A now.
+    resolveFirst();
+    await Promise.all([p1, p2]);
+
+    expect(order).toEqual(["start:A", "end:A", "start:B", "end:B"]);
+    mockBotApi.sendMessage.mockReset();
+    mockBotApi.sendMessage.mockResolvedValue(undefined);
   });
 
   it("onMessage stores handler", () => {

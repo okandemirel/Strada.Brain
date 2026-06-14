@@ -116,6 +116,11 @@ export async function initializeChannel(
       const teamsAppPassword = config.teams.appPassword;
       const allowOpenAccess = config.teams.allowOpenAccess;
       const allowedUserIds = config.teams.allowedUserIds;
+      // Single-tenant bots need MicrosoftAppType/MicrosoftAppTenantId threaded
+      // through or proactive (continueConversationAsync) sends fail. Undefined
+      // falls back to the constructor default ("MultiTenant").
+      const appType = config.teams.appType;
+      const appTenantId = config.teams.appTenantId;
       if (!teamsAppId || !teamsAppPassword) {
         throw new AppError(
           "TEAMS_APP_ID and TEAMS_APP_PASSWORD are required for Teams channel",
@@ -129,6 +134,8 @@ export async function initializeChannel(
         allowedUserIds,
         "127.0.0.1",
         allowOpenAccess,
+        appType,
+        appTenantId,
       );
     }
 

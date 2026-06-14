@@ -134,10 +134,20 @@ describe('PersonalityPage', () => {
     mockFetch.mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), { status: 200 }))
     renderPage()
 
-    // Custom profiles should have a "Delete" button
+    // Custom profiles should have a "Delete" button that opens a confirm dialog
+    // (replacing the old native window.confirm).
     const deleteBtn = screen.getByRole('button', { name: 'Delete' })
     expect(deleteBtn).toBeInTheDocument()
     await user.click(deleteBtn)
+
+    // The dialog adds a second "Delete" (confirm) button; the delete fires only
+    // after confirming.
+    expect(mockFetch).not.toHaveBeenCalledWith(
+      '/api/personality/profiles/my-custom',
+      expect.objectContaining({ method: 'DELETE' }),
+    )
+    const confirmButtons = screen.getAllByRole('button', { name: 'Delete' })
+    await user.click(confirmButtons[confirmButtons.length - 1]!)
     expect(mockFetch).toHaveBeenCalledWith(
       '/api/personality/profiles/my-custom',
       expect.objectContaining({ method: 'DELETE' }),

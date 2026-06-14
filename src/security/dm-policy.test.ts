@@ -220,118 +220,6 @@ describe("DMPolicy", () => {
     });
   });
 
-  describe("requestApproval", () => {
-    it("should auto-approve when not required", async () => {
-      policy.setSessionPrefs("user1", "chat1", { level: ApprovalLevel.NEVER });
-      const diff = createMockFileDiff();
-
-      const result = await policy.requestApproval("chat1", "user1", diff, "test op");
-
-      expect(result.approved).toBe(true);
-      expect(result.action).toBe("approve");
-      expect(result.message).toContain("Auto-approved");
-    });
-
-    it("should request confirmation when required", async () => {
-      policy.setSessionPrefs("user1", "chat1", { level: ApprovalLevel.ALWAYS });
-      const diff = createMockFileDiff();
-
-      // Mock response
-      vi.mocked(mockChannel.sendMarkdown).mockResolvedValue(undefined);
-      
-      // Start the request but don't await yet
-      const requestPromise = policy.requestApproval("chat1", "user1", diff, "test op");
-      
-      // Wait a bit for the confirmation to be registered
-      await new Promise(r => setTimeout(r, 10));
-      
-      // Find and approve the confirmation
-      const pending = policy.getPendingConfirmations();
-      expect(pending.length).toBe(1);
-      
-      policy.handleUserResponse(pending[0]!.id, "approve");
-      
-      const result = await requestPromise;
-      expect(result.approved).toBe(true);
-    });
-  });
-
-  describe("handleUserResponse", () => {
-    it("should handle approve response", async () => {
-      policy.setSessionPrefs("user1", "chat1", { level: ApprovalLevel.ALWAYS });
-      const diff = createMockFileDiff();
-
-      const requestPromise = policy.requestApproval("chat1", "user1", diff, "test op");
-      await new Promise(r => setTimeout(r, 10));
-
-      const pending = policy.getPendingConfirmations();
-      const handled = policy.handleUserResponse(pending[0]!.id, "yes");
-      
-      expect(handled).toBe(true);
-      const result = await requestPromise;
-      expect(result.approved).toBe(true);
-      expect(result.action).toBe("approve");
-    });
-
-    it("should handle reject response", async () => {
-      policy.setSessionPrefs("user1", "chat1", { level: ApprovalLevel.ALWAYS });
-      const diff = createMockFileDiff();
-
-      const requestPromise = policy.requestApproval("chat1", "user1", diff, "test op");
-      await new Promise(r => setTimeout(r, 10));
-
-      const pending = policy.getPendingConfirmations();
-      policy.handleUserResponse(pending[0]!.id, "no");
-      
-      const result = await requestPromise;
-      expect(result.approved).toBe(false);
-      expect(result.action).toBe("reject");
-    });
-
-    it("should handle unknown confirmation ID", () => {
-      const handled = policy.handleUserResponse("nonexistent", "yes");
-      expect(handled).toBe(false);
-    });
-
-    it("should handle view_full action", async () => {
-      policy.setSessionPrefs("user1", "chat1", { level: ApprovalLevel.ALWAYS });
-      const diff = createMockFileDiff();
-
-      policy.requestApproval("chat1", "user1", diff, "test op");
-      await new Promise(r => setTimeout(r, 10));
-
-      const pending = policy.getPendingConfirmations();
-      const handled = policy.handleUserResponse(pending[0]!.id, "view full");
-      
-      expect(handled).toBe(true);
-      // Confirmation should still be pending
-      expect(policy.getPendingConfirmations().length).toBe(1);
-    });
-  });
-
-  describe("cancelConfirmation", () => {
-    it("should cancel pending confirmation", async () => {
-      policy.setSessionPrefs("user1", "chat1", { level: ApprovalLevel.ALWAYS });
-      const diff = createMockFileDiff();
-
-      const requestPromise = policy.requestApproval("chat1", "user1", diff, "test op");
-      await new Promise(r => setTimeout(r, 10));
-
-      const pending = policy.getPendingConfirmations();
-      const cancelled = policy.cancelConfirmation(pending[0]!.id, "Test cancel");
-      
-      expect(cancelled).toBe(true);
-      const result = await requestPromise;
-      expect(result.approved).toBe(false);
-      expect(result.message).toBe("Test cancel");
-    });
-
-    it("should return false for unknown ID", () => {
-      const cancelled = policy.cancelConfirmation("nonexistent");
-      expect(cancelled).toBe(false);
-    });
-  });
-
   describe("cleanupExpiredPrefs", () => {
     it("should remove expired preferences", () => {
       const pastDate = new Date(Date.now() - 1000);
@@ -345,6 +233,40 @@ describe("DMPolicy", () => {
       // user2 should keep their prefs
       expect(policy.getSessionPrefs("user2", "chat1").level).toBe(ApprovalLevel.ALWAYS);
     });
+
+    it("does not retain default prefs from read-only access of ephemeral sessions (M11)", () => {
+      const sessionPrefs = (policy as unknown as {
+        sessionPrefs: Map<string, SessionApprovalPrefs>;
+      }).sessionPrefs;
+
+      for (let i = 0; i < 100; i++) {
+        policy.getSessionPrefs(`user${i}`, `chat${i}`); // read-only — never setSessionPrefs
+      }
+      policy.cleanupExpiredPrefs();
+
+      // TEETH: the unfixed getSessionPrefs persisted a default (no expiresAt) on every
+      // read, so size would be 100 and cleanupExpiredPrefs could never reclaim them.
+      expect(sessionPrefs.size).toBe(0);
+    });
+
+    it("reclaims orphaned autonomousExpiry entries (leak regression)", () => {
+      const autonomousExpiry = (policy as unknown as {
+        autonomousExpiry: Map<string, number>;
+      }).autonomousExpiry;
+
+      const pastDate = new Date(Date.now() - 1000);
+      // Enable autonomous mode (writes both sessionPrefs + autonomousExpiry) then
+      // mark the session pref expired so cleanup removes it.
+      policy.initFromProfile("chat1", { autonomousMode: true, autonomousExpiresAt: Date.now() + 60_000 }, "user1");
+      policy.setSessionPrefs("user1", "chat1", { expiresAt: pastDate });
+      expect(autonomousExpiry.has("user1:chat1")).toBe(true);
+
+      policy.cleanupExpiredPrefs();
+
+      // TEETH: the unfixed cleanupExpiredPrefs only iterated sessionPrefs, so the
+      // matching autonomousExpiry entry was never reclaimed.
+      expect(autonomousExpiry.has("user1:chat1")).toBe(false);
+    });
   });
 
   describe("resetSessionPrefs", () => {
@@ -354,6 +276,22 @@ describe("DMPolicy", () => {
 
       const prefs = policy.getSessionPrefs("user1", "chat1");
       expect(prefs.level).toBe(ApprovalLevel.SMART);
+    });
+
+    it("clears the tracked autonomous expiry so it cannot leak", () => {
+      const autonomousExpiry = (policy as unknown as {
+        autonomousExpiry: Map<string, number>;
+      }).autonomousExpiry;
+
+      // initFromProfile keys on `${userId}:${chatId}` when a userId is given.
+      policy.initFromProfile("chat1", { autonomousMode: true, autonomousExpiresAt: Date.now() + 60_000 }, "user1");
+      expect(autonomousExpiry.has("user1:chat1")).toBe(true);
+
+      policy.resetSessionPrefs("user1", "chat1");
+
+      // TEETH: the unfixed resetSessionPrefs deleted only sessionPrefs, leaving
+      // the autonomousExpiry entry behind forever.
+      expect(autonomousExpiry.has("user1:chat1")).toBe(false);
     });
   });
 
@@ -377,6 +315,10 @@ describe("isDestructiveOperation", () => {
 
   it("should identify file_write as destructive (can overwrite)", () => {
     expect(isDestructiveOperation("file_write", { path: "test.ts" })).toBe(true);
+  });
+
+  it("should identify file_rename as destructive (moves/overwrites)", () => {
+    expect(isDestructiveOperation("file_rename", { old_path: "a.ts", new_path: "b.ts" })).toBe(true);
   });
 
   it("should identify dangerous shell commands as destructive", () => {

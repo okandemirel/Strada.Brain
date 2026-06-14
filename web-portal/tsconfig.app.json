@@ -24,6 +24,10 @@
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true,
     "noUncheckedSideEffectImports": true,
+    /* baseUrl is required for the office/retro (@react-three/fiber) type
+       resolution; ignoreDeprecations silences the TS 6.0 baseUrl deprecation. */
+    "ignoreDeprecations": "6.0",
+    "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"]
     }

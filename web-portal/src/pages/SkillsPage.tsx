@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
+import { PageEmptyState } from "../components/ui/page-empty-state"
 import { useTranslation } from 'react-i18next'
 import { useQueryClient } from '@tanstack/react-query'
 import { useSkills, useSkillRegistry } from '../hooks/use-api'
@@ -51,33 +52,46 @@ interface ToggleButtonProps {
 }
 
 function ToggleButton({ skill, onToggle }: ToggleButtonProps) {
+  const { t } = useTranslation('pages')
   const [pending, setPending] = useState(false)
+  const [error, setError] = useState<string | null>(null)
   const isActive = skill.status === 'active'
   const isGated = skill.status === 'gated'
   const isError = skill.status === 'error'
 
   const handleClick = async () => {
     setPending(true)
+    setError(null)
     try {
       await onToggle(skill.manifest.name, !isActive)
+    } catch (err) {
+      // Surface the failure instead of dropping it as an unhandled rejection.
+      setError(err instanceof Error ? err.message : String(err))
     } finally {
       setPending(false)
     }
   }
 
   return (
-    <button
-      onClick={handleClick}
-      disabled={pending || isGated || isError}
-      aria-label={isActive ? `${skill.manifest.name}` : `${skill.manifest.name}`}
-      className={`px-3 py-1 rounded-lg text-[12px] font-semibold border transition-all duration-150 font-[inherit] cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
-        isActive
-          ? 'border-error/40 bg-error/10 text-error hover:bg-error/20'
-          : 'border-success/40 bg-success/10 text-success hover:bg-success/20'
-      }`}
-    >
-      {pending ? '...' : isActive ? 'Disable' : 'Enable'}
-    </button>
+    <div className="flex items-center gap-2">
+      {error && (
+        <span className="text-[11px] text-error max-w-[180px] truncate" title={error} role="alert">
+          {error}
+        </span>
+      )}
+      <button
+        onClick={handleClick}
+        disabled={pending || isGated || isError}
+        aria-label={skill.manifest.name}
+        className={`px-3 py-1 rounded-lg text-[12px] font-semibold border transition-all duration-150 font-[inherit] cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
+          isActive
+            ? 'border-error/40 bg-error/10 text-error hover:bg-error/20'
+            : 'border-success/40 bg-success/10 text-success hover:bg-success/20'
+        }`}
+      >
+        {pending ? '...' : isActive ? t('skills.installed.disable') : t('skills.installed.enable')}
+      </button>
+    </div>
   )
 }
 
@@ -118,12 +132,7 @@ function InstalledTab() {
 
   if (skills.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center h-[200px] gap-2.5 text-text-secondary text-center">
-        <h3 className="text-text text-lg font-semibold">{t('skills.installed.noSkillsTitle')}</h3>
-        <p className="text-sm max-w-[400px]">
-          {t('skills.installed.noSkillsDescription')}
-        </p>
-      </div>
+      <PageEmptyState title={t('skills.installed.noSkillsTitle')} description={t('skills.installed.noSkillsDescription')} />
     )
   }
 
@@ -310,14 +319,9 @@ function MarketplaceTab() {
       {data && !isLoading && (
         <>
           {data.skills.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-[200px] gap-2.5 text-text-secondary text-center">
-              <h3 className="text-text text-lg font-semibold">{t('skills.marketplace.noSkillsTitle')}</h3>
-              <p className="text-sm max-w-[400px]">
-                {debouncedSearch
+            <PageEmptyState title={t('skills.marketplace.noSkillsTitle')} description={debouncedSearch
                   ? t('skills.marketplace.noSkillsSearchDescription', { query: debouncedSearch })
-                  : t('skills.marketplace.noSkillsEmptyDescription')}
-              </p>
-            </div>
+                  : t('skills.marketplace.noSkillsEmptyDescription')} />
           ) : (
             <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-4">
               {data.skills.map((skill) => (

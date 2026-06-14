@@ -1,4 +1,6 @@
 {
+  "section.errorTitle": "Couldn’t load this section",
+  "section.errorFallback": "Something went wrong while loading. Please try again.",
   "hub.title": "Settings",
   "hub.loading": "Loading...",
   "hub.tabs.budget": "Budget",
@@ -12,7 +14,6 @@
   "hub.tabs.rateLimits": "Rate Limits",
   "hub.tabs.routing": "Routing",
   "hub.tabs.advanced": "Advanced",
-
   "budget.title": "Budget",
   "budget.description": "Manage spending limits across all systems",
   "budget.loading": "Loading...",
@@ -39,7 +40,6 @@
   "budget.toastFailed": "Failed to update budget settings",
   "budget.tokenLimit": "Token Limit",
   "budget.tokenLimitDescription": "Maximum input tokens per task. Set to -1 for unlimited.",
-
   "providers.title": "Providers",
   "providers.description": "Configure AI providers and models",
   "providers.primaryWorker": "Primary Worker",
@@ -56,7 +56,10 @@
   "providers.refreshing": "Refreshing...",
   "providers.toastRefreshed": "Models refreshed",
   "providers.toastRefreshFailed": "Failed to refresh models",
-
+  "providers.availableModels": "Available Models",
+  "providers.modelsLive": "Live",
+  "providers.modelsStale": "Stale",
+  "providers.modelsCurated": "Curated",
   "agents.title": "Agents",
   "agents.description": "Multi-agent system configuration",
   "agents.loading": "Loading...",
@@ -76,7 +79,6 @@
   "agents.timeMinutesAgo": "{{count}}m ago",
   "agents.timeHoursAgo": "{{count}}h ago",
   "agents.timeDaysAgo": "{{count}}d ago",
-
   "daemon.title": "Daemon",
   "daemon.description": "Background task automation",
   "daemon.loading": "Loading...",
@@ -100,7 +102,6 @@
   "daemon.toastStarted": "Daemon started",
   "daemon.toastStopped": "Daemon stopped",
   "daemon.toastFailed": "Failed to {{action}} daemon",
-
   "learning.title": "Learning",
   "learning.description": "Self-improvement diagnostics and recent decisions",
   "learning.loading": "Loading...",
@@ -125,7 +126,6 @@
   "learning.outcomes": "Outcomes",
   "learning.recentDecisions": "Recent Decisions",
   "learning.noRecentDecisions": "No recent decisions recorded",
-
   "persona.title": "Persona",
   "persona.description": "Personality profiles and channel overrides",
   "persona.loading": "Loading...",
@@ -134,14 +134,13 @@
   "persona.availableProfiles": "Available Profiles",
   "persona.active": "(active)",
   "persona.switch": "Switch",
-  "persona.switching": "Switching\u2026",
+  "persona.switching": "Switching…",
   "persona.channelOverrides": "Channel Overrides",
   "persona.noProfiles": "No personality profiles configured",
   "persona.toastSwitched": "Switched to profile: {{profile}}",
   "persona.toastSwitchFailed": "Failed to switch profile",
-
   "rateLimits.title": "Rate Limits",
-  "rateLimits.description": "Message and token rate limiting \u2014 set 0 for unlimited",
+  "rateLimits.description": "Message and token rate limiting — set 0 for unlimited",
   "rateLimits.loading": "Loading...",
   "rateLimits.messagesPerMinute": "Messages / Minute",
   "rateLimits.messagesPerMinuteDesc": "Max messages accepted per minute",
@@ -150,10 +149,9 @@
   "rateLimits.tokensPerDay": "Tokens / Day",
   "rateLimits.tokensPerDayDesc": "Max tokens consumed per day",
   "rateLimits.saveChanges": "Save Changes",
-  "rateLimits.saving": "Saving\u2026",
+  "rateLimits.saving": "Saving…",
   "rateLimits.toastSaved": "Rate limits saved",
   "rateLimits.toastFailed": "Failed to save rate limits",
-
   "routing.title": "Routing",
   "routing.description": "Execution policy and provider routing",
   "routing.routingPreset": "Routing Preset",
@@ -170,7 +168,6 @@
   "routing.noActivity": "No routing activity yet",
   "routing.toastPresetSet": "Routing preset set to {{preset}}",
   "routing.toastPresetFailed": "Failed to apply routing preset",
-
   "voice.title": "Voice",
   "voice.description": "Voice input and output settings",
   "voice.browserSupport": "Browser Support",
@@ -216,7 +213,7 @@
   "advanced.remainingMinutes": "{{minutes}}m remaining",
   "advanced.durationWhenEnabling": "Duration when enabling",
   "advanced.openChatFirst": "Open a chat session first",
-  "advanced.noActiveSession": "No active session \u2014 open a chat first",
+  "advanced.noActiveSession": "No active session — open a chat first",
   "advanced.toastEnabled": "Autonomous mode enabled for {{hours}}h",
   "advanced.toastDisabled": "Autonomous mode disabled",
   "advanced.toastFailed": "Failed to update autonomous mode",

@@ -44,7 +44,13 @@ const SLACK_TRUNCATE_BOUNDARIES = [
  * Handles common differences between standard Markdown and Slack's mrkdwn.
  */
 export function formatToSlackMrkdwn(markdown: string): string {
-  let text = markdown;
+  // Escape the three mrkdwn-significant HTML characters up front so any
+  // user-controlled substring in the input cannot inject Slack control syntax
+  // (e.g. raw <...> link/mention sequences). The conversions below synthesize
+  // their own <...> link/mention markup AFTER this escape, so legitimate
+  // formatting is unaffected while literal user angle brackets/ampersands are
+  // neutralized.
+  let text = escapeSlackText(markdown);
 
   // Convert headers (### → *bold* for Slack)
   text = text.replace(/^#{1,6}\s+(.+)$/gm, (_, content) => `*${content.trim()}*`);
@@ -140,7 +146,14 @@ export function formatFilePath(path: string, maxLength = 100): string {
  * Format code for Slack with optional language.
  */
 export function formatCodeBlock(code: string, language?: string): string {
-  return fenceCodeBlock(code, language, { surroundingNewlines: true });
+  // Break triple-backtick sequences (backslash between backticks) so the embedded
+  // content can't close the surrounding ``` fence. The old replacement string
+  // collapsed to three literal backticks — a no-op. The fencing/newline wrapping
+  // is delegated to the shared helper (surroundingNewlines === true matches the
+  // historical Slack "\n```...\n```\n" output byte-for-byte).
+  const escaped = code.replace(/```/g, "`\\`\\`");
+
+  return fenceCodeBlock(escaped, language, { surroundingNewlines: true });
 }
 
 /**

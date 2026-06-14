@@ -1157,7 +1157,7 @@ export function registerDaemonCommands(
   daemon
     .command("memory:consolidation-undo <logId>")
     .description("Undo a consolidation by restoring originals and removing summary")
-    .action((logId: string) => {
+    .action(async (logId: string) => {
       const ctx = getDaemonContext();
       if (!ctx) {
         console.error("Daemon is not running. Start with: strada daemon start");
@@ -1171,7 +1171,7 @@ export function registerDaemonCommands(
       }
 
       try {
-        ctx.consolidationEngine.undo(logId);
+        await ctx.consolidationEngine.undo(logId);
         console.log(`Consolidation '${logId}' undone successfully.`);
       } catch (err) {
         console.error(`Failed to undo: ${err instanceof Error ? err.message : String(err)}`);

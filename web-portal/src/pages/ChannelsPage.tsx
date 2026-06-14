@@ -1,4 +1,5 @@
 import { useTranslation } from 'react-i18next'
+import { PageEmptyState } from "../components/ui/page-empty-state"
 import { formatUptime } from '../utils/format'
 import { useChannels, useHealth } from '../hooks/use-api'
 import { PageSkeleton } from '../components/ui/page-skeleton'
@@ -36,10 +37,11 @@ export default function ChannelsPage() {
     return ch.healthy ? t('channels.statusActive') : t('channels.statusDegraded')
   }
 
-  const loading = channelsQuery.isLoading && healthQuery.isLoading
-  const error = channelsQuery.error && healthQuery.error
-    ? channelsQuery.error.message
-    : null
+  // Skeleton until BOTH queries settle, and surface a failure from EITHER —
+  // the previous AND logic skipped the skeleton and hid the error when one
+  // query failed while the other was still loading (broken partial render).
+  const loading = channelsQuery.isLoading || healthQuery.isLoading
+  const error = channelsQuery.error?.message ?? healthQuery.error?.message ?? null
   const health = healthQuery.data ?? null
 
   if (error) return <PageError title={t('channels.errorTitle')} message={error} />
@@ -87,10 +89,7 @@ export default function ChannelsPage() {
       <div className="mb-7">
         <div className="text-xs font-semibold uppercase tracking-[0.04em] text-text-tertiary mb-3.5 flex items-center gap-2">{t('channels.activeChannels')}</div>
         {channels.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-[200px] gap-2.5 text-text-secondary text-center">
-            <h3 className="text-text text-lg font-semibold">{t('channels.noChannelsTitle')}</h3>
-            <p className="text-sm max-w-[400px]">{t('channels.noChannelsDescription')}</p>
-          </div>
+          <PageEmptyState title={t('channels.noChannelsTitle')} description={t('channels.noChannelsDescription')} />
         ) : (
           <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-3.5">
             {channels.map(ch => (

@@ -110,7 +110,7 @@ export const SYSTEM_PRESETS: Record<PresetName, SystemPreset> = {
     delegationTierPremium: "groq:openai/gpt-oss-120b",
     embeddingProvider: "gemini",
     embeddingModel: "gemini-embedding-exp-03-07",
-    embeddingBaseUrl: "https://generativelanguage.googleapis.com/v1beta",
+    embeddingBaseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
     pricing: {
       chat: { input: 0.28, output: 0.42, model: "deepseek-chat (V3.2)" },
       embedding: { perMillion: 0, model: "gemini-embedding (free tier, 1500 req/day)" },

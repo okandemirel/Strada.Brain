@@ -37,7 +37,7 @@ describe('VaultGraphTab', () => {
   it('shows empty state when no vault selected', () => {
     useVaultStore.setState({ selected: null, graphCache: {} });
     render(<VaultGraphTab />);
-    expect(screen.getByText(/bir vault seçin/i)).toBeInTheDocument();
+    expect(screen.getByText(/select a vault to view the graph/i)).toBeInTheDocument();
   });
 
   it('fetches canvas and renders graph', async () => {
@@ -55,6 +55,6 @@ describe('VaultGraphTab', () => {
   it('shows empty-state message when canvas has no nodes', async () => {
     fetchMock.mockResolvedValueOnce({ ok: true, json: async () => ({ nodes: [], edges: [] }) });
     render(<VaultGraphTab />);
-    await waitFor(() => expect(screen.getByText(/graf verisi yok/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/no graph data/i)).toBeInTheDocument());
   });
 });

@@ -18,8 +18,10 @@
   "nav.identity": "Kimlik",
   "nav.personality": "Kişilik",
   "nav.memory": "Bellek",
+  "nav.vaults": "Kasalar",
   "nav.settings": "Ayarlar",
   "nav.skills": "Yetenekler",
+  "nav.office": "Ofis",
   "nav.sidebar": "Kenar cubugu gezintisi",
   "nav.bottomTabs": "Alt sekme gezintisi",
 

@@ -65,6 +65,8 @@ interface WsClient {
   msgCount: number;
   /** Timestamp (ms) when current rate-limit window started. */
   windowStart: number;
+  /** Heartbeat liveness flag: set true on each pong, cleared on each ping. */
+  isAlive: boolean;
 }
 
 interface RecentlyDisconnectedSession {
@@ -175,6 +177,12 @@ export class WebChannel
   private wss: WebSocketServer | null = null;
   private handler: MessageHandler | null = null;
   private healthy = false;
+  /**
+   * Set true at the start of disconnect() so the asynchronous ws 'close'/'error'
+   * events (which the real ws library fires AFTER disconnect() returns) cannot
+   * repopulate per-instance maps (e.g. recentlyDisconnected) after teardown.
+   */
+  private shuttingDown = false;
   private clients = new Map<string, WsClient>();
   private pendingConfirmations = new Map<string, PendingConfirmation>();
   /** Recently disconnected chatIds eligible for reconnect (5 min TTL) */
@@ -197,6 +205,8 @@ export class WebChannel
 
   private static readonly UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   private static readonly RECONNECT_TTL_MS = 5 * 60 * 1000;
+  /** Interval between WebSocket liveness pings (terminates dead half-open sockets). */
+  private static readonly WS_HEARTBEAT_MS = 30 * 1000;
   private static readonly MAX_MONITOR_SNAPSHOT_MESSAGES = 200;
   private static readonly CACHEABLE_MONITOR_TYPES = new Set([
     "monitor:task_update",
@@ -300,10 +310,34 @@ export class WebChannel
       }
     }, WebChannel.RECONNECT_TTL_MS);
 
+    // Heartbeat: ping each client every tick and terminate any that did not
+    // pong since the previous tick. A half-open TCP socket (client vanished
+    // without FIN/RST) never fires 'close', so without this its WsClient leaks
+    // in this.clients indefinitely. terminate() fires 'close' → handleDisconnect
+    // does the normal map/session cleanup.
+    this._wsHeartbeatInterval = setInterval(() => this.wsHeartbeatTick(), WebChannel.WS_HEARTBEAT_MS);
+
     console.log(`Web channel running at http://127.0.0.1:${this.port}`);
   }
 
   private _reconnectCleanupInterval: ReturnType<typeof setInterval> | undefined;
+  private _wsHeartbeatInterval: ReturnType<typeof setInterval> | undefined;
+
+  /**
+   * One heartbeat round: terminate clients that didn't pong since the last
+   * tick, then ping the rest (clearing isAlive until their pong arrives).
+   * Extracted from the interval so it can be driven deterministically in tests.
+   */
+  private wsHeartbeatTick(): void {
+    for (const [, client] of this.clients) {
+      if (!client.isAlive) {
+        client.ws.terminate();
+        continue;
+      }
+      client.isAlive = false;
+      try { client.ws.ping(); } catch { /* socket already closing */ }
+    }
+  }
 
   /**
    * Per-chat in-flight `verify:check_criterion` spawn guard. Each chatId may
@@ -470,9 +504,17 @@ export class WebChannel
 
   async disconnect(): Promise<void> {
     this.healthy = false;
+    // Signal teardown BEFORE closing sockets so the async ws 'close'/'error'
+    // events (which fire after this method returns with the real ws library)
+    // early-return in handleDisconnect instead of repopulating recentlyDisconnected
+    // (and other per-instance maps) after they have been cleared below.
+    this.shuttingDown = true;
 
     if (this._reconnectCleanupInterval) {
       clearInterval(this._reconnectCleanupInterval);
+    }
+    if (this._wsHeartbeatInterval) {
+      clearInterval(this._wsHeartbeatInterval);
     }
     this.recentlyDisconnected.clear();
     // Intentionally NOT clearing inflightVerifyByChat here. Each spawn owns
@@ -597,7 +639,10 @@ export class WebChannel
   }
 
   sendTypingStop(chatId: string): void {
-    this.sendToClient(chatId, { type: "typing", active: false, messageId: "" });
+    // Mirror sendTypingIndicator's shape exactly (apart from the active flag);
+    // the previous `messageId: ""` was meaningless noise and a latent footgun
+    // for any client that dedupes/routes off messageId.
+    this.sendToClient(chatId, { type: "typing", active: false });
   }
 
   async sendAttachment(chatId: string, attachment: Attachment): Promise<void> {
@@ -611,13 +656,25 @@ export class WebChannel
   async requestConfirmation(req: ConfirmationRequest): Promise<string> {
     const confirmId = randomUUID();
 
-    this.sendToClient(req.chatId, {
+    const delivered = this.sendToClient(req.chatId, {
       type: "confirmation",
       confirmId,
       question: req.question,
       options: req.options,
       details: req.details,
     });
+
+    // If there is no live socket the confirmation prompt was never delivered;
+    // registering a 5-minute pending entry would block the awaiting orchestrator
+    // for the full timeout with no way for the (absent) user to respond. Resolve
+    // immediately with the non-approving "timeout" sentinel that callers already
+    // treat as "do not proceed".
+    if (!delivered) {
+      getLoggerSafe().debug("requestConfirmation: no live client; resolving as timeout", {
+        chatId: req.chatId,
+      });
+      return "timeout";
+    }
 
     return new Promise<string>((done) => {
       const timer = setTimeout(
@@ -785,8 +842,13 @@ export class WebChannel
       profileId: chatId,
       msgCount: 0,
       windowStart: Date.now(),
+      isAlive: true,
     };
     this.clients.set(chatId, client);
+
+    // Mark live on each pong. Bind to the stable `client` object (not chatId,
+    // which can be reassigned on session_init / reconnect re-keying).
+    ws.on("pong", () => { client.isAlive = true; });
 
     // Note: A temporary 'connected' event is sent immediately, then replaced
     // by the full 'connected' event after session_init with profileId/language.
@@ -820,6 +882,9 @@ export class WebChannel
     });
 
     const handleDisconnect = () => {
+      // During shutdown the maps have already been cleared by disconnect();
+      // skip so a late async 'close'/'error' can't repopulate recentlyDisconnected.
+      if (this.shuttingDown) return;
       const current = this.clients.get(chatId);
       if (current && current.ws === ws) {
         this.clients.delete(chatId);
@@ -967,8 +1032,11 @@ export class WebChannel
           text: "Rate limit exceeded. Please slow down.",
           messageId: randomUUID(),
         });
+        // Let the 'close' handler (handleDisconnect) own teardown — it deletes the
+        // client AND runs per-chat cleanup (appliedInstinctIds, recentlyDisconnected,
+        // streams, pendingConfirmations). Deleting here first made handleDisconnect's
+        // `clients.get(chatId) === ws` guard fail, skipping all of that cleanup.
         client.ws.close(1008, "Rate limit exceeded");
-        this.clients.delete(chatId);
         return;
       }
     }
@@ -997,7 +1065,21 @@ export class WebChannel
             const mimeType = normalizeMimeType(raw.mimeType || raw.type); // Frontend sends "type", normalize to mimeType
             if (!raw.name || !mimeType) continue;
             const buf = typeof raw.data === "string" ? Buffer.from(raw.data, "base64") : undefined;
-            const size = buf?.length ?? raw.size ?? 0;
+
+            // Require decodable bytes for every non-URL attachment. An object
+            // declaring name/mimeType with no `data` field would otherwise fall
+            // back to a client-claimed `raw.size` and skip the magic-byte check,
+            // letting an unvalidated/spoofed attachment through. Derive size
+            // ONLY from the decoded bytes — never trust raw.size.
+            if (!buf || buf.length === 0) {
+              this.sendToClient(chatId, {
+                type: "text",
+                text: `File "${raw.name || 'attachment'}" was rejected: unsupported format or invalid content.`,
+                messageId: randomUUID(),
+              });
+              continue;
+            }
+            const size = buf.length;
 
             // Validate before accepting
             const attachType = mimeType.startsWith("image/") ? "image"
@@ -1012,7 +1094,7 @@ export class WebChannel
               });
               continue;
             }
-            if (buf && !validateMagicBytes(buf, mimeType)) {
+            if (!validateMagicBytes(buf, mimeType)) {
               this.sendToClient(chatId, {
                 type: "text",
                 text: `File "${raw.name || 'attachment'}" was rejected: unsupported format or invalid content.`,
@@ -1547,17 +1629,34 @@ export class WebChannel
           verdict,
           noteLength: note.length,
         });
-        // TODO: Integrate with src/supervisor/supervisor-verification.ts when reachable
-        // from this context. For MVP we acknowledge receipt so the frontend state
-        // transitions out of the pending banner.
+        // Forward the operator's verdict onto the workspace bus so the supervisor
+        // verification subsystem (src/supervisor/supervisor-verification.ts) can
+        // resolve the pending gate by taskId and apply it. The wiring of that
+        // consumer lives outside this channel; when no consumer is attached the
+        // decision is NOT enforced, so we must not pretend it was.
+        const gateForwarded = Boolean(this.workspaceBusEmitter);
+        if (this.workspaceBusEmitter) {
+          this.workspaceBusEmitter("verify:gate_decision", {
+            type: "verify:gate_decision",
+            taskId: safeTaskId,
+            verdict,
+            note,
+          });
+        }
         this.sendToClient(chatId, {
           type: "verify:gate_ack",
           taskId: safeTaskId,
-          // Only an explicit "approve" verdict is an acceptance — "request_changes"
-          // and "escalate" must surface as a non-green banner so operators aren't
-          // misled into thinking an escalation was auto-approved.
-          accepted: verdict === "approve",
+          // Only an explicit "approve" verdict that was actually forwarded for
+          // enforcement is an acceptance — "request_changes"/"escalate" must
+          // surface as a non-green banner, and an unforwarded decision must NOT
+          // clear the pending banner as if it took effect.
+          accepted: gateForwarded && verdict === "approve",
           supervisorVerdict: verdict,
+          // Tells the frontend whether the verdict was actually routed for
+          // enforcement; when false the pending gate is unresolved (no consumer
+          // wired) and the UI should keep an explicit "not yet enforced" state
+          // rather than transitioning out of the pending banner.
+          enforced: gateForwarded,
         });
         break;
       }
@@ -1647,15 +1746,22 @@ export class WebChannel
   // Helpers
   // ===========================================================================
 
-  private sendToClient(chatId: string, data: Record<string, unknown>): void {
+  /**
+   * Send a JSON frame to the connected client for `chatId`.
+   * Returns `false` when no live socket is available (client gone, never
+   * connected, or socket not OPEN) so callers that need a delivery guarantee
+   * — e.g. requestConfirmation — can react instead of silently blocking.
+   */
+  private sendToClient(chatId: string, data: Record<string, unknown>): boolean {
     const client = this.clients.get(chatId);
     if (!client || client.ws.readyState !== 1) {
       if (!client) {
         getLoggerSafe().debug("sendToClient: no active WS client for chatId, response may be lost", { chatId, type: data.type });
       }
-      return;
+      return false;
     }
     this.sendJson(client.ws, data);
+    return true;
   }
 
   private sendJson(ws: WebSocket, data: Record<string, unknown>): void {
@@ -1695,7 +1801,13 @@ export class WebChannel
     }
 
     const legacyProfileId = this.resolveLegacyProfileId(data);
-    if (legacyProfileId) {
+    // Only adopt a legacy profileId that is NOT already registered. profileId is
+    // a public value (sent to clients, stored in localStorage), so without this
+    // guard an unauthenticated request supplying a known profileId would
+    // overwrite that profile's token via issue()'s blind upsert — a profile
+    // takeover. An already-claimed id must present a valid token (handled above);
+    // otherwise fall back to a fresh identity.
+    if (legacyProfileId && !this.identityStore.has(legacyProfileId)) {
       return this.identityStore.issue(legacyProfileId);
     }
 
@@ -1843,6 +1955,27 @@ export class WebChannel
   }
 
   /**
+   * Gate for read-only (GET) proxy requests. Rejects only when a browser
+   * supplies an Origin/Referer header that is NOT an allowed origin — blocking
+   * cross-origin GETs from a hostile same-browser page while still allowing the
+   * header-less non-browser case (e.g. curl, server-to-server reads).
+   */
+  private isAllowedGetProxyRequest(req: HttpReq): boolean {
+    const origin = this.getSingleHeader(req.headers.origin);
+    if (origin !== undefined) {
+      return isAllowedOrigin(origin);
+    }
+
+    const referer = this.getSingleHeader(req.headers.referer);
+    if (referer !== undefined) {
+      return isAllowedOrigin(referer);
+    }
+
+    // No Origin/Referer header — not a browser cross-origin request; allow.
+    return true;
+  }
+
+  /**
    * Proxy /api/* requests to the dashboard server (same-origin solution).
    * GET is allowed for all allowlisted paths; POST/DELETE only for mutable paths.
    */
@@ -1877,6 +2010,17 @@ export class WebChannel
     }
 
     if (method !== "GET" && !this.isTrustedMutableProxyRequest(req)) {
+      res.writeHead(403, { ...WebChannel.SECURITY_HEADERS, "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Forbidden" }));
+      return;
+    }
+
+    // GET requests are read-only but still browser-reachable, so a cross-origin
+    // page could trigger them (CSRF-style). When an Origin/Referer header IS
+    // present it must be an allowed origin; the genuinely header-less case
+    // (non-browser clients like curl) is still permitted so server-to-server
+    // reads keep working.
+    if (method === "GET" && !this.isAllowedGetProxyRequest(req)) {
       res.writeHead(403, { ...WebChannel.SECURITY_HEADERS, "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: "Forbidden" }));
       return;

@@ -390,16 +390,4 @@ describe("delegation config schema", () => {
       expect(result.data.delegationTypes).toBe(customTypes);
     }
   });
-
-  it("validates delegationMaxIterationsPerType defaults to 10", async () => {
-    const { configSchema } = await import("../../../config/config.js");
-    const result = configSchema.safeParse({
-      unityProjectPath: "/tmp/test",
-      anthropicApiKey: "sk-test-key-123456",
-    });
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.delegationMaxIterationsPerType).toBe(10);
-    }
-  });
 });

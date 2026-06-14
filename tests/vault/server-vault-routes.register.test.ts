@@ -2,20 +2,44 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { Readable } from 'node:stream';
 import { VaultRegistry } from '../../src/vault/vault-registry.js';
 import {
-  registerVaultRoutes,
+  handleVaultRoutes,
   type VaultFactory,
 } from '../../src/dashboard/server-vault-routes.js';
+import type { RouteContext } from '../../src/dashboard/server-types.js';
 import type { IVault } from '../../src/vault/vault.interface.js';
 
-function makeFakeApp() {
-  const routes: Record<string, (req: unknown, res: unknown) => unknown> = {};
-  return {
-    get: (p: string, h: (req: unknown, res: unknown) => unknown) => { routes['GET ' + p] = h; },
-    post: (p: string, h: (req: unknown, res: unknown) => unknown) => { routes['POST ' + p] = h; },
-    routes,
-  };
+/**
+ * Drives the production raw-http `handleVaultRoutes` with a mock
+ * IncomingMessage/ServerResponse (the old `registerVaultRoutes` Express adapter
+ * was removed). Captures the JSON status + body.
+ */
+function callRoute(
+  ctx: RouteContext,
+  url: string,
+  method: string,
+  body?: unknown,
+): Promise<{ status: number; body: any }> {
+  return new Promise((resolve) => {
+    const captured = { status: 200, body: undefined as any };
+    const res = {
+      writeHead(status: number) {
+        captured.status = status;
+        return res;
+      },
+      end(s?: string) {
+        if (typeof s === 'string') {
+          try { captured.body = JSON.parse(s); } catch { captured.body = s; }
+        }
+        resolve(captured);
+      },
+    };
+    const req = Readable.from(body !== undefined ? [Buffer.from(JSON.stringify(body))] : []);
+    const handled = handleVaultRoutes(url, method, req as never, res as never, ctx);
+    if (!handled) resolve({ status: 0, body: { __unhandled: true } });
+  });
 }
 
 /** Minimal IVault stub — the POST path never calls init/startWatch synchronously. */
@@ -61,68 +85,67 @@ describe('POST /api/vaults (register)', () => {
     await rm(tmpDir, { recursive: true, force: true });
   });
 
+  const ctxWithFactory = (): RouteContext =>
+    ({ vaultRegistry: registry, vaultFactory: factory } as unknown as RouteContext);
+
   it('happy path: creates a vault when rootPath exists', async () => {
-    const app = makeFakeApp();
-    registerVaultRoutes(app as never, registry, factory);
-    const resp = (await app.routes['POST /api/vaults']({
-      body: { name: 'My Project', rootPath: tmpDir, kind: 'generic' },
-    }, {})) as { id?: string; status?: string; error?: string; kind?: string; rootPath?: string };
-    expect(resp.error).toBeUndefined();
-    expect(resp.id).toMatch(/^generic:[a-f0-9]{8}$/);
-    expect(resp.status).toBe('indexing');
-    expect(resp.rootPath).toBeUndefined();
+    const r = await callRoute(ctxWithFactory(), '/api/vaults', 'POST', {
+      name: 'My Project', rootPath: tmpDir, kind: 'generic',
+    });
+    expect(r.status).toBe(201);
+    expect(r.body.id).toMatch(/^generic:[a-f0-9]{8}$/);
+    expect(r.body.status).toBe('indexing');
+    expect(r.body.rootPath).toBeUndefined();
     expect(factoryCalls).toHaveLength(1);
     expect(registry.list()).toHaveLength(1);
   });
 
   it('rejects invalid (non-existent) path', async () => {
-    const app = makeFakeApp();
-    registerVaultRoutes(app as never, registry, factory);
-    const resp = (await app.routes['POST /api/vaults']({
-      body: { name: 'X', rootPath: '/does/not/exist/abcdef123', kind: 'generic' },
-    }, {})) as { error?: string };
-    expect(resp.error).toMatch(/path/i);
+    const r = await callRoute(ctxWithFactory(), '/api/vaults', 'POST', {
+      name: 'X', rootPath: '/does/not/exist/abcdef123', kind: 'generic',
+    });
+    expect(r.status).toBe(400);
+    expect(r.body.error).toMatch(/path/i);
     expect(registry.list()).toHaveLength(0);
   });
 
   it('rejects relative path', async () => {
-    const app = makeFakeApp();
-    registerVaultRoutes(app as never, registry, factory);
-    const resp = (await app.routes['POST /api/vaults']({
-      body: { name: 'X', rootPath: './relative', kind: 'generic' },
-    }, {})) as { error?: string };
-    expect(resp.error).toMatch(/absolute/i);
+    const r = await callRoute(ctxWithFactory(), '/api/vaults', 'POST', {
+      name: 'X', rootPath: './relative', kind: 'generic',
+    });
+    expect(r.status).toBe(400);
+    expect(r.body.error).toMatch(/absolute/i);
   });
 
   it('rejects invalid name', async () => {
-    const app = makeFakeApp();
-    registerVaultRoutes(app as never, registry, factory);
-    const resp = (await app.routes['POST /api/vaults']({
-      body: { name: 'bad<>name', rootPath: tmpDir, kind: 'generic' },
-    }, {})) as { error?: string };
-    expect(resp.error).toMatch(/name/i);
+    const r = await callRoute(ctxWithFactory(), '/api/vaults', 'POST', {
+      name: 'bad<>name', rootPath: tmpDir, kind: 'generic',
+    });
+    expect(r.status).toBe(400);
+    expect(r.body.error).toMatch(/name/i);
   });
 
   it('rejects duplicate registration', async () => {
-    const app = makeFakeApp();
-    registerVaultRoutes(app as never, registry, factory);
-    const first = (await app.routes['POST /api/vaults']({
-      body: { name: 'Proj', rootPath: tmpDir, kind: 'generic' },
-    }, {})) as { id?: string };
-    expect(first.id).toBeDefined();
+    const first = await callRoute(ctxWithFactory(), '/api/vaults', 'POST', {
+      name: 'Proj', rootPath: tmpDir, kind: 'generic',
+    });
+    expect(first.body.id).toBeDefined();
 
-    const second = (await app.routes['POST /api/vaults']({
-      body: { name: 'Proj', rootPath: tmpDir, kind: 'generic' },
-    }, {})) as { error?: string };
-    expect(second.error).toMatch(/already/i);
+    const second = await callRoute(ctxWithFactory(), '/api/vaults', 'POST', {
+      name: 'Proj', rootPath: tmpDir, kind: 'generic',
+    });
+    expect(second.status).toBe(409);
+    expect(second.body.error).toMatch(/already/i);
   });
 
   it('responds with 503 message when no factory is wired', async () => {
-    const app = makeFakeApp();
-    registerVaultRoutes(app as never, registry); // no factory
-    const resp = (await app.routes['POST /api/vaults']({
-      body: { name: 'Proj', rootPath: tmpDir, kind: 'generic' },
-    }, {})) as { error?: string };
-    expect(resp.error).toMatch(/VaultFactory not installed/i);
+    const r = await callRoute(
+      { vaultRegistry: registry } as unknown as RouteContext, // no vaultFactory
+      '/api/vaults',
+      'POST',
+      { name: 'Proj', rootPath: tmpDir, kind: 'generic' },
+    );
+    expect(r.status).toBe(503);
+    expect(r.body.error).toMatch(/VaultFactory not installed/i);
   });
 });

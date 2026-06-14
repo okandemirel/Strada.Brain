@@ -978,3 +978,44 @@
   padding: 28px;
   animation: admin-fade-in 0.3s ease;
 }
+
+/* ===== Obsidian-style markdown callouts (rendered by remarkObsidianCallouts) ===== */
+.obsidian-callout {
+  margin: 0.75rem 0;
+  padding: 0.55rem 0.9rem;
+  border-left: 3px solid var(--callout-color, var(--color-accent));
+  border-radius: 0.375rem;
+  background: color-mix(in srgb, var(--callout-color, var(--color-accent)) 9%, transparent);
+}
+.obsidian-callout > .callout-title {
+  font-weight: 600;
+  text-transform: capitalize;
+  color: var(--callout-color, var(--color-accent));
+  margin-bottom: 0.2rem;
+}
+.obsidian-callout > :last-child {
+  margin-bottom: 0;
+}
+.callout-note, .callout-info, .callout-abstract, .callout-summary, .callout-tldr, .callout-todo {
+  --callout-color: var(--color-accent);
+}
+.callout-tip, .callout-hint, .callout-success, .callout-check, .callout-done, .callout-example {
+  --callout-color: var(--color-success);
+}
+.callout-warning, .callout-caution, .callout-attention, .callout-question, .callout-help, .callout-faq {
+  --callout-color: var(--color-warning);
+}
+.callout-danger, .callout-error, .callout-failure, .callout-fail, .callout-missing, .callout-bug {
+  --callout-color: var(--color-error);
+}
+
+/* Obsidian inline syntax (remarkObsidian* plugins) */
+.obsidian-wikilink {
+  color: var(--color-accent);
+  text-decoration: none;
+  border-bottom: 1px dashed color-mix(in srgb, var(--color-accent) 50%, transparent);
+}
+.obsidian-embed {
+  color: var(--color-text-secondary);
+  font-style: italic;
+}

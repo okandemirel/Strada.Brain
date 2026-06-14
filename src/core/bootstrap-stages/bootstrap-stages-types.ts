@@ -165,6 +165,8 @@ export interface TaskRuntimeStageResult {
   projectScopeFingerprint?: string;
   commandHandler: CommandHandler;
   messageRouter: MessageRouter;
+  /** Captured so it can be disposed on shutdown (removes taskManager listeners, clears timers). */
+  progressReporter: ProgressReporter;
 }
 
 export interface DaemonTriggerStageResult {

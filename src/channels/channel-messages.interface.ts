@@ -13,9 +13,17 @@ export type ChannelType = "telegram" | "whatsapp" | "cli" | "web" | "discord" | 
 export const MAX_INCOMING_TEXT_LENGTH = 16_000;
 
 export function limitIncomingText(text: string): string {
-  return text.length > MAX_INCOMING_TEXT_LENGTH
-    ? text.slice(0, MAX_INCOMING_TEXT_LENGTH)
-    : text;
+  if (text.length <= MAX_INCOMING_TEXT_LENGTH) {
+    return text;
+  }
+  let out = text.slice(0, MAX_INCOMING_TEXT_LENGTH);
+  // Avoid splitting a surrogate pair at the cap: if the last code unit is a
+  // lone high surrogate (0xD800-0xDBFF), its low surrogate was cut off, so drop it.
+  const last = out.charCodeAt(out.length - 1);
+  if (last >= 0xd800 && last <= 0xdbff) {
+    out = out.slice(0, -1);
+  }
+  return out;
 }
 
 /**
@@ -36,6 +44,13 @@ export interface IncomingMessage {
   attachments?: Attachment[];
   /** ID of message being replied to, if any */
   replyTo?: string;
+  /**
+   * Opaque, channel-specific token correlating a reply back to a specific
+   * inbound interaction (e.g. a Discord interaction token / id). Lets a channel
+   * route the response to the exact interaction that triggered it rather than a
+   * generic chat send.
+   */
+  replyToken?: string;
   /** When the message was sent */
   timestamp: Date;
 }

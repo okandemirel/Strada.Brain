@@ -19,6 +19,34 @@ import type { PostSetupBootstrapContext } from "../common/setup-contract.js";
  */
 export interface IChannelAdapter extends IChannelCore, IChannelReceiver, IChannelSender {
   setPostSetupBootstrapHandler?(handler: ((context: PostSetupBootstrapContext) => Promise<void> | void) | null): void;
+
+  /**
+   * Optional channel-specific wiring hooks. Only some channels (e.g. WebChannel)
+   * implement these; bootstrap calls them with `?.` so non-implementing
+   * channels are simply skipped. Declared here so callers get compile-time
+   * typing instead of `channel as unknown as { ... }` structural casts.
+   */
+
+  /** Resolve the chat/owner that a background task belongs to (e.g. for web routing). */
+  setTaskOwnerResolver?(
+    resolver: (taskId: string) => string | null | undefined | Promise<string | null | undefined>,
+  ): void;
+
+  /** Bridge inbound workspace commands from the frontend into the workspace bus. */
+  setWorkspaceBusEmitter?(
+    emitter: ((event: string, payload: unknown) => void) | null,
+  ): void;
+
+  /** Receive user feedback reactions (thumbs up/down) for the learning system. */
+  setFeedbackHandler?(
+    handler: (
+      type: "thumbs_up" | "thumbs_down",
+      instinctIds: string[],
+      userId?: string,
+      source?: "reaction" | "button",
+    ) => void,
+  ): void;
+
   // Core features are required
   // Optional features use type guards
 }

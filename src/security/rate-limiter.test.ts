@@ -161,6 +161,34 @@ describe("RateLimiter", () => {
       expect(snap.costThisMonth).toBeGreaterThan(0);
     });
   });
+
+  describe("bucket eviction", () => {
+    it("evicts a drained user bucket on a rejected check (no UTC rollover wait)", () => {
+      // tokensPerDay is already exceeded, so every checkMessageRate is rejected
+      // before the allow-path re-registers the bucket. The drained bucket from
+      // the first (pre-quota) message must be evicted immediately.
+      const limiter = new RateLimiter({ messagesPerHour: 10, tokensPerDay: 1000 });
+      expect(limiter.checkMessageRate("user1").allowed).toBe(true);
+      expect(limiter.getSnapshot().activeUsers).toBe(1);
+
+      // Exceed the daily token quota, then let the per-user window drain.
+      limiter.recordTokenUsage(600, 500, "claude");
+      vi.advanceTimersByTime(3_600_001);
+
+      // This check prunes user1's now-empty timestamps, then is rejected by the
+      // token quota — so the bucket is not re-added and gets evicted.
+      expect(limiter.checkMessageRate("user1").allowed).toBe(false);
+      expect(limiter.getSnapshot().activeUsers).toBe(0);
+    });
+
+    it("keeps running daily token aggregate accurate across many records", () => {
+      const limiter = new RateLimiter();
+      for (let i = 0; i < 50; i++) {
+        limiter.recordTokenUsage(100, 200, "claude");
+      }
+      expect(limiter.getSnapshot().tokensToday).toBe(50 * 300);
+    });
+  });
 });
 
 describe("estimateCost", () => {

@@ -832,6 +832,67 @@ describe("AgentManager", () => {
       await idleManager.shutdown();
       vi.useRealTimers();
     });
+
+    it("does not evict an agent that has an in-flight request (eviction race guard)", async () => {
+      const evictEvents: unknown[] = [];
+      eventBus.on("agent:evicted", (evt) => evictEvents.push(evt));
+
+      // idleTimeoutMs < 0 makes `now - lastActivity > idleTimeoutMs` always true
+      // (so every agent is a timeout candidate regardless of wall-clock), and the
+      // constructor skips the idle interval (only started when > 0). This isolates
+      // the busy guard as the sole reason eviction is skipped.
+      const idleManager = new AgentManager({
+        config: makeConfig({ idleTimeoutMs: -1 }),
+        registry,
+        budgetTracker,
+        eventBus,
+        providerManager: {} as never,
+        toolRegistry: { getAllTools: () => [] } as never,
+        channel: { sendMessage: vi.fn() } as never,
+        projectPath: "/fake/project",
+        readOnly: false,
+        requireConfirmation: false,
+        metrics: undefined,
+        streamingEnabled: false,
+        stradaDeps: { installed: false, version: undefined },
+        memoryConfig: { dimensions: 768, dbBasePath: tmpDir },
+      });
+
+      // First request creates the agent so we can grab its live orchestrator.
+      await idleManager.routeMessage(makeMsg({ chatId: "chat-1" }));
+      const all = idleManager.getAllAgents();
+      const orchestrator = idleManager.getLiveOrchestrator(all[0].id)!;
+
+      // Make the next handleMessage hang so a request is in-flight while we evict.
+      let release: () => void = () => {};
+      const inFlight = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      (orchestrator.handleMessage as Mock).mockImplementationOnce(async () => {
+        await inFlight;
+        return "delayed response";
+      });
+
+      const routePromise = idleManager.routeMessage(makeMsg({ chatId: "chat-1" }));
+      // Let the in-flight request register (past the awaited resolveAgent
+      // microtasks) before the eviction sweep runs.
+      for (let i = 0; i < 5; i++) {
+        await Promise.resolve();
+      }
+
+      // Sweep: idleTimeoutMs is 0, but the busy agent must be skipped.
+      idleManager.evictIdleAgents();
+      expect(idleManager.getActiveCount()).toBe(1);
+      expect(evictEvents).toHaveLength(0);
+
+      // Complete the request; the agent's memory must still be live for the
+      // post-request syncMemoryCount (no use-after-shutdown — must not throw).
+      release();
+      await expect(routePromise).resolves.toBe("delayed response");
+      expect(idleManager.getActiveCount()).toBe(1);
+
+      await idleManager.shutdown();
+    });
   });
 
   // ===========================================================================

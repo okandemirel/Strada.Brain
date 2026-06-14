@@ -14,8 +14,12 @@ import { convertToolDefinitions } from "./openai-compat.js";
 import { fetchWithRetry as sharedFetchWithRetry } from "../../common/fetch-with-retry.js";
 import {
   ensureOpenAiSubscriptionAuth,
+  refreshOpenAiSubscriptionToken,
+  expandHomePath,
   OPENAI_CHATGPT_AUTH_DEFAULT_FILE,
 } from "../../common/openai-subscription-auth.js";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 const MAX_RETRIES = 3;
 export const MAX_SSE_BUFFER_BYTES = 1 * 1024 * 1024; // 1 MB
@@ -79,6 +83,13 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
   protected readonly auth: OpenAIProviderAuth;
   protected readonly model: string;
   protected readonly baseUrl: string;
+  /** Human-readable reason the last healthCheck() failed (for accurate preflight diagnostics). */
+  private lastHealthDetail?: string;
+
+  /** Returns the reason the most recent healthCheck() failed, if any. */
+  getLastHealthDetail(): string | undefined {
+    return this.lastHealthDetail;
+  }
 
   constructor(
     auth: string | OpenAIProviderAuth,
@@ -99,7 +110,7 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
     options?: { signal?: AbortSignal },
   ): Promise<ProviderResponse> {
     if (this.isChatGptSubscriptionMode()) {
-      return this.chatViaChatGptResponses(systemPrompt, messages, tools);
+      return this.chatViaChatGptResponses(systemPrompt, messages, tools, undefined, options?.signal);
     }
 
     const logger = getLogger();
@@ -137,7 +148,7 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
     options?: { signal?: AbortSignal },
   ): Promise<ProviderResponse> {
     if (this.isChatGptSubscriptionMode()) {
-      return this.chatViaChatGptResponses(systemPrompt, messages, tools, onChunk);
+      return this.chatViaChatGptResponses(systemPrompt, messages, tools, onChunk, options?.signal);
     }
 
     const logger = getLogger();
@@ -289,13 +300,33 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
     messages: ConversationMessage[],
     tools: ToolDefinition[],
     onChunk?: StreamCallback,
+    signal?: AbortSignal,
   ): Promise<ProviderResponse> {
     const logger = getLogger();
-    const response = await this.fetchWithRetry(`${this.baseUrl}/responses`, {
+    let response = await this.fetchWithRetry(`${this.baseUrl}/responses`, {
       method: "POST",
       headers: await this.buildHeaders(),
       body: JSON.stringify(this.buildChatGptResponsesRequest(systemPrompt, messages, tools)),
+      signal,
     });
+
+    // Refresh-on-401: a server-invalidated/rotated subscription token (whose local
+    // JWT is not yet expired, so ensureOpenAiSubscriptionAuth won't have refreshed
+    // it) returns 401/403 here. Force a refresh via the stored refresh_token and
+    // retry once before surfacing an auth error.
+    if ((response.status === 401 || response.status === 403) && await this.tryRefreshChatGptToken()) {
+      await response.body?.cancel().catch(() => {});
+      response = await this.fetchWithRetry(`${this.baseUrl}/responses`, {
+        method: "POST",
+        headers: await this.buildHeaders(),
+        body: JSON.stringify(this.buildChatGptResponsesRequest(systemPrompt, messages, tools)),
+        signal,
+      });
+    }
+    if (!response.ok) {
+      const detail = await this.describeChatGptHealthFailure(response);
+      throw new Error(`${this.name} ${detail}`);
+    }
 
     logger.debug(`${this.name} ChatGPT/Codex subscription API call`, {
       model: this.model,
@@ -308,6 +339,14 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
     }
 
     const reader = response.body.getReader();
+    // Honor the caller's AbortSignal (user/task cancel or the orchestrator's
+    // stall-timeout guard): cancel the in-flight read so a stalled stream cannot
+    // block on reader.read() until the server closes the socket (connection leak).
+    const onAbort = (): void => { void reader.cancel().catch(() => {}); };
+    if (signal) {
+      if (signal.aborted) onAbort();
+      else signal.addEventListener("abort", onAbort, { once: true });
+    }
     const decoder = new TextDecoder();
     let buffer = "";
     let text = "";
@@ -319,6 +358,29 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
       if (!parsed) return;
 
       const { eventName, data } = parsed;
+
+      // The Codex/ChatGPT subscription backend emits `keepalive` heartbeat frames
+      // (~every 30s) during the model's silent reasoning phase — gpt-5.x models can
+      // "think" for tens of seconds to minutes producing no output_text, broken only
+      // by these heartbeats. Surface them as stream progress (an empty chunk) so the
+      // orchestrator's stall-timeout watchdog (markProgress) treats the model as
+      // alive instead of aborting it mid-reasoning. Without this the request is
+      // wrongly killed as a stall and the whole provider chain collapses. Mirrors the
+      // reasoning_content progress signal in the OpenAI-compatible streaming path.
+      if (eventName === "keepalive") {
+        onChunk?.("");
+        return;
+      }
+
+      // Reasoning-summary deltas (emitted when `reasoning.summary` is requested)
+      // stream densely during the silent think phase. They carry no user-visible
+      // answer text, so surface them as an empty liveness heartbeat — the watchdog
+      // stays alive on the long thinking window without flipping to the stall window.
+      if (eventName === "response.reasoning_summary_text.delta") {
+        onChunk?.("");
+        return;
+      }
+
       if (eventName === "response.output_text.delta" && typeof data.delta === "string") {
         text += data.delta;
         onChunk?.(data.delta);
@@ -326,6 +388,10 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
       }
 
       if (eventName === "response.output_item.added" && data.item?.type === "function_call") {
+        // A tool-call-only turn streams these events but no output_text — without a
+        // heartbeat the watchdog would see no progress while large tool-call JSON
+        // arguments stream. Treat as a liveness heartbeat (no visible answer text).
+        onChunk?.("");
         toolCallAccumulator.set(data.item.id, {
           id: data.item.call_id ?? data.item.id,
           name: data.item.name ?? "",
@@ -339,6 +405,7 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
         && typeof data.item_id === "string"
         && typeof data.delta === "string"
       ) {
+        onChunk?.("");
         const existing = toolCallAccumulator.get(data.item_id);
         if (existing) {
           existing.arguments += data.delta;
@@ -353,6 +420,7 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
       }
 
       if (eventName === "response.output_item.done" && data.item?.type === "function_call") {
+        onChunk?.("");
         toolCallAccumulator.set(data.item.id, {
           id: data.item.call_id ?? data.item.id,
           name: data.item.name ?? "",
@@ -385,6 +453,7 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
 
     try {
       while (true) {
+        if (signal?.aborted) break;
         const { done, value } = await reader.read();
         if (done) {
           if (buffer.trim()) {
@@ -407,7 +476,12 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
         }
       }
     } finally {
+      if (signal) signal.removeEventListener("abort", onAbort);
       reader.releaseLock();
+    }
+
+    if (signal?.aborted) {
+      throw new DOMException("ChatGPT subscription stream aborted", "AbortError");
     }
 
     const toolCalls: ToolCall[] = Array.from(toolCallAccumulator.values())
@@ -565,6 +639,7 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
 
   async healthCheck(): Promise<boolean> {
     const logger = getLoggerSafe();
+    this.lastHealthDetail = undefined;
     try {
       if (this.isChatGptSubscriptionMode()) {
         const authConfig = this.getChatGptSubscriptionAuth();
@@ -578,14 +653,27 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
           logger.warn(`${this.name} health check failed: ${authInspection.detail}`);
           return false;
         }
-        const response = await fetch(`${this.baseUrl}/responses`, {
+        let response = await fetch(`${this.baseUrl}/responses`, {
           method: "POST",
           headers: await this.buildHeaders(),
           body: JSON.stringify(this.buildChatGptHealthCheckRequest()),
           signal: AbortSignal.timeout(10_000),
         });
+        // Refresh-on-401: the server can invalidate/rotate a token whose local JWT
+        // is not yet expired, so the ensureOpenAiSubscriptionAuth above won't have
+        // refreshed it. Force a refresh via the stored refresh_token and retry once.
+        if ((response.status === 401 || response.status === 403) && await this.tryRefreshChatGptToken()) {
+          await response.body?.cancel().catch(() => {});
+          response = await fetch(`${this.baseUrl}/responses`, {
+            method: "POST",
+            headers: await this.buildHeaders(),
+            body: JSON.stringify(this.buildChatGptHealthCheckRequest()),
+            signal: AbortSignal.timeout(10_000),
+          });
+        }
         if (!response.ok) {
-          logger.warn(`${this.name} health check failed: HTTP ${response.status}`);
+          this.lastHealthDetail = await this.describeChatGptHealthFailure(response);
+          logger.warn(`${this.name} health check failed: ${this.lastHealthDetail}`);
           return false;
         }
         await response.body?.cancel();
@@ -622,7 +710,7 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
   async listModels(): Promise<string[]> {
     try {
       if (this.isChatGptSubscriptionMode()) {
-        return [this.model];
+        return this.listChatGptSubscriptionModels();
       }
       const response = await fetch(`${this.baseUrl}/models`, {
         method: "GET",
@@ -634,6 +722,38 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
       return (data.data || []).map((m) => m.id).sort();
     } catch {
       return [this.model];
+    }
+  }
+
+  /**
+   * Discover the available Codex models for a ChatGPT/Codex subscription. The
+   * subscription /responses endpoint exposes no live /models list, but the Codex
+   * CLI writes the available models to `models_cache.json` next to the auth file
+   * (e.g. `~/.codex/models_cache.json`). We read the cached `slug` values so the
+   * model catalog/picker can offer the full Codex set instead of just the one
+   * configured model. Any failure (missing/unparseable/empty) degrades to
+   * `[this.model]` and never throws — this is a best-effort local read.
+   */
+  private listChatGptSubscriptionModels(): string[] {
+    const fallback = [this.model];
+    try {
+      const authConfig = this.getChatGptSubscriptionAuth();
+      const authFile = expandHomePath(
+        authConfig.authFile ?? OPENAI_CHATGPT_AUTH_DEFAULT_FILE,
+        process.env,
+      );
+      const cacheFile = join(dirname(authFile), "models_cache.json");
+      const parsed = JSON.parse(readFileSync(cacheFile, "utf8")) as {
+        models?: Array<{ slug?: unknown }>;
+      };
+      const slugs = (parsed.models ?? [])
+        .map((entry) => entry?.slug)
+        .filter((slug): slug is string => typeof slug === "string" && slug.length > 0);
+      if (slugs.length === 0) return fallback;
+      // Ensure the configured model is present, then dedupe (preserving order).
+      return Array.from(new Set([this.model, ...slugs]));
+    } catch {
+      return fallback;
     }
   }
 
@@ -721,6 +841,39 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
     };
   }
 
+  /**
+   * Force-refresh the ChatGPT/Codex subscription access token via the stored
+   * refresh_token. Used after a live 401/403 from a server-invalidated token
+   * whose local JWT has not yet expired (the expiry-driven refresh in
+   * ensureOpenAiSubscriptionAuth does not cover that case). The refresh primitive
+   * writes the new token to the auth file, so a subsequent buildHeaders() picks it
+   * up. Returns true when a refresh succeeded so the caller can retry once.
+   */
+  private async tryRefreshChatGptToken(): Promise<boolean> {
+    if (!this.isChatGptSubscriptionMode()) return false;
+    const authConfig = this.getChatGptSubscriptionAuth();
+    // Refresh only works against the file-based refresh_token; an explicit
+    // in-memory access token has nothing to refresh against.
+    if (authConfig.accessToken) return false;
+    try {
+      const result = await refreshOpenAiSubscriptionToken({
+        authFile: authConfig.authFile ?? OPENAI_CHATGPT_AUTH_DEFAULT_FILE,
+        env: process.env,
+      });
+      if (result.ok) {
+        getLoggerSafe().info(`${this.name} subscription token refreshed after a 401; retrying once`);
+        return true;
+      }
+      getLoggerSafe().warn(`${this.name} subscription token refresh failed: ${result.error ?? "unknown error"}`);
+      return false;
+    } catch (err) {
+      getLoggerSafe().warn(`${this.name} subscription token refresh threw`, {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return false;
+    }
+  }
+
   private buildChatGptResponsesRequest(
     systemPrompt: string,
     messages: ConversationMessage[],
@@ -730,6 +883,12 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
       model: this.model,
       instructions: systemPrompt,
       input: this.buildChatGptInput(messages),
+      // Request a reasoning summary so gpt-5.x reasoning models stream
+      // `response.reasoning_summary_text.delta` events during the otherwise-silent
+      // think phase. This gives a dense liveness heartbeat (handled in processFrame)
+      // on top of the ~30s `keepalive`, and surfaces the model's thinking. `summary`
+      // only (no `effort`) keeps the model's default reasoning depth unchanged.
+      reasoning: { summary: "auto" },
       store: false,
       stream: true,
     };
@@ -745,6 +904,40 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
     }
 
     return body;
+  }
+
+  /**
+   * Turns a failed ChatGPT/Codex /responses probe into an accurate, actionable
+   * reason. The Codex backend rejects non-Codex models with HTTP 400 and a body
+   * like {"detail":"The 'gpt-4.1-mini' model is not supported when using Codex
+   * with a ChatGPT account."} — so a model mismatch must NOT be reported as an
+   * auth failure ("sign in again").
+   */
+  private async describeChatGptHealthFailure(response: Response): Promise<string> {
+    let backendDetail = "";
+    try {
+      const text = await response.text();
+      try {
+        const parsed = JSON.parse(text) as { detail?: unknown; error?: { message?: unknown } };
+        if (typeof parsed.detail === "string") {
+          backendDetail = parsed.detail;
+        } else if (parsed.error && typeof parsed.error.message === "string") {
+          backendDetail = parsed.error.message;
+        }
+      } catch {
+        backendDetail = text.slice(0, 200).trim();
+      }
+    } catch {
+      // ignore body read errors — status code still informs the message
+    }
+
+    if (response.status === 401 || response.status === 403) {
+      return `ChatGPT/Codex subscription was rejected (HTTP ${response.status}). Sign in again.${backendDetail ? ` ${backendDetail}` : ""}`;
+    }
+    if (response.status === 400 || response.status === 404) {
+      return `The configured model "${this.model}" is not accepted by the ChatGPT/Codex subscription endpoint (HTTP ${response.status}).${backendDetail ? ` ${backendDetail}` : ""} Choose a Codex-compatible model (e.g. gpt-5.2) or switch OpenAI to API-key mode.`;
+    }
+    return `ChatGPT/Codex subscription health probe failed (HTTP ${response.status}).${backendDetail ? ` ${backendDetail}` : ""}`;
   }
 
   private buildChatGptHealthCheckRequest(): Record<string, unknown> {

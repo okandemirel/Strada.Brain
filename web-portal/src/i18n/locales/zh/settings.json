@@ -1,4 +1,6 @@
 {
+  "section.errorTitle": "无法加载此部分",
+  "section.errorFallback": "加载时出错，请重试。",
   "hub.title": "设置",
   "hub.loading": "加载中...",
   "hub.tabs.budget": "预算",
@@ -12,7 +14,6 @@
   "hub.tabs.rateLimits": "速率限制",
   "hub.tabs.routing": "路由",
   "hub.tabs.advanced": "高级",
-
   "budget.title": "预算",
   "budget.description": "管理所有系统的支出限额",
   "budget.loading": "加载中...",
@@ -37,7 +38,6 @@
   "budget.sevenDaySpending": "7 天支出",
   "budget.toastUpdated": "预算设置已更新",
   "budget.toastFailed": "预算设置更新失败",
-
   "providers.title": "提供商",
   "providers.description": "配置 AI 提供商和模型",
   "providers.primaryWorker": "主工作器",
@@ -54,7 +54,10 @@
   "providers.refreshing": "刷新中...",
   "providers.toastRefreshed": "模型已刷新",
   "providers.toastRefreshFailed": "模型刷新失败",
-
+  "providers.availableModels": "可用模型",
+  "providers.modelsLive": "实时",
+  "providers.modelsStale": "过期",
+  "providers.modelsCurated": "精选",
   "agents.title": "智能体",
   "agents.description": "多智能体系统配置",
   "agents.loading": "加载中...",
@@ -74,7 +77,6 @@
   "agents.timeMinutesAgo": "{{count}}分钟前",
   "agents.timeHoursAgo": "{{count}}小时前",
   "agents.timeDaysAgo": "{{count}}天前",
-
   "daemon.title": "守护进程",
   "daemon.description": "后台任务自动化",
   "daemon.loading": "加载中...",
@@ -98,7 +100,6 @@
   "daemon.toastStarted": "守护进程已启动",
   "daemon.toastStopped": "守护进程已停止",
   "daemon.toastFailed": "守护进程{{action}}失败",
-
   "learning.title": "学习",
   "learning.description": "自我改进诊断与近期决策",
   "learning.loading": "加载中...",
@@ -123,7 +124,6 @@
   "learning.outcomes": "结果",
   "learning.recentDecisions": "近期决策",
   "learning.noRecentDecisions": "暂无近期决策记录",
-
   "persona.title": "角色",
   "persona.description": "个性档案和频道覆盖",
   "persona.loading": "加载中...",
@@ -132,12 +132,11 @@
   "persona.availableProfiles": "可用档案",
   "persona.active": "（活跃）",
   "persona.switch": "切换",
-  "persona.switching": "切换中\u2026",
+  "persona.switching": "切换中…",
   "persona.channelOverrides": "频道覆盖",
   "persona.noProfiles": "未配置个性档案",
   "persona.toastSwitched": "已切换到档案：{{profile}}",
   "persona.toastSwitchFailed": "档案切换失败",
-
   "rateLimits.title": "速率限制",
   "rateLimits.description": "消息和 Token 速率限制——设为 0 表示无限制",
   "rateLimits.loading": "加载中...",
@@ -148,10 +147,9 @@
   "rateLimits.tokensPerDay": "Token 数 / 天",
   "rateLimits.tokensPerDayDesc": "每天消耗的最大 Token 数",
   "rateLimits.saveChanges": "保存更改",
-  "rateLimits.saving": "保存中\u2026",
+  "rateLimits.saving": "保存中…",
   "rateLimits.toastSaved": "速率限制已保存",
   "rateLimits.toastFailed": "速率限制保存失败",
-
   "routing.title": "路由",
   "routing.description": "执行策略与提供商路由",
   "routing.routingPreset": "路由预设",
@@ -168,7 +166,6 @@
   "routing.noActivity": "暂无路由活动",
   "routing.toastPresetSet": "路由预设已设为 {{preset}}",
   "routing.toastPresetFailed": "路由预设应用失败",
-
   "voice.title": "语音",
   "voice.description": "语音输入和输出设置",
   "voice.browserSupport": "浏览器支持",
@@ -185,7 +182,6 @@
   "voice.voiceOutputDescUnsupported": "此浏览器不可用",
   "voice.toastInputUnsupported": "此浏览器不支持语音输入",
   "voice.toastOutputUnsupported": "此浏览器不支持语音输出",
-
   "mcp.title": "Unity MCP 桥接",
   "mcp.description": "Strada MCP 运行时与 Unity 编辑器桥接的状态",
   "mcp.notInstalled": "此项目未安装 Strada MCP。",

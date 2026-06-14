@@ -31,6 +31,8 @@
   "detail.noOutgoing": "Aucune arête sortante.",
   "detail.loadError": "Impossible de charger les appelants.",
   "empty.selectVault": "Sélectionnez un vault pour afficher le graphe.",
+  "empty.fetching": "Chargement…",
+  "empty.noGraphData": "Aucune donnée de graphe",
   "empty.loading": "Chargement du graphe…",
   "empty.noSymbols": "Aucun symbole indexé pour l'instant.",
   "empty.noMatches": "Aucun symbole ne correspond aux filtres actuels.",

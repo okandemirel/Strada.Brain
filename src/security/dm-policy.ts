@@ -1,25 +1,24 @@
 /**
- * DM Policy (Diff/Merge Confirmation Flow)
+ * DM Policy (approval policy for destructive or modifying operations)
  *
- * Manages confirmation policy for destructive or modifying operations.
+ * Determines whether an operation requires user confirmation. The live
+ * confirmation prompt itself is delivered by the channel adapter via
+ * `channel.requestConfirmation` (see orchestrator-write-gate.ts); this module
+ * only decides whether approval is required and tracks per-session prefs.
  */
 
 import type { IChannelAdapter } from "../channels/channel.interface.js";
 import type { FileDiff, BatchDiff } from "../utils/diff-generator.js";
-import { formatDiffForChannel, formatBatchDiffForChannel } from "../utils/diff-formatter.js";
-import { getLogger } from "../utils/logger.js";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const DEFAULT_TIMEOUT_MS = 300_000; // 5 minutes
 const DEFAULT_FILE_THRESHOLD = 3;
 const DEFAULT_LINE_THRESHOLD = 50;
-const DEFAULT_PREVIEW_LINES = 50;
-const MAX_FULL_DIFF_LINES = 500;
 
 const DESTRUCTIVE_TOOLS = [
   "file_delete",
   "file_delete_directory",
+  "file_rename",
   "file_write",
   "shell_exec",
   "git_push",
@@ -43,58 +42,28 @@ export interface SessionApprovalPrefs {
   expiresAt?: Date;
 }
 
-export interface ApprovalResult {
-  approved: boolean;
-  action: "approve" | "reject" | "edit" | "view_full" | "timeout";
-  editedContent?: string;
-  message?: string;
-}
-
 export interface DMPolicyConfig {
   defaultLevel: ApprovalLevel;
-  defaultTimeoutMs: number;
   smartFileThreshold: number;
   smartLineThreshold: number;
-  maxPreviewLines: number;
-  allowEditing: boolean;
-}
-
-interface PendingConfirmation {
-  id: string;
-  chatId: string;
-  userId: string;
-  requestedAt: Date;
-  timeoutMs: number;
-  fileDiff?: FileDiff;
-  batchDiff?: BatchDiff;
-  resolve: (result: ApprovalResult) => void;
-  operation: string;
-  timer: ReturnType<typeof setTimeout> | null;
 }
 
 // ─── Default Config ──────────────────────────────────────────────────────────
 
 const DEFAULT_CONFIG: DMPolicyConfig = {
   defaultLevel: ApprovalLevel.SMART,
-  defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
   smartFileThreshold: DEFAULT_FILE_THRESHOLD,
   smartLineThreshold: DEFAULT_LINE_THRESHOLD,
-  maxPreviewLines: DEFAULT_PREVIEW_LINES,
-  allowEditing: true,
 };
 
 // ─── DMPolicy Class ──────────────────────────────────────────────────────────
 
 export class DMPolicy {
   private readonly config: DMPolicyConfig;
-  private readonly channel: IChannelAdapter;
   private readonly sessionPrefs = new Map<string, SessionApprovalPrefs>();
-  private readonly pendingConfirmations = new Map<string, PendingConfirmation>();
   private readonly autonomousExpiry = new Map<string, number>();
-  private confirmationCounter = 0;
 
-  constructor(channel: IChannelAdapter, config: Partial<DMPolicyConfig> = {}) {
-    this.channel = channel;
+  constructor(_channel: IChannelAdapter, config: Partial<DMPolicyConfig> = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config };
   }
 
@@ -128,17 +97,25 @@ export class DMPolicy {
     let prefs = this.sessionPrefs.get(resolvedKey);
 
     if (!prefs || this.isExpired(prefs)) {
-      prefs = this.buildPrefs(userId, this.config.defaultLevel);
-      this.sessionPrefs.set(primaryKey, prefs);
-      return prefs;
+      // Do NOT persist the synthetic default on read. Persisting it grew
+      // sessionPrefs unbounded across ephemeral chats: defaults carry no
+      // expiresAt, so cleanupExpiredPrefs could never reclaim them. Callers
+      // (orchestrator user_confirm) only read this value; setSessionPrefs is
+      // the sole writer of persisted prefs.
+      return this.buildPrefs(userId, this.config.defaultLevel);
     }
 
     if (resolvedKey !== primaryKey) {
+      // Promote the chat-scoped fallback entry to the user-specific primary key.
+      // MOVE (not copy): leaving the fallback entries behind duplicated both
+      // sessionPrefs and autonomousExpiry under two keys, leaking the stale pair.
       const copied = { ...prefs, userId };
       this.sessionPrefs.set(primaryKey, copied);
+      this.sessionPrefs.delete(resolvedKey);
       const expiry = this.autonomousExpiry.get(resolvedKey);
       if (expiry !== undefined) {
         this.autonomousExpiry.set(primaryKey, expiry);
+        this.autonomousExpiry.delete(resolvedKey);
       }
       return copied;
     }
@@ -153,7 +130,11 @@ export class DMPolicy {
   }
 
   resetSessionPrefs(userId: string, chatId: string): void {
-    this.sessionPrefs.delete(`${userId}:${chatId}`);
+    const key = `${userId}:${chatId}`;
+    this.sessionPrefs.delete(key);
+    // Also drop any tracked autonomous expiry for this key, otherwise it would
+    // persist forever after the session pref is gone (unbounded leak).
+    this.autonomousExpiry.delete(key);
   }
 
   // ─── Autonomous Profile Init ────────────────────────────────────────────────
@@ -235,156 +216,19 @@ export class DMPolicy {
     return diff.stats.totalChanges >= prefs.smartLineThreshold;
   }
 
-  // ─── Request Approval ──────────────────────────────────────────────────────
-
-  async requestApproval(
-    chatId: string,
-    userId: string,
-    diff: FileDiff | BatchDiff,
-    operation: string,
-    isDestructive = false,
-  ): Promise<ApprovalResult> {
-    const prefs = this.getSessionPrefs(userId, chatId);
-
-    if (!this.isApprovalRequired(prefs, diff, isDestructive)) {
-      return { approved: true, action: "approve", message: "Auto-approved by policy" };
-    }
-
-    const channelType = this.detectChannelType(chatId);
-    const isBatch = "files" in diff;
-
-    const preview = isBatch
-      ? formatBatchDiffForChannel(diff, channelType, { maxLines: this.config.maxPreviewLines })
-      : formatDiffForChannel(diff, channelType, { maxLines: this.config.maxPreviewLines });
-
-    return this.createConfirmation(
-      chatId,
-      userId,
-      diff,
-      operation,
-      preview,
-      channelType,
-      isDestructive,
-    );
-  }
-
-  private createConfirmation(
-    chatId: string,
-    userId: string,
-    diff: FileDiff | BatchDiff,
-    operation: string,
-    preview: string,
-    channelType: "telegram" | "whatsapp" | "cli",
-    isDestructive: boolean,
-  ): Promise<ApprovalResult> {
-    const confirmationId = this.generateConfirmationId();
-
-    return new Promise<ApprovalResult>((resolve) => {
-      const confirmation: PendingConfirmation = {
-        id: confirmationId,
-        chatId,
-        userId,
-        requestedAt: new Date(),
-        timeoutMs: this.config.defaultTimeoutMs,
-        ...("files" in diff ? { batchDiff: diff } : { fileDiff: diff }),
-        resolve,
-        operation,
-        timer: null,
-      };
-
-      this.pendingConfirmations.set(confirmationId, confirmation);
-
-      this.sendConfirmationRequest(confirmation, preview, channelType, isDestructive).catch(
-        (err) => {
-          getLogger().error("Failed to send confirmation request", { error: err });
-          resolve({ approved: false, action: "timeout", message: "Failed to send confirmation" });
-        },
-      );
-
-      confirmation.timer = setTimeout(() => this.handleTimeout(confirmationId), this.config.defaultTimeoutMs);
-    });
-  }
-
-  // ─── Handle User Response ──────────────────────────────────────────────────
-
-  handleUserResponse(confirmationId: string, response: string): boolean {
-    const confirmation = this.pendingConfirmations.get(confirmationId);
-    if (!confirmation) return false;
-
-    const action = this.parseUserResponse(response);
-
-    switch (action) {
-      case "approve":
-        this.resolveConfirmation(confirmationId, { approved: true, action: "approve" });
-        return true;
-
-      case "reject":
-        this.resolveConfirmation(confirmationId, {
-          approved: false,
-          action: "reject",
-          message: "User rejected",
-        });
-        return true;
-
-      case "view_full":
-        this.sendFullDiff(confirmation);
-        return true;
-
-      case "edit":
-        this.handleEditRequest(confirmation);
-        return true;
-
-      default:
-        this.channel
-          .sendText(
-            confirmation.chatId,
-            "Please respond with: ✅ Approve, ❌ Reject, or 📋 View Full",
-          )
-          .catch((err) =>
-            getLogger().error("Failed to send approval prompt", {
-              chatId: confirmation.chatId,
-              error: err instanceof Error ? err.message : String(err),
-            }),
-          );
-        return true;
-    }
-  }
-
-  cancelConfirmation(confirmationId: string, reason = "Cancelled"): boolean {
-    const confirmation = this.pendingConfirmations.get(confirmationId);
-    if (!confirmation) return false;
-
-    this.resolveConfirmation(confirmationId, {
-      approved: false,
-      action: "timeout",
-      message: reason,
-    });
-    return true;
-  }
-
-  // ─── Getters ─────────────────────────────────────────────────────────────────
-
-  getPendingConfirmations(): Array<{
-    id: string;
-    chatId: string;
-    userId: string;
-    requestedAt: Date;
-    operation: string;
-  }> {
-    return Array.from(this.pendingConfirmations.values()).map((c) => ({
-      id: c.id,
-      chatId: c.chatId,
-      userId: c.userId,
-      requestedAt: c.requestedAt,
-      operation: c.operation,
-    }));
-  }
-
   cleanupExpiredPrefs(): void {
     const now = new Date();
     for (const [key, prefs] of this.sessionPrefs.entries()) {
       if (prefs.expiresAt && prefs.expiresAt < now) {
         this.sessionPrefs.delete(key);
+        // Keep autonomousExpiry in lockstep with sessionPrefs so it can't leak.
+        this.autonomousExpiry.delete(key);
+      }
+    }
+    // Reclaim any orphaned expiry whose session pref is already gone.
+    for (const key of this.autonomousExpiry.keys()) {
+      if (!this.sessionPrefs.has(key)) {
+        this.autonomousExpiry.delete(key);
       }
     }
   }
@@ -404,115 +248,6 @@ export class DMPolicy {
 
   private isExpired(prefs: SessionApprovalPrefs): boolean {
     return prefs.expiresAt !== undefined && prefs.expiresAt < new Date();
-  }
-
-  private generateConfirmationId(): string {
-    return `dm_${Date.now()}_${++this.confirmationCounter}`;
-  }
-
-  private detectChannelType(chatId: string): "telegram" | "whatsapp" | "cli" {
-    if (chatId.startsWith("telegram_") || /^\d+$/.test(chatId)) return "telegram";
-    if (chatId.startsWith("whatsapp_")) return "whatsapp";
-    return "cli";
-  }
-
-  private async sendConfirmationRequest(
-    confirmation: PendingConfirmation,
-    preview: string,
-    channelType: "telegram" | "whatsapp" | "cli",
-    isDestructive: boolean,
-  ): Promise<void> {
-    const warning = isDestructive ? "⚠️ " : "";
-    const header = `${warning}*Approval Required*\n\n`;
-    const footer = "\n\n_Reply with: ✅ Approve, ❌ Reject, or 📋 View Full_";
-
-    const message =
-      channelType === "cli"
-        ? `${preview}\n\nApprove? (y/n/v for view full): `
-        : header + preview + footer;
-
-    await this.channel.sendMarkdown(confirmation.chatId, message);
-  }
-
-  private parseUserResponse(
-    response: string,
-  ): "approve" | "reject" | "edit" | "view_full" | "unknown" {
-    const lower = response.toLowerCase().trim();
-
-    if (/^(yes|y|approve|✅|✓|ok|confirm)/i.test(lower)) return "approve";
-    if (/^(no|n|reject|❌|✗|cancel|deny|stop)/i.test(lower)) return "reject";
-    if (/^(view|full|more|details|📋|show)/i.test(lower)) return "view_full";
-    if (/^(edit|modify|change|✏️)/i.test(lower)) return "edit";
-
-    return "unknown";
-  }
-
-  private async sendFullDiff(confirmation: PendingConfirmation): Promise<void> {
-    const channelType = this.detectChannelType(confirmation.chatId);
-
-    let fullDiff: string;
-    if (confirmation.fileDiff) {
-      fullDiff = formatDiffForChannel(confirmation.fileDiff, channelType, { maxLines: MAX_FULL_DIFF_LINES });
-    } else if (confirmation.batchDiff) {
-      fullDiff = formatBatchDiffForChannel(confirmation.batchDiff, channelType, { maxLines: MAX_FULL_DIFF_LINES });
-    } else {
-      fullDiff = "No diff available";
-    }
-
-    await this.channel.sendMarkdown(
-      confirmation.chatId,
-      `*Full Diff:*\n\n${fullDiff}\n\n_Reply with: ✅ Approve or ❌ Reject_`,
-    );
-  }
-
-  private handleEditRequest(confirmation: PendingConfirmation): void {
-    if (!this.config.allowEditing || !confirmation.fileDiff) {
-      this.channel
-        .sendText(confirmation.chatId, "Editing is not available for this operation.")
-        .catch((err) =>
-          getLogger().error("Failed to send editing unavailable message", {
-            chatId: confirmation.chatId,
-            error: err instanceof Error ? err.message : String(err),
-          }),
-        );
-      return;
-    }
-
-    this.channel
-      .sendText(
-        confirmation.chatId,
-        "Please send the edited content. Reply with 'cancel' to abort.",
-      )
-      .catch((err) =>
-        getLogger().error("Failed to send edit prompt", {
-          chatId: confirmation.chatId,
-          error: err instanceof Error ? err.message : String(err),
-        }),
-      );
-
-    getLogger().info("Edit requested for confirmation", {
-      confirmationId: confirmation.id,
-      operation: confirmation.operation,
-    });
-  }
-
-  private resolveConfirmation(confirmationId: string, result: ApprovalResult): void {
-    const confirmation = this.pendingConfirmations.get(confirmationId);
-    if (!confirmation) return;
-
-    this.pendingConfirmations.delete(confirmationId);
-    if (confirmation.timer) clearTimeout(confirmation.timer);
-    confirmation.resolve(result);
-  }
-
-  private handleTimeout(confirmationId: string): void {
-    if (!this.pendingConfirmations.has(confirmationId)) return;
-
-    this.resolveConfirmation(confirmationId, {
-      approved: false,
-      action: "timeout",
-      message: "Confirmation timed out",
-    });
   }
 }
 

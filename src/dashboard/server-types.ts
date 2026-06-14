@@ -289,6 +289,7 @@ export interface DashboardProviderManager {
     source: string;
     errors: string[];
   } | null>;
+  getModelCatalogFreshness?(name: string): { stale: boolean; fetchedAt?: number } | undefined;
   getActiveInfo(chatId: string): {
     provider?: string;
     providerName?: string;

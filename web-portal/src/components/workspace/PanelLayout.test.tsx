@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render as rtlRender, screen } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
+
+// PanelLayout renders TopBar, which now reads the route (useLocation) to show a
+// route-aware title, so renders must run inside a Router (as they do in the app).
+const render = (ui: React.ReactElement) => rtlRender(<MemoryRouter>{ui}</MemoryRouter>)
 
 // Mock workspace store
 let mockSecondaryVisible = false

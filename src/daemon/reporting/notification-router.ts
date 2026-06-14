@@ -62,12 +62,18 @@ interface GroupEntry {
 // NOTIFICATION ROUTER
 // =============================================================================
 
+/** How often the background timer flushes stale groups and checks for the quiet→active transition. */
+const MAINTENANCE_INTERVAL_MS = 30_000;
+
 export class NotificationRouter {
   private readonly config: NotificationConfig;
   private readonly eventBus: IEventBus<DaemonEventMap>;
   private readonly storage: DaemonStorage;
   private readonly channelSender?: IChannelSender;
-  private readonly chatId?: string;
+  // Mutable: set on the first inbound message via setChatId() (bootstrap wires
+  // this from the channel.onMessage handler). Until then the 'chat' delivery
+  // path is skipped — there is no chat to deliver to yet.
+  private chatId?: string;
   private readonly quietHoursManager: QuietHoursManager;
 
   /** Time-window grouping: key -> group state */
@@ -79,6 +85,12 @@ export class NotificationRouter {
   /** Event listener references for cleanup */
   private readonly listeners: Array<{ event: string; fn: Function }> = [];
 
+  /** Background maintenance timer (flush groups + drain on quiet→active). */
+  private maintenanceTimer?: ReturnType<typeof setInterval>;
+
+  /** Tracks whether we were in quiet hours on the previous maintenance tick. */
+  private wasQuiet = false;
+
   constructor(deps: NotificationRouterDeps) {
     this.config = deps.config;
     this.eventBus = deps.eventBus;
@@ -89,6 +101,15 @@ export class NotificationRouter {
       config: deps.quietHoursConfig,
       storage: deps.storage,
     });
+    this.wasQuiet = this.quietHoursManager.isQuietHours();
+  }
+
+  /**
+   * Set the chat id used for the 'chat' delivery channel. Called on the first
+   * inbound message so daemon-generated notifications can reach the user.
+   */
+  setChatId(id: string): void {
+    this.chatId = id;
   }
 
   /**
@@ -103,8 +124,12 @@ export class NotificationRouter {
       return;
     }
 
-    // Evict stale group entries to prevent unbounded memory growth
-    this.evictStaleGroups(payload.timestamp);
+    // Flush any group whose window has expired. Unlike a silent eviction this
+    // DELIVERS the residual collapsed summary (count > 1) instead of dropping
+    // it, so a burst's final group is surfaced and memory stays bounded. This
+    // also clears the current key's expired group, so the window-ending event
+    // below is delivered on its own payload rather than masked by the summary.
+    await this.flushExpiredGroups(payload.timestamp);
 
     // 2. Apply time-window grouping
     const groupKey = payload.sourceEvent || payload.title;
@@ -117,29 +142,32 @@ export class NotificationRouter {
       return; // Grouped, delivery deferred
     }
 
-    // New group or window expired -- check if previous group had collapsed entries
-    let deliveryPayload = payload;
-    if (existingGroup && existingGroup.count > 1) {
-      deliveryPayload = {
-        ...existingGroup.lastPayload,
-        title: `${existingGroup.count}x: ${existingGroup.lastPayload.title}`,
-      };
-    }
-    // Start new group window
+    // No active window (new key, or flushed above): start a fresh window for
+    // this event and deliver it on its own payload.
     this.groupMap.set(groupKey, { count: 1, lastPayload: payload, windowStart: now });
+    await this.deliver(payload);
+  }
+
+  /**
+   * Apply silent-handling, rate limiting, quiet-hours buffering, channel
+   * delivery, history persistence, and event emission for a single payload.
+   * Grouping/min-level filtering happen upstream in {@link notify}.
+   */
+  private async deliver(deliveryPayload: NotificationPayload): Promise<void> {
+    const now = deliveryPayload.timestamp;
 
     // 3. Silent urgency: log to history only (never delivered to channels)
-    if (payload.level === "silent") {
+    if (deliveryPayload.level === "silent") {
       this.logToHistory(deliveryPayload, ["dashboard"]);
       this.emitRoutedEvent(deliveryPayload, ["dashboard"], false);
       return;
     }
 
     // 4. Apply per-urgency rate limiting (critical is unlimited)
-    if (payload.level !== "critical") {
-      const limit = RATE_LIMITS[payload.level];
+    if (deliveryPayload.level !== "critical") {
+      const limit = RATE_LIMITS[deliveryPayload.level];
       const windowMs = 60000; // 1 minute sliding window
-      const timestamps = this.rateLimitMap.get(payload.level) ?? [];
+      const timestamps = this.rateLimitMap.get(deliveryPayload.level) ?? [];
       const windowStart = now - windowMs;
       const recent = timestamps.filter((t) => t > windowStart);
 
@@ -148,7 +176,7 @@ export class NotificationRouter {
       }
 
       recent.push(now);
-      this.rateLimitMap.set(payload.level, recent);
+      this.rateLimitMap.set(deliveryPayload.level, recent);
     }
 
     // 5. Check quiet hours
@@ -168,8 +196,15 @@ export class NotificationRouter {
         try {
           await this.channelSender.sendMarkdown(this.chatId, markdown);
           deliveredTo.push("chat");
-        } catch {
-          // Fire-and-forget: log and continue
+        } catch (err) {
+          // Do not swallow silently: surface the failure so a broken channel
+          // send is debuggable, then continue to the next channel.
+          getLoggerSafe().warn("Notification channel send failed", {
+            chatId: this.chatId,
+            urgency: deliveryPayload.level,
+            title: deliveryPayload.title,
+            error: err instanceof Error ? err.message : String(err),
+          });
         }
       } else if (channel === "dashboard") {
         deliveredTo.push("dashboard");
@@ -188,6 +223,20 @@ export class NotificationRouter {
    */
   start(): void {
     this.subscribeToEvents();
+    // Background maintenance: flush stale groups (so the final group in a burst
+    // is actually delivered even without a follow-up event) and drain the
+    // quiet-hours buffer on the quiet→active transition.
+    if (!this.maintenanceTimer) {
+      this.maintenanceTimer = setInterval(() => {
+        this.runMaintenance().catch((err) => {
+          getLoggerSafe().warn("Notification maintenance tick failed", {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
+      }, MAINTENANCE_INTERVAL_MS);
+      // Don't keep the event loop alive solely for this timer.
+      this.maintenanceTimer.unref?.();
+    }
   }
 
   /**
@@ -198,6 +247,91 @@ export class NotificationRouter {
       this.eventBus.off(listener.event as keyof DaemonEventMap & string, listener.fn as never);
     }
     this.listeners.length = 0;
+    if (this.maintenanceTimer) {
+      clearInterval(this.maintenanceTimer);
+      this.maintenanceTimer = undefined;
+    }
+  }
+
+  /**
+   * Periodic maintenance: flush any group whose window has expired, and drain
+   * buffered notifications when quiet hours have just ended.
+   */
+  async runMaintenance(now: number = Date.now()): Promise<void> {
+    await this.flushExpiredGroups(now);
+    await this.checkQuietHoursTransition(now);
+  }
+
+  /**
+   * Flush groups whose window has expired so the residual collapsed summary
+   * (count > 1) is delivered without waiting for a subsequent triggering event.
+   * Single-event groups (count === 1) were already delivered when created.
+   */
+  async flushExpiredGroups(now: number = Date.now()): Promise<void> {
+    const windowMs = this.config.groupingWindowMs;
+    for (const [key, entry] of this.groupMap) {
+      if (now - entry.windowStart >= windowMs) {
+        this.groupMap.delete(key);
+        if (entry.count > 1) {
+          await this.deliver({
+            ...entry.lastPayload,
+            title: `${entry.count}x: ${entry.lastPayload.title}`,
+          });
+        }
+      }
+    }
+  }
+
+  /**
+   * Detect the quiet→active transition and drain the SQLite buffer, delivering
+   * the aggregated backlog so notifications generated during quiet hours are
+   * not lost.
+   */
+  private async checkQuietHoursTransition(now: number): Promise<void> {
+    const isQuiet = this.quietHoursManager.isQuietHours(new Date(now));
+    if (this.wasQuiet && !isQuiet) {
+      await this.drainBufferedNotifications();
+    }
+    this.wasQuiet = isQuiet;
+  }
+
+  /**
+   * Drain all buffered notifications (cleared from SQLite) and deliver them as a
+   * single aggregated chat message. Public so a digest/quiet-end hook can call
+   * it explicitly in addition to the background timer.
+   */
+  async drainBufferedNotifications(now: number = Date.now()): Promise<void> {
+    const buffered = this.quietHoursManager.drainBuffer();
+    if (buffered.length === 0) return;
+
+    const lines = buffered.map(
+      (n) => `**[${n.urgency.toUpperCase()}]** ${n.title}${n.actionHint ? `\n> ${n.actionHint}` : ""}`,
+    );
+    const markdown = `**Buffered during quiet hours (${buffered.length})**\n\n${lines.join("\n\n")}`;
+
+    const deliveredTo: string[] = [];
+    if (this.channelSender && this.chatId) {
+      try {
+        await this.channelSender.sendMarkdown(this.chatId, markdown);
+        deliveredTo.push("chat");
+      } catch (err) {
+        getLoggerSafe().warn("Quiet-hours buffer drain send failed", {
+          chatId: this.chatId,
+          count: buffered.length,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    this.logToHistory(
+      {
+        level: "low",
+        title: `Buffered during quiet hours (${buffered.length})`,
+        message: markdown,
+        timestamp: now,
+      },
+      deliveredTo,
+    );
   }
 
   /**
@@ -355,16 +489,6 @@ export class NotificationRouter {
       buffered,
       timestamp: payload.timestamp,
     });
-  }
-
-  /** Remove group entries whose window has expired to bound memory usage */
-  private evictStaleGroups(now: number): void {
-    const windowMs = this.config.groupingWindowMs;
-    for (const [key, entry] of this.groupMap) {
-      if (now - entry.windowStart >= windowMs) {
-        this.groupMap.delete(key);
-      }
-    }
   }
 
   private formatNotification(payload: NotificationPayload): string {

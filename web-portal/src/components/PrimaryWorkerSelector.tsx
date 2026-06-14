@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useWS } from '../hooks/useWS'
+import { useProviderModels } from '../hooks/use-api'
 
 export interface ProviderInfo {
   name: string
@@ -171,21 +172,45 @@ export function PrimaryWorkerSelectorSurface({
 
 export default function PrimaryWorkerSelector() {
   const { switchProvider, sessionId, profileId } = useWS()
-  const [providers, setProviders] = useState<ProviderInfo[]>([])
+  // Configured providers (base list + active info) still come from
+  // /api/providers/available + /api/providers/active. The per-provider MODEL
+  // OPTIONS now come from the shared live catalog (useProviderModels), the same
+  // source the admin picker uses — so the admin Refresh button (which refetches
+  // the shared ['provider-models'] query) also refreshes this switcher.
+  const [configuredProviders, setConfiguredProviders] = useState<ProviderInfo[]>([])
   const [active, setActive] = useState<ActiveInfo | null>(null)
   const [open, setOpen] = useState(false)
   const [loading, setLoading] = useState(true)
-  const [modelsLoaded, setModelsLoaded] = useState(false)
-  const [modelsLoading, setModelsLoading] = useState(false)
   const [expandedProvider, setExpandedProvider] = useState<string | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
-  const modelsCacheRef = useRef<ProviderInfo[] | null>(null)
   const identityQuery = sessionId
     ? new URLSearchParams({
       chatId: sessionId,
       ...(profileId ? { userId: profileId, conversationId: profileId } : {}),
     }).toString()
     : null
+
+  const { data: modelCatalog, isLoading: catalogLoading, isFetching: catalogFetching } = useProviderModels()
+
+  // name -> models[] map from the live catalog.
+  const catalogModelMap = useMemo(() => {
+    const map = new Map<string, string[]>()
+    for (const entry of modelCatalog?.providers ?? []) {
+      map.set(entry.name, Array.isArray(entry.models) ? entry.models : [])
+    }
+    return map
+  }, [modelCatalog])
+
+  // Merge catalog models into the CONFIGURED providers by name. The catalog
+  // lists ALL providers; the switcher only shows configured ones, so we map
+  // over the configured base list and attach each provider's catalog models.
+  const providers = useMemo<ProviderInfo[]>(
+    () => configuredProviders.map((p) => ({ ...p, models: catalogModelMap.get(p.name) ?? [] })),
+    [configuredProviders, catalogModelMap],
+  )
+
+  // Reflect the catalog hook's loading while the dropdown is open.
+  const modelsLoading = open && (catalogLoading || catalogFetching)
 
   const fetchProviders = useCallback(async () => {
     try {
@@ -197,8 +222,8 @@ export default function PrimaryWorkerSelector() {
 
       if (availRes.ok) {
         const data = await availRes.json()
-        setProviders(
-          (data.providers as ProviderInfo[]).filter((p) => p.configured),
+        setConfiguredProviders(
+          (Array.isArray(data.providers) ? (data.providers as ProviderInfo[]) : []).filter((p) => p.configured),
         )
       }
 
@@ -213,34 +238,9 @@ export default function PrimaryWorkerSelector() {
     }
   }, [identityQuery])
 
-  const fetchModels = useCallback(async () => {
-    if (modelsLoaded || modelsLoading || modelsCacheRef.current) return
-    setModelsLoading(true)
-    try {
-      const res = await fetch('/api/providers/available?withModels=true')
-      if (res.ok) {
-        const data = await res.json()
-        const enriched = (data.providers as ProviderInfo[]).filter((p) => p.configured)
-        modelsCacheRef.current = enriched
-        setProviders(enriched)
-        setModelsLoaded(true)
-      }
-    } catch (err) {
-      console.error('[PrimaryWorkerSelector] fetchModels failed:', err)
-    } finally {
-      setModelsLoading(false)
-    }
-  }, [modelsLoaded, modelsLoading])
-
   useEffect(() => {
     fetchProviders()
   }, [fetchProviders])
-
-  useEffect(() => {
-    if (open && !modelsLoaded) {
-      void fetchModels()
-    }
-  }, [open, modelsLoaded, fetchModels])
 
   useEffect(() => {
     if (!open) return

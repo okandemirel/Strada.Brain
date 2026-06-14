@@ -53,7 +53,7 @@ The `Config` type groups settings into nested sub-configs:
 | `web`                      | Web config                 | `WEB_CHANNEL_PORT` (default 3000)                                                                                                                                                                                                                                                                                        |
 | top-level streaming safety | numeric fields             | `LLM_STREAM_INITIAL_TIMEOUT_MS` (default 600000), `LLM_STREAM_STALL_TIMEOUT_MS` (default 120000)                                                                                                                                                                                                                         |
 | `agent`                    | `AgentConfig`              | `MULTI_AGENT_ENABLED` (default true), `AGENT_DEFAULT_BUDGET_USD`, `AGENT_MAX_CONCURRENT`, `AGENT_IDLE_TIMEOUT_MS`, `AGENT_MAX_MEMORY_ENTRIES`                                                                                                                                                                            |
-| `delegation`               | `DelegationConfig`         | `TASK_DELEGATION_ENABLED` (default true), `AGENT_MAX_DELEGATION_DEPTH`, `AGENT_MAX_CONCURRENT_DELEGATIONS`, `DELEGATION_TIER_LOCAL`, `DELEGATION_TIER_CHEAP`, `DELEGATION_TIER_STANDARD`, `DELEGATION_TIER_PREMIUM`, `DELEGATION_VERBOSITY`, `DELEGATION_TYPES`, `DELEGATION_MAX_ITERATIONS_PER_TYPE`                    |
+| `delegation`               | `DelegationConfig`         | `TASK_DELEGATION_ENABLED` (default true), `AGENT_MAX_DELEGATION_DEPTH`, `AGENT_MAX_CONCURRENT_DELEGATIONS`, `DELEGATION_TIER_LOCAL`, `DELEGATION_TIER_CHEAP`, `DELEGATION_TIER_STANDARD`, `DELEGATION_TIER_PREMIUM`, `DELEGATION_VERBOSITY`, `DELEGATION_TYPES`                    |
 | `autoUpdate`               | auto-update config         | `AUTO_UPDATE_ENABLED`, `AUTO_UPDATE_INTERVAL_HOURS`, `AUTO_UPDATE_IDLE_TIMEOUT_MIN`, `AUTO_UPDATE_CHANNEL`, `AUTO_UPDATE_NOTIFY`, `AUTO_UPDATE_AUTO_RESTART`                                                                                                                                                             |
 
 - `PROVIDER_CHAIN` - comma-separated provider names for Strada's default orchestration pool and fallback ordering
@@ -119,11 +119,6 @@ Exports a `secretPatterns: SecretPattern[]` array with 15 regex patterns for san
 | `discord_token` / `telegram_token` | Platform-specific token formats                    |
 | `aws_access_key`                   | `AKIA` prefix                                      |
 | `secret_value`                     | Generic `secret/token/password/key` assignments    |
-
-### Config Merging
-
-- `createPartialConfig(env)` builds a `PartialConfig` from a subset of env vars
-- `mergeConfigs(base, partial)` shallow-merges top-level fields and each nested sub-config object
 
 ## Key Files
 

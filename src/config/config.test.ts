@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { loadConfig, resetConfigCache, validateConfig } from "./config.js";
+import { loadConfig, resetConfigCache, validateConfig, secretPatterns } from "./config.js";
 import { realpathSync, statSync } from "node:fs";
 
 vi.mock("node:fs", () => ({
@@ -60,6 +60,8 @@ describe("loadConfig", () => {
     delete process.env["IRC_ALLOW_OPEN_ACCESS"];
     delete process.env["TEAMS_APP_ID"];
     delete process.env["TEAMS_APP_PASSWORD"];
+    delete process.env["TEAMS_APP_TYPE"];
+    delete process.env["TEAMS_APP_TENANT_ID"];
     delete process.env["TEAMS_ALLOWED_USER_IDS"];
     delete process.env["TEAMS_ALLOW_OPEN_ACCESS"];
     delete process.env["JWT_SECRET"];
@@ -73,6 +75,9 @@ describe("loadConfig", () => {
     delete process.env["OPENAI_CHATGPT_AUTH_FILE"];
     delete process.env["OPENAI_SUBSCRIPTION_ACCESS_TOKEN"];
     delete process.env["OPENAI_SUBSCRIPTION_ACCOUNT_ID"];
+    delete process.env["PROVIDER_CHAIN"];
+    delete process.env["OPENROUTER_API_KEY"];
+    delete process.env["OPENROUTER_MODEL"];
     delete process.env["STRADA_CORE_REPO_URL"];
     delete process.env["STRADA_MODULES_REPO_URL"];
     delete process.env["STRADA_MCP_PATH"];
@@ -132,7 +137,6 @@ describe("loadConfig", () => {
     delete process.env["DELEGATION_TIER_PREMIUM"];
     delete process.env["DELEGATION_VERBOSITY"];
     delete process.env["DELEGATION_TYPES"];
-    delete process.env["DELEGATION_MAX_ITERATIONS_PER_TYPE"];
     delete process.env["TASK_MAX_CONCURRENT"];
     delete process.env["TASK_MESSAGE_BURST_WINDOW_MS"];
     delete process.env["TASK_MESSAGE_BURST_MAX_MESSAGES"];
@@ -238,7 +242,6 @@ describe("loadConfig", () => {
           maxIterations: 7,
         },
       ]),
-      DELEGATION_MAX_ITERATIONS_PER_TYPE: "7",
     });
 
     const config = loadConfig();
@@ -267,6 +270,88 @@ describe("loadConfig", () => {
       modulesRepoUrl: "https://example.com/modules.git",
       mcpPath: "/opt/strada-mcp",
     });
+  });
+
+  // Regression (M5): anthropic and claude are aliases for one provider, but the
+  // env var is CLAUDE_MODEL. Both model-map keys must carry the configured model
+  // so PROVIDER_CHAIN=anthropic does not silently downgrade to the provider's
+  // hardcoded default model.
+  it("mirrors CLAUDE_MODEL across the claude and anthropic provider-model keys", () => {
+    setEnv({ CLAUDE_MODEL: "claude-opus-4-6-20250514" });
+    const config = loadConfig();
+    expect(config.providerModels?.claude).toBe("claude-opus-4-6-20250514");
+    expect(config.providerModels?.anthropic).toBe("claude-opus-4-6-20250514");
+  });
+
+  // Phase 5: OPENCODE_DEFAULT_MODEL must populate the opencode model override
+  // (opencode uses OPENCODE_DEFAULT_MODEL, not OPENCODE_MODEL, so it was missing
+  // from the generic {PROVIDER}_MODEL loop and never reached providerModels).
+  it("wires OPENCODE_DEFAULT_MODEL into providerModels.opencode", () => {
+    setEnv({ OPENCODE_DEFAULT_MODEL: "opencode/grok-code" });
+    const config = loadConfig();
+    try {
+      expect(config.opencodeDefaultModel).toBe("opencode/grok-code");
+      expect(config.providerModels?.opencode).toBe("opencode/grok-code");
+    } finally {
+      delete process.env["OPENCODE_DEFAULT_MODEL"];
+    }
+  });
+
+  // Phase 5: OPENCODE_BASE_URL must reach a base-URL override map (defaults to
+  // the Zen preset inside createProvider when unset). Phase 6 flips this between
+  // Zen and Go.
+  it("wires OPENCODE_BASE_URL into providerBaseUrls.opencode", () => {
+    setEnv({ OPENCODE_BASE_URL: "https://opencode.ai/go/v1" });
+    const config = loadConfig();
+    try {
+      expect(config.opencodeBaseUrl).toBe("https://opencode.ai/go/v1");
+      expect(config.providerBaseUrls?.opencode).toBe("https://opencode.ai/go/v1");
+    } finally {
+      delete process.env["OPENCODE_BASE_URL"];
+    }
+  });
+
+  it("omits providerBaseUrls.opencode when OPENCODE_BASE_URL is unset", () => {
+    setEnv({ OPENCODE_BASE_URL: undefined });
+    delete process.env["OPENCODE_BASE_URL"];
+    const config = loadConfig();
+    expect(config.providerBaseUrls?.opencode).toBeUndefined();
+  });
+
+  it("loads OPENROUTER_API_KEY and OPENROUTER_MODEL into runtime config", () => {
+    setEnv({
+      OPENROUTER_API_KEY: "sk-or-test-key-123",
+      OPENROUTER_MODEL: "anthropic/claude-sonnet-4",
+    });
+
+    const config = loadConfig();
+
+    try {
+      expect(config.openrouterApiKey).toBe("sk-or-test-key-123");
+      expect(config.providerModels?.openrouter).toBe("anthropic/claude-sonnet-4");
+    } finally {
+      delete process.env["OPENROUTER_API_KEY"];
+      delete process.env["OPENROUTER_MODEL"];
+    }
+  });
+
+  it("accepts OpenRouter as the sole provider key (no Anthropic key required)", () => {
+    setEnv({
+      ANTHROPIC_API_KEY: undefined,
+      OPENROUTER_API_KEY: "sk-or-test-key-123",
+      PROVIDER_CHAIN: "openrouter",
+    });
+    delete process.env["ANTHROPIC_API_KEY"];
+
+    const config = loadConfig();
+
+    try {
+      expect(config.openrouterApiKey).toBe("sk-or-test-key-123");
+      expect(config.anthropicApiKey).toBeUndefined();
+    } finally {
+      delete process.env["OPENROUTER_API_KEY"];
+      delete process.env["PROVIDER_CHAIN"];
+    }
   });
 
   it("loads streaming timeout config into runtime config", () => {
@@ -369,6 +454,43 @@ describe("loadConfig", () => {
     expect(config.telegram.allowedUserIds).toEqual([1, 2, 3]);
   });
 
+  it("ignores trailing comma / blank tokens in CSV user IDs (M14)", () => {
+    setEnv({ ALLOWED_TELEGRAM_USER_IDS: "1,2,," });
+    // TEETH: the unfixed schema parsed the empty tokens to NaN, failed validation,
+    // and loadConfig threw "Invalid configuration" — crashing the whole config load.
+    expect(() => loadConfig()).not.toThrow();
+    expect(loadConfig().telegram.allowedUserIds).toEqual([1, 2]);
+  });
+
+  it("still rejects genuinely non-numeric user IDs (M14 guard)", () => {
+    setEnv({ ALLOWED_TELEGRAM_USER_IDS: "1,abc" });
+    expect(() => loadConfig()).toThrow("Invalid configuration");
+  });
+
+  it("does not pair a user EMBEDDING_PROVIDER with the preset embedding model/baseUrl (M15)", () => {
+    const config = loadConfig({
+      ANTHROPIC_API_KEY: "sk-test-key-123",
+      UNITY_PROJECT_PATH: "/test/project",
+      SYSTEM_PRESET: "budget", // preset embeds via gemini + gemini model + gemini baseUrl
+      EMBEDDING_PROVIDER: "ollama", // user override — provider is NOT from the preset
+    });
+    expect(config.rag.provider).toBe("ollama");
+    // TEETH: pre-fix the preset's model+baseUrl were grafted onto the user's provider.
+    expect(config.rag.model).not.toBe("gemini-embedding-exp-03-07");
+    expect(config.rag.baseUrl).not.toBe("https://generativelanguage.googleapis.com/v1beta/openai");
+  });
+
+  it("applies preset embedding provider/model/baseUrl when no EMBEDDING_PROVIDER override (M15 guard)", () => {
+    const config = loadConfig({
+      ANTHROPIC_API_KEY: "sk-test-key-123",
+      UNITY_PROJECT_PATH: "/test/project",
+      SYSTEM_PRESET: "budget",
+    });
+    expect(config.rag.provider).toBe("gemini");
+    expect(config.rag.model).toBe("gemini-embedding-exp-03-07");
+    expect(config.rag.baseUrl).toBe("https://generativelanguage.googleapis.com/v1beta/openai");
+  });
+
   it("loads channel auth configuration into structured runtime config", () => {
     setEnv({
       ALLOWED_DISCORD_USER_IDS: "user-1,user-2",
@@ -388,6 +510,8 @@ describe("loadConfig", () => {
       IRC_ALLOW_OPEN_ACCESS: "true",
       TEAMS_APP_ID: "teams-app-id",
       TEAMS_APP_PASSWORD: "teams-app-password",
+      TEAMS_APP_TYPE: "SingleTenant",
+      TEAMS_APP_TENANT_ID: "tenant-abc",
       TEAMS_ALLOWED_USER_IDS: "user-a,user-b",
       TEAMS_ALLOW_OPEN_ACCESS: "true",
     });
@@ -418,6 +542,8 @@ describe("loadConfig", () => {
     expect(config.teams).toEqual({
       appId: "teams-app-id",
       appPassword: "teams-app-password",
+      appType: "SingleTenant",
+      appTenantId: "tenant-abc",
       allowedUserIds: ["user-a", "user-b"],
       allowOpenAccess: true,
     });
@@ -913,5 +1039,21 @@ describe("loadConfig", () => {
       setEnv({ CHAIN_COMPENSATION_TIMEOUT_MS: "500000" });
       expect(() => loadConfig()).toThrow();
     });
+  });
+});
+
+describe("secretPatterns redaction", () => {
+  it("bearer_token matches tokens containing digits 1-9 (L11)", () => {
+    const bearer = secretPatterns.find((p) => p.name === "bearer_token")!;
+
+    const token = "Bearer aB9cD8eF7gH6iJ5kL4mN3oP2qR1s"; // 20+ chars, digits 1-9
+    bearer.pattern.lastIndex = 0; // global regex — reset stateful lastIndex
+    // TEETH: the unfixed class [a-zA-Z0_...] excluded digits 1-9 → no match.
+    expect(bearer.pattern.test(token)).toBe(true);
+
+    const input = `Authorization: ${token}`;
+    bearer.pattern.lastIndex = 0;
+    const out = input.replace(bearer.pattern, bearer.redaction as string);
+    expect(out).toBe("Authorization: Bearer [REDACTED]");
   });
 });

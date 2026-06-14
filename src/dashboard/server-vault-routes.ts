@@ -5,7 +5,6 @@ import type { VaultRegistry, VaultStatsWithInit } from '../vault/vault-registry.
 import type { IVault, VaultQuery, VaultStats } from '../vault/vault.interface.js';
 import { getVaultFileReadStats } from '../agents/tools/file-read.js';
 import { getLoggerSafe } from '../utils/logger.js';
-import type { IAIProvider } from '../agents/providers/provider.interface.js';
 import { sendJson, sendJsonError, type RouteContext } from './server-types.js';
 import { summarizeSymbol } from '../vault/symbol-summarizer.js';
 import { resolveExistingVaultRoot } from '../vault/path-policy.js';
@@ -65,6 +64,23 @@ function makeVaultId(kind: 'unity' | 'generic', rootPath: string): string {
   return `${kind}:${hash}`;
 }
 
+/**
+ * Display label for a vault registered WITHOUT an explicit name — i.e. the
+ * config-driven self/unity/obsidian vaults wired at bootstrap. Derived purely
+ * from `kind` so no filesystem path segment ever leaks into the API response
+ * (preserves the SecC2 fix: `GET /api/vaults` must not expose `rootPath`).
+ * POST-registered vaults always carry the user's name, so they never hit this.
+ */
+function defaultVaultName(kind: string, id: string): string {
+  switch (kind) {
+    case 'self': return 'Strada.Brain (self)';
+    case 'unity-project': return 'Unity Project';
+    case 'obsidian': return 'Obsidian Vault';
+    case 'framework': return 'Framework';
+    default: return id;
+  }
+}
+
 /** Merge the registry-tracked init state (if any) into a stats payload. */
 function mergeInitState(
   registry: VaultRegistry,
@@ -78,23 +94,6 @@ function mergeInitState(
     status: init.status,
     ...(init.status === 'error' && init.error ? { error: init.error } : {}),
   };
-}
-
-/**
- * Express-shaped req/res for `registerVaultRoutes` (dev-server/test adapter; production
- * uses the raw Node http path via `handleVaultRoutes`). A full `IncomingMessage &
- * { params; query; body }` typing fights noUncheckedIndexedAccess on every handler
- * access; the tradeoff isn't worth a lint-only win. The raw-http `handleVaultRoutes`
- * path (production) IS strictly typed.
- */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type ExpressLikeReq = any;
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type ExpressLikeRes = any;
-
-export interface RouteApp {
-  get(path: string, handler: (req: ExpressLikeReq, res: ExpressLikeRes) => unknown): void;
-  post(path: string, handler: (req: ExpressLikeReq, res: ExpressLikeRes) => unknown): void;
 }
 
 const MAX_QUERY_TEXT_CHARS = 4096;
@@ -188,138 +187,6 @@ export function buildVaultRetrievalStatsSnapshot(
   };
 }
 
-export function registerVaultRoutes(app: RouteApp, registry: VaultRegistry, factory?: VaultFactory, llmProvider?: IAIProvider): void {
-  // Fix SecC2: do NOT expose absolute rootPath. Clients get id + kind only.
-  app.get('/api/vaults', () => ({
-    items: registry.list().map((v) => ({ id: v.id, kind: v.kind })),
-  }));
-
-  app.post('/api/vaults', async (req) => {
-    if (!factory) {
-      return {
-        error: 'VaultFactory not installed (bootstrap ordering issue or embedding provider missing)',
-      };
-    }
-    const body = (req.body ?? {}) as Record<string, unknown>;
-    const parsed = validateVaultRegisterBody(body);
-    if (!parsed.ok) return { error: parsed.error };
-    const dirCheck = await resolveExistingDirectory(parsed.rootPath);
-    if (!dirCheck.ok) return { error: dirCheck.error };
-    const id = makeVaultId(parsed.kind, dirCheck.realPath);
-    if (registry.get(id)) return { error: 'vault already registered' };
-    const vault = await factory.create({ id, rootPath: dirCheck.realPath, kind: parsed.kind });
-    registry.register(vault);
-    const initPromise = vault.init();
-    registry.trackInit(vault, initPromise);
-    void initPromise.catch((err) => getLoggerSafe().warn('[vault] async init failed', { err }));
-    return {
-      id: vault.id, name: parsed.name,
-      kind: vault.kind, status: 'indexing', symbolCount: 0,
-    };
-  });
-
-  // Round 2: expose vault_search vs file_read retrieval telemetry.
-  app.get('/api/vaults/stats', () => buildVaultRetrievalStatsSnapshot());
-
-  app.get('/api/vaults/:id/stats', async (req) => {
-    const v = registry.get(req.params.id);
-    return v ? mergeInitState(registry, v.id, await v.stats()) : { error: 'not found' };
-  });
-
-  app.get('/api/vaults/:id/tree', (req) => {
-    const v = registry.get(req.params.id);
-    if (!v) return { error: 'not found' };
-    return { items: v.listFiles().map((f) => ({ path: f.path, lang: f.lang })) };
-  });
-
-  app.get('/api/vaults/:id/file', async (req) => {
-    const v = registry.get(req.params.id);
-    if (!v) return { error: 'not found' };
-    const p = req.query?.path;
-    if (isUnsafePath(p)) return { error: 'invalid path' };
-    try {
-      return { body: await v.readFile(p as string) };
-    } catch {
-      return { error: 'invalid path' };
-    }
-  });
-
-  app.post('/api/vaults/:id/search', async (req) => {
-    const v = registry.get(req.params.id);
-    if (!v) return { error: 'not found' };
-    const query = buildVaultSearchQuery((req.body ?? {}) as Record<string, unknown>);
-    if ('error' in query) return { error: query.error };
-    try {
-      return await v.query(query);
-    } catch (err) {
-      if (err instanceof VaultQueryError) {
-        // P2 fix: surface typed query errors (e.g. empty FTS) as 4xx-style payloads.
-        return { error: err.message, code: err.code };
-      }
-      throw err;
-    }
-  });
-
-  app.post('/api/vaults/:id/sync', async (req) => {
-    const v = registry.get(req.params.id);
-    if (!v) return { error: 'not found' };
-    const result = await v.sync();
-    return sanitizeSyncResponse(result);
-  });
-
-  // Phase 2: graph + symbol endpoints.
-  app.get('/api/vaults/:id/canvas', async (req) => {
-    const v = registry.get(req.params.id);
-    if (!v) return { error: 'not found' };
-    return (await v.readCanvas?.()) ?? { nodes: [], edges: [] };
-  });
-
-  app.get('/api/vaults/:id/symbols/by-name', async (req) => {
-    const v = registry.get(req.params.id);
-    if (!v) return { error: 'not found' };
-    const q = typeof req.query?.q === 'string' ? req.query.q : '';
-    if (!q || q.length > 200) return { error: 'invalid q' };
-    const items = (await v.findSymbolsByName?.(q, 20)) ?? [];
-    return { items };
-  });
-
-  app.get('/api/vaults/:id/symbols/:symbolId/callers', async (req) => {
-    const v = registry.get(req.params.id);
-    if (!v) return { error: 'not found' };
-    const sid = String(req.params.symbolId ?? '');
-    if (!sid || sid.length > 1024) return { error: 'invalid symbol id' };
-    const items = (await v.findCallers?.(sid)) ?? [];
-    return { items };
-  });
-
-  app.get('/api/vaults/:id/notes/:path/backlinks', async (req) => {
-    const v = registry.get(req.params.id);
-    if (!v) return { error: 'not found' };
-    const notePath = String(req.params.path ?? '');
-    if (isUnsafePath(notePath)) return { error: 'invalid path' };
-    return (await v.listBacklinks?.(notePath)) ?? { wikilinks: [], callers: [] };
-  });
-
-  app.post('/api/vaults/:id/symbols/:symbolId/summarize', async (req) => {
-    const v = registry.get(req.params.id);
-    if (!v) return { error: 'not found' };
-    const symbolId = String(req.params.symbolId ?? '');
-    if (!symbolId || symbolId.length > 1024) return { error: 'invalid symbol id' };
-    if (!llmProvider) return { error: 'LLM provider not available' };
-
-    const symbols = await v.findSymbolsByName?.(symbolId.split('::').pop() ?? symbolId, 20) ?? [];
-    const symbol = symbols.find((s) => s.symbolId === symbolId);
-    if (!symbol) return { error: 'symbol not found' };
-
-    const summary = await summarizeSymbol(
-      { provider: llmProvider },
-      symbol,
-      (path) => v.readFile!(path),
-    );
-    return { summary };
-  });
-}
-
 /**
  * DashboardServer handler-pattern adapter for the vault routes.
  * Mirrors handleSkillsRoutes / handleSystemRoutes shape so it can be wired
@@ -348,7 +215,9 @@ export function handleVaultRoutes(
       items: registry.list().map((v) => ({
         id: v.id,
         kind: v.kind,
-        // Intentionally do NOT expose v.rootPath — callers only need the id.
+        // Registered name, or a path-free kind-derived label. Intentionally do
+        // NOT expose v.rootPath — callers only need id/kind/name (SecC2).
+        name: registry.getName(v.id) ?? defaultVaultName(v.kind, v.id),
       })),
     });
     return true;
@@ -382,7 +251,7 @@ export function handleVaultRoutes(
         const vault = await factory.create({ id, rootPath: dirCheck.realPath, kind: parsed.kind });
         // Register synchronously so the vault appears in GET /api/vaults immediately,
         // then kick off indexing in the background — init() can take a while on large repos.
-        registry.register(vault);
+        registry.register(vault, parsed.name);
         sendJson(res, {
           id: vault.id,
           name: parsed.name,
@@ -544,7 +413,12 @@ export function handleVaultRoutes(
   if (op === 'file' && method === 'GET') {
     const p = u.searchParams.get('path');
     if (isUnsafePath(p)) { sendJsonError(res, 400, 'invalid path'); return true; }
-    void vault.readFile(p!).then((body) => sendJson(res, { body }))
+    // Optional `maxChars` truncates the returned body (hover preview needs only
+    // the first ~200 chars; avoids shipping a whole ≤2MB file for a tooltip).
+    const max = coercePositiveInteger(u.searchParams.get('maxChars'));
+    void vault.readFile(p!).then((body) => sendJson(res, {
+      body: max !== undefined ? body.slice(0, max) : body,
+    }))
       .catch(() => sendJsonError(res, 400, 'invalid path'));
     return true;
   }

@@ -271,6 +271,31 @@ describe("RAGPipeline", () => {
       expect(output).not.toContain("LowScoreHelper");
     });
 
+    it("falls back to the top result truncated when the single top chunk exceeds the budget (L1)", () => {
+      const longContent = "x".repeat(500);
+      const results = [
+        {
+          chunk: makeChunk({ id: "big", symbol: "BigSystem", content: longContent }),
+          vectorScore: 0.9,
+          finalScore: 0.9,
+        },
+      ];
+
+      // maxTokens * 4 = 40 chars; the 500-char chunk alone exceeds the budget.
+      const output = pipeline.formatContext(results, {
+        maxTokens: 10,
+        truncationStrategy: "drop_lowest",
+        contextLines: 2,
+      });
+
+      // TEETH: the unfixed drop_lowest broke on the first chunk and returned "".
+      expect(output).not.toBe("");
+      expect(output).toContain("BigSystem");
+      expect(output).toContain("```csharp");
+      // Content was truncated to the budget, not the full 500 chars.
+      expect(output).not.toContain(longContent);
+    });
+
     it("returns an empty string for an empty results array", () => {
       expect(pipeline.formatContext([])).toBe("");
     });

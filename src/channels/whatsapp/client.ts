@@ -12,9 +12,16 @@ import type {
   ConfirmationRequest,
 } from "../channel.interface.js";
 import { limitIncomingText } from "../channel-messages.interface.js";
+import { chunkText } from "../chunk-text.js";
 
 // ---------- Constants ----------
 
+/**
+ * Conservative outbound message-length cap. WhatsApp's protocol body limit is
+ * ~65,536 chars, but clients render long messages poorly, so we split well
+ * under that. Long answers are chunked (never truncated/dropped) via chunkText.
+ */
+const WHATSAPP_MAX_CHARS = 4096;
 /** Minimum interval between streaming message edits (ms). */
 const STREAM_THROTTLE_MS = 1000;
 /** Default session inactivity timeout (ms). */
@@ -94,6 +101,15 @@ export class WhatsAppChannel extends EventEmitter implements IChannelAdapter {
   /** Per-chatId applied instinct IDs for emoji-based feedback attribution. */
   private readonly appliedInstinctIds = new Map<string, string[]>();
 
+  /**
+   * Bounded FIFO set of recently-seen inbound message IDs, used to drop
+   * duplicates (e.g. history-sync replays delivered again on reconnect, or the
+   * same id redelivered within a batch). Insertion order is the eviction order.
+   */
+  private readonly seenMessageIds = new Set<string>();
+  /** Maximum number of message IDs to remember for dedup. */
+  private static readonly MAX_SEEN_MESSAGE_IDS = 1000;
+
   // 4.1 Streaming support
   private readonly streamingMessages = new Map<string, StreamingMessageState>();
 
@@ -104,8 +120,21 @@ export class WhatsAppChannel extends EventEmitter implements IChannelAdapter {
   // 4.3 Rate limiting
   private readonly rateLimiter: RateLimiter;
 
+  // Baileys JID helpers captured from the dynamic import at connect time.
+  // They are optional (older builds may not export them, and unit tests mock
+  // baileys without them), so every use must be guarded — the allowlist check
+  // degrades gracefully to a plain string strip when they are unavailable.
+  private jidNormalizedUser?: (jid: string) => string;
+  private jidDecode?: (jid: string) => { user?: string; server?: string } | undefined;
+
   // 4.5 Reconnection
   private reconnectAttempts = 0;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * Set true by disconnect() so a reconnect timer scheduled before shutdown
+   * cannot resurrect a deliberately stopped channel. Reset by connect().
+   */
+  private stopped = false;
 
   constructor(
     sessionPath = ".whatsapp-session",
@@ -122,6 +151,8 @@ export class WhatsAppChannel extends EventEmitter implements IChannelAdapter {
   }
 
   async connect(): Promise<void> {
+    // An intentional connect clears the stop flag set by a prior disconnect.
+    this.stopped = false;
     // Clean up previous socket if reconnecting
     if (this.sock) {
       try {
@@ -139,6 +170,13 @@ export class WhatsAppChannel extends EventEmitter implements IChannelAdapter {
       // @ts-expect-error -- baileys is an optional peer dependency
       const baileys = await import("@whiskeysockets/baileys");
       const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = baileys;
+
+      // Capture Baileys' JID utilities (best-effort) so the allowlist check can
+      // normalize device-suffixed and '<lid>@lid' senders to a comparable
+      // identity. Guarded everywhere they are used so a build/mock without them
+      // still works.
+      this.jidNormalizedUser = baileys.jidNormalizedUser;
+      this.jidDecode = baileys.jidDecode;
 
       const { state, saveCreds } = await useMultiFileAuthState(this.sessionPath);
 
@@ -170,7 +208,7 @@ export class WhatsAppChannel extends EventEmitter implements IChannelAdapter {
               delayMs: delay,
               statusCode,
             });
-            setTimeout(() => void this.connect(), delay);
+            this.scheduleReconnect(delay);
           } else if (!shouldReconnect) {
             logger.error("WhatsApp logged out. Delete session and re-scan QR.");
           } else {
@@ -188,8 +226,25 @@ export class WhatsAppChannel extends EventEmitter implements IChannelAdapter {
 
       // --- messages.upsert with rate limiting, media, and session tracking ---
       this.sock.ev.on("messages.upsert", async (upsert: MessagesUpsert) => {
+        // Only process new live messages. 'append' carries older/offline/
+        // history-synced messages that are (re)delivered on (re)connect, which
+        // must not be re-routed. An undefined type is treated as live.
+        if (upsert.type === "append") return;
+
         for (const msg of upsert.messages) {
           if (!msg.message || msg.key.fromMe) continue;
+
+          // Dedup by message id so a redelivered/duplicate message is processed
+          // at most once (bounded FIFO eviction keeps memory constant).
+          const messageId = msg.key.id;
+          if (messageId) {
+            if (this.seenMessageIds.has(messageId)) continue;
+            this.seenMessageIds.add(messageId);
+            if (this.seenMessageIds.size > WhatsAppChannel.MAX_SEEN_MESSAGE_IDS) {
+              const oldest = this.seenMessageIds.values().next().value;
+              if (oldest !== undefined) this.seenMessageIds.delete(oldest);
+            }
+          }
 
           const chatId = msg.key.remoteJid ?? "";
           const senderId = msg.key.participant ?? chatId;
@@ -204,11 +259,19 @@ export class WhatsAppChannel extends EventEmitter implements IChannelAdapter {
 
           // Auth check — empty allowlist means no restriction, matching Slack-style open access
           {
-            const normalized = senderId.replace(/@.*$/, "");
-            const allowed = isAllowedBySingleIdPolicy(normalized, this.allowedNumbers, "open");
+            // A sender JID can arrive in several shapes: a plain number, a
+            // device-suffixed phone JID ('5511999990000:12@s.whatsapp.net'), or
+            // the newer LID addressing ('<lid>@lid'). Build the set of identities
+            // a single allowlist entry could legitimately match against, then
+            // accept if ANY of them is allowed. This lets operators store either
+            // bare numbers or raw LIDs in the allowlist.
+            const candidates = this.allowlistCandidates(senderId);
+            const allowed = candidates.some((candidate) =>
+              isAllowedBySingleIdPolicy(candidate, this.allowedNumbers, "open"),
+            );
             if (!allowed) {
               logger.warn("WhatsApp: unauthorized number", { senderId });
-              void this.sendText(chatId, "Unauthorized. Contact the admin.");
+              this.safeSend(chatId, "Unauthorized. Contact the admin.");
               continue;
             }
           }
@@ -291,7 +354,7 @@ export class WhatsAppChannel extends EventEmitter implements IChannelAdapter {
           const rateResult = this.rateLimiter.checkMessageRate(senderId);
           if (!rateResult.allowed) {
             logger.warn("WhatsApp: rate limited", { senderId, reason: rateResult.reason });
-            void this.sendText(
+            this.safeSend(
               chatId,
               `Rate limited. ${rateResult.reason ?? "Please wait before sending more messages."}`,
             );
@@ -337,7 +400,7 @@ export class WhatsAppChannel extends EventEmitter implements IChannelAdapter {
               const instinctIds = this.appliedInstinctIds.get(chatId);
               if (instinctIds && instinctIds.length > 0) {
                 this.feedbackReactionCallback(feedbackType, instinctIds, senderId, "reaction");
-                void this.sendText(chatId, feedbackType === "thumbs_up" ? "Thanks for the positive feedback!" : "Thanks for the feedback. I'll try to improve.");
+                this.safeSend(chatId, feedbackType === "thumbs_up" ? "Thanks for the positive feedback!" : "Thanks for the feedback. I'll try to improve.");
                 continue;
               }
             }
@@ -379,7 +442,52 @@ export class WhatsAppChannel extends EventEmitter implements IChannelAdapter {
     }
   }
 
+  /**
+   * Schedule a reconnect. The timer handle is stored so disconnect() can cancel
+   * it, and the callback re-checks `stopped` so a timer that already fired after
+   * disconnect cannot resurrect a stopped channel.
+   */
+  private scheduleReconnect(delay: number): void {
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      if (this.stopped) return;
+      // If connect() itself throws before a socket/'close' handler exists (e.g.
+      // useMultiFileAuthState() fails transiently), the 'close' handler never
+      // runs, so attempt-increment and re-scheduling must happen here too.
+      // Otherwise the rejection would float as an unhandled promise rejection
+      // and reconnection would silently stop.
+      this.connect().catch((error) => {
+        if (this.stopped) return;
+        if (this.reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+          const nextDelay = Math.min(
+            BASE_RECONNECT_DELAY_MS * Math.pow(2, this.reconnectAttempts),
+            MAX_RECONNECT_DELAY_MS,
+          );
+          this.reconnectAttempts++;
+          getLogger().warn("WhatsApp reconnect attempt failed, retrying...", {
+            attempt: this.reconnectAttempts,
+            maxAttempts: MAX_RECONNECT_ATTEMPTS,
+            delayMs: nextDelay,
+            error,
+          });
+          this.scheduleReconnect(nextDelay);
+        } else {
+          getLogger().error("WhatsApp max reconnect attempts reached, giving up.", {
+            attempts: this.reconnectAttempts,
+          });
+        }
+      });
+    }, delay);
+  }
+
   async disconnect(): Promise<void> {
+    // Prevent any pending reconnect timer from resurrecting the channel.
+    this.stopped = true;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+
     // Stop session cleanup
     if (this.sessionCleanupInterval) {
       clearInterval(this.sessionCleanupInterval);
@@ -396,8 +504,60 @@ export class WhatsAppChannel extends EventEmitter implements IChannelAdapter {
       resolve("cancelled");
     }
     this.pendingConfirmations.clear();
+    // Clear any pending streaming throttle timers before dropping the states,
+    // otherwise they fire after teardown (and keep the event loop alive).
+    for (const state of this.streamingMessages.values()) {
+      if (state.throttleTimer) {
+        clearTimeout(state.throttleTimer);
+        state.throttleTimer = undefined;
+      }
+    }
     this.streamingMessages.clear();
+    this.seenMessageIds.clear();
     this.sessions.clear();
+  }
+
+  /**
+   * Produce the set of comparable identities a sender JID could match in the
+   * allowlist. Best-effort and order-stable:
+   *   1. The bare local part — strips the device suffix (':12') and domain
+   *      ('@...') so '5511999990000:12@s.whatsapp.net' -> '5511999990000'.
+   *      For a LID this yields the numeric lid (e.g. '12345' from '12345@lid').
+   *   2. Baileys' jidNormalizedUser(jid) — collapses a device-suffixed JID to a
+   *      canonical user JID; helps when operators store full JIDs.
+   *   3. Baileys' jidDecode(jid).user — the decoded user part for either the
+   *      's.whatsapp.net' or 'lid' server, so a raw LID stored in the allowlist
+   *      still matches.
+   *   4. The raw senderId — so an allowlist entry kept verbatim (e.g. the exact
+   *      '<lid>@lid' string) matches too.
+   * Duplicates are removed while preserving order; Baileys helpers are guarded
+   * since they may be absent (older builds / test mocks).
+   */
+  private allowlistCandidates(senderId: string): string[] {
+    const candidates: string[] = [];
+    const add = (value: string | undefined | null): void => {
+      if (value && !candidates.includes(value)) candidates.push(value);
+    };
+
+    // Plain strip — device suffix (':') and domain ('@') removed.
+    add(senderId.replace(/[:@].*$/, ""));
+
+    // Baileys normalization (best-effort; guard against missing util / throws).
+    try {
+      add(this.jidNormalizedUser?.(senderId));
+    } catch {
+      // Ignore — fall back to the other candidates.
+    }
+    try {
+      add(this.jidDecode?.(senderId)?.user);
+    } catch {
+      // Ignore — fall back to the other candidates.
+    }
+
+    // Raw JID last, so a verbatim allowlist entry (e.g. '<lid>@lid') matches.
+    add(senderId);
+
+    return candidates;
   }
 
   onMessage(handler: (msg: IncomingMessage) => Promise<void>): void {
@@ -420,18 +580,36 @@ export class WhatsAppChannel extends EventEmitter implements IChannelAdapter {
 
   async sendText(chatId: string, text: string): Promise<void> {
     if (!this.sock) throw new Error("WhatsApp not connected");
-    await this.sock.sendMessage(chatId, { text });
+    // Long answers must be split into multiple messages rather than sent as a
+    // single oversize body (which the server/client rejects). chunkText prefers
+    // newline/space boundaries and never drops content; empty chunks are skipped.
+    for (const chunk of chunkText(text, WHATSAPP_MAX_CHARS)) {
+      if (!chunk) continue;
+      await this.sock.sendMessage(chatId, { text: chunk });
+    }
   }
 
   async sendMarkdown(chatId: string, markdown: string): Promise<void> {
-    // WhatsApp supports basic formatting: *bold*, _italic_, ~strikethrough~, ```code```
-    // Convert markdown to WhatsApp format
+    // WhatsApp supports basic formatting: *bold*, _italic_, ~strikethrough~,
+    // and ```fenced``` code blocks. Inline single-backtick `code` is left as-is:
+    // mapping it to ```...``` (a forced multiline block) breaks inline code and
+    // produces malformed nesting when the input already contains fenced blocks.
     const formatted = markdown
       .replace(/\*\*(.+?)\*\*/g, "*$1*") // **bold** -> *bold*
-      .replace(/`([^`]+)`/g, "```$1```") // `code` -> ```code```
       .replace(/^#{1,6}\s+(.+)$/gm, "*$1*"); // # Header -> *Header*
 
     await this.sendText(chatId, formatted);
+  }
+
+  /**
+   * Best-effort send used by fire-and-forget notices (unauthorized, rate-limit,
+   * feedback ack). Swallows failures (e.g. socket null during a reconnect
+   * window) so they never surface as unhandled promise rejections.
+   */
+  private safeSend(chatId: string, text: string): void {
+    this.sendText(chatId, text).catch((error) => {
+      getLogger().debug("WhatsApp: safeSend failed", { chatId, error });
+    });
   }
 
   // ---- 4.6 Typing Indicators ----
@@ -507,6 +685,8 @@ export class WhatsAppChannel extends EventEmitter implements IChannelAdapter {
           },
           STREAM_THROTTLE_MS - (now - state.lastUpdate),
         );
+        // Don't keep the event loop alive solely for a throttled stream update.
+        state.throttleTimer.unref();
       }
       return;
     }
@@ -727,6 +907,11 @@ interface BoomError extends Error {
 }
 
 interface MessagesUpsert {
+  /**
+   * 'notify' for new live messages, 'append' for older/offline/history-synced
+   * messages (re)delivered on (re)connect. Older baileys builds may omit it.
+   */
+  type?: "notify" | "append";
   messages: Array<{
     key: WhatsAppMessageKey;
     message?: {

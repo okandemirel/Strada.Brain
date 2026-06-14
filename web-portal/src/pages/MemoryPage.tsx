@@ -1,4 +1,5 @@
 import { useTranslation } from 'react-i18next'
+import { PageEmptyState } from "../components/ui/page-empty-state"
 import { useMemoryStats, useConsolidation, useMaintenance } from '../hooks/use-api'
 import { PageSkeleton } from '../components/ui/page-skeleton'
 import { PageError } from '../components/ui/page-error'
@@ -16,10 +17,8 @@ export default function MemoryPage() {
   const consolidationQuery = useConsolidation()
   const maintenanceQuery = useMaintenance()
 
-  const loading = memoryQuery.isLoading && consolidationQuery.isLoading && maintenanceQuery.isLoading
-  const error = memoryQuery.error && consolidationQuery.error && maintenanceQuery.error
-    ? memoryQuery.error.message
-    : null
+  const loading = memoryQuery.isLoading || consolidationQuery.isLoading || maintenanceQuery.isLoading
+  const error = memoryQuery.error?.message ?? consolidationQuery.error?.message ?? maintenanceQuery.error?.message ?? null
 
   const memoryStats = memoryQuery.data?.memory ?? null
   const consolidation = consolidationQuery.data ?? null
@@ -189,10 +188,7 @@ export default function MemoryPage() {
       )}
 
       {!memoryStats && tiers.length === 0 && !consolidation?.enabled && !maintenance?.decay?.enabled && (
-        <div className="flex flex-col items-center justify-center h-[200px] gap-2.5 text-text-secondary text-center">
-          <h3 className="text-text text-lg font-semibold">{t('memory.noDataTitle')}</h3>
-          <p className="text-sm max-w-[400px]">{t('memory.noDataDescription')}</p>
-        </div>
+        <PageEmptyState title={t('memory.noDataTitle')} description={t('memory.noDataDescription')} />
       )}
     </div>
   )

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  checkProviderFailureCircuitBreaker,
   classifyStepErrorCategory,
   mergeLearnedInsights,
   normalizeFailureFingerprint,
@@ -10,7 +11,47 @@ import {
   sanitizeToolResult,
   validateReflectionDecision,
 } from "./orchestrator-runtime-utils.js";
+import type { ProviderResponse } from "./providers/provider-core.interface.js";
 import { AgentPhase, type AgentState } from "./agent-state.js";
+
+function makeResponse(overrides: Partial<ProviderResponse> = {}): ProviderResponse {
+  return {
+    text: "",
+    toolCalls: [],
+    stopReason: "end_turn",
+    usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+    ...overrides,
+  };
+}
+
+describe("checkProviderFailureCircuitBreaker (audit #18)", () => {
+  it("detects a reasoning-only empty response (no content but NON-zero tokens)", () => {
+    // The old token-based heuristic missed this: a reasoning model that produced
+    // only thinking tokens and no usable output would slip through as 'ok'.
+    const res = makeResponse({ usage: { inputTokens: 500, outputTokens: 200, totalTokens: 700 } });
+    expect(checkProviderFailureCircuitBreaker(res, 0).action).toBe("warn_continue");
+  });
+
+  it("honors the explicit meta.empty signal even with content-shaped fields", () => {
+    const res = makeResponse({ text: "partial", meta: { empty: true } });
+    expect(checkProviderFailureCircuitBreaker(res, 4).action).toBe("abort");
+  });
+
+  it("treats a real text response as ok", () => {
+    const res = makeResponse({ text: "here is the answer", usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 } });
+    expect(checkProviderFailureCircuitBreaker(res, 4).action).toBe("ok");
+  });
+
+  it("treats a tool-call response with empty text as ok (not empty)", () => {
+    const res = makeResponse({ toolCalls: [{ id: "t1", name: "do", input: {} }] });
+    expect(checkProviderFailureCircuitBreaker(res, 4).action).toBe("ok");
+  });
+
+  it("aborts after the consecutive-failure limit on empties", () => {
+    expect(checkProviderFailureCircuitBreaker(makeResponse(), 4).action).toBe("abort");
+    expect(checkProviderFailureCircuitBreaker(makeResponse(), 0).action).toBe("warn_continue");
+  });
+});
 
 function createState(overrides: Partial<AgentState> = {}): AgentState {
   return {

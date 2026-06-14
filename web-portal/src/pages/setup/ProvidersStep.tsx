@@ -1,13 +1,16 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   PRESETS,
   PROVIDERS,
   getDefaultProviderModel,
+  getOpencodeBaseUrl,
   getProviderModelOptions,
+  type OpencodePlatform,
   type ProviderModelOption,
 } from '../../types/setup-constants'
 import type { OpenAiSubscriptionState } from '../../hooks/useSetupWizard'
+import OpencodePlatformToggle from './OpencodePlatformToggle'
 
 interface ProvidersStepProps {
   selectedPreset: string | null
@@ -20,6 +23,8 @@ interface ProvidersStepProps {
   setProviderKey: (id: string, key: string) => void
   setProviderAuthMode: (id: string, mode: string) => void
   setProviderModel: (id: string, model: string) => void
+  opencodePlatform: OpencodePlatform
+  setOpencodePlatform: (platform: OpencodePlatform) => void
   openaiSubscription: OpenAiSubscriptionState
   signInWithChatGpt: () => Promise<void>
   refreshOpenAiSubscriptionStatus: () => Promise<boolean>
@@ -92,6 +97,28 @@ const TIER_KEYS: Record<string, string> = {
   premium: 'providers.tier.premium',
 }
 
+/**
+ * Merge live model ids with the static catalog so curated metadata (tier,
+ * pricing, context window) is preserved for known models, while unknown live
+ * models still render with a sensible default descriptor.
+ */
+function mergeLiveModels(providerId: string, modelIds: string[]): ProviderModelOption[] {
+  const staticOptions = getProviderModelOptions(providerId)
+  return modelIds.map((modelId) => {
+    const staticOpt = staticOptions.find((o) => o.model === modelId)
+    if (staticOpt) return staticOpt
+    return {
+      model: modelId,
+      label: modelId.split('/').pop() ?? modelId,
+      tier: 'standard' as const,
+      inputPer1M: 0,
+      outputPer1M: 0,
+      contextWindow: 'unknown',
+      notes: 'Auto-discovered model',
+    }
+  })
+}
+
 export default function ProvidersStep({
   selectedPreset,
   selectPreset,
@@ -103,6 +130,8 @@ export default function ProvidersStep({
   setProviderKey,
   setProviderAuthMode,
   setProviderModel,
+  opencodePlatform,
+  setOpencodePlatform,
   openaiSubscription,
   signInWithChatGpt,
   refreshOpenAiSubscriptionStatus,
@@ -112,37 +141,82 @@ export default function ProvidersStep({
   const { t } = useTranslation('setup')
   const [liveModels, setLiveModels] = useState<Map<string, ProviderModelOption[]>>(new Map())
 
+  // Probe each enabled+keyed provider's live model list via POST (key in body,
+  // never the URL). Debounced per-provider so typing a key doesn't flood the
+  // endpoint. OpenCode is re-probed at the chosen platform's base URL. Empty
+  // results / failures simply leave the provider absent from `liveModels`, so the
+  // UI falls back to the static catalog.
+  const PROBE_DEBOUNCE_MS = 400
+  const probeKeyRef = useRef<Record<string, string>>({})
+
   useEffect(() => {
-    fetch('/api/providers/models')
-      .then((res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        return res.json()
-      })
-      .then((data: { providers: Array<{ name: string; models: string[] }> }) => {
-        const map = new Map<string, ProviderModelOption[]>()
-        for (const p of data.providers) {
-          const staticOptions = getProviderModelOptions(p.name)
-          const merged: ProviderModelOption[] = p.models.map((modelId) => {
-            const staticOpt = staticOptions.find((o) => o.model === modelId)
-            if (staticOpt) return staticOpt
-            return {
-              model: modelId,
-              label: modelId.split('/').pop() ?? modelId,
-              tier: 'standard' as const,
-              inputPer1M: 0,
-              outputPer1M: 0,
-              contextWindow: 'unknown',
-              notes: 'Auto-discovered model',
-            }
+    const timers: Array<ReturnType<typeof setTimeout>> = []
+
+    for (const provider of PROVIDERS) {
+      if (!checkedProviders.has(provider.id)) continue
+      const key = (providerKeys[provider.id] ?? '').trim()
+      if (!key) continue
+
+      const baseUrl = provider.id === 'opencode' ? getOpencodeBaseUrl(opencodePlatform) : undefined
+      // Re-probe whenever the key or (for OpenCode) the base URL changes.
+      const probeSignature = `${key}::${baseUrl ?? ''}`
+      if (probeKeyRef.current[provider.id] === probeSignature) continue
+
+      const providerId = provider.id
+      const timer = setTimeout(() => {
+        probeKeyRef.current[providerId] = probeSignature
+        const body: { provider: string; key: string; baseUrl?: string } = { provider: providerId, key }
+        if (baseUrl) body.baseUrl = baseUrl
+
+        fetch('/api/providers/models', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        })
+          .then((res) => {
+            if (!res.ok) throw new Error(`HTTP ${res.status}`)
+            return res.json()
           })
-          map.set(p.name, merged)
-        }
-        setLiveModels(map)
-      })
-      .catch((err) => {
-        console.error('[ProvidersStep] Failed to fetch live models:', err)
-      })
-  }, [])
+          .then((data: { providers?: Array<{ name: string; models: string[] }> }) => {
+            // Ignore a stale response: a newer probe (different key/baseUrl) for
+            // this provider has since superseded this one, so don't clobber it.
+            if (probeKeyRef.current[providerId] !== probeSignature) return
+            const match = data.providers?.find((p) => p.name === providerId)
+            setLiveModels((prev) => {
+              const next = new Map(prev)
+              if (match && match.models.length > 0) {
+                next.set(providerId, mergeLiveModels(providerId, match.models))
+              } else {
+                // Empty result: drop any stale live list so we fall back to static.
+                next.delete(providerId)
+              }
+              return next
+            })
+          })
+          .catch((err) => {
+            // Ignore a stale failure: a newer probe has superseded this one, so
+            // don't reset its signature or drop its (possibly good) live list.
+            if (probeKeyRef.current[providerId] !== probeSignature) return
+            console.error(`[ProvidersStep] live model probe failed for ${providerId}:`, err)
+            // Allow a later retry after a transient failure.
+            delete probeKeyRef.current[providerId]
+            setLiveModels((prev) => {
+              if (!prev.has(providerId)) return prev
+              const next = new Map(prev)
+              next.delete(providerId)
+              return next
+            })
+          })
+      }, PROBE_DEBOUNCE_MS)
+      timers.push(timer)
+    }
+
+    return () => {
+      for (const timer of timers) clearTimeout(timer)
+    }
+  }, [checkedProviders, providerKeys, opencodePlatform])
+
+  const isLiveProvider = (providerId: string): boolean => liveModels.has(providerId)
 
   const getModelsForProvider = (providerId: string): ProviderModelOption[] => {
     return liveModels.get(providerId) ?? getProviderModelOptions(providerId)
@@ -219,8 +293,24 @@ export default function ProvidersStep({
                   </div>
                 )}
 
+                {provider.id === 'opencode' && (
+                  <OpencodePlatformToggle
+                    value={opencodePlatform}
+                    onChange={setOpencodePlatform}
+                  />
+                )}
+
                 <div className="provider-choice-group">
-                  <div className="provider-field-label">{t('providers.defaultModel')}</div>
+                  <div className="provider-field-label">
+                    {t('providers.defaultModel')}
+                    <span
+                      className={`provider-model-source provider-model-source-${isLiveProvider(provider.id) ? 'live' : 'static'}`}
+                    >
+                      {isLiveProvider(provider.id)
+                        ? t('providers.modelSource.live', { defaultValue: 'live' })
+                        : t('providers.modelSource.static', { defaultValue: 'default list' })}
+                    </span>
+                  </div>
                   {modelOptions.length > 0 ? (
                     <div className="provider-model-grid">
                       {modelOptions.map((option) => (

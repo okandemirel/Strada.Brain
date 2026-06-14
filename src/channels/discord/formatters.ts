@@ -109,8 +109,21 @@ export function truncateForDiscord(
   maxLength: number = DISCORD_MAX_MESSAGE_LENGTH,
   addEllipsis: boolean = true
 ): string {
+  if (text.length <= maxLength) {
+    return text;
+  }
+
+  const ellipsis = addEllipsis ? "..." : "";
+  // Guard against maxLength values too small to hold the ellipsis: delegating
+  // to truncateText with reserveMarkerSpace would yield a negative budget and
+  // return the marker alone, which would exceed maxLength. Clamp to a plain
+  // hard cut so the result never exceeds maxLength.
+  if (maxLength <= ellipsis.length) {
+    return text.substring(0, Math.max(0, maxLength));
+  }
+
   return truncateText(text, maxLength, {
-    marker: addEllipsis ? "..." : "",
+    marker: ellipsis,
     reserveMarkerSpace: true,
   });
 }

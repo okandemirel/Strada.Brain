@@ -1092,16 +1092,16 @@ describe("preview", () => {
 // ---------------------------------------------------------------------------
 
 describe("undo", () => {
-  it("should throw if log entry not found", () => {
+  it("should reject if log entry not found", async () => {
     const opts = makeOpts();
     const engine = new MemoryConsolidationEngine(opts);
 
-    expect(() => engine.undo("nonexistent-id")).toThrow(
+    await expect(engine.undo("nonexistent-id")).rejects.toThrow(
       "Consolidation log entry not found: nonexistent-id",
     );
   });
 
-  it("should throw if log entry status is not 'completed'", () => {
+  it("should reject if log entry status is not 'completed'", async () => {
     const { db, tables } = makeFakeDb();
     tables.consolidation_log.push({
       id: "failed-log",
@@ -1122,9 +1122,48 @@ describe("undo", () => {
     const opts = makeOpts({ sqliteDb: db as any });
     const engine = new MemoryConsolidationEngine(opts);
 
-    expect(() => engine.undo("failed-log")).toThrow(
+    await expect(engine.undo("failed-log")).rejects.toThrow(
       "Cannot undo consolidation with status 'failed'",
     );
+  });
+
+  it("awaits the HNSW restore before resolving (no fire-and-forget)", async () => {
+    const { db, tables } = makeFakeDb();
+    tables.consolidation_log.push({
+      id: "log1",
+      summary_entry_id: "sum1",
+      source_entry_ids: JSON.stringify(["s1", "s2"]),
+      status: "completed",
+    });
+    // Source rows for the in-memory restore loop (null embedding → upsert skipped).
+    tables.memories.push({ id: "s1", value: JSON.stringify({ type: "note", content: "a" }), metadata: "{}", embedding: null, created_at: 1 });
+    tables.memories.push({ id: "s2", value: JSON.stringify({ type: "note", content: "b" }), metadata: "{}", embedding: null, created_at: 2 });
+
+    const entries = new Map<string, unknown>();
+    entries.set("sum1", makeMemEntry("sum1", "summary entry", { tier: MemoryTier.Ephemeral }));
+
+    // remove() completes only after a macrotask. If undo() were fire-and-forget,
+    // it would resolve before this flag flips; awaiting it guarantees the flag.
+    let removeCompleted = false;
+    const hnswStore = {
+      search: vi.fn(async () => []),
+      remove: vi.fn(async () => {
+        await new Promise((r) => setTimeout(r, 0));
+        removeCompleted = true;
+      }),
+      upsert: vi.fn(async () => {}),
+    };
+
+    const opts = makeOpts({ sqliteDb: db as any, entries, hnswStore });
+    const engine = new MemoryConsolidationEngine(opts);
+
+    await engine.undo("log1");
+
+    expect(removeCompleted).toBe(true); // proves the HNSW restore was awaited
+    expect(hnswStore.remove).toHaveBeenCalledWith(["sum1"]);
+    expect(hnswStore.upsert).not.toHaveBeenCalled(); // null embeddings → nothing to re-add
+    expect(tables.consolidation_log[0]!.status).toBe("undone");
+    expect(entries.has("sum1")).toBe(false); // summary removed from the in-memory map
   });
 });
 

@@ -658,9 +658,10 @@ export class MemoryConsolidationEngine {
 
   /**
    * Undo a consolidation: restore originals, delete summary, rebuild HNSW vectors.
-   * @throws if log entry not found or not in "completed" status
+   * Async so the HNSW restore is awaited — on return, DB and HNSW are consistent.
+   * @throws (rejects) if log entry not found or not in "completed" status
    */
-  undo(logId: string): void {
+  async undo(logId: string): Promise<void> {
     const logRow = this.db.prepare(
       "SELECT * FROM consolidation_log WHERE id = ?",
     ).get(logId) as Record<string, unknown> | undefined;
@@ -746,8 +747,10 @@ export class MemoryConsolidationEngine {
     }
 
     // HNSW updates: remove summary vector, re-add original vectors.
-    // Acquire the write mutex to prevent interleaved writes.
-    // Use .catch() to log errors (undo is sync but HNSW ops are async).
+    // Acquire the write mutex to prevent interleaved writes. Awaited (not
+    // fire-and-forget) so HNSW state is restored before undo() resolves —
+    // otherwise a caller observing HNSW right after return saw the summary
+    // vector still present and the originals still missing.
     const doUndoHnsw = async (): Promise<void> => {
       await this.hnsw.remove([summaryEntryId]);
       if (originalEmbeddings.length > 0) {
@@ -762,12 +765,13 @@ export class MemoryConsolidationEngine {
         );
       }
     };
-    const hnswPromise = this.hnswMutex
-      ? this.hnswMutex.withLock(doUndoHnsw)
-      : doUndoHnsw();
-    void hnswPromise.catch((err) => {
+    try {
+      await (this.hnswMutex
+        ? this.hnswMutex.withLock(doUndoHnsw)
+        : doUndoHnsw());
+    } catch (err) {
       this.logger.warn("[Consolidation] HNSW update failed during undo", { error: String(err) });
-    });
+    }
 
     this.logger.info("[Consolidation] Undo completed", { logId, summaryEntryId, restoredCount: sourceEntryIds.length });
   }

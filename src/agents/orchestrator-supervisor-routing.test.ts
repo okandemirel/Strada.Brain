@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { getProviderByNameOrFallback } from "./orchestrator-supervisor-routing.js";
+import {
+  getProviderByNameOrFallback,
+  resolveSupervisorAssignment,
+} from "./orchestrator-supervisor-routing.js";
+import type { TaskClassification } from "../agent-core/routing/routing-types.js";
 
 function makeProvider(name: string) {
   return {
@@ -52,5 +56,51 @@ describe("getProviderByNameOrFallback", () => {
 
     expect(resolved.providerName).toBe("qwen");
     expect(resolved.provider).toBe(fallbackProvider);
+  });
+});
+
+describe("resolveSupervisorAssignment hard-pin fallback", () => {
+  const task: TaskClassification = {
+    type: "planning",
+    complexity: "simple",
+    criticality: "medium",
+  };
+
+  it("falls back to the current worker when the hard-pinned provider can no longer be built", () => {
+    const fallbackProvider = makeProvider("openai");
+    const hardPinError = Object.assign(new Error("hard pin unavailable"), {
+      code: "HARD_PIN_UNAVAILABLE",
+    });
+
+    const ctx = {
+      providerManager: {
+        getActiveInfo: vi.fn().mockReturnValue({
+          selectionMode: "strada-hard-pin",
+          providerName: "claude",
+          model: "claude-sonnet-4-6",
+        }),
+        getProvider: vi.fn(() => {
+          throw hardPinError;
+        }),
+        listExecutionCandidates: vi.fn().mockReturnValue([]),
+        listAvailable: vi.fn().mockReturnValue([]),
+        // getRoutingMetadata is optional; omit so a default catalog version is used.
+      },
+    } as any;
+
+    const assignment = resolveSupervisorAssignment(
+      ctx,
+      "planner",
+      task,
+      "planning",
+      "chat:web:1",
+      "openai",
+      fallbackProvider as any,
+    );
+
+    // Must not throw; degrades to the fallback worker.
+    expect(assignment.providerName).toBe("openai");
+    expect(assignment.provider).toBe(fallbackProvider);
+    expect(assignment.reason).toBe("hard-pinned provider unavailable, reusing the current worker");
   });
 });

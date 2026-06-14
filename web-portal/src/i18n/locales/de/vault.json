@@ -31,6 +31,8 @@
   "detail.noOutgoing": "Keine ausgehenden Kanten.",
   "detail.loadError": "Aufrufer konnten nicht geladen werden.",
   "empty.selectVault": "Wähle einen Vault, um den Graph anzuzeigen.",
+  "empty.fetching": "Wird geladen…",
+  "empty.noGraphData": "Keine Graphdaten",
   "empty.loading": "Graph wird geladen…",
   "empty.noSymbols": "Noch keine Symbole indexiert.",
   "empty.noMatches": "Keine Symbole entsprechen den aktuellen Filtern.",

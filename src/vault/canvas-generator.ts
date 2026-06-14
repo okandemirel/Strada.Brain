@@ -3,7 +3,7 @@ import type { VaultSymbol, VaultEdge, VaultFile, VaultWikilink } from './vault.i
 // JSON Canvas 1.0 spec: https://jsoncanvas.org/spec/1.0/
 export interface CanvasNode {
   id: string;
-  type: 'text';
+  type: 'text' | 'file';
   text: string;
   x: number;
   y: number;
@@ -20,8 +20,15 @@ export interface CanvasEdge {
   id: string;
   fromNode: string;
   toNode: string;
+  /** JSON Canvas side anchors (optional per spec; emitted deterministically). */
+  fromSide?: CanvasSide;
+  toSide?: CanvasSide;
+  /** JSON Canvas color: hex like "#RRGGBB" or a preset "1".."6". */
+  color?: string;
   label?: string;
 }
+
+type CanvasSide = 'top' | 'right' | 'bottom' | 'left';
 
 export interface Canvas {
   nodes: CanvasNode[];
@@ -47,6 +54,20 @@ const PASTEL_LANG_COLORS: Record<string, string> = {
   'hlsl': '#B87A9B',       // soft pink
   'unknown': '#888888',    // soft gray
 };
+
+// Deterministic edge color by edge kind. Undefined for unknown kinds →
+// JSON.stringify omits the field, keeping output spec-valid and minimal.
+const EDGE_KIND_COLORS: Record<string, string> = {
+  calls: '#6B7280', references: '#9CA3AF', inherits: '#6A5ACD',
+  implements: '#3178C6', imports: '#F59E0B', embeds: '#10B981',
+  wikilink: '#10B981',
+};
+
+// Deterministic left→right anchors. The canonical from/to ordering is already
+// fixed upstream (commit 3a52f710), so a constant right→left keeps the drawn
+// arrow consistent and the generated .canvas byte-stable across runs.
+const EDGE_FROM_SIDE: CanvasSide = 'right';
+const EDGE_TO_SIDE: CanvasSide = 'left';
 
 // Size tiers based on content/connections (Obsidian-style)
 function nodeSize(connections: number): { width: number; height: number } {
@@ -148,7 +169,9 @@ function buildSymbolGraph(
     const file = files[col]!;
     const syms = byFile.get(file)!.slice().sort((a, b) => a.startLine - b.startLine);
     const color = LANG_COLORS[syms[0]?.kind ?? 'unknown'] ?? LANG_COLORS.unknown;
-    const group = file.split('/').slice(0, 2).join('/');
+    // Full parent dir — same `group` semantics as the file graph (was the first
+    // two segments only), so the folder-color key is consistent across graphs.
+    const group = file.split('/').slice(0, -1).join('/') || '/';
 
     for (let row = 0; row < syms.length; row++) {
       const s = syms[row]!;
@@ -180,6 +203,9 @@ function buildSymbolGraph(
       id: `e${++i}`,
       fromNode: e.fromSymbol,
       toNode: e.toSymbol,
+      fromSide: EDGE_FROM_SIDE,
+      toSide: EDGE_TO_SIDE,
+      color: EDGE_KIND_COLORS[e.kind],
       label: e.kind,
     });
   }
@@ -189,6 +215,9 @@ function buildSymbolGraph(
         id: `wiki-${++i}`,
         fromNode: w.fromNote,
         toNode: w.target,
+        fromSide: EDGE_FROM_SIDE,
+        toSide: EDGE_TO_SIDE,
+        color: EDGE_KIND_COLORS.wikilink,
         label: 'wikilink',
       });
     }
@@ -212,13 +241,19 @@ function buildFileGraph(
   const fileEdgeMap = new Map<string, { from: string; to: string; kind: string; count: number }>();
   const addFileEdge = (from: string, to: string, kind: string) => {
     if (!filePaths.has(from) || !filePaths.has(to) || from === to) return;
-    const key = from < to ? `${from}|${to}` : `${to}|${from}`;
+    // Dedup bidirectionally: A<->B is one file-level connection regardless of
+    // the direction of the underlying symbol edges. Store the endpoints in the
+    // SAME canonical order as the dedup key so the rendered edge is
+    // deterministic (it previously kept the first-seen order, which flipped the
+    // drawn arrow depending on iteration order).
+    const [a, b] = from < to ? [from, to] : [to, from];
+    const key = `${a}|${b}`;
     const existing = fileEdgeMap.get(key);
     if (existing) {
       existing.count++;
       if (!existing.kind.includes(kind)) existing.kind += `,${kind}`;
     } else {
-      fileEdgeMap.set(key, { from, to, kind, count: 1 });
+      fileEdgeMap.set(key, { from: a, to: b, kind, count: 1 });
     }
   };
 
@@ -265,8 +300,10 @@ function buildFileGraph(
     const group = dir;
 
     nodes.push({
+      // JSON Canvas spec node type: these endpoints are vault files, not free
+      // text. (Per-language color/kind are still carried below.)
       id: f.path,
-      type: 'text',
+      type: 'file',
       text: f.path.split('/').pop() ?? f.path,
       x: (i % 10) * 250,
       y: Math.floor(i / 10) * 120,
@@ -284,10 +321,14 @@ function buildFileGraph(
   const edges: CanvasEdge[] = [];
   let edgeIdx = 0;
   for (const [, e] of fileEdgeMap) {
+    const primaryKind = e.kind.split(',')[0] ?? e.kind;
     edges.push({
       id: `f${++edgeIdx}`,
       fromNode: e.from,
       toNode: e.to,
+      fromSide: EDGE_FROM_SIDE,
+      toSide: EDGE_TO_SIDE,
+      color: EDGE_KIND_COLORS[primaryKind],
       label: e.count > 1 ? `${e.kind} (${e.count})` : e.kind,
     });
   }

@@ -191,6 +191,44 @@ describe("ModelIntelligenceService", () => {
     expect(info!.contextWindow).toBe(1_000_000);
   });
 
+  it("getModelInfo resolves slash-prefixed preset ids via prefix-stripped catalog key", async () => {
+    // LiteLLM stores models under the prefix-stripped id. A preset default like
+    // "openai/gpt-oss-120b" must still resolve against the "gpt-oss-120b" catalog key.
+    const litellmData = {
+      "gpt-oss-120b": {
+        max_input_tokens: 128000,
+        max_output_tokens: 8192,
+        input_cost_per_token: 0.00000015,
+        output_cost_per_token: 0.0000006,
+        supports_function_calling: true,
+      },
+    };
+    mockFetch
+      .mockResolvedValueOnce({ ok: true, json: async () => litellmData })
+      .mockRejectedValueOnce(new Error("models.dev offline"));
+
+    await service.refresh();
+
+    const direct = service.getModelInfo("gpt-oss-120b");
+    expect(direct).toBeDefined();
+    const prefixed = service.getModelInfo("openai/gpt-oss-120b");
+    expect(prefixed).toBeDefined();
+    expect(prefixed!.id).toBe("gpt-oss-120b");
+    expect(prefixed!.contextWindow).toBe(128000);
+  });
+
+  it("getModelInfo resolves multi-segment slash-prefixed ids via last-segment key", () => {
+    // Hardcoded opencode entries are keyed with their slash prefix; a bare tail
+    // lookup must not regress, while a deeper-prefixed alias resolves to the tail.
+    const tail = service.getModelInfo("accounts/fireworks/models/gpt-oss-120b");
+    // No such hardcoded/catalog entry for the bare tail here -> undefined (no crash).
+    expect(tail).toBeUndefined();
+    // Exact hardcoded slash-keyed id still resolves.
+    const exact = service.getModelInfo("opencode/qwen-3-coder-480b");
+    expect(exact).toBeDefined();
+    expect(exact!.id).toBe("opencode/qwen-3-coder-480b");
+  });
+
   it("getProviderModels returns correct models for claude after initialize", async () => {
     mockFetch.mockRejectedValue(new Error("offline"));
     await service.initialize(":memory:");

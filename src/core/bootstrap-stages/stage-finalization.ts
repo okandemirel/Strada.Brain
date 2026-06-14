@@ -217,6 +217,8 @@ export function registerDashboardPostBootStage(
         params.providerManager.setPreference(chatId, provider, model, selectionMode);
       },
       refreshCatalog: async () => params.providerManager.refreshModelCatalog(),
+      getModelCatalogFreshness: (name: string) =>
+        params.providerManager.getModelCatalogFreshness(name),
     },
     userProfileStore: params.userProfileStore,
     embeddingStatusProvider: {

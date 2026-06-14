@@ -52,6 +52,14 @@ class MockTaskManager extends EventEmitter {
     this.emit("task:cancelled", taskId);
   }
 
+  emitPaused(taskId: string): void {
+    const task = this.tasks.get(taskId);
+    if (task) {
+      task.status = TaskStatus.paused;
+    }
+    this.emit("task:paused", taskId);
+  }
+
   emitBlocked(taskId: string, result: string): void {
     const task = this.tasks.get(taskId);
     if (task) {
@@ -91,6 +99,7 @@ describe("ProgressReporter", () => {
       sendText: vi.fn().mockResolvedValue(undefined),
       sendMarkdown: vi.fn().mockResolvedValue(undefined),
       sendTypingIndicator: vi.fn().mockResolvedValue(undefined),
+      sendAttachment: vi.fn().mockResolvedValue(undefined),
     };
     const taskManager = new MockTaskManager();
     new ProgressReporter(channel as any, taskManager as any);
@@ -118,6 +127,7 @@ describe("ProgressReporter", () => {
       sendText: vi.fn().mockResolvedValue(undefined),
       sendMarkdown: vi.fn().mockResolvedValue(undefined),
       sendTypingIndicator: vi.fn().mockResolvedValue(undefined),
+      sendAttachment: vi.fn().mockResolvedValue(undefined),
     };
     const taskManager = new MockTaskManager();
     new ProgressReporter(channel as any, taskManager as any);
@@ -131,6 +141,28 @@ describe("ProgressReporter", () => {
 
     await vi.advanceTimersByTimeAsync(300_000);
     expect(channel.sendText).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears heartbeat timers when the task is paused (L2)", async () => {
+    const channel = {
+      sendText: vi.fn().mockResolvedValue(undefined),
+      sendMarkdown: vi.fn().mockResolvedValue(undefined),
+      sendTypingIndicator: vi.fn().mockResolvedValue(undefined),
+      sendAttachment: vi.fn().mockResolvedValue(undefined),
+    };
+    const taskManager = new MockTaskManager();
+    new ProgressReporter(channel as any, taskManager as any);
+
+    taskManager.emitCreated(createTask());
+    await vi.advanceTimersByTimeAsync(10_000); // heartbeat not yet due (cap is 20_000ms)
+    expect(channel.sendText).not.toHaveBeenCalled();
+
+    taskManager.emitPaused("task_heartbeat");
+    await vi.advanceTimersByTimeAsync(300_000);
+
+    // TEETH: without a task:paused listener the heartbeat timer scheduled at
+    // task:created still fires after the cap, sending a stale "working" status.
+    expect(channel.sendText).not.toHaveBeenCalled();
   });
 
   it("updates a streaming status message in place and finalizes it on blocked", async () => {
@@ -243,6 +275,7 @@ describe("ProgressReporter", () => {
       sendText: vi.fn().mockResolvedValue(undefined),
       sendMarkdown: vi.fn().mockResolvedValue(undefined),
       sendTypingIndicator: vi.fn().mockResolvedValue(undefined),
+      sendAttachment: vi.fn().mockResolvedValue(undefined),
     };
     const taskManager = new MockTaskManager();
     new ProgressReporter(channel as any, taskManager as any, {
@@ -256,5 +289,49 @@ describe("ProgressReporter", () => {
     await vi.advanceTimersByTimeAsync(10_000);
 
     expect(channel.sendText).not.toHaveBeenCalled();
+  });
+
+  it("dispose() removes taskManager listeners and clears pending heartbeat timers", async () => {
+    const channel = {
+      sendText: vi.fn().mockResolvedValue(undefined),
+      sendMarkdown: vi.fn().mockResolvedValue(undefined),
+      sendTypingIndicator: vi.fn().mockResolvedValue(undefined),
+      sendAttachment: vi.fn().mockResolvedValue(undefined),
+    };
+    const taskManager = new MockTaskManager();
+    const reporter = new ProgressReporter(channel as any, taskManager as any);
+
+    taskManager.emitCreated(createTask());
+    expect(taskManager.listenerCount("task:created")).toBeGreaterThan(0);
+
+    reporter.dispose();
+
+    // All listeners removed.
+    expect(taskManager.listenerCount("task:created")).toBe(0);
+    expect(taskManager.listenerCount("task:completed")).toBe(0);
+    expect(taskManager.listenerCount("task:paused")).toBe(0);
+
+    // The pending heartbeat timer scheduled at task:created must not fire after dispose.
+    await vi.advanceTimersByTimeAsync(300_000);
+    expect(channel.sendText).not.toHaveBeenCalled();
+
+    // Post-dispose events are ignored (no listeners), so nothing is sent.
+    taskManager.emitCompleted("task_heartbeat", "**Done**");
+    expect(channel.sendMarkdown).not.toHaveBeenCalled();
+  });
+
+  it("stop() is an alias for dispose()", () => {
+    const channel = {
+      sendText: vi.fn().mockResolvedValue(undefined),
+      sendMarkdown: vi.fn().mockResolvedValue(undefined),
+      sendTypingIndicator: vi.fn().mockResolvedValue(undefined),
+      sendAttachment: vi.fn().mockResolvedValue(undefined),
+    };
+    const taskManager = new MockTaskManager();
+    const reporter = new ProgressReporter(channel as any, taskManager as any);
+    expect(taskManager.listenerCount("task:created")).toBeGreaterThan(0);
+
+    reporter.stop();
+    expect(taskManager.listenerCount("task:created")).toBe(0);
   });
 });

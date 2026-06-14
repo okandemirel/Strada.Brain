@@ -67,6 +67,9 @@ export class CLIChannel implements IChannelAdapter {
       if (this.healthy) {
         console.log("\nStdin closed (EOF). Shutting down CLI...");
         this.healthy = false;
+        // Resolve any pending confirmation so its awaiting tool promise doesn't
+        // hang past shutdown; 'timeout' is treated as "do not proceed".
+        this.pendingConfirmation?.finalize("timeout");
         this.rl = null;
         process.kill(process.pid, "SIGINT");
       }
@@ -85,6 +88,7 @@ export class CLIChannel implements IChannelAdapter {
 
   async disconnect(): Promise<void> {
     this.healthy = false;
+    this.pendingInputs.length = 0;
     this.pendingConfirmation?.finalize("timeout");
     this.rl?.close();
     this.rl = null;
@@ -106,7 +110,10 @@ export class CLIChannel implements IChannelAdapter {
 
   async requestConfirmation(req: ConfirmationRequest): Promise<string> {
     if (!this.rl) {
-      return req.options[0] ?? "timeout";
+      // No interactive input available (post-EOF/shutdown): never auto-approve.
+      // Returning 'timeout' makes the write-gate / ask-user treat this as
+      // "do not proceed" rather than selecting the first option (e.g. "Yes").
+      return "timeout";
     }
 
     return new Promise<string>((resolve) => {
@@ -142,6 +149,7 @@ export class CLIChannel implements IChannelAdapter {
       console.log(optionStr);
 
       timeoutId = setTimeout(() => {
+        console.log("\nNo response received (timed out).");
         finalize("timeout");
       }, 60_000);
 
@@ -159,9 +167,12 @@ export class CLIChannel implements IChannelAdapter {
   }
 
   async updateStreamingMessage(_chatId: string, _streamId: string, accumulatedText: string): Promise<void> {
-    // Write the latest line of the accumulated text
-    const lastLine = accumulatedText.split("\n").pop() ?? "";
-    process.stdout.write(`\r\x1b[K${lastLine}`);
+    // Re-render the FULL accumulated text on each update. The previous
+    // implementation wrote only the last line (`\r\x1b[K<lastLine>`), so
+    // multi-line responses showed only their final line while streaming and
+    // earlier lines were dropped until finalize. Clear the current line and
+    // print the whole accumulated text so nothing is lost mid-stream.
+    process.stdout.write(`\r\x1b[K${accumulatedText}`);
   }
 
   async finalizeStreamingMessage(_chatId: string, _streamId: string, finalText: string): Promise<void> {
@@ -186,10 +197,21 @@ export class CLIChannel implements IChannelAdapter {
     const trimmed = input.trim();
 
     if (this.pendingConfirmation) {
-      const idx = parseInt(trimmed, 10) - 1;
-      const value = idx >= 0 && idx < this.pendingConfirmation.options.length
-        ? this.pendingConfirmation.options[idx]!
-        : this.pendingConfirmation.options[0] ?? "timeout";
+      // A clean integer in [1..options.length] selects that option; anything
+      // else is treated as a free-form answer and passed through verbatim
+      // (ask_user tells the user "you can pick an option or write your own
+      // answer"). Previously any non-numeric/out-of-range input was silently
+      // coerced to the first option, discarding the user's real answer.
+      const options = this.pendingConfirmation.options;
+      const idx = /^\d+$/.test(trimmed) ? parseInt(trimmed, 10) - 1 : -1;
+      let value: string;
+      if (idx >= 0 && idx < options.length) {
+        value = options[idx]!;
+      } else if (trimmed) {
+        value = trimmed;
+      } else {
+        value = "timeout";
+      }
       this.pendingConfirmation.finalize(value);
       return;
     }
@@ -261,7 +283,7 @@ export class CLIChannel implements IChannelAdapter {
   }
 
   private async drainInputQueue(): Promise<void> {
-    if (this.processing || this.pendingConfirmation || !this.handler) {
+    if (!this.healthy || this.processing || this.pendingConfirmation || !this.handler) {
       return;
     }
 

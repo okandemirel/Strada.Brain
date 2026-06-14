@@ -1,4 +1,5 @@
 import { useEffect, Suspense, lazy } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   useVaultStore,
   type CanvasJson,
@@ -16,7 +17,7 @@ function sanitizeCanvas(raw: unknown): CanvasJson {
     if (!n?.id) continue;
     nodes.push({
       id: n.id,
-      type: 'text',
+      type: n.type === 'file' ? 'file' : 'text',
       text: n.text ?? '',
       x: n.x ?? 0,
       y: n.y ?? 0,
@@ -31,14 +32,24 @@ function sanitizeCanvas(raw: unknown): CanvasJson {
   }
   const ids = new Set(nodes.map((n) => n.id));
   const edges: CanvasEdge[] = [];
+  const SIDES = new Set(['top', 'right', 'bottom', 'left']);
   for (const e of (src.edges ?? []) as Partial<CanvasEdge>[]) {
     if (!e?.id || !ids.has(e.fromNode!) || !ids.has(e.toNode!)) continue;
-    edges.push({ id: e.id, fromNode: e.fromNode!, toNode: e.toNode!, label: e.label });
+    edges.push({
+      id: e.id,
+      fromNode: e.fromNode!,
+      toNode: e.toNode!,
+      fromSide: SIDES.has(e.fromSide as string) ? e.fromSide : undefined,
+      toSide: SIDES.has(e.toSide as string) ? e.toSide : undefined,
+      color: typeof e.color === 'string' ? e.color : undefined,
+      label: e.label,
+    });
   }
   return { nodes, edges };
 }
 
 export default function VaultGraphTab() {
+  const { t } = useTranslation('vault');
   const selected = useVaultStore((s) => s.selected);
   const graph = useVaultStore((s) => (selected ? s.graphCache[selected] : undefined));
   const setGraph = useVaultStore((s) => s.setGraph);
@@ -53,21 +64,21 @@ export default function VaultGraphTab() {
   }, [selected, graph, setGraph]);
 
   if (!selected) {
-    return <div className="p-4 text-sm text-muted-foreground">Bir vault seçin</div>;
+    return <div className="p-4 text-sm text-muted-foreground">{t('empty.selectVault')}</div>;
   }
 
   if (!graph) {
-    return <div className="p-4 text-sm text-muted-foreground">Yükleniyor...</div>;
+    return <div className="p-4 text-sm text-muted-foreground">{t('empty.fetching')}</div>;
   }
 
   if (graph.nodes.length === 0) {
-    return <div className="p-4 text-sm text-muted-foreground">Graf verisi yok</div>;
+    return <div className="p-4 text-sm text-muted-foreground">{t('empty.noGraphData')}</div>;
   }
 
   return (
     <Suspense
       fallback={
-        <div className="p-4 text-sm text-muted-foreground">Graf yükleniyor...</div>
+        <div className="p-4 text-sm text-muted-foreground">{t('empty.loading')}</div>
       }
     >
       <GraphCanvas graph={graph} />

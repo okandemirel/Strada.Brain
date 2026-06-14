@@ -102,14 +102,6 @@ export interface WorkerRunResult {
   readonly reason?: string;
 }
 
-export interface IntegrationResult {
-  readonly applied: boolean;
-  readonly workspaceId?: string;
-  readonly summary: string;
-  readonly touchedFiles: readonly string[];
-  readonly conflicts: readonly string[];
-}
-
 export function createCatalogVersion(snapshot: {
   provider: string;
   model?: string;

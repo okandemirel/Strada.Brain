@@ -324,9 +324,16 @@ export class ProviderRouter {
       (entry) => entry.name.trim().toLowerCase() === decision.provider.trim().toLowerCase(),
     );
 
+    // On a catalog miss, fall through to the provider's real default model id
+    // instead of leaking the provider NAME as the model (which breaks routing/scoring).
+    const fallbackDefaultModel = this.providerManager
+      .listAvailable()
+      .find((entry) => entry.name.trim().toLowerCase() === decision.provider.trim().toLowerCase())
+      ?.defaultModel;
+
     return {
       provider: decision.provider,
-      model: provider?.model ?? provider?.defaultModel ?? decision.provider,
+      model: provider?.model ?? provider?.defaultModel ?? fallbackDefaultModel ?? decision.provider,
       reason: decision.reason,
       timestamp: decision.timestamp,
       assignmentVersion: catalog?.assignmentVersion ?? 0,

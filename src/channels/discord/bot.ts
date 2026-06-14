@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import {
   Client,
   GatewayIntentBits,
+  Partials,
   Events,
   EmbedBuilder,
   ButtonBuilder,
@@ -27,6 +28,7 @@ import { downloadMedia, mimeToAttachmentType, validateMediaAttachment, validateM
 import { classifyErrorMessage } from "../../utils/error-messages.js";
 import { DiscordRateLimiter } from "./rate-limiter.js";
 import { formatToDiscordMarkdown, truncateForDiscord } from "./formatters.js";
+import { chunkText } from "../chunk-text.js";
 import type { SlashCommand } from "./commands.js";
 
 type MessageHandler = (msg: IncomingMessage) => Promise<void>;
@@ -44,6 +46,10 @@ interface StreamingMessageState {
   accumulatedText: string;
   lastUpdate: number;
   updateQueued: boolean;
+  /** Tracked throttle timer so it can be cleared on finalize/disconnect. */
+  throttleTimer: ReturnType<typeof setTimeout> | null;
+  /** Set once finalize runs so a late throttled update cannot overwrite the final text. */
+  finalized: boolean;
 }
 
 interface QueuedMessage {
@@ -54,6 +60,9 @@ interface QueuedMessage {
   embedOptions?: Parameters<DiscordChannel['sendRichEmbed']>[1];
   threadOptions?: { name: string; autoArchiveDuration?: 60 | 1440 | 4320 | 10080 };
   confirmationRequest?: ConfirmationRequest;
+  /** Pre-generated confirmation id, set for 'confirmation' items so the long-lived
+   * response promise can be registered before the prompt is dispatched. */
+  confirmId?: string;
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
   retries: number;
@@ -65,6 +74,8 @@ const RETRY_BASE_DELAY_MS = 1000;
 const QUEUE_PROCESS_INTERVAL_MS = 100;
 const RATE_LIMIT_BACKOFF_MS = 5000;
 const MESSAGE_TIMEOUT_MS = 30_000;
+/** Discord per-message hard limit is 2000 chars; split long content into chunks. */
+const DISCORD_MAX_MESSAGE_LENGTH = 2000;
 
 /**
  * Discord channel adapter using discord.js.
@@ -93,14 +104,32 @@ export class DiscordChannel implements IChannelAdapter {
     }
   >();
   private readonly streamingMessages = new Map<string, StreamingMessageState>();
+  /** Pending slash-command reply callbacks keyed by a unique per-interaction token
+   * (the interaction id), falling back to chatId when no token is present. Keying
+   * by token prevents concurrent slash commands in the same channel from
+   * overwriting each other's callback (which would route a response to the wrong
+   * interaction). */
   private readonly pendingReplyCallbacks = new Map<string, (response: string) => Promise<void>>();
+  /** chatId -> FIFO-ordered list of pending reply tokens, so the send path (which
+   * only knows chatId) can resolve the oldest waiting interaction for a channel. */
+  private readonly replyTokensByChatId = new Map<string, string[]>();
   private isConnected = false;
   private slashCommands: SlashCommand[] = [];
-  
+  /** Set true once disconnect() runs so reconnection backoff stops. */
+  private shuttingDown = false;
+  /** Pending reconnection backoff timer (cleared on disconnect). */
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconnectAttempts = 0;
+  private static readonly MAX_RECONNECT_ATTEMPTS = 10;
+  private static readonly RECONNECT_BASE_DELAY_MS = 1000;
+  private static readonly RECONNECT_MAX_DELAY_MS = 60_000;
+
   // Message queue for rate limit handling
   private messageQueue: QueuedMessage[] = [];
   private queueProcessing = false;
   private queueInterval: NodeJS.Timeout | null = null;
+  /** Pending retry-backoff timers (message kept so disconnect can reject it). */
+  private readonly retryTimers = new Map<NodeJS.Timeout, QueuedMessage>();
   private rateLimited = false;
   private rateLimitResetTime = 0;
   private feedbackReactionCallback: FeedbackReactionCallback | null = null;
@@ -129,6 +158,10 @@ export class DiscordChannel implements IChannelAdapter {
         GatewayIntentBits.DirectMessages,
         GatewayIntentBits.GuildMessageReactions,
       ],
+      // Required so DMs (uncached channels) and reactions on messages the bot
+      // did not see created (e.g. older replies after a restart) are delivered
+      // as partial structures instead of being silently dropped.
+      partials: [Partials.Channel, Partials.Message, Partials.Reaction],
     });
 
     this.setupEventHandlers();
@@ -170,11 +203,32 @@ export class DiscordChannel implements IChannelAdapter {
   async disconnect(): Promise<void> {
     getLogger().info("Stopping Discord bot...");
     this.isConnected = false;
-    
+    this.shuttingDown = true;
+
+    // Cancel any pending reconnection backoff — this is an intentional shutdown.
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+
     // Stop queue processor
     if (this.queueInterval) {
       clearInterval(this.queueInterval);
       this.queueInterval = null;
+    }
+
+    // Reject every queued and retry-pending message: the queue processor that
+    // would settle their promises is now stopped, so without this every awaiting
+    // caller (sendText/sendMarkdown/...) would hang forever. Mirrors the Slack
+    // channel's disconnect drain.
+    for (const [timer, message] of this.retryTimers) {
+      clearTimeout(timer);
+      message.reject(new Error("Discord channel disconnected"));
+    }
+    this.retryTimers.clear();
+    const queued = this.messageQueue.splice(0, this.messageQueue.length);
+    for (const message of queued) {
+      message.reject(new Error("Discord channel disconnected"));
     }
 
     // Clean up pending confirmations
@@ -186,6 +240,12 @@ export class DiscordChannel implements IChannelAdapter {
 
     // Clean up streaming messages
     for (const [, state] of this.streamingMessages) {
+      // Stop any pending throttled update so it cannot fire after destroy().
+      state.finalized = true;
+      if (state.throttleTimer) {
+        clearTimeout(state.throttleTimer);
+        state.throttleTimer = null;
+      }
       try {
         await state.message.edit("*Message ended*");
       } catch {
@@ -194,7 +254,66 @@ export class DiscordChannel implements IChannelAdapter {
     }
     this.streamingMessages.clear();
 
+    // Drop any pending slash-command reply callbacks; the awaiting interactions
+    // will fall through to their own deferReply timeout rather than hang on a
+    // callback that can no longer be invoked against the destroyed client.
+    this.pendingReplyCallbacks.clear();
+    this.replyTokensByChatId.clear();
+
+    // Clear the rate limiter's pending cooldown timer and flush its waiters so
+    // no timer fires against the destroyed client and no acquire() hangs.
+    this.rateLimiter.dispose();
+
     await this.client.destroy();
+  }
+
+  /**
+   * Schedule an application-level relogin with exponential backoff after a fatal
+   * session invalidation. discord.js handles transient shard reconnects itself;
+   * this only covers the case where the client has given up.
+   */
+  private scheduleReconnect(): void {
+    const logger = getLogger();
+
+    if (this.shuttingDown) return; // Intentional disconnect — do not reconnect.
+    if (this.reconnectTimer) return; // A reconnect is already scheduled.
+
+    if (this.reconnectAttempts >= DiscordChannel.MAX_RECONNECT_ATTEMPTS) {
+      logger.error("Discord reconnection gave up after max attempts", {
+        attempts: this.reconnectAttempts,
+      });
+      return;
+    }
+
+    const delay = Math.min(
+      DiscordChannel.RECONNECT_BASE_DELAY_MS * Math.pow(2, this.reconnectAttempts),
+      DiscordChannel.RECONNECT_MAX_DELAY_MS,
+    );
+    this.reconnectAttempts++;
+
+    logger.info("Scheduling Discord reconnection", {
+      attempt: this.reconnectAttempts,
+      delayMs: delay,
+    });
+
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      if (this.shuttingDown) return;
+      this.client
+        .login(this.token)
+        .then(() => {
+          this.isConnected = true;
+          logger.info("Discord reconnected");
+        })
+        .catch((error) => {
+          logger.error("Discord reconnection attempt failed", {
+            attempt: this.reconnectAttempts,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          // Schedule the next attempt (backoff grows via reconnectAttempts).
+          this.scheduleReconnect();
+        });
+    }, delay);
   }
 
   // ---- Queue-based Message Sending ----
@@ -268,9 +387,17 @@ export class DiscordChannel implements IChannelAdapter {
             // Move to end of queue with exponential backoff — re-enqueue after delay
             const delay = RETRY_BASE_DELAY_MS * Math.pow(2, message.retries - 1);
             this.messageQueue.shift();
-            setTimeout(() => {
+            const timer = setTimeout(() => {
+              this.retryTimers.delete(timer);
+              // If we were disconnected during the backoff window, reject rather
+              // than re-pushing onto a dead queue (which would never settle).
+              if (!this.isConnected) {
+                message.reject(new Error("Discord channel disconnected"));
+                return;
+              }
               this.messageQueue.push(message);
             }, delay);
+            this.retryTimers.set(timer, message);
           }
         }
       }
@@ -305,8 +432,12 @@ export class DiscordChannel implements IChannelAdapter {
         break;
       }
       case 'confirmation': {
-        const result = await this.requestConfirmationImmediate(msg.confirmationRequest!);
-        msg.resolve(result);
+        // Only SEND the embed+buttons through the rate-limited path here, then
+        // resolve the queue item immediately. The long-lived promise that waits
+        // for the user's button click (or 120s timeout) is owned by
+        // requestConfirmation and must NOT block the shared send queue.
+        await this.sendConfirmationPrompt(msg.confirmationRequest!, msg.confirmId!);
+        msg.resolve(undefined);
         break;
       }
     }
@@ -338,22 +469,39 @@ export class DiscordChannel implements IChannelAdapter {
   }
 
   private async sendTextImmediate(chatId: string, text: string): Promise<void> {
-    // If a slash command is awaiting a reply for this channel, route through its callback
-    const replyCallback = this.pendingReplyCallbacks.get(chatId);
+    const chunks = chunkText(text, DISCORD_MAX_MESSAGE_LENGTH);
+    if (chunks.length === 0) return; // Nothing to send (empty/whitespace input)
+
+    // If a slash command is awaiting a reply for this channel, route through its
+    // callback (oldest waiting interaction first; resolved+removed atomically).
+    const replyCallback = this.takeReplyCallback(chatId);
     if (replyCallback) {
-      this.pendingReplyCallbacks.delete(chatId);
-      const truncated = truncateForDiscord(text, 2000);
-      await replyCallback(truncated);
+      // The interaction reply takes the first chunk; any overflow is delivered
+      // as follow-up channel messages so no content is dropped.
+      await replyCallback(chunks[0]!);
+      await this.sendChunksToChannel(chatId, chunks.slice(1));
       return;
     }
 
-    await this.rateLimiter.acquire();
-    const channel = await this.client.channels.fetch(chatId);
-    if (!channel?.isTextBased()) {
-      throw new Error(`Invalid channel: ${chatId}`);
+    await this.sendChunksToChannel(chatId, chunks);
+  }
+
+  /** Send each pre-split chunk to the channel through the rate limiter, isolating
+   * per-chunk failures so one failed send does not drop the remaining chunks. */
+  private async sendChunksToChannel(chatId: string, chunks: string[]): Promise<void> {
+    let resolvedChannel: TextChannel | null = null;
+    for (const chunk of chunks) {
+      if (chunk.length === 0) continue;
+      await this.rateLimiter.acquire();
+      if (!resolvedChannel) {
+        const channel = await this.client.channels.fetch(chatId);
+        if (!channel?.isTextBased()) {
+          throw new Error(`Invalid channel: ${chatId}`);
+        }
+        resolvedChannel = channel as TextChannel;
+      }
+      await resolvedChannel.send(chunk);
     }
-    const truncated = truncateForDiscord(text, 2000);
-    await (channel as TextChannel).send(truncated);
   }
 
   async sendMarkdown(chatId: string, markdown: string): Promise<void> {
@@ -361,24 +509,22 @@ export class DiscordChannel implements IChannelAdapter {
   }
 
   private async sendMarkdownImmediate(chatId: string, markdown: string): Promise<void> {
-    // If a slash command is awaiting a reply for this channel, route through its callback
-    const replyCallback = this.pendingReplyCallbacks.get(chatId);
+    const formatted = formatToDiscordMarkdown(markdown);
+    const chunks = chunkText(formatted, DISCORD_MAX_MESSAGE_LENGTH);
+    if (chunks.length === 0) return; // Nothing to send (empty/whitespace input)
+
+    // If a slash command is awaiting a reply for this channel, route through its
+    // callback (oldest waiting interaction first; resolved+removed atomically).
+    const replyCallback = this.takeReplyCallback(chatId);
     if (replyCallback) {
-      this.pendingReplyCallbacks.delete(chatId);
-      const formatted = formatToDiscordMarkdown(markdown);
-      const truncated = truncateForDiscord(formatted, 2000);
-      await replyCallback(truncated);
+      // The interaction reply takes the first chunk; any overflow is delivered
+      // as follow-up channel messages so no content is dropped.
+      await replyCallback(chunks[0]!);
+      await this.sendChunksToChannel(chatId, chunks.slice(1));
       return;
     }
 
-    await this.rateLimiter.acquire();
-    const channel = await this.client.channels.fetch(chatId);
-    if (!channel?.isTextBased()) {
-      throw new Error(`Invalid channel: ${chatId}`);
-    }
-    const formatted = formatToDiscordMarkdown(markdown);
-    const truncated = truncateForDiscord(formatted, 2000);
-    await (channel as TextChannel).send(truncated);
+    await this.sendChunksToChannel(chatId, chunks);
   }
 
   async sendRichEmbed(
@@ -439,20 +585,61 @@ export class DiscordChannel implements IChannelAdapter {
   }
 
   async requestConfirmation(req: ConfirmationRequest): Promise<string> {
-    return this.enqueueMessage({ 
-      type: 'confirmation', 
-      chatId: req.chatId, 
-      confirmationRequest: req 
-    }) as Promise<string>;
+    const confirmId = `confirm_${randomUUID()}`;
+
+    // The long-lived response promise resolves on a button click or the 120s
+    // timeout — it is independent of the send queue, so a pending confirmation
+    // never blocks other channels' sends (head-of-line) and is never evicted by
+    // the queue's send-dispatch timeout.
+    const responsePromise = new Promise<string>((resolve) => {
+      const timeout = setTimeout(() => {
+        this.pendingConfirmations.delete(confirmId);
+        resolve("timeout");
+      }, 120_000);
+
+      this.pendingConfirmations.set(confirmId, {
+        resolve,
+        timeout,
+        chatId: req.chatId,
+        userId: req.userId,
+      });
+    });
+
+    // Dispatch only the embed+buttons through the rate-limited queue. If the
+    // send itself fails (e.g. invalid channel, or the queue is drained on
+    // disconnect), settle the response promise as "cancelled" so it never hangs
+    // for the full 120s timeout. (disconnect() may have already resolved the
+    // pending entry, in which case it is gone and there is nothing to clean up.)
+    try {
+      await this.enqueueMessage({
+        type: 'confirmation',
+        chatId: req.chatId,
+        confirmationRequest: req,
+        confirmId,
+      });
+    } catch (error) {
+      const pending = this.pendingConfirmations.get(confirmId);
+      if (pending) {
+        clearTimeout(pending.timeout);
+        this.pendingConfirmations.delete(confirmId);
+        pending.resolve("cancelled");
+        getLogger().warn("Discord confirmation prompt could not be sent", {
+          chatId: req.chatId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    return responsePromise;
   }
 
-  private async requestConfirmationImmediate(req: ConfirmationRequest): Promise<string> {
+  /** Send the confirmation prompt (embed + buttons) for an already-registered
+   * confirmId. Does NOT wait for the user's response. */
+  private async sendConfirmationPrompt(req: ConfirmationRequest, confirmId: string): Promise<void> {
     const channel = await this.client.channels.fetch(req.chatId);
     if (!channel?.isTextBased()) {
       throw new Error(`Invalid channel: ${req.chatId}`);
     }
-
-    const confirmId = `confirm_${randomUUID()}`;
 
     const buttons = req.options.map((option) =>
       new ButtonBuilder()
@@ -476,20 +663,6 @@ export class DiscordChannel implements IChannelAdapter {
     await (channel as TextChannel).send({
       embeds: [embed],
       components: [row],
-    });
-
-    return new Promise<string>((resolve) => {
-      const timeout = setTimeout(() => {
-        this.pendingConfirmations.delete(confirmId);
-        resolve("timeout");
-      }, 120_000);
-
-      this.pendingConfirmations.set(confirmId, {
-        resolve,
-        timeout,
-        chatId: req.chatId,
-        userId: req.userId,
-      });
     });
   }
 
@@ -515,6 +688,8 @@ export class DiscordChannel implements IChannelAdapter {
         accumulatedText: "",
         lastUpdate: Date.now(),
         updateQueued: false,
+        throttleTimer: null,
+        finalized: false,
       });
 
       return streamId;
@@ -530,7 +705,7 @@ export class DiscordChannel implements IChannelAdapter {
     accumulatedText: string
   ): Promise<void> {
     const state = this.streamingMessages.get(streamId);
-    if (!state) return;
+    if (!state || state.finalized) return;
 
     state.accumulatedText = accumulatedText;
 
@@ -539,8 +714,11 @@ export class DiscordChannel implements IChannelAdapter {
     if (now - state.lastUpdate < 1000) {
       if (!state.updateQueued) {
         state.updateQueued = true;
-        setTimeout(() => {
+        // Track the timer so finalize/disconnect can clear it and prevent a late
+        // throttled edit from overwriting the final text.
+        state.throttleTimer = setTimeout(() => {
           state.updateQueued = false;
+          state.throttleTimer = null;
           void this.performStreamUpdate(streamId);
         }, 1000 - (now - state.lastUpdate));
       }
@@ -552,16 +730,25 @@ export class DiscordChannel implements IChannelAdapter {
 
   private async performStreamUpdate(streamId: string): Promise<void> {
     const state = this.streamingMessages.get(streamId);
-    if (!state) return;
+    // Bail if the stream was finalized (or removed) after this update was queued —
+    // editing now would overwrite the final text with stale intermediate content.
+    if (!state || state.finalized) return;
 
     try {
       await this.rateLimiter.acquire();
+      // Intermediate preview: a single edited message cannot exceed Discord's
+      // 2000-char limit, so the in-progress view is truncated; the full content
+      // is delivered in finalizeStreamingMessage (which splits into chunks).
       const text = state.accumulatedText || "...";
-      const truncated = truncateForDiscord(text, 2000);
+      const truncated = truncateForDiscord(text, DISCORD_MAX_MESSAGE_LENGTH);
       await state.message.edit(truncated);
       state.lastUpdate = Date.now();
-    } catch (_error) {
-      // Ignore update errors
+    } catch (error) {
+      // Log at debug so a frozen/failing stream is diagnosable instead of silent.
+      getLogger().debug("Failed to update streaming message", {
+        streamId,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 
@@ -573,16 +760,49 @@ export class DiscordChannel implements IChannelAdapter {
     const state = this.streamingMessages.get(streamId);
     if (!state) return;
 
+    // Mark finalized and clear any pending throttled update so it cannot fire
+    // after this point and overwrite the final text with stale content.
+    state.finalized = true;
+    if (state.throttleTimer) {
+      clearTimeout(state.throttleTimer);
+      state.throttleTimer = null;
+    }
+
+    const formatted = formatToDiscordMarkdown(finalText);
+    // Split the full final text so nothing is dropped: the first chunk edits the
+    // existing streaming message; any remaining chunks are sent as follow-ups.
+    const chunks = chunkText(formatted, DISCORD_MAX_MESSAGE_LENGTH);
+
     try {
-      await this.rateLimiter.acquire();
-      const formatted = formatToDiscordMarkdown(finalText);
-      const truncated = truncateForDiscord(formatted, 2000);
-      await state.message.edit(truncated);
-    } catch (_error) {
+      if (chunks.length === 0) {
+        // Empty final text — leave the streaming placeholder as-is.
+        return;
+      }
+
+      let editApplied = false;
       try {
-        await this.sendMarkdown(_chatId, finalText);
-      } catch {
-        getLogger().error("Failed to finalize streaming message");
+        await this.rateLimiter.acquire();
+        await state.message.edit(chunks[0]!);
+        editApplied = true;
+      } catch (error) {
+        getLogger().debug("Failed to edit streaming message on finalize", {
+          streamId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+
+      if (editApplied) {
+        // Edit landed — send only the overflow chunks as follow-ups.
+        await this.sendChunksToChannel(_chatId, chunks.slice(1));
+      } else {
+        // The edit definitively did not apply (the streaming placeholder still
+        // shows "..."), so deliver the full final text as new messages. This is
+        // not a double-send of the final content because the edit failed.
+        try {
+          await this.sendChunksToChannel(_chatId, chunks);
+        } catch {
+          getLogger().error("Failed to finalize streaming message", { streamId });
+        }
       }
     } finally {
       this.streamingMessages.delete(streamId);
@@ -635,17 +855,24 @@ export class DiscordChannel implements IChannelAdapter {
     content: string,
     options?: { markdown?: boolean }
   ): Promise<void> {
+    const text = options?.markdown
+      ? formatToDiscordMarkdown(content)
+      : content;
+    const chunks = chunkText(text, DISCORD_MAX_MESSAGE_LENGTH);
+    if (chunks.length === 0) return; // Nothing to send (empty/whitespace input)
+
     await this.rateLimiter.acquire();
     const thread = await this.client.channels.fetch(threadId);
     if (!(thread instanceof ThreadChannel)) {
       throw new Error(`Invalid thread: ${threadId}`);
     }
 
-    const text = options?.markdown
-      ? formatToDiscordMarkdown(content)
-      : content;
-    const truncated = truncateForDiscord(text, 2000);
-    await thread.send(truncated);
+    // First chunk uses the token already acquired above; each subsequent chunk
+    // acquires its own so multi-chunk sends still respect the rate limiter.
+    for (let i = 0; i < chunks.length; i++) {
+      if (i > 0) await this.rateLimiter.acquire();
+      await thread.send(chunks[i]!);
+    }
   }
 
   // ---- Private Setup Methods ----
@@ -653,7 +880,14 @@ export class DiscordChannel implements IChannelAdapter {
   private setupEventHandlers(): void {
     const logger = getLogger();
 
-    this.client.once(Events.ClientReady, () => {
+    this.client.on(Events.ClientReady, () => {
+      // A successful (re)connect: clear backoff state.
+      this.reconnectAttempts = 0;
+      if (this.reconnectTimer) {
+        clearTimeout(this.reconnectTimer);
+        this.reconnectTimer = null;
+      }
+      this.isConnected = true;
       logger.info(`Discord bot logged in as ${this.client.user?.tag}`);
     });
 
@@ -663,6 +897,32 @@ export class DiscordChannel implements IChannelAdapter {
 
     this.client.on(Events.Warn, (info) => {
       logger.warn("Discord client warning", { info });
+    });
+
+    // Shard lifecycle: discord.js auto-reconnects shards in most cases. We log
+    // these so a degraded connection is observable via isHealthy().
+    this.client.on(Events.ShardDisconnect, (event, shardId) => {
+      logger.warn("Discord shard disconnected", {
+        shardId,
+        code: (event as { code?: number }).code,
+      });
+    });
+
+    this.client.on(Events.ShardReconnecting, (shardId) => {
+      logger.info("Discord shard reconnecting", { shardId });
+    });
+
+    this.client.on(Events.ShardResume, (shardId, replayedEvents) => {
+      logger.info("Discord shard resumed", { shardId, replayedEvents });
+    });
+
+    // Fatal: the session was invalidated (token reset, prolonged outage). The
+    // client gives up here, so we attempt an application-level relogin with
+    // exponential backoff instead of leaving the bot permanently unhealthy.
+    this.client.on(Events.Invalidated, () => {
+      logger.error("Discord session invalidated; scheduling reconnection");
+      this.isConnected = false;
+      this.scheduleReconnect();
     });
 
     this.client.on(Events.InteractionCreate, async (interaction: Interaction) => {
@@ -708,6 +968,16 @@ export class DiscordChannel implements IChannelAdapter {
       try {
         if (user.bot) return;
         if (!this.feedbackReactionCallback) return;
+
+        // With Partials enabled, reactions on uncached messages arrive partial;
+        // fetch the full structure before reading emoji/message fields.
+        if (reaction.partial) {
+          try {
+            await reaction.fetch();
+          } catch {
+            return; // Cannot resolve the reaction — nothing we can attribute.
+          }
+        }
 
         const emoji = reaction.emoji.name;
         let feedbackType: "thumbs_up" | "thumbs_down" | null = null;
@@ -800,6 +1070,9 @@ export class DiscordChannel implements IChannelAdapter {
         const msg: IncomingMessage = {
           channelType: "discord",
           chatId: interaction.channelId,
+          // Unique per-interaction token so concurrent slash commands in the same
+          // channel each get their own pending reply slot (avoids cross-routing).
+          replyToken: interaction.id,
           userId: interaction.user.id,
           text: limitIncomingText(question),
           timestamp: new Date(),
@@ -817,6 +1090,9 @@ export class DiscordChannel implements IChannelAdapter {
         const msg: IncomingMessage = {
           channelType: "discord",
           chatId: interaction.channelId,
+          // Unique per-interaction token so concurrent slash commands in the same
+          // channel each get their own pending reply slot (avoids cross-routing).
+          replyToken: interaction.id,
           userId: interaction.user.id,
           text: limitIncomingText("Analyze project structure"),
           timestamp: new Date(),
@@ -838,6 +1114,9 @@ export class DiscordChannel implements IChannelAdapter {
         const msg: IncomingMessage = {
           channelType: "discord",
           chatId: interaction.channelId,
+          // Unique per-interaction token so concurrent slash commands in the same
+          // channel each get their own pending reply slot (avoids cross-routing).
+          replyToken: interaction.id,
           userId: interaction.user.id,
           text: limitIncomingText(`Create ${type} named "${name}"${description ? `: ${description}` : ""}`),
           timestamp: new Date(),
@@ -897,6 +1176,9 @@ export class DiscordChannel implements IChannelAdapter {
         const msg: IncomingMessage = {
           channelType: "discord",
           chatId: interaction.channelId,
+          // Unique per-interaction token so concurrent slash commands in the same
+          // channel each get their own pending reply slot (avoids cross-routing).
+          replyToken: interaction.id,
           userId: interaction.user.id,
           text: limitIncomingText(autonomousText),
           timestamp: new Date(),
@@ -921,6 +1203,9 @@ export class DiscordChannel implements IChannelAdapter {
         const msg: IncomingMessage = {
           channelType: "discord",
           chatId: interaction.channelId,
+          // Unique per-interaction token so concurrent slash commands in the same
+          // channel each get their own pending reply slot (avoids cross-routing).
+          replyToken: interaction.id,
           userId: interaction.user.id,
           text: limitIncomingText(modelText),
           timestamp: new Date(),
@@ -929,6 +1214,52 @@ export class DiscordChannel implements IChannelAdapter {
         await this.routeMessage(msg, async (response) => {
           await interaction.editReply(response);
         });
+        break;
+      }
+
+      case "search": {
+        const query = interaction.options.getString("query", true);
+        const type = interaction.options.getString("type") ?? "all";
+
+        await interaction.deferReply();
+
+        const msg: IncomingMessage = {
+          channelType: "discord",
+          chatId: interaction.channelId,
+          // Unique per-interaction token so concurrent slash commands in the same
+          // channel each get their own pending reply slot (avoids cross-routing).
+          replyToken: interaction.id,
+          userId: interaction.user.id,
+          text: limitIncomingText(`Search ${type}: ${query}`),
+          timestamp: new Date(),
+        };
+
+        await this.routeMessage(msg, async (response) => {
+          await interaction.editReply(response);
+        });
+        break;
+      }
+
+      case "thread": {
+        const topic = interaction.options.getString("topic", true);
+        const initialMessage = interaction.options.getString("initial_message");
+
+        await interaction.deferReply();
+
+        try {
+          const threadId = await this.createThread(interaction.channelId, topic);
+          if (initialMessage) {
+            await this.sendInThread(threadId, initialMessage);
+          }
+          await interaction.editReply(`Created thread: <#${threadId}>`);
+        } catch (error) {
+          getLogger().error("Failed to create thread from slash command", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+          await interaction.editReply(
+            "Could not create a thread in this channel.",
+          );
+        }
         break;
       }
 
@@ -1054,18 +1385,68 @@ export class DiscordChannel implements IChannelAdapter {
       return;
     }
 
+    // Key the pending callback by the unique per-interaction token (falling back
+    // to chatId when none is present) so concurrent slash commands in the same
+    // channel do not overwrite each other's callback and misroute the response.
+    const replyKey = msg.replyToken ?? msg.chatId;
+
     // Register the callback so sendText/sendMarkdown can route the response
     // back to the slash command interaction instead of sending a new channel message
     if (replyCallback) {
-      this.pendingReplyCallbacks.set(msg.chatId, replyCallback);
+      this.registerReplyCallback(msg.chatId, replyKey, replyCallback);
     }
 
     try {
       await this.handler(msg);
     } finally {
       // Clean up if the callback was never consumed (e.g. handler error or no response)
-      this.pendingReplyCallbacks.delete(msg.chatId);
+      if (replyCallback) {
+        this.removeReplyCallback(msg.chatId, replyKey);
+      }
     }
+  }
+
+  /** Register a pending slash-command reply callback under its unique key and
+   * track the key in the chatId index so the send path can resolve it. */
+  private registerReplyCallback(
+    chatId: string,
+    key: string,
+    callback: (response: string) => Promise<void>,
+  ): void {
+    this.pendingReplyCallbacks.set(key, callback);
+    const tokens = this.replyTokensByChatId.get(chatId);
+    if (tokens) {
+      tokens.push(key);
+    } else {
+      this.replyTokensByChatId.set(chatId, [key]);
+    }
+  }
+
+  /** Resolve the oldest pending reply callback for a channel (FIFO) and remove it,
+   * so the send path can deliver a response to the correct waiting interaction. */
+  private takeReplyCallback(
+    chatId: string,
+  ): ((response: string) => Promise<void>) | undefined {
+    const tokens = this.replyTokensByChatId.get(chatId);
+    if (!tokens || tokens.length === 0) return undefined;
+
+    const key = tokens.shift()!;
+    if (tokens.length === 0) this.replyTokensByChatId.delete(chatId);
+
+    const callback = this.pendingReplyCallbacks.get(key);
+    this.pendingReplyCallbacks.delete(key);
+    return callback;
+  }
+
+  /** Remove a still-pending reply callback by its key (e.g. handler error or no
+   * response), keeping the chatId index in sync. */
+  private removeReplyCallback(chatId: string, key: string): void {
+    if (!this.pendingReplyCallbacks.delete(key)) return;
+    const tokens = this.replyTokensByChatId.get(chatId);
+    if (!tokens) return;
+    const idx = tokens.indexOf(key);
+    if (idx !== -1) tokens.splice(idx, 1);
+    if (tokens.length === 0) this.replyTokensByChatId.delete(chatId);
   }
 
   private async registerSlashCommands(): Promise<void> {

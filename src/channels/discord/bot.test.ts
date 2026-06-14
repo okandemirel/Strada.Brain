@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import { ThreadChannel } from "discord.js";
 import { DiscordChannel } from "./bot.js";
 import { AuthManager } from "../../security/auth.js";
 
@@ -105,6 +106,40 @@ describe("DiscordChannel", () => {
       await channel.disconnect();
       expect(channel.isHealthy()).toBe(false);
     });
+
+    // Regression (H7): a message still in the queue when the processor stops
+    // must be rejected, or its awaiting caller hangs forever.
+    it("rejects queued messages on disconnect", async () => {
+      const pending = (channel as unknown as {
+        enqueueMessage: (m: { type: string; chatId: string; content: string }) => Promise<unknown>;
+      }).enqueueMessage({ type: "text", chatId: "c1", content: "hi" });
+
+      await channel.disconnect();
+
+      await expect(pending).rejects.toThrow("Discord channel disconnected");
+      expect((channel as unknown as { messageQueue: unknown[] }).messageQueue).toHaveLength(0);
+    });
+
+    // Regression (M6): a retry-backoff timer pending at disconnect must be
+    // cleared and its message rejected — not left to re-push onto a dead queue.
+    it("rejects retry-pending messages and clears their timers on disconnect", async () => {
+      const reject = vi.fn();
+      let firedOntoDeadQueue = false;
+      const timer = setTimeout(() => {
+        firedOntoDeadQueue = true;
+      }, 10_000);
+      (channel as unknown as {
+        retryTimers: Map<ReturnType<typeof setTimeout>, { reject: (e: Error) => void }>;
+      }).retryTimers.set(timer, { reject });
+
+      await channel.disconnect();
+
+      expect(reject).toHaveBeenCalledTimes(1);
+      expect(reject.mock.calls[0]![0]).toBeInstanceOf(Error);
+      expect((channel as unknown as { retryTimers: Map<unknown, unknown> }).retryTimers.size).toBe(0);
+      await new Promise((r) => setTimeout(r, 30));
+      expect(firedOntoDeadQueue).toBe(false);
+    });
   });
 
   describe("sendText", () => {
@@ -113,6 +148,35 @@ describe("DiscordChannel", () => {
       await expect(
         channel.sendText("channel123", "Hello World")
       ).resolves.not.toThrow();
+    });
+  });
+
+  describe("long message splitting", () => {
+    // Regression (HIGH/message-length): long messages must be split into chunks
+    // and every chunk sent, not truncated to 2000 chars (which dropped content).
+    it("splits a >2000-char text message into multiple chunks instead of truncating", async () => {
+      await channel.connect();
+
+      const client = channel.getClient();
+      const channelObj = await client.channels.fetch("channel123");
+      const sendMock = (channelObj as unknown as { send: ReturnType<typeof vi.fn> }).send;
+      sendMock.mockClear();
+
+      // 5000 single-line chars (no newlines) forces hard word/length splitting.
+      const long = "x".repeat(5000);
+      await channel.sendText("channel123", long);
+
+      expect(sendMock.mock.calls.length).toBeGreaterThan(1);
+
+      let total = 0;
+      for (const call of sendMock.mock.calls) {
+        const sent = call[0] as string;
+        expect(typeof sent).toBe("string");
+        expect(sent.length).toBeLessThanOrEqual(2000);
+        total += sent.length;
+      }
+      // No content dropped: the concatenated chunks reconstruct the full input.
+      expect(total).toBe(long.length);
     });
   });
 
@@ -175,15 +239,10 @@ describe("DiscordChannel", () => {
 
       await boundChannel.connect();
 
-      const promise = (boundChannel as unknown as {
-        requestConfirmationImmediate: (req: {
-          chatId: string;
-          userId?: string;
-          question: string;
-          options: string[];
-          details?: string;
-        }) => Promise<string>;
-      }).requestConfirmationImmediate({
+      // requestConfirmation now decouples the long-lived response promise from
+      // the send queue: the pending confirmation is registered immediately and
+      // only the embed+buttons are dispatched through the queue.
+      const promise = boundChannel.requestConfirmation({
         chatId: "channel123",
         userId: "allowed123",
         question: "Confirm?",
@@ -273,20 +332,35 @@ describe("DiscordChannel", () => {
       expect(threadId).toBeDefined();
     });
 
-    it.skip("should send in thread", async () => {
-      // Skipped: requires ThreadChannel mock
+    // sendInThread() rejects anything that is not a ThreadChannel instance, so
+    // these resolve the thread id to a ThreadChannel-prototyped mock (real
+    // ThreadChannel from the partially-mocked discord.js) just for this test.
+    function stubThreadFetch(): { send: ReturnType<typeof vi.fn> } {
+      const thread = Object.assign(Object.create(ThreadChannel.prototype) as object, {
+        id: "thread123",
+        send: vi.fn().mockResolvedValue({ id: "threadmsg123" }),
+      }) as { send: ReturnType<typeof vi.fn> };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (channel as any).client.channels.fetch = vi.fn().mockResolvedValue(thread);
+      return thread;
+    }
+
+    it("should send in thread", async () => {
       await channel.connect();
+      const thread = stubThreadFetch();
       await expect(
         channel.sendInThread("thread123", "Thread message")
       ).resolves.not.toThrow();
+      expect(thread.send).toHaveBeenCalledWith("Thread message");
     });
 
-    it.skip("should send markdown in thread", async () => {
-      // Skipped: requires ThreadChannel mock
+    it("should send markdown in thread", async () => {
       await channel.connect();
+      const thread = stubThreadFetch();
       await expect(
         channel.sendInThread("thread123", "**Bold**", { markdown: true })
       ).resolves.not.toThrow();
+      expect(thread.send).toHaveBeenCalled();
     });
   });
 

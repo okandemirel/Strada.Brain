@@ -18,8 +18,10 @@
   "nav.identity": "アイデンティティ",
   "nav.personality": "パーソナリティ",
   "nav.memory": "メモリ",
+  "nav.vaults": "ボールト",
   "nav.settings": "設定",
   "nav.skills": "スキル",
+  "nav.office": "オフィス",
   "nav.sidebar": "サイドバーナビゲーション",
   "nav.bottomTabs": "ボトムタブナビゲーション",
 

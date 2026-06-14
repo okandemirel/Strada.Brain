@@ -19,6 +19,12 @@ import { buildBatchedPrompt, buildBurstOrQueueNotice } from "./message-bursting.
 import { getLogger } from "../utils/logger.js";
 
 const QUEUE_NOTICE_COOLDOWN_MS = 15_000;
+/**
+ * Upper bound on tracked per-conversation queue-notice cooldowns. Without a cap
+ * the map grew once per distinct conversation forever. Mirrors the bounded-Map
+ * + oldest-drop idiom used for MAX_SESSIONS in orchestrator-session-manager.
+ */
+const MAX_QUEUE_NOTICE_COOLDOWNS = 500;
 
 export interface MessageRouterOptions {
   readonly burstWindowMs: number;
@@ -40,14 +46,30 @@ export class MessageRouter {
   private readonly queueNoticeCooldowns = new Map<string, number>();
   private readonly burstWindowMs: number;
   private readonly maxBurstMessages: number;
+  private startupNoticeTimer: ReturnType<typeof setTimeout> | null = null;
 
   dispose(): void {
+    // Cancel the one-shot startup-notice reset timer so it can't keep `this`
+    // (and its Maps) alive — or keep the Node event loop running — on a fast
+    // shutdown that happens within the 60s window.
+    if (this.startupNoticeTimer) {
+      clearTimeout(this.startupNoticeTimer);
+      this.startupNoticeTimer = null;
+    }
+
     for (const [, batch] of this.pendingTaskBatches) {
       if (batch.timer) {
         clearTimeout(batch.timer);
       }
     }
+    // Buffered (un-flushed) burst messages are intentionally DROPPED on dispose
+    // rather than flushed. Flushing here would call taskManager.submit() during
+    // shutdown — after the task pipeline / channel may already be torn down — so
+    // the result could never be delivered and could throw mid-teardown. Dropping
+    // is the lower-risk choice: dispose() only runs on shutdown, and any task
+    // not yet flushed has not been acknowledged to the user.
     this.pendingTaskBatches.clear();
+    this.queueNoticeCooldowns.clear();
   }
 
   constructor(
@@ -69,11 +91,15 @@ export class MessageRouter {
     this.burstWindowMs = options.burstWindowMs;
     this.maxBurstMessages = options.maxBurstMessages;
 
-    // Auto-clear startup notice state after 60s — no need to track chats forever
-    setTimeout(() => {
+    // Auto-clear startup notice state after 60s — no need to track chats forever.
+    // Store the handle so dispose() can cancel it; unref() so this one-shot timer
+    // never keeps the Node process alive on its own.
+    this.startupNoticeTimer = setTimeout(() => {
       this.notifiedChats = null;
       this.startupNoticeMarkdown = undefined;
+      this.startupNoticeTimer = null;
     }, 60_000);
+    this.startupNoticeTimer.unref?.();
   }
 
   /**
@@ -255,11 +281,13 @@ export class MessageRouter {
     }
 
     if (queuedBehindActiveTask) {
+      const now = Date.now();
       const cooldownUntil = this.queueNoticeCooldowns.get(batch.conversationKey) ?? 0;
-      if (Date.now() < cooldownUntil) {
+      if (now < cooldownUntil) {
         return;
       }
-      this.queueNoticeCooldowns.set(batch.conversationKey, Date.now() + QUEUE_NOTICE_COOLDOWN_MS);
+      this.pruneQueueNoticeCooldowns(now);
+      this.queueNoticeCooldowns.set(batch.conversationKey, now + QUEUE_NOTICE_COOLDOWN_MS);
     }
 
     const notice = this.buildQueueNotice(batch.messages, queuedBehindActiveTask);
@@ -274,6 +302,24 @@ export class MessageRouter {
         chatId: batch.chatId,
         error: error instanceof Error ? error.message : String(error),
       });
+    }
+  }
+
+  /**
+   * Bound `queueNoticeCooldowns`: drop expired entries (already inert), then if
+   * still at/over the cap evict oldest-first (Map preserves insertion order).
+   * Called before inserting a new cooldown so the map can never grow unbounded.
+   */
+  private pruneQueueNoticeCooldowns(now: number): void {
+    for (const [key, until] of this.queueNoticeCooldowns) {
+      if (until <= now) {
+        this.queueNoticeCooldowns.delete(key);
+      }
+    }
+    while (this.queueNoticeCooldowns.size >= MAX_QUEUE_NOTICE_COOLDOWNS) {
+      const oldestKey = this.queueNoticeCooldowns.keys().next().value;
+      if (oldestKey === undefined) break;
+      this.queueNoticeCooldowns.delete(oldestKey);
     }
   }
 }

@@ -126,6 +126,16 @@ export interface HNSWStats {
 }
 
 /**
+ * Minimal write-serializer contract — structurally matches the memory layer's
+ * HnswWriteMutex.withLock. Injected so the background compaction rebuild runs
+ * through the SAME serializer as every other index write (hnswlib-node is not
+ * safe for interleaved writes).
+ */
+export interface HnswWriteSerializer {
+  withLock<T>(fn: () => Promise<T>): Promise<T>;
+}
+
+/**
  * HNSW Vector Store using hnswlib-node
  */
 export class HNSWVectorStore implements IHNSWVectorStore {
@@ -141,10 +151,25 @@ export class HNSWVectorStore implements IHNSWVectorStore {
   private quantizedVectors: Map<number, QuantizedVector> = new Map();
   private isInitialized: boolean = false;
   private deletedIndices: Set<number> = new Set();
+  /** Optional write serializer (the memory layer's HnswWriteMutex) for background compaction. */
+  private writeSerializer: HnswWriteSerializer | null = null;
+  /** Coalesce guard: at most one background compaction rebuild scheduled at a time. */
+  private rebuildScheduled = false;
 
   constructor(storePath: string, config: Partial<HNSWConfig> = {}) {
     this.storePath = storePath;
     this.config = { ...DEFAULT_HNSW_CONFIG, ...config };
+  }
+
+  /**
+   * Inject the write serializer used to gate background compaction. When set, the
+   * deleted-ratio rebuild triggered inside {@link remove} runs through it so it
+   * cannot interleave with a concurrent add/remove/upsert (the previous
+   * `setImmediate` path escaped the write mutex entirely). Without it, the rebuild
+   * falls back to a deferred `setImmediate` run as before.
+   */
+  setWriteSerializer(serializer: HnswWriteSerializer | null): void {
+    this.writeSerializer = serializer;
   }
 
   // ---------------------------------------------------------------------------
@@ -372,20 +397,36 @@ export class HNSWVectorStore implements IHNSWVectorStore {
       }
     }
 
-    // Background compaction when deleted ratio exceeds threshold
+    // Background compaction when deleted ratio exceeds threshold. Coalesced via
+    // rebuildScheduled so a burst of removes can't stack multiple rebuilds.
     const total = this.chunks.size + this.deletedIndices.size;
-    if (total > 0 && this.deletedIndices.size / total > 0.3) {
+    if (total > 0 && this.deletedIndices.size / total > 0.3 && !this.rebuildScheduled) {
       getLoggerSafe().info("[HNSWVectorStore] Deleted ratio exceeded threshold, scheduling compaction", {
         deleted: this.deletedIndices.size,
         total,
       });
-      setImmediate(() => {
-        this.rebuildIndex().catch((err) => {
+      this.rebuildScheduled = true;
+      const runCompaction = async (): Promise<void> => {
+        try {
+          await this.rebuildIndex();
+        } catch (err) {
           getLoggerSafe().error("[HNSWVectorStore] Background compaction failed", {
             error: err instanceof Error ? err.message : String(err),
           });
-        });
-      });
+        } finally {
+          this.rebuildScheduled = false;
+        }
+      };
+      // Serialize the rebuild behind the write mutex so it can't interleave with a
+      // concurrent add/remove/upsert; the old setImmediate path ran the rebuild
+      // outside the mutex (hnswlib-node corrupts under interleaved writes). The
+      // call is fire-and-forget: it queues behind the in-flight write and runs
+      // exclusively. Fall back to a deferred run when no serializer is injected.
+      if (this.writeSerializer) {
+        void this.writeSerializer.withLock(runCompaction);
+      } else {
+        setImmediate(() => { void runCompaction(); });
+      }
     }
 
     getLoggerSafe().debug("[HNSWVectorStore] Removed entries", { count: ids.length });

@@ -163,6 +163,15 @@ export class CachedEmbeddingProvider implements IEmbeddingProvider {
     if (uncachedIndices.length > 0) {
       const uncachedTexts = uncachedIndices.map((i) => texts[i]!);
       const result = await this.inner.embed(uncachedTexts);
+      // Guard against a provider returning a short/misaligned batch — caching
+      // result.embeddings[j] when it is undefined poisons the cache, and the
+      // final `keys.map((k) => cache.get(k)!)` then hands undefined vectors
+      // downstream (the `!` lies). Fail loudly instead.
+      if (result.embeddings.length !== uncachedTexts.length) {
+        throw new Error(
+          `EmbeddingCache: provider returned ${result.embeddings.length} embeddings for ${uncachedTexts.length} texts`,
+        );
+      }
       totalTokens = result.usage.totalTokens;
 
       for (let j = 0; j < uncachedIndices.length; j++) {

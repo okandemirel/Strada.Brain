@@ -13,7 +13,9 @@ import { buildProviderChain, createProvider, PROVIDER_PRESETS } from "./provider
 import type { ProviderCredentialMap } from "./provider-registry.js";
 import { ProviderPreferenceStore } from "./provider-preferences.js";
 import type { ProviderSelectionMode } from "./provider-preferences.js";
+import { ProviderHealthRegistry } from "./provider-health.js";
 import { getLogger } from "../../utils/logger.js";
+import { ProviderError } from "../../common/errors.js";
 import { LRUCache } from "../../common/lru-cache.js";
 import type { ProviderOfficialSnapshot } from "./provider-source-registry.js";
 import type {
@@ -39,6 +41,8 @@ interface ProviderModelCatalogLookup {
   getProviderOfficialSnapshot?(provider: string): ProviderOfficialSnapshot | undefined;
   getCatalogHealth?(provider: string): ProviderCatalogHealth | undefined;
   refresh?(): Promise<RefreshResult>;
+  isStale?(provider: string): boolean;
+  getFetchedAt?(provider: string): number | undefined;
 }
 
 const MAX_CACHED_PROVIDERS = 50;
@@ -152,22 +156,70 @@ export class ProviderManager {
     private readonly modelOverrides?: Record<string, string>,
     preferencesDbPath?: string,
     private readonly defaultProviderOrder: readonly string[] = [],
+    private readonly ollamaBaseUrl?: string,
+    private readonly baseUrlOverrides?: Record<string, string>,
   ) {
     const dbPath = preferencesDbPath ?? process.env["MEMORY_DB_PATH"] ?? join(process.cwd(), ".strada-memory");
     this.preferences = new ProviderPreferenceStore(
       join(dbPath, "provider-preferences.db"),
     );
     this.preferences.initialize();
+    this.seedGlobalDefaultFromMostRecent();
     this.catalog = new ProviderCatalog(this);
   }
 
+  /**
+   * One-time migration: preferences set BEFORE the global-mirror existed have no global
+   * row, so a churned profile would still revert. If the global default is absent, seed
+   * it from the most recent existing selection so pre-fix choices survive profileId
+   * churn without forcing the user to re-select. Never overwrites an existing global.
+   */
+  private seedGlobalDefaultFromMostRecent(): void {
+    if (this.preferences.get(ProviderManager.GLOBAL_PREFERENCE_KEY)) {
+      return;
+    }
+    const recent = this.preferences.getMostRecent?.(ProviderManager.GLOBAL_PREFERENCE_KEY);
+    if (!recent) {
+      return;
+    }
+    this.preferences.set(
+      ProviderManager.GLOBAL_PREFERENCE_KEY,
+      recent.providerName,
+      recent.model,
+      recent.selectionMode,
+    );
+    getLogger().info("Seeded brain-wide global provider default from most recent selection", {
+      providerName: recent.providerName,
+      model: recent.model,
+    });
+  }
+
   getProvider(chatId: string): IAIProvider {
-    const pref = this.preferences.get(chatId);
+    const pref = this.resolveEffectivePreference(chatId);
     if (!pref) return this.defaultProvider;
 
-    const provider = pref.selectionMode === "strada-hard-pin"
-      ? this.buildPrimaryProvider(pref.providerName, pref.model)
-      : this.buildResilientProvider(pref.providerName, pref.model);
+    if (pref.selectionMode === "strada-hard-pin") {
+      const pinned = this.buildPrimaryProvider(pref.providerName, pref.model);
+      if (pinned) {
+        return pinned;
+      }
+      // A hard pin is a contract: never silently downgrade to the default chain
+      // (the previous behavior). Surface the failure so the caller/user can clear
+      // the pin or restore credentials instead of unknowingly running elsewhere.
+      getLogger().error("Hard-pinned provider could not be built; refusing to silently fall back", {
+        chatId,
+        provider: pref.providerName,
+        model: pref.model,
+      });
+      throw new ProviderError(
+        pref.providerName,
+        `Chat ${chatId} is hard-pinned to '${pref.providerName}' but the provider could not be built (credentials removed/rotated after pinning). Clear the pin or restore credentials.`,
+        "HARD_PIN_UNAVAILABLE",
+        { chatId, model: pref.model },
+      );
+    }
+
+    const provider = this.buildResilientProvider(pref.providerName, pref.model);
     if (provider) {
       return provider;
     }
@@ -198,6 +250,7 @@ export class ProviderManager {
     try {
       const provider = buildProviderChain(order, this.providerCredentials, {
         models: model ? { ...this.modelOverrides, [primaryName]: model } : this.modelOverrides,
+        baseUrls: this.resolveBaseUrlOverrides(),
       });
       this.providerCache.set(cacheKey, provider);
       return provider;
@@ -233,6 +286,20 @@ export class ProviderManager {
 
   private buildCacheKey(order: readonly string[], primaryName: string, model?: string): string {
     return `chain:${order.join(">")}:${primaryName}:${model ?? "(default)"}`;
+  }
+
+  /**
+   * Per-provider base-URL overrides handed to buildProviderChain. Merges the
+   * ollama base URL (threaded separately for backward compatibility) with any
+   * additional overrides (e.g. opencode's OPENCODE_BASE_URL). Returns undefined
+   * when there is nothing to override so the registry uses preset base URLs.
+   */
+  private resolveBaseUrlOverrides(): Record<string, string> | undefined {
+    const merged: Record<string, string> = { ...this.baseUrlOverrides };
+    if (this.ollamaBaseUrl) {
+      merged["ollama"] = this.ollamaBaseUrl;
+    }
+    return Object.keys(merged).length > 0 ? merged : undefined;
   }
 
   private getDefaultPrimaryName(): string {
@@ -272,6 +339,7 @@ export class ProviderManager {
         openaiSubscriptionAccessToken: this.providerCredentials[normalizedName]?.openaiSubscriptionAccessToken,
         openaiSubscriptionAccountId: this.providerCredentials[normalizedName]?.openaiSubscriptionAccountId,
         model: model ?? this.modelOverrides?.[normalizedName],
+        baseUrl: this.resolveBaseUrlOverrides()?.[normalizedName],
       });
       this.primaryProviderCache.set(cacheKey, provider);
       return provider;
@@ -286,29 +354,71 @@ export class ProviderManager {
   }
 
   getActiveInfo(chatId: string): ProviderActiveInfo {
-    const pref = this.preferences.get(chatId);
+    const pref = this.resolveEffectivePreference(chatId);
     if (!pref) {
       const defaultProviderName = this.getDefaultPrimaryName();
-      return {
+      return this.withHealth({
         providerName: defaultProviderName,
         model: this.getDefaultModelForProvider(defaultProviderName),
         isDefault: true,
         selectionMode: "strada-preference-bias",
         executionPolicyNote: EXECUTION_POLICY_NOTE,
-      };
+      });
     }
 
     const providerName = canonicalizeProviderName(pref.providerName) ?? pref.providerName;
-    const preset = PROVIDER_PRESETS[providerName];
-    return {
+    return this.withHealth({
       providerName,
-      model: pref.model ?? this.modelOverrides?.[providerName] ?? preset?.defaultModel ?? "default",
+      // Route through getDefaultModelForProvider (as the no-preference branch
+      // does) so providers without a PROVIDER_PRESETS entry — claude/anthropic/
+      // ollama — report their real default instead of the literal "default".
+      model: pref.model ?? this.getDefaultModelForProvider(providerName),
       isDefault: false,
       selectionMode: pref.selectionMode,
       executionPolicyNote: pref.selectionMode === "strada-hard-pin"
         ? HARD_PIN_EXECUTION_POLICY_NOTE
         : EXECUTION_POLICY_NOTE,
+    });
+  }
+
+  /**
+   * Attach live provider health to ProviderActiveInfo, but ONLY when the provider is
+   * NOT healthy — so a user/dashboard can see "this provider is degraded/down (last
+   * error: …)" instead of silently discovering it at call time (RC-3). When healthy or
+   * unknown the object is returned unchanged (keeps the common shape minimal).
+   */
+  private withHealth(info: ProviderActiveInfo): ProviderActiveInfo {
+    const entry = ProviderHealthRegistry.getInstance().getEntry(info.providerName);
+    if (!entry || entry.status === "healthy") {
+      return info;
+    }
+    return {
+      ...info,
+      healthStatus: entry.status,
+      ...(entry.lastError ? { healthError: entry.lastError } : {}),
     };
+  }
+
+  /**
+   * Stable, identity-independent key that mirrors the most recent explicit selection
+   * as a brain-wide default. Per-provider/model preferences were keyed by the EPHEMERAL
+   * web profileId; when that churned (page reload / new browser / lost token → a fresh
+   * `issue()`), the per-profile row was orphaned and getActiveInfo/getProvider silently
+   * reverted to the SYSTEM DEFAULT — the chronic "no matter what I pick it reverts". The
+   * mirror lets a brand-new profile inherit the last selection instead of reverting. An
+   * explicit per-chat preference still takes precedence. The sentinel cannot collide with
+   * a real chatId/profileId (those are UUIDs / channel-scoped ids).
+   */
+  private static readonly GLOBAL_PREFERENCE_KEY = "__strada_global_default__";
+
+  /**
+   * Resolve the effective preference for a chat: the explicit per-chat row if present,
+   * otherwise the brain-wide global default (mirror). Centralised so every read path
+   * (getActiveInfo, getProvider, listExecutionCandidates) resolves identically.
+   */
+  private resolveEffectivePreference(chatId: string) {
+    return this.preferences.get(chatId)
+      ?? this.preferences.get(ProviderManager.GLOBAL_PREFERENCE_KEY);
   }
 
   setPreference(
@@ -319,6 +429,11 @@ export class ProviderManager {
   ): void {
     const canonicalName = canonicalizeProviderName(providerName) ?? providerName.trim().toLowerCase();
     this.preferences.set(chatId, canonicalName, model, selectionMode);
+    // Mirror to the stable global key so the selection survives web-profileId churn.
+    // Guard against recursing on the sentinel itself.
+    if (chatId !== ProviderManager.GLOBAL_PREFERENCE_KEY) {
+      this.preferences.set(ProviderManager.GLOBAL_PREFERENCE_KEY, canonicalName, model, selectionMode);
+    }
     getLogger().info("Provider preference set", {
       chatId,
       providerName: canonicalName,
@@ -342,6 +457,21 @@ export class ProviderManager {
       return null;
     }
     return this.modelCatalog.refresh();
+  }
+
+  /**
+   * Minimal freshness lookup for the dynamic model catalog, surfaced so dashboard
+   * routes can annotate per-provider model lists with staleness without reaching
+   * into the catalog directly. Returns `undefined` when no catalog is wired.
+   */
+  getModelCatalogFreshness(name: string): { stale: boolean; fetchedAt?: number } | undefined {
+    if (!this.modelCatalog) {
+      return undefined;
+    }
+    const canonicalName = canonicalizeProviderName(name) ?? name.trim().toLowerCase();
+    const stale = this.modelCatalog.isStale?.(canonicalName) ?? true;
+    const fetchedAt = this.modelCatalog.getFetchedAt?.(canonicalName);
+    return fetchedAt === undefined ? { stale } : { stale, fetchedAt };
   }
 
   getCatalogSnapshot(identityKey?: string): ProviderCatalogSnapshot {
@@ -368,6 +498,11 @@ export class ProviderManager {
   > {
     const available = this.listAvailable();
     const AGGREGATE_TIMEOUT = 30_000;
+    // Capture the fallback timer so it can be cleared once the race settles.
+    // Otherwise, whenever allSettled wins (the normal case), the 30s timer stays
+    // ref'd on the event loop — delaying clean shutdown and stacking one timer
+    // per call under bursty dashboard polling.
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
     const settled = await Promise.race([
       Promise.allSettled(
         available.map(async (p) => {
@@ -389,12 +524,15 @@ export class ProviderManager {
         }),
       ),
       new Promise<PromiseSettledResult<{ name: string; label: string; defaultModel: string; models: string[] }>[]>(
-        (resolve) => setTimeout(() => resolve(available.map((p) => ({
-          status: "fulfilled" as const,
-          value: { ...p, models: [p.defaultModel] },
-        }))), AGGREGATE_TIMEOUT),
+        (resolve) => {
+          timeoutId = setTimeout(() => resolve(available.map((p) => ({
+            status: "fulfilled" as const,
+            value: { ...p, models: [p.defaultModel] },
+          }))), AGGREGATE_TIMEOUT);
+        },
       ),
     ]);
+    if (timeoutId !== undefined) clearTimeout(timeoutId);
     return settled.map((r) => r.status === "fulfilled" ? r.value : { name: "", label: "", defaultModel: "", models: [] }).filter(r => r.name);
   }
 
@@ -430,7 +568,10 @@ export class ProviderManager {
       const models = primaryModel
         ? { ...this.modelOverrides, [normalizedOrder[0]!]: primaryModel }
         : this.modelOverrides;
-      const provider = buildProviderChain(normalizedOrder, this.providerCredentials, { models });
+      const provider = buildProviderChain(normalizedOrder, this.providerCredentials, {
+        models,
+        baseUrls: this.resolveBaseUrlOverrides(),
+      });
       this.providerCache.set(cacheKey, provider);
       return provider;
     } catch (error) {
@@ -571,7 +712,7 @@ export class ProviderManager {
   }
 
   private resolveExecutionPoolNames(chatId?: string): string[] {
-    const preferred = chatId ? this.preferences.get(chatId) : undefined;
+    const preferred = chatId ? this.resolveEffectivePreference(chatId) : undefined;
     const preferredProvider = preferred?.providerName;
     const primaryName = canonicalizeProviderName(preferredProvider) || this.getDefaultPrimaryName();
     if (preferred?.selectionMode === "strada-hard-pin") {
@@ -587,7 +728,7 @@ export class ProviderManager {
   }
 
   listExecutionCandidates(chatId?: string): ProviderExecutionCandidate[] {
-    const preferred = chatId ? this.preferences.get(chatId) : undefined;
+    const preferred = chatId ? this.resolveEffectivePreference(chatId) : undefined;
 
     return this.resolveExecutionPoolNames(chatId).map((name) => {
       const model =

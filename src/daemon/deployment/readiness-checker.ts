@@ -127,12 +127,21 @@ export class ReadinessChecker {
       });
       const killTimer = setTimeout(() => child.kill("SIGKILL"), this.config.testTimeoutMs + 5000);
 
+      // Total cap (matches DeploymentExecutor) — only the first 200 chars are ever
+      // logged, so a chatty failing command can't grow stderr unbounded.
+      const MAX_STDERR_BYTES = 10 * 1024;
       let stderr = "";
       child.stderr?.on("data", (chunk: Buffer) => {
-        stderr += chunk.toString().slice(0, 2048);
+        if (stderr.length < MAX_STDERR_BYTES) {
+          stderr += chunk.toString().slice(0, MAX_STDERR_BYTES - stderr.length);
+        }
       });
 
       child.on("error", (err) => {
+        // Clear the SIGKILL backstop too — on spawn errors (e.g. ENOENT) only
+        // "error" fires, never "close", so the timer would otherwise leak for
+        // ~testTimeoutMs+5s and fire kill() on a process that never started.
+        clearTimeout(killTimer);
         this.logger.warn(`Test command error: ${err.message}`);
         resolve(false);
       });

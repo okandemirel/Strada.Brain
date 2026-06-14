@@ -42,6 +42,9 @@ export class ProgressReporter {
   private readonly heartbeats = new Map<TaskId, HeartbeatState>();
   private readonly defaultLanguage: ProgressLanguage;
   private lastNarrativeAt = 0;
+  private readonly taskManager: TaskManager;
+  /** Bound listeners retained so dispose() can remove them from the taskManager. */
+  private readonly listeners: Array<[string, (...args: never[]) => void]> = [];
 
   constructor(
     private readonly channel: IChannelAdapter,
@@ -51,48 +54,85 @@ export class ProgressReporter {
   ) {
     this.interaction = interaction;
     this.defaultLanguage = defaultLanguage;
+    this.taskManager = taskManager;
     this.setupListeners(taskManager);
   }
 
   private setupListeners(taskManager: TaskManager): void {
-    taskManager.on("task:created", (task: Task) => {
+    this.register(taskManager, "task:created", (task: Task) => {
       this.reportCreated(task);
     });
 
-    taskManager.on("task:progress", (taskId: TaskId, message: TaskProgressUpdate) => {
+    this.register(taskManager, "task:progress", (taskId: TaskId, message: TaskProgressUpdate) => {
       const task = taskManager.getStatus(taskId);
       if (task) {
         this.reportProgress(task, message);
       }
     });
 
-    taskManager.on("task:completed", (taskId: TaskId, result: string) => {
+    this.register(taskManager, "task:completed", (taskId: TaskId, result: string) => {
       const task = taskManager.getStatus(taskId);
       if (task) {
         this.reportCompleted(task, result);
       }
     });
 
-    taskManager.on("task:failed", (taskId: TaskId, error: string) => {
+    this.register(taskManager, "task:failed", (taskId: TaskId, error: string) => {
       const task = taskManager.getStatus(taskId);
       if (task) {
         this.reportFailed(task, error);
       }
     });
 
-    taskManager.on("task:blocked", (taskId: TaskId, result: string) => {
+    this.register(taskManager, "task:blocked", (taskId: TaskId, result: string) => {
       const task = taskManager.getStatus(taskId);
       if (task) {
         this.reportBlocked(task, result);
       }
     });
 
-    taskManager.on("task:cancelled", (taskId: TaskId) => {
+    this.register(taskManager, "task:cancelled", (taskId: TaskId) => {
       const task = taskManager.getStatus(taskId);
       if (task) {
         this.reportCancelled(task);
       }
     });
+
+    // Resume mints a NEW task id, so no terminal event ever arrives for a paused
+    // id — clear its heartbeat here or the Map entry + timers leak per pause and a
+    // pending heartbeat could fire a stale "working" status after pause.
+    this.register(taskManager, "task:paused", (taskId: TaskId) => {
+      this.clearHeartbeat(taskId, true);
+    });
+  }
+
+  private register(
+    taskManager: TaskManager,
+    event: string,
+    handler: (...args: never[]) => void,
+  ): void {
+    taskManager.on(event, handler as (...args: unknown[]) => void);
+    this.listeners.push([event, handler]);
+  }
+
+  /**
+   * Tear down the reporter: remove all taskManager listeners and clear every
+   * pending heartbeat/throttle timer so the instance can be GC'd and cannot fire
+   * stale status updates after shutdown.
+   */
+  dispose(): void {
+    for (const [event, handler] of this.listeners) {
+      this.taskManager.off(event, handler as (...args: unknown[]) => void);
+    }
+    this.listeners.length = 0;
+    for (const taskId of Array.from(this.heartbeats.keys())) {
+      this.clearHeartbeat(taskId);
+    }
+  }
+
+  /** Alias for {@link dispose} to match the stop()/shutdown() convention used elsewhere. */
+  stop(): void {
+    this.dispose();
   }
 
   private reportCreated(task: Task): void {

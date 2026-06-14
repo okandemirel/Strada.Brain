@@ -275,6 +275,9 @@ export async function initializeTaskRuntimeStage(
   const backgroundExecutorOptions: ConstructorParameters<typeof BackgroundExecutor>[0] = {
     orchestrator: params.orchestrator,
     concurrencyLimit: params.config.tasks.concurrencyLimit,
+    // Feed the per-call stream timeout so the executor can keep the per-task
+    // inactivity window strictly larger than a single legitimately-long LLM call.
+    streamInitialTimeoutMs: params.config.llmStreamInitialTimeoutMs,
     decomposer: params.goalDecomposer,
     goalStorage: params.goalStorage,
     aiProvider: params.providerManager.getProvider(""),
@@ -306,7 +309,10 @@ export async function initializeTaskRuntimeStage(
     ) ?? new AutoUpdater(params.config, params.activityRegistry, backgroundExecutor);
     autoUpdater.setNotifyFn((msg: string) => {
       const safe = sanitizeSecrets(msg);
-      const chats = params.activityRegistry.getActiveChatIds();
+      // Only notify chats active within the idle window — avoids broadcasting
+      // update notices to long-dead conversations.
+      const idleWindowMs = params.config.autoUpdate.idleTimeoutMin * 60 * 1000;
+      const chats = params.activityRegistry.getActiveChatIds(idleWindowMs);
       for (const { chatId } of chats) {
         const send = params.channel.sendSystemMessage
           ? params.channel.sendSystemMessage.bind(params.channel)
@@ -363,16 +369,14 @@ export async function initializeTaskRuntimeStage(
     maxBurstMessages: params.config.tasks.messageBurstMaxMessages,
   });
 
-  if (deps.createProgressReporter) {
-    deps.createProgressReporter(
-      params.channel,
-      taskManager,
-      params.config.interaction,
-      params.config.language,
-    );
-  } else {
-    new ProgressReporter(params.channel, taskManager, params.config.interaction, params.config.language);
-  }
+  const progressReporter = deps.createProgressReporter
+    ? deps.createProgressReporter(
+        params.channel,
+        taskManager,
+        params.config.interaction,
+        params.config.language,
+      )
+    : new ProgressReporter(params.channel, taskManager, params.config.interaction, params.config.language);
 
   return {
     daemonEventBus,
@@ -383,5 +387,6 @@ export async function initializeTaskRuntimeStage(
     projectScopeFingerprint,
     commandHandler,
     messageRouter,
+    progressReporter,
   };
 }

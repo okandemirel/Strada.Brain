@@ -1031,6 +1031,21 @@ describe("LearningStorage", () => {
       expect(logs).toHaveLength(2);
     });
 
+    // Regression (H9): session_hit dedup rows (keyed by session id) must NOT be
+    // counted as distinct projects, or the instinct is falsely promoted to
+    // universal scope.
+    it("excludes session_hit dedup rows from getInstinctScopeCount", () => {
+      const instinct = createTestInstinct();
+      storage.createInstinct(instinct);
+      storage.addInstinctScope(instinct.id, "/proj/a");
+      storage.addInstinctScope(instinct.id, "/proj/b");
+      storage.incrementCrossSessionHitCount(instinct.id, "session-1");
+      storage.incrementCrossSessionHitCount(instinct.id, "session-2");
+
+      // Only the two real project scopes count, not the two session_hit markers.
+      expect(storage.getInstinctScopeCount(instinct.id)).toBe(2);
+    });
+
     it("should add and retrieve instinct scopes with v2 fields", () => {
       const instinct = createTestInstinct();
       storage.createInstinct(instinct);

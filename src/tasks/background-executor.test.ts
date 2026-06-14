@@ -1462,3 +1462,123 @@ describe("BackgroundExecutor - goal:failed event emission (INT-02)", () => {
   });
 });
 
+// Regression: gpt-5.x reasoning models can spend several minutes "thinking" on a
+// single step with no visible output. The task watchdog must NOT be a hard
+// wall-clock cap (the old fixed 5-min TASK_TIMEOUT_MS aborted them mid-reasoning
+// and collapsed the provider chain). It must be an INACTIVITY timeout that any
+// progress update resets, so an actively-working task never trips it while a
+// genuinely hung task still cannot block the conversation forever.
+describe("BackgroundExecutor - task inactivity timeout", () => {
+  it("aborts a task that reports no progress within the inactivity window", async () => {
+    const mockOrch = createMockOrchestrator();
+    let sawAbort = false;
+    mockOrch.runBackgroundTask = vi.fn(async (_prompt: string, opts: { signal: AbortSignal }) => {
+      await new Promise<void>((_resolve, reject) => {
+        opts.signal.addEventListener("abort", () => { sawAbort = true; reject(new Error("aborted")); }, { once: true });
+      });
+      return "done";
+    });
+
+    const executor = new BackgroundExecutor({
+      orchestrator: mockOrch as any,
+      taskInactivityTimeoutMs: 120,
+    });
+    executor.setTaskManager({ updateStatus: vi.fn(), complete: vi.fn(), fail: vi.fn(), block: vi.fn() } as any);
+
+    executor.enqueue(createTestTask(), new AbortController().signal, vi.fn());
+
+    await vi.waitFor(() => { expect(sawAbort).toBe(true); }, { timeout: 3000 });
+  });
+
+  it("does not abort a long-running task that keeps reporting progress (inactivity resets)", async () => {
+    const mockOrch = createMockOrchestrator();
+    let aborted = false;
+    let progressTicks = 0;
+    mockOrch.runBackgroundTask = vi.fn(async (
+      _prompt: string,
+      opts: { signal: AbortSignal; onProgress: (u: unknown) => void },
+    ) => {
+      opts.signal.addEventListener("abort", () => { aborted = true; }, { once: true });
+      // Run for ~360ms (3x the 120ms window) but report progress every 60ms so
+      // the inactivity timer is reset before it can ever fire.
+      for (let i = 0; i < 6 && !opts.signal.aborted; i++) {
+        await new Promise((r) => setTimeout(r, 60));
+        opts.onProgress("working");
+        progressTicks++;
+      }
+      return "done";
+    });
+
+    const executor = new BackgroundExecutor({
+      orchestrator: mockOrch as any,
+      taskInactivityTimeoutMs: 120,
+    });
+    executor.setTaskManager({ updateStatus: vi.fn(), complete: vi.fn(), fail: vi.fn(), block: vi.fn() } as any);
+
+    executor.enqueue(createTestTask(), new AbortController().signal, vi.fn());
+
+    await vi.waitFor(() => { expect(progressTicks).toBeGreaterThanOrEqual(6); }, { timeout: 3000 });
+    expect(aborted).toBe(false);
+  });
+
+  it("enforces the inactivity window >= 2x the stream-initial timeout (ordering invariant)", async () => {
+    const mockOrch = createMockOrchestrator();
+    let aborted = false;
+    mockOrch.runBackgroundTask = vi.fn(async (
+      _prompt: string,
+      opts: { signal: AbortSignal },
+    ) => {
+      opts.signal.addEventListener("abort", () => { aborted = true; }, { once: true });
+      // Stay silent for 300ms — well past the requested 100ms inactivity window, but
+      // far under the enforced floor (2 x 100000ms). Must NOT abort: a long single
+      // LLM call kept alive by keepalive must outlive the task timer.
+      await new Promise((r) => setTimeout(r, 300));
+      return "done";
+    });
+
+    const executor = new BackgroundExecutor({
+      orchestrator: mockOrch as any,
+      taskInactivityTimeoutMs: 100,    // would abort at 100ms on its own...
+      streamInitialTimeoutMs: 100000,  // ...but the 2x floor (200000ms) overrides it
+    });
+    executor.setTaskManager({ updateStatus: vi.fn(), complete: vi.fn(), fail: vi.fn(), block: vi.fn() } as any);
+
+    executor.enqueue(createTestTask(), new AbortController().signal, vi.fn());
+
+    await new Promise((r) => setTimeout(r, 380));
+    expect(aborted).toBe(false);
+  });
+
+  it("re-arms the inactivity window on heartbeat updates without forwarding them to the UI (audit #8)", async () => {
+    const mockOrch = createMockOrchestrator();
+    let aborted = false;
+    let ticks = 0;
+    mockOrch.runBackgroundTask = vi.fn(async (
+      _prompt: string,
+      opts: { signal: AbortSignal; onProgress: (u: unknown) => void },
+    ) => {
+      opts.signal.addEventListener("abort", () => { aborted = true; }, { once: true });
+      // Emit ONLY heartbeats for ~360ms (3x the 120ms window). They must keep the
+      // task alive (re-arm) yet never reach the user-facing onProgress.
+      for (let i = 0; i < 6 && !opts.signal.aborted; i++) {
+        await new Promise((r) => setTimeout(r, 60));
+        opts.onProgress({ kind: "heartbeat", message: "" });
+        ticks++;
+      }
+      return "done";
+    });
+
+    const executor = new BackgroundExecutor({ orchestrator: mockOrch as any, taskInactivityTimeoutMs: 120 });
+    const userProgress = vi.fn();
+    executor.setTaskManager({ updateStatus: vi.fn(), complete: vi.fn(), fail: vi.fn(), block: vi.fn() } as any);
+    executor.enqueue(createTestTask(), new AbortController().signal, userProgress);
+
+    await vi.waitFor(() => { expect(ticks).toBeGreaterThanOrEqual(6); }, { timeout: 3000 });
+    expect(aborted).toBe(false); // heartbeats kept it alive past the 120ms window
+    const heartbeatCalls = userProgress.mock.calls.filter(
+      (c: unknown[]) => typeof c[0] === "object" && c[0] !== null && (c[0] as { kind?: string }).kind === "heartbeat",
+    );
+    expect(heartbeatCalls).toHaveLength(0); // heartbeats are not user-facing
+  });
+});
+

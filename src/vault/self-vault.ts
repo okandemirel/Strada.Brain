@@ -210,10 +210,7 @@ export class SelfVault extends UnityProjectVault {
     if (phase === 'sync') {
       const present = new Set(found.map((f) => f.path));
       for (const p of before) {
-        if (!present.has(p)) {
-          const hnswIds = this.store.listHnswIdsForPath(p);
-          for (const hnswId of hnswIds) this.adapter.remove(hnswId);
-          this.store.deleteFile(p);
+        if (!present.has(p) && await this.writeLock.run(async () => this.deleteIndexedFileInternal(p))) {
           changed.push(p);
         }
       }

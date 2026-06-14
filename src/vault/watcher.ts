@@ -14,6 +14,12 @@ export interface VaultWatcherOptions {
   onBatch: (paths: string[]) => Promise<void> | void;
   /** Poll interval in ms. Defaults to 100 for test-runner reliability on macOS FSEvents. Set 0 to use native events. */
   pollIntervalMs?: number;
+  /**
+   * Hard cap on how long a continuous stream of edits may defer a drain.
+   * Without it the trailing-only debounce starves indexing under non-stop
+   * writes (the timer keeps resetting). Defaults to max(debounceMs * 5, 5000).
+   */
+  maxWaitMs?: number;
 }
 
 const IGNORE_REGEX = /(^|\/)(Library|Temp|Logs|obj|bin|\.git|node_modules|\.strada|\.obsidian)(\/|$)/;
@@ -25,6 +31,10 @@ export class VaultWatcher {
   private watcher: FSWatcher | null = null;
   private dirty = new Set<string>();
   private timer: NodeJS.Timeout | null = null;
+  private draining = false;
+  private pendingDrain = false;
+  private firstScheduledAt: number | null = null;
+  private stopped = false;
   constructor(private opts: VaultWatcherOptions) {}
 
   async start(): Promise<void> {
@@ -91,26 +101,51 @@ export class VaultWatcher {
   }
 
   private scheduleDrain(): void {
+    const now = Date.now();
+    if (this.firstScheduledAt === null) this.firstScheduledAt = now;
     if (this.timer) clearTimeout(this.timer);
-    this.timer = setTimeout(() => void this.drain(), this.opts.debounceMs);
+    // Trailing debounce, capped by maxWaitMs so a continuous edit stream can't
+    // defer indexing forever. Once the cap is hit the next tick fires at once.
+    const maxWait = this.opts.maxWaitMs ?? Math.max(this.opts.debounceMs * 5, 5000);
+    const elapsed = now - this.firstScheduledAt;
+    const wait = Math.max(0, Math.min(this.opts.debounceMs, maxWait - elapsed));
+    this.timer = setTimeout(() => void this.drain(), wait);
   }
 
   private async drain(): Promise<void> {
+    // In-flight guard: never run two onBatch passes concurrently. If a drain
+    // fires while one is running, defer it — the running pass reschedules on
+    // completion when new events have arrived.
+    if (this.draining) {
+      this.pendingDrain = true;
+      return;
+    }
+    this.timer = null;
+    this.firstScheduledAt = null;
     const batch = [...this.dirty].sort();
     this.dirty.clear();
-    this.timer = null;
     if (batch.length === 0) return;
+    this.draining = true;
     try {
       await this.opts.onBatch(batch);
     } catch (err) {
       getLoggerSafe().warn('[VaultWatcher] onBatch threw', { error: err instanceof Error ? err.message : String(err) });
+    } finally {
+      this.draining = false;
+      // Events that arrived during onBatch (a deferred tick, or freshly enqueued
+      // paths) get a fresh drain — unless we're shutting down.
+      if (!this.stopped && (this.pendingDrain || this.dirty.size > 0)) {
+        this.pendingDrain = false;
+        this.scheduleDrain();
+      }
     }
   }
 
   async stop(): Promise<void> {
+    this.stopped = true;
     if (this.timer) { clearTimeout(this.timer); this.timer = null; }
     if (this.watcher) { await this.watcher.close(); this.watcher = null; }
-    if (this.dirty.size) await this.drain();
+    if (this.dirty.size && !this.draining) await this.drain();
   }
 }
 

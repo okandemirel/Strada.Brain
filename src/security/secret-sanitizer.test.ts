@@ -178,9 +178,31 @@ MHQCAQEEIBkMCxBh8rS2CBwI6MQkGRL0M0R0RLzBFXu0GHZdypPCoAcGBSuBBAAK
     it("should redact MongoDB URLs", () => {
       const content = "MONGO_URI=mongodb://admin:secret123@mongodb.example.com:27017/admin";
       const result = sanitizer.sanitize(content);
-      
+
       expect(result.wasSanitized).toBe(true);
       expect(result.content).not.toContain("secret123");
+    });
+
+    it("redacts each DB URL with its OWN scheme and host (M10)", () => {
+      const content = "a postgres://u:pw1xyz@db1.example.com b mysql://x:pw2xyz@db2.host.io";
+      const result = sanitizer.sanitize(content);
+
+      expect(result.content).not.toContain("pw1xyz");
+      expect(result.content).not.toContain("pw2xyz");
+      expect(result.content).toContain("postgres://[REDACTED_CREDENTIALS]@db1.example.com");
+      // TEETH: the unfixed code derived ONE redaction string from the first match
+      // and applied it to all, so the second URL became postgres://…@db1.example.com.
+      expect(result.content).toContain("mysql://[REDACTED_CREDENTIALS]@db2.host.io");
+    });
+
+    it("does not re-inject plaintext via a $&-bearing host (M10)", () => {
+      const content = "postgres://u:secretpw@h$&x.com and mysql://a:other@db2.io";
+      const result = sanitizer.sanitize(content);
+
+      // TEETH: the first match's computed redaction string contained "$&"; passed as a
+      // String.replace replacement string it re-inserted the whole matched URL (with creds).
+      expect(result.content).not.toContain("u:secretpw");
+      expect(result.content).not.toContain("secretpw");
     });
   });
 
@@ -361,9 +383,24 @@ DB_PASSWORD=supersecret`;
     it("should track bytes removed correctly", () => {
       const content = "sk-abcdefghijklmnopqrstuvwxyz123456";
       const result = sanitizer.sanitize(content);
-      
+
       // Original: ~37 chars, Redacted: ~21 chars
       expect(result.stats.bytesRemoved).toBeGreaterThan(0);
+    });
+
+    it("never reports negative bytesRemoved when the marker is longer than the secret (L9)", () => {
+      const result = sanitizer.sanitize("pwd=abcd"); // 8 chars → "password=[REDACTED]" (19 chars)
+      expect(result.content).toContain("[REDACTED]");
+      // TEETH: the unfixed global delta reported 8 - 19 = -11.
+      expect(result.stats.bytesRemoved).toBeGreaterThanOrEqual(0);
+    });
+
+    it("counts truncated source bytes, not the marker length (L9)", () => {
+      const s = new SecretSanitizer({ maxLength: 100 });
+      const result = s.sanitize("x".repeat(160)); // 60 chars over the cap, no secrets
+      expect(result.wasSanitized).toBe(true);
+      // TEETH: the unfixed code reported TRUNCATION_MARKER.length (16), not 60.
+      expect(result.stats.bytesRemoved).toBe(60);
     });
 
     it("should track matches by pattern", () => {

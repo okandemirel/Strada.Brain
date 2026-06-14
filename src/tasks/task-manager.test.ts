@@ -197,6 +197,55 @@ describe("TaskManager", () => {
     expect(executor.enqueue).toHaveBeenCalledOnce()
   });
 
+  // Regression: enqueue() throws on queue overflow. submit() runs fire-and-forget
+  // from MessageRouter.flushPendingChat (`void this.flushPendingChat(...)`), so a
+  // throw escaping submit() becomes an unhandledRejection — which the global
+  // handler in src/index.ts escalates to a full daemon shutdown.
+  it("does not let an enqueue overflow throw escape submit()", () => {
+    const storage = { save: vi.fn() } as any;
+    const executor = {
+      enqueue: vi.fn().mockImplementation(() => {
+        throw new Error("Task queue full (max 100). Try again later.");
+      }),
+    } as any;
+    const manager = new TaskManager(storage, executor);
+
+    let task: Task | undefined;
+    expect(() => {
+      task = manager.submit("chat-1", "cli", "do the thing");
+    }).not.toThrow();
+    expect(executor.enqueue).toHaveBeenCalledOnce();
+    expect(task).toBeDefined();
+    // The unusable abort controller for the rejected task is cleaned up.
+    expect((manager as unknown as { abortControllers: Map<string, AbortController> })
+      .abortControllers.has(task!.id)).toBe(false);
+  });
+
+  // Regression (H1): cancelling a *paused* task must release its conversation
+  // lock — otherwise the conversationKey is stuck in pausedConversations forever
+  // (resumeTask() can no longer remove it once the task is cancelled) and every
+  // future task in that conversation is skipped.
+  it("releases the conversation lock when cancelling a paused task", () => {
+    const pausedTask = buildTask({
+      id: "task_paused1" as Task["id"],
+      status: TaskStatus.paused,
+      chatId: "chat-x",
+      channelType: "cli",
+    });
+    const storage = {
+      load: vi.fn().mockReturnValue(pausedTask),
+      updateStatus: vi.fn(),
+    } as any;
+    const executor = { resumeConversation: vi.fn() } as any;
+    const manager = new TaskManager(storage, executor);
+
+    const cancelled = manager.cancel("task_paused1" as Task["id"]);
+
+    expect(cancelled).toBe(true);
+    expect(executor.resumeConversation).toHaveBeenCalledTimes(1);
+    expect(storage.updateStatus).toHaveBeenCalledWith("task_paused1", TaskStatus.cancelled);
+  });
+
   it("creates a goal retry attempt that preserves completed checkpoints", () => {
     const failedTask = buildTask({
       id: "task_goal123" as Task["id"],
@@ -255,5 +304,26 @@ describe("TaskManager", () => {
     );
     expect(goalStorage.updateTreeStatus).toHaveBeenCalledWith("goal_root", "paused");
     expect(pausedListener).toHaveBeenCalled()
+  });
+
+  it("leaves a recovered user task paused, not failed (updateError must not clobber paused)", () => {
+    const interruptedTask = buildTask({
+      id: "task_order123" as Task["id"],
+      status: TaskStatus.executing,
+      origin: "user",
+    });
+    // Fake storage mirroring the real SQL: updateError forces status=failed;
+    // updateStatus only changes status. Recovery must end on 'paused'.
+    let status: TaskStatus = interruptedTask.status;
+    const storage = {
+      loadIncomplete: vi.fn().mockReturnValue([interruptedTask]),
+      updateStatus: vi.fn((_id: Task["id"], s: TaskStatus) => { status = s; }),
+      updateError: vi.fn(() => { status = TaskStatus.failed; }),
+    } as any;
+    const manager = new TaskManager(storage, {} as any);
+
+    manager.recoverOnStartup();
+
+    expect(status).toBe(TaskStatus.paused);
   });
 });

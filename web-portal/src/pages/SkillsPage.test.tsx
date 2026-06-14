@@ -229,6 +229,31 @@ describe('SkillsPage', () => {
     vi.unstubAllGlobals()
   })
 
+  it('surfaces an error (not a silent unhandled rejection) when a toggle request fails', async () => {
+    const user = userEvent.setup()
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+      json: async () => ({ error: 'gate failed' }),
+    })
+    vi.stubGlobal('fetch', mockFetch)
+
+    mockUseSkills.mockReturnValue({
+      data: { skills: SAMPLE_SKILLS },
+      error: null,
+      isLoading: false,
+    })
+    renderPage()
+
+    await user.click(screen.getByRole('button', { name: 'web-search' }))
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent('gate failed')
+    })
+
+    vi.unstubAllGlobals()
+  })
+
   it('calls disable endpoint when Disable button is clicked', async () => {
     const user = userEvent.setup()
     const mockFetch = vi.fn().mockResolvedValue({

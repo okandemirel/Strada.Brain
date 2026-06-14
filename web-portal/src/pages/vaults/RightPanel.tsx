@@ -97,6 +97,53 @@ function BacklinksSection({ symbolId, vaultId }: BacklinksProps) {
   );
 }
 
+interface NoteWikilink {
+  fromNote: string;
+  target: string;
+  resolved: boolean;
+}
+
+/** Backlinks for the currently-open NOTE (not a graph symbol): which notes
+ *  wikilink to it. Clicking a source note opens it in the files tab. */
+function NoteBacklinksSection({ vaultId, notePath }: { vaultId: string; notePath: string }) {
+  const { t } = useTranslation('vault');
+  const setActiveFilePath = useVaultStore((s) => s.setActiveFilePath);
+  const setActiveTab = useVaultStore((s) => s.setActiveTab);
+
+  // The path is encoded as a single segment to match the server's
+  // `/notes/(.+)/backlinks` route (which decodeURIComponent's it back).
+  const url = `/api/vaults/${encodeURIComponent(vaultId)}/notes/${encodeURIComponent(notePath)}/backlinks`;
+  const { data, loading, error } = useVaultFetch<{ wikilinks?: NoteWikilink[] }>(url);
+  const wikilinks = data?.wikilinks ?? null;
+
+  if (loading) return <VaultEmptyState kind="loading" variant="inline" label="…" />;
+  if (error) return <VaultEmptyState kind="error" variant="inline" label={t('detail.loadError')} />;
+  if (!wikilinks || wikilinks.length === 0) {
+    return <VaultEmptyState kind="empty" variant="inline" label={t('right.noBacklinks')} />;
+  }
+
+  return (
+    <ul className="px-2 py-1 space-y-0.5">
+      {wikilinks.map((w) => (
+        <li key={`${w.fromNote}:${w.target}`}>
+          <button
+            type="button"
+            onClick={() => {
+              setActiveFilePath(w.fromNote);
+              setActiveTab('files');
+            }}
+            className="w-full text-left px-2 py-1 rounded text-xs hover:bg-[var(--color-surface-hover)] transition-colors group"
+          >
+            <div className="font-mono truncate text-[var(--color-text)] group-hover:text-[var(--color-accent)]">
+              {w.fromNote}
+            </div>
+          </button>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 function OutlineSection({ vaultId }: { vaultId: string }) {
   const { t } = useTranslation('vault');
   const graph = useVaultStore((s) => s.graphCache[vaultId]);
@@ -165,13 +212,25 @@ function OutlineSection({ vaultId }: { vaultId: string }) {
   );
 }
 
-function MetadataSection({ vaultId, symbolId }: { vaultId: string; symbolId: string | null }) {
+function MetadataList({ rows }: { rows: [string, string][] }) {
+  return (
+    <dl className="px-3 py-2 text-xs space-y-1.5">
+      {rows.map(([k, v]) => (
+        <div key={k} className="grid grid-cols-[80px_1fr] gap-2">
+          <dt className="text-[10px] uppercase tracking-wider text-[var(--color-text-tertiary)] mt-0.5">
+            {k}
+          </dt>
+          <dd className="font-mono text-[var(--color-text-secondary)] break-all">{v}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+function MetadataSection({ vaultId, symbolId }: { vaultId: string; symbolId: string }) {
   const { t } = useTranslation('vault');
   const graph = useVaultStore((s) => s.graphCache[vaultId]);
 
-  if (!symbolId) {
-    return <VaultEmptyState kind="empty" variant="inline" label={t('right.empty')} />;
-  }
   const node = graph?.nodes.find((n) => n.id === symbolId);
   if (!node) {
     return <VaultEmptyState kind="empty" variant="inline" label={t('right.noMetadata')} />;
@@ -187,18 +246,19 @@ function MetadataSection({ vaultId, symbolId }: { vaultId: string; symbolId: str
     ['id', node.id],
   ];
 
-  return (
-    <dl className="px-3 py-2 text-xs space-y-1.5">
-      {rows.map(([k, v]) => (
-        <div key={k} className="grid grid-cols-[80px_1fr] gap-2">
-          <dt className="text-[10px] uppercase tracking-wider text-[var(--color-text-tertiary)] mt-0.5">
-            {k}
-          </dt>
-          <dd className="font-mono text-[var(--color-text-secondary)] break-all">{v}</dd>
-        </div>
-      ))}
-    </dl>
-  );
+  return <MetadataList rows={rows} />;
+}
+
+/** Metadata for the currently-open NOTE (path-derived; no fetch needed). */
+function NoteMetadataSection({ notePath }: { notePath: string }) {
+  const name = notePath.split('/').pop() ?? notePath;
+  const ext = name.match(/\.([^.]+)$/)?.[1];
+  const rows: [string, string][] = [
+    ['name', name],
+    ['path', notePath],
+    ...(ext ? [['type', ext] as [string, string]] : []),
+  ];
+  return <MetadataList rows={rows} />;
 }
 
 /**
@@ -209,6 +269,7 @@ export function RightPanel() {
   const activeRightTab = useVaultStore((s) => s.activeRightTab);
   const setActiveRightTab = useVaultStore((s) => s.setActiveRightTab);
   const selectedSymbolId = useVaultStore((s) => s.selectedSymbolId);
+  const activeFilePath = useVaultStore((s) => s.activeFilePath);
   const vaultId = useVaultStore((s) => s.selected);
 
   // Exhaustive Record for tab dispatch — replaces the nested-ternary ladder
@@ -219,12 +280,19 @@ export function RightPanel() {
   if (!vaultId) {
     panel = <VaultEmptyState kind="no-vault" variant="inline" label={t('files.selectVault')} />;
   } else {
+    // Prefer the selected graph symbol; otherwise reflect the open note.
     const panels: Record<RightPanelTab, ReactNode> = {
       backlinks: selectedSymbolId
         ? <BacklinksSection symbolId={selectedSymbolId} vaultId={vaultId} />
-        : <VaultEmptyState kind="empty" variant="inline" label={t('right.empty')} />,
+        : activeFilePath
+          ? <NoteBacklinksSection vaultId={vaultId} notePath={activeFilePath} />
+          : <VaultEmptyState kind="empty" variant="inline" label={t('right.empty')} />,
       outline: <OutlineSection vaultId={vaultId} />,
-      metadata: <MetadataSection vaultId={vaultId} symbolId={selectedSymbolId} />,
+      metadata: selectedSymbolId
+        ? <MetadataSection vaultId={vaultId} symbolId={selectedSymbolId} />
+        : activeFilePath
+          ? <NoteMetadataSection notePath={activeFilePath} />
+          : <VaultEmptyState kind="empty" variant="inline" label={t('right.empty')} />,
     };
     panel = panels[activeRightTab];
   }

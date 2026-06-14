@@ -335,4 +335,34 @@ describe("FileVectorStore", () => {
       await store.shutdown();
     });
   });
+
+  describe("HNSW search after removals (regression)", () => {
+    it("does not crash when searching after the entry point / neighbors are removed", async () => {
+      const store = new FileVectorStore(tmpDir, DIMS);
+      await store.initialize();
+
+      // > 100 live entries forces the HNSW search path (FileVectorStore.search).
+      const entries = Array.from({ length: 200 }, (_, i) =>
+        makeEntry(`v${i}`, "/src/Big.cs", randomVector()),
+      );
+      await store.upsert(entries);
+
+      // Remove the earliest 50 ids — these include the HNSW entry point and are
+      // dense neighbors of the survivors. Their slots become soft-deleted nulls
+      // still referenced by survivors' connection lists; an unguarded traversal
+      // dereferences them and throws. 200 - 50 = 150 > 100 keeps the HNSW path.
+      await store.remove(Array.from({ length: 50 }, (_, i) => `v${i}`));
+      expect(store.count()).toBe(150);
+
+      // Several queries must complete without throwing and only reference live ids.
+      for (let q = 0; q < 5; q++) {
+        const results = await store.search(randomVector(), 10);
+        for (const r of results) {
+          expect(store.has(r.id)).toBe(true);
+        }
+      }
+
+      await store.shutdown();
+    });
+  });
 });

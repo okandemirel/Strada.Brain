@@ -274,4 +274,18 @@ describe("CachedEmbeddingProvider", () => {
     expect(result.embeddings).toHaveLength(2);
     expect(result.usage.totalTokens).toBe(0);
   });
+
+  it("throws on a short/misaligned provider batch instead of poisoning the cache", async () => {
+    // Two uncached texts, but the provider returns only ONE embedding.
+    inner.embed.mockResolvedValue(makeEmbedResult([makeEmbedding(1)]));
+    await expect(cached.embed(["alpha", "beta"])).rejects.toThrow(/embeddings for 2 texts/);
+
+    // The cache must not have been poisoned with an undefined entry: a retry
+    // with a well-behaved provider returns real vectors for both texts.
+    inner.embed.mockResolvedValue(makeEmbedResult([makeEmbedding(1), makeEmbedding(2)]));
+    const ok = await cached.embed(["alpha", "beta"]);
+    expect(ok.embeddings).toHaveLength(2);
+    expect(ok.embeddings[0]).toBeDefined();
+    expect(ok.embeddings[1]).toBeDefined();
+  });
 });

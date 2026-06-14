@@ -3,10 +3,11 @@ import { useTranslation } from 'react-i18next'
 import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { useDaemon } from '../../hooks/use-api'
+import { PageError } from '../../components/ui/page-error'
 
 export default function DaemonSection() {
   const { t } = useTranslation('settings')
-  const { data: daemon, isLoading } = useDaemon()
+  const { data: daemon, isLoading, error } = useDaemon()
   const queryClient = useQueryClient()
   const [toggling, setToggling] = useState(false)
 
@@ -25,6 +26,10 @@ export default function DaemonSection() {
       setToggling(false)
     }
   }, [daemon, queryClient, t])
+
+  if (error) {
+    return <PageError title={t('section.errorTitle')} message={error instanceof Error ? error.message : t('section.errorFallback')} />
+  }
 
   if (isLoading || !daemon) {
     return (

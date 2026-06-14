@@ -286,7 +286,6 @@ const SELF_IMPROVEMENT_TOOLS: ReadonlySet<string> = new Set([
   "create_tool", "create_skill", "remove_dynamic_tool",
 ]);
 const TYPING_INTERVAL_MS = 4000;
-const STREAM_THROTTLE_MS = 500; // Throttle streaming updates to channels
 const MAX_CONSECUTIVE_PROVIDER_FAILURES = 5;
 const NATURAL_LANGUAGE_BUILTIN_PERSONAS = ["default", "formal", "casual", "minimal"] as const;
 const SUPERVISOR_SYNTHESIS_SYSTEM_PROMPT = `You are a synthesis worker inside Strada Brain's orchestrator.
@@ -521,6 +520,7 @@ function createStreamingProgressTimeout(
   thinkingStallTimeoutMs?: number,
 ): {
   markProgress: () => void;
+  markAlive: () => void;
   timeoutPromise: Promise<never>;
   signal: AbortSignal;
   clear: () => void;
@@ -555,8 +555,18 @@ function createStreamingProgressTimeout(
   armTimeout();
 
   return {
+    // Real visible content arrived. Flip to the (shorter) post-first-token stall
+    // window — once tokens are flowing, a long gap means a dead connection.
     markProgress: () => {
       sawProgress = true;
+      armTimeout();
+    },
+    // The stream is alive but produced no visible content (e.g. a `keepalive`
+    // heartbeat or reasoning-summary delta during a silent thinking phase).
+    // Re-arm WITHOUT setting sawProgress so the generous pre-first-token thinking
+    // window is preserved — a keepalive must NOT downgrade the watchdog to the
+    // short stall window mid-reasoning.
+    markAlive: () => {
       armTimeout();
     },
     timeoutPromise,
@@ -644,7 +654,6 @@ export function buildUserContent(
 export class Orchestrator {
   private readonly vaultRegistry?: import("../vault/vault-registry.js").VaultRegistry;
   private readonly vaultWriteHookBudgetMs: number = 200;
-  private vaultContext: string = "";
   private vaultWriteHook: import("../vault/write-hook.js").InstalledWriteHook | null = null;
   private readonly providerManager: ProviderManager;
   private readonly tools: Map<string, ITool>;
@@ -1263,10 +1272,13 @@ export class Orchestrator {
       ? STRADA_AGENT_PREAMBLE + frameworkSection
       : STRADA_SYSTEM_PROMPT; // fallback to static knowledge
 
+    // Note: vault context is intentionally NOT folded in here. It is
+    // request-specific (depends on the current user message) and is injected
+    // per-request via buildSystemPromptWithContext({ vaultContext }) so that
+    // concurrent chats / background tasks do not race on a shared field.
     this.systemPrompt =
       knowledgeBase +
       buildProjectContext(this.projectPath) +
-      this.vaultContext +
       buildDepsContext(this.stradaDeps) +
       buildCapabilityManifest() +
       buildToolUsageHints(!!this.vaultRegistry) +
@@ -2290,12 +2302,24 @@ export class Orchestrator {
     };
   }
 
-  private buildInterventionDeps(): InterventionDeps {
+  /**
+   * Build the dependency bundle consumed by the intervention/clarification/review
+   * pipeline. The clarification and review stages prepend the system prompt, so
+   * they must see the LIVE per-request prompt (which the PAOR loops mutate via
+   * memory re-retrieval) rather than the static base `this.systemPrompt`. Callers
+   * inside a loop pass a `getSystemPrompt` thunk closing over their local
+   * `systemPrompt` variable so updates are reflected without rebuilding deps.
+   */
+  private buildInterventionDeps(getSystemPrompt?: () => string): InterventionDeps {
+    // Fallback to the static base prompt when no live thunk is supplied.
+    const resolveSystemPrompt = getSystemPrompt ?? (() => this.systemPrompt);
     return {
       getReviewerAssignment: (id, s) => this.getClarificationReviewAssignment(id, s),
       classifyTask: (p) => this.taskClassifier.classify(p),
       buildSupervisorRolePrompt: (s, a) => this.buildSupervisorRolePrompt(s, a),
-      systemPrompt: this.systemPrompt,
+      get systemPrompt(): string {
+        return resolveSystemPrompt();
+      },
       projectPath: this.projectPath,
       clarificationContext: this.getClarificationContext(),
       stripInternalDecisionMarkers: (t) => stripInternalDecisionMarkersHelper(t),
@@ -2429,6 +2453,7 @@ export class Orchestrator {
     channelType?: string;
     prompt: string;
     personaContent?: string;
+    vaultContext?: string;
     profile: {
       displayName?: string;
       language: string;
@@ -2444,6 +2469,25 @@ export class Orchestrator {
     projectWorldFingerprint?: string;
   }> {
     return buildSystemPromptWithContextHelper(this.getContextBuilderDeps(), params);
+  }
+
+  /**
+   * Compute request-scoped vault context enrichment for a user message.
+   * Returns "" when no vault registry is configured or on failure, so the
+   * value can be passed directly into buildSystemPromptWithContext.
+   */
+  private async computeVaultContext(userMessage: string): Promise<string> {
+    if (!this.vaultRegistry) return "";
+    try {
+      return await buildVaultProjectContext({
+        vaultRegistry: this.vaultRegistry,
+        userMessage,
+        contextBudget: 4000,
+      });
+    } catch (err) {
+      getLogger().warn("Vault context enrichment failed", { err });
+      return "";
+    }
   }
 
   /**
@@ -2805,6 +2849,8 @@ export class Orchestrator {
         }
 
         // Build system prompt with all context layers (DRY: shared with runAgentLoop)
+        // Per-request vault context enrichment (request-scoped, not a shared field).
+        const bgVaultContext = await this.computeVaultContext(prompt);
         const {
           systemPrompt: builtPrompt,
           initialContentHashes: bgInitialContentHashes,
@@ -2817,6 +2863,7 @@ export class Orchestrator {
           channelType: options.channelType,
           prompt,
           personaContent: bgPersonaContent,
+          vaultContext: bgVaultContext,
           profile,
           preComputedEmbedding: bgEmbedding,
         });
@@ -2875,7 +2922,9 @@ export class Orchestrator {
           progressAssessmentEnabled: this.progressAssessmentEnabled,
         });
         const controlLoopTracker = controlLoopTrackerOrNull!;
-        const interventionDeps = this.buildInterventionDeps();
+        // Pass a live thunk so clarification/review stages see the per-request
+        // prompt (updated by memory re-retrieval), not the static base prompt.
+        const interventionDeps = this.buildInterventionDeps(() => systemPrompt);
         const progressTitle = prompt.replace(/\s+/g, " ").trim().slice(0, 80) || "Task";
         const progressLanguage = (profile?.language ?? this.defaultLanguage) as ProgressLanguage;
         const taskStartedAtMs = Date.now();
@@ -2997,7 +3046,10 @@ export class Orchestrator {
           let consecutiveProviderFailures = 0;
           const iterationHealth = new IterationHealthTracker();
           let maxTokensAbort = false;
-          let bgCumulativeInputTokens = 0;
+          let providerAbort = false;
+          let providerAbortReason: string | undefined;
+          let bgCumulativeInputTokens = 0; // observability only
+          let bgCumulativeOutputTokens = 0; // the budget-gating metric (audit #3)
           while (true) {
             // Re-read every epoch so a mid-task budget raise (via /token
             // or the portal budget editor) actually takes effect without
@@ -3064,6 +3116,11 @@ export class Orchestrator {
                 currentAssignment.providerName,
                 executionStrategy.task,
                 bgAgentState.phase,
+                {
+                  modelId: currentAssignment.modelId,
+                  identityKey,
+                  usesMultipleProviders: executionStrategy.usesMultipleProviders,
+                },
               ) ?? currentProvider;
               const canBgStream =
                 this.streamingEnabled &&
@@ -3072,12 +3129,22 @@ export class Orchestrator {
               let response;
               try {
                 response = canBgStream
-                  ? await this.silentStream(chatId, activePrompt, session, resilientProvider, currentToolDefinitions, signal)
+                  ? await this.silentStream(
+                      chatId, activePrompt, session, resilientProvider, currentToolDefinitions, signal,
+                      // Re-arm the per-task inactivity watchdog from intra-call
+                      // keepalive/reasoning liveness (audit #8). Non-user-facing.
+                      () => emitProgress({ kind: "heartbeat", message: "" }),
+                    )
                   : await resilientProvider.chat(
                       this.withCompactionSummary(activePrompt, session),
                       session.messages,
                       currentToolDefinitions,
-                      { signal },
+                      // Non-streaming sibling of the silentStream path: thread the task
+                      // signal as externalSignal too, so a benign cancel / inactivity
+                      // abort does not poison provider health or fall over the chain —
+                      // keeping streaming and non-streaming cancel behaviour consistent
+                      // (audit #6).
+                      { signal, externalSignal: signal },
                     );
               } catch (providerError) {
                 const errMsg = providerError instanceof Error ? providerError.message : String(providerError);
@@ -3104,6 +3171,8 @@ export class Orchestrator {
                   logger.error("Background task aborting: too many consecutive provider failures", {
                     consecutiveProviderFailures, chatId, provider: currentAssignment.providerName,
                   });
+                  providerAbort = true;
+                  providerAbortReason = `Too many consecutive provider failures (${consecutiveProviderFailures}).`;
                   break;
                 }
 
@@ -3155,23 +3224,31 @@ export class Orchestrator {
                 options.onUsage ?? this.onUsage,
               );
 
-              // Token budget enforcement — prevent runaway token consumption in background tasks
+              // Token budget enforcement. Gate on cumulative OUTPUT tokens ("fresh
+              // work" the model generated) — NOT cumulative input. Cumulative input
+              // re-counts the whole growing context every iteration, so a task with
+              // a stable working set was killed for RE-SENDING rather than for doing
+              // new work (it hit 500K "input" by ~iteration 13 while the real context
+              // was a fraction of that). Output tokens don't re-count re-sent context
+              // and remain a real runaway/cost bound (audit #3). Cumulative input is
+              // kept for observability only.
               bgCumulativeInputTokens += response.usage?.inputTokens ?? 0;
-              if (bgTokenBudget !== -1 && bgCumulativeInputTokens > bgTokenBudget) {
+              bgCumulativeOutputTokens += response.usage?.outputTokens ?? 0;
+              if (bgTokenBudget !== -1 && bgCumulativeOutputTokens > bgTokenBudget) {
                 logger.warn("Background token budget exceeded", {
-                  chatId, bgCumulativeInputTokens, bgTokenBudget,
+                  chatId, bgCumulativeOutputTokens, bgCumulativeInputTokens, bgTokenBudget,
                   iteration: bgIteration, provider: currentAssignment.providerName,
                 });
                 await this.saveBudgetExceededCheckpoint({
                   taskId: options.taskRunId ?? `${chatId}-bg-${Date.now()}`,
                   chatId,
                   lastUserMessage: typeof prompt === "string" ? prompt : "",
-                  used: bgCumulativeInputTokens,
+                  used: bgCumulativeOutputTokens,
                   budget: bgTokenBudget,
                 });
                 return finish(
                   getResilienceMessage("token_budget_exceeded", progressLanguage ?? "en", {
-                    used: Math.round(bgCumulativeInputTokens / 1000),
+                    used: Math.round(bgCumulativeOutputTokens / 1000),
                     budget: Math.round(bgTokenBudget / 1000),
                   }),
                   "completed",
@@ -3688,7 +3765,20 @@ export class Orchestrator {
               }
               // ─────────────────────────────────────────────────────────────────
             }
-            if (maxTokensAbort) break;
+            if (providerAbort) {
+              return finish(
+                getResilienceMessage("provider_abort", progressLanguage ?? "en"),
+                "failed",
+                providerAbortReason ?? "Too many consecutive provider failures.",
+              );
+            }
+            if (maxTokensAbort) {
+              return finish(
+                getResilienceMessage("task_stuck", progressLanguage ?? "en"),
+                "failed",
+                "Background task aborted after repeated max_tokens truncations (runaway output).",
+              );
+            }
             const completedEpochCount = bgEpochCount;
             const continuedAfterBudget = this.canAutoContinueBackgroundEpoch(completedEpochCount);
 
@@ -3933,22 +4023,10 @@ export class Orchestrator {
     this.metrics?.recordMessage();
     this.metrics?.setActiveSessions(this.sessionManager.sessions.size);
 
-    // Pre-request vault context enrichment: query vaults with the user message
-    // so semantically relevant chunks are injected into the system prompt.
-    if (this.vaultRegistry) {
-      try {
-        this.vaultContext = await buildVaultProjectContext({
-          vaultRegistry: this.vaultRegistry,
-          userMessage: text,
-          contextBudget: 4000,
-        });
-      } catch (err) {
-        logger.warn("Vault context enrichment failed", { err });
-        this.vaultContext = "";
-      }
-    } else {
-      this.vaultContext = "";
-    }
+    // Vault context enrichment is computed per-request inside runAgentLoop /
+    // runBackgroundTask (see computeVaultContext) and injected via
+    // buildSystemPromptWithContext, so it stays request-scoped rather than
+    // living on a shared instance field that concurrent turns would race on.
 
     const identityKey = resolveIdentityKey(chatId, userId, conversationId, this.userProfileStore, msg.channelType);
     const clearedPlanReview = this.interactionPolicy.noteUserMessage(chatId, text);
@@ -4054,17 +4132,19 @@ export class Orchestrator {
     const conversationScopeForMonitor = resolveConversationScope(chatId, conversationId);
     this.monitorLifecycle?.requestStart(conversationScopeForMonitor, text);
 
-    // Start typing indicator loop
-    const typingInterval = setInterval(() => {
-      if (supportsRichMessaging(this.channel)) {
-        this.channel.sendTypingIndicator(chatId as string).catch((err) =>
-          getLogger().error("Failed to send typing indicator", {
-            chatId,
-            error: err instanceof Error ? err.message : String(err),
-          }),
-        );
-      }
-    }, TYPING_INTERVAL_MS);
+    // Start typing indicator loop (only on channels that support rich messaging;
+    // check the capability once here rather than on every interval tick)
+    const richChannel = supportsRichMessaging(this.channel) ? this.channel : undefined;
+    const typingInterval = richChannel
+      ? setInterval(() => {
+          richChannel.sendTypingIndicator(chatId as string).catch((err) =>
+            getLogger().error("Failed to send typing indicator", {
+              chatId,
+              error: err instanceof Error ? err.message : String(err),
+            }),
+          );
+        }, TYPING_INTERVAL_MS)
+      : undefined;
 
     try {
       await this.runAgentLoop(chatId, session, msg.channelType, userId, conversationId, msg.attachments);
@@ -4074,7 +4154,9 @@ export class Orchestrator {
       await this.sessionManager.sendVisibleAssistantText(chatId, session, classifyErrorMessage(error));
     } finally {
       this.monitorLifecycle?.requestEnd(resolveConversationScope(chatId, conversationId));
-      clearInterval(typingInterval);
+      if (typingInterval) {
+        clearInterval(typingInterval);
+      }
       // Clear typing indicator on completion/error
       if (supportsRichMessaging(this.channel)) {
         this.channel.sendTypingStop?.(chatId);
@@ -4153,6 +4235,8 @@ export class Orchestrator {
 
     // Build system prompt with all context layers (DRY: shared with runBackgroundTask)
     logger.debug("Building system prompt", { chatId });
+    // Per-request vault context enrichment (request-scoped, not a shared field).
+    const vaultContext = await this.computeVaultContext(queryText);
     const {
       systemPrompt: builtSystemPrompt,
       initialContentHashes,
@@ -4166,6 +4250,7 @@ export class Orchestrator {
       channelType,
       prompt: queryText,
       personaContent,
+      vaultContext,
       profile,
       preComputedEmbedding,
     });
@@ -4200,7 +4285,9 @@ export class Orchestrator {
       loopHardCapBlock: this.loopHardCapBlock,
       progressAssessmentEnabled: this.progressAssessmentEnabled,
     });
-    const interventionDeps = this.buildInterventionDeps();
+    // Pass a live thunk so clarification/review stages see the per-request
+    // prompt (updated by memory re-retrieval), not the static base prompt.
+    const interventionDeps = this.buildInterventionDeps(() => systemPrompt);
     const taskStartedAtMs = Date.now();
     const buildInteractivePhaseOutcomeTelemetry = (params: {
       state?: AgentState;
@@ -4294,7 +4381,8 @@ export class Orchestrator {
 
       let consecutiveMaxTokens = 0;
       let consecutiveProviderFailures = 0;
-      let cumulativeInputTokens = 0;
+      let cumulativeInputTokens = 0; // observability only
+      let cumulativeOutputTokens = 0; // the budget-gating metric (audit #3)
       const iterationHealth = new IterationHealthTracker();
       for (let iteration = 0; iteration < interactiveIterationLimit; iteration++) {
         // Re-read every iteration so a mid-task budget raise (via /token
@@ -4330,6 +4418,11 @@ export class Orchestrator {
           currentAssignment.providerName,
           executionStrategy.task,
           agentState.phase,
+          {
+            modelId: currentAssignment.modelId,
+            identityKey,
+            usesMultipleProviders: executionStrategy.usesMultipleProviders,
+          },
         ) ?? currentProvider;
         const canStream =
           this.streamingEnabled &&
@@ -4435,8 +4528,12 @@ export class Orchestrator {
         }
         this.recordProviderUsage(currentAssignment.providerName, response.usage, this.onUsage);
 
-        // Token budget enforcement — prevent runaway token consumption
+        // Token budget enforcement. Gate on cumulative OUTPUT tokens ("fresh work"),
+        // NOT cumulative input — cumulative input re-counts the growing context each
+        // iteration and kills a stable-working-set task for re-sending (audit #3).
+        // Cumulative input is retained for observability only.
         cumulativeInputTokens += response.usage?.inputTokens ?? 0;
+        cumulativeOutputTokens += response.usage?.outputTokens ?? 0;
 
         // Per-iteration observability log
         logger.debug("Iteration complete (interactive)", {
@@ -4445,11 +4542,13 @@ export class Orchestrator {
           inputTokens: response.usage?.inputTokens ?? 0,
           toolCalls: response.toolCalls?.length ?? 0,
           cumulativeInputTokens,
+          cumulativeOutputTokens,
           durationMs: Date.now() - iterationStartMs,
         });
-        if (tokenBudget !== -1 && cumulativeInputTokens > tokenBudget) {
+        if (tokenBudget !== -1 && cumulativeOutputTokens > tokenBudget) {
           logger.warn("Interactive token budget exceeded — aborting loop", {
             chatId,
+            cumulativeOutputTokens,
             cumulativeInputTokens,
             tokenBudget,
             iteration,
@@ -4459,13 +4558,13 @@ export class Orchestrator {
             taskId: conversationId ?? `${chatId}-fg-${Date.now()}`,
             chatId,
             lastUserMessage,
-            used: cumulativeInputTokens,
+            used: cumulativeOutputTokens,
             budget: tokenBudget,
           });
           await this.sessionManager.sendVisibleAssistantMarkdown(
             chatId, session,
             getResilienceMessage("token_budget_exceeded", (profile?.language ?? this.defaultLanguage) as string, {
-              used: Math.round(cumulativeInputTokens / 1000),
+              used: Math.round(cumulativeOutputTokens / 1000),
               budget: Math.round(tokenBudget / 1000),
             }),
           );
@@ -5229,6 +5328,7 @@ export class Orchestrator {
       input_schema: import("../types/index.js").JsonObject;
     }>,
     externalSignal?: AbortSignal,
+    onLiveness?: () => void,
   ): Promise<ProviderResponse> => {
     // Reasoning models get an extended stall window equal to the initial timeout
     // because they may enter long silent thinking phases with no SSE events.
@@ -5236,6 +5336,10 @@ export class Orchestrator {
       ? this.streamInitialTimeoutMs
       : undefined;
     const effectivePrompt = this.withCompactionSummary(systemPrompt, session);
+    // Throttle for surfacing intra-call liveness to the task-level inactivity
+    // watchdog (which cannot otherwise see keepalive/reasoning heartbeats) — a
+    // dense reasoning-summary stream must not flood it (audit #8).
+    let lastLivenessAt = 0;
     const timeoutGuard = createStreamingProgressTimeout(
       this.streamInitialTimeoutMs,
       this.streamStallTimeoutMs,
@@ -5251,10 +5355,28 @@ export class Orchestrator {
         effectivePrompt,
         session.messages,
         toolDefinitions,
-        () => {
-          timeoutGuard.markProgress();
+        (chunk) => {
+          // Non-empty chunk = real visible content (flip to stall window); empty
+          // chunk = liveness heartbeat (keepalive / reasoning summary) that must
+          // keep the long thinking window so the model is not cut off mid-reason.
+          if (chunk) {
+            timeoutGuard.markProgress();
+          } else {
+            timeoutGuard.markAlive();
+            // Forward liveness to the task-level inactivity watchdog (throttled).
+            if (onLiveness) {
+              const now = Date.now();
+              if (now - lastLivenessAt >= 20_000) {
+                lastLivenessAt = now;
+                onLiveness();
+              }
+            }
+          }
         },
-        { signal: composedSignal },
+        // Thread the EXTERNAL (un-composed) signal so the resilient chain can tell a
+        // benign control-plane cancel from a watchdog stall and not poison health /
+        // fall over / emit a false "All providers failed" on cancel (audit #6).
+        { signal: composedSignal, externalSignal },
       );
       // Suppress unhandled rejection from abandoned stream when timeout wins the race
       streamPromise.catch((err) => {
@@ -5266,6 +5388,14 @@ export class Orchestrator {
       return response;
     } catch (err) {
       timeoutGuard.clear();
+      // Control-plane cancellation: the external signal aborted this call (user cancel /
+      // task wind-down). Benign — NOT a provider failure. Do not log an error, do not
+      // attempt the fallback chat (it would re-run the chain on the same aborted signal
+      // → a false "All providers failed"), and do not poison provider health. Rethrow so
+      // the loop's `if (signal.aborted) throw` cancellation path handles it (audit #6).
+      if (externalSignal?.aborted) {
+        throw err;
+      }
       const errMsg = err instanceof Error ? err.message : "Unknown streaming error";
       getLogger().error("Silent stream error", { chatId, error: errMsg });
       try {
@@ -5277,6 +5407,7 @@ export class Orchestrator {
           : timeoutSignal;
         const fallbackResponse = await provider.chat(effectivePrompt, session.messages, toolDefinitions, {
           signal: fallbackSignal,
+          externalSignal,
         });
         ProviderHealthRegistry.getInstance().recordSuccess(provider.name);
         return fallbackResponse;
@@ -5293,147 +5424,20 @@ export class Orchestrator {
           role: "user",
           content: `[System: The AI provider (${provider.name}) failed to respond. Error: ${fallbackMsg}. You may need to: simplify your current step, reduce the number of tool calls, or skip non-critical analysis. Adapt your approach and continue.]`,
         } as ConversationMessage);
-        // Return a synthetic empty response so the PAOR loop can continue
-        // with the agent's awareness of the failure.
-        // IMPORTANT: The circuit breaker in runBackgroundTask / runAgentLoop
-        // detects this exact shape ({ text: "", toolCalls: [], totalTokens: 0 })
-        // to identify provider failures. If you change this, update both loops.
+        // Return a synthetic empty response so the PAOR loop can continue with the
+        // agent's awareness of the failure. The explicit `meta.empty` flag is the
+        // canonical signal the circuit breaker (runBackgroundTask / runAgentLoop)
+        // keys on — more robust than inferring emptiness from the token shape (#18).
         return {
           text: "",
           toolCalls: [],
           stopReason: "end_turn" as const,
           usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+          meta: { empty: true, reason: "provider_failure" },
         };
       }
     }
   };
-
-  /**
-   * Stream a response from the LLM to the channel in real-time.
-   * Sends text chunks as they arrive, then returns the final ProviderResponse.
-   * Reserved for runBackgroundTask visible streaming.
-   */
-  // @ts-expect-error Reserved for background task streaming
-  private async streamResponse(
-    chatId: string,
-    systemPrompt: string,
-    session: Session,
-    provider: IAIProvider,
-    toolDefinitions: Array<{
-      name: string;
-      description: string;
-      input_schema: import("../types/index.js").JsonObject;
-    }>,
-  ): Promise<ProviderResponse> {
-    const channel = this.channel;
-    let streamId: string | undefined;
-    let accumulated = "";
-    let lastUpdate = 0;
-
-    const onChunk = (chunk: string) => {
-      accumulated += chunk;
-
-      // Throttle updates to avoid flooding the channel
-      const now = Date.now();
-      if (now - lastUpdate >= STREAM_THROTTLE_MS && streamId) {
-        lastUpdate = now;
-        (
-          channel as {
-            updateStreamingMessage?: (
-              chatId: string,
-              streamId: string,
-              text: string,
-            ) => Promise<void>;
-          }
-        )
-          .updateStreamingMessage?.(chatId, streamId, accumulated)
-          ?.catch((err) =>
-            getLogger().error("Failed to update streaming message", {
-              chatId,
-              error: err instanceof Error ? err.message : String(err),
-            }),
-          );
-      }
-    };
-
-    // Start the streaming message placeholder
-    streamId =
-      (await (
-        channel as { startStreamingMessage?: (chatId: string) => Promise<string | undefined> }
-      ).startStreamingMessage?.(chatId)) ?? undefined;
-
-    let response: ProviderResponse;
-    const thinkingStall = provider.capabilities.thinkingSupported
-      ? this.streamInitialTimeoutMs
-      : undefined;
-    const timeoutGuard = createStreamingProgressTimeout(
-      this.streamInitialTimeoutMs,
-      this.streamStallTimeoutMs,
-      thinkingStall,
-    );
-    try {
-      const streamPromise = (provider as IStreamingProvider).chatStream(
-        this.withCompactionSummary(systemPrompt, session),
-        session.messages,
-        toolDefinitions,
-        (chunk) => {
-          timeoutGuard.markProgress();
-          onChunk(chunk);
-        },
-        { signal: timeoutGuard.signal },
-      );
-
-      // Suppress unhandled rejection from abandoned stream when timeout wins the race
-      streamPromise.catch((err) => {
-        getLogger().debug("Stream abandoned after timeout race", { error: err instanceof Error ? err.message : String(err) });
-      });
-
-      // Race against abort signal
-      response = await Promise.race([streamPromise, timeoutGuard.timeoutPromise]);
-
-      timeoutGuard.clear();
-    } catch (streamError) {
-      timeoutGuard.clear();
-      const errMsg = streamError instanceof Error ? streamError.message : "Unknown streaming error";
-      getLogger().error("Streaming error", { chatId, error: errMsg });
-      accumulated = `[Streaming error: ${errMsg}]`;
-
-      // Finalize with error message and return a synthetic response
-      if (streamId) {
-        await (
-          channel as {
-            finalizeStreamingMessage?: (
-              chatId: string,
-              streamId: string,
-              text: string,
-            ) => Promise<void>;
-          }
-        ).finalizeStreamingMessage?.(chatId, streamId, accumulated);
-      }
-
-      return {
-        text: accumulated,
-        toolCalls: [],
-        stopReason: "end_turn" as const,
-        usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-      };
-    }
-
-    // Finalize the streamed message
-    if (streamId) {
-      await (
-        channel as {
-          finalizeStreamingMessage?: (
-            chatId: string,
-            streamId: string,
-            text: string,
-          ) => Promise<void>;
-        }
-      ).finalizeStreamingMessage?.(chatId, streamId, accumulated);
-    }
-
-    return response;
-  }
 
   /**
    * Execute tool calls, handling confirmations for write operations.
@@ -5677,15 +5681,26 @@ export class Orchestrator {
     primaryName: string,
     task?: import("../agent-core/routing/routing-types.js").TaskClassification,
     phase?: string,
+    options?: { modelId?: string; identityKey?: string; usesMultipleProviders?: boolean },
   ): import("./providers/provider.interface.js").IAIProvider | null {
-    if (!this.providerRouter || !task) {
-      return this.providerManager.getProviderByName?.(primaryName) ?? null;
+    const modelId = options?.modelId;
+
+    // Honor a single-provider / hard-pinned strategy exactly: materialize the
+    // supervisor-selected provider AND model rather than building a multi-provider
+    // fallback chain, which would both ignore the pin and silently drop the chosen
+    // model (running the provider's static default instead).
+    if (!this.providerRouter || !task || options?.usesMultipleProviders === false) {
+      return this.providerManager.getProviderByName?.(primaryName, modelId) ?? null;
     }
 
     try {
-      const rankedOrder = this.providerRouter.resolveRanked(task, phase);
+      const rankedOrder = this.providerRouter.resolveRanked(
+        task,
+        phase,
+        options?.identityKey ? { identityKey: options.identityKey } : undefined,
+      );
       if (rankedOrder.length <= 1) {
-        return this.providerManager.getProviderByName?.(primaryName) ?? null;
+        return this.providerManager.getProviderByName?.(primaryName, modelId) ?? null;
       }
 
       // Ensure primary is first, then fill with router-ranked order
@@ -5696,10 +5711,12 @@ export class Orchestrator {
         }
       }
 
-      return this.providerManager.buildResilientProviderWithOrder?.(order) ?? this.providerManager.getProviderByName?.(primaryName) ?? null;
+      return this.providerManager.buildResilientProviderWithOrder?.(order, modelId)
+        ?? this.providerManager.getProviderByName?.(primaryName, modelId)
+        ?? null;
     } catch {
-      // Fallback to standard resilient provider on any router error
-      return this.providerManager.getProviderByName?.(primaryName) ?? null;
+      // Fallback to the selected provider + model on any router error
+      return this.providerManager.getProviderByName?.(primaryName, modelId) ?? null;
     }
   }
 

@@ -12,7 +12,7 @@ import { join, extname, resolve, sep, isAbsolute } from "node:path";
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { PROVIDER_PRESETS } from "../agents/providers/provider-registry.js";
+import { PROVIDER_PRESETS, createProvider } from "../agents/providers/provider-registry.js";
 import {
   buildMcpRecommendation,
   checkStradaDeps,
@@ -24,6 +24,7 @@ import {
 } from "../config/strada-deps.js";
 import {
   preflightResponseProviders,
+  formatProviderPreflightFailures,
   type ResponseProviderPreflightFailure,
 } from "./response-provider-preflight.js";
 import { getPreset, PROVIDER_MODEL_OPTIONS } from "../config/presets.js";
@@ -644,8 +645,26 @@ export class SetupWizard {
         return;
       }
 
-      // During setup, provider API isn't available yet — return 503 so the UI
-      // can fall back to static model lists instead of getting HTML.
+      // During setup most provider routes aren't available yet. The model list,
+      // however, drives the providers step UI, so we carve it out: a best-effort
+      // live probe when a key is supplied, otherwise an EMPTY 200 so the UI falls
+      // back to its static model list WITHOUT a console error. Never 503 here.
+      if ((url === "/api/providers/models" || url.startsWith("/api/providers/models?")) && method === "GET") {
+        await this.handleSetupProviderModels(res);
+        return;
+      }
+
+      // Keyed probe moved to a POST body so the API key never lands in server
+      // access logs / history / Referer (a query-string key would). This is the
+      // ONLY keyed model-list path during setup; like the GET carve-out it is
+      // best-effort and NEVER 503s or crashes.
+      if (url === "/api/providers/models" && method === "POST") {
+        await this.handleSetupProviderModelsProbe(req, res);
+        return;
+      }
+
+      // Every OTHER provider route stays unavailable during setup — return 503 so
+      // the UI can fall back to static lists instead of getting HTML.
       if (url.startsWith("/api/providers/") && method === "GET") {
         res.writeHead(503, {
           ...SECURITY_HEADERS,
@@ -907,6 +926,107 @@ export class SetupWizard {
     } else {
       this.json(res, 200, { valid: false, error: result.error });
     }
+  }
+
+  /**
+   * Setup-safe handler for `GET /api/providers/models`.
+   *
+   * This is the NO-KEY path. The setup server holds no server-side credential
+   * state, and we deliberately do NOT read a key from the URL (a query-string
+   * key leaks into access logs / history / Referer). So the GET always returns
+   * an EMPTY 200, which lets the UI gracefully fall back to its static model
+   * list. The keyed probe lives on `POST /api/providers/models` (key in body).
+   * This route NEVER returns 503 and NEVER crashes setup.
+   */
+  private async handleSetupProviderModels(res: ServerResponse): Promise<void> {
+    this.json(res, 200, { providers: [] });
+  }
+
+  /**
+   * Setup-safe handler for `POST /api/providers/models`.
+   *
+   * Reads `{ provider, key, baseUrl? }` from the JSON body — the key travels in
+   * the request body, never the URL, so it can't leak into access logs /
+   * history / Referer. When the provider is known and a key is present we run
+   * the BEST-EFFORT `probeProviderModels` seam (with an optional `baseUrl` so
+   * OpenCode Zen/Go can be probed at the chosen base URL). On missing/unknown
+   * provider, missing key, malformed body, or any probe error/timeout we return
+   * an EMPTY 200 so the UI falls back to its static model list. NEVER 503/crash.
+   */
+  private async handleSetupProviderModelsProbe(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    let providers: Array<{ name: string; models: string[] }> = [];
+    try {
+      let body: string;
+      try {
+        body = await this.readBody(req);
+      } catch {
+        body = "";
+      }
+
+      let payload: { provider?: unknown; key?: unknown; baseUrl?: unknown } = {};
+      try {
+        const parsed = body ? JSON.parse(body) : {};
+        if (parsed && typeof parsed === "object") {
+          payload = parsed as { provider?: unknown; key?: unknown; baseUrl?: unknown };
+        }
+      } catch {
+        // Malformed/empty JSON degrades to the empty 200 below.
+        payload = {};
+      }
+
+      const rawProvider = (typeof payload.provider === "string" ? payload.provider : "").trim().toLowerCase();
+      const key = typeof payload.key === "string" ? payload.key : "";
+      const baseUrl = typeof payload.baseUrl === "string" && payload.baseUrl.trim()
+        ? payload.baseUrl.trim()
+        : undefined;
+
+      if (rawProvider && rawProvider !== "all" && KNOWN_PROVIDERS.has(rawProvider) && key) {
+        const models = await this.probeProviderModels(rawProvider, key, baseUrl);
+        if (models.length > 0) {
+          providers = [{ name: rawProvider, models }];
+        }
+      }
+    } catch {
+      // Best-effort only: any failure degrades to the empty 200 below.
+      providers = [];
+    }
+    this.json(res, 200, { providers });
+  }
+
+  /**
+   * Best-effort live model probe for a single provider during setup. Returns an
+   * empty array (never throws) on missing `listModels`, errors, or timeout. An
+   * optional `baseUrl` is threaded through so OpenCode Zen/Go can be probed at
+   * the chosen base URL.
+   */
+  private async probeProviderModels(name: string, apiKey: string, baseUrl?: string): Promise<string[]> {
+    const PROBE_TIMEOUT_MS = 8_000;
+    try {
+      const provider = this.createProbeProvider({ name, apiKey, baseUrl });
+      if (typeof provider.listModels !== "function") {
+        return [];
+      }
+      const timeout = new Promise<string[]>((resolve) => {
+        setTimeout(() => resolve([]), PROBE_TIMEOUT_MS).unref?.();
+      });
+      // Swallow a late rejection (provider fails AFTER the timeout already won the
+      // race) so it can't surface as an unhandled rejection once Phase 6 activates
+      // real probes.
+      const listing = provider.listModels().catch((): string[] => []);
+      const models = await Promise.race([listing, timeout]);
+      return Array.isArray(models) ? models.filter((m): m is string => typeof m === "string") : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Seam over `createProvider` so tests can inject a fake provider without a real
+   * network call. Returns an object exposing the optional `listModels()` method.
+   * An optional `baseUrl` (for OpenCode Zen/Go) is forwarded to `createProvider`.
+   */
+  private createProbeProvider(config: { name: string; apiKey?: string; baseUrl?: string }): { listModels?: () => Promise<string[]> } {
+    return createProvider(config);
   }
 
   /** Reports whether a usable ChatGPT/Codex subscription session is available. */
@@ -1177,11 +1297,39 @@ export class SetupWizard {
         }
       }
 
+      // Preflight the response providers with their CONFIGURED models (not the
+      // provider defaults), so an unusable primary — e.g. an OpenAI model the
+      // ChatGPT/Codex subscription endpoint rejects — is caught HERE with an
+      // accurate reason instead of crashing bootstrap with NO_HEALTHY_AI_PROVIDER.
+      const providerModels: Record<string, string> = {};
+      for (const provider of KNOWN_PROVIDER_MODEL_ORDER) {
+        const model = config[`${provider.toUpperCase()}_MODEL`];
+        if (typeof model === "string" && model.trim()) {
+          providerModels[provider] = model.trim();
+        }
+      }
+
       const preflight = await preflightResponseProviders(
         names,
         this.collectProviderCredentials(config),
+        providerModels,
       );
-      providerWarnings = preflight.failures.length > 0 ? preflight.failures : undefined;
+
+      if (preflight.failures.length > 0) {
+        const primaryName = names[0];
+        const primaryFailed = preflight.failures.some((f) => f.providerId === primaryName);
+        const noneHealthy = preflight.passedProviderIds.length === 0;
+        if (primaryFailed || noneHealthy) {
+          // Block: saving now would only defer the failure to a confusing bootstrap crash.
+          this.json(res, 400, {
+            success: false,
+            error: `Provider preflight failed. ${formatProviderPreflightFailures(preflight.failures)}`,
+          });
+          return;
+        }
+        // A non-primary fallback failed but a usable primary remains — warn, don't block.
+        providerWarnings = preflight.failures;
+      }
     }
 
     // RAG configuration

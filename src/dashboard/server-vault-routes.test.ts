@@ -4,11 +4,9 @@ import { join } from "node:path";
 import type { ServerResponse } from "node:http";
 import {
   handleVaultRoutes,
-  registerVaultRoutes,
   buildVaultRetrievalStatsSnapshot,
   wireVaultUpdatesToWs,
   type VaultFactory,
-  type RouteApp,
   type WsBroadcaster,
 } from "./server-vault-routes.js";
 import { WebhookRateLimiter } from "../daemon/triggers/webhook-trigger.js";
@@ -111,8 +109,11 @@ describe("handleVaultRoutes — GET /api/vaults", () => {
     );
     expect(handled).toBe(true);
     expect(res.statusCode).toBe(200);
+    // Item shape is { id, kind, name } — name is a path-free, kind-derived
+    // label (no explicit name was supplied to register()). The security point
+    // of this test is that NO rootPath / absolute path leaks into the response.
     expect(responseJson(res)).toEqual({
-      items: [{ id: "unity:abc12345", kind: "unity-project" }],
+      items: [{ id: "unity:abc12345", kind: "unity-project", name: "Unity Project" }],
     });
     expect((res as MockRes).body).not.toContain("/Users/secret");
   });
@@ -461,84 +462,6 @@ describe("wireVaultUpdatesToWs", () => {
 });
 
 // =============================================================================
-// TESTS — registerVaultRoutes (express-like dev/test adapter)
-// =============================================================================
-
-type FakeHandler = (req?: unknown, res?: unknown) => unknown;
-
-function makeFakeApp(): { app: RouteApp; routes: Map<string, FakeHandler> } {
-  const routes = new Map<string, FakeHandler>();
-  const app: RouteApp = {
-    get: (path, handler) => { routes.set(`GET ${path}`, handler as FakeHandler); },
-    post: (path, handler) => { routes.set(`POST ${path}`, handler as FakeHandler); },
-  };
-  return { app, routes };
-}
-
-describe("registerVaultRoutes (fake-app adapter)", () => {
-  it("GET /api/vaults returns items without rootPath", () => {
-    const { app, routes } = makeFakeApp();
-    const registry = new VaultRegistry();
-    registry.register(createFakeVault({ rootPath: "/Users/secret/project" }));
-    registerVaultRoutes(app, registry);
-
-    const result = routes.get("GET /api/vaults")!() as { items: unknown[] };
-    expect(result).toEqual({ items: [{ id: "unity:abc12345", kind: "unity-project" }] });
-    expect(JSON.stringify(result)).not.toContain("/Users/secret");
-  });
-
-  it("POST /api/vaults without a factory returns an error payload", async () => {
-    const { app, routes } = makeFakeApp();
-    registerVaultRoutes(app, new VaultRegistry());
-
-    const result = await routes.get("POST /api/vaults")!({ body: { name: "ok", rootPath: "/tmp" } });
-    expect(String((result as { error: string }).error)).toContain("VaultFactory not installed");
-  });
-
-  it.each([
-    ["invalid name", { name: "a/b", rootPath: "/tmp" }, "invalid name"],
-    ["relative rootPath", { name: "ok", rootPath: "relative" }, "rootPath must be absolute"],
-    ["invalid kind", { name: "ok", rootPath: "/tmp", kind: "weird" }, "invalid kind"],
-  ])("POST /api/vaults rejects %s", async (_label, body, expectedError) => {
-    const { app, routes } = makeFakeApp();
-    const factory: VaultFactory = { create: vi.fn(async () => createFakeVault()) };
-    registerVaultRoutes(app, new VaultRegistry(), factory);
-
-    const result = await routes.get("POST /api/vaults")!({ body });
-    expect(result).toEqual({ error: expectedError });
-  });
-
-  it("POST /api/vaults rejects a nonexistent directory", async () => {
-    const { app, routes } = makeFakeApp();
-    const factory: VaultFactory = { create: vi.fn(async () => createFakeVault()) };
-    registerVaultRoutes(app, new VaultRegistry(), factory);
-
-    const result = await routes.get("POST /api/vaults")!({
-      body: { name: "ok", rootPath: join(tmpdir(), "does-not-exist-xyz-007") },
-    });
-    expect(result).toEqual({ error: "path does not exist" });
-  });
-
-  it("POST /api/vaults registers on the happy path then rejects a duplicate", async () => {
-    const { app, routes } = makeFakeApp();
-    const registry = new VaultRegistry();
-    const factory: VaultFactory = {
-      create: vi.fn(async (spec: { id: string }) => createFakeVault({ id: spec.id })),
-    };
-    registerVaultRoutes(app, registry, factory);
-    const dir = tmp.makeDir();
-
-    const handler = routes.get("POST /api/vaults")!;
-    const result = await handler({ body: { name: "My Vault", rootPath: dir, kind: "generic" } }) as Record<string, unknown>;
-    expect(result).toMatchObject({ name: "My Vault", status: "indexing", symbolCount: 0 });
-    expect(registry.get(result.id as string)).toBeDefined();
-
-    const dup = await handler({ body: { name: "My Vault", rootPath: dir, kind: "generic" } });
-    expect(dup).toEqual({ error: "vault already registered" });
-  });
-});
-
-// =============================================================================
 // TESTS — plan 004 hardening: search rate limiting
 // (merged from the plan-004 executor's test file; adapted to this file's helpers)
 // =============================================================================
@@ -671,7 +594,7 @@ describe("vault init failure surfacing", () => {
 
     const stats = await h.getStats(id);
     expect(stats).toEqual({
-      fileCount: 1, chunkCount: 2, lastIndexedAt: 123, dbBytes: 10,
+      fileCount: 1, symbolCount: 3, chunkCount: 2, lastIndexedAt: 123, dbBytes: 10,
       status: "indexing",
     });
   });
@@ -712,7 +635,7 @@ describe("vault init failure surfacing", () => {
     );
     expect(handled).toBe(true);
     await vi.waitFor(() => expect(res.end).toHaveBeenCalled());
-    expect(responseJson(res)).toEqual({ fileCount: 1, chunkCount: 2, lastIndexedAt: 123, dbBytes: 10 });
+    expect(responseJson(res)).toEqual({ fileCount: 1, symbolCount: 3, chunkCount: 2, lastIndexedAt: 123, dbBytes: 10 });
     expect(responseJson(res)).not.toHaveProperty("status");
   });
 
@@ -736,49 +659,6 @@ describe("vault init failure surfacing", () => {
     const stats = await h.getStats(id);
     expect(stats).not.toHaveProperty("status");
     expect(stats).not.toHaveProperty("error");
-  });
-
-  it("registerVaultRoutes parity: stats follows the indexing/error/ready progression", async () => {
-    const { app, routes } = makeFakeApp();
-    const registry = new VaultRegistry();
-    const inits = new Map<string, ReturnType<typeof deferred>>();
-    const factory: VaultFactory = {
-      create: vi.fn(async (spec: { id: string; rootPath: string; kind: "unity" | "generic" }) => {
-        const d = deferred();
-        inits.set(spec.id, d);
-        return createFakeVault({ id: spec.id, rootPath: spec.rootPath, init: vi.fn(() => d.promise) });
-      }),
-    };
-    registerVaultRoutes(app, registry, factory);
-    const postHandler = routes.get("POST /api/vaults")!;
-    const statsHandler = routes.get("GET /api/vaults/:id/stats")!;
-    const getStats = async (id: string): Promise<Record<string, unknown>> =>
-      await statsHandler({ params: { id } }) as Record<string, unknown>;
-
-    // Vault A: indexing → ready.
-    const dirA = tmp.makeDir();
-    const a = await postHandler({ body: { name: "A", rootPath: dirA, kind: "generic" } }) as Record<string, unknown>;
-    expect(a.status).toBe("indexing");
-    const idA = a.id as string;
-    expect((await getStats(idA)).status).toBe("indexing");
-    inits.get(idA)!.resolve();
-    await vi.waitFor(() => expect(registry.getInitState(idA)?.status).toBe("ready"));
-    const readyStats = await getStats(idA);
-    expect(readyStats.status).toBe("ready");
-    expect(readyStats).not.toHaveProperty("error");
-
-    // Vault B: indexing → error (redacted).
-    const dirB = tmp.makeDir();
-    const b = await postHandler({ body: { name: "B", rootPath: dirB, kind: "generic" } }) as Record<string, unknown>;
-    const idB = b.id as string;
-    expect((await getStats(idB)).status).toBe("indexing");
-    const rootB = registry.get(idB)!.rootPath;
-    inits.get(idB)!.reject(new Error(`db locked at ${rootB}/index.db`));
-    await vi.waitFor(() => expect(registry.getInitState(idB)?.status).toBe("error"));
-    const errorStats = await getStats(idB);
-    expect(errorStats.status).toBe("error");
-    expect(errorStats.error as string).not.toContain(rootB);
-    expect(errorStats.error as string).toContain("<vault>");
   });
 });
 

@@ -98,9 +98,24 @@ export class TaskManager extends EventEmitter {
     const ac = new AbortController();
     this.abortControllers.set(task.id, ac);
 
-    this.executor.enqueue(task, ac.signal, (message: TaskProgressUpdate) => {
-      this.addProgress(task.id, message);
-    });
+    try {
+      this.executor.enqueue(task, ac.signal, (message: TaskProgressUpdate) => {
+        this.addProgress(task.id, message);
+      });
+    } catch (enqueueErr) {
+      // enqueue() throws on queue overflow (after marking the task failed). That
+      // throw must NOT escape submit(): callers such as MessageRouter.flushPendingChat
+      // run submit() fire-and-forget (`void this.flushPendingChat(...)`), so an
+      // escaping throw becomes an unhandledRejection — which the global handler in
+      // src/index.ts escalates to a full daemon shutdown. The task is already
+      // marked failed by enqueue(); drop its now-unusable abort controller and
+      // return it so the caller still gets a (failed) Task instead of throwing.
+      this.abortControllers.delete(task.id);
+      logger.warn("Task enqueue rejected; returning task without execution", {
+        taskId: task.id,
+        error: enqueueErr instanceof Error ? enqueueErr.message : String(enqueueErr),
+      });
+    }
 
     return task;
   }
@@ -122,6 +137,18 @@ export class TaskManager extends EventEmitter {
     if (ac) {
       ac.abort();
       this.abortControllers.delete(taskId);
+    }
+
+    // If the task was paused, release its conversation lock. pauseTask() added
+    // the conversationKey to BackgroundExecutor.pausedConversations and only
+    // resumeTask() removes it — but resumeTask() bails at its `status === paused`
+    // guard once the task is cancelled, so without this every future task in the
+    // conversation would be skipped forever (e.g. /cancel during the 500ms
+    // auto-resume window, or cancelling a recovery-paused task).
+    if (task.status === TaskStatus.paused) {
+      this.executor.resumeConversation(
+        getTaskConversationKey(task.chatId, task.channelType, task.conversationId),
+      );
     }
 
     this.storage.updateStatus(taskId, TaskStatus.cancelled);
@@ -441,8 +468,12 @@ export class TaskManager extends EventEmitter {
       const pausedReason = task.goalRootId
         ? "Task interrupted by system restart. Resume is available from the monitor and will continue from the saved plan."
         : "Task interrupted by system restart. Resume is available and will continue from the strongest checkpoint.";
-      this.storage.updateStatus(task.id, TaskStatus.paused);
+      // updateError() also forces status=failed, so it must run BEFORE
+      // updateStatus(paused) — otherwise it clobbers the paused status and the
+      // recoverable task is wrongly left as failed. updateStatus only touches
+      // status/updated_at, leaving the error message intact.
       this.storage.updateError(task.id, pausedReason);
+      this.storage.updateStatus(task.id, TaskStatus.paused);
       if (task.goalRootId && this.goalStorage) {
         this.goalStorage.updateTreeStatus(task.goalRootId as GoalNodeId, "paused");
       }

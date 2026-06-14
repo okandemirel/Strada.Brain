@@ -65,6 +65,16 @@ describe('VaultsPage', () => {
     expect(screen.getByText(/unity:abc/)).toBeInTheDocument();
   });
 
+  it('shows the display name instead of the hashed id when one is present (H3)', () => {
+    useVaultStore.setState({
+      vaults: [{ id: 'generic:abc', kind: 'unity-project', name: 'My Project' }],
+    });
+    render(<MemoryRouter><VaultsPage /></MemoryRouter>);
+    expect(screen.getByText('My Project')).toBeInTheDocument();
+    // The id is no longer the visible label (kept only as the hover title attr).
+    expect(screen.queryByText('generic:abc')).not.toBeInTheDocument();
+  });
+
   it('opens command palette on Cmd/Ctrl+P', () => {
     render(<MemoryRouter><VaultsPage /></MemoryRouter>);
     expect(useVaultStore.getState().commandPaletteOpen).toBe(false);

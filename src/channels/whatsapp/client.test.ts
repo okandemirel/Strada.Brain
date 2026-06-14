@@ -97,14 +97,26 @@ describe("WhatsAppChannel", () => {
       expect(capturedText).toBe("This is *bold* text");
     });
 
-    it("should convert `code` to ```code```", async () => {
+    it("should leave inline `code` as-is (not force a fenced block)", async () => {
       let capturedText = "";
       channel.sendText = vi.fn().mockImplementation(async (_chatId: string, text: string) => {
         capturedText = text;
       });
 
       await channel.sendMarkdown("chat1", "Run `npm install` now");
-      expect(capturedText).toBe("Run ```npm install``` now");
+      // Inline single-backtick code must NOT become a ```fenced``` multiline block.
+      expect(capturedText).toBe("Run `npm install` now");
+    });
+
+    it("should preserve existing fenced code blocks without malformed nesting", async () => {
+      let capturedText = "";
+      channel.sendText = vi.fn().mockImplementation(async (_chatId: string, text: string) => {
+        capturedText = text;
+      });
+
+      const fenced = "```\nconst x = 1;\n```";
+      await channel.sendMarkdown("chat1", fenced);
+      expect(capturedText).toBe(fenced);
     });
 
     it("should convert # headers to *Header*", async () => {
@@ -136,7 +148,8 @@ describe("WhatsAppChannel", () => {
       await channel.sendMarkdown("chat1", "# Title\nThis is **bold** and `code`.");
       expect(capturedText).toContain("*Title*");
       expect(capturedText).toContain("*bold*");
-      expect(capturedText).toContain("```code```");
+      expect(capturedText).toContain("`code`");
+      expect(capturedText).not.toContain("```code```");
     });
   });
 
@@ -249,6 +262,42 @@ describe("WhatsAppChannel", () => {
 
       confirmPromise.catch(() => {});
     });
+
+    // Regression (H5): a reconnect timer scheduled before shutdown must not
+    // resurrect a deliberately disconnected channel.
+    it("cancels a pending reconnect timer on disconnect", async () => {
+      vi.useFakeTimers();
+      try {
+        const connectSpy = vi.spyOn(channel, "connect").mockResolvedValue(undefined);
+        (channel as unknown as { scheduleReconnect: (d: number) => void }).scheduleReconnect(1000);
+        expect((channel as unknown as { reconnectTimer: unknown }).reconnectTimer).not.toBeNull();
+
+        await channel.disconnect();
+
+        expect((channel as unknown as { stopped: boolean }).stopped).toBe(true);
+        expect((channel as unknown as { reconnectTimer: unknown }).reconnectTimer).toBeNull();
+        vi.advanceTimersByTime(5000);
+        expect(connectSpy).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("does not reconnect when stopped even if a scheduled reconnect timer fires", () => {
+      vi.useFakeTimers();
+      try {
+        const connectSpy = vi.spyOn(channel, "connect").mockResolvedValue(undefined);
+        (channel as unknown as { scheduleReconnect: (d: number) => void }).scheduleReconnect(1000);
+        (channel as unknown as { stopped: boolean }).stopped = true;
+
+        vi.advanceTimersByTime(1000);
+
+        expect(connectSpy).not.toHaveBeenCalled();
+        expect((channel as unknown as { reconnectTimer: unknown }).reconnectTimer).toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   // ---------------------------------------------------------------------------
@@ -289,11 +338,17 @@ describe("WhatsAppChannel", () => {
   describe("media attachment detection", () => {
     let eventHandlers: Record<string, (...args: unknown[]) => void>;
     let connectedChannel: WhatsAppChannel;
+    let mockSock: {
+      ev: { on: ReturnType<typeof vi.fn> };
+      sendMessage: ReturnType<typeof vi.fn>;
+      sendPresenceUpdate: ReturnType<typeof vi.fn>;
+      end: ReturnType<typeof vi.fn>;
+    };
 
     beforeEach(async () => {
       eventHandlers = {};
 
-      const mockSock = {
+      mockSock = {
         ev: {
           on: vi.fn().mockImplementation((event: string, handler: (...args: unknown[]) => void) => {
             eventHandlers[event] = handler;
@@ -304,7 +359,9 @@ describe("WhatsAppChannel", () => {
         end: vi.fn(),
       };
 
-      // Mock baileys dynamic import
+      // Mock baileys dynamic import. Includes the JID utilities the allowlist
+      // normalization uses so LID/device-suffix handling can be exercised; they
+      // mirror Baileys' real behavior closely enough for these tests.
       vi.doMock("@whiskeysockets/baileys", () => ({
         default: () => mockSock,
         useMultiFileAuthState: vi.fn().mockResolvedValue({
@@ -312,6 +369,21 @@ describe("WhatsAppChannel", () => {
           saveCreds: vi.fn(),
         }),
         DisconnectReason: { loggedOut: 401 },
+        jidNormalizedUser: (jid: string) => {
+          // Collapse '<user>:<device>@<server>' -> '<user>@<server>'.
+          const at = jid.indexOf("@");
+          if (at === -1) return jid;
+          const user = jid.slice(0, at).split(":")[0];
+          return `${user}@${jid.slice(at + 1)}`;
+        },
+        jidDecode: (jid: string) => {
+          const at = jid.indexOf("@");
+          if (at === -1) return undefined;
+          return {
+            user: jid.slice(0, at).split(":")[0],
+            server: jid.slice(at + 1),
+          };
+        },
       }));
 
       // Create a channel with the test sender number allowed
@@ -431,6 +503,141 @@ describe("WhatsAppChannel", () => {
       });
 
       await openChannel.disconnect();
+    });
+
+    // Regression: a device-suffixed sender JID
+    // ('5511999990000:12@s.whatsapp.net') must normalize to the bare number the
+    // allowlist is keyed by ('5511999990000') and be authorized.
+    it("authorizes a device-suffixed sender JID against a bare-number allowlist", async () => {
+      const handler = vi.fn().mockResolvedValue(undefined);
+      connectedChannel.onMessage(handler);
+
+      const upsert = {
+        type: "notify",
+        messages: [
+          {
+            key: {
+              remoteJid: "chat1@s.whatsapp.net",
+              participant: "5511999990000:12@s.whatsapp.net",
+              id: "dev-suffix-1",
+              fromMe: false,
+            },
+            message: { conversation: "hi from a second device" },
+            messageTimestamp: Math.floor(Date.now() / 1000),
+          },
+        ],
+      };
+
+      await eventHandlers["messages.upsert"]!(upsert);
+
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(handler.mock.calls[0]![0]).toMatchObject({
+        text: "hi from a second device",
+      });
+    });
+
+    // A raw LID-addressed sender ('<lid>@lid') must be authorized when the LID
+    // (bare or full) is stored in the allowlist, using Baileys' JID utilities.
+    it("authorizes a LID-format sender JID stored in the allowlist", async () => {
+      const handler = vi.fn().mockResolvedValue(undefined);
+      // Allowlist keyed by the bare LID local-part.
+      const lidChannel = new WhatsAppChannel(".test-session", ["123456789"]);
+      await lidChannel.connect();
+      lidChannel.onMessage(handler);
+
+      if (eventHandlers["connection.update"]) {
+        eventHandlers["connection.update"]({ connection: "open" });
+      }
+
+      const upsert = {
+        type: "notify",
+        messages: [
+          {
+            key: {
+              remoteJid: "chat1@s.whatsapp.net",
+              participant: "123456789@lid",
+              id: "lid-1",
+              fromMe: false,
+            },
+            message: { conversation: "hello from a lid sender" },
+            messageTimestamp: Math.floor(Date.now() / 1000),
+          },
+        ],
+      };
+
+      await eventHandlers["messages.upsert"]!(upsert);
+
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(handler.mock.calls[0]![0]).toMatchObject({
+        text: "hello from a lid sender",
+      });
+
+      await lidChannel.disconnect();
+    });
+
+    // A verbatim '<lid>@lid' allowlist entry must also match the raw sender JID.
+    it("authorizes a sender when the raw LID JID is stored verbatim", async () => {
+      const handler = vi.fn().mockResolvedValue(undefined);
+      const lidChannel = new WhatsAppChannel(".test-session", ["987654321@lid"]);
+      await lidChannel.connect();
+      lidChannel.onMessage(handler);
+
+      if (eventHandlers["connection.update"]) {
+        eventHandlers["connection.update"]({ connection: "open" });
+      }
+
+      const upsert = {
+        type: "notify",
+        messages: [
+          {
+            key: {
+              remoteJid: "chat1@s.whatsapp.net",
+              participant: "987654321@lid",
+              id: "lid-verbatim-1",
+              fromMe: false,
+            },
+            message: { conversation: "verbatim lid match" },
+            messageTimestamp: Math.floor(Date.now() / 1000),
+          },
+        ],
+      };
+
+      await eventHandlers["messages.upsert"]!(upsert);
+
+      expect(handler).toHaveBeenCalledTimes(1);
+      await lidChannel.disconnect();
+    });
+
+    // A LID-addressed sender NOT in the allowlist must be rejected.
+    it("rejects a LID-format sender absent from the allowlist", async () => {
+      const handler = vi.fn().mockResolvedValue(undefined);
+      // connectedChannel allows chat1 / 5511999990000 / 5511888880000 only.
+      connectedChannel.sendText = vi.fn().mockResolvedValue(undefined);
+      connectedChannel.onMessage(handler);
+
+      const upsert = {
+        type: "notify",
+        messages: [
+          {
+            key: {
+              remoteJid: "chat1@s.whatsapp.net",
+              participant: "555000111@lid",
+              id: "lid-denied-1",
+              fromMe: false,
+            },
+            message: { conversation: "unauthorized lid sender" },
+            messageTimestamp: Math.floor(Date.now() / 1000),
+          },
+        ],
+      };
+
+      await eventHandlers["messages.upsert"]!(upsert);
+
+      expect(handler).not.toHaveBeenCalled();
+      expect(connectedChannel.sendText).toHaveBeenCalledWith(
+        "chat1@s.whatsapp.net",
+        "Unauthorized. Contact the admin.",
+      );
     });
 
     it("should use default mimeType for video without mimetype", async () => {
@@ -633,6 +840,80 @@ describe("WhatsAppChannel", () => {
       await connectedChannel.disconnect();
       await expect(confirmPromise).resolves.toBe("cancelled");
       vi.useRealTimers();
+    });
+
+    // Regression: long outbound text must be split into multiple messages
+    // (chunked, never truncated/dropped).
+    it("splits an oversize outbound message into multiple chunks", async () => {
+      mockSock.sendMessage.mockClear();
+      // Two lines, each well over the 4096-char cap, so they cannot share a chunk.
+      const longLine = "a".repeat(5000);
+      await connectedChannel.sendText("chat1@s.whatsapp.net", `${longLine}\n${longLine}`);
+
+      expect(mockSock.sendMessage.mock.calls.length).toBeGreaterThan(1);
+      // No single chunk may exceed the cap, and concatenation must lose no content.
+      let total = 0;
+      for (const call of mockSock.sendMessage.mock.calls) {
+        const sent = (call[1] as { text: string }).text;
+        expect(sent.length).toBeLessThanOrEqual(4096);
+        total += sent.length;
+      }
+      // 10000 content chars survive (newlines/boundary spaces may be reflowed).
+      expect(total).toBeGreaterThanOrEqual(10000);
+    });
+
+    it("sends a normal-length message as a single chunk", async () => {
+      mockSock.sendMessage.mockClear();
+      await connectedChannel.sendText("chat1@s.whatsapp.net", "hello world");
+      expect(mockSock.sendMessage).toHaveBeenCalledTimes(1);
+      expect(mockSock.sendMessage).toHaveBeenCalledWith(
+        "chat1@s.whatsapp.net",
+        { text: "hello world" },
+      );
+    });
+
+    // Regression: a duplicate inbound id (e.g. history-sync replay) is routed once.
+    it("dedupes inbound messages with a repeated key id", async () => {
+      const handler = vi.fn().mockResolvedValue(undefined);
+      connectedChannel.onMessage(handler);
+
+      const upsert = {
+        type: "notify",
+        messages: [
+          {
+            key: { remoteJid: "chat1@s.whatsapp.net", id: "dup-1", fromMe: false },
+            message: { conversation: "hello once" },
+            messageTimestamp: Math.floor(Date.now() / 1000),
+          },
+        ],
+      };
+
+      await eventHandlers["messages.upsert"]!(upsert);
+      // Same id redelivered (history-sync / retransmit) — must be ignored.
+      await eventHandlers["messages.upsert"]!(upsert);
+
+      expect(handler).toHaveBeenCalledTimes(1);
+    });
+
+    // Regression: history-sync 'append' batches must not be re-routed.
+    it("ignores 'append' upsert batches (history-sync replays)", async () => {
+      const handler = vi.fn().mockResolvedValue(undefined);
+      connectedChannel.onMessage(handler);
+
+      const upsert = {
+        type: "append",
+        messages: [
+          {
+            key: { remoteJid: "chat1@s.whatsapp.net", id: "old-1", fromMe: false },
+            message: { conversation: "an old offline message" },
+            messageTimestamp: Math.floor(Date.now() / 1000),
+          },
+        ],
+      };
+
+      await eventHandlers["messages.upsert"]!(upsert);
+
+      expect(handler).not.toHaveBeenCalled();
     });
   });
 });

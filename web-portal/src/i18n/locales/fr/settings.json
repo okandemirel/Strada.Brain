@@ -1,4 +1,6 @@
 {
+  "section.errorTitle": "Impossible de charger cette section",
+  "section.errorFallback": "Une erreur s’est produite lors du chargement. Veuillez réessayer.",
   "hub.title": "Parametres",
   "hub.loading": "Chargement...",
   "hub.tabs.budget": "Budget",
@@ -12,7 +14,6 @@
   "hub.tabs.rateLimits": "Limites de debit",
   "hub.tabs.routing": "Routage",
   "hub.tabs.advanced": "Avance",
-
   "budget.title": "Budget",
   "budget.description": "Gerez les limites de depenses pour tous les systemes",
   "budget.loading": "Chargement...",
@@ -37,7 +38,6 @@
   "budget.sevenDaySpending": "Depenses sur 7 jours",
   "budget.toastUpdated": "Parametres du budget mis a jour",
   "budget.toastFailed": "Echec de la mise a jour des parametres du budget",
-
   "providers.title": "Fournisseurs",
   "providers.description": "Configurez les fournisseurs et modeles IA",
   "providers.primaryWorker": "Worker principal",
@@ -54,7 +54,10 @@
   "providers.refreshing": "Actualisation...",
   "providers.toastRefreshed": "Modeles actualises",
   "providers.toastRefreshFailed": "Echec de l'actualisation des modeles",
-
+  "providers.availableModels": "Modeles disponibles",
+  "providers.modelsLive": "En direct",
+  "providers.modelsStale": "Obsolete",
+  "providers.modelsCurated": "Selectionne",
   "agents.title": "Agents",
   "agents.description": "Configuration du systeme multi-agent",
   "agents.loading": "Chargement...",
@@ -74,7 +77,6 @@
   "agents.timeMinutesAgo": "il y a {{count}}m",
   "agents.timeHoursAgo": "il y a {{count}}h",
   "agents.timeDaysAgo": "il y a {{count}}j",
-
   "daemon.title": "Daemon",
   "daemon.description": "Automatisation des taches en arriere-plan",
   "daemon.loading": "Chargement...",
@@ -98,7 +100,6 @@
   "daemon.toastStarted": "Daemon demarre",
   "daemon.toastStopped": "Daemon arrete",
   "daemon.toastFailed": "Echec de l'action {{action}} du daemon",
-
   "learning.title": "Apprentissage",
   "learning.description": "Diagnostics d'auto-amelioration et decisions recentes",
   "learning.loading": "Chargement...",
@@ -123,7 +124,6 @@
   "learning.outcomes": "Resultats",
   "learning.recentDecisions": "Decisions recentes",
   "learning.noRecentDecisions": "Aucune decision recente enregistree",
-
   "persona.title": "Personnage",
   "persona.description": "Profils de personnalite et surcharges par canal",
   "persona.loading": "Chargement...",
@@ -132,14 +132,13 @@
   "persona.availableProfiles": "Profils disponibles",
   "persona.active": "(actif)",
   "persona.switch": "Changer",
-  "persona.switching": "Changement\u2026",
+  "persona.switching": "Changement…",
   "persona.channelOverrides": "Surcharges par canal",
   "persona.noProfiles": "Aucun profil de personnalite configure",
   "persona.toastSwitched": "Profil change pour : {{profile}}",
   "persona.toastSwitchFailed": "Echec du changement de profil",
-
   "rateLimits.title": "Limites de debit",
-  "rateLimits.description": "Limitation du debit de messages et de tokens \u2014 definissez 0 pour illimite",
+  "rateLimits.description": "Limitation du debit de messages et de tokens — definissez 0 pour illimite",
   "rateLimits.loading": "Chargement...",
   "rateLimits.messagesPerMinute": "Messages / Minute",
   "rateLimits.messagesPerMinuteDesc": "Nombre maximum de messages acceptes par minute",
@@ -148,10 +147,9 @@
   "rateLimits.tokensPerDay": "Tokens / Jour",
   "rateLimits.tokensPerDayDesc": "Nombre maximum de tokens consommes par jour",
   "rateLimits.saveChanges": "Enregistrer les modifications",
-  "rateLimits.saving": "Enregistrement\u2026",
+  "rateLimits.saving": "Enregistrement…",
   "rateLimits.toastSaved": "Limites de debit enregistrees",
   "rateLimits.toastFailed": "Echec de l'enregistrement des limites de debit",
-
   "routing.title": "Routage",
   "routing.description": "Politique d'execution et routage des fournisseurs",
   "routing.routingPreset": "Preset de routage",
@@ -168,7 +166,6 @@
   "routing.noActivity": "Aucune activite de routage pour le moment",
   "routing.toastPresetSet": "Preset de routage defini sur {{preset}}",
   "routing.toastPresetFailed": "Echec de l'application du preset de routage",
-
   "voice.title": "Voix",
   "voice.description": "Parametres d'entree et de sortie vocales",
   "voice.browserSupport": "Support du navigateur",
@@ -185,7 +182,6 @@
   "voice.voiceOutputDescUnsupported": "Non disponible dans ce navigateur",
   "voice.toastInputUnsupported": "L'entree vocale n'est pas supportee par ce navigateur",
   "voice.toastOutputUnsupported": "La sortie vocale n'est pas supportee par ce navigateur",
-
   "mcp.title": "Pont Unity MCP",
   "mcp.description": "État du runtime Strada MCP et du pont de l'éditeur Unity",
   "mcp.notInstalled": "Strada MCP n'est pas installé pour ce projet.",
@@ -212,7 +208,7 @@
   "advanced.remainingMinutes": "{{minutes}}m restantes",
   "advanced.durationWhenEnabling": "Duree lors de l'activation",
   "advanced.openChatFirst": "Ouvrez d'abord une session de discussion",
-  "advanced.noActiveSession": "Aucune session active \u2014 ouvrez d'abord une discussion",
+  "advanced.noActiveSession": "Aucune session active — ouvrez d'abord une discussion",
   "advanced.toastEnabled": "Mode autonome active pour {{hours}}h",
   "advanced.toastDisabled": "Mode autonome desactive",
   "advanced.toastFailed": "Echec de la mise a jour du mode autonome",

@@ -23,6 +23,7 @@ import { ToolRegistry } from "./tool-registry.js";
 import { SoulLoader } from "../agents/soul/index.js";
 import { SESSION_CLEANUP_INTERVAL_MS } from "../common/constants.js";
 import { MessageRouter, TaskStorage } from "../tasks/index.js";
+import type { ProgressReporter } from "../tasks/index.js";
 import type { TaskManager } from "../tasks/task-manager.js";
 import type { ChainManager } from "../learning/chains/index.js";
 import type { GoalStorage } from "../goals/index.js";
@@ -48,6 +49,8 @@ export function wireMessageHandler(
   heartbeatLoopRef?: HeartbeatLoop,
   activityRegistryRef?: ChannelActivityRegistry,
   channelTypeName?: string,
+  notificationRouter?: NotificationRouter,
+  digestReporter?: DigestReporter,
 ): void {
   channel.onMessage(async (msg) => {
     const audioResult = await transcribeIncomingAudioMessage(msg, projectPath);
@@ -58,6 +61,15 @@ export function wireMessageHandler(
       return;
     }
     const normalizedMsg = audioResult.message;
+
+    // Bind daemon notification + digest delivery to the first real inbound chat
+    // (both routers are constructed with chatId=undefined). Mirrors the
+    // multi-agent path in bootstrap.ts so non-daemon notifications and scheduled
+    // digests have a concrete chat target.
+    if (normalizedMsg.chatId) {
+      notificationRouter?.setChatId(normalizedMsg.chatId);
+      digestReporter?.setChatId(normalizedMsg.chatId);
+    }
 
     if (activityRegistryRef && channelTypeName) {
       activityRegistryRef.recordActivity(channelTypeName, normalizedMsg.chatId);
@@ -164,6 +176,8 @@ export interface ShutdownOptions {
   learningStorage?: { close(): void };
   /** Message router — disposed on shutdown to clear pending batches and timers. */
   messageRouter?: MessageRouter;
+  /** Progress reporter — disposed on shutdown to remove taskManager listeners and clear timers. */
+  progressReporter?: ProgressReporter;
   /** Vault registry — disposes all vaults on shutdown to release SQLite fds and stop watchers. */
   vaultRegistry?: VaultRegistry;
   /** Background executor — shuts down to clear queue and release workspace leases. */
@@ -172,6 +186,12 @@ export interface ShutdownOptions {
   providerHealthRegistry?: ProviderHealthRegistry;
   /** Path to persist provider health registry state across restarts. */
   providerHealthPersistencePath?: string;
+  /** Shared daemon storage (daemon.db) — closed late on shutdown to release the SQLite fd/WAL. */
+  daemonStorage?: { close(): void };
+  /** Framework knowledge store (SQLite) — closed on shutdown to release the fd. */
+  frameworkStore?: { close(): void };
+  /** Framework sync pipeline — stopped on shutdown to close the chokidar watcher and clear its debounce timer. */
+  frameworkSyncPipeline?: { stop(): Promise<void> | void };
 }
 
 function failIncompleteTasksInStorage(
@@ -200,180 +220,220 @@ export function createShutdownHandler(options: ShutdownOptions): () => Promise<v
   const logger = getLogger();
   const shutdownTaskReason = "Task interrupted by system shutdown. Resume is available after restart.";
 
-  return async (): Promise<void> => {
+  // Idempotency: a second invocation must not re-run close()/stop()/disconnect()
+  // (better-sqlite3 .close(), channel.disconnect(), memoryManager.shutdown()
+  // throw or error on a double call). Cache the in-flight/completed promise.
+  let shutdownPromise: Promise<void> | undefined;
+
+  // Run a single disposal step in isolation: a throwing/rejecting collaborator
+  // is logged and swallowed so it cannot abort the remaining cleanup (which
+  // would leak SQLite fds/sockets and skip channel.disconnect).
+  const runStep = async (name: string, step: () => unknown): Promise<void> => {
+    try {
+      await step();
+    } catch (err) {
+      logger.warn("Shutdown step failed (continuing)", {
+        step: name,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  };
+
+  const run = async (): Promise<void> => {
     const SHUTDOWN_TIMEOUT_MS = 60_000;
 
     const gracefulShutdown = async (): Promise<void> => {
       logger.info("Shutting down Strada Brain...");
 
-      clearInterval(cleanupInterval);
+      await runStep("cleanupInterval", () => clearInterval(cleanupInterval));
 
       // Dispose message router (clears pending batches and timers)
       if (options.messageRouter) {
-        options.messageRouter.dispose();
+        await runStep("messageRouter", () => options.messageRouter!.dispose());
+      }
+
+      // Dispose progress reporter (removes taskManager listeners and clears timers)
+      if (options.progressReporter) {
+        await runStep("progressReporter", () => options.progressReporter!.dispose());
       }
 
       // Stop auto-updater timers
       if (options.autoUpdater) {
-        options.autoUpdater.shutdown();
+        await runStep("autoUpdater", () => options.autoUpdater!.shutdown());
       }
 
       // Stop soul file watchers
       if (options.soulLoader) {
-        options.soulLoader.shutdown();
+        await runStep("soulLoader", () => options.soulLoader!.shutdown());
       }
 
       // Stop reporting before heartbeat loop
       if (options.digestReporter) {
-        options.digestReporter.stop();
+        await runStep("digestReporter", () => options.digestReporter!.stop());
       }
       if (options.notificationRouter) {
-        options.notificationRouter.stop();
+        await runStep("notificationRouter", () => options.notificationRouter!.stop());
       }
 
       // Shut down delegation manager before multi-agent system
       if (options.delegationManager) {
-        await options.delegationManager.shutdown();
+        await runStep("delegationManager", () => options.delegationManager!.shutdown());
       }
 
       // Shut down multi-agent system before heartbeat loop
       if (options.agentManager) {
-        await options.agentManager.shutdown();
+        await runStep("agentManager", () => options.agentManager!.shutdown());
       }
 
       // Stop heartbeat loop before draining events
       if (options.heartbeatLoop) {
-        options.heartbeatLoop.stop();
+        await runStep("heartbeatLoop", () => options.heartbeatLoop!.stop());
       }
 
       // Stop chain detection timer before draining events
       if (options.chainManager) {
-        options.chainManager.stop();
+        await runStep("chainManager", () => options.chainManager!.stop());
       }
 
       // Shut down background executor before failing tasks
       if (options.backgroundExecutor) {
-        await options.backgroundExecutor.shutdown();
+        await runStep("backgroundExecutor", () => options.backgroundExecutor!.shutdown());
       }
 
       if (options.taskManager) {
-        options.taskManager.failActiveTasksOnShutdown(shutdownTaskReason);
+        await runStep("taskManager", () =>
+          options.taskManager!.failActiveTasksOnShutdown(shutdownTaskReason),
+        );
       }
       if (!options.taskManager && options.taskStorage) {
-        failIncompleteTasksInStorage(options.taskStorage, shutdownTaskReason);
+        await runStep("failIncompleteTasks", () =>
+          failIncompleteTasksInStorage(options.taskStorage!, shutdownTaskReason),
+        );
+      }
+
+      // Stop event-bus subscribers (workspace/monitor bridges live in
+      // stoppableServers) BEFORE eventBus.shutdown() clears the emitter, so
+      // their drain does not run against an already-removed listener set.
+      if (options.stoppableServers) {
+        await runStep("stoppableServers", () =>
+          Promise.all(options.stoppableServers!.map((s) => s.stop())),
+        );
       }
 
       // Drain event bus and learning queue before stopping pipeline
       if (options.eventBus) {
-        await options.eventBus.shutdown();
+        await runStep("eventBus", () => options.eventBus!.shutdown());
       }
       if (options.learningQueue) {
-        await options.learningQueue.shutdown();
+        await runStep("learningQueue", () => options.learningQueue!.shutdown());
       }
 
       // Then stop the pipeline (clears evolution timer, shuts down embedding queue)
       if (learningPipeline) {
-        learningPipeline.stop();
+        await runStep("learningPipeline", () => learningPipeline.stop());
       }
 
       if (options.metricsStorage) {
-        options.metricsStorage.close();
+        await runStep("metricsStorage", () => options.metricsStorage!.close());
       }
 
       if (options.goalStorage) {
-        options.goalStorage.close();
+        await runStep("goalStorage", () => options.goalStorage!.close());
       }
 
       if (options.taskStorage) {
-        options.taskStorage.close();
+        await runStep("taskStorage", () => options.taskStorage!.close());
       }
 
       if (options.providerManager) {
-        options.providerManager.shutdown();
+        await runStep("providerManager", () => options.providerManager!.shutdown());
       }
 
-      options.toolRegistry?.shutdown();
+      await runStep("toolRegistry", () => options.toolRegistry?.shutdown());
 
       if (options.modelIntelligence) {
-        options.modelIntelligence.shutdown();
+        await runStep("modelIntelligence", () => options.modelIntelligence!.shutdown());
       }
 
       if (dashboard) {
-        await dashboard.stop();
-      }
-
-      if (options.stoppableServers) {
-        await Promise.all(options.stoppableServers.map((s) => s.stop()));
+        await runStep("dashboard", () => dashboard.stop());
       }
 
       if (ragPipeline) {
-        await ragPipeline.shutdown();
+        await runStep("ragPipeline", () => ragPipeline.shutdown());
       }
 
       if (memoryManager) {
-        await memoryManager.shutdown();
+        await runStep("memoryManager", () => memoryManager.shutdown());
+      }
+
+      // Stop framework sync watcher (chokidar + debounce timer) and close its
+      // SQLite store — these are opened on the success path and otherwise leak.
+      if (options.frameworkSyncPipeline) {
+        await runStep("frameworkSyncPipeline", () => options.frameworkSyncPipeline!.stop());
+      }
+      if (options.frameworkStore) {
+        await runStep("frameworkStore", () => options.frameworkStore!.close());
       }
 
       // Dispose all vaults (stops watchers and closes SQLite stores)
       if (options.vaultRegistry) {
-        await options.vaultRegistry.disposeAll();
+        await runStep("vaultRegistry", () => options.vaultRegistry!.disposeAll());
       }
 
       // Close canvas storage to release SQLite fd
       if (options.canvasStorage) {
-        options.canvasStorage.close();
+        await runStep("canvasStorage", () => options.canvasStorage!.close());
       }
 
       // Identity shutdown: record clean shutdown and flush uptime (before DB closes)
       if (options.uptimeInterval) {
-        clearInterval(options.uptimeInterval);
+        await runStep("uptimeInterval", () => clearInterval(options.uptimeInterval!));
       }
       if (options.identityManager) {
-        options.identityManager.recordShutdown();
-        options.identityManager.close();
+        await runStep("identityManager", () => {
+          options.identityManager!.recordShutdown();
+          options.identityManager!.close();
+        });
       }
 
       if (options.checkpointStore) {
-        try {
-          options.checkpointStore.close();
-        } catch (err) {
-          logger.warn("Failed to close task checkpoint store on shutdown", {
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
+        await runStep("checkpointStore", () => options.checkpointStore!.close());
       }
 
       if (options.learningStorage) {
-        try {
-          options.learningStorage.close();
-        } catch (err) {
-          logger.warn("Failed to close learning storage on shutdown", {
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
+        await runStep("learningStorage", () => options.learningStorage!.close());
       }
 
       // Persist provider health state so cooldowns survive restarts
       if (options.providerHealthRegistry && options.providerHealthPersistencePath) {
-        try {
-          options.providerHealthRegistry.save(options.providerHealthPersistencePath);
-        } catch (err) {
-          logger.warn("Failed to persist provider health registry", {
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
+        await runStep("providerHealthRegistry", () =>
+          options.providerHealthRegistry!.save(options.providerHealthPersistencePath!),
+        );
       }
 
-      await channel.disconnect();
+      // Close shared daemon storage (daemon.db) last — it is opened
+      // unconditionally and kept alive for the daemon's lifetime, so it must be
+      // released on a clean shutdown (not just the failure path) to avoid
+      // leaking the fd/WAL across restarts.
+      if (options.daemonStorage) {
+        await runStep("daemonStorage", () => options.daemonStorage!.close());
+      }
+
+      await runStep("channel", () => channel.disconnect());
       logger.info("Strada Brain stopped.");
     };
 
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
     try {
       await Promise.race([
         gracefulShutdown(),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error("Shutdown timeout exceeded")), SHUTDOWN_TIMEOUT_MS),
-        ),
+        new Promise<never>((_, reject) => {
+          timeoutHandle = setTimeout(
+            () => reject(new Error("Shutdown timeout exceeded")),
+            SHUTDOWN_TIMEOUT_MS,
+          );
+        }),
       ]);
     } catch (err) {
       if (err instanceof Error && err.message === "Shutdown timeout exceeded") {
@@ -381,8 +441,76 @@ export function createShutdownHandler(options: ShutdownOptions): () => Promise<v
         process.exit(1);
       }
       throw err;
+    } finally {
+      // Clear the losing branch of the race so its 60s timer cannot keep the
+      // Node event loop alive after a successful shutdown.
+      if (timeoutHandle) {
+        clearTimeout(timeoutHandle);
+      }
     }
   };
+
+  return (): Promise<void> => {
+    if (!shutdownPromise) {
+      shutdownPromise = run();
+    }
+    return shutdownPromise;
+  };
+}
+
+/**
+ * Tracks resources allocated during bootstrap so a mid-bootstrap failure can
+ * tear them down (release SQLite fds, clear timers, stop servers/ports) instead
+ * of leaking them. This is the failure-path analogue of {@link createShutdownHandler}:
+ * `bootstrap()` registers a disposer immediately after each resource is created,
+ * and if any later step throws the wrapper runs {@link teardown} before rethrowing.
+ *
+ * Disposers run in reverse (LIFO) registration order — newest resource first —
+ * mirroring conventional teardown. Each disposer is isolated in its own
+ * try/catch so one failure cannot strand the rest, and `teardown()` is idempotent
+ * (it snapshots-and-clears the list) so it can never double-dispose. On the
+ * success path nothing is torn down here; the returned `shutdown` handler owns
+ * the full lifecycle as before.
+ */
+export class BootstrapDisposables {
+  private readonly disposers: Array<{ name: string; dispose: () => void | Promise<void> }> = [];
+
+  /** Register a teardown callback. Call immediately after the resource is allocated. */
+  push(name: string, dispose: () => void | Promise<void>): void {
+    this.disposers.push({ name, dispose });
+  }
+
+  /** Number of registered disposers (observability / tests). */
+  get size(): number {
+    return this.disposers.length;
+  }
+
+  /**
+   * Run all registered disposers in reverse (LIFO) order. Each runs in its own
+   * try/catch; a throwing disposer is logged and does not abort the remaining
+   * teardown. Snapshots-and-clears the list first, so repeated calls are no-ops.
+   */
+  async teardown(): Promise<void> {
+    // Snapshot + clear up-front so a re-entrant call cannot double-dispose.
+    const pending = this.disposers.splice(0).reverse();
+    if (pending.length === 0) {
+      return;
+    }
+    const logger = getLogger();
+    logger.warn("Bootstrap failed mid-initialization — tearing down allocated resources", {
+      count: pending.length,
+    });
+    for (const { name, dispose } of pending) {
+      try {
+        await dispose();
+      } catch (err) {
+        logger.warn("Bootstrap cleanup failed for a resource (continuing)", {
+          resource: name,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+  }
 }
 
 export function generateSessionId(): string {

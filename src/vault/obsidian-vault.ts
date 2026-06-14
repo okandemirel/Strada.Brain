@@ -13,6 +13,7 @@ import { getExtractorFor } from './symbol-extractor/index.js';
 import { buildCanvas } from './canvas-generator.js';
 import { runPpr } from './ppr.js';
 import { getLoggerSafe } from '../utils/logger.js';
+import { AsyncLock } from './async-lock.js';
 import { ObsidianApiClient, type ObsidianApiConfig } from './obsidian-client.js';
 import {
   getIndexableFileInfo,
@@ -76,42 +77,6 @@ function canonicalizePath(path: string): string {
   return p;
 }
 
-/**
- * Tiny FIFO async lock — serializes async sections per vault instance.
- * Used to prevent concurrent sync()/reindexFile() interleaving from
- * desynchronizing the embedding/edge caches.
- *
- * Re-entrancy guard (debug-time): the lock is NOT re-entrant. If the same
- * call chain tries to acquire the lock while already holding it the result
- * is a deadlock. The `held` flag lets us detect that synchronously and
- * throw a useful error instead of hanging. The check is always on — its
- * cost is a boolean read/write — and only fires for the misuse case.
- */
-class AsyncLock {
-  private tail: Promise<void> = Promise.resolve();
-  private held = false;
-  async run<T>(fn: () => Promise<T>): Promise<T> {
-    if (this.held) {
-      throw new Error(
-        'AsyncLock re-entrancy detected: call chain tried to acquire the vault writeLock ' +
-          'while already holding it — this would deadlock. Refactor the inner call site to ' +
-          'use the internal (`*Internal`) helper that assumes the lock is already held.',
-      );
-    }
-    const prev = this.tail;
-    let release!: () => void;
-    this.tail = new Promise<void>((res) => { release = res; });
-    try {
-      await prev;
-      this.held = true;
-      return await fn();
-    } finally {
-      this.held = false;
-      release();
-    }
-  }
-}
-
 function globToRegex(glob: string): RegExp {
   const escaped = glob.replace(/[.+^${}()|[\]\\]/g, '\\$&');
   const pattern = escaped.replace(/\*\*/g, '.*').replace(/\*/g, '[^/]*').replace(/\?/g, '.');
@@ -154,6 +119,15 @@ export class ObsidianVault implements IVault {
    * HNSW upsert/delete sequencing (which can otherwise leak orphan HNSW IDs).
    */
   private writeLock = new AsyncLock();
+  /**
+   * Set when a canvas regeneration fails. Forces the next sync() to retry the
+   * canvas/wikilink derivation even when no source files changed, so a transient
+   * write failure (locked .tmp, ENOSPC, rename error) can self-heal instead of
+   * leaving the `.canvas` permanently stale until an unrelated edit happens to
+   * flip count>0 again. In-memory only: a restart routes through init()→
+   * fullIndex(), which regenerates unconditionally.
+   */
+  private canvasDirty = false;
 
   constructor(deps: ObsidianVaultDeps) {
     this.id = deps.id;
@@ -194,7 +168,11 @@ export class ObsidianVault implements IVault {
       const started = Date.now();
       const { count, paths } = await this.reindexChangedInternal();
       let canvasStatus: { ok: boolean; error?: string } | undefined;
-      if (count > 0) {
+      // Derive wikilinks + canvas when files changed OR when a prior canvas
+      // regen failed (canvasDirty). The dirty latch lets a transient regen
+      // failure self-heal on a later no-change sync instead of leaving the
+      // .canvas permanently stale.
+      if (count > 0 || this.canvasDirty) {
         // Resolve wikilinks once: the index pass is sequential, so by the
         // time we get here every file in this sync has its row in
         // vault_files. The previous predicate-filtered second pass iterated
@@ -202,11 +180,18 @@ export class ObsidianVault implements IVault {
         await this.resolveWikilinks();
         canvasStatus = await this.regenerateCanvasWithStatus();
         if (!canvasStatus.ok) {
+          this.canvasDirty = true;
           getLoggerSafe().warn('[obsidian-vault] sync: canvas regen failed', {
             vaultId: this.id, op: 'sync', error: canvasStatus.error,
           });
+        } else {
+          this.canvasDirty = false;
         }
-        this.emitter.emit('update', { vaultId: this.id, changedPaths: paths });
+        // Only emit when files actually changed — a pure dirty-latch retry
+        // must not fire a spurious update with an empty changedPaths.
+        if (count > 0) {
+          this.emitter.emit('update', { vaultId: this.id, changedPaths: paths });
+        }
       }
       return { changed: count, durationMs: Date.now() - started, ...(canvasStatus ? { canvas: canvasStatus } : {}) };
     });
@@ -294,7 +279,7 @@ export class ObsidianVault implements IVault {
       if (lastIndexedAt === null || f.indexedAt > lastIndexedAt) lastIndexedAt = f.indexedAt;
     }
     const st = await stat(this.dbPath).catch(() => null);
-    return { fileCount: files.length, chunkCount, lastIndexedAt, dbBytes: st?.size ?? 0 };
+    return { fileCount: files.length, symbolCount: this.store.symbolCount(), chunkCount, lastIndexedAt, dbBytes: st?.size ?? 0 };
   }
 
   listFiles(): VaultFile[] { return this.store.listFiles(); }
@@ -302,6 +287,17 @@ export class ObsidianVault implements IVault {
   async readFile(relPath: string): Promise<string> {
     const abs = await resolveSafeVaultReadPath(this.rootPath, relPath);
     return await readFile(abs, 'utf8');
+  }
+
+  /**
+   * Wrap an error thrown by a write so its message can't leak the absolute
+   * vault path to agent-visible tool output. FS/REST errors routinely embed
+   * `abs`/`rootPath`/homedir; `redactPathsInMessage` rewrites those to
+   * `<vault>`/`<home>` while preserving the vault-relative tail.
+   */
+  private redactError(err: unknown): Error {
+    const msg = err instanceof Error ? err.message : String(err);
+    return new Error(redactPathsInMessage(msg, this.rootPath, this.realpathRoot));
   }
 
   async writeFile(relPath: string, content: string): Promise<void> {
@@ -314,7 +310,11 @@ export class ObsidianVault implements IVault {
       getLoggerSafe().warn(`[obsidian-vault ${this.id}] Obsidian API write failed, falling back to FS`, { err });
     }
     const abs = await prepareSafeVaultWritePath(this.rootPath, safeRelPath, bytes);
-    await writeFile(abs, content, 'utf8');
+    try {
+      await writeFile(abs, content, 'utf8');
+    } catch (err) {
+      throw this.redactError(err);
+    }
   }
 
   onUpdate(listener: (p: { vaultId: VaultId; changedPaths: string[] }) => void): () => void {
@@ -333,16 +333,43 @@ export class ObsidianVault implements IVault {
   /** Write a note to Obsidian via REST API. */
   async writeNote(relPath: string, content: string): Promise<void> {
     const safeRelPath = validateSafeVaultWriteRelPath(relPath, Buffer.byteLength(content, 'utf8'));
-    await this.client.putNote(safeRelPath, content);
-    // Trigger reindex after write so the vault stays in sync.
-    await this.reindexFile(safeRelPath);
+    try {
+      await this.client.putNote(safeRelPath, content);
+      // Trigger reindex after write so the vault stays in sync.
+      await this.reindexFile(safeRelPath);
+    } catch (err) {
+      throw this.redactError(err);
+    }
   }
 
   /** Append content to a heading in an Obsidian note. */
   async appendToHeading(relPath: string, heading: string, content: string): Promise<void> {
     const safeRelPath = validateSafeVaultWriteRelPath(relPath, Buffer.byteLength(content, 'utf8'));
-    await this.client.appendToHeading(safeRelPath, heading, content);
-    await this.reindexFile(safeRelPath);
+    try {
+      await this.client.appendToHeading(safeRelPath, heading, content);
+      await this.reindexFile(safeRelPath);
+    } catch (err) {
+      throw this.redactError(err);
+    }
+  }
+
+  /**
+   * Delete a note via the Obsidian REST API, then incrementally remove its
+   * SQLite rows + HNSW vectors so the index doesn't carry orphans until the
+   * next full sync. Reuses the same removal helper the sync-prune path uses
+   * (deleteIndexedFileInternal), serialized through the write lock to keep
+   * HNSW/edge state consistent with concurrent reindex/sync. On a REST failure
+   * the (path-redacted) error propagates BEFORE any index mutation, so the
+   * note and its index rows stay intact and consistent.
+   */
+  async deleteNote(relPath: string): Promise<void> {
+    const safeRelPath = validateSafeVaultWriteRelPath(relPath, 0);
+    try {
+      await this.client.deleteNote(safeRelPath);
+    } catch (err) {
+      throw this.redactError(err);
+    }
+    await this.writeLock.run(async () => this.deleteIndexedFileInternal(safeRelPath));
   }
 
   /** Search Obsidian's native index. */
@@ -445,11 +472,21 @@ export class ObsidianVault implements IVault {
     const basenameMap = this.buildWikilinkBasenameMap();
     const wikilinks = this.store.listWikilinks();
     for (const w of wikilinks) {
-      if (w.resolved) continue;
-      const resolvedPath = this.resolveWikilinkTarget(w.target, basenameMap);
-      if (!resolvedPath) continue;
       const fromNote = canonicalizePath(w.fromNote);
-      this.store.updateWikilinkTarget(fromNote, w.target, resolvedPath);
+      if (!w.resolved) {
+        // Unresolved: the raw token is still in `target`. Resolve and preserve it.
+        const resolvedPath = this.resolveWikilinkTarget(w.target, basenameMap);
+        if (!resolvedPath) continue;
+        this.store.updateWikilinkTarget(fromNote, w.target, resolvedPath, w.target);
+        continue;
+      }
+      // Resolved: re-resolve from the preserved original token so a target
+      // rename re-points the link. Old rows (no original_target) fall back to
+      // the resolved target, which still re-resolves via the basename map.
+      const originalToken = w.originalTarget ?? w.target;
+      const rePath = this.resolveWikilinkTarget(originalToken, basenameMap);
+      if (!rePath || rePath === w.target) continue; // unresolvable now, or unchanged
+      this.store.updateWikilinkTarget(fromNote, w.target, rePath, originalToken);
     }
   }
 
@@ -728,7 +765,8 @@ export class ObsidianVault implements IVault {
       // predicate-filtered pass would iterate an empty set (re-review
       // finding 2).
       await this.resolveWikilinks();
-      await this.regenerateCanvasWithStatus();
+      // fullIndex regenerates unconditionally; keep the dirty latch authoritative.
+      this.canvasDirty = !(await this.regenerateCanvasWithStatus()).ok;
       if (changed.length) {
         this.emitter.emit('update', { vaultId: this.id, changedPaths: changed });
       }

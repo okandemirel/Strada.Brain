@@ -43,13 +43,27 @@ describe('node-style', () => {
       expect(parsed.line).toBeNull();
     });
 
-    it('splits head on first whitespace into (kind, name)', () => {
-      // The regex always treats the first whitespace-delimited token as the
-      // kind label — backend always emits `**kind** name`, so ambiguous input
-      // like "**Just a note**" is parsed as kind="Just", name="a note".
+    it('extracts kind only from the `**kind** name` form, not bold-wrapped text', () => {
+      // "**class** Foo" carries a real kind marker → kind="class".
+      expect(parseNodeText('**class** Foo')).toMatchObject({ kind: 'class', name: 'Foo' });
+      // "**Just a note**" is bold-wrapped text, NOT `**kind** name` — the whole
+      // thing is the name (previously `Just` was wrongly dropped as a kind).
       const parsed = parseNodeText('**Just a note**');
-      expect(parsed.kind).toBe('Just');
-      expect(parsed.name).toBe('a note');
+      expect(parsed.kind).toBeNull();
+      expect(parsed.name).toBe('Just a note');
+    });
+
+    it('keeps a bare file-graph basename containing spaces intact as the name', () => {
+      const parsed = parseNodeText('My File.md');
+      expect(parsed.kind).toBeNull();
+      expect(parsed.name).toBe('My File.md');
+      expect(parsed.file).toBeNull();
+    });
+
+    it('parses a tail path that itself contains colons (drive/path refs)', () => {
+      const parsed = parseNodeText('**method** Bar\n\n*C:/repo/a.ts:99*');
+      expect(parsed.file).toBe('C:/repo/a.ts');
+      expect(parsed.line).toBe(99);
     });
   });
 

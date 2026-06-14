@@ -44,7 +44,7 @@ A string-keyed dependency injection container with three lifecycles: `singleton`
 - `Services` const object defines typed string keys for all known services (Logger, Config, AuthManager, RateLimiter, AIProvider, MemoryManager, RAGPipeline, ToolRegistry, Orchestrator, LearningPipeline, etc.)
 - `ServiceKey` type is derived from `typeof Services`
 
-Note: `bootstrap.ts` does not currently use `DIContainer` for resolution. The container is passed through but services are wired manually.
+Note: `DIContainer` is **reserved**, not active. `bootstrap.ts` does not use it for resolution — the container is passed through and only `Logger`/`Config` are registered (in `index.ts`), staging them for a future opt-in DI-resolution migration; all other services are wired manually. It is kept rather than removed deliberately: small, tested, correct, and part of the `BootstrapResult` contract.
 
 ## Tool Registry (`tool-registry.ts`)
 

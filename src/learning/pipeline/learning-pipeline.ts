@@ -172,11 +172,38 @@ export class LearningPipeline {
     // Drain any leftover unprocessed observations from previous sessions on startup.
     void this.runDetectionBatch().catch(() => { /* non-critical startup drain */ });
 
-    this.evolutionTimer = setInterval(() => this.runEvolution(), this.config.evolutionIntervalMs);
+    this.evolutionTimer = setInterval(() => this.tickEvolution(), this.config.evolutionIntervalMs);
 
     // Periodic trajectory extraction — use detection interval from config
     const periodicMs = this.config.detectionIntervalMs;
-    this.periodicTimer = setInterval(() => this.runPeriodicExtraction(), periodicMs);
+    this.periodicTimer = setInterval(() => {
+      void this.tickPeriodicExtraction();
+    }, periodicMs);
+  }
+
+  /**
+   * Evolution tick with error isolation. An unguarded throw in a setInterval
+   * callback escapes to the process and the global uncaughtException handler
+   * shuts the whole daemon down, so swallow it (non-fatal; the next tick retries).
+   */
+  private tickEvolution(): void {
+    try {
+      this.runEvolution();
+    } catch {
+      /* evolution tick errors are non-fatal; the next tick retries */
+    }
+  }
+
+  /**
+   * Periodic-extraction tick with error isolation. runPeriodicExtraction is
+   * async, so an unguarded rejection from the setInterval callback becomes an
+   * unhandledRejection — which the process-level handler escalates to a full
+   * daemon shutdown (src/index.ts). Swallow it (non-fatal; the next tick retries).
+   */
+  private tickPeriodicExtraction(): Promise<void> {
+    return this.runPeriodicExtraction().catch(() => {
+      /* periodic-extraction tick errors are non-fatal; the next tick retries */
+    });
   }
 
   stop(): void {

@@ -10,6 +10,7 @@ import type {
   MemoryImportance,
   MemoryMetadata,
 } from "./memory.interface.js";
+import { getImportanceValue } from "./memory.interface.js";
 import type { StradaProjectAnalysis } from "../intelligence/strada-analyzer.js";
 import {
   extractTerms,
@@ -53,6 +54,12 @@ class OptimizedTextIndex {
   private idfCache: Map<string, number> = new Map();
   private docFrequency: Map<string, number> = new Map();
   private docCount: number = 0;
+  /**
+   * Monotonic counter bumped on every IDF-affecting corpus mutation
+   * (addDocument/removeDocument). Lets version-gated consumers detect when a
+   * previously computed TF-IDF vector has gone stale without diffing the corpus.
+   */
+  private idfVersion = 0;
 
   /**
    * Optimized TF computation with memoization
@@ -119,8 +126,7 @@ class OptimizedTextIndex {
         this.docFrequency.set(term, (this.docFrequency.get(term) || 0) + 1);
       }
     }
-    // Invalidate IDF cache
-    this.idfCache.clear();
+    this.invalidateIdf();
   }
 
   /**
@@ -151,8 +157,26 @@ class OptimizedTextIndex {
         }
       }
     }
-    // Invalidate IDF cache
+    this.invalidateIdf();
+  }
+
+  /**
+   * Invalidate IDF-derived memoization after a corpus mutation. The per-term
+   * idfCache is dropped (its memoized values are now wrong) and idfVersion is
+   * bumped so version-gated consumers (cached entry vectors) recompute lazily.
+   */
+  private invalidateIdf(): void {
     this.idfCache.clear();
+    this.idfVersion++;
+  }
+
+  /**
+   * Current IDF version — bumped on every addDocument/removeDocument. A TF-IDF
+   * vector computed at version V stays valid only while getIdfVersion() === V
+   * (IDF, and thus every entry vector, changes iff the corpus does).
+   */
+  getIdfVersion(): number {
+    return this.idfVersion;
   }
 
   /**
@@ -217,6 +241,25 @@ export class FileMemoryManager implements IMemoryManager {
   private readonly maxEntries: number;
   private entries: MemoryEntry[] = [];
   private index = new OptimizedTextIndex();
+  /**
+   * Bounded cache of tokenization for the retrieve() hot path: extractTerms ran
+   * for every entry on every query. Keyed by content (extractTerms is a pure
+   * function of it), so updated content yields a fresh key and stale entries
+   * simply age out — no explicit invalidation needed. Oldest-evicted at the cap.
+   */
+  private readonly termsCache = new Map<string, string[]>();
+  private static readonly TERMS_CACHE_MAX = 2000;
+  /**
+   * Bounded cache of per-entry TF-IDF vectors for the retrieve() hot path
+   * (previously every query rebuilt every entry's vector). A vector is
+   * TF(content) ⊙ IDF(corpus); the IDF half shifts on every add/removeDocument,
+   * so the cache is version-gated against the index's idfVersion — a hit is
+   * honored only while the corpus IDF state is unchanged since the vector was
+   * computed, otherwise it is recomputed. Keyed by content (extractTerms is
+   * pure), so edited content yields a fresh key. Oldest-evicted at the cap.
+   */
+  private readonly entryVectorCache = new Map<string, { version: number; vector: Record<string, number> }>();
+  private static readonly ENTRY_VECTOR_CACHE_MAX = 2000;
   private cachedAnalysis: { projectPath: string; analysis: StradaProjectAnalysis } | null = null;
   
   // Debounced flush with max wait time
@@ -744,9 +787,8 @@ export class FileMemoryManager implements IMemoryManager {
         if (options.after && entry.createdAt < options.after) continue;
         if (options.before && entry.createdAt > options.before) continue;
 
-        // Compute TF-IDF similarity
-        const entryTerms = extractTerms(entry.content);
-        const entryVector = this.index.computeTFIDFOptimized(entryTerms);
+        // Compute TF-IDF similarity (entry vector cached + IDF-version-gated)
+        const entryVector = this.cachedEntryVector(entry.content);
         const score = cosineSimilarity(queryVector, entryVector);
 
         if (score >= minScore) {
@@ -831,8 +873,7 @@ export class FileMemoryManager implements IMemoryManager {
       const scored: RetrievalResult<ConversationMemoryEntry>[] = [];
       
       for (const entry of chatEntries) {
-        const entryTerms = extractTerms(entry.content);
-        const entryVector = this.index.computeTFIDFOptimized(entryTerms);
+        const entryVector = this.cachedEntryVector(entry.content);
         const score = cosineSimilarity(queryVector, entryVector);
         
         if (score >= (options?.minScore ?? DEFAULT_MIN_SCORE)) {
@@ -1016,26 +1057,77 @@ export class FileMemoryManager implements IMemoryManager {
   /**
    * LRU eviction based on access patterns
    */
+  /** extractTerms(content) with a bounded content-keyed cache (retrieve hot path). */
+  private cachedExtractTerms(content: string): string[] {
+    const hit = this.termsCache.get(content);
+    if (hit) return hit;
+    const terms = extractTerms(content);
+    if (this.termsCache.size >= FileMemoryManager.TERMS_CACHE_MAX) {
+      const oldest = this.termsCache.keys().next().value;
+      if (oldest !== undefined) this.termsCache.delete(oldest);
+    }
+    this.termsCache.set(content, terms);
+    return terms;
+  }
+
+  /**
+   * computeTFIDFOptimized(extractTerms(content)) with a version-gated,
+   * content-keyed cache. Returns a vector identical to a fresh recompute under
+   * the current corpus IDF: a cached entry is reused only while the index's
+   * idfVersion is unchanged, and IDF (hence the vector) changes iff the corpus
+   * does. The returned Record is read-only for callers (cosineSimilarity does
+   * not mutate it), so sharing the cached reference is safe.
+   */
+  private cachedEntryVector(content: string): Record<string, number> {
+    const version = this.index.getIdfVersion();
+    const hit = this.entryVectorCache.get(content);
+    if (hit && hit.version === version) return hit.vector;
+
+    const vector = this.index.computeTFIDFOptimized(this.cachedExtractTerms(content));
+    // Evict oldest only when inserting a genuinely new key; a version-stale
+    // refresh of an existing key just overwrites it (corpus mutations make
+    // every cached key stale at once, so evict-on-refresh would thrash).
+    if (
+      !this.entryVectorCache.has(content) &&
+      this.entryVectorCache.size >= FileMemoryManager.ENTRY_VECTOR_CACHE_MAX
+    ) {
+      const oldest = this.entryVectorCache.keys().next().value;
+      if (oldest !== undefined) this.entryVectorCache.delete(oldest);
+    }
+    this.entryVectorCache.set(content, { version, vector });
+    return vector;
+  }
+
   private evictIfNeeded(): void {
-    while (this.entries.length > this.maxEntries) {
-      let evictIdx = 0;
-      let oldestAccess = Infinity;
+    const overflow = this.entries.length - this.maxEntries;
+    if (overflow <= 0) return;
 
-      // Find least recently accessed entry
-      for (let i = 0; i < this.entries.length; i++) {
-        const entryId = this.entries[i]!.id as string;
-        const lastAccess = this.entryAccessCache.get(entryId) || this.entries[i]!.createdAt as number;
-        
-        if (lastAccess < oldestAccess) {
-          oldestAccess = lastAccess;
-          evictIdx = i;
-        }
-      }
+    const lastAccessOf = (e: MemoryEntry): number =>
+      this.entryAccessCache.get(e.id as string) ?? (e.createdAt as number);
 
-      const removed = this.entries.splice(evictIdx, 1)[0]!;
-      const removedTerms = extractTerms(removed.content);
-      this.index.removeDocument(removedTerms);
-      this.entryAccessCache.delete(removed.id as string);
+    // Rank eviction candidates worst-first: archived entries go before live
+    // ones; among equal archived-state, lower importance is evicted first;
+    // ties broken by least-recently-accessed (LRU). A single O(N log N) sort
+    // replaces the old O(N^2) repeated-min-scan and, unlike it, honors
+    // importance/archived instead of evicting purely by age.
+    const victims = this.entries
+      .map((entry) => ({ entry, lastAccess: lastAccessOf(entry) }))
+      .sort((a, b) => {
+        const archDiff = (a.entry.archived ? 0 : 1) - (b.entry.archived ? 0 : 1);
+        if (archDiff !== 0) return archDiff;
+        const impDiff =
+          getImportanceValue(a.entry.importance) - getImportanceValue(b.entry.importance);
+        if (impDiff !== 0) return impDiff;
+        return a.lastAccess - b.lastAccess;
+      })
+      .slice(0, overflow)
+      .map((r) => r.entry);
+
+    const victimIds = new Set(victims.map((e) => e.id as string));
+    this.entries = this.entries.filter((e) => !victimIds.has(e.id as string));
+    for (const v of victims) {
+      this.index.removeDocument(extractTerms(v.content));
+      this.entryAccessCache.delete(v.id as string);
     }
   }
 

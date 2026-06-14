@@ -1,17 +1,23 @@
 /**
  * Simple Dependency Injection Container
- * 
+ *
  * Provides:
  * - Interface-based registration
  * - Singleton and Transient lifecycles
  * - Lazy initialization
  * - Circular dependency detection
+ *
+ * NOTE: This container is currently RESERVED / UNUSED in production wiring —
+ * `bootstrap.ts` constructs services explicitly rather than resolving them
+ * through this container. It is retained (with its internal bugs already fixed
+ * and covered by tests) for future migration to container-based DI. Do not
+ * assume it participates in the live dependency graph.
  */
 
 export type Lifecycle = "singleton" | "transient" | "scoped";
 
 export interface Registration<T> {
-  implementation: new (...args: unknown[]) => T;
+  implementation?: new (...args: unknown[]) => T;
   lifecycle: Lifecycle;
   instance?: T;
   factory?: () => T;
@@ -58,7 +64,6 @@ export class DIContainer {
     factory: () => T
   ): this {
     this.registrations.set(interfaceName, {
-      implementation: class {} as new (...args: unknown[]) => T,
       lifecycle: "singleton",
       factory,
     });
@@ -83,6 +88,10 @@ export class DIContainer {
    * Register an existing instance (useful for testing)
    */
   registerInstance<T>(interfaceName: string, instance: T): this {
+    // Also create a registration entry so resolve() (which checks
+    // `registrations` first and throws ServiceNotFoundError if absent) can find
+    // the pre-built instance without requiring a separate class registration.
+    this.registrations.set(interfaceName, { lifecycle: "singleton" });
     this.singletons.set(interfaceName, instance);
     return this;
   }
@@ -104,11 +113,18 @@ export class DIContainer {
       throw new ServiceNotFoundError(interfaceName);
     }
 
-    // Return existing singleton
-    if (registration.lifecycle === "singleton") {
-      const existing = this.singletons.get(interfaceName);
-      if (existing) {
-        return existing as T;
+    // Return existing singleton or scoped instance. Use presence (has), not
+    // truthiness: an instance legitimately resolved/registered as a falsy value
+    // (0, "", false) must not be treated as absent and re-created. Scoped
+    // instances are cached per-container (createScope copies registrations into
+    // a fresh container), so caching them here honors the documented
+    // "same instance within scope" contract.
+    if (
+      registration.lifecycle === "singleton" ||
+      registration.lifecycle === "scoped"
+    ) {
+      if (this.singletons.has(interfaceName)) {
+        return this.singletons.get(interfaceName) as T;
       }
     }
 
@@ -120,12 +136,18 @@ export class DIContainer {
 
       if (registration.factory) {
         instance = registration.factory() as T;
-      } else {
+      } else if (registration.implementation) {
         instance = new registration.implementation() as T;
+      } else {
+        throw new ServiceNotFoundError(interfaceName);
       }
 
-      // Cache singletons
-      if (registration.lifecycle === "singleton") {
+      // Cache singletons and scoped instances (scoped is cached within this
+      // container/scope only).
+      if (
+        registration.lifecycle === "singleton" ||
+        registration.lifecycle === "scoped"
+      ) {
         this.singletons.set(interfaceName, instance);
       }
 
@@ -181,11 +203,10 @@ export class DIContainer {
         scope.registrations.set(name, { ...reg });
       } else {
         scope.registrations.set(name, reg);
-        if (reg.lifecycle === "singleton") {
-          const instance = this.singletons.get(name);
-          if (instance) {
-            scope.singletons.set(name, instance);
-          }
+        // Presence check, not truthiness: copy a falsy singleton (0/""/false)
+        // into the child scope too.
+        if (reg.lifecycle === "singleton" && this.singletons.has(name)) {
+          scope.singletons.set(name, this.singletons.get(name));
         }
       }
     }
@@ -237,49 +258,3 @@ export function resetContainer(): void {
 export function createContainer(): DIContainer {
   return new DIContainer();
 }
-
-// ============================================================================
-// Service Keys (for type-safe resolution)
-// ============================================================================
-
-export const Services = {
-  // Core
-  Logger: "Logger",
-  Config: "Config",
-  
-  // Security
-  AuthManager: "AuthManager",
-  RateLimiter: "RateLimiter",
-  PathGuard: "PathGuard",
-  SecretSanitizer: "SecretSanitizer",
-  ReadOnlyGuard: "ReadOnlyGuard",
-  DMPolicy: "DMPolicy",
-  
-  // AI
-  AIProvider: "AIProvider",
-  
-  // Memory
-  MemoryManager: "MemoryManager",
-  RAGPipeline: "RAGPipeline",
-  EmbeddingProvider: "EmbeddingProvider",
-  
-  // Tools
-  ToolRegistry: "ToolRegistry",
-  
-  // Channels
-  ChannelAdapter: "ChannelAdapter",
-  
-  // Orchestration
-  Orchestrator: "Orchestrator",
-  
-  // Learning
-  LearningPipeline: "LearningPipeline",
-  ErrorRecovery: "ErrorRecovery",
-  TaskPlanner: "TaskPlanner",
-  
-  // Dashboard
-  MetricsCollector: "MetricsCollector",
-  DashboardServer: "DashboardServer",
-} as const;
-
-export type ServiceKey = (typeof Services)[keyof typeof Services];

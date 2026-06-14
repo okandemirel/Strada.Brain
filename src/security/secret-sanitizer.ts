@@ -13,9 +13,9 @@ import { getLogger } from "../utils/logger.js";
 import {
   DEFAULT_SECRET_PATTERNS,
   MAX_OUTPUT_LENGTH,
-  applySecretPatterns,
   emitSanitizationEvent,
   sanitizeSecrets as applyDefaultSanitization,
+  type SanitizationStats,
   type SanitizeOptions,
   type SanitizeResult,
   type SecretPattern,
@@ -28,6 +28,18 @@ export type {
   SanitizeOptions,
   SanitizeResult,
 } from "./secret-patterns.js";
+
+/**
+ * Truncation suffix appended when sanitized output exceeds `maxLength`.
+ *
+ * Re-declared locally (it is module-private in ./secret-patterns.ts) because
+ * `SecretSanitizer.sanitize()` performs its own refined bytesRemoved accounting
+ * — per-pattern clamped shrinkage plus truncated-source-byte counting — that is
+ * verified by the class-level statistics tests and is not reproducible from the
+ * leaf `applySecretPatterns` return value alone. Keep this string in sync with
+ * the leaf's TRUNCATION_MARKER.
+ */
+const TRUNCATION_MARKER = "\n... (truncated)";
 
 // ─── SecretSanitizer Class ───────────────────────────────────────────────────
 
@@ -56,14 +68,63 @@ export class SecretSanitizer {
   }
 
   sanitize(content: string): SanitizeResult {
-    const onPatternMatch = this.debug
-      ? (patternName: string, matchCount: number): void => {
-          getLogger().info(
-            `[SecretSanitizer] Matched ${patternName}: ${matchCount} occurrence(s)`,
-          );
-        }
-      : undefined;
-    return applySecretPatterns(content, this.patterns, this.maxLength, onPatternMatch);
+    const stats: SanitizationStats = {
+      totalMatches: 0,
+      matchesByPattern: {},
+      bytesRemoved: 0,
+    };
+
+    let result = content;
+    let bytesRemoved = 0;
+    const originalLength = content.length;
+
+    for (const pattern of this.patterns) {
+      pattern.pattern.lastIndex = 0;
+      const matches = result.match(pattern.pattern);
+      if (!matches) continue;
+
+      stats.totalMatches += matches.length;
+      stats.matchesByPattern[pattern.name] = matches.length;
+
+      if (this.debug) {
+        getLogger().info(
+          `[SecretSanitizer] Matched ${pattern.name}: ${matches.length} occurrence(s)`,
+        );
+      }
+
+      const lengthBefore = result.length;
+      if (typeof pattern.redaction === "function") {
+        // Evaluate the redaction per-match from each match's OWN text. Passing a
+        // precomputed string (derived from matches[0]) re-used the first match's
+        // scheme/host for every later match, and any `$&`/`$1` in a matched host
+        // re-injected the plaintext via String.replace's pattern semantics.
+        const fn = pattern.redaction;
+        result = result.replace(pattern.pattern, (match) => fn(match));
+      } else {
+        // String redactions intentionally keep `$1` back-reference semantics.
+        result = result.replace(pattern.pattern, pattern.redaction);
+      }
+      // Accumulate per-pattern shrinkage, clamped at 0: a redaction marker longer
+      // than the matched secret counts as 0, never as negative bytesRemoved.
+      bytesRemoved += Math.max(0, lengthBefore - result.length);
+    }
+
+    stats.bytesRemoved = bytesRemoved;
+
+    // Apply length cap
+    if (result.length > this.maxLength) {
+      const lengthBeforeTruncation = result.length;
+      result = result.substring(0, this.maxLength) + TRUNCATION_MARKER;
+      // Count the source bytes actually dropped by truncation — the appended
+      // marker is added output, not removed bytes.
+      stats.bytesRemoved += lengthBeforeTruncation - this.maxLength;
+    }
+
+    return {
+      content: result,
+      wasSanitized: stats.totalMatches > 0 || originalLength > this.maxLength,
+      stats,
+    };
   }
 
   containsSecrets(content: string): boolean {

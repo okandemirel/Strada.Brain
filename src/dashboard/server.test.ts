@@ -594,6 +594,71 @@ describe("DashboardServer", () => {
     }));
   });
 
+  it("includes catalog freshness metadata on /api/providers/models without breaking name/models", async () => {
+    const metrics = new MetricsCollector();
+    server = new DashboardServer(0, metrics, () => undefined);
+    server.registerExtendedServices({
+      providerManager: {
+        listAvailable: () => [
+          { name: "kimi", label: "Kimi", defaultModel: "kimi-for-coding", configured: true, models: ["kimi-for-coding"] },
+        ],
+        listAvailableWithModels: async () => [
+          { name: "kimi", label: "Kimi", defaultModel: "kimi-for-coding", configured: true, models: ["kimi-for-coding", "kimi-fast"] },
+        ],
+        getActiveInfo: () => null,
+        setPreference: async () => {},
+        getModelCatalogFreshness: (name: string) =>
+          name === "kimi" ? { stale: false, fetchedAt: 1700000000000 } : { stale: true },
+      },
+    });
+    if (!await safeStart(server)) return;
+
+    const addr = (server as unknown as { server: { address: () => { port: number } } }).server.address();
+    if (!addr || typeof addr === "string") return;
+
+    const res = await fetch(`http://localhost:${addr.port}/api/providers/models`);
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.providers[0]).toEqual(expect.objectContaining({
+      name: "kimi",
+      models: ["kimi-for-coding", "kimi-fast"],
+      stale: false,
+      fetchedAt: 1700000000000,
+    }));
+  });
+
+  it("refreshes the catalog through POST /api/providers/models/refresh", async () => {
+    const metrics = new MetricsCollector();
+    server = new DashboardServer(0, metrics, () => undefined);
+    const refreshCatalog = vi.fn().mockResolvedValue({
+      modelsUpdated: 7,
+      source: "litellm",
+      errors: [],
+    });
+    server.registerExtendedServices({
+      providerManager: {
+        listAvailable: () => [],
+        getActiveInfo: () => null,
+        setPreference: async () => {},
+        refreshCatalog,
+      },
+    });
+    if (!await safeStart(server)) return;
+
+    const addr = (server as unknown as { server: { address: () => { port: number } } }).server.address();
+    if (!addr || typeof addr === "string") return;
+
+    const res = await fetch(`http://localhost:${addr.port}/api/providers/models/refresh`, {
+      method: "POST",
+      headers: { Origin: `http://localhost:${addr.port}` },
+    });
+    expect(res.status).toBe(200);
+    expect(refreshCatalog).toHaveBeenCalledTimes(1);
+    const data = await res.json();
+    expect(data.success).toBe(true);
+    expect(data.result).toEqual(expect.objectContaining({ modelsUpdated: 7, source: "litellm" }));
+  });
+
   it("returns runtime execution traces alongside routing decisions", async () => {
     const metrics = new MetricsCollector();
     server = new DashboardServer(0, metrics, () => undefined);
@@ -1129,6 +1194,36 @@ describe("DashboardServer", () => {
       expect(data.identity.totalMessages).toBe(42);
       expect(data.identity.totalTasks).toBe(10);
       expect(data.identity.cleanShutdown).toBe(true);
+    });
+
+    it("preserves heartbeatLoop/registry on a later partial setDaemonContext call", async () => {
+      const metrics = new MetricsCollector();
+      server = new DashboardServer(0, metrics, () => undefined);
+
+      const mockIdentity = createMockIdentityManager();
+      const mockLoop = createMockHeartbeatLoop();
+      const mockRegistry = createMockTriggerRegistry();
+
+      // First call wires the daemon heartbeat loop + registry.
+      server.setDaemonContext({
+        heartbeatLoop: mockLoop as never,
+        registry: mockRegistry as never,
+      });
+      // Second (non-daemon) call wires only the identity manager — it must NOT
+      // null out the previously-set heartbeat loop / registry.
+      server.setDaemonContext({ identityManager: mockIdentity as never });
+      if (!await safeStart(server)) return;
+
+      const port = getPort(server);
+      const res = await fetch(`http://localhost:${port}/api/daemon`);
+      expect(res.status).toBe(200);
+
+      const data = await res.json();
+      // identity merged in by the second call …
+      expect(data.identity).toBeDefined();
+      expect(data.identity.agentName).toBe("TestAgent");
+      // … and the heartbeat-loop-backed daemon status survived (not nulled).
+      expect(data.triggerHistory).toBeDefined();
     });
 
     it("includes capabilityManifest string when set", async () => {

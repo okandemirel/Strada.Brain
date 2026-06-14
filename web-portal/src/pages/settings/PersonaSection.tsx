@@ -4,11 +4,12 @@ import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { usePersonality } from '../../hooks/use-api'
 import { useWS } from '../../hooks/useWS'
+import { PageError } from '../../components/ui/page-error'
 
 export default function PersonaSection() {
   const { t } = useTranslation('settings')
   const { profileId } = useWS()
-  const { data, isLoading } = usePersonality(profileId)
+  const { data, isLoading, error } = usePersonality(profileId)
   const queryClient = useQueryClient()
   const [switching, setSwitching] = useState<string | null>(null)
 
@@ -29,6 +30,10 @@ export default function PersonaSection() {
     } finally {
       setSwitching(null)
     }
+  }
+
+  if (error) {
+    return <PageError title={t('section.errorTitle')} message={error instanceof Error ? error.message : t('section.errorFallback')} />
   }
 
   if (isLoading || !data) {

@@ -2,11 +2,15 @@
  * Microsoft Teams Channel - Bot Framework adapter
  *
  * Requires: botframework-connector, botbuilder (npm install botbuilder)
- * Config: TEAMS_APP_ID, TEAMS_APP_PASSWORD, TEAMS_ALLOWED_USER_IDS, TEAMS_ALLOW_OPEN_ACCESS
+ * Config: TEAMS_APP_ID, TEAMS_APP_PASSWORD, TEAMS_APP_TYPE (MultiTenant|SingleTenant),
+ *         TEAMS_APP_TENANT_ID, TEAMS_ALLOWED_USER_IDS, TEAMS_ALLOW_OPEN_ACCESS
  */
 
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import type { IChannelAdapter } from "../channel.interface.js";
 import { limitIncomingText, type Attachment, type IncomingMessage } from "../channel-messages.interface.js";
+import { chunkText } from "../chunk-text.js";
 import { getLogger } from "../../utils/logger.js";
 import { isAllowedBySingleIdPolicy } from "../../security/access-policy.js";
 import {
@@ -17,6 +21,23 @@ import {
 } from "../../utils/media-processor.js";
 
 type MessageHandler = (msg: IncomingMessage) => Promise<void>;
+
+/**
+ * Conservative per-message character cap for Teams / Bot Framework. Activities
+ * have a payload limit (~28 KB) and channels truncate or reject long text, so we
+ * split well under that to leave headroom for UTF-16/UTF-8 expansion and markup.
+ */
+const TEAMS_MAX_MESSAGE_LENGTH = 18_000;
+
+/** Bot Framework app tenancy model. Single-tenant bots need their tenant id. */
+type TeamsAppType = "MultiTenant" | "SingleTenant";
+
+/**
+ * On-disk location for persisted conversation references. The in-memory map is
+ * lost on restart, which silently drops any reply produced after a restart; we
+ * mirror it to a tiny JSON file under `.strada` so proactive delivery survives.
+ */
+const CONVERSATION_REFERENCES_FILE = join(".strada", "teams-conversation-references.json");
 
 /** Callback for feedback reactions (thumbs up/down) from channel adapters. */
 type FeedbackReactionCallback = (
@@ -31,9 +52,18 @@ export class TeamsChannel implements IChannelAdapter {
 
   private handler: MessageHandler | null = null;
   private adapter: BotAdapterLike | null = null;
+  private turnContextClass: TurnContextStaticLike | null = null;
   private server: import("node:http").Server | null = null;
   private healthy = false;
   private activeTurnContexts = new Map<string, TurnContextLike>();
+  /**
+   * Persisted Bot Framework conversation references keyed by chatId. Unlike the
+   * ephemeral per-request turn context (deleted when the inbound handler
+   * returns), these survive after the request completes so asynchronous,
+   * fire-and-forget agent replies can be delivered proactively via
+   * adapter.continueConversationAsync.
+   */
+  private readonly conversationReferences = new Map<string, ConversationReferenceLike>();
   private feedbackReactionCallback: FeedbackReactionCallback | null = null;
   /** Per-conversationId applied instinct IDs for feedback attribution. */
   private readonly appliedInstinctIds = new Map<string, string[]>();
@@ -45,6 +75,8 @@ export class TeamsChannel implements IChannelAdapter {
     private readonly allowedUserIds: readonly string[] = [],
     private readonly listenHost: string = "127.0.0.1",
     private readonly allowOpenAccess: boolean = false,
+    private readonly appType: TeamsAppType = "MultiTenant",
+    private readonly appTenantId?: string,
   ) {}
 
   onMessage(handler: MessageHandler): void {
@@ -67,21 +99,66 @@ export class TeamsChannel implements IChannelAdapter {
 
   async connect(): Promise<void> {
     const logger = getLogger();
-    const { CloudAdapter, ConfigurationBotFrameworkAuthentication } =
+    const { CloudAdapter, ConfigurationBotFrameworkAuthentication, TurnContext } =
       await import("botbuilder" as string);
 
+    // Single-tenant bots are issued tokens scoped to their home tenant, so the
+    // adapter must be told the tenancy + tenant id or proactive
+    // (continueConversationAsync) sends fail. Multi-tenant remains the default.
     const botFrameworkAuth = new ConfigurationBotFrameworkAuthentication({
       MicrosoftAppId: this.appId,
       MicrosoftAppPassword: this.appPassword,
-      MicrosoftAppType: "MultiTenant",
+      MicrosoftAppType: this.appType,
+      ...(this.appTenantId ? { MicrosoftAppTenantId: this.appTenantId } : {}),
     });
 
     this.adapter = new CloudAdapter(botFrameworkAuth) as unknown as BotAdapterLike;
+    this.turnContextClass = TurnContext as unknown as TurnContextStaticLike;
+
+    // Restore conversation references persisted before the last shutdown so a
+    // reply produced after a restart can still be delivered proactively.
+    this.restoreConversationReferences();
 
     // Create HTTP server for Bot Framework messages
     const { createServer } = await import("node:http");
-    this.server = createServer(async (req, res) => {
-      if (req.method === "POST" && req.url === "/api/messages") {
+    this.server = createServer((req, res) => {
+      void this.handleRequest(req, res);
+    });
+
+    // net.Server.listen reports bind failures (EADDRINUSE/EACCES) via an 'error'
+    // event, NOT the listening callback. Without a one-shot error listener the
+    // promise would never settle (hanging boot) or surface as an
+    // unhandledRejection. Reject so the caller can fail fast.
+    await new Promise<void>((resolve, reject) => {
+      const server = this.server!;
+      const onError = (err: Error): void => {
+        server.removeListener("error", onError);
+        reject(err);
+      };
+      server.once("error", onError);
+      server.listen(this.port, this.listenHost, () => {
+        server.removeListener("error", onError);
+        resolve();
+      });
+    });
+
+    this.healthy = true;
+    logger.info("Teams channel listening", { port: this.port, host: this.listenHost });
+  }
+
+  /**
+   * Handle one inbound Bot Framework HTTP request. A throw from adapter.process
+   * (auth/JWT verification failure, malformed activity) on the public
+   * /api/messages endpoint must NOT escape: an unhandledRejection here trips the
+   * global handler in src/index.ts and shuts the whole daemon down (remote DoS).
+   * Catch it, log, and always close the socket.
+   */
+  private async handleRequest(
+    req: import("node:http").IncomingMessage,
+    res: import("node:http").ServerResponse,
+  ): Promise<void> {
+    if (req.method === "POST" && req.url === "/api/messages") {
+      try {
         await (this.adapter as BotAdapterLike).process(req, res, async (context: TurnContextLike) => {
           if (context.activity.type === "message") {
             if (!this.isAllowedInboundUser(context.activity.from.id)) {
@@ -89,6 +166,11 @@ export class TeamsChannel implements IChannelAdapter {
             }
 
             const chatId = context.activity.conversation.id;
+
+            // Persist a conversation reference so asynchronous (fire-and-forget)
+            // agent replies can be delivered proactively after this request's
+            // ephemeral turn context has been torn down.
+            this.captureConversationReference(chatId, context.activity);
 
             // Detect feedback before routing to the normal handler
             const feedbackType = context.activity.text
@@ -132,23 +214,25 @@ export class TeamsChannel implements IChannelAdapter {
             }
           }
         });
-      } else {
-        res.writeHead(404);
+      } catch (err) {
+        getLogger().error("Teams request processing failed", {
+          error: err instanceof Error ? err.message : String(err),
+        });
+        if (!res.headersSent) {
+          res.writeHead(500);
+        }
         res.end();
       }
-    });
-
-    await new Promise<void>((resolve) => {
-      this.server!.listen(this.port, this.listenHost, () => resolve());
-    });
-
-    this.healthy = true;
-    logger.info("Teams channel listening", { port: this.port, host: this.listenHost });
+    } else {
+      res.writeHead(404);
+      res.end();
+    }
   }
 
   async disconnect(): Promise<void> {
     this.healthy = false;
     this.activeTurnContexts.clear();
+    this.conversationReferences.clear();
     await new Promise<void>((resolve) => {
       if (this.server) {
         this.server.close(() => resolve());
@@ -163,16 +247,130 @@ export class TeamsChannel implements IChannelAdapter {
   }
 
   async sendText(chatId: string, text: string): Promise<void> {
-    const context = this.activeTurnContexts.get(chatId);
-    if (!context) {
-      throw new Error(`No active Teams turn context for conversation: ${chatId}`);
-    }
-
-    await context.sendActivity(text);
+    // Plain-text intent: render verbatim so user/tool-derived content cannot
+    // inject Teams markdown/HTML (Bot Framework defaults text to markdown).
+    await this.deliver(chatId, text, "plain");
   }
 
   async sendMarkdown(chatId: string, markdown: string): Promise<void> {
-    await this.sendText(chatId, markdown);
+    // Markdown intent: leave Bot Framework's default markdown rendering in place.
+    await this.deliver(chatId, markdown, "markdown");
+  }
+
+  /**
+   * Split `body` into provider-safe chunks and deliver each non-empty piece.
+   *
+   * Outbound delivery is stateless: it prefers the synchronous turn context if
+   * one is still active for the chat, otherwise it sends proactively via the
+   * persisted conversation reference. This is what makes asynchronous,
+   * fire-and-forget agent replies reach the user — the ephemeral turn context is
+   * already gone by the time the answer is ready.
+   */
+  private async deliver(
+    chatId: string,
+    body: string,
+    format: "plain" | "markdown",
+  ): Promise<void> {
+    const chunks = chunkText(body, TEAMS_MAX_MESSAGE_LENGTH);
+    if (chunks.length === 0) return; // nothing to send (empty/whitespace input)
+
+    const context = this.activeTurnContexts.get(chatId);
+    const reference = this.conversationReferences.get(chatId);
+
+    if (!context && !reference) {
+      // Make the dropped delivery loud: with neither a live turn context nor a
+      // persisted reference there is no way to reach the user, so surface it
+      // clearly instead of letting the reply vanish silently.
+      getLogger().warn("Teams cannot deliver reply: no active turn context or stored conversation reference", {
+        chatId,
+      });
+      throw new Error(`No active Teams conversation for: ${chatId}`);
+    }
+
+    for (const chunk of chunks) {
+      const activity: OutgoingActivityLike = {
+        type: "message",
+        text: chunk,
+        textFormat: format,
+      };
+
+      if (context) {
+        // Fast path: a turn context is still active for this chat.
+        await context.sendActivity(activity);
+      } else {
+        // Proactive path: deliver via the persisted conversation reference.
+        await this.adapter!.continueConversationAsync(
+          this.appId,
+          reference!,
+          async (proactive) => {
+            await proactive.sendActivity(activity);
+          },
+        );
+      }
+    }
+  }
+
+  /** Capture and persist a Bot Framework conversation reference for a chat. */
+  private captureConversationReference(chatId: string, activity: TeamsActivityLike): void {
+    if (!this.turnContextClass) return;
+    try {
+      const reference = this.turnContextClass.getConversationReference(activity);
+      this.conversationReferences.set(chatId, reference);
+      // Mirror to disk so the reference survives a restart and a later
+      // fire-and-forget reply can still be delivered proactively.
+      this.persistConversationReferences();
+    } catch (err) {
+      getLogger().warn("Teams failed to capture conversation reference", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  /**
+   * Persist the in-memory conversation references to a small JSON file under
+   * `.strada`. Best-effort: a write failure must not break inbound handling, so
+   * it is logged and swallowed. Bot Framework conversation references are plain
+   * JSON-serialisable objects, so a JSON round-trip is lossless.
+   */
+  private persistConversationReferences(): void {
+    try {
+      mkdirSync(dirname(CONVERSATION_REFERENCES_FILE), { recursive: true });
+      const serialisable = Object.fromEntries(this.conversationReferences);
+      writeFileSync(CONVERSATION_REFERENCES_FILE, JSON.stringify(serialisable), "utf8");
+    } catch (err) {
+      getLogger().warn("Teams failed to persist conversation references", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  /**
+   * Restore conversation references from disk into the in-memory map. Best-effort:
+   * a missing or malformed file is treated as "no references yet" and logged at
+   * debug level so a fresh install does not warn.
+   */
+  private restoreConversationReferences(): void {
+    let raw: string;
+    try {
+      raw = readFileSync(CONVERSATION_REFERENCES_FILE, "utf8");
+    } catch {
+      // No persisted file yet (first run / never received a message) — nothing to restore.
+      return;
+    }
+    try {
+      const parsed = JSON.parse(raw) as Record<string, ConversationReferenceLike>;
+      if (parsed && typeof parsed === "object") {
+        for (const [chatId, reference] of Object.entries(parsed)) {
+          if (reference && typeof reference === "object") {
+            this.conversationReferences.set(chatId, reference);
+          }
+        }
+      }
+    } catch (err) {
+      getLogger().warn("Teams failed to restore conversation references", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   private isAllowedInboundUser(userId: string): boolean {
@@ -360,17 +558,39 @@ export class TeamsChannel implements IChannelAdapter {
 }
 
 // Minimal type stubs
+
+/** Outgoing Bot Framework activity payload (subset we set). */
+interface OutgoingActivityLike {
+  type: string;
+  text: string;
+  textFormat: "plain" | "markdown";
+}
+
+/** Opaque Bot Framework conversation reference for proactive messaging. */
+type ConversationReferenceLike = Record<string, unknown>;
+
 interface BotAdapterLike {
   process(
     req: import("node:http").IncomingMessage,
     res: import("node:http").ServerResponse,
     logic: (context: TurnContextLike) => Promise<void>,
   ): Promise<void>;
+  /** Proactively continue a conversation from a stored reference. */
+  continueConversationAsync(
+    botAppId: string,
+    reference: ConversationReferenceLike,
+    logic: (context: TurnContextLike) => Promise<void>,
+  ): Promise<void>;
+}
+
+/** Static surface of botbuilder's TurnContext class that we rely on. */
+interface TurnContextStaticLike {
+  getConversationReference(activity: TeamsActivityLike): ConversationReferenceLike;
 }
 
 interface TurnContextLike {
   activity: TeamsActivityLike;
-  sendActivity(text: string): Promise<void>;
+  sendActivity(activityOrText: string | OutgoingActivityLike): Promise<void>;
 }
 
 interface TeamsActivityLike {

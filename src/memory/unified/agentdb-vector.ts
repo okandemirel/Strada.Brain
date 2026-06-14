@@ -227,6 +227,9 @@ export async function rebuildHnswIndex(ctx: AgentDBVectorContext): Promise<void>
       metric: "cosine",
       quantization: ctx.config.quantizationType,
     });
+    // Gate the store's background compaction behind the shared write mutex (M1).
+    // Optional: best-effort wiring, must not abort rebuild if the store lacks it.
+    ctx.hnswStore.setWriteSerializer?.(ctx.writeMutex);
 
     // Load entries from SQLite (entries map may be empty at this point during init)
     const hadEntries = ctx.entries.size > 0;

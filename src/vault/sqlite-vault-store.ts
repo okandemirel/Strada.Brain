@@ -39,6 +39,7 @@ export class SqliteVaultStore {
   private _stmtListEdgesAll: Database.Statement | null = null;
   private _stmtDeleteEdgesByPath: Database.Statement | null = null;
   private _stmtUpsertWikilink: Database.Statement | null = null;
+  private _stmtUpsertWikilinkResolved: Database.Statement | null = null;
   private _stmtListWikilinksAll: Database.Statement | null = null;
   private _stmtListWikilinksTo: Database.Statement | null = null;
   private _stmtMarkWikilinkResolved: Database.Statement | null = null;
@@ -63,6 +64,13 @@ export class SqliteVaultStore {
   migrate(): void {
     const ddl = readFileSync(SCHEMA_PATH, 'utf8');
     applyDdl(this.db, ddl);
+    // Additive migration for pre-existing DBs: schema.sql uses CREATE TABLE IF
+    // NOT EXISTS, so a new column isn't added to an already-created table. Guard
+    // with PRAGMA so this is idempotent (new DBs already have the column).
+    const wikilinkCols = this.db.prepare('PRAGMA table_info(vault_wikilinks)').all() as { name: string }[];
+    if (!wikilinkCols.some((c) => c.name === 'original_target')) {
+      this.db.prepare('ALTER TABLE vault_wikilinks ADD COLUMN original_target TEXT').run();
+    }
     // Prepare cached statements now that tables exist.
     this._stmtUpsertFile = this.db.prepare(`
       INSERT INTO vault_files (path, blob_hash, mtime_ms, size, lang, kind, indexed_at)
@@ -126,6 +134,16 @@ export class SqliteVaultStore {
       INSERT INTO vault_wikilinks (from_note, target, resolved)
       VALUES (@fromNote, @target, @resolved)
       ON CONFLICT(from_note, target) DO UPDATE SET resolved = excluded.resolved
+    `);
+    // Insert a resolved row keyed by the resolved path, preserving the raw
+    // authored token in original_target. COALESCE keeps a previously-stored
+    // token on conflict (don't clobber it with a later resolved-path token).
+    this._stmtUpsertWikilinkResolved = this.db.prepare(`
+      INSERT INTO vault_wikilinks (from_note, target, original_target, resolved)
+      VALUES (@fromNote, @target, @originalTarget, 1)
+      ON CONFLICT(from_note, target) DO UPDATE SET
+        original_target = COALESCE(vault_wikilinks.original_target, excluded.original_target),
+        resolved = 1
     `);
     this._stmtListWikilinksAll = this.db.prepare('SELECT * FROM vault_wikilinks');
     this._stmtListWikilinksTo = this.db.prepare('SELECT * FROM vault_wikilinks WHERE target = ?');
@@ -224,6 +242,10 @@ export class SqliteVaultStore {
     return (this._stmtChunkCount!.get() as { n: number }).n;
   }
 
+  symbolCount(): number {
+    return (this.db.prepare('SELECT COUNT(*) AS n FROM vault_symbols').get() as { n: number }).n;
+  }
+
   /**
    * Full-text search via FTS5 BM25.
    * @returns hits sorted by relevance, with `score > 0` where higher = more relevant
@@ -286,6 +308,7 @@ export class SqliteVaultStore {
       fromNote: r['from_note'] as string,
       target: r['target'] as string,
       resolved: (r['resolved'] as number) === 1,
+      originalTarget: (r['original_target'] as string | null) ?? null,
     }));
   }
 
@@ -295,6 +318,7 @@ export class SqliteVaultStore {
       fromNote: r['from_note'] as string,
       target: r['target'] as string,
       resolved: (r['resolved'] as number) === 1,
+      originalTarget: (r['original_target'] as string | null) ?? null,
     }));
   }
 
@@ -302,10 +326,15 @@ export class SqliteVaultStore {
     this._stmtMarkWikilinkResolved!.run(fromNote, target);
   }
 
-  updateWikilinkTarget(fromNote: string, oldTarget: string, newTarget: string): void {
+  /**
+   * Re-key a wikilink row from `oldTarget` to the resolved `newTarget`, storing
+   * `originalToken` (the raw authored token, e.g. "B") in original_target so a
+   * later target rename can re-resolve from it instead of the now-stale path.
+   */
+  updateWikilinkTarget(fromNote: string, oldTarget: string, newTarget: string, originalToken: string): void {
     const txn = this.db.transaction(() => {
       this._stmtDeleteWikilink!.run(fromNote, oldTarget);
-      this._stmtUpsertWikilink!.run({ fromNote, target: newTarget, resolved: 1 });
+      this._stmtUpsertWikilinkResolved!.run({ fromNote, target: newTarget, originalTarget: originalToken });
     });
     txn();
   }

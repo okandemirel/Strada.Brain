@@ -103,6 +103,30 @@ describe("DigestReporter.sendDigest", () => {
     expect(markdown.length).toBeGreaterThan(0);
   });
 
+  it("delivers to a chat bound after construction via setChatId", async () => {
+    const sender = makeMockChannelSender();
+    // Constructed without a chatId, exactly as bootstrap does (the chat target
+    // is bound on the first inbound message).
+    const deps = makeDeps({
+      channelSender: sender,
+      chatId: undefined,
+      channelType: "web",
+    });
+
+    const reporter = new DigestReporter(deps);
+
+    // Before binding, delivery is skipped — there is no chat target yet.
+    await reporter.sendDigest();
+    expect(sender.sendMarkdown).not.toHaveBeenCalled();
+
+    // Once the first inbound message wires the chat id, digests deliver to it.
+    reporter.setChatId("chat-bound");
+    await reporter.sendDigest();
+
+    expect(sender.sendMarkdown).toHaveBeenCalledTimes(1);
+    expect((sender.sendMarkdown as ReturnType<typeof vi.fn>).mock.calls[0][0]).toBe("chat-bound");
+  });
+
   it("updates digest_state with timestamp and counters after sending", async () => {
     const sender = makeMockChannelSender();
     const deps = makeDeps({

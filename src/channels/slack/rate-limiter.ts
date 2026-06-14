@@ -107,7 +107,12 @@ export class SlackRateLimiter {
    */
   async acquire(method: string, tier: 1 | 2 | 3 | 4 = 1): Promise<void> {
     return new Promise((resolve, reject) => {
+      const entry = { cancelled: false };
       const timeout = setTimeout(() => {
+        // Mark cancelled so a still-queued closure is skipped by processQueue —
+        // otherwise the timed-out (already-rejected) request later phantom-consumes
+        // a real rate-limit slot via recordRequest.
+        entry.cancelled = true;
         reject(new Error(`Rate limit acquisition timeout for ${method}`));
       }, 30000); // 30 second timeout
 
@@ -121,6 +126,9 @@ export class SlackRateLimiter {
           const queue = this.queues.get(tier)!;
 
           queue.push(() => {
+            if (entry.cancelled) {
+              return;
+            }
             clearTimeout(timeout);
             this.recordRequest(method, tier);
             resolve();

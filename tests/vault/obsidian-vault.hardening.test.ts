@@ -116,6 +116,29 @@ describe('ObsidianVault — hardening (P0/P1/P2)', () => {
     });
   });
 
+  // ─────────────── Sec: write errors must not leak absolute vault paths ───────────────
+  describe('Sec: write errors are path-redacted before reaching callers', () => {
+    it('redactPathsInMessage rewrites the vault root to <vault>', () => {
+      const leak = `EACCES: permission denied, open '${join(dir, 'Notes', 'x.md')}'`;
+      const redacted = redactPathsInMessage(leak, dir);
+      expect(redacted).toContain('<vault>');
+      expect(redacted).not.toContain(dir);
+    });
+
+    it('the vault redactError helper scrubs the absolute path from a write error', async () => {
+      writeFileSync(join(dir, 'x.md'), '# x\n\nbody');
+      ({ vault, store: vectorStore } = newVault(dir));
+      await vault.init();
+
+      // writeFile/writeNote/appendToHeading all funnel thrown FS/REST errors
+      // through this helper; verify it redacts the absolute path it embeds.
+      const leaky = new Error(`EACCES: permission denied, open '${join(dir, 'Notes', 'x.md')}'`);
+      const redacted = (vault as unknown as { redactError(e: unknown): Error }).redactError(leaky);
+      expect(redacted.message).toContain('<vault>');
+      expect(redacted.message).not.toContain(dir);
+    });
+  });
+
   // ─────────────── P1: reindexFile transactional rollback ───────────────
   describe('P1: reindex SQL transaction is atomic', () => {
     it('runReindexTxn rollback on bad chunk leaves chunks/files tables untouched', async () => {
@@ -243,6 +266,99 @@ describe('ObsidianVault — hardening (P0/P1/P2)', () => {
       // The pre-existing graph.canvas file must still be intact.
       const afterBytes = readFileSync(canvasPath, 'utf8');
       expect(afterBytes).toBe(beforeBytes);
+    });
+
+    it('self-heals on a later no-change sync once the tmp path is unblocked (canvasDirty latch)', async () => {
+      writeFileSync(join(dir, 'X.md'), '# X');
+      ({ vault, store: vectorStore } = newVault(dir));
+      await vault.init();
+
+      const canvasPath = join(dir, '.strada/vault/graph.canvas');
+      const tmpPath = `${canvasPath}.tmp`;
+
+      // Block the tmp path so the next canvas regen fails.
+      mkdirSync(tmpPath, { recursive: true });
+      writeFileSync(join(tmpPath, 'block.txt'), 'blocker');
+
+      // Edit a file → sync indexes it but the canvas regen fails (latch set).
+      writeFileSync(join(dir, 'Y.md'), '# Y');
+      const failed = await vault.sync();
+      expect(failed.canvas?.ok).toBe(false);
+      const staleBytes = readFileSync(canvasPath, 'utf8');
+
+      // Unblock the tmp path but do NOT touch any source file: with the old
+      // code the count===0 sync skips regen and the canvas stays stale forever.
+      rmSync(tmpPath, { recursive: true, force: true });
+      const healed = await vault.sync();
+
+      expect(healed.changed).toBe(0);        // no files changed this sync
+      expect(healed.canvas?.ok).toBe(true);  // dirty latch forced a regen retry
+      const healedBytes = readFileSync(canvasPath, 'utf8');
+      expect(healedBytes).not.toBe(staleBytes); // canvas actually refreshed
+    });
+  });
+
+  // ─────────────── wikilink re-resolution after a target rename ───────────────
+  describe('wikilink re-resolution: a renamed target re-points the link via the preserved token', () => {
+    it('moves [[B]] from B.md to sub/B.md after the target is relocated', async () => {
+      writeFileSync(join(dir, 'A.md'), '# A\n\nlink to [[B]] here');
+      writeFileSync(join(dir, 'B.md'), '# B\n\noriginal location');
+      ({ vault, store: vectorStore } = newVault(dir));
+      await vault.init();
+
+      // Initially [[B]] resolves to B.md, with the raw token 'B' preserved.
+      const before = await vault.listBacklinks?.('B.md');
+      const link = before?.wikilinks.find((w) => w.fromNote === 'A.md');
+      expect(link?.resolved).toBe(true);
+      expect(link?.target).toBe('B.md');
+      expect(link?.originalTarget).toBe('B');
+
+      // Relocate the target: delete B.md, create sub/B.md (basename 'B' unchanged).
+      rmSync(join(dir, 'B.md'));
+      mkdirSync(join(dir, 'sub'), { recursive: true });
+      writeFileSync(join(dir, 'sub', 'B.md'), '# B\n\nnew location');
+      await vault.sync();
+
+      // The link re-resolved to sub/B.md using the preserved token — impossible
+      // with the old code, which overwrote the token with the resolved path.
+      expect((await vault.listBacklinks?.('B.md'))?.wikilinks.length ?? 0).toBe(0);
+      const after = await vault.listBacklinks?.('sub/B.md');
+      const moved = after?.wikilinks.find((w) => w.fromNote === 'A.md');
+      expect(moved?.resolved).toBe(true);
+      expect(moved?.target).toBe('sub/B.md');
+      expect(moved?.originalTarget).toBe('B');
+    });
+  });
+
+  // ─────────────── deleteNote: incremental index cleanup ───────────────
+  describe('deleteNote removes index rows + HNSW vectors without a full sync', () => {
+    it('drops the deleted note and its vectors immediately, and a later sync finds nothing to prune', async () => {
+      writeFileSync(join(dir, 'A.md'), '# A\n\nalpha body content for chunking');
+      writeFileSync(join(dir, 'B.md'), '# B\n\nbeta body content for chunking');
+      ({ vault, store: vectorStore } = newVault(dir));
+      await vault.init();
+
+      expect(vault.listFiles().length).toBe(2);
+      const sizeBefore = vectorStore.items.size;
+      expect(sizeBefore).toBeGreaterThan(0);
+
+      // REST DELETE succeeds (204 No Content). Also remove A.md from disk so a
+      // later sync wouldn't re-prune it and mask the incremental cleanup.
+      fetchSpy.mockResolvedValue(new Response(null, { status: 204 }) as unknown as Response);
+      rmSync(join(dir, 'A.md'));
+
+      await vault.deleteNote('A.md');
+
+      // Immediately, with NO sync: A.md is gone from the index and its vectors removed.
+      expect(vault.listFiles().some((f) => f.path === 'A.md')).toBe(false);
+      const stats = await vault.stats();
+      expect(stats.fileCount).toBe(1);
+      expect(vectorStore.items.size).toBeLessThan(sizeBefore);
+
+      // A follow-up sync must find nothing to prune — delete already cleaned up.
+      const afterDeleteSize = vectorStore.items.size;
+      await vault.sync();
+      expect(vectorStore.items.size).toBe(afterDeleteSize);
     });
   });
 

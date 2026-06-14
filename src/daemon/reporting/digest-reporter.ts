@@ -66,9 +66,23 @@ export interface DigestReporterDeps {
 export class DigestReporter {
   private readonly deps: DigestReporterDeps;
   private cronJob: Cron | null = null;
+  // Mutable: set on the first inbound message via setChatId() (bootstrap wires
+  // this from the channel.onMessage handler). Constructed undefined — until set,
+  // scheduled digests have no chat target and log a skip instead of delivering.
+  private chatId?: string;
 
   constructor(deps: DigestReporterDeps) {
     this.deps = deps;
+    this.chatId = deps.chatId;
+  }
+
+  /**
+   * Set the chat id used for digest delivery. Called on the first inbound
+   * message so scheduled digests can reach the user (mirrors
+   * NotificationRouter.setChatId).
+   */
+  setChatId(id: string): void {
+    this.chatId = id;
   }
 
   /**
@@ -127,13 +141,13 @@ export class DigestReporter {
 
     // 4. Deliver via channel
     let truncated = false;
-    if (this.deps.channelSender && this.deps.chatId) {
+    if (this.deps.channelSender && this.chatId) {
       const channelType = this.deps.channelType ?? "web";
       const finalMarkdown = truncateForChannel(markdown, channelType, dashboardUrl);
       truncated = finalMarkdown.length < markdown.length;
 
       try {
-        await this.deps.channelSender.sendMarkdown(this.deps.chatId, finalMarkdown);
+        await this.deps.channelSender.sendMarkdown(this.chatId, finalMarkdown);
       } catch (err) {
         this.deps.logger.error("Failed to send digest", { error: err });
       }

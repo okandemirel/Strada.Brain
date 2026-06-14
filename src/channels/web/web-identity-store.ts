@@ -58,6 +58,19 @@ export class WebIdentityStore {
     return { profileId, profileToken };
   }
 
+  /**
+   * True if a profile is already registered (has a token). Used to refuse
+   * re-minting a token for an already-claimed profileId from an unauthenticated
+   * request (which the blind upsert in issue() would otherwise allow).
+   */
+  has(profileId: string): boolean {
+    const normalized = profileId.trim();
+    if (!normalized) {
+      return false;
+    }
+    return this.stmtGet.get(normalized) !== undefined;
+  }
+
   verify(profileId: string, profileToken: string): boolean {
     const normalizedProfileId = profileId.trim();
     const normalizedProfileToken = profileToken.trim();

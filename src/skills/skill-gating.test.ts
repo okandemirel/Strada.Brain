@@ -197,4 +197,29 @@ describe("checkGates", () => {
       delete process.env["SKILL_ALL_MET"];
     }
   });
+
+  // -------------------------------------------------------------------------
+  // Skill dependencies
+  // -------------------------------------------------------------------------
+
+  it("does not block a skill dependency when active skills are not tracked", async () => {
+    // Regression: previously `!activeSkillNames?.has(x)` was true when the set
+    // was undefined, so every skill with requires.skills was permanently gated.
+    const requires: SkillRequirements = { skills: ["dep-skill"] };
+    const result = await checkGates(requires);
+    expect(result.passed).toBe(true);
+  });
+
+  it("fails a skill dependency only when a tracked active-skill set lacks it", async () => {
+    const requires: SkillRequirements = { skills: ["dep-skill"] };
+    const result = await checkGates(requires, undefined, new Set(["other-skill"]));
+    expect(result.passed).toBe(false);
+    expect(result.reasons.some((r) => r.includes("dep-skill"))).toBe(true);
+  });
+
+  it("passes a skill dependency present in the tracked active-skill set", async () => {
+    const requires: SkillRequirements = { skills: ["dep-skill"] };
+    const result = await checkGates(requires, undefined, new Set(["dep-skill"]));
+    expect(result.passed).toBe(true);
+  });
 });

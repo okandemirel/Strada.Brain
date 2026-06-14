@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 import { useAutonomousStatus, useBootReport } from '../../hooks/use-api'
 import { useWS } from '../../hooks/useWS'
 import { resolveSettingsIdentity } from '../settings-identity'
+import { PageError } from '../../components/ui/page-error'
 
 const DURATION_OPTIONS = [
   { value: 1, label: '1h' },
@@ -34,7 +35,7 @@ export default function AdvancedSection() {
   const { t } = useTranslation('settings')
   const { sessionId, profileId } = useWS()
   const identity = resolveSettingsIdentity(sessionId, profileId)
-  const { data: autonomousData } = useAutonomousStatus(identity?.query ?? null)
+  const { data: autonomousData, error } = useAutonomousStatus(identity?.query ?? null)
   const { data: bootData, isLoading: bootLoading } = useBootReport()
   const queryClient = useQueryClient()
   const [toggling, setToggling] = useState(false)
@@ -75,6 +76,11 @@ export default function AdvancedSection() {
     const m = Math.floor((ms % 3_600_000) / 60_000)
     if (h > 0) return t('advanced.remainingHours', { hours: h, minutes: m })
     return t('advanced.remainingMinutes', { minutes: m })
+  }
+
+  // Surfaced only once the (identity-gated) autonomous-status query runs and fails.
+  if (error) {
+    return <PageError title={t('section.errorTitle')} message={error instanceof Error ? error.message : t('section.errorFallback')} />
   }
 
   return (

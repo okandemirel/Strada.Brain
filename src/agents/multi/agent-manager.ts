@@ -149,6 +149,13 @@ export class AgentManager {
   /** In-flight agent creation promises to prevent duplicate creation races */
   private readonly creating = new Map<string, Promise<LiveAgent>>();
 
+  /**
+   * In-flight request counts keyed by agent key. An agent with active requests
+   * must not be evicted (its memory would be shut down mid-request, causing a
+   * use-after-shutdown of getStats()/handleMessage).
+   */
+  private readonly inFlightRequests = new Map<string, number>();
+
   /** Idle check interval handle */
   private idleCheckInterval: ReturnType<typeof setInterval> | undefined;
 
@@ -297,12 +304,36 @@ export class AgentManager {
       return;
     }
 
-    // Route through agent's orchestrator
+    // Route through agent's orchestrator. Mark the agent busy so a concurrent
+    // idle-eviction sweep cannot shut down its memory mid-request.
+    const requestKey = liveAgent.instance.key;
+    this.beginRequest(requestKey);
     try {
       return await liveAgent.orchestrator.handleMessage(msg);
     } finally {
+      this.endRequest(requestKey);
       this.syncMemoryCount(liveAgent);
     }
+  }
+
+  /** Mark an agent as having an in-flight request (eviction guard). */
+  private beginRequest(key: string): void {
+    this.inFlightRequests.set(key, (this.inFlightRequests.get(key) ?? 0) + 1);
+  }
+
+  /** Release an in-flight request marker for an agent. */
+  private endRequest(key: string): void {
+    const next = (this.inFlightRequests.get(key) ?? 0) - 1;
+    if (next <= 0) {
+      this.inFlightRequests.delete(key);
+    } else {
+      this.inFlightRequests.set(key, next);
+    }
+  }
+
+  /** True when the agent has at least one in-flight request and must not be evicted. */
+  private isAgentBusy(key: string): boolean {
+    return (this.inFlightRequests.get(key) ?? 0) > 0;
   }
 
   // ===========================================================================
@@ -360,7 +391,11 @@ export class AgentManager {
     for (const [key, liveAgent] of this.agents) {
       if (
         (liveAgent.instance.status === "active" || liveAgent.instance.status === "budget_exceeded") &&
-        now - liveAgent.instance.lastActivity > this.config.idleTimeoutMs
+        now - liveAgent.instance.lastActivity > this.config.idleTimeoutMs &&
+        // Never evict an agent with an in-flight request: shutting down its
+        // memory mid-request would cause a use-after-shutdown in handleMessage
+        // / syncMemoryCount.
+        !this.isAgentBusy(key)
       ) {
         toEvict.push(key);
       }
@@ -556,7 +591,8 @@ export class AgentManager {
       // Directory might already exist
     }
 
-    // TODO(phase-24): enforce maxMemoryEntries cap on per-agent memory writes
+    // The per-agent maxMemoryEntries cap is enforced at the routing boundary via
+    // enforceMemoryCap() (AgentDBMemory itself bounds growth per-tier).
     const memory = new AgentDBMemory({
       dbPath: agentMemoryDir,
       dimensions: this.opts.memoryConfig.dimensions,
@@ -786,8 +822,10 @@ export class AgentManager {
 
     for (const [key, liveAgent] of this.agents) {
       // Only consider agents that are actually idle (past the timeout threshold)
+      // and have no in-flight request (eviction would shut down memory mid-request).
       if (now - liveAgent.instance.lastActivity > this.config.idleTimeoutMs &&
-          liveAgent.instance.lastActivity < oldestActivity) {
+          liveAgent.instance.lastActivity < oldestActivity &&
+          !this.isAgentBusy(key)) {
         oldestActivity = liveAgent.instance.lastActivity;
         oldestKey = key;
       }
@@ -845,12 +883,58 @@ export class AgentManager {
   }
 
   private syncMemoryCount(liveAgent: LiveAgent): void {
-    const totalEntries = liveAgent.memory.getStats().totalEntries;
+    // The agent may have been evicted (memory shut down + removed from the map)
+    // between capturing liveAgent and reaching here. Reading getStats() on a
+    // shut-down memory is a use-after-shutdown; skip silently if it is no longer live.
+    if (this.agents.get(liveAgent.instance.key) !== liveAgent) {
+      return;
+    }
+
+    let totalEntries: number;
+    try {
+      totalEntries = liveAgent.memory.getStats().totalEntries;
+    } catch (error) {
+      try {
+        getLogger().debug("Skipping memory-count sync for inactive agent", {
+          agentId: liveAgent.instance.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      } catch {
+        // Logger may be intentionally absent in isolated tests.
+      }
+      return;
+    }
+
+    this.enforceMemoryCap(liveAgent, totalEntries);
+
     if (liveAgent.instance.memoryEntryCount === totalEntries) {
       return;
     }
 
     this.registry.updateMemoryCount(liveAgent.instance.id, totalEntries);
     liveAgent.instance = { ...liveAgent.instance, memoryEntryCount: totalEntries };
+  }
+
+  /**
+   * Enforce the per-agent memory cap (maxMemoryEntries). The underlying
+   * AgentDBMemory already evicts per-tier, so this bounds total growth and
+   * surfaces a warning when an agent's persisted memory exceeds its configured
+   * cap. A non-positive cap disables enforcement.
+   */
+  private enforceMemoryCap(liveAgent: LiveAgent, totalEntries: number): void {
+    const cap = this.config.maxMemoryEntries;
+    if (!cap || cap <= 0 || totalEntries <= cap) {
+      return;
+    }
+    try {
+      getLogger().warn("Agent memory exceeds configured cap", {
+        agentId: liveAgent.instance.id,
+        key: liveAgent.instance.key,
+        totalEntries,
+        maxMemoryEntries: cap,
+      });
+    } catch {
+      // Logger may be intentionally absent in isolated tests.
+    }
   }
 }

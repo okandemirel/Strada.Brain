@@ -1,5 +1,6 @@
 import { beforeAll, afterEach, describe, expect, it, vi } from "vitest";
 import {
+  BootstrapDisposables,
   createShutdownHandler,
   setupCleanup,
   generateSessionId,
@@ -245,6 +246,173 @@ describe("createShutdownHandler", () => {
     expect(s2.stop).toHaveBeenCalledTimes(1);
     clearInterval(interval);
   });
+
+  it("stops eventBus-subscribed servers before draining the eventBus", async () => {
+    const channel = makeChannel();
+    const callOrder: string[] = [];
+    const bridge = { stop: vi.fn(async () => { callOrder.push("stoppableServers"); }) };
+    const eventBus = { shutdown: vi.fn(async () => { callOrder.push("eventBus"); }) } as any;
+    const interval = setInterval(() => {}, 99999);
+    const shutdown = createShutdownHandler({
+      channel, cleanupInterval: interval,
+      stoppableServers: [bridge], eventBus,
+    } as any);
+
+    await shutdown();
+
+    expect(callOrder.indexOf("stoppableServers")).toBeLessThan(callOrder.indexOf("eventBus"));
+    clearInterval(interval);
+  });
+
+  it("closes shared daemon storage on a clean shutdown", async () => {
+    const channel = makeChannel();
+    const daemonStorage = { close: vi.fn() };
+    const interval = setInterval(() => {}, 99999);
+    const shutdown = createShutdownHandler({
+      channel, cleanupInterval: interval, daemonStorage,
+    } as any);
+
+    await shutdown();
+
+    expect(daemonStorage.close).toHaveBeenCalledTimes(1);
+    clearInterval(interval);
+  });
+
+  it("stops the framework sync watcher and closes the framework store on shutdown", async () => {
+    const channel = makeChannel();
+    const frameworkSyncPipeline = { stop: vi.fn(async () => {}) };
+    const frameworkStore = { close: vi.fn() };
+    const interval = setInterval(() => {}, 99999);
+    const shutdown = createShutdownHandler({
+      channel, cleanupInterval: interval, frameworkSyncPipeline, frameworkStore,
+    } as any);
+
+    await shutdown();
+
+    expect(frameworkSyncPipeline.stop).toHaveBeenCalledTimes(1);
+    expect(frameworkStore.close).toHaveBeenCalledTimes(1);
+    clearInterval(interval);
+  });
+
+  it("continues remaining cleanup when one disposal step throws", async () => {
+    const channel = makeChannel();
+    const memoryManager = {
+      shutdown: vi.fn(async () => { throw new Error("memory boom"); }),
+    } as any;
+    const daemonStorage = { close: vi.fn() };
+    const interval = setInterval(() => {}, 99999);
+    const shutdown = createShutdownHandler({
+      channel, cleanupInterval: interval, memoryManager, daemonStorage,
+    } as any);
+
+    // Must not reject even though memoryManager.shutdown throws.
+    await expect(shutdown()).resolves.toBeUndefined();
+    // Later steps (daemonStorage.close, channel.disconnect) still ran.
+    expect(daemonStorage.close).toHaveBeenCalledTimes(1);
+    expect(channel.disconnect).toHaveBeenCalledTimes(1);
+    clearInterval(interval);
+  });
+
+  it("is idempotent — a second invocation does not re-run disposers", async () => {
+    const channel = makeChannel();
+    const memoryManager = { shutdown: vi.fn(async () => {}) } as any;
+    const interval = setInterval(() => {}, 99999);
+    const shutdown = createShutdownHandler({
+      channel, cleanupInterval: interval, memoryManager,
+    } as any);
+
+    await shutdown();
+    await shutdown();
+
+    expect(memoryManager.shutdown).toHaveBeenCalledTimes(1);
+    expect(channel.disconnect).toHaveBeenCalledTimes(1);
+    clearInterval(interval);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: BootstrapDisposables (H11 — mid-bootstrap failure cleanup)
+// ---------------------------------------------------------------------------
+
+describe("BootstrapDisposables", () => {
+  beforeAll(() => {
+    try { createLogger("error", "/tmp/strada-bootstrap-wiring-test.log"); } catch { /* already initialized */ }
+  });
+
+  it("starts empty and tracks pushes via size", () => {
+    const d = new BootstrapDisposables();
+    expect(d.size).toBe(0);
+    d.push("a", vi.fn());
+    d.push("b", vi.fn());
+    expect(d.size).toBe(2);
+  });
+
+  it("runs disposers in reverse (LIFO) registration order", async () => {
+    const order: string[] = [];
+    const d = new BootstrapDisposables();
+    d.push("first", () => { order.push("first"); });
+    d.push("second", () => { order.push("second"); });
+    d.push("third", () => { order.push("third"); });
+
+    await d.teardown();
+
+    expect(order).toEqual(["third", "second", "first"]);
+  });
+
+  it("awaits async disposers before resolving", async () => {
+    let asyncDone = false;
+    const d = new BootstrapDisposables();
+    d.push("async", async () => {
+      await new Promise((r) => setTimeout(r, 5));
+      asyncDone = true;
+    });
+
+    await d.teardown();
+
+    expect(asyncDone).toBe(true);
+  });
+
+  it("isolates a throwing disposer so the rest still run", async () => {
+    const ran: string[] = [];
+    const d = new BootstrapDisposables();
+    d.push("ok-1", () => { ran.push("ok-1"); });
+    d.push("boom", () => { throw new Error("dispose failed"); });
+    d.push("ok-2", () => { ran.push("ok-2"); });
+
+    // teardown itself must not reject even though a disposer threw
+    await expect(d.teardown()).resolves.toBeUndefined();
+
+    // LIFO: ok-2 (last pushed) runs first, boom is swallowed, ok-1 still runs
+    expect(ran).toEqual(["ok-2", "ok-1"]);
+  });
+
+  it("isolates a rejecting async disposer so the rest still run", async () => {
+    const ran: string[] = [];
+    const d = new BootstrapDisposables();
+    d.push("ok", () => { ran.push("ok"); });
+    d.push("reject", async () => { throw new Error("async dispose failed"); });
+
+    await expect(d.teardown()).resolves.toBeUndefined();
+
+    expect(ran).toEqual(["ok"]);
+  });
+
+  it("is idempotent — a second teardown is a no-op", async () => {
+    const dispose = vi.fn();
+    const d = new BootstrapDisposables();
+    d.push("once", dispose);
+
+    await d.teardown();
+    await d.teardown();
+
+    expect(dispose).toHaveBeenCalledTimes(1);
+    expect(d.size).toBe(0);
+  });
+
+  it("teardown on an empty stack resolves without error", async () => {
+    const d = new BootstrapDisposables();
+    await expect(d.teardown()).resolves.toBeUndefined();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -320,6 +488,38 @@ describe("wireMessageHandler", () => {
     expect(tp.endTask).toHaveBeenCalledWith(
       expect.objectContaining({ success: false, hadErrors: true }),
     );
+  });
+
+  it("binds notification + digest delivery to the first inbound chat", async () => {
+    const channel = makeChannel();
+    const notificationRouter = { setChatId: vi.fn() } as any;
+    const digestReporter = { setChatId: vi.fn() } as any;
+    wireMessageHandler(
+      channel, makeMessageRouter(), makeOrchestrator(), makeTaskPlanner(),
+      undefined, "/tmp", undefined, undefined, undefined, undefined,
+      notificationRouter, digestReporter,
+    );
+
+    await channel._emit({ chatId: "c1", text: "hi", userId: "u1" });
+
+    expect(notificationRouter.setChatId).toHaveBeenCalledWith("c1");
+    expect(digestReporter.setChatId).toHaveBeenCalledWith("c1");
+  });
+
+  it("does not bind chat delivery when the inbound message has no chatId", async () => {
+    const channel = makeChannel();
+    const notificationRouter = { setChatId: vi.fn() } as any;
+    const digestReporter = { setChatId: vi.fn() } as any;
+    wireMessageHandler(
+      channel, makeMessageRouter(), makeOrchestrator(), makeTaskPlanner(),
+      undefined, "/tmp", undefined, undefined, undefined, undefined,
+      notificationRouter, digestReporter,
+    );
+
+    await channel._emit({ text: "hi", userId: "u1" });
+
+    expect(notificationRouter.setChatId).not.toHaveBeenCalled();
+    expect(digestReporter.setChatId).not.toHaveBeenCalled();
   });
 });
 

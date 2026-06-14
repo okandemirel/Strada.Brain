@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAgents } from '../../hooks/use-api'
+import { PageError } from '../../components/ui/page-error'
 
 function relativeTime(ts: number, renderNow: number, t: (key: string, opts?: Record<string, unknown>) => string): string {
   const diffMs = renderNow - ts
@@ -29,9 +30,13 @@ function StatusBadge({ status }: { status: string }) {
 
 export default function AgentsSection() {
   const { t } = useTranslation('settings')
-  const { data, isLoading } = useAgents()
+  const { data, isLoading, error } = useAgents()
 
   const [renderNow] = useState(() => Date.now())
+
+  if (error) {
+    return <PageError title={t('section.errorTitle')} message={error instanceof Error ? error.message : t('section.errorFallback')} />
+  }
 
   if (isLoading || !data) {
     return (

@@ -343,9 +343,19 @@ export class DashboardServer {
     bootReport?: BootReport;
     autoUpdater?: AutoUpdater;
   }): void {
-    this.daemonHeartbeatLoop = ctx.heartbeatLoop;
-    this.daemonRegistry = ctx.registry;
-    this.daemonApprovalQueue = ctx.approvalQueue;
+    // Guarded (merge-only) like every other field below: setDaemonContext is
+    // called more than once (e.g. a later non-daemon call wires only the
+    // identity manager), and an unconditional assignment here would null out
+    // the daemon heartbeat loop / registry / approval queue set by the first call.
+    if (ctx.heartbeatLoop) {
+      this.daemonHeartbeatLoop = ctx.heartbeatLoop;
+    }
+    if (ctx.registry) {
+      this.daemonRegistry = ctx.registry;
+    }
+    if (ctx.approvalQueue) {
+      this.daemonApprovalQueue = ctx.approvalQueue;
+    }
 
     if (ctx.webhookTriggers) {
       this.webhookTriggers = ctx.webhookTriggers;

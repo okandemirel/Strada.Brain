@@ -341,6 +341,114 @@ describe("DelegationManager", () => {
     });
   });
 
+  describe("budget gate", () => {
+    it("rejects delegation before spawn when the parent has exceeded its cap", async () => {
+      const budgetTracker = createMockBudgetTracker();
+      budgetTracker.isAgentExceeded.mockReturnValue(true);
+      budgetTracker.getAgentUsage.mockReturnValue({ usedUsd: 12, limitUsd: 10, pct: 1.2 });
+
+      const gatedManager = new DelegationManager(
+        buildManagerOpts({
+          delegationLog,
+          budgetTracker: budgetTracker as never,
+          getAgentBudgetCap: () => 10,
+        }),
+      );
+
+      const request: DelegationRequest = {
+        type: "code_review",
+        task: "Review this code",
+        parentAgentId: PARENT_AGENT_ID,
+        depth: 0,
+        mode: "sync",
+        toolContext: TEST_TOOL_CONTEXT,
+      };
+
+      await expect(gatedManager.delegate(request)).rejects.toThrow(
+        /budget exceeded/i,
+      );
+      // Cap checked against the parent agent; sub-agent never spawned (no cost recorded).
+      expect(budgetTracker.isAgentExceeded).toHaveBeenCalledWith(PARENT_AGENT_ID, 10);
+      expect(budgetTracker.recordCost).not.toHaveBeenCalled();
+      expect(orchestratorHandleMessage).not.toHaveBeenCalled();
+    });
+
+    it("allows delegation when the parent is under its cap", async () => {
+      const budgetTracker = createMockBudgetTracker();
+      budgetTracker.isAgentExceeded.mockReturnValue(false);
+
+      const gatedManager = new DelegationManager(
+        buildManagerOpts({
+          delegationLog,
+          budgetTracker: budgetTracker as never,
+          getAgentBudgetCap: () => 10,
+        }),
+      );
+
+      const request: DelegationRequest = {
+        type: "code_review",
+        task: "Review this code",
+        parentAgentId: PARENT_AGENT_ID,
+        depth: 0,
+        mode: "sync",
+        toolContext: TEST_TOOL_CONTEXT,
+      };
+
+      const result = await gatedManager.delegate(request);
+      expect(result.content).toBe("Sub-agent completed the task successfully.");
+      expect(budgetTracker.isAgentExceeded).toHaveBeenCalledWith(PARENT_AGENT_ID, 10);
+    });
+
+    it("skips the budget gate (no-op) when no cap resolver is wired", async () => {
+      const budgetTracker = createMockBudgetTracker();
+      // Even if the tracker would report exceeded, no resolver => gate must not run.
+      budgetTracker.isAgentExceeded.mockReturnValue(true);
+
+      const ungatedManager = new DelegationManager(
+        buildManagerOpts({ delegationLog, budgetTracker: budgetTracker as never }),
+      );
+
+      const request: DelegationRequest = {
+        type: "code_review",
+        task: "Review this code",
+        parentAgentId: PARENT_AGENT_ID,
+        depth: 0,
+        mode: "sync",
+        toolContext: TEST_TOOL_CONTEXT,
+      };
+
+      const result = await ungatedManager.delegate(request);
+      expect(result.content).toBe("Sub-agent completed the task successfully.");
+      expect(budgetTracker.isAgentExceeded).not.toHaveBeenCalled();
+    });
+
+    it("skips the budget gate when the resolver returns undefined (unknown agent)", async () => {
+      const budgetTracker = createMockBudgetTracker();
+      budgetTracker.isAgentExceeded.mockReturnValue(true);
+
+      const gatedManager = new DelegationManager(
+        buildManagerOpts({
+          delegationLog,
+          budgetTracker: budgetTracker as never,
+          getAgentBudgetCap: () => undefined,
+        }),
+      );
+
+      const request: DelegationRequest = {
+        type: "code_review",
+        task: "Review this code",
+        parentAgentId: PARENT_AGENT_ID,
+        depth: 0,
+        mode: "sync",
+        toolContext: TEST_TOOL_CONTEXT,
+      };
+
+      const result = await gatedManager.delegate(request);
+      expect(result.content).toBe("Sub-agent completed the task successfully.");
+      expect(budgetTracker.isAgentExceeded).not.toHaveBeenCalled();
+    });
+  });
+
   describe("concurrency enforcement", () => {
     it("enforces max concurrent delegations per parent", async () => {
       const requests = Array.from({ length: 4 }, (_, i) => ({
@@ -359,6 +467,90 @@ describe("DelegationManager", () => {
       // 4th should work after slots freed
       const result = await manager.delegate(requests[3]!);
       expect(result.content).toBeDefined();
+    });
+  });
+
+  // Regression: per-attempt concurrency-slot ownership. Slots are reserved in
+  // prepareRequest / re-acquired for escalation and released by
+  // executeWithEscalation's per-attempt finally — exactly once, regardless of
+  // setup throws, sibling delegations, or cancellation. A leaked or
+  // double-released slot eventually wedges (or over-admits) a parent's delegation.
+  describe("concurrency slot accounting (Series 3 H13/H14/M17)", () => {
+    const slots = (): Map<string, number> =>
+      (manager as unknown as { parentConcurrency: Map<string, number> }).parentConcurrency;
+    const active = (): Map<string, { parentAgentId: string }> =>
+      (manager as unknown as { activeDelegations: Map<string, { parentAgentId: string }> }).activeDelegations;
+    const addSibling = (id: string): void => {
+      slots().set(PARENT_AGENT_ID, (slots().get(PARENT_AGENT_ID) ?? 0) + 1);
+      active().set(id, {
+        abortController: new AbortController(),
+        logId: 0,
+        parentAgentId: PARENT_AGENT_ID,
+        type: "code_review",
+        startedAt: Date.now(),
+      } as never);
+    };
+    const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
+    const request = (mode: "sync" | "async"): DelegationRequest => ({
+      type: "code_review",
+      task: "x",
+      parentAgentId: PARENT_AGENT_ID,
+      depth: 0,
+      mode,
+      toolContext: TEST_TOOL_CONTEXT,
+    });
+
+    // H13: delegateAsync swallows the rejection; without per-attempt release the
+    // slot reserved before the setup throw leaks.
+    it("releases the slot when delegateAsync setup throws (H13)", async () => {
+      vi.mocked(createProvider).mockImplementation(() => {
+        throw new Error("missing provider credentials");
+      });
+
+      await manager.delegateAsync(request("async"));
+      await flush();
+
+      expect(slots().get(PARENT_AGENT_ID) ?? 0).toBe(0);
+    });
+
+    // H14: a parent-wide existence guard would see the live sibling and skip the
+    // failed delegation's release, leaking its slot.
+    it("releases only its own slot when a setup-throwing delegate has a live sibling (H14)", async () => {
+      addSibling("sibling-1");
+      vi.mocked(createProvider).mockImplementation(() => {
+        throw new Error("missing provider credentials");
+      });
+
+      await expect(manager.delegate(request("sync"))).rejects.toThrow();
+
+      expect(slots().get(PARENT_AGENT_ID)).toBe(1); // sibling slot preserved, no leak
+      expect(active().has("sibling-1")).toBe(true);
+    });
+
+    // M17: cancelDelegation + the unwinding executeSingleDelegation must not both
+    // decrement. With a live sibling, a double release would drop below 1.
+    it("releases a cancelled delegation's slot exactly once, even with a sibling (M17)", async () => {
+      addSibling("sibling-1");
+
+      let rejectExec: (e: Error) => void = () => {};
+      orchestratorHandleMessage.mockImplementation(
+        () => new Promise<void>((_resolve, reject) => {
+          rejectExec = reject;
+        }),
+      );
+
+      await manager.delegateAsync(request("async"));
+      await flush(); // register + reach the hung execution
+
+      const subId = [...active().keys()].find((k) => k !== "sibling-1");
+      expect(subId).toBeDefined();
+      expect(slots().get(PARENT_AGENT_ID)).toBe(2);
+
+      manager.cancelDelegation(subId as string);
+      rejectExec(new Error("aborted")); // the hung execution unwinds on abort
+      await flush();
+
+      expect(slots().get(PARENT_AGENT_ID)).toBe(1); // exactly one release
     });
   });
 

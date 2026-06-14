@@ -59,9 +59,16 @@ export function stripMarkdown(text: string): string {
 
 /** Parse `**kind** name\n\n*file:line*` backend text into structured parts. */
 export function parseNodeText(text: string): { kind: string | null; name: string; file: string | null; line: number | null } {
-  const stripped = stripMarkdown(text);
-  const [head = '', tail = ''] = stripped.split('\n\n');
-  const headMatch = head.match(/^(\S+)\s+(.+)$/);
+  // Split BEFORE stripping markdown so the bold-marker probe below is reliable.
+  const [rawHead = '', rawTail = ''] = text.split('\n\n');
+  const head = stripMarkdown(rawHead);
+  const tail = stripMarkdown(rawTail);
+  // Only treat the first whitespace token as a `kind` label when the head was
+  // emitted in the backend `**kind** name` form (bold markers present). Bare
+  // node text — e.g. a file-graph basename like `My File.md` — has no markers,
+  // so it must be kept intact as the name (otherwise `My` is dropped as a kind).
+  const hasKindMarker = /^\*\*\S+\*\*\s+/.test(rawHead);
+  const headMatch = hasKindMarker ? head.match(/^(\S+)\s+(.+)$/) : null;
   const kind = headMatch?.[1] ?? null;
   const name = headMatch?.[2] ?? head;
   const tailMatch = tail.match(/^(.+):(\d+)$/);

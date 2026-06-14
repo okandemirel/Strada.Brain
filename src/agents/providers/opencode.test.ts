@@ -36,6 +36,22 @@ describe("OpencodeProvider", () => {
     expect(provider.name).toBe("OpenCode (Zen/Go)");
   });
 
+  // OpenCode's API rejects namespaced ids ("Model opencode/... is not supported",
+  // verified live via /models which returns BARE ids). Strip the "opencode/" prefix
+  // so presets / saved preferences / catalog entries all send a valid bare id.
+  it("strips the 'opencode/' prefix from model ids (API expects bare ids)", () => {
+    const provider = new OpencodeProvider("test-key", "opencode/deepseek-v4-flash");
+    expect((provider as unknown as { model: string }).model).toBe("deepseek-v4-flash");
+  });
+
+  it("passes a bare model id through unchanged and defaults to a live bare id", () => {
+    expect((new OpencodeProvider("k", "qwen3.6-plus") as unknown as { model: string }).model)
+      .toBe("qwen3.6-plus");
+    // Default must be a CURRENT, bare model (the old "opencode/qwen-3-coder-480b" is gone).
+    expect((new OpencodeProvider("k") as unknown as { model: string }).model)
+      .toBe("qwen3.6-plus");
+  });
+
   describe("buildHeaders", () => {
     it("includes User-Agent header", async () => {
       const provider = new OpencodeProvider("test-key");

@@ -124,7 +124,7 @@ export class DelegationLog {
          WHERE id = ?`,
       ),
       timeout: this.db.prepare(
-        `UPDATE delegation_log SET status = 'timeout', completed_at = ? WHERE id = ?`,
+        `UPDATE delegation_log SET status = 'timeout', duration_ms = ?, cost_usd = ?, completed_at = ? WHERE id = ?`,
       ),
       cancel: this.db.prepare(
         `UPDATE delegation_log SET status = 'cancelled', completed_at = ? WHERE id = ?`,
@@ -196,8 +196,8 @@ export class DelegationLog {
   /**
    * Mark a delegation as timed out.
    */
-  timeout(id: number): void {
-    this.stmts.timeout.run(Date.now(), id);
+  timeout(id: number, usage?: { durationMs?: number; costUsd?: number }): void {
+    this.stmts.timeout.run(usage?.durationMs ?? null, usage?.costUsd ?? null, Date.now(), id);
   }
 
   /**

@@ -66,6 +66,15 @@ describe("truncateForDiscord", () => {
     const result = truncateForDiscord(input, 2000, false);
     expect(result.endsWith("...")).toBe(false);
   });
+
+  it("never exceeds maxLength even when maxLength is smaller than the ellipsis", () => {
+    // Regression: with addEllipsis=true and maxLength < 3 the old code returned
+    // "..." (length 3), exceeding maxLength. It must now clamp to a hard cut.
+    expect(truncateForDiscord("abcdef", 2).length).toBeLessThanOrEqual(2);
+    expect(truncateForDiscord("abcdef", 2)).toBe("ab");
+    expect(truncateForDiscord("abcdef", 0)).toBe("");
+    expect(truncateForDiscord("abcdef", 1)).toBe("a");
+  });
 });
 
 describe("truncateForEmbedDescription", () => {

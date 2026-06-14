@@ -22,6 +22,8 @@ const RETIREMENT_MIN_CLEAN_RATE = 0.6;
 const RETIREMENT_RETRY_THRESHOLD = 4;
 const MATCH_THRESHOLD = 0.42;
 const GUIDANCE_THRESHOLD = 0.55;
+/** Cap on identities tracked in recentArtifactActivityByIdentity (LRU eviction). */
+const MAX_TRACKED_IDENTITIES = 256;
 
 export interface RuntimeArtifactMatches {
   readonly active: RuntimeArtifactMatch[];
@@ -295,7 +297,16 @@ export class RuntimeArtifactManager {
       { artifactId, timestamp },
       ...history.filter((entry) => entry.artifactId !== artifactId),
     ].slice(0, 32);
+    // Re-insert at the end so this identity becomes most-recently-used (Map keeps
+    // insertion order), then evict the coldest keys to bound the map. identityKey
+    // is unbounded user/chat cardinality, so without this the map grows forever.
+    this.recentArtifactActivityByIdentity.delete(identityKey);
     this.recentArtifactActivityByIdentity.set(identityKey, nextHistory);
+    while (this.recentArtifactActivityByIdentity.size > MAX_TRACKED_IDENTITIES) {
+      const oldestKey = this.recentArtifactActivityByIdentity.keys().next().value as string | undefined;
+      if (oldestKey === undefined) break;
+      this.recentArtifactActivityByIdentity.delete(oldestKey);
+    }
   }
 
   private inferTaskTypes(instinct: Instinct): TaskType[] {

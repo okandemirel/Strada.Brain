@@ -15,6 +15,9 @@ const { preflightResponseProvidersMock, installStradaMcpSubmoduleMock, installSt
 
 vi.mock("./response-provider-preflight.js", () => ({
   preflightResponseProviders: preflightResponseProvidersMock,
+  formatProviderPreflightFailures: (
+    failures: Array<{ providerName: string; detail: string }>,
+  ) => failures.map((f) => `${f.providerName}: ${f.detail}`).join(" "),
 }));
 
 vi.mock("../config/strada-deps.js", async (importOriginal) => {
@@ -176,6 +179,27 @@ describe("SetupWizard path validation", () => {
 
   it("builds a canonical ready url for the target web app", () => {
     expect(buildSetupReadyUrl(3000)).toBe("http://127.0.0.1:3000/");
+  });
+
+  it("serves an absolute cross-port ready url when the web channel runs on a different port than the wizard", async () => {
+    // Regression: index.ts must hand markBootstrapReady the absolute web-channel
+    // URL (buildSetupReadyUrl(config.web.port)) instead of a relative "/", or the
+    // browser's refresh redirect would point back at the now-closed wizard port.
+    const wizard = new SetupWizard({ port: 0 });
+    const webChannelReadyUrl = buildSetupReadyUrl(4321);
+    wizard.markBootstrapStarting("Strada is starting the main web app.");
+    wizard.markBootstrapReady(webChannelReadyUrl);
+
+    const status = makeResponse();
+    await (wizard as unknown as {
+      handleRequest: (req: { url: string; method: string; headers?: Record<string, string> }, res: unknown) => Promise<void>;
+    }).handleRequest({ url: "/api/setup/status", method: "GET" }, status.response);
+
+    const parsed = JSON.parse(status.read().body) as { state: string; readyUrl: string };
+    expect(parsed.state).toBe("ready");
+    expect(parsed.readyUrl).toBe(webChannelReadyUrl);
+    expect(parsed.readyUrl).toBe("http://127.0.0.1:4321/");
+    expect(parsed.readyUrl).not.toBe("/");
   });
 
   it("writes EMBEDDING_MODEL when provided with explicit provider", () => {
@@ -394,20 +418,22 @@ describe("SetupWizard path validation", () => {
     process.env["STRADA_INSTALL_ROOT"] = tempCwd;
     process.env["STRADA_SOURCE_CHECKOUT"] = "true";
 
+    // Primary (kimi) passes preflight; a fallback (deepseek) fails -> non-blocking warning.
     preflightResponseProvidersMock.mockResolvedValue({
-      passedProviderIds: [],
+      passedProviderIds: ["kimi"],
       failures: [{
-        providerId: "kimi",
-        providerName: "Kimi (Moonshot)",
-        detail: "Kimi (Moonshot) health check failed. Verify the credential and network access.",
+        providerId: "deepseek",
+        providerName: "DeepSeek",
+        detail: "DeepSeek health check failed. Verify the credential and network access.",
       }],
     });
 
     const wizard = new SetupWizard({ port: 0 });
     const saveResponse = await saveWizard(wizard, {
       UNITY_PROJECT_PATH: homedir(),
-      PROVIDER_CHAIN: "kimi",
+      PROVIDER_CHAIN: "kimi,deepseek",
       KIMI_API_KEY: "sk-kimi",
+      DEEPSEEK_API_KEY: "sk-deepseek",
       LANGUAGE_PREFERENCE: "tr",
       RAG_ENABLED: "false",
       AUTONOMOUS_DEFAULT_ENABLED: "true",
@@ -419,9 +445,9 @@ describe("SetupWizard path validation", () => {
       success: true,
       readyUrl: "http://127.0.0.1:0/",
       providerWarnings: [{
-        providerId: "kimi",
-        providerName: "Kimi (Moonshot)",
-        detail: "Kimi (Moonshot) health check failed. Verify the credential and network access.",
+        providerId: "deepseek",
+        providerName: "DeepSeek",
+        detail: "DeepSeek health check failed. Verify the credential and network access.",
       }],
       postSetupBootstrap: {
         language: "tr",
@@ -441,12 +467,39 @@ describe("SetupWizard path validation", () => {
     });
 
     const envContent = fs.readFileSync(path.join(tempCwd, ".env"), "utf-8");
-    expect(envContent).toContain('PROVIDER_CHAIN="kimi"');
+    expect(envContent).toContain('PROVIDER_CHAIN="kimi,deepseek"');
     expect(envContent).toContain('KIMI_API_KEY="sk-kimi"');
+    expect(envContent).toContain('DEEPSEEK_API_KEY="sk-deepseek"');
     expect(envContent).toContain("AUTONOMOUS_DEFAULT_ENABLED=true");
     expect(envContent).toContain("AUTONOMOUS_DEFAULT_HOURS=48");
     expect(envContent).toContain("MULTI_AGENT_ENABLED=true");
     expect(envContent).toContain("TASK_DELEGATION_ENABLED=true");
+  });
+
+  it("blocks saving when the only response provider fails preflight (no false success)", async () => {
+    preflightResponseProvidersMock.mockResolvedValue({
+      passedProviderIds: [],
+      failures: [{
+        providerId: "openai",
+        providerName: "OpenAI",
+        detail: 'The configured model "gpt-4.1-mini" is not accepted by the ChatGPT/Codex subscription endpoint (HTTP 400). Choose a Codex-compatible model (e.g. gpt-5.2) or switch OpenAI to API-key mode.',
+      }],
+    });
+
+    const wizard = new SetupWizard({ port: 0 });
+    const response = await saveWizard(wizard, {
+      UNITY_PROJECT_PATH: homedir(),
+      PROVIDER_CHAIN: "openai",
+      OPENAI_AUTH_MODE: "chatgpt-subscription",
+      OPENAI_MODEL: "gpt-4.1-mini",
+      RAG_ENABLED: "false",
+    });
+
+    expect(response.read().statusCode).toBe(400);
+    const body = JSON.parse(response.read().body);
+    expect(body.success).toBe(false);
+    expect(body.error).toContain("gpt-4.1-mini");
+    expect(body.error).not.toMatch(/sign in again/i);
   });
 
   it("resolves setup completion even when waiting starts after save", async () => {
@@ -488,18 +541,25 @@ describe("SetupWizard path validation", () => {
     process.env["STRADA_INSTALL_ROOT"] = tempCwd;
     process.env["STRADA_SOURCE_CHECKOUT"] = "true";
 
+    // Primary (kimi) passes preflight; a fallback (deepseek) fails -> non-blocking warning.
     preflightResponseProvidersMock.mockResolvedValue({
-      passedProviderIds: [],
+      passedProviderIds: ["kimi"],
       failures: [{
-        providerId: "kimi",
-        providerName: "Kimi (Moonshot)",
-        detail: "Kimi (Moonshot) health check failed. Verify the credential and network access.",
+        providerId: "deepseek",
+        providerName: "DeepSeek",
+        detail: "DeepSeek health check failed. Verify the credential and network access.",
       }],
     });
 
     const wizard = new SetupWizard({ port: 0 });
     const completion = wizard.waitForCompletion();
-    await saveWizard(wizard);
+    await saveWizard(wizard, {
+      UNITY_PROJECT_PATH: homedir(),
+      PROVIDER_CHAIN: "kimi,deepseek",
+      KIMI_API_KEY: "sk-kimi",
+      DEEPSEEK_API_KEY: "sk-deepseek",
+      RAG_ENABLED: "false",
+    });
     await completion;
 
     wizard.markBootstrapStarting("Strada is starting the main web app.");
@@ -514,9 +574,9 @@ describe("SetupWizard path validation", () => {
       detail: "Strada is starting the main web app.",
       readyUrl: "http://127.0.0.1:0/",
       providerWarnings: [{
-        providerId: "kimi",
-        providerName: "Kimi (Moonshot)",
-        detail: "Kimi (Moonshot) health check failed. Verify the credential and network access.",
+        providerId: "deepseek",
+        providerName: "DeepSeek",
+        detail: "DeepSeek health check failed. Verify the credential and network access.",
       }],
       postSetupBootstrap: {
         language: "en",
@@ -681,6 +741,193 @@ describe("SetupWizard path validation", () => {
     expect(JSON.parse(response.read().body)).toMatchObject({
       success: false,
       error: "Invalid package: must be 'core' or 'modules'",
+    });
+  });
+
+  describe("GET /api/providers/models during setup", () => {
+    it("returns 200 with an empty providers array when no key is configured (never 503)", async () => {
+      const wizard = new SetupWizard({ port: 0 });
+
+      const response = makeResponse();
+      await (wizard as unknown as {
+        handleRequest: (req: { url: string; method: string; headers?: Record<string, string> }, res: unknown) => Promise<void>;
+      }).handleRequest({ url: "/api/providers/models", method: "GET" }, response.response);
+
+      expect(response.read().statusCode).toBe(200);
+      expect(JSON.parse(response.read().body)).toEqual({ providers: [] });
+    });
+
+    it("still returns 503 for other /api/providers/* GET routes during setup", async () => {
+      const wizard = new SetupWizard({ port: 0 });
+
+      const response = makeResponse();
+      await (wizard as unknown as {
+        handleRequest: (req: { url: string; method: string; headers?: Record<string, string> }, res: unknown) => Promise<void>;
+      }).handleRequest({ url: "/api/providers/available", method: "GET" }, response.response);
+
+      expect(response.read().statusCode).toBe(503);
+    });
+
+    it("IGNORES a key passed via the query param and never probes (key-in-URL is deprecated)", async () => {
+      const wizard = new SetupWizard({ port: 0 });
+
+      // The query-param key path is removed for security (keys leak into access
+      // logs / Referer). The GET handler must NOT call the probe seam at all.
+      let probeCalled = false;
+      (wizard as unknown as {
+        createProbeProvider: (config: { name: string; apiKey?: string }) => {
+          listModels?: () => Promise<string[]>;
+        };
+      }).createProbeProvider = () => {
+        probeCalled = true;
+        return { listModels: async () => ["gpt-5.4", "gpt-5.4-mini"] };
+      };
+
+      const response = makeResponse();
+      await (wizard as unknown as {
+        handleRequest: (req: { url: string; method: string; headers?: Record<string, string> }, res: unknown) => Promise<void>;
+      }).handleRequest(
+        { url: "/api/providers/models?provider=openai&key=sk-probe", method: "GET" },
+        response.response,
+      );
+
+      expect(response.read().statusCode).toBe(200);
+      expect(JSON.parse(response.read().body)).toEqual({ providers: [] });
+      expect(probeCalled).toBe(false);
+    });
+  });
+
+  describe("POST /api/providers/models during setup", () => {
+    const postProviderModels = async (
+      wizard: SetupWizard,
+      body: unknown,
+    ) => {
+      (wizard as unknown as {
+        readBody: (req: unknown) => Promise<string>;
+      }).readBody = async () => (typeof body === "string" ? body : JSON.stringify(body));
+
+      const response = makeResponse();
+      await (wizard as unknown as {
+        handleRequest: (req: { url: string; method: string; headers?: Record<string, string> }, res: unknown) => Promise<void>;
+      }).handleRequest({ url: "/api/providers/models", method: "POST" }, response.response);
+      return response;
+    };
+
+    it("probes live models when a key is supplied in the JSON body", async () => {
+      const wizard = new SetupWizard({ port: 0 });
+
+      (wizard as unknown as {
+        createProbeProvider: (config: { name: string; apiKey?: string; baseUrl?: string }) => {
+          listModels?: () => Promise<string[]>;
+        };
+      }).createProbeProvider = (config) => {
+        expect(config.name).toBe("openai");
+        expect(config.apiKey).toBe("sk-x");
+        return { listModels: async () => ["gpt-5.4", "gpt-5.4-mini"] };
+      };
+
+      const response = await postProviderModels(wizard, { provider: "openai", key: "sk-x" });
+
+      expect(response.read().statusCode).toBe(200);
+      expect(JSON.parse(response.read().body)).toEqual({
+        providers: [{ name: "openai", models: ["gpt-5.4", "gpt-5.4-mini"] }],
+      });
+    });
+
+    it("threads a baseUrl from the body to the probe (OpenCode Zen/Go)", async () => {
+      const wizard = new SetupWizard({ port: 0 });
+
+      let receivedBaseUrl: string | undefined;
+      (wizard as unknown as {
+        createProbeProvider: (config: { name: string; apiKey?: string; baseUrl?: string }) => {
+          listModels?: () => Promise<string[]>;
+        };
+      }).createProbeProvider = (config) => {
+        receivedBaseUrl = config.baseUrl;
+        expect(config.name).toBe("opencode");
+        return { listModels: async () => ["go-1"] };
+      };
+
+      const response = await postProviderModels(wizard, {
+        provider: "opencode",
+        key: "sk-zen",
+        baseUrl: "https://opencode.ai/zen/v1",
+      });
+
+      expect(response.read().statusCode).toBe(200);
+      expect(receivedBaseUrl).toBe("https://opencode.ai/zen/v1");
+      expect(JSON.parse(response.read().body)).toEqual({
+        providers: [{ name: "opencode", models: ["go-1"] }],
+      });
+    });
+
+    it("returns 200 empty for a missing key", async () => {
+      const wizard = new SetupWizard({ port: 0 });
+
+      let probeCalled = false;
+      (wizard as unknown as {
+        createProbeProvider: () => { listModels?: () => Promise<string[]> };
+      }).createProbeProvider = () => {
+        probeCalled = true;
+        return { listModels: async () => ["x"] };
+      };
+
+      const response = await postProviderModels(wizard, { provider: "openai" });
+
+      expect(response.read().statusCode).toBe(200);
+      expect(JSON.parse(response.read().body)).toEqual({ providers: [] });
+      expect(probeCalled).toBe(false);
+    });
+
+    it("returns 200 empty for an unknown provider", async () => {
+      const wizard = new SetupWizard({ port: 0 });
+
+      let probeCalled = false;
+      (wizard as unknown as {
+        createProbeProvider: () => { listModels?: () => Promise<string[]> };
+      }).createProbeProvider = () => {
+        probeCalled = true;
+        return { listModels: async () => ["x"] };
+      };
+
+      const response = await postProviderModels(wizard, { provider: "not-a-real-provider", key: "sk-x" });
+
+      expect(response.read().statusCode).toBe(200);
+      expect(JSON.parse(response.read().body)).toEqual({ providers: [] });
+      expect(probeCalled).toBe(false);
+    });
+
+    it("returns 200 empty when the probe throws (never crashes setup)", async () => {
+      const wizard = new SetupWizard({ port: 0 });
+
+      (wizard as unknown as {
+        createProbeProvider: () => { listModels?: () => Promise<string[]> };
+      }).createProbeProvider = () => {
+        throw new Error("boom");
+      };
+
+      const response = await postProviderModels(wizard, { provider: "openai", key: "sk-x" });
+
+      expect(response.read().statusCode).toBe(200);
+      expect(JSON.parse(response.read().body)).toEqual({ providers: [] });
+    });
+
+    it("returns 200 empty for malformed/empty JSON (never crashes setup)", async () => {
+      const wizard = new SetupWizard({ port: 0 });
+
+      let probeCalled = false;
+      (wizard as unknown as {
+        createProbeProvider: () => { listModels?: () => Promise<string[]> };
+      }).createProbeProvider = () => {
+        probeCalled = true;
+        return { listModels: async () => ["x"] };
+      };
+
+      const response = await postProviderModels(wizard, "{ this is not json");
+
+      expect(response.read().statusCode).toBe(200);
+      expect(JSON.parse(response.read().body)).toEqual({ providers: [] });
+      expect(probeCalled).toBe(false);
     });
   });
 });

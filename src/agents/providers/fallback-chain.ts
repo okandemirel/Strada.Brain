@@ -24,6 +24,14 @@ import { QUOTA_LIMIT_RE } from "../orchestrator-runtime-utils.js";
 const REASONING_CONTENT_RE = /reasoning_content/i;
 /** Regex for HTTP 400 errors caused by malformed request body or schema */
 const BAD_REQUEST_RE = /bad.?request|invalid|malformed/i;
+/**
+ * A model-availability error: an OpenAI-compatible gateway reports the configured
+ * model id as unknown/unsupported (OpenCode/Zen returns this under a 401 with a
+ * `ModelError` body). This is a per-provider CONFIG mismatch, NOT an auth failure —
+ * it must remain RETRYABLE so a healthy sibling provider is tried instead of
+ * collapsing the chain to a false "All providers failed".
+ */
+const MODEL_UNSUPPORTED_RE = /ModelError|model[\s\S]{0,80}not supported|unsupported model|no such model|model[\s\S]{0,40}(not found|does not exist)/i;
 /** Regex for invalid tool/schema errors */
 const INVALID_TOOL_RE = /invalid.*tool|tool.*invalid|invalid.*schema/i;
 /** Regex patterns for reasoning model timeout detection */
@@ -36,11 +44,25 @@ const OVERLOAD_RE = /\b(?:529|503)\b/;
 function isNonRetryableRequestError(error: unknown): boolean {
   const msg = error instanceof Error ? error.message : String(error);
   if (REASONING_CONTENT_RE.test(msg)) return false;
+  // Model-not-supported / ModelError is a per-provider config mismatch, not a fatal
+  // auth/request error — retryable so the chain fails over to a healthy sibling.
+  if (MODEL_UNSUPPORTED_RE.test(msg)) return false;
   if (/\b400\b/.test(msg) && BAD_REQUEST_RE.test(msg)) return true;
   if (/\b403\b/.test(msg) && QUOTA_LIMIT_RE.test(msg)) return false;
   if (/\b40[13]\b/.test(msg)) return true;
   if (INVALID_TOOL_RE.test(msg)) return true;
   return false;
+}
+
+/**
+ * A provider response that produced no usable output: no visible text AND no tool
+ * calls. Detection is by CONTENT only — the token count is intentionally ignored so
+ * a dropped/absent usage frame is never mistaken for an empty answer (audit #18).
+ */
+function isEmptyProviderResponse(response: ProviderResponse): boolean {
+  const hasText = typeof response.text === "string" && response.text.trim().length > 0;
+  const hasToolCalls = Array.isArray(response.toolCalls) && response.toolCalls.length > 0;
+  return !hasText && !hasToolCalls;
 }
 
 /**
@@ -59,6 +81,8 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
   get providerCount(): number { return this.providers.length; }
   /** Guards against thundering-herd concurrent probes to the same recovering provider. */
   private readonly probing = new Set<string>();
+  /** Throttle flag so the single-point-of-failure warning fires once per collapse. */
+  private spofWarned = false;
   // Thinking disable state now lives in ProviderHealthRegistry singleton
   // to survive FallbackChainProvider re-creation on cache misses.
 
@@ -113,11 +137,12 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
     systemPrompt: string,
     messages: ConversationMessage[],
     tools: ToolDefinition[],
-    options?: { signal?: AbortSignal },
+    options?: { signal?: AbortSignal; externalSignal?: AbortSignal },
   ): Promise<ProviderResponse> {
     return this.tryWithFallback("chat", (provider, safeMessages) =>
       provider.chat(systemPrompt, safeMessages, tools, options),
       messages,
+      options?.externalSignal,
     );
   }
 
@@ -126,14 +151,14 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
     messages: ConversationMessage[],
     tools: ToolDefinition[],
     onChunk: StreamCallback,
-    options?: { signal?: AbortSignal },
+    options?: { signal?: AbortSignal; externalSignal?: AbortSignal },
   ): Promise<ProviderResponse> {
     return this.tryWithFallback("streaming", (provider, safeMessages) => {
       if (supportsStreaming(provider)) {
         return provider.chatStream(systemPrompt, safeMessages, tools, onChunk, options);
       }
       return provider.chat(systemPrompt, safeMessages, tools, options);
-    }, messages);
+    }, messages, options?.externalSignal);
   }
 
   async healthCheck(): Promise<boolean> {
@@ -177,6 +202,7 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
     label: string,
     attempt: (provider: IAIProvider & Partial<IStreamingProvider>, messages: ConversationMessage[]) => Promise<ProviderResponse>,
     messages: ConversationMessage[],
+    externalSignal?: AbortSignal,
   ): Promise<ProviderResponse> {
     const logger = getLogger();
     const health = ProviderHealthRegistry.getInstance();
@@ -231,6 +257,16 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
 
         const safeMessages = this.stripImages(messages, provider);
         const response = await attempt(provider, safeMessages);
+        // A resolved-but-empty response (no text AND no tool calls) is NOT a
+        // success: a silently-empty provider must not short-circuit the chain and
+        // heal its own health while the loop's circuit breaker simultaneously
+        // counts it as a failure (audit #1/#2). Treat it as a retryable failure so
+        // the next healthy provider is tried. Detection is by content only — the
+        // token count is deliberately ignored (a dropped usage frame must not be
+        // mistaken for an empty answer; audit #18).
+        if (isEmptyProviderResponse(response)) {
+          throw new Error(`Provider "${provider.name}" returned an empty response (no text or tool calls)`);
+        }
         health.recordSuccess(provider.name);
 
         // Require 3 consecutive successes before re-enabling thinking to
@@ -258,6 +294,18 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
         const errorMsg = error instanceof Error ? error.message : String(error);
         lastError = error instanceof Error ? error : new Error(String(error));
 
+        // Control-plane cancellation: the EXTERNAL (un-composed) signal aborted this
+        // call — a benign cancel (user cancel / task wind-down), NOT a provider outage.
+        // Do NOT poison provider health and do NOT fall over to the next provider (it
+        // would fail identically on the same aborted signal → a false "All providers
+        // failed"). Propagate the cancel so the caller's cancellation path engages.
+        // A watchdog stall (externalSignal NOT aborted) falls through to the normal
+        // failure handling below, so stall recovery is unchanged and the decision keys
+        // on the signal, never the error-message text (audit #6).
+        if (externalSignal?.aborted) {
+          throw lastError;
+        }
+
         // Quota/billing errors get a long cooldown so the provider is skipped for hours.
         // Overload errors (529/503) get a medium cooldown to let the server recover.
         // Single-provider setups use shorter cooldowns since there is no fallback.
@@ -274,6 +322,26 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
 
         // Reset thinking success counter on any failure
         health.resetThinkingSuccessCounter(provider.name);
+
+        // SPOF guard: warn (once per collapse) when this failure leaves the chain
+        // with at most one working provider, so a dead fallback (expired key,
+        // unsupported model) is surfaced instead of silently leaving a single point
+        // of failure — health membership != real availability (audit #19).
+        if (this.providers.length > 1) {
+          const availableCount = this.providers.filter((p) => health.isAvailable(p.name)).length;
+          if (availableCount <= 1 && !this.spofWarned) {
+            this.spofWarned = true;
+            const live = this.providers.find((p) => health.isAvailable(p.name));
+            logger.warn("Provider chain collapsed to a single working provider — no real fallback remains", {
+              configured: this.providers.length,
+              available: availableCount,
+              liveProvider: live?.name ?? "none",
+              hint: "A configured fallback is failing health (e.g. expired key or unsupported model). Fix it via PROVIDER_CHAIN / credentials so the chain keeps redundancy.",
+            });
+          } else if (availableCount > 1 && this.spofWarned) {
+            this.spofWarned = false; // chain recovered redundancy
+          }
+        }
 
         // Detect reasoning model timeout pattern: the provider's CDN/proxy
         // may abort long-running reasoning requests before the model responds.

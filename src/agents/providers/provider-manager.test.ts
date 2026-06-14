@@ -68,6 +68,14 @@ vi.mock("./provider-preferences.js", () => ({
       delete: vi.fn((chatId: string) => {
         preferenceState.delete(chatId);
       }),
+      getMostRecent: vi.fn((excludeChatId?: string) => {
+        let last: { chatId: string; providerName: string; model?: string; selectionMode: "strada-preference-bias" | "strada-hard-pin" } | undefined;
+        for (const [chatId, value] of preferenceState) {
+          if (excludeChatId && chatId === excludeChatId) continue;
+          last = { chatId, ...value };
+        }
+        return last;
+      }),
       close: vi.fn(),
     };
   }),
@@ -83,9 +91,11 @@ vi.mock("../../utils/logger.js", () => ({
 }));
 
 import { ProviderManager } from "./provider-manager.js";
+import { ProviderHealthRegistry } from "./provider-health.js";
 
 describe("ProviderManager", () => {
   beforeEach(() => {
+    ProviderHealthRegistry.resetInstance();
     preferenceState.clear();
     buildProviderChainMock.mockReset();
     buildProviderChainMock.mockImplementation((order: string[]) => makeProvider(`chain(${order.join("->")})`));
@@ -179,6 +189,31 @@ describe("ProviderManager", () => {
     expect(provider?.name).toBe("chain(kimi->qwen)");
   });
 
+  it("threads per-provider base-URL overrides (opencode) plus ollama into buildProviderChain", () => {
+    const defaultProvider = makeProvider("chain(opencode)");
+    const manager = new ProviderManager(
+      defaultProvider,
+      { opencode: { apiKey: "opencode-key" }, qwen: { apiKey: "qwen-key" } },
+      { opencode: "opencode/grok-code" },
+      "/tmp/provider-manager-test",
+      // Default order is qwen-first; querying opencode reorders to
+      // ["opencode","qwen"], which differs from the default order and therefore
+      // forces a real buildProviderChain call (not the default-chain short-circuit).
+      ["qwen", "opencode"],
+      "http://localhost:11434",
+      { opencode: "https://opencode.ai/go/v1" },
+    );
+
+    manager.getProviderByName("opencode");
+
+    const lastCall = buildProviderChainMock.mock.calls.at(-1);
+    expect(lastCall?.[2]?.baseUrls).toEqual({
+      opencode: "https://opencode.ai/go/v1",
+      ollama: "http://localhost:11434",
+    });
+    expect(lastCall?.[2]?.models).toMatchObject({ opencode: "opencode/grok-code" });
+  });
+
   it("canonicalizes labeled provider names before preference storage and direct lookup", () => {
     const defaultProvider = makeProvider("chain(qwen->kimi)");
     const manager = new ProviderManager(
@@ -199,6 +234,129 @@ describe("ProviderManager", () => {
       executionPolicyNote: "Strada remains the control plane. This selection biases routing toward the preferred provider/model, but planning, execution, review, and synthesis may still route dynamically unless an explicit hard pin is requested.",
     });
     expect(manager.getProviderByName("Kimi (Moonshot)")?.name).toBe("chain(kimi->qwen)");
+  });
+
+  // Model-revert root cause: per-provider preferences were keyed by the ephemeral web
+  // profileId, so when the profileId churned (reload / new browser / lost token / a
+  // fresh `issue()`), the per-profile row was orphaned and getActiveInfo silently fell
+  // back to the SYSTEM DEFAULT — the chronic "no matter what I pick it reverts". The
+  // most recent explicit selection is now mirrored to a stable global key so a new
+  // profile inherits it instead of reverting.
+  it("inherits the most recent selection as a global default so it survives profileId churn", () => {
+    const defaultProvider = makeProvider("chain(qwen->kimi)");
+    const manager = new ProviderManager(
+      defaultProvider,
+      { qwen: { apiKey: "qwen-key" }, kimi: { apiKey: "kimi-key" } },
+      { qwen: "qwen-max", kimi: "kimi-for-coding" },
+      "/tmp/provider-manager-test",
+      ["qwen", "kimi"],
+    );
+
+    // User selects under their current web profile.
+    manager.setPreference("profile-A", "Kimi (Moonshot)", "kimi-long-context");
+
+    // The web session churns → a brand-new profileId with no per-profile row. It must
+    // STILL see the selection (global fallback), not the system default.
+    const active = manager.getActiveInfo("profile-B-new");
+    expect(active.providerName).toBe("kimi");
+    expect(active.model).toBe("kimi-long-context");
+    expect(active.isDefault).toBe(false);
+  });
+
+  // Retroactive seed: preferences set BEFORE the global-mirror fix existed have no
+  // global row, so a churned profile would still revert. On startup, seed the global
+  // default from the most recent existing selection so pre-fix choices survive churn
+  // without forcing the user to re-select.
+  it("seeds the global default from the most recent existing preference on startup", () => {
+    // Simulate rows written before the fix (no global key present).
+    preferenceState.set("old-profile-A", {
+      providerName: "openai", model: "gpt-5.4", selectionMode: "strada-preference-bias",
+    });
+    preferenceState.set("old-profile-B", {
+      providerName: "kimi", model: "kimi-for-coding", selectionMode: "strada-preference-bias",
+    }); // most recently inserted → the one to inherit
+
+    const defaultProvider = makeProvider("chain(qwen->kimi)");
+    const manager = new ProviderManager(
+      defaultProvider,
+      { qwen: { apiKey: "qwen-key" }, kimi: { apiKey: "kimi-key" } },
+      { qwen: "qwen-max", kimi: "kimi-for-coding" },
+      "/tmp/provider-manager-test",
+      ["qwen", "kimi"],
+    );
+
+    // A brand-new (churned) profile with no row inherits the seeded global default.
+    const active = manager.getActiveInfo("brand-new-profile");
+    expect(active.providerName).toBe("kimi");
+    expect(active.model).toBe("kimi-for-coding");
+    expect(active.isDefault).toBe(false);
+  });
+
+  it("does not overwrite an existing global default when seeding on startup", () => {
+    preferenceState.set("__strada_global_default__", {
+      providerName: "openai", model: "gpt-5.5", selectionMode: "strada-preference-bias",
+    });
+    preferenceState.set("some-profile", {
+      providerName: "kimi", model: "kimi-for-coding", selectionMode: "strada-preference-bias",
+    });
+
+    const defaultProvider = makeProvider("chain(qwen->kimi)");
+    const manager = new ProviderManager(
+      defaultProvider,
+      { qwen: { apiKey: "qwen-key" }, kimi: { apiKey: "kimi-key" } },
+      { qwen: "qwen-max", kimi: "kimi-for-coding" },
+      "/tmp/provider-manager-test",
+      ["qwen", "kimi"],
+    );
+
+    // Existing global default (openai) is preserved, not replaced by "some-profile".
+    expect(manager.getActiveInfo("fresh-profile").providerName).toBe("openai");
+  });
+
+  it("lets an explicit per-chat preference override the inherited global default", () => {
+    const defaultProvider = makeProvider("chain(qwen->kimi)");
+    const manager = new ProviderManager(
+      defaultProvider,
+      { qwen: { apiKey: "qwen-key" }, kimi: { apiKey: "kimi-key" } },
+      { qwen: "qwen-max", kimi: "kimi-for-coding" },
+      "/tmp/provider-manager-test",
+      ["qwen", "kimi"],
+    );
+
+    manager.setPreference("profile-A", "Kimi (Moonshot)", "kimi-for-coding");
+    manager.setPreference("profile-B", "qwen", "qwen-max"); // global is now qwen
+
+    // A keeps its own explicit pref (kimi) even though the global default is qwen.
+    expect(manager.getActiveInfo("profile-A").providerName).toBe("kimi");
+    expect(manager.getActiveInfo("profile-B").providerName).toBe("qwen");
+    // A churned-in new profile inherits the latest global (qwen).
+    expect(manager.getActiveInfo("profile-C-fresh").providerName).toBe("qwen");
+  });
+
+  // RC-3: getActiveInfo surfaces live provider health when the selected provider is
+  // unhealthy, so the user/dashboard can see "it's failing" instead of silent reverts.
+  it("attaches health status to getActiveInfo only when the selected provider is unhealthy", () => {
+    const defaultProvider = makeProvider("chain(qwen->kimi)");
+    const manager = new ProviderManager(
+      defaultProvider,
+      { qwen: { apiKey: "qwen-key" }, kimi: { apiKey: "kimi-key" } },
+      { qwen: "qwen-max", kimi: "kimi-for-coding" },
+      "/tmp/provider-manager-test",
+      ["qwen", "kimi"],
+    );
+    manager.setPreference("chat-1", "kimi", "kimi-for-coding");
+
+    // Healthy → no health fields (keeps the common shape minimal).
+    expect(manager.getActiveInfo("chat-1").healthStatus).toBeUndefined();
+
+    // Drive kimi to "down" via repeated failures.
+    const health = ProviderHealthRegistry.getInstance();
+    for (let i = 0; i < 5; i++) health.recordFailure("kimi", "Model kimi-for-coding not supported");
+    expect(health.getStatus("kimi")).toBe("down");
+
+    const active = manager.getActiveInfo("chat-1");
+    expect(active.healthStatus).toBe("down");
+    expect(active.healthError).toContain("not supported");
   });
 
   it("limits execution candidates to the configured default chain", () => {
@@ -320,6 +478,50 @@ describe("ProviderManager", () => {
     expect(manager.listExecutionCandidates("chat-1").map((entry) => entry.name)).toEqual(["kimi"]);
   });
 
+  it("reports the real default model for a claude-pinned chat instead of \"default\" (L3)", () => {
+    const defaultProvider = makeProvider("chain(qwen->kimi)");
+    preferenceState.set("chat-claude", {
+      providerName: "claude",
+      selectionMode: "strada-hard-pin",
+      // intentionally NO model
+    });
+    const manager = new ProviderManager(
+      defaultProvider,
+      { qwen: { apiKey: "qwen-key" }, kimi: { apiKey: "kimi-key" } },
+      { qwen: "qwen-max", kimi: "kimi-for-coding" }, // no claude override
+      "/tmp/provider-manager-test",
+      ["qwen", "kimi"],
+    );
+
+    // TEETH: unfixed code returns "default" (no PROVIDER_PRESETS["claude"] entry).
+    expect(manager.getActiveInfo("chat-claude").model).toBe("claude-sonnet-4-6-20250514");
+  });
+
+  it("throws instead of silently falling back when a hard-pinned provider cannot be built (L4)", async () => {
+    const defaultProvider = makeProvider("chain(qwen->kimi)");
+    preferenceState.set("chat-1", {
+      providerName: "kimi",
+      model: "kimi-long-context",
+      selectionMode: "strada-hard-pin",
+    });
+    const registry = await import("./provider-registry.js");
+    // Simulate creds removed/rotated after the pin: the pinned build throws.
+    (registry.createProvider as any).mockImplementationOnce(() => {
+      throw new Error("Kimi (Moonshot) provider requires an API key");
+    });
+
+    const manager = new ProviderManager(
+      defaultProvider,
+      { qwen: { apiKey: "qwen-key" }, kimi: { apiKey: "kimi-key" } },
+      { qwen: "qwen-max", kimi: "kimi-for-coding" },
+      "/tmp/provider-manager-test",
+      ["qwen", "kimi"],
+    );
+
+    // TEETH: the unfixed code caught the build failure and returned defaultProvider.
+    expect(() => manager.getProvider("chat-1")).toThrow(/hard-pinned/i);
+  });
+
   it("surfaces official model signals in the provider model list when the shared catalog lags", async () => {
     const defaultProvider = makeProvider("chain(minimax)");
     const manager = new ProviderManager(
@@ -366,6 +568,28 @@ describe("ProviderManager", () => {
       "MiniMax-M2.7",
       "MiniMax-M2.7-highspeed",
     ]));
+  });
+
+  // Regression (M4): the 30s aggregate-timeout fallback timer must be cleared
+  // once allSettled wins the race; otherwise it stays ref'd on the event loop.
+  it("does not leak the aggregate-timeout timer when models resolve fast", async () => {
+    vi.useFakeTimers();
+    try {
+      const defaultProvider = makeProvider("chain(minimax)");
+      const manager = new ProviderManager(
+        defaultProvider,
+        { minimax: { apiKey: "minimax-key" } },
+        { minimax: "MiniMax-M2.7" },
+        "/tmp/provider-manager-test",
+        ["minimax"],
+      );
+
+      await manager.listAvailableWithModels();
+
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("surfaces catalog freshness and capability drift telemetry for execution candidates", () => {

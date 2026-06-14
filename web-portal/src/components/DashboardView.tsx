@@ -40,7 +40,7 @@ export default function DashboardView() {
   const loading = healthQuery.isLoading && metricsQuery.isLoading
   const health = healthQuery.data ?? null
   const metrics = metricsQuery.data ?? null
-  const triggers = triggersQuery.data ?? []
+  const triggers = Array.isArray(triggersQuery.data) ? triggersQuery.data : []
   const agents = agentsQuery.data ?? null
   const delegations = delegationsQuery.data ?? null
   const consolidation = consolidationQuery.data ?? null

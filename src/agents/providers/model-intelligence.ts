@@ -473,10 +473,15 @@ async function fetchLiteLLM(): Promise<Map<string, ModelInfo>> {
       // Skip metadata keys (e.g. "sample_spec")
       if (!entry || typeof entry !== "object" || (!entry.max_tokens && !entry.max_input_tokens && !entry.max_output_tokens)) continue;
 
-      const contextWindow = entry.max_input_tokens ?? entry.max_tokens ?? 0;
       const maxOutputTokens = entry.max_output_tokens ?? entry.max_tokens ?? 0;
-
-      if (contextWindow === 0) continue;
+      // Some catalog entries (often provider aliases) omit context-window
+      // metadata but are still valid, selectable models. Dropping them here
+      // starved the model picker (e.g. only the default OpenAI model showed up
+      // even though the catalog had 2000+ models). Keep them with a
+      // conservative fallback context window instead of discarding them.
+      const contextWindow =
+        (entry.max_input_tokens ?? entry.max_tokens)
+        ?? (maxOutputTokens > 0 ? maxOutputTokens : 8000);
 
       // Prices in LiteLLM are per-token; convert to per-million
       const inputPricePerMillion = (entry.input_cost_per_token ?? 0) * 1_000_000;
@@ -872,9 +877,27 @@ export class ModelIntelligenceService {
     return { modelsUpdated: HARDCODED_MODELS.size, source: "hardcoded", errors };
   }
 
-  /** Look up a model by its id. Falls back to hardcoded if not found in live registry. */
+  /**
+   * Look up a model by its id. Falls back to hardcoded if not found in live registry.
+   *
+   * Preset default model ids are sometimes slash-prefixed/aliased
+   * (e.g. "openai/gpt-oss-120b", "meta-llama/Llama-4-...", "accounts/fireworks/models/...").
+   * The remote catalog (LiteLLM) stores entries under the prefix-stripped id
+   * (everything after the last "/"). To reconcile the keyspace we try the exact id
+   * first, then the prefix-stripped tail, against both the live and hardcoded maps.
+   */
   getModelInfo(modelId: string): ModelInfo | undefined {
-    return this.models.get(modelId) ?? HARDCODED_MODELS.get(modelId);
+    const exact = this.models.get(modelId) ?? HARDCODED_MODELS.get(modelId);
+    if (exact) return exact;
+
+    const slashIdx = modelId.lastIndexOf("/");
+    if (slashIdx >= 0) {
+      const stripped = modelId.slice(slashIdx + 1);
+      if (stripped && stripped !== modelId) {
+        return this.models.get(stripped) ?? HARDCODED_MODELS.get(stripped);
+      }
+    }
+    return undefined;
   }
 
   /** Return all models for a given provider name. */

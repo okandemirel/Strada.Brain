@@ -51,6 +51,14 @@ describe("Slack Formatters", () => {
       expect(result).toContain("```");
       expect(result).toContain("code");
     });
+
+    it("escapes literal angle brackets and ampersands so content can't inject mrkdwn control syntax", () => {
+      const result = formatToSlackMrkdwn("a <b> & c");
+      // The raw < > & are neutralized; no unescaped control characters remain.
+      expect(result).toContain("&lt;b&gt;");
+      expect(result).toContain("&amp;");
+      expect(result).not.toContain("<b>");
+    });
   });
 
   describe("truncateForSlack", () => {
@@ -117,6 +125,13 @@ describe("Slack Formatters", () => {
     it("should format code with language", () => {
       const result = formatCodeBlock("const x = 1;", "javascript");
       expect(result).toContain("```javascript");
+    });
+
+    it("escapes embedded triple backticks (L5)", () => {
+      const result = formatCodeBlock("a```b");
+      // TEETH: the unfixed no-op left the raw ``` intact inside the fence.
+      expect(result).toContain("a`\\`\\`b");
+      expect(result).not.toContain("a```b");
     });
   });
 
@@ -302,10 +317,13 @@ describe("characterization (plan 013)", () => {
     ]);
   });
 
-  it("formatCodeBlock keeps inner fences verbatim, adds surrounding newlines, no trim", () => {
+  it("formatCodeBlock NEUTRALIZES inner fences, adds surrounding newlines, no trim", () => {
+    // origin/main 9a1ecdf: inner ``` is neutralized to `\`\` so a nested fence
+    // can't close the surrounding Slack code block. Surrounding newlines and the
+    // no-trim behavior are unchanged.
     const nested = "console.log(\"hi\");\n```\nnested fence\n```";
     expect(formatCodeBlock(nested, "js")).toBe(
-      "\n```js\nconsole.log(\"hi\");\n```\nnested fence\n```\n```\n"
+      "\n```js\nconsole.log(\"hi\");\n`\\`\\`\nnested fence\n`\\`\\`\n```\n"
     );
     expect(formatCodeBlock("  padded  ")).toBe("\n```\n  padded  \n```\n");
   });
