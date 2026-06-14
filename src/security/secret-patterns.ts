@@ -226,11 +226,17 @@ export function applySecretPatterns(
 
     onPatternMatch?.(pattern.name, matches.length);
 
-    const redaction =
-      typeof pattern.redaction === "function"
-        ? pattern.redaction(matches[0] ?? "")
-        : pattern.redaction;
-    result = result.replace(pattern.pattern, redaction);
+    // FUNCTION redactions: pass a per-match replacer so each match is redacted
+    // from its OWN text (no cross-record corruption: e.g. two different DB URLs
+    // each keep their own scheme+host). The function return value is also NOT
+    // $-interpreted by String.replace, so a redaction that embeds match-derived
+    // text or a secret legally containing "$&"/"$1"/"$`" can't re-insert the
+    // raw secret. STRING redactions keep group refs (e.g. env_value "$1=...").
+    const { redaction } = pattern;
+    result =
+      typeof redaction === "function"
+        ? result.replace(pattern.pattern, (m) => redaction(m))
+        : result.replace(pattern.pattern, redaction);
   }
 
   stats.bytesRemoved = originalLength - result.length;
@@ -278,4 +284,17 @@ export function sanitizeSecrets(content: string): string {
   const result = applySecretPatterns(content, DEFAULT_SECRET_PATTERNS, MAX_OUTPUT_LENGTH);
   emitSanitizationEvent(result.stats.totalMatches);
   return result.content;
+}
+
+/**
+ * Like {@link sanitizeSecrets} but does NOT fire the sanitization metric event.
+ *
+ * The logger applies this on every ring-buffer write as defense-in-depth, not
+ * as a distinct exposure event. Routine lines (e.g. "DEBUG=true", "token=...")
+ * trip the env_value/secret_value patterns and would otherwise inflate the
+ * user-facing "Secrets Sanitized" counter on the dashboard. Redaction still
+ * happens; only the metric emission is suppressed for this hot path.
+ */
+export function sanitizeSecretsQuiet(content: string): string {
+  return applySecretPatterns(content, DEFAULT_SECRET_PATTERNS, MAX_OUTPUT_LENGTH).content;
 }
