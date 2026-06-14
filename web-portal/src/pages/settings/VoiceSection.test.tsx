@@ -31,7 +31,11 @@ describe('VoiceSection', () => {
 
     render(<VoiceSection />)
 
-    expect(fetchMock).toHaveBeenCalledWith('/api/settings/voice')
+    // fetchJson() passes a second options arg (headers/cache), so assert on
+    // the URL of the GET (non-POST) call rather than an exact two-arg match.
+    expect(
+      fetchMock.mock.calls.some(([url, init]) => url === '/api/settings/voice' && init?.method !== 'POST'),
+    ).toBe(true)
 
     // Default browserSttEnabled is false — true proves server hydration won.
     await waitFor(() => {

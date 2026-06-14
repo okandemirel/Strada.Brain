@@ -101,7 +101,13 @@ function findSplitPoint(
 
   const sentenceEnd = remaining.lastIndexOf(". ", maxLength);
   if (accepts(sentenceEnd, options.sentenceRatio)) {
-    return sentenceEnd + (options.sentenceSplitOffset ?? 0);
+    // lastIndexOf(". ", maxLength) can return exactly maxLength; a positive
+    // sentenceSplitOffset (Discord uses 1) would then push the slice end to
+    // maxLength + 1, producing a chunk one char over the channel limit that
+    // trim() cannot shorten (the final char is "."). Clamp so a sentence
+    // split can never exceed maxLength. All other inputs are unaffected
+    // because the offset only matters when sentenceEnd is at maxLength.
+    return Math.min(sentenceEnd + (options.sentenceSplitOffset ?? 0), maxLength);
   }
 
   if (options.spaceRatio !== undefined) {

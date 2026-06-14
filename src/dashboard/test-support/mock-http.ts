@@ -54,17 +54,13 @@ export function createMockReq(body?: string): IncomingMessage {
  * Mock IncomingMessage for handlers that read the body themselves via
  * `for await (const chunk of req)` — must be a real async-iterable stream,
  * not a bare EventEmitter.
+ *
+ * Always attaches a `socket` (with `remoteAddress`) and empty `headers` so
+ * handlers that inspect them for per-IP rate limiting work without a second
+ * helper. Pass `remoteAddress` to exercise a specific source address.
  */
-export function createStreamReq(body: string): IncomingMessage {
-  return Readable.from([Buffer.from(body)]) as unknown as IncomingMessage;
-}
-
-/**
- * Stream request carrying a source address, for per-IP rate-limit cases.
- * The body is JSON-serialized automatically.
- */
-export function createStreamReqFrom(body: unknown, remoteAddress = "127.0.0.1"): IncomingMessage {
-  const stream = Readable.from([Buffer.from(JSON.stringify(body))]);
+export function createStreamReq(body: string, remoteAddress = "127.0.0.1"): IncomingMessage {
+  const stream = Readable.from([Buffer.from(body)]);
   return Object.assign(stream, {
     socket: { remoteAddress },
     headers: {},
@@ -76,7 +72,15 @@ export function responseJson(res: MockRes & ServerResponse): Record<string, unkn
   return JSON.parse((res as MockRes).body) as Record<string, unknown>;
 }
 
-/** Flush one macrotask turn so readJsonBody().then(...) chains settle. */
+/**
+ * Flush one macrotask turn so readJsonBody().then(...) chains settle.
+ *
+ * Use this ONLY when a test asserts that NO response was written yet (e.g.
+ * `expect(res.end).not.toHaveBeenCalled()` after a null body) — a single turn
+ * is deterministic there. When a test asserts a response WAS written, prefer
+ * `waitForResponse(res)` instead, which polls until `res.end` fires rather
+ * than betting on one macrotask.
+ */
 export async function flushAsync(): Promise<void> {
   await new Promise((resolve) => setImmediate(resolve));
 }
@@ -84,7 +88,8 @@ export async function flushAsync(): Promise<void> {
 /**
  * Wait until the mock response has been ended (for async handlers). Unlike
  * flushAsync(), this polls until `res.end` fires (up to 50 turns), so it also
- * covers handlers that need more than one macrotask to settle.
+ * covers handlers that need more than one macrotask to settle. Use this
+ * whenever a test asserts a response WAS written.
  */
 export async function waitForResponse(res: MockRes & ServerResponse): Promise<void> {
   for (let i = 0; i < 50 && !(res as MockRes).end.mock.calls.length; i++) {

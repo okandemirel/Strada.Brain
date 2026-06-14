@@ -1,8 +1,7 @@
 import { realpathSync } from 'node:fs';
 import { isAbsolute, resolve, sep } from 'node:path';
 import type { IVault, VaultId, VaultQuery, VaultQueryResult, VaultHit, VaultStats } from './vault.interface.js';
-import { isVaultRootAllowed, resolveExistingVaultRoot } from './path-policy.js';
-import { redactPathsInMessage } from './obsidian-vault.js';
+import { isVaultRootAllowed, redactPathsInMessage, resolveExistingVaultRoot } from './path-policy.js';
 
 export interface VaultFactory {
   createVault(rootPath: string): IVault | Promise<IVault>;

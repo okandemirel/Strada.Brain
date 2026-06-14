@@ -7,6 +7,7 @@ import {
   useVoiceSettings,
 } from '../../hooks/use-voice-settings'
 import type { VoiceSettings } from '../../hooks/use-voice-settings'
+import { fetchJson } from '../../utils/api'
 
 function Toggle({
   enabled,
@@ -50,7 +51,7 @@ export default function VoiceSection() {
 
   const syncToBackend = useCallback(async (next: VoiceSettings) => {
     try {
-      await fetch('/api/settings/voice', {
+      await fetchJson('/api/settings/voice', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(next),
@@ -64,8 +65,7 @@ export default function VoiceSection() {
   // an offline backend or null fields must not clobber local settings).
   useEffect(() => {
     let cancelled = false
-    fetch('/api/settings/voice')
-      .then((r) => (r.ok ? r.json() : null))
+    fetchJson<Partial<VoiceSettings>>('/api/settings/voice')
       .then((d) => {
         if (cancelled || !d) return
         const serverValues: Partial<VoiceSettings> = {}
