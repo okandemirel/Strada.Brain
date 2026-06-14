@@ -73,12 +73,13 @@ describe('GraphNodeOverlay', () => {
 
     render(<GraphNodeOverlay nodeId="a" onClose={() => {}} />);
 
+    // The heading and the backlink items can render on separate async ticks;
+    // assert them all inside waitFor so a slower render (CI) isn't flaky.
     await waitFor(() => {
       expect(screen.getByText('Backlinks')).toBeInTheDocument();
+      expect(screen.getByText('note-1')).toBeInTheDocument();
+      expect(screen.getByText('note-2')).toBeInTheDocument();
     });
-
-    expect(screen.getByText('note-1')).toBeInTheDocument();
-    expect(screen.getByText('note-2')).toBeInTheDocument();
   });
 
   it('gracefully handles missing backlinks endpoint (404)', async () => {
