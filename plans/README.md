@@ -115,6 +115,48 @@ Audit findings vetted and dropped (do not re-audit these):
   extraction command was wrong — config.ts reads env via an `env["VAR"]` map
   (282 distinct vars). Plan 002 inlines corrected commands.
 
+## Post-implementation review (2026-06-14)
+
+After all 15 plans landed, the merged branch went through `/simplify`, `/security-review`,
+and `/code-review high`. `/simplify` applied 12 quality fixes (5 commits); `/security-review`
+found nothing exploitable (the branch's security changes are net hardenings). `/code-review high`
+surfaced 7 correctness candidates; each was put through an independent adversarial verifier.
+**5 were CONFIRMED and fixed** (3 disjoint worktree groups, each tech-lead reviewed + reproduced
+the base bug before approving):
+
+- **HIGH** — Rolling compaction summary grew unbounded on the live path (only the disk-restore
+  path was capped), eventually returning an empty conversation while still over budget →
+  thrash + total history loss. Fixed: `MAX_ROLLING_SUMMARY_CHARS` cap with head/tail keep at the
+  single `partitionSummary` chokepoint; stage-4 can no longer return an over-budget prompt;
+  restore truncates instead of discarding.
+- **HIGH** — `stage4HardTruncation` could orphan a tool_use/tool_result pair (they are separate
+  messages; per-message skip drops one side) → Anthropic 400 → persisted → permanently bricked
+  session. Fixed: id-matched `dropOrphanToolMessages` normalization in compaction, both directions.
+- **HIGH** — `applySecretPatterns` computed a function-redaction once from `matches[0]` and applied
+  it to every match (cross-record host stamping) and passed it as a *string* to `.replace()` so
+  `$&`/`$1` in a secret value re-expanded the original (redaction bypass). Now on every log write.
+  Fixed: per-match function replacer; string `$1` path preserved.
+- **MEDIUM** — Ring-buffer meta was sanitized over its *serialized JSON*; patterns that eat a
+  closing quote/brace made it unparseable → the whole meta object was dropped to
+  `{_sanitizeFailed:true}` (losing `chatId` etc.) exactly on credential-bearing diagnostic
+  entries. Fixed: sanitize string *leaf values* of the parsed object, never delimiters.
+- **LOW** — Ring-buffer redactions (incl. false positives on routine `KEY=value` text) fired the
+  metrics callback, inflating the user-facing "Secrets Sanitized" exposure counter. Fixed:
+  `sanitizeSecretsQuiet` (non-emitting) for the logger path.
+- **LOW (latent)** — `splitMessage` could emit a 2001-char Discord chunk (off-by-one at the
+  sentence boundary). Fixed with a clamp; note it has no production caller today (the bot truncates).
+
+Verdicts recorded so they are not re-audited: the telemetry-queue race (stale monitor diff,
+event ordering, no shutdown drain) was judged **not worth a code fix** — best-effort UI telemetry,
+the bus is a guarded no-op after shutdown and errors are swallowed at two layers; one clarifying
+comment was added instead. Cleanups applied alongside: moved `redactPathsInMessage` to the
+`path-policy` leaf (cut a heavy `vault-registry → obsidian-vault` import edge / cycle risk),
+`VoiceSection` now uses `fetchJson`, mock-http twin helpers collapsed.
+
+Follow-up worth a future plan (out of scope here): `server-system-routes.ts:339` still uses the
+same serialized-JSON sanitize-then-parse pattern as the MEDIUM bug above, on the dashboard
+`/api/logs` *read* path — pre-existing, same fix shape.
+
 ## Confirmed but not planned this round
 
 Real findings with no plan yet (candidates for a future `improve reconcile` run):
