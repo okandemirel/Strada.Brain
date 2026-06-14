@@ -6920,6 +6920,9 @@ export class Orchestrator {
             if (tc.name === "file_edit" && typeof toolInput.old_string === "string" && typeof toolInput.new_string === "string") {
               // file_edit → emit code:file_update with original + modified for diff view
               try {
+                // `modified` is intentionally re-read live from disk; in a turn with
+                // multiple edits to the same file it may reflect a later same-file
+                // edit, not just this one — accepted as best-effort monitor telemetry.
                 const modified = await readFile(absoluteFilePath, "utf-8");
                 // Prefer pre-edit content from tool metadata (reliable) over reverse-engineering
                 const original = typeof tr.metadata?.originalContent === "string"
