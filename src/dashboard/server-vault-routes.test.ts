@@ -16,7 +16,6 @@ import {
   createMockReq,
   createMockRes,
   createStreamReq,
-  createStreamReqFrom,
   responseJson,
   type MockRes,
 } from "./test-support/mock-http.js";
@@ -563,14 +562,14 @@ describe("handleVaultRoutes — POST /api/vaults/:id/search rate limiting", () =
 
     for (let i = 0; i < 2; i++) {
       const res = createMockRes();
-      const handled = handleVaultRoutes("/api/vaults/x/search", "POST", createStreamReqFrom({ text: "hi" }), res, ctx);
+      const handled = handleVaultRoutes("/api/vaults/x/search", "POST", createStreamReq(JSON.stringify({ text: "hi" })), res, ctx);
       expect(handled).toBe(true);
       await new Promise(setImmediate);
       expect((res as unknown as { statusCode: number }).statusCode).toBe(200);
     }
 
     const res = createMockRes();
-    const handled = handleVaultRoutes("/api/vaults/x/search", "POST", createStreamReqFrom({ text: "hi" }), res, ctx);
+    const handled = handleVaultRoutes("/api/vaults/x/search", "POST", createStreamReq(JSON.stringify({ text: "hi" })), res, ctx);
     expect(handled).toBe(true);
     await new Promise(setImmediate);
     expect((res as unknown as { statusCode: number }).statusCode).toBe(429);
@@ -582,14 +581,14 @@ describe("handleVaultRoutes — POST /api/vaults/:id/search rate limiting", () =
 
     for (let i = 0; i < 2; i++) {
       const res = createMockRes();
-      handleVaultRoutes("/api/vaults/x/search", "POST", createStreamReqFrom({ text: "hi" }), res, ctx);
+      handleVaultRoutes("/api/vaults/x/search", "POST", createStreamReq(JSON.stringify({ text: "hi" })), res, ctx);
       await new Promise(setImmediate);
       expect((res as unknown as { statusCode: number }).statusCode).toBe(200);
     }
 
     // Third request from a DIFFERENT source is still allowed.
     const res = createMockRes();
-    const handled = handleVaultRoutes("/api/vaults/x/search", "POST", createStreamReqFrom({ text: "hi" }, "10.0.0.9"), res, ctx);
+    const handled = handleVaultRoutes("/api/vaults/x/search", "POST", createStreamReq(JSON.stringify({ text: "hi" }), "10.0.0.9"), res, ctx);
     expect(handled).toBe(true);
     await new Promise(setImmediate);
     expect((res as unknown as { statusCode: number }).statusCode).toBe(200);
