@@ -1,4 +1,5 @@
 import { lstat, mkdir, realpath, stat } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { basename, dirname, extname, isAbsolute, relative, resolve, sep } from 'node:path';
 import type { VaultFile } from './vault.interface.js';
 
@@ -329,4 +330,60 @@ async function assertRealpathInside(rootPath: string, path: string): Promise<voi
 function isInsideOrEqual(candidatePath: string, rootPath: string): boolean {
   const rootWithSep = rootPath.endsWith(sep) ? rootPath : `${rootPath}${sep}`;
   return candidatePath === rootPath || candidatePath.startsWith(rootWithSep);
+}
+
+/**
+ * Compute homedir() once at module load — it never changes for the life of
+ * the process, so the lookup belongs out of the hot path.
+ */
+const REDACT_HOMEDIR = homedir();
+
+/**
+ * Escape a literal path for embedding in a RegExp constructor. Path
+ * separators (`/`, `\\`) are intentionally treated as literals, not
+ * alternation — sanitizeSyncResponse (server-vault-routes.ts) is the
+ * authoritative defense against any new-shape leak. `-` is escaped too so
+ * the pattern stays safe if it's ever moved inside a character class.
+ */
+function escapeForRegExp(literal: string): string {
+  return literal.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&');
+}
+
+/**
+ * Redact absolute filesystem paths from an error message before it crosses a
+ * trust boundary. Replaces occurrences of:
+ *   - `rootPath` (lexical) → `<vault>`
+ *   - `realpath(rootPath)` when it differs (e.g. /var/folders → /private/var) → `<vault>`
+ *   - `os.homedir()` → `<home>`
+ *
+ * Pure string function (no fs access): it lives in this leaf module so vault
+ * consumers (VaultRegistry) can import it without eagerly pulling in the whole
+ * obsidian-vault implementation graph. `obsidian-vault.ts` re-exports it for
+ * existing importers.
+ *
+ * Windows note: this best-effort helper matches the path string exactly as it
+ * appears. It does NOT canonicalize forward-slash vs backslash, the `\\?\`
+ * long-path prefix, or short-name (8.3) variants. `sanitizeSyncResponse` in
+ * server-vault-routes.ts is the authoritative defense — it replaces
+ * `canvas.error` with a stable generic string regardless of content, so any
+ * variant this helper misses is still scrubbed at the HTTP boundary.
+ *
+ * Synchronous: `realpathRoot` is resolved once at construction time by
+ * `ObsidianVault`; the standalone export path takes the realpath as an
+ * optional argument so callers (and tests) can pass a value without an
+ * extra fs hit.
+ */
+export function redactPathsInMessage(msg: string, rootPath: string, realpathRoot?: string): string {
+  if (!msg) return msg;
+  let out = msg;
+  if (rootPath) {
+    out = out.replace(new RegExp(escapeForRegExp(rootPath), 'g'), '<vault>');
+    if (realpathRoot && realpathRoot !== rootPath) {
+      out = out.replace(new RegExp(escapeForRegExp(realpathRoot), 'g'), '<vault>');
+    }
+  }
+  if (REDACT_HOMEDIR && REDACT_HOMEDIR !== '/' && REDACT_HOMEDIR !== rootPath) {
+    out = out.replace(new RegExp(escapeForRegExp(REDACT_HOMEDIR), 'g'), '<home>');
+  }
+  return out;
 }
