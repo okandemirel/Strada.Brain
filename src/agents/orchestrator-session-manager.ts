@@ -33,6 +33,7 @@ import {
   stripVisibleProviderArtifacts,
 } from "./orchestrator-text-utils.js";
 import { stripInternalDecisionMarkers } from "./orchestrator-supervisor-routing.js";
+import { capRollingSummary, MAX_ROLLING_SUMMARY_CHARS } from "./session-compaction.js";
 import { getLogger } from "../utils/logger.js";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -168,13 +169,25 @@ export class SessionManager {
           ? rawOverrideCount
           : 0;
       // Migration: legacy session files (pre-compactionSummary) restore as undefined.
+      // Truncate (head+tail) an over-long restored summary to MAX_ROLLING_SUMMARY_CHARS
+      // instead of discarding it — discarding loses ALL compacted history, including
+      // the preserved "Original user request" header. The 512KB whole-file rejection
+      // in restoreSessionFromDisk still guards against pathological files.
       const rawCompactionSummary = (data as Record<string, unknown>).compactionSummary;
-      const compactionSummary =
-        typeof rawCompactionSummary === "string" &&
-        rawCompactionSummary.length > 0 &&
-        rawCompactionSummary.length <= 50_000
-          ? rawCompactionSummary
-          : undefined;
+      let compactionSummary: string | undefined;
+      if (typeof rawCompactionSummary === "string" && rawCompactionSummary.length > 0) {
+        compactionSummary = capRollingSummary(rawCompactionSummary);
+        if (compactionSummary.length < rawCompactionSummary.length) {
+          // Best-effort log — must never break a restore if the logger is not yet
+          // initialized (deserializeSession is a static helper used in unit tests).
+          try {
+            getLogger().debug("Restored compaction summary truncated to rolling cap", {
+              original: rawCompactionSummary.length,
+              capped: MAX_ROLLING_SUMMARY_CHARS,
+            });
+          } catch { /* logger not initialized — non-fatal */ }
+        }
+      }
       return {
         messages,
         visibleMessages: [],

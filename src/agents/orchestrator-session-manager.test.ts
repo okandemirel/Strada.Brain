@@ -327,6 +327,26 @@ describe("SessionManager", () => {
       expect(restored!.compactionSummary).toBeUndefined();
     });
 
+    it("truncates an over-long restored compactionSummary instead of discarding it (BUG 1)", () => {
+      // Pre-fix behavior discarded summaries > 50KB, losing the original-request
+      // header. New behavior truncates head+tail to the rolling cap.
+      const header = "Original user request:\nbuild the feature.\n";
+      const tail = "\nmost recent summary line.";
+      const oversized = header + "X".repeat(60_000) + tail;
+      const json = JSON.stringify({
+        messages: [{ role: "user", content: "hi" }],
+        lastActivity: new Date().toISOString(),
+        compactionSummary: oversized,
+      });
+      const restored = SessionManager.deserializeSession(json);
+      expect(restored).not.toBeNull();
+      expect(restored!.compactionSummary).toBeDefined();
+      // Truncated, not discarded.
+      expect(restored!.compactionSummary!.length).toBeLessThan(oversized.length);
+      expect(restored!.compactionSummary).toContain("Original user request");
+      expect(restored!.compactionSummary!.endsWith("most recent summary line.")).toBe(true);
+    });
+
     it("filters out messages with invalid roles", () => {
       const json = JSON.stringify({
         messages: [

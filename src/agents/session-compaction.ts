@@ -27,6 +27,49 @@ export const DEFAULT_CONTEXT_WINDOW = 128_000;
 /** Max chars for the extractive summary in stage 2 (~800 tokens). */
 const SUMMARY_MAX_CHARS = 3200;
 
+/**
+ * Hard cap for the rolling compaction summary that accumulates across cycles.
+ *
+ * Each stage-2 compaction APPENDS a fresh ~SUMMARY_MAX_CHARS (3200-char) summary
+ * and KEEPS the previous one, so without a cap the rolling summary grows ~3.2KB
+ * per compaction until it alone exceeds the model budget — at which point stage 4
+ * drops all conversation and compaction thrashes on every provider call.
+ *
+ * 12000 chars ≈ 3000 tokens (chars/4). That holds ~3-4 stacked stage-2 summaries
+ * (head = original-request header + oldest flow, tail = most recent flow) and stays
+ * comfortably under even the smallest realistic post-compaction budget
+ * (DEFAULT_CONTEXT_WINDOW 128k × COMPACTION_TARGET_RATIO 0.6 ≈ 76k tokens; an 8k
+ * model still yields ~4800 tokens of budget), so the summary never starves the
+ * conversation. The cap is enforced head+tail so the "Original user request"
+ * header (always first) and the newest summary detail (most relevant) both survive.
+ */
+export const MAX_ROLLING_SUMMARY_CHARS = 12000;
+
+/** Middle-elision marker inserted when a rolling summary is head+tail truncated. */
+const SUMMARY_TRUNCATION_MARKER = "\n\n[... older summary detail truncated ...]\n\n";
+
+/**
+ * Truncate an over-long rolling summary while preserving BOTH ends:
+ * the head (carries the "Original user request" header emitted first by stage 2)
+ * and the tail (the most recent, most relevant summary). The dropped middle is
+ * replaced with {@link SUMMARY_TRUNCATION_MARKER}. Returns the input unchanged
+ * when it already fits within {@link MAX_ROLLING_SUMMARY_CHARS}.
+ *
+ * This is the single choke point for rolling-summary growth — both the live
+ * compaction path (via {@link partitionSummary}) and the disk-restore path route
+ * through it, so the cap cannot be bypassed.
+ */
+export function capRollingSummary(summary: string): string {
+  if (summary.length <= MAX_ROLLING_SUMMARY_CHARS) return summary;
+  const budget = MAX_ROLLING_SUMMARY_CHARS - SUMMARY_TRUNCATION_MARKER.length;
+  if (budget <= 0) return summary.slice(0, MAX_ROLLING_SUMMARY_CHARS);
+  // Bias toward the tail (most recent) but keep a substantial head for the
+  // original-request header: ~40% head, ~60% tail.
+  const headChars = Math.floor(budget * 0.4);
+  const tailChars = budget - headChars;
+  return summary.slice(0, headChars) + SUMMARY_TRUNCATION_MARKER + summary.slice(summary.length - tailChars);
+}
+
 import type { ConversationMessage } from "./providers/provider-core.interface.js";
 
 // =============================================================================
@@ -156,6 +199,86 @@ export function groupMessages(messages: readonly CompactableMessage[]): MessageG
 }
 
 // =============================================================================
+// ORPHAN TOOL-REFERENCE REPAIR
+// =============================================================================
+
+/**
+ * Removes orphaned tool references from a compacted conversation so the result
+ * can never produce an Anthropic 400 ("tool_use without tool_result" / vice versa).
+ *
+ * In this project's wire shape a tool call spans TWO messages: an assistant
+ * message carries `tool_calls: [{ id, ... }]` (string content), and the matching
+ * tool RESULT is a SEPARATE later user message whose content is tool_result
+ * block(s) with `tool_use_id`. Stage-4 truncation can keep one side of a pair and
+ * drop the other; this pass rebalances by tool id:
+ *   - drops any user message whose content is ONLY tool_result block(s) when none
+ *     of those tool_use_ids match a kept assistant tool_call id; and
+ *   - strips an assistant message's tool_calls whose results are all absent
+ *     (keeping the assistant's text so context is not lost).
+ *
+ * Provider-agnostic and minimal: the repair lives here (where compaction creates
+ * the orphan), NOT in claude.ts buildMessages (which assumes paired tool blocks).
+ */
+export function dropOrphanToolMessages(messages: ConversationMessage[]): ConversationMessage[] {
+  // Collect tool_result ids that survive (present in some user message).
+  const presentResultIds = new Set<string>();
+  for (const msg of messages) {
+    if (msg.role !== "user" || typeof msg.content === "string") continue;
+    for (const block of msg.content as readonly ContentBlock[]) {
+      if (block.type === "tool_result") presentResultIds.add(block.tool_use_id);
+    }
+  }
+
+  // Collect assistant tool_call ids that survive (so we can detect orphan results).
+  const presentCallIds = new Set<string>();
+  for (const msg of messages) {
+    if (msg.role !== "assistant") continue;
+    const calls = (msg as { tool_calls?: readonly { id: string }[] }).tool_calls;
+    if (calls) for (const tc of calls) presentCallIds.add(tc.id);
+  }
+
+  const repaired: ConversationMessage[] = [];
+  for (const msg of messages) {
+    if (msg.role === "assistant") {
+      const calls = (msg as { tool_calls?: readonly { id: string }[] }).tool_calls;
+      if (calls && calls.length > 0) {
+        const keptCalls = calls.filter((tc) => presentResultIds.has(tc.id));
+        if (keptCalls.length === calls.length) {
+          repaired.push(msg);
+        } else if (keptCalls.length > 0) {
+          // Some results survived — keep only the paired calls.
+          repaired.push({ ...(msg as object), tool_calls: keptCalls } as ConversationMessage);
+        } else {
+          // No paired result — drop tool_calls entirely, keep the text.
+          const { tool_calls: _drop, ...rest } = msg as { tool_calls?: unknown };
+          repaired.push(rest as ConversationMessage);
+        }
+        continue;
+      }
+      repaired.push(msg);
+      continue;
+    }
+
+    // User message: if its content is ONLY tool_result blocks and none of them
+    // reference a surviving tool_call, the whole message is an orphan — drop it.
+    if (msg.role === "user" && typeof msg.content !== "string") {
+      const blocks = msg.content as readonly ContentBlock[];
+      const resultBlocks = blocks.filter((b) => b.type === "tool_result");
+      if (resultBlocks.length > 0 && resultBlocks.length === blocks.length) {
+        const keptBlocks = resultBlocks.filter((b) => presentCallIds.has((b as { tool_use_id: string }).tool_use_id));
+        if (keptBlocks.length === 0) continue; // fully orphaned → drop
+        if (keptBlocks.length < resultBlocks.length) {
+          repaired.push({ role: "user", content: keptBlocks as unknown as ConversationMessage["content"] });
+          continue;
+        }
+      }
+    }
+    repaired.push(msg);
+  }
+  return repaired;
+}
+
+// =============================================================================
 // STAGE 1: Tool Result Compaction
 // =============================================================================
 
@@ -257,12 +380,30 @@ function stage3SlidingWindow(groups: MessageGroup[], maxGroups: number): Message
 // =============================================================================
 
 function stage4HardTruncation(messages: readonly CompactableMessage[], maxTokens: number): CompactableMessage[] {
-  const sys: CompactableMessage[] = [];
+  let sys: CompactableMessage[] = [];
   const rest: CompactableMessage[] = [];
   for (const msg of messages) { (msg.role === "system" ? sys : rest).push(msg); }
 
   let budget = maxTokens - estimateTokens(sys);
-  if (budget <= 0) return sys;
+  if (budget <= 0) {
+    // Defensive: the (capped) summary alone overruns the budget. NEVER return an
+    // over-budget prompt — hard-truncate the summary TEXT itself to fit maxTokens.
+    // maxTokens × 4 ≈ total char budget shared ACROSS all system messages (there
+    // may be more than one: previous + freshly-appended summary). Drop the
+    // conversation entirely; allocate the whole budget to the summaries head-first.
+    // Reserve the "\n\n" join overhead that partitionSummary later adds between
+    // summaries so the merged-and-measured result stays within maxTokens.
+    const systemCount = sys.filter((m) => m.role === "system").length;
+    const joinOverhead = systemCount > 1 ? (systemCount - 1) * 2 : 0;
+    let remainingChars = Math.max(0, maxTokens * 4 - joinOverhead);
+    sys = sys.map((m): CompactableMessage => {
+      if (m.role !== "system" || typeof m.content !== "string") return m;
+      const take = Math.min(m.content.length, remainingChars);
+      remainingChars -= take;
+      return { role: "system", content: m.content.slice(0, take) };
+    });
+    return sys;
+  }
 
   const kept: CompactableMessage[] = [];
   for (let i = rest.length - 1; i >= 0; i--) {
@@ -291,11 +432,18 @@ function partitionSummary(flat: readonly CompactableMessage[]): {
   messages: ConversationMessage[];
   summary: string | undefined;
 } {
-  const messages = flat.filter((m): m is ConversationMessage => m.role !== "system");
+  // Drop any orphaned tool_use/tool_result references before partitioning so the
+  // returned conversation can never trigger an Anthropic 400 (see dropOrphanToolMessages).
+  const repaired = dropOrphanToolMessages(
+    flat.filter((m): m is ConversationMessage => m.role !== "system"),
+  );
   const summaries = flat
     .filter((m): m is SystemSummaryMessage => m.role === "system")
     .map((m) => m.content);
-  return { messages, summary: summaries.length > 0 ? summaries.join("\n\n") : undefined };
+  // Cap the merged rolling summary here — the single choke point every live
+  // compaction flows through — so it can never grow unbounded across cycles.
+  const merged = summaries.length > 0 ? capRollingSummary(summaries.join("\n\n")) : undefined;
+  return { messages: repaired, summary: merged };
 }
 
 /**
@@ -317,7 +465,9 @@ export function compactSession(
   if (originalTokens <= maxTokens) {
     return {
       messages: [...messages],
-      summary: options.previousSummary,
+      // Cap here too so the early-return path can never carry an over-cap summary
+      // forward (defence in depth — restore + every compaction already cap).
+      summary: options.previousSummary ? capRollingSummary(options.previousSummary) : undefined,
       compacted: false,
       stageApplied: null,
       originalTokens,
