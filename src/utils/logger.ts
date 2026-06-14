@@ -2,7 +2,7 @@ import winston from "winston";
 import TransportStream from "winston-transport";
 // Leaf module with no dependencies of its own — safe to import here without
 // creating a logger <-> security circular dependency.
-import { sanitizeSecrets } from "../security/secret-patterns.js";
+import { sanitizeSecretsQuiet } from "../security/secret-patterns.js";
 
 // ---------------------------------------------------------------------------
 // Log ring buffer — captures recent entries for the /api/logs dashboard endpoint
@@ -27,35 +27,59 @@ const MAX_META_BYTES = 2048;
 /** Maximum message length stored in the ring buffer. */
 const MAX_MESSAGE_LENGTH = 4096;
 
+/**
+ * Recursively sanitize the STRING leaf values of a JSON-safe meta value,
+ * leaving keys, structure, and non-string scalars untouched.
+ *
+ * Running the redaction regexes on individual values (never on the serialized
+ * JSON) is what makes Bug 2 unreachable: several patterns' character classes
+ * admit JSON delimiters ('"', '}', ';'), so sanitizing the serialized string
+ * could eat a closing quote/brace and make the whole blob unparseable —
+ * previously collapsing every credential-bearing entry to {_sanitizeFailed}.
+ * Uses the metrics-quiet variant so ring-buffer redaction (defense-in-depth)
+ * does not inflate the user-facing "Secrets Sanitized" counter.
+ */
+function sanitizeMetaValue(value: unknown): unknown {
+  if (typeof value === "string") return sanitizeSecretsQuiet(value);
+  if (Array.isArray(value)) return value.map(sanitizeMetaValue);
+  if (value !== null && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      out[k] = sanitizeMetaValue(v);
+    }
+    return out;
+  }
+  return value;
+}
+
 class RingBufferTransport extends TransportStream {
   log(info: { timestamp?: string; level: string; message: string; service?: string; [key: string]: unknown }, callback: () => void): void {
     const { timestamp, level, message, service: _service, ...meta } = info;
-    let truncatedMeta: Record<string, unknown> | undefined;
-    let metaJson: string | undefined;
+    let storedMeta: Record<string, unknown> | undefined;
     if (Object.keys(meta).length > 0) {
       try {
         const serialized = JSON.stringify(meta);
-        metaJson = serialized.length > MAX_META_BYTES
-          ? JSON.stringify({ _truncated: true, preview: serialized.slice(0, 256) })
-          : serialized;
+        if (serialized.length > MAX_META_BYTES) {
+          // Preview is a plain string, never re-parsed — safe to sanitize directly.
+          storedMeta = { _truncated: true, preview: sanitizeSecretsQuiet(serialized.slice(0, 256)) };
+        } else {
+          // serialized came from JSON.stringify, so JSON.parse always succeeds
+          // (preserves the prior Date→string / undefined-drop semantics). We then
+          // sanitize only the string LEAF values — never JSON delimiters — so no
+          // redaction can corrupt the structure.
+          const cloned = JSON.parse(serialized) as Record<string, unknown>;
+          storedMeta = sanitizeMetaValue(cloned) as Record<string, unknown>;
+        }
       } catch {
-        truncatedMeta = { _truncated: true };
-      }
-    }
-    // Write-time secret sanitization, applied AFTER truncation so the regex
-    // cost stays bounded by the MAX_MESSAGE_LENGTH/MAX_META_BYTES caps.
-    if (metaJson !== undefined) {
-      try {
-        truncatedMeta = JSON.parse(sanitizeSecrets(metaJson)) as Record<string, unknown>;
-      } catch {
-        truncatedMeta = { _sanitizeFailed: true };
+        storedMeta = { _truncated: true };
       }
     }
     LOG_RING_BUFFER.push({
       timestamp: String(timestamp ?? new Date().toISOString()),
       level,
-      message: sanitizeSecrets(String(message).slice(0, MAX_MESSAGE_LENGTH)),
-      meta: truncatedMeta,
+      // Plain string — safe to sanitize directly (metrics-quiet on this hot path).
+      message: sanitizeSecretsQuiet(String(message).slice(0, MAX_MESSAGE_LENGTH)),
+      meta: storedMeta,
     });
     if (LOG_RING_BUFFER.length > MAX_LOG_ENTRIES) {
       LOG_RING_BUFFER.shift();
