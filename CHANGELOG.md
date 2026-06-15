@@ -6,7 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Security
+- **Dependency advisories patched**: esbuild bumped 0.27.3 → 0.28.1 (HIGH: GHSA-gv7w-rqvm-qjhr RCE via `NPM_CONFIG_REGISTRY`, GHSA-g7r4-m6w7-qqqr dev-server file read), react-router-dom advisories in the web portal, and the transitive `qs` DoS
+- **Secret redaction correctness**: multi-match redaction no longer applies the first match's replacement to every match (cross-record corruption / host leak), and function-redaction results are no longer `$`-expanded by `String.replace` — a crafted secret containing `$&` could previously re-insert the unredacted value. This code now runs on every ring-buffer log write
+- **Write-time log sanitization**: log ring-buffer entries are sanitized at write time (string leaf values, never the serialized JSON), so credential-bearing metadata is no longer dropped wholesale when a redaction crossed a JSON delimiter. The redundant `/api/logs` read-time re-sanitization was removed (it double-counted the "Secrets Sanitized" metric and could corrupt `meta`)
+- **Dashboard hardening**: per-IP rate limit on `POST /api/vaults/:id/search`, `%00` blocked in vault file-path validation, and a startup warning when the dashboard runs without an auth token
+
+### Changed
+- **CI on Node.js 22**: CI moved off EOL Node 20 (`engines` already allowed `>=22.12.0`); resolves the Windows native-build failure where better-sqlite3 12.10.0 dropped its Node-20 prebuilt and `npm ci` fell back to a node-gyp compile the runner's VS 2026 toolchain couldn't satisfy
+- **Dependency refresh**: `@anthropic-ai/sdk` → 0.104.x, `web-tree-sitter` → 0.26.9 (with the C#/TypeScript grammars), `better-sqlite3` → 12.10, `playwright` → 1.60, `vitest` → 4.1.8, and web-portal TypeScript aligned to 6.0
+- **Workload scoring unified**: provider behavioral profiles are now authoritative for known providers; the feature-flag scoring formula is demoted to an unknown-provider fallback (removes the duplicated weight table and 40/60 blend)
+- **Shared channel formatting**: common message splitting / truncation / code-fence / mention / quote helpers extracted to `src/common/text-formatting.ts`; Discord and Slack formatters delegate to it while keeping their platform-specific markdown converters
+- **Repo cleanup**: removed committed root working files (`action-items*.md`, `analysis-report*.md`, `unified-action-items.md`); `redactPathsInMessage` moved to the `path-policy` leaf to cut a heavy `vault-registry → obsidian-vault` import edge
+
 ### Fixed
+- **Session compaction summary growth**: the rolling compaction summary is now bounded (head/tail-preserving cap on the live path, not just on disk restore); previously it grew unbounded, eventually returning an empty conversation while still over budget — destroying history and thrashing compaction on every call
+- **Compaction tool-pair integrity**: hard truncation can no longer orphan a `tool_use`/`tool_result` pair (they are separate messages); an orphan previously caused a provider 400 that persisted into the compacted session, permanently bricking it. An id-matched normalization now drops orphans in both directions
+- **Voice settings persistence**: the backend now reads/writes the `inputEnabled`/`outputEnabled`/`browserSttEnabled` fields the portal actually sends; `POST /api/settings/voice` previously acknowledged success while persisting nothing (field-name contract mismatch)
+- **Vault init failure visibility**: `POST /api/vaults` init failures are surfaced through `GET /api/vaults/:id/stats` (`status: indexing|ready|error` with a redacted message) instead of leaving the portal polling forever
+- **CompactableMessage cast removed**: the `as unknown as CompactableMessage` double-cast is gone; the compaction summary lives in a typed `Session` field, which also fixes a runtime loss where system-role summary messages were silently dropped before reaching the provider
+- **Async tool telemetry**: synchronous `readFileSync` calls on the tool-result workspace-telemetry path were moved off the event loop into an order-preserving async queue
+- **Test flake**: the `GraphNodeOverlay` backlinks test asserts the rendered items inside `waitFor` (they render a tick after the heading), fixing an intermittent CI failure
 - **Authoritative Unity Project Scope**: Runtime startup now treats the setup-selected `UNITY_PROJECT_PATH` as the coding scope of record. If a different Unity project is open in the editor, Strada surfaces a mismatch warning instead of silently retargeting work
 - **Shared PAOR Loop Recovery**: Interactive `clarification/verifier/visibility/reflection continue` paths and background reflection-continue now converge on the same loop-recovery executor, avoiding repeated prompt-injection loops and letting stuck turns escalate through the same replan/delegation controls
 - **Windows Web Portal Setup**: Fixed path traversal checks using hardcoded `/` separator instead of `path.sep`, causing all static assets (JS, CSS, images) to return 403 Forbidden on Windows — the setup page and web portal appeared as a blank white page
@@ -16,6 +36,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Cross-platform path separator fix applied consistently across `setup-wizard.ts`, `channel.ts`, `stage-daemon.ts`, `soul-loader.ts`, `speech-to-text.ts`, and `browser-automation.ts`
 
 ### Added
+- **MCP Bridge Status**: `GET /api/mcp/status` and `POST /api/mcp/reconnect` plus a portal settings section (translated across all 8 locales) exposing Strada.MCP bridge state, active editor, and a manual reconnect — previously `unity_*` tools could silently vanish with no visibility
+- **`.env.example`**: complete environment template (grouped by feature, required provider keys marked) referenced by `CONTRIBUTING.md` but previously missing
+- **Fast inner-loop scripts**: `npm run verify` (typecheck + lint + a curated `test:fast` subset, <90s) for quick local verification before pushing
+- **Test coverage**: vault characterization tests (path-policy, hashing, discovery, obsidian/unity vaults, registry) and dashboard route tests (vault/provider/settings) for previously untested data-mutation and HTTP-boundary code
 - **Web Portal — Code Mode (Phase 5)**: Monaco editor with multi-tab support, syntax highlighting for 30+ languages, file tree explorer with lazy-loaded directories and agent-touched file highlights, terminal output panel with 5k line cap, diff viewer. Full WebSocket event pipeline: `code:file_open`, `code:file_update`, `code:terminal_output`, `code:annotation_add`. Workspace file REST endpoints with path security (traversal protection, denylist, symlink verification, 1MB size limit)
 - **Web Portal — Auto Mode Switching (Phase 6)**: Intelligent auto-switching between Chat, Monitor, Canvas, and Code modes based on agent activity. Toast notification system with auto-dismiss, severity colors, and mode-switch undo. Keyboard shortcuts help modal (`Cmd/Ctrl+?`). Sidebar notification bell with badge count. Chat override reset (sending a message resumes auto-switch). Monitor export endpoint (`POST /api/monitor/export`) generating markdown reports with DAG summary, task list, and review results. Performance validated: 60-node DAG <50ms, 100 task updates <100ms, 50 code tabs <50ms
 - **CLI Setup Wizard**: `strada setup` command with interactive terminal-based quick setup or web browser full setup. Asks for Unity project path, API key, channel, and language. Writes `.env` with owner-only permissions (0o600)
