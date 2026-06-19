@@ -5,6 +5,9 @@ import { OpenAIProvider } from "./openai.js";
  * OpenCode hosted-platform base URLs (both OpenAI-compatible). The Go API lives
  * UNDER the zen path — opencode.ai/zen/go/v1 — NOT opencode.ai/go (a marketing
  * page; opencode.ai/go/v1 returns an HTML 404). Verified live via GET /models.
+ *
+ * Mirrored in the web portal at web-portal/src/types/setup-constants.ts
+ * (OPENCODE_PLATFORM_BASE_URLS) — separate package, no shared import, keep in sync.
  */
 export const OPENCODE_ZEN_BASE_URL = "https://opencode.ai/zen/v1";
 export const OPENCODE_GO_BASE_URL = "https://opencode.ai/zen/go/v1";

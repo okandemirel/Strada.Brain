@@ -685,6 +685,8 @@ async function bootstrapImpl(
       logger.warn("[vault] hash fallback embedding init failed", { err });
     }
   }
+  // `const` (not the mutable `vaultEmbeddingProvider`) so TS narrows it to
+  // non-null inside the async `embed` closure below. Keep it a const.
   const resolvedVaultEmbedding = vaultEmbeddingProvider;
   if (resolvedVaultEmbedding) {
     try {

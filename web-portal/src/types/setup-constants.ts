@@ -86,11 +86,12 @@ export const PROVIDER_MAP = Object.fromEntries(PROVIDERS.map((p) => [p.id, p]))
 
 export type OpencodePlatform = 'zen' | 'go'
 
-// Base URLs for OpenCode's hosted platforms (both OpenAI-compatible). The Zen
-// URL matches the backend default (OPENCODE_BASE_URL). IMPORTANT: the Go API
-// lives UNDER the zen path — opencode.ai/zen/go/v1 — NOT opencode.ai/go (that
-// path is the marketing page; opencode.ai/go/v1 returns an HTML 404). Verified
-// live via GET /models. Kept as named constants so the endpoints adjust here.
+// Base URLs for OpenCode's hosted platforms (both OpenAI-compatible). These
+// mirror the backend constants in src/agents/providers/opencode.ts
+// (OPENCODE_ZEN_BASE_URL / OPENCODE_GO_BASE_URL) — separate package, no shared
+// import, keep in sync. IMPORTANT: the Go API lives UNDER the zen path —
+// opencode.ai/zen/go/v1 — NOT opencode.ai/go (that path is the marketing page;
+// opencode.ai/go/v1 returns an HTML 404). Verified live via GET /models.
 export const OPENCODE_PLATFORM_BASE_URLS: Record<OpencodePlatform, string> = {
   zen: 'https://opencode.ai/zen/v1',
   go: 'https://opencode.ai/zen/go/v1',
