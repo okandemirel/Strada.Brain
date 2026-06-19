@@ -79,6 +79,7 @@ type AdapterInternalEntry = MutableMemoryEntry & {
 type AgentDBAdapterInternals = {
   cachedAnalysis: { projectPath: string; analysis: StradaProjectAnalysis } | null;
   persistEntry: (entry: AdapterInternalEntry) => void;
+  sqliteDb: { transaction: (fn: () => void) => () => void } | null;
 };
 
 const MEMORY_TIERS = [MemoryTier.Working, MemoryTier.Ephemeral, MemoryTier.Persistent] as const;
@@ -711,15 +712,29 @@ export class AgentDBAdapter implements IMemoryManager {
 
   async archiveOldEntries(before: TimestampMs): Promise<Result<number, Error>> {
     try {
-      let archived = 0;
+      const toArchive: AdapterInternalEntry[] = [];
       for (const original of await this.listRawEntries()) {
         if ((original.createdAt as number) < (before as number) && !original.archived) {
-          const entry: AdapterInternalEntry = { ...original, archived: true };
-          this.persistMutableEntry(entry);
-          archived++;
+          toArchive.push({ ...original, archived: true });
         }
       }
-      return ok(archived);
+      if (toArchive.length === 0) {
+        return ok(0);
+      }
+      const internals = this.agentdb as unknown as AgentDBAdapterInternals;
+      const db = internals.sqliteDb;
+      if (db) {
+        db.transaction(() => {
+          for (const entry of toArchive) {
+            internals.persistEntry(entry);
+          }
+        })();
+      } else {
+        for (const entry of toArchive) {
+          internals.persistEntry(entry);
+        }
+      }
+      return ok(toArchive.length);
     } catch (e) {
       return err(e instanceof Error ? e : new Error(String(e)));
     }

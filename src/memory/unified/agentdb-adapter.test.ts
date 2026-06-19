@@ -59,6 +59,7 @@ function createMockAgentDB(): {
     getIndexHealth: vi.fn(),
     optimizeIndex: vi.fn(),
     persistEntry: vi.fn(),
+    sqliteDb: null,
   } as unknown as ReturnType<typeof createMockAgentDB>;
 }
 
@@ -1026,6 +1027,55 @@ describe("AgentDBAdapter", () => {
         id: "mem_old",
         archived: true,
       }));
+    });
+
+    it("archiveOldEntries commits in a single transaction and archives only matching entries", async () => {
+      const makeEntry = (id: string, createdAt: number, archived: boolean) => ({
+        id: id as MemoryId,
+        type: "note",
+        content: id,
+        createdAt: createdAt as TimestampMs,
+        accessCount: 0,
+        tags: [],
+        importance: "low",
+        archived,
+        metadata: {},
+      } as unknown as MemoryEntry);
+
+      // 2 old unarchived (should be archived), 1 fresh (skip), 1 old but already archived (skip)
+      const oldA = makeEntry("mem_old_a", 1000, false);
+      const oldB = makeEntry("mem_old_b", 2000, false);
+      const fresh = makeEntry("mem_fresh", 9000, false);
+      const alreadyArchived = makeEntry("mem_already", 500, true);
+
+      (mockDb.getByTier as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce([oldA, oldB, fresh, alreadyArchived])
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([]);
+
+      // Provide a sqliteDb with a transaction spy — better-sqlite3 style:
+      // db.transaction(fn) returns a runner; the runner is invoked immediately.
+      const transactionSpy = vi.fn((fn: () => void) => fn);
+      (mockDb as unknown as Record<string, unknown>).sqliteDb = { transaction: transactionSpy };
+
+      const result = await adapter.archiveOldEntries(5000 as TimestampMs);
+
+      // Correct count: only oldA and oldB qualify
+      expect(result).toEqual({ kind: "ok", value: 2 });
+
+      // Transaction seam invoked exactly once (the perf contract — not once-per-entry)
+      expect(transactionSpy).toHaveBeenCalledTimes(1);
+
+      // Both matching entries were persisted with archived: true
+      expect(mockDb.persistEntry).toHaveBeenCalledWith(expect.objectContaining({ id: "mem_old_a", archived: true }));
+      expect(mockDb.persistEntry).toHaveBeenCalledWith(expect.objectContaining({ id: "mem_old_b", archived: true }));
+
+      // Fresh and already-archived entries must not have been touched
+      expect(mockDb.persistEntry).not.toHaveBeenCalledWith(expect.objectContaining({ id: "mem_fresh" }));
+      expect(mockDb.persistEntry).not.toHaveBeenCalledWith(expect.objectContaining({ id: "mem_already" }));
+
+      // Total persistEntry calls: exactly 2
+      expect(mockDb.persistEntry).toHaveBeenCalledTimes(2);
     });
 
     it("deleteEntry delegates to agentdb.delete()", async () => {
