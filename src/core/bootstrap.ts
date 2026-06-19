@@ -18,6 +18,7 @@ import { Orchestrator } from "../agents/orchestrator.js";
 import { MetricsCollector } from "../dashboard/metrics.js";
 import { setSanitizationCallback } from "../security/secret-sanitizer.js";
 import { CachedEmbeddingProvider } from "../rag/embeddings/embedding-cache.js";
+import { HashEmbeddingProvider } from "../rag/embeddings/hash-embeddings.js";
 import { RAGPipeline } from "../rag/rag-pipeline.js";
 import { FileVectorStore } from "../rag/vector-store.js";
 import { type DIContainer, createContainer } from "./di-container.js";
@@ -656,12 +657,38 @@ async function bootstrapImpl(
   // 503 "vault registration unavailable" for every user who hadn't explicitly
   // opted in — even though the portal UI is shipped unconditionally.
   //
-  // `cachedEmbeddingProvider` is the real dependency: without it we can't build
-  // a UnityProjectVault, so that's the only hard gate.
+  // The vault always builds now: use the real embedding provider when one is
+  // configured, otherwise fall back to a deterministic hash embedder so the
+  // Codebase Memory Vault is never silently skipped. (Previously a missing
+  // embedding provider skipped the ENTIRE vault subsystem — a user with no
+  // embedding key got no vault at all, even with STRADA_VAULT_ENABLED=true.
+  // Lexical BM25 carries retrieval; hash vectors add a token-overlap signal
+  // and surface as usingHashFallback.)
   const { VaultRegistry } = await import("../vault/vault-registry.js");
   const vaultRegistry = new VaultRegistry();
   disposables.push("vaultRegistry", () => vaultRegistry.disposeAll());
-  if (cachedEmbeddingProvider) {
+  let vaultEmbeddingProvider = cachedEmbeddingProvider;
+  if (!vaultEmbeddingProvider) {
+    try {
+      const { join } = await import("node:path");
+      const hashFallback = new CachedEmbeddingProvider(new HashEmbeddingProvider(), {
+        persistPath: join(config.memory.dbPath, "vault-hash-cache"),
+      });
+      await hashFallback.initialize();
+      vaultEmbeddingProvider = hashFallback;
+      logger.warn(
+        "[vault] no embedding provider configured — building vault with a hash " +
+          "fallback (lexical BM25 + hash vectors; semantic quality degraded). Add " +
+          "GEMINI_API_KEY / OPENAI_API_KEY or run local Ollama for semantic search.",
+      );
+    } catch (err) {
+      logger.warn("[vault] hash fallback embedding init failed", { err });
+    }
+  }
+  // `const` (not the mutable `vaultEmbeddingProvider`) so TS narrows it to
+  // non-null inside the async `embed` closure below. Keep it a const.
+  const resolvedVaultEmbedding = vaultEmbeddingProvider;
+  if (resolvedVaultEmbedding) {
     try {
       logger.info("[vault] initializing vault subsystem", {
         hasUnityProjectPath: Boolean(config.unityProjectPath),
@@ -669,9 +696,9 @@ async function bootstrapImpl(
       });
       // Bridge CachedEmbeddingProvider (returns {embeddings, usage}) → vault EmbeddingProvider (returns Float32Array[])
       const vaultEmbedding = {
-        model: "cached", dim: cachedEmbeddingProvider.dimensions,
+        model: "cached", dim: resolvedVaultEmbedding.dimensions,
         async embed(texts: string[]) {
-          const result = await cachedEmbeddingProvider.embed(texts);
+          const result = await resolvedVaultEmbedding.embed(texts);
           return result.embeddings.map((e: number[]) => Float32Array.from(e));
         },
       };
@@ -811,7 +838,7 @@ async function bootstrapImpl(
       logger.warn("[vault] bootstrap initialization failed", { err });
     }
   } else {
-    logger.warn("[vault] skipping vault bootstrap: no embedding provider available");
+    logger.warn("[vault] skipping vault bootstrap: embedding fallback unavailable (hash init failed)");
   }
 
   // Hand the vault registry to the dashboard server so HTTP routes can resolve it.

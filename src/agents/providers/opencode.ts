@@ -2,12 +2,23 @@ import type { ProviderCapabilities } from "./provider.interface.js";
 import { OpenAIProvider } from "./openai.js";
 
 /**
+ * OpenCode hosted-platform base URLs (both OpenAI-compatible). The Go API lives
+ * UNDER the zen path — opencode.ai/zen/go/v1 — NOT opencode.ai/go (a marketing
+ * page; opencode.ai/go/v1 returns an HTML 404). Verified live via GET /models.
+ *
+ * Mirrored in the web portal at web-portal/src/types/setup-constants.ts
+ * (OPENCODE_PLATFORM_BASE_URLS) — separate package, no shared import, keep in sync.
+ */
+export const OPENCODE_ZEN_BASE_URL = "https://opencode.ai/zen/v1";
+export const OPENCODE_GO_BASE_URL = "https://opencode.ai/zen/go/v1";
+
+/**
  * OpenCode (Zen/Go) provider.
  *
  * OpenCode Zen/Go provides curated coding models through an OpenAI-compatible API.
  * A single API key grants access to all Zen/Go models regardless of subscription tier.
  *
- * Base URL: https://opencode.ai/zen/v1
+ * Base URLs: Zen = https://opencode.ai/zen/v1 (default), Go = https://opencode.ai/zen/go/v1.
  *
  * IMPORTANT — model id format: the API expects BARE ids (NO "opencode/" namespace).
  * The constructor strips a leading "opencode/" defensively because presets / saved
@@ -40,7 +51,7 @@ export class OpencodeProvider extends OpenAIProvider {
   constructor(
     apiKey: string,
     model = "qwen3.6-plus",
-    baseUrl = "https://opencode.ai/zen/v1",
+    baseUrl = OPENCODE_ZEN_BASE_URL,
   ) {
     super(apiKey, OpencodeProvider.toBareModelId(model), baseUrl, "OpenCode (Zen/Go)");
   }
