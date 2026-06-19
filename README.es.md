@@ -208,6 +208,7 @@ strada supervise --channel web
 ./strada                  # Launcher canonico del source checkout
 .\strada.ps1             # Launcher fuente para Windows PowerShell
 strada.cmd               # Companion launcher para Windows Command Prompt
+node strada.js            # Punto de entrada universal Node.js (funciona en cualquier SO sin wrappers de shell)
 ./strada install-command  # Instala un comando bare `strada` para el usuario
 ./strada uninstall        # Elimina el bare command instalado y los cambios gestionados en PATH/profile
 .\strada.ps1 uninstall   # Lo mismo desde el checkout en Windows
@@ -287,30 +288,98 @@ El portal web presenta un diseno glassmorphism premium impulsado por shadcn/ui y
 
 ## Ecosistema de Skills
 
-Los skills son paquetes de funcionalidad opcionales que se pueden instalar en Strada.Brain. Cada skill contiene un manifiesto `SKILL.md` e implementaciones de herramientas.
+Los skills son paquetes de funcionalidad opcionales que se pueden instalar, compartir y construir sobre Strada.Brain. Cada skill es un directorio con un manifiesto `SKILL.md` y configuracion de entorno opcional.
+
+### Instalacion de skills
 
 ```bash
-strada skill install notion          # Instalar desde el registro
-strada skill list                    # Listar todos los skills
-strada skill search <consulta>       # Buscar en el registro
+# Instalar desde cualquier repositorio git publico
+strada skill install https://github.com/okandemirel/strada-skill-example
+
+# Listar todos los skills instalados y su estado
+strada skill list
+
+# Actualizar todos los skills gestionados
+strada skill update
+
+# Buscar en el registro publico
+strada skill search <consulta>
+
+# Mostrar detalles de un skill instalado
+strada skill info <nombre>
+
+# Habilitar o deshabilitar un skill
+strada skill enable <nombre>
+strada skill disable <nombre>
+
+# Eliminar un skill
+strada skill remove <nombre>
 ```
+
+### Crear un skill
+
+Un skill es un directorio que contiene como minimo un archivo `SKILL.md` con frontmatter YAML:
+
+```markdown
+---
+name: my-skill
+version: 1.0.0
+description: A short description of what this skill does
+author: your-name
+requires:
+  bins:
+    - some-cli-tool        # must exist in PATH
+  env:
+    - MY_API_KEY           # must be set
+  skills:
+    - another-skill        # dependency on another skill
+capabilities:
+  - code-generation
+  - analysis
+---
+
+The body of SKILL.md is the system prompt or documentation injected into
+the agent when this skill is active.
+```
+
+### Carga en 3 niveles
+
+Los skills se descubren desde tres ubicaciones, en orden de prioridad:
+
+| Nivel | Ubicacion | Proposito |
+|-------|-----------|-----------|
+| **workspace** | `.strada/skills/` en la raiz de tu proyecto | Skills especificos del proyecto, maxima prioridad |
+| **managed** | `~/.strada/skills/` | Skills instalados por el usuario via `strada skill install` |
+| **bundled** | `src/skills/bundled/` dentro del checkout de Strada.Brain | Incluidos con la aplicacion, siempre disponibles |
+
+Los skills de un nivel con mayor prioridad reemplazan a los del mismo nombre en niveles inferiores. Un skill cuyos requisitos no esten satisfechos pasa a estado `gated` y queda excluido de la superficie de herramientas activa hasta que se cumplan sus prerequisitos.
+
+### Registro
+
+El registro publico de skills es un indice JSON de skills mantenidos por la comunidad (11 skills y creciendo). Ejecuta `strada skill search` para explorarlos. Cada entrada lista el repositorio git, descripcion, etiquetas, version y autor. La URL del registro es configurable via `SKILL_REGISTRY_URL`.
 
 ### Skills Incluidos
 
 | Skill | Descripcion | Requisitos |
-|-------|-------------|-----------|
+|-------|-------------|------------|
 | `hello-world` | Skill de prueba que repite mensajes | Ninguno |
-| `github-utils` | Estado de PR, lista de issues, info de repo | Binario `gh` |
+| `github-utils` | Estado de PR, lista de issues, info de repo via CLI `gh` | Binario `gh` |
 | `unity-helpers` | Buscar scripts, listar escenas, estructura del proyecto | Ninguno |
 | `web-search` | Obtener URLs, busqueda con DuckDuckGo | Ninguno |
-| `file-utils` | Conteo de palabras, lineas, analisis de archivos | Ninguno |
-| `system-info` | Tiempo activo, CPU/memoria/disco, red | Ninguno |
-| `json-utils` | Formatear, consultar, comparar JSON | Ninguno |
+| `file-utils` | Conteo de palabras, lineas, buscar duplicados, tamano de directorio | Ninguno |
+| `system-info` | Tiempo activo del SO, CPU/memoria/disco, interfaces de red | Ninguno |
+| `json-utils` | Formatear, consultar (dot-path), comparar objetos JSON | Ninguno |
 
 ### Skills de la Comunidad
 
+Instala desde el registro con un solo comando:
+
+```bash
+strada skill install notion
+```
+
 | Skill | Descripcion | Requisitos |
-|-------|-------------|-----------|
+|-------|-------------|------------|
 | `notion` | Buscar paginas, leer contenido, crear paginas | `NOTION_API_KEY` |
 | `google-calendar` | Listar eventos, crear eventos, agenda del dia | `GOOGLE_CALENDAR_API_KEY` |
 | `spotify` | Reproduciendo ahora, busqueda, control de reproduccion | `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET` |
@@ -318,7 +387,58 @@ strada skill search <consulta>       # Buscar en el registro
 
 ### Marketplace del Portal Web
 
-El portal web incluye una pestana **Marketplace** en `/admin/skills` donde puedes buscar e instalar skills de la comunidad con un solo clic.
+El portal web incluye una pestana **Marketplace** en `/admin/skills` donde puedes explorar, buscar e instalar skills de la comunidad con un solo clic. Los skills instalados aparecen en la pestana **Installed** con controles para habilitar/deshabilitar.
+
+---
+
+## Codebase Memory Vault
+
+El **Codebase Memory Vault** es memoria de codebase persistente y por proyecto que reemplaza la relectura de archivos en cada solicitud con busqueda hibrida (BM25 + vectorial) y simbolica (Personalized PageRank sobre el grafo de llamadas/imports). Entiende proyectos Unity y el propio codigo de Strada.Brain via **SelfVault**. Ahorros de tokens dramaticos en cada turno.
+
+Introducido en **v4.2.69** (PR #11, 2026-04-14). Guia completa: [docs/vault.es.md](docs/vault.es.md).
+
+**Fase 1 — Recuperacion hibrida:**
+- SQLite por vault en `<proyecto>/.strada/vault/index.db` (better-sqlite3, WAL + FK)
+- Tablas: `vault_files`, `vault_chunks`, `vault_chunks_fts` (FTS5/BM25), `vault_embeddings` (puntero HNSW), `vault_meta`
+- BM25 + vectores fusionados via Reciprocal Rank Fusion (k = 60)
+- Packing por presupuesto de tokens (`packByBudget`)
+- Tres caminos de actualizacion: watcher chokidar (debounce 800 ms), write-hook (presupuesto 200 ms), `/vault sync` manual
+- Short-circuit por hash xxhash64 — archivos sin cambios nunca se re-embeden
+- Herramientas: `vault_init`, `vault_sync`, `vault_status`
+- Portal `/admin/vaults`: pestanas Files y Search
+- HTTP `/api/vaults/*`, evento WS `vault:update`
+
+**Fase 2 — Grafo de simbolos, PPR, SelfVault, Graph UI:**
+- Nuevas tablas `vault_symbols`, `vault_edges`, `vault_wikilinks`; `vault_meta.indexer_version = 'phase2.v1'`
+- Extractores Tree-sitter WASM para TypeScript y C#; regex para wikilinks Markdown
+- Formato de Symbol ID: `<lang>::<relPath>::<qualifiedName>` (externs: `<lang>::unresolved::<label>`)
+- `.strada/vault/graph.canvas` (JSON Canvas 1.0), regenerado en cold start / `/vault sync` / drain del watcher
+- **Personalized PageRank** re-rankea cuando `VaultQuery.focusFiles` esta presente
+- **SelfVault** indexa `src/`, `web-portal/src/`, `tests/`, `docs/`, `AGENTS.md`, `CLAUDE.md` (omite symlinks)
+- Endpoints nuevos: `GET /api/vaults/:id/canvas`, `GET /api/vaults/:id/symbols/by-name?q=X`, `GET /api/vaults/:id/symbols/:symbolId/callers`
+- Portal gana pestana Graph via `@xyflow/react` + `@dagrejs/dagre`
+
+**Configuracion (`config.vault`):**
+- `enabled: false` por defecto — activa con `STRADA_VAULT_ENABLED=true`
+- `writeHookBudgetMs: 200`, `debounceMs: 800`, `embeddingFallback: 'local'`, `self.enabled: true`
+
+**Inicio rapido:**
+
+```bash
+export STRADA_VAULT_ENABLED=true
+npm start
+
+# En el chat:
+/vault init /ruta/a/tu/proyecto/unity
+/vault sync
+/vault status
+```
+
+**Endurecimiento de seguridad (commit `5563d48`):** escrituras atomicas del canvas, skip de symlinks, parser fresco por llamada, cap del body de request (DoS), GC de aristas huerfanas, damping PPR normalizado, cap 2 MB en extraccion de simbolos, invalidacion de cache de aristas, cota superior en `findCallers`.
+
+**Hoja de ruta Fase 3:** resumenes rolling con Haiku, upgrade de FrameworkVault (busqueda semantica + extraccion de docstrings), acoplamiento bidireccional con el pipeline de Learning.
+
+Consulta **[docs/vault.es.md](docs/vault.es.md)** para la referencia completa (arquitectura, pipeline de consulta, formas de la API HTTP, postura de seguridad, hoja de ruta Fase 3).
 
 ---
 
@@ -387,19 +507,21 @@ El portal web incluye una pestana **Marketplace** en `/admin/skills` donde puede
 
 ### Como funciona el bucle del agente
 
-1. **Mensaje recibido** desde un canal de chat
+1. **Mensaje recibido** desde un canal de chat (texto, imagenes, video, audio o documentos)
 2. **Recuperacion de memoria** -- busqueda hibrida de AgentDB (70% semantica HNSW + 30% TF-IDF) encuentra las conversaciones pasadas mas relevantes
 3. **Recuperacion RAG** -- busqueda semantica sobre tu codigo C# (vectores HNSW, top 6 resultados)
 4. **Recuperacion de instintos** -- consulta proactivamente patrones aprendidos relevantes para la tarea (coincidencia semantica + palabras clave)
 5. **Contexto de identidad** -- inyecta la identidad persistente del agente (UUID, conteo de arranques, tiempo activo, estado de recuperacion de fallos)
-6. **Fase PLAN** -- el LLM crea un plan numerado, informado por conocimientos aprendidos y fallos pasados
-7. **Fase ACTUAR** -- el LLM ejecuta llamadas a herramientas siguiendo el plan
-8. **OBSERVAR** -- se registran resultados; recuperacion de errores analiza fallos; el clasificador de fallos categoriza errores
-9. **REFLEXIONAR** -- cada 3 pasos (o en error), el LLM decide: **CONTINUAR**, **REPLANIFICAR** o **HECHO**
-10. **Replanificacion automatica** -- si ocurren 3+ fallos consecutivos del mismo tipo, fuerza un nuevo enfoque evitando estrategias fallidas
-11. **Repetir** hasta 50 iteraciones hasta completar
-12. **Aprendizaje** -- los resultados de herramientas fluyen a traves del TypedEventBus al pipeline de aprendizaje para almacenamiento inmediato de patrones
-13. **Respuesta enviada** al usuario a traves del canal (streaming si es compatible)
+6. **Capa de auto-mejora en tiempo de ejecucion** -- los artefactos activos de runtime (`skill`, `workflow`, `knowledge_patch`) inyectan orientacion interna; los artefactos en shadow se mantienen solo en evaluacion
+7. **Capa de replay de ejecucion** -- las ramas de exito/fallo previas del mismo entorno se inyectan antes de reintentar planificaciones
+8. **Fase PLAN** -- el LLM crea un plan numerado, informado por conocimientos aprendidos y fallos pasados
+9. **Fase ACTUAR** -- el LLM ejecuta llamadas a herramientas siguiendo el plan
+10. **OBSERVAR** -- se registran resultados; recuperacion de errores analiza fallos; el clasificador de fallos categoriza errores
+11. **REFLEXIONAR** -- cada 3 pasos (o en error), el LLM decide: **CONTINUAR**, **REPLANIFICAR** o **HECHO**
+12. **Replanificacion automatica** -- si ocurren 3+ fallos consecutivos del mismo tipo, fuerza un nuevo enfoque evitando estrategias fallidas
+13. **Repetir** hasta 50 iteraciones hasta completar
+14. **Aprendizaje** -- los resultados de herramientas fluyen a traves del TypedEventBus al pipeline de aprendizaje para almacenamiento inmediato de patrones
+15. **Respuesta enviada** al usuario a traves del canal (streaming si es compatible)
 
 ---
 
@@ -413,62 +535,14 @@ El backend de memoria activo es `AgentDBMemory` -- SQLite con indexacion vectori
 - **Memoria persistente** -- almacenamiento a largo plazo, promovida desde la efimera segun frecuencia de acceso e importancia
 
 **Como funciona:**
-- Cuando el historial de sesion supera los 40 mensajes, los mensajes antiguos se resumen y almacenan como entradas de conversacion
+- El historial de sesion se recorta con umbrales por proveedor, y los fragmentos recortados se persisten en memoria antes de salir de la ventana de contexto activa
 - La recuperacion hibrida combina 70% de similitud semantica (vectores HNSW) con 30% de coincidencia de palabras clave TF-IDF
 - La herramienta `strada_analyze_project` almacena en cache el analisis de estructura del proyecto para inyeccion instantanea de contexto
 - La memoria persiste entre reinicios en el directorio `MEMORY_DB_PATH` (por defecto: `.strada-memory/`)
+- El resumidor de sesion actualiza la memoria de ejecucion de tareas cada 10 mensajes activos y de nuevo durante la limpieza de sesion
 - La migracion automatica desde el legado FileMemoryManager se ejecuta en el primer inicio
 
 **Respaldo:** Si la inicializacion de AgentDB falla, el sistema recurre automaticamente a `FileMemoryManager` (JSON + TF-IDF).
-
----
-
-## Codebase Memory Vault
-
-El **Codebase Memory Vault** es memoria de codebase persistente y por proyecto que reemplaza la relectura de archivos en cada solicitud con busqueda hibrida (BM25 + vectorial) y simbolica (Personalized PageRank sobre el grafo de llamadas/imports). Entiende proyectos Unity y el propio codigo de Strada.Brain via **SelfVault**. Ahorros de tokens dramaticos en cada turno.
-
-Introducido en **v4.2.69** (PR #11, 2026-04-14). Guia completa: [docs/vault.es.md](docs/vault.es.md).
-
-**Fase 1 — Recuperacion hibrida:**
-- SQLite por vault en `<proyecto>/.strada/vault/index.db` (better-sqlite3, WAL + FK)
-- Tablas: `vault_files`, `vault_chunks`, `vault_chunks_fts` (FTS5/BM25), `vault_embeddings` (puntero HNSW), `vault_meta`
-- BM25 + vectores fusionados via Reciprocal Rank Fusion (k = 60)
-- Packing por presupuesto de tokens (`packByBudget`)
-- Tres caminos de actualizacion: watcher chokidar (debounce 800 ms), write-hook (presupuesto 200 ms), `/vault sync` manual
-- Short-circuit por hash xxhash64 — archivos sin cambios nunca se re-embeden
-- Herramientas: `vault_init`, `vault_sync`, `vault_status`
-- Portal `/admin/vaults`: pestanas Files y Search
-- HTTP `/api/vaults/*`, evento WS `vault:update`
-
-**Fase 2 — Grafo de simbolos, PPR, SelfVault, Graph UI:**
-- Nuevas tablas `vault_symbols`, `vault_edges`, `vault_wikilinks`; `vault_meta.indexer_version = 'phase2.v1'`
-- Extractores Tree-sitter WASM para TypeScript y C#; regex para wikilinks Markdown
-- Formato de Symbol ID: `<lang>::<relPath>::<qualifiedName>` (externs: `<lang>::unresolved::<label>`)
-- `.strada/vault/graph.canvas` (JSON Canvas 1.0), regenerado en cold start / `/vault sync` / drain del watcher
-- **Personalized PageRank** re-rankea cuando `VaultQuery.focusFiles` esta presente
-- **SelfVault** indexa `src/`, `web-portal/src/`, `tests/`, `docs/`, `AGENTS.md`, `CLAUDE.md` (omite symlinks)
-- Endpoints nuevos: `GET /api/vaults/:id/canvas`, `GET /api/vaults/:id/symbols/by-name?q=X`, `GET /api/vaults/:id/symbols/:symbolId/callers`
-- Portal gana pestana Graph via `@xyflow/react` + `@dagrejs/dagre`
-
-**Configuracion (`config.vault`):**
-- `enabled: false` por defecto — activa con `STRADA_VAULT_ENABLED=true`
-- `writeHookBudgetMs: 200`, `debounceMs: 800`, `embeddingFallback: 'local'`, `self.enabled: true`
-
-**Inicio rapido:**
-
-```bash
-export STRADA_VAULT_ENABLED=true
-npm start
-
-# En el chat:
-/vault init /ruta/a/tu/proyecto/unity
-/vault sync
-/vault status
-```
-
-**Endurecimiento de seguridad (commit `5563d48`):** escrituras atomicas del canvas, skip de symlinks, parser fresco por llamada, cap del body de request (DoS), GC de aristas huerfanas, damping PPR normalizado, cap 2 MB en extraccion de simbolos, invalidacion de cache de aristas, cota superior en `findCallers`.
-
-**Hoja de ruta Fase 3:** resumenes rolling con Haiku, upgrade de FrameworkVault (busqueda semantica + extraccion de docstrings), acoplamiento bidireccional con el pipeline de Learning.
 
 ---
 
@@ -711,6 +785,11 @@ El agente mantiene una identidad persistente entre sesiones y reinicios.
 - Deteccion de apagado limpio para recuperacion ante fallos
 - Cache de contadores en memoria con volcado periodico para minimizar escrituras en SQLite
 
+**Preferencias de usuario y continuidad web:**
+- Las preferencias en lenguaje natural como el nombre del asistente, formato de respuesta y modo ultrathink se persisten en el almacen de perfil de usuario
+- El canal web mantiene un perfil estable en el navegador via `profileId` + `profileToken`, mientras que las reconexiones usan un `reconnectToken` rotativo
+- Actualizar `localhost` mantiene al mismo usuario web logico mientras el almacenamiento del navegador permanezca intacto y el usuario no haya reiniciado la sesion explicitamente
+
 **Recuperacion ante fallos:**
 - Al iniciar, si la sesion anterior no se cerro limpiamente, construye un `CrashRecoveryContext`
 - Incluye duracion de la inactividad, arboles de objetivos interrumpidos y conteo de arranques
@@ -805,6 +884,33 @@ Strada no le devuelve al usuario los siguientes pasos obvios. Si un proveedor de
 | `WHATSAPP_SESSION_PATH` | Directorio para archivos de sesion (por defecto: `.whatsapp-session`) |
 | `WHATSAPP_ALLOWED_NUMBERS` | Numeros de telefono separados por comas (opcional; vacio = acceso abierto) |
 
+**Matrix:**
+| Variable | Descripcion |
+|----------|-------------|
+| `MATRIX_HOMESERVER` | URL del homeserver de Matrix |
+| `MATRIX_ACCESS_TOKEN` | Token de acceso del bot |
+| `MATRIX_USER_ID` | ID de usuario del bot |
+| `MATRIX_ALLOWED_USER_IDS` | IDs de usuario de Matrix separados por comas con permiso para hablar al bot |
+| `MATRIX_ALLOWED_ROOM_IDS` | IDs de sala de Matrix separados por comas con permiso para entregar mensajes |
+| `MATRIX_ALLOW_OPEN_ACCESS` | Poner `true` para permitir trafico Matrix entrante sin listas de usuarios/salas |
+
+**IRC:**
+| Variable | Descripcion |
+|----------|-------------|
+| `IRC_SERVER` | Nombre de host del servidor IRC |
+| `IRC_NICK` | Nick del bot |
+| `IRC_CHANNELS` | Canales a unirse (separados por comas) |
+| `IRC_ALLOWED_USERS` | Nicks IRC separados por comas con permiso para activar el bot |
+| `IRC_ALLOW_OPEN_ACCESS` | Poner `true` para permitir trafico IRC entrante sin lista de usuarios |
+
+**Teams:**
+| Variable | Descripcion |
+|----------|-------------|
+| `TEAMS_APP_ID` | ID de la app de Microsoft Teams |
+| `TEAMS_APP_PASSWORD` | Contrasena de la app de Microsoft Teams |
+| `TEAMS_ALLOWED_USER_IDS` | IDs de usuario de Teams separados por comas con permiso para enviar mensajes al bot |
+| `TEAMS_ALLOW_OPEN_ACCESS` | Poner `true` para permitir trafico Teams entrante sin lista de usuarios |
+
 ### Funcionalidades
 
 | Variable | Por Defecto | Descripcion |
@@ -818,10 +924,19 @@ Strada no le devuelve al usuario los siguientes pasos obvios. Si un proveedor de
 | `DASHBOARD_ENABLED` | `false` | Habilitar dashboard HTTP de monitoreo |
 | `DASHBOARD_PORT` | `3100` | Puerto del servidor del dashboard |
 | `ENABLE_WEBSOCKET_DASHBOARD` | `false` | Habilitar dashboard en tiempo real via WebSocket |
+| `WEBSOCKET_DASHBOARD_AUTH_TOKEN` | (no definido) | Token bearer opcional para autenticacion del dashboard WebSocket; cuando esta presente tambien protege las APIs del dashboard; cuando esta ausente, el dashboard integrado same-origin arranca un token de alcance de proceso automaticamente |
+| `WEBSOCKET_DASHBOARD_ALLOWED_ORIGINS` | (no definido) | Origenes adicionales permitidos para el dashboard WebSocket (separados por comas) |
+| `LLM_STREAM_INITIAL_TIMEOUT_MS` | `600000` | Tiempo maximo para esperar que una respuesta en streaming comience antes de considerarla paralizada |
+| `LLM_STREAM_STALL_TIMEOUT_MS` | `120000` | Intervalo maximo entre fragmentos de streaming antes de considerar la respuesta paralizada |
 | `ENABLE_PROMETHEUS` | `false` | Habilitar endpoint de metricas Prometheus (puerto 9090) |
-| `MULTI_AGENT_ENABLED` | `true` | Habilitar orquestacion multi-agente |
+| `MULTI_AGENT_ENABLED` | `true` | Habilitar orquestacion multi-agente; usa `false` para el modo legacy de agente unico |
+| `TASK_MAX_CONCURRENT` | `3` | Numero maximo de tareas en segundo plano que pueden ejecutarse simultaneamente entre conversaciones distintas |
+| `TASK_MESSAGE_BURST_WINDOW_MS` | `350` | Ventana de tiempo para fusionar mensajes consecutivos rapidos del usuario en una tarea ordenada |
+| `TASK_MESSAGE_BURST_MAX_MESSAGES` | `8` | Maximo de mensajes consecutivos a fusionar en un solo burst de tarea |
 | `TASK_DELEGATION_ENABLED` | `true` | Habilitar delegacion de tareas entre agentes; la delegacion solo se inicializa cuando `MULTI_AGENT_ENABLED=true` |
 | `AGENT_MAX_DELEGATION_DEPTH` | `2` | Profundidad maxima de cadena de delegacion |
+| `AGENT_MAX_CONCURRENT_DELEGATIONS` | `3` | Maximo de delegaciones concurrentes por agente padre |
+| `DELEGATION_VERBOSITY` | `normal` | Verbosidad del registro de delegacion: `quiet`, `normal` o `verbose` |
 | `DEPLOY_ENABLED` | `false` | Habilitar subsistema de despliegue |
 | `SOUL_FILE` | `soul.md` | Ruta al archivo de personalidad del agente (recarga en caliente al cambiar) |
 | `SOUL_FILE_WEB` | (no definido) | Anulacion de personalidad por canal para el canal web |
@@ -841,6 +956,9 @@ Strada no le devuelve al usuario los siguientes pasos obvios. Si un proveedor de
 | `CONSENSUS_MODE` | `auto` | Modo de consenso: `auto`, `critical-only`, `always` o `disabled` |
 | `CONSENSUS_THRESHOLD` | `0.5` | Umbral de confianza para activar consenso |
 | `CONSENSUS_MAX_PROVIDERS` | `3` | Maximo de proveedores a consultar para consenso |
+| `MODEL_INTELLIGENCE_ENABLED` | `true` | Habilitar actualizacion del catalogo compartido en vivo de modelos/proveedores |
+| `MODEL_INTELLIGENCE_REFRESH_HOURS` | `24` | Cadencia de actualizacion de metadatos de modelos y snapshots oficiales del proveedor |
+| `MODEL_INTELLIGENCE_PROVIDER_SOURCES_PATH` | `src/agents/providers/provider-sources.json` | Registro JSON de URLs oficiales de docs/noticias de proveedores que alimentan las capacidades dinamicas del proveedor y el selector de modelos |
 | `STRADA_DAEMON_DAILY_BUDGET` | `1.0` | Presupuesto diario (USD) para modo daemon |
 
 ### Limitacion de Tasa
@@ -858,7 +976,8 @@ Strada no le devuelve al usuario los siguientes pasos obvios. Si un proveedor de
 
 | Variable | Por Defecto | Descripcion |
 |----------|-------------|-------------|
-| `REQUIRE_MFA` | `false` | Requerir autenticacion multi-factor |
+| `JWT_SECRET` | (no definido) | Secreto opcional para autenticacion interna del sistema y flujos JWT/sesion. Generar con `openssl rand -hex 64` antes de habilitar esas funciones |
+| `REQUIRE_MFA` | `false` | Requerir autenticacion multi-factor para autenticacion interna del sistema |
 | `BROWSER_HEADLESS` | `true` | Ejecutar automatizacion del navegador en modo headless |
 | `BROWSER_MAX_CONCURRENT` | `5` | Sesiones de navegador simultaneas maximas |
 
@@ -990,6 +1109,9 @@ Todos los canales implementan streaming con edicion in situ. La respuesta del ag
 - **Discord**: Bloquea todo por defecto. Se debe configurar `ALLOWED_DISCORD_USER_IDS` o `ALLOWED_DISCORD_ROLE_IDS`.
 - **Slack**: **Abierto por defecto.** Si `ALLOWED_SLACK_USER_IDS` esta vacio, cualquier usuario de Slack puede acceder al bot. Configura la lista de permitidos para produccion.
 - **WhatsApp**: Abierto por defecto. Si se configura `WHATSAPP_ALLOWED_NUMBERS`, el adaptador restringe los mensajes entrantes a esa lista de permitidos.
+- **Matrix**: Bloquea todo por defecto. Configura listas de permitidos o `MATRIX_ALLOW_OPEN_ACCESS=true`.
+- **IRC**: Bloquea todo por defecto. Configura `IRC_ALLOWED_USERS` o `IRC_ALLOW_OPEN_ACCESS=true`.
+- **Teams**: Bloquea todo por defecto. Configura `TEAMS_ALLOWED_USER_IDS` o `TEAMS_ALLOW_OPEN_ACCESS=true`.
 
 ---
 
@@ -1113,11 +1235,34 @@ Notas:
 src/
   index.ts              # Punto de entrada CLI (Commander.js)
   core/
-    bootstrap.ts        # Secuencia de inicializacion completa -- toda la configuracion ocurre aqui
-    event-bus.ts        # TypedEventBus para comunicacion desacoplada orientada a eventos
-    tool-registry.ts    # Instanciacion y registro de herramientas
+    bootstrap.ts              # Secuencia de inicializacion completa -- delega a modulos auxiliares
+    bootstrap-channels.ts     # Logica de inicializacion de canales
+    bootstrap-memory.ts       # Inicializacion del subsistema de memoria
+    bootstrap-providers.ts    # Inicializacion de proveedores LLM
+    bootstrap-wiring.ts       # Cableado de servicios e inyeccion de dependencias
+    bootstrap-stages.ts       # Re-exportaciones del directorio bootstrap-stages/
+    bootstrap-stages/
+      bootstrap-stages-types.ts # Tipos compartidos para etapas de bootstrap
+      stage-agents.ts           # Etapa de inicializacion del subsistema de agentes
+      stage-daemon.ts           # Etapa de inicializacion del subsistema daemon
+      stage-finalization.ts     # Comprobaciones finales de inicio y disponibilidad
+      stage-goals.ts            # Etapa de inicializacion del subsistema de objetivos
+      stage-knowledge.ts        # Etapa de inicializacion de Knowledge/RAG
+      stage-providers.ts        # Etapa de inicializacion de proveedores
+      stage-runtime.ts          # Etapa de inicializacion de servicios de runtime
+      index.ts                  # Re-exportacion barrel
+    event-bus.ts              # TypedEventBus para comunicacion desacoplada orientada a eventos
+    tool-registry.ts          # Instanciacion y registro de herramientas
   agents/
-    orchestrator.ts     # Bucle de agente PAOR, gestion de sesiones, streaming
+    orchestrator.ts                    # Bucle de agente PAOR, gestion de sesiones, streaming
+    orchestrator-clarification.ts      # Manejo del flujo de clarificacion
+    orchestrator-context-builder.ts    # Ensamblado del contexto de conversacion
+    orchestrator-interaction-policy.ts # Aplicacion de la politica de interaccion
+    orchestrator-phase-telemetry.ts    # Telemetria y metricas a nivel de fase
+    orchestrator-runtime-utils.ts      # Utilidades auxiliares de runtime
+    orchestrator-session-persistence.ts # Logica de guardado/restauracion de sesion
+    orchestrator-supervisor-routing.ts  # Enrutamiento de delegacion al supervisor
+    orchestrator-text-utils.ts          # Utilidades de procesamiento de texto
     agent-state.ts      # Maquina de estados de fase (Planificar/Actuar/Observar/Reflexionar)
     paor-prompts.ts     # Constructores de prompts conscientes de fase
     instinct-retriever.ts # Recuperacion proactiva de patrones aprendidos
@@ -1125,9 +1270,17 @@ src/
     autonomy/           # Recuperacion de errores, planificacion de tareas, auto-verificacion
     context/            # System prompt (base de conocimiento Strada.Core)
     providers/          # Claude, OpenAI, Ollama, DeepSeek, Kimi, Qwen, MiniMax, Groq + mas
-    tools/              # 30+ implementaciones de herramientas (ask_user, show_plan, switch_personality, ...)
+    tools/              # 30+ implementaciones de herramientas mas turnos de interaccion del plano de control (ask_user, show_plan, switch_personality, ...)
     soul/               # Cargador de personalidad SOUL.md con recarga en caliente y anulaciones por canal
     plugins/            # Cargador de plugins externos
+    multi/
+      agent-manager.ts         # Ciclo de vida multi-agente y aislamiento de sesion
+      agent-budget-tracker.ts  # Seguimiento de presupuesto por agente
+      agent-registry.ts        # Registro central de agentes activos
+      delegation/
+        delegation-manager.ts  # Gestion del ciclo de vida de delegacion
+        delegation-tool.ts     # Herramienta de delegacion para agentes
+        tier-router.ts         # Enrutamiento de tareas en 4 niveles
   profiles/             # Archivos de perfiles de personalidad: casual.md, formal.md, minimal.md
   channels/
     telegram/           # Bot basado en Grammy
@@ -1140,11 +1293,21 @@ src/
   memory/
     file-memory-manager.ts   # Backend legado: JSON + TF-IDF (respaldo)
     unified/
-      agentdb-memory.ts      # Backend activo: SQLite + HNSW, auto-clasificacion en 3 niveles
-      agentdb-adapter.ts     # Adaptador IMemoryManager para AgentDBMemory
-      migration.ts           # Migracion de FileMemoryManager legado -> AgentDB
-      consolidation-engine.ts # Consolidacion de memoria en inactividad con clustering HNSW
-      consolidation-types.ts  # Definiciones de tipos e interfaces de consolidacion
+      agentdb-memory.ts        # Backend activo: SQLite + HNSW, auto-clasificacion en 3 niveles
+      agentdb-sqlite.ts        # Operaciones SQLite y helpers de consulta
+      agentdb-vector.ts        # Operaciones del indice vectorial HNSW
+      agentdb-tiering.ts       # Logica de auto-clasificacion en 3 niveles
+      agentdb-retrieval.ts     # Recuperacion y busqueda en memoria
+      agentdb-time.ts          # Decaimiento temporal y puntuacion
+      agentdb-adapter.ts       # Adaptador IMemoryManager para AgentDBMemory
+      user-profile-store.ts    # Persistencia del perfil de usuario
+      session-summarizer.ts    # Generacion de resumenes de sesion
+      task-execution-store.ts  # Almacenamiento del historial de ejecucion de tareas
+      hnsw-write-mutex.ts      # Proteccion de escritura concurrente en HNSW
+      sqlite-pragmas.ts        # Configuracion de PRAGMAs de SQLite
+      migration.ts             # Migracion de FileMemoryManager legado -> AgentDB
+      consolidation-engine.ts  # Consolidacion de memoria en inactividad con clustering HNSW
+      consolidation-types.ts   # Definiciones de tipos e interfaces de consolidacion
     decay/                    # Sistema de decaimiento exponencial de memoria
   rag/
     rag-pipeline.ts     # Orquestacion de indice + busqueda + formato
@@ -1172,14 +1335,6 @@ src/
       composite-tool.ts    # Herramienta compuesta ejecutable
       chain-validator.ts   # Validacion post-sintesis, retroalimentacion en tiempo de ejecucion
       chain-manager.ts     # Orquestador de ciclo de vida completo
-  multi-agent/
-    agent-manager.ts    # Ciclo de vida multi-agente y aislamiento de sesion
-    agent-budget-tracker.ts  # Seguimiento de presupuesto por agente
-    agent-registry.ts   # Registro central de agentes activos
-  delegation/
-    delegation-manager.ts    # Gestion del ciclo de vida de delegacion
-    delegation-tool.ts       # Herramienta de delegacion para agentes
-    tier-router.ts           # Enrutamiento de tareas en 4 niveles
   goals/
     goal-decomposer.ts  # Descomposicion de objetivos basada en DAG (proactiva + reactiva)
     goal-executor.ts    # Ejecucion paralela por olas con presupuestos de fallo
@@ -1245,6 +1400,12 @@ src/
 ## Contribuir
 
 Consulta [CONTRIBUTING.md](CONTRIBUTING.md) para la configuracion de desarrollo, convenciones de codigo y directrices para PR.
+
+Consulta la [guia de creacion de skills](CONTRIBUTING.md#creating-a-skill) para crear y publicar tus propios skills.
+
+Consulta [AGENTS.md](AGENTS.md) para convenciones de codigo detalladas, patrones de arquitectura y directrices especificas para agentes utilizados al trabajar con asistentes de programacion de IA en este repositorio.
+
+Consulta [CHANGELOG.md](CHANGELOG.md) para el historial de versiones y los cambios que rompen compatibilidad.
 
 ---
 

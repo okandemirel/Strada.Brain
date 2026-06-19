@@ -252,7 +252,8 @@ Strada.Brain 每天自动检查更新，在空闲时应用更新。源码 checko
 | `AUTO_UPDATE_INTERVAL_HOURS` | `24` | 检查频率（小时） |
 | `AUTO_UPDATE_IDLE_TIMEOUT_MIN` | `5` | 应用更新前的空闲分钟数 |
 | `AUTO_UPDATE_CHANNEL` | `latest` | npm 分发标签：`stable` 或 `latest` |
-| `AUTO_UPDATE_AUTO_RESTART` | `true` | 更新后自动重启（需要 `strada daemon`） |
+| `AUTO_UPDATE_NOTIFY` | `true` | 检查或安装更新时发送通知 |
+| `AUTO_UPDATE_AUTO_RESTART` | `true` | 更新后空闲时自动重启（需要 `strada daemon`） |
 
 ---
 
@@ -287,13 +288,75 @@ Web 门户采用由 shadcn/ui 以及 [21st.dev](https://21st.dev) 和 [Magic UI]
 
 ## 技能生态系统
 
-技能是可以安装到 Strada.Brain 上的可选功能包。每个技能包含一个 `SKILL.md` 清单文件和工具实现。
+技能是可以安装、共享和基于 Strada.Brain 构建的可选功能包。每个技能是一个包含 `SKILL.md` 清单文件和可选环境配置的目录。
+
+### 安装技能
 
 ```bash
-strada skill install notion          # 从注册表安装
-strada skill list                    # 列出所有技能
-strada skill search <查询>            # 搜索注册表
+# 从任意公开的 git 仓库安装
+strada skill install https://github.com/okandemirel/strada-skill-example
+
+# 列出已安装的技能及其状态
+strada skill list
+
+# 更新所有托管技能
+strada skill update
+
+# 搜索公共注册表
+strada skill search <查询>
+
+# 查看已安装技能的详细信息
+strada skill info <名称>
+
+# 启用或禁用技能
+strada skill enable <名称>
+strada skill disable <名称>
+
+# 移除技能
+strada skill remove <名称>
 ```
+
+### 创建技能
+
+技能是一个目录，至少包含一个带有 YAML frontmatter 的 `SKILL.md` 文件：
+
+```markdown
+---
+name: my-skill
+version: 1.0.0
+description: A short description of what this skill does
+author: your-name
+requires:
+  bins:
+    - some-cli-tool        # must exist in PATH
+  env:
+    - MY_API_KEY           # must be set
+  skills:
+    - another-skill        # dependency on another skill
+capabilities:
+  - code-generation
+  - analysis
+---
+
+The body of SKILL.md is the system prompt or documentation injected into
+the agent when this skill is active.
+```
+
+### 三层加载
+
+技能从三个位置按优先级顺序发现：
+
+| 层级 | 位置 | 用途 |
+|------|------|------|
+| **workspace** | 项目根目录的 `.strada/skills/` | 项目特定技能，最高优先级 |
+| **managed** | `~/.strada/skills/` | 通过 `strada skill install` 安装的用户技能 |
+| **bundled** | Strada.Brain checkout 内的 `src/skills/bundled/` | 随应用一起发布，始终可用 |
+
+高优先级层的技能会覆盖低优先级层中同名技能。`requires` 条件未满足的技能被置于 `gated` 状态，在其前提条件满足之前从活跃工具面中排除。
+
+### 注册表
+
+公共技能注册表是社区维护技能的 JSON 索引（11 个技能并持续增长）。运行 `strada skill search` 可浏览。每个条目列出 git 仓库、描述、标签、版本和作者。注册表 URL 可通过 `SKILL_REGISTRY_URL` 配置。
 
 ### 内置技能
 
@@ -391,14 +454,16 @@ Web 门户在 `/admin/skills` 提供**市场**标签页，可以浏览、搜索�
 3. **RAG 检索** -- 对 C# 代码库进行语义搜索（HNSW 向量，前 6 个结果）
 4. **本能检索** -- 主动查询与任务相关的已学习模式（语义 + 关键词匹配）
 5. **身份上下文** -- 注入持久代理身份（UUID、启动次数、运行时间、崩溃恢复状态）
-6. **计划阶段** -- LLM 根据已学习的洞察和过去的失败创建编号计划
-7. **行动阶段** -- LLM 按照计划执行工具调用
-8. **观察** -- 记录结果；错误恢复分析失败；故障分类器对错误进行分类
-9. **反思** -- 每 3 步（或出错时），LLM 决定：**继续**、**重新规划** 或 **完成**
-10. **自动重新规划** -- 如果连续 3 次以上相同类型的失败，强制采用避免失败策略的新方法
-11. **重复** 最多 50 次迭代直到完成
-12. **学习** -- 工具结果通过 TypedEventBus 流入学习管道，实现即时模式存储
-13. **发送响应** -- 通过频道发送给用户（如支持则以流式传输）
+6. **运行时自我提升层** -- 活跃的运行时制品（`skill`、`workflow`、`knowledge_patch`）注入内部指导；影子制品仅用于评估
+7. **执行回放层** -- 在规划重试之前注入相同场景下的历史成功/失败分支
+8. **计划阶段** -- LLM 根据已学习的洞察和过去的失败创建编号计划
+9. **行动阶段** -- LLM 按照计划执行工具调用
+10. **观察** -- 记录结果；错误恢复分析失败；故障分类器对错误进行分类
+11. **反思** -- 每 3 步（或出错时），LLM 决定：**继续**、**重新规划** 或 **完成**
+12. **自动重新规划** -- 如果连续 3 次以上相同类型的失败，强制采用避免失败策略的新方法
+13. **重复** 最多 50 次迭代直到完成
+14. **学习** -- 工具结果通过 TypedEventBus 流入学习管道，实现即时模式存储
+15. **发送响应** -- 通过频道发送给用户（如支持则以流式传输）
 
 ---
 
@@ -412,10 +477,11 @@ Web 门户在 `/admin/skills` 提供**市场**标签页，可以浏览、搜索�
 - **持久记忆** -- 长期存储，根据访问频率和重要性从临时记忆提升
 
 **工作原理：**
-- 当会话历史超过 40 条消息时，旧消息被摘要并存储为对话条目
+- 会话历史使用提供商感知阈值进行修剪，修剪的片段在离开活跃上下文窗口之前持久化到记忆中
 - 混合检索结合 70% 语义相似度（HNSW 向量）和 30% TF-IDF 关键词匹配
 - `strada_analyze_project` 工具缓存项目结构分析，用于即时上下文注入
 - 记忆在 `MEMORY_DB_PATH` 目录（默认：`.strada-memory/`）中跨重启持久化
+- 会话摘要器每 10 条活跃消息更新一次任务执行记忆，并在会话清理时再次更新
 - 首次启动时自动从旧版 FileMemoryManager 执行迁移
 
 **回退机制：** 如果 AgentDB 初始化失败，系统自动回退到 `FileMemoryManager`（JSON + TF-IDF）。
@@ -708,6 +774,11 @@ npm run dev -- daemon --channel web
 - 干净关闭检测，用于崩溃恢复
 - 内存计数器缓存，定期刷新到磁盘以减少 SQLite 写入
 
+**用户偏好与 Web 连续性：**
+- 助手名称、响应格式、ultrathink 模式等自然语言偏好持久化到用户配置存储
+- Web 频道通过 `profileId` + `profileToken` 保持稳定的浏览器配置；重连时使用滚动的 `reconnectToken`
+- 只要浏览器存储保持完整且用户未明确重置会话，刷新 `localhost` 将保持同一个逻辑 Web 用户
+
 **崩溃恢复：**
 - 启动时，如果上次会话未正常关闭，构建 `CrashRecoveryContext`
 - 包含停机时长、中断的目标树和启动次数
@@ -802,6 +873,33 @@ Strada 不会把明显的下一步再丢回给用户。如果某个 provider 返
 | `WHATSAPP_SESSION_PATH` | 会话文件目录（默认：`.whatsapp-session`） |
 | `WHATSAPP_ALLOWED_NUMBERS` | 以逗号分隔的电话号码（可选；为空时开放访问） |
 
+**Matrix：**
+| 变量 | 说明 |
+|------|------|
+| `MATRIX_HOMESERVER` | Matrix 主服务器 URL |
+| `MATRIX_ACCESS_TOKEN` | 机器人访问令牌 |
+| `MATRIX_USER_ID` | 机器人用户 ID |
+| `MATRIX_ALLOWED_USER_IDS` | 允许与机器人对话的 Matrix 用户 ID（逗号分隔） |
+| `MATRIX_ALLOWED_ROOM_IDS` | 允许投递消息的 Matrix 房间 ID（逗号分隔） |
+| `MATRIX_ALLOW_OPEN_ACCESS` | 设置为 `true` 时无需用户/房间白名单即可接收 Matrix 流量 |
+
+**IRC：**
+| 变量 | 说明 |
+|------|------|
+| `IRC_SERVER` | IRC 服务器主机名 |
+| `IRC_NICK` | 机器人昵称 |
+| `IRC_CHANNELS` | 要加入的频道（逗号分隔） |
+| `IRC_ALLOWED_USERS` | 允许触发机器人的 IRC 昵称（逗号分隔） |
+| `IRC_ALLOW_OPEN_ACCESS` | 设置为 `true` 时无需用户白名单即可接收 IRC 流量 |
+
+**Teams：**
+| 变量 | 说明 |
+|------|------|
+| `TEAMS_APP_ID` | Microsoft Teams 应用 ID |
+| `TEAMS_APP_PASSWORD` | Microsoft Teams 应用密码 |
+| `TEAMS_ALLOWED_USER_IDS` | 允许向机器人发消息的 Teams 用户 ID（逗号分隔） |
+| `TEAMS_ALLOW_OPEN_ACCESS` | 设置为 `true` 时无需用户白名单即可接收 Teams 流量 |
+
 ### 功能特性
 
 | 变量 | 默认值 | 说明 |
@@ -815,10 +913,20 @@ Strada 不会把明显的下一步再丢回给用户。如果某个 provider 返
 | `DASHBOARD_ENABLED` | `false` | 启用 HTTP 监控仪表板 |
 | `DASHBOARD_PORT` | `3100` | 仪表板服务器端口 |
 | `ENABLE_WEBSOCKET_DASHBOARD` | `false` | 启用 WebSocket 实时仪表板 |
+| `WEBSOCKET_DASHBOARD_PORT` | `3100` | WebSocket 仪表板服务器端口 |
+| `WEBSOCKET_DASHBOARD_AUTH_TOKEN` | （未设置） | WebSocket 仪表板的可选 bearer 令牌；设置后同时保护仪表板 API；未设置时内嵌 same-origin 仪表板会自动 bootstrap 进程级令牌 |
+| `WEBSOCKET_DASHBOARD_ALLOWED_ORIGINS` | （未设置） | WebSocket 仪表板的额外允许来源（逗号分隔） |
+| `LLM_STREAM_INITIAL_TIMEOUT_MS` | `600000` | 流式响应开始前的最大等待时间（毫秒） |
+| `LLM_STREAM_STALL_TIMEOUT_MS` | `120000` | 流式传输期间两个 chunk 之间的最大间隔（毫秒） |
 | `ENABLE_PROMETHEUS` | `false` | 启用 Prometheus 指标端点（端口 9090） |
-| `MULTI_AGENT_ENABLED` | `true` | 启用多代理编排 |
+| `MULTI_AGENT_ENABLED` | `true` | 启用多代理编排；设为 `false` 回退到旧版单代理模式 |
+| `TASK_MAX_CONCURRENT` | `3` | 不同对话中同时运行的后台任务最大数量 |
+| `TASK_MESSAGE_BURST_WINDOW_MS` | `350` | 将快速连续用户消息合并为一个有序任务的时间窗口（毫秒） |
+| `TASK_MESSAGE_BURST_MAX_MESSAGES` | `8` | 合并为单次任务突发的最大连续消息数 |
 | `TASK_DELEGATION_ENABLED` | `true` | 启用代理间任务委派；只有在 `MULTI_AGENT_ENABLED=true` 时委派才会初始化 |
 | `AGENT_MAX_DELEGATION_DEPTH` | `2` | 最大委派链深度 |
+| `AGENT_MAX_CONCURRENT_DELEGATIONS` | `3` | 每个父代理的最大并发委派数 |
+| `DELEGATION_VERBOSITY` | `normal` | 委派日志详细程度：`quiet`、`normal` 或 `verbose` |
 | `DEPLOY_ENABLED` | `false` | 启用部署子系统 |
 | `SOUL_FILE` | `soul.md` | 代理个性文件路径（变更时热重载） |
 | `SOUL_FILE_WEB` | (未设置) | Web 频道的频道级个性覆盖 |
@@ -838,6 +946,9 @@ Strada 不会把明显的下一步再丢回给用户。如果某个 provider 返
 | `CONSENSUS_MODE` | `auto` | 共识模式：`auto`、`critical-only`、`always` 或 `disabled` |
 | `CONSENSUS_THRESHOLD` | `0.5` | 触发共识的置信度阈值 |
 | `CONSENSUS_MAX_PROVIDERS` | `3` | 共识咨询的最大提供商数量 |
+| `MODEL_INTELLIGENCE_ENABLED` | `true` | 启用共享的实时模型/提供商目录刷新 |
+| `MODEL_INTELLIGENCE_REFRESH_HOURS` | `24` | 模型元数据和官方提供商源快照的刷新频率 |
+| `MODEL_INTELLIGENCE_PROVIDER_SOURCES_PATH` | `src/agents/providers/provider-sources.json` | 官方提供商文档/新闻 URL 的 JSON 注册表，为动态提供商能力和模型选择器提供数据 |
 | `STRADA_DAEMON_DAILY_BUDGET` | `1.0` | 守护进程模式的每日预算（美元） |
 
 ### 速率限制
@@ -987,6 +1098,9 @@ RAG（检索增强生成）管道对您的 C# 源代码进行索引以支持语�
 - **Discord**：默认拒绝所有。必须设置 `ALLOWED_DISCORD_USER_IDS` 或 `ALLOWED_DISCORD_ROLE_IDS`。
 - **Slack**：**默认对所有人开放。** 如果 `ALLOWED_SLACK_USER_IDS` 为空，任何 Slack 用户都可以访问机器人。请为生产环境设置允许列表。
 - **WhatsApp**：默认开放访问。只有在设置 `WHATSAPP_ALLOWED_NUMBERS` 时，适配器才会将入站消息限制到该允许列表。
+- **Matrix**：默认拒绝所有。设置白名单或 `MATRIX_ALLOW_OPEN_ACCESS=true`。
+- **IRC**：默认拒绝所有。设置 `IRC_ALLOWED_USERS` 或 `IRC_ALLOW_OPEN_ACCESS=true`。
+- **Teams**：默认拒绝所有。设置 `TEAMS_ALLOWED_USER_IDS` 或 `TEAMS_ALLOW_OPEN_ACCESS=true`。
 
 ---
 
@@ -1058,10 +1172,10 @@ docker-compose up -d
 
 ```bash
 # 24/7 自主运行，带心跳循环和主动触发器
-node dist/index.js daemon --channel web
+node dist/index.js start --channel web --daemon
 
 # 崩溃时自动重启，指数退避（1 秒到 60 秒，最多 10 次重启）
-node dist/index.js daemon --channel telegram
+node dist/index.js supervise --channel telegram
 ```
 
 ### 生产环境清单
@@ -1110,11 +1224,34 @@ npm run lint                     # ESLint
 src/
   index.ts              # CLI 入口点（Commander.js）
   core/
-    bootstrap.ts        # 完整初始化序列——所有连接在此完成
-    event-bus.ts        # TypedEventBus，用于解耦的事件驱动通信
-    tool-registry.ts    # 工具实例化和注册
+    bootstrap.ts              # 完整初始化序列——委托给辅助模块
+    bootstrap-channels.ts     # 频道初始化逻辑
+    bootstrap-memory.ts       # 记忆子系统初始化
+    bootstrap-providers.ts    # LLM 提供商初始化
+    bootstrap-wiring.ts       # 服务连接与依赖注入
+    bootstrap-stages.ts       # 从 bootstrap-stages/ 目录重新导出
+    bootstrap-stages/
+      bootstrap-stages-types.ts # bootstrap 阶段的共享类型
+      stage-agents.ts           # 代理子系统初始化阶段
+      stage-daemon.ts           # 守护进程子系统初始化阶段
+      stage-finalization.ts     # 最终启动检查与就绪状态
+      stage-goals.ts            # 目标子系统初始化阶段
+      stage-knowledge.ts        # 知识/RAG 初始化阶段
+      stage-providers.ts        # 提供商初始化阶段
+      stage-runtime.ts          # 运行时服务初始化阶段
+      index.ts                  # 桶形重新导出
+    event-bus.ts              # TypedEventBus，用于解耦的事件驱动通信
+    tool-registry.ts          # 工具实例化和注册
   agents/
-    orchestrator.ts     # PAOR 代理循环、会话管理、流式传输
+    orchestrator.ts                    # PAOR 代理循环、会话管理、流式传输
+    orchestrator-clarification.ts      # 澄清流程处理
+    orchestrator-context-builder.ts    # 对话上下文组装
+    orchestrator-interaction-policy.ts # 交互策略执行
+    orchestrator-phase-telemetry.ts    # 阶段级遥测与指标
+    orchestrator-runtime-utils.ts      # 运行时辅助工具
+    orchestrator-session-persistence.ts # 会话保存/恢复逻辑
+    orchestrator-supervisor-routing.ts  # 监督员委派路由
+    orchestrator-text-utils.ts          # 文本处理辅助工具
     agent-state.ts      # 阶段状态机（计划/行动/观察/反思）
     paor-prompts.ts     # 阶段感知的提示构建器
     instinct-retriever.ts # 主动已学习模式检索
@@ -1122,9 +1259,17 @@ src/
     autonomy/           # 错误恢复、任务规划、自我验证
     context/            # 系统提示（Strada.Core 知识库）
     providers/          # Claude、OpenAI、Ollama、DeepSeek、Kimi、Qwen、MiniMax、Groq 等
-    tools/              # 30+ 工具实现（ask_user, show_plan, switch_personality 等）
+    tools/              # 30+ 工具实现以及 control-plane 交互回合（ask_user, show_plan, switch_personality 等）
     soul/               # SOUL.md 个性加载器，支持热重载和按频道覆盖
     plugins/            # 外部插件加载器
+    multi/
+      agent-manager.ts         # 多代理生命周期和会话隔离
+      agent-budget-tracker.ts  # 代理级预算跟踪
+      agent-registry.ts        # 活跃代理中央注册表
+      delegation/
+        delegation-manager.ts  # 委派生命周期管理
+        delegation-tool.ts     # 面向代理的委派工具
+        tier-router.ts         # 4 级任务路由
   profiles/             # 个性配置文件：casual.md, formal.md, minimal.md
   channels/
     telegram/           # 基于 Grammy 的机器人
@@ -1137,11 +1282,21 @@ src/
   memory/
     file-memory-manager.ts   # 旧版后端：JSON + TF-IDF（回退）
     unified/
-      agentdb-memory.ts      # 活跃后端：SQLite + HNSW，3 层自动分层
-      agentdb-adapter.ts     # AgentDBMemory 的 IMemoryManager 适配器
-      migration.ts           # 旧版 FileMemoryManager -> AgentDB 迁移
-      consolidation-engine.ts # 空闲记忆整合与 HNSW 聚类
-      consolidation-types.ts  # 整合类型定义和接口
+      agentdb-memory.ts        # 活跃后端：SQLite + HNSW，3 层自动分层
+      agentdb-sqlite.ts        # SQLite 操作与查询辅助工具
+      agentdb-vector.ts        # HNSW 向量索引操作
+      agentdb-tiering.ts       # 3 层自动分层逻辑
+      agentdb-retrieval.ts     # 记忆检索与搜索
+      agentdb-time.ts          # 基于时间的衰减与评分
+      agentdb-adapter.ts       # AgentDBMemory 的 IMemoryManager 适配器
+      user-profile-store.ts    # 用户配置持久化
+      session-summarizer.ts    # 会话摘要生成
+      task-execution-store.ts  # 任务执行历史存储
+      hnsw-write-mutex.ts      # HNSW 并发写保护
+      sqlite-pragmas.ts        # SQLite PRAGMA 配置
+      migration.ts             # 旧版 FileMemoryManager -> AgentDB 迁移
+      consolidation-engine.ts  # 空闲记忆整合与 HNSW 聚类
+      consolidation-types.ts   # 整合类型定义和接口
     decay/                    # 指数记忆衰减系统
   rag/
     rag-pipeline.ts     # 索引 + 搜索 + 格式化编排
@@ -1169,14 +1324,6 @@ src/
       composite-tool.ts    # 可执行组合工具
       chain-validator.ts   # 合成后验证、运行时反馈
       chain-manager.ts     # 完整生命周期编排器
-  multi-agent/
-    agent-manager.ts    # 多代理生命周期和会话隔离
-    agent-budget-tracker.ts  # 代理级预算跟踪
-    agent-registry.ts   # 活跃代理中央注册表
-  delegation/
-    delegation-manager.ts    # 委派生命周期管理
-    delegation-tool.ts       # 面向代理的委派工具
-    tier-router.ts           # 4 级任务路由
   goals/
     goal-decomposer.ts  # 基于 DAG 的目标分解（主动 + 反应式）
     goal-executor.ts    # 基于波次的并行执行，带失败预算
@@ -1230,6 +1377,16 @@ src/
     metrics-cli.ts      # CLI 指标显示命令
   utils/
     media-processor.ts  # 媒体下载、验证（MIME/大小/魔数字节）、SSRF 保护
+  skills/
+    types.ts                  # SkillManifest、SkillEntry、SkillStatus、RegistryEntry 类型
+    skill-loader.ts           # 3 层技能发现（bundled / managed / workspace）
+    skill-gating.ts           # 前置条件门控检查（bins、env、config、技能依赖）
+    skill-config.ts           # 按技能启用/禁用持久化（skills.json）
+    skill-env-injector.ts     # 激活时将技能环境变量注入 process.env
+    skill-manager.ts          # 高级生命周期：加载、启用、禁用、安装、移除
+    skill-cli.ts              # `strada skill` 子命令（install、list、update、search、info 等）
+    skill-registry-client.ts  # 获取和搜索远程 JSON 注册表索引
+    frontmatter-parser.ts     # 从 SKILL.md 文件提取 YAML frontmatter
   security/             # 认证、RBAC、路径守卫、速率限制、密钥清洗
   intelligence/         # C# 解析、项目分析、代码质量
   dashboard/            # HTTP、WebSocket、Prometheus 仪表板
@@ -1242,6 +1399,12 @@ src/
 ## 贡献
 
 开发环境设置、代码规范和 PR 指南请参阅 [CONTRIBUTING.md](CONTRIBUTING.md)。
+
+如需创建和发布自己的技能，请参阅[技能编写指南](CONTRIBUTING.md#creating-a-skill)。
+
+在此仓库中使用 AI 编程助手时所用的详细编码规范、架构模式和代理专属指导，请参阅 [AGENTS.md](AGENTS.md)。
+
+版本历史和重大变更请参阅 [CHANGELOG.md](CHANGELOG.md)。
 
 ---
 

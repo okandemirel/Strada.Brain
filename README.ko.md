@@ -252,6 +252,7 @@ Strada.Brain은 매일 자동으로 업데이트를 확인하고 유휴 상태�
 | `AUTO_UPDATE_INTERVAL_HOURS` | `24` | 확인 빈도 (시간) |
 | `AUTO_UPDATE_IDLE_TIMEOUT_MIN` | `5` | 업데이트 적용 전 유휴 시간 (분) |
 | `AUTO_UPDATE_CHANNEL` | `latest` | npm dist-tag: `stable` 또는 `latest` |
+| `AUTO_UPDATE_NOTIFY` | `true` | 확인 또는 설치 시 업데이트 알림 전송 |
 | `AUTO_UPDATE_AUTO_RESTART` | `true` | 업데이트 후 자동 재시작 (`strada daemon` 필요) |
 
 ---
@@ -287,27 +288,97 @@ Strada.Brain은 매일 자동으로 업데이트를 확인하고 유휴 상태�
 
 ## 스킬 에코시스템
 
-스킬은 Strada.Brain에 추가할 수 있는 선택적 기능 패키지입니다. 각 스킬은 `SKILL.md` 매니페스트와 도구 구현을 포함합니다.
+스킬은 Strada.Brain에 추가, 공유, 확장할 수 있는 선택적 기능 패키지입니다. 각 스킬은 `SKILL.md` 매니페스트와 선택적 환경 설정을 포함하는 디렉터리입니다.
+
+### 스킬 설치
 
 ```bash
-strada skill install notion          # 레지스트리에서 설치
-strada skill list                    # 모든 스킬 나열
-strada skill search <쿼리>            # 레지스트리 검색
+# 공개 git 저장소에서 설치
+strada skill install https://github.com/okandemirel/strada-skill-example
+
+# 설치된 스킬 및 상태 나열
+strada skill list
+
+# 모든 관리형 스킬 업데이트
+strada skill update
+
+# 공개 레지스트리 검색
+strada skill search <쿼리>
+
+# 설치된 스킬 상세 정보 표시
+strada skill info <이름>
+
+# 스킬 활성화 또는 비활성화
+strada skill enable <이름>
+strada skill disable <이름>
+
+# 스킬 제거
+strada skill remove <이름>
 ```
 
+### 스킬 만들기
+
+스킬은 최소한 YAML 프론트매터가 있는 `SKILL.md` 파일을 포함하는 디렉터리입니다:
+
+```markdown
+---
+name: my-skill
+version: 1.0.0
+description: A short description of what this skill does
+author: your-name
+requires:
+  bins:
+    - some-cli-tool        # must exist in PATH
+  env:
+    - MY_API_KEY           # must be set
+  skills:
+    - another-skill        # dependency on another skill
+capabilities:
+  - code-generation
+  - analysis
+---
+
+The body of SKILL.md is the system prompt or documentation injected into
+the agent when this skill is active.
+```
+
+### 3단계 로딩
+
+스킬은 우선순위 순서로 세 위치에서 검색됩니다:
+
+| 단계 | 위치 | 목적 |
+|------|------|------|
+| **workspace** | 프로젝트 루트의 `.strada/skills/` | 프로젝트별 스킬, 최우선순위 |
+| **managed** | `~/.strada/skills/` | `strada skill install`로 사용자 설치 |
+| **bundled** | Strada.Brain 체크아웃 내 `src/skills/bundled/` | 애플리케이션과 함께 제공, 항상 사용 가능 |
+
+상위 우선순위 단계의 스킬이 하위 단계의 동일한 이름 스킬을 덮어씁니다. `requires` 조건이 충족되지 않은 스킬은 `gated` 상태가 되어 전제 조건이 충족될 때까지 활성 도구 표면에서 제외됩니다.
+
+### 레지스트리
+
+공개 스킬 레지스트리는 커뮤니티 관리 스킬의 JSON 인덱스입니다 (현재 11개 이상). `strada skill search`로 탐색할 수 있습니다. 각 항목에는 git 저장소, 설명, 태그, 버전, 작성자가 나열됩니다. 레지스트리 URL은 `SKILL_REGISTRY_URL`로 구성할 수 있습니다.
+
 ### 번들 스킬
+
+다음 스킬은 Strada.Brain과 함께 제공되어 항상 사용 가능합니다:
 
 | 스킬 | 설명 | 요구사항 |
 |------|------|---------|
 | `hello-world` | 메시지를 에코하는 테스트 스킬 | 없음 |
-| `github-utils` | PR 상태, 이슈 목록, 저장소 정보 | `gh` 바이너리 |
-| `unity-helpers` | 스크립트 찾기, 씬 나열, 프로젝트 구조 | 없음 |
+| `github-utils` | PR 상태, 이슈 목록, 저장소 정보 (`gh` CLI) | `gh` 바이너리 |
+| `unity-helpers` | 스크립트 찾기, 씬 나열, 프로젝트 구조 확인 | 없음 |
 | `web-search` | URL 가져오기, DuckDuckGo 검색 | 없음 |
-| `file-utils` | 단어 수, 줄 수, 파일 분석 | 없음 |
-| `system-info` | 가동시간, CPU/메모리/디스크, 네트워크 | 없음 |
-| `json-utils` | JSON 포맷, 쿼리, 비교/차이 | 없음 |
+| `file-utils` | 단어 수, 줄 수, 중복 찾기, 디렉터리 크기 | 없음 |
+| `system-info` | OS 가동시간, CPU/메모리/디스크, 네트워크 인터페이스 | 없음 |
+| `json-utils` | JSON 포맷, 쿼리(점 경로), 객체 비교/차이 | 없음 |
 
 ### 커뮤니티 스킬
+
+레지스트리에서 한 번의 명령으로 설치할 수 있습니다:
+
+```bash
+strada skill install notion
+```
 
 | 스킬 | 설명 | 요구사항 |
 |------|------|---------|
@@ -318,7 +389,7 @@ strada skill search <쿼리>            # 레지스트리 검색
 
 ### 웹 포털 마켓플레이스
 
-`/admin/skills`의 **마켓플레이스** 탭에서 커뮤니티 스킬을 검색하고 원클릭으로 설치할 수 있습니다.
+웹 포털의 `/admin/skills`에 있는 **마켓플레이스** 탭에서 커뮤니티 레지스트리의 스킬을 탐색, 검색, 원클릭으로 설치할 수 있습니다. 설치된 스킬은 활성화/비활성화 컨트롤이 있는 **설치됨** 탭에 표시됩니다.
 
 ---
 
@@ -715,13 +786,11 @@ npm run dev -- daemon --channel web
 
 모든 구성은 환경 변수를 통해 이루어집니다. 전체 목록은 `.env.example`을 참조하세요.
 
-### 필수
+### 최소 런타임 구성
 
 | 변수 | 설명 |
 |------|------|
-| AI 공급자 접근 | 최소 하나의 공급자 자격 증명, `ANTHROPIC_AUTH_MODE=claude-subscription` + `ANTHROPIC_AUTH_TOKEN`, `OPENAI_AUTH_MODE=chatgpt-subscription`, 또는 `ollama` 가 포함된 `PROVIDER_CHAIN` |
 | `UNITY_PROJECT_PATH` | Unity 프로젝트 루트의 절대 경로 (`Assets/` 포함 필수) |
-| `JWT_SECRET` | JWT 서명용 시크릿. 생성 방법: `openssl rand -hex 64` |
 
 ### AI 공급자
 
@@ -798,6 +867,33 @@ Strada는 명백한 다음 단계를 사용자에게 다시 넘기지 않습니�
 | `WHATSAPP_SESSION_PATH` | 세션 파일 디렉터리 (기본값: `.whatsapp-session`) |
 | `WHATSAPP_ALLOWED_NUMBERS` | 쉼표로 구분된 전화번호 (선택 사항; 비어 있으면 전체 허용) |
 
+**Matrix:**
+| 변수 | 설명 |
+|------|------|
+| `MATRIX_HOMESERVER` | Matrix 홈서버 URL |
+| `MATRIX_ACCESS_TOKEN` | 봇 액세스 토큰 |
+| `MATRIX_USER_ID` | 봇 사용자 ID |
+| `MATRIX_ALLOWED_USER_IDS` | 봇과 대화할 수 있는 쉼표로 구분된 Matrix 사용자 ID |
+| `MATRIX_ALLOWED_ROOM_IDS` | 메시지 전달이 허용된 쉼표로 구분된 Matrix 방 ID |
+| `MATRIX_ALLOW_OPEN_ACCESS` | `true`로 설정하면 사용자/방 허용 목록 없이 수신 Matrix 트래픽 허용 |
+
+**IRC:**
+| 변수 | 설명 |
+|------|------|
+| `IRC_SERVER` | IRC 서버 호스트명 |
+| `IRC_NICK` | 봇 닉네임 |
+| `IRC_CHANNELS` | 참가할 쉼표로 구분된 채널 |
+| `IRC_ALLOWED_USERS` | 봇을 트리거할 수 있는 쉼표로 구분된 IRC 닉네임 |
+| `IRC_ALLOW_OPEN_ACCESS` | `true`로 설정하면 사용자 허용 목록 없이 수신 IRC 트래픽 허용 |
+
+**Teams:**
+| 변수 | 설명 |
+|------|------|
+| `TEAMS_APP_ID` | Microsoft Teams 앱 ID |
+| `TEAMS_APP_PASSWORD` | Microsoft Teams 앱 비밀번호 |
+| `TEAMS_ALLOWED_USER_IDS` | 봇에 메시지를 보낼 수 있는 쉼표로 구분된 Teams 사용자 ID |
+| `TEAMS_ALLOW_OPEN_ACCESS` | `true`로 설정하면 사용자 허용 목록 없이 수신 Teams 트래픽 허용 |
+
 ### 기능
 
 | 변수 | 기본값 | 설명 |
@@ -811,10 +907,20 @@ Strada는 명백한 다음 단계를 사용자에게 다시 넘기지 않습니�
 | `DASHBOARD_ENABLED` | `false` | HTTP 모니터링 대시보드 활성화 |
 | `DASHBOARD_PORT` | `3100` | 대시보드 서버 포트 |
 | `ENABLE_WEBSOCKET_DASHBOARD` | `false` | WebSocket 실시간 대시보드 활성화 |
+| `WEBSOCKET_DASHBOARD_PORT` | `3100` | WebSocket 대시보드 서버 포트 |
+| `WEBSOCKET_DASHBOARD_AUTH_TOKEN` | (미설정) | WebSocket 대시보드 인증용 선택적 bearer 토큰; 설정 시 대시보드 API도 보호하며, 미설정 시 embedded same-origin 대시보드가 프로세스 범위 토큰을 자동 bootstrap |
+| `WEBSOCKET_DASHBOARD_ALLOWED_ORIGINS` | (미설정) | WebSocket 대시보드에 허용할 쉼표로 구분된 추가 출처 |
+| `LLM_STREAM_INITIAL_TIMEOUT_MS` | `600000` | 스트리밍 응답 시작 전 최대 대기 시간 (지연 응답 판단 기준) |
+| `LLM_STREAM_STALL_TIMEOUT_MS` | `120000` | 진행 중인 스트리밍 응답에서 청크 간 최대 허용 간격 |
 | `ENABLE_PROMETHEUS` | `false` | Prometheus 메트릭 엔드포인트 활성화 (포트 9090) |
-| `MULTI_AGENT_ENABLED` | `true` | 멀티 에이전트 오케스트레이션 활성화 |
+| `MULTI_AGENT_ENABLED` | `true` | 멀티 에이전트 오케스트레이션 활성화; 레거시 단일 에이전트 모드는 `false`로 설정 |
+| `TASK_MAX_CONCURRENT` | `3` | 별도 대화에서 동시에 실행할 수 있는 최대 백그라운드 작업 수 |
+| `TASK_MESSAGE_BURST_WINDOW_MS` | `350` | 빠른 연속 사용자 메시지를 하나의 순서 있는 작업으로 병합하는 시간 창 |
+| `TASK_MESSAGE_BURST_MAX_MESSAGES` | `8` | 단일 작업 버스트로 병합할 최대 연속 메시지 수 |
 | `TASK_DELEGATION_ENABLED` | `true` | 에이전트 간 작업 위임 활성화; 위임은 `MULTI_AGENT_ENABLED=true` 일 때만 초기화 |
 | `AGENT_MAX_DELEGATION_DEPTH` | `2` | 최대 위임 체인 깊이 |
+| `AGENT_MAX_CONCURRENT_DELEGATIONS` | `3` | 부모 에이전트당 최대 동시 위임 수 |
+| `DELEGATION_VERBOSITY` | `normal` | 위임 로깅 상세도: `quiet`, `normal` 또는 `verbose` |
 | `DEPLOY_ENABLED` | `false` | 배포 하위 시스템 활성화 |
 | `SOUL_FILE` | `soul.md` | 에이전트 성격 파일 경로 (변경 시 핫 리로드) |
 | `SOUL_FILE_WEB` | (미설정) | 웹 채널용 채널별 성격 재정의 |
@@ -834,6 +940,9 @@ Strada는 명백한 다음 단계를 사용자에게 다시 넘기지 않습니�
 | `CONSENSUS_MODE` | `auto` | 합의 모드: `auto`, `critical-only`, `always` 또는 `disabled` |
 | `CONSENSUS_THRESHOLD` | `0.5` | 합의를 트리거하는 신뢰도 임계값 |
 | `CONSENSUS_MAX_PROVIDERS` | `3` | 합의에 참조할 최대 공급자 수 |
+| `MODEL_INTELLIGENCE_ENABLED` | `true` | 공유 라이브 모델/공급자 카탈로그 갱신 활성화 |
+| `MODEL_INTELLIGENCE_REFRESH_HOURS` | `24` | 모델 메타데이터 및 공식 공급자 소스 스냅샷의 갱신 주기 |
+| `MODEL_INTELLIGENCE_PROVIDER_SOURCES_PATH` | `src/agents/providers/provider-sources.json` | 동적 공급자 능력과 모델 선택기에 제공되는 공식 공급자 문서/뉴스 URL의 JSON 레지스트리 |
 | `STRADA_DAEMON_DAILY_BUDGET` | `1.0` | 데몬 모드의 일일 예산 (USD) |
 
 ### 속도 제한
@@ -851,7 +960,8 @@ Strada는 명백한 다음 단계를 사용자에게 다시 넘기지 않습니�
 
 | 변수 | 기본값 | 설명 |
 |------|--------|------|
-| `REQUIRE_MFA` | `false` | 다중 인증 요구 |
+| `JWT_SECRET` | (미설정) | 내부 시스템 인증 및 JWT/세션 흐름을 위한 선택적 시크릿. 기능 활성화 전 `openssl rand -hex 64`로 생성 |
+| `REQUIRE_MFA` | `false` | 내부 시스템 인증에 다중 인증 요구 |
 | `BROWSER_HEADLESS` | `true` | 브라우저 자동화를 헤드리스로 실행 |
 | `BROWSER_MAX_CONCURRENT` | `5` | 최대 동시 브라우저 세션 수 |
 
@@ -973,6 +1083,8 @@ RAG (검색 증강 생성) 파이프라인은 C# 소스 코드를 인덱싱하�
 | 스레드 지원 | 미지원 | 미지원 | 지원 | 지원 | 미지원 | 미지원 |
 | 속도 제한기 (아웃바운드) | 지원 (세션별) | 미지원 | 지원 (토큰 버킷) | 지원 (4단계 슬라이딩 윈도우) | 인라인 스로틀 | 미지원 |
 
+(Matrix, IRC, Teams 채널도 지원됩니다. 구성 변수 상세는 위의 채팅 채널 구성 섹션을 참조하세요.)
+
 ### 스트리밍
 
 모든 채널에서 인플레이스 편집 스트리밍을 구현합니다. LLM이 생성하는 대로 에이전트의 응답이 점진적으로 표시됩니다. 속도 제한을 피하기 위해 플랫폼별로 업데이트 빈도가 조절됩니다 (WhatsApp/Discord: 1회/초, Slack: 2회/초).
@@ -983,6 +1095,9 @@ RAG (검색 증강 생성) 파이프라인은 C# 소스 코드를 인덱싱하�
 - **Discord**: 기본적으로 전체 거부. `ALLOWED_DISCORD_USER_IDS` 또는 `ALLOWED_DISCORD_ROLE_IDS` 설정 필수.
 - **Slack**: **기본적으로 전체 개방.** `ALLOWED_SLACK_USER_IDS`가 비어 있으면 모든 Slack 사용자가 봇에 접근 가능. 프로덕션에서는 허용 목록을 설정하세요.
 - **WhatsApp**: 기본적으로 전체 허용입니다. `WHATSAPP_ALLOWED_NUMBERS`를 설정한 경우에만 어댑터가 수신 메시지를 그 허용 목록으로 제한합니다.
+- **Matrix**: 기본적으로 전체 거부. 허용 목록을 설정하거나 `MATRIX_ALLOW_OPEN_ACCESS=true`로 설정하세요.
+- **IRC**: 기본적으로 전체 거부. `IRC_ALLOWED_USERS`를 설정하거나 `IRC_ALLOW_OPEN_ACCESS=true`로 설정하세요.
+- **Teams**: 기본적으로 전체 거부. `TEAMS_ALLOWED_USER_IDS`를 설정하거나 `TEAMS_ALLOW_OPEN_ACCESS=true`로 설정하세요.
 
 ---
 
@@ -1087,6 +1202,7 @@ npm run sync:check -- --core-path /path/to/Strada.Core  # Strada.Core API 드리
 npm run test:file-build-flow     # opt-in 로컬 .NET 통합 플로우
 npm run test:unity-fixture       # opt-in 로컬 Unity fixture 컴파일/테스트 플로우
 npm run test:hnsw-perf           # opt-in HNSW 벤치마크 / 재현율 스위트
+npm run test:portal              # 웹 포털 스모크 테스트
 npm run typecheck                # TypeScript 타입 체크
 npm run lint                     # ESLint
 ```
@@ -1106,11 +1222,34 @@ npm run lint                     # ESLint
 src/
   index.ts              # CLI 진입점 (Commander.js)
   core/
-    bootstrap.ts        # 전체 초기화 시퀀스 -- 모든 연결이 여기서 이루어짐
-    event-bus.ts        # 분리된 이벤트 기반 통신을 위한 TypedEventBus
-    tool-registry.ts    # 도구 인스턴스화 및 등록
+    bootstrap.ts              # 전체 초기화 시퀀스 -- 헬퍼 모듈로 위임
+    bootstrap-channels.ts     # 채널 초기화 로직
+    bootstrap-memory.ts       # 메모리 하위 시스템 초기화
+    bootstrap-providers.ts    # LLM 공급자 초기화
+    bootstrap-wiring.ts       # 서비스 배선 및 의존성 주입
+    bootstrap-stages.ts       # bootstrap-stages/ 디렉터리의 재내보내기
+    bootstrap-stages/
+      bootstrap-stages-types.ts # bootstrap 단계 공유 타입
+      stage-agents.ts           # 에이전트 하위 시스템 초기화 단계
+      stage-daemon.ts           # 데몬 하위 시스템 초기화 단계
+      stage-finalization.ts     # 최종 시작 검사 및 준비 상태
+      stage-goals.ts            # 목표 하위 시스템 초기화 단계
+      stage-knowledge.ts        # 지식/RAG 초기화 단계
+      stage-providers.ts        # 공급자 초기화 단계
+      stage-runtime.ts          # 런타임 서비스 초기화 단계
+      index.ts                  # 배럴 재내보내기
+    event-bus.ts              # 분리된 이벤트 기반 통신을 위한 TypedEventBus
+    tool-registry.ts          # 도구 인스턴스화 및 등록
   agents/
-    orchestrator.ts     # PAOR 에이전트 루프, 세션 관리, 스트리밍
+    orchestrator.ts                    # PAOR 에이전트 루프, 세션 관리, 스트리밍
+    orchestrator-clarification.ts      # 명확화 흐름 처리
+    orchestrator-context-builder.ts    # 대화 컨텍스트 조립
+    orchestrator-interaction-policy.ts # 상호작용 정책 적용
+    orchestrator-phase-telemetry.ts    # 단계 수준 텔레메트리 및 메트릭
+    orchestrator-runtime-utils.ts      # 런타임 헬퍼 유틸리티
+    orchestrator-session-persistence.ts # 세션 저장/복원 로직
+    orchestrator-supervisor-routing.ts  # 슈퍼바이저 위임 라우팅
+    orchestrator-text-utils.ts          # 텍스트 처리 헬퍼
     agent-state.ts      # 단계 상태 머신 (계획/행동/관찰/반성)
     paor-prompts.ts     # 단계 인식 프롬프트 빌더
     instinct-retriever.ts # 사전 학습 패턴 검색
@@ -1118,26 +1257,44 @@ src/
     autonomy/           # 오류 복구, 작업 계획, 자체 검증
     context/            # 시스템 프롬프트 (Strada.Core 지식 베이스)
     providers/          # Claude, OpenAI, Ollama, DeepSeek, Kimi, Qwen, MiniMax, Groq, + 기타
-    tools/              # 30+ 도구 구현 (ask_user, show_plan, switch_personality 등)
+    tools/              # 30+ 도구 구현 및 컨트롤 플레인 상호작용 턴 (ask_user, show_plan, switch_personality 등)
     soul/               # SOUL.md 성격 로더 (핫 리로드 및 채널별 재정의 포함)
     plugins/            # 외부 플러그인 로더
+    multi/
+      agent-manager.ts         # 멀티 에이전트 라이프사이클 및 세션 격리
+      agent-budget-tracker.ts  # 에이전트별 예산 추적
+      agent-registry.ts        # 활성 에이전트의 중앙 레지스트리
+      delegation/
+        delegation-manager.ts  # 위임 수명 주기 관리
+        delegation-tool.ts     # 에이전트용 위임 도구
+        tier-router.ts         # 4단계 작업 라우팅
   profiles/             # 성격 프로필 파일: casual.md, formal.md, minimal.md
   channels/
     telegram/           # Grammy 기반 봇
     discord/            # discord.js 봇 (슬래시 명령 포함)
     slack/              # Slack Bolt (소켓 모드) + Block Kit
     whatsapp/           # Baileys 기반 클라이언트 (세션 관리 포함)
-    web/                # Express + WebSocket 웹 채널
+    web/                # 로컬 HTTP + WebSocket 웹 채널
     cli/                # Readline REPL
   web-portal/           # React + Vite 채팅 UI (다크/라이트 테마, 파일 업로드, 스트리밍, 대시보드 탭, 사이드 패널)
   memory/
     file-memory-manager.ts   # 레거시 백엔드: JSON + TF-IDF (폴백)
     unified/
-      agentdb-memory.ts      # 활성 백엔드: SQLite + HNSW, 3계층 자동 티어링
-      agentdb-adapter.ts     # AgentDBMemory용 IMemoryManager 어댑터
-      migration.ts           # 레거시 FileMemoryManager -> AgentDB 마이그레이션
-      consolidation-engine.ts # HNSW 클러스터링을 활용한 유휴 메모리 통합
-      consolidation-types.ts  # 통합 타입 정의 및 인터페이스
+      agentdb-memory.ts        # 활성 백엔드: SQLite + HNSW, 3계층 자동 티어링
+      agentdb-sqlite.ts        # SQLite 작업 및 쿼리 헬퍼
+      agentdb-vector.ts        # HNSW 벡터 인덱스 작업
+      agentdb-tiering.ts       # 3계층 자동 티어링 로직
+      agentdb-retrieval.ts     # 메모리 검색 및 탐색
+      agentdb-time.ts          # 시간 기반 감쇠 및 점수 산정
+      agentdb-adapter.ts       # AgentDBMemory용 IMemoryManager 어댑터
+      user-profile-store.ts    # 사용자 프로필 영속화
+      session-summarizer.ts    # 세션 요약 생성
+      task-execution-store.ts  # 작업 실행 이력 저장소
+      hnsw-write-mutex.ts      # HNSW 동시 쓰기 보호
+      sqlite-pragmas.ts        # SQLite PRAGMA 구성
+      migration.ts             # 레거시 FileMemoryManager -> AgentDB 마이그레이션
+      consolidation-engine.ts  # HNSW 클러스터링을 활용한 유휴 메모리 통합
+      consolidation-types.ts   # 통합 타입 정의 및 인터페이스
     decay/                    # 지수적 메모리 감쇠 시스템
   rag/
     rag-pipeline.ts     # 인덱스 + 검색 + 포맷 오케스트레이션
@@ -1165,14 +1322,16 @@ src/
       composite-tool.ts    # 실행 가능한 복합 도구
       chain-validator.ts   # 합성 후 검증, 런타임 피드백
       chain-manager.ts     # 전체 라이프사이클 오케스트레이터
-  multi-agent/
-    agent-manager.ts    # 멀티 에이전트 라이프사이클 및 세션 격리
-    agent-budget-tracker.ts  # 에이전트별 예산 추적
-    agent-registry.ts   # 활성 에이전트의 중앙 레지스트리
-  delegation/
-    delegation-manager.ts    # 위임 수명 주기 관리
-    delegation-tool.ts       # 에이전트용 위임 도구
-    tier-router.ts           # 4단계 작업 라우팅
+  skills/
+    types.ts                  # SkillManifest, SkillEntry, SkillStatus, RegistryEntry 타입
+    skill-loader.ts           # 3단계 스킬 검색 (bundled / managed / workspace)
+    skill-gating.ts           # 전제 조건 게이트 검사 (bins, env, config, 스킬 의존성)
+    skill-config.ts           # 스킬별 활성화/비활성화 영속화 (skills.json)
+    skill-env-injector.ts     # 활성화 시 스킬 환경 변수를 process.env에 주입
+    skill-manager.ts          # 고수준 라이프사이클: 로드, 활성화, 비활성화, 설치, 제거
+    skill-cli.ts              # `strada skill` 하위 명령 (install, list, update, search, info 등)
+    skill-registry-client.ts  # 원격 JSON 레지스트리 인덱스를 가져오고 검색
+    frontmatter-parser.ts     # SKILL.md 파일에서 YAML 프론트매터 추출
   goals/
     goal-decomposer.ts  # DAG 기반 목표 분해 (사전 + 반응형)
     goal-executor.ts    # 실패 예산이 포함된 웨이브 기반 병렬 실행
@@ -1238,6 +1397,12 @@ src/
 ## 기여
 
 개발 환경 설정, 코드 컨벤션, PR 가이드라인은 [CONTRIBUTING.md](CONTRIBUTING.md)를 참조하세요.
+
+나만의 스킬을 만들고 게시하려면 [스킬 작성 가이드](CONTRIBUTING.md#creating-a-skill)를 참조하세요.
+
+AI 코딩 어시스턴트와 함께 이 저장소에서 작업할 때 사용하는 자세한 코딩 컨벤션, 아키텍처 패턴, 에이전트 가이드라인은 [AGENTS.md](AGENTS.md)를 참조하세요.
+
+버전 이력 및 주요 변경 사항은 [CHANGELOG.md](CHANGELOG.md)를 참조하세요.
 
 ---
 

@@ -256,6 +256,7 @@ Strada.Brain, her gun otomatik olarak guncellemeleri kontrol eder ve acil oldugu
 | `AUTO_UPDATE_INTERVAL_HOURS` | `24` | Kontrol sikliği (saatler) |
 | `AUTO_UPDATE_IDLE_TIMEOUT_MIN` | `5` | Guncellemeleri uygulamadan onceki bekleme suresi (dakikalar) |
 | `AUTO_UPDATE_CHANNEL` | `latest` | npm dist-tag: `stable` veya `latest` |
+| `AUTO_UPDATE_NOTIFY` | `true` | Guncelleme kontrolu veya kurulumu gerceklestiginde bildirim gonder |
 | `AUTO_UPDATE_AUTO_RESTART` | `true` | Guncelleme sonrasi otomatik yeniden baslat (`strada daemon` gerektirir) |
 
 ---
@@ -291,16 +292,77 @@ Web portali, shadcn/ui ve [21st.dev](https://21st.dev) ile [Magic UI](https://ma
 
 ## Yetenek Ekosistemi
 
-Yetenekler, Strada.Brain uzerine kurulabilen istege bagli ozellik paketleridir. Her yetenek bir `SKILL.md` manifest dosyasi ve arac uygulamalari icerir.
+Yetenekler, Strada.Brain uzerine kurulabilen, paylasabileceginiz ve uzerine insa edebileceginiz istege bagli ozellik paketleridir. Her yetenek bir `SKILL.md` manifest dosyasi ve istege bagli ortam yapilandirmasi icerir.
+
+### Yetenek kurma
 
 ```bash
-strada skill install notion          # Kayit defterinden yukle
-strada skill list                    # Tum yetenekleri listele
-strada skill search <sorgu>          # Kayit defterinde ara
-strada skill enable <isim>           # Etkinlestir
-strada skill disable <isim>          # Devre disi birak
-strada skill remove <isim>           # Kaldir
+# Herhangi bir public git deposundan yukle
+strada skill install https://github.com/okandemirel/strada-skill-example
+
+# Kurulu yetenekleri ve durumlarini listele
+strada skill list
+
+# Tum yonetilen yetenekleri guncelle
+strada skill update
+
+# Public kayit defterinde ara
+strada skill search <sorgu>
+
+# Kurulu bir yetenek icin detay goster
+strada skill info <isim>
+
+# Bir yetenegi etkinlestir veya devre disi birak
+strada skill enable <isim>
+strada skill disable <isim>
+
+# Bir yetenegi kaldir
+strada skill remove <isim>
 ```
+
+### Yetenek olusturma
+
+Bir yetenek, en az YAML frontmatter iceren bir `SKILL.md` dosyasini barindiran bir dizindir:
+
+```markdown
+---
+name: my-skill
+version: 1.0.0
+description: A short description of what this skill does
+author: your-name
+requires:
+  bins:
+    - some-cli-tool        # PATH'de bulunmali
+  env:
+    - MY_API_KEY           # ayarli olmali
+  skills:
+    - another-skill        # baska bir yeteneğe bagimlilik
+capabilities:
+  - code-generation
+  - analysis
+---
+
+SKILL.md govdesi, bu yetenek aktifken ajana enjekte edilen
+sistem istemi veya dokumantasyondur.
+```
+
+Kendi yeteneklerinizi olusturmak ve yayimlamak icin [yetenek yazarligi kilavuzuna](CONTRIBUTING.md#creating-a-skill) bakin.
+
+### 3 katmanli yukleme
+
+Yetenekler oncelik sirasina gore uc konumdan kesfolunur:
+
+| Katman | Konum | Amac |
+|--------|-------|------|
+| **workspace** | Proje kokunuzdeki `.strada/skills/` | Projeye ozel yetenekler, en yuksek oncelik |
+| **managed** | `~/.strada/skills/` | `strada skill install` ile kullanici tarafindan yuklenen yetenekler |
+| **bundled** | Strada.Brain checkout icindeki `src/skills/bundled/` | Uygulama ile birlikte gelir, her zaman kullanilabilir |
+
+Daha yuksek oncelikli katmandaki bir yetenek, alt katmanlardaki ayni isimli yetenegin uzerine yazar. `requires` kosullari saglanmayan bir yetenek, `gated` durumuna alinir ve gereksinimleri karsilanana kadar aktif arac yuzeyinden cikarilir.
+
+### Kayit defteri
+
+Public yetenek kayit defteri, topluluk tarafindan surdurulen yeteneklerin JSON indeksidir (11 yetenek ve buyuyor). Gormek icin `strada skill search` calistirin. Her girdi git deposunu, aciklamayi, etiketleri, surumu ve yazari listeler. Kayit defteri URL'si `SKILL_REGISTRY_URL` ile yapilandirabilir.
 
 ### Hazir Yetenekler
 
@@ -682,6 +744,11 @@ Ajan, oturumlar ve yeniden baslatmalar arasinda kalici bir kimlik surdurir.
 - Cokme kurtarmasi icin temiz kapatma tespiti
 - SQLite yazmalarini en aza indirmek icin periyodik temizleme ile bellek ici sayac onbellegi
 
+**Kullanici tercihleri ve web surekliligi:**
+- Asistan adi, yanit bicimi ve ultrathink modu gibi dogal dil tercihleri kullanici profil deposunda kalici olarak saklanir
+- Web kanali `profileId` + `profileToken` araciligiyla sabit bir tarayici profili tutar; yeniden baglantilarda ise donen bir `reconnectToken` kullanilir
+- `localhost` yenilemek, tarayici deposu bozulmadigi ve kullanici oturumu acikca sifirlamadigi surece ayni mantiksal web kullanicisini korur
+
 **Cokme kurtarmasi:**
 - Baslatmada, onceki oturum temiz bir sekilde kapatilmadiysa, bir `CrashRecoveryContext` olusturur
 - Kesinti suresi, yarida kalan hedef agaclari ve baslangic sayisini icerir
@@ -776,6 +843,33 @@ Strada bariz sonraki adimlari kullaniciya geri paslamaz. Bir saglayici eksik ana
 | `WHATSAPP_SESSION_PATH` | Oturum dosyalari icin dizin (varsayilan: `.whatsapp-session`) |
 | `WHATSAPP_ALLOWED_NUMBERS` | Virgule ayrilmis telefon numaralari (opsiyonel; bos ise herkese acik) |
 
+**Matrix:**
+| Degisken | Aciklama |
+|----------|----------|
+| `MATRIX_HOMESERVER` | Matrix homeserver URL'si |
+| `MATRIX_ACCESS_TOKEN` | Bot erisim token'i |
+| `MATRIX_USER_ID` | Bot kullanici kimligi |
+| `MATRIX_ALLOWED_USER_IDS` | Bota konusabilecek virgule ayrilmis Matrix kullanici kimlikleri |
+| `MATRIX_ALLOWED_ROOM_IDS` | Mesaj iletebilecek virgule ayrilmis Matrix oda kimlikleri |
+| `MATRIX_ALLOW_OPEN_ACCESS` | Kullanici/oda izin listeleri olmadan Matrix trafikine izin vermek icin `true` ayarlayin |
+
+**IRC:**
+| Degisken | Aciklama |
+|----------|----------|
+| `IRC_SERVER` | IRC sunucu ana bilgisayar adi |
+| `IRC_NICK` | Bot nick'i |
+| `IRC_CHANNELS` | Katilacak virgule ayrilmis kanallar |
+| `IRC_ALLOWED_USERS` | Botu tetikleyebilecek virgule ayrilmis IRC nickleri |
+| `IRC_ALLOW_OPEN_ACCESS` | Kullanici izin listesi olmadan IRC trafikine izin vermek icin `true` ayarlayin |
+
+**Teams:**
+| Degisken | Aciklama |
+|----------|----------|
+| `TEAMS_APP_ID` | Microsoft Teams uygulama kimligi |
+| `TEAMS_APP_PASSWORD` | Microsoft Teams uygulama sifresi |
+| `TEAMS_ALLOWED_USER_IDS` | Bota mesaj gonderebilecek virgule ayrilmis Teams kullanici kimlikleri |
+| `TEAMS_ALLOW_OPEN_ACCESS` | Kullanici izin listesi olmadan Teams trafikine izin vermek icin `true` ayarlayin |
+
 ### Ozellikler
 
 | Degisken | Varsayilan | Aciklama |
@@ -789,10 +883,20 @@ Strada bariz sonraki adimlari kullaniciya geri paslamaz. Bir saglayici eksik ana
 | `DASHBOARD_ENABLED` | `false` | HTTP izleme panelini etkinlestir |
 | `DASHBOARD_PORT` | `3100` | Panel sunucu portu |
 | `ENABLE_WEBSOCKET_DASHBOARD` | `false` | WebSocket gercek zamanli paneli etkinlestir |
+| `WEBSOCKET_DASHBOARD_PORT` | `3100` | WebSocket panel sunucu portu |
+| `WEBSOCKET_DASHBOARD_AUTH_TOKEN` | (ayarsiz) | WebSocket panel kimlik dogrulamasi icin opsiyonel bearer token; ayarliysa dashboard API'lerini de korur, ayarsizsa gomulu ayni-kaynak dashboard otomatik bir surecle kapsamli token bootstrap eder |
+| `WEBSOCKET_DASHBOARD_ALLOWED_ORIGINS` | (ayarsiz) | WebSocket panel icin virgule ayrilmis ek izinli origin'ler |
+| `LLM_STREAM_INITIAL_TIMEOUT_MS` | `600000` | Akim yaniti baslamadan once bekleme suresi (ms); asimi asinmis sayilir |
+| `LLM_STREAM_STALL_TIMEOUT_MS` | `120000` | Devam eden akimda parcalar arasinda maksimum bosluk (ms); asimi asinmis sayilir |
 | `ENABLE_PROMETHEUS` | `false` | Prometheus metrik uc noktasini etkinlestir (port 9090) |
-| `MULTI_AGENT_ENABLED` | `true` | Coklu ajan orkestrasyonunu etkinlestir |
+| `MULTI_AGENT_ENABLED` | `true` | Coklu ajan orkestrasyonunu etkinlestir; eski tek ajan modu icin `false` yapin |
+| `TASK_MAX_CONCURRENT` | `3` | Farkli konusmalar genelinde ayni anda calisabilecek maksimum arka plan gorevi sayisi |
+| `TASK_MESSAGE_BURST_WINDOW_MS` | `350` | Ardisik hizli kullanici mesajlarini tek siralama gorevi olarak birlestirme penceresi (ms) |
+| `TASK_MESSAGE_BURST_MAX_MESSAGES` | `8` | Tek bir patlama gorevinde birlestirilecek maksimum ardisik mesaj sayisi |
 | `TASK_DELEGATION_ENABLED` | `true` | Ajanlar arasi gorev delegasyonunu etkinlestir; delegasyon yalnizca `MULTI_AGENT_ENABLED=true` iken initialize edilir |
 | `AGENT_MAX_DELEGATION_DEPTH` | `2` | Maksimum delegasyon zincir derinligi |
+| `AGENT_MAX_CONCURRENT_DELEGATIONS` | `3` | Ust ajan basina maksimum es zamanli delegasyon sayisi |
+| `DELEGATION_VERBOSITY` | `normal` | Delegasyon loglama ayrintisi: `quiet`, `normal` veya `verbose` |
 | `DEPLOY_ENABLED` | `false` | Dagitim alt sistemini etkinlestir |
 | `SOUL_FILE` | `soul.md` | Ajan kisilik dosyasinin yolu (degisiklikte sicak yeniden yuklenir) |
 | `SOUL_FILE_WEB` | (ayarsiz) | Web kanali icin kanal bazli kisilik gecikmesi |
@@ -812,6 +916,9 @@ Strada bariz sonraki adimlari kullaniciya geri paslamaz. Bir saglayici eksik ana
 | `CONSENSUS_MODE` | `auto` | Konsensus modu: `auto`, `critical-only`, `always` veya `disabled` |
 | `CONSENSUS_THRESHOLD` | `0.5` | Konsensusu tetiklemek icin guven esigi |
 | `CONSENSUS_MAX_PROVIDERS` | `3` | Konsensus icin danisilan maksimum saglayici sayisi |
+| `MODEL_INTELLIGENCE_ENABLED` | `true` | Paylasilan canli model/saglayici katalog yenilemesini etkinlestir |
+| `MODEL_INTELLIGENCE_REFRESH_HOURS` | `24` | Model meta verisi ve resmi saglayici kaynak anlık goruntuleri icin yenileme kadansi |
+| `MODEL_INTELLIGENCE_PROVIDER_SOURCES_PATH` | `src/agents/providers/provider-sources.json` | Dinamik saglayici yeteneklerini ve model seciciyi besleyen resmi saglayici dok/haber URL'lerinin JSON kayit defteri |
 | `STRADA_DAEMON_DAILY_BUDGET` | `1.0` | Daemon modu icin gunluk butce (USD) |
 
 ### Hiz Sinirlamasi
@@ -961,6 +1068,9 @@ Tum kanallar yerinde duzenleme akisi uygular. Ajanin yaniti, LLM urettikce asama
 - **Discord**: Varsayilan olarak tumu reddeder. `ALLOWED_DISCORD_USER_IDS` veya `ALLOWED_DISCORD_ROLE_IDS` ayarlanmalidir.
 - **Slack**: **Varsayilan olarak herkese aciktir.** `ALLOWED_SLACK_USER_IDS` bos ise, herhangi bir Slack kullanicisi bota erisebilir. Uretim ortami icin izin listesini ayarlayin.
 - **WhatsApp**: Varsayilan olarak herkese aciktir. `WHATSAPP_ALLOWED_NUMBERS` ayarlanirsa adaptor yalnizca bu izin listesindeki numaralari kabul eder.
+- **Matrix**: Varsayilan olarak tumu reddeder. Izin listelerini ayarlayin veya `MATRIX_ALLOW_OPEN_ACCESS=true` yapin.
+- **IRC**: Varsayilan olarak tumu reddeder. `IRC_ALLOWED_USERS` veya `IRC_ALLOW_OPEN_ACCESS=true` ayarlayin.
+- **Teams**: Varsayilan olarak tumu reddeder. `TEAMS_ALLOWED_USER_IDS` veya `TEAMS_ALLOW_OPEN_ACCESS=true` ayarlayin.
 
 ---
 
@@ -1089,7 +1199,15 @@ src/
     event-bus.ts        # Ayrisik olay gudumlu iletisim icin TypedEventBus
     tool-registry.ts    # Arac ornekleme ve kayit
   agents/
-    orchestrator.ts     # PAOR ajan dongusu, oturum yonetimi, akis
+    orchestrator.ts                    # PAOR ajan dongusu, oturum yonetimi, akis
+    orchestrator-clarification.ts      # Clarification akisi islemleri
+    orchestrator-context-builder.ts    # Konusma baglami derleme
+    orchestrator-interaction-policy.ts # Etkilesim politikasi zorunlulugu
+    orchestrator-phase-telemetry.ts    # Faz duzeyi telemetri ve metrikler
+    orchestrator-runtime-utils.ts      # Runtime yardimci yardimci programlari
+    orchestrator-session-persistence.ts # Oturum kaydetme/geri yukleme mantigi
+    orchestrator-supervisor-routing.ts  # Supervisor delegasyon yonlendirmesi
+    orchestrator-text-utils.ts          # Metin isleme yardimcilari
     agent-state.ts      # Asama durum makinesi (Plan/Eylem/Gozlem/Yansima)
     paor-prompts.ts     # Asama duyarli prompt olusturucular
     instinct-retriever.ts # Proaktif ogrenilmis kalip getirme
@@ -1097,9 +1215,17 @@ src/
     autonomy/           # Hata kurtarma, gorev planlama, oz-dogrulama
     context/            # Sistem istemi (Strada.Core bilgi tabani)
     providers/          # Claude, OpenAI, Ollama, DeepSeek, Kimi, Qwen, MiniMax, Groq, + dahasi
-    tools/              # 30+ arac uygulamasi (ask_user, show_plan, switch_personality, ...)
+    tools/              # 30+ arac uygulamasi ve control-plane etkilesim donusleri (ask_user, show_plan, switch_personality, ...)
     soul/               # SOUL.md kisilik yukleyici, sicak yeniden yukleme ve kanal bazli gecikmeler ile
     plugins/            # Harici eklenti yukleyici
+    multi/
+      agent-manager.ts         # Coklu ajan yasam dongusu ve oturum izolasyonu
+      agent-budget-tracker.ts  # Ajan bazinda butce takibi
+      agent-registry.ts        # Aktif ajanlarin merkezi kaydi
+      delegation/
+        delegation-manager.ts  # Delegasyon yasam dongusu yonetimi
+        delegation-tool.ts     # Ajana yonelik delegasyon araci
+        tier-router.ts         # 4 seviyeli gorev yonlendirmesi
   profiles/             # Kisilik profil dosyalari: casual.md, formal.md, minimal.md
   channels/
     telegram/           # Grammy tabanli bot
@@ -1112,12 +1238,22 @@ src/
   memory/
     file-memory-manager.ts   # Eski arka uc: JSON + TF-IDF (yedek)
     unified/
-      agentdb-memory.ts      # Aktif arka uc: SQLite + HNSW, 3 katmanli otomatik kademelenme
-      agentdb-adapter.ts     # AgentDBMemory icin IMemoryManager adaptoru
-      migration.ts           # Eski FileMemoryManager -> AgentDB gocu
-      consolidation-engine.ts # HNSW kumeleme ile bellek konsolidasyonu
-      consolidation-types.ts  # Konsolidasyon tip tanimlari
-    decay/                   # Ustel bozunum ve bellek yasam dongusu
+      agentdb-memory.ts        # Aktif arka uc: SQLite + HNSW, 3 katmanli otomatik kademelenme
+      agentdb-sqlite.ts        # SQLite islemleri ve sorgu yardimcilari
+      agentdb-vector.ts        # HNSW vektor indeks islemleri
+      agentdb-tiering.ts       # 3 katmanli otomatik kademelenme mantigi
+      agentdb-retrieval.ts     # Bellek getirme ve arama
+      agentdb-time.ts          # Zaman tabanli bozunum ve puanlama
+      agentdb-adapter.ts       # AgentDBMemory icin IMemoryManager adaptoru
+      user-profile-store.ts    # Kullanici profili kaliciligi
+      session-summarizer.ts    # Oturum ozeti olusturma
+      task-execution-store.ts  # Gorev yurutme gecmisi depolama
+      hnsw-write-mutex.ts      # HNSW es zamanli yazma korumasi
+      sqlite-pragmas.ts        # SQLite PRAGMA yapilandirmasi
+      migration.ts             # Eski FileMemoryManager -> AgentDB gocu
+      consolidation-engine.ts  # HNSW kumeleme ile bosta bellek konsolidasyonu
+      consolidation-types.ts   # Konsolidasyon tip tanimlari ve arayuzleri
+    decay/                   # Ustel bozunum sistemi
   rag/
     rag-pipeline.ts     # Indeksleme + arama + bicimlendirme orkestrasyonu
     chunker.ts          # C#'a ozel yapisal parcalama
@@ -1144,14 +1280,6 @@ src/
       composite-tool.ts    # Yurutulebilir bilesik arac
       chain-validator.ts   # Sentez sonrasi dogrulama, calisma zamani geri bildirimi
       chain-manager.ts     # Tam yasam dongusu orkestrasyonu
-  multi-agent/
-    agent-manager.ts       # Kanal/oturum bazinda ajan olusturma ve yonetim
-    agent-budget-tracker.ts # Ajan bazinda token ve maliyet takibi
-    agent-registry.ts      # Aktif ajanlarin merkezi kaydi
-  delegation/
-    delegation-manager.ts  # Delegasyon yasam dongusu yonetimi
-    delegation-tool.ts     # Ajan delegasyon araci
-    tier-router.ts         # 4 seviyeli gorev siniflandirma yonlendiricisi
   goals/
     goal-decomposer.ts  # DAG tabanli hedef ayristirma (proaktif + reaktif)
     goal-executor.ts    # Basarisizlik butceli dalga tabanli paralel yurutme
@@ -1205,6 +1333,16 @@ src/
     metrics-cli.ts      # CLI metrik goruntuleme komutu
   utils/
     media-processor.ts  # Medya indirme, dogrulama (MIME/boyut/sihirli bayt), SSRF korumasi
+  skills/
+    types.ts                  # SkillManifest, SkillEntry, SkillStatus, RegistryEntry turleri
+    skill-loader.ts           # 3 katmanli yetenek kesfi (bundled / managed / workspace)
+    skill-gating.ts           # On kosul kapi kontrolleri (bins, env, config, yetenek bagimliliklari)
+    skill-config.ts           # Yetenek bazinda etkinlestirme/devre disi birakma kaliciligi (skills.json)
+    skill-env-injector.ts     # Aktivasyonda yetenek env degerlerini process.env'e enjekte eder
+    skill-manager.ts          # Ust duzey yasam dongusu: yukleme, etkinlestirme, devre disi birakma, kurma, kaldirma
+    skill-cli.ts              # `strada skill` alt komutlari (install, list, update, search, info, ...)
+    skill-registry-client.ts  # Uzak JSON kayit defteri indeksini getirir ve arar
+    frontmatter-parser.ts     # SKILL.md dosyalarindan YAML frontmatter cikarimi
   security/             # Kimlik dogrulama, RBAC, yol korumasi, hiz sinirlamasi, gizli bilgi temizleyici
   intelligence/         # C# ayristirma, proje analizi, kod kalitesi
   dashboard/            # HTTP, WebSocket, Prometheus panelleri
@@ -1217,6 +1355,12 @@ src/
 ## Katki
 
 Gelistirme kurulumu, kod kurallari ve PR yonergeleri icin [CONTRIBUTING.md](CONTRIBUTING.md) dosyasina bakin.
+
+Kendi yeteneklerinizi olusturmak ve yayimlamak icin [yetenek yazarligi kilavuzuna](CONTRIBUTING.md#creating-a-skill) bakin.
+
+Bu depo icinde AI kodlama asistanlariyla calisirken kullanilan ayrintili kodlama kurallari, mimari kaliplar ve ajan-ozel yonergeler icin [AGENTS.md](AGENTS.md) dosyasina bakin.
+
+Surum gecmisi ve kisici degisiklikler icin [CHANGELOG.md](CHANGELOG.md) dosyasina bakin.
 
 ---
 

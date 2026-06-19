@@ -252,6 +252,7 @@ Strada.Brain v&eacute;rifie automatiquement les mises &agrave; jour quotidiennem
 | `AUTO_UPDATE_INTERVAL_HOURS` | `24` | Fr&eacute;quence de v&eacute;rification (heures) |
 | `AUTO_UPDATE_IDLE_TIMEOUT_MIN` | `5` | Minutes d'inactivit&eacute; avant d'appliquer la mise &agrave; jour |
 | `AUTO_UPDATE_CHANNEL` | `latest` | npm dist-tag : `stable` ou `latest` |
+| `AUTO_UPDATE_NOTIFY` | `true` | Envoyer des notifications lors des v&eacute;rifications ou des installations de mises &agrave; jour |
 | `AUTO_UPDATE_AUTO_RESTART` | `true` | Red&eacute;marrage automatique apr&egrave;s mise &agrave; jour (`strada daemon` requis) |
 
 ---
@@ -287,13 +288,75 @@ Le portail web presente un design glassmorphisme premium propulse par shadcn/ui 
 
 ## Ecosysteme de Skills
 
-Les skills sont des paquets de fonctionnalites optionnels installables sur Strada.Brain. Chaque skill contient un manifeste `SKILL.md` et des implementations d'outils.
+Les skills sont des paquets de fonctionnalites optionnels que vous pouvez installer, partager et construire par-dessus Strada.Brain. Chaque skill est un repertoire contenant un manifeste `SKILL.md` et une configuration d'environnement optionnelle.
+
+### Installation de skills
 
 ```bash
-strada skill install notion          # Installer depuis le registre
-strada skill list                    # Lister tous les skills
-strada skill search <requete>        # Rechercher dans le registre
+# Installer depuis n'importe quel depot git public
+strada skill install https://github.com/okandemirel/strada-skill-example
+
+# Lister les skills installes et leur statut
+strada skill list
+
+# Mettre a jour tous les skills geres
+strada skill update
+
+# Rechercher dans le registre public
+strada skill search <requete>
+
+# Afficher les details d'un skill installe
+strada skill info <nom>
+
+# Activer ou desactiver un skill
+strada skill enable <nom>
+strada skill disable <nom>
+
+# Supprimer un skill
+strada skill remove <nom>
 ```
+
+### Creation d'un skill
+
+Un skill est un repertoire contenant au minimum un fichier `SKILL.md` avec un en-tete YAML :
+
+```markdown
+---
+name: my-skill
+version: 1.0.0
+description: A short description of what this skill does
+author: your-name
+requires:
+  bins:
+    - some-cli-tool        # must exist in PATH
+  env:
+    - MY_API_KEY           # must be set
+  skills:
+    - another-skill        # dependency on another skill
+capabilities:
+  - code-generation
+  - analysis
+---
+
+The body of SKILL.md is the system prompt or documentation injected into
+the agent when this skill is active.
+```
+
+### Chargement en 3 niveaux
+
+Les skills sont decouverts depuis trois emplacements, par ordre de priorite :
+
+| Niveau | Emplacement | Objectif |
+|--------|-------------|---------|
+| **workspace** | `.strada/skills/` a la racine de votre projet | Skills specifiques au projet, priorite la plus haute |
+| **managed** | `~/.strada/skills/` | Skills installes par l'utilisateur via `strada skill install` |
+| **bundled** | `src/skills/bundled/` dans le checkout Strada.Brain | Livres avec l'application, toujours disponibles |
+
+Les skills d'un niveau superieur remplacent ceux du meme nom dans les niveaux inferieurs. Un skill dont les conditions `requires` ne sont pas remplies est place en statut `gated` et exclu de la surface d'outils active jusqu'a ce que ses prerequis soient satisfaits.
+
+### Registre
+
+Le registre public de skills est un index JSON de skills maintenus par la communaute (11 skills et en croissance). Lancez `strada skill search` pour le parcourir. Chaque entree liste le depot git, la description, les tags, la version et l'auteur. L'URL du registre est configurable via `SKILL_REGISTRY_URL`.
 
 ### Skills Integres
 
@@ -441,14 +504,16 @@ Documentation complete : [`docs/vault.fr.md`](docs/vault.fr.md) (version anglais
 3. **R&eacute;cup&eacute;ration RAG** -- recherche s&eacute;mantique sur votre code C# (vecteurs HNSW, top 6 r&eacute;sultats)
 4. **R&eacute;cup&eacute;ration d'instincts** -- interroge proactivement les motifs appris pertinents pour la t&acirc;che (correspondance s&eacute;mantique + par mots-cl&eacute;s)
 5. **Contexte d'identit&eacute;** -- injecte l'identit&eacute; persistante de l'agent (UUID, nombre de d&eacute;marrages, temps de fonctionnement, &eacute;tat de r&eacute;cup&eacute;ration apr&egrave;s crash)
-6. **Phase PLAN** -- le LLM cr&eacute;e un plan num&eacute;rot&eacute;, inform&eacute; par les connaissances apprises et les &eacute;checs pass&eacute;s
-7. **Phase AGIR** -- le LLM ex&eacute;cute les appels d'outils selon le plan
-8. **OBSERVER** -- les r&eacute;sultats sont enregistr&eacute;s ; la r&eacute;cup&eacute;ration d'erreurs analyse les pannes ; le classificateur cat&eacute;gorise les erreurs
-9. **R&Eacute;FL&Eacute;CHIR** -- tous les 3 pas (ou en cas d'erreur), le LLM d&eacute;cide : **CONTINUER**, **REPLANIFIER** ou **TERMIN&Eacute;**
-10. **Replanification automatique** -- si 3+ &eacute;checs cons&eacute;cutifs du m&ecirc;me type, force une nouvelle approche en &eacute;vitant les strat&eacute;gies ayant &eacute;chou&eacute;
-11. **R&eacute;p&eacute;ter** jusqu'&agrave; 50 it&eacute;rations jusqu'&agrave; compl&eacute;tion
-12. **Apprentissage** -- les r&eacute;sultats des outils transitent par le TypedEventBus vers le pipeline d'apprentissage pour un stockage imm&eacute;diat des motifs
-13. **R&eacute;ponse envoy&eacute;e** &agrave; l'utilisateur via le canal (streaming si support&eacute;)
+6. **Couche d'auto-am&eacute;lioration runtime** -- les artefacts runtime actifs (`skill`, `workflow`, `knowledge_patch`) injectent des orientations internes ; les artefacts shadow restent en mode &eacute;valuation uniquement
+7. **Couche de replay d'ex&eacute;cution** -- les branches de succ&egrave;s/&eacute;chec ant&eacute;rieures dans le m&ecirc;me contexte sont inject&eacute;es avant les nouvelles tentatives de planification
+8. **Phase PLAN** -- le LLM cr&eacute;e un plan num&eacute;rot&eacute;, inform&eacute; par les connaissances apprises et les &eacute;checs pass&eacute;s
+9. **Phase AGIR** -- le LLM ex&eacute;cute les appels d'outils selon le plan
+10. **OBSERVER** -- les r&eacute;sultats sont enregistr&eacute;s ; la r&eacute;cup&eacute;ration d'erreurs analyse les pannes ; le classificateur cat&eacute;gorise les erreurs
+11. **R&Eacute;FL&Eacute;CHIR** -- tous les 3 pas (ou en cas d'erreur), le LLM d&eacute;cide : **CONTINUER**, **REPLANIFIER** ou **TERMIN&Eacute;**
+12. **Replanification automatique** -- si 3+ &eacute;checs cons&eacute;cutifs du m&ecirc;me type, force une nouvelle approche en &eacute;vitant les strat&eacute;gies ayant &eacute;chou&eacute;
+13. **R&eacute;p&eacute;ter** jusqu'&agrave; 50 it&eacute;rations jusqu'&agrave; compl&eacute;tion
+14. **Apprentissage** -- les r&eacute;sultats des outils transitent par le TypedEventBus vers le pipeline d'apprentissage pour un stockage imm&eacute;diat des motifs
+15. **R&eacute;ponse envoy&eacute;e** &agrave; l'utilisateur via le canal (streaming si support&eacute;)
 
 ---
 
@@ -711,6 +776,11 @@ L'agent maintient une identit&eacute; persistante entre les sessions et les red&
 - D&eacute;tection d'arr&ecirc;t propre pour la r&eacute;cup&eacute;ration apr&egrave;s crash
 - Cache de compteurs en m&eacute;moire avec vidage p&eacute;riodique pour minimiser les &eacute;critures SQLite
 
+**Pr&eacute;f&eacute;rences utilisateur et continuit&eacute; web :**
+- Les pr&eacute;f&eacute;rences en langage naturel telles que le nom de l'assistant, le format de r&eacute;ponse et le mode ultrathink sont persist&eacute;es dans le magasin de profils utilisateur
+- Le canal web maintient un profil navigateur stable via `profileId` + `profileToken`, tandis que les reconnexions utilisent un `reconnectToken` rotatif
+- Rafra&icirc;chir `localhost` conserve le m&ecirc;me utilisateur web logique tant que le stockage navigateur est intact et que l'utilisateur n'a pas r&eacute;initialis&eacute; explicitement la session
+
 **R&eacute;cup&eacute;ration apr&egrave;s crash :**
 - Au d&eacute;marrage, si la session pr&eacute;c&eacute;dente ne s'est pas termin&eacute;e proprement, un `CrashRecoveryContext` est construit
 - Inclut la dur&eacute;e d'indisponibilit&eacute;, les arbres d'objectifs interrompus et le nombre de d&eacute;marrages
@@ -722,13 +792,11 @@ L'agent maintient une identit&eacute; persistante entre les sessions et les red&
 
 Toute la configuration se fait via des variables d'environnement. Consultez `.env.example` pour la liste compl&egrave;te.
 
-### Obligatoires
+### Configuration Runtime Minimale
 
 | Variable | Description |
 |----------|-------------|
-| Acces fournisseur IA | Au moins un identifiant fournisseur, `ANTHROPIC_AUTH_MODE=claude-subscription` + `ANTHROPIC_AUTH_TOKEN`, `OPENAI_AUTH_MODE=chatgpt-subscription` ou une `PROVIDER_CHAIN` avec `ollama` |
 | `UNITY_PROJECT_PATH` | Chemin absolu vers la racine de votre projet Unity (doit contenir `Assets/`) |
-| `JWT_SECRET` | Secret pour la signature JWT. G&eacute;n&eacute;rer : `openssl rand -hex 64` |
 
 ### Fournisseurs d'IA
 
@@ -805,6 +873,33 @@ Strada ne renvoie pas les prochaines etapes evidentes a l'utilisateur. Si un fou
 | `WHATSAPP_SESSION_PATH` | R&eacute;pertoire pour les fichiers de session (d&eacute;faut : `.whatsapp-session`) |
 | `WHATSAPP_ALLOWED_NUMBERS` | Num&eacute;ros de t&eacute;l&eacute;phone s&eacute;par&eacute;s par des virgules (optionnel ; vide = acc&egrave;s ouvert) |
 
+**Matrix :**
+| Variable | Description |
+|----------|-------------|
+| `MATRIX_HOMESERVER` | URL du homeserver Matrix |
+| `MATRIX_ACCESS_TOKEN` | Token d'acc&egrave;s du bot |
+| `MATRIX_USER_ID` | ID utilisateur du bot |
+| `MATRIX_ALLOWED_USER_IDS` | IDs utilisateur Matrix autoris&eacute;s &agrave; parler au bot, s&eacute;par&eacute;s par des virgules |
+| `MATRIX_ALLOWED_ROOM_IDS` | IDs de salon Matrix autoris&eacute;s &agrave; recevoir des messages, s&eacute;par&eacute;s par des virgules |
+| `MATRIX_ALLOW_OPEN_ACCESS` | D&eacute;finir &agrave; `true` pour autoriser le trafic Matrix entrant sans listes d'autorisation |
+
+**IRC :**
+| Variable | Description |
+|----------|-------------|
+| `IRC_SERVER` | Nom d'h&ocirc;te du serveur IRC |
+| `IRC_NICK` | Pseudo du bot |
+| `IRC_CHANNELS` | Canaux &agrave; rejoindre, s&eacute;par&eacute;s par des virgules |
+| `IRC_ALLOWED_USERS` | Pseudos IRC autoris&eacute;s &agrave; d&eacute;clencher le bot, s&eacute;par&eacute;s par des virgules |
+| `IRC_ALLOW_OPEN_ACCESS` | D&eacute;finir &agrave; `true` pour autoriser le trafic IRC entrant sans liste d'autorisation |
+
+**Teams :**
+| Variable | Description |
+|----------|-------------|
+| `TEAMS_APP_ID` | ID d'application Microsoft Teams |
+| `TEAMS_APP_PASSWORD` | Mot de passe de l'application Microsoft Teams |
+| `TEAMS_ALLOWED_USER_IDS` | IDs utilisateur Teams autoris&eacute;s &agrave; envoyer des messages au bot, s&eacute;par&eacute;s par des virgules |
+| `TEAMS_ALLOW_OPEN_ACCESS` | D&eacute;finir &agrave; `true` pour autoriser le trafic Teams entrant sans liste d'autorisation |
+
 ### Fonctionnalit&eacute;s
 
 | Variable | D&eacute;faut | Description |
@@ -818,10 +913,20 @@ Strada ne renvoie pas les prochaines etapes evidentes a l'utilisateur. Si un fou
 | `DASHBOARD_ENABLED` | `false` | Active le tableau de bord de surveillance HTTP |
 | `DASHBOARD_PORT` | `3100` | Port du serveur du tableau de bord |
 | `ENABLE_WEBSOCKET_DASHBOARD` | `false` | Active le tableau de bord en temps r&eacute;el WebSocket |
+| `WEBSOCKET_DASHBOARD_PORT` | `3100` | Port du serveur du tableau de bord WebSocket |
+| `WEBSOCKET_DASHBOARD_AUTH_TOKEN` | (non d&eacute;fini) | Token bearer optionnel pour l'auth du tableau de bord WebSocket ; s'il est pr&eacute;sent, il prot&egrave;ge aussi les APIs du tableau de bord ; s'il est absent, le tableau de bord same-origin d&eacute;marrage bootstrappe automatiquement un token li&eacute; au processus |
+| `WEBSOCKET_DASHBOARD_ALLOWED_ORIGINS` | (non d&eacute;fini) | Origines suppl&eacute;mentaires autoris&eacute;es pour le tableau de bord WebSocket, s&eacute;par&eacute;es par des virgules |
+| `LLM_STREAM_INITIAL_TIMEOUT_MS` | `600000` | Temps d'attente maximum avant de consid&eacute;rer qu'une r&eacute;ponse en streaming est bloquee au d&eacute;marrage |
+| `LLM_STREAM_STALL_TIMEOUT_MS` | `120000` | &Eacute;cart maximum entre les fragments en streaming avant de consid&eacute;rer une r&eacute;ponse en cours comme bloqu&eacute;e |
 | `ENABLE_PROMETHEUS` | `false` | Active l'endpoint de m&eacute;triques Prometheus (port 9090) |
 | `MULTI_AGENT_ENABLED` | `true` | Activer l'orchestration multi-agent |
+| `TASK_MAX_CONCURRENT` | `3` | Nombre maximum de t&acirc;ches en arri&egrave;re-plan pouvant s'ex&eacute;cuter simultan&eacute;ment dans des conversations distinctes |
+| `TASK_MESSAGE_BURST_WINDOW_MS` | `350` | Fen&ecirc;tre de temps pour fusionner des messages utilisateur successifs rapides en une seule t&acirc;che ordonn&eacute;e |
+| `TASK_MESSAGE_BURST_MAX_MESSAGES` | `8` | Nombre maximum de messages cons&eacute;cutifs &agrave; fusionner en une seule burst de t&acirc;che |
 | `TASK_DELEGATION_ENABLED` | `true` | Activer la d&eacute;l&eacute;gation de t&acirc;ches entre agents ; la d&eacute;l&eacute;gation ne s'initialise que lorsque `MULTI_AGENT_ENABLED=true` |
 | `AGENT_MAX_DELEGATION_DEPTH` | `2` | Profondeur maximale de cha&icirc;ne de d&eacute;l&eacute;gation |
+| `AGENT_MAX_CONCURRENT_DELEGATIONS` | `3` | Nombre maximum de d&eacute;l&eacute;gations simultan&eacute;es par agent parent |
+| `DELEGATION_VERBOSITY` | `normal` | Verbosit&eacute; des logs de d&eacute;l&eacute;gation : `quiet`, `normal` ou `verbose` |
 | `DEPLOY_ENABLED` | `false` | Activer le sous-syst&egrave;me de d&eacute;ploiement |
 | `SOUL_FILE` | `soul.md` | Chemin vers le fichier de personnalit&eacute; de l'agent (rechargement &agrave; chaud lors des changements) |
 | `SOUL_FILE_WEB` | (non d&eacute;fini) | Remplacement de personnalit&eacute; par canal pour le canal web |
@@ -841,6 +946,9 @@ Strada ne renvoie pas les prochaines etapes evidentes a l'utilisateur. Si un fou
 | `CONSENSUS_MODE` | `auto` | Mode consensus : `auto`, `critical-only`, `always` ou `disabled` |
 | `CONSENSUS_THRESHOLD` | `0.5` | Seuil de confiance pour d&eacute;clencher le consensus |
 | `CONSENSUS_MAX_PROVIDERS` | `3` | Nombre maximum de fournisseurs &agrave; consulter pour le consensus |
+| `MODEL_INTELLIGENCE_ENABLED` | `true` | Active le rafra&icirc;chissement du catalogue live de mod&egrave;les/fournisseurs partag&eacute; |
+| `MODEL_INTELLIGENCE_REFRESH_HOURS` | `24` | Cadence de rafra&icirc;chissement des m&eacute;tadonn&eacute;es de mod&egrave;les et des instantan&eacute;s officiels |
+| `MODEL_INTELLIGENCE_PROVIDER_SOURCES_PATH` | `src/agents/providers/provider-sources.json` | Registre JSON des URLs de docs/news officielles des fournisseurs qui alimentent les capacit&eacute;s dynamiques et le s&eacute;lecteur de mod&egrave;le |
 | `STRADA_DAEMON_DAILY_BUDGET` | `1.0` | Budget journalier (USD) pour le mode daemon |
 
 ### Limitation de D&eacute;bit
@@ -858,6 +966,7 @@ Strada ne renvoie pas les prochaines etapes evidentes a l'utilisateur. Si un fou
 
 | Variable | D&eacute;faut | Description |
 |----------|--------|-------------|
+| `JWT_SECRET` | (non d&eacute;fini) | Secret optionnel pour l'auth syst&egrave;me interne et les flux JWT/session. G&eacute;n&eacute;rer avec `openssl rand -hex 64` avant d'activer ces fonctionnalit&eacute;s |
 | `REQUIRE_MFA` | `false` | Exige l'authentification multi-facteurs |
 | `BROWSER_HEADLESS` | `true` | Ex&eacute;cute l'automatisation du navigateur en mode headless |
 | `BROWSER_MAX_CONCURRENT` | `5` | Nombre maximal de sessions de navigateur simultan&eacute;es |
@@ -990,6 +1099,9 @@ Tous les canaux impl&eacute;mentent le streaming par &eacute;dition en place. La
 - **Discord** : Refus par d&eacute;faut. Vous devez d&eacute;finir `ALLOWED_DISCORD_USER_IDS` ou `ALLOWED_DISCORD_ROLE_IDS`.
 - **Slack** : **Ouvert par d&eacute;faut.** Si `ALLOWED_SLACK_USER_IDS` est vide, tout utilisateur Slack peut acc&eacute;der au bot. D&eacute;finissez la liste d'autorisation pour la production.
 - **WhatsApp** : Ouvert par d&eacute;faut. Si `WHATSAPP_ALLOWED_NUMBERS` est d&eacute;fini, l'adaptateur limite les messages entrants &agrave; cette liste d'autorisation.
+- **Matrix** : Refus par d&eacute;faut. D&eacute;finissez les listes d'autorisation ou `MATRIX_ALLOW_OPEN_ACCESS=true`.
+- **IRC** : Refus par d&eacute;faut. D&eacute;finissez `IRC_ALLOWED_USERS` ou `IRC_ALLOW_OPEN_ACCESS=true`.
+- **Teams** : Refus par d&eacute;faut. D&eacute;finissez `TEAMS_ALLOWED_USER_IDS` ou `TEAMS_ALLOW_OPEN_ACCESS=true`.
 
 ---
 
@@ -1113,11 +1225,34 @@ Notes :
 src/
   index.ts              # Point d'entr&eacute;e CLI (Commander.js)
   core/
-    bootstrap.ts        # S&eacute;quence compl&egrave;te d'initialisation -- tout le c&acirc;blage se fait ici
-    event-bus.ts        # TypedEventBus pour la communication &eacute;v&eacute;nementielle d&eacute;coupl&eacute;e
-    tool-registry.ts    # Instanciation et enregistrement des outils
+    bootstrap.ts              # S&eacute;quence compl&egrave;te d'initialisation -- d&eacute;l&egrave;gue aux modules auxiliaires
+    bootstrap-channels.ts     # Logique d'initialisation des canaux
+    bootstrap-memory.ts       # Initialisation du sous-syst&egrave;me m&eacute;moire
+    bootstrap-providers.ts    # Initialisation des fournisseurs LLM
+    bootstrap-wiring.ts       # C&acirc;blage des services et injection de d&eacute;pendances
+    bootstrap-stages.ts       # R&eacute;-exports depuis le r&eacute;pertoire bootstrap-stages/
+    bootstrap-stages/
+      bootstrap-stages-types.ts # Types partag&eacute;s pour les &eacute;tapes de d&eacute;marrage
+      stage-agents.ts           # &Eacute;tape d'initialisation du sous-syst&egrave;me agents
+      stage-daemon.ts           # &Eacute;tape d'initialisation du sous-syst&egrave;me daemon
+      stage-finalization.ts     # Contr&ocirc;les finaux de d&eacute;marrage et disponibilit&eacute;
+      stage-goals.ts            # &Eacute;tape d'initialisation du sous-syst&egrave;me objectifs
+      stage-knowledge.ts        # &Eacute;tape d'initialisation Knowledge/RAG
+      stage-providers.ts        # &Eacute;tape d'initialisation des fournisseurs
+      stage-runtime.ts          # &Eacute;tape d'initialisation des services runtime
+      index.ts                  # Re-export barrel
+    event-bus.ts              # TypedEventBus pour la communication &eacute;v&eacute;nementielle d&eacute;coupl&eacute;e
+    tool-registry.ts          # Instanciation et enregistrement des outils
   agents/
-    orchestrator.ts     # Boucle d'agent PAOR, gestion de sessions, streaming
+    orchestrator.ts                    # Boucle d'agent PAOR, gestion de sessions, streaming
+    orchestrator-clarification.ts      # Gestion du flux de clarification
+    orchestrator-context-builder.ts    # Assemblage du contexte de conversation
+    orchestrator-interaction-policy.ts # Application de la politique d'interaction
+    orchestrator-phase-telemetry.ts    # T&eacute;l&eacute;m&eacute;trie et m&eacute;triques au niveau des phases
+    orchestrator-runtime-utils.ts      # Utilitaires helper runtime
+    orchestrator-session-persistence.ts # Logique de sauvegarde/restauration de session
+    orchestrator-supervisor-routing.ts  # Routage de d&eacute;l&eacute;gation superviseur
+    orchestrator-text-utils.ts          # Helpers de traitement de texte
     agent-state.ts      # Machine &agrave; &eacute;tats de phase (Planifier/Agir/Observer/R&eacute;fl&eacute;chir)
     paor-prompts.ts     # Constructeurs de prompts sensibles aux phases
     instinct-retriever.ts # R&eacute;cup&eacute;ration proactive de motifs appris
@@ -1125,9 +1260,17 @@ src/
     autonomy/           # R&eacute;cup&eacute;ration d'erreurs, planification de t&acirc;ches, auto-v&eacute;rification
     context/            # Prompt syst&egrave;me (base de connaissances Strada.Core)
     providers/          # Claude, OpenAI, Ollama, DeepSeek, Kimi, Qwen, MiniMax, Groq, + autres
-    tools/              # 30+ impl&eacute;mentations d'outils (ask_user, show_plan, switch_personality, ...)
+    tools/              # 30+ impl&eacute;mentations d'outils plus les tours d'interaction control-plane (ask_user, show_plan, switch_personality, ...)
     soul/               # Chargeur de personnalit&eacute; SOUL.md avec rechargement &agrave; chaud et remplacements par canal
     plugins/            # Chargeur de plugins externes
+    multi/
+      agent-manager.ts         # Cycle de vie multi-agent et isolation des sessions
+      agent-budget-tracker.ts  # Suivi budg&eacute;taire par agent
+      agent-registry.ts        # Registre central des agents actifs
+      delegation/
+        delegation-manager.ts  # Gestion du cycle de vie de la d&eacute;l&eacute;gation
+        delegation-tool.ts     # Outil de d&eacute;l&eacute;gation c&ocirc;t&eacute; agent
+        tier-router.ts         # Routage de t&acirc;ches &agrave; 4 niveaux
   profiles/             # Fichiers de profils de personnalit&eacute; : casual.md, formal.md, minimal.md
   channels/
     telegram/           # Bot bas&eacute; sur Grammy
@@ -1172,14 +1315,16 @@ src/
       composite-tool.ts    # Outil composite ex&eacute;cutable
       chain-validator.ts   # Validation post-synth&egrave;se, retour d'information &agrave; l'ex&eacute;cution
       chain-manager.ts     # Orchestrateur du cycle de vie complet
-  multi-agent/
-    agent-manager.ts    # Cycle de vie multi-agent et isolation des sessions
-    agent-budget-tracker.ts  # Suivi budg&eacute;taire par agent
-    agent-registry.ts   # Registre central des agents actifs
-  delegation/
-    delegation-manager.ts    # Gestion du cycle de vie de la d&eacute;l&eacute;gation
-    delegation-tool.ts       # Outil de d&eacute;l&eacute;gation c&ocirc;t&eacute; agent
-    tier-router.ts           # Routage de t&acirc;ches &agrave; 4 niveaux
+  skills/
+    types.ts                  # Types SkillManifest, SkillEntry, SkillStatus, RegistryEntry
+    skill-loader.ts           # D&eacute;couverte de skills en 3 niveaux (bundled / managed / workspace)
+    skill-gating.ts           # V&eacute;rification des portes de pr&eacute;requis (bins, env, config, d&eacute;pendances de skills)
+    skill-config.ts           # Persistance activation/d&eacute;sactivation par skill (skills.json)
+    skill-env-injector.ts     # Injection des variables d'env du skill dans process.env &agrave; l'activation
+    skill-manager.ts          # Cycle de vie de haut niveau : charger, activer, d&eacute;sactiver, installer, supprimer
+    skill-cli.ts              # Sous-commandes `strada skill` (install, list, update, search, info, ...)
+    skill-registry-client.ts  # R&eacute;cup&egrave;re et recherche dans l'index de registre JSON distant
+    frontmatter-parser.ts     # Extraction du frontmatter YAML depuis les fichiers SKILL.md
   goals/
     goal-decomposer.ts  # D&eacute;composition d'objectifs en DAG (proactive + r&eacute;active)
     goal-executor.ts    # Ex&eacute;cution parall&egrave;le par vagues avec budgets d'&eacute;checs
@@ -1245,6 +1390,12 @@ src/
 ## Contribuer
 
 Consultez [CONTRIBUTING.md](CONTRIBUTING.md) pour la configuration du d&eacute;veloppement, les conventions de code et les directives pour les PR.
+
+Consultez le [guide de cr&eacute;ation de skills](CONTRIBUTING.md#creating-a-skill) pour cr&eacute;er et publier vos propres skills.
+
+Consultez [AGENTS.md](AGENTS.md) pour les conventions de code d&eacute;taill&eacute;es, les patrons d'architecture et les directives sp&eacute;cifiques aux agents utilis&eacute;s avec les assistants de code IA dans ce d&eacute;p&ocirc;t.
+
+Consultez [CHANGELOG.md](CHANGELOG.md) pour l'historique des versions et les changements incompatibles.
 
 ---
 

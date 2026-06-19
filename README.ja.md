@@ -252,6 +252,7 @@ Strada.Brain は毎日自動的に更新をチェックし、アイドル時に�
 | `AUTO_UPDATE_INTERVAL_HOURS` | `24` | チェック頻度（時間） |
 | `AUTO_UPDATE_IDLE_TIMEOUT_MIN` | `5` | 更新を適用するまでのアイドル時間（分） |
 | `AUTO_UPDATE_CHANNEL` | `latest` | npm dist-tag：`stable` または `latest` |
+| `AUTO_UPDATE_NOTIFY` | `true` | チェックまたはインストール時に更新通知を送信 |
 | `AUTO_UPDATE_AUTO_RESTART` | `true` | 更新後自動再起動（`strada daemon` が必要） |
 
 ---
@@ -359,13 +360,75 @@ Claude Haiku による rolling summary、FrameworkVault アップグレード（
 
 ## スキルエコシステム
 
-スキルはStrada.Brainに追加できるオプションの機能パッケージです。各スキルは`SKILL.md`マニフェストとツール実装を含むディレクトリです。
+スキルはStrada.Brainに追加できるオプションの機能パッケージです。各スキルは`SKILL.md`マニフェストとオプションの環境設定を含むディレクトリです。
+
+### スキルのインストール
 
 ```bash
-strada skill install notion          # レジストリからインストール
-strada skill list                    # 全スキルを一覧表示
-strada skill search <クエリ>          # レジストリを検索
+# 任意の公開 git リポジトリからインストール
+strada skill install https://github.com/okandemirel/strada-skill-example
+
+# インストール済みスキルとそのステータスを一覧表示
+strada skill list
+
+# 管理対象スキルをすべて更新
+strada skill update
+
+# 公開レジストリを検索
+strada skill search <クエリ>
+
+# インストール済みスキルの詳細を表示
+strada skill info <名前>
+
+# スキルを有効化または無効化
+strada skill enable <名前>
+strada skill disable <名前>
+
+# スキルを削除
+strada skill remove <名前>
 ```
+
+### スキルの作成
+
+スキルは最低限 YAML フロントマターを持つ `SKILL.md` ファイルを含むディレクトリです：
+
+```markdown
+---
+name: my-skill
+version: 1.0.0
+description: このスキルの短い説明
+author: your-name
+requires:
+  bins:
+    - some-cli-tool        # PATH に存在する必要あり
+  env:
+    - MY_API_KEY           # 設定されている必要あり
+  skills:
+    - another-skill        # 別スキルへの依存
+capabilities:
+  - code-generation
+  - analysis
+---
+
+SKILL.md の本文は、このスキルがアクティブなときに
+エージェントに注入されるシステムプロンプトまたはドキュメントです。
+```
+
+### 3段階ローディング
+
+スキルは優先度順に3つの場所から検索されます：
+
+| 段階 | 場所 | 目的 |
+|------|------|------|
+| **workspace** | プロジェクトルートの `.strada/skills/` | プロジェクト固有スキル、最高優先度 |
+| **managed** | `~/.strada/skills/` | `strada skill install` でインストールされたユーザースキル |
+| **bundled** | Strada.Brain checkout 内の `src/skills/bundled/` | アプリケーションに同梱、常に利用可能 |
+
+優先度の高い段階のスキルは、同名の低優先度スキルを上書きします。`requires` 条件を満たさないスキルは `gated` ステータスになり、前提条件が満たされるまでアクティブなツールサーフェスから除外されます。
+
+### レジストリ
+
+公開スキルレジストリはコミュニティが管理するスキルの JSON インデックスです（11 スキル以上で増加中）。`strada skill search` で閲覧できます。各エントリには git リポジトリ、説明、タグ、バージョン、作者が含まれます。レジストリ URL は `SKILL_REGISTRY_URL` で設定可能です。
 
 ### バンドルスキル
 
@@ -827,6 +890,33 @@ Strada は明らかな次の作業をユーザーに投げ返しません。プ�
 | `WHATSAPP_SESSION_PATH` | セッションファイルのディレクトリ（デフォルト：`.whatsapp-session`） |
 | `WHATSAPP_ALLOWED_NUMBERS` | カンマ区切りの電話番号（任意。空の場合は全員に公開） |
 
+**Matrix：**
+| 変数 | 説明 |
+|------|------|
+| `MATRIX_HOMESERVER` | Matrix ホームサーバー URL |
+| `MATRIX_ACCESS_TOKEN` | ボットアクセストークン |
+| `MATRIX_USER_ID` | ボットユーザー ID |
+| `MATRIX_ALLOWED_USER_IDS` | ボットへの発言を許可するカンマ区切りの Matrix ユーザー ID |
+| `MATRIX_ALLOWED_ROOM_IDS` | メッセージ配信を許可するカンマ区切りのルーム ID |
+| `MATRIX_ALLOW_OPEN_ACCESS` | `true` に設定すると、ユーザー/ルーム許可リストなしで Matrix トラフィックを受け付ける |
+
+**IRC：**
+| 変数 | 説明 |
+|------|------|
+| `IRC_SERVER` | IRC サーバーホスト名 |
+| `IRC_NICK` | ボットのニック |
+| `IRC_CHANNELS` | 参加するカンマ区切りのチャンネル |
+| `IRC_ALLOWED_USERS` | ボットをトリガーできるカンマ区切りの IRC ニックネーム |
+| `IRC_ALLOW_OPEN_ACCESS` | `true` に設定すると、ユーザー許可リストなしで IRC トラフィックを受け付ける |
+
+**Teams：**
+| 変数 | 説明 |
+|------|------|
+| `TEAMS_APP_ID` | Microsoft Teams アプリ ID |
+| `TEAMS_APP_PASSWORD` | Microsoft Teams アプリパスワード |
+| `TEAMS_ALLOWED_USER_IDS` | ボットへのメッセージを許可するカンマ区切りの Teams ユーザー ID |
+| `TEAMS_ALLOW_OPEN_ACCESS` | `true` に設定すると、ユーザー許可リストなしで Teams トラフィックを受け付ける |
+
 ### 機能
 
 | 変数 | デフォルト | 説明 |
@@ -840,10 +930,20 @@ Strada は明らかな次の作業をユーザーに投げ返しません。プ�
 | `DASHBOARD_ENABLED` | `false` | HTTP モニタリングダッシュボードを有効化 |
 | `DASHBOARD_PORT` | `3100` | ダッシュボードサーバーポート |
 | `ENABLE_WEBSOCKET_DASHBOARD` | `false` | WebSocket リアルタイムダッシュボードを有効化 |
+| `WEBSOCKET_DASHBOARD_PORT` | `3100` | WebSocket ダッシュボードサーバーポート |
+| `WEBSOCKET_DASHBOARD_AUTH_TOKEN` | (未設定) | WebSocket ダッシュボード認証用オプション bearer トークン。設定するとダッシュボード API も保護され、未設定の場合は同一オリジンダッシュボードがプロセス単位のトークンを自動 bootstrap する |
+| `WEBSOCKET_DASHBOARD_ALLOWED_ORIGINS` | (未設定) | WebSocket ダッシュボード向けのカンマ区切り追加許可オリジン |
+| `LLM_STREAM_INITIAL_TIMEOUT_MS` | `600000` | ストリーミングレスポンスが停止と判定されるまでの最大待機時間 |
+| `LLM_STREAM_STALL_TIMEOUT_MS` | `120000` | 進行中のレスポンスが停止と判定されるチャンク間の最大ギャップ |
 | `ENABLE_PROMETHEUS` | `false` | Prometheus メトリクスエンドポイントを有効化（ポート 9090） |
 | `MULTI_AGENT_ENABLED` | `true` | マルチエージェントオーケストレーションを有効化 |
+| `TASK_MAX_CONCURRENT` | `3` | 異なる会話間で同時実行できるバックグラウンドタスクの最大数 |
+| `TASK_MESSAGE_BURST_WINDOW_MS` | `350` | 連続したユーザーメッセージを1つの順序付きタスクにまとめる時間ウィンドウ |
+| `TASK_MESSAGE_BURST_MAX_MESSAGES` | `8` | 1つのタスクバーストにまとめる連続メッセージの最大数 |
 | `TASK_DELEGATION_ENABLED` | `true` | エージェント間タスク委任を有効化；委任は `MULTI_AGENT_ENABLED=true` のときだけ初期化 |
 | `AGENT_MAX_DELEGATION_DEPTH` | `2` | 最大委任チェーン深度 |
+| `AGENT_MAX_CONCURRENT_DELEGATIONS` | `3` | 親エージェントあたりの最大同時委任数 |
+| `DELEGATION_VERBOSITY` | `normal` | 委任ログの詳細度：`quiet`、`normal`、または `verbose` |
 | `DEPLOY_ENABLED` | `false` | デプロイメントサブシステムを有効化 |
 | `SOUL_FILE` | `soul.md` | エージェント性格ファイルのパス（変更時にホットリロード） |
 | `SOUL_FILE_WEB` | (未設定) | Web チャネル向けのチャネル別性格オーバーライド |
@@ -863,6 +963,9 @@ Strada は明らかな次の作業をユーザーに投げ返しません。プ�
 | `CONSENSUS_MODE` | `auto` | コンセンサスモード：`auto`、`critical-only`、`always`、または `disabled` |
 | `CONSENSUS_THRESHOLD` | `0.5` | コンセンサスをトリガーする信頼度しきい値 |
 | `CONSENSUS_MAX_PROVIDERS` | `3` | コンセンサスで参照する最大プロバイダー数 |
+| `MODEL_INTELLIGENCE_ENABLED` | `true` | 共有ライブモデル/プロバイダーカタログの更新を有効化 |
+| `MODEL_INTELLIGENCE_REFRESH_HOURS` | `24` | モデルメタデータと公式プロバイダーソーススナップショットの更新間隔 |
+| `MODEL_INTELLIGENCE_PROVIDER_SOURCES_PATH` | `src/agents/providers/provider-sources.json` | 動的プロバイダー能力とモデルセレクターに使われる公式プロバイダードキュメント/ニュース URL の JSON レジストリ |
 | `STRADA_DAEMON_DAILY_BUDGET` | `1.0` | デーモンモードの日次予算（USD） |
 
 ### レート制限
@@ -880,6 +983,7 @@ Strada は明らかな次の作業をユーザーに投げ返しません。プ�
 
 | 変数 | デフォルト | 説明 |
 |------|-----------|------|
+| `JWT_SECRET` | (未設定) | 内部システム認証と JWT/セッションフローのオプションシークレット。使用前に `openssl rand -hex 64` で生成してください |
 | `REQUIRE_MFA` | `false` | 多要素認証を要求 |
 | `BROWSER_HEADLESS` | `true` | ブラウザ自動化をヘッドレスで実行 |
 | `BROWSER_MAX_CONCURRENT` | `5` | 同時ブラウザセッションの最大数 |
@@ -1012,6 +1116,9 @@ RAG（検索拡張生成）パイプラインは、C# ソースコードをイ�
 - **Discord**：デフォルトで全拒否。`ALLOWED_DISCORD_USER_IDS` または `ALLOWED_DISCORD_ROLE_IDS` の設定が必要。
 - **Slack**：**デフォルトで全開放。** `ALLOWED_SLACK_USER_IDS` が空の場合、すべての Slack ユーザーがボットにアクセス可能。本番環境では許可リストを設定してください。
 - **WhatsApp**：デフォルトで公開です。`WHATSAPP_ALLOWED_NUMBERS` を設定した場合のみ、アダプターは受信メッセージをその許可リストに制限します。
+- **Matrix**：デフォルトで全拒否。許可リストを設定するか `MATRIX_ALLOW_OPEN_ACCESS=true` を使用してください。
+- **IRC**：デフォルトで全拒否。`IRC_ALLOWED_USERS` を設定するか `IRC_ALLOW_OPEN_ACCESS=true` を使用してください。
+- **Teams**：デフォルトで全拒否。`TEAMS_ALLOWED_USER_IDS` を設定するか `TEAMS_ALLOW_OPEN_ACCESS=true` を使用してください。
 
 ---
 
@@ -1116,6 +1223,7 @@ npm run sync:check -- --core-path /path/to/Strada.Core  # Strada.Core API ドリ
 npm run test:file-build-flow     # opt-in のローカル .NET 統合フロー
 npm run test:unity-fixture       # opt-in のローカル Unity fixture compile/test フロー
 npm run test:hnsw-perf           # opt-in の HNSW ベンチマーク / 再現率スイート
+npm run test:portal              # Web ポータルスモークテスト
 npm run typecheck                # TypeScript 型チェック
 npm run lint                     # ESLint
 ```
@@ -1139,7 +1247,15 @@ src/
     event-bus.ts        # 疎結合なイベント駆動通信のための TypedEventBus
     tool-registry.ts    # ツールのインスタンス化と登録
   agents/
-    orchestrator.ts     # PAOR エージェントループ、セッション管理、ストリーミング
+    orchestrator.ts                    # PAOR エージェントループ、セッション管理、ストリーミング
+    orchestrator-clarification.ts      # クラリフィケーションフロー処理
+    orchestrator-context-builder.ts    # 会話コンテキスト組み立て
+    orchestrator-interaction-policy.ts # インタラクションポリシー適用
+    orchestrator-phase-telemetry.ts    # フェーズレベルのテレメトリとメトリクス
+    orchestrator-runtime-utils.ts      # ランタイムヘルパーユーティリティ
+    orchestrator-session-persistence.ts # セッション保存/復元ロジック
+    orchestrator-supervisor-routing.ts  # スーパーバイザー委任ルーティング
+    orchestrator-text-utils.ts          # テキスト処理ヘルパー
     agent-state.ts      # フェーズステートマシン（計画/実行/観察/振り返り）
     paor-prompts.ts     # フェーズ対応プロンプトビルダー
     instinct-retriever.ts # プロアクティブ学習パターン検索
@@ -1150,6 +1266,14 @@ src/
     tools/              # 30+ ツール実装（ask_user, show_plan, switch_personality 等）
     soul/               # SOUL.md 性格ローダー（ホットリロードとチャネル別オーバーライド付き）
     plugins/            # 外部プラグインローダー
+    multi/
+      agent-manager.ts         # マルチエージェントライフサイクルとセッション分離
+      agent-budget-tracker.ts  # エージェント別予算追跡
+      agent-registry.ts        # アクティブエージェントの中央レジストリ
+      delegation/
+        delegation-manager.ts  # 委任ライフサイクル管理
+        delegation-tool.ts     # エージェント向け委任ツール
+        tier-router.ts         # 4段階タスクルーティング
   profiles/             # 性格プロファイルファイル：casual.md, formal.md, minimal.md
   channels/
     telegram/           # Grammy ベースのボット
@@ -1162,11 +1286,21 @@ src/
   memory/
     file-memory-manager.ts   # レガシーバックエンド：JSON + TF-IDF（フォールバック）
     unified/
-      agentdb-memory.ts      # アクティブバックエンド：SQLite + HNSW、3 層オートティアリング
-      agentdb-adapter.ts     # AgentDBMemory 用 IMemoryManager アダプター
-      migration.ts           # レガシー FileMemoryManager -> AgentDB マイグレーション
-      consolidation-engine.ts # アイドル時メモリ統合（HNSW クラスタリング）
-      consolidation-types.ts  # 統合の型定義とインターフェース
+      agentdb-memory.ts        # アクティブバックエンド：SQLite + HNSW、3 層オートティアリング
+      agentdb-sqlite.ts        # SQLite 操作とクエリヘルパー
+      agentdb-vector.ts        # HNSW ベクトルインデックス操作
+      agentdb-tiering.ts       # 3 層オートティアリングロジック
+      agentdb-retrieval.ts     # メモリ検索
+      agentdb-time.ts          # 時間ベースの減衰とスコアリング
+      agentdb-adapter.ts       # AgentDBMemory 用 IMemoryManager アダプター
+      user-profile-store.ts    # ユーザープロファイル永続化
+      session-summarizer.ts    # セッションサマリー生成
+      task-execution-store.ts  # タスク実行履歴ストレージ
+      hnsw-write-mutex.ts      # HNSW 同時書き込み保護
+      sqlite-pragmas.ts        # SQLite PRAGMA 設定
+      migration.ts             # レガシー FileMemoryManager -> AgentDB マイグレーション
+      consolidation-engine.ts  # アイドル時メモリ統合（HNSW クラスタリング）
+      consolidation-types.ts   # 統合の型定義とインターフェース
     decay/                    # 指数関数的メモリ減衰システム
   rag/
     rag-pipeline.ts     # インデックス + 検索 + フォーマットのオーケストレーション
@@ -1194,14 +1328,16 @@ src/
       composite-tool.ts    # 実行可能なコンポジットツール
       chain-validator.ts   # 合成後の検証、ランタイムフィードバック
       chain-manager.ts     # フルライフサイクルオーケストレーター
-  multi-agent/
-    agent-manager.ts    # マルチエージェントライフサイクルとセッション分離
-    agent-budget-tracker.ts  # エージェント別予算追跡
-    agent-registry.ts   # アクティブエージェントの中央レジストリ
-  delegation/
-    delegation-manager.ts    # 委任ライフサイクル管理
-    delegation-tool.ts       # エージェント向け委任ツール
-    tier-router.ts           # 4 段階タスクルーティング
+  skills/
+    types.ts                  # SkillManifest、SkillEntry、SkillStatus、RegistryEntry 型
+    skill-loader.ts           # 3段階スキル検索（bundled / managed / workspace）
+    skill-gating.ts           # 前提条件ゲートチェック（bins、env、config、スキル依存）
+    skill-config.ts           # スキル有効/無効の永続化（skills.json）
+    skill-env-injector.ts     # アクティベート時にスキル env 変数を process.env に注入
+    skill-manager.ts          # 高レベルライフサイクル：load、enable、disable、install、remove
+    skill-cli.ts              # `strada skill` サブコマンド（install、list、update、search、info など）
+    skill-registry-client.ts  # リモート JSON レジストリインデックスの取得と検索
+    frontmatter-parser.ts     # SKILL.md ファイルから YAML フロントマターを抽出
   goals/
     goal-decomposer.ts  # DAG ベースのゴール分解（プロアクティブ + リアクティブ）
     goal-executor.ts    # 失敗バジェット付きウェーブベース並列実行
@@ -1267,6 +1403,12 @@ src/
 ## 貢献
 
 開発環境のセットアップ、コード規約、PR ガイドラインについては [CONTRIBUTING.md](CONTRIBUTING.md) を参照してください。
+
+独自スキルの作成・公開方法については [スキルオーサリングガイド](CONTRIBUTING.md#creating-a-skill) を参照してください。
+
+このリポジトリで AI コーディングアシスタントを使用する際のコーディング規約、アーキテクチャパターン、エージェント固有のガイドラインについては [AGENTS.md](AGENTS.md) を参照してください。
+
+バージョン履歴と破壊的変更については [CHANGELOG.md](CHANGELOG.md) を参照してください。
 
 ---
 
