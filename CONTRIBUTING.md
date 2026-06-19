@@ -315,6 +315,10 @@ To contribute a skill directly to the Strada.Brain repo:
 3. Run tests: `npx vitest run src/skills/bundled/your-skill/`
 4. Bundled skills should have **zero external dependencies**
 
+### Skill Version Pinning
+
+`skills-lock.json` pins the active skill versions and hashes (similar to a lock file). Commit changes to it so that clones and CI reproduce the exact same skill state.
+
 ## Cross-Platform Guidelines
 
 - **Path separators:** Never use hardcoded `"/"` in path containment checks (e.g., `startsWith(root + "/")`). Use `path.sep` from `node:path` instead. On Windows, `path.resolve()` produces backslash paths and a hardcoded `/` will always fail the comparison.
