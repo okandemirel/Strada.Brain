@@ -60,7 +60,8 @@
     "security:shell": "./pentest/scripts/test-command-injection.sh",
     "security:ssrf": "./pentest/scripts/test-ssrf.sh",
     "prepare": "node scripts/install-git-hooks.mjs",
-    "hooks:install": "node scripts/install-git-hooks.mjs"
+    "hooks:install": "node scripts/install-git-hooks.mjs",
+    "audit:env": "node scripts/audit-env-coverage.mjs"
   },
   "keywords": [
     "unity",
