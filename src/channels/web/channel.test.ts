@@ -1,7 +1,8 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createHash } from "node:crypto";
 import { WebChannel, getCanonicalWebRedirectTarget } from "./channel.js";
 import { MAX_INCOMING_TEXT_LENGTH } from "../channel-messages.interface.js";
 
@@ -1046,5 +1047,38 @@ describe("WebChannel shutdown teardown", () => {
       recentlyDisconnected: Map<string, unknown>;
     }).recentlyDisconnected;
     expect(recentlyDisconnected.size).toBe(0);
+  });
+});
+
+describe("WebChannel CSP drift guard", () => {
+  it("script-src contains the correct inline-script hash and no unsafe-inline", () => {
+    // Resolve web-portal/index.html relative to this repo root.
+    // __dirname is not available in ESM; use import.meta.url instead.
+    const repoRoot = new URL("../../../", import.meta.url).pathname;
+    const indexPath = join(repoRoot, "web-portal", "index.html");
+    const html = readFileSync(indexPath, "utf8");
+
+    // Extract the inner text of the single inline (non-src) <script> element.
+    const match = /<script>([^<]+)<\/script>/.exec(html);
+    expect(match, "Expected exactly one inline <script> in web-portal/index.html").not.toBeNull();
+    const inlineText = match![1]!;
+
+    // Compute sha256/base64 of the inline script's exact text.
+    const hash = createHash("sha256").update(inlineText).digest("base64");
+    const expectedDirective = `'sha256-${hash}'`;
+
+    // The SECURITY_HEADERS constant is private; access it via the class's static
+    // property through type coercion.
+    const csp = (WebChannel as unknown as {
+      SECURITY_HEADERS: Record<string, string>;
+    }).SECURITY_HEADERS["Content-Security-Policy"];
+
+    // Extract the script-src directive value.
+    const scriptSrcMatch = /script-src ([^;]+)/.exec(csp);
+    expect(scriptSrcMatch, "CSP must contain a script-src directive").not.toBeNull();
+    const scriptSrc = scriptSrcMatch![1]!;
+
+    expect(scriptSrc).toContain(expectedDirective);
+    expect(scriptSrc).not.toContain("'unsafe-inline'");
   });
 });
