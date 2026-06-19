@@ -196,9 +196,9 @@ export class MessageQueue<T> {
 
   /**
    * Exponential backoff for a retry attempt: `baseDelayMs * 2^(retries-1)`,
-   * clamped to `maxDelayMs` and with ±10% jitter when those opts are set
-   * (Slack mode). With neither set (Discord/FIFO mode) it returns the bare
-   * `baseDelayMs * 2^(retries-1)`.
+   * clamped to `maxDelayMs` and with up to +10% additive jitter when those
+   * opts are set (Slack mode). With neither set (Discord/FIFO mode) it returns
+   * the bare `baseDelayMs * 2^(retries-1)`.
    */
   private computeRetryDelay(retries: number): number {
     const delay = Math.min(

@@ -4,9 +4,9 @@
  * No-ops silently when .git/hooks/ does not exist (CI, npm-dep install, etc.).
  * Does NOT touch the existing .git/hooks/pre-push.
  */
-import { existsSync, copyFileSync, chmodSync } from "fs";
-import { resolve, dirname } from "path";
-import { fileURLToPath } from "url";
+import { existsSync, copyFileSync, chmodSync } from "node:fs";
+import { resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, "..");
