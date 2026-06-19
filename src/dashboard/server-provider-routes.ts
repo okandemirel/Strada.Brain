@@ -16,6 +16,7 @@
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { projectScopeMatches } from "../learning/project-scope.js";
+import { WORKLOAD_TYPES as WORKLOAD_TYPE_LIST } from "../agents/providers/provider-behavioral-profiles.js";
 import {
   DASHBOARD_IDENTITY_MAX_LENGTH,
   isDashboardIdentityPartTooLong,
@@ -29,10 +30,10 @@ import {
 
 const MODEL_NAME_RE = /^[a-zA-Z0-9._:\-/]{1,128}$/;
 
-/** The six task workloads the dynamic profile leaderboards group models by. */
-const WORKLOAD_TYPES: ReadonlySet<string> = new Set([
-  "planning", "implementation", "review", "analysis", "coordination", "debugging",
-]);
+/** The task workloads the dynamic profile leaderboards group models by. Derived
+ *  from the backend single source of truth (WORKLOAD_DIMENSION_WEIGHTS keys) so
+ *  the route's validation/default list can never drift from the routing engine. */
+const WORKLOAD_TYPES: ReadonlySet<string> = new Set(WORKLOAD_TYPE_LIST);
 
 /**
  * Try to handle provider-related routes. Returns true if the route was handled.
@@ -408,19 +409,21 @@ export function handleProviderRoutes(
       sendJson(res, { available: true, workloads: grouped, profiles: snapshots() });
     };
 
-    // Build provider → supported-model-ids so de-supported models are pruned
-    // from the leaderboards. Best-effort: on any failure, rank without pruning.
-    if (ctx.providerManager?.listAvailableWithModels) {
-      void ctx.providerManager.listAvailableWithModels().then((entries) => {
-        const live = new Map<string, ReadonlySet<string>>();
-        for (const entry of entries) {
-          live.set(entry.name.toLowerCase().trim(), new Set(entry.models ?? []));
-        }
-        respond(live);
-      }).catch(() => respond(undefined));
-    } else {
-      respond(undefined);
-    }
+    // Build provider → supported-model-ids so de-supported models are pruned from
+    // the leaderboards. The .catch is scoped to the discovery call ONLY (resolving
+    // to undefined = no pruning); respond() is then called exactly once, so a throw
+    // inside respond() can't trigger a second terminal send (ERR_HTTP_HEADERS_SENT).
+    const liveModels: Promise<ReadonlyMap<string, ReadonlySet<string>> | undefined> =
+      ctx.providerManager?.listAvailableWithModels
+        ? ctx.providerManager.listAvailableWithModels().then((entries) => {
+            const live = new Map<string, ReadonlySet<string>>();
+            for (const entry of entries) {
+              live.set(entry.name.toLowerCase().trim(), new Set((entry.models ?? []).map((m) => m.trim())));
+            }
+            return live;
+          }).catch(() => undefined)
+        : Promise.resolve(undefined);
+    void liveModels.then(respond);
     return true;
   }
 

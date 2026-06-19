@@ -939,12 +939,17 @@ async function bootstrapImpl(
   if (modelIntelligence) {
     disposables.push("modelIntelligence", () => modelIntelligence.shutdown());
   }
+  // Hoisted so the clean-shutdown handler (createShutdownHandler, below) can clear
+  // it too — the disposables stack only fires on the bootstrap-FAILURE path.
+  let dynamicProfilesFlushInterval: ReturnType<typeof setInterval> | undefined;
   if (dynamicProfiles) {
     // Periodically persist the telemetry-blended profiles so learned per-model
     // scores survive a restart. Unref'd so it never holds the process open.
-    const flushInterval = setInterval(() => { void dynamicProfiles.flush(); }, 60_000);
-    flushInterval.unref?.();
-    disposables.push("dynamicProfilesFlush", () => clearInterval(flushInterval));
+    dynamicProfilesFlushInterval = setInterval(() => { void dynamicProfiles.flush(); }, 60_000);
+    dynamicProfilesFlushInterval.unref?.();
+    disposables.push("dynamicProfilesFlush", () => {
+      if (dynamicProfilesFlushInterval) clearInterval(dynamicProfilesFlushInterval);
+    });
     disposables.push("dynamicProfiles", async () => {
       await dynamicProfiles.flush();
       dynamicProfilePersistence?.close();
@@ -1702,6 +1707,9 @@ async function bootstrapImpl(
       toolRegistry,
       identityManager,
       modelIntelligence,
+      dynamicProfiles,
+      dynamicProfilePersistence,
+      dynamicProfilesFlushInterval,
       uptimeInterval,
       heartbeatLoop,
       digestReporter: digestReporterInstance,

@@ -332,6 +332,19 @@ export class DynamicBehavioralProfileStore {
   }
 
   /**
+   * Resolve the accumulator for a dimension: model-level evidence wins, else
+   * provider-level. Single source of the model→provider fallback rule, shared by
+   * the blend and confidence computations so they can never drift apart.
+   */
+  private statFor(
+    dim: BehavioralDimension,
+    providerKey: string,
+    modelKey?: string,
+  ): DimensionStat | undefined {
+    return (modelKey ? this.stats.get(modelKey)?.get(dim) : undefined) ?? this.stats.get(providerKey)?.get(dim);
+  }
+
+  /**
    * The blended profile for a provider (or a specific model). Returns a
    * `BehavioralProfile` so it is a drop-in for `getBaselineProfile`. Model-level
    * blends fold the model's own evidence on top of the provider's static prior.
@@ -348,10 +361,7 @@ export class DynamicBehavioralProfileStore {
     const scores = {} as Record<BehavioralDimension, number>;
     for (const dim of ALL_DIMENSIONS) {
       const prior = baseline?.scores[dim] ?? NEUTRAL_SCORE;
-      // Model evidence preferred; fall back to provider-level evidence.
-      const stat =
-        (modelKey ? this.stats.get(modelKey)?.get(dim) : undefined) ??
-        this.stats.get(providerKey)?.get(dim);
+      const stat = this.statFor(dim, providerKey, modelKey);
       if (!stat || stat.samples <= 0) {
         scores[dim] = prior;
       } else {
@@ -376,9 +386,7 @@ export class DynamicBehavioralProfileStore {
     const modelKey = model ? makeKey(provider, model) : undefined;
     const out: Partial<Record<BehavioralDimension, number>> = {};
     for (const dim of ALL_DIMENSIONS) {
-      const stat =
-        (modelKey ? this.stats.get(modelKey)?.get(dim) : undefined) ??
-        this.stats.get(providerKey)?.get(dim);
+      const stat = this.statFor(dim, providerKey, modelKey);
       if (stat && stat.samples > 0) {
         out[dim] = stat.samples / (stat.samples + this.priorWeight);
       }
@@ -400,11 +408,6 @@ export class DynamicBehavioralProfileStore {
       observationCount: this.counts.get(key) ?? 0,
       updatedAt: this.lastSeen.get(key) ?? 0,
     };
-  }
-
-  /** Every accumulator key currently tracked (provider- and model-level). */
-  trackedKeys(): string[] {
-    return [...this.stats.keys()];
   }
 
   /** Snapshots for every tracked key (for the dashboard). */
@@ -439,7 +442,10 @@ export class DynamicBehavioralProfileStore {
       const { provider, model } = splitKey(key);
       if (model && liveModels) {
         const live = liveModels.get(provider.toLowerCase().trim());
-        if (live && !live.has(model)) continue; // de-supported model → skip
+        // Prune only against a KNOWN, non-empty live set. An empty or missing set
+        // means "couldn't determine" (e.g. a provider that timed out in discovery),
+        // NOT "every model de-supported" — keep those rows rather than blanking them.
+        if (live && live.size > 0 && !live.has(model)) continue;
       }
       const blended = this.getBlendedProfile(provider, model);
       if (!blended) continue;

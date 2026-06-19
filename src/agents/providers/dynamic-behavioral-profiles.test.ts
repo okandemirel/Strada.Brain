@@ -148,6 +148,19 @@ describe("DynamicBehavioralProfileStore — leaderboards & pruning", () => {
     expect(models).not.toContain("claude-retired-model");
   });
 
+  it("does NOT prune when a provider's live set is empty (discovery failure ≠ de-supported)", () => {
+    const store = new DynamicBehavioralProfileStore();
+    for (let i = 0; i < 10; i++) {
+      store.ingest(outcome({ provider: "claude", model: "claude-opus-4-8", timestamp: 1000 + i }));
+    }
+    // An empty set models "couldn't determine live models" (e.g. a timeout) —
+    // the rows must be KEPT, not blanked.
+    const live = new Map<string, ReadonlySet<string>>([["claude", new Set<string>()]]);
+    const models = store.rankModelsForWorkload("implementation", live)
+      .filter((r) => r.model).map((r) => r.model);
+    expect(models).toContain("claude-opus-4-8");
+  });
+
   it("drift is positive when a model beats its baseline", () => {
     const store = new DynamicBehavioralProfileStore();
     for (let i = 0; i < 30; i++) {
@@ -181,7 +194,7 @@ describe("DynamicBehavioralProfileStore — confidence & snapshots", () => {
   it("ignores malformed outcomes without a provider", () => {
     const store = new DynamicBehavioralProfileStore();
     store.ingest({ ...outcome(), provider: "" });
-    expect(store.trackedKeys()).toHaveLength(0);
+    expect(store.getAllSnapshots()).toHaveLength(0);
   });
 });
 
