@@ -104,8 +104,11 @@ jobs:
       - name: Typecheck
         run: npm run typecheck:src
 
+      - name: Lint
+        run: npm run lint:src
+
       - name: Windows launcher and setup tests
-        run: npm exec vitest run src/tests/integration/source-launcher.test.ts src/common/runtime-paths.test.ts src/core/setup-doctor.test.ts src/core/terminal-wizard.test.ts
+        run: npm exec vitest run src/tests/integration/source-launcher.test.ts src/common/runtime-paths.test.ts src/core/setup-doctor.test.ts src/core/terminal-wizard.test.ts src/vault/path-policy.test.ts src/security/auth-hardened.test.ts src/config/config.test.ts
 
       - name: Build
         run: npm run build
