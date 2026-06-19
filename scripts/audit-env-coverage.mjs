@@ -71,13 +71,19 @@ const docVars = new Set();
 
 for (const line of envExampleSource.split("\n")) {
   const trimmed = line.trim();
-  // Skip comments and blank lines
-  if (!trimmed || trimmed.startsWith("#")) continue;
+  // Skip blank lines and pure comment lines that carry no var declaration
+  if (!trimmed) continue;
+  // Strip an optional leading "# " (the standard "uncomment-as-needed" convention)
+  // so that both  VAR_NAME=value  and  # VAR_NAME=value  are recognised as
+  // documentation for VAR_NAME.
+  const stripped = trimmed.startsWith("#")
+    ? trimmed.replace(/^#+\s*/, "")
+    : trimmed;
   // Match  VAR_NAME=...
-  const eqIdx = trimmed.indexOf("=");
+  const eqIdx = stripped.indexOf("=");
   if (eqIdx > 0) {
-    const key = trimmed.slice(0, eqIdx).trim();
-    if (/^[A-Z0-9_]+$/.test(key)) {
+    const key = stripped.slice(0, eqIdx).trim();
+    if (/^[A-Z][A-Z0-9_]*$/.test(key)) {
       docVars.add(key);
     }
   }
