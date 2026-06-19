@@ -141,12 +141,7 @@ export class MessageQueue<T> {
               entry.reject(error instanceof Error ? error : new Error(String(error)));
               processedIds.push(entry.id);
             } else {
-              const delay = Math.min(
-                this.opts.baseDelayMs * Math.pow(2, entry.retries - 1),
-                this.opts.maxDelayMs ?? Infinity,
-              );
-              const jitter = this.opts.jitter ? Math.random() * delay * 0.1 : 0;
-              entry.retryAfter = Date.now() + delay + jitter;
+              entry.retryAfter = Date.now() + this.computeRetryDelay(entry.retries);
             }
           }
         }
@@ -179,7 +174,7 @@ export class MessageQueue<T> {
               entry.reject(error instanceof Error ? error : new Error(String(error)));
               this.entries.shift();
             } else {
-              const delay = this.opts.baseDelayMs * Math.pow(2, entry.retries - 1);
+              const delay = this.computeRetryDelay(entry.retries);
               this.entries.shift();
               const timer = setTimeout(() => {
                 this.timerMap.delete(timer);
@@ -197,6 +192,21 @@ export class MessageQueue<T> {
     } finally {
       this.processing = false;
     }
+  }
+
+  /**
+   * Exponential backoff for a retry attempt: `baseDelayMs * 2^(retries-1)`,
+   * clamped to `maxDelayMs` and with ±10% jitter when those opts are set
+   * (Slack mode). With neither set (Discord/FIFO mode) it returns the bare
+   * `baseDelayMs * 2^(retries-1)`.
+   */
+  private computeRetryDelay(retries: number): number {
+    const delay = Math.min(
+      this.opts.baseDelayMs * Math.pow(2, retries - 1),
+      this.opts.maxDelayMs ?? Infinity,
+    );
+    const jitter = this.opts.jitter ? Math.random() * delay * 0.1 : 0;
+    return delay + jitter;
   }
 
   /** Drain the queue, rejecting all pending entries with the given reason. */

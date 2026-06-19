@@ -669,7 +669,7 @@ export class WhatsAppChannel extends EventEmitter implements IChannelAdapter {
           } catch {
             // Fallback: send as a new message
             try {
-              await this.sendMarkdown(chatId, text);
+              await this.sendMarkdown(state.chatId, text);
             } catch {
               getLogger().error("Failed to finalize streaming message");
             }

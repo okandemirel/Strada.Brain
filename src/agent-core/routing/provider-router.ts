@@ -503,28 +503,22 @@ export class ProviderRouter {
   }
 
   private getSnapshot(entry: AvailableProvider): ProviderIntelligenceSnapshot {
+    // Per-decision memo: when active, cache even null/empty snapshots (via `has`)
+    // so unknown providers aren't recomputed N times. When inactive (memo null),
+    // `?.has` is falsy and `?.set` is a no-op — i.e. construct-and-return.
     const key = `${entry.name}:${entry.defaultModel}`;
-    if (this.snapshotMemo !== null) {
-      if (this.snapshotMemo.has(key)) {
-        return this.snapshotMemo.get(key)!;
-      }
-      const snapshot = getProviderIntelligenceSnapshot(
-        entry.name,
-        entry.defaultModel,
-        this.modelIntelligence,
-        entry.capabilities ?? this.providerManager.getProviderCapabilities?.(entry.name, entry.defaultModel),
-        entry.label,
-      );
-      this.snapshotMemo.set(key, snapshot);
-      return snapshot;
+    if (this.snapshotMemo?.has(key)) {
+      return this.snapshotMemo.get(key)!;
     }
-    return getProviderIntelligenceSnapshot(
+    const snapshot = getProviderIntelligenceSnapshot(
       entry.name,
       entry.defaultModel,
       this.modelIntelligence,
       entry.capabilities ?? this.providerManager.getProviderCapabilities?.(entry.name, entry.defaultModel),
       entry.label,
     );
+    this.snapshotMemo?.set(key, snapshot);
+    return snapshot;
   }
 
   private normalizeContextWindow(tokens: number): number {
