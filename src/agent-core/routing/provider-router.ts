@@ -31,6 +31,12 @@ import {
   type TrajectoryPhaseSignal,
   type TrajectoryPhaseSignalRetriever,
 } from "./trajectory-phase-signal-retriever.js";
+import type {
+  DynamicBehavioralProfileStore,
+  ModelWorkloadRanking,
+  DynamicProfileSnapshot,
+} from "../../agents/providers/dynamic-behavioral-profiles.js";
+import type { WorkloadType } from "../../agents/providers/provider-behavioral-profiles.js";
 
 /* ------------------------------------------------------------------ */
 /*  Provider Manager structural interface (avoids hard coupling)      */
@@ -120,6 +126,8 @@ export class ProviderRouter {
   private lastExecutingProvider: string | undefined;
   private readonly modelIntelligence?: ModelIntelligenceLookup;
   private readonly trajectoryPhaseSignalRetriever?: TrajectoryPhaseSignalRetriever;
+  /** Tier 2 dynamic behavioral profiles (telemetry-blended). Optional. */
+  private readonly dynamicProfiles?: DynamicBehavioralProfileStore;
   /** Per-decision snapshot memo; null outside a resolve/resolveRanked call. */
   private snapshotMemo: Map<string, ProviderIntelligenceSnapshot> | null = null;
 
@@ -132,12 +140,14 @@ export class ProviderRouter {
     options: {
       modelIntelligence?: ModelIntelligenceLookup;
       trajectoryPhaseSignalRetriever?: TrajectoryPhaseSignalRetriever;
+      dynamicProfiles?: DynamicBehavioralProfileStore;
     } = {},
   ) {
     this.weights = ROUTING_PRESETS[preset];
     this.presetName = preset;
     this.modelIntelligence = options.modelIntelligence;
     this.trajectoryPhaseSignalRetriever = options.trajectoryPhaseSignalRetriever;
+    this.dynamicProfiles = options.dynamicProfiles;
   }
 
   /**
@@ -396,6 +406,8 @@ export class ProviderRouter {
     if (this.phaseOutcomes.length > MAX_DECISIONS) {
       this.phaseOutcomes.splice(0, this.phaseOutcomes.length - MAX_DECISIONS);
     }
+    // Tier 2: fold the outcome into the dynamic per-model behavioral profiles.
+    this.dynamicProfiles?.ingest(outcome);
   }
 
   getRecentPhaseOutcomes(n: number, identityKey?: string): PhaseOutcome[] {
@@ -407,6 +419,23 @@ export class ProviderRouter {
 
   getPhaseScoreboard(n: number, identityKey?: string): PhaseScore[] {
     return this.computePhaseScores(identityKey).slice(0, n);
+  }
+
+  /**
+   * Tier 2: rank models for a workload from the dynamic (telemetry-blended)
+   * profiles, best first. `liveModels` (provider → supported model ids) prunes
+   * de-supported models. Returns [] when no dynamic store is wired.
+   */
+  getDynamicModelRankings(
+    workload: WorkloadType,
+    liveModels?: ReadonlyMap<string, ReadonlySet<string>>,
+  ): ModelWorkloadRanking[] {
+    return this.dynamicProfiles?.rankModelsForWorkload(workload, liveModels) ?? [];
+  }
+
+  /** Tier 2: per-key blended profile snapshots for the dashboard. */
+  getDynamicProfileSnapshots(): DynamicProfileSnapshot[] {
+    return this.dynamicProfiles?.getAllSnapshots() ?? [];
   }
 
   /**
@@ -516,6 +545,9 @@ export class ProviderRouter {
       this.modelIntelligence,
       entry.capabilities ?? this.providerManager.getProviderCapabilities?.(entry.name, entry.defaultModel),
       entry.label,
+      // Tier 2: the telemetry-blended profile drives workload scoring when
+      // evidence exists; falls back to the static baseline inside the snapshot.
+      this.dynamicProfiles?.getBlendedProfile(entry.name, entry.defaultModel),
     );
     this.snapshotMemo?.set(key, snapshot);
     return snapshot;

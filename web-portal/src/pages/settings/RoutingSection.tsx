@@ -5,6 +5,7 @@ import { useAgentActivity } from '../../hooks/use-api'
 import { useWS } from '../../hooks/useWS'
 import { resolveSettingsIdentity } from '../settings-identity'
 import { PageError } from '../../components/ui/page-error'
+import ModelScoresPanel from '../../components/ModelScoresPanel'
 
 const PRESETS = [
   { id: 'budget', labelKey: 'routing.presetBudget', descKey: 'routing.presetBudgetDesc' },
@@ -192,6 +193,10 @@ export default function RoutingSection() {
           </div>
         </>
       )}
+
+      {/* Tier 2 dynamic, telemetry-blended per-model leaderboards (self-hides
+          when the dynamic store is unavailable). */}
+      <ModelScoresPanel />
 
       {routing.length === 0 && execution.length === 0 && outcomes.length === 0 && phaseScores.length === 0 && (
         <p className="text-sm text-text-tertiary text-center py-8">{t('routing.noActivity')}</p>

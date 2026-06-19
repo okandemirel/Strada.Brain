@@ -927,8 +927,10 @@ async function bootstrapImpl(
     disposables.push("soulLoader", () => soulLoader.shutdown());
   }
 
-  const { modelIntelligence, providerRouter, consensusManager, confidenceEstimator } =
-    await initializeRuntimeIntelligenceStage({
+  const {
+    modelIntelligence, providerRouter, consensusManager, confidenceEstimator,
+    dynamicProfiles, dynamicProfilePersistence,
+  } = await initializeRuntimeIntelligenceStage({
       config,
       logger,
       providerManager,
@@ -936,6 +938,17 @@ async function bootstrapImpl(
     });
   if (modelIntelligence) {
     disposables.push("modelIntelligence", () => modelIntelligence.shutdown());
+  }
+  if (dynamicProfiles) {
+    // Periodically persist the telemetry-blended profiles so learned per-model
+    // scores survive a restart. Unref'd so it never holds the process open.
+    const flushInterval = setInterval(() => { void dynamicProfiles.flush(); }, 60_000);
+    flushInterval.unref?.();
+    disposables.push("dynamicProfilesFlush", () => clearInterval(flushInterval));
+    disposables.push("dynamicProfiles", async () => {
+      await dynamicProfiles.flush();
+      dynamicProfilePersistence?.close();
+    });
   }
 
   const { supervisorBrain } = initializeSupervisorStage({

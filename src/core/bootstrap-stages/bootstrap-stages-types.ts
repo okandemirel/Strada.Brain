@@ -206,6 +206,10 @@ export interface RuntimeIntelligenceStageResult {
   providerRouter?: import("../../agent-core/routing/provider-router.js").ProviderRouter;
   consensusManager?: import("../../agent-core/routing/consensus-manager.js").ConsensusManager;
   confidenceEstimator?: import("../../agent-core/routing/confidence-estimator.js").ConfidenceEstimator;
+  /** Tier 2 dynamic behavioral profile store (telemetry-blended per-model scoring). */
+  dynamicProfiles?: import("../../agents/providers/dynamic-behavioral-profiles.js").DynamicBehavioralProfileStore;
+  /** SQLite handle backing the dynamic profiles; closed on shutdown. */
+  dynamicProfilePersistence?: import("../../agents/providers/dynamic-profile-persistence.js").SqliteDynamicProfilePersistence;
 }
 
 export interface ToolChainStageResult {
@@ -498,6 +502,7 @@ export interface RuntimeIntelligenceStageDeps {
     options: {
       modelIntelligence?: import("../../agents/providers/model-intelligence.js").ModelIntelligenceService;
       trajectoryPhaseSignalRetriever?: import("../../agent-core/routing/trajectory-phase-signal-retriever.js").TrajectoryPhaseSignalRetriever;
+      dynamicProfiles?: import("../../agents/providers/dynamic-behavioral-profiles.js").DynamicBehavioralProfileStore;
     },
   ) => import("../../agent-core/routing/provider-router.js").ProviderRouter;
   createConsensusManager?: (

@@ -216,6 +216,29 @@ export interface DashboardProviderRouter {
     latestTimestamp: number;
     latestReason: string;
   }>;
+  /** Tier 2: rank models for a workload from telemetry-blended profiles. */
+  getDynamicModelRankings?(
+    workload: string,
+    liveModels?: ReadonlyMap<string, ReadonlySet<string>>,
+  ): Array<{
+    provider: string;
+    model?: string;
+    key: string;
+    score: number;
+    confidence: number;
+    drift: number;
+    observationCount: number;
+  }>;
+  /** Tier 2: per-key blended behavioral profile snapshots. */
+  getDynamicProfileSnapshots?(): Array<{
+    key: string;
+    provider: string;
+    model?: string;
+    scores: Record<string, number>;
+    confidence: Record<string, number>;
+    observationCount: number;
+    updatedAt: number;
+  }>;
   getPreset(): string;
   setPreset(preset: "budget" | "balanced" | "performance"): void;
 }

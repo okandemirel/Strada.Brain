@@ -1,9 +1,10 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
 import { ProviderRouter } from "./provider-router.js";
 import type { ProviderManagerRef } from "./provider-router.js";
-import type { TaskClassification } from "./routing-types.js";
+import type { TaskClassification, PhaseOutcome, PhaseOutcomeStatus } from "./routing-types.js";
 import type { ProviderCapabilities } from "../../agents/providers/provider.interface.js";
 import type { TrajectoryPhaseSignalRetriever } from "./trajectory-phase-signal-retriever.js";
+import { DynamicBehavioralProfileStore } from "../../agents/providers/dynamic-behavioral-profiles.js";
 import * as providerKnowledge from "../../agents/providers/provider-knowledge.js";
 
 /* ------------------------------------------------------------------ */
@@ -837,5 +838,59 @@ describe("ProviderRouter", () => {
       expect(normalRanked.length).toBe(MULTI_PROVIDERS.length);
       expect(reflectingRanked.length).toBe(MULTI_PROVIDERS.length);
     });
+  });
+});
+
+describe("ProviderRouter — dynamic behavioral profiles (Tier 2)", () => {
+  function phaseOutcome(provider: string, model: string, status: PhaseOutcomeStatus, ts: number): PhaseOutcome {
+    return {
+      provider, model, role: "executor", phase: "executing", source: "supervisor-strategy",
+      status, reason: "test",
+      task: { type: "code-generation", complexity: "moderate", criticality: "medium" },
+      timestamp: ts,
+    };
+  }
+
+  it("feeds recorded outcomes into per-model rankings, best first", () => {
+    const store = new DynamicBehavioralProfileStore();
+    const manager = createMockManager([
+      { name: "claude", label: "Claude", defaultModel: "claude-opus-4-8" },
+      { name: "groq", label: "Groq", defaultModel: "groq-fast" },
+    ]);
+    const router = new ProviderRouter(manager, "balanced", { dynamicProfiles: store });
+
+    for (let i = 0; i < 20; i++) {
+      router.recordPhaseOutcome(phaseOutcome("claude", "claude-opus-4-8", "approved", 1000 + i));
+      router.recordPhaseOutcome(phaseOutcome("groq", "groq-fast", "failed", 1000 + i));
+    }
+    const ranked = router.getDynamicModelRankings("implementation");
+    const claudeModel = ranked.find((r) => r.model === "claude-opus-4-8");
+    const groqModel = ranked.find((r) => r.model === "groq-fast");
+    expect(claudeModel).toBeDefined();
+    expect(groqModel).toBeDefined();
+    expect(claudeModel!.score).toBeGreaterThan(groqModel!.score);
+  });
+
+  it("prunes de-supported models via the live-models map", () => {
+    const store = new DynamicBehavioralProfileStore();
+    const manager = createMockManager([{ name: "claude", label: "Claude", defaultModel: "claude-opus-4-8" }]);
+    const router = new ProviderRouter(manager, "balanced", { dynamicProfiles: store });
+    for (let i = 0; i < 10; i++) {
+      router.recordPhaseOutcome(phaseOutcome("claude", "claude-opus-4-8", "approved", 1000 + i));
+      router.recordPhaseOutcome(phaseOutcome("claude", "claude-old", "approved", 1000 + i));
+    }
+    const live = new Map<string, ReadonlySet<string>>([["claude", new Set(["claude-opus-4-8"])]]);
+    const models = router.getDynamicModelRankings("implementation", live)
+      .filter((r) => r.model).map((r) => r.model);
+    expect(models).toContain("claude-opus-4-8");
+    expect(models).not.toContain("claude-old");
+  });
+
+  it("returns empty rankings + snapshots when no dynamic store is wired", () => {
+    const manager = createMockManager([{ name: "claude", label: "Claude", defaultModel: "claude-opus-4-8" }]);
+    const router = new ProviderRouter(manager, "balanced");
+    router.recordPhaseOutcome(phaseOutcome("claude", "claude-opus-4-8", "approved", 1000));
+    expect(router.getDynamicModelRankings("implementation")).toEqual([]);
+    expect(router.getDynamicProfileSnapshots()).toEqual([]);
   });
 });

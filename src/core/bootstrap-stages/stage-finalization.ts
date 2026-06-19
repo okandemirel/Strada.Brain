@@ -53,6 +53,29 @@ export async function initializeRuntimeIntelligenceStage(
     }
   }
 
+  // Tier 2 dynamic behavioral profiles (telemetry-blended per-model scoring).
+  // Persistence is best-effort: a SQLite failure degrades to in-memory-only
+  // accumulation (the static baseline still carries routing), never blocks boot.
+  let dynamicProfiles: import("../../agents/providers/dynamic-behavioral-profiles.js").DynamicBehavioralProfileStore | undefined;
+  let dynamicProfilePersistence: import("../../agents/providers/dynamic-profile-persistence.js").SqliteDynamicProfilePersistence | undefined;
+  try {
+    const { DynamicBehavioralProfileStore } = await import("../../agents/providers/dynamic-behavioral-profiles.js");
+    try {
+      const { SqliteDynamicProfilePersistence } = await import("../../agents/providers/dynamic-profile-persistence.js");
+      const { join, dirname } = await import("node:path");
+      const dir = dirname(params.config.modelIntelligence.dbPath) || ".";
+      dynamicProfilePersistence = new SqliteDynamicProfilePersistence(join(dir, "dynamic-profiles.db"));
+    } catch (error) {
+      params.logger.warn("Dynamic profile persistence unavailable — in-memory only", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    dynamicProfiles = new DynamicBehavioralProfileStore(dynamicProfilePersistence);
+    await dynamicProfiles.initialize();
+  } catch {
+    // Non-fatal — dynamic profiles disabled; static baselines carry routing.
+  }
+
   let providerRouter: import("../../agent-core/routing/provider-router.js").ProviderRouter | undefined;
   try {
     const { ProviderRouter } = await import("../../agent-core/routing/provider-router.js");
@@ -67,10 +90,12 @@ export async function initializeRuntimeIntelligenceStage(
       {
         modelIntelligence,
         trajectoryPhaseSignalRetriever,
+        dynamicProfiles,
       },
     ) ?? new ProviderRouter(params.providerManager, params.config.routing.preset, {
       modelIntelligence,
       trajectoryPhaseSignalRetriever,
+      dynamicProfiles,
     });
     params.logger.info("ProviderRouter initialized", { preset: params.config.routing.preset });
   } catch {
@@ -102,6 +127,8 @@ export async function initializeRuntimeIntelligenceStage(
     providerRouter,
     consensusManager,
     confidenceEstimator,
+    dynamicProfiles,
+    dynamicProfilePersistence,
   };
 }
 
