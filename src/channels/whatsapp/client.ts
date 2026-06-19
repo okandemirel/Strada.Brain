@@ -13,6 +13,7 @@ import type {
 } from "../channel.interface.js";
 import { limitIncomingText } from "../channel-messages.interface.js";
 import { chunkText } from "../chunk-text.js";
+import { StreamingBuffer } from "../streaming-buffer.js";
 
 // ---------- Constants ----------
 
@@ -48,10 +49,8 @@ type FeedbackReactionCallback = (
 interface StreamingMessageState {
   chatId: string;
   messageKey: WhatsAppMessageKey;
-  accumulatedText: string;
-  lastUpdate: number;
-  updateQueued: boolean;
-  throttleTimer?: ReturnType<typeof setTimeout>;
+  /** Shared throttled-streaming core. */
+  buffer: StreamingBuffer;
 }
 
 interface SessionState {
@@ -504,13 +503,10 @@ export class WhatsAppChannel extends EventEmitter implements IChannelAdapter {
       resolve("cancelled");
     }
     this.pendingConfirmations.clear();
-    // Clear any pending streaming throttle timers before dropping the states,
+    // Cancel any pending streaming throttle timers before dropping the states,
     // otherwise they fire after teardown (and keep the event loop alive).
     for (const state of this.streamingMessages.values()) {
-      if (state.throttleTimer) {
-        clearTimeout(state.throttleTimer);
-        state.throttleTimer = undefined;
-      }
+      state.buffer.clearOnDisconnect();
     }
     this.streamingMessages.clear();
     this.seenMessageIds.clear();
@@ -645,13 +641,45 @@ export class WhatsAppChannel extends EventEmitter implements IChannelAdapter {
       if (!sent?.key) return undefined;
 
       const streamId = randomUUID();
-      this.streamingMessages.set(streamId, {
-        chatId,
-        messageKey: sent.key,
-        accumulatedText: "",
-        lastUpdate: Date.now(),
-        updateQueued: false,
+      const messageKey = sent.key;
+
+      const buffer = new StreamingBuffer({
+        throttleMs: STREAM_THROTTLE_MS,
+        onFlush: async (text) => {
+          const state = this.streamingMessages.get(streamId);
+          if (!state || !this.sock) return;
+          try {
+            await this.sock.sendMessage(state.chatId, {
+              text: text || "...",
+              edit: state.messageKey,
+            });
+          } catch {
+            // Ignore update errors — non-critical
+          }
+        },
+        onFinalize: async (text) => {
+          const state = this.streamingMessages.get(streamId);
+          if (!state) return;
+          try {
+            if (!this.sock) throw new Error("WhatsApp not connected");
+            await this.sock.sendMessage(state.chatId, {
+              text,
+              edit: state.messageKey,
+            });
+          } catch {
+            // Fallback: send as a new message
+            try {
+              await this.sendMarkdown(chatId, text);
+            } catch {
+              getLogger().error("Failed to finalize streaming message");
+            }
+          } finally {
+            this.streamingMessages.delete(streamId);
+          }
+        },
       });
+
+      this.streamingMessages.set(streamId, { chatId, messageKey, buffer });
       return streamId;
     } catch (error) {
       getLogger().error("Failed to start streaming message", { error });
@@ -670,80 +698,20 @@ export class WhatsAppChannel extends EventEmitter implements IChannelAdapter {
   ): Promise<void> {
     const state = this.streamingMessages.get(streamId);
     if (!state) return;
-
-    state.accumulatedText = accumulatedText;
-
-    const now = Date.now();
-    if (now - state.lastUpdate < STREAM_THROTTLE_MS) {
-      if (!state.updateQueued) {
-        state.updateQueued = true;
-        state.throttleTimer = setTimeout(
-          () => {
-            state.throttleTimer = undefined;
-            state.updateQueued = false;
-            void this.performStreamUpdate(streamId);
-          },
-          STREAM_THROTTLE_MS - (now - state.lastUpdate),
-        );
-        // Don't keep the event loop alive solely for a throttled stream update.
-        state.throttleTimer.unref();
-      }
-      return;
-    }
-
-    await this.performStreamUpdate(streamId);
+    await state.buffer.update(accumulatedText);
   }
 
   /**
    * Finalize a streaming message with the complete text.
    */
   async finalizeStreamingMessage(
-    chatId: string,
+    _chatId: string,
     streamId: string,
     finalText: string,
   ): Promise<void> {
     const state = this.streamingMessages.get(streamId);
     if (!state) return;
-
-    // Cancel pending throttled update immediately before sending final
-    if (state.throttleTimer) {
-      clearTimeout(state.throttleTimer);
-      state.throttleTimer = undefined;
-      state.updateQueued = false;
-    }
-
-    try {
-      if (!this.sock) throw new Error("WhatsApp not connected");
-      await this.sock.sendMessage(state.chatId, {
-        text: finalText,
-        edit: state.messageKey,
-      });
-    } catch {
-      // Fallback: send as a new message
-      try {
-        await this.sendMarkdown(chatId, finalText);
-      } catch {
-        getLogger().error("Failed to finalize streaming message");
-      }
-    } finally {
-      this.streamingMessages.delete(streamId);
-    }
-  }
-
-  private async performStreamUpdate(streamId: string): Promise<void> {
-    const state = this.streamingMessages.get(streamId);
-    if (!state || !this.sock) return;
-
-    try {
-      const text = state.accumulatedText || "...";
-      await this.sock.sendMessage(state.chatId, {
-        text,
-        edit: state.messageKey,
-      });
-      state.lastUpdate = Date.now();
-    } catch {
-      // Ignore update errors — non-critical
-    }
+    await state.buffer.finalize(finalText);
   }
 
   // ---- 4.4 Media Support ----

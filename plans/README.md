@@ -202,17 +202,17 @@ non-band-aid solutions** for all confirmed findings.
 
 | Plan | Title | Priority | Effort | Depends on | Status |
 |------|-------|----------|--------|------------|--------|
-| 017 | Patch web-portal HIGH advisories + add CI audit gate | P1 | S | — | TODO |
-| 018 | Add `(processed,timestamp)` index for unprocessed-observation scans | P2 | S | — | TODO |
-| 019 | Characterization tests: fallback-chain reasoning-timeout detection | P2 | S | — | TODO |
-| 020 | Memoize provider snapshots within a routing decision (O(N²)→O(N)) | P2 | S–M | — | TODO |
-| 021 | Zero-dep pre-commit lint guard + `.editorconfig` | P2 | S–M | — | TODO |
-| 022 | Drop web-channel `script-src 'unsafe-inline'` via hashed inline script | P2 | M | — | TODO |
-| 023 | Resilient provider-snapshot DB load (per-row guard) | P3 | S | — | TODO |
-| 024 | Characterization tests for 11 untested high-risk modules | P2 | L | — | TODO |
-| 025 | Batch `archiveOldEntries` in a single transaction | P3 | M | — | TODO |
-| 026 | Windows CI: run lint + cross-platform path/security tests | P3 | M | — | TODO |
-| 027 | Extract shared channel message-queue + streaming-buffer cores | P3 | M | 024 | TODO |
+| 017 | Patch web-portal HIGH advisories + add CI audit gate | P1 | S | — | DONE (66f8aca; portal audit 0 high, 751 tests pass) |
+| 018 | Add `(processed,timestamp)` index for unprocessed-observation scans | P2 | S | — | DONE (3edef52; EXPLAIN confirms index used, 61 tests pass) |
+| 019 | Characterization tests: fallback-chain reasoning-timeout detection | P2 | S | — | DONE (1348b5a; 6 cases, 28 tests pass, source untouched) |
+| 020 | Memoize provider snapshots within a routing decision (O(N²)→O(N)) | P2 | S–M | — | DONE (8749fdf; ≤N snapshot calls, 21 existing tests green = behavior preserved) |
+| 021 | Zero-dep pre-commit lint guard + `.editorconfig` | P2 | S–M | — | DONE (86d7994; native hook, ZERO new deps, pre-push preserved) |
+| 022 | Drop web-channel `script-src 'unsafe-inline'` via hashed inline script | P2 | M | — | DONE (4588285; hash verified vs source+built index, drift-guard test, 39 tests) |
+| 023 | Resilient provider-snapshot DB load (per-row guard) | P3 | S | — | DONE (f6ee304; per-row guard, corrupt row no longer drops siblings, 32 tests) |
+| 024 | Characterization tests for 11 untested high-risk modules | P2 | L | — | DONE (11 commits 28dde78..648dc84; 312 tests, no source touched; surfaced personality-routes `isAutonomousMode` type-seam bug → follow-up below) |
+| 025 | Batch `archiveOldEntries` in a single transaction | P3 | M | — | DONE (1b0ea36; one transaction not N, atomic, 43 tests, non-SQLite fallback) |
+| 026 | Windows CI: run lint + cross-platform path/security tests | P3 | M | — | DONE (0ceb9e9; lint + path-policy/auth/config on Windows, 197 tests pass locally) |
+| 027 | Extract shared channel message-queue + streaming-buffer cores | P3 | M | 024 | DONE (a5122d1·9e3159c·91cd1fc: MessageQueue+StreamingBuffer+tests done, Discord+Slack queue delegated, Discord+WhatsApp streaming migrated; remaining streaming channels: telegram/web/cli — follow-up in backlog) |
 | 028 | Decompose `config.ts` (first god-file) into types + schema | P3 | L | 024 | TODO |
 | 029 | Remove dashboard → learning-internals layering violation | P4 | S | — | TODO |
 | 030 | Docs discoverability + skills-lock decision + env-var coverage | P4 | S | — | TODO |
