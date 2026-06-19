@@ -58,7 +58,9 @@
     "security:sast": "./pentest/scripts/test-sast.sh",
     "security:path": "./pentest/scripts/test-path-traversal.sh",
     "security:shell": "./pentest/scripts/test-command-injection.sh",
-    "security:ssrf": "./pentest/scripts/test-ssrf.sh"
+    "security:ssrf": "./pentest/scripts/test-ssrf.sh",
+    "prepare": "node scripts/install-git-hooks.mjs",
+    "hooks:install": "node scripts/install-git-hooks.mjs"
   },
   "keywords": [
     "unity",
