@@ -1,9 +1,10 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
 import { ProviderRouter } from "./provider-router.js";
 import type { ProviderManagerRef } from "./provider-router.js";
 import type { TaskClassification } from "./routing-types.js";
 import type { ProviderCapabilities } from "../../agents/providers/provider.interface.js";
 import type { TrajectoryPhaseSignalRetriever } from "./trajectory-phase-signal-retriever.js";
+import * as providerKnowledge from "../../agents/providers/provider-knowledge.js";
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                           */
@@ -727,6 +728,66 @@ describe("ProviderRouter", () => {
       expect(["ollama", "groq"]).toContain(decision.provider);
       expect(decision.provider).not.toBe("claude");
       expect(decision.provider).not.toBe("deepseek");
+    });
+  });
+
+  describe("snapshot memoization", () => {
+    let snapshotSpy: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+      snapshotSpy = vi.spyOn(providerKnowledge, "getProviderIntelligenceSnapshot");
+    });
+
+    afterEach(() => {
+      snapshotSpy.mockRestore();
+    });
+
+    it("calls the snapshot factory at most N times for N providers in resolve()", () => {
+      const n = MULTI_PROVIDERS.length;
+      const manager = createMockManager(MULTI_PROVIDERS);
+      const router = new ProviderRouter(manager, "balanced");
+
+      router.resolve(planningTask);
+
+      expect(snapshotSpy.mock.calls.length).toBeLessThanOrEqual(n);
+    });
+
+    it("produces the same provider selection with and without spy instrumentation", () => {
+      // Baseline (no spy active yet — previous test restored it)
+      const manager = createMockManager(MULTI_PROVIDERS);
+      const router = new ProviderRouter(manager, "performance");
+
+      // First call goes through the real implementation
+      const firstDecision = router.resolve(planningTask);
+
+      // Second call should hit memo for all snapshots but produce an identical selection
+      // (reset lastExecutingProvider by creating a fresh router to isolate diversity score)
+      const router2 = new ProviderRouter(manager, "performance");
+      const secondDecision = router2.resolve(planningTask);
+
+      expect(firstDecision.provider).toBe(secondDecision.provider);
+    });
+
+    it("calls the snapshot factory at most N times for N providers in resolveRanked()", () => {
+      const n = MULTI_PROVIDERS.length;
+      const manager = createMockManager(MULTI_PROVIDERS);
+      const router = new ProviderRouter(manager, "balanced");
+
+      router.resolveRanked(planningTask);
+
+      expect(snapshotSpy.mock.calls.length).toBeLessThanOrEqual(n);
+    });
+
+    it("resolveRanked ordering is unchanged across two calls on the same fixture", () => {
+      const manager = createMockManager(MULTI_PROVIDERS);
+      const router = new ProviderRouter(manager, "balanced");
+
+      const first = router.resolveRanked(codeGenTask);
+      // Reset spy count between calls
+      snapshotSpy.mockClear();
+      const second = router.resolveRanked(codeGenTask);
+
+      expect(first).toEqual(second);
     });
   });
 

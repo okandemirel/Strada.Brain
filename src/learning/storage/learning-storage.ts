@@ -198,6 +198,7 @@ CREATE INDEX IF NOT EXISTS idx_error_patterns_category_count ON error_patterns(c
 CREATE INDEX IF NOT EXISTS idx_error_patterns_message ON error_patterns(message_pattern);
 CREATE INDEX IF NOT EXISTS idx_observations_type_processed ON observations(type, processed);
 CREATE INDEX IF NOT EXISTS idx_observations_timestamp ON observations(timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_observations_processed_timestamp ON observations(processed, timestamp ASC);
 CREATE INDEX IF NOT EXISTS idx_verdicts_trajectory ON verdicts(trajectory_id);
 CREATE INDEX IF NOT EXISTS idx_solutions_pattern ON solutions(error_pattern_id);
 CREATE INDEX IF NOT EXISTS idx_runtime_artifacts_state_kind ON runtime_artifacts(state, kind, updated_at DESC);

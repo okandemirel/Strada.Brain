@@ -1415,7 +1415,11 @@ src/
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, code conventions, and PR guidelines.
 
+See the [skill authoring guide](CONTRIBUTING.md#creating-a-skill) to create and publish your own skills.
+
 See [AGENTS.md](AGENTS.md) for detailed coding conventions, architecture patterns, and agent-specific guidelines used when working with AI coding assistants inside this repository.
+
+See [CHANGELOG.md](CHANGELOG.md) for version history and breaking changes.
 
 ---
 

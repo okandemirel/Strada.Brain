@@ -897,19 +897,51 @@ describe("SlackChannel file extraction", () => {
   });
 
   describe("processMessageQueue head-of-line blocking (M7)", () => {
-    type QM = {
-      id: string; type: string; priority: number; channelId: string;
-      retries: number; retryAfter?: number;
-      resolve: (v: unknown) => void; reject: (e: Error) => void;
+    // After plan 027, `messageQueue` is a getter returning `this.queue.entries`
+    // (QueueEntry<QueuedMessage>[]). The entries array is mutable but the
+    // property itself has no setter — direct reassignment is a no-op. The fix
+    // populates entries by pushing QueueEntry-shaped objects into the live array.
+    //
+    // QueueEntry layout: { id, item: QueuedMessage, priority, retries,
+    //                       enqueuedAt, retryAfter?, resolve, reject }
+    // processItem(msg) calls this.processQueuedMessage(msg) where msg = entry.item.
+    // HOL-skip correctness is fully proven in message-queue.test.ts
+    // ("MessageQueue – HOL-skip (Slack/priority mode)").  This test validates
+    // that the Slack adapter's delegation wires through to that behavior.
+
+    type QueueEntry = {
+      id: string;
+      item: { id: string; type: string; channelId: string };
+      priority: number;
+      retries: number;
+      enqueuedAt: number;
+      retryAfter?: number;
+      resolve: (v: unknown) => void;
+      reject: (e: Error) => void;
     };
-    function backoffMsg(id: string): QM {
+
+    function backoffEntry(msgId: string): QueueEntry {
       return {
-        id, type: "text", priority: 5, channelId: "C1", retries: 0,
-        retryAfter: Date.now() + 60_000, resolve: vi.fn(), reject: vi.fn(),
+        id: `entry-${msgId}`,
+        item: { id: msgId, type: "text", channelId: "C1" },
+        priority: 5,
+        retries: 0,
+        enqueuedAt: Date.now(),
+        retryAfter: Date.now() + 60_000,
+        resolve: vi.fn(),
+        reject: vi.fn(),
       };
     }
-    function readyMsg(id: string, resolve: (v: unknown) => void): QM {
-      return { id, type: "text", priority: 5, channelId: "C1", retries: 0, resolve, reject: vi.fn() };
+    function readyEntry(msgId: string, resolve: (v: unknown) => void): QueueEntry {
+      return {
+        id: `entry-${msgId}`,
+        item: { id: msgId, type: "text", channelId: "C1" },
+        priority: 5,
+        retries: 0,
+        enqueuedAt: Date.now(),
+        resolve,
+        reject: vi.fn(),
+      };
     }
 
     it("advances past backed-off heads to process ready messages behind them", async () => {
@@ -918,23 +950,28 @@ describe("SlackChannel file extraction", () => {
       internal.processQueuedMessage = worker;
 
       const resolveB = vi.fn();
+      // messageQueue is a getter returning the live queue.entries array — push
+      // into it directly (reassignment would silently fail as there is no setter).
+      const entries: QueueEntry[] = internal.messageQueue;
+      entries.length = 0; // clear any residual state
       // Five backed-off heads fill all MESSAGE_BATCH_SIZE=5 front slots; "B" is ready behind them.
-      internal.messageQueue = [
-        backoffMsg("b0"), backoffMsg("b1"), backoffMsg("b2"),
-        backoffMsg("b3"), backoffMsg("b4"), readyMsg("B", resolveB),
-      ];
+      entries.push(
+        backoffEntry("b0"), backoffEntry("b1"), backoffEntry("b2"),
+        backoffEntry("b3"), backoffEntry("b4"), readyEntry("B", resolveB),
+      );
 
       await internal.processMessageQueue();
 
-      // TEETH: the unfixed fixed-index loop visits only indices 0..4 (all in backoff),
-      // never reaching "B" — worker(B) is never called and B stays queued.
+      // HOL-skip: worker called with the item of entry "B" (the ready message
+      // behind the five backed-off heads) and resolveB resolved via entry.resolve.
       expect(worker).toHaveBeenCalledWith(expect.objectContaining({ id: "B" }));
       expect(resolveB).toHaveBeenCalled();
-      expect(internal.messageQueue.find((m: QM) => m.id === "B")).toBeUndefined();
+      // Entry "B" was processed and removed from the queue.
+      expect(internal.messageQueue.find((e: QueueEntry) => e.item.id === "B")).toBeUndefined();
 
       // Backed-off heads are skipped (not processed) and remain queued.
       expect(worker).not.toHaveBeenCalledWith(expect.objectContaining({ id: "b0" }));
-      expect(internal.messageQueue.find((m: QM) => m.id === "b0")).toBeDefined();
+      expect(internal.messageQueue.find((e: QueueEntry) => e.item.id === "b0")).toBeDefined();
     });
   });
 });

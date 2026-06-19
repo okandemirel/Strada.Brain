@@ -677,3 +677,110 @@ describe("DiscordChannel with auth checks", () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Characterization tests: verify queue behaviour preserved after any refactor.
+// These tests create their own DiscordChannel instances so they are independent
+// of the outer beforeEach that runs before each test in the parent describe.
+// They use enqueueMessage() (a semi-private method) rather than direct array
+// manipulation so they remain valid after the MessageQueue delegation refactor.
+// ---------------------------------------------------------------------------
+describe("DiscordChannel queue behaviour (characterization)", () => {
+  function makeChannel(): DiscordChannel {
+    const auth = new AuthManager([], {
+      allowedDiscordIds: new Set(["u1"]),
+      allowedDiscordRoles: new Set<string>(),
+    });
+    return new DiscordChannel("fake-token", auth);
+  }
+
+  type InternalChannel = {
+    enqueueMessage: (m: { type: string; chatId: string; content?: string }) => Promise<unknown>;
+    processMessageQueue: () => Promise<void>;
+    processQueuedMessage: (m: unknown) => Promise<unknown>;
+    messageQueue: unknown[];
+    retryTimers: Map<unknown, unknown>;
+  };
+
+  it("FIFO: processQueuedMessage is called in enqueue order", async () => {
+    const ch = makeChannel();
+    const internal = ch as unknown as InternalChannel;
+    const order: string[] = [];
+
+    // Stub processQueuedMessage to record the chatId of each call and resolve
+    // the message's own promise (required in the pre-delegation code path).
+    internal.processQueuedMessage = async (m: unknown) => {
+      const msg = m as { chatId: string; resolve?: (v: unknown) => void };
+      order.push(msg.chatId);
+      // In the pre-delegation layout, msg.resolve settles the enqueue promise.
+      // In the post-delegation layout, MessageQueue settles it via entry.resolve.
+      if (typeof msg.resolve === "function") msg.resolve(undefined);
+      return undefined;
+    };
+
+    // Suppress unhandled rejections — these promises settle via the stub above.
+    const pA = internal.enqueueMessage({ type: "text", chatId: "A", content: "a" });
+    const pB = internal.enqueueMessage({ type: "text", chatId: "B", content: "b" });
+    const pC = internal.enqueueMessage({ type: "text", chatId: "C", content: "c" });
+    pA.catch(() => {});
+    pB.catch(() => {});
+    pC.catch(() => {});
+
+    await internal.processMessageQueue();
+
+    expect(order).toEqual(["A", "B", "C"]);
+    expect(internal.messageQueue).toHaveLength(0);
+  });
+
+  it("timeout eviction: enqueued items are rejected when they exceed MESSAGE_TIMEOUT_MS", async () => {
+    const ch = makeChannel();
+    const internal = ch as unknown as InternalChannel;
+
+    const p = internal.enqueueMessage({ type: "text", chatId: "ch1", content: "stale" });
+
+    // Backdate the enqueuedAt timestamp by more than the 30 s timeout.
+    // The queue exposes the backing array via the messageQueue accessor; we update
+    // whatever field holds the timestamp regardless of the exact wrapper shape.
+    const arr = internal.messageQueue as Array<Record<string, unknown>>;
+    const entry = arr[0]!;
+    // Support both the pre-refactor flat layout and the post-refactor QueueEntry layout.
+    if ("enqueuedAt" in entry) {
+      entry["enqueuedAt"] = Date.now() - 31_000;
+    }
+
+    await internal.processMessageQueue();
+
+    await expect(p).rejects.toThrow(/timed out/i);
+    expect(internal.messageQueue).toHaveLength(0);
+  });
+
+  it("disconnect-reject: pending enqueued item is rejected on disconnect", async () => {
+    const ch = makeChannel();
+    const internal = ch as unknown as InternalChannel;
+
+    const pending = internal.enqueueMessage({ type: "text", chatId: "c1", content: "hi" });
+
+    await ch.disconnect();
+
+    await expect(pending).rejects.toThrow("Discord channel disconnected");
+    expect(internal.messageQueue).toHaveLength(0);
+  });
+
+  it("retry counter: after a transient failure the item moves to a retry timer", async () => {
+    const ch = makeChannel();
+    const internal = ch as unknown as InternalChannel;
+
+    // Make processQueuedMessage always fail.
+    internal.processQueuedMessage = vi.fn().mockRejectedValue(new Error("transient"));
+
+    const p = internal.enqueueMessage({ type: "text", chatId: "ch1", content: "x" });
+    // Suppress unhandled rejection — will be settled after retries exhaust.
+    p.catch(() => {});
+
+    await internal.processMessageQueue();
+
+    // After first failure: item removed from queue and a retry timer is set.
+    expect(internal.messageQueue).toHaveLength(0);
+    expect(internal.retryTimers.size).toBe(1);
+  });
+});

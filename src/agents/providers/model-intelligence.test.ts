@@ -622,6 +622,45 @@ describe("ModelIntelligenceService", () => {
     }
   });
 
+  it("skips an unparseable provider-snapshot row and still loads the rest", async () => {
+    const tempDbPath = join(process.cwd(), ".tmp-model-intelligence-corrupt-snapshot.test.db");
+
+    // Initialise the service so it creates the schema and prepared statements
+    service.shutdown();
+    service = new ModelIntelligenceService({
+      providerSourcesPath: "/tmp/strada-test-missing-provider-sources.json",
+    });
+    mockFetch.mockRejectedValue(new Error("offline"));
+    await service.initialize(tempDbPath);
+    service.shutdown();
+
+    // Directly seed a valid row and a corrupt row into the DB
+    const Database = (await import("better-sqlite3")).default;
+    const db = new Database(tempDbPath);
+    const insert = db.prepare(
+      "INSERT OR REPLACE INTO provider_official_snapshot (provider, last_updated, source_urls_json, signals_json, feature_tags_json) VALUES (?, ?, ?, ?, ?)",
+    );
+    insert.run("valid-provider", Date.now(), '["https://example.com"]', '[]', '["tool-calling"]');
+    insert.run("corrupt-provider", Date.now(), '["https://example.com"]', "{not json", '[]');
+    db.close();
+
+    // Re-open via a new service instance — loadFromDb is called during initialize
+    const reloaded = new ModelIntelligenceService({
+      providerSourcesPath: "/tmp/strada-test-missing-provider-sources.json",
+    });
+    await expect(reloaded.initialize(tempDbPath)).resolves.not.toThrow();
+
+    expect(reloaded.getProviderOfficialSnapshot("valid-provider")).toBeDefined();
+    expect(reloaded.getProviderOfficialSnapshot("corrupt-provider")).toBeUndefined();
+
+    reloaded.shutdown();
+    try {
+      unlinkSync(tempDbPath);
+    } catch {
+      // ignore temp cleanup failures
+    }
+  });
+
   it("clears stale official snapshots when a later successful refresh yields no relevant signals", async () => {
     tempRegistryPath = join(process.cwd(), ".tmp-provider-sources-clear.test.json");
     const tempDbPath = join(process.cwd(), ".tmp-model-intelligence-clear.test.db");

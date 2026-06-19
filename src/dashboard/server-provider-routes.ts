@@ -14,7 +14,7 @@
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { projectScopeMatches } from "../learning/runtime-artifact-manager.js";
+import { projectScopeMatches } from "../learning/project-scope.js";
 import {
   DASHBOARD_IDENTITY_MAX_LENGTH,
   isDashboardIdentityPartTooLong,

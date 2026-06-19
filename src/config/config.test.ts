@@ -1042,6 +1042,99 @@ describe("loadConfig", () => {
   });
 });
 
+// =============================================================================
+// SNAPSHOT CHARACTERIZATION TEST (plan 028)
+// Proves loadConfig output is unchanged across the config.ts decomposition.
+// Uses envOverride so it is 100% deterministic regardless of process.env.
+// =============================================================================
+
+describe("loadConfig snapshot (plan-028 guard)", () => {
+  const FIXED_ENV: Record<string, string> = {
+    ANTHROPIC_API_KEY: "sk-test-key-snapshot",
+    UNITY_PROJECT_PATH: "/snapshot/project",
+  };
+
+  beforeEach(() => {
+    resetConfigCache();
+    vi.mocked(realpathSync).mockImplementation((p) => String(p));
+    vi.mocked(statSync).mockReturnValue({ isDirectory: () => true } as ReturnType<typeof statSync>);
+  });
+
+  it("produces a stable top-level structure from a fixed env", () => {
+    const cfg = loadConfig(FIXED_ENV);
+
+    // Provider keys
+    expect(cfg.anthropicApiKey).toBe("sk-test-key-snapshot");
+    expect(cfg.openaiApiKey).toBeUndefined();
+    expect(cfg.openaiAuthMode).toBe("api-key");
+
+    // Channels
+    expect(cfg.telegram).toEqual({ botToken: undefined, allowedUserIds: [] });
+    expect(cfg.discord).toEqual({ botToken: undefined, guildId: undefined, allowedUserIds: [], allowedRoleIds: [] });
+    expect(cfg.slack).toMatchObject({ socketMode: true });
+    expect(cfg.whatsapp).toMatchObject({ sessionPath: ".whatsapp-session", allowedNumbers: [] });
+    expect(cfg.matrix).toMatchObject({ allowedUserIds: [], allowedRoomIds: [], allowOpenAccess: false });
+    expect(cfg.irc).toMatchObject({ nick: "strada-brain", channels: [], allowedUsers: [], allowOpenAccess: false });
+    expect(cfg.teams).toMatchObject({ allowedUserIds: [], allowOpenAccess: false });
+
+    // Security defaults
+    expect(cfg.security.requireEditConfirmation).toBe(true);
+    expect(cfg.security.readOnlyMode).toBe(false);
+    expect(cfg.security.systemAuth.requireMfa).toBe(false);
+
+    // Dashboard defaults
+    expect(cfg.dashboard).toEqual({ enabled: false, port: 3100 });
+    expect(cfg.websocketDashboard).toMatchObject({ enabled: false, port: 3101 });
+    expect(cfg.prometheus).toEqual({ enabled: false, port: 9090 });
+
+    // Memory defaults
+    expect(cfg.memory.enabled).toBe(true);
+    expect(cfg.memory.backend).toBe("agentdb");
+    expect(cfg.memory.unified.dimensions).toBe(1536);
+    expect(cfg.memory.decay.enabled).toBe(true);
+    expect(cfg.memory.decay.lambdas).toEqual({ working: 0.10, ephemeral: 0.05, persistent: 0.01 });
+    expect(cfg.memory.consolidation.enabled).toBe(true);
+
+    // RAG defaults
+    expect(cfg.rag.enabled).toBe(true);
+    expect(cfg.rag.provider).toBe("auto");
+    expect(cfg.rag.contextMaxTokens).toBe(4000);
+
+    // Features
+    expect(cfg.streamingEnabled).toBe(true);
+    expect(cfg.shellEnabled).toBe(true);
+    expect(cfg.llmStreamInitialTimeoutMs).toBe(10 * 60 * 1000);
+    expect(cfg.llmStreamStallTimeoutMs).toBe(5 * 60 * 1000);
+
+    // Rate limit defaults
+    expect(cfg.rateLimit).toEqual({
+      enabled: false,
+      messagesPerMinute: 0,
+      messagesPerHour: 0,
+      tokensPerDay: 0,
+      dailyBudgetUsd: 0,
+      monthlyBudgetUsd: 0,
+    });
+
+    // Routing & consensus defaults
+    expect(cfg.routing).toMatchObject({ preset: "balanced", phaseSwitching: true });
+    expect(cfg.consensus).toMatchObject({ mode: "auto" });
+
+    // Budget defaults
+    expect(cfg.budget).toMatchObject({ dailyLimitUsd: 0, monthlyLimitUsd: 0, warnPct: 0.8 });
+
+    // Strada dependency defaults
+    expect(cfg.strada.coreRepoUrl).toBe("https://github.com/okandemirel/Strada.Core.git");
+    expect(cfg.strada.unityBridgePort).toBe(7691);
+    expect(cfg.strada.unityBridgeAutoConnect).toBe(true);
+    expect(cfg.strada.scriptExecuteEnabled).toBe(false);
+    expect(cfg.strada.reflectionInvokeEnabled).toBe(false);
+
+    // Unity project path (normalized by realpathSync mock — returns as-is)
+    expect(cfg.unityProjectPath).toBe("/snapshot/project");
+  });
+});
+
 describe("secretPatterns redaction", () => {
   it("bearer_token matches tokens containing digits 1-9 (L11)", () => {
     const bearer = secretPatterns.find((p) => p.name === "bearer_token")!;

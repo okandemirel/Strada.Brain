@@ -30,6 +30,8 @@ import { DiscordRateLimiter } from "./rate-limiter.js";
 import { formatToDiscordMarkdown, truncateForDiscord } from "./formatters.js";
 import { chunkText } from "../chunk-text.js";
 import type { SlashCommand } from "./commands.js";
+import { MessageQueue } from "../message-queue.js";
+import { StreamingBuffer } from "../streaming-buffer.js";
 
 type MessageHandler = (msg: IncomingMessage) => Promise<void>;
 
@@ -43,15 +45,12 @@ type FeedbackReactionCallback = (
 
 interface StreamingMessageState {
   message: Message;
-  accumulatedText: string;
-  lastUpdate: number;
-  updateQueued: boolean;
-  /** Tracked throttle timer so it can be cleared on finalize/disconnect. */
-  throttleTimer: ReturnType<typeof setTimeout> | null;
-  /** Set once finalize runs so a late throttled update cannot overwrite the final text. */
-  finalized: boolean;
+  /** Throttled streaming buffer that manages edits and finalization. */
+  buffer: StreamingBuffer;
 }
 
+/** Payload-only queue message.  resolve/reject/retries/enqueuedAt are now
+ * managed by the shared MessageQueue infrastructure. */
 interface QueuedMessage {
   id: string;
   type: 'text' | 'markdown' | 'embed' | 'typing' | 'thread' | 'confirmation';
@@ -63,10 +62,6 @@ interface QueuedMessage {
   /** Pre-generated confirmation id, set for 'confirmation' items so the long-lived
    * response promise can be registered before the prompt is dispatched. */
   confirmId?: string;
-  resolve: (value: unknown) => void;
-  reject: (error: Error) => void;
-  retries: number;
-  enqueuedAt: number;
 }
 
 const MAX_RETRIES = 3;
@@ -124,15 +119,20 @@ export class DiscordChannel implements IChannelAdapter {
   private static readonly RECONNECT_BASE_DELAY_MS = 1000;
   private static readonly RECONNECT_MAX_DELAY_MS = 60_000;
 
-  // Message queue for rate limit handling
-  private messageQueue: QueuedMessage[] = [];
-  private queueProcessing = false;
+  /** Shared queue infrastructure — FIFO ordering, timeout eviction, retry. */
+  private readonly queue: MessageQueue<QueuedMessage>;
   private queueInterval: NodeJS.Timeout | null = null;
-  /** Pending retry-backoff timers (message kept so disconnect can reject it). */
-  private readonly retryTimers = new Map<NodeJS.Timeout, QueuedMessage>();
-  private rateLimited = false;
-  private rateLimitResetTime = 0;
   private feedbackReactionCallback: FeedbackReactionCallback | null = null;
+
+  /** Backward-compatible accessor — used internally by /status and by tests. */
+  protected get messageQueue(): MessageQueue<QueuedMessage>["entries"] {
+    return this.queue.entries;
+  }
+
+  /** Backward-compatible accessor — used by tests to inspect/inject retry timers. */
+  protected get retryTimers(): MessageQueue<QueuedMessage>["timerMap"] {
+    return this.queue.timerMap;
+  }
   /** Per-channelId applied instinct IDs for reaction-based feedback attribution. */
   private readonly appliedInstinctIds = new Map<string, string[]>();
 
@@ -149,6 +149,32 @@ export class DiscordChannel implements IChannelAdapter {
     this.guildId = options?.guildId;
     this.slashCommands = options?.slashCommands ?? [];
     this.rateLimiter = new DiscordRateLimiter();
+
+    this.queue = new MessageQueue<QueuedMessage>({
+      maxRetries: MAX_RETRIES,
+      baseDelayMs: RETRY_BASE_DELAY_MS,
+      batchSize: 5,
+      timeoutMs: MESSAGE_TIMEOUT_MS,
+      ordering: "fifo",
+      jitter: false,
+      skipBackedOff: false,
+      rateLimitBackoffMs: RATE_LIMIT_BACKOFF_MS,
+      processItem: async (msg) => {
+        try {
+          return await this.processQueuedMessage(msg);
+        } catch (error) {
+          if (this.isRateLimitError(error)) {
+            const retryAfter = this.extractRetryAfter(error) ?? RATE_LIMIT_BACKOFF_MS;
+            this.rateLimiter.reportRateLimitError(retryAfter);
+            getLogger().warn("Discord rate limited", { retryAfter });
+          }
+          throw error;
+        }
+      },
+      isRateLimitError: (err) => this.isRateLimitError(err),
+      extractRetryAfter: (err) => this.extractRetryAfter(err),
+      isConnected: () => this.isConnected,
+    });
 
     this.client = new Client({
       intents: [
@@ -221,15 +247,8 @@ export class DiscordChannel implements IChannelAdapter {
     // would settle their promises is now stopped, so without this every awaiting
     // caller (sendText/sendMarkdown/...) would hang forever. Mirrors the Slack
     // channel's disconnect drain.
-    for (const [timer, message] of this.retryTimers) {
-      clearTimeout(timer);
-      message.reject(new Error("Discord channel disconnected"));
-    }
-    this.retryTimers.clear();
-    const queued = this.messageQueue.splice(0, this.messageQueue.length);
-    for (const message of queued) {
-      message.reject(new Error("Discord channel disconnected"));
-    }
+    this.queue.rejectRetryTimers("Discord channel disconnected");
+    this.queue.rejectAll("Discord channel disconnected");
 
     // Clean up pending confirmations
     for (const [, pending] of this.pendingConfirmations) {
@@ -241,11 +260,7 @@ export class DiscordChannel implements IChannelAdapter {
     // Clean up streaming messages
     for (const [, state] of this.streamingMessages) {
       // Stop any pending throttled update so it cannot fire after destroy().
-      state.finalized = true;
-      if (state.throttleTimer) {
-        clearTimeout(state.throttleTimer);
-        state.throttleTimer = null;
-      }
+      state.buffer.clearOnDisconnect();
       try {
         await state.message.edit("*Message ended*");
       } catch {
@@ -320,126 +335,55 @@ export class DiscordChannel implements IChannelAdapter {
 
   private startQueueProcessor(): void {
     this.queueInterval = setInterval(() => {
-      void this.processMessageQueue().catch((err) => {
+      void this.queue.processQueue().catch((err) => {
         getLogger().error("Queue processor error", { error: err instanceof Error ? err.message : String(err) });
       });
     }, QUEUE_PROCESS_INTERVAL_MS);
   }
 
-  private enqueueMessage(message: Omit<QueuedMessage, 'id' | 'retries' | 'resolve' | 'reject' | 'enqueuedAt'>): Promise<unknown> {
-    return new Promise((resolve, reject) => {
-      const queuedMessage: QueuedMessage = {
-        ...message,
-        id: randomUUID(),
-        retries: 0,
-        resolve,
-        reject,
-        enqueuedAt: Date.now(),
-      };
-
-      this.messageQueue.push(queuedMessage);
-    });
+  private enqueueMessage(message: Omit<QueuedMessage, 'id'>): Promise<unknown> {
+    const queuedMessage: QueuedMessage = {
+      ...message,
+      id: randomUUID(),
+    };
+    return this.queue.enqueue(queuedMessage);
   }
 
-  private async processMessageQueue(): Promise<void> {
-    if (this.queueProcessing || this.messageQueue.length === 0) return;
-    if (this.rateLimited && Date.now() < this.rateLimitResetTime) return;
-
-    this.queueProcessing = true;
-    this.rateLimited = false;
-
-    try {
-      // Evict timed-out messages before processing
-      const now = Date.now();
-      this.messageQueue = this.messageQueue.filter((msg) => {
-        if (now - msg.enqueuedAt > MESSAGE_TIMEOUT_MS) {
-          msg.reject(new Error(`Message timed out after ${MESSAGE_TIMEOUT_MS}ms`));
-          return false;
-        }
-        return true;
-      });
-
-      const batchSize = Math.min(5, this.messageQueue.length);
-      for (let i = 0; i < batchSize; i++) {
-        const message = this.messageQueue[0];
-        if (!message) break;
-
-        try {
-          await this.processQueuedMessage(message);
-          this.messageQueue.shift(); // Remove successfully processed message
-        } catch (error) {
-          if (this.isRateLimitError(error)) {
-            // Rate limited - pause processing
-            const retryAfter = this.extractRetryAfter(error) || RATE_LIMIT_BACKOFF_MS;
-            this.rateLimited = true;
-            this.rateLimitResetTime = Date.now() + retryAfter;
-            this.rateLimiter.reportRateLimitError(retryAfter);
-            getLogger().warn("Discord rate limited", { retryAfter });
-            break;
-          }
-
-          // Retry logic
-          message.retries++;
-          if (message.retries >= MAX_RETRIES) {
-            message.reject(error instanceof Error ? error : new Error(String(error)));
-            this.messageQueue.shift();
-          } else {
-            // Move to end of queue with exponential backoff — re-enqueue after delay
-            const delay = RETRY_BASE_DELAY_MS * Math.pow(2, message.retries - 1);
-            this.messageQueue.shift();
-            const timer = setTimeout(() => {
-              this.retryTimers.delete(timer);
-              // If we were disconnected during the backoff window, reject rather
-              // than re-pushing onto a dead queue (which would never settle).
-              if (!this.isConnected) {
-                message.reject(new Error("Discord channel disconnected"));
-                return;
-              }
-              this.messageQueue.push(message);
-            }, delay);
-            this.retryTimers.set(timer, message);
-          }
-        }
-      }
-    } finally {
-      this.queueProcessing = false;
-    }
+  /** Alias for backward-compat with characterization tests (delegated to queue.processQueue). */
+  protected processMessageQueue(): Promise<void> {
+    return this.queue.processQueue();
   }
 
-  private async processQueuedMessage(msg: QueuedMessage): Promise<void> {
+  private async processQueuedMessage(msg: QueuedMessage): Promise<unknown> {
     switch (msg.type) {
       case 'text':
         await this.sendTextImmediate(msg.chatId, msg.content!);
-        msg.resolve(undefined);
-        break;
+        return undefined;
       case 'markdown':
         await this.sendMarkdownImmediate(msg.chatId, msg.content!);
-        msg.resolve(undefined);
-        break;
+        return undefined;
       case 'embed':
         await this.sendRichEmbedImmediate(msg.chatId, msg.embedOptions!);
-        msg.resolve(undefined);
-        break;
+        return undefined;
       case 'typing':
         await this.sendTypingIndicatorImmediate(msg.chatId);
-        msg.resolve(undefined);
-        break;
+        return undefined;
       case 'thread': {
         const threadId = await this.createThreadImmediate(msg.chatId, msg.threadOptions!.name, {
           autoArchiveDuration: msg.threadOptions!.autoArchiveDuration,
         });
-        msg.resolve(threadId);
-        break;
+        return threadId;
       }
       case 'confirmation': {
-        // Only SEND the embed+buttons through the rate-limited path here, then
-        // resolve the queue item immediately. The long-lived promise that waits
-        // for the user's button click (or 120s timeout) is owned by
-        // requestConfirmation and must NOT block the shared send queue.
+        // Only SEND the embed+buttons through the rate-limited path here.
+        // The long-lived promise that waits for the user's button click
+        // (or 120s timeout) is owned by requestConfirmation and must NOT
+        // block the shared send queue.
         await this.sendConfirmationPrompt(msg.confirmationRequest!, msg.confirmId!);
-        msg.resolve(undefined);
-        break;
+        return undefined;
       }
+      default:
+        return undefined;
     }
   }
 
@@ -683,14 +627,72 @@ export class DiscordChannel implements IChannelAdapter {
       const message = await (channel as TextChannel).send("...");
       const streamId = randomUUID();
 
-      this.streamingMessages.set(streamId, {
-        message,
-        accumulatedText: "",
-        lastUpdate: Date.now(),
-        updateQueued: false,
-        throttleTimer: null,
-        finalized: false,
+      const buffer = new StreamingBuffer({
+        throttleMs: 1000,
+        onFlush: async (text) => {
+          const state = this.streamingMessages.get(streamId);
+          if (!state) return;
+          try {
+            await this.rateLimiter.acquire();
+            // Intermediate preview: a single edited message cannot exceed Discord's
+            // 2000-char limit, so the in-progress view is truncated; the full content
+            // is delivered in finalizeStreamingMessage (which splits into chunks).
+            const truncated = truncateForDiscord(text || "...", DISCORD_MAX_MESSAGE_LENGTH);
+            await state.message.edit(truncated);
+          } catch (error) {
+            getLogger().debug("Failed to update streaming message", {
+              streamId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        },
+        onFinalize: async (text) => {
+          const state = this.streamingMessages.get(streamId);
+          if (!state) return;
+
+          const formatted = formatToDiscordMarkdown(text);
+          // Split the full final text so nothing is dropped: the first chunk edits the
+          // existing streaming message; any remaining chunks are sent as follow-ups.
+          const chunks = chunkText(formatted, DISCORD_MAX_MESSAGE_LENGTH);
+
+          try {
+            if (chunks.length === 0) {
+              // Empty final text — leave the streaming placeholder as-is.
+              return;
+            }
+
+            let editApplied = false;
+            try {
+              await this.rateLimiter.acquire();
+              await state.message.edit(chunks[0]!);
+              editApplied = true;
+            } catch (error) {
+              getLogger().debug("Failed to edit streaming message on finalize", {
+                streamId,
+                error: error instanceof Error ? error.message : String(error),
+              });
+            }
+
+            if (editApplied) {
+              // Edit landed — send only the overflow chunks as follow-ups.
+              await this.sendChunksToChannel(chatId, chunks.slice(1));
+            } else {
+              // The edit definitively did not apply (the streaming placeholder still
+              // shows "..."), so deliver the full final text as new messages. This is
+              // not a double-send of the final content because the edit failed.
+              try {
+                await this.sendChunksToChannel(chatId, chunks);
+              } catch {
+                getLogger().error("Failed to finalize streaming message", { streamId });
+              }
+            }
+          } finally {
+            this.streamingMessages.delete(streamId);
+          }
+        },
       });
+
+      this.streamingMessages.set(streamId, { message, buffer });
 
       return streamId;
     } catch (error) {
@@ -705,51 +707,8 @@ export class DiscordChannel implements IChannelAdapter {
     accumulatedText: string
   ): Promise<void> {
     const state = this.streamingMessages.get(streamId);
-    if (!state || state.finalized) return;
-
-    state.accumulatedText = accumulatedText;
-
-    // Throttle updates to avoid rate limits (max 1 update per second)
-    const now = Date.now();
-    if (now - state.lastUpdate < 1000) {
-      if (!state.updateQueued) {
-        state.updateQueued = true;
-        // Track the timer so finalize/disconnect can clear it and prevent a late
-        // throttled edit from overwriting the final text.
-        state.throttleTimer = setTimeout(() => {
-          state.updateQueued = false;
-          state.throttleTimer = null;
-          void this.performStreamUpdate(streamId);
-        }, 1000 - (now - state.lastUpdate));
-      }
-      return;
-    }
-
-    await this.performStreamUpdate(streamId);
-  }
-
-  private async performStreamUpdate(streamId: string): Promise<void> {
-    const state = this.streamingMessages.get(streamId);
-    // Bail if the stream was finalized (or removed) after this update was queued —
-    // editing now would overwrite the final text with stale intermediate content.
-    if (!state || state.finalized) return;
-
-    try {
-      await this.rateLimiter.acquire();
-      // Intermediate preview: a single edited message cannot exceed Discord's
-      // 2000-char limit, so the in-progress view is truncated; the full content
-      // is delivered in finalizeStreamingMessage (which splits into chunks).
-      const text = state.accumulatedText || "...";
-      const truncated = truncateForDiscord(text, DISCORD_MAX_MESSAGE_LENGTH);
-      await state.message.edit(truncated);
-      state.lastUpdate = Date.now();
-    } catch (error) {
-      // Log at debug so a frozen/failing stream is diagnosable instead of silent.
-      getLogger().debug("Failed to update streaming message", {
-        streamId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
+    if (!state) return;
+    await state.buffer.update(accumulatedText);
   }
 
   async finalizeStreamingMessage(
@@ -759,54 +718,7 @@ export class DiscordChannel implements IChannelAdapter {
   ): Promise<void> {
     const state = this.streamingMessages.get(streamId);
     if (!state) return;
-
-    // Mark finalized and clear any pending throttled update so it cannot fire
-    // after this point and overwrite the final text with stale content.
-    state.finalized = true;
-    if (state.throttleTimer) {
-      clearTimeout(state.throttleTimer);
-      state.throttleTimer = null;
-    }
-
-    const formatted = formatToDiscordMarkdown(finalText);
-    // Split the full final text so nothing is dropped: the first chunk edits the
-    // existing streaming message; any remaining chunks are sent as follow-ups.
-    const chunks = chunkText(formatted, DISCORD_MAX_MESSAGE_LENGTH);
-
-    try {
-      if (chunks.length === 0) {
-        // Empty final text — leave the streaming placeholder as-is.
-        return;
-      }
-
-      let editApplied = false;
-      try {
-        await this.rateLimiter.acquire();
-        await state.message.edit(chunks[0]!);
-        editApplied = true;
-      } catch (error) {
-        getLogger().debug("Failed to edit streaming message on finalize", {
-          streamId,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-
-      if (editApplied) {
-        // Edit landed — send only the overflow chunks as follow-ups.
-        await this.sendChunksToChannel(_chatId, chunks.slice(1));
-      } else {
-        // The edit definitively did not apply (the streaming placeholder still
-        // shows "..."), so deliver the full final text as new messages. This is
-        // not a double-send of the final content because the edit failed.
-        try {
-          await this.sendChunksToChannel(_chatId, chunks);
-        } catch {
-          getLogger().error("Failed to finalize streaming message", { streamId });
-        }
-      }
-    } finally {
-      this.streamingMessages.delete(streamId);
-    }
+    await state.buffer.finalize(finalText);
   }
 
   // ---- Thread Support ----

@@ -398,4 +398,125 @@ describe("FallbackChainProvider", () => {
     const afterEntry = health.getEntry("recovering-prov")!;
     expect(afterEntry.status).toBe("healthy");
   });
+
+  describe("reasoning-timeout detection", () => {
+    // Helper to build a mock provider with thinkingSupported set
+    function createThinkingProvider(name: string, supportsThinking: boolean): ReturnType<typeof createMockProvider> & { name: string } {
+      const base = createMockProvider();
+      return {
+        ...base,
+        name,
+        capabilities: {
+          ...base.capabilities,
+          thinkingSupported: supportsThinking,
+        },
+      };
+    }
+
+    // Case 1: abort + thinkingSupported + single provider → disableThinking called once
+    it("abort + thinkingSupported + single provider: disables thinking exactly once", async () => {
+      const p1 = createThinkingProvider("kimi-single", true);
+      (p1.chat as ReturnType<typeof vi.fn>).mockRejectedValue(
+        new Error("upstream proxy abort: request timed out")
+      );
+
+      const chain = new FallbackChainProvider([p1]);
+      const health = ProviderHealthRegistry.getInstance();
+      const disableThinking = vi.spyOn(health, "disableThinking");
+
+      // Single provider + reasoning timeout → throws "timed out during reasoning" error
+      await expect(chain.chat("sys", [], [])).rejects.toThrow("timed out during reasoning");
+
+      expect(disableThinking).toHaveBeenCalledWith("kimi-single");
+      expect(disableThinking).toHaveBeenCalledTimes(1);
+    });
+
+    // Case 2: abort + "cancel" present → NOT a reasoning timeout; disableThinking NOT called
+    it("abort + cancel in message: not classified as reasoning timeout", async () => {
+      const p1 = createThinkingProvider("kimi-cancel", true);
+      (p1.chat as ReturnType<typeof vi.fn>).mockRejectedValue(
+        new Error("request abort: cancel")
+      );
+
+      const chain = new FallbackChainProvider([p1]);
+      const health = ProviderHealthRegistry.getInstance();
+      const disableThinking = vi.spyOn(health, "disableThinking");
+
+      await expect(chain.chat("sys", [], [])).rejects.toThrow();
+
+      expect(disableThinking).not.toHaveBeenCalled();
+    });
+
+    // Case 3: abort + "task.interrupted" present → NOT classified; disableThinking NOT called
+    it("abort + task.interrupted in message: not classified as reasoning timeout", async () => {
+      const p1 = createThinkingProvider("kimi-interrupted", true);
+      (p1.chat as ReturnType<typeof vi.fn>).mockRejectedValue(
+        new Error("task.interrupted abort signal received")
+      );
+
+      const chain = new FallbackChainProvider([p1]);
+      const health = ProviderHealthRegistry.getInstance();
+      const disableThinking = vi.spyOn(health, "disableThinking");
+
+      await expect(chain.chat("sys", [], [])).rejects.toThrow();
+
+      expect(disableThinking).not.toHaveBeenCalled();
+    });
+
+    // Case 4: abort + multi-provider → warning may log but disableThinking NOT called (single-provider guard)
+    it("abort + multi-provider: warning may log but disableThinking is NOT called", async () => {
+      const p1 = createThinkingProvider("kimi-multi", true);
+      (p1.chat as ReturnType<typeof vi.fn>).mockRejectedValue(
+        new Error("upstream proxy abort: request timed out")
+      );
+      const p2 = { ...createMockProvider({ text: "fallback-ok" }), name: "openai-backup" };
+
+      const chain = new FallbackChainProvider([p1, p2]);
+      const health = ProviderHealthRegistry.getInstance();
+      const disableThinking = vi.spyOn(health, "disableThinking");
+
+      // Multi-provider: falls through to p2 successfully, no disableThinking
+      const result = await chain.chat("sys", [], []);
+
+      expect(result.text).toBe("fallback-ok");
+      expect(disableThinking).not.toHaveBeenCalled();
+    });
+
+    // Case 5: abort + thinkingSupported: false → NOT classified; disableThinking NOT called
+    it("abort + thinkingSupported false: not classified as reasoning timeout", async () => {
+      const p1 = createThinkingProvider("openai-no-thinking", false);
+      (p1.chat as ReturnType<typeof vi.fn>).mockRejectedValue(
+        new Error("upstream proxy abort: request timed out")
+      );
+
+      const chain = new FallbackChainProvider([p1]);
+      const health = ProviderHealthRegistry.getInstance();
+      const disableThinking = vi.spyOn(health, "disableThinking");
+
+      await expect(chain.chat("sys", [], [])).rejects.toThrow();
+
+      expect(disableThinking).not.toHaveBeenCalled();
+    });
+
+    // Case 6: already disabled (idempotence) → disableThinking NOT called again
+    it("abort + already disabled: disableThinking is idempotent (not called again)", async () => {
+      const p1 = createThinkingProvider("kimi-idempotent", true);
+      (p1.chat as ReturnType<typeof vi.fn>).mockRejectedValue(
+        new Error("upstream proxy abort: request timed out")
+      );
+
+      const chain = new FallbackChainProvider([p1]);
+      const health = ProviderHealthRegistry.getInstance();
+
+      // Pre-disable thinking so isThinkingDisabled returns true
+      health.disableThinking("kimi-idempotent");
+
+      const disableThinking = vi.spyOn(health, "disableThinking");
+
+      await expect(chain.chat("sys", [], [])).rejects.toThrow();
+
+      // disableThinking must NOT have been called by the chain (already disabled guard)
+      expect(disableThinking).not.toHaveBeenCalled();
+    });
+  });
 });

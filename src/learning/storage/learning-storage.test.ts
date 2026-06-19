@@ -344,6 +344,76 @@ describe("LearningStorage", () => {
       const unprocessed = storage.getUnprocessedObservations(10);
       expect(unprocessed).toHaveLength(0);
     });
+
+    it("getUnprocessedObservations returns only unprocessed rows in ascending timestamp order and respects LIMIT", () => {
+      const db = storage.getDatabase()!;
+      const now = Date.now();
+
+      // Insert 5 unprocessed observations with spread timestamps
+      const unprocessedIds: string[] = [];
+      for (let i = 0; i < 5; i++) {
+        const id = randomUUID();
+        unprocessedIds.push(id);
+        db.prepare(
+          `INSERT INTO observations (id, type, session_id, tool_name, input, output, success, error_details, correction, timestamp, processed)
+           VALUES (?, 'tool_use', 'sess-index-test', 'tool', '{}', 'ok', 1, NULL, NULL, ?, 0)`
+        ).run(id, now + i * 1000);
+      }
+
+      // Insert 3 processed observations
+      for (let i = 0; i < 3; i++) {
+        db.prepare(
+          `INSERT INTO observations (id, type, session_id, tool_name, input, output, success, error_details, correction, timestamp, processed)
+           VALUES (?, 'tool_use', 'sess-index-test', 'tool', '{}', 'ok', 1, NULL, NULL, ?, 1)`
+        ).run(randomUUID(), now + i * 500);
+      }
+
+      // LIMIT 3 — should get the 3 earliest unprocessed rows
+      const results = storage.getUnprocessedObservations(3);
+      expect(results).toHaveLength(3);
+
+      // Must be in ascending timestamp order
+      for (let i = 1; i < results.length; i++) {
+        expect(Number(results[i]!.timestamp)).toBeGreaterThanOrEqual(Number(results[i - 1]!.timestamp));
+      }
+
+      // All returned rows must be unprocessed
+      for (const row of results) {
+        expect(row.processed).toBe(false);
+      }
+
+      // The 3 earliest unprocessed IDs should be returned
+      const expectedIds = unprocessedIds.slice(0, 3);
+      const returnedIds = results.map((r) => r.id);
+      expect(returnedIds).toEqual(expectedIds);
+    });
+
+    it("EXPLAIN QUERY PLAN for getUnprocessedObservations uses idx_observations_processed_timestamp on a large table", () => {
+      const db = storage.getDatabase()!;
+      const now = Date.now();
+
+      // Insert 1000+ rows so SQLite's query planner prefers the index
+      const insertStmt = db.prepare(
+        `INSERT INTO observations (id, type, session_id, tool_name, input, output, success, error_details, correction, timestamp, processed)
+         VALUES (?, 'tool_use', 'sess-index-eqp', 'tool', '{}', 'ok', 1, NULL, NULL, ?, ?)`
+      );
+      const insertMany = db.transaction(() => {
+        for (let i = 0; i < 1002; i++) {
+          insertStmt.run(randomUUID(), now + i * 100, i % 3 === 0 ? 1 : 0);
+        }
+      });
+      insertMany();
+
+      const plan = db
+        .prepare("EXPLAIN QUERY PLAN SELECT * FROM observations WHERE processed = 0 ORDER BY timestamp ASC LIMIT ?")
+        .all(10) as Array<{ detail: string }>;
+
+      const usesIndex = plan.some((step) =>
+        step.detail?.includes("idx_observations_processed_timestamp")
+      );
+
+      expect(usesIndex).toBe(true);
+    });
   });
 
   describe("Error Pattern Operations", () => {

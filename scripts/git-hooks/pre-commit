@@ -1,0 +1,8 @@
+#!/bin/sh
+# Zero-dep pre-commit guard. Lints staged TS under src/. Bypass with `git commit --no-verify`.
+staged=$(git diff --cached --name-only --diff-filter=ACM | grep -E '^src/.*\.ts$' || true)
+[ -z "$staged" ] && exit 0
+echo "[pre-commit] eslint on staged src/*.ts…"
+npx --no-install eslint $staged || {
+  echo "[pre-commit] lint failed — fix or commit with --no-verify"; exit 1;
+}

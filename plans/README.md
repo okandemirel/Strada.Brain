@@ -5,6 +5,12 @@ Execute in the order below unless dependencies say otherwise. Each executor:
 read the plan fully before starting, honor its STOP conditions, and update
 your row when done.
 
+> **Round 2 (2026-06-19, planned at commit `cc8f814`)** added plans **017–030**
+> from a fresh deep audit after the +302-commit origin/main merge. Round 1
+> (001–016) is all DONE. See the **"## Round 2"** section at the bottom for the
+> 017–030 status table, dependency order, and this round's rejected/deferred
+> findings.
+
 ## Execution order & status
 
 | Plan | Title | Priority | Effort | Depends on | Status |
@@ -182,3 +188,71 @@ Real findings with no plan yet (candidates for a future `improve reconcile` run)
 - Direction options not selected: webhook CRUD API (DIR-02), vault write
   symmetry for Unity/Self vaults (DIR-03), shadow-artifact promotion lifecycle
   + approval UI (DIR-04).
+
+---
+
+## Round 2 (2026-06-19, planned at commit `cc8f814`)
+
+Fresh deep audit (8 parallel category agents) after the +302-commit origin/main
+merge (v4.2.292 → v4.2.300). Every finding below was re-verified against live
+code by the advisor before planning. Scope chosen by the maintainer: **complete,
+non-band-aid solutions** for all confirmed findings.
+
+### Execution order & status
+
+| Plan | Title | Priority | Effort | Depends on | Status |
+|------|-------|----------|--------|------------|--------|
+| 017 | Patch web-portal HIGH advisories + add CI audit gate | P1 | S | — | DONE (66f8aca; portal audit 0 high, 751 tests pass) |
+| 018 | Add `(processed,timestamp)` index for unprocessed-observation scans | P2 | S | — | DONE (3edef52; EXPLAIN confirms index used, 61 tests pass) |
+| 019 | Characterization tests: fallback-chain reasoning-timeout detection | P2 | S | — | DONE (1348b5a; 6 cases, 28 tests pass, source untouched) |
+| 020 | Memoize provider snapshots within a routing decision (O(N²)→O(N)) | P2 | S–M | — | DONE (8749fdf; ≤N snapshot calls, 21 existing tests green = behavior preserved) |
+| 021 | Zero-dep pre-commit lint guard + `.editorconfig` | P2 | S–M | — | DONE (86d7994; native hook, ZERO new deps, pre-push preserved) |
+| 022 | Drop web-channel `script-src 'unsafe-inline'` via hashed inline script | P2 | M | — | DONE (4588285; hash verified vs source+built index, drift-guard test, 39 tests) |
+| 023 | Resilient provider-snapshot DB load (per-row guard) | P3 | S | — | DONE (f6ee304; per-row guard, corrupt row no longer drops siblings, 32 tests) |
+| 024 | Characterization tests for 11 untested high-risk modules | P2 | L | — | DONE (11 commits 28dde78..648dc84; 312 tests, no source touched; surfaced personality-routes `isAutonomousMode` type-seam bug → follow-up below) |
+| 025 | Batch `archiveOldEntries` in a single transaction | P3 | M | — | DONE (1b0ea36; one transaction not N, atomic, 43 tests, non-SQLite fallback) |
+| 026 | Windows CI: run lint + cross-platform path/security tests | P3 | M | — | DONE (0ceb9e9; lint + path-policy/auth/config on Windows, 197 tests pass locally) |
+| 027 | Extract shared channel message-queue + streaming-buffer cores | P3 | M | 024 | DONE (a5122d1·9e3159c·91cd1fc·2e449cd·0d6497f; MessageQueue+StreamingBuffer, Discord+Slack queue, Discord+WhatsApp streaming; revise-2 fixed M7 HOL white-box test for QueueEntry shape — behavior proven in message-queue.test.ts; src/channels 486 tests green) |
+| 028 | Decompose `config.ts` (first god-file) into types + schema | P3 | L | 024 | DONE (3db098c·15c3642·9b9fc5a; config.ts 3684→1695 = −54%, types+schema extracted behind unchanged re-exports, diverged-orphan EnvVarName fixed to 300 members, whole-repo typecheck green, snapshot 75 tests) |
+| 029 | Remove dashboard → learning-internals layering violation | P4 | S | — | DONE (e049949; projectScopeMatches → leaf project-scope.ts, dashboard repointed, zero-import leaf = no cycle, 31 tests) |
+| 030 | Docs discoverability + skills-lock decision + env-var coverage | P4 | S | — | DONE (4e0ae45·4e3be7f·66b2cac·b6d5ba5; skills-lock committed, README CHANGELOG+skill links, env-coverage script — revise fixed parser to count commented vars: 322 documented, surfaced 4 genuinely-undocumented vars) |
+
+Status values: TODO | IN PROGRESS | DONE | BLOCKED (reason) | REJECTED (rationale)
+
+### Dependency notes (Round 2)
+
+- **027 and 028 depend on 024** — characterization tests are the safety net before refactoring channels / splitting config.
+- **020 and 023** both touch provider files but disjoint ones (`provider-router.ts` vs `model-intelligence.ts`) — safe in parallel.
+- **017 / 018 / 019 / 021 / 029 / 030** are mutually independent — fully parallelizable.
+- Recommended order: **017** (security, free) → **018·019·020·021** (quick, independent) → **022·023** → **024** → **025·026** → **027·028** (after 024) → **029·030** anytime.
+
+### Findings considered and rejected / downgraded (Round 2 — do not re-audit)
+
+- **GraphCanvas "rebuilds connection/adjacency maps every render"**: REJECTED — now `useMemo`'d (`web-portal/src/pages/vaults/graph/GraphCanvas.tsx:350-367`); the Round-1 lead has been fixed upstream.
+- **"`JSON.parse(instinct.action)` unguarded" (/api/chain-resilience)**: REJECTED — it is inside a `try` (`server-system-routes.ts:541`).
+- **"`/api/logs` read-time sanitize-then-parse is unsafe"**: REJECTED — already removed; entries are sanitized at write time and served as-is (`server-system-routes.ts:332-343`, documented in the comment).
+- **"ObsidianVault EventEmitter listener leak"**: REJECTED — `onUpdate` returns an unsubscribe fn (`obsidian-vault.ts:320-323`); `dispose()` closes the store.
+- **"Provider `baseUrl` SSRF" (openai/ollama)**: DOWNGRADED — `baseUrl` is operator/config-controlled, not an untrusted-request boundary; servers bind 127.0.0.1. Optional minor hardening (scheme validation / non-https warn) only — not planned.
+- **"`/api/settings/voice` chatId IDOR"**: DOWNGRADED — auth-gated + 127.0.0.1-bound + single-user-by-design; cross-chatId access is the same user's own scopes; voice config only. Not planned.
+- **"Dashboard error messages leak internals" (server-provider-routes)**: NOTED LOW — secret-sanitizer covers logs; internal detail to a localhost client is low value. Not planned this round.
+- **"WS rate-limit O(n) array" (websocket-server.ts:260)**: REJECTED as a perf finding — bounded to ≤ `WS_RATE_LIMIT_MAX_MESSAGES` (~100); a micro-optimization, not an algorithmic win.
+- **"markdown/highlight.js bundle shipped to all"**: DOWNGRADED — already split into a `markdown-vendor` chunk (`web-portal/vite.config.ts:22-33`); route-level lazy-load is a minor follow-up.
+- **"Marketplace endpoints not wired" (DIR-09)**: REJECTED — `/api/skills/registry` + `/api/skills/install` ARE wired (`server-skills-routes.ts`, dispatched at `server.ts:696`); residual is only a portal marketplace UI tab + a seed registry, far smaller than reported.
+- **Provider `as unknown as` double-casts (~5 provider source files: kimi/deepseek/together/fireworks/minimax)**: DEFERRED (P4) — latent type-safety smell, not an active bug; M effort + MED risk (runtime validation could reject valid responses). Revisit with a shared Zod response-validation helper (zod is already a dep).
+- **botbuilder → uuid (7 moderate)**: ACCEPT (carried from Round 1) — optional Teams dep, breaking to fix, root high-gate passes.
+
+### Confirmed but not planned this round (future, needs its own dedicated plan)
+
+- **God-file decomposition beyond config.ts**: `orchestrator.ts` (7087 — split LAST, highest risk), `bootstrap.ts` (1926, stage-DAG), `learning-storage.ts` (2621, schema/queries/stats), `web/channel.ts` (2123), `dashboard/server.ts` (2036). Each needs plan-024-style characterization tests first; plan 028 establishes the safe pattern on `config.ts`.
+- **Self-host `@huggingface/transformers` WASM** to drop `cdn.jsdelivr.net` from the web CSP entirely + tighten `style-src` off `unsafe-inline` (follow-up to plan 022).
+- **Remaining streaming-buffer channel migrations** (telegram/whatsapp/web/cli) after plan 027.
+- **README translation re-sync** (7 languages) to current English + section-parity CI check — needs a translator (content work).
+- **Direction options** (not defects — maintainer's call): outbound webhook CRUD (inbound infra exists), multi-channel notification fan-out (config field exists, single-sink today), bulk vault ops, OpenAPI spec for the ~60 dashboard routes, Unity/Self vault write symmetry. Each is a design-spike if pursued.
+
+### Follow-ups surfaced DURING execution (new, small — candidates for a future round)
+
+- **`server-personality-routes` `isAutonomousMode` type-seam bug** (found by plan 024): `resolveAutonomousModeWithDefault` calls `store.isAutonomousMode(chatId)` but `RouteContext.userProfileStore` doesn't declare the method → a conforming store without it returns 500 at runtime on `GET /api/user/autonomous`. Real latent bug; fix = add the method to the interface. S effort.
+- **4 undocumented env vars** (found by plan 030's `audit:env`): `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `TEAMS_APP_TENANT_ID`, `TEAMS_APP_TYPE` are in `EnvVarName` but absent from `.env.example`; also 26 vars in `.env.example` not yet in the `EnvVarName` union. S effort doc/type sync.
+- **`StreamingBuffer.unref()` parity** (plan 027): WhatsApp's original throttle timer called `.unref()`; `StreamingBuffer` doesn't — a negligible process-exit-timing delta. Add optional `unref` to `StreamingBuffer`. XS effort.
+- **Remaining streaming-channel migrations** (plan 027): telegram / web / cli still hand-roll streaming accumulators — migrate to `StreamingBuffer`. S–M.
+- **Pre-existing lint warning**: `src/channels/discord/bot.test.ts:343` "Unused eslint-disable directive" (predates round 2; not introduced here). Trivial cleanup.
