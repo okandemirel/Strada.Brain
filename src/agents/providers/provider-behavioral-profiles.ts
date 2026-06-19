@@ -123,6 +123,11 @@ export const WORKLOAD_DIMENSION_WEIGHTS: Readonly<Record<WorkloadType, readonly 
   ],
 };
 
+/** The canonical list of workload types, derived from the weight table (the
+ *  single source of truth). Reuse this instead of re-listing the union members
+ *  so a new workload can never silently drift between consumers. */
+export const WORKLOAD_TYPES = Object.keys(WORKLOAD_DIMENSION_WEIGHTS) as WorkloadType[];
+
 // ---------------------------------------------------------------------------
 // Helper — Build frozen profiles from compact tuples
 // ---------------------------------------------------------------------------

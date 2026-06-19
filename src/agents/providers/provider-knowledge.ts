@@ -325,7 +325,7 @@ function deriveWorkloadScores(snapshot: {
   featureTags: readonly string[];
   capabilities: ProviderIntelligenceSnapshot["capabilities"];
   economics: ProviderIntelligenceSnapshot["economics"];
-}): Record<ProviderWorkload, number> {
+}, behavioralProfile?: BehavioralProfile): Record<ProviderWorkload, number> {
   const features = new Set(snapshot.featureTags.map((tag) => tag.toLowerCase()));
   const context = normalizeContextWindow(snapshot.contextWindow);
   const thinking = snapshot.capabilities.supportsThinking ? 1 : 0.45;
@@ -353,9 +353,10 @@ function deriveWorkloadScores(snapshot: {
     coordination: clamp(0.25 * streaming + 0.20 * speed + 0.20 * toolCalling + 0.20 * cheapness + 0.15 * context),
   };
 
-  const profile = snapshot.providerName
-    ? getBaselineProfile(snapshot.providerName)
-    : undefined;
+  // Tier 2 (dynamic, telemetry-blended) profile wins when supplied; otherwise
+  // the Tier 1 static baseline. Either way the scoring math below is identical.
+  const profile = behavioralProfile
+    ?? (snapshot.providerName ? getBaselineProfile(snapshot.providerName) : undefined);
 
   if (!profile) {
     // Fallback: unknown provider — pure feature-flag heuristics.
@@ -390,6 +391,9 @@ export function getProviderIntelligenceSnapshot(
   modelIntelligence?: ModelIntelligenceLookup,
   providerCapabilities?: ProviderCapabilities | ProviderCapabilitySnapshot,
   providerLabel?: string,
+  /** Tier 2 dynamic profile override; when supplied it replaces the static
+   *  baseline as the behavioral source for scoring and strength enrichment. */
+  behavioralProfile?: BehavioralProfile,
 ): ProviderIntelligenceSnapshot {
   const modelInfo = modelId ? modelIntelligence?.getModelInfo(modelId) : undefined;
   const contextWindow =
@@ -422,10 +426,10 @@ export function getProviderIntelligenceSnapshot(
 
   // Enrich strengths with behavioral profile best workloads
   const strengths = buildStrengths(contextWindow, capabilities, featureTags);
-  const behavioralProfile = getBaselineProfile(providerName);
-  if (behavioralProfile?.bestWorkloads?.length) {
+  const resolvedProfile = behavioralProfile ?? getBaselineProfile(providerName);
+  if (resolvedProfile?.bestWorkloads?.length) {
     const existingSet = new Set(strengths.map((s) => s.toLowerCase()));
-    for (const workload of behavioralProfile.bestWorkloads) {
+    for (const workload of resolvedProfile.bestWorkloads) {
       const label = `Best for ${workload}`;
       if (!existingSet.has(label.toLowerCase())) {
         strengths.push(label);
@@ -458,7 +462,7 @@ export function getProviderIntelligenceSnapshot(
 
   return {
     ...snapshot,
-    workloadScores: deriveWorkloadScores(snapshot),
+    workloadScores: deriveWorkloadScores(snapshot, behavioralProfile),
   };
 }
 

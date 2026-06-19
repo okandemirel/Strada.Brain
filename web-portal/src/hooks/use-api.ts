@@ -670,6 +670,44 @@ export function useAgentActivity(identityQuery: string | null) {
   })
 }
 
+export interface ModelWorkloadRankingEntry {
+  provider: string
+  model?: string
+  key: string
+  score: number
+  confidence: number
+  drift: number
+  observationCount: number
+}
+
+export interface DynamicProfileSnapshotEntry {
+  key: string
+  provider: string
+  model?: string
+  scores: Record<string, number>
+  confidence: Record<string, number>
+  observationCount: number
+  updatedAt: number
+}
+
+export interface ModelScoresResponse {
+  available: boolean
+  workloads: Record<string, ModelWorkloadRankingEntry[]>
+  profiles: DynamicProfileSnapshotEntry[]
+}
+
+/**
+ * GET /api/models/scores -- Tier 2 dynamic, telemetry-blended per-model scores
+ * grouped into task leaderboards. De-supported models are pruned server-side.
+ */
+export function useModelScores() {
+  return useQuery<ModelScoresResponse>({
+    queryKey: ['model-scores'],
+    queryFn: () => fetchApi<ModelScoresResponse>('/api/models/scores'),
+    refetchInterval: 30_000,
+  })
+}
+
 /** GET /api/system/boot */
 export function useBootReport() {
   return useQuery<BootReportResponse>({

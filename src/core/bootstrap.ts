@@ -927,8 +927,10 @@ async function bootstrapImpl(
     disposables.push("soulLoader", () => soulLoader.shutdown());
   }
 
-  const { modelIntelligence, providerRouter, consensusManager, confidenceEstimator } =
-    await initializeRuntimeIntelligenceStage({
+  const {
+    modelIntelligence, providerRouter, consensusManager, confidenceEstimator,
+    dynamicProfiles, dynamicProfilePersistence,
+  } = await initializeRuntimeIntelligenceStage({
       config,
       logger,
       providerManager,
@@ -936,6 +938,22 @@ async function bootstrapImpl(
     });
   if (modelIntelligence) {
     disposables.push("modelIntelligence", () => modelIntelligence.shutdown());
+  }
+  // Hoisted so the clean-shutdown handler (createShutdownHandler, below) can clear
+  // it too — the disposables stack only fires on the bootstrap-FAILURE path.
+  let dynamicProfilesFlushInterval: ReturnType<typeof setInterval> | undefined;
+  if (dynamicProfiles) {
+    // Periodically persist the telemetry-blended profiles so learned per-model
+    // scores survive a restart. Unref'd so it never holds the process open.
+    dynamicProfilesFlushInterval = setInterval(() => { void dynamicProfiles.flush(); }, 60_000);
+    dynamicProfilesFlushInterval.unref?.();
+    disposables.push("dynamicProfilesFlush", () => {
+      if (dynamicProfilesFlushInterval) clearInterval(dynamicProfilesFlushInterval);
+    });
+    disposables.push("dynamicProfiles", async () => {
+      await dynamicProfiles.flush();
+      dynamicProfilePersistence?.close();
+    });
   }
 
   const { supervisorBrain } = initializeSupervisorStage({
@@ -1689,6 +1707,9 @@ async function bootstrapImpl(
       toolRegistry,
       identityManager,
       modelIntelligence,
+      dynamicProfiles,
+      dynamicProfilePersistence,
+      dynamicProfilesFlushInterval,
       uptimeInterval,
       heartbeatLoop,
       digestReporter: digestReporterInstance,

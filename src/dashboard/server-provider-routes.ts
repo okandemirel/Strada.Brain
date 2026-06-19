@@ -11,10 +11,12 @@
  *   POST /api/models/refresh
  *   GET  /api/agent-activity
  *   POST /api/routing/preset
+ *   GET  /api/models/scores
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { projectScopeMatches } from "../learning/project-scope.js";
+import { WORKLOAD_TYPES as WORKLOAD_TYPE_LIST } from "../agents/providers/provider-behavioral-profiles.js";
 import {
   DASHBOARD_IDENTITY_MAX_LENGTH,
   isDashboardIdentityPartTooLong,
@@ -27,6 +29,11 @@ import {
 } from "./server-types.js";
 
 const MODEL_NAME_RE = /^[a-zA-Z0-9._:\-/]{1,128}$/;
+
+/** The task workloads the dynamic profile leaderboards group models by. Derived
+ *  from the backend single source of truth (WORKLOAD_DIMENSION_WEIGHTS keys) so
+ *  the route's validation/default list can never drift from the routing engine. */
+const WORKLOAD_TYPES: ReadonlySet<string> = new Set(WORKLOAD_TYPE_LIST);
 
 /**
  * Try to handle provider-related routes. Returns true if the route was handled.
@@ -375,6 +382,48 @@ export function handleProviderRoutes(
       ctx.providerRouter!.setPreset(preset as "budget" | "balanced" | "performance");
       sendJson(res, { success: true, preset });
     });
+    return true;
+  }
+
+  // GET /api/models/scores -- Tier 2 dynamic per-model scores + task-grouped
+  // leaderboards (telemetry-blended). Optional ?workload=<type> for one group.
+  if (method === "GET" && (url === "/api/models/scores" || url.startsWith("/api/models/scores?"))) {
+    const router = ctx.providerRouter;
+    if (!router?.getDynamicModelRankings || !router.getDynamicProfileSnapshots) {
+      sendJson(res, { available: false, workloads: {}, profiles: [] });
+      return true;
+    }
+    const rankFor = router.getDynamicModelRankings.bind(router);
+    const snapshots = router.getDynamicProfileSnapshots.bind(router);
+    const query = new URL(req.url ?? "", `http://${req.headers.host ?? "127.0.0.1"}`).searchParams;
+    const requested = query.get("workload");
+    const workloads = requested && WORKLOAD_TYPES.has(requested)
+      ? [requested]
+      : [...WORKLOAD_TYPES];
+
+    const respond = (liveModels?: ReadonlyMap<string, ReadonlySet<string>>): void => {
+      const grouped: Record<string, ReturnType<typeof rankFor>> = {};
+      for (const w of workloads) {
+        grouped[w] = rankFor(w, liveModels);
+      }
+      sendJson(res, { available: true, workloads: grouped, profiles: snapshots() });
+    };
+
+    // Build provider → supported-model-ids so de-supported models are pruned from
+    // the leaderboards. The .catch is scoped to the discovery call ONLY (resolving
+    // to undefined = no pruning); respond() is then called exactly once, so a throw
+    // inside respond() can't trigger a second terminal send (ERR_HTTP_HEADERS_SENT).
+    const liveModels: Promise<ReadonlyMap<string, ReadonlySet<string>> | undefined> =
+      ctx.providerManager?.listAvailableWithModels
+        ? ctx.providerManager.listAvailableWithModels().then((entries) => {
+            const live = new Map<string, ReadonlySet<string>>();
+            for (const entry of entries) {
+              live.set(entry.name.toLowerCase().trim(), new Set((entry.models ?? []).map((m) => m.trim())));
+            }
+            return live;
+          }).catch(() => undefined)
+        : Promise.resolve(undefined);
+    void liveModels.then(respond);
     return true;
   }
 

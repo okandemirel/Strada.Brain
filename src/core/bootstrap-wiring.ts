@@ -158,6 +158,12 @@ export interface ShutdownOptions {
   toolRegistry?: ToolRegistry;
   identityManager?: IdentityStateManager;
   modelIntelligence?: import("../agents/providers/model-intelligence.js").ModelIntelligenceService;
+  /** Tier 2 dynamic behavioral profile store — flushed on shutdown so learned per-model scores survive a restart. */
+  dynamicProfiles?: { flush(): Promise<void> };
+  /** SQLite handle backing the dynamic profiles — closed on shutdown to release the fd/WAL. */
+  dynamicProfilePersistence?: { close(): void };
+  /** Periodic flush timer for the dynamic profiles — cleared on shutdown. */
+  dynamicProfilesFlushInterval?: ReturnType<typeof setInterval>;
   uptimeInterval?: ReturnType<typeof setInterval>;
   heartbeatLoop?: HeartbeatLoop;
   digestReporter?: DigestReporter;
@@ -353,6 +359,19 @@ export function createShutdownHandler(options: ShutdownOptions): () => Promise<v
 
       if (options.modelIntelligence) {
         await runStep("modelIntelligence", () => options.modelIntelligence!.shutdown());
+      }
+
+      // Tier 2 dynamic profiles: stop the flush timer, persist the final learned
+      // state, then close the SQLite handle — so per-model scores survive a restart
+      // and the fd/WAL is released on a clean stop (mirrors daemon.db / model-intelligence).
+      if (options.dynamicProfilesFlushInterval) {
+        clearInterval(options.dynamicProfilesFlushInterval);
+      }
+      if (options.dynamicProfiles) {
+        await runStep("dynamicProfiles", () => options.dynamicProfiles!.flush());
+      }
+      if (options.dynamicProfilePersistence) {
+        await runStep("dynamicProfilePersistence", () => options.dynamicProfilePersistence!.close());
       }
 
       if (dashboard) {
