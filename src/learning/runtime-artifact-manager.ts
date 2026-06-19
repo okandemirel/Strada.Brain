@@ -13,6 +13,8 @@ import type {
 } from "./types.js";
 import { createRuntimeArtifactId } from "./types.js";
 import type { LearningStorage } from "./storage/learning-storage.js";
+import { projectScopeMatches } from "./project-scope.js";
+export { projectScopeMatches } from "./project-scope.js";
 
 const PROMOTION_MIN_SAMPLES = 5;
 const PROMOTION_MIN_CLEAN_RATE = 0.8;
@@ -45,18 +47,6 @@ export function createProjectScopeFingerprint(projectPath: string | null | undef
     return undefined;
   }
   return normalizeArtifactFingerprint(`root=${normalizedPath}`);
-}
-
-export function projectScopeMatches(
-  artifactFingerprint: string | null | undefined,
-  runtimeFingerprint: string | null | undefined,
-): boolean {
-  const left = artifactFingerprint?.trim();
-  const right = runtimeFingerprint?.trim();
-  if (!left || !right) {
-    return false;
-  }
-  return left === right || left.startsWith(right) || right.startsWith(left);
 }
 
 export class RuntimeArtifactManager {
