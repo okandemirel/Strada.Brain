@@ -87,15 +87,12 @@ describe("SlackChannel queue behaviour (characterization)", () => {
     pFirst.catch(() => {});
     pSecond.catch(() => {});
 
-    // Back off the first item so it is not ready.
+    // Back off the first item by setting retryAfter directly on the queue entry.
+    // After delegation, messageQueue returns QueueEntry<T>[] and entry.retryAfter
+    // is the field checked by MessageQueue.processQueue().
     const arr = internal.messageQueue as Array<Record<string, unknown>>;
     const firstEntry = arr[0]!;
-    // Support both pre-delegation flat layout and post-delegation QueueEntry layout.
-    if ("retryAfter" in firstEntry || !("item" in firstEntry)) {
-      firstEntry["retryAfter"] = Date.now() + 60_000;
-    } else {
-      (firstEntry["item"] as Record<string, unknown>)["retryAfter"] = Date.now() + 60_000;
-    }
+    firstEntry["retryAfter"] = Date.now() + 60_000;
 
     await internal.processMessageQueue();
 

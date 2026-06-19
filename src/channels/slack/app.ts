@@ -24,6 +24,7 @@ import { chunkText } from "../chunk-text.js";
 import { sanitizeError } from "../../security/secret-sanitizer.js";
 import { downloadMedia, mimeToAttachmentType, validateMediaAttachment, validateMagicBytes } from "../../utils/media-processor.js";
 import { isAllowedBySingleIdPolicy } from "../../security/access-policy.js";
+import { MessageQueue } from "../message-queue.js";
 
 interface SlackConfig {
   botToken: string;
@@ -55,10 +56,11 @@ interface StreamingMessage {
   isFinalized: boolean;
 }
 
+/** Payload-only queue message.  resolve/reject/retries/retryAfter are now
+ * managed by the shared MessageQueue infrastructure. */
 interface QueuedMessage {
   id: string;
   type: "text" | "markdown" | "blocks" | "ephemeral" | "thread" | "file" | "update";
-  priority: number;
   channelId: string;
   content?: string;
   blocks?: KnownBlock[];
@@ -74,11 +76,6 @@ interface QueuedMessage {
     messageTs: string;
     blocks?: KnownBlock[];
   };
-  resolve: (value: unknown) => void;
-  reject: (error: Error) => void;
-  retries: number;
-  retryAfter?: number;
-  lastAttempt?: number;
 }
 
 // Slack message event type
@@ -143,12 +140,41 @@ export class SlackChannel implements IChannelAdapter {
   // Streaming messages
   private readonly streamingMessages: Map<string, StreamingMessage> = new Map();
 
-  // Message queue for rate limit handling
-  private messageQueue: QueuedMessage[] = [];
-  private queueProcessing = false;
+  /** Shared queue infrastructure — priority ordering, HOL-skip, jitter retry. */
+  private readonly queue: MessageQueue<QueuedMessage> = new MessageQueue<QueuedMessage>({
+    maxRetries: MAX_RETRIES,
+    baseDelayMs: RETRY_BASE_DELAY_MS,
+    maxDelayMs: MAX_RETRY_DELAY_MS,
+    batchSize: MESSAGE_BATCH_SIZE,
+    ordering: "priority",
+    jitter: true,
+    skipBackedOff: true,
+    rateLimitBackoffMs: RATE_LIMIT_BACKOFF_MS,
+    processItem: async (msg) => {
+      try {
+        return await this.processQueuedMessage(msg);
+      } catch (error) {
+        if (this.isRateLimitError(error)) {
+          const retryAfter = this.extractRetryAfter(error) ?? RATE_LIMIT_BACKOFF_MS;
+          this.logger.warn("Slack rate limited", { retryAfter });
+        }
+        throw error;
+      }
+    },
+    isRateLimitError: (err) => this.isRateLimitError(err),
+    extractRetryAfter: (err) => this.extractRetryAfter(err),
+  });
   private queueInterval: ReturnType<typeof setInterval> | null = null;
-  private rateLimited = false;
-  private rateLimitResetTime = 0;
+
+  /** Backward-compatible accessor used by tests. */
+  protected get messageQueue(): MessageQueue<QueuedMessage>["entries"] {
+    return this.queue.entries;
+  }
+
+  /** Backward-compatible alias used by characterization tests. */
+  protected processMessageQueue(): Promise<void> {
+    return this.queue.processQueue();
+  }
 
   // Config
   private readonly config: SlackConfig;
@@ -247,10 +273,7 @@ export class SlackChannel implements IChannelAdapter {
     // Reject any still-queued messages. Their enqueueMessage() promise only
     // settles inside processMessageQueue, which we just stopped by clearing
     // queueInterval — without this every awaiting caller hangs forever.
-    const queued = this.messageQueue.splice(0, this.messageQueue.length);
-    for (const message of queued) {
-      message.reject(new Error("Channel disconnected"));
-    }
+    this.queue.rejectAll("Channel disconnected");
 
     if (this.app) {
       // @ts-expect-error - accessing internal property
@@ -289,7 +312,7 @@ export class SlackChannel implements IChannelAdapter {
 
   private startQueueProcessor(): void {
     this.queueInterval = setInterval(() => {
-      this.processMessageQueue().catch((error) => {
+      this.queue.processQueue().catch((error) => {
         this.logger.error("Queue processor error", {
           error: sanitizeError(error),
         });
@@ -300,93 +323,16 @@ export class SlackChannel implements IChannelAdapter {
   private enqueueMessage(
     type: QueuedMessage["type"],
     channelId: string,
-    data: Omit<
-      Omit<QueuedMessage, "id" | "type" | "channelId" | "priority" | "retries">,
-      "resolve" | "reject"
-    >,
+    data: Omit<QueuedMessage, "id" | "type" | "channelId">,
     priority: number = 5,
   ): Promise<unknown> {
-    return new Promise((resolve, reject) => {
-      const message: QueuedMessage = {
-        ...data,
-        id: `msg_${randomUUID().replaceAll("-", "").slice(0, 12)}`,
-        type,
-        channelId,
-        priority,
-        retries: 0,
-        resolve,
-        reject,
-      };
-
-      // Insert by priority
-      const insertIndex = this.messageQueue.findIndex((m) => m.priority > priority);
-      if (insertIndex === -1) {
-        this.messageQueue.push(message);
-      } else {
-        this.messageQueue.splice(insertIndex, 0, message);
-      }
-    });
-  }
-
-  private async processMessageQueue(): Promise<void> {
-    if (this.queueProcessing || this.messageQueue.length === 0) return;
-    if (this.rateLimited && Date.now() < this.rateLimitResetTime) return;
-
-    this.queueProcessing = true;
-    this.rateLimited = false;
-
-    // Process batch of messages
-    const now = Date.now();
-    const processedIds: string[] = [];
-    let processedCount = 0;
-
-    // Process up to MESSAGE_BATCH_SIZE *ready* messages, advancing past backed-off
-    // entries instead of burning a fixed front slot on them — a run of backed-off
-    // heads otherwise starves ready messages behind them (head-of-line blocking).
-    // Iterate a snapshot so a concurrent enqueue/disconnect can't disturb the walk;
-    // the removal below keys off message id.
-    for (const message of [...this.messageQueue]) {
-      if (processedCount >= MESSAGE_BATCH_SIZE) break;
-
-      // Skip messages waiting for exponential backoff retry — advance to the next.
-      if (message.retryAfter && now < message.retryAfter) {
-        continue;
-      }
-
-      processedCount++;
-      try {
-        await this.processQueuedMessage(message);
-        processedIds.push(message.id);
-        message.resolve(undefined);
-      } catch (error) {
-        if (this.isRateLimitError(error)) {
-          const retryAfter = this.extractRetryAfter(error) || RATE_LIMIT_BACKOFF_MS;
-          this.rateLimited = true;
-          this.rateLimitResetTime = Date.now() + retryAfter;
-          this.logger.warn("Slack rate limited", { retryAfter });
-          break;
-        }
-
-        // Retry with exponential backoff
-        message.retries++;
-        if (message.retries >= MAX_RETRIES) {
-          message.reject(error instanceof Error ? error : new Error(String(error)));
-          processedIds.push(message.id);
-        } else {
-          // Set retryAfter timestamp with exponential backoff + jitter
-          const delay = Math.min(
-            RETRY_BASE_DELAY_MS * Math.pow(2, message.retries - 1),
-            MAX_RETRY_DELAY_MS,
-          );
-          const jitter = Math.random() * delay * 0.1;
-          message.retryAfter = Date.now() + delay + jitter;
-        }
-      }
-    }
-
-    // Remove processed messages
-    this.messageQueue = this.messageQueue.filter((m) => !processedIds.includes(m.id));
-    this.queueProcessing = false;
+    const message: QueuedMessage = {
+      ...data,
+      id: `msg_${randomUUID().replaceAll("-", "").slice(0, 12)}`,
+      type,
+      channelId,
+    };
+    return this.queue.enqueue(message, priority);
   }
 
   private async processQueuedMessage(msg: QueuedMessage): Promise<void> {
