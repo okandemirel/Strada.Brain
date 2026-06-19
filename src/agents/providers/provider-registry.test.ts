@@ -158,7 +158,7 @@ describe("createProvider", () => {
       // The override flows through, but OpencodeProvider strips the "opencode/" namespace
       // the API rejects — so the bare id reaches .model (not the hardcoded default).
       expect(model).toBe("grok-code");
-      expect(model).not.toBe("opencode/qwen-3-coder-480b");
+      expect(model).not.toBe("qwen3.6-plus");
     });
 
     it("defaults opencode .baseUrl to Zen when no override is supplied", () => {
@@ -178,7 +178,7 @@ describe("createProvider", () => {
     });
 
     it.each([
-      ["deepseek", "deepseek-v4-pro"],
+      ["deepseek", "deepseek-v4-flash"],
       ["kimi", "kimi-k2.6"],
       ["qwen", "qwen-3.6-plus"],
       ["minimax", "MiniMax-M2.5"],

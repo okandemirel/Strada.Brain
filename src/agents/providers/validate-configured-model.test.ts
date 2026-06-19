@@ -14,16 +14,16 @@ describe("validateConfiguredModel", () => {
 
   it("returns ok:false with a live corrected model and a reason naming provider + stale id when stale", () => {
     const live = ["opencode/grok-code", "opencode/glm-5"];
-    const result = validateConfiguredModel("opencode", "opencode/qwen-3-coder-480b", live);
+    const result = validateConfiguredModel("opencode", "opencode/stale-model-retired", live);
     expect(result.ok).toBe(false);
     expect(result.corrected).toBeDefined();
     expect(live).toContain(result.corrected!);
-    expect(result.reason).toContain("opencode/qwen-3-coder-480b");
+    expect(result.reason).toContain("opencode/stale-model-retired");
     expect(result.reason).toContain("opencode");
   });
 
   it("returns ok:true when the live list is empty (discovery unavailable — cannot validate)", () => {
-    const result = validateConfiguredModel("opencode", "opencode/qwen-3-coder-480b", []);
+    const result = validateConfiguredModel("opencode", "opencode/stale-model-retired", []);
     expect(result.ok).toBe(true);
     expect(result.corrected).toBeUndefined();
     expect(result.reason).toBeUndefined();
@@ -42,7 +42,7 @@ describe("validateConfiguredModel", () => {
   });
 
   it("prefers a same provider/-prefix live model when no closer family match exists", () => {
-    const result = validateConfiguredModel("opencode", "opencode/qwen-3-coder-480b", [
+    const result = validateConfiguredModel("opencode", "opencode/stale-model-retired", [
       "anthropic/claude-x",
       "opencode/glm-5",
       "openai/gpt-5",

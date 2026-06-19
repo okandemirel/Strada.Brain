@@ -91,7 +91,7 @@ export type OpencodePlatform = 'zen' | 'go'
 // are trivial to adjust in one place.
 export const OPENCODE_PLATFORM_BASE_URLS: Record<OpencodePlatform, string> = {
   zen: 'https://opencode.ai/zen/v1',
-  go: 'https://opencode.ai/go',
+  go: 'https://opencode.ai/go/v1',
 }
 
 export const DEFAULT_OPENCODE_PLATFORM: OpencodePlatform = 'zen'

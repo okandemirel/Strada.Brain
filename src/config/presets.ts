@@ -282,7 +282,7 @@ export const PROVIDER_MODEL_OPTIONS: Record<string, Array<{
     { model: "accounts/fireworks/models/llama4-maverick-instruct-basic", label: "Llama 4 Maverick", tier: "budget", inputPer1M: 0.22, outputPer1M: 0.88, contextWindow: "1M", notes: "Fast Fireworks inference. Competitive pricing." },
   ],
   opencode: [
-    { model: "opencode/qwen-3-coder-480b", label: "Qwen 3 Coder 480B", tier: "standard", inputPer1M: 0.60, outputPer1M: 3.00, contextWindow: "128K", notes: "Zen flagship. Best for coding via OpenCode." },
+    { model: "qwen3.6-plus", label: "Qwen3.6 Plus", tier: "standard", inputPer1M: 0.60, outputPer1M: 3.00, contextWindow: "128K", notes: "Zen default. Best for coding via OpenCode." },
   ],
 };
 

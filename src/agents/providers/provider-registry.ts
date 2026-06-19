@@ -102,8 +102,7 @@ export const PROVIDER_PRESETS: Record<
   opencode: {
     baseUrl: "https://opencode.ai/zen/v1",
     // BARE id (no "opencode/" namespace — the API rejects the prefix) and a model that
-    // still exists per live GET /models. The old "opencode/qwen-3-coder-480b" was both
-    // namespaced AND deprecated. OpencodeProvider also strips any stray prefix.
+    // still exists per live GET /models. OpencodeProvider also strips any stray prefix.
     defaultModel: "qwen3.6-plus",
     label: "OpenCode (Zen/Go)",
   },

@@ -244,10 +244,10 @@ It is OpenAI-compatible and authenticates via a dedicated `OPENROUTER_API_KEY`.
 
 | | |
 |---|---|
-| **Env** | `OPENCODE_API_KEY` |
+| **Env** | `OPENCODE_API_KEY` (required), optional `OPENCODE_DEFAULT_MODEL` (default `qwen3.6-plus` — override with any bare model id, e.g. `deepseek-v4-flash`), and optional `OPENCODE_BASE_URL` (default `https://opencode.ai/zen/v1` — set `https://opencode.ai/go/v1` for the Go platform). |
 | **Round-trip** | `node scripts/provider-smoke.mjs --provider opencode` |
 | **Expected** | `ANSWERED BY: OpenCode (Zen/Go)` |
-| **FAIL signature** | `OpenCode (Zen/Go) provider requires an API key`; non-2xx from `https://opencode.ai/zen/v1`. |
+| **FAIL signature** | `OpenCode (Zen/Go) provider requires an API key`; non-2xx from `https://opencode.ai/zen/v1` (or configured base URL); `Model ... is not supported` = `OPENCODE_DEFAULT_MODEL` is no longer offered — override it with a currently available model. |
 
 ### ollama / local
 

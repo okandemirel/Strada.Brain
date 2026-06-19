@@ -13,8 +13,7 @@ import { OpenAIProvider } from "./openai.js";
  * The constructor strips a leading "opencode/" defensively because presets / saved
  * preferences / the model catalog historically used the namespaced form, which the API
  * now rejects ("ModelError: Model opencode/... is not supported"). Verified live via
- * GET /models. The old "qwen-3-coder-480b" / "deepseek-v4-pro" ids are also no longer
- * offered — do not reintroduce them.
+ * GET /models. Model ids that are no longer offered must not be reintroduced.
  *
  * Current model ids (bare), from GET /models:
  * - Coding/general: qwen3.6-plus (default), qwen3.5-plus, deepseek-v4-flash, glm-5.1, glm-5

@@ -47,7 +47,7 @@ describe("OpencodeProvider", () => {
   it("passes a bare model id through unchanged and defaults to a live bare id", () => {
     expect((new OpencodeProvider("k", "qwen3.6-plus") as unknown as { model: string }).model)
       .toBe("qwen3.6-plus");
-    // Default must be a CURRENT, bare model (the old "opencode/qwen-3-coder-480b" is gone).
+    // Default must be a CURRENT, bare model (retired ids must not be reintroduced).
     expect((new OpencodeProvider("k") as unknown as { model: string }).model)
       .toBe("qwen3.6-plus");
   });

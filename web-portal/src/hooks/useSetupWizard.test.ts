@@ -63,18 +63,18 @@ describe('useSetupWizard helpers', () => {
 
   it('threads the chosen OpenCode platform base URL and model into the config', () => {
     const config: Record<string, string> = {}
-    applyOpencodeConfig(config, new Set(['opencode']), 'go', { opencode: 'opencode/qwen-3-coder-480b' })
+    applyOpencodeConfig(config, new Set(['opencode']), 'go', { opencode: 'qwen3.6-plus' })
 
-    expect(config.OPENCODE_BASE_URL).toBe(OPENCODE_PLATFORM_BASE_URLS.go)
-    expect(config.OPENCODE_DEFAULT_MODEL).toBe('opencode/qwen-3-coder-480b')
+    expect(config.OPENCODE_BASE_URL).toBe('https://opencode.ai/go/v1')
+    expect(config.OPENCODE_DEFAULT_MODEL).toBe('qwen3.6-plus')
   })
 
   it('uses the Zen base URL by default for OpenCode', () => {
     const config: Record<string, string> = {}
-    applyOpencodeConfig(config, new Set(['opencode']), 'zen', { opencode: 'opencode/qwen-3-coder-480b' })
+    applyOpencodeConfig(config, new Set(['opencode']), 'zen', { opencode: 'qwen3.6-plus' })
 
     expect(config.OPENCODE_BASE_URL).toBe(OPENCODE_PLATFORM_BASE_URLS.zen)
-    expect(config.OPENCODE_DEFAULT_MODEL).toBe('opencode/qwen-3-coder-480b')
+    expect(config.OPENCODE_DEFAULT_MODEL).toBe('qwen3.6-plus')
   })
 
   it('does not write OpenCode env vars when OpenCode is not enabled', () => {

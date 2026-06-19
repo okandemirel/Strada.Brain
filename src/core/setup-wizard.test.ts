@@ -224,6 +224,31 @@ describe("SetupWizard path validation", () => {
     expect(lines.some((line) => line.startsWith("EMBEDDING_MODEL="))).toBe(false);
   });
 
+  it("persists OPENCODE_BASE_URL and OPENCODE_DEFAULT_MODEL alongside the API key", () => {
+    const lines = buildSetupEnvLines({
+      PROVIDER_CHAIN: "opencode",
+      OPENCODE_API_KEY: "sk-oc-test",
+      OPENCODE_BASE_URL: "https://opencode.ai/zen/v1",
+      OPENCODE_DEFAULT_MODEL: "opencode-go-1",
+    }, homedir(), 3000);
+
+    expect(lines).toContain('OPENCODE_API_KEY="sk-oc-test"');
+    expect(lines).toContain('OPENCODE_BASE_URL="https://opencode.ai/zen/v1"');
+    expect(lines).toContain('OPENCODE_DEFAULT_MODEL="opencode-go-1"');
+    // opencode must NOT appear in KNOWN_PROVIDER_MODEL_ORDER so no stale preset default leaks through
+    expect(lines.some((l) => /^OPENCODE_MODEL=/.test(l))).toBe(false);
+  });
+
+  it("omits OPENCODE_DEFAULT_MODEL when the value contains unsafe characters", () => {
+    const lines = buildSetupEnvLines({
+      PROVIDER_CHAIN: "opencode",
+      OPENCODE_API_KEY: "sk-oc-test",
+      OPENCODE_DEFAULT_MODEL: "bad model; rm -rf /",
+    }, homedir(), 3000);
+
+    expect(lines.some((l) => /^OPENCODE_DEFAULT_MODEL=/.test(l))).toBe(false);
+  });
+
   it("enables the Codebase Memory Vault by default during setup", () => {
     const lines = buildSetupEnvLines({
       PROVIDER_CHAIN: "claude",

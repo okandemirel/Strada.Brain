@@ -243,8 +243,16 @@ function buildHardcoded(): Map<string, ModelInfo> {
       supportsToolCalling: true,
       supportsStreaming: true,
     },
+    // OpenCode (Zen/Go) catalog. Only the Zen DEFAULT is keyed BARE, because the
+    // configured default (stored bare in OPENCODE_DEFAULT_MODEL) must resolve in
+    // getModelInfo() to price correctly, and "qwen3.6-plus" is a Zen-specific id
+    // absent from the live LiteLLM catalog. Every other entry keeps the "opencode/"
+    // namespace: bare names like gpt-5.5 / claude-sonnet-4-6 / kimi-k2.6 also exist
+    // in LiteLLM as native openai/anthropic/kimi rows, and the refresh merge keeps
+    // the live row (adds hardcoded only `if (!this.models.has(id))`), so a bare key
+    // would be shadowed and mis-attributed away from opencode. See opencode.ts.
     {
-      id: "opencode/qwen-3-coder-480b",
+      id: "qwen3.6-plus",
       provider: "opencode",
       contextWindow: 128_000,
       maxOutputTokens: 8_192,
@@ -268,7 +276,7 @@ function buildHardcoded(): Map<string, ModelInfo> {
       supportsStreaming: true,
     },
     {
-      id: "opencode/claude-sonnet-4",
+      id: "opencode/claude-sonnet-4-6",
       provider: "opencode",
       contextWindow: 128_000,
       maxOutputTokens: 8_192,
@@ -280,7 +288,7 @@ function buildHardcoded(): Map<string, ModelInfo> {
       supportsStreaming: true,
     },
     {
-      id: "opencode/deepseek-v4-pro",
+      id: "opencode/deepseek-v4-flash",
       provider: "opencode",
       contextWindow: 128_000,
       maxOutputTokens: 8_192,

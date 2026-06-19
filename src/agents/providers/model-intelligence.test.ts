@@ -31,6 +31,7 @@ import {
   type ModelInfo,
   type RefreshResult,
 } from "./model-intelligence.js";
+import { PROVIDER_MODEL_OPTIONS } from "../../config/presets.js";
 
 // ============================================================================
 // 1. HARDCODED_MODELS — static model registry
@@ -54,10 +55,10 @@ describe("HARDCODED_MODELS", () => {
     "qwen3.5-plus",
     "mistral-large-3",
     "llama3.3",
-    "opencode/qwen-3-coder-480b",
+    "qwen3.6-plus",
     "opencode/gpt-5.5",
-    "opencode/claude-sonnet-4",
-    "opencode/deepseek-v4-pro",
+    "opencode/claude-sonnet-4-6",
+    "opencode/deepseek-v4-flash",
     "opencode/glm-5.1",
     "opencode/kimi-k2.6",
   ];
@@ -94,10 +95,10 @@ describe("HARDCODED_MODELS", () => {
       "qwen3.5-plus": "qwen",
       "mistral-large-3": "mistral",
       "llama3.3": "ollama",
-      "opencode/qwen-3-coder-480b": "opencode",
+      "qwen3.6-plus": "opencode",
       "opencode/gpt-5.5": "opencode",
-      "opencode/claude-sonnet-4": "opencode",
-      "opencode/deepseek-v4-pro": "opencode",
+      "opencode/claude-sonnet-4-6": "opencode",
+      "opencode/deepseek-v4-flash": "opencode",
       "opencode/glm-5.1": "opencode",
       "opencode/kimi-k2.6": "opencode",
     };
@@ -218,15 +219,19 @@ describe("ModelIntelligenceService", () => {
   });
 
   it("getModelInfo resolves multi-segment slash-prefixed ids via last-segment key", () => {
-    // Hardcoded opencode entries are keyed with their slash prefix; a bare tail
-    // lookup must not regress, while a deeper-prefixed alias resolves to the tail.
+    // Opencode entries are now keyed with bare ids; a bare query resolves directly.
+    const bare = service.getModelInfo("qwen3.6-plus");
+    expect(bare).toBeDefined();
+    expect(bare!.id).toBe("qwen3.6-plus");
+    expect(bare!.provider).toBe("opencode");
+    // A namespaced query "opencode/qwen3.6-plus" resolves via last-segment strip
+    // (getModelInfo strips after the last "/" and retries with "qwen3.6-plus").
+    const slashed = service.getModelInfo("opencode/qwen3.6-plus");
+    expect(slashed).toBeDefined();
+    expect(slashed!.id).toBe("qwen3.6-plus");
+    // An unknown multi-segment path with no matching bare tail is still undefined.
     const tail = service.getModelInfo("accounts/fireworks/models/gpt-oss-120b");
-    // No such hardcoded/catalog entry for the bare tail here -> undefined (no crash).
     expect(tail).toBeUndefined();
-    // Exact hardcoded slash-keyed id still resolves.
-    const exact = service.getModelInfo("opencode/qwen-3-coder-480b");
-    expect(exact).toBeDefined();
-    expect(exact!.id).toBe("opencode/qwen-3-coder-480b");
   });
 
   it("getProviderModels returns correct models for claude after initialize", async () => {
@@ -596,6 +601,25 @@ describe("ModelIntelligenceService", () => {
     expect(health?.refreshIntervalMs).toBe(60 * 60 * 1000);
     expect(health?.snapshotAgeMs).toBeGreaterThanOrEqual(0);
     expect(health?.stale).toBe(false);
+  });
+
+  it("no deprecated opencode ids remain in HARDCODED_MODELS or PROVIDER_MODEL_OPTIONS", () => {
+    const bare = (id: string) => (id.includes("/") ? id.slice(id.lastIndexOf("/") + 1) : id);
+    const deprecated = new Set(["qwen-3-coder-480b", "deepseek-v4-pro"]);
+
+    for (const [id] of HARDCODED_MODELS) {
+      expect(
+        deprecated.has(bare(id)),
+        `HARDCODED_MODELS key "${id}" must not resolve to a deprecated opencode id`,
+      ).toBe(false);
+    }
+
+    for (const option of PROVIDER_MODEL_OPTIONS["opencode"] ?? []) {
+      expect(
+        deprecated.has(bare(option.model)),
+        `PROVIDER_MODEL_OPTIONS opencode entry "${option.model}" must not resolve to a deprecated opencode id`,
+      ).toBe(false);
+    }
   });
 
   it("clears stale official snapshots when a later successful refresh yields no relevant signals", async () => {

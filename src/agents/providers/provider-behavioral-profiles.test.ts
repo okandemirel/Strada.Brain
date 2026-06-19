@@ -19,21 +19,31 @@ import type {
   WorkloadType,
   RankedProvider,
 } from "./provider-behavioral-profiles.js";
+import { PROVIDER_PRESETS } from "./provider-registry.js";
 
 // ---------------------------------------------------------------------------
 // Tests: STATIC_BASELINE_PROFILES
 // ---------------------------------------------------------------------------
 
 describe("STATIC_BASELINE_PROFILES", () => {
-  it("should contain all 12 expected providers", () => {
-    const expectedProviders = [
-      "claude", "openai", "kimi", "gemini", "deepseek", "qwen",
-      "minimax", "mistral", "groq", "together", "fireworks", "ollama",
-    ];
-    for (const provider of expectedProviders) {
-      expect(STATIC_BASELINE_PROFILES.has(provider)).toBe(true);
+  it("has a behavioral profile for every registry provider preset", () => {
+    // Drift-proof invariant: any provider added to PROVIDER_PRESETS without a
+    // matching baseline profile fails here, instead of silently degrading to
+    // feature-flag heuristics at routing time. Replaces a hardcoded count/list
+    // that had to be hand-bumped on every provider addition.
+    for (const provider of Object.keys(PROVIDER_PRESETS)) {
+      expect(
+        STATIC_BASELINE_PROFILES.has(provider),
+        `missing behavioral profile for registry provider "${provider}"`,
+      ).toBe(true);
     }
-    expect(STATIC_BASELINE_PROFILES.size).toBe(12);
+  });
+
+  it("has profiles for the special-cased claude and ollama providers", () => {
+    // claude and ollama have dedicated construction paths and are not
+    // PROVIDER_PRESETS keys, so assert them explicitly to keep coverage.
+    expect(STATIC_BASELINE_PROFILES.has("claude")).toBe(true);
+    expect(STATIC_BASELINE_PROFILES.has("ollama")).toBe(true);
   });
 
   it("should have scores for all 12 dimensions per provider", () => {
@@ -221,9 +231,9 @@ describe("WORKLOAD_DIMENSION_WEIGHTS", () => {
 // ---------------------------------------------------------------------------
 
 describe("rankProvidersForWorkload", () => {
-  it("should return all 12 providers sorted by composite score", () => {
+  it("should return all providers sorted by composite score", () => {
     const ranked = rankProvidersForWorkload("planning");
-    expect(ranked).toHaveLength(12);
+    expect(ranked).toHaveLength(STATIC_BASELINE_PROFILES.size);
     // Verify descending order
     for (let i = 1; i < ranked.length; i++) {
       expect(ranked[i - 1]!.compositeScore).toBeGreaterThanOrEqual(ranked[i]!.compositeScore);

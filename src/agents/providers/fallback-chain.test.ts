@@ -201,7 +201,7 @@ describe("FallbackChainProvider", () => {
   it("falls over on a 'model not supported' / ModelError (even with 401) instead of treating it as fatal", async () => {
     const p1 = { ...createMockProvider(), name: "opencode" };
     (p1.chat as ReturnType<typeof vi.fn>).mockRejectedValue(
-      new Error('OpenCode (Zen/Go) API error 401: {"type":"error","error":{"type":"ModelError","message":"Model opencode/qwen-3-coder-480b is not supported"}}'),
+      new Error('OpenCode (Zen/Go) API error 401: {"type":"error","error":{"type":"ModelError","message":"Model opencode/stale-model-xyz is not supported"}}'),
     );
     const p2 = { ...createMockProvider({ text: "openai-ok" }), name: "openai" };
 

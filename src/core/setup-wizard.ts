@@ -198,6 +198,7 @@ const DEFAULT_PROVIDER_MODELS: Record<string, string> = {
   ollama: "llama3.3",
 };
 const MODEL_NAME_RE = /^[A-Za-z0-9._:/-]+$/;
+const HTTP_URL_RE = /^https?:\/\/[^\s]+$/;
 
 const KNOWN_ANTHROPIC_AUTH_MODES = new Set(["api-key", "claude-subscription"]);
 const KNOWN_OPENAI_AUTH_MODES = new Set(["api-key", "chatgpt-subscription"]);
@@ -393,6 +394,15 @@ export function buildSetupEnvLines(
   }
   if (config.OPENAI_CHATGPT_AUTH_FILE) {
     lines.push(`OPENAI_CHATGPT_AUTH_FILE=${sanitizeEnvValue(config.OPENAI_CHATGPT_AUTH_FILE)}`);
+  }
+
+  const opencodeBaseUrl = config.OPENCODE_BASE_URL?.trim();
+  if (opencodeBaseUrl && HTTP_URL_RE.test(opencodeBaseUrl)) {
+    lines.push(`OPENCODE_BASE_URL=${sanitizeEnvValue(opencodeBaseUrl)}`);
+  }
+  const opencodeDefaultModel = config.OPENCODE_DEFAULT_MODEL?.trim();
+  if (opencodeDefaultModel && MODEL_NAME_RE.test(opencodeDefaultModel)) {
+    lines.push(`OPENCODE_DEFAULT_MODEL=${sanitizeEnvValue(opencodeDefaultModel)}`);
   }
 
   if (config.PROVIDER_CHAIN) {

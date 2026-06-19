@@ -182,6 +182,8 @@ export const STATIC_BASELINE_PROFILES: ReadonlyMap<string, BehavioralProfile> = 
   ["together",  buildProfile("together",  [0.60, 0.60, 0.80, 0.65, 0.60, 0.60, 0.65, 0.70, 0.65, 0.90, 0.75, 0.65], ["implementation (budget)", "analysis"])],
   ["fireworks", buildProfile("fireworks", [0.55, 0.55, 0.90, 0.60, 0.55, 0.55, 0.60, 0.75, 0.92, 0.85, 0.75, 0.60], ["implementation (JSON)", "coordination (speed)"])],
   ["ollama",    buildProfile("ollama",    [0.35, 0.50, 0.70, 0.50, 0.45, 0.55, 0.40, 0.40, 0.45, 0.95, 0.55, 0.45], ["classification", "embeddings", "privacy"])],
+  ["opencode",  buildProfile("opencode",  [0.55, 0.65, 0.88, 0.68, 0.72, 0.90, 0.70, 0.88, 0.86, 0.75, 0.60, 0.82], ["implementation (coding)", "debugging"])],
+  ["openrouter", buildProfile("openrouter", [0.62, 0.65, 0.65, 0.65, 0.65, 0.65, 0.65, 0.65, 0.65, 0.68, 0.65, 0.64], ["implementation", "analysis"])],
 ]);
 
 // ---------------------------------------------------------------------------
