@@ -1048,13 +1048,20 @@ export class ModelIntelligenceService {
     try {
       const snapshotRows = this.stmtGetProviderSnapshots.all() as ProviderSnapshotRow[];
       for (const row of snapshotRows) {
-        this.providerSnapshots.set(row.provider, {
-          provider: row.provider,
-          lastUpdated: row.last_updated,
-          sourceUrls: JSON.parse(row.source_urls_json) as string[],
-          signals: JSON.parse(row.signals_json) as ProviderOfficialSnapshot["signals"],
-          featureTags: JSON.parse(row.feature_tags_json) as string[],
-        });
+        try {
+          this.providerSnapshots.set(row.provider, {
+            provider: row.provider,
+            lastUpdated: row.last_updated,
+            sourceUrls: JSON.parse(row.source_urls_json) as string[],
+            signals: JSON.parse(row.signals_json) as ProviderOfficialSnapshot["signals"],
+            featureTags: JSON.parse(row.feature_tags_json) as string[],
+          });
+        } catch (err) {
+          getLogger().warn("ModelIntelligence: skipping corrupt provider snapshot row", {
+            provider: row.provider,
+            err,
+          });
+        }
       }
     } catch {
       // DB might be empty or older schema on first run
