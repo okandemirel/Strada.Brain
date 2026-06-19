@@ -65,7 +65,7 @@ describe('useSetupWizard helpers', () => {
     const config: Record<string, string> = {}
     applyOpencodeConfig(config, new Set(['opencode']), 'go', { opencode: 'qwen3.6-plus' })
 
-    expect(config.OPENCODE_BASE_URL).toBe('https://opencode.ai/go/v1')
+    expect(config.OPENCODE_BASE_URL).toBe(OPENCODE_PLATFORM_BASE_URLS.go)
     expect(config.OPENCODE_DEFAULT_MODEL).toBe('qwen3.6-plus')
   })
 
