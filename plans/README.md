@@ -212,10 +212,10 @@ non-band-aid solutions** for all confirmed findings.
 | 024 | Characterization tests for 11 untested high-risk modules | P2 | L | — | DONE (11 commits 28dde78..648dc84; 312 tests, no source touched; surfaced personality-routes `isAutonomousMode` type-seam bug → follow-up below) |
 | 025 | Batch `archiveOldEntries` in a single transaction | P3 | M | — | DONE (1b0ea36; one transaction not N, atomic, 43 tests, non-SQLite fallback) |
 | 026 | Windows CI: run lint + cross-platform path/security tests | P3 | M | — | DONE (0ceb9e9; lint + path-policy/auth/config on Windows, 197 tests pass locally) |
-| 027 | Extract shared channel message-queue + streaming-buffer cores | P3 | M | 024 | DONE (a5122d1·9e3159c·91cd1fc: MessageQueue+StreamingBuffer+tests done, Discord+Slack queue delegated, Discord+WhatsApp streaming migrated; remaining streaming channels: telegram/web/cli — follow-up in backlog) |
-| 028 | Decompose `config.ts` (first god-file) into types + schema | P3 | L | 024 | TODO |
-| 029 | Remove dashboard → learning-internals layering violation | P4 | S | — | TODO |
-| 030 | Docs discoverability + skills-lock decision + env-var coverage | P4 | S | — | TODO |
+| 027 | Extract shared channel message-queue + streaming-buffer cores | P3 | M | 024 | DONE (a5122d1·9e3159c·91cd1fc·2e449cd·0d6497f; MessageQueue+StreamingBuffer, Discord+Slack queue, Discord+WhatsApp streaming; revise-2 fixed M7 HOL white-box test for QueueEntry shape — behavior proven in message-queue.test.ts; src/channels 486 tests green) |
+| 028 | Decompose `config.ts` (first god-file) into types + schema | P3 | L | 024 | DONE (3db098c·15c3642·9b9fc5a; config.ts 3684→1695 = −54%, types+schema extracted behind unchanged re-exports, diverged-orphan EnvVarName fixed to 300 members, whole-repo typecheck green, snapshot 75 tests) |
+| 029 | Remove dashboard → learning-internals layering violation | P4 | S | — | DONE (e049949; projectScopeMatches → leaf project-scope.ts, dashboard repointed, zero-import leaf = no cycle, 31 tests) |
+| 030 | Docs discoverability + skills-lock decision + env-var coverage | P4 | S | — | DONE (4e0ae45·4e3be7f·66b2cac·b6d5ba5; skills-lock committed, README CHANGELOG+skill links, env-coverage script — revise fixed parser to count commented vars: 322 documented, surfaced 4 genuinely-undocumented vars) |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (reason) | REJECTED (rationale)
 
@@ -248,3 +248,11 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (reason) | REJECTED (rational
 - **Remaining streaming-buffer channel migrations** (telegram/whatsapp/web/cli) after plan 027.
 - **README translation re-sync** (7 languages) to current English + section-parity CI check — needs a translator (content work).
 - **Direction options** (not defects — maintainer's call): outbound webhook CRUD (inbound infra exists), multi-channel notification fan-out (config field exists, single-sink today), bulk vault ops, OpenAPI spec for the ~60 dashboard routes, Unity/Self vault write symmetry. Each is a design-spike if pursued.
+
+### Follow-ups surfaced DURING execution (new, small — candidates for a future round)
+
+- **`server-personality-routes` `isAutonomousMode` type-seam bug** (found by plan 024): `resolveAutonomousModeWithDefault` calls `store.isAutonomousMode(chatId)` but `RouteContext.userProfileStore` doesn't declare the method → a conforming store without it returns 500 at runtime on `GET /api/user/autonomous`. Real latent bug; fix = add the method to the interface. S effort.
+- **4 undocumented env vars** (found by plan 030's `audit:env`): `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `TEAMS_APP_TENANT_ID`, `TEAMS_APP_TYPE` are in `EnvVarName` but absent from `.env.example`; also 26 vars in `.env.example` not yet in the `EnvVarName` union. S effort doc/type sync.
+- **`StreamingBuffer.unref()` parity** (plan 027): WhatsApp's original throttle timer called `.unref()`; `StreamingBuffer` doesn't — a negligible process-exit-timing delta. Add optional `unref` to `StreamingBuffer`. XS effort.
+- **Remaining streaming-channel migrations** (plan 027): telegram / web / cli still hand-roll streaming accumulators — migrate to `StreamingBuffer`. S–M.
+- **Pre-existing lint warning**: `src/channels/discord/bot.test.ts:343` "Unused eslint-disable directive" (predates round 2; not introduced here). Trivial cleanup.
