@@ -34,6 +34,7 @@
     "pack:dry-run": "npm pack --dry-run",
     "build": "node scripts/build-package.mjs",
     "build:portal": "npm --prefix web-portal run build",
+    "build:portal-static": "node scripts/build-package.mjs --portal-only",
     "lint:src": "eslint src/",
     "lint:portal": "npm --prefix web-portal run lint",
     "typecheck:src": "tsc --noEmit",

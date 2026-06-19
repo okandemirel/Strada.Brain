@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
@@ -9,6 +9,8 @@ const ROOT_DIR = path.resolve(SCRIPT_DIR, "..");
 const PACKAGE_JSON = path.join(ROOT_DIR, "package.json");
 const DIST_ENTRY = path.join(ROOT_DIR, "dist", "index.js");
 const SOURCE_ENTRY = path.join(ROOT_DIR, "src", "index.ts");
+const PORTAL_SRC_DIR = path.join(ROOT_DIR, "web-portal", "src");
+const SERVED_PORTAL_MARKER = path.join(ROOT_DIR, "dist", "channels", "web", "static", "index.html");
 const MANAGED_BLOCK_START = "# >>> Strada command >>>";
 const MANAGED_BLOCK_END = "# <<< Strada command <<<";
 const STRADA_LAUNCH_CWD_ENV = "STRADA_LAUNCH_CWD";
@@ -134,11 +136,90 @@ function ensureSourceCheckout() {
   }
 }
 
+/**
+ * True when any file under `dir` has an mtime newer than `thresholdMs`, skipping
+ * heavy or irrelevant subtrees (node_modules, dist, dot-directories). Stops at
+ * the first newer file (the caller only needs a yes/no), and treats an absent or
+ * unreadable directory as "nothing newer".
+ */
+function hasFileNewerThan(dir, thresholdMs, skip = new Set(["node_modules", "dist", ".git"])) {
+  let entries;
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return false;
+  }
+  for (const entry of entries) {
+    if (entry.name.startsWith(".") || skip.has(entry.name)) {
+      continue;
+    }
+    const full = path.join(dir, entry.name);
+    try {
+      if (entry.isDirectory()) {
+        if (hasFileNewerThan(full, thresholdMs, skip)) {
+          return true;
+        }
+      } else if (statSync(full).mtimeMs > thresholdMs) {
+        return true;
+      }
+    } catch {
+      // Unreadable entry: ignore it rather than failing the whole scan.
+    }
+  }
+  return false;
+}
+
+/**
+ * True when the SERVED web portal bundle (dist/channels/web/static) is older
+ * than its source (web-portal/src), so `./strada` would serve a stale UI. The
+ * launcher only rebuilds when dist/index.js is entirely absent, so without this
+ * check a portal source change after the first build never reaches the browser.
+ * Returns false for a packaged install (no web-portal/src — it ships a prebuilt
+ * portal) and when STRADA_SKIP_STALE_REBUILD is set (opt-out / fast restarts).
+ */
+export function isServedPortalStale(options = {}) {
+  const env = options.env || process.env;
+  const portalSrcDir = options.portalSrcDir || PORTAL_SRC_DIR;
+  const servedMarker = options.servedMarker || SERVED_PORTAL_MARKER;
+  if (env.STRADA_SKIP_STALE_REBUILD) {
+    return false;
+  }
+  if (!existsSync(portalSrcDir)) {
+    return false;
+  }
+  let servedMtime;
+  try {
+    servedMtime = statSync(servedMarker).mtimeMs;
+  } catch {
+    return true;
+  }
+  return hasFileNewerThan(portalSrcDir, servedMtime);
+}
+
 function ensurePrepared() {
   ensureSourceCheckout();
   if (!existsSync(DIST_ENTRY)) {
     console.log("Preparing Strada build...");
     const result = spawnSync(resolveCommandBinary("npm"), ["run", "bootstrap"], windowsSafeSpawnOptions({
+      cwd: ROOT_DIR,
+      stdio: "inherit",
+    }));
+    if (result.status !== 0) {
+      process.exit(result.status ?? 1);
+    }
+    // First boot just bootstrapped a fresh portal — skip the staleness check.
+    return;
+  }
+  if (isServedPortalStale()) {
+    // `build:portal-static` (vite) needs web-portal/node_modules; if they were
+    // removed, fall back to a full bootstrap (which installs them) rather than
+    // failing with a cryptic vite error.
+    const rebuildScript = existsSync(path.join(ROOT_DIR, "web-portal", "node_modules"))
+      ? "build:portal-static"
+      : "bootstrap";
+    console.log("Web portal source changed since the last build; rebuilding it so the latest UI is served...");
+    console.log("(set STRADA_SKIP_STALE_REBUILD=1 to skip this check)");
+    const result = spawnSync(resolveCommandBinary("npm"), ["run", rebuildScript], windowsSafeSpawnOptions({
       cwd: ROOT_DIR,
       stdio: "inherit",
     }));

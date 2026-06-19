@@ -770,6 +770,24 @@ describe("SetupWizard path validation", () => {
   });
 
   describe("GET /api/providers/models during setup", () => {
+    // The warm GET sources provider keys from process.env, so snapshot + clear
+    // them around each test to keep assertions deterministic regardless of the
+    // ambient environment (e.g. CI secrets).
+    const GET_ENV_KEYS = [
+      "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "OPENAI_API_KEY", "DEEPSEEK_API_KEY",
+      "QWEN_API_KEY", "KIMI_API_KEY", "GEMINI_API_KEY", "GROQ_API_KEY", "MISTRAL_API_KEY",
+      "TOGETHER_API_KEY", "FIREWORKS_API_KEY", "MINIMAX_API_KEY", "OPENCODE_API_KEY",
+      "OPENCODE_BASE_URL",
+    ];
+    beforeEach(() => {
+      // Stub the provider key vars empty so assertions are deterministic
+      // regardless of the ambient environment (e.g. CI secrets).
+      for (const k of GET_ENV_KEYS) vi.stubEnv(k, "");
+    });
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
     it("returns 200 with an empty providers array when no key is configured (never 503)", async () => {
       const wizard = new SetupWizard({ port: 0 });
 
@@ -819,6 +837,30 @@ describe("SetupWizard path validation", () => {
       expect(response.read().statusCode).toBe(200);
       expect(JSON.parse(response.read().body)).toEqual({ providers: [] });
       expect(probeCalled).toBe(false);
+    });
+
+    it("warms live models from a provider key already present in the environment", async () => {
+      vi.stubEnv("OPENAI_API_KEY", "sk-env");
+      const wizard = new SetupWizard({ port: 0 });
+
+      (wizard as unknown as {
+        createProbeProvider: (config: { name: string; apiKey?: string; baseUrl?: string }) => {
+          listModels?: () => Promise<string[]>;
+        };
+      }).createProbeProvider = (config) => {
+        expect(config.name).toBe("openai");
+        return { listModels: async () => ["gpt-5.4", "gpt-5.4-mini"] };
+      };
+
+      const response = makeResponse();
+      await (wizard as unknown as {
+        handleRequest: (req: { url: string; method: string; headers?: Record<string, string> }, res: unknown) => Promise<void>;
+      }).handleRequest({ url: "/api/providers/models", method: "GET" }, response.response);
+
+      expect(response.read().statusCode).toBe(200);
+      expect(JSON.parse(response.read().body)).toEqual({
+        providers: [{ name: "openai", models: ["gpt-5.4", "gpt-5.4-mini"] }],
+      });
     });
   });
 

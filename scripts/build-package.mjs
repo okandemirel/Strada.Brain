@@ -27,7 +27,13 @@ function run(command, args) {
   }
 }
 
-run(resolveCommandBinary("tsc"), []);
+// `--portal-only` skips the backend tsc build — used by the launcher's
+// stale-portal rebuild, where the backend already runs from source (tsx) and
+// only the served web bundle needs refreshing.
+const portalOnly = process.argv.includes("--portal-only");
+if (!portalOnly) {
+  run(resolveCommandBinary("tsc"), []);
+}
 
 const portalBuild = spawnSync(resolveCommandBinary("npm"), ["run", "build:portal"], {
   cwd: ROOT_DIR,
@@ -42,6 +48,10 @@ if (portalBuild.status === 0) {
   } catch {
     console.log("[strada] Portal build skipped — web UI will use fallback page.");
   }
+} else if (portalOnly) {
+  // The launcher's stale-portal rebuild relies on this exit code — a portal
+  // build failure must surface, not be silently swallowed into a stale UI.
+  process.exit(portalBuild.status ?? 1);
 } else {
   console.log("[strada] Portal build skipped — web UI will use fallback page.");
 }

@@ -939,17 +939,53 @@ export class SetupWizard {
   }
 
   /**
+   * Enumerate providers whose API key is present in the PROCESS ENVIRONMENT
+   * (e.g. a re-run of setup over an existing .env), pairing each with its key
+   * and — for OpenCode — its optional base URL. Keys are sourced from the
+   * environment only, never the request, so they cannot leak into URLs / logs.
+   */
+  private configuredProviderKeysFromEnv(): Array<{ provider: string; key: string; baseUrl?: string }> {
+    const opencodeBaseUrl = (process.env["OPENCODE_BASE_URL"] ?? "").trim() || undefined;
+    return Object.entries(PROVIDER_ID_TO_ENV_KEY)
+      .map(([provider, envKey]) => ({
+        provider,
+        key: envKey ? (process.env[envKey] ?? "").trim() : "",
+        baseUrl: provider === "opencode" ? opencodeBaseUrl : undefined,
+      }))
+      .filter((entry) => entry.key.length > 0);
+  }
+
+  /**
    * Setup-safe handler for `GET /api/providers/models`.
    *
-   * This is the NO-KEY path. The setup server holds no server-side credential
-   * state, and we deliberately do NOT read a key from the URL (a query-string
-   * key leaks into access logs / history / Referer). So the GET always returns
-   * an EMPTY 200, which lets the UI gracefully fall back to its static model
-   * list. The keyed probe lives on `POST /api/providers/models` (key in body).
-   * This route NEVER returns 503 and NEVER crashes setup.
+   * Warm path: for every provider whose API key is already present in the
+   * environment we run the BEST-EFFORT `probeProviderModels` seam in parallel and
+   * return its live model list, so the wizard shows the CURRENT supported models
+   * on first paint instead of waiting for a per-keystroke POST probe. We
+   * deliberately do NOT read a key from the URL (a query-string key leaks into
+   * access logs / history / Referer); keys come from the environment only.
+   * Providers without an env key are omitted, leaving the UI to fall back to its
+   * static list. The keyed probe still lives on `POST /api/providers/models`
+   * (key in body). This route NEVER returns 503 and NEVER crashes setup.
    */
   private async handleSetupProviderModels(res: ServerResponse): Promise<void> {
-    this.json(res, 200, { providers: [] });
+    let providers: Array<{ name: string; models: string[] }> = [];
+    try {
+      const results = await Promise.all(
+        this.configuredProviderKeysFromEnv().map(({ provider, key, baseUrl }) =>
+          this.probeProviderModels(provider, key, baseUrl)
+            .then((models) => (models.length > 0 ? { name: provider, models } : null))
+            .catch(() => null),
+        ),
+      );
+      providers = results.filter(
+        (entry): entry is { name: string; models: string[] } => entry !== null,
+      );
+    } catch {
+      // Best-effort only: any failure degrades to an empty 200 below.
+      providers = [];
+    }
+    this.json(res, 200, { providers });
   }
 
   /**

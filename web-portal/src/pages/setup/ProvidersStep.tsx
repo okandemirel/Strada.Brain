@@ -216,6 +216,37 @@ export default function ProvidersStep({
     }
   }, [checkedProviders, providerKeys, opencodePlatform])
 
+  // On mount, fetch the server's WARM live-model list. The backend GET sources
+  // provider keys from its OWN environment (e.g. re-running setup over an
+  // existing .env), so it can return CURRENT models for already-configured
+  // providers before the user types anything. Seed those into `liveModels` so the
+  // live set shows on first paint; a later per-key POST probe still takes
+  // precedence (we don't clobber an entry a probe has already set). Best-effort:
+  // on failure the static fallback list simply remains.
+  useEffect(() => {
+    let cancelled = false
+    fetch('/api/providers/models', { method: 'GET' })
+      .then((res) => (res.ok ? res.json() : { providers: [] }))
+      .then((data: { providers?: Array<{ name: string; models: string[] }> }) => {
+        if (cancelled) return
+        const warm = (data.providers ?? []).filter((p) => p.models?.length > 0)
+        if (warm.length === 0) return
+        setLiveModels((prev) => {
+          const next = new Map(prev)
+          for (const p of warm) {
+            if (!next.has(p.name)) next.set(p.name, mergeLiveModels(p.name, p.models))
+          }
+          return next
+        })
+      })
+      .catch(() => {
+        // Best-effort warm: keep the static fallback on any failure.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
   const isLiveProvider = (providerId: string): boolean => liveModels.has(providerId)
 
   const getModelsForProvider = (providerId: string): ProviderModelOption[] => {

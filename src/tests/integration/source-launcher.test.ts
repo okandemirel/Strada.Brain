@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -8,6 +8,85 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 async function loadSourceLauncherModule() {
   return import(pathToFileURL(path.join(process.cwd(), "scripts", "source-launcher.mjs")).href);
 }
+
+describe("source launcher isServedPortalStale", () => {
+  const tempDirs: string[] = [];
+
+  afterEach(() => {
+    for (const dir of tempDirs) {
+      rmSync(dir, { recursive: true, force: true });
+    }
+    tempDirs.length = 0;
+  });
+
+  function makeFixture() {
+    const root = mkdtempSync(path.join(os.tmpdir(), "strada-portal-stale-"));
+    tempDirs.push(root);
+    const portalSrcDir = path.join(root, "web-portal", "src");
+    const servedDir = path.join(root, "dist", "channels", "web", "static");
+    mkdirSync(portalSrcDir, { recursive: true });
+    mkdirSync(servedDir, { recursive: true });
+    return { portalSrcDir, servedMarker: path.join(servedDir, "index.html") };
+  }
+
+  // Force a deterministic mtime so the test does not depend on filesystem
+  // timestamp granularity.
+  const stamp = (file: string, offsetMs: number) => {
+    const when = new Date(Date.now() + offsetMs);
+    utimesSync(file, when, when);
+  };
+
+  it("is stale when portal source is newer than the served bundle", async () => {
+    const { portalSrcDir, servedMarker } = makeFixture();
+    const { isServedPortalStale } = await loadSourceLauncherModule();
+    writeFileSync(servedMarker, "<html></html>");
+    stamp(servedMarker, -10_000);
+    const srcFile = path.join(portalSrcDir, "App.tsx");
+    writeFileSync(srcFile, "export const App = 1;");
+    stamp(srcFile, 10_000);
+    expect(isServedPortalStale({ portalSrcDir, servedMarker, env: {} })).toBe(true);
+  });
+
+  it("is fresh when the served bundle is newer than all portal source", async () => {
+    const { portalSrcDir, servedMarker } = makeFixture();
+    const { isServedPortalStale } = await loadSourceLauncherModule();
+    const srcFile = path.join(portalSrcDir, "App.tsx");
+    writeFileSync(srcFile, "export const App = 1;");
+    stamp(srcFile, -10_000);
+    writeFileSync(servedMarker, "<html></html>");
+    stamp(servedMarker, 10_000);
+    expect(isServedPortalStale({ portalSrcDir, servedMarker, env: {} })).toBe(false);
+  });
+
+  it("treats a missing served bundle as stale", async () => {
+    const { portalSrcDir, servedMarker } = makeFixture();
+    const { isServedPortalStale } = await loadSourceLauncherModule();
+    writeFileSync(path.join(portalSrcDir, "App.tsx"), "x");
+    rmSync(servedMarker, { force: true });
+    expect(isServedPortalStale({ portalSrcDir, servedMarker, env: {} })).toBe(true);
+  });
+
+  it("is never stale for a packaged install with no portal source dir", async () => {
+    const { servedMarker } = makeFixture();
+    const { isServedPortalStale } = await loadSourceLauncherModule();
+    writeFileSync(servedMarker, "<html></html>");
+    const missingSrc = path.join(os.tmpdir(), "strada-no-portal-src-does-not-exist-xyz");
+    expect(isServedPortalStale({ portalSrcDir: missingSrc, servedMarker, env: {} })).toBe(false);
+  });
+
+  it("respects the STRADA_SKIP_STALE_REBUILD opt-out even when stale", async () => {
+    const { portalSrcDir, servedMarker } = makeFixture();
+    const { isServedPortalStale } = await loadSourceLauncherModule();
+    writeFileSync(servedMarker, "<html></html>");
+    stamp(servedMarker, -10_000);
+    const srcFile = path.join(portalSrcDir, "App.tsx");
+    writeFileSync(srcFile, "x");
+    stamp(srcFile, 10_000);
+    expect(
+      isServedPortalStale({ portalSrcDir, servedMarker, env: { STRADA_SKIP_STALE_REBUILD: "1" } }),
+    ).toBe(false);
+  });
+});
 
 describe("source launcher install-command", () => {
   const tempDirs: string[] = [];

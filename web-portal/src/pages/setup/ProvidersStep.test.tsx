@@ -58,10 +58,10 @@ describe('ProvidersStep live model probe', () => {
     render(<ProvidersStep {...baseProps()} />)
 
     await waitFor(() => {
-      expect(calls.some((c) => c.url === '/api/providers/models')).toBe(true)
+      expect(calls.some((c) => c.url === '/api/providers/models' && c.init?.method === 'POST')).toBe(true)
     })
 
-    const probeCall = calls.find((c) => c.url === '/api/providers/models')
+    const probeCall = calls.find((c) => c.url === '/api/providers/models' && c.init?.method === 'POST')
     expect(probeCall).toBeDefined()
     expect(probeCall?.init?.method).toBe('POST')
     // Key must NOT appear in the URL
@@ -87,7 +87,7 @@ describe('ProvidersStep live model probe', () => {
     render(<ProvidersStep {...baseProps()} />)
 
     await waitFor(() => {
-      expect(calls.some((c) => c.url === '/api/providers/models')).toBe(true)
+      expect(calls.some((c) => c.url === '/api/providers/models' && c.init?.method === 'POST')).toBe(true)
     })
 
     // Static DeepSeek catalog includes deepseek-chat (rendered in a model-id cell)
@@ -114,10 +114,10 @@ describe('ProvidersStep live model probe', () => {
     )
 
     await waitFor(() => {
-      expect(calls.some((c) => c.url === '/api/providers/models')).toBe(true)
+      expect(calls.some((c) => c.url === '/api/providers/models' && c.init?.method === 'POST')).toBe(true)
     })
 
-    const probeCall = calls.find((c) => c.url === '/api/providers/models')
+    const probeCall = calls.find((c) => c.url === '/api/providers/models' && c.init?.method === 'POST')
     const parsedBody = JSON.parse(String(probeCall?.init?.body))
     expect(parsedBody.provider).toBe('opencode')
     expect(parsedBody.baseUrl).toBe(OPENCODE_PLATFORM_BASE_URLS.go)
@@ -139,7 +139,28 @@ describe('ProvidersStep live model probe', () => {
     await Promise.resolve()
     await new Promise((r) => setTimeout(r, 50))
 
-    expect(calls.some((c) => c.url === '/api/providers/models')).toBe(false)
+    expect(calls.some((c) => c.url === '/api/providers/models' && c.init?.method === 'POST')).toBe(false)
+  })
+
+  it('seeds live models on mount from the warm GET, with no key entered', async () => {
+    // The backend warms models for providers whose key is already in its env;
+    // the client GETs them on mount and seeds them before any key is typed.
+    stubFetch((call) =>
+      call.init?.method === 'GET'
+        ? { providers: [{ name: 'deepseek', models: ['deepseek-warm-model'] }] }
+        : { providers: [] },
+    )
+
+    render(<ProvidersStep {...baseProps({ checkedProviders: new Set(['deepseek']), providerKeys: {} })} />)
+
+    // Warm model appears from the GET seed, marked live, without a POST probe.
+    await waitFor(() => {
+      const cells = screen.getAllByText('deepseek-warm-model')
+      expect(cells.some((el) => el.className.includes('provider-model-id'))).toBe(true)
+    })
+    expect(screen.getByText('live')).toBeInTheDocument()
+    expect(calls.some((c) => c.url === '/api/providers/models' && c.init?.method === 'GET')).toBe(true)
+    expect(calls.some((c) => c.url === '/api/providers/models' && c.init?.method === 'POST')).toBe(false)
   })
 
   it('renders the OpenCode Zen/Go toggle when OpenCode is enabled', async () => {
