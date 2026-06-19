@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdirSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
+import { realpath } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createTempDirTracker } from '../test-helpers.js';
 import {
@@ -195,7 +196,10 @@ describe('path-policy', () => {
   describe('resolveExistingVaultRoot', () => {
     it('returns the realpath for an existing directory', async () => {
       const root = makeTempDir('strada-path-policy-');
-      expect(await resolveExistingVaultRoot(root)).toEqual({ ok: true, realPath: realpathSync(root) });
+      // Compare against the SAME async realpath the impl uses (node:fs/promises),
+      // not realpathSync — on Windows the two can resolve 8.3 short names / drive
+      // casing differently, so matching the impl's function keeps this cross-platform.
+      expect(await resolveExistingVaultRoot(root)).toEqual({ ok: true, realPath: await realpath(root) });
     });
 
     it('rejects relative paths', async () => {
