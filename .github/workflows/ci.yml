@@ -46,6 +46,9 @@ jobs:
       - name: Security Audit
         run: npm audit --audit-level=high
 
+      - name: Portal Security Audit
+        run: npm --prefix web-portal run security:audit
+
       - name: Typecheck
         run: npm run typecheck
 
