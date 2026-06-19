@@ -25,6 +25,7 @@ import {
   getProviderIntelligenceSnapshot,
   type ModelIntelligenceLookup,
   type ProviderWorkload,
+  type ProviderIntelligenceSnapshot,
 } from "../../agents/providers/provider-knowledge.js";
 import {
   type TrajectoryPhaseSignal,
@@ -119,6 +120,8 @@ export class ProviderRouter {
   private lastExecutingProvider: string | undefined;
   private readonly modelIntelligence?: ModelIntelligenceLookup;
   private readonly trajectoryPhaseSignalRetriever?: TrajectoryPhaseSignalRetriever;
+  /** Per-decision snapshot memo; null outside a resolve/resolveRanked call. */
+  private snapshotMemo: Map<string, ProviderIntelligenceSnapshot> | null = null;
 
   /** Optional TierRouter for delegation escalation compatibility */
   private tierRouter?: TierRouterRef;
@@ -220,29 +223,34 @@ export class ProviderRouter {
     let bestScore = -Infinity;
     let bestReason = "";
 
-    for (const entry of available) {
-      const score = this.scoreProvider(
-        entry,
-        task,
-        weights,
-        available,
-        phase,
-        options.identityKey,
-        trajectorySignals,
-      );
-      if (score > bestScore) {
-        bestScore = score;
-        bestProvider = entry.name;
-        bestEntry = entry;
-        bestReason = this.buildReason(
+    this.snapshotMemo = new Map();
+    try {
+      for (const entry of available) {
+        const score = this.scoreProvider(
           entry,
           task,
           weights,
+          available,
           phase,
           options.identityKey,
           trajectorySignals,
         );
+        if (score > bestScore) {
+          bestScore = score;
+          bestProvider = entry.name;
+          bestEntry = entry;
+          bestReason = this.buildReason(
+            entry,
+            task,
+            weights,
+            phase,
+            options.identityKey,
+            trajectorySignals,
+          );
+        }
       }
+    } finally {
+      this.snapshotMemo = null;
     }
 
     const decision: RoutingDecision = {
@@ -294,10 +302,16 @@ export class ProviderRouter {
       };
     }
 
-    const scored = available.map((entry) => ({
-      name: entry.name,
-      score: this.scoreProvider(entry, task, weights, available, phase, options.identityKey, trajectorySignals),
-    }));
+    this.snapshotMemo = new Map();
+    let scored: Array<{ name: string; score: number }>;
+    try {
+      scored = available.map((entry) => ({
+        name: entry.name,
+        score: this.scoreProvider(entry, task, weights, available, phase, options.identityKey, trajectorySignals),
+      }));
+    } finally {
+      this.snapshotMemo = null;
+    }
 
     scored.sort((a, b) => b.score - a.score);
     return scored.map((s) => s.name);
@@ -488,7 +502,22 @@ export class ProviderRouter {
     }));
   }
 
-  private getSnapshot(entry: AvailableProvider) {
+  private getSnapshot(entry: AvailableProvider): ProviderIntelligenceSnapshot {
+    const key = `${entry.name}:${entry.defaultModel}`;
+    if (this.snapshotMemo !== null) {
+      if (this.snapshotMemo.has(key)) {
+        return this.snapshotMemo.get(key)!;
+      }
+      const snapshot = getProviderIntelligenceSnapshot(
+        entry.name,
+        entry.defaultModel,
+        this.modelIntelligence,
+        entry.capabilities ?? this.providerManager.getProviderCapabilities?.(entry.name, entry.defaultModel),
+        entry.label,
+      );
+      this.snapshotMemo.set(key, snapshot);
+      return snapshot;
+    }
     return getProviderIntelligenceSnapshot(
       entry.name,
       entry.defaultModel,
