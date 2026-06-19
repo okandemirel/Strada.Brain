@@ -340,7 +340,6 @@ describe("DiscordChannel", () => {
         id: "thread123",
         send: vi.fn().mockResolvedValue({ id: "threadmsg123" }),
       }) as { send: ReturnType<typeof vi.fn> };
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (channel as any).client.channels.fetch = vi.fn().mockResolvedValue(thread);
       return thread;
     }

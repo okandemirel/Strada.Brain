@@ -5,6 +5,11 @@ export interface StreamingBufferOptions {
   onFlush: (text: string) => Promise<void>;
   /** If provided, called instead of onFlush for the final finalize call. */
   onFinalize?: (text: string) => Promise<void>;
+  /**
+   * If true, `unref()` the throttle timer so a pending deferred flush never
+   * keeps the Node event loop alive (matches WhatsApp's original behavior).
+   */
+  unref?: boolean;
 }
 
 /**
@@ -48,6 +53,7 @@ export class StreamingBuffer {
             this.lastUpdate = Date.now();
           }
         }, this.opts.throttleMs - elapsed);
+        if (this.opts.unref) this.throttleTimer?.unref();
       }
       return;
     }

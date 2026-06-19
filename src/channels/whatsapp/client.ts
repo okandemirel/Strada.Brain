@@ -645,6 +645,7 @@ export class WhatsAppChannel extends EventEmitter implements IChannelAdapter {
 
       const buffer = new StreamingBuffer({
         throttleMs: STREAM_THROTTLE_MS,
+        unref: true,
         onFlush: async (text) => {
           const state = this.streamingMessages.get(streamId);
           if (!state || !this.sock) return;
