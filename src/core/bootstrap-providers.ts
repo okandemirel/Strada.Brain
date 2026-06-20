@@ -220,6 +220,13 @@ export async function initializeAIProvider(
     logger[logMethod](message, { name: defaultProvider.name });
   }
 
+  // The chain's per-attempt first-response timeout intentionally reuses
+  // llmStreamInitialTimeoutMs (same "time to first token" budget). On the
+  // orchestrator streaming path this double-arms with createStreamingProgressTimeout,
+  // but the chain timer is cleared on the first chunk so the orchestrator's
+  // stall/thinking-aware watchdog governs mid-stream; the chain timeout's genuinely
+  // new coverage is the previously-unbounded non-streaming chat() callers
+  // (planning/synthesis/review) and any provider that ignores the abort signal.
   const providerManager = new ProviderManager(
     defaultProvider,
     providerCredentials,
