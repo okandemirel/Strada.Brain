@@ -36,6 +36,14 @@ import type { UnifiedBudgetManager } from "../budget/unified-budget-manager.js";
 import { getLogger } from "../utils/logger.js";
 import { WorkspaceLeaseManager } from "../agents/multi/workspace-lease-manager.js";
 import type { WorkerRunRequest, WorkerRunResult } from "../agents/supervisor/supervisor-types.js";
+import {
+  V1AgentRunner,
+  toWorkerRunResult,
+  type AgentRunRequest,
+  type IOStrategy,
+  type RunnerMode,
+  type V1OrchestratorLike,
+} from "../agent-core/runner/index.js";
 import { normalizeSupervisorProgressMarkdown } from "../supervisor/supervisor-feedback.js";
 import type { MonitorLifecycle } from "../dashboard/monitor-lifecycle.js";
 import type { WorkspaceBus } from "../dashboard/workspace-bus.js";
@@ -824,81 +832,52 @@ export class BackgroundExecutor {
       goalContext?: import("./types.js").GoalContext;
     },
   ): Promise<{ output: string; workerResult?: WorkerRunResult }> {
-    if (typeof (orchestrator as IOrchestrator & { runWorkerTask?: unknown }).runWorkerTask === "function") {
-      const workerResult = await (
-        orchestrator as IOrchestrator & {
-          runWorkerTask: (request: {
-            prompt: string;
-            mode: WorkerRunRequest["mode"];
-            signal: AbortSignal;
-            onProgress: (message: TaskProgressUpdate) => void;
-            chatId: string;
-            taskRunId: string;
-            channelType: string;
-            conversationId?: string;
-            userId?: string;
-            assignedProvider?: string;
-            assignedModel?: string;
-            attachments?: import("../channels/channel.interface.js").Attachment[];
-            userContent?: string | import("../agents/providers/provider-core.interface.js").MessageContent[] | null;
-            onUsage?: (usage: { provider: string; inputTokens: number; outputTokens: number }) => void;
-            workspaceLease?: Awaited<ReturnType<WorkspaceLeaseManager["acquireLease"]>>;
-            workspaceLeaseRetained?: boolean;
-            supervisorMode?: import("./types.js").BackgroundTaskOptions["supervisorMode"];
-            goalContext?: import("./types.js").GoalContext;
-          }) => Promise<WorkerRunResult>;
-        }
-      ).runWorkerTask({
-        prompt: params.prompt,
-        mode: params.mode,
-        signal: params.signal,
-        onProgress: params.onProgress,
-        chatId: params.chatId,
-        taskRunId: params.taskRunId,
-        channelType: params.channelType,
-        conversationId: params.conversationId,
-        userId: params.userId,
-        assignedProvider: params.assignedProvider,
-        assignedModel: params.assignedModel,
-        attachments: params.attachments,
-        userContent: params.userContent,
-        onUsage: params.onUsage,
-        workspaceLease: params.workspaceLease,
-        workspaceLeaseRetained: params.workspaceLeaseRetained,
-        supervisorMode: params.supervisorMode,
-        goalContext: params.goalContext,
-      });
-      return {
-        output: workerResult.visibleResponse,
-        workerResult,
-      };
-    }
+    // Phase-0 strangler seam: route through the AgentRunner façade (V1AgentRunner) instead of
+    // calling the v1 orchestrator entry methods directly. V1AgentRunner is a pass-through over the
+    // SAME runWorkerTask / runBackgroundTask on this exact orchestrator and replicates the
+    // identical capability detection, so the observable behavior — which method is called, with
+    // which arguments, and the returned { output, workerResult } shape — is preserved by
+    // construction. The runner is built per-call over the passed orchestrator (which may be a
+    // per-task orchestrator, not this.orchestrator), keeping orchestrator.ts at net-zero.
+    const runner = new V1AgentRunner(orchestrator as unknown as V1OrchestratorLike);
 
-    return {
-      output: await orchestrator.runBackgroundTask(
-        params.prompt,
-        {
-          signal: params.signal,
-          onProgress: params.onProgress,
-          chatId: params.chatId,
-          taskRunId: params.taskRunId,
-          channelType: params.channelType,
-          conversationId: params.conversationId,
-          userId: params.userId,
-          assignedProvider: params.assignedProvider,
-          assignedModel: params.assignedModel,
-          attachments: params.attachments,
-          userContent: params.userContent,
-          onUsage: params.onUsage,
-          workspaceLease: params.workspaceLease,
-          workspaceLeaseRetained: params.workspaceLeaseRetained,
-          supervisorMode: params.supervisorMode,
-          goalContext: params.goalContext,
-        } as import("./types.js").BackgroundTaskOptions & {
-          workspaceLeaseRetained?: boolean;
-        },
-      ),
+    // RunnerMode mirrors the underlying WorkerRunRequest.mode: "delegated" → supervisor-node,
+    // anything else ("background") → worker. The exact WorkerRunRequest.mode is preserved verbatim
+    // via request.workerMode so the v1 call shape is byte-identical.
+    const mode: RunnerMode = params.mode === "delegated" ? "supervisor-node" : "worker";
+    const io: IOStrategy = {
+      mode,
+      onEvent: params.onProgress,
+      externalSignal: params.signal,
+      // background/worker never delivers to a channel — the string is carried in the result.
+      deliverFinal: () => {},
+      // visibleSink omitted (Phase 0: v1 background streams silently).
     };
+
+    const request: AgentRunRequest = {
+      prompt: params.prompt,
+      workerMode: params.mode,
+      chatId: params.chatId,
+      channelType: params.channelType,
+      conversationId: params.conversationId,
+      userId: params.userId,
+      taskRunId: params.taskRunId,
+      attachments: params.attachments,
+      userContent: params.userContent,
+      assignedProvider: params.assignedProvider,
+      assignedModel: params.assignedModel,
+      workspaceLease: params.workspaceLease,
+      workspaceLeaseRetained: params.workspaceLeaseRetained,
+      supervisorMode: params.supervisorMode,
+      goalContext: params.goalContext,
+      onUsage: params.onUsage,
+    };
+
+    const result = await runner.run(request, io);
+    // toWorkerRunResult returns undefined for the legacy bare-string path, reproducing the v1
+    // { output, workerResult: undefined } shape; otherwise it is the byte-identical worker view.
+    const workerResult = toWorkerRunResult(result);
+    return workerResult ? { output: result.finalText, workerResult } : { output: result.finalText };
   }
 
   async runWorkerEnvelope(

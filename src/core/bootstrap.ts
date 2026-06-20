@@ -103,6 +103,7 @@ import type { PostSetupBootstrap } from "../common/setup-contract.js";
 import { MessageRouter } from "../tasks/index.js";
 import { buildTaskProgressSummary } from "../tasks/progress-signals.js";
 import type { BackgroundExecutor } from "../tasks/background-executor.js";
+import { resolveLegalFlagSet, DEFAULT_FLAG_SET } from "../agent-core/runner/index.js";
 
 import type { IChannelAdapter } from "../channels/channel.interface.js";
 import type { NodeResult, SupervisorContext, TaggedGoalNode } from "../supervisor/supervisor-types.js";
@@ -1031,6 +1032,13 @@ async function bootstrapImpl(
     onSkillCreated: async (skillPath) => { await skillManager.loadSingle(skillPath); },
     getSkillEntries: () => skillManager.getEntries(),
   });
+
+  // Agent Core v2 strangler seam (Phase 0): validate the active driver/control-plane flag
+  // combination against LEGAL_FLAG_SETS and REJECT-AT-BOOT any uncatalogued combo (P-F closed
+  // matrix). Phase 0 has no config surface for these flags yet, so the default `all-v1` set is
+  // resolved — installing the seam changes nothing observable (the Phase-0 acceptance criterion).
+  const agentCoreFlagSet = resolveLegalFlagSet(DEFAULT_FLAG_SET);
+  logger.info("Agent Core flag set resolved", { flagSet: agentCoreFlagSet.id });
 
   // Wire FrameworkPromptGenerator to the orchestrator (deferred: IIFE may complete before or after)
   const wireFrameworkPromptGenerator = async (store: FrameworkKnowledgeStore) => {
