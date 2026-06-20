@@ -374,10 +374,8 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
           throw new Error(`Provider "${provider.name}" returned an empty response (no text or tool calls)`);
         }
         health.recordSuccess(provider.name);
-        {
-          const meta = this.attemptMeta[i];
-          if (meta) this.onModelResponsive?.(meta.provider, meta.model);
-        }
+        const okMeta = this.attemptMeta[i];
+        if (okMeta) this.onModelResponsive?.(okMeta.provider, okMeta.model);
 
         // Require 3 consecutive successes before re-enabling thinking to
         // prevent timeout→success→re-enable→timeout cycles.

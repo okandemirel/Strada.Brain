@@ -511,7 +511,10 @@ export class ProviderManager {
     const matchesGlobalDefault = globalPref
       && globalPref.selectionMode === "strada-preference-bias"
       && (canonicalizeProviderName(globalPref.providerName) ?? globalPref.providerName) === canonical
-      && globalPref.model === model;
+      // Exact model match, OR a provider-only default (no explicit model): in that
+      // case the chain only ever runs the provider's DEFAULT model, so the model that
+      // just timed out IS that default — demote the provider-only default too.
+      && (globalPref.model === model || !globalPref.model);
     if (matchesGlobalDefault) {
       this.preferences.delete(ProviderManager.GLOBAL_PREFERENCE_KEY);
       this.modelUnresponsiveCounts.delete(key);

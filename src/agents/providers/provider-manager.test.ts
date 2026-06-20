@@ -798,5 +798,36 @@ describe("ProviderManager", () => {
       manager.recordModelUnresponsive("kimi", "kimi-flaky"); // strike 1 again (not 2)
       expect(preferenceState.get(GLOBAL)?.model).toBe("kimi-flaky"); // not demoted
     });
+
+    it("demotes a provider-only global default (no explicit model) on its default model's strikes", () => {
+      const manager = new ProviderManager(
+        makeProvider("chain(qwen->kimi)"),
+        { qwen: { apiKey: "qwen-key" }, kimi: { apiKey: "kimi-key" } },
+        { qwen: "qwen-max", kimi: "kimi-for-coding" },
+        "/tmp/provider-manager-test",
+        ["qwen", "kimi"],
+      );
+      manager.setPreference("chat-1", "kimi"); // provider-only → global default model is undefined
+      expect(preferenceState.get(GLOBAL)?.providerName).toBe("kimi");
+      expect(preferenceState.get(GLOBAL)?.model).toBeUndefined();
+      // The provider's default model (what the chain runs) times out repeatedly.
+      manager.recordModelUnresponsive("kimi", "kimi-for-coding");
+      manager.recordModelUnresponsive("kimi", "kimi-for-coding");
+      expect(preferenceState.get(GLOBAL)).toBeUndefined(); // provider-only default demoted
+    });
+
+    it("wires the unresponsive callbacks into the provider chain it builds", () => {
+      const manager = new ProviderManager(
+        makeProvider("chain(qwen->kimi)"),
+        { qwen: { apiKey: "qwen-key" }, kimi: { apiKey: "kimi-key" } },
+        { qwen: "qwen-max", kimi: "kimi-for-coding" },
+        "/tmp/provider-manager-test",
+        ["qwen", "kimi"],
+      );
+      manager.getProviderByName("kimi");
+      const overrides = buildProviderChainMock.mock.calls.at(-1)?.[2];
+      expect(typeof overrides?.onModelUnresponsive).toBe("function");
+      expect(typeof overrides?.onModelResponsive).toBe("function");
+    });
   });
 });
