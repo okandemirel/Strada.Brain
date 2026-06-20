@@ -47,6 +47,7 @@ describe("NotificationRouter", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     storage.close();
     rmSync(tmpDir, { recursive: true, force: true });
   });
@@ -267,12 +268,16 @@ describe("NotificationRouter", () => {
 
   describe("quiet hours integration", () => {
     it("during quiet hours, non-critical notifications buffered instead of delivered", async () => {
-      // Use a config where quiet hours is active, create router with overridden time
+      // Pin the clock to UTC noon so the [0,23) quiet window is unambiguously active. The router
+      // reads the wall clock (isQuietHours() with no arg → new Date()), so without this the test
+      // flaked at 23:00–23:59 UTC, where hour 23 ∉ [0,23). timezone is "UTC" (defaultQuietConfig).
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-06-21T12:00:00Z"));
       const router = createRouter({
         quietConfig: {
           enabled: true,
           startHour: 0,
-          endHour: 23, // Covers almost entire day
+          endHour: 23,
         },
       });
 
@@ -428,6 +433,10 @@ describe("NotificationRouter", () => {
     });
 
     it("emits buffered=true when notification is buffered during quiet hours", async () => {
+      // Pin the clock to UTC noon so the [0,23) quiet window is unambiguously active (see the
+      // buffering test above) — otherwise this flaked at 23:00–23:59 UTC where hour 23 ∉ [0,23).
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-06-21T12:00:00Z"));
       const routedEvents: unknown[] = [];
       eventBus.on("daemon:notification_routed", (e) => routedEvents.push(e));
 
