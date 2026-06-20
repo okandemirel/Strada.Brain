@@ -14,7 +14,6 @@ import type {
   ProviderRoutingDecision,
   TaskType,
   ExecutionTrace,
-  ExecutionRole,
   PhaseOutcome,
   PhaseScore,
   ExecutionPhase,
@@ -483,8 +482,7 @@ export class ProviderRouter {
     const capability = this.capabilityScore(entry, task);
     const speed = this.speedScore(entry);
     const diversity = this.diversityScore(entry.name, identityKey);
-    // Role-agnostic phase bias (see getProviderPhaseScore) — role intentionally omitted.
-    const adaptiveBias = this.phaseReliabilityBias(entry.name, phase, undefined, identityKey);
+    const adaptiveBias = this.phaseReliabilityBias(entry.name, phase, identityKey);
     const replayBias = this.trajectoryPhaseBias(
       entry.name,
       phase,
@@ -696,8 +694,7 @@ export class ProviderRouter {
 
     const workload = this.getWorkload(task.type);
     const topFeatures = snapshot.featureTags.slice(0, 2).join(", ");
-    // Role-agnostic lookup (see getProviderPhaseScore) — role intentionally omitted.
-    const phaseScore = this.getProviderPhaseScore(entry.name, phase, undefined, identityKey);
+    const phaseScore = this.getProviderPhaseScore(entry.name, phase, identityKey);
     const replaySignal = this.getProviderTrajectorySignal(
       entry.name,
       phase,
@@ -719,18 +716,12 @@ export class ProviderRouter {
     }
   }
 
-  /**
-   * @param role The execution role being routed. Accepted for call-site
-   *   symmetry and future use; phase scores are aggregated role-agnostically
-   *   (see computePhaseScores), so it does not currently filter the lookup.
-   */
   private phaseReliabilityBias(
     providerName: string,
     phase: string | undefined,
-    _role: ExecutionRole | undefined,
     identityKey?: string,
   ): number {
-    const score = this.getProviderPhaseScore(providerName, phase, _role, identityKey);
+    const score = this.getProviderPhaseScore(providerName, phase, identityKey);
     if (!score) {
       return 0;
     }
@@ -792,18 +783,14 @@ export class ProviderRouter {
   }
 
   /**
-   * @param role The execution role being routed. Accepted for call-site
-   *   symmetry; the lookup is intentionally role-agnostic — computePhaseScores
-   *   now aggregates by provider+phase only, so there is exactly one row per
-   *   provider+phase and no role filter is needed (or possible). This is the
-   *   deliberate, consistent model: group and query both ignore role, so a
-   *   provider's reviewer history can no longer leak into its executor bias via
-   *   a stale best-role row.
+   * Look up a provider's phase reliability score. Intentionally role-agnostic:
+   * computePhaseScores aggregates by provider+phase only, so there is exactly one row
+   * per provider+phase and a provider's reviewer history can no longer leak into its
+   * executor bias via a stale best-role row.
    */
   private getProviderPhaseScore(
     providerName: string,
     phase: string | undefined,
-    _role: ExecutionRole | undefined,
     identityKey?: string,
   ): PhaseScore | null {
     const normalizedPhase = normalizeExecutionPhase(phase);

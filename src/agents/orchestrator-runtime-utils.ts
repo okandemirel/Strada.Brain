@@ -218,6 +218,19 @@ const PROVIDER_FAILURE_LIMIT = 5;
 export const QUOTA_LIMIT_RE = /quota|limit|billing|cycle|exceeded|usage/i;
 
 /**
+ * A provider response with no usable output: no visible text AND no tool calls.
+ * Detection is by CONTENT only — the token count is intentionally ignored, because a
+ * reasoning-only turn reports non-zero tokens yet produces no usable output, and a
+ * dropped usage frame must not be mistaken for an empty answer (audit #18). Shared by
+ * the per-task circuit breaker and the silentStream health-recording path so the two
+ * can never diverge on what "empty" means (audit #9).
+ */
+export function isEmptyProviderResponse(response: ProviderResponse): boolean {
+  return response.meta?.empty === true
+    || (response.text.trim() === "" && response.toolCalls.length === 0);
+}
+
+/**
  * Detect synthetic empty responses from silentStream provider failures.
  * Returns "abort" when the failure limit is reached, "warn_continue" for
  * intermediate failures, and "ok" for real responses.
@@ -226,13 +239,7 @@ export function checkProviderFailureCircuitBreaker(
   response: ProviderResponse,
   consecutiveFailures: number,
 ): { action: "abort" | "warn_continue" | "ok" } {
-  // Prefer the explicit typed signal; otherwise infer emptiness from CONTENT only
-  // (no visible text AND no tool calls). The token count is intentionally NOT used:
-  // a reasoning-only turn reports non-zero tokens yet produces no usable output, and
-  // a dropped usage frame must not be mistaken for an empty answer (audit #18).
-  const isEmpty = response.meta?.empty === true
-    || (response.text.trim() === "" && response.toolCalls.length === 0);
-  if (isEmpty) {
+  if (isEmptyProviderResponse(response)) {
     const newCount = consecutiveFailures + 1;
     return newCount >= PROVIDER_FAILURE_LIMIT
       ? { action: "abort" }

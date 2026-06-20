@@ -274,6 +274,9 @@ export class DynamicToolFactory {
   ): (input: Record<string, unknown>, context: ToolContext) => Promise<ToolExecutionResult> {
     const timeout = Math.min(spec.timeout ?? DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS);
     const commandTemplate = spec.command!;
+    // Build the allowlisted env ONCE per executor — process.env is static for the
+    // daemon's lifetime, so rescanning it on every shell invocation is pure waste.
+    const shellEnv = buildSanitizedShellEnv();
 
     return async (input, context) => {
       // Block shell execution in read-only mode
@@ -294,7 +297,7 @@ export class DynamicToolFactory {
           // SECURITY: pass an ALLOWLISTED env only. The full process.env holds every
           // provider API key/token; an LLM-authored command like `echo $OPENAI_API_KEY`
           // or `env | curl ...` would otherwise exfiltrate all credentials.
-          env: buildSanitizedShellEnv(),
+          env: shellEnv,
         });
 
         const output = stdout.trim() || stderr.trim() || "(no output)";

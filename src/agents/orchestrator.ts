@@ -174,6 +174,7 @@ import {
   sanitizeEventInput,
   sanitizeToolResult,
   checkProviderFailureCircuitBreaker,
+  isEmptyProviderResponse,
   recordProviderHealthFailure,
   evaluateProviderFailure,
 } from "./orchestrator-runtime-utils.js";
@@ -5398,16 +5399,12 @@ export class Orchestrator {
       });
       const response = await Promise.race([streamPromise, timeoutGuard.timeoutPromise]);
       timeoutGuard.clear();
-      // A 200 with no usable output (no text AND no tool calls) is what the per-task
-      // circuit breaker (checkProviderFailureCircuitBreaker) classifies as a FAILURE.
-      // Recording it as registry success here would diverge the two — the breaker
-      // would back off while the health registry kept the provider "healthy". Apply
-      // the SAME emptiness predicate and route empty responses to the health-failure
-      // path so registry and breaker stay in agreement (audit #9).
-      const isEmptyResponse =
-        response.meta?.empty === true
-        || (response.text.trim() === "" && response.toolCalls.length === 0);
-      if (isEmptyResponse) {
+      // A 200 with no usable output is what the per-task circuit breaker classifies as
+      // a FAILURE. Recording it as registry success here would diverge the two — the
+      // breaker would back off while the health registry kept the provider "healthy".
+      // Use the SHARED predicate (the same one the breaker uses) so they can't drift
+      // and route empty responses to the health-failure path (audit #9).
+      if (isEmptyProviderResponse(response)) {
         recordProviderHealthFailure(
           ProviderHealthRegistry.getInstance(),
           provider.name,

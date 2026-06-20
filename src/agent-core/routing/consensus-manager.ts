@@ -8,7 +8,7 @@
  * Graceful degradation: 1 provider = skip entirely.
  */
 
-import type { IAIProvider } from "../../agents/providers/provider.interface.js";
+import type { IAIProvider, ProviderResponse } from "../../agents/providers/provider.interface.js";
 import type { TaskClassification, OriginalOutput, ConsensusResult, ConsensusStrategy } from "./routing-types.js";
 import { getLogger } from "../../utils/logger.js";
 
@@ -315,16 +315,31 @@ export class ConsensusManager {
     provider: IAIProvider,
     systemPrompt: string,
     content: string,
-  ): Promise<import("../../agents/providers/provider.interface.js").ProviderResponse> {
-    const chat = provider.chat(systemPrompt, [{ role: "user" as const, content }], []);
+  ): Promise<ProviderResponse> {
+    const messages = [{ role: "user" as const, content }];
     const ms = this.config.reviewTimeoutMs;
-    if (!ms || ms <= 0) return chat;
+    if (!ms || ms <= 0) {
+      return provider.chat(systemPrompt, messages, []);
+    }
+    // Abort the underlying request on timeout instead of merely abandoning it — a
+    // stalled reviewer fetch is then cancelled rather than left running until its own
+    // internal timeout. The race still rejects even if a provider ignores the signal,
+    // so the turn always fails CLOSED (the verify() catch turns this into "manual
+    // review required").
+    const controller = new AbortController();
+    const chat = provider.chat(systemPrompt, messages, [], { signal: controller.signal });
+    // If the timeout wins the race the abandoned chat still settles later; swallow its
+    // (abort) rejection on a side chain so Node logs no unhandled rejection.
+    chat.catch(() => { /* superseded by the timeout below */ });
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       return await Promise.race([
         chat,
         new Promise<never>((_, reject) => {
-          timer = setTimeout(() => reject(new Error(`Consensus review timed out after ${ms}ms`)), ms);
+          timer = setTimeout(() => {
+            controller.abort();
+            reject(new Error(`Consensus review timed out after ${ms}ms`));
+          }, ms);
         }),
       ]);
     } finally {
