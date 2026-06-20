@@ -249,6 +249,17 @@ export function checkProviderFailureCircuitBreaker(
 }
 
 /**
+ * True when `provider` is NOT a multi-provider fallback chain — i.e. a failure should be
+ * treated as a single-provider outage. A FallbackChainProvider exposes `providerCount`;
+ * anything else is treated as single. Shared so every health-recording site agrees.
+ */
+export function isSingleProviderChain(provider: object): boolean {
+  return "providerCount" in provider
+    ? (provider as { providerCount: number }).providerCount === 1
+    : true;
+}
+
+/**
  * Route a provider error to the appropriate ProviderHealthRegistry method.
  * Matches the same quota-detection logic used in fallback-chain.ts.
  */

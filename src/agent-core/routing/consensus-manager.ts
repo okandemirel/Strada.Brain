@@ -34,18 +34,29 @@ function stripCodeFences(text: string): string {
 }
 
 /**
- * Find the first BALANCED {...} object that JSON-parses and carries `key`, and return
- * its boolean value (or undefined if none). String/escape-aware brace counting — unlike
- * the old non-greedy regex, it does not stop at the first '}' that appears inside the
- * reasoning text (e.g. "the {component} is wrong"), which used to corrupt the JSON and
- * silently fail-OPEN via the keyword fallback.
+ * Scan TEXT for balanced, string/escape-aware {...} objects and return the verdict boolean
+ * carried by the first of KEYS found on a TOP-LEVEL object. Only top-level objects count:
+ * once an object JSON-parses, the scan skips PAST it rather than descending, so a nested
+ * {"approved":true} inside a rejection's reasoning cannot flip the verdict. If two top-level
+ * objects carry conflicting verdicts it fails CLOSED (returns false). Returns undefined when
+ * no top-level object carries any key (the caller then falls back to keyword scanning).
+ * String-aware counting means braces inside reasoning text (e.g. "the {component} is wrong")
+ * don't corrupt the scan.
  */
-function extractJsonBoolForKey(text: string, key: string): boolean | undefined {
-  for (let i = 0; i < text.length; i += 1) {
-    if (text[i] !== "{") continue;
+function extractJsonVerdict(
+  text: string,
+  keys: readonly string[],
+): { verdict: boolean | undefined; sawObject: boolean } {
+  let verdict: boolean | undefined;
+  let sawObject = false;
+  let i = 0;
+  while (i < text.length) {
+    if (text[i] !== "{") { i += 1; continue; }
+    // Find this object's matching close brace (string/escape-aware).
     let depth = 0;
     let inStr = false;
     let esc = false;
+    let end = -1;
     for (let j = i; j < text.length; j += 1) {
       const c = text[j];
       if (esc) { esc = false; continue; }
@@ -55,19 +66,31 @@ function extractJsonBoolForKey(text: string, key: string): boolean | undefined {
       if (c === "{") depth += 1;
       else if (c === "}") {
         depth -= 1;
-        if (depth === 0) {
-          try {
-            const parsed: unknown = JSON.parse(text.slice(i, j + 1));
-            if (parsed && typeof parsed === "object" && key in parsed) {
-              return Boolean((parsed as Record<string, unknown>)[key]);
-            }
-          } catch { /* not valid JSON — keep scanning for the next object */ }
-          break;
-        }
+        if (depth === 0) { end = j; break; }
       }
     }
+    if (end === -1) { i += 1; continue; } // no balanced close from here — keep scanning
+    try {
+      const parsed: unknown = JSON.parse(text.slice(i, end + 1));
+      if (parsed && typeof parsed === "object") {
+        sawObject = true;
+        for (const key of keys) {
+          if (key in parsed) {
+            const value = Boolean((parsed as Record<string, unknown>)[key]);
+            if (verdict !== undefined && verdict !== value) {
+              return { verdict: false, sawObject: true }; // conflicting verdicts → fail closed
+            }
+            verdict = value;
+            break;
+          }
+        }
+        i = end + 1; // top-level object consumed — skip past it (never descend into nesting)
+        continue;
+      }
+    } catch { /* not valid JSON — resume at i+1 to find JSON embedded in prose */ }
+    i += 1;
   }
-  return undefined;
+  return { verdict, sawObject };
 }
 
 export class ConsensusManager {
@@ -321,11 +344,11 @@ export class ConsensusManager {
     if (!ms || ms <= 0) {
       return provider.chat(systemPrompt, messages, []);
     }
-    // Abort the underlying request on timeout instead of merely abandoning it — a
-    // stalled reviewer fetch is then cancelled rather than left running until its own
-    // internal timeout. The race still rejects even if a provider ignores the signal,
-    // so the turn always fails CLOSED (the verify() catch turns this into "manual
-    // review required").
+    // Request cancellation of the underlying call on timeout instead of merely abandoning
+    // it: providers that thread `signal` into fetch abort the stalled request rather than
+    // leaving it open until their own internal timeout. The race rejects regardless of
+    // whether the provider honors the signal, so the turn always fails CLOSED (verify()'s
+    // catch turns this into "manual review required").
     const controller = new AbortController();
     const chat = provider.chat(systemPrompt, messages, [], { signal: controller.signal });
     // If the timeout wins the race the abandoned chat still settles later; swallow its
@@ -351,20 +374,28 @@ export class ConsensusManager {
     if (!text) return false;
     const cleaned = stripCodeFences(text).trim();
 
-    // Prefer a real JSON verdict object (balanced-brace scan, not a greedy regex), so
-    // a rejection whose reasoning contains literal braces is read correctly instead of
-    // corrupting the JSON and fail-OPENing through the keyword path.
-    for (const key of ["approved", "agreed"]) {
-      const verdict = extractJsonBoolForKey(cleaned, key);
-      if (verdict !== undefined) return verdict;
-    }
+    // Prefer a real JSON verdict: a TOP-LEVEL {...} object carrying "approved"/"agreed".
+    // Top-level-only + conflict-fail-closed means neither a nested affirmative in the
+    // reasoning nor an earlier discarded attempt can flip a rejection to approval.
+    const { verdict, sawObject } = extractJsonVerdict(cleaned, ["approved", "agreed"]);
+    if (verdict !== undefined) return verdict;
+    // The reviewer emitted parseable JSON but no top-level verdict key — ambiguous
+    // structured output. Fail CLOSED rather than fuzzy-matching a stray "approved"
+    // substring buried inside that JSON (e.g. in a nested object), which would fail-OPEN.
+    if (sawObject) return false;
 
-    // No parseable verdict object — keyword fallback, fail-closed, negatives first.
+    // No JSON at all — keyword fallback on prose, fail-closed, negatives first.
+    // "correct" is intentionally NOT a positive keyword: "incorrect" / "not correct"
+    // contain it and would fail-OPEN a rejection through the positive branch.
     const lower = cleaned.toLowerCase();
-    if (lower.includes("not approved") || lower.includes("rejected") || lower.includes("disagree")) {
+    if (
+      lower.includes("not approved") || lower.includes("reject") || lower.includes("disagree")
+      || lower.includes("do not agree") || lower.includes("don't agree")
+      || lower.includes("not correct") || lower.includes("incorrect")
+    ) {
       return false;
     }
-    if (lower.includes("approved") || lower.includes("agree") || lower.includes("correct")) {
+    if (lower.includes("approved") || lower.includes("agree")) {
       return true;
     }
 

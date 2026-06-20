@@ -546,4 +546,67 @@ describe("ConsensusManager", () => {
 
     expect(result.agreed).toBe(false);
   });
+
+  it("parseApproval: a nested {approved:true} inside a rejection does NOT flip to approved", async () => {
+    const mockReview = {
+      name: "groq",
+      chat: vi.fn().mockResolvedValue({
+        text: '{"previousAttempt":{"approved":true},"comment":"this regresses behavior, do not ship it"}',
+        toolCalls: [],
+        stopReason: "end_turn",
+      }),
+    };
+    const mgr = new ConsensusManager({ mode: "always", threshold: 1.0 });
+    const result = await mgr.verify({
+      originalOutput: { text: "Some action" },
+      originalProvider: "claude",
+      task: { type: "destructive-operation", complexity: "simple", criticality: "critical" },
+      confidence: 0.5,
+      reviewProvider: mockReview as any,
+      prompt: "Delete file",
+    });
+    expect(result.agreed).toBe(false);
+  });
+
+  it("parseApproval: conflicting top-level verdicts fail closed", async () => {
+    const mockReview = {
+      name: "groq",
+      chat: vi.fn().mockResolvedValue({
+        text: 'The earlier draft said {"approved": true} but on reflection: {"approved": false}',
+        toolCalls: [],
+        stopReason: "end_turn",
+      }),
+    };
+    const mgr = new ConsensusManager({ mode: "always", threshold: 1.0 });
+    const result = await mgr.verify({
+      originalOutput: { text: "Some action" },
+      originalProvider: "claude",
+      task: { type: "destructive-operation", complexity: "simple", criticality: "critical" },
+      confidence: 0.5,
+      reviewProvider: mockReview as any,
+      prompt: "Delete file",
+    });
+    expect(result.agreed).toBe(false);
+  });
+
+  it("parseApproval: prose 'incorrect' is a rejection, not approval via the 'correct' substring", async () => {
+    const mockReview = {
+      name: "groq",
+      chat: vi.fn().mockResolvedValue({
+        text: "The proposed change is incorrect and should be reworked.",
+        toolCalls: [],
+        stopReason: "end_turn",
+      }),
+    };
+    const mgr = new ConsensusManager({ mode: "always", threshold: 1.0 });
+    const result = await mgr.verify({
+      originalOutput: { text: "Some action" },
+      originalProvider: "claude",
+      task: { type: "code-generation", complexity: "moderate", criticality: "medium" },
+      confidence: 0.5,
+      reviewProvider: mockReview as any,
+      prompt: "Generate code",
+    });
+    expect(result.agreed).toBe(false);
+  });
 });

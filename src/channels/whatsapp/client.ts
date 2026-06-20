@@ -666,6 +666,7 @@ export class WhatsAppChannel extends EventEmitter implements IChannelAdapter {
           // fallback never fires). The first chunk edits the existing placeholder;
           // any remaining chunks are sent as follow-up messages. Mirrors Discord.
           const chunks = chunkText(text, WHATSAPP_MAX_CHARS);
+          let delivered = false;
           try {
             if (!this.sock) throw new Error("WhatsApp not connected");
             if (chunks.length === 0) {
@@ -676,17 +677,26 @@ export class WhatsAppChannel extends EventEmitter implements IChannelAdapter {
               text: chunks[0]!,
               edit: state.messageKey,
             });
+            delivered = true;
             // Send the overflow chunks as new messages so the tail is never lost.
             for (const chunk of chunks.slice(1)) {
               if (!chunk) continue;
               await this.sock.sendMessage(state.chatId, { text: chunk });
             }
           } catch {
-            // Fallback: send as a new message (sendMarkdown chunks internally).
-            try {
-              await this.sendMarkdown(state.chatId, text);
-            } catch {
-              getLogger().error("Failed to finalize streaming message");
+            if (delivered) {
+              // The placeholder edit already landed; only a later overflow chunk failed.
+              // Re-sending the whole message via sendMarkdown would DUPLICATE what was
+              // already delivered, so just log the dropped tail.
+              getLogger().error("WhatsApp finalize: overflow chunk failed after the edit landed; tail may be truncated");
+            } else {
+              // Nothing delivered yet (the placeholder edit itself failed) — send fresh
+              // (sendMarkdown chunks internally).
+              try {
+                await this.sendMarkdown(state.chatId, text);
+              } catch {
+                getLogger().error("Failed to finalize streaming message");
+              }
             }
           } finally {
             this.streamingMessages.delete(streamId);

@@ -175,6 +175,7 @@ import {
   sanitizeToolResult,
   checkProviderFailureCircuitBreaker,
   isEmptyProviderResponse,
+  isSingleProviderChain,
   recordProviderHealthFailure,
   evaluateProviderFailure,
 } from "./orchestrator-runtime-utils.js";
@@ -5409,12 +5410,7 @@ export class Orchestrator {
           ProviderHealthRegistry.getInstance(),
           provider.name,
           response.meta?.reason ?? "empty response (no text, no tool calls)",
-          {
-            isSingleProvider:
-              "providerCount" in provider
-                ? (provider as { providerCount: number }).providerCount === 1
-                : true,
-          },
+          { isSingleProvider: isSingleProviderChain(provider) },
         );
       } else {
         ProviderHealthRegistry.getInstance().recordSuccess(provider.name);
@@ -5443,13 +5439,25 @@ export class Orchestrator {
           signal: fallbackSignal,
           externalSignal,
         });
-        ProviderHealthRegistry.getInstance().recordSuccess(provider.name);
+        // The fallback chat can also return an empty 200 — record it as a health FAILURE
+        // (same predicate the per-task breaker uses) instead of success, so the registry
+        // and breaker stay in agreement on this path too (audit #9).
+        if (isEmptyProviderResponse(fallbackResponse)) {
+          recordProviderHealthFailure(
+            ProviderHealthRegistry.getInstance(),
+            provider.name,
+            fallbackResponse.meta?.reason ?? "empty response (no text, no tool calls)",
+            { isSingleProvider: isSingleProviderChain(provider) },
+          );
+        } else {
+          ProviderHealthRegistry.getInstance().recordSuccess(provider.name);
+        }
         return fallbackResponse;
       } catch (fallbackErr) {
         const fallbackMsg = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
         getLogger().error("Silent stream fallback chat failed", { chatId, error: fallbackMsg });
         recordProviderHealthFailure(ProviderHealthRegistry.getInstance(), provider.name, fallbackMsg, {
-          isSingleProvider: "providerCount" in provider ? (provider as { providerCount: number }).providerCount === 1 : true,
+          isSingleProvider: isSingleProviderChain(provider),
         });
         // Surface the failure to the agent so it can adapt its approach
         // (e.g. simplify the request, reduce tool usage, skip non-critical work).

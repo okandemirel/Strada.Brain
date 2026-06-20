@@ -907,6 +907,31 @@ describe("WhatsAppChannel", () => {
       expect(total).toBeGreaterThanOrEqual(10000);
     });
 
+    // Regression: if the placeholder edit lands but a later overflow chunk send fails,
+    // the catch must NOT re-send the whole message via sendMarkdown (that would duplicate
+    // everything already delivered) — it should only log the dropped tail.
+    it("does not re-send the whole message when an overflow chunk fails after the edit landed", async () => {
+      const streamId = await connectedChannel.startStreamingMessage("chat1@s.whatsapp.net");
+      expect(streamId).toBeDefined();
+      mockSock.sendMessage.mockClear();
+      // Chunk 0 (the placeholder edit) succeeds; the first overflow chunk send fails.
+      mockSock.sendMessage
+        .mockResolvedValueOnce({ key: { id: "msg1" } })
+        .mockRejectedValueOnce(new Error("socket dropped"));
+
+      const longLine = "a".repeat(5000);
+      await connectedChannel.finalizeStreamingMessage(
+        "chat1@s.whatsapp.net",
+        streamId!,
+        `${longLine}\n${longLine}`,
+      );
+
+      // Exactly the edit + the one failed overflow attempt. A whole-message sendMarkdown
+      // fallback would add >=1 more call, duplicating the already-delivered first chunk.
+      expect(mockSock.sendMessage).toHaveBeenCalledTimes(2);
+      expect(mockSock.sendMessage.mock.calls[0]![1]).toMatchObject({ edit: { id: "msg1" } });
+    });
+
     // Regression: a duplicate inbound id (e.g. history-sync replay) is routed once.
     it("dedupes inbound messages with a repeated key id", async () => {
       const handler = vi.fn().mockResolvedValue(undefined);

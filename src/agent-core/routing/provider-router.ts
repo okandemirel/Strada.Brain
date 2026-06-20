@@ -279,7 +279,17 @@ export class ProviderRouter {
     };
 
     this.recordDecision(decision);
-    this.lastExecutingProvider.set(options.identityKey ?? "", bestProvider);
+    // Bound this per-identity map like the sibling decision/trace/outcome buffers
+    // (MAX_DECISIONS): delete-then-set re-inserts at the tail for LRU recency, then evict
+    // the oldest entry once over the cap, so a long-lived daemon serving many distinct
+    // conversations never grows it without bound.
+    const identityScope = options.identityKey ?? "";
+    this.lastExecutingProvider.delete(identityScope);
+    this.lastExecutingProvider.set(identityScope, bestProvider);
+    if (this.lastExecutingProvider.size > MAX_DECISIONS) {
+      const oldest = this.lastExecutingProvider.keys().next().value;
+      if (oldest !== undefined) this.lastExecutingProvider.delete(oldest);
+    }
     return decision;
   }
 
