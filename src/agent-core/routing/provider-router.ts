@@ -14,6 +14,7 @@ import type {
   ProviderRoutingDecision,
   TaskType,
   ExecutionTrace,
+  ExecutionRole,
   PhaseOutcome,
   PhaseScore,
   ExecutionPhase,
@@ -123,7 +124,12 @@ export class ProviderRouter {
   private readonly decisions: RoutingDecision[] = [];
   private readonly executionTraces: ExecutionTrace[] = [];
   private readonly phaseOutcomes: PhaseOutcome[] = [];
-  private lastExecutingProvider: string | undefined;
+  /**
+   * Last executing provider, scoped by identityKey so concurrent chats/users
+   * never contaminate each other's diversity scoring. The empty-string key
+   * holds the global (identity-less) prior.
+   */
+  private readonly lastExecutingProvider = new Map<string, string>();
   private readonly modelIntelligence?: ModelIntelligenceLookup;
   private readonly trajectoryPhaseSignalRetriever?: TrajectoryPhaseSignalRetriever;
   /** Tier 2 dynamic behavioral profiles (telemetry-blended). Optional. */
@@ -274,7 +280,7 @@ export class ProviderRouter {
     };
 
     this.recordDecision(decision);
-    this.lastExecutingProvider = bestProvider;
+    this.lastExecutingProvider.set(options.identityKey ?? "", bestProvider);
     return decision;
   }
 
@@ -476,8 +482,9 @@ export class ProviderRouter {
     const cost = this.costScore(entry, available);
     const capability = this.capabilityScore(entry, task);
     const speed = this.speedScore(entry);
-    const diversity = this.diversityScore(entry.name);
-    const adaptiveBias = this.phaseReliabilityBias(entry.name, phase, identityKey);
+    const diversity = this.diversityScore(entry.name, identityKey);
+    // Role-agnostic phase bias (see getProviderPhaseScore) — role intentionally omitted.
+    const adaptiveBias = this.phaseReliabilityBias(entry.name, phase, undefined, identityKey);
     const replayBias = this.trajectoryPhaseBias(
       entry.name,
       phase,
@@ -658,10 +665,14 @@ export class ProviderRouter {
     return 0.5;
   }
 
-  /** Diversity: bonus for using a different provider than the last one. */
-  private diversityScore(name: string): number {
-    if (!this.lastExecutingProvider) return 0.5;
-    return name === this.lastExecutingProvider ? 0.0 : 1.0;
+  /**
+   * Diversity: bonus for using a different provider than the last one.
+   * Scoped by identityKey so one tenant's last provider never biases another's.
+   */
+  private diversityScore(name: string, identityKey?: string): number {
+    const last = this.lastExecutingProvider.get(identityKey ?? "");
+    if (!last) return 0.5;
+    return name === last ? 0.0 : 1.0;
   }
 
   private buildReason(
@@ -685,7 +696,8 @@ export class ProviderRouter {
 
     const workload = this.getWorkload(task.type);
     const topFeatures = snapshot.featureTags.slice(0, 2).join(", ");
-    const phaseScore = this.getProviderPhaseScore(entry.name, phase, identityKey);
+    // Role-agnostic lookup (see getProviderPhaseScore) — role intentionally omitted.
+    const phaseScore = this.getProviderPhaseScore(entry.name, phase, undefined, identityKey);
     const replaySignal = this.getProviderTrajectorySignal(
       entry.name,
       phase,
@@ -707,12 +719,18 @@ export class ProviderRouter {
     }
   }
 
+  /**
+   * @param role The execution role being routed. Accepted for call-site
+   *   symmetry and future use; phase scores are aggregated role-agnostically
+   *   (see computePhaseScores), so it does not currently filter the lookup.
+   */
   private phaseReliabilityBias(
     providerName: string,
     phase: string | undefined,
+    _role: ExecutionRole | undefined,
     identityKey?: string,
   ): number {
-    const score = this.getProviderPhaseScore(providerName, phase, identityKey);
+    const score = this.getProviderPhaseScore(providerName, phase, _role, identityKey);
     if (!score) {
       return 0;
     }
@@ -773,9 +791,19 @@ export class ProviderRouter {
     return (entry.officialAlignmentScore - PHASE_SCORE_NEUTRAL) * OFFICIAL_ALIGNMENT_WEIGHT * sensitivity;
   }
 
+  /**
+   * @param role The execution role being routed. Accepted for call-site
+   *   symmetry; the lookup is intentionally role-agnostic — computePhaseScores
+   *   now aggregates by provider+phase only, so there is exactly one row per
+   *   provider+phase and no role filter is needed (or possible). This is the
+   *   deliberate, consistent model: group and query both ignore role, so a
+   *   provider's reviewer history can no longer leak into its executor bias via
+   *   a stale best-role row.
+   */
   private getProviderPhaseScore(
     providerName: string,
     phase: string | undefined,
+    _role: ExecutionRole | undefined,
     identityKey?: string,
   ): PhaseScore | null {
     const normalizedPhase = normalizeExecutionPhase(phase);
@@ -913,7 +941,14 @@ export class ProviderRouter {
     }>();
 
     for (const outcome of relevant) {
-      const key = `${outcome.provider}:${outcome.role}:${outcome.phase}`;
+      // Role-AGNOSTIC aggregation (deliberate): outcomes are grouped by
+      // provider+phase only, blending a provider's history across every role
+      // it played in that phase. This keeps the grouping consistent with the
+      // role-agnostic query in getProviderPhaseScore — otherwise a provider's
+      // reviewer history could leak into its executor routing bias. The `role`
+      // field below is the latest outcome's role, retained purely as a
+      // human-readable scoreboard hint (it is NOT a routing filter).
+      const key = `${outcome.provider}:${outcome.phase}`;
       const current = grouped.get(key) ?? {
         provider: outcome.provider,
         role: outcome.role,
@@ -972,6 +1007,8 @@ export class ProviderRouter {
       if (outcome.timestamp >= current.latestTimestamp) {
         current.latestTimestamp = outcome.timestamp;
         current.latestReason = outcome.reason;
+        // Representative role = latest outcome's role (scoreboard hint only).
+        current.role = outcome.role;
       }
       grouped.set(key, current);
     }

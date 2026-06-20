@@ -732,6 +732,146 @@ describe("ProviderRouter", () => {
     });
   });
 
+  describe("per-identity diversity isolation (FIX #10)", () => {
+    it("does not let tenant A's last provider bias tenant B's diversity scoring", () => {
+      // PARITY_PROVIDERS are scored identically, so the diversity prior is the
+      // only tiebreaker. On a fresh router with no prior, a reflecting-phase
+      // resolve breaks the tie toward the first provider ("alpha").
+      const control = new ProviderRouter(createMockManager(PARITY_PROVIDERS), "balanced");
+      const controlProvider = control.resolve(planningTask, "reflecting", {
+        identityKey: "tenant-b",
+      }).provider;
+      expect(controlProvider).toBe("alpha");
+
+      // Now reuse ONE shared router across two tenants. Tenant A resolves first,
+      // pinning "alpha" as A's last executing provider. Under the old global
+      // state, this would boost diversity AWAY from "alpha" for tenant B and
+      // flip B's reflecting pick to "beta" — cross-tenant contamination.
+      const shared = new ProviderRouter(createMockManager(PARITY_PROVIDERS), "balanced");
+      const tenantALast = shared.resolve(planningTask, undefined, {
+        identityKey: "tenant-a",
+      }).provider;
+      expect(tenantALast).toBe("alpha");
+
+      const tenantBDecision = shared.resolve(planningTask, "reflecting", {
+        identityKey: "tenant-b",
+      });
+
+      // Tenant B sees its OWN (empty) prior, not tenant A's — identical to control.
+      expect(tenantBDecision.provider).toBe(controlProvider);
+      expect(tenantBDecision.provider).toBe("alpha");
+    });
+
+    it("still applies the diversity prior within a single identity", () => {
+      // Sanity: scoping must not disable diversity — within one tenant the
+      // last provider is still avoided in the reflecting phase.
+      const router = new ProviderRouter(createMockManager(PARITY_PROVIDERS), "balanced");
+      const first = router.resolve(planningTask, undefined, { identityKey: "tenant-a" });
+      expect(first.provider).toBe("alpha");
+      const reflect = router.resolve(planningTask, "reflecting", { identityKey: "tenant-a" });
+      expect(reflect.provider).not.toBe("alpha");
+    });
+  });
+
+  describe("role-agnostic phase bias (FIX #11)", () => {
+    it("does not let a provider's reviewer history leak into its executor routing bias", () => {
+      // Build phase history for "alpha" in the "executing" phase under TWO roles:
+      //  - executor outcomes that are uniformly BAD (failed)
+      //  - reviewer outcomes that are uniformly GREAT (approved, clean verifier)
+      // Phase scores are aggregated role-agnostically, so the reviewer wins do
+      // NOT mask the executor failures when routing the executing phase.
+      const buildRouter = () => new ProviderRouter(createMockManager(PARITY_PROVIDERS), "balanced");
+
+      // Reference router: ONLY alpha's bad executor history in "executing".
+      const executorOnly = buildRouter();
+      for (let i = 0; i < 4; i++) {
+        executorOnly.recordPhaseOutcome({
+          provider: "alpha",
+          role: "executor",
+          phase: "executing",
+          source: "supervisor-strategy",
+          status: "failed",
+          reason: "executor run failed",
+          task: codeGenTask,
+          timestamp: 100 + i,
+          identityKey: "tenant-x",
+        });
+      }
+      const executorOnlyScore = executorOnly
+        .getPhaseScoreboard(10, "tenant-x")
+        .find((entry) => entry.provider === "alpha" && entry.phase === "executing")!;
+
+      // Reference router: ONLY alpha's great reviewer history in "executing".
+      // This is the score the OLD bug would have leaked into executor routing.
+      const reviewerOnly = buildRouter();
+      for (let i = 0; i < 4; i++) {
+        reviewerOnly.recordPhaseOutcome({
+          provider: "alpha",
+          role: "reviewer",
+          phase: "executing",
+          source: "supervisor-strategy",
+          status: "approved",
+          reason: "reviewer pass was clean",
+          task: codeGenTask,
+          timestamp: 200 + i,
+          identityKey: "tenant-x",
+          telemetry: { verifierDecision: "approve", retryCount: 0, rollbackDepth: 0 },
+        });
+      }
+      const reviewerOnlyScore = reviewerOnly
+        .getPhaseScoreboard(10, "tenant-x")
+        .find((entry) => entry.provider === "alpha" && entry.phase === "executing")!;
+
+      // Mixed router: same bad executor history PLUS strong reviewer history in
+      // the same provider+phase. Reviewer wins must not inflate the executing score.
+      const mixed = buildRouter();
+      for (let i = 0; i < 4; i++) {
+        mixed.recordPhaseOutcome({
+          provider: "alpha",
+          role: "executor",
+          phase: "executing",
+          source: "supervisor-strategy",
+          status: "failed",
+          reason: "executor run failed",
+          task: codeGenTask,
+          timestamp: 100 + i,
+          identityKey: "tenant-x",
+        });
+      }
+      for (let i = 0; i < 4; i++) {
+        mixed.recordPhaseOutcome({
+          provider: "alpha",
+          role: "reviewer",
+          phase: "executing",
+          source: "supervisor-strategy",
+          status: "approved",
+          reason: "reviewer pass was clean",
+          task: codeGenTask,
+          timestamp: 200 + i,
+          identityKey: "tenant-x",
+          telemetry: { verifierDecision: "approve", retryCount: 0, rollbackDepth: 0 },
+        });
+      }
+
+      const alphaRows = mixed
+        .getPhaseScoreboard(20, "tenant-x")
+        .filter((entry) => entry.provider === "alpha" && entry.phase === "executing");
+
+      // Grouping is role-agnostic: exactly ONE alpha row for the executing phase
+      // (not one-per-role), so getProviderPhaseScore can no longer pick a
+      // best-scoring reviewer row while routing the executor.
+      expect(alphaRows).toHaveLength(1);
+      const blended = alphaRows[0]!;
+      expect(blended.sampleSize).toBe(8); // 4 executor + 4 reviewer, merged
+
+      // The blended score sits STRICTLY BETWEEN the pure-executor score and the
+      // pure-reviewer score: reviewer wins are folded in, but they no longer
+      // stand in for executor reliability the way the old best-role row did.
+      expect(blended.score).toBeGreaterThan(executorOnlyScore.score);
+      expect(blended.score).toBeLessThan(reviewerOnlyScore.score);
+    });
+  });
+
   describe("snapshot memoization", () => {
     let snapshotSpy: ReturnType<typeof vi.spyOn>;
 
