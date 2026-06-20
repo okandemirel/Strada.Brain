@@ -3172,12 +3172,19 @@ export class Orchestrator {
                       this.withCompactionSummary(activePrompt, session),
                       session.messages,
                       currentToolDefinitions,
-                      // Non-streaming sibling of the silentStream path: thread the task
-                      // signal as externalSignal too, so a benign cancel / inactivity
-                      // abort does not poison provider health or fall over the chain —
-                      // keeping streaming and non-streaming cancel behaviour consistent
-                      // (audit #6).
-                      { signal, externalSignal: signal },
+                      // Non-streaming sibling of the silentStream path. Bound it with a
+                      // per-call deadline: the streaming path has its progress watchdog and
+                      // the interactive non-streaming path has the same AbortSignal.timeout,
+                      // but this background path had NONE — so a stalled provider hung the
+                      // task until the task-level abort (observed: ~70min silent stall).
+                      // Compose the deadline with the task signal; externalSignal stays the
+                      // task signal ALONE so a benign cancel / inactivity abort isn't mistaken
+                      // for a provider stall (no health poison / no false fall-over), while a
+                      // genuine timeout IS treated as a provider failure (audit #6 / #7).
+                      {
+                        signal: AbortSignal.any([signal, AbortSignal.timeout(this.streamInitialTimeoutMs)]),
+                        externalSignal: signal,
+                      },
                     );
               } catch (providerError) {
                 const errMsg = providerError instanceof Error ? providerError.message : String(providerError);
