@@ -38,8 +38,8 @@ export interface HealthCore {
  * refs makes the precedence trivially testable.
  */
 export interface VerdictInput {
-  /** The task or call token's reason, if either aborted; else null. */
-  readonly cancelReason: CancelReason | null;
+  /** The TASK token's reason if it is aborted; else null. (Call-level aborts arrive via `callStalled`.) */
+  readonly taskCancelReason: CancelReason | null;
   readonly hardTimeoutBlown: boolean; // call OR task wall-clock ceiling reached
   readonly hardTimeoutScope: ScopeLevel;
   readonly resourceExhausted: false | "tokens" | "cost";
@@ -98,8 +98,15 @@ class FailureLedgerImpl implements FailureLedger {
     // Deterministic precedence (§2.5), top-down, first match wins.
 
     // 1. Benign cancel — never counted as a failure.
-    if (input.cancelReason !== null && isBenign(input.cancelReason)) {
-      return { decision: "stop", reason: input.cancelReason, finalize: "graceful" };
+    if (input.taskCancelReason !== null && isBenign(input.taskCancelReason)) {
+      return { decision: "stop", reason: input.taskCancelReason, finalize: "graceful" };
+    }
+    // 1b. Any OTHER task-token abort is AUTHORITATIVE: the token is already aborted, so the
+    //     run must stop regardless of whether the loop's derived booleans (rules 2–4) have
+    //     caught up to the timer that aborted it. Self-defending, not contract-dependent —
+    //     a between-tick hard-timeout fire can never be lost to a stale `remainingTaskMs`.
+    if (input.taskCancelReason !== null) {
+      return { decision: "stop", reason: input.taskCancelReason, finalize: "graceful" };
     }
     // 2. Hard wall-clock blown — OVERRIDES the reflection override (rule 8). Kills the 3h27m runaway.
     if (input.hardTimeoutBlown) {
@@ -137,7 +144,8 @@ class FailureLedgerImpl implements FailureLedger {
         finalize: "graceful",
       };
     }
-    // 7. Health ask_user / retry.
+    // 7. Health ask_user / retry. (Phase 1 routes the reason/guidance text through v1's
+    //    centralized, i18n-aware message formatter; the literals here are placeholders.)
     if (this.core.shouldAskUser()) {
       return {
         decision: "ask_user",
@@ -145,7 +153,9 @@ class FailureLedgerImpl implements FailureLedger {
         reason: "Repeated provider failures — manual guidance requested.",
       };
     }
-    if (this.core.consecutive > 0) {
+    // A stale single failure must not force a retry when the model has signaled completion —
+    // defer to rule 8 (the success about to be recorded would clear `consecutive` anyway).
+    if (this.core.consecutive > 0 && !input.modelProposedDone) {
       return {
         decision: "retry",
         backoffMs: this.core.backoffMs(),

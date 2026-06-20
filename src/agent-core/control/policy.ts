@@ -58,10 +58,19 @@ export interface PolicyResolution {
 export function resolveRunBudgetPolicy(mode: RunMode, seed: PolicySeed): PolicyResolution {
   const warnings: string[] = [];
 
-  const callStallMs = seed.streamStallTimeoutMs;
-  // First-response can't exceed the per-call hard ceiling.
-  const callFirstResponseMs = Math.min(seed.providerFirstResponseMs, seed.streamInitialTimeoutMs);
   const callHardMs = seed.streamInitialTimeoutMs;
+  // First-response can't exceed the per-call hard ceiling.
+  const callFirstResponseMs = Math.min(seed.providerFirstResponseMs, callHardMs);
+  // Neither can the stall window — clamp + warn rather than silently honoring an ordering
+  // violation (the spec's "every deadline is a clamped+warned min() slice" claim).
+  let callStallMs = seed.streamStallTimeoutMs;
+  if (callStallMs > callHardMs) {
+    warnings.push(
+      `streamStallTimeoutMs (${callStallMs}ms) > callHardMs (${callHardMs}ms); ` +
+        `clamped to ${callHardMs}ms so the stall window never outlives the call's hard ceiling.`,
+    );
+    callStallMs = callHardMs;
+  }
 
   const floor = seed.minInactivityOverStreamRatio * callStallMs;
   let taskInactivityMs = seed.taskInactivityMs;

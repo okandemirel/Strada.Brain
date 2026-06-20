@@ -43,7 +43,7 @@ function fakeHealth(overrides: Partial<HealthCore> = {}): HealthCore {
 
 function vin(overrides: Partial<VerdictInput> = {}): VerdictInput {
   return {
-    cancelReason: null,
+    taskCancelReason: null,
     hardTimeoutBlown: false,
     hardTimeoutScope: "task",
     resourceExhausted: false,
@@ -333,7 +333,7 @@ describe("FailureLedger verdict precedence", () => {
     createFailureLedger(fakeHealth(health), { pauseRetryBudget });
 
   it("1. benign cancel → stop graceful", () => {
-    const v = ledger().verdict(vin({ cancelReason: { kind: "user-cancel" } }));
+    const v = ledger().verdict(vin({ taskCancelReason: { kind: "user-cancel" } }));
     expect(v).toEqual({ decision: "stop", reason: { kind: "user-cancel" }, finalize: "graceful" });
   });
 
@@ -436,5 +436,65 @@ describe("incident regressions", () => {
     }
     expect(stopped).toBe(true);
     expect(rc.accumulatedSilentMs()).toBeGreaterThanOrEqual(2000);
+  });
+});
+
+describe("review hardening (P-A)", () => {
+  it("HIGH-1: a non-benign task-token abort is authoritative even if the mirror boolean lags", () => {
+    const l = createFailureLedger(fakeHealth(), { pauseRetryBudget: 3 });
+    // The hard-timeout timer aborted the task token, but the loop's derived hardTimeoutBlown
+    // is still false (stale snapshot). The verdict must STILL stop — never fall to continue.
+    const v = l.verdict(vin({ taskCancelReason: { kind: "hard-timeout", scope: "task" }, hardTimeoutBlown: false }));
+    expect(v).toEqual({ decision: "stop", reason: { kind: "hard-timeout", scope: "task" }, finalize: "graceful" });
+  });
+
+  it("MEDIUM: a stale single failure does not preempt a model-proposed DONE", () => {
+    const honored = createFailureLedger(fakeHealth({ consecutive: 1 }), { pauseRetryBudget: 3 }).verdict(
+      vin({ modelProposedDone: true, reflectionWantsExtend: false }),
+    );
+    expect(honored).toEqual({ decision: "done", finalize: "graceful" });
+    // Without a done proposal, the same stale failure still retries.
+    expect(
+      createFailureLedger(fakeHealth({ consecutive: 1 }), { pauseRetryBudget: 3 }).verdict(vin()).decision,
+    ).toBe("retry");
+  });
+
+  it("LOW: policy clamps callStallMs above callHardMs and warns", () => {
+    const { policy, warnings } = resolveRunBudgetPolicy("background", {
+      streamInitialTimeoutMs: 100_000, // callHardMs
+      streamStallTimeoutMs: 300_000, // > callHardMs
+      providerFirstResponseMs: 90_000,
+      taskInactivityMs: 10_000_000,
+      minInactivityOverStreamRatio: 2,
+      outputTokenCap: 1000,
+      costCapUsd: 1,
+    });
+    expect(policy.callStallMs).toBe(100_000);
+    expect(warnings.some((w) => w.includes("clamped"))).toBe(true);
+  });
+
+  it("F1: a non-finite call window arms no timer (no bogus stall under a real clock)", () => {
+    const clock = new FakeClock(0);
+    const rc = openRunClock(clock, POLICY({ taskHardMs: Number.POSITIVE_INFINITY }));
+    rc.enterCall({
+      firstResponseMs: Number.POSITIVE_INFINITY,
+      stallMs: Number.POSITIVE_INFINITY,
+      hardMs: Number.POSITIVE_INFINITY,
+    });
+    expect(clock.pendingTimers()).toBe(0);
+    clock.advance(10_000_000);
+    expect(rc.taskToken.aborted).toBe(false);
+  });
+
+  it("F2: entering a fresh call flushes an abandoned prior call's silent contribution", () => {
+    const clock = new FakeClock(0);
+    const rc = openRunClock(
+      clock,
+      POLICY({ callFirstResponseMs: 100_000, callHardMs: 100_000, taskHardMs: Number.POSITIVE_INFINITY }),
+    );
+    rc.enterCall({ firstResponseMs: 100_000, stallMs: 100_000, hardMs: 100_000 }); // abandoned, no leave()
+    clock.advance(500);
+    rc.enterCall({ firstResponseMs: 100_000, stallMs: 100_000, hardMs: 100_000 }); // must flush the prior
+    expect(rc.accumulatedSilentMs()).toBe(500);
   });
 });

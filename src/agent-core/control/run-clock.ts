@@ -78,7 +78,14 @@ class CallScopeImpl implements CallScope {
   }
 
   private armInactivity(ms: number): void {
-    if (this.inactivityTimer) this.clock.clearTimer(this.inactivityTimer);
+    if (this.inactivityTimer) {
+      this.clock.clearTimer(this.inactivityTimer);
+      this.inactivityTimer = null;
+    }
+    // Symmetric with armHard: a non-finite window means "no inactivity limit" — never arm a
+    // timer (setTimer(Infinity) clamps to ~1ms under a real clock and would fire bogusly; a
+    // FakeClock silently never fires it, so the divergence would otherwise hide in tests).
+    if (!Number.isFinite(ms)) return;
     this.inactivityTimer = this.clock.setTimer(ms, () => {
       this.token.cancel({ kind: "provider-stall", scope: "call" });
     });
@@ -199,6 +206,11 @@ class RunClockImpl implements RunClock {
   }
 
   enterCall(limits: CallLimits): CallScope {
+    // Invariant: exactly ONE live call per RunClock (the loop runs one call per step; sub-
+    // agents get the read-only `view`, never a shared enterCall). If a prior call was
+    // abandoned without leave(), commit its silent contribution + clear its timers now, so a
+    // fresh call can never under-count the silence accumulator (review F2).
+    if (this.activeCall) this.activeCall.leave();
     const remaining = this.remainingTaskMs();
     const carved: CallLimits = {
       hardMs: Math.min(limits.hardMs, remaining),
