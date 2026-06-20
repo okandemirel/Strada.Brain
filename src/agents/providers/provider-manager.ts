@@ -158,6 +158,9 @@ export class ProviderManager {
     private readonly defaultProviderOrder: readonly string[] = [],
     private readonly ollamaBaseUrl?: string,
     private readonly baseUrlOverrides?: Record<string, string>,
+    /** Per-attempt first-response timeout (ms) threaded into every chain we build,
+     *  so an unresponsive model fails over instead of hanging. 0/undefined = disabled. */
+    private readonly providerResponseTimeoutMs?: number,
   ) {
     const dbPath = preferencesDbPath ?? process.env["MEMORY_DB_PATH"] ?? join(process.cwd(), ".strada-memory");
     this.preferences = new ProviderPreferenceStore(
@@ -251,6 +254,7 @@ export class ProviderManager {
       const provider = buildProviderChain(order, this.providerCredentials, {
         models: model ? { ...this.modelOverrides, [primaryName]: model } : this.modelOverrides,
         baseUrls: this.resolveBaseUrlOverrides(),
+        attemptTimeoutMs: this.providerResponseTimeoutMs,
       });
       this.providerCache.set(cacheKey, provider);
       return provider;
@@ -421,6 +425,23 @@ export class ProviderManager {
       ?? this.preferences.get(ProviderManager.GLOBAL_PREFERENCE_KEY);
   }
 
+  /**
+   * Whether the live model catalog confirms `provider` serves `model`. Used to
+   * gate what may become the brain-wide GLOBAL default. An empty/unknown catalog
+   * for the provider means "cannot determine" (catalog not yet warmed, or probe
+   * failed) and must NOT be treated as invalid — only a KNOWN, non-empty catalog
+   * that omits the model returns false. Matches both bare and `provider/`-namespaced ids.
+   */
+  private isModelKnownToCatalog(providerName: string, model: string): boolean {
+    const known = this.modelCatalog?.getProviderModels(providerName) ?? [];
+    if (known.length === 0) return true; // catalog unknown — cannot disprove, don't block
+    const bare = model.includes("/") ? model.slice(model.indexOf("/") + 1) : model;
+    return known.some((m) => {
+      const idBare = m.id.includes("/") ? m.id.slice(m.id.indexOf("/") + 1) : m.id;
+      return m.id === model || idBare === bare || m.id === `${providerName}/${model}`;
+    });
+  }
+
   setPreference(
     chatId: string,
     providerName: string,
@@ -430,9 +451,20 @@ export class ProviderManager {
     const canonicalName = canonicalizeProviderName(providerName) ?? providerName.trim().toLowerCase();
     this.preferences.set(chatId, canonicalName, model, selectionMode);
     // Mirror to the stable global key so the selection survives web-profileId churn.
-    // Guard against recursing on the sentinel itself.
+    // Guard against recursing on the sentinel itself. Do NOT mirror a model the live
+    // catalog says the provider no longer serves: a per-chat pick is the user's own
+    // (explicit) risk, but a de-supported model must never silently become the
+    // brain-wide default for every other chat (the per-chat row still applies).
     if (chatId !== ProviderManager.GLOBAL_PREFERENCE_KEY) {
-      this.preferences.set(ProviderManager.GLOBAL_PREFERENCE_KEY, canonicalName, model, selectionMode);
+      if (!model || this.isModelKnownToCatalog(canonicalName, model)) {
+        this.preferences.set(ProviderManager.GLOBAL_PREFERENCE_KEY, canonicalName, model, selectionMode);
+      } else {
+        getLogger().warn("Not mirroring an unlisted model to the global default", {
+          providerName: canonicalName,
+          model,
+          hint: "The live catalog does not list this model; the per-chat preference still applies but the brain-wide default is left unchanged so other chats are unaffected.",
+        });
+      }
     }
     getLogger().info("Provider preference set", {
       chatId,
@@ -571,6 +603,7 @@ export class ProviderManager {
       const provider = buildProviderChain(normalizedOrder, this.providerCredentials, {
         models,
         baseUrls: this.resolveBaseUrlOverrides(),
+        attemptTimeoutMs: this.providerResponseTimeoutMs,
       });
       this.providerCache.set(cacheKey, provider);
       return provider;

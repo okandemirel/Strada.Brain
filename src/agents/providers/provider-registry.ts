@@ -253,7 +253,12 @@ export function createProvider(config: ProviderConfig): IAIProvider {
 export function buildProviderChain(
   providerNames: string[],
   credentials: ProviderCredentialMap,
-  overrides?: { models?: Record<string, string>; baseUrls?: Record<string, string> },
+  overrides?: {
+    models?: Record<string, string>;
+    baseUrls?: Record<string, string>;
+    /** Per-attempt first-response timeout (ms) for the chain; see FallbackChainProvider. */
+    attemptTimeoutMs?: number;
+  },
 ): IAIProvider {
   const logger = getLogger();
   const providers: IAIProvider[] = [];
@@ -309,5 +314,5 @@ export function buildProviderChain(
     throw new Error("No valid providers configured");
   }
 
-  return new FallbackChainProvider(providers);
+  return new FallbackChainProvider(providers, { attemptTimeoutMs: overrides?.attemptTimeoutMs });
 }

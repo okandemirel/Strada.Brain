@@ -697,4 +697,56 @@ describe("ProviderManager", () => {
     );
     expect(customOrderCalls.length).toBe(1);
   });
+
+  // Guard: a per-chat pick of a model the live catalog does NOT list must not
+  // silently become the brain-wide default for every other chat (the bug where
+  // a de-supported/broken model poisoned __strada_global_default__ and hung new chats).
+  describe("global-default guard against unlisted models", () => {
+    const GLOBAL = "__strada_global_default__";
+
+    function makeManager() {
+      return new ProviderManager(
+        makeProvider("chain(qwen->kimi)"),
+        { qwen: { apiKey: "qwen-key" }, kimi: { apiKey: "kimi-key" } },
+        { qwen: "qwen-max", kimi: "kimi-for-coding" },
+        "/tmp/provider-manager-test",
+        ["qwen", "kimi"],
+      );
+    }
+
+    it("mirrors a catalog-listed model to the global default", () => {
+      const manager = makeManager();
+      manager.setModelCatalog({ getProviderModels: () => [{ id: "kimi-for-coding" }] });
+      manager.setPreference("chat-1", "kimi", "kimi-for-coding");
+      expect(preferenceState.get(GLOBAL)?.model).toBe("kimi-for-coding");
+    });
+
+    it("does NOT mirror an unlisted model — global default is left unchanged", () => {
+      const manager = makeManager();
+      manager.setModelCatalog({ getProviderModels: () => [{ id: "kimi-for-coding" }] });
+      // Establish a known-good global default first.
+      manager.setPreference("chat-0", "kimi", "kimi-for-coding");
+      expect(preferenceState.get(GLOBAL)?.model).toBe("kimi-for-coding");
+      // A per-chat pick of a model the catalog does not list...
+      manager.setPreference("chat-1", "kimi", "kimi-ghost-pro");
+      // ...still applies to that chat...
+      expect(preferenceState.get("chat-1")?.model).toBe("kimi-ghost-pro");
+      // ...but must NOT poison the brain-wide default.
+      expect(preferenceState.get(GLOBAL)?.model).toBe("kimi-for-coding");
+    });
+
+    it("mirrors when the catalog is unknown/empty (cannot disprove)", () => {
+      const manager = makeManager();
+      manager.setModelCatalog({ getProviderModels: () => [] });
+      manager.setPreference("chat-1", "kimi", "kimi-anything");
+      expect(preferenceState.get(GLOBAL)?.model).toBe("kimi-anything");
+    });
+
+    it("matches namespaced vs bare model ids when validating", () => {
+      const manager = makeManager();
+      manager.setModelCatalog({ getProviderModels: () => [{ id: "kimi/kimi-for-coding" }] });
+      manager.setPreference("chat-1", "kimi", "kimi-for-coding"); // bare vs namespaced
+      expect(preferenceState.get(GLOBAL)?.model).toBe("kimi-for-coding");
+    });
+  });
 });
