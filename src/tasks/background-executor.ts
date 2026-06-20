@@ -53,6 +53,13 @@ import {
 } from "../dashboard/workspace-events.js";
 
 const GOAL_CANVAS_SUMMARY_WIDTH = 320;
+
+/**
+ * Shared no-op for the background/worker IOStrategy.deliverFinal sink — these paths never deliver
+ * to a channel (the answer is carried in AgentRunResult.finalText), so the sink is inert. Hoisted
+ * to module scope so it is allocated once rather than per task.
+ */
+const NOOP_DELIVER_FINAL: IOStrategy["deliverFinal"] = () => {};
 const GOAL_CANVAS_SUMMARY_HEIGHT = 180;
 const GOAL_CANVAS_CARD_WIDTH = 240;
 const GOAL_CANVAS_CARD_HEIGHT = 120;
@@ -850,7 +857,7 @@ export class BackgroundExecutor {
       onEvent: params.onProgress,
       externalSignal: params.signal,
       // background/worker never delivers to a channel — the string is carried in the result.
-      deliverFinal: () => {},
+      deliverFinal: NOOP_DELIVER_FINAL,
       // visibleSink omitted (Phase 0: v1 background streams silently).
     };
 
@@ -877,7 +884,9 @@ export class BackgroundExecutor {
     // toWorkerRunResult returns undefined for the legacy bare-string path, reproducing the v1
     // { output, workerResult: undefined } shape; otherwise it is the byte-identical worker view.
     const workerResult = toWorkerRunResult(result);
-    return workerResult ? { output: result.finalText, workerResult } : { output: result.finalText };
+    return workerResult !== undefined
+      ? { output: result.finalText, workerResult }
+      : { output: result.finalText };
   }
 
   async runWorkerEnvelope(

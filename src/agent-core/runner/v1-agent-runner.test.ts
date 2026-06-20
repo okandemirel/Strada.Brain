@@ -229,7 +229,7 @@ describe("V1AgentRunner v1 options parity (review regression)", () => {
     const runner = new V1AgentRunner({ runBackgroundTask: bgSpy } as unknown as V1OrchestratorLike);
 
     const result = await runner.run(
-      baseRequest({ parentMetricId: "m-1", workspaceLeaseRetained: true }),
+      baseRequest({ parentMetricId: "m-1", workspaceLeaseRetained: true, userContent: null }),
       baseIo({ mode: "supervisor-node" }), // non-background + unset supervisorMode = the exact divergence case
     );
 
@@ -238,6 +238,8 @@ describe("V1AgentRunner v1 options parity (review regression)", () => {
     expect(opts.supervisorMode).toBeUndefined();
     expect("parentMetricId" in opts).toBe(false);
     expect(opts.workspaceLeaseRetained).toBe(true);
+    // userContent forwarded RAW — null preserved, NOT coerced to undefined (exact v1 mirror).
+    expect(opts.userContent).toBeNull();
     // Legacy bare string → completed result carrying the text; no structured WorkerRunResult.
     expect(result.status).toBe("completed");
     expect(result.finalText).toBe("legacy answer");

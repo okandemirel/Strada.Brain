@@ -200,6 +200,41 @@ export function toWorkerRunResult(result: AgentRunResult): WorkerRunResult | und
   };
 }
 
+/**
+ * The empty-collector `AgentRunResult` stub shared by the two paths with no structured
+ * `WorkerRunResult` underneath — the interactive void-return path and the legacy bare-string
+ * fallback. Centralizes the provider/catalog/version placeholders + empty trace collections so the
+ * two call sites cannot drift; each supplies only the fields its path actually carries.
+ */
+function buildMinimalAgentRunResult(fields: {
+  status: AgentRunResult["status"];
+  finalText: string;
+  finalSummary: string;
+  reason?: string;
+  workspaceId?: string;
+  terminalState?: AgentState;
+}): AgentRunResult {
+  return {
+    status: fields.status,
+    finalText: fields.finalText,
+    finalSummary: fields.finalSummary,
+    reason: fields.reason,
+    provider: "unknown",
+    model: undefined,
+    catalogVersion: "",
+    assignmentVersion: 0,
+    workspaceId: fields.workspaceId,
+    touchedFiles: [],
+    toolTrace: [],
+    verificationResults: [],
+    reviewFindings: [],
+    artifacts: [],
+    usage: undefined,
+    terminalState: fields.terminalState,
+    cancelReason: undefined,
+  };
+}
+
 export class V1AgentRunner implements AgentRunner {
   /**
    * @param orchestrator      The concrete v1 orchestrator (structurally `V1OrchestratorLike`).
@@ -264,25 +299,13 @@ export class V1AgentRunner implements AgentRunner {
         ...createInitialState(request.prompt),
         phase: statusToPhase(outcome.status),
       };
-    return {
+    return buildMinimalAgentRunResult({
       status: outcome.status,
       finalText: "", // delivered to the channel by the v1 loop; callers ignore the return
       finalSummary: outcome.reason ?? "",
       reason: outcome.reason,
-      provider: "unknown",
-      model: undefined,
-      catalogVersion: "",
-      assignmentVersion: 0,
-      workspaceId: undefined,
-      touchedFiles: [],
-      toolTrace: [],
-      verificationResults: [],
-      reviewFindings: [],
-      artifacts: [],
-      usage: undefined,
       terminalState,
-      cancelReason: undefined,
-    };
+    });
   }
 
   /**
@@ -359,38 +382,31 @@ export class V1AgentRunner implements AgentRunner {
       signal: io.externalSignal,
       onProgress: io.onEvent,
       chatId: request.chatId,
-      channelType: String(request.channelType),
+      channelType: request.channelType,
       taskRunId: request.taskRunId,
       conversationId: request.conversationId,
       userId: request.userId,
       assignedProvider: request.assignedProvider,
       assignedModel: request.assignedModel,
       attachments: request.attachments as Attachment[] | undefined,
-      userContent: request.userContent ?? undefined,
+      // Forwarded RAW exactly as v1's executeWorkerRun: channelType (a ChannelType string-union ≡
+      // string, so no String() coercion — the structured path doesn't coerce either) and
+      // userContent (null preserved, NOT narrowed to undefined). The object cast below absorbs the
+      // wider AgentRunRequest field types, mirroring v1's identical cast.
+      userContent: request.userContent,
       onUsage: request.onUsage,
       workspaceLease: request.workspaceLease,
       workspaceLeaseRetained: request.workspaceLeaseRetained,
       supervisorMode: request.supervisorMode,
       goalContext: request.goalContext,
     } as BackgroundTaskOptions & { workspaceLeaseRetained?: boolean });
-    return markLegacyBareString({
-      status: "completed",
-      finalText: output,
-      finalSummary: output,
-      reason: undefined,
-      provider: "unknown",
-      model: undefined,
-      catalogVersion: "",
-      assignmentVersion: 0,
-      workspaceId: request.workspaceLease?.id,
-      touchedFiles: [],
-      toolTrace: [],
-      verificationResults: [],
-      reviewFindings: [],
-      artifacts: [],
-      usage: undefined,
-      terminalState: undefined,
-      cancelReason: undefined,
-    });
+    return markLegacyBareString(
+      buildMinimalAgentRunResult({
+        status: "completed",
+        finalText: output,
+        finalSummary: output,
+        workspaceId: request.workspaceLease?.id,
+      }),
+    );
   }
 }
