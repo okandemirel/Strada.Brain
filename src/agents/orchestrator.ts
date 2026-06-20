@@ -180,6 +180,15 @@ import {
   evaluateProviderFailure,
 } from "./orchestrator-runtime-utils.js";
 import { IterationHealthTracker } from "./iteration-health-tracker.js";
+import {
+  createFailureLedger,
+  IterationHealthCoreAdapter,
+  mapVerdictToLoopAction,
+  type FailureLedger,
+  type LoopAction,
+  type VerdictInput,
+} from "../agent-core/control/index.js";
+import type { FlagSet } from "../agent-core/runner/index.js";
 import { getResilienceMessage } from "./resilience-messages.js";
 import {
   buildPhasePromptSection,
@@ -708,6 +717,14 @@ export class Orchestrator {
   private readonly defaultLanguage: "en" | "tr" | "ja" | "ko" | "zh" | "de" | "es" | "fr";
   private readonly streamInitialTimeoutMs: number;
   private readonly streamStallTimeoutMs: number;
+  /**
+   * Agent Core v2 resolved flag set (Phase 1a). When `failureLedger === true`, the four
+   * provider-failure decision sites consult the {@link FailureLedger} instead of v1's
+   * inline `consecutiveProviderFailures`/`iterationHealth` logic. Undefined or `false`
+   * keeps the byte-identical v1 path. Threaded whole (not the bare boolean) so 1b–1d wire
+   * up with zero re-plumbing.
+   */
+  private readonly agentCoreFlagSet?: FlagSet;
   private readonly sessionManager: SessionManager;
   private systemPrompt: string;
   private readonly getIdentityState?: () => IdentityState;
@@ -904,6 +921,11 @@ export class Orchestrator {
     vaultRegistry?: import("../vault/vault-registry.js").VaultRegistry;
     /** Vault write-hook budget in ms (Phase 1 default 200). */
     vaultWriteHookBudgetMs?: number;
+    /**
+     * Agent Core v2 resolved flag set (Phase 1a). Defaults to undefined (= v1 everywhere).
+     * Only `failureLedger` is consulted in 1a; the rest are threaded for 1b–1d.
+     */
+    agentCoreFlagSet?: FlagSet;
   }) {
     this.providerManager = opts.providerManager;
     // Vault write-hook lazy-binds when the first Edit/Write tool runs.
@@ -981,6 +1003,7 @@ export class Orchestrator {
     this.crashRecoveryContext = opts.crashRecoveryContext;
     this.onSkillCreated = opts.onSkillCreated;
     this.getSkillEntries = opts.getSkillEntries;
+    this.agentCoreFlagSet = opts.agentCoreFlagSet;
 
     // Build tool registry
     this.tools = new Map();
@@ -1016,6 +1039,206 @@ export class Orchestrator {
     run: () => Promise<T>,
   ): Promise<T> {
     return await this.taskContext.run(context, run);
+  }
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // Agent Core v2 — Phase 1a: FailureLedger consultation (flag-gated).
+  //
+  // These helpers are reached ONLY when `agentCoreFlagSet.failureLedger === true`.
+  // The flag-OFF path is v1's unchanged inline logic. All DECISION logic lives in
+  // agent-core (`mapVerdictToLoopAction`); these methods only ASSEMBLE the inert
+  // 1a VerdictInput and EXECUTE v1's existing side-effect statements for the chosen
+  // action. No v1 behavior is rewritten — the notices/finish/guidance below are the
+  // same resilience messages and message pushes the OFF arms emit.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Phase 1a {@link VerdictInput}. failureLedger ships in ISOLATION (runClock /
+   * silenceAccumulator / typedCancelReason still OFF), so every field those concerns own is
+   * inert here:
+   *   - taskCancelReason: null      (typed cancel = 1d; v1 cancel still flows via
+   *                                  `signal.aborted` re-throw, handled OUTSIDE this helper).
+   *   - hardTimeoutBlown: false     (runClock = 1b).
+   *   - hardTimeoutScope: "task"    (inert; never read because hardTimeoutBlown=false).
+   *   - resourceExhausted: false    (token-budget abort stays v1's own check ABOVE the site).
+   *   - taskInactivityExceeded: false (silenceAccumulator = 1c).
+   *   - callStalled: false          (a typed provider-stall is a runClock signal, 1b).
+   *   - modelProposedDone/reflectionWantsExtend/loopDetectionBlocked: false at failure sites.
+   * With these inert, verdict() precedence collapses to rule 5 (shouldAbort) → rule 7
+   * (shouldAskUser) → rule 9 (consecutive>0 retry) → default continue — EXACTLY the
+   * THROW+EMPTY decision surface 1a replaces. Rules 1–4, 6, 8, 10 are provably dead here.
+   */
+  private buildPhase1aVerdictInput(): VerdictInput {
+    return {
+      taskCancelReason: null,
+      hardTimeoutBlown: false,
+      hardTimeoutScope: "task",
+      resourceExhausted: false,
+      taskInactivityExceeded: false,
+      callStalled: false,
+      modelProposedDone: false,
+      reflectionWantsExtend: false,
+      loopDetectionBlocked: false,
+    };
+  }
+
+  /**
+   * Synthesize the v1 {@link FailureAction} the legacy health-context message expects, from
+   * the ledger's loop action + served backoff. Lets the ledger path reuse v1's exact
+   * `buildSessionHealthContext` text without duplicating it.
+   */
+  private synthFailureAction(action: LoopAction): import("./iteration-health-tracker.js").FailureAction {
+    if (action.notice === "abort") {
+      return { kind: "abort", reason: "Provider failure rate critical" };
+    }
+    if (action.notice === "ask_user") {
+      return { kind: "ask_user", backoffMs: action.backoffMs };
+    }
+    return { kind: "retry", backoffMs: action.backoffMs };
+  }
+
+  /**
+   * Execute the BACKGROUND-loop side effects for a ledger verdict, returning how the loop
+   * should proceed. Mirrors v1's bg health-context push + progressive-disclosure emits +
+   * backoff + abort `finish(...)`. `terminalAbort` is "return" (bg EMPTY) — but bg THROW
+   * supplies "break" so the existing `providerAbort`/`break` post-loop handling runs.
+   */
+  private async applyBackgroundVerdict(
+    verdict: ReturnType<FailureLedger["verdict"]>,
+    bag: {
+      ledger: FailureLedger;
+      iterationHealth: IterationHealthTracker;
+      session: Session;
+      providerName: string;
+      prompt: string;
+      progressTitle: string;
+      progressLanguage: ProgressLanguage;
+      emitProgress: (update: TaskProgressUpdate) => void;
+      finish: (text: string, status?: WorkerRunResult["status"], reason?: string) => string;
+      abortControl: "break" | "return";
+      onAbort: (reason: string) => void;
+    },
+  ): Promise<{ control: "continue" } | { control: "break" } | { control: "return"; finish: string }> {
+    const action = mapVerdictToLoopAction(verdict, bag.abortControl);
+    const statusLevel = bag.iterationHealth.getStatusLevel();
+    const failureAction = this.synthFailureAction(action);
+
+    // Inject rich health context so the agent can reason about it when provider recovers.
+    bag.session.messages.push({
+      role: "user",
+      content: bag.iterationHealth.buildSessionHealthContext(bag.providerName, failureAction),
+    } as ConversationMessage);
+
+    // Progressive disclosure — notify by severity (identical to v1 EMPTY path).
+    if (statusLevel === "degraded") {
+      bag.emitProgress(this.buildStructuredProgressSignal(
+        bag.prompt, bag.progressTitle,
+        { kind: "status", message: getResilienceMessage("provider_slow", bag.progressLanguage ?? "en") },
+        bag.progressLanguage,
+      ));
+    } else if (statusLevel === "critical") {
+      bag.emitProgress(this.buildStructuredProgressSignal(
+        bag.prompt, bag.progressTitle,
+        { kind: "status", message: getResilienceMessage("provider_failing", bag.progressLanguage ?? "en", {
+          seconds: Math.round(action.backoffMs / 1000),
+          attempt: bag.iterationHealth.getConsecutiveFailures(),
+          max: 5,
+        }) },
+        bag.progressLanguage,
+      ));
+    }
+
+    if (action.notice === "ask_user") {
+      bag.emitProgress(this.buildStructuredProgressSignal(
+        bag.prompt, bag.progressTitle,
+        { kind: "status", message: getResilienceMessage("provider_ask_user", bag.progressLanguage ?? "en") },
+        bag.progressLanguage,
+      ));
+    }
+
+    if (action.control !== "continue") {
+      // Terminal: a verdict-stop / health abort.
+      const reason = `Provider failure rate critical (${(bag.ledger.health.failureRate * 100).toFixed(0)}% with ${bag.ledger.health.consecutive} consecutive failures).`;
+      if (action.control === "return") {
+        return {
+          control: "return",
+          finish: bag.finish(
+            getResilienceMessage("provider_abort", bag.progressLanguage ?? "en"),
+            "completed",
+            reason,
+          ),
+        };
+      }
+      bag.onAbort(reason);
+      return { control: "break" };
+    }
+
+    // Retry / informational ask_user → optional backoff then continue.
+    if (action.backoffMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, action.backoffMs));
+    }
+    return { control: "continue" };
+  }
+
+  /**
+   * Execute the INTERACTIVE-loop side effects for a ledger verdict. Differs from the bg
+   * helper only in I/O surface (sync user-visible `sendVisibleAssistantMarkdown`) and in
+   * mapping a terminal stop to `break` (interactive never `finish(...)`-returns mid-loop).
+   */
+  private async applyInteractiveVerdict(
+    verdict: ReturnType<FailureLedger["verdict"]>,
+    bag: {
+      iterationHealth: IterationHealthTracker;
+      chatId: string;
+      session: Session;
+      providerName: string;
+      language: string;
+    },
+  ): Promise<{ control: "continue" | "break" }> {
+    const action = mapVerdictToLoopAction(verdict, "break");
+    const statusLevel = bag.iterationHealth.getStatusLevel();
+    const failureAction = this.synthFailureAction(action);
+
+    bag.session.messages.push({
+      role: "user",
+      content: bag.iterationHealth.buildSessionHealthContext(bag.providerName, failureAction),
+    } as ConversationMessage);
+
+    if (statusLevel === "degraded") {
+      await this.sessionManager.sendVisibleAssistantMarkdown(
+        bag.chatId, bag.session,
+        getResilienceMessage("provider_slow", bag.language),
+      );
+    } else if (statusLevel === "critical") {
+      await this.sessionManager.sendVisibleAssistantMarkdown(
+        bag.chatId, bag.session,
+        getResilienceMessage("provider_failing", bag.language, {
+          seconds: Math.round(action.backoffMs / 1000),
+          attempt: bag.iterationHealth.getConsecutiveFailures(),
+          max: 5,
+        }),
+      );
+    }
+
+    if (action.notice === "ask_user") {
+      await this.sessionManager.sendVisibleAssistantMarkdown(
+        bag.chatId, bag.session,
+        getResilienceMessage("provider_ask_user", bag.language),
+      );
+    }
+
+    if (action.control === "break") {
+      await this.sessionManager.sendVisibleAssistantMarkdown(
+        bag.chatId, bag.session,
+        getResilienceMessage("provider_abort", bag.language),
+      );
+      return { control: "break" };
+    }
+
+    if (action.backoffMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, action.backoffMs));
+    }
+    return { control: "continue" };
   }
 
   private getTaskExecutionContext(): TaskExecutionContext | undefined {
@@ -3078,6 +3301,17 @@ export class Orchestrator {
           let consecutiveMaxTokens = 0;
           let consecutiveProviderFailures = 0;
           const iterationHealth = new IterationHealthTracker();
+          // Agent Core v2 — Phase 1a (flag-gated). The ledger wraps the SAME iterationHealth
+          // tracker, so the OFF path's downstream reads (health-awareness prompt, tool-result
+          // health context) keep working unchanged. pauseRetryBudget:0 is correct for 1a:
+          // callStalled is never set (run-clock OFF) → rule 6 dead → budget never consulted.
+          const bgFailureLedgerAdapter =
+            this.agentCoreFlagSet?.failureLedger === true
+              ? new IterationHealthCoreAdapter(iterationHealth, "")
+              : undefined;
+          const bgFailureLedger = bgFailureLedgerAdapter
+            ? createFailureLedger(bgFailureLedgerAdapter, { pauseRetryBudget: 0 })
+            : undefined;
           let maxTokensAbort = false;
           let providerAbort = false;
           let providerAbortReason: string | undefined;
@@ -3192,6 +3426,46 @@ export class Orchestrator {
                 // Don't swallow cancellation — let the outer catch handle it
                 if (signal.aborted) throw providerError;
 
+                if (bgFailureLedger && bgFailureLedgerAdapter) {
+                  // ── Agent Core v2 — Phase 1a LEDGER PATH (bg THROW). A throw is a generic
+                  //    health failure routed through rules 5/7/9 (NOT a typed call-stall — that
+                  //    is a run-clock signal, 1b). ──
+                  bgFailureLedgerAdapter.setProvider(currentAssignment.providerName);
+                  bgFailureLedger.recordFailure(currentAssignment.providerName, false);
+                  const verdict = bgFailureLedger.verdict(this.buildPhase1aVerdictInput());
+                  logger.warn("Provider call failed in background loop (ledger)", {
+                    chatId,
+                    epoch: bgEpochCount,
+                    iteration: bgIteration,
+                    provider: currentAssignment.providerName,
+                    error: errMsg,
+                    consecutive: bgFailureLedger.health.consecutive,
+                    isTimeoutOrAbort,
+                    verdict: verdict.decision,
+                  });
+                  const handled = await this.applyBackgroundVerdict(verdict, {
+                    ledger: bgFailureLedger,
+                    iterationHealth,
+                    session,
+                    providerName: currentAssignment.providerName,
+                    prompt,
+                    progressTitle,
+                    progressLanguage,
+                    emitProgress,
+                    finish,
+                    abortControl: "break",
+                    onAbort: (reason) => { providerAbort = true; providerAbortReason = reason; },
+                  });
+                  if (handled.control === "return") return handled.finish;
+                  if (handled.control === "break") break;
+                  if (isTimeoutOrAbort) {
+                    // Give back the iteration — timeouts produce no progress (UNCHANGED).
+                    bgEpochIteration--;
+                    bgIteration--;
+                  }
+                  continue;
+                }
+
                 consecutiveProviderFailures++;
                 logger.warn("Provider call failed in background loop", {
                   chatId,
@@ -3231,7 +3505,14 @@ export class Orchestrator {
 
                 continue;
               }
-              consecutiveProviderFailures = 0;
+              // The ledger path defers its success accounting to the EMPTY gate below
+              // (a response that arrives but is EMPTY is a failure, so success must NOT be
+              // recorded here — only once we know the response is usable). v1's two
+              // independent counters reset separately, so the OFF arm keeps its post-catch
+              // reset of `consecutiveProviderFailures`.
+              if (!bgFailureLedger) {
+                consecutiveProviderFailures = 0;
+              }
               this.recordExecutionTrace({
                 chatId,
                 identityKey,
@@ -3307,76 +3588,103 @@ export class Orchestrator {
               });
 
               // Intelligent provider resilience: detect synthetic empty responses and adapt
-              const cbResult = checkProviderFailureCircuitBreaker(response, iterationHealth.getConsecutiveFailures());
-              if (cbResult.action !== "ok") {
-                const failureAction = iterationHealth.recordFailure(currentAssignment.providerName);
-                const statusLevel = iterationHealth.getStatusLevel();
-
-                // Inject rich health context so the agent can reason about it when provider recovers
-                session.messages.push({
-                  role: "user",
-                  content: iterationHealth.buildSessionHealthContext(currentAssignment.providerName, failureAction),
-                } as ConversationMessage);
-
-                // Progressive disclosure — notify user based on severity
-                if (statusLevel === "degraded") {
-                  emitProgress(this.buildStructuredProgressSignal(
-                    prompt, progressTitle,
-                    { kind: "status", message: getResilienceMessage("provider_slow", progressLanguage ?? "en") },
+              if (bgFailureLedger && bgFailureLedgerAdapter) {
+                // ── Agent Core v2 — Phase 1a LEDGER PATH (bg EMPTY). Emptiness is v1's shared
+                //    predicate; the ledger owns retry/ask_user/abort + backoff. ──
+                if (isEmptyProviderResponse(response)) {
+                  bgFailureLedgerAdapter.setProvider(currentAssignment.providerName);
+                  bgFailureLedger.recordFailure(currentAssignment.providerName, false);
+                  const verdict = bgFailureLedger.verdict(this.buildPhase1aVerdictInput());
+                  const handled = await this.applyBackgroundVerdict(verdict, {
+                    ledger: bgFailureLedger,
+                    iterationHealth,
+                    session,
+                    providerName: currentAssignment.providerName,
+                    prompt,
+                    progressTitle,
                     progressLanguage,
-                  ));
-                } else if (statusLevel === "critical") {
-                  emitProgress(this.buildStructuredProgressSignal(
-                    prompt, progressTitle,
-                    { kind: "status", message: getResilienceMessage("provider_failing", progressLanguage ?? "en", {
-                      seconds: Math.round((failureAction.kind !== "abort" ? failureAction.backoffMs : 0) / 1000),
-                      attempt: iterationHealth.getConsecutiveFailures(),
-                      max: 5,
-                    }) },
-                    progressLanguage,
-                  ));
-                }
-
-                // Ask user — provider has been unreliable beyond retry threshold
-                if (failureAction.kind === "ask_user") {
-                  emitProgress(this.buildStructuredProgressSignal(
-                    prompt, progressTitle,
-                    { kind: "status", message: getResilienceMessage("provider_ask_user", progressLanguage ?? "en") },
-                    progressLanguage,
-                  ));
-                }
-
-                // Abort if failure rate is critical
-                if (failureAction.kind === "abort") {
-                  logger.error("Provider failure rate critical — aborting task", {
-                    chatId,
-                    provider: currentAssignment.providerName,
-                    failureRate: iterationHealth.getFailureRate(),
-                    consecutiveFailures: iterationHealth.getConsecutiveFailures(),
-                    totalFailures: iterationHealth.getTotalFailures(),
-                    taskDurationMs: iterationHealth.getTaskDurationMs(),
+                    emitProgress,
+                    finish,
+                    abortControl: "return",
+                    onAbort: (reason) => { providerAbort = true; providerAbortReason = reason; },
                   });
-                  return finish(
-                    getResilienceMessage("provider_abort", progressLanguage ?? "en"),
-                    "completed",
-                    failureAction.reason,
-                  );
+                  if (handled.control === "return") return handled.finish;
+                  if (handled.control === "break") break;
+                  continue;
                 }
-
-                // Exponential backoff before retry
-                if (failureAction.backoffMs > 0) {
-                  logger.info("Provider failure backoff", {
-                    chatId,
-                    backoffMs: failureAction.backoffMs,
-                    provider: currentAssignment.providerName,
-                    consecutiveFailures: iterationHealth.getConsecutiveFailures(),
-                  });
-                  await new Promise(resolve => setTimeout(resolve, failureAction.backoffMs));
-                }
-
-                continue;
+                bgFailureLedger.recordSuccess(currentAssignment.providerName, "real");
               } else {
-                iterationHealth.recordSuccess();
+                const cbResult = checkProviderFailureCircuitBreaker(response, iterationHealth.getConsecutiveFailures());
+                if (cbResult.action !== "ok") {
+                  const failureAction = iterationHealth.recordFailure(currentAssignment.providerName);
+                  const statusLevel = iterationHealth.getStatusLevel();
+
+                  // Inject rich health context so the agent can reason about it when provider recovers
+                  session.messages.push({
+                    role: "user",
+                    content: iterationHealth.buildSessionHealthContext(currentAssignment.providerName, failureAction),
+                  } as ConversationMessage);
+
+                  // Progressive disclosure — notify user based on severity
+                  if (statusLevel === "degraded") {
+                    emitProgress(this.buildStructuredProgressSignal(
+                      prompt, progressTitle,
+                      { kind: "status", message: getResilienceMessage("provider_slow", progressLanguage ?? "en") },
+                      progressLanguage,
+                    ));
+                  } else if (statusLevel === "critical") {
+                    emitProgress(this.buildStructuredProgressSignal(
+                      prompt, progressTitle,
+                      { kind: "status", message: getResilienceMessage("provider_failing", progressLanguage ?? "en", {
+                        seconds: Math.round((failureAction.kind !== "abort" ? failureAction.backoffMs : 0) / 1000),
+                        attempt: iterationHealth.getConsecutiveFailures(),
+                        max: 5,
+                      }) },
+                      progressLanguage,
+                    ));
+                  }
+
+                  // Ask user — provider has been unreliable beyond retry threshold
+                  if (failureAction.kind === "ask_user") {
+                    emitProgress(this.buildStructuredProgressSignal(
+                      prompt, progressTitle,
+                      { kind: "status", message: getResilienceMessage("provider_ask_user", progressLanguage ?? "en") },
+                      progressLanguage,
+                    ));
+                  }
+
+                  // Abort if failure rate is critical
+                  if (failureAction.kind === "abort") {
+                    logger.error("Provider failure rate critical — aborting task", {
+                      chatId,
+                      provider: currentAssignment.providerName,
+                      failureRate: iterationHealth.getFailureRate(),
+                      consecutiveFailures: iterationHealth.getConsecutiveFailures(),
+                      totalFailures: iterationHealth.getTotalFailures(),
+                      taskDurationMs: iterationHealth.getTaskDurationMs(),
+                    });
+                    return finish(
+                      getResilienceMessage("provider_abort", progressLanguage ?? "en"),
+                      "completed",
+                      failureAction.reason,
+                    );
+                  }
+
+                  // Exponential backoff before retry
+                  if (failureAction.backoffMs > 0) {
+                    logger.info("Provider failure backoff", {
+                      chatId,
+                      backoffMs: failureAction.backoffMs,
+                      provider: currentAssignment.providerName,
+                      consecutiveFailures: iterationHealth.getConsecutiveFailures(),
+                    });
+                    await new Promise(resolve => setTimeout(resolve, failureAction.backoffMs));
+                  }
+
+                  continue;
+                } else {
+                  iterationHealth.recordSuccess();
+                }
               }
 
               // max_tokens: model output was truncated — push and continue so the model finishes.
@@ -4424,6 +4732,15 @@ export class Orchestrator {
       let cumulativeInputTokens = 0; // observability only
       let cumulativeOutputTokens = 0; // the budget-gating metric (audit #3)
       const iterationHealth = new IterationHealthTracker();
+      // Agent Core v2 — Phase 1a (flag-gated). Wraps the SAME iterationHealth so OFF-path
+      // downstream reads are unaffected; pauseRetryBudget:0 (rule 6 dead without run-clock).
+      const ifFailureLedgerAdapter =
+        this.agentCoreFlagSet?.failureLedger === true
+          ? new IterationHealthCoreAdapter(iterationHealth, "")
+          : undefined;
+      const ifFailureLedger = ifFailureLedgerAdapter
+        ? createFailureLedger(ifFailureLedgerAdapter, { pauseRetryBudget: 0 })
+        : undefined;
       for (let iteration = 0; iteration < interactiveIterationLimit; iteration++) {
         // Re-read every iteration so a mid-task budget raise (via /token
         // or the portal budget editor) actually takes effect without
@@ -4512,6 +4829,29 @@ export class Orchestrator {
           }
         } catch (providerError) {
           const errMsg = providerError instanceof Error ? providerError.message : String(providerError);
+          if (ifFailureLedger && ifFailureLedgerAdapter) {
+            // ── Agent Core v2 — Phase 1a LEDGER PATH (interactive THROW). ──
+            const interactiveLang = (profile?.language ?? this.defaultLanguage) as string;
+            ifFailureLedgerAdapter.setProvider(currentAssignment.providerName);
+            ifFailureLedger.recordFailure(currentAssignment.providerName, false);
+            const verdict = ifFailureLedger.verdict(this.buildPhase1aVerdictInput());
+            logger.warn("Provider call failed in interactive loop (ledger)", {
+              chatId, iteration,
+              provider: currentAssignment.providerName,
+              error: errMsg,
+              consecutive: ifFailureLedger.health.consecutive,
+              verdict: verdict.decision,
+            });
+            const handled = await this.applyInteractiveVerdict(verdict, {
+              iterationHealth,
+              chatId,
+              session,
+              providerName: currentAssignment.providerName,
+              language: interactiveLang,
+            });
+            if (handled.control === "break") break;
+            continue;
+          }
           consecutiveProviderFailures++;
           logger.warn("Provider call failed in interactive loop", {
             chatId, iteration,
@@ -4547,7 +4887,10 @@ export class Orchestrator {
           }
           continue;
         }
-        consecutiveProviderFailures = 0;
+        // Ledger path defers success accounting to the EMPTY gate below (see bg loop).
+        if (!ifFailureLedger) {
+          consecutiveProviderFailures = 0;
+        }
         this.recordExecutionTrace({
           chatId,
           identityKey,
@@ -4627,73 +4970,92 @@ export class Orchestrator {
 
         // Intelligent provider resilience: detect synthetic empty responses and adapt
         const interactiveLang = (profile?.language ?? this.defaultLanguage) as string;
-        const cbResult = checkProviderFailureCircuitBreaker(response, iterationHealth.getConsecutiveFailures());
-        if (cbResult.action !== "ok") {
-          const failureAction = iterationHealth.recordFailure(currentAssignment.providerName);
-          const statusLevel = iterationHealth.getStatusLevel();
-
-          // Inject rich health context so the agent can reason about it when provider recovers
-          session.messages.push({
-            role: "user",
-            content: iterationHealth.buildSessionHealthContext(currentAssignment.providerName, failureAction),
-          } as ConversationMessage);
-
-          // Progressive disclosure — notify user based on severity
-          if (statusLevel === "degraded") {
-            await this.sessionManager.sendVisibleAssistantMarkdown(
-              chatId, session,
-              getResilienceMessage("provider_slow", interactiveLang),
-            );
-          } else if (statusLevel === "critical") {
-            await this.sessionManager.sendVisibleAssistantMarkdown(
-              chatId, session,
-              getResilienceMessage("provider_failing", interactiveLang, {
-                seconds: Math.round((failureAction.kind !== "abort" ? failureAction.backoffMs : 0) / 1000),
-                attempt: iterationHealth.getConsecutiveFailures(),
-                max: 5,
-              }),
-            );
-          }
-
-          // Ask user — provider has been unreliable beyond retry threshold
-          if (failureAction.kind === "ask_user") {
-            await this.sessionManager.sendVisibleAssistantMarkdown(
-              chatId, session,
-              getResilienceMessage("provider_ask_user", interactiveLang),
-            );
-          }
-
-          // Abort if failure rate is critical
-          if (failureAction.kind === "abort") {
-            logger.error("Provider failure rate critical — aborting interactive loop", {
+        if (ifFailureLedger && ifFailureLedgerAdapter) {
+          // ── Agent Core v2 — Phase 1a LEDGER PATH (interactive EMPTY). ──
+          if (isEmptyProviderResponse(response)) {
+            ifFailureLedgerAdapter.setProvider(currentAssignment.providerName);
+            ifFailureLedger.recordFailure(currentAssignment.providerName, false);
+            const verdict = ifFailureLedger.verdict(this.buildPhase1aVerdictInput());
+            const handled = await this.applyInteractiveVerdict(verdict, {
+              iterationHealth,
               chatId,
-              provider: currentAssignment.providerName,
-              failureRate: iterationHealth.getFailureRate(),
-              consecutiveFailures: iterationHealth.getConsecutiveFailures(),
-              totalFailures: iterationHealth.getTotalFailures(),
-              taskDurationMs: iterationHealth.getTaskDurationMs(),
+              session,
+              providerName: currentAssignment.providerName,
+              language: interactiveLang,
             });
-            await this.sessionManager.sendVisibleAssistantMarkdown(
-              chatId, session,
-              getResilienceMessage("provider_abort", interactiveLang),
-            );
-            break;
+            if (handled.control === "break") break;
+            continue;
           }
-
-          // Exponential backoff before retry
-          if (failureAction.backoffMs > 0) {
-            logger.info("Provider failure backoff", {
-              chatId,
-              backoffMs: failureAction.backoffMs,
-              provider: currentAssignment.providerName,
-              consecutiveFailures: iterationHealth.getConsecutiveFailures(),
-            });
-            await new Promise(resolve => setTimeout(resolve, failureAction.backoffMs));
-          }
-
-          continue;
+          ifFailureLedger.recordSuccess(currentAssignment.providerName, "real");
         } else {
-          iterationHealth.recordSuccess();
+          const cbResult = checkProviderFailureCircuitBreaker(response, iterationHealth.getConsecutiveFailures());
+          if (cbResult.action !== "ok") {
+            const failureAction = iterationHealth.recordFailure(currentAssignment.providerName);
+            const statusLevel = iterationHealth.getStatusLevel();
+
+            // Inject rich health context so the agent can reason about it when provider recovers
+            session.messages.push({
+              role: "user",
+              content: iterationHealth.buildSessionHealthContext(currentAssignment.providerName, failureAction),
+            } as ConversationMessage);
+
+            // Progressive disclosure — notify user based on severity
+            if (statusLevel === "degraded") {
+              await this.sessionManager.sendVisibleAssistantMarkdown(
+                chatId, session,
+                getResilienceMessage("provider_slow", interactiveLang),
+              );
+            } else if (statusLevel === "critical") {
+              await this.sessionManager.sendVisibleAssistantMarkdown(
+                chatId, session,
+                getResilienceMessage("provider_failing", interactiveLang, {
+                  seconds: Math.round((failureAction.kind !== "abort" ? failureAction.backoffMs : 0) / 1000),
+                  attempt: iterationHealth.getConsecutiveFailures(),
+                  max: 5,
+                }),
+              );
+            }
+
+            // Ask user — provider has been unreliable beyond retry threshold
+            if (failureAction.kind === "ask_user") {
+              await this.sessionManager.sendVisibleAssistantMarkdown(
+                chatId, session,
+                getResilienceMessage("provider_ask_user", interactiveLang),
+              );
+            }
+
+            // Abort if failure rate is critical
+            if (failureAction.kind === "abort") {
+              logger.error("Provider failure rate critical — aborting interactive loop", {
+                chatId,
+                provider: currentAssignment.providerName,
+                failureRate: iterationHealth.getFailureRate(),
+                consecutiveFailures: iterationHealth.getConsecutiveFailures(),
+                totalFailures: iterationHealth.getTotalFailures(),
+                taskDurationMs: iterationHealth.getTaskDurationMs(),
+              });
+              await this.sessionManager.sendVisibleAssistantMarkdown(
+                chatId, session,
+                getResilienceMessage("provider_abort", interactiveLang),
+              );
+              break;
+            }
+
+            // Exponential backoff before retry
+            if (failureAction.backoffMs > 0) {
+              logger.info("Provider failure backoff", {
+                chatId,
+                backoffMs: failureAction.backoffMs,
+                provider: currentAssignment.providerName,
+                consecutiveFailures: iterationHealth.getConsecutiveFailures(),
+              });
+              await new Promise(resolve => setTimeout(resolve, failureAction.backoffMs));
+            }
+
+            continue;
+          } else {
+            iterationHealth.recordSuccess();
+          }
         }
 
         // max_tokens: model output was truncated — push and continue so the model finishes.

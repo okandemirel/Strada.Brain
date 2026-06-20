@@ -74,6 +74,25 @@ export const LEGAL_FLAG_SETS: readonly FlagSet[] = [
     ...ALL_V1_NO_CP,
   },
 
+  // ── Phase 1a — failureLedger in ISOLATION (the other 3 control-plane concerns still OFF). ──
+  //    Per-concern incremental rollout must be explicitly enumerated in the closed matrix
+  //    (P-F). With runClock/silenceAccumulator/typedCancelReason still false, the ledger's
+  //    VerdictInput is inert for those concerns and reduces to the v1 failure surface.
+  {
+    id: "v1-driver+failure-ledger-only",
+    interactive: "v1",
+    background: "v1",
+    worker: "v1",
+    supervisorNode: "v1",
+    failureLedger: true,
+    runClock: false,
+    silenceAccumulator: false,
+    typedCancelReason: false,
+    providerRouterScoring: false,
+    capabilityRegistry: false,
+    streamVisibleTokens: false,
+  },
+
   // ── Phase 1 — v1 driver + full control plane (the consolidation target). ──
   {
     id: "v1-driver+full-control-plane",

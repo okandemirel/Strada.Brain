@@ -90,12 +90,24 @@ describe("resolveLegalFlagSet — closed-matrix rejections", () => {
     expect(() => resolveLegalFlagSet(illegal)).toThrow(/Illegal agent-core flag combination/);
   });
 
-  it("rejects a partial control-plane bundle (one sub-flag on, rest off)", () => {
+  it("rejects a partial control-plane bundle (two sub-flags on, rest off)", () => {
+    // Phase 1a made `failureLedger` alone legal (isolation set). A *partial bundle* beyond
+    // that — e.g. failureLedger+runClock without silenceAccumulator/typedCancelReason — is
+    // still uncatalogued and must reject.
     const illegal: RequestedFlagSet = {
       ...DEFAULT_FLAG_SET,
-      failureLedger: true, // a lone CP sub-flag with v1 everywhere is not catalogued
+      failureLedger: true,
+      runClock: true,
     };
     expect(() => resolveLegalFlagSet(illegal)).toThrow(/not in LEGAL_FLAG_SETS/);
+  });
+
+  it("accepts failureLedger in isolation (Phase 1a set)", () => {
+    const phase1a: RequestedFlagSet = {
+      ...DEFAULT_FLAG_SET,
+      failureLedger: true,
+    };
+    expect(resolveLegalFlagSet(phase1a).id).toBe("v1-driver+failure-ledger-only");
   });
 
   it("rejects streamVisibleTokens without the full Phase-3 stack", () => {

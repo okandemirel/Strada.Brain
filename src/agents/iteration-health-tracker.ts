@@ -141,6 +141,11 @@ export class IterationHealthTracker {
     return this.totalFailures;
   }
 
+  /** Number of recorded results (successes + failures) — for window-fill checks. */
+  getTotalResults(): number {
+    return this.results.length;
+  }
+
   /**
    * Build a rich health context message for injection into session.messages.
    * The agent sees this when the provider recovers and can reason about it.

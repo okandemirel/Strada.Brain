@@ -969,6 +969,14 @@ async function bootstrapImpl(
     goalDecomposer,
   });
 
+  // Agent Core v2 strangler seam: validate the active driver/control-plane flag combination
+  // against LEGAL_FLAG_SETS and REJECT-AT-BOOT any uncatalogued combo (P-F closed matrix).
+  // Resolved BEFORE the orchestrator so the resolved FlagSet can be threaded into it (Phase
+  // 1a reads `agentCoreFlagSet.failureLedger`). The default `all-v1` set keeps the flag OFF,
+  // so installing the seam changes nothing observable until the active set is flipped.
+  const agentCoreFlagSet = resolveLegalFlagSet(DEFAULT_FLAG_SET);
+  logger.info("Agent Core flag set resolved", { flagSet: agentCoreFlagSet.id });
+
   // Initialize orchestrator
   const orchestrator = new Orchestrator({
     providerManager,
@@ -1031,14 +1039,8 @@ async function bootstrapImpl(
     progressAssessmentEnabled: config.progressAssessmentEnabled,
     onSkillCreated: async (skillPath) => { await skillManager.loadSingle(skillPath); },
     getSkillEntries: () => skillManager.getEntries(),
+    agentCoreFlagSet,
   });
-
-  // Agent Core v2 strangler seam (Phase 0): validate the active driver/control-plane flag
-  // combination against LEGAL_FLAG_SETS and REJECT-AT-BOOT any uncatalogued combo (P-F closed
-  // matrix). Phase 0 has no config surface for these flags yet, so the default `all-v1` set is
-  // resolved — installing the seam changes nothing observable (the Phase-0 acceptance criterion).
-  const agentCoreFlagSet = resolveLegalFlagSet(DEFAULT_FLAG_SET);
-  logger.info("Agent Core flag set resolved", { flagSet: agentCoreFlagSet.id });
 
   // Wire FrameworkPromptGenerator to the orchestrator (deferred: IIFE may complete before or after)
   const wireFrameworkPromptGenerator = async (store: FrameworkKnowledgeStore) => {
