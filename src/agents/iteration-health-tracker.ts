@@ -17,14 +17,14 @@ export const ABORT_CONSECUTIVE = 5;
 export const SLIDING_WINDOW_SIZE = 10;
 
 /** Failure rate at which ask_user is suggested (below abort threshold). */
-const ASK_USER_FAILURE_RATE = 0.4;
+export const ASK_USER_FAILURE_RATE = 0.4;
 
 /**
  * Minimum number of results in the sliding window before the failure-rate
  * threshold is considered meaningful. Without this guard the very first
  * failure would yield a 100% rate and immediately trigger ask_user.
  */
-const MIN_WINDOW_FOR_RATE = 5;
+export const MIN_WINDOW_FOR_RATE = 5;
 
 // ---------------------------------------------------------------------------
 // Types

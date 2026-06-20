@@ -18,17 +18,13 @@
  */
 import {
   ASK_USER_CONSECUTIVE,
+  ASK_USER_FAILURE_RATE,
   IterationHealthTracker,
+  MIN_WINDOW_FOR_RATE,
   SLIDING_WINDOW_SIZE,
   type FailureAction,
 } from "../../agents/iteration-health-tracker.js";
 import type { HealthCore } from "./failure-ledger.js";
-
-// Mirror of the tracker's MODULE-PRIVATE constants (iteration-health-tracker.ts:20,27).
-// Kept in lockstep with that file; a drift test asserts equivalence (the equivalence suite
-// re-derives the same crossings from the live tracker, so a value drift fails loudly).
-const ASK_USER_FAILURE_RATE = 0.4;
-const MIN_WINDOW_FOR_RATE = 5;
 
 /**
  * Wraps an {@link IterationHealthTracker} behind {@link HealthCore}.

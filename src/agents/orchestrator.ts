@@ -1083,13 +1083,37 @@ export class Orchestrator {
   }
 
   /**
+   * Phase 1a: the shared 3-step ledger interaction at each of the 4 failure sites — tag the
+   * provider, record the (non-benign) failure, and read the verdict under the inert 1a inputs.
+   * One definition so 1b–1d can add sites without re-stamping the call sequence.
+   */
+  private recordPhase1aFailureAndVerdict(
+    ledger: FailureLedger,
+    adapter: IterationHealthCoreAdapter,
+    provider: string,
+  ): ReturnType<FailureLedger["verdict"]> {
+    adapter.setProvider(provider);
+    ledger.recordFailure(provider, false);
+    return ledger.verdict(this.buildPhase1aVerdictInput());
+  }
+
+  /**
    * Synthesize the v1 {@link FailureAction} the legacy health-context message expects, from
    * the ledger's loop action + served backoff. Lets the ledger path reuse v1's exact
    * `buildSessionHealthContext` text without duplicating it.
    */
-  private synthFailureAction(action: LoopAction): import("./iteration-health-tracker.js").FailureAction {
+  private synthFailureAction(
+    action: LoopAction,
+    iterationHealth: IterationHealthTracker,
+  ): import("./iteration-health-tracker.js").FailureAction {
     if (action.notice === "abort") {
-      return { kind: "abort", reason: "Provider failure rate critical" };
+      // Reproduce v1's tracker abort-reason format VERBATIM (iteration-health-tracker.ts) so the
+      // ledger path's buildSessionHealthContext message carries the same specific rate + count
+      // the agent saw under v1 — not a generic string.
+      return {
+        kind: "abort",
+        reason: `Failure rate ${(iterationHealth.getFailureRate() * 100).toFixed(0)}% with ${iterationHealth.getConsecutiveFailures()} consecutive failures`,
+      };
     }
     if (action.notice === "ask_user") {
       return { kind: "ask_user", backoffMs: action.backoffMs };
@@ -1121,7 +1145,7 @@ export class Orchestrator {
   ): Promise<{ control: "continue" } | { control: "break" } | { control: "return"; finish: string }> {
     const action = mapVerdictToLoopAction(verdict, bag.abortControl);
     const statusLevel = bag.iterationHealth.getStatusLevel();
-    const failureAction = this.synthFailureAction(action);
+    const failureAction = this.synthFailureAction(action, bag.iterationHealth);
 
     // Inject rich health context so the agent can reason about it when provider recovers.
     bag.session.messages.push({
@@ -1197,7 +1221,7 @@ export class Orchestrator {
   ): Promise<{ control: "continue" | "break" }> {
     const action = mapVerdictToLoopAction(verdict, "break");
     const statusLevel = bag.iterationHealth.getStatusLevel();
-    const failureAction = this.synthFailureAction(action);
+    const failureAction = this.synthFailureAction(action, bag.iterationHealth);
 
     bag.session.messages.push({
       role: "user",
@@ -3430,9 +3454,11 @@ export class Orchestrator {
                   // ── Agent Core v2 — Phase 1a LEDGER PATH (bg THROW). A throw is a generic
                   //    health failure routed through rules 5/7/9 (NOT a typed call-stall — that
                   //    is a run-clock signal, 1b). ──
-                  bgFailureLedgerAdapter.setProvider(currentAssignment.providerName);
-                  bgFailureLedger.recordFailure(currentAssignment.providerName, false);
-                  const verdict = bgFailureLedger.verdict(this.buildPhase1aVerdictInput());
+                  const verdict = this.recordPhase1aFailureAndVerdict(
+                    bgFailureLedger,
+                    bgFailureLedgerAdapter,
+                    currentAssignment.providerName,
+                  );
                   logger.warn("Provider call failed in background loop (ledger)", {
                     chatId,
                     epoch: bgEpochCount,
@@ -3592,9 +3618,11 @@ export class Orchestrator {
                 // ── Agent Core v2 — Phase 1a LEDGER PATH (bg EMPTY). Emptiness is v1's shared
                 //    predicate; the ledger owns retry/ask_user/abort + backoff. ──
                 if (isEmptyProviderResponse(response)) {
-                  bgFailureLedgerAdapter.setProvider(currentAssignment.providerName);
-                  bgFailureLedger.recordFailure(currentAssignment.providerName, false);
-                  const verdict = bgFailureLedger.verdict(this.buildPhase1aVerdictInput());
+                  const verdict = this.recordPhase1aFailureAndVerdict(
+                    bgFailureLedger,
+                    bgFailureLedgerAdapter,
+                    currentAssignment.providerName,
+                  );
                   const handled = await this.applyBackgroundVerdict(verdict, {
                     ledger: bgFailureLedger,
                     iterationHealth,
@@ -4832,9 +4860,11 @@ export class Orchestrator {
           if (ifFailureLedger && ifFailureLedgerAdapter) {
             // ── Agent Core v2 — Phase 1a LEDGER PATH (interactive THROW). ──
             const interactiveLang = (profile?.language ?? this.defaultLanguage) as string;
-            ifFailureLedgerAdapter.setProvider(currentAssignment.providerName);
-            ifFailureLedger.recordFailure(currentAssignment.providerName, false);
-            const verdict = ifFailureLedger.verdict(this.buildPhase1aVerdictInput());
+            const verdict = this.recordPhase1aFailureAndVerdict(
+              ifFailureLedger,
+              ifFailureLedgerAdapter,
+              currentAssignment.providerName,
+            );
             logger.warn("Provider call failed in interactive loop (ledger)", {
               chatId, iteration,
               provider: currentAssignment.providerName,
@@ -4973,9 +5003,11 @@ export class Orchestrator {
         if (ifFailureLedger && ifFailureLedgerAdapter) {
           // ── Agent Core v2 — Phase 1a LEDGER PATH (interactive EMPTY). ──
           if (isEmptyProviderResponse(response)) {
-            ifFailureLedgerAdapter.setProvider(currentAssignment.providerName);
-            ifFailureLedger.recordFailure(currentAssignment.providerName, false);
-            const verdict = ifFailureLedger.verdict(this.buildPhase1aVerdictInput());
+            const verdict = this.recordPhase1aFailureAndVerdict(
+              ifFailureLedger,
+              ifFailureLedgerAdapter,
+              currentAssignment.providerName,
+            );
             const handled = await this.applyInteractiveVerdict(verdict, {
               iterationHealth,
               chatId,
