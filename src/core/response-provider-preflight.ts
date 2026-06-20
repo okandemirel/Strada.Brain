@@ -108,6 +108,7 @@ export async function preflightResponseProviders(
   providerNames: string[],
   credentials: ProviderCredentialMap,
   models?: Record<string, string>,
+  baseUrls?: Record<string, string>,
 ): Promise<ResponseProviderPreflightResult> {
   const seen = new Set<string>();
   const normalizedNames = providerNames
@@ -143,6 +144,7 @@ export async function preflightResponseProviders(
         openaiSubscriptionAccessToken: credential?.openaiSubscriptionAccessToken,
         openaiSubscriptionAccountId: credential?.openaiSubscriptionAccountId,
         model: models?.[providerId],
+        baseUrl: baseUrls?.[providerId],
       });
 
       const healthy = provider.healthCheck ? await provider.healthCheck() : true;

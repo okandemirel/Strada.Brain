@@ -249,6 +249,27 @@ describe("DelegationManager", () => {
       expect(result.metadata.escalated).toBe(false);
     });
 
+    // Regression: the sub-agent provider MUST receive the configured base URL
+    // (e.g. OpenCode Go), not silently fall back to the provider's preset default
+    // (Zen) — that leak routed delegated calls to the wrong, uncredited endpoint.
+    it("threads providerBaseUrls into the delegated sub-agent provider", async () => {
+      opts = buildManagerOpts({ delegationLog, providerBaseUrls: { deepseek: "https://test.example/go/v1" } });
+      manager = new DelegationManager(opts);
+
+      await manager.delegate({
+        type: "code_review",
+        task: "Review this code",
+        parentAgentId: PARENT_AGENT_ID,
+        depth: 0,
+        mode: "sync",
+        toolContext: TEST_TOOL_CONTEXT,
+      });
+
+      expect(vi.mocked(createProvider)).toHaveBeenCalledWith(
+        expect.objectContaining({ name: "deepseek", baseUrl: "https://test.example/go/v1" }),
+      );
+    });
+
     it("returns blocked delegated worker results without throwing", async () => {
       orchestratorRunWorkerTask = vi.fn().mockResolvedValueOnce({
         status: "blocked",

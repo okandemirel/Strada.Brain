@@ -59,6 +59,10 @@ export interface DelegationManagerOptions {
   readonly parentTools: ITool[];
   readonly apiKeys: Record<string, string | undefined>;
   readonly providerCredentials?: ProviderCredentialMap;
+  /** Per-provider base-URL overrides (e.g. OpenCode's OPENCODE_BASE_URL = Zen vs Go).
+   *  MUST be threaded into every sub-agent/candidate provider, or opencode silently
+   *  falls back to its Zen preset default and hits the wrong (uncredited) endpoint. */
+  readonly providerBaseUrls?: Record<string, string>;
   readonly preferencesDbPath?: string;
   readonly verifiedLocalProviders?: readonly string[];
   readonly workspaceLeaseManager?: WorkspaceLeaseManager;
@@ -363,6 +367,7 @@ export class DelegationManager {
       openaiSubscriptionAccessToken: providerCredential?.openaiSubscriptionAccessToken,
       openaiSubscriptionAccountId: providerCredential?.openaiSubscriptionAccountId,
       model: providerConfig.model,
+      baseUrl: this.opts.providerBaseUrls?.[providerConfig.name],
     });
 
     const providerManager = new ProviderManager(
@@ -370,6 +375,9 @@ export class DelegationManager {
       this.opts.providerCredentials ?? {},
       undefined,
       this.opts.preferencesDbPath,
+      [],
+      undefined,
+      this.opts.providerBaseUrls,
     );
     const subAgentTools = this.buildSubAgentTools(request.depth);
 
@@ -702,6 +710,7 @@ export class DelegationManager {
           openaiSubscriptionAccessToken: credential?.openaiSubscriptionAccessToken,
           openaiSubscriptionAccountId: credential?.openaiSubscriptionAccountId,
           model,
+          baseUrl: this.opts.providerBaseUrls?.[name],
         });
         candidates.push({
           name,

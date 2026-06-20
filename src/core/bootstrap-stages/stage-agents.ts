@@ -207,6 +207,7 @@ export async function initializeMultiAgentDelegationStage(
       parentTools: params.toolRegistry.getAllTools(),
       apiKeys: collectApiKeys(params.config),
       providerCredentials: collectProviderCredentials(params.config),
+      providerBaseUrls: params.config.providerBaseUrls,
       preferencesDbPath: params.config.memory.dbPath,
       verifiedLocalProviders: params.providerManager.isAvailable("ollama") ? ["ollama"] : [],
       workspaceLeaseManager,
