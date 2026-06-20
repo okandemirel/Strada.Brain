@@ -87,7 +87,18 @@ export class DelegationTool implements ITool {
       };
 
       if (mode === "async") {
-        void this.delegationManager.delegateAsync(request);
+        try {
+          // await: delegateAsync runs the pre-spawn gate (concurrency / all-providers-
+          // in-cooldown / parent-budget) synchronously and only THEN fires the
+          // fire-and-forget run, so a gate REJECTION surfaces here as a real failure
+          // instead of an unhandled promise rejection + a false "delegating..." ack.
+          await this.delegationManager.delegateAsync(request);
+        } catch (error) {
+          return {
+            content: `Delegation could not start: ${error instanceof Error ? error.message : String(error)}`,
+            isError: true,
+          };
+        }
         return {
           content: `[Delegating ${this.typeConfig.name} to sub-agent...]`,
           metadata: { delegationMode: "async" },

@@ -207,7 +207,14 @@ export async function initializeMultiAgentDelegationStage(
       parentTools: params.toolRegistry.getAllTools(),
       apiKeys: collectApiKeys(params.config),
       providerCredentials: collectProviderCredentials(params.config),
-      providerBaseUrls: params.config.providerBaseUrls,
+      // Merge the resolved Ollama base URL in (it lives in config.ollamaBaseUrl, NOT
+      // config.providerBaseUrls), mirroring bootstrap-providers — otherwise delegated
+      // Ollama sub-agents silently fall back to localhost:11434 instead of the remote.
+      providerBaseUrls: {
+        ...params.config.providerBaseUrls,
+        ...(params.config.ollamaBaseUrl ? { ollama: params.config.ollamaBaseUrl } : {}),
+      },
+      providerResponseTimeoutMs: params.config.llmProviderFirstResponseTimeoutMs,
       preferencesDbPath: params.config.memory.dbPath,
       verifiedLocalProviders: params.providerManager.isAvailable("ollama") ? ["ollama"] : [],
       workspaceLeaseManager,

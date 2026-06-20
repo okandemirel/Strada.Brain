@@ -63,6 +63,10 @@ export interface DelegationManagerOptions {
    *  MUST be threaded into every sub-agent/candidate provider, or opencode silently
    *  falls back to its Zen preset default and hits the wrong (uncredited) endpoint. */
   readonly providerBaseUrls?: Record<string, string>;
+  /** Per-attempt first-response timeout (ms) for sub-agent provider chains — without
+   *  it the sub-agent ProviderManager runs with attemptTimeoutMs=0 (unbounded), so a
+   *  dead tier provider never fails over fast. Threaded from llmProviderFirstResponseTimeoutMs. */
+  readonly providerResponseTimeoutMs?: number;
   readonly preferencesDbPath?: string;
   readonly verifiedLocalProviders?: readonly string[];
   readonly workspaceLeaseManager?: WorkspaceLeaseManager;
@@ -366,8 +370,9 @@ export class DelegationManager {
       undefined, // modelOverrides
       this.opts.preferencesDbPath,
       [], // defaultProviderOrder
-      undefined, // ollamaBaseUrl
+      this.opts.providerBaseUrls?.["ollama"], // ollamaBaseUrl (threaded via the providerBaseUrls merge in stage-agents)
       this.opts.providerBaseUrls, // baseUrlOverrides — keeps sub-agent chains on the configured (Go) endpoint
+      this.opts.providerResponseTimeoutMs, // first-response timeout so dead tier providers fail over fast
     );
     const subAgentTools = this.buildSubAgentTools(request.depth);
 
@@ -492,26 +497,11 @@ export class DelegationManager {
         ]);
       }
 
-      // Check if aborted (timeout fired)
+      // Timed out (signal aborted). Just surface it — ALL timeout accounting/logging
+      // happens in the catch's aborted branch below, which is the path actually taken
+      // when waitForAbort rejects the race (the common case). Handling it in one place
+      // avoids both the dropped-accounting bug and any double-count on a same-tick race.
       if (abortController.signal.aborted) {
-        // A timed-out delegation still consumed compute — account for its cost
-        // against the parent's budget and persist the duration/cost, instead of
-        // silently dropping it (which let the parent keep delegating for free).
-        const timedOutMs = Date.now() - startTime;
-        const timedOutCostUsd = this.estimateDelegationCost(tier, timedOutMs);
-        budgetTracker.recordCost(request.parentAgentId as AgentId, timedOutCostUsd, {
-          model: providerConfig.model,
-          tokensIn: 0,
-          tokensOut: 0,
-        });
-        delegationLog.timeout(logId, { durationMs: timedOutMs, costUsd: timedOutCostUsd });
-        eventBus.emit("delegation:failed", {
-          parentAgentId: request.parentAgentId,
-          subAgentId,
-          type: request.type,
-          reason: "Delegation timed out",
-          timestamp: Date.now(),
-        });
         throw new Error(`Delegation ${request.type} timed out after ${typeConfig.timeoutMs}ms`);
       }
 
@@ -569,8 +559,28 @@ export class DelegationManager {
         },
       };
     } catch (error) {
-      // Only log failure if not already handled (timeout)
-      if (!abortController.signal.aborted) {
+      if (abortController.signal.aborted) {
+        // Timed out — the race rejected via waitForAbort (or a same-tick resolve re-threw).
+        // A timed-out delegation still consumed compute: bill it against the parent and
+        // persist a TERMINAL 'timeout' status. Previously this lived only in the
+        // post-race branch (unreachable when waitForAbort rejects), so the log row stayed
+        // 'running' forever and the parent kept delegating for free.
+        const timedOutMs = Date.now() - startTime;
+        const timedOutCostUsd = this.estimateDelegationCost(tier, timedOutMs);
+        budgetTracker.recordCost(request.parentAgentId as AgentId, timedOutCostUsd, {
+          model: providerConfig.model,
+          tokensIn: 0,
+          tokensOut: 0,
+        });
+        delegationLog.timeout(logId, { durationMs: timedOutMs, costUsd: timedOutCostUsd });
+        eventBus.emit("delegation:failed", {
+          parentAgentId: request.parentAgentId,
+          subAgentId,
+          type: request.type,
+          reason: "Delegation timed out",
+          timestamp: Date.now(),
+        });
+      } else {
         const reason = error instanceof Error ? error.message : String(error);
         delegationLog.fail(logId, reason, escalatedFrom);
 
@@ -741,7 +751,14 @@ export class DelegationManager {
     if (name === "claude" || name === "anthropic") {
       return "claude-sonnet-4-6-20250514";
     }
-    return PROVIDER_PRESETS[name]?.defaultModel ?? "default";
+    const preset = PROVIDER_PRESETS[name]?.defaultModel;
+    if (preset) return preset;
+    // Refuse to emit the literal "default" model id — the endpoint rejects it with an
+    // opaque error and the misconfig is invisible. Surface it at resolution time.
+    throw new Error(
+      `No model configured for delegation provider "${name}". Add it to config.delegation.tiers ` +
+        `(e.g. "${name}:<model-id>") or to PROVIDER_PRESETS.`,
+    );
   }
 
   private isVerifiedLocalProvider(name: string): boolean {
