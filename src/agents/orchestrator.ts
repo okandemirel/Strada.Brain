@@ -515,7 +515,22 @@ interface SelfManagedWriteReview {
   reason?: string;
 }
 
-function createStreamingProgressTimeout(
+/**
+ * Maximum number of silent (pre-first-token) thinking windows a stream may re-arm via
+ * markAlive() before the watchdog fires regardless. markAlive() keeps re-arming the
+ * generous thinking window on every keepalive / reasoning-summary delta so a genuinely
+ * thinking model is never cut off mid-reason — but WITHOUT a hard ceiling an endpoint
+ * that emits endless heartbeats with no visible content (a stuck reasoning model or a
+ * chatty proxy) would re-arm forever and the call would hang until the outer task
+ * timeout (minutes-to-hours). This bounds total silent time at N × the window.
+ *
+ * Kept in step with MIN_INACTIVITY_OVER_STREAM_RATIO (background-executor.ts): with the
+ * default window the silent cap lands right at the outer task-inactivity floor, so this
+ * watchdog fires at-or-before the task timer. Tune the two together.
+ */
+const MAX_SILENT_THINKING_WINDOWS = 2;
+
+export function createStreamingProgressTimeout(
   initialTimeoutMs: number,
   stallTimeoutMs: number,
   /** Extended stall timeout for reasoning models during silent thinking phases. */
@@ -531,20 +546,36 @@ function createStreamingProgressTimeout(
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
   let sawProgress = false;
   let rejectTimeout: ((error: Error) => void) | undefined;
+  // When the silent (pre-first-token) phase began — used to bound total silent time so
+  // markAlive() re-arms cannot extend it forever (see MAX_SILENT_THINKING_WINDOWS).
+  const silentPhaseStartedAt = Date.now();
 
   const armTimeout = () => {
     if (timeoutId) clearTimeout(timeoutId);
     // Pre-first-token: use extended thinking timeout (silent reasoning phase).
     // Post-first-token: always use normal stall timeout — if tokens were flowing
     // and stopped, the connection is likely dead, not thinking.
-    const timeoutMs = sawProgress
+    const windowMs = sawProgress
       ? stallTimeoutMs
       : (thinkingStallTimeoutMs ?? initialTimeoutMs);
+    // Absolute ceiling on the silent phase: keepalives re-arm `windowMs`, but never past
+    // N windows of total silent time — otherwise an endless heartbeat stream hangs forever.
+    let timeoutMs = windowMs;
+    let cappedBySilenceCeiling = false;
+    if (!sawProgress) {
+      const remaining = windowMs * MAX_SILENT_THINKING_WINDOWS - (Date.now() - silentPhaseStartedAt);
+      if (remaining < timeoutMs) {
+        timeoutMs = Math.max(0, remaining);
+        cappedBySilenceCeiling = true;
+      }
+    }
     timeoutId = setTimeout(() => {
       const thinkingHint = !sawProgress && thinkingStallTimeoutMs ? " (thinking model)" : "";
       const error = new Error(sawProgress
-        ? `Streaming stalled after ${timeoutMs}ms without progress`
-        : `Streaming did not start within ${timeoutMs}ms${thinkingHint}`);
+        ? `Streaming stalled after ${stallTimeoutMs}ms without progress`
+        : cappedBySilenceCeiling
+          ? `Streaming produced no visible content within ${windowMs * MAX_SILENT_THINKING_WINDOWS}ms${thinkingHint}`
+          : `Streaming did not start within ${windowMs}ms${thinkingHint}`);
       abortController.abort(error);
       rejectTimeout?.(error);
     }, timeoutMs);

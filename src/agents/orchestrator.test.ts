@@ -1,4 +1,4 @@
-import { Orchestrator } from "./orchestrator.js";
+import { Orchestrator, createStreamingProgressTimeout } from "./orchestrator.js";
 import Database from "better-sqlite3";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -8775,5 +8775,87 @@ DONE`,
       // second call was made (i.e. the loop continued past the first failure).
       expect(mockProvider.chat.mock.calls.length).toBeGreaterThanOrEqual(2);
     });
+  });
+});
+
+describe("createStreamingProgressTimeout — silent-thinking ceiling", () => {
+  it("fires by the absolute cap when markAlive() re-arms forever (endless keepalives, no visible content)", async () => {
+    vi.useFakeTimers();
+    try {
+      const window = 1000; // pre-first-token thinking window
+      const guard = createStreamingProgressTimeout(window, 500, window);
+      let rejected: Error | undefined;
+      guard.timeoutPromise.catch((e: unknown) => { rejected = e as Error; });
+
+      // Keepalives every 0.6×window keep re-arming the window. WITHOUT the ceiling this
+      // never fires; WITH it, total silent time is bounded to window × 2 = 2000ms.
+      for (let elapsed = 0; elapsed < 2200; elapsed += 600) {
+        guard.markAlive();
+        await vi.advanceTimersByTimeAsync(600);
+      }
+
+      expect(rejected).toBeInstanceOf(Error);
+      expect(rejected?.message).toMatch(/no visible content within 2000ms/);
+      guard.clear();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("uses the short stall window once visible content has arrived (markProgress)", async () => {
+    vi.useFakeTimers();
+    try {
+      const guard = createStreamingProgressTimeout(1000, 500, 1000);
+      let rejected: Error | undefined;
+      guard.timeoutPromise.catch((e: unknown) => { rejected = e as Error; });
+
+      guard.markProgress(); // first visible token → post-first-token stall window (500ms)
+      await vi.advanceTimersByTimeAsync(300);
+      expect(rejected).toBeUndefined(); // still within the stall window
+      await vi.advanceTimersByTimeAsync(300); // 600ms total > 500ms stall → fires
+      expect(rejected?.message).toMatch(/stalled after 500ms/);
+      guard.clear();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("grants the full window on the first arm (the cap is not applied at construction)", async () => {
+    vi.useFakeTimers();
+    try {
+      const windowMs = 1000;
+      const guard = createStreamingProgressTimeout(windowMs, 500, windowMs);
+      let rejected: Error | undefined;
+      guard.timeoutPromise.catch((e: unknown) => { rejected = e as Error; });
+      // Just under one full window with no activity → must NOT fire (cap is 2×window).
+      await vi.advanceTimersByTimeAsync(windowMs - 1);
+      expect(rejected).toBeUndefined();
+      guard.clear();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("never cuts off a working stream: once visible content arrives the silent cap stops applying", async () => {
+    vi.useFakeTimers();
+    try {
+      const windowMs = 1000; // silent cap would be 2000ms
+      const guard = createStreamingProgressTimeout(windowMs, 500, windowMs);
+      let rejected: Error | undefined;
+      guard.timeoutPromise.catch((e: unknown) => { rejected = e as Error; });
+      guard.markAlive(); // silent heartbeat
+      await vi.advanceTimersByTimeAsync(600);
+      guard.markProgress(); // first visible token latches sawProgress (before the 2000ms cap)
+      // Keep producing content past where the silent cap WOULD have fired; a working stream
+      // (gaps < 500ms stall window) must never be aborted by the silent ceiling.
+      for (let i = 0; i < 5; i += 1) {
+        await vi.advanceTimersByTimeAsync(400);
+        guard.markProgress();
+      }
+      expect(rejected).toBeUndefined(); // total ~2600ms > 2000ms cap, but still alive
+      guard.clear();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
