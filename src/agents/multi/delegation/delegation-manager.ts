@@ -915,9 +915,12 @@ export class DelegationManager {
   }
 
   private buildSubAgentTools(_currentDepth: number): ITool[] {
-    // Always filter out parent's bound delegation tools — they carry the wrong
-    // parentAgentId and depth. Fresh delegation tools for the sub-agent are
-    // created by the delegation factory in AgentManager if depth allows.
+    // Strip the parent's bound delegation tools — they carry the wrong parentAgentId
+    // and depth. Sub-agents are deliberately given NO fresh delegate_ tools, so
+    // delegation is single-level by design: config.delegation.maxDepth > 1 currently
+    // has no effect (nested/recursive delegation is intentionally not wired). This is
+    // the single place to revisit — call createDelegationTools(..., _currentDepth,
+    // maxDepth) here — if nested delegation is ever implemented.
     return this.opts.parentTools.filter((t) => !t.name.startsWith("delegate_"));
   }
 
