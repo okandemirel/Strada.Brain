@@ -29,6 +29,25 @@ function simplifyProviderKey(value: string): string {
     .trim();
 }
 
+/**
+ * Strip a single leading `provider/` namespace from a model id, returning the
+ * BARE id. Several providers (notably OpenCode) expose bare runtime ids
+ * (`qwen3.6-plus`) while the catalog/preferences store the namespaced form
+ * (`opencode/qwen3.6-plus`). Comparing the two with strict equality silently
+ * mismatches; normalize BOTH sides through this helper first.
+ *
+ * Only the first `/`-delimited segment is removed (`a/b/c` → `b/c`) so model
+ * ids that legitimately contain slashes keep their remaining path. A blank or
+ * undefined input is returned unchanged.
+ */
+export function toBareModelId(model: string | null | undefined): string {
+  if (!model) {
+    return "";
+  }
+  const slash = model.indexOf("/");
+  return slash === -1 ? model : model.slice(slash + 1);
+}
+
 export function canonicalizeProviderName(value: string | null | undefined): string | undefined {
   if (!value) {
     return undefined;

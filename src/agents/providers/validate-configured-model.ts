@@ -9,6 +9,8 @@
  * running model — the caller logs a warning only.
  */
 
+import { toBareModelId } from "./provider-identity.js";
+
 export interface ModelValidationResult {
   ok: boolean;
   /** A suggested live fallback model id when not ok. */
@@ -75,7 +77,17 @@ export function validateConfiguredModel(
     return { ok: true };
   }
 
+  // Compare BARE-vs-BARE so a namespaced configured id (e.g. `opencode/qwen3.6-plus`)
+  // matches a bare live-catalog id (`qwen3.6-plus`) and vice versa. Providers such as
+  // OpenCode expose bare runtime ids while config/preferences store the namespaced
+  // form; a strict `includes` would emit a bogus "not offered" warning + wrong
+  // correction. An exact match still short-circuits first (cheapest, and preserves the
+  // configured id when both sides are already namespaced).
   if (liveModelIds.includes(configuredModel)) {
+    return { ok: true };
+  }
+  const configuredBare = toBareModelId(configuredModel);
+  if (liveModelIds.some((id) => toBareModelId(id) === configuredBare)) {
     return { ok: true };
   }
 

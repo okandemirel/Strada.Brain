@@ -784,6 +784,28 @@ describe("ProviderManager", () => {
       expect(preferenceState.get(GLOBAL)?.model).toBe("kimi-good"); // untouched
     });
 
+    // FIX #15: OpenCode exposes BARE runtime ids while the catalog/preference stores
+    // the NAMESPACED form. A namespaced global default must still demote when the chain
+    // reports a bare-id strike — strict equality silently never fired before.
+    it("demotes a namespaced global default on a bare-id strike", () => {
+      const manager = new ProviderManager(
+        makeProvider("chain(qwen->kimi)"),
+        { qwen: { apiKey: "qwen-key" }, kimi: { apiKey: "kimi-key" } },
+        { qwen: "qwen-max", kimi: "kimi-for-coding" },
+        "/tmp/provider-manager-test",
+        ["qwen", "kimi"],
+      );
+      // Catalog lists the bare id; preference stores the namespaced form.
+      manager.setModelCatalog({ getProviderModels: () => [{ id: "qwen3.6-plus" }] });
+      manager.setPreference("chat-1", "qwen", "opencode/qwen3.6-plus");
+      expect(preferenceState.get(GLOBAL)?.model).toBe("opencode/qwen3.6-plus");
+      // The chain reports the BARE id when the endpoint is dead.
+      manager.recordModelUnresponsive("qwen", "qwen3.6-plus");
+      expect(preferenceState.get(GLOBAL)?.model).toBe("opencode/qwen3.6-plus"); // 1 strike < threshold
+      manager.recordModelUnresponsive("qwen", "qwen3.6-plus");
+      expect(preferenceState.get(GLOBAL)).toBeUndefined(); // demoted despite namespace mismatch
+    });
+
     it("never demotes a hard-pinned model", () => {
       const manager = managerWithGlobalDefault("kimi-pinned", "strada-hard-pin");
       manager.recordModelUnresponsive("kimi", "kimi-pinned");

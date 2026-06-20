@@ -143,14 +143,19 @@ export function getProviderByNameOrFallback(
   providerName: string | undefined,
   fallbackProviderName: string,
   fallbackProvider: IAIProvider,
+  modelId?: string,
 ): { providerName: string; provider: IAIProvider } {
   const normalizedName = canonicalizeProviderName(providerName) ?? providerName?.trim().toLowerCase();
   const normalizedFallbackName =
     canonicalizeProviderName(fallbackProviderName)
     ?? canonicalizeProviderName(fallbackProvider.name)
     ?? fallbackProviderName.trim().toLowerCase();
+  // Thread the routed/active model through so the built provider runs THAT model
+  // instead of its static default — matching buildTaskAwareProvider, which passes
+  // getProviderByName(primaryName, modelId). Without it the synthesis /
+  // visibility-review / null-fallback paths silently carry the provider's default.
   const resolved =
-    (normalizedName ? ctx.providerManager.getProviderByName?.(normalizedName) : null) ??
+    (normalizedName ? ctx.providerManager.getProviderByName?.(normalizedName, modelId) : null) ??
     fallbackProvider;
   return {
     providerName: normalizedName || normalizedFallbackName,
@@ -258,15 +263,18 @@ export function resolveSupervisorAssignment(
           taskDescription,
           projectWorldFingerprint,
         });
+    const routedModel = "model" in routed && typeof routed.model === "string"
+      ? routed.model
+      : undefined;
     const resolved = getProviderByNameOrFallback(
       ctx,
       routed.provider,
       canonicalFallbackName,
       fallbackProvider,
+      routedModel,
     );
-    const modelId = "model" in routed && typeof routed.model === "string"
-      ? routed.model
-      : resolveProviderModelId(ctx, resolved.providerName, identityKey);
+    const modelId = routedModel
+      ?? resolveProviderModelId(ctx, resolved.providerName, identityKey);
     return buildStaticSupervisorAssignment(
       role,
       resolved.providerName,
@@ -361,6 +369,7 @@ export function buildSupervisorExecutionStrategy(
     activeInfo?.providerName,
     fallbackProviderName,
     fallbackProvider,
+    activeInfo?.model,
   );
   const selectedProviderName = selected.providerName;
   const selectedProvider = selected.provider;
@@ -603,23 +612,25 @@ export function resolveConsensusReviewAssignment(
     return null;
   }
 
+  const fallbackReviewModelId = resolveProviderModelId(ctx, fallbackReviewName, identityKey);
   const fallbackReviewProvider = getProviderByNameOrFallback(
     ctx,
     fallbackReviewName,
     fallbackReviewName,
     currentAssignment.provider,
+    fallbackReviewModelId,
   );
   return buildStaticSupervisorAssignment(
     "reviewer",
     fallbackReviewProvider.providerName,
-    resolveProviderModelId(ctx, fallbackReviewProvider.providerName, identityKey),
+    fallbackReviewModelId,
     fallbackReviewProvider.provider,
     "selected an alternate reviewer to keep consensus verification cross-provider",
     undefined,
     buildCatalogAssignmentMetadata(
       ctx,
       fallbackReviewProvider.providerName,
-      resolveProviderModelId(ctx, fallbackReviewProvider.providerName, identityKey),
+      fallbackReviewModelId,
       identityKey,
     ),
   );

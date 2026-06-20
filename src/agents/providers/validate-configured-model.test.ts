@@ -12,6 +12,29 @@ describe("validateConfiguredModel", () => {
     expect(result.reason).toBeUndefined();
   });
 
+  // FIX #15: OpenCode's live catalog returns BARE ids while config stores the
+  // NAMESPACED form. A bare-vs-namespaced pair is the SAME model and must not produce
+  // a bogus "not offered" warning or a wrong correction.
+  it("returns ok:true for a namespaced configured model against a bare live catalog", () => {
+    const result = validateConfiguredModel("opencode", "opencode/qwen3.6-plus", [
+      "qwen3.6-plus",
+      "glm-5",
+    ]);
+    expect(result.ok).toBe(true);
+    expect(result.corrected).toBeUndefined();
+    expect(result.reason).toBeUndefined();
+  });
+
+  it("returns ok:true for a bare configured model against a namespaced live catalog", () => {
+    const result = validateConfiguredModel("opencode", "qwen3.6-plus", [
+      "opencode/qwen3.6-plus",
+      "opencode/glm-5",
+    ]);
+    expect(result.ok).toBe(true);
+    expect(result.corrected).toBeUndefined();
+    expect(result.reason).toBeUndefined();
+  });
+
   it("returns ok:false with a live corrected model and a reason naming provider + stale id when stale", () => {
     const live = ["opencode/grok-code", "opencode/glm-5"];
     const result = validateConfiguredModel("opencode", "opencode/stale-model-retired", live);

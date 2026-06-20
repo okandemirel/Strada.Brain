@@ -57,6 +57,26 @@ describe("getProviderByNameOrFallback", () => {
     expect(resolved.providerName).toBe("qwen");
     expect(resolved.provider).toBe(fallbackProvider);
   });
+
+  // FIX #17: the resolved model must be threaded into getProviderByName so the built
+  // provider runs THAT model instead of its static default (matching
+  // buildTaskAwareProvider which passes getProviderByName(primaryName, modelId)).
+  it("threads the resolved modelId through to getProviderByName", () => {
+    const kimiProvider = makeProvider("kimi");
+    const fallbackProvider = makeProvider("chain(qwen->kimi)");
+    const getProviderByName = vi.fn((name: string) => (name === "kimi" ? kimiProvider : null));
+
+    const resolved = getProviderByNameOrFallback(
+      { providerManager: { getProviderByName } } as any,
+      "Kimi (Moonshot)",
+      "qwen",
+      fallbackProvider as any,
+      "kimi-long-context",
+    );
+
+    expect(getProviderByName).toHaveBeenCalledWith("kimi", "kimi-long-context");
+    expect(resolved.provider).toBe(kimiProvider);
+  });
 });
 
 describe("resolveSupervisorAssignment hard-pin fallback", () => {

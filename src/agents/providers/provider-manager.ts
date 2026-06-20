@@ -26,7 +26,7 @@ import type {
   ProviderCatalogHealth,
 } from "./provider-types.js";
 import { ProviderCatalog, type ProviderCatalogSnapshot } from "./provider-catalog.js";
-import { canonicalizeProviderName } from "./provider-identity.js";
+import { canonicalizeProviderName, toBareModelId } from "./provider-identity.js";
 
 // Re-export shared types so existing consumers of this module are unaffected
 export type {
@@ -443,10 +443,9 @@ export class ProviderManager {
   private isModelKnownToCatalog(providerName: string, model: string): boolean {
     const known = this.modelCatalog?.getProviderModels(providerName) ?? [];
     if (known.length === 0) return true; // catalog unknown — cannot disprove, don't block
-    const bare = model.includes("/") ? model.slice(model.indexOf("/") + 1) : model;
+    const bare = toBareModelId(model);
     return known.some((m) => {
-      const idBare = m.id.includes("/") ? m.id.slice(m.id.indexOf("/") + 1) : m.id;
-      return m.id === model || idBare === bare || m.id === `${providerName}/${model}`;
+      return m.id === model || toBareModelId(m.id) === bare || m.id === `${providerName}/${model}`;
     });
   }
 
@@ -511,10 +510,13 @@ export class ProviderManager {
     const matchesGlobalDefault = globalPref
       && globalPref.selectionMode === "strada-preference-bias"
       && (canonicalizeProviderName(globalPref.providerName) ?? globalPref.providerName) === canonical
-      // Exact model match, OR a provider-only default (no explicit model): in that
+      // Model match, OR a provider-only default (no explicit model): in that
       // case the chain only ever runs the provider's DEFAULT model, so the model that
       // just timed out IS that default — demote the provider-only default too.
-      && (globalPref.model === model || !globalPref.model);
+      // Compare BARE-vs-BARE: the chain reports bare runtime ids (e.g. OpenCode's
+      // `qwen3.6-plus`) while the preference stores the namespaced form
+      // (`opencode/qwen3.6-plus`); strict equality would silently never fire.
+      && (toBareModelId(globalPref.model) === toBareModelId(model) || !globalPref.model);
     if (matchesGlobalDefault) {
       this.preferences.delete(ProviderManager.GLOBAL_PREFERENCE_KEY);
       this.modelUnresponsiveCounts.delete(key);
