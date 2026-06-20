@@ -133,6 +133,7 @@ export async function initializeAIProvider(
     defaultProvider = buildProviderChain(preflightResult.passedProviderIds, providerCredentials, {
       models: config.providerModels,
       baseUrls: baseUrlOverrides,
+      attemptTimeoutMs: config.llmStreamInitialTimeoutMs,
     });
     logger.info("AI provider chain initialized", { chain: preflightResult.passedProviderIds });
 
@@ -151,6 +152,7 @@ export async function initializeAIProvider(
         defaultProvider = buildProviderChain(allProviderIds, providerCredentials, {
           models: config.providerModels,
           baseUrls: baseUrlOverrides,
+          attemptTimeoutMs: config.llmStreamInitialTimeoutMs,
         });
         notices.push(
           `Auto-appended fallback providers: ${fallbackPreflight.passedProviderIds.join(", ")}`,
@@ -201,6 +203,7 @@ export async function initializeAIProvider(
     defaultProvider = buildProviderChain(preflightResult.passedProviderIds, providerCredentials, {
       models: config.providerModels,
       baseUrls: baseUrlOverrides,
+      attemptTimeoutMs: config.llmStreamInitialTimeoutMs,
     });
     logger.info("AI provider auto-detected from available keys", {
       chain: preflightResult.passedProviderIds,
@@ -225,6 +228,7 @@ export async function initializeAIProvider(
     defaultProviderOrder,
     ollamaBaseUrl,
     config.providerBaseUrls,
+    config.llmStreamInitialTimeoutMs,
   );
 
   // Verify Ollama reachability before marking it available for routing.

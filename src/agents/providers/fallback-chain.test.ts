@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { FallbackChainProvider } from "./fallback-chain.js";
 import { createMockProvider } from "../../test-helpers.js";
 import { ProviderHealthRegistry } from "./provider-health.js";
+import type { IAIProvider, ConversationMessage, ToolDefinition } from "./provider.interface.js";
 
 vi.mock("../../utils/logger.js", () => ({
   getLogger: () => ({
@@ -517,6 +518,75 @@ describe("FallbackChainProvider", () => {
 
       // disableThinking must NOT have been called by the chain (already disabled guard)
       expect(disableThinking).not.toHaveBeenCalled();
+    });
+  });
+
+  // A provider that accepts the connection but never responds (token-less stream /
+  // unresponsive endpoint) used to hang indefinitely: no throw → no recordFailure →
+  // no failover. The per-attempt first-response timeout converts that into a
+  // retryable failure so the chain fails over (or fails fast for a single provider).
+  describe("first-response timeout (silent-hang guard)", () => {
+    beforeEach(() => ProviderHealthRegistry.resetInstance());
+
+    function hangingProvider(name: string): IAIProvider {
+      const p = { ...createMockProvider(), name };
+      (p.chat as ReturnType<typeof vi.fn>).mockImplementation(() => new Promise<never>(() => {}));
+      return p;
+    }
+
+    it("times out an unresponsive attempt and fails over to a healthy provider", async () => {
+      const hang = hangingProvider("hang");
+      const p2 = { ...createMockProvider({ text: "recovered" }), name: "p2" };
+      const chain = new FallbackChainProvider([hang, p2], { attemptTimeoutMs: 50 });
+
+      const result = await chain.chat("sys", [], []);
+      expect(result.text).toBe("recovered");
+      expect(hang.chat).toHaveBeenCalledTimes(1);
+      expect(p2.chat).toHaveBeenCalledTimes(1);
+    });
+
+    it("a single unresponsive provider fails fast instead of hanging forever", async () => {
+      const chain = new FallbackChainProvider([hangingProvider("hang")], { attemptTimeoutMs: 50 });
+      await expect(chain.chat("sys", [], [])).rejects.toThrow(/no response within/i);
+    });
+
+    it("counts a timed-out attempt as a provider failure (trips the circuit breaker)", async () => {
+      const hang = hangingProvider("hang");
+      const p2 = { ...createMockProvider({ text: "ok" }), name: "p2" };
+      const chain = new FallbackChainProvider([hang, p2], { attemptTimeoutMs: 50 });
+      const recordFailure = vi.spyOn(ProviderHealthRegistry.getInstance(), "recordFailure");
+
+      await chain.chat("sys", [], []);
+      expect(recordFailure).toHaveBeenCalledWith("hang", expect.stringMatching(/no response within/i));
+    });
+
+    it("does not time out when attemptTimeoutMs is 0 (disabled — back-compat)", async () => {
+      const slow = { ...createMockProvider(), name: "slow" };
+      (slow.chat as ReturnType<typeof vi.fn>).mockImplementation(
+        () => new Promise((r) => setTimeout(() => r({ text: "slow-ok", toolCalls: [], stopReason: "end_turn", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } }), 80)),
+      );
+      const chain = new FallbackChainProvider([slow], { attemptTimeoutMs: 0 });
+      const result = await chain.chat("sys", [], []);
+      expect(result.text).toBe("slow-ok");
+    });
+
+    it("does NOT kill a streaming provider after its first chunk (long healthy stream)", async () => {
+      const streamer: IAIProvider = {
+        ...createMockProvider(),
+        name: "streamer",
+        capabilities: { ...createMockProvider().capabilities, streaming: true },
+        chatStream: vi.fn(async (_sp: string, _m: ConversationMessage[], _t: ToolDefinition[], onChunk: (c: string) => void) => {
+          onChunk("hi");                                   // first chunk fast → clears the 40ms timer
+          await new Promise((r) => setTimeout(r, 120));    // then a 120ms pause (> attemptTimeoutMs)
+          return { text: "complete", toolCalls: [], stopReason: "end_turn" as const, usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } };
+        }),
+      } as IAIProvider;
+      const chain = new FallbackChainProvider([streamer], { attemptTimeoutMs: 40 });
+
+      const chunks: string[] = [];
+      const result = await chain.chatStream("sys", [], [], (c) => { chunks.push(c); });
+      expect(result.text).toBe("complete");                // not timed out despite 120ms > 40ms
+      expect(chunks).toContain("hi");
     });
   });
 });

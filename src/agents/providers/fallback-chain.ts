@@ -77,6 +77,15 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
   readonly name: string;
   readonly capabilities: ProviderCapabilities;
   private readonly providers: IAIProvider[];
+  /**
+   * Per-attempt first-response hard timeout (ms); 0 disables it. A provider that
+   * accepts the connection but sends no response / first stream chunk within this
+   * window is aborted and turned into a RETRYABLE error so the chain counts a
+   * failure and fails over — instead of hanging indefinitely on a dead model/endpoint.
+   * Streaming attempts clear the timer on their first chunk, so long healthy streams
+   * are never cut short (the orchestrator's stall timeout governs mid-stream).
+   */
+  private readonly attemptTimeoutMs: number;
   /** Number of providers in this chain (used for single-provider detection). */
   get providerCount(): number { return this.providers.length; }
   /** Guards against thundering-herd concurrent probes to the same recovering provider. */
@@ -86,11 +95,12 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
   // Thinking disable state now lives in ProviderHealthRegistry singleton
   // to survive FallbackChainProvider re-creation on cache misses.
 
-  constructor(providers: IAIProvider[]) {
+  constructor(providers: IAIProvider[], options: { attemptTimeoutMs?: number } = {}) {
     if (providers.length === 0) {
       throw new Error("FallbackChainProvider requires at least one provider");
     }
     this.providers = providers;
+    this.attemptTimeoutMs = Math.max(0, options.attemptTimeoutMs ?? 0);
     this.name = `chain(${providers.map((p) => p.name).join("→")})`;
     // Aggregate capabilities - use primary provider's limits where sensible
     this.capabilities = {
@@ -133,14 +143,29 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
     }) as ConversationMessage[];
   }
 
+  /**
+   * Merge the per-attempt timeout signal into the caller's options so aborting the
+   * attempt (on first-response timeout) actually cancels the underlying fetch.
+   */
+  private withTimeoutSignal(
+    options: { signal?: AbortSignal; externalSignal?: AbortSignal } | undefined,
+    timeoutSignal?: AbortSignal,
+  ): { signal?: AbortSignal; externalSignal?: AbortSignal } | undefined {
+    if (!timeoutSignal) return options;
+    const composed = options?.signal
+      ? AbortSignal.any([options.signal, timeoutSignal])
+      : timeoutSignal;
+    return { ...options, signal: composed };
+  }
+
   async chat(
     systemPrompt: string,
     messages: ConversationMessage[],
     tools: ToolDefinition[],
     options?: { signal?: AbortSignal; externalSignal?: AbortSignal },
   ): Promise<ProviderResponse> {
-    return this.tryWithFallback("chat", (provider, safeMessages) =>
-      provider.chat(systemPrompt, safeMessages, tools, options),
+    return this.tryWithFallback("chat", (provider, safeMessages, ctl) =>
+      provider.chat(systemPrompt, safeMessages, tools, this.withTimeoutSignal(options, ctl.timeoutSignal)),
       messages,
       options?.externalSignal,
     );
@@ -153,11 +178,15 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
     onChunk: StreamCallback,
     options?: { signal?: AbortSignal; externalSignal?: AbortSignal },
   ): Promise<ProviderResponse> {
-    return this.tryWithFallback("streaming", (provider, safeMessages) => {
+    return this.tryWithFallback("streaming", (provider, safeMessages, ctl) => {
+      const opts = this.withTimeoutSignal(options, ctl.timeoutSignal);
       if (supportsStreaming(provider)) {
-        return provider.chatStream(systemPrompt, safeMessages, tools, onChunk, options);
+        // The first chunk proves the provider is responding → clear the first-response
+        // timer so a long, healthy stream is never cut short.
+        const activityAwareChunk: StreamCallback = (chunk) => { ctl.markActivity(); return onChunk(chunk); };
+        return provider.chatStream(systemPrompt, safeMessages, tools, activityAwareChunk, opts);
       }
-      return provider.chat(systemPrompt, safeMessages, tools, options);
+      return provider.chat(systemPrompt, safeMessages, tools, opts);
     }, messages, options?.externalSignal);
   }
 
@@ -195,12 +224,61 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
   }
 
   /**
+   * Run a single provider attempt under a first-response hard timeout. Streaming
+   * attempts clear the timer on their first chunk (so long, healthy streams are
+   * never killed — the orchestrator's stall timeout governs mid-stream); a
+   * non-streaming attempt is bounded as a whole. On timeout the underlying call is
+   * aborted AND the race rejects, so it settles even if the provider ignores the
+   * abort — surfacing a RETRYABLE error the caller's catch counts as a failure → fail
+   * over. With attemptTimeoutMs <= 0 the attempt runs unbounded (back-compat).
+   */
+  private async runAttemptWithTimeout(
+    provider: IAIProvider & Partial<IStreamingProvider>,
+    attempt: (
+      provider: IAIProvider & Partial<IStreamingProvider>,
+      messages: ConversationMessage[],
+      ctl: { markActivity: () => void; timeoutSignal?: AbortSignal },
+    ) => Promise<ProviderResponse>,
+    messages: ConversationMessage[],
+  ): Promise<ProviderResponse> {
+    if (this.attemptTimeoutMs <= 0) {
+      return attempt(provider, messages, { markActivity: () => {} });
+    }
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let settled = false;
+    const markActivity = (): void => {
+      if (timer) { clearTimeout(timer); timer = undefined; }
+    };
+    try {
+      return await new Promise<ProviderResponse>((resolve, reject) => {
+        timer = setTimeout(() => {
+          if (settled) return;
+          controller.abort();
+          reject(new Error(
+            `Provider "${provider.name}" sent no response within ${this.attemptTimeoutMs}ms (unresponsive endpoint or model)`,
+          ));
+        }, this.attemptTimeoutMs);
+        attempt(provider, messages, { markActivity, timeoutSignal: controller.signal })
+          .then((r) => { settled = true; resolve(r); })
+          .catch((e: unknown) => { settled = true; reject(e instanceof Error ? e : new Error(String(e))); });
+      });
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  /**
    * Try each provider in order, falling back on transient errors.
    * Non-retryable errors (400, auth) are re-thrown immediately.
    */
   private async tryWithFallback(
     label: string,
-    attempt: (provider: IAIProvider & Partial<IStreamingProvider>, messages: ConversationMessage[]) => Promise<ProviderResponse>,
+    attempt: (
+      provider: IAIProvider & Partial<IStreamingProvider>,
+      messages: ConversationMessage[],
+      ctl: { markActivity: () => void; timeoutSignal?: AbortSignal },
+    ) => Promise<ProviderResponse>,
     messages: ConversationMessage[],
     externalSignal?: AbortSignal,
   ): Promise<ProviderResponse> {
@@ -256,7 +334,7 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
         }
 
         const safeMessages = this.stripImages(messages, provider);
-        const response = await attempt(provider, safeMessages);
+        const response = await this.runAttemptWithTimeout(provider, attempt, safeMessages);
         // A resolved-but-empty response (no text AND no tool calls) is NOT a
         // success: a silently-empty provider must not short-circuit the chain and
         // heal its own health while the loop's circuit breaker simultaneously
