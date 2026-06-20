@@ -627,6 +627,7 @@ describe("initializeAIProvider", () => {
       expect.arrayContaining(["deepseek", "gemini"]),
       expect.anything(),
       expect.anything(),
+      expect.anything(), // baseUrlOverrides (now threaded so opencode preflight uses the configured endpoint)
     );
 
     // buildProviderChain called twice: initial chain, then with fallbacks appended
