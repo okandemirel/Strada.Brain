@@ -588,5 +588,30 @@ describe("FallbackChainProvider", () => {
       expect(result.text).toBe("complete");                // not timed out despite 120ms > 40ms
       expect(chunks).toContain("hi");
     });
+
+    it("notifies onModelUnresponsive (provider, model) when an attempt times out", async () => {
+      const hang = hangingProvider("hang");
+      const p2 = { ...createMockProvider({ text: "ok" }), name: "p2" };
+      const onModelUnresponsive = vi.fn();
+      const chain = new FallbackChainProvider([hang, p2], {
+        attemptTimeoutMs: 50,
+        attemptMeta: [{ provider: "opencode", model: "dead-model" }, { provider: "claude", model: "claude-x" }],
+        onModelUnresponsive,
+      });
+      await chain.chat("sys", [], []);
+      expect(onModelUnresponsive).toHaveBeenCalledWith("opencode", "dead-model");
+    });
+
+    it("notifies onModelResponsive (provider, model) on a successful attempt", async () => {
+      const p1 = { ...createMockProvider({ text: "ok" }), name: "p1" };
+      const onModelResponsive = vi.fn();
+      const chain = new FallbackChainProvider([p1], {
+        attemptTimeoutMs: 5000,
+        attemptMeta: [{ provider: "opencode", model: "good-model" }],
+        onModelResponsive,
+      });
+      await chain.chat("sys", [], []);
+      expect(onModelResponsive).toHaveBeenCalledWith("opencode", "good-model");
+    });
   });
 });

@@ -3,7 +3,7 @@ import { ClaudeProvider } from "./claude.js";
 import { OpenAIProvider } from "./openai.js";
 import type { AnthropicAuthMode, OpenAIAuthMode } from "../../config/config.js";
 import { OllamaProvider } from "./ollama.js";
-import { FallbackChainProvider } from "./fallback-chain.js";
+import { FallbackChainProvider, type ChainAttemptMeta } from "./fallback-chain.js";
 import { GeminiProvider } from "./gemini.js";
 import { DeepSeekProvider } from "./deepseek.js";
 import { QwenProvider } from "./qwen.js";
@@ -258,10 +258,17 @@ export function buildProviderChain(
     baseUrls?: Record<string, string>;
     /** Per-attempt first-response timeout (ms) for the chain; see FallbackChainProvider. */
     attemptTimeoutMs?: number;
+    /** Notified (canonical provider, model) when an attempt times out with no response. */
+    onModelUnresponsive?: (provider: string, model: string) => void;
+    /** Notified (canonical provider, model) when an attempt succeeds. */
+    onModelResponsive?: (provider: string, model: string) => void;
   },
 ): IAIProvider {
   const logger = getLogger();
   const providers: IAIProvider[] = [];
+  // Canonical provider+model per successfully-created provider, index-aligned with
+  // `providers`, so the chain can attribute a first-response timeout to the right model.
+  const attemptMeta: ChainAttemptMeta[] = [];
 
   for (const name of providerNames) {
     const trimmed = name.trim().toLowerCase();
@@ -280,6 +287,10 @@ export function buildProviderChain(
         baseUrl: overrides?.baseUrls?.[trimmed],
       });
       providers.push(provider);
+      attemptMeta.push({
+        provider: trimmed,
+        model: overrides?.models?.[trimmed] ?? PROVIDER_PRESETS[trimmed]?.defaultModel ?? "",
+      });
 
       const preset = PROVIDER_PRESETS[trimmed];
       const keyPrefix = credential.apiKey?.slice(0, 6)
@@ -314,5 +325,10 @@ export function buildProviderChain(
     throw new Error("No valid providers configured");
   }
 
-  return new FallbackChainProvider(providers, { attemptTimeoutMs: overrides?.attemptTimeoutMs });
+  return new FallbackChainProvider(providers, {
+    attemptTimeoutMs: overrides?.attemptTimeoutMs,
+    attemptMeta,
+    onModelUnresponsive: overrides?.onModelUnresponsive,
+    onModelResponsive: overrides?.onModelResponsive,
+  });
 }

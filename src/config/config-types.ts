@@ -660,6 +660,16 @@ export const DEFAULT_STRADA_MODULES_REPO_URL = "https://github.com/okandemirel/S
 export const DEFAULT_STRADA_MCP_REPO_URL = "https://github.com/okandemirel/Strada.MCP.git";
 export const DEFAULT_LLM_STREAM_INITIAL_TIMEOUT_MS = 10 * 60 * 1000;
 export const DEFAULT_LLM_STREAM_STALL_TIMEOUT_MS = 5 * 60 * 1000;
+/**
+ * Per-attempt FIRST-RESPONSE timeout for the provider fallback chain — how long a
+ * single provider may stay silent (no response / no first stream chunk) before the
+ * attempt is aborted, counted as a failure, and the chain fails over (or fails fast
+ * for a single provider). Deliberately MUCH shorter than the stream-initial window
+ * above (which is the orchestrator's full thinking/first-token budget): a provider
+ * that emits literally nothing for ~90s is dead, and waiting the full 10 min to
+ * discover that is the difference between a fast failover and a hung request.
+ */
+export const DEFAULT_LLM_PROVIDER_FIRST_RESPONSE_TIMEOUT_MS = 90 * 1000;
 export const DEFAULT_INTERACTION_CONFIG: InteractionConfig = {
   mode: "phase-driven",
   heartbeatAfterMs: 120_000,
@@ -785,6 +795,8 @@ export interface Config {
   readonly shellEnabled: boolean;
   readonly llmStreamInitialTimeoutMs: number;
   readonly llmStreamStallTimeoutMs: number;
+  /** Per-attempt first-response timeout (ms) for the provider fallback chain. */
+  readonly llmProviderFirstResponseTimeoutMs: number;
 
   // Rate Limiting
   readonly rateLimit: RateLimitConfig;

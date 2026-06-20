@@ -16,6 +16,7 @@ import {
   DEFAULT_STRADA_MCP_REPO_URL,
   DEFAULT_LLM_STREAM_INITIAL_TIMEOUT_MS,
   DEFAULT_LLM_STREAM_STALL_TIMEOUT_MS,
+  DEFAULT_LLM_PROVIDER_FIRST_RESPONSE_TIMEOUT_MS,
 } from "./config-types.js";
 
 // =============================================================================
@@ -343,6 +344,17 @@ export const configSchema = z
           .max(60 * 60 * 1000),
       )
       .default(String(DEFAULT_LLM_STREAM_STALL_TIMEOUT_MS)),
+    llmProviderFirstResponseTimeoutMs: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(
+        z
+          .number()
+          .int()
+          .min(1)
+          .max(60 * 60 * 1000),
+      )
+      .default(String(DEFAULT_LLM_PROVIDER_FIRST_RESPONSE_TIMEOUT_MS)),
 
     // Rate Limiting
     rateLimitEnabled: boolFromString(false),

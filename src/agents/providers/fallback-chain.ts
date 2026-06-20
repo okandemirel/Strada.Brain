@@ -66,6 +66,20 @@ function isEmptyProviderResponse(response: ProviderResponse): boolean {
 }
 
 /**
+ * Thrown by the per-attempt first-response timeout. Distinct type so the catch
+ * path can both treat it as a retryable failure (fail over) AND notify
+ * onModelUnresponsive, which lets the manager auto-demote a model that keeps
+ * failing to respond.
+ */
+class FirstResponseTimeoutError extends Error {}
+
+/** Canonical provider name + model id for one chain position (for auto-demote). */
+export interface ChainAttemptMeta {
+  readonly provider: string;
+  readonly model: string;
+}
+
+/**
  * Provider that chains multiple AI providers with automatic fallback.
  *
  * Tries providers in order. If one fails, falls through to the next.
@@ -86,6 +100,12 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
    * are never cut short (the orchestrator's stall timeout governs mid-stream).
    */
   private readonly attemptTimeoutMs: number;
+  /** Canonical provider+model per chain position, for auto-demote notifications. */
+  private readonly attemptMeta: readonly ChainAttemptMeta[];
+  /** Called when an attempt times out with no first response (→ auto-demote candidate). */
+  private readonly onModelUnresponsive?: (provider: string, model: string) => void;
+  /** Called when an attempt succeeds (clears a model's unresponsive streak). */
+  private readonly onModelResponsive?: (provider: string, model: string) => void;
   /** Number of providers in this chain (used for single-provider detection). */
   get providerCount(): number { return this.providers.length; }
   /** Guards against thundering-herd concurrent probes to the same recovering provider. */
@@ -95,12 +115,20 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
   // Thinking disable state now lives in ProviderHealthRegistry singleton
   // to survive FallbackChainProvider re-creation on cache misses.
 
-  constructor(providers: IAIProvider[], options: { attemptTimeoutMs?: number } = {}) {
+  constructor(providers: IAIProvider[], options: {
+    attemptTimeoutMs?: number;
+    attemptMeta?: readonly ChainAttemptMeta[];
+    onModelUnresponsive?: (provider: string, model: string) => void;
+    onModelResponsive?: (provider: string, model: string) => void;
+  } = {}) {
     if (providers.length === 0) {
       throw new Error("FallbackChainProvider requires at least one provider");
     }
     this.providers = providers;
     this.attemptTimeoutMs = Math.max(0, options.attemptTimeoutMs ?? 0);
+    this.attemptMeta = options.attemptMeta ?? [];
+    this.onModelUnresponsive = options.onModelUnresponsive;
+    this.onModelResponsive = options.onModelResponsive;
     this.name = `chain(${providers.map((p) => p.name).join("→")})`;
     // Aggregate capabilities - use primary provider's limits where sensible
     this.capabilities = {
@@ -255,7 +283,7 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
         timer = setTimeout(() => {
           if (settled) return;
           controller.abort();
-          reject(new Error(
+          reject(new FirstResponseTimeoutError(
             `Provider "${provider.name}" sent no response within ${this.attemptTimeoutMs}ms (unresponsive endpoint or model)`,
           ));
         }, this.attemptTimeoutMs);
@@ -346,6 +374,8 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
           throw new Error(`Provider "${provider.name}" returned an empty response (no text or tool calls)`);
         }
         health.recordSuccess(provider.name);
+        const okMeta = this.attemptMeta[i];
+        if (okMeta) this.onModelResponsive?.(okMeta.provider, okMeta.model);
 
         // Require 3 consecutive successes before re-enabling thinking to
         // prevent timeout→success→re-enable→timeout cycles.
@@ -382,6 +412,15 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
         // on the signal, never the error-message text (audit #6).
         if (externalSignal?.aborted) {
           throw lastError;
+        }
+
+        // A first-response timeout (provider stayed silent) is a strong "this model
+        // is unresponsive" signal — notify so the manager can auto-demote it from the
+        // global default after a couple of strikes. Still falls through to the normal
+        // failure handling below (retryable → fail over).
+        if (error instanceof FirstResponseTimeoutError) {
+          const meta = this.attemptMeta[i];
+          if (meta) this.onModelUnresponsive?.(meta.provider, meta.model);
         }
 
         // Quota/billing errors get a long cooldown so the provider is skipped for hours.
