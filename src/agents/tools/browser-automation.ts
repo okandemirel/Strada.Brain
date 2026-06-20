@@ -576,11 +576,35 @@ export class BrowserAutomationTool implements ITool {
 
   private async fallbackDownload(url: string, targetPath: string): Promise<ToolExecutionResult> {
     try {
-      const response = await fetch(url, {
-        method: "GET",
-        headers: { "User-Agent": "Mozilla/5.0 (compatible; StradaBot/1.0)" },
-      });
+      // SSRF guard: follow redirects MANUALLY, re-validating every hop. The initial
+      // URL was validated by the caller, but a 3xx Location can point at a private /
+      // link-local / cloud-metadata host — a blind redirect:'follow' would fetch it
+      // and write the response to disk. Never follow a redirect we haven't validated.
+      const MAX_REDIRECTS = 5;
+      let currentUrl = url;
+      let response: Awaited<ReturnType<typeof fetch>> | undefined;
+      for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+        const hopValidation = validateUrlWithConfig(currentUrl, this.config);
+        if (!hopValidation.valid) {
+          return { content: `Download blocked (URL validation failed): ${hopValidation.reason}`, isError: true };
+        }
+        response = await fetch(currentUrl, {
+          method: "GET",
+          headers: { "User-Agent": "Mozilla/5.0 (compatible; StradaBot/1.0)" },
+          redirect: "manual",
+        });
+        if (response.status < 300 || response.status >= 400) break;
+        const location = response.headers.get("location");
+        if (!location) break;
+        currentUrl = new URL(location, currentUrl).toString();
+      }
 
+      if (!response) {
+        return { content: "Download failed: no response", isError: true };
+      }
+      if (response.status >= 300 && response.status < 400) {
+        return { content: "Download failed: too many redirects", isError: true };
+      }
       if (!response.ok) {
         return { content: `Download failed: HTTP ${response.status}`, isError: true };
       }

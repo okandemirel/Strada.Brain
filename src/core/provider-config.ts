@@ -65,6 +65,7 @@ export function collectProviderCredentials(config: Config): ProviderCredentialMa
     fireworks: { apiKey: config.fireworksApiKey },
     gemini: { apiKey: config.geminiApiKey },
     opencode: { apiKey: config.opencodeApiKey },
+    openrouter: { apiKey: config.openrouterApiKey },
   };
 }
 
@@ -100,6 +101,7 @@ export function detectConfiguredProviderNames(
     "fireworks",
     "gemini",
     "opencode",
+    "openrouter",
   ]) {
     if (apiKeys[name]) {
       names.push(name);

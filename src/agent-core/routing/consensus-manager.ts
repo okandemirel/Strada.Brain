@@ -16,13 +16,59 @@ export interface ConsensusConfig {
   mode: "auto" | "critical-only" | "always" | "disabled";
   threshold: number;       // 0.0-1.0
   maxProviders: number;    // Max providers to consult
+  /** Per-review-call hard timeout (ms). A hung reviewer must fail CLOSED, not block
+   *  the turn forever. 0 disables the timeout. */
+  reviewTimeoutMs: number;
 }
 
 export const DEFAULT_CONSENSUS_CONFIG: ConsensusConfig = {
   mode: "auto",
   threshold: 0.5,
   maxProviders: 3,
+  reviewTimeoutMs: 60_000,
 };
+
+/** Strip markdown code fences so a fenced JSON verdict still parses. */
+function stripCodeFences(text: string): string {
+  return text.replace(/```[a-zA-Z]*\n?/g, "").replace(/```/g, "");
+}
+
+/**
+ * Find the first BALANCED {...} object that JSON-parses and carries `key`, and return
+ * its boolean value (or undefined if none). String/escape-aware brace counting — unlike
+ * the old non-greedy regex, it does not stop at the first '}' that appears inside the
+ * reasoning text (e.g. "the {component} is wrong"), which used to corrupt the JSON and
+ * silently fail-OPEN via the keyword fallback.
+ */
+function extractJsonBoolForKey(text: string, key: string): boolean | undefined {
+  for (let i = 0; i < text.length; i += 1) {
+    if (text[i] !== "{") continue;
+    let depth = 0;
+    let inStr = false;
+    let esc = false;
+    for (let j = i; j < text.length; j += 1) {
+      const c = text[j];
+      if (esc) { esc = false; continue; }
+      if (c === "\\") { esc = true; continue; }
+      if (c === '"') { inStr = !inStr; continue; }
+      if (inStr) continue;
+      if (c === "{") depth += 1;
+      else if (c === "}") {
+        depth -= 1;
+        if (depth === 0) {
+          try {
+            const parsed: unknown = JSON.parse(text.slice(i, j + 1));
+            if (parsed && typeof parsed === "object" && key in parsed) {
+              return Boolean((parsed as Record<string, unknown>)[key]);
+            }
+          } catch { /* not valid JSON — keep scanning for the next object */ }
+          break;
+        }
+      }
+    }
+  }
+  return undefined;
+}
 
 export class ConsensusManager {
   private readonly config: ConsensusConfig;
@@ -166,10 +212,10 @@ export class ConsensusManager {
       'Respond with exactly: {"approved": true, "reasoning": "..."} or {"approved": false, "reasoning": "..."}',
     ].join("\n");
 
-    const response = await params.reviewProvider.chat(
+    const response = await this.chatWithTimeout(
+      params.reviewProvider,
       "You are a code review agent. Evaluate the proposed action for correctness and safety.",
-      [{ role: "user" as const, content: reviewPrompt }],
-      [],
+      reviewPrompt,
     );
 
     const approved = this.parseApproval(response.text);
@@ -194,10 +240,10 @@ export class ConsensusManager {
     prompt: string;
     task: TaskClassification;
   }): Promise<ConsensusResult> {
-    const response = await params.reviewProvider.chat(
+    const response = await this.chatWithTimeout(
+      params.reviewProvider,
       "You are a helpful AI assistant.",
-      [{ role: "user" as const, content: params.prompt }],
-      [],
+      params.prompt,
     );
 
     const originalHasTools = (params.originalOutput.toolCalls?.length ?? 0) > 0;
@@ -243,10 +289,10 @@ export class ConsensusManager {
       'Respond with exactly: {"agreed": true, "reasoning": "..."} or {"agreed": false, "reasoning": "..."}',
     ].join("\n");
 
-    const comparison = await params.reviewProvider.chat(
+    const comparison = await this.chatWithTimeout(
+      params.reviewProvider,
       "You compare AI responses for agreement.",
-      [{ role: "user" as const, content: comparisonPrompt }],
-      [],
+      comparisonPrompt,
     );
 
     const agreed = this.parseApproval(comparison.text);
@@ -259,29 +305,47 @@ export class ConsensusManager {
     };
   }
 
+  /**
+   * Run a single review provider.chat under a hard timeout. A reviewer that stalls
+   * (uncredited/misconfigured endpoint) would otherwise hang the whole turn — the
+   * verify() catch only fires on a thrown error, never on an indefinitely-pending
+   * promise. On timeout we throw so verify() fails CLOSED ("manual review required").
+   */
+  private async chatWithTimeout(
+    provider: IAIProvider,
+    systemPrompt: string,
+    content: string,
+  ): Promise<import("../../agents/providers/provider.interface.js").ProviderResponse> {
+    const chat = provider.chat(systemPrompt, [{ role: "user" as const, content }], []);
+    const ms = this.config.reviewTimeoutMs;
+    if (!ms || ms <= 0) return chat;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        chat,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`Consensus review timed out after ${ms}ms`)), ms);
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
   private parseApproval(text: string | null | undefined): boolean {
     if (!text) return false;
+    const cleaned = stripCodeFences(text).trim();
 
-    // Try JSON parsing first — "approved" key
-    try {
-      const match = text.match(/\{[\s\S]*?"approved"[\s\S]*?\}/);
-      if (match) {
-        const parsed = JSON.parse(match[0]);
-        return Boolean(parsed.approved);
-      }
-    } catch { /* parse failure */ }
+    // Prefer a real JSON verdict object (balanced-brace scan, not a greedy regex), so
+    // a rejection whose reasoning contains literal braces is read correctly instead of
+    // corrupting the JSON and fail-OPENing through the keyword path.
+    for (const key of ["approved", "agreed"]) {
+      const verdict = extractJsonBoolForKey(cleaned, key);
+      if (verdict !== undefined) return verdict;
+    }
 
-    // Also try "agreed" key (for re-execute comparison)
-    try {
-      const match = text.match(/\{[\s\S]*?"agreed"[\s\S]*?\}/);
-      if (match) {
-        const parsed = JSON.parse(match[0]);
-        return Boolean(parsed.agreed);
-      }
-    } catch { /* parse failure */ }
-
-    // Keyword fallback (fail-closed: only approve on clear positive signal)
-    const lower = text.toLowerCase();
+    // No parseable verdict object — keyword fallback, fail-closed, negatives first.
+    const lower = cleaned.toLowerCase();
     if (lower.includes("not approved") || lower.includes("rejected") || lower.includes("disagree")) {
       return false;
     }

@@ -27,6 +27,29 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 /** Absolute maximum timeout. */
 const MAX_TIMEOUT_MS = 60_000;
 
+/**
+ * Benign system env vars a shell tool may legitimately need. Everything else —
+ * notably every provider API key/token in process.env — is withheld. Default-deny:
+ * an LLM-authored command can never read a secret it was never handed.
+ */
+const SHELL_ENV_ALLOWLIST: readonly string[] = [
+  "PATH", "HOME", "TMPDIR", "TMP", "TEMP", "TZ", "TERM", "SHELL", "USER", "LOGNAME", "PWD", "LANG", "LANGUAGE",
+];
+
+/** Build the allowlisted env for a dynamic shell tool (see SHELL_ENV_ALLOWLIST). */
+function buildSanitizedShellEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const key of SHELL_ENV_ALLOWLIST) {
+    const value = process.env[key];
+    if (value !== undefined) env[key] = value;
+  }
+  // Locale LC_* vars are safe and occasionally required for correct text handling.
+  for (const [key, value] of Object.entries(process.env)) {
+    if (key.startsWith("LC_") && value !== undefined) env[key] = value;
+  }
+  return env;
+}
+
 // ---------------------------------------------------------------------------
 // Shell-safe parameter escaping
 // ---------------------------------------------------------------------------
@@ -268,7 +291,10 @@ export class DynamicToolFactory {
           cwd: context.workingDirectory || context.projectPath,
           timeout,
           maxBuffer: 1024 * 1024, // 1 MB
-          env: process.env,
+          // SECURITY: pass an ALLOWLISTED env only. The full process.env holds every
+          // provider API key/token; an LLM-authored command like `echo $OPENAI_API_KEY`
+          // or `env | curl ...` would otherwise exfiltrate all credentials.
+          env: buildSanitizedShellEnv(),
         });
 
         const output = stdout.trim() || stderr.trim() || "(no output)";

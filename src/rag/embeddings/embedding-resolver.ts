@@ -44,6 +44,7 @@ export function collectApiKeys(config: Config): Record<string, string | undefine
     fireworks: config.fireworksApiKey,
     gemini: config.geminiApiKey,
     opencode: config.opencodeApiKey,
+    openrouter: config.openrouterApiKey,
   };
 }
 
