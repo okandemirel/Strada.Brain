@@ -17,9 +17,15 @@ vi.mock("../agents/providers/claude.js", () => ({
 }));
 
 const mockBuildProviderChain = vi.fn();
-vi.mock("../agents/providers/provider-registry.js", () => ({
-  buildProviderChain: (...args: unknown[]) => mockBuildProviderChain(...args),
-}));
+// Partial mock: keep the real exports (notably PROVIDER_PRESETS, which provider-identity.js
+// reads at module load via validate-configured-model.js) and override only buildProviderChain.
+vi.mock("../agents/providers/provider-registry.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../agents/providers/provider-registry.js")>();
+  return {
+    ...actual,
+    buildProviderChain: (...args: unknown[]) => mockBuildProviderChain(...args),
+  };
+});
 
 const mockProviderManagerInstance = {
   setOllamaVerified: vi.fn(),
