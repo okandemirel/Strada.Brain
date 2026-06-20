@@ -4424,12 +4424,15 @@ export class Orchestrator {
             usesMultipleProviders: executionStrategy.usesMultipleProviders,
           },
         ) ?? currentProvider;
+        // Gate silent streaming purely on provider capability — it uses
+        // chatStream/chat internally and renders the final reply via sendMarkdown,
+        // so it does NOT require channel.startStreamingMessage. Requiring it forced
+        // channels without that hook (IRC/Matrix/Teams) onto the un-timed
+        // non-streaming .chat() path. Mirror the background gate (audit #8).
         const canStream =
           this.streamingEnabled &&
           "chatStream" in resilientProvider &&
-          typeof resilientProvider.chatStream === "function" &&
-          "startStreamingMessage" in this.channel &&
-          typeof this.channel.startStreamingMessage === "function";
+          typeof resilientProvider.chatStream === "function";
 
         logger.debug("Calling LLM", {
           chatId,
@@ -4450,11 +4453,22 @@ export class Orchestrator {
               currentToolDefinitions,
             );
           } else {
+            // Interactive non-streaming sibling of silentStream: even though the user
+            // is actively connected, the underlying fetch needs a deadline or a stalled
+            // provider hangs this loop forever. Thread a per-attempt timeout signal so a
+            // stall throws → routed through the catch/evaluateProviderFailure/backoff
+            // below. (runAgentLoop has no user-cancel signal in scope, unlike the
+            // background path; the timeout is the bound that was missing — audit #7.)
+            // No externalSignal: here the only signal is the deadline, and a timeout is
+            // a genuine provider stall that SHOULD count as a failure / poison health —
+            // so it must not be tagged as a benign control-plane cancel (audit #7).
+            const interactiveSignal = AbortSignal.timeout(this.streamInitialTimeoutMs);
             response = await resilientProvider.chat(
               this.withCompactionSummary(activePrompt, session),
               session.messages,
               currentToolDefinitions,
-            ); // Interactive path — no abort signal (user is actively connected)
+              { signal: interactiveSignal },
+            );
           }
         } catch (providerError) {
           const errMsg = providerError instanceof Error ? providerError.message : String(providerError);
@@ -5384,7 +5398,30 @@ export class Orchestrator {
       });
       const response = await Promise.race([streamPromise, timeoutGuard.timeoutPromise]);
       timeoutGuard.clear();
-      ProviderHealthRegistry.getInstance().recordSuccess(provider.name);
+      // A 200 with no usable output (no text AND no tool calls) is what the per-task
+      // circuit breaker (checkProviderFailureCircuitBreaker) classifies as a FAILURE.
+      // Recording it as registry success here would diverge the two — the breaker
+      // would back off while the health registry kept the provider "healthy". Apply
+      // the SAME emptiness predicate and route empty responses to the health-failure
+      // path so registry and breaker stay in agreement (audit #9).
+      const isEmptyResponse =
+        response.meta?.empty === true
+        || (response.text.trim() === "" && response.toolCalls.length === 0);
+      if (isEmptyResponse) {
+        recordProviderHealthFailure(
+          ProviderHealthRegistry.getInstance(),
+          provider.name,
+          response.meta?.reason ?? "empty response (no text, no tool calls)",
+          {
+            isSingleProvider:
+              "providerCount" in provider
+                ? (provider as { providerCount: number }).providerCount === 1
+                : true,
+          },
+        );
+      } else {
+        ProviderHealthRegistry.getInstance().recordSuccess(provider.name);
+      }
       return response;
     } catch (err) {
       timeoutGuard.clear();

@@ -8652,6 +8652,68 @@ DONE`,
       ProviderHealthRegistry.resetInstance();
     });
 
+    it("silentStream records FAILURE (not success) for an empty 200 streaming response (audit #9)", async () => {
+      const { ProviderHealthRegistry } = await import("./providers/provider-health.js");
+      ProviderHealthRegistry.resetInstance();
+
+      // A 200 with no text and no tool calls is what checkProviderFailureCircuitBreaker
+      // classifies as a failure — silentStream must NOT record it as registry success,
+      // or the registry and the per-task breaker diverge.
+      const emptyResponse: ProviderResponse = {
+        text: "   ",
+        toolCalls: [],
+        stopReason: "end_turn" as const,
+        usage: { inputTokens: 10, outputTokens: 0, totalTokens: 10 },
+      };
+
+      const streamingProvider = {
+        name: "empty-provider",
+        capabilities: {
+          maxTokens: 4096,
+          streaming: true,
+          structuredStreaming: false,
+          toolCalling: true,
+          vision: false,
+          systemPrompt: true,
+        },
+        chat: vi.fn(),
+        chatStream: vi.fn().mockResolvedValue(emptyResponse),
+      };
+
+      const streamOrch = new Orchestrator({
+        providerManager: {
+          getProvider: () => streamingProvider,
+          shutdown: vi.fn(),
+        } as any,
+        tools: [],
+        channel: mockChannel,
+        projectPath: "/tmp/test-project",
+        readOnly: false,
+        requireConfirmation: false,
+        streamingEnabled: true,
+        streamInitialTimeoutMs: 5000,
+        streamStallTimeoutMs: 5000,
+      });
+
+      const session = { messages: [] as any[], lastActivity: new Date() };
+      const response = await (streamOrch as any).silentStream(
+        "health-empty-test",
+        "system",
+        session,
+        streamingProvider,
+        [],
+      );
+
+      // The empty response is returned as-is (the loop's circuit breaker reacts to it),
+      // but the health registry must now show a recorded failure, not success.
+      expect(response.text).toBe("   ");
+      const entry = ProviderHealthRegistry.getInstance().getEntry("empty-provider");
+      expect(entry).toBeDefined();
+      expect(entry!.consecutiveFailures).toBe(1);
+
+      ProviderHealthRegistry.resetInstance();
+    });
+
     it("injects rich health context into session messages on provider failure", async () => {
       const backgroundOrch = new Orchestrator({
         providerManager: {
