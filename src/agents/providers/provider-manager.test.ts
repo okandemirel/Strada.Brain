@@ -154,12 +154,12 @@ describe("ProviderManager", () => {
     expect(buildProviderChainMock).toHaveBeenCalledWith(
       ["kimi", "qwen"],
       { qwen: { apiKey: "qwen-key" }, kimi: { apiKey: "kimi-key" } },
-      {
+      expect.objectContaining({
         models: {
           qwen: "qwen-max",
           kimi: "kimi-long-context",
         },
-      },
+      }),
     );
     expect(provider.name).toBe("chain(kimi->qwen)");
   });
@@ -179,12 +179,12 @@ describe("ProviderManager", () => {
     expect(buildProviderChainMock).toHaveBeenCalledWith(
       ["kimi", "qwen"],
       { qwen: { apiKey: "qwen-key" }, kimi: { apiKey: "kimi-key" } },
-      {
+      expect.objectContaining({
         models: {
           qwen: "qwen-max",
           kimi: "kimi-for-coding",
         },
-      },
+      }),
     );
     expect(provider?.name).toBe("chain(kimi->qwen)");
   });
@@ -747,6 +747,56 @@ describe("ProviderManager", () => {
       manager.setModelCatalog({ getProviderModels: () => [{ id: "kimi/kimi-for-coding" }] });
       manager.setPreference("chat-1", "kimi", "kimi-for-coding"); // bare vs namespaced
       expect(preferenceState.get(GLOBAL)?.model).toBe("kimi-for-coding");
+    });
+  });
+
+  // Auto-demote: a model that repeatedly times out with no first response is removed
+  // from the brain-wide global default so new chats stop inheriting a dead model.
+  describe("auto-demote of an unresponsive model", () => {
+    const GLOBAL = "__strada_global_default__";
+
+    function managerWithGlobalDefault(model: string, mode: "strada-preference-bias" | "strada-hard-pin" = "strada-preference-bias") {
+      const manager = new ProviderManager(
+        makeProvider("chain(qwen->kimi)"),
+        { qwen: { apiKey: "qwen-key" }, kimi: { apiKey: "kimi-key" } },
+        { qwen: "qwen-max", kimi: "kimi-for-coding" },
+        "/tmp/provider-manager-test",
+        ["qwen", "kimi"],
+      );
+      manager.setModelCatalog({ getProviderModels: () => [{ id: model }] });
+      manager.setPreference("chat-1", "kimi", model, mode);
+      expect(preferenceState.get(GLOBAL)?.model).toBe(model);
+      return manager;
+    }
+
+    it("demotes the global default after the strike threshold", () => {
+      const manager = managerWithGlobalDefault("kimi-dead");
+      manager.recordModelUnresponsive("kimi", "kimi-dead");
+      expect(preferenceState.get(GLOBAL)?.model).toBe("kimi-dead"); // 1 strike < threshold
+      manager.recordModelUnresponsive("kimi", "kimi-dead");
+      expect(preferenceState.get(GLOBAL)).toBeUndefined();          // demoted at threshold
+    });
+
+    it("does not demote a different model", () => {
+      const manager = managerWithGlobalDefault("kimi-good");
+      manager.recordModelUnresponsive("kimi", "some-other-model");
+      manager.recordModelUnresponsive("kimi", "some-other-model");
+      expect(preferenceState.get(GLOBAL)?.model).toBe("kimi-good"); // untouched
+    });
+
+    it("never demotes a hard-pinned model", () => {
+      const manager = managerWithGlobalDefault("kimi-pinned", "strada-hard-pin");
+      manager.recordModelUnresponsive("kimi", "kimi-pinned");
+      manager.recordModelUnresponsive("kimi", "kimi-pinned");
+      expect(preferenceState.get(GLOBAL)?.model).toBe("kimi-pinned"); // explicit pin survives
+    });
+
+    it("recordModelResponsive resets the strike count", () => {
+      const manager = managerWithGlobalDefault("kimi-flaky");
+      manager.recordModelUnresponsive("kimi", "kimi-flaky"); // strike 1
+      manager.recordModelResponsive("kimi", "kimi-flaky");   // reset
+      manager.recordModelUnresponsive("kimi", "kimi-flaky"); // strike 1 again (not 2)
+      expect(preferenceState.get(GLOBAL)?.model).toBe("kimi-flaky"); // not demoted
     });
   });
 });

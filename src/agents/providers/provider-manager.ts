@@ -46,6 +46,10 @@ interface ProviderModelCatalogLookup {
 }
 
 const MAX_CACHED_PROVIDERS = 50;
+/** First-response timeouts for one (provider, model) before it is auto-demoted
+ *  from the brain-wide global default. Small so a dead model self-heals quickly,
+ *  but >1 so a single transient blip doesn't demote a good model. */
+const MODEL_UNRESPONSIVE_DEMOTE_THRESHOLD = 2;
 const EXECUTION_POLICY_NOTE =
   "Strada remains the control plane. This selection biases routing toward the preferred provider/model, but planning, execution, review, and synthesis may still route dynamically unless an explicit hard pin is requested.";
 const HARD_PIN_EXECUTION_POLICY_NOTE =
@@ -149,6 +153,8 @@ export class ProviderManager {
   private readonly catalog: ProviderCatalog;
   private ollamaVerified = false;
   private modelCatalog?: ProviderModelCatalogLookup;
+  /** Consecutive first-response timeout strikes per `provider::model`, for auto-demote. */
+  private readonly modelUnresponsiveCounts = new Map<string, number>();
 
   constructor(
     private readonly defaultProvider: IAIProvider,
@@ -255,6 +261,8 @@ export class ProviderManager {
         models: model ? { ...this.modelOverrides, [primaryName]: model } : this.modelOverrides,
         baseUrls: this.resolveBaseUrlOverrides(),
         attemptTimeoutMs: this.providerResponseTimeoutMs,
+        onModelUnresponsive: (p, m) => this.recordModelUnresponsive(p, m),
+        onModelResponsive: (p, m) => this.recordModelResponsive(p, m),
       });
       this.providerCache.set(cacheKey, provider);
       return provider;
@@ -484,6 +492,45 @@ export class ProviderManager {
     this.modelCatalog = modelCatalog;
   }
 
+  /**
+   * Record that a (provider, model) attempt timed out with no first response. After
+   * MODEL_UNRESPONSIVE_DEMOTE_THRESHOLD strikes, if that model is the brain-wide global
+   * default AND was auto-selected (strada-preference-bias, not a deliberate hard pin),
+   * demote it: clear the global default so new chats fall back to the provider's own
+   * default model. A dead model thus self-heals instead of hanging every new chat.
+   */
+  recordModelUnresponsive(providerName: string, model: string): void {
+    if (!model) return;
+    const canonical = canonicalizeProviderName(providerName) ?? providerName.trim().toLowerCase();
+    const key = `${canonical}::${model}`;
+    const strikes = (this.modelUnresponsiveCounts.get(key) ?? 0) + 1;
+    this.modelUnresponsiveCounts.set(key, strikes);
+    if (strikes < MODEL_UNRESPONSIVE_DEMOTE_THRESHOLD) return;
+
+    const globalPref = this.preferences.get(ProviderManager.GLOBAL_PREFERENCE_KEY);
+    const matchesGlobalDefault = globalPref
+      && globalPref.selectionMode === "strada-preference-bias"
+      && (canonicalizeProviderName(globalPref.providerName) ?? globalPref.providerName) === canonical
+      && globalPref.model === model;
+    if (matchesGlobalDefault) {
+      this.preferences.delete(ProviderManager.GLOBAL_PREFERENCE_KEY);
+      this.modelUnresponsiveCounts.delete(key);
+      getLogger().warn("Auto-demoted an unresponsive model from the global default", {
+        providerName: canonical,
+        model,
+        strikes,
+        hint: "New chats fall back to the provider's default model; set a different model to re-pin.",
+      });
+    }
+  }
+
+  /** Clear a model's unresponsive streak after a successful attempt. */
+  recordModelResponsive(providerName: string, model: string): void {
+    if (!model) return;
+    const canonical = canonicalizeProviderName(providerName) ?? providerName.trim().toLowerCase();
+    this.modelUnresponsiveCounts.delete(`${canonical}::${model}`);
+  }
+
   async refreshModelCatalog(): Promise<RefreshResult | null> {
     if (!this.modelCatalog?.refresh) {
       return null;
@@ -604,6 +651,8 @@ export class ProviderManager {
         models,
         baseUrls: this.resolveBaseUrlOverrides(),
         attemptTimeoutMs: this.providerResponseTimeoutMs,
+        onModelUnresponsive: (p, m) => this.recordModelUnresponsive(p, m),
+        onModelResponsive: (p, m) => this.recordModelResponsive(p, m),
       });
       this.providerCache.set(cacheKey, provider);
       return provider;

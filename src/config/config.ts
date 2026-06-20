@@ -254,6 +254,7 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
     shellEnabled: rawConfig.shellEnabled,
     llmStreamInitialTimeoutMs: rawConfig.llmStreamInitialTimeoutMs,
     llmStreamStallTimeoutMs: rawConfig.llmStreamStallTimeoutMs,
+    llmProviderFirstResponseTimeoutMs: rawConfig.llmProviderFirstResponseTimeoutMs,
 
     rateLimit: {
       enabled: rawConfig.rateLimitEnabled,
@@ -814,6 +815,7 @@ interface EnvVars {
   shellEnabled: string | undefined;
   llmStreamInitialTimeoutMs: string | undefined;
   llmStreamStallTimeoutMs: string | undefined;
+  llmProviderFirstResponseTimeoutMs: string | undefined;
   rateLimitEnabled: string | undefined;
   rateLimitMessagesPerMinute: string | undefined;
   rateLimitMessagesPerHour: string | undefined;
@@ -1138,6 +1140,7 @@ function loadFromEnv(env: Record<string, string | undefined>): EnvVars {
     shellEnabled: env["SHELL_ENABLED"],
     llmStreamInitialTimeoutMs: env["LLM_STREAM_INITIAL_TIMEOUT_MS"],
     llmStreamStallTimeoutMs: env["LLM_STREAM_STALL_TIMEOUT_MS"],
+    llmProviderFirstResponseTimeoutMs: env["LLM_PROVIDER_FIRST_RESPONSE_TIMEOUT_MS"],
     rateLimitEnabled: env["RATE_LIMIT_ENABLED"],
     rateLimitMessagesPerMinute: env["RATE_LIMIT_MESSAGES_PER_MINUTE"],
     rateLimitMessagesPerHour: env["RATE_LIMIT_MESSAGES_PER_HOUR"],

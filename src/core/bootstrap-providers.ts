@@ -133,7 +133,7 @@ export async function initializeAIProvider(
     defaultProvider = buildProviderChain(preflightResult.passedProviderIds, providerCredentials, {
       models: config.providerModels,
       baseUrls: baseUrlOverrides,
-      attemptTimeoutMs: config.llmStreamInitialTimeoutMs,
+      attemptTimeoutMs: config.llmProviderFirstResponseTimeoutMs,
     });
     logger.info("AI provider chain initialized", { chain: preflightResult.passedProviderIds });
 
@@ -152,7 +152,7 @@ export async function initializeAIProvider(
         defaultProvider = buildProviderChain(allProviderIds, providerCredentials, {
           models: config.providerModels,
           baseUrls: baseUrlOverrides,
-          attemptTimeoutMs: config.llmStreamInitialTimeoutMs,
+          attemptTimeoutMs: config.llmProviderFirstResponseTimeoutMs,
         });
         notices.push(
           `Auto-appended fallback providers: ${fallbackPreflight.passedProviderIds.join(", ")}`,
@@ -203,7 +203,7 @@ export async function initializeAIProvider(
     defaultProvider = buildProviderChain(preflightResult.passedProviderIds, providerCredentials, {
       models: config.providerModels,
       baseUrls: baseUrlOverrides,
-      attemptTimeoutMs: config.llmStreamInitialTimeoutMs,
+      attemptTimeoutMs: config.llmProviderFirstResponseTimeoutMs,
     });
     logger.info("AI provider auto-detected from available keys", {
       chain: preflightResult.passedProviderIds,
@@ -220,13 +220,13 @@ export async function initializeAIProvider(
     logger[logMethod](message, { name: defaultProvider.name });
   }
 
-  // The chain's per-attempt first-response timeout intentionally reuses
-  // llmStreamInitialTimeoutMs (same "time to first token" budget). On the
-  // orchestrator streaming path this double-arms with createStreamingProgressTimeout,
-  // but the chain timer is cleared on the first chunk so the orchestrator's
-  // stall/thinking-aware watchdog governs mid-stream; the chain timeout's genuinely
-  // new coverage is the previously-unbounded non-streaming chat() callers
-  // (planning/synthesis/review) and any provider that ignores the abort signal.
+  // The chain's per-attempt FIRST-RESPONSE timeout is its own short budget
+  // (llmProviderFirstResponseTimeoutMs, default 90s) — deliberately distinct from
+  // the orchestrator's 10-min stream-initial/thinking window. A provider silent for
+  // ~90s is dead, so the chain aborts + fails over fast; the chain timer clears on
+  // the first chunk, leaving the orchestrator's stall/thinking-aware watchdog to
+  // govern a long, healthy stream mid-flight. onModelUnresponsive lets the manager
+  // auto-demote a model that repeatedly fails to respond from the global default.
   const providerManager = new ProviderManager(
     defaultProvider,
     providerCredentials,
@@ -235,7 +235,7 @@ export async function initializeAIProvider(
     defaultProviderOrder,
     ollamaBaseUrl,
     config.providerBaseUrls,
-    config.llmStreamInitialTimeoutMs,
+    config.llmProviderFirstResponseTimeoutMs,
   );
 
   // Verify Ollama reachability before marking it available for routing.
