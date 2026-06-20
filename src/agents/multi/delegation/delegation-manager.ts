@@ -30,7 +30,7 @@ import type {
 } from "./delegation-types.js";
 import type { DelegationLog } from "./delegation-log.js";
 import type { TierRouter } from "./tier-router.js";
-import type { ProviderCredentialMap } from "../../providers/provider-registry.js";
+import type { ProviderCredentialMap, ProviderConfig } from "../../providers/provider-registry.js";
 import { createProvider, PROVIDER_PRESETS } from "../../providers/provider-registry.js";
 import { ProviderManager } from "../../providers/provider-manager.js";
 import { Orchestrator } from "../../orchestrator.js";
@@ -59,6 +59,10 @@ export interface DelegationManagerOptions {
   readonly parentTools: ITool[];
   readonly apiKeys: Record<string, string | undefined>;
   readonly providerCredentials?: ProviderCredentialMap;
+  /** Per-provider base-URL overrides (e.g. OpenCode's OPENCODE_BASE_URL = Zen vs Go).
+   *  MUST be threaded into every sub-agent/candidate provider, or opencode silently
+   *  falls back to its Zen preset default and hits the wrong (uncredited) endpoint. */
+  readonly providerBaseUrls?: Record<string, string>;
   readonly preferencesDbPath?: string;
   readonly verifiedLocalProviders?: readonly string[];
   readonly workspaceLeaseManager?: WorkspaceLeaseManager;
@@ -354,22 +358,16 @@ export class DelegationManager {
 
     // Resolve provider for this tier
     const providerConfig = this.resolveDelegationProviderConfig(tier, typeConfig);
-    const providerCredential = this.opts.providerCredentials?.[providerConfig.name];
-    const provider = createProvider({
-      name: providerConfig.name,
-      apiKey: providerCredential?.apiKey ?? this.opts.apiKeys[providerConfig.name],
-      openaiAuthMode: providerCredential?.openaiAuthMode,
-      openaiChatgptAuthFile: providerCredential?.openaiChatgptAuthFile,
-      openaiSubscriptionAccessToken: providerCredential?.openaiSubscriptionAccessToken,
-      openaiSubscriptionAccountId: providerCredential?.openaiSubscriptionAccountId,
-      model: providerConfig.model,
-    });
+    const provider = createProvider(this.buildDelegationProviderConfig(providerConfig.name, providerConfig.model));
 
     const providerManager = new ProviderManager(
       provider,
       this.opts.providerCredentials ?? {},
-      undefined,
+      undefined, // modelOverrides
       this.opts.preferencesDbPath,
+      [], // defaultProviderOrder
+      undefined, // ollamaBaseUrl
+      this.opts.providerBaseUrls, // baseUrlOverrides — keeps sub-agent chains on the configured (Go) endpoint
     );
     const subAgentTools = this.buildSubAgentTools(request.depth);
 
@@ -606,6 +604,26 @@ export class DelegationManager {
     return typeConfig;
   }
 
+  /**
+   * Single source for a delegated provider's createProvider config, so the
+   * sub-agent and candidate-scoring paths can never drift — in particular, both
+   * always thread the per-provider base-URL override (the OpenCode Zen→Go leak
+   * this guards against) and the same credential/auth resolution.
+   */
+  private buildDelegationProviderConfig(name: string, model: string | undefined): ProviderConfig {
+    const credential = this.opts.providerCredentials?.[name];
+    return {
+      name,
+      apiKey: credential?.apiKey ?? this.opts.apiKeys[name],
+      openaiAuthMode: credential?.openaiAuthMode,
+      openaiChatgptAuthFile: credential?.openaiChatgptAuthFile,
+      openaiSubscriptionAccessToken: credential?.openaiSubscriptionAccessToken,
+      openaiSubscriptionAccountId: credential?.openaiSubscriptionAccountId,
+      model,
+      baseUrl: this.opts.providerBaseUrls?.[name],
+    };
+  }
+
   private resolveDelegationProviderConfig(
     tier: ModelTier,
     typeConfig: DelegationTypeConfig,
@@ -692,17 +710,8 @@ export class DelegationManager {
 
     for (const name of names) {
       try {
-        const credential = this.opts.providerCredentials?.[name];
         const model = this.getDefaultModelForProvider(name);
-        const provider = createProvider({
-          name,
-          apiKey: credential?.apiKey ?? this.opts.apiKeys[name],
-          openaiAuthMode: credential?.openaiAuthMode,
-          openaiChatgptAuthFile: credential?.openaiChatgptAuthFile,
-          openaiSubscriptionAccessToken: credential?.openaiSubscriptionAccessToken,
-          openaiSubscriptionAccountId: credential?.openaiSubscriptionAccountId,
-          model,
-        });
+        const provider = createProvider(this.buildDelegationProviderConfig(name, model));
         candidates.push({
           name,
           model,

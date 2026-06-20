@@ -104,6 +104,7 @@ export async function initializeAIProvider(
       configuredNames,
       providerCredentials,
       config.providerModels,
+      baseUrlOverrides,
     );
     // Graceful degradation: only abort boot if NOTHING healthy remains, or if the
     // PRIMARY (first) provider in the chain failed. A non-primary fallback failing
@@ -145,6 +146,7 @@ export async function initializeAIProvider(
         additionalNames,
         providerCredentials,
         config.providerModels,
+        baseUrlOverrides,
       );
       if (fallbackPreflight.passedProviderIds.length > 0) {
         const allProviderIds = [...defaultProviderOrder, ...fallbackPreflight.passedProviderIds];
@@ -184,6 +186,7 @@ export async function initializeAIProvider(
       detectedNames,
       providerCredentials,
       config.providerModels,
+      baseUrlOverrides,
     );
     if (preflightResult.failures.length > 0) {
       const notice = `Configured AI providers failed preflight and were skipped: ${formatProviderPreflightFailures(preflightResult.failures)}`;
