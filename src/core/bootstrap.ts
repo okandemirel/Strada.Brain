@@ -533,6 +533,11 @@ async function bootstrapImpl(
   }
   disposables.push("channel", () => channel.disconnect());
   disposables.push("providerManager", () => providerManager.shutdown());
+  // Persist the embedding cache on the failure path too — registered early (when
+  // it comes online) so LIFO teardown flushes it after RAG/learning stop using it.
+  if (cachedEmbeddingProvider) {
+    disposables.push("cachedEmbeddingProvider", () => cachedEmbeddingProvider.shutdown());
+  }
 
   const { ragPipeline: codeRagPipeline, learningResult, startupNotices } = await initializeKnowledgeStage(
     {
@@ -1692,6 +1697,7 @@ async function bootstrapImpl(
       canvasStorage,
       ragPipeline,
       memoryManager,
+      cachedEmbeddingProvider,
       channel,
       cleanupInterval,
       learningPipeline: learningResult.pipeline,

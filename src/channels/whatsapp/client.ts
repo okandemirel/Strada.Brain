@@ -661,14 +661,28 @@ export class WhatsAppChannel extends EventEmitter implements IChannelAdapter {
         onFinalize: async (text) => {
           const state = this.streamingMessages.get(streamId);
           if (!state) return;
+          // Split the full final text so nothing is dropped: a single oversize
+          // edit is silently truncated by the WhatsApp server (so the catch
+          // fallback never fires). The first chunk edits the existing placeholder;
+          // any remaining chunks are sent as follow-up messages. Mirrors Discord.
+          const chunks = chunkText(text, WHATSAPP_MAX_CHARS);
           try {
             if (!this.sock) throw new Error("WhatsApp not connected");
+            if (chunks.length === 0) {
+              // Empty final text — leave the streaming placeholder as-is.
+              return;
+            }
             await this.sock.sendMessage(state.chatId, {
-              text,
+              text: chunks[0]!,
               edit: state.messageKey,
             });
+            // Send the overflow chunks as new messages so the tail is never lost.
+            for (const chunk of chunks.slice(1)) {
+              if (!chunk) continue;
+              await this.sock.sendMessage(state.chatId, { text: chunk });
+            }
           } catch {
-            // Fallback: send as a new message
+            // Fallback: send as a new message (sendMarkdown chunks internally).
             try {
               await this.sendMarkdown(state.chatId, text);
             } catch {

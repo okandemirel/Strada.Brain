@@ -182,7 +182,11 @@ export class MessageQueue<T> {
                   entry.reject(new Error("Discord channel disconnected"));
                   return;
                 }
-                this.entries.push(entry);
+                // Re-insert at the HEAD, not the tail: this entry was at the
+                // front of the FIFO queue, so pushing it to the back would let
+                // messages enqueued during its backoff be delivered ahead of it,
+                // breaking Discord's in-order delivery. unshift preserves FIFO.
+                this.entries.unshift(entry);
               }, delay);
               this.timerMap.set(timer, entry);
             }

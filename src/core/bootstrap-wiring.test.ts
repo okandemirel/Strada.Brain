@@ -264,6 +264,28 @@ describe("createShutdownHandler", () => {
     clearInterval(interval);
   });
 
+  it("persists the embedding cache on shutdown, after RAG and memory shut down", async () => {
+    const callOrder: string[] = [];
+    const channel = makeChannel();
+    const ragPipeline = { shutdown: vi.fn(async () => { callOrder.push("ragPipeline"); }) } as any;
+    const memoryManager = { shutdown: vi.fn(async () => { callOrder.push("memoryManager"); }) } as any;
+    const cachedEmbeddingProvider = {
+      shutdown: vi.fn(async () => { callOrder.push("cachedEmbeddingProvider"); }),
+    };
+    const interval = setInterval(() => {}, 99999);
+    const shutdown = createShutdownHandler({
+      channel, cleanupInterval: interval, ragPipeline, memoryManager, cachedEmbeddingProvider,
+    } as any);
+
+    await shutdown();
+
+    expect(cachedEmbeddingProvider.shutdown).toHaveBeenCalledTimes(1);
+    // Must flush only after RAG/memory have stopped reading from it.
+    expect(callOrder.indexOf("ragPipeline")).toBeLessThan(callOrder.indexOf("cachedEmbeddingProvider"));
+    expect(callOrder.indexOf("memoryManager")).toBeLessThan(callOrder.indexOf("cachedEmbeddingProvider"));
+    clearInterval(interval);
+  });
+
   it("closes shared daemon storage on a clean shutdown", async () => {
     const channel = makeChannel();
     const daemonStorage = { close: vi.fn() };

@@ -872,6 +872,41 @@ describe("WhatsAppChannel", () => {
       );
     });
 
+    // Regression: finalizing a streaming message whose final text exceeds the
+    // 4096-char cap must chunk it — edit the placeholder with the first chunk and
+    // send the rest as follow-up messages — rather than ship one oversize edit
+    // (which the server silently truncates, dropping the tail of long answers).
+    it("chunks an oversize streaming finalize across edit + follow-up messages", async () => {
+      const streamId = await connectedChannel.startStreamingMessage("chat1@s.whatsapp.net");
+      expect(streamId).toBeDefined();
+      mockSock.sendMessage.mockClear();
+
+      // Two lines each over the cap, so they cannot share a single chunk.
+      const longLine = "a".repeat(5000);
+      await connectedChannel.finalizeStreamingMessage(
+        "chat1@s.whatsapp.net",
+        streamId!,
+        `${longLine}\n${longLine}`,
+      );
+
+      const calls = mockSock.sendMessage.mock.calls;
+      expect(calls.length).toBeGreaterThan(1);
+      // First call edits the placeholder in-place.
+      expect(calls[0]![1]).toMatchObject({ edit: { id: "msg1" } });
+      // No chunk may exceed the cap, and concatenation must lose no content.
+      let total = 0;
+      for (const call of calls) {
+        const sent = (call[1] as { text: string }).text;
+        expect(sent.length).toBeLessThanOrEqual(4096);
+        total += sent.length;
+      }
+      // Follow-up chunks are plain messages (no edit key) so the tail survives.
+      for (const call of calls.slice(1)) {
+        expect((call[1] as { edit?: unknown }).edit).toBeUndefined();
+      }
+      expect(total).toBeGreaterThanOrEqual(10000);
+    });
+
     // Regression: a duplicate inbound id (e.g. history-sync replay) is routed once.
     it("dedupes inbound messages with a repeated key id", async () => {
       const handler = vi.fn().mockResolvedValue(undefined);

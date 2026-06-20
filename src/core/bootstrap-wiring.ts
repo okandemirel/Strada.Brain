@@ -145,6 +145,8 @@ export interface ShutdownOptions {
   dashboard?: DashboardServer;
   ragPipeline?: IRAGPipeline;
   memoryManager?: IMemoryManager;
+  /** Embedding cache — persisted to disk on shutdown so runtime-computed vectors survive a restart (otherwise every restart re-embeds from scratch). */
+  cachedEmbeddingProvider?: { shutdown(): Promise<void> };
   channel: IChannelAdapter;
   cleanupInterval: ReturnType<typeof setInterval>;
   learningPipeline?: LearningPipeline;
@@ -384,6 +386,13 @@ export function createShutdownHandler(options: ShutdownOptions): () => Promise<v
 
       if (memoryManager) {
         await runStep("memoryManager", () => memoryManager.shutdown());
+      }
+
+      // Persist the embedding cache to disk after RAG/memory have stopped using
+      // it — otherwise runtime-computed embeddings are dropped and every restart
+      // re-embeds from scratch (shutdown() is a no-op when not dirty / no path).
+      if (options.cachedEmbeddingProvider) {
+        await runStep("cachedEmbeddingProvider", () => options.cachedEmbeddingProvider!.shutdown());
       }
 
       // Stop framework sync watcher (chokidar + debounce timer) and close its

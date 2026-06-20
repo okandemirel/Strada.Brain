@@ -147,6 +147,38 @@ describe("MessageQueue – retry backoff (FIFO mode)", () => {
     expect(entry.retries).toBe(1);
   });
 
+  it("re-inserts a transiently-failed entry at the HEAD to preserve FIFO order", async () => {
+    // "A" fails transiently on its first attempt; while it is backing off, "B"
+    // is enqueued. When the retry timer fires, "A" must be re-inserted ahead of
+    // "B" (FIFO), not pushed to the tail.
+    let failA = true;
+    const q = new MessageQueue<string>(
+      makeOpts<string>({
+        baseDelayMs: 1000,
+        processItem: async (item) => {
+          if (item === "A" && failA) {
+            failA = false;
+            throw new Error("transient");
+          }
+        },
+      }),
+    );
+
+    const pA = q.enqueue("A");
+    pA.catch(() => {});
+    await q.processQueue(); // "A" fails, removed from queue pending re-push
+    expect(q.size).toBe(0);
+    expect(q.timerMap.size).toBe(1);
+
+    // A later message arrives during "A"'s backoff window.
+    void q.enqueue("B");
+    expect(q.entries.map((e) => e.item)).toEqual(["B"]);
+
+    // Retry timer fires — "A" must land at the front, ahead of "B".
+    await vi.runAllTimersAsync();
+    expect(q.entries.map((e) => e.item)).toEqual(["A", "B"]);
+  });
+
   it("rejects the item after maxRetries exceeded", async () => {
     const q = new MessageQueue<string>(
       makeOpts<string>({
