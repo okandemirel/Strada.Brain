@@ -100,6 +100,48 @@ function createSilentProvider(clock: FakeClock) {
   };
 }
 
+const CAP = {
+  maxTokens: 4096,
+  streaming: false,
+  structuredStreaming: false,
+  toolCalling: true,
+  vision: false,
+  systemPrompt: true,
+  thinkingSupported: false,
+};
+
+/** Provider that returns an internal plan-artifact (matches draftLooksLikeInternalPlanArtifact) with
+ *  no tool calls — drives the 3.5 plan-review gate when the user explicitly asked for a plan. */
+function createPlanArtifactProvider() {
+  let n = 0;
+  const chat = vi.fn(async (): Promise<ProviderResponse> => {
+    n++;
+    // Turn 1: a plan artifact (first line is a PLAN heading). Turn 2 (after approval): a normal answer.
+    const text = n === 1 ? "## Plan\n1. First, read the files\n2. Then apply the change" : ANSWER;
+    return { text, toolCalls: [], stopReason: "end_turn" as const, usage: { inputTokens: 10, outputTokens: 20 } };
+  });
+  return { name: "mock-plan", capabilities: CAP, chat };
+}
+
+/** Provider that ALWAYS returns a goal block — drives the 3.6 goal→background handoff. "Always"
+ *  is deliberate: if the spine fails to TERMINATE after the handoff, it would loop PLANNING and call
+ *  taskManager.submit on every iteration, so asserting submit-called-once is the no-double-run guard. */
+function createGoalBlockProvider(extraText = "") {
+  const goal = '```goal\n{"isGoal": true, "estimatedMinutes": 5, "nodes": [{"id": "a", "task": "do the thing", "dependsOn": []}]}\n```';
+  const chat = vi.fn(async (): Promise<ProviderResponse> => ({
+    text: `${extraText}${goal}`,
+    toolCalls: [],
+    stopReason: "end_turn" as const,
+    usage: { inputTokens: 10, outputTokens: 20 },
+  }));
+  return { name: "mock-goal", capabilities: CAP, chat };
+}
+
+/** Minimal TaskManager stand-in: only `submit` is exercised by the goal-handoff path. */
+function createTaskManagerSpy() {
+  return { submit: vi.fn().mockReturnValue({ id: "task-1" }) };
+}
+
 function createMockChannel() {
   return {
     name: "mock",
@@ -296,8 +338,112 @@ describe("Step 3 — interactive route flip (v2 spine vs v1 loop, no double-rend
     // else a successful reflection-completed turn would render a spurious "Unable to complete" abort.
     expect(render({ type: "run.ending", reason: "completed" })).toEqual([]);
     expect(render({ type: "run.ending", reason: "blocked" })).toEqual([]);
+    // 3.5 plan-review / 3.6 goal-handoff terminals — the plan/ack was already rendered (show_plan);
+    // these must skip, else a successful plan-review or goal handoff renders a spurious abort.
+    expect(render({ type: "run.ending", reason: "plan-review" })).toEqual([]);
+    expect(render({ type: "run.ending", reason: "goal-handoff" })).toEqual([]);
     // non-user-facing lifecycle events → no-op
     expect(render({ type: "step.completed", step: 1, phase: "EXECUTING" })).toEqual([]);
     expect(render({ type: "heartbeat", source: "model-keepalive" })).toEqual([]);
+  });
+
+  it("flag ON (v2): 3.5 — an explicit plan request + plan-artifact response parks a review gate, presents the plan, terminates without a spurious abort, and the next approval clears the gate", async () => {
+    const channel = createMockChannel();
+    const orch = makeOrchestrator({
+      provider: createPlanArtifactProvider(),
+      channel,
+      flagSet: resolveFlagSetById("v2-all-routes+full-control-plane"),
+    });
+    const sm = (
+      orch as unknown as {
+        sessionManager: { getPendingPlanReviewVisibleText(id: string): string | undefined };
+      }
+    ).sessionManager;
+
+    await orch.handleMessage({
+      channelType: "cli",
+      chatId: "v2-plan-1",
+      userId: "u1",
+      text: "show me your plan before you proceed",
+      timestamp: new Date(),
+    });
+
+    const rendered = channel.sendMarkdown.mock.calls
+      .filter((c: unknown[]) => c[0] === "v2-plan-1")
+      .map((c: unknown[]) => c[1] as string);
+    // The plan was presented (show_plan render) and the write-blocking review gate is parked.
+    expect(rendered.some((m) => m.includes("## Plan"))).toBe(true);
+    expect(sm.getPendingPlanReviewVisibleText("v2-plan-1")).toBeTruthy();
+    // No spurious provider_abort — the run terminated with the happy "plan-review" reason.
+    expect(rendered.some((m) => m.includes("Unable to complete"))).toBe(false);
+
+    // Resume: the next message approves → noteUserMessage clears the gate; the run won't re-park.
+    await orch.handleMessage({
+      channelType: "cli",
+      chatId: "v2-plan-1",
+      userId: "u1",
+      text: "yes, go ahead",
+      timestamp: new Date(),
+    });
+    expect(sm.getPendingPlanReviewVisibleText("v2-plan-1")).toBeFalsy();
+  });
+
+  it("flag ON (v2): 3.6 — a goal-block response submits exactly ONE background task, acks, and terminates (no inline double-run)", async () => {
+    const channel = createMockChannel();
+    const taskManager = createTaskManagerSpy();
+    const orch = makeOrchestrator({
+      provider: createGoalBlockProvider(),
+      channel,
+      flagSet: resolveFlagSetById("v2-all-routes+full-control-plane"),
+    });
+    (orch as unknown as { setTaskManager(tm: unknown): void }).setTaskManager(taskManager);
+
+    await orch.handleMessage({
+      channelType: "cli",
+      chatId: "v2-goal-1",
+      userId: "u1",
+      text: "build me a full feature end to end",
+      timestamp: new Date(),
+    });
+
+    // Exactly ONE submit: the run TERMINATED after the handoff (before decomposeGoalsIfPlanning). An
+    // always-goal-block provider would re-submit every PLANNING iteration if the terminate break were
+    // missing → submit-called-once is the no-double-run guard.
+    expect(taskManager.submit).toHaveBeenCalledTimes(1);
+    expect(taskManager.submit.mock.calls[0][0]).toBe("v2-goal-1");
+    const rendered = channel.sendMarkdown.mock.calls
+      .filter((c: unknown[]) => c[0] === "v2-goal-1")
+      .map((c: unknown[]) => c[1] as string);
+    expect(rendered.some((m) => m.includes("Working on:"))).toBe(true);
+    expect(rendered.some((m) => m.includes("Unable to complete"))).toBe(false);
+  });
+
+  it("flag ON (v2): 3.8 — goal-block detection takes precedence over the plan-review gate (v1 ordering)", async () => {
+    const channel = createMockChannel();
+    const taskManager = createTaskManagerSpy();
+    // A response that looks like a plan artifact AND carries a goal block, with an explicit plan request.
+    const orch = makeOrchestrator({
+      provider: createGoalBlockProvider("## Plan\nHere is the approach.\n\n"),
+      channel,
+      flagSet: resolveFlagSetById("v2-all-routes+full-control-plane"),
+    });
+    (orch as unknown as { setTaskManager(tm: unknown): void }).setTaskManager(taskManager);
+
+    await orch.handleMessage({
+      channelType: "cli",
+      chatId: "v2-prec-1",
+      userId: "u1",
+      text: "show me your plan before you proceed",
+      timestamp: new Date(),
+    });
+
+    // Goal-detection wins: the task was submitted and NO plan-review gate was parked.
+    expect(taskManager.submit).toHaveBeenCalledTimes(1);
+    const sm = (
+      orch as unknown as {
+        sessionManager: { getPendingPlanReviewVisibleText(id: string): string | undefined };
+      }
+    ).sessionManager;
+    expect(sm.getPendingPlanReviewVisibleText("v2-prec-1")).toBeFalsy();
   });
 });

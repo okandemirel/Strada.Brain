@@ -431,6 +431,7 @@ export class V2AgentRunner implements AgentRunner {
             providerName: prepared.currentProvider.name,
             modelId: prepared.currentAssignment.modelId,
             chatId: request.chatId,
+            toolCallCount: outcome.response.toolCalls.length,
           });
           state = plan.agentState;
           if (plan.yield) {
@@ -438,6 +439,17 @@ export class V2AgentRunner implements AgentRunner {
             if (y === "blocked") {
               terminalStatus = "blocked";
               terminalReason = "blocked:ask_user";
+              break epochLoop;
+            }
+            // 3.5 plan-review / 3.6 goal-handoff: the interactive run ends cleanly HERE — BEFORE
+            // decomposeGoalsIfPlanning below, which would re-run a handed-off goal inline (3.6
+            // double-execution). terminalStatus "completed" + a happy reason (in the interactive
+            // skip-set) so the resilience adapter renders no spurious abort. The visible text
+            // (plan / ack) was already rendered once by handlePlanYield via the show_plan event.
+            if (y === "terminate") {
+              terminalStatus = "completed";
+              terminalReason = plan.yield.kind === "goal_handoff" ? "goal-handoff" : "plan-review";
+              emit({ type: "run.ending", reason: terminalReason });
               break epochLoop;
             }
           }
@@ -677,11 +689,19 @@ export class V2AgentRunner implements AgentRunner {
     io: IOStrategy,
     emit: (e: Parameters<AgentRunEventBus["emit"]>[0]) => number,
     y: PlanPhaseYield,
-  ): Promise<"continue" | "blocked"> {
+  ): Promise<"continue" | "blocked" | "terminate"> {
     if (y.kind === "show_plan") {
       emit({ type: "show_plan", visibleText: y.visibleText });
       await guardedSleep(bus, clock, 0, { type: "heartbeat", source: "loop-yield" });
       return "continue";
+    }
+    // Interactive PLANNING terminal divergences (cutover Step 3 / 3.5 plan-review + 3.6 goal-handoff):
+    // the port already decided to present a plan for review OR hand the goal to a background task.
+    // Render the visible text ONCE — reuse the show_plan event (the interactive onEvent adapter renders
+    // it verbatim; the port did NOT render it) — then signal the spine to TERMINATE the run.
+    if (y.kind === "plan_review" || y.kind === "goal_handoff") {
+      emit({ type: "show_plan", visibleText: y.visibleText });
+      return "terminate";
     }
     // ask_user from the plan phase.
     emit({ type: "ask_user", question: y.question, visibleText: y.visibleText });

@@ -371,6 +371,8 @@ const INTERACTIVE_NON_ABORT_RUN_ENDING_REASONS: ReadonlySet<string> = new Set([
   "max-tokens-runaway",
   "blocked:ask_user",
   "epoch-budget-exhausted",
+  "plan-review", // Step 3 (3.5): plan presented for review + run terminated — the plan was rendered
+  "goal-handoff", // Step 3 (3.6): goal handed to a background task + run terminated — ack was rendered
 ]);
 /** Self-improvement tools bypass phase-based write filtering — they have their own guards. */
 const SELF_IMPROVEMENT_TOOLS: ReadonlySet<string> = new Set([
@@ -420,6 +422,14 @@ interface AgentCorePortRunContext {
   readonly controlLoopTracker: NonNullable<ReturnType<typeof createAutonomyBundle>["controlLoopTracker"]> | undefined;
   systemPrompt: string;
   readonly identityKey: string;
+  // Step 3 (3.5/3.6) — the interactive PLANNING-phase divergences need these: `userId` for the
+  // autonomous-mode check (3.5 plan-review gate); `channelType`/`attachments`/`conversationScope`
+  // for the goal→background submit (3.6). Threaded from AgentRunSetupInput; undefined on paths that
+  // don't supply them (the divergences are interactive-only, where they are always set).
+  readonly userId?: string;
+  readonly channelType?: string;
+  readonly attachments?: readonly Attachment[];
+  readonly conversationScope?: string;
   readonly projectWorldFingerprint?: string;
   // Refreshed each step by prepareIteration (the handler contexts read them).
   executionStrategy: SupervisorExecutionStrategy | undefined;
@@ -8626,6 +8636,10 @@ export class Orchestrator {
       controlLoopTracker: bundle.controlLoopTracker ?? undefined,
       systemPrompt,
       identityKey,
+      userId: request.userId,
+      channelType: request.channelType,
+      attachments: request.attachments,
+      conversationScope,
       projectWorldFingerprint,
       executionStrategy: undefined,
       lastAssignment: undefined,
@@ -8890,6 +8904,90 @@ export class Orchestrator {
     params: PlanPhaseParams,
     runCtx: AgentCorePortRunContext,
   ): Promise<PlanPhaseResult> {
+    const chatId = params.chatId;
+    const phase = params.agentState.phase;
+
+    // Interactive PLANNING-phase terminal divergences (cutover Step 3). Background/worker/supervisor
+    // runs fall straight to the default auto-transition below (v1 ran these only in the interactive loop).
+    if (
+      params.mode === "interactive" &&
+      (phase === AgentPhase.PLANNING || phase === AgentPhase.REPLANNING)
+    ) {
+      const lastUserMessage = this.sessionManager.extractLastUserMessage(runCtx.session);
+
+      // ── 3.6: goal-block → background submit (v1 orchestrator.ts:5754-5796). FIRST, matching v1
+      // precedence (a goal-block short-circuits to background before the plan-review / end-turn logic).
+      // Returns a TERMINATING yield so the spine ends the interactive run BEFORE decomposeGoalsIfPlanning
+      // — the handed-off goal must NOT also execute inline (no double-run).
+      if (phase === AgentPhase.PLANNING && this.taskManager) {
+        const goalBlock = parseGoalBlock(params.responseText ?? "");
+        if (goalBlock && goalBlock.isGoal) {
+          const lastUserContent = this.sessionManager.extractLastUserContent(runCtx.session);
+          const lastUserHasRichInput =
+            (runCtx.attachments?.length ?? 0) > 0 ||
+            (Array.isArray(lastUserContent) && lastUserContent.some((b) => b.type !== "text"));
+          const conversationScope = runCtx.conversationScope ?? chatId;
+          const goalTree = lastUserHasRichInput
+            ? undefined
+            : buildGoalTreeFromBlock(goalBlock, conversationScope, lastUserMessage, params.responseText ?? undefined);
+          const nodeCount = goalTree ? goalTree.nodes.size - 1 : goalBlock.nodes.length;
+          const ackMsg =
+            `Working on: ${lastUserMessage.slice(0, 80)}` +
+            ` (${nodeCount} step${nodeCount !== 1 ? "s" : ""}, ~${goalBlock.estimatedMinutes} min). I'll update you as I go.`;
+          this.taskManager.submit(chatId, runCtx.channelType ?? "cli", lastUserMessage, {
+            ...(goalTree ? { goalTree } : {}),
+            ...(lastUserHasRichInput ? { forceSharedPlanning: true } : {}),
+            ...(lastUserContent ? { userContent: lastUserContent } : {}),
+            attachments: runCtx.attachments?.length ? [...runCtx.attachments] : undefined,
+            conversationId: conversationScope,
+            userId: runCtx.identityKey,
+          });
+          return { agentState: params.agentState, yield: { kind: "goal_handoff", visibleText: ackMsg } };
+        }
+      }
+
+      // ── 3.5: explicit plan-review gate (v1 orchestrator.ts:5799-5857). NON-autonomous only —
+      // autonomous mode auto-executes via the default auto-transition below. Records the plan WITHOUT
+      // transitioning, parks the write-blocking review gate, and returns a TERMINATING yield that
+      // presents the plan; the user approves on the next message (cleared upstream by
+      // interactionPolicy.noteUserMessage in processMessage, so this gate won't re-trigger).
+      if (
+        params.toolCallCount === 0 && // v1 parity (orchestrator.ts:5812): text-only PLANNING responses only
+        userExplicitlyAskedForPlan(lastUserMessage) &&
+        draftLooksLikeInternalPlanArtifact(params.responseText ?? "", { toolNames: runCtx.lastToolNames }) &&
+        !this.dmPolicy?.isAutonomousActive(chatId, runCtx.userId)
+      ) {
+        let agentState = handlePlanPhaseTransition({
+          agentState: params.agentState,
+          executionJournal: runCtx.executionJournal,
+          responseText: params.responseText,
+          providerName: params.providerName,
+          modelId: params.modelId,
+          autoTransition: false,
+        });
+        if (agentState.phase === AgentPhase.PLANNING) {
+          agentState = await this.runProactiveGoalDecomposition({
+            conversationScope: runCtx.conversationScope ?? chatId,
+            userMessage: lastUserMessage,
+            chatId,
+            session: runCtx.session,
+            agentState,
+          });
+        }
+        this.interactionPolicy.requirePlanReview(
+          chatId,
+          "user explicitly asked to review a plan first",
+          applyVisibleResponseContract(
+            lastUserMessage,
+            this.stripInternalDecisionMarkers(params.responseText) || params.responseText || "",
+          ),
+        );
+        const planText = this.sessionManager.getPendingPlanReviewVisibleText(chatId) ?? "";
+        return { agentState, yield: { kind: "plan_review", visibleText: planText } };
+      }
+    }
+
+    // ── default: auto-transition (existing behavior — autonomous auto-execute + the non-divergent path).
     const agentState = handlePlanPhaseTransition({
       agentState: params.agentState,
       executionJournal: runCtx.executionJournal,

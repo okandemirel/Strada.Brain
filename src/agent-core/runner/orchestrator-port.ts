@@ -236,12 +236,28 @@ export interface PlanPhaseParams {
   readonly providerName: string;
   readonly modelId?: string;
   readonly chatId: string;
+  /** Tool-call count on the response. v1's plan-review gate fired only on a text-only PLANNING
+   *  response (`response.toolCalls.length === 0`, orchestrator.ts ~5812); the port needs the count
+   *  to replicate that guard (PlanPhaseParams otherwise carries only `responseText`). */
+  readonly toolCallCount: number;
 }
 
-/** Optional yield: show_plan (emit+continue) or ask_user (interactive emit+continue / bg block). */
+/**
+ * Optional yield from the plan phase:
+ *  - `show_plan`    — emit the plan + continue (in-loop plan presentation).
+ *  - `ask_user`     — interactive emit+continue / background block.
+ *  - `plan_review`  — (Step 3 / 3.5) interactive plan-review gate: present the plan + TERMINATE the
+ *                     run (the user approves on the next message). The spine renders `visibleText`
+ *                     once (as a `show_plan` event) and ends the run with a happy terminal reason.
+ *  - `goal_handoff` — (Step 3 / 3.6) interactive goal-block detected: the goal was submitted to the
+ *                     background task manager; render the ack `visibleText` once + TERMINATE the run
+ *                     (so the goal does NOT also execute inline → no double-run).
+ */
 export type PlanPhaseYield =
   | { readonly kind: "show_plan"; readonly visibleText: string }
-  | { readonly kind: "ask_user"; readonly question: string; readonly visibleText: string };
+  | { readonly kind: "ask_user"; readonly question: string; readonly visibleText: string }
+  | { readonly kind: "plan_review"; readonly visibleText: string }
+  | { readonly kind: "goal_handoff"; readonly visibleText: string };
 
 export interface PlanPhaseResult {
   readonly agentState: AgentState;
