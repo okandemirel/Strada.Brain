@@ -96,9 +96,14 @@ export interface IOStrategy {
   visibleSink?: (chunk: VisibleChunk) => void;
 
   /**
-   * Deliver the terminal answer. This is the interactive-vs-background divergence made
-   * explicit: interactive renders to the channel (v1 `sendVisibleAssistantMarkdown`);
-   * background/worker is a NO-OP (the string is carried by `AgentRunResult.finalText`).
+   * Deliver the terminal answer. The divergence is by RUNNER, not by mode alone:
+   *  - `V1AgentRunner` interactive RENDERS here (v1 `sendVisibleAssistantMarkdown`).
+   *  - `V2AgentRunner` interactive is a NO-OP: the faithful port's dispatch handlers
+   *    (`portDispatchEndTurn`/`portDispatchReflection` → `emitVisibleBoundary` →
+   *    `sendVisibleAssistantMarkdown`) ALREADY render the answer to the channel DURING the run,
+   *    and `synthesizeFinal` only reads it back into `AgentRunResult.finalText`; rendering here
+   *    too would DOUBLE-RENDER.
+   *  - background/worker (both runners) is a NO-OP (the string is carried by `finalText`).
    * `state` is the terminal `AgentState` (phase/iteration) for sinks that annotate.
    */
   deliverFinal(text: string, state: AgentState): void;

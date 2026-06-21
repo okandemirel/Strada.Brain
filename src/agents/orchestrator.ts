@@ -205,7 +205,13 @@ import {
   type RunClock,
   type VerdictInput,
 } from "../agent-core/control/index.js";
-import type { FlagSet } from "../agent-core/runner/index.js";
+import {
+  selectAgentRunner,
+  type FlagSet,
+  type AgentRunRequest,
+  type IOStrategy,
+  type RunnerHostOrchestrator,
+} from "../agent-core/runner/index.js";
 import { getResilienceMessage } from "./resilience-messages.js";
 import {
   buildPhasePromptSection,
@@ -4808,7 +4814,44 @@ export class Orchestrator {
       : undefined;
 
     try {
-      await this.runAgentLoop(chatId, session, msg.channelType, userId, conversationId, msg.attachments);
+      if (this.agentCoreFlagSet?.interactive === "v2") {
+        // Agent Core v2 interactive driver (cutover Step 3). DEFAULT-OFF: the production-default
+        // flag set keeps `interactive: "v1"`, so control never enters this branch and the v1 call
+        // in the `else` is byte-identical to before. When an operator flips the interactive route
+        // to "v2", the SAME persistent session and the SAME wrapper (typing indicator + monitor +
+        // persistence in the finally below) are preserved — only the engine swaps.
+        //
+        // `deliverFinal` is a NO-OP under the faithful port: the dispatch handlers
+        // (portDispatchEndTurn/portDispatchReflection → emitVisibleBoundary →
+        // sendVisibleAssistantMarkdown) ALREADY render the terminal answer to the channel DURING
+        // the run; `synthesizeFinal` only reads it back into `AgentRunResult.finalText`. Rendering
+        // here too would double-render. `onEvent` is a NO-OP (v1 interactive has no narrative sink
+        // today; resilience/ask_user/abort rendering is a later Step-3 increment). `externalSignal`
+        // is a never-aborting signal (interactive has no user-cancel in v1) — built FRESH per turn,
+        // deliberately NOT hoisted to a shared module constant, so any abort listener a provider
+        // call attaches (fetch/AbortSignal.any) is released when this run is GC'd rather than
+        // accumulating on a long-lived signal. The result is discarded — the port already rendered,
+        // and the finally block persists the transcript.
+        const runner = selectAgentRunner(this as unknown as RunnerHostOrchestrator, "interactive");
+        const io: IOStrategy = {
+          mode: "interactive",
+          onEvent: () => {},
+          externalSignal: new AbortController().signal,
+          deliverFinal: () => {},
+        };
+        const request: AgentRunRequest = {
+          prompt: this.sessionManager.extractLastUserMessage(session) || text,
+          chatId,
+          channelType: msg.channelType,
+          conversationId,
+          userId,
+          attachments: msg.attachments,
+          interactiveSession: session,
+        };
+        await runner.run(request, io);
+      } else {
+        await this.runAgentLoop(chatId, session, msg.channelType, userId, conversationId, msg.attachments);
+      }
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : "Unknown error";
       logger.error("Agent loop error", { chatId, error: errMsg });
