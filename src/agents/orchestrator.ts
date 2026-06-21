@@ -300,6 +300,31 @@ import {
   runReactiveGoalDecomposition as runReactiveGoalDecompositionHelper,
   type GoalDecompositionDeps,
 } from "./orchestrator-goal-decomposition.js";
+// Agent Core v2 — worker-route strangler seam. The Orchestrator IMPLEMENTS OrchestratorPort by
+// binding its existing private methods (COMPOSE+ADAPT). Nothing routes here yet (DEFAULT-OFF).
+import { ModelGateway } from "../agent-core/model/model-gateway.js";
+import type { SilentStreamPort } from "../agent-core/model/model-gateway.js";
+import type {
+  AgentRunResultProjection,
+  AgentRunSetupInput,
+  ClassifyFailureParams,
+  DispatchEndTurnParams,
+  DispatchReflectionParams,
+  EndTurnDispatchResult,
+  ExecuteToolCallsFn,
+  FailureVerdictContribution,
+  OrchestratorPort,
+  PlanPhaseParams,
+  PlanPhaseResult,
+  PreparedIteration as PortPreparedIteration,
+  PrepareIterationParams,
+  ReflectionDispatchResult,
+  ResultProjectionParams,
+  RunSetup as PortRunSetup,
+  SynthesizedFinal,
+} from "../agent-core/runner/orchestrator-port.js";
+import type { HealthCore } from "../agent-core/control/failure-ledger.js";
+import type { ReflectionCoreContext } from "./orchestrator-reflection-handler.js";
 
 const DIAGNOSTIC_BLOCKED_RE = /^Blocked checkpoint:/i;
 /** Self-improvement tools bypass phase-based write filtering — they have their own guards. */
@@ -308,6 +333,63 @@ const SELF_IMPROVEMENT_TOOLS: ReadonlySet<string> = new Set([
 ]);
 const TYPING_INTERVAL_MS = 4000;
 const MAX_CONSECUTIVE_PROVIDER_FAILURES = 5;
+
+// ─── Agent Core v2 — OrchestratorPort run-context (Phase 2d-2) ───────────────────────────────
+/** Reflect cadence for the v2 tool turn (== v1's REFLECT_INTERVAL / BG_REFLECT_INTERVAL). */
+const REFLECT_INTERVAL_AGENT_CORE = 3;
+
+/** What the port's bound tool turn returns: the trace rows + the PAOR-advanced state. */
+interface AgentCoreToolTurnResult {
+  readonly trace: ReadonlyArray<{
+    toolName: string;
+    toolCallId: string;
+    success: boolean;
+    errorCategory?: string;
+    touchedFiles?: readonly string[];
+  }>;
+  readonly advancedState: AgentState;
+}
+
+/**
+ * Per-run state the OrchestratorPort closes over. Populated by {@link Orchestrator.setupAgentCoreRun};
+ * the V2 spine never touches it. Mutable on the few fields prepareIteration refreshes each step.
+ */
+interface AgentCorePortRunContext {
+  onUsage?: (usage: TaskUsageEvent) => void;
+  readonly iterationHealth: IterationHealthTracker;
+  readonly healthAdapter: IterationHealthCoreAdapter;
+  readonly session: Session;
+  readonly chatId: string;
+  readonly metricId: string | undefined;
+  readonly executionJournal: ReturnType<typeof createAutonomyBundle>["executionJournal"];
+  readonly selfVerification: ReturnType<typeof createAutonomyBundle>["selfVerification"];
+  readonly stradaConformance: ReturnType<typeof createAutonomyBundle>["stradaConformance"];
+  readonly errorRecovery: ReturnType<typeof createAutonomyBundle>["errorRecovery"];
+  readonly taskPlanner: ReturnType<typeof createAutonomyBundle>["taskPlanner"];
+  readonly controlLoopTracker: NonNullable<ReturnType<typeof createAutonomyBundle>["controlLoopTracker"]> | undefined;
+  systemPrompt: string;
+  readonly identityKey: string;
+  readonly projectWorldFingerprint?: string;
+  // Refreshed each step by prepareIteration (the handler contexts read them).
+  executionStrategy: SupervisorExecutionStrategy | undefined;
+  lastAssignment: SupervisorAssignment | undefined;
+  lastToolNames: string[];
+  lastProviderCapabilities: IAIProvider["capabilities"] | undefined;
+  readonly taskStartedAtMs: number;
+  readonly progressLanguage: ProgressLanguage;
+  readonly progressTitle: string;
+  readonly emitProgress: (update: TaskProgressUpdate) => void;
+  readonly workerCollector: WorkerRunCollector | undefined;
+  readonly profileLanguage: string | undefined;
+}
+
+/** The first clause of the prompt — the v2 ack fallback (mirrors v2-agent-runner.ts firstClause). */
+function firstClauseForAck(prompt: string): string {
+  const trimmed = prompt.trim();
+  const cut = trimmed.search(/[.!?\n]/);
+  const clause = (cut === -1 ? trimmed : trimmed.slice(0, cut)).trim();
+  return clause.length > 0 ? clause.slice(0, 120) : "Working on your request.";
+}
 /** 1b/1c seed default for the task-scope silence ceiling: the shared
  *  {@link DEFAULT_TASK_INACTIVITY_TIMEOUT_MS} (600_000), imported from config (config-only,
  *  NOT the bg-executor) so the interactive path and the background executor read ONE source.
@@ -7879,6 +7961,806 @@ export class Orchestrator {
       if (typeof v === 'string' && v.length > 0) return v;
     }
     return null;
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════════════════
+  // Agent Core v2 — OrchestratorPort implementation (Phase 2d-2). COMPOSE+ADAPT only.
+  //
+  // createAgentCorePort() returns the bound-method surface V2AgentRunner drives. Each method
+  // DELEGATES to an existing private method (a pure reader) or ADAPTS an existing handler's
+  // action-union to the flat V2 DTO at the binding. No v1 method body changes; the port only
+  // READS. The whole tool turn is owned by the port's bound executeToolCalls closure (the V1
+  // free-helper sequence), so the spine stays shape-agnostic and the V2 unit tests stay green.
+  //
+  // DEFAULT-OFF: nothing routes here yet. This is the slot the worker-route-flip increment flips.
+  // ═══════════════════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Build the OrchestratorPort + the gateway/seed/health factory the V2 runner needs. The port
+   * closes over a per-run {@link AgentCorePortRunContext} populated by `setupRun`; methods read it
+   * lazily through a closure cell, so `setupRun` runs first (building the context) and every
+   * per-iteration method sees the live state. Returns a frozen port object.
+   */
+  createAgentCorePort(): {
+    port: OrchestratorPort;
+    gateway: ModelGateway;
+    seed: PolicySeed;
+    createHealthCore: () => HealthCore;
+  } {
+    const self = this;
+    // The closure cell the runCtx-bound methods read lazily. setupRun populates it before the
+    // first per-iteration call; the spine never touches it.
+    const cell: { ctx: AgentCorePortRunContext | undefined } = { ctx: undefined };
+    const ctx = (): AgentCorePortRunContext => {
+      if (!cell.ctx) throw new Error("AgentCorePort: setupRun must run before this method");
+      return cell.ctx;
+    };
+
+    const portImpl: OrchestratorPort = {
+      // ── A. setup / seed ──────────────────────────────────────────────────────────────────
+      setupRun: async (request: AgentRunSetupInput): Promise<PortRunSetup> => {
+        const built = await self.setupAgentCoreRun(request);
+        cell.ctx = built.runCtx;
+        return built.setup;
+      },
+      buildPolicySeed: () => self.buildPolicySeed(),
+
+      // ── B. per-iteration prep ────────────────────────────────────────────────────────────
+      prepareIteration: (params: PrepareIterationParams): PortPreparedIteration => {
+        const prepared = self.prepareIteration({
+          prompt: params.prompt,
+          identityKey: params.identityKey,
+          agentState: params.agentState,
+          executionJournal: params.executionJournal,
+          systemPrompt: params.systemPrompt,
+          fallbackProvider: params.fallbackProvider,
+          toolTurnAffinity: params.toolTurnAffinity,
+          enableGoalDetection: params.enableGoalDetection,
+          iterationHealth: params.iterationHealth,
+        });
+        // ADAPT: capture the last strategy/assignment/toolNames so the handler contexts can read
+        // them (they are loop-locals in v1; here the port threads them through runCtx).
+        const c = ctx();
+        c.executionStrategy = prepared.executionStrategy;
+        c.lastAssignment = prepared.currentAssignment;
+        c.lastToolNames = prepared.currentToolNames;
+        c.lastProviderCapabilities = prepared.currentProvider.capabilities;
+        return prepared as PortPreparedIteration; // currentToolDefinitions is GatewayToolDefinition[]
+      },
+      maybeCompactSession: (session, providerName, modelId, systemPrompt) =>
+        self.maybeCompactSession(session as Session, providerName, modelId, systemPrompt),
+      trimContextWindow: (session, mode) =>
+        self.trimContextWindowForRun(session as unknown as Session, mode, ctx()),
+
+      // ── C. accounting / trace ──────────────────────────────────────────────────────────────
+      recordExecutionTrace: (params) =>
+        self.recordExecutionTrace({
+          chatId: params.chatId,
+          identityKey: params.identityKey,
+          assignment: params.assignment,
+          phase: params.phase,
+          task: params.task,
+          taskRunId: params.taskRunId,
+          reason: params.reason,
+        }),
+      recordProviderUsage: (providerName, usage) =>
+        self.recordProviderUsage(providerName, usage, ctx().onUsage), // CURRY onUsage
+      saveBudgetExceededCheckpoint: (params) => self.saveBudgetExceededCheckpoint(params),
+
+      // ── D. the verdict bridge (ADAPT: record into tracker, RETURN INPUT, no verdict) ─────────
+      classifyFailureForVerdict: (params: ClassifyFailureParams): FailureVerdictContribution =>
+        self.classifyAgentCoreFailure(params, ctx()),
+      recordHealthSuccess: (_provider: string) => {
+        // v1 success pair: the ledger half (bgFailureLedger.recordSuccess(provider,"real")) is the
+        // spine's concern; the port owns the tracker half (iterationHealth.recordSuccess()).
+        ctx().iterationHealth.recordSuccess();
+      },
+
+      // ── E. reflection + end-turn (COMPOSE handler + ADAPT union→DTO) ─────────────────────────
+      dispatchReflection: (params: DispatchReflectionParams): Promise<ReflectionDispatchResult> =>
+        self.portDispatchReflection(params, ctx()),
+      dispatchEndTurn: (params: DispatchEndTurnParams): Promise<EndTurnDispatchResult> =>
+        self.portDispatchEndTurn(params, ctx()),
+      handlePlanPhase: (params: PlanPhaseParams): Promise<PlanPhaseResult> =>
+        self.portHandlePlanPhase(params, ctx()),
+      decomposeGoalsIfPlanning: async (params) =>
+        self.runProactiveGoalDecomposition({
+          conversationScope: params.chatId,
+          userMessage: self.sessionManager.extractLastUserMessage(ctx().session),
+          chatId: params.chatId,
+          session: ctx().session,
+          agentState: params.agentState,
+        }),
+
+      // ── F. tool execution (the bound FULL TOOL TURN; see portExecuteToolTurn) ────────────────
+      executeToolCalls: (async (...args: unknown[]) =>
+        self.portExecuteToolTurn(args, ctx())) as ExecuteToolCallsFn,
+
+      // ── G. limits / config (1:1) ─────────────────────────────────────────────────────────────
+      getInteractiveIterationLimit: () => self.getInteractiveIterationLimit(),
+      getBackgroundEpochIterationLimit: () => self.getBackgroundEpochIterationLimit(),
+      canAutoContinueBackgroundEpoch: (n) => self.canAutoContinueBackgroundEpoch(n),
+      getLiveInteractiveTokenBudget: () => self.getLiveInteractiveTokenBudget(),
+
+      // ── H. GAP: classifyIntent → mirror the spine's first-clause fallback ────────────────────
+      classifyIntent: async (prompt: string) => firstClauseForAck(prompt),
+
+      // ── Terminal ─────────────────────────────────────────────────────────────────────────────
+      synthesizeFinal: (_state: AgentState, _mode): SynthesizedFinal => {
+        // GAP: PURE read of the already-synthesized transcript (synthesizeUserFacingResponse is
+        // async+impure and would re-bill; the visible text was assembled by the dispatch handlers).
+        const session = ctx().session;
+        const transcript = self.sessionManager.getVisibleTranscript(session);
+        const lastVisible = [...transcript].reverse().find((m) => m.role === "assistant");
+        const text =
+          (typeof lastVisible?.content === "string" ? lastVisible.content : "") || "Task completed.";
+        return { text, summary: text };
+      },
+      persistTerminal: async (state: AgentState, _setup) => {
+        const c = ctx();
+        self.recordMetricEnd(c.metricId, {
+          agentPhase: AgentPhase.COMPLETE,
+          iterations: state.iteration,
+          toolCallCount: state.stepResults.length,
+          hitMaxIterations: false,
+        });
+        await self.sessionManager.persistSessionToMemory(
+          c.chatId,
+          self.sessionManager.getVisibleTranscript(c.session),
+          true,
+        );
+      },
+      buildResultProjection: (params: ResultProjectionParams): AgentRunResultProjection =>
+        self.portBuildResultProjection(params, ctx()),
+    };
+    const port: OrchestratorPort = Object.freeze(portImpl);
+
+    return {
+      port,
+      // silentStream's 8th param is typed `runClock?: RunClock`; the gateway's SilentStreamPort
+      // types it `runClock: unknown` (carrying no control-plane dependency). The bodies are
+      // identical — the cast localizes the variance mismatch to this one line (gateway passes
+      // undefined for that slot; the Orchestrator's real method narrows it back).
+      gateway: new ModelGateway(self.silentStream as unknown as SilentStreamPort),
+      seed: self.buildPolicySeed(),
+      createHealthCore: () => new IterationHealthCoreAdapter(new IterationHealthTracker(), ""),
+    };
+  }
+
+  /**
+   * COMPOSE the existing per-run setup helpers (the same callees the inline loop preamble calls)
+   * into the {@link PortRunSetup} the spine threads + the {@link AgentCorePortRunContext} the
+   * port closes over. Mirrors runAgentLoop's prologue (orchestrator.ts ~4790-4894).
+   */
+  private async setupAgentCoreRun(
+    request: AgentRunSetupInput,
+  ): Promise<{ setup: PortRunSetup; runCtx: AgentCorePortRunContext }> {
+    const chatId = request.chatId;
+    const identityKey = chatId;
+    const session = this.sessionManager.getOrCreateSession(chatId);
+    const queryText = request.prompt;
+    const conversationScope = session.conversationScope ?? chatId;
+
+    const vaultContext = await this.computeVaultContext(queryText);
+    const {
+      systemPrompt,
+      initialContentHashes,
+      projectWorldSummary,
+      projectWorldFingerprint,
+    } = await this.buildSystemPromptWithContext({
+      chatId,
+      conversationScope,
+      identityKey,
+      channelType: request.channelType,
+      prompt: queryText,
+      vaultContext,
+      profile: null,
+    });
+
+    const lastUserMessage = this.sessionManager.extractLastUserMessage(session) || queryText;
+    const bundle = createAutonomyBundle({
+      prompt: lastUserMessage,
+      iterationBudget: this.getInteractiveIterationLimit(),
+      stradaDeps: this.stradaDeps,
+      projectWorldSummary,
+      projectWorldFingerprint,
+      includeControlLoopTracker: true,
+      previousJournalSnapshot: session.lastJournalSnapshot,
+      conformanceEnabled: this.conformanceEnabled,
+      conformanceFrameworkPathsOnly: this.conformanceFrameworkPathsOnly,
+      progressAssessmentEnabled: this.progressAssessmentEnabled,
+    });
+
+    const memoryRefresher = this.sessionManager.createMemoryRefresher(initialContentHashes);
+    const metricId = this.metricsRecorder?.startTask({
+      sessionId: chatId,
+      taskDescription: lastUserMessage.slice(0, 200),
+      taskType: "interactive",
+      instinctIds: [],
+    });
+
+    const fallbackProvider = this.providerManager.getProvider(identityKey);
+    const iterationHealth = new IterationHealthTracker();
+    const healthAdapter = new IterationHealthCoreAdapter(iterationHealth, "");
+
+    const onUsage = request.onUsage as ((usage: TaskUsageEvent) => void) | undefined;
+    const runCtx: AgentCorePortRunContext = {
+      onUsage,
+      iterationHealth,
+      healthAdapter,
+      session,
+      chatId,
+      metricId,
+      executionJournal: bundle.executionJournal,
+      selfVerification: bundle.selfVerification,
+      stradaConformance: bundle.stradaConformance,
+      errorRecovery: bundle.errorRecovery,
+      taskPlanner: bundle.taskPlanner,
+      controlLoopTracker: bundle.controlLoopTracker ?? undefined,
+      systemPrompt,
+      identityKey,
+      projectWorldFingerprint,
+      executionStrategy: undefined,
+      lastAssignment: undefined,
+      lastToolNames: [],
+      lastProviderCapabilities: undefined,
+      taskStartedAtMs: Date.now(),
+      progressLanguage: this.defaultLanguage as ProgressLanguage,
+      progressTitle: queryText.replace(/\s+/g, " ").trim().slice(0, 80) || "Task",
+      emitProgress: () => {
+        /* worker/background progress is surfaced via the V2 event bus, not this v1 sink */
+      },
+      workerCollector: undefined,
+      profileLanguage: undefined,
+    };
+
+    const setup: PortRunSetup = {
+      systemPrompt,
+      session: session as unknown as PortRunSetup["session"],
+      executionJournal: bundle.executionJournal,
+      memoryRefresher,
+      identityKey,
+      fallbackProvider,
+      iterationHealth,
+      metricId: metricId ?? "",
+      enableGoalDetection: this.taskManager != null,
+    };
+
+    return { setup, runCtx };
+  }
+
+  /**
+   * Provider-aware context-window trim for the v2 run. Mirrors runAgentLoop's trim (orchestrator.ts
+   * ~4669): trimSession to the recommended max messages, then persist the trimmed tail to memory.
+   * Idempotent across iterations (trimSession is a no-op when already within bounds).
+   */
+  private trimContextWindowForRun(
+    session: Session,
+    _mode: "interactive" | "background",
+    runCtx: AgentCorePortRunContext,
+  ): void {
+    const providerInfo = this.providerManager.getActiveInfo?.(runCtx.identityKey);
+    const providerName = providerInfo?.providerName ?? this.providerManager.getProvider(runCtx.identityKey).name;
+    const trimmed = this.sessionManager.trimSession(
+      session,
+      getRecommendedMaxMessages(
+        providerName,
+        providerInfo?.model,
+        this.modelIntelligence,
+        this.providerManager.getProviderCapabilities?.(providerName, providerInfo?.model),
+        providerName,
+      ),
+    );
+    if (trimmed.length > 0) {
+      void this.sessionManager.persistSessionToMemory(
+        runCtx.chatId,
+        trimmed,
+        /* force */ true,
+      );
+    }
+  }
+
+  /**
+   * The verdict bridge's HEALTH/FAILURE half. Records the failure into the LIVE tracker (the shared
+   * prefix of recordPhase1a/1bFailureAndVerdict: setProvider + recordFailure(provider,false)) and
+   * derives callStalled exactly as buildPhase1bVerdictInput. Returns INPUT, not a verdict — the
+   * spine owns the single ledger.verdict gate. Benign aborts re-throw upstream and never reach here.
+   */
+  private classifyAgentCoreFailure(
+    params: ClassifyFailureParams,
+    runCtx: AgentCorePortRunContext,
+  ): FailureVerdictContribution {
+    runCtx.healthAdapter.setProvider(params.provider);
+    runCtx.healthAdapter.recordFailure(); // tracker-half; false=non-benign is the only path here
+    const reason = params.failedCallReason;
+    const callStalled = reason?.kind === "provider-stall" || reason?.kind === "hard-timeout";
+    // A task-scoped abort surfaces here only for the two scoped kinds; else null (the spine
+    // overrides taskCancelReason with runClock.taskToken.reason anyway).
+    const taskCancelReason =
+      reason && (reason.kind === "provider-stall" || reason.kind === "hard-timeout") && reason.scope === "task"
+        ? reason
+        : null;
+    return { callStalled, taskCancelReason, benign: false };
+  }
+
+  /** Build the shared ReflectionCoreContext from existing this.* methods + runCtx (COMPOSITION). */
+  private buildReflectionCoreContext(
+    runCtx: AgentCorePortRunContext,
+    responseText: string | undefined,
+    responseUsage: ProviderResponse["usage"] | undefined,
+    toolCallCount: number,
+  ): ReflectionCoreContext {
+    return {
+      chatId: runCtx.chatId,
+      identityKey: runCtx.identityKey,
+      prompt: this.sessionManager.extractLastUserMessage(runCtx.session),
+      responseText,
+      // v1 threads response.usage; the v2 spine does not carry per-step usage into the dispatch
+      // ctx, so a zero usage is the faithful default (telemetry treats it as optional).
+      responseUsage: responseUsage ?? { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+      toolCallCount,
+      executionStrategy: runCtx.executionStrategy as SupervisorExecutionStrategy,
+      executionJournal: runCtx.executionJournal,
+      selfVerification: runCtx.selfVerification,
+      stradaConformance: runCtx.stradaConformance,
+      taskStartedAtMs: runCtx.taskStartedAtMs,
+      currentToolNames: runCtx.lastToolNames,
+      currentAssignment: runCtx.lastAssignment as SupervisorAssignment,
+      interventionDeps: this.buildInterventionDeps(() => runCtx.systemPrompt),
+      session: runCtx.session,
+      recordPhaseOutcome: (p) => this.recordPhaseOutcome(p),
+      buildPhaseOutcomeTelemetry: (p) => this.buildPhaseOutcomeTelemetry(p),
+      usageHandler: runCtx.onUsage,
+    };
+  }
+
+  /**
+   * COMPOSE the 4 reflection handlers on (mode, decision) and ADAPT the action-union to the flat
+   * {@link ReflectionDispatchResult}. Faithful to the interactive call-site (orchestrator.ts
+   * ~5380-5491) and the background call-site (~3943-4019).
+   */
+  private async portDispatchReflection(
+    params: DispatchReflectionParams,
+    runCtx: AgentCorePortRunContext,
+  ): Promise<ReflectionDispatchResult> {
+    const core = this.buildReflectionCoreContext(runCtx, params.responseText, undefined, 0);
+    const chatId = params.chatId;
+    let action: ReflectionLoopAction;
+
+    if (params.mode === "interactive") {
+      const ctx: InteractiveReflectionContext = {
+        ...core,
+        systemPrompt: runCtx.systemPrompt,
+        progressAssessmentEnabled: this.progressAssessmentEnabled,
+        controlLoopTracker: runCtx.controlLoopTracker,
+      };
+      if (params.decision === "DONE" || params.decision === "DONE_WITH_SUGGESTIONS") {
+        action = await handleInteractiveReflectionDone(params.agentState, ctx);
+      } else if (params.decision === "REPLAN") {
+        action = handleInteractiveReflectionReplan(params.agentState, ctx);
+        // FAITHFUL: bundle v1's interactive REPLAN-continue special-case (orchestrator.ts
+        // ~5409-5436): reactive goal-decomposition + transitionPhase(REPLANNING) + continuation.
+        if (action.flow === "continue") {
+          await this.runReactiveGoalDecomposition({
+            conversationScope: chatId,
+            chatId,
+            session: runCtx.session,
+            responseText: params.responseText ?? "",
+          });
+          let replanState = transitionPhase(action.newState, AgentPhase.REPLANNING);
+          if (params.responseText) {
+            runCtx.session.messages.push({ role: "assistant", content: params.responseText });
+          }
+          runCtx.session.messages.push({ role: "user", content: "Please create a new plan." });
+          return { agentState: replanState, terminal: false };
+        }
+      } else {
+        action = await handleInteractiveReflectionContinue(params.agentState, ctx, {
+          text: params.responseText,
+          toolCalls: [],
+          stopReason: "end_turn",
+          usage: undefined,
+        } as unknown as ProviderResponse);
+      }
+    } else {
+      const ctx = this.buildBgReflectionContext(core, runCtx, params.agentState.iteration);
+      action =
+        params.decision === "DONE" || params.decision === "DONE_WITH_SUGGESTIONS"
+          ? await handleBgReflectionDone(params.agentState, ctx)
+          : params.decision === "REPLAN"
+            ? handleBgReflectionReplan(params.agentState, ctx)
+            : await handleBgReflectionContinue(params.agentState, ctx, 0);
+    }
+
+    // ADAPT union → DTO (faithful to interactive call-site orchestrator.ts ~5447-5491).
+    switch (action.flow) {
+      case "continue":
+        return { agentState: action.newState, terminal: false };
+      case "done": {
+        const safe = this.sanitizeBlockedVisibleText(action.visibleText ?? "");
+        if (safe.text) {
+          await this.sessionManager.sendVisibleAssistantMarkdown(chatId, runCtx.session, safe.text);
+        }
+        return { agentState: action.newState, terminal: true, reason: action.status ?? "done" };
+      }
+      case "blocked": {
+        const safe = this.sanitizeBlockedVisibleText(action.visibleText ?? "");
+        if (safe.text) {
+          await this.sessionManager.sendVisibleAssistantMarkdown(chatId, runCtx.session, safe.text);
+        }
+        return {
+          agentState: safe.marked
+            ? { ...params.agentState, loopDetectionBlocked: true }
+            : params.agentState,
+          terminal: true,
+          reason: action.status ?? "blocked",
+        };
+      }
+    }
+  }
+
+  /** COMPOSE the 2 end-turn handlers on mode, ADAPT union → {agentState, finalText}. */
+  private async portDispatchEndTurn(
+    params: DispatchEndTurnParams,
+    runCtx: AgentCorePortRunContext,
+  ): Promise<EndTurnDispatchResult> {
+    const core = this.buildReflectionCoreContext(runCtx, params.responseText, undefined, 0);
+    const chatId = params.chatId;
+    const action: EndTurnLoopAction =
+      params.mode === "interactive"
+        ? await handleInteractiveEndTurn(
+            params.agentState,
+            this.buildInteractiveEndTurnContext(core, runCtx),
+          )
+        : await handleBgEndTurn(
+            params.agentState,
+            this.buildBgEndTurnContext(core, runCtx, params.agentState.iteration),
+          );
+
+    switch (action.flow) {
+      case "done": {
+        const safe = this.sanitizeBlockedVisibleText(action.visibleText ?? "");
+        if (safe.text) {
+          await this.sessionManager.sendVisibleAssistantMarkdown(chatId, runCtx.session, safe.text);
+        }
+        return { agentState: action.newState, finalText: safe.text };
+      }
+      case "blocked": {
+        const safe = this.sanitizeBlockedVisibleText(action.visibleText ?? "");
+        if (safe.text) {
+          await this.sessionManager.sendVisibleAssistantMarkdown(chatId, runCtx.session, safe.text);
+        }
+        return {
+          agentState: safe.marked
+            ? { ...params.agentState, loopDetectionBlocked: true }
+            : params.agentState,
+          finalText: safe.text,
+        };
+      }
+      case "continue":
+        // SEMANTIC NARROWING CAVEAT (the one end-turn fidelity gap): the flat DTO has no terminal
+        // flag and the spine treats dispatchEndTurn as terminal. The handler already re-pushed the
+        // continuation; we surface empty finalText. This arm is only reached if a handler converts a
+        // genuine end_turn into a continue — flagged, not silently dropped.
+        return { agentState: action.newState, finalText: "" };
+    }
+  }
+
+  /** BIND handlePlanPhaseTransition (no auto-transition; the goal-decomposition step follows). */
+  private async portHandlePlanPhase(
+    params: PlanPhaseParams,
+    runCtx: AgentCorePortRunContext,
+  ): Promise<PlanPhaseResult> {
+    const agentState = handlePlanPhaseTransition({
+      agentState: params.agentState,
+      executionJournal: runCtx.executionJournal,
+      responseText: params.responseText,
+      providerName: params.providerName,
+      modelId: params.modelId,
+      autoTransition: true,
+    });
+    return { agentState };
+  }
+
+  /** ADAPT mutation→pure: project the terminal state + accumulated effects into the result fields. */
+  private portBuildResultProjection(
+    params: ResultProjectionParams,
+    runCtx: AgentCorePortRunContext,
+  ): AgentRunResultProjection {
+    const info = this.providerManager.getActiveInfo?.(runCtx.identityKey);
+    const snapshot = this.providerManager.getCatalogSnapshot?.(runCtx.identityKey);
+    return {
+      provider: runCtx.lastAssignment?.providerName ?? info?.providerName ?? "unknown",
+      model: runCtx.lastAssignment?.modelId ?? info?.model,
+      // The catalog exposes only assignmentVersion; surface it as the catalog version string and
+      // fall back to "unknown" when no snapshot getter exists (lightweight test providerManager).
+      catalogVersion: snapshot ? String(snapshot.assignmentVersion) : "unknown",
+      assignmentVersion: snapshot?.assignmentVersion ?? 0,
+      // WorkerRunCollector is never populated on the v2 path (the spine accumulates trace by value
+      // and passes it in `params`); these structured-effect fields stay empty here.
+      workspaceId: undefined,
+      touchedFiles: params.touchedFiles,
+      toolTrace: params.toolTrace.map((t) => ({
+        toolName: t.toolName,
+        success: t.success,
+        summary: "",
+        timestamp: 0,
+      })),
+      verificationResults: [],
+      reviewFindings: [],
+      artifacts: [],
+    };
+  }
+
+  /**
+   * Compose the background-only ReflectionContext fields (orchestrator.ts ~3943-3978) from existing
+   * this.* methods + runCtx. Every field is an EXISTING method or a runCtx value.
+   */
+  private buildBgReflectionContext(
+    core: ReflectionCoreContext,
+    runCtx: AgentCorePortRunContext,
+    iteration: number,
+  ): BgReflectionContext {
+    return {
+      ...core,
+      progressAssessmentEnabled: this.progressAssessmentEnabled,
+      controlLoopTracker: runCtx.controlLoopTracker as BgReflectionContext["controlLoopTracker"],
+      workerCollector: runCtx.workerCollector,
+      progressTitle: runCtx.progressTitle,
+      progressLanguage: runCtx.progressLanguage,
+      iteration,
+      workspaceLease: undefined,
+      systemPrompt: runCtx.systemPrompt,
+      emitProgress: runCtx.emitProgress,
+      buildStructuredProgressSignal: (p, t, s, l) => this.buildStructuredProgressSignal(p, t, s, l),
+      getClarificationContext: () => this.getClarificationContext(),
+      formatBoundaryVisibleText: (b) => this.sessionManager.formatBoundaryVisibleText(b),
+      appendVisibleAssistantMessage: (s, t) => this.sessionManager.appendVisibleAssistantMessage(s, t),
+      synthesizeUserFacingResponse: (p) => this.synthesizeUserFacingResponse(p),
+      persistSessionToMemory: (c, t, f) => this.sessionManager.persistSessionToMemory(c, t, f),
+      getVisibleTranscript: (s) => this.sessionManager.getVisibleTranscript(s),
+    };
+  }
+
+  /** Compose the background-only EndTurnContext fields (orchestrator.ts ~4113-4149). */
+  private buildBgEndTurnContext(
+    core: ReflectionCoreContext,
+    runCtx: AgentCorePortRunContext,
+    iteration: number,
+  ): BgEndTurnContext {
+    return {
+      chatId: core.chatId,
+      identityKey: core.identityKey,
+      prompt: core.prompt,
+      taskClassification: this.taskClassifier.classify(core.prompt),
+      responseText: core.responseText,
+      responseUsage: core.responseUsage,
+      executionStrategy: core.executionStrategy,
+      executionJournal: core.executionJournal,
+      selfVerification: core.selfVerification,
+      stradaConformance: core.stradaConformance,
+      taskStartedAtMs: core.taskStartedAtMs,
+      currentToolNames: core.currentToolNames,
+      currentAssignment: core.currentAssignment,
+      interventionDeps: core.interventionDeps,
+      session: core.session,
+      usageHandler: core.usageHandler,
+      recordPhaseOutcome: core.recordPhaseOutcome,
+      buildPhaseOutcomeTelemetry: core.buildPhaseOutcomeTelemetry,
+      progressAssessmentEnabled: this.progressAssessmentEnabled,
+      controlLoopTracker: runCtx.controlLoopTracker as BgEndTurnContext["controlLoopTracker"],
+      workerCollector: runCtx.workerCollector,
+      progressTitle: runCtx.progressTitle,
+      progressLanguage: runCtx.progressLanguage,
+      iteration,
+      workspaceLease: undefined,
+      systemPrompt: runCtx.systemPrompt,
+      daemonMode: true,
+      emitProgress: runCtx.emitProgress,
+      buildStructuredProgressSignal: (p, t, s, l) => this.buildStructuredProgressSignal(p, t, s, l),
+      getClarificationContext: () => this.getClarificationContext(),
+      formatBoundaryVisibleText: (b) => this.sessionManager.formatBoundaryVisibleText(b),
+      appendVisibleAssistantMessage: (s, t) => this.sessionManager.appendVisibleAssistantMessage(s, t),
+      synthesizeUserFacingResponse: (p) => this.synthesizeUserFacingResponse(p),
+      persistSessionToMemory: (c, t, f) => this.sessionManager.persistSessionToMemory(c, t as ConversationMessage[], f),
+      getVisibleTranscript: (s) => this.sessionManager.getVisibleTranscript(s),
+    };
+  }
+
+  /** Compose the interactive-only EndTurnContext fields (orchestrator.ts ~5648-5697). */
+  private buildInteractiveEndTurnContext(
+    core: ReflectionCoreContext,
+    runCtx: AgentCorePortRunContext,
+  ): InteractiveEndTurnContext {
+    const identityKey = runCtx.identityKey;
+    const providerCaps = runCtx.lastProviderCapabilities;
+    const executionStrategy = core.executionStrategy;
+    const currentAssignment = core.currentAssignment;
+    return {
+      ...core,
+      systemPrompt: runCtx.systemPrompt,
+      defaultLanguage: this.defaultLanguage,
+      profileLanguage: runCtx.profileLanguage,
+      progressAssessmentEnabled: this.progressAssessmentEnabled,
+      controlLoopTracker: runCtx.controlLoopTracker,
+      runTextConsensusIfCritical: async (p) => {
+        if (!this.consensusManager || !this.confidenceEstimator) return;
+        const textTaskClass = this.taskClassifier.classify(p.prompt);
+        if (textTaskClass.criticality !== "critical") return;
+        const textConfidence = this.confidenceEstimator.estimate({
+          task: textTaskClass,
+          providerName: p.providerName,
+          providerCapabilities: providerCaps ?? ({} as never),
+          agentState: p.agentState,
+          responseLength: p.responseText.length,
+        });
+        await runConsensusVerification({
+          consensusManager: this.consensusManager,
+          availableProviderCount: this.providerManager.listAvailable().length,
+          taskClass: textTaskClass,
+          confidence: textConfidence,
+          originalOutput: { text: p.responseText },
+          originalProviderName: p.providerName,
+          prompt: p.prompt,
+          reviewAssignment: this.resolveConsensusReviewAssignment(executionStrategy.reviewer, currentAssignment, identityKey),
+          chatId: core.chatId,
+          identityKey,
+          logLabel: "text-only, critical",
+          recordExecutionTrace: (rp) => this.recordExecutionTrace(rp as Parameters<typeof this.recordExecutionTrace>[0]),
+          recordPhaseOutcome: (rp) => this.recordPhaseOutcome(rp as Parameters<typeof this.recordPhaseOutcome>[0]),
+        });
+      },
+    };
+  }
+
+  /**
+   * Diagnostic-blocked sanitizer factored from the byte-identical v1 inline at orchestrator.ts
+   * ~5466-5483 / ~5716-5731. Faithful: same DIAGNOSTIC_BLOCKED_RE → task_stuck rewrite + the
+   * loopDetectionBlocked mark. Shared by portDispatchReflection + portDispatchEndTurn.
+   */
+  private sanitizeBlockedVisibleText(raw: string): { text: string; marked: boolean } {
+    if (!raw) return { text: "", marked: false };
+    if (!DIAGNOSTIC_BLOCKED_RE.test(raw)) return { text: raw, marked: false };
+    getLogger().warn("Loop detection blocked task", { diagnostic: raw.slice(0, 500) });
+    const stuckMsg = getResilienceMessage("task_stuck", this.defaultLanguage);
+    const actionMatch = /Suggested action:\s*(.+?)(?:\nFiles t|$)/is.exec(raw);
+    const text = actionMatch?.[1]?.trim()
+      ? `${stuckMsg}\n\n**${actionMatch[1].trim()}**`
+      : stuckMsg;
+    return { text, marked: true };
+  }
+
+  /**
+   * The FULL v1 tool turn behind the port's bound executeToolCalls seam. Runs the exact v1 free-
+   * helper sequence (executeAndTrackTools → controlLoopTracker.markToolExecution → consensus →
+   * recordStepResultsAndCheckReflection → content-blocks → refreshMemoryIfNeeded) and returns BOTH
+   * the trace rows the spine projects AND the advanced AgentState. Faithful to the interactive
+   * (orchestrator.ts ~5774-5879) and background (~4191-4289) tool-execution blocks.
+   *
+   * The spine calls this through `port.executeToolCalls(toolCalls, session, agentState)`; the
+   * positional args are decoded here so the port stays the existing ExecuteToolCallsFn shape.
+   */
+  private async portExecuteToolTurn(
+    args: unknown[],
+    runCtx: AgentCorePortRunContext,
+  ): Promise<AgentCoreToolTurnResult> {
+    const toolCalls = args[0] as ToolCall[];
+    const agentState = (args[2] as AgentState | undefined) ?? createInitialState("");
+    const chatId = runCtx.chatId;
+    const session = runCtx.session;
+    const assignment = runCtx.lastAssignment as SupervisorAssignment;
+    const strategy = runCtx.executionStrategy as SupervisorExecutionStrategy;
+    const lastUserMessage = this.sessionManager.extractLastUserMessage(session);
+
+    // STEP A — assistant-message push + executeToolCalls (CORRECT arg order) + autonomy tracking.
+    const responseText =
+      session.messages.length > 0 ? "" : ""; // the spine pushes no draft text here; v1 pushes response.text
+    const { toolResults } = await executeAndTrackTools({
+      chatId,
+      responseText,
+      toolCalls,
+      session: session as { messages: ConversationMessage[] },
+      executeToolCalls: (c, tc, opts) => this.executeToolCalls(c, tc, opts),
+      executeOptions: {
+        mode: "background",
+        taskPrompt: lastUserMessage,
+        sessionMessages: session.messages,
+        onUsage: runCtx.onUsage,
+        identityKey: runCtx.identityKey,
+        strategy,
+        agentState,
+        touchedFiles: [...runCtx.selfVerification.getState().touchedFiles],
+      },
+      trackingParams: {
+        taskPlanner: runCtx.taskPlanner,
+        selfVerification: runCtx.selfVerification,
+        stradaConformance: runCtx.stradaConformance,
+        errorRecovery: runCtx.errorRecovery,
+        executionJournal: runCtx.executionJournal,
+        agentPhase: agentState.phase,
+        providerName: assignment.providerName,
+        modelId: assignment.modelId,
+        emitToolResult: (c, tc, tr) => this.emitToolResult(c, tc, tr),
+        workerCollector: runCtx.workerCollector ?? undefined,
+      },
+    });
+
+    // STEP B — control-loop tracker mark (per call), as v1 does.
+    if (runCtx.controlLoopTracker) {
+      for (const tc of toolCalls) runCtx.controlLoopTracker.markToolExecution(tc.name);
+    }
+
+    // STEP D — consensus (non-fatal; gated on the managers existing).
+    if (this.consensusManager && this.confidenceEstimator && this.providerRouter) {
+      await runConsensusIfAvailable({
+        consensusManager: this.consensusManager,
+        confidenceEstimator: this.confidenceEstimator,
+        providerManager: this.providerManager,
+        taskClassifier: this.taskClassifier,
+        prompt: lastUserMessage,
+        responseText,
+        toolCalls,
+        currentAssignment: assignment,
+        currentProviderCapabilities: runCtx.lastProviderCapabilities ?? ({} as never),
+        agentState,
+        executionStrategy: strategy,
+        identityKey: runCtx.identityKey,
+        chatId,
+        logLabel: "agent-core",
+        resolveConsensusReviewAssignment: (r, c, k) => this.resolveConsensusReviewAssignment(r, c, k),
+        recordExecutionTrace: (p) => this.recordExecutionTrace(p),
+        recordPhaseOutcome: (p) => this.recordPhaseOutcome(p),
+      }).catch(() => {
+        /* non-fatal */
+      });
+    }
+
+    // STEP E — record step results + PAOR transition (the REAL transition; returns new state).
+    const step = recordStepResultsAndCheckReflection({
+      agentState,
+      toolCalls,
+      toolResults,
+      reflectInterval: REFLECT_INTERVAL_AGENT_CORE,
+    });
+
+    // STEP C+F — content blocks pushed AFTER the REFLECTING transition (E first).
+    const stateCtx = runCtx.taskPlanner.getStateInjection();
+    const providerHealthContext =
+      runCtx.iterationHealth.getTotalFailures() > 0
+        ? `${runCtx.iterationHealth.getTotalFailures()} failure(s), ${(runCtx.iterationHealth.getFailureRate() * 100).toFixed(0)}% failure rate, ${runCtx.iterationHealth.getConsecutiveFailures()} consecutive`
+        : undefined;
+    const blocks = buildToolResultContentBlocks(stateCtx, step.agentState, toolResults, {
+      providerHealthContext,
+    });
+    session.messages.push({
+      role: "user",
+      content: (blocks.length === 1 && stateCtx ? stateCtx : blocks) as unknown as ConversationMessage["content"],
+    } as ConversationMessage);
+
+    // STEP G — memory refresh (non-fatal; reassigns systemPrompt + state).
+    const mem = await refreshMemoryIfNeeded({
+      memoryRefresher: null, // the spine threads its own RunSetup.memoryRefresher; per-turn refresh is opt-in
+      iteration: step.agentState.iteration,
+      queryContext: this.sessionManager.extractLastUserMessage(session),
+      chatId,
+      systemPrompt: runCtx.systemPrompt,
+      agentState: step.agentState,
+    });
+    runCtx.systemPrompt = mem.systemPrompt;
+
+    const trace = toolCalls.map((tc, i) => {
+      const tr = toolResults[i];
+      const touched = (tr?.metadata?.touchedFiles as string[] | undefined) ?? undefined;
+      return {
+        toolName: tc.name,
+        toolCallId: tc.id,
+        success: !(tr?.isError ?? false),
+        errorCategory: tr?.isError ? "tool-error" : undefined,
+        touchedFiles: touched,
+      };
+    });
+
+    return { trace, advancedState: mem.agentState };
   }
 
 }

@@ -60,6 +60,12 @@ import type { ProviderResponse, TokenUsage } from "../../agents/providers/provid
 import type { WorkerUsageEvent } from "../../agents/supervisor/supervisor-types.js";
 import { AgentPhase, createInitialState, type AgentState } from "../../agents/agent-state.js";
 import { getLoggerSafe } from "../../utils/logger.js";
+// Free helpers imported directly by the spine (no `this`). The max_tokens continuation gate +
+// pusher are the v1 shared helpers; nothing here closes over the Orchestrator.
+import {
+  pushContinuationMessages,
+  MAX_TOKENS_CONTINUATION_GATE,
+} from "../../agents/orchestrator-loop-shared.js";
 
 // ───────────────────────────────────────────────────────────────────────────
 // ControlPlane — the thin assembler the spine reads the foundations through.
@@ -218,6 +224,10 @@ export class V2AgentRunner implements AgentRunner {
     const maxEpochs = isInteractive(mode) ? 1 : Number.POSITIVE_INFINITY;
     let epoch = 0;
     let stepNo = 0;
+    // max_tokens continuation runaway guard (gauntlet #12): 3 consecutive truncated-with-no-tools
+    // turns abort the run. Reset on every other path (v1 orchestrator.ts:5346 reset-on-any-non-
+    // truncated-turn).
+    let consecutiveMaxTokens = 0;
     let terminalReason: string | undefined;
     let terminalStatus: TerminalStatus = "completed";
 
@@ -373,12 +383,26 @@ export class V2AgentRunner implements AgentRunner {
         port.recordHealthSuccess(prepared.currentProvider.name);
         const responseText = outcome.response.text;
 
-        // max_tokens continuation (gauntlet #12).
-        if (outcome.response.stopReason === "max_tokens") {
+        // max_tokens continuation (gauntlet #12) — only when the truncated turn carries NO tool
+        // calls. A truncated turn that still emitted tool calls falls through to tool execution.
+        if (outcome.response.stopReason === "max_tokens" && outcome.response.toolCalls.length === 0) {
+          consecutiveMaxTokens++;
+          if (consecutiveMaxTokens >= 3) {
+            log.error(
+              "max_tokens on 3 consecutive calls — aborting to prevent runaway accumulation",
+              { chatId: request.chatId },
+            );
+            terminalReason = "max-tokens-runaway";
+            // interactive break ≈ completed; bg ≈ bgFinishBlocked.
+            terminalStatus = isInteractive(mode) ? "completed" : "blocked";
+            emit({ type: "run.ending", reason: terminalReason });
+            break epochLoop;
+          }
           this.pushContinuation(setup, responseText);
           emit({ type: "step.completed", step: stepNo, phase: state.phase });
           continue;
         }
+        consecutiveMaxTokens = 0; // reset on every non-(toolless-max_tokens) turn (v1 ~5346)
 
         // PLANNING: plan-phase transition + goal decomposition (gauntlet #13,#14,#15).
         if (state.phase === AgentPhase.PLANNING) {
@@ -453,8 +477,8 @@ export class V2AgentRunner implements AgentRunner {
           for (const tc of outcome.response.toolCalls) {
             emit({ type: "tool.started", toolName: tc.name, toolCallId: tc.id });
           }
-          const results = await this.executeTools(setup, outcome.response);
-          for (const tr of results) {
+          const { trace, advancedState } = await this.executeTools(setup, outcome.response, state);
+          for (const tr of trace) {
             toolTrace.push({ toolName: tr.toolName, toolCallId: tr.toolCallId, success: tr.success });
             for (const f of tr.touchedFiles ?? []) touchedFiles.add(f);
             // The learning-bridge sink mirrors tool.finished → "tool:result" (wired on the bus).
@@ -467,8 +491,10 @@ export class V2AgentRunner implements AgentRunner {
               touchedFiles: tr.touchedFiles,
             });
           }
-          // PAOR phase transition (the loop is the sole writer of AgentState).
-          state = this.advanceAfterTools(state);
+          // PAOR phase transition (the loop is the sole writer of AgentState). The REAL port's
+          // tool turn returns the recordStepResultsAndCheckReflection-advanced state; when absent
+          // (mock port returns only the trace) the canonical EXECUTING→REFLECTING move applies.
+          state = advancedState ?? this.advanceAfterTools(state);
           const pc = phaseChangedEvent(prevPhase, state.phase);
           if (pc) emit(pc);
           emit({ type: "step.completed", step: stepNo, phase: state.phase });
@@ -712,42 +738,47 @@ export class V2AgentRunner implements AgentRunner {
   }
 
   /**
-   * max_tokens continuation: push the partial text back into the session so the next turn picks
-   * up where the model was truncated. STUBBED minimally — the rich continuation (the v1
-   * pushContinuationMessages helper + MAX_TOKENS_CONTINUATION_GATE) is a free helper wired in the
-   * route-flip increment; here we keep the transcript advancing so the loop never stalls.
-   * TODO(route-flip): replace with the imported pushContinuationMessages free helper.
+   * max_tokens continuation: push the partial text back + the continuation gate so the next turn
+   * resumes where the model was truncated. Routes through the v1 free helper
+   * `pushContinuationMessages` + `MAX_TOKENS_CONTINUATION_GATE` (the same gate v1 injects).
    */
   private pushContinuation(setup: RunSetup, responseText: string): void {
-    if (responseText) {
-      setup.session.messages.push({ role: "assistant", content: responseText });
-    }
-    setup.session.messages.push({ role: "user", content: "Continue." });
+    pushContinuationMessages(
+      {
+        responseText,
+        session: setup.session as { messages: Array<{ role: string; content: string | unknown[] }> },
+      },
+      MAX_TOKENS_CONTINUATION_GATE,
+    );
   }
 
   /**
-   * Tool execution. DELEGATES to the port's bound executeToolCalls via the free executeAndTrackTools
-   * helper in the route-flip increment; the spine accumulates the trace as events fly. STUBBED here
-   * to call the port's bound executor directly and normalize its result into the trace shape — the
-   * full executeAndTrackTools wiring (consensus, recordStepResults, content-block append, memory
-   * refresh) is the route-flip increment's job.
-   * TODO(route-flip): route through executeAndTrackTools + runConsensusIfAvailable +
-   *   recordStepResultsAndCheckReflection + buildToolResultContentBlocks + refreshMemoryIfNeeded.
+   * Tool execution. DELEGATES the entire v1 tool turn to the port's bound executeToolCalls (the
+   * REAL port runs executeAndTrackTools → controlLoopTracker.markToolExecution → consensus →
+   * recordStepResultsAndCheckReflection → content-block append → refreshMemoryIfNeeded, returning
+   * `{ trace, advancedState }`). The MOCK port returns only the trace array; this method normalizes
+   * BOTH shapes so the V2 unit tests (mock) and the real port both work. The spine stays the sole
+   * writer of AgentState — it applies `advancedState` when the port supplied one.
    */
   private async executeTools(
     setup: RunSetup,
     response: ProviderResponse,
-  ): Promise<
-    {
+    state: AgentState,
+  ): Promise<{
+    trace: {
       toolName: string;
       toolCallId: string;
       success: boolean;
       errorCategory?: string;
       touchedFiles?: readonly string[];
-    }[]
-  > {
+    }[];
+    advancedState?: AgentState;
+  }> {
     const port = this.deps.orchestratorPort;
-    const raw = (await port.executeToolCalls(response.toolCalls, setup.session)) as
+    // The port's executeToolCalls is the existing ExecuteToolCallsFn seam (variadic). We pass the
+    // tool calls, the session, AND the live AgentState (the real port reads the 3rd arg to drive
+    // recordStepResultsAndCheckReflection); the mock ignores extra args.
+    const raw = (await port.executeToolCalls(response.toolCalls, setup.session, state)) as
       | {
           toolName: string;
           toolCallId: string;
@@ -755,16 +786,30 @@ export class V2AgentRunner implements AgentRunner {
           errorCategory?: string;
           touchedFiles?: readonly string[];
         }[]
+      | {
+          trace: {
+            toolName: string;
+            toolCallId: string;
+            success: boolean;
+            errorCategory?: string;
+            touchedFiles?: readonly string[];
+          }[];
+          advancedState?: AgentState;
+        }
       | undefined;
-    return raw ?? [];
+
+    if (Array.isArray(raw)) return { trace: raw };
+    if (raw && typeof raw === "object" && "trace" in raw) {
+      return { trace: raw.trace ?? [], advancedState: raw.advancedState };
+    }
+    return { trace: [] };
   }
 
   /**
-   * PAOR phase transition after a tool turn. The full transition logic
-   * (recordStepResultsAndCheckReflection → transitionPhase) is the route-flip increment's job; here
-   * the spine performs the canonical EXECUTING→REFLECTING move so the loop keeps progressing toward
-   * a reflection boundary (the sole writer of AgentState is the loop).
-   * TODO(route-flip): replace with recordStepResultsAndCheckReflection's returned state.
+   * PAOR phase transition after a tool turn — the FALLBACK applied only when the port did not
+   * return an advanced state (the mock port). The canonical EXECUTING→REFLECTING move keeps the
+   * loop progressing toward a reflection boundary. The REAL port supplies
+   * recordStepResultsAndCheckReflection's returned state instead (see executeTools).
    */
   private advanceAfterTools(state: AgentState): AgentState {
     if (state.phase === AgentPhase.EXECUTING) {
