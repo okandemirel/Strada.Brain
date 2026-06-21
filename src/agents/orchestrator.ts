@@ -8230,6 +8230,31 @@ export class Orchestrator {
   }
 
   /**
+   * Step 0 / gap #3 — build a FRESH per-run session from the request's userContent (v1 parity:
+   * runBackgroundTask :3278-3289). Worker/background/delegated runs use this so parallel runs on one
+   * chatId never collide on a shared persistent session; attachments/vision are seeded here.
+   */
+  private buildFreshRunSession(
+    request: AgentRunSetupInput,
+    queryText: string,
+    supportsVision: boolean,
+  ): Session {
+    const userContent =
+      request.userContent ??
+      buildUserContent(
+        queryText || DEFAULT_IMAGE_PROMPT,
+        request.attachments ? [...request.attachments] : undefined, // readonly → mutable for buildUserContent
+        supportsVision,
+      );
+    const initialUserMessage: ConversationMessage = { role: "user", content: userContent };
+    return {
+      messages: [initialUserMessage],
+      visibleMessages: [initialUserMessage],
+      lastActivity: new Date(),
+    };
+  }
+
+  /**
    * COMPOSE the existing per-run setup helpers (the same callees the inline loop preamble calls)
    * into the {@link PortRunSetup} the spine threads + the {@link AgentCorePortRunContext} the
    * port closes over. Mirrors runAgentLoop's prologue (orchestrator.ts ~4790-4894).
@@ -8253,9 +8278,19 @@ export class Orchestrator {
         this.userProfileStore,
         request.channelType,
       );
-    const session = this.sessionManager.getOrCreateSession(chatId);
     const queryText = request.prompt;
-    const conversationScope = session.conversationScope ?? chatId;
+    const fallbackProvider = this.providerManager.getProvider(identityKey);
+    // Step 0 / gap #3 — worker/background/delegated runs get a FRESH session built from userContent
+    // (v1 parity: runBackgroundTask :3278-3289), so parallel runs on one chatId never collide on a
+    // shared persistent session and attachments/vision are seeded. Interactive keeps the persistent
+    // session (the chat continues across messages).
+    const session: Session =
+      request.mode === "interactive"
+        ? this.sessionManager.getOrCreateSession(chatId)
+        : this.buildFreshRunSession(request, queryText, fallbackProvider.capabilities.vision);
+    // v1 parity (runBackgroundTask :3213): derive the conversation scope from the request, not the
+    // (possibly-shared/fresh) session — a fresh worker session carries no scope field.
+    const conversationScope = resolveConversationScope(chatId, request.conversationId);
 
     const vaultContext = await this.computeVaultContext(queryText);
     const {
@@ -8288,14 +8323,23 @@ export class Orchestrator {
     });
 
     const memoryRefresher = this.sessionManager.createMemoryRefresher(initialContentHashes);
+    // Step 0 / gap #7 — label the metric by the actual run mode (v1 parity: runBackgroundTask uses
+    // "subtask" for delegated sub-agents else "background"; interactive stays "interactive") + thread
+    // parentTaskId for sub-agent lineage. The prior hardcoded "interactive" mislabeled every
+    // worker/background/delegated run and dropped the parent link.
     const metricId = this.metricsRecorder?.startTask({
       sessionId: chatId,
       taskDescription: lastUserMessage.slice(0, 200),
-      taskType: "interactive",
+      taskType:
+        request.mode === "interactive"
+          ? "interactive"
+          : request.parentMetricId
+            ? "subtask"
+            : "background",
+      parentTaskId: request.parentMetricId,
       instinctIds: [],
     });
 
-    const fallbackProvider = this.providerManager.getProvider(identityKey);
     const iterationHealth = new IterationHealthTracker();
     const healthAdapter = new IterationHealthCoreAdapter(iterationHealth, "");
 

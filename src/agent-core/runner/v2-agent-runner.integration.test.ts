@@ -459,4 +459,24 @@ describe("Step 0 — v2 prologue fidelity gaps (behind the route flag; productio
       expect.any(Function),
     );
   });
+
+  it("gap #3: a worker run builds a FRESH session — the shared persistent session is untouched", async () => {
+    const provider = mkScriptedProvider();
+    provider.chat.mockResolvedValue(resp({ text: "done", stopReason: "end_turn" }));
+    const h = buildHarness(provider);
+    const sm = (
+      h.orch as unknown as {
+        sessionManager: { getOrCreateSession: (id: string) => { messages: unknown[] } };
+      }
+    ).sessionManager;
+    // Materialize the shared persistent session for this chatId BEFORE the run; a worker run must NOT
+    // write its transcript into it (the parallel-worker collision gap #3 closes) — it uses a fresh
+    // session built from userContent. Pre-fix the worker pulled getOrCreateSession(chatId) and grew it.
+    const persistent = sm.getOrCreateSession("chat-1");
+    const before = persistent.messages.length;
+
+    await drive(h.clock, h.runner.run(mkRequest(), mkIO("worker")));
+
+    expect(persistent.messages.length).toBe(before); // worker used a FRESH session, not the shared one
+  });
 });

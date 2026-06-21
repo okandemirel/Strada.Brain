@@ -41,7 +41,8 @@
  */
 
 import type { IAIProvider } from "../../agents/providers/provider.interface.js";
-import type { ProviderResponse } from "../../agents/providers/provider-core.interface.js";
+import type { MessageContent, ProviderResponse } from "../../agents/providers/provider-core.interface.js";
+import type { Attachment } from "../../channels/channel-messages.interface.js";
 import type { AgentState } from "../../agents/agent-state.js";
 import type { ExecutionJournal } from "../../agents/autonomy/execution-journal.js";
 import type {
@@ -133,6 +134,10 @@ export interface AgentRunSetupInput {
    *  sessions, profiles, and provider selection. Absent ⇒ falls back to the conversation scope. */
   readonly userId?: string;
   readonly conversationId?: string;
+  /** Multimodal inputs — gap #3 builds a FRESH per-run session from these for worker/background
+   *  (v1 parity: runBackgroundTask :3278-3289), so parallel runs on one chatId never collide. */
+  readonly attachments?: readonly Attachment[];
+  readonly userContent?: string | MessageContent[] | null;
   readonly mode: RunnerModeLike;
   readonly interactiveSession?: unknown;
   readonly assignedProvider?: string;

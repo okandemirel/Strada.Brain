@@ -718,6 +718,8 @@ export class V2AgentRunner implements AgentRunner {
       channelType: String(request.channelType),
       userId: request.userId,
       conversationId: request.conversationId,
+      attachments: request.attachments,
+      userContent: request.userContent,
       mode,
       interactiveSession: request.interactiveSession,
       assignedProvider: request.assignedProvider,
