@@ -88,17 +88,24 @@ every path. See [`plans/agent-core-v2/`](../../plans/agent-core-v2/) for the arc
   `LEGAL_FLAG_SETS` enumerates the valid flag combinations and **rejects anything else at boot**, so
   untested combinations are unreachable by construction.
 
-**Migration status.** Phase 0 (the `AgentRunner` seam over worker/background/supervisor-node) and
-Phase 1 (the control plane wired into the live v1 loop, one concern at a time — `failureLedger`,
-`runClock`, `silenceAccumulator`, `typedCancelReason`) have shipped. **Every flag defaults OFF**, so
-the shipped behavior is byte-identical to v1; the v2 paths are exercised by tests and verified
-before any flag is flipped. Phase 2+ (unified `V2AgentRunner` + ModelGateway + EventBus, per-route
-rollout, scoring/capability unification) and the eventual v1 deletion (gated on a soak) are pending.
+**Migration status.** Phase 0 (the `AgentRunner` seam), Phase 1 (the control plane wired into the
+live v1 loop one concern at a time — `failureLedger`, `runClock`, `silenceAccumulator`,
+`typedCancelReason`), and Phase 2 (the unified `V2AgentRunner` spine + `ModelGateway` + `EventBus`,
+the faithful `OrchestratorPort`, and the **worker + supervisor-node** route selector) have shipped.
+Those two routes are **flip-ready** — the V2 spine runs them via the real port with the workspace
+lease threaded for worktree isolation; equivalence rests on delegating to the same v1 helpers + the
+reflection/assistant-text/tool-mode fixes + a characterization matrix (real-port REFLECTING, the
+max-tokens runaway guard, and a lease-isolation scenario). **Every flag still defaults OFF** (the
+default `all-v1` set), so shipped behavior is byte-identical to v1. Flipping a route is an
+**`AGENT_CORE_FLAG_SET` config change** (see Configuration), not a redeploy; per the plan a flip
+starts the soak that gates the eventual v1 deletion. The interactive route (`handleMessage`),
+scoring/capability unification (Phase 3), and streaming visibility (Phase 5) are pending.
 
 ## Configuration
 
 | Env Var | Default | Description |
 |---------|---------|-------------|
+| `AGENT_CORE_FLAG_SET` | `all-v1` | Active v2 rollout stage — a `LEGAL_FLAG_SETS` id (e.g. `v2-worker-only+full-control-plane` to route worker+supervisor-node tasks through V2). Unknown id → reject-at-boot. |
 | `ROUTING_PRESET` | `balanced` | budget / balanced / performance |
 | `ROUTING_PHASE_SWITCHING` | `true` | Different providers per PAOR phase (orchestrator phases, not OODA) |
 | `CONSENSUS_MODE` | `auto` | auto / critical-only / always / disabled |
