@@ -104,6 +104,7 @@ import { MessageRouter } from "../tasks/index.js";
 import { buildTaskProgressSummary } from "../tasks/progress-signals.js";
 import type { BackgroundExecutor } from "../tasks/background-executor.js";
 import { resolveFlagSetById } from "../agent-core/runner/index.js";
+import { CapabilityRegistry, seedCapabilities, SystemClock } from "../agent-core/control/index.js";
 
 import type { IChannelAdapter } from "../channels/channel.interface.js";
 import type { NodeResult, SupervisorContext, TaggedGoalNode } from "../supervisor/supervisor-types.js";
@@ -982,6 +983,20 @@ async function bootstrapImpl(
     source: rawFlagSetEnv ? "AGENT_CORE_FLAG_SET" : "default",
   });
 
+  // Agent Core v2 — Phase 3b: construct + seed the CapabilityRegistry (tool-substrate liveness) ONLY
+  // when the capabilityRegistry flag is on (the v2-all+scoring+capability legal sets). Seeded here,
+  // where the MCP runtime handle lives, from the live bridge status; held by the orchestrator for the
+  // advertise/guardExecute wiring. No reader yet → behavior-neutral. Default-off → undefined.
+  const capabilityRegistry = agentCoreFlagSet.capabilityRegistry
+    ? (() => {
+        const registry = new CapabilityRegistry(new SystemClock());
+        seedCapabilities(registry, {
+          mcpConnected: toolRegistry.getStradaMcpRuntimeStatus()?.bridgeConnected ?? false,
+        });
+        return registry;
+      })()
+    : undefined;
+
   // Initialize orchestrator
   const orchestrator = new Orchestrator({
     providerManager,
@@ -1045,6 +1060,7 @@ async function bootstrapImpl(
     onSkillCreated: async (skillPath) => { await skillManager.loadSingle(skillPath); },
     getSkillEntries: () => skillManager.getEntries(),
     agentCoreFlagSet,
+    capabilityRegistry,
   });
 
   // Wire FrameworkPromptGenerator to the orchestrator (deferred: IIFE may complete before or after)

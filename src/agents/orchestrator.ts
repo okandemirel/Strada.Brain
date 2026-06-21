@@ -189,6 +189,7 @@ import {
   openRunClock,
   resolveRunBudgetPolicy,
   SystemClock,
+  CapabilityRegistry,
   type CallScope,
   type CancelReason,
   type Clock,
@@ -827,6 +828,10 @@ export class Orchestrator {
   /** Agent Core v2 — Phase 1b. Injectable time source for RunClock; SystemClock in prod,
    *  FakeClock in tests. Only consulted when `agentCoreFlagSet.runClock === true`. */
   private readonly agentCoreClock: Clock;
+  /** Agent Core v2 — Phase 3b. Tool-substrate liveness registry; constructed + seeded by bootstrap
+   *  only when `agentCoreFlagSet.capabilityRegistry === true`. Held for the advertise/guardExecute
+   *  wiring — NO reader yet, so it is behavior-neutral. */
+  private readonly capabilityRegistry?: CapabilityRegistry;
   private readonly sessionManager: SessionManager;
   private systemPrompt: string;
   private readonly getIdentityState?: () => IdentityState;
@@ -1030,6 +1035,8 @@ export class Orchestrator {
     agentCoreFlagSet?: FlagSet;
     /** Agent Core v2 — Phase 1b injectable Clock (defaults to SystemClock). */
     agentCoreClock?: Clock;
+    /** Agent Core v2 — Phase 3b capability registry (seeded by bootstrap when the flag is on). */
+    capabilityRegistry?: CapabilityRegistry;
   }) {
     this.providerManager = opts.providerManager;
     // Vault write-hook lazy-binds when the first Edit/Write tool runs.
@@ -1109,6 +1116,7 @@ export class Orchestrator {
     this.getSkillEntries = opts.getSkillEntries;
     this.agentCoreFlagSet = opts.agentCoreFlagSet;
     this.agentCoreClock = opts.agentCoreClock ?? new SystemClock();
+    this.capabilityRegistry = opts.capabilityRegistry;
 
     // Build tool registry
     this.tools = new Map();
@@ -7985,6 +7993,11 @@ export class Orchestrator {
   /** The injected agent-core clock (SystemClock in prod, FakeClock in tests). */
   getAgentCoreClock(): Clock {
     return this.agentCoreClock;
+  }
+
+  /** The capability registry, when wired (Phase 3b). undefined when the flag is off. */
+  getCapabilityRegistry(): CapabilityRegistry | undefined {
+    return this.capabilityRegistry;
   }
 
   /**

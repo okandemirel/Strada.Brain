@@ -19,3 +19,4 @@ export * from "./verdict-loop-action.js";
 export * from "./control-plane.js";
 export * from "./capability-registry.js";
 export * from "./capability-guard.js";
+export * from "./capability-bindings.js";
