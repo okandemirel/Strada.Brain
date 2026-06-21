@@ -171,7 +171,6 @@ export interface DispatchReflectionParams {
   readonly mode: RunnerModeLike;
   readonly agentState: AgentState;
   readonly decision: "CONTINUE" | "REPLAN" | "DONE" | "DONE_WITH_SUGGESTIONS";
-  readonly wasOverride: boolean;
   readonly responseText: string | undefined;
   readonly chatId: string;
   readonly session: unknown;
@@ -182,6 +181,19 @@ export interface ReflectionDispatchResult {
   /** True when the dispatch resolved to a terminal DONE (→ spine emits run.ending + breaks). */
   readonly terminal: boolean;
   readonly reason?: string;
+}
+
+export interface ParseReflectionDecisionParams {
+  readonly agentState: AgentState;
+  readonly responseText: string | undefined;
+  readonly providerName: string;
+  readonly modelId?: string;
+}
+
+export interface ParsedReflectionDecision {
+  readonly decision: "CONTINUE" | "REPLAN" | "DONE" | "DONE_WITH_SUGGESTIONS";
+  /** True when a heuristic overrode the model's stated decision (DONE→CONTINUE / DONE→REPLAN). */
+  readonly wasOverride: boolean;
 }
 
 export interface DispatchEndTurnParams {
@@ -314,6 +326,15 @@ export interface OrchestratorPort {
   recordHealthSuccess(provider: string): void;
 
   // ════ Reflection + end-turn terminators (gauntlet #12c, #15, #16) ══════════════════
+  /**
+   * Parse the model's reflection preamble into {decision, wasOverride} — v1's
+   * processReflectionPreamble verbatim. The spine calls this FIRST at a REFLECTING boundary, then
+   * threads `decision` into dispatchReflection so the model's own DONE/REPLAN/CONTINUE drives the
+   * boundary — not just the control-plane verdict. Side effects (journal + learning metrics) match
+   * v1 exactly; the spine only consumes the returned decision.
+   */
+  parseReflectionDecision(params: ParseReflectionDecisionParams): Promise<ParsedReflectionDecision>;
+
   /**
    * Dispatch the reflection decision (DONE / REPLAN / CONTINUE) for the active mode. Returns the
    * new AgentState (handlers RETURN newState, never mutate — the loop is sole writer) plus

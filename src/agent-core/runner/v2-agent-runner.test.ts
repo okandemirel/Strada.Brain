@@ -39,6 +39,7 @@ import type {
   OrchestratorPort,
   PreparedIteration,
   ReflectionDispatchResult,
+  ParsedReflectionDecision,
   RunSetup,
 } from "./orchestrator-port.js";
 
@@ -184,6 +185,8 @@ function mkPlane(opts: {
 interface MockPortOptions {
   /** Reflection dispatch result (default: terminal done). */
   reflection?: ReflectionDispatchResult;
+  /** Parsed reflection decision (default: CONTINUE, wasOverride false). */
+  reflectionDecision?: ParsedReflectionDecision;
   /** Tool results returned by the bound executeToolCalls. */
   toolResults?: {
     toolName: string;
@@ -244,6 +247,7 @@ function mkPort(provider: IAIProvider, opts: MockPortOptions = {}): Orchestrator
     synthesizeFinal: ReturnType<typeof vi.fn>;
     dispatchEndTurn: ReturnType<typeof vi.fn>;
     dispatchReflection: ReturnType<typeof vi.fn>;
+    parseReflectionDecision: ReturnType<typeof vi.fn>;
     executeToolCalls: ReturnType<typeof vi.fn>;
     recordHealthSuccess: ReturnType<typeof vi.fn>;
     classifyFailureForVerdict: ReturnType<typeof vi.fn>;
@@ -266,6 +270,10 @@ function mkPort(provider: IAIProvider, opts: MockPortOptions = {}): Orchestrator
           reason: "done",
         },
     ),
+    parseReflectionDecision: vi.fn(
+      async (): Promise<ParsedReflectionDecision> =>
+        opts.reflectionDecision ?? { decision: "CONTINUE", wasOverride: false },
+    ),
     executeToolCalls: vi.fn(async () => opts.toolResults ?? []),
     recordHealthSuccess: vi.fn(),
     classifyFailureForVerdict: vi.fn(() => {
@@ -286,6 +294,7 @@ function mkPort(provider: IAIProvider, opts: MockPortOptions = {}): Orchestrator
     classifyFailureForVerdict: spies.classifyFailureForVerdict,
     recordHealthSuccess: spies.recordHealthSuccess,
     dispatchReflection: spies.dispatchReflection,
+    parseReflectionDecision: spies.parseReflectionDecision,
     dispatchEndTurn: spies.dispatchEndTurn,
     // Default mirrors v1's handlePlanPhaseTransition: a normal plan moves PLANNING→EXECUTING.
     // Tests override planTransitionTo to pin a specific target.
@@ -466,6 +475,95 @@ describe("V2AgentRunner — multi-step run with tool calls", () => {
     expect(types).toContain("tool.finished");
     // PLANNING→EXECUTING and EXECUTING→REFLECTING are real phase moves → phase.changed events.
     expect(types.filter((t) => t === "phase.changed").length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe("V2AgentRunner — D1/D2 spine equivalence (reflection decision routing + assistant text)", () => {
+  it("D1: a parsed DONE reflection terminates AND dispatchReflection receives the parsed decision (not a hardcoded CONTINUE)", async () => {
+    const handles = mkPlane();
+    const provider = mkProvider();
+    // plan → tool turn (→ REFLECTING via the advanceAfterTools fallback) → reflection turn.
+    const gateway = new ModelGateway(
+      scriptedStream([
+        mkResponse({ text: "plan", stopReason: "end_turn" }),
+        mkResponse({ text: "", stopReason: "tool_use", toolCalls: [{ id: "tc-1", name: "edit_file", input: {} }] }),
+        mkResponse({ text: "DONE", stopReason: "end_turn" }),
+      ]),
+    );
+    const port = mkPort(provider, {
+      planTransitionTo: AgentPhase.EXECUTING,
+      toolResults: [{ toolName: "edit_file", toolCallId: "tc-1", success: true }],
+      reflectionDecision: { decision: "DONE", wasOverride: false },
+    });
+    const runner = mkRunner(handles.plane, gateway, port, handles.clock);
+
+    const result = await drive(handles.clock, runner.run(mkRequest(), mkIO("background")));
+
+    expect(result.status).toBe("completed");
+    expect(port.spies.parseReflectionDecision).toHaveBeenCalledTimes(1); // D1: the spine now parses first
+    expect(port.spies.dispatchReflection).toHaveBeenCalledWith(
+      expect.objectContaining({ decision: "DONE" }), // threaded — NOT the old hardcoded "CONTINUE"
+    );
+  });
+
+  it("D1: a parsed CONTINUE reflection continues the loop instead of force-terminating", async () => {
+    const handles = mkPlane();
+    const provider = mkProvider();
+    const gateway = new ModelGateway(
+      scriptedStream([
+        mkResponse({ text: "plan", stopReason: "end_turn" }),
+        mkResponse({ text: "", stopReason: "tool_use", toolCalls: [{ id: "tc-1", name: "edit_file", input: {} }] }),
+        mkResponse({ text: "CONTINUE", stopReason: "end_turn" }), // reflection: continue
+        mkResponse({ text: "now actually done", stopReason: "end_turn" }), // post-reflection EXECUTING → terminal
+      ]),
+    );
+    const port = mkPort(provider, {
+      planTransitionTo: AgentPhase.EXECUTING,
+      toolResults: [{ toolName: "edit_file", toolCallId: "tc-1", success: true }],
+      reflectionDecision: { decision: "CONTINUE", wasOverride: false },
+      // CONTINUE: the dispatch returns the loop to EXECUTING, non-terminal (mirrors v1's continue).
+      reflection: {
+        agentState: { ...createInitialState("do the thing"), phase: AgentPhase.EXECUTING },
+        terminal: false,
+      },
+    });
+    const runner = mkRunner(handles.plane, gateway, port, handles.clock);
+
+    const result = await drive(handles.clock, runner.run(mkRequest(), mkIO("background")));
+
+    expect(result.status).toBe("completed");
+    expect(port.spies.dispatchReflection).toHaveBeenCalledWith(expect.objectContaining({ decision: "CONTINUE" }));
+    // The loop CONTINUED past reflection: the post-reflection EXECUTING step ran end_turn → terminal.
+    expect(port.spies.dispatchEndTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it("D2: the assistant pre-tool text (response.text) is threaded to executeToolCalls", async () => {
+    const handles = mkPlane();
+    const provider = mkProvider();
+    const gateway = new ModelGateway(
+      scriptedStream([
+        mkResponse({ text: "plan", stopReason: "end_turn" }),
+        mkResponse({ text: "thinking before the tools", stopReason: "tool_use", toolCalls: [{ id: "tc-1", name: "edit_file", input: {} }] }),
+        mkResponse({ text: "DONE", stopReason: "end_turn" }),
+      ]),
+    );
+    const port = mkPort(provider, {
+      planTransitionTo: AgentPhase.EXECUTING,
+      toolResults: [{ toolName: "edit_file", toolCallId: "tc-1", success: true }],
+      reflectionDecision: { decision: "DONE", wasOverride: false },
+    });
+    const runner = mkRunner(handles.plane, gateway, port, handles.clock);
+
+    await drive(handles.clock, runner.run(mkRequest(), mkIO("background")));
+
+    // D2: executeToolCalls receives (toolCalls, session, agentState, response.text) — the 4th arg
+    // is the assistant's pre-tool text the port pushes onto the session before the tool results.
+    expect(port.spies.executeToolCalls).toHaveBeenCalledWith(
+      expect.arrayContaining([expect.objectContaining({ name: "edit_file" })]),
+      expect.anything(), // session
+      expect.anything(), // agentState
+      "thinking before the tools", // ← response.text (D2 — was dropped before the fix)
+    );
   });
 });
 

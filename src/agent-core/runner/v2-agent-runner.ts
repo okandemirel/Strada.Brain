@@ -435,13 +435,27 @@ export class V2AgentRunner implements AgentRunner {
           continue;
         }
 
-        // REFLECTING: reflection-boundary verdict → dispatch (gauntlet #12,#13).
+        // REFLECTING: parse the model's decision (v1 processReflectionPreamble) → boundary verdict
+        // → dispatch (gauntlet #12,#13). The model's own DONE/REPLAN/CONTINUE drives the boundary,
+        // not just the control-plane verdict (D1 fix — was hardcoded CONTINUE + always modelProposedDone).
         if (state.phase === AgentPhase.REFLECTING) {
           const prevPhase = state.phase;
+          const parsed = await port.parseReflectionDecision({
+            agentState: state,
+            responseText,
+            providerName: prepared.currentProvider.name,
+            modelId: prepared.currentAssignment.modelId,
+          });
+          if (parsed.wasOverride) {
+            // v1 (orchestrator.ts ~5437): a heuristic override bumps the reflection-override count.
+            state = { ...state, reflectionOverrideCount: state.reflectionOverrideCount + 1 };
+          }
+          const modelProposedDone =
+            parsed.decision === "DONE" || parsed.decision === "DONE_WITH_SUGGESTIONS";
           const reflectionVerdict = ledger.verdict({
             ...this.clockBudgetVerdict(runClock, budget, state),
             taskCancelReason: runClock.taskToken.reason,
-            modelProposedDone: true, // a reflection turn is the model proposing a completion decision
+            modelProposedDone, // only a DONE decision proposes completion (v1-faithful)
           });
           if (reflectionVerdict.decision === "stop") {
             // Terminators win (rule 2/8) over the reflection extend.
@@ -453,8 +467,7 @@ export class V2AgentRunner implements AgentRunner {
           const refl = await port.dispatchReflection({
             mode,
             agentState: state,
-            decision: "CONTINUE", // the port maps the model's parsed decision; spine consumes state
-            wasOverride: reflectionVerdict.decision === "continue",
+            decision: parsed.decision,
             responseText,
             chatId: request.chatId,
             session: setup.session,
@@ -776,9 +789,15 @@ export class V2AgentRunner implements AgentRunner {
   }> {
     const port = this.deps.orchestratorPort;
     // The port's executeToolCalls is the existing ExecuteToolCallsFn seam (variadic). We pass the
-    // tool calls, the session, AND the live AgentState (the real port reads the 3rd arg to drive
-    // recordStepResultsAndCheckReflection); the mock ignores extra args.
-    const raw = (await port.executeToolCalls(response.toolCalls, setup.session, state)) as
+    // tool calls, the session, the live AgentState (the real port reads the 3rd arg to drive
+    // recordStepResultsAndCheckReflection), AND response.text as the 4th arg (D2 fix: the port pushes
+    // it onto the session before the tool results, v1 parity); the mock ignores extra args.
+    const raw = (await port.executeToolCalls(
+      response.toolCalls,
+      setup.session,
+      state,
+      response.text,
+    )) as
       | {
           toolName: string;
           toolCallId: string;

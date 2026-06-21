@@ -319,6 +319,8 @@ import type {
   PreparedIteration as PortPreparedIteration,
   PrepareIterationParams,
   ReflectionDispatchResult,
+  ParseReflectionDecisionParams,
+  ParsedReflectionDecision,
   ResultProjectionParams,
   RunSetup as PortRunSetup,
   SynthesizedFinal,
@@ -361,6 +363,8 @@ interface AgentCorePortRunContext {
   readonly session: Session;
   readonly chatId: string;
   readonly metricId: string | undefined;
+  /** Tool-execution mode for the bound executeToolCalls turn (v1 ToolExecutionMode parity). */
+  readonly toolExecMode: ToolExecutionMode;
   readonly executionJournal: ReturnType<typeof createAutonomyBundle>["executionJournal"];
   readonly selfVerification: ReturnType<typeof createAutonomyBundle>["selfVerification"];
   readonly stradaConformance: ReturnType<typeof createAutonomyBundle>["stradaConformance"];
@@ -8059,6 +8063,9 @@ export class Orchestrator {
       // ── E. reflection + end-turn (COMPOSE handler + ADAPT union→DTO) ─────────────────────────
       dispatchReflection: (params: DispatchReflectionParams): Promise<ReflectionDispatchResult> =>
         self.portDispatchReflection(params, ctx()),
+      parseReflectionDecision: (
+        params: ParseReflectionDecisionParams,
+      ): Promise<ParsedReflectionDecision> => self.portParseReflectionDecision(params, ctx()),
       dispatchEndTurn: (params: DispatchEndTurnParams): Promise<EndTurnDispatchResult> =>
         self.portDispatchEndTurn(params, ctx()),
       handlePlanPhase: (params: PlanPhaseParams): Promise<PlanPhaseResult> =>
@@ -8191,6 +8198,12 @@ export class Orchestrator {
       session,
       chatId,
       metricId,
+      toolExecMode:
+        request.mode === "interactive"
+          ? "interactive"
+          : request.mode === "supervisor-node"
+            ? "delegated" // v1 parity: supervisor-node workers run as the "delegated" tool-exec mode
+            : "background",
       executionJournal: bundle.executionJournal,
       selfVerification: bundle.selfVerification,
       stradaConformance: bundle.stradaConformance,
@@ -8312,6 +8325,29 @@ export class Orchestrator {
       buildPhaseOutcomeTelemetry: (p) => this.buildPhaseOutcomeTelemetry(p),
       usageHandler: runCtx.onUsage,
     };
+  }
+
+  /**
+   * Parse the model's reflection preamble into {decision, wasOverride} — v1's
+   * processReflectionPreamble verbatim (orchestrator.ts ~4001 / ~5432). The spine calls this at a
+   * REFLECTING boundary, then threads `decision` into portDispatchReflection so the model's own
+   * DONE/REPLAN/CONTINUE drives the boundary. Records the reflection into the journal + learning
+   * metrics exactly as v1 (the side effects live inside processReflectionPreamble).
+   */
+  private async portParseReflectionDecision(
+    params: ParseReflectionDecisionParams,
+    runCtx: AgentCorePortRunContext,
+  ): Promise<ParsedReflectionDecision> {
+    const { decision, wasOverride } = await processReflectionPreamble({
+      agentState: params.agentState,
+      executionJournal: runCtx.executionJournal,
+      responseText: params.responseText,
+      providerName: params.providerName,
+      modelId: params.modelId,
+      // v1 parity: the background/delegated loop tags override warnings "(bg)"; interactive none.
+      logLabel: runCtx.toolExecMode === "interactive" ? undefined : "bg",
+    });
+    return { decision, wasOverride };
   }
 
   /**
@@ -8653,8 +8689,9 @@ export class Orchestrator {
     const lastUserMessage = this.sessionManager.extractLastUserMessage(session);
 
     // STEP A — assistant-message push + executeToolCalls (CORRECT arg order) + autonomy tracking.
-    const responseText =
-      session.messages.length > 0 ? "" : ""; // the spine pushes no draft text here; v1 pushes response.text
+    // D2 fix: the spine threads the assistant's pre-tool text as the 4th positional arg; v1 pushes
+    // response.text onto the session before the tool results (executeAndTrackTools does the push).
+    const responseText = (args[3] as string | undefined) ?? "";
     const { toolResults } = await executeAndTrackTools({
       chatId,
       responseText,
@@ -8662,7 +8699,7 @@ export class Orchestrator {
       session: session as { messages: ConversationMessage[] },
       executeToolCalls: (c, tc, opts) => this.executeToolCalls(c, tc, opts),
       executeOptions: {
-        mode: "background",
+        mode: runCtx.toolExecMode, // #3 fix: was hardcoded "background" (broke the interactive route)
         taskPrompt: lastUserMessage,
         sessionMessages: session.messages,
         onUsage: runCtx.onUsage,
