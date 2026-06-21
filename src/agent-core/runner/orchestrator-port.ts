@@ -413,6 +413,20 @@ export interface OrchestratorPort {
   getBackgroundEpochIterationLimit(): number;
   canAutoContinueBackgroundEpoch(completedEpochCount: number): boolean;
   getLiveInteractiveTokenBudget(): number;
+  /**
+   * 3.3 — render the SPECIFIC `token_budget_exceeded` notice (with {used, budget}) on the interactive
+   * token-budget stop, v1 parity (runAgentLoop:5491). Called by the spine ONLY on an interactive
+   * `budget-exhausted:tokens` terminal — instead of the generic `provider_abort`. The port renders
+   * inline (it owns the cumulative-output counter + the session), exactly as v1 did in the loop body;
+   * the checkpoint is already saved by the spine. `budget-exhausted:tokens` is in the interactive
+   * skip-set so the resilience adapter does NOT also render an abort on top.
+   *
+   * NOTE (deferred): this surfaces the static control-plane budget stop with the right message; it does
+   * NOT honor a mid-task `/token` RAISE (v1 re-read the live budget each iteration). The raise needs the
+   * interactive control-plane Budget to be unlimited so a live gate is authoritative — a control-plane
+   * change deferred as a niche follow-up.
+   */
+  renderInteractiveBudgetExceeded(): Promise<void>;
 
   // ════ Intent ack (≤2s contract, §6) ════════════════════════════════════════════════
   /**

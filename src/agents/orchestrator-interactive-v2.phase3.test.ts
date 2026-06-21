@@ -24,6 +24,8 @@ import { Orchestrator } from "./orchestrator.js";
 import type { ProviderResponse } from "./providers/provider.interface.js";
 import { FakeClock } from "../agent-core/control/clock.js";
 import { resolveFlagSetById } from "../agent-core/runner/index.js";
+import { DEFAULT_TASK_CONFIG } from "../config/config.js";
+import type { TaskConfig } from "../config/config.js";
 
 // ─── Logger + knowledge mocks (mirror orchestrator-runclock.phase1c.test.ts) ──
 
@@ -171,10 +173,12 @@ function makeOrchestrator(opts: {
   clock?: FakeClock;
   streamInitialTimeoutMs?: number;
   streamStallTimeoutMs?: number;
+  tools?: ReturnType<typeof createMockTool>[];
+  taskConfig?: Partial<TaskConfig>;
 }) {
   return new Orchestrator({
     providerManager: makeProviderManager(opts.provider),
-    tools: [],
+    tools: opts.tools ?? [],
     channel: opts.channel,
     projectPath: "/tmp/test-project",
     readOnly: false,
@@ -184,7 +188,42 @@ function makeOrchestrator(opts: {
     agentCoreFlagSet: opts.flagSet,
     ...(opts.streamInitialTimeoutMs ? { streamInitialTimeoutMs: opts.streamInitialTimeoutMs } : {}),
     ...(opts.streamStallTimeoutMs ? { streamStallTimeoutMs: opts.streamStallTimeoutMs } : {}),
+    ...(opts.taskConfig ? { taskConfig: { ...DEFAULT_TASK_CONFIG, ...opts.taskConfig } } : {}),
   });
+}
+
+/** A mock tool that always succeeds — lets a looping provider drive iterations without ending. */
+function createMockTool(name: string) {
+  return {
+    name,
+    description: `Mock ${name} tool`,
+    inputSchema: { type: "object", properties: {} },
+    execute: vi.fn().mockResolvedValue({ content: `${name} ok` }),
+  };
+}
+
+/** Provider that ALWAYS returns a tool call → the interactive loop never reaches end_turn, so it
+ *  exhausts its iteration budget (drives the 3.4 max-iterations notice). */
+function createLoopingProvider(toolName: string) {
+  const chat = vi.fn(async (): Promise<ProviderResponse> => ({
+    text: "still working",
+    toolCalls: [{ id: "tc-1", name: toolName, input: {} }],
+    stopReason: "tool_use" as const,
+    usage: { inputTokens: 10, outputTokens: 20 },
+  }));
+  return { name: "mock-loop", capabilities: CAP, chat };
+}
+
+/** Provider that burns a large OUTPUT-token count each call → trips a low interactive token budget
+ *  (drives the 3.3 budget-exceeded notice). */
+function createBudgetBurnerProvider() {
+  const chat = vi.fn(async (): Promise<ProviderResponse> => ({
+    text: "burning tokens",
+    toolCalls: [],
+    stopReason: "end_turn" as const,
+    usage: { inputTokens: 10, outputTokens: 5000 },
+  }));
+  return { name: "mock-burn", capabilities: CAP, chat };
 }
 
 /** Count of channel renders of the terminal answer for a given chat. */
@@ -308,9 +347,9 @@ describe("Step 3 — interactive route flip (v2 spine vs v1 loop, no double-rend
     const adapter = orch as unknown as {
       renderInteractiveResilienceEvent(e: unknown, language: string, enqueue: (t: string) => void): void;
     };
-    const render = (e: unknown): string[] => {
+    const render = (e: unknown, language = "en"): string[] => {
       const out: string[] = [];
-      adapter.renderInteractiveResilienceEvent(e, "en", (t) => out.push(t));
+      adapter.renderInteractiveResilienceEvent(e, language, (t) => out.push(t));
       return out;
     };
 
@@ -342,6 +381,12 @@ describe("Step 3 — interactive route flip (v2 spine vs v1 loop, no double-rend
     // these must skip, else a successful plan-review or goal handoff renders a spurious abort.
     expect(render({ type: "run.ending", reason: "plan-review" })).toEqual([]);
     expect(render({ type: "run.ending", reason: "goal-handoff" })).toEqual([]);
+    // 3.4 max-iterations → dedicated arm renders the localized "max steps" notice (NOT skip, NOT abort).
+    expect(render({ type: "run.ending", reason: "max-iterations" })[0]).toContain("maximum number of steps");
+    // Localization is the point of 3.4's arm over v1's hardcoded English: a tr language renders the tr notice.
+    expect(render({ type: "run.ending", reason: "max-iterations" }, "tr")[0]).toContain("maksimum adım");
+    // 3.3 interactive token-budget stop → skip-set (the port already rendered the specific notice inline).
+    expect(render({ type: "run.ending", reason: "budget-exhausted:tokens" })).toEqual([]);
     // non-user-facing lifecycle events → no-op
     expect(render({ type: "step.completed", step: 1, phase: "EXECUTING" })).toEqual([]);
     expect(render({ type: "heartbeat", source: "model-keepalive" })).toEqual([]);
@@ -445,5 +490,56 @@ describe("Step 3 — interactive route flip (v2 spine vs v1 loop, no double-rend
       }
     ).sessionManager;
     expect(sm.getPendingPlanReviewVisibleText("v2-prec-1")).toBeFalsy();
+  });
+
+  it("flag ON (v2): 3.4 — exhausting the iteration budget renders the 'max steps' notice, not an abort", async () => {
+    const channel = createMockChannel();
+    const orch = makeOrchestrator({
+      provider: createLoopingProvider("noop"),
+      channel,
+      flagSet: resolveFlagSetById("v2-all-routes+full-control-plane"),
+      tools: [createMockTool("noop")],
+      taskConfig: { interactiveMaxIterations: 2 }, // exhaust fast: 2 looping iterations → max-iterations
+    });
+
+    await orch.handleMessage({
+      channelType: "cli",
+      chatId: "v2-maxiter-1",
+      userId: "u1",
+      text: "do a long thing",
+      timestamp: new Date(),
+    });
+
+    const rendered = channel.sendMarkdown.mock.calls
+      .filter((c: unknown[]) => c[0] === "v2-maxiter-1")
+      .map((c: unknown[]) => c[1] as string);
+    // v1 "Hit max iterations" parity: the localized max_steps_reached notice renders, NOT a provider_abort.
+    expect(rendered.some((m) => m.includes("maximum number of steps"))).toBe(true);
+    expect(rendered.some((m) => m.includes("Unable to complete"))).toBe(false);
+  });
+
+  it("flag ON (v2): 3.3 — exceeding the live token budget renders the token-budget notice, not an abort", async () => {
+    const channel = createMockChannel();
+    const orch = makeOrchestrator({
+      provider: createBudgetBurnerProvider(),
+      channel,
+      flagSet: resolveFlagSetById("v2-all-routes+full-control-plane"),
+      taskConfig: { interactiveTokenBudget: 1000 }, // 1000 output-token cap; the provider burns 5000/call
+    });
+
+    await orch.handleMessage({
+      channelType: "cli",
+      chatId: "v2-budget-1",
+      userId: "u1",
+      text: "burn it",
+      timestamp: new Date(),
+    });
+
+    const rendered = channel.sendMarkdown.mock.calls
+      .filter((c: unknown[]) => c[0] === "v2-budget-1")
+      .map((c: unknown[]) => c[1] as string);
+    // v1 parity: the specific token_budget_exceeded notice renders inline (port-side), NOT a provider_abort.
+    expect(rendered.some((m) => m.includes("Token budget exceeded"))).toBe(true);
+    expect(rendered.some((m) => m.includes("Unable to complete"))).toBe(false);
   });
 });

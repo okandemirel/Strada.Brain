@@ -272,6 +272,13 @@ export class V2AgentRunner implements AgentRunner {
           terminalStatus = gate.finalize === "hard" ? "failed" : "completed";
           if (gate.reason.kind === "budget-exhausted") {
             await port.saveBudgetExceededCheckpoint(this.budgetCheckpoint(request, budget));
+            // 3.3: on the INTERACTIVE token-budget stop, render the SPECIFIC token_budget_exceeded
+            // notice (with {used, budget}) instead of the generic provider_abort — v1 parity. The port
+            // renders inline (it owns the cumulative-output counter + session); "budget-exhausted:tokens"
+            // is in the interactive skip-set so the adapter does NOT also render an abort.
+            if (isInteractive(mode) && gate.reason.resource === "tokens") {
+              await port.renderInteractiveBudgetExceeded();
+            }
           }
           emit({ type: "run.ending", reason: terminalReason });
           break epochLoop;
@@ -558,7 +565,15 @@ export class V2AgentRunner implements AgentRunner {
       } // end iteration for
 
       // ══ Epoch rollover (gauntlet #1,#22; non-interactive only) ════════════════════════
-      if (isInteractive(mode)) break;
+      if (isInteractive(mode)) {
+        // 3.4: interactive exhausted its iteration budget (the inner `for` completed without an
+        // end_turn/done/stop). v1 (runAgentLoop "Hit max iterations") rendered a "send a follow-up"
+        // notice here; emit a distinct terminal so the interactive adapter renders it. terminalStatus
+        // stays "completed" (a benign budget-reached end, not a failure) — only an event is added.
+        terminalReason = "max-iterations";
+        emit({ type: "run.ending", reason: terminalReason });
+        break;
+      }
       if (!port.canAutoContinueBackgroundEpoch(epoch + 1)) {
         emit({ type: "run.ending", reason: "epoch-budget-exhausted" });
         break;

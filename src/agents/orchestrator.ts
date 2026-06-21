@@ -373,6 +373,8 @@ const INTERACTIVE_NON_ABORT_RUN_ENDING_REASONS: ReadonlySet<string> = new Set([
   "epoch-budget-exhausted",
   "plan-review", // Step 3 (3.5): plan presented for review + run terminated — the plan was rendered
   "goal-handoff", // Step 3 (3.6): goal handed to a background task + run terminated — ack was rendered
+  "budget-exhausted:tokens", // Step 3 (3.3): interactive token-budget stop — port renders the specific
+  // token_budget_exceeded notice inline (with {used,budget}), so the adapter must not add a generic abort.
 ]);
 /** Self-improvement tools bypass phase-based write filtering — they have their own guards. */
 const SELF_IMPROVEMENT_TOOLS: ReadonlySet<string> = new Set([
@@ -436,6 +438,10 @@ interface AgentCorePortRunContext {
   lastAssignment: SupervisorAssignment | undefined;
   lastToolNames: string[];
   lastProviderCapabilities: IAIProvider["capabilities"] | undefined;
+  // 3.3: cumulative OUTPUT tokens for the interactive live token-budget gate (v1's cumulativeOutputTokens,
+  // orchestrator.ts:5209). Accumulated in recordProviderUsage; read by checkInteractiveBudget. Output-only
+  // — input re-counts the growing context each iteration and would kill a stable working set (audit #3).
+  cumulativeOutputTokens: number;
   readonly taskStartedAtMs: number;
   readonly progressLanguage: ProgressLanguage;
   readonly progressTitle: string;
@@ -1581,6 +1587,14 @@ export class Orchestrator {
         enqueue(e.visibleText);
         return;
       case "run.ending":
+        if (e.reason === "max-iterations") {
+          // 3.4: the interactive run exhausted its step budget — render the "send a follow-up" notice
+          // (v1 runAgentLoop "Hit max iterations" parity), NOT a provider_abort. Localized via the
+          // resilience key (v1 hardcoded English). Dedicated arm — NOT a skip-set entry (the skip-set
+          // means "already rendered, do nothing"; here we render a specific notice).
+          enqueue(getResilienceMessage("max_steps_reached", language));
+          return;
+        }
         if (!INTERACTIVE_NON_ABORT_RUN_ENDING_REASONS.has(e.reason)) {
           enqueue(getResilienceMessage("provider_abort", language));
         }
@@ -2864,6 +2878,27 @@ export class Orchestrator {
       touchedFiles: [],
       budgetState: { used: params.used, budget: params.budget },
     });
+  }
+
+  /**
+   * 3.3 — render the SPECIFIC `token_budget_exceeded` notice on the interactive token-budget stop (v1
+   * runAgentLoop:5491 parity), instead of the generic provider_abort. {used} = the run's cumulative
+   * OUTPUT tokens (the "fresh work" metric; input re-counts the growing context — audit #3); {budget} =
+   * the live interactive cap (== the enforced static cap for the common no-mid-task-change case).
+   * Localized via the user profile (v1 used the same). The checkpoint is already saved by the spine.
+   */
+  private async portRenderInteractiveBudgetExceeded(runCtx: AgentCorePortRunContext): Promise<void> {
+    const tokenBudget = this.getLiveInteractiveTokenBudget();
+    const language = (this.userProfileStore?.getProfile(runCtx.identityKey)?.language ??
+      this.defaultLanguage) as string;
+    await this.sessionManager.sendVisibleAssistantMarkdown(
+      runCtx.chatId,
+      runCtx.session,
+      getResilienceMessage("token_budget_exceeded", language, {
+        used: Math.round(runCtx.cumulativeOutputTokens / 1000),
+        budget: Math.round(tokenBudget / 1000),
+      }),
+    );
   }
 
   private buildWorkerToolDefinitions(
@@ -8303,8 +8338,11 @@ export class Orchestrator {
           taskRunId: params.taskRunId,
           reason: params.reason,
         }),
-      recordProviderUsage: (providerName, usage) =>
-        self.recordProviderUsage(providerName, usage, ctx().onUsage), // CURRY onUsage
+      recordProviderUsage: (providerName, usage) => {
+        const c = ctx();
+        self.recordProviderUsage(providerName, usage, c.onUsage); // CURRY onUsage
+        c.cumulativeOutputTokens += usage?.outputTokens ?? 0; // 3.3: feed the interactive budget gate (output-only)
+      },
       saveBudgetExceededCheckpoint: (params) => self.saveBudgetExceededCheckpoint(params),
 
       // ── D. the verdict bridge (ADAPT: record into tracker, RETURN INPUT, no verdict) ─────────
@@ -8344,6 +8382,7 @@ export class Orchestrator {
       getBackgroundEpochIterationLimit: () => self.getBackgroundEpochIterationLimit(),
       canAutoContinueBackgroundEpoch: (n) => self.canAutoContinueBackgroundEpoch(n),
       getLiveInteractiveTokenBudget: () => self.getLiveInteractiveTokenBudget(),
+      renderInteractiveBudgetExceeded: () => self.portRenderInteractiveBudgetExceeded(ctx()),
 
       // ── H. GAP: classifyIntent → mirror the spine's first-clause fallback ────────────────────
       classifyIntent: async (prompt: string) => firstClause(prompt),
@@ -8645,6 +8684,7 @@ export class Orchestrator {
       lastAssignment: undefined,
       lastToolNames: [],
       lastProviderCapabilities: undefined,
+      cumulativeOutputTokens: 0,
       taskStartedAtMs: Date.now(),
       progressLanguage: this.defaultLanguage as ProgressLanguage,
       progressTitle: queryText.replace(/\s+/g, " ").trim().slice(0, 80) || "Task",
