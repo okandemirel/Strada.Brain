@@ -423,6 +423,14 @@ interface AgentCorePortRunContext {
   readonly taskPlanner: ReturnType<typeof createAutonomyBundle>["taskPlanner"];
   readonly controlLoopTracker: NonNullable<ReturnType<typeof createAutonomyBundle>["controlLoopTracker"]> | undefined;
   systemPrompt: string;
+  /**
+   * H2: per-run guard so proactive goal decomposition runs AT MOST ONCE (v1 parity).
+   * v1 decomposes on the first PLANNING then transitions to EXECUTING; the v2 spine
+   * re-enters PLANNING on every epoch rollover, which without this guard re-runs
+   * decomposeProactive → a FRESH goal tree (dag_init) each epoch, discarding progress
+   * and spraying the DAG/Kanban monitor. Flipped true by the decomposeGoalsIfPlanning binding.
+   */
+  goalsDecomposed: boolean;
   readonly identityKey: string;
   // Step 3 (3.5/3.6) — the interactive PLANNING-phase divergences need these: `userId` for the
   // autonomous-mode check (3.5 plan-review gate); `channelType`/`attachments`/`conversationScope`
@@ -8341,14 +8349,19 @@ export class Orchestrator {
         self.portDispatchEndTurn(params, ctx()),
       handlePlanPhase: (params: PlanPhaseParams): Promise<PlanPhaseResult> =>
         self.portHandlePlanPhase(params, ctx()),
-      decomposeGoalsIfPlanning: async (params) =>
-        self.runProactiveGoalDecomposition({
+      decomposeGoalsIfPlanning: async (params) => {
+        // H2: once-per-run guard (rationale on AgentCorePortRunContext.goalsDecomposed).
+        const c = ctx();
+        if (c.goalsDecomposed) return params.agentState;
+        c.goalsDecomposed = true;
+        return self.runProactiveGoalDecomposition({
           conversationScope: params.chatId,
-          userMessage: self.sessionManager.extractLastUserMessage(ctx().session),
+          userMessage: self.sessionManager.extractLastUserMessage(c.session),
           chatId: params.chatId,
-          session: ctx().session,
+          session: c.session,
           agentState: params.agentState,
-        }),
+        });
+      },
 
       // ── F. tool execution (the bound FULL TOOL TURN; see portExecuteToolTurn) ────────────────
       executeToolCalls: (async (...args: unknown[]) =>
@@ -8656,6 +8669,7 @@ export class Orchestrator {
       taskPlanner: bundle.taskPlanner,
       controlLoopTracker: bundle.controlLoopTracker ?? undefined,
       systemPrompt,
+      goalsDecomposed: false,
       identityKey,
       userId: request.userId,
       channelType: request.channelType,

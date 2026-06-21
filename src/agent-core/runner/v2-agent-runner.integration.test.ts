@@ -31,6 +31,7 @@ import type { ProviderResponse } from "../../agents/providers/provider-core.inte
 import type { WorkspaceLease } from "../../agents/supervisor/supervisor-types.js";
 import { DEFAULT_TASK_CONFIG } from "../../config/config.js";
 import type { TaskConfig } from "../../config/config.js";
+import { createInitialState, type AgentState } from "../../agents/agent-state.js";
 
 // Logger + strada-knowledge module mocks — copied from orchestrator.test.ts so the Orchestrator
 // boots without a real project / SQLite / network.
@@ -188,7 +189,7 @@ function buildHarness(
   const { port, gateway, seed, createHealthCore } = orch.createAgentCorePort();
   const controlPlane = createControlPlane({ clock, seed, createHealthCore }); // no learning sink
   const runner = new V2AgentRunner({ controlPlane, gateway, orchestratorPort: port, clock } as V2RunnerDeps);
-  return { clock, channel, provider, tools, runner, getProvider, orch };
+  return { clock, channel, provider, tools, runner, getProvider, orch, port };
 }
 
 describe("V2AgentRunner — REAL port + REAL gateway (provider.chat scripted)", () => {
@@ -310,6 +311,40 @@ describe("V2AgentRunner — REAL port + REAL gateway (provider.chat scripted)", 
     expect(result.status).not.toBe("completed");
     // A handful of calls (1 plan + a few consecutive failures), far below the epoch cap (~16 pre-fix).
     expect(provider.chat.mock.calls.length).toBeLessThan(10);
+  });
+
+  it("H2 (decompose idempotency): proactive goal decomposition runs at most once per run", async () => {
+    // The v2 spine re-enters PLANNING on each REPLAN cycle; without the per-run guard in the
+    // decomposeGoalsIfPlanning binding, every re-entry re-runs decomposeProactive → a FRESH goal
+    // tree (dag_init), discarding progress and spraying the DAG/Kanban monitor. Guard = once per run.
+    const provider = mkScriptedProvider();
+    const h = buildHarness(provider);
+    // Populate the per-run context cell the binding reads (ctx().goalsDecomposed). setupRun is the
+    // REAL prologue; drive() pumps the FakeClock in case it awaits internally.
+    const setupInput = (
+      h.runner as unknown as {
+        toSetupInput: (r: AgentRunRequest, m: RunnerMode) => Parameters<typeof h.port.setupRun>[0];
+      }
+    ).toSetupInput(mkRequest(), "background");
+    await drive(h.clock, h.port.setupRun(setupInput));
+    // Spy the underlying decompose the binding calls — bypasses goalDecomposer/tree wiring; we are
+    // asserting the GUARD, not decomposition itself.
+    const decompSpy = vi
+      .spyOn(
+        h.orch as unknown as {
+          runProactiveGoalDecomposition: (o: { agentState: AgentState }) => Promise<AgentState>;
+        },
+        "runProactiveGoalDecomposition",
+      )
+      .mockImplementation(async (o: { agentState: AgentState }) => o.agentState);
+    const state = createInitialState("do the thing");
+
+    // Three PLANNING entries (initial + two REPLAN re-entries) on the SAME run.
+    for (let i = 0; i < 3; i++) {
+      await h.port.decomposeGoalsIfPlanning({ agentState: state, responseText: "plan", chatId: "chat-1" });
+    }
+
+    expect(decompSpy).toHaveBeenCalledTimes(1); // once-per-run, NOT once-per-PLANNING-entry
   });
 
   it("E (P-E): reaches the REAL REFLECTING boundary → real parseReflectionDecision drives termination", async () => {
