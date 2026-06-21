@@ -65,6 +65,7 @@ import { getLoggerSafe } from "../../utils/logger.js";
 import {
   pushContinuationMessages,
   MAX_TOKENS_CONTINUATION_GATE,
+  firstClause,
 } from "../../agents/orchestrator-loop-shared.js";
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -157,14 +158,6 @@ function newRunId(): string {
   return `run-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-/** The first clause of the prompt — the ack fallback when no classifier resolves in time. */
-function firstClause(prompt: string): string {
-  const trimmed = prompt.trim();
-  const cut = trimmed.search(/[.!?\n]/);
-  const clause = (cut === -1 ? trimmed : trimmed.slice(0, cut)).trim();
-  return clause.length > 0 ? clause.slice(0, 120) : "Working on your request.";
-}
-
 /** What the gateway call collapsed to: a real response, an empty response, or a throw. */
 type StepOutcome =
   | { readonly kind: "ok"; readonly response: ProviderResponse }
@@ -184,6 +177,14 @@ function phaseChangedEvent(
 ): { type: "phase.changed"; from: AgentPhase; to: AgentPhase } | null {
   return from === to ? null : { type: "phase.changed", from, to };
 }
+
+/** AgentPhase → execution-trace phase string. Hoisted: built once, not re-allocated per step. */
+const PHASE_TRACE_MAP: Record<string, RecordExecutionTraceParams["phase"]> = {
+  [AgentPhase.PLANNING]: "planning",
+  [AgentPhase.EXECUTING]: "executing",
+  [AgentPhase.REFLECTING]: "reflecting",
+  [AgentPhase.REPLANNING]: "replanning",
+};
 
 export class V2AgentRunner implements AgentRunner {
   constructor(private readonly deps: V2RunnerDeps) {}
@@ -734,17 +735,11 @@ export class V2AgentRunner implements AgentRunner {
     state: AgentState,
     setup: RunSetup,
   ): RecordExecutionTraceParams {
-    const phaseMap: Record<string, RecordExecutionTraceParams["phase"]> = {
-      [AgentPhase.PLANNING]: "planning",
-      [AgentPhase.EXECUTING]: "executing",
-      [AgentPhase.REFLECTING]: "reflecting",
-      [AgentPhase.REPLANNING]: "replanning",
-    };
     return {
       chatId: request.chatId,
       identityKey: setup.identityKey,
       assignment: prepared.currentAssignment,
-      phase: phaseMap[state.phase] ?? "executing",
+      phase: PHASE_TRACE_MAP[state.phase] ?? "executing",
       task: prepared.executionStrategy.task,
       taskRunId: request.taskRunId,
     };

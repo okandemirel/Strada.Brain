@@ -215,6 +215,7 @@ import {
   checkPendingBlocks,
   pushContinuationMessages,
   MAX_TOKENS_CONTINUATION_GATE,
+  firstClause,
 } from "./orchestrator-loop-shared.js";
 import { createAutonomyBundle } from "./orchestrator-autonomy-tracker.js";
 import {
@@ -387,13 +388,6 @@ interface AgentCorePortRunContext {
   readonly profileLanguage: string | undefined;
 }
 
-/** The first clause of the prompt — the v2 ack fallback (mirrors v2-agent-runner.ts firstClause). */
-function firstClauseForAck(prompt: string): string {
-  const trimmed = prompt.trim();
-  const cut = trimmed.search(/[.!?\n]/);
-  const clause = (cut === -1 ? trimmed : trimmed.slice(0, cut)).trim();
-  return clause.length > 0 ? clause.slice(0, 120) : "Working on your request.";
-}
 /** 1b/1c seed default for the task-scope silence ceiling: the shared
  *  {@link DEFAULT_TASK_INACTIVITY_TIMEOUT_MS} (600_000), imported from config (config-only,
  *  NOT the bg-executor) so the interactive path and the background executor read ONE source.
@@ -8090,7 +8084,7 @@ export class Orchestrator {
       getLiveInteractiveTokenBudget: () => self.getLiveInteractiveTokenBudget(),
 
       // ── H. GAP: classifyIntent → mirror the spine's first-clause fallback ────────────────────
-      classifyIntent: async (prompt: string) => firstClauseForAck(prompt),
+      classifyIntent: async (prompt: string) => firstClause(prompt),
 
       // ── Terminal ─────────────────────────────────────────────────────────────────────────────
       synthesizeFinal: (_state: AgentState, _mode): SynthesizedFinal => {
@@ -8413,17 +8407,11 @@ export class Orchestrator {
       case "continue":
         return { agentState: action.newState, terminal: false };
       case "done": {
-        const safe = this.sanitizeBlockedVisibleText(action.visibleText ?? "");
-        if (safe.text) {
-          await this.sessionManager.sendVisibleAssistantMarkdown(chatId, runCtx.session, safe.text);
-        }
+        await this.emitVisibleBoundary(chatId, runCtx.session, action.visibleText);
         return { agentState: action.newState, terminal: true, reason: action.status ?? "done" };
       }
       case "blocked": {
-        const safe = this.sanitizeBlockedVisibleText(action.visibleText ?? "");
-        if (safe.text) {
-          await this.sessionManager.sendVisibleAssistantMarkdown(chatId, runCtx.session, safe.text);
-        }
+        const safe = await this.emitVisibleBoundary(chatId, runCtx.session, action.visibleText);
         return {
           agentState: safe.marked
             ? { ...params.agentState, loopDetectionBlocked: true }
@@ -8455,17 +8443,11 @@ export class Orchestrator {
 
     switch (action.flow) {
       case "done": {
-        const safe = this.sanitizeBlockedVisibleText(action.visibleText ?? "");
-        if (safe.text) {
-          await this.sessionManager.sendVisibleAssistantMarkdown(chatId, runCtx.session, safe.text);
-        }
+        const safe = await this.emitVisibleBoundary(chatId, runCtx.session, action.visibleText);
         return { agentState: action.newState, finalText: safe.text };
       }
       case "blocked": {
-        const safe = this.sanitizeBlockedVisibleText(action.visibleText ?? "");
-        if (safe.text) {
-          await this.sessionManager.sendVisibleAssistantMarkdown(chatId, runCtx.session, safe.text);
-        }
+        const safe = await this.emitVisibleBoundary(chatId, runCtx.session, action.visibleText);
         return {
           agentState: safe.marked
             ? { ...params.agentState, loopDetectionBlocked: true }
@@ -8654,6 +8636,23 @@ export class Orchestrator {
    * ~5466-5483 / ~5716-5731. Faithful: same DIAGNOSTIC_BLOCKED_RE → task_stuck rewrite + the
    * loopDetectionBlocked mark. Shared by portDispatchReflection + portDispatchEndTurn.
    */
+  /**
+   * Sanitize a handler's visible text and, when non-empty, render it to the channel; returns the
+   * sanitized {text, marked} so callers apply the loop-block mark. Centralizes the sanitize→emit
+   * boundary the reflection + end-turn dispatch arms shared (4 copies → 1).
+   */
+  private async emitVisibleBoundary(
+    chatId: string,
+    session: Session,
+    visibleText: string | undefined,
+  ): Promise<{ text: string; marked: boolean }> {
+    const safe = this.sanitizeBlockedVisibleText(visibleText ?? "");
+    if (safe.text) {
+      await this.sessionManager.sendVisibleAssistantMarkdown(chatId, session, safe.text);
+    }
+    return safe;
+  }
+
   private sanitizeBlockedVisibleText(raw: string): { text: string; marked: boolean } {
     if (!raw) return { text: "", marked: false };
     if (!DIAGNOSTIC_BLOCKED_RE.test(raw)) return { text: raw, marked: false };
@@ -8762,10 +8761,8 @@ export class Orchestrator {
 
     // STEP C+F — content blocks pushed AFTER the REFLECTING transition (E first).
     const stateCtx = runCtx.taskPlanner.getStateInjection();
-    const providerHealthContext =
-      runCtx.iterationHealth.getTotalFailures() > 0
-        ? `${runCtx.iterationHealth.getTotalFailures()} failure(s), ${(runCtx.iterationHealth.getFailureRate() * 100).toFixed(0)}% failure rate, ${runCtx.iterationHealth.getConsecutiveFailures()} consecutive`
-        : undefined;
+    // Reuse the centralizing helper (single source for the user-facing health string + the guard).
+    const providerHealthContext = runCtx.iterationHealth.buildHealthSummary();
     const blocks = buildToolResultContentBlocks(stateCtx, step.agentState, toolResults, {
       providerHealthContext,
     });
@@ -8778,6 +8775,8 @@ export class Orchestrator {
     const mem = await refreshMemoryIfNeeded({
       memoryRefresher: null, // the spine threads its own RunSetup.memoryRefresher; per-turn refresh is opt-in
       iteration: step.agentState.iteration,
+      // NOTE: a fresh extract here (NOT the top-of-turn lastUserMessage local) — the tool-result
+      // content-block was pushed above, so this intentionally re-scans to the latest user message.
       queryContext: this.sessionManager.extractLastUserMessage(session),
       chatId,
       systemPrompt: runCtx.systemPrompt,

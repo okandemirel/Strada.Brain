@@ -27,6 +27,18 @@ import type { MemoryRefresher } from "./memory-refresher.js";
 import type { ProviderResponse } from "./providers/provider.interface.js";
 import { getLoggerSafe } from "../utils/logger.js";
 
+/**
+ * The first clause of a prompt — the ≤2s intent-ack fallback shared by the v1 port's
+ * `classifyIntent` stub and the v2 spine's `intentAck` race. Trims to the first sentence
+ * boundary, clamps to 120 chars, and falls back to a generic ack.
+ */
+export function firstClause(prompt: string): string {
+  const trimmed = prompt.trim();
+  const cut = trimmed.search(/[.!?\n]/);
+  const clause = (cut === -1 ? trimmed : trimmed.slice(0, cut)).trim();
+  return clause.length > 0 ? clause.slice(0, 120) : "Working on your request.";
+}
+
 // =============================================================================
 // Pattern 1: executeAndTrackTools
 // =============================================================================
