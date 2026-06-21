@@ -6959,39 +6959,6 @@ export class Orchestrator {
     };
   }
 
-  // @ts-expect-error -- method retained for backward compatibility with legacy review format; will be removed in a future cleanup pass
-  private deriveStageResultsFromLegacyReviewDecision(
-    decision: ReturnType<typeof parseCompletionReviewDecision>,
-  ): CompletionReviewStageResult[] {
-    if (!decision?.reviews) {
-      return [];
-    }
-
-    return [
-      {
-        stage: "code",
-        status: decision.reviews.code === "issues" || decision.reviews.code === "not_applicable"
-          ? decision.reviews.code
-          : "clean",
-        summary: decision.summary,
-      },
-      {
-        stage: "simplify",
-        status: decision.reviews.simplify === "issues" || decision.reviews.simplify === "not_applicable"
-          ? decision.reviews.simplify
-          : "clean",
-        summary: decision.summary,
-      },
-      {
-        stage: "security",
-        status: decision.reviews.security === "issues" || decision.reviews.security === "not_applicable"
-          ? decision.reviews.security
-          : "clean",
-        summary: decision.summary,
-      },
-    ];
-  }
-
   private async runVisibilityReview(params: {
     chatId: string;
     identityKey: string;
