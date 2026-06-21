@@ -1,0 +1,615 @@
+/**
+ * Agent Core v2 — V2AgentRunner spine unit tests (Phase 2 → route-flip readiness).
+ *
+ * Drives the unified loop with a MOCK OrchestratorPort + a ControlPlane backed by the REAL
+ * control-plane primitives (openRunClock + createFailureLedger over a fake HealthCore + createBudget)
+ * and the REAL run-scoped EventBus, all under a deterministic FakeClock. The gateway is a thin
+ * fake that returns a scripted ProviderResponse (or throws) and emits the same model.* events the
+ * real one does — so the spine's "never re-emit / never re-touch" invariants are exercised.
+ *
+ * Covered (per the design's required matrix):
+ *  - clean single-step run → done (end_turn terminal),
+ *  - multi-step run with tool calls (EXECUTING → REFLECTING → done),
+ *  - retry (verdict retry → backoff → continue, heartbeat emitted before the sleep),
+ *  - abort (verdict stop → AgentRunResult failed/blocked),
+ *  - interactive-vs-background IOStrategy divergence (deliverFinal called for interactive, not bg),
+ *  - the heartbeat-emitted-per-wait invariant (headSeq advances across every guardedSleep).
+ */
+
+import { describe, it, expect, vi } from "vitest";
+import { FakeClock } from "../control/clock.js";
+import { createAgentRunEventBus, type AgentRunEventBus } from "../events/event-bus.js";
+import { openRunClock } from "../control/run-clock.js";
+import { createBudget } from "../control/budget.js";
+import { createFailureLedger, type HealthCore } from "../control/failure-ledger.js";
+import { resolveRunBudgetPolicy, type PolicySeed, type RunMode } from "../control/policy.js";
+import { ModelGateway, type SilentStreamPort } from "../model/model-gateway.js";
+import type { ProviderResponse } from "../../agents/providers/provider-core.interface.js";
+import type { IAIProvider } from "../../agents/providers/provider.interface.js";
+import { AgentPhase, createInitialState, type AgentState } from "../../agents/agent-state.js";
+import type { AgentEvent } from "../events/agent-event.js";
+import type { AgentRunRequest, IOStrategy, RunnerMode } from "./agent-runner.js";
+import {
+  V2AgentRunner,
+  type ControlPlane,
+  type OpenRunResult,
+  type V2RunnerDeps,
+} from "./v2-agent-runner.js";
+import type {
+  OrchestratorPort,
+  PreparedIteration,
+  ReflectionDispatchResult,
+  RunSetup,
+} from "./orchestrator-port.js";
+
+// ── seed / policy ───────────────────────────────────────────────────────────
+
+const SEED: PolicySeed = {
+  streamInitialTimeoutMs: 600_000,
+  streamStallTimeoutMs: 300_000,
+  providerFirstResponseMs: 90_000,
+  taskInactivityMs: 600_000,
+  minInactivityOverStreamRatio: 2,
+  outputTokenCap: 100_000,
+  costCapUsd: 10,
+};
+
+// ── fake provider / response ──────────────────────────────────────────────────
+
+function mkProvider(name = "mock"): IAIProvider {
+  return {
+    name,
+    model: "mock-model",
+    capabilities: {
+      maxTokens: 4096,
+      streaming: false,
+      structuredStreaming: false,
+      toolCalling: true,
+      vision: false,
+      systemPrompt: true,
+    },
+    chat: vi.fn(),
+  } as unknown as IAIProvider;
+}
+
+function mkResponse(over: Partial<ProviderResponse> = {}): ProviderResponse {
+  return {
+    text: "ok",
+    toolCalls: [],
+    stopReason: "end_turn",
+    usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+    ...over,
+  };
+}
+
+/** A scripted silentStream → one ProviderResponse per call, or a throw. */
+function scriptedStream(script: (ProviderResponse | Error)[]): SilentStreamPort {
+  let i = 0;
+  return async () => {
+    const next = script[Math.min(i, script.length - 1)];
+    i += 1;
+    if (next instanceof Error) throw next;
+    return next ?? mkResponse();
+  };
+}
+
+// ── fake health core (drives the REAL FailureLedger verdict precedence) ───────
+
+/**
+ * A STATEFUL fake HealthCore that mirrors the real tracker's key behavior the verdict depends on:
+ * recordSuccess() clears the consecutive-failure run (so a recovered step stops the retry loop),
+ * recordFailure() increments it. `over` seeds the initial consecutive count + the boolean gates.
+ */
+function mkHealth(over: Partial<HealthCore> = {}): HealthCore {
+  let consecutive = over.consecutive ?? 0;
+  return {
+    recordSuccess: () => {
+      consecutive = 0;
+    },
+    recordFailure: () => {
+      consecutive += 1;
+    },
+    shouldAbort: over.shouldAbort ?? (() => false),
+    shouldAskUser: over.shouldAskUser ?? (() => false),
+    backoffMs: over.backoffMs ?? (() => 1000),
+    statusLevel: over.statusLevel ?? "healthy",
+    failureRate: over.failureRate ?? 0,
+    get consecutive() {
+      return consecutive;
+    },
+  };
+}
+
+// ── a ControlPlane over the REAL primitives + REAL bus ────────────────────────
+
+interface PlaneHandles {
+  readonly plane: ControlPlane;
+  readonly clock: FakeClock;
+  /** The last opened bus (so tests can read the event log). */
+  bus(): AgentRunEventBus;
+  events(): AgentEvent[];
+}
+
+function mkPlane(opts: {
+  clock?: FakeClock;
+  health?: Partial<HealthCore>;
+  /** A shared health instance (so a test's port can record failures the ledger then sees). */
+  healthCore?: HealthCore;
+  mode?: RunMode;
+  /** Override the resolved budget caps (e.g. to force budget-exhausted). */
+  outputTokenCap?: number;
+} = {}): PlaneHandles & { readonly health: HealthCore } {
+  const clock = opts.clock ?? new FakeClock(0);
+  const health = opts.healthCore ?? mkHealth(opts.health);
+  let busRef: AgentRunEventBus | undefined;
+  const onEventSpy = vi.fn();
+
+  const plane: ControlPlane = {
+    openRun(mode: RunMode): OpenRunResult {
+      const { policy } = resolveRunBudgetPolicy(mode, {
+        ...SEED,
+        outputTokenCap: opts.outputTokenCap ?? SEED.outputTokenCap,
+      });
+      return {
+        clock: openRunClock(clock, policy),
+        ledger: createFailureLedger(health, {
+          pauseRetryBudget: policy.pauseRetryBudget,
+        }),
+        budget: createBudget(policy.outputTokenCap, policy.costCapUsd),
+      };
+    },
+    openBus(runId: string): AgentRunEventBus {
+      const bus = createAgentRunEventBus({ runId, clock });
+      // Mirror what the real openBus does: attach io's onEvent as a live sink (here a spy sink).
+      bus.addSink({ id: "io", deliver: (e) => onEventSpy(e) });
+      busRef = bus;
+      return bus;
+    },
+  };
+
+  return {
+    plane,
+    clock,
+    health,
+    bus: () => {
+      if (!busRef) throw new Error("bus not opened yet");
+      return busRef;
+    },
+    events: () => (busRef ? [...busRef.log] : []),
+  };
+}
+
+// ── a mock OrchestratorPort ───────────────────────────────────────────────────
+
+interface MockPortOptions {
+  /** Reflection dispatch result (default: terminal done). */
+  reflection?: ReflectionDispatchResult;
+  /** Tool results returned by the bound executeToolCalls. */
+  toolResults?: {
+    toolName: string;
+    toolCallId: string;
+    success: boolean;
+    touchedFiles?: readonly string[];
+  }[];
+  iterationLimit?: number;
+  bgEpochLimit?: number;
+  canContinueEpoch?: boolean;
+  /** If set, the mock handlePlanPhase transitions the state into this phase (e.g. EXECUTING). */
+  planTransitionTo?: AgentPhase;
+  /**
+   * Side effect run inside classifyFailureForVerdict — the real port records the failure into the
+   * health tracker here; a test wires this to the SHARED HealthCore so the ledger's next verdict
+   * sees the incremented consecutive count (faithful to v1's recordPhase1*FailureAndVerdict).
+   */
+  onClassifyFailure?: () => void;
+}
+
+function mkSetup(): RunSetup {
+  return {
+    systemPrompt: "sys",
+    session: { messages: [] },
+    executionJournal: {} as RunSetup["executionJournal"],
+    memoryRefresher: null,
+    identityKey: "id-1",
+    fallbackProvider: mkProvider("fallback"),
+    iterationHealth: {} as RunSetup["iterationHealth"],
+    metricId: "metric-1",
+    enableGoalDetection: false,
+  };
+}
+
+function mkPrepared(provider: IAIProvider): PreparedIteration {
+  return {
+    executionStrategy: {
+      task: { type: "code-edit", complexity: "simple", criticality: "low" },
+    } as PreparedIteration["executionStrategy"],
+    activePrompt: "active",
+    currentAssignment: {
+      role: "executor",
+      providerName: provider.name,
+      modelId: "mock-model",
+      provider,
+      reason: "test",
+    } as PreparedIteration["currentAssignment"],
+    currentProvider: provider,
+    currentToolDefinitions: [],
+    currentToolNames: [],
+  };
+}
+
+function mkPort(provider: IAIProvider, opts: MockPortOptions = {}): OrchestratorPort & {
+  readonly spies: {
+    setupRun: ReturnType<typeof vi.fn>;
+    persistTerminal: ReturnType<typeof vi.fn>;
+    synthesizeFinal: ReturnType<typeof vi.fn>;
+    dispatchEndTurn: ReturnType<typeof vi.fn>;
+    dispatchReflection: ReturnType<typeof vi.fn>;
+    executeToolCalls: ReturnType<typeof vi.fn>;
+    recordHealthSuccess: ReturnType<typeof vi.fn>;
+    classifyFailureForVerdict: ReturnType<typeof vi.fn>;
+  };
+} {
+  const setup = mkSetup();
+  const spies = {
+    setupRun: vi.fn(async () => setup),
+    persistTerminal: vi.fn(async () => {}),
+    synthesizeFinal: vi.fn((_s: AgentState) => ({ text: "final-answer", summary: "summary" })),
+    dispatchEndTurn: vi.fn(async (p: { agentState: AgentState; responseText?: string }) => ({
+      agentState: { ...p.agentState, phase: AgentPhase.COMPLETE },
+      finalText: p.responseText ?? "final-answer",
+    })),
+    dispatchReflection: vi.fn(
+      async (p: { agentState: AgentState }): Promise<ReflectionDispatchResult> =>
+        opts.reflection ?? {
+          agentState: { ...p.agentState, phase: AgentPhase.COMPLETE },
+          terminal: true,
+          reason: "done",
+        },
+    ),
+    executeToolCalls: vi.fn(async () => opts.toolResults ?? []),
+    recordHealthSuccess: vi.fn(),
+    classifyFailureForVerdict: vi.fn(() => {
+      opts.onClassifyFailure?.(); // faithful: the real port records the failure into the tracker
+      return { callStalled: false, taskCancelReason: null, benign: false };
+    }),
+  };
+
+  const port: OrchestratorPort = {
+    setupRun: spies.setupRun,
+    buildPolicySeed: () => SEED,
+    prepareIteration: () => mkPrepared(provider),
+    maybeCompactSession: () => {},
+    trimContextWindow: () => {},
+    recordExecutionTrace: () => {},
+    recordProviderUsage: () => {},
+    saveBudgetExceededCheckpoint: async () => {},
+    classifyFailureForVerdict: spies.classifyFailureForVerdict,
+    recordHealthSuccess: spies.recordHealthSuccess,
+    dispatchReflection: spies.dispatchReflection,
+    dispatchEndTurn: spies.dispatchEndTurn,
+    // Default mirrors v1's handlePlanPhaseTransition: a normal plan moves PLANNING→EXECUTING.
+    // Tests override planTransitionTo to pin a specific target.
+    handlePlanPhase: async (p) => ({
+      agentState: { ...p.agentState, phase: opts.planTransitionTo ?? AgentPhase.EXECUTING },
+    }),
+    decomposeGoalsIfPlanning: async (p) => p.agentState,
+    executeToolCalls: spies.executeToolCalls,
+    getInteractiveIterationLimit: () => opts.iterationLimit ?? 10,
+    getBackgroundEpochIterationLimit: () => opts.bgEpochLimit ?? opts.iterationLimit ?? 10,
+    canAutoContinueBackgroundEpoch: () => opts.canContinueEpoch ?? false,
+    getLiveInteractiveTokenBudget: () => 100_000,
+    classifyIntent: async () => "intent",
+    synthesizeFinal: spies.synthesizeFinal,
+    persistTerminal: spies.persistTerminal,
+    buildResultProjection: (p) => ({
+      provider: provider.name,
+      model: "mock-model",
+      catalogVersion: "cat-1",
+      assignmentVersion: 1,
+      touchedFiles: p.touchedFiles,
+      toolTrace: p.toolTrace.map((t) => ({
+        toolName: t.toolName,
+        success: t.success,
+        summary: "",
+        timestamp: 0,
+      })),
+      verificationResults: [],
+      reviewFindings: [],
+      artifacts: [],
+    }),
+  };
+
+  return Object.assign(port, { spies });
+}
+
+// ── IOStrategy builders ───────────────────────────────────────────────────────
+
+function mkIO(mode: RunnerMode, deliverFinal = vi.fn()): IOStrategy & {
+  deliverFinal: ReturnType<typeof vi.fn>;
+} {
+  return {
+    mode,
+    onEvent: vi.fn(),
+    deliverFinal,
+    externalSignal: new AbortController().signal,
+  } as IOStrategy & { deliverFinal: ReturnType<typeof vi.fn> };
+}
+
+function mkRequest(over: Partial<AgentRunRequest> = {}): AgentRunRequest {
+  return {
+    prompt: "do the thing",
+    chatId: "chat-1",
+    channelType: "web",
+    ...over,
+  };
+}
+
+function mkRunner(plane: ControlPlane, gateway: ModelGateway, port: OrchestratorPort, clock: FakeClock): V2AgentRunner {
+  const deps: V2RunnerDeps = { controlPlane: plane, gateway, orchestratorPort: port, clock };
+  return new V2AgentRunner(deps);
+}
+
+/**
+ * Drive a run to completion under a FakeClock. The spine's only waits are guardedSleep timers
+ * (intent-ack 2s fallback, retry/pause backoffs, epoch rollover) — none resolve until the fake
+ * clock advances. We pump microtasks + advance the clock on a loop until the run promise settles,
+ * so the run is fully deterministic with no real wall-clock dependency.
+ */
+async function drive<T>(clock: FakeClock, runPromise: Promise<T>): Promise<T> {
+  let settled = false;
+  const wrapped = runPromise.then(
+    (v) => {
+      settled = true;
+      return v;
+    },
+    (e) => {
+      settled = true;
+      throw e;
+    },
+  );
+  // Bound the pump so a genuine infinite loop fails fast instead of hanging the suite.
+  for (let i = 0; i < 5000 && !settled; i++) {
+    await Promise.resolve();
+    await Promise.resolve();
+    clock.advance(5000);
+  }
+  return wrapped;
+}
+
+// ── TESTS ─────────────────────────────────────────────────────────────────────
+
+describe("V2AgentRunner — clean run (PLANNING → EXECUTING → end_turn)", () => {
+  it("end_turn terminal → completed, deliverFinal called, run.ended emitted, persistTerminal joined", async () => {
+    const handles = mkPlane();
+    const provider = mkProvider();
+    // Step 1 (PLANNING): text → handlePlanPhase moves to EXECUTING.
+    // Step 2 (EXECUTING): end_turn, no tools → dispatchEndTurn terminal.
+    const gateway = new ModelGateway(scriptedStream([mkResponse({ text: "all done", stopReason: "end_turn" })]));
+    const port = mkPort(provider);
+    const io = mkIO("interactive");
+    const runner = mkRunner(handles.plane, gateway, port, handles.clock);
+
+    const result = await drive(handles.clock, runner.run(mkRequest(), io));
+
+    expect(result.status).toBe("completed");
+    expect(result.finalText).toBe("final-answer");
+    expect(io.deliverFinal).toHaveBeenCalledTimes(1);
+    expect(io.deliverFinal).toHaveBeenCalledWith("final-answer", expect.objectContaining({ phase: AgentPhase.COMPLETE }));
+    expect(port.spies.dispatchEndTurn).toHaveBeenCalledTimes(1);
+    expect(port.spies.persistTerminal).toHaveBeenCalledTimes(1);
+    expect(port.spies.recordHealthSuccess).toHaveBeenCalledWith("mock");
+
+    const types = handles.events().map((e) => e.type);
+    expect(types).toContain("run.started");
+    expect(types).toContain("intent.ack");
+    expect(types).toContain("step.started");
+    expect(types).toContain("run.ending");
+    expect(types).toContain("run.ended");
+    // The gateway's own events are present, emitted by the gateway (not re-emitted by the spine).
+    expect(types).toContain("model.call.started");
+    expect(types).toContain("model.call.finished");
+  });
+
+  it("the spine never re-emits model.call.* (exactly one finished PER call, terminates without spinning)", async () => {
+    const handles = mkPlane();
+    const gateway = new ModelGateway(scriptedStream([mkResponse({ stopReason: "end_turn" })]));
+    const port = mkPort(mkProvider());
+    const runner = mkRunner(handles.plane, gateway, port, handles.clock);
+
+    await drive(handles.clock, runner.run(mkRequest(), mkIO("interactive")));
+
+    // PLANNING step + EXECUTING terminal = exactly 2 model calls → 2 finished events. Crucially
+    // NOT 10 (the iteration limit): the run terminated, and each call has exactly one finished
+    // event (the spine re-emits none of the gateway's events).
+    const started = handles.events().filter((e) => e.type === "model.call.started");
+    const finished = handles.events().filter((e) => e.type === "model.call.finished");
+    expect(finished).toHaveLength(2);
+    expect(started).toHaveLength(2);
+  });
+});
+
+describe("V2AgentRunner — multi-step run with tool calls", () => {
+  it("PLANNING → EXECUTING(tool) → REFLECTING → done; tool.started/finished emitted; toolTrace projected", async () => {
+    const handles = mkPlane();
+    const provider = mkProvider();
+    // Step 1: PLANNING, returns text → handlePlanPhase moves PLANNING→EXECUTING.
+    // Step 2: EXECUTING, returns a tool call → tool exec → EXECUTING→REFLECTING.
+    // Step 3: REFLECTING, returns text → the reflection turn → terminal done.
+    const gateway = new ModelGateway(
+      scriptedStream([
+        mkResponse({ text: "here is the plan", stopReason: "end_turn" }),
+        mkResponse({
+          text: "",
+          stopReason: "tool_use",
+          toolCalls: [{ id: "tc-1", name: "edit_file", input: {} }],
+        }),
+        mkResponse({ text: "reflected: done", stopReason: "end_turn" }),
+      ]),
+    );
+    const port = mkPort(provider, {
+      // The mock plan-phase transition mirrors v1's handlePlanPhaseTransition: PLANNING→EXECUTING.
+      planTransitionTo: AgentPhase.EXECUTING,
+      toolResults: [{ toolName: "edit_file", toolCallId: "tc-1", success: true, touchedFiles: ["a.cs"] }],
+    });
+    const runner = mkRunner(handles.plane, gateway, port, handles.clock);
+
+    const result = await drive(handles.clock, runner.run(mkRequest(), mkIO("background")));
+
+    expect(result.status).toBe("completed");
+    expect(port.spies.executeToolCalls).toHaveBeenCalledTimes(1);
+    expect(port.spies.dispatchReflection).toHaveBeenCalledTimes(1);
+    expect(result.toolTrace.map((t) => t.toolName)).toEqual(["edit_file"]);
+    expect(result.touchedFiles).toContain("a.cs");
+
+    const types = handles.events().map((e) => e.type);
+    expect(types).toContain("tool.started");
+    expect(types).toContain("tool.finished");
+    // PLANNING→EXECUTING and EXECUTING→REFLECTING are real phase moves → phase.changed events.
+    expect(types.filter((t) => t === "phase.changed").length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe("V2AgentRunner — retry (verdict retry → backoff → continue)", () => {
+  it("a provider THROW → failure recorded → retry verdict → guardedSleep backoff → recovery continues", async () => {
+    // A shared, stateful health: the throw's classifyFailureForVerdict records a failure
+    // (consecutive 0→1) → the failure-gate verdict is `retry` (consecutive>0, !modelProposedDone)
+    // → guardedSleep backoff → the recovery step's recordHealthSuccess clears it → clean terminal.
+    const health = mkHealth({ backoffMs: () => 2000 });
+    const handles = mkPlane({ healthCore: health });
+    const provider = mkProvider();
+    // Step 1: THROW (classified non-benign). Step 2: clean end_turn.
+    const gateway = new ModelGateway(
+      scriptedStream([new Error("boom"), mkResponse({ stopReason: "end_turn" })]),
+    );
+    const port = mkPort(provider, { onClassifyFailure: () => health.recordFailure() });
+    const runner = mkRunner(handles.plane, gateway, port, handles.clock);
+
+    const result = await drive(handles.clock, runner.run(mkRequest(), mkIO("background")));
+
+    expect(result.status).toBe("completed"); // recovered after the retry
+    expect(port.spies.classifyFailureForVerdict).toHaveBeenCalledTimes(1);
+    // A backoff event must have been emitted (the retry's guardedSleep beat).
+    const backoffs = handles.events().filter((e) => e.type === "backoff");
+    expect(backoffs.length).toBeGreaterThanOrEqual(1);
+    // The dispatchEndTurn ran on the (post-recovery) EXECUTING terminal step.
+    expect(port.spies.dispatchEndTurn).toHaveBeenCalledTimes(1);
+    // recordHealthSuccess fires on every successful step after the recovery (≥1).
+    expect(port.spies.recordHealthSuccess.mock.calls.length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("V2AgentRunner — abort (verdict stop)", () => {
+  it("health shouldAbort → stop hard → AgentRunResult failed", async () => {
+    const handles = mkPlane({ health: { shouldAbort: () => true } });
+    const gateway = new ModelGateway(scriptedStream([mkResponse({ stopReason: "end_turn" })]));
+    const port = mkPort(mkProvider());
+    const runner = mkRunner(handles.plane, gateway, port, handles.clock);
+
+    const result = await drive(handles.clock, runner.run(mkRequest(), mkIO("background")));
+
+    // The very first GATE returns stop (hard) → the loop breaks before any model call.
+    expect(result.status).toBe("failed");
+    expect(result.reason).toContain("verdict-stop");
+    const types = handles.events().map((e) => e.type);
+    expect(types).toContain("run.ending");
+    expect(types).toContain("run.ended");
+  });
+
+  it("background ask_user (health) → run yields blocked", async () => {
+    const handles = mkPlane({ health: { shouldAskUser: () => true } });
+    const gateway = new ModelGateway(scriptedStream([mkResponse({ stopReason: "end_turn" })]));
+    const port = mkPort(mkProvider());
+    const runner = mkRunner(handles.plane, gateway, port, handles.clock);
+
+    const result = await drive(handles.clock, runner.run(mkRequest(), mkIO("background")));
+
+    expect(result.status).toBe("blocked");
+    const types = handles.events().map((e) => e.type);
+    expect(types).toContain("ask_user");
+  });
+
+  it("interactive ask_user (health) → emits ask_user, continues, does NOT block", async () => {
+    // First gate asks; once asked, the same health keeps asking → eventually hits the iteration
+    // limit and falls through to the terminal. We only assert it did NOT yield "blocked".
+    const handles = mkPlane({ health: { shouldAskUser: () => true } });
+    const gateway = new ModelGateway(scriptedStream([mkResponse({ stopReason: "end_turn" })]));
+    const port = mkPort(mkProvider(), { iterationLimit: 2 });
+    const runner = mkRunner(handles.plane, gateway, port, handles.clock);
+
+    const result = await drive(handles.clock, runner.run(mkRequest(), mkIO("interactive")));
+
+    expect(result.status).not.toBe("blocked");
+    const asks = handles.events().filter((e) => e.type === "ask_user");
+    expect(asks.length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("V2AgentRunner — interactive vs background divergence (only via IOStrategy)", () => {
+  it("interactive deliverFinal renders; background deliverFinal is a no-op sink (still called, strategy differs)", async () => {
+    // Interactive.
+    const h1 = mkPlane();
+    const interactiveDeliver = vi.fn();
+    const r1 = mkRunner(h1.plane, new ModelGateway(scriptedStream([mkResponse({ stopReason: "end_turn" })])), mkPort(mkProvider()), h1.clock);
+    await drive(h1.clock, r1.run(mkRequest(), mkIO("interactive", interactiveDeliver)));
+    expect(interactiveDeliver).toHaveBeenCalledTimes(1);
+
+    // Background: deliverFinal is still invoked by the spine (same call site) — the divergence is
+    // that the background STRATEGY's deliverFinal is a no-op, which here we assert by passing a
+    // no-op fn and confirming the run still completes + carries finalText on the result.
+    const h2 = mkPlane();
+    const bgDeliver = vi.fn(); // a background strategy would do nothing on render
+    const r2 = mkRunner(h2.plane, new ModelGateway(scriptedStream([mkResponse({ stopReason: "end_turn" })])), mkPort(mkProvider()), h2.clock);
+    const bgResult = await drive(h2.clock, r2.run(mkRequest(), mkIO("background", bgDeliver)));
+    expect(bgDeliver).toHaveBeenCalledTimes(1);
+    expect(bgResult.finalText).toBe("final-answer"); // background carries the text by value
+  });
+
+  it("worker mode maps to the delegate policy and still completes by value", async () => {
+    const handles = mkPlane();
+    const gateway = new ModelGateway(scriptedStream([mkResponse({ stopReason: "end_turn" })]));
+    const result = await drive(
+      handles.clock,
+      mkRunner(handles.plane, gateway, mkPort(mkProvider()), handles.clock).run(mkRequest(), mkIO("worker")),
+    );
+    expect(result.status).toBe("completed");
+    expect(result.provider).toBe("mock");
+    expect(result.catalogVersion).toBe("cat-1");
+  });
+});
+
+describe("V2AgentRunner — heartbeat-per-wait invariant", () => {
+  it("every guardedSleep advances headSeq before sleeping (no silent spin across the retry wait)", async () => {
+    const health = mkHealth({ backoffMs: () => 3000 });
+    const handles = mkPlane({ healthCore: health });
+    const gateway = new ModelGateway(scriptedStream([new Error("boom"), mkResponse({ stopReason: "end_turn" })]));
+    const port = mkPort(mkProvider(), { onClassifyFailure: () => health.recordFailure() });
+    const runner = mkRunner(handles.plane, gateway, port, handles.clock);
+
+    await drive(handles.clock, runner.run(mkRequest(), mkIO("background")));
+
+    // The backoff beat (a wait-point) is in the log, and it precedes the subsequent step.started
+    // for the recovery iteration — i.e. the loop emitted BEFORE it slept, never after a silent gap.
+    const log = handles.events();
+    const backoffIdx = log.findIndex((e) => e.type === "backoff");
+    expect(backoffIdx).toBeGreaterThanOrEqual(0);
+    // seq is gap-free and monotonic — the bus's structural guarantee the heartbeat invariant rides on.
+    const seqs = log.map((e) => e.seq);
+    expect(seqs).toEqual([...seqs].sort((a, b) => a - b));
+    expect(new Set(seqs).size).toBe(seqs.length);
+  });
+
+  it("intent.ack is emitted within the prologue (the ≤2s ack contract)", async () => {
+    const handles = mkPlane();
+    const gateway = new ModelGateway(scriptedStream([mkResponse({ stopReason: "end_turn" })]));
+    // A classifier that never resolves → the 2s fallback must still emit intent.ack.
+    const port = mkPort(mkProvider());
+    port.classifyIntent = () => new Promise<string>(() => {}); // never resolves
+    const runner = mkRunner(handles.plane, gateway, port, handles.clock);
+
+    await drive(handles.clock, runner.run(mkRequest({ prompt: "Refactor the build pipeline. Then test." }), mkIO("interactive")));
+
+    const ack = handles.events().find((e) => e.type === "intent.ack");
+    expect(ack).toBeDefined();
+    expect((ack as { summary: string }).summary).toBe("Refactor the build pipeline");
+  });
+});

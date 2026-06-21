@@ -36,3 +36,31 @@ export {
   resolveLegalFlagSet,
 } from "./flags.js";
 export type { FlagSet, RequestedFlagSet, DriverChoice } from "./flags.js";
+
+export { V2AgentRunner, mapMode } from "./v2-agent-runner.js";
+export type { V2RunnerDeps, ControlPlane, OpenRunResult } from "./v2-agent-runner.js";
+
+export type {
+  OrchestratorPort,
+  RunnerModeLike,
+  PreparedIteration,
+  RunSetup,
+  FailureVerdictContribution,
+  ClassifyFailureParams,
+  AgentRunSetupInput,
+  PrepareIterationParams,
+  RecordExecutionTraceParams,
+  BudgetCheckpointParams,
+  DispatchReflectionParams,
+  ReflectionDispatchResult,
+  DispatchEndTurnParams,
+  EndTurnDispatchResult,
+  PlanPhaseParams,
+  PlanPhaseYield,
+  PlanPhaseResult,
+  GoalDecompositionParams,
+  SynthesizedFinal,
+  ResultProjectionParams,
+  AgentRunResultProjection,
+  ExecuteToolCallsFn,
+} from "./orchestrator-port.js";
