@@ -248,4 +248,53 @@ describe("V2AgentRunner — REAL port + REAL gateway (provider.chat scripted)", 
     expect(result.status).toBe("completed");
     expect(provider.chat).toHaveBeenCalledTimes(3); // plan, throw, recover — REAL retry path
   });
+
+  it("E (P-E): reaches the REAL REFLECTING boundary → real parseReflectionDecision drives termination", async () => {
+    // The ONLY test that exercises the REAL portParseReflectionDecision (processReflectionPreamble):
+    // 3 tool calls in one turn push stepResults.length to 3 → recordStepResultsAndCheckReflection
+    // transitions EXECUTING→REFLECTING (reflectInterval=3), so the next turn hits the spine's
+    // REFLECTING branch and the real decision parser runs on the model's "**DONE**" text.
+    const provider = mkScriptedProvider();
+    provider.chat
+      .mockResolvedValueOnce(resp({ text: "the plan", stopReason: "end_turn" })) // PLANNING→EXECUTING
+      .mockResolvedValueOnce(
+        resp({
+          text: "doing the work",
+          stopReason: "tool_use",
+          toolCalls: [
+            { id: "tc-1", name: "file_read", input: {} },
+            { id: "tc-2", name: "file_read", input: {} },
+            { id: "tc-3", name: "edit_file", input: { path: "a.cs" } },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(resp({ text: "All requirements met.\n\n**DONE**", stopReason: "end_turn" })) // REFLECTING
+      .mockResolvedValue(resp({ text: "finished", stopReason: "end_turn" })); // safety net if the parse overrides DONE→CONTINUE
+    const h = buildHarness(provider);
+    const io = mkIO("worker");
+
+    const result = await drive(h.clock, h.runner.run(mkRequest(), io));
+
+    expect(result.status).toBe("completed");
+    // Reached + processed the REAL reflection boundary (plan + 3-tool turn + reflection = ≥3 calls)
+    // through the real parseReflectionDecision without throwing.
+    expect(provider.chat.mock.calls.length).toBeGreaterThanOrEqual(3);
+    expect(h.tools.find((t) => t.name === "edit_file")!.execute).toHaveBeenCalled(); // real tool turn ran
+  });
+
+  it("E (P-E): 3 consecutive no-tool max_tokens turns → runaway guard aborts (worker → blocked)", async () => {
+    const provider = mkScriptedProvider();
+    provider.chat
+      .mockResolvedValueOnce(resp({ text: "the plan", stopReason: "end_turn" })) // PLANNING→EXECUTING
+      .mockResolvedValue(resp({ text: "truncated…", stopReason: "max_tokens", toolCalls: [] })); // then truncate forever
+    const h = buildHarness(provider);
+    const io = mkIO("worker");
+
+    const result = await drive(h.clock, h.runner.run(mkRequest(), io));
+
+    // The spine's consecutiveMaxTokens>=3 guard aborts; worker (non-interactive) → blocked.
+    expect(result.status).toBe("blocked");
+    expect(result.reason).toBe("max-tokens-runaway");
+    expect(provider.chat).toHaveBeenCalledTimes(4); // plan + 3 truncated turns before the abort
+  });
 });
