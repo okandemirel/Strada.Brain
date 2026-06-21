@@ -29,6 +29,8 @@ import { V2AgentRunner, type V2RunnerDeps } from "./v2-agent-runner.js";
 import type { AgentRunRequest, IOStrategy, RunnerMode } from "./agent-runner.js";
 import type { ProviderResponse } from "../../agents/providers/provider-core.interface.js";
 import type { WorkspaceLease } from "../../agents/supervisor/supervisor-types.js";
+import { DEFAULT_TASK_CONFIG } from "../../config/config.js";
+import type { TaskConfig } from "../../config/config.js";
 
 // Logger + strada-knowledge module mocks — copied from orchestrator.test.ts so the Orchestrator
 // boots without a real project / SQLite / network.
@@ -156,6 +158,7 @@ function buildHarness(
   personalization?: {
     instinctRetriever?: { getInsightsForTask: (prompt: string) => Promise<{ insights: string[] }> };
   },
+  taskConfig?: TaskConfig,
 ) {
   const clock = new FakeClock(0);
   const channel = mkChannel();
@@ -178,6 +181,7 @@ function buildHarness(
     toolMetadataByName: capability?.toolMetadataByName,
     // Step 0 / gap #6 — inject a personalization store (instinct retriever) to exercise the prologue.
     instinctRetriever: personalization?.instinctRetriever,
+    ...(taskConfig ? { taskConfig } : {}),
     // agentCoreFlagSet OMITTED — the gateway passes runClock=undefined → flag-OFF silentStream.
   } as unknown as ConstructorParameters<typeof Orchestrator>[0]);
 
@@ -269,6 +273,43 @@ describe("V2AgentRunner — REAL port + REAL gateway (provider.chat scripted)", 
 
     expect(result.status).toBe("completed");
     expect(provider.chat).toHaveBeenCalledTimes(3); // plan, throw, recover — REAL retry path
+  });
+
+  it("D2 (livelock guard): persistent provider failure ABORTS via rule 5 — not a background livelock", async () => {
+    // Regression guard for the v2-background-livelock fix. The FailureLedger's health core MUST be the
+    // SAME tracker the spine records into (createAgentCorePort now threads one shared instance into both
+    // createHealthCore AND setupAgentCoreRun's runCtx). With it unified, 5 consecutive failures trip
+    // rule 5 → {decision:"stop", verdict-stop:health, finalize:"hard"} → status "failed" at ~6 calls.
+    // PRE-FIX the ledger read a permanently-EMPTY tracker → rule 5/7 dead → the background run looped to
+    // backgroundEpochMaxIterations × backgroundMaxEpochs, re-decomposing the goal tree each epoch (the
+    // "sürekli eklemeli ilerleyip başa saran" loop the soak caught). A small epoch budget here makes the
+    // pre-fix livelock settle deterministically (~16 calls) so the post-fix abort (~6) is a clean split.
+    const provider = mkScriptedProvider();
+    provider.chat.mockImplementation(async () => {
+      // call 1 = PLANNING success → EXECUTING; every subsequent call throws a NON-retryable error.
+      if (provider.chat.mock.calls.length === 1) {
+        return resp({ text: "the plan", stopReason: "end_turn" });
+      }
+      throw new Error("API error 401: Insufficient balance");
+    });
+    const taskConfig = {
+      ...DEFAULT_TASK_CONFIG,
+      backgroundEpochMaxIterations: 8,
+      backgroundMaxEpochs: 2,
+    } as TaskConfig;
+    const h = buildHarness(provider, undefined, undefined, undefined, taskConfig);
+    const io = mkIO("background");
+
+    const result = await drive(h.clock, h.runner.run(mkRequest(), io));
+
+    // GRACEFULLY TERMINATED via the now-live health rules — NOT run to the epoch cap (which yields
+    // "completed"). For background, rule 7 (ask_user, ASK_USER_CONSECUTIVE) trips before rule 5
+    // (abort, ABORT_CONSECUTIVE=5): ask_user YIELDS "blocked"; a pure rule-5 hard stop is "failed".
+    // Either is the fix working; "completed" here would mean the pre-fix livelock to the epoch cap.
+    expect(["failed", "blocked"]).toContain(result.status);
+    expect(result.status).not.toBe("completed");
+    // A handful of calls (1 plan + a few consecutive failures), far below the epoch cap (~16 pre-fix).
+    expect(provider.chat.mock.calls.length).toBeLessThan(10);
   });
 
   it("E (P-E): reaches the REAL REFLECTING boundary → real parseReflectionDecision drives termination", async () => {

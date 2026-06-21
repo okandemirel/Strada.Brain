@@ -8231,10 +8231,20 @@ export class Orchestrator {
       return cell.ctx;
     };
 
+    // BUG FIX (v2 background livelock): the FailureLedger's health core (createHealthCore, consumed by
+    // controlPlane.openRun) MUST be the SAME IterationHealthTracker the spine records into via the port
+    // (runCtx.iterationHealth/healthAdapter). openRun runs BEFORE setupRun builds runCtx, so the shared
+    // per-run instance is created HERE and threaded into BOTH. Without this the ledger read a permanently
+    // EMPTY tracker → rule 5 (5-consecutive-failure abort), rule 7 (ask_user), and the stale-failure
+    // retry were ALL dead → background runs LIVELOCKED under persistent provider failure instead of
+    // aborting (v1 aborted via a task-scoped consecutiveProviderFailures). One run = one port = one tracker.
+    const runHealth = new IterationHealthTracker();
+    const runHealthAdapter = new IterationHealthCoreAdapter(runHealth, "");
+
     const portImpl: OrchestratorPort = {
       // ── A. setup / seed ──────────────────────────────────────────────────────────────────
       setupRun: async (request: AgentRunSetupInput): Promise<PortRunSetup> => {
-        const built = await self.setupAgentCoreRun(request);
+        const built = await self.setupAgentCoreRun(request, runHealth, runHealthAdapter);
         cell.ctx = built.runCtx;
         return built.setup;
       },
@@ -8401,7 +8411,9 @@ export class Orchestrator {
       // undefined for that slot; the Orchestrator's real method narrows it back).
       gateway: new ModelGateway(self.silentStream as unknown as SilentStreamPort),
       seed: self.buildPolicySeed(),
-      createHealthCore: () => new IterationHealthCoreAdapter(new IterationHealthTracker(), ""),
+      // Returns the SHARED per-run adapter (see the bug-fix note above) — the SAME instance the spine
+      // records failures/successes into via the port, so the ledger's verdict rules read live health.
+      createHealthCore: () => runHealthAdapter,
     };
   }
 
@@ -8500,6 +8512,10 @@ export class Orchestrator {
    */
   private async setupAgentCoreRun(
     request: AgentRunSetupInput,
+    // Shared with the FailureLedger's core (createAgentCorePort) so the ledger's verdict rules read the
+    // SAME tracker the spine records into — the v2-background-livelock fix. One run = one tracker.
+    iterationHealth: IterationHealthTracker,
+    healthAdapter: IterationHealthCoreAdapter,
   ): Promise<{ setup: PortRunSetup; runCtx: AgentCorePortRunContext }> {
     const chatId = request.chatId;
     const isInteractive = request.mode === "interactive"; // gap #3/#7/#8 share this branch
@@ -8614,9 +8630,8 @@ export class Orchestrator {
       instinctIds: [],
     });
 
-    const iterationHealth = new IterationHealthTracker();
-    const healthAdapter = new IterationHealthCoreAdapter(iterationHealth, "");
-
+    // iterationHealth + healthAdapter are now passed in (shared with the FailureLedger's core) — the
+    // v2-background-livelock fix. Previously created here as a SEPARATE instance the ledger never saw.
     const onUsage = request.onUsage as ((usage: TaskUsageEvent) => void) | undefined;
     const runCtx: AgentCorePortRunContext = {
       onUsage,
