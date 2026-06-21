@@ -155,6 +155,50 @@ describe("resolveLegalFlagSet — closed-matrix rejections", () => {
     expect(() => resolveLegalFlagSet(illegal)).toThrow(/Illegal agent-core flag combination/);
   });
 
+  it("accepts the full control plane (Phase 1d set: typedCancelReason completes the four-true combo)", () => {
+    // 1d has NO own variant: turning on `typedCancelReason` on top of the 1c set sets the
+    // fourth and only remaining false CP flag true, which collapses exactly into the existing
+    // `v1-driver+full-control-plane` set (the Phase-1 consolidation target).
+    const phase1d: RequestedFlagSet = {
+      ...DEFAULT_FLAG_SET,
+      failureLedger: true,
+      runClock: true,
+      silenceAccumulator: true,
+      typedCancelReason: true,
+    };
+    expect(resolveLegalFlagSet(phase1d).id).toBe("v1-driver+full-control-plane");
+  });
+
+  it("rejects typedCancelReason WITHOUT each of the other three CP flags (1d needs the full plane)", () => {
+    // 1d feeds the RunClock-owned reason (needs runClock) into the ledger verdict (needs
+    // failureLedger), and only ever turns on as part of FULL_CP (needs silenceAccumulator too).
+    // Every partial combo that drops ONE of the other three CP flags is uncatalogued → reject.
+    const drops: ReadonlyArray<Partial<RequestedFlagSet>> = [
+      { failureLedger: false, runClock: true, silenceAccumulator: true }, // no ledger
+      { failureLedger: true, runClock: false, silenceAccumulator: true }, // no run-clock
+      { failureLedger: true, runClock: true, silenceAccumulator: false }, // no silence-accumulator
+    ];
+    for (const drop of drops) {
+      const illegal: RequestedFlagSet = {
+        ...DEFAULT_FLAG_SET,
+        ...drop,
+        typedCancelReason: true,
+      };
+      expect(() => resolveLegalFlagSet(illegal)).toThrow(/not in LEGAL_FLAG_SETS/);
+    }
+  });
+
+  it("typedCancelReason is true ONLY when all four CP flags are true, across the whole catalogue", () => {
+    // The closed-matrix guarantee for 1d: no legal set turns typed-cancel on in isolation.
+    for (const set of LEGAL_FLAG_SETS) {
+      if (set.typedCancelReason) {
+        expect(set.failureLedger).toBe(true);
+        expect(set.runClock).toBe(true);
+        expect(set.silenceAccumulator).toBe(true);
+      }
+    }
+  });
+
   it("rejects streamVisibleTokens without the full Phase-3 stack", () => {
     const illegal: RequestedFlagSet = {
       interactive: "v2",

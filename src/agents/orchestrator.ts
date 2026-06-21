@@ -1153,9 +1153,10 @@ export class Orchestrator {
    * `agentCoreFlagSet.runClock === true`. `callStalled` is true when the just-failed call's
    * token aborted with a typed provider-stall / hard-timeout; `hardTimeoutBlown` from the task
    * token; `taskInactivityExceeded` from the silence accumulator BUT gated on the
-   * `silenceAccumulator` flag (1c) — see the field comment. taskCancelReason stays null
-   * here (typed cancel = 1d; v1 cancel still flows via `signal.aborted` re-throw outside this
-   * site). `failedCallReason` is the just-failed call scope's `token.reason` when locally
+   * `silenceAccumulator` flag (1c) — see the field comment. `taskCancelReason` is the live
+   * RunClock-owned task-token reason BUT gated on the `typedCancelReason` flag (1d) — see the
+   * field comment; flag-OFF feeds null exactly as 1b/1c did (verdict rules 1/1b stay dead).
+   * `failedCallReason` is the just-failed call scope's `token.reason` when locally
    * readable (non-streaming sibling sites), else null (streaming sites rely on the task-scope
    * silence accumulator + hard-timeout — see P-1b-4).
    */
@@ -1166,7 +1167,16 @@ export class Orchestrator {
     const taskReason = runClock.taskToken.reason;
     const hardTask = taskReason?.kind === "hard-timeout" && taskReason.scope === "task";
     return {
-      taskCancelReason: null, // 1d
+      // Phase 1d: feed the RunClock-owned typed task-token reason through to the verdict,
+      // gated on the `typedCancelReason` flag. This is the structural twin of the 1c
+      // `taskInactivityExceeded` gate below: flag-gate the field the next sub-flag owns.
+      // ON → a benign task abort (e.g. `task-winddown`) reaches rule 1 (stop/graceful, no
+      // health failure) and any other task-token abort (e.g. `hard-timeout/task`) reaches
+      // the AUTHORITATIVE rule 1b ahead of the re-derived booleans (rules 2–4). OFF → null,
+      // byte-identical to 1b/1c: rules 1/1b stay dead and the v1 `signal.aborted` re-throw
+      // (upstream of this ledger path) remains the sole cancel mechanism.
+      taskCancelReason:
+        this.agentCoreFlagSet?.typedCancelReason === true ? (taskReason ?? null) : null,
       hardTimeoutBlown: runClock.hardTaskExpired() || hardTask,
       hardTimeoutScope: "task",
       resourceExhausted: false, // token-budget abort stays v1's own check above the site
