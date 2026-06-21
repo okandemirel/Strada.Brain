@@ -287,6 +287,14 @@ export interface OrchestratorPort {
    */
   setupRun(request: AgentRunSetupInput): Promise<RunSetup>;
 
+  /**
+   * Establish the v1-parity task-execution ALS scope around the ENTIRE run, so deep readers
+   * (goal-decomposition taskRunId, artifact-eval identityKey) see the context v1 set inside
+   * runBackgroundTask. The spine wraps its whole run in this; the port owns the scope because the
+   * spine cannot import the orchestrator's AsyncLocalStorage. v2-only (Step 0 / gap #1).
+   */
+  withRunTaskContext<T>(input: AgentRunSetupInput, fn: () => Promise<T>): Promise<T>;
+
   /** The policy seed (v1 config defaults) for resolveRunBudgetPolicy. Read-only. */
   buildPolicySeed(): PolicySeed;
 

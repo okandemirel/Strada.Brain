@@ -179,7 +179,7 @@ function buildHarness(
   const { port, gateway, seed, createHealthCore } = orch.createAgentCorePort();
   const controlPlane = createControlPlane({ clock, seed, createHealthCore }); // no learning sink
   const runner = new V2AgentRunner({ controlPlane, gateway, orchestratorPort: port, clock } as V2RunnerDeps);
-  return { clock, channel, provider, tools, runner, getProvider };
+  return { clock, channel, provider, tools, runner, getProvider, orch };
 }
 
 describe("V2AgentRunner — REAL port + REAL gateway (provider.chat scripted)", () => {
@@ -436,5 +436,27 @@ describe("Step 0 — v2 prologue fidelity gaps (behind the route flag; productio
     // Pre-fix it hardcoded `identityKey = chatId` → getProvider("chat-1"); the fix routes through
     // resolveIdentityKey → "user-42" (the fallback-provider fetch in the v2 prologue).
     expect(h.getProvider).toHaveBeenCalledWith("user-42");
+  });
+
+  it("gap #1: the run establishes v1's task-execution ALS scope (identity + taskRunId)", async () => {
+    const provider = mkScriptedProvider();
+    provider.chat.mockResolvedValue(resp({ text: "done", stopReason: "end_turn" }));
+    const h = buildHarness(provider);
+    const scopeSpy = vi.spyOn(h.orch as unknown as { withTaskExecutionContext: (...a: unknown[]) => unknown }, "withTaskExecutionContext");
+
+    await drive(h.clock, h.runner.run(mkRequest({ userId: "user-42", taskRunId: "run-7" }), mkIO("worker")));
+
+    // The spine must wrap the WHOLE run in withTaskExecutionContext so deep readers (goal-decomposition
+    // taskRunId, artifact-eval identityKey) see the ctx instead of undefined. Pre-fix the v2 path never
+    // established the scope (0 calls); post-fix it is called once with the resolved v1-parity ctx.
+    expect(scopeSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chatId: "chat-1",
+        userId: "user-42",
+        identityKey: "user-42",
+        taskRunId: "run-7",
+      }),
+      expect.any(Function),
+    );
   });
 });

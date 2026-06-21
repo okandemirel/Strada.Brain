@@ -8075,6 +8075,33 @@ export class Orchestrator {
         cell.ctx = built.runCtx;
         return built.setup;
       },
+      // Step 0 / gap #1 — wrap the v2 run in v1's task-execution ALS scope (mirrors runBackgroundTask
+      // :3214-3225). Resolves the SAME ctx v1 builds {chatId, conversationId, userId, identityKey,
+      // taskRunId}; the per-run readers (decomposeGoalsIfPlanning taskRunId, recordEvaluation
+      // identityKey) then see it instead of `undefined`. taskRunId mirrors v1's fallback chain.
+      withRunTaskContext: <T>(input: AgentRunSetupInput, fn: () => Promise<T>): Promise<T> => {
+        const identityKey = resolveIdentityKey(
+          input.chatId,
+          input.userId,
+          input.conversationId,
+          self.userProfileStore,
+          input.channelType,
+        );
+        const taskRunId =
+          input.taskRunId?.trim() ||
+          self.getTaskExecutionContext()?.taskRunId ||
+          `taskrun_${randomUUID()}`; // v1-parity token (runBackgroundTask :3218 / handleMessage :3059)
+        return self.withTaskExecutionContext(
+          {
+            chatId: input.chatId,
+            conversationId: input.conversationId,
+            userId: input.userId,
+            identityKey,
+            taskRunId,
+          },
+          fn,
+        );
+      },
       buildPolicySeed: () => self.buildPolicySeed(),
 
       // ── B. per-iteration prep ────────────────────────────────────────────────────────────
@@ -8214,13 +8241,18 @@ export class Orchestrator {
     // Step 0 / gap #5 — resolve the run identity the way v1's prologue does (resolveIdentityKey at
     // :3057/:2201): userId/conversationId key multi-user + cross-channel sessions, profiles, and
     // provider selection. The prior `identityKey = chatId` mis-keyed every non-default-channel run.
-    const identityKey = resolveIdentityKey(
-      chatId,
-      request.userId,
-      request.conversationId,
-      this.userProfileStore,
-      request.channelType,
-    );
+    // gap #1: the run scope (withRunTaskContext) already resolved + established this identity, so
+    // reuse it to avoid a duplicate resolve; fall back for any path that calls setupRun outside a
+    // scope (e.g. direct unit tests).
+    const identityKey =
+      this.getTaskExecutionContext()?.identityKey ??
+      resolveIdentityKey(
+        chatId,
+        request.userId,
+        request.conversationId,
+        this.userProfileStore,
+        request.channelType,
+      );
     const session = this.sessionManager.getOrCreateSession(chatId);
     const queryText = request.prompt;
     const conversationScope = session.conversationScope ?? chatId;

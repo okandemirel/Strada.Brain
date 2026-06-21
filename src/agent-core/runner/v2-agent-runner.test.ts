@@ -36,6 +36,7 @@ import {
   type V2RunnerDeps,
 } from "./v2-agent-runner.js";
 import type {
+  AgentRunSetupInput,
   OrchestratorPort,
   PreparedIteration,
   ReflectionDispatchResult,
@@ -284,6 +285,9 @@ function mkPort(provider: IAIProvider, opts: MockPortOptions = {}): Orchestrator
 
   const port: OrchestratorPort = {
     setupRun: spies.setupRun,
+    // Step 0 / gap #1: pass-through — the unit test's mock port has no real ALS scope; the spine just
+    // needs the wrapper to invoke its body.
+    withRunTaskContext: <T>(_input: AgentRunSetupInput, fn: () => Promise<T>): Promise<T> => fn(),
     buildPolicySeed: () => SEED,
     prepareIteration: () => mkPrepared(provider),
     maybeCompactSession: () => {},
