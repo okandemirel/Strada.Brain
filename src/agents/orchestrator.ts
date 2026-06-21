@@ -16,6 +16,7 @@ import { detectLanguage } from "../dashboard/workspace-routes.js";
 import type { ProviderManager } from "./providers/provider-manager.js";
 import { canonicalizeProviderName } from "./providers/provider-identity.js";
 import { getToolMetadata, type ITool, type ToolContext } from "./tools/tool.interface.js";
+import type { ToolExecutionResult } from "./tools/tool-core.interface.js";
 import type {
   IChannelAdapter,
   IncomingMessage,
@@ -190,6 +191,9 @@ import {
   resolveRunBudgetPolicy,
   SystemClock,
   CapabilityRegistry,
+  capabilityForTool,
+  guardExecute,
+  formatBlocked,
   type CallScope,
   type CancelReason,
   type Clock,
@@ -7501,7 +7505,37 @@ export class Orchestrator {
       emitSubstep("active");
 
       try {
-        const result = await tool.execute(activeToolCall.input, toolContext);
+        // Phase 3b write-path guard (flag-gated, ADDITIVE): run the tool through guardExecute so a
+        // down + un-revivable substrate capability returns the typed BLOCKED contract, and a real
+        // success/failure feeds the registry's health. Unwired (flag off) → the plain call below,
+        // byte-identical. (Revive via a CapabilityAdapter is the next increment; no adapter here, so
+        // a down substrate simply BLOCKs.) The orchestrator's flattened toolMetadataByName carries
+        // only `requiresBridge`, so the binding here distinguishes the bridge from in-process.
+        let result: ToolExecutionResult;
+        if (this.capabilityRegistry) {
+          const capabilityId = capabilityForTool({ requiresBridge: toolMeta?.requiresBridge });
+          const guarded = await guardExecute({
+            registry: this.capabilityRegistry,
+            capabilityId,
+            run: () => tool.execute(activeToolCall.input, toolContext),
+          });
+          if (guarded.kind === "blocked") {
+            // BLOCKED is non-progress, non-fatal — NOT counted as a tool error (mirrors the available
+            // gate above), so it never trips the consecutive-error disable. Sanitized for parity with
+            // the success path: the BLOCKED reason can embed a substrate transport-error fragment, so
+            // redact/de-inject it defensively rather than push it raw.
+            emitSubstep("skipped");
+            results.push({
+              toolCallId: activeToolCall.id,
+              content: sanitizeToolResult(formatBlocked(guarded.blocked)),
+              isError: true,
+            });
+            continue;
+          }
+          result = guarded.value;
+        } else {
+          result = await tool.execute(activeToolCall.input, toolContext);
+        }
         this.metrics?.recordToolCall(activeToolCall.name, Date.now() - toolStart, !result.isError, result.isError ? String(result.content).slice(0, 200) : undefined);
         // Vault write-hook (Phase 1): on successful Edit/Write tool calls,
         // trigger a budget-aware reindex of the touched file so the next turn's
