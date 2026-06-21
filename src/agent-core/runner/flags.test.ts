@@ -12,6 +12,7 @@ import {
   LEGAL_FLAG_SETS,
   DEFAULT_FLAG_SET,
   DEFAULT_FLAG_SET_ID,
+  PRODUCTION_DEFAULT_FLAG_SET_ID,
   resolveLegalFlagSet,
   resolveFlagSetById,
   type FlagSet,
@@ -41,6 +42,25 @@ describe("LEGAL_FLAG_SETS catalogue", () => {
       capabilityRegistry: false,
       streamVisibleTokens: false,
     });
+  });
+
+  it("PRODUCTION_DEFAULT_FLAG_SET_ID is the v1-engine + full-control-plane shipped default", () => {
+    expect(PRODUCTION_DEFAULT_FLAG_SET_ID).toBe("v1-driver+full-control-plane");
+    const prod = LEGAL_FLAG_SETS.find((s) => s.id === PRODUCTION_DEFAULT_FLAG_SET_ID);
+    expect(prod).toBeDefined();
+    // v1 engine on every route (no runner swap) + the FULL Phase-1 control plane ON.
+    expect(prod).toMatchObject({
+      interactive: "v1",
+      background: "v1",
+      worker: "v1",
+      supervisorNode: "v1",
+      failureLedger: true,
+      runClock: true,
+      silenceAccumulator: true,
+      typedCancelReason: true,
+    });
+    // Resolvable by id (reject-at-boot would otherwise throw on an uncatalogued id).
+    expect(resolveFlagSetById(PRODUCTION_DEFAULT_FLAG_SET_ID).id).toBe(PRODUCTION_DEFAULT_FLAG_SET_ID);
   });
 
   it("has unique set ids", () => {

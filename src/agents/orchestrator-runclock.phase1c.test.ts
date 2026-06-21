@@ -131,6 +131,19 @@ const PHASE_1C_SET = resolveLegalFlagSet({
   silenceAccumulator: true, // ← the 1c flip that turns the gate ON.
 });
 
+// The shipped PRODUCTION DEFAULT (PRODUCTION_DEFAULT_FLAG_SET_ID = "v1-driver+full-control-plane"):
+// the proven v1 engine + ALL FOUR control-plane concerns ON. The per-flag tests cover 1a/1b/1c in
+// isolation, and phase1d covers typedCancelReason as a pure-fn gate — but nothing drove the full
+// four-flag combo through a live orchestrator run until the arms below (the production-default
+// backstop: the combo boots + completes, and rule-4 precedence is intact with 1d also ON).
+const PRODUCTION_DEFAULT_SET = resolveLegalFlagSet({
+  ...DEFAULT_FLAG_SET,
+  failureLedger: true,
+  runClock: true,
+  silenceAccumulator: true,
+  typedCancelReason: true, // ← the 1d flip the per-flag tests never drive through the live loop
+});
+
 function makeOrchestrator(opts: {
   clock: FakeClock;
   provider: { name: string };
@@ -193,5 +206,51 @@ describe("Phase 1c orchestrator gate — silence accumulator OFF (inert) vs ON (
     expect(p.callCount()).toBe(2);
     // And it did NOT terminate with the provider_abort message — it completed normally.
     expect(result).not.toMatch(/Unable to complete this task/i);
+  });
+});
+
+describe("Production default (v1-driver+full-control-plane) — the shipped four-flag combo end-to-end", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("a clean run completes under the full four-flag control plane (the combo boots + the happy path works)", async () => {
+    const clock = new FakeClock(0);
+    // Succeeds on the first call → no failure → the verdict path is not hit; proves the four-flag
+    // combo constructs + runs a normal task to completion (no boot/run interaction crash).
+    const p = createGoSilentProvider(clock, { succeedOnCall: 1 });
+    const orch = makeOrchestrator({ clock, provider: p.provider, flagSet: PRODUCTION_DEFAULT_SET });
+
+    const result = await orch.runBackgroundTask("Analyze", {
+      signal: new AbortController().signal,
+      onProgress: vi.fn(),
+      chatId: "bg-prod-default-ok",
+      channelType: "cli",
+    });
+
+    expect(p.callCount()).toBe(1);
+    expect(result).not.toMatch(/Unable to complete this task/i); // completed, not aborted
+  });
+
+  it("the silence-accumulator stop (rule 4) STILL fires with typedCancelReason ALSO on — verdict precedence intact", async () => {
+    const clock = new FakeClock(0);
+    // Same silent-throw provider as the Phase-1c ON arm, but now the FULL control plane is on
+    // (typedCancelReason added). The verdict path runs with typedCancelReason:true feeding the live
+    // RunClock task-token reason into buildPhase1bVerdictInput — the 1d ON-gate exercised end-to-end
+    // for the first time (the reason is null here, so the gate reads-live-and-finds-none, vs the
+    // hardcoded-null OFF path). Rule 4 must still win on the over-ceiling silent call: adding 1d must
+    // not perturb the rule-4 stop. Proves the combined four-flag default terminates correctly.
+    const p = createGoSilentProvider(clock, { succeedOnCall: null });
+    const orch = makeOrchestrator({ clock, provider: p.provider, flagSet: PRODUCTION_DEFAULT_SET });
+
+    const result = await orch.runBackgroundTask("Analyze", {
+      signal: new AbortController().signal,
+      onProgress: vi.fn(),
+      chatId: "bg-prod-default-stop",
+      channelType: "cli",
+    });
+
+    expect(p.callCount()).toBe(1); // rule-4 stop after one over-ceiling silent call (unchanged by 1d)
+    expect(result).toMatch(/Unable to complete this task/i);
   });
 });

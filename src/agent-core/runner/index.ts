@@ -33,6 +33,7 @@ export {
   LEGAL_FLAG_SETS,
   DEFAULT_FLAG_SET_ID,
   DEFAULT_FLAG_SET,
+  PRODUCTION_DEFAULT_FLAG_SET_ID,
   resolveLegalFlagSet,
   resolveFlagSetById,
 } from "./flags.js";

@@ -8030,7 +8030,9 @@ export class Orchestrator {
   // DEFAULT-OFF: nothing routes here yet. This is the slot the worker-route-flip increment flips.
   // ═══════════════════════════════════════════════════════════════════════════════════════
 
-  /** The resolved agent-core flag set, read by the route selector. undefined ⇒ default all-v1. */
+  /** The resolved agent-core flag set, read by the route selector. undefined ⇒ a test constructed the
+   *  orchestrator without one; bootstrap always passes a set (production default:
+   *  `v1-driver+full-control-plane`). */
   getAgentCoreFlagSet(): FlagSet | undefined {
     return this.agentCoreFlagSet;
   }

@@ -212,7 +212,11 @@ export const LEGAL_FLAG_SETS: readonly FlagSet[] = [
   },
 ];
 
-/** Phase 0 default; flipping the active set is a config change, not a redeploy. */
+/**
+ * The Phase-0 baseline (`all-v1`, every flag OFF). NOT the shipped production default — that is
+ * `PRODUCTION_DEFAULT_FLAG_SET_ID` below. This stays the test base + the `resolveFlagSetById(undefined)`
+ * fallback + the env-revert target. Flipping the active set is a config change, not a redeploy.
+ */
 export const DEFAULT_FLAG_SET_ID = "all-v1";
 
 /** The Phase-0 default combination as a `RequestedFlagSet` (the `all-v1` fields, no `id`). */
@@ -223,6 +227,18 @@ export const DEFAULT_FLAG_SET: RequestedFlagSet = {
   supervisorNode: "v1",
   ...ALL_V1_NO_CP,
 };
+
+/**
+ * The PRODUCTION default — what bootstrap selects when AGENT_CORE_FLAG_SET is unset. The proven v1
+ * engine on every route (NO runner swap) running with the FULL Phase-1 control plane: failureLedger
+ * (unified failure→verdict), runClock (per-call provider deadlines), silenceAccumulator (kills the
+ * ~70-min cross-call stall/livelock), typedCancelReason (clean aborts). All four shipped + tested
+ * (Phase 1a–1d); this promotes them from opt-in to the default — a tangibly more robust product on
+ * the hardened engine. `all-v1` (above) stays the bare baseline: the instant env-revert
+ * (AGENT_CORE_FLAG_SET=all-v1, no redeploy), the test base, and what `resolveFlagSetById(undefined)`
+ * returns. Must be a LEGAL_FLAG_SETS id (reject-at-boot enforces it).
+ */
+export const PRODUCTION_DEFAULT_FLAG_SET_ID = "v1-driver+full-control-plane";
 
 /** Structural equality over the flag fields (`id` excluded). */
 function flagsEqual(a: RequestedFlagSet, b: RequestedFlagSet): boolean {

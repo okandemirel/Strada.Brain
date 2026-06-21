@@ -103,7 +103,7 @@ import type { PostSetupBootstrap } from "../common/setup-contract.js";
 import { MessageRouter } from "../tasks/index.js";
 import { buildTaskProgressSummary } from "../tasks/progress-signals.js";
 import type { BackgroundExecutor } from "../tasks/background-executor.js";
-import { resolveFlagSetById } from "../agent-core/runner/index.js";
+import { resolveFlagSetById, PRODUCTION_DEFAULT_FLAG_SET_ID } from "../agent-core/runner/index.js";
 import {
   CapabilityRegistry,
   CAPABILITY_MCP_STRADA,
@@ -977,16 +977,16 @@ async function bootstrapImpl(
   });
 
   // Agent Core v2 strangler seam: select the active rollout stage by id via the AGENT_CORE_FLAG_SET
-  // ops knob (a config change, not a redeploy), REJECT-AT-BOOT for an unknown/uncatalogued id (P-F
-  // closed matrix). Resolved BEFORE the orchestrator so the FlagSet threads into it (Phase 1a reads
-  // `agentCoreFlagSet.failureLedger`). UNSET (the default) → `all-v1` → every flag OFF, so the seam
-  // changes nothing observable until an operator flips the active set (e.g.
-  // AGENT_CORE_FLAG_SET=v2-worker-only+full-control-plane to start the worker-route soak).
-  const rawFlagSetEnv = process.env.AGENT_CORE_FLAG_SET;
-  const agentCoreFlagSet = resolveFlagSetById(rawFlagSetEnv);
+  // ops knob (a config change, not a redeploy), REJECT-AT-BOOT for an unknown id (P-F closed matrix).
+  // Resolved BEFORE the orchestrator so the FlagSet threads into it. UNSET (the normal case) →
+  // PRODUCTION_DEFAULT_FLAG_SET_ID (the proven engine + full control plane; see flags.ts for what it
+  // enables). INSTANT REVERT with no redeploy: AGENT_CORE_FLAG_SET=all-v1 drops to the bare baseline.
+  const rawFlagSetEnv = process.env.AGENT_CORE_FLAG_SET?.trim();
+  const requestedFlagSetId = rawFlagSetEnv || PRODUCTION_DEFAULT_FLAG_SET_ID;
+  const agentCoreFlagSet = resolveFlagSetById(requestedFlagSetId);
   logger.info("Agent Core flag set resolved", {
     flagSet: agentCoreFlagSet.id,
-    source: rawFlagSetEnv ? "AGENT_CORE_FLAG_SET" : "default",
+    source: rawFlagSetEnv ? "AGENT_CORE_FLAG_SET" : "production-default",
   });
 
   // Agent Core v2 — Phase 3b: construct + seed the CapabilityRegistry (tool-substrate liveness) ONLY
