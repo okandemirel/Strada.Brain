@@ -129,6 +129,10 @@ export interface AgentRunSetupInput {
   readonly prompt: string;
   readonly chatId: string;
   readonly channelType: string;
+  /** User + conversation identity for resolveIdentityKey — multi-user / cross-channel keying of
+   *  sessions, profiles, and provider selection. Absent ⇒ falls back to the conversation scope. */
+  readonly userId?: string;
+  readonly conversationId?: string;
   readonly mode: RunnerModeLike;
   readonly interactiveSession?: unknown;
   readonly assignedProvider?: string;

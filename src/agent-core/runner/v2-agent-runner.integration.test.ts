@@ -156,9 +156,10 @@ function buildHarness(
 ) {
   const clock = new FakeClock(0);
   const channel = mkChannel();
+  const getProvider = vi.fn((_identityKey?: string) => provider);
   const orch = new Orchestrator({
     providerManager: {
-      getProvider: () => provider,
+      getProvider,
       getActiveInfo: () => ({ providerName: "mock", model: "mock-model", isDefault: true }),
       shutdown: vi.fn(),
     },
@@ -178,7 +179,7 @@ function buildHarness(
   const { port, gateway, seed, createHealthCore } = orch.createAgentCorePort();
   const controlPlane = createControlPlane({ clock, seed, createHealthCore }); // no learning sink
   const runner = new V2AgentRunner({ controlPlane, gateway, orchestratorPort: port, clock } as V2RunnerDeps);
-  return { clock, channel, provider, tools, runner };
+  return { clock, channel, provider, tools, runner, getProvider };
 }
 
 describe("V2AgentRunner — REAL port + REAL gateway (provider.chat scripted)", () => {
@@ -420,5 +421,20 @@ describe("V2AgentRunner — Phase 3b capability guard (flag-on; the first regist
     expect(result.status).toBe("completed");
     // revive() → recordProbeSuccess → degraded(usable) → canAttempt → the tool ran (step 2b recovery).
     expect(h.tools.find((t) => t.name === BRIDGE)!.execute).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("Step 0 — v2 prologue fidelity gaps (behind the route flag; production routes stay v1)", () => {
+  it("gap #5: the run identity is resolved via resolveIdentityKey — userId wins over chatId", async () => {
+    const provider = mkScriptedProvider();
+    provider.chat.mockResolvedValue(resp({ text: "done", stopReason: "end_turn" }));
+    const h = buildHarness(provider);
+
+    await drive(h.clock, h.runner.run(mkRequest({ userId: "user-42" }), mkIO("worker")));
+
+    // setupAgentCoreRun must key the run on the RESOLVED identity (userId), not the raw chatId.
+    // Pre-fix it hardcoded `identityKey = chatId` → getProvider("chat-1"); the fix routes through
+    // resolveIdentityKey → "user-42" (the fallback-provider fetch in the v2 prologue).
+    expect(h.getProvider).toHaveBeenCalledWith("user-42");
   });
 });

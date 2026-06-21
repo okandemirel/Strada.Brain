@@ -8211,7 +8211,16 @@ export class Orchestrator {
     request: AgentRunSetupInput,
   ): Promise<{ setup: PortRunSetup; runCtx: AgentCorePortRunContext }> {
     const chatId = request.chatId;
-    const identityKey = chatId;
+    // Step 0 / gap #5 — resolve the run identity the way v1's prologue does (resolveIdentityKey at
+    // :3057/:2201): userId/conversationId key multi-user + cross-channel sessions, profiles, and
+    // provider selection. The prior `identityKey = chatId` mis-keyed every non-default-channel run.
+    const identityKey = resolveIdentityKey(
+      chatId,
+      request.userId,
+      request.conversationId,
+      this.userProfileStore,
+      request.channelType,
+    );
     const session = this.sessionManager.getOrCreateSession(chatId);
     const queryText = request.prompt;
     const conversationScope = session.conversationScope ?? chatId;

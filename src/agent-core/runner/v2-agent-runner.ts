@@ -706,6 +706,8 @@ export class V2AgentRunner implements AgentRunner {
       prompt: request.prompt,
       chatId: request.chatId,
       channelType: String(request.channelType),
+      userId: request.userId,
+      conversationId: request.conversationId,
       mode,
       interactiveSession: request.interactiveSession,
       assignedProvider: request.assignedProvider,
