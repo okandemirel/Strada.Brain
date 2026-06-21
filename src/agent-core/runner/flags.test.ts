@@ -13,6 +13,7 @@ import {
   DEFAULT_FLAG_SET,
   DEFAULT_FLAG_SET_ID,
   resolveLegalFlagSet,
+  resolveFlagSetById,
   type FlagSet,
   type RequestedFlagSet,
 } from "./flags.js";
@@ -242,6 +243,41 @@ describe("resolveLegalFlagSet — closed-matrix rejections", () => {
       for (const set of LEGAL_FLAG_SETS) {
         expect(message).toContain(set.id);
       }
+    }
+  });
+});
+
+describe("resolveFlagSetById — the AGENT_CORE_FLAG_SET ops knob", () => {
+  it("undefined/empty/whitespace → the default all-v1 set", () => {
+    expect(resolveFlagSetById(undefined).id).toBe(DEFAULT_FLAG_SET_ID);
+    expect(resolveFlagSetById("").id).toBe(DEFAULT_FLAG_SET_ID);
+    expect(resolveFlagSetById("   ").id).toBe(DEFAULT_FLAG_SET_ID);
+  });
+
+  it("a valid id resolves to that legal set (incl. the worker-flip stage)", () => {
+    expect(resolveFlagSetById("all-v1").id).toBe("all-v1");
+    const workerFlip = resolveFlagSetById("v2-worker-only+full-control-plane");
+    expect(workerFlip.worker).toBe("v2");
+    expect(workerFlip.supervisorNode).toBe("v2");
+    expect(workerFlip.failureLedger).toBe(true); // a V2 route requires the full control plane
+  });
+
+  it("every LEGAL_FLAG_SET id round-trips", () => {
+    for (const set of LEGAL_FLAG_SETS) {
+      expect(resolveFlagSetById(set.id)).toBe(set);
+    }
+  });
+
+  it("an unknown id throws (reject-at-boot) and lists the legal ids", () => {
+    expect(() => resolveFlagSetById("bogus-set")).toThrow(/Unknown agent-core flag set id/);
+    let message = "";
+    try {
+      resolveFlagSetById("bogus-set");
+    } catch (e) {
+      message = e instanceof Error ? e.message : String(e);
+    }
+    for (const set of LEGAL_FLAG_SETS) {
+      expect(message).toContain(set.id);
     }
   });
 });

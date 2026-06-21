@@ -103,7 +103,7 @@ import type { PostSetupBootstrap } from "../common/setup-contract.js";
 import { MessageRouter } from "../tasks/index.js";
 import { buildTaskProgressSummary } from "../tasks/progress-signals.js";
 import type { BackgroundExecutor } from "../tasks/background-executor.js";
-import { resolveLegalFlagSet, DEFAULT_FLAG_SET } from "../agent-core/runner/index.js";
+import { resolveFlagSetById } from "../agent-core/runner/index.js";
 
 import type { IChannelAdapter } from "../channels/channel.interface.js";
 import type { NodeResult, SupervisorContext, TaggedGoalNode } from "../supervisor/supervisor-types.js";
@@ -969,13 +969,18 @@ async function bootstrapImpl(
     goalDecomposer,
   });
 
-  // Agent Core v2 strangler seam: validate the active driver/control-plane flag combination
-  // against LEGAL_FLAG_SETS and REJECT-AT-BOOT any uncatalogued combo (P-F closed matrix).
-  // Resolved BEFORE the orchestrator so the resolved FlagSet can be threaded into it (Phase
-  // 1a reads `agentCoreFlagSet.failureLedger`). The default `all-v1` set keeps the flag OFF,
-  // so installing the seam changes nothing observable until the active set is flipped.
-  const agentCoreFlagSet = resolveLegalFlagSet(DEFAULT_FLAG_SET);
-  logger.info("Agent Core flag set resolved", { flagSet: agentCoreFlagSet.id });
+  // Agent Core v2 strangler seam: select the active rollout stage by id via the AGENT_CORE_FLAG_SET
+  // ops knob (a config change, not a redeploy), REJECT-AT-BOOT for an unknown/uncatalogued id (P-F
+  // closed matrix). Resolved BEFORE the orchestrator so the FlagSet threads into it (Phase 1a reads
+  // `agentCoreFlagSet.failureLedger`). UNSET (the default) → `all-v1` → every flag OFF, so the seam
+  // changes nothing observable until an operator flips the active set (e.g.
+  // AGENT_CORE_FLAG_SET=v2-worker-only+full-control-plane to start the worker-route soak).
+  const rawFlagSetEnv = process.env.AGENT_CORE_FLAG_SET;
+  const agentCoreFlagSet = resolveFlagSetById(rawFlagSetEnv);
+  logger.info("Agent Core flag set resolved", {
+    flagSet: agentCoreFlagSet.id,
+    source: rawFlagSetEnv ? "AGENT_CORE_FLAG_SET" : "default",
+  });
 
   // Initialize orchestrator
   const orchestrator = new Orchestrator({

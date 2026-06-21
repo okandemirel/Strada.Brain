@@ -246,3 +246,22 @@ export function resolveLegalFlagSet(requested: RequestedFlagSet): FlagSet {
   }
   return match;
 }
+
+/**
+ * Resolve the active flag set by its `id` — the ops knob (`AGENT_CORE_FLAG_SET` env var) that
+ * selects the rollout stage WITHOUT a code change. An undefined/empty id resolves to the default
+ * `all-v1` set (so the default boot is unchanged). An UNKNOWN id throws (reject-at-boot), listing
+ * the legal ids — a typo can never silently fall back to the wrong stage. The result is one of
+ * `LEGAL_FLAG_SETS` by construction, inheriting the closed-matrix guarantee.
+ */
+export function resolveFlagSetById(id: string | undefined): FlagSet {
+  const wanted = (id ?? "").trim() || DEFAULT_FLAG_SET_ID;
+  const match = LEGAL_FLAG_SETS.find((candidate) => candidate.id === wanted);
+  if (!match) {
+    throw new Error(
+      `Unknown agent-core flag set id "${wanted}" (set via AGENT_CORE_FLAG_SET). ` +
+        `Legal set ids: ${LEGAL_FLAG_SETS.map((s) => s.id).join(", ")}.`,
+    );
+  }
+  return match;
+}

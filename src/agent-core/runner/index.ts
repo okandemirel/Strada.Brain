@@ -34,6 +34,7 @@ export {
   DEFAULT_FLAG_SET_ID,
   DEFAULT_FLAG_SET,
   resolveLegalFlagSet,
+  resolveFlagSetById,
 } from "./flags.js";
 export type { FlagSet, RequestedFlagSet, DriverChoice } from "./flags.js";
 
