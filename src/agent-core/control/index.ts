@@ -18,3 +18,4 @@ export * from "./iteration-health-core-adapter.js";
 export * from "./verdict-loop-action.js";
 export * from "./control-plane.js";
 export * from "./capability-registry.js";
+export * from "./capability-guard.js";
