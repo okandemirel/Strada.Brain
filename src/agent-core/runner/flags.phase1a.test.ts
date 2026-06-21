@@ -30,16 +30,19 @@ describe("Phase 1a — failureLedger isolation set", () => {
     expect(set.supervisorNode).toBe("v1");
   });
 
-  it("still rejects failureLedger + runClock (partial bundle beyond the isolation set)", () => {
+  it("resolves failureLedger + runClock to v1-driver+failure-ledger+run-clock (Phase 1b set)", () => {
     const requested: RequestedFlagSet = {
       ...DEFAULT_FLAG_SET,
       failureLedger: true,
       runClock: true,
     };
-    expect(() => resolveLegalFlagSet(requested)).toThrow(/Illegal agent-core flag combination/);
+    expect(resolveLegalFlagSet(requested).id).toBe("v1-driver+failure-ledger+run-clock");
   });
 
-  it("still rejects the other lone control-plane sub-flags (only failureLedger is isolable)", () => {
+  it("still rejects the other lone control-plane sub-flags (lone runClock needs the ledger)", () => {
+    // Phase 1b made the failureLedger+runClock PAIR legal, but lone runClock (failureLedger
+    // OFF) stays illegal: runClock alone arms timers whose typed provider-stall / hard-timeout
+    // cancels reach no verdict consumer (the ledger). So runClock remains in this rejection loop.
     for (const lone of ["runClock", "silenceAccumulator", "typedCancelReason"] as const) {
       const requested: RequestedFlagSet = { ...DEFAULT_FLAG_SET, [lone]: true };
       expect(() => resolveLegalFlagSet(requested)).toThrow(/not in LEGAL_FLAG_SETS/);

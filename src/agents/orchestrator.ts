@@ -64,6 +64,7 @@ import type { LearningPipeline } from "../learning/pipeline/learning-pipeline.js
 import type { InterventionEngine } from "../learning/intervention/intervention-engine.js";
 import {
   DEFAULT_INTERACTION_CONFIG,
+  DEFAULT_LLM_PROVIDER_FIRST_RESPONSE_TIMEOUT_MS,
   DEFAULT_LLM_STREAM_INITIAL_TIMEOUT_MS,
   DEFAULT_LLM_STREAM_STALL_TIMEOUT_MS,
   DEFAULT_TASK_CONFIG,
@@ -184,8 +185,16 @@ import {
   createFailureLedger,
   IterationHealthCoreAdapter,
   mapVerdictToLoopAction,
+  openRunClock,
+  resolveRunBudgetPolicy,
+  SystemClock,
+  type CallScope,
+  type CancelReason,
+  type Clock,
   type FailureLedger,
   type LoopAction,
+  type PolicySeed,
+  type RunClock,
   type VerdictInput,
 } from "../agent-core/control/index.js";
 import type { FlagSet } from "../agent-core/runner/index.js";
@@ -298,6 +307,11 @@ const SELF_IMPROVEMENT_TOOLS: ReadonlySet<string> = new Set([
 ]);
 const TYPING_INTERVAL_MS = 4000;
 const MAX_CONSECUTIVE_PROVIDER_FAILURES = 5;
+/** 1b seed default for the task-scope silence ceiling. Mirrors background-executor.ts's
+ *  DEFAULT_TASK_INACTIVITY_TIMEOUT_MS (600_000) — re-declared locally to avoid importing the
+ *  bg-executor into the interactive path. Kept in step via the policy clamp (ratio×stall). */
+const PHASE1B_TASK_INACTIVITY_MS = 10 * 60 * 1000;
+const PHASE1B_MIN_INACTIVITY_OVER_STREAM_RATIO = 2;
 const NATURAL_LANGUAGE_BUILTIN_PERSONAS = ["default", "formal", "casual", "minimal"] as const;
 const SUPERVISOR_SYNTHESIS_SYSTEM_PROMPT = `You are a synthesis worker inside Strada Brain's orchestrator.
 The orchestrator remains the primary intelligence and the user-facing agent.
@@ -725,6 +739,9 @@ export class Orchestrator {
    * up with zero re-plumbing.
    */
   private readonly agentCoreFlagSet?: FlagSet;
+  /** Agent Core v2 — Phase 1b. Injectable time source for RunClock; SystemClock in prod,
+   *  FakeClock in tests. Only consulted when `agentCoreFlagSet.runClock === true`. */
+  private readonly agentCoreClock: Clock;
   private readonly sessionManager: SessionManager;
   private systemPrompt: string;
   private readonly getIdentityState?: () => IdentityState;
@@ -926,6 +943,8 @@ export class Orchestrator {
      * Only `failureLedger` is consulted in 1a; the rest are threaded for 1b–1d.
      */
     agentCoreFlagSet?: FlagSet;
+    /** Agent Core v2 — Phase 1b injectable Clock (defaults to SystemClock). */
+    agentCoreClock?: Clock;
   }) {
     this.providerManager = opts.providerManager;
     // Vault write-hook lazy-binds when the first Edit/Write tool runs.
@@ -1004,6 +1023,7 @@ export class Orchestrator {
     this.onSkillCreated = opts.onSkillCreated;
     this.getSkillEntries = opts.getSkillEntries;
     this.agentCoreFlagSet = opts.agentCoreFlagSet;
+    this.agentCoreClock = opts.agentCoreClock ?? new SystemClock();
 
     // Build tool registry
     this.tools = new Map();
@@ -1095,6 +1115,91 @@ export class Orchestrator {
     adapter.setProvider(provider);
     ledger.recordFailure(provider, false);
     return ledger.verdict(this.buildPhase1aVerdictInput());
+  }
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // Agent Core v2 — Phase 1b: RunClock construction + the live-signal VerdictInput.
+  //
+  // Reached ONLY when `agentCoreFlagSet.runClock === true`. The RunClock owns every
+  // per-call deadline (CallScope token) + the task-scope silence accumulator; its typed
+  // provider-stall / hard-timeout / silence signals feed the SAME FailureLedger the 1a
+  // helper feeds (rules 2/4/6 become reachable). The flag-OFF path is byte-identical v1.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Phase 1b. Build the PolicySeed from live v1 config/state for a run.
+   * `-1` (interactiveTokenBudget "unbounded" sentinel) maps to +Infinity because Budget has
+   * no sentinel; costCap is Infinity (v1 has no cost gate). Reads the LIVE token budget so a
+   * mid-task portal raise is reflected if `reArmOnConfigChange` is later called (deferred).
+   */
+  private buildPolicySeed(): PolicySeed {
+    const liveTokenBudget = this.getLiveInteractiveTokenBudget();
+    return {
+      streamInitialTimeoutMs: this.streamInitialTimeoutMs,
+      streamStallTimeoutMs: this.streamStallTimeoutMs,
+      providerFirstResponseMs: DEFAULT_LLM_PROVIDER_FIRST_RESPONSE_TIMEOUT_MS,
+      taskInactivityMs: PHASE1B_TASK_INACTIVITY_MS,
+      minInactivityOverStreamRatio: PHASE1B_MIN_INACTIVITY_OVER_STREAM_RATIO,
+      outputTokenCap: liveTokenBudget === -1 ? Number.POSITIVE_INFINITY : liveTokenBudget,
+      costCapUsd: Number.POSITIVE_INFINITY,
+      // taskHardMs omitted → resolver uses Infinity (v1 has no wall-clock task ceiling). The
+      // 3h27m-runaway bound stays the iteration limit + loopDetectionBlocked guard in 1b.
+    };
+  }
+
+  /**
+   * Phase 1b: VerdictInput with real RunClock signals. Called at the failure sites ONLY when
+   * `agentCoreFlagSet.runClock === true`. `callStalled` is true when the just-failed call's
+   * token aborted with a typed provider-stall / hard-timeout; `hardTimeoutBlown` from the task
+   * token; `taskInactivityExceeded` from the silence accumulator BUT gated on the
+   * `silenceAccumulator` flag (1c) — see the field comment. taskCancelReason stays null
+   * here (typed cancel = 1d; v1 cancel still flows via `signal.aborted` re-throw outside this
+   * site). `failedCallReason` is the just-failed call scope's `token.reason` when locally
+   * readable (non-streaming sibling sites), else null (streaming sites rely on the task-scope
+   * silence accumulator + hard-timeout — see P-1b-4).
+   */
+  private buildPhase1bVerdictInput(
+    runClock: RunClock,
+    failedCallReason: CancelReason | null,
+  ): VerdictInput {
+    const taskReason = runClock.taskToken.reason;
+    const hardTask = taskReason?.kind === "hard-timeout" && taskReason.scope === "task";
+    return {
+      taskCancelReason: null, // 1d
+      hardTimeoutBlown: runClock.hardTaskExpired() || hardTask,
+      hardTimeoutScope: "task",
+      resourceExhausted: false, // token-budget abort stays v1's own check above the site
+      // The task-scope silence accumulator drives the task-inactivity verdict only from Phase 1c
+      // (silenceAccumulator flag). RunClock already accumulates silent ms in 1b, but CONSUMING it
+      // here would prematurely leak 1c's livelock-stop into 1b (where the flag is off) and make the
+      // silenceAccumulator flag a no-op. Behavior-preserving: v1 never bounded the accumulator
+      // livelock either — that is precisely what 1c adds. Per-call stalls ARE bounded in 1b via
+      // `callStalled` below; only the cross-call accumulator verdict waits for 1c.
+      taskInactivityExceeded:
+        this.agentCoreFlagSet?.silenceAccumulator === true && runClock.silenceCeilingExceeded(),
+      callStalled:
+        failedCallReason?.kind === "provider-stall" ||
+        failedCallReason?.kind === "hard-timeout",
+      modelProposedDone: false,
+      reflectionWantsExtend: false,
+      loopDetectionBlocked: false,
+    };
+  }
+
+  /**
+   * Phase 1b sibling of {@link recordPhase1aFailureAndVerdict}: tag the provider, record the
+   * (non-benign) failure, and read the verdict under the LIVE RunClock signals.
+   */
+  private recordPhase1bFailureAndVerdict(
+    ledger: FailureLedger,
+    adapter: IterationHealthCoreAdapter,
+    provider: string,
+    runClock: RunClock,
+    failedCallReason: CancelReason | null,
+  ): ReturnType<FailureLedger["verdict"]> {
+    adapter.setProvider(provider);
+    ledger.recordFailure(provider, false);
+    return ledger.verdict(this.buildPhase1bVerdictInput(runClock, failedCallReason));
   }
 
   /**
@@ -3272,6 +3377,9 @@ export class Orchestrator {
           return finish(userText, "blocked", userText);
         };
 
+        // Phase 1b: declared OUTSIDE the try so the outer finally can dispose it. Assigned
+        // (flag-ON only) once the ledger is built; undefined keeps the byte-identical v1 path.
+        let bgRunClock: RunClock | undefined;
         try {
           if (supervisorMode !== "off") {
             let lastSupervisorSummary: string | null = null;
@@ -3329,12 +3437,21 @@ export class Orchestrator {
           // tracker, so the OFF path's downstream reads (health-awareness prompt, tool-result
           // health context) keep working unchanged. pauseRetryBudget:0 is correct for 1a:
           // callStalled is never set (run-clock OFF) → rule 6 dead → budget never consulted.
+          // Phase 1b: when run-clock is ON, open ONE RunClock per bg run and lift the pause→retry
+          // budget from the resolved policy so rule 6 (call-stall → pause→retry→stop) is live.
+          let bgPauseRetryBudget = 0;
+          if (this.agentCoreFlagSet?.runClock === true) {
+            const { policy, warnings } = resolveRunBudgetPolicy("background", this.buildPolicySeed());
+            for (const w of warnings) logger.warn(`[RunBudgetPolicy:background] ${w}`);
+            bgRunClock = openRunClock(this.agentCoreClock, policy);
+            bgPauseRetryBudget = policy.pauseRetryBudget;
+          }
           const bgFailureLedgerAdapter =
             this.agentCoreFlagSet?.failureLedger === true
               ? new IterationHealthCoreAdapter(iterationHealth, "")
               : undefined;
           const bgFailureLedger = bgFailureLedgerAdapter
-            ? createFailureLedger(bgFailureLedgerAdapter, { pauseRetryBudget: 0 })
+            ? createFailureLedger(bgFailureLedgerAdapter, { pauseRetryBudget: bgPauseRetryBudget })
             : undefined;
           let maxTokensAbort = false;
           let providerAbort = false;
@@ -3418,6 +3535,11 @@ export class Orchestrator {
                 "chatStream" in resilientProvider &&
                 typeof resilientProvider.chatStream === "function";
               let response;
+              // Phase 1b: capture the non-streaming sibling's CallScope so the catch can read
+              // its typed token.reason (provider-stall / hard-timeout) for the verdict's
+              // `callStalled`. Declared outside the try; undefined on the streaming path and on
+              // flag-OFF (streaming sites rely on the silence accumulator instead — P-1b-4).
+              let bgChatScope: CallScope | undefined;
               try {
                 response = canBgStream
                   ? await this.silentStream(
@@ -3425,7 +3547,31 @@ export class Orchestrator {
                       // Re-arm the per-task inactivity watchdog from intra-call
                       // keepalive/reasoning liveness (audit #8). Non-user-facing.
                       () => emitProgress({ kind: "heartbeat", message: "" }),
+                      bgRunClock, // Phase 1b
                     )
+                  : bgRunClock
+                  ? await (async () => {
+                      // Phase 1b ON: per-call deadline is the CallScope token, carved under
+                      // task-remaining; externalSignal stays the task `signal` ALONE (audit #6/#7).
+                      bgChatScope = bgRunClock.enterCall({
+                        firstResponseMs: this.streamInitialTimeoutMs,
+                        stallMs: this.streamInitialTimeoutMs,
+                        hardMs: this.streamInitialTimeoutMs,
+                      });
+                      try {
+                        return await resilientProvider.chat(
+                          this.withCompactionSummary(activePrompt, session),
+                          session.messages,
+                          currentToolDefinitions,
+                          {
+                            signal: AbortSignal.any([signal, bgChatScope.token.signal]),
+                            externalSignal: signal,
+                          },
+                        );
+                      } finally {
+                        bgChatScope.leave();
+                      }
+                    })()
                   : await resilientProvider.chat(
                       this.withCompactionSummary(activePrompt, session),
                       session.messages,
@@ -3451,10 +3597,19 @@ export class Orchestrator {
                 if (signal.aborted) throw providerError;
 
                 if (bgFailureLedger && bgFailureLedgerAdapter) {
-                  // ── Agent Core v2 — Phase 1a LEDGER PATH (bg THROW). A throw is a generic
-                  //    health failure routed through rules 5/7/9 (NOT a typed call-stall — that
-                  //    is a run-clock signal, 1b). ──
-                  const verdict = this.recordPhase1aFailureAndVerdict(
+                  // ── Agent Core v2 — Phase 1a/1b LEDGER PATH (bg THROW). 1a: a throw is a
+                  //    generic health failure (rules 5/7/9). 1b: when run-clock is ON, the
+                  //    non-streaming sibling's typed token.reason also feeds rule 6 (call-stall)
+                  //    / rule 2 (hard-timeout) via buildPhase1bVerdictInput. ──
+                  const verdict = bgRunClock
+                    ? this.recordPhase1bFailureAndVerdict(
+                        bgFailureLedger,
+                        bgFailureLedgerAdapter,
+                        currentAssignment.providerName,
+                        bgRunClock,
+                        bgChatScope?.token.reason ?? null,
+                      )
+                    : this.recordPhase1aFailureAndVerdict(
                     bgFailureLedger,
                     bgFailureLedgerAdapter,
                     currentAssignment.providerName,
@@ -3615,10 +3770,20 @@ export class Orchestrator {
 
               // Intelligent provider resilience: detect synthetic empty responses and adapt
               if (bgFailureLedger && bgFailureLedgerAdapter) {
-                // ── Agent Core v2 — Phase 1a LEDGER PATH (bg EMPTY). Emptiness is v1's shared
-                //    predicate; the ledger owns retry/ask_user/abort + backoff. ──
+                // ── Agent Core v2 — Phase 1a/1b LEDGER PATH (bg EMPTY). Emptiness is v1's shared
+                //    predicate; the ledger owns retry/ask_user/abort + backoff. An EMPTY response
+                //    is not a call-stall (the call returned), so 1b passes null failedCallReason;
+                //    the task-scope silence/hard signals still flow via buildPhase1bVerdictInput. ──
                 if (isEmptyProviderResponse(response)) {
-                  const verdict = this.recordPhase1aFailureAndVerdict(
+                  const verdict = bgRunClock
+                    ? this.recordPhase1bFailureAndVerdict(
+                        bgFailureLedger,
+                        bgFailureLedgerAdapter,
+                        currentAssignment.providerName,
+                        bgRunClock,
+                        null,
+                      )
+                    : this.recordPhase1aFailureAndVerdict(
                     bgFailureLedger,
                     bgFailureLedgerAdapter,
                     currentAssignment.providerName,
@@ -4215,6 +4380,9 @@ export class Orchestrator {
           finalReason = error instanceof Error ? error.message : String(error);
           throw error;
         } finally {
+          // Phase 1b: clear the RunClock's timers + commit the final silent contribution.
+          // Idempotent; cancels taskToken as benign `task-winddown`, never poisons health.
+          bgRunClock?.dispose();
           this.sessionManager.persistExecutionMemory(identityKey, executionJournal);
           session.lastJournalSnapshot = executionJournal.snapshot();
           // ─── Metrics: safety net for unexpected exits (endTask is idempotent) ─
@@ -4720,6 +4888,9 @@ export class Orchestrator {
     logger.debug("System prompt built", { chatId, promptLength: systemPrompt.length });
     const interactiveIterationLimit = this.getInteractiveIterationLimit();
 
+    // Phase 1b: declared OUTSIDE the try so the outer finally can dispose it. Assigned
+    // (flag-ON only) once the ledger is built; undefined keeps the byte-identical v1 path.
+    let ifRunClock: RunClock | undefined;
     try {
       const supervisorDecision = await this.evaluateSupervisorAdmission({
         prompt: lastUserMessage,
@@ -4762,12 +4933,21 @@ export class Orchestrator {
       const iterationHealth = new IterationHealthTracker();
       // Agent Core v2 — Phase 1a (flag-gated). Wraps the SAME iterationHealth so OFF-path
       // downstream reads are unaffected; pauseRetryBudget:0 (rule 6 dead without run-clock).
+      // Phase 1b: when run-clock is ON, open ONE RunClock per interactive run and lift the
+      // pause→retry budget from the resolved policy so rule 6 (call-stall) is live.
+      let ifPauseRetryBudget = 0;
+      if (this.agentCoreFlagSet?.runClock === true) {
+        const { policy, warnings } = resolveRunBudgetPolicy("interactive", this.buildPolicySeed());
+        for (const w of warnings) logger.warn(`[RunBudgetPolicy:interactive] ${w}`);
+        ifRunClock = openRunClock(this.agentCoreClock, policy);
+        ifPauseRetryBudget = policy.pauseRetryBudget;
+      }
       const ifFailureLedgerAdapter =
         this.agentCoreFlagSet?.failureLedger === true
           ? new IterationHealthCoreAdapter(iterationHealth, "")
           : undefined;
       const ifFailureLedger = ifFailureLedgerAdapter
-        ? createFailureLedger(ifFailureLedgerAdapter, { pauseRetryBudget: 0 })
+        ? createFailureLedger(ifFailureLedgerAdapter, { pauseRetryBudget: ifPauseRetryBudget })
         : undefined;
       for (let iteration = 0; iteration < interactiveIterationLimit; iteration++) {
         // Re-read every iteration so a mid-task budget raise (via /token
@@ -4826,6 +5006,10 @@ export class Orchestrator {
           iteration,
         });
         let response;
+        // Phase 1b: capture the non-streaming sibling's CallScope so the catch can read its
+        // typed token.reason for the verdict's `callStalled`. Undefined on the streaming path
+        // and on flag-OFF (streaming sites rely on the silence accumulator — P-1b-4).
+        let ifChatScope: CallScope | undefined;
         try {
           if (canStream) {
             // Silent streaming: use streaming internally (SSE parsing, timeout, reasoning_content)
@@ -4836,7 +5020,29 @@ export class Orchestrator {
               session,
               resilientProvider,
               currentToolDefinitions,
+              undefined, // externalSignal — runAgentLoop has no user-cancel signal in scope
+              undefined, // onLiveness — interactive has no task-inactivity heartbeat
+              ifRunClock, // Phase 1b
             );
+          } else if (ifRunClock) {
+            // Phase 1b ON: scoped per-call deadline, NO externalSignal (a stall here IS a
+            // genuine provider failure that must poison health — audit #7 — so the call
+            // token's provider-stall is the only signal).
+            ifChatScope = ifRunClock.enterCall({
+              firstResponseMs: this.streamInitialTimeoutMs,
+              stallMs: this.streamInitialTimeoutMs,
+              hardMs: this.streamInitialTimeoutMs,
+            });
+            try {
+              response = await resilientProvider.chat(
+                this.withCompactionSummary(activePrompt, session),
+                session.messages,
+                currentToolDefinitions,
+                { signal: ifChatScope.token.signal },
+              );
+            } finally {
+              ifChatScope.leave();
+            }
           } else {
             // Interactive non-streaming sibling of silentStream: even though the user
             // is actively connected, the underlying fetch needs a deadline or a stalled
@@ -4858,9 +5064,18 @@ export class Orchestrator {
         } catch (providerError) {
           const errMsg = providerError instanceof Error ? providerError.message : String(providerError);
           if (ifFailureLedger && ifFailureLedgerAdapter) {
-            // ── Agent Core v2 — Phase 1a LEDGER PATH (interactive THROW). ──
+            // ── Agent Core v2 — Phase 1a/1b LEDGER PATH (interactive THROW). 1b: when run-clock
+            //    is ON, the non-streaming sibling's typed token.reason feeds rule 6/rule 2. ──
             const interactiveLang = (profile?.language ?? this.defaultLanguage) as string;
-            const verdict = this.recordPhase1aFailureAndVerdict(
+            const verdict = ifRunClock
+              ? this.recordPhase1bFailureAndVerdict(
+                  ifFailureLedger,
+                  ifFailureLedgerAdapter,
+                  currentAssignment.providerName,
+                  ifRunClock,
+                  ifChatScope?.token.reason ?? null,
+                )
+              : this.recordPhase1aFailureAndVerdict(
               ifFailureLedger,
               ifFailureLedgerAdapter,
               currentAssignment.providerName,
@@ -5001,9 +5216,18 @@ export class Orchestrator {
         // Intelligent provider resilience: detect synthetic empty responses and adapt
         const interactiveLang = (profile?.language ?? this.defaultLanguage) as string;
         if (ifFailureLedger && ifFailureLedgerAdapter) {
-          // ── Agent Core v2 — Phase 1a LEDGER PATH (interactive EMPTY). ──
+          // ── Agent Core v2 — Phase 1a/1b LEDGER PATH (interactive EMPTY). 1b: an EMPTY
+          //    response is not a call-stall (null failedCallReason); task-scope signals flow. ──
           if (isEmptyProviderResponse(response)) {
-            const verdict = this.recordPhase1aFailureAndVerdict(
+            const verdict = ifRunClock
+              ? this.recordPhase1bFailureAndVerdict(
+                  ifFailureLedger,
+                  ifFailureLedgerAdapter,
+                  currentAssignment.providerName,
+                  ifRunClock,
+                  null,
+                )
+              : this.recordPhase1aFailureAndVerdict(
               ifFailureLedger,
               ifFailureLedgerAdapter,
               currentAssignment.providerName,
@@ -5671,6 +5895,9 @@ export class Orchestrator {
       agentState = transitionPhase(agentState, AgentPhase.FAILED);
       throw error;
     } finally {
+      // Phase 1b: clear the RunClock's timers + commit the final silent contribution.
+      // Idempotent; cancels taskToken as benign `task-winddown`, never poisons health.
+      ifRunClock?.dispose();
       this.sessionManager.persistExecutionMemory(identityKey, executionJournal);
       session.lastJournalSnapshot = executionJournal.snapshot();
       // ─── Metrics: safety net for unexpected exits (endTask is idempotent) ─
@@ -5760,6 +5987,105 @@ export class Orchestrator {
   }
 
   /**
+   * Classify a {@link silentStream} response into the registry health signal. A 200 with no
+   * usable output is what the per-task circuit breaker classifies as a FAILURE; recording it
+   * as registry success would diverge the two — the breaker would back off while the registry
+   * kept the provider "healthy". Uses the SHARED predicate so they can't drift (audit #9).
+   *
+   * Pure extraction of the exact sequence the v1 stream-success and fallback-success arms ran
+   * inline; both the flag-OFF and flag-ON `silentStream` branches call it identically.
+   */
+  private classifySilentStreamResponse(response: ProviderResponse, provider: IAIProvider): void {
+    if (isEmptyProviderResponse(response)) {
+      recordProviderHealthFailure(
+        ProviderHealthRegistry.getInstance(),
+        provider.name,
+        response.meta?.reason ?? "empty response (no text, no tool calls)",
+        { isSingleProvider: isSingleProviderChain(provider) },
+      );
+    } else {
+      ProviderHealthRegistry.getInstance().recordSuccess(provider.name);
+    }
+  }
+
+  /**
+   * The non-streaming fallback {@link silentStream} runs after a streaming error. Pure
+   * extraction of v1's fallback try/catch (the success path + the synthetic-empty-response
+   * catch). Flag-OFF (`runClock` undefined) is byte-identical to v1: the per-call deadline is
+   * `AbortSignal.timeout(this.streamInitialTimeoutMs)` composed with the external signal exactly
+   * as before. Flag-ON: the deadline is a fresh RunClock CallScope token composed the same way.
+   */
+  private async silentStreamFallback(
+    provider: IAIProvider,
+    effectivePrompt: string,
+    session: Session,
+    toolDefinitions: Array<{
+      name: string;
+      description: string;
+      input_schema: import("../types/index.js").JsonObject;
+    }>,
+    externalSignal: AbortSignal | undefined,
+    chatId: string,
+    runClock?: RunClock,
+  ): Promise<ProviderResponse> {
+    let fbScope: CallScope | undefined;
+    // Flag-ON: a fresh fallback CallScope token (composition order [externalSignal, token]
+    // mirrors v1's [externalSignal, timeoutSignal]). Flag-OFF: VERBATIM v1 AbortSignal.timeout.
+    const fallbackSignal: AbortSignal = runClock
+      ? (() => {
+          fbScope = runClock.enterCall({
+            firstResponseMs: this.streamInitialTimeoutMs,
+            stallMs: this.streamInitialTimeoutMs,
+            hardMs: this.streamInitialTimeoutMs,
+          });
+          return externalSignal
+            ? AbortSignal.any([externalSignal, fbScope.token.signal])
+            : fbScope.token.signal;
+        })()
+      : (() => {
+          const timeoutSignal = AbortSignal.timeout(this.streamInitialTimeoutMs);
+          return externalSignal ? AbortSignal.any([externalSignal, timeoutSignal]) : timeoutSignal;
+        })();
+    try {
+      const fallbackResponse = await provider.chat(effectivePrompt, session.messages, toolDefinitions, {
+        signal: fallbackSignal,
+        externalSignal,
+      });
+      // The fallback chat can also return an empty 200 — record it as a health FAILURE
+      // (same predicate the per-task breaker uses) so the registry and breaker stay in
+      // agreement on this path too (audit #9).
+      this.classifySilentStreamResponse(fallbackResponse, provider);
+      return fallbackResponse;
+    } catch (fallbackErr) {
+      const fallbackMsg = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
+      getLogger().error("Silent stream fallback chat failed", { chatId, error: fallbackMsg });
+      recordProviderHealthFailure(ProviderHealthRegistry.getInstance(), provider.name, fallbackMsg, {
+        isSingleProvider: isSingleProviderChain(provider),
+      });
+      // Surface the failure to the agent so it can adapt its approach
+      // (e.g. simplify the request, reduce tool usage, skip non-critical work).
+      // This mirrors Claude Code's behavior of showing errors to the user.
+      session.messages.push({
+        role: "user",
+        content: `[System: The AI provider (${provider.name}) failed to respond. Error: ${fallbackMsg}. You may need to: simplify your current step, reduce the number of tool calls, or skip non-critical analysis. Adapt your approach and continue.]`,
+      } as ConversationMessage);
+      // Return a synthetic empty response so the PAOR loop can continue with the
+      // agent's awareness of the failure. The explicit `meta.empty` flag is the
+      // canonical signal the circuit breaker (runBackgroundTask / runAgentLoop)
+      // keys on — more robust than inferring emptiness from the token shape (#18).
+      return {
+        text: "",
+        toolCalls: [],
+        stopReason: "end_turn" as const,
+        usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+        meta: { empty: true, reason: "provider_failure" },
+      };
+    } finally {
+      fbScope?.leave();
+    }
+  }
+
+  /**
    * Silent streaming: uses the provider's streaming API internally (SSE parsing,
    * timeout, reasoning_content) but does NOT create visible messages for the user.
    * Returns the full ProviderResponse. Used by runAgentLoop to avoid showing
@@ -5777,6 +6103,7 @@ export class Orchestrator {
     }>,
     externalSignal?: AbortSignal,
     onLiveness?: () => void,
+    runClock?: RunClock, // Phase 1b — flag-ON only; undefined keeps the verbatim v1 watchdog path.
   ): Promise<ProviderResponse> => {
     // Reasoning models get an extended stall window equal to the initial timeout
     // because they may enter long silent thinking phases with no SSE events.
@@ -5784,6 +6111,69 @@ export class Orchestrator {
       ? this.streamInitialTimeoutMs
       : undefined;
     const effectivePrompt = this.withCompactionSummary(systemPrompt, session);
+
+    // ── Agent Core v2 — Phase 1b: RunClock-governed streaming (flag-ON). ──────────────────
+    // The CallScope token replaces the createStreamingProgressTimeout watchdog + Promise.race:
+    // the token aborts the live fetch directly via the composed signal (no rejecting race).
+    if (runClock) {
+      // Reasoning providers keep the generous stall window (== first-response) so a long
+      // silent think is not cut short — mirrors v1's `thinkingStall`. firstResponse==hard==
+      // streamInitialTimeoutMs reproduces v1's single AbortSignal.timeout bound on the silent
+      // phase; the task-scope silence accumulator is the global ceiling (replaces the deleted
+      // MAX_SILENT_THINKING_WINDOWS local cap).
+      const scope = runClock.enterCall({
+        firstResponseMs: this.streamInitialTimeoutMs,
+        stallMs: thinkingStall ?? this.streamStallTimeoutMs,
+        hardMs: this.streamInitialTimeoutMs,
+      });
+      // Compose exactly as v1 composed (scope token + external signal); externalSignal stays
+      // threaded so the resilient chain can tell a benign cancel from a stall (audit #6).
+      const composedSignal = externalSignal
+        ? AbortSignal.any([scope.token.signal, externalSignal])
+        : scope.token.signal;
+      let onLivenessAt = 0;
+      try {
+        const response = await (provider as IStreamingProvider).chatStream(
+          effectivePrompt,
+          session.messages,
+          toolDefinitions,
+          (chunk) => {
+            // Visible token → firstTokenSeen (flip first-response → stall) + touch (re-arm).
+            // Empty chunk = keepalive/reasoning delta → do NOT touch (preserve the long think
+            // window; the call's first-response==hard timer bounds the silent phase, and the
+            // task-scope accumulator bounds it globally). Still forward throttled task-liveness.
+            if (chunk) {
+              scope.firstTokenSeen();
+              scope.touch();
+            } else if (onLiveness) {
+              const now = this.agentCoreClock.now();
+              if (now - onLivenessAt >= 20_000) {
+                onLivenessAt = now;
+                onLiveness();
+              }
+            }
+          },
+          { signal: composedSignal, externalSignal },
+        );
+        this.classifySilentStreamResponse(response, provider);
+        return response;
+      } catch (err) {
+        // Benign control-plane cancel → rethrow for the loop's `signal.aborted` path (audit #6).
+        if (externalSignal?.aborted) throw err;
+        getLogger().error("Silent stream error", {
+          chatId,
+          error: err instanceof Error ? err.message : "Unknown streaming error",
+        });
+        // Non-cancel error → the same non-streaming fallback v1 runs, under a fresh scope.
+        return await this.silentStreamFallback(
+          provider, effectivePrompt, session, toolDefinitions, externalSignal, chatId, runClock,
+        );
+      } finally {
+        scope.leave();
+      }
+    }
+
+    // ── Flag-OFF: VERBATIM v1 (createStreamingProgressTimeout + Promise.race). ─────────────
     // Throttle for surfacing intra-call liveness to the task-level inactivity
     // watchdog (which cannot otherwise see keepalive/reasoning heartbeats) — a
     // dense reasoning-summary stream must not flood it (audit #8).
@@ -5832,21 +6222,8 @@ export class Orchestrator {
       });
       const response = await Promise.race([streamPromise, timeoutGuard.timeoutPromise]);
       timeoutGuard.clear();
-      // A 200 with no usable output is what the per-task circuit breaker classifies as
-      // a FAILURE. Recording it as registry success here would diverge the two — the
-      // breaker would back off while the health registry kept the provider "healthy".
-      // Use the SHARED predicate (the same one the breaker uses) so they can't drift
-      // and route empty responses to the health-failure path (audit #9).
-      if (isEmptyProviderResponse(response)) {
-        recordProviderHealthFailure(
-          ProviderHealthRegistry.getInstance(),
-          provider.name,
-          response.meta?.reason ?? "empty response (no text, no tool calls)",
-          { isSingleProvider: isSingleProviderChain(provider) },
-        );
-      } else {
-        ProviderHealthRegistry.getInstance().recordSuccess(provider.name);
-      }
+      // Route empty 200s to the health-failure path (the shared breaker predicate, audit #9).
+      this.classifySilentStreamResponse(response, provider);
       return response;
     } catch (err) {
       timeoutGuard.clear();
@@ -5860,56 +6237,11 @@ export class Orchestrator {
       }
       const errMsg = err instanceof Error ? err.message : "Unknown streaming error";
       getLogger().error("Silent stream error", { chatId, error: errMsg });
-      try {
-        // Fallback to non-streaming with a timeout so it doesn't hang
-        // indefinitely if the provider is genuinely unresponsive.
-        const timeoutSignal = AbortSignal.timeout(this.streamInitialTimeoutMs);
-        const fallbackSignal = externalSignal
-          ? AbortSignal.any([externalSignal, timeoutSignal])
-          : timeoutSignal;
-        const fallbackResponse = await provider.chat(effectivePrompt, session.messages, toolDefinitions, {
-          signal: fallbackSignal,
-          externalSignal,
-        });
-        // The fallback chat can also return an empty 200 — record it as a health FAILURE
-        // (same predicate the per-task breaker uses) instead of success, so the registry
-        // and breaker stay in agreement on this path too (audit #9).
-        if (isEmptyProviderResponse(fallbackResponse)) {
-          recordProviderHealthFailure(
-            ProviderHealthRegistry.getInstance(),
-            provider.name,
-            fallbackResponse.meta?.reason ?? "empty response (no text, no tool calls)",
-            { isSingleProvider: isSingleProviderChain(provider) },
-          );
-        } else {
-          ProviderHealthRegistry.getInstance().recordSuccess(provider.name);
-        }
-        return fallbackResponse;
-      } catch (fallbackErr) {
-        const fallbackMsg = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
-        getLogger().error("Silent stream fallback chat failed", { chatId, error: fallbackMsg });
-        recordProviderHealthFailure(ProviderHealthRegistry.getInstance(), provider.name, fallbackMsg, {
-          isSingleProvider: isSingleProviderChain(provider),
-        });
-        // Surface the failure to the agent so it can adapt its approach
-        // (e.g. simplify the request, reduce tool usage, skip non-critical work).
-        // This mirrors Claude Code's behavior of showing errors to the user.
-        session.messages.push({
-          role: "user",
-          content: `[System: The AI provider (${provider.name}) failed to respond. Error: ${fallbackMsg}. You may need to: simplify your current step, reduce the number of tool calls, or skip non-critical analysis. Adapt your approach and continue.]`,
-        } as ConversationMessage);
-        // Return a synthetic empty response so the PAOR loop can continue with the
-        // agent's awareness of the failure. The explicit `meta.empty` flag is the
-        // canonical signal the circuit breaker (runBackgroundTask / runAgentLoop)
-        // keys on — more robust than inferring emptiness from the token shape (#18).
-        return {
-          text: "",
-          toolCalls: [],
-          stopReason: "end_turn" as const,
-          usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-          meta: { empty: true, reason: "provider_failure" },
-        };
-      }
+      // Fallback to non-streaming under the SAME per-call deadline v1 used (extracted; the
+      // OFF call passes no runClock → AbortSignal.timeout, byte-identical to the prior inline).
+      return await this.silentStreamFallback(
+        provider, effectivePrompt, session, toolDefinitions, externalSignal, chatId,
+      );
     }
   };
 

@@ -93,6 +93,26 @@ export const LEGAL_FLAG_SETS: readonly FlagSet[] = [
     streamVisibleTokens: false,
   },
 
+  // ── Phase 1b — failureLedger + runClock (the next incremental rung; silence/typed-cancel
+  //    still OFF). RunClock's provider-stall / hard-timeout / silence-accumulator signals feed
+  //    the ledger's VerdictInput, so the two ship as a pair: runClock alone has no consumer for
+  //    its typed signals (rules 2/6 unreachable without the ledger). silenceAccumulator (1c) and
+  //    typedCancelReason (1d) layer on next. ──
+  {
+    id: "v1-driver+failure-ledger+run-clock",
+    interactive: "v1",
+    background: "v1",
+    worker: "v1",
+    supervisorNode: "v1",
+    failureLedger: true,
+    runClock: true,
+    silenceAccumulator: false,
+    typedCancelReason: false,
+    providerRouterScoring: false,
+    capabilityRegistry: false,
+    streamVisibleTokens: false,
+  },
+
   // ── Phase 1 — v1 driver + full control plane (the consolidation target). ──
   {
     id: "v1-driver+full-control-plane",

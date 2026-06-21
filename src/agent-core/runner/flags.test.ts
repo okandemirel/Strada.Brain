@@ -90,14 +90,14 @@ describe("resolveLegalFlagSet — closed-matrix rejections", () => {
     expect(() => resolveLegalFlagSet(illegal)).toThrow(/Illegal agent-core flag combination/);
   });
 
-  it("rejects a partial control-plane bundle (two sub-flags on, rest off)", () => {
-    // Phase 1a made `failureLedger` alone legal (isolation set). A *partial bundle* beyond
-    // that — e.g. failureLedger+runClock without silenceAccumulator/typedCancelReason — is
-    // still uncatalogued and must reject.
+  it("rejects a partial control-plane bundle (uncatalogued two-flag combo)", () => {
+    // Phase 1a made `failureLedger` alone legal; Phase 1b made failureLedger+runClock legal.
+    // Pick a still-uncatalogued pair to keep asserting the closed-matrix rejection:
+    // failureLedger+silenceAccumulator (silence without runClock) has no set and must reject.
     const illegal: RequestedFlagSet = {
       ...DEFAULT_FLAG_SET,
       failureLedger: true,
-      runClock: true,
+      silenceAccumulator: true,
     };
     expect(() => resolveLegalFlagSet(illegal)).toThrow(/not in LEGAL_FLAG_SETS/);
   });
