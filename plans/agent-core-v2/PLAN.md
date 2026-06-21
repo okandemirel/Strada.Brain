@@ -6,6 +6,19 @@
 
 ---
 
+## Status (2026-06-21)
+
+**SHIPPED to main** — each behind a default-off flag (flag-off ≡ v1), through the mandatory review trio + CI green:
+- **P-A** Control Plane (`src/agent-core/control/`: `RunClock` / `Budget` / `FailureLedger` / `CancelReason` / `Clock` / `policy`).
+- **Phase 0** — the `AgentRunner` seam + `V1AgentRunner` pass-through (`src/agent-core/runner/`), rerouting worker / background / supervisor-node; `__workerCollector` superseded by `AgentRunResult`.
+- **Phase 1** — the control plane wired into the live v1 loop one concern at a time: **1a** `FailureLedger` (one verdict arbiter over the kept `IterationHealthTracker`), **1b** `RunClock` per-call deadlines (replacing the scattered `AbortSignal.timeout` sites), **1c** the silence-accumulator task-inactivity verdict (bounds the delegation livelock), **1d** typed `CancelReason`. The full-control-plane `LEGAL_FLAG_SET` is now reachable.
+
+**Deferred to Phase 2 (v2-driver concern):** the fallback-chain `RunClock` sites (**P-1b-2**) and the supervisor-path `CancelReason` adoption — both need a `CancelToken` threaded through the chain / supervisor pipeline (which has no per-run token today).
+
+**Pending:** Phase 2 (unified `V2AgentRunner` + ModelGateway + EventBus, per-route rollout: worker → background → interactive), Phase 3 (scoring + capability unification), Phase 4 (v1 deletion — soak-gated, the only irreversible step), Phase 5 (streaming visibility).
+
+---
+
 ## 0. Non-negotiable prerequisites (the critique's blocking findings)
 
 These are **gates on starting Phase 1+**, not phases themselves. They exist because the adversarial critique proved the five sub-specs were three incompatible control planes, and that two of the proposed mechanisms had latent defects.

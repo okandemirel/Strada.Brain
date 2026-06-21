@@ -444,6 +444,8 @@ Consulta **[docs/vault.es.md](docs/vault.es.md)** para la referencia completa (a
 
 ## Arquitectura
 
+> **Agent Core v2 (en curso, detras de flags desactivados por defecto):** el `Orchestrator (PAOR Agent Loop)` reactivo que se muestra abajo esta siendo migrado a un plano de control unificado en `src/agent-core/control/` -- un unico `RunClock` / `Budget` / `FailureLedger` y un `CancelReason` tipado, que reemplazan los 5 timeouts dispersos + 3 contadores de fallos de v1 -- accesible a traves de una costura `AgentRunner` (`src/agent-core/runner/`). Es una reescritura tipo strangler-fig que preserva el endurecimiento ante incidentes de v1; **cada flag esta desactivado por defecto, por lo que el comportamiento actual es identico byte a byte al de v1.** Consulta [`src/agent-core/README.md`](src/agent-core/README.md) y [`plans/agent-core-v2/`](plans/agent-core-v2/).
+
 ```
 +-----------------------------------------------------------------+
 |  Canales de Chat + Portal Web (4 modos, shadcn/ui + Magic UI)    |

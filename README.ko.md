@@ -438,6 +438,8 @@ npm start
 
 ## 아키텍처
 
+> **Agent Core v2 (진행 중, 기본적으로 비활성화된 플래그 뒤에 위치):** 아래에 표시된 반응형 `Orchestrator (PAOR Agent Loop)` 는 `src/agent-core/control/` 의 통합 컨트롤 플레인으로 마이그레이션되고 있습니다 — 단일 `RunClock` / `Budget` / `FailureLedger` / 타입이 지정된 `CancelReason` 가 v1 의 흩어진 5개 타임아웃 + 3개 실패 카운터를 대체하며, `AgentRunner` 심(seam, `src/agent-core/runner/`)을 통해 접근됩니다. 이는 v1 의 장애 대응 강화를 보존하는 strangler-fig 재작성입니다; **모든 플래그는 기본적으로 비활성화되어 있으므로, 현재 동작은 v1 과 바이트 단위로 동일합니다.** [`src/agent-core/README.md`](src/agent-core/README.md) 와 [`plans/agent-core-v2/`](plans/agent-core-v2/) 를 참고하세요.
+
 ```
 +-----------------------------------------------------------------+
 |  채팅 채널 + 웹 포털 (4모드, shadcn/ui + Magic UI)               |

@@ -448,6 +448,8 @@ Detayli referans: [docs/vault.tr.md](docs/vault.tr.md) (Ingilizce: [docs/vault.m
 
 ## Mimari
 
+> **Agent Core v2 (devam ediyor, varsayilan olarak kapali bayraklarin arkasinda):** asagida gosterilen reaktif `Orchestrator (PAOR Agent Loop)`, `src/agent-core/control/` altindaki birlesik bir control plane uzerine tasiniyor — v1'in dagilmis 5 zaman asimi + 3 hata sayacinin yerine gecen tek bir `RunClock` / `Budget` / `FailureLedger` / tipli `CancelReason`'a — ve buna bir `AgentRunner` baglanti noktasi (`src/agent-core/runner/`) uzerinden ulasiliyor. Bu, v1'in olaylara karsi saglamlastirmasini koruyan bir strangler-fig (boguci incir) yeniden yazmasidir; **her bayrak varsayilan olarak kapalidir, dolayisiyla mevcut davranis v1 ile byte duzeyinde aynidir.** Bakiniz [`src/agent-core/README.md`](src/agent-core/README.md) ve [`plans/agent-core-v2/`](plans/agent-core-v2/).
+
 ```
 +-----------------------------------------------------------------+
 |  Sohbet Kanallari + Web Portali (4 mod, shadcn/ui + Magic UI)    |

@@ -387,6 +387,8 @@ Web 门户在 `/admin/skills` 提供**市场**标签页，可以浏览、搜索�
 
 ## 架构
 
+> **Agent Core v2（进行中，受默认关闭的 flag 保护）：** 下方所示的反应式 `Orchestrator (PAOR Agent Loop)` 正在迁移到 `src/agent-core/control/` 中的统一控制平面 —— 单一的 `RunClock` / `Budget` / `FailureLedger` 和类型化的 `CancelReason`，取代 v1 中分散的 5 个超时和 3 个失败计数器 —— 并通过 `AgentRunner` 接缝（`src/agent-core/runner/`）接入。这是一次绞杀榕式重写，保留了 v1 的事故加固；**每个 flag 都默认关闭，因此当前行为与 v1 逐字节一致。** 详见 [`src/agent-core/README.md`](src/agent-core/README.md) 和 [`plans/agent-core-v2/`](plans/agent-core-v2/)。
+
 ```
 +-----------------------------------------------------------------+
 |  聊天频道 + Web 门户（4 模式，shadcn/ui + Magic UI）              |

@@ -24,13 +24,27 @@ src/agent-core/
 │   ├── user-activity-observer.ts — Idle/active state changes
 │   ├── test-result-observer.ts — Test execution outcomes
 │   └── index.ts
-└── routing/
-    ├── task-classifier.ts     — Heuristic prompt/tool classification
-    ├── provider-router.ts     — Task+phase→provider selection with presets
-    ├── routing-presets.ts     — budget/balanced/performance weight definitions
-    ├── routing-types.ts       — TaskClassification, RoutingPreset, ConsensusResult
-    ├── confidence-estimator.ts — Heuristic output confidence scoring
-    ├── consensus-manager.ts   — Multi-provider review/re-execute verification
+├── routing/
+│   ├── task-classifier.ts     — Heuristic prompt/tool classification
+│   ├── provider-router.ts     — Task+phase→provider selection with presets
+│   ├── routing-presets.ts     — budget/balanced/performance weight definitions
+│   ├── routing-types.ts       — TaskClassification, RoutingPreset, ConsensusResult
+│   ├── confidence-estimator.ts — Heuristic output confidence scoring
+│   ├── consensus-manager.ts   — Multi-provider review/re-execute verification
+│   └── index.ts
+├── control/                   — Agent Core v2 control plane: ONE owner per cross-cutting concern
+│   ├── run-clock.ts           — wall-clock deadlines (per-call timers + task-scope silence accumulator)
+│   ├── budget.ts              — output-token / cost budget (input never gates)
+│   ├── failure-ledger.ts      — continue/retry/ask/pause/stop/done verdict precedence (the one arbiter)
+│   ├── cancel-reason.ts       — the single typed CancelReason union + isBenign()
+│   ├── cancel-token.ts        — linked AbortController tree (first-writer-wins fan-out)
+│   ├── clock.ts               — injectable Clock (SystemClock in prod / FakeClock for deterministic tests)
+│   ├── policy.ts              — RunBudgetPolicy resolved once from config (clamp-and-warn on bad ordering)
+│   └── index.ts
+└── runner/                    — Agent Core v2 strangler seam: the AgentRunner façade
+    ├── agent-runner.ts        — AgentRunner / IOStrategy / AgentRunRequest / AgentRunResult contract
+    ├── v1-agent-runner.ts     — pass-through adapter over the existing v1 orchestrator entry methods
+    ├── flags.ts               — LEGAL_FLAG_SETS (enumerated, reject-at-boot) gating the staged migration
     └── index.ts
 ```
 
@@ -50,6 +64,36 @@ These routing decisions are internal worker assignments only. The user still tal
 
 ### ConsensusManager
 When ConfidenceEstimator scores output below threshold, ConsensusManager verifies with a second provider. Strategies: "review" (ask if correct) or "re-execute" (same prompt to different provider). Graceful degradation: 1 provider = skip entirely.
+
+## Agent Core v2 — Control Plane & AgentRunner Seam (staged migration, in progress)
+
+`control/` and `runner/` are the foundation of the **Agent Core v2** migration: a strangler-fig
+rewrite of the three drift-prone seams in v1's reactive loop (the two ~600-line driver shells, the
+fragmented control plane of 5 timeouts + 3 failure counters, and the triplicated provider scorers)
+into one coherent fabric — **without** discarding the incident-hardening that the kept components
+earned (the 3h27m runaway, the ~70min silent-stall, audits #6–#18). v1 and v2 coexist behind
+**per-concern / per-route flags** consuming the same unversioned dependencies until v2 has absorbed
+every path. See [`plans/agent-core-v2/`](../../plans/agent-core-v2/) for the architecture + phased plan.
+
+- **`control/` — the one control plane (P-A).** Exactly one owner per cross-cutting concern:
+  `RunClock` (every wall-clock deadline, deadlines nested by `min(child, parentRemaining)`, plus a
+  task-scope *silence accumulator* that the per-call ceiling can't livelock), `Budget`,
+  `FailureLedger` (a single deterministic verdict precedence — the arbiter v1 lacked), and one typed
+  `CancelReason` union. Timers are real per-scope `AbortSignal.timeout`s re-armed on change (no
+  sampler); the injectable `Clock` makes the incident regressions deterministic under a `FakeClock`.
+- **`runner/` — the strangler boundary.** `AgentRunner` is the single entry both engines implement.
+  `V1AgentRunner` is a behavior-preserving pass-through over the existing v1 orchestrator methods
+  (Phase 0); `V2AgentRunner` (Phase 2) is the unified strategy-parameterized driver. `IOStrategy`
+  captures the one axis of variation (interactive vs background I/O) so the loop body never forks.
+  `LEGAL_FLAG_SETS` enumerates the valid flag combinations and **rejects anything else at boot**, so
+  untested combinations are unreachable by construction.
+
+**Migration status.** Phase 0 (the `AgentRunner` seam over worker/background/supervisor-node) and
+Phase 1 (the control plane wired into the live v1 loop, one concern at a time — `failureLedger`,
+`runClock`, `silenceAccumulator`, `typedCancelReason`) have shipped. **Every flag defaults OFF**, so
+the shipped behavior is byte-identical to v1; the v2 paths are exercised by tests and verified
+before any flag is flipped. Phase 2+ (unified `V2AgentRunner` + ModelGateway + EventBus, per-route
+rollout, scoring/capability unification) and the eventual v1 deletion (gated on a soak) are pending.
 
 ## Configuration
 

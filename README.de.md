@@ -386,6 +386,8 @@ Das Web-Portal bietet unter `/admin/skills` einen **Marktplatz**-Tab, ueber den 
 
 ## Architektur
 
+> **Agent Core v2 (in Arbeit, hinter standardmaessig deaktivierten Flags):** Der unten gezeigte reaktive `Orchestrator (PAOR Agent Loop)` wird derzeit auf eine vereinheitlichte Control Plane in `src/agent-core/control/` migriert -- eine einzige `RunClock` / `Budget` / `FailureLedger` / ein typisierter `CancelReason`, die die verstreuten 5 Timeouts + 3 Fehlerzaehler von v1 ersetzen -- erreichbar ueber eine `AgentRunner`-Naht (`src/agent-core/runner/`). Es handelt sich um eine Strangler-Fig-Neuschreibung, die das Incident-Hardening von v1 bewahrt; **jedes Flag ist standardmaessig deaktiviert, das aktuelle Verhalten ist also byte-identisch zu v1.** Siehe [`src/agent-core/README.md`](src/agent-core/README.md) und [`plans/agent-core-v2/`](plans/agent-core-v2/).
+
 ```
 +-----------------------------------------------------------------+
 |  Chat-Kanaele + Web-Portal (4-Modi, shadcn/ui + Magic UI)        |

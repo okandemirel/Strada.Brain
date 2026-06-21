@@ -459,6 +459,8 @@ Webポータルの`/admin/skills`に**マーケットプレイス**タブがあ�
 
 ## アーキテクチャ
 
+> **Agent Core v2（進行中、デフォルトで無効のフラグの背後）：** 下図に示す reactive な `Orchestrator (PAOR Agent Loop)` は、`src/agent-core/control/` の統一されたコントロールプレーンへ移行中です。単一の `RunClock` / `Budget` / `FailureLedger` / 型付きの `CancelReason` が、v1 で散在していた 5 つのタイムアウト + 3 つの障害カウンタを置き換え、これには `AgentRunner` シーム（`src/agent-core/runner/`）を介してアクセスします。これは v1 のインシデント耐性を保持する strangler-fig リライトです。**すべてのフラグはデフォルトで無効のため、現在の挙動は v1 とバイト単位で同一です。** [`src/agent-core/README.md`](src/agent-core/README.md) および [`plans/agent-core-v2/`](plans/agent-core-v2/) を参照してください。
+
 ```
 +-----------------------------------------------------------------+
 |  チャットチャネル + Web ポータル（4モード、shadcn/ui + Magic UI） |
