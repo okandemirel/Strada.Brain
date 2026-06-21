@@ -9,9 +9,11 @@
  * capability) from TOOL-LOGIC (never cools a healthy capability) using the typed `CancelReason` carried
  * on the call scope — a tool's own returned/thrown error is tool-logic by default.
  *
- * ADDITIVE + UNWIRED: nothing calls this yet. The call-site wiring (into `executeAndTrackTools`, with
- * the real bus heartbeat + the CallScope token's reason + the `McpBridgeAdapter`) is the next
- * increment; here the logic is built + tested in isolation against the registry + a mock adapter.
+ * WIRED (Phase 3b steps 2a/2b): called from `executeToolCalls` (orchestrator.ts) behind the
+ * `capabilityRegistry` flag, with the `McpBridgeAdapter` (mcp:strada → bridge lazy-reconnect) threaded
+ * from bootstrap. Still pending (both optional params): the real bus `emitHeartbeat` around revive and
+ * the CallScope token's `cancelReason` — until threaded, revive is bounded by the substrate's own
+ * reconnect timeout and `classifyToolError` falls back to the transport-signature text heuristic.
  */
 
 import type { CancelReason } from "./cancel-reason.js";

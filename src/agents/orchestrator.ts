@@ -195,6 +195,7 @@ import {
   guardExecute,
   formatBlocked,
   type CallScope,
+  type CapabilityAdapter,
   type CancelReason,
   type Clock,
   type FailureLedger,
@@ -833,9 +834,13 @@ export class Orchestrator {
    *  FakeClock in tests. Only consulted when `agentCoreFlagSet.runClock === true`. */
   private readonly agentCoreClock: Clock;
   /** Agent Core v2 — Phase 3b. Tool-substrate liveness registry; constructed + seeded by bootstrap
-   *  only when `agentCoreFlagSet.capabilityRegistry === true`. Held for the advertise/guardExecute
-   *  wiring — NO reader yet, so it is behavior-neutral. */
+   *  only when `agentCoreFlagSet.capabilityRegistry === true`. Read by the guardExecute write-path
+   *  wrap in executeToolCalls (flag-on); flag-off ⇒ undefined ⇒ behavior-neutral. */
   private readonly capabilityRegistry?: CapabilityRegistry;
+  /** Agent Core v2 — Phase 3b step 2b. Per-capability revive adapters (e.g. mcp:strada → bridge
+   *  lazy-reconnect), consulted by guardExecute to revive a `down` substrate ONCE before BLOCKED.
+   *  Built alongside the registry by bootstrap; absent/unmapped ⇒ no revive (→ BLOCKED on down). */
+  private readonly capabilityAdapters?: ReadonlyMap<string, CapabilityAdapter>;
   private readonly sessionManager: SessionManager;
   private systemPrompt: string;
   private readonly getIdentityState?: () => IdentityState;
@@ -1041,6 +1046,9 @@ export class Orchestrator {
     agentCoreClock?: Clock;
     /** Agent Core v2 — Phase 3b capability registry (seeded by bootstrap when the flag is on). */
     capabilityRegistry?: CapabilityRegistry;
+    /** Agent Core v2 — Phase 3b step 2b: per-capability revive adapters (bootstrap builds the
+     *  mcp:strada → tryStradaMcpReconnect adapter alongside the registry). */
+    capabilityAdapters?: ReadonlyMap<string, CapabilityAdapter>;
   }) {
     this.providerManager = opts.providerManager;
     // Vault write-hook lazy-binds when the first Edit/Write tool runs.
@@ -1121,6 +1129,7 @@ export class Orchestrator {
     this.agentCoreFlagSet = opts.agentCoreFlagSet;
     this.agentCoreClock = opts.agentCoreClock ?? new SystemClock();
     this.capabilityRegistry = opts.capabilityRegistry;
+    this.capabilityAdapters = opts.capabilityAdapters;
 
     // Build tool registry
     this.tools = new Map();
@@ -7508,15 +7517,17 @@ export class Orchestrator {
         // Phase 3b write-path guard (flag-gated, ADDITIVE): run the tool through guardExecute so a
         // down + un-revivable substrate capability returns the typed BLOCKED contract, and a real
         // success/failure feeds the registry's health. Unwired (flag off) → the plain call below,
-        // byte-identical. (Revive via a CapabilityAdapter is the next increment; no adapter here, so
-        // a down substrate simply BLOCKs.) The orchestrator's flattened toolMetadataByName carries
-        // only `requiresBridge`, so the binding here distinguishes the bridge from in-process.
+        // byte-identical. A `down` substrate first gets ONE revive attempt via the per-capability
+        // adapter (mcp:strada → bridge lazy-reconnect, wired by bootstrap); only an absent adapter or
+        // a failed revive BLOCKs. The orchestrator's flattened toolMetadataByName carries only
+        // `requiresBridge`, so the binding here distinguishes the bridge from in-process.
         let result: ToolExecutionResult;
         if (this.capabilityRegistry) {
           const capabilityId = capabilityForTool({ requiresBridge: toolMeta?.requiresBridge });
           const guarded = await guardExecute({
             registry: this.capabilityRegistry,
             capabilityId,
+            adapter: this.capabilityAdapters?.get(capabilityId),
             run: () => tool.execute(activeToolCall.input, toolContext),
           });
           if (guarded.kind === "blocked") {

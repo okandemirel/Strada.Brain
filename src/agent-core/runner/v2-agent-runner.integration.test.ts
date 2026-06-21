@@ -19,6 +19,12 @@
 import { describe, it, expect, vi } from "vitest";
 import { FakeClock } from "../control/clock.js";
 import { createControlPlane } from "../control/control-plane.js";
+import {
+  CapabilityRegistry,
+  CAPABILITY_MCP_STRADA,
+  seedCapabilities,
+  type CapabilityAdapter,
+} from "../control/index.js";
 import { V2AgentRunner, type V2RunnerDeps } from "./v2-agent-runner.js";
 import type { AgentRunRequest, IOStrategy, RunnerMode } from "./agent-runner.js";
 import type { ProviderResponse } from "../../agents/providers/provider-core.interface.js";
@@ -142,6 +148,11 @@ async function drive<T>(clock: FakeClock, runPromise: Promise<T>): Promise<T> {
 function buildHarness(
   provider: ReturnType<typeof mkScriptedProvider>,
   tools = [mkTool("file_read"), mkTool("edit_file", true, ["a.cs"])],
+  capability?: {
+    registry?: CapabilityRegistry;
+    adapters?: ReadonlyMap<string, CapabilityAdapter>;
+    toolMetadataByName?: Map<string, { requiresBridge?: boolean; readOnly?: boolean }>;
+  },
 ) {
   const clock = new FakeClock(0);
   const channel = mkChannel();
@@ -157,6 +168,10 @@ function buildHarness(
     readOnly: false,
     requireConfirmation: false,
     agentCoreClock: clock,
+    // Phase 3b flag-on wiring — default tests omit `capability` → registry undefined → flag-off path.
+    capabilityRegistry: capability?.registry,
+    capabilityAdapters: capability?.adapters,
+    toolMetadataByName: capability?.toolMetadataByName,
     // agentCoreFlagSet OMITTED — the gateway passes runClock=undefined → flag-OFF silentStream.
   } as unknown as ConstructorParameters<typeof Orchestrator>[0]);
 
@@ -329,5 +344,81 @@ describe("V2AgentRunner — REAL port + REAL gateway (provider.chat scripted)", 
     expect(toolCtx?.projectPath).toBe("/tmp/worktree-ws-1");
     // #2: the workspace artifact is surfaced (buildWorkerArtifacts).
     expect(result.artifacts.some((a) => a.kind === "workspace")).toBe(true);
+  });
+});
+
+describe("V2AgentRunner — Phase 3b capability guard (flag-on; the first registry-wired integration)", () => {
+  // A requiresBridge tool → capabilityForTool({requiresBridge:true}) → "mcp:strada". The registry's
+  // health for that capability is the ONLY thing that differs between G1 (runs) and G2 (BLOCKED), so
+  // the differential proves the guardExecute write-path wrap — not some filter — gates the tool.
+  const BRIDGE = "unity_bridge";
+
+  function bridgeHarness(
+    provider: ReturnType<typeof mkScriptedProvider>,
+    opts: { state: "live" | "down"; adapterRevives?: boolean },
+  ) {
+    const registry = new CapabilityRegistry(new FakeClock(0)); // own clock, never advanced → down stays down
+    seedCapabilities(registry, { mcpConnected: true }); // mcp:strada starts live
+    if (opts.state === "down") {
+      for (let i = 0; i < 6; i++) registry.recordFailure(CAPABILITY_MCP_STRADA, "ECONNREFUSED bridge");
+      expect(registry.canAttempt(CAPABILITY_MCP_STRADA)).toBe(false); // guard: truly down (downThreshold=5)
+    }
+    const adapterRevives = opts.adapterRevives;
+    const adapters =
+      adapterRevives === undefined
+        ? undefined
+        : new Map<string, CapabilityAdapter>([
+            [
+              CAPABILITY_MCP_STRADA,
+              { capabilityId: CAPABILITY_MCP_STRADA, revive: () => Promise.resolve(adapterRevives) },
+            ],
+          ]);
+    const tools = [mkTool("file_read"), mkTool("edit_file", true, ["a.cs"]), mkTool(BRIDGE)];
+    return buildHarness(provider, tools, {
+      registry,
+      adapters,
+      toolMetadataByName: new Map([[BRIDGE, { requiresBridge: true, readOnly: true }]]),
+    });
+  }
+
+  function scriptBridgeCall(provider: ReturnType<typeof mkScriptedProvider>) {
+    provider.chat
+      .mockResolvedValueOnce(resp({ text: "plan", stopReason: "end_turn" })) // PLANNING→EXECUTING
+      .mockResolvedValueOnce(
+        resp({ text: "", stopReason: "tool_use", toolCalls: [{ id: "b1", name: BRIDGE, input: {} }] }),
+      )
+      .mockResolvedValue(resp({ text: "done", stopReason: "end_turn" })); // continue after the tool result
+  }
+
+  it("G1: live mcp:strada → the bridge tool runs through guardExecute (ok path)", async () => {
+    const provider = mkScriptedProvider();
+    scriptBridgeCall(provider);
+    const h = bridgeHarness(provider, { state: "live" });
+    const result = await drive(h.clock, h.runner.run(mkRequest(), mkIO("worker")));
+    expect(result.status).toBe("completed");
+    expect(h.tools.find((t) => t.name === BRIDGE)!.execute).toHaveBeenCalledTimes(1); // canAttempt(live) → ran
+  });
+
+  it("G2: down mcp:strada + no adapter → BLOCKED contract, tool NEVER executed", async () => {
+    const provider = mkScriptedProvider();
+    scriptBridgeCall(provider);
+    const h = bridgeHarness(provider, { state: "down" }); // no adapters → no revive
+    const result = await drive(h.clock, h.runner.run(mkRequest(), mkIO("worker")));
+    expect(result.status).toBe("completed"); // BLOCKED is non-fatal — the loop continues
+    expect(h.tools.find((t) => t.name === BRIDGE)!.execute).not.toHaveBeenCalled(); // guardExecute blocked first
+    // The typed BLOCKED result reached the model as the tool result (proves the wrap, not a filter).
+    const seenByModel = JSON.stringify(provider.chat.mock.calls);
+    expect(seenByModel).toContain("BLOCKED");
+    expect(seenByModel).toContain("mcp:strada");
+  });
+
+  it("G3: down mcp:strada + an adapter that revives → recovers and the tool runs", async () => {
+    const provider = mkScriptedProvider();
+    scriptBridgeCall(provider);
+    const h = bridgeHarness(provider, { state: "down", adapterRevives: true });
+    const result = await drive(h.clock, h.runner.run(mkRequest(), mkIO("worker")));
+    expect(result.status).toBe("completed");
+    // revive() → recordProbeSuccess → degraded(usable) → canAttempt → the tool ran (step 2b recovery).
+    expect(h.tools.find((t) => t.name === BRIDGE)!.execute).toHaveBeenCalledTimes(1);
   });
 });

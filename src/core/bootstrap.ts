@@ -104,7 +104,13 @@ import { MessageRouter } from "../tasks/index.js";
 import { buildTaskProgressSummary } from "../tasks/progress-signals.js";
 import type { BackgroundExecutor } from "../tasks/background-executor.js";
 import { resolveFlagSetById } from "../agent-core/runner/index.js";
-import { CapabilityRegistry, seedCapabilities, SystemClock } from "../agent-core/control/index.js";
+import {
+  CapabilityRegistry,
+  CAPABILITY_MCP_STRADA,
+  type CapabilityAdapter,
+  seedCapabilities,
+  SystemClock,
+} from "../agent-core/control/index.js";
 
 import type { IChannelAdapter } from "../channels/channel.interface.js";
 import type { NodeResult, SupervisorContext, TaggedGoalNode } from "../supervisor/supervisor-types.js";
@@ -997,6 +1003,18 @@ async function bootstrapImpl(
       })()
     : undefined;
 
+  // Phase 3b step 2b: the bridge revive adapter. guardExecute gives a `down` mcp:strada capability ONE
+  // revive attempt (generalizing StradaMcp's lazy-reconnect) before it returns BLOCKED. Built only
+  // when the registry is (same flag); in-process/dotnet/network seed live and need no revive.
+  const capabilityAdapters: ReadonlyMap<string, CapabilityAdapter> | undefined = capabilityRegistry
+    ? new Map<string, CapabilityAdapter>([
+        [
+          CAPABILITY_MCP_STRADA,
+          { capabilityId: CAPABILITY_MCP_STRADA, revive: () => toolRegistry.tryStradaMcpReconnect() },
+        ],
+      ])
+    : undefined;
+
   // Initialize orchestrator
   const orchestrator = new Orchestrator({
     providerManager,
@@ -1061,6 +1079,7 @@ async function bootstrapImpl(
     getSkillEntries: () => skillManager.getEntries(),
     agentCoreFlagSet,
     capabilityRegistry,
+    capabilityAdapters,
   });
 
   // Wire FrameworkPromptGenerator to the orchestrator (deferred: IIFE may complete before or after)
