@@ -340,9 +340,38 @@ import type {
   SynthesizedFinal,
 } from "../agent-core/runner/orchestrator-port.js";
 import type { HealthCore } from "../agent-core/control/failure-ledger.js";
+import type { AgentEvent } from "../agent-core/events/agent-event.js";
 import type { ReflectionCoreContext } from "./orchestrator-reflection-handler.js";
 
 const DIAGNOSTIC_BLOCKED_RE = /^Blocked checkpoint:/i;
+
+/**
+ * Interactive v2 `run.ending` reasons that are NOT a provider-failure abort — the happy or
+ * separately-handled terminals where the port has ALREADY rendered the user-facing text (the answer
+ * or a block explanation) via `emitVisibleBoundary`, so the adapter must NOT add a `provider_abort`:
+ *   - `done` / `completed` / `blocked` — the reflection terminal (v2-agent-runner.ts:494 →
+ *     `portDispatchReflection` :8822/:8831, `reason = action.status ?? "done"|"blocked"`, where the
+ *     reflection done/blocked action.status ∈ {"completed","blocked"} | undefined — see
+ *     orchestrator-reflection-handler.ts:59). The answer / block text was emitted by the port.
+ *   - `end_turn` — the happy end-turn (v2-agent-runner.ts:544); the port dispatch rendered the answer.
+ *   - `max-tokens-runaway` — the step cap (surfaced by the max-iterations notice, a later increment).
+ *   - `blocked:ask_user` — the background ask_user yield (interactive never emits it; harmless).
+ *   - `epoch-budget-exhausted` — non-interactive epoch rollover (interactive breaks first; harmless).
+ * EVERY other reason is a control-plane STOP (a `describeCancelReason` output such as `task-inactivity`
+ * / `hard-timeout:task` / `verdict-stop:*`, or the literal `provider-failure`) = v1's
+ * `applyInteractiveVerdict` break→`provider_abort`. `describeCancelReason` (cancel-reason.ts:45) never
+ * emits any of the literals above, so no skip entry can mask a real abort. Kept in sync with the
+ * `run.ending` emit sites in src/agent-core/runner/v2-agent-runner.ts.
+ */
+const INTERACTIVE_NON_ABORT_RUN_ENDING_REASONS: ReadonlySet<string> = new Set([
+  "done",
+  "completed",
+  "blocked",
+  "end_turn",
+  "max-tokens-runaway",
+  "blocked:ask_user",
+  "epoch-budget-exhausted",
+]);
 /** Self-improvement tools bypass phase-based write filtering — they have their own guards. */
 const SELF_IMPROVEMENT_TOOLS: ReadonlySet<string> = new Set([
   "create_tool", "create_skill", "remove_dynamic_tool",
@@ -1491,6 +1520,64 @@ export class Orchestrator {
       await new Promise((resolve) => setTimeout(resolve, action.backoffMs));
     }
     return { control: "continue" };
+  }
+
+  /**
+   * Agent Core v2 (Step 3 / increment 3.2) — render the spine's user-facing resilience events to the
+   * INTERACTIVE channel. This is the v2 analog of {@link applyInteractiveVerdict}'s rendering arm
+   * (:1459-1487): on the v2 path the spine emits typed `AgentEvent`s through the bus→ioSink→onEvent
+   * seam, and without translating them the user sees NOTHING when a provider backs off, asks, or the
+   * run aborts — a UX regression vs v1. Mapping (robust: keyed on event type/status, never a humanized
+   * reason string):
+   *   - `backoff`   → `provider_slow` (v1 degraded tier, :1462). The event carries no failure
+   *                   count/tier, so the no-param degraded message is rendered; the critical-tier
+   *                   `provider_failing {attempt}/{max}` is deferred to a backoff-event enrichment.
+   *   - `ask_user`  → the model's own `visibleText` when present, else `provider_ask_user` (:1478).
+   *   - `show_plan` → `visibleText` verbatim (the plan body, not a resilience string).
+   *   - `run.ending` whose reason is a control-plane STOP → `provider_abort` (v1's ledger-break
+   *                   render, :1485). The reason carries the terminal cause; every value NOT in
+   *                   {@link INTERACTIVE_NON_ABORT_RUN_ENDING_REASONS} (done/end_turn/max-tokens/
+   *                   ask-block/epoch) is a stop. The happy `end_turn`/`done` already had the answer
+   *                   rendered by the port dispatch (3.0), so they are skipped — no double-render.
+   *                   (Empirically: a rule-4 inactivity stop is a SOFT stop → terminalStatus
+   *                   "completed", so keying on `run.ended.status==="failed"` would MISS it; the
+   *                   reason on `run.ending` is the faithful break signal.)
+   * Everything else (lifecycle, heartbeat, model/tool streaming deltas, run.started/ending, step.x) is
+   * a no-op here — not user-facing on the interactive path. The TERMINAL ANSWER is never rendered here
+   * (the port's dispatch handlers own it); this strictly handles non-answer signals.
+   *
+   * `e` is typed `AgentEvent` but arrives via the `AgentRunEvent`-typed `onEvent` (the deferred
+   * AgentEvent→TaskProgressUpdate seam — control-plane.ts), so the caller casts at the boundary.
+   * `enqueue` appends the render to an ordered tail-promise chain (the caller drains it post-run);
+   * v1-faithful, this does NOT throttle — one message per event, as applyInteractiveVerdict does.
+   */
+  private renderInteractiveResilienceEvent(
+    e: AgentEvent,
+    language: string,
+    enqueue: (text: string) => void,
+  ): void {
+    switch (e.type) {
+      case "backoff":
+        enqueue(getResilienceMessage("provider_slow", language));
+        return;
+      case "ask_user":
+        enqueue(
+          e.visibleText.trim().length > 0
+            ? e.visibleText
+            : getResilienceMessage("provider_ask_user", language),
+        );
+        return;
+      case "show_plan":
+        enqueue(e.visibleText);
+        return;
+      case "run.ending":
+        if (!INTERACTIVE_NON_ABORT_RUN_ENDING_REASONS.has(e.reason)) {
+          enqueue(getResilienceMessage("provider_abort", language));
+        }
+        return;
+      default:
+        return;
+    }
   }
 
   private getTaskExecutionContext(): TaskExecutionContext | undefined {
@@ -4825,17 +4912,36 @@ export class Orchestrator {
         // (portDispatchEndTurn/portDispatchReflection → emitVisibleBoundary →
         // sendVisibleAssistantMarkdown) ALREADY render the terminal answer to the channel DURING
         // the run; `synthesizeFinal` only reads it back into `AgentRunResult.finalText`. Rendering
-        // here too would double-render. `onEvent` is a NO-OP (v1 interactive has no narrative sink
-        // today; resilience/ask_user/abort rendering is a later Step-3 increment). `externalSignal`
-        // is a never-aborting signal (interactive has no user-cancel in v1) — built FRESH per turn,
-        // deliberately NOT hoisted to a shared module constant, so any abort listener a provider
-        // call attaches (fetch/AbortSignal.any) is released when this run is GC'd rather than
-        // accumulating on a long-lived signal. The result is discarded — the port already rendered,
-        // and the finally block persists the transcript.
+        // here too would double-render. `externalSignal` is a never-aborting signal (interactive has
+        // no user-cancel in v1) — built FRESH per turn, deliberately NOT hoisted to a shared module
+        // constant, so any abort listener a provider call attaches (fetch/AbortSignal.any) is released
+        // when this run is GC'd rather than accumulating on a long-lived signal. The AgentRunResult is
+        // discarded — the port already rendered the answer, and the finally block persists the transcript.
+        //
+        // `onEvent` (increment 3.2): the spine's user-facing resilience events (backoff / ask_user /
+        // show_plan / failed→abort) reach here via the bus→ioSink seam (control-plane.ts); v1 rendered
+        // the equivalents inline in applyInteractiveVerdict (:1459-1487). Without this adapter they'd be
+        // INVISIBLE on the v2 path. Renders are async but onEvent is sync and must NOT block the bus
+        // (the BoundedSink contract), so they fire through an ordered tail-promise chain that we drain
+        // (await renderTail) after the run — guaranteeing order + a complete persisted transcript.
         const runner = selectAgentRunner(this as unknown as RunnerHostOrchestrator, "interactive");
+        const interactiveLang = (this.userProfileStore?.getProfile(identityKey)?.language ??
+          this.defaultLanguage) as string;
+        let renderTail: Promise<void> = Promise.resolve();
+        const enqueueRender = (renderText: string): void => {
+          renderTail = renderTail
+            .then(() => this.sessionManager.sendVisibleAssistantMarkdown(chatId, session, renderText))
+            .catch((err) => {
+              logger.warn("v2 interactive resilience render failed", {
+                chatId,
+                error: err instanceof Error ? err.message : String(err),
+              });
+            });
+        };
         const io: IOStrategy = {
           mode: "interactive",
-          onEvent: () => {},
+          onEvent: (e) =>
+            this.renderInteractiveResilienceEvent(e as unknown as AgentEvent, interactiveLang, enqueueRender),
           externalSignal: new AbortController().signal,
           deliverFinal: () => {},
         };
@@ -4849,6 +4955,7 @@ export class Orchestrator {
           interactiveSession: session,
         };
         await runner.run(request, io);
+        await renderTail; // drain the ordered resilience renders before the finally persists the transcript
       } else {
         await this.runAgentLoop(chatId, session, msg.channelType, userId, conversationId, msg.attachments);
       }
