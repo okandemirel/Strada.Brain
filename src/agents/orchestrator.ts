@@ -68,6 +68,7 @@ import {
   DEFAULT_LLM_STREAM_INITIAL_TIMEOUT_MS,
   DEFAULT_LLM_STREAM_STALL_TIMEOUT_MS,
   DEFAULT_TASK_CONFIG,
+  DEFAULT_TASK_INACTIVITY_TIMEOUT_MS,
   type InteractionConfig,
   type ReRetrievalConfig,
   type StradaDependencyConfig,
@@ -307,10 +308,10 @@ const SELF_IMPROVEMENT_TOOLS: ReadonlySet<string> = new Set([
 ]);
 const TYPING_INTERVAL_MS = 4000;
 const MAX_CONSECUTIVE_PROVIDER_FAILURES = 5;
-/** 1b seed default for the task-scope silence ceiling. Mirrors background-executor.ts's
- *  DEFAULT_TASK_INACTIVITY_TIMEOUT_MS (600_000) — re-declared locally to avoid importing the
- *  bg-executor into the interactive path. Kept in step via the policy clamp (ratio×stall). */
-const PHASE1B_TASK_INACTIVITY_MS = 10 * 60 * 1000;
+/** 1b/1c seed default for the task-scope silence ceiling: the shared
+ *  {@link DEFAULT_TASK_INACTIVITY_TIMEOUT_MS} (600_000), imported from config (config-only,
+ *  NOT the bg-executor) so the interactive path and the background executor read ONE source.
+ *  Kept in step with the per-call stall via the policy clamp (ratio×stall). */
 const PHASE1B_MIN_INACTIVITY_OVER_STREAM_RATIO = 2;
 const NATURAL_LANGUAGE_BUILTIN_PERSONAS = ["default", "formal", "casual", "minimal"] as const;
 const SUPERVISOR_SYNTHESIS_SYSTEM_PROMPT = `You are a synthesis worker inside Strada Brain's orchestrator.
@@ -1138,7 +1139,7 @@ export class Orchestrator {
       streamInitialTimeoutMs: this.streamInitialTimeoutMs,
       streamStallTimeoutMs: this.streamStallTimeoutMs,
       providerFirstResponseMs: DEFAULT_LLM_PROVIDER_FIRST_RESPONSE_TIMEOUT_MS,
-      taskInactivityMs: PHASE1B_TASK_INACTIVITY_MS,
+      taskInactivityMs: DEFAULT_TASK_INACTIVITY_TIMEOUT_MS,
       minInactivityOverStreamRatio: PHASE1B_MIN_INACTIVITY_OVER_STREAM_RATIO,
       outputTokenCap: liveTokenBudget === -1 ? Number.POSITIVE_INFINITY : liveTokenBudget,
       costCapUsd: Number.POSITIVE_INFINITY,

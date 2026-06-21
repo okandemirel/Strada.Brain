@@ -110,6 +110,51 @@ describe("resolveLegalFlagSet — closed-matrix rejections", () => {
     expect(resolveLegalFlagSet(phase1a).id).toBe("v1-driver+failure-ledger-only");
   });
 
+  it("accepts failureLedger + runClock (Phase 1b set)", () => {
+    const phase1b: RequestedFlagSet = {
+      ...DEFAULT_FLAG_SET,
+      failureLedger: true,
+      runClock: true,
+    };
+    expect(resolveLegalFlagSet(phase1b).id).toBe("v1-driver+failure-ledger+run-clock");
+  });
+
+  it("accepts failureLedger + runClock + silenceAccumulator (Phase 1c set)", () => {
+    const phase1c: RequestedFlagSet = {
+      ...DEFAULT_FLAG_SET,
+      failureLedger: true,
+      runClock: true,
+      silenceAccumulator: true,
+    };
+    expect(resolveLegalFlagSet(phase1c).id).toBe(
+      "v1-driver+failure-ledger+run-clock+silence-accumulator",
+    );
+  });
+
+  it("rejects silenceAccumulator WITHOUT runClock (1c requires the accumulator's producer)", () => {
+    // silenceAccumulator IS the RunClock task-scope signal; turning it on without runClock
+    // would leave a consumer with no producer. The combo is uncatalogued → reject-at-boot.
+    const illegal: RequestedFlagSet = {
+      ...DEFAULT_FLAG_SET,
+      failureLedger: true,
+      runClock: false,
+      silenceAccumulator: true,
+    };
+    expect(() => resolveLegalFlagSet(illegal)).toThrow(/not in LEGAL_FLAG_SETS/);
+  });
+
+  it("rejects silenceAccumulator WITHOUT failureLedger (1c requires the ledger to escalate)", () => {
+    // The accumulator escalates through the ledger's VerdictInput (rule 4); with the ledger
+    // off the verdict is inert. The combo is uncatalogued → reject-at-boot.
+    const illegal: RequestedFlagSet = {
+      ...DEFAULT_FLAG_SET,
+      failureLedger: false,
+      runClock: true,
+      silenceAccumulator: true,
+    };
+    expect(() => resolveLegalFlagSet(illegal)).toThrow(/Illegal agent-core flag combination/);
+  });
+
   it("rejects streamVisibleTokens without the full Phase-3 stack", () => {
     const illegal: RequestedFlagSet = {
       interactive: "v2",

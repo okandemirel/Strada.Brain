@@ -113,6 +113,29 @@ export const LEGAL_FLAG_SETS: readonly FlagSet[] = [
     streamVisibleTokens: false,
   },
 
+  // ── Phase 1c — failureLedger + runClock + silenceAccumulator (typed-cancel still OFF).
+  //    Turns ON consumption of the RunClock task-scope silence accumulator: the
+  //    `taskInactivityExceeded` verdict (failure-ledger rule 4) now fires, killing the ~70min
+  //    cross-call stall + the delegation livelock. STRICTLY NESTED on 1b — silenceAccumulator
+  //    requires runClock (the accumulator IS the RunClock signal; no producer otherwise) AND
+  //    failureLedger (the accumulator escalates through the ledger's VerdictInput; inert
+  //    otherwise). typedCancelReason (1d) layers on next, after which the four-true combo
+  //    collapses into `v1-driver+full-control-plane` below — so 1c needs no own variant. ──
+  {
+    id: "v1-driver+failure-ledger+run-clock+silence-accumulator",
+    interactive: "v1",
+    background: "v1",
+    worker: "v1",
+    supervisorNode: "v1",
+    failureLedger: true,
+    runClock: true,
+    silenceAccumulator: true,
+    typedCancelReason: false,
+    providerRouterScoring: false,
+    capabilityRegistry: false,
+    streamVisibleTokens: false,
+  },
+
   // ── Phase 1 — v1 driver + full control plane (the consolidation target). ──
   {
     id: "v1-driver+full-control-plane",

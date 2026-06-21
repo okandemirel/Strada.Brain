@@ -670,6 +670,16 @@ export const DEFAULT_LLM_STREAM_STALL_TIMEOUT_MS = 5 * 60 * 1000;
  * discover that is the difference between a fast failover and a hung request.
  */
 export const DEFAULT_LLM_PROVIDER_FIRST_RESPONSE_TIMEOUT_MS = 90 * 1000;
+/**
+ * Default per-task INACTIVITY window (ms). A task is aborted only after it has produced
+ * NO progress update for this long (not a hard wall-clock cap), so a reasoning model that
+ * legitimately spends minutes on a single step is not killed mid-flight, while a genuinely
+ * hung task still cannot block the conversation forever. Lives here beside the LLM stream
+ * timeouts above so the orchestrator's PolicySeed and the background executor share ONE
+ * source. The streaming stall watchdog (DEFAULT_LLM_STREAM_STALL_TIMEOUT_MS) independently
+ * detects dead provider connections during a single LLM call.
+ */
+export const DEFAULT_TASK_INACTIVITY_TIMEOUT_MS = 10 * 60 * 1000;
 export const DEFAULT_INTERACTION_CONFIG: InteractionConfig = {
   mode: "phase-driven",
   heartbeatAfterMs: 120_000,

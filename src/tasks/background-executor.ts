@@ -51,6 +51,8 @@ import {
   goalTreeToDagPayload,
   type WorkspaceEventMap,
 } from "../dashboard/workspace-events.js";
+// Single source for the per-task inactivity default (config-only; config has no dep on tasks).
+import { DEFAULT_TASK_INACTIVITY_TIMEOUT_MS } from "../config/config.js";
 
 const GOAL_CANVAS_SUMMARY_WIDTH = 320;
 
@@ -182,14 +184,11 @@ export interface BackgroundExecutorOptions {
 export const MIN_INACTIVITY_OVER_STREAM_RATIO = 2;
 
 /**
- * Default per-task inactivity window. A background task is aborted only after it
- * has produced NO progress update for this long (not a hard wall-clock cap), so a
- * reasoning model that legitimately spends minutes on a single step is not killed
- * mid-flight, while a genuinely hung task still cannot block the conversation
- * forever. The streaming stall watchdog (LLM_STREAM_STALL_TIMEOUT_MS) independently
- * detects dead provider connections during a single LLM call.
+ * Default per-task inactivity window. Imported from config (the single source) and re-exported
+ * so existing `src/tasks` importers keep resolving the established name unchanged; the value +
+ * its rationale now live beside the sibling LLM stream timeouts in config-types.ts.
  */
-export const DEFAULT_TASK_INACTIVITY_TIMEOUT_MS = 10 * 60 * 1000;
+export { DEFAULT_TASK_INACTIVITY_TIMEOUT_MS };
 
 export class BackgroundExecutor {
   private readonly queue: QueueEntry[] = [];
