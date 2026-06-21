@@ -366,6 +366,10 @@ interface AgentCorePortRunContext {
   readonly metricId: string | undefined;
   /** Tool-execution mode for the bound executeToolCalls turn (v1 ToolExecutionMode parity). */
   readonly toolExecMode: ToolExecutionMode;
+  // Worker isolation + supervisor linkage (threaded into executeOptions + the result projection).
+  readonly workspaceLease?: WorkspaceLease;
+  readonly workspaceLeaseRetained?: boolean;
+  readonly goalContext?: { readonly rootId: string; readonly nodeId: string };
   readonly executionJournal: ReturnType<typeof createAutonomyBundle>["executionJournal"];
   readonly selfVerification: ReturnType<typeof createAutonomyBundle>["selfVerification"];
   readonly stradaConformance: ReturnType<typeof createAutonomyBundle>["stradaConformance"];
@@ -7973,6 +7977,16 @@ export class Orchestrator {
   // DEFAULT-OFF: nothing routes here yet. This is the slot the worker-route-flip increment flips.
   // ═══════════════════════════════════════════════════════════════════════════════════════
 
+  /** The resolved agent-core flag set, read by the route selector. undefined ⇒ default all-v1. */
+  getAgentCoreFlagSet(): FlagSet | undefined {
+    return this.agentCoreFlagSet;
+  }
+
+  /** The injected agent-core clock (SystemClock in prod, FakeClock in tests). */
+  getAgentCoreClock(): Clock {
+    return this.agentCoreClock;
+  }
+
   /**
    * Build the OrchestratorPort + the gateway/seed/health factory the V2 runner needs. The port
    * closes over a per-run {@link AgentCorePortRunContext} populated by `setupRun`; methods read it
@@ -8198,6 +8212,9 @@ export class Orchestrator {
           : request.mode === "supervisor-node"
             ? "delegated" // v1 parity: supervisor-node workers run as the "delegated" tool-exec mode
             : "background",
+      workspaceLease: request.workspaceLease,
+      workspaceLeaseRetained: request.workspaceLeaseRetained,
+      goalContext: request.goalContext,
       executionJournal: bundle.executionJournal,
       selfVerification: bundle.selfVerification,
       stradaConformance: bundle.stradaConformance,
@@ -8495,8 +8512,8 @@ export class Orchestrator {
       catalogVersion: snapshot ? String(snapshot.assignmentVersion) : "unknown",
       assignmentVersion: snapshot?.assignmentVersion ?? 0,
       // WorkerRunCollector is never populated on the v2 path (the spine accumulates trace by value
-      // and passes it in `params`); these structured-effect fields stay empty here.
-      workspaceId: undefined,
+      // and passes it in `params`); verification/review stay empty (verifier runs are collector-only).
+      workspaceId: runCtx.workspaceLease?.id, // v1 parity: runWorkerTask result.workspaceId
       touchedFiles: params.touchedFiles,
       toolTrace: params.toolTrace.map((t) => ({
         toolName: t.toolName,
@@ -8506,7 +8523,13 @@ export class Orchestrator {
       })),
       verificationResults: [],
       reviewFindings: [],
-      artifacts: [],
+      // v1 parity: buildWorkerArtifacts surfaces the workspace + touched-files + result summary.
+      artifacts: this.buildWorkerArtifacts({
+        workspaceLease: runCtx.workspaceLease,
+        workspaceLeaseRetained: runCtx.workspaceLeaseRetained,
+        touchedFiles: params.touchedFiles,
+        finalSummary: params.final.summary,
+      }),
     };
   }
 
@@ -8706,6 +8729,8 @@ export class Orchestrator {
         strategy,
         agentState,
         touchedFiles: [...runCtx.selfVerification.getState().touchedFiles],
+        workspaceLease: runCtx.workspaceLease, // #1: scopes tools to the worktree (v1 parity @ :7175)
+        goalContext: runCtx.goalContext, // supervisor-tree linkage for delegated child tasks
       },
       trackingParams: {
         taskPlanner: runCtx.taskPlanner,

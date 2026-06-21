@@ -56,6 +56,7 @@ import type {
   WorkerToolTrace,
   WorkerUsageEvent,
   WorkerVerificationResult,
+  WorkspaceLease,
 } from "../../agents/supervisor/supervisor-types.js";
 import type { TaskClassification } from "../routing/routing-types.js";
 import type { PolicySeed } from "../control/policy.js";
@@ -135,6 +136,12 @@ export interface AgentRunSetupInput {
   readonly taskRunId?: string;
   readonly parentMetricId?: string;
   readonly onUsage?: (u: WorkerUsageEvent) => void;
+  // Worker isolation + supervisor linkage. Threaded into the bound tool-turn's executeOptions +
+  // the result projection; v1 scopes ONLY tools to the worktree (executeToolCalls computes
+  // projectPath = options.workspaceLease?.path), never the session/systemPrompt.
+  readonly workspaceLease?: WorkspaceLease;
+  readonly workspaceLeaseRetained?: boolean;
+  readonly goalContext?: { readonly rootId: string; readonly nodeId: string };
 }
 
 export interface PrepareIterationParams {

@@ -37,12 +37,12 @@ import { getLogger } from "../utils/logger.js";
 import { WorkspaceLeaseManager } from "../agents/multi/workspace-lease-manager.js";
 import type { WorkerRunRequest, WorkerRunResult } from "../agents/supervisor/supervisor-types.js";
 import {
-  V1AgentRunner,
+  selectAgentRunner,
   toWorkerRunResult,
   type AgentRunRequest,
   type IOStrategy,
   type RunnerMode,
-  type V1OrchestratorLike,
+  type RunnerHostOrchestrator,
 } from "../agent-core/runner/index.js";
 import { normalizeSupervisorProgressMarkdown } from "../supervisor/supervisor-feedback.js";
 import type { MonitorLifecycle } from "../dashboard/monitor-lifecycle.js";
@@ -845,12 +845,16 @@ export class BackgroundExecutor {
     // which arguments, and the returned { output, workerResult } shape — is preserved by
     // construction. The runner is built per-call over the passed orchestrator (which may be a
     // per-task orchestrator, not this.orchestrator), keeping orchestrator.ts at net-zero.
-    const runner = new V1AgentRunner(orchestrator as unknown as V1OrchestratorLike);
-
     // RunnerMode mirrors the underlying WorkerRunRequest.mode: "delegated" → supervisor-node,
     // anything else ("background") → worker. The exact WorkerRunRequest.mode is preserved verbatim
     // via request.workerMode so the v1 call shape is byte-identical.
     const mode: RunnerMode = params.mode === "delegated" ? "supervisor-node" : "worker";
+
+    // Phase-2 route selector: V2AgentRunner when this route's driver flag is "v2" (the closed flag
+    // matrix only permits a V2 route alongside the full control plane), else the v1 pass-through.
+    // DEFAULT-OFF — the default "all-v1" set leaves worker/supervisor-node "v1", so this stays
+    // byte-identical to the prior `new V1AgentRunner(...)` path.
+    const runner = selectAgentRunner(orchestrator as unknown as RunnerHostOrchestrator, mode);
     const io: IOStrategy = {
       mode,
       onEvent: params.onProgress,

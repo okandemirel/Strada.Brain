@@ -22,6 +22,7 @@ import { createControlPlane } from "../control/control-plane.js";
 import { V2AgentRunner, type V2RunnerDeps } from "./v2-agent-runner.js";
 import type { AgentRunRequest, IOStrategy, RunnerMode } from "./agent-runner.js";
 import type { ProviderResponse } from "../../agents/providers/provider-core.interface.js";
+import type { WorkspaceLease } from "../../agents/supervisor/supervisor-types.js";
 
 // Logger + strada-knowledge module mocks — copied from orchestrator.test.ts so the Orchestrator
 // boots without a real project / SQLite / network.
@@ -296,5 +297,37 @@ describe("V2AgentRunner — REAL port + REAL gateway (provider.chat scripted)", 
     expect(result.status).toBe("blocked");
     expect(result.reason).toBe("max-tokens-runaway");
     expect(provider.chat).toHaveBeenCalledTimes(4); // plan + 3 truncated turns before the abort
+  });
+
+  it("F (P-E): workspaceLease scopes the V2 tool turn to the worktree (isolation — the flip prerequisite)", async () => {
+    // The blocker the worker flip depended on: a V2 worker must run its tools in the LEASED git
+    // worktree, not the main tree (else parallel workers collide). Proves the lease threads
+    // request → setupRun → runCtx → executeOptions → executeToolCalls' projectPath (v1 @ :7175).
+    const provider = mkScriptedProvider();
+    provider.chat
+      .mockResolvedValueOnce(resp({ text: "plan", stopReason: "end_turn" }))
+      .mockResolvedValueOnce(
+        resp({
+          text: "editing",
+          stopReason: "tool_use",
+          toolCalls: [{ id: "tc-1", name: "edit_file", input: { path: "a.cs" } }],
+        }),
+      )
+      .mockResolvedValue(resp({ text: "done", stopReason: "end_turn" }));
+    const h = buildHarness(provider);
+    const io = mkIO("worker");
+    const lease = { id: "ws-1", path: "/tmp/worktree-ws-1" } as unknown as WorkspaceLease;
+
+    const result = await drive(h.clock, h.runner.run(mkRequest({ workspaceLease: lease }), io));
+
+    expect(result.status).toBe("completed");
+    expect(result.workspaceId).toBe("ws-1"); // #2: projection surfaces the lease id (v1 parity)
+    const editTool = h.tools.find((t) => t.name === "edit_file")!;
+    expect(editTool.execute).toHaveBeenCalled();
+    // #1 ISOLATION: the tool executed with the worktree path as projectPath — NOT /tmp/test-project.
+    const toolCtx = editTool.execute.mock.calls[0]?.[1] as { projectPath?: string } | undefined;
+    expect(toolCtx?.projectPath).toBe("/tmp/worktree-ws-1");
+    // #2: the workspace artifact is surfaced (buildWorkerArtifacts).
+    expect(result.artifacts.some((a) => a.kind === "workspace")).toBe(true);
   });
 });

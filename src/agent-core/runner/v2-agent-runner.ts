@@ -713,6 +713,9 @@ export class V2AgentRunner implements AgentRunner {
       taskRunId: request.taskRunId,
       parentMetricId: request.parentMetricId,
       onUsage: request.onUsage,
+      workspaceLease: request.workspaceLease,
+      workspaceLeaseRetained: request.workspaceLeaseRetained,
+      goalContext: request.goalContext,
     };
   }
 

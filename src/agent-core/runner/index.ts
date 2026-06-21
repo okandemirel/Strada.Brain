@@ -40,6 +40,9 @@ export type { FlagSet, RequestedFlagSet, DriverChoice } from "./flags.js";
 export { V2AgentRunner, mapMode } from "./v2-agent-runner.js";
 export type { V2RunnerDeps, ControlPlane, OpenRunResult } from "./v2-agent-runner.js";
 
+export { selectAgentRunner } from "./runner-factory.js";
+export type { RunnerHostOrchestrator } from "./runner-factory.js";
+
 export type {
   OrchestratorPort,
   RunnerModeLike,
