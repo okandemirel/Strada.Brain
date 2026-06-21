@@ -153,6 +153,9 @@ function buildHarness(
     adapters?: ReadonlyMap<string, CapabilityAdapter>;
     toolMetadataByName?: Map<string, { requiresBridge?: boolean; readOnly?: boolean }>;
   },
+  personalization?: {
+    instinctRetriever?: { getInsightsForTask: (prompt: string) => Promise<{ insights: string[] }> };
+  },
 ) {
   const clock = new FakeClock(0);
   const channel = mkChannel();
@@ -173,6 +176,8 @@ function buildHarness(
     capabilityRegistry: capability?.registry,
     capabilityAdapters: capability?.adapters,
     toolMetadataByName: capability?.toolMetadataByName,
+    // Step 0 / gap #6 — inject a personalization store (instinct retriever) to exercise the prologue.
+    instinctRetriever: personalization?.instinctRetriever,
     // agentCoreFlagSet OMITTED — the gateway passes runClock=undefined → flag-OFF silentStream.
   } as unknown as ConstructorParameters<typeof Orchestrator>[0]);
 
@@ -478,5 +483,18 @@ describe("Step 0 — v2 prologue fidelity gaps (behind the route flag; productio
     await drive(h.clock, h.runner.run(mkRequest(), mkIO("worker")));
 
     expect(persistent.messages.length).toBe(before); // worker used a FRESH session, not the shared one
+  });
+
+  it("gap #6: the worker prologue runs personalization — instinct retrieval is invoked (v1 parity)", async () => {
+    const provider = mkScriptedProvider();
+    provider.chat.mockResolvedValue(resp({ text: "done", stopReason: "end_turn" }));
+    const getInsightsForTask = vi.fn().mockResolvedValue({ insights: ["learned-insight-xyz"] });
+    const h = buildHarness(provider, undefined, undefined, { instinctRetriever: { getInsightsForTask } });
+
+    await drive(h.clock, h.runner.run(mkRequest(), mkIO("worker")));
+
+    // The v2 prologue must run the personalization layers (v1 parity, runBackgroundTask :3291-3388);
+    // the prior profile:null version skipped them all. Instinct retrieval runs with the prompt.
+    expect(getInsightsForTask).toHaveBeenCalledWith("do the thing");
   });
 });

@@ -136,6 +136,7 @@ import type { SessionSummarizer } from "../memory/unified/session-summarizer.js"
 import {
   resolveAutonomousModeWithDefault,
   type UserProfileStore,
+  type UserProfile,
 } from "../memory/unified/user-profile-store.js";
 import type {
   TaskExecutionStore,
@@ -8255,6 +8256,69 @@ export class Orchestrator {
   }
 
   /**
+   * Step 0 / gap #6 — v1's worker-prologue personalization (runBackgroundTask :3291-3350): load the
+   * user profile (drives persona + autonomous mode), debounced touch, prompt-derived profile update,
+   * autonomous-mode restore (a dmPolicy side-effect), a once-computed embedding (reused by the prompt
+   * build), and the per-user persona override. Returns the pieces the prompt build consumes.
+   */
+  private async loadRunPersonalization(
+    chatId: string,
+    identityKey: string,
+    queryText: string,
+    userId: string | undefined,
+  ): Promise<{
+    profile: UserProfile | null;
+    personaContent: string | undefined;
+    preComputedEmbedding: number[] | undefined;
+  }> {
+    let profile = this.userProfileStore?.getProfile(identityKey) ?? null;
+    if (this.userProfileStore && profile) {
+      const lastTouch = this.sessionManager.persistTimeMap.get(`touch:${identityKey}`) ?? 0;
+      if (Date.now() - lastTouch > 60_000) {
+        this.userProfileStore.touchLastSeen(identityKey);
+        this.sessionManager.persistTimeMap.set(`touch:${identityKey}`, Date.now());
+      }
+    }
+    await this.maybeUpdateUserProfileFromPrompt(chatId, identityKey, queryText, userId);
+    profile = this.userProfileStore?.getProfile(identityKey) ?? profile;
+
+    if (this.dmPolicy && this.userProfileStore) {
+      try {
+        const autonomousState = await resolveAutonomousModeWithDefault(this.userProfileStore, identityKey, {
+          enabled: this.autonomousDefaultEnabled,
+          hours: this.autonomousDefaultHours,
+        });
+        this.dmPolicy.initFromProfile(
+          chatId,
+          autonomousState.enabled
+            ? { autonomousMode: true, autonomousExpiresAt: autonomousState.expiresAt }
+            : { autonomousMode: false },
+          userId,
+        );
+      } catch {
+        // Autonomous-mode restoration failure is non-fatal.
+      }
+    }
+
+    let preComputedEmbedding: number[] | undefined;
+    if (this.embeddingProvider && queryText) {
+      try {
+        const batch = await this.embeddingProvider.embed([queryText]);
+        preComputedEmbedding = batch.embeddings[0];
+      } catch {
+        // Embedding failure is non-fatal; downstream embeds on demand.
+      }
+    }
+
+    let personaContent: string | undefined;
+    if (profile?.activePersona && profile.activePersona !== "default" && this.soulLoader) {
+      personaContent = (await this.soulLoader.getProfileContent(profile.activePersona)) ?? undefined;
+    }
+
+    return { profile, personaContent, preComputedEmbedding };
+  }
+
+  /**
    * COMPOSE the existing per-run setup helpers (the same callees the inline loop preamble calls)
    * into the {@link PortRunSetup} the spine threads + the {@link AgentCorePortRunContext} the
    * port closes over. Mirrors runAgentLoop's prologue (orchestrator.ts ~4790-4894).
@@ -8263,6 +8327,7 @@ export class Orchestrator {
     request: AgentRunSetupInput,
   ): Promise<{ setup: PortRunSetup; runCtx: AgentCorePortRunContext }> {
     const chatId = request.chatId;
+    const isInteractive = request.mode === "interactive"; // gap #3/#7/#8 share this branch
     // Step 0 / gap #5 — resolve the run identity the way v1's prologue does (resolveIdentityKey at
     // :3057/:2201): userId/conversationId key multi-user + cross-channel sessions, profiles, and
     // provider selection. The prior `identityKey = chatId` mis-keyed every non-default-channel run.
@@ -8285,16 +8350,25 @@ export class Orchestrator {
     // shared persistent session and attachments/vision are seeded. Interactive keeps the persistent
     // session (the chat continues across messages).
     const session: Session =
-      request.mode === "interactive"
+      isInteractive
         ? this.sessionManager.getOrCreateSession(chatId)
         : this.buildFreshRunSession(request, queryText, fallbackProvider.capabilities.vision);
     // v1 parity (runBackgroundTask :3213): derive the conversation scope from the request, not the
     // (possibly-shared/fresh) session — a fresh worker session carries no scope field.
     const conversationScope = resolveConversationScope(chatId, request.conversationId);
 
+    // Step 0 / gap #6 — load v1's worker-prologue personalization (profile, persona, autonomous-mode
+    // restore, pre-computed embedding) before the prompt build (runBackgroundTask :3291-3350).
+    const { profile, personaContent, preComputedEmbedding } = await this.loadRunPersonalization(
+      chatId,
+      identityKey,
+      queryText,
+      request.userId,
+    );
+
     const vaultContext = await this.computeVaultContext(queryText);
     const {
-      systemPrompt,
+      systemPrompt: builtSystemPrompt,
       initialContentHashes,
       projectWorldSummary,
       projectWorldFingerprint,
@@ -8304,14 +8378,39 @@ export class Orchestrator {
       identityKey,
       channelType: request.channelType,
       prompt: queryText,
+      personaContent,
       vaultContext,
-      profile: null,
+      profile,
+      preComputedEmbedding,
     });
+    // gap #6 — instinct injection (v1 runBackgroundTask :3377-3388): augment the system prompt with
+    // retrieved learned insights AND capture them so the spine can seed state.learnedInsights — that
+    // field IS read on the v2 path (prepareIteration → buildPhasePromptSection renders the PLANNING
+    // prompt's "### Learned Patterns" block from it), so BOTH carriers must be populated to match v1.
+    let systemPrompt = builtSystemPrompt;
+    let learnedInsights: readonly string[] = [];
+    if (this.instinctRetriever) {
+      try {
+        const insightResult = await this.instinctRetriever.getInsightsForTask(queryText);
+        if (insightResult.insights.length > 0) {
+          learnedInsights = insightResult.insights;
+          systemPrompt += `\n\n## Learned Insights\n${insightResult.insights.join("\n")}\n`;
+        }
+      } catch {
+        // Non-fatal.
+      }
+    }
 
     const lastUserMessage = this.sessionManager.extractLastUserMessage(session) || queryText;
     const bundle = createAutonomyBundle({
       prompt: lastUserMessage,
-      iterationBudget: this.getInteractiveIterationLimit(),
+      // Step 0 / gap #8 — v1 workers use the background-epoch iteration budget (runBackgroundTask
+      // :3407); only interactive uses the interactive limit. The prior v2 prologue used the
+      // interactive limit for ALL modes, giving workers the wrong autonomy-bundle budget.
+      iterationBudget:
+        isInteractive
+          ? this.getInteractiveIterationLimit()
+          : this.getBackgroundEpochIterationLimit(),
       stradaDeps: this.stradaDeps,
       projectWorldSummary,
       projectWorldFingerprint,
@@ -8331,7 +8430,7 @@ export class Orchestrator {
       sessionId: chatId,
       taskDescription: lastUserMessage.slice(0, 200),
       taskType:
-        request.mode === "interactive"
+        isInteractive
           ? "interactive"
           : request.parentMetricId
             ? "subtask"
@@ -8352,7 +8451,7 @@ export class Orchestrator {
       chatId,
       metricId,
       toolExecMode:
-        request.mode === "interactive"
+        isInteractive
           ? "interactive"
           : request.mode === "supervisor-node"
             ? "delegated" // v1 parity: supervisor-node workers run as the "delegated" tool-exec mode
@@ -8393,6 +8492,7 @@ export class Orchestrator {
       iterationHealth,
       metricId: metricId ?? "",
       enableGoalDetection: this.taskManager != null,
+      learnedInsights,
     };
 
     return { setup, runCtx };

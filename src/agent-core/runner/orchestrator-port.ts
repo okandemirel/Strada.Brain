@@ -94,6 +94,10 @@ export interface RunSetup {
   /** Read-only metrics handle id for recordMetricEnd at terminal. */
   readonly metricId: string;
   readonly enableGoalDetection: boolean;
+  /** Step 0 / gap #6 — instinct insights retrieved in the prologue; the spine seeds these into the
+   *  initial AgentState so the PLANNING prompt's "### Learned Patterns" block renders them (v1 parity:
+   *  runBackgroundTask :3381). Absent/empty ⇒ no insights this run. */
+  readonly learnedInsights?: readonly string[];
 }
 
 // ── The verdict-bridge contribution type (the load-bearing one) ────────────────────────

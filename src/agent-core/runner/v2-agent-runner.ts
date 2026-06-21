@@ -221,6 +221,12 @@ export class V2AgentRunner implements AgentRunner {
     // The loop is the sole writer of AgentState; every mode seeds the same initial PLANNING state
     // (interactive vs background differ only via IOStrategy + policy, never the state machine).
     let state: AgentState = createInitialState(request.prompt);
+    // Step 0 / gap #6 — seed the prologue's retrieved instinct insights into the state so the PLANNING
+    // prompt's "### Learned Patterns" block (buildPhasePromptSection → mergeLearnedInsights) renders
+    // them, matching v1 (runBackgroundTask :3381). The base systemPrompt is also augmented by the port.
+    if (setup.learnedInsights && setup.learnedInsights.length > 0) {
+      state = { ...state, learnedInsights: setup.learnedInsights };
+    }
 
     emit({ type: "run.started", prompt: request.prompt, mode });
     await this.intentAck(bus, clock, port, request);
