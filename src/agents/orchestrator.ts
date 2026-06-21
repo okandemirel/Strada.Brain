@@ -8250,6 +8250,15 @@ export class Orchestrator {
           toolCallCount: state.stepResults.length,
           hitMaxIterations: false,
         });
+        // Step 3 / gap #6 — execution-journal continuity (v1 parity: runAgentLoop finally :6061-6062,
+        // runBackgroundTask finally :4509-4510). v1 wrote the journal to execution memory + snapshotted
+        // it onto the session on every terminal path; the v2 prologue READS session.lastJournalSnapshot
+        // (setupAgentCoreRun) as previousJournalSnapshot for cross-turn continuity, so WITHOUT this
+        // write-back every v2 turn after the first reads a stale snapshot — silent multi-turn memory
+        // corruption. Runs on the same normal-terminal path as persistSessionToMemory below (v2 failures
+        // are verdicts, not throws, so this covers every path the spine actually takes).
+        self.sessionManager.persistExecutionMemory(c.identityKey, c.executionJournal);
+        c.session.lastJournalSnapshot = c.executionJournal.snapshot();
         await self.sessionManager.persistSessionToMemory(
           c.chatId,
           self.sessionManager.getVisibleTranscript(c.session),

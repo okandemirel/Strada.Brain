@@ -167,4 +167,32 @@ describe("Step 3 — interactive route flip (v2 spine vs v1 loop, no double-rend
     // Equivalence: the v1 loop renders the answer once too. Same harness, only the flag differs.
     expect(answerRenderCount(channel, "v1-int-1")).toBe(1);
   });
+
+  it("flag ON (v2): persistTerminal snapshots the execution journal onto the session (cross-turn continuity, gap #6)", async () => {
+    const channel = createMockChannel();
+    const orch = makeOrchestrator({
+      provider: createAnswerProvider(),
+      channel,
+      flagSet: resolveFlagSetById("v2-all-routes+full-control-plane"),
+    });
+
+    await orch.handleMessage({
+      channelType: "cli",
+      chatId: "v2-journal-1",
+      userId: "u1",
+      text: "What is the answer?",
+      timestamp: new Date(),
+    });
+
+    // gap #6: persistTerminal must write `executionJournal.snapshot()` back onto the session so the
+    // NEXT turn's setupAgentCoreRun reads it as `previousJournalSnapshot`. Before the write-back this
+    // stayed undefined on the v2 path → silent stale cross-turn continuity. (sessionManager is
+    // internal; reach it directly for the assertion — same persistent session the run used.)
+    const session = (
+      orch as unknown as {
+        sessionManager: { getOrCreateSession(id: string): { lastJournalSnapshot?: unknown } };
+      }
+    ).sessionManager.getOrCreateSession("v2-journal-1");
+    expect(session.lastJournalSnapshot).toBeDefined();
+  });
 });
