@@ -15,12 +15,12 @@ import {
 import type { RouteContext } from "./server-types.js";
 import type { GoalTree, GoalNodeId } from "../goals/types.js";
 
-vi.mock("../utils/logger.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../utils/logger.js")>();
-  const stub = { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() };
-  return { ...actual, getLogger: () => stub, getLoggerSafe: () => stub };
-});
-
+// EXACTLY ONE vi.mock for the logger. A second, partial vi.mock for this same module path used to
+// sit here (it stubbed getLogger/getLoggerSafe but NOT getLogRingBuffer) — two factories for one
+// path resolve non-deterministically, so getLogRingBuffer sometimes fell through to the REAL
+// process-global ring buffer and GET /api/logs flaked with `count: 0` (cross-file: another suite's
+// log writes / empty global won the resolution). The single complete factory below is deterministic.
+//
 // We need the mock BEFORE the module imports it, so the mock factory
 // also captures the ring-buffer stub used in GET /api/logs tests below.
 const mockRingBuffer: Array<Record<string, unknown>> = [];
