@@ -37,6 +37,11 @@ import { Orchestrator } from "../../orchestrator.js";
 import { getProviderIntelligenceSnapshot, type ProviderWorkload, type ModelIntelligenceLookup } from "../../providers/provider-knowledge.js";
 import { ProviderHealthRegistry } from "../../providers/provider-health.js";
 import { WorkspaceLeaseManager } from "../workspace-lease-manager.js";
+import {
+  selectAgentRunner,
+  toWorkerRunResult,
+  type RunnerHostOrchestrator,
+} from "../../../agent-core/runner/index.js";
 
 // =============================================================================
 // OPTIONS
@@ -455,37 +460,37 @@ export class DelegationManager {
 
       let workerResult: import("../../supervisor/supervisor-types.js").WorkerRunResult | undefined;
       if (typeof (orchestrator as Orchestrator & { runWorkerTask?: unknown }).runWorkerTask === "function") {
-        workerResult = await Promise.race([
-          (
-            orchestrator as Orchestrator & {
-              runWorkerTask: (request: {
-                prompt: string;
-                mode: "delegated";
-                signal: AbortSignal;
-                onProgress: (message: import("../../../tasks/types.js").TaskProgressUpdate) => void;
-                chatId: string;
-                taskRunId: string;
-                channelType: string;
-                userId: string;
-                workspaceLease?: Awaited<ReturnType<WorkspaceLeaseManager["acquireLease"]>>;
-              }) => Promise<import("../../supervisor/supervisor-types.js").WorkerRunResult>;
-            }
-          ).runWorkerTask({
-            prompt: message.text,
-            mode: "delegated",
-            signal: abortController.signal,
-            onProgress: () => {},
-            chatId: message.chatId,
-            taskRunId: subAgentId,
-            channelType: message.channelType,
-            userId: message.userId ?? "sub-agent",
-            workspaceLease,
-          }),
+        // Cutover Step 2 — route the delegated sub-agent through the AgentRunner seam instead of a
+        // DIRECT orchestrator.runWorkerTask call, so it rides whichever engine the flag selects
+        // (default → V1AgentRunner → runWorkerTask, byte-identical) and the direct caller that blocked
+        // deleting runWorkerTask/runBackgroundTask is gone. Mirrors background-executor.executeWorkerRun:
+        // supervisor-node ⇒ the "delegated" worker mode; the never-returning waitForAbort still races
+        // the run for the delegation timeout; toWorkerRunResult projects AgentRunResult → WorkerRunResult.
+        const mode = "supervisor-node" as const;
+        const runner = selectAgentRunner(orchestrator as unknown as RunnerHostOrchestrator, mode);
+        const runResult = await Promise.race([
+          runner.run(
+            {
+              prompt: message.text,
+              chatId: message.chatId,
+              taskRunId: subAgentId,
+              channelType: message.channelType,
+              userId: message.userId,
+              workspaceLease,
+            },
+            {
+              mode,
+              onEvent: () => {},
+              externalSignal: abortController.signal,
+              deliverFinal: () => {},
+            },
+          ),
           this.waitForAbort(
             abortController.signal,
             `delegation(${request.type}, sub=${subAgentId}, timeoutMs=${typeConfig.timeoutMs})`,
           ),
         ]);
+        workerResult = toWorkerRunResult(runResult);
       } else {
         // Execute with abort awareness
         await Promise.race([

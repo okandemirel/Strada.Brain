@@ -301,6 +301,38 @@ describe("DelegationManager", () => {
       expect(result.content).toBe("Checkpoint from delegated worker");
     });
 
+    it("round-trips a COMPLETED delegated worker result through the runner seam (Step 2 success path)", async () => {
+      orchestratorRunWorkerTask = vi.fn().mockResolvedValueOnce({
+        status: "completed",
+        finalSummary: "Analysis complete",
+        visibleResponse: "The verifier loop is caused by a stale fingerprint",
+        provider: "mock-provider",
+        catalogVersion: "mock-provider:mock-model",
+        assignmentVersion: 0,
+        touchedFiles: [],
+        toolTrace: [],
+        verificationResults: [],
+        reviewFindings: [],
+        artifacts: [],
+      });
+
+      const request: DelegationRequest = {
+        type: "analysis",
+        task: "Analyze the repeated verifier loop",
+        parentAgentId: PARENT_AGENT_ID,
+        depth: 0,
+        mode: "sync",
+        toolContext: TEST_TOOL_CONTEXT,
+      };
+
+      const result = await manager.delegate(request);
+
+      // Step 2 reroute: the SUCCESS path round-trips runWorkerTask → projectWorkerResult →
+      // AgentRunResult → toWorkerRunResult with visibleResponse(↔finalText) preserved into content.
+      expect(result.workerResult?.status).toBe("completed");
+      expect(result.content).toBe("The verifier loop is caused by a stale fingerprint");
+    });
+
     it("logs start/complete in DelegationLog", async () => {
       const request: DelegationRequest = {
         type: "code_review",
