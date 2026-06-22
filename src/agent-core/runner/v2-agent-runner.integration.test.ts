@@ -427,6 +427,63 @@ describe("V2AgentRunner — REAL port + REAL gateway (provider.chat scripted)", 
     // #2: the workspace artifact is surfaced (buildWorkerArtifacts).
     expect(result.artifacts.some((a) => a.kind === "workspace")).toBe(true);
   });
+
+  it("CANCEL (P1): a mid-run external /cancel is a BENIGN cancel — no health failure, not a COMPLETE metric", async () => {
+    // The soak-audit P1: when io.externalSignal aborts mid-call, gateway.call throws → the spine
+    // catches {kind:"threw"}. PRE-FIX the failure gate ran classifyFailureForVerdict (recordFailure →
+    // poisoned per-run health) and the run was recorded as AgentPhase.COMPLETE (cancelReason undefined,
+    // since the reason lived only on externalSignal, never on the task token). POST-FIX the run-open
+    // signal→token wiring stamps runClock.taskToken.reason = user-cancel, the gate short-circuits the
+    // benign cancel (NO classify/recordFailure), and persistTerminal records a non-COMPLETE phase.
+    const provider = mkScriptedProvider();
+    const controller = new AbortController();
+    provider.chat.mockImplementation(async () => {
+      // call 1 = PLANNING success → EXECUTING. On the 2nd call the user cancels mid-run: abort the
+      // signal (fires the run-open listener synchronously → token.reason = user-cancel) then reject
+      // with an abort-style error, exactly as a provider rejects when its AbortSignal trips.
+      if (provider.chat.mock.calls.length === 1) {
+        return resp({ text: "the plan", stopReason: "end_turn" });
+      }
+      controller.abort();
+      throw new Error("This operation was aborted");
+    });
+    const h = buildHarness(provider);
+    const io: IOStrategy & { deliverFinal: ReturnType<typeof vi.fn>; onEvent: ReturnType<typeof vi.fn> } = {
+      mode: "worker",
+      onEvent: vi.fn(),
+      deliverFinal: vi.fn(),
+      externalSignal: controller.signal, // the REAL user-cancel signal, wired to the task token
+    } as IOStrategy & { deliverFinal: ReturnType<typeof vi.fn>; onEvent: ReturnType<typeof vi.fn> };
+
+    // (b) spy the health-failure classifier (the port delegates classifyFailureForVerdict → this);
+    // a benign cancel must NOT reach it (no recordFailure → no per-run health poison).
+    const classifySpy = vi.spyOn(
+      h.orch as unknown as { classifyAgentCoreFailure: (...a: unknown[]) => unknown },
+      "classifyAgentCoreFailure",
+    );
+    // (c) spy recordMetricEnd (called by persistTerminal in the spine's finally) to assert the
+    // recorded terminal phase is NOT COMPLETE for a cancel.
+    const metricSpy = vi.spyOn(
+      h.orch as unknown as { recordMetricEnd: (...a: unknown[]) => void },
+      "recordMetricEnd",
+    );
+
+    const result = await drive(h.clock, h.runner.run(mkRequest(), io));
+
+    // (a) the task token carries the typed user-cancel reason (the wiring populated it).
+    expect(result.cancelReason).toEqual({ kind: "user-cancel" });
+    // (d) cancelReason surfaced on AgentRunResult + the terminal reason is the typed cancel label.
+    expect(result.reason).toBe("user-cancel");
+    // (b) NO health failure was classified/recorded for the benign cancel.
+    expect(classifySpy).not.toHaveBeenCalled();
+    // (e) NOT recorded as a successful completion — the metric phase is the v1-parity non-COMPLETE.
+    expect(metricSpy).toHaveBeenCalled();
+    const recordedPhases = metricSpy.mock.calls.map((c) => (c[1] as { agentPhase?: string })?.agentPhase);
+    expect(recordedPhases).not.toContain("complete");
+    // status is NOT "completed" via the success path's lens — a benign cancel terminates gracefully
+    // and is never billed as a real completion (the executor's signal.aborted guard owns the surface).
+    expect(result.status).not.toBe("failed"); // benign cancel ≠ provider failure
+  });
 });
 
 describe("V2AgentRunner — Phase 3b capability guard (flag-on; the first registry-wired integration)", () => {

@@ -195,6 +195,7 @@ import {
   capabilityForTool,
   guardExecute,
   formatBlocked,
+  isBenign,
   type CallScope,
   type CapabilityAdapter,
   type CancelReason,
@@ -8388,10 +8389,16 @@ export class Orchestrator {
           (typeof lastVisible?.content === "string" ? lastVisible.content : "") || "Task completed.";
         return { text, summary: text };
       },
-      persistTerminal: async (state: AgentState, _setup) => {
+      persistTerminal: async (state: AgentState, _setup, cancelReason?: CancelReason) => {
         const c = ctx();
+        // A BENIGN cancel (mid-run user /cancel, daemon winddown, …) must NOT be recorded as a
+        // successful completion — that polluted metrics + the learning signal. v1 recorded the
+        // terminal phase (its catch transitioned to FAILED on the `signal.aborted` re-throw, so the
+        // finally recorded FAILED, never COMPLETE). Mirror that: a benign cancel records FAILED; every
+        // other terminal (success / verdict-stop / non-cancel) keeps COMPLETE exactly as before.
+        const cancelled = cancelReason !== undefined && isBenign(cancelReason);
         self.recordMetricEnd(c.metricId, {
-          agentPhase: AgentPhase.COMPLETE,
+          agentPhase: cancelled ? AgentPhase.FAILED : AgentPhase.COMPLETE,
           iterations: state.iteration,
           toolCallCount: state.stepResults.length,
           hitMaxIterations: false,

@@ -445,8 +445,11 @@ export interface OrchestratorPort {
   /**
    * Durably persist the terminal state (execution memory + journal snapshot + recordMetricEnd).
    * The fire-and-forget-with-barrier target: kicked at run.ending, JOINED at the terminal.
+   * `cancelReason` (when present) is the task token's typed reason; a BENIGN cancel (e.g. a mid-run
+   * user /cancel) makes the impl record the metric as a non-COMPLETE terminal (v1 parity — a cancel
+   * must never be counted as a successful completion in metrics/learning).
    */
-  persistTerminal(state: AgentState, setup: RunSetup): Promise<void>;
+  persistTerminal(state: AgentState, setup: RunSetup, cancelReason?: CancelReason): Promise<void>;
 
   /**
    * Project the terminal state + collected effects into the structured AgentRunResult fields the

@@ -49,7 +49,7 @@ import type { RunClock, CallLimits } from "../control/run-clock.js";
 import type { RunClockView } from "../control/run-clock.js";
 import type { FailureLedger, RunVerdict, VerdictInput } from "../control/failure-ledger.js";
 import type { CancelReason } from "../control/cancel-reason.js";
-import { describeCancelReason } from "../control/cancel-reason.js";
+import { describeCancelReason, isBenign } from "../control/cancel-reason.js";
 import { mapVerdictToLoopAction } from "../control/verdict-loop-action.js";
 import type { Clock } from "../control/clock.js";
 import type { AgentRunEventBus } from "../events/event-bus.js";
@@ -217,6 +217,28 @@ export class V2AgentRunner implements AgentRunner {
     const bus = controlPlane.openBus(runId, io, request.parentClockView ? runId : undefined);
     const emit = (e: Parameters<AgentRunEventBus["emit"]>[0]): number => bus.emit(e);
 
+    // ─── Bind the external (user/daemon) cancel signal to the task token (benign-cancel parity) ──
+    // io.externalSignal is the dual-signal v1 carried verbatim, but on the v2 route nothing tied an
+    // ABORT of it back to runClock.taskToken — so a mid-run /cancel surfaced ONLY as a gateway throw
+    // ({kind:"threw"}) and the failure gate misread it as a provider HEALTH failure (recordFailure +
+    // COMPLETE metric). Wiring it here stamps the token's reason = user-cancel the instant the signal
+    // fires, so (a) the failure gate's user-cancel short-circuit and rule 1/1b see the benign reason,
+    // and (b) the terminal reads it into AgentRunResult.cancelReason. {once:true} + a guarded cancel
+    // (the token may already have ended) keep this a single, side-effect-free hook over the whole run.
+    if (io.externalSignal) {
+      io.externalSignal.addEventListener(
+        "abort",
+        () => {
+          try {
+            runClock.taskToken.cancel({ kind: "user-cancel" });
+          } catch {
+            /* run already ended — the token is the single source of truth, first write wins */
+          }
+        },
+        { once: true },
+      );
+    }
+
     // Hoisted ABOVE the try so the finally can read the latest state + the resolved setup on EVERY
     // exit (happy or throw). The loop is the sole writer of AgentState; every mode seeds the same
     // initial PLANNING state (interactive vs background differ only via IOStrategy + policy).
@@ -371,6 +393,20 @@ export class V2AgentRunner implements AgentRunner {
 
           // ══ FAILURE / EMPTY → verdict GATE arbitrates (gauntlet #7,#10,#11) ═══════════════
           if (outcome.kind === "threw" || outcome.kind === "empty") {
+            // BENIGN USER-CANCEL short-circuit (v1 parity: the bg loop's `if (signal.aborted) throw`
+            // re-throws BEFORE recordPhase1bFailureAndVerdict — a /cancel is never a provider failure).
+            // The signal→token wiring (run open) has already stamped runClock.taskToken.reason; if it is
+            // a benign cancel, DO NOT call classifyFailureForVerdict (its unconditional recordFailure
+            // would poison the per-run health counter). Stop the run gracefully with the typed reason so
+            // the terminal surfaces it on AgentRunResult.cancelReason and persistTerminal records it as a
+            // cancel (not COMPLETE). terminalStatus stays graceful ("completed" — a benign cancel is not
+            // a failure); the metric phase is corrected via persistTerminal's cancel awareness below.
+            const taskReason = runClock.taskToken.reason;
+            if (taskReason && isBenign(taskReason)) {
+              terminalReason = describeCancelReason(taskReason);
+              emit({ type: "run.ending", reason: terminalReason });
+              break epochLoop;
+            }
             const contrib = port.classifyFailureForVerdict({
               kind: outcome.kind === "threw" ? "throw" : "empty",
               provider: prepared.currentProvider.name,
@@ -380,7 +416,7 @@ export class V2AgentRunner implements AgentRunner {
             });
             const failVerdict = ledger.verdict({
               ...this.clockBudgetVerdict(runClock, budget, state),
-              taskCancelReason: runClock.taskToken.reason ?? contrib.taskCancelReason,
+              taskCancelReason: taskReason ?? contrib.taskCancelReason,
               callStalled: contrib.callStalled,
             });
             const action = mapVerdictToLoopAction(failVerdict, "break");
@@ -632,7 +668,11 @@ export class V2AgentRunner implements AgentRunner {
       // skipping it on a throw corrupts the next turn's prologue. dispose()+close() are idempotent.
       if (setup) {
         try {
-          await port.persistTerminal(state, setup);
+          // Read the token reason BEFORE runClock.dispose() (which stamps a benign task-winddown on a
+          // still-live token). A benign cancel here flips the recorded metric phase off COMPLETE (v1
+          // parity: the bg catch transitions FAILED then the finally records state.phase) so a mid-run
+          // /cancel no longer pollutes metrics/learning as a successful completion.
+          await port.persistTerminal(state, setup, runClock.taskToken.reason ?? undefined);
         } catch (e) {
           log.warn("[v2-runner] terminal persist failed", { error: e instanceof Error ? e.message : String(e) });
         }
