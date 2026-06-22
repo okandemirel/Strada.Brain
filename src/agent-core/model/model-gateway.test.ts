@@ -81,9 +81,36 @@ describe("ModelGateway — delegation", () => {
     expect(args[3]).toBe(provider); // provider (caller-selected; gateway does not route)
     expect(args[5]).toBe(ext); // externalSignal preserved verbatim
     expect(typeof args[6]).toBe("function"); // onLiveness supplied
-    expect(args[7]).toBeUndefined(); // runClock slot stays the loop's concern
+    expect(args[7]).toBeUndefined(); // runClock slot forwarded from req.runClock — this request omits it
     expect(result.response).toBe(expected);
     expect(result.streamed).toBe(true);
+  });
+
+  it("FORWARDS req.runClock verbatim into silentStream's 8th arg (Phase 1c liveness re-arm)", async () => {
+    // The Phase 1c fix: the gateway must thread the run's RunClock into silentStream's 8th slot so
+    // the frozen silentStream re-arms call liveness (firstTokenSeen()/touch()) per visible chunk —
+    // exactly v1's flag-ON branch. The gateway itself must NOT call touch()/firstTokenSeen() (that
+    // would double-arm the inactivity timer); it only FORWARDS. We assert the same opaque handle is
+    // passed straight through, and that the gateway invoked NO method on it.
+    const clock = new FakeClock();
+    const bus = createAgentRunEventBus({ runId: "r", clock });
+    const provider = mkProvider();
+    // A sentinel RunClock-like object whose touch/firstTokenSeen would throw if the gateway (wrongly)
+    // called them — proving the gateway forwards but never drives the touch surface itself.
+    const runClock = {
+      enterCall: () => {
+        throw new Error("gateway must NOT enter a call scope — silentStream owns that");
+      },
+    };
+    const port = vi.fn<SilentStreamPort>(async () => mkResponse("streamed"));
+    const gw = new ModelGateway(port);
+
+    await gw.call({ ...mkRequest(provider), runClock }, bus);
+
+    expect(port).toHaveBeenCalledTimes(1);
+    // 8th arg (index 7) is the EXACT same handle the request carried — forwarded verbatim.
+    expect(port.mock.calls[0][7]).toBe(runClock);
+    // The gateway never touched it (no enterCall thrown) — silentStream is the sole owner.
   });
 
   it("emits model.call.started then model.call.finished around the call", async () => {

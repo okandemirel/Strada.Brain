@@ -8427,8 +8427,9 @@ export class Orchestrator {
       port,
       // silentStream's 8th param is typed `runClock?: RunClock`; the gateway's SilentStreamPort
       // types it `runClock: unknown` (carrying no control-plane dependency). The bodies are
-      // identical — the cast localizes the variance mismatch to this one line (gateway passes
-      // undefined for that slot; the Orchestrator's real method narrows it back).
+      // identical — the cast localizes the variance mismatch to this one line. Phase 1c: the
+      // gateway now FORWARDS the run's RunClock (req.runClock) into that slot; this real method
+      // narrows the `unknown` back to RunClock and re-arms call liveness per chunk (v1 parity).
       gateway: new ModelGateway(self.silentStream as unknown as SilentStreamPort),
       seed: self.buildPolicySeed(),
       // Returns the SHARED per-run adapter (see the bug-fix note above) — the SAME instance the spine

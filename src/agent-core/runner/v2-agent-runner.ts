@@ -15,11 +15,13 @@
  * Two correctness invariants encoded here (from the foundations):
  *  - Policy warnings are LOGGED, never thrown (resolveRunBudgetPolicy returns { policy, warnings }).
  *  - The spine never re-emits the gateway's events (model.call.* / model.delta / heartbeat) and
- *    never re-calls call.touch()/firstTokenSeen() — silentStream owns liveness. The gateway today
- *    passes `undefined` for the runClock slot (model-gateway.ts), so on the v2 route nothing yet
- *    re-arms the CallScope inactivity timer from token arrival. That single wiring decision is the
- *    live question the worker-route-flip increment resolves (Part 3, item 2); the spine leaves the
- *    `call` handle available for whichever wiring is chosen and deliberately does NOT call them.
+ *    never re-calls call.touch()/firstTokenSeen() — silentStream owns liveness. Phase 1c RESOLVED
+ *    the wiring decision: the spine FORWARDS `runClock` into gateway.call (model-gateway.ts threads
+ *    it to silentStream's 8th arg), so the frozen silentStream re-arms the CallScope inactivity
+ *    timer from token arrival on the v2 route too — exactly v1's flag-ON branch. The spine still
+ *    does NOT call touch()/firstTokenSeen() itself (silentStream owns that surface); its own
+ *    enterCall `call` only bounds the non-streaming sibling and is superseded when silentStream
+ *    opens its scope from the threaded runClock (enterCall auto-leaves the prior active call).
  *
  * PURELY ADDITIVE: nothing in v1 routes here yet (the flag selector lands in the route-flip
  * increment). The concrete ControlPlane assembler (control/control-plane.ts) is likewise deferred;
@@ -362,7 +364,15 @@ export class V2AgentRunner implements AgentRunner {
           // ══ THE COLLAPSE POINT — the one LLM call (gauntlet #6,#7) ════════════════════════
           //   gateway.call emits model.call.started / model.delta / heartbeat / model.call.finished.
           //   The spine does NOT re-emit those, and does NOT call call.touch()/firstTokenSeen()
-          //   (silentStream owns liveness — see the WIRING DECISION in the header / Part 3 item 2).
+          //   itself — instead it FORWARDS `runClock` to the gateway (Phase 1c), which threads it
+          //   into silentStream's 8th arg so the frozen silentStream re-arms liveness per visible
+          //   chunk (orchestrator.ts ~6466-6467) = v1. WITHOUT this thread, a long-but-productive
+          //   stream commits its whole wall-clock as silent ms (the CallScope's lastActivityAt is
+          //   frozen at enter) and false-aborts with task-inactivity. The spine's `call` (enterCall
+          //   above) bounds the NON-streaming sibling; when silentStream opens its own scope from
+          //   the threaded runClock, that supersedes this `call` (enterCall auto-leaves the prior
+          //   active call) and the `call.leave()` in the finally is then an idempotent no-op — the
+          //   exact v1 shape, where only ONE enterCall runs per LLM call.
           let outcome: StepOutcome;
           try {
             const result = await gateway.call(
@@ -373,6 +383,7 @@ export class V2AgentRunner implements AgentRunner {
                 provider: prepared.currentProvider,
                 toolDefinitions: prepared.currentToolDefinitions,
                 externalSignal: io.externalSignal, // = task token (dual-signal preserved verbatim)
+                runClock, // Phase 1c — silentStream re-arms call liveness from token arrival (v1 parity)
               },
               bus,
             );

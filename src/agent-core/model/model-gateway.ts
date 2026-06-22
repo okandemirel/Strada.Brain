@@ -17,9 +17,14 @@
  * frozen silentStream finally surfaces the token deltas v1 discarded.
  *
  * THE ONE SUBTLETY (must not get wrong): in the SHIPPED Phase-1b code, CallScope.touch() /
- * firstTokenSeen() are already called INSIDE silentStream (flag-ON branch). So the division of
- * labor is: silentStream owns watchdog/touch (frozen); the gateway owns emit (new). The gateway
- * MUST NOT re-call touch()/firstTokenSeen() (that would double-arm the inactivity timer).
+ * firstTokenSeen() are already called INSIDE silentStream (flag-ON branch) — BUT ONLY when it is
+ * handed a runClock as its 8th arg. So the division of labor is: silentStream owns watchdog/touch
+ * (frozen); the gateway owns emit (new). The gateway MUST NOT re-call touch()/firstTokenSeen()
+ * (that would double-arm the inactivity timer) — instead it FORWARDS the run's RunClock
+ * (req.runClock) into that 8th slot (Phase 1c) so the frozen silentStream re-arms liveness per
+ * chunk = v1. WITHOUT that thread (the original `undefined`), a long-but-productive v2 stream
+ * commits its whole wall-clock as silent ms (its CallScope lastActivityAt frozen at enter) and
+ * false-aborts with task-inactivity once the cumulative duration exceeds taskInactivityMs.
  *
  * PURELY ADDITIVE: silentStream is UNCHANGED. nothing in v1 imports this yet (Phase 2). When no
  * chunk observer is wired (the additive `onChunkObserver?` refactor has not landed), deltas are
@@ -56,6 +61,21 @@ export interface ModelCallRequest {
   readonly toolDefinitions: GatewayToolDefinition[];
   /** Dual-signal abort preserved VERBATIM: externalSignal = task token (§2.2). */
   readonly externalSignal?: AbortSignal;
+  /**
+   * The run's live RunClock — forwarded VERBATIM as silentStream's 8th (runClock) arg so the
+   * FROZEN silentStream re-arms call liveness (scope.firstTokenSeen()/touch()) on every visible
+   * chunk, exactly as v1's flag-ON branch does (orchestrator.ts ~6466-6467). WITHOUT this, every
+   * streamed call commits its full wall-clock duration as "silent" ms (its CallScope's
+   * lastActivityAt stays frozen at enter time), and a long-but-PRODUCTIVE streaming run
+   * false-aborts with task-inactivity once the cumulative wall-clock exceeds taskInactivityMs.
+   *
+   * Typed `unknown` (NOT a concrete RunClock import) so the gateway carries NO dependency on the
+   * control-plane concrete — identical to {@link SilentStreamPort}'s 8th-arg typing; the caller's
+   * real silentStream method narrows it back. The gateway NEVER calls touch()/firstTokenSeen()
+   * itself (that would double-arm the inactivity timer — see the header); it only FORWARDS this.
+   * Optional: a non-streaming caller (or a test) may omit it (→ verbatim v1 watchdog path).
+   */
+  readonly runClock?: unknown;
 }
 
 export interface ModelCallResult {
@@ -70,8 +90,9 @@ export interface ModelCallResult {
  * (chatId, systemPrompt, session, provider, toolDefinitions, externalSignal?, onLiveness?,
  *  runClock?). The Orchestrator supplies its own bound `silentStream` method here, with NO body
  * change. The gateway uses the `onLiveness` slot (7th) for task-scope liveness; the `runClock`
- * slot (8th) stays the loop's concern and is passed `undefined` (the gateway does not own the
- * RunClock-touch surface — silentStream does).
+ * slot (8th) is FORWARDED from req.runClock (Phase 1c) so the frozen silentStream — which owns the
+ * RunClock-touch surface — re-arms call liveness (firstTokenSeen()/touch()) on each visible chunk.
+ * The gateway still does NOT touch() itself (silentStream does); it only forwards.
  *
  * `runClock` is typed `unknown` so this port carries no dependency on the control-plane RunClock
  * concrete (the Orchestrator's real method narrows it back).
@@ -184,7 +205,9 @@ export class ModelGateway {
       req.toolDefinitions,
       req.externalSignal, // dual-signal preserved verbatim
       onLiveness,
-      undefined, // runClock slot stays the loop's concern; the gateway does not own the touch surface
+      // FORWARD the run's RunClock VERBATIM (Phase 1c) — silentStream owns the touch surface; the
+      // gateway only forwards, never touch()/double-arm (see the ModelCallRequest.runClock doc).
+      req.runClock,
     );
 
     // No chunk observer wired → derive the visible answer-delta from the final response so the

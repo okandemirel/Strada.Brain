@@ -715,3 +715,172 @@ describe("V2AgentRunner — heartbeat-per-wait invariant", () => {
     expect((ack as { summary: string }).summary).toBe("Refactor the build pipeline");
   });
 });
+
+// ── Phase 1c: streaming liveness re-arm (the false-task-inactivity-abort regression) ──────────
+describe("V2AgentRunner — Phase 1c streaming liveness re-arm (no false task-inactivity abort)", () => {
+  // The bug: the spine created `call = runClock.enterCall(callLimits)` but passed `undefined` for
+  // silentStream's 8th (runClock) arg, so the frozen silentStream never re-armed the CallScope.
+  // EVERY streamed call then committed its full wall-clock duration as "silent" ms (its CallScope
+  // lastActivityAt frozen at enter), and a sequence of dense-but-productive streaming calls whose
+  // cumulative wall-clock exceeded taskInactivityMs tripped silenceCeilingExceeded() → the ledger
+  // issued {stop, task-inactivity} and killed a run that was steadily producing tokens.
+  //
+  // The fix: the spine FORWARDS runClock into gateway.call → the gateway threads it to the
+  // SilentStreamPort's 8th arg → the (frozen, here faithfully simulated) silentStream opens its OWN
+  // CallScope and re-arms firstTokenSeen()/touch() per visible chunk = v1's flag-ON branch.
+  //
+  // This test drives the REAL RunClock + REAL FailureLedger over a FakeClock, with a faithful
+  // streaming SilentStreamPort that re-arms per chunk EXACTLY as orchestrator.ts:6457-6478 does. A
+  // small inactivity window keeps the wall-clock arithmetic obvious: each call advances the clock
+  // 80ms (4×20ms chunks, each gap < the 50ms stall window, total < the 100ms call-hard ceiling), so
+  // two productive calls = 160ms cumulative > the 100ms taskInactivityMs. With the re-arm wired the
+  // committed silent ms stays ~0 and the run COMPLETES; the pre-fix path would commit ~160ms silent
+  // and stop with task-inactivity.
+
+  // A faithful silentStream: mirrors v1's flag-ON branch — open a scope on the threaded runClock,
+  // re-arm firstTokenSeen()/touch() per visible chunk (advancing the clock between chunks), leave().
+  // `runClock` is the 8th arg the gateway forwards (typed unknown at the port boundary, narrowed
+  // here to the minimal touch surface the real silentStream uses).
+  function faithfulStreamPort(
+    clock: FakeClock,
+    script: ProviderResponse[],
+    opts: { chunkMs?: number; chunks?: number } = {},
+  ): SilentStreamPort {
+    const chunkMs = opts.chunkMs ?? 20;
+    const chunks = opts.chunks ?? 4;
+    let i = 0;
+    return async (_chatId, _sys, _session, _provider, _tools, _externalSignal, _onLiveness, runClock) => {
+      const rc = runClock as
+        | {
+            enterCall: (l: { firstResponseMs: number; stallMs: number; hardMs: number }) => {
+              firstTokenSeen: () => void;
+              touch: () => void;
+              leave: () => void;
+            };
+          }
+        | undefined;
+      // The 8th arg MUST be the live RunClock (the whole point of the Phase 1c fix). If the gateway
+      // regressed to passing undefined, this throws → the test fails loudly rather than silently
+      // exercising the no-rearm path.
+      if (!rc || typeof rc.enterCall !== "function") {
+        throw new Error("Phase 1c regression: gateway did not forward the RunClock to silentStream's 8th arg");
+      }
+      // v1 parity (orchestrator.ts:6445): silentStream opens its OWN call scope on the runClock.
+      const scope = rc.enterCall({ firstResponseMs: 100, stallMs: 50, hardMs: 100 });
+      try {
+        for (let c = 0; c < chunks; c++) {
+          clock.advance(chunkMs); // dense streaming: time passes between visible chunks
+          // v1 parity (orchestrator.ts:6467-6468): a visible chunk re-arms liveness.
+          scope.firstTokenSeen();
+          scope.touch();
+        }
+      } finally {
+        scope.leave(); // commits this call's silent contribution (~0 — last touch was just now)
+      }
+      const next = script[Math.min(i, script.length - 1)];
+      i += 1;
+      return next ?? mkResponse({ stopReason: "end_turn" });
+    };
+  }
+
+  // A ControlPlane over the REAL primitives with a SMALL inactivity window, exposing the live
+  // RunClock so the test can read accumulatedSilentMs(). Mirrors mkPlane but with a tiny seed +
+  // a captured clock handle.
+  function mkTinyInactivityPlane(clock: FakeClock): {
+    plane: ControlPlane;
+    runClock: () => ReturnType<typeof openRunClock>;
+  } {
+    const tinySeed: PolicySeed = {
+      streamInitialTimeoutMs: 100,
+      streamStallTimeoutMs: 50,
+      providerFirstResponseMs: 100,
+      taskInactivityMs: 100, // == 2×callStallMs(50) floor → applied verbatim, no clamp warning
+      minInactivityOverStreamRatio: 2,
+      outputTokenCap: 100_000,
+      costCapUsd: 10,
+      // taskHardMs omitted → Infinity (the task-hard timer never fires; isolates the inactivity path)
+    };
+    let rcRef: ReturnType<typeof openRunClock> | undefined;
+    const plane: ControlPlane = {
+      openRun(mode: RunMode): OpenRunResult {
+        const { policy } = resolveRunBudgetPolicy(mode, tinySeed);
+        const rc = openRunClock(clock, policy);
+        rcRef = rc;
+        return {
+          clock: rc,
+          ledger: createFailureLedger(mkHealth(), { pauseRetryBudget: policy.pauseRetryBudget }),
+          budget: createBudget(policy.outputTokenCap, policy.costCapUsd),
+        };
+      },
+      openBus(runId: string): AgentRunEventBus {
+        return createAgentRunEventBus({ runId, clock });
+      },
+    };
+    return {
+      plane,
+      runClock: () => {
+        if (!rcRef) throw new Error("runClock not opened yet");
+        return rcRef;
+      },
+    };
+  }
+
+  it("a long-but-productive 2-step stream COMPLETES (re-arm keeps silent ms ~0) — no task-inactivity", async () => {
+    const clock = new FakeClock(0);
+    const provider = mkProvider();
+    const { plane, runClock } = mkTinyInactivityPlane(clock);
+    // Step 1 (PLANNING): faithful stream re-arms across 80ms → handlePlanPhase moves to EXECUTING.
+    // Step 2 (EXECUTING): faithful stream re-arms across 80ms → end_turn terminal. Cumulative
+    // wall-clock 160ms > taskInactivityMs(100); with the re-arm the silence accumulator stays ~0.
+    const gateway = new ModelGateway(
+      faithfulStreamPort(clock, [
+        mkResponse({ text: "the plan", stopReason: "end_turn" }),
+        mkResponse({ text: "all done", stopReason: "end_turn" }),
+      ]),
+    );
+    const port = mkPort(provider);
+    const runner = mkRunner(plane, gateway, port, clock);
+
+    const result = await drive(clock, runner.run(mkRequest(), mkIO("interactive")));
+
+    // The run completed normally — NOT killed by a spurious task-inactivity stop.
+    expect(result.status).toBe("completed");
+    expect(result.reason).not.toBe("task-inactivity");
+    // The terminal came from the real end_turn path (dispatchEndTurn), proving step 2 actually ran
+    // (a pre-fix abort would have stopped at the gate BEFORE step 2's terminal).
+    expect(port.spies.dispatchEndTurn).toHaveBeenCalledTimes(1);
+    // The silence accumulator stayed far below the 100ms ceiling — the re-arm worked. (Each call
+    // commits ~0 because its scope's lastActivityAt was just touched; the spine's own superseded
+    // enterCall also commits ~0 because silentStream's enterCall leaves it immediately at entry.)
+    expect(runClock().accumulatedSilentMs()).toBeLessThan(100);
+  });
+
+  it("CONTROL (proves the assertion bites): the SAME stream withOUT the re-arm commits the full duration as silent", async () => {
+    // The negative control: a port that does NOT re-arm (it simply lets the spine's frozen `call`
+    // hold the whole call) advances the clock the same 80ms/call but never touches. The spine's
+    // own enterCall scope then commits its full duration on leave() → the silence accumulator climbs
+    // past the ceiling, exactly the pre-fix behavior. This locks in that the re-arm — not some other
+    // effect — is what keeps the run alive in the test above.
+    const clock = new FakeClock(0);
+    const provider = mkProvider();
+    const { plane, runClock } = mkTinyInactivityPlane(clock);
+    let i = 0;
+    const noRearmScript = [
+      mkResponse({ text: "the plan", stopReason: "end_turn" }),
+      mkResponse({ text: "all done", stopReason: "end_turn" }),
+    ];
+    const noRearmPort: SilentStreamPort = async () => {
+      clock.advance(80); // same wall-clock as faithfulStreamPort, but NO scope.touch() re-arm
+      const next = noRearmScript[Math.min(i, noRearmScript.length - 1)];
+      i += 1;
+      return next ?? mkResponse({ stopReason: "end_turn" });
+    };
+    const runner = mkRunner(plane, new ModelGateway(noRearmPort), mkPort(provider), clock);
+
+    await drive(clock, runner.run(mkRequest(), mkIO("interactive")));
+
+    // Without the re-arm, the spine's frozen per-call scope committed its full ~80ms/call → the
+    // accumulator crossed the 100ms ceiling (this is the bug the fix prevents).
+    expect(runClock().accumulatedSilentMs()).toBeGreaterThanOrEqual(100);
+  });
+});
