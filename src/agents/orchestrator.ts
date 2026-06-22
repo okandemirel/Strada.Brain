@@ -8417,6 +8417,12 @@ export class Orchestrator {
           self.sessionManager.getVisibleTranscript(c.session),
           true,
         );
+        // GAP1 teardown — symmetric to v1's runAgentLoop finally (:6232-6234): clear the per-session
+        // instinct IDs so a later, unrelated emitToolResult on this chatId cannot mis-attribute to a
+        // prior run's instincts, and prevent the Map growing unbounded. Runs from the spine's finally
+        // on EVERY exit (happy or throw), exactly once per run.
+        self.currentSessionInstinctIds.delete(c.chatId);
+        self.propagateInstinctIdsToChannel(c.chatId, []);
       },
       buildResultProjection: (params: ResultProjectionParams): AgentRunResultProjection =>
         self.portBuildResultProjection(params, ctx()),
@@ -8601,9 +8607,16 @@ export class Orchestrator {
     // prompt's "### Learned Patterns" block from it), so BOTH carriers must be populated to match v1.
     let systemPrompt = builtSystemPrompt;
     let learnedInsights: readonly string[] = [];
+    // GAP1 (self-learning attribution): capture the retrieved instincts' IDs and stash them per-session
+    // so emitToolResult tags every v2 tool:result with appliedInstinctIds (v1 parity: runAgentLoop
+    // :5189-5191). WITHOUT this the v2 path is open-loop — instincts are created but never reinforced
+    // (learning-pipeline.ts:333 is gated on appliedInstinctIds.length>0). Cleared on teardown in
+    // persistTerminal (symmetric to v1's runAgentLoop finally :6232-6234).
+    let matchedInstinctIds: string[] = [];
     if (this.instinctRetriever) {
       try {
         const insightResult = await this.instinctRetriever.getInsightsForTask(queryText);
+        matchedInstinctIds = insightResult.matchedInstinctIds;
         if (insightResult.insights.length > 0) {
           learnedInsights = insightResult.insights;
           systemPrompt += `\n\n## Learned Insights\n${insightResult.insights.join("\n")}\n`;
@@ -8612,6 +8625,8 @@ export class Orchestrator {
         // Non-fatal.
       }
     }
+    this.currentSessionInstinctIds.set(chatId, matchedInstinctIds);
+    this.propagateInstinctIdsToChannel(chatId, matchedInstinctIds);
 
     const lastUserMessage = this.sessionManager.extractLastUserMessage(session) || queryText;
     const bundle = createAutonomyBundle({
@@ -8648,7 +8663,8 @@ export class Orchestrator {
             ? "subtask"
             : "background",
       parentTaskId: request.parentMetricId,
-      instinctIds: [],
+      // GAP1: attribute the metric to the retrieved instincts (v1 parity: runAgentLoop :5198-5203).
+      instinctIds: matchedInstinctIds,
     });
 
     // iterationHealth + healthAdapter are now passed in (shared with the FailureLedger's core) — the

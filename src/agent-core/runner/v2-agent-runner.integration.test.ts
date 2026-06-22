@@ -157,9 +157,16 @@ function buildHarness(
     toolMetadataByName?: Map<string, { requiresBridge?: boolean; readOnly?: boolean }>;
   },
   personalization?: {
-    instinctRetriever?: { getInsightsForTask: (prompt: string) => Promise<{ insights: string[] }> };
+    instinctRetriever?: {
+      getInsightsForTask: (
+        prompt: string,
+      ) => Promise<{ insights: string[]; matchedInstinctIds: string[] }>;
+    };
   },
   taskConfig?: TaskConfig,
+  // GAP1: an optional learning event emitter so emitToolResult's tool:result path runs end-to-end
+  // (the orchestrator's emitToolResult early-returns when eventEmitter is null).
+  eventEmitter?: { emit: (event: string, payload: unknown) => void },
 ) {
   const clock = new FakeClock(0);
   const channel = mkChannel();
@@ -182,6 +189,8 @@ function buildHarness(
     toolMetadataByName: capability?.toolMetadataByName,
     // Step 0 / gap #6 — inject a personalization store (instinct retriever) to exercise the prologue.
     instinctRetriever: personalization?.instinctRetriever,
+    // GAP1 — inject a learning event emitter so emitToolResult emits tool:result (else it no-ops).
+    ...(eventEmitter ? { eventEmitter } : {}),
     ...(taskConfig ? { taskConfig } : {}),
     // agentCoreFlagSet OMITTED — the gateway passes runClock=undefined → flag-OFF silentStream.
   } as unknown as ConstructorParameters<typeof Orchestrator>[0]);
@@ -621,7 +630,9 @@ describe("Step 0 — v2 prologue fidelity gaps (behind the route flag; productio
   it("gap #6: the worker prologue runs personalization — instinct retrieval is invoked (v1 parity)", async () => {
     const provider = mkScriptedProvider();
     provider.chat.mockResolvedValue(resp({ text: "done", stopReason: "end_turn" }));
-    const getInsightsForTask = vi.fn().mockResolvedValue({ insights: ["learned-insight-xyz"] });
+    const getInsightsForTask = vi
+      .fn()
+      .mockResolvedValue({ insights: ["learned-insight-xyz"], matchedInstinctIds: [] });
     const h = buildHarness(provider, undefined, undefined, { instinctRetriever: { getInsightsForTask } });
 
     await drive(h.clock, h.runner.run(mkRequest(), mkIO("worker")));
@@ -629,5 +640,73 @@ describe("Step 0 — v2 prologue fidelity gaps (behind the route flag; productio
     // The v2 prologue must run the personalization layers (v1 parity, runBackgroundTask :3291-3388);
     // the prior profile:null version skipped them all. Instinct retrieval runs with the prompt.
     expect(getInsightsForTask).toHaveBeenCalledWith("do the thing");
+  });
+
+  it("GAP1: v2 attributes the retrieved instincts — tool:result carries appliedInstinctIds, cleared after", async () => {
+    // The v2 path was open-loop: it retrieved insights for the prompt but DROPPED matchedInstinctIds,
+    // so every tool:result carried appliedInstinctIds:[] and the confidence reinforcement at
+    // learning-pipeline.ts (gated on appliedInstinctIds.length>0) never fired. This asserts the fix:
+    // setupAgentCoreRun stashes the IDs in currentSessionInstinctIds, the SHARED emitToolResult tags
+    // each tool:result with them, and persistTerminal clears the per-session store after the run.
+    const provider = mkScriptedProvider();
+    provider.chat
+      .mockResolvedValueOnce(resp({ text: "plan", stopReason: "end_turn" })) // PLANNING→EXECUTING
+      .mockResolvedValueOnce(
+        resp({
+          text: "",
+          stopReason: "tool_use",
+          toolCalls: [{ id: "tc-1", name: "edit_file", input: { path: "a.cs" } }],
+        }),
+      )
+      .mockResolvedValueOnce(resp({ text: "done", stopReason: "end_turn" })); // REFLECTING→terminal
+    const getInsightsForTask = vi
+      .fn()
+      .mockResolvedValue({ insights: ["learned-insight-xyz"], matchedInstinctIds: ["inst-1"] });
+    // Capture every emitted tool:result through a real injected learning emitter (emitToolResult
+    // no-ops when eventEmitter is null, so it must be wired for the attribution path to run).
+    const events: Array<{ toolName: string; appliedInstinctIds: string[] }> = [];
+    const eventEmitter = {
+      emit: (evt: string, payload: unknown) => {
+        if (evt === "tool:result") {
+          const p = payload as { toolName?: string; appliedInstinctIds?: string[] };
+          events.push({
+            toolName: p.toolName ?? "",
+            appliedInstinctIds: p.appliedInstinctIds ?? [],
+          });
+        }
+      },
+    };
+    const h = buildHarness(
+      provider,
+      undefined,
+      undefined,
+      { instinctRetriever: { getInsightsForTask } },
+      undefined,
+      eventEmitter,
+    );
+
+    // Mid-run probe: capture currentSessionInstinctIds WHILE the tool turn runs (it is cleared on
+    // teardown). The edit tool's execute resolves during the run, so read the store from inside it.
+    let midRunInstinctIds: string[] | undefined;
+    const editTool = h.tools.find((t) => t.name === "edit_file")!;
+    const store = (
+      h.orch as unknown as { currentSessionInstinctIds: Map<string, string[]> }
+    ).currentSessionInstinctIds;
+    (editTool.execute as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      midRunInstinctIds = store.get("chat-1");
+      return { content: "edit_file result" };
+    });
+
+    await drive(h.clock, h.runner.run(mkRequest(), mkIO("interactive")));
+
+    // (a) the IDs were retrieved and stashed during the run …
+    expect(getInsightsForTask).toHaveBeenCalledWith("do the thing");
+    expect(midRunInstinctIds).toEqual(["inst-1"]);
+    // (b) … the SHARED emitToolResult attributed the tool:result to them (the reinforcement signal) …
+    const toolResults = events.filter((e) => e.toolName === "edit_file");
+    expect(toolResults.length).toBeGreaterThan(0);
+    expect(toolResults.every((e) => e.appliedInstinctIds.includes("inst-1"))).toBe(true);
+    // (c) … and the per-session store was CLEARED on teardown (no cross-run mis-attribution / leak).
+    expect(store.get("chat-1")).toBeUndefined();
   });
 });
