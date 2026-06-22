@@ -213,7 +213,7 @@ import {
   type IOStrategy,
   type RunnerHostOrchestrator,
 } from "../agent-core/runner/index.js";
-import { getResilienceMessage } from "./resilience-messages.js";
+import { getResilienceMessage, type MessageKey } from "./resilience-messages.js";
 import {
   buildPhasePromptSection,
   recordStepResultsAndCheckReflection,
@@ -642,6 +642,22 @@ function appendAttachmentNotesToGroundingContent(
     };
   }
   return updated;
+}
+
+/**
+ * GAP4 — extract the user-facing text of an assistant message for the terminal read-back.
+ * `AssistantMessage.content` is typed `string`, but a structured/multimodal turn can carry a
+ * `MessageContent[]` at runtime; in that case join ONLY the `text` blocks (a final answer must not
+ * leak serialized tool_use/tool_result/image blocks — unlike extractSupervisorPromptText, which is
+ * a prompt-grounding helper). Returns "" when there is no genuine text to surface.
+ */
+function extractAssistantText(content: string | MessageContent[] | null | undefined): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .filter((block): block is Extract<MessageContent, { type: "text" }> => block.type === "text")
+    .map((block) => block.text)
+    .join("\n");
 }
 
 function buildSupervisorGroundingContent(
@@ -2951,6 +2967,60 @@ export class Orchestrator {
         readOnlyToolCalls: controlLoopTracker?.getConsecutiveReadOnlyToolCalls(),
       });
     }
+  }
+
+  /**
+   * GAP4 — map a spine terminalReason to the resilience MessageKey for the terminal read-back
+   * fallback (worker/background VERDICT-STOP terminals carry NO visible assistant message). Returns
+   * `undefined` for a CLEAN terminal (done / end_turn / plan-review / goal-handoff / benign cancel /
+   * unknown) so synthesizeFinal keeps the neutral "Task completed." — only a genuine stop surfaces a
+   * reason. Reasons come from describeCancelReason (cancel-reason.ts:45) + the spine's literal
+   * terminalReason assignments (v2-agent-runner.ts). A `failed` status without a recognized reason
+   * still surfaces a generic abort (never a false success).
+   */
+  private mapTerminalReasonToMessageKey(
+    reason: string | undefined,
+    status: "completed" | "failed" | "blocked" | undefined,
+  ): MessageKey | undefined {
+    if (reason) {
+      // budget-exhausted:tokens | budget-exhausted:cost
+      if (reason.startsWith("budget-exhausted")) {
+        return reason.endsWith(":tokens") ? "token_budget_exceeded" : "provider_abort";
+      }
+      // provider-stall:* | hard-timeout:* | task-inactivity → provider not responding.
+      if (
+        reason.startsWith("provider-stall") ||
+        reason.startsWith("hard-timeout") ||
+        reason === "task-inactivity"
+      ) {
+        return "provider_abort";
+      }
+      // verdict-stop:health → abort; verdict-stop:loop-detected → stuck.
+      if (reason.startsWith("verdict-stop")) {
+        return reason.endsWith(":loop-detected") ? "task_stuck" : "provider_abort";
+      }
+      // ask_user terminals (gate or failure yielded "blocked").
+      if (reason.includes("ask_user")) return "provider_ask_user";
+      // persistent provider failure / max_tokens runaway / epoch-budget exhaustion → stuck.
+      if (
+        reason === "provider-failure" ||
+        reason === "max-tokens-runaway" ||
+        reason === "epoch-budget-exhausted"
+      ) {
+        return "task_stuck";
+      }
+      // 3.4 — background never reaches max-iterations here (it's interactive-only via the adapter),
+      // but map it defensively to the localized notice rather than a false success.
+      if (reason === "max-iterations") return "max_steps_reached";
+      // A parent-cancelled wrapping a genuine cause → treat as abort (benign roots never reach here:
+      // benign terminals carry a benign reason string but with a clean status, handled below).
+      if (reason.startsWith("parent-cancelled")) return "provider_abort";
+    }
+    // Clean reasons (done / end_turn / plan-review / goal-handoff / user-cancel / task-winddown /
+    // first-success-satisfied) → no message key (neutral fallback). But a hard-FAILED status with no
+    // recognized reason must still avoid a false success.
+    if (status === "failed") return "provider_abort";
+    return undefined;
   }
 
   /**
@@ -8445,14 +8515,32 @@ export class Orchestrator {
       classifyIntent: async (prompt: string) => firstClause(prompt),
 
       // ── Terminal ─────────────────────────────────────────────────────────────────────────────
-      synthesizeFinal: (_state: AgentState, _mode): SynthesizedFinal => {
+      synthesizeFinal: (_state: AgentState, _mode, terminal): SynthesizedFinal => {
         // GAP: PURE read of the already-synthesized transcript (synthesizeUserFacingResponse is
         // async+impure and would re-bill; the visible text was assembled by the dispatch handlers).
-        const session = ctx().session;
-        const transcript = self.sessionManager.getVisibleTranscript(session);
+        const c = ctx();
+        const transcript = self.sessionManager.getVisibleTranscript(c.session);
         const lastVisible = [...transcript].reverse().find((m) => m.role === "assistant");
-        const text =
-          (typeof lastVisible?.content === "string" ? lastVisible.content : "") || "Task completed.";
+        // GAP4: extract the text from the last visible assistant message — handle BOTH a plain
+        // string AND structured/multimodal MessageContent[] (join the text blocks; ignore image/
+        // tool blocks). The interactive path always has a string here (dispatch → markdown).
+        const readBack = extractAssistantText(lastVisible?.content).trim();
+        if (readBack) return { text: readBack, summary: readBack }; // happy path — verbatim, no regress.
+        // No visible read-back. This is the VERDICT-STOP terminal shape (budget/timeout/persistent
+        // failure/ask_user broke epochLoop BEFORE any dispatch handler appended a visible message),
+        // OR a genuinely clean completion that emitted no text. A bare "Task completed." on a STOP is
+        // a FALSE success → surface the real, localized stop reason instead (GAP4). Only a clean
+        // terminal (done/end_turn/plan-review/goal-handoff/benign-cancel) keeps the neutral fallback.
+        const messageKey = self.mapTerminalReasonToMessageKey(terminal?.reason, terminal?.status);
+        if (messageKey) {
+          // Language: worker/background sets profileLanguage=undefined → defaults to this.defaultLanguage
+          // (EN unless configured) — matches portRenderInteractiveBudgetExceeded's resolution. The
+          // interactive path never reaches here (it has a read-back via dispatch).
+          const language = (c.profileLanguage ?? self.defaultLanguage) as string;
+          const text = getResilienceMessage(messageKey, language);
+          return { text, summary: text };
+        }
+        const text = "Task completed.";
         return { text, summary: text };
       },
       persistTerminal: async (state: AgentState, _setup, cancelReason?: CancelReason) => {

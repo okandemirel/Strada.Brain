@@ -63,7 +63,7 @@ import type { TaskClassification } from "../routing/routing-types.js";
 import type { PolicySeed } from "../control/policy.js";
 import type { CancelReason } from "../control/cancel-reason.js";
 import type { GatewayToolDefinition } from "../model/model-gateway.js";
-import type { RunnerMode } from "./agent-runner.js";
+import type { RunnerMode, TerminalStatus } from "./agent-runner.js";
 
 /** The runner-facing mode the port keys its mode-dependent dispatch on. */
 export type RunnerModeLike = RunnerMode;
@@ -458,8 +458,18 @@ export interface OrchestratorPort {
   /**
    * Assemble the terminal visible text from final state (KEEP synthesizeUserFacingResponse /
    * the v1 finalVisibleResponse assembly). Pure read of state + session transcript.
+   *
+   * `terminal` (GAP4) is the spine's terminal reason/status. On a control-plane VERDICT-STOP
+   * (budget/timeout/persistent-failure/ask_user) the run breaks BEFORE any dispatch handler
+   * appends a visible assistant message, so the transcript read-back is empty — without the
+   * reason the impl falls back to a bare "Task completed." (a FALSE success). When the read-back
+   * is empty the impl uses `terminal.reason` to surface the real (localized) stop reason instead.
    */
-  synthesizeFinal(state: AgentState, mode: RunnerModeLike): SynthesizedFinal;
+  synthesizeFinal(
+    state: AgentState,
+    mode: RunnerModeLike,
+    terminal?: { readonly reason?: string; readonly status?: TerminalStatus },
+  ): SynthesizedFinal;
 
   /**
    * Durably persist the terminal state (execution memory + journal snapshot + recordMetricEnd).

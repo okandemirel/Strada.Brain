@@ -649,7 +649,14 @@ export class V2AgentRunner implements AgentRunner {
       // synthesizeFinal → deliverFinal → run.ended, THEN buildResultProjection. persistTerminal +
       // dispose + bus.close moved to the finally so they run on EVERY exit (happy or throw) — see
       // below. deliverFinal still precedes bus.close (the finally runs after this return is computed).
-      const final = port.synthesizeFinal(state, mode); // KEEP terminal-text assembly
+      // GAP4: thread the terminal reason/status so synthesizeFinal can surface a reason-aware
+      // fallback on a VERDICT-STOP (budget/timeout/failure/ask_user) — those break BEFORE any
+      // dispatch handler appends a visible assistant message, so the transcript read-back is empty
+      // and a bare "Task completed." would be a FALSE success.
+      const final = port.synthesizeFinal(state, mode, {
+        reason: terminalReason,
+        status: terminalStatus,
+      }); // KEEP terminal-text assembly
       io.deliverFinal(final.text, state); // interactive renders / bg+worker no-op
       emit({ type: "run.ended", status: terminalStatus });
 

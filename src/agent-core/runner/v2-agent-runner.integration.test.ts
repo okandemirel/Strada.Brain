@@ -33,6 +33,7 @@ import { DEFAULT_TASK_CONFIG } from "../../config/config.js";
 import type { TaskConfig } from "../../config/config.js";
 import { createInitialState, type AgentState } from "../../agents/agent-state.js";
 import { TaskPlanner } from "../../agents/autonomy/task-planner.js";
+import { getResilienceMessage } from "../../agents/resilience-messages.js";
 
 // Logger + strada-knowledge module mocks — copied from orchestrator.test.ts so the Orchestrator
 // boots without a real project / SQLite / network.
@@ -475,6 +476,51 @@ describe("V2AgentRunner — REAL port + REAL gateway (provider.chat scripted)", 
     expect(result.status).toBe("blocked");
     expect(result.reason).toBe("max-tokens-runaway");
     expect(provider.chat).toHaveBeenCalledTimes(4); // plan + 3 truncated turns before the abort
+  });
+
+  it("GAP4 (verdict-stop fallback): a worker that STOPS on a verdict returns the reason text, NOT a false 'Task completed.'", async () => {
+    // The bug: synthesizeFinal is a pure read-back of the last VISIBLE assistant message. A
+    // VERDICT-STOP terminal (here max-tokens-runaway) breaks epochLoop BEFORE any dispatch handler
+    // appends a visible assistant message — the max_tokens continuation pushes to session.messages
+    // ONLY, never session.visibleMessages — so the read-back is empty and PRE-FIX the run returned
+    // the bare string "Task completed." (a FALSE success). POST-FIX synthesizeFinal maps the spine's
+    // terminalReason ("max-tokens-runaway" → task_stuck) to the localized resilience text.
+    const provider = mkScriptedProvider();
+    provider.chat
+      .mockResolvedValueOnce(resp({ text: "the plan", stopReason: "end_turn" })) // PLANNING→EXECUTING
+      .mockResolvedValue(resp({ text: "truncated…", stopReason: "max_tokens", toolCalls: [] })); // truncate forever
+    const h = buildHarness(provider);
+    const io = mkIO("worker");
+
+    const result = await drive(h.clock, h.runner.run(mkRequest(), io));
+
+    expect(result.status).toBe("blocked");
+    expect(result.reason).toBe("max-tokens-runaway");
+    // The fix: NOT the bare false-success fallback…
+    expect(result.finalText).not.toBe("Task completed.");
+    // …and it reflects the terminal reason — the localized task_stuck resilience message (worker
+    // path → profileLanguage undefined → defaultLanguage EN). Asserted against the source of truth.
+    expect(result.finalText).toBe(getResilienceMessage("task_stuck", "en"));
+    expect(result.finalSummary).toBe(getResilienceMessage("task_stuck", "en"));
+  });
+
+  it("GAP4 (happy-path verbatim): a clean end_turn completion still returns the real visible answer", async () => {
+    // The positive control: the read-back happy path MUST NOT regress. A clean run whose final turn
+    // emits a real answer (dispatchEndTurn → sendVisibleAssistantMarkdown appends it to the visible
+    // transcript) returns that answer VERBATIM — never the reason fallback.
+    const provider = mkScriptedProvider();
+    provider.chat
+      .mockResolvedValueOnce(resp({ text: "plan", stopReason: "end_turn" }))
+      .mockResolvedValueOnce(resp({ text: "the real worker answer", stopReason: "end_turn" }));
+    const h = buildHarness(provider);
+    const io = mkIO("worker");
+
+    const result = await drive(h.clock, h.runner.run(mkRequest(), io));
+
+    expect(result.status).toBe("completed");
+    expect(result.finalText).toContain("the real worker answer"); // verbatim read-back, not the fallback
+    expect(result.finalText).not.toBe("Task completed.");
+    expect(result.finalText).not.toBe(getResilienceMessage("task_stuck", "en"));
   });
 
   it("F (P-E): workspaceLease scopes the V2 tool turn to the worktree (isolation — the flip prerequisite)", async () => {
