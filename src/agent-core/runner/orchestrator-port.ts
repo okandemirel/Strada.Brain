@@ -412,6 +412,25 @@ export interface OrchestratorPort {
   getInteractiveIterationLimit(): number;
   getBackgroundEpochIterationLimit(): number;
   canAutoContinueBackgroundEpoch(completedEpochCount: number): boolean;
+  /**
+   * GAP3 — replicate v1 runBackgroundTask's end-of-epoch side effects at the spine's background
+   * epoch boundary (v1 orchestrator.ts ~4587-4623). The spine's rollover was a bare `epoch++`, so on
+   * a multi-epoch background run none of these fired: phase-outcome telemetry under-counted, the
+   * taskPlanner's budget window never reset (planner drift), and the loop-detector amnesty never
+   * fired (a healthy long task could trip loop-detection). NON-INTERACTIVE ONLY (interactive is a
+   * single epoch — maxEpochs=1, no rollover). Called EXACTLY ONCE per epoch boundary:
+   *  - `continued === true`  (auto-continue into the next epoch): records a "continued" phase
+   *     outcome, persists execution memory, resets the planner budget window, and amnesties the
+   *     loop detector IFF the epoch produced mutations (else preserves its accumulated state).
+   *  - `continued === false` (epoch budget exhausted → the spine breaks): records a "blocked"
+   *     phase outcome + persists execution memory (so telemetry/memory still fire on the stop path),
+   *     and performs NONE of the continue-only resets.
+   * Uses the SAME identityKey/executionJournal/taskPlanner/controlLoopTracker the run carries (from
+   * runCtx) — never fresh ones. `agentState` supplies the phase + telemetry (v1 read `bgAgentState`).
+   * The spine-local `consecutiveMaxTokens` reset on continue stays spine-side (a port cannot touch a
+   * spine local).
+   */
+  onEpochRollover(continued: boolean, epoch: number, agentState: AgentState): Promise<void> | void;
   getLiveInteractiveTokenBudget(): number;
   /**
    * 3.3 — render the SPECIFIC `token_budget_exceeded` notice (with {used, budget}) on the interactive

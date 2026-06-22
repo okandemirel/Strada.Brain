@@ -2890,6 +2890,70 @@ export class Orchestrator {
   }
 
   /**
+   * GAP3 — the v2 background epoch-rollover side effects, replicating v1 runBackgroundTask's
+   * end-of-epoch block VERBATIM over the run's runCtx deps. Called by
+   * the spine EXACTLY ONCE per background epoch boundary (continue path AND the budget-exhausted
+   * break path). NON-INTERACTIVE only. The spine owns the `consecutiveMaxTokens` reset (a spine local).
+   *
+   * Always (continue or stop):
+   *  - recordPhaseOutcome({ status: continued ? "continued" : "blocked", … }) — phase telemetry that
+   *    v1 emitted at every epoch boundary (the under-count this fix closes), keyed off the live
+   *    executionStrategy.executor/.task (refreshed each step by prepareIteration) + agentState.phase.
+   *  - persistExecutionMemory(identityKey, executionJournal) — durable journal flush per epoch.
+   * Continue only (the auto-rollover into the next epoch):
+   *  - taskPlanner.resetBudgetWindow() — without it the planner's budget window never resets (drift).
+   *  - loop-detector amnesty: markVerificationClean IFF the epoch produced mutations, else PRESERVE
+   *    the accumulated state (a no-mutation epoch is stalling — the detector should carry over).
+   */
+  private portOnEpochRollover(
+    continued: boolean,
+    epoch: number,
+    agentState: AgentState,
+    runCtx: AgentCorePortRunContext,
+  ): void {
+    // Phase telemetry (v1 runBackgroundTask end-of-epoch). recordPhaseOutcome strictly needs assignment + task; the live
+    // executionStrategy is set by prepareIteration on every step, so after a completed inner `for` it
+    // is present. Guard defensively so the load-bearing memory flush + planner reset below still run
+    // even on the (unreachable in a real background run) no-strategy path.
+    const executionStrategy = runCtx.executionStrategy;
+    if (executionStrategy) {
+      this.recordPhaseOutcome({
+        chatId: runCtx.chatId,
+        identityKey: runCtx.identityKey,
+        assignment: executionStrategy.executor,
+        phase: toExecutionPhaseModel(agentState.phase),
+        status: continued ? "continued" : "blocked",
+        task: executionStrategy.task,
+        reason: continued
+          ? "Background execution window reached its iteration budget and rolled into a new autonomous epoch."
+          : "Background execution stopped after reaching the configured iteration budget.",
+        telemetry: this.buildPhaseOutcomeTelemetry({
+          state: agentState,
+          projectWorldFingerprint: runCtx.projectWorldFingerprint,
+        }),
+      });
+    }
+    this.sessionManager.persistExecutionMemory(runCtx.identityKey, runCtx.executionJournal);
+
+    if (!continued) return;
+
+    runCtx.taskPlanner.resetBudgetWindow();
+    // Only amnesty loop detection state if the epoch produced mutations. Without mutations, the agent
+    // is stalling and the loop detector should carry its accumulated state across the epoch boundary
+    // (v1 runBackgroundTask, continue-only).
+    const controlLoopTracker = runCtx.controlLoopTracker;
+    if (controlLoopTracker?.hadMutationsSinceLastReset()) {
+      controlLoopTracker.markVerificationClean(agentState.iteration);
+    } else {
+      getLogger().warn("Epoch rolled without mutations — preserving loop detection state", {
+        chatId: runCtx.chatId,
+        epoch,
+        readOnlyToolCalls: controlLoopTracker?.getConsecutiveReadOnlyToolCalls(),
+      });
+    }
+  }
+
+  /**
    * 3.3 — render the SPECIFIC `token_budget_exceeded` notice on the interactive token-budget stop (v1
    * runAgentLoop:5491 parity), instead of the generic provider_abort. {used} = the run's cumulative
    * OUTPUT tokens (the "fresh work" metric; input re-counts the growing context — audit #3); {budget} =
@@ -8372,6 +8436,8 @@ export class Orchestrator {
       getInteractiveIterationLimit: () => self.getInteractiveIterationLimit(),
       getBackgroundEpochIterationLimit: () => self.getBackgroundEpochIterationLimit(),
       canAutoContinueBackgroundEpoch: (n) => self.canAutoContinueBackgroundEpoch(n),
+      onEpochRollover: (continued, epoch, agentState) =>
+        self.portOnEpochRollover(continued, epoch, agentState, ctx()),
       getLiveInteractiveTokenBudget: () => self.getLiveInteractiveTokenBudget(),
       renderInteractiveBudgetExceeded: () => self.portRenderInteractiveBudgetExceeded(ctx()),
 

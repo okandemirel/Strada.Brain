@@ -626,9 +626,21 @@ export class V2AgentRunner implements AgentRunner {
           break;
         }
         if (!port.canAutoContinueBackgroundEpoch(epoch + 1)) {
+          // GAP3 — the epoch-budget-exhausted STOP path. Fire v1's end-of-epoch side effects with
+          // continued=false BEFORE the break, so the "blocked" phase-outcome telemetry + the
+          // per-epoch persistExecutionMemory still run (v1 runBackgroundTask's end-of-epoch ran on the
+          // stop branch too; only the planner-reset/amnesty are continue-only). EXACTLY ONCE.
+          await port.onEpochRollover(false, epoch, state);
           emit({ type: "run.ending", reason: "epoch-budget-exhausted" });
           break;
         }
+        // GAP3 — the auto-CONTINUE rollover. Fire v1's end-of-epoch side effects with continued=true
+        // (records "continued" phase-outcome, persists execution memory, resets the taskPlanner budget
+        // window, and amnesties the loop detector iff the epoch mutated — v1's end-of-epoch block) BEFORE
+        // the epoch bump. The spine-local consecutiveMaxTokens reset (v1's continue-only step) stays here — a port hook
+        // cannot touch a spine local. EXACTLY ONCE per boundary.
+        await port.onEpochRollover(true, epoch, state);
+        consecutiveMaxTokens = 0;
         epoch++;
         await guardedSleep(bus, clock, 0, { type: "epoch.rolled", epoch });
       } // end epoch while

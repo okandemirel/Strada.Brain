@@ -252,6 +252,7 @@ function mkPort(provider: IAIProvider, opts: MockPortOptions = {}): Orchestrator
     executeToolCalls: ReturnType<typeof vi.fn>;
     recordHealthSuccess: ReturnType<typeof vi.fn>;
     classifyFailureForVerdict: ReturnType<typeof vi.fn>;
+    onEpochRollover: ReturnType<typeof vi.fn>;
   };
 } {
   const setup = mkSetup();
@@ -281,6 +282,7 @@ function mkPort(provider: IAIProvider, opts: MockPortOptions = {}): Orchestrator
       opts.onClassifyFailure?.(); // faithful: the real port records the failure into the tracker
       return { callStalled: false, taskCancelReason: null, benign: false };
     }),
+    onEpochRollover: vi.fn(),
   };
 
   const port: OrchestratorPort = {
@@ -310,6 +312,7 @@ function mkPort(provider: IAIProvider, opts: MockPortOptions = {}): Orchestrator
     getInteractiveIterationLimit: () => opts.iterationLimit ?? 10,
     getBackgroundEpochIterationLimit: () => opts.bgEpochLimit ?? opts.iterationLimit ?? 10,
     canAutoContinueBackgroundEpoch: () => opts.canContinueEpoch ?? false,
+    onEpochRollover: spies.onEpochRollover,
     getLiveInteractiveTokenBudget: () => 100_000,
     classifyIntent: async () => "intent",
     synthesizeFinal: spies.synthesizeFinal,

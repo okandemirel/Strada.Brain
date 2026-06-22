@@ -32,6 +32,7 @@ import type { WorkspaceLease } from "../../agents/supervisor/supervisor-types.js
 import { DEFAULT_TASK_CONFIG } from "../../config/config.js";
 import type { TaskConfig } from "../../config/config.js";
 import { createInitialState, type AgentState } from "../../agents/agent-state.js";
+import { TaskPlanner } from "../../agents/autonomy/task-planner.js";
 
 // Logger + strada-knowledge module mocks — copied from orchestrator.test.ts so the Orchestrator
 // boots without a real project / SQLite / network.
@@ -354,6 +355,77 @@ describe("V2AgentRunner — REAL port + REAL gateway (provider.chat scripted)", 
     }
 
     expect(decompSpy).toHaveBeenCalledTimes(1); // once-per-run, NOT once-per-PLANNING-entry
+  });
+
+  it("GAP3 (epoch-rollover side effects): the bg epoch boundary records phase-outcome + persists memory + resets the planner budget window", async () => {
+    // Regression guard for the v2 background epoch-rollover gap. v1 runBackgroundTask ran a block of
+    // side effects at EVERY epoch boundary (orchestrator.ts ~4587-4623): recordPhaseOutcome (continued
+    // /blocked), persistExecutionMemory, and ON CONTINUE taskPlanner.resetBudgetWindow() + the loop
+    // amnesty. The v2 spine's rollover was a bare `epoch++` → on a multi-epoch background run the
+    // phase-outcome telemetry under-counted, the planner budget window never reset (drift), and the
+    // loop-detector amnesty never fired. The port's onEpochRollover (called once per boundary, on both
+    // the continue AND the budget-exhausted-break path) now replicates v1 verbatim.
+    //
+    // Drive ≥2 epochs WITHOUT terminating: backgroundEpochMaxIterations=1 (one iteration per epoch) +
+    // backgroundMaxEpochs=2. The provider ALWAYS returns a tool-call response so no iteration hits an
+    // end_turn / DONE terminal — each epoch's single iteration is consumed (PLANNING transition in
+    // epoch 0, tool execution in epoch 1) and the inner `for` completes → the rollover runs.
+    //   epoch 0: canAutoContinueBackgroundEpoch(1) → 1<2 = true  → onEpochRollover(true, 0)  → epoch++
+    //   epoch 1: canAutoContinueBackgroundEpoch(2) → 2<2 = false → onEpochRollover(false, 1) → break
+    const provider = mkScriptedProvider();
+    provider.chat.mockResolvedValue(
+      resp({
+        text: "working",
+        stopReason: "tool_use",
+        toolCalls: [{ id: "tc-1", name: "edit_file", input: { path: "a.cs" } }],
+      }),
+    );
+    const taskConfig = {
+      ...DEFAULT_TASK_CONFIG,
+      backgroundEpochMaxIterations: 1, // one iteration per epoch → the inner `for` completes → rollover
+      backgroundMaxEpochs: 2, // allow exactly one auto-continue (epoch 0→1), then stop (epoch 1)
+    } as TaskConfig;
+    const h = buildHarness(provider, undefined, undefined, undefined, taskConfig);
+    const io = mkIO("background");
+
+    // recordPhaseOutcome is a private orchestrator method; persistExecutionMemory is on its
+    // sessionManager. resetBudgetWindow is a per-run TaskPlanner instance built inside setupRun —
+    // spy the prototype to catch the continue-path reset.
+    const recordPhaseOutcomeSpy = vi.spyOn(
+      h.orch as unknown as { recordPhaseOutcome: (p: { status: string }) => void },
+      "recordPhaseOutcome",
+    );
+    const persistExecMemSpy = vi.spyOn(
+      (h.orch as unknown as { sessionManager: { persistExecutionMemory: (...a: unknown[]) => void } })
+        .sessionManager,
+      "persistExecutionMemory",
+    );
+    const resetBudgetWindowSpy = vi.spyOn(TaskPlanner.prototype, "resetBudgetWindow");
+
+    const result = await drive(h.clock, h.runner.run(mkRequest(), io));
+
+    // The run reached the epoch-budget-exhausted stop via the rollover (not a livelock / throw). The
+    // spine's terminal STATUS on this path is its existing choice (not part of GAP3); GAP3 asserts the
+    // SIDE EFFECTS fire at the boundary. The run.ending reason proves the budget-exhausted break ran.
+    expect(["completed", "blocked"]).toContain(result.status);
+    const endingReasons = io.onEvent.mock.calls
+      .map((c) => c[0] as { type?: string; reason?: string })
+      .filter((e) => e?.type === "run.ending")
+      .map((e) => e.reason);
+    expect(endingReasons).toContain("epoch-budget-exhausted");
+
+    // (1) Phase-outcome telemetry fired at the boundary — a "continued" on the rollover AND a
+    //     "blocked" on the budget-exhausted stop (the under-count the fix closes).
+    const statuses = recordPhaseOutcomeSpy.mock.calls.map((c) => c[0].status);
+    expect(statuses).toContain("continued"); // epoch 0 auto-continue
+    expect(statuses).toContain("blocked"); // epoch 1 budget exhausted
+
+    // (2) Execution memory persisted at EACH epoch boundary. Two rollover calls (continue + stop) plus
+    //     the terminal persistTerminal flush → ≥2 (the rollover ones are the regression target).
+    expect(persistExecMemSpy.mock.calls.length).toBeGreaterThanOrEqual(2);
+
+    // (3) The taskPlanner budget window was reset on the CONTINUE rollover (planner-drift fix).
+    expect(resetBudgetWindowSpy).toHaveBeenCalled();
   });
 
   it("E (P-E): reaches the REAL REFLECTING boundary → real parseReflectionDecision drives termination", async () => {
