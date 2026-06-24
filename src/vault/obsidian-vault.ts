@@ -27,6 +27,10 @@ import {
 // implementation now lives in the leaf path-policy module so VaultRegistry can
 // import it without pulling in the whole vault implementation graph.
 export { redactPathsInMessage } from './path-policy.js';
+import { escapeFtsQuery } from './fts-query.js';
+// Re-exported for existing importers (e.g. obsidian-vault.test.ts,
+// server-vault-routes.ts) that reference VaultQueryError from this module.
+export { VaultQueryError } from './fts-query.js';
 import type {
   IVault, VaultFile, VaultQuery, VaultQueryResult, VaultStats, VaultId, VaultChunk,
   VaultSymbol, VaultEdge, VaultWikilink,
@@ -38,29 +42,6 @@ export interface ObsidianVaultDeps {
   embedding: EmbeddingProvider;
   vectorStore: VectorStore;
   obsidian: ObsidianApiConfig;
-}
-
-/**
- * Typed error thrown when a vault query is invalid (e.g. empty FTS query).
- * Route handlers should catch and translate to HTTP 400.
- */
-export class VaultQueryError extends Error {
-  readonly code: string;
-  constructor(message: string, code = 'invalid_query') {
-    super(message);
-    this.name = 'VaultQueryError';
-    this.code = code;
-  }
-}
-
-function escapeFtsQuery(q: string): string {
-  const stripped = q.replace(/["*:()^+\-]/g, ' ').replace(/\b(NOT|AND|OR|NEAR)\b/g, ' ').trim();
-  if (!stripped) {
-    // Fix P2: empty query previously returned '""' which matched nothing silently.
-    // Throw typed error so callers can surface a 400 to clients.
-    throw new VaultQueryError('Vault query is empty after sanitization', 'empty_query');
-  }
-  return `"${stripped}"`;
 }
 
 /**

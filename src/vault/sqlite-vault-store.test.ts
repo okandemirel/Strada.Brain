@@ -274,6 +274,30 @@ describe("SqliteVaultStore — FTS search", () => {
     expect(hits).toHaveLength(1);
     store.close();
   });
+
+  // Regression for the whole-query-as-one-phrase bug: the vaults' escapeFtsQuery
+  // builds a per-token OR query (`("a" OR "b" ...) OR "a b ..."`). A multi-word
+  // question whose words appear SCATTERED in the content (not as a contiguous
+  // phrase) must still return hits. The single-word tests above passed the term
+  // RAW (no quoting), so they never exercised this path — this closes that gap.
+  it("matches scattered multi-word content via a per-token OR query (not one phrase)", () => {
+    store.upsertFile(makeFile({ path: "src/Move.cs" }));
+    store.upsertChunk(makeChunk({
+      chunkId: "multiword-chunk",
+      path: "src/Move.cs",
+      content: "the character controller handles jumping and gravity in the physics loop",
+    }));
+    // Mirrors escapeFtsQuery's output for "how does character jumping gravity work":
+    // none of those words form a contiguous phrase in the content, so a single
+    // quoted phrase would return 0 rows — per-token OR returns the chunk.
+    const phrase = '"how does character jumping gravity work"';
+    const perTokenOr = `("how" OR "does" OR "character" OR "jumping" OR "gravity" OR "work") OR ${phrase}`;
+    expect(store.searchFts(phrase, 5)).toHaveLength(0);
+    const hits = store.searchFts(perTokenOr, 5);
+    expect(hits.length).toBeGreaterThan(0);
+    expect(hits[0]!.chunkId).toBe("multiword-chunk");
+    store.close();
+  });
 });
 
 // =============================================================================

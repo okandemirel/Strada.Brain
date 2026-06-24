@@ -328,3 +328,57 @@ describe("UnityProjectVault embedding-optional retrieval (FTS-carries)", () => {
     }
   });
 });
+
+describe("UnityProjectVault FTS query escaping (multi-word + injection)", () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "strada-vault-fts-escape-"));
+    // A realistic doc — the indexed terms are scattered, NOT a single contiguous
+    // phrase matching the question word-order. Pre-fix, the whole-string phrase
+    // MATCH returned 0 rows for the multi-word question below.
+    await writeFile(
+      join(dir, "movement.md"),
+      "# Player Movement\n" +
+        "The character controller handles jumping and gravity in the physics update loop.\n" +
+        "Input is read each frame and applied to the rigidbody velocity.\n",
+      "utf8",
+    );
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("returns hits for a MULTI-WORD natural-language query (per-token OR, not one contiguous phrase)", async () => {
+    const store = new SpyVectorStore(false); // non-semantic — FTS/BM25 carries
+    const embed = new FakeEmbedding();
+    const vault = new UnityProjectVault({ id: "multiword", rootPath: dir, embedding: embed, vectorStore: store });
+    try {
+      await vault.init();
+      // This question's words exist in the doc but NOT as a contiguous phrase.
+      // Pre-fix (`escapeFtsQuery` quoted the whole string), this returned 0 hits.
+      const result = await vault.query({ text: "how does character jumping gravity work" });
+      expect(result.hits.length).toBeGreaterThan(0);
+      expect(result.hits.some((h) => h.chunk.path === "movement.md")).toBe(true);
+    } finally {
+      await vault.dispose().catch(() => undefined);
+    }
+  });
+
+  it("does not throw or mis-match on a query containing FTS5 operators / quotes (injection-safe)", async () => {
+    const store = new SpyVectorStore(false);
+    const embed = new FakeEmbedding();
+    const vault = new UnityProjectVault({ id: "injection", rootPath: dir, embedding: embed, vectorStore: store });
+    try {
+      await vault.init();
+      // Embedded FTS5 operators / quotes must be neutralized to literals, not
+      // parsed — the query resolves (real terms still match) and never throws.
+      const result = await vault.query({ text: 'character" OR jumping NEAR(gravity)* AND :physics' });
+      expect(Array.isArray(result.hits)).toBe(true);
+      expect(result.hits.some((h) => h.chunk.path === "movement.md")).toBe(true);
+    } finally {
+      await vault.dispose().catch(() => undefined);
+    }
+  });
+});

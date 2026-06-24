@@ -18,7 +18,7 @@ import { buildCanvas } from './canvas-generator.js';
 import { runPpr } from './ppr.js';
 import { getLoggerSafe } from '../utils/logger.js';
 import { AsyncLock } from './async-lock.js';
-import { VaultQueryError } from './obsidian-vault.js';
+import { escapeFtsQuery } from './fts-query.js';
 import type {
   IVault, VaultFile, VaultQuery, VaultQueryResult, VaultStats, VaultId, VaultChunk,
   VaultSymbol, VaultEdge, VaultWikilink,
@@ -35,18 +35,6 @@ export interface UnityVaultDeps {
 interface IVaultWatcher {
   start(): Promise<void>;
   stop(): Promise<void>;
-}
-
-// Strip FTS5 special operators AND boolean keywords that could confuse the parser.
-function escapeFtsQuery(q: string): string {
-  const stripped = q.replace(/["*:()^+\-]/g, ' ').replace(/\b(NOT|AND|OR|NEAR)\b/g, ' ').trim();
-  if (!stripped) {
-    // Parity with ObsidianVault: a query that is empty after sanitization is a
-    // typed error so the route layer returns a 4xx instead of running `""`
-    // (which silently yields no/garbage matches). Both vault impls now agree.
-    throw new VaultQueryError('Vault query is empty after sanitization', 'empty_query');
-  }
-  return `"${stripped}"`;
 }
 
 function globToRegex(glob: string): RegExp {
