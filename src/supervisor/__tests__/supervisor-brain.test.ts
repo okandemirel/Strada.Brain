@@ -517,4 +517,96 @@ describe("SupervisorBrain", () => {
     expect(events).toContain("supervisor:plan_ready");
     expect(events).toContain("supervisor:complete");
   });
+
+  it("does NOT emit monitor:clear at the start of a run (no whole-board wipe)", async () => {
+    // BUG#5 (P0): a new supervisor run must not blanket-clear the monitor board,
+    // which previously clobbered a prior, still-relevant task's DAG + Kanban cards
+    // in the same conversation.
+    const emitter = { emit: vi.fn() };
+    const decomposer = {
+      shouldDecompose: vi.fn().mockReturnValue(true),
+      decomposeProactive: vi.fn().mockResolvedValue(
+        makeGoalTree([{ id: "root", task: "Build" }, { id: "s1", task: "Sub task" }]),
+      ),
+    };
+    const brain = new SupervisorBrain({
+      config: DEFAULT_CONFIG,
+      decomposer: decomposer as any,
+      capabilityMatcher: new CapabilityMatcher(),
+      providerAssigner: new ProviderAssigner(PROVIDERS),
+      eventEmitter: emitter,
+    });
+    brain.setExecuteNode(vi.fn().mockResolvedValue({
+      nodeId: "s1", status: "ok", output: "done", artifacts: [], toolResults: [],
+      provider: "claude", model: "sonnet", cost: 0.001, duration: 100,
+    }));
+
+    await brain.execute("Build something complex", { chatId: "test" });
+
+    const events = emitter.emit.mock.calls.map(c => c[0]);
+    expect(events).not.toContain("monitor:clear");
+    // The run still establishes its own board via dag_init (full board replace).
+    expect(events).toContain("monitor:dag_init");
+  });
+
+  it("emits dag_init node ids that match the per-node task_update stream (DAG id alignment)", async () => {
+    // BUG#1 (P0): the monitor:dag_init payload must share node ids with the
+    // dispatcher's per-node monitor:task_update stream, or the frontend DAG-node
+    // patch (findIndex by id) misses → DAG stays static while the Kanban updates.
+    const emitter = { emit: vi.fn() };
+    const decomposer = {
+      shouldDecompose: vi.fn().mockReturnValue(true),
+      decomposeProactive: vi.fn().mockResolvedValue(
+        makeGoalTree([
+          { id: "root", task: "Build auth" },
+          { id: "s1", task: "Create DB schema" },
+          { id: "s2", task: "Implement endpoint", deps: ["s1"] },
+        ]),
+      ),
+    };
+    const brain = new SupervisorBrain({
+      config: DEFAULT_CONFIG,
+      decomposer: decomposer as any,
+      capabilityMatcher: new CapabilityMatcher(),
+      providerAssigner: new ProviderAssigner(PROVIDERS),
+      eventEmitter: emitter,
+    });
+    brain.setExecuteNode(vi.fn().mockImplementation(async (node: any) => ({
+      nodeId: node.id, status: "ok", output: `Done: ${node.task}`,
+      artifacts: [], toolResults: [], provider: "claude", model: "sonnet", cost: 0.001, duration: 100,
+    })));
+
+    // A relabeling task forces buildVisibleGoalTree to rewrite node.task,
+    // exercising the display path while ids must stay aligned.
+    await brain.execute("Build the authentication system", { chatId: "test" });
+
+    const calls = emitter.emit.mock.calls as Array<[string, any]>;
+    const dagInit = calls.find(([event]) => event === "monitor:dag_init");
+    expect(dagInit).toBeDefined();
+    const dagPayload = dagInit![1] as {
+      rootId: string;
+      nodes: Array<{ id: string }>;
+    };
+    const dagNodeIds = new Set(dagPayload.nodes.map((n) => n.id));
+    expect(dagNodeIds.size).toBeGreaterThan(0);
+
+    const taskUpdateNodeIds = new Set(
+      calls
+        .filter(([event]) => event === "monitor:task_update")
+        .map(([, payload]) => String(payload.nodeId)),
+    );
+    expect(taskUpdateNodeIds.size).toBeGreaterThan(0);
+
+    // Every node that streamed a task_update must exist in the dag_init payload,
+    // and they must share the same rootId.
+    for (const nodeId of taskUpdateNodeIds) {
+      expect(dagNodeIds.has(nodeId)).toBe(true);
+    }
+    const taskUpdateRootIds = new Set(
+      calls
+        .filter(([event]) => event === "monitor:task_update")
+        .map(([, payload]) => String(payload.rootId)),
+    );
+    expect([...taskUpdateRootIds]).toEqual([dagPayload.rootId]);
+  });
 });

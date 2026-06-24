@@ -196,6 +196,19 @@ export class SupervisorBrain {
     }
   }
 
+  /**
+   * Produce a display-only variant of the decomposed goal tree (re-labels the
+   * task text shown in the monitor) WITHOUT changing topology.
+   *
+   * INVARIANT — id alignment: this MUST preserve `goalTree.rootId` and the exact
+   * set of node-id keys. The monitor:dag_init payload is built from this tree,
+   * while the per-node monitor:task_update stream is keyed on the *decomposed*
+   * tree's node ids (see SupervisorDispatcher.emitNodeWorkspaceStatus). If the
+   * ids diverged, the frontend DAG-node patch (findIndex by id) would miss and
+   * the DAG node would stay static while the Kanban card updates. We only ever
+   * rewrite the `.task` string on existing keys, never add/remove/relabel keys,
+   * so the two streams share identical ids by construction.
+   */
   private buildVisibleGoalTree(goalTree: GoalTree, task: string): GoalTree {
     const normalizedTask = task.trim();
     const originalTask = goalTree.taskDescription.trim();
@@ -203,6 +216,7 @@ export class SupervisorBrain {
       return goalTree;
     }
 
+    // Clone preserves every node-id key; we only overwrite the `.task` text.
     const updatedNodes = new Map(goalTree.nodes);
     for (const [nodeId, node] of goalTree.nodes.entries()) {
       if (node.task.trim() !== originalTask) {
@@ -214,10 +228,50 @@ export class SupervisorBrain {
       });
     }
 
+    // Spread preserves rootId; keys are preserved by the clone above.
     return {
       ...goalTree,
       taskDescription: normalizedTask,
       nodes: updatedNodes,
+    };
+  }
+
+  /**
+   * Build the monitor:dag_init payload, guaranteeing its node ids match the
+   * per-node monitor:task_update stream (which is keyed on the *decomposed*
+   * tree's ids). `buildVisibleGoalTree` is id-preserving by construction, but
+   * this is the single source of truth for the DAG payload and defensively
+   * re-aligns to the decomposed topology if a future change ever diverges the
+   * id set — so the DAG and Kanban can never desync.
+   */
+  private buildAlignedDagTree(
+    decomposedGoalTree: GoalTree,
+    visibleGoalTree: GoalTree,
+  ): GoalTree {
+    const sameRoot = String(visibleGoalTree.rootId) === String(decomposedGoalTree.rootId);
+    const sameNodeIds =
+      visibleGoalTree.nodes.size === decomposedGoalTree.nodes.size &&
+      [...decomposedGoalTree.nodes.keys()].every((id) => visibleGoalTree.nodes.has(id));
+
+    if (sameRoot && sameNodeIds) {
+      // Common case: ids already aligned — use the relabeled (display) tree.
+      return visibleGoalTree;
+    }
+
+    // Defensive fallback: ids diverged. Keep the decomposed topology/ids (so
+    // the DAG matches the task_update stream) but carry over display labels for
+    // any node ids that still exist in both trees.
+    const realignedNodes = new Map(decomposedGoalTree.nodes);
+    for (const [nodeId, node] of decomposedGoalTree.nodes.entries()) {
+      const visibleNode = visibleGoalTree.nodes.get(nodeId);
+      if (visibleNode && visibleNode.task !== node.task) {
+        realignedNodes.set(nodeId, { ...node, task: visibleNode.task });
+      }
+    }
+    return {
+      ...decomposedGoalTree,
+      taskDescription: visibleGoalTree.taskDescription,
+      nodes: realignedNodes,
     };
   }
 
@@ -271,8 +325,20 @@ export class SupervisorBrain {
     this.activeAbortControllers.add(internalController);
 
     try {
-      // Clear stale monitor state before a new supervisor run
-      this.emitter?.emit("monitor:clear", {});
+      // NOTE: We intentionally do NOT emit a blanket "monitor:clear" here.
+      // It used to wipe the ENTIRE monitor board (tasks + dag + activeRootId)
+      // on every supervisor run, which clobbered a prior, still-relevant task's
+      // cards when a new request arrived in the same conversation (the prior
+      // task looked cancelled even though it actually completed). The new run
+      // re-establishes its own board via the upcoming "monitor:dag_init" — which
+      // fully replaces the DAG + active root (Kanban tasks MERGE by id, not replace)
+      // — so no clear is needed for correct rendering of THIS run.
+      // TRADEOFF (accepted P0→P1): the prior run's cards now LINGER instead of being
+      // wiped. A graceful abort/completion settles them terminal (the dispatcher
+      // always emits a terminal task_update — informative, not stale); only an
+      // abnormal process-death/teardown could leave an "executing" card until
+      // MAX_TASKS eviction. Net win vs. clobbering completed work (BUG#5); the full
+      // fix is P1 task-scoping (multi-root store + active/done segregation).
 
       // Step 2: Emit supervisor:activated
       this.emitter?.emit("supervisor:activated", {
@@ -296,9 +362,15 @@ export class SupervisorBrain {
       );
       const visibleGoalTree = this.buildVisibleGoalTree(decomposedGoalTree, task);
       goalRootId = String(decomposedGoalTree.rootId);
-      context.onGoalDecomposed?.(visibleGoalTree);
+      // The DAG payload (and the tree handed to onGoalDecomposed, which the
+      // monitor lifecycle turns into monitor:dag_init) MUST share the same
+      // rootId + node ids as the dispatcher's per-node monitor:task_update
+      // stream — otherwise the DAG node patch misses and the DAG stays static
+      // while the Kanban updates. buildAlignedDagTree guarantees that.
+      const dagTree = this.buildAlignedDagTree(decomposedGoalTree, visibleGoalTree);
+      context.onGoalDecomposed?.(dagTree);
       if (!context.onGoalDecomposed) {
-        this.emitter?.emit("monitor:dag_init", goalTreeToDagPayload(visibleGoalTree));
+        this.emitter?.emit("monitor:dag_init", goalTreeToDagPayload(dagTree));
       }
 
       // Check abort after decomposition
