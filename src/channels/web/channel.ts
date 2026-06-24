@@ -202,12 +202,26 @@ export class WebChannel
   private workspaceBusEmitter: ((event: string, payload: unknown) => void) | null = null;
   /** Cached monitor state for replaying to reconnecting clients. */
   private lastMonitorSnapshot: string[] = [];
+  /**
+   * Per-chatId buffer of answer-bearing frames (markdown/text/system) that could
+   * NOT be delivered because no live socket was present at send time. Flushed to
+   * the socket on the next session-init/reconnect (next to replayMonitorState) so
+   * a background final produced while the client was offline is still surfaced.
+   * Bounded per chat (MAX_PENDING_DELIVERY_FRAMES, oldest-evicted) so it cannot
+   * grow without limit. The client dedups by the frame's stable messageId, so a
+   * frame both replayed here and previously received live renders only once.
+   */
+  private readonly pendingDelivery = new Map<string, Record<string, unknown>[]>();
 
   private static readonly UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   private static readonly RECONNECT_TTL_MS = 5 * 60 * 1000;
   /** Interval between WebSocket liveness pings (terminates dead half-open sockets). */
   private static readonly WS_HEARTBEAT_MS = 30 * 1000;
   private static readonly MAX_MONITOR_SNAPSHOT_MESSAGES = 200;
+  /** Max buffered undelivered answer frames per chat before oldest is evicted. */
+  private static readonly MAX_PENDING_DELIVERY_FRAMES = 20;
+  /** Frame types worth buffering for offline replay (answer-bearing only). */
+  private static readonly REPLAYABLE_FRAME_TYPES = new Set(["markdown", "text", "system"]);
   private static readonly CACHEABLE_MONITOR_TYPES = new Set([
     "monitor:task_update",
     "monitor:substep",
@@ -306,6 +320,15 @@ export class WebChannel
       for (const [id, session] of this.recentlyDisconnected) {
         if (now - session.disconnectedAt > WebChannel.RECONNECT_TTL_MS) {
           this.recentlyDisconnected.delete(id);
+        }
+      }
+      // Evict buffered finals for chats that can no longer reconnect (no live
+      // socket AND past the reconnect window) so the pending buffer cannot
+      // accumulate orphaned keys over long uptimes. A chat that is still
+      // connected or reconnect-eligible is kept (flush is still possible).
+      for (const id of this.pendingDelivery.keys()) {
+        if (!this.clients.has(id) && !this.recentlyDisconnected.has(id)) {
+          this.pendingDelivery.delete(id);
         }
       }
     }, WebChannel.RECONNECT_TTL_MS);
@@ -525,6 +548,7 @@ export class WebChannel
     // bypass (precedent: fix commit 6660012). Slot lifetime is
     // process-level, not chat-level.
     this.lastMonitorSnapshot = [];
+    this.pendingDelivery.clear();
 
     for (const [, pending] of this.pendingConfirmations) {
       clearTimeout(pending.timer);
@@ -1011,6 +1035,11 @@ export class WebChannel
 
     // Replay cached monitor state so reconnecting clients see the current DAG
     this.replayMonitorState(ws);
+
+    // Flush any answer frames that were buffered while this chat had no live
+    // socket (e.g. a background final that arrived offline). Client dedups by
+    // messageId so frames already received live are not re-rendered.
+    this.flushPendingDelivery(chatId, ws);
 
     void this.consumePostSetupBootstrap({ chatId, profileId: identity.profileId, profileToken: identity.profileToken });
 
@@ -1755,13 +1784,51 @@ export class WebChannel
   private sendToClient(chatId: string, data: Record<string, unknown>): boolean {
     const client = this.clients.get(chatId);
     if (!client || client.ws.readyState !== 1) {
-      if (!client) {
+      // Buffer answer-bearing frames so a final produced while the client is
+      // offline survives to the next reconnect (flushed by flushPendingDelivery
+      // next to replayMonitorState). Transient frames (typing/stream_*/etc) and
+      // confirmations are intentionally NOT buffered.
+      if (typeof data.type === "string" && WebChannel.REPLAYABLE_FRAME_TYPES.has(data.type)) {
+        this.bufferPendingDelivery(chatId, data);
+      } else if (!client) {
         getLoggerSafe().debug("sendToClient: no active WS client for chatId, response may be lost", { chatId, type: data.type });
       }
       return false;
     }
     this.sendJson(client.ws, data);
     return true;
+  }
+
+  /**
+   * Append an undeliverable answer frame to the per-chat pending buffer, evicting
+   * the oldest when the per-chat cap is reached (bounded growth).
+   */
+  private bufferPendingDelivery(chatId: string, data: Record<string, unknown>): void {
+    const queue = this.pendingDelivery.get(chatId) ?? [];
+    queue.push(data);
+    if (queue.length > WebChannel.MAX_PENDING_DELIVERY_FRAMES) {
+      queue.splice(0, queue.length - WebChannel.MAX_PENDING_DELIVERY_FRAMES);
+    }
+    this.pendingDelivery.set(chatId, queue);
+  }
+
+  /**
+   * Flush + clear any frames buffered while `chatId` had no live socket onto the
+   * (now reconnected) socket. The client dedups by messageId, so any frame the
+   * client already received live is dropped client-side rather than re-rendered.
+   */
+  private flushPendingDelivery(chatId: string, ws: WebSocket): void {
+    const queue = this.pendingDelivery.get(chatId);
+    if (!queue || queue.length === 0) {
+      return;
+    }
+    this.pendingDelivery.delete(chatId);
+    for (const frame of queue) {
+      if (ws.readyState !== 1) {
+        break;
+      }
+      this.sendJson(ws, frame);
+    }
   }
 
   private sendJson(ws: WebSocket, data: Record<string, unknown>): void {

@@ -877,6 +877,99 @@ describe("WebChannel confirmation send-failure", () => {
   });
 });
 
+describe("WebChannel offline final delivery (BUG#7 2b)", () => {
+  it("buffers an answer frame dropped while offline and replays it on reconnect with the same messageId", async () => {
+    const channel = new WebChannel();
+
+    // Connect, capture the assigned chatId + reconnectToken, then disconnect so
+    // there is no live socket when the background final arrives.
+    const firstSocket = createMockSocket();
+    (channel as unknown as { handleWsConnection: (ws: unknown) => void }).handleWsConnection(firstSocket);
+    const connected = firstSocket.getSentMessages().find((m) => m.type === "connected")!;
+    const chatId = String(connected.chatId);
+    const reconnectToken = String(connected.reconnectToken);
+    firstSocket.close();
+
+    // Background final delivered while offline → dropped from the socket but
+    // buffered server-side.
+    await channel.sendMarkdown(chatId, "Here is your answer.");
+
+    const buffered = (channel as unknown as {
+      pendingDelivery: Map<string, Array<Record<string, unknown>>>;
+    }).pendingDelivery.get(chatId);
+    expect(buffered).toHaveLength(1);
+    const bufferedId = buffered![0]!.messageId;
+    expect(typeof bufferedId).toBe("string");
+
+    // Reconnect (reclaim the same chatId via the reconnectToken) → the buffered
+    // final is flushed onto the new socket and the buffer is cleared.
+    const secondSocket = createMockSocket();
+    (channel as unknown as { handleWsConnection: (ws: unknown) => void }).handleWsConnection(secondSocket);
+    secondSocket.emit(
+      "message",
+      Buffer.from(JSON.stringify({ type: "session_init", chatId, reconnectToken })),
+    );
+
+    const replayed = secondSocket.getSentMessages().filter((m) => m.type === "markdown");
+    expect(replayed).toHaveLength(1);
+    expect(replayed[0]!.text).toBe("Here is your answer.");
+    // Same messageId → client dedups (no double-render) when it was also seen live.
+    expect(replayed[0]!.messageId).toBe(bufferedId);
+    expect(
+      (channel as unknown as { pendingDelivery: Map<string, unknown> }).pendingDelivery.has(chatId),
+    ).toBe(false);
+
+    await channel.disconnect();
+  });
+
+  it("does NOT buffer when the frame is delivered to a live socket", async () => {
+    const channel = new WebChannel();
+    const socket = createMockSocket();
+    (channel as unknown as { handleWsConnection: (ws: unknown) => void }).handleWsConnection(socket);
+    const chatId = String(socket.getSentMessages()[0]!.chatId);
+
+    await channel.sendMarkdown(chatId, "Live answer.");
+
+    expect(socket.getSentMessages().some((m) => m.type === "markdown" && m.text === "Live answer.")).toBe(true);
+    expect(
+      (channel as unknown as { pendingDelivery: Map<string, unknown> }).pendingDelivery.has(chatId),
+    ).toBe(false);
+
+    await channel.disconnect();
+  });
+
+  it("does NOT buffer transient frames (typing) for an offline chat", async () => {
+    const channel = new WebChannel();
+
+    await channel.sendTypingIndicator("ghost-chat");
+
+    expect(
+      (channel as unknown as { pendingDelivery: Map<string, unknown> }).pendingDelivery.has("ghost-chat"),
+    ).toBe(false);
+
+    await channel.disconnect();
+  });
+
+  it("bounds the per-chat buffer, evicting oldest frames beyond the cap", async () => {
+    const channel = new WebChannel();
+    const cap = (WebChannel as unknown as { MAX_PENDING_DELIVERY_FRAMES: number }).MAX_PENDING_DELIVERY_FRAMES;
+
+    for (let i = 0; i < cap + 5; i++) {
+      await channel.sendMarkdown("ghost-chat", `answer ${i}`);
+    }
+
+    const buffered = (channel as unknown as {
+      pendingDelivery: Map<string, Array<Record<string, unknown>>>;
+    }).pendingDelivery.get("ghost-chat")!;
+    expect(buffered).toHaveLength(cap);
+    // Oldest evicted: the surviving window is the LAST `cap` frames.
+    expect(buffered[0]!.text).toBe("answer 5");
+    expect(buffered[buffered.length - 1]!.text).toBe(`answer ${cap + 4}`);
+
+    await channel.disconnect();
+  });
+});
+
 describe("WebChannel verify:gate_decision enforcement", () => {
   async function sendGate(channel: WebChannel, chatId: string, payload: Record<string, unknown>): Promise<void> {
     await (channel as unknown as {
