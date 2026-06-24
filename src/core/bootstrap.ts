@@ -674,9 +674,14 @@ async function bootstrapImpl(
   // configured, otherwise fall back to a deterministic hash embedder so the
   // Codebase Memory Vault is never silently skipped. (Previously a missing
   // embedding provider skipped the ENTIRE vault subsystem — a user with no
-  // embedding key got no vault at all, even with STRADA_VAULT_ENABLED=true.
-  // Lexical BM25 carries retrieval; hash vectors add a token-overlap signal
-  // and surface as usingHashFallback.)
+  // embedding key got no vault at all, even with STRADA_VAULT_ENABLED=true.)
+  //
+  // Lexical FTS/BM25 (plus wikilinks/symbols/PPR) carries retrieval on its own.
+  // The in-memory vector store wired below is a NON-SEMANTIC placeholder
+  // (`semantic: false`): the vault's query() skips it entirely, so it never
+  // pollutes the BM25 ranking and the vault runs fully without any embedding
+  // dependency. A real persistent HNSW store (semantic: true) later restores
+  // vectors into the RRF fusion — embeddings only ENHANCE, never carry.
   const { VaultRegistry } = await import("../vault/vault-registry.js");
   const vaultRegistry = new VaultRegistry();
   disposables.push("vaultRegistry", () => vaultRegistry.disposeAll());
@@ -715,14 +720,24 @@ async function bootstrapImpl(
           return result.embeddings.map((e: number[]) => Float32Array.from(e));
         },
       };
-      // In-memory VectorStore for Phase 1; Phase 2 wires the real HNSW backing store.
+      // In-memory VectorStore placeholder. It is intentionally NON-SEMANTIC
+      // (`semantic: false`): its `search()` cannot honour a query vector (no
+      // ANN index) and it is not persisted, so it must never fuse vectors into
+      // the lexical (BM25) ranking. With `semantic: false` the vault's query()
+      // skips the embed + search round-trip entirely (pure-lexical fast path).
+      // `search()` therefore returns [] rather than a bogus insertion-ordered
+      // slice. A future Phase wires a REAL persistent HNSW backing store here
+      // with `semantic: true`, which restores HNSW into the RRF fusion exactly
+      // as "embeddings only enhance" intends. `add`/`remove` stay functional so
+      // the existing index/lifecycle bookkeeping (hnsw_id mapping) is unchanged.
       let nextId = 1;
       const vaultStore = new Map<number, { v: Float32Array; payload: unknown }>();
       const vaultVectorStore = {
+        semantic: false as const,
         add(v: Float32Array, payload: unknown): number { const id = nextId++; vaultStore.set(id, { v, payload }); return id; },
         remove(id: number): void { vaultStore.delete(id); },
-        search(_q: Float32Array, k: number) {
-          return [...vaultStore.entries()].slice(0, k).map(([id, r]) => ({ id, score: 1, payload: r.payload }));
+        search(_q: Float32Array, _k: number): Array<{ id: number; score: number; payload?: unknown }> {
+          return [];
         },
         clear(): void { vaultStore.clear(); nextId = 1; },
       };

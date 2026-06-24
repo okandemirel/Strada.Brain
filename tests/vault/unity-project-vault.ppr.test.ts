@@ -9,6 +9,10 @@ class StubEmb {
   async embed(t: string[]) { return t.map(() => new Float32Array([1, 0, 0, 0])); }
 }
 class StubStore {
+  // Stands in for a REAL semantic (HNSW) backend exercised through RRF + PPR,
+  // so it declares semantic:true (the vault only calls adapter.search on a
+  // semantic store).
+  readonly semantic = true;
   private i = 0; private items: Array<{ id: number; payload: unknown }> = [];
   add(_: Float32Array, p: unknown) { const id = ++this.i; this.items.push({ id, payload: p }); return id; }
   remove() {}

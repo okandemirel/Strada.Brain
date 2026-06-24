@@ -12,6 +12,10 @@ class Stub implements EmbeddingProvider {
   async embed(xs: string[]) { return xs.map(() => new Float32Array(4)); }
 }
 class Mem implements VectorStore {
+  // Stands in for a REAL semantic (HNSW) backend exercised through RRF fusion,
+  // so it declares semantic:true (the vault only calls adapter.search on a
+  // semantic store).
+  readonly semantic = true;
   private n = 1; items = new Map<number, unknown>();
   add(_v: Float32Array, p: unknown) { const id = this.n++; this.items.set(id, p); return id; }
   remove(id: number) { this.items.delete(id); }

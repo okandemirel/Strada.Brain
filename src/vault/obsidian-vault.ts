@@ -209,10 +209,15 @@ export class ObsidianVault implements IVault {
     // Fix P2: escapeFtsQuery throws VaultQueryError on whitespace-only input;
     // bubble it up so the route handler can return HTTP 400.
     const fts = this.store.searchFts(escapeFtsQuery(q.text), topK);
-    const hnsw = await this.adapter.search(q.text, topK);
-    const hnswRanked = hnsw
-      .map((h) => ({ chunkId: payloadChunkId(h), score: h.score }))
-      .filter((r): r is { chunkId: string; score: number } => r.chunkId !== null);
+    // Embeddings only ENHANCE retrieval. Skip the embed + vector-search
+    // round-trip entirely when the backing store is non-semantic (no real
+    // HNSW backend) so a placeholder/unwired store can't fuse noise vectors
+    // into the lexical (BM25) ranking. When semantic, fuse via RRF as before.
+    const hnswRanked: Array<{ chunkId: string; score: number }> = this.adapter.isSemantic()
+      ? (await this.adapter.search(q.text, topK))
+          .map((h) => ({ chunkId: payloadChunkId(h), score: h.score }))
+          .filter((r): r is { chunkId: string; score: number } => r.chunkId !== null)
+      : [];
     const fused = rrfFuse(fts, hnswRanked, 60).slice(0, topK);
 
     let rankedChunkIds = fused.map((f) => f.chunkId);

@@ -27,6 +27,30 @@ class FakeVectorStore implements VectorStore {
   clear(): void { this.live.clear(); }
 }
 
+/**
+ * Configurable VectorStore for the embedding-optional regression tests. Records
+ * how many times `search()` was called and what payloads it would surface, so a
+ * test can prove the vault either calls it (semantic) or skips it entirely
+ * (non-semantic, the production placeholder).
+ */
+class SpyVectorStore implements VectorStore {
+  private next = 0;
+  readonly entries = new Map<number, { vector: Float32Array; payload: unknown }>();
+  searchCalls = 0;
+  constructor(readonly semantic: boolean) {}
+  add(vector: Float32Array, payload: unknown): number {
+    const id = this.next++;
+    this.entries.set(id, { vector, payload });
+    return id;
+  }
+  remove(id: number): void { this.entries.delete(id); }
+  search(_v: Float32Array, k: number): Array<{ id: number; score: number; payload?: unknown }> {
+    this.searchCalls++;
+    return [...this.entries.entries()].slice(0, k).map(([id, e]) => ({ id, score: 1, payload: e.payload }));
+  }
+  clear(): void { this.entries.clear(); }
+}
+
 class FakeEmbedding implements EmbeddingProvider {
   readonly model = "fake";
   readonly dim = 3;
@@ -213,5 +237,94 @@ describe("UnityProjectVault reindex vector lifecycle", () => {
     // initial id) was created on retry, proving the reset hash forced a
     // re-embed instead of short-circuiting — i.e. no permanent vector loss.
     expect(finalIds.some((id) => id > Math.max(...initialIds))).toBe(true);
+  });
+});
+
+describe("UnityProjectVault embedding-optional retrieval (FTS-carries)", () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "strada-vault-embed-opt-"));
+    await writeFile(
+      join(dir, "alpha.md"),
+      "# Alpha\nthe quick brown fox jumps over the lazy dog\n",
+      "utf8",
+    );
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("(a) non-semantic store: returns FTS/BM25 hits, never calls adapter.search/embed, and is not polluted by the vector store", async () => {
+    const store = new SpyVectorStore(false); // production placeholder: semantic === false
+    const embed = new FakeEmbedding();
+    const embedSpy = vi.spyOn(embed, "embed");
+    const vault = new UnityProjectVault({ id: "nonsem", rootPath: dir, embedding: embed, vectorStore: store });
+    try {
+      await vault.init();
+      // Indexing IS allowed to embed (upsertBatch). Reset the spy so the query
+      // assertion only measures the query path.
+      embedSpy.mockClear();
+
+      const result = await vault.query({ text: "fox" });
+
+      // FTS/BM25 carries retrieval — the indexed file is found...
+      expect(result.hits.length).toBeGreaterThan(0);
+      expect(result.hits.some((h) => h.chunk.path === "alpha.md")).toBe(true);
+      // ...and the non-semantic vector store is fully bypassed on query: no
+      // embed round-trip, no search(), so no fabricated rows pollute the result.
+      expect(embedSpy).not.toHaveBeenCalled();
+      expect(store.searchCalls).toBe(0);
+      // Every hit's hnsw sub-score is null (lexical-only — nothing fused).
+      for (const h of result.hits) {
+        expect(h.scores.hnsw).toBeNull();
+        expect(h.scores.fts).not.toBeNull();
+      }
+    } finally {
+      await vault.dispose().catch(() => undefined);
+    }
+  });
+
+  it("(a') semantic store: DOES call adapter.search and fuses vector hits via RRF", async () => {
+    const store = new SpyVectorStore(true); // real-backend stand-in
+    const embed = new FakeEmbedding();
+    const embedSpy = vi.spyOn(embed, "embed");
+    const vault = new UnityProjectVault({ id: "sem", rootPath: dir, embedding: embed, vectorStore: store });
+    try {
+      await vault.init();
+      embedSpy.mockClear();
+
+      const result = await vault.query({ text: "fox" });
+
+      // Semantic path is unchanged: query embeds once + hits the vector store.
+      expect(embedSpy).toHaveBeenCalledTimes(1);
+      expect(store.searchCalls).toBe(1);
+      expect(result.hits.length).toBeGreaterThan(0);
+    } finally {
+      await vault.dispose().catch(() => undefined);
+    }
+  });
+
+  it("(b) A.1: adapter.search returns [] (does not throw) when embed throws, and query() still returns FTS hits", async () => {
+    const store = new SpyVectorStore(true); // semantic so the query path attempts search
+    const embed = new FakeEmbedding();
+    const vault = new UnityProjectVault({ id: "embfail", rootPath: dir, embedding: embed, vectorStore: store });
+    try {
+      await vault.init();
+      // Now make the embedding provider fail for the QUERY embed.
+      embed.shouldFail = true;
+
+      // query() must not reject — the embed failure is swallowed inside
+      // EmbeddingAdapter.search (returns []), so pure-FTS results survive.
+      const result = await vault.query({ text: "fox" });
+      expect(result.hits.length).toBeGreaterThan(0);
+      expect(result.hits.some((h) => h.chunk.path === "alpha.md")).toBe(true);
+      for (const h of result.hits) {
+        expect(h.scores.hnsw).toBeNull(); // nothing fused — search returned []
+      }
+    } finally {
+      await vault.dispose().catch(() => undefined);
+    }
   });
 });

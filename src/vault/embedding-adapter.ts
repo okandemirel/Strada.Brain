@@ -12,6 +12,15 @@ export interface VectorStore {
   remove(id: number): void;
   search(vector: Float32Array, k: number): Array<{ id: number; score: number; payload?: unknown }>;
   clear(): void;
+  /**
+   * Capability flag: `true` only for a REAL semantic backend (e.g. a persistent
+   * HNSW store) whose `search()` honours the query vector. When omitted/false
+   * the store is treated as non-semantic and the vault's `query()` skips the
+   * embed + `search()` round-trip entirely (pure-lexical fast path) so a
+   * placeholder/unwired store can never fuse noise vectors into the BM25
+   * ranking. Embeddings only *enhance* retrieval — they never carry it.
+   */
+  readonly semantic?: boolean;
 }
 
 export interface ChunkToEmbed {
@@ -145,8 +154,33 @@ export class EmbeddingAdapter {
     this.store.remove(hnswId);
   }
 
+  /**
+   * Whether the backing store is a real semantic backend. Callers (the vault
+   * `query()` paths) use this to decide whether to perform an embed +
+   * `search()` round-trip at all — a non-semantic store contributes no useful
+   * vector ranking and must not pollute the lexical (BM25) results.
+   */
+  isSemantic(): boolean {
+    return this.store.semantic === true;
+  }
+
+  /**
+   * Embed the query and run a vector search. Best-effort by design: a failing
+   * embedding provider (e.g. Ollama down) or an empty store must NOT reject the
+   * caller — embeddings only *enhance* retrieval. On any failure (embed throw,
+   * missing vector) we return [] so the vault's pure-FTS/BM25 results survive.
+   */
   async search(query: string, topK: number): Promise<Array<{ id: number; score: number; payload?: unknown }>> {
-    const [vec] = await this.provider.embed([query]);
-    return this.store.search(vec!, topK);
+    try {
+      const [vec] = await this.provider.embed([query]);
+      if (!vec) return [];
+      return this.store.search(vec, topK);
+    } catch (err) {
+      getLoggerSafe().debug('[EmbeddingAdapter] semantic search skipped (embed/search failed)', {
+        op: 'embed-search',
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return [];
+    }
   }
 }

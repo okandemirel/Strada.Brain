@@ -344,6 +344,7 @@ import { formatDowntime } from "../../identity/crash-recovery.js";
 import type { StradaProjectAnalysis } from "../../intelligence/strada-analyzer.js";
 import type { StradaDepsStatus } from "../../config/strada-deps.js";
 import { sanitizeRetrievalContent } from "../orchestrator-text-utils.js";
+import { getLoggerSafe } from "../../utils/logger.js";
 
 
 /**
@@ -464,6 +465,19 @@ export async function buildVaultProjectContext(input: VaultProjectContextInput):
     topK: 20,
     budgetTokens: input.contextBudget ?? 4000,
   })));
+  // Visibility (Fix D): a rejected vault query is dropped here so one bad vault
+  // never sinks the others. Debug-log each rejection so a future query failure
+  // is observable instead of silently swallowed (previously a thrown query()
+  // could drop the whole vault — FTS hits included — with no trace).
+  settled.forEach((s, i) => {
+    if (s.status === "rejected") {
+      getLoggerSafe().debug("[vault] project-context query rejected, vault skipped", {
+        op: "build-vault-project-context",
+        vaultId: vaults[i]?.id,
+        error: s.reason instanceof Error ? s.reason.message : String(s.reason),
+      });
+    }
+  });
   const results = settled
     .filter((s): s is PromiseFulfilledResult<{ hits: { chunk: { path: string; content: string } }[] }> => s.status === "fulfilled")
     .map((s) => s.value);

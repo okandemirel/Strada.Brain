@@ -144,11 +144,17 @@ export function createFakeEmbedding(overrides?: Partial<EmbeddingProvider>): Emb
 
 /**
  * Create an in-memory fake VectorStore.
+ *
+ * Defaults to `semantic: true` so vault tests exercise the RRF-fusion path
+ * (the vault's query() only calls `adapter.search` when the store is
+ * semantic). Pass `{ semantic: false }` to model the production placeholder /
+ * unwired store that the vault must bypass entirely.
  */
-export function createFakeVectorStore(): VectorStore {
+export function createFakeVectorStore(opts: { semantic?: boolean } = {}): VectorStore {
   let next = 1;
   const items = new Map<number, { payload: unknown }>();
   return {
+    semantic: opts.semantic ?? true,
     add: (_v, payload) => { const id = next++; items.set(id, { payload }); return id; },
     remove: (id) => { items.delete(id); },
     search: (_v, k) => [...items.entries()].slice(0, k).map(([id, e]) => ({ id, score: 1, payload: e.payload })),

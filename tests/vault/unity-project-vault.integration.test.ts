@@ -16,6 +16,10 @@ class Stub implements EmbeddingProvider {
   }
 }
 class InMem implements VectorStore {
+  // Stands in for a REAL semantic (HNSW) backend: returns scored vector hits and
+  // is exercised through the RRF-fusion path, so it must declare semantic:true
+  // (the vault's query() only calls adapter.search on a semantic store).
+  readonly semantic = true;
   private n = 1; items = new Map<number, unknown>();
   add(_v: Float32Array, p: unknown) { const id = this.n++; this.items.set(id, p); return id; }
   remove(id: number) { this.items.delete(id); }
