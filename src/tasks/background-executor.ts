@@ -44,6 +44,7 @@ import {
   type RunnerMode,
   type RunnerHostOrchestrator,
 } from "../agent-core/runner/index.js";
+import { TURKISH_HINT_RE } from "./progress-signals.js";
 import { normalizeSupervisorProgressMarkdown } from "../supervisor/supervisor-feedback.js";
 import type { MonitorLifecycle } from "../dashboard/monitor-lifecycle.js";
 import type { WorkspaceBus } from "../dashboard/workspace-bus.js";
@@ -142,6 +143,17 @@ interface QueueEntry {
   task: Task;
   signal: AbortSignal;
   onProgress: (message: TaskProgressUpdate) => void;
+  /**
+   * The ORIGINAL external cancel signal, BEFORE it is combined with the per-task
+   * inactivity watchdog (see {@link BackgroundExecutor.processQueue}). Inside
+   * {@link BackgroundExecutor.executeTask} `signal` is the COMBINED signal, so it
+   * aborts for two distinct reasons: a user `/cancel` (external) OR the inactivity
+   * watchdog firing. Only the external one is silent; a watchdog abort must emit a
+   * terminal so the chat does not silently lose the answer (BUG#7). This field is
+   * the authoritative "user actually cancelled" indicator that disambiguates them.
+   * Absent for entries that have not yet been combined (queued).
+   */
+  externalSignal?: AbortSignal;
 }
 
 type ManagedWorkspaceLease = Awaited<ReturnType<WorkspaceLeaseManager["acquireLease"]>>;
@@ -301,7 +313,7 @@ export class BackgroundExecutor {
   }
 
   private buildKickoffProgressSignal(task: Task): TaskProgressSignal {
-    const isTurkish = /[ğüşöçıİ]|\b(?:ve|için|şu|hata|düzelt|incele|bak|çöz|dosya|ekle|güncelle)\b/iu.test(task.prompt);
+    const isTurkish = TURKISH_HINT_RE.test(task.prompt);
     return {
       kind: "analysis",
       message: "Task started",
@@ -313,6 +325,37 @@ export class BackgroundExecutor {
 
   private getConversationScope(task: Pick<Task, "chatId" | "conversationId">): string {
     return resolveConversationScope(task.chatId, task.conversationId);
+  }
+
+  /**
+   * An aborted run reached a terminal early-return. Decide whether the abort was a
+   * genuine user `/cancel` (stay silent — the user already knows) or the inactivity
+   * WATCHDOG firing (the task hung with no progress). In the watchdog case we MUST
+   * emit a terminal `block`, otherwise no `task:blocked`/`task:failed` event is
+   * raised, the chat never receives an answer, and the task is stuck "executing"
+   * forever (BUG#7 — silent data loss).
+   *
+   * `externalSignal` is the un-timed external cancel signal; if IT is aborted the
+   * user cancelled. If only the combined `signal` is aborted, the watchdog fired.
+   * Returns `true` if a watchdog terminal was emitted (so `requestFailed` should be
+   * set by the caller); `false` for a genuine cancel (caller stays silent).
+   */
+  private settleWatchdogAbortIfHung(task: Task, externalSignal: AbortSignal | undefined): boolean {
+    // A genuine external cancel: the user asked to stop. Stay silent.
+    if (!externalSignal || externalSignal.aborted) {
+      return false;
+    }
+    // Only the combined signal aborted -> the inactivity watchdog tripped. Block the
+    // task with a clear "no progress" message instead of silently dropping it.
+    if (!this.taskManager) {
+      return false;
+    }
+    const isTurkish = TURKISH_HINT_RE.test(task.prompt);
+    const message = isTurkish
+      ? "Görev ilerleme kaydetmeden takıldı, bu yüzden durduruldu. Lütfen tekrar deneyin ya da isteği daha küçük adımlara bölün."
+      : "The task stalled without making progress, so it was stopped. Please try again or break the request into smaller steps.";
+    this.taskManager.block(task.id, message);
+    return true;
   }
 
   private async resolveTopLevelAdmission(params: {
@@ -751,6 +794,10 @@ export class BackgroundExecutor {
         ...entry,
         signal: timeoutController.signal,
         onProgress: progressAwareOnProgress,
+        // Preserve the un-timed external signal so executeTask can tell a real
+        // user /cancel (silent) apart from the inactivity-watchdog abort (must
+        // still emit a terminal — BUG#7).
+        externalSignal: entry.signal,
       };
 
       this.executeTask(timedEntry)
@@ -945,7 +992,7 @@ export class BackgroundExecutor {
   }
 
   private async executeTask(entry: QueueEntry): Promise<void> {
-    const { task, signal, onProgress } = entry;
+    const { task, signal, onProgress, externalSignal } = entry;
     const logger = getLogger();
     const taskOrchestrator = task.orchestrator ?? this.orchestrator;
     let taskWorkspaceLease: ManagedWorkspaceLease | undefined;
@@ -1016,6 +1063,11 @@ export class BackgroundExecutor {
         }
 
         if (signal.aborted) {
+          // Watchdog abort -> emit a terminal so the answer is not silently lost
+          // (BUG#7); a genuine /cancel stays silent.
+          if (this.settleWatchdogAbortIfHung(task, externalSignal)) {
+            requestFailed = true;
+          }
           return;
         }
 
@@ -1034,6 +1086,9 @@ export class BackgroundExecutor {
       }
 
       if (signal.aborted) {
+        if (this.settleWatchdogAbortIfHung(task, externalSignal)) {
+          requestFailed = true;
+        }
         return;
       }
 
@@ -1055,7 +1110,12 @@ export class BackgroundExecutor {
       });
 
       if (signal.aborted) {
-        // Already cancelled -- don't overwrite the cancelled status
+        // Already cancelled -- don't overwrite the cancelled status. But if the
+        // INACTIVITY watchdog (not a user /cancel) aborted, emit a terminal so the
+        // result isn't silently dropped and the task isn't stuck "executing" (BUG#7).
+        if (this.settleWatchdogAbortIfHung(task, externalSignal)) {
+          requestFailed = true;
+        }
         return;
       }
 
@@ -1080,6 +1140,14 @@ export class BackgroundExecutor {
       this.taskManager.complete(task.id, result.output);
     } catch (error) {
       if (signal.aborted) {
+        // The run threw because it was aborted. A user /cancel stays silent; the
+        // inactivity watchdog emits a "no progress" terminal so the answer isn't
+        // silently lost and the task doesn't hang "executing" (BUG#7). The raw
+        // abort error (e.g. "This operation was aborted") is deliberately NOT
+        // surfaced to the user here.
+        if (this.settleWatchdogAbortIfHung(task, externalSignal)) {
+          requestFailed = true;
+        }
         return;
       }
 

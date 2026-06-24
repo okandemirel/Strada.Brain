@@ -3,7 +3,7 @@ import type { Task, TaskProgressSignal, TaskProgressUpdate } from "./types.js";
 
 export type ProgressLanguage = "en" | "tr" | "ja" | "ko" | "zh" | "de" | "es" | "fr";
 
-const TURKISH_HINT_RE = /[ğüşöçıİ]|\b(?:ve|için|şu|hata|düzelt|incele|bak|çöz|dosya|ekle|güncelle)\b/iu;
+export const TURKISH_HINT_RE = /[ğüşöçıİ]|\b(?:ve|için|şu|hata|düzelt|incele|bak|çöz|dosya|ekle|güncelle)\b/iu;
 
 export function toTaskProgressSignal(update: TaskProgressUpdate): TaskProgressSignal {
   if (typeof update === "string") {

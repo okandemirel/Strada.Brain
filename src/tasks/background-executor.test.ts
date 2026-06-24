@@ -1490,6 +1490,63 @@ describe("BackgroundExecutor - task inactivity timeout", () => {
     await vi.waitFor(() => { expect(sawAbort).toBe(true); }, { timeout: 3000 });
   });
 
+  // BUG#7 (chat/UX): when the INACTIVITY watchdog aborts a hung task, the terminal
+  // branches must still emit a terminal status. Previously they early-returned on
+  // `signal.aborted` with no complete/fail/block -> no task event -> no chat message
+  // -> the task was stuck "executing" forever and the answer was silently lost.
+  it("emits a terminal (block) when the inactivity watchdog aborts a hung task (BUG#7)", async () => {
+    const mockOrch = createMockOrchestrator();
+    mockOrch.runBackgroundTask = vi.fn(async (_prompt: string, opts: { signal: AbortSignal }) => {
+      await new Promise<void>((_resolve, reject) => {
+        opts.signal.addEventListener("abort", () => reject(new Error("This operation was aborted")), { once: true });
+      });
+      return "done";
+    });
+
+    const block = vi.fn();
+    const fail = vi.fn();
+    const complete = vi.fn();
+    const executor = new BackgroundExecutor({ orchestrator: mockOrch as any, taskInactivityTimeoutMs: 120 });
+    executor.setTaskManager({ updateStatus: vi.fn(), complete, fail, block } as any);
+
+    // No external abort: the ONLY thing that can stop this task is the watchdog.
+    executor.enqueue(createTestTask(), new AbortController().signal, vi.fn());
+
+    await vi.waitFor(() => { expect(block).toHaveBeenCalledTimes(1); }, { timeout: 3000 });
+    // The user sees a clear "no progress" terminal, not a raw abort error or silence.
+    expect(String(block.mock.calls[0]?.[1] ?? "")).toMatch(/progress/i);
+    expect(complete).not.toHaveBeenCalled();
+  });
+
+  // The counterpart to BUG#7: a GENUINE user /cancel must STAY SILENT — we must not
+  // overwrite the cancelled task with a spurious "no progress" terminal.
+  it("does NOT emit a terminal when the user cancels (external abort stays silent)", async () => {
+    const mockOrch = createMockOrchestrator();
+    const externalController = new AbortController();
+    mockOrch.runBackgroundTask = vi.fn(async (_prompt: string, opts: { signal: AbortSignal }) => {
+      await new Promise<void>((_resolve, reject) => {
+        opts.signal.addEventListener("abort", () => reject(new Error("This operation was aborted")), { once: true });
+      });
+      return "done";
+    });
+
+    const block = vi.fn();
+    const fail = vi.fn();
+    const complete = vi.fn();
+    // Large inactivity window so ONLY the external cancel can stop the task.
+    const executor = new BackgroundExecutor({ orchestrator: mockOrch as any, taskInactivityTimeoutMs: 100000 });
+    executor.setTaskManager({ updateStatus: vi.fn(), complete, fail, block } as any);
+
+    executor.enqueue(createTestTask(), externalController.signal, vi.fn());
+    await new Promise((r) => setTimeout(r, 30));
+    externalController.abort();
+
+    await new Promise((r) => setTimeout(r, 60));
+    expect(block).not.toHaveBeenCalled();
+    expect(fail).not.toHaveBeenCalled();
+    expect(complete).not.toHaveBeenCalled();
+  });
+
   it("does not abort a long-running task that keeps reporting progress (inactivity resets)", async () => {
     const mockOrch = createMockOrchestrator();
     let aborted = false;
