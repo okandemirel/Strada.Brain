@@ -6,8 +6,8 @@ import { UserProfileStore } from "../memory/unified/user-profile-store.js";
 import { UnifiedBudgetManager } from "../budget/unified-budget-manager.js";
 
 describe("CommandHandler /model", () => {
-  const sendMarkdown = vi.fn().mockResolvedValue(undefined);
-  const sendText = vi.fn().mockResolvedValue(undefined);
+  const sendMarkdown = vi.fn();
+  const sendText = vi.fn();
 
   beforeEach(() => {
     sendMarkdown.mockReset();
@@ -84,8 +84,8 @@ describe("CommandHandler /model", () => {
 });
 
 describe("CommandHandler /routing", () => {
-  const sendMarkdown = vi.fn().mockResolvedValue(undefined);
-  const sendText = vi.fn().mockResolvedValue(undefined);
+  const sendMarkdown = vi.fn();
+  const sendText = vi.fn();
 
   beforeEach(() => {
     sendMarkdown.mockReset();
@@ -287,8 +287,8 @@ describe("CommandHandler /routing", () => {
 });
 
 describe("CommandHandler /vault", () => {
-  const sendMarkdown = vi.fn().mockResolvedValue(undefined);
-  const sendText = vi.fn().mockResolvedValue(undefined);
+  const sendMarkdown = vi.fn();
+  const sendText = vi.fn();
 
   beforeEach(() => {
     sendMarkdown.mockReset();
@@ -464,8 +464,8 @@ describe("CommandHandler /autonomous", () => {
 });
 
 describe("CommandHandler /token", () => {
-  const sendMarkdown = vi.fn().mockResolvedValue(undefined);
-  const sendText = vi.fn().mockResolvedValue(undefined);
+  const sendMarkdown = vi.fn();
+  const sendText = vi.fn();
 
   beforeEach(() => {
     sendMarkdown.mockReset();
@@ -535,5 +535,108 @@ describe("CommandHandler /token", () => {
       "chat-1",
       expect.stringContaining("Could not parse"),
     );
+  });
+});
+
+describe("CommandHandler /run", () => {
+  const sendMarkdown = vi.fn();
+  const sendText = vi.fn();
+
+  beforeEach(() => {
+    sendMarkdown.mockReset();
+    sendText.mockReset();
+    sendMarkdown.mockResolvedValue(undefined);
+    sendText.mockResolvedValue(undefined);
+  });
+
+  it("shows usage and runs nothing when the command is empty", async () => {
+    const requestConfirmation = vi.fn().mockResolvedValue("Yes");
+    const handler = new CommandHandler(
+      {} as never,
+      { sendMarkdown, sendText, requestConfirmation } as never,
+    );
+    handler.setProjectPath(process.cwd());
+
+    await handler.handle("chat-1", "run", [], "user-1");
+
+    expect(requestConfirmation).not.toHaveBeenCalled();
+    expect(sendText).toHaveBeenCalledWith("chat-1", expect.stringContaining("Usage: /run"));
+  });
+
+  it("reports unavailable when no project path is configured", async () => {
+    const requestConfirmation = vi.fn().mockResolvedValue("Yes");
+    const handler = new CommandHandler(
+      {} as never,
+      { sendMarkdown, sendText, requestConfirmation } as never,
+    );
+    // No setProjectPath() call.
+
+    await handler.handle("chat-1", "run", ["echo", "hi"], "user-1");
+
+    expect(requestConfirmation).not.toHaveBeenCalled();
+    expect(sendText).toHaveBeenCalledWith(
+      "chat-1",
+      expect.stringContaining("Shell execution is not available"),
+    );
+  });
+
+  it("requests confirmation and runs the command when approved", async () => {
+    const requestConfirmation = vi.fn().mockResolvedValue("Yes");
+    const handler = new CommandHandler(
+      {} as never,
+      { sendMarkdown, sendText, requestConfirmation } as never,
+    );
+    handler.setProjectPath(process.cwd());
+
+    await handler.handle("chat-1", "run", ["echo", "strada-run-ok"], "user-1");
+
+    expect(requestConfirmation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chatId: "chat-1",
+        userId: "user-1",
+        details: expect.stringContaining("echo strada-run-ok"),
+      }),
+    );
+    expect(sendMarkdown).toHaveBeenCalledWith(
+      "chat-1",
+      expect.stringContaining("strada-run-ok"),
+    );
+  });
+
+  it("cancels without running when the user declines confirmation", async () => {
+    const requestConfirmation = vi.fn().mockResolvedValue("No");
+    const handler = new CommandHandler(
+      {} as never,
+      { sendMarkdown, sendText, requestConfirmation } as never,
+    );
+    handler.setProjectPath(process.cwd());
+
+    await handler.handle("chat-1", "run", ["echo", "should-not-run"], "user-1");
+
+    expect(requestConfirmation).toHaveBeenCalled();
+    expect(sendText).toHaveBeenCalledWith(
+      "chat-1",
+      expect.stringContaining("Command cancelled"),
+    );
+    expect(sendMarkdown).not.toHaveBeenCalledWith(
+      "chat-1",
+      expect.stringContaining("should-not-run"),
+    );
+  });
+
+  it("declines on a non-interactive channel that cannot confirm", async () => {
+    const handler = new CommandHandler(
+      {} as never,
+      { sendMarkdown, sendText } as never, // no requestConfirmation → not interactive
+    );
+    handler.setProjectPath(process.cwd());
+
+    await handler.handle("chat-1", "run", ["echo", "no-confirm"], "user-1");
+
+    expect(sendText).toHaveBeenCalledWith(
+      "chat-1",
+      expect.stringContaining("Command cancelled"),
+    );
+    expect(sendMarkdown).not.toHaveBeenCalled();
   });
 });

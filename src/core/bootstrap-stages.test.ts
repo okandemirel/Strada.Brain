@@ -511,6 +511,7 @@ describe("bootstrap-stages", () => {
     } as any;
     const commandHandler = {
       setProviderRouter: vi.fn(),
+      setProjectPath: vi.fn(),
     } as any;
     const messageRouter = { _tag: "message-router" } as any;
     const daemonEventBus = { _tag: "daemon-bus" } as any;

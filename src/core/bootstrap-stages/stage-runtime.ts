@@ -356,6 +356,8 @@ export async function initializeTaskRuntimeStage(
   if (params.providerRouter) {
     commandHandler.setProviderRouter(params.providerRouter);
   }
+  // Wire the project root so `/run` can execute gated shell commands from chat.
+  commandHandler.setProjectPath(params.config.unityProjectPath);
 
   const messageRouter = deps.createMessageRouter?.({
     taskManager,

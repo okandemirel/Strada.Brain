@@ -22,6 +22,8 @@ import type { TaskCheckpointStore, PendingTaskCheckpoint } from "./task-checkpoi
 import { parseRecoveryIntent } from "./orchestrator-intent-parser.js";
 import type { IVault } from "../vault/vault.interface.js";
 import type { VaultRegistry } from "../vault/vault-registry.js";
+import { ShellExecTool } from "../agents/tools/shell-exec.js";
+import { requestWriteConfirmation } from "../agents/orchestrator-write-gate.js";
 
 /** Structural interface for ProviderRouter to avoid circular dependency */
 interface ProviderRouterRef {
@@ -81,6 +83,7 @@ export class CommandHandler {
   private checkpointStore?: TaskCheckpointStore;
   private orchestratorRef?: OrchestratorRef;
   private vaultRegistry?: VaultRegistry;
+  private projectPath?: string;
   private readonly autonomousDefaultEnabled: boolean;
   private readonly autonomousDefaultHours: number;
 
@@ -131,6 +134,15 @@ export class CommandHandler {
 
   setVaultRegistry(registry: VaultRegistry): void {
     this.vaultRegistry = registry;
+  }
+
+  /**
+   * Set the project root used as the working directory for `/run` shell
+   * commands. Set after construction (mirrors the other post-construction
+   * setters) so the positional constructor signature stays stable.
+   */
+  setProjectPath(projectPath: string): void {
+    this.projectPath = projectPath;
   }
 
   private getIdentityKey(chatId: string, userId?: string): string {
@@ -193,6 +205,9 @@ export class CommandHandler {
         break;
       case "vault":
         await this.handleVault(chatId, args);
+        break;
+      case "run":
+        await this.handleRun(chatId, args, userId);
         break;
     }
   }
@@ -365,7 +380,11 @@ export class CommandHandler {
       "`/vault init <path|id>` - Register and initialize a project path, or initialize an existing vault id",
       "`/vault sync [id]` - Reindex all vaults, or one vault id",
       "",
-      "Turkish: /durum, /iptal, /gorevler, /detay, /yardim, /hedef, /kisilik, /ajan, /yonlendirme, /model listele, /model bilgi, /model sıfırla, /butce, /dene, /surdur",
+      "*Shell*",
+      "",
+      "`/run <command>` - Run a shell command in the project (asks for confirmation first)",
+      "",
+      "Turkish: /durum, /iptal, /gorevler, /detay, /yardim, /hedef, /kisilik, /ajan, /yonlendirme, /model listele, /model bilgi, /model sıfırla, /butce, /dene, /surdur, /calistir",
       "",
       "Send any other message to start a new background task.",
     ].join("\n");
@@ -459,6 +478,61 @@ export class CommandHandler {
       return vault ? [vault] : [];
     }
     return registry.list();
+  }
+
+  /**
+   * `/run <command>` — execute a gated shell command from chat.
+   *
+   * Bypasses task submission so it works mid-task (the command handler is
+   * routed before the session lock). The command always goes through an
+   * explicit user confirmation prompt — UNCONDITIONALLY, not via the
+   * autonomous-mode-aware dmPolicy — so a one-click suggestion can never run
+   * a shell command without the user's express approval, even with
+   * autonomous mode on. Safety blocklists live in ShellExecTool.
+   */
+  private async handleRun(chatId: string, args: string[], userId?: string): Promise<void> {
+    const command = args.join(" ").trim();
+    if (!command) {
+      await this.channel.sendText(chatId, "Usage: /run <command> (e.g. /run dotnet build)");
+      return;
+    }
+
+    if (!this.projectPath) {
+      await this.channel.sendText(
+        chatId,
+        "Shell execution is not available: no project path is configured in this runtime.",
+      );
+      return;
+    }
+
+    // Unconditional confirmation. Channels without interactivity return false
+    // from the gate → we decline rather than silently running unconfirmed.
+    const confirmed = await requestWriteConfirmation(
+      this.channel,
+      chatId,
+      userId,
+      "shell_exec",
+      { command },
+    );
+    if (!confirmed) {
+      await this.channel.sendText(chatId, `Command cancelled: \`${command.slice(0, 100)}\``);
+      return;
+    }
+
+    const tool = new ShellExecTool();
+    try {
+      const result = await tool.execute(
+        { command },
+        { projectPath: this.projectPath, workingDirectory: this.projectPath, readOnly: false },
+      );
+      const heading = result.isError ? "*Command failed*" : "*Command output*";
+      await this.channel.sendMarkdown(chatId, `${heading}\n\n\`\`\`\n${result.content}\n\`\`\``);
+    } catch (err) {
+      await this.channel.sendMarkdown(
+        chatId,
+        `*Command failed*\n\n${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   private async handlePause(chatId: string, taskId?: TaskId): Promise<void> {

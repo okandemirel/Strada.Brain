@@ -5,13 +5,17 @@
  * Extracted from orchestrator.ts to reduce its line count.
  */
 
-import type { IChannelAdapter } from "../channels/channel.interface.js";
+import type { IChannelSender } from "../channels/channel-core.interface.js";
 import { supportsInteractivity } from "../channels/channel-core.interface.js";
 
 // ─── Functions ────────────────────────────────────────────────────────────────
 
 export async function requestWriteConfirmation(
-  channel: IChannelAdapter,
+  // Typed as the minimal IChannelSender: the gate relies entirely on the
+  // runtime `supportsInteractivity` guard below to widen to the interactive
+  // surface, so it never touches an IChannelAdapter-only member. Accepting the
+  // narrower type lets non-adapter callers (e.g. CommandHandler) reuse it.
+  channel: IChannelSender,
   chatId: string,
   userId: string | undefined,
   toolName: string,

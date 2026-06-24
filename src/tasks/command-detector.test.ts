@@ -190,3 +190,32 @@ describe("detectCommand /vault", () => {
     });
   });
 });
+
+describe("detectCommand /run", () => {
+  it('"/run dotnet build" returns run command with the command as args', () => {
+    const result = detectCommand("/run dotnet build");
+    expect(result).toEqual({
+      type: "command",
+      command: "run",
+      args: ["dotnet", "build"],
+    });
+  });
+
+  it('"/calistir git status" returns run command (Turkish alias)', () => {
+    const result = detectCommand("/calistir git status");
+    expect(result).toEqual({
+      type: "command",
+      command: "run",
+      args: ["git", "status"],
+    });
+  });
+
+  it('"/run" with no args returns run command with empty args', () => {
+    const result = detectCommand("/run");
+    expect(result).toEqual({
+      type: "command",
+      command: "run",
+      args: [],
+    });
+  });
+});
