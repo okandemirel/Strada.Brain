@@ -101,6 +101,9 @@
   "panel.summaryDescription": "Workspace is expanded. Show the summary strip again when needed.",
   "panel.loadingDag": "Loading DAG view...",
   "panel.loadingKanban": "Loading Kanban...",
+  "panel.rootSwitcher": "Switch request",
+  "panel.rootSwitcherSelect": "Select request",
+  "panel.rootSwitcherConversation": "Conversation",
 
   "status.pending": "Pending",
   "status.executing": "Executing",

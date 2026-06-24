@@ -101,6 +101,9 @@
   "panel.summaryDescription": "El espacio de trabajo esta expandido. Muestra la barra de resumen de nuevo cuando sea necesario.",
   "panel.loadingDag": "Cargando vista DAG...",
   "panel.loadingKanban": "Cargando Kanban...",
+  "panel.rootSwitcher": "Cambiar solicitud",
+  "panel.rootSwitcherSelect": "Seleccionar solicitud",
+  "panel.rootSwitcherConversation": "Conversación",
 
   "status.pending": "Pendiente",
   "status.executing": "Ejecutando",

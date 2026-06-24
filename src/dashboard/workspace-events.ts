@@ -13,12 +13,24 @@ export interface DagPayload {
   rootId: string
   nodes: DagNodeShape[]
   edges: Array<{ source: string; target: string }>
+  /**
+   * Optional conversation/chat scope this request-root belongs to. The frontend
+   * groups multiple request-roots under one conversation by this id (falling
+   * back to `rootId` when absent). Additive: legacy consumers ignore it.
+   */
+  conversationId?: string
 }
 
 const MAX_TASK_LABEL_LENGTH = 200
 
-/** Convert a GoalTree into the DAG payload used by monitor events. */
-export function goalTreeToDagPayload(goalTree: GoalTree): DagPayload {
+/**
+ * Convert a GoalTree into the DAG payload used by monitor events.
+ *
+ * @param conversationId Optional conversation/chat scope to label this root
+ *   with so the frontend can group request-roots per conversation. Omitting it
+ *   is fully backward-compatible (the field stays undefined).
+ */
+export function goalTreeToDagPayload(goalTree: GoalTree, conversationId?: string): DagPayload {
   const nodes: DagNodeShape[] = []
   const edges: Array<{ source: string; target: string }> = []
   for (const [id, node] of goalTree.nodes) {
@@ -38,7 +50,7 @@ export function goalTreeToDagPayload(goalTree: GoalTree): DagPayload {
       edges.push({ source: String(dep), target: String(id) })
     }
   }
-  return { rootId: String(goalTree.rootId), nodes, edges }
+  return { rootId: String(goalTree.rootId), nodes, edges, ...(conversationId ? { conversationId } : {}) }
 }
 
 export interface WorkspaceEventMap {
@@ -49,6 +61,8 @@ export interface WorkspaceEventMap {
     rootId: string
     nodes: DagNodeShape[]
     edges: Array<{ source: string; target: string }>
+    /** Conversation/chat scope for per-conversation root grouping (optional). */
+    conversationId?: string
   }
   'monitor:task_update': {
     rootId: string
@@ -62,6 +76,8 @@ export interface WorkspaceEventMap {
     elapsed?: number
     startedAt?: number
     completedAt?: number
+    /** Conversation/chat scope for per-conversation root grouping (optional). */
+    conversationId?: string
   }
   'monitor:review_result': {
     rootId: string
@@ -89,6 +105,8 @@ export interface WorkspaceEventMap {
     rootId: string
     nodes: DagNodeShape[]
     edges: Array<{ source: string; target: string }>
+    /** Conversation/chat scope for per-conversation root grouping (optional). */
+    conversationId?: string
   }
   'monitor:gate_response': {
     rootId: string

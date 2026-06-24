@@ -101,6 +101,9 @@
   "panel.summaryDescription": "ワークスペースが展開されています。必要に応じてサマリーストリップを再表示してください。",
   "panel.loadingDag": "DAG ビューを読み込み中...",
   "panel.loadingKanban": "カンバンを読み込み中...",
+  "panel.rootSwitcher": "リクエストを切り替え",
+  "panel.rootSwitcherSelect": "リクエストを選択",
+  "panel.rootSwitcherConversation": "会話",
 
   "status.pending": "保留中",
   "status.executing": "実行中",

@@ -119,6 +119,31 @@ export const DEFAULT_VERIFICATION_CRITERIA: CriterionState[] = [
 export interface RootView {
   dag: DagState | null
   tasks: Record<string, MonitorTask>
+  /**
+   * Conversation/chat scope this root belongs to (from the dag_init payload's
+   * optional `conversationId`). Used to group request-roots per conversation in
+   * the root-switcher. First-wins so a later root-node-less dag_init (e.g. a
+   * decomposition restructure) never blanks it.
+   */
+  conversationId?: string
+  /**
+   * Human-readable label for this root (the original request/goal text), derived
+   * from the root node's title when the topology first arrives. First-wins so a
+   * decomposition's later dag_init (which drops the root node) keeps the label.
+   */
+  label?: string
+}
+
+/** Optional per-root metadata captured when a root's topology first arrives. */
+export interface RootMeta {
+  conversationId?: string
+  label?: string
+}
+
+/** One conversation group for the root-switcher: its roots, newest-last. */
+export interface RootSwitcherGroup {
+  conversationId: string
+  roots: Array<{ rootId: string; label: string; isActive: boolean }>
 }
 
 interface MonitorState {
@@ -135,7 +160,7 @@ interface MonitorState {
 
   addTask: (task: MonitorTask) => void
   updateTask: (id: string, updates: Partial<MonitorTask>) => void
-  setDAG: (dag: DagState, rootId?: string) => void
+  setDAG: (dag: DagState, rootId?: string, meta?: RootMeta) => void
   addActivity: (entry: ActivityEntry) => void
   setActiveRootId: (id: string | null) => void
   setSelectedTask: (id: string | null) => void
@@ -306,13 +331,26 @@ export const useMonitorStore = create<MonitorState>()((set) => ({
       return commit(rootsById, s.activeRootId)
     }),
 
-  setDAG: (dag, rootId) =>
+  setDAG: (dag, rootId, meta) =>
     set((s) => {
       // dag_init / dag_restructure replace ONE root's topology. Other roots'
       // buckets are preserved (no cross-request clobber).
       const key = rootId ?? activeKey(s)
       const bucket = s.rootsById[key] ?? emptyView()
-      const rootsById = { ...s.rootsById, [key]: { ...bucket, dag } }
+      // Persist conversation/label metadata FIRST-WINS: a decomposition's later
+      // dag_init drops the root node (so it carries no label) — keeping the
+      // original prevents it from blanking the switcher entry.
+      const conversationId = bucket.conversationId ?? meta?.conversationId
+      const label = bucket.label ?? meta?.label
+      const rootsById = {
+        ...s.rootsById,
+        [key]: {
+          ...bucket,
+          dag,
+          ...(conversationId !== undefined ? { conversationId } : {}),
+          ...(label !== undefined ? { label } : {}),
+        },
+      }
       return commit(rootsById, s.activeRootId)
     }),
 
@@ -392,3 +430,70 @@ export const useMonitorStore = create<MonitorState>()((set) => ({
       }
     }),
 }))
+
+/**
+ * The human-readable label for a root bucket: the original request text, falling
+ * back to its first task's title, else `undefined`. Single source of the label
+ * rule so callers can pick their own final fallback (rootId vs null).
+ */
+function rootLabel(bucket: RootView): string | undefined {
+  return bucket.label ?? Object.values(bucket.tasks)[0]?.title
+}
+
+/**
+ * Build the root-switcher view: every real (non-default) root, grouped by its
+ * conversation. Each root carries a human-readable label (the original request
+ * text), falling back to its first task's title, then to a short id. Roots with
+ * no `conversationId` fall back to being their own group (keyed by rootId), so
+ * the switcher is legacy-safe before the backend ships `conversationId` (each
+ * root is simply its own group — a flat recent-roots list).
+ *
+ * Pure grouping over the raw inputs (no hook). Kept separate from any selector so
+ * the component can subscribe to `rootsById`/`activeRootId` (stable references
+ * under shallow equality) and memoize the freshly-allocated group array —
+ * subscribing to the array directly would re-render on every store change.
+ */
+export function buildRootGroups(
+  rootsById: Record<string, RootView> | undefined,
+  activeRootId: string | null,
+): RootSwitcherGroup[] {
+  const groups = new Map<string, RootSwitcherGroup>()
+  for (const [rootId, bucket] of Object.entries(rootsById ?? {})) {
+    if (rootId === DEFAULT_ROOT_KEY) continue
+    const label = rootLabel(bucket) ?? rootId
+    const conversationId = bucket.conversationId ?? rootId
+    const entry = { rootId, label, isActive: rootId === activeRootId }
+    const group = groups.get(conversationId)
+    if (group) {
+      group.roots.push(entry)
+    } else {
+      groups.set(conversationId, { conversationId, roots: [entry] })
+    }
+  }
+  return [...groups.values()]
+}
+
+/**
+ * Pure selector (no hook) so callers can `useMonitorStore(selectRootSwitcher)`
+ * or compute it from a snapshot in tests.
+ */
+export function selectRootSwitcher(s: MonitorState): RootSwitcherGroup[] {
+  return buildRootGroups(s.rootsById, s.activeRootId)
+}
+
+/** Total count of real (non-default) roots — drives showing/hiding the switcher. */
+export function selectRootCount(s: MonitorState): number {
+  let count = 0
+  for (const rootId in s.rootsById ?? {}) {
+    if (rootId !== DEFAULT_ROOT_KEY) count++
+  }
+  return count
+}
+
+/** The active root's human-readable label (request/goal text), if any. */
+export function selectActiveRootLabel(s: MonitorState): string | null {
+  if (!s.activeRootId) return null
+  const bucket = s.rootsById?.[s.activeRootId]
+  if (!bucket) return null
+  return rootLabel(bucket) ?? null
+}

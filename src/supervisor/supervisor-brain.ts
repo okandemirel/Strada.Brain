@@ -18,6 +18,7 @@ import type {
   VerificationVerdict,
 } from "./supervisor-types.js";
 import { canonicalizeProviderName } from "../agents/providers/provider-identity.js";
+import { resolveConversationScope } from "../agents/orchestrator-text-utils.js";
 import type { CapabilityMatcher } from "./capability-matcher.js";
 import type { ProviderAssigner } from "./provider-assigner.js";
 import { SupervisorDispatcher } from "./supervisor-dispatcher.js";
@@ -321,6 +322,10 @@ export class SupervisorBrain {
     const externalSignal = context.signal;
     const internalController = new AbortController();
     const internalSignal = internalController.signal;
+    // Conversation/chat scope for per-conversation root grouping in the monitor.
+    // Attached (optionally) to the dag_init + per-node task_update payloads so the
+    // frontend can group this request-root under its conversation. Additive only.
+    const conversationScope = resolveConversationScope(context.chatId, context.conversationId);
     let goalRootId: string | null = null;
     this.activeAbortControllers.add(internalController);
 
@@ -370,7 +375,7 @@ export class SupervisorBrain {
       const dagTree = this.buildAlignedDagTree(decomposedGoalTree, visibleGoalTree);
       context.onGoalDecomposed?.(dagTree);
       if (!context.onGoalDecomposed) {
-        this.emitter?.emit("monitor:dag_init", goalTreeToDagPayload(dagTree));
+        this.emitter?.emit("monitor:dag_init", goalTreeToDagPayload(dagTree, conversationScope));
       }
 
       // Check abort after decomposition
@@ -433,6 +438,7 @@ export class SupervisorBrain {
         },
         eventEmitter: this.emitter,
         rootId: String(decomposedGoalTree.rootId),
+        conversationId: conversationScope,
         taskDescription: task,
         displayTaskLabels,
       });
@@ -532,6 +538,7 @@ export class SupervisorBrain {
             nodeId: String(verifiedResults[i]!.nodeId),
             status: rejectedStatus,
             completedAt: Date.now(),
+            conversationId: conversationScope,
           });
           // Emit narrative for rejected nodes
           this.emitNarrative(

@@ -52,9 +52,10 @@ function emitDagEvent(
   workspaceBus: WorkspaceBus | null,
   eventName: "monitor:dag_init" | "monitor:dag_restructure",
   goalTree: GoalTree,
+  conversationId?: string,
 ): void {
   if (!workspaceBus) return;
-  workspaceBus.emit(eventName, goalTreeToDagPayload(goalTree));
+  workspaceBus.emit(eventName, goalTreeToDagPayload(goalTree, conversationId));
 }
 
 // ─── Functions ────────────────────────────────────────────────────────────────
@@ -88,7 +89,7 @@ export async function runProactiveGoalDecomposition(
     if (deps.monitorLifecycle) {
       deps.monitorLifecycle.goalDecomposed(opts.conversationScope, goalTree);
     } else {
-      emitDagEvent(deps.workspaceBus, "monitor:dag_init", goalTree);
+      emitDagEvent(deps.workspaceBus, "monitor:dag_init", goalTree, opts.conversationScope);
     }
     await deps.sessionManager.sendVisibleAssistantMarkdown(
       opts.chatId,
@@ -155,7 +156,7 @@ export async function runReactiveGoalDecomposition(
         if (deps.monitorLifecycle) {
           deps.monitorLifecycle.goalRestructured(opts.conversationScope, updatedTree);
         } else {
-          emitDagEvent(deps.workspaceBus, "monitor:dag_restructure", updatedTree);
+          emitDagEvent(deps.workspaceBus, "monitor:dag_restructure", updatedTree, opts.conversationScope);
         }
         await deps.sessionManager.sendVisibleAssistantMarkdown(
           opts.chatId,

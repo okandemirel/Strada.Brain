@@ -5,6 +5,7 @@ import GateDialog from './GateDialog'
 import InterventionToolbar from './InterventionToolbar'
 import MonitorOverview from './MonitorOverview'
 import ResizeHandle from './ResizeHandle'
+import RootSwitcher from './RootSwitcher'
 import SupervisorPanel from './SupervisorPanel'
 import TaskInspectModal from './TaskInspectModal'
 
@@ -157,6 +158,8 @@ export default function MonitorPanel() {
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <div className="flex shrink-0 items-center justify-between gap-3 border-b border-white/6 px-4 py-3">
           <div className="flex items-center gap-2">
+            <RootSwitcher />
+
             <div className="inline-flex rounded-lg border border-white/8 bg-white/[0.03] p-1">
               <button
                 onClick={() => setViewMode('dag')}

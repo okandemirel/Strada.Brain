@@ -466,7 +466,7 @@ export class BackgroundExecutor {
     if (this.monitorLifecycle) {
       this.monitorLifecycle.goalDecomposed(conversationScope, goalTree);
     } else if (this.workspaceBus) {
-      this.workspaceBus.emit("monitor:dag_init", goalTreeToDagPayload(goalTree));
+      this.workspaceBus.emit("monitor:dag_init", goalTreeToDagPayload(goalTree, conversationScope));
     }
 
     if (this.daemonEventBus) {

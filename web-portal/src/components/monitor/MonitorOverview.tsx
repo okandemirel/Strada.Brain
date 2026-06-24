@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useMonitorStore } from '../../stores/monitor-store'
+import { selectActiveRootLabel, useMonitorStore } from '../../stores/monitor-store'
 import type { TFunction } from 'i18next'
 
 function compactId(value: string | null, t: TFunction): string {
@@ -25,6 +25,7 @@ export default function MonitorOverview() {
   const tasks = useMonitorStore((s) => s.tasks)
   const activities = useMonitorStore((s) => s.activities)
   const activeRootId = useMonitorStore((s) => s.activeRootId)
+  const activeRootLabel = useMonitorStore(selectActiveRootLabel)
   const selectedTaskId = useMonitorStore((s) => s.selectedTaskId)
 
   const summary = useMemo(() => {
@@ -93,7 +94,8 @@ export default function MonitorOverview() {
               </div>
               <div className="mt-1 text-lg font-semibold text-text">{t('overview.cockpitTitle')}</div>
               <div className="mt-1 text-sm text-text-secondary">
-                {t('overview.rootGoal')} <span className="text-text">{compactId(activeRootId, t)}</span>
+                {t('overview.rootGoal')}{' '}
+                <span className="text-text">{activeRootLabel ?? compactId(activeRootId, t)}</span>
               </div>
             </div>
 

@@ -130,7 +130,9 @@ describe('createMonitorLifecycle', () => {
     lifecycle.goalDecomposed('conv-1', goalTree)
 
     expect(events).toHaveLength(1)
-    const expected = goalTreeToDagPayload(goalTree)
+    // The lifecycle threads the conversation scope through for per-conversation
+    // root grouping, so the expected payload carries the same conversationId.
+    const expected = goalTreeToDagPayload(goalTree, 'conv-1')
     expect(events[0]).toEqual(expected)
     // Root node is excluded from goalTreeToDagPayload, so 2 child nodes
     expect(events[0].nodes).toHaveLength(2)
@@ -231,7 +233,8 @@ describe('createMonitorLifecycle', () => {
     lifecycle.goalRestructured('conv-1', goalTree)
 
     expect(restructureEvents).toHaveLength(1)
-    const expected = goalTreeToDagPayload(goalTree)
+    // goalRestructured threads the conversation scope through for grouping.
+    const expected = goalTreeToDagPayload(goalTree, 'conv-1')
     expect(restructureEvents[0]).toEqual(expected)
   })
 

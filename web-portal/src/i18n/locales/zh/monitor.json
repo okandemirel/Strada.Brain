@@ -101,6 +101,9 @@
   "panel.summaryDescription": "工作区已展开。需要时可重新显示摘要栏。",
   "panel.loadingDag": "加载 DAG 视图中...",
   "panel.loadingKanban": "加载看板中...",
+  "panel.rootSwitcher": "切换请求",
+  "panel.rootSwitcherSelect": "选择请求",
+  "panel.rootSwitcherConversation": "对话",
 
   "status.pending": "待处理",
   "status.executing": "执行中",

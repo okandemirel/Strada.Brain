@@ -1,5 +1,10 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { useMonitorStore } from './monitor-store'
+import {
+  selectActiveRootLabel,
+  selectRootCount,
+  selectRootSwitcher,
+  useMonitorStore,
+} from './monitor-store'
 
 describe('useMonitorStore', () => {
   beforeEach(() => {
@@ -300,5 +305,80 @@ describe('useMonitorStore — multi-root scoping', () => {
     expect(state.activeRootId).toBe('root-keep')
     expect(state.rootsById['root-keep']).toBeDefined()
     expect(state.dag!.nodes[0].id).toBe('keep')
+  })
+
+  describe('root-switcher metadata + selectors', () => {
+    it('persists conversationId + label on the root bucket via setDAG meta', () => {
+      const s = useMonitorStore.getState()
+      s.setDAG({ nodes: [{ id: 'r1' }], edges: [] }, 'r1', {
+        conversationId: 'conv-a',
+        label: 'Build the login page',
+      })
+      const bucket = useMonitorStore.getState().rootsById['r1']
+      expect(bucket.conversationId).toBe('conv-a')
+      expect(bucket.label).toBe('Build the login page')
+    })
+
+    it('keeps the FIRST label (first-wins) when a later dag_init omits it', () => {
+      const s = useMonitorStore.getState()
+      s.setDAG({ nodes: [{ id: 'r1' }], edges: [] }, 'r1', {
+        conversationId: 'conv-a',
+        label: 'Original goal',
+      })
+      // Decomposition's later dag_init drops the root node → no label/conversationId.
+      s.setDAG({ nodes: [{ id: 'child' }], edges: [] }, 'r1', {})
+      const bucket = useMonitorStore.getState().rootsById['r1']
+      expect(bucket.label).toBe('Original goal')
+      expect(bucket.conversationId).toBe('conv-a')
+    })
+
+    it('selectRootCount excludes the default bucket and counts real roots', () => {
+      const s = useMonitorStore.getState()
+      expect(selectRootCount(useMonitorStore.getState())).toBe(0)
+      s.setDAG({ nodes: [{ id: 'a' }], edges: [] }, 'root-a')
+      s.setDAG({ nodes: [{ id: 'b' }], edges: [] }, 'root-b')
+      expect(selectRootCount(useMonitorStore.getState())).toBe(2)
+    })
+
+    it('selectRootSwitcher groups roots by conversationId', () => {
+      const s = useMonitorStore.getState()
+      s.setDAG({ nodes: [{ id: 'a' }], edges: [] }, 'root-a', { conversationId: 'c1', label: 'A' })
+      s.setDAG({ nodes: [{ id: 'b' }], edges: [] }, 'root-b', { conversationId: 'c1', label: 'B' })
+      s.setDAG({ nodes: [{ id: 'c' }], edges: [] }, 'root-c', { conversationId: 'c2', label: 'C' })
+      const groups = selectRootSwitcher(useMonitorStore.getState())
+      expect(groups).toHaveLength(2)
+      const c1 = groups.find((g) => g.conversationId === 'c1')!
+      expect(c1.roots.map((r) => r.rootId).sort()).toEqual(['root-a', 'root-b'])
+      const c2 = groups.find((g) => g.conversationId === 'c2')!
+      expect(c2.roots.map((r) => r.label)).toEqual(['C'])
+    })
+
+    it('selectRootSwitcher falls back to rootId as group key when conversationId absent (legacy-safe)', () => {
+      const s = useMonitorStore.getState()
+      s.setDAG({ nodes: [{ id: 'a' }], edges: [] }, 'root-a')
+      s.setDAG({ nodes: [{ id: 'b' }], edges: [] }, 'root-b')
+      const groups = selectRootSwitcher(useMonitorStore.getState())
+      // No conversationId → each root is its own group.
+      expect(groups).toHaveLength(2)
+      expect(groups.map((g) => g.conversationId).sort()).toEqual(['root-a', 'root-b'])
+    })
+
+    it('selectRootSwitcher marks the active root and falls back to first task title for label', () => {
+      const s = useMonitorStore.getState()
+      s.setActiveRootId('root-a')
+      s.addTask({ id: 'a', nodeId: 'a', rootId: 'root-a', title: 'Task A', status: 'executing', reviewStatus: 'none' })
+      const groups = selectRootSwitcher(useMonitorStore.getState())
+      const entry = groups.flatMap((g) => g.roots).find((r) => r.rootId === 'root-a')!
+      expect(entry.isActive).toBe(true)
+      expect(entry.label).toBe('Task A')
+    })
+
+    it('selectActiveRootLabel returns the active root label (or null when none)', () => {
+      expect(selectActiveRootLabel(useMonitorStore.getState())).toBeNull()
+      const s = useMonitorStore.getState()
+      s.setActiveRootId('root-a')
+      s.setDAG({ nodes: [{ id: 'a' }], edges: [] }, 'root-a', { label: 'My request' })
+      expect(selectActiveRootLabel(useMonitorStore.getState())).toBe('My request')
+    })
   })
 })

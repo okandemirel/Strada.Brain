@@ -13,6 +13,9 @@ vi.mock('../../stores/monitor-store', () => ({
       selectedTaskId: mockSelectedTaskId,
       activities: mockActivities,
       dag: null,
+      rootsById: {},
+      activeRootId: null,
+      setActiveRootId: vi.fn(),
       setSelectedTask: vi.fn(),
       updateTask: vi.fn(),
       verification: { active: false, criteria: [], results: [] },
@@ -24,6 +27,13 @@ vi.mock('../../stores/monitor-store', () => ({
     }
     return selector ? selector(state) : state
   },
+  // RootSwitcher imports these named selectors/helpers. Default single-root
+  // (count 0) so the switcher renders nothing, preserving the existing header
+  // assertions.
+  selectRootCount: () => 0,
+  selectRootSwitcher: () => [],
+  selectActiveRootLabel: () => null,
+  buildRootGroups: () => [],
 }))
 
 // Mock useWS for InterventionToolbar

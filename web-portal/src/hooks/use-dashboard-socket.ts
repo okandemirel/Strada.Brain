@@ -12,6 +12,7 @@ import type { MonitorTask, ActivityEntry, DagState } from '../stores/monitor-sto
 export interface MonitorDagInitMessage {
   type: 'monitor:dag_init'
   rootId: string
+  conversationId?: string
   dag: {
     nodes: Array<{ id: string; title: string; status: string; reviewStatus: string; [key: string]: unknown }>
     edges: Array<{ source: string; target: string }>
@@ -55,6 +56,11 @@ function suggestCanvasMode(): void {
   }
 }
 
+/** Narrow an untyped payload field to a string, else `undefined`. */
+function asOptionalString(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined
+}
+
 /**
  * Dispatches a workspace/monitor message to the appropriate Zustand stores.
  * This is a pure function (no hooks) so it can be called from the WS message handler
@@ -71,8 +77,16 @@ export function dispatchWorkspaceMessage(data: { type: string; [key: string]: un
       const rootId = payload.rootId as string
       monitor.setActiveRootId(rootId)
       const dag = (payload.dag ?? { nodes: payload.nodes, edges: payload.edges }) as Bag
-      monitor.setDAG(dag as unknown as DagState, rootId)
       const nodes = (dag.nodes ?? []) as Bag[]
+      // Derive a human-readable label for the root-switcher: prefer the root
+      // node's own title/task (the original request text for a simple root),
+      // else the first node's title/task, else the synthetic id. The store keeps
+      // the FIRST non-empty label per root, so a decomposition's later dag_init
+      // (which omits the root node) never blanks it.
+      const rootNode = nodes.find((n) => (n.id as string) === rootId) ?? nodes[0]
+      const label = (rootNode?.title ?? rootNode?.task) as string | undefined
+      const conversationId = asOptionalString(payload.conversationId)
+      monitor.setDAG(dag as unknown as DagState, rootId, { conversationId, label })
       for (const node of nodes) {
         monitor.addTask({
           id: node.id as string,
@@ -304,9 +318,13 @@ export function dispatchWorkspaceMessage(data: { type: string; [key: string]: un
       const monitor = useMonitorStore.getState()
       if (payload.nodes && payload.edges) {
         if (payload.rootId) monitor.setActiveRootId(payload.rootId as string)
+        // Pass conversationId so a root first seen via restructure still groups
+        // correctly; omit label (store keeps the original, first-wins).
+        const conversationId = asOptionalString(payload.conversationId)
         monitor.setDAG(
           { nodes: payload.nodes, edges: payload.edges } as unknown as DagState,
           payload.rootId as string | undefined,
+          { conversationId },
         )
         const existingTasks = useMonitorStore.getState().tasks
         const nodes = payload.nodes as Bag[]

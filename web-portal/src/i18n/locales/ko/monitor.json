@@ -101,6 +101,9 @@
   "panel.summaryDescription": "작업 공간이 확장되었습니다. 필요할 때 요약 스트립을 다시 표시하세요.",
   "panel.loadingDag": "DAG 뷰 로딩 중...",
   "panel.loadingKanban": "칸반 로딩 중...",
+  "panel.rootSwitcher": "요청 전환",
+  "panel.rootSwitcherSelect": "요청 선택",
+  "panel.rootSwitcherConversation": "대화",
 
   "status.pending": "대기 중",
   "status.executing": "실행 중",

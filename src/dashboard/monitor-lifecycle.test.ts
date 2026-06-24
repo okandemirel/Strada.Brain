@@ -87,9 +87,11 @@ describe("createMonitorLifecycle", () => {
       const { event, payload } = bus.calls[0]!;
       expect(event).toBe("monitor:dag_init");
 
-      const p = payload as { rootId: string; nodes: Array<Record<string, unknown>>; edges: unknown[] };
+      const p = payload as { rootId: string; conversationId?: string; nodes: Array<Record<string, unknown>>; edges: unknown[] };
       expect(p.nodes).toHaveLength(1);
       expect(p.edges).toHaveLength(0);
+      // Conversation scope is attached for per-conversation root grouping.
+      expect(p.conversationId).toBe("scope-1");
 
       const node = p.nodes[0]!;
       expect(node.id).toBe(p.rootId);
@@ -166,6 +168,7 @@ describe("createMonitorLifecycle", () => {
         rootId: taskId,
         nodeId: taskId,
         status: "completed",
+        conversationId: "scope-1",
       });
     });
 
@@ -181,6 +184,7 @@ describe("createMonitorLifecycle", () => {
         rootId: taskId,
         nodeId: taskId,
         status: "failed",
+        conversationId: "scope-1",
       });
     });
 
@@ -220,10 +224,12 @@ describe("createMonitorLifecycle", () => {
       const { event, payload } = bus.calls[2]!;
       expect(event).toBe("monitor:dag_init");
 
-      const p = payload as { rootId: string; nodes: unknown[]; edges: unknown[] };
+      const p = payload as { rootId: string; conversationId?: string; nodes: unknown[]; edges: unknown[] };
       expect(p.rootId).toBe("goal_root");
       // goalTreeToDagPayload skips the root node, so only child is included
       expect(p.nodes).toHaveLength(1);
+      // Conversation scope threaded through for per-conversation grouping.
+      expect(p.conversationId).toBe("scope-1");
     });
 
     it("settles the superseded simple node to completed before emitting the tree", () => {
@@ -282,8 +288,10 @@ describe("createMonitorLifecycle", () => {
       const { event, payload } = bus.calls[0]!;
       expect(event).toBe("monitor:dag_restructure");
 
-      const p = payload as { rootId: string; nodes: unknown[] };
+      const p = payload as { rootId: string; conversationId?: string; nodes: unknown[] };
       expect(p.rootId).toBe("goal_root");
+      // goalRestructured now uses (not discards) the conversation scope param.
+      expect(p.conversationId).toBe("scope-1");
     });
   });
 

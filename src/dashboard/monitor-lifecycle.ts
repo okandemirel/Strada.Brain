@@ -62,6 +62,7 @@ export function createMonitorLifecycle(workspaceBus: WorkspaceBus): MonitorLifec
         rootId: taskId,
         nodes: [node],
         edges: [],
+        conversationId: conversationScope,
       })
     },
 
@@ -76,12 +77,12 @@ export function createMonitorLifecycle(workspaceBus: WorkspaceBus): MonitorLifec
       // path emits the identical terminal {status:'completed'} task_update and
       // clears tracking, so reuse it rather than duplicate that logic here.
       lifecycle.requestEnd(conversationScope)
-      workspaceBus.emit('monitor:dag_init', goalTreeToDagPayload(goalTree))
+      workspaceBus.emit('monitor:dag_init', goalTreeToDagPayload(goalTree, conversationScope))
     },
 
-    goalRestructured(_conversationScope: string, goalTree: GoalTree): void {
+    goalRestructured(conversationScope: string, goalTree: GoalTree): void {
       // Restructure doesn't affect simple task tracking (already cleared by goalDecomposed)
-      workspaceBus.emit('monitor:dag_restructure', goalTreeToDagPayload(goalTree))
+      workspaceBus.emit('monitor:dag_restructure', goalTreeToDagPayload(goalTree, conversationScope))
     },
 
     requestEnd(conversationScope: string, failed = false): void {
@@ -93,6 +94,7 @@ export function createMonitorLifecycle(workspaceBus: WorkspaceBus): MonitorLifec
         rootId: taskId,
         nodeId: taskId,
         status: failed ? 'failed' : 'completed',
+        conversationId: conversationScope,
       })
     },
   }

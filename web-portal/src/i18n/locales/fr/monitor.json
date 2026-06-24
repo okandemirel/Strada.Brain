@@ -101,6 +101,9 @@
   "panel.summaryDescription": "L'espace de travail est agrandi. Affichez a nouveau la bande de resume si necessaire.",
   "panel.loadingDag": "Chargement de la vue DAG...",
   "panel.loadingKanban": "Chargement du Kanban...",
+  "panel.rootSwitcher": "Changer de requête",
+  "panel.rootSwitcherSelect": "Sélectionner une requête",
+  "panel.rootSwitcherConversation": "Conversation",
 
   "status.pending": "En attente",
   "status.executing": "En execution",

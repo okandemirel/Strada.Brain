@@ -101,6 +101,9 @@
   "panel.summaryDescription": "Çalışma alanı genişletildi. Gerektiğinde özet şeridini tekrar gösterin.",
   "panel.loadingDag": "DAG görünümü yükleniyor...",
   "panel.loadingKanban": "Kanban yükleniyor...",
+  "panel.rootSwitcher": "İsteği değiştir",
+  "panel.rootSwitcherSelect": "İstek seç",
+  "panel.rootSwitcherConversation": "Sohbet",
 
   "status.pending": "Bekliyor",
   "status.executing": "Yürütülüyor",

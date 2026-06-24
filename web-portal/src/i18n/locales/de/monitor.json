@@ -101,6 +101,9 @@
   "panel.summaryDescription": "Arbeitsbereich ist erweitert. Zeige den Zusammenfassungsstreifen bei Bedarf wieder an.",
   "panel.loadingDag": "DAG-Ansicht wird geladen...",
   "panel.loadingKanban": "Kanban wird geladen...",
+  "panel.rootSwitcher": "Anfrage wechseln",
+  "panel.rootSwitcherSelect": "Anfrage auswählen",
+  "panel.rootSwitcherConversation": "Unterhaltung",
 
   "status.pending": "Ausstehend",
   "status.executing": "Wird ausgeführt",

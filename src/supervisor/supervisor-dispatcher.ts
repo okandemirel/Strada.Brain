@@ -37,6 +37,8 @@ export interface DispatcherOptions {
   readonly config: DispatcherConfig;
   readonly eventEmitter?: { emit: (event: string, payload: unknown) => void };
   readonly rootId?: string;
+  /** Conversation/chat scope for per-conversation root grouping in the monitor (optional). */
+  readonly conversationId?: string;
   readonly taskDescription?: string;
   readonly displayTaskLabels?: ReadonlyMap<string, string>;
 }
@@ -182,6 +184,7 @@ export class SupervisorDispatcher {
   private readonly config: DispatcherConfig;
   private readonly emitter?: DispatcherOptions["eventEmitter"];
   private readonly rootId?: string;
+  private readonly conversationId?: string;
   private readonly taskDescription?: string;
   private readonly displayTaskLabels?: ReadonlyMap<string, string>;
   /** Node IDs that have reached a terminal state (failed/completed/skipped) — suppress stale events from background-running promises */
@@ -192,6 +195,7 @@ export class SupervisorDispatcher {
     this.config = options.config;
     this.emitter = options.eventEmitter;
     this.rootId = options.rootId;
+    this.conversationId = options.conversationId;
     this.taskDescription = options.taskDescription;
     this.displayTaskLabels = options.displayTaskLabels;
   }
@@ -246,6 +250,7 @@ export class SupervisorDispatcher {
       ...(status !== "executing" ? { completedAt: Date.now() } : {}),
       ...(result?.duration ? { elapsed: result.duration } : {}),
       ...(error ? { error } : {}),
+      ...(this.conversationId ? { conversationId: this.conversationId } : {}),
     });
   }
 
