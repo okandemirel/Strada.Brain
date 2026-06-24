@@ -44,7 +44,7 @@ export function createMonitorLifecycle(workspaceBus: WorkspaceBus): MonitorLifec
   // Cleared when goal decomposition replaces the simple task.
   const activeSimpleTaskIds = new Map<string, string>()
 
-  return {
+  const lifecycle: MonitorLifecycle = {
     requestStart(conversationScope: string, userMessage: string): void {
       const taskId = generateTaskId()
       activeSimpleTaskIds.set(conversationScope, taskId)
@@ -66,8 +66,16 @@ export function createMonitorLifecycle(workspaceBus: WorkspaceBus): MonitorLifec
     },
 
     goalDecomposed(conversationScope: string, goalTree: GoalTree): void {
-      // Goal decomposition replaces the simple task — stop tracking it
-      activeSimpleTaskIds.delete(conversationScope)
+      // Goal decomposition replaces the simple task with the real goal tree.
+      // Before we stop tracking the simple node, settle its Kanban card to a
+      // terminal state. Otherwise the superseded `req-…` node lingers forever
+      // as "executing" (dag_init replaces the DAG topology but the simple task
+      // stays in the frontend `tasks` map) — a stale in-flight card that reads
+      // as the prior request never finishing (a BUG#5 symptom). It is being
+      // superseded by a richer representation, not failed: requestEnd's success
+      // path emits the identical terminal {status:'completed'} task_update and
+      // clears tracking, so reuse it rather than duplicate that logic here.
+      lifecycle.requestEnd(conversationScope)
       workspaceBus.emit('monitor:dag_init', goalTreeToDagPayload(goalTree))
     },
 
@@ -88,4 +96,6 @@ export function createMonitorLifecycle(workspaceBus: WorkspaceBus): MonitorLifec
       })
     },
   }
+
+  return lifecycle
 }

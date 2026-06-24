@@ -140,7 +140,7 @@ describe('createMonitorLifecycle', () => {
   // -------------------------------------------------------------------------
   // 4. goalDecomposed clears simple task tracking (requestEnd becomes no-op)
   // -------------------------------------------------------------------------
-  it('goalDecomposed clears simple task tracking so requestEnd is a no-op', () => {
+  it('goalDecomposed settles the simple task then clears tracking so requestEnd is a no-op', () => {
     const lifecycle = createMonitorLifecycle(workspaceBus)
     const taskUpdates: WorkspaceEventMap['monitor:task_update'][] = []
     workspaceBus.on('monitor:task_update', (payload) => taskUpdates.push(payload))
@@ -150,9 +150,12 @@ describe('createMonitorLifecycle', () => {
     const goalTree = makeGoalTree()
     lifecycle.goalDecomposed('conv-1', goalTree)
 
-    // requestEnd should be no-op — no task_update emitted
+    // goalDecomposed settles the superseded simple node to completed (so its
+    // Kanban card doesn't linger "executing"), then clears tracking — so the
+    // subsequent requestEnd is a no-op (no second task_update).
     lifecycle.requestEnd('conv-1')
-    expect(taskUpdates).toHaveLength(0)
+    expect(taskUpdates).toHaveLength(1)
+    expect(taskUpdates[0].status).toBe('completed')
   })
 
   // -------------------------------------------------------------------------
@@ -247,14 +250,17 @@ describe('createMonitorLifecycle', () => {
     lifecycle.requestStart('conv-B', 'Task B')
     expect(dagInits).toHaveLength(2)
 
-    // Decompose only conv-A — conv-B should still be tracked as simple task
+    // Decompose only conv-A — its simple node is settled to completed; conv-B
+    // remains tracked as a simple task.
     lifecycle.goalDecomposed('conv-A', makeGoalTree())
 
-    // End both — conv-A should be no-op, conv-B should emit task_update
+    // End both — conv-A is a no-op (already settled by goalDecomposed), conv-B
+    // emits its own terminal task_update. So two completed settles total: one
+    // from conv-A's decomposition, one from conv-B's requestEnd.
     lifecycle.requestEnd('conv-A')
     lifecycle.requestEnd('conv-B')
 
-    expect(taskUpdates).toHaveLength(1)
-    expect(taskUpdates[0].status).toBe('completed')
+    expect(taskUpdates).toHaveLength(2)
+    expect(taskUpdates.every((u) => u.status === 'completed')).toBe(true)
   })
 })

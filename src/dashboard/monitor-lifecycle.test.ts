@@ -214,14 +214,34 @@ describe("createMonitorLifecycle", () => {
 
       lc.goalDecomposed("scope-1", goalTree);
 
-      expect(bus.calls).toHaveLength(2);
-      const { event, payload } = bus.calls[1]!;
+      // requestStart (dag_init) + settle the simple node (task_update) + the
+      // decomposed tree (dag_init).
+      expect(bus.calls).toHaveLength(3);
+      const { event, payload } = bus.calls[2]!;
       expect(event).toBe("monitor:dag_init");
 
       const p = payload as { rootId: string; nodes: unknown[]; edges: unknown[] };
       expect(p.rootId).toBe("goal_root");
       // goalTreeToDagPayload skips the root node, so only child is included
       expect(p.nodes).toHaveLength(1);
+    });
+
+    it("settles the superseded simple node to completed before emitting the tree", () => {
+      const lc = createMonitorLifecycle(bus);
+      lc.requestStart("scope-1", "msg");
+      const simpleTaskId = (bus.calls[0]!.payload as { rootId: string }).rootId;
+
+      lc.goalDecomposed("scope-1", makeGoalTree());
+
+      // The settle is the second emit: a terminal task_update for the simple node
+      // so its Kanban card doesn't linger "executing" once the tree replaces it.
+      const settle = bus.calls[1]!;
+      expect(settle.event).toBe("monitor:task_update");
+      expect(settle.payload).toMatchObject({
+        rootId: simpleTaskId,
+        nodeId: simpleTaskId,
+        status: "completed",
+      });
     });
 
     it("clears the simple task so requestEnd becomes a no-op", () => {
@@ -231,15 +251,17 @@ describe("createMonitorLifecycle", () => {
 
       lc.requestEnd("scope-1"); // should be no-op
 
-      // dag_init (requestStart) + dag_init (goalDecomposed), no task_update
-      expect(bus.calls).toHaveLength(2);
-      expect(bus.calls.every(c => c.event === "monitor:dag_init")).toBe(true);
+      // dag_init (requestStart) + task_update (settle simple node) +
+      // dag_init (goalDecomposed). requestEnd adds nothing — tracking cleared.
+      expect(bus.calls).toHaveLength(3);
+      expect(bus.calls.filter(c => c.event === "monitor:task_update")).toHaveLength(1);
     });
 
-    it("works even without a prior requestStart", () => {
+    it("works even without a prior requestStart (no simple node to settle)", () => {
       const lc = createMonitorLifecycle(bus);
       lc.goalDecomposed("scope-1", makeGoalTree());
 
+      // No tracked simple node → no settle task_update, just the tree.
       expect(bus.calls).toHaveLength(1);
       expect(bus.calls[0]!.event).toBe("monitor:dag_init");
     });
