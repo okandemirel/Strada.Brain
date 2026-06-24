@@ -133,13 +133,26 @@ export function handlePersonalityRoutes(
       sendJsonError(res, 501, "Soul loader not available");
       return true;
     }
-    void ctx.readJsonBody<{ profile?: string; chatId?: string }>(req, res).then(async (parsed) => {
+    void ctx.readJsonBody<{ profile?: string; chatId?: string; userId?: string; conversationId?: string }>(req, res).then(async (parsed) => {
       if (!parsed) return;
       const profile = typeof parsed.profile === "string" ? parsed.profile.trim() : "";
       if (!profile || !PROFILE_NAME_RE.test(profile)) {
         sendJsonError(res, 400, "Invalid profile name");
         return;
       }
+      // Resolve a persistable identity (consistent with the /api/user/autonomous routes).
+      const chatId = typeof parsed.chatId === "string" ? parsed.chatId.trim() : "";
+      const userId = typeof parsed.userId === "string" ? parsed.userId.trim() : null;
+      const conversationId = typeof parsed.conversationId === "string" ? parsed.conversationId.trim() : null;
+      if (
+        chatId.length > DASHBOARD_IDENTITY_MAX_LENGTH ||
+        isDashboardIdentityPartTooLong(userId) ||
+        isDashboardIdentityPartTooLong(conversationId)
+      ) {
+        sendJsonError(res, 400, `Identity values too long (max ${DASHBOARD_IDENTITY_MAX_LENGTH} chars)`);
+        return;
+      }
+      const identityKey = resolveDashboardIdentityKey(chatId, userId, conversationId);
       try {
         // Validate profile exists (no global mutation — per-user only)
         const available = ctx.soulLoader!.getProfiles();
@@ -147,12 +160,14 @@ export function handlePersonalityRoutes(
           sendJsonError(res, 400, `Profile '${profile}' not found. Available: ${available.join(", ")}`);
           return;
         }
-        // Persist per-user persona
-        if (parsed.chatId && ctx.userProfileStore?.setActivePersona) {
-          try {
-            ctx.userProfileStore.setActivePersona(parsed.chatId, profile);
-          } catch { /* non-fatal — persona update is best-effort */ }
+        // A persistable per-user identity is required — otherwise setActivePersona would
+        // be a silent no-op while we mislead the caller with success:true.
+        if (!identityKey || !ctx.userProfileStore?.setActivePersona) {
+          sendJsonError(res, 400, "Cannot switch persona without a persistable identity (provide chatId, userId, or conversationId)");
+          return;
         }
+        // Persist per-user persona under the resolved identity (no longer a silent no-op).
+        ctx.userProfileStore.setActivePersona(identityKey, profile);
         sendJson(res, { success: true, activeProfile: profile });
       } catch (err) {
         sendJsonError(res, 500, err instanceof Error ? err.message : String(err));

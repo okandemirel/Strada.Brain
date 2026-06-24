@@ -2354,6 +2354,12 @@ export class Orchestrator {
   }): Promise<string> {
     const identityKey = resolveIdentityKey(params.chatId, params.userId, params.conversationId, this.userProfileStore, params.channelType);
     const fallbackProvider = this.providerManager.getProvider(identityKey);
+
+    // Per-user persona override (from profile, not global SoulLoader mutation) so the final
+    // user-facing answer respects the user's selected persona, not just the global default.
+    const synthesisProfile = this.userProfileStore?.getProfile(identityKey) ?? null;
+    const synthesisPersonaContent = await this.resolvePersonaContent(synthesisProfile);
+
     const strategy = this.buildSupervisorExecutionStrategy(
       params.prompt,
       identityKey,
@@ -2414,8 +2420,15 @@ export class Orchestrator {
     ].join("\n");
 
     try {
-      // Use the full prompt with personality (soul) instead of the base systemPrompt
-      const soulEnrichedPrompt = injectSoulPersonality(this.getContextBuilderDeps(), this.systemPrompt, params.channelType);
+      // Use the full prompt with personality (soul) instead of the base systemPrompt.
+      // Pass the per-user persona override (if any) so decomposed/multi-agent final
+      // answers honor the selected persona; falls back to the global default soul.
+      const soulEnrichedPrompt = injectSoulPersonality(
+        this.getContextBuilderDeps(),
+        this.systemPrompt,
+        params.channelType,
+        synthesisPersonaContent,
+      );
       const synthesisResponse = await synthesisProvider.chat(
         `${soulEnrichedPrompt}\n\n${SUPERVISOR_SYNTHESIS_SYSTEM_PROMPT}${this.buildSupervisorRolePrompt(strategy, strategy.synthesizer)}`,
         [{ role: "user", content: synthesisRequest }],
@@ -3636,11 +3649,7 @@ export class Orchestrator {
         }
 
         // Per-user persona override (from profile, not global SoulLoader mutation)
-        let bgPersonaContent: string | undefined;
-        if (profile?.activePersona && profile.activePersona !== "default" && this.soulLoader) {
-          bgPersonaContent =
-            (await this.soulLoader.getProfileContent(profile.activePersona)) ?? undefined;
-        }
+        const bgPersonaContent = await this.resolvePersonaContent(profile);
 
         // Build system prompt with all context layers (DRY: shared with runAgentLoop)
         // Per-request vault context enrichment (request-scoped, not a shared field).
@@ -5248,11 +5257,7 @@ export class Orchestrator {
     const profile = this.userProfileStore?.getProfile(identityKey) ?? null;
 
     // Per-user persona override (from profile, not global SoulLoader mutation)
-    let personaContent: string | undefined;
-    if (profile?.activePersona && profile.activePersona !== "default" && this.soulLoader) {
-      personaContent =
-        (await this.soulLoader.getProfileContent(profile.activePersona)) ?? undefined;
-    }
+    const personaContent = await this.resolvePersonaContent(profile);
 
     // Extract query text from last user message for embedding + context
     const lastUserMsg = [...session.messages].reverse().find((m) => m.role === "user" && m.content);
@@ -8786,6 +8791,20 @@ export class Orchestrator {
   }
 
   /**
+   * Resolve the per-user persona override content (from the user's profile, NOT a global
+   * SoulLoader mutation). Returns the active persona's SOUL content, or undefined when the
+   * profile selects the default persona, has none, or no SoulLoader is configured.
+   * Shared by every run path (runAgentLoop / runBackgroundTask / loadRunPersonalization /
+   * synthesizeDecomposedFinal) so the user-facing answer honors the selected persona.
+   */
+  private async resolvePersonaContent(profile: UserProfile | null): Promise<string | undefined> {
+    if (profile?.activePersona && profile.activePersona !== "default" && this.soulLoader) {
+      return (await this.soulLoader.getProfileContent(profile.activePersona)) ?? undefined;
+    }
+    return undefined;
+  }
+
+  /**
    * Step 0 / gap #6 — v1's worker-prologue personalization (runBackgroundTask :3291-3350): load the
    * user profile (drives persona + autonomous mode), debounced touch, prompt-derived profile update,
    * autonomous-mode restore (a dmPolicy side-effect), a once-computed embedding (reused by the prompt
@@ -8840,10 +8859,7 @@ export class Orchestrator {
       }
     }
 
-    let personaContent: string | undefined;
-    if (profile?.activePersona && profile.activePersona !== "default" && this.soulLoader) {
-      personaContent = (await this.soulLoader.getProfileContent(profile.activePersona)) ?? undefined;
-    }
+    const personaContent = await this.resolvePersonaContent(profile);
 
     return { profile, personaContent, preComputedEmbedding };
   }

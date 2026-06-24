@@ -261,16 +261,66 @@ describe("handlePersonalityRoutes — POST /api/personality/switch", () => {
     expect((responseJson(res) as { error: string }).error).toContain("not found");
   });
 
-  it("switches profile and returns { success: true, activeProfile }", async () => {
+  it("switches profile, persists per-user persona, and returns { success: true, activeProfile }", async () => {
+    const setActivePersona = vi.fn();
     const ctx = makeCtx({
       soulLoader: makeSoulLoader({ getProfiles: vi.fn(() => ["default", "concise"]) }),
-      readJsonBody: vi.fn().mockResolvedValue({ profile: "concise" }),
+      userProfileStore: { setActivePersona } as unknown as RouteContext["userProfileStore"],
+      readJsonBody: vi.fn().mockResolvedValue({ profile: "concise", chatId: "chat-1" }),
     });
     const res = createMockRes();
     handlePersonalityRoutes("/api/personality/switch", "POST", createMockReq(), res, ctx);
     await vi.waitFor(() => expect(res.end).toHaveBeenCalled());
     expect(res.statusCode).toBe(200);
     expect(responseJson(res)).toMatchObject({ success: true, activeProfile: "concise" });
+    // BUG #2 regression: a valid identity must actually persist the persona.
+    expect(setActivePersona).toHaveBeenCalledWith("chat-1", "concise");
+  });
+
+  it("resolves identity via userId when chatId is absent and persists under it", async () => {
+    const setActivePersona = vi.fn();
+    const ctx = makeCtx({
+      soulLoader: makeSoulLoader({ getProfiles: vi.fn(() => ["default", "concise"]) }),
+      userProfileStore: { setActivePersona } as unknown as RouteContext["userProfileStore"],
+      readJsonBody: vi.fn().mockResolvedValue({ profile: "concise", userId: "user-7" }),
+    });
+    const res = createMockRes();
+    handlePersonalityRoutes("/api/personality/switch", "POST", createMockReq(), res, ctx);
+    await vi.waitFor(() => expect(res.end).toHaveBeenCalled());
+    expect(res.statusCode).toBe(200);
+    expect(setActivePersona).toHaveBeenCalledWith("user-7", "concise");
+  });
+
+  it("returns 400 (not a silent success) when no persistable identity resolves", async () => {
+    const setActivePersona = vi.fn();
+    const ctx = makeCtx({
+      soulLoader: makeSoulLoader({ getProfiles: vi.fn(() => ["default", "concise"]) }),
+      userProfileStore: { setActivePersona } as unknown as RouteContext["userProfileStore"],
+      // No chatId / userId / conversationId → setActivePersona would be a no-op.
+      readJsonBody: vi.fn().mockResolvedValue({ profile: "concise" }),
+    });
+    const res = createMockRes();
+    handlePersonalityRoutes("/api/personality/switch", "POST", createMockReq(), res, ctx);
+    await vi.waitFor(() => expect(res.end).toHaveBeenCalled());
+    expect(res.statusCode).toBe(400);
+    const body = responseJson(res) as { success?: boolean; error: string };
+    expect(body.success).not.toBe(true);
+    expect(body.error).toContain("persistable identity");
+    expect(setActivePersona).not.toHaveBeenCalled();
+  });
+
+  it("returns 400 for an oversized identity value", async () => {
+    const longId = "x".repeat(200);
+    const ctx = makeCtx({
+      soulLoader: makeSoulLoader({ getProfiles: vi.fn(() => ["default", "concise"]) }),
+      userProfileStore: { setActivePersona: vi.fn() } as unknown as RouteContext["userProfileStore"],
+      readJsonBody: vi.fn().mockResolvedValue({ profile: "concise", chatId: longId }),
+    });
+    const res = createMockRes();
+    handlePersonalityRoutes("/api/personality/switch", "POST", createMockReq(), res, ctx);
+    await vi.waitFor(() => expect(res.end).toHaveBeenCalled());
+    expect(res.statusCode).toBe(400);
+    expect((responseJson(res) as { error: string }).error).toContain("too long");
   });
 });
 

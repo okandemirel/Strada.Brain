@@ -495,6 +495,109 @@ describe("Orchestrator", () => {
     expect(visible).not.toContain("memory_search");
   });
 
+  it("threads the user's selected persona into the decomposed final synthesis prompt (and falls back to the global soul for default)", async () => {
+    const personaSynthProvider = createNamedProvider("synth-persona");
+    const defaultSynthProvider = createNamedProvider("synth-default");
+
+    const soulLoader = {
+      // Global default soul — used as the fallback when activePersona === "default".
+      getContent: vi.fn(() => "GLOBAL_DEFAULT_SOUL_MARKER"),
+      // Per-user persona content — read on demand for non-default personas.
+      getProfileContent: vi.fn(async (name: string) =>
+        name === "pirate" ? "PIRATE_PERSONA_MARKER" : null,
+      ),
+      getProfiles: vi.fn(() => ["default", "pirate"]),
+    };
+
+    const goalTree = buildGoalTreeFromBlock(
+      {
+        isGoal: true,
+        estimatedMinutes: 5,
+        nodes: [{ id: "sub-1", task: "Inspect Level_031.asset", dependsOn: [] }],
+      },
+      "goal-session",
+      "Investigate the freeze",
+    );
+    const executionResult = {
+      tree: goalTree,
+      results: [
+        {
+          nodeId: [...goalTree.nodes.keys()][1]!,
+          task: "Inspect Level_031.asset",
+          result: "The asset loads cleanly.",
+        },
+      ],
+      totalDurationMs: 1000,
+      failureCount: 0,
+      aborted: false,
+    } as const;
+
+    // ── Non-default persona: the selected persona content must reach the synth prompt ──
+    const personaDb = new Database(":memory:");
+    const personaProfileStore = new UserProfileStore(personaDb);
+    personaProfileStore.setActivePersona("persona-user", "pirate");
+    const personaOrch = new Orchestrator({
+      providerManager: {
+        getProvider: () => personaSynthProvider,
+        getActiveInfo: () => ({ providerName: "synth-persona", model: "default", isDefault: true }),
+        shutdown: vi.fn(),
+      } as any,
+      tools: [readTool],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: false,
+      userProfileStore: personaProfileStore,
+      soulLoader: soulLoader as any,
+    });
+
+    await personaOrch.synthesizeGoalExecutionResult({
+      prompt: "Investigate the freeze",
+      goalTree,
+      executionResult,
+      chatId: "persona-chat",
+      userId: "persona-user",
+    });
+
+    const personaSystemPrompt = personaSynthProvider.chat.mock.calls[0]?.[0] as string;
+    expect(personaSystemPrompt).toContain("PIRATE_PERSONA_MARKER");
+    expect(personaSystemPrompt).not.toContain("GLOBAL_DEFAULT_SOUL_MARKER");
+    expect(soulLoader.getProfileContent).toHaveBeenCalledWith("pirate");
+    personaDb.close();
+
+    // ── Default persona: behavior unchanged — global default soul is used ──
+    const defaultDb = new Database(":memory:");
+    const defaultProfileStore = new UserProfileStore(defaultDb);
+    defaultProfileStore.upsertProfile("default-user", { displayName: "Bob" }); // activePersona stays "default"
+    const defaultOrch = new Orchestrator({
+      providerManager: {
+        getProvider: () => defaultSynthProvider,
+        getActiveInfo: () => ({ providerName: "synth-default", model: "default", isDefault: true }),
+        shutdown: vi.fn(),
+      } as any,
+      tools: [readTool],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: false,
+      userProfileStore: defaultProfileStore,
+      soulLoader: soulLoader as any,
+    });
+
+    await defaultOrch.synthesizeGoalExecutionResult({
+      prompt: "Investigate the freeze",
+      goalTree,
+      executionResult,
+      chatId: "default-chat",
+      userId: "default-user",
+    });
+
+    const defaultSystemPrompt = defaultSynthProvider.chat.mock.calls[0]?.[0] as string;
+    expect(defaultSystemPrompt).toContain("GLOBAL_DEFAULT_SOUL_MARKER");
+    expect(defaultSystemPrompt).not.toContain("PIRATE_PERSONA_MARKER");
+    defaultDb.close();
+  });
+
   it("does not leak the raw worker draft when supervisor synthesis fails", async () => {
     const synthProvider = createNamedProvider("synth");
     synthProvider.chat = vi.fn().mockRejectedValue(new Error("synthesis unavailable"));
