@@ -68,15 +68,16 @@ export function dispatchWorkspaceMessage(data: { type: string; [key: string]: un
   switch (data.type) {
     case 'monitor:dag_init': {
       const monitor = useMonitorStore.getState()
-      monitor.setActiveRootId(payload.rootId as string)
+      const rootId = payload.rootId as string
+      monitor.setActiveRootId(rootId)
       const dag = (payload.dag ?? { nodes: payload.nodes, edges: payload.edges }) as Bag
-      monitor.setDAG(dag as unknown as DagState)
+      monitor.setDAG(dag as unknown as DagState, rootId)
       const nodes = (dag.nodes ?? []) as Bag[]
       for (const node of nodes) {
         monitor.addTask({
           id: node.id as string,
           nodeId: node.id as string,
-          rootId: payload.rootId as string,
+          rootId,
           title: (node.title ?? node.task ?? node.id) as string,
           status: node.status as string,
           reviewStatus: node.reviewStatus as string,
@@ -303,8 +304,11 @@ export function dispatchWorkspaceMessage(data: { type: string; [key: string]: un
       const monitor = useMonitorStore.getState()
       if (payload.nodes && payload.edges) {
         if (payload.rootId) monitor.setActiveRootId(payload.rootId as string)
-        monitor.setDAG({ nodes: payload.nodes, edges: payload.edges } as unknown as DagState)
-        const existingTasks = monitor.tasks
+        monitor.setDAG(
+          { nodes: payload.nodes, edges: payload.edges } as unknown as DagState,
+          payload.rootId as string | undefined,
+        )
+        const existingTasks = useMonitorStore.getState().tasks
         const nodes = payload.nodes as Bag[]
         for (const node of nodes) {
           const id = node.id as string

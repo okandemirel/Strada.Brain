@@ -283,6 +283,36 @@ describe('dispatchWorkspaceMessage', () => {
     const state = useMonitorStore.getState()
     expect(state.tasks).toEqual({})
   })
+
+  it('scopes two dag_init requests so their tasks do not intermix', () => {
+    // First request
+    dispatchWorkspaceMessage({
+      type: 'monitor:dag_init',
+      rootId: 'req-1',
+      dag: {
+        nodes: [{ id: 'r1-a', title: 'R1 A', status: 'pending', reviewStatus: 'none' }],
+        edges: [],
+      },
+    })
+    // Second request arrives (sequential or concurrent)
+    dispatchWorkspaceMessage({
+      type: 'monitor:dag_init',
+      rootId: 'req-2',
+      dag: {
+        nodes: [{ id: 'r2-a', title: 'R2 A', status: 'pending', reviewStatus: 'none' }],
+        edges: [],
+      },
+    })
+
+    const state = useMonitorStore.getState()
+    // Newest request is active and is the only thing rendered (no pile-up)
+    expect(state.activeRootId).toBe('req-2')
+    expect(Object.keys(state.tasks)).toEqual(['r2-a'])
+    expect(state.dag!.nodes).toHaveLength(1)
+    // The first request survives in its own bucket
+    expect(Object.keys(state.rootsById['req-1'].tasks)).toEqual(['r1-a'])
+    expect(state.rootsById['req-2'].tasks['r2-a'].rootId).toBe('req-2')
+  })
 })
 
 describe('dispatchWorkspaceMessage — workspace:notification', () => {

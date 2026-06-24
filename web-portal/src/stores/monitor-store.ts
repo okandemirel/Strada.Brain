@@ -111,7 +111,21 @@ export const DEFAULT_VERIFICATION_CRITERIA: CriterionState[] = [
   { id: 'security', label: 'No security flags', checkType: 'manual', status: 'pending' },
 ]
 
+/**
+ * A single top-level request's view: its DAG topology + its own task map.
+ * The monitor keeps one RootView per root id so concurrent/sequential requests
+ * never intermix their tasks or clobber each other's DAG.
+ */
+export interface RootView {
+  dag: DagState | null
+  tasks: Record<string, MonitorTask>
+}
+
 interface MonitorState {
+  // Per-root buckets — the source of truth. Keyed by the top-level request rootId.
+  rootsById: Record<string, RootView>
+  // Mirror of the active root's view, so components/selectors and existing
+  // callers can keep reading `tasks`/`dag` directly (single-root = byte-identical).
   tasks: Record<string, MonitorTask>
   dag: DagState | null
   activities: ActivityEntry[]
@@ -121,7 +135,7 @@ interface MonitorState {
 
   addTask: (task: MonitorTask) => void
   updateTask: (id: string, updates: Partial<MonitorTask>) => void
-  setDAG: (dag: DagState) => void
+  setDAG: (dag: DagState, rootId?: string) => void
   addActivity: (entry: ActivityEntry) => void
   setActiveRootId: (id: string | null) => void
   setSelectedTask: (id: string | null) => void
@@ -139,6 +153,12 @@ interface MonitorState {
 
 const MAX_ACTIVITIES = 200
 const MAX_TASKS = 500
+// Cap on retained per-root buckets. Each distinct top-level request mints a
+// fresh rootId, so without a ceiling rootsById would grow unbounded over a
+// long-lived portal session. When the cap is exceeded, the oldest non-active
+// buckets are evicted (insertion order); the active root is always retained
+// so the mirrored tasks/dag never go blank.
+const MAX_ROOTS = 20
 
 const initialVerification: VerificationState = {
   active: false,
@@ -146,7 +166,12 @@ const initialVerification: VerificationState = {
   results: [],
 }
 
+// Single shared bucket key used when no root id is known yet (pre-dag_init
+// races, late nodes, reconnects). Keeps the legacy single-root flow intact.
+const DEFAULT_ROOT_KEY = '__default__'
+
 const initialState = {
+  rootsById: {} as Record<string, RootView>,
   tasks: {} as Record<string, MonitorTask>,
   dag: null as DagState | null,
   activities: [] as ActivityEntry[],
@@ -155,20 +180,96 @@ const initialState = {
   verification: initialVerification,
 }
 
+/** A fresh, empty per-root bucket. */
+function emptyView(): RootView {
+  return { dag: null, tasks: {} }
+}
+
+/** The bucket key for the currently active root (falls back to the default bucket). */
+function activeKey(s: { activeRootId: string | null }): string {
+  return s.activeRootId ?? DEFAULT_ROOT_KEY
+}
+
+/**
+ * Evict the oldest non-active buckets when the root cap is exceeded so a
+ * long-lived session does not accumulate buckets without bound. Object keys
+ * preserve insertion order, so the leading keys are the oldest roots. The
+ * active root (and the default bucket, which absorbs root-less updates) are
+ * never evicted — the mirror reads the active bucket, so it never goes blank.
+ */
+function evictStaleRoots(rootsById: Record<string, RootView>, activeRootId: string | null): Record<string, RootView> {
+  const keys = Object.keys(rootsById)
+  if (keys.length <= MAX_ROOTS) return rootsById
+  const active = activeRootId ?? DEFAULT_ROOT_KEY
+  const pruned = { ...rootsById }
+  for (const key of keys) {
+    if (Object.keys(pruned).length <= MAX_ROOTS) break
+    if (key === active || key === DEFAULT_ROOT_KEY) continue
+    delete pruned[key]
+  }
+  return pruned
+}
+
+/** Persist the updated buckets (capped) and re-derive the active-root mirror. */
+function commit(
+  rootsById: Record<string, RootView>,
+  activeRootId: string | null,
+): { rootsById: Record<string, RootView>; tasks: Record<string, MonitorTask>; dag: DagState | null } {
+  const capped = evictStaleRoots(rootsById, activeRootId)
+  return { rootsById: capped, ...mirrorActive(capped, activeRootId) }
+}
+
+/** Find which bucket key currently owns a task id (active root first, then any). */
+function ownerKey(rootsById: Record<string, RootView>, activeRootId: string | null, id: string): string | null {
+  const active = activeRootId ?? DEFAULT_ROOT_KEY
+  if (rootsById[active]?.tasks[id]) return active
+  for (const key in rootsById) {
+    if (rootsById[key].tasks[id]) return key
+  }
+  return null
+}
+
+/**
+ * Re-derive the mirrored top-level `tasks`/`dag` from the active root's bucket.
+ * Components read these directly, so a single-root session is byte-identical
+ * to the prior flat-map behavior.
+ */
+function mirrorActive(rootsById: Record<string, RootView>, activeRootId: string | null): { tasks: Record<string, MonitorTask>; dag: DagState | null } {
+  const view = rootsById[activeRootId ?? DEFAULT_ROOT_KEY]
+  return { tasks: view?.tasks ?? {}, dag: view?.dag ?? null }
+}
+
 export const useMonitorStore = create<MonitorState>()((set) => ({
   ...initialState,
 
   addTask: (task) =>
-    set((s) => ({ tasks: { ...s.tasks, [task.id]: task } })),
+    set((s) => {
+      // Route the task into its own root bucket so tasks from different
+      // top-level requests never intermix. Fall back to the active root, then
+      // the default bucket when no root id is known.
+      const key = task.rootId ?? activeKey(s)
+      const bucket = s.rootsById[key] ?? emptyView()
+      const rootsById = {
+        ...s.rootsById,
+        [key]: { ...bucket, tasks: { ...bucket.tasks, [task.id]: task } },
+      }
+      return commit(rootsById, s.activeRootId)
+    }),
 
   updateTask: (id, updates) =>
     set((s) => {
-      // Auto-create a placeholder task when an update arrives before dag_init
-      // (e.g. WS reconnect, late-arriving nodes, or race conditions).
-      // DAG sync is intentionally skipped — the DAG is not yet initialized.
-      // When dag_init arrives later, setDAG will populate it.
-      if (!s.tasks[id]) {
-        if ((updates.status || updates.title) && Object.keys(s.tasks).length < MAX_TASKS) {
+      // Resolve which root bucket owns this task. Updates from background roots
+      // land in their own bucket; only the active root's update reaches the mirror.
+      const owner = ownerKey(s.rootsById, s.activeRootId, id)
+
+      if (!owner) {
+        // Auto-create a placeholder task when an update arrives before dag_init
+        // (e.g. WS reconnect, late-arriving nodes, or race conditions). It is
+        // scoped to the active root bucket. DAG sync is intentionally skipped —
+        // the DAG is not yet initialized; when dag_init arrives, setDAG populates it.
+        const key = updates.rootId ?? activeKey(s)
+        const bucket = s.rootsById[key] ?? emptyView()
+        if ((updates.status || updates.title) && Object.keys(bucket.tasks).length < MAX_TASKS) {
           const created: MonitorTask = {
             id,
             nodeId: updates.nodeId ?? id,
@@ -177,35 +278,51 @@ export const useMonitorStore = create<MonitorState>()((set) => ({
             reviewStatus: updates.reviewStatus ?? 'none',
             ...updates,
           }
-          return { tasks: { ...s.tasks, [id]: created } }
+          const rootsById = {
+            ...s.rootsById,
+            [key]: { ...bucket, tasks: { ...bucket.tasks, [id]: created } },
+          }
+          return commit(rootsById, s.activeRootId)
         }
         return s
       }
-      const newTasks = { ...s.tasks, [id]: { ...s.tasks[id], ...updates } }
-      // Sync status into dag.nodes so DAGView re-renders
-      let newDag = s.dag
-      if (s.dag && ('status' in updates || 'reviewStatus' in updates)) {
-        const idx = s.dag.nodes.findIndex((n) => n.id === id)
+
+      const bucket = s.rootsById[owner]
+      const newTasks = { ...bucket.tasks, [id]: { ...bucket.tasks[id], ...updates } }
+      // Sync status into that bucket's dag.nodes so DAGView re-renders
+      let newDag = bucket.dag
+      if (bucket.dag && ('status' in updates || 'reviewStatus' in updates)) {
+        const idx = bucket.dag.nodes.findIndex((n) => n.id === id)
         if (idx >= 0) {
-          const updatedNodes = [...s.dag.nodes]
+          const updatedNodes = [...bucket.dag.nodes]
           const dagUpdates: Record<string, unknown> = {}
           if (updates.status !== undefined) dagUpdates.status = updates.status
           if (updates.reviewStatus !== undefined) dagUpdates.reviewStatus = updates.reviewStatus
           updatedNodes[idx] = { ...updatedNodes[idx], ...dagUpdates }
-          newDag = { ...s.dag, nodes: updatedNodes }
+          newDag = { ...bucket.dag, nodes: updatedNodes }
         }
       }
-      return { tasks: newTasks, dag: newDag }
+      const rootsById = { ...s.rootsById, [owner]: { dag: newDag, tasks: newTasks } }
+      return commit(rootsById, s.activeRootId)
     }),
 
-  setDAG: (dag) => set({ dag }),
+  setDAG: (dag, rootId) =>
+    set((s) => {
+      // dag_init / dag_restructure replace ONE root's topology. Other roots'
+      // buckets are preserved (no cross-request clobber).
+      const key = rootId ?? activeKey(s)
+      const bucket = s.rootsById[key] ?? emptyView()
+      const rootsById = { ...s.rootsById, [key]: { ...bucket, dag } }
+      return commit(rootsById, s.activeRootId)
+    }),
 
   addActivity: (entry) =>
     set((s) => ({
       activities: [...s.activities, entry].slice(-MAX_ACTIVITIES),
     })),
 
-  setActiveRootId: (activeRootId) => set({ activeRootId }),
+  setActiveRootId: (activeRootId) =>
+    set((s) => ({ activeRootId, ...commit(s.rootsById, activeRootId) })),
   setSelectedTask: (selectedTaskId) => set({ selectedTaskId }),
   clearMonitor: () =>
     set({

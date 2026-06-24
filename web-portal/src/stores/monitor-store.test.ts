@@ -189,3 +189,116 @@ describe('useMonitorStore', () => {
     expect(Object.keys(useMonitorStore.getState().tasks)).toHaveLength(1)
   })
 })
+
+describe('useMonitorStore — multi-root scoping', () => {
+  beforeEach(() => {
+    useMonitorStore.getState().clearMonitor()
+  })
+
+  it('does not intermix tasks from two different roots', () => {
+    const s = useMonitorStore.getState()
+    // Root A becomes active, gets its own DAG + tasks
+    s.setActiveRootId('root-a')
+    s.setDAG({ nodes: [{ id: 'a1' }], edges: [] }, 'root-a')
+    s.addTask({ id: 'a1', nodeId: 'a1', rootId: 'root-a', title: 'A1', status: 'executing', reviewStatus: 'none' })
+
+    // Root B arrives (e.g. a second request): becomes active, gets its own bucket
+    s.setActiveRootId('root-b')
+    s.setDAG({ nodes: [{ id: 'b1' }], edges: [] }, 'root-b')
+    s.addTask({ id: 'b1', nodeId: 'b1', rootId: 'root-b', title: 'B1', status: 'pending', reviewStatus: 'none' })
+
+    // The mirror (what KanbanBoard/DAGView render) shows ONLY root B
+    const afterB = useMonitorStore.getState()
+    expect(Object.keys(afterB.tasks)).toEqual(['b1'])
+    expect(afterB.dag!.nodes).toHaveLength(1)
+    expect(afterB.dag!.nodes[0].id).toBe('b1')
+
+    // Switching back to root A restores A's view, untouched by B
+    afterB.setActiveRootId('root-a')
+    const backToA = useMonitorStore.getState()
+    expect(Object.keys(backToA.tasks)).toEqual(['a1'])
+    expect(backToA.tasks['a1'].title).toBe('A1')
+    expect(backToA.dag!.nodes[0].id).toBe('a1')
+  })
+
+  it('does not clobber a prior root DAG when a new root inits', () => {
+    const s = useMonitorStore.getState()
+    s.setActiveRootId('root-a')
+    s.setDAG({ nodes: [{ id: 'a1' }, { id: 'a2' }], edges: [{ source: 'a1', target: 'a2' }] }, 'root-a')
+
+    s.setActiveRootId('root-b')
+    s.setDAG({ nodes: [{ id: 'b1' }], edges: [] }, 'root-b')
+
+    // Root A's two-node DAG survives in its bucket
+    const state = useMonitorStore.getState()
+    expect(state.rootsById['root-a'].dag!.nodes).toHaveLength(2)
+    expect(state.rootsById['root-b'].dag!.nodes).toHaveLength(1)
+  })
+
+  it('routes a task_update to the owning root even when another root is active', () => {
+    const s = useMonitorStore.getState()
+    s.setActiveRootId('root-a')
+    s.addTask({ id: 'a1', nodeId: 'a1', rootId: 'root-a', title: 'A1', status: 'executing', reviewStatus: 'none' })
+    s.setActiveRootId('root-b')
+    s.addTask({ id: 'b1', nodeId: 'b1', rootId: 'root-b', title: 'B1', status: 'executing', reviewStatus: 'none' })
+
+    // Background update for root A's task while root B is active
+    s.updateTask('a1', { status: 'completed' })
+
+    const state = useMonitorStore.getState()
+    // Root A's bucket updated; the active (B) mirror is untouched
+    expect(state.rootsById['root-a'].tasks['a1'].status).toBe('completed')
+    expect(Object.keys(state.tasks)).toEqual(['b1'])
+  })
+
+  it('auto-created placeholder lands in the active root bucket', () => {
+    const s = useMonitorStore.getState()
+    s.setActiveRootId('root-a')
+    s.updateTask('late', { status: 'executing' })
+
+    const state = useMonitorStore.getState()
+    expect(state.rootsById['root-a'].tasks['late']).toBeDefined()
+    expect(state.tasks['late'].status).toBe('executing')
+  })
+
+  it('caps retained root buckets and evicts the oldest non-active roots', () => {
+    const s = useMonitorStore.getState()
+    // Mint 30 distinct roots — far above the cap — each with its own bucket.
+    for (let i = 0; i < 30; i++) {
+      const rootId = `root-${i}`
+      s.setActiveRootId(rootId)
+      s.setDAG({ nodes: [{ id: `n-${i}` }], edges: [] }, rootId)
+      s.addTask({ id: `n-${i}`, nodeId: `n-${i}`, rootId, title: `T${i}`, status: 'pending', reviewStatus: 'none' })
+    }
+
+    const state = useMonitorStore.getState()
+    const roots = Object.keys(state.rootsById)
+    // Bucket count never exceeds the cap…
+    expect(roots.length).toBeLessThanOrEqual(20)
+    // …the oldest roots were evicted…
+    expect(state.rootsById['root-0']).toBeUndefined()
+    // …and the active root always survives so the mirror is never blank.
+    expect(state.activeRootId).toBe('root-29')
+    expect(state.rootsById['root-29']).toBeDefined()
+    expect(Object.keys(state.tasks)).toEqual(['n-29'])
+    expect(state.dag!.nodes[0].id).toBe('n-29')
+  })
+
+  it('never evicts the active root even when it is the oldest bucket', () => {
+    const s = useMonitorStore.getState()
+    // root-keep is created first (oldest) and stays active throughout.
+    s.setActiveRootId('root-keep')
+    s.setDAG({ nodes: [{ id: 'keep' }], edges: [] }, 'root-keep')
+    // Fill background buckets without changing the active root.
+    for (let i = 0; i < 30; i++) {
+      s.setDAG({ nodes: [{ id: `bg-${i}` }], edges: [] }, `bg-root-${i}`)
+    }
+
+    const state = useMonitorStore.getState()
+    expect(Object.keys(state.rootsById).length).toBeLessThanOrEqual(20)
+    // The active root survives despite being the oldest insertion.
+    expect(state.activeRootId).toBe('root-keep')
+    expect(state.rootsById['root-keep']).toBeDefined()
+    expect(state.dag!.nodes[0].id).toBe('keep')
+  })
+})
