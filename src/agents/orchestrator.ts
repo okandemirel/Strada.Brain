@@ -57,6 +57,7 @@ import {
   createInitialState,
   transitionPhase,
   type AgentState,
+  type StepResult,
 } from "./agent-state.js";
 import type { InstinctRetriever } from "./instinct-retriever.js";
 import type { TrajectoryReplayRetriever } from "./trajectory-replay-retriever.js";
@@ -144,6 +145,8 @@ import type {
 import type {
   RuntimeArtifactManager,
   TrajectoryReplayContext,
+  TrajectoryStep,
+  TrajectoryOutcome,
 } from "../learning/index.js";
 import { classifyErrorMessage } from "../utils/error-messages.js";
 import { TaskClassifier } from "../agent-core/routing/task-classifier.js";
@@ -3671,6 +3674,14 @@ export class Orchestrator {
               const insightsText = insightResult.insights.join("\n");
               systemPrompt += `\n\n## Learned Insights\n${insightsText}\n`;
             }
+            // Issue #22 (SIBLING A) — record the run's participating instinct set so the in-run
+            // trajectory-credit trigger (see the finally below) can read it BEFORE the matching
+            // .delete. Gated on the flag so flag-OFF stays byte-identical: today's background path
+            // never touches currentSessionInstinctIds / propagateInstinctIdsToChannel, so we must
+            // not perturb that under the default. Mirrors runAgentLoop :5331-5343 when on.
+            if (this.learningPipeline?.isTrajectoryLevelCreditEnabled()) {
+              this.currentSessionInstinctIds.set(chatId, insightResult.matchedInstinctIds);
+            }
           } catch {
             // Non-fatal
           }
@@ -4797,6 +4808,25 @@ export class Orchestrator {
             toolCallCount: bgToolCallCount,
             hitMaxIterations: false,
           });
+          // ────────────────────────────────────────────────────────────────
+          // Issue #22 (SIBLING A) — IN-RUN trajectory-credit trigger for the worker/background path
+          // (the production default for ALL task submissions). MUST run BEFORE the matching
+          // currentSessionInstinctIds.delete below (the participating set is read inside). Default-OFF
+          // ⇒ no-op ⇒ byte-identical. Success-only: only finalStatus === "completed" (set by finish()
+          // on a clean terminal) credits; a "blocked"/"failed"/undefined terminal passes success=false.
+          // Sole writer under flag-on — the route-level endTask record is suppressed when on.
+          this.recordInRunTrajectoryCredit({
+            chatId,
+            sessionId: chatId,
+            taskDescription: prompt,
+            success: finalStatus === "completed",
+            stepResults: bgAgentState.stepResults,
+          });
+          // Mirror the .set above: clear the per-run participating set (flag-gated so flag-OFF leaves
+          // currentSessionInstinctIds untouched on this path, byte-identical to today).
+          if (this.learningPipeline?.isTrajectoryLevelCreditEnabled()) {
+            this.currentSessionInstinctIds.delete(chatId);
+          }
           // ────────────────────────────────────────────────────────────────
           if (workerCollector) {
             workerCollector.touchedFiles = [...selfVerification.getState().touchedFiles];
@@ -6383,6 +6413,19 @@ export class Orchestrator {
         hitMaxIterations: false,
       });
       // ────────────────────────────────────────────────────────────────
+      // Issue #22 (SIBLING A) — IN-RUN trajectory-credit trigger. MUST run BEFORE the
+      // currentSessionInstinctIds.delete below (the participating set is read inside). Default-OFF
+      // ⇒ no-op ⇒ byte-identical. Success-only: the catch above transitions to FAILED on a genuine
+      // throw, so success=phase===COMPLETE excludes failed runs (v1 has no benign user-cancel here —
+      // timeouts are genuine provider failures → FAILED). Sole writer under flag-on (the route-level
+      // endTask record is suppressed when the flag is on; see endTask's suppressTrajectoryRecord).
+      this.recordInRunTrajectoryCredit({
+        chatId,
+        sessionId: chatId,
+        taskDescription: lastUserMessage,
+        success: agentState.phase === AgentPhase.COMPLETE,
+        stepResults: agentState.stepResults,
+      });
       // Clean up per-session instinct IDs and goal trees to prevent memory leak
       this.currentSessionInstinctIds.delete(chatId);
       this.propagateInstinctIdsToChannel(chatId, []);
@@ -6397,6 +6440,91 @@ export class Orchestrator {
     if (typeof ch.setAppliedInstinctIds === "function") {
       (ch.setAppliedInstinctIds as (chatId: string, ids: string[]) => void)(chatId, instinctIds);
     }
+  }
+
+  /**
+   * Issue #22 (SIBLING A) — the IN-RUN trajectory-credit trigger (the trigger the groundwork in
+   * b794552 reserved for; default-OFF ⇒ this whole method is gated off ⇒ byte-identical to today).
+   *
+   * Fires from BOTH terminal hooks (v1 runAgentLoop finally, v2 persistTerminal) on a SUCCESSFUL
+   * terminal, BEFORE {@link currentSessionInstinctIds}.delete clears the run's participating set.
+   * Hands recordTrajectory the FULL participating set + the run's REAL minted taskRunId + the run's
+   * REAL per-step results; recordTrajectory's existing computeTrajectoryCreditIds takes the DISJOINT
+   * complement (only the per-turn-skipped planning/strategy instincts) and the existing
+   * autoGenerateVerdict reinforces exactly that subset (no double-count).
+   *
+   * WHY this is the CORRECT trigger (and the route-level endTask is NOT — see doubleRecordResolution):
+   *  - steps: the run's REAL StepResult[] (passed in from AgentState.stepResults). The bundle
+   *    TaskPlanner's getTrajectorySteps() is EMPTY here — startTask is never called on the per-run
+   *    bundle planner, so trackToolCall's `if (isTaskActive)` step-push is skipped — so the disjoint
+   *    computation MUST be fed the real step tool names, or every participating instinct would wrongly
+   *    look disjoint. The route-level planner's steps are likewise empty (obs 32423).
+   *  - taskRunId: getTaskExecutionContext()?.taskRunId — the run's real minted T2 (same source
+   *    persistExecutionMemory/metrics use), NOT the route-level T1 minted before the run.
+   *  - appliedInstinctIds: the run's POPULATED participating set (currentSessionInstinctIds.get) —
+   *    the route-level path fires at buffer time before the run and cannot supply it.
+   *
+   * Success-only: a benign-cancel / FAILED terminal passes success=false so autoGenerateVerdict
+   * (recordTrajectory: `outcome.success && !hadErrors`) never reinforces a non-successful run.
+   */
+  private recordInRunTrajectoryCredit(params: {
+    chatId: string;
+    sessionId: string;
+    taskDescription: string;
+    success: boolean;
+    finalOutput?: string;
+    stepResults: readonly StepResult[];
+  }): void {
+    const pipeline = this.learningPipeline;
+    // Gated off by default ⇒ zero extra work ⇒ byte-identical. Also short-circuit non-success: the
+    // disjoint credit is reserved for clean successful runs (mirrors recordTrajectory's verdict gate).
+    if (!pipeline?.isTrajectoryLevelCreditEnabled() || !params.success) {
+      return;
+    }
+    // The run's participating instinct set — read here, BEFORE the caller's
+    // currentSessionInstinctIds.delete. Empty ⇒ nothing to credit ⇒ skip (no empty trajectory row).
+    const appliedInstinctIds = this.currentSessionInstinctIds.get(params.chatId) ?? [];
+    if (appliedInstinctIds.length === 0) {
+      return;
+    }
+    // Map the run's REAL per-step results to the minimal TrajectoryStep shape the disjoint
+    // computation needs (it reads step.toolName; success/error result kept faithful for the row).
+    // NOTE: input:{}, durationMs:0 here (and the outcome's durationMs:0/completionRate:1 below) are
+    // persisted-row padding to satisfy the Trajectory shape — NOT load-bearing for credit, which
+    // reads only step.toolName + outcome.success/hadErrors.
+    const steps: TrajectoryStep[] = params.stepResults.map((sr, i) => ({
+      stepNumber: i + 1,
+      toolName: sr.toolName as TrajectoryStep["toolName"],
+      input: {} as TrajectoryStep["input"],
+      result: sr.success
+        ? { kind: "success", output: sr.summary }
+        : { kind: "error", error: { category: "unknown", message: sr.summary } },
+      timestamp: sr.timestamp as TrajectoryStep["timestamp"],
+      durationMs: 0 as TrajectoryStep["durationMs"],
+    }));
+    // Derive the error tally once from the source results (the discriminant the mapped step.result
+    // carries is set from sr.success above, so reading the source avoids a double traversal).
+    const errorCount = params.stepResults.filter((sr) => !sr.success).length;
+    const outcome: TrajectoryOutcome = {
+      success: params.success,
+      finalOutput: params.finalOutput,
+      totalSteps: steps.length,
+      hadErrors: errorCount > 0,
+      errorCount,
+      durationMs: 0 as TrajectoryOutcome["durationMs"],
+      completionRate: 1 as TrajectoryOutcome["completionRate"],
+    };
+    pipeline.recordTrajectory({
+      sessionId: params.sessionId,
+      chatId: params.chatId,
+      // The run's OWN minted taskRunId (T2), not the route-level T1.
+      taskRunId: this.getTaskExecutionContext()?.taskRunId,
+      taskDescription: params.taskDescription,
+      steps,
+      outcome,
+      // The FULL participating set; recordTrajectory credits only the disjoint complement.
+      appliedInstinctIds: [...appliedInstinctIds],
+    });
   }
 
   /** Record a metric end event (idempotent — endTask is a no-op for already-completed or unknown IDs) */
@@ -8591,6 +8719,19 @@ export class Orchestrator {
           self.sessionManager.getVisibleTranscript(c.session),
           true,
         );
+        // Issue #22 (SIBLING A) — IN-RUN trajectory-credit trigger. MUST run BEFORE the
+        // currentSessionInstinctIds.delete below (the participating set is read inside). Default-OFF
+        // ⇒ no-op ⇒ byte-identical. Success-only: a benign cancel (`cancelled`) or a non-COMPLETE
+        // terminal passes success=false ⇒ no reinforcement. (#22's sole writer under flag-on — the
+        // route-level endTask record is suppressed when the flag is on; see endTask's
+        // suppressTrajectoryRecord.)
+        self.recordInRunTrajectoryCredit({
+          chatId: c.chatId,
+          sessionId: c.chatId,
+          taskDescription: state.taskDescription,
+          success: !cancelled && state.phase === AgentPhase.COMPLETE,
+          stepResults: state.stepResults,
+        });
         // GAP1 teardown — symmetric to v1's runAgentLoop finally (:6232-6234): clear the per-session
         // instinct IDs so a later, unrelated emitToolResult on this chatId cannot mis-attribute to a
         // prior run's instincts, and prevent the Map growing unbounded. Runs from the spine's finally

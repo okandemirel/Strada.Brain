@@ -165,6 +165,15 @@ export class TaskPlanner {
    *   real set — see the reverted route-level wiring. Reserved for a future in-run trigger that
    *   has the populated set in scope. Omitted/undefined (the default, and always when the flag is
    *   off) ⇒ today's behavior.
+   *
+   * @param params.suppressTrajectoryRecord Issue #22 (SIBLING A) — double-record coordination. The
+   *   IN-RUN trigger (orchestrator.recordInRunTrajectoryCredit) is now the SOLE recordTrajectory
+   *   writer when trajectory-level credit is ON (it has the run's real steps + taskRunId + populated
+   *   instinct set). The route-level callers pass this = isTrajectoryLevelCreditEnabled() so that,
+   *   flag-ON, this endTask SKIPS its recordTrajectory emission (no duplicate, low-value, empty-step
+   *   route-level row) while preserving every OTHER side effect (isTaskActive teardown; the separate
+   *   attachReplayContext call is unaffected). Flag-OFF / undefined ⇒ records exactly as today
+   *   (byte-identical) ⇒ the route-level path remains the sole writer.
    */
   endTask(params: {
     success: boolean;
@@ -172,6 +181,7 @@ export class TaskPlanner {
     hadErrors: boolean;
     errorCount: number;
     appliedInstinctIds?: readonly string[];
+    suppressTrajectoryRecord?: boolean;
   }): void {
     if (!this.isTaskActive) return;
 
@@ -189,8 +199,10 @@ export class TaskPlanner {
       replayContext: this.trajectoryReplayContext,
     };
 
-    // Record trajectory for learning
-    if (this.learningPipeline) {
+    // Record trajectory for learning. Issue #22 (SIBLING A): when suppressTrajectoryRecord is set
+    // (route-level caller, trajectory-level credit ON), skip ONLY this emission — the in-run trigger
+    // is the sole writer then. isTaskActive is still cleared below, so the planner state is identical.
+    if (this.learningPipeline && !params.suppressTrajectoryRecord) {
       this.learningPipeline.recordTrajectory({
         sessionId: this.sessionId,
         chatId: this.chatId,

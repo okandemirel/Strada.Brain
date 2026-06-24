@@ -1559,6 +1559,11 @@ async function bootstrapImpl(
                 finalOutput: routeError instanceof Error ? routeError.message : undefined,
                 hadErrors: routeError !== undefined,
                 errorCount: routeError === undefined ? 0 : 1,
+                // Issue #22 (SIBLING A): when trajectory-level credit is ON, the in-run trigger is the
+                // sole recordTrajectory writer; suppress this early, empty-step route-level emission to
+                // avoid a duplicate. Flag-OFF (default) ⇒ false ⇒ records exactly as today.
+                suppressTrajectoryRecord:
+                  learningResult.pipeline?.isTrajectoryLevelCreditEnabled() ?? false,
               });
             }
           }

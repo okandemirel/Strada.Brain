@@ -9,8 +9,9 @@ import { ShowPlanTool } from "./tools/show-plan.js";
 import { AskUserTool } from "./tools/ask-user.js";
 import { DMPolicy } from "../security/dm-policy.js";
 import { LearningStorage } from "../learning/storage/learning-storage.js";
+import { LearningPipeline } from "../learning/pipeline/learning-pipeline.js";
 import { RuntimeArtifactManager } from "../learning/runtime-artifact-manager.js";
-import type { Trajectory } from "../learning/types.js";
+import type { Trajectory, Instinct } from "../learning/types.js";
 import { UserProfileStore } from "../memory/unified/user-profile-store.js";
 import { TaskExecutionStore } from "../memory/unified/task-execution-store.js";
 import { buildGoalTreeFromBlock } from "../goals/types.js";
@@ -8857,5 +8858,330 @@ describe("createStreamingProgressTimeout — silent-thinking ceiling", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Issue #22 (SIBLING A) — IN-RUN trajectory-credit trigger (production ordering).
+//
+// The prior attempt at this wiring was DEAD-ON-ARRIVAL in production (review obs 33099):
+// the route-level endTask fired at BUFFER time (before the run) and held a DIFFERENT taskRunId
+// than the run (T1 vs T2), so the credit was a permanent no-op. Isolation tests masked it.
+// These tests pin the CORRECT trigger: the in-run hook (recordInRunTrajectoryCredit) reads the
+// LIVE currentSessionInstinctIds (populated by setupAgentCoreRun) under the RUN'S taskRunId
+// (getTaskExecutionContext → T2), with the run's REAL step results — exercising that exact
+// production ordering, NOT a hand-supplied appliedInstinctIds.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("Orchestrator — #22 in-run trajectory-credit trigger (production ordering)", () => {
+  let creditDir: string;
+  let storage: LearningStorage;
+
+  function makeInstinct(id: string, contextConditions: Instinct["contextConditions"]): Instinct {
+    return {
+      id: id as unknown as Instinct["id"],
+      name: id,
+      type: "tool_usage",
+      status: "active",
+      confidence: 0.5 as unknown as Instinct["confidence"],
+      triggerPattern: "trigger pattern long enough to be meaningful",
+      action: "do the thing",
+      contextConditions,
+      stats: {
+        timesSuggested: 0,
+        timesApplied: 0,
+        timesFailed: 0,
+        successRate: 0 as unknown as Instinct["stats"]["successRate"],
+        averageExecutionMs: 0,
+      },
+      createdAt: Date.now() as TimestampMs,
+      updatedAt: Date.now() as TimestampMs,
+      sourceTrajectoryIds: [],
+      tags: [],
+    };
+  }
+  const ctxCond = (type: string, value: string): Instinct["contextConditions"][number] =>
+    ({ id: `ctx_${Math.random()}` as any, type: type as any, value, match: "include" });
+
+  // The run used file_edit; a tool_name=file_edit instinct is per-turn-credited (NOT disjoint),
+  // a language=csharp planning instinct is structurally skipped per-turn (DISJOINT → credited).
+  const realStepResults = [
+    { toolName: "file_edit", success: true, summary: "edited", timestamp: Date.now() },
+  ] as const;
+
+  function makePipeline(flagOn: boolean): LearningPipeline {
+    return new LearningPipeline(storage, {
+      enabled: true,
+      minConfidenceForCreation: 0.5,
+      batchSize: 5,
+      trajectoryLevelCredit: flagOn,
+    });
+  }
+
+  function makeOrch(
+    pipeline: LearningPipeline,
+    extra?: {
+      provider?: ReturnType<typeof createMockProvider>;
+      instinctRetriever?: unknown;
+      tools?: unknown[];
+    },
+  ): Orchestrator {
+    const provider = extra?.provider ?? createMockProvider();
+    return new Orchestrator({
+      providerManager: {
+        getProvider: () => provider,
+        getProviderByName: () => provider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        listAvailable: () => [{ name: "mock", label: "mock", defaultModel: "default" }],
+        shutdown: vi.fn(),
+      } as any,
+      tools: (extra?.tools as any) ?? [],
+      channel: createMockChannel(),
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: false,
+      learningPipeline: pipeline,
+      ...(extra?.instinctRetriever ? { instinctRetriever: extra.instinctRetriever as any } : {}),
+    });
+  }
+
+  /** Reach the private in-run recorder + the private instinct map, faithful to the hook body. */
+  function harness(orch: Orchestrator) {
+    return orch as unknown as {
+      currentSessionInstinctIds: Map<string, string[]>;
+      recordInRunTrajectoryCredit(params: {
+        chatId: string;
+        sessionId: string;
+        taskDescription: string;
+        success: boolean;
+        finalOutput?: string;
+        stepResults: readonly { toolName: string; success: boolean; summary: string; timestamp: number }[];
+      }): void;
+      withTaskExecutionContext<T>(ctx: { chatId?: string; taskRunId?: string }, run: () => Promise<T>): Promise<T>;
+    };
+  }
+
+  beforeEach(() => {
+    creditDir = mkdtempSync(join(tmpdir(), "orch-credit-test-"));
+    storage = new LearningStorage(join(creditDir, "learning.db"));
+    storage.initialize();
+  });
+
+  afterEach(() => {
+    storage.close();
+    rmSync(creditDir, { recursive: true, force: true });
+    vi.clearAllMocks();
+  });
+
+  it("flag-ON: credits the DISJOINT set ONCE, in-run, under the RUN'S taskRunId, with a POPULATED set (the masked-bug regression)", async () => {
+    const planning = makeInstinct("instinct_planning", [ctxCond("language", "csharp")]);
+    const toolMatched = makeInstinct("instinct_toolmatched", [ctxCond("tool_name", "file_edit")]);
+    storage.createInstinct(planning);
+    storage.createInstinct(toolMatched);
+
+    const orch = makeOrch(makePipeline(true));
+    const h = harness(orch);
+    const chatId = "chat-credit-on";
+
+    // setupAgentCoreRun populates the participating set for THIS run.
+    h.currentSessionInstinctIds.set(chatId, [planning.id, toolMatched.id]);
+
+    // Fire the in-run recorder UNDER the run's own minted taskRunId (T2), exactly as the terminal
+    // hook does (it runs inside withTaskExecutionContext, BEFORE the set is cleared).
+    const runTaskRunId = "taskrun_T2_real_run";
+    await h.withTaskExecutionContext({ chatId, taskRunId: runTaskRunId }, async () => {
+      h.recordInRunTrajectoryCredit({
+        chatId,
+        sessionId: chatId,
+        taskDescription: "edit the csharp file",
+        success: true,
+        stepResults: realStepResults as any,
+      });
+    });
+    storage.flush();
+
+    // EXACTLY ONE trajectory row, under the RUN'S T2 (not a route-level id), crediting ONLY the disjoint set.
+    const all = storage.getTrajectories({ limit: 10 });
+    expect(all.length).toBe(1);
+    expect(all[0]!.taskRunId).toBe(runTaskRunId);
+    // The masked-bug regression assertion: credit is NON-EMPTY for a run that applied instincts.
+    expect(all[0]!.appliedInstinctIds).toEqual([planning.id]);
+
+    // Disjoint planning instinct WAS reinforced; the per-turn-credited tool instinct was NOT touched.
+    const planningAfter = storage.getInstinct(planning.id)!;
+    expect(planningAfter.stats.timesApplied).toBe(1);
+    expect(planningAfter.confidence).not.toBe(planning.confidence);
+    const toolAfter = storage.getInstinct(toolMatched.id)!;
+    expect(toolAfter.stats.timesApplied).toBe(0);
+    expect(toolAfter.confidence).toBe(toolMatched.confidence);
+  });
+
+  it("ORDER is load-bearing: clearing the set BEFORE the recorder (the prior bug) yields ZERO credit", async () => {
+    const planning = makeInstinct("instinct_planning_order", [ctxCond("language", "csharp")]);
+    storage.createInstinct(planning);
+    const orch = makeOrch(makePipeline(true));
+    const h = harness(orch);
+    const chatId = "chat-order";
+
+    h.currentSessionInstinctIds.set(chatId, [planning.id]);
+    await h.withTaskExecutionContext({ chatId, taskRunId: "taskrun_order" }, async () => {
+      // Simulate the WRONG order (delete before record) — the exact early-fire defect class.
+      h.currentSessionInstinctIds.delete(chatId);
+      h.recordInRunTrajectoryCredit({
+        chatId,
+        sessionId: chatId,
+        taskDescription: "edit",
+        success: true,
+        stepResults: realStepResults as any,
+      });
+    });
+    storage.flush();
+
+    // Empty participating set ⇒ no trajectory row at all, no credit. (Proves the populated set, read
+    // BEFORE the clear, is what makes the credit non-empty in the correct ordering above.)
+    expect(storage.getTrajectories({ limit: 10 }).length).toBe(0);
+    const after = storage.getInstinct(planning.id)!;
+    expect(after.stats.timesApplied).toBe(0);
+    expect(after.confidence).toBe(planning.confidence);
+  });
+
+  it("flag-OFF is byte-identical: the in-run recorder is a NO-OP (no trajectory, no credit)", async () => {
+    const planning = makeInstinct("instinct_planning_off", [ctxCond("language", "csharp")]);
+    storage.createInstinct(planning);
+    const orch = makeOrch(makePipeline(false));
+    const h = harness(orch);
+    const chatId = "chat-credit-off";
+
+    h.currentSessionInstinctIds.set(chatId, [planning.id]);
+    await h.withTaskExecutionContext({ chatId, taskRunId: "taskrun_off" }, async () => {
+      h.recordInRunTrajectoryCredit({
+        chatId,
+        sessionId: chatId,
+        taskDescription: "edit",
+        success: true,
+        stepResults: realStepResults as any,
+      });
+    });
+    storage.flush();
+
+    expect(storage.getTrajectories({ limit: 10 }).length).toBe(0);
+    const after = storage.getInstinct(planning.id)!;
+    expect(after.stats.timesApplied).toBe(0);
+    expect(after.confidence).toBe(planning.confidence);
+  });
+
+  it("success-only: a FAILED terminal credits nothing even with a populated disjoint set", async () => {
+    const planning = makeInstinct("instinct_planning_fail", [ctxCond("language", "csharp")]);
+    storage.createInstinct(planning);
+    const orch = makeOrch(makePipeline(true));
+    const h = harness(orch);
+    const chatId = "chat-fail";
+
+    h.currentSessionInstinctIds.set(chatId, [planning.id]);
+    await h.withTaskExecutionContext({ chatId, taskRunId: "taskrun_fail" }, async () => {
+      h.recordInRunTrajectoryCredit({
+        chatId,
+        sessionId: chatId,
+        taskDescription: "edit",
+        success: false, // benign-cancel / FAILED terminal
+        stepResults: realStepResults as any,
+      });
+    });
+    storage.flush();
+
+    expect(storage.getTrajectories({ limit: 10 }).length).toBe(0);
+    const after = storage.getInstinct(planning.id)!;
+    expect(after.stats.timesApplied).toBe(0);
+    expect(after.confidence).toBe(planning.confidence);
+  });
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // The PRODUCTION-INGRESS regression (review obs 33099/this finding): drives the REAL
+  // worker/background loop (runBackgroundTask — the production default for ALL task submissions),
+  // NOT a hand-seeded set. Proves runBackgroundTask now (a) populates currentSessionInstinctIds
+  // from the retriever's matchedInstinctIds and (b) fires the in-run credit hook in its finally,
+  // so the feature is LIVE on the path that matters — not just the interactive route.
+  // ───────────────────────────────────────────────────────────────────────────
+  it("flag-ON drives the REAL runBackgroundTask ingress: populates the set + fires credit once", async () => {
+    const planning = makeInstinct("instinct_bg_planning", [ctxCond("language", "csharp")]);
+    const toolMatched = makeInstinct("instinct_bg_tool", [ctxCond("tool_name", "file_edit")]);
+    storage.createInstinct(planning);
+    storage.createInstinct(toolMatched);
+
+    // A retriever whose matchedInstinctIds are exactly the run's participating set.
+    const retriever = {
+      getInsightsForTask: vi.fn().mockResolvedValue({
+        insights: ["use file_edit on csharp"],
+        matchedInstinctIds: [planning.id, toolMatched.id],
+      }),
+    };
+
+    // A provider that immediately ends the turn cleanly (COMPLETE terminal → finalStatus "completed").
+    const provider = createMockProvider();
+    provider.chat.mockResolvedValue({
+      text: "Done.",
+      toolCalls: [],
+      stopReason: "end_turn",
+      usage: { inputTokens: 5, outputTokens: 5 },
+    });
+
+    const orch = makeOrch(makePipeline(true), { provider, instinctRetriever: retriever });
+
+    await orch.runBackgroundTask("edit the csharp file", {
+      signal: AbortSignal.timeout(10_000),
+      onProgress: vi.fn(),
+      chatId: "bg-credit-ingress",
+      channelType: "cli",
+    });
+    storage.flush();
+
+    expect(retriever.getInsightsForTask).toHaveBeenCalled();
+    // The KEY production-ingress assertion: runBackgroundTask now records EXACTLY ONE trajectory row
+    // with a POPULATED participating set (read from the live currentSessionInstinctIds it now sets) —
+    // proving the feature is LIVE on the worker/background default path, not just the interactive route.
+    // (This is a zero-tool run, so the disjoint complement is the FULL set per LOW#3 — the exact
+    // tool-step split is pinned by the direct-call test above; here we pin that production FIRES.)
+    const all = storage.getTrajectories({ limit: 10 });
+    expect(all.length).toBe(1);
+    expect(all[0]!.appliedInstinctIds).toEqual([planning.id, toolMatched.id]);
+    // The set is cleared after the run (the .delete mirrors the .set; no leak across runs).
+    expect(harness(orch).currentSessionInstinctIds.has("bg-credit-ingress")).toBe(false);
+
+    // Both context-conditioned instincts were reinforced (zero-tool run ⇒ both disjoint).
+    expect(storage.getInstinct(planning.id)!.stats.timesApplied).toBe(1);
+    expect(storage.getInstinct(toolMatched.id)!.stats.timesApplied).toBe(1);
+  });
+
+  it("flag-OFF drives the REAL runBackgroundTask ingress: NO set, NO trajectory (byte-identical)", async () => {
+    const planning = makeInstinct("instinct_bg_off", [ctxCond("language", "csharp")]);
+    storage.createInstinct(planning);
+    const retriever = {
+      getInsightsForTask: vi.fn().mockResolvedValue({
+        insights: ["use file_edit on csharp"],
+        matchedInstinctIds: [planning.id],
+      }),
+    };
+    const provider = createMockProvider();
+    provider.chat.mockResolvedValue({
+      text: "Done.",
+      toolCalls: [],
+      stopReason: "end_turn",
+      usage: { inputTokens: 5, outputTokens: 5 },
+    });
+
+    const orch = makeOrch(makePipeline(false), { provider, instinctRetriever: retriever });
+
+    await orch.runBackgroundTask("edit the csharp file", {
+      signal: AbortSignal.timeout(10_000),
+      onProgress: vi.fn(),
+      chatId: "bg-credit-off",
+      channelType: "cli",
+    });
+    storage.flush();
+
+    // Flag-OFF: the background path never touches currentSessionInstinctIds and records nothing.
+    expect(storage.getTrajectories({ limit: 10 }).length).toBe(0);
+    expect(harness(orch).currentSessionInstinctIds.has("bg-credit-off")).toBe(false);
+    const after = storage.getInstinct(planning.id)!;
+    expect(after.stats.timesApplied).toBe(0);
   });
 });
