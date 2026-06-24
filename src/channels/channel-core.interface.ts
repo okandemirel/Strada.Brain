@@ -146,3 +146,26 @@ export function supportsMessageEditing(channel: unknown): channel is IChannelMes
     isObject(channel) && typeof channel.editMessage === "function"
   );
 }
+
+/**
+ * Send a system notice (queue/burst notice, progress summary, error/resilience
+ * message) so the client can render it as a distinct system pill rather than as
+ * an assistant answer.
+ *
+ * Notices that go out via {@link IChannelSender.sendText} are visually
+ * indistinguishable from a real answer in the portal. Routing them through
+ * {@link IChannelSender.sendSystemMessage} (when the channel implements it)
+ * surfaces them as the dedicated system message instead. Channels without that
+ * optional capability degrade gracefully to plain text, matching the existing
+ * fallback used by the auto-updater notifier.
+ */
+export function sendChannelNotice(
+  channel: IChannelSender,
+  chatId: string,
+  text: string,
+): Promise<void> {
+  if (typeof channel.sendSystemMessage === "function") {
+    return channel.sendSystemMessage(chatId, text);
+  }
+  return channel.sendText(chatId, text);
+}

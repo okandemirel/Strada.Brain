@@ -10,7 +10,7 @@
  */
 
 import type { IncomingMessage } from "../channels/channel-messages.interface.js";
-import type { IChannelSender } from "../channels/channel-core.interface.js";
+import { sendChannelNotice, type IChannelSender } from "../channels/channel-core.interface.js";
 import type { TaskManager } from "./task-manager.js";
 import { getTaskConversationKey } from "./types.js";
 import { CommandHandler } from "./command-handler.js";
@@ -296,7 +296,9 @@ export class MessageRouter {
     }
 
     try {
-      await this.channel.sendText(batch.chatId, notice);
+      // Queue/burst notices are status, not an answer — surface them as a
+      // distinct system pill (falls back to plain text on channels without it).
+      await sendChannelNotice(this.channel, batch.chatId, notice);
     } catch (error) {
       getLogger().warn("Failed to send queue/burst notice", {
         chatId: batch.chatId,

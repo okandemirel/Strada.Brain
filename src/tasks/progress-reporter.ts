@@ -7,7 +7,7 @@
  */
 
 import type { IChannelAdapter, IChannelRichMessaging } from "../channels/channel.interface.js";
-import { supportsRichMessaging, supportsStreaming } from "../channels/channel-core.interface.js";
+import { sendChannelNotice, supportsRichMessaging, supportsStreaming } from "../channels/channel-core.interface.js";
 import { DEFAULT_INTERACTION_CONFIG, type InteractionConfig } from "../config/config.js";
 import type { TaskManager } from "./task-manager.js";
 import type { Task, TaskId, TaskProgressUpdate } from "./types.js";
@@ -165,7 +165,9 @@ export class ProgressReporter {
 
   private reportFailed(task: Task, error: string): void {
     this.clearHeartbeat(task.id, true);
-    this.sendToChannel(task.chatId, classifyTaskErrorMessage(error));
+    // A failure message is a notice, not an answer — render it as a system pill
+    // (falls back to plain text on channels without sendSystemMessage).
+    this.sendNoticeToChannel(task.chatId, classifyTaskErrorMessage(error));
     getLogger().error("Task failed", { taskId: task.id, error });
   }
 
@@ -328,7 +330,8 @@ export class ProgressReporter {
       return;
     }
 
-    await this.channel.sendText(task.chatId, summary).catch((err) => {
+    // Non-streaming progress summary: a transient status notice, not the answer.
+    await sendChannelNotice(this.channel, task.chatId, summary).catch((err) => {
       getLogger().debug("Failed to send progress status update", {
         chatId: task.chatId,
         error: err instanceof Error ? err.message : String(err),
@@ -342,7 +345,7 @@ export class ProgressReporter {
     summary: string,
   ): Promise<void> {
     if (!supportsStreaming(this.channel)) {
-      await this.channel.sendText(chatId, summary);
+      await sendChannelNotice(this.channel, chatId, summary);
       return;
     }
 
@@ -352,7 +355,7 @@ export class ProgressReporter {
         state.streamId = await channel.startStreamingMessage(chatId);
       }
       if (!state.streamId) {
-        await channel.sendText(chatId, summary);
+        await sendChannelNotice(channel, chatId, summary);
         return;
       }
       await channel.updateStreamingMessage(chatId, state.streamId, summary);
@@ -361,13 +364,28 @@ export class ProgressReporter {
         chatId,
         error: err instanceof Error ? err.message : String(err),
       });
-      await this.channel.sendText(chatId, summary).catch(() => {});
+      await sendChannelNotice(this.channel, chatId, summary).catch(() => {});
     }
   }
 
+  /** Deliver a task-completion/blocked result (the real answer) as markdown. */
   private sendToChannel(chatId: string, message: string): void {
     this.channel.sendMarkdown(chatId, message).catch((err) => {
       getLogger().error("Failed to send progress update", {
+        chatId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
+  }
+
+  /**
+   * Deliver a status/error notice (not an answer) as a system message, falling
+   * back to plain text on channels without sendSystemMessage. Mirrors
+   * {@link sendToChannel}'s fire-and-forget + error-logging shape.
+   */
+  private sendNoticeToChannel(chatId: string, message: string): void {
+    sendChannelNotice(this.channel, chatId, message).catch((err) => {
+      getLogger().error("Failed to send progress notice", {
         chatId,
         error: err instanceof Error ? err.message : String(err),
       });

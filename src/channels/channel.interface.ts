@@ -76,4 +76,5 @@ export {
   supportsRichMessaging,
   supportsInteractivity,
   supportsMessageEditing,
+  sendChannelNotice,
 } from "./channel-core.interface.js";
