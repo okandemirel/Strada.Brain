@@ -208,6 +208,8 @@
 
   "ui.copy": "复制",
   "ui.copied": "已复制！",
+  "ui.run": "运行",
+  "ui.runSent": "已发送！",
   "ui.cancel": "取消",
   "ui.submit": "提交",
   "ui.file": "文件",

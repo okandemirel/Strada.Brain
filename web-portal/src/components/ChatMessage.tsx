@@ -6,13 +6,34 @@ import type { Attachment, ChatMessage as ChatMessageType } from '../types/messag
 import VoiceOutput from './VoiceOutput'
 import { cn } from '@/lib/utils'
 import { REMARK_PLUGINS, REHYPE_PLUGINS } from '@/lib/markdown'
-import { CopyButton } from './ui/copy-button'
+import { CopyButton, RunButton } from './ui/copy-button'
 import { formatTimeAgo } from '../utils/format'
 
 interface ChatMessageProps {
   message: ChatMessageType
   onFeedback?: (messageId: string, type: 'thumbs_up' | 'thumbs_down') => void
+  /**
+   * When provided, a "Run" affordance is shown on single-line shell code-blocks
+   * in assistant messages. Clicking it sends `/run <command>` through the normal
+   * send path (which triggers the backend's unconditional confirmation).
+   */
+  onRun?: (command: string) => void
   voiceOutputEnabled?: boolean
+}
+
+// Fenced-code languages we treat as runnable shell commands.
+const SHELL_LANGUAGES = new Set([
+  'bash',
+  'sh',
+  'shell',
+  'zsh',
+  'console',
+  'shell-session',
+  'sh-session',
+])
+
+function isShellLanguage(language: string | null): boolean {
+  return language != null && SHELL_LANGUAGES.has(language.toLowerCase())
 }
 
 function formatRelativeTime(timestamp: number): string {
@@ -71,7 +92,7 @@ function hasTextContent(text: string): boolean {
   return stripped.length > 0
 }
 
-function makeComponents(isUser: boolean): Components {
+function makeComponents(isUser: boolean, onRun?: (command: string) => void): Components {
   return {
     pre({ children, ...props }) {
       const codeEl = children as React.ReactElement | null
@@ -98,16 +119,33 @@ function makeComponents(isUser: boolean): Components {
         }
       })()
 
+      // Show a "Run" affordance only on single-line shell commands in assistant
+      // messages. Multi-line blocks are intentionally excluded: the backend's
+      // /run handler joins args with single spaces (collapsing newlines), so a
+      // multi-line script would be silently flattened into a dangerous one-liner.
+      const runnableCommand = rawText.trim()
+      const isSingleLine = runnableCommand.length > 0 && !runnableCommand.includes('\n')
+      const showRun = !isUser && !!onRun && isShellLanguage(language) && isSingleLine
+
       return (
         <div className="relative group/code">
           {language && (
             <div className="flex items-center justify-between px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-text-tertiary bg-white/[0.04] border-b border-white/5 rounded-t-lg">
               {language}
               {!isUser && rawText && (
-                <CopyButton
-                  text={rawText}
-                  className="opacity-0 group-hover/code:opacity-100 transition-opacity"
-                />
+                <div className="flex items-center gap-1.5">
+                  {showRun && (
+                    <RunButton
+                      command={runnableCommand}
+                      onRun={onRun}
+                      className="opacity-0 group-hover/code:opacity-100 transition-opacity"
+                    />
+                  )}
+                  <CopyButton
+                    text={rawText}
+                    className="opacity-0 group-hover/code:opacity-100 transition-opacity"
+                  />
+                </div>
               )}
             </div>
           )}
@@ -125,7 +163,6 @@ function makeComponents(isUser: boolean): Components {
 }
 
 const USER_COMPONENTS = makeComponents(true)
-const AI_COMPONENTS = makeComponents(false)
 
 const FeedbackToolbar = memo(function FeedbackToolbar({
   messageId,
@@ -169,9 +206,14 @@ const FeedbackToolbar = memo(function FeedbackToolbar({
   )
 })
 
-function ChatMessageComponent({ message, onFeedback, voiceOutputEnabled = true }: ChatMessageProps) {
+function ChatMessageComponent({ message, onFeedback, onRun, voiceOutputEnabled = true }: ChatMessageProps) {
   const { t } = useTranslation()
   const isUser = message.sender === 'user'
+
+  // AI components carry a per-message `onRun`, so they can't be a module-level
+  // constant like USER_COMPONENTS. Memoize on `onRun` to keep referential
+  // stability across re-renders (markdown re-parses only when this changes).
+  const aiComponents = useMemo(() => makeComponents(false, onRun), [onRun])
 
   if (message.sender === 'system') {
     return (
@@ -207,7 +249,7 @@ function ChatMessageComponent({ message, onFeedback, voiceOutputEnabled = true }
         <ReactMarkdown
           remarkPlugins={REMARK_PLUGINS}
           rehypePlugins={REHYPE_PLUGINS}
-          components={isUser ? USER_COMPONENTS : AI_COMPONENTS}
+          components={isUser ? USER_COMPONENTS : aiComponents}
         >
           {message.text}
         </ReactMarkdown>

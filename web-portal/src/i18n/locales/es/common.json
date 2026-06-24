@@ -181,6 +181,8 @@
   "shortcuts.showShortcuts": "Mostrar atajos de teclado",
   "ui.copy": "Copiar",
   "ui.copied": "Copiado!",
+  "ui.run": "Ejecutar",
+  "ui.runSent": "¡Enviado!",
   "ui.cancel": "Cancelar",
   "ui.submit": "Enviar",
   "ui.file": "ARCHIVO",

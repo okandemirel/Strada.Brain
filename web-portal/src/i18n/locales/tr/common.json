@@ -209,6 +209,8 @@
 
   "ui.copy": "Kopyala",
   "ui.copied": "Kopyalandı!",
+  "ui.run": "Çalıştır",
+  "ui.runSent": "Gönderildi!",
   "ui.cancel": "İptal",
   "ui.submit": "Gönder",
   "ui.file": "DOSYA",

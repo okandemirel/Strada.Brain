@@ -208,6 +208,8 @@
 
   "ui.copy": "コピー",
   "ui.copied": "コピーしました!",
+  "ui.run": "実行",
+  "ui.runSent": "送信しました!",
   "ui.cancel": "キャンセル",
   "ui.submit": "送信",
   "ui.file": "ファイル",

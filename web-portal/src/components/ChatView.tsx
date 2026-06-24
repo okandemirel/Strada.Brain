@@ -223,6 +223,13 @@ export default function ChatView() {
     sendRawJSON({ type: 'feedback', feedbackType, instinctIds: msg.instinctIds ?? [] })
   }, [sendRawJSON, updateMessage])
 
+  // Run a suggested shell command from an assistant code-block: send it verbatim
+  // as `/run <command>` through the normal send path so it hits the backend's
+  // existing unconditional confirmation flow (no direct execution / no bypass).
+  const handleRun = useCallback((command: string) => {
+    sendMessage(`/run ${command}`)
+  }, [sendMessage])
+
   const isDisconnected = status !== 'connected'
   const viewingHistorical = useSessionStore((s) => s.viewingHistorical)
 
@@ -303,6 +310,7 @@ export default function ChatView() {
                       <ChatMessageComponent
                         message={msg}
                         onFeedback={handleFeedback}
+                        onRun={handleRun}
                         voiceOutputEnabled={voice.outputEnabled}
                       />
                     </div>

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, fireEvent } from '@testing-library/react'
 import type { ChatMessage as ChatMessageType } from '../types/messages'
 
 // Mock VoiceOutput to avoid audio issues in jsdom
@@ -125,5 +125,54 @@ describe('ChatMessage', () => {
     )
 
     expect(screen.getByText('Not delivered')).toBeInTheDocument()
+  })
+
+  it('shows a Run button on single-line shell code-blocks and forwards the verbatim command', () => {
+    const onRun = vi.fn()
+    render(
+      <ChatMessage
+        message={makeMessage({
+          sender: 'assistant',
+          text: '```bash\nnpm run build\n```',
+          isMarkdown: true,
+        })}
+        onRun={onRun}
+      />,
+    )
+    const runButton = screen.getByRole('button', { name: 'Run' })
+    expect(runButton).toBeInTheDocument()
+    fireEvent.click(runButton)
+    // Command is passed verbatim (trimmed of the surrounding fence whitespace).
+    expect(onRun).toHaveBeenCalledWith('npm run build')
+  })
+
+  it('does not show a Run button on multi-line shell blocks (avoids flattening a script)', () => {
+    const onRun = vi.fn()
+    render(
+      <ChatMessage
+        message={makeMessage({
+          sender: 'assistant',
+          text: '```bash\ncd /tmp\nnpm run build\n```',
+          isMarkdown: true,
+        })}
+        onRun={onRun}
+      />,
+    )
+    expect(screen.queryByRole('button', { name: 'Run' })).not.toBeInTheDocument()
+  })
+
+  it('does not show a Run button on non-shell code-blocks', () => {
+    const onRun = vi.fn()
+    render(
+      <ChatMessage
+        message={makeMessage({
+          sender: 'assistant',
+          text: '```typescript\nconst x = 1\n```',
+          isMarkdown: true,
+        })}
+        onRun={onRun}
+      />,
+    )
+    expect(screen.queryByRole('button', { name: 'Run' })).not.toBeInTheDocument()
   })
 })

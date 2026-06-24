@@ -181,6 +181,8 @@
   "shortcuts.showShortcuts": "Tastaturkürzel anzeigen",
   "ui.copy": "Kopieren",
   "ui.copied": "Kopiert!",
+  "ui.run": "Ausführen",
+  "ui.runSent": "Gesendet!",
   "ui.cancel": "Abbrechen",
   "ui.submit": "Absenden",
   "ui.file": "DATEI",

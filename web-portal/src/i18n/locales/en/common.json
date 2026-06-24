@@ -209,6 +209,8 @@
 
   "ui.copy": "Copy",
   "ui.copied": "Copied!",
+  "ui.run": "Run",
+  "ui.runSent": "Sent!",
   "ui.cancel": "Cancel",
   "ui.submit": "Submit",
   "ui.file": "FILE",

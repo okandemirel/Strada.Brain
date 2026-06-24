@@ -181,6 +181,8 @@
   "shortcuts.showShortcuts": "Afficher les raccourcis clavier",
   "ui.copy": "Copier",
   "ui.copied": "Copie !",
+  "ui.run": "Exécuter",
+  "ui.runSent": "Envoyé !",
   "ui.cancel": "Annuler",
   "ui.submit": "Soumettre",
   "ui.file": "FICHIER",

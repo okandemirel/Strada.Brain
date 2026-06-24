@@ -208,6 +208,8 @@
 
   "ui.copy": "복사",
   "ui.copied": "복사됨!",
+  "ui.run": "실행",
+  "ui.runSent": "전송됨!",
   "ui.cancel": "취소",
   "ui.submit": "제출",
   "ui.file": "파일",
