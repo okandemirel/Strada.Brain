@@ -79,6 +79,14 @@ export interface SessionManagerDeps {
   readonly channel: {
     sendText(chatId: string, text: string): Promise<void>;
     sendMarkdown(chatId: string, markdown: string): Promise<void>;
+    /**
+     * Optional system-notice sink (renders as a distinct system pill rather
+     * than an assistant answer). Mirrors {@link import("../channels/channel-core.interface.js").IChannelSender.sendSystemMessage}.
+     * Optional so non-pill channels / test mocks keep working —
+     * {@link SessionManager.sendVisibleAssistantNotice} falls back to
+     * {@link sendMarkdown} when this is absent.
+     */
+    sendSystemMessage?(chatId: string, text: string): Promise<void>;
   };
   readonly interactionPolicy: {
     get(chatId: string): InteractionGateState | undefined;
@@ -455,6 +463,41 @@ export class SessionManager {
   ): Promise<void> {
     const sanitizedContent = stripVisibleProviderArtifacts(content);
     this.appendVisibleAssistantMessage(session, sanitizedContent);
+    await this.deps.channel.sendMarkdown(chatId, sanitizedContent);
+  }
+
+  /**
+   * Render a TRANSIENT system notice (e.g. a mid-run resilience status like
+   * "provider is slow, retrying…") as a system pill rather than an assistant
+   * answer. Unlike {@link sendVisibleAssistantMarkdown} this:
+   *   1. Does NOT append the text to {@link Session.messages} — the notice is
+   *      operational meta, not task content, and recording it would pollute the
+   *      model's transcript/context (the failure SIGNAL the model needs is pushed
+   *      separately via buildSessionHealthContext at the call sites).
+   *   2. Routes to {@link SessionManagerDeps.channel.sendSystemMessage} when the
+   *      channel implements it (web channel renders it as a distinct pill), and
+   *      degrades gracefully to {@link SessionManagerDeps.channel.sendMarkdown}
+   *      otherwise — byte-identical to {@link sendVisibleAssistantMarkdown}'s sink
+   *      on non-pill channels, so the flag-off / no-pill case is behavior-preserving
+   *      except for the (intentionally) dropped transcript append.
+   *
+   * Use this ONLY for genuinely transient status; terminal outcomes and
+   * interactive prompts must stay on {@link sendVisibleAssistantMarkdown} so the
+   * user (and the persisted transcript) retain the run's outcome.
+   */
+  async sendVisibleAssistantNotice(
+    chatId: string,
+    _session: Session,
+    content: string,
+  ): Promise<void> {
+    const sanitizedContent = stripVisibleProviderArtifacts(content);
+    // Intentionally NOT appended to session.messages — transient, not transcript.
+    if (typeof this.deps.channel.sendSystemMessage === "function") {
+      await this.deps.channel.sendSystemMessage(chatId, sanitizedContent);
+      return;
+    }
+    // Fall back to the markdown sink (not sendText) so non-pill channels keep the
+    // same rendering the resilience notice had before this change.
     await this.deps.channel.sendMarkdown(chatId, sanitizedContent);
   }
 

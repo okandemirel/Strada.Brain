@@ -345,18 +345,36 @@ describe("Step 3 — interactive route flip (v2 spine vs v1 loop, no double-rend
       flagSet: resolveFlagSetById("all-v1"),
     });
     const adapter = orch as unknown as {
-      renderInteractiveResilienceEvent(e: unknown, language: string, enqueue: (t: string) => void): void;
+      renderInteractiveResilienceEvent(
+        e: unknown,
+        language: string,
+        enqueue: (t: string, transient?: boolean) => void,
+      ): void;
     };
     const render = (e: unknown, language = "en"): string[] => {
       const out: string[] = [];
       adapter.renderInteractiveResilienceEvent(e, language, (t) => out.push(t));
       return out;
     };
+    // Capture both the text AND the transient flag so the pill-vs-answer routing is pinned.
+    const renderWithTransient = (e: unknown, language = "en"): Array<{ text: string; transient: boolean }> => {
+      const out: Array<{ text: string; transient: boolean }> = [];
+      adapter.renderInteractiveResilienceEvent(e, language, (text, transient = false) =>
+        out.push({ text, transient }),
+      );
+      return out;
+    };
 
-    // backoff → provider_slow (v1 degraded tier, no params)
-    expect(render({ type: "backoff", ms: 2000, reason: "retry" })).toEqual([
-      "The AI provider is experiencing delays. Retrying...",
+    // backoff → provider_slow (v1 degraded tier, no params), flagged TRANSIENT so the
+    // enqueueRender tail routes it to a system pill (not the recorded transcript).
+    expect(renderWithTransient({ type: "backoff", ms: 2000, reason: "retry" })).toEqual([
+      { text: "The AI provider is experiencing delays. Retrying...", transient: true },
     ]);
+    // Every terminal/prompt arm is NON-transient (stays a recorded, visible answer).
+    expect(renderWithTransient({ type: "ask_user", question: "q", visibleText: "Need your input." })[0]!.transient).toBe(false);
+    expect(renderWithTransient({ type: "show_plan", visibleText: "## Plan" })[0]!.transient).toBe(false);
+    expect(renderWithTransient({ type: "run.ending", reason: "task-inactivity" })[0]!.transient).toBe(false);
+    expect(renderWithTransient({ type: "run.ending", reason: "max-iterations" })[0]!.transient).toBe(false);
     // ask_user with a real question → render the model's visibleText verbatim
     expect(render({ type: "ask_user", question: "q", visibleText: "Need your input on X." })).toEqual([
       "Need your input on X.",

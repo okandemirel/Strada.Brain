@@ -94,6 +94,63 @@ describe("SessionManager", () => {
     expect(deps.channel.sendMarkdown).toHaveBeenCalledWith("chat-1", "Visible answer");
   });
 
+  it("sendVisibleAssistantNotice routes to sendSystemMessage (pill) and does NOT record to the transcript", async () => {
+    const sendSystemMessage = vi.fn().mockResolvedValue(undefined);
+    const deps = createMockDeps({
+      channel: {
+        sendText: vi.fn().mockResolvedValue(undefined),
+        sendMarkdown: vi.fn().mockResolvedValue(undefined),
+        sendSystemMessage,
+      },
+    });
+    const sm = new SessionManager(deps);
+    const session = sm.getOrCreateSession("chat-1");
+
+    await sm.sendVisibleAssistantNotice("chat-1", session, "Provider is slow, retrying…");
+
+    // Pill sink used; assistant-answer sink NOT used.
+    expect(sendSystemMessage).toHaveBeenCalledWith("chat-1", "Provider is slow, retrying…");
+    expect(deps.channel.sendMarkdown).not.toHaveBeenCalled();
+    // Transient — never appended to the model transcript.
+    expect(session.messages).toHaveLength(0);
+    expect(session.visibleMessages).toHaveLength(0);
+  });
+
+  it("sendVisibleAssistantNotice falls back to sendMarkdown when sendSystemMessage is absent, still not recorded", async () => {
+    const deps = createMockDeps(); // no sendSystemMessage on the mock channel
+    const sm = new SessionManager(deps);
+    const session = sm.getOrCreateSession("chat-1");
+
+    await sm.sendVisibleAssistantNotice("chat-1", session, "Provider is slow, retrying…");
+
+    // Graceful degradation to the markdown sink (matches sendChannelNotice fallback).
+    expect(deps.channel.sendMarkdown).toHaveBeenCalledWith("chat-1", "Provider is slow, retrying…");
+    // Still transient — even on the fallback path it must not pollute the transcript.
+    expect(session.messages).toHaveLength(0);
+    expect(session.visibleMessages).toHaveLength(0);
+  });
+
+  it("sendVisibleAssistantNotice strips provider reasoning artifacts before sending the pill", async () => {
+    const sendSystemMessage = vi.fn().mockResolvedValue(undefined);
+    const deps = createMockDeps({
+      channel: {
+        sendText: vi.fn().mockResolvedValue(undefined),
+        sendMarkdown: vi.fn().mockResolvedValue(undefined),
+        sendSystemMessage,
+      },
+    });
+    const sm = new SessionManager(deps);
+    const session = sm.getOrCreateSession("chat-1");
+
+    await sm.sendVisibleAssistantNotice(
+      "chat-1",
+      session,
+      "<reasoning>\ninternal\n</reasoning>\n\nProvider is slow",
+    );
+
+    expect(sendSystemMessage).toHaveBeenCalledWith("chat-1", "Provider is slow");
+  });
+
   it("extractLastUserMessage returns last user string content", () => {
     const sm = new SessionManager(createMockDeps());
     const session = sm.getOrCreateSession("chat-1");

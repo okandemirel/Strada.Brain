@@ -1527,12 +1527,15 @@ export class Orchestrator {
     } as ConversationMessage);
 
     if (statusLevel === "degraded") {
-      await this.sessionManager.sendVisibleAssistantMarkdown(
+      // Transient mid-run status — route to a system pill (NOT recorded to the
+      // transcript). The model's failure signal is pushed separately above via
+      // buildSessionHealthContext, so the pill is purely a user-facing cue.
+      await this.sessionManager.sendVisibleAssistantNotice(
         bag.chatId, bag.session,
         getResilienceMessage("provider_slow", bag.language),
       );
     } else if (statusLevel === "critical") {
-      await this.sessionManager.sendVisibleAssistantMarkdown(
+      await this.sessionManager.sendVisibleAssistantNotice(
         bag.chatId, bag.session,
         getResilienceMessage("provider_failing", bag.language, {
           seconds: Math.round(action.backoffMs / 1000),
@@ -1595,11 +1598,15 @@ export class Orchestrator {
   private renderInteractiveResilienceEvent(
     e: AgentEvent,
     language: string,
-    enqueue: (text: string) => void,
+    enqueue: (text: string, transient?: boolean) => void,
   ): void {
     switch (e.type) {
       case "backoff":
-        enqueue(getResilienceMessage("provider_slow", language));
+        // Transient mid-run status (v1 degraded tier) — `transient:true` routes it
+        // to a system pill, NOT the transcript. Every other arm below is a terminal
+        // explanation (abort/max-iterations) or an interactive prompt (ask_user/
+        // show_plan) and stays a recorded, visible answer.
+        enqueue(getResilienceMessage("provider_slow", language), true);
         return;
       case "ask_user":
         enqueue(
@@ -5116,9 +5123,17 @@ export class Orchestrator {
         const interactiveLang = (this.userProfileStore?.getProfile(identityKey)?.language ??
           this.defaultLanguage) as string;
         let renderTail: Promise<void> = Promise.resolve();
-        const enqueueRender = (renderText: string): void => {
+        const enqueueRender = (renderText: string, transient = false): void => {
           renderTail = renderTail
-            .then(() => this.sessionManager.sendVisibleAssistantMarkdown(chatId, session, renderText))
+            .then(() =>
+              // Transient mid-run status (backoff → provider_slow) goes to a system
+              // pill and is NOT recorded to the transcript; terminal explanations and
+              // interactive prompts stay recorded, visible answers. Both sinks append
+              // to the same ordered tail-promise chain (drained by `await renderTail`).
+              transient
+                ? this.sessionManager.sendVisibleAssistantNotice(chatId, session, renderText)
+                : this.sessionManager.sendVisibleAssistantMarkdown(chatId, session, renderText),
+            )
             .catch((err) => {
               logger.warn("v2 interactive resilience render failed", {
                 chatId,
@@ -5574,8 +5589,10 @@ export class Orchestrator {
             );
             break;
           }
-          // Send a user-visible retry notice so the user knows something went wrong
-          await this.sessionManager.sendVisibleAssistantMarkdown(
+          // Send a user-visible retry notice so the user knows something went wrong.
+          // Transient mid-run status (the loop `continue`s below) — route to a pill,
+          // not the transcript.
+          await this.sessionManager.sendVisibleAssistantNotice(
             chatId, session,
             getResilienceMessage("provider_slow", interactiveLang),
           );
@@ -5710,14 +5727,17 @@ export class Orchestrator {
               content: iterationHealth.buildSessionHealthContext(currentAssignment.providerName, failureAction),
             } as ConversationMessage);
 
-            // Progressive disclosure — notify user based on severity
+            // Progressive disclosure — notify user based on severity.
+            // Transient mid-run status (the loop `continue`s below) — route to a
+            // system pill, NOT the transcript. The health context is pushed
+            // separately above via buildSessionHealthContext.
             if (statusLevel === "degraded") {
-              await this.sessionManager.sendVisibleAssistantMarkdown(
+              await this.sessionManager.sendVisibleAssistantNotice(
                 chatId, session,
                 getResilienceMessage("provider_slow", interactiveLang),
               );
             } else if (statusLevel === "critical") {
-              await this.sessionManager.sendVisibleAssistantMarkdown(
+              await this.sessionManager.sendVisibleAssistantNotice(
                 chatId, session,
                 getResilienceMessage("provider_failing", interactiveLang, {
                   seconds: Math.round((failureAction.kind !== "abort" ? failureAction.backoffMs : 0) / 1000),
