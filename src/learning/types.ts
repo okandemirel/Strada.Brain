@@ -664,6 +664,14 @@ export interface LearningConfig {
   readonly minObservationsBeforeLearning: number;
   /** Auto-archive instincts below threshold */
   readonly autoArchiveThreshold: NormalizedScore;
+  /**
+   * Issue #22 (SIBLING A) — trajectory-level instinct credit. When enabled, a successful
+   * task's terminal `recordTrajectory` reinforces the DISJOINT set of participating instincts
+   * that the per-tool-result path structurally skips (the non-tool-matched planning/strategy
+   * instincts), with one task-outcome verdict. Default OFF: flag-off is byte-identical to today
+   * (recordTrajectory receives no appliedInstinctIds, so no extra credit fires).
+   */
+  readonly trajectoryLevelCredit: boolean;
 }
 
 /** Default learning configuration */
@@ -678,6 +686,7 @@ export const DEFAULT_LEARNING_CONFIG: LearningConfig = {
   strategy: "periodic",
   minObservationsBeforeLearning: 5,
   autoArchiveThreshold: 0.2 as NormalizedScore,
+  trajectoryLevelCredit: false,
 };
 
 // =============================================================================

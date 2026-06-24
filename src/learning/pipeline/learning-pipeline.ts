@@ -340,12 +340,10 @@ export class LearningPipeline {
         // Skip permanent instincts -- confidence is frozen
         if (instinct.status === "permanent") continue;
 
-        // Only update confidence if instinct has a tool_name contextCondition matching event.toolName
-        const isRelevant = instinct.contextConditions.length === 0 ||
-          instinct.contextConditions.some(cc =>
-            cc.type === "tool_name" && cc.value === event.toolName
-          );
-        if (!isRelevant) continue;
+        // Only update confidence if instinct has a tool_name contextCondition matching event.toolName.
+        // Shared with the trajectory-credit disjoint computation (computeTrajectoryCreditIds) so the
+        // two stay exact complements by construction (Issue #22 SIBLING A).
+        if (!LearningPipeline.isInstinctRelevantToTool(instinct, event.toolName as string)) continue;
 
         // Increment coolingFailures for failures on cooling instincts
         let instinctForUpdate = instinct;
@@ -380,6 +378,23 @@ export class LearningPipeline {
     outcome: TrajectoryOutcome;
     appliedInstinctIds?: string[];
   }): void {
+    // Issue #22 (SIBLING A) — trajectory-level instinct credit (DISJOINT-SET, default OFF, dark).
+    // GROUNDWORK ONLY: no production caller passes appliedInstinctIds today (the route-level endTask
+    // fires before the run and under a different taskRunId, so it was removed; a future in-run trigger
+    // with the populated set in scope will supply it). Until then this always yields [] → byte-identical.
+    // The caller passes the FULL set of instincts that participated across the run. The per-tool-result
+    // path (handleToolResult, this file ~:344-348) ALREADY credits each participating instinct whose
+    // tool_name contextCondition matched a used tool (or that has no contextConditions). To avoid any
+    // double-count, the trajectory credit is restricted to the DISJOINT remainder — participating
+    // instincts the per-turn path STRUCTURALLY SKIPS (those with contextConditions but no tool_name
+    // matching any tool used in this trajectory). Stored AS the trajectory's appliedInstinctIds so the
+    // existing autoGenerateVerdict → updateInstinctsFromVerdict reinforces exactly that disjoint set
+    // (one updateConfidence each). Flag-OFF (or no appliedInstinctIds): yields [] → byte-identical.
+    const creditIds =
+      this.config.trajectoryLevelCredit && params.appliedInstinctIds && params.appliedInstinctIds.length > 0
+        ? this.computeTrajectoryCreditIds(params.appliedInstinctIds, params.steps)
+        : [];
+
     const trajectory: Trajectory = {
       id: `traj_${randomUUID()}` as TrajectoryId,
       sessionId: createBrand(params.sessionId, "SessionId" as const),
@@ -388,19 +403,78 @@ export class LearningPipeline {
       taskDescription: params.taskDescription,
       steps: params.steps,
       outcome: params.outcome,
-      appliedInstinctIds: (params.appliedInstinctIds ?? []) as InstinctId[],
+      appliedInstinctIds: creditIds as InstinctId[],
       createdAt: Date.now() as TimestampMs,
       processed: false,
     };
 
     this.storage.createTrajectory(trajectory);
-    
+
     // Flush immediately to ensure trajectory exists in DB for any follow-up operations
     this.storage.flush();
 
     if (params.outcome.success && !params.outcome.hadErrors) {
       this.autoGenerateVerdict(trajectory);
     }
+  }
+
+  /**
+   * Issue #22 (SIBLING A) — compute the DISJOINT trajectory-credit subset.
+   *
+   * Returns the participating instincts the per-tool-result path NEVER credited, using the SAME
+   * predicate that path applies ({@link isInstinctRelevantToTool}, shared with handleToolResult):
+   * per-turn credits an instinct on a tool result iff that predicate holds for that tool. Across the
+   * whole run the per-turn-credited set is therefore every participating instinct relevant to SOME
+   * tool used in the trajectory. The disjoint remainder (returned here) is the rest: instincts WITH
+   * contextConditions whose tool_name conditions (if any) never matched a used tool — provably zero
+   * overlap, so no double-count. Missing/permanent instincts are harmless downstream (updateConfidence
+   * freezes permanent; updateInstinctsFromVerdict skips missing) but are filtered here for clarity.
+   */
+  private computeTrajectoryCreditIds(
+    participatingInstinctIds: readonly string[],
+    steps: readonly TrajectoryStep[],
+  ): string[] {
+    const usedToolNames: string[] = [];
+    for (const step of steps) {
+      usedToolNames.push(step.toolName as string);
+    }
+
+    const disjoint: string[] = [];
+    const seen = new Set<string>();
+    for (const instinctId of participatingInstinctIds) {
+      if (seen.has(instinctId)) continue;
+      seen.add(instinctId);
+
+      const instinct = this.storage.getInstinct(instinctId);
+      if (!instinct) continue;
+
+      // Per-turn-credited iff the SHARED predicate holds for ANY tool used in the run (no
+      // contextConditions ⇒ relevant to every tool ⇒ always per-turn-credited ⇒ NOT disjoint). The
+      // disjoint set is the exact complement: relevant to NONE of the used tools.
+      const perTurnCredited = usedToolNames.some((toolName) =>
+        LearningPipeline.isInstinctRelevantToTool(instinct, toolName),
+      );
+      if (perTurnCredited) continue;
+
+      // Structurally skipped per-turn (planning/strategy or stale-tool instinct) ⇒ disjoint, credit it.
+      disjoint.push(instinctId);
+    }
+    return disjoint;
+  }
+
+  /**
+   * Issue #22 (SIBLING A) — the single per-turn relevance predicate, shared by the per-tool-result
+   * credit path (handleToolResult) and the trajectory-credit disjoint computation
+   * ({@link computeTrajectoryCreditIds}). Per-turn credits an instinct on a given tool result iff it
+   * has NO contextConditions (applies to every tool) OR a `tool_name` contextCondition equal to that
+   * tool. Keeping ONE definition guarantees the disjoint set stays the exact complement of the
+   * per-turn-credited set, so no future edit to one site can silently reintroduce double-count.
+   */
+  private static isInstinctRelevantToTool(instinct: Instinct, toolName: string): boolean {
+    return (
+      instinct.contextConditions.length === 0 ||
+      instinct.contextConditions.some((cc) => cc.type === "tool_name" && cc.value === toolName)
+    );
   }
 
   submitVerdict(params: {
@@ -1091,5 +1165,15 @@ export class LearningPipeline {
 
   getStats() {
     return this.storage.getStats();
+  }
+
+  /**
+   * Issue #22 (SIBLING A) — whether trajectory-level instinct credit is enabled (default OFF).
+   * Reserved seam for a future in-run trigger to gate its instinct-set capture on, so flag-off
+   * does zero extra work and stays byte-identical. No production caller today (the route-level
+   * wiring was removed as structurally unable to supply the run's real instinct set).
+   */
+  isTrajectoryLevelCreditEnabled(): boolean {
+    return this.config.trajectoryLevelCredit === true;
   }
 }

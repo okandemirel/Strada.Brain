@@ -475,4 +475,65 @@ describe("TaskPlanner", () => {
       expect(steps[1]?.toolName).toBe("file_write");
     });
   });
+
+  // ─── Issue #22 (SIBLING A): endTask → recordTrajectory instinct pass-through ───
+  describe("Trajectory-level instinct credit pass-through (#22 SIBLING A)", () => {
+    function withPipeline(fn: (pipeline: LearningPipeline) => void): void {
+      const tempDir = mkdtempSync(join(tmpdir(), "planner-sibling-a-"));
+      const dbPath = join(tempDir, "test.db");
+      const storage = new LearningStorage(dbPath);
+      storage.initialize();
+      const pipeline = new LearningPipeline(storage);
+      try {
+        fn(pipeline);
+      } finally {
+        storage.close();
+        rmSync(tempDir, { recursive: true, force: true });
+      }
+    }
+
+    it("(a) byte-identical default: endTask WITHOUT appliedInstinctIds forwards undefined into recordTrajectory", () => {
+      withPipeline((pipeline) => {
+        const spy = vi.spyOn(pipeline, "recordTrajectory");
+        planner.startTask({ sessionId: "s", chatId: "c", taskDescription: "t", learningPipeline: pipeline });
+        planner.trackToolCall("file_read", false, {}, "ok");
+
+        planner.endTask({ success: true, hadErrors: false, errorCount: 0 });
+
+        expect(spy).toHaveBeenCalledTimes(1);
+        expect(spy.mock.calls[0]![0].appliedInstinctIds).toBeUndefined();
+      });
+    });
+
+    it("(b) flag-ON path: endTask forwards the participating instinct set VERBATIM into recordTrajectory", () => {
+      withPipeline((pipeline) => {
+        const spy = vi.spyOn(pipeline, "recordTrajectory");
+        planner.startTask({ sessionId: "s", chatId: "c", taskDescription: "t", learningPipeline: pipeline });
+        planner.trackToolCall("file_read", false, {}, "ok");
+
+        planner.endTask({
+          success: true,
+          hadErrors: false,
+          errorCount: 0,
+          appliedInstinctIds: ["instinct_a", "instinct_b"],
+        });
+
+        expect(spy).toHaveBeenCalledTimes(1);
+        // Forwarded verbatim as a fresh array (defensive copy, not the caller's reference).
+        expect(spy.mock.calls[0]![0].appliedInstinctIds).toEqual(["instinct_a", "instinct_b"]);
+      });
+    });
+
+    it("records EXACTLY ONE trajectory per task (no double-record from the pass-through)", () => {
+      withPipeline((pipeline) => {
+        const spy = vi.spyOn(pipeline, "recordTrajectory");
+        planner.startTask({ sessionId: "s", chatId: "c", taskDescription: "t", learningPipeline: pipeline });
+        planner.trackToolCall("file_read", false, {}, "ok");
+        planner.endTask({ success: true, hadErrors: false, errorCount: 0, appliedInstinctIds: ["instinct_a"] });
+        // A second endTask is a no-op (task already inactive) — still exactly one record.
+        planner.endTask({ success: true, hadErrors: false, errorCount: 0, appliedInstinctIds: ["instinct_a"] });
+        expect(spy).toHaveBeenCalledTimes(1);
+      });
+    });
+  });
 });

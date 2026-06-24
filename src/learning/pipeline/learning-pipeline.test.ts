@@ -1777,4 +1777,183 @@ describe("learning pipeline v2 integration", () => {
 
     storage.close();
   });
+
+  // ─── Issue #22 (SIBLING A): trajectory-level instinct credit (disjoint-set, default OFF) ───
+  describe("Trajectory-level instinct credit (#22 SIBLING A)", () => {
+    // Self-contained storage/pipeline (this describe sits outside the LearningPipeline block's beforeEach).
+    let storage: LearningStorage;
+    let pipeline: LearningPipeline; // flag-OFF (default) pipeline for the byte-identical cases.
+    let creditTempDir: string;
+
+    beforeEach(() => {
+      creditTempDir = mkdtempSync(join(tmpdir(), "pipeline-credit-test-"));
+      storage = new LearningStorage(join(creditTempDir, "test.db"));
+      storage.initialize();
+      pipeline = new LearningPipeline(storage, { enabled: true, minConfidenceForCreation: 0.5, batchSize: 5 });
+    });
+
+    afterEach(() => {
+      pipeline.stop();
+      storage.close();
+      rmSync(creditTempDir, { recursive: true, force: true });
+    });
+
+    /** Create an instinct row with explicit contextConditions and known confidence/stats. */
+    function makeInstinct(
+      id: string,
+      contextConditions: Instinct["contextConditions"],
+    ): Instinct {
+      return {
+        id: id as any,
+        name: id,
+        type: "tool_usage",
+        status: "active",
+        confidence: 0.5,
+        triggerPattern: "trigger pattern long enough to be meaningful",
+        action: "do the thing",
+        contextConditions,
+        stats: { timesSuggested: 0, timesApplied: 0, timesFailed: 0, successRate: 0 as any, averageExecutionMs: 0 },
+        createdAt: Date.now() as TimestampMs,
+        updatedAt: Date.now() as TimestampMs,
+        sourceTrajectoryIds: [],
+        tags: [],
+      };
+    }
+
+    const ctx = (type: string, value: string): Instinct["contextConditions"][number] =>
+      ({ id: `ctx_${randomUUID()}` as any, type: type as any, value, match: "include" });
+
+    /** A clean (success, no errors) trajectory whose steps used dotnet_build + file_edit. */
+    function cleanTrajectory(appliedInstinctIds: string[]): {
+      sessionId: string; taskRunId: string; taskDescription: string;
+      steps: TrajectoryStep[]; outcome: TrajectoryOutcome; appliedInstinctIds: string[];
+    } {
+      return {
+        sessionId: "session-22",
+        taskRunId: `taskrun_${randomUUID()}`,
+        taskDescription: "Build then edit",
+        steps: [
+          { stepNumber: 1, toolName: "dotnet_build" as ToolName, input: {}, result: { kind: "success", output: "ok" }, timestamp: Date.now() as TimestampMs },
+          { stepNumber: 2, toolName: "file_edit" as ToolName, input: {}, result: { kind: "success", output: "ok" }, timestamp: Date.now() as TimestampMs },
+        ],
+        outcome: { success: true, totalSteps: 2, hadErrors: false, errorCount: 0, durationMs: 100 as any },
+        appliedInstinctIds,
+      };
+    }
+
+    function enabledPipeline(): LearningPipeline {
+      return new LearningPipeline(storage, { enabled: true, minConfidenceForCreation: 0.5, batchSize: 5, trajectoryLevelCredit: true });
+    }
+
+    it("(a) flag default-OFF: passing appliedInstinctIds credits NOTHING and records the trajectory with an EMPTY applied set (byte-identical)", () => {
+      // Default config (flag off). A planning instinct (no tool_name match) that WOULD be disjoint-credited if on.
+      const planning = makeInstinct("instinct_planning_off", [ctx("language", "csharp")]);
+      storage.createInstinct(planning);
+
+      pipeline.recordTrajectory(cleanTrajectory([planning.id]));
+      storage.flush();
+
+      // No credit applied — confidence + stats unchanged.
+      const after = storage.getInstinct(planning.id)!;
+      expect(after.confidence).toBe(planning.confidence);
+      expect(after.stats.timesApplied).toBe(0);
+      expect(after.stats.timesFailed).toBe(0);
+      // The single trajectory still recorded, but with NO appliedInstinctIds (today's behavior).
+      const stored = storage.getTrajectories({ limit: 1 })[0];
+      expect(stored?.appliedInstinctIds ?? []).toEqual([]);
+    });
+
+    it("flag-OFF is byte-identical: isTrajectoryLevelCreditEnabled reflects config", () => {
+      expect(pipeline.isTrajectoryLevelCreditEnabled()).toBe(false);
+      expect(enabledPipeline().isTrajectoryLevelCreditEnabled()).toBe(true);
+    });
+
+    it("(c) flag-ON credits ONLY the DISJOINT (per-turn-skipped) instinct, never the per-turn-credited ones (no double-count)", () => {
+      const p = enabledPipeline();
+      // Disjoint: contextConditions present, but NO tool_name matching a used tool (planning/strategy).
+      const planning = makeInstinct("instinct_planning_on", [ctx("language", "csharp")]);
+      // Per-turn-credited: tool_name matches a used tool (dotnet_build) → MUST NOT be trajectory-credited.
+      const toolMatched = makeInstinct("instinct_toolmatched_on", [ctx("tool_name", "dotnet_build")]);
+      // Per-turn-credited: NO contextConditions → always per-turn-credited → MUST NOT be trajectory-credited.
+      const unconditional = makeInstinct("instinct_unconditional_on", []);
+      for (const i of [planning, toolMatched, unconditional]) storage.createInstinct(i);
+
+      p.recordTrajectory(cleanTrajectory([planning.id, toolMatched.id, unconditional.id]));
+      storage.flush();
+
+      // Disjoint planning instinct WAS credited (confidence moved, applied counter incremented).
+      const planningAfter = storage.getInstinct(planning.id)!;
+      expect(planningAfter.stats.timesApplied).toBe(1);
+      expect(planningAfter.confidence).not.toBe(planning.confidence);
+
+      // The two per-turn-credited instincts were NOT touched by the trajectory credit (disjoint).
+      const toolAfter = storage.getInstinct(toolMatched.id)!;
+      expect(toolAfter.stats.timesApplied).toBe(0);
+      expect(toolAfter.confidence).toBe(toolMatched.confidence);
+      const uncondAfter = storage.getInstinct(unconditional.id)!;
+      expect(uncondAfter.stats.timesApplied).toBe(0);
+      expect(uncondAfter.confidence).toBe(unconditional.confidence);
+
+      // Exactly ONE trajectory recorded, carrying ONLY the disjoint id.
+      const stored = storage.getTrajectories({ limit: 1 })[0];
+      expect(stored?.appliedInstinctIds).toEqual([planning.id]);
+    });
+
+    it("(c) a tool_name instinct for a tool NOT used in the run IS disjoint (per-turn never credited it)", () => {
+      const p = enabledPipeline();
+      // tool_name = git_commit, which is NOT among the run's tools (dotnet_build, file_edit) → disjoint.
+      const staleTool = makeInstinct("instinct_staletool_on", [ctx("tool_name", "git_commit")]);
+      storage.createInstinct(staleTool);
+
+      p.recordTrajectory(cleanTrajectory([staleTool.id]));
+      storage.flush();
+
+      const after = storage.getInstinct(staleTool.id)!;
+      expect(after.stats.timesApplied).toBe(1);
+      expect(after.confidence).not.toBe(staleTool.confidence);
+    });
+
+    it("(d) does NOT fire on an empty participating set (no verdict, no credit)", () => {
+      const p = enabledPipeline();
+      const before = pipeline.getStats().trajectoryCount;
+      p.recordTrajectory(cleanTrajectory([])); // empty applied set
+      storage.flush();
+      // Trajectory still recorded once, but with no applied ids and no instinct touched (none exist anyway).
+      const stored = storage.getTrajectories({ limit: 1 })[0];
+      expect(stored?.appliedInstinctIds ?? []).toEqual([]);
+      expect(pipeline.getStats().trajectoryCount).toBe(before + 1);
+    });
+
+    it("(d) fires NOTHING when the only participating instincts are all per-turn-credited (disjoint set is empty)", () => {
+      const p = enabledPipeline();
+      const toolMatched = makeInstinct("instinct_alltoolmatched_on", [ctx("tool_name", "file_edit")]);
+      storage.createInstinct(toolMatched);
+
+      p.recordTrajectory(cleanTrajectory([toolMatched.id]));
+      storage.flush();
+
+      const after = storage.getInstinct(toolMatched.id)!;
+      expect(after.stats.timesApplied).toBe(0);
+      expect(after.confidence).toBe(toolMatched.confidence);
+      const stored = storage.getTrajectories({ limit: 1 })[0];
+      expect(stored?.appliedInstinctIds ?? []).toEqual([]);
+    });
+
+    it("(e) success-only: a FAILED trajectory credits nothing even with a disjoint participating set", () => {
+      const p = enabledPipeline();
+      const planning = makeInstinct("instinct_planning_fail", [ctx("language", "csharp")]);
+      storage.createInstinct(planning);
+
+      const failed = cleanTrajectory([planning.id]);
+      failed.outcome = { success: false, totalSteps: 2, hadErrors: true, errorCount: 1, durationMs: 100 as any };
+      p.recordTrajectory(failed);
+      storage.flush();
+
+      // No auto-verdict on failure ⇒ no credit. (Failure-penalty path is explicitly deferred.)
+      const after = storage.getInstinct(planning.id)!;
+      expect(after.stats.timesApplied).toBe(0);
+      expect(after.stats.timesFailed).toBe(0);
+      expect(after.confidence).toBe(planning.confidence);
+    });
+  });
 });

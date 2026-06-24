@@ -155,13 +155,23 @@ export class TaskPlanner {
   }
 
   /**
-   * End the current task and record trajectory
+   * End the current task and record trajectory.
+   *
+   * @param params.appliedInstinctIds Issue #22 (SIBLING A) — the FULL set of instincts that
+   *   participated across the run, forwarded verbatim into recordTrajectory. The pipeline credits
+   *   only the DISJOINT (per-turn-skipped) subset, and ONLY when its trajectoryLevelCredit flag is
+   *   on. NO production caller threads this today: the route-level endTask fires before the run
+   *   (buffered/fire-and-forget) and under a different taskRunId, so it cannot supply the run's
+   *   real set — see the reverted route-level wiring. Reserved for a future in-run trigger that
+   *   has the populated set in scope. Omitted/undefined (the default, and always when the flag is
+   *   off) ⇒ today's behavior.
    */
   endTask(params: {
     success: boolean;
     finalOutput?: string;
     hadErrors: boolean;
     errorCount: number;
+    appliedInstinctIds?: readonly string[];
   }): void {
     if (!this.isTaskActive) return;
 
@@ -188,6 +198,9 @@ export class TaskPlanner {
         taskDescription: this.taskDescription,
         steps: this.trajectorySteps,
         outcome,
+        // SIBLING A (#22): undefined unless the caller threads the run's participating instinct set;
+        // recordTrajectory ignores it entirely when its trajectoryLevelCredit flag is off.
+        appliedInstinctIds: params.appliedInstinctIds ? [...params.appliedInstinctIds] : undefined,
       });
     }
 
