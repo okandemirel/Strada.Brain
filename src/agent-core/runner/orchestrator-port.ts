@@ -280,7 +280,7 @@ export interface ResultProjectionParams {
   readonly final: SynthesizedFinal;
   readonly toolTrace: readonly { toolName: string; toolCallId: string; success: boolean }[];
   readonly touchedFiles: readonly string[];
-  readonly status: "completed" | "failed" | "blocked";
+  readonly status: TerminalStatus;
   readonly reason?: string;
   readonly usage?: WorkerUsageEvent;
   readonly cancelReason?: CancelReason;

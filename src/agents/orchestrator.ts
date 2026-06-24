@@ -215,6 +215,7 @@ import {
   type AgentRunRequest,
   type IOStrategy,
   type RunnerHostOrchestrator,
+  type TerminalStatus,
 } from "../agent-core/runner/index.js";
 import { getResilienceMessage, type MessageKey } from "./resilience-messages.js";
 import {
@@ -2990,7 +2991,7 @@ export class Orchestrator {
    */
   private mapTerminalReasonToMessageKey(
     reason: string | undefined,
-    status: "completed" | "failed" | "blocked" | undefined,
+    status: TerminalStatus | undefined,
   ): MessageKey | undefined {
     if (reason) {
       // budget-exhausted:tokens | budget-exhausted:cost

@@ -22,6 +22,7 @@ import type { TaskProgressSignal } from "../../tasks/types.js";
 import type { CancelReason } from "../control/cancel-reason.js";
 import type { AgentPhase } from "../../agents/agent-state.js";
 import type { StopReason, TokenUsage } from "../../agents/providers/provider-core.interface.js";
+import type { TerminalStatus } from "../runner/agent-runner.js";
 
 /** Monotonic run-local sequence; assigned by the bus, never by emitters. */
 export type Seq = number;
@@ -52,7 +53,7 @@ export interface RunEndingEvent extends AgentEventBase {
 }
 export interface RunEndedEvent extends AgentEventBase {
   readonly type: "run.ended";
-  readonly status: "completed" | "failed" | "blocked";
+  readonly status: TerminalStatus;
 }
 export interface StepStartedEvent extends AgentEventBase {
   readonly type: "step.started";
