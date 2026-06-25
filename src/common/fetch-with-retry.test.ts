@@ -140,4 +140,47 @@ describe("fetchWithRetry — AbortSignal handling", () => {
     expect(response.ok).toBe(true);
     expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
+
+  it("fires onBackoff with status 429 and the Retry-After delay before retrying", async () => {
+    const onBackoff = vi.fn();
+    fetchSpy
+      .mockResolvedValueOnce(
+        new Response("rate limited", { status: 429, headers: { "retry-after": "2" } }),
+      )
+      .mockResolvedValueOnce(new Response("ok", { status: 200 }));
+
+    const promise = fetchWithRetry(
+      "https://example.com/api",
+      { method: "GET" },
+      { maxRetries: 3, baseDelayMs: 100, callerName: "TestCaller", onBackoff },
+    );
+
+    await vi.advanceTimersByTimeAsync(2100);
+    const response = await promise;
+
+    expect(response.ok).toBe(true);
+    // Retry-After of 2s is honored verbatim (not the exponential default).
+    expect(onBackoff).toHaveBeenCalledTimes(1);
+    expect(onBackoff).toHaveBeenCalledWith({ status: 429, delayMs: 2000 });
+  });
+
+  it("throws an honest rate-limited (HTTP 429) error when 429 retries are exhausted", async () => {
+    // Every attempt returns 429 → retries exhaust → terminal error must classify as
+    // rate-limited, not a generic API error or an unresponsive endpoint.
+    fetchSpy.mockResolvedValue(
+      new Response("too many requests", { status: 429, headers: { "retry-after": "1" } }),
+    );
+
+    const promise = fetchWithRetry(
+      "https://example.com/api",
+      { method: "GET" },
+      { maxRetries: 1, baseDelayMs: 100, callerName: "OpenCode (Zen/Go)" },
+    );
+    // Attach the rejection handler synchronously so advancing timers can't surface an
+    // unhandled rejection between ticks.
+    const assertion = expect(promise).rejects.toThrow(/rate-limited \(HTTP 429\)/i);
+
+    await vi.advanceTimersByTimeAsync(1100);
+    await assertion;
+  });
 });

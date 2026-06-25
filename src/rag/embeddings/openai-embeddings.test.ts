@@ -317,7 +317,8 @@ describe("OpenAIEmbeddingProvider", () => {
     embedPromise.catch(() => {});
     await vi.runAllTimersAsync();
 
-    await expect(embedPromise).rejects.toThrow(/API error 429/);
+    // Honest classification: an exhausted 429 is now reported as rate-limited.
+    await expect(embedPromise).rejects.toThrow(/rate-limited \(HTTP 429\)/i);
     expect(mockFetch).toHaveBeenCalledTimes(4);
   });
 

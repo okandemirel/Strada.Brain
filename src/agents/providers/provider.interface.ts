@@ -15,6 +15,31 @@ import type {
 } from "./provider-core.interface.js";
 
 /**
+ * Optional control-plane hooks the FallbackChain passes down through a provider call.
+ *
+ * `onBackoff` fires when a provider's own HTTP retry wrapper is about to wait ON
+ * PURPOSE during a deliberate retry backoff (e.g. a 429 with maxRetries). The chain
+ * uses it to (1) reset its first-response silence timer — a deliberate backoff must
+ * not be counted against the "unresponsive endpoint" budget — and (2) remember that
+ * the failure cause was rate-limiting (HTTP 429) so a later timeout/exhaustion is
+ * reported honestly as rate-limited, not as an unresponsive endpoint. Optional and
+ * back-compat: providers without an HTTP retry wrapper simply never call it.
+ */
+export interface ProviderCallHooks {
+  onBackoff?: (info: { status: number; delayMs: number }) => void;
+}
+
+/**
+ * Options every provider `chat`/`chatStream` accepts. `signal` aborts the underlying
+ * request (and may carry the per-call stall watchdog); `externalSignal` is the
+ * task/control-plane abort (audit #6); `hooks` carries optional resilience callbacks.
+ */
+export interface ProviderCallOptions extends ProviderCallHooks {
+  signal?: AbortSignal;
+  externalSignal?: AbortSignal;
+}
+
+/**
  * Core AI provider interface.
  * All providers must implement this.
  */
@@ -36,8 +61,9 @@ export interface IAIProvider {
     // stalled"). FallbackChainProvider treats an aborted externalSignal as a benign cancel:
     // it does NOT poison provider health and does NOT fall over, so a cancel is never
     // mistaken for an outage. A genuine provider stall surfaces via `signal` only and
-    // still records failure + falls over (audit #6).
-    options?: { signal?: AbortSignal; externalSignal?: AbortSignal },
+    // still records failure + falls over (audit #6). `onBackoff` is an optional
+    // resilience hook (see ProviderCallHooks).
+    options?: ProviderCallOptions,
   ): Promise<ProviderResponse>;
 
   /** Optional health check to verify API connectivity on startup */
@@ -57,8 +83,9 @@ export interface IStreamingProvider extends IAIProvider {
     messages: ConversationMessage[],
     tools: ToolDefinition[],
     onChunk: StreamCallback,
-    // See `chat` — `externalSignal` is the task/control-plane abort signal (audit #6).
-    options?: { signal?: AbortSignal; externalSignal?: AbortSignal },
+    // See `chat` — `externalSignal` is the task/control-plane abort signal (audit #6);
+    // `onBackoff` is an optional resilience hook (see ProviderCallHooks).
+    options?: ProviderCallOptions,
   ): Promise<ProviderResponse>;
 }
 

@@ -354,7 +354,11 @@ export function isTransientEmbeddingVerificationError(error: unknown): boolean {
     "enotfound",
     "eai_again",
     "etimedout",
-    "api error 429",
+    // Rate-limiting (HTTP 429) is transient — the bare "429" token matches both the
+    // legacy "api error 429" phrasing and the honest "rate-limited (HTTP 429)"
+    // classification from fetch-with-retry.
+    "rate-limited",
+    "429",
     "api error 500",
     "api error 502",
     "api error 503",

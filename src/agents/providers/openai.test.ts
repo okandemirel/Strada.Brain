@@ -165,8 +165,10 @@ describe("OpenAIProvider", () => {
     });
 
     const provider = new OpenAIProvider("sk-test");
+    // Honest classification: an exhausted 429 is reported as rate-limited, not a
+    // generic API error (so upstream can distinguish throttling from a hard failure).
     await expect(provider.chat("system", [{ role: "user", content: "Hi" }], [])).rejects.toThrow(
-      "OpenAI API error 429",
+      "OpenAI rate-limited (HTTP 429)",
     );
     // Initial attempt + 3 retries = 4 calls
     expect(mockFetch).toHaveBeenCalledTimes(4);

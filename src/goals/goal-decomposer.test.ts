@@ -388,6 +388,26 @@ describe("GoalDecomposer", () => {
       ).rejects.toBeInstanceOf(GoalDecompositionProviderError);
     });
 
+    it("throws GoalDecompositionProviderError on a rate-limited (HTTP 429) outage", async () => {
+      const provider: IStreamingProvider = {
+        name: "mock-429",
+        capabilities: { streaming: true, vision: false, functionCalling: true },
+        chat: vi.fn(),
+        chatStream: vi.fn(async () => {
+          // Mirrors FallbackChain's honest rate-limited terminal message — must surface
+          // as a clean provider outage, NOT silently degrade to a single-node tree.
+          throw new Error(
+            'Provider "mock-429" rate-limited (HTTP 429) — retry backoff exceeded the 90000ms first-response budget',
+          );
+        }),
+      };
+
+      const decomposer = new GoalDecomposer(provider, 3);
+      await expect(
+        decomposer.decomposeProactive("test-session", "Build something complex that needs decomposition"),
+      ).rejects.toBeInstanceOf(GoalDecompositionProviderError);
+    });
+
     it("does NOT throw for a transient parse failure — falls back to single-node tree", async () => {
       const provider = createStreamingMockProvider(["not valid json at all", "still {{{ broken"]);
       const decomposer = new GoalDecomposer(provider, 3);

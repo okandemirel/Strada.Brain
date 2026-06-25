@@ -7,6 +7,8 @@ import type {
   StreamCallback,
   ProviderCapabilities,
   IStreamingProvider,
+  ProviderCallOptions,
+  ProviderCallHooks,
 } from "./provider.interface.js";
 import type { MessageContent, AssistantMessage } from "./provider-core.interface.js";
 import { getLogger, getLoggerSafe } from "../../utils/logger.js";
@@ -107,7 +109,7 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
     systemPrompt: string,
     messages: ConversationMessage[],
     tools: ToolDefinition[],
-    options?: { signal?: AbortSignal },
+    options?: ProviderCallOptions,
   ): Promise<ProviderResponse> {
     if (this.isChatGptSubscriptionMode()) {
       return this.chatViaChatGptResponses(systemPrompt, messages, tools, undefined, options?.signal);
@@ -134,6 +136,7 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
         body: JSON.stringify(body),
         signal: options?.signal,
       },
+      { onBackoff: options?.onBackoff },
     );
 
     const data = (await response.json()) as OpenAIResponse;
@@ -145,7 +148,7 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
     messages: ConversationMessage[],
     tools: ToolDefinition[],
     onChunk: StreamCallback,
-    options?: { signal?: AbortSignal },
+    options?: ProviderCallOptions,
   ): Promise<ProviderResponse> {
     if (this.isChatGptSubscriptionMode()) {
       return this.chatViaChatGptResponses(systemPrompt, messages, tools, onChunk, options?.signal);
@@ -173,6 +176,7 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
         body: JSON.stringify(body),
         signal: options?.signal,
       },
+      { onBackoff: options?.onBackoff },
     );
 
     let text = "";
@@ -759,14 +763,20 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
 
   /**
    * Fetch with exponential backoff retry for transient errors (429, 5xx).
+   *
+   * `hooks.onBackoff` (when supplied by the FallbackChain via the call options) is
+   * forwarded so a deliberate 429 retry backoff resets the chain's first-response
+   * timer and is classified as rate-limiting, not an unresponsive endpoint.
    */
   protected async fetchWithRetry(
     url: string,
     options: RequestInit,
+    hooks?: ProviderCallHooks,
   ): Promise<Response> {
     return sharedFetchWithRetry(url, options, {
       maxRetries: MAX_RETRIES,
       callerName: this.name,
+      onBackoff: hooks?.onBackoff,
     });
   }
 

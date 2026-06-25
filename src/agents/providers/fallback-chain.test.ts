@@ -166,7 +166,14 @@ describe("FallbackChainProvider", () => {
 
     await chain.chat("system-prompt", msgs, tools);
 
-    expect(p1.chat).toHaveBeenCalledWith("system-prompt", msgs, tools, undefined);
+    // The chain now always threads a resilience options object carrying the onBackoff
+    // hook (so a provider's 429 retry backoff can reset the first-response timer).
+    expect(p1.chat).toHaveBeenCalledWith(
+      "system-prompt",
+      msgs,
+      tools,
+      expect.objectContaining({ onBackoff: expect.any(Function) }),
+    );
   });
 
   it("reports healthy when a fallback provider passes healthCheck", async () => {
@@ -612,6 +619,105 @@ describe("FallbackChainProvider", () => {
       });
       await chain.chat("sys", [], []);
       expect(onModelResponsive).toHaveBeenCalledWith("opencode", "good-model");
+    });
+  });
+
+  // A deliberate 429 retry backoff is the client waiting ON PURPOSE — it must NOT be
+  // counted against the first-response silence budget (which protects against a truly
+  // unresponsive endpoint). These tests prove: (1) a transient 429 that backs off
+  // LONGER than the budget but then succeeds now COMPLETES instead of dying at the
+  // timeout; (2) a 429-driven failure is classified + reported as RATE-LIMITED, not
+  // "unresponsive endpoint"; (3) a genuinely-silent endpoint (no 429) STILL times out.
+  describe("429 rate-limit coherence + honest classification", () => {
+    beforeEach(() => ProviderHealthRegistry.resetInstance());
+
+    /**
+     * A provider whose own HTTP retry wrapper hits a 429 and waits on a deliberate
+     * backoff (longer than the chain's first-response budget) before finally
+     * succeeding. It models that by firing options.onBackoff({status:429}) then
+     * resolving after `backoffMs` — the backoff must reset the chain timer so the
+     * late success survives.
+     */
+    function backoffThenSucceedProvider(name: string, backoffMs: number): IAIProvider {
+      const p = { ...createMockProvider({ text: "after-429" }), name };
+      (p.chat as ReturnType<typeof vi.fn>).mockImplementation(
+        (_sp: string, _m: ConversationMessage[], _t: ToolDefinition[], opts?: { onBackoff?: (i: { status: number; delayMs: number }) => void }) =>
+          new Promise((resolve) => {
+            // Simulate the retry wrapper scheduling a 429 backoff immediately.
+            opts?.onBackoff?.({ status: 429, delayMs: backoffMs });
+            setTimeout(
+              () => resolve({ text: "after-429", toolCalls: [], stopReason: "end_turn", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } }),
+              backoffMs,
+            );
+          }),
+      );
+      return p;
+    }
+
+    it("a transient 429-then-success completes within budget instead of aborting at the timeout (coherence)", async () => {
+      // backoff (80ms) is LONGER than the 40ms first-response budget; without the
+      // markActivity reset this would die with a 90s-style "no response" timeout.
+      const provider = backoffThenSucceedProvider("opencode", 80);
+      const chain = new FallbackChainProvider([provider], { attemptTimeoutMs: 40 });
+
+      const result = await chain.chat("sys", [], []);
+      expect(result.text).toBe("after-429");
+      expect(provider.chat).toHaveBeenCalledTimes(1);
+    });
+
+    it("classifies a 429 backoff that exceeds the budget as RATE-LIMITED, not unresponsive", async () => {
+      // Fires onBackoff(429) then never resolves → the budget (extended by the backoff)
+      // elapses while still silent. The terminal error must say rate-limited, NOT
+      // "unresponsive endpoint". delayMs is small so the extended deadline fires fast.
+      const p = { ...createMockProvider(), name: "opencode" };
+      (p.chat as ReturnType<typeof vi.fn>).mockImplementation(
+        (_sp: string, _m: ConversationMessage[], _t: ToolDefinition[], opts?: { onBackoff?: (i: { status: number; delayMs: number }) => void }) =>
+          new Promise<never>(() => { opts?.onBackoff?.({ status: 429, delayMs: 30 }); }),
+      );
+      const chain = new FallbackChainProvider([p], { attemptTimeoutMs: 40 });
+
+      await expect(chain.chat("sys", [], [])).rejects.toThrow(/rate-limited \(HTTP 429\)/i);
+    });
+
+    it("does NOT mark a rate-limited model unresponsive (no auto-demote for 429)", async () => {
+      const p = { ...createMockProvider(), name: "opencode" };
+      (p.chat as ReturnType<typeof vi.fn>).mockImplementation(
+        (_sp: string, _m: ConversationMessage[], _t: ToolDefinition[], opts?: { onBackoff?: (i: { status: number; delayMs: number }) => void }) =>
+          new Promise<never>(() => { opts?.onBackoff?.({ status: 429, delayMs: 30 }); }),
+      );
+      const onModelUnresponsive = vi.fn();
+      const chain = new FallbackChainProvider([p], {
+        attemptTimeoutMs: 40,
+        attemptMeta: [{ provider: "opencode", model: "qwen" }],
+        onModelUnresponsive,
+      });
+
+      await expect(chain.chat("sys", [], [])).rejects.toThrow(/rate-limited/i);
+      // A throttled model is alive — it must NOT be auto-demoted as unresponsive.
+      expect(onModelUnresponsive).not.toHaveBeenCalled();
+    });
+
+    it("surfaces a terminal rate-limited message when 429 retries are exhausted by the provider", async () => {
+      // Models the provider's retry wrapper exhausting its 429 retries and throwing the
+      // honest fetch-with-retry terminal message.
+      const p = { ...createMockProvider(), name: "opencode" };
+      (p.chat as ReturnType<typeof vi.fn>).mockRejectedValue(
+        new Error("OpenCode (Zen/Go) rate-limited (HTTP 429): too many requests"),
+      );
+      const chain = new FallbackChainProvider([p], { attemptTimeoutMs: 5000 });
+
+      await expect(chain.chat("sys", [], [])).rejects.toThrow(/rate-limited \(HTTP 429\)/i);
+    });
+
+    it("a genuinely-silent endpoint (no 429, no bytes) STILL times out as unresponsive (protection intact)", async () => {
+      // No onBackoff is ever fired → the silence budget is never reset → the honest
+      // unresponsive-endpoint timeout still fires. This is the guard that the coherence
+      // fix did NOT weaken the genuine-timeout protection.
+      const silent = { ...createMockProvider(), name: "dead" };
+      (silent.chat as ReturnType<typeof vi.fn>).mockImplementation(() => new Promise<never>(() => {}));
+      const chain = new FallbackChainProvider([silent], { attemptTimeoutMs: 40 });
+
+      await expect(chain.chat("sys", [], [])).rejects.toThrow(/no response within|unresponsive endpoint/i);
     });
   });
 });

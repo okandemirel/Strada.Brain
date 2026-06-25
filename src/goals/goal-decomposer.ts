@@ -129,7 +129,12 @@ export function isProviderOutageError(err: unknown): boolean {
     msg.includes("all providers failed") ||
     msg.includes("providers failed or unavailable") ||
     msg.includes("sent no response within") ||
-    msg.includes("unresponsive endpoint")
+    msg.includes("unresponsive endpoint") ||
+    // Rate-limiting (HTTP 429) that exhausted retries / backoff is a genuine provider
+    // outage for surfacing purposes — fail the task cleanly with an honest cause
+    // rather than silently degrading to a single-node tree.
+    msg.includes("rate-limited") ||
+    msg.includes("429")
   );
 }
 

@@ -6,6 +6,7 @@ import type {
   StreamCallback,
   ProviderCapabilities,
   IStreamingProvider,
+  ProviderCallOptions,
 } from "./provider.interface.js";
 import type { MessageContent } from "./provider-core.interface.js";
 import { supportsStreaming } from "./provider.interface.js";
@@ -40,6 +41,13 @@ const CANCEL_RE = /cancel/i;
 const TASK_INTERRUPTED_RE = /task\.interrupted/i;
 /** Regex for server overload errors (HTTP 529, 503) — triggers extended cooldown */
 const OVERLOAD_RE = /\b(?:529|503)\b/;
+/**
+ * Regex for rate-limit (HTTP 429) errors. Matched against the terminal error message
+ * so a 429-driven failure is classified + reported as rate-limited, NOT as an
+ * "unresponsive endpoint". Anchored on the bare 429 status and the explicit
+ * "rate-limited" phrasing emitted by fetch-with-retry.ts.
+ */
+const RATE_LIMIT_RE = /\b429\b|rate.?limit/i;
 
 function isNonRetryableRequestError(error: unknown): boolean {
   const msg = error instanceof Error ? error.message : String(error);
@@ -73,10 +81,33 @@ function isEmptyProviderResponse(response: ProviderResponse): boolean {
  */
 class FirstResponseTimeoutError extends Error {}
 
+/**
+ * Thrown when an attempt fails specifically because the provider rate-limited us
+ * (HTTP 429) — either the provider's retry wrapper exhausted its 429 retries, or a
+ * 429 backoff was still in flight when the budget elapsed. Distinct type so the
+ * catch path reports it honestly as rate-limiting instead of "unresponsive endpoint",
+ * and so it is NOT counted as an unresponsive-streak auto-demote signal (a
+ * rate-limited model is alive, just throttled).
+ */
+class RateLimitedError extends Error {}
+
 /** Canonical provider name + model id for one chain position (for auto-demote). */
 export interface ChainAttemptMeta {
   readonly provider: string;
   readonly model: string;
+}
+
+/**
+ * Control surface handed to a single provider attempt. `markActivity` proves the
+ * endpoint is alive (stream chunk or deliberate retry backoff) and resets the
+ * first-response timer; `onBackoff` is forwarded to the provider's HTTP retry wrapper
+ * so a deliberate 429 backoff resets the timer AND is classified as rate-limiting;
+ * `timeoutSignal` cancels the underlying call when the first-response budget elapses.
+ */
+interface AttemptControl {
+  markActivity: () => void;
+  onBackoff: (info: { status: number; delayMs: number }) => void;
+  timeoutSignal?: AbortSignal;
 }
 
 /**
@@ -190,10 +221,13 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
     systemPrompt: string,
     messages: ConversationMessage[],
     tools: ToolDefinition[],
-    options?: { signal?: AbortSignal; externalSignal?: AbortSignal },
+    options?: ProviderCallOptions,
   ): Promise<ProviderResponse> {
     return this.tryWithFallback("chat", (provider, safeMessages, ctl) =>
-      provider.chat(systemPrompt, safeMessages, tools, this.withTimeoutSignal(options, ctl.timeoutSignal)),
+      provider.chat(systemPrompt, safeMessages, tools, {
+        ...this.withTimeoutSignal(options, ctl.timeoutSignal),
+        onBackoff: ctl.onBackoff,
+      }),
       messages,
       options?.externalSignal,
     );
@@ -204,10 +238,10 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
     messages: ConversationMessage[],
     tools: ToolDefinition[],
     onChunk: StreamCallback,
-    options?: { signal?: AbortSignal; externalSignal?: AbortSignal },
+    options?: ProviderCallOptions,
   ): Promise<ProviderResponse> {
     return this.tryWithFallback("streaming", (provider, safeMessages, ctl) => {
-      const opts = this.withTimeoutSignal(options, ctl.timeoutSignal);
+      const opts = { ...this.withTimeoutSignal(options, ctl.timeoutSignal), onBackoff: ctl.onBackoff };
       if (supportsStreaming(provider)) {
         // The first chunk proves the provider is responding → clear the first-response
         // timer so a long, healthy stream is never cut short.
@@ -265,31 +299,62 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
     attempt: (
       provider: IAIProvider & Partial<IStreamingProvider>,
       messages: ConversationMessage[],
-      ctl: { markActivity: () => void; timeoutSignal?: AbortSignal },
+      ctl: AttemptControl,
     ) => Promise<ProviderResponse>,
     messages: ConversationMessage[],
   ): Promise<ProviderResponse> {
     if (this.attemptTimeoutMs <= 0) {
-      return attempt(provider, messages, { markActivity: () => {} });
+      return attempt(provider, messages, { markActivity: () => {}, onBackoff: () => {} });
     }
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
     let settled = false;
-    const markActivity = (): void => {
-      if (timer) { clearTimeout(timer); timer = undefined; }
-    };
-    try {
-      return await new Promise<ProviderResponse>((resolve, reject) => {
-        timer = setTimeout(() => {
-          if (settled) return;
-          controller.abort();
-          reject(new FirstResponseTimeoutError(
+    let disarmed = false;
+    // Tracks whether the provider's own retry wrapper hit a 429 and waited on a
+    // deliberate backoff. If so, a budget-exhaustion is reported as rate-limiting,
+    // not as an unresponsive endpoint (the endpoint DID respond — with a 429).
+    let rateLimited = false;
+    const fire = (): void => {
+      if (settled) return;
+      controller.abort();
+      // Honest classification: if the silence was actually a deliberate 429 backoff,
+      // surface it as rate-limiting; otherwise it is a genuinely unresponsive endpoint.
+      reject(rateLimited
+        ? new RateLimitedError(
+            `Provider "${provider.name}" rate-limited (HTTP 429) — retry backoff exceeded the ${this.attemptTimeoutMs}ms first-response budget`,
+          )
+        : new FirstResponseTimeoutError(
             `Provider "${provider.name}" sent no response within ${this.attemptTimeoutMs}ms (unresponsive endpoint or model)`,
           ));
-        }, this.attemptTimeoutMs);
-        attempt(provider, messages, { markActivity, timeoutSignal: controller.signal })
-          .then((r) => { settled = true; resolve(r); })
-          .catch((e: unknown) => { settled = true; reject(e instanceof Error ? e : new Error(String(e))); });
+    };
+    // markActivity proves the endpoint is genuinely streaming → PERMANENTLY clear the
+    // first-response timer so a long, healthy stream is never cut short (the
+    // orchestrator's stall watchdog governs mid-stream from here). Used by streaming
+    // attempts on their first chunk.
+    const markActivity = (): void => {
+      disarmed = true;
+      if (timer) { clearTimeout(timer); timer = undefined; }
+    };
+    // A deliberate retry backoff is us waiting ON PURPOSE, not the endpoint being silent.
+    // EXTEND the deadline by the backoff duration (rather than permanently disarm) so a
+    // transient 429 retry can complete in-budget WHILE the unresponsive-endpoint
+    // protection stays intact for any silence AFTER the backoff. A 429 also flags the
+    // attempt so a budget overrun is reported as rate-limiting, not "unresponsive".
+    const onBackoff = (info: { status: number; delayMs: number }): void => {
+      if (settled || disarmed) return;
+      if (info.status === 429) rateLimited = true;
+      if (timer) clearTimeout(timer);
+      const extend = Number.isFinite(info.delayMs) && info.delayMs > 0 ? info.delayMs : 0;
+      timer = setTimeout(fire, this.attemptTimeoutMs + extend);
+    };
+    let reject!: (reason: unknown) => void;
+    try {
+      return await new Promise<ProviderResponse>((res, rej) => {
+        reject = rej;
+        timer = setTimeout(fire, this.attemptTimeoutMs);
+        attempt(provider, messages, { markActivity, onBackoff, timeoutSignal: controller.signal })
+          .then((r) => { settled = true; res(r); })
+          .catch((e: unknown) => { settled = true; rej(e instanceof Error ? e : new Error(String(e))); });
       });
     } finally {
       if (timer) clearTimeout(timer);
@@ -305,7 +370,7 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
     attempt: (
       provider: IAIProvider & Partial<IStreamingProvider>,
       messages: ConversationMessage[],
-      ctl: { markActivity: () => void; timeoutSignal?: AbortSignal },
+      ctl: AttemptControl,
     ) => Promise<ProviderResponse>,
     messages: ConversationMessage[],
     externalSignal?: AbortSignal,
@@ -416,21 +481,30 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
 
         // A first-response timeout (provider stayed silent) is a strong "this model
         // is unresponsive" signal — notify so the manager can auto-demote it from the
-        // global default after a couple of strikes. Still falls through to the normal
-        // failure handling below (retryable → fail over).
+        // global default after a couple of strikes. A RATE-LIMITED failure is NOT an
+        // unresponsive signal (the endpoint answered — with a 429), so it must NOT
+        // trigger auto-demote. Both still fall through to the normal failure handling
+        // below (retryable → fail over).
         if (error instanceof FirstResponseTimeoutError) {
           const meta = this.attemptMeta[i];
           if (meta) this.onModelUnresponsive?.(meta.provider, meta.model);
         }
 
-        // Quota/billing errors get a long cooldown so the provider is skipped for hours.
-        // Overload errors (529/503) get a medium cooldown to let the server recover.
-        // Single-provider setups use shorter cooldowns since there is no fallback.
+        // Is this failure caused by rate-limiting (HTTP 429)? Either the timeout fired
+        // mid-429-backoff (RateLimitedError), or the provider's retry wrapper exhausted
+        // its 429 retries and threw a "rate-limited (HTTP 429)" message.
+        const isRateLimited = error instanceof RateLimitedError || RATE_LIMIT_RE.test(errorMsg);
+
+        // Quota/billing (403) errors get a long cooldown so the provider is skipped for
+        // hours. Overload (529/503) AND rate-limit (429) errors get a medium cooldown to
+        // let the server recover — a 429 is transient throttling, not a billing block, so
+        // it must NOT inherit the multi-hour quota cooldown. Single-provider setups use
+        // shorter cooldowns since there is no fallback.
         const isSingleProvider = this.providers.length === 1;
         if (/\b403\b/.test(errorMsg) && QUOTA_LIMIT_RE.test(errorMsg)) {
           const method = isSingleProvider ? "recordQuotaExhaustedShort" : "recordQuotaExhausted";
           health[method](provider.name, errorMsg);
-        } else if (OVERLOAD_RE.test(errorMsg)) {
+        } else if (OVERLOAD_RE.test(errorMsg) || isRateLimited) {
           const method = isSingleProvider ? "recordOverloadedShort" : "recordOverloaded";
           health[method](provider.name, errorMsg);
         } else {

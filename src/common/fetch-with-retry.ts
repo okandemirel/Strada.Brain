@@ -24,6 +24,15 @@ export interface FetchWithRetryOptions {
   sanitizeErrors?: boolean;
   /** AbortSignal for cancellation — propagated to fetch() */
   signal?: AbortSignal;
+  /**
+   * Fired immediately BEFORE a deliberate retry backoff sleep, carrying the HTTP
+   * status that triggered the retry and the backoff duration. Lets a caller (the
+   * FallbackChain) distinguish "we are waiting ON PURPOSE during a retry backoff"
+   * from "the endpoint is silent": it can reset its first-response timer so a
+   * deliberate backoff is not counted against the silence budget, and remember that
+   * the failure was rate-limited (429) rather than an unresponsive endpoint.
+   */
+  onBackoff?: (info: { status: number; delayMs: number }) => void;
 }
 
 const DEFAULTS = {
@@ -83,10 +92,16 @@ export async function fetchWithRetry(
     if (!isRetryable || attempt === maxRetries) {
       const rawText = (await response.text().catch(() => "(unreadable)")).slice(0, 200);
       const errorText = shouldSanitize ? sanitizeSecrets(rawText) : rawText;
-      throw new Error(`${callerName} API error ${status}: ${errorText}`);
+      // Honest classification: a 429 that has exhausted its retries is RATE-LIMITED,
+      // not a generic API error — tag the message so upstream (FallbackChain,
+      // goal-decomposition surfacing) reports "rate-limited" instead of misdiagnosing
+      // it as an unresponsive endpoint.
+      const prefix = status === 429 ? `${callerName} rate-limited (HTTP 429)` : `${callerName} API error ${status}`;
+      throw new Error(`${prefix}: ${errorText}`);
     }
 
-    // Calculate delay: prefer Retry-After header if available
+    // Calculate delay: prefer Retry-After header if available (often shorter than the
+    // exponential default), so a 429 with a short Retry-After is honored verbatim.
     let delay: number;
     if (useRetryAfter && response.headers?.get) {
       const retryAfterMs = parseFloat(response.headers.get("retry-after") ?? "") * 1000;
@@ -100,6 +115,13 @@ export async function fetchWithRetry(
     if (drainBody && response.body?.cancel) {
       try { await response.body.cancel(); } catch { /* ignore */ }
     }
+
+    // Tell the caller we are about to wait ON PURPOSE during a retry backoff. The
+    // FallbackChain uses this to reset its first-response silence timer (a deliberate
+    // backoff is us waiting, not the endpoint being unresponsive) and to remember that
+    // the failure cause is rate-limiting (429), so a later timeout/exhaustion is
+    // reported honestly as rate-limited rather than "unresponsive endpoint".
+    opts.onBackoff?.({ status, delayMs: delay });
 
     logger.warn(`${callerName} API ${status}, retrying in ${Math.round(delay)}ms`, {
       attempt: attempt + 1,
