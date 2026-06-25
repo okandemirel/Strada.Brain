@@ -7688,366 +7688,449 @@ export class Orchestrator {
       vaultRegistry: this.vaultRegistry,
     };
 
-    for (const tc of toolCalls) {
-      let activeToolCall = tc;
-      const interactiveResolution = await this.resolveInteractiveToolCall(
-        chatId,
-        activeToolCall,
-        mode,
-        options.taskPrompt,
-        options.userId,
-      );
-      if (interactiveResolution) {
-        results.push(interactiveResolution);
-        continue;
-      }
+    // SPEED (intelligence-neutral): the LLM frequently batches several INDEPENDENT read-only tool
+    // calls in a single turn (e.g. 3× file_read, grep + list_directory). Running them strictly
+    // serial wastes wall-clock on I/O-bound waits that have no ordering dependency. We parallelize
+    // ONLY the LEADING contiguous run of parallel-safe calls (read-only, not a write op, not
+    // ask_user, not a registry-mutating control tool), then fall back to the existing serial loop
+    // the instant a non-safe call appears — so a read AFTER a write in the same turn stays serial,
+    // and every write/confirm/ask_user remains strictly ordered. Each parallel call still passes
+    // through the FULL per-call gate chain (interactive resolution, read-only block, vault
+    // interceptor, auto-disable, policy, intervention engine, guardExecute, trackToolError) — we cut
+    // idle wait, never a gate or a reasoning pass. Results are keyed by toolCallId, and we assign
+    // them back into `results` in the original toolCall order so the LLM's id-association and the
+    // array order are both preserved exactly as the serial path produced them.
+    let boundary = 0;
+    for (const candidate of toolCalls) {
+      if (!this.isParallelSafeToolCall(candidate)) break;
+      boundary++;
+    }
 
-      if (
-        mode === "interactive" &&
-        activeToolCall.name === "ask_user" &&
-        options.taskPrompt &&
-        options.identityKey &&
-        options.agentState
-      ) {
-        // Break clarification loops: after 2 consecutive blocks, let ask_user through
-        const blockCount = this.askUserBlockCounts.get(chatId) ?? 0;
-        const MAX_ASK_USER_BLOCKS = 2;
-
-        if (blockCount < MAX_ASK_USER_BLOCKS) {
-          const clarificationIntervention = await this.resolveAskUserClarificationIntervention({
+    if (boundary >= 2) {
+      // Reserve a contiguous, deterministic substep-order block for the parallel group so the
+      // emitted substep labels stay monotonic and match the serial-path ordering (the group runs
+      // concurrently, but each call gets a stable pre-assigned order index).
+      const parallelGroup = toolCalls.slice(0, boundary);
+      const baseOrder = substepOrder;
+      substepOrder += parallelGroup.length;
+      const parallelResults = await Promise.all(
+        parallelGroup.map((tc, idx) =>
+          this.executeSingleToolCall(tc, baseOrder + idx, {
             chatId,
-            identityKey: options.identityKey,
-            toolCall: activeToolCall,
-            prompt: options.taskPrompt,
-            state: options.agentState,
-            strategy: options.strategy,
-            touchedFiles: options.touchedFiles,
-            usageHandler: options.onUsage,
-          });
-          if (clarificationIntervention.kind === "continue") {
-            this.askUserBlockCounts.set(chatId, blockCount + 1);
-            results.push({
-              toolCallId: activeToolCall.id,
-              content:
-                clarificationIntervention.gate ?? "Continue internally without asking the user yet.",
-              isError: false,
-            });
-            continue;
-          }
-          if (clarificationIntervention.input) {
-            activeToolCall = {
-              ...activeToolCall,
-              input:
-                clarificationIntervention.input as unknown as import("../types/index.js").JsonObject,
-            };
-          }
-        } else {
-          // Loop breaker: reset counter and let ask_user pass through
-          logger.info("Clarification loop breaker: letting ask_user through after repeated blocks", {
-            chatId, blockCount,
-          });
-        }
-        // Reset counter when ask_user actually goes through
-        this.askUserBlockCounts.delete(chatId);
-      }
-
-      const readOnlyCheck = checkReadOnlyBlock(activeToolCall.name, this.readOnly);
-      if (!readOnlyCheck.allowed) {
-        this.metrics?.recordToolBlocked();
-        results.push(createReadOnlyToolStub(activeToolCall.name, activeToolCall.id));
-        continue;
-      }
-
-      const tool = this.tools.get(activeToolCall.name);
-      if (!tool) {
-        results.push({
-          toolCallId: activeToolCall.id,
-          content: `Error: unknown tool '${activeToolCall.name}'`,
-          isError: true,
-        });
-        continue;
-      }
-
-      // Vault-first interceptor: bypass file_read tool execution when vault has fresh data.
-      if (activeToolCall.name === "file_read" && this.vaultRegistry && toolContext.projectPath) {
-        const input = activeToolCall.input as Record<string, unknown>;
-        const rawPath = input["path"];
-        if (typeof rawPath === "string") {
-          const pathCheck = await validatePath(toolContext.projectPath, rawPath);
-          if (pathCheck.valid) {
-            const vault = this.vaultRegistry.resolveVaultForPath(pathCheck.fullPath, toolContext.projectPath);
-            if (vault) {
-              const vaultRel = pathRelative(vault.rootPath, pathCheck.fullPath).replaceAll("\\", "/");
-              const intercepted = await vaultFileRead({
-                vault,
-                vaultRelPath: vaultRel,
-                absPath: pathCheck.fullPath,
-                displayPath: rawPath,
-                offset: input["offset"] !== undefined ? Math.max(1, Number(input["offset"])) : undefined,
-                limit: input["limit"] !== undefined ? Math.min(FILE_LIMITS.MAX_LINES, Math.max(1, Number(input["limit"]))) : undefined,
-                symbol: typeof input["symbol"] === "string" && input["symbol"].length > 0 ? input["symbol"] : undefined,
-              });
-              if (intercepted) {
-                results.push({
-                  toolCallId: activeToolCall.id,
-                  content: intercepted.content,
-                  isError: false,
-                  metadata: intercepted.metadata,
-                });
-                continue;
-              }
-            }
-          }
-        }
-      }
-
-      // Auto-disable tools that have failed repeatedly in this chat
-      const chatToolErrors = this.toolConsecutiveErrors.get(chatId);
-      const toolErrorCount = chatToolErrors?.get(activeToolCall.name) ?? 0;
-      if (toolErrorCount >= Orchestrator.MAX_CONSECUTIVE_TOOL_ERRORS) {
-        results.push({
-          toolCallId: activeToolCall.id,
-          content: `Tool '${activeToolCall.name}' has failed ${toolErrorCount} consecutive times and is temporarily disabled for this conversation. Use a different approach or tool.`,
-          isError: true,
-        });
-        continue;
-      }
-
-      const toolMeta = this.toolMetadataByName.get(activeToolCall.name);
-      if (toolMeta?.available === false) {
-        results.push({
-          toolCallId: activeToolCall.id,
-          content: toolMeta.availabilityReason || `Tool '${activeToolCall.name}' is currently unavailable.`,
-          isError: true,
-        });
-        continue;
-      }
-
-      const executionPolicy = this.resolveToolExecutionPolicy(
-        chatId,
-        activeToolCall.name,
-        mode,
-        options.userId,
-      );
-      logger.debug("Resolved tool execution policy", {
-        chatId,
-        tool: activeToolCall.name,
-        mode: executionPolicy.mode,
-        reason: executionPolicy.reason,
-        hardBlockers: [...executionPolicy.hardBlockers],
-      });
-      if (executionPolicy.mode === "blocked") {
-        if (executionPolicy.hardBlockers.includes("read_only_mode")) {
-          results.push(createReadOnlyToolStub(activeToolCall.name, activeToolCall.id));
-          continue;
-        }
-
-        const pendingWriteBlock = this.interactionPolicy.getWriteBlock(chatId, activeToolCall.name);
-        if (pendingWriteBlock) {
-          results.push({
-            toolCallId: activeToolCall.id,
-            content:
-              `Plan approval is still required before '${activeToolCall.name}' can run. ` +
-              `Reason: ${pendingWriteBlock.reason}. Revise or reshow the plan, or wait for the user to approve it first.`,
-            isError: true,
-          });
-          continue;
-        }
-
-        results.push({
-          toolCallId: activeToolCall.id,
-          content: executionPolicy.reason,
-          isError: true,
-        });
-        continue;
-      }
-
-      // Intervention Engine: evaluate instincts before tool execution (Learning Pipeline v2)
-      if (this.interventionEngine && this.instinctRetriever) {
-        try {
-          const relevantInstincts = await this.instinctRetriever.getMatchedInstincts(
-            activeToolCall.name,
-          );
-          if (relevantInstincts.length > 0) {
-            const intervention = this.interventionEngine.evaluate(
-              activeToolCall.name,
-              activeToolCall.input as Record<string, unknown>,
-              relevantInstincts,
-            );
-
-            if (intervention.action === 'warn') {
-              logger.debug("Intervention engine: warn for tool", {
-                tool: activeToolCall.name,
-                matches: intervention.matches.length,
-              });
-            }
-
-            if (intervention.action === 'auto_apply') {
-              for (const match of intervention.matches.filter((i: { tier: string }) => i.tier === 'auto')) {
-                await this.interventionEngine.logIntervention(
-                  match.instinctId, activeToolCall.name, 'auto', 'applied',
-                );
-              }
-            }
-          }
-        } catch (err) {
-          logger.debug("Intervention evaluation skipped", {
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
-      }
-
-      logger.debug("Executing tool", {
-        chatId,
-        tool: activeToolCall.name,
-        input: activeToolCall.input,
-      });
-
-      if (this.isWriteOperation(activeToolCall.name)) {
-        if (executionPolicy.mode === "self_managed") {
-          const review = await this.reviewSelfManagedWriteOperation(
-            chatId,
-            activeToolCall.name,
-            activeToolCall.input,
             mode,
             options,
-          );
-          if (!review.approved) {
-            results.push(
-              this.buildSelfManagedWriteRejection(
-                activeToolCall.id,
-                activeToolCall.name,
-                mode,
-                review.reason ?? "operation did not pass local safety review",
-              ),
-            );
-            continue;
-          }
-        } else if (executionPolicy.mode === "user_confirm") {
-          const destructive = isDestructiveOperation(activeToolCall.name, activeToolCall.input);
-          const sessionUserId = options.userId ?? chatId;
-          const prefs = this.dmPolicy.getSessionPrefs(sessionUserId, chatId);
-          const stubDiff = {
-            path: String(activeToolCall.input["path"] ?? ""),
-            content: "",
-            stats: { additions: 0, deletions: 0, modifications: 0, totalChanges: 1, hunks: 1 },
-            oldPath: "",
-            newPath: String(activeToolCall.input["path"] ?? ""),
-            diff: "",
-            isNew: false,
-            isDeleted: false,
-            isRename: false,
+            toolContext,
+            goalCtx,
+            logger,
+          }),
+        ),
+      );
+      results.push(...parallelResults);
+    } else {
+      // Fewer than 2 leading safe calls → nothing to parallelize; let the serial loop handle all.
+      boundary = 0;
+    }
+
+    const remaining = toolCalls.slice(boundary);
+    for (const tc of remaining) {
+      const order = substepOrder;
+      substepOrder++;
+      const result = await this.executeSingleToolCall(tc, order, {
+        chatId,
+        mode,
+        options,
+        toolContext,
+        goalCtx,
+        logger,
+      });
+      results.push(result);
+    }
+
+    return results;
+  }
+
+  /**
+   * A tool call is SAFE to run concurrently with its siblings in the same turn iff it is read-only,
+   * not a write operation, not the interactive `ask_user` control tool, and not a tool that mutates
+   * the dynamic tool registry. Anything we cannot positively classify as read-only is treated as
+   * NOT parallel-safe (serial) — the conservative default. This gates only EXECUTION CONCURRENCY;
+   * it never changes which tools run, their gating, or any reasoning.
+   */
+  private isParallelSafeToolCall(tc: ToolCall): boolean {
+    const name = tc.name;
+    if (name === "ask_user" || name === "show_plan") return false;
+    if (WRITE_OPERATIONS.has(name)) return false;
+    // Registry-mutating control tools self-guard but mutate this.tools via toolContext callbacks;
+    // keep them serial so concurrent registrations never race.
+    if (name === "create_tool" || name === "create_skill" || name === "remove_dynamic_tool") {
+      return false;
+    }
+    // Require a POSITIVE read-only classification from the flattened metadata cache (which already
+    // merges registration + intrinsic metadata with a WRITE_OPERATIONS fallback). Unknown → serial.
+    return this.toolMetadataByName.get(name)?.readOnly === true;
+  }
+
+  /**
+   * Execute ONE tool call through the full per-call gate chain and return its {@link ToolResult}.
+   * Extracted verbatim from the body of {@link executeToolCalls}'s serial loop so the SAME pipeline
+   * runs whether a call is dispatched serially or as part of the parallel leading group — only the
+   * idle wait between independent read-only calls is removed, never a gate or a reasoning step.
+   * `order` is the pre-assigned substep order index (so concurrent calls keep stable, monotonic
+   * substep labels). Returns exactly one result for every input call (every branch produces one).
+   */
+  private async executeSingleToolCall(
+    tc: ToolCall,
+    order: number,
+    ctx: {
+      chatId: string;
+      mode: ToolExecutionMode;
+      options: ToolExecutionOptions;
+      toolContext: ToolContext & { soulLoader?: SoulLoader | null; userProfileStore?: UserProfileStore };
+      goalCtx?: import("../tasks/types.js").GoalContext;
+      logger: ReturnType<typeof getLogger>;
+    },
+  ): Promise<ToolResult> {
+    const { chatId, mode, options, toolContext, goalCtx, logger } = ctx;
+    let activeToolCall = tc;
+    const interactiveResolution = await this.resolveInteractiveToolCall(
+      chatId,
+      activeToolCall,
+      mode,
+      options.taskPrompt,
+      options.userId,
+    );
+    if (interactiveResolution) {
+      return interactiveResolution;
+    }
+
+    if (
+      mode === "interactive" &&
+      activeToolCall.name === "ask_user" &&
+      options.taskPrompt &&
+      options.identityKey &&
+      options.agentState
+    ) {
+      // Break clarification loops: after 2 consecutive blocks, let ask_user through
+      const blockCount = this.askUserBlockCounts.get(chatId) ?? 0;
+      const MAX_ASK_USER_BLOCKS = 2;
+
+      if (blockCount < MAX_ASK_USER_BLOCKS) {
+        const clarificationIntervention = await this.resolveAskUserClarificationIntervention({
+          chatId,
+          identityKey: options.identityKey,
+          toolCall: activeToolCall,
+          prompt: options.taskPrompt,
+          state: options.agentState,
+          strategy: options.strategy,
+          touchedFiles: options.touchedFiles,
+          usageHandler: options.onUsage,
+        });
+        if (clarificationIntervention.kind === "continue") {
+          this.askUserBlockCounts.set(chatId, blockCount + 1);
+          return {
+            toolCallId: activeToolCall.id,
+            content:
+              clarificationIntervention.gate ?? "Continue internally without asking the user yet.",
+            isError: false,
           };
-          if (this.dmPolicy.isApprovalRequired(prefs, stubDiff, destructive)) {
-            const confirmed = await this.requestWriteConfirmation(
-              chatId,
-              options.userId,
-              activeToolCall.name,
-              activeToolCall.input,
-            );
-            if (!confirmed) {
-              results.push({
+        }
+        if (clarificationIntervention.input) {
+          activeToolCall = {
+            ...activeToolCall,
+            input:
+              clarificationIntervention.input as unknown as import("../types/index.js").JsonObject,
+          };
+        }
+      } else {
+        // Loop breaker: reset counter and let ask_user pass through
+        logger.info("Clarification loop breaker: letting ask_user through after repeated blocks", {
+          chatId, blockCount,
+        });
+      }
+      // Reset counter when ask_user actually goes through
+      this.askUserBlockCounts.delete(chatId);
+    }
+
+    const readOnlyCheck = checkReadOnlyBlock(activeToolCall.name, this.readOnly);
+    if (!readOnlyCheck.allowed) {
+      this.metrics?.recordToolBlocked();
+      return createReadOnlyToolStub(activeToolCall.name, activeToolCall.id);
+    }
+
+    const tool = this.tools.get(activeToolCall.name);
+    if (!tool) {
+      return {
+        toolCallId: activeToolCall.id,
+        content: `Error: unknown tool '${activeToolCall.name}'`,
+        isError: true,
+      };
+    }
+
+    // Vault-first interceptor: bypass file_read tool execution when vault has fresh data.
+    if (activeToolCall.name === "file_read" && this.vaultRegistry && toolContext.projectPath) {
+      const input = activeToolCall.input as Record<string, unknown>;
+      const rawPath = input["path"];
+      if (typeof rawPath === "string") {
+        const pathCheck = await validatePath(toolContext.projectPath, rawPath);
+        if (pathCheck.valid) {
+          const vault = this.vaultRegistry.resolveVaultForPath(pathCheck.fullPath, toolContext.projectPath);
+          if (vault) {
+            const vaultRel = pathRelative(vault.rootPath, pathCheck.fullPath).replaceAll("\\", "/");
+            const intercepted = await vaultFileRead({
+              vault,
+              vaultRelPath: vaultRel,
+              absPath: pathCheck.fullPath,
+              displayPath: rawPath,
+              offset: input["offset"] !== undefined ? Math.max(1, Number(input["offset"])) : undefined,
+              limit: input["limit"] !== undefined ? Math.min(FILE_LIMITS.MAX_LINES, Math.max(1, Number(input["limit"]))) : undefined,
+              symbol: typeof input["symbol"] === "string" && input["symbol"].length > 0 ? input["symbol"] : undefined,
+            });
+            if (intercepted) {
+              return {
                 toolCallId: activeToolCall.id,
-                content: "Operation cancelled by user.",
+                content: intercepted.content,
                 isError: false,
-              });
-              continue;
+                metadata: intercepted.metadata,
+              };
             }
           }
         }
       }
+    }
 
-      const toolStart = Date.now();
-      const substepId = `${activeToolCall.name}-${substepOrder}`;
-      substepOrder++;
-
-      const emitSubstep = (status: "active" | "done" | "skipped"): void => {
-        if (goalCtx && this.workspaceBus) {
-          this.workspaceBus.emit("monitor:substep", {
-            rootId: goalCtx.rootId,
-            nodeId: goalCtx.nodeId,
-            substep: { id: substepId, label: activeToolCall.name, status, order: substepOrder },
-          });
-        }
+    // Auto-disable tools that have failed repeatedly in this chat
+    const chatToolErrors = this.toolConsecutiveErrors.get(chatId);
+    const toolErrorCount = chatToolErrors?.get(activeToolCall.name) ?? 0;
+    if (toolErrorCount >= Orchestrator.MAX_CONSECUTIVE_TOOL_ERRORS) {
+      return {
+        toolCallId: activeToolCall.id,
+        content: `Tool '${activeToolCall.name}' has failed ${toolErrorCount} consecutive times and is temporarily disabled for this conversation. Use a different approach or tool.`,
+        isError: true,
       };
+    }
 
-      emitSubstep("active");
+    const toolMeta = this.toolMetadataByName.get(activeToolCall.name);
+    if (toolMeta?.available === false) {
+      return {
+        toolCallId: activeToolCall.id,
+        content: toolMeta.availabilityReason || `Tool '${activeToolCall.name}' is currently unavailable.`,
+        isError: true,
+      };
+    }
 
-      try {
-        // Phase 3b write-path guard (flag-gated, ADDITIVE): run the tool through guardExecute so a
-        // down + un-revivable substrate capability returns the typed BLOCKED contract, and a real
-        // success/failure feeds the registry's health. Unwired (flag off) → the plain call below,
-        // byte-identical. A `down` substrate first gets ONE revive attempt via the per-capability
-        // adapter (mcp:strada → bridge lazy-reconnect, wired by bootstrap); only an absent adapter or
-        // a failed revive BLOCKs. The orchestrator's flattened toolMetadataByName carries only
-        // `requiresBridge`, so the binding here distinguishes the bridge from in-process.
-        let result: ToolExecutionResult;
-        if (this.capabilityRegistry) {
-          const capabilityId = capabilityForTool({ requiresBridge: toolMeta?.requiresBridge });
-          const guarded = await guardExecute({
-            registry: this.capabilityRegistry,
-            capabilityId,
-            adapter: this.capabilityAdapters?.get(capabilityId),
-            run: () => tool.execute(activeToolCall.input, toolContext),
-          });
-          if (guarded.kind === "blocked") {
-            // BLOCKED is non-progress, non-fatal — NOT counted as a tool error (mirrors the available
-            // gate above), so it never trips the consecutive-error disable. Sanitized for parity with
-            // the success path: the BLOCKED reason can embed a substrate transport-error fragment, so
-            // redact/de-inject it defensively rather than push it raw.
-            emitSubstep("skipped");
-            results.push({
-              toolCallId: activeToolCall.id,
-              content: sanitizeToolResult(formatBlocked(guarded.blocked)),
-              isError: true,
-            });
-            continue;
-          }
-          result = guarded.value;
-        } else {
-          result = await tool.execute(activeToolCall.input, toolContext);
-        }
-        this.metrics?.recordToolCall(activeToolCall.name, Date.now() - toolStart, !result.isError, result.isError ? String(result.content).slice(0, 200) : undefined);
-        // Vault write-hook (Phase 1): on successful Edit/Write tool calls,
-        // trigger a budget-aware reindex of the touched file so the next turn's
-        // vault-backed context reflects the just-written change.
-        if (!result.isError && this.vaultRegistry) {
-          await this.maybeFireVaultWriteHook(activeToolCall.name, activeToolCall.input);
-        }
-        if (!result.isError && activeToolCall.name !== "ask_user") {
-          this.askUserBlockCounts.delete(chatId);
-        }
-        emitSubstep(result.isError ? "skipped" : "done");
+    const executionPolicy = this.resolveToolExecutionPolicy(
+      chatId,
+      activeToolCall.name,
+      mode,
+      options.userId,
+    );
+    logger.debug("Resolved tool execution policy", {
+      chatId,
+      tool: activeToolCall.name,
+      mode: executionPolicy.mode,
+      reason: executionPolicy.reason,
+      hardBlockers: [...executionPolicy.hardBlockers],
+    });
+    if (executionPolicy.mode === "blocked") {
+      if (executionPolicy.hardBlockers.includes("read_only_mode")) {
+        return createReadOnlyToolStub(activeToolCall.name, activeToolCall.id);
+      }
 
-        this.trackToolError(chatId, activeToolCall.name, !!result.isError);
-
-        results.push({
+      const pendingWriteBlock = this.interactionPolicy.getWriteBlock(chatId, activeToolCall.name);
+      if (pendingWriteBlock) {
+        return {
           toolCallId: activeToolCall.id,
-          content: sanitizeToolResult(result.content),
-          isError: result.isError,
-          metadata: result.metadata,
-        });
-      } catch (error) {
-        const errMsg = error instanceof Error ? error.message : "Unknown error";
-        this.metrics?.recordToolCall(activeToolCall.name, Date.now() - toolStart, false, errMsg.slice(0, 200));
-        logger.error("Tool execution error", {
-          chatId,
-          tool: activeToolCall.name,
-          error: errMsg,
-        });
-        emitSubstep("skipped");
-
-        this.trackToolError(chatId, activeToolCall.name, true);
-
-        results.push({
-          toolCallId: activeToolCall.id,
-          content: `Tool execution failed: ${classifyErrorMessage(error)}`,
+          content:
+            `Plan approval is still required before '${activeToolCall.name}' can run. ` +
+            `Reason: ${pendingWriteBlock.reason}. Revise or reshow the plan, or wait for the user to approve it first.`,
           isError: true,
+        };
+      }
+
+      return {
+        toolCallId: activeToolCall.id,
+        content: executionPolicy.reason,
+        isError: true,
+      };
+    }
+
+    // Intervention Engine: evaluate instincts before tool execution (Learning Pipeline v2)
+    if (this.interventionEngine && this.instinctRetriever) {
+      try {
+        const relevantInstincts = await this.instinctRetriever.getMatchedInstincts(
+          activeToolCall.name,
+        );
+        if (relevantInstincts.length > 0) {
+          const intervention = this.interventionEngine.evaluate(
+            activeToolCall.name,
+            activeToolCall.input as Record<string, unknown>,
+            relevantInstincts,
+          );
+
+          if (intervention.action === 'warn') {
+            logger.debug("Intervention engine: warn for tool", {
+              tool: activeToolCall.name,
+              matches: intervention.matches.length,
+            });
+          }
+
+          if (intervention.action === 'auto_apply') {
+            for (const match of intervention.matches.filter((i: { tier: string }) => i.tier === 'auto')) {
+              await this.interventionEngine.logIntervention(
+                match.instinctId, activeToolCall.name, 'auto', 'applied',
+              );
+            }
+          }
+        }
+      } catch (err) {
+        logger.debug("Intervention evaluation skipped", {
+          error: err instanceof Error ? err.message : String(err),
         });
       }
     }
 
-    return results;
+    logger.debug("Executing tool", {
+      chatId,
+      tool: activeToolCall.name,
+      input: activeToolCall.input,
+    });
+
+    if (this.isWriteOperation(activeToolCall.name)) {
+      if (executionPolicy.mode === "self_managed") {
+        const review = await this.reviewSelfManagedWriteOperation(
+          chatId,
+          activeToolCall.name,
+          activeToolCall.input,
+          mode,
+          options,
+        );
+        if (!review.approved) {
+          return this.buildSelfManagedWriteRejection(
+            activeToolCall.id,
+            activeToolCall.name,
+            mode,
+            review.reason ?? "operation did not pass local safety review",
+          );
+        }
+      } else if (executionPolicy.mode === "user_confirm") {
+        const destructive = isDestructiveOperation(activeToolCall.name, activeToolCall.input);
+        const sessionUserId = options.userId ?? chatId;
+        const prefs = this.dmPolicy.getSessionPrefs(sessionUserId, chatId);
+        const stubDiff = {
+          path: String(activeToolCall.input["path"] ?? ""),
+          content: "",
+          stats: { additions: 0, deletions: 0, modifications: 0, totalChanges: 1, hunks: 1 },
+          oldPath: "",
+          newPath: String(activeToolCall.input["path"] ?? ""),
+          diff: "",
+          isNew: false,
+          isDeleted: false,
+          isRename: false,
+        };
+        if (this.dmPolicy.isApprovalRequired(prefs, stubDiff, destructive)) {
+          const confirmed = await this.requestWriteConfirmation(
+            chatId,
+            options.userId,
+            activeToolCall.name,
+            activeToolCall.input,
+          );
+          if (!confirmed) {
+            return {
+              toolCallId: activeToolCall.id,
+              content: "Operation cancelled by user.",
+              isError: false,
+            };
+          }
+        }
+      }
+    }
+
+    const toolStart = Date.now();
+    const substepId = `${activeToolCall.name}-${order}`;
+
+    const emitSubstep = (status: "active" | "done" | "skipped"): void => {
+      if (goalCtx && this.workspaceBus) {
+        this.workspaceBus.emit("monitor:substep", {
+          rootId: goalCtx.rootId,
+          nodeId: goalCtx.nodeId,
+          substep: { id: substepId, label: activeToolCall.name, status, order: order + 1 },
+        });
+      }
+    };
+
+    emitSubstep("active");
+
+    try {
+      // Phase 3b write-path guard (flag-gated, ADDITIVE): run the tool through guardExecute so a
+      // down + un-revivable substrate capability returns the typed BLOCKED contract, and a real
+      // success/failure feeds the registry's health. Unwired (flag off) → the plain call below,
+      // byte-identical. A `down` substrate first gets ONE revive attempt via the per-capability
+      // adapter (mcp:strada → bridge lazy-reconnect, wired by bootstrap); only an absent adapter or
+      // a failed revive BLOCKs. The orchestrator's flattened toolMetadataByName carries only
+      // `requiresBridge`, so the binding here distinguishes the bridge from in-process.
+      let result: ToolExecutionResult;
+      if (this.capabilityRegistry) {
+        const capabilityId = capabilityForTool({ requiresBridge: toolMeta?.requiresBridge });
+        const guarded = await guardExecute({
+          registry: this.capabilityRegistry,
+          capabilityId,
+          adapter: this.capabilityAdapters?.get(capabilityId),
+          run: () => tool.execute(activeToolCall.input, toolContext),
+        });
+        if (guarded.kind === "blocked") {
+          // BLOCKED is non-progress, non-fatal — NOT counted as a tool error (mirrors the available
+          // gate above), so it never trips the consecutive-error disable. Sanitized for parity with
+          // the success path: the BLOCKED reason can embed a substrate transport-error fragment, so
+          // redact/de-inject it defensively rather than push it raw.
+          emitSubstep("skipped");
+          return {
+            toolCallId: activeToolCall.id,
+            content: sanitizeToolResult(formatBlocked(guarded.blocked)),
+            isError: true,
+          };
+        }
+        result = guarded.value;
+      } else {
+        result = await tool.execute(activeToolCall.input, toolContext);
+      }
+      this.metrics?.recordToolCall(activeToolCall.name, Date.now() - toolStart, !result.isError, result.isError ? String(result.content).slice(0, 200) : undefined);
+      // Vault write-hook (Phase 1): on successful Edit/Write tool calls,
+      // trigger a budget-aware reindex of the touched file so the next turn's
+      // vault-backed context reflects the just-written change.
+      if (!result.isError && this.vaultRegistry) {
+        await this.maybeFireVaultWriteHook(activeToolCall.name, activeToolCall.input);
+      }
+      if (!result.isError && activeToolCall.name !== "ask_user") {
+        this.askUserBlockCounts.delete(chatId);
+      }
+      emitSubstep(result.isError ? "skipped" : "done");
+
+      this.trackToolError(chatId, activeToolCall.name, !!result.isError);
+
+      return {
+        toolCallId: activeToolCall.id,
+        content: sanitizeToolResult(result.content),
+        isError: result.isError,
+        metadata: result.metadata,
+      };
+    } catch (error) {
+      const errMsg = error instanceof Error ? error.message : "Unknown error";
+      this.metrics?.recordToolCall(activeToolCall.name, Date.now() - toolStart, false, errMsg.slice(0, 200));
+      logger.error("Tool execution error", {
+        chatId,
+        tool: activeToolCall.name,
+        error: errMsg,
+      });
+      emitSubstep("skipped");
+
+      this.trackToolError(chatId, activeToolCall.name, true);
+
+      return {
+        toolCallId: activeToolCall.id,
+        content: `Tool execution failed: ${classifyErrorMessage(error)}`,
+        isError: true,
+      };
+    }
   }
 
   private isWriteOperation(toolName: string): boolean {

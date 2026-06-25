@@ -105,6 +105,8 @@
   "panel.rootSwitcherSelect": "Select request",
   "panel.rootSwitcherConversation": "Conversation",
 
+  "progress.stepCounter": "step {{done}}/{{total}}",
+
   "status.pending": "Pending",
   "status.executing": "Executing",
   "status.verifying": "Verifying",

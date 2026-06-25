@@ -105,6 +105,8 @@
   "panel.rootSwitcherSelect": "リクエストを選択",
   "panel.rootSwitcherConversation": "会話",
 
+  "progress.stepCounter": "ステップ {{done}}/{{total}}",
+
   "status.pending": "保留中",
   "status.executing": "実行中",
   "status.verifying": "検証中",

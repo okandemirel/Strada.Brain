@@ -16,9 +16,10 @@ vi.mock('@xyflow/react', () => ({
 }))
 
 import { TaskNode, ReviewNode, GateNode } from './dag-nodes'
+import type { MonitorTask } from '../../stores/monitor-store'
 
 // Components only destructure { data } from NodeProps — cast to simplified FC for testing
-type TaskData = { label: string; status: string; reviewStatus?: string }
+type TaskData = { label: string; status: string; reviewStatus?: string; task?: MonitorTask }
 type ReviewData = { label: string; status: string; reviewType?: string }
 type GateData = { label: string; status: string }
 
@@ -64,6 +65,33 @@ describe('TaskNode', () => {
     render(<Task data={{ label: 'Task', status: 'pending' }} />)
     expect(screen.getByTestId('handle-target-top')).toBeInTheDocument()
     expect(screen.getByTestId('handle-source-bottom')).toBeInTheDocument()
+  })
+
+  it('renders a live progress line for an executing task with a forwarded task record', () => {
+    const task = {
+      id: 'n1',
+      nodeId: 'n1',
+      title: 'Working node',
+      status: 'executing',
+      reviewStatus: 'none',
+      narrative: 'Compiling C#',
+      elapsed: 5_000,
+    } as MonitorTask
+    render(<Task data={{ label: 'Working node', status: 'executing', task }} />)
+    expect(screen.getByText('Compiling C#')).toBeInTheDocument()
+  })
+
+  it('does NOT render a live progress line for a non-executing node', () => {
+    const task = {
+      id: 'n1',
+      nodeId: 'n1',
+      title: 'Pending node',
+      status: 'pending',
+      reviewStatus: 'none',
+      narrative: 'hidden-narrative',
+    } as MonitorTask
+    render(<Task data={{ label: 'Pending node', status: 'pending', task }} />)
+    expect(screen.queryByText('hidden-narrative')).not.toBeInTheDocument()
   })
 })
 

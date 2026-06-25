@@ -274,4 +274,62 @@ describe('KanbanBoard', () => {
     // Second call: rollback
     expect(mockUpdateTask).toHaveBeenNthCalledWith(2, 't1', { status: 'failed', reviewStatus: 'none' })
   })
+
+  // ── Live progress footer (visibility-only) ────────────────────────────────────
+  // A working card must visibly advance so a still-progressing task never looks frozen.
+  it('renders the live progress (narrative + elapsed) for an executing task', () => {
+    mockTasks = {
+      t1: makeTask({
+        id: 't1',
+        title: 'Active Task',
+        status: 'executing',
+        narrative: 'Reading orchestrator.ts',
+        elapsed: 12_000,
+      }),
+    }
+    render(<KanbanBoard />)
+    // Current activity narrative is surfaced on the always-visible card.
+    expect(screen.getByText('Reading orchestrator.ts')).toBeInTheDocument()
+    // Elapsed readout renders (fallback elapsed of 12s → "12.0s").
+    expect(screen.getByText('12.0s')).toBeInTheDocument()
+  })
+
+  it('shows a substep step counter while executing', () => {
+    mockTasks = {
+      t1: makeTask({
+        id: 't1',
+        title: 'Stepping Task',
+        status: 'executing',
+        elapsed: 3_000,
+        substeps: [
+          { id: 's1', label: 'file_read', status: 'done', order: 1 },
+          { id: 's2', label: 'grep', status: 'active', order: 2 },
+        ],
+      }),
+    }
+    render(<KanbanBoard />)
+    expect(screen.getByText('step 1/2')).toBeInTheDocument()
+  })
+
+  it('does NOT render the live progress footer for a pending task', () => {
+    mockTasks = {
+      t1: makeTask({ id: 't1', title: 'Idle Task', status: 'pending', narrative: 'should-not-show' }),
+    }
+    render(<KanbanBoard />)
+    expect(screen.queryByText('should-not-show')).not.toBeInTheDocument()
+  })
+
+  it('does NOT render the live progress footer for a completed task', () => {
+    mockTasks = {
+      t1: makeTask({
+        id: 't1',
+        title: 'Finished',
+        status: 'completed',
+        reviewStatus: 'review_passed',
+        narrative: 'done-narrative',
+      }),
+    }
+    render(<KanbanBoard />)
+    expect(screen.queryByText('done-narrative')).not.toBeInTheDocument()
+  })
 })

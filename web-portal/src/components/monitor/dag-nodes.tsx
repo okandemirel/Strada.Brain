@@ -1,6 +1,8 @@
 import { Handle, Position, type Node, type NodeProps } from '@xyflow/react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
+import type { MonitorTask } from '../../stores/monitor-store'
+import { LiveProgress } from './ProgressIndicator'
 
 const STATUS_COLORS: Record<string, string> = {
   pending: 'bg-text-tertiary',
@@ -30,6 +32,11 @@ type TaskNodeData = {
   label: string
   status: string
   reviewStatus?: string
+  /**
+   * The live task record (forwarded by DAGView from the store) so the node can render the same
+   * executing-only progress indicator as the Kanban card. Optional — absent on legacy callers.
+   */
+  task?: MonitorTask
 }
 
 type TaskNodeType = Node<TaskNodeData, 'task'>
@@ -57,6 +64,8 @@ export function TaskNode({ data }: NodeProps<TaskNodeType>) {
         {data.reviewStatus && data.reviewStatus !== 'none' && (
           <div className="mt-1 text-[10px] text-text-secondary">{t('dag.nodeReviewPrefix')}{data.reviewStatus}</div>
         )}
+        {/* Executing-only single-line live indicator (spinner + elapsed); null otherwise. */}
+        {data.task && <LiveProgress task={data.task} condensed />}
       </div>
       <Handle
         type="source"

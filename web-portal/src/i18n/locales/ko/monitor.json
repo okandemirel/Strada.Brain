@@ -105,6 +105,8 @@
   "panel.rootSwitcherSelect": "요청 선택",
   "panel.rootSwitcherConversation": "대화",
 
+  "progress.stepCounter": "단계 {{done}}/{{total}}",
+
   "status.pending": "대기 중",
   "status.executing": "실행 중",
   "status.verifying": "검증 중",

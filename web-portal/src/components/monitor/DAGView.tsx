@@ -88,6 +88,11 @@ function layoutNodes(
 export default function DAGView() {
   const { t } = useTranslation('monitor')
   const dag = useMonitorStore((s) => s.dag)
+  // Live task records carry the per-step progress fields (startedAt/elapsed/narrative/milestone/
+  // progress/substeps) that the DAG nodes (which mirror only topology+status) lack. Forwarding the
+  // record lets an executing node show the same "working… / elapsed" indicator as the Kanban card,
+  // so a progressing node never looks frozen. Read-only — no store-shape change.
+  const tasks = useMonitorStore((s) => s.tasks)
   const setSelectedTask = useMonitorStore((s) => s.setSelectedTask)
 
   // Separate structural identity from status so layout only recomputes on topology changes
@@ -113,6 +118,7 @@ export default function DAGView() {
           status: (raw?.status as string) || 'pending',
           reviewStatus: (raw?.reviewStatus as string) || undefined,
           reviewType: (raw?.reviewType as string) || undefined,
+          task: tasks?.[pos.id],
         },
       }
     })
@@ -126,7 +132,7 @@ export default function DAGView() {
     }))
 
     return { nodes, edges }
-  }, [dag, positions, dagNodes, dagEdges])
+  }, [dag, positions, dagNodes, dagEdges, tasks])
 
   if (!dag) {
     return (

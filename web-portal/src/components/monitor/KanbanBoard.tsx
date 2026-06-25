@@ -23,6 +23,7 @@ import {
 } from '../../stores/monitor-store'
 import { useWS } from '../../hooks/useWS'
 import { normalizeLabel } from './monitor-utils'
+import { LiveProgress } from './ProgressIndicator'
 
 /** Maps each Kanban column to the default status when a task is dropped there. */
 const COLUMN_STATUS_MAP: Record<string, { status: MonitorTaskStatus; reviewStatus: MonitorReviewStatus }> = {
@@ -125,6 +126,8 @@ function TaskCard({ task }: { task: MonitorTask }) {
           </span>
         )}
       </div>
+      {/* Executing-only live progress so a working card never looks frozen (renders nothing otherwise). */}
+      <LiveProgress task={task} />
     </div>
   )
 }

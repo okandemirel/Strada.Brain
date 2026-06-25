@@ -105,6 +105,8 @@
   "panel.rootSwitcherSelect": "İstek seç",
   "panel.rootSwitcherConversation": "Sohbet",
 
+  "progress.stepCounter": "adım {{done}}/{{total}}",
+
   "status.pending": "Bekliyor",
   "status.executing": "Yürütülüyor",
   "status.verifying": "Doğrulanıyor",
