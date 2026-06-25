@@ -17,6 +17,8 @@ import { summarizeTree } from "../goals/goal-renderer.js";
 import { formatGoalPlanMarkdown } from "../goals/goal-feedback.js";
 import { goalTreeToDagPayload } from "../dashboard/workspace-events.js";
 import { getLogger } from "../utils/logger.js";
+import { GoalDecompositionProviderError } from "../goals/goal-decomposer.js";
+import { getResilienceMessage } from "./resilience-messages.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -63,8 +65,11 @@ function emitDagEvent(
 /**
  * Run proactive goal decomposition if the decomposer is available and the
  * message qualifies. Returns an updated agentState with plan augmented by
- * the goal tree summary. Non-fatal: errors are logged and the original
- * agentState is returned unchanged.
+ * the goal tree summary. Parse/validation failures are non-fatal (the original
+ * agentState is returned unchanged). A genuine provider OUTAGE during
+ * decomposition (all providers failed / unresponsive endpoint) is surfaced to
+ * the user (system pill / chat notice) + settles the monitor as FAILED, then
+ * re-throws so the run terminates cleanly instead of hanging in PENDING.
  */
 export async function runProactiveGoalDecomposition(
   deps: GoalDecompositionDeps,
@@ -74,6 +79,8 @@ export async function runProactiveGoalDecomposition(
     chatId: string;
     session: Session;
     agentState: AgentState;
+    /** Resolved user language for the outage notice (defaults to "en"). */
+    language?: string;
   },
 ): Promise<AgentState> {
   if (!deps.goalDecomposer || !deps.goalDecomposer.shouldDecompose(opts.userMessage)) {
@@ -106,6 +113,30 @@ export async function runProactiveGoalDecomposition(
       chatId: opts.chatId,
       error: decompError instanceof Error ? decompError.message : String(decompError),
     });
+    // A genuine provider outage during decomposition (all providers failed /
+    // unresponsive endpoint) must NOT be swallowed into a silent PENDING state.
+    // Surface a clear user-facing notice (system pill / chat) AND settle the monitor
+    // episode as FAILED so the DAG shows failed (not silent pending), then re-throw
+    // the typed error so the run terminates cleanly instead of degrading silently.
+    if (decompError instanceof GoalDecompositionProviderError) {
+      const notice = getResilienceMessage("provider_abort", opts.language ?? "en");
+      try {
+        await deps.sessionManager.sendVisibleAssistantNotice(
+          opts.chatId,
+          opts.session,
+          notice,
+        );
+      } catch (noticeErr) {
+        getLogger().warn("Failed to surface goal-decomposition provider-outage notice", {
+          chatId: opts.chatId,
+          error: noticeErr instanceof Error ? noticeErr.message : String(noticeErr),
+        });
+      }
+      // Settle/clear any pending DAG node for this scope: mark the monitor episode
+      // terminal-failed so the monitor renders FAILED, not a hung pending card.
+      deps.monitorLifecycle?.requestEnd(opts.conversationScope, true);
+      throw decompError;
+    }
     return opts.agentState;
   }
 }

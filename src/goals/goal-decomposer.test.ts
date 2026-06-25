@@ -9,11 +9,10 @@
  * - Cycle detection: invalid LLM output rejected, falls back to flat sequential
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { GoalDecomposer } from "./goal-decomposer.js";
+import { describe, it, expect, vi } from "vitest";
+import { GoalDecomposer, GoalDecompositionProviderError } from "./goal-decomposer.js";
 import type { GoalTree, GoalNodeId } from "./types.js";
-import { generateGoalNodeId } from "./types.js";
-import type { IAIProvider } from "../agents/providers/provider.interface.js";
+import type { IAIProvider, IStreamingProvider } from "../agents/providers/provider.interface.js";
 import type { ProviderResponse } from "../agents/providers/provider-core.interface.js";
 
 // =============================================================================
@@ -35,6 +34,48 @@ function createMockProvider(responses: string[]): IAIProvider {
         stopReason: "end",
       };
     }),
+  };
+}
+
+/**
+ * A streaming-capable provider. `chatStream` emits the response in chunks (so the
+ * accumulating onChunk fires, mirroring the FallbackChain markActivity behavior),
+ * and `chat` is a spy that MUST NOT be called when streaming is supported.
+ */
+function createStreamingMockProvider(
+  responses: string[],
+  opts?: { emitEmptyResponseText?: boolean },
+): IStreamingProvider {
+  let callIndex = 0;
+  return {
+    name: "mock-stream",
+    capabilities: { streaming: true, vision: false, functionCalling: true },
+    chat: vi.fn(async (): Promise<ProviderResponse> => {
+      throw new Error("chat() must not be called when streaming is supported");
+    }),
+    chatStream: vi.fn(
+      async (
+        _system: string,
+        _messages,
+        _tools,
+        onChunk: (chunk: string) => void,
+      ): Promise<ProviderResponse> => {
+        const text = responses[callIndex] ?? responses[responses.length - 1] ?? "";
+        callIndex++;
+        // Emit in two chunks so the accumulator + markActivity behavior is exercised.
+        const mid = Math.ceil(text.length / 2);
+        onChunk(text.slice(0, mid));
+        onChunk(text.slice(mid));
+        return {
+          // Optionally simulate a provider that only delivers via chunks (empty .text)
+          // to prove the accumulator fallback reconstructs the parsed body.
+          text: opts?.emitEmptyResponseText ? "" : text,
+          toolCalls: [],
+          usage: { inputTokens: 10, outputTokens: 10 },
+          stopReason: "end",
+        };
+      },
+    ),
   };
 }
 
@@ -244,6 +285,121 @@ describe("GoalDecomposer", () => {
       // Verify depth-2 children exist
       const depth2Nodes = Array.from(tree.nodes.values()).filter((n) => n.depth === 2);
       expect(depth2Nodes.length).toBe(2);
+    });
+  });
+
+  // ===========================================================================
+  // FIX 1 — Streaming decomposition path
+  // ===========================================================================
+
+  describe("streaming decomposition (FIX 1)", () => {
+    it("routes the decomposition call through chatStream, not blocking chat()", async () => {
+      const provider = createStreamingMockProvider([
+        JSON.stringify({
+          nodes: [
+            { id: "s1", task: "Setup database schema", dependsOn: [] },
+            { id: "s2", task: "Create auth middleware", dependsOn: ["s1"] },
+          ],
+        }),
+      ]);
+
+      const decomposer = new GoalDecomposer(provider, 3);
+      const tree = await decomposer.decomposeProactive(
+        "test-session",
+        "Build auth with database schema and middleware",
+      );
+
+      // The streaming path MUST be used (clears the FallbackChain first-response timer).
+      expect(provider.chatStream).toHaveBeenCalledTimes(1);
+      // The blocking chat() must NOT be used (it never reports activity → false-abort).
+      expect(provider.chat).not.toHaveBeenCalled();
+
+      // The accumulated streamed output parses to the SAME decomposition result.
+      expect(tree.nodes.size).toBe(3); // root + 2 depth-1
+      const childNodes = Array.from(tree.nodes.values()).filter((n) => n.depth === 1);
+      expect(childNodes.map((n) => n.task).sort()).toEqual(
+        ["Create auth middleware", "Setup database schema"].sort(),
+      );
+    });
+
+    it("reconstructs the parsed body from streamed chunks when response.text is empty", async () => {
+      const provider = createStreamingMockProvider(
+        [
+          JSON.stringify({
+            nodes: [
+              { id: "s1", task: "Step 1", dependsOn: [] },
+              { id: "s2", task: "Step 2", dependsOn: ["s1"] },
+            ],
+          }),
+        ],
+        { emitEmptyResponseText: true },
+      );
+
+      const decomposer = new GoalDecomposer(provider, 3);
+      const tree = await decomposer.decomposeProactive(
+        "test-session",
+        "Build a multi-step pipeline with ordered stages",
+      );
+
+      expect(provider.chatStream).toHaveBeenCalledTimes(1);
+      expect(provider.chat).not.toHaveBeenCalled();
+      // Parsed from the accumulator → identical tree (root + 2 depth-1).
+      expect(tree.nodes.size).toBe(3);
+    });
+  });
+
+  // ===========================================================================
+  // FIX 2 (decomposer half) — provider outage propagates as a typed error
+  // ===========================================================================
+
+  describe("provider-outage propagation (FIX 2)", () => {
+    it("throws GoalDecompositionProviderError on a first-response timeout (all-providers-failed)", async () => {
+      const provider: IStreamingProvider = {
+        name: "mock-timeout",
+        capabilities: { streaming: true, vision: false, functionCalling: true },
+        chat: vi.fn(),
+        chatStream: vi.fn(async () => {
+          // Mirrors FallbackChain's FirstResponseTimeoutError message.
+          throw new Error(
+            'Provider "mock-timeout" sent no response within 90000ms (unresponsive endpoint or model)',
+          );
+        }),
+      };
+
+      const decomposer = new GoalDecomposer(provider, 3);
+      await expect(
+        decomposer.decomposeProactive("test-session", "Build something complex that needs decomposition"),
+      ).rejects.toBeInstanceOf(GoalDecompositionProviderError);
+    });
+
+    it("throws GoalDecompositionProviderError when all providers failed", async () => {
+      const provider: IStreamingProvider = {
+        name: "mock-allfail",
+        capabilities: { streaming: true, vision: false, functionCalling: true },
+        chat: vi.fn(),
+        chatStream: vi.fn(async () => {
+          throw new Error("All providers failed");
+        }),
+      };
+
+      const decomposer = new GoalDecomposer(provider, 3);
+      await expect(
+        decomposer.decomposeProactive("test-session", "Build something complex that needs decomposition"),
+      ).rejects.toBeInstanceOf(GoalDecompositionProviderError);
+    });
+
+    it("does NOT throw for a transient parse failure — falls back to single-node tree", async () => {
+      const provider = createStreamingMockProvider(["not valid json at all", "still {{{ broken"]);
+      const decomposer = new GoalDecomposer(provider, 3);
+
+      // Parse/validation hiccups stay silent (no outage) → single executable child.
+      const tree = await decomposer.decomposeProactive(
+        "test-session",
+        "Build something complex that needs decomposition",
+      );
+      expect(tree.nodes.size).toBe(2);
+      const childNodes = Array.from(tree.nodes.values()).filter((n) => n.depth === 1);
+      expect(childNodes).toHaveLength(1);
     });
   });
 

@@ -8578,7 +8578,12 @@ export class Orchestrator {
     session: Session;
     agentState: AgentState;
   }): Promise<AgentState> {
-    return runProactiveGoalDecompositionHelper(this.goalDecompositionDeps, opts);
+    // Thread the resolved user language so a provider-outage notice surfaced from the
+    // helper (all-providers-failed during decomposition) is localized, not hardcoded EN.
+    return runProactiveGoalDecompositionHelper(this.goalDecompositionDeps, {
+      ...opts,
+      language: this.defaultLanguage,
+    });
   }
 
   private async runReactiveGoalDecomposition(opts: {

@@ -86,6 +86,39 @@ export function supportsStreaming(provider: IAIProvider): provider is IStreaming
 }
 
 /**
+ * Issue a single-user-message, tool-less LLM call over the STREAMING path when the
+ * provider supports it, falling back to the blocking {@link IAIProvider.chat} otherwise.
+ *
+ * Streaming matters for SLOW reasoning models behind the FallbackChain: a blocking
+ * `chat()` never reports activity, so the chain's first-response timer degenerates into
+ * a whole-call deadline and aborts with "sent no response within Nms" before a long,
+ * silent think completes. `chatStream` fires the chain's `markActivity` on the first
+ * SSE chunk → the timer clears → a slow reasoning stream is allowed to COMPLETE.
+ *
+ * The streamed chunks are accumulated only as a defensive fallback: providers set
+ * `response.text` to the full body, which is what we return — identical to the
+ * non-streaming path. If a provider returns empty text but streamed chunks, we
+ * reconstruct the text from the accumulator so downstream parsing still succeeds.
+ */
+export async function streamOrChatText(
+  provider: IAIProvider,
+  systemPrompt: string,
+  userMessage: string,
+): Promise<{ text: string }> {
+  const messages: ConversationMessage[] = [{ role: "user", content: userMessage }];
+  if (supportsStreaming(provider)) {
+    let accumulated = "";
+    const response = await provider.chatStream(systemPrompt, messages, [], (chunk) => {
+      // The first chunk clears the FallbackChain first-response timer (see fallback-chain.ts).
+      if (chunk) accumulated += chunk;
+    });
+    const text = response.text && response.text.length > 0 ? response.text : accumulated;
+    return { text };
+  }
+  return provider.chat(systemPrompt, messages, []);
+}
+
+/**
  * Type guard for structured streaming support.
  */
 export function supportsStructuredStreaming(

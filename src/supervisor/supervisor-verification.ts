@@ -1,4 +1,5 @@
 import type { IAIProvider } from "../agents/providers/provider.interface.js";
+import { streamOrChatText } from "../agents/providers/provider.interface.js";
 import { canonicalizeProviderName } from "../agents/providers/provider-identity.js";
 import type {
   NodeResult,
@@ -150,10 +151,17 @@ export function createSupervisorNodeVerifier(providerManager: {
     }
 
     try {
-      const response = await reviewer.provider.chat(
+      // STREAM the cross-provider verification review (mirrors the goal-decomposer fix).
+      // The reviewer is drawn from the execution candidates, which can include a slow
+      // REASONING model (e.g. deepseek-v4-pro). A blocking provider.chat() never reports
+      // activity, so the FallbackChain's first-response timer degenerates into a whole-call
+      // deadline and aborts with "sent no response within Nms" before a long, silent think
+      // completes. chatStream fires markActivity on the first SSE chunk → the timer clears →
+      // the review is allowed to COMPLETE. Parsing is byte-identical (we parse response.text).
+      const response = await streamOrChatText(
+        reviewer.provider,
         "You are a verification agent. Review another worker's result for obvious issues and reply with strict JSON only.",
-        [{ role: "user", content: buildVerificationPrompt(node) }],
-        [],
+        buildVerificationPrompt(node),
       );
       return parseSupervisorVerificationVerdict(response.text, reviewer.providerName);
     } catch (error) {

@@ -83,4 +83,101 @@ describe("createSupervisorNodeVerifier", () => {
     });
     expect(reviewer.chat).toHaveBeenCalledTimes(1);
   });
+
+  it("routes the verification review through chatStream when the reviewer streams", async () => {
+    // A reasoning-capable reviewer that streams. The verification call MUST go through
+    // chatStream (clears the FallbackChain first-response timer) — never the blocking chat().
+    const chatStream = vi.fn(
+      async (
+        _system: string,
+        _messages: unknown,
+        _tools: unknown,
+        onChunk: (chunk: string) => void,
+      ) => {
+        onChunk('{"verdict":');
+        onChunk('"approve"}');
+        return {
+          text: '{"verdict":"approve"}',
+          toolCalls: [],
+          stopReason: "end_turn",
+          usage: undefined,
+        };
+      },
+    );
+    const reviewer = {
+      name: "deepseek",
+      capabilities: {
+        maxTokens: 4096,
+        streaming: true,
+        structuredStreaming: false,
+        toolCalling: true,
+        vision: false,
+        systemPrompt: true,
+      },
+      chat: vi.fn(),
+      chatStream,
+    };
+    const verifyNode = createSupervisorNodeVerifier({
+      listExecutionCandidates: () => [
+        { name: "Claude", defaultModel: "sonnet" },
+        { name: "DeepSeek", defaultModel: "deepseek-v4-pro" },
+      ],
+      listAvailable: () => [{ name: "DeepSeek", defaultModel: "deepseek-v4-pro" }],
+      getProviderByName: (name: string) => (name === "deepseek" ? (reviewer as any) : null),
+    });
+
+    const verdict = await verifyNode(
+      makeNodeResult({ provider: "claude" }),
+      { chatId: "chat-1" } as any,
+    );
+
+    expect(verdict).toEqual({ verdict: "approve", verifierProvider: "deepseek" });
+    expect(chatStream).toHaveBeenCalledTimes(1);
+    expect(reviewer.chat).not.toHaveBeenCalled();
+  });
+
+  it("recovers a slow reviewer that streams chunks but returns empty response.text", async () => {
+    const chatStream = vi.fn(
+      async (
+        _system: string,
+        _messages: unknown,
+        _tools: unknown,
+        onChunk: (chunk: string) => void,
+      ) => {
+        onChunk('{"verdict":"reject",');
+        onChunk('"issues":["No tests"]}');
+        // Provider delivered only via chunks → empty .text; the accumulator reconstructs it.
+        return { text: "", toolCalls: [], stopReason: "end_turn", usage: undefined };
+      },
+    );
+    const reviewer = {
+      name: "deepseek",
+      capabilities: {
+        maxTokens: 4096,
+        streaming: true,
+        structuredStreaming: false,
+        toolCalling: true,
+        vision: false,
+        systemPrompt: true,
+      },
+      chat: vi.fn(),
+      chatStream,
+    };
+    const verifyNode = createSupervisorNodeVerifier({
+      listExecutionCandidates: () => [
+        { name: "Claude", defaultModel: "sonnet" },
+        { name: "DeepSeek", defaultModel: "deepseek-v4-pro" },
+      ],
+      listAvailable: () => [{ name: "DeepSeek", defaultModel: "deepseek-v4-pro" }],
+      getProviderByName: (name: string) => (name === "deepseek" ? (reviewer as any) : null),
+    });
+
+    const verdict = await verifyNode(
+      makeNodeResult({ provider: "claude" }),
+      { chatId: "chat-1" } as any,
+    );
+
+    expect(verdict).toMatchObject({ verdict: "reject", verifierProvider: "deepseek" });
+    expect(chatStream).toHaveBeenCalledTimes(1);
+  });
 });

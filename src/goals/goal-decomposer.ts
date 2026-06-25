@@ -10,6 +10,7 @@
  */
 
 import type { IAIProvider } from "../agents/providers/provider.interface.js";
+import { streamOrChatText } from "../agents/providers/provider.interface.js";
 import type {
   GoalNode,
   GoalTree,
@@ -93,6 +94,44 @@ Rules:
 
 Respond ONLY with JSON:
 {"nodes": [{"id": "r1", "task": "description", "dependsOn": []}, ...]}`;
+
+// =============================================================================
+// PROVIDER-OUTAGE ERROR
+// =============================================================================
+
+/**
+ * Thrown by {@link GoalDecomposer.decomposeProactive} when the backing LLM call
+ * fails because every provider is unavailable / unresponsive (all-providers-failed
+ * or a first-response timeout) — a real outage, NOT a parse/validation hiccup.
+ *
+ * Callers surface this to the user (resilience pill + chat notice) and fail the
+ * task cleanly instead of silently degrading to a single-node tree and leaving
+ * the task hanging in PENDING.
+ */
+export class GoalDecompositionProviderError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options as ErrorOptions);
+    this.name = "GoalDecompositionProviderError";
+  }
+}
+
+/**
+ * Distinguish a genuine provider outage (all providers failed / unresponsive
+ * endpoint / first-response timeout) from a transient parse/validation failure.
+ * Only the former should surface + fail the task; the latter keeps the existing
+ * silent single-node fallback. Matches the FallbackChain's terminal error
+ * messages (fallback-chain.ts: "All providers failed", "sent no response within").
+ */
+export function isProviderOutageError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const msg = err.message.toLowerCase();
+  return (
+    msg.includes("all providers failed") ||
+    msg.includes("providers failed or unavailable") ||
+    msg.includes("sent no response within") ||
+    msg.includes("unresponsive endpoint")
+  );
+}
 
 // =============================================================================
 // GOAL DECOMPOSER CLASS
@@ -217,10 +256,20 @@ export class GoalDecomposer {
           maxTotalNodes: remainingSlots,
         });
 
-        const subOutput = await this.callLLMForDecomposition(
-          subPrompt,
-          `Further decompose this sub-goal (max ${remainingSlots} sub-goals):\n\n<task>${flagged.task}</task>`,
-        );
+        // A depth-2 outage must NOT discard the already-valid depth-1 tree — just
+        // stop expanding and keep what we have (the top-level call is what guards
+        // the reported "silent PENDING" bug). Only the FIRST (depth-1) call's outage
+        // propagates to fail the task cleanly.
+        let subOutput: LLMDecompositionOutput | null;
+        try {
+          subOutput = await this.callLLMForDecomposition(
+            subPrompt,
+            `Further decompose this sub-goal (max ${remainingSlots} sub-goals):\n\n<task>${flagged.task}</task>`,
+          );
+        } catch (err) {
+          if (err instanceof GoalDecompositionProviderError) break;
+          throw err;
+        }
 
         if (subOutput) {
           const subNodes = this.buildNodesFromLLM(
@@ -310,11 +359,15 @@ export class GoalDecomposer {
     if (!this.provider) return null;
 
     try {
-      const response = await this.provider.chat(
-        systemPrompt,
-        [{ role: "user", content: userMessage }],
-        [],
-      );
+      // STREAM the decomposition call (mirrors the orchestrator's silentStream path).
+      // Reasoning models (e.g. deepseek-v4-pro) can think silently for >90s; a blocking
+      // provider.chat() never reports activity, so the FallbackChain's first-response
+      // timer degenerates into a whole-call deadline and aborts with "sent no response
+      // within Nms". chatStream fires markActivity on the first SSE chunk → the timer
+      // clears → a slow reasoning stream is allowed to COMPLETE. The accumulating onChunk
+      // collects chunk text; we parse the final response.text exactly as before (the
+      // streamed text and the response.text are identical), so output is behavior-identical.
+      const response = await streamOrChatText(this.provider, systemPrompt, userMessage);
 
       const parsed = parseLLMOutput(response.text);
       if (!parsed) {
@@ -343,6 +396,16 @@ export class GoalDecomposer {
       getLoggerSafe().warn("Goal decomposition LLM call failed", {
         error: err instanceof Error ? err.message : String(err),
       });
+      // A genuine provider outage (all providers failed / unresponsive endpoint)
+      // must NOT be swallowed into a silent single-node fallback — propagate it as a
+      // typed error so the caller surfaces a user notice + fails the task cleanly.
+      // Transient parse/validation hiccups still fall back to null (degrade silently).
+      if (isProviderOutageError(err)) {
+        throw new GoalDecompositionProviderError(
+          err instanceof Error ? err.message : String(err),
+          { cause: err },
+        );
+      }
       return null;
     }
   }
