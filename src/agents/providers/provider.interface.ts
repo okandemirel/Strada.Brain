@@ -13,6 +13,7 @@ import type {
   StructuredStreamCallback,
   ProviderCapabilities,
 } from "./provider-core.interface.js";
+import type { BackoffInfo } from "../../common/fetch-with-retry.js";
 
 /**
  * Optional control-plane hooks the FallbackChain passes down through a provider call.
@@ -22,11 +23,13 @@ import type {
  * uses it to (1) reset its first-response silence timer — a deliberate backoff must
  * not be counted against the "unresponsive endpoint" budget — and (2) remember that
  * the failure cause was rate-limiting (HTTP 429) so a later timeout/exhaustion is
- * reported honestly as rate-limited, not as an unresponsive endpoint. Optional and
- * back-compat: providers without an HTTP retry wrapper simply never call it.
+ * reported honestly as rate-limited, not as an unresponsive endpoint. For a 429 the
+ * info also carries parsed rate-limit headers + a truncated body (never auth/secrets)
+ * so a consumer can classify/surface WHY the 429 happened. Optional and back-compat:
+ * providers without an HTTP retry wrapper simply never call it.
  */
 export interface ProviderCallHooks {
-  onBackoff?: (info: { status: number; delayMs: number }) => void;
+  onBackoff?: (info: BackoffInfo) => void;
 }
 
 /**

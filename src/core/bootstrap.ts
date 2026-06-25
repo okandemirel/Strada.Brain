@@ -14,6 +14,7 @@ import { type DurationMs } from "../types/index.js";
 import { createLogger } from "../utils/logger.js";
 import { AuthManager } from "../security/auth.js";
 import { configureAuthManager } from "../security/auth-hardened.js";
+import { configureProviderConcurrency } from "../common/fetch-with-retry.js";
 import { Orchestrator } from "../agents/orchestrator.js";
 import { resolveConversationScope } from "../agents/orchestrator-text-utils.js";
 import { MetricsCollector } from "../dashboard/metrics.js";
@@ -421,6 +422,11 @@ async function bootstrapImpl(
   }
 
   configureAuthManager(config.security.systemAuth);
+
+  // Cap simultaneous in-flight HTTP calls PER PROVIDER so the fan-out of parallel
+  // agents/nodes/delegations does not burst a single provider key past its
+  // concurrency/RPM ceiling (HTTP 429). Different providers never block each other.
+  configureProviderConcurrency(config.providerMaxConcurrentRequests);
 
   // Check Strada framework dependencies
   const stradaDeps = checkStradaDeps(config.unityProjectPath, config.strada);

@@ -301,6 +301,7 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
     goalMaxFailures: rawConfig.goalMaxFailures,
     goalParallelExecution: rawConfig.goalParallelExecution,
     goalMaxParallel: rawConfig.goalMaxParallel,
+    providerMaxConcurrentRequests: rawConfig.providerMaxConcurrentRequests,
 
     goal: {
       maxFailures: rawConfig.goalMaxFailures,
@@ -858,6 +859,7 @@ interface EnvVars {
   goalMaxFailures: string | undefined;
   goalParallelExecution: string | undefined;
   goalMaxParallel: string | undefined;
+  providerMaxConcurrentRequests: string | undefined;
   stradaGoalEscalationTimeoutMinutes: string | undefined;
   stradaGoalMaxRedecompositions: string | undefined;
   toolChainEnabled: string | undefined;
@@ -1191,6 +1193,7 @@ function loadFromEnv(env: Record<string, string | undefined>): EnvVars {
     goalMaxFailures: env["GOAL_MAX_FAILURES"],
     goalParallelExecution: env["GOAL_PARALLEL_EXECUTION"],
     goalMaxParallel: env["GOAL_MAX_PARALLEL"],
+    providerMaxConcurrentRequests: env["PROVIDER_MAX_CONCURRENT_REQUESTS"],
     stradaGoalEscalationTimeoutMinutes: env["STRADA_GOAL_ESCALATION_TIMEOUT_MINUTES"],
     stradaGoalMaxRedecompositions: env["STRADA_GOAL_MAX_REDECOMPOSITIONS"],
     toolChainEnabled: env["TOOL_CHAIN_ENABLED"],

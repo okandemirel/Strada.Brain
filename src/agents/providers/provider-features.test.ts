@@ -339,14 +339,17 @@ describe("Feature: Vision capability", () => {
 // ============================================================================
 
 describe("Feature: Retry logic", () => {
-  it("retries on 429 (rate limit) with body drain", async () => {
-    const mockCancel = vi.fn();
+  it("retries on 429 (rate limit) and reads the body for diagnostics (drains it)", async () => {
+    // On a retryable 429 the body is now READ (not just cancelled) so the rate-limit
+    // reason is surfaced; reading the body to completion also drains the connection.
+    const mockText = vi.fn(async () => "rate limit exceeded");
     mockFetch
       .mockResolvedValueOnce({
         ok: false,
         status: 429,
-        headers: new Headers({ "retry-after": "0" }),
-        body: { cancel: mockCancel },
+        headers: new Headers({ "retry-after": "0", "x-ratelimit-remaining-requests": "0" }),
+        text: mockText,
+        body: { cancel: vi.fn() },
       })
       .mockResolvedValueOnce({
         ok: true,
@@ -362,7 +365,7 @@ describe("Feature: Retry logic", () => {
 
     expect(result.text).toBe("ok");
     expect(mockFetch).toHaveBeenCalledTimes(2);
-    expect(mockCancel).toHaveBeenCalled(); // body drained
+    expect(mockText).toHaveBeenCalled(); // body read → surfaced + drained
   });
 
   it("retries on 500 (server error)", async () => {

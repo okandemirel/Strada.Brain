@@ -173,6 +173,7 @@ export type EnvVarName =
   | "GOAL_MAX_FAILURES"
   | "GOAL_PARALLEL_EXECUTION"
   | "GOAL_MAX_PARALLEL"
+  | "PROVIDER_MAX_CONCURRENT_REQUESTS"
   | "STRADA_AGENT_NAME"
   | "STRADA_CROSS_SESSION_ENABLED"
   | "STRADA_INSTINCT_MAX_AGE_DAYS"
@@ -840,6 +841,15 @@ export interface Config {
   readonly goalMaxFailures: number;
   readonly goalParallelExecution: boolean;
   readonly goalMaxParallel: number;
+
+  /**
+   * Max simultaneous in-flight HTTP calls PER PROVIDER (env
+   * PROVIDER_MAX_CONCURRENT_REQUESTS, default 3). Bounds the fan-out burst of
+   * parallel agents/nodes/delegations against a single provider key so it does not
+   * trip the key's concurrency/RPM ceiling (HTTP 429). Different providers do not
+   * block each other; calls at or under the cap acquire instantly.
+   */
+  readonly providerMaxConcurrentRequests: number;
 
   // Goal Interactive Execution (Phase 16)
   readonly goal: GoalConfig;

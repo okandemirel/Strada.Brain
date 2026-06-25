@@ -547,6 +547,16 @@ export const configSchema = z
       .pipe(z.number().int().min(1).max(10))
       .default("3"),
 
+    // Per-provider HTTP concurrency: caps simultaneous in-flight provider HTTP calls
+    // PER PROVIDER KEY so the fan-out of parallel agents/nodes/delegations does not
+    // burst a single key past its concurrency/RPM ceiling (HTTP 429). Different
+    // providers do NOT block each other.
+    providerMaxConcurrentRequests: z
+      .string()
+      .transform((s) => parseInt(s, 10))
+      .pipe(z.number().int().min(1).max(20))
+      .default("3"),
+
     // Goal Interactive Execution (Phase 16)
     stradaGoalEscalationTimeoutMinutes: z
       .string()

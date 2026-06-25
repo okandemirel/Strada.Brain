@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fetchWithRetry } from "./fetch-with-retry.js";
+import {
+  fetchWithRetry,
+  configureProviderConcurrency,
+  __resetProviderConcurrency,
+  type BackoffInfo,
+} from "./fetch-with-retry.js";
 
 // Suppress logger output during tests
 vi.mock("../utils/logger.js", () => ({
@@ -22,11 +27,16 @@ describe("fetchWithRetry — AbortSignal handling", () => {
     fetchSpy = vi.fn();
     vi.stubGlobal("fetch", fetchSpy);
     vi.useFakeTimers();
+    // These tests resolve the returned Response but never consume its body, which (by
+    // design) holds the per-provider permit open. Reset the limiter between tests so a
+    // held permit from one test can't exhaust the cap and hang the next.
+    __resetProviderConcurrency();
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
     vi.useRealTimers();
+    __resetProviderConcurrency();
   });
 
   it("propagates abort immediately when signal is already aborted", async () => {
@@ -159,9 +169,12 @@ describe("fetchWithRetry — AbortSignal handling", () => {
     const response = await promise;
 
     expect(response.ok).toBe(true);
-    // Retry-After of 2s is honored verbatim (not the exponential default).
+    // Retry-After of 2s is honored verbatim (not the exponential default). The 429 also
+    // carries rate-limit diagnostics (asserted in the dedicated surfacing suite below).
     expect(onBackoff).toHaveBeenCalledTimes(1);
-    expect(onBackoff).toHaveBeenCalledWith({ status: 429, delayMs: 2000 });
+    expect(onBackoff).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 429, delayMs: 2000 }),
+    );
   });
 
   it("throws an honest rate-limited (HTTP 429) error when 429 retries are exhausted", async () => {
@@ -182,5 +195,243 @@ describe("fetchWithRetry — AbortSignal handling", () => {
 
     await vi.advanceTimersByTimeAsync(1100);
     await assertion;
+  });
+});
+
+describe("fetchWithRetry — per-provider concurrency limiter", () => {
+  let fetchSpy: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    __resetProviderConcurrency();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    __resetProviderConcurrency();
+  });
+
+  /** A 200 response whose body resolves only when `release()` is called. */
+  function gatedResponse(): { response: Response; release: () => void } {
+    let release!: () => void;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        release = () => {
+          controller.enqueue(new TextEncoder().encode("ok"));
+          controller.close();
+        };
+      },
+    });
+    return { response: new Response(body, { status: 200 }), release };
+  }
+
+  it("never exceeds the cap of in-flight calls to the SAME provider", async () => {
+    configureProviderConcurrency(2);
+
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const pendingReleases: Array<() => void> = [];
+
+    fetchSpy.mockImplementation(() => {
+      inFlight++;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      const { response, release } = gatedResponse();
+      pendingReleases.push(() => {
+        inFlight--;
+        release();
+      });
+      return Promise.resolve(response);
+    });
+
+    // Fire 6 calls to the SAME provider; cap is 2. Each fully consumes its body, which
+    // releases the permit so the next queued call can acquire.
+    const calls = Array.from({ length: 6 }, () =>
+      fetchWithRetry("https://example.com/api", { method: "GET" }, { callerName: "ProviderA" })
+        .then((r) => r.text()),
+    );
+
+    // Drain loop: at any instant at most `cap` fetches are in flight. Repeatedly let the
+    // event loop settle, snapshot the cap invariant, then release every fetch that has
+    // started but not yet completed. This frees permits for queued calls one wave at a
+    // time until all 6 have run.
+    for (let i = 0; i < 12 && fetchSpy.mock.calls.length < 6; i++) {
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(maxInFlight).toBeLessThanOrEqual(2);
+      while (pendingReleases.length > 0) pendingReleases.shift()!();
+    }
+    // Release any stragglers, then await all calls to settle.
+    while (pendingReleases.length > 0) pendingReleases.shift()!();
+    await Promise.all(calls);
+    // Flush in case the final release admitted a last queued call.
+    while (pendingReleases.length > 0) pendingReleases.shift()!();
+
+    expect(maxInFlight).toBeLessThanOrEqual(2);
+    expect(fetchSpy).toHaveBeenCalledTimes(6);
+  });
+
+  it("releases a permit when the call throws (no leak)", async () => {
+    configureProviderConcurrency(1);
+
+    // First call rejects on every fetch attempt (network error, signal aborted → no retry).
+    const aborted = new AbortController();
+    aborted.abort(new Error("boom"));
+    fetchSpy.mockRejectedValueOnce(new Error("boom"));
+
+    await expect(
+      fetchWithRetry(
+        "https://example.com/api",
+        { method: "GET" },
+        { callerName: "ProviderThrow", signal: aborted.signal },
+      ),
+    ).rejects.toThrow("boom");
+
+    // If the permit leaked, this second call (cap 1) would hang forever. It must resolve.
+    fetchSpy.mockResolvedValueOnce(new Response("ok", { status: 200 }));
+    const second = await fetchWithRetry(
+      "https://example.com/api",
+      { method: "GET" },
+      { callerName: "ProviderThrow" },
+    );
+    expect(second.ok).toBe(true);
+  });
+
+  it("runs DIFFERENT providers concurrently — they do not block each other", async () => {
+    configureProviderConcurrency(1);
+
+    const started: string[] = [];
+    const releases = new Map<string, () => void>();
+
+    fetchSpy.mockImplementation((url: string, init: RequestInit & { __name?: string }) => {
+      const name = init.__name ?? "?";
+      started.push(name);
+      const { response, release } = gatedResponse();
+      releases.set(name, release);
+      return Promise.resolve(response);
+    });
+
+    // Cap is 1 PER provider, so one call to A and one to B should BOTH be in flight.
+    const a = fetchWithRetry(
+      "https://a.example.com",
+      { method: "GET", __name: "A" } as RequestInit,
+      { callerName: "ProviderA" },
+    ).then((r) => r.text());
+    const b = fetchWithRetry(
+      "https://b.example.com",
+      { method: "GET", __name: "B" } as RequestInit,
+      { callerName: "ProviderB" },
+    ).then((r) => r.text());
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Both providers' fetches started despite a per-provider cap of 1 — proves they
+    // use independent semaphores and run concurrently.
+    expect(started).toContain("A");
+    expect(started).toContain("B");
+
+    releases.get("A")!();
+    releases.get("B")!();
+    await Promise.all([a, b]);
+  });
+});
+
+describe("fetchWithRetry — 429 diagnostics surfacing", () => {
+  let fetchSpy: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    vi.useFakeTimers();
+    __resetProviderConcurrency();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+    __resetProviderConcurrency();
+  });
+
+  it("surfaces rate-limit headers + truncated body via onBackoff (never auth headers)", async () => {
+    const backoffCalls: BackoffInfo[] = [];
+    const onBackoff = (info: BackoffInfo): void => { backoffCalls.push(info); };
+
+    const longBody = "rate limit exceeded: ".repeat(60); // > 500 chars
+    fetchSpy
+      .mockResolvedValueOnce(
+        new Response(longBody, {
+          status: 429,
+          headers: {
+            "retry-after": "1",
+            "x-ratelimit-limit-requests": "60",
+            "x-ratelimit-remaining-requests": "0",
+            "x-ratelimit-limit-tokens": "100000",
+            "x-ratelimit-remaining-tokens": "42",
+            "x-concurrency-limit": "3",
+            // These must NOT be surfaced:
+            authorization: "Bearer sk-secret-token-should-never-leak",
+            "x-api-key": "sk-another-secret",
+          },
+        }),
+      )
+      .mockResolvedValueOnce(new Response("ok", { status: 200 }));
+
+    const promise = fetchWithRetry(
+      "https://example.com/api",
+      { method: "GET" },
+      { maxRetries: 3, baseDelayMs: 100, callerName: "OpenCode (Zen/Go)", onBackoff },
+    );
+
+    await vi.advanceTimersByTimeAsync(1100);
+    const response = await promise;
+    expect(response.ok).toBe(true);
+
+    expect(backoffCalls).toHaveLength(1);
+    const info = backoffCalls[0]!;
+    expect(info.status).toBe(429);
+    expect(info.rateLimit).toBeDefined();
+
+    const { headers, body } = info.rateLimit!;
+    // Rate-limit headers ARE surfaced.
+    expect(headers["retry-after"]).toBe("1");
+    expect(headers["x-ratelimit-limit-requests"]).toBe("60");
+    expect(headers["x-ratelimit-remaining-requests"]).toBe("0");
+    expect(headers["x-ratelimit-remaining-tokens"]).toBe("42");
+    expect(headers["x-concurrency-limit"]).toBe("3");
+
+    // Auth headers / secrets are NEVER surfaced.
+    expect(headers).not.toHaveProperty("authorization");
+    expect(headers).not.toHaveProperty("x-api-key");
+    const serialized = JSON.stringify(info.rateLimit);
+    expect(serialized).not.toContain("sk-secret-token-should-never-leak");
+    expect(serialized).not.toContain("sk-another-secret");
+
+    // Body is captured but truncated to <= 500 chars.
+    expect(body.length).toBeLessThanOrEqual(500);
+    expect(body).toContain("rate limit exceeded");
+  });
+
+  it("does not attach rateLimit diagnostics for a non-429 retryable status (503)", async () => {
+    const backoffCalls: BackoffInfo[] = [];
+    const onBackoff = (info: BackoffInfo): void => { backoffCalls.push(info); };
+
+    fetchSpy
+      .mockResolvedValueOnce(new Response("server error", { status: 503 }))
+      .mockResolvedValueOnce(new Response("ok", { status: 200 }));
+
+    const promise = fetchWithRetry(
+      "https://example.com/api",
+      { method: "GET" },
+      { maxRetries: 3, baseDelayMs: 100, callerName: "TestCaller", onBackoff },
+    );
+
+    await vi.advanceTimersByTimeAsync(250);
+    const response = await promise;
+    expect(response.ok).toBe(true);
+
+    expect(backoffCalls).toHaveLength(1);
+    expect(backoffCalls[0]!.status).toBe(503);
+    expect(backoffCalls[0]!.rateLimit).toBeUndefined();
   });
 });

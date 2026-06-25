@@ -7,6 +7,117 @@
 import { getLogger } from "../utils/logger.js";
 import { sanitizeSecrets } from "../security/secret-sanitizer.js";
 
+// =============================================================================
+// PER-PROVIDER CONCURRENCY LIMITER
+// =============================================================================
+
+/**
+ * Default ceiling on simultaneous in-flight HTTP calls PER PROVIDER. Strada fans
+ * out many concurrent LLM calls per task (supervisor parallel nodes, goal/agent
+ * delegations, per-node verification, goal decomposition), and with NO per-key
+ * concurrency limit these STACK into a large burst against a single provider API
+ * key. Providers like OpenCode (Zen/Go) enforce a per-key concurrency/RPM ceiling,
+ * so the burst trips HTTP 429 even though a single-caller tool using the same key
+ * never would. This caps the burst PER PROVIDER while preserving real parallelism:
+ * when concurrent calls are <= the cap an acquire is instant (zero added latency),
+ * only the excess queues. Overridden at bootstrap via configureProviderConcurrency()
+ * from config.providerMaxConcurrentRequests (env PROVIDER_MAX_CONCURRENT_REQUESTS).
+ */
+const DEFAULT_PROVIDER_MAX_CONCURRENT_REQUESTS = 3;
+
+let providerMaxConcurrentRequests = DEFAULT_PROVIDER_MAX_CONCURRENT_REQUESTS;
+
+/**
+ * One semaphore per provider, keyed by the stable provider/caller name passed to
+ * fetchWithRetry. DIFFERENT providers get DIFFERENT semaphores, so they never block
+ * each other — cross-provider parallelism is preserved (no single global cap).
+ */
+const providerSemaphores = new Map<string, ConcurrencySemaphore>();
+
+/**
+ * Queue-based semaphore limiting concurrent in-flight operations. When the limit is
+ * reached, acquire() queues until a running operation releases. Mirrors the
+ * Semaphore in src/goals/goal-executor.ts but exposes explicit acquire()/release()
+ * so a permit can be held across BOTH the fetch AND the streamed body consumption
+ * (the body is read by the CALLER after fetchWithRetry returns).
+ */
+class ConcurrencySemaphore {
+  private running = 0;
+  private readonly queue: Array<() => void> = [];
+
+  constructor(
+    private limit: number,
+    private readonly name: string,
+  ) {}
+
+  /** Update the cap at runtime; wake queued waiters if the limit grew. */
+  setLimit(limit: number): void {
+    this.limit = limit;
+    // Each woken waiter reclaims its slot via its own `running++` after the await
+    // in acquire(); count admissions locally so the gate advances without the waker
+    // mutating `running` (the post-await acquire() owns the increment).
+    let admitted = 0;
+    while (this.running + admitted < this.limit && this.queue.length > 0) {
+      admitted++;
+      this.queue.shift()!();
+    }
+  }
+
+  async acquire(): Promise<void> {
+    if (this.running < this.limit) {
+      this.running++;
+      return;
+    }
+    // Observability only: pacing kicked in for THIS provider. <= cap = instant acquire
+    // above (zero added latency); this logs only when the excess is being queued.
+    getLogger().debug(`${this.name} HTTP call queued (per-provider concurrency cap reached)`, {
+      provider: this.name,
+      cap: this.limit,
+    });
+    await new Promise<void>((resolve) => this.queue.push(resolve));
+    this.running++;
+  }
+
+  release(): void {
+    this.running--;
+    if (this.queue.length > 0) {
+      // Hand the freed permit directly to the next waiter. It reclaims the slot via
+      // its own `running++` after the await in acquire(), so the `running--` above
+      // and that increment net to zero across this release + that acquire.
+      this.queue.shift()!();
+    }
+  }
+}
+
+function getProviderSemaphore(name: string): ConcurrencySemaphore {
+  let sem = providerSemaphores.get(name);
+  if (!sem) {
+    sem = new ConcurrencySemaphore(providerMaxConcurrentRequests, name);
+    providerSemaphores.set(name, sem);
+  }
+  return sem;
+}
+
+/**
+ * Set the per-provider concurrent-request cap. Called once at bootstrap (mirroring
+ * configureAuthManager) so the centralized config — NOT process.env at the call
+ * site — drives the limiter. Applies to existing AND future per-provider semaphores.
+ * A non-positive value is ignored (the previous/default cap stays in force).
+ */
+export function configureProviderConcurrency(cap: number): void {
+  if (!Number.isFinite(cap) || cap < 1) return;
+  providerMaxConcurrentRequests = Math.floor(cap);
+  for (const sem of providerSemaphores.values()) {
+    sem.setLimit(providerMaxConcurrentRequests);
+  }
+}
+
+/** Reset limiter state to defaults — test-only helper. */
+export function __resetProviderConcurrency(): void {
+  providerMaxConcurrentRequests = DEFAULT_PROVIDER_MAX_CONCURRENT_REQUESTS;
+  providerSemaphores.clear();
+}
+
 export interface FetchWithRetryOptions {
   /** Maximum retry attempts (default 3) */
   maxRetries?: number;
@@ -31,8 +142,76 @@ export interface FetchWithRetryOptions {
    * from "the endpoint is silent": it can reset its first-response timer so a
    * deliberate backoff is not counted against the silence budget, and remember that
    * the failure was rate-limited (429) rather than an unresponsive endpoint.
+   *
+   * For a retryable 429 the callback also carries the parsed rate-limit headers and a
+   * truncated response body (the provider's error message) so the FallbackChain can
+   * classify/surface WHY the 429 happened. NEVER carries Authorization/auth headers
+   * or any secret — only the named rate-limit headers + truncated body.
    */
-  onBackoff?: (info: { status: number; delayMs: number }) => void;
+  onBackoff?: (info: BackoffInfo) => void;
+}
+
+/** Rate-limit diagnostics surfaced on a retryable 429 (no auth headers / secrets). */
+export interface RateLimitDiagnostics {
+  /** Subset of rate-limit headers present on the response (lowercased keys). */
+  headers: Record<string, string>;
+  /** Truncated (<=500 char) response body — the provider error message. */
+  body: string;
+}
+
+export interface BackoffInfo {
+  status: number;
+  delayMs: number;
+  /** Present only for a 429 — the rate-limit headers + truncated body. */
+  rateLimit?: RateLimitDiagnostics;
+}
+
+/**
+ * Rate-limit / quota headers safe to log (provider-agnostic OpenAI-compatible set
+ * plus generic concurrency hints). Authorization, cookies, and API keys are NEVER
+ * in this list, so they can never leak into a log line.
+ */
+const RATE_LIMIT_HEADER_NAMES = [
+  "retry-after",
+  "x-ratelimit-limit-requests",
+  "x-ratelimit-remaining-requests",
+  "x-ratelimit-reset-requests",
+  "x-ratelimit-limit-tokens",
+  "x-ratelimit-remaining-tokens",
+  "x-ratelimit-reset-tokens",
+  "x-ratelimit-limit-concurrency",
+  "x-ratelimit-remaining-concurrency",
+  "x-concurrency-limit",
+] as const;
+
+/** Max chars of a 429 response body we log/surface (truncate the provider message). */
+const MAX_RATE_LIMIT_BODY_CHARS = 500;
+
+/**
+ * Read the allow-listed rate-limit headers (never auth/secret headers) and a
+ * truncated response body for a retryable 429, so the 429 reason becomes VISIBLE
+ * instead of being silently drained. Body read failures degrade to "" — diagnostics
+ * are best-effort and must never break the retry path.
+ */
+async function extractRateLimitDiagnostics(
+  response: Response,
+  shouldSanitize: boolean,
+): Promise<RateLimitDiagnostics> {
+  const headers: Record<string, string> = {};
+  if (response.headers?.get) {
+    for (const name of RATE_LIMIT_HEADER_NAMES) {
+      const value = response.headers.get(name);
+      if (value !== null && value !== undefined) headers[name] = value;
+    }
+  }
+  let body = "";
+  try {
+    const raw = (await response.text()).slice(0, MAX_RATE_LIMIT_BODY_CHARS);
+    body = shouldSanitize ? sanitizeSecrets(raw) : raw;
+  } catch {
+    body = "(unreadable)";
+  }
+  return { headers, body };
 }
 
 const DEFAULTS = {
@@ -45,7 +224,92 @@ const DEFAULTS = {
   sanitizeErrors: true,
 } as const;
 
+/**
+ * Fetch with exponential-backoff retry, bounded by a PER-PROVIDER concurrency limiter.
+ *
+ * The permit is acquired BEFORE the first fetch and released only once the returned
+ * response body is fully consumed (or the call throws) — so a STREAMING response holds
+ * its permit for the lifetime of the stream (the caller reads the body after this
+ * returns), correctly bounding simultaneous in-flight connections per provider key. A
+ * throw/timeout releases the permit in a finally, so a permit can never leak.
+ */
 export async function fetchWithRetry(
+  url: string,
+  init: RequestInit,
+  opts: FetchWithRetryOptions = {},
+): Promise<Response> {
+  const callerName = opts.callerName ?? DEFAULTS.callerName;
+  const semaphore = getProviderSemaphore(callerName);
+
+  await semaphore.acquire();
+  let permitHeld = true;
+  const release = (): void => {
+    if (permitHeld) {
+      permitHeld = false;
+      semaphore.release();
+    }
+  };
+  try {
+    const response = await runFetchLoop(url, init, opts);
+    // Hold the permit until the body is fully consumed/closed (streaming) — the caller
+    // reads it after we return. If there is no body, release now.
+    if (response.body) {
+      return attachReleaseOnBodyClose(response, release);
+    }
+    release();
+    return response;
+  } catch (err) {
+    release();
+    throw err;
+  }
+}
+
+/**
+ * Wrap response.body so the per-provider permit is released exactly once, when the
+ * stream is fully read, cancelled, or errors. Lets a streaming caller hold the permit
+ * for the connection's whole lifetime without leaking it.
+ */
+function attachReleaseOnBodyClose(response: Response, release: () => void): Response {
+  const original = response.body;
+  if (!original) {
+    release();
+    return response;
+  }
+  const reader = original.getReader();
+  // A ReadableStream that proxies the original body and releases the permit exactly
+  // once — when the stream ends (close), errors, or is cancelled by the caller. This
+  // covers BOTH the non-streaming path (.json() reads to close) and the streaming path
+  // (caller reads chunk-by-chunk, or cancels the reader mid-stream).
+  const monitored = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const { done, value } = await reader.read();
+        if (done) {
+          controller.close();
+          release();
+          return;
+        }
+        controller.enqueue(value);
+      } catch (err) {
+        release();
+        controller.error(err);
+      }
+    },
+    cancel(reason) {
+      release();
+      return reader.cancel(reason);
+    },
+  });
+  // Re-wrap so downstream sees a normal Response whose body releases the permit on
+  // completion. Headers/status/statusText are preserved.
+  return new Response(monitored, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
+}
+
+async function runFetchLoop(
   url: string,
   init: RequestInit,
   opts: FetchWithRetryOptions = {},
@@ -112,7 +376,14 @@ export async function fetchWithRetry(
       delay = baseDelayMs * Math.pow(2, attempt) + Math.random() * 100;
     }
 
-    if (drainBody && response.body?.cancel) {
+    // For a retryable 429, READ the rate-limit headers + a truncated body BEFORE the
+    // body is drained, so the true 429 reason (per-key concurrency, RPM, token quota)
+    // becomes VISIBLE instead of being silently discarded. extractRateLimitDiagnostics
+    // reads the body, which also drains it (no separate cancel needed in that case).
+    let rateLimit: RateLimitDiagnostics | undefined;
+    if (status === 429) {
+      rateLimit = await extractRateLimitDiagnostics(response, shouldSanitize);
+    } else if (drainBody && response.body?.cancel) {
       try { await response.body.cancel(); } catch { /* ignore */ }
     }
 
@@ -120,13 +391,24 @@ export async function fetchWithRetry(
     // FallbackChain uses this to reset its first-response silence timer (a deliberate
     // backoff is us waiting, not the endpoint being unresponsive) and to remember that
     // the failure cause is rate-limiting (429), so a later timeout/exhaustion is
-    // reported honestly as rate-limited rather than "unresponsive endpoint".
-    opts.onBackoff?.({ status, delayMs: delay });
+    // reported honestly as rate-limited rather than "unresponsive endpoint". For a 429
+    // the parsed rate-limit headers + truncated body ride along so the chain can
+    // classify/surface WHY (never any auth header or secret).
+    opts.onBackoff?.({ status, delayMs: delay, rateLimit });
 
-    logger.warn(`${callerName} API ${status}, retrying in ${Math.round(delay)}ms`, {
-      attempt: attempt + 1,
-      maxRetries,
-    });
+    if (status === 429 && rateLimit) {
+      logger.warn(`${callerName} API 429, retrying in ${Math.round(delay)}ms`, {
+        attempt: attempt + 1,
+        maxRetries,
+        rateLimitHeaders: rateLimit.headers,
+        body: rateLimit.body,
+      });
+    } else {
+      logger.warn(`${callerName} API ${status}, retrying in ${Math.round(delay)}ms`, {
+        attempt: attempt + 1,
+        maxRetries,
+      });
+    }
 
     await sleep(delay);
   }
