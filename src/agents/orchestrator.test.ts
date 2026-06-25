@@ -1094,6 +1094,120 @@ describe("Orchestrator", () => {
     expect(monitorLifecycle.requestEnd).not.toHaveBeenCalled();
   });
 
+  it("runBackgroundTask JOINs the parent episode when monitorScope differs from the worker's own scope (non-dormant consumer)", async () => {
+    // Direct runBackgroundTask exercise of the supervisor-bridge worker path (bypasses
+    // handleMessage/processMessage). A worker run is never the whole-goal root: when it carries a
+    // parent monitorScope that DIFFERS from its own conversationScope, it joinEpisode's onto the
+    // parent and settles via joinEpisodeEnd — never requestStart/requestEnd (which would mint a
+    // sibling dropdown conversation).
+    const mockProvider = createMockProvider();
+    mockProvider.chat.mockResolvedValueOnce({
+      text: "Worker done.",
+      toolCalls: [],
+      stopReason: "end_turn" as const,
+      usage: { inputTokens: 3, outputTokens: 4 },
+    });
+    const mockChannel = createMockChannel();
+    const orchestrator = new Orchestrator({
+      providerManager: {
+        getProvider: () => mockProvider,
+        getProviderByName: () => mockProvider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        listAvailable: () => [{ name: "mock", label: "mock", defaultModel: "default" }],
+        shutdown: vi.fn(),
+      } as any,
+      tools: [],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: false,
+    });
+    const monitorLifecycle = {
+      requestStart: vi.fn(),
+      joinEpisode: vi.fn(),
+      goalDecomposed: vi.fn(),
+      goalRestructured: vi.fn(),
+      requestEnd: vi.fn(),
+      joinEpisodeEnd: vi.fn(),
+    };
+    orchestrator.setMonitorLifecycle(monitorLifecycle as any);
+
+    await orchestrator.runBackgroundTask("Investigate a sub-goal", {
+      signal: AbortSignal.timeout(5_000),
+      onProgress: vi.fn(),
+      chatId: "distinct-worker-chat",
+      channelType: "cli",
+      supervisorMode: "off",
+      monitorScope: "parent-goal-scope",
+    } as any);
+
+    expect(monitorLifecycle.joinEpisode).toHaveBeenCalledWith(
+      "distinct-worker-chat",
+      "Investigate a sub-goal",
+      "parent-goal-scope",
+    );
+    expect(monitorLifecycle.joinEpisodeEnd).toHaveBeenCalledWith(
+      "distinct-worker-chat",
+      false,
+      "parent-goal-scope",
+    );
+    expect(monitorLifecycle.requestStart).not.toHaveBeenCalled();
+    expect(monitorLifecycle.requestEnd).not.toHaveBeenCalled();
+  });
+
+  it("runBackgroundTask stays monitor-silent when monitorScope equals its own scope (supervisor node shares the parent scope; the DAG represents it)", async () => {
+    // The supervisor bridge forwards the parent's chatId/conversationId verbatim, so a sub-goal
+    // worker runs UNDER the parent's own scope. With monitorScope === own conversationScope the
+    // consumer must SUPPRESS the simple-card join (no stray card on top of the supervisor's DAG
+    // node) — and never requestStart either. Byte-identical to the prior monitor-silent behavior.
+    const mockProvider = createMockProvider();
+    mockProvider.chat.mockResolvedValueOnce({
+      text: "Worker done.",
+      toolCalls: [],
+      stopReason: "end_turn" as const,
+      usage: { inputTokens: 3, outputTokens: 4 },
+    });
+    const mockChannel = createMockChannel();
+    const orchestrator = new Orchestrator({
+      providerManager: {
+        getProvider: () => mockProvider,
+        getProviderByName: () => mockProvider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        listAvailable: () => [{ name: "mock", label: "mock", defaultModel: "default" }],
+        shutdown: vi.fn(),
+      } as any,
+      tools: [],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: false,
+    });
+    const monitorLifecycle = {
+      requestStart: vi.fn(),
+      joinEpisode: vi.fn(),
+      goalDecomposed: vi.fn(),
+      goalRestructured: vi.fn(),
+      requestEnd: vi.fn(),
+      joinEpisodeEnd: vi.fn(),
+    };
+    orchestrator.setMonitorLifecycle(monitorLifecycle as any);
+
+    await orchestrator.runBackgroundTask("Investigate a sub-goal", {
+      signal: AbortSignal.timeout(5_000),
+      onProgress: vi.fn(),
+      chatId: "shared-scope-chat",
+      channelType: "cli",
+      supervisorMode: "off",
+      // Same as the worker's own conversationScope (chatId), like the supervisor bridge stamps.
+      monitorScope: "shared-scope-chat",
+    } as any);
+
+    expect(monitorLifecycle.joinEpisode).not.toHaveBeenCalled();
+    expect(monitorLifecycle.joinEpisodeEnd).not.toHaveBeenCalled();
+    expect(monitorLifecycle.requestStart).not.toHaveBeenCalled();
+    expect(monitorLifecycle.requestEnd).not.toHaveBeenCalled();
+  });
+
   it("routes top-level background tasks through supervisor planning when allowed", async () => {
     const mockProvider = createMockProvider();
     const mockChannel = createMockChannel();

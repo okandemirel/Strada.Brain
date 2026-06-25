@@ -15,6 +15,7 @@ import { createLogger } from "../utils/logger.js";
 import { AuthManager } from "../security/auth.js";
 import { configureAuthManager } from "../security/auth-hardened.js";
 import { Orchestrator } from "../agents/orchestrator.js";
+import { resolveConversationScope } from "../agents/orchestrator-text-utils.js";
 import { MetricsCollector } from "../dashboard/metrics.js";
 import { setSanitizationCallback } from "../security/secret-sanitizer.js";
 import { CachedEmbeddingProvider } from "../rag/embeddings/embedding-cache.js";
@@ -176,6 +177,13 @@ export function createSupervisorExecuteNodeBridge(params: {
         channelType: context.channelType ?? params.defaultChannelType ?? "cli",
         conversationId: context.conversationId,
         userId: context.userId,
+        // PRODUCER: stamp the originating request's parent scope — the SAME scope the supervisor
+        // uses for its own dag_init/task_update (supervisor-brain.ts) — so every supervisor-
+        // decomposed sub-goal worker's monitor episode JOINs the parent goal's ONE dropdown
+        // conversation (isMonitorRootRun=false → joinEpisode) instead of minting a sibling.
+        // MONITOR-only — the worker's chatId/conversationId/session/identity stay fresh.
+        // Confined to this bridge + strictly the originating request's scope (no cross-conv bleed).
+        monitorScope: resolveConversationScope(context.chatId, context.conversationId),
         taskRunId: nodeTaskRunId,
         assignedProvider: node.assignedProvider,
         assignedModel: node.assignedModel,

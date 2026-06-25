@@ -169,6 +169,18 @@ export interface AgentRunRequest {
   readonly goalContext?: { readonly rootId: string; readonly nodeId: string };
 
   /**
+   * Whole-goal MONITOR scope (optional). When a single user request fans out into
+   * supervisor-decomposed worker runs (each with its own chatId/session/identity), the
+   * originating request's `resolveConversationScope` is stamped here so each worker's
+   * monitor events JOIN the parent goal's episode (one dropdown conversation per whole
+   * goal) instead of minting a sibling episode. MONITOR-only: `V1AgentRunner` forwards it
+   * onto the worker's `IncomingMessage`/`Task` for the monitor consumer; it NEVER re-keys
+   * the worker's chatId/conversationId/session/identity (those stay fresh by design).
+   * Absent ⇒ the run is its own whole-goal root (byte-identical to the prior behavior).
+   */
+  readonly monitorScope?: string;
+
+  /**
    * Worker driver sub-mode, carried only for the `"worker"`/`"supervisor-node"` RunnerModes —
    * the underlying `WorkerRunRequest.mode` (`"interactive" | "background" | "delegated"`). When
    * omitted, `V1AgentRunner` derives it from `IOStrategy.mode`.

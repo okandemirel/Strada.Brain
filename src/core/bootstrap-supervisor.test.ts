@@ -74,6 +74,49 @@ describe("createSupervisorExecuteNodeBridge", () => {
     });
   });
 
+  it("stamps the parent goal's monitorScope onto the worker envelope (the run's whole-goal rollup scope)", async () => {
+    // Producer-side proof that monitorScope is wired (no longer a write-only sink): the supervisor
+    // bridge stamps the ORIGINATING request's resolveConversationScope onto the worker envelope —
+    // the SAME scope the supervisor uses for its own dag_init/task_update. The downstream consumer
+    // lives in Orchestrator.runBackgroundTask (joinEpisode/joinEpisodeEnd), gated exactly like
+    // executeTask/processMessage on `monitorScope !== own conversationScope`.
+    const runWorkerEnvelope = vi.fn().mockResolvedValue({
+      output: "done",
+      workerResult: { status: "completed", finalSummary: "done", touchedFiles: [] },
+    });
+
+    const bridge = createSupervisorExecuteNodeBridge({
+      backgroundExecutor: { runWorkerEnvelope } as any,
+      orchestrator: {} as any,
+      workspaceBus: { emit: vi.fn() } as any,
+      defaultChannelType: "cli",
+    });
+
+    // Parent request carries a distinct conversationId so the parent scope is that conversationId
+    // (resolveConversationScope prefers conversationId over chatId) — proving the stamp is the
+    // ORIGINATING request's scope, never a coarser/shared value or the worker's bare chatId.
+    await bridge(
+      { id: "node-9", task: "Sub-goal A" } as any,
+      {
+        chatId: "parent-chat",
+        conversationId: "parent-conversation",
+        taskRunId: "taskrun_parent",
+      } as any,
+      new AbortController().signal,
+    );
+
+    const envelope = runWorkerEnvelope.mock.calls[0]?.[1];
+    // The parent scope (the conversationId) is stamped — NOT undefined (dormant) and NOT the
+    // worker's bare chatId.
+    expect(envelope.monitorScope).toBe("parent-conversation");
+    // The bridge forwards the parent's identity verbatim, so the worker runs UNDER the parent's
+    // own scope. The consumer therefore sees `monitorScope === own conversationScope` and
+    // correctly SUPPRESSES a simple-card join — the supervisor already represents this sub-goal
+    // as a DAG node, so the whole goal stays ONE monitor conversation without a stray card.
+    expect(envelope.chatId).toBe("parent-chat");
+    expect(envelope.conversationId).toBe("parent-conversation");
+  });
+
   it("wires supervisor execution before channel startup completes", () => {
     const setWorkspaceBus = vi.fn();
     const setMonitorLifecycle = vi.fn();

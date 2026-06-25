@@ -168,6 +168,33 @@ describe("V1AgentRunner I/O axis threading", () => {
     });
   });
 
+  it("forwards monitorScope onto runWorkerTask so the parent-episode rollup reaches runBackgroundTask's consumer", async () => {
+    const { orchestrator, spy } = mockOrchestrator();
+    const runner = new V1AgentRunner(orchestrator);
+
+    // A worker fanned out from a parent goal carries the parent's monitorScope; the runner must
+    // forward it verbatim onto the runWorkerTask request (the field is consumed downstream in
+    // Orchestrator.runBackgroundTask, which joinEpisode's the worker's card onto the parent episode
+    // when the worker runs under a DISTINCT scope). MONITOR-only: identity is untouched.
+    await runner.run(
+      baseRequest({ chatId: "chat-1", monitorScope: "parent-goal-scope" }),
+      baseIo({ mode: "supervisor-node" }),
+    );
+
+    const call = spy.mock.calls[0]?.[0] as { monitorScope?: string; chatId: string };
+    expect(call.monitorScope).toBe("parent-goal-scope");
+    // MONITOR-only: the worker's own identity (chatId) is forwarded UNCHANGED.
+    expect(call.chatId).toBe("chat-1");
+  });
+
+  it("forwards monitorScope as undefined when the run is its own whole-goal root (byte-identical to prior)", async () => {
+    const { orchestrator, spy } = mockOrchestrator();
+    const runner = new V1AgentRunner(orchestrator);
+
+    await runner.run(baseRequest(), baseIo({ mode: "background" }));
+    expect((spy.mock.calls[0]?.[0] as { monitorScope?: string }).monitorScope).toBeUndefined();
+  });
+
   it("forwards supervisorMode RAW — the orchestrator owns the per-mode default (v1 parity)", async () => {
     const { orchestrator, spy } = mockOrchestrator();
     const runner = new V1AgentRunner(orchestrator);

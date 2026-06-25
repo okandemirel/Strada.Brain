@@ -76,6 +76,13 @@ export interface WorkerExecutionEnvelope {
   readonly userContent?: string | MessageContent[] | null;
   readonly onUsage?: (usage: WorkerUsageEvent) => void;
   readonly workspaceLease?: WorkspaceLease;
+  /**
+   * Whole-goal MONITOR scope (optional). When a supervisor-decomposed worker runs with its
+   * own chatId/conversationId, the parent goal's conversationScope is stamped here so the
+   * worker's monitor events JOIN the parent episode (one workspace per whole goal) instead
+   * of minting a sibling conversation. MONITOR-only — never re-keys identity/session/memory.
+   */
+  readonly monitorScope?: string;
 }
 
 export interface WorkerRunRequest extends WorkerExecutionEnvelope {

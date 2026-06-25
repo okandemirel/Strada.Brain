@@ -887,6 +887,7 @@ export class BackgroundExecutor {
       workspaceLeaseRetained?: boolean;
       supervisorMode?: import("./types.js").BackgroundTaskOptions["supervisorMode"];
       goalContext?: import("./types.js").GoalContext;
+      monitorScope?: string;
     },
   ): Promise<{ output: string; workerResult?: WorkerRunResult }> {
     // Phase-0 strangler seam: route through the AgentRunner façade (V1AgentRunner) instead of
@@ -931,6 +932,8 @@ export class BackgroundExecutor {
       workspaceLeaseRetained: params.workspaceLeaseRetained,
       supervisorMode: params.supervisorMode,
       goalContext: params.goalContext,
+      // Parent-episode rollup scope; see AgentRunRequest.monitorScope. MONITOR-only.
+      monitorScope: params.monitorScope,
       onUsage: params.onUsage,
     };
 
@@ -964,6 +967,7 @@ export class BackgroundExecutor {
       workspaceSourceRoot?: string;
       supervisorMode?: import("./types.js").BackgroundTaskOptions["supervisorMode"];
       goalContext?: import("./types.js").GoalContext;
+      monitorScope?: string;
     },
   ): Promise<{ output: string; workerResult?: WorkerRunResult }> {
     const managedWorkspaceLease = params.workspaceLease ?? (this.workspaceLeaseManager

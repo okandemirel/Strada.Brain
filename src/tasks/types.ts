@@ -179,6 +179,13 @@ export interface BackgroundTaskOptions {
   supervisorMode?: "auto" | "off";
   /** Goal tree context for substep emission (rootId + nodeId). */
   goalContext?: GoalContext;
+  /**
+   * Whole-goal MONITOR scope (optional). When a supervisor-decomposed worker runs with its
+   * own chatId/conversationId, the parent goal's conversationScope is stamped here so the
+   * worker's monitor events JOIN the parent episode instead of minting a sibling conversation.
+   * MONITOR-only — never re-keys identity/session/memory.
+   */
+  monitorScope?: string;
 }
 
 /** Minimal goal tree reference for substep/event context. */

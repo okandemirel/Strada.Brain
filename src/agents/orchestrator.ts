@@ -3450,6 +3450,9 @@ export class Orchestrator {
           workspaceLease: request.workspaceLease,
           supervisorMode,
           goalContext: request.goalContext,
+          // Parent-episode rollup scope, consumed in runBackgroundTask; see
+          // AgentRunRequest.monitorScope. MONITOR-only — identity/session unchanged.
+          monitorScope: request.monitorScope,
           __workerCollector: collector,
           __workerMode: request.mode,
         } as BackgroundTaskOptions & {
@@ -3523,7 +3526,28 @@ export class Orchestrator {
       this.getTaskExecutionContext()?.taskRunId ||
       `taskrun_${randomUUID()}`;
 
-    return await this.withTaskExecutionContext<string>(
+    // Whole-goal monitor rollup: a worker run is NEVER the whole-goal root (the root is the
+    // interactive request in processMessage, or the queued task in BackgroundExecutor.executeTask).
+    // When this run was fanned out from a parent goal that stamped its scope here
+    // (`options.monitorScope`) AND the worker runs under a DISTINCT scope of its own, the worker's
+    // monitor card JOINs the parent's open episode (one dropdown conversation per whole goal)
+    // instead of minting a sibling. We only ever joinEpisode/joinEpisodeEnd here — never
+    // requestStart — and gate exactly like executeTask/processMessage on `monitorScope !== own
+    // scope`, so:
+    //   • absent monitorScope (queued/top-level path — executeTask already owns the lifecycle and
+    //     passes monitorScope=undefined; or a monitor-silent sub-agent orchestrator with no
+    //     monitorLifecycle wired) ⇒ no-op ⇒ byte-identical to the prior behavior;
+    //   • monitorScope === own conversationScope (a supervisor-decomposed sub-goal worker shares
+    //     the parent's chatId/conversationId, and the supervisor already represents it as a DAG
+    //     node) ⇒ suppressed, so we never push a stray simple card on top of the DAG;
+    //   • joinEpisode itself is a safe no-op when no parent episode is open under the scope.
+    // MONITOR-only — chatId/conversationId/session/identity above are untouched.
+    const workerMonitorScope = options.monitorScope?.trim() || undefined;
+    const joinsParentEpisode = Boolean(workerMonitorScope) && workerMonitorScope !== conversationScope;
+    let workerRequestFailed = false;
+
+    try {
+      return await this.withTaskExecutionContext<string>(
       {
         chatId,
         conversationId: options.conversationId,
@@ -3533,6 +3557,9 @@ export class Orchestrator {
       },
       async (): Promise<string> => {
         const logger = getLogger();
+        if (joinsParentEpisode) {
+          this.monitorLifecycle?.joinEpisode(conversationScope, prompt, workerMonitorScope);
+        }
         const fixedProviderName =
           canonicalizeProviderName(options.assignedProvider)
           ?? options.assignedProvider?.trim().toLowerCase();
@@ -4845,10 +4872,23 @@ export class Orchestrator {
             workerCollector.status = finalStatus;
             workerCollector.reason = finalReason;
           }
+          // Carry the terminal disposition out to the monitor rollup below so a
+          // joined worker card settles failed/completed faithfully (mirrors
+          // BackgroundExecutor.executeTask's `requestFailed`).
+          workerRequestFailed = finalStatus === "failed" || finalStatus === "blocked";
         }
         return finalVisibleResponse || "Task completed.";
       },
-    );
+      );
+    } finally {
+      // Settle the joined worker card WITHOUT marking the parent episode terminal — the
+      // whole-goal episode stays open until the ROOT run's requestEnd. No-op when this run
+      // is not a parent-episode join (workerMonitorScope absent) or the monitorLifecycle is
+      // unwired, keeping the top-level/queued/sub-agent paths byte-identical.
+      if (joinsParentEpisode) {
+        this.monitorLifecycle?.joinEpisodeEnd(conversationScope, workerRequestFailed, workerMonitorScope);
+      }
+    }
   }
 
   /**

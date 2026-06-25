@@ -62,6 +62,7 @@ export interface V1OrchestratorLike {
       workspaceLeaseRetained?: boolean;
       supervisorMode?: "auto" | "off";
       goalContext?: { readonly rootId: string; readonly nodeId: string };
+      monitorScope?: string;
     },
   ): Promise<WorkerRunResult>;
 
@@ -349,6 +350,8 @@ export class V1AgentRunner implements AgentRunner {
         workspaceLeaseRetained: request.workspaceLeaseRetained,
         supervisorMode: request.supervisorMode,
         goalContext: request.goalContext,
+        // Parent-episode rollup scope; see AgentRunRequest.monitorScope. MONITOR-only.
+        monitorScope: request.monitorScope,
       });
       return projectWorkerResult(worker);
     }
@@ -399,6 +402,8 @@ export class V1AgentRunner implements AgentRunner {
       workspaceLeaseRetained: request.workspaceLeaseRetained,
       supervisorMode: request.supervisorMode,
       goalContext: request.goalContext,
+      // MONITOR-only parent-scope rollup (see runWorker); identity/session unchanged.
+      monitorScope: request.monitorScope,
     } as BackgroundTaskOptions & { workspaceLeaseRetained?: boolean });
     return markLegacyBareString(
       buildMinimalAgentRunResult({
