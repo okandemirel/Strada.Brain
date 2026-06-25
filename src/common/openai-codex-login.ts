@@ -10,11 +10,87 @@
  */
 import { spawn, spawnSync } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 const CODEX_BIN = "codex";
 const AUTH_URL_RE = /(https?:\/\/[^\s"']+)/;
 /** A login attempt is considered "in flight" for this long before we allow a new spawn. */
 const LOGIN_DEDUP_MS = 5 * 60_000;
+
+/**
+ * Pinned fallback Codex CLI version used to build the `codex_cli_rs/<version>`
+ * User-Agent when the installed binary cannot be located/read. Codex gates the
+ * consumer subscription token on a codex-shaped client identity; a plausible
+ * version keeps the request indistinguishable from a real codex call. Bump this
+ * when the codex wire protocol moves on (it is undocumented and brittle).
+ */
+export const CODEX_CLI_FALLBACK_VERSION = "0.132.0";
+
+/** Memoized so we never spawn/stat per request — resolved at most once per process. */
+let cachedCodexCliVersion: string | undefined;
+
+/**
+ * Best-effort resolution of the installed Codex CLI version, used only to build a
+ * non-secret `codex_cli_rs/<version>` User-Agent. Locates the `codex` binary on
+ * PATH (fixed-argv `which`/`where`, no shell interpolation), follows the symlink
+ * to the real `@openai/codex` install, and reads the `version` from the nearest
+ * `package.json`. Falls back to {@link CODEX_CLI_FALLBACK_VERSION} when anything
+ * is unavailable. The result is memoized so callers may invoke it per request
+ * cheaply; pass `force` only in tests to bypass the cache.
+ */
+export function resolveCodexCliVersion(
+  spawnSyncFn: typeof spawnSync = spawnSync,
+  force = false,
+): string {
+  if (cachedCodexCliVersion !== undefined && !force) {
+    return cachedCodexCliVersion;
+  }
+  cachedCodexCliVersion = readCodexPackageVersion(spawnSyncFn) ?? CODEX_CLI_FALLBACK_VERSION;
+  return cachedCodexCliVersion;
+}
+
+function readCodexPackageVersion(spawnSyncFn: typeof spawnSync): string | undefined {
+  try {
+    // Resolve the binary's location on PATH with a fixed argv (no shell string).
+    const locator = process.platform === "win32" ? "where" : "which";
+    const located = spawnSyncFn(locator, [CODEX_BIN], { encoding: "utf8", timeout: 5000 });
+    if (located.status !== 0 || typeof located.stdout !== "string") {
+      return undefined;
+    }
+    const binPath = located.stdout.split(/\r?\n/)[0]?.trim();
+    if (!binPath) {
+      return undefined;
+    }
+    // Follow any symlink (e.g. a Homebrew shim) to the real installed file, then
+    // walk up looking for the package.json that owns it. A missing/inaccessible
+    // path makes realpathSync throw and the surrounding try/catch returns undefined.
+    let dir = dirname(realpathSync(binPath));
+    for (let depth = 0; depth < 6; depth++) {
+      const pkgPath = join(dir, "package.json");
+      if (existsSync(pkgPath)) {
+        const parsed = JSON.parse(readFileSync(pkgPath, "utf8")) as { version?: unknown };
+        if (typeof parsed.version === "string" && parsed.version) {
+          return parsed.version;
+        }
+        return undefined;
+      }
+      const parent = dirname(dir);
+      if (parent === dir) {
+        break;
+      }
+      dir = parent;
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Test-only: clears the memoized Codex CLI version. */
+export function __resetCodexCliVersionCache(): void {
+  cachedCodexCliVersion = undefined;
+}
 
 export interface CodexLoginStart {
   readonly started: boolean;

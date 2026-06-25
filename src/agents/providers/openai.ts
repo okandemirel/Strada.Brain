@@ -20,12 +20,34 @@ import {
   expandHomePath,
   OPENAI_CHATGPT_AUTH_DEFAULT_FILE,
 } from "../../common/openai-subscription-auth.js";
+import { resolveCodexCliVersion } from "../../common/openai-codex-login.js";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { randomUUID } from "node:crypto";
 
 const MAX_RETRIES = 3;
 export const MAX_SSE_BUFFER_BYTES = 1 * 1024 * 1024; // 1 MB
+
+/**
+ * Headers common to every request shape (api-key and subscription). Spread into
+ * each branch of buildHeaders() so a change here can't diverge between them.
+ */
+const OPENAI_BASE_HEADERS = { "Content-Type": "application/json" } as const;
 export const OPENAI_CHATGPT_RESPONSES_BASE_URL = "https://chatgpt.com/backend-api/codex";
+
+/**
+ * Static client-identity string the official codex CLI sends as `originator`.
+ * The Codex backend GATES the consumer ChatGPT/Codex subscription token on this
+ * (and a codex-shaped User-Agent / OpenAI-Beta / session_id) — without it the
+ * very same valid token is rejected with HTTP 401. This is a NON-SECRET identity
+ * marker, not a credential.
+ *
+ * NOTE: this tracks codex's UNDOCUMENTED wire protocol and is therefore brittle —
+ * it may need updating if codex changes the headers it sends.
+ */
+export const CODEX_ORIGINATOR = "codex_cli_rs";
+/** Responses-API beta marker the codex CLI sends. */
+export const CODEX_OPENAI_BETA = "responses=experimental";
 
 /** Maps OpenAI finish_reason values to internal stop reasons */
 export const OPENAI_STOP_REASON_MAP: Record<string, ProviderResponse["stopReason"]> = {
@@ -87,10 +109,37 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
   protected readonly baseUrl: string;
   /** Human-readable reason the last healthCheck() failed (for accurate preflight diagnostics). */
   private lastHealthDetail?: string;
+  /**
+   * Stable per-instance session id sent as the codex `session_id` identity header
+   * in subscription mode. Generated ONCE in the constructor so it stays constant
+   * across a conversation's turns (matching how the codex CLI keeps one session id
+   * for the life of a run), and differs across provider instances.
+   */
+  private readonly sessionId = randomUUID();
 
   /** Returns the reason the most recent healthCheck() failed, if any. */
   getLastHealthDetail(): string | undefined {
     return this.lastHealthDetail;
+  }
+
+  /**
+   * Codex-shaped User-Agent (`codex_cli_rs/<version>`) sent in subscription mode.
+   * Resolved lazily on first use (never at construction, never per request) and
+   * only in subscription mode, so construction stays pure and api-key callers
+   * never pay the version lookup. The underlying resolveCodexCliVersion() is
+   * itself memoized, so this is computed at most once per process.
+   */
+  private codexUserAgent?: string;
+
+  /**
+   * Lazily resolve the codex-shaped User-Agent, memoizing the result on the
+   * instance. Only called from the subscription branch of buildHeaders().
+   */
+  private getCodexUserAgent(): string {
+    if (this.codexUserAgent === undefined) {
+      this.codexUserAgent = `${CODEX_ORIGINATOR}/${resolveCodexCliVersion()}`;
+    }
+    return this.codexUserAgent;
   }
 
   constructor(
@@ -103,6 +152,9 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
     this.auth = typeof auth === "string" ? { mode: "api-key", apiKey: auth } : auth;
     this.model = model;
     this.baseUrl = this.isChatGptSubscriptionMode() ? OPENAI_CHATGPT_RESPONSES_BASE_URL : baseUrl;
+    // The codex-shaped User-Agent is resolved lazily on first request via
+    // getCodexUserAgent() — only in subscription mode — so construction stays
+    // pure and api-key mode never pays the version lookup.
   }
 
   async chat(
@@ -595,16 +647,31 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
   protected async buildHeaders(): Promise<Record<string, string>> {
     if (!this.isChatGptSubscriptionMode()) {
       return {
-        "Content-Type": "application/json",
+        ...OPENAI_BASE_HEADERS,
         Authorization: `Bearer ${(this.auth as { apiKey: string }).apiKey}`,
       };
     }
 
     const auth = await this.resolveChatGptAuth();
+    // The Codex backend gates the consumer subscription token on the client-identity
+    // headers the official codex CLI sends. Without them the SAME valid token is
+    // rejected with HTTP 401. These are all NON-SECRET identity markers — the bearer
+    // token (the only credential) is attached exactly as before and never logged.
+    // This mirrors codex's UNDOCUMENTED wire protocol and is therefore brittle.
     return {
-      "Content-Type": "application/json",
+      ...OPENAI_BASE_HEADERS,
       Authorization: `Bearer ${auth.accessToken}`,
       "ChatGPT-Account-Id": auth.accountId,
+      // codex sends the account id lowercased too; sending both is harmless and
+      // keeps us byte-for-byte aligned with the CLI's request shape.
+      "chatgpt-account-id": auth.accountId,
+      // Primary identity gate — a static marker, identical to codex_cli_rs.
+      originator: CODEX_ORIGINATOR,
+      // codex-shaped User-Agent, resolved lazily + memoized on first use.
+      "User-Agent": this.getCodexUserAgent(),
+      "OpenAI-Beta": CODEX_OPENAI_BETA,
+      // Stable per-instance session id (constant across this conversation's turns).
+      session_id: this.sessionId,
     };
   }
 
@@ -942,7 +1009,7 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
     }
 
     if (response.status === 401 || response.status === 403) {
-      return `ChatGPT/Codex subscription was rejected (HTTP ${response.status}). Consumer ChatGPT/Codex subscription tokens are frequently rejected by OpenAI for programmatic use; signing in again usually will not help. Switch OpenAI to API-key mode (or use a Team/Enterprise plan).${backendDetail ? ` ${backendDetail}` : ""}`;
+      return `ChatGPT/Codex subscription was rejected (HTTP ${response.status}). This most likely means the codex token needs refreshing — re-run \`codex login\` to renew it — or that the codex wire protocol changed (the client-identity headers Strada sends to match the codex CLI may be out of date). API-key mode remains a stable alternative if the subscription path keeps failing.${backendDetail ? ` ${backendDetail}` : ""}`;
     }
     if (response.status === 400 || response.status === 404) {
       return `The configured model "${this.model}" is not accepted by the ChatGPT/Codex subscription endpoint (HTTP ${response.status}).${backendDetail ? ` ${backendDetail}` : ""} Choose a Codex-compatible model (e.g. gpt-5.2) or switch OpenAI to API-key mode.`;

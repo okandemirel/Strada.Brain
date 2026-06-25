@@ -664,4 +664,108 @@ describe("OpenAIProvider", () => {
       rmSync(dir, { recursive: true, force: true });
     });
   });
+
+  // The Codex backend gates the consumer ChatGPT/Codex subscription token on the
+  // client-identity headers the official codex CLI sends (chiefly `originator`,
+  // a codex-shaped User-Agent, OpenAI-Beta and a session_id). Omitting them gets
+  // the SAME valid token rejected with HTTP 401. These tests pin the enriched
+  // header set and guard against it leaking into api-key mode. No network, no real
+  // tokens — headers are captured off the mocked fetch (same approach as above).
+  describe("subscription requests carry codex client-identity headers", () => {
+    function okStream(): ReadableStream<Uint8Array> {
+      return new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(
+            [
+              "event: response.output_text.delta",
+              'data: {"delta":"ok"}',
+              "",
+              "event: response.completed",
+              'data: {"response":{"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2},"output":[{"id":"m","type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}]}}',
+              "",
+            ].join("\n"),
+          ));
+          controller.close();
+        },
+      });
+    }
+
+    function headersFromLastCall(): Record<string, string> {
+      return mockFetch.mock.calls.at(-1)![1].headers as Record<string, string>;
+    }
+
+    it("adds originator, codex User-Agent, OpenAI-Beta, a uuid session_id and the bearer token", async () => {
+      mockFetch.mockResolvedValue({ ok: true, body: okStream(), text: async () => "", headers: new Headers() });
+
+      const provider = new OpenAIProvider({
+        mode: "chatgpt-subscription",
+        accessToken: "access-token",
+        accountId: "account-id",
+      });
+      await provider.chat("system", [{ role: "user", content: "ping" }], []);
+
+      const headers = headersFromLastCall();
+      expect(headers["originator"]).toBe("codex_cli_rs");
+      expect(headers["User-Agent"]).toMatch(/^codex_cli_rs\/.+/);
+      expect(headers["OpenAI-Beta"]).toBe("responses=experimental");
+      expect(headers["session_id"]).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+      );
+      // The only credential is attached exactly as before, plus both account-id casings.
+      expect(headers["Authorization"]).toBe("Bearer access-token");
+      expect(headers["ChatGPT-Account-Id"]).toBe("account-id");
+      expect(headers["chatgpt-account-id"]).toBe("account-id");
+    });
+
+    it("keeps session_id stable across turns on one instance and distinct across instances", async () => {
+      mockFetch.mockResolvedValue({ ok: true, body: okStream(), text: async () => "", headers: new Headers() });
+
+      const provider = new OpenAIProvider({
+        mode: "chatgpt-subscription",
+        accessToken: "access-token",
+        accountId: "account-id",
+      });
+      await provider.chat("system", [{ role: "user", content: "one" }], []);
+      const first = headersFromLastCall()["session_id"];
+
+      mockFetch.mockResolvedValue({ ok: true, body: okStream(), text: async () => "", headers: new Headers() });
+      await provider.chat("system", [{ role: "user", content: "two" }], []);
+      const second = headersFromLastCall()["session_id"];
+
+      expect(second).toBe(first); // stable across this conversation's turns
+
+      const other = new OpenAIProvider({
+        mode: "chatgpt-subscription",
+        accessToken: "access-token",
+        accountId: "account-id",
+      });
+      mockFetch.mockResolvedValue({ ok: true, body: okStream(), text: async () => "", headers: new Headers() });
+      await other.chat("system", [{ role: "user", content: "ping" }], []);
+      expect(headersFromLastCall()["session_id"]).not.toBe(first); // distinct per instance
+    });
+
+    it("does NOT leak codex identity headers into api-key mode (regression guard)", async () => {
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: "Hi", tool_calls: [] }, finish_reason: "stop" }],
+          usage: { prompt_tokens: 1, completion_tokens: 1 },
+        }),
+        text: async () => "",
+      });
+
+      const provider = new OpenAIProvider("sk-test");
+      await provider.chat("system", [{ role: "user", content: "Hello" }], []);
+
+      const [url, init] = mockFetch.mock.calls.at(-1)!;
+      expect(String(url)).toContain("api.openai.com");
+      const headers = init.headers as Record<string, string>;
+      expect(headers["Authorization"]).toBe("Bearer sk-test");
+      expect(headers["originator"]).toBeUndefined();
+      expect(headers["User-Agent"]).toBeUndefined();
+      expect(headers["OpenAI-Beta"]).toBeUndefined();
+      expect(headers["session_id"]).toBeUndefined();
+      expect(headers["ChatGPT-Account-Id"]).toBeUndefined();
+    });
+  });
 });
