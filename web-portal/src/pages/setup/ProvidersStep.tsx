@@ -9,7 +9,7 @@ import {
   type OpencodePlatform,
   type ProviderModelOption,
 } from '../../types/setup-constants'
-import type { OpenAiSubscriptionState } from '../../hooks/useSetupWizard'
+import type { OpenAiSubscriptionState, ClaudeSubscriptionState } from '../../hooks/useSetupWizard'
 import OpencodePlatformToggle from './OpencodePlatformToggle'
 
 interface ProvidersStepProps {
@@ -28,6 +28,9 @@ interface ProvidersStepProps {
   openaiSubscription: OpenAiSubscriptionState
   signInWithChatGpt: () => Promise<void>
   refreshOpenAiSubscriptionStatus: () => Promise<boolean>
+  claudeSubscription: ClaudeSubscriptionState
+  signInWithClaude: () => Promise<void>
+  refreshClaudeSubscriptionStatus: () => Promise<boolean>
   onNext: () => void
   onBack: () => void
 }
@@ -135,6 +138,9 @@ export default function ProvidersStep({
   openaiSubscription,
   signInWithChatGpt,
   refreshOpenAiSubscriptionStatus,
+  claudeSubscription,
+  signInWithClaude,
+  refreshClaudeSubscriptionStatus,
   onNext,
   onBack,
 }: ProvidersStepProps) {
@@ -498,7 +504,80 @@ export default function ProvidersStep({
                 )}
 
                 {usingClaudeSubscription && (
-                  <div className="provider-helper-copy">
+                  <div className="provider-helper-copy provider-claude-signin">
+                    {claudeSubscription.claudeAvailable === false ? (
+                      <p className="warning">
+                        {claudeSubscription.error
+                          ?? t('providers.claude.cliMissing', {
+                            defaultValue: 'Claude CLI not found. Install it with `npm install -g @anthropic-ai/claude-code`, then sign in.',
+                          })}
+                      </p>
+                    ) : (
+                      <>
+                        <div className={`signin-status signin-status-${claudeSubscription.status}`}>
+                          {claudeSubscription.status === 'connected' ? (
+                            <span className="signin-badge connected">
+                              ✓ {t('providers.claude.signedIn', { defaultValue: 'Signed in with Claude' })}
+                            </span>
+                          ) : claudeSubscription.status === 'checking' ? (
+                            <span className="signin-badge checking">
+                              {t('providers.claude.checking', { defaultValue: 'Checking Claude session…' })}
+                            </span>
+                          ) : claudeSubscription.status === 'signing-in' ? (
+                            <span className="signin-badge signing-in">
+                              {t('providers.claude.waitingBrowser', { defaultValue: 'Waiting for sign-in in your browser…' })}
+                            </span>
+                          ) : (
+                            <span className="signin-badge disconnected">
+                              {t('providers.claude.notSignedIn', { defaultValue: 'Not signed in' })}
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="signin-actions">
+                          <button
+                            type="button"
+                            className="btn btn-primary"
+                            onClick={() => { void signInWithClaude() }}
+                            disabled={claudeSubscription.status === 'signing-in' || claudeSubscription.status === 'checking'}
+                          >
+                            {claudeSubscription.status === 'connected'
+                              ? t('providers.claude.signInAgain', { defaultValue: 'Sign in again' })
+                              : t('providers.claude.signIn', { defaultValue: 'Sign in with Claude' })}
+                          </button>
+                          {(claudeSubscription.status === 'signing-in' || claudeSubscription.status === 'disconnected') && (
+                            <button
+                              type="button"
+                              className="btn btn-secondary"
+                              onClick={() => { void refreshClaudeSubscriptionStatus() }}
+                            >
+                              {t('providers.claude.refresh', { defaultValue: 'Refresh' })}
+                            </button>
+                          )}
+                        </div>
+
+                        {claudeSubscription.status === 'signing-in' && claudeSubscription.authUrl && (
+                          <p className="signin-help">
+                            {t('providers.claude.browserHint', { defaultValue: "If your browser didn't open, " })}
+                            <a href={claudeSubscription.authUrl} target="_blank" rel="noopener noreferrer">
+                              {t('providers.claude.openLink', { defaultValue: 'open the sign-in page' })}
+                            </a>
+                            .
+                          </p>
+                        )}
+
+                        {claudeSubscription.error && claudeSubscription.status !== 'connected' && (
+                          <p className="warning">{claudeSubscription.error}</p>
+                        )}
+
+                        <p className="signin-note">
+                          {t('providers.claude.tokenStep', {
+                            defaultValue: 'Step 2: after signing in, run `claude setup-token` in a terminal and paste the generated token below.',
+                          })}
+                        </p>
+                      </>
+                    )}
+
                     <p>
                       {t('providers.claude.subscriptionInfo')}
                     </p>

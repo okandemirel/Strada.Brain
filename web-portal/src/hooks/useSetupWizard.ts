@@ -318,6 +318,30 @@ interface OpenAiSigninResponse {
   error: string | null
 }
 
+export interface ClaudeSubscriptionState {
+  status: 'idle' | 'checking' | 'connected' | 'disconnected' | 'signing-in'
+  detail?: string
+  loggedIn?: boolean | null
+  claudeAvailable?: boolean
+  authUrl?: string | null
+  error?: string | null
+}
+
+interface ClaudeStatusResponse {
+  ok: boolean
+  issue: string | null
+  detail: string
+  loggedIn: boolean | null
+  claudeAvailable: boolean
+}
+
+interface ClaudeSigninResponse {
+  started: boolean
+  claudeAvailable: boolean
+  url: string | null
+  error: string | null
+}
+
 export function useSetupWizard() {
   const [setupAvailability, setSetupAvailability] = useState<'checking' | 'available' | 'unavailable'>('checking')
   const [setupUnavailableReason, setSetupUnavailableReason] = useState<string | null>(null)
@@ -365,10 +389,13 @@ export function useSetupWizard() {
   const [readyUrl, setReadyUrl] = useState<string | null>(typeof window !== 'undefined' ? `${window.location.origin}/` : null)
   const [csrfToken, setCsrfToken] = useState('')
   const [openaiSubscription, setOpenaiSubscription] = useState<OpenAiSubscriptionState>({ status: 'idle' })
+  const [claudeSubscription, setClaudeSubscription] = useState<ClaudeSubscriptionState>({ status: 'idle' })
 
   const csrfTokenRef = useRef<string>('')
   const openaiPollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const openaiPollDeadlineRef = useRef<number>(0)
+  const claudePollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const claudePollDeadlineRef = useRef<number>(0)
   const readyUrlRef = useRef<string | null>(typeof window !== 'undefined' ? `${window.location.origin}/` : null)
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pollAbortControllerRef = useRef<AbortController | null>(null)
@@ -452,6 +479,9 @@ export function useSetupWizard() {
       if (openaiPollTimerRef.current) {
         clearTimeout(openaiPollTimerRef.current)
       }
+      if (claudePollTimerRef.current) {
+        clearTimeout(claudePollTimerRef.current)
+      }
     }
   }, [stopBootstrapPolling])
 
@@ -532,6 +562,10 @@ export function useSetupWizard() {
     if (id === 'openai') {
       // Re-arm the subscription status check for the newly selected OpenAI mode.
       setOpenaiSubscription({ status: 'idle' })
+    }
+    if (id === 'claude') {
+      // Re-arm the subscription status check for the newly selected Claude mode.
+      setClaudeSubscription({ status: 'idle' })
     }
   }, [])
 
@@ -790,6 +824,123 @@ export function useSetupWizard() {
       void refreshOpenAiSubscriptionStatus()
     }
   }, [csrfToken, checkedProviders, providerAuthModes, openaiSubscription.status, refreshOpenAiSubscriptionStatus])
+
+  const refreshClaudeSubscriptionStatus = useCallback(async (): Promise<boolean> => {
+    try {
+      const res = await fetch('/api/setup/claude/status', {
+        headers: csrfTokenRef.current ? { 'X-CSRF-Token': csrfTokenRef.current } : {},
+        cache: 'no-store',
+      })
+      const data = await res.json().catch(() => null) as ClaudeStatusResponse | null
+      if (!data) {
+        setClaudeSubscription((prev) => ({
+          ...prev,
+          status: prev.status === 'signing-in' ? 'signing-in' : 'disconnected',
+          error: 'Could not read subscription status.',
+        }))
+        return false
+      }
+      setClaudeSubscription((prev) => ({
+        status: data.ok ? 'connected' : prev.status === 'signing-in' ? 'signing-in' : 'disconnected',
+        detail: data.detail,
+        loggedIn: data.loggedIn,
+        claudeAvailable: data.claudeAvailable,
+        authUrl: prev.authUrl ?? null,
+        error: data.ok ? null : prev.error ?? null,
+      }))
+      return data.ok
+    } catch {
+      setClaudeSubscription((prev) => ({
+        ...prev,
+        status: prev.status === 'signing-in' ? 'signing-in' : 'disconnected',
+        error: 'Could not read subscription status.',
+      }))
+      return false
+    }
+  }, [])
+
+  const signInWithClaude = useCallback(async () => {
+    if (claudePollTimerRef.current) {
+      clearTimeout(claudePollTimerRef.current)
+      claudePollTimerRef.current = null
+    }
+    setClaudeSubscription((prev) => ({ ...prev, status: 'signing-in', error: null, authUrl: null }))
+    try {
+      const res = await fetch('/api/setup/claude/signin', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': csrfTokenRef.current,
+        },
+      })
+      const data = await res.json().catch(() => ({})) as Partial<ClaudeSigninResponse>
+      if (!data.started) {
+        setClaudeSubscription((prev) => ({
+          ...prev,
+          status: 'disconnected',
+          claudeAvailable: data.claudeAvailable ?? prev.claudeAvailable,
+          error: data.error ?? 'Could not start Claude sign-in.',
+        }))
+        return
+      }
+      setClaudeSubscription((prev) => ({
+        ...prev,
+        status: 'signing-in',
+        claudeAvailable: true,
+        authUrl: data.url ?? null,
+        error: null,
+      }))
+
+      // Browser login alone does not mint the token Strada needs; the user must
+      // still run `claude setup-token` and paste it. Poll status so the badge
+      // flips to connected once ANTHROPIC_AUTH_TOKEN becomes available.
+      claudePollDeadlineRef.current = Date.now() + 3 * 60_000
+      const poll = async (): Promise<void> => {
+        const ok = await refreshClaudeSubscriptionStatus()
+        if (!mountedRef.current) return
+        if (ok) {
+          if (claudePollTimerRef.current) {
+            clearTimeout(claudePollTimerRef.current)
+            claudePollTimerRef.current = null
+          }
+          return
+        }
+        if (Date.now() >= claudePollDeadlineRef.current) {
+          if (claudePollTimerRef.current) {
+            clearTimeout(claudePollTimerRef.current)
+            claudePollTimerRef.current = null
+          }
+          setClaudeSubscription((prev) => prev.status === 'connected'
+            ? prev
+            : { ...prev, status: 'disconnected', error: prev.error ?? 'Finish sign-in in your browser, then run `claude setup-token` and paste the token below.' })
+          return
+        }
+        claudePollTimerRef.current = setTimeout(() => { void poll() }, 2000)
+      }
+      claudePollTimerRef.current = setTimeout(() => { void poll() }, 2000)
+    } catch (err) {
+      setClaudeSubscription((prev) => ({
+        ...prev,
+        status: 'disconnected',
+        error: err instanceof Error ? err.message : 'Claude sign-in failed.',
+      }))
+    }
+  }, [refreshClaudeSubscriptionStatus])
+
+  // When Claude's subscription mode is selected, fetch its live connection status
+  // once so the badge reflects whether ANTHROPIC_AUTH_TOKEN / the local Claude CLI
+  // session is available.
+  useEffect(() => {
+    if (
+      csrfToken &&
+      checkedProviders.has('claude') &&
+      providerAuthModes.claude === 'claude-subscription' &&
+      claudeSubscription.status === 'idle'
+    ) {
+      setClaudeSubscription((prev) => ({ ...prev, status: 'checking' }))
+      void refreshClaudeSubscriptionStatus()
+    }
+  }, [csrfToken, checkedProviders, providerAuthModes, claudeSubscription.status, refreshClaudeSubscriptionStatus])
 
   const setChannel = useCallback((id: string) => {
     setChannelState(id)
@@ -1134,6 +1285,7 @@ export function useSetupWizard() {
     setupUnavailableReason,
     csrfToken,
     openaiSubscription,
+    claudeSubscription,
     step,
     selectedPreset,
     checkedProviders,
@@ -1187,6 +1339,8 @@ export function useSetupWizard() {
     setProviderAuthMode,
     signInWithChatGpt,
     refreshOpenAiSubscriptionStatus,
+    signInWithClaude,
+    refreshClaudeSubscriptionStatus,
     setProviderModel,
     setOpencodePlatform,
     setProjectPath,

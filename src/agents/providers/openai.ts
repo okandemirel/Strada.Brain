@@ -942,7 +942,7 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
     }
 
     if (response.status === 401 || response.status === 403) {
-      return `ChatGPT/Codex subscription was rejected (HTTP ${response.status}). Sign in again.${backendDetail ? ` ${backendDetail}` : ""}`;
+      return `ChatGPT/Codex subscription was rejected (HTTP ${response.status}). Consumer ChatGPT/Codex subscription tokens are frequently rejected by OpenAI for programmatic use; signing in again usually will not help. Switch OpenAI to API-key mode (or use a Team/Enterprise plan).${backendDetail ? ` ${backendDetail}` : ""}`;
     }
     if (response.status === 400 || response.status === 404) {
       return `The configured model "${this.model}" is not accepted by the ChatGPT/Codex subscription endpoint (HTTP ${response.status}).${backendDetail ? ` ${backendDetail}` : ""} Choose a Codex-compatible model (e.g. gpt-5.2) or switch OpenAI to API-key mode.`;

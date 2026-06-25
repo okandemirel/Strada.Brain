@@ -68,6 +68,9 @@ export default function SetupWizard() {
             openaiSubscription={wiz.openaiSubscription}
             signInWithChatGpt={wiz.signInWithChatGpt}
             refreshOpenAiSubscriptionStatus={wiz.refreshOpenAiSubscriptionStatus}
+            claudeSubscription={wiz.claudeSubscription}
+            signInWithClaude={wiz.signInWithClaude}
+            refreshClaudeSubscriptionStatus={wiz.refreshClaudeSubscriptionStatus}
             onNext={wiz.nextStep}
             onBack={wiz.prevStep}
           />

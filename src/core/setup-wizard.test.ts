@@ -4,13 +4,23 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { preflightResponseProvidersMock, installStradaMcpSubmoduleMock, installStradaDepMock } = vi.hoisted(() => ({
+const {
+  preflightResponseProvidersMock,
+  installStradaMcpSubmoduleMock,
+  installStradaDepMock,
+  isClaudeCliAvailableMock,
+  getClaudeInstallHintMock,
+  startClaudeLoginMock,
+} = vi.hoisted(() => ({
   preflightResponseProvidersMock: vi.fn().mockResolvedValue({
     passedProviderIds: ["kimi"],
     failures: [],
   }),
   installStradaMcpSubmoduleMock: vi.fn(),
   installStradaDepMock: vi.fn(),
+  isClaudeCliAvailableMock: vi.fn(),
+  getClaudeInstallHintMock: vi.fn(() => "Claude CLI not found. Install it with `npm install -g @anthropic-ai/claude-code`, then sign in again."),
+  startClaudeLoginMock: vi.fn(),
 }));
 
 vi.mock("./response-provider-preflight.js", () => ({
@@ -28,6 +38,14 @@ vi.mock("../config/strada-deps.js", async (importOriginal) => {
     installStradaDep: installStradaDepMock,
   };
 });
+
+// Mock the Claude CLI login driver so the /api/setup/claude/* routes are
+// deterministic regardless of whether the `claude` CLI is installed locally.
+vi.mock("../common/claude-cli-login.js", () => ({
+  isClaudeCliAvailable: isClaudeCliAvailableMock,
+  getClaudeInstallHint: getClaudeInstallHintMock,
+  startClaudeLogin: startClaudeLoginMock,
+}));
 
 import {
   SetupWizard,
@@ -995,6 +1013,115 @@ describe("SetupWizard path validation", () => {
       expect(response.read().statusCode).toBe(200);
       expect(JSON.parse(response.read().body)).toEqual({ providers: [] });
       expect(probeCalled).toBe(false);
+    });
+  });
+
+  describe("Claude subscription routes (mirror OpenAI)", () => {
+    beforeEach(() => {
+      isClaudeCliAvailableMock.mockReset();
+      startClaudeLoginMock.mockReset();
+      getClaudeInstallHintMock.mockClear();
+    });
+
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    const callRoute = async (
+      wizard: SetupWizard,
+      url: string,
+      method: string,
+      withCsrf: boolean,
+    ) => {
+      const response = makeResponse();
+      await (wizard as unknown as {
+        csrfToken: string;
+        handleRequest: (
+          req: { url: string; method: string; headers?: Record<string, string> },
+          res: unknown,
+        ) => Promise<void>;
+      }).handleRequest(
+        {
+          url,
+          method,
+          headers: withCsrf ? { "x-csrf-token": (wizard as unknown as { csrfToken: string }).csrfToken } : {},
+        },
+        response.response,
+      );
+      return response;
+    };
+
+    it("GET /api/setup/claude/status reports ok via inspectClaudeSubscriptionAuth + CLI availability, never echoing the token", async () => {
+      vi.stubEnv("ANTHROPIC_AUTH_TOKEN", "sk-ant-secret-token");
+      isClaudeCliAvailableMock.mockReturnValue(true);
+      const wizard = new SetupWizard({ port: 0 });
+
+      const response = await callRoute(wizard, "/api/setup/claude/status", "GET", true);
+
+      expect(response.read().statusCode).toBe(200);
+      const body = JSON.parse(response.read().body) as Record<string, unknown>;
+      expect(body.ok).toBe(true);
+      expect(body.claudeAvailable).toBe(true);
+      // Security: the token must NEVER be echoed back to the browser.
+      expect(response.read().body).not.toContain("sk-ant-secret-token");
+      expect(body).not.toHaveProperty("authToken");
+    });
+
+    it("GET /api/setup/claude/status reports not-ok when no auth token is present", async () => {
+      vi.stubEnv("ANTHROPIC_AUTH_TOKEN", "");
+      isClaudeCliAvailableMock.mockReturnValue(false);
+      const wizard = new SetupWizard({ port: 0 });
+
+      const response = await callRoute(wizard, "/api/setup/claude/status", "GET", true);
+
+      expect(response.read().statusCode).toBe(200);
+      const body = JSON.parse(response.read().body) as Record<string, unknown>;
+      expect(body.ok).toBe(false);
+      expect(body.issue).toBeTruthy();
+      expect(body.claudeAvailable).toBe(false);
+    });
+
+    it("GET /api/setup/claude/status requires the CSRF token", async () => {
+      const wizard = new SetupWizard({ port: 0 });
+      const response = await callRoute(wizard, "/api/setup/claude/status", "GET", false);
+      expect(response.read().statusCode).toBe(403);
+    });
+
+    it("POST /api/setup/claude/signin starts `claude auth login` and returns the auth URL", async () => {
+      isClaudeCliAvailableMock.mockReturnValue(true);
+      startClaudeLoginMock.mockResolvedValue({ started: true, url: "https://claude.ai/oauth?code=abc" });
+      const wizard = new SetupWizard({ port: 0 });
+
+      const response = await callRoute(wizard, "/api/setup/claude/signin", "POST", true);
+
+      expect(response.read().statusCode).toBe(200);
+      expect(JSON.parse(response.read().body)).toMatchObject({
+        started: true,
+        claudeAvailable: true,
+        url: "https://claude.ai/oauth?code=abc",
+        error: null,
+      });
+      expect(startClaudeLoginMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("POST /api/setup/claude/signin returns an install hint when the CLI is missing", async () => {
+      isClaudeCliAvailableMock.mockReturnValue(false);
+      const wizard = new SetupWizard({ port: 0 });
+
+      const response = await callRoute(wizard, "/api/setup/claude/signin", "POST", true);
+
+      expect(response.read().statusCode).toBe(200);
+      const body = JSON.parse(response.read().body) as Record<string, unknown>;
+      expect(body.started).toBe(false);
+      expect(body.claudeAvailable).toBe(false);
+      expect(String(body.error)).toContain("@anthropic-ai/claude-code");
+      expect(startClaudeLoginMock).not.toHaveBeenCalled();
+    });
+
+    it("POST /api/setup/claude/signin requires the CSRF token", async () => {
+      const wizard = new SetupWizard({ port: 0 });
+      const response = await callRoute(wizard, "/api/setup/claude/signin", "POST", false);
+      expect(response.read().statusCode).toBe(403);
     });
   });
 });

@@ -44,6 +44,8 @@ import {
 import { resolveDotenvPath } from "../common/runtime-paths.js";
 import { ensureOpenAiSubscriptionAuth } from "../common/openai-subscription-auth.js";
 import { isCodexCliAvailable, getCodexInstallHint, startCodexLogin } from "../common/openai-codex-login.js";
+import { inspectClaudeSubscriptionAuth } from "../common/claude-subscription-auth.js";
+import { isClaudeCliAvailable, getClaudeInstallHint, startClaudeLogin } from "../common/claude-cli-login.js";
 
 const PACKAGED_STATIC_DIR = fileURLToPath(new URL("../channels/web/static/", import.meta.url));
 // In a published package the line above resolves to dist/channels/web/static,
@@ -753,6 +755,18 @@ export class SetupWizard {
         return;
       }
 
+      if (url === "/api/setup/claude/status" && method === "GET") {
+        if (!this.guardSetupReadRoute(req, res)) return;
+        await this.handleClaudeSubscriptionStatus(res);
+        return;
+      }
+
+      if (url === "/api/setup/claude/signin" && method === "POST") {
+        if (!this.guardMutatingRoute(req, res)) return;
+        await this.handleClaudeSubscriptionSignin(res);
+        return;
+      }
+
       // Static files
       if (method === "GET") {
         await this.serveStatic(url, res);
@@ -1100,6 +1114,43 @@ export class SetupWizard {
     this.json(res, 200, {
       started: result.started,
       codexAvailable: true,
+      url: result.url ?? null,
+      error: result.error ?? null,
+    });
+  }
+
+  /**
+   * Reports whether a usable Claude subscription session is available. Mirrors
+   * the OpenAI status route. NOTE: the inspection may carry the auth token, but
+   * we deliberately NEVER echo it — only the boolean/issue/detail and CLI
+   * availability are returned to the browser.
+   */
+  private async handleClaudeSubscriptionStatus(res: ServerResponse): Promise<void> {
+    const inspection = inspectClaudeSubscriptionAuth();
+    this.json(res, 200, {
+      ok: inspection.ok,
+      issue: inspection.issue ?? null,
+      detail: inspection.detail,
+      loggedIn: inspection.loggedIn ?? null,
+      claudeAvailable: isClaudeCliAvailable(),
+    });
+  }
+
+  /**
+   * Starts the official `claude auth login --claudeai` browser flow so the user
+   * can sign in with their Claude subscription. After the browser login the user
+   * still runs `claude setup-token` to mint the pasteable ANTHROPIC_AUTH_TOKEN —
+   * the UI guides both steps.
+   */
+  private async handleClaudeSubscriptionSignin(res: ServerResponse): Promise<void> {
+    if (!isClaudeCliAvailable()) {
+      this.json(res, 200, { started: false, claudeAvailable: false, error: getClaudeInstallHint() });
+      return;
+    }
+    const result = await startClaudeLogin();
+    this.json(res, 200, {
+      started: result.started,
+      claudeAvailable: true,
       url: result.url ?? null,
       error: result.error ?? null,
     });
