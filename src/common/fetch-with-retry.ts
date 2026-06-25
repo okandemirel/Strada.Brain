@@ -167,6 +167,82 @@ export interface BackoffInfo {
 }
 
 /**
+ * Thrown when a 429 is a HARD QUOTA STOP — the provider has signalled (via Retry-After)
+ * that it will not recover within our ENTIRE retry budget (maxRetries * maxDelayMs), so
+ * retrying is futile. Distinct, NON-RETRYABLE error type so fetchWithRetry stops
+ * immediately (no further attempts) and the FallbackChain can fail over to the next
+ * provider AND put the quota-blocked provider into a long cooldown (≈ the Retry-After),
+ * instead of wasting the whole retry budget on a provider that is down for days.
+ *
+ * The message is the human-readable reason (enriched from the response body when it
+ * matches a quota pattern); the structured fields carry the provider name and the
+ * Retry-After duration so the chain can size the cooldown. NO secrets are ever carried
+ * (the body is run through the secret sanitizer + truncated before enrichment).
+ */
+/**
+ * The exact human-readable phrase embedded in every {@link QuotaExhaustedError} message
+ * (see the throw site below). EXPORTED + shared so the cross-module recognisers that must
+ * re-detect a flattened-to-plain-Error quota stop (fallback-chain's QUOTA_HARD_STOP_RE,
+ * orchestrator-runtime-utils' shared classifier, goal-decomposer's outage check) derive
+ * from this single literal instead of hard-coding their own copy — if the wording is ever
+ * edited here, the recognisers stay in sync instead of silently stopping matching.
+ */
+export const QUOTA_EXHAUSTED_PHRASE = "usage quota exhausted";
+
+export class QuotaExhaustedError extends Error {
+  /** Always false — this error must never be retried. */
+  readonly retryable = false as const;
+  /** Provider/caller name (callerName) so the chain knows which provider to cool down. */
+  readonly provider: string;
+  /** Parsed Retry-After in ms — the chain sizes its cooldown from this. */
+  readonly retryAfterMs: number;
+
+  constructor(provider: string, retryAfterMs: number, message: string) {
+    super(message);
+    this.name = "QuotaExhaustedError";
+    this.provider = provider;
+    this.retryAfterMs = retryAfterMs;
+  }
+}
+
+/**
+ * Quota / balance / usage-limit patterns. SECONDARY signal only: used to ENRICH the
+ * surfaced message (extract a human reason) for a 429 already classified as a hard stop
+ * by the Retry-After threshold. NEVER the sole gate — a brittle provider-specific string
+ * must not by itself decide to stop retrying (the durable gate is the derived threshold).
+ */
+const QUOTA_BODY_RE = /usage limit|quota|insufficient|balance|out of credit|UsageLimitError|limitName/i;
+
+/**
+ * Format a millisecond duration as a short, human-friendly reset hint ("~3d", "~5h",
+ * "~12m", "~45s") for the user-facing message. Always rounds to the largest sensible
+ * unit so the surfaced reason reads naturally.
+ */
+export function formatResetDuration(ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) return "soon";
+  const sec = Math.round(ms / 1000);
+  if (sec >= 86_400) return `~${Math.round(sec / 86_400)}d`;
+  if (sec >= 3_600) return `~${Math.round(sec / 3_600)}h`;
+  if (sec >= 60) return `~${Math.round(sec / 60)}m`;
+  return `~${sec}s`;
+}
+
+/**
+ * Extract a concise human reason from a (sanitized, truncated) 429 body when it matches a
+ * quota pattern. Returns undefined when the body is not quota-shaped (so only the generic
+ * reason is used). The body is already secret-sanitized + truncated by the caller.
+ */
+function extractQuotaReason(body: string): string | undefined {
+  if (!body || !QUOTA_BODY_RE.test(body)) return undefined;
+  // Prefer the provider's own "message" field if present (OpenAI-compatible error
+  // envelope), else fall back to the first non-empty line of the matched body.
+  const msgMatch = body.match(/"message"\s*:\s*"([^"]{1,160})"/i);
+  if (msgMatch?.[1]) return msgMatch[1].trim();
+  const firstLine = body.split(/[\r\n]/).map((l) => l.trim()).find((l) => l.length > 0);
+  return firstLine ? firstLine.slice(0, 160) : undefined;
+}
+
+/**
  * Rate-limit / quota headers safe to log (provider-agnostic OpenAI-compatible set
  * plus generic concurrency hints). Authorization, cookies, and API keys are NEVER
  * in this list, so they can never leak into a log line.
@@ -364,17 +440,18 @@ async function runFetchLoop(
       throw new Error(`${prefix}: ${errorText}`);
     }
 
+    // Parse Retry-After (seconds → ms) once: it both sizes the backoff delay AND drives
+    // the hard-quota-stop classification below. NaN/<=0 means the header is absent/invalid.
+    const rawRetryAfterMs = useRetryAfter && response.headers?.get
+      ? parseFloat(response.headers.get("retry-after") ?? "") * 1000
+      : NaN;
+    const hasRetryAfter = Number.isFinite(rawRetryAfterMs) && rawRetryAfterMs > 0;
+
     // Calculate delay: prefer Retry-After header if available (often shorter than the
     // exponential default), so a 429 with a short Retry-After is honored verbatim.
-    let delay: number;
-    if (useRetryAfter && response.headers?.get) {
-      const retryAfterMs = parseFloat(response.headers.get("retry-after") ?? "") * 1000;
-      delay = Number.isFinite(retryAfterMs) && retryAfterMs > 0
-        ? Math.min(retryAfterMs, maxDelayMs)
-        : baseDelayMs * Math.pow(2, attempt) + Math.random() * 100;
-    } else {
-      delay = baseDelayMs * Math.pow(2, attempt) + Math.random() * 100;
-    }
+    const delay = hasRetryAfter
+      ? Math.min(rawRetryAfterMs, maxDelayMs)
+      : baseDelayMs * Math.pow(2, attempt) + Math.random() * 100;
 
     // For a retryable 429, READ the rate-limit headers + a truncated body BEFORE the
     // body is drained, so the true 429 reason (per-key concurrency, RPM, token quota)
@@ -385,6 +462,26 @@ async function runFetchLoop(
       rateLimit = await extractRateLimitDiagnostics(response, shouldSanitize);
     } else if (drainBody && response.body?.cancel) {
       try { await response.body.cancel(); } catch { /* ignore */ }
+    }
+
+    // HARD QUOTA STOP: a 429 whose Retry-After exceeds our ENTIRE retry budget
+    // (maxRetries * maxDelayMs — the max total time we could ever spend retrying, since
+    // each retry is capped at maxDelayMs) cannot succeed within our window. Retrying is
+    // futile and just wastes the budget (e.g. OpenCode's "Weekly usage limit reached.
+    // Resets in 3 days" with retry-after ≈ 279094s). The threshold is DERIVED from
+    // existing config, not a magic number. Throw a NON-RETRYABLE QuotaExhaustedError NOW
+    // (no further attempts) so the FallbackChain fails over to the next provider and puts
+    // this one into a long cooldown ≈ the Retry-After. The PRIMARY gate is the threshold;
+    // the body pattern only ENRICHES the human message, it is never the sole gate.
+    if (status === 429 && hasRetryAfter && rawRetryAfterMs > maxRetries * maxDelayMs) {
+      const reset = formatResetDuration(rawRetryAfterMs);
+      const quotaReason = rateLimit ? extractQuotaReason(rateLimit.body) : undefined;
+      const detail = quotaReason ? `: ${quotaReason}` : "";
+      throw new QuotaExhaustedError(
+        callerName,
+        rawRetryAfterMs,
+        `${callerName} ${QUOTA_EXHAUSTED_PHRASE} (resets in ${reset})${detail}`,
+      );
     }
 
     // Tell the caller we are about to wait ON PURPOSE during a retry backoff. The

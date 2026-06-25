@@ -134,7 +134,10 @@ export function isProviderOutageError(err: unknown): boolean {
     // outage for surfacing purposes — fail the task cleanly with an honest cause
     // rather than silently degrading to a single-node tree.
     msg.includes("rate-limited") ||
-    msg.includes("429")
+    msg.includes("429") ||
+    // A hard quota stop (provider's usage quota exhausted, no available provider) is
+    // likewise a genuine outage for surfacing — fail cleanly with the honest cause.
+    msg.includes("usage quota exhausted")
   );
 }
 

@@ -14,6 +14,7 @@ import { getLogger } from "../../utils/logger.js";
 import { ProviderHealthRegistry } from "./provider-health.js";
 import { sanitizeSecrets } from "../../security/secret-sanitizer.js";
 import { QUOTA_LIMIT_RE } from "../orchestrator-runtime-utils.js";
+import { QuotaExhaustedError, QUOTA_EXHAUSTED_PHRASE } from "../../common/fetch-with-retry.js";
 
 /**
  * Check whether a provider error is likely caused by the request itself
@@ -48,6 +49,17 @@ const OVERLOAD_RE = /\b(?:529|503)\b/;
  * "rate-limited" phrasing emitted by fetch-with-retry.ts.
  */
 const RATE_LIMIT_RE = /\b429\b|rate.?limit/i;
+/**
+ * Cross-boundary fallback recogniser for a HARD QUOTA STOP (a 429 whose Retry-After
+ * exceeds our entire retry budget). The primary signal is `instanceof QuotaExhaustedError`
+ * (preserved across the provider call), but if a wrapper ever flattens it to a plain
+ * Error the message still carries this distinct phrase — so the chain reliably classifies
+ * it as a quota stop (long cooldown + fail over) rather than a transient rate-limit.
+ * Derived from the shared QUOTA_EXHAUSTED_PHRASE constant (the exact literal QuotaExhaustedError
+ * builds its message from) so the two stay coupled — if the wording is edited in
+ * fetch-with-retry.ts, this recogniser tracks it instead of silently going stale.
+ */
+const QUOTA_HARD_STOP_RE = new RegExp(QUOTA_EXHAUSTED_PHRASE, "i");
 
 function isNonRetryableRequestError(error: unknown): boolean {
   const msg = error instanceof Error ? error.message : String(error);
@@ -490,10 +502,24 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
           if (meta) this.onModelUnresponsive?.(meta.provider, meta.model);
         }
 
+        // HARD QUOTA STOP: a 429 whose Retry-After exceeds our entire retry budget — the
+        // provider cannot recover within our window (e.g. a weekly usage-limit reset days
+        // out). fetch-with-retry already failed FAST (non-retryable QuotaExhaustedError),
+        // so we did NOT burn the retry budget. Put THIS provider into a long cooldown
+        // sized ≈ the Retry-After (capped) so it is skipped for the rest of the session,
+        // then fall through to the normal failover so the NEXT provider is tried
+        // IMMEDIATELY. This is distinct from a transient 429 (medium overload cooldown
+        // below): a quota stop will not heal in minutes, so a medium cooldown would just
+        // re-pick the dead provider next call.
+        const quotaHardStop = error instanceof QuotaExhaustedError ? error : undefined;
+        const isQuotaHardStop = quotaHardStop !== undefined || QUOTA_HARD_STOP_RE.test(errorMsg);
+
         // Is this failure caused by rate-limiting (HTTP 429)? Either the timeout fired
         // mid-429-backoff (RateLimitedError), or the provider's retry wrapper exhausted
-        // its 429 retries and threw a "rate-limited (HTTP 429)" message.
-        const isRateLimited = error instanceof RateLimitedError || RATE_LIMIT_RE.test(errorMsg);
+        // its 429 retries and threw a "rate-limited (HTTP 429)" message. A hard quota stop
+        // is handled on its own (long cooldown) branch, NOT as a transient rate-limit.
+        const isRateLimited = !isQuotaHardStop
+          && (error instanceof RateLimitedError || RATE_LIMIT_RE.test(errorMsg));
 
         // Quota/billing (403) errors get a long cooldown so the provider is skipped for
         // hours. Overload (529/503) AND rate-limit (429) errors get a medium cooldown to
@@ -501,7 +527,17 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
         // it must NOT inherit the multi-hour quota cooldown. Single-provider setups use
         // shorter cooldowns since there is no fallback.
         const isSingleProvider = this.providers.length === 1;
-        if (/\b403\b/.test(errorMsg) && QUOTA_LIMIT_RE.test(errorMsg)) {
+        if (isQuotaHardStop) {
+          // Size the cooldown from the provider's Retry-After (capped). A single-provider
+          // setup still gets the hard-stop cooldown — there is no sibling to fall over to,
+          // and futilely retrying a days-out quota block helps no one; isAvailable()
+          // auto-recovers once the cooldown expires.
+          health.recordQuotaHardStop(
+            provider.name,
+            quotaHardStop?.retryAfterMs ?? Number.NaN,
+            errorMsg,
+          );
+        } else if (/\b403\b/.test(errorMsg) && QUOTA_LIMIT_RE.test(errorMsg)) {
           const method = isSingleProvider ? "recordQuotaExhaustedShort" : "recordQuotaExhausted";
           health[method](provider.name, errorMsg);
         } else if (OVERLOAD_RE.test(errorMsg) || isRateLimited) {
@@ -570,6 +606,31 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
         }
 
         const remaining = this.providers.slice(i + 1).filter((p) => health.isAvailable(p.name));
+
+        // A hard quota stop is surfaced with a DISTINCT, accurate reason (not "rate-limited"
+        // and not "unresponsive"): the provider's usage quota is exhausted and it has been
+        // cooled down — we either fail over to the next provider, or terminate with the
+        // quota reason when none remain.
+        if (isQuotaHardStop) {
+          if (remaining.length === 0) {
+            logger.error(`Provider usage quota exhausted, no available provider (${label})`, {
+              provider: provider.name,
+              error: sanitizeSecrets(errorMsg),
+              totalProviders: this.providers.length,
+            });
+            throw new Error(
+              `Provider "${provider.name}": ${sanitizeSecrets(errorMsg)} — no available provider`,
+              { cause: error instanceof Error ? error : undefined },
+            );
+          }
+          logger.warn(`Provider usage quota exhausted, failing over (${label})`, {
+            failedProvider: provider.name,
+            nextProvider: remaining[0]!.name,
+            error: sanitizeSecrets(errorMsg),
+          });
+          continue;
+        }
+
         if (remaining.length === 0) {
           if (isReasoningTimeout && isSingleProvider) {
             const thinkingDisabled = health.isThinkingDisabled(provider.name);

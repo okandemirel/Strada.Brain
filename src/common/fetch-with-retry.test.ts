@@ -3,6 +3,7 @@ import {
   fetchWithRetry,
   configureProviderConcurrency,
   __resetProviderConcurrency,
+  QuotaExhaustedError,
   type BackoffInfo,
 } from "./fetch-with-retry.js";
 
@@ -433,5 +434,120 @@ describe("fetchWithRetry — 429 diagnostics surfacing", () => {
     expect(backoffCalls).toHaveLength(1);
     expect(backoffCalls[0]!.status).toBe(503);
     expect(backoffCalls[0]!.rateLimit).toBeUndefined();
+  });
+});
+
+// A 429 whose Retry-After exceeds our ENTIRE retry budget (maxRetries * maxDelayMs) is a
+// HARD QUOTA STOP — retrying is futile (the provider won't recover within our window). It
+// must fail FAST with a non-retryable QuotaExhaustedError (no further attempts), while a
+// SHORT Retry-After 429 still retries exactly as before (regression guard for 1d425fa).
+describe("fetchWithRetry — hard quota stop (429 with Retry-After >> retry budget)", () => {
+  let fetchSpy: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    vi.useFakeTimers();
+    __resetProviderConcurrency();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+    __resetProviderConcurrency();
+  });
+
+  it("throws a non-retryable QuotaExhaustedError WITHOUT exhausting retries", async () => {
+    // OpenCode-style weekly-limit body + a ~3.23-day Retry-After (279094s). With
+    // maxRetries=3 and maxDelayMs=60000 the budget is 180000ms; 279094000ms is far over
+    // it → hard stop on the FIRST response (attempt count == 1, not maxRetries).
+    fetchSpy.mockResolvedValue(
+      new Response(
+        JSON.stringify({ error: { type: "GoUsageLimitError", message: "Weekly usage limit reached. Resets in 3 days." } }),
+        { status: 429, headers: { "retry-after": "279094" } },
+      ),
+    );
+
+    const promise = fetchWithRetry(
+      "https://example.com/api",
+      { method: "GET" },
+      { maxRetries: 3, baseDelayMs: 500, maxDelayMs: 60_000, callerName: "OpenCode (Zen/Go)" },
+    );
+    const assertion = expect(promise).rejects.toBeInstanceOf(QuotaExhaustedError);
+    await vi.runAllTimersAsync();
+    await assertion;
+
+    // No retry sleeps happened — exactly ONE fetch, the hard stop fired immediately.
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("surfaces a distinct 'usage quota exhausted (resets in ~Xd)' reason enriched from the body", async () => {
+    fetchSpy.mockResolvedValue(
+      new Response(
+        JSON.stringify({ error: { type: "GoUsageLimitError", message: "Weekly usage limit reached. Resets in 3 days." } }),
+        { status: 429, headers: { "retry-after": "279094" } },
+      ),
+    );
+
+    const promise = fetchWithRetry(
+      "https://example.com/api",
+      { method: "GET" },
+      { maxRetries: 3, baseDelayMs: 500, maxDelayMs: 60_000, callerName: "OpenCode (Zen/Go)" },
+    );
+    let captured: unknown;
+    const assertion = promise.catch((e: unknown) => { captured = e; });
+    await vi.runAllTimersAsync();
+    await assertion;
+
+    expect(captured).toBeInstanceOf(QuotaExhaustedError);
+    const err = captured as QuotaExhaustedError;
+    expect(err.retryable).toBe(false);
+    expect(err.provider).toBe("OpenCode (Zen/Go)");
+    expect(err.retryAfterMs).toBe(279_094_000);
+    // Distinct, accurate wording — NOT "rate-limited", NOT "unresponsive".
+    expect(err.message).toMatch(/usage quota exhausted \(resets in ~3d\)/i);
+    // Secondary body enrichment carries the human reason.
+    expect(err.message).toContain("Weekly usage limit reached");
+    expect(err.message).not.toMatch(/rate-limited|unresponsive/i);
+  });
+
+  it("a 429 with a SHORT Retry-After still retries exactly as before (regression guard for 1d425fa)", async () => {
+    // Retry-After of 1s is WELL within the 180000ms budget → transient path unchanged:
+    // it backs off and retries, then succeeds. No QuotaExhaustedError.
+    fetchSpy
+      .mockResolvedValueOnce(
+        new Response("slow down", { status: 429, headers: { "retry-after": "1" } }),
+      )
+      .mockResolvedValueOnce(new Response("ok", { status: 200 }));
+
+    const promise = fetchWithRetry(
+      "https://example.com/api",
+      { method: "GET" },
+      { maxRetries: 3, baseDelayMs: 500, maxDelayMs: 60_000, callerName: "TestCaller" },
+    );
+
+    await vi.advanceTimersByTimeAsync(1100);
+    const response = await promise;
+    expect(response.ok).toBe(true);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("a 429 with NO Retry-After is treated as transient (never a hard stop)", async () => {
+    // Without a Retry-After header there is no futility signal → the existing
+    // exponential-backoff retry path runs (no QuotaExhaustedError).
+    fetchSpy
+      .mockResolvedValueOnce(new Response("too many requests", { status: 429 }))
+      .mockResolvedValueOnce(new Response("ok", { status: 200 }));
+
+    const promise = fetchWithRetry(
+      "https://example.com/api",
+      { method: "GET" },
+      { maxRetries: 3, baseDelayMs: 100, maxDelayMs: 60_000, callerName: "TestCaller" },
+    );
+
+    await vi.advanceTimersByTimeAsync(500);
+    const response = await promise;
+    expect(response.ok).toBe(true);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
 });

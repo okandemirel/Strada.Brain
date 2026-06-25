@@ -357,6 +357,63 @@ describe("ProviderHealthRegistry — recordOverloaded", () => {
   });
 });
 
+describe("ProviderHealthRegistry — recordQuotaHardStop", () => {
+  afterEach(() => {
+    ProviderHealthRegistry.resetInstance();
+    vi.restoreAllMocks();
+    delete process.env["PROVIDER_HEALTH_MAX_QUOTA_COOLDOWN_MS"];
+  });
+
+  it("sizes the cooldown from the Retry-After (within the cap)", () => {
+    const registry = new ProviderHealthRegistry();
+    const now = 1_000_000;
+    vi.spyOn(Date, "now").mockReturnValue(now);
+
+    const retryAfterMs = 2 * 60 * 60 * 1000; // 2h — within the 24h default cap
+    registry.recordQuotaHardStop("opencode", retryAfterMs, "usage quota exhausted (resets in ~2h)");
+
+    const entry = registry.getEntry("opencode")!;
+    expect(entry.status).toBe("down");
+    expect(entry.cooldownUntil).toBe(now + retryAfterMs);
+    expect(registry.isAvailable("opencode")).toBe(false);
+  });
+
+  it("caps a days-out Retry-After at the max quota cooldown (default 24h)", () => {
+    const registry = new ProviderHealthRegistry();
+    const now = 1_000_000;
+    vi.spyOn(Date, "now").mockReturnValue(now);
+
+    const threeDaysMs = 3 * 24 * 60 * 60 * 1000;
+    registry.recordQuotaHardStop("opencode", threeDaysMs, "usage quota exhausted (resets in ~3d)");
+
+    const entry = registry.getEntry("opencode")!;
+    expect(entry.cooldownUntil).toBe(now + 24 * 60 * 60 * 1000); // capped at 24h
+  });
+
+  it("falls back to the default quota cooldown when Retry-After is NaN", () => {
+    const registry = new ProviderHealthRegistry();
+    const now = 1_000_000;
+    vi.spyOn(Date, "now").mockReturnValue(now);
+
+    registry.recordQuotaHardStop("opencode", Number.NaN, "usage quota exhausted");
+    const entry = registry.getEntry("opencode")!;
+    expect(entry.cooldownUntil).toBe(now + 8 * 60 * 60 * 1000); // 8h default
+  });
+
+  it("does not shorten an already-longer active cooldown", () => {
+    const registry = new ProviderHealthRegistry();
+    let time = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => time);
+
+    registry.recordQuotaHardStop("opencode", 10 * 60 * 60 * 1000, "first"); // 10h
+    const first = registry.getEntry("opencode")!.cooldownUntil;
+
+    time += 1000;
+    registry.recordQuotaHardStop("opencode", 1 * 60 * 1000, "second (1m)"); // shorter
+    expect(registry.getEntry("opencode")!.cooldownUntil).toBe(first); // unchanged
+  });
+});
+
 describe("ProviderHealthRegistry — areAllUnavailable", () => {
   afterEach(() => {
     ProviderHealthRegistry.resetInstance();

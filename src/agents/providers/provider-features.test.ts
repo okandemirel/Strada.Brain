@@ -427,7 +427,7 @@ describe("Feature: Retry logic", () => {
       .mockResolvedValueOnce({
         ok: false,
         status: 429,
-        headers: new Headers({ "retry-after": "999999" }),
+        headers: new Headers({ "retry-after": "120" }),
         body: { cancel: vi.fn() },
       })
       .mockResolvedValueOnce({
@@ -444,7 +444,9 @@ describe("Feature: Retry logic", () => {
     await provider.chat("system", [{ role: "user", content: "test" }], []);
     const elapsed = Date.now() - start;
 
-    // Should be capped at 60s, not 999999s. In practice < 61s.
+    // 120s retry-after is transient (<= the hard-stop threshold
+    // maxRetries*maxDelayMs=180s) so it caps+retries rather than failing fast;
+    // it should be capped at 60s, not 120s. In practice < 61s.
     expect(elapsed).toBeLessThan(65000);
   }, 70000);
 

@@ -56,6 +56,20 @@ const OVERLOAD_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
 const QUOTA_COOLDOWN_MS = 8 * 60 * 60 * 1000; // 8 hours
 const SINGLE_PROVIDER_QUOTA_COOLDOWN_MS = 15 * 60 * 1000; // 15 minutes (when no fallbacks exist)
 
+/**
+ * Upper bound for a hard-quota-stop cooldown sized from a provider's Retry-After. A
+ * provider may advertise a multi-DAY reset (e.g. OpenCode's "resets in 3 days"); we
+ * honor it but never lock a provider out longer than this ceiling, so a stale/bogus
+ * Retry-After can't sideline a provider effectively forever. Overridable via env
+ * PROVIDER_HEALTH_MAX_QUOTA_COOLDOWN_MS. Default 24h — long enough to skip a
+ * day/week-scale quota block for the rest of the session, bounded enough to self-heal.
+ */
+function resolveMaxQuotaCooldownMs(): number {
+  const raw = process.env["PROVIDER_HEALTH_MAX_QUOTA_COOLDOWN_MS"];
+  const parsed = raw ? parseInt(raw, 10) : NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 24 * 60 * 60 * 1000; // 24h
+}
+
 export class ProviderHealthRegistry {
   private static instance: ProviderHealthRegistry | null = null;
 
@@ -202,6 +216,36 @@ export class ProviderHealthRegistry {
     const now = Date.now();
     const existingCooldown = existing?.cooldownUntil ?? 0;
     const cooldownUntil = existingCooldown > now ? existingCooldown : now + SINGLE_PROVIDER_QUOTA_COOLDOWN_MS;
+
+    this.entries.set(normalized, {
+      status: "down",
+      consecutiveFailures: this.nextFailureCount(normalized),
+      lastFailureAt: now,
+      lastError: error.slice(0, 200),
+      cooldownUntil,
+    });
+  }
+
+  /**
+   * Record a HARD QUOTA STOP (a 429 whose Retry-After exceeds our entire retry budget —
+   * the provider cannot recover within our window, e.g. a weekly usage-limit reset days
+   * out). Sets the cooldown to the requested duration (≈ the provider's Retry-After) so
+   * the provider is skipped for the rest of the session instead of being futilely
+   * retried, capped to a sane maximum (PROVIDER_HEALTH_MAX_QUOTA_COOLDOWN_MS, default
+   * 24h) so a stale/bogus Retry-After can't lock it out effectively forever. Does NOT
+   * extend an already-longer active cooldown (keep the original, later expiry).
+   */
+  recordQuotaHardStop(providerName: string, retryAfterMs: number, error: string): void {
+    const normalized = this.norm(providerName);
+    const existing = this.entries.get(normalized);
+    const now = Date.now();
+    const cap = resolveMaxQuotaCooldownMs();
+    const requested = Number.isFinite(retryAfterMs) && retryAfterMs > 0
+      ? Math.min(retryAfterMs, cap)
+      : QUOTA_COOLDOWN_MS;
+    const desired = now + requested;
+    const existingCooldown = existing?.cooldownUntil ?? 0;
+    const cooldownUntil = existingCooldown > desired ? existingCooldown : desired;
 
     this.entries.set(normalized, {
       status: "down",

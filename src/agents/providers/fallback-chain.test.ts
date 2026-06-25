@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { FallbackChainProvider } from "./fallback-chain.js";
 import { createMockProvider } from "../../test-helpers.js";
 import { ProviderHealthRegistry } from "./provider-health.js";
+import { QuotaExhaustedError } from "../../common/fetch-with-retry.js";
 import type { IAIProvider, ConversationMessage, ToolDefinition } from "./provider.interface.js";
 
 vi.mock("../../utils/logger.js", () => ({
@@ -718,6 +719,88 @@ describe("FallbackChainProvider", () => {
       const chain = new FallbackChainProvider([silent], { attemptTimeoutMs: 40 });
 
       await expect(chain.chat("sys", [], [])).rejects.toThrow(/no response within|unresponsive endpoint/i);
+    });
+  });
+
+  // A HARD QUOTA STOP (a 429 whose Retry-After exceeds the whole retry budget — the
+  // provider is out of weekly/quota credit for days) surfaces as a non-retryable
+  // QuotaExhaustedError from fetch-with-retry. The chain must cool THAT provider down for
+  // a long time AND fail over to the next provider IMMEDIATELY (never abort the chain
+  // because one provider is quota-blocked). If it is the only provider, a distinct quota
+  // terminal is surfaced. This must NOT be treated as a transient rate-limit.
+  describe("hard quota stop (429 with days-out Retry-After)", () => {
+    beforeEach(() => ProviderHealthRegistry.resetInstance());
+
+    /** Rejects with the non-retryable QuotaExhaustedError fetch-with-retry throws. */
+    function quotaExhaustedProvider(name: string): IAIProvider {
+      const p = { ...createMockProvider(), name };
+      (p.chat as ReturnType<typeof vi.fn>).mockRejectedValue(
+        new QuotaExhaustedError(
+          name,
+          279_094_000, // ~3.23 days
+          `${name} usage quota exhausted (resets in ~3d): Weekly usage limit reached. Resets in 3 days.`,
+        ),
+      );
+      return p;
+    }
+
+    it("cools the quota-blocked provider down and IMMEDIATELY tries the next provider", async () => {
+      const a = quotaExhaustedProvider("opencode");
+      const b = { ...createMockProvider({ text: "from-b" }), name: "openai" };
+      const chain = new FallbackChainProvider([a, b]);
+      const health = ProviderHealthRegistry.getInstance();
+      const recordHardStop = vi.spyOn(health, "recordQuotaHardStop");
+
+      const result = await chain.chat("sys", [], []);
+      expect(result.text).toBe("from-b");
+      expect(a.chat).toHaveBeenCalledTimes(1);
+      expect(b.chat).toHaveBeenCalledTimes(1);
+      // A was cooled down via the hard-stop path (long cooldown ≈ Retry-After), so it is
+      // skipped for the rest of the session.
+      expect(recordHardStop).toHaveBeenCalledWith("opencode", 279_094_000, expect.any(String));
+      expect(health.isAvailable("opencode")).toBe(false);
+      expect(health.isAvailable("openai")).toBe(true);
+    });
+
+    it("does NOT auto-demote the quota-blocked provider as unresponsive (it answered, with a 429)", async () => {
+      const a = quotaExhaustedProvider("opencode");
+      const b = { ...createMockProvider({ text: "from-b" }), name: "openai" };
+      const onModelUnresponsive = vi.fn();
+      const chain = new FallbackChainProvider([a, b], {
+        attemptMeta: [{ provider: "opencode", model: "deepseek" }, { provider: "openai", model: "gpt" }],
+        onModelUnresponsive,
+      });
+
+      await chain.chat("sys", [], []);
+      expect(onModelUnresponsive).not.toHaveBeenCalled();
+    });
+
+    it("surfaces a distinct quota terminal when the quota-blocked provider is the only one", async () => {
+      const a = quotaExhaustedProvider("opencode");
+      const chain = new FallbackChainProvider([a]);
+
+      // Distinct, accurate wording — NOT "rate-limited", NOT "unresponsive endpoint".
+      await expect(chain.chat("sys", [], [])).rejects.toThrow(/usage quota exhausted.*no available provider/i);
+    });
+
+    it("classifies a flattened (plain-Error) quota message as a hard stop too", async () => {
+      // Robustness: if a wrapper ever flattens QuotaExhaustedError to a plain Error, the
+      // distinct phrase still routes it to the long cooldown + failover (not a transient).
+      const a = { ...createMockProvider(), name: "opencode" };
+      (a.chat as ReturnType<typeof vi.fn>).mockRejectedValue(
+        new Error("OpenCode (Zen/Go) usage quota exhausted (resets in ~3d)"),
+      );
+      const b = { ...createMockProvider({ text: "from-b" }), name: "openai" };
+      const chain = new FallbackChainProvider([a, b]);
+      const health = ProviderHealthRegistry.getInstance();
+      const recordHardStop = vi.spyOn(health, "recordQuotaHardStop");
+
+      const result = await chain.chat("sys", [], []);
+      expect(result.text).toBe("from-b");
+      // NaN retryAfterMs (no structured field on a plain Error) → registry falls back to
+      // the default long quota cooldown.
+      expect(recordHardStop).toHaveBeenCalledWith("opencode", Number.NaN, expect.any(String));
+      expect(health.isAvailable("opencode")).toBe(false);
     });
   });
 });

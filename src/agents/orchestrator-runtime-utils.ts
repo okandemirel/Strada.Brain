@@ -3,6 +3,15 @@ import { MUTATION_TOOLS, isVerificationToolName } from "./autonomy/constants.js"
 import { isTerminalFailureReport } from "./autonomy/index.js";
 import type { ProviderResponse } from "./providers/provider.interface.js";
 import { redactSensitiveText, sanitizePromptInjection } from "./orchestrator-text-utils.js";
+import { QUOTA_EXHAUSTED_PHRASE } from "../common/fetch-with-retry.js";
+
+/**
+ * Cross-boundary recogniser for a HARD QUOTA STOP surfaced on a NON-chain (direct) provider
+ * call. Derived from the shared QUOTA_EXHAUSTED_PHRASE so it stays coupled to the exact wording
+ * QuotaExhaustedError builds its message from. Kept identical in intent to fallback-chain.ts's
+ * QUOTA_HARD_STOP_RE so the two classifiers never diverge on the same "usage quota exhausted" input.
+ */
+const QUOTA_HARD_STOP_RE = new RegExp(QUOTA_EXHAUSTED_PHRASE, "i");
 
 const MAX_TOOL_RESULT_LENGTH = 8192;
 const REFLECTION_DECISION_RE = /\*\*\s*(DONE_WITH_SUGGESTIONS|DONE|REPLAN|CONTINUE)\s*\*\*/;
@@ -270,13 +279,22 @@ export function recordProviderHealthFailure(
     recordQuotaExhaustedShort?(name: string, error: string): void;
     recordOverloaded(name: string, error: string): void;
     recordOverloadedShort?(name: string, error: string): void;
+    recordQuotaHardStop?(name: string, retryAfterMs: number, error: string): void;
   },
   providerName: string,
   errorMsg: string,
   options?: { isSingleProvider?: boolean },
 ): void {
   const single = options?.isSingleProvider ?? false;
-  if (/\b403\b/.test(errorMsg) && QUOTA_LIMIT_RE.test(errorMsg)) {
+  // HARD QUOTA STOP first: a QuotaExhaustedError that surfaced on a direct (non-chain)
+  // provider call would be flattened to a plain Error here, matching neither 403+quota nor
+  // 529/503 and falling through to a short generic cooldown. Route it to the same long
+  // hard-stop cooldown fallback-chain.ts uses so the two classifiers don't diverge. No
+  // structured Retry-After survives the flattening, so pass NaN — recordQuotaHardStop falls
+  // back to its default quota cooldown (and isAvailable() auto-recovers when it expires).
+  if (registry.recordQuotaHardStop && QUOTA_HARD_STOP_RE.test(errorMsg)) {
+    registry.recordQuotaHardStop(providerName, Number.NaN, errorMsg);
+  } else if (/\b403\b/.test(errorMsg) && QUOTA_LIMIT_RE.test(errorMsg)) {
     if (single && registry.recordQuotaExhaustedShort) {
       registry.recordQuotaExhaustedShort(providerName, errorMsg);
     } else {
