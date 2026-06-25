@@ -139,12 +139,42 @@ describe('KanbanBoard', () => {
     expect(screen.getAllByText('Under Review').length).toBeGreaterThanOrEqual(1)
   })
 
-  it('places completed+reviewed tasks in Done column', () => {
+  it('places completed+reviewed tasks in Done column (collapsed by default; expands on click)', async () => {
+    const { default: userEvent } = await import('@testing-library/user-event')
+    const user = userEvent.setup()
+
     mockTasks = {
       t1: makeTask({ id: 't1', title: 'Finished Task', status: 'completed', reviewStatus: 'review_passed' }),
     }
     render(<KanbanBoard />)
+
+    // Done is collapsed by default: the card is kept + counted but not rendered.
+    expect(screen.queryByText('Finished Task')).not.toBeInTheDocument()
+    // The Done column still shows its count (1) even while collapsed.
+    expect(screen.getByText('Done')).toBeInTheDocument()
+
+    // Expanding the Done column reveals the accumulated card.
+    await user.click(screen.getByText('Done'))
     expect(screen.getByText('Finished Task')).toBeInTheDocument()
+  })
+
+  it('toggles the Done column collapse on header click (collapse → expand → collapse)', async () => {
+    const { default: userEvent } = await import('@testing-library/user-event')
+    const user = userEvent.setup()
+
+    mockTasks = {
+      t1: makeTask({ id: 't1', title: 'Done Card', status: 'completed', reviewStatus: 'review_passed' }),
+    }
+    render(<KanbanBoard />)
+
+    // Collapsed by default.
+    expect(screen.queryByText('Done Card')).not.toBeInTheDocument()
+    // Expand.
+    await user.click(screen.getByText('Done'))
+    expect(screen.getByText('Done Card')).toBeInTheDocument()
+    // Collapse again.
+    await user.click(screen.getByText('Done'))
+    expect(screen.queryByText('Done Card')).not.toBeInTheDocument()
   })
 
   it('places failed tasks in Issues column', () => {

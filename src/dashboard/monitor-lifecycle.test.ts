@@ -94,19 +94,25 @@ describe("createMonitorLifecycle", () => {
       expect(p.conversationId).toBe("scope-1");
 
       const node = p.nodes[0]!;
-      expect(node.id).toBe(p.rootId);
+      // The episode model decouples the episode root (`ep-…`) from the per-request
+      // Kanban card node (`req-…`): a continued request adds a NEW card to the SAME
+      // episode root, so the card node id is distinct from the rootId.
+      expect(p.rootId).toMatch(/^ep-/);
+      expect(node.id).toMatch(/^req-/);
+      expect(node.id).not.toBe(p.rootId);
       expect(node.status).toBe("executing");
       expect(node.reviewStatus).toBe("none");
       expect(node.depth).toBe(1);
       expect(node.dependsOn).toEqual([]);
     });
 
-    it("generates task IDs matching the req-<uuid> pattern", () => {
+    it("emits an episode rootId matching the ep-<uuid> pattern with a req-<uuid> node id", () => {
       const lc = createMonitorLifecycle(bus);
       lc.requestStart("scope-1", "msg");
 
-      const p = bus.calls[0]!.payload as { rootId: string };
-      expect(p.rootId).toMatch(/^req-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
+      const p = bus.calls[0]!.payload as { rootId: string; nodes: Array<{ id: string }> };
+      expect(p.rootId).toMatch(/^ep-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
+      expect(p.nodes[0]!.id).toMatch(/^req-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
     });
 
     it("truncates messages longer than 200 characters and appends ellipsis", () => {
@@ -138,14 +144,57 @@ describe("createMonitorLifecycle", () => {
       expect(p.nodes[0]!.task).toBe("Short msg");
     });
 
-    it("generates unique task IDs for consecutive calls on the same scope", () => {
+    it("continues the SAME episode for a follow-up request that arrives while the prior one is still in-progress", () => {
       const lc = createMonitorLifecycle(bus);
       lc.requestStart("scope-1", "first");
+      // No requestEnd between them: the active episode is still in-progress, so the
+      // follow-up JOINS it (same episode root) with its own fresh Kanban card.
       lc.requestStart("scope-1", "second");
 
-      const id1 = (bus.calls[0]!.payload as { rootId: string }).rootId;
-      const id2 = (bus.calls[1]!.payload as { rootId: string }).rootId;
-      expect(id1).not.toBe(id2);
+      const first = bus.calls[0]!.payload as { rootId: string; nodes: Array<{ id: string }> };
+      const second = bus.calls[1]!.payload as { rootId: string; nodes: Array<{ id: string }> };
+      // Same EPISODE root → the follow-up updates the existing board in place.
+      expect(second.rootId).toBe(first.rootId);
+      // Distinct CARD node ids → the follow-up is its own Kanban item, not a clobber.
+      expect(second.nodes[0]!.id).not.toBe(first.nodes[0]!.id);
+    });
+
+    it("opens a NEW episode after the prior one went terminal (complete)", () => {
+      const lc = createMonitorLifecycle(bus);
+      lc.requestStart("scope-1", "first");
+      const firstEpisode = (bus.calls[0]!.payload as { rootId: string }).rootId;
+      // The active task goes terminal → the episode is closed (kept, marked terminal).
+      lc.requestEnd("scope-1");
+      // The next request rolls over to a fresh episode/workspace.
+      lc.requestStart("scope-1", "second");
+      const secondEpisode = (bus.calls[bus.calls.length - 1]!.payload as { rootId: string }).rootId;
+
+      expect(secondEpisode).not.toBe(firstEpisode);
+      expect(secondEpisode).toMatch(/^ep-/);
+    });
+
+    it("opens a NEW episode after the prior one went terminal (failed)", () => {
+      const lc = createMonitorLifecycle(bus);
+      lc.requestStart("scope-1", "first");
+      const firstEpisode = (bus.calls[0]!.payload as { rootId: string }).rootId;
+      // ANY terminal status closes the episode (uniform any-terminal-closes policy).
+      lc.requestEnd("scope-1", true);
+      lc.requestStart("scope-1", "second");
+      const secondEpisode = (bus.calls[bus.calls.length - 1]!.payload as { rootId: string }).rootId;
+
+      expect(secondEpisode).not.toBe(firstEpisode);
+    });
+
+    it("rolls over even on a same-tick re-entrant requestStart after requestEnd (terminal entry kept, not deleted)", () => {
+      const lc = createMonitorLifecycle(bus);
+      lc.requestStart("scope-1", "first");
+      const firstEpisode = (bus.calls[0]!.payload as { rootId: string }).rootId;
+      // requestEnd marks terminal without deleting the entry, so a synchronous
+      // re-entrant requestStart still observes `terminal` and rolls over.
+      lc.requestEnd("scope-1");
+      lc.requestStart("scope-1", "second");
+      const secondEpisode = (bus.calls[bus.calls.length - 1]!.payload as { rootId: string }).rootId;
+      expect(secondEpisode).not.toBe(firstEpisode);
     });
   });
 
@@ -157,16 +206,19 @@ describe("createMonitorLifecycle", () => {
     it("emits monitor:task_update with status completed on success", () => {
       const lc = createMonitorLifecycle(bus);
       lc.requestStart("scope-1", "msg");
-      const taskId = (bus.calls[0]!.payload as { rootId: string }).rootId;
+      const startPayload = bus.calls[0]!.payload as { rootId: string; nodes: Array<{ id: string }> };
+      const episodeId = startPayload.rootId;
+      const cardId = startPayload.nodes[0]!.id;
 
       lc.requestEnd("scope-1");
 
       expect(bus.calls).toHaveLength(2);
       const { event, payload } = bus.calls[1]!;
       expect(event).toBe("monitor:task_update");
+      // The settle targets the EPISODE root + the request's CARD node id.
       expect(payload).toEqual({
-        rootId: taskId,
-        nodeId: taskId,
+        rootId: episodeId,
+        nodeId: cardId,
         status: "completed",
         conversationId: "scope-1",
       });
@@ -175,14 +227,16 @@ describe("createMonitorLifecycle", () => {
     it("emits monitor:task_update with status failed when failed=true", () => {
       const lc = createMonitorLifecycle(bus);
       lc.requestStart("scope-1", "msg");
-      const taskId = (bus.calls[0]!.payload as { rootId: string }).rootId;
+      const startPayload = bus.calls[0]!.payload as { rootId: string; nodes: Array<{ id: string }> };
+      const episodeId = startPayload.rootId;
+      const cardId = startPayload.nodes[0]!.id;
 
       lc.requestEnd("scope-1", true);
 
       const { payload } = bus.calls[1]!;
       expect(payload).toEqual({
-        rootId: taskId,
-        nodeId: taskId,
+        rootId: episodeId,
+        nodeId: cardId,
         status: "failed",
         conversationId: "scope-1",
       });
@@ -214,6 +268,7 @@ describe("createMonitorLifecycle", () => {
     it("emits monitor:dag_init with the converted goal tree payload", () => {
       const lc = createMonitorLifecycle(bus);
       lc.requestStart("scope-1", "msg");
+      const episodeId = (bus.calls[0]!.payload as { rootId: string }).rootId;
       const goalTree = makeGoalTree();
 
       lc.goalDecomposed("scope-1", goalTree);
@@ -225,7 +280,10 @@ describe("createMonitorLifecycle", () => {
       expect(event).toBe("monitor:dag_init");
 
       const p = payload as { rootId: string; conversationId?: string; nodes: unknown[]; edges: unknown[] };
-      expect(p.rootId).toBe("goal_root");
+      // rootId is overridden to the EPISODE id so decomposition grows the active
+      // board rather than spraying a sibling root keyed by the goal tree's own id.
+      expect(p.rootId).toBe(episodeId);
+      expect(p.rootId).not.toBe("goal_root");
       // goalTreeToDagPayload skips the root node, so only child is included
       expect(p.nodes).toHaveLength(1);
       // Conversation scope threaded through for per-conversation grouping.
@@ -235,27 +293,58 @@ describe("createMonitorLifecycle", () => {
     it("settles the superseded simple node to completed before emitting the tree", () => {
       const lc = createMonitorLifecycle(bus);
       lc.requestStart("scope-1", "msg");
-      const simpleTaskId = (bus.calls[0]!.payload as { rootId: string }).rootId;
+      const startPayload = bus.calls[0]!.payload as { rootId: string; nodes: Array<{ id: string }> };
+      const episodeId = startPayload.rootId;
+      const cardId = startPayload.nodes[0]!.id;
 
       lc.goalDecomposed("scope-1", makeGoalTree());
 
       // The settle is the second emit: a terminal task_update for the simple node
       // so its Kanban card doesn't linger "executing" once the tree replaces it.
+      // It targets the EPISODE root + the request's CARD node id.
       const settle = bus.calls[1]!;
       expect(settle.event).toBe("monitor:task_update");
       expect(settle.payload).toMatchObject({
-        rootId: simpleTaskId,
-        nodeId: simpleTaskId,
+        rootId: episodeId,
+        nodeId: cardId,
         status: "completed",
       });
     });
 
-    it("clears the simple task so requestEnd becomes a no-op", () => {
+    it("emits the decomposed goal tree UNDER the episode root (not a sibling goalTree root)", () => {
+      const lc = createMonitorLifecycle(bus);
+      lc.requestStart("scope-1", "msg");
+      const episodeId = (bus.calls[0]!.payload as { rootId: string }).rootId;
+
+      lc.goalDecomposed("scope-1", makeGoalTree());
+
+      // The decomposition dag_init is the third emit; its rootId is overridden to
+      // the episodeId so the tree grows THIS board rather than spraying a sibling.
+      const tree = bus.calls[2]!;
+      expect(tree.event).toBe("monitor:dag_init");
+      expect((tree.payload as { rootId: string }).rootId).toBe(episodeId);
+      expect((tree.payload as { rootId: string }).rootId).not.toBe("goal_root");
+    });
+
+    it("emits a restructure UNDER the active episode root", () => {
+      const lc = createMonitorLifecycle(bus);
+      lc.requestStart("scope-1", "msg");
+      const episodeId = (bus.calls[0]!.payload as { rootId: string }).rootId;
+      lc.goalDecomposed("scope-1", makeGoalTree());
+
+      lc.goalRestructured("scope-1", makeGoalTree());
+
+      const restructure = bus.calls[bus.calls.length - 1]!;
+      expect(restructure.event).toBe("monitor:dag_restructure");
+      expect((restructure.payload as { rootId: string }).rootId).toBe(episodeId);
+    });
+
+    it("settles the simple task on decomposition so requestEnd adds no card task_update", () => {
       const lc = createMonitorLifecycle(bus);
       lc.requestStart("scope-1", "msg");
       lc.goalDecomposed("scope-1", makeGoalTree());
 
-      lc.requestEnd("scope-1"); // should be no-op
+      lc.requestEnd("scope-1"); // no card left to settle (consumed by decomposition)
 
       // dag_init (requestStart) + task_update (settle simple node) +
       // dag_init (goalDecomposed). requestEnd adds nothing — tracking cleared.
@@ -349,17 +438,43 @@ describe("createMonitorLifecycle", () => {
   // =========================================================================
 
   describe("edge cases", () => {
-    it("requestStart overwrites previous tracking for the same scope", () => {
+    it("requestEnd settles the LATEST request's card within a continued episode", () => {
       const lc = createMonitorLifecycle(bus);
       lc.requestStart("scope-1", "first");
       lc.requestStart("scope-1", "second");
 
-      const id2 = (bus.calls[1]!.payload as { rootId: string }).rootId;
+      const episodeId = (bus.calls[1]!.payload as { rootId: string }).rootId;
+      const secondCardId = (bus.calls[1]!.payload as { nodes: Array<{ id: string }> }).nodes[0]!.id;
 
-      // requestEnd should use the second task ID
+      // The second requestStart continued the SAME episode (in-progress) but tracked
+      // its own card; requestEnd settles that latest card under the episode root.
       lc.requestEnd("scope-1");
-      const endPayload = bus.calls[2]!.payload as { rootId: string };
-      expect(endPayload.rootId).toBe(id2);
+      const endPayload = bus.calls[2]!.payload as { rootId: string; nodeId: string };
+      expect(endPayload.rootId).toBe(episodeId);
+      expect(endPayload.nodeId).toBe(secondCardId);
+    });
+
+    it("settles BOTH cards when two concurrent same-scope requests overlap (no card lingers 'executing')", () => {
+      // Models the only reachable same-scope overlap: an interactive chat message
+      // AND a background task on the SAME conversationScope (independent locks).
+      // Both requestStart inside one episode, then both requestEnd in finally.
+      const lc = createMonitorLifecycle(bus);
+      lc.requestStart("scope-1", "interactive");
+      lc.requestStart("scope-1", "background"); // joins the in-progress episode
+      const firstCardId = (bus.calls[0]!.payload as { nodes: Array<{ id: string }> }).nodes[0]!.id;
+      const secondCardId = (bus.calls[1]!.payload as { nodes: Array<{ id: string }> }).nodes[0]!.id;
+      expect(firstCardId).not.toBe(secondCardId);
+
+      // Both ends fire (one per path). With a single shared slot the first card
+      // would never get a terminal task_update; the per-request list settles both.
+      lc.requestEnd("scope-1"); // settles the most-recent card (LIFO)
+      lc.requestEnd("scope-1"); // settles the remaining card
+
+      const settled = bus.calls
+        .filter((c) => c.event === "monitor:task_update")
+        .map((c) => (c.payload as { nodeId: string }).nodeId);
+      expect(settled).toHaveLength(2);
+      expect(new Set(settled)).toEqual(new Set([firstCardId, secondCardId]));
     });
 
     it("handles empty string user message", () => {
@@ -377,6 +492,29 @@ describe("createMonitorLifecycle", () => {
 
       const p = bus.calls[1]!.payload as { status: string };
       expect(p.status).toBe("completed");
+    });
+
+    it("keeps the conversation scope (chat-level grouping) stable across an episode rollover", () => {
+      // Episode boundaries change ONLY the monitor dag rootId (`ep-…`). The
+      // conversationId — the chat-level grouping that is identity-adjacent — must
+      // stay identical across episodes so prior episodes remain grouped under the
+      // same conversation in the RootSwitcher and identity/memory keying (which is
+      // derived from chat/user, NEVER the episode) is never fragmented.
+      const lc = createMonitorLifecycle(bus);
+      lc.requestStart("scope-1", "first");
+      lc.requestEnd("scope-1");
+      lc.requestStart("scope-1", "second");
+
+      const dagInits = bus.calls.filter((c) => c.event === "monitor:dag_init");
+      const conversationIds = dagInits.map((c) => (c.payload as { conversationId?: string }).conversationId);
+      // Both episodes carry the SAME conversationId (the chat scope) ...
+      expect(conversationIds).toEqual(["scope-1", "scope-1"]);
+      // ... while the episode rootIds differ (the workspace rolled over).
+      const rootIds = dagInits.map((c) => (c.payload as { rootId: string }).rootId);
+      expect(rootIds[0]).not.toBe(rootIds[1]);
+      // The conversationId is the verbatim scope, never an identity/user-derived
+      // key — the lifecycle only ever echoes the conversationScope it was given.
+      for (const id of conversationIds) expect(id).toBe("scope-1");
     });
   });
 });

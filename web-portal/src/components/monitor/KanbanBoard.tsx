@@ -13,6 +13,7 @@ import {
 } from '@dnd-kit/core'
 import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
+import { ChevronDown } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import {
   useMonitorStore,
@@ -32,7 +33,17 @@ const COLUMN_STATUS_MAP: Record<string, { status: MonitorTaskStatus; reviewStatu
   issues: { status: 'failed', reviewStatus: 'none' },
 }
 
-const COLUMNS = [
+interface KanbanColumnDef {
+  id: string
+  labelKey: string
+  filter: (task: MonitorTask) => boolean
+  /** When true, the column header is a toggle and its cards can be hidden. */
+  collapsible?: boolean
+  /** Initial collapsed state for a collapsible column. */
+  defaultCollapsed?: boolean
+}
+
+const COLUMNS: KanbanColumnDef[] = [
   { id: 'backlog', labelKey: 'kanban.columns.backlog', filter: (task: MonitorTask) => task.status === 'pending' },
   { id: 'working', labelKey: 'kanban.columns.working', filter: (task: MonitorTask) => task.status === 'executing' },
   {
@@ -46,6 +57,12 @@ const COLUMNS = [
   {
     id: 'done',
     labelKey: 'kanban.columns.done',
+    // The Done column accumulates every completed card across the episode. It is
+    // collapsed by default so a long-running episode's finished work stays kept
+    // (cards are preserved, droppable, and counted) without crowding the board —
+    // the user expands it on demand. Mirrors Obsidian-style collapsible sections.
+    collapsible: true,
+    defaultCollapsed: true,
     filter: (task: MonitorTask) =>
       task.status === 'completed' &&
       task.reviewStatus !== 'spec_review' &&
@@ -116,11 +133,37 @@ interface KanbanColumnProps {
   id: string
   label: string
   tasks: MonitorTask[]
+  collapsible?: boolean
+  collapsed?: boolean
+  onToggleCollapsed?: () => void
 }
 
-function KanbanColumn({ id, label, tasks }: KanbanColumnProps) {
+function KanbanColumn({ id, label, tasks, collapsible, collapsed, onToggleCollapsed }: KanbanColumnProps) {
   const { t } = useTranslation('monitor')
+  // Keep the column droppable even when collapsed so a drag onto the (collapsed)
+  // Done column still moves the card — collapsing is purely presentational.
   const { setNodeRef, isOver } = useDroppable({ id })
+  const isCollapsed = Boolean(collapsible && collapsed)
+
+  const header = (
+    <>
+      <span className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-[0.18em] text-text-secondary">
+        {collapsible && (
+          <ChevronDown
+            className={cn(
+              'h-3.5 w-3.5 shrink-0 opacity-60 transition-transform duration-200',
+              isCollapsed && '-rotate-90',
+            )}
+            aria-hidden
+          />
+        )}
+        {label}
+      </span>
+      <span className="rounded-full border border-white/10 bg-black/20 px-2.5 py-1 text-[10px] font-semibold text-text-secondary">
+        {tasks.length}
+      </span>
+    </>
+  )
 
   return (
     <div
@@ -130,26 +173,34 @@ function KanbanColumn({ id, label, tasks }: KanbanColumnProps) {
         isOver ? 'border-accent/40 bg-accent/[0.04]' : 'border-white/8',
       )}
     >
-      <div className="flex shrink-0 items-center justify-between gap-2 border-b border-white/8 px-3 py-3">
-        <span className="text-xs font-semibold uppercase tracking-[0.18em] text-text-secondary">
-          {label}
-        </span>
-        <span className="rounded-full border border-white/10 bg-black/20 px-2.5 py-1 text-[10px] font-semibold text-text-secondary">
-          {tasks.length}
-        </span>
-      </div>
-
-      <SortableContext items={tasks.map((task) => task.id)} strategy={verticalListSortingStrategy}>
-        <div className="flex flex-1 flex-col gap-2 overflow-y-auto p-2.5">
-          {tasks.length === 0 ? (
-            <div className="flex flex-1 items-center justify-center rounded-xl border border-dashed border-white/8 bg-black/10 px-3 py-6 text-center text-xs text-text-tertiary">
-              {t('kanban.empty')}
-            </div>
-          ) : (
-            tasks.map((task) => <TaskCard key={task.id} task={task} />)
-          )}
+      {collapsible ? (
+        <button
+          type="button"
+          onClick={onToggleCollapsed}
+          aria-expanded={!isCollapsed}
+          className="flex shrink-0 items-center justify-between gap-2 border-b border-white/8 px-3 py-3 text-left transition-colors hover:bg-white/[0.03]"
+        >
+          {header}
+        </button>
+      ) : (
+        <div className="flex shrink-0 items-center justify-between gap-2 border-b border-white/8 px-3 py-3">
+          {header}
         </div>
-      </SortableContext>
+      )}
+
+      {!isCollapsed && (
+        <SortableContext items={tasks.map((task) => task.id)} strategy={verticalListSortingStrategy}>
+          <div className="flex flex-1 flex-col gap-2 overflow-y-auto p-2.5">
+            {tasks.length === 0 ? (
+              <div className="flex flex-1 items-center justify-center rounded-xl border border-dashed border-white/8 bg-black/10 px-3 py-6 text-center text-xs text-text-tertiary">
+                {t('kanban.empty')}
+              </div>
+            ) : (
+              tasks.map((task) => <TaskCard key={task.id} task={task} />)
+            )}
+          </div>
+        </SortableContext>
+      )}
     </div>
   )
 }
@@ -195,6 +246,19 @@ export default function KanbanBoard() {
     const taskList = Object.values(tasks)
     return COLUMNS.map((column) => ({ ...column, label: t(column.labelKey), tasks: taskList.filter(column.filter) }))
   }, [tasks, t])
+
+  // Per-column collapse state, seeded once from each column's `defaultCollapsed`
+  // (the Done column starts collapsed so finished work stays kept but tucked away).
+  // User toggles persist for the session; only collapsible columns are tracked.
+  const [collapsedColumns, setCollapsedColumns] = useState<Record<string, boolean>>(() => {
+    const initial: Record<string, boolean> = {}
+    for (const column of COLUMNS) {
+      if (column.collapsible) initial[column.id] = Boolean(column.defaultCollapsed)
+    }
+    return initial
+  })
+  const toggleColumnCollapsed = (id: string) =>
+    setCollapsedColumns((prev) => ({ ...prev, [id]: !prev[id] }))
 
   const [activeDragId, setActiveDragId] = useState<string | null>(null)
 
@@ -307,6 +371,9 @@ export default function KanbanBoard() {
               id={column.id}
               label={column.label}
               tasks={column.tasks}
+              collapsible={column.collapsible}
+              collapsed={collapsedColumns[column.id]}
+              onToggleCollapsed={() => toggleColumnCollapsed(column.id)}
             />
           ))}
         </div>
