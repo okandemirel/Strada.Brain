@@ -434,6 +434,143 @@ describe("createMonitorLifecycle", () => {
   });
 
   // =========================================================================
+  // Whole-goal monitor unit (workers/sub-goals roll up to the PARENT episode)
+  // =========================================================================
+
+  describe("whole-goal monitor unit (monitorScope rollup)", () => {
+    it("a worker presenting the parent monitorScope JOINs the parent episode (NO new episode)", () => {
+      const lc = createMonitorLifecycle(bus);
+      // The whole-goal ROOT run opens the episode under the parent scope.
+      lc.requestStart("parent-scope", "root request");
+      const parentEpisode = (bus.calls[0]!.payload as { rootId: string }).rootId;
+
+      // A worker runs under its OWN fresh chatId scope, but stamps the parent
+      // monitorScope → it must roll up to the parent episode, not mint a sibling.
+      lc.joinEpisode("worker-scope-1", "sub-goal A", "parent-scope");
+
+      const joinPayload = bus.calls[1]!.payload as { rootId: string; conversationId: string; nodes: Array<{ id: string }> };
+      // SAME episode root → one workspace for the whole goal.
+      expect(joinPayload.rootId).toBe(parentEpisode);
+      // The emitted conversationId is the PARENT scope → the frontend RootSwitcher
+      // groups the worker card under the parent conversation, NOT a new one.
+      expect(joinPayload.conversationId).toBe("parent-scope");
+      // Its own fresh CARD node → a distinct Kanban item inside the one board.
+      expect(joinPayload.nodes[0]!.id).toMatch(/^req-/);
+    });
+
+    it("multiple workers all roll up to the ONE parent episode (no spray)", () => {
+      const lc = createMonitorLifecycle(bus);
+      lc.requestStart("parent-scope", "decomposed request");
+      const parentEpisode = (bus.calls[0]!.payload as { rootId: string }).rootId;
+
+      // 3 sub-goal workers, each with its own fresh chatId scope (the screenshot bug).
+      lc.joinEpisode("worker-1", "Analyze the current AI level", "parent-scope");
+      lc.joinEpisode("worker-2", "Implement a level solvability check", "parent-scope");
+      lc.joinEpisode("worker-3", "Write tests", "parent-scope");
+
+      const dagInits = bus.calls.filter((c) => c.event === "monitor:dag_init");
+      const rootIds = dagInits.map((c) => (c.payload as { rootId: string }).rootId);
+      const conversationIds = dagInits.map((c) => (c.payload as { conversationId: string }).conversationId);
+
+      // ONE conversation/episode — all 4 dag_inits share the parent episode + scope.
+      expect(new Set(rootIds)).toEqual(new Set([parentEpisode]));
+      expect(new Set(conversationIds)).toEqual(new Set(["parent-scope"]));
+    });
+
+    it("joinEpisode is a no-op when NO parent episode is open (never mints a sibling)", () => {
+      const lc = createMonitorLifecycle(bus);
+      // No requestStart for the parent scope → the worker stays monitor-silent.
+      lc.joinEpisode("worker-scope", "orphan sub-goal", "parent-scope");
+      expect(bus.calls).toHaveLength(0);
+    });
+
+    it("joinEpisode does not mint nor roll the parent episode over (stays open while workers run)", () => {
+      const lc = createMonitorLifecycle(bus);
+      lc.requestStart("parent-scope", "root");
+      const parentEpisode = (bus.calls[0]!.payload as { rootId: string }).rootId;
+      lc.joinEpisode("worker-1", "sub", "parent-scope");
+
+      // A subsequent ROOT requestStart on the parent scope (while still in-progress)
+      // continues the SAME episode — proof the worker join did NOT terminate it.
+      lc.requestStart("parent-scope", "follow-up");
+      const followUp = bus.calls[bus.calls.length - 1]!.payload as { rootId: string };
+      expect(followUp.rootId).toBe(parentEpisode);
+    });
+
+    it("the episode stays OPEN while a sub-task completes (joinEpisodeEnd does NOT mark terminal)", () => {
+      const lc = createMonitorLifecycle(bus);
+      lc.requestStart("parent-scope", "root");
+      const parentEpisode = (bus.calls[0]!.payload as { rootId: string }).rootId;
+
+      lc.joinEpisode("worker-1", "sub-goal A", "parent-scope");
+      const workerCardId = (bus.calls[1]!.payload as { nodes: Array<{ id: string }> }).nodes[0]!.id;
+
+      // The worker finishes → settle ITS card, but the episode must remain open.
+      lc.joinEpisodeEnd("worker-1", false, "parent-scope");
+      const settle = bus.calls[bus.calls.length - 1]!;
+      expect(settle.event).toBe("monitor:task_update");
+      expect(settle.payload).toMatchObject({ rootId: parentEpisode, nodeId: workerCardId, status: "completed" });
+
+      // A new ROOT requestStart on the parent scope still CONTINUES the same episode
+      // (not rolled over) → the whole-goal episode survived the worker completion.
+      lc.requestStart("parent-scope", "still going");
+      const after = bus.calls[bus.calls.length - 1]!.payload as { rootId: string };
+      expect(after.rootId).toBe(parentEpisode);
+    });
+
+    it("the episode closes ONLY on the whole-goal root requestEnd; a NEW request then opens a NEW episode", () => {
+      const lc = createMonitorLifecycle(bus);
+      lc.requestStart("parent-scope", "root");
+      const firstEpisode = (bus.calls[0]!.payload as { rootId: string }).rootId;
+
+      // Workers run + finish — episode still open.
+      lc.joinEpisode("worker-1", "sub A", "parent-scope");
+      lc.joinEpisodeEnd("worker-1", false, "parent-scope");
+      lc.joinEpisode("worker-2", "sub B", "parent-scope");
+      lc.joinEpisodeEnd("worker-2", true, "parent-scope"); // a failed sub-task, still no rollover
+
+      // The whole goal completes → ROOT requestEnd marks the episode terminal.
+      lc.requestEnd("parent-scope");
+
+      // The NEXT request after whole-goal completion opens a FRESH episode.
+      lc.requestStart("parent-scope", "next goal");
+      const secondEpisode = (bus.calls[bus.calls.length - 1]!.payload as { rootId: string }).rootId;
+      expect(secondEpisode).not.toBe(firstEpisode);
+      expect(secondEpisode).toMatch(/^ep-/);
+    });
+
+    it("a decomposed sub-goal worker grows the PARENT board (goalDecomposed honors monitorScope)", () => {
+      const lc = createMonitorLifecycle(bus);
+      lc.requestStart("parent-scope", "root");
+      const parentEpisode = (bus.calls[0]!.payload as { rootId: string }).rootId;
+      lc.joinEpisode("worker-1", "sub-goal", "parent-scope");
+
+      // The worker itself decomposes; with the parent monitorScope its tree lands
+      // on the parent episode board (rootId overridden to the parent episode).
+      lc.goalDecomposed("worker-1", makeGoalTree(), "parent-scope");
+
+      const treeInit = bus.calls[bus.calls.length - 1]!;
+      expect(treeInit.event).toBe("monitor:dag_init");
+      const p = treeInit.payload as { rootId: string; conversationId: string };
+      expect(p.rootId).toBe(parentEpisode);
+      expect(p.conversationId).toBe("parent-scope");
+    });
+
+    it("absent monitorScope ⇒ byte-identical to the prior per-scope behavior", () => {
+      const lc = createMonitorLifecycle(bus);
+      // requestStart with NO monitorScope behaves exactly as before.
+      lc.requestStart("scope-1", "msg");
+      const p = bus.calls[0]!.payload as { rootId: string; conversationId: string };
+      expect(p.rootId).toMatch(/^ep-/);
+      expect(p.conversationId).toBe("scope-1");
+
+      lc.requestEnd("scope-1");
+      expect(bus.calls).toHaveLength(2);
+      expect((bus.calls[1]!.payload as { conversationId: string }).conversationId).toBe("scope-1");
+    });
+  });
+
+  // =========================================================================
   // Edge cases
   // =========================================================================
 

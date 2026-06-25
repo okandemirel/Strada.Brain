@@ -57,9 +57,11 @@ function createMockWorkspaceBus() {
 function createMockMonitorLifecycle() {
   return {
     requestStart: vi.fn(),
+    joinEpisode: vi.fn(),
     goalDecomposed: vi.fn(),
     goalRestructured: vi.fn(),
     requestEnd: vi.fn(),
+    joinEpisodeEnd: vi.fn(),
   };
 }
 
@@ -456,9 +458,79 @@ describe("BackgroundExecutor - Pre-decomposed Tree Path", () => {
       expect(mockTaskManager.complete).toHaveBeenCalledWith(task.id, "supervisor task done");
     }, { timeout: 5000 });
 
+    // A top-level task (no monitorScope) is its own whole-goal root: it owns
+    // requestStart/requestEnd and never joins. goalDecomposed now carries the
+    // (undefined) monitorScope override as its 3rd arg.
     expect(monitorLifecycle.requestStart).toHaveBeenCalledWith("thread-7", task.prompt);
-    expect(monitorLifecycle.goalDecomposed).toHaveBeenCalledWith("thread-7", goalTree);
+    expect(monitorLifecycle.joinEpisode).not.toHaveBeenCalled();
+    expect(monitorLifecycle.goalDecomposed).toHaveBeenCalledWith("thread-7", goalTree, undefined);
     expect(monitorLifecycle.requestEnd).toHaveBeenCalledWith("thread-7", false);
+    expect(monitorLifecycle.joinEpisodeEnd).not.toHaveBeenCalled();
+  });
+
+  it("a sub-goal task with a parent monitorScope JOINs the parent episode (no new conversation)", async () => {
+    const goalTree = buildTestGoalTree();
+    // The sub-goal task runs under its OWN conversation scope but stamps the parent
+    // goal's monitorScope so its monitor events roll up to the parent episode.
+    const task = createTestTask(goalTree, {
+      chatId: "worker-chat",
+      conversationId: "worker-thread",
+      monitorScope: "parent-goal-scope",
+    });
+    const monitorLifecycle = createMockMonitorLifecycle();
+    mockOrch.evaluateSupervisorAdmission.mockImplementation(async (params: { onGoalDecomposed?: (goalTree: GoalTree) => void }) => {
+      params.onGoalDecomposed?.(goalTree);
+      return {
+        path: "supervisor",
+        reason: "eligible",
+        result: {
+          success: true,
+          partial: false,
+          output: "sub-goal done",
+          totalNodes: 2,
+          succeeded: 2,
+          failed: 0,
+          skipped: 0,
+          totalCost: 0,
+          totalDuration: 0,
+          nodeResults: [],
+        },
+      };
+    });
+
+    const executor = new BackgroundExecutor({
+      orchestrator: mockOrch as any,
+      decomposer: mockDecomposer as any,
+      goalStorage: mockGoalStorage as any,
+      daemonEventBus: mockDaemonEventBus as any,
+      aiProvider: undefined,
+      channel: undefined,
+    });
+    executor.setMonitorLifecycle(monitorLifecycle as any);
+
+    const mockTaskManager = {
+      updateStatus: vi.fn(),
+      complete: vi.fn(),
+      fail: vi.fn(),
+      block: vi.fn(),
+    };
+    executor.setTaskManager(mockTaskManager as any);
+
+    executor.enqueue(task, new AbortController().signal, vi.fn());
+
+    await vi.waitFor(() => {
+      expect(mockTaskManager.complete).toHaveBeenCalledWith(task.id, "sub-goal done");
+    }, { timeout: 5000 });
+
+    // The sub-goal run JOINs the parent episode and settles via joinEpisodeEnd —
+    // it NEVER calls requestStart/requestEnd (which would mint/close a sibling
+    // episode = a new conversation in the dropdown). The conversation scope passed
+    // is the task's own ("worker-thread"); the parent monitorScope rolls it up.
+    expect(monitorLifecycle.joinEpisode).toHaveBeenCalledWith("worker-thread", task.prompt, "parent-goal-scope");
+    expect(monitorLifecycle.requestStart).not.toHaveBeenCalled();
+    expect(monitorLifecycle.goalDecomposed).toHaveBeenCalledWith("worker-thread", goalTree, "parent-goal-scope");
+    expect(monitorLifecycle.joinEpisodeEnd).toHaveBeenCalledWith("worker-thread", false, "parent-goal-scope");
+    expect(monitorLifecycle.requestEnd).not.toHaveBeenCalled();
   });
 
   it("emits goal lifecycle events for queued supervisor executions", async () => {

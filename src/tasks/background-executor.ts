@@ -463,10 +463,14 @@ export class BackgroundExecutor {
     this.emitGoalCanvasSnapshot(task, goalTree);
 
     const conversationScope = this.getConversationScope(task);
+    // Whole-goal monitor unit: a sub-goal task's decomposition grows the PARENT
+    // episode (task.monitorScope) so it lands as nodes on the one whole-goal DAG.
+    const monitorScope = task.monitorScope?.trim() || undefined;
+    const emittedScope = monitorScope ?? conversationScope;
     if (this.monitorLifecycle) {
-      this.monitorLifecycle.goalDecomposed(conversationScope, goalTree);
+      this.monitorLifecycle.goalDecomposed(conversationScope, goalTree, monitorScope);
     } else if (this.workspaceBus) {
-      this.workspaceBus.emit("monitor:dag_init", goalTreeToDagPayload(goalTree, conversationScope));
+      this.workspaceBus.emit("monitor:dag_init", goalTreeToDagPayload(goalTree, emittedScope));
     }
 
     if (this.daemonEventBus) {
@@ -1011,9 +1015,21 @@ export class BackgroundExecutor {
     onProgress(this.buildKickoffProgressSignal(task));
 
     const conversationScope = this.getConversationScope(task);
+    // Whole-goal monitor unit: a task submitted as a sub-goal of a parent goal carries
+    // the parent's monitorScope, so its monitor events JOIN the parent episode (one
+    // workspace per whole goal) rather than minting a sibling conversation. A normal
+    // top-level task (no override, or override === own scope) is its own whole-goal
+    // root and owns episode create + terminal. MONITOR-only — task chatId/session/
+    // identity are unchanged.
+    const monitorScope = task.monitorScope?.trim() || undefined;
+    const isMonitorRootRun = !monitorScope || monitorScope === conversationScope;
 
     // Monitor lifecycle: emit simple DAG so monitor workspace always shows something
-    this.monitorLifecycle?.requestStart(conversationScope, task.prompt);
+    if (isMonitorRootRun) {
+      this.monitorLifecycle?.requestStart(conversationScope, task.prompt);
+    } else {
+      this.monitorLifecycle?.joinEpisode(conversationScope, task.prompt, monitorScope);
+    }
 
     let requestFailed = false;
     let activeGoalTree: GoalTree | undefined;
@@ -1167,7 +1183,14 @@ export class BackgroundExecutor {
       await taskWorkspaceLease?.release().catch((err) => {
         getLogger().warn("Task workspace lease release failed", { error: err instanceof Error ? err.message : String(err) });
       });
-      this.monitorLifecycle?.requestEnd(conversationScope, requestFailed);
+      // A root task marks its episode terminal; a re-scoped sub-goal task settles ONLY
+      // its joined card (joinEpisodeEnd) so it never prematurely terminates the shared
+      // parent episode — the whole-goal episode stays open until the ROOT settles.
+      if (isMonitorRootRun) {
+        this.monitorLifecycle?.requestEnd(conversationScope, requestFailed);
+      } else {
+        this.monitorLifecycle?.joinEpisodeEnd(conversationScope, requestFailed, monitorScope);
+      }
     }
   }
 

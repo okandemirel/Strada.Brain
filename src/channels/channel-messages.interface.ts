@@ -36,6 +36,16 @@ export interface IncomingMessage {
   chatId: string;
   /** Stable conversation identity when chatId is transient (optional). */
   conversationId?: string;
+  /**
+   * Whole-goal MONITOR scope (optional). When a single user request fans out into
+   * multiple agent/worker runs (each with its own chatId), the originating request's
+   * conversationScope is stamped here so each spawned run's monitor events roll UP
+   * to the parent goal's episode/conversation (one workspace per whole goal) instead
+   * of minting a sibling conversation. MONITOR-only: never re-keys identity/session/
+   * memory (those stay on the run's own chatId/userId). Absent ⇒ the run is its own
+   * whole-goal root (byte-identical to the prior per-chatId behavior).
+   */
+  monitorScope?: string;
   /** Unique identifier for the user */
   userId: string;
   /** The text content of the message */

@@ -98,6 +98,14 @@ export interface Task {
   chatId: string;
   channelType: string;
   conversationId?: string;
+  /**
+   * Whole-goal MONITOR scope (optional). When a sub-goal is submitted as a separate
+   * background Task, the parent goal's conversationScope is stamped here so the
+   * task's monitor requestStart/requestEnd JOIN the parent episode (one workspace
+   * per whole goal) instead of minting a sibling conversation. MONITOR-only — never
+   * re-keys identity/session/memory. Absent ⇒ the task is its own whole-goal root.
+   */
+  monitorScope?: string;
   userId?: string;
   goalRootId?: string;
   title: string;

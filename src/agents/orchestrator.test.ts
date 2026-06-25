@@ -961,9 +961,11 @@ describe("Orchestrator", () => {
 
     const monitorLifecycle = {
       requestStart: vi.fn(),
+      joinEpisode: vi.fn(),
       goalDecomposed: vi.fn(),
       goalRestructured: vi.fn(),
       requestEnd: vi.fn(),
+      joinEpisodeEnd: vi.fn(),
     };
     orchestrator.setMonitorLifecycle(monitorLifecycle as any);
     (orchestrator as any).taskClassifier = {
@@ -983,13 +985,18 @@ describe("Orchestrator", () => {
     });
 
     expect(supervisorBrain.execute).toHaveBeenCalledTimes(1);
+    // A normal interactive request (no monitorScope) is its own whole-goal root:
+    // it owns requestStart and never joins. goalDecomposed now carries the
+    // (undefined) monitorScope override as its 3rd arg.
     expect(monitorLifecycle.requestStart).toHaveBeenCalledWith(
       "chat-supervisor-callbacks",
       "Investigate the complex failure",
     );
+    expect(monitorLifecycle.joinEpisode).not.toHaveBeenCalled();
     expect(monitorLifecycle.goalDecomposed).toHaveBeenCalledWith(
       "chat-supervisor-callbacks",
       goalTree,
+      undefined,
     );
     expect(mockChannel.sendMarkdown).toHaveBeenCalledWith(
       "chat-supervisor-callbacks",
@@ -999,6 +1006,92 @@ describe("Orchestrator", () => {
       "chat-supervisor-callbacks",
       "Supervisor final answer",
     );
+  });
+
+  it("rolls a re-scoped worker run UP to the parent goal episode (joinEpisode, not a new conversation)", async () => {
+    const mockProvider = createMockProvider();
+    const mockChannel = createMockChannel();
+    const goalTree = buildGoalTreeFromBlock(
+      {
+        isGoal: true,
+        estimatedMinutes: 5,
+        nodes: [{ id: "plan", task: "Inspect", dependsOn: [] }],
+      },
+      "worker-chat",
+      "Investigate the complex failure",
+    );
+
+    const supervisorBrain = {
+      shouldExecute: vi.fn().mockReturnValue(true),
+      execute: vi.fn(async (_task: string, context: { onGoalDecomposed?: (goalTree: typeof goalTree) => void }) => {
+        context.onGoalDecomposed?.(goalTree);
+        return {
+          success: true,
+          partial: false,
+          output: "worker answer",
+          totalNodes: 1,
+          succeeded: 1,
+          failed: 0,
+          skipped: 0,
+          totalCost: 0,
+          totalDuration: 0,
+          nodeResults: [],
+        };
+      }),
+    };
+
+    const orchestrator = new Orchestrator({
+      providerManager: {
+        getProvider: () => mockProvider,
+        getProviderByName: () => mockProvider,
+        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
+        listAvailable: () => [{ name: "mock", label: "mock", defaultModel: "default" }],
+        shutdown: vi.fn(),
+      } as any,
+      tools: [],
+      channel: mockChannel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: false,
+      supervisorBrain: supervisorBrain as any,
+      supervisorComplexityThreshold: "complex",
+    });
+
+    const monitorLifecycle = {
+      requestStart: vi.fn(),
+      joinEpisode: vi.fn(),
+      goalDecomposed: vi.fn(),
+      goalRestructured: vi.fn(),
+      requestEnd: vi.fn(),
+      joinEpisodeEnd: vi.fn(),
+    };
+    orchestrator.setMonitorLifecycle(monitorLifecycle as any);
+    (orchestrator as any).taskClassifier = {
+      classify: vi.fn().mockReturnValue({ type: "analysis", complexity: "complex", criticality: "high" }),
+    };
+
+    await orchestrator.handleMessage({
+      channelType: "cli",
+      chatId: "worker-chat",
+      // The worker run stamps the parent goal's whole-goal monitor scope so its
+      // monitor events roll up to the parent episode instead of minting a sibling
+      // conversation. The AGENT chatId stays "worker-chat" (fresh session) — only
+      // the MONITOR scope rolls up.
+      monitorScope: "parent-goal-scope",
+      userId: "user1",
+      text: "Investigate the complex failure",
+      timestamp: new Date(),
+    });
+
+    // The re-scoped worker JOINs the parent episode and settles via joinEpisodeEnd;
+    // it NEVER calls requestStart/requestEnd (which would open/close a sibling
+    // episode = a new dropdown conversation). The conversation scope is its own
+    // chatId; the parent monitorScope is the rollup key.
+    expect(monitorLifecycle.joinEpisode).toHaveBeenCalledWith("worker-chat", "Investigate the complex failure", "parent-goal-scope");
+    expect(monitorLifecycle.requestStart).not.toHaveBeenCalled();
+    expect(monitorLifecycle.goalDecomposed).toHaveBeenCalledWith("worker-chat", goalTree, "parent-goal-scope");
+    expect(monitorLifecycle.joinEpisodeEnd).toHaveBeenCalledWith("worker-chat", false, "parent-goal-scope");
+    expect(monitorLifecycle.requestEnd).not.toHaveBeenCalled();
   });
 
   it("routes top-level background tasks through supervisor planning when allowed", async () => {

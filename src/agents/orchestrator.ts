@@ -4955,6 +4955,13 @@ export class Orchestrator {
     const text = sanitizePromptInjection(rawText);
     const userId = msgUserId;
     const conversationScope = resolveConversationScope(chatId, conversationId);
+    // Whole-goal monitor unit: when this run was spawned by a parent goal that fanned
+    // out across agents (msg.monitorScope set to the originating request's scope), its
+    // monitor events JOIN the parent episode rather than minting a sibling conversation.
+    // MONITOR-only — the AGENT chatId/session/identity above stay fresh by design. A
+    // root run (no override, or override === own scope) owns episode create + terminal.
+    const monitorScope = msg.monitorScope?.trim() || undefined;
+    const isMonitorRootRun = !monitorScope || monitorScope === conversationScope;
 
     logger.info("Processing message", {
       chatId,
@@ -5117,9 +5124,16 @@ export class Orchestrator {
       await this.sessionManager.persistSessionToMemory(chatId, trimmed, /* force */ true);
     }
 
-    // Monitor lifecycle: emit simple DAG so monitor workspace always shows something
+    // Monitor lifecycle: emit simple DAG so monitor workspace always shows something.
+    // A root run opens/continues its own episode; a re-scoped worker/agent run JOINs the
+    // parent goal's open episode (no sibling conversation) and is monitor-silent if none
+    // is open — only the whole-goal root owns episode creation.
     const conversationScopeForMonitor = resolveConversationScope(chatId, conversationId);
-    this.monitorLifecycle?.requestStart(conversationScopeForMonitor, text);
+    if (isMonitorRootRun) {
+      this.monitorLifecycle?.requestStart(conversationScopeForMonitor, text);
+    } else {
+      this.monitorLifecycle?.joinEpisode(conversationScopeForMonitor, text, monitorScope);
+    }
 
     // Start typing indicator loop (only on channels that support rich messaging;
     // check the capability once here rather than on every interval tick)
@@ -5200,14 +5214,22 @@ export class Orchestrator {
         await runner.run(request, io);
         await renderTail; // drain the ordered resilience renders before the finally persists the transcript
       } else {
-        await this.runAgentLoop(chatId, session, msg.channelType, userId, conversationId, msg.attachments);
+        await this.runAgentLoop(chatId, session, msg.channelType, userId, conversationId, msg.attachments, monitorScope);
       }
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : "Unknown error";
       logger.error("Agent loop error", { chatId, error: errMsg });
       await this.sessionManager.sendVisibleAssistantText(chatId, session, classifyErrorMessage(error));
     } finally {
-      this.monitorLifecycle?.requestEnd(resolveConversationScope(chatId, conversationId));
+      // A root run marks its episode terminal (rolls the workspace over on the next
+      // request); a re-scoped worker run settles ONLY its own joined card via
+      // joinEpisodeEnd so it never prematurely terminates the shared parent episode —
+      // the whole-goal episode stays open until the ROOT run's requestEnd.
+      if (isMonitorRootRun) {
+        this.monitorLifecycle?.requestEnd(resolveConversationScope(chatId, conversationId));
+      } else {
+        this.monitorLifecycle?.joinEpisodeEnd(resolveConversationScope(chatId, conversationId), false, monitorScope);
+      }
       if (typingInterval) {
         clearInterval(typingInterval);
       }
@@ -5243,6 +5265,7 @@ export class Orchestrator {
     userId?: string,
     conversationId?: string,
     attachments?: Attachment[],
+    monitorScope?: string,
   ): Promise<void> {
     const logger = getLogger();
     const conversationScope = resolveConversationScope(chatId, conversationId);
@@ -5409,7 +5432,10 @@ export class Orchestrator {
         taskRunId: this.getTaskExecutionContext()?.taskRunId,
         onUsage: this.onUsage,
         onGoalDecomposed: (goalTree) => {
-          this.monitorLifecycle?.goalDecomposed(conversationScope, goalTree);
+          // Decomposition grows the active episode board. For a re-scoped worker run
+          // this is the PARENT goal's episode (monitorScope), so sub-goals land as
+          // nodes on the one whole-goal DAG rather than spraying a sibling root.
+          this.monitorLifecycle?.goalDecomposed(conversationScope, goalTree, monitorScope);
           try {
             this.goalStorage?.upsertTree(goalTree, "executing");
           } catch {
