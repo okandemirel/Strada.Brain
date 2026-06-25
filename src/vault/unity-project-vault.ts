@@ -52,7 +52,7 @@ function payloadChunkId(hit: { payload?: unknown }): string | null {
 
 export class UnityProjectVault implements IVault {
   readonly id: VaultId;
-  readonly kind: 'unity-project' | 'self' = 'unity-project';
+  readonly kind: 'unity-project' | 'self' | 'knowledge' = 'unity-project';
   readonly rootPath: string;
   protected store: SqliteVaultStore;
   protected adapter: EmbeddingAdapter;

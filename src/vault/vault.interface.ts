@@ -1,5 +1,5 @@
 export type VaultId = string;
-export type VaultKind = 'framework' | 'unity-project' | 'self' | 'obsidian';
+export type VaultKind = 'framework' | 'unity-project' | 'self' | 'obsidian' | 'knowledge';
 
 export interface VaultFile {
   path: string;

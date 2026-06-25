@@ -37,6 +37,8 @@ import type { IRAGPipeline } from "../rag/rag.interface.js";
 import type { AgentManager as AgentManagerType } from "../agents/multi/agent-manager.js";
 import type { DelegationManager as DelegationManagerType } from "../agents/multi/delegation/delegation-manager.js";
 import { transcribeIncomingAudioMessage } from "./incoming-audio-transcription.js";
+import { fireDevKnowledgeCompletionNote } from "../vault/dev-knowledge-writer.js";
+import type { DevKnowledgeNoteWriter } from "../vault/dev-knowledge-writer.js";
 
 export function wireMessageHandler(
   channel: IChannelAdapter,
@@ -51,6 +53,7 @@ export function wireMessageHandler(
   channelTypeName?: string,
   notificationRouter?: NotificationRouter,
   digestReporter?: DigestReporter,
+  devKnowledgeNoteWriter?: DevKnowledgeNoteWriter,
 ): void {
   channel.onMessage(async (msg) => {
     const audioResult = await transcribeIncomingAudioMessage(msg, projectPath);
@@ -122,6 +125,22 @@ export function wireMessageHandler(
                 taskRunId,
               }),
             );
+            // LIVING VAULT (B): snapshot the completion summary BEFORE endTask
+            // teardown, then fire the fire-and-forget dev-knowledge write-back
+            // (real-work-gated; INCLUDES failures; skips trivial chat). Never
+            // awaited — it cannot slow or break task completion.
+            fireDevKnowledgeCompletionNote(devKnowledgeNoteWriter, {
+              goal: normalizedMsg.text,
+              success: routeError === undefined,
+              reason: routeError instanceof Error ? routeError.message : undefined,
+              taskRunId,
+              state: taskPlanner.getState(),
+              steps: taskPlanner.getTrajectorySteps().map((s) => ({
+                toolName: String(s.toolName),
+                input: s.input as Record<string, unknown> | undefined,
+              })),
+              errorCount: routeError === undefined ? 0 : 1,
+            });
             taskPlanner.endTask({
               success: routeError === undefined,
               finalOutput: routeError instanceof Error ? routeError.message : undefined,

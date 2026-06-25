@@ -137,6 +137,7 @@ import {
   generateSessionId as _generateSessionId,
 } from "./bootstrap-wiring.js";
 import { transcribeIncomingAudioMessage } from "./incoming-audio-transcription.js";
+import { fireDevKnowledgeCompletionNote } from "../vault/dev-knowledge-writer.js";
 
 // Re-export for backward compatibility (tests and other modules import these from bootstrap.js)
 export const initializeAIProvider = _initializeAIProvider;
@@ -685,6 +686,9 @@ async function bootstrapImpl(
   const { VaultRegistry } = await import("../vault/vault-registry.js");
   const vaultRegistry = new VaultRegistry();
   disposables.push("vaultRegistry", () => vaultRegistry.disposeAll());
+  // LIVING VAULT: set once the dedicated dev-knowledge vault is registered so
+  // the learning-bridge note-writer (C) is only wired when there is a target.
+  let devKnowledgeVaultRegistered = false;
   let vaultEmbeddingProvider = cachedEmbeddingProvider;
   if (!vaultEmbeddingProvider) {
     try {
@@ -852,6 +856,54 @@ async function bootstrapImpl(
         logger.warn("[vault] generic auto-register failed", { err });
       }
 
+      // LIVING VAULT (A) — dedicated per-project dev-knowledge vault rooted at
+      // `<unityProjectPath>/.strada/knowledge/`. It ACCUMULATES dev-time
+      // knowledge (task-completion notes, learned heuristics, clean-success
+      // verdicts) so the agent improves incrementally. It reuses the full
+      // UnityProjectVault engine via the DevKnowledgeVault subclass (distinct
+      // `kind: 'knowledge'` so the code write-hook never binds to it). The
+      // CODE vault rooted at <unityProjectPath> never walks into `.strada`
+      // (IGNORE_DIRS), so there is zero double-indexing, and resolveVaultForPath
+      // is longest-prefix so paths under `.strada/knowledge/` route here.
+      try {
+        if (config.unityProjectPath) {
+          const { join } = await import("node:path");
+          const { mkdir } = await import("node:fs/promises");
+          const knowledgeRoot = join(config.unityProjectPath, ".strada", "knowledge");
+          await mkdir(knowledgeRoot, { recursive: true });
+          const { DevKnowledgeVault } = await import("../vault/dev-knowledge-vault.js");
+          const hash = createHash("sha1").update(knowledgeRoot).digest("hex").slice(0, 8);
+          const knowledgeVault = new DevKnowledgeVault({
+            id: `knowledge:${hash}`,
+            rootPath: knowledgeRoot,
+            embedding: vaultEmbedding,
+            vectorStore: vaultVectorStore,
+          });
+          vaultRegistry.register(knowledgeVault, "Dev Knowledge");
+          devKnowledgeVaultRegistered = true;
+          logger.info("[vault] registered dev-knowledge vault", {
+            id: knowledgeVault.id,
+            rootPath: knowledgeRoot,
+          });
+          // Fire-and-log init + watcher so bootstrap never blocks on indexing.
+          void (async () => {
+            try {
+              await knowledgeVault.init();
+              await knowledgeVault.startWatch(config.vault?.debounceMs ?? 800);
+              logger.info(`[vault] async init complete for ${knowledgeVault.id}`);
+            } catch (err) {
+              logger.warn(`[vault] async init failed for ${knowledgeVault.id}`, {
+                error: err instanceof Error ? err.message : String(err),
+              });
+            }
+          })();
+        } else {
+          logger.info("[vault] skipping dev-knowledge vault: no unityProjectPath configured");
+        }
+      } catch (err) {
+        logger.warn("[vault] dev-knowledge vault registration failed", { err });
+      }
+
       // Hand a factory to the dashboard so POST /api/vaults (and the web
       // channel's proxy to it) can create new vaults at runtime using the
       // same embedding + vector-store deps wired above.
@@ -875,6 +927,29 @@ async function bootstrapImpl(
     logger.info("[vault] VaultRegistry installed on dashboard", {
       vaultCount: vaultRegistry.list().length,
     });
+  }
+
+  // LIVING VAULT (B + C) — build the shared dev-knowledge note-writer over the
+  // registry (resolves the `kind: 'knowledge'` vault at write time) and inject
+  // it into BOTH the learning pipeline (C: high-confidence instinct /
+  // clean-success verdict notes) and the route completion-hook (B: per-task
+  // write-back). Cycle-safe: the learning pipeline depends only on the
+  // DevKnowledgeNoteWriter INTERFACE (defined in vault/, type-only from
+  // learning's side) — no runtime src/learning -> src/vault edge. When no
+  // knowledge vault was registered the writer is a no-op (resolve returns
+  // undefined), so flag/path-off is byte-identical.
+  let devKnowledgeNoteWriter:
+    | import("../vault/dev-knowledge-writer.js").DevKnowledgeNoteWriter
+    | undefined;
+  if (devKnowledgeVaultRegistered) {
+    try {
+      const { DevKnowledgeNoteWriterImpl } = await import("../vault/dev-knowledge-writer.js");
+      devKnowledgeNoteWriter = new DevKnowledgeNoteWriterImpl(vaultRegistry, logger);
+      learningResult.pipeline?.setNoteWriter(devKnowledgeNoteWriter);
+      logger.info("[vault] dev-knowledge note-writer wired into learning pipeline");
+    } catch (err) {
+      logger.warn("[vault] dev-knowledge note-writer wiring failed", { err });
+    }
   }
 
   await initializeToolRegistryStage(
@@ -1554,6 +1629,22 @@ async function bootstrapImpl(
                   taskRunId,
                 }),
               );
+              // LIVING VAULT (B): fire the fire-and-forget dev-knowledge
+              // write-back BEFORE endTask teardown (multi-agent twin of the
+              // single-agent path). Real-work-gated; INCLUDES failures; skips
+              // trivial chat. Never awaited.
+              fireDevKnowledgeCompletionNote(devKnowledgeNoteWriter, {
+                goal: normalizedMsg.text,
+                success: routeError === undefined,
+                reason: routeError instanceof Error ? routeError.message : undefined,
+                taskRunId,
+                state: learningResult.taskPlanner.getState(),
+                steps: learningResult.taskPlanner.getTrajectorySteps().map((s) => ({
+                  toolName: String(s.toolName),
+                  input: s.input as Record<string, unknown> | undefined,
+                })),
+                errorCount: routeError === undefined ? 0 : 1,
+              });
               learningResult.taskPlanner.endTask({
                 success: routeError === undefined,
                 finalOutput: routeError instanceof Error ? routeError.message : undefined,
@@ -1585,6 +1676,7 @@ async function bootstrapImpl(
       channelType,
       notificationRouterInstance,
       digestReporterInstance,
+      devKnowledgeNoteWriter,
     );
   }
 

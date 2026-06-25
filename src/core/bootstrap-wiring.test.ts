@@ -79,6 +79,13 @@ function makeTaskPlanner() {
     getTaskStartedAt: vi.fn(() => Date.now()),
     attachReplayContext: vi.fn(),
     endTask: vi.fn(),
+    // LIVING VAULT (B): the completion-hook reads these to compose the note.
+    getState: vi.fn(() => ({
+      iterationsUsed: 0,
+      mutationsSinceVerify: 0,
+      errorHistory: [] as string[],
+    })),
+    getTrajectorySteps: vi.fn(() => [] as Array<{ toolName: string; input?: Record<string, unknown> }>),
   } as any;
 }
 

@@ -100,6 +100,20 @@ export class LearningPipeline {
     timestamp: number;
   }>();
 
+  /**
+   * LIVING VAULT (C) — optional injected note-writer for the learning↔vault
+   * bridge. When set (bootstrap wires it after the dev-knowledge vault is
+   * registered), high-confidence instinct creations and clean-success verdicts
+   * are mirrored as human-readable notes into the dev-knowledge vault. The
+   * dependency is INTERFACE-ONLY (defined in src/vault/), so there is no
+   * runtime src/learning -> src/vault import — no import cycle. Unset (default,
+   * and in all unit tests that don't wire it) ⇒ every bridge call is a
+   * null-guarded no-op ⇒ byte-identical to prior behavior.
+   */
+  private noteWriter?: import("../../vault/dev-knowledge-writer.js").DevKnowledgeNoteWriter;
+  /** Per-id dedup set so the same instinct/verdict is not re-noted within a process. */
+  private readonly notedIds = new Set<string>();
+
   /** Project path for scope-aware instinct creation (Phase 13) */
   private projectPath?: string;
   /** Scope promotion threshold (Phase 13): distinct projects needed for universal promotion */
@@ -584,6 +598,8 @@ export class LearningPipeline {
       this.embeddingQueue.enqueue(instinct.id, `${instinct.triggerPattern} ${instinct.action}`);
     }
     this.enforceMaxInstincts();
+    // LIVING VAULT (C): mirror high-confidence instincts as learned-heuristic notes.
+    this.noteHighConfidenceInstinct(instinct);
     return instinct;
   }
 
@@ -610,6 +626,8 @@ export class LearningPipeline {
       this.embeddingQueue.enqueue(instinct.id, `${instinct.triggerPattern} ${instinct.action}`);
     }
     this.enforceMaxInstincts();
+    // LIVING VAULT (C): mirror high-confidence instincts as learned-heuristic notes.
+    this.noteHighConfidenceInstinct(instinct);
     return instinct;
   }
 
@@ -1114,6 +1132,9 @@ export class LearningPipeline {
       dimensions,
       feedback: "Auto-generated verdict for clean successful trajectory",
     });
+
+    // LIVING VAULT (C): mirror the clean-success trajectory as a durable note.
+    this.noteCleanSuccessVerdict(trajectory, score);
   }
 
   // ─── Feedback Methods ────────────────────────────────────────────────────────
@@ -1175,5 +1196,98 @@ export class LearningPipeline {
    */
   isTrajectoryLevelCreditEnabled(): boolean {
     return this.config.trajectoryLevelCredit === true;
+  }
+
+  // ─── LIVING VAULT (C): learning↔vault bridge ──────────────────────────────
+
+  /**
+   * Inject the dev-knowledge note-writer (bootstrap wires it after the vault is
+   * registered). Interface-only dependency — no src/learning -> src/vault
+   * runtime import. Idempotent; passing undefined detaches the bridge.
+   */
+  setNoteWriter(
+    writer: import("../../vault/dev-knowledge-writer.js").DevKnowledgeNoteWriter | undefined,
+  ): void {
+    this.noteWriter = writer;
+  }
+
+  /**
+   * Fire-and-forget bridge write. Best-effort, per-id deduped, never throws onto
+   * the caller's path. No-op when no writer is wired.
+   */
+  private writeKnowledgeNote(dedupId: string, relPath: string, content: string): void {
+    const writer = this.noteWriter;
+    if (!writer) return;
+    if (this.notedIds.has(dedupId)) return;
+    this.notedIds.add(dedupId);
+    void writer.writeNote(relPath, content).catch(() => {
+      // Best-effort: the writer already swallows+logs; this catch is a final guard.
+    });
+  }
+
+  /**
+   * Mirror a newly created high-confidence instinct as a durable "learned
+   * heuristic" note. Low-volume (creation is rare); deduped by instinctId.
+   */
+  private noteHighConfidenceInstinct(instinct: Instinct): void {
+    if (!this.noteWriter) return;
+    const ACTIVE_THRESHOLD = this.bayesianConfig.activeThreshold;
+    if (instinct.confidence < ACTIVE_THRESHOLD) return;
+    const trigger = sanitizePromptInjection(instinct.triggerPattern.slice(0, 500));
+    const action = sanitizePromptInjection(instinct.action.slice(0, 500));
+    const content = [
+      '---',
+      `title: "${instinct.name.replace(/["\n]/g, ' ').trim()}"`,
+      `date: ${new Date().toISOString()}`,
+      `instinctId: ${instinct.id}`,
+      `confidence: ${instinct.confidence.toFixed(2)}`,
+      `type: ${instinct.type}`,
+      '---',
+      '',
+      '## Learned Heuristic',
+      `When: ${trigger}`,
+      '',
+      `Do: ${action}`,
+      '',
+      `Confidence: ${instinct.confidence.toFixed(2)} (${instinct.status})`,
+      '',
+    ].join('\n');
+    this.writeKnowledgeNote(
+      `instinct:${instinct.id}`,
+      `knowledge/instincts/${instinct.id}.md`,
+      content,
+    );
+  }
+
+  /**
+   * Mirror a clean-success trajectory verdict as a human-readable note.
+   * Gated upstream (only clean, error-free successes reach autoGenerateVerdict);
+   * deduped by trajectoryId.
+   */
+  private noteCleanSuccessVerdict(trajectory: Trajectory, score: number): void {
+    if (!this.noteWriter) return;
+    const desc = sanitizePromptInjection((trajectory.taskDescription ?? '').slice(0, 500));
+    const content = [
+      '---',
+      `title: "${desc.replace(/["\n]/g, ' ').slice(0, 80).trim() || 'Clean success'}"`,
+      `date: ${new Date().toISOString()}`,
+      `trajectoryId: ${trajectory.id}`,
+      `score: ${score.toFixed(2)}`,
+      '---',
+      '',
+      '## Verified Clean Success',
+      desc || '(no description)',
+      '',
+      `Steps: ${trajectory.outcome.totalSteps}; score=${score.toFixed(2)}`,
+      '',
+      '## Key Learning',
+      'Approach that worked — verified clean success (no errors, no retries).',
+      '',
+    ].join('\n');
+    this.writeKnowledgeNote(
+      `verdict:${trajectory.id}`,
+      `knowledge/verdicts/${trajectory.id}.md`,
+      content,
+    );
   }
 }
