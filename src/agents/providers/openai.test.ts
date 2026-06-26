@@ -768,4 +768,112 @@ describe("OpenAIProvider", () => {
       expect(headers["ChatGPT-Account-Id"]).toBeUndefined();
     });
   });
+
+  // A consumer ChatGPT/Codex subscription only serves a fixed set of Codex models and
+  // rejects anything else with HTTP 400 ("The 'X' model is not supported when using
+  // Codex with a ChatGPT account."). Strada routes by per-chat/delegation preference,
+  // which can construct a fresh OpenAIProvider with an arbitrary model override (e.g.
+  // the global gpt-5.2 fallback) even though the subscription booted ready on a
+  // different Codex model (e.g. gpt-5.4). The subscription /responses request must use
+  // the user-configured Codex model (OPENAI_MODEL), NOT the churned override.
+  describe("subscription pins the /responses model to the configured Codex model", () => {
+    function okStream(): ReadableStream<Uint8Array> {
+      return new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(
+            [
+              "event: response.output_text.delta",
+              'data: {"delta":"ok"}',
+              "",
+              "event: response.completed",
+              'data: {"response":{"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2},"output":[{"id":"m","type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}]}}',
+              "",
+            ].join("\n"),
+          ));
+          controller.close();
+        },
+      });
+    }
+
+    const savedModel = process.env["OPENAI_MODEL"];
+    afterEach(() => {
+      if (savedModel === undefined) delete process.env["OPENAI_MODEL"];
+      else process.env["OPENAI_MODEL"] = savedModel;
+    });
+
+    it("sends the configured OPENAI_MODEL, ignoring a churned per-call override the subscription can't serve", async () => {
+      process.env["OPENAI_MODEL"] = "gpt-5.4";
+      mockFetch.mockResolvedValue({ ok: true, body: okStream(), text: async () => "", headers: new Headers() });
+
+      // The constructor model is the churned override the chain handed this instance
+      // (the global gpt-5.2 default), but the subscription only supports gpt-5.4.
+      const provider = new OpenAIProvider(
+        { mode: "chatgpt-subscription", accessToken: "access-token", accountId: "account-id" },
+        "gpt-5.2",
+      );
+      await provider.chat("system", [{ role: "user", content: "ping" }], []);
+
+      const body = JSON.parse(mockFetch.mock.calls.at(-1)![1].body);
+      // The request carries the configured Codex model, NOT the gpt-5.2 override.
+      expect(body.model).toBe("gpt-5.4");
+    });
+
+    it("does NOT clamp the model in api-key mode — a per-call/override model is honored (regression guard)", async () => {
+      process.env["OPENAI_MODEL"] = "gpt-5.4";
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: "Hi", tool_calls: [] }, finish_reason: "stop" }],
+          usage: { prompt_tokens: 1, completion_tokens: 1 },
+        }),
+        text: async () => "",
+      });
+
+      // api-key mode: the constructor/override model must reach the request verbatim;
+      // the subscription-only env pin must NOT leak into this path.
+      const provider = new OpenAIProvider("sk-test", "gpt-5.2");
+      await provider.chat("system", [{ role: "user", content: "Hello" }], []);
+
+      const [url, init] = mockFetch.mock.calls.at(-1)!;
+      expect(String(url)).toContain("chat/completions");
+      const body = JSON.parse(init.body);
+      expect(body.model).toBe("gpt-5.2");
+    });
+
+    it("surfaces a clear, actionable message on a 400 model-unsupported and does not loop", async () => {
+      mockFetch.mockResolvedValue({
+        ok: false,
+        status: 400,
+        text: async () => JSON.stringify({
+          detail: "The 'gpt-5.2' model is not supported when using Codex with a ChatGPT account.",
+        }),
+        headers: new Headers(),
+        body: { cancel: vi.fn(async () => undefined) },
+      });
+
+      const provider = new OpenAIProvider(
+        { mode: "chatgpt-subscription", accessToken: "access-token", accountId: "account-id" },
+        "gpt-5.2",
+      );
+
+      await expect(
+        provider.chat("system", [{ role: "user", content: "ping" }], []),
+      ).rejects.toThrow(/not accepted by the ChatGPT\/Codex subscription endpoint/i);
+
+      // Exactly one /responses attempt — the safety net never loops (there is one
+      // pinned model and it was already tried). A 400 is not a 401/403, so no
+      // refresh-and-retry fires either.
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+
+      // The message names a Codex-supported model and the API-key alternative.
+      try {
+        await provider.chat("system", [{ role: "user", content: "ping" }], []);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        expect(msg).toMatch(/gpt-5\.4/);
+        expect(msg).toMatch(/API-key mode/i);
+        expect(msg).not.toMatch(/sign in again/i);
+      }
+    });
+  });
 });

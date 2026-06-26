@@ -222,6 +222,35 @@ describe("FallbackChainProvider", () => {
     expect(p2.chat).toHaveBeenCalledTimes(1);
   });
 
+  // Unlike a generic gateway ModelError (above, which SHOULD fail over to a sibling),
+  // a ChatGPT/Codex SUBSCRIPTION rejecting its pinned model with HTTP 400 is a STATIC
+  // config mismatch — the subscription serves a fixed Codex model set, so retrying or
+  // failing over re-fails identically. It must be NON-retryable AND must NOT churn the
+  // provider's health (recording a cooldown would take an otherwise-healthy provider
+  // offline for hours). This is the exact live bug: a churned gpt-5.2 override 400'd
+  // the Codex subscription, poisoned OpenAI's health, and — with the only sibling on a
+  // weekly-quota cooldown — collapsed the chain to a false "no available provider".
+  it("treats a Codex subscription model-rejection (400) as non-retryable WITHOUT churning health", async () => {
+    const health = ProviderHealthRegistry.getInstance();
+    const recordFailure = vi.spyOn(health, "recordFailure");
+
+    const p1 = { ...createMockProvider(), name: "openai" };
+    (p1.chat as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error('OpenAI The configured model "gpt-5.2" is not accepted by the ChatGPT/Codex subscription endpoint (HTTP 400). The \'gpt-5.2\' model is not supported when using Codex with a ChatGPT account. Set the OpenAI model to a Codex-supported one (such as gpt-5.4) or switch OpenAI to API-key mode.'),
+    );
+    const p2 = { ...createMockProvider({ text: "should-not-reach" }), name: "deepseek" };
+
+    const chain = new FallbackChainProvider([p1, p2]);
+
+    // Non-retryable: rethrows immediately, does NOT hammer the sibling.
+    await expect(chain.chat("sys", [], [])).rejects.toThrow(/not accepted by the ChatGPT\/Codex subscription/i);
+    expect(p2.chat).not.toHaveBeenCalled();
+
+    // Health not poisoned — the provider stays available for a corrected model.
+    expect(recordFailure).not.toHaveBeenCalled();
+    expect(health.isAvailable("openai")).toBe(true);
+  });
+
   // Guard: a GENUINE auth 401 stays non-retryable (don't hammer every sibling with a
   // request that will fail identically). Proves the carve-out is scoped to model errors.
   it("still treats a genuine auth 401 as non-retryable (rethrows without trying siblings)", async () => {

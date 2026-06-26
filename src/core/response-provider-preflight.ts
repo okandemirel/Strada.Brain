@@ -6,6 +6,7 @@ import {
   type ProviderCredential,
   type ProviderCredentialMap,
 } from "../agents/providers/provider-registry.js";
+import { codexSubscriptionProbeFailureMessage } from "../agents/providers/codex-model-rejection.js";
 
 export interface ResponseProviderPreflightFailure {
   providerId: string;
@@ -66,7 +67,7 @@ function getOpenAiSubscriptionFailureDetail(
   if (!inspection.ok) {
     return `${inspection.detail} Sign in again on this machine or switch OpenAI to API-key mode.`;
   }
-  return "OpenAI ChatGPT/Codex subscription health probe failed. Verify the configured model is Codex-compatible (e.g. gpt-5.2) or switch OpenAI to API-key mode.";
+  return codexSubscriptionProbeFailureMessage();
 }
 
 function getGenericFailureDetail(providerId: string, providerName: string): string {

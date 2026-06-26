@@ -21,6 +21,10 @@ import {
   OPENAI_CHATGPT_AUTH_DEFAULT_FILE,
 } from "../../common/openai-subscription-auth.js";
 import { resolveCodexCliVersion } from "../../common/openai-codex-login.js";
+import {
+  codexModelRejectionMessage,
+  isRawCodexModelRejection,
+} from "./codex-model-rejection.js";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -107,6 +111,26 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
   protected readonly auth: OpenAIProviderAuth;
   protected readonly model: string;
   protected readonly baseUrl: string;
+  /**
+   * The model the ChatGPT/Codex subscription `/responses` path is PINNED to.
+   *
+   * INVARIANT: a consumer ChatGPT/Codex subscription only serves a small set of
+   * Codex-enabled models, and rejects anything else with HTTP 400 ("The 'X' model
+   * is not supported when using Codex with a ChatGPT account."). Strada routes by
+   * per-chat/delegation preference, which can construct a fresh OpenAIProvider with
+   * an arbitrary model override (e.g. the global gpt-5.2 fallback) even though the
+   * subscription was configured (and booted ready) on a different Codex-supported
+   * model (e.g. gpt-5.4). Sending that override would 400 and churn provider health.
+   *
+   * So the subscription request model is resolved ONCE at construction to the
+   * user's configured Codex model — `OPENAI_MODEL` env when set (the SAME value the
+   * boot-time preflight used to verify the subscription is healthy), falling back to
+   * the constructor model. A churned per-call override that the subscription cannot
+   * serve is therefore ignored in favour of the known-good configured model. Only
+   * relevant in subscription mode; api-key mode always uses `this.model` verbatim so
+   * per-call/override models keep working.
+   */
+  private readonly chatGptModel: string;
   /** Human-readable reason the last healthCheck() failed (for accurate preflight diagnostics). */
   private lastHealthDetail?: string;
   /**
@@ -152,6 +176,13 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
     this.auth = typeof auth === "string" ? { mode: "api-key", apiKey: auth } : auth;
     this.model = model;
     this.baseUrl = this.isChatGptSubscriptionMode() ? OPENAI_CHATGPT_RESPONSES_BASE_URL : baseUrl;
+    // Pin the subscription `/responses` model to the user-configured Codex model
+    // (OPENAI_MODEL), so a churned per-chat/delegation model override that the
+    // subscription cannot serve never reaches the request. See `chatGptModel`.
+    const envModel = this.isChatGptSubscriptionMode()
+      ? process.env["OPENAI_MODEL"]?.trim()
+      : undefined;
+    this.chatGptModel = envModel && envModel.length > 0 ? envModel : model;
     // The codex-shaped User-Agent is resolved lazily on first request via
     // getCodexUserAgent() — only in subscription mode — so construction stays
     // pure and api-key mode never pays the version lookup.
@@ -359,12 +390,25 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
     signal?: AbortSignal,
   ): Promise<ProviderResponse> {
     const logger = getLogger();
-    let response = await this.fetchWithRetry(`${this.baseUrl}/responses`, {
-      method: "POST",
-      headers: await this.buildHeaders(),
-      body: JSON.stringify(this.buildChatGptResponsesRequest(systemPrompt, messages, tools)),
-      signal,
-    });
+    let response: Response;
+    try {
+      response = await this.fetchWithRetry(`${this.baseUrl}/responses`, {
+        method: "POST",
+        headers: await this.buildHeaders(),
+        body: JSON.stringify(this.buildChatGptResponsesRequest(systemPrompt, messages, tools)),
+        signal,
+      });
+    } catch (err) {
+      // fetchWithRetry throws on a non-retryable non-ok status (e.g. a 400 whose body
+      // is the Codex "model is not supported when using Codex with a ChatGPT account").
+      // SAFETY NET: rewrite that raw transport error into the clear, actionable message
+      // (the same guidance the health probe surfaces) so the user is told to set a
+      // Codex-supported model / use API-key mode — and so the FallbackChain recognises
+      // it as a static CONFIG mismatch (non-retryable, no health churn) instead of a
+      // transient model error that would collapse the chain to a false "no available
+      // provider". We do NOT loop: the request already used the single pinned model.
+      throw this.rewriteChatGptModelRejection(err);
+    }
 
     // Refresh-on-401: a server-invalidated/rotated subscription token (whose local
     // JWT is not yet expired, so ensureOpenAiSubscriptionAuth won't have refreshed
@@ -380,6 +424,12 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
       });
     }
     if (!response.ok) {
+      // Defensive net: in practice fetchWithRetry already THROWS on every non-ok,
+      // non-retryable status (401/403/400/404), so this branch is not reached on the
+      // live chat path — a 400/404 model rejection is surfaced by the catch above via
+      // rewriteChatGptModelRejection, and an auth 401/403 propagates as the thrown
+      // transport error. (describeChatGptHealthFailure's 400/404 model-rejection
+      // branch is exercised by healthCheck(), which uses a raw fetch, not this path.)
       const detail = await this.describeChatGptHealthFailure(response);
       throw new Error(`${this.name} ${detail}`);
     }
@@ -957,7 +1007,8 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
     tools: ToolDefinition[],
   ): Record<string, unknown> {
     const body: Record<string, unknown> = {
-      model: this.model,
+      // Always the pinned Codex-supported model (NOT a churned per-call override).
+      model: this.chatGptModel,
       instructions: systemPrompt,
       input: this.buildChatGptInput(messages),
       // Request a reasoning summary so gpt-5.x reasoning models stream
@@ -1012,14 +1063,42 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
       return `ChatGPT/Codex subscription was rejected (HTTP ${response.status}). This most likely means the codex token needs refreshing — re-run \`codex login\` to renew it — or that the codex wire protocol changed (the client-identity headers Strada sends to match the codex CLI may be out of date). API-key mode remains a stable alternative if the subscription path keeps failing.${backendDetail ? ` ${backendDetail}` : ""}`;
     }
     if (response.status === 400 || response.status === 404) {
-      return `The configured model "${this.model}" is not accepted by the ChatGPT/Codex subscription endpoint (HTTP ${response.status}).${backendDetail ? ` ${backendDetail}` : ""} Choose a Codex-compatible model (e.g. gpt-5.2) or switch OpenAI to API-key mode.`;
+      return codexModelRejectionMessage(this.chatGptModel, {
+        status: response.status,
+        backendDetail: backendDetail || undefined,
+      });
     }
     return `ChatGPT/Codex subscription health probe failed (HTTP ${response.status}).${backendDetail ? ` ${backendDetail}` : ""}`;
   }
 
+  /**
+   * Rewrite a raw subscription `/responses` transport error into a clear, actionable
+   * message WHEN it is a Codex model-rejection (HTTP 400 "...model is not supported
+   * when using Codex with a ChatGPT account."). fetchWithRetry surfaces that as a
+   * terse `"<name> API error 400: {...}"`, which (a) buries the fix and (b) would be
+   * read by the FallbackChain as a transient/fail-over-able model error. The rewritten
+   * message names the pinned model, points at a Codex-supported model and the API-key
+   * alternative, and carries the distinct "not accepted by the ChatGPT/Codex
+   * subscription endpoint" phrase the chain recognises as a non-retryable config error
+   * (so the provider's health is not churned). Any other error is returned untouched.
+   */
+  private rewriteChatGptModelRejection(err: unknown): Error {
+    const base = err instanceof Error ? err : new Error(String(err));
+    const msg = base.message;
+    if (!isRawCodexModelRejection(msg)) {
+      return base;
+    }
+    return new Error(
+      `${this.name} ${codexModelRejectionMessage(this.chatGptModel, { backendDetail: msg })}`,
+      { cause: base },
+    );
+  }
+
   private buildChatGptHealthCheckRequest(): Record<string, unknown> {
     return {
-      model: this.model,
+      // Probe the SAME pinned model the live `/responses` calls will use, so a
+      // healthy boot guarantees the model the chat path sends is Codex-supported.
+      model: this.chatGptModel,
       instructions: "Connectivity health check. Reply with OK.",
       input: [
         {

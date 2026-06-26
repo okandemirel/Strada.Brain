@@ -525,7 +525,7 @@ describe("SetupWizard path validation", () => {
       failures: [{
         providerId: "openai",
         providerName: "OpenAI",
-        detail: 'The configured model "gpt-4.1-mini" is not accepted by the ChatGPT/Codex subscription endpoint (HTTP 400). Choose a Codex-compatible model (e.g. gpt-5.2) or switch OpenAI to API-key mode.',
+        detail: 'The configured model "gpt-4.1-mini" is not accepted by the ChatGPT/Codex subscription endpoint (HTTP 400). Set the OpenAI model to a Codex-supported one (such as gpt-5.4) or switch OpenAI to API-key mode.',
       }],
     });
 

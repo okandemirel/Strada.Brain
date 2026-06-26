@@ -15,6 +15,7 @@ import { ProviderHealthRegistry } from "./provider-health.js";
 import { sanitizeSecrets } from "../../security/secret-sanitizer.js";
 import { QUOTA_LIMIT_RE } from "../orchestrator-runtime-utils.js";
 import { QuotaExhaustedError, QUOTA_EXHAUSTED_PHRASE } from "../../common/fetch-with-retry.js";
+import { CODEX_MODEL_UNSUPPORTED_RE } from "./codex-model-rejection.js";
 
 /**
  * Check whether a provider error is likely caused by the request itself
@@ -34,6 +35,22 @@ const BAD_REQUEST_RE = /bad.?request|invalid|malformed/i;
  * collapsing the chain to a false "All providers failed".
  */
 const MODEL_UNSUPPORTED_RE = /ModelError|model[\s\S]{0,80}not supported|unsupported model|no such model|model[\s\S]{0,40}(not found|does not exist)/i;
+/**
+ * A ChatGPT/Codex SUBSCRIPTION rejecting the configured model with HTTP 400/404
+ * ("The 'X' model is not supported when using Codex with a ChatGPT account." — or
+ * Strada's own "... is not accepted by the ChatGPT/Codex subscription endpoint").
+ * Unlike the generic MODEL_UNSUPPORTED_RE above (an OpenCode/Zen gateway mismatch
+ * that SHOULD fail over to a healthy sibling), this is a STATIC per-provider config
+ * mismatch: the subscription only serves a fixed set of Codex models, so retrying or
+ * failing over the SAME pinned model just re-fails identically while churning this
+ * otherwise-healthy provider's health. It is therefore classified NON-retryable AND
+ * excluded from health recording, so the chain surfaces the clear actionable message
+ * (set a Codex-supported model / use API-key mode) instead of collapsing to a false
+ * "no available provider" when the only sibling is on cooldown.
+ *
+ * The recogniser regex itself lives in codex-model-rejection.ts so it stays in sync
+ * with the message openai.ts/preflight build (a shared cross-module contract).
+ */
 /** Regex for invalid tool/schema errors */
 const INVALID_TOOL_RE = /invalid.*tool|tool.*invalid|invalid.*schema/i;
 /** Regex patterns for reasoning model timeout detection */
@@ -64,6 +81,13 @@ const QUOTA_HARD_STOP_RE = new RegExp(QUOTA_EXHAUSTED_PHRASE, "i");
 function isNonRetryableRequestError(error: unknown): boolean {
   const msg = error instanceof Error ? error.message : String(error);
   if (REASONING_CONTENT_RE.test(msg)) return false;
+  // A ChatGPT/Codex subscription rejecting its pinned model is a STATIC config
+  // mismatch (the subscription serves a fixed Codex model set): retrying/failing
+  // over re-fails identically and churns an otherwise-healthy provider, so treat it
+  // as non-retryable and surface the actionable message. Checked BEFORE the generic
+  // MODEL_UNSUPPORTED_RE so the Codex case is not misread as a fail-over-able gateway
+  // mismatch.
+  if (CODEX_MODEL_UNSUPPORTED_RE.test(msg)) return true;
   // Model-not-supported / ModelError is a per-provider config mismatch, not a fatal
   // auth/request error — retryable so the chain fails over to a healthy sibling.
   if (MODEL_UNSUPPORTED_RE.test(msg)) return false;
@@ -527,7 +551,15 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
         // it must NOT inherit the multi-hour quota cooldown. Single-provider setups use
         // shorter cooldowns since there is no fallback.
         const isSingleProvider = this.providers.length === 1;
-        if (isQuotaHardStop) {
+        // A ChatGPT/Codex subscription rejecting its pinned model is a static CONFIG
+        // mismatch, NOT a provider-health problem — recording a failure (or cooldown)
+        // would churn an otherwise-healthy provider for hours. Skip health recording
+        // entirely; the non-retryable classification below surfaces the clear,
+        // actionable message and stops the chain from collapsing.
+        const isCodexModelConfigError = CODEX_MODEL_UNSUPPORTED_RE.test(errorMsg);
+        if (isCodexModelConfigError) {
+          // intentionally record nothing — provider stays healthy for a corrected model
+        } else if (isQuotaHardStop) {
           // Size the cooldown from the provider's Retry-After (capped). A single-provider
           // setup still gets the hard-stop cooldown — there is no sibling to fall over to,
           // and futilely retrying a days-out quota block helps no one; isAvailable()
