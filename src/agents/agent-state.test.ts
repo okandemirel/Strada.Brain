@@ -105,6 +105,13 @@ describe("AgentState", () => {
       expect(canTransition(AgentPhase.REPLANNING, AgentPhase.FAILED)).toBe(true);
     });
 
+    it("should allow REPLANNING -> REPLANNING (idempotent re-replan)", () => {
+      // A verifier/loop-recovery gate can request "replan again" while the loop is
+      // still in REPLANNING; this self-edge prevents a spurious throw that failed
+      // supervisor nodes ("Invalid phase transition: replanning -> replanning").
+      expect(canTransition(AgentPhase.REPLANNING, AgentPhase.REPLANNING)).toBe(true);
+    });
+
     it("should reject PLANNING -> REFLECTING", () => {
       expect(canTransition(AgentPhase.PLANNING, AgentPhase.REFLECTING)).toBe(false);
     });
@@ -137,11 +144,12 @@ describe("AgentState", () => {
       expect(canTransition(AgentPhase.REFLECTING, AgentPhase.PLANNING)).toBe(false);
     });
 
-    it("should reject self-transitions", () => {
+    it("should reject self-transitions except the REPLANNING idempotent self-edge", () => {
       expect(canTransition(AgentPhase.PLANNING, AgentPhase.PLANNING)).toBe(false);
       expect(canTransition(AgentPhase.EXECUTING, AgentPhase.EXECUTING)).toBe(false);
       expect(canTransition(AgentPhase.REFLECTING, AgentPhase.REFLECTING)).toBe(false);
-      expect(canTransition(AgentPhase.REPLANNING, AgentPhase.REPLANNING)).toBe(false);
+      // REPLANNING -> REPLANNING is the ONE allowed self-edge (re-replan while still
+      // replanning); asserted positively in "should allow REPLANNING -> REPLANNING".
     });
   });
 
@@ -174,6 +182,13 @@ describe("AgentState", () => {
       transitionPhase(state, AgentPhase.EXECUTING);
 
       expect(state.phase).toBe(AgentPhase.PLANNING);
+    });
+
+    it("should allow REPLANNING -> REPLANNING without throwing (re-replan)", () => {
+      const planning = createInitialState("test task");
+      const replanning = transitionPhase(planning, AgentPhase.REPLANNING);
+      const reReplanned = transitionPhase(replanning, AgentPhase.REPLANNING);
+      expect(reReplanned.phase).toBe(AgentPhase.REPLANNING);
     });
 
     it("should throw on invalid transition", () => {

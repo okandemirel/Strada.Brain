@@ -50,7 +50,12 @@ const VALID_TRANSITIONS: ReadonlyMap<AgentPhase, ReadonlySet<AgentPhase>> =
     ],
     [
       AgentPhase.REPLANNING,
-      new Set([AgentPhase.EXECUTING, AgentPhase.FAILED]),
+      // REPLANNING -> REPLANNING is an idempotent self-edge: a verifier/loop-recovery
+      // gate can request "replan again" while the loop is still in REPLANNING (the
+      // REPLANNING -> EXECUTING clear happens later in the same iteration), so
+      // re-entering REPLANNING must be allowed rather than throwing and failing the
+      // supervisor node. Scoped to REPLANNING only — no other phase gets a self-edge.
+      new Set([AgentPhase.EXECUTING, AgentPhase.REPLANNING, AgentPhase.FAILED]),
     ],
     [AgentPhase.COMPLETE, new Set<AgentPhase>()],
     [AgentPhase.FAILED, new Set<AgentPhase>()],
