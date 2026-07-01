@@ -470,6 +470,95 @@ describe("ProviderHealthRegistry — areAllUnavailable", () => {
   });
 });
 
+describe("ProviderHealthRegistry — suggestRecoveryWaitMs", () => {
+  afterEach(() => {
+    ProviderHealthRegistry.resetInstance();
+    vi.restoreAllMocks();
+    delete process.env["PROVIDER_HEALTH_RECOVERY_WAIT_MS"];
+  });
+
+  it("returns null when no providers are tracked", () => {
+    const registry = new ProviderHealthRegistry();
+    expect(registry.suggestRecoveryWaitMs()).toBeNull();
+  });
+
+  it("returns null when at least one provider is available (use it, no wait)", () => {
+    const registry = new ProviderHealthRegistry({ degradedThreshold: 2, downThreshold: 3, degradedCooldownMs: 30_000, downCooldownMs: 120_000 });
+    triggerDown(registry, "prov-a", 3); // down + cooling
+    registry.recordFailure("prov-b", "transient");
+    registry.recordSuccess("prov-b"); // prov-b tracked but healthy → something usable now
+    expect(registry.suggestRecoveryWaitMs()).toBeNull();
+  });
+
+  it("returns the bounded wait when all cooled and soonest recovery is imminent", () => {
+    const registry = new ProviderHealthRegistry({ degradedThreshold: 2, downThreshold: 5, degradedCooldownMs: 30_000, downCooldownMs: 120_000 });
+    const time = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => time);
+    registry.recordFailure("prov", "err");
+    registry.recordFailure("prov", "err"); // degraded, 30s cooldown (≤ 60s default window)
+    expect(registry.suggestRecoveryWaitMs()).toBe(30_000);
+  });
+
+  it("returns null when the soonest recovery is beyond the wait window", () => {
+    const registry = new ProviderHealthRegistry({ degradedThreshold: 2, downThreshold: 5, degradedCooldownMs: 30_000, downCooldownMs: 120_000 });
+    const time = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => time);
+    triggerDown(registry, "prov", 5); // down, ≥120s cooldown > 60s window → fail fast
+    expect(registry.suggestRecoveryWaitMs()).toBeNull();
+  });
+
+  it("returns the smaller remaining cooldown across multiple cooled providers", () => {
+    const registry = new ProviderHealthRegistry({ degradedThreshold: 2, downThreshold: 5, degradedCooldownMs: 30_000, downCooldownMs: 120_000 });
+    let time = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => time);
+    registry.recordFailure("prov-a", "err");
+    registry.recordFailure("prov-a", "err"); // recovers at 1_030_000
+    time += 10_000; // now = 1_010_000
+    registry.recordFailure("prov-b", "err");
+    registry.recordFailure("prov-b", "err"); // recovers at 1_040_000
+    // soonest = prov-a @ 1_030_000; remaining = 1_030_000 - 1_010_000 = 20_000
+    expect(registry.suggestRecoveryWaitMs()).toBe(20_000);
+  });
+
+  it("honours PROVIDER_HEALTH_RECOVERY_WAIT_MS to widen the window", () => {
+    process.env["PROVIDER_HEALTH_RECOVERY_WAIT_MS"] = "200000"; // 200s
+    const registry = new ProviderHealthRegistry({ degradedThreshold: 2, downThreshold: 5, degradedCooldownMs: 30_000, downCooldownMs: 120_000 });
+    const time = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => time);
+    triggerDown(registry, "prov", 5); // ~120s cooldown, now within 200s window
+    const waitMs = registry.suggestRecoveryWaitMs();
+    expect(waitMs).not.toBeNull();
+    expect(waitMs!).toBeGreaterThan(60_000);
+  });
+
+  it("scopes the decision to the given provider set (ignores out-of-scope providers)", () => {
+    const registry = new ProviderHealthRegistry({ degradedThreshold: 2, downThreshold: 5, degradedCooldownMs: 30_000, downCooldownMs: 120_000 });
+    const now = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    // In-scope provider: down FAR beyond the recovery window.
+    triggerDown(registry, "chain-prov", 5);
+    Object.assign(registry.getEntry("chain-prov")!, { cooldownUntil: now + 10 * 60_000 });
+    // Out-of-scope provider: recovering imminently (~30s).
+    registry.recordFailure("other-prov", "err");
+    registry.recordFailure("other-prov", "err");
+
+    // Unscoped sees the imminent out-of-scope provider → non-null wait...
+    expect(registry.suggestRecoveryWaitMs(now)).not.toBeNull();
+    // ...but scoped to the chain's own down-far provider → fail fast (null), no wait for a
+    // provider the caller cannot use.
+    expect(registry.suggestRecoveryWaitMs(now, ["chain-prov"])).toBeNull();
+  });
+
+  it("returns null when a scoped provider is untracked (fresh ⇒ available ⇒ no wait)", () => {
+    const registry = new ProviderHealthRegistry({ degradedThreshold: 2, downThreshold: 5, degradedCooldownMs: 30_000, downCooldownMs: 120_000 });
+    const now = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    triggerDown(registry, "cooled", 5); // tracked + down
+    // Chain = [cooled, fresh]; "fresh" was never tracked ⇒ healthy ⇒ usable now ⇒ no wait.
+    expect(registry.suggestRecoveryWaitMs(now, ["cooled", "fresh"])).toBeNull();
+  });
+});
+
 describe("ProviderHealthRegistry — isRecovering", () => {
   afterEach(() => {
     ProviderHealthRegistry.resetInstance();

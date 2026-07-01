@@ -36,18 +36,25 @@ export interface ProviderHealthConfig {
   downCooldownMs: number;
 }
 
+/**
+ * Parse an integer env override, falling back to `fallback` when unset, non-numeric, or
+ * below `min`. Single source of truth for the file's env-int knobs (thresholds, cooldowns,
+ * recovery-wait) so the validity predicate can't drift between them. `min` distinguishes
+ * knobs that accept 0 (thresholds/waits) from those that require a positive value (cooldown
+ * ceilings, where 0 is meaningless).
+ */
+function parseEnvIntMs(key: string, fallback: number, min = 0): number {
+  const raw = process.env[key];
+  const parsed = raw ? parseInt(raw, 10) : NaN;
+  return Number.isFinite(parsed) && parsed >= min ? parsed : fallback;
+}
+
 function resolveDefaultConfig(): ProviderHealthConfig {
-  const envInt = (key: string, fallback: number): number => {
-    const raw = process.env[key];
-    if (!raw) return fallback;
-    const parsed = parseInt(raw, 10);
-    return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
-  };
   return {
-    degradedThreshold: envInt("PROVIDER_HEALTH_DEGRADED_THRESHOLD", 2),
-    downThreshold: envInt("PROVIDER_HEALTH_DOWN_THRESHOLD", 5),
-    degradedCooldownMs: envInt("PROVIDER_HEALTH_DEGRADED_COOLDOWN_MS", 30_000),
-    downCooldownMs: envInt("PROVIDER_HEALTH_DOWN_COOLDOWN_MS", 120_000),
+    degradedThreshold: parseEnvIntMs("PROVIDER_HEALTH_DEGRADED_THRESHOLD", 2),
+    downThreshold: parseEnvIntMs("PROVIDER_HEALTH_DOWN_THRESHOLD", 5),
+    degradedCooldownMs: parseEnvIntMs("PROVIDER_HEALTH_DEGRADED_COOLDOWN_MS", 30_000),
+    downCooldownMs: parseEnvIntMs("PROVIDER_HEALTH_DOWN_COOLDOWN_MS", 120_000),
   };
 }
 
@@ -65,9 +72,20 @@ const SINGLE_PROVIDER_QUOTA_COOLDOWN_MS = 15 * 60 * 1000; // 15 minutes (when no
  * day/week-scale quota block for the rest of the session, bounded enough to self-heal.
  */
 function resolveMaxQuotaCooldownMs(): number {
-  const raw = process.env["PROVIDER_HEALTH_MAX_QUOTA_COOLDOWN_MS"];
-  const parsed = raw ? parseInt(raw, 10) : NaN;
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 24 * 60 * 60 * 1000; // 24h
+  return parseEnvIntMs("PROVIDER_HEALTH_MAX_QUOTA_COOLDOWN_MS", 24 * 60 * 60 * 1000, 1); // 24h, must be > 0
+}
+
+/**
+ * Upper bound on how long a caller (FallbackChain / delegation gate) may BLOCK waiting
+ * for the soonest cooled provider to exit cooldown before aborting. Rides out a transient
+ * all-cooled blip (every provider briefly degraded) rather than failing the whole task,
+ * while never stalling on a genuinely-down or quota-blocked provider (recovery beyond this
+ * window returns null → fail fast). Overridable via env PROVIDER_HEALTH_RECOVERY_WAIT_MS.
+ * Default 60s == fetch-with-retry maxDelayMs (the longest single backoff the system already
+ * tolerates) and comfortably under the 90s first-response timeout.
+ */
+function resolveRecoveryWaitMs(): number {
+  return parseEnvIntMs("PROVIDER_HEALTH_RECOVERY_WAIT_MS", 60_000); // 60s
 }
 
 export class ProviderHealthRegistry {
@@ -395,6 +413,37 @@ export class ProviderHealthRegistry {
     // (recordFailure/recordQuotaExhausted both increment the counter).
     // When cooldown expires without an explicit recordSuccess, the provider is "recovering".
     return entry.status !== "healthy" && Date.now() >= entry.cooldownUntil;
+  }
+
+  /**
+   * When ALL of the caller's providers are currently unavailable, return the bounded number of
+   * milliseconds to wait for the SOONEST one to exit cooldown — but ONLY when that recovery
+   * is imminent (within resolveRecoveryWaitMs()). Returns null when: the set is empty, at least
+   * one provider is already available (no wait needed — use it), or the soonest recovery is
+   * beyond the wait window (a genuinely-down / quota-blocked provider — waiting synchronously
+   * would just stall the caller, so fail fast instead). Lets a caller ride out a transient
+   * all-cooled blip rather than aborting the whole task on a brief cooldown overlap.
+   *
+   * @param providerNames Scope the decision to exactly these providers (e.g. a FallbackChain's
+   *   own `this.providers`). A chain holding a strict subset of the globally-tracked providers
+   *   must NOT wait for — or be blocked by — a provider it cannot use. Omit to consider every
+   *   tracked provider (the coarse delegation pre-flight gate). An untracked name counts as
+   *   available (never failed ⇒ healthy), so a chain with any fresh provider never waits.
+   */
+  suggestRecoveryWaitMs(now: number = Date.now(), providerNames?: readonly string[]): number | null {
+    const names = providerNames ?? [...this.entries.keys()];
+    if (names.length === 0) return null;
+    let soonest = Infinity;
+    for (const rawName of names) {
+      if (this.isAvailable(rawName)) return null; // a usable provider exists — no wait
+      // Unavailable ⇒ tracked, status !== healthy, AND cooldownUntil > now (isAvailable
+      // auto-recovers once now >= cooldownUntil), so cooldownUntil is a real future instant.
+      const entry = this.entries.get(this.norm(rawName));
+      if (entry && entry.cooldownUntil < soonest) soonest = entry.cooldownUntil;
+    }
+    if (!Number.isFinite(soonest)) return null;
+    const waitMs = Math.max(0, soonest - now);
+    return waitMs <= resolveRecoveryWaitMs() ? waitMs : null;
   }
 
   /** Persist health state to disk so it survives process restarts. */

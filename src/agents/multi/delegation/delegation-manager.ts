@@ -274,7 +274,15 @@ export class DelegationManager {
         (e) => e.status === "down" && now < e.cooldownUntil,
       );
       if (allDown) {
-        throw new Error("All providers are in cooldown — delegation skipped to prevent thundering herd");
+        // Only hard-abort when recovery is NOT imminent. When the soonest provider is about
+        // to exit a transient cooldown, let delegation proceed — the sub-agent's FallbackChain
+        // performs a single bounded wait-for-recovery (the one place the wait lives) instead of
+        // failing the whole task on a brief all-cooled blip. The FallbackChain probing guard
+        // still prevents a thundering herd of concurrent probes to the recovering provider.
+        const recoveryImminent = healthRegistry.suggestRecoveryWaitMs(now) !== null;
+        if (!recoveryImminent) {
+          throw new Error("All providers are in cooldown — delegation skipped to prevent thundering herd");
+        }
       }
     }
 

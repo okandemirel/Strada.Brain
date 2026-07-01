@@ -14,7 +14,7 @@ import { getLogger } from "../../utils/logger.js";
 import { ProviderHealthRegistry } from "./provider-health.js";
 import { sanitizeSecrets } from "../../security/secret-sanitizer.js";
 import { QUOTA_LIMIT_RE } from "../orchestrator-runtime-utils.js";
-import { QuotaExhaustedError, QUOTA_EXHAUSTED_PHRASE } from "../../common/fetch-with-retry.js";
+import { QuotaExhaustedError, QUOTA_EXHAUSTED_PHRASE, sleep } from "../../common/fetch-with-retry.js";
 import { CODEX_MODEL_UNSUPPORTED_RE } from "./codex-model-rejection.js";
 
 /**
@@ -415,6 +415,26 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
     const health = ProviderHealthRegistry.getInstance();
     let lastError: Error | null = null;
     let attempted = 0;
+
+    // Transient all-cooled guard: when EVERY provider is currently on cooldown but the
+    // soonest is about to recover (within the bounded recovery window), wait once rather
+    // than failing the whole task on a brief cooldown overlap. suggestRecoveryWaitMs()
+    // returns null the moment any provider is usable (→ no wait, use it) or when the
+    // soonest recovery is beyond the window (genuinely-down/quota-blocked → fall through
+    // to the loop, which surfaces the accurate "all in cooldown" terminal error). After
+    // the sleep the recovered provider becomes isAvailable and the loop probes it.
+    if (!externalSignal?.aborted) {
+      // Scope the decision to THIS chain's providers — a chain holding a subset of the
+      // globally-tracked providers must not wait for (or be blocked by) one it cannot use.
+      const waitMs = health.suggestRecoveryWaitMs(Date.now(), this.providers.map((p) => p.name));
+      if (waitMs !== null && waitMs > 0) {
+        logger.info(`All providers transiently cooled; waiting ${waitMs}ms for soonest recovery before aborting (${label})`, {
+          waitMs,
+          totalProviders: this.providers.length,
+        });
+        await sleep(waitMs, externalSignal);
+      }
+    }
 
     for (let i = 0; i < this.providers.length; i++) {
       const provider = this.providers[i]!;

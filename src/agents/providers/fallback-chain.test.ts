@@ -346,6 +346,43 @@ describe("FallbackChainProvider", () => {
     expect(result.text).toBe("from-p1");
   });
 
+  it("waits once for the soonest provider to recover when the whole chain is transiently cooled", async () => {
+    const health = ProviderHealthRegistry.getInstance();
+    const p1 = { ...createMockProvider({ text: "recovered-p1" }), name: "cooled-provider" };
+    const chain = new FallbackChainProvider([p1]);
+
+    // Only provider is transiently cooled with an IMMINENT recovery (~30ms ahead, well
+    // inside the 60s window). The chain must wait once rather than throw "all in cooldown".
+    health.recordFailure("cooled-provider", "transient 429");
+    health.recordFailure("cooled-provider", "transient 429"); // degraded
+    const entry = health.getEntry("cooled-provider")!;
+    Object.assign(entry, { cooldownUntil: Date.now() + 30 });
+    expect(health.isAvailable("cooled-provider")).toBe(false);
+    expect(health.suggestRecoveryWaitMs()).not.toBeNull();
+
+    const result = await chain.chat("sys", [], []);
+
+    // After the bounded wait the cooldown has elapsed → provider is probed + used.
+    expect(result.text).toBe("recovered-p1");
+    expect((p1.chat as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("fails fast (no bounded wait) when the soonest recovery is beyond the window", async () => {
+    const health = ProviderHealthRegistry.getInstance();
+    const p1 = { ...createMockProvider(), name: "down-provider" };
+    const chain = new FallbackChainProvider([p1]);
+
+    // Down with a cooldown far beyond the recovery window → suggestRecoveryWaitMs() === null.
+    for (let i = 0; i < 5; i++) health.recordFailure("down-provider", "err");
+    const entry = health.getEntry("down-provider")!;
+    Object.assign(entry, { cooldownUntil: Date.now() + 10 * 60_000 }); // 10 min ahead
+    expect(health.suggestRecoveryWaitMs()).toBeNull();
+
+    const started = Date.now();
+    await expect(chain.chat("sys", [], [])).rejects.toThrow(/cooldown/i);
+    expect(Date.now() - started).toBeLessThan(1000); // no bounded wait was taken
+  });
+
   it("skips provider when probe fails", async () => {
     const health = ProviderHealthRegistry.getInstance();
 

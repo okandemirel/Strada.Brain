@@ -513,7 +513,12 @@ async function runFetchLoop(
   throw new Error(`${callerName} max retries exceeded`);
 }
 
-function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+/**
+ * Sleep for `ms`, rejecting early if `signal` aborts. Exported for reuse by callers
+ * that need a bounded, abortable wait (e.g. FallbackChain waiting for the soonest
+ * provider cooldown to expire) without re-implementing the abort plumbing.
+ */
+export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) { reject(signal.reason ?? new Error("Aborted")); return; }
     const timer = setTimeout(resolve, ms);

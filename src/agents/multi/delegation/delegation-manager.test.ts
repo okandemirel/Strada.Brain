@@ -1038,6 +1038,67 @@ describe("DelegationManager", () => {
       );
     });
 
+    it("does NOT hard-abort when all providers are DOWN but recovery is imminent", async () => {
+      // Drive BOTH providers fully "down" (5 failures) so the allDown gate branch is actually
+      // entered, then pull their cooldown into the 60s recovery window so recoveryImminent=true.
+      // The thundering-herd gate must NOT fire — the sub-agent's FallbackChain owns the single
+      // bounded wait-for-recovery. Any other mock-driven rejection is fine; only the cooldown
+      // gate error is forbidden.
+      for (let i = 0; i < 5; i++) {
+        healthRegistry.recordFailure("deepseek", "HTTP 529 overloaded");
+        healthRegistry.recordFailure("claude", "HTTP 529 overloaded");
+      }
+      const near = Date.now() + 5_000; // within the 60s window → imminent
+      Object.assign(healthRegistry.getEntry("deepseek")!, { cooldownUntil: near });
+      Object.assign(healthRegistry.getEntry("claude")!, { cooldownUntil: near });
+      expect(healthRegistry.areAllUnavailable()).toBe(true);
+      expect(healthRegistry.suggestRecoveryWaitMs()).not.toBeNull();
+
+      const request: DelegationRequest = {
+        type: "code_review",
+        task: "Review this code",
+        parentAgentId: PARENT_AGENT_ID,
+        depth: 0,
+        mode: "sync",
+        toolContext: TEST_TOOL_CONTEXT,
+      };
+
+      await manager.delegate(request).then(
+        () => {},
+        (err: unknown) => {
+          expect(String((err as Error)?.message ?? err)).not.toContain(
+            "All providers are in cooldown",
+          );
+        },
+      );
+    });
+
+    it("hard-aborts when all providers are DOWN and recovery is NOT imminent", async () => {
+      // Both down with cooldowns far beyond the recovery window → recoveryImminent=false → the
+      // gate must still throw (pins the other side of the softening).
+      for (let i = 0; i < 5; i++) {
+        healthRegistry.recordFailure("deepseek", "HTTP 529 overloaded");
+        healthRegistry.recordFailure("claude", "HTTP 529 overloaded");
+      }
+      const far = Date.now() + 10 * 60_000; // beyond the 60s window
+      Object.assign(healthRegistry.getEntry("deepseek")!, { cooldownUntil: far });
+      Object.assign(healthRegistry.getEntry("claude")!, { cooldownUntil: far });
+      expect(healthRegistry.suggestRecoveryWaitMs()).toBeNull();
+
+      const request: DelegationRequest = {
+        type: "code_review",
+        task: "Review this code",
+        parentAgentId: PARENT_AGENT_ID,
+        depth: 0,
+        mode: "sync",
+        toolContext: TEST_TOOL_CONTEXT,
+      };
+
+      await expect(manager.delegate(request)).rejects.toThrow(
+        "All providers are in cooldown",
+      );
+    });
+
     it("allows delegation when at least one provider is healthy", async () => {
       // Mark one provider as down (5 failures)
       for (let i = 0; i < 5; i++) {
