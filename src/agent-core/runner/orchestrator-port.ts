@@ -155,6 +155,10 @@ export interface AgentRunSetupInput {
   readonly workspaceLease?: WorkspaceLease;
   readonly workspaceLeaseRetained?: boolean;
   readonly goalContext?: { readonly rootId: string; readonly nodeId: string };
+  /** Parent-episode monitor rollup scope (v1 parity: runBackgroundTask :3549-3565) — a worker
+   *  carrying this joins the parent whole-goal episode instead of spraying a sibling workspace.
+   *  MONITOR-only; identity/session unchanged. See AgentRunRequest.monitorScope. */
+  readonly monitorScope?: string;
 }
 
 export interface PrepareIterationParams {
@@ -478,7 +482,15 @@ export interface OrchestratorPort {
    * user /cancel) makes the impl record the metric as a non-COMPLETE terminal (v1 parity — a cancel
    * must never be counted as a successful completion in metrics/learning).
    */
-  persistTerminal(state: AgentState, setup: RunSetup, cancelReason?: CancelReason): Promise<void>;
+  persistTerminal(
+    state: AgentState,
+    setup: RunSetup,
+    cancelReason?: CancelReason,
+    /** The spine's REAL terminal status ("failed" when the run threw before finalizing) — the
+     *  join-settle parity source (v1 read finalStatus, :4884); AgentState.phase never reaches
+     *  COMPLETE in production, so it must NOT be derived from the state. */
+    terminalStatus?: TerminalStatus,
+  ): Promise<void>;
 
   /**
    * Project the terminal state + collected effects into the structured AgentRunResult fields the

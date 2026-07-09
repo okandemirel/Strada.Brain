@@ -59,6 +59,7 @@ import { guardedSleep } from "../events/heartbeat-guard.js";
 import type { ModelGateway } from "../model/model-gateway.js";
 import type { ModelCallResult } from "../model/model-gateway.js";
 import type { ProviderResponse, TokenUsage } from "../../agents/providers/provider-core.interface.js";
+import type { TaskProgressSignal } from "../../tasks/types.js";
 import type { WorkerUsageEvent } from "../../agents/supervisor/supervisor-types.js";
 import { AgentPhase, createInitialState, type AgentState } from "../../agents/agent-state.js";
 import { getLoggerSafe } from "../../utils/logger.js";
@@ -246,6 +247,13 @@ export class V2AgentRunner implements AgentRunner {
     // initial PLANNING state (interactive vs background differ only via IOStrategy + policy).
     let state: AgentState = createInitialState(request.prompt);
     let setup: RunSetup | undefined;
+    // Hoisted so the finally can hand persistTerminal the REAL terminal status (v1 parity: the bg
+    // finally read finalStatus :4884). `ranToTerminal` distinguishes a normal terminal (verdict
+    // stops included — they RETURN) from an exception unwinding the try: on a throw the status
+    // was never finalized, so the settle must treat the run as failed (v1: catch → FAILED).
+    let terminalReason: string | undefined;
+    let terminalStatus: TerminalStatus = "completed";
+    let ranToTerminal = false;
 
     try {
       setup = await port.setupRun(this.toSetupInput(request, mode));
@@ -273,8 +281,6 @@ export class V2AgentRunner implements AgentRunner {
       // turns abort the run. Reset on every other path (v1 orchestrator.ts:5346 reset-on-any-non-
       // truncated-turn).
       let consecutiveMaxTokens = 0;
-      let terminalReason: string | undefined;
-      let terminalStatus: TerminalStatus = "completed";
 
       // The deriveCallLimits carve the spine hands enterCall (subtractive-min vs task remaining is
       // RunClock's own job — we pass the policy's per-call windows).
@@ -357,7 +363,11 @@ export class V2AgentRunner implements AgentRunner {
             prepared.currentAssignment.modelId,
             prepared.activePrompt,
           );
-          lastProvider = prepared.currentProvider.name || lastProvider;
+          // v1 parity (trio catch): attribute by the ASSIGNMENT's provider name (:4192/:5764) —
+          // prepared.currentProvider may be a resilient FallbackChain whose synthetic name
+          // ("chain(a→b→…)") would poison per-provider usage/cost/health keys. The callable is
+          // handed to the gateway; the NAME always comes from the assignment.
+          lastProvider = prepared.currentAssignment.providerName || lastProvider;
 
           emit({ type: "step.started", step: stepNo, phase: state.phase });
 
@@ -397,8 +407,8 @@ export class V2AgentRunner implements AgentRunner {
           // ══ Accounting (gauntlet #8,#9): budget.debit + execution trace ══════════════════
           if (outcome.kind !== "threw") {
             budget.debit(toBudgetUsage(outcome.response.usage));
-            usageTotal = mergeUsage(usageTotal, prepared.currentProvider.name, outcome.response.usage);
-            port.recordProviderUsage(prepared.currentProvider.name, outcome.response.usage);
+            usageTotal = mergeUsage(usageTotal, prepared.currentAssignment.providerName, outcome.response.usage);
+            port.recordProviderUsage(prepared.currentAssignment.providerName, outcome.response.usage);
             port.recordExecutionTrace(this.traceParams(request, prepared, state, setup));
           }
 
@@ -420,7 +430,7 @@ export class V2AgentRunner implements AgentRunner {
             }
             const contrib = port.classifyFailureForVerdict({
               kind: outcome.kind === "threw" ? "throw" : "empty",
-              provider: prepared.currentProvider.name,
+              provider: prepared.currentAssignment.providerName,
               error: outcome.kind === "threw" ? outcome.error : undefined,
               response: outcome.kind === "empty" ? outcome.response : undefined,
               failedCallReason: call.token.reason, // carried, never inferred
@@ -455,7 +465,7 @@ export class V2AgentRunner implements AgentRunner {
           }
 
           // ══ SUCCESS: record health, apply outcome (gauntlet #12–#22) ══════════════════════
-          port.recordHealthSuccess(prepared.currentProvider.name);
+          port.recordHealthSuccess(prepared.currentAssignment.providerName);
           const responseText = outcome.response.text;
 
           // max_tokens continuation (gauntlet #12) — only when the truncated turn carries NO tool
@@ -486,7 +496,7 @@ export class V2AgentRunner implements AgentRunner {
               mode,
               agentState: state,
               responseText,
-              providerName: prepared.currentProvider.name,
+              providerName: prepared.currentAssignment.providerName,
               modelId: prepared.currentAssignment.modelId,
               chatId: request.chatId,
               toolCallCount: outcome.response.toolCalls.length,
@@ -530,7 +540,7 @@ export class V2AgentRunner implements AgentRunner {
             const parsed = await port.parseReflectionDecision({
               agentState: state,
               responseText,
-              providerName: prepared.currentProvider.name,
+              providerName: prepared.currentAssignment.providerName,
               modelId: prepared.currentAssignment.modelId,
             });
             if (parsed.wasOverride) {
@@ -577,7 +587,7 @@ export class V2AgentRunner implements AgentRunner {
             for (const tc of outcome.response.toolCalls) {
               emit({ type: "tool.started", toolName: tc.name, toolCallId: tc.id });
             }
-            const { trace, advancedState } = await this.executeTools(setup, outcome.response, state);
+            const { trace, advancedState, progressSignal } = await this.executeTools(setup, outcome.response, state);
             for (const tr of trace) {
               toolTrace.push({ toolName: tr.toolName, toolCallId: tr.toolCallId, success: tr.success });
               for (const f of tr.touchedFiles ?? []) touchedFiles.add(f);
@@ -591,6 +601,10 @@ export class V2AgentRunner implements AgentRunner {
                 touchedFiles: tr.touchedFiles,
               });
             }
+            // v1 parity (bg loop :4687): the port's localized per-tool-batch progress signal rides
+            // the bus as a `narrative` event; the background io adapter unwraps it back into the
+            // v1 TaskProgressUpdate stream (Kanban/progress detail: kind + toolNames + files).
+            if (progressSignal) emit({ type: "narrative", signal: progressSignal });
             // PAOR phase transition (the loop is the sole writer of AgentState). The REAL port's
             // tool turn returns the recordStepResultsAndCheckReflection-advanced state; when absent
             // (mock port returns only the trace) the canonical EXECUTING→REFLECTING move applies.
@@ -672,6 +686,7 @@ export class V2AgentRunner implements AgentRunner {
         cancelReason,
       });
 
+      ranToTerminal = true;
       return {
         // BY VALUE — kills __workerCollector.
         status: terminalStatus,
@@ -702,7 +717,14 @@ export class V2AgentRunner implements AgentRunner {
           // still-live token). A benign cancel here flips the recorded metric phase off COMPLETE (v1
           // parity: the bg catch transitions FAILED then the finally records state.phase) so a mid-run
           // /cancel no longer pollutes metrics/learning as a successful completion.
-          await port.persistTerminal(state, setup, runClock.taskToken.reason ?? undefined);
+          // 4th arg: the REAL terminal status for the join-settle parity (v1 :4884-4896); a throw
+          // (ranToTerminal false) settles as "failed" — the status default was never finalized.
+          await port.persistTerminal(
+            state,
+            setup,
+            runClock.taskToken.reason ?? undefined,
+            ranToTerminal ? terminalStatus : "failed",
+          );
         } catch (e) {
           log.warn("[v2-runner] terminal persist failed", { error: e instanceof Error ? e.message : String(e) });
         }
@@ -857,6 +879,7 @@ export class V2AgentRunner implements AgentRunner {
       workspaceLease: request.workspaceLease,
       workspaceLeaseRetained: request.workspaceLeaseRetained,
       goalContext: request.goalContext,
+      monitorScope: request.monitorScope,
     };
   }
 
@@ -925,6 +948,8 @@ export class V2AgentRunner implements AgentRunner {
       touchedFiles?: readonly string[];
     }[];
     advancedState?: AgentState;
+    /** v1 parity: the port's localized per-tool-batch progress signal (emitted as `narrative`). */
+    progressSignal?: TaskProgressSignal;
   }> {
     const port = this.deps.orchestratorPort;
     // The port's executeToolCalls is the existing ExecuteToolCallsFn seam (variadic). We pass the
@@ -953,12 +978,13 @@ export class V2AgentRunner implements AgentRunner {
             touchedFiles?: readonly string[];
           }[];
           advancedState?: AgentState;
+          progressSignal?: TaskProgressSignal;
         }
       | undefined;
 
     if (Array.isArray(raw)) return { trace: raw };
     if (raw && typeof raw === "object" && "trace" in raw) {
-      return { trace: raw.trace ?? [], advancedState: raw.advancedState };
+      return { trace: raw.trace ?? [], advancedState: raw.advancedState, progressSignal: raw.progressSignal };
     }
     return { trace: [] };
   }

@@ -18,7 +18,7 @@
  * PURELY ADDITIVE: nothing in v1 imports this yet (Phase 2 foundation).
  */
 
-import type { TaskProgressSignal } from "../../tasks/types.js";
+import type { TaskProgressSignal, TaskProgressUpdate } from "../../tasks/types.js";
 import type { CancelReason } from "../control/cancel-reason.js";
 import type { AgentPhase } from "../../agents/agent-state.js";
 import type { StopReason, TokenUsage } from "../../agents/providers/provider-core.interface.js";
@@ -210,4 +210,75 @@ export function assertNever(x: never): never {
  */
 export function isVisibleContent(e: AgentEvent): e is ModelDeltaEvent & { channel: "answer" } {
   return e.type === "model.delta" && e.channel === "answer";
+}
+
+/** Liveness-only signal: re-arms the per-task inactivity watchdog, filtered from UI (audit #8). */
+const HEARTBEAT_PROGRESS: TaskProgressSignal = { kind: "heartbeat", message: "" };
+
+/**
+ * AgentEvent → v1 TaskProgressUpdate — the io-seam adapter the background/worker routes wire in
+ * front of their `onProgress` sink (the "open WIRING DECISION" the control-plane ioSink comment
+ * deferred; before this, raw AgentEvents were cast into TaskProgressUpdate consumers, so the
+ * heartbeat filter (`update.kind === "heartbeat"`) never matched and every bus event leaked
+ * toward the UI-facing progress stream as an alien shape).
+ *
+ * PHASE-0 DUALITY: until the v1 deletion, V1AgentRunner forwards v1's TaskProgressUpdate stream
+ * VERBATIM through io.onEvent (a string or a `{kind,…}` signal — see runner/agent-runner.ts's
+ * AgentRunEvent note), while the V2 spine emits the closed `{type,…}` union. The adapter accepts
+ * both and passes v1 shapes through untouched, so one wiring serves whichever runner is selected.
+ *
+ * Mapping contract (v1 parity):
+ *  - `narrative` carries v1's TaskProgressSignal VERBATIM (by construction) → unwrap it.
+ *  - `error` / `capability` surface as visible `status` lines (v1 emitted status on both).
+ *  - Everything else (model I/O, tool start/finish ticks, lifecycle, backoff, ask/plan)
+ *    collapses to the liveness heartbeat: it re-arms the inactivity watchdog exactly like v1's
+ *    silentStream heartbeats and is filtered from the UI. Tool-batch DETAIL is not lost — the
+ *    port emits it as a localized `narrative` signal after each tool turn (see
+ *    AgentCoreToolTurnResult.progressSignal).
+ *
+ * KNOWN GAP (deliberate, deferred): v1's background verdict path progressively disclosed
+ * degraded/critical provider-health STATUS lines (applyBackgroundVerdict →
+ * buildStructuredProgressSignal); collapsing `backoff` to a heartbeat keeps that disclosure
+ * absent on the v2 route. The faithful fix belongs at the spine's failure-gate seam (emit a
+ * localized `error`/`narrative` event when health degrades), NOT in this shape adapter.
+ */
+export function agentEventToTaskProgress(e: AgentEvent | TaskProgressUpdate): TaskProgressUpdate {
+  // v1 shapes pass through verbatim (V1AgentRunner's Phase-0 stream).
+  if (typeof e === "string") return e;
+  if (!("type" in e)) return e;
+  const event = e as AgentEvent;
+  switch (event.type) {
+    case "narrative":
+      return event.signal;
+    case "error":
+      return { kind: "status", message: event.message };
+    case "capability":
+      return { kind: "status", message: event.message };
+    case "run.started":
+    case "run.ending":
+    case "run.ended":
+    case "step.started":
+    case "step.completed":
+    case "phase.changed":
+    case "epoch.rolled":
+    case "backoff":
+    case "intent.ack":
+    case "model.call.started":
+    case "model.delta":
+    case "model.tool_call":
+    case "model.call.finished":
+    case "tool.started":
+    case "tool.finished":
+    case "heartbeat":
+    case "ask_user":
+    case "show_plan":
+      return HEARTBEAT_PROGRESS;
+    default: {
+      // Compile-time exhaustiveness WITHOUT a runtime throw — an io progress adapter must never
+      // fail the run on an unknown/foreign event shape; degrade to the liveness heartbeat.
+      const _exhaustive: never = event;
+      void _exhaustive;
+      return HEARTBEAT_PROGRESS;
+    }
+  }
 }

@@ -406,6 +406,13 @@ interface AgentCoreToolTurnResult {
     touchedFiles?: readonly string[];
   }>;
   readonly advancedState: AgentState;
+  /**
+   * v1 parity (bg loop :4687): the localized per-tool-batch progress signal (kind
+   * delegation/verification/editing/inspection + files + toolNames). Built HERE (the port owns
+   * the v1 classification + localization) and emitted by the SPINE as a `narrative` bus event,
+   * which the background io adapter unwraps back into the v1 TaskProgressUpdate stream.
+   */
+  readonly progressSignal?: TaskProgressSignal;
 }
 
 /**
@@ -465,6 +472,11 @@ interface AgentCorePortRunContext {
   readonly emitProgress: (update: TaskProgressUpdate) => void;
   readonly workerCollector: WorkerRunCollector | undefined;
   readonly profileLanguage: string | undefined;
+  // v1 parity (runBackgroundTask :3549-3550): a worker carrying a parent monitorScope joins the
+  // parent whole-goal episode (joinEpisode at setup, joinEpisodeEnd at persistTerminal) instead
+  // of opening a sibling monitor workspace. False/undefined on interactive + scope-less runs.
+  readonly joinsParentEpisode: boolean;
+  readonly workerMonitorScope: string | undefined;
 }
 
 /** 1b/1c seed default for the task-scope silence ceiling: the shared
@@ -7173,11 +7185,23 @@ export class Orchestrator {
   ): import("./providers/provider.interface.js").IAIProvider | null {
     const modelId = options?.modelId;
 
-    // Honor a single-provider / hard-pinned strategy exactly: materialize the
-    // supervisor-selected provider AND model rather than building a multi-provider
-    // fallback chain, which would both ignore the pin and silently drop the chosen
-    // model (running the provider's static default instead).
-    if (!this.providerRouter || !task || options?.usesMultipleProviders === false) {
+    // Honor a single-provider / hard-pinned strategy exactly: materialize the BARE pinned
+    // provider AND model (getPrimaryProviderByName → buildPrimaryProvider, the same strict
+    // materialization ProviderManager.getProvider uses for hard pins). getProviderByName would
+    // build a resilient FALLBACK CHAIN over the pin — which both ignores the pin and, worse,
+    // can silently re-send a PRIVATE/local-pinned conversation to a cloud sibling when the
+    // pinned model stalls (trio-review HIGH). `?? null` (NOT the chain) on a missing method:
+    // the caller's `?? currentProvider` then uses the assignment provider, which for a hard
+    // pin IS the strictly-materialized pin.
+    if (options?.usesMultipleProviders === false) {
+      return (
+        this.providerManager as {
+          getPrimaryProviderByName?: (name: string, model?: string) => import("./providers/provider.interface.js").IAIProvider | null;
+        }
+      ).getPrimaryProviderByName?.(primaryName, modelId) ?? null;
+    }
+    // No router / no task classification → keep v1's resilient single-name materialization.
+    if (!this.providerRouter || !task) {
       return this.providerManager.getProviderByName?.(primaryName, modelId) ?? null;
     }
 
@@ -8737,8 +8761,27 @@ export class Orchestrator {
         c.executionStrategy = prepared.executionStrategy;
         c.lastAssignment = prepared.currentAssignment;
         c.lastToolNames = prepared.currentToolNames;
+        // RAW provider capabilities (v1 parity :4705 — v1 reads capabilities off the unwrapped
+        // assignment provider even though the CALL goes through the resilient wrap below).
         c.lastProviderCapabilities = prepared.currentProvider.capabilities;
-        return prepared as PortPreparedIteration; // currentToolDefinitions is GatewayToolDefinition[]
+        // v1 parity (deletion-map risk catch): BOTH v1 loops wrap the assignment provider with
+        // buildTaskAwareProvider before the LLM call (:3980 background / :5561 interactive) — a
+        // router-ranked multi-provider resilient chain (primary first), honoring a hard pin via
+        // usesMultipleProviders=false. The spine consumed prepared.currentProvider RAW, silently
+        // dropping the in-call fallback chain on the now-default v2 path. Wrap here so every
+        // gateway call gets the identical resilient provider v1 used.
+        const resilientProvider =
+          self.buildTaskAwareProvider(
+            prepared.currentAssignment.providerName,
+            prepared.executionStrategy.task,
+            params.agentState.phase,
+            {
+              modelId: prepared.currentAssignment.modelId,
+              identityKey: params.identityKey,
+              usesMultipleProviders: prepared.executionStrategy.usesMultipleProviders,
+            },
+          ) ?? prepared.currentProvider;
+        return { ...prepared, currentProvider: resilientProvider } as PortPreparedIteration; // currentToolDefinitions is GatewayToolDefinition[]
       },
       maybeCompactSession: (session, providerName, modelId, systemPrompt) =>
         self.maybeCompactSession(session as Session, providerName, modelId, systemPrompt),
@@ -8841,7 +8884,7 @@ export class Orchestrator {
         const text = "Task completed.";
         return { text, summary: text };
       },
-      persistTerminal: async (state: AgentState, _setup, cancelReason?: CancelReason) => {
+      persistTerminal: async (state: AgentState, _setup, cancelReason?: CancelReason, terminalStatus?: TerminalStatus) => {
         const c = ctx();
         // A BENIGN cancel (mid-run user /cancel, daemon winddown, …) must NOT be recorded as a
         // successful completion — that polluted metrics + the learning signal. v1 recorded the
@@ -8849,6 +8892,7 @@ export class Orchestrator {
         // finally recorded FAILED, never COMPLETE). Mirror that: a benign cancel records FAILED; every
         // other terminal (success / verdict-stop / non-cancel) keeps COMPLETE exactly as before.
         const cancelled = cancelReason !== undefined && isBenign(cancelReason);
+        try {
         self.recordMetricEnd(c.metricId, {
           agentPhase: cancelled ? AgentPhase.FAILED : AgentPhase.COMPLETE,
           iterations: state.iteration,
@@ -8888,6 +8932,22 @@ export class Orchestrator {
         // on EVERY exit (happy or throw), exactly once per run.
         self.currentSessionInstinctIds.delete(c.chatId);
         self.propagateInstinctIdsToChannel(c.chatId, []);
+        } finally {
+          // v1 parity (runBackgroundTask finally :4894-4896): settle the joined worker card WITHOUT
+          // marking the parent whole-goal episode terminal — the episode stays open until the ROOT
+          // run's requestEnd. In a FINALLY so a persistence throw above can never leave the card
+          // dangling "executing" (trio catch). failed mirrors v1's workerRequestFailed (:4884:
+          // finalStatus failed/blocked → true) from the spine's REAL terminal status — NOT from
+          // state.phase, which never reaches COMPLETE in production (trio HIGH catch); a benign
+          // cancel also settles as failed (v1: the abort catch transitioned FAILED).
+          if (c.joinsParentEpisode && c.conversationScope) {
+            self.monitorLifecycle?.joinEpisodeEnd(
+              c.conversationScope,
+              cancelled || terminalStatus === "failed" || terminalStatus === "blocked",
+              c.workerMonitorScope,
+            );
+          }
+        }
       },
       buildResultProjection: (params: ResultProjectionParams): AgentRunResultProjection =>
         self.portBuildResultProjection(params, ctx()),
@@ -9051,6 +9111,16 @@ export class Orchestrator {
     // (possibly-shared/fresh) session — a fresh worker session carries no scope field.
     const conversationScope = resolveConversationScope(chatId, request.conversationId);
 
+    // v1 parity (runBackgroundTask :3549-3550, deletion-map risk catch): a worker/sub-goal run
+    // carrying a parent monitorScope joins the PARENT whole-goal episode — its Kanban card nests
+    // under the parent workspace instead of spraying a sibling root. The v2 path dropped
+    // request.monitorScope entirely; without this the supervisor-bridge workers are monitor-silent
+    // on the now-default v2 route. The joinEpisode CALL fires at the END of setup (after the last
+    // throwing await) so a setup failure never leaves a dangling joined card (trio catch);
+    // joinEpisodeEnd fires from persistTerminal's finally (v1: finally :4894).
+    const workerMonitorScope = request.monitorScope?.trim() || undefined;
+    const joinsParentEpisode = Boolean(workerMonitorScope) && workerMonitorScope !== conversationScope;
+
     // Step 0 / gap #6 — load v1's worker-prologue personalization (profile, persona, autonomous-mode
     // restore, pre-computed embedding) before the prompt build (runBackgroundTask :3291-3350).
     const { profile, personaContent, preComputedEmbedding } = await this.loadRunPersonalization(
@@ -9189,6 +9259,8 @@ export class Orchestrator {
       },
       workerCollector: undefined,
       profileLanguage: undefined,
+      joinsParentEpisode,
+      workerMonitorScope,
     };
 
     const setup: PortRunSetup = {
@@ -9203,6 +9275,12 @@ export class Orchestrator {
       enableGoalDetection: this.taskManager != null,
       learnedInsights,
     };
+
+    // The join is the LAST setup step (no throwing awaits remain) — see the derivation comment
+    // above; a joined card is now guaranteed to be settled by persistTerminal's finally.
+    if (joinsParentEpisode) {
+      this.monitorLifecycle?.joinEpisode(conversationScope, queryText, workerMonitorScope);
+    }
 
     return { setup, runCtx };
   }
@@ -9865,7 +9943,23 @@ export class Orchestrator {
       };
     });
 
-    return { trace, advancedState: mem.agentState };
+    // v1 parity (bg loop :4687): the per-tool-batch structured progress signal (kind + toolNames
+    // + files, localized). v1 emitProgress'd it inline; the port RETURNS it so the spine emits it
+    // as a `narrative` bus event — the background io adapter unwraps it back into the v1
+    // TaskProgressUpdate stream. Non-fatal: a classification error must never fail the tool turn.
+    let progressSignal: TaskProgressSignal | undefined;
+    try {
+      progressSignal = this.buildToolBatchProgressSignal({
+        prompt: agentState.taskDescription || lastUserMessage,
+        title: runCtx.progressTitle,
+        toolCalls,
+        language: runCtx.progressLanguage,
+      });
+    } catch {
+      progressSignal = undefined;
+    }
+
+    return { trace, advancedState: mem.agentState, progressSignal };
   }
 
 }

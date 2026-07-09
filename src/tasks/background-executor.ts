@@ -45,6 +45,7 @@ import {
   type RunnerHostOrchestrator,
 } from "../agent-core/runner/index.js";
 import { TURKISH_HINT_RE } from "./progress-signals.js";
+import { agentEventToTaskProgress, type AgentEvent } from "../agent-core/events/agent-event.js";
 import { normalizeSupervisorProgressMarkdown } from "../supervisor/supervisor-feedback.js";
 import type { MonitorLifecycle } from "../dashboard/monitor-lifecycle.js";
 import type { WorkspaceBus } from "../dashboard/workspace-bus.js";
@@ -910,7 +911,14 @@ export class BackgroundExecutor {
     const runner = selectAgentRunner(orchestrator as unknown as RunnerHostOrchestrator, mode);
     const io: IOStrategy = {
       mode,
-      onEvent: params.onProgress,
+      // The V2 bus delivers the closed AgentEvent union to io.onEvent; v1 consumers expect
+      // TaskProgressUpdate. agentEventToTaskProgress is THE adapter (the "open WIRING DECISION"
+      // the control-plane ioSink deferred): narrative signals unwrap verbatim (tool-batch detail),
+      // error/capability surface as status, everything else collapses to the liveness heartbeat
+      // that re-arms the inactivity watchdog and is filtered from the UI (audit #8). V1AgentRunner's
+      // verbatim TaskProgressUpdate stream passes through untouched (Phase-0 duality — see the
+      // adapter doc). Before this, raw AgentEvents leaked into the progress stream as an alien shape.
+      onEvent: (e) => params.onProgress(agentEventToTaskProgress(e as AgentEvent | TaskProgressUpdate)),
       externalSignal: params.signal,
       // background/worker never delivers to a channel — the string is carried in the result.
       deliverFinal: NOOP_DELIVER_FINAL,
