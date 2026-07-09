@@ -32,16 +32,12 @@ import {
   redactSensitiveText,
   stripVisibleProviderArtifacts,
 } from "./orchestrator-text-utils.js";
-import { stripInternalDecisionMarkers } from "./orchestrator-supervisor-routing.js";
 import { capRollingSummary, MAX_ROLLING_SUMMARY_CHARS } from "./session-compaction.js";
 import { getLogger } from "../utils/logger.js";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const MAX_SESSIONS = 100;
-
-const LOW_SIGNAL_EXECUTION_ACK_RE =
-  /^(?:adjusted|done|ok(?:ay)?|noted|ack(?:nowledged)?|revised|updated|handled|understood|fixed)\.?$/iu;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -678,47 +674,6 @@ export class SessionManager {
     ].join("\n");
   }
 
-  getPendingSelfManagedWriteRejectionVisibleText(
-    session: Session,
-    draft: string | null | undefined,
-  ): string | null {
-    const normalizedDraft = stripInternalDecisionMarkers(draft ?? "").trim();
-    if (normalizedDraft && !LOW_SIGNAL_EXECUTION_ACK_RE.test(normalizedDraft)) {
-      return null;
-    }
-
-    for (let index = session.messages.length - 1; index >= 0; index -= 1) {
-      const message = session.messages[index];
-      if (!message || message.role !== "user" || !Array.isArray(message.content)) {
-        continue;
-      }
-
-      for (let blockIndex = message.content.length - 1; blockIndex >= 0; blockIndex -= 1) {
-        const block = message.content[blockIndex];
-        if (!block || block.type !== "tool_result" || typeof block.content !== "string") {
-          continue;
-        }
-        if (!block.content.startsWith("Self-managed write review rejected")) {
-          continue;
-        }
-
-        const match = block.content.match(
-          /for '([^']+)':\s*(.+?)\.\s*Choose a safer bounded operation/iu,
-        );
-        const toolName = match?.[1] ?? "write-capable action";
-        const reason = match?.[2]?.trim() ?? block.content.trim();
-        return [
-          `Execution stopped because the proposed '${toolName}' operation was rejected by autonomous safety review.`,
-          "",
-          `Reason: ${reason}.`,
-          "",
-          "No safer bounded replacement was produced in the same turn.",
-        ].join("\n");
-      }
-    }
-
-    return null;
-  }
 
   formatBoundaryVisibleText(decision: InteractionBoundaryDecision): string | undefined {
     if (!decision.visibleText) {

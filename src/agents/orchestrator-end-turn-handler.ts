@@ -552,9 +552,8 @@ export async function handleBgEndTurn(
         usageHandler: ctx.usageHandler,
       })
     : draft;
-  if (ctx.workerCollector && needsSynthesis) {
-    ctx.workerCollector.lastAssignment = ctx.executionStrategy.synthesizer;
-  }
+  // (Step 5: the collector's lastAssignment write died with its only reader, v1 runWorkerTask —
+  // the v2 result projection attributes provider/model from runCtx.lastAssignment instead.)
 
   // 5. Second boundary check on synthesized text
   const finalBoundary = decideUserVisibleBoundaryHelper(ctx.getClarificationContext(), {

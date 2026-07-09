@@ -26,7 +26,7 @@
  *
  * What is NOT here (imported directly by the spine — no `this`):
  *   - free helpers: executeAndTrackTools, refreshMemoryIfNeeded, runConsensusIfAvailable,
- *     checkPendingBlocks, pushContinuationMessages, MAX_TOKENS_CONTINUATION_GATE,
+ *     pushContinuationMessages, MAX_TOKENS_CONTINUATION_GATE,
  *     buildPhasePromptSection, processReflectionPreamble, recordStepResultsAndCheckReflection,
  *     buildToolResultContentBlocks
  *   - agent-state: createInitialState, transitionPhase, canTransition,
@@ -139,7 +139,7 @@ export interface AgentRunSetupInput {
   readonly userId?: string;
   readonly conversationId?: string;
   /** Multimodal inputs — gap #3 builds a FRESH per-run session from these for worker/background
-   *  (v1 parity: runBackgroundTask :3278-3289), so parallel runs on one chatId never collide. */
+   *  (v1 parity: pre-Step5 runBackgroundTask — v1 @ a3de7d1 orchestrator.ts:3278-3289), so parallel runs on one chatId never collide. */
   readonly attachments?: readonly Attachment[];
   readonly userContent?: string | MessageContent[] | null;
   readonly mode: RunnerModeLike;
@@ -418,7 +418,7 @@ export interface OrchestratorPort {
   canAutoContinueBackgroundEpoch(completedEpochCount: number): boolean;
   /**
    * GAP3 — replicate v1 runBackgroundTask's end-of-epoch side effects at the spine's background
-   * epoch boundary (v1 orchestrator.ts ~4587-4623). The spine's rollover was a bare `epoch++`, so on
+   * epoch boundary (v1 @ a3de7d1 orchestrator.ts ~4587-4623). The spine's rollover was a bare `epoch++`, so on
    * a multi-epoch background run none of these fired: phase-outcome telemetry under-counted, the
    * taskPlanner's budget window never reset (planner drift), and the loop-detector amnesty never
    * fired (a healthy long task could trip loop-detection). NON-INTERACTIVE ONLY (interactive is a

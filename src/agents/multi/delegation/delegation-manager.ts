@@ -444,7 +444,6 @@ export class DelegationManager {
         projectPath: workspaceLease?.path ?? this.opts.projectPath,
         readOnly: this.opts.readOnly,
         requireConfirmation: false,
-        streamingEnabled: false,
         defaultLanguage: this.opts.defaultLanguage,
         streamInitialTimeoutMs: this.opts.streamInitialTimeoutMs,
         streamStallTimeoutMs: this.opts.streamStallTimeoutMs,
@@ -467,13 +466,12 @@ export class DelegationManager {
       };
 
       let workerResult: import("../../supervisor/supervisor-types.js").WorkerRunResult | undefined;
-      if (typeof (orchestrator as Orchestrator & { runWorkerTask?: unknown }).runWorkerTask === "function") {
-        // Cutover Step 2 — route the delegated sub-agent through the AgentRunner seam instead of a
-        // DIRECT orchestrator.runWorkerTask call, so it rides whichever engine the flag selects
-        // (default → V1AgentRunner → runWorkerTask, byte-identical) and the direct caller that blocked
-        // deleting runWorkerTask/runBackgroundTask is gone. Mirrors background-executor.executeWorkerRun:
-        // supervisor-node ⇒ the "delegated" worker mode; the never-returning waitForAbort still races
-        // the run for the delegation timeout; toWorkerRunResult projects AgentRunResult → WorkerRunResult.
+      if (typeof (orchestrator as Orchestrator & { createAgentCorePort?: unknown }).createAgentCorePort === "function") {
+        // Route the delegated sub-agent through the AgentRunner seam (the V2 spine — cutover
+        // Step 5 deleted the v1 engine; the probe now keys on the Agent Core wiring hook, NOT the
+        // deleted runWorkerTask). Mirrors background-executor.executeWorkerRun: supervisor-node ⇒
+        // the "delegated" worker mode; the never-returning waitForAbort still races the run for
+        // the delegation timeout; toWorkerRunResult projects AgentRunResult → WorkerRunResult.
         const mode = "supervisor-node" as const;
         const runner = selectAgentRunner(orchestrator as unknown as RunnerHostOrchestrator, mode);
         const runResult = await Promise.race([

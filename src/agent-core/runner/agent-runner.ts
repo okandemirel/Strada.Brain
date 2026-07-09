@@ -7,10 +7,9 @@
  * becomes a pure projection of it. `IOStrategy` is the one axis of variation between
  * interactive and background — never a forked control flow.
  *
- * Phase 0: only `V1AgentRunner` exists (pass-through over the v1 entry methods). This
- * module is purely additive — net-zero new lines in `orchestrator.ts` (gate §3/B3). It
- * imports ONLY types (no concrete `Orchestrator`/`Session`), so both `src/agent-core/`
- * and `src/tasks/`/`src/agents/` can import it without a cycle (mirrors
+ * Since cutover Step 5 the `V2AgentRunner` spine is THE engine (the v1 pass-through was
+ * deleted). This module imports ONLY types (no concrete `Orchestrator`/`Session`), so both
+ * `src/agent-core/` and `src/tasks/`/`src/agents/` can import it without a cycle (mirrors
  * `orchestrator-contract.ts`).
  */
 
@@ -25,6 +24,7 @@ import type {
   WorkerReviewFinding,
   WorkerArtifactMetadata,
   WorkerUsageEvent,
+  WorkerRunResult,
 } from "../../agents/supervisor/supervisor-types.js";
 import type { CancelReason } from "../control/cancel-reason.js";
 import type { RunClockView } from "../control/run-clock.js";
@@ -32,12 +32,10 @@ import type { RunClockView } from "../control/run-clock.js";
 // ───────────────────────────────────────────────────────────────────────────
 // AgentEvent — the one typed stream (ARCHITECTURE §5.1).
 //
-// Phase 0 scope: V1AgentRunner emits ZERO AgentEvents through onEvent EXCEPT by adapting
-// v1's existing TaskProgressUpdate stream (background). The full closed union is owned by
-// EventBus and lands in Phase 2; here onEvent's payload is kept deliberately wide (the v1
-// narrative shape) so Phase 0 ships without EventBus. We DO NOT invent the union now (that
-// is Phase 2 / §5 of ARCHITECTURE); we type the SINK so its contract is stable across the
-// swap.
+// The SINK's payload type is deliberately the v1 TaskProgressUpdate shape: the closed
+// AgentEvent union rides through it via the control-plane ioSink cast, and consumers adapt
+// with agentEventToTaskProgress (events/agent-event.ts). Retyping the sink to the closed
+// union belongs to the engine-relocation step.
 // ───────────────────────────────────────────────────────────────────────────
 
 /**
@@ -280,4 +278,29 @@ export interface AgentRunResult {
 
 export interface AgentRunner {
   run(request: AgentRunRequest, io: IOStrategy): Promise<AgentRunResult>;
+}
+
+/**
+ * The inverse view: `AgentRunResult → WorkerRunResult` — a TOTAL projection. Lets callers that
+ * still consume `WorkerRunResult` (background-executor, delegation-manager) keep their EXACT
+ * return shape while the runner speaks the superset internally. Relocated from the deleted
+ * V1AgentRunner module (cutover Step 5) minus its legacy bare-string branch (producer deleted).
+ */
+export function toWorkerRunResult(result: AgentRunResult): WorkerRunResult {
+  return {
+    status: result.status,
+    finalSummary: result.finalSummary,
+    visibleResponse: result.finalText,
+    provider: result.provider,
+    model: result.model,
+    catalogVersion: result.catalogVersion,
+    assignmentVersion: result.assignmentVersion,
+    workspaceId: result.workspaceId,
+    touchedFiles: result.touchedFiles,
+    toolTrace: result.toolTrace,
+    verificationResults: result.verificationResults,
+    reviewFindings: result.reviewFindings,
+    artifacts: result.artifacts,
+    reason: result.reason,
+  };
 }

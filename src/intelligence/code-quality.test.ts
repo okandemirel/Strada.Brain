@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { analyzeFile, formatQualityReport, type ProjectQualityReport } from "./code-quality.js";
 
 vi.mock("../utils/logger.js", () => ({
+  getLoggerSafe: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
   getLogger: () => ({
     info: vi.fn(),
     warn: vi.fn(),

@@ -4,6 +4,7 @@ import type { CronTriggerDef, FileWatchTriggerDef, ChecklistTriggerDef, WebhookT
 
 // Mock the logger to prevent "Logger not initialized" errors
 vi.mock("../utils/logger.js", () => ({
+  getLoggerSafe: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
   getLogger: () => ({
     warn: vi.fn(),
     error: vi.fn(),

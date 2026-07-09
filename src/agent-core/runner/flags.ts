@@ -46,16 +46,6 @@ const FLAG_FIELDS = [
 /** The requested flag combination — a `FlagSet` without the human-readable `id`. */
 export type RequestedFlagSet = Omit<FlagSet, "id">;
 
-const ALL_V1_NO_CP = {
-  failureLedger: false,
-  runClock: false,
-  silenceAccumulator: false,
-  typedCancelReason: false,
-  providerRouterScoring: false,
-  capabilityRegistry: false,
-  streamVisibleTokens: false,
-} as const;
-
 const FULL_CP = {
   failureLedger: true,
   runClock: true,
@@ -64,115 +54,11 @@ const FULL_CP = {
 } as const;
 
 export const LEGAL_FLAG_SETS: readonly FlagSet[] = [
-  // ── Phase 0 — the ONLY reachable set today: all v1, no control plane. ──
-  {
-    id: "all-v1",
-    interactive: "v1",
-    background: "v1",
-    worker: "v1",
-    supervisorNode: "v1",
-    ...ALL_V1_NO_CP,
-  },
-
-  // ── Phase 1a — failureLedger in ISOLATION (the other 3 control-plane concerns still OFF). ──
-  //    Per-concern incremental rollout must be explicitly enumerated in the closed matrix
-  //    (P-F). With runClock/silenceAccumulator/typedCancelReason still false, the ledger's
-  //    VerdictInput is inert for those concerns and reduces to the v1 failure surface.
-  {
-    id: "v1-driver+failure-ledger-only",
-    interactive: "v1",
-    background: "v1",
-    worker: "v1",
-    supervisorNode: "v1",
-    failureLedger: true,
-    runClock: false,
-    silenceAccumulator: false,
-    typedCancelReason: false,
-    providerRouterScoring: false,
-    capabilityRegistry: false,
-    streamVisibleTokens: false,
-  },
-
-  // ── Phase 1b — failureLedger + runClock (the next incremental rung; silence/typed-cancel
-  //    still OFF). RunClock's provider-stall / hard-timeout / silence-accumulator signals feed
-  //    the ledger's VerdictInput, so the two ship as a pair: runClock alone has no consumer for
-  //    its typed signals (rules 2/6 unreachable without the ledger). silenceAccumulator (1c) and
-  //    typedCancelReason (1d) layer on next. ──
-  {
-    id: "v1-driver+failure-ledger+run-clock",
-    interactive: "v1",
-    background: "v1",
-    worker: "v1",
-    supervisorNode: "v1",
-    failureLedger: true,
-    runClock: true,
-    silenceAccumulator: false,
-    typedCancelReason: false,
-    providerRouterScoring: false,
-    capabilityRegistry: false,
-    streamVisibleTokens: false,
-  },
-
-  // ── Phase 1c — failureLedger + runClock + silenceAccumulator (typed-cancel still OFF).
-  //    Turns ON consumption of the RunClock task-scope silence accumulator: the
-  //    `taskInactivityExceeded` verdict (failure-ledger rule 4) now fires, killing the ~70min
-  //    cross-call stall + the delegation livelock. STRICTLY NESTED on 1b — silenceAccumulator
-  //    requires runClock (the accumulator IS the RunClock signal; no producer otherwise) AND
-  //    failureLedger (the accumulator escalates through the ledger's VerdictInput; inert
-  //    otherwise). typedCancelReason (1d) layers on next, after which the four-true combo
-  //    collapses into `v1-driver+full-control-plane` below — so 1c needs no own variant. ──
-  {
-    id: "v1-driver+failure-ledger+run-clock+silence-accumulator",
-    interactive: "v1",
-    background: "v1",
-    worker: "v1",
-    supervisorNode: "v1",
-    failureLedger: true,
-    runClock: true,
-    silenceAccumulator: true,
-    typedCancelReason: false,
-    providerRouterScoring: false,
-    capabilityRegistry: false,
-    streamVisibleTokens: false,
-  },
-
-  // ── Phase 1 — v1 driver + full control plane (the consolidation target). ──
-  {
-    id: "v1-driver+full-control-plane",
-    interactive: "v1",
-    background: "v1",
-    worker: "v1",
-    supervisorNode: "v1",
-    ...FULL_CP,
-    providerRouterScoring: false,
-    capabilityRegistry: false,
-    streamVisibleTokens: false,
-  },
-
-  // ── Phase 2 — V2 per-route rollout order: worker → background → interactive.
-  //    Each step requires FULL control plane (V2 consumes it). ──
-  {
-    id: "v2-worker-only+full-control-plane",
-    interactive: "v1",
-    background: "v1",
-    worker: "v2",
-    supervisorNode: "v2",
-    ...FULL_CP,
-    providerRouterScoring: false,
-    capabilityRegistry: false,
-    streamVisibleTokens: false,
-  },
-  {
-    id: "v2-worker+background+full-control-plane",
-    interactive: "v1",
-    background: "v2",
-    worker: "v2",
-    supervisorNode: "v2",
-    ...FULL_CP,
-    providerRouterScoring: false,
-    capabilityRegistry: false,
-    streamVisibleTokens: false,
-  },
+  // Cutover Step 5 deleted the v1 engine: every legal set runs the V2 spine on every route
+  // with the FULL control plane (V2 consumes it). The remaining ladder differs only in the
+  // Phase-3/5 extras. The v1-containing sets (all-v1, the per-concern 1a-1d steps,
+  // v1-driver+full-control-plane, and the partial v2-worker rollout steps) were removed with
+  // the engine; their ids resolve via DEPRECATED_FLAG_SET_IDS below instead of reject-at-boot.
   {
     id: "v2-all-routes+full-control-plane",
     interactive: "v2",
@@ -185,7 +71,7 @@ export const LEGAL_FLAG_SETS: readonly FlagSet[] = [
     streamVisibleTokens: false,
   },
 
-  // ── Phase 3 — V2 everywhere + scoring + capability. ──
+  // ── Phase 3 — scoring + capability. ──
   {
     id: "v2-all+scoring+capability",
     interactive: "v2",
@@ -212,21 +98,6 @@ export const LEGAL_FLAG_SETS: readonly FlagSet[] = [
   },
 ];
 
-/**
- * The Phase-0 baseline (`all-v1`, every flag OFF). NOT the shipped production default — that is
- * `PRODUCTION_DEFAULT_FLAG_SET_ID` below. This stays the test base + the `resolveFlagSetById(undefined)`
- * fallback + the env-revert target. Flipping the active set is a config change, not a redeploy.
- */
-export const DEFAULT_FLAG_SET_ID = "all-v1";
-
-/** The Phase-0 default combination as a `RequestedFlagSet` (the `all-v1` fields, no `id`). */
-export const DEFAULT_FLAG_SET: RequestedFlagSet = {
-  interactive: "v1",
-  background: "v1",
-  worker: "v1",
-  supervisorNode: "v1",
-  ...ALL_V1_NO_CP,
-};
 
 /**
  * The PRODUCTION default — what bootstrap selects when AGENT_CORE_FLAG_SET is unset. THE FLIP
@@ -234,8 +105,9 @@ export const DEFAULT_FLAG_SET: RequestedFlagSet = {
  * on the FULL control plane. All flip-blockers shipped + gated (Phase 1 robustness 4a3cf94/7af4ba2/
  * ce32c11, Phase 2 faithfulness 34198f6/3db5f3a/04a018c, soak fixes bbc6e2b/bbd2baf, provider chain
  * 08541aa/de22366/ee5c063). INSTANT REVERT with no redeploy: AGENT_CORE_FLAG_SET=all-v1 (bare v1
- * baseline) or v1-driver+full-control-plane (v1 engine, hardened control plane) — both stay in
- * LEGAL_FLAG_SETS until the v1 deletion (cutover Step 5) removes the v1 engine entirely.
+ * baseline) or v1-driver+full-control-plane — REMOVED by cutover Step 5 with the v1 engine;
+ * both ids now resolve to this production default via DEPRECATED_FLAG_SET_IDS (an ops
+ * deployment still exporting a revert value must not crash-loop at boot).
  * Must be a LEGAL_FLAG_SETS id (reject-at-boot enforces it).
  */
 export const PRODUCTION_DEFAULT_FLAG_SET_ID = "v2-all-routes+full-control-plane";
@@ -264,14 +136,35 @@ export function resolveLegalFlagSet(requested: RequestedFlagSet): FlagSet {
 }
 
 /**
+ * The rollout-era ids cutover Step 5 deleted along with the v1 engine. A deployment (env file,
+ * systemd unit, runbook) may still export one as its documented "instant revert" value —
+ * rejecting it at boot would CRASH-LOOP the daemon on an upgrade, so these resolve to the
+ * production default instead (the ops-safe deprecation; the boot log's "source" field still
+ * shows the env var supplied it). Unknown ids outside this list keep the reject-at-boot typo
+ * guard.
+ */
+const DEPRECATED_FLAG_SET_IDS: ReadonlySet<string> = new Set([
+  "all-v1",
+  "v1-driver+failure-ledger-only",
+  "v1-driver+failure-ledger+run-clock",
+  "v1-driver+failure-ledger+run-clock+silence-accumulator",
+  "v1-driver+full-control-plane",
+  "v2-worker-only+full-control-plane",
+  "v2-worker+background+full-control-plane",
+]);
+
+/**
  * Resolve the active flag set by its `id` — the ops knob (`AGENT_CORE_FLAG_SET` env var) that
- * selects the rollout stage WITHOUT a code change. An undefined/empty id resolves to the default
- * `all-v1` set (so the default boot is unchanged). An UNKNOWN id throws (reject-at-boot), listing
+ * selects the stage WITHOUT a code change. An undefined/empty id resolves to the production
+ * default. A DEPRECATED (deleted rollout-era) id also resolves to the production default —
+ * never a boot crash on a stale revert value. An UNKNOWN id throws (reject-at-boot), listing
  * the legal ids — a typo can never silently fall back to the wrong stage. The result is one of
  * `LEGAL_FLAG_SETS` by construction, inheriting the closed-matrix guarantee.
  */
 export function resolveFlagSetById(id: string | undefined): FlagSet {
-  const wanted = (id ?? "").trim() || DEFAULT_FLAG_SET_ID;
+  const trimmed = (id ?? "").trim();
+  const wanted =
+    !trimmed || DEPRECATED_FLAG_SET_IDS.has(trimmed) ? PRODUCTION_DEFAULT_FLAG_SET_ID : trimmed;
   const match = LEGAL_FLAG_SETS.find((candidate) => candidate.id === wanted);
   if (!match) {
     throw new Error(

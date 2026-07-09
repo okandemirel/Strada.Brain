@@ -6,6 +6,7 @@ import type { IAIProvider, ProviderResponse, MessageContent } from "./agents/pro
 import type { ITool } from "./agents/tools/tool.interface.js";
 
 vi.mock("./utils/logger.js", () => ({
+  getLoggerSafe: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
   getLogger: () => ({
     info: vi.fn(),
     warn: vi.fn(),
@@ -40,6 +41,8 @@ const defaultCapabilities = {
 };
 
 function createMockProvider() {
+  // v2 PAOR semantics: call #1 is the PLANNING turn (its text is the plan, not the answer);
+  // the tool turn and the final answer follow. v1's call-count script shifted by one.
   let callCount = 0;
   return {
     name: "mock-integration",
@@ -47,6 +50,14 @@ function createMockProvider() {
     chat: vi.fn(async () => {
       callCount++;
       if (callCount === 1) {
+        return {
+          text: "Plan: read the file, then answer.",
+          toolCalls: [],
+          stopReason: "end_turn" as const,
+          usage: { inputTokens: 40, outputTokens: 20, totalTokens: 60 },
+        };
+      }
+      if (callCount === 2) {
         return {
           text: "Let me read that file.",
           toolCalls: [{ id: "tc-1", name: "file_read", input: { path: "test.cs" } }],
@@ -91,6 +102,7 @@ function createReasoningLeakProvider() {
 }
 
 function createUnknownToolProvider() {
+  // v2 PAOR semantics: call #1 = PLANNING; the unknown-tool call comes on the EXECUTING turn.
   let callCount = 0;
   return {
     name: "mock-unknown-tool",
@@ -98,6 +110,14 @@ function createUnknownToolProvider() {
     chat: vi.fn(async (): Promise<ProviderResponse> => {
       callCount++;
       if (callCount === 1) {
+        return {
+          text: "Plan: try the special tool.",
+          toolCalls: [],
+          stopReason: "end_turn",
+          usage: { inputTokens: 20, outputTokens: 10, totalTokens: 30 },
+        };
+      }
+      if (callCount === 2) {
         return {
           text: "Let me try that.",
           toolCalls: [{ id: "tc-bad", name: "nonexistent_tool", input: {} }],
@@ -135,13 +155,12 @@ describe("Integration: full message flow", () => {
   let fileReadTool: ITool;
 
   beforeEach(() => {
-    vi.useFakeTimers();
     channel = createMockChannel();
     fileReadTool = createMockTool("file_read", { content: "using UnityEngine;\npublic class Test {}" });
   });
 
   afterEach(() => {
-    vi.useRealTimers();
+    vi.clearAllMocks();
   });
 
   it("handles tool call round-trip: user -> provider -> tool -> provider -> channel", async () => {
@@ -163,11 +182,10 @@ describe("Integration: full message flow", () => {
       text: "Read the file at Assets/test.cs",
       timestamp: new Date(),
     });
-    await vi.advanceTimersByTimeAsync(100);
     await promise;
 
-    // Provider should have been called twice: once for the initial request, once after tool result
-    expect(provider.chat).toHaveBeenCalledTimes(2);
+    // v2 PAOR: PLANNING + tool turn + post-tool answer — at least three provider calls.
+    expect(provider.chat.mock.calls.length).toBeGreaterThanOrEqual(3);
 
     // Tool should have been executed with the correct input
     expect(fileReadTool.execute).toHaveBeenCalledWith(
@@ -175,9 +193,9 @@ describe("Integration: full message flow", () => {
       expect.objectContaining({ projectPath: "/test/project" })
     );
 
-    // The second provider call should include the tool result in messages
-    const secondCallMessages = vi.mocked(provider.chat).mock.calls[1]![1];
-    const toolResults = findToolResultContent(secondCallMessages);
+    // A later provider call includes the tool result in its messages (v2: the post-tool turn).
+    const lastCallMessages = vi.mocked(provider.chat).mock.calls.at(-1)![1];
+    const toolResults = findToolResultContent(lastCallMessages);
     expect(toolResults.length).toBeGreaterThan(0);
     expect(toolResults[0]!.content).toContain("using UnityEngine");
 
@@ -207,11 +225,10 @@ describe("Integration: full message flow", () => {
       text: "Hello",
       timestamp: new Date(),
     });
-    await vi.advanceTimersByTimeAsync(100);
     await promise;
 
-    // Provider called once, no tool loop
-    expect(provider.chat).toHaveBeenCalledTimes(1);
+    // v2 PAOR: PLANNING + EXECUTING — two calls, no tool loop.
+    expect(provider.chat).toHaveBeenCalledTimes(2);
 
     // No tools executed
     expect(fileReadTool.execute).not.toHaveBeenCalled();
@@ -242,7 +259,6 @@ describe("Integration: full message flow", () => {
       text: "Explain briefly",
       timestamp: new Date(),
     });
-    await vi.advanceTimersByTimeAsync(100);
     await promise;
 
     expect(channel.sendMarkdown).toHaveBeenCalledWith(
@@ -270,18 +286,17 @@ describe("Integration: full message flow", () => {
       text: "Do something special",
       timestamp: new Date(),
     });
-    await vi.advanceTimersByTimeAsync(100);
     await promise;
 
-    // PAOR reflection may add extra calls after tool errors
-    expect(provider.chat.mock.calls.length).toBeGreaterThanOrEqual(2);
+    // v2 PAOR: PLANNING + the unknown-tool turn + recovery calls after the error result.
+    expect(provider.chat.mock.calls.length).toBeGreaterThanOrEqual(3);
 
     // No actual tool was executed
     expect(fileReadTool.execute).not.toHaveBeenCalled();
 
-    // Verify the error result was sent back in the second call
-    const secondCallMessages = vi.mocked(provider.chat).mock.calls[1]![1];
-    const toolResults = findToolResultContent(secondCallMessages);
+    // Verify the error result was sent back on a later call (v2: after the EXECUTING turn).
+    const lastCallMessages2 = vi.mocked(provider.chat).mock.calls.at(-1)![1];
+    const toolResults = findToolResultContent(lastCallMessages2);
     expect(toolResults.length).toBeGreaterThan(0);
     expect(toolResults[0]!.content).toContain("unknown tool");
     expect(toolResults[0]!.is_error).toBe(true);

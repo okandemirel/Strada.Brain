@@ -168,6 +168,14 @@ export class MockAIProvider implements IAIProvider, IStreamingProvider {
     finalResponseText: string,
     intermediateText = "I'll help you with that..."
   ): void {
+    // v2 PAOR: the engine's first provider call is the PLANNING turn (its text is the plan,
+    // never the tool turn) — queue a plan response first so the tool_use lands on EXECUTING.
+    this.queueResponse({
+      text: "Plan: run the requested tools, then answer.",
+      toolCalls: [],
+      stopReason: "end_turn",
+      usage: { inputTokens: 80, outputTokens: 30, totalTokens: 110 },
+    });
     this.queueResponse({
       text: intermediateText,
       toolCalls,
@@ -193,6 +201,13 @@ export class MockAIProvider implements IAIProvider, IStreamingProvider {
     secondToolCall: ToolCall,
     finalResponseText: string
   ): void {
+    // v2 PAOR: plan turn first (see simulateToolCallFlow).
+    this.queueResponse({
+      text: "Plan: run the requested tools, then answer.",
+      toolCalls: [],
+      stopReason: "end_turn",
+      usage: { inputTokens: 80, outputTokens: 30, totalTokens: 110 },
+    });
     this.queueResponse({
       text: "Let me try that...",
       toolCalls: [firstToolCall],

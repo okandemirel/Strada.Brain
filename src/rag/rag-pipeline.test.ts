@@ -12,6 +12,7 @@ import type {
 // Mock the logger so RAGPipeline (and any transitive deps) never throw.
 // ---------------------------------------------------------------------------
 vi.mock("../utils/logger.js", () => ({
+  getLoggerSafe: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
   getLogger: () => ({
     info: () => undefined,
     debug: () => undefined,

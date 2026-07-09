@@ -4,6 +4,7 @@ import { ProgressReporter } from "./progress-reporter.js";
 import { TaskStatus, type Task, type TaskProgressUpdate } from "./types.js";
 
 vi.mock("../utils/logger.js", () => ({
+  getLoggerSafe: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
   getLogger: () => ({
     debug: vi.fn(),
     error: vi.fn(),

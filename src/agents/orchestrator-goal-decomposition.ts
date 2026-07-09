@@ -29,6 +29,9 @@ export interface GoalDecompositionDeps {
   readonly monitorLifecycle: MonitorLifecycle | null;
   readonly eventEmitter: IEventEmitter<LearningEventMap> | null;
   readonly workspaceBus: WorkspaceBus | null;
+  /** Best-effort goal-tree persistence (v1 parity: the interactive onGoalDecomposed callback
+   *  upserted the tree; the helper now owns it so EVERY decomposition path persists). */
+  readonly goalStorage: { upsertTree(tree: GoalTree, status: string): void } | null;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -97,6 +100,13 @@ export async function runProactiveGoalDecomposition(
       deps.monitorLifecycle.goalDecomposed(opts.conversationScope, goalTree);
     } else {
       emitDagEvent(deps.workspaceBus, "monitor:dag_init", goalTree, opts.conversationScope);
+    }
+    // v1 parity (interactive onGoalDecomposed callback): persist the decomposed tree.
+    // Best-effort — DAG display still works via the WS events above.
+    try {
+      deps.goalStorage?.upsertTree(goalTree, "executing");
+    } catch {
+      /* goal persistence is best-effort */
     }
     await deps.sessionManager.sendVisibleAssistantMarkdown(
       opts.chatId,

@@ -29,7 +29,13 @@ import type { IEventBus } from "../../../core/event-bus.js";
 
 // Store the mock constructor so tests can override handleMessage per-test
 let orchestratorHandleMessage: ReturnType<typeof vi.fn>;
-let orchestratorRunWorkerTask: ReturnType<typeof vi.fn> | undefined;
+// Step 5 retarget: runWorkerTask was DELETED with the v1 engine. The production probe is now
+// `typeof orchestrator.createAgentCorePort === "function"` → selectAgentRunner (V2 spine).
+// Tests that want the runner-seam path opt in via `orchestratorHasAgentCore = true` and script
+// the fake runner through `scriptedRunnerRun` (selectAgentRunner is factory-mocked below —
+// these tests exercise DELEGATION logic, not the engine).
+let orchestratorHasAgentCore: boolean;
+let scriptedRunnerRun: ReturnType<typeof vi.fn> | undefined;
 let orchestratorOpts: Record<string, unknown>;
 
 vi.mock("../../orchestrator.js", () => {
@@ -38,10 +44,25 @@ vi.mock("../../orchestrator.js", () => {
       orchestratorOpts = opts;
       this._opts = opts;
       this.handleMessage = orchestratorHandleMessage;
-      this.runWorkerTask = orchestratorRunWorkerTask;
+      // Only expose the Agent Core wiring hook when the test opts in — absent hook ⇒ the
+      // delegation falls back to the handleMessage path (the other tests' original behavior).
+      this.createAgentCorePort = orchestratorHasAgentCore ? vi.fn() : undefined;
+      this.getAgentCoreClock = orchestratorHasAgentCore ? vi.fn() : undefined;
       this.addTool = vi.fn();
       this.removeTool = vi.fn();
     }),
+  };
+});
+
+vi.mock("../../../agent-core/runner/index.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../agent-core/runner/index.js")>();
+  return {
+    ...actual,
+    // Fake AgentRunner: delegation-manager tests isolate EXECUTOR/DELEGATION logic from the
+    // V2 engine; the scripted run returns a canned AgentRunResult per-test.
+    selectAgentRunner: vi.fn(() => ({
+      run: (request: unknown, io: unknown) => scriptedRunnerRun!(request, io),
+    })),
   };
 });
 
@@ -218,7 +239,8 @@ describe("DelegationManager", () => {
         "Sub-agent completed the task successfully.",
       );
     });
-    orchestratorRunWorkerTask = undefined;
+    orchestratorHasAgentCore = false;
+    scriptedRunnerRun = undefined;
 
     db = new Database(":memory:");
     delegationLog = new DelegationLog(db);
@@ -271,10 +293,13 @@ describe("DelegationManager", () => {
     });
 
     it("returns blocked delegated worker results without throwing", async () => {
-      orchestratorRunWorkerTask = vi.fn().mockResolvedValueOnce({
+      // Runner-seam path: the scripted V2 runner returns an AgentRunResult (finalText ↔
+      // WorkerRunResult.visibleResponse via the real toWorkerRunResult projection).
+      orchestratorHasAgentCore = true;
+      scriptedRunnerRun = vi.fn().mockResolvedValueOnce({
         status: "blocked",
+        finalText: "Checkpoint from delegated worker",
         finalSummary: "Need a different diagnosis path",
-        visibleResponse: "Checkpoint from delegated worker",
         provider: "mock-provider",
         catalogVersion: "mock-provider:mock-model",
         assignmentVersion: 0,
@@ -302,10 +327,11 @@ describe("DelegationManager", () => {
     });
 
     it("round-trips a COMPLETED delegated worker result through the runner seam (Step 2 success path)", async () => {
-      orchestratorRunWorkerTask = vi.fn().mockResolvedValueOnce({
+      orchestratorHasAgentCore = true;
+      scriptedRunnerRun = vi.fn().mockResolvedValueOnce({
         status: "completed",
+        finalText: "The verifier loop is caused by a stale fingerprint",
         finalSummary: "Analysis complete",
-        visibleResponse: "The verifier loop is caused by a stale fingerprint",
         provider: "mock-provider",
         catalogVersion: "mock-provider:mock-model",
         assignmentVersion: 0,
@@ -327,7 +353,7 @@ describe("DelegationManager", () => {
 
       const result = await manager.delegate(request);
 
-      // Step 2 reroute: the SUCCESS path round-trips runWorkerTask → projectWorkerResult →
+      // Step 5 reroute: the SUCCESS path round-trips the runner seam (V2 spine) →
       // AgentRunResult → toWorkerRunResult with visibleResponse(↔finalText) preserved into content.
       expect(result.workerResult?.status).toBe("completed");
       expect(result.content).toBe("The verifier loop is caused by a stale fingerprint");

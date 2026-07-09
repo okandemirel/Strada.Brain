@@ -484,10 +484,6 @@ async function evaluateBgReflectionCompletion(
     systemPrompt: ctx.systemPrompt,
     usageHandler: ctx.usageHandler,
   });
-  if (ctx.workerCollector) {
-    ctx.workerCollector.lastAssignment = ctx.executionStrategy.synthesizer;
-  }
-
   const finalBoundary = decideUserVisibleBoundaryHelper(ctx.getClarificationContext(), {
     chatId: ctx.chatId,
     prompt: ctx.prompt,

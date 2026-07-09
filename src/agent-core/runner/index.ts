@@ -1,10 +1,9 @@
 /**
  * Agent Core v2 — Runner seam public surface (ARCHITECTURE §4.1–§4.2).
  *
- * The strangler boundary: the `AgentRunner` façade + its I/O contract, the Phase-0
- * `V1AgentRunner` pass-through adapter over the v1 orchestrator entry methods, and the
- * enumerated `LEGAL_FLAG_SETS` rollout matrix with its reject-at-boot validator. Purely
- * additive — `orchestrator.ts` stays at net-zero (gate §3/B3).
+ * The engine boundary: the `AgentRunner` façade + its I/O contract, the `V2AgentRunner`
+ * spine, the runner factory, and the `LEGAL_FLAG_SETS` matrix with its reject-at-boot
+ * validator. Cutover Step 5 deleted the v1 pass-through — the V2 spine is THE engine.
  */
 
 export type {
@@ -18,21 +17,10 @@ export type {
   TerminalStatus,
 } from "./agent-runner.js";
 
-export {
-  V1AgentRunner,
-  projectWorkerResult,
-  toWorkerRunResult,
-} from "./v1-agent-runner.js";
-export type {
-  V1OrchestratorLike,
-  InteractiveDriver,
-  InteractiveOutcome,
-} from "./v1-agent-runner.js";
+export { toWorkerRunResult } from "./agent-runner.js";
 
 export {
   LEGAL_FLAG_SETS,
-  DEFAULT_FLAG_SET_ID,
-  DEFAULT_FLAG_SET,
   PRODUCTION_DEFAULT_FLAG_SET_ID,
   resolveLegalFlagSet,
   resolveFlagSetById,

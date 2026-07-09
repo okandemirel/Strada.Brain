@@ -891,38 +891,27 @@ export class BackgroundExecutor {
       monitorScope?: string;
     },
   ): Promise<{ output: string; workerResult?: WorkerRunResult }> {
-    // Phase-0 strangler seam: route through the AgentRunner façade (V1AgentRunner) instead of
-    // calling the v1 orchestrator entry methods directly. V1AgentRunner is a pass-through over the
-    // SAME runWorkerTask / runBackgroundTask on this exact orchestrator and replicates the
-    // identical capability detection, so the observable behavior — which method is called, with
-    // which arguments, and the returned { output, workerResult } shape — is preserved by
-    // construction. The runner is built per-call over the passed orchestrator (which may be a
-    // per-task orchestrator, not this.orchestrator), keeping orchestrator.ts at net-zero.
-    // RunnerMode mirrors the underlying WorkerRunRequest.mode: "delegated" → supervisor-node,
-    // anything else ("background") → worker. The exact WorkerRunRequest.mode is preserved verbatim
-    // via request.workerMode so the v1 call shape is byte-identical.
+    // The runner seam (cutover Step 5: the V2 spine is THE engine — selectAgentRunner constructs
+    // V2AgentRunner over the passed orchestrator's port/gateway and throws a descriptive error if
+    // the host lacks the wiring hooks). The runner is built per-call over the PASSED orchestrator
+    // (which may be a per-task orchestrator, not this.orchestrator). RunnerMode mirrors the
+    // underlying WorkerRunRequest.mode: "delegated" → supervisor-node, anything else → worker;
+    // the exact mode is preserved verbatim via request.workerMode.
     const mode: RunnerMode = params.mode === "delegated" ? "supervisor-node" : "worker";
-
-    // Phase-2 route selector: V2AgentRunner when this route's driver flag is "v2" (the closed flag
-    // matrix only permits a V2 route alongside the full control plane), else the v1 pass-through.
-    // Since THE FLIP the production default (v2-all-routes+full-control-plane) routes worker and
-    // supervisor-node through V2AgentRunner; the V1 pass-through is reached only under the revert
-    // flag sets (AGENT_CORE_FLAG_SET=v1-driver+full-control-plane / all-v1) until Step 5 deletes it.
     const runner = selectAgentRunner(orchestrator as unknown as RunnerHostOrchestrator, mode);
     const io: IOStrategy = {
       mode,
       // The V2 bus delivers the closed AgentEvent union to io.onEvent; v1 consumers expect
-      // TaskProgressUpdate. agentEventToTaskProgress is THE adapter (the "open WIRING DECISION"
-      // the control-plane ioSink deferred): narrative signals unwrap verbatim (tool-batch detail),
-      // error/capability surface as status, everything else collapses to the liveness heartbeat
-      // that re-arms the inactivity watchdog and is filtered from the UI (audit #8). V1AgentRunner's
-      // verbatim TaskProgressUpdate stream passes through untouched (Phase-0 duality — see the
-      // adapter doc). Before this, raw AgentEvents leaked into the progress stream as an alien shape.
+      // TaskProgressUpdate. agentEventToTaskProgress is THE adapter: narrative signals unwrap
+      // verbatim (tool-batch detail), error/capability surface as status, everything else
+      // collapses to the liveness heartbeat that re-arms the inactivity watchdog and is filtered
+      // from the UI (audit #8). Already-v1-shaped updates (test fakes; the sink contract is still
+      // typed TaskProgressUpdate) pass through untouched.
       onEvent: (e) => params.onProgress(agentEventToTaskProgress(e as AgentEvent | TaskProgressUpdate)),
       externalSignal: params.signal,
       // background/worker never delivers to a channel — the string is carried in the result.
       deliverFinal: NOOP_DELIVER_FINAL,
-      // visibleSink omitted (Phase 0: v1 background streams silently).
+      // visibleSink omitted: background streams silently by design.
     };
 
     const request: AgentRunRequest = {
@@ -947,12 +936,9 @@ export class BackgroundExecutor {
     };
 
     const result = await runner.run(request, io);
-    // toWorkerRunResult returns undefined for the legacy bare-string path, reproducing the v1
-    // { output, workerResult: undefined } shape; otherwise it is the byte-identical worker view.
-    const workerResult = toWorkerRunResult(result);
-    return workerResult !== undefined
-      ? { output: result.finalText, workerResult }
-      : { output: result.finalText };
+    // toWorkerRunResult is a TOTAL projection post-Step-5 (the legacy bare-string path died
+    // with V1AgentRunner) — every run yields the byte-identical structured worker view.
+    return { output: result.finalText, workerResult: toWorkerRunResult(result) };
   }
 
   async runWorkerEnvelope(

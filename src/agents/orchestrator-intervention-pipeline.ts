@@ -551,16 +551,17 @@ async function executeLoopRecoveryDelegation(
 
 // ─── WorkerRunCollector (mirrored from orchestrator.ts local type) ────────────
 
+/**
+ * The per-run accumulation the SHARED handlers write during a run and the v2 result projection
+ * reads back (portBuildResultProjection: verifierResult → verification/review; childWorkerResults
+ * → the touched-files union; toolTrace via orchestrator-tool-execution). Slimmed in cutover
+ * Step 5: the deleted v1 runWorkerTask was the only reader of the wider shape
+ * (touchedFiles/finalVisibleResponse/finalSummary/lastAssignment/status/reason).
+ */
 export interface WorkerRunCollector {
   toolTrace: WorkerToolTrace[];
   childWorkerResults: WorkerRunResult[];
   verifierResult?: VerifierPipelineResult;
-  touchedFiles?: readonly string[];
-  finalVisibleResponse?: string;
-  finalSummary?: string;
-  lastAssignment?: SupervisorAssignment;
-  status?: WorkerRunResult["status"];
-  reason?: string;
 }
 
 type DelegationLoopRecoveryDecision = LoopRecoveryReviewDecision & {

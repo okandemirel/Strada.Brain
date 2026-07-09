@@ -3,6 +3,7 @@ import { StradaAnalyzer } from "./strada-analyzer.js";
 import type { StradaProjectAnalysis } from "./strada-analyzer.js";
 
 vi.mock("../utils/logger.js", () => ({
+  getLoggerSafe: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
   getLogger: () => ({
     info: vi.fn(),
     warn: vi.fn(),

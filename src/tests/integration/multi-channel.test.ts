@@ -124,21 +124,31 @@ describe("Multi-Channel Flow Integration", () => {
 
   describe("Concurrent Message Handling", () => {
     it("should handle messages from Telegram and Discord simultaneously", async () => {
-      // Configure provider with responses for both channels
-      mockProvider.queueResponses([
-        {
-          text: "Telegram response: I received your command!",
-          toolCalls: [],
-          stopReason: "end_turn",
-          usage: { inputTokens: 100, outputTokens: 30, totalTokens: 130 },
-        },
-        {
-          text: "Discord response: Status check complete!",
-          toolCalls: [],
-          stopReason: "end_turn",
-          usage: { inputTokens: 100, outputTokens: 30, totalTokens: 130 },
-        },
-      ]);
+      // v2 PAOR makes ~2 provider calls per run (PLANNING + EXECUTING) and the two runs race,
+      // so a shared FIFO queue misaligns — key the response on the incoming message instead
+      // (both the plan and the answer call of a run get the same channel-correct text).
+      mockProvider.registerResponseHandler("channel-router", ({ messages }) => {
+        const content = messages
+          .map((m) => (typeof m.content === "string" ? m.content : ""))
+          .join(" ");
+        if (content.includes("/command execute")) {
+          return {
+            text: "Telegram response: I received your command!",
+            toolCalls: [],
+            stopReason: "end_turn",
+            usage: { inputTokens: 100, outputTokens: 30, totalTokens: 130 },
+          };
+        }
+        if (content.includes("!status")) {
+          return {
+            text: "Discord response: Status check complete!",
+            toolCalls: [],
+            stopReason: "end_turn",
+            usage: { inputTokens: 100, outputTokens: 30, totalTokens: 130 },
+          };
+        }
+        return undefined;
+      });
 
       // Act: Send messages to both channels concurrently
       await Promise.all([
@@ -227,12 +237,21 @@ describe("Multi-Channel Flow Integration", () => {
   describe("Session Isolation", () => {
     it("should maintain separate sessions for different channels", async () => {
       // Telegram: First message about PlayerController
-      mockProvider.queueResponse({
-        text: "I understand you're asking about PlayerController on Telegram.",
-        toolCalls: [],
-        stopReason: "end_turn",
-        usage: { inputTokens: 100, outputTokens: 30, totalTokens: 130 },
-      });
+      // v2 PAOR: two calls per sequential turn (PLANNING + EXECUTING) — queue the text twice.
+      mockProvider.queueResponses([
+        {
+          text: "I understand you're asking about PlayerController on Telegram.",
+          toolCalls: [],
+          stopReason: "end_turn",
+          usage: { inputTokens: 100, outputTokens: 30, totalTokens: 130 },
+        },
+        {
+          text: "I understand you're asking about PlayerController on Telegram.",
+          toolCalls: [],
+          stopReason: "end_turn",
+          usage: { inputTokens: 100, outputTokens: 30, totalTokens: 130 },
+        },
+      ]);
 
       await telegramChannel.simulateIncomingMessage(
         "tg-session-test",
@@ -240,12 +259,20 @@ describe("Multi-Channel Flow Integration", () => {
       );
 
       // Discord: First message about EnemyAI
-      mockProvider.queueResponse({
-        text: "I understand you're asking about EnemyAI on Discord.",
-        toolCalls: [],
-        stopReason: "end_turn",
-        usage: { inputTokens: 100, outputTokens: 30, totalTokens: 130 },
-      });
+      mockProvider.queueResponses([
+        {
+          text: "I understand you're asking about EnemyAI on Discord.",
+          toolCalls: [],
+          stopReason: "end_turn",
+          usage: { inputTokens: 100, outputTokens: 30, totalTokens: 130 },
+        },
+        {
+          text: "I understand you're asking about EnemyAI on Discord.",
+          toolCalls: [],
+          stopReason: "end_turn",
+          usage: { inputTokens: 100, outputTokens: 30, totalTokens: 130 },
+        },
+      ]);
 
       await discordChannel.simulateIncomingMessage(
         "discord-session-test",
@@ -359,12 +386,21 @@ describe("Multi-Channel Flow Integration", () => {
       await streamingDiscordChannel.connect();
       streamingDiscordChannel.onMessage((msg) => streamingOrchestrator.handleMessage(msg));
 
-      mockProvider.queueResponse({
-        text: "Streaming response for Discord",
-        toolCalls: [],
-        stopReason: "end_turn",
-        usage: { inputTokens: 100, outputTokens: 30, totalTokens: 130 },
-      });
+      // v2 PAOR: PLANNING consumes the first response — queue the streaming answer twice.
+      mockProvider.queueResponses([
+        {
+          text: "Streaming response for Discord",
+          toolCalls: [],
+          stopReason: "end_turn",
+          usage: { inputTokens: 100, outputTokens: 30, totalTokens: 130 },
+        },
+        {
+          text: "Streaming response for Discord",
+          toolCalls: [],
+          stopReason: "end_turn",
+          usage: { inputTokens: 100, outputTokens: 30, totalTokens: 130 },
+        },
+      ]);
 
       await streamingDiscordChannel.simulateIncomingMessage("discord-stream", "Test streaming");
 
@@ -412,31 +448,47 @@ describe("Multi-Channel Flow Integration", () => {
       confirmTelegram.onMessage((msg) => tgOrchestrator.handleMessage(msg));
       confirmDiscord.onMessage((msg) => discordOrchestrator.handleMessage(msg));
 
-      // Configure provider responses for Telegram first
-      mockProvider.queueResponse({
-        text: "I'll create that file...",
-        toolCalls: [
-          createMockToolCall("tool-tg", "file_write", {
-            path: "Assets/TestTG.cs",
-            content: "class TestTG {}",
-          }),
-        ],
-        stopReason: "tool_use",
-      });
+      // Configure provider responses for Telegram first (v2 PAOR: plan first, then the tool turn).
+      mockProvider.queueResponses([
+        {
+          text: "Plan: create the file.",
+          toolCalls: [],
+          stopReason: "end_turn",
+          usage: { inputTokens: 40, outputTokens: 10, totalTokens: 50 },
+        },
+        {
+          text: "I'll create that file...",
+          toolCalls: [
+            createMockToolCall("tool-tg", "file_write", {
+              path: "Assets/TestTG.cs",
+              content: "class TestTG {}",
+            }),
+          ],
+          stopReason: "tool_use",
+        },
+      ]);
 
       await confirmTelegram.simulateIncomingMessage("tg-confirm", "Create Test.cs file");
 
-      // Then configure for Discord
-      mockProvider.queueResponse({
-        text: "I'll create that file...",
-        toolCalls: [
-          createMockToolCall("tool-disc", "file_write", {
-            path: "Assets/TestDiscord.cs",
-            content: "class TestDiscord {}",
-          }),
-        ],
-        stopReason: "tool_use",
-      });
+      // Then configure for Discord (plan first, then the tool turn).
+      mockProvider.queueResponses([
+        {
+          text: "Plan: create the file.",
+          toolCalls: [],
+          stopReason: "end_turn",
+          usage: { inputTokens: 40, outputTokens: 10, totalTokens: 50 },
+        },
+        {
+          text: "I'll create that file...",
+          toolCalls: [
+            createMockToolCall("tool-disc", "file_write", {
+              path: "Assets/TestDiscord.cs",
+              content: "class TestDiscord {}",
+            }),
+          ],
+          stopReason: "tool_use",
+        },
+      ]);
 
       await confirmDiscord.simulateIncomingMessage("discord-confirm", "Create Test.cs file");
 

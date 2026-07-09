@@ -7,6 +7,7 @@ import type { StradaProjectAnalysis } from "../intelligence/strada-analyzer.js";
 import { unwrap, isOk, isSome, isNone, unwrapOption } from "../types/index.js";
 
 vi.mock("../utils/logger.js", () => ({
+  getLoggerSafe: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
   getLogger: () => ({
     info: vi.fn(),
     warn: vi.fn(),

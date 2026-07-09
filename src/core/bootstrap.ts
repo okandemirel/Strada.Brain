@@ -1080,17 +1080,25 @@ async function bootstrapImpl(
     goalDecomposer,
   });
 
-  // Agent Core v2 strangler seam: select the active rollout stage by id via the AGENT_CORE_FLAG_SET
-  // ops knob (a config change, not a redeploy), REJECT-AT-BOOT for an unknown id (P-F closed matrix).
-  // Resolved BEFORE the orchestrator so the FlagSet threads into it. UNSET (the normal case) →
-  // PRODUCTION_DEFAULT_FLAG_SET_ID (THE FLIP: the V2 engine on every route + full control plane; see
-  // flags.ts). INSTANT REVERT with no redeploy: AGENT_CORE_FLAG_SET=v1-driver+full-control-plane
-  // (v1 engine, hardened control plane) or =all-v1 (bare baseline).
+  // Agent Core v2: select the active stage by id via the AGENT_CORE_FLAG_SET ops knob, REJECT-AT-
+  // BOOT for an unknown id (P-F closed matrix). Resolved BEFORE the orchestrator so the FlagSet
+  // threads into it. UNSET (the normal case) → PRODUCTION_DEFAULT_FLAG_SET_ID (the V2 engine on
+  // every route + full control plane). NOTE (cutover Step 5): the v1 engine is DELETED — there is
+  // no v1 revert. The old revert ids (all-v1, v1-driver+full-control-plane, the rollout stages)
+  // are DEPRECATED aliases that resolve to the production default; the warn below makes that
+  // loud so an operator can never believe a v1 revert took effect.
   const rawFlagSetEnv = process.env.AGENT_CORE_FLAG_SET?.trim();
   const requestedFlagSetId = rawFlagSetEnv || PRODUCTION_DEFAULT_FLAG_SET_ID;
   const agentCoreFlagSet = resolveFlagSetById(requestedFlagSetId);
+  if (rawFlagSetEnv && agentCoreFlagSet.id !== rawFlagSetEnv) {
+    logger.warn(
+      "AGENT_CORE_FLAG_SET names a deprecated v1-era flag set (the v1 engine was deleted in cutover Step 5); running the production default instead",
+      { requested: rawFlagSetEnv, resolved: agentCoreFlagSet.id },
+    );
+  }
   logger.info("Agent Core flag set resolved", {
     flagSet: agentCoreFlagSet.id,
+    requested: requestedFlagSetId,
     source: rawFlagSetEnv ? "AGENT_CORE_FLAG_SET" : "production-default",
   });
 
@@ -1132,7 +1140,6 @@ async function bootstrapImpl(
     metrics,
     ragPipeline,
     rateLimiter,
-    streamingEnabled: config.streamingEnabled,
     defaultLanguage: config.language,
     streamInitialTimeoutMs: config.llmStreamInitialTimeoutMs,
     streamStallTimeoutMs: config.llmStreamStallTimeoutMs,

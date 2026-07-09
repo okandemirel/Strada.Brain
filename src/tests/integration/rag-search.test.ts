@@ -539,6 +539,13 @@ describe("RAG Search Flow Integration", () => {
       });
 
       // First search: combat system
+      // v2 PAOR: provider call #1 of each run is the PLANNING turn — prepend a
+      // plan response per user turn so the tool_use lands on the executing call.
+      mockProvider.queueResponse({
+        text: "Plan: search the codebase, then answer.",
+        toolCalls: [],
+        stopReason: "end_turn",
+      });
       mockProvider.queueResponse({
         text: "Searching for combat system...",
         toolCalls: [
@@ -551,7 +558,12 @@ describe("RAG Search Flow Integration", () => {
 
       await channel.simulateIncomingMessage("chat-rag-multi-1", "Find combat system");
 
-      // Second search: damage calculation
+      // Second search: damage calculation (plan turn first — new run, new plan)
+      mockProvider.queueResponse({
+        text: "Plan: search the codebase, then answer.",
+        toolCalls: [],
+        stopReason: "end_turn",
+      });
       mockProvider.queueResponse({
         text: "Now searching for damage calculation...",
         toolCalls: [

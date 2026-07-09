@@ -1,93 +1,60 @@
 /**
- * Agent Core v2 — selectAgentRunner route-selector tests.
+ * Agent Core v2 — selectAgentRunner factory tests.
  *
- * Proves the Phase-2 flip mechanism: a route flips to V2AgentRunner ONLY when its driver flag is
- * "v2" AND the orchestrator exposes the V2 wiring hooks; everything else (default all-v1, missing
- * hooks, a different route's flag) falls through to the v1 pass-through — byte-identical to today.
+ * Cutover Step 5 deleted the v1 pass-through: the factory ALWAYS constructs V2AgentRunner over
+ * the host's port/gateway bundle, and a host lacking the wiring hooks is a HARD, descriptive
+ * error (previously a silent v1 fallback — the worst failure mode after the engine deletion).
  */
 
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect } from "vitest";
 import { FakeClock } from "../control/clock.js";
 import { selectAgentRunner, type RunnerHostOrchestrator } from "./runner-factory.js";
-import { V1AgentRunner } from "./v1-agent-runner.js";
 import { V2AgentRunner } from "./v2-agent-runner.js";
-import type { FlagSet } from "./flags.js";
 import type { OrchestratorPort } from "./orchestrator-port.js";
 import type { ModelGateway } from "../model/model-gateway.js";
 import type { PolicySeed } from "../control/policy.js";
 import type { HealthCore } from "../control/failure-ledger.js";
 
-/** A FlagSet with every route "v1" + the FULL control plane, overridable per test. */
-function mkFlags(over: Partial<FlagSet> = {}): FlagSet {
+/** A host orchestrator exposing the V2 wiring hooks (stubs — construction only stores them). */
+function mkHost(): RunnerHostOrchestrator {
   return {
-    id: "test",
-    interactive: "v1",
-    background: "v1",
-    worker: "v1",
-    supervisorNode: "v1",
-    failureLedger: true,
-    runClock: true,
-    silenceAccumulator: true,
-    typedCancelReason: true,
-    providerRouterScoring: false,
-    capabilityRegistry: false,
-    streamVisibleTokens: false,
-    ...over,
-  };
-}
-
-/** A host orchestrator exposing the V2 hooks. `flagSet` controls the routing; hooks return stubs. */
-function mkHost(opts: {
-  flagSet?: FlagSet | undefined;
-  withV2Hooks?: boolean;
-} = {}): RunnerHostOrchestrator {
-  const withV2Hooks = opts.withV2Hooks ?? true;
-  const host: RunnerHostOrchestrator = {
-    // V1OrchestratorLike surface (enough for V1AgentRunner construction).
-    runWorkerTask: vi.fn(async () => ({}) as never),
-    getAgentCoreFlagSet: () => opts.flagSet,
-  };
-  if (withV2Hooks) {
-    host.getAgentCoreClock = () => new FakeClock(0);
-    // createControlPlane only STORES seed/createHealthCore at construction (calls them in openRun),
-    // and new V2AgentRunner only stores its deps — so opaque stubs suffice for the instanceof check.
-    host.createAgentCorePort = () => ({
+    getAgentCoreClock: () => new FakeClock(0),
+    // createControlPlane only STORES seed/createHealthCore at construction (calls them in
+    // openRun), and new V2AgentRunner only stores its deps — opaque stubs suffice.
+    createAgentCorePort: () => ({
       port: {} as OrchestratorPort,
       gateway: {} as ModelGateway,
       seed: {} as PolicySeed,
       createHealthCore: () => ({}) as HealthCore,
-    });
-  }
-  return host;
+    }),
+  };
 }
 
-describe("selectAgentRunner — Phase-2 route selector (default-off)", () => {
-  it("no flag set → V1AgentRunner (the default all-v1 path)", () => {
-    expect(selectAgentRunner(mkHost({ flagSet: undefined }), "worker")).toBeInstanceOf(V1AgentRunner);
+describe("selectAgentRunner", () => {
+  it.each(["worker", "supervisor-node", "background", "interactive"] as const)(
+    "constructs V2AgentRunner for the %s mode",
+    (mode) => {
+      expect(selectAgentRunner(mkHost(), mode)).toBeInstanceOf(V2AgentRunner);
+    },
+  );
+
+  it("throws a descriptive error when the host lacks createAgentCorePort", () => {
+    const host = { getAgentCoreClock: () => new FakeClock(0) } as unknown as RunnerHostOrchestrator;
+    expect(() => selectAgentRunner(host, "worker")).toThrow(/wiring hooks/);
+    expect(() => selectAgentRunner(host, "worker")).toThrow(/Step 5/);
   });
 
-  it("worker route 'v1' → V1AgentRunner", () => {
-    const host = mkHost({ flagSet: mkFlags({ worker: "v1" }) });
-    expect(selectAgentRunner(host, "worker")).toBeInstanceOf(V1AgentRunner);
+  it("throws a descriptive error when the host lacks getAgentCoreClock", () => {
+    const host = {
+      createAgentCorePort: mkHost().createAgentCorePort,
+    } as unknown as RunnerHostOrchestrator;
+    expect(() => selectAgentRunner(host, "interactive")).toThrow(/wiring hooks/);
   });
 
-  it("worker route 'v2' + V2 hooks present → V2AgentRunner", () => {
-    const host = mkHost({ flagSet: mkFlags({ worker: "v2" }) });
-    expect(selectAgentRunner(host, "worker")).toBeInstanceOf(V2AgentRunner);
-  });
-
-  it("supervisor-node route 'v2' → V2AgentRunner", () => {
-    const host = mkHost({ flagSet: mkFlags({ supervisorNode: "v2" }) });
-    expect(selectAgentRunner(host, "supervisor-node")).toBeInstanceOf(V2AgentRunner);
-  });
-
-  it("route isolation: worker 'v2' does NOT flip the interactive route", () => {
-    const host = mkHost({ flagSet: mkFlags({ worker: "v2" }) }); // interactive stays "v1"
-    expect(selectAgentRunner(host, "interactive")).toBeInstanceOf(V1AgentRunner);
-  });
-
-  it("graceful fallback: worker 'v2' but the orchestrator lacks createAgentCorePort → V1AgentRunner", () => {
-    const host = mkHost({ flagSet: mkFlags({ worker: "v2" }), withV2Hooks: false });
-    expect(selectAgentRunner(host, "worker")).toBeInstanceOf(V1AgentRunner);
+  it("constructs a fresh runner per call (per-call construction is the contract)", () => {
+    const host = mkHost();
+    const a = selectAgentRunner(host, "worker");
+    const b = selectAgentRunner(host, "worker");
+    expect(a).not.toBe(b);
   });
 });

@@ -104,7 +104,6 @@ export async function initializeMultiAgentDelegationStage(
     metrics: params.metrics,
     ragPipeline: params.ragPipeline,
     rateLimiter: params.rateLimiter,
-    streamingEnabled: params.config.streamingEnabled,
     defaultLanguage: params.config.language,
     streamInitialTimeoutMs: params.config.llmStreamInitialTimeoutMs,
     streamStallTimeoutMs: params.config.llmStreamStallTimeoutMs,

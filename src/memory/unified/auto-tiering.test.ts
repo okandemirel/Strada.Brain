@@ -54,6 +54,7 @@ vi.mock("../../utils/logger.js", () => {
   const warnFn = vi.fn();
   const errorFn = vi.fn();
   return {
+    getLoggerSafe: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
     getLogger: vi.fn().mockReturnValue({
       debug: debugFn,
       info: infoFn,

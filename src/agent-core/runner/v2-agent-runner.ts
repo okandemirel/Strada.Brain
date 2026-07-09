@@ -195,7 +195,7 @@ export class V2AgentRunner implements AgentRunner {
   async run(request: AgentRunRequest, io: IOStrategy): Promise<AgentRunResult> {
     // Step 0 / gap #1 — establish v1's task-execution ALS scope around the ENTIRE run so deep readers
     // (goal-decomposition taskRunId, artifact-eval identityKey) see the context v1 set inside
-    // runBackgroundTask. v2-only (V1AgentRunner doesn't call this); the port owns the scope since the
+    // runBackgroundTask. the port owns the scope since the
     // spine cannot import the orchestrator's AsyncLocalStorage.
     return await this.deps.orchestratorPort.withRunTaskContext(this.toSetupInput(request, io.mode), () =>
       this.runInner(request, io),

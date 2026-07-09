@@ -12,6 +12,7 @@ import type { RouteContext } from "./server-types.js";
 import type { StradaMcpRuntimeStatus } from "../core/strada-mcp-tool-loader.js";
 
 vi.mock("../utils/logger.js", () => ({
+  getLoggerSafe: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
   getLogger: () => ({
     error: vi.fn(),
     warn: vi.fn(),

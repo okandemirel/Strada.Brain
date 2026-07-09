@@ -6,6 +6,7 @@ import type { IEmbeddingProvider, EmbeddingBatch } from "../rag.interface.js";
 // Logger mock
 // ---------------------------------------------------------------------------
 vi.mock("../../utils/logger.js", () => ({
+  getLoggerSafe: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
   getLogger: () => ({
     debug: vi.fn(),
     info: vi.fn(),

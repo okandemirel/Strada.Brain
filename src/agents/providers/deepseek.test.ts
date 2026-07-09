@@ -3,6 +3,7 @@ import { DeepSeekProvider } from "./deepseek.js";
 import type { ConversationMessage } from "./provider.interface.js";
 
 vi.mock("../../utils/logger.js", () => ({
+  getLoggerSafe: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
   getLogger: () => ({
     info: vi.fn(),
     warn: vi.fn(),

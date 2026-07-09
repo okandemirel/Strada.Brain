@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { OpenRouterProvider } from "./openrouter.js";
 
 vi.mock("../../utils/logger.js", () => ({
+  getLoggerSafe: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
   getLogger: () => ({
     info: vi.fn(),
     warn: vi.fn(),

@@ -464,9 +464,21 @@ public class NullSafety : MonoBehaviour
 
       mockProvider.queueResponses([
         {
+          // v2 PAOR: provider call #1 is the PLANNING turn — never the tool turn
+          text: "Plan: build, analyze the error, fix it, rebuild.",
+          toolCalls: [],
+          stopReason: "end_turn",
+        },
+        {
           text: "Building...",
           toolCalls: [createMockToolCall("tool-1", "dotnet_build", {})],
           stopReason: "tool_use",
+        },
+        {
+          // PAOR reflection response — build error triggers REFLECTING phase
+          text: "CONTINUE — the build failed, let me fix the reported error.",
+          toolCalls: [],
+          stopReason: "end_turn",
         },
         {
           text: "I can see the build output shows CS0246 error for 'InvalidType'. Let me fix this by using the correct type...",
@@ -483,6 +495,12 @@ public class NullSafety : MonoBehaviour
           text: "Fixed the type. Building again...",
           toolCalls: [createMockToolCall("tool-3", "dotnet_build", {})],
           stopReason: "tool_use",
+        },
+        {
+          // PAOR reflection response — second build error triggers REFLECTING again
+          text: "CONTINUE — report the build results to the user.",
+          toolCalls: [],
+          stopReason: "end_turn",
         },
         {
           text: "✅ Build successful! Changed InvalidType to string.",
@@ -513,6 +531,12 @@ public class NullSafety : MonoBehaviour
     it("should handle build timeout gracefully", async () => {
       mockProvider.queueResponses([
         {
+          // v2 PAOR: provider call #1 is the PLANNING turn — never the tool turn
+          text: "Plan: build the project and report the outcome.",
+          toolCalls: [],
+          stopReason: "end_turn",
+        },
+        {
           text: "Starting build (this may take a while)...",
           toolCalls: [createMockToolCall("tool-1", "dotnet_build", {})],
           stopReason: "tool_use",
@@ -541,6 +565,12 @@ public class NullSafety : MonoBehaviour
 
     it("should handle unrecoverable errors", async () => {
       mockProvider.queueResponses([
+        {
+          // v2 PAOR: provider call #1 is the PLANNING turn — never the tool turn
+          text: "Plan: attempt the build and assess recoverability.",
+          toolCalls: [],
+          stopReason: "end_turn",
+        },
         {
           text: "Attempting to build...",
           toolCalls: [createMockToolCall("tool-1", "dotnet_build", {})],

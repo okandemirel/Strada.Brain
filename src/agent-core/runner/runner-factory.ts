@@ -1,16 +1,15 @@
 /**
- * Agent Core v2 — the per-route runner selector (Phase 2 route flip).
+ * Agent Core v2 — the runner factory.
  *
- * `selectAgentRunner` is the single decision point that picks V2AgentRunner vs the v1 pass-through
- * for a given route, reading the resolved agent-core flag set off the orchestrator. It is the slot
- * `background-executor` calls instead of constructing V1AgentRunner directly.
+ * `selectAgentRunner` constructs the V2AgentRunner over the host orchestrator's port/gateway
+ * bundle. Cutover Step 5 deleted the v1 engine (runAgentLoop / runBackgroundTask /
+ * V1AgentRunner), so there is no per-route selection left: every mode runs the V2 spine. The
+ * `mode` parameter stays — it shapes the run policy + IOStrategy, not the engine choice.
  *
- * Since THE FLIP the shipped production default (PRODUCTION_DEFAULT_FLAG_SET_ID =
- * `v2-all-routes+full-control-plane`) selects `V2AgentRunner` on every route; `V1AgentRunner` is
- * reached only under the revert flag sets (`all-v1` — also the bare `resolveFlagSetById(undefined)`
- * / test baseline — and `v1-driver+full-control-plane`). A route only runs V2 when its driver flag
- * is `"v2"`, which the closed `LEGAL_FLAG_SETS` matrix only permits alongside the FULL control
- * plane (V2 consumes it) — so a V2 route can never be reached without the control plane.
+ * A host that lacks the V2 wiring hooks is a HARD ERROR (it would previously fall through to
+ * the now-deleted v1 pass-through silently): test hosts must provide the real
+ * `createAgentCorePort`/`getAgentCoreClock` (see v2-agent-runner.integration.test.ts's
+ * buildHarness for the canonical construction).
  *
  * Dependency rule (mirrors the rest of agent-core/runner): this imports ONLY agent-core modules +
  * a STRUCTURAL `RunnerHostOrchestrator` slice — never the concrete `Orchestrator` — so there is no
@@ -26,19 +25,19 @@ import type { ModelGateway } from "../model/model-gateway.js";
 import type { AgentRunner, RunnerMode } from "./agent-runner.js";
 import type { FlagSet } from "./flags.js";
 import type { OrchestratorPort } from "./orchestrator-port.js";
-import { V1AgentRunner, type V1OrchestratorLike } from "./v1-agent-runner.js";
 import { V2AgentRunner } from "./v2-agent-runner.js";
 
 /**
- * The structural slice of the v1 `Orchestrator` the selector needs to build a V2 runner — declared
+ * The structural slice of the `Orchestrator` the factory needs to build a V2 runner — declared
  * structurally (not by importing the concrete class) so `agent-core` stays cycle-free. The real
- * `Orchestrator` satisfies it (it has `getAgentCoreFlagSet`/`getAgentCoreClock`/`createAgentCorePort`).
- * All three are optional so a legacy/test orchestrator that lacks them simply falls through to v1.
+ * `Orchestrator` satisfies it. The wiring hooks are REQUIRED since the v1 pass-through fallback
+ * was deleted (cutover Step 5); `getAgentCoreFlagSet` stays optional — the remaining legal sets
+ * differ only in control-plane extras (scoring/capability/streaming), not in engine choice.
  */
-export interface RunnerHostOrchestrator extends V1OrchestratorLike {
+export interface RunnerHostOrchestrator {
   getAgentCoreFlagSet?(): FlagSet | undefined;
-  getAgentCoreClock?(): Clock;
-  createAgentCorePort?(): {
+  getAgentCoreClock(): Clock;
+  createAgentCorePort(): {
     port: OrchestratorPort;
     gateway: ModelGateway;
     seed: PolicySeed;
@@ -47,45 +46,27 @@ export interface RunnerHostOrchestrator extends V1OrchestratorLike {
 }
 
 /**
- * RunnerMode → the FlagSet driver field that governs it. A `Record<RunnerMode, …>` so a NEW
- * RunnerMode is a COMPILE error here (forcing an explicit route mapping) rather than silently
- * defaulting to v1 — the exhaustiveness guarantee a `default:`-arm switch would lose.
- */
-const ROUTE_FLAG_FIELD: Record<
-  RunnerMode,
-  "worker" | "supervisorNode" | "background" | "interactive"
-> = {
-  worker: "worker",
-  "supervisor-node": "supervisorNode",
-  background: "background",
-  interactive: "interactive",
-};
-
-/** True when `mode`'s per-route driver flag is `"v2"` in the resolved set. */
-function routeUsesV2(flagSet: FlagSet | undefined, mode: RunnerMode): boolean {
-  return flagSet?.[ROUTE_FLAG_FIELD[mode]] === "v2";
-}
-
-/**
- * Select the runner for `mode`: `V2AgentRunner` when the route's driver flag is `"v2"` AND the
- * orchestrator exposes the V2 wiring hooks; otherwise the v1 pass-through. Per-call construction is
- * cheap (the port is a bundle of bound closures; the control plane is per-run state) and matches the
- * existing per-call `V1AgentRunner` construction the executor already did.
+ * Construct the V2 runner for `mode`. Per-call construction is cheap (the port is a bundle of
+ * bound closures; the control plane is per-run state). Throws a descriptive error when the host
+ * lacks the V2 wiring hooks — a silent fallback no longer exists.
  */
 export function selectAgentRunner(
   orchestrator: RunnerHostOrchestrator,
   mode: RunnerMode,
 ): AgentRunner {
-  const flagSet = orchestrator.getAgentCoreFlagSet?.();
   if (
-    routeUsesV2(flagSet, mode) &&
-    typeof orchestrator.createAgentCorePort === "function" &&
-    typeof orchestrator.getAgentCoreClock === "function"
+    typeof orchestrator.createAgentCorePort !== "function" ||
+    typeof orchestrator.getAgentCoreClock !== "function"
   ) {
-    const { port, gateway, seed, createHealthCore } = orchestrator.createAgentCorePort();
-    const clock = orchestrator.getAgentCoreClock();
-    const controlPlane = createControlPlane({ clock, seed, createHealthCore });
-    return new V2AgentRunner({ controlPlane, gateway, orchestratorPort: port, clock });
+    throw new Error(
+      `selectAgentRunner(${mode}): the host orchestrator lacks the Agent Core wiring hooks ` +
+        "(createAgentCorePort/getAgentCoreClock). The v1 pass-through was deleted in cutover " +
+        "Step 5 — construct the host with the real port wiring (see " +
+        "v2-agent-runner.integration.test.ts buildHarness).",
+    );
   }
-  return new V1AgentRunner(orchestrator as V1OrchestratorLike);
+  const { port, gateway, seed, createHealthCore } = orchestrator.createAgentCorePort();
+  const clock = orchestrator.getAgentCoreClock();
+  const controlPlane = createControlPlane({ clock, seed, createHealthCore });
+  return new V2AgentRunner({ controlPlane, gateway, orchestratorPort: port, clock });
 }

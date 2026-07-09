@@ -4,8 +4,10 @@ import type { Task } from "./types.js";
 import { TaskStatus } from "./types.js";
 import type { GoalTree, GoalNode, GoalNodeId } from "../goals/types.js";
 import { generateGoalNodeId } from "../goals/types.js";
+import type { AgentRunRequest, AgentRunResult, IOStrategy } from "../agent-core/runner/index.js";
 
 vi.mock("../utils/logger.js", () => ({
+  getLoggerSafe: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
   getLogger: () => ({
     info: vi.fn(),
     warn: vi.fn(),
@@ -13,6 +15,80 @@ vi.mock("../utils/logger.js", () => ({
     debug: vi.fn(),
   }),
 }));
+
+// Step 5 retarget: the executor now ALWAYS routes worker runs through the AgentRunner seam
+// (selectAgentRunner → the V2 spine), and the real factory THROWS when the host orchestrator
+// lacks createAgentCorePort/getAgentCoreClock. These tests exercise EXECUTOR logic (queueing,
+// watchdog, terminals, budget threading) — not the engine — so we factory-mock the runner
+// module with a fake AgentRunner that translates the AgentRunRequest back into the v1-era
+// mock-orchestrator script surface (runBackgroundTask(prompt, options) / runWorkerTask(request)),
+// preserving every existing per-test script and assertion byte-for-byte.
+vi.mock("../agent-core/runner/index.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../agent-core/runner/index.js")>();
+  type FakeHost = {
+    runWorkerTask?: (req: Record<string, unknown>) => Promise<Record<string, unknown>>;
+    runBackgroundTask?: (prompt: string, options: Record<string, unknown>) => Promise<string>;
+  };
+  const baseResult = {
+    provider: "mock",
+    catalogVersion: "mock:default",
+    assignmentVersion: 0,
+    touchedFiles: [],
+    toolTrace: [],
+    verificationResults: [],
+    reviewFindings: [],
+    artifacts: [],
+  };
+  return {
+    ...actual,
+    selectAgentRunner: (host: FakeHost) => ({
+      run: async (request: AgentRunRequest, io: IOStrategy): Promise<AgentRunResult> => {
+        // The v1 BackgroundTaskOptions/WorkerRunRequest option surface the mocks script against.
+        const v1Options: Record<string, unknown> = {
+          chatId: request.chatId,
+          channelType: request.channelType,
+          conversationId: request.conversationId,
+          userId: request.userId,
+          taskRunId: request.taskRunId,
+          attachments: request.attachments,
+          userContent: request.userContent,
+          assignedProvider: request.assignedProvider,
+          assignedModel: request.assignedModel,
+          workspaceLease: request.workspaceLease,
+          workspaceLeaseRetained: request.workspaceLeaseRetained,
+          supervisorMode: request.supervisorMode,
+          goalContext: request.goalContext,
+          monitorScope: request.monitorScope,
+          onUsage: request.onUsage,
+          signal: io.externalSignal,
+          onProgress: (update: unknown) => io.onEvent(update as never),
+        };
+        if (typeof host.runWorkerTask === "function") {
+          // Worker-scripted hosts return a WorkerRunResult; lift it into an AgentRunResult
+          // (finalText ↔ visibleResponse) exactly like the deleted v1 pass-through did.
+          const workerResult = await host.runWorkerTask({
+            ...v1Options,
+            mode: request.workerMode,
+            prompt: request.prompt,
+          });
+          return {
+            ...baseResult,
+            ...workerResult,
+            finalText: String(workerResult.visibleResponse ?? ""),
+            finalSummary: String(workerResult.finalSummary ?? workerResult.visibleResponse ?? ""),
+          } as unknown as AgentRunResult;
+        }
+        const output = await host.runBackgroundTask!(request.prompt, v1Options);
+        return {
+          ...baseResult,
+          status: "completed",
+          finalText: output,
+          finalSummary: output,
+        } as unknown as AgentRunResult;
+      },
+    }),
+  };
+});
 
 function createMockOrchestrator() {
   const evaluateSupervisorAdmission = vi.fn().mockResolvedValue({

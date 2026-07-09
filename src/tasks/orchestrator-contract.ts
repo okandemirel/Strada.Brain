@@ -38,18 +38,20 @@ export interface IBackgroundExecutor {
 
 // ─── Orchestrator Interface ──────────────────────────────────────────────────
 
-/** Minimal contract the task system needs from an Orchestrator instance. */
+/**
+ * Minimal contract the task system needs from an Orchestrator instance.
+ *
+ * Cutover Step 5 removed the v1 `runBackgroundTask` entry point: the task system now routes
+ * every run through the Agent Core runner seam (`selectAgentRunner` over the host hooks below;
+ * see `src/agent-core/runner/runner-factory.ts`). The hooks are typed loosely here to keep this
+ * contract import-free (it must not import ./types.ts, and stays decoupled from agent-core's
+ * concrete types — background-executor narrows via `RunnerHostOrchestrator` at the call site).
+ */
 export interface IOrchestrator {
-  /**
-   * Execute a task in background mode and return the visible response.
-   *
-   * The `options` parameter uses a broad signature here to avoid importing
-   * BackgroundTaskOptions (which lives in ./types.ts and would create an
-   * intra-package cycle). Callers in background-executor.ts always pass a
-   * properly-typed BackgroundTaskOptions object.
-   */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  runBackgroundTask(prompt: string, options: any): Promise<string>;
+  /** Agent Core v2 strangler seam: builds the port/gateway bundle the V2 runner drives. */
+  createAgentCorePort(): unknown;
+  /** The injected agent-core clock (SystemClock in prod, FakeClock in tests). */
+  getAgentCoreClock(): unknown;
 }
 
 // ─── Supervisor Admission Types ──────────────────────────────────────────────

@@ -87,7 +87,6 @@ export interface AgentManagerOptions {
   readonly metrics?: MetricsCollector;
   readonly ragPipeline?: IRAGPipeline;
   readonly rateLimiter?: RateLimiter;
-  readonly streamingEnabled: boolean;
   readonly defaultLanguage?: "en" | "tr" | "ja" | "ko" | "zh" | "de" | "es" | "fr";
   readonly streamInitialTimeoutMs?: number;
   readonly streamStallTimeoutMs?: number;
@@ -613,7 +612,6 @@ export class AgentManager {
       metrics: this.opts.metrics,
       ragPipeline: this.opts.ragPipeline,
       rateLimiter: this.opts.rateLimiter,
-      streamingEnabled: this.opts.streamingEnabled,
       defaultLanguage: this.opts.defaultLanguage,
       streamInitialTimeoutMs: this.opts.streamInitialTimeoutMs,
       streamStallTimeoutMs: this.opts.streamStallTimeoutMs,

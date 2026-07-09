@@ -11,6 +11,7 @@ import {
 import type { CanvasStorage, CanvasState } from "./canvas-storage.js";
 
 vi.mock("../utils/logger.js", () => ({
+  getLoggerSafe: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
   getLogger: () => ({
     error: vi.fn(),
     warn: vi.fn(),

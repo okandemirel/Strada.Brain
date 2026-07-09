@@ -4,6 +4,7 @@ import { ConsensusManager } from "./consensus-manager.js";
 import type { ProviderCapabilities } from "../../agents/providers/provider.interface.js";
 
 vi.mock("../../utils/logger.js", () => ({
+  getLoggerSafe: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
   getLogger: () => ({
     error: vi.fn(),
     warn: vi.fn(),

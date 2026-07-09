@@ -6,6 +6,7 @@ import { join } from "node:path";
 // The FileVectorStore calls getLogger(), so we must initialise the singleton
 // before importing the module under test.
 vi.mock("../utils/logger.js", () => ({
+  getLoggerSafe: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
   getLogger: () => ({
     info: () => undefined,
     debug: () => undefined,

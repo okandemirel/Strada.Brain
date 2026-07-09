@@ -64,13 +64,23 @@ describe("Telegram Flow Integration", () => {
 
   describe("Basic Message Flow", () => {
     it("should receive message and send response", async () => {
-      // Arrange: Configure provider to return a simple response
-      mockProvider.queueResponse({
-        text: "Hello! I received your message.",
-        toolCalls: [],
-        stopReason: "end_turn",
-        usage: { inputTokens: 50, outputTokens: 20, totalTokens: 70 },
-      });
+      // Arrange: Configure provider to return a simple response.
+      // v2 PAOR: provider call #1 is the PLANNING turn (never rendered), so the
+      // same response is queued twice — plan + rendered answer.
+      mockProvider.queueResponses([
+        {
+          text: "Hello! I received your message.",
+          toolCalls: [],
+          stopReason: "end_turn",
+          usage: { inputTokens: 50, outputTokens: 20, totalTokens: 70 },
+        },
+        {
+          text: "Hello! I received your message.",
+          toolCalls: [],
+          stopReason: "end_turn",
+          usage: { inputTokens: 50, outputTokens: 20, totalTokens: 70 },
+        },
+      ]);
 
       // Act: Simulate incoming Telegram message
       await telegramChannel.simulateIncomingMessage(
@@ -85,12 +95,22 @@ describe("Telegram Flow Integration", () => {
     });
 
     it("should handle messages with markdown formatting", async () => {
-      mockProvider.queueResponse({
-        text: "Here's some **bold** and `code` formatting.",
-        toolCalls: [],
-        stopReason: "end_turn",
-        usage: { inputTokens: 50, outputTokens: 25, totalTokens: 75 },
-      });
+      // v2 PAOR: queue twice — call #1 is the plan (not rendered); the ANSWER
+      // call carries the markdown text that must reach the channel.
+      mockProvider.queueResponses([
+        {
+          text: "Here's some **bold** and `code` formatting.",
+          toolCalls: [],
+          stopReason: "end_turn",
+          usage: { inputTokens: 50, outputTokens: 25, totalTokens: 75 },
+        },
+        {
+          text: "Here's some **bold** and `code` formatting.",
+          toolCalls: [],
+          stopReason: "end_turn",
+          usage: { inputTokens: 50, outputTokens: 25, totalTokens: 75 },
+        },
+      ]);
 
       await telegramChannel.simulateIncomingMessage("chat-456", "Show me formatting");
 
@@ -242,13 +262,21 @@ describe("Telegram Flow Integration", () => {
 
   describe("Session Management", () => {
     it("should maintain conversation context within a session", async () => {
-      // First message
-      mockProvider.queueResponse({
-        text: "I understand you're asking about PlayerController.",
-        toolCalls: [],
-        stopReason: "end_turn",
-        usage: { inputTokens: 100, outputTokens: 30, totalTokens: 130 },
-      });
+      // First message — v2 PAOR: queued twice (plan turn + rendered answer)
+      mockProvider.queueResponses([
+        {
+          text: "I understand you're asking about PlayerController.",
+          toolCalls: [],
+          stopReason: "end_turn",
+          usage: { inputTokens: 100, outputTokens: 30, totalTokens: 130 },
+        },
+        {
+          text: "I understand you're asking about PlayerController.",
+          toolCalls: [],
+          stopReason: "end_turn",
+          usage: { inputTokens: 100, outputTokens: 30, totalTokens: 130 },
+        },
+      ]);
 
       await telegramChannel.simulateIncomingMessage("chat-session", "Tell me about PlayerController");
 
@@ -277,10 +305,32 @@ describe("Telegram Flow Integration", () => {
     });
 
     it("should isolate sessions between different chats", async () => {
-      mockProvider.queueResponses([
-        { text: "Response for chat A", toolCalls: [], stopReason: "end_turn" },
-        { text: "Response for chat B", toolCalls: [], stopReason: "end_turn" },
-      ]);
+      // v2 PAOR: each run makes multiple provider calls (plan + answer), so FIFO
+      // queueing can't be relied on across chats — key the response on the user
+      // message content instead (same text serves both the plan and answer calls).
+      mockProvider.registerResponseHandler("chat-isolation", ({ messages }) => {
+        const lastUser = [...messages]
+          .reverse()
+          .find((m) => m.role === "user" && typeof m.content === "string");
+        const text = typeof lastUser?.content === "string" ? lastUser.content : "";
+        if (text.includes("Message A")) {
+          return {
+            text: "Response for chat A",
+            toolCalls: [],
+            stopReason: "end_turn",
+            usage: { inputTokens: 50, outputTokens: 20, totalTokens: 70 },
+          };
+        }
+        if (text.includes("Message B")) {
+          return {
+            text: "Response for chat B",
+            toolCalls: [],
+            stopReason: "end_turn",
+            usage: { inputTokens: 50, outputTokens: 20, totalTokens: 70 },
+          };
+        }
+        return undefined;
+      });
 
       // Send messages to different chats
       await telegramChannel.simulateIncomingMessage("chat-A", "Message A");
@@ -312,16 +362,17 @@ describe("Telegram Flow Integration", () => {
 
   describe("Error Handling", () => {
     it("should handle provider errors gracefully", async () => {
-      // Simulate repeated provider errors to trigger abort with user notification
-      for (let i = 0; i < 5; i++) {
-        mockProvider.chatSpy.mockRejectedValueOnce(new Error("Provider API error"));
-      }
+      // Simulate persistent provider errors to trigger abort with user notification.
+      // v2 spine calls the provider via chatStream (silent streaming), so the stream
+      // spy — not chatSpy — is the failure injection point.
+      mockProvider.chatStreamSpy.mockRejectedValue(new Error("Provider API error"));
 
       await telegramChannel.simulateIncomingMessage("chat-error", "Trigger error");
 
-      // Assert: Error message sent to user (not internal details)
-      expect(telegramChannel.sentMessages.length).toBeGreaterThan(0);
-      const lastMessage = telegramChannel.getLastMessage("chat-error");
+      // Assert: Error message sent to user (not internal details).
+      // v2 renders resilience/abort notices through the markdown sink.
+      expect(telegramChannel.sentMarkdowns.length).toBeGreaterThan(0);
+      const lastMessage = telegramChannel.getLastMarkdown("chat-error");
       // Error message should be user-friendly (no raw stack traces or API keys)
       expect(lastMessage?.text).toBeDefined();
       expect(lastMessage?.text).not.toContain("stack");

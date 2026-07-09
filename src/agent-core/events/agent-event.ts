@@ -222,10 +222,12 @@ const HEARTBEAT_PROGRESS: TaskProgressSignal = { kind: "heartbeat", message: "" 
  * heartbeat filter (`update.kind === "heartbeat"`) never matched and every bus event leaked
  * toward the UI-facing progress stream as an alien shape).
  *
- * PHASE-0 DUALITY: until the v1 deletion, V1AgentRunner forwards v1's TaskProgressUpdate stream
- * VERBATIM through io.onEvent (a string or a `{kind,…}` signal — see runner/agent-runner.ts's
- * AgentRunEvent note), while the V2 spine emits the closed `{type,…}` union. The adapter accepts
- * both and passes v1 shapes through untouched, so one wiring serves whichever runner is selected.
+ * SHAPE TOLERANCE (kept deliberately post-Step-5): io.onEvent's SINK contract is still typed
+ * `AgentRunEvent = TaskProgressUpdate` (runner/agent-runner.ts), and test fakes drive it with
+ * v1-shaped updates (a string or a `{kind,…}` signal), while the V2 spine emits the closed
+ * `{type,…}` union through the bus. The adapter accepts both and passes v1 shapes through
+ * untouched; narrowing to AgentEvent-only belongs to the engine-relocation step that also
+ * retypes the sink contract.
  *
  * Mapping contract (v1 parity):
  *  - `narrative` carries v1's TaskProgressSignal VERBATIM (by construction) → unwrap it.

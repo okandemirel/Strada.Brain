@@ -259,7 +259,9 @@ describe("Step 3 — interactive route flip (v2 spine vs v1 loop, no double-rend
     expect(answerRenderCount(channel, "v2-int-1")).toBe(1);
   });
 
-  it("flag OFF (all-v1 baseline): the SAME turn on the v1 loop also renders EXACTLY ONCE", async () => {
+  it("a DEPRECATED revert flag id (all-v1) aliases to the v2 default and still renders EXACTLY ONCE", async () => {
+    // Cutover Step 5 deleted the v1 loop; resolveFlagSetById("all-v1") now aliases to the
+    // production default (ops-safe deprecation), so this turn runs the SAME v2 driver.
     const channel = createMockChannel();
     const orch = makeOrchestrator({
       provider: createAnswerProvider(),
@@ -275,7 +277,6 @@ describe("Step 3 — interactive route flip (v2 spine vs v1 loop, no double-rend
       timestamp: new Date(),
     });
 
-    // Equivalence: the v1 loop renders the answer once too. Same harness, only the flag differs.
     expect(answerRenderCount(channel, "v1-int-1")).toBe(1);
   });
 
