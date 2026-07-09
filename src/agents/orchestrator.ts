@@ -6,6 +6,9 @@ import type {
   ProviderResponse,
   IStreamingProvider,
 } from "./providers/provider.interface.js";
+// Streaming-first single-shot LLM call: a slow reasoning model must not trip the
+// FallbackChain's 90s first-response timer on the blocking chat() path (533b1e9).
+import { streamOrChatText } from "./providers/provider.interface.js";
 import { ProviderHealthRegistry } from "./providers/provider-health.js";
 import { DynamicToolFactory } from "./tools/dynamic/dynamic-tool-factory.js";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -2274,10 +2277,10 @@ export class Orchestrator {
     ].join("\n");
 
     try {
-      const synthesisResponse = await synthesisProvider.chat(
+      const synthesisResponse = await streamOrChatText(
+        synthesisProvider,
         `${params.systemPrompt}\n\n${SUPERVISOR_SYNTHESIS_SYSTEM_PROMPT}${this.buildSupervisorRolePrompt(params.strategy, params.strategy.synthesizer)}`,
-        [{ role: "user", content: synthesisRequest }],
-        [],
+        synthesisRequest,
       );
       this.recordExecutionTrace({
         chatId: params.chatId,
@@ -2429,10 +2432,10 @@ export class Orchestrator {
         params.channelType,
         synthesisPersonaContent,
       );
-      const synthesisResponse = await synthesisProvider.chat(
+      const synthesisResponse = await streamOrChatText(
+        synthesisProvider,
         `${soulEnrichedPrompt}\n\n${SUPERVISOR_SYNTHESIS_SYSTEM_PROMPT}${this.buildSupervisorRolePrompt(strategy, strategy.synthesizer)}`,
-        [{ role: "user", content: synthesisRequest }],
-        [],
+        synthesisRequest,
       );
       this.recordExecutionTrace({
         chatId: params.chatId,
@@ -7346,21 +7349,16 @@ export class Orchestrator {
       `${params.prompt}\n\nVisibility review.`,
     );
 
-    const response = await reviewer.provider.chat(
+    const response = await streamOrChatText(
+      reviewer.provider,
       `${this.systemPrompt}\n\n${VISIBILITY_REVIEW_SYSTEM_PROMPT}${this.buildSupervisorRolePrompt(params.strategy, reviewer)}`,
-      [
-        {
-          role: "user",
-          content: buildVisibilityReviewRequest({
-            prompt: params.prompt,
-            draft: params.draft,
-            evidence: params.evidence,
-            task: params.task,
-            canInspectLocally: params.canInspectLocally,
-          }),
-        },
-      ],
-      [],
+      buildVisibilityReviewRequest({
+        prompt: params.prompt,
+        draft: params.draft,
+        evidence: params.evidence,
+        task: params.task,
+        canInspectLocally: params.canInspectLocally,
+      }),
     );
     this.recordExecutionTrace({
       chatId: params.chatId,
@@ -7432,8 +7430,6 @@ export class Orchestrator {
         verifierChecks,
         buildToolsAvailable: params.plan.buildToolsAvailable,
       });
-      const stageMessages: ConversationMessage[] = [{ role: "user", content: stageRequest }];
-
       const parseOrFallback = (text: string): CompletionReviewStageResult =>
         parseCompletionReviewStageResult(text, stage)
         ?? this.buildCompletionReviewStageFallback(
@@ -7443,10 +7439,10 @@ export class Orchestrator {
         );
 
       try {
-        const reviewResponse = await assignment.provider.chat(
+        const reviewResponse = await streamOrChatText(
+          assignment.provider,
           `${this.systemPrompt}\n\n${buildCompletionReviewStageSystemPrompt(stage)}${this.buildSupervisorRolePrompt(params.strategy, assignment)}`,
-          stageMessages,
-          [],
+          stageRequest,
         );
         this.recordExecutionTrace({
           chatId: params.chatId,
@@ -7470,10 +7466,10 @@ export class Orchestrator {
         // Retry with the main provider chain (FallbackChainProvider) before giving up
         try {
           const chainProvider = this.providerManager.getProvider(params.identityKey);
-          const retryResponse = await chainProvider.chat(
+          const retryResponse = await streamOrChatText(
+            chainProvider,
             `${this.systemPrompt}\n\n${buildCompletionReviewStageSystemPrompt(stage)}`,
-            stageMessages,
-            [],
+            stageRequest,
           );
           this.recordAuxiliaryUsage(chainProvider.name, retryResponse.usage, params.usageHandler);
           recordUsage(retryResponse.usage);
@@ -7513,15 +7509,10 @@ export class Orchestrator {
       buildToolsAvailable: params.plan.buildToolsAvailable,
     });
 
-    const reviewResponse = await reviewer.provider.chat(
+    const reviewResponse = await streamOrChatText(
+      reviewer.provider,
       `${this.systemPrompt}\n\n${COMPLETION_REVIEW_SYNTHESIS_SYSTEM_PROMPT}${this.buildSupervisorRolePrompt(params.strategy, reviewer)}`,
-      [
-        {
-          role: "user",
-          content: synthesisRequest,
-        },
-      ],
-      [],
+      synthesisRequest,
     ).catch(async (error) => {
       getLogger().warn("Completion review synthesis failed, trying main provider chain", {
         chatId: params.chatId,
@@ -7531,10 +7522,10 @@ export class Orchestrator {
       // Retry with the main provider chain before giving up
       try {
         const chainProvider = this.providerManager.getProvider(params.identityKey);
-        const retryResponse = await chainProvider.chat(
+        const retryResponse = await streamOrChatText(
+          chainProvider,
           `${this.systemPrompt}\n\n${COMPLETION_REVIEW_SYNTHESIS_SYSTEM_PROMPT}`,
-          [{ role: "user", content: synthesisRequest }],
-          [],
+          synthesisRequest,
         );
         this.recordAuxiliaryUsage(chainProvider.name, retryResponse.usage, params.usageHandler);
         recordUsage(retryResponse.usage);
@@ -7603,21 +7594,15 @@ export class Orchestrator {
     const reviewTask = this.taskClassifier.classify(taskPrompt || command);
 
     try {
-      const response = await provider.chat(
+      const response = await streamOrChatText(
+        provider,
         SHELL_REVIEW_SYSTEM_PROMPT,
-        [
-          {
-            role: "user",
-            content:
-              `Mode: ${mode}\n` +
-              `Task: ${taskPrompt || "(not provided)"}\n` +
-              `Working directory: ${workingDirectory}\n` +
-              `Timeout ms: ${Number.isFinite(timeoutMs) ? timeoutMs : 30000}\n` +
-              `Recent context:\n${recentContext || "(none)"}\n\n` +
-              `Command:\n${command}`,
-          },
-        ],
-        [],
+        `Mode: ${mode}\n` +
+          `Task: ${taskPrompt || "(not provided)"}\n` +
+          `Working directory: ${workingDirectory}\n` +
+          `Timeout ms: ${Number.isFinite(timeoutMs) ? timeoutMs : 30000}\n` +
+          `Recent context:\n${recentContext || "(none)"}\n\n` +
+          `Command:\n${command}`,
       );
       this.recordExecutionTrace({
         chatId,

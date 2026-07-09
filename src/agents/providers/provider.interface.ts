@@ -129,12 +129,16 @@ export function supportsStreaming(provider: IAIProvider): provider is IStreaming
  * `response.text` to the full body, which is what we return — identical to the
  * non-streaming path. If a provider returns empty text but streamed chunks, we
  * reconstruct the text from the accumulator so downstream parsing still succeeds.
+ *
+ * Returns the FULL ProviderResponse (usage, stopReason, …) so callers that record
+ * token usage (e.g. the orchestrator review/verify cluster) lose nothing by
+ * switching from a blocking `chat()` to this streaming-first helper.
  */
 export async function streamOrChatText(
   provider: IAIProvider,
   systemPrompt: string,
   userMessage: string,
-): Promise<{ text: string }> {
+): Promise<ProviderResponse> {
   const messages: ConversationMessage[] = [{ role: "user", content: userMessage }];
   if (supportsStreaming(provider)) {
     let accumulated = "";
@@ -143,7 +147,7 @@ export async function streamOrChatText(
       if (chunk) accumulated += chunk;
     });
     const text = response.text && response.text.length > 0 ? response.text : accumulated;
-    return { text };
+    return { ...response, text };
   }
   return provider.chat(systemPrompt, messages, []);
 }

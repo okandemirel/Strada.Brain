@@ -50,6 +50,9 @@
  */
 
 import type { WorkspaceBus } from './workspace-bus.js'
+// getLoggerSafe: no-op before createLogger() runs (e.g. unit tests) — a monitor
+// lifecycle event must never throw for want of the logging singleton.
+import { getLoggerSafe } from '../utils/logger.js'
 import type { GoalTree } from '../goals/types.js'
 import { goalTreeToDagPayload, type DagNodeShape, type DagPayload } from './workspace-events.js'
 
@@ -231,7 +234,19 @@ export function createMonitorLifecycle(workspaceBus: WorkspaceBus): MonitorLifec
   const lifecycle: MonitorLifecycle = {
     requestStart(conversationScope: string, userMessage: string, monitorScope?: string): void {
       const scopeKey = resolveScopeKey(conversationScope, monitorScope)
+      // Capture the prior entry BEFORE resolveEpisode so the log line can attribute
+      // every episode boundary: a MINT (no prior / rollover after terminal) vs a
+      // CONTINUE (card added to the open episode). Monitor events are otherwise
+      // WS-only — this is the file-log trail that lets a soak verify "one
+      // conversation per whole goal" (and, if a spray ever reappears, its source).
+      const prior = episodes.get(scopeKey)
       const episode = resolveEpisode(scopeKey)
+      getLoggerSafe().info('Monitor episode request-start', {
+        scopeKey,
+        episodeId: episode.episodeId,
+        minted: !prior || prior.terminal,
+        ...(prior?.terminal ? { rolledOverFrom: prior.episodeId } : {}),
+      })
       // Each request gets its own simple node (Kanban card) inside the episode.
       emitStartCard(episode, userMessage, scopeKey)
     },
@@ -243,6 +258,11 @@ export function createMonitorLifecycle(workspaceBus: WorkspaceBus): MonitorLifec
       // workspace (the whole-goal root owns episode creation).
       const scopeKey = resolveScopeKey(conversationScope, monitorScope)
       const episode = episodes.get(scopeKey)
+      getLoggerSafe().info('Monitor episode join', {
+        scopeKey,
+        episodeId: episode?.episodeId,
+        joined: Boolean(episode && !episode.terminal),
+      })
       if (!episode || episode.terminal) return
       emitStartCard(episode, userMessage, scopeKey)
     },
@@ -259,6 +279,12 @@ export function createMonitorLifecycle(workspaceBus: WorkspaceBus): MonitorLifec
       const episode = episodes.get(scopeKey)
       if (episode) settleLatestCard(episode, scopeKey, false)
       const payload = goalTreeToDagPayload(goalTree, scopeKey)
+      getLoggerSafe().info('Monitor episode goal-decomposed', {
+        scopeKey,
+        episodeId: episode?.episodeId,
+        goalRootId: payload.rootId,
+        nodeCount: payload.nodes.length,
+      })
       workspaceBus.emit('monitor:dag_init', withEpisodeRoot(payload, episode))
     },
 
@@ -274,7 +300,16 @@ export function createMonitorLifecycle(workspaceBus: WorkspaceBus): MonitorLifec
     requestEnd(conversationScope: string, failed = false, monitorScope?: string): void {
       const scopeKey = resolveScopeKey(conversationScope, monitorScope)
       const episode = episodes.get(scopeKey)
-      if (!episode) return // No active episode for this scope — no-op
+      if (!episode) {
+        // A requestEnd with no episode may indicate a scope-key mismatch — worth a trace.
+        getLoggerSafe().debug('Monitor episode request-end without an active episode', { scopeKey })
+        return
+      }
+      getLoggerSafe().info('Monitor episode terminal', {
+        scopeKey,
+        episodeId: episode.episodeId,
+        failed,
+      })
       // Settle this request's simple node (the most-recent in-flight card, LIFO),
       // if any remains un-superseded by decomposition. Tracking each request's
       // card separately means a concurrent same-scope request (e.g. interactive +
@@ -293,6 +328,11 @@ export function createMonitorLifecycle(workspaceBus: WorkspaceBus): MonitorLifec
       const scopeKey = resolveScopeKey(conversationScope, monitorScope)
       const episode = episodes.get(scopeKey)
       if (!episode) return
+      getLoggerSafe().debug('Monitor episode joined-card settled', {
+        scopeKey,
+        episodeId: episode.episodeId,
+        failed,
+      })
       settleLatestCard(episode, scopeKey, failed)
     },
   }
