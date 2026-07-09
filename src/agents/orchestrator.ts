@@ -460,6 +460,11 @@ interface AgentCorePortRunContext {
   // of opening a sibling monitor workspace. False/undefined on interactive + scope-less runs.
   readonly joinsParentEpisode: boolean;
   readonly workerMonitorScope: string | undefined;
+  /** step5-parity: v1 refreshed memory per tool turn via this refresher (mid-run re-retrieval);
+   *  the port's tool turn threads it into refreshMemoryIfNeeded exactly as the v1 loops did. */
+  readonly memoryRefresher: ReturnType<SessionManager["createMemoryRefresher"]> | null;
+  /** step5-parity: the supervisor provider pin's fixed all-roles strategy (undefined = unpinned). */
+  readonly fixedExecutionStrategy: SupervisorExecutionStrategy | undefined;
 }
 
 /** 1b/1c seed default for the task-scope silence ceiling: the shared
@@ -1716,6 +1721,43 @@ export class Orchestrator {
     projectWorldFingerprint?: string,
   ): SupervisorExecutionStrategy {
     return buildSupervisorExecutionStrategyHelper(this.getSupervisorRoutingContext(), prompt, identityKey, fallbackProvider, projectWorldFingerprint);
+  }
+
+  /**
+   * step5-parity (resurrected — deleted as "loop-only" but the CAPABILITY belongs to the engine):
+   * a supervisor-assigned provider pin materializes a strategy with EVERY role on the pinned
+   * provider+model and usesMultipleProviders=false, so a vision-pinned image subtask can never
+   * silently run (and gate) on the identity default. Consumed by setupAgentCoreRun →
+   * runCtx.fixedExecutionStrategy → prepareIteration's fixedExecutionStrategy param.
+   */
+  private buildFixedSupervisorExecutionStrategy(
+    prompt: string,
+    identityKey: string,
+    providerName: string,
+    modelId: string | undefined,
+    provider: IAIProvider,
+  ): SupervisorExecutionStrategy {
+    const task = this.taskClassifier.classify(prompt);
+    const metadata = this.buildCatalogAssignmentMetadata(providerName, modelId, identityKey);
+    const buildAssignment = (role: SupervisorRole): SupervisorAssignment =>
+      this.buildStaticSupervisorAssignment(
+        role,
+        providerName,
+        modelId,
+        provider,
+        "Supervisor delegated child-worker assignment",
+        undefined,
+        metadata,
+      );
+
+    return {
+      task,
+      planner: buildAssignment("planner"),
+      executor: buildAssignment("executor"),
+      reviewer: buildAssignment("reviewer"),
+      synthesizer: buildAssignment("synthesizer"),
+      usesMultipleProviders: false,
+    };
   }
 
 
@@ -5715,11 +5757,17 @@ export class Orchestrator {
           identityKey: params.identityKey,
           agentState: params.agentState,
           executionJournal: params.executionJournal,
-          systemPrompt: params.systemPrompt,
+          // trio HIGH catch: use the LIVE prompt (runCtx.systemPrompt — STEP G's memory refresh
+          // reassigns it mid-run), NOT the spine's frozen setup.systemPrompt snapshot; v1's loops
+          // consumed the reassigned loop-local the same way. Without this the refreshed
+          // "## Relevant Memory"/RAG sections were computed and silently dropped.
+          systemPrompt: ctx().systemPrompt,
           fallbackProvider: params.fallbackProvider,
           toolTurnAffinity: params.toolTurnAffinity,
           enableGoalDetection: params.enableGoalDetection,
           iterationHealth: params.iterationHealth,
+          // step5-parity: the supervisor provider pin (all roles on the pinned provider+model).
+          fixedExecutionStrategy: ctx().fixedExecutionStrategy,
         });
         // ADAPT: capture the last strategy/assignment/toolNames so the handler contexts can read
         // them (they are loop-locals in v1; here the port threads them through runCtx).
@@ -6064,7 +6112,36 @@ export class Orchestrator {
         request.channelType,
       );
     const queryText = request.prompt;
-    const fallbackProvider = this.providerManager.getProvider(identityKey);
+    // step5-parity (v1 @ a3de7d1 runWorkerTask :3567-3583): a supervisor-assigned provider pin
+    // (request.assignedProvider/assignedModel) materializes the pinned provider as THE run
+    // provider and a fixed all-roles strategy; an unmaterializable pin warns and falls back.
+    const fixedProviderName =
+      canonicalizeProviderName(request.assignedProvider)
+      ?? request.assignedProvider?.trim().toLowerCase();
+    const fixedModelId = request.assignedModel?.trim() || undefined;
+    // Strict BARE materialization (getPrimaryProviderByName): (a) the existence probe is real —
+    // getProviderByName builds a resilient chain for almost any name, so the "unmaterializable
+    // pin" warn below could never fire and a bogus pin silently ran the default chain under the
+    // pinned name (trio security catch); (b) a pin must be the bare provider, consistent with
+    // buildTaskAwareProvider's hard-pin branch (never a chain that could fall over to a sibling).
+    const fixedProvider = fixedProviderName
+      ? (this.providerManager as {
+          getPrimaryProviderByName?: (name: string, model?: string) => IAIProvider | null;
+        }).getPrimaryProviderByName?.(fixedProviderName, fixedModelId) ?? null
+      : null;
+    if (request.assignedProvider && fixedProviderName && !fixedProvider) {
+      getLogger().warn("Delegated worker provider pin could not be materialized; using fallback provider", {
+        assignedProvider: request.assignedProvider,
+        canonicalProvider: fixedProviderName,
+        assignedModel: fixedModelId,
+        chatId,
+      });
+    }
+    const fallbackProvider = fixedProvider ?? this.providerManager.getProvider(identityKey);
+    const fixedExecutionStrategy =
+      fixedProviderName && fixedProvider
+        ? this.buildFixedSupervisorExecutionStrategy(queryText, identityKey, fixedProviderName, fixedModelId, fixedProvider)
+        : undefined;
     // Step 0 / gap #3 — worker/background/delegated runs get a FRESH session built from userContent
     // (v1 parity: runBackgroundTask :3278-3289), so parallel runs on one chatId never collide on a
     // shared persistent session and attachments/vision are seeded. Interactive keeps the persistent
@@ -6107,6 +6184,12 @@ export class Orchestrator {
       conversationScope,
       identityKey,
       channelType: request.channelType,
+      // step5-parity: v1's INTERACTIVE prologue threaded userId so dmPolicy.isAutonomousActive
+      // resolves userId-keyed prefs and the AUTONOMOUS MODE directive renders in the prompt
+      // (the skip-confirmation BEHAVIOR worked either way; only the prompt layer was blind).
+      // Interactive-ONLY, exactly as v1: the background/worker prologue never passed it
+      // (a3de7d1 :3693-3703), so worker prompts must not inherit the directive (trio catch).
+      userId: isInteractive ? request.userId : undefined,
       prompt: queryText,
       personaContent,
       vaultContext,
@@ -6241,6 +6324,8 @@ export class Orchestrator {
       profileLanguage: undefined,
       joinsParentEpisode,
       workerMonitorScope,
+      memoryRefresher,
+      fixedExecutionStrategy,
     };
 
     const setup: PortRunSetup = {
@@ -6411,7 +6496,7 @@ export class Orchestrator {
             runCtx.session.messages.push({ role: "assistant", content: params.responseText });
           }
           runCtx.session.messages.push({ role: "user", content: "Please create a new plan." });
-          return { agentState: replanState, terminal: false };
+          return { agentState: replanState, terminal: false, extendRequested: true };
         }
       } else {
         action = await handleInteractiveReflectionContinue(params.agentState, ctx, {
@@ -6431,10 +6516,12 @@ export class Orchestrator {
             : await handleBgReflectionContinue(params.agentState, ctx, 0);
     }
 
-    // ADAPT union → DTO (faithful to interactive call-site orchestrator.ts ~5447-5491).
+    // ADAPT union → DTO (faithful to the pre-Step5 interactive call-site, v1 @ a3de7d1 ~5447-5491).
     switch (action.flow) {
       case "continue":
-        return { agentState: action.newState, terminal: false };
+        // step5-parity: a "continue" out of a DONE dispatch = the verifier/loop-recovery
+        // intervention extended the run — the spine must honor it over the parse-time verdict.
+        return { agentState: action.newState, terminal: false, extendRequested: true };
       case "done": {
         await this.emitVisibleBoundary(chatId, runCtx.session, action.visibleText);
         return { agentState: action.newState, terminal: true, reason: action.status ?? "done" };
@@ -6485,11 +6572,11 @@ export class Orchestrator {
         };
       }
       case "continue":
-        // SEMANTIC NARROWING CAVEAT (the one end-turn fidelity gap): the flat DTO has no terminal
-        // flag and the spine treats dispatchEndTurn as terminal. The handler already re-pushed the
-        // continuation; we surface empty finalText. This arm is only reached if a handler converts a
-        // genuine end_turn into a continue — flagged, not silently dropped.
-        return { agentState: action.newState, finalText: "" };
+        // step5-parity (the former "one end-turn fidelity gap", now CLOSED): the handler
+        // (verifier partial-closure / loop-recovery) converted a genuine end_turn into a
+        // continuation and already re-pushed the gate onto the session — signal the spine to
+        // keep iterating instead of terminating with an empty finalText.
+        return { agentState: action.newState, finalText: "", continueRun: true };
     }
   }
 
@@ -6910,16 +6997,35 @@ export class Orchestrator {
       content: (blocks.length === 1 && stateCtx ? stateCtx : blocks) as unknown as ConversationMessage["content"],
     } as ConversationMessage);
 
-    // STEP G — memory refresh (non-fatal; reassigns systemPrompt + state).
+    // STEP G — memory refresh (non-fatal; reassigns systemPrompt + state). step5-parity: the
+    // run's MemoryRefresher threads through runCtx so mid-run re-retrieval fires exactly as the
+    // v1 loops did (it was passed null — "opt-in" — which silently killed re-retrieval on v2).
+    const isInteractiveTurn = runCtx.toolExecMode === "interactive";
     const mem = await refreshMemoryIfNeeded({
-      memoryRefresher: null, // the spine threads its own RunSetup.memoryRefresher; per-turn refresh is opt-in
+      memoryRefresher: runCtx.memoryRefresher,
       iteration: step.agentState.iteration,
-      // NOTE: a fresh extract here (NOT the top-of-turn lastUserMessage local) — the tool-result
-      // content-block was pushed above, so this intentionally re-scans to the latest user message.
-      queryContext: this.sessionManager.extractLastUserMessage(session),
+      // v1 parity per route (trio catch): interactive re-scans the session (a fresh extract —
+      // the tool-result block was pushed above); background/delegated pins the STABLE task
+      // prompt (v1 @ a3de7d1 :4756) so drift detection never runs against planner boilerplate.
+      queryContext: isInteractiveTurn
+        ? this.sessionManager.extractLastUserMessage(session)
+        : agentState.taskDescription || lastUserMessage,
       chatId,
       systemPrompt: runCtx.systemPrompt,
       agentState: step.agentState,
+      // v1 interactive parity (trio catch, a3de7d1 :6444-6452): surface refreshed instinct IDs —
+      // dedupe+cap into the run's set and propagate to the channel for attribution. v1's
+      // background loop passed no callback; keep that asymmetry.
+      ...(isInteractiveTurn
+        ? {
+            onNewInstinctIds: (ids: string[]) => {
+              const current = this.currentSessionInstinctIds.get(chatId) ?? [];
+              const merged = [...new Set([...current, ...ids])].slice(0, 200);
+              this.currentSessionInstinctIds.set(chatId, merged);
+              this.propagateInstinctIdsToChannel(chatId, merged);
+            },
+          }
+        : {}),
     });
     runCtx.systemPrompt = mem.systemPrompt;
 

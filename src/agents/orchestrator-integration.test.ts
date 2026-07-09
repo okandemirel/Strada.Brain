@@ -739,13 +739,13 @@ describe("Orchestrator Integration", () => {
   // ═══════════════════════════════════════════════════════════════════════════
 
   describe("Memory re-retrieval during loop execution", () => {
-    // TODO(step5-parity): mid-loop memory re-retrieval is NOT wired on the v2 route.
+    // step5-parity (fix shipped — un-skipped): mid-loop memory re-retrieval is NOT wired on the v2 route.
     // v1's loops called refreshMemoryIfNeeded per tool turn with the live MemoryRefresher;
     // the v2 port's tool turn passes `memoryRefresher: null` (orchestrator.ts
     // portExecuteToolTurn: "the spine threads its own RunSetup.memoryRefresher; per-turn
     // refresh is opt-in") and the spine never consumes RunSetup.memoryRefresher. Until the
     // refresher is threaded, only the initial retrieval (setupRun context build) happens.
-    it.skip("refreshes memory context after tool execution modifies files (interactive)", async () => {
+    it("refreshes memory context after tool execution modifies files (interactive)", async () => {
       const mockMemMgr = {
         retrieve: vi.fn().mockResolvedValue({
           kind: "ok",
@@ -801,9 +801,9 @@ describe("Orchestrator Integration", () => {
       expect(mockMemMgr.retrieve.mock.calls.length).toBeGreaterThan(1);
     });
 
-    // TODO(step5-parity): same v2 gap as above — the worker/background route never
+    // step5-parity (fix shipped — un-skipped): same v2 gap as above — the worker/background route never
     // consumes RunSetup.memoryRefresher, so no mid-loop re-retrieval fires.
-    it.skip("refreshes memory context in background task loop", async () => {
+    it("refreshes memory context in background task loop", async () => {
       const mockMemMgr = {
         retrieve: vi
           .fn()

@@ -570,7 +570,27 @@ export class V2AgentRunner implements AgentRunner {
               session: setup.session,
             });
             state = refl.agentState;
-            if (refl.terminal || reflectionVerdict.decision === "done") {
+            // step5-parity: the dispatched handler runs the verifier/visibility interventions and
+            // may EXTEND past the model's DONE (refl.extendRequested). Feed that outcome through
+            // the ledger's purpose-built reflectionWantsExtend input (rule 8) — the LEDGER stays
+            // the single verdict arbiter, so its other rules (health/budget/cancel) can still
+            // terminate an extended run rather than the spine arbitrating DONE-vs-extend itself.
+            const postDispatchVerdict = refl.extendRequested
+              ? ledger.verdict({
+                  ...this.clockBudgetVerdict(runClock, budget, state),
+                  taskCancelReason: runClock.taskToken.reason,
+                  modelProposedDone,
+                  reflectionWantsExtend: true,
+                })
+              : reflectionVerdict;
+            if (postDispatchVerdict.decision === "stop") {
+              // A terminator surfacing on the post-dispatch re-verdict still wins (rule 2 > 8).
+              terminalReason = describeCancelReason(postDispatchVerdict.reason);
+              terminalStatus = postDispatchVerdict.finalize === "hard" ? "failed" : "completed";
+              emit({ type: "run.ending", reason: terminalReason });
+              break epochLoop;
+            }
+            if (refl.terminal || postDispatchVerdict.decision === "done") {
               terminalReason = refl.reason ?? "done";
               emit({ type: "run.ending", reason: terminalReason });
               break epochLoop;
@@ -623,7 +643,17 @@ export class V2AgentRunner implements AgentRunner {
             chatId: request.chatId,
             session: setup.session,
           });
+          const prevEndPhase = state.phase;
           state = end.agentState;
+          // step5-parity (closes "the one end-turn fidelity gap"): the handler converted the
+          // end_turn into a continuation (verifier partial-closure / replan) and re-pushed the
+          // gate onto the session — keep iterating instead of terminating.
+          if (end.continueRun) {
+            const endPc = phaseChangedEvent(prevEndPhase, state.phase);
+            if (endPc) emit(endPc);
+            emit({ type: "step.completed", step: stepNo, phase: state.phase });
+            continue;
+          }
           emit({ type: "step.completed", step: stepNo, phase: state.phase });
           emit({ type: "run.ending", reason: "end_turn" });
           break epochLoop;
@@ -645,7 +675,16 @@ export class V2AgentRunner implements AgentRunner {
           // per-epoch persistExecutionMemory still run (v1 runBackgroundTask's end-of-epoch ran on the
           // stop branch too; only the planner-reset/amnesty are continue-only). EXACTLY ONCE.
           await port.onEpochRollover(false, epoch, state);
-          emit({ type: "run.ending", reason: "epoch-budget-exhausted" });
+          // step5-parity: ASSIGN the reason (not just the event) — synthesizeFinal's reason-aware
+          // fallback maps it to the honest localized task_stuck notice; leaving terminalReason
+          // unset surfaced a FALSE "Task completed." on budget exhaustion. Status "blocked"
+          // matches v1's finish(..., "blocked") on this exact terminal (trio catch — this arm is
+          // non-interactive by construction; interactive broke at max-iterations above) and the
+          // max-tokens-runaway precedent, so supervisor/executor consumers stop treating an
+          // exhausted child as fulfilled.
+          terminalReason = "epoch-budget-exhausted";
+          terminalStatus = "blocked";
+          emit({ type: "run.ending", reason: terminalReason });
           break;
         }
         // GAP3 — the auto-CONTINUE rollover. Fire v1's end-of-epoch side effects with continued=true

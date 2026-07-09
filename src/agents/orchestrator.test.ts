@@ -1284,13 +1284,13 @@ describe("Orchestrator", () => {
   // the background-executor), making the assertion vacuous here; the executor's nested-worker /
   // supervisorMode routing is covered by src/tasks/background-executor.test.ts.
 
-  // TODO(step5-parity): AgentRunRequest.assignedProvider/assignedModel are threaded into
+  // step5-parity (fix shipped — un-skipped): AgentRunRequest.assignedProvider/assignedModel are threaded into
   // AgentRunSetupInput but the v2 port never consumes them — v1's runBackgroundTask pinned the
   // execution strategy via buildFixedSupervisorExecutionStrategy (deleted with the v1 loop) and no
   // equivalent exists in setupAgentCoreRun/prepareIteration. Supervisor-delegated workers currently
   // run on the identity's default provider instead of the assigned one. Un-skip once the port
   // rebuilds the pin.
-  it.skip("pins delegated worker runs to the supervisor-assigned provider", async () => {
+  it("pins delegated worker runs to the supervisor-assigned provider", async () => {
     const defaultProvider = createNamedProvider("default");
     const assignedProvider = createNamedProvider("claude");
     // v2 PAOR: call #1 is the PLANNING turn (also pinned to the assigned provider); the answer follows.
@@ -1313,6 +1313,8 @@ describe("Orchestrator", () => {
       providerManager: {
         getProvider: () => defaultProvider,
         getProviderByName: (name: string) => (name === "claude" ? assignedProvider : null),
+        // The pin probe uses the STRICT bare materialization (trio security fix) — model it.
+        getPrimaryProviderByName: (name: string) => (name === "claude" ? assignedProvider : null),
         getActiveInfo: () => ({ providerName: "default", model: "default", isDefault: true }),
         listAvailable: () => [
           { name: "default", label: "default", defaultModel: "default" },
@@ -1349,9 +1351,9 @@ describe("Orchestrator", () => {
     expect(defaultProvider.chat).not.toHaveBeenCalled();
   });
 
-  // TODO(step5-parity): same assigned-provider pin gap as above — label canonicalization before
+  // step5-parity (fix shipped — un-skipped): same assigned-provider pin gap as above — label canonicalization before
   // pinning has no v2 owner until the port consumes assignedProvider/assignedModel.
-  it.skip("canonicalizes delegated worker provider labels before pinning execution", async () => {
+  it("canonicalizes delegated worker provider labels before pinning execution", async () => {
     const defaultProvider = createNamedProvider("default");
     const assignedProvider = createNamedProvider("kimi");
     // v2 PAOR: call #1 is the PLANNING turn (also pinned); the answer follows.
@@ -1374,6 +1376,7 @@ describe("Orchestrator", () => {
       providerManager: {
         getProvider: () => defaultProvider,
         getProviderByName: (name: string) => (name === "kimi" ? assignedProvider : null),
+        getPrimaryProviderByName: (name: string) => (name === "kimi" ? assignedProvider : null),
         getActiveInfo: () => ({ providerName: "default", model: "default", isDefault: true }),
         listAvailable: () => [
           { name: "default", label: "default", defaultModel: "default" },
@@ -3491,13 +3494,13 @@ describe("Orchestrator", () => {
     db.close();
   });
 
-  // TODO(step5-parity): the "## AUTONOMOUS MODE ACTIVE" system-prompt directive is missing on the
+  // step5-parity (fix shipped — un-skipped): the "## AUTONOMOUS MODE ACTIVE" system-prompt directive is missing on the
   // v2 route — setupAgentCoreRun calls buildSystemPromptWithContext WITHOUT `userId` (v1's
   // runAgentLoop passed it, orchestrator v1 :5381), so dmPolicy.isAutonomousActive misses userId-keyed
   // autonomous prefs and the directive is never appended. The BEHAVIOR (skip write confirmation)
   // still works (the tool-exec path reads the policy with the real userId) — only the prompt layer
   // is affected. Un-skip once the port threads userId into the prompt builder.
-  it.skip("injects the AUTONOMOUS MODE directive into the system prompt for userId-keyed autonomous sessions", async () => {
+  it("injects the AUTONOMOUS MODE directive into the system prompt for userId-keyed autonomous sessions", async () => {
     const db = new Database(":memory:");
     const userProfileStore = new UserProfileStore(db);
     const dmPolicy = new DMPolicy(mockChannel as any);
@@ -4158,7 +4161,7 @@ describe("Orchestrator", () => {
     );
   });
 
-  // TODO(step5-parity): in-run continuation after an INTERCEPTED model-declared DONE is dead on
+  // step5-parity (fix shipped — un-skipped): in-run continuation after an INTERCEPTED model-declared DONE is dead on
   // the v2 route. v1's end-turn/reflection-DONE handlers could convert a premature DONE into an
   // internal continue (visibility/verifier partial-closure gates) and KEEP LOOPING; the v2 spine
   // (a) treats a plain EXECUTING end_turn as terminal (the documented "one end-turn fidelity gap",
@@ -4168,7 +4171,7 @@ describe("Orchestrator", () => {
   // (v2-agent-runner.ts `refl.terminal || reflectionVerdict.decision === "done"`,
   // reflectionWantsExtend hardcoded false). Only the parse-time failure override (P1) still
   // extends a DONE. Un-skip when the port threads the intervention outcome into the verdict.
-  it.skip("keeps partial-closure runtime hypotheses internal until the real issue is verified", async () => {
+  it("keeps partial-closure runtime hypotheses internal until the real issue is verified", async () => {
     const runtimeOrch = new Orchestrator({
       providerManager: {
         getProvider: () => mockProvider,
@@ -4322,11 +4325,11 @@ DONE`,
     );
   });
 
-  // TODO(step5-parity): same intercepted-DONE continuation gap as the test above — the verifier
+  // step5-parity (fix shipped — un-skipped): same intercepted-DONE continuation gap as the test above — the verifier
   // pipeline's REPLAN of a clean model-declared DONE cannot extend the run on the v2 route (the
   // reflection-boundary ledger verdict honors modelProposedDone before the verifier runs, and the
   // EXECUTING end_turn arm is terminal). Un-skip with the same port fix.
-  it.skip("replans internally when the verifier pipeline requests a new approach", async () => {
+  it("replans internally when the verifier pipeline requests a new approach", async () => {
     const replanningOrch = new Orchestrator({
       providerManager: {
         getProvider: () => mockProvider,
@@ -5602,11 +5605,11 @@ Belirsizlik varsa ask_user ile tek bir soru sor ve show_plan ile onaylat.`,
     expect(toolResultBlock?.is_error).toBe(false);
   });
 
-  // TODO(step5-parity): same intercepted-DONE continuation gap as the interactive variant above —
+  // step5-parity (fix shipped — un-skipped): same intercepted-DONE continuation gap as the interactive variant above —
   // the background end-turn/reflection boundary cannot extend a run past a model-declared DONE
   // whose draft the visibility/verifier gates wanted to keep working on (v2 spine end-turn arm is
   // terminal; the reflection verdict honors modelProposedDone before the interventions run).
-  it.skip("keeps partial-closure runtime hypotheses internal during background execution", async () => {
+  it("keeps partial-closure runtime hypotheses internal during background execution", async () => {
     const backgroundOrch = new Orchestrator({
       providerManager: {
         getProvider: () => mockProvider,
@@ -7180,7 +7183,11 @@ DONE`,
           stopReason: "tool_use",
           usage: { inputTokens: 10, outputTokens: 20 },
         })
-        .mockResolvedValueOnce({
+        // PERSISTENT tail (not Once): the step5-parity extension fix means the verifier can
+        // legitimately extend the run past this answer (more provider calls — reviews,
+        // continuation cycles); a dry Once-chain returned undefined → throw → backoff →
+        // fake-timer hang. The benign end_turn lets the bounded run terminate cleanly.
+        .mockResolvedValue({
           text: "Fixed!",
           toolCalls: [],
           stopReason: "end_turn",
@@ -7275,7 +7282,7 @@ DONE`,
           stopReason: "end_turn",
           usage: { inputTokens: 10, outputTokens: 20 },
         })
-        .mockResolvedValueOnce({
+        .mockResolvedValue({
           text: JSON.stringify({
             decision: "approve",
             summary: "Completion review passed after a clean verification.",
@@ -7870,12 +7877,12 @@ DONE`,
       };
     }
 
-    // TODO(step5-parity): mid-run memory RE-retrieval is dead on the v2 route. The port's tool
+    // step5-parity (fix shipped — un-skipped): mid-run memory RE-retrieval is dead on the v2 route. The port's tool
     // turn calls refreshMemoryIfNeeded with `memoryRefresher: null` (orchestrator.ts ~6877,
     // "per-turn refresh is opt-in") and the spine never consumes RunSetup.memoryRefresher
     // (declared in orchestrator-port.ts:89, zero readers in agent-core). Only the prologue's
     // initial retrieval fires. Un-skip when the spine/port wires the refresher back in.
-    it.skip("re-retrieval triggers after N iterations in interactive loop", async () => {
+    it("re-retrieval triggers after N iterations in interactive loop", async () => {
       // Setup: Create orchestrator with memoryManager, ragPipeline, and reRetrieval config
       const mockMemMgr = {
         retrieve: vi.fn().mockResolvedValue({
@@ -7941,9 +7948,9 @@ DONE`,
       expect(mockMemMgr.retrieve.mock.calls.length).toBeGreaterThan(1);
     });
 
-    // TODO(step5-parity): same mid-run re-retrieval gap as the interactive test above (the v2
+    // step5-parity (fix shipped — un-skipped): same mid-run re-retrieval gap as the interactive test above (the v2
     // tool turn passes memoryRefresher: null; RunSetup.memoryRefresher is never consumed).
-    it.skip("re-retrieval triggers in background task loop", async () => {
+    it("re-retrieval triggers in background task loop", async () => {
       const mockMemMgr = {
         retrieve: vi.fn().mockResolvedValue({
           kind: "ok",
@@ -8149,7 +8156,8 @@ DONE`,
           .fn()
           .mockResolvedValueOnce({ embeddings: [[1, 0, 0]], usage: { totalTokens: 10 } }) // initial baseline
           .mockResolvedValueOnce({ embeddings: [[1, 0, 0]], usage: { totalTokens: 10 } }) // 1st re-retrieval check: same topic
-          .mockResolvedValueOnce({ embeddings: [[0, 1, 0]], usage: { totalTokens: 10 } }), // 2nd: shifted topic
+          .mockResolvedValueOnce({ embeddings: [[0, 1, 0]], usage: { totalTokens: 10 } }) // 2nd: shifted topic
+          .mockResolvedValue({ embeddings: [[0, 1, 0]], usage: { totalTokens: 10 } }), // persistent tail (re-retrieval fires embeds now)
       };
       const reRetrievalConfig = {
         enabled: true,
@@ -8166,7 +8174,8 @@ DONE`,
         .fn()
         .mockResolvedValueOnce(createToolResponse("Plan", "file_read"))
         .mockResolvedValueOnce(createToolResponse("Step 2", "file_read"))
-        .mockResolvedValueOnce(createToolResponse("Done!", undefined));
+        // PERSISTENT tail: the wired memory-refresher path can add calls (step5-parity fix).
+        .mockResolvedValue(createToolResponse("Done!", undefined));
       mockProvider.chat = chatSpy;
 
       const orchTopic = new Orchestrator({
@@ -8596,7 +8605,7 @@ DONE`,
       );
     });
 
-    // TODO(step5-parity): the epoch-budget-exhausted STOP surfaces a FALSE SUCCESS on the v2
+    // step5-parity (fix shipped — un-skipped): the epoch-budget-exhausted STOP surfaces a FALSE SUCCESS on the v2
     // route. The spine's `!canAutoContinueBackgroundEpoch` break emits run.ending
     // "epoch-budget-exhausted" but never assigns `terminalReason` (v2-agent-runner.ts epoch
     // rollover block), so synthesizeFinal's reason-aware fallback (which DOES map
@@ -8604,7 +8613,7 @@ DONE`,
     // mapTerminalReasonToMessageKey) never fires and the worker result reads "Task completed."
     // — exactly the false-success this test guarded against. v1 composed an honest checkpoint
     // message + iteration-budget metric enrichment. Un-skip when the spine threads the reason.
-    it.skip("background iteration budget can stop with an honest checkpoint message when auto-continue is disabled", async () => {
+    it("background iteration budget can stop with an honest checkpoint message when auto-continue is disabled", async () => {
       const mockRecorder = {
         startTask: vi.fn().mockReturnValue("metric_bg_budget_stop"),
         endTask: vi.fn(),
@@ -8847,7 +8856,7 @@ DONE`,
     // (verified: 2 provider calls). The remaining loop-detection nets (tool-loop
     // controlLoopTracker → loopDetectionBlocked → ledger stop) are covered by the v2 integration
     // tests and the loop-recovery unit tests; the end-turn-terminal narrowing itself is pinned by
-    // the skipped TODO(step5-parity) tests above.
+    // the skipped step5-parity (fix shipped — un-skipped) tests above.
 
     it("streaming error handling: chatStream throws gracefully handled", async () => {
       const streamingProvider = {

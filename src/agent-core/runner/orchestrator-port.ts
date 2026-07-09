@@ -205,6 +205,10 @@ export interface ReflectionDispatchResult {
   /** True when the dispatch resolved to a terminal DONE (→ spine emits run.ending + breaks). */
   readonly terminal: boolean;
   readonly reason?: string;
+  /** step5-parity: true when the dispatched handler (verifier/loop-recovery interventions)
+   *  converted the model's DONE into a continuation/replan — the spine must NOT break on the
+   *  parse-time ledger "done" verdict in that case (v1's applyVerdict honored the handler). */
+  readonly extendRequested?: boolean;
 }
 
 export interface ParseReflectionDecisionParams {
@@ -231,6 +235,10 @@ export interface DispatchEndTurnParams {
 export interface EndTurnDispatchResult {
   readonly agentState: AgentState;
   readonly finalText: string;
+  /** step5-parity (closes "the one end-turn fidelity gap"): true when the handler converted a
+   *  genuine end_turn into a continuation (verifier partial-closure/replan) — the handler already
+   *  re-pushed the continuation gate onto the session; the spine continues instead of breaking. */
+  readonly continueRun?: boolean;
 }
 
 export interface PlanPhaseParams {
