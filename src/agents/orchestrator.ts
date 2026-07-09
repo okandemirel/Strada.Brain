@@ -322,8 +322,9 @@ import {
   runReactiveGoalDecomposition as runReactiveGoalDecompositionHelper,
   type GoalDecompositionDeps,
 } from "./orchestrator-goal-decomposition.js";
-// Agent Core v2 — worker-route strangler seam. The Orchestrator IMPLEMENTS OrchestratorPort by
-// binding its existing private methods (COMPOSE+ADAPT). Nothing routes here yet (DEFAULT-OFF).
+// Agent Core v2 — the strangler seam. The Orchestrator IMPLEMENTS OrchestratorPort by binding
+// its existing private methods (COMPOSE+ADAPT). Since THE FLIP this port IS the production
+// route on every route (v2-all-routes+full-control-plane); v1 is the env-revert path only.
 import { ModelGateway } from "../agent-core/model/model-gateway.js";
 import type { SilentStreamPort } from "../agent-core/model/model-gateway.js";
 import type {
@@ -4849,8 +4850,10 @@ export class Orchestrator {
             hitMaxIterations: false,
           });
           // ────────────────────────────────────────────────────────────────
-          // Issue #22 (SIBLING A) — IN-RUN trajectory-credit trigger for the worker/background path
-          // (the production default for ALL task submissions). MUST run BEFORE the matching
+          // Issue #22 (SIBLING A) — IN-RUN trajectory-credit trigger for the v1 worker/background
+          // loop (the pre-flip production path, now the AGENT_CORE_FLAG_SET revert target; the v2
+          // port mirrors this hook — see recordInRunTrajectoryCredit's port-side call site).
+          // MUST run BEFORE the matching
           // currentSessionInstinctIds.delete below (the participating set is read inside). Default-OFF
           // ⇒ no-op ⇒ byte-identical. Success-only: only finalStatus === "completed" (set by finish()
           // on a clean terminal) credits; a "blocked"/"failed"/undefined terminal passes success=false.
@@ -5194,11 +5197,12 @@ export class Orchestrator {
 
     try {
       if (this.agentCoreFlagSet?.interactive === "v2") {
-        // Agent Core v2 interactive driver (cutover Step 3). DEFAULT-OFF: the production-default
-        // flag set keeps `interactive: "v1"`, so control never enters this branch and the v1 call
-        // in the `else` is byte-identical to before. When an operator flips the interactive route
-        // to "v2", the SAME persistent session and the SAME wrapper (typing indicator + monitor +
-        // persistence in the finally below) are preserved — only the engine swaps.
+        // Agent Core v2 interactive driver (cutover Step 3). DEFAULT-ON since THE FLIP: the
+        // production default (v2-all-routes+full-control-plane) routes every interactive turn
+        // HERE; the v1 call in the `else` is reachable only under the revert flag sets
+        // (AGENT_CORE_FLAG_SET=v1-driver+full-control-plane / all-v1) until cutover Step 5
+        // deletes it. The SAME persistent session and the SAME wrapper (typing indicator +
+        // monitor + persistence in the finally below) are preserved — only the engine swaps.
         //
         // `deliverFinal` is a NO-OP under the faithful port: the dispatch handlers
         // (portDispatchEndTurn/portDispatchReflection → emitVisibleBoundary →
@@ -8626,12 +8630,13 @@ export class Orchestrator {
   // READS. The whole tool turn is owned by the port's bound executeToolCalls closure (the V1
   // free-helper sequence), so the spine stays shape-agnostic and the V2 unit tests stay green.
   //
-  // DEFAULT-OFF: nothing routes here yet. This is the slot the worker-route-flip increment flips.
+  // DEFAULT-ON since THE FLIP: this port serves ALL production routes (the shipped default is
+  // v2-all-routes+full-control-plane); v1 is reachable only via the revert flag sets.
   // ═══════════════════════════════════════════════════════════════════════════════════════
 
   /** The resolved agent-core flag set, read by the route selector. undefined ⇒ a test constructed the
    *  orchestrator without one; bootstrap always passes a set (production default:
-   *  `v1-driver+full-control-plane`). */
+   *  `PRODUCTION_DEFAULT_FLAG_SET_ID` = v2-all-routes+full-control-plane since THE FLIP). */
   getAgentCoreFlagSet(): FlagSet | undefined {
     return this.agentCoreFlagSet;
   }
@@ -9755,6 +9760,12 @@ export class Orchestrator {
       executeToolCalls: (c, tc, opts) => this.executeToolCalls(c, tc, opts),
       executeOptions: {
         mode: runCtx.toolExecMode, // #3 fix: was hardcoded "background" (broke the interactive route)
+        // v1 parity (flip trio-review catch): the v1 INTERACTIVE loop threads userId (@ :6350)
+        // so identity-keyed gates (dm-policy autonomy prefs, `${userId}:${chatId}` keys) resolve
+        // the USER's stored prefs, not the chat-scoped fallback — critical on multi-user channels
+        // where userId != chatId. The v1 background/worker loop does NOT thread it (@ :4642), so
+        // keep byte-parity per route; unconditional threading is its own decision post-deletion.
+        userId: runCtx.toolExecMode === "interactive" ? runCtx.userId : undefined,
         taskPrompt: lastUserMessage,
         sessionMessages: session.messages,
         onUsage: runCtx.onUsage,

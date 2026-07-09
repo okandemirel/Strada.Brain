@@ -9405,11 +9405,12 @@ describe("Orchestrator — #22 in-run trajectory-credit trigger (production orde
   });
 
   // ───────────────────────────────────────────────────────────────────────────
-  // The PRODUCTION-INGRESS regression (review obs 33099/this finding): drives the REAL
-  // worker/background loop (runBackgroundTask — the production default for ALL task submissions),
-  // NOT a hand-seeded set. Proves runBackgroundTask now (a) populates currentSessionInstinctIds
+  // The v1-INGRESS regression (review obs 33099/this finding): drives the REAL v1
+  // worker/background loop (runBackgroundTask — the pre-flip production path, now the
+  // AGENT_CORE_FLAG_SET revert target; the v2 port mirrors this hook at its own terminal),
+  // NOT a hand-seeded set. Proves runBackgroundTask (a) populates currentSessionInstinctIds
   // from the retriever's matchedInstinctIds and (b) fires the in-run credit hook in its finally,
-  // so the feature is LIVE on the path that matters — not just the interactive route.
+  // so the feature stays LIVE on the revert path too — not just the interactive route.
   // ───────────────────────────────────────────────────────────────────────────
   it("flag-ON drives the REAL runBackgroundTask ingress: populates the set + fires credit once", async () => {
     const planning = makeInstinct("instinct_bg_planning", [ctxCond("language", "csharp")]);

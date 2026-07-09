@@ -5,10 +5,12 @@
  * for a given route, reading the resolved agent-core flag set off the orchestrator. It is the slot
  * `background-executor` calls instead of constructing V1AgentRunner directly.
  *
- * DEFAULT-OFF by construction: the default `all-v1` flag set leaves every route `"v1"`, so this
- * returns `V1AgentRunner` — byte-identical to the pre-flip path. A route only flips to V2 when its
- * driver flag is `"v2"`, which the closed `LEGAL_FLAG_SETS` matrix only permits alongside the FULL
- * control plane (V2 consumes it) — so a V2 route can never be reached without the control plane.
+ * Since THE FLIP the shipped production default (PRODUCTION_DEFAULT_FLAG_SET_ID =
+ * `v2-all-routes+full-control-plane`) selects `V2AgentRunner` on every route; `V1AgentRunner` is
+ * reached only under the revert flag sets (`all-v1` — also the bare `resolveFlagSetById(undefined)`
+ * / test baseline — and `v1-driver+full-control-plane`). A route only runs V2 when its driver flag
+ * is `"v2"`, which the closed `LEGAL_FLAG_SETS` matrix only permits alongside the FULL control
+ * plane (V2 consumes it) — so a V2 route can never be reached without the control plane.
  *
  * Dependency rule (mirrors the rest of agent-core/runner): this imports ONLY agent-core modules +
  * a STRUCTURAL `RunnerHostOrchestrator` slice — never the concrete `Orchestrator` — so there is no

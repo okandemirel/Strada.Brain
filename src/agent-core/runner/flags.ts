@@ -229,16 +229,16 @@ export const DEFAULT_FLAG_SET: RequestedFlagSet = {
 };
 
 /**
- * The PRODUCTION default — what bootstrap selects when AGENT_CORE_FLAG_SET is unset. The proven v1
- * engine on every route (NO runner swap) running with the FULL Phase-1 control plane: failureLedger
- * (unified failure→verdict), runClock (per-call provider deadlines), silenceAccumulator (kills the
- * ~70-min cross-call stall/livelock), typedCancelReason (clean aborts). All four shipped + tested
- * (Phase 1a–1d); this promotes them from opt-in to the default — a tangibly more robust product on
- * the hardened engine. `all-v1` (above) stays the bare baseline: the instant env-revert
- * (AGENT_CORE_FLAG_SET=all-v1, no redeploy), the test base, and what `resolveFlagSetById(undefined)`
- * returns. Must be a LEGAL_FLAG_SETS id (reject-at-boot enforces it).
+ * The PRODUCTION default — what bootstrap selects when AGENT_CORE_FLAG_SET is unset. THE FLIP
+ * (cutover Step 4): the V2 engine drives EVERY route (interactive/background/worker/supervisor-node)
+ * on the FULL control plane. All flip-blockers shipped + gated (Phase 1 robustness 4a3cf94/7af4ba2/
+ * ce32c11, Phase 2 faithfulness 34198f6/3db5f3a/04a018c, soak fixes bbc6e2b/bbd2baf, provider chain
+ * 08541aa/de22366/ee5c063). INSTANT REVERT with no redeploy: AGENT_CORE_FLAG_SET=all-v1 (bare v1
+ * baseline) or v1-driver+full-control-plane (v1 engine, hardened control plane) — both stay in
+ * LEGAL_FLAG_SETS until the v1 deletion (cutover Step 5) removes the v1 engine entirely.
+ * Must be a LEGAL_FLAG_SETS id (reject-at-boot enforces it).
  */
-export const PRODUCTION_DEFAULT_FLAG_SET_ID = "v1-driver+full-control-plane";
+export const PRODUCTION_DEFAULT_FLAG_SET_ID = "v2-all-routes+full-control-plane";
 
 /** Structural equality over the flag fields (`id` excluded). */
 function flagsEqual(a: RequestedFlagSet, b: RequestedFlagSet): boolean {

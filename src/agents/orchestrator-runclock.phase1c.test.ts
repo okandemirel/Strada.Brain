@@ -131,12 +131,14 @@ const PHASE_1C_SET = resolveLegalFlagSet({
   silenceAccumulator: true, // ← the 1c flip that turns the gate ON.
 });
 
-// The shipped PRODUCTION DEFAULT (PRODUCTION_DEFAULT_FLAG_SET_ID = "v1-driver+full-control-plane"):
-// the proven v1 engine + ALL FOUR control-plane concerns ON. The per-flag tests cover 1a/1b/1c in
-// isolation, and phase1d covers typedCancelReason as a pure-fn gate — but nothing drove the full
-// four-flag combo through a live orchestrator run until the arms below (the production-default
-// backstop: the combo boots + completes, and rule-4 precedence is intact with 1d also ON).
-const PRODUCTION_DEFAULT_SET = resolveLegalFlagSet({
+// The v1-engine + full-control-plane combo ("v1-driver+full-control-plane" — the shipped
+// production default until THE FLIP moved the default to v2-all-routes; it remains the
+// no-redeploy v1 revert target): the proven v1 engine + ALL FOUR control-plane concerns ON.
+// The per-flag tests cover 1a/1b/1c in isolation, and phase1d covers typedCancelReason as a
+// pure-fn gate — but nothing drove the full four-flag combo through a live orchestrator run
+// until the arms below (the revert-path backstop: the combo boots + completes, and rule-4
+// precedence is intact with 1d also ON).
+const V1_REVERT_TARGET_SET = resolveLegalFlagSet({
   ...DEFAULT_FLAG_SET,
   failureLedger: true,
   runClock: true,
@@ -209,7 +211,7 @@ describe("Phase 1c orchestrator gate — silence accumulator OFF (inert) vs ON (
   });
 });
 
-describe("Production default (v1-driver+full-control-plane) — the shipped four-flag combo end-to-end", () => {
+describe("v1 revert target (v1-driver+full-control-plane) — the four-flag combo end-to-end", () => {
   afterEach(() => {
     vi.clearAllMocks();
   });
@@ -219,7 +221,7 @@ describe("Production default (v1-driver+full-control-plane) — the shipped four
     // Succeeds on the first call → no failure → the verdict path is not hit; proves the four-flag
     // combo constructs + runs a normal task to completion (no boot/run interaction crash).
     const p = createGoSilentProvider(clock, { succeedOnCall: 1 });
-    const orch = makeOrchestrator({ clock, provider: p.provider, flagSet: PRODUCTION_DEFAULT_SET });
+    const orch = makeOrchestrator({ clock, provider: p.provider, flagSet: V1_REVERT_TARGET_SET });
 
     const result = await orch.runBackgroundTask("Analyze", {
       signal: new AbortController().signal,
@@ -241,7 +243,7 @@ describe("Production default (v1-driver+full-control-plane) — the shipped four
     // hardcoded-null OFF path). Rule 4 must still win on the over-ceiling silent call: adding 1d must
     // not perturb the rule-4 stop. Proves the combined four-flag default terminates correctly.
     const p = createGoSilentProvider(clock, { succeedOnCall: null });
-    const orch = makeOrchestrator({ clock, provider: p.provider, flagSet: PRODUCTION_DEFAULT_SET });
+    const orch = makeOrchestrator({ clock, provider: p.provider, flagSet: V1_REVERT_TARGET_SET });
 
     const result = await orch.runBackgroundTask("Analyze", {
       signal: new AbortController().signal,

@@ -88,24 +88,23 @@ every path. See [`plans/agent-core-v2/`](../../plans/agent-core-v2/) for the arc
   `LEGAL_FLAG_SETS` enumerates the valid flag combinations and **rejects anything else at boot**, so
   untested combinations are unreachable by construction.
 
-**Migration status.** Phase 0 (the `AgentRunner` seam), Phase 1 (the control plane wired into the
-live v1 loop one concern at a time — `failureLedger`, `runClock`, `silenceAccumulator`,
-`typedCancelReason`), and Phase 2 (the unified `V2AgentRunner` spine + `ModelGateway` + `EventBus`,
-the faithful `OrchestratorPort`, and the **worker + supervisor-node** route selector) have shipped.
-Those two routes are **flip-ready** — the V2 spine runs them via the real port with the workspace
-lease threaded for worktree isolation; equivalence rests on delegating to the same v1 helpers + the
-reflection/assistant-text/tool-mode fixes + a characterization matrix (real-port REFLECTING, the
-max-tokens runaway guard, and a lease-isolation scenario). **Every flag still defaults OFF** (the
-default `all-v1` set), so shipped behavior is byte-identical to v1. Flipping a route is an
-**`AGENT_CORE_FLAG_SET` config change** (see Configuration), not a redeploy; per the plan a flip
-starts the soak that gates the eventual v1 deletion. The interactive route (`handleMessage`),
-scoring/capability unification (Phase 3), and streaming visibility (Phase 5) are pending.
+**Migration status — THE FLIP has shipped.** Phase 0 (the `AgentRunner` seam), Phase 1 (the
+control plane wired in one concern at a time — `failureLedger`, `runClock`, `silenceAccumulator`,
+`typedCancelReason`), Phase 2 (the unified `V2AgentRunner` spine + `ModelGateway` + `EventBus`,
+the faithful `OrchestratorPort`, the worker + supervisor-node route selector), and Step 3 (the
+interactive driver, v1-parity) have all shipped, and the **production default is now
+`v2-all-routes+full-control-plane`**: with `AGENT_CORE_FLAG_SET` unset, the V2 engine drives
+every route (interactive/background/worker/supervisor-node) on the full control plane.
+**Instant revert, no redeploy:** `AGENT_CORE_FLAG_SET=v1-driver+full-control-plane` (v1 engine on
+the hardened control plane) or `=all-v1` (bare v1 baseline) — both remain legal until cutover
+Step 5 deletes the v1 engine. Scoring/capability unification (Phase 3) and streaming visibility
+(Phase 5) are pending.
 
 ## Configuration
 
 | Env Var | Default | Description |
 |---------|---------|-------------|
-| `AGENT_CORE_FLAG_SET` | `all-v1` | Active v2 rollout stage — a `LEGAL_FLAG_SETS` id (e.g. `v2-worker-only+full-control-plane` to route worker+supervisor-node tasks through V2). Unknown id → reject-at-boot. |
+| `AGENT_CORE_FLAG_SET` | `v2-all-routes+full-control-plane` | Active rollout stage — a `LEGAL_FLAG_SETS` id. Unset → the production default (V2 on every route). Revert: `v1-driver+full-control-plane` or `all-v1`. Unknown id → reject-at-boot. |
 | `ROUTING_PRESET` | `balanced` | budget / balanced / performance |
 | `ROUTING_PHASE_SWITCHING` | `true` | Different providers per PAOR phase (orchestrator phases, not OODA) |
 | `CONSENSUS_MODE` | `auto` | auto / critical-only / always / disabled |

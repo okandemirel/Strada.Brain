@@ -44,16 +44,16 @@ describe("LEGAL_FLAG_SETS catalogue", () => {
     });
   });
 
-  it("PRODUCTION_DEFAULT_FLAG_SET_ID is the v1-engine + full-control-plane shipped default", () => {
-    expect(PRODUCTION_DEFAULT_FLAG_SET_ID).toBe("v1-driver+full-control-plane");
+  it("PRODUCTION_DEFAULT_FLAG_SET_ID is the v2-all-routes + full-control-plane shipped default (THE FLIP)", () => {
+    expect(PRODUCTION_DEFAULT_FLAG_SET_ID).toBe("v2-all-routes+full-control-plane");
     const prod = LEGAL_FLAG_SETS.find((s) => s.id === PRODUCTION_DEFAULT_FLAG_SET_ID);
     expect(prod).toBeDefined();
-    // v1 engine on every route (no runner swap) + the FULL Phase-1 control plane ON.
+    // V2 engine on EVERY route + the FULL Phase-1 control plane ON (cutover Step 4).
     expect(prod).toMatchObject({
-      interactive: "v1",
-      background: "v1",
-      worker: "v1",
-      supervisorNode: "v1",
+      interactive: "v2",
+      background: "v2",
+      worker: "v2",
+      supervisorNode: "v2",
       failureLedger: true,
       runClock: true,
       silenceAccumulator: true,
@@ -61,6 +61,13 @@ describe("LEGAL_FLAG_SETS catalogue", () => {
     });
     // Resolvable by id (reject-at-boot would otherwise throw on an uncatalogued id).
     expect(resolveFlagSetById(PRODUCTION_DEFAULT_FLAG_SET_ID).id).toBe(PRODUCTION_DEFAULT_FLAG_SET_ID);
+  });
+
+  it("keeps both instant-revert targets legal until the v1 deletion lands (cutover Step 5)", () => {
+    // AGENT_CORE_FLAG_SET=all-v1 (bare baseline) and =v1-driver+full-control-plane (v1 engine on
+    // the hardened control plane) are the no-redeploy rollback paths for the flipped default.
+    expect(resolveFlagSetById("all-v1").id).toBe("all-v1");
+    expect(resolveFlagSetById("v1-driver+full-control-plane").id).toBe("v1-driver+full-control-plane");
   });
 
   it("has unique set ids", () => {

@@ -13,7 +13,8 @@
  * Test D is the highest-value (the verdict bridge end-to-end: classifyFailureForVerdict records
  * into the REAL IterationHealthTracker the REAL FailureLedger reads).
  *
- * DEFAULT-OFF: nothing in v1 routes here; the runner is constructed directly with the real port.
+ * The runner under test is constructed directly with the real port — no flag routing involved.
+ * (Since THE FLIP this V2 spine is also the shipped production default on every route.)
  */
 
 import { describe, it, expect, vi } from "vitest";
@@ -553,6 +554,65 @@ describe("V2AgentRunner — REAL port + REAL gateway (provider.chat scripted)", 
     expect(toolCtx?.projectPath).toBe("/tmp/worktree-ws-1");
     // #2: the workspace artifact is surfaced (buildWorkerArtifacts).
     expect(result.artifacts.some((a) => a.kind === "workspace")).toBe(true);
+  });
+
+  it("USERID (flip trio catch): the interactive tool turn threads the run's userId into executeOptions (v1 parity @ :6350)", async () => {
+    // Identity-keyed gates in executeSingleToolCall (dm-policy autonomy prefs keyed
+    // `${userId}:${chatId}`) must resolve the USER's stored prefs on multi-user channels
+    // where userId != chatId. v1 interactive threads userId; the port must too.
+    const provider = mkScriptedProvider();
+    provider.chat
+      .mockResolvedValueOnce(resp({ text: "plan", stopReason: "end_turn" }))
+      .mockResolvedValueOnce(
+        resp({
+          text: "reading",
+          stopReason: "tool_use",
+          toolCalls: [{ id: "tc-1", name: "file_read", input: {} }],
+        }),
+      )
+      .mockResolvedValue(resp({ text: "done", stopReason: "end_turn" }));
+    const h = buildHarness(provider);
+    const spy = vi.spyOn(
+      h.orch as unknown as {
+        executeToolCalls: (c: string, tc: unknown[], opts: { userId?: string }) => Promise<unknown>;
+      },
+      "executeToolCalls",
+    );
+
+    const result = await drive(h.clock, h.runner.run(mkRequest({ userId: "user-42" }), mkIO("interactive")));
+
+    expect(result.status).toBe("completed");
+    expect(spy).toHaveBeenCalled();
+    expect(spy.mock.calls[0]?.[2]?.userId).toBe("user-42");
+  });
+
+  it("USERID (worker parity): the worker tool turn does NOT thread userId (v1 background parity @ :4642)", async () => {
+    // v1's background/worker loop never threaded userId into executeOptions — the port keeps
+    // byte-parity per route; unconditional threading is a separate post-deletion decision.
+    const provider = mkScriptedProvider();
+    provider.chat
+      .mockResolvedValueOnce(resp({ text: "plan", stopReason: "end_turn" }))
+      .mockResolvedValueOnce(
+        resp({
+          text: "reading",
+          stopReason: "tool_use",
+          toolCalls: [{ id: "tc-1", name: "file_read", input: {} }],
+        }),
+      )
+      .mockResolvedValue(resp({ text: "done", stopReason: "end_turn" }));
+    const h = buildHarness(provider);
+    const spy = vi.spyOn(
+      h.orch as unknown as {
+        executeToolCalls: (c: string, tc: unknown[], opts: { userId?: string }) => Promise<unknown>;
+      },
+      "executeToolCalls",
+    );
+
+    const result = await drive(h.clock, h.runner.run(mkRequest({ userId: "user-42" }), mkIO("worker")));
+
+    expect(result.status).toBe("completed");
+    expect(spy).toHaveBeenCalled();
+    expect(spy.mock.calls[0]?.[2]?.userId).toBeUndefined();
   });
 
   it("CANCEL (P1): a mid-run external /cancel is a BENIGN cancel — no health failure, not a COMPLETE metric", async () => {

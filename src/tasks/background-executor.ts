@@ -904,8 +904,9 @@ export class BackgroundExecutor {
 
     // Phase-2 route selector: V2AgentRunner when this route's driver flag is "v2" (the closed flag
     // matrix only permits a V2 route alongside the full control plane), else the v1 pass-through.
-    // The production default (`v1-driver+full-control-plane`) keeps worker/supervisor-node "v1", so
-    // this resolves to the V1AgentRunner pass-through unless an operator flips to a v2-route set.
+    // Since THE FLIP the production default (v2-all-routes+full-control-plane) routes worker and
+    // supervisor-node through V2AgentRunner; the V1 pass-through is reached only under the revert
+    // flag sets (AGENT_CORE_FLAG_SET=v1-driver+full-control-plane / all-v1) until Step 5 deletes it.
     const runner = selectAgentRunner(orchestrator as unknown as RunnerHostOrchestrator, mode);
     const io: IOStrategy = {
       mode,

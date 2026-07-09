@@ -1083,8 +1083,9 @@ async function bootstrapImpl(
   // Agent Core v2 strangler seam: select the active rollout stage by id via the AGENT_CORE_FLAG_SET
   // ops knob (a config change, not a redeploy), REJECT-AT-BOOT for an unknown id (P-F closed matrix).
   // Resolved BEFORE the orchestrator so the FlagSet threads into it. UNSET (the normal case) →
-  // PRODUCTION_DEFAULT_FLAG_SET_ID (the proven engine + full control plane; see flags.ts for what it
-  // enables). INSTANT REVERT with no redeploy: AGENT_CORE_FLAG_SET=all-v1 drops to the bare baseline.
+  // PRODUCTION_DEFAULT_FLAG_SET_ID (THE FLIP: the V2 engine on every route + full control plane; see
+  // flags.ts). INSTANT REVERT with no redeploy: AGENT_CORE_FLAG_SET=v1-driver+full-control-plane
+  // (v1 engine, hardened control plane) or =all-v1 (bare baseline).
   const rawFlagSetEnv = process.env.AGENT_CORE_FLAG_SET?.trim();
   const requestedFlagSetId = rawFlagSetEnv || PRODUCTION_DEFAULT_FLAG_SET_ID;
   const agentCoreFlagSet = resolveFlagSetById(requestedFlagSetId);
