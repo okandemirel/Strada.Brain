@@ -23,6 +23,14 @@ import { CODEX_MODEL_UNSUPPORTED_RE } from "./codex-model-rejection.js";
  * provider issue. Non-retryable errors should NOT fall through to the
  * next provider because they would fail identically.
  */
+/**
+ * Slack added to the bounded all-cooled recovery wait: the sleep runs on the monotonic clock
+ * while cooldownUntil is compared against wall-clock Date.now(), so ms-scale timer truncation /
+ * clock slew can resolve the sleep a hair before the wall-clock expiry (observed as a CI flake:
+ * the loop still saw the provider cooled → attempted=0 abort). Noise-scale vs the 60s wait bound.
+ */
+const RECOVERY_WAIT_SLACK_MS = 10;
+
 /** Regex for provider-specific reasoning protocol errors that should fall through */
 const REASONING_CONTENT_RE = /reasoning_content/i;
 /** Regex for HTTP 400 errors caused by malformed request body or schema */
@@ -432,7 +440,12 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
           waitMs,
           totalProviders: this.providers.length,
         });
-        await sleep(waitMs, externalSignal);
+        // RECOVERY_WAIT_SLACK_MS: setTimeout runs on the MONOTONIC clock while cooldownUntil is
+        // compared against wall-clock Date.now(); ms-scale timer truncation / clock slew can make
+        // the sleep resolve a hair BEFORE the wall-clock expiry, so the loop below would still see
+        // the provider cooled and abort with attempted=0 (caught as a real CI flake). The slack is
+        // noise-scale against a wait bounded at PROVIDER_HEALTH_RECOVERY_WAIT_MS (default 60s).
+        await sleep(waitMs + RECOVERY_WAIT_SLACK_MS, externalSignal);
       }
     }
 

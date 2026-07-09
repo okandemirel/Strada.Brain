@@ -351,12 +351,14 @@ describe("FallbackChainProvider", () => {
     const p1 = { ...createMockProvider({ text: "recovered-p1" }), name: "cooled-provider" };
     const chain = new FallbackChainProvider([p1]);
 
-    // Only provider is transiently cooled with an IMMINENT recovery (~30ms ahead, well
+    // Only provider is transiently cooled with an IMMINENT recovery (~80ms ahead, well
     // inside the 60s window). The chain must wait once rather than throw "all in cooldown".
+    // 80ms (not lower) + the chain's RECOVERY_WAIT_SLACK_MS keep the wall-vs-monotonic clock
+    // jitter that flaked this test on CI comfortably out of range.
     health.recordFailure("cooled-provider", "transient 429");
     health.recordFailure("cooled-provider", "transient 429"); // degraded
     const entry = health.getEntry("cooled-provider")!;
-    Object.assign(entry, { cooldownUntil: Date.now() + 30 });
+    Object.assign(entry, { cooldownUntil: Date.now() + 80 });
     expect(health.isAvailable("cooled-provider")).toBe(false);
     expect(health.suggestRecoveryWaitMs()).not.toBeNull();
 

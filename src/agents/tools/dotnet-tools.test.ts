@@ -1,6 +1,22 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { DotnetBuildTool, DotnetTestTool, parseBuildOutput, parseTestOutput } from "./dotnet-tools.js";
 import type { ToolContext } from "./tool.interface.js";
+
+// The "handles dotnet not installed gracefully" tests previously ran the REAL `dotnet` binary:
+// on a runner WITH dotnet installed (GitHub ubuntu-latest) that meant an actual `dotnet build`
+// whose cold start (NuGet init / workload resolution) could exceed the 30s test timeout — a CI
+// flake, and the test wasn't testing what its name claims. Mock the process runner to the
+// spawn-failure shape runProcess resolves with when the binary is missing, so the tests are
+// hermetic and actually exercise the not-installed path.
+vi.mock("../../utils/process-runner.js", () => ({
+  runProcess: vi.fn().mockResolvedValue({
+    stdout: "",
+    stderr: "spawn dotnet ENOENT: command not found",
+    exitCode: -1,
+    timedOut: false,
+    durationMs: 1,
+  }),
+}));
 
 const ctx: ToolContext = {
   projectPath: "/tmp/test-project",
