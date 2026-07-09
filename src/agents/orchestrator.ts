@@ -10,6 +10,7 @@ import type {
 // FallbackChain's 90s first-response timer on the blocking chat() path (533b1e9).
 import { streamOrChatText } from "./providers/provider.interface.js";
 import { ProviderHealthRegistry } from "./providers/provider-health.js";
+import { AgentEngine } from "../agent-core/engine/agent-engine.js";
 import { DynamicToolFactory } from "./tools/dynamic/dynamic-tool-factory.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
@@ -117,7 +118,7 @@ import {
   createReadOnlyToolStub,
   getReadOnlySystemPrompt,
 } from "../security/read-only-guard.js";
-import type { TaskProgressSignal, TaskProgressUpdate, TaskUsageEvent } from "../tasks/types.js";
+import type { TaskProgressSignal, TaskUsageEvent } from "../tasks/types.js";
 import type { UnifiedBudgetManager } from "../budget/unified-budget-manager.js";
 import type { TaskCheckpointStore, PendingTaskCheckpoint } from "../tasks/task-checkpoint-store.js";
 import { buildTaskProgressSummary, type ProgressLanguage } from "../tasks/progress-signals.js";
@@ -228,7 +229,6 @@ import {
 } from "./orchestrator-loop-shared.js";
 import { createAutonomyBundle } from "./orchestrator-autonomy-tracker.js";
 import {
-  buildExecutionTraceRecord,
   buildPhaseOutcomeRecord,
   buildPhaseOutcomeTelemetry as buildPhaseOutcomeTelemetryModel,
   toExecutionPhase as toExecutionPhaseModel,
@@ -250,7 +250,6 @@ import {
   getPinnedToolTurnAssignment as getPinnedToolTurnAssignmentHelper,
   buildSupervisorRolePrompt as buildSupervisorRolePromptHelper,
   resolveConsensusReviewAssignment as resolveConsensusReviewAssignmentHelper,
-  recordProviderUsage as recordProviderUsageHelper,
   stripInternalDecisionMarkers as stripInternalDecisionMarkersHelper,
   type SupervisorRoutingContext,
   type SupervisorAssignment,
@@ -270,7 +269,6 @@ import {
 import {
   reviewClarification as reviewClarificationPipeline,
   type InterventionDeps,
-  type WorkerRunCollector,
 } from "./orchestrator-intervention-pipeline.js";
 import {
   buildSystemPromptWithContext as buildSystemPromptWithContextHelper,
@@ -398,74 +396,10 @@ interface AgentCoreToolTurnResult {
   readonly progressSignal?: TaskProgressSignal;
 }
 
-/**
- * Per-run state the OrchestratorPort closes over. Populated by {@link Orchestrator.setupAgentCoreRun};
- * the V2 spine never touches it. Mutable on the few fields prepareIteration refreshes each step.
- */
-interface AgentCorePortRunContext {
-  onUsage?: (usage: TaskUsageEvent) => void;
-  readonly iterationHealth: IterationHealthTracker;
-  readonly healthAdapter: IterationHealthCoreAdapter;
-  readonly session: Session;
-  readonly chatId: string;
-  readonly metricId: string | undefined;
-  /** Tool-execution mode for the bound executeToolCalls turn (v1 ToolExecutionMode parity). */
-  readonly toolExecMode: ToolExecutionMode;
-  // Worker isolation + supervisor linkage (threaded into executeOptions + the result projection).
-  readonly workspaceLease?: WorkspaceLease;
-  readonly workspaceLeaseRetained?: boolean;
-  readonly goalContext?: { readonly rootId: string; readonly nodeId: string };
-  readonly executionJournal: ReturnType<typeof createAutonomyBundle>["executionJournal"];
-  readonly selfVerification: ReturnType<typeof createAutonomyBundle>["selfVerification"];
-  readonly stradaConformance: ReturnType<typeof createAutonomyBundle>["stradaConformance"];
-  readonly errorRecovery: ReturnType<typeof createAutonomyBundle>["errorRecovery"];
-  readonly taskPlanner: ReturnType<typeof createAutonomyBundle>["taskPlanner"];
-  readonly controlLoopTracker: NonNullable<ReturnType<typeof createAutonomyBundle>["controlLoopTracker"]> | undefined;
-  systemPrompt: string;
-  /**
-   * H2: per-run guard so proactive goal decomposition runs AT MOST ONCE (v1 parity).
-   * v1 decomposes on the first PLANNING then transitions to EXECUTING; the v2 spine
-   * re-enters PLANNING on every epoch rollover, which without this guard re-runs
-   * decomposeProactive → a FRESH goal tree (dag_init) each epoch, discarding progress
-   * and spraying the DAG/Kanban monitor. Flipped true by the decomposeGoalsIfPlanning binding.
-   */
-  goalsDecomposed: boolean;
-  readonly identityKey: string;
-  // Step 3 (3.5/3.6) — the interactive PLANNING-phase divergences need these: `userId` for the
-  // autonomous-mode check (3.5 plan-review gate); `channelType`/`attachments`/`conversationScope`
-  // for the goal→background submit (3.6). Threaded from AgentRunSetupInput; undefined on paths that
-  // don't supply them (the divergences are interactive-only, where they are always set).
-  readonly userId?: string;
-  readonly channelType?: string;
-  readonly attachments?: readonly Attachment[];
-  readonly conversationScope?: string;
-  readonly projectWorldFingerprint?: string;
-  // Refreshed each step by prepareIteration (the handler contexts read them).
-  executionStrategy: SupervisorExecutionStrategy | undefined;
-  lastAssignment: SupervisorAssignment | undefined;
-  lastToolNames: string[];
-  lastProviderCapabilities: IAIProvider["capabilities"] | undefined;
-  // 3.3: cumulative OUTPUT tokens for the interactive live token-budget gate (v1's cumulativeOutputTokens,
-  // orchestrator.ts:5209). Accumulated in recordProviderUsage; read by checkInteractiveBudget. Output-only
-  // — input re-counts the growing context each iteration and would kill a stable working set (audit #3).
-  cumulativeOutputTokens: number;
-  readonly taskStartedAtMs: number;
-  readonly progressLanguage: ProgressLanguage;
-  readonly progressTitle: string;
-  readonly emitProgress: (update: TaskProgressUpdate) => void;
-  readonly workerCollector: WorkerRunCollector | undefined;
-  readonly profileLanguage: string | undefined;
-  // v1 parity (runBackgroundTask :3549-3550): a worker carrying a parent monitorScope joins the
-  // parent whole-goal episode (joinEpisode at setup, joinEpisodeEnd at persistTerminal) instead
-  // of opening a sibling monitor workspace. False/undefined on interactive + scope-less runs.
-  readonly joinsParentEpisode: boolean;
-  readonly workerMonitorScope: string | undefined;
-  /** step5-parity: v1 refreshed memory per tool turn via this refresher (mid-run re-retrieval);
-   *  the port's tool turn threads it into refreshMemoryIfNeeded exactly as the v1 loops did. */
-  readonly memoryRefresher: ReturnType<SessionManager["createMemoryRefresher"]> | null;
-  /** step5-parity: the supervisor provider pin's fixed all-roles strategy (undefined = unpinned). */
-  readonly fixedExecutionStrategy: SupervisorExecutionStrategy | undefined;
-}
+// Relocation Step 0: the per-run context struct moved VERBATIM to the engine module
+// (src/agent-core/engine/engine-deps.ts EngineRunContext); the old name stays as a local alias
+// while the port methods still live here (they relocate in Steps 1-9).
+type AgentCorePortRunContext = import("../agent-core/engine/engine-deps.js").EngineRunContext;
 
 /** 1b/1c seed default for the task-scope silence ceiling: the shared
  *  {@link DEFAULT_TASK_INACTIVITY_TIMEOUT_MS} (600_000), imported from config (config-only,
@@ -914,6 +848,9 @@ export class Orchestrator {
    * up with zero re-plumbing.
    */
   private readonly agentCoreFlagSet?: FlagSet;
+  /** Relocation Step 0: the engine facade — Steps 1-9 move the port's method clusters into it,
+   *  ending with createAgentCorePort() → this.engine.createPort(). */
+  private readonly engine: AgentEngine;
   /** Agent Core v2 — Phase 1b. Injectable time source for RunClock; SystemClock in prod,
    *  FakeClock in tests. Only consulted when `agentCoreFlagSet.runClock === true`. */
   private readonly agentCoreClock: Clock;
@@ -1242,6 +1179,18 @@ export class Orchestrator {
       eventEmitter: this.eventEmitter,
       taskExecutionStore: this.taskExecutionStore,
       sessionsDir: join(opts.memoryDbPath ?? join(this.projectPath ?? ".", ".strada-memory"), "sessions"),
+    });
+
+    // Relocation: the engine facade (constructed LAST so every ctor-assigned dep is live;
+    // setter-backed fields must go in as lazy getters when their consumers relocate).
+    this.engine = new AgentEngine({
+      getSupervisorRoutingContext: () => this.getSupervisorRoutingContext(),
+      resolveTaskRunId: (chatId?: string, explicitTaskRunId?: string) =>
+        this.resolveTaskRunId(chatId, explicitTaskRunId),
+      providerRouter: this.providerRouter,
+      metricsRecorder: this.metricsRecorder,
+      metrics: this.metrics,
+      rateLimiter: this.rateLimiter,
     });
   }
 
@@ -1785,7 +1734,7 @@ export class Orchestrator {
     usage: ProviderResponse["usage"] | undefined,
     onUsage?: (usage: TaskUsageEvent) => void,
   ): void {
-    recordProviderUsageHelper(this.getSupervisorRoutingContext(), providerName, usage, onUsage);
+    this.engine.recordProviderUsage(providerName, usage, onUsage);
   }
 
 
@@ -1799,19 +1748,7 @@ export class Orchestrator {
     reason?: string;
     taskRunId?: string;
   }): void {
-    this.providerRouter?.recordExecutionTrace?.(
-      buildExecutionTraceRecord({
-        identityKey: params.identityKey,
-        assignment: params.assignment,
-        phase: params.phase,
-        source: params.source,
-        task: params.task,
-        reason: params.reason,
-        timestampMs: Date.now(),
-        chatId: params.chatId,
-        taskRunId: this.resolveTaskRunId(params.chatId, params.taskRunId),
-      }),
-    );
+    this.engine.recordExecutionTrace(params);
   }
 
   private recordPhaseOutcome(params: {
@@ -3639,9 +3576,7 @@ export class Orchestrator {
       terminatedByIterationBudget?: boolean;
     },
   ): void {
-    if (metricId) {
-      this.metricsRecorder?.endTask(metricId, result);
-    }
+    this.engine.recordMetricEnd(metricId, result);
   }
 
   /**
@@ -4167,17 +4102,7 @@ export class Orchestrator {
     usage: ProviderResponse["usage"] | undefined,
     sink?: (usage: TaskUsageEvent) => void,
   ): void {
-    if (!usage) {
-      return;
-    }
-
-    this.metrics?.recordTokenUsage(usage.inputTokens, usage.outputTokens, provider);
-    this.rateLimiter?.recordTokenUsage(usage.inputTokens, usage.outputTokens, provider);
-    sink?.({
-      provider,
-      inputTokens: usage.inputTokens,
-      outputTokens: usage.outputTokens,
-    });
+    this.engine.recordAuxiliaryUsage(provider, usage, sink);
   }
 
   /**
@@ -6391,17 +6316,7 @@ export class Orchestrator {
     params: ClassifyFailureParams,
     runCtx: AgentCorePortRunContext,
   ): FailureVerdictContribution {
-    runCtx.healthAdapter.setProvider(params.provider);
-    runCtx.healthAdapter.recordFailure(); // tracker-half; false=non-benign is the only path here
-    const reason = params.failedCallReason;
-    const callStalled = reason?.kind === "provider-stall" || reason?.kind === "hard-timeout";
-    // A task-scoped abort surfaces here only for the two scoped kinds; else null (the spine
-    // overrides taskCancelReason with runClock.taskToken.reason anyway).
-    const taskCancelReason =
-      reason && (reason.kind === "provider-stall" || reason.kind === "hard-timeout") && reason.scope === "task"
-        ? reason
-        : null;
-    return { callStalled, taskCancelReason, benign: false };
+    return this.engine.classifyAgentCoreFailure(params, runCtx);
   }
 
   /** Build the shared ReflectionCoreContext from existing this.* methods + runCtx (COMPOSITION). */
