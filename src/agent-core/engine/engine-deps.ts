@@ -105,6 +105,7 @@ import type { PrepareIterationDeps } from "./prepare-iteration.js";
 import type { SynthesisDeps } from "./synthesis.js";
 import type { ReviewDeps } from "./review.js";
 import type { RenderDeps } from "./render.js";
+import type { ReflectionDeps } from "./reflection.js";
 
 /**
  * The DI boundary for the relocated engine. Grows per relocation step (each module contributes
@@ -118,4 +119,5 @@ export interface EngineDeps
     PrepareIterationDeps,
     SynthesisDeps,
     ReviewDeps,
-    RenderDeps {}
+    RenderDeps,
+    ReflectionDeps {}

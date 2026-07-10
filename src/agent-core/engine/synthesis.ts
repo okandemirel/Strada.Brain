@@ -26,6 +26,7 @@ export interface EngineProviderManager {
   getActiveInfo?: (identityKey: string) => { providerName?: string; model?: string } | undefined;
   getCatalogSnapshot?: (identityKey: string) => { assignmentVersion: number } | undefined;
   getProvider: (identityKey: string) => import("../../agents/providers/provider.interface.js").IAIProvider;
+  listAvailable: () => Array<{ name: string; label?: string; defaultModel?: string }>;
 }
 
 export interface SynthesisDeps {

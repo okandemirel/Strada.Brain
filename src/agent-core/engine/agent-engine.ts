@@ -43,6 +43,22 @@ import {
   portRenderInteractiveBudgetExceeded,
   renderInteractiveResilienceEvent,
 } from "./render.js";
+import {
+  portDispatchReflection,
+  portDispatchEndTurn,
+  portParseReflectionDecision,
+  portHandlePlanPhase,
+} from "./reflection.js";
+import type {
+  DispatchReflectionParams,
+  ReflectionDispatchResult,
+  DispatchEndTurnParams,
+  EndTurnDispatchResult,
+  ParseReflectionDecisionParams,
+  ParsedReflectionDecision,
+  PlanPhaseParams,
+  PlanPhaseResult,
+} from "../runner/orchestrator-port.js";
 import type { Session } from "../../agents/orchestrator-session-manager.js";
 import type { AgentEvent } from "../events/agent-event.js";
 
@@ -146,5 +162,22 @@ export class AgentEngine {
     enqueue: (text: string, transient?: boolean) => void,
   ): void {
     renderInteractiveResilienceEvent(e, language, enqueue);
+  }
+
+  // ── Reflection / end-turn dispatch (relocation Step 6b, HIGHEST CARE) ──────────────────────
+  portParseReflectionDecision(params: ParseReflectionDecisionParams, runCtx: EngineRunContext): Promise<ParsedReflectionDecision> {
+    return portParseReflectionDecision(params, runCtx);
+  }
+
+  portDispatchReflection(params: DispatchReflectionParams, runCtx: EngineRunContext): Promise<ReflectionDispatchResult> {
+    return portDispatchReflection(this.deps, params, runCtx);
+  }
+
+  portDispatchEndTurn(params: DispatchEndTurnParams, runCtx: EngineRunContext): Promise<EndTurnDispatchResult> {
+    return portDispatchEndTurn(this.deps, params, runCtx);
+  }
+
+  portHandlePlanPhase(params: PlanPhaseParams, runCtx: EngineRunContext): Promise<PlanPhaseResult> {
+    return portHandlePlanPhase(this.deps, params, runCtx);
   }
 }

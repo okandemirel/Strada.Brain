@@ -59,7 +59,6 @@ import type { PostSetupBootstrap, PostSetupBootstrapContext } from "../common/se
 import {
   AgentPhase,
   createInitialState,
-  transitionPhase,
   type AgentState,
   type StepResult,
 } from "./agent-state.js";
@@ -91,7 +90,6 @@ import {
   DEFAULT_CONTEXT_WINDOW,
 } from "./session-compaction.js";
 import {
-  draftLooksLikeInternalPlanArtifact,
   parseCompletionReviewDecision,
   planVerifierPipeline,
   sanitizeVisibilityReviewDecision,
@@ -123,7 +121,6 @@ import type { GoalStorage } from "../goals/goal-storage.js";
 import type { WorkspaceBus } from "../dashboard/workspace-bus.js";
 // goalTreeToDagPayload moved to orchestrator-goal-decomposition.ts
 import type { MonitorLifecycle } from '../dashboard/monitor-lifecycle.js';
-import { parseGoalBlock, buildGoalTreeFromBlock } from "../goals/types.js";
 import type { TaskManager } from "../tasks/task-manager.js";
 import type { SoulLoader } from "./soul/index.js";
 import type { SessionSummarizer } from "../memory/unified/session-summarizer.js";
@@ -202,10 +199,7 @@ import { getResilienceMessage, type MessageKey } from "./resilience-messages.js"
 import {
   recordStepResultsAndCheckReflection,
   buildToolResultContentBlocks,
-  handlePlanPhaseTransition,
-  processReflectionPreamble,
 } from "./orchestrator-loop-utils.js";
-import { runConsensusVerification } from "./orchestrator-consensus.js";
 import {
   executeAndTrackTools,
   refreshMemoryIfNeeded,
@@ -256,23 +250,7 @@ import {
   type ContextBuilderDeps,
 } from "./orchestrator-context-builder.js";
 import {
-  handleBgReflectionDone,
-  handleBgReflectionReplan,
-  handleBgReflectionContinue,
-  handleInteractiveReflectionDone,
-  handleInteractiveReflectionReplan,
-  handleInteractiveReflectionContinue,
-  type BgReflectionContext,
-  type InteractiveReflectionContext,
-  type ReflectionLoopAction,
 } from "./orchestrator-reflection-handler.js";
-import {
-  handleBgEndTurn,
-  handleInteractiveEndTurn,
-  type BgEndTurnContext,
-  type InteractiveEndTurnContext,
-  type EndTurnLoopAction,
-} from "./orchestrator-end-turn-handler.js";
 import type { SupervisorBrain } from "../supervisor/supervisor-brain.js";
 import { requestWriteConfirmation as requestWriteConfirmationHelper } from "./orchestrator-write-gate.js";
 import {
@@ -312,7 +290,6 @@ import type {
 } from "../agent-core/runner/orchestrator-port.js";
 import type { HealthCore } from "../agent-core/control/failure-ledger.js";
 import type { AgentEvent } from "../agent-core/events/agent-event.js";
-import type { ReflectionCoreContext } from "./orchestrator-reflection-handler.js";
 
 
 /** Self-improvement tools bypass phase-based write filtering — they have their own guards. */
@@ -1152,6 +1129,20 @@ export class Orchestrator {
       defaultLanguage: this.defaultLanguage,
       // Step 6a (rendering).
       sessionManager: this.sessionManager,
+      // Step 6b (reflection/end-turn dispatch, HIGHEST CARE): taskManager is setter-backed → LAZY.
+      taskManager: () => this.taskManager,
+      dmPolicy: this.dmPolicy,
+      interactionPolicy: this.interactionPolicy,
+      consensusManager: this.consensusManager,
+      confidenceEstimator: this.confidenceEstimator,
+      progressAssessmentEnabled: this.progressAssessmentEnabled,
+      buildInterventionDeps: (getSystemPrompt) => this.buildInterventionDeps(getSystemPrompt),
+      buildStructuredProgressSignal: (prompt, title, signal, language) =>
+        this.buildStructuredProgressSignal(prompt, title, signal, language),
+      getClarificationContext: () => this.getClarificationContext(),
+      synthesizeUserFacingResponse: (p) => this.synthesizeUserFacingResponse(p),
+      runProactiveGoalDecomposition: (opts) => this.runProactiveGoalDecomposition(opts),
+      runReactiveGoalDecomposition: (opts) => this.runReactiveGoalDecomposition(opts),
     });
   }
 
@@ -5643,36 +5634,7 @@ export class Orchestrator {
     return this.engine.classifyAgentCoreFailure(params, runCtx);
   }
 
-  /** Build the shared ReflectionCoreContext from existing this.* methods + runCtx (COMPOSITION). */
-  private buildReflectionCoreContext(
-    runCtx: AgentCorePortRunContext,
-    responseText: string | undefined,
-    responseUsage: ProviderResponse["usage"] | undefined,
-    toolCallCount: number,
-  ): ReflectionCoreContext {
-    return {
-      chatId: runCtx.chatId,
-      identityKey: runCtx.identityKey,
-      prompt: this.sessionManager.extractLastUserMessage(runCtx.session),
-      responseText,
-      // v1 threads response.usage; the v2 spine does not carry per-step usage into the dispatch
-      // ctx, so a zero usage is the faithful default (telemetry treats it as optional).
-      responseUsage: responseUsage ?? { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-      toolCallCount,
-      executionStrategy: runCtx.executionStrategy as SupervisorExecutionStrategy,
-      executionJournal: runCtx.executionJournal,
-      selfVerification: runCtx.selfVerification,
-      stradaConformance: runCtx.stradaConformance,
-      taskStartedAtMs: runCtx.taskStartedAtMs,
-      currentToolNames: runCtx.lastToolNames,
-      currentAssignment: runCtx.lastAssignment as SupervisorAssignment,
-      interventionDeps: this.buildInterventionDeps(() => runCtx.systemPrompt),
-      session: runCtx.session,
-      recordPhaseOutcome: (p) => this.recordPhaseOutcome(p),
-      buildPhaseOutcomeTelemetry: (p) => this.buildPhaseOutcomeTelemetry(p),
-      usageHandler: runCtx.onUsage,
-    };
-  }
+  
 
   /**
    * Parse the model's reflection preamble into {decision, wasOverride} — v1's
@@ -5685,16 +5647,7 @@ export class Orchestrator {
     params: ParseReflectionDecisionParams,
     runCtx: AgentCorePortRunContext,
   ): Promise<ParsedReflectionDecision> {
-    const { decision, wasOverride } = await processReflectionPreamble({
-      agentState: params.agentState,
-      executionJournal: runCtx.executionJournal,
-      responseText: params.responseText,
-      providerName: params.providerName,
-      modelId: params.modelId,
-      // v1 parity: the background/delegated loop tags override warnings "(bg)"; interactive none.
-      logLabel: runCtx.toolExecMode === "interactive" ? undefined : "bg",
-    });
-    return { decision, wasOverride };
+    return this.engine.portParseReflectionDecision(params, runCtx);
   }
 
   /**
@@ -5706,88 +5659,7 @@ export class Orchestrator {
     params: DispatchReflectionParams,
     runCtx: AgentCorePortRunContext,
   ): Promise<ReflectionDispatchResult> {
-    const chatId = params.chatId;
-    // step5-parity (trio catch): v1's checkPendingBlocks ran the self-managed write-rejection check
-    // at BOTH the end-turn AND the REFLECTING boundary (v1 @ a3de7d1 :5936/:6204 + :4379/:4550). A
-    // write rejected during EXECUTING can advance to REFLECTING and terminate on a low-signal DONE
-    // here — surface WHY execution stopped, exactly as in portDispatchEndTurn.
-    const writeRejectionText = this.sessionManager.getPendingSelfManagedWriteRejectionVisibleText(
-      runCtx.session,
-      params.responseText,
-    );
-    if (writeRejectionText) {
-      await this.emitVisibleBoundary(chatId, runCtx.session, writeRejectionText);
-      return { agentState: params.agentState, terminal: true, reason: "self-managed-write-rejected" };
-    }
-    const core = this.buildReflectionCoreContext(runCtx, params.responseText, undefined, 0);
-    let action: ReflectionLoopAction;
-
-    if (params.mode === "interactive") {
-      const ctx: InteractiveReflectionContext = {
-        ...core,
-        systemPrompt: runCtx.systemPrompt,
-        progressAssessmentEnabled: this.progressAssessmentEnabled,
-        controlLoopTracker: runCtx.controlLoopTracker,
-      };
-      if (params.decision === "DONE" || params.decision === "DONE_WITH_SUGGESTIONS") {
-        action = await handleInteractiveReflectionDone(params.agentState, ctx);
-      } else if (params.decision === "REPLAN") {
-        action = handleInteractiveReflectionReplan(params.agentState, ctx);
-        // FAITHFUL: bundle v1's interactive REPLAN-continue special-case (orchestrator.ts
-        // ~5409-5436): reactive goal-decomposition + transitionPhase(REPLANNING) + continuation.
-        if (action.flow === "continue") {
-          await this.runReactiveGoalDecomposition({
-            conversationScope: chatId,
-            chatId,
-            session: runCtx.session,
-            responseText: params.responseText ?? "",
-          });
-          let replanState = transitionPhase(action.newState, AgentPhase.REPLANNING);
-          if (params.responseText) {
-            runCtx.session.messages.push({ role: "assistant", content: params.responseText });
-          }
-          runCtx.session.messages.push({ role: "user", content: "Please create a new plan." });
-          return { agentState: replanState, terminal: false, extendRequested: true };
-        }
-      } else {
-        action = await handleInteractiveReflectionContinue(params.agentState, ctx, {
-          text: params.responseText,
-          toolCalls: [],
-          stopReason: "end_turn",
-          usage: undefined,
-        } as unknown as ProviderResponse);
-      }
-    } else {
-      const ctx = this.buildBgReflectionContext(core, runCtx, params.agentState.iteration);
-      action =
-        params.decision === "DONE" || params.decision === "DONE_WITH_SUGGESTIONS"
-          ? await handleBgReflectionDone(params.agentState, ctx)
-          : params.decision === "REPLAN"
-            ? handleBgReflectionReplan(params.agentState, ctx)
-            : await handleBgReflectionContinue(params.agentState, ctx, 0);
-    }
-
-    // ADAPT union → DTO (faithful to the pre-Step5 interactive call-site, v1 @ a3de7d1 ~5447-5491).
-    switch (action.flow) {
-      case "continue":
-        // step5-parity: a "continue" out of a DONE dispatch = the verifier/loop-recovery
-        // intervention extended the run — the spine must honor it over the parse-time verdict.
-        return { agentState: action.newState, terminal: false, extendRequested: true };
-      case "done": {
-        await this.emitVisibleBoundary(chatId, runCtx.session, action.visibleText);
-        return { agentState: action.newState, terminal: true, reason: action.status ?? "done" };
-      }
-      case "blocked": {
-        const safe = await this.emitVisibleBoundary(chatId, runCtx.session, action.visibleText);
-        return {
-          agentState: safe.marked
-            ? { ...params.agentState, loopDetectionBlocked: true }
-            : params.agentState,
-          terminal: true,
-          reason: action.status ?? "blocked",
-        };
-      }
-    }
+    return this.engine.portDispatchReflection(params, runCtx);
   }
 
   /** COMPOSE the 2 end-turn handlers on mode, ADAPT union → {agentState, finalText}. */
@@ -5795,53 +5667,7 @@ export class Orchestrator {
     params: DispatchEndTurnParams,
     runCtx: AgentCorePortRunContext,
   ): Promise<EndTurnDispatchResult> {
-    const chatId = params.chatId;
-    // step5-parity: v1 checked pending blocks at the end-turn boundary (deleted checkPendingBlocks).
-    // The plan-review half is surfaced on v2 during the plan phase, but the self-managed
-    // write-REJECTION half had no v2 home: when the model ends the turn with only a low-signal ack
-    // after a write was blocked by autonomous safety review, surface WHY execution stopped instead
-    // of terminating on the empty ack. Terminal (v1 recorded COMPLETE + returned the block text).
-    const writeRejectionText = this.sessionManager.getPendingSelfManagedWriteRejectionVisibleText(
-      runCtx.session,
-      params.responseText,
-    );
-    if (writeRejectionText) {
-      const safe = await this.emitVisibleBoundary(chatId, runCtx.session, writeRejectionText);
-      return { agentState: params.agentState, finalText: safe.text };
-    }
-    const core = this.buildReflectionCoreContext(runCtx, params.responseText, undefined, 0);
-    const action: EndTurnLoopAction =
-      params.mode === "interactive"
-        ? await handleInteractiveEndTurn(
-            params.agentState,
-            this.buildInteractiveEndTurnContext(core, runCtx),
-          )
-        : await handleBgEndTurn(
-            params.agentState,
-            this.buildBgEndTurnContext(core, runCtx, params.agentState.iteration),
-          );
-
-    switch (action.flow) {
-      case "done": {
-        const safe = await this.emitVisibleBoundary(chatId, runCtx.session, action.visibleText);
-        return { agentState: action.newState, finalText: safe.text };
-      }
-      case "blocked": {
-        const safe = await this.emitVisibleBoundary(chatId, runCtx.session, action.visibleText);
-        return {
-          agentState: safe.marked
-            ? { ...params.agentState, loopDetectionBlocked: true }
-            : params.agentState,
-          finalText: safe.text,
-        };
-      }
-      case "continue":
-        // step5-parity (the former "one end-turn fidelity gap", now CLOSED): the handler
-        // (verifier partial-closure / loop-recovery) converted a genuine end_turn into a
-        // continuation and already re-pushed the gate onto the session — signal the spine to
-        // keep iterating instead of terminating with an empty finalText.
-        return { agentState: action.newState, finalText: "", continueRun: true };
-    }
+    return this.engine.portDispatchEndTurn(params, runCtx);
   }
 
   /** BIND handlePlanPhaseTransition (no auto-transition; the goal-decomposition step follows). */
@@ -5849,99 +5675,7 @@ export class Orchestrator {
     params: PlanPhaseParams,
     runCtx: AgentCorePortRunContext,
   ): Promise<PlanPhaseResult> {
-    const chatId = params.chatId;
-    const phase = params.agentState.phase;
-
-    // Interactive PLANNING-phase terminal divergences (cutover Step 3). Background/worker/supervisor
-    // runs fall straight to the default auto-transition below (v1 ran these only in the interactive loop).
-    if (
-      params.mode === "interactive" &&
-      (phase === AgentPhase.PLANNING || phase === AgentPhase.REPLANNING)
-    ) {
-      const lastUserMessage = this.sessionManager.extractLastUserMessage(runCtx.session);
-
-      // ── 3.6: goal-block → background submit (v1 orchestrator.ts:5754-5796). FIRST, matching v1
-      // precedence (a goal-block short-circuits to background before the plan-review / end-turn logic).
-      // Returns a TERMINATING yield so the spine ends the interactive run BEFORE decomposeGoalsIfPlanning
-      // — the handed-off goal must NOT also execute inline (no double-run).
-      if (phase === AgentPhase.PLANNING && this.taskManager) {
-        const goalBlock = parseGoalBlock(params.responseText ?? "");
-        if (goalBlock && goalBlock.isGoal) {
-          const lastUserContent = this.sessionManager.extractLastUserContent(runCtx.session);
-          const lastUserHasRichInput =
-            (runCtx.attachments?.length ?? 0) > 0 ||
-            (Array.isArray(lastUserContent) && lastUserContent.some((b) => b.type !== "text"));
-          const conversationScope = runCtx.conversationScope ?? chatId;
-          const goalTree = lastUserHasRichInput
-            ? undefined
-            : buildGoalTreeFromBlock(goalBlock, conversationScope, lastUserMessage, params.responseText ?? undefined);
-          const nodeCount = goalTree ? goalTree.nodes.size - 1 : goalBlock.nodes.length;
-          const ackMsg =
-            `Working on: ${lastUserMessage.slice(0, 80)}` +
-            ` (${nodeCount} step${nodeCount !== 1 ? "s" : ""}, ~${goalBlock.estimatedMinutes} min). I'll update you as I go.`;
-          this.taskManager.submit(chatId, runCtx.channelType ?? "cli", lastUserMessage, {
-            ...(goalTree ? { goalTree } : {}),
-            ...(lastUserHasRichInput ? { forceSharedPlanning: true } : {}),
-            ...(lastUserContent ? { userContent: lastUserContent } : {}),
-            attachments: runCtx.attachments?.length ? [...runCtx.attachments] : undefined,
-            conversationId: conversationScope,
-            userId: runCtx.identityKey,
-          });
-          return { agentState: params.agentState, yield: { kind: "goal_handoff", visibleText: ackMsg } };
-        }
-      }
-
-      // ── 3.5: explicit plan-review gate (v1 orchestrator.ts:5799-5857). NON-autonomous only —
-      // autonomous mode auto-executes via the default auto-transition below. Records the plan WITHOUT
-      // transitioning, parks the write-blocking review gate, and returns a TERMINATING yield that
-      // presents the plan; the user approves on the next message (cleared upstream by
-      // interactionPolicy.noteUserMessage in processMessage, so this gate won't re-trigger).
-      if (
-        params.toolCallCount === 0 && // v1 parity (orchestrator.ts:5812): text-only PLANNING responses only
-        userExplicitlyAskedForPlan(lastUserMessage) &&
-        draftLooksLikeInternalPlanArtifact(params.responseText ?? "", { toolNames: runCtx.lastToolNames }) &&
-        !this.dmPolicy?.isAutonomousActive(chatId, runCtx.userId)
-      ) {
-        let agentState = handlePlanPhaseTransition({
-          agentState: params.agentState,
-          executionJournal: runCtx.executionJournal,
-          responseText: params.responseText,
-          providerName: params.providerName,
-          modelId: params.modelId,
-          autoTransition: false,
-        });
-        if (agentState.phase === AgentPhase.PLANNING) {
-          agentState = await this.runProactiveGoalDecomposition({
-            conversationScope: runCtx.conversationScope ?? chatId,
-            userMessage: lastUserMessage,
-            chatId,
-            session: runCtx.session,
-            agentState,
-          });
-        }
-        this.interactionPolicy.requirePlanReview(
-          chatId,
-          "user explicitly asked to review a plan first",
-          applyVisibleResponseContract(
-            lastUserMessage,
-            this.stripInternalDecisionMarkers(params.responseText) || params.responseText || "",
-          ),
-        );
-        const planText = this.sessionManager.getPendingPlanReviewVisibleText(chatId) ?? "";
-        return { agentState, yield: { kind: "plan_review", visibleText: planText } };
-      }
-    }
-
-    // ── default: auto-transition (existing behavior — autonomous auto-execute + the non-divergent path).
-    const agentState = handlePlanPhaseTransition({
-      agentState: params.agentState,
-      executionJournal: runCtx.executionJournal,
-      responseText: params.responseText,
-      providerName: params.providerName,
-      modelId: params.modelId,
-      autoTransition: true,
-    });
-    return { agentState };
+    return this.engine.portHandlePlanPhase(params, runCtx);
   }
 
   /** ADAPT mutation→pure: project the terminal state + accumulated effects into the result fields. */
@@ -5952,144 +5686,18 @@ export class Orchestrator {
     return this.engine.buildResultProjection(params, runCtx);
   }
 
-  /**
-   * Compose the background-only ReflectionContext fields (orchestrator.ts ~3943-3978) from existing
-   * this.* methods + runCtx. Every field is an EXISTING method or a runCtx value.
-   */
-  private buildBgReflectionContext(
-    core: ReflectionCoreContext,
-    runCtx: AgentCorePortRunContext,
-    iteration: number,
-  ): BgReflectionContext {
-    return {
-      ...core,
-      progressAssessmentEnabled: this.progressAssessmentEnabled,
-      controlLoopTracker: runCtx.controlLoopTracker as BgReflectionContext["controlLoopTracker"],
-      workerCollector: runCtx.workerCollector,
-      progressTitle: runCtx.progressTitle,
-      progressLanguage: runCtx.progressLanguage,
-      iteration,
-      workspaceLease: undefined,
-      systemPrompt: runCtx.systemPrompt,
-      emitProgress: runCtx.emitProgress,
-      buildStructuredProgressSignal: (p, t, s, l) => this.buildStructuredProgressSignal(p, t, s, l),
-      getClarificationContext: () => this.getClarificationContext(),
-      formatBoundaryVisibleText: (b) => this.sessionManager.formatBoundaryVisibleText(b),
-      appendVisibleAssistantMessage: (s, t) => this.sessionManager.appendVisibleAssistantMessage(s, t),
-      synthesizeUserFacingResponse: (p) => this.synthesizeUserFacingResponse(p),
-      persistSessionToMemory: (c, t, f) => this.sessionManager.persistSessionToMemory(c, t, f),
-      getVisibleTranscript: (s) => this.sessionManager.getVisibleTranscript(s),
-    };
-  }
+  
 
-  /** Compose the background-only EndTurnContext fields (orchestrator.ts ~4113-4149). */
-  private buildBgEndTurnContext(
-    core: ReflectionCoreContext,
-    runCtx: AgentCorePortRunContext,
-    iteration: number,
-  ): BgEndTurnContext {
-    return {
-      chatId: core.chatId,
-      identityKey: core.identityKey,
-      prompt: core.prompt,
-      taskClassification: this.taskClassifier.classify(core.prompt),
-      responseText: core.responseText,
-      responseUsage: core.responseUsage,
-      executionStrategy: core.executionStrategy,
-      executionJournal: core.executionJournal,
-      selfVerification: core.selfVerification,
-      stradaConformance: core.stradaConformance,
-      taskStartedAtMs: core.taskStartedAtMs,
-      currentToolNames: core.currentToolNames,
-      currentAssignment: core.currentAssignment,
-      interventionDeps: core.interventionDeps,
-      session: core.session,
-      usageHandler: core.usageHandler,
-      recordPhaseOutcome: core.recordPhaseOutcome,
-      buildPhaseOutcomeTelemetry: core.buildPhaseOutcomeTelemetry,
-      progressAssessmentEnabled: this.progressAssessmentEnabled,
-      controlLoopTracker: runCtx.controlLoopTracker as BgEndTurnContext["controlLoopTracker"],
-      workerCollector: runCtx.workerCollector,
-      progressTitle: runCtx.progressTitle,
-      progressLanguage: runCtx.progressLanguage,
-      iteration,
-      workspaceLease: undefined,
-      systemPrompt: runCtx.systemPrompt,
-      daemonMode: true,
-      emitProgress: runCtx.emitProgress,
-      buildStructuredProgressSignal: (p, t, s, l) => this.buildStructuredProgressSignal(p, t, s, l),
-      getClarificationContext: () => this.getClarificationContext(),
-      formatBoundaryVisibleText: (b) => this.sessionManager.formatBoundaryVisibleText(b),
-      appendVisibleAssistantMessage: (s, t) => this.sessionManager.appendVisibleAssistantMessage(s, t),
-      synthesizeUserFacingResponse: (p) => this.synthesizeUserFacingResponse(p),
-      persistSessionToMemory: (c, t, f) => this.sessionManager.persistSessionToMemory(c, t as ConversationMessage[], f),
-      getVisibleTranscript: (s) => this.sessionManager.getVisibleTranscript(s),
-    };
-  }
+  
 
-  /** Compose the interactive-only EndTurnContext fields (orchestrator.ts ~5648-5697). */
-  private buildInteractiveEndTurnContext(
-    core: ReflectionCoreContext,
-    runCtx: AgentCorePortRunContext,
-  ): InteractiveEndTurnContext {
-    const identityKey = runCtx.identityKey;
-    const providerCaps = runCtx.lastProviderCapabilities;
-    const executionStrategy = core.executionStrategy;
-    const currentAssignment = core.currentAssignment;
-    return {
-      ...core,
-      systemPrompt: runCtx.systemPrompt,
-      defaultLanguage: this.defaultLanguage,
-      profileLanguage: runCtx.profileLanguage,
-      progressAssessmentEnabled: this.progressAssessmentEnabled,
-      controlLoopTracker: runCtx.controlLoopTracker,
-      runTextConsensusIfCritical: async (p) => {
-        if (!this.consensusManager || !this.confidenceEstimator) return;
-        const textTaskClass = this.taskClassifier.classify(p.prompt);
-        if (textTaskClass.criticality !== "critical") return;
-        const textConfidence = this.confidenceEstimator.estimate({
-          task: textTaskClass,
-          providerName: p.providerName,
-          providerCapabilities: providerCaps ?? ({} as never),
-          agentState: p.agentState,
-          responseLength: p.responseText.length,
-        });
-        await runConsensusVerification({
-          consensusManager: this.consensusManager,
-          availableProviderCount: this.providerManager.listAvailable().length,
-          taskClass: textTaskClass,
-          confidence: textConfidence,
-          originalOutput: { text: p.responseText },
-          originalProviderName: p.providerName,
-          prompt: p.prompt,
-          reviewAssignment: this.resolveConsensusReviewAssignment(executionStrategy.reviewer, currentAssignment, identityKey),
-          chatId: core.chatId,
-          identityKey,
-          logLabel: "text-only, critical",
-          recordExecutionTrace: (rp) => this.recordExecutionTrace(rp as Parameters<typeof this.recordExecutionTrace>[0]),
-          recordPhaseOutcome: (rp) => this.recordPhaseOutcome(rp as Parameters<typeof this.recordPhaseOutcome>[0]),
-        });
-      },
-    };
-  }
+  
 
   /**
    * Diagnostic-blocked sanitizer factored from the byte-identical v1 inline at orchestrator.ts
    * ~5466-5483 / ~5716-5731. Faithful: same DIAGNOSTIC_BLOCKED_RE → task_stuck rewrite + the
    * loopDetectionBlocked mark. Shared by portDispatchReflection + portDispatchEndTurn.
    */
-  /**
-   * Sanitize a handler's visible text and, when non-empty, render it to the channel; returns the
-   * sanitized {text, marked} so callers apply the loop-block mark. Centralizes the sanitize→emit
-   * boundary the reflection + end-turn dispatch arms shared (4 copies → 1).
-   */
-  private async emitVisibleBoundary(
-    chatId: string,
-    session: Session,
-    visibleText: string | undefined,
-  ): Promise<{ text: string; marked: boolean }> {
-    return this.engine.emitVisibleBoundary(chatId, session, visibleText);
-  }
+  
 
 
   /**
