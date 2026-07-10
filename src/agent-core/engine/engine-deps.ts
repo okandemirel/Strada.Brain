@@ -103,6 +103,7 @@ import type { AccountingDeps } from "./accounting.js";
 import type { BudgetDeps } from "./budget.js";
 import type { PrepareIterationDeps } from "./prepare-iteration.js";
 import type { SynthesisDeps } from "./synthesis.js";
+import type { ReviewDeps } from "./review.js";
 
 /**
  * The DI boundary for the relocated engine. Grows per relocation step (each module contributes
@@ -110,4 +111,9 @@ import type { SynthesisDeps } from "./synthesis.js";
  * checkpointStore, unifiedBudgetManager, capabilityRegistry) must be injected as LAZY GETTERS,
  * never by-value.
  */
-export interface EngineDeps extends AccountingDeps, BudgetDeps, PrepareIterationDeps, SynthesisDeps {}
+export interface EngineDeps
+  extends AccountingDeps,
+    BudgetDeps,
+    PrepareIterationDeps,
+    SynthesisDeps,
+    ReviewDeps {}

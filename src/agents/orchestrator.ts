@@ -91,21 +91,13 @@ import {
   DEFAULT_CONTEXT_WINDOW,
 } from "./session-compaction.js";
 import {
-  COMPLETION_REVIEW_SYNTHESIS_SYSTEM_PROMPT,
-  buildCompletionReviewStageRequest,
-  buildCompletionReviewStageSystemPrompt,
-  buildCompletionReviewSynthesisRequest,
-  buildVisibilityReviewRequest,
   draftLooksLikeInternalPlanArtifact,
   parseCompletionReviewDecision,
-  parseCompletionReviewStageResult,
-  parseVisibilityReviewDecision,
   planVerifierPipeline,
   sanitizeVisibilityReviewDecision,
-  VISIBILITY_REVIEW_SYSTEM_PROMPT,
   InteractionPolicyStateMachine,
   userExplicitlyAskedForPlan,
-  type CompletionReviewStageName,
+
   type CompletionReviewStageResult,
 } from "./autonomy/index.js";
 import { MUTATION_TOOLS, WRITE_OPERATIONS, extractFilePath, isVerificationToolName } from "./autonomy/constants.js";
@@ -160,11 +152,8 @@ import type {
   VerifierDecision,
 } from "../agent-core/routing/routing-types.js";
 import {
-  SHELL_REVIEW_SYSTEM_PROMPT,
   formatRequestedPlan,
-  isSafeShellFallback,
   normalizeInteractiveText as normalizePolicyText,
-  parseShellReviewDecision,
   resolveExecutionPolicy,
   reviewAutonomousPlan,
   reviewAutonomousQuestion,
@@ -237,7 +226,7 @@ import {
   buildStaticSupervisorAssignment as buildStaticSupervisorAssignmentHelper,
   buildCatalogAssignmentMetadata as buildCatalogAssignmentMetadataHelper,
   resolveProviderModelId as resolveProviderModelIdHelper,
-  resolveSupervisorAssignment as resolveSupervisorAssignmentHelper,
+
   buildSupervisorExecutionStrategy as buildSupervisorExecutionStrategyHelper,
   buildSupervisorRolePrompt as buildSupervisorRolePromptHelper,
   resolveConsensusReviewAssignment as resolveConsensusReviewAssignmentHelper,
@@ -1187,6 +1176,12 @@ export class Orchestrator {
       buildWorkerToolDefinitions: (task, phase, role) => this.buildWorkerToolDefinitions(task, phase, role),
       // Step 4 (synthesis/projection).
       providerManager: this.providerManager,
+      // Step 5b (review/verify): systemPrompt is mutable (rebuilt) → LAZY GETTER.
+      systemPrompt: () => this.systemPrompt,
+      taskClassifier: this.taskClassifier,
+      userProfileStore: this.userProfileStore,
+      onUsage: this.onUsage,
+      defaultLanguage: this.defaultLanguage,
     });
   }
 
@@ -1628,18 +1623,7 @@ export class Orchestrator {
     return resolveProviderModelIdHelper(this.getSupervisorRoutingContext(), providerName, identityKey);
   }
 
-  private resolveSupervisorAssignment(
-    role: SupervisorRole,
-    task: TaskClassification,
-    phase: string | undefined,
-    identityKey: string,
-    fallbackName: string,
-    fallbackProvider: IAIProvider,
-    taskDescription?: string,
-    projectWorldFingerprint?: string,
-  ): SupervisorAssignment {
-    return resolveSupervisorAssignmentHelper(this.getSupervisorRoutingContext(), role, task, phase, identityKey, fallbackName, fallbackProvider, taskDescription, projectWorldFingerprint);
-  }
+
 
   private buildSupervisorExecutionStrategy(
     prompt: string,
@@ -3862,45 +3846,9 @@ export class Orchestrator {
     }
   }
 
-  private extractConversationText(content: string | MessageContent[]): string {
-    if (typeof content === "string") {
-      return content;
-    }
 
-    return content
-      .map((block) => {
-        switch (block.type) {
-          case "text":
-            return block.text;
-          case "tool_result":
-            return block.content;
-          case "tool_use":
-            return `${block.name}(${JSON.stringify(block.input)})`;
-          default:
-            return "";
-        }
-      })
-      .filter((part) => part.length > 0)
-      .join(" ");
-  }
 
-  private summarizeMessagesForShellReview(messages?: ConversationMessage[]): string {
-    if (!messages || messages.length === 0) {
-      return "";
-    }
 
-    return messages
-      .slice(-4)
-      .map((message) => {
-        const text = this.extractConversationText(message.content).replace(/\s+/g, " ").trim();
-        if (!text) {
-          return "";
-        }
-        return `${message.role}: ${text.slice(0, 220)}`;
-      })
-      .filter((line) => line.length > 0)
-      .join("\n");
-  }
 
   private recordAuxiliaryUsage(
     provider: string,
@@ -4046,49 +3994,9 @@ export class Orchestrator {
     return /\b(?:test|build|check|lint|typecheck|verify|compile|playmode|editmode|smoke)\b/iu.test(command);
   }
 
-  private resolveCompletionReviewStageAssignment(
-    stage: CompletionReviewStageName,
-    params: {
-      prompt: string;
-      identityKey: string;
-      strategy: SupervisorExecutionStrategy;
-    },
-  ): SupervisorAssignment {
-    const task =
-      stage === "code"
-        ? { ...params.strategy.task, type: "code-review" as const }
-        : stage === "simplify"
-          ? { ...params.strategy.task, type: "refactoring" as const }
-          : {
-            ...params.strategy.task,
-            type: "analysis" as const,
-            criticality: params.strategy.task.criticality === "low" ? "medium" : params.strategy.task.criticality,
-          };
 
-    return this.resolveSupervisorAssignment(
-      "reviewer",
-      task,
-      "completion-review",
-      params.identityKey,
-      params.strategy.reviewer.providerName,
-      params.strategy.reviewer.provider,
-      `${params.prompt}\n\nCompletion review stage: ${stage}.`,
-    );
-  }
 
-  private buildCompletionReviewStageFallback(
-    stage: CompletionReviewStageName,
-    summary: string,
-    requiredAction: string,
-  ): CompletionReviewStageResult {
-    return {
-      stage,
-      status: "issues",
-      summary,
-      findings: [summary],
-      requiredActions: [requiredAction],
-    };
-  }
+
 
   private async runVisibilityReview(params: {
     chatId: string;
@@ -4104,53 +4012,7 @@ export class Orchestrator {
     decision: ReturnType<typeof sanitizeVisibilityReviewDecision>;
     usage?: ProviderResponse["usage"];
   }> {
-    const reviewer = this.resolveSupervisorAssignment(
-      "reviewer",
-      { ...params.strategy.task, type: "analysis" },
-      "visibility-review",
-      params.identityKey,
-      params.strategy.reviewer.providerName,
-      params.strategy.reviewer.provider,
-      `${params.prompt}\n\nVisibility review.`,
-    );
-
-    const response = await streamOrChatText(
-      reviewer.provider,
-      `${this.systemPrompt}\n\n${VISIBILITY_REVIEW_SYSTEM_PROMPT}${this.buildSupervisorRolePrompt(params.strategy, reviewer)}`,
-      buildVisibilityReviewRequest({
-        prompt: params.prompt,
-        draft: params.draft,
-        evidence: params.evidence,
-        task: params.task,
-        canInspectLocally: params.canInspectLocally,
-      }),
-    );
-    this.recordExecutionTrace({
-      chatId: params.chatId,
-      identityKey: params.identityKey,
-      assignment: reviewer,
-      phase: "visibility-review",
-      source: "visibility-review",
-      task: params.task,
-    });
-    this.recordAuxiliaryUsage(reviewer.providerName, response.usage, params.usageHandler);
-    const decision = sanitizeVisibilityReviewDecision(
-      parseVisibilityReviewDecision(response.text),
-    );
-    this.recordPhaseOutcome({
-      chatId: params.chatId,
-      identityKey: params.identityKey,
-      assignment: reviewer,
-      phase: "visibility-review",
-      source: "visibility-review",
-      status: decision?.decision === "internal_continue" ? "continued" : "approved",
-      task: params.task,
-      reason: decision?.reason ?? "Visibility review completed.",
-      telemetry: this.buildPhaseOutcomeTelemetry({
-        usage: response.usage,
-      }),
-    });
-    return { decision, usage: response.usage };
+    return this.engine.runVisibilityReview(params);
   }
 
   private async runCompletionReviewStages(params: {
@@ -4167,173 +4029,7 @@ export class Orchestrator {
     stageResults: CompletionReviewStageResult[];
     usage?: ProviderResponse["usage"];
   }> {
-    const verifierChecks = params.plan.checks.map(
-      (check) => `- ${check.name}: ${check.status} — ${check.summary}`,
-    );
-    const stageResults: CompletionReviewStageResult[] = [];
-    const stages: CompletionReviewStageName[] = ["code", "simplify", "security"];
-    let totalInputTokens = 0;
-    let totalOutputTokens = 0;
-
-    const recordUsage = (usage: ProviderResponse["usage"] | undefined) => {
-      if (!usage) {
-        return;
-      }
-      totalInputTokens += usage.inputTokens ?? 0;
-      totalOutputTokens += usage.outputTokens ?? 0;
-    };
-
-    // Run all review stages in parallel to reduce wall-clock time (3 sequential → 1 parallel batch)
-    const stagePromises = stages.map(async (stage) => {
-      const assignment = this.resolveCompletionReviewStageAssignment(stage, params);
-      const stageRequest = buildCompletionReviewStageRequest({
-        stage,
-        prompt: params.prompt,
-        draft: params.draft,
-        state: params.state,
-        evidence: params.plan.evidence,
-        verifierChecks,
-        buildToolsAvailable: params.plan.buildToolsAvailable,
-      });
-      const parseOrFallback = (text: string): CompletionReviewStageResult =>
-        parseCompletionReviewStageResult(text, stage)
-        ?? this.buildCompletionReviewStageFallback(
-          stage,
-          `${stage} review returned an invalid response.`,
-          `Rerun the ${stage} review and continue conservatively until it is clean.`,
-        );
-
-      try {
-        const reviewResponse = await streamOrChatText(
-          assignment.provider,
-          `${this.systemPrompt}\n\n${buildCompletionReviewStageSystemPrompt(stage)}${this.buildSupervisorRolePrompt(params.strategy, assignment)}`,
-          stageRequest,
-        );
-        this.recordExecutionTrace({
-          chatId: params.chatId,
-          identityKey: params.identityKey,
-          assignment,
-          phase: "completion-review",
-          source: "completion-review",
-          task: params.strategy.task,
-          reason: `${stage} stage review`,
-        });
-        this.recordAuxiliaryUsage(assignment.providerName, reviewResponse.usage, params.usageHandler);
-        recordUsage(reviewResponse.usage);
-        return parseOrFallback(reviewResponse.text);
-      } catch (error) {
-        getLogger().warn("Completion review stage failed, trying main provider chain", {
-          chatId: params.chatId,
-          stage,
-          provider: assignment.providerName,
-          error: error instanceof Error ? error.message : String(error),
-        });
-        // Retry with the main provider chain (FallbackChainProvider) before giving up
-        try {
-          const chainProvider = this.providerManager.getProvider(params.identityKey);
-          const retryResponse = await streamOrChatText(
-            chainProvider,
-            `${this.systemPrompt}\n\n${buildCompletionReviewStageSystemPrompt(stage)}`,
-            stageRequest,
-          );
-          this.recordAuxiliaryUsage(chainProvider.name, retryResponse.usage, params.usageHandler);
-          recordUsage(retryResponse.usage);
-          return parseOrFallback(retryResponse.text);
-        } catch (retryError) {
-          getLogger().debug("Completion review stage retry also failed", {
-            chatId: params.chatId,
-            stage,
-            error: retryError instanceof Error ? retryError.message : String(retryError),
-          });
-          return this.buildCompletionReviewStageFallback(
-            stage,
-            `${stage} review failed before Strada could validate completion.`,
-            `Investigate the ${stage} review failure, rerun that review, and continue conservatively.`,
-          );
-        }
-      }
-    });
-    stageResults.push(...await Promise.all(stagePromises));
-
-    const reviewer = this.resolveSupervisorAssignment(
-      "reviewer",
-      { ...params.strategy.task, type: "code-review" },
-      "completion-review",
-      params.identityKey,
-      params.strategy.reviewer.providerName,
-      params.strategy.reviewer.provider,
-      `${params.prompt}\n\nCompletion review synthesis.`,
-    );
-    const synthesisRequest = buildCompletionReviewSynthesisRequest({
-      prompt: params.prompt,
-      draft: params.draft,
-      state: params.state,
-      evidence: params.plan.evidence,
-      verifierChecks,
-      stageResults,
-      buildToolsAvailable: params.plan.buildToolsAvailable,
-    });
-
-    const reviewResponse = await streamOrChatText(
-      reviewer.provider,
-      `${this.systemPrompt}\n\n${COMPLETION_REVIEW_SYNTHESIS_SYSTEM_PROMPT}${this.buildSupervisorRolePrompt(params.strategy, reviewer)}`,
-      synthesisRequest,
-    ).catch(async (error) => {
-      getLogger().warn("Completion review synthesis failed, trying main provider chain", {
-        chatId: params.chatId,
-        provider: reviewer.providerName,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      // Retry with the main provider chain before giving up
-      try {
-        const chainProvider = this.providerManager.getProvider(params.identityKey);
-        const retryResponse = await streamOrChatText(
-          chainProvider,
-          `${this.systemPrompt}\n\n${COMPLETION_REVIEW_SYNTHESIS_SYSTEM_PROMPT}`,
-          synthesisRequest,
-        );
-        this.recordAuxiliaryUsage(chainProvider.name, retryResponse.usage, params.usageHandler);
-        recordUsage(retryResponse.usage);
-        return retryResponse;
-      } catch (retryError) {
-        getLogger().debug("Completion review synthesis retry also failed", {
-          chatId: params.chatId,
-          error: retryError instanceof Error ? retryError.message : String(retryError),
-        });
-        return null;
-      }
-    });
-    if (!reviewResponse) {
-      return {
-        decision: null,
-        stageResults,
-        usage: {
-          inputTokens: totalInputTokens,
-          outputTokens: totalOutputTokens,
-          totalTokens: totalInputTokens + totalOutputTokens,
-        },
-      };
-    }
-    this.recordExecutionTrace({
-      chatId: params.chatId,
-      identityKey: params.identityKey,
-      assignment: reviewer,
-      phase: "completion-review",
-      source: "completion-review",
-      task: params.strategy.task,
-      reason: "aggregated staged completion review",
-    });
-    this.recordAuxiliaryUsage(reviewer.providerName, reviewResponse.usage, params.usageHandler);
-    recordUsage(reviewResponse.usage);
-    return {
-      decision: parseCompletionReviewDecision(reviewResponse.text),
-      stageResults,
-      usage: {
-        inputTokens: totalInputTokens,
-        outputTokens: totalOutputTokens,
-        totalTokens: totalInputTokens + totalOutputTokens,
-      },
-    };
+    return this.engine.runCompletionReviewStages(params);
   }
 
   private async reviewShellCommandWithProvider(
@@ -4343,111 +4039,7 @@ export class Orchestrator {
     options: ToolExecutionOptions,
     input: Record<string, unknown>,
   ): Promise<SelfManagedWriteReview> {
-    const identityKey = resolveIdentityKey(chatId, options.userId, undefined, this.userProfileStore);
-    const provider = this.providerManager.getProvider(identityKey);
-    const taskPrompt = this.normalizeInteractiveText(options.taskPrompt);
-    const recentContext = this.summarizeMessagesForShellReview(options.sessionMessages);
-    const workingDirectory = this.normalizeInteractiveText(input["working_directory"]) || ".";
-    const timeoutMs = Number(input["timeout_ms"] ?? 30000);
-    const reviewAssignment = this.buildStaticSupervisorAssignment(
-      "reviewer",
-      provider.name,
-      this.resolveProviderModelId(provider.name, identityKey),
-      provider,
-      "reviewed whether a write-capable shell command should run autonomously",
-    );
-    const reviewTask = this.taskClassifier.classify(taskPrompt || command);
-
-    try {
-      const response = await streamOrChatText(
-        provider,
-        SHELL_REVIEW_SYSTEM_PROMPT,
-        `Mode: ${mode}\n` +
-          `Task: ${taskPrompt || "(not provided)"}\n` +
-          `Working directory: ${workingDirectory}\n` +
-          `Timeout ms: ${Number.isFinite(timeoutMs) ? timeoutMs : 30000}\n` +
-          `Recent context:\n${recentContext || "(none)"}\n\n` +
-          `Command:\n${command}`,
-      );
-      this.recordExecutionTrace({
-        chatId,
-        identityKey,
-        assignment: reviewAssignment,
-        phase: "shell-review",
-        source: "shell-review",
-        task: reviewTask,
-      });
-
-      this.recordAuxiliaryUsage(provider.name, response.usage, options.onUsage ?? this.onUsage);
-      const decision = parseShellReviewDecision(response.text);
-
-      if (
-        decision?.decision === "approve" &&
-        decision.taskAligned !== false &&
-        decision.bounded !== false
-      ) {
-        this.recordPhaseOutcome({
-          chatId,
-          identityKey,
-          assignment: reviewAssignment,
-          phase: "shell-review",
-          source: "shell-review",
-          status: "approved",
-          task: reviewTask,
-          reason: decision.reason || "Shell review approved the autonomous command.",
-          telemetry: this.buildPhaseOutcomeTelemetry({
-            usage: response.usage,
-          }),
-        });
-        return { approved: true, reason: decision.reason };
-      }
-
-      if (
-        decision?.decision === "reject" ||
-        decision?.taskAligned === false ||
-        decision?.bounded === false
-      ) {
-        this.recordPhaseOutcome({
-          chatId,
-          identityKey,
-          assignment: reviewAssignment,
-          phase: "shell-review",
-          source: "shell-review",
-          status: "blocked",
-          task: reviewTask,
-          reason: decision.reason || "Shell review rejected the autonomous command.",
-          telemetry: this.buildPhaseOutcomeTelemetry({
-            usage: response.usage,
-            failureReason: command,
-          }),
-        });
-        return { approved: false, reason: decision.reason || "shell review rejected the command" };
-      }
-    } catch {
-      this.recordPhaseOutcome({
-        chatId,
-        identityKey,
-        assignment: reviewAssignment,
-        phase: "shell-review",
-        source: "shell-review",
-        status: "failed",
-        task: reviewTask,
-        reason: "Shell review provider failed; falling back to bounded local heuristics.",
-        telemetry: this.buildPhaseOutcomeTelemetry({
-          failureReason: command,
-        }),
-      });
-      // Fall back to local bounded-command heuristics below.
-    }
-
-    if (isSafeShellFallback(command)) {
-      return {
-        approved: true,
-        reason: "shell review fallback approved a bounded development command",
-      };
-    }
-
-    return { approved: false, reason: "shell review was inconclusive for this command" };
+    return this.engine.reviewShellCommandWithProvider(chatId, command, mode, options, input);
   }
 
   private buildSelfManagedWriteRejection(

@@ -22,11 +22,14 @@ import type { ResultProjectionParams, AgentRunResultProjection } from "../runner
 import type { EngineRunContext } from "./engine-deps.js";
 
 /** The dependency slice the projection reads (grows only with this module). */
+export interface EngineProviderManager {
+  getActiveInfo?: (identityKey: string) => { providerName?: string; model?: string } | undefined;
+  getCatalogSnapshot?: (identityKey: string) => { assignmentVersion: number } | undefined;
+  getProvider: (identityKey: string) => import("../../agents/providers/provider.interface.js").IAIProvider;
+}
+
 export interface SynthesisDeps {
-  readonly providerManager: {
-    getActiveInfo?: (identityKey: string) => { providerName?: string; model?: string } | undefined;
-    getCatalogSnapshot?: (identityKey: string) => { assignmentVersion: number } | undefined;
-  };
+  readonly providerManager: EngineProviderManager;
 }
 
 export function toWorkerVerificationResults(

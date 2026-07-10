@@ -33,6 +33,11 @@ import type { PolicySeed } from "../control/policy.js";
 import { prepareIteration, type PrepareIterationParams, type PreparedIteration } from "./prepare-iteration.js";
 import { buildResultProjection } from "./synthesis.js";
 import type { ResultProjectionParams, AgentRunResultProjection } from "../runner/orchestrator-port.js";
+import {
+  runVisibilityReview,
+  runCompletionReviewStages,
+  reviewShellCommandWithProvider,
+} from "./review.js";
 
 export class AgentEngine {
   constructor(private readonly deps: EngineDeps) {}
@@ -102,5 +107,20 @@ export class AgentEngine {
   // ── Result projection (relocation Step 4) ─────────────────────────────────────────────────
   buildResultProjection(params: ResultProjectionParams, runCtx: EngineRunContext): AgentRunResultProjection {
     return buildResultProjection(this.deps, params, runCtx);
+  }
+
+  // ── Review / verify (relocation Step 5b) ──────────────────────────────────────────────────
+  runVisibilityReview(params: Parameters<typeof runVisibilityReview>[1]): ReturnType<typeof runVisibilityReview> {
+    return runVisibilityReview(this.deps, params);
+  }
+
+  runCompletionReviewStages(params: Parameters<typeof runCompletionReviewStages>[1]): ReturnType<typeof runCompletionReviewStages> {
+    return runCompletionReviewStages(this.deps, params);
+  }
+
+  reviewShellCommandWithProvider(
+    ...args: Parameters<typeof reviewShellCommandWithProvider> extends [unknown, ...infer R] ? R : never
+  ): ReturnType<typeof reviewShellCommandWithProvider> {
+    return reviewShellCommandWithProvider(this.deps, ...args);
   }
 }
