@@ -458,7 +458,8 @@ export async function portHandlePlanPhase(
     // precedence (a goal-block short-circuits to background before the plan-review / end-turn logic).
     // Returns a TERMINATING yield so the spine ends the interactive run BEFORE decomposeGoalsIfPlanning
     // — the handed-off goal must NOT also execute inline (no double-run).
-    if (phase === AgentPhase.PLANNING && deps.taskManager) {
+    const taskManager = deps.taskManager();
+    if (phase === AgentPhase.PLANNING && taskManager) {
       const goalBlock = parseGoalBlock(params.responseText ?? "");
       if (goalBlock && goalBlock.isGoal) {
         const lastUserContent = deps.sessionManager.extractLastUserContent(runCtx.session);
@@ -473,7 +474,7 @@ export async function portHandlePlanPhase(
         const ackMsg =
           `Working on: ${lastUserMessage.slice(0, 80)}` +
           ` (${nodeCount} step${nodeCount !== 1 ? "s" : ""}, ~${goalBlock.estimatedMinutes} min). I'll update you as I go.`;
-        deps.taskManager()?.submit(chatId, runCtx.channelType ?? "cli", lastUserMessage, {
+        taskManager.submit(chatId, runCtx.channelType ?? "cli", lastUserMessage, {
           ...(goalTree ? { goalTree } : {}),
           ...(lastUserHasRichInput ? { forceSharedPlanning: true } : {}),
           ...(lastUserContent ? { userContent: lastUserContent } : {}),

@@ -482,6 +482,34 @@ describe("Step 3 — interactive route flip (v2 spine vs v1 loop, no double-rend
     expect(rendered.some((m) => m.includes("Unable to complete"))).toBe(false);
   });
 
+  it("flag ON (v2): 3.6 regression — with NO taskManager wired, a goal-block does NOT false-terminate via handoff (the guard must CALL the lazy getter, not test its truthiness)", async () => {
+    const channel = createMockChannel();
+    // Deliberately DO NOT setTaskManager → the lazy getter resolves null (its default). A guard that
+    // tested the getter FUNCTION (always truthy) instead of calling it would wrongly ENTER the 3.6
+    // branch: it would ack "Working on:" and terminate while `taskManager?.submit` silently no-oped —
+    // dropping the user's request. v1 parity requires the branch be SKIPPED when the manager is null,
+    // falling through to inline planning execution (decomposeGoalsIfPlanning).
+    const orch = makeOrchestrator({
+      provider: createGoalBlockProvider(),
+      channel,
+      flagSet: resolveFlagSetById("v2-all-routes+full-control-plane"),
+    });
+
+    await orch.handleMessage({
+      channelType: "cli",
+      chatId: "v2-goal-null-tm",
+      userId: "u1",
+      text: "build me a full feature end to end",
+      timestamp: new Date(),
+    });
+
+    const rendered = channel.sendMarkdown.mock.calls
+      .filter((c: unknown[]) => c[0] === "v2-goal-null-tm")
+      .map((c: unknown[]) => c[1] as string);
+    // The false-handoff ack must NOT appear — the branch was skipped because taskManager is null.
+    expect(rendered.some((m) => m.includes("Working on:"))).toBe(false);
+  });
+
   it("flag ON (v2): 3.8 — goal-block detection takes precedence over the plan-review gate (v1 ordering)", async () => {
     const channel = createMockChannel();
     const taskManager = createTaskManagerSpy();

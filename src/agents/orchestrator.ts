@@ -249,8 +249,6 @@ import {
   injectSoulPersonality,
   type ContextBuilderDeps,
 } from "./orchestrator-context-builder.js";
-import {
-} from "./orchestrator-reflection-handler.js";
 import type { SupervisorBrain } from "../supervisor/supervisor-brain.js";
 import { requestWriteConfirmation as requestWriteConfirmationHelper } from "./orchestrator-write-gate.js";
 import {
