@@ -6382,8 +6382,20 @@ export class Orchestrator {
     params: DispatchReflectionParams,
     runCtx: AgentCorePortRunContext,
   ): Promise<ReflectionDispatchResult> {
-    const core = this.buildReflectionCoreContext(runCtx, params.responseText, undefined, 0);
     const chatId = params.chatId;
+    // step5-parity (trio catch): v1's checkPendingBlocks ran the self-managed write-rejection check
+    // at BOTH the end-turn AND the REFLECTING boundary (v1 @ a3de7d1 :5936/:6204 + :4379/:4550). A
+    // write rejected during EXECUTING can advance to REFLECTING and terminate on a low-signal DONE
+    // here — surface WHY execution stopped, exactly as in portDispatchEndTurn.
+    const writeRejectionText = this.sessionManager.getPendingSelfManagedWriteRejectionVisibleText(
+      runCtx.session,
+      params.responseText,
+    );
+    if (writeRejectionText) {
+      await this.emitVisibleBoundary(chatId, runCtx.session, writeRejectionText);
+      return { agentState: params.agentState, terminal: true, reason: "self-managed-write-rejected" };
+    }
+    const core = this.buildReflectionCoreContext(runCtx, params.responseText, undefined, 0);
     let action: ReflectionLoopAction;
 
     if (params.mode === "interactive") {
@@ -6459,8 +6471,21 @@ export class Orchestrator {
     params: DispatchEndTurnParams,
     runCtx: AgentCorePortRunContext,
   ): Promise<EndTurnDispatchResult> {
-    const core = this.buildReflectionCoreContext(runCtx, params.responseText, undefined, 0);
     const chatId = params.chatId;
+    // step5-parity: v1 checked pending blocks at the end-turn boundary (deleted checkPendingBlocks).
+    // The plan-review half is surfaced on v2 during the plan phase, but the self-managed
+    // write-REJECTION half had no v2 home: when the model ends the turn with only a low-signal ack
+    // after a write was blocked by autonomous safety review, surface WHY execution stopped instead
+    // of terminating on the empty ack. Terminal (v1 recorded COMPLETE + returned the block text).
+    const writeRejectionText = this.sessionManager.getPendingSelfManagedWriteRejectionVisibleText(
+      runCtx.session,
+      params.responseText,
+    );
+    if (writeRejectionText) {
+      const safe = await this.emitVisibleBoundary(chatId, runCtx.session, writeRejectionText);
+      return { agentState: params.agentState, finalText: safe.text };
+    }
+    const core = this.buildReflectionCoreContext(runCtx, params.responseText, undefined, 0);
     const action: EndTurnLoopAction =
       params.mode === "interactive"
         ? await handleInteractiveEndTurn(

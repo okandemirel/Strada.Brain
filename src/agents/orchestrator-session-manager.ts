@@ -18,6 +18,7 @@ import type { GoalTree } from "../goals/types.js";
 import type { IEmbeddingProvider, IRAGPipeline } from "../rag/rag.interface.js";
 import type { InstinctRetriever } from "./instinct-retriever.js";
 import type { ReRetrievalConfig } from "../config/config.js";
+import { stripInternalDecisionMarkers } from "./orchestrator-supervisor-routing.js";
 import type { IEventEmitter, LearningEventMap } from "../core/event-bus.js";
 import type { ExecutionJournal } from "./autonomy/index.js";
 import type { TaskExecutionStore } from "../memory/unified/task-execution-store.js";
@@ -40,6 +41,11 @@ import { getLogger } from "../utils/logger.js";
 const MAX_SESSIONS = 100;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
+
+// A "low-signal" model draft after a self-managed write rejection = a bare ack (done/ok/…) that
+// produced no safer replacement; the run must then surface the rejection reason, not the ack.
+const LOW_SIGNAL_EXECUTION_ACK_RE =
+  /^(?:adjusted|done|ok(?:ay)?|noted|ack(?:nowledged)?|revised|updated|handled|understood|fixed)\.?$/iu;
 
 export interface Session {
   messages: ConversationMessage[];
@@ -655,6 +661,55 @@ export class SessionManager {
       "",
       "Reply with your approval or requested changes before write-capable execution continues.",
     ].join("\n");
+  }
+
+  /**
+   * When the model's end-turn draft is a low-signal ack AND the session carries a self-managed
+   * write REJECTION (a tool_result "Self-managed write review rejected …") with no safer bounded
+   * replacement produced in the same turn, surface WHY execution stopped. Restored + rewired onto
+   * the v2 end-turn boundary (portDispatchEndTurn) — v1 checked it via the deleted checkPendingBlocks
+   * inside the loops (cutover Step 5); the FLIP left it unsurfaced until now.
+   */
+  getPendingSelfManagedWriteRejectionVisibleText(
+    session: Session,
+    draft: string | null | undefined,
+  ): string | null {
+    const normalizedDraft = stripInternalDecisionMarkers(draft ?? "").trim();
+    if (normalizedDraft && !LOW_SIGNAL_EXECUTION_ACK_RE.test(normalizedDraft)) {
+      return null;
+    }
+
+    for (let index = session.messages.length - 1; index >= 0; index -= 1) {
+      const message = session.messages[index];
+      if (!message || message.role !== "user" || !Array.isArray(message.content)) {
+        continue;
+      }
+
+      for (let blockIndex = message.content.length - 1; blockIndex >= 0; blockIndex -= 1) {
+        const block = message.content[blockIndex];
+        if (!block || block.type !== "tool_result" || typeof block.content !== "string") {
+          continue;
+        }
+        if (!block.content.startsWith("Self-managed write review rejected")) {
+          continue;
+        }
+
+        const match = block.content.match(
+          /for '([^']+)':\s*(.+?)\.\s*Choose a safer bounded operation/iu,
+        );
+        const toolName = match?.[1] ?? "write-capable action";
+        const reason = match?.[2]?.trim() ?? block.content.trim();
+        return [
+          `Execution stopped because the proposed '${toolName}' operation was rejected by autonomous safety review.`,
+          "",
+          `Reason: ${reason}.`,
+          "",
+          "No safer bounded replacement was produced in the same turn.",
+        ].join("\n");
+      }
+    }
+
+    return null;
   }
 
   getPendingPlanReviewVisibleText(chatId: string): string | null {

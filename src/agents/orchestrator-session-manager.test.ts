@@ -237,6 +237,51 @@ describe("SessionManager", () => {
     expect(result).toContain("Step 2");
   });
 
+  it("getPendingSelfManagedWriteRejectionVisibleText surfaces the rejection on a low-signal ack", () => {
+    const sm = new SessionManager(createMockDeps());
+    const session = sm.getOrCreateSession("chat-wr");
+    session.messages.push({
+      role: "user",
+      content: [
+        {
+          type: "tool_result",
+          tool_use_id: "tc-1",
+          content:
+            "Self-managed write review rejected (autonomous mode) for 'shell_exec': rm is destructive. Choose a safer bounded operation.",
+        },
+      ],
+    } as never);
+
+    // Low-signal draft ("Done.") → the rejection reason is surfaced instead of the ack.
+    const result = sm.getPendingSelfManagedWriteRejectionVisibleText(session, "Done.");
+    expect(result).not.toBeNull();
+    expect(result).toContain("rejected by autonomous safety review");
+    expect(result).toContain("shell_exec");
+    expect(result).toContain("rm is destructive");
+  });
+
+  it("getPendingSelfManagedWriteRejectionVisibleText returns null when the draft carries real content", () => {
+    const sm = new SessionManager(createMockDeps());
+    const session = sm.getOrCreateSession("chat-wr2");
+    session.messages.push({
+      role: "user",
+      content: [
+        { type: "tool_result", tool_use_id: "tc-1", content: "Self-managed write review rejected (auto) for 'x': y. Choose a safer bounded operation." },
+      ],
+    } as never);
+
+    // A substantive draft (the model produced a real alternative) must NOT trigger the block.
+    expect(
+      sm.getPendingSelfManagedWriteRejectionVisibleText(session, "I found a safer approach: patch only the config line."),
+    ).toBeNull();
+  });
+
+  it("getPendingSelfManagedWriteRejectionVisibleText returns null when there is no rejection block", () => {
+    const sm = new SessionManager(createMockDeps());
+    const session = sm.getOrCreateSession("chat-wr3");
+    expect(sm.getPendingSelfManagedWriteRejectionVisibleText(session, "Done.")).toBeNull();
+  });
+
   it("cleanupSessions removes expired sessions", () => {
     const sm = new SessionManager(createMockDeps());
     const session = sm.getOrCreateSession("chat-1");
