@@ -100,6 +100,7 @@ export interface EngineRunContext {
 }
 
 import type { AccountingDeps } from "./accounting.js";
+import type { BudgetDeps } from "./budget.js";
 
 /**
  * The DI boundary for the relocated engine. Grows per relocation step (each module contributes
@@ -107,4 +108,4 @@ import type { AccountingDeps } from "./accounting.js";
  * checkpointStore, unifiedBudgetManager, capabilityRegistry) must be injected as LAZY GETTERS,
  * never by-value.
  */
-export interface EngineDeps extends AccountingDeps {}
+export interface EngineDeps extends AccountingDeps, BudgetDeps {}

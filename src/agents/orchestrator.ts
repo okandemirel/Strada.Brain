@@ -70,11 +70,9 @@ import type { LearningPipeline } from "../learning/pipeline/learning-pipeline.js
 import type { InterventionEngine } from "../learning/intervention/intervention-engine.js";
 import {
   DEFAULT_INTERACTION_CONFIG,
-  DEFAULT_LLM_PROVIDER_FIRST_RESPONSE_TIMEOUT_MS,
   DEFAULT_LLM_STREAM_INITIAL_TIMEOUT_MS,
   DEFAULT_LLM_STREAM_STALL_TIMEOUT_MS,
   DEFAULT_TASK_CONFIG,
-  DEFAULT_TASK_INACTIVITY_TIMEOUT_MS,
   type InteractionConfig,
   type ReRetrievalConfig,
   type StradaDependencyConfig,
@@ -401,11 +399,6 @@ interface AgentCoreToolTurnResult {
 // while the port methods still live here (they relocate in Steps 1-9).
 type AgentCorePortRunContext = import("../agent-core/engine/engine-deps.js").EngineRunContext;
 
-/** 1b/1c seed default for the task-scope silence ceiling: the shared
- *  {@link DEFAULT_TASK_INACTIVITY_TIMEOUT_MS} (600_000), imported from config (config-only,
- *  NOT the bg-executor) so the interactive path and the background executor read ONE source.
- *  Kept in step with the per-call stall via the policy clamp (ratio×stall). */
-const PHASE1B_MIN_INACTIVITY_OVER_STREAM_RATIO = 2;
 const NATURAL_LANGUAGE_BUILTIN_PERSONAS = ["default", "formal", "casual", "minimal"] as const;
 const SUPERVISOR_SYNTHESIS_SYSTEM_PROMPT = `You are a synthesis worker inside Strada Brain's orchestrator.
 The orchestrator remains the primary intelligence and the user-facing agent.
@@ -1191,6 +1184,12 @@ export class Orchestrator {
       metricsRecorder: this.metricsRecorder,
       metrics: this.metrics,
       rateLimiter: this.rateLimiter,
+      // Step 2 (budget/limits): unifiedBudgetManager is setter-backed → LAZY GETTER.
+      unifiedBudgetManager: () => this.unifiedBudgetManager ?? null,
+      taskConfig: this.taskConfig,
+      maxIterations: this.maxIterations,
+      streamInitialTimeoutMs: this.streamInitialTimeoutMs,
+      streamStallTimeoutMs: this.streamStallTimeoutMs,
     });
   }
 
@@ -1230,18 +1229,7 @@ export class Orchestrator {
    * mid-task portal raise is reflected if `reArmOnConfigChange` is later called (deferred).
    */
   private buildPolicySeed(): PolicySeed {
-    const liveTokenBudget = this.getLiveInteractiveTokenBudget();
-    return {
-      streamInitialTimeoutMs: this.streamInitialTimeoutMs,
-      streamStallTimeoutMs: this.streamStallTimeoutMs,
-      providerFirstResponseMs: DEFAULT_LLM_PROVIDER_FIRST_RESPONSE_TIMEOUT_MS,
-      taskInactivityMs: DEFAULT_TASK_INACTIVITY_TIMEOUT_MS,
-      minInactivityOverStreamRatio: PHASE1B_MIN_INACTIVITY_OVER_STREAM_RATIO,
-      outputTokenCap: liveTokenBudget === -1 ? Number.POSITIVE_INFINITY : liveTokenBudget,
-      costCapUsd: Number.POSITIVE_INFINITY,
-      // taskHardMs omitted → resolver uses Infinity (v1 has no wall-clock task ceiling). The
-      // 3h27m-runaway bound stays the iteration limit + loopDetectionBlocked guard in 1b.
-    };
+    return this.engine.buildPolicySeed();
   }
 
 
@@ -1349,22 +1337,15 @@ export class Orchestrator {
   }
 
   private getInteractiveIterationLimit(): number {
-    const configLimit = Math.max(1, this.taskConfig.interactiveMaxIterations);
-    return this.maxIterations ? Math.min(this.maxIterations, configLimit) : configLimit;
+    return this.engine.getInteractiveIterationLimit();
   }
 
   private getBackgroundEpochIterationLimit(): number {
-    const configLimit = Math.max(1, this.taskConfig.backgroundEpochMaxIterations);
-    return this.maxIterations ? Math.min(this.maxIterations, configLimit) : configLimit;
+    return this.engine.getBackgroundEpochIterationLimit();
   }
 
   private canAutoContinueBackgroundEpoch(completedEpochCount: number): boolean {
-    if (!this.taskConfig.backgroundAutoContinue) {
-      return false;
-    }
-
-    const maxEpochs = this.taskConfig.backgroundMaxEpochs;
-    return maxEpochs === 0 || completedEpochCount < maxEpochs;
+    return this.engine.canAutoContinueBackgroundEpoch(completedEpochCount);
   }
 
   private shouldActivateSupervisor(classification: TaskClassification): boolean {
@@ -2536,16 +2517,7 @@ export class Orchestrator {
    * the static TaskConfig value otherwise. -1 means unlimited.
    */
   private getLiveInteractiveTokenBudget(): number {
-    const live = this.unifiedBudgetManager?.getConfig()?.interactiveTokenBudget;
-    if (typeof live === "number" && live >= -1) return live;
-    if (live !== undefined && live !== null) {
-      getLogger().warn("getLiveInteractiveTokenBudget: live value out of range", {
-        unifiedBudgetManagerSet: !!this.unifiedBudgetManager,
-        rawConfigValue: live,
-        fallbackUsed: this.taskConfig.interactiveTokenBudget,
-      });
-    }
-    return this.taskConfig.interactiveTokenBudget;
+    return this.engine.getLiveInteractiveTokenBudget();
   }
 
   /**

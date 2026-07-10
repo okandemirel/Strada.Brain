@@ -20,6 +20,14 @@ import {
   type RecordExecutionTraceParams,
   type RecordMetricEndResult,
 } from "./accounting.js";
+import {
+  buildPolicySeed,
+  getLiveInteractiveTokenBudget,
+  getInteractiveIterationLimit,
+  getBackgroundEpochIterationLimit,
+  canAutoContinueBackgroundEpoch,
+} from "./budget.js";
+import type { PolicySeed } from "../control/policy.js";
 
 export class AgentEngine {
   constructor(private readonly deps: EngineDeps) {}
@@ -54,5 +62,26 @@ export class AgentEngine {
     runCtx: EngineRunContext,
   ): FailureVerdictContribution {
     return classifyAgentCoreFailure(params, runCtx);
+  }
+
+  // ── Budget / limits (relocation Step 2) ───────────────────────────────────────────────────
+  getLiveInteractiveTokenBudget(): number {
+    return getLiveInteractiveTokenBudget(this.deps);
+  }
+
+  buildPolicySeed(): PolicySeed {
+    return buildPolicySeed(this.deps);
+  }
+
+  getInteractiveIterationLimit(): number {
+    return getInteractiveIterationLimit(this.deps);
+  }
+
+  getBackgroundEpochIterationLimit(): number {
+    return getBackgroundEpochIterationLimit(this.deps);
+  }
+
+  canAutoContinueBackgroundEpoch(completedEpochCount: number): boolean {
+    return canAutoContinueBackgroundEpoch(this.deps, completedEpochCount);
   }
 }
