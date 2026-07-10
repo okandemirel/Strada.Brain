@@ -38,6 +38,13 @@ import {
   runCompletionReviewStages,
   reviewShellCommandWithProvider,
 } from "./review.js";
+import {
+  emitVisibleBoundary,
+  portRenderInteractiveBudgetExceeded,
+  renderInteractiveResilienceEvent,
+} from "./render.js";
+import type { Session } from "../../agents/orchestrator-session-manager.js";
+import type { AgentEvent } from "../events/agent-event.js";
 
 export class AgentEngine {
   constructor(private readonly deps: EngineDeps) {}
@@ -122,5 +129,22 @@ export class AgentEngine {
     ...args: Parameters<typeof reviewShellCommandWithProvider> extends [unknown, ...infer R] ? R : never
   ): ReturnType<typeof reviewShellCommandWithProvider> {
     return reviewShellCommandWithProvider(this.deps, ...args);
+  }
+
+  // ── Rendering (relocation Step 6a) ────────────────────────────────────────────────────────
+  emitVisibleBoundary(chatId: string, session: Session, visibleText: string | undefined): ReturnType<typeof emitVisibleBoundary> {
+    return emitVisibleBoundary(this.deps, chatId, session, visibleText);
+  }
+
+  portRenderInteractiveBudgetExceeded(runCtx: EngineRunContext): Promise<void> {
+    return portRenderInteractiveBudgetExceeded(this.deps, runCtx);
+  }
+
+  renderInteractiveResilienceEvent(
+    e: AgentEvent,
+    language: string,
+    enqueue: (text: string, transient?: boolean) => void,
+  ): void {
+    renderInteractiveResilienceEvent(e, language, enqueue);
   }
 }

@@ -314,39 +314,7 @@ import type { HealthCore } from "../agent-core/control/failure-ledger.js";
 import type { AgentEvent } from "../agent-core/events/agent-event.js";
 import type { ReflectionCoreContext } from "./orchestrator-reflection-handler.js";
 
-const DIAGNOSTIC_BLOCKED_RE = /^Blocked checkpoint:/i;
 
-/**
- * Interactive v2 `run.ending` reasons that are NOT a provider-failure abort — the happy or
- * separately-handled terminals where the port has ALREADY rendered the user-facing text (the answer
- * or a block explanation) via `emitVisibleBoundary`, so the adapter must NOT add a `provider_abort`:
- *   - `done` / `completed` / `blocked` — the reflection terminal (v2-agent-runner.ts:494 →
- *     `portDispatchReflection` :8822/:8831, `reason = action.status ?? "done"|"blocked"`, where the
- *     reflection done/blocked action.status ∈ {"completed","blocked"} | undefined — see
- *     orchestrator-reflection-handler.ts:59). The answer / block text was emitted by the port.
- *   - `end_turn` — the happy end-turn (v2-agent-runner.ts:544); the port dispatch rendered the answer.
- *   - `max-tokens-runaway` — the step cap (surfaced by the max-iterations notice, a later increment).
- *   - `blocked:ask_user` — the background ask_user yield (interactive never emits it; harmless).
- *   - `epoch-budget-exhausted` — non-interactive epoch rollover (interactive breaks first; harmless).
- * EVERY other reason is a control-plane STOP (a `describeCancelReason` output such as `task-inactivity`
- * / `hard-timeout:task` / `verdict-stop:*`, or the literal `provider-failure`) = v1's
- * `applyInteractiveVerdict` break→`provider_abort`. `describeCancelReason` (cancel-reason.ts:45) never
- * emits any of the literals above, so no skip entry can mask a real abort. Kept in sync with the
- * `run.ending` emit sites in src/agent-core/runner/v2-agent-runner.ts.
- */
-const INTERACTIVE_NON_ABORT_RUN_ENDING_REASONS: ReadonlySet<string> = new Set([
-  "done",
-  "completed",
-  "blocked",
-  "end_turn",
-  "max-tokens-runaway",
-  "blocked:ask_user",
-  "epoch-budget-exhausted",
-  "plan-review", // Step 3 (3.5): plan presented for review + run terminated — the plan was rendered
-  "goal-handoff", // Step 3 (3.6): goal handed to a background task + run terminated — ack was rendered
-  "budget-exhausted:tokens", // Step 3 (3.3): interactive token-budget stop — port renders the specific
-  // token_budget_exceeded notice inline (with {used,budget}), so the adapter must not add a generic abort.
-]);
 /** Self-improvement tools bypass phase-based write filtering — they have their own guards. */
 const SELF_IMPROVEMENT_TOOLS: ReadonlySet<string> = new Set([
   "create_tool", "create_skill", "remove_dynamic_tool",
@@ -1182,6 +1150,8 @@ export class Orchestrator {
       userProfileStore: this.userProfileStore,
       onUsage: this.onUsage,
       defaultLanguage: this.defaultLanguage,
+      // Step 6a (rendering).
+      sessionManager: this.sessionManager,
     });
   }
 
@@ -1263,40 +1233,7 @@ export class Orchestrator {
     language: string,
     enqueue: (text: string, transient?: boolean) => void,
   ): void {
-    switch (e.type) {
-      case "backoff":
-        // Transient mid-run status (v1 degraded tier) — `transient:true` routes it
-        // to a system pill, NOT the transcript. Every other arm below is a terminal
-        // explanation (abort/max-iterations) or an interactive prompt (ask_user/
-        // show_plan) and stays a recorded, visible answer.
-        enqueue(getResilienceMessage("provider_slow", language), true);
-        return;
-      case "ask_user":
-        enqueue(
-          e.visibleText.trim().length > 0
-            ? e.visibleText
-            : getResilienceMessage("provider_ask_user", language),
-        );
-        return;
-      case "show_plan":
-        enqueue(e.visibleText);
-        return;
-      case "run.ending":
-        if (e.reason === "max-iterations") {
-          // 3.4: the interactive run exhausted its step budget — render the "send a follow-up" notice
-          // (v1 runAgentLoop "Hit max iterations" parity), NOT a provider_abort. Localized via the
-          // resilience key (v1 hardcoded English). Dedicated arm — NOT a skip-set entry (the skip-set
-          // means "already rendered, do nothing"; here we render a specific notice).
-          enqueue(getResilienceMessage("max_steps_reached", language));
-          return;
-        }
-        if (!INTERACTIVE_NON_ABORT_RUN_ENDING_REASONS.has(e.reason)) {
-          enqueue(getResilienceMessage("provider_abort", language));
-        }
-        return;
-      default:
-        return;
-    }
+    this.engine.renderInteractiveResilienceEvent(e, language, enqueue);
   }
 
   private getTaskExecutionContext(): TaskExecutionContext | undefined {
@@ -2500,17 +2437,7 @@ export class Orchestrator {
    * Localized via the user profile (v1 used the same). The checkpoint is already saved by the spine.
    */
   private async portRenderInteractiveBudgetExceeded(runCtx: AgentCorePortRunContext): Promise<void> {
-    const tokenBudget = this.getLiveInteractiveTokenBudget();
-    const language = (this.userProfileStore?.getProfile(runCtx.identityKey)?.language ??
-      this.defaultLanguage) as string;
-    await this.sessionManager.sendVisibleAssistantMarkdown(
-      runCtx.chatId,
-      runCtx.session,
-      getResilienceMessage("token_budget_exceeded", language, {
-        used: Math.round(runCtx.cumulativeOutputTokens / 1000),
-        budget: Math.round(tokenBudget / 1000),
-      }),
-    );
+    return this.engine.portRenderInteractiveBudgetExceeded(runCtx);
   }
 
   private buildWorkerToolDefinitions(
@@ -6161,24 +6088,9 @@ export class Orchestrator {
     session: Session,
     visibleText: string | undefined,
   ): Promise<{ text: string; marked: boolean }> {
-    const safe = this.sanitizeBlockedVisibleText(visibleText ?? "");
-    if (safe.text) {
-      await this.sessionManager.sendVisibleAssistantMarkdown(chatId, session, safe.text);
-    }
-    return safe;
+    return this.engine.emitVisibleBoundary(chatId, session, visibleText);
   }
 
-  private sanitizeBlockedVisibleText(raw: string): { text: string; marked: boolean } {
-    if (!raw) return { text: "", marked: false };
-    if (!DIAGNOSTIC_BLOCKED_RE.test(raw)) return { text: raw, marked: false };
-    getLogger().warn("Loop detection blocked task", { diagnostic: raw.slice(0, 500) });
-    const stuckMsg = getResilienceMessage("task_stuck", this.defaultLanguage);
-    const actionMatch = /Suggested action:\s*(.+?)(?:\nFiles t|$)/is.exec(raw);
-    const text = actionMatch?.[1]?.trim()
-      ? `${stuckMsg}\n\n**${actionMatch[1].trim()}**`
-      : stuckMsg;
-    return { text, marked: true };
-  }
 
   /**
    * The FULL v1 tool turn behind the port's bound executeToolCalls seam. Runs the exact v1 free-
