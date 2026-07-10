@@ -11,6 +11,7 @@ import type {
 import { streamOrChatText } from "./providers/provider.interface.js";
 import { ProviderHealthRegistry } from "./providers/provider-health.js";
 import { AgentEngine } from "../agent-core/engine/agent-engine.js";
+import type { AgentCoreToolTurnResult } from "../agent-core/engine/tool-turn.js";
 import { DynamicToolFactory } from "./tools/dynamic/dynamic-tool-factory.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
@@ -57,7 +58,6 @@ import { buildPostSetupWelcomeMessage } from "../common/setup-state.js";
 import type { PostSetupBootstrap, PostSetupBootstrapContext } from "../common/setup-contract.js";
 import {
   AgentPhase,
-  createInitialState,
   type AgentState,
   type StepResult,
 } from "./agent-state.js";
@@ -196,13 +196,6 @@ import {
 } from "../agent-core/runner/index.js";
 import { getResilienceMessage, type MessageKey } from "./resilience-messages.js";
 import {
-  recordStepResultsAndCheckReflection,
-  buildToolResultContentBlocks,
-} from "./orchestrator-loop-utils.js";
-import {
-  executeAndTrackTools,
-  refreshMemoryIfNeeded,
-  runConsensusIfAvailable,
   firstClause,
 } from "./orchestrator-loop-shared.js";
 import {
@@ -221,7 +214,6 @@ import {
 
   buildSupervisorExecutionStrategy as buildSupervisorExecutionStrategyHelper,
   buildSupervisorRolePrompt as buildSupervisorRolePromptHelper,
-  resolveConsensusReviewAssignment as resolveConsensusReviewAssignmentHelper,
   stripInternalDecisionMarkers as stripInternalDecisionMarkersHelper,
   type SupervisorRoutingContext,
   type SupervisorAssignment,
@@ -294,27 +286,8 @@ const SELF_IMPROVEMENT_TOOLS: ReadonlySet<string> = new Set([
 const TYPING_INTERVAL_MS = 4000;
 
 // ─── Agent Core v2 — OrchestratorPort run-context (Phase 2d-2) ───────────────────────────────
-/** Reflect cadence for the v2 tool turn (== v1's REFLECT_INTERVAL / BG_REFLECT_INTERVAL). */
-const REFLECT_INTERVAL_AGENT_CORE = 3;
-
-/** What the port's bound tool turn returns: the trace rows + the PAOR-advanced state. */
-interface AgentCoreToolTurnResult {
-  readonly trace: ReadonlyArray<{
-    toolName: string;
-    toolCallId: string;
-    success: boolean;
-    errorCategory?: string;
-    touchedFiles?: readonly string[];
-  }>;
-  readonly advancedState: AgentState;
-  /**
-   * v1 parity (bg loop :4687): the localized per-tool-batch progress signal (kind
-   * delegation/verification/editing/inspection + files + toolNames). Built HERE (the port owns
-   * the v1 classification + localization) and emitted by the SPINE as a `narrative` bus event,
-   * which the background io adapter unwraps back into the v1 TaskProgressUpdate stream.
-   */
-  readonly progressSignal?: TaskProgressSignal;
-}
+// REFLECT_INTERVAL_AGENT_CORE + AgentCoreToolTurnResult moved to the engine tool-turn module
+// (relocation Step 8 → src/agent-core/engine/tool-turn.ts); AgentCoreToolTurnResult is imported back.
 
 // Relocation Step 0: the per-run context struct moved VERBATIM to the engine module
 // (src/agent-core/engine/engine-deps.ts EngineRunContext); the old name stays as a local alias
@@ -1170,6 +1143,11 @@ export class Orchestrator {
       getTaskExecutionContext: () => this.getTaskExecutionContext(),
       propagateInstinctIdsToChannel: (chatId, instinctIds) =>
         this.propagateInstinctIdsToChannel(chatId, instinctIds),
+      // Step 8 (tool turn): the RCE-sensitive tool-execution primitives + batch classifier stay in
+      // the shell → injected as callbacks (the turn orchestrates; it does not re-home the write gate).
+      executeToolCalls: (chatId, toolCalls, options) => this.executeToolCalls(chatId, toolCalls, options),
+      emitToolResult: (chatId, tc, tr) => this.emitToolResult(chatId, tc, tr),
+      buildToolBatchProgressSignal: (params) => this.buildToolBatchProgressSignal(params),
     });
   }
 
@@ -1684,14 +1662,6 @@ export class Orchestrator {
     projectWorldFingerprint?: string;
   }): PhaseOutcomeTelemetry | undefined {
     return buildPhaseOutcomeTelemetryModel(params);
-  }
-
-  private resolveConsensusReviewAssignment(
-    preferredReviewer: SupervisorAssignment,
-    currentAssignment: SupervisorAssignment,
-    identityKey: string,
-  ): SupervisorAssignment | null {
-    return resolveConsensusReviewAssignmentHelper(this.getSupervisorRoutingContext(), preferredReviewer, currentAssignment, identityKey);
   }
 
   /**
@@ -5350,171 +5320,15 @@ export class Orchestrator {
    * The spine calls this through `port.executeToolCalls(toolCalls, session, agentState)`; the
    * positional args are decoded here so the port stays the existing ExecuteToolCallsFn shape.
    */
+  /**
+   * The port's bound FULL TOOL TURN (relocation Step 8 → tool-turn.ts). Positional args are decoded
+   * inside the engine fn so the port stays the existing ExecuteToolCallsFn shape.
+   */
   private async portExecuteToolTurn(
     args: unknown[],
     runCtx: AgentCorePortRunContext,
   ): Promise<AgentCoreToolTurnResult> {
-    const toolCalls = args[0] as ToolCall[];
-    const agentState = (args[2] as AgentState | undefined) ?? createInitialState("");
-    const chatId = runCtx.chatId;
-    const session = runCtx.session;
-    const assignment = runCtx.lastAssignment as SupervisorAssignment;
-    const strategy = runCtx.executionStrategy as SupervisorExecutionStrategy;
-    const lastUserMessage = this.sessionManager.extractLastUserMessage(session);
-
-    // STEP A — assistant-message push + executeToolCalls (CORRECT arg order) + autonomy tracking.
-    // D2 fix: the spine threads the assistant's pre-tool text as the 4th positional arg; v1 pushes
-    // response.text onto the session before the tool results (executeAndTrackTools does the push).
-    const responseText = (args[3] as string | undefined) ?? "";
-    const { toolResults } = await executeAndTrackTools({
-      chatId,
-      responseText,
-      toolCalls,
-      session: session as { messages: ConversationMessage[] },
-      executeToolCalls: (c, tc, opts) => this.executeToolCalls(c, tc, opts),
-      executeOptions: {
-        mode: runCtx.toolExecMode, // #3 fix: was hardcoded "background" (broke the interactive route)
-        // v1 parity (flip trio-review catch): the v1 INTERACTIVE loop threads userId (@ :6350)
-        // so identity-keyed gates (dm-policy autonomy prefs, `${userId}:${chatId}` keys) resolve
-        // the USER's stored prefs, not the chat-scoped fallback — critical on multi-user channels
-        // where userId != chatId. The v1 background/worker loop does NOT thread it (@ :4642), so
-        // keep byte-parity per route; unconditional threading is its own decision post-deletion.
-        userId: runCtx.toolExecMode === "interactive" ? runCtx.userId : undefined,
-        taskPrompt: lastUserMessage,
-        sessionMessages: session.messages,
-        onUsage: runCtx.onUsage,
-        identityKey: runCtx.identityKey,
-        strategy,
-        agentState,
-        touchedFiles: [...runCtx.selfVerification.getState().touchedFiles],
-        workspaceLease: runCtx.workspaceLease, // #1: scopes tools to the worktree (v1 parity @ :7175)
-        goalContext: runCtx.goalContext, // supervisor-tree linkage for delegated child tasks
-      },
-      trackingParams: {
-        taskPlanner: runCtx.taskPlanner,
-        selfVerification: runCtx.selfVerification,
-        stradaConformance: runCtx.stradaConformance,
-        errorRecovery: runCtx.errorRecovery,
-        executionJournal: runCtx.executionJournal,
-        agentPhase: agentState.phase,
-        providerName: assignment.providerName,
-        modelId: assignment.modelId,
-        emitToolResult: (c, tc, tr) => this.emitToolResult(c, tc, tr),
-        workerCollector: runCtx.workerCollector ?? undefined,
-      },
-    });
-
-    // STEP B — control-loop tracker mark (per call), as v1 does.
-    if (runCtx.controlLoopTracker) {
-      for (const tc of toolCalls) runCtx.controlLoopTracker.markToolExecution(tc.name);
-    }
-
-    // STEP D — consensus (non-fatal; gated on the managers existing).
-    if (this.consensusManager && this.confidenceEstimator && this.providerRouter) {
-      await runConsensusIfAvailable({
-        consensusManager: this.consensusManager,
-        confidenceEstimator: this.confidenceEstimator,
-        providerManager: this.providerManager,
-        taskClassifier: this.taskClassifier,
-        prompt: lastUserMessage,
-        responseText,
-        toolCalls,
-        currentAssignment: assignment,
-        currentProviderCapabilities: runCtx.lastProviderCapabilities ?? ({} as never),
-        agentState,
-        executionStrategy: strategy,
-        identityKey: runCtx.identityKey,
-        chatId,
-        logLabel: "agent-core",
-        resolveConsensusReviewAssignment: (r, c, k) => this.resolveConsensusReviewAssignment(r, c, k),
-        recordExecutionTrace: (p) => this.recordExecutionTrace(p),
-        recordPhaseOutcome: (p) => this.recordPhaseOutcome(p),
-      }).catch(() => {
-        /* non-fatal */
-      });
-    }
-
-    // STEP E — record step results + PAOR transition (the REAL transition; returns new state).
-    const step = recordStepResultsAndCheckReflection({
-      agentState,
-      toolCalls,
-      toolResults,
-      reflectInterval: REFLECT_INTERVAL_AGENT_CORE,
-    });
-
-    // STEP C+F — content blocks pushed AFTER the REFLECTING transition (E first).
-    const stateCtx = runCtx.taskPlanner.getStateInjection();
-    // Reuse the centralizing helper (single source for the user-facing health string + the guard).
-    const providerHealthContext = runCtx.iterationHealth.buildHealthSummary();
-    const blocks = buildToolResultContentBlocks(stateCtx, step.agentState, toolResults, {
-      providerHealthContext,
-    });
-    session.messages.push({
-      role: "user",
-      content: (blocks.length === 1 && stateCtx ? stateCtx : blocks) as unknown as ConversationMessage["content"],
-    } as ConversationMessage);
-
-    // STEP G — memory refresh (non-fatal; reassigns systemPrompt + state). step5-parity: the
-    // run's MemoryRefresher threads through runCtx so mid-run re-retrieval fires exactly as the
-    // v1 loops did (it was passed null — "opt-in" — which silently killed re-retrieval on v2).
-    const isInteractiveTurn = runCtx.toolExecMode === "interactive";
-    const mem = await refreshMemoryIfNeeded({
-      memoryRefresher: runCtx.memoryRefresher,
-      iteration: step.agentState.iteration,
-      // v1 parity per route (trio catch): interactive re-scans the session (a fresh extract —
-      // the tool-result block was pushed above); background/delegated pins the STABLE task
-      // prompt (v1 @ a3de7d1 :4756) so drift detection never runs against planner boilerplate.
-      queryContext: isInteractiveTurn
-        ? this.sessionManager.extractLastUserMessage(session)
-        : agentState.taskDescription || lastUserMessage,
-      chatId,
-      systemPrompt: runCtx.systemPrompt,
-      agentState: step.agentState,
-      // v1 interactive parity (trio catch, a3de7d1 :6444-6452): surface refreshed instinct IDs —
-      // dedupe+cap into the run's set and propagate to the channel for attribution. v1's
-      // background loop passed no callback; keep that asymmetry.
-      ...(isInteractiveTurn
-        ? {
-            onNewInstinctIds: (ids: string[]) => {
-              const current = this.currentSessionInstinctIds.get(chatId) ?? [];
-              const merged = [...new Set([...current, ...ids])].slice(0, 200);
-              this.currentSessionInstinctIds.set(chatId, merged);
-              this.propagateInstinctIdsToChannel(chatId, merged);
-            },
-          }
-        : {}),
-    });
-    runCtx.systemPrompt = mem.systemPrompt;
-
-    const trace = toolCalls.map((tc, i) => {
-      const tr = toolResults[i];
-      const touched = (tr?.metadata?.touchedFiles as string[] | undefined) ?? undefined;
-      return {
-        toolName: tc.name,
-        toolCallId: tc.id,
-        success: !(tr?.isError ?? false),
-        errorCategory: tr?.isError ? "tool-error" : undefined,
-        touchedFiles: touched,
-      };
-    });
-
-    // v1 parity (bg loop :4687): the per-tool-batch structured progress signal (kind + toolNames
-    // + files, localized). v1 emitProgress'd it inline; the port RETURNS it so the spine emits it
-    // as a `narrative` bus event — the background io adapter unwraps it back into the v1
-    // TaskProgressUpdate stream. Non-fatal: a classification error must never fail the tool turn.
-    let progressSignal: TaskProgressSignal | undefined;
-    try {
-      progressSignal = this.buildToolBatchProgressSignal({
-        prompt: agentState.taskDescription || lastUserMessage,
-        title: runCtx.progressTitle,
-        toolCalls,
-        language: runCtx.progressLanguage,
-      });
-    } catch {
-      progressSignal = undefined;
-    }
-
-    return { trace, advancedState: mem.agentState, progressSignal };
+    return this.engine.portExecuteToolTurn(args, runCtx);
   }
 
 }

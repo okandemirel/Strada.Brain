@@ -107,6 +107,7 @@ import type { ReviewDeps } from "./review.js";
 import type { RenderDeps } from "./render.js";
 import type { ReflectionDeps } from "./reflection.js";
 import type { SetupDeps } from "./setup.js";
+import type { ToolTurnDeps } from "./tool-turn.js";
 
 /**
  * The DI boundary for the relocated engine. Grows per relocation step (each module contributes
@@ -122,4 +123,5 @@ export interface EngineDeps
     ReviewDeps,
     RenderDeps,
     ReflectionDeps,
-    SetupDeps {}
+    SetupDeps,
+    ToolTurnDeps {}
