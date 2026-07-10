@@ -18,8 +18,13 @@ import {
   recordProviderUsage as recordProviderUsageHelper,
   type SupervisorRoutingContext,
 } from "../../agents/orchestrator-supervisor-routing.js";
-import { buildExecutionTraceRecord } from "../../agents/orchestrator-phase-telemetry.js";
-import type { ExecutionPhase, ExecutionTraceSource } from "../routing/routing-types.js";
+import { buildExecutionTraceRecord, buildPhaseOutcomeRecord } from "../../agents/orchestrator-phase-telemetry.js";
+import type {
+  ExecutionPhase,
+  ExecutionTraceSource,
+  PhaseOutcomeStatus,
+  PhaseOutcomeTelemetry,
+} from "../routing/routing-types.js";
 import type { ClassifyFailureParams, FailureVerdictContribution } from "../runner/orchestrator-port.js";
 import type { EngineRunContext } from "./engine-deps.js";
 
@@ -31,6 +36,7 @@ export interface AccountingDeps {
   readonly resolveTaskRunId: (chatId?: string, explicitTaskRunId?: string) => string | undefined;
   readonly providerRouter?: {
     recordExecutionTrace?: (record: ReturnType<typeof buildExecutionTraceRecord>) => void;
+    recordPhaseOutcome?: (record: ReturnType<typeof buildPhaseOutcomeRecord>) => void;
   };
   readonly metricsRecorder: {
     endTask: (metricId: string, result: RecordMetricEndResult) => void;
@@ -51,6 +57,19 @@ export interface RecordExecutionTraceParams {
   source?: ExecutionTraceSource;
   task: TaskClassification;
   reason?: string;
+  taskRunId?: string;
+}
+
+export interface RecordPhaseOutcomeParams {
+  chatId?: string;
+  identityKey: string;
+  assignment: SupervisorAssignment;
+  phase: ExecutionPhase;
+  status: PhaseOutcomeStatus;
+  task: TaskClassification;
+  source?: ExecutionTraceSource;
+  reason?: string;
+  telemetry?: PhaseOutcomeTelemetry;
   taskRunId?: string;
 }
 
@@ -84,6 +103,24 @@ export function recordExecutionTrace(deps: AccountingDeps, params: RecordExecuti
       task: params.task,
       reason: params.reason,
       timestampMs: Date.now(),
+      chatId: params.chatId,
+      taskRunId: deps.resolveTaskRunId(params.chatId, params.taskRunId),
+    }),
+  );
+}
+
+export function recordPhaseOutcome(deps: AccountingDeps, params: RecordPhaseOutcomeParams): void {
+  deps.providerRouter?.recordPhaseOutcome?.(
+    buildPhaseOutcomeRecord({
+      identityKey: params.identityKey,
+      assignment: params.assignment,
+      phase: params.phase,
+      status: params.status,
+      task: params.task,
+      timestampMs: Date.now(),
+      source: params.source,
+      reason: params.reason,
+      telemetry: params.telemetry,
       chatId: params.chatId,
       taskRunId: deps.resolveTaskRunId(params.chatId, params.taskRunId),
     }),

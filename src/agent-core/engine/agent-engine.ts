@@ -16,8 +16,10 @@ import {
   recordExecutionTrace,
   recordMetricEnd,
   recordAuxiliaryUsage,
+  recordPhaseOutcome,
   classifyAgentCoreFailure,
   type RecordExecutionTraceParams,
+  type RecordPhaseOutcomeParams,
   type RecordMetricEndResult,
 } from "./accounting.js";
 import {
@@ -46,6 +48,10 @@ export class AgentEngine {
 
   recordExecutionTrace(params: RecordExecutionTraceParams): void {
     recordExecutionTrace(this.deps, params);
+  }
+
+  recordPhaseOutcome(params: RecordPhaseOutcomeParams): void {
+    recordPhaseOutcome(this.deps, params);
   }
 
   recordMetricEnd(metricId: string | undefined, result: RecordMetricEndResult): void {

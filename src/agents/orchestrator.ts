@@ -225,7 +225,6 @@ import {
 } from "./orchestrator-loop-shared.js";
 import { createAutonomyBundle } from "./orchestrator-autonomy-tracker.js";
 import {
-  buildPhaseOutcomeRecord,
   buildPhaseOutcomeTelemetry as buildPhaseOutcomeTelemetryModel,
   toExecutionPhase as toExecutionPhaseModel,
 } from "./orchestrator-phase-telemetry.js";
@@ -1735,21 +1734,7 @@ export class Orchestrator {
     telemetry?: PhaseOutcomeTelemetry;
     taskRunId?: string;
   }): void {
-    this.providerRouter?.recordPhaseOutcome?.(
-      buildPhaseOutcomeRecord({
-        identityKey: params.identityKey,
-        assignment: params.assignment,
-        phase: params.phase,
-        status: params.status,
-        task: params.task,
-        timestampMs: Date.now(),
-        source: params.source,
-        reason: params.reason,
-        telemetry: params.telemetry,
-        chatId: params.chatId,
-        taskRunId: this.resolveTaskRunId(params.chatId, params.taskRunId),
-      }),
-    );
+    this.engine.recordPhaseOutcome(params);
   }
 
   private buildPhaseOutcomeTelemetry(params: {
