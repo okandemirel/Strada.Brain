@@ -15,6 +15,7 @@
 import type { ConversationMessage, MessageContent } from "../../agents/providers/provider-core.interface.js";
 import type { ToolCall, ProviderResponse } from "../../agents/providers/provider.interface.js";
 import type { AgentState } from "../../agents/agent-state.js";
+import type { UserProfileStore } from "../../memory/unified/user-profile-store.js";
 import type { TaskClassification } from "../routing/routing-types.js";
 import type { TaskUsageEvent } from "../../tasks/types.js";
 import type { ToolExecutionMode } from "./engine-deps.js";
@@ -69,10 +70,7 @@ export interface ReviewDeps extends AccountingDeps, SynthesisDeps {
   readonly taskClassifier: {
     classify: (text: string) => TaskClassification;
   };
-  readonly userProfileStore?: {
-    resolveLinkedIdentity: (channelType: string, channelUserId: string) => string | null;
-    getProfile?: (identityKey: string) => { language?: string } | null | undefined;
-  };
+  readonly userProfileStore?: UserProfileStore;
   readonly onUsage?: (usage: import("../../tasks/types.js").TaskUsageEvent) => void;
   readonly defaultLanguage: string;
 }

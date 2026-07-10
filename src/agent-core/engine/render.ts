@@ -9,6 +9,7 @@
  */
 
 import type { Session, SessionManager } from "../../agents/orchestrator-session-manager.js";
+import type { UserProfileStore } from "../../memory/unified/user-profile-store.js";
 import type { AgentEvent } from "../events/agent-event.js";
 import { getResilienceMessage } from "../../agents/resilience-messages.js";
 import { getLogger } from "../../utils/logger.js";
@@ -34,10 +35,7 @@ const INTERACTIVE_NON_ABORT_RUN_ENDING_REASONS: ReadonlySet<string> = new Set([
 /** The dependency slice the rendering cluster reads (grows only with this module). */
 export interface RenderDeps extends BudgetDeps {
   readonly sessionManager: SessionManager;
-  readonly userProfileStore?: {
-    resolveLinkedIdentity: (channelType: string, channelUserId: string) => string | null;
-    getProfile?: (identityKey: string) => { language?: string } | null | undefined;
-  };
+  readonly userProfileStore?: UserProfileStore;
   readonly defaultLanguage: string;
 }
 

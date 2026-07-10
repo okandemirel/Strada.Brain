@@ -36,7 +36,6 @@ import {
   STRADA_SYSTEM_PROMPT,
   STRADA_AGENT_PREAMBLE,
   buildProjectContext,
-  buildVaultProjectContext,
   buildDepsContext,
   buildCapabilityManifest,
   buildToolUsageHints,
@@ -206,7 +205,6 @@ import {
   runConsensusIfAvailable,
   firstClause,
 } from "./orchestrator-loop-shared.js";
-import { createAutonomyBundle } from "./orchestrator-autonomy-tracker.js";
 import {
   buildPhaseOutcomeTelemetry as buildPhaseOutcomeTelemetryModel,
   toExecutionPhase as toExecutionPhaseModel,
@@ -245,7 +243,6 @@ import {
   type InterventionDeps,
 } from "./orchestrator-intervention-pipeline.js";
 import {
-  buildSystemPromptWithContext as buildSystemPromptWithContextHelper,
   injectSoulPersonality,
   type ContextBuilderDeps,
 } from "./orchestrator-context-builder.js";
@@ -1141,6 +1138,38 @@ export class Orchestrator {
       synthesizeUserFacingResponse: (p) => this.synthesizeUserFacingResponse(p),
       runProactiveGoalDecomposition: (opts) => this.runProactiveGoalDecomposition(opts),
       runReactiveGoalDecomposition: (opts) => this.runReactiveGoalDecomposition(opts),
+      // Step 7 (run setup / bootstrap).
+      soulLoader: this.soulLoader,
+      vaultRegistry: this.vaultRegistry,
+      embeddingProvider: this.embeddingProvider,
+      instinctRetriever: this.instinctRetriever,
+      modelIntelligence: this.modelIntelligence,
+      autonomousDefaultEnabled: this.autonomousDefaultEnabled,
+      autonomousDefaultHours: this.autonomousDefaultHours,
+      conformanceEnabled: this.conformanceEnabled,
+      conformanceFrameworkPathsOnly: this.conformanceFrameworkPathsOnly,
+      loopFingerprintThreshold: this.loopFingerprintThreshold,
+      loopFingerprintWindow: this.loopFingerprintWindow,
+      loopDensityThreshold: this.loopDensityThreshold,
+      loopDensityWindow: this.loopDensityWindow,
+      loopMaxRecoveryEpisodes: this.loopMaxRecoveryEpisodes,
+      loopStaleAnalysisThreshold: this.loopStaleAnalysisThreshold,
+      loopHardCapReplan: this.loopHardCapReplan,
+      loopHardCapBlock: this.loopHardCapBlock,
+      currentSessionInstinctIds: this.currentSessionInstinctIds,
+      // monitorLifecycle + stradaDeps are setter-backed (setMonitorLifecycle / runtime checkStradaDeps) → LAZY GETTERS.
+      monitorLifecycle: () => this.monitorLifecycle,
+      stradaDeps: () => this.stradaDeps,
+      getContextBuilderContext: () => this.getContextBuilderDeps(),
+      buildFreshRunSession: (request, queryText, supportsVision) =>
+        this.buildFreshRunSession(request, queryText, supportsVision),
+      buildFixedSupervisorExecutionStrategy: (prompt, identityKey, providerName, modelId, provider) =>
+        this.buildFixedSupervisorExecutionStrategy(prompt, identityKey, providerName, modelId, provider),
+      maybeUpdateUserProfileFromPrompt: (chatId, identityKey, queryText, userId) =>
+        this.maybeUpdateUserProfileFromPrompt(chatId, identityKey, queryText, userId),
+      getTaskExecutionContext: () => this.getTaskExecutionContext(),
+      propagateInstinctIdsToChannel: (chatId, instinctIds) =>
+        this.propagateInstinctIdsToChannel(chatId, instinctIds),
     });
   }
 
@@ -2609,54 +2638,7 @@ export class Orchestrator {
     };
   }
 
-  /**
-   * Build a complete system prompt with all context layers.
-   * Shared by both runAgentLoop (interactive) and runBackgroundTask (background).
-   */
-  private async buildSystemPromptWithContext(params: {
-    chatId: string;
-    conversationScope: string;
-    identityKey: string;
-    userId?: string;
-    channelType?: string;
-    prompt: string;
-    personaContent?: string;
-    vaultContext?: string;
-    profile: {
-      displayName?: string;
-      language: string;
-      activePersona: string;
-      preferences: unknown;
-      contextSummary?: string;
-    } | null;
-    preComputedEmbedding?: number[];
-  }): Promise<{
-    systemPrompt: string;
-    initialContentHashes: string[];
-    projectWorldSummary?: string;
-    projectWorldFingerprint?: string;
-  }> {
-    return buildSystemPromptWithContextHelper(this.getContextBuilderDeps(), params);
-  }
 
-  /**
-   * Compute request-scoped vault context enrichment for a user message.
-   * Returns "" when no vault registry is configured or on failure, so the
-   * value can be passed directly into buildSystemPromptWithContext.
-   */
-  private async computeVaultContext(userMessage: string): Promise<string> {
-    if (!this.vaultRegistry) return "";
-    try {
-      return await buildVaultProjectContext({
-        vaultRegistry: this.vaultRegistry,
-        userMessage,
-        contextBudget: 4000,
-      });
-    } catch (err) {
-      getLogger().warn("Vault context enrichment failed", { err });
-      return "";
-    }
-  }
 
   /**
    * Public accessor for active sessions (used by dashboard /api/sessions).
@@ -5254,369 +5236,29 @@ export class Orchestrator {
    * synthesizeDecomposedFinal) so the user-facing answer honors the selected persona.
    */
   private async resolvePersonaContent(profile: UserProfile | null): Promise<string | undefined> {
-    if (profile?.activePersona && profile.activePersona !== "default" && this.soulLoader) {
-      return (await this.soulLoader.getProfileContent(profile.activePersona)) ?? undefined;
-    }
-    return undefined;
+    return this.engine.resolvePersonaContent(profile);
   }
 
-  /**
-   * Step 0 / gap #6 — v1's worker-prologue personalization (runBackgroundTask :3291-3350): load the
-   * user profile (drives persona + autonomous mode), debounced touch, prompt-derived profile update,
-   * autonomous-mode restore (a dmPolicy side-effect), a once-computed embedding (reused by the prompt
-   * build), and the per-user persona override. Returns the pieces the prompt build consumes.
-   */
-  private async loadRunPersonalization(
-    chatId: string,
-    identityKey: string,
-    queryText: string,
-    userId: string | undefined,
-  ): Promise<{
-    profile: UserProfile | null;
-    personaContent: string | undefined;
-    preComputedEmbedding: number[] | undefined;
-  }> {
-    let profile = this.userProfileStore?.getProfile(identityKey) ?? null;
-    if (this.userProfileStore && profile) {
-      const lastTouch = this.sessionManager.persistTimeMap.get(`touch:${identityKey}`) ?? 0;
-      if (Date.now() - lastTouch > 60_000) {
-        this.userProfileStore.touchLastSeen(identityKey);
-        this.sessionManager.persistTimeMap.set(`touch:${identityKey}`, Date.now());
-      }
-    }
-    await this.maybeUpdateUserProfileFromPrompt(chatId, identityKey, queryText, userId);
-    profile = this.userProfileStore?.getProfile(identityKey) ?? profile;
-
-    if (this.dmPolicy && this.userProfileStore) {
-      try {
-        const autonomousState = await resolveAutonomousModeWithDefault(this.userProfileStore, identityKey, {
-          enabled: this.autonomousDefaultEnabled,
-          hours: this.autonomousDefaultHours,
-        });
-        this.dmPolicy.initFromProfile(
-          chatId,
-          autonomousState.enabled
-            ? { autonomousMode: true, autonomousExpiresAt: autonomousState.expiresAt }
-            : { autonomousMode: false },
-          userId,
-        );
-      } catch {
-        // Autonomous-mode restoration failure is non-fatal.
-      }
-    }
-
-    let preComputedEmbedding: number[] | undefined;
-    if (this.embeddingProvider && queryText) {
-      try {
-        const batch = await this.embeddingProvider.embed([queryText]);
-        preComputedEmbedding = batch.embeddings[0];
-      } catch {
-        // Embedding failure is non-fatal; downstream embeds on demand.
-      }
-    }
-
-    const personaContent = await this.resolvePersonaContent(profile);
-
-    return { profile, personaContent, preComputedEmbedding };
-  }
 
   /**
-   * COMPOSE the existing per-run setup helpers (the same callees the inline loop preamble calls)
-   * into the {@link PortRunSetup} the spine threads + the {@link AgentCorePortRunContext} the
-   * port closes over. Mirrors runAgentLoop's prologue (orchestrator.ts ~4790-4894).
+   * COMPOSE the per-run setup helpers into the PortRunSetup the spine threads + the run context the
+   * port closes over (relocation Step 7 → setup.ts; mirrors runAgentLoop's prologue).
    */
   private async setupAgentCoreRun(
     request: AgentRunSetupInput,
-    // Shared with the FailureLedger's core (createAgentCorePort) so the ledger's verdict rules read the
-    // SAME tracker the spine records into — the v2-background-livelock fix. One run = one tracker.
     iterationHealth: IterationHealthTracker,
     healthAdapter: IterationHealthCoreAdapter,
   ): Promise<{ setup: PortRunSetup; runCtx: AgentCorePortRunContext }> {
-    const chatId = request.chatId;
-    const isInteractive = request.mode === "interactive"; // gap #3/#7/#8 share this branch
-    // Step 0 / gap #5 — resolve the run identity the way v1's prologue does (resolveIdentityKey at
-    // :3057/:2201): userId/conversationId key multi-user + cross-channel sessions, profiles, and
-    // provider selection. The prior `identityKey = chatId` mis-keyed every non-default-channel run.
-    // gap #1: the run scope (withRunTaskContext) already resolved + established this identity, so
-    // reuse it to avoid a duplicate resolve; fall back for any path that calls setupRun outside a
-    // scope (e.g. direct unit tests).
-    const identityKey =
-      this.getTaskExecutionContext()?.identityKey ??
-      resolveIdentityKey(
-        chatId,
-        request.userId,
-        request.conversationId,
-        this.userProfileStore,
-        request.channelType,
-      );
-    const queryText = request.prompt;
-    // step5-parity (v1 @ a3de7d1 runWorkerTask :3567-3583): a supervisor-assigned provider pin
-    // (request.assignedProvider/assignedModel) materializes the pinned provider as THE run
-    // provider and a fixed all-roles strategy; an unmaterializable pin warns and falls back.
-    const fixedProviderName =
-      canonicalizeProviderName(request.assignedProvider)
-      ?? request.assignedProvider?.trim().toLowerCase();
-    const fixedModelId = request.assignedModel?.trim() || undefined;
-    // Strict BARE materialization (getPrimaryProviderByName): (a) the existence probe is real —
-    // getProviderByName builds a resilient chain for almost any name, so the "unmaterializable
-    // pin" warn below could never fire and a bogus pin silently ran the default chain under the
-    // pinned name (trio security catch); (b) a pin must be the bare provider, consistent with
-    // buildTaskAwareProvider's hard-pin branch (never a chain that could fall over to a sibling).
-    const fixedProvider = fixedProviderName
-      ? (this.providerManager as {
-          getPrimaryProviderByName?: (name: string, model?: string) => IAIProvider | null;
-        }).getPrimaryProviderByName?.(fixedProviderName, fixedModelId) ?? null
-      : null;
-    if (request.assignedProvider && fixedProviderName && !fixedProvider) {
-      getLogger().warn("Delegated worker provider pin could not be materialized; using fallback provider", {
-        assignedProvider: request.assignedProvider,
-        canonicalProvider: fixedProviderName,
-        assignedModel: fixedModelId,
-        chatId,
-      });
-    }
-    const fallbackProvider = fixedProvider ?? this.providerManager.getProvider(identityKey);
-    const fixedExecutionStrategy =
-      fixedProviderName && fixedProvider
-        ? this.buildFixedSupervisorExecutionStrategy(queryText, identityKey, fixedProviderName, fixedModelId, fixedProvider)
-        : undefined;
-    // Step 0 / gap #3 — worker/background/delegated runs get a FRESH session built from userContent
-    // (v1 parity: runBackgroundTask :3278-3289), so parallel runs on one chatId never collide on a
-    // shared persistent session and attachments/vision are seeded. Interactive keeps the persistent
-    // session (the chat continues across messages).
-    const session: Session =
-      isInteractive
-        ? this.sessionManager.getOrCreateSession(chatId)
-        : this.buildFreshRunSession(request, queryText, fallbackProvider.capabilities.vision);
-    // v1 parity (runBackgroundTask :3213): derive the conversation scope from the request, not the
-    // (possibly-shared/fresh) session — a fresh worker session carries no scope field.
-    const conversationScope = resolveConversationScope(chatId, request.conversationId);
-
-    // v1 parity (runBackgroundTask :3549-3550, deletion-map risk catch): a worker/sub-goal run
-    // carrying a parent monitorScope joins the PARENT whole-goal episode — its Kanban card nests
-    // under the parent workspace instead of spraying a sibling root. The v2 path dropped
-    // request.monitorScope entirely; without this the supervisor-bridge workers are monitor-silent
-    // on the now-default v2 route. The joinEpisode CALL fires at the END of setup (after the last
-    // throwing await) so a setup failure never leaves a dangling joined card (trio catch);
-    // joinEpisodeEnd fires from persistTerminal's finally (v1: finally :4894).
-    const workerMonitorScope = request.monitorScope?.trim() || undefined;
-    const joinsParentEpisode = Boolean(workerMonitorScope) && workerMonitorScope !== conversationScope;
-
-    // Step 0 / gap #6 — load v1's worker-prologue personalization (profile, persona, autonomous-mode
-    // restore, pre-computed embedding) before the prompt build (runBackgroundTask :3291-3350).
-    const { profile, personaContent, preComputedEmbedding } = await this.loadRunPersonalization(
-      chatId,
-      identityKey,
-      queryText,
-      request.userId,
-    );
-
-    const vaultContext = await this.computeVaultContext(queryText);
-    const {
-      systemPrompt: builtSystemPrompt,
-      initialContentHashes,
-      projectWorldSummary,
-      projectWorldFingerprint,
-    } = await this.buildSystemPromptWithContext({
-      chatId,
-      conversationScope,
-      identityKey,
-      channelType: request.channelType,
-      // step5-parity: v1's INTERACTIVE prologue threaded userId so dmPolicy.isAutonomousActive
-      // resolves userId-keyed prefs and the AUTONOMOUS MODE directive renders in the prompt
-      // (the skip-confirmation BEHAVIOR worked either way; only the prompt layer was blind).
-      // Interactive-ONLY, exactly as v1: the background/worker prologue never passed it
-      // (a3de7d1 :3693-3703), so worker prompts must not inherit the directive (trio catch).
-      userId: isInteractive ? request.userId : undefined,
-      prompt: queryText,
-      personaContent,
-      vaultContext,
-      profile,
-      preComputedEmbedding,
-    });
-    // gap #6 — instinct injection (v1 runBackgroundTask :3377-3388): augment the system prompt with
-    // retrieved learned insights AND capture them so the spine can seed state.learnedInsights — that
-    // field IS read on the v2 path (prepareIteration → buildPhasePromptSection renders the PLANNING
-    // prompt's "### Learned Patterns" block from it), so BOTH carriers must be populated to match v1.
-    let systemPrompt = builtSystemPrompt;
-    let learnedInsights: readonly string[] = [];
-    // GAP1 (self-learning attribution): capture the retrieved instincts' IDs and stash them per-session
-    // so emitToolResult tags every v2 tool:result with appliedInstinctIds (v1 parity: runAgentLoop
-    // :5189-5191). WITHOUT this the v2 path is open-loop — instincts are created but never reinforced
-    // (learning-pipeline.ts:333 is gated on appliedInstinctIds.length>0). Cleared on teardown in
-    // persistTerminal (symmetric to v1's runAgentLoop finally :6232-6234).
-    let matchedInstinctIds: string[] = [];
-    if (this.instinctRetriever) {
-      try {
-        const insightResult = await this.instinctRetriever.getInsightsForTask(queryText);
-        matchedInstinctIds = insightResult.matchedInstinctIds;
-        if (insightResult.insights.length > 0) {
-          learnedInsights = insightResult.insights;
-          systemPrompt += `\n\n## Learned Insights\n${insightResult.insights.join("\n")}\n`;
-        }
-      } catch {
-        // Non-fatal.
-      }
-    }
-    this.currentSessionInstinctIds.set(chatId, matchedInstinctIds);
-    this.propagateInstinctIdsToChannel(chatId, matchedInstinctIds);
-
-    const lastUserMessage = this.sessionManager.extractLastUserMessage(session) || queryText;
-    const bundle = createAutonomyBundle({
-      prompt: lastUserMessage,
-      // Step 0 / gap #8 — v1 workers use the background-epoch iteration budget (runBackgroundTask
-      // :3407); only interactive uses the interactive limit. The prior v2 prologue used the
-      // interactive limit for ALL modes, giving workers the wrong autonomy-bundle budget.
-      iterationBudget:
-        isInteractive
-          ? this.getInteractiveIterationLimit()
-          : this.getBackgroundEpochIterationLimit(),
-      stradaDeps: this.stradaDeps,
-      projectWorldSummary,
-      projectWorldFingerprint,
-      includeControlLoopTracker: true,
-      previousJournalSnapshot: session.lastJournalSnapshot,
-      conformanceEnabled: this.conformanceEnabled,
-      conformanceFrameworkPathsOnly: this.conformanceFrameworkPathsOnly,
-      // v1 parity (trio catch): the documented loop-detection knobs configure the
-      // ControlLoopTracker on the v2 route exactly as the deleted loops threaded them.
-      loopFingerprintThreshold: this.loopFingerprintThreshold,
-      loopFingerprintWindow: this.loopFingerprintWindow,
-      loopDensityThreshold: this.loopDensityThreshold,
-      loopDensityWindow: this.loopDensityWindow,
-      loopMaxRecoveryEpisodes: this.loopMaxRecoveryEpisodes,
-      loopStaleAnalysisThreshold: this.loopStaleAnalysisThreshold,
-      loopHardCapReplan: this.loopHardCapReplan,
-      loopHardCapBlock: this.loopHardCapBlock,
-      progressAssessmentEnabled: this.progressAssessmentEnabled,
-    });
-
-    const memoryRefresher = this.sessionManager.createMemoryRefresher(initialContentHashes);
-    // Step 0 / gap #7 — label the metric by the actual run mode (v1 parity: runBackgroundTask uses
-    // "subtask" for delegated sub-agents else "background"; interactive stays "interactive") + thread
-    // parentTaskId for sub-agent lineage. The prior hardcoded "interactive" mislabeled every
-    // worker/background/delegated run and dropped the parent link.
-    const metricId = this.metricsRecorder?.startTask({
-      sessionId: chatId,
-      taskDescription: lastUserMessage.slice(0, 200),
-      taskType:
-        isInteractive
-          ? "interactive"
-          : request.parentMetricId
-            ? "subtask"
-            : "background",
-      parentTaskId: request.parentMetricId,
-      // GAP1: attribute the metric to the retrieved instincts (v1 parity: runAgentLoop :5198-5203).
-      instinctIds: matchedInstinctIds,
-    });
-
-    // iterationHealth + healthAdapter are now passed in (shared with the FailureLedger's core) — the
-    // v2-background-livelock fix. Previously created here as a SEPARATE instance the ledger never saw.
-    const onUsage = request.onUsage as ((usage: TaskUsageEvent) => void) | undefined;
-    const runCtx: AgentCorePortRunContext = {
-      onUsage,
-      iterationHealth,
-      healthAdapter,
-      session,
-      chatId,
-      metricId,
-      toolExecMode:
-        isInteractive
-          ? "interactive"
-          : request.mode === "supervisor-node"
-            ? "delegated" // v1 parity: supervisor-node workers run as the "delegated" tool-exec mode
-            : "background",
-      workspaceLease: request.workspaceLease,
-      workspaceLeaseRetained: request.workspaceLeaseRetained,
-      goalContext: request.goalContext,
-      executionJournal: bundle.executionJournal,
-      selfVerification: bundle.selfVerification,
-      stradaConformance: bundle.stradaConformance,
-      errorRecovery: bundle.errorRecovery,
-      taskPlanner: bundle.taskPlanner,
-      controlLoopTracker: bundle.controlLoopTracker ?? undefined,
-      systemPrompt,
-      goalsDecomposed: false,
-      identityKey,
-      userId: request.userId,
-      channelType: request.channelType,
-      attachments: request.attachments,
-      conversationScope,
-      projectWorldFingerprint,
-      executionStrategy: undefined,
-      lastAssignment: undefined,
-      lastToolNames: [],
-      lastProviderCapabilities: undefined,
-      cumulativeOutputTokens: 0,
-      taskStartedAtMs: Date.now(),
-      progressLanguage: this.defaultLanguage as ProgressLanguage,
-      progressTitle: queryText.replace(/\s+/g, " ").trim().slice(0, 80) || "Task",
-      emitProgress: () => {
-        /* worker/background progress is surfaced via the V2 event bus, not this v1 sink */
-      },
-      // v1 parity: worker/background runs get a live collector so the SHARED handlers
-      // (end-turn verifier :452, reflection, tool-exec delegation :91) accumulate
-      // verifierResult / childWorkerResults exactly as they did for runWorkerTask; the
-      // result projection reads them back. Interactive stays collector-less (as v1).
-      workerCollector: isInteractive ? undefined : { toolTrace: [], childWorkerResults: [] },
-      profileLanguage: undefined,
-      joinsParentEpisode,
-      workerMonitorScope,
-      memoryRefresher,
-      fixedExecutionStrategy,
-    };
-
-    const setup: PortRunSetup = {
-      systemPrompt,
-      session: session as unknown as PortRunSetup["session"],
-      executionJournal: bundle.executionJournal,
-      memoryRefresher,
-      identityKey,
-      fallbackProvider,
-      iterationHealth,
-      metricId: metricId ?? "",
-      enableGoalDetection: this.taskManager != null,
-      learnedInsights,
-    };
-
-    // The join is the LAST setup step (no throwing awaits remain) — see the derivation comment
-    // above; a joined card is now guaranteed to be settled by persistTerminal's finally.
-    if (joinsParentEpisode) {
-      this.monitorLifecycle?.joinEpisode(conversationScope, queryText, workerMonitorScope);
-    }
-
-    return { setup, runCtx };
+    return this.engine.setupAgentCoreRun(request, iterationHealth, healthAdapter);
   }
 
-  /**
-   * Provider-aware context-window trim for the v2 run. Mirrors runAgentLoop's trim (orchestrator.ts
-   * ~4669): trimSession to the recommended max messages, then persist the trimmed tail to memory.
-   * Idempotent across iterations (trimSession is a no-op when already within bounds).
-   */
+  /** Provider-aware context-window trim for the v2 run (relocation Step 7 → setup.ts). */
   private trimContextWindowForRun(
     session: Session,
     _mode: "interactive" | "background",
     runCtx: AgentCorePortRunContext,
   ): void {
-    const providerInfo = this.providerManager.getActiveInfo?.(runCtx.identityKey);
-    const providerName = providerInfo?.providerName ?? this.providerManager.getProvider(runCtx.identityKey).name;
-    const trimmed = this.sessionManager.trimSession(
-      session,
-      getRecommendedMaxMessages(
-        providerName,
-        providerInfo?.model,
-        this.modelIntelligence,
-        this.providerManager.getProviderCapabilities?.(providerName, providerInfo?.model),
-        providerName,
-      ),
-    );
-    if (trimmed.length > 0) {
-      void this.sessionManager.persistSessionToMemory(
-        runCtx.chatId,
-        trimmed,
-        /* force */ true,
-      );
-    }
+    this.engine.trimContextWindowForRun(session, _mode, runCtx);
   }
 
   /**

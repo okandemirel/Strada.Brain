@@ -27,6 +27,11 @@ export interface EngineProviderManager {
   getCatalogSnapshot?: (identityKey: string) => { assignmentVersion: number } | undefined;
   getProvider: (identityKey: string) => import("../../agents/providers/provider.interface.js").IAIProvider;
   listAvailable: () => Array<{ name: string; label?: string; defaultModel?: string }>;
+  /** Step 7 (trimContextWindowForRun): provider-capability lookup for the context-window trim. */
+  getProviderCapabilities?: (
+    providerName: string,
+    model?: string,
+  ) => import("../../agents/providers/provider.interface.js").IAIProvider["capabilities"] | undefined;
 }
 
 export interface SynthesisDeps {

@@ -12,6 +12,7 @@
 import type { ProviderResponse } from "../../agents/providers/provider-core.interface.js";
 import type { TaskUsageEvent } from "../../tasks/types.js";
 import type { AgentPhase } from "../../agents/agent-state.js";
+import type { TaskType } from "../../metrics/metrics-types.js";
 import type { SupervisorAssignment } from "../../agents/orchestrator-supervisor-routing.js";
 import type { TaskClassification } from "../routing/routing-types.js";
 import {
@@ -39,6 +40,13 @@ export interface AccountingDeps {
     recordPhaseOutcome?: (record: ReturnType<typeof buildPhaseOutcomeRecord>) => void;
   };
   readonly metricsRecorder: {
+    startTask: (opts: {
+      sessionId: string;
+      taskDescription: string;
+      taskType: TaskType;
+      parentTaskId?: string;
+      instinctIds?: string[];
+    }) => string;
     endTask: (metricId: string, result: RecordMetricEndResult) => void;
   } | null;
   readonly metrics?: {

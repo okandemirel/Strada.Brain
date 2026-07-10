@@ -49,6 +49,15 @@ import {
   portParseReflectionDecision,
   portHandlePlanPhase,
 } from "./reflection.js";
+import {
+  setupAgentCoreRun,
+  resolvePersonaContent,
+  trimContextWindowForRun,
+} from "./setup.js";
+import type { UserProfile } from "../../memory/unified/user-profile-store.js";
+import type { AgentRunSetupInput, RunSetup as PortRunSetup } from "../runner/orchestrator-port.js";
+import type { IterationHealthTracker } from "../../agents/iteration-health-tracker.js";
+import type { IterationHealthCoreAdapter } from "../control/iteration-health-core-adapter.js";
 import type {
   DispatchReflectionParams,
   ReflectionDispatchResult,
@@ -179,5 +188,26 @@ export class AgentEngine {
 
   portHandlePlanPhase(params: PlanPhaseParams, runCtx: EngineRunContext): Promise<PlanPhaseResult> {
     return portHandlePlanPhase(this.deps, params, runCtx);
+  }
+
+  // ── Run setup / bootstrap (relocation Step 7) ─────────────────────────────────────────────────
+  setupAgentCoreRun(
+    request: AgentRunSetupInput,
+    iterationHealth: IterationHealthTracker,
+    healthAdapter: IterationHealthCoreAdapter,
+  ): Promise<{ setup: PortRunSetup; runCtx: EngineRunContext }> {
+    return setupAgentCoreRun(this.deps, request, iterationHealth, healthAdapter);
+  }
+
+  resolvePersonaContent(profile: UserProfile | null): Promise<string | undefined> {
+    return resolvePersonaContent(this.deps, profile);
+  }
+
+  trimContextWindowForRun(
+    session: Session,
+    mode: "interactive" | "background",
+    runCtx: EngineRunContext,
+  ): void {
+    trimContextWindowForRun(this.deps, session, mode, runCtx);
   }
 }

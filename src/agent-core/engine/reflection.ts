@@ -14,6 +14,7 @@
 import { AgentPhase, transitionPhase, type AgentState } from "../../agents/agent-state.js";
 import type { ProviderResponse, ConversationMessage } from "../../agents/providers/provider-core.interface.js";
 import type { Session } from "../../agents/orchestrator-session-manager.js";
+import type { DMPolicy } from "../../security/dm-policy.js";
 import type { TaskUsageEvent, TaskProgressSignal } from "../../tasks/types.js";
 import type { ProgressLanguage } from "../../tasks/progress-signals.js";
 import type { SupervisorExecutionStrategy, SupervisorAssignment } from "../../agents/orchestrator-supervisor-routing.js";
@@ -72,9 +73,7 @@ export interface ReflectionDeps extends ReviewDeps, RenderDeps {
   readonly progressAssessmentEnabled: boolean;
   /** LAZY GETTER — set after construction. Reads the submit entry the goal-handoff needs. */
   readonly taskManager: () => TaskManager | null;
-  readonly dmPolicy?: {
-    isAutonomousActive: (chatId: string, userId?: string) => boolean;
-  };
+  readonly dmPolicy?: DMPolicy;
   readonly interactionPolicy: {
     requirePlanReview: (chatId: string, reason: string, planText: string) => void;
   };
