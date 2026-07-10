@@ -1,6 +1,6 @@
 {
   "name": "strada-brain",
-  "version": "4.2.401",
+  "version": "4.2.402",
   "description": "AI-powered Unity development assistant for Strada.Core framework projects",
   "type": "module",
   "main": "dist/index.js",
