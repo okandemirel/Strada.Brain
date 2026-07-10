@@ -644,14 +644,16 @@ describe("V2AgentRunner — REAL port + REAL gateway (provider.chat scripted)", 
 
     // (b) spy the health-failure classifier (the port delegates classifyFailureForVerdict → this);
     // a benign cancel must NOT reach it (no recordFailure → no per-run health poison).
+    // The port assembly + accounting moved into the engine (relocation Step 9); the classifier +
+    // metric-end now live on orch.engine, so the spies target it (same methods, same call path).
     const classifySpy = vi.spyOn(
-      h.orch as unknown as { classifyAgentCoreFailure: (...a: unknown[]) => unknown },
+      (h.orch as unknown as { engine: { classifyAgentCoreFailure: (...a: unknown[]) => unknown } }).engine,
       "classifyAgentCoreFailure",
     );
     // (c) spy recordMetricEnd (called by persistTerminal in the spine's finally) to assert the
     // recorded terminal phase is NOT COMPLETE for a cancel.
     const metricSpy = vi.spyOn(
-      h.orch as unknown as { recordMetricEnd: (...a: unknown[]) => void },
+      (h.orch as unknown as { engine: { recordMetricEnd: (...a: unknown[]) => void } }).engine,
       "recordMetricEnd",
     );
 

@@ -11,7 +11,6 @@ import type {
 import { streamOrChatText } from "./providers/provider.interface.js";
 import { ProviderHealthRegistry } from "./providers/provider-health.js";
 import { AgentEngine } from "../agent-core/engine/agent-engine.js";
-import type { AgentCoreToolTurnResult } from "../agent-core/engine/tool-turn.js";
 import { DynamicToolFactory } from "./tools/dynamic/dynamic-tool-factory.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
@@ -170,20 +169,15 @@ import {
   isSingleProviderChain,
   recordProviderHealthFailure,
 } from "./orchestrator-runtime-utils.js";
-import { IterationHealthTracker } from "./iteration-health-tracker.js";
 import {
-  IterationHealthCoreAdapter,
   SystemClock,
   CapabilityRegistry,
   capabilityForTool,
   guardExecute,
   formatBlocked,
-  isBenign,
   type CallScope,
   type CapabilityAdapter,
-  type CancelReason,
   type Clock,
-  type PolicySeed,
   type RunClock,
 } from "../agent-core/control/index.js";
 import {
@@ -194,10 +188,7 @@ import {
   type RunnerHostOrchestrator,
   type TerminalStatus,
 } from "../agent-core/runner/index.js";
-import { getResilienceMessage, type MessageKey } from "./resilience-messages.js";
-import {
-  firstClause,
-} from "./orchestrator-loop-shared.js";
+import { type MessageKey } from "./resilience-messages.js";
 import {
   buildPhaseOutcomeTelemetry as buildPhaseOutcomeTelemetryModel,
   toExecutionPhase as toExecutionPhaseModel,
@@ -254,28 +245,7 @@ import {
 // route on every route (v2-all-routes+full-control-plane); v1 is the env-revert path only.
 import { ModelGateway } from "../agent-core/model/model-gateway.js";
 import type { SilentStreamPort } from "../agent-core/model/model-gateway.js";
-import type {
-  AgentRunResultProjection,
-  AgentRunSetupInput,
-  ClassifyFailureParams,
-  DispatchEndTurnParams,
-  DispatchReflectionParams,
-  EndTurnDispatchResult,
-  ExecuteToolCallsFn,
-  FailureVerdictContribution,
-  OrchestratorPort,
-  PlanPhaseParams,
-  PlanPhaseResult,
-  PreparedIteration as PortPreparedIteration,
-  PrepareIterationParams,
-  ReflectionDispatchResult,
-  ParseReflectionDecisionParams,
-  ParsedReflectionDecision,
-  ResultProjectionParams,
-  RunSetup as PortRunSetup,
-  SynthesizedFinal,
-} from "../agent-core/runner/orchestrator-port.js";
-import type { HealthCore } from "../agent-core/control/failure-ledger.js";
+import type { AgentRunSetupInput } from "../agent-core/runner/orchestrator-port.js";
 import type { AgentEvent } from "../agent-core/events/agent-event.js";
 
 
@@ -474,21 +444,6 @@ function appendAttachmentNotesToGroundingContent(
   return updated;
 }
 
-/**
- * GAP4 — extract the user-facing text of an assistant message for the terminal read-back.
- * `AssistantMessage.content` is typed `string`, but a structured/multimodal turn can carry a
- * `MessageContent[]` at runtime; in that case join ONLY the `text` blocks (a final answer must not
- * leak serialized tool_use/tool_result/image blocks — unlike extractSupervisorPromptText, which is
- * a prompt-grounding helper). Returns "" when there is no genuine text to surface.
- */
-function extractAssistantText(content: string | MessageContent[] | null | undefined): string {
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-  return content
-    .filter((block): block is Extract<MessageContent, { type: "text" }> => block.type === "text")
-    .map((block) => block.text)
-    .join("\n");
-}
 
 function buildSupervisorGroundingContent(
   params: Pick<SupervisorAdmissionRequest, "prompt" | "userContent" | "attachments">,
@@ -1148,6 +1103,20 @@ export class Orchestrator {
       executeToolCalls: (chatId, toolCalls, options) => this.executeToolCalls(chatId, toolCalls, options),
       emitToolResult: (chatId, tc, tr) => this.emitToolResult(chatId, tc, tr),
       buildToolBatchProgressSignal: (params) => this.buildToolBatchProgressSignal(params),
+      // Step 9 (port assembly): the shell residue the port binds — provider resilience, session
+      // compaction, checkpoint, ALS scope, epoch rollover, trajectory credit, terminal-reason map,
+      // and the ModelGateway construction (silentStream stays in the shell).
+      buildTaskAwareProvider: (primaryName, task, phase, options) =>
+        this.buildTaskAwareProvider(primaryName, task, phase, options),
+      maybeCompactSession: (session, providerName, modelId, systemPrompt) =>
+        this.maybeCompactSession(session, providerName, modelId, systemPrompt),
+      saveBudgetExceededCheckpoint: (params) => this.saveBudgetExceededCheckpoint(params),
+      withTaskExecutionContext: (context, run) => this.withTaskExecutionContext(context, run),
+      portOnEpochRollover: (continued, epoch, agentState, runCtx) =>
+        this.portOnEpochRollover(continued, epoch, agentState, runCtx),
+      recordInRunTrajectoryCredit: (params) => this.recordInRunTrajectoryCredit(params),
+      mapTerminalReasonToMessageKey: (reason, status) => this.mapTerminalReasonToMessageKey(reason, status),
+      createGateway: () => new ModelGateway(this.silentStream as unknown as SilentStreamPort),
     });
   }
 
@@ -1180,15 +1149,6 @@ export class Orchestrator {
   // helper feeds (rules 2/4/6 become reachable). The flag-OFF path is byte-identical v1.
   // ───────────────────────────────────────────────────────────────────────────
 
-  /**
-   * Phase 1b. Build the PolicySeed from live v1 config/state for a run.
-   * `-1` (interactiveTokenBudget "unbounded" sentinel) maps to +Infinity because Budget has
-   * no sentinel; costCap is Infinity (v1 has no cost gate). Reads the LIVE token budget so a
-   * mid-task portal raise is reflected if `reArmOnConfigChange` is later called (deferred).
-   */
-  private buildPolicySeed(): PolicySeed {
-    return this.engine.buildPolicySeed();
-  }
 
 
 
@@ -1261,17 +1221,8 @@ export class Orchestrator {
     }
   }
 
-  private getInteractiveIterationLimit(): number {
-    return this.engine.getInteractiveIterationLimit();
-  }
 
-  private getBackgroundEpochIterationLimit(): number {
-    return this.engine.getBackgroundEpochIterationLimit();
-  }
 
-  private canAutoContinueBackgroundEpoch(completedEpochCount: number): boolean {
-    return this.engine.canAutoContinueBackgroundEpoch(completedEpochCount);
-  }
 
   private shouldActivateSupervisor(classification: TaskClassification): boolean {
     // Conversational messages never need supervisor decomposition
@@ -1662,41 +1613,6 @@ export class Orchestrator {
     projectWorldFingerprint?: string;
   }): PhaseOutcomeTelemetry | undefined {
     return buildPhaseOutcomeTelemetryModel(params);
-  }
-
-  /**
-   * Shared per-iteration boilerplate for both `runBackgroundTask` and `runAgentLoop`.
-   *
-   * Rebuilds the execution strategy, constructs the phase-aware active prompt,
-   * resolves the current provider assignment, builds tool definitions, and
-   * appends the supervisor role prompt.  The LLM call itself stays inline in
-   * each loop because the two paths diverge (direct `.chat()` vs streaming).
-   */
-  private prepareIteration(params: {
-    prompt: string;
-    identityKey: string;
-    agentState: AgentState;
-    executionJournal: import("./autonomy/execution-journal.js").ExecutionJournal;
-    systemPrompt: string;
-    fallbackProvider: IAIProvider;
-    toolTurnAffinity: SupervisorAssignment | null;
-    projectWorldFingerprint?: string;
-    enableGoalDetection: boolean;
-    fixedExecutionStrategy?: SupervisorExecutionStrategy;
-    iterationHealth?: IterationHealthTracker;
-  }): {
-    executionStrategy: SupervisorExecutionStrategy;
-    activePrompt: string;
-    currentAssignment: SupervisorAssignment;
-    currentProvider: IAIProvider;
-    currentToolDefinitions: Array<{
-      name: string;
-      description: string;
-      input_schema: import("../types/index.js").JsonObject;
-    }>;
-    currentToolNames: string[];
-  } {
-    return this.engine.prepareIteration(params);
   }
 
   private shouldUseSupervisorSynthesis(strategy: SupervisorExecutionStrategy): boolean {
@@ -2417,16 +2333,6 @@ export class Orchestrator {
     return undefined;
   }
 
-  /**
-   * 3.3 — render the SPECIFIC `token_budget_exceeded` notice on the interactive token-budget stop (v1
-   * runAgentLoop:5491 parity), instead of the generic provider_abort. {used} = the run's cumulative
-   * OUTPUT tokens (the "fresh work" metric; input re-counts the growing context — audit #3); {budget} =
-   * the live interactive cap (== the enforced static cap for the common no-mid-task-change case).
-   * Localized via the user profile (v1 used the same). The checkpoint is already saved by the spine.
-   */
-  private async portRenderInteractiveBudgetExceeded(runCtx: AgentCorePortRunContext): Promise<void> {
-    return this.engine.portRenderInteractiveBudgetExceeded(runCtx);
-  }
 
   private buildWorkerToolDefinitions(
     _task: TaskClassification,
@@ -3220,21 +3126,6 @@ export class Orchestrator {
   }
 
   /** Record a metric end event (idempotent — endTask is a no-op for already-completed or unknown IDs) */
-  private recordMetricEnd(
-    metricId: string | undefined,
-    result: {
-      agentPhase: AgentPhase;
-      iterations: number;
-      toolCallCount: number;
-      hitMaxIterations?: boolean;
-      iterationBudgetReached?: boolean;
-      continuedAfterBudget?: boolean;
-      epochCount?: number;
-      terminatedByIterationBudget?: boolean;
-    },
-  ): void {
-    this.engine.recordMetricEnd(metricId, result);
-  }
 
   /**
    * Compact session messages when approaching the provider's context window.
@@ -4879,298 +4770,12 @@ export class Orchestrator {
    * lazily through a closure cell, so `setupRun` runs first (building the context) and every
    * per-iteration method sees the live state. Returns a frozen port object.
    */
-  createAgentCorePort(): {
-    port: OrchestratorPort;
-    gateway: ModelGateway;
-    seed: PolicySeed;
-    createHealthCore: () => HealthCore;
-  } {
-    const self = this;
-    // The closure cell the runCtx-bound methods read lazily. setupRun populates it before the
-    // first per-iteration call; the spine never touches it.
-    const cell: { ctx: AgentCorePortRunContext | undefined } = { ctx: undefined };
-    const ctx = (): AgentCorePortRunContext => {
-      if (!cell.ctx) throw new Error("AgentCorePort: setupRun must run before this method");
-      return cell.ctx;
-    };
-
-    // BUG FIX (v2 background livelock): the FailureLedger's health core (createHealthCore, consumed by
-    // controlPlane.openRun) MUST be the SAME IterationHealthTracker the spine records into via the port
-    // (runCtx.iterationHealth/healthAdapter). openRun runs BEFORE setupRun builds runCtx, so the shared
-    // per-run instance is created HERE and threaded into BOTH. Without this the ledger read a permanently
-    // EMPTY tracker → rule 5 (5-consecutive-failure abort), rule 7 (ask_user), and the stale-failure
-    // retry were ALL dead → background runs LIVELOCKED under persistent provider failure instead of
-    // aborting (v1 aborted via a task-scoped consecutiveProviderFailures). One run = one port = one tracker.
-    const runHealth = new IterationHealthTracker();
-    const runHealthAdapter = new IterationHealthCoreAdapter(runHealth, "");
-
-    const portImpl: OrchestratorPort = {
-      // ── A. setup / seed ──────────────────────────────────────────────────────────────────
-      setupRun: async (request: AgentRunSetupInput): Promise<PortRunSetup> => {
-        const built = await self.setupAgentCoreRun(request, runHealth, runHealthAdapter);
-        cell.ctx = built.runCtx;
-        return built.setup;
-      },
-      // Step 0 / gap #1 — wrap the v2 run in v1's task-execution ALS scope (mirrors runBackgroundTask
-      // :3214-3225). Resolves the SAME ctx v1 builds {chatId, conversationId, userId, identityKey,
-      // taskRunId}; the per-run readers (decomposeGoalsIfPlanning taskRunId, recordEvaluation
-      // identityKey) then see it instead of `undefined`. taskRunId mirrors v1's fallback chain.
-      withRunTaskContext: <T>(input: AgentRunSetupInput, fn: () => Promise<T>): Promise<T> => {
-        const identityKey = resolveIdentityKey(
-          input.chatId,
-          input.userId,
-          input.conversationId,
-          self.userProfileStore,
-          input.channelType,
-        );
-        const taskRunId =
-          input.taskRunId?.trim() ||
-          self.getTaskExecutionContext()?.taskRunId ||
-          `taskrun_${randomUUID()}`; // v1-parity token (runBackgroundTask :3218 / handleMessage :3059)
-        return self.withTaskExecutionContext(
-          {
-            chatId: input.chatId,
-            conversationId: input.conversationId,
-            userId: input.userId,
-            identityKey,
-            taskRunId,
-          },
-          fn,
-        );
-      },
-      buildPolicySeed: () => self.buildPolicySeed(),
-
-      // ── B. per-iteration prep ────────────────────────────────────────────────────────────
-      prepareIteration: (params: PrepareIterationParams): PortPreparedIteration => {
-        const prepared = self.prepareIteration({
-          prompt: params.prompt,
-          identityKey: params.identityKey,
-          agentState: params.agentState,
-          executionJournal: params.executionJournal,
-          // trio HIGH catch: use the LIVE prompt (runCtx.systemPrompt — STEP G's memory refresh
-          // reassigns it mid-run), NOT the spine's frozen setup.systemPrompt snapshot; v1's loops
-          // consumed the reassigned loop-local the same way. Without this the refreshed
-          // "## Relevant Memory"/RAG sections were computed and silently dropped.
-          systemPrompt: ctx().systemPrompt,
-          fallbackProvider: params.fallbackProvider,
-          toolTurnAffinity: params.toolTurnAffinity,
-          enableGoalDetection: params.enableGoalDetection,
-          iterationHealth: params.iterationHealth,
-          // step5-parity: the supervisor provider pin (all roles on the pinned provider+model).
-          fixedExecutionStrategy: ctx().fixedExecutionStrategy,
-        });
-        // ADAPT: capture the last strategy/assignment/toolNames so the handler contexts can read
-        // them (they are loop-locals in v1; here the port threads them through runCtx).
-        const c = ctx();
-        c.executionStrategy = prepared.executionStrategy;
-        c.lastAssignment = prepared.currentAssignment;
-        c.lastToolNames = prepared.currentToolNames;
-        // RAW provider capabilities (v1 parity :4705 — v1 reads capabilities off the unwrapped
-        // assignment provider even though the CALL goes through the resilient wrap below).
-        c.lastProviderCapabilities = prepared.currentProvider.capabilities;
-        // v1 parity (deletion-map risk catch): BOTH v1 loops wrap the assignment provider with
-        // buildTaskAwareProvider before the LLM call (:3980 background / :5561 interactive) — a
-        // router-ranked multi-provider resilient chain (primary first), honoring a hard pin via
-        // usesMultipleProviders=false. The spine consumed prepared.currentProvider RAW, silently
-        // dropping the in-call fallback chain on the now-default v2 path. Wrap here so every
-        // gateway call gets the identical resilient provider v1 used.
-        const resilientProvider =
-          self.buildTaskAwareProvider(
-            prepared.currentAssignment.providerName,
-            prepared.executionStrategy.task,
-            params.agentState.phase,
-            {
-              modelId: prepared.currentAssignment.modelId,
-              identityKey: params.identityKey,
-              usesMultipleProviders: prepared.executionStrategy.usesMultipleProviders,
-            },
-          ) ?? prepared.currentProvider;
-        return { ...prepared, currentProvider: resilientProvider } as PortPreparedIteration; // currentToolDefinitions is GatewayToolDefinition[]
-      },
-      maybeCompactSession: (session, providerName, modelId, systemPrompt) =>
-        self.maybeCompactSession(session as Session, providerName, modelId, systemPrompt),
-      trimContextWindow: (session, mode) =>
-        self.trimContextWindowForRun(session as unknown as Session, mode, ctx()),
-
-      // ── C. accounting / trace ──────────────────────────────────────────────────────────────
-      recordExecutionTrace: (params) =>
-        self.recordExecutionTrace({
-          chatId: params.chatId,
-          identityKey: params.identityKey,
-          assignment: params.assignment,
-          phase: params.phase,
-          task: params.task,
-          taskRunId: params.taskRunId,
-          reason: params.reason,
-        }),
-      recordProviderUsage: (providerName, usage) => {
-        const c = ctx();
-        self.recordProviderUsage(providerName, usage, c.onUsage); // CURRY onUsage
-        c.cumulativeOutputTokens += usage?.outputTokens ?? 0; // 3.3: feed the interactive budget gate (output-only)
-      },
-      saveBudgetExceededCheckpoint: (params) => self.saveBudgetExceededCheckpoint(params),
-
-      // ── D. the verdict bridge (ADAPT: record into tracker, RETURN INPUT, no verdict) ─────────
-      classifyFailureForVerdict: (params: ClassifyFailureParams): FailureVerdictContribution =>
-        self.classifyAgentCoreFailure(params, ctx()),
-      recordHealthSuccess: (_provider: string) => {
-        // v1 success pair: the ledger half (bgFailureLedger.recordSuccess(provider,"real")) is the
-        // spine's concern; the port owns the tracker half (iterationHealth.recordSuccess()).
-        ctx().iterationHealth.recordSuccess();
-      },
-
-      // ── E. reflection + end-turn (COMPOSE handler + ADAPT union→DTO) ─────────────────────────
-      dispatchReflection: (params: DispatchReflectionParams): Promise<ReflectionDispatchResult> =>
-        self.portDispatchReflection(params, ctx()),
-      parseReflectionDecision: (
-        params: ParseReflectionDecisionParams,
-      ): Promise<ParsedReflectionDecision> => self.portParseReflectionDecision(params, ctx()),
-      dispatchEndTurn: (params: DispatchEndTurnParams): Promise<EndTurnDispatchResult> =>
-        self.portDispatchEndTurn(params, ctx()),
-      handlePlanPhase: (params: PlanPhaseParams): Promise<PlanPhaseResult> =>
-        self.portHandlePlanPhase(params, ctx()),
-      decomposeGoalsIfPlanning: async (params) => {
-        // H2: once-per-run guard (rationale on AgentCorePortRunContext.goalsDecomposed).
-        const c = ctx();
-        if (c.goalsDecomposed) return params.agentState;
-        c.goalsDecomposed = true;
-        return self.runProactiveGoalDecomposition({
-          conversationScope: params.chatId,
-          userMessage: self.sessionManager.extractLastUserMessage(c.session),
-          chatId: params.chatId,
-          session: c.session,
-          agentState: params.agentState,
-        });
-      },
-
-      // ── F. tool execution (the bound FULL TOOL TURN; see portExecuteToolTurn) ────────────────
-      executeToolCalls: (async (...args: unknown[]) =>
-        self.portExecuteToolTurn(args, ctx())) as ExecuteToolCallsFn,
-
-      // ── G. limits / config (1:1) ─────────────────────────────────────────────────────────────
-      getInteractiveIterationLimit: () => self.getInteractiveIterationLimit(),
-      getBackgroundEpochIterationLimit: () => self.getBackgroundEpochIterationLimit(),
-      canAutoContinueBackgroundEpoch: (n) => self.canAutoContinueBackgroundEpoch(n),
-      onEpochRollover: (continued, epoch, agentState) =>
-        self.portOnEpochRollover(continued, epoch, agentState, ctx()),
-      getLiveInteractiveTokenBudget: () => self.getLiveInteractiveTokenBudget(),
-      renderInteractiveBudgetExceeded: () => self.portRenderInteractiveBudgetExceeded(ctx()),
-
-      // ── H. GAP: classifyIntent → mirror the spine's first-clause fallback ────────────────────
-      classifyIntent: async (prompt: string) => firstClause(prompt),
-
-      // ── Terminal ─────────────────────────────────────────────────────────────────────────────
-      synthesizeFinal: (_state: AgentState, _mode, terminal): SynthesizedFinal => {
-        // GAP: PURE read of the already-synthesized transcript (synthesizeUserFacingResponse is
-        // async+impure and would re-bill; the visible text was assembled by the dispatch handlers).
-        const c = ctx();
-        const transcript = self.sessionManager.getVisibleTranscript(c.session);
-        const lastVisible = [...transcript].reverse().find((m) => m.role === "assistant");
-        // GAP4: extract the text from the last visible assistant message — handle BOTH a plain
-        // string AND structured/multimodal MessageContent[] (join the text blocks; ignore image/
-        // tool blocks). The interactive path always has a string here (dispatch → markdown).
-        const readBack = extractAssistantText(lastVisible?.content).trim();
-        if (readBack) return { text: readBack, summary: readBack }; // happy path — verbatim, no regress.
-        // No visible read-back. This is the VERDICT-STOP terminal shape (budget/timeout/persistent
-        // failure/ask_user broke epochLoop BEFORE any dispatch handler appended a visible message),
-        // OR a genuinely clean completion that emitted no text. A bare "Task completed." on a STOP is
-        // a FALSE success → surface the real, localized stop reason instead (GAP4). Only a clean
-        // terminal (done/end_turn/plan-review/goal-handoff/benign-cancel) keeps the neutral fallback.
-        const messageKey = self.mapTerminalReasonToMessageKey(terminal?.reason, terminal?.status);
-        if (messageKey) {
-          // Language: worker/background sets profileLanguage=undefined → defaults to this.defaultLanguage
-          // (EN unless configured) — matches portRenderInteractiveBudgetExceeded's resolution. The
-          // interactive path never reaches here (it has a read-back via dispatch).
-          const language = (c.profileLanguage ?? self.defaultLanguage) as string;
-          const text = getResilienceMessage(messageKey, language);
-          return { text, summary: text };
-        }
-        const text = "Task completed.";
-        return { text, summary: text };
-      },
-      persistTerminal: async (state: AgentState, _setup, cancelReason?: CancelReason, terminalStatus?: TerminalStatus) => {
-        const c = ctx();
-        // A BENIGN cancel (mid-run user /cancel, daemon winddown, …) must NOT be recorded as a
-        // successful completion — that polluted metrics + the learning signal. v1 recorded the
-        // terminal phase (its catch transitioned to FAILED on the `signal.aborted` re-throw, so the
-        // finally recorded FAILED, never COMPLETE). Mirror that: a benign cancel records FAILED; every
-        // other terminal (success / verdict-stop / non-cancel) keeps COMPLETE exactly as before.
-        const cancelled = cancelReason !== undefined && isBenign(cancelReason);
-        try {
-        self.recordMetricEnd(c.metricId, {
-          agentPhase: cancelled ? AgentPhase.FAILED : AgentPhase.COMPLETE,
-          iterations: state.iteration,
-          toolCallCount: state.stepResults.length,
-          hitMaxIterations: false,
-        });
-        // Step 3 / gap #6 — execution-journal continuity (v1 parity: runAgentLoop finally :6061-6062,
-        // runBackgroundTask finally :4509-4510). v1 wrote the journal to execution memory + snapshotted
-        // it onto the session on every terminal path; the v2 prologue READS session.lastJournalSnapshot
-        // (setupAgentCoreRun) as previousJournalSnapshot for cross-turn continuity, so WITHOUT this
-        // write-back every v2 turn after the first reads a stale snapshot — silent multi-turn memory
-        // corruption. Runs on the same normal-terminal path as persistSessionToMemory below (v2 failures
-        // are verdicts, not throws, so this covers every path the spine actually takes).
-        self.sessionManager.persistExecutionMemory(c.identityKey, c.executionJournal);
-        c.session.lastJournalSnapshot = c.executionJournal.snapshot();
-        await self.sessionManager.persistSessionToMemory(
-          c.chatId,
-          self.sessionManager.getVisibleTranscript(c.session),
-          true,
-        );
-        // Issue #22 (SIBLING A) — IN-RUN trajectory-credit trigger. MUST run BEFORE the
-        // currentSessionInstinctIds.delete below (the participating set is read inside). Default-OFF
-        // ⇒ no-op ⇒ byte-identical. Success-only: a benign cancel (`cancelled`) or a non-COMPLETE
-        // terminal passes success=false ⇒ no reinforcement. (#22's sole writer under flag-on — the
-        // route-level endTask record is suppressed when the flag is on; see endTask's
-        // suppressTrajectoryRecord.)
-        self.recordInRunTrajectoryCredit({
-          chatId: c.chatId,
-          sessionId: c.chatId,
-          taskDescription: state.taskDescription,
-          success: !cancelled && state.phase === AgentPhase.COMPLETE,
-          stepResults: state.stepResults,
-        });
-        // GAP1 teardown — symmetric to v1's runAgentLoop finally (:6232-6234): clear the per-session
-        // instinct IDs so a later, unrelated emitToolResult on this chatId cannot mis-attribute to a
-        // prior run's instincts, and prevent the Map growing unbounded. Runs from the spine's finally
-        // on EVERY exit (happy or throw), exactly once per run.
-        self.currentSessionInstinctIds.delete(c.chatId);
-        self.propagateInstinctIdsToChannel(c.chatId, []);
-        } finally {
-          // v1 parity (runBackgroundTask finally :4894-4896): settle the joined worker card WITHOUT
-          // marking the parent whole-goal episode terminal — the episode stays open until the ROOT
-          // run's requestEnd. In a FINALLY so a persistence throw above can never leave the card
-          // dangling "executing" (trio catch). failed mirrors v1's workerRequestFailed (:4884:
-          // finalStatus failed/blocked → true) from the spine's REAL terminal status — NOT from
-          // state.phase, which never reaches COMPLETE in production (trio HIGH catch); a benign
-          // cancel also settles as failed (v1: the abort catch transitioned FAILED).
-          if (c.joinsParentEpisode && c.conversationScope) {
-            self.monitorLifecycle?.joinEpisodeEnd(
-              c.conversationScope,
-              cancelled || terminalStatus === "failed" || terminalStatus === "blocked",
-              c.workerMonitorScope,
-            );
-          }
-        }
-      },
-      buildResultProjection: (params: ResultProjectionParams): AgentRunResultProjection =>
-        self.portBuildResultProjection(params, ctx()),
-    };
-    const port: OrchestratorPort = Object.freeze(portImpl);
-
-    return {
-      port,
-      // silentStream's 8th param is typed `runClock?: RunClock`; the gateway's SilentStreamPort
-      // types it `runClock: unknown` (carrying no control-plane dependency). The bodies are
-      // identical — the cast localizes the variance mismatch to this one line. Phase 1c: the
-      // gateway now FORWARDS the run's RunClock (req.runClock) into that slot; this real method
-      // narrows the `unknown` back to RunClock and re-arms call liveness per chunk (v1 parity).
-      gateway: new ModelGateway(self.silentStream as unknown as SilentStreamPort),
-      seed: self.buildPolicySeed(),
-      // Returns the SHARED per-run adapter (see the bug-fix note above) — the SAME instance the spine
-      // records failures/successes into via the port, so the ledger's verdict rules read live health.
-      createHealthCore: () => runHealthAdapter,
-    };
+  /**
+   * The OrchestratorPort assembly the V2AgentRunner drives (relocation Step 9 → engine port.ts).
+   * The engine owns the port; the shell just injects its residual callbacks (see the AgentEngine ctor).
+   */
+  createAgentCorePort(): ReturnType<AgentEngine["createPort"]> {
+    return this.engine.createPort();
   }
 
   /**
@@ -5210,91 +4815,19 @@ export class Orchestrator {
   }
 
 
-  /**
-   * COMPOSE the per-run setup helpers into the PortRunSetup the spine threads + the run context the
-   * port closes over (relocation Step 7 → setup.ts; mirrors runAgentLoop's prologue).
-   */
-  private async setupAgentCoreRun(
-    request: AgentRunSetupInput,
-    iterationHealth: IterationHealthTracker,
-    healthAdapter: IterationHealthCoreAdapter,
-  ): Promise<{ setup: PortRunSetup; runCtx: AgentCorePortRunContext }> {
-    return this.engine.setupAgentCoreRun(request, iterationHealth, healthAdapter);
-  }
 
   /** Provider-aware context-window trim for the v2 run (relocation Step 7 → setup.ts). */
-  private trimContextWindowForRun(
-    session: Session,
-    _mode: "interactive" | "background",
-    runCtx: AgentCorePortRunContext,
-  ): void {
-    this.engine.trimContextWindowForRun(session, _mode, runCtx);
-  }
 
-  /**
-   * The verdict bridge's HEALTH/FAILURE half. Records the failure into the LIVE tracker (the shared
-   * prefix of recordPhase1a/1bFailureAndVerdict: setProvider + recordFailure(provider,false)) and
-   * derives callStalled exactly as buildPhase1bVerdictInput. Returns INPUT, not a verdict — the
-   * spine owns the single ledger.verdict gate. Benign aborts re-throw upstream and never reach here.
-   */
-  private classifyAgentCoreFailure(
-    params: ClassifyFailureParams,
-    runCtx: AgentCorePortRunContext,
-  ): FailureVerdictContribution {
-    return this.engine.classifyAgentCoreFailure(params, runCtx);
-  }
 
   
 
-  /**
-   * Parse the model's reflection preamble into {decision, wasOverride} — v1's
-   * processReflectionPreamble verbatim (orchestrator.ts ~4001 / ~5432). The spine calls this at a
-   * REFLECTING boundary, then threads `decision` into portDispatchReflection so the model's own
-   * DONE/REPLAN/CONTINUE drives the boundary. Records the reflection into the journal + learning
-   * metrics exactly as v1 (the side effects live inside processReflectionPreamble).
-   */
-  private async portParseReflectionDecision(
-    params: ParseReflectionDecisionParams,
-    runCtx: AgentCorePortRunContext,
-  ): Promise<ParsedReflectionDecision> {
-    return this.engine.portParseReflectionDecision(params, runCtx);
-  }
 
-  /**
-   * COMPOSE the 4 reflection handlers on (mode, decision) and ADAPT the action-union to the flat
-   * {@link ReflectionDispatchResult}. Faithful to the interactive call-site (orchestrator.ts
-   * ~5380-5491) and the background call-site (~3943-4019).
-   */
-  private async portDispatchReflection(
-    params: DispatchReflectionParams,
-    runCtx: AgentCorePortRunContext,
-  ): Promise<ReflectionDispatchResult> {
-    return this.engine.portDispatchReflection(params, runCtx);
-  }
 
   /** COMPOSE the 2 end-turn handlers on mode, ADAPT union → {agentState, finalText}. */
-  private async portDispatchEndTurn(
-    params: DispatchEndTurnParams,
-    runCtx: AgentCorePortRunContext,
-  ): Promise<EndTurnDispatchResult> {
-    return this.engine.portDispatchEndTurn(params, runCtx);
-  }
 
   /** BIND handlePlanPhaseTransition (no auto-transition; the goal-decomposition step follows). */
-  private async portHandlePlanPhase(
-    params: PlanPhaseParams,
-    runCtx: AgentCorePortRunContext,
-  ): Promise<PlanPhaseResult> {
-    return this.engine.portHandlePlanPhase(params, runCtx);
-  }
 
   /** ADAPT mutation→pure: project the terminal state + accumulated effects into the result fields. */
-  private portBuildResultProjection(
-    params: ResultProjectionParams,
-    runCtx: AgentCorePortRunContext,
-  ): AgentRunResultProjection {
-    return this.engine.buildResultProjection(params, runCtx);
-  }
 
   
 
@@ -5320,16 +4853,6 @@ export class Orchestrator {
    * The spine calls this through `port.executeToolCalls(toolCalls, session, agentState)`; the
    * positional args are decoded here so the port stays the existing ExecuteToolCallsFn shape.
    */
-  /**
-   * The port's bound FULL TOOL TURN (relocation Step 8 → tool-turn.ts). Positional args are decoded
-   * inside the engine fn so the port stays the existing ExecuteToolCallsFn shape.
-   */
-  private async portExecuteToolTurn(
-    args: unknown[],
-    runCtx: AgentCorePortRunContext,
-  ): Promise<AgentCoreToolTurnResult> {
-    return this.engine.portExecuteToolTurn(args, runCtx);
-  }
 
 }
 

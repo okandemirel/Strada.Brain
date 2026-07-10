@@ -55,6 +55,7 @@ import {
   trimContextWindowForRun,
 } from "./setup.js";
 import { portExecuteToolTurn, type AgentCoreToolTurnResult } from "./tool-turn.js";
+import { createAgentCorePort } from "./port.js";
 import type { UserProfile } from "../../memory/unified/user-profile-store.js";
 import type { AgentRunSetupInput, RunSetup as PortRunSetup } from "../runner/orchestrator-port.js";
 import type { IterationHealthTracker } from "../../agents/iteration-health-tracker.js";
@@ -215,5 +216,10 @@ export class AgentEngine {
   // ── Tool turn (relocation Step 8) ─────────────────────────────────────────────────────────────
   portExecuteToolTurn(args: unknown[], runCtx: EngineRunContext): Promise<AgentCoreToolTurnResult> {
     return portExecuteToolTurn(this.deps, args, runCtx);
+  }
+
+  // ── Port assembly (relocation Step 9, FINAL) ──────────────────────────────────────────────────
+  createPort(): ReturnType<typeof createAgentCorePort> {
+    return createAgentCorePort(this, this.deps);
   }
 }

@@ -108,6 +108,7 @@ import type { RenderDeps } from "./render.js";
 import type { ReflectionDeps } from "./reflection.js";
 import type { SetupDeps } from "./setup.js";
 import type { ToolTurnDeps } from "./tool-turn.js";
+import type { PortDeps } from "./port.js";
 
 /**
  * The DI boundary for the relocated engine. Grows per relocation step (each module contributes
@@ -124,4 +125,5 @@ export interface EngineDeps
     RenderDeps,
     ReflectionDeps,
     SetupDeps,
-    ToolTurnDeps {}
+    ToolTurnDeps,
+    PortDeps {}

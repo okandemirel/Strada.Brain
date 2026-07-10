@@ -97,7 +97,7 @@ export interface SetupDeps extends ReflectionDeps, BudgetDeps {
     queryText: string,
     userId: string | undefined,
   ): Promise<void>;
-  getTaskExecutionContext(): { readonly identityKey?: string } | undefined;
+  getTaskExecutionContext(): { readonly identityKey?: string; readonly taskRunId?: string } | undefined;
   propagateInstinctIdsToChannel(chatId: string, instinctIds: string[]): void;
 }
 
