@@ -29,6 +29,8 @@ import {
 } from "./budget.js";
 import type { PolicySeed } from "../control/policy.js";
 import { prepareIteration, type PrepareIterationParams, type PreparedIteration } from "./prepare-iteration.js";
+import { buildResultProjection } from "./synthesis.js";
+import type { ResultProjectionParams, AgentRunResultProjection } from "../runner/orchestrator-port.js";
 
 export class AgentEngine {
   constructor(private readonly deps: EngineDeps) {}
@@ -89,5 +91,10 @@ export class AgentEngine {
   // ── Per-iteration setup (relocation Step 3) ───────────────────────────────────────────────
   prepareIteration(params: PrepareIterationParams): PreparedIteration {
     return prepareIteration(this.deps, params);
+  }
+
+  // ── Result projection (relocation Step 4) ─────────────────────────────────────────────────
+  buildResultProjection(params: ResultProjectionParams, runCtx: EngineRunContext): AgentRunResultProjection {
+    return buildResultProjection(this.deps, params, runCtx);
   }
 }

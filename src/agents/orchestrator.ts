@@ -107,7 +107,6 @@ import {
   userExplicitlyAskedForPlan,
   type CompletionReviewStageName,
   type CompletionReviewStageResult,
-  type VerifierPipelineResult,
 } from "./autonomy/index.js";
 import { MUTATION_TOOLS, WRITE_OPERATIONS, extractFilePath, isVerificationToolName } from "./autonomy/constants.js";
 import { DMPolicy, isDestructiveOperation, type DMPolicyConfig } from "../security/dm-policy.js";
@@ -231,10 +230,7 @@ import {
   toExecutionPhase as toExecutionPhaseModel,
 } from "./orchestrator-phase-telemetry.js";
 import {
-  type WorkerArtifactMetadata,
-  type WorkerReviewFinding,
   type WorkerRunResult,
-  type WorkerVerificationResult,
   type WorkspaceLease,
 } from "./supervisor/supervisor-types.js";
 import type { SupervisorResult } from "../supervisor/supervisor-types.js";
@@ -1190,6 +1186,8 @@ export class Orchestrator {
       streamStallTimeoutMs: this.streamStallTimeoutMs,
       // Step 3 (prepare-iteration): the tool registry is shell state → inject as a callback.
       buildWorkerToolDefinitions: (task, phase, role) => this.buildWorkerToolDefinitions(task, phase, role),
+      // Step 4 (synthesis/projection).
+      providerManager: this.providerManager,
     });
   }
 
@@ -2073,111 +2071,8 @@ export class Orchestrator {
     }
   }
 
-  private toWorkerVerificationResults(
-    result: VerifierPipelineResult | null | undefined,
-  ): WorkerVerificationResult[] {
-    if (!result) {
-      return [];
-    }
 
-    return result.checks.map((check) => ({
-      name: check.name,
-      status: check.status,
-      summary: check.summary,
-    }));
-  }
 
-  private toWorkerReviewFindings(
-    result: VerifierPipelineResult | null | undefined,
-  ): WorkerReviewFinding[] {
-    if (!result) {
-      return [];
-    }
-
-    const findings: WorkerReviewFinding[] = [];
-    for (const check of result.checks) {
-      if (check.status === "issues") {
-        findings.push({
-          source: check.name === "completion-review" ? "completion-review" : "integration",
-          severity: check.gate ? "error" : "warning",
-          message: check.summary,
-        });
-      }
-    }
-
-    const reviewDecision = result.reviewDecision;
-    if (reviewDecision?.reviews) {
-      const reviewSources: Array<{
-        key: keyof NonNullable<typeof reviewDecision.reviews>;
-        source: WorkerReviewFinding["source"];
-      }> = [
-        { key: "code", source: "code-review" },
-        { key: "simplify", source: "simplify" },
-        { key: "security", source: "security-review" },
-      ];
-      for (const reviewSource of reviewSources) {
-        if (reviewDecision.reviews[reviewSource.key] === "issues") {
-          findings.push({
-            source: reviewSource.source,
-            severity: "error",
-            message: `${reviewSource.source} found issues during completion review.`,
-          });
-        }
-      }
-    }
-
-    for (const finding of reviewDecision?.findings ?? []) {
-      findings.push({
-        source: "completion-review",
-        severity: result.decision === "approve" ? "info" : "warning",
-        message: finding,
-      });
-    }
-
-    for (const stageResult of result.stageResults ?? []) {
-      const source = stageResult.stage === "code"
-        ? "code-review"
-        : stageResult.stage === "simplify"
-          ? "simplify"
-          : "security-review";
-      for (const finding of stageResult.findings ?? []) {
-        findings.push({
-          source,
-          severity: stageResult.status === "issues" ? "warning" : "info",
-          message: finding,
-        });
-      }
-    }
-
-    return findings;
-  }
-
-  private buildWorkerArtifacts(params: {
-    workspaceLease?: WorkspaceLease;
-    workspaceLeaseRetained?: boolean;
-    touchedFiles: readonly string[];
-    finalSummary: string;
-  }): WorkerArtifactMetadata[] {
-    const artifacts: WorkerArtifactMetadata[] = [];
-    if (params.workspaceLease) {
-      artifacts.push({
-        kind: "workspace",
-        summary: `Worker executed in isolated workspace ${params.workspaceLease.id}.`,
-        ...(params.workspaceLeaseRetained !== false ? { path: params.workspaceLease.path } : {}),
-      });
-    }
-    if (params.touchedFiles.length > 0) {
-      artifacts.push({
-        kind: "patch",
-        summary: `Touched ${params.touchedFiles.length} file(s).`,
-      });
-    }
-    artifacts.push({
-      kind: "result",
-      summary: params.finalSummary,
-    });
-    return artifacts;
-  }
 
   /**
    * Dynamically add a tool to the orchestrator's available tools.
@@ -6550,47 +6445,7 @@ export class Orchestrator {
     params: ResultProjectionParams,
     runCtx: AgentCorePortRunContext,
   ): AgentRunResultProjection {
-    const info = this.providerManager.getActiveInfo?.(runCtx.identityKey);
-    const snapshot = this.providerManager.getCatalogSnapshot?.(runCtx.identityKey);
-    const allTouchedFiles = [
-      ...new Set([
-        ...params.touchedFiles,
-        ...runCtx.selfVerification.getState().touchedFiles,
-        ...(runCtx.workerCollector?.childWorkerResults ?? []).flatMap((r) => r.touchedFiles ?? []),
-      ]),
-    ];
-    return {
-      provider: runCtx.lastAssignment?.providerName ?? info?.providerName ?? "unknown",
-      model: runCtx.lastAssignment?.modelId ?? info?.model,
-      // The catalog exposes only assignmentVersion; surface it as the catalog version string and
-      // fall back to "unknown" when no snapshot getter exists (lightweight test providerManager).
-      catalogVersion: snapshot ? String(snapshot.assignmentVersion) : "unknown",
-      assignmentVersion: snapshot?.assignmentVersion ?? 0,
-      // The spine accumulates the tool trace BY VALUE (params); the run collector exists only
-      // for what the SHARED handlers write during the run — the verifier pipeline result —
-      // which the projection reads back here (v1 parity: runWorkerTask's collector projection).
-      workspaceId: runCtx.workspaceLease?.id, // v1 parity: runWorkerTask result.workspaceId
-      // v1 parity (trio catch): union the spine's by-value trace files with selfVerification's
-      // ingested state AND delegated child workers' touchedFiles — the deleted runWorkerTask
-      // merged both (collector.touchedFiles = selfVerification state; child files unioned), so
-      // a sub-agent's edits must keep surfacing in the parent's result + artifacts.
-      touchedFiles: allTouchedFiles,
-      toolTrace: params.toolTrace.map((t) => ({
-        toolName: t.toolName,
-        success: t.success,
-        summary: "",
-        timestamp: 0,
-      })),
-      verificationResults: this.toWorkerVerificationResults(runCtx.workerCollector?.verifierResult),
-      reviewFindings: this.toWorkerReviewFindings(runCtx.workerCollector?.verifierResult),
-      // v1 parity: buildWorkerArtifacts surfaces the workspace + touched-files + result summary.
-      artifacts: this.buildWorkerArtifacts({
-        workspaceLease: runCtx.workspaceLease,
-        workspaceLeaseRetained: runCtx.workspaceLeaseRetained,
-        touchedFiles: allTouchedFiles,
-        finalSummary: params.final.summary,
-      }),
-    };
+    return this.engine.buildResultProjection(params, runCtx);
   }
 
   /**
