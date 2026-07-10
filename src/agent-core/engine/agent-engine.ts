@@ -28,6 +28,7 @@ import {
   canAutoContinueBackgroundEpoch,
 } from "./budget.js";
 import type { PolicySeed } from "../control/policy.js";
+import { prepareIteration, type PrepareIterationParams, type PreparedIteration } from "./prepare-iteration.js";
 
 export class AgentEngine {
   constructor(private readonly deps: EngineDeps) {}
@@ -83,5 +84,10 @@ export class AgentEngine {
 
   canAutoContinueBackgroundEpoch(completedEpochCount: number): boolean {
     return canAutoContinueBackgroundEpoch(this.deps, completedEpochCount);
+  }
+
+  // ── Per-iteration setup (relocation Step 3) ───────────────────────────────────────────────
+  prepareIteration(params: PrepareIterationParams): PreparedIteration {
+    return prepareIteration(this.deps, params);
   }
 }

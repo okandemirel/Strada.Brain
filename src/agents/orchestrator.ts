@@ -212,7 +212,6 @@ import {
 } from "../agent-core/runner/index.js";
 import { getResilienceMessage, type MessageKey } from "./resilience-messages.js";
 import {
-  buildPhasePromptSection,
   recordStepResultsAndCheckReflection,
   buildToolResultContentBlocks,
   handlePlanPhaseTransition,
@@ -245,7 +244,6 @@ import {
   resolveProviderModelId as resolveProviderModelIdHelper,
   resolveSupervisorAssignment as resolveSupervisorAssignmentHelper,
   buildSupervisorExecutionStrategy as buildSupervisorExecutionStrategyHelper,
-  getPinnedToolTurnAssignment as getPinnedToolTurnAssignmentHelper,
   buildSupervisorRolePrompt as buildSupervisorRolePromptHelper,
   resolveConsensusReviewAssignment as resolveConsensusReviewAssignmentHelper,
   stripInternalDecisionMarkers as stripInternalDecisionMarkersHelper,
@@ -1190,6 +1188,8 @@ export class Orchestrator {
       maxIterations: this.maxIterations,
       streamInitialTimeoutMs: this.streamInitialTimeoutMs,
       streamStallTimeoutMs: this.streamStallTimeoutMs,
+      // Step 3 (prepare-iteration): the tool registry is shell state → inject as a callback.
+      buildWorkerToolDefinitions: (task, phase, role) => this.buildWorkerToolDefinitions(task, phase, role),
     });
   }
 
@@ -1691,13 +1691,6 @@ export class Orchestrator {
   }
 
 
-  private getPinnedToolTurnAssignment(
-    strategy: SupervisorExecutionStrategy,
-    phase: AgentPhase,
-    pinnedProvider: SupervisorAssignment | null,
-  ): SupervisorAssignment {
-    return getPinnedToolTurnAssignmentHelper(strategy, phase, pinnedProvider);
-  }
 
   private buildSupervisorRolePrompt(
     strategy: SupervisorExecutionStrategy,
@@ -1798,7 +1791,6 @@ export class Orchestrator {
     projectWorldFingerprint?: string;
     enableGoalDetection: boolean;
     fixedExecutionStrategy?: SupervisorExecutionStrategy;
-    /** Optional: pass IterationHealthTracker to inject health awareness into the prompt when failures have occurred. */
     iterationHealth?: IterationHealthTracker;
   }): {
     executionStrategy: SupervisorExecutionStrategy;
@@ -1812,46 +1804,7 @@ export class Orchestrator {
     }>;
     currentToolNames: string[];
   } {
-    const executionStrategy = params.fixedExecutionStrategy ?? this.buildSupervisorExecutionStrategy(
-      params.prompt,
-      params.identityKey,
-      params.fallbackProvider,
-      params.projectWorldFingerprint,
-    );
-
-    let activePrompt = params.systemPrompt + buildPhasePromptSection(
-      params.agentState,
-      params.executionJournal,
-      { enableGoalDetection: params.enableGoalDetection },
-    );
-
-    const currentAssignment = this.getPinnedToolTurnAssignment(
-      executionStrategy,
-      params.agentState.phase,
-      params.toolTurnAffinity,
-    );
-    const currentProvider = currentAssignment.provider;
-    const currentToolDefinitions = this.buildWorkerToolDefinitions(
-      executionStrategy.task,
-      params.agentState.phase,
-      currentAssignment.role,
-    );
-    const currentToolNames = currentToolDefinitions.map((d) => d.name);
-    activePrompt += this.buildSupervisorRolePrompt(executionStrategy, currentAssignment);
-
-    // Append provider health awareness when failures have occurred during this task
-    if (params.iterationHealth && params.iterationHealth.getTotalFailures() > 0) {
-      activePrompt += `\n\n## Provider Health Awareness\nThe AI provider has experienced ${params.iterationHealth.getTotalFailures()} failure(s) during this task (current failure rate: ${(params.iterationHealth.getFailureRate() * 100).toFixed(0)}%). If you notice [Provider Health Report] messages in the conversation, this means the provider was temporarily unavailable. Adapt your approach: use fewer tool calls per step, simplify complex operations, and consider providing partial results if the provider remains unstable. Your goal is to deliver the best possible result despite infrastructure challenges.`;
-    }
-
-    return {
-      executionStrategy,
-      activePrompt,
-      currentAssignment,
-      currentProvider,
-      currentToolDefinitions,
-      currentToolNames,
-    };
+    return this.engine.prepareIteration(params);
   }
 
   private shouldUseSupervisorSynthesis(strategy: SupervisorExecutionStrategy): boolean {
