@@ -26,6 +26,8 @@ export interface BudgetDeps {
   /** LAZY GETTER — the unified budget manager is set AFTER construction (setter-backed). */
   readonly unifiedBudgetManager: () => {
     getConfig?: () => { interactiveTokenBudget?: number | null } | undefined;
+    /** Subscribe to runtime budget-config changes (mid-task /token raise); returns unsubscribe. */
+    onConfigUpdated?: (listener: () => void) => () => void;
   } | null;
   readonly taskConfig: TaskConfig;
   readonly maxIterations?: number;
@@ -50,16 +52,25 @@ export function getLiveInteractiveTokenBudget(deps: BudgetDeps): number {
   return deps.taskConfig.interactiveTokenBudget;
 }
 
+/**
+ * The live interactive OUTPUT-token cap with the -1→∞ "unbounded" sentinel resolved. THIS is what the
+ * control-plane Budget is seeded with (buildPolicySeed) and what a mid-task `/token` raise re-reads —
+ * the single source of the sentinel transform, so the two never drift.
+ */
+export function resolveLiveOutputTokenCap(deps: BudgetDeps): number {
+  const live = getLiveInteractiveTokenBudget(deps);
+  return live === -1 ? Number.POSITIVE_INFINITY : live;
+}
+
 /** Phase 1b — build the PolicySeed the control plane resolves the run's clock/budget from. */
 export function buildPolicySeed(deps: BudgetDeps): PolicySeed {
-  const liveTokenBudget = getLiveInteractiveTokenBudget(deps);
   return {
     streamInitialTimeoutMs: deps.streamInitialTimeoutMs,
     streamStallTimeoutMs: deps.streamStallTimeoutMs,
     providerFirstResponseMs: DEFAULT_LLM_PROVIDER_FIRST_RESPONSE_TIMEOUT_MS,
     taskInactivityMs: DEFAULT_TASK_INACTIVITY_TIMEOUT_MS,
     minInactivityOverStreamRatio: PHASE1B_MIN_INACTIVITY_OVER_STREAM_RATIO,
-    outputTokenCap: liveTokenBudget === -1 ? Number.POSITIVE_INFINITY : liveTokenBudget,
+    outputTokenCap: resolveLiveOutputTokenCap(deps),
     costCapUsd: Number.POSITIVE_INFINITY,
     // taskHardMs omitted → resolver uses Infinity (v1 has no wall-clock task ceiling). The
     // 3h27m-runaway bound stays the iteration limit + loopDetectionBlocked guard in 1b.

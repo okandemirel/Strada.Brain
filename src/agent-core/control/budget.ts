@@ -28,15 +28,26 @@ export interface Budget {
   debit(usage: TokenUsage): void;
   /** A deterministic slice for a child; the child's own debits also propagate up here. */
   carveChild(weight: number, totalWeight: number): BudgetSlice;
+  /**
+   * Raise the OUTPUT-token cap of a LIVE run (the mid-task `/token` raise). Raise-only: a newCap
+   * not strictly greater than the current cap is ignored, so a concurrent config LOWERING can never
+   * strand an in-flight run below what it has already spent (and a child's carved slice is untouched).
+   * The per-iteration gate re-reads remainingOutputTokens(), so the new headroom is observed on the
+   * next tick. Returns true iff the cap actually grew.
+   */
+  raiseOutputCap(newCap: number): boolean;
 }
 
 class BudgetImpl implements Budget {
   private outputRemaining: number;
+  /** The current cap (== outputRemaining + spent). Tracked so a raise adds only the delta. */
+  private outputCap: number;
   private costRemaining: number;
   private inputSeen = 0;
 
   constructor(outputCap: number, costCapUsd: number) {
     this.outputRemaining = outputCap;
+    this.outputCap = outputCap;
     this.costRemaining = costCapUsd;
   }
 
@@ -56,6 +67,13 @@ class BudgetImpl implements Budget {
     this.inputSeen += Math.max(0, usage.inputTokens);
     this.outputRemaining -= Math.max(0, usage.outputTokens);
     this.costRemaining -= Math.max(0, usage.costUsd ?? 0);
+  }
+
+  raiseOutputCap(newCap: number): boolean {
+    if (!(newCap > this.outputCap)) return false;
+    this.outputRemaining += newCap - this.outputCap;
+    this.outputCap = newCap;
+    return true;
   }
 
   carveChild(weight: number, totalWeight: number): BudgetSlice {

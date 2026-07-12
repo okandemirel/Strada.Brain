@@ -242,6 +242,24 @@ export class V2AgentRunner implements AgentRunner {
       );
     }
 
+    // ─── Mid-task /token RAISE: subscribe the LIVE Budget to runtime config changes ────────────────
+    // The interactive token cap is SEEDED once at prologue (buildPolicySeed → Budget), but the
+    // per-iteration gate re-reads budget.remainingOutputTokens() every tick — so a `/token 500k` mid-run
+    // had zero effect (the cap was frozen). Bridge the run to UnifiedBudgetManager.updateConfig: on a
+    // config change re-read the resolved cap (same seed transform, incl. the -1→∞ unbounded sentinel)
+    // and raise the Budget in place; the next gate tick observes the headroom. Raise-only (Budget guards
+    // it), and interactive-only — background epochs seed their own cap per epoch and a global config
+    // event must not perturb an in-flight epoch's frozen slice. Unsubscribed in the finally (exception-
+    // safe, mirroring the externalSignal hook). This wires the niche deferred at buildPolicySeed.
+    let unsubBudgetConfig: (() => void) | undefined;
+    if (isInteractive(mode)) {
+      unsubBudgetConfig = port.onBudgetConfigChanged(() => {
+        if (budget.raiseOutputCap(port.getLiveOutputTokenCap())) {
+          log.info("[v2-token-raise] interactive run output-token cap raised mid-task", { runId });
+        }
+      });
+    }
+
     // Hoisted ABOVE the try so the finally can read the latest state + the resolved setup on EVERY
     // exit (happy or throw). The loop is the sole writer of AgentState; every mode seeds the same
     // initial PLANNING state (interactive vs background differ only via IOStrategy + policy).
@@ -747,6 +765,8 @@ export class V2AgentRunner implements AgentRunner {
         cancelReason,
       };
     } finally {
+      // Release the mid-task budget-raise subscription first (idempotent; no-op when unwired).
+      unsubBudgetConfig?.();
       // Durability + cleanup on EVERY exit (happy or throw) — v1 did this in its finally
       // (orchestrator.ts:4645-4666). persistTerminal advances session.lastJournalSnapshot;
       // skipping it on a throw corrupts the next turn's prologue. dispose()+close() are idempotent.

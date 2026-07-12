@@ -25,6 +25,7 @@ import {
 import {
   buildPolicySeed,
   getLiveInteractiveTokenBudget,
+  resolveLiveOutputTokenCap,
   getInteractiveIterationLimit,
   getBackgroundEpochIterationLimit,
   canAutoContinueBackgroundEpoch,
@@ -115,6 +116,11 @@ export class AgentEngine {
   // ── Budget / limits (relocation Step 2) ───────────────────────────────────────────────────
   getLiveInteractiveTokenBudget(): number {
     return getLiveInteractiveTokenBudget(this.deps);
+  }
+
+  /** The live output-token cap with the -1→∞ sentinel resolved (mid-task /token raise re-reads this). */
+  getLiveOutputTokenCap(): number {
+    return resolveLiveOutputTokenCap(this.deps);
   }
 
   buildPolicySeed(): PolicySeed {

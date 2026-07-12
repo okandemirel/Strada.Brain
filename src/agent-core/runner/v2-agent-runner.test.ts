@@ -314,6 +314,8 @@ function mkPort(provider: IAIProvider, opts: MockPortOptions = {}): Orchestrator
     canAutoContinueBackgroundEpoch: () => opts.canContinueEpoch ?? false,
     onEpochRollover: spies.onEpochRollover,
     getLiveInteractiveTokenBudget: () => 100_000,
+    getLiveOutputTokenCap: () => 100_000,
+    onBudgetConfigChanged: () => () => {},
     classifyIntent: async () => "intent",
     synthesizeFinal: spies.synthesizeFinal,
     persistTerminal: spies.persistTerminal,

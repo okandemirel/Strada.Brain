@@ -444,6 +444,8 @@ export interface OrchestratorPort {
    */
   onEpochRollover(continued: boolean, epoch: number, agentState: AgentState): Promise<void> | void;
   getLiveInteractiveTokenBudget(): number;
+  /** The live output-token cap with the -1→∞ unbounded sentinel resolved — what a mid-task raise re-reads. */
+  getLiveOutputTokenCap(): number;
   /**
    * 3.3 — render the SPECIFIC `token_budget_exceeded` notice (with {used, budget}) on the interactive
    * token-budget stop, v1 parity (runAgentLoop:5491). Called by the spine ONLY on an interactive
@@ -452,12 +454,20 @@ export interface OrchestratorPort {
    * the checkpoint is already saved by the spine. `budget-exhausted:tokens` is in the interactive
    * skip-set so the resilience adapter does NOT also render an abort on top.
    *
-   * NOTE (deferred): this surfaces the static control-plane budget stop with the right message; it does
-   * NOT honor a mid-task `/token` RAISE (v1 re-read the live budget each iteration). The raise needs the
-   * interactive control-plane Budget to be unlimited so a live gate is authoritative — a control-plane
-   * change deferred as a niche follow-up.
+   * A mid-task `/token` RAISE is now honored live via {@link onBudgetConfigChanged} — the interactive
+   * run subscribes to runtime budget-config changes and raises its control-plane Budget cap in place,
+   * so the per-iteration gate observes the new headroom on the next tick (no restart / re-seed).
    */
   renderInteractiveBudgetExceeded(): Promise<void>;
+
+  /**
+   * Subscribe to a runtime interactive budget-config change (the `/token` command / portal settings →
+   * UnifiedBudgetManager.updateConfig). The listener fires on every change; the interactive runner
+   * re-reads {@link buildPolicySeed}().outputTokenCap and raises its live Budget cap (raise-only).
+   * Returns an unsubscribe function to call in the run's finally; a no-op unsubscribe when no budget
+   * manager is wired. Interactive-only by the caller (background epochs seed their own caps per epoch).
+   */
+  onBudgetConfigChanged(listener: () => void): () => void;
 
   // ════ Intent ack (≤2s contract, §6) ════════════════════════════════════════════════
   /**

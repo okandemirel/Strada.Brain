@@ -280,7 +280,11 @@ export function createAgentCorePort(
       onEpochRollover: (continued, epoch, agentState) =>
         deps.portOnEpochRollover(continued, epoch, agentState, ctx()),
       getLiveInteractiveTokenBudget: () => engine.getLiveInteractiveTokenBudget(),
+      getLiveOutputTokenCap: () => engine.getLiveOutputTokenCap(),
       renderInteractiveBudgetExceeded: () => engine.portRenderInteractiveBudgetExceeded(ctx()),
+      // Mid-task /token raise: bridge the run to UnifiedBudgetManager config changes (no-op when unwired).
+      onBudgetConfigChanged: (listener) =>
+        deps.unifiedBudgetManager()?.onConfigUpdated?.(listener) ?? (() => {}),
 
       // ── H. GAP: classifyIntent → mirror the spine's first-clause fallback ────────────────────
       classifyIntent: async (prompt: string) => firstClause(prompt),

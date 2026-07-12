@@ -207,6 +207,27 @@ describe("Budget", () => {
     expect(b.carveChild(1, 4)).toEqual({ outputTokens: 250, costUsd: 2.5 });
     expect(b.carveChild(0, 0)).toEqual({ outputTokens: 0, costUsd: 0 });
   });
+
+  it("raiseOutputCap adds only the delta to the live remaining (mid-task /token raise)", () => {
+    const b = createBudget(1000, 5);
+    b.debit({ inputTokens: 0, outputTokens: 800, costUsd: 0 }); // 200 left of a 1000 cap
+    expect(b.raiseOutputCap(3000)).toBe(true); // cap 1000 → 3000: +2000 headroom
+    expect(b.remainingOutputTokens()).toBe(2200); // 200 already-spent-adjusted + 2000
+    // A second raise stacks on the NEW cap, not the original.
+    expect(b.raiseOutputCap(4000)).toBe(true);
+    expect(b.remainingOutputTokens()).toBe(3200);
+  });
+
+  it("raiseOutputCap is raise-only — a lower/equal cap is ignored (no mid-run strand)", () => {
+    const b = createBudget(1000, 5);
+    b.debit({ inputTokens: 0, outputTokens: 900, costUsd: 0 }); // 100 left
+    expect(b.raiseOutputCap(1000)).toBe(false); // equal → no-op
+    expect(b.raiseOutputCap(500)).toBe(false); // lower → no-op (never strands below spent)
+    expect(b.remainingOutputTokens()).toBe(100);
+    // Raising to unbounded (∞, the -1 config sentinel) lifts the gate entirely.
+    expect(b.raiseOutputCap(Number.POSITIVE_INFINITY)).toBe(true);
+    expect(b.remainingOutputTokens()).toBe(Number.POSITIVE_INFINITY);
+  });
 });
 
 // ── policy ──────────────────────────────────────────────────────────────────
