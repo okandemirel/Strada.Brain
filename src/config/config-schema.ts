@@ -51,7 +51,7 @@ const boolFromString = (defaultValue: boolean) =>
     .string()
     .transform((s) => s.toLowerCase().trim())
     .transform((s) => s === "true" || s === "1" || s === "yes")
-    .default(String(defaultValue));
+    .prefault(String(defaultValue));
 
 /** Comma-separated list schema */
 const commaSeparatedList = z
@@ -158,13 +158,13 @@ export const configSchema = z
 
     // Project
     unityProjectPath: z.string().min(1, "UNITY_PROJECT_PATH is required"),
-    unityBridgePort: portSchema.default("7691"),
+    unityBridgePort: portSchema.prefault("7691"),
     unityBridgeAutoConnect: boolFromString(true),
     unityBridgeTimeout: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(1000).max(60000))
-      .default("5000"),
+      .prefault("5000"),
     unityEditorPath: z.string().min(1).optional(),
     stradaCoreRepoUrl: z.string().url().default(DEFAULT_STRADA_CORE_REPO_URL),
     stradaModulesRepoUrl: z.string().url().default(DEFAULT_STRADA_MODULES_REPO_URL),
@@ -175,17 +175,17 @@ export const configSchema = z
 
     // Dashboard
     dashboardEnabled: boolFromString(false),
-    dashboardPort: portSchema.default("3100"),
+    dashboardPort: portSchema.prefault("3100"),
 
     // WebSocket Dashboard
     websocketDashboardEnabled: boolFromString(false),
-    websocketDashboardPort: portSchema.default("3101"),
+    websocketDashboardPort: portSchema.prefault("3101"),
     websocketDashboardAuthToken: z.string().optional(),
     websocketDashboardAllowedOrigins: commaSeparatedList.optional(),
 
     // Prometheus
     prometheusEnabled: boolFromString(false),
-    prometheusPort: portSchema.default("9090"),
+    prometheusPort: portSchema.prefault("9090"),
 
     // Model Intelligence
     modelIntelligenceEnabled: boolFromString(true),
@@ -193,7 +193,7 @@ export const configSchema = z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(1).max(168))
-      .default("24"),
+      .prefault("24"),
     modelIntelligenceDbPath: z.string().default(".strada-memory/model-intelligence.db"),
     modelIntelligenceProviderSourcesPath: z
       .string()
@@ -210,43 +210,43 @@ export const configSchema = z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(64).max(4096))
-      .default("1536"),
+      .prefault("1536"),
     memoryAutoTiering: boolFromString(false),
     memoryAutoTieringIntervalMs: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(10000).max(3600000))
-      .default("300000"),
+      .prefault("300000"),
     memoryPromotionThreshold: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(1).max(1000))
-      .default("5"),
+      .prefault("5"),
     memoryDemotionTimeoutDays: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(1).max(365))
-      .default("7"),
+      .prefault("7"),
     memoryTierWorkingMax: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(10).max(10000))
-      .default("100"),
+      .prefault("100"),
     memoryTierEphemeralMax: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(10).max(100000))
-      .default("1000"),
+      .prefault("1000"),
     memoryTierPersistentMax: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(10).max(1000000))
-      .default("10000"),
+      .prefault("10000"),
     memoryEphemeralTtlHours: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(1).max(8760))
-      .default("24"),
+      .prefault("24"),
 
     // Memory Decay (Phase 21)
     memoryDecayEnabled: boolFromString(true),
@@ -254,23 +254,23 @@ export const configSchema = z
       .string()
       .transform((s) => parseFloat(s))
       .pipe(z.number().min(0.001).max(1.0))
-      .default("0.10"),
+      .prefault("0.10"),
     memoryDecayLambdaEphemeral: z
       .string()
       .transform((s) => parseFloat(s))
       .pipe(z.number().min(0.001).max(1.0))
-      .default("0.05"),
+      .prefault("0.05"),
     memoryDecayLambdaPersistent: z
       .string()
       .transform((s) => parseFloat(s))
       .pipe(z.number().min(0.001).max(1.0))
-      .default("0.01"),
+      .prefault("0.01"),
     memoryDecayExemptDomains: z.string().default("instinct,analysis-cache"),
     memoryDecayTimeoutMs: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(1000).max(300000))
-      .default("30000"),
+      .prefault("30000"),
 
     // Memory Consolidation (Phase 25)
     memoryConsolidationEnabled: boolFromString(true),
@@ -278,27 +278,27 @@ export const configSchema = z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(1).max(1440))
-      .default("5"),
+      .prefault("5"),
     memoryConsolidationThreshold: z
       .string()
       .transform((s) => parseFloat(s))
       .pipe(z.number().min(0.5).max(0.99))
-      .default("0.85"),
+      .prefault("0.85"),
     memoryConsolidationBatchSize: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(5).max(200))
-      .default("50"),
+      .prefault("50"),
     memoryConsolidationMinClusterSize: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(2).max(20))
-      .default("2"),
+      .prefault("2"),
     memoryConsolidationMaxDepth: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(1).max(10))
-      .default("3"),
+      .prefault("3"),
     memoryConsolidationModelTier: z
       .enum(["local", "cheap", "standard", "premium"])
       .default("cheap"),
@@ -317,7 +317,7 @@ export const configSchema = z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(500).max(16000))
-      .default("4000"),
+      .prefault("4000"),
 
     // Features
     streamingEnabled: boolFromString(true),
@@ -332,7 +332,7 @@ export const configSchema = z
           .min(1)
           .max(60 * 60 * 1000),
       )
-      .default(String(DEFAULT_LLM_STREAM_INITIAL_TIMEOUT_MS)),
+      .prefault(String(DEFAULT_LLM_STREAM_INITIAL_TIMEOUT_MS)),
     llmStreamStallTimeoutMs: z
       .string()
       .transform((s) => parseInt(s, 10))
@@ -343,7 +343,7 @@ export const configSchema = z
           .min(1)
           .max(60 * 60 * 1000),
       )
-      .default(String(DEFAULT_LLM_STREAM_STALL_TIMEOUT_MS)),
+      .prefault(String(DEFAULT_LLM_STREAM_STALL_TIMEOUT_MS)),
     llmProviderFirstResponseTimeoutMs: z
       .string()
       .transform((s) => parseInt(s, 10))
@@ -354,7 +354,7 @@ export const configSchema = z
           .min(1)
           .max(60 * 60 * 1000),
       )
-      .default(String(DEFAULT_LLM_PROVIDER_FIRST_RESPONSE_TIMEOUT_MS)),
+      .prefault(String(DEFAULT_LLM_PROVIDER_FIRST_RESPONSE_TIMEOUT_MS)),
 
     // Rate Limiting
     rateLimitEnabled: boolFromString(false),
@@ -362,27 +362,27 @@ export const configSchema = z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(0))
-      .default("0"),
+      .prefault("0"),
     rateLimitMessagesPerHour: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(0))
-      .default("0"),
+      .prefault("0"),
     rateLimitTokensPerDay: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(0))
-      .default("0"),
+      .prefault("0"),
     rateLimitDailyBudgetUsd: z
       .string()
       .transform((s) => parseFloat(s))
       .pipe(z.number().min(0))
-      .default("0"),
+      .prefault("0"),
     rateLimitMonthlyBudgetUsd: z
       .string()
       .transform((s) => parseFloat(s))
       .pipe(z.number().min(0))
-      .default("0"),
+      .prefault("0"),
 
     // Unified Budget System
     stradaBudgetDailyUsd: z
@@ -412,8 +412,8 @@ export const configSchema = z
       embeddingFallback: z.enum(["none", "local"]).default("local"),
       self: z.object({
         enabled: boolFromString(true),
-      }).default({}),
-    }).default({}),
+      }).prefault({}),
+    }).prefault({}),
 
     // Obsidian Integration
     obsidian: z.object({
@@ -422,14 +422,14 @@ export const configSchema = z
       apiKey: z.string().default(""),
       vaultPath: z.string().default(""),
       certPath: z.string().optional(),
-    }).default({}),
+    }).prefault({}),
 
     // Logging
     logLevel: logLevelSchema.default("info"),
     logFile: z.string().default("strada-brain.log"),
 
     // Web Channel
-    webChannelPort: portSchema.default("3000"),
+    webChannelPort: portSchema.prefault("3000"),
 
     // Plugins
     pluginDirs: commaSeparatedList.transform((arr) => arr ?? []),
@@ -440,62 +440,62 @@ export const configSchema = z
       .string()
       .transform((s) => parseFloat(s))
       .pipe(z.number().min(0.1).max(0.5))
-      .default("0.3"),
+      .prefault("0.3"),
     bayesianActiveThreshold: z
       .string()
       .transform((s) => parseFloat(s))
       .pipe(z.number().min(0.5).max(0.9))
-      .default("0.7"),
+      .prefault("0.7"),
     bayesianEvolutionThreshold: z
       .string()
       .transform((s) => parseFloat(s))
       .pipe(z.number().min(0.8).max(0.99))
-      .default("0.9"),
+      .prefault("0.9"),
     bayesianAutoEvolveThreshold: z
       .string()
       .transform((s) => parseFloat(s))
       .pipe(z.number().min(0.9).max(1.0))
-      .default("0.95"),
+      .prefault("0.95"),
     bayesianMaxInitial: z
       .string()
       .transform((s) => parseFloat(s))
       .pipe(z.number().min(0.3).max(0.8))
-      .default("0.5"),
+      .prefault("0.5"),
     bayesianCoolingPeriodDays: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(1).max(30))
-      .default("7"),
+      .prefault("7"),
     bayesianCoolingMinObservations: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(3).max(50))
-      .default("10"),
+      .prefault("10"),
     bayesianCoolingMaxFailures: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(2).max(10))
-      .default("3"),
+      .prefault("3"),
     bayesianPromotionMinObservations: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(10).max(100))
-      .default("25"),
+      .prefault("25"),
     bayesianVerdictCleanSuccess: z
       .string()
       .transform((s) => parseFloat(s))
       .pipe(z.number().min(0.5).max(1.0))
-      .default("0.9"),
+      .prefault("0.9"),
     bayesianVerdictRetrySuccess: z
       .string()
       .transform((s) => parseFloat(s))
       .pipe(z.number().min(0.3).max(0.8))
-      .default("0.6"),
+      .prefault("0.6"),
     bayesianVerdictFailure: z
       .string()
       .transform((s) => parseFloat(s))
       .pipe(z.number().min(0.0).max(0.5))
-      .default("0.2"),
+      .prefault("0.2"),
 
     // Learning Pipeline v2
     stradaConfidenceWeights: z
@@ -505,47 +505,47 @@ export const configSchema = z
         catch { return [0.15, 0.25, 0.15, 0.30, 0.15]; }
       })
       .pipe(z.array(z.number()).length(5))
-      .default("[0.15, 0.25, 0.15, 0.30, 0.15]"),
+      .prefault("[0.15, 0.25, 0.15, 0.30, 0.15]"),
     stradaMaxInstincts: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(10).max(100000))
-      .default("1000"),
+      .prefault("1000"),
     stradaDetectionWindowSize: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(5).max(200))
-      .default("20"),
+      .prefault("20"),
     stradaPeriodicExtractionInterval: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(10000).max(3600000))
-      .default("300000"),
+      .prefault("300000"),
 
     // Goal Decomposition
     goalMaxDepth: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(1).max(5))
-      .default("3"),
+      .prefault("3"),
 
     // Goal Execution Policy
     goalMaxRetries: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(0).max(5))
-      .default("1"),
+      .prefault("1"),
     goalMaxFailures: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(1).max(20))
-      .default("3"),
+      .prefault("3"),
     goalParallelExecution: boolFromString(true),
     goalMaxParallel: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(1).max(10))
-      .default("3"),
+      .prefault("3"),
 
     // Per-provider HTTP concurrency: caps simultaneous in-flight provider HTTP calls
     // PER PROVIDER KEY so the fan-out of parallel agents/nodes/delegations does not
@@ -555,19 +555,19 @@ export const configSchema = z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(1).max(20))
-      .default("3"),
+      .prefault("3"),
 
     // Goal Interactive Execution (Phase 16)
     stradaGoalEscalationTimeoutMinutes: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(1).max(120))
-      .default("10"),
+      .prefault("10"),
     stradaGoalMaxRedecompositions: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(0).max(10))
-      .default("2"),
+      .prefault("2"),
 
     // Tool Chain Synthesis
     toolChainEnabled: boolFromString(true),
@@ -575,42 +575,42 @@ export const configSchema = z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(2).max(20))
-      .default("3"),
+      .prefault("3"),
     toolChainSuccessRateThreshold: z
       .string()
       .transform((s) => parseFloat(s))
       .pipe(z.number().min(0.5).max(1.0))
-      .default("0.8"),
+      .prefault("0.8"),
     toolChainMaxActive: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(1).max(50))
-      .default("10"),
+      .prefault("10"),
     toolChainMaxAgeDays: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(1).max(365))
-      .default("30"),
+      .prefault("30"),
     toolChainLlmBudgetPerCycle: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(1).max(20))
-      .default("3"),
+      .prefault("3"),
     toolChainMinChainLength: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(2).max(5))
-      .default("2"),
+      .prefault("2"),
     toolChainMaxChainLength: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(3).max(10))
-      .default("5"),
+      .prefault("5"),
     toolChainDetectionIntervalMs: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(60000).max(3600000))
-      .default("300000"),
+      .prefault("300000"),
 
     // Chain Resilience (Phase 22)
     chainRollbackEnabled: boolFromString(false),
@@ -619,12 +619,12 @@ export const configSchema = z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(1).max(10))
-      .default("4"),
+      .prefault("4"),
     chainCompensationTimeoutMs: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(1000).max(300000))
-      .default("30000"),
+      .prefault("30000"),
 
     // Cross-Session Learning
     crossSessionEnabled: boolFromString(true),
@@ -632,7 +632,7 @@ export const configSchema = z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(1).max(365))
-      .default("90"),
+      .prefault("90"),
     crossSessionScopeFilter: z
       .enum(["project-only", "project+universal", "all"])
       .default("project+universal"),
@@ -640,17 +640,17 @@ export const configSchema = z
       .string()
       .transform((s) => parseFloat(s))
       .pipe(z.number().min(0.5).max(3.0))
-      .default("1.0"),
+      .prefault("1.0"),
     crossSessionScopeBoost: z
       .string()
       .transform((s) => parseFloat(s))
       .pipe(z.number().min(0.5).max(3.0))
-      .default("1.1"),
+      .prefault("1.1"),
     crossSessionPromotionThreshold: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(2).max(10))
-      .default("3"),
+      .prefault("3"),
 
     // Identity
     agentName: z.string().default("Strada Brain"),
@@ -663,7 +663,7 @@ export const configSchema = z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(10000).max(300000))
-      .default("60000"),
+      .prefault("60000"),
     daemonTimezone: z.string().default(""),
     daemonHeartbeatFile: z.string().default("./HEARTBEAT.md"),
     daemonDailyBudget: z
@@ -675,12 +675,12 @@ export const configSchema = z
       .string()
       .transform((s) => parseFloat(s))
       .pipe(z.number().min(0.1).max(0.99))
-      .default("0.8"),
+      .prefault("0.8"),
     daemonApprovalTimeoutMin: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(1).max(1440))
-      .default("30"),
+      .prefault("30"),
     daemonAutoApproveTools: z
       .string()
       .transform((s) =>
@@ -689,22 +689,22 @@ export const configSchema = z
           .map((t) => t.trim())
           .filter(Boolean),
       )
-      .default(""),
+      .prefault(""),
     daemonBackoffBase: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(10000).max(600000))
-      .default("60000"),
+      .prefault("60000"),
     daemonBackoffMax: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(60000).max(86400000))
-      .default("3600000"),
+      .prefault("3600000"),
     daemonFailureThreshold: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(1).max(20))
-      .default("3"),
+      .prefault("3"),
     daemonIdlePause: boolFromString(false),
 
     // Daemon Triggers (Phase 15)
@@ -714,34 +714,34 @@ export const configSchema = z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(0).max(3600000))
-      .default("300000"),
+      .prefault("300000"),
     daemonDefaultDebounceMs: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(100).max(60000))
-      .default("500"),
+      .prefault("500"),
     checklistMorningHour: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(0).max(23))
-      .default("9"),
+      .prefault("9"),
     checklistAfternoonHour: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(0).max(23))
-      .default("14"),
+      .prefault("14"),
     checklistEveningHour: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(0).max(23))
-      .default("18"),
+      .prefault("18"),
 
     // Trigger Fire History Pruning (Phase 21)
     triggerFireRetentionDays: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(1).max(365))
-      .default("30"),
+      .prefault("30"),
 
     // Notification, Quiet Hours, Digest (Phase 18)
     stradaDigestEnabled: boolFromString(true),
@@ -761,17 +761,17 @@ export const configSchema = z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(0).max(23))
-      .default("8"),
+      .prefault("8"),
     stradaQuietBufferMax: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(10).max(10000))
-      .default("100"),
+      .prefault("100"),
     stradaDashboardHistoryDepth: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(1).max(1000))
-      .default("10"),
+      .prefault("10"),
 
     // Memory Re-Retrieval (Phase 17)
     stradaMemoryReRetrievalEnabled: boolFromString(true),
@@ -779,33 +779,33 @@ export const configSchema = z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(1).max(100))
-      .default("5"),
+      .prefault("5"),
     stradaMemoryTopicShiftEnabled: boolFromString(true),
     stradaMemoryTopicShiftThreshold: z
       .string()
       .transform((s) => parseFloat(s))
       .pipe(z.number().min(0.1).max(1.0))
-      .default("0.4"),
+      .prefault("0.4"),
     stradaMemoryMaxReRetrievals: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(1).max(100))
-      .default("10"),
+      .prefault("10"),
     stradaMemoryReRetrievalTimeoutMs: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(100).max(60000))
-      .default("5000"),
+      .prefault("5000"),
     stradaMemoryReRetrievalMemoryLimit: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(1).max(50))
-      .default("3"),
+      .prefault("3"),
     stradaMemoryReRetrievalRagTopK: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(1).max(50))
-      .default("6"),
+      .prefault("6"),
 
     // Multi-Agent (Phase 23)
     multiAgentEnabled: boolFromString(false),
@@ -813,22 +813,22 @@ export const configSchema = z
       .string()
       .transform(parseFloat)
       .pipe(z.number().min(0.01).max(100))
-      .default("5.00"),
+      .prefault("5.00"),
     agentMaxConcurrent: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(1).max(10))
-      .default("3"),
+      .prefault("3"),
     agentIdleTimeoutMs: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(60000))
-      .default("3600000"),
+      .prefault("3600000"),
     agentMaxMemoryEntries: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(100))
-      .default("5000"),
+      .prefault("5000"),
 
     // Task Delegation (Phase 24)
     taskDelegationEnabled: boolFromString(false),
@@ -836,12 +836,12 @@ export const configSchema = z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(1).max(5))
-      .default("2"),
+      .prefault("2"),
     agentMaxConcurrentDelegations: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(1).max(10))
-      .default("3"),
+      .prefault("3"),
     delegationTierLocal: z.string().default("ollama:llama3.3"),
     delegationTierCheap: z.string().default("deepseek:deepseek-chat"),
     delegationTierStandard: z.string().default("claude:claude-sonnet-4-6-20250514"),
@@ -859,17 +859,17 @@ export const configSchema = z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(10000).max(600000))
-      .default("300000"),
+      .prefault("300000"),
     deployExecutionTimeoutMs: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(30000).max(1800000))
-      .default("600000"),
+      .prefault("600000"),
     deployCooldownMinutes: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(1).max(1440))
-      .default("30"),
+      .prefault("30"),
     deployNotificationUrgency: z.enum(["low", "medium", "high", "critical"]).default("high"),
     deployPostScriptPath: z.string().optional(),
     deployRollbackScriptPath: z.string().optional(),
@@ -880,7 +880,7 @@ export const configSchema = z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(1).max(168))
-      .default("24"),
+      .prefault("24"),
 
     // Conformance Guard
     conformanceEnabled: boolFromString(true),
@@ -890,42 +890,42 @@ export const configSchema = z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(1).max(100))
-      .default("3"),
+      .prefault("3"),
     loopFingerprintWindow: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(1).max(200))
-      .default("20"),
+      .prefault("20"),
     loopDensityThreshold: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(1).max(100))
-      .default("5"),
+      .prefault("5"),
     loopDensityWindow: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(1).max(200))
-      .default("30"),
+      .prefault("30"),
     loopMaxRecoveryEpisodes: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(1).max(50))
-      .default("5"),
+      .prefault("5"),
     loopStaleAnalysisThreshold: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(1).max(20))
-      .default("3"),
+      .prefault("3"),
     loopHardCapReplan: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(2).max(20))
-      .default("5"),
+      .prefault("5"),
     loopHardCapBlock: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(3).max(30))
-      .default("8"),
+      .prefault("8"),
     progressAssessmentEnabled: boolFromString(true),
     // Daemon Full Autonomy
     daemonFullAutonomy: boolFromString(false),
@@ -936,12 +936,12 @@ export const configSchema = z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(0).max(86_400_000))
-      .default("120000"),
+      .prefault("120000"),
     interactionHeartbeatIntervalMs: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(1000).max(86_400_000))
-      .default("300000"),
+      .prefault("300000"),
     interactionEscalationPolicy: z
       .enum(["hard-blockers-only", "standard"])
       .default("hard-blockers-only"),
@@ -951,38 +951,38 @@ export const configSchema = z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(1).max(10))
-      .default("3"),
+      .prefault("3"),
     taskMessageBurstWindowMs: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(0).max(5000))
-      .default("350"),
+      .prefault("350"),
     taskMessageBurstMaxMessages: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(1).max(20))
-      .default("8"),
+      .prefault("8"),
     taskInteractiveMaxIterations: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(1).max(10_000))
-      .default("25"),
+      .prefault("25"),
     taskInteractiveTokenBudget: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(10_000).max(10_000_000))
-      .default("500000"),
+      .prefault("500000"),
     taskBackgroundEpochMaxIterations: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(1).max(10_000))
-      .default("50"),
+      .prefault("50"),
     taskBackgroundAutoContinue: boolFromString(true),
     taskBackgroundMaxEpochs: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(0).max(1_000_000))
-      .default("3"),
+      .prefault("3"),
 
     // Provider Routing
     routingPreset: z.enum(["budget", "balanced", "performance"]).default("balanced"),
@@ -994,12 +994,12 @@ export const configSchema = z
       .string()
       .transform((s) => parseFloat(s))
       .pipe(z.number().min(0).max(1))
-      .default("0.5"),
+      .prefault("0.5"),
     consensusMaxProviders: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(1).max(5))
-      .default("3"),
+      .prefault("3"),
 
     // Auto-Update
     autoUpdateEnabled: boolFromString(true),
@@ -1007,12 +1007,12 @@ export const configSchema = z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().positive())
-      .default("6"),
+      .prefault("6"),
     autoUpdateIdleTimeoutMin: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().positive())
-      .default("5"),
+      .prefault("5"),
     autoUpdateChannel: z.enum(["stable", "latest"]).default("latest"),
     autoUpdateNotify: boolFromString(true),
     autoUpdateAutoRestart: boolFromString(true),
@@ -1026,12 +1026,12 @@ export const configSchema = z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(1).max(16))
-      .default("4"),
+      .prefault("4"),
     stradaSupervisorNodeTimeoutMs: z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(10000).max(7_200_000))
-      .default("3600000"),
+      .prefault("3600000"),
     stradaSupervisorVerificationMode: z
       .enum(["always", "critical-only", "sampling", "disabled"])
       .default("critical-only"),
@@ -1039,7 +1039,7 @@ export const configSchema = z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(0).max(50))
-      .default("15"),
+      .prefault("15"),
     stradaSupervisorTriageProvider: z
       .string()
       .default("groq"),
@@ -1047,12 +1047,12 @@ export const configSchema = z
       .string()
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(0).max(20))
-      .default("3"),
+      .prefault("3"),
     stradaSupervisorDiversityCap: z
       .string()
       .transform((s) => parseFloat(s))
       .pipe(z.number().min(0).max(1))
-      .default("0.6"),
+      .prefault("0.6"),
   })
   .superRefine((data, ctx) => {
     // Bayesian threshold ordering validation: deprecated < active < evolution < autoEvolve

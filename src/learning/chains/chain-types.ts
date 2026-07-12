@@ -58,7 +58,7 @@ export const LLMChainOutputSchema = z.object({
   /** Parameter mappings for the chain */
   parameterMappings: z.array(ChainStepMappingSchema),
   /** Optional JSON schema for the composite tool's input */
-  inputSchema: z.record(z.unknown()).optional(),
+  inputSchema: z.record(z.string(), z.unknown()).optional(),
 });
 
 // =============================================================================
@@ -182,7 +182,7 @@ export const CompensatingActionSchema = z.object({
   /** Tool name to execute for compensation */
   toolName: z.string(),
   /** Maps compensation input params to source step output keys */
-  inputMappings: z.record(z.string()),
+  inputMappings: z.record(z.string(), z.string()),
 });
 
 /**

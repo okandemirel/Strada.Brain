@@ -8,7 +8,7 @@
  * - Utility types
  */
 
-import type { z } from "zod";
+import type { ZodSafeParseResult } from "zod";
 
 // =============================================================================
 // BRAND TYPES - Type-safe identifiers
@@ -274,7 +274,7 @@ export function isValid<T>(result: ValidationResult<T>): result is { kind: "vali
 }
 
 /** Convert Zod result to ValidationResult */
-export function fromZodResult<T>(result: z.SafeParseReturnType<unknown, T>): ValidationResult<T> {
+export function fromZodResult<T>(result: ZodSafeParseResult<T>): ValidationResult<T> {
   if (result.success) {
     return valid(result.data);
   }

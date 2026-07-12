@@ -224,7 +224,7 @@ export const shellCommandSchema = z.object({
   args: z.array(z.string().max(4096)).max(100).default([]),
   timeout: z.number().int().min(1000).max(300000).default(60000), // 1s to 5min
   cwd: safePathSchema.optional(),
-  env: z.record(z.string().max(4096)).optional(),
+  env: z.record(z.string(), z.string().max(4096)).optional(),
   captureOutput: z.boolean().default(true),
 });
 
@@ -373,14 +373,14 @@ export const searchQuerySchema = z.object({
     wholeWord: z.boolean().default(false),
     regex: z.boolean().default(false),
     maxResults: z.number().int().min(1).max(10000).default(100),
-  }).default({}),
+  }).prefault({}),
 });
 
 export const ragQuerySchema = z.object({
   query: z.string().min(1).max(2000),
   topK: z.number().int().min(1).max(50).default(5),
   threshold: z.number().min(0).max(1).default(0.7),
-  filters: z.record(z.string()).optional(),
+  filters: z.record(z.string(), z.string()).optional(),
 });
 
 // =============================================================================

@@ -51,7 +51,7 @@ Helpers: `some()`, `none()`, `fromNullable()`, `isSome()`, `isNone()`, `unwrapOp
 
 - `{ kind: "valid"; value: T }` or `{ kind: "invalid"; errors: ValidationError[] }`
 - `ValidationError` has fields: `path: string`, `message: string`, `code: string`
-- `fromZodResult()` converts `z.SafeParseReturnType` to `ValidationResult`
+- `fromZodResult()` converts `ZodSafeParseResult` to `ValidationResult`
 
 ## Vector Types
 
