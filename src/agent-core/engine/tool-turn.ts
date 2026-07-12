@@ -39,6 +39,53 @@ import type { SetupDeps } from "./setup.js";
 /** v1 parity: the PAOR reflection cadence on the agent-core route (orchestrator const copy). */
 const REFLECT_INTERVAL_AGENT_CORE = 3;
 
+/**
+ * BUG#1 P2 — SUPPRESSION GUARD (engine half). `true` iff this run has NO parent/supervisor board it
+ * would double-drive. This is the FIRST of a TWO-STAGE guard: the engine excludes supervisor sub-node
+ * workers + parent-episode rollup workers here, and MonitorLifecycle.stepBatch applies the SECOND,
+ * authoritative stage — it no-ops when the episode board was already re-rooted as a decomposed goal
+ * tree (goalDecomposed/goalRestructured). See stepBatch for why the decomposition check MUST live in
+ * MonitorLifecycle, not here.
+ *
+ * What each clause excludes — and, IMPORTANTLY, what it does NOT:
+ *   - `!goalContext`      — excludes supervisor sub-node workers that carry goalContext {rootId,nodeId}
+ *                           (bootstrap.ts createSupervisorExecuteNodeBridge stamps it) AND every
+ *                           delegated child linked to a supervisor tree. It is NOT a complete supervisor
+ *                           fence: in the FRESH-decompose path SupervisorBrain.execute decomposes into a
+ *                           LOCAL tree but never writes it back into dispatchContext.goalTree
+ *                           (supervisor-brain.ts:364), so the bridge stamps NO goalContext → such a
+ *                           worker CAN pass this clause. That is fine — those workers present a parent
+ *                           monitorScope (joinsParentEpisode below) and/or run on a board the supervisor
+ *                           already flipped to a goal tree; the AUTHORITATIVE suppression is the dagKind
+ *                           check in MonitorLifecycle.stepBatch, not this engine gate. (The supervisor
+ *                           ROOT never reaches portExecuteToolTurn — it returns early in the bg-executor.)
+ *   - `!joinsParentEpisode` — excludes a re-scoped worker that joined a PARENT episode (goalDecomposed/
+ *                           supervisor owned); it must not seed a step DAG onto a board it does not own.
+ *                           This catches the fresh-decompose supervisor worker above (it carries the
+ *                           parent monitorScope), plus any future non-supervisor rollup.
+ *
+ * So this engine gate is a FIRST-STAGE filter, deliberately not a complete supervisor/decomposition
+ * fence. The DECOMPOSITION check is deliberately NOT here (it was `goalsDecomposed === false`, a BUG
+ * that made this feature DEAD): the spine flips runCtx.goalsDecomposed true UNCONDITIONALLY on the
+ * first PLANNING turn (port.ts decomposeGoalsIfPlanning sets it BEFORE deciding whether anything
+ * actually decomposes), and PLANNING runs BEFORE the first EXECUTING tool turn — so goalsDecomposed is
+ * already true on EVERY run by the time portExecuteToolTurn fires, plain or decomposed. Whether the
+ * board is ACTUALLY a goal tree is authoritatively known only by MonitorLifecycle (it alone received
+ * goalDecomposed for a REAL tree — runProactiveGoalDecomposition returns early without touching the
+ * monitor when goalDecomposer.shouldDecompose is false), so that check lives in stepBatch (dagKind).
+ */
+export function isPlainLoop(runCtx: EngineRunContext): boolean {
+  return runCtx.goalContext === undefined && runCtx.joinsParentEpisode === false;
+}
+
+/** Human-readable label for a plain-loop batch node: the batch's tool names (deduped, capped). */
+export function summarizePlainLoopBatch(toolCalls: readonly ToolCall[]): string {
+  const names = [...new Set(toolCalls.map((tc) => tc.name).filter(Boolean))];
+  if (names.length === 0) return "Working…";
+  const shown = names.slice(0, 3).join(", ");
+  return names.length > 3 ? `${shown} +${names.length - 3}` : shown;
+}
+
 /** What the port's bound tool turn returns: the trace rows + the PAOR-advanced state. */
 export interface AgentCoreToolTurnResult {
   readonly trace: ReadonlyArray<{
@@ -75,6 +122,19 @@ export interface ToolTurnDeps extends SetupDeps {
     toolCalls: readonly ToolCall[];
     language?: ProgressLanguage;
   }): TaskProgressSignal;
+  /**
+   * BUG#1 P2 — emit ONE live plain-loop step-DAG node for a tool batch. The shell wires this to
+   * MonitorLifecycle.stepBatch (under the active episode root); a cycle-safe callback because the
+   * engine must not import workspaceBus / MonitorLifecycle directly (the tool-turn import rule).
+   * The engine calls it ONLY when its suppression guard admits a plain loop (no supervisor, no
+   * goal-tree/decomposition), so it can never collide with the supervisor node-id stream.
+   */
+  emitPlainLoopStep(params: {
+    conversationScope: string;
+    monitorScope?: string;
+    batchIndex: number;
+    toolLabel: string;
+  }): void;
 }
 
 export async function portExecuteToolTurn(
@@ -169,6 +229,29 @@ export async function portExecuteToolTurn(
       toolResults,
       reflectInterval: REFLECT_INTERVAL_AGENT_CORE,
     });
+
+    // STEP E.5 — BUG#1 P2: live plain-loop step DAG. Model each tool batch as a node so the plain
+    // interactive/background loop drives per-node monitor status (executing→completed) instead of
+    // one static "executing" card for the whole run. NON-FATAL: a monitor emit must never fail the
+    // tool turn. TWO-STAGE suppression: isPlainLoop here excludes supervisor sub-node + parent-rollup
+    // workers (they carry goalContext / joinsParentEpisode); MonitorLifecycle.stepBatch then applies
+    // the AUTHORITATIVE decomposition guard (no-op when the board is a real goal tree). Both are needed
+    // — the decomposition state is NOT reliably on runCtx at tool-turn time (goalsDecomposed flips true
+    // in PLANNING for every run), only MonitorLifecycle knows the board was actually re-rooted a tree.
+    if (isPlainLoop(runCtx) && runCtx.conversationScope) {
+      const batchIndex = runCtx.plainLoopStepIndex;
+      runCtx.plainLoopStepIndex = batchIndex + 1; // SINGLE source: `step-<batchIndex>` for BOTH events.
+      try {
+        deps.emitPlainLoopStep({
+          conversationScope: runCtx.conversationScope,
+          monitorScope: runCtx.workerMonitorScope,
+          batchIndex,
+          toolLabel: summarizePlainLoopBatch(toolCalls),
+        });
+      } catch {
+        /* non-fatal — monitor is best-effort */
+      }
+    }
 
     // STEP C+F — content blocks pushed AFTER the REFLECTING transition (E first).
     const stateCtx = runCtx.taskPlanner.getStateInjection();

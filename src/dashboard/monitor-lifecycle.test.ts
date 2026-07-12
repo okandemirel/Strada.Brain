@@ -654,4 +654,155 @@ describe("createMonitorLifecycle", () => {
       for (const id of conversationIds) expect(id).toBe("scope-1");
     });
   });
+
+  // =========================================================================
+  // stepBatch (BUG#1 P2 — live plain-loop step DAG)
+  // =========================================================================
+
+  describe("stepBatch", () => {
+    it("first batch supersedes the simple card then seeds a step-0 executing node", () => {
+      const lc = createMonitorLifecycle(bus);
+      lc.requestStart("scope-1", "do a thing");
+      const startPayload = bus.calls[0]!.payload as { rootId: string; nodes: Array<{ id: string }> };
+      const episodeId = startPayload.rootId;
+      const simpleCardId = startPayload.nodes[0]!.id;
+      bus.calls.length = 0;
+
+      lc.stepBatch("scope-1", 0, "read_file, edit_file");
+
+      // 1) settle (completed) the superseded simple card, 2) dag_init with step-0 executing.
+      expect(bus.calls).toHaveLength(2);
+      expect(bus.calls[0]).toEqual({
+        event: "monitor:task_update",
+        payload: { rootId: episodeId, nodeId: simpleCardId, status: "completed", conversationId: "scope-1" },
+      });
+      const dag = bus.calls[1]!.payload as {
+        rootId: string;
+        nodes: Array<{ id: string; status: string; task: string }>;
+        conversationId: string;
+      };
+      expect(bus.calls[1]!.event).toBe("monitor:dag_init");
+      expect(dag.rootId).toBe(episodeId); // UNDER the episode root, not a sibling.
+      expect(dag.conversationId).toBe("scope-1");
+      expect(dag.nodes).toHaveLength(1);
+      expect(dag.nodes[0]!.id).toBe("step-0");
+      expect(dag.nodes[0]!.status).toBe("executing");
+      expect(dag.nodes[0]!.task).toBe("read_file, edit_file");
+    });
+
+    it("ALIGNS dag_init node ids with the per-batch task_update node ids", () => {
+      const lc = createMonitorLifecycle(bus);
+      lc.requestStart("scope-1", "msg");
+      lc.stepBatch("scope-1", 0, "toolA");
+      bus.calls.length = 0;
+
+      lc.stepBatch("scope-1", 1, "toolB");
+
+      // LOW-2 single source: batch 1 does NOT emit a redundant per-batch task_update for step-0 —
+      // the dag_init re-emit is the single source and carries step-0=completed. (The prior-node
+      // completion is conveyed by the dag_init topology, not a separate task_update.)
+      const midBatchStepUpdates = bus.calls.filter(
+        (c) => c.event === "monitor:task_update" &&
+          String((c.payload as { nodeId: string }).nodeId).startsWith("step-"),
+      );
+      expect(midBatchStepUpdates).toHaveLength(0);
+
+      const dag = bus.calls.find((c) => c.event === "monitor:dag_init")!.payload as {
+        rootId: string;
+        nodes: Array<{ id: string; status: string }>;
+        edges: Array<{ source: string; target: string }>;
+      };
+      // The dag_init node ids are the SINGLE source; both step nodes present with aligned ids.
+      expect(dag.nodes.map((n) => n.id)).toEqual(["step-0", "step-1"]);
+      // step-0 carries its completed status (single source: the re-emit conveys it); step-1 executing.
+      expect(dag.nodes.find((n) => n.id === "step-0")!.status).toBe("completed");
+      expect(dag.nodes.find((n) => n.id === "step-1")!.status).toBe("executing");
+      // Edges chain the steps linearly.
+      expect(dag.edges).toEqual([{ source: "step-0", target: "step-1" }]);
+    });
+
+    it("requestEnd settles the final in-flight step node (completed)", () => {
+      const lc = createMonitorLifecycle(bus);
+      lc.requestStart("scope-1", "msg");
+      lc.stepBatch("scope-1", 0, "toolA");
+      lc.stepBatch("scope-1", 1, "toolB");
+      bus.calls.length = 0;
+
+      lc.requestEnd("scope-1");
+
+      // The last step node (step-1) is settled completed on end.
+      const settle = bus.calls.find(
+        (c) => c.event === "monitor:task_update" && (c.payload as { nodeId: string }).nodeId === "step-1",
+      );
+      expect(settle).toBeDefined();
+      expect((settle!.payload as { status: string }).status).toBe("completed");
+    });
+
+    it("requestEnd(failed) settles the final in-flight step node as failed", () => {
+      const lc = createMonitorLifecycle(bus);
+      lc.requestStart("scope-1", "msg");
+      lc.stepBatch("scope-1", 0, "toolA");
+      bus.calls.length = 0;
+
+      lc.requestEnd("scope-1", true);
+
+      const settle = bus.calls.find(
+        (c) => c.event === "monitor:task_update" && (c.payload as { nodeId: string }).nodeId === "step-0",
+      );
+      expect(settle).toBeDefined();
+      expect((settle!.payload as { status: string }).status).toBe("failed");
+    });
+
+    it("is a no-op when no episode is open (never mints a sibling root)", () => {
+      const lc = createMonitorLifecycle(bus);
+      lc.stepBatch("no-episode-scope", 0, "toolA");
+      expect(bus.calls).toHaveLength(0);
+    });
+
+    it("is a no-op after the episode went terminal", () => {
+      const lc = createMonitorLifecycle(bus);
+      lc.requestStart("scope-1", "msg");
+      lc.requestEnd("scope-1"); // episode terminal
+      bus.calls.length = 0;
+
+      lc.stepBatch("scope-1", 0, "toolA");
+      expect(bus.calls).toHaveLength(0);
+    });
+
+    it("is a NO-OP once the board is a decomposed goal tree (goalDecomposed re-rooted it) — AUTHORITATIVE suppression", () => {
+      const lc = createMonitorLifecycle(bus);
+      lc.requestStart("scope-1", "msg");
+      // Decomposition re-roots the board as a goal tree (dagKind → 'goal-tree').
+      lc.goalDecomposed("scope-1", makeGoalTree());
+      bus.calls.length = 0;
+
+      // The plain-loop step DAG must stay silent — the goal tree owns the node-id stream.
+      lc.stepBatch("scope-1", 0, "toolA");
+      lc.stepBatch("scope-1", 1, "toolB");
+      expect(bus.calls).toHaveLength(0);
+    });
+
+    it("is a NO-OP once the board is a goal tree via a reactive re-plan (goalRestructured)", () => {
+      const lc = createMonitorLifecycle(bus);
+      lc.requestStart("scope-1", "msg");
+      lc.goalRestructured("scope-1", makeGoalTree());
+      bus.calls.length = 0;
+
+      lc.stepBatch("scope-1", 0, "toolA");
+      expect(bus.calls).toHaveLength(0);
+    });
+
+    it("goal-tree suppression holds even if goalDecomposed arrives AFTER some plain-loop steps", () => {
+      // Timing safety: in production goalDecomposed runs in PLANNING before any tool turn, so the
+      // step DAG never starts. But even out of order, once dagKind flips no further steps emit.
+      const lc = createMonitorLifecycle(bus);
+      lc.requestStart("scope-1", "msg");
+      lc.stepBatch("scope-1", 0, "toolA"); // plain steps begin
+      lc.goalDecomposed("scope-1", makeGoalTree()); // board becomes a goal tree
+      bus.calls.length = 0;
+
+      lc.stepBatch("scope-1", 1, "toolB"); // now suppressed
+      expect(bus.calls).toHaveLength(0);
+    });
+  });
 });

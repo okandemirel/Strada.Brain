@@ -97,6 +97,15 @@ export interface EngineRunContext {
   readonly memoryRefresher: ReturnType<SessionManager["createMemoryRefresher"]> | null;
   /** step5-parity: the supervisor provider pin's fixed all-roles strategy (undefined = unpinned). */
   readonly fixedExecutionStrategy: SupervisorExecutionStrategy | undefined;
+  /**
+   * BUG#1 P2 — monotonic per-run tool-batch index for the PLAIN-loop live step DAG. Starts at 0
+   * (no batch has run) and is post-incremented by portExecuteToolTurn each batch it emits, so the
+   * emitted node id (`step-<index>`) is the SINGLE source shared by dag_init and task_update
+   * (id-alignment). Only advanced when the suppression guard admits a plain loop; a supervisor /
+   * decomposed run never touches it. Distinct from agentState.iteration (which counts tool CALLS,
+   * not batches) so ids stay a clean batch sequence.
+   */
+  plainLoopStepIndex: number;
 }
 
 import type { AccountingDeps } from "./accounting.js";

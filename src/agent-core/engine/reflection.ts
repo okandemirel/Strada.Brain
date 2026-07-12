@@ -330,7 +330,12 @@ export async function portDispatchReflection(
       // ~5409-5436): reactive goal-decomposition + transitionPhase(REPLANNING) + continuation.
       if (action.flow === "continue") {
         await deps.runReactiveGoalDecomposition({
-          conversationScope: chatId,
+          // SCOPE-KEY ALIGNMENT (BUG#1 P2 HIGH): the reactive re-plan must look up activeGoalTrees +
+          // drive monitorLifecycle.goalRestructured under the RESOLVED scope, matching how the proactive
+          // path now sets the tree (port.ts) and how the monitor episode / stepBatch are keyed. Using raw
+          // chatId here would miss the tree (set under the resolved scope) on the web channel
+          // (conversationId≠chatId) and flip goalRestructured's dagKind on the wrong episode.
+          conversationScope: runCtx.conversationScope ?? chatId,
           chatId,
           session: runCtx.session,
           responseText: params.responseText ?? "",

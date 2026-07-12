@@ -428,6 +428,7 @@ export async function setupAgentCoreRun(
       workerMonitorScope,
       memoryRefresher,
       fixedExecutionStrategy,
+      plainLoopStepIndex: 0, // BUG#1 P2: per-run tool-batch counter for the plain-loop live step DAG.
     };
 
     const setup: PortRunSetup = {

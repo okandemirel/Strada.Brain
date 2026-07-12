@@ -83,6 +83,28 @@ export interface MonitorLifecycle {
    * a finishing worker never rolls the dropdown over early.
    */
   joinEpisodeEnd(conversationScope: string, failed?: boolean, monitorScope?: string): void
+  /**
+   * BUG#1 P2 — live plan-step DAG for a PLAIN interactive/background loop (no supervisor,
+   * no goal-tree decomposition). Each PAOR tool batch calls this with its monotonic
+   * `batchIndex` (0-based, the SINGLE source for node ids: `step-<batchIndex>`) so the one
+   * static "executing" card grows into a live multi-node DAG that advances as batches run.
+   *
+   * Behaviour, under the ACTIVE episode root (looked up by scope — never mints one; a no-op
+   * if none is open or it is terminal, exactly like joinEpisode/goalDecomposed):
+   *   - batchIndex 0: settle the simple `req-…` card (completed — it is SUPERSEDED, like
+   *     goalDecomposed) then seed a `dag_init` with `step-0` (executing).
+   *   - batchIndex n>0: mark `step-<n-1>` completed and re-emit `dag_init` with all
+   *     accumulated nodes (prior=completed, new=executing) so the board grows in place.
+   * The final in-flight step node is settled by requestEnd/joinEpisodeEnd.
+   *
+   * Two-stage suppression keeps this off supervisor/decomposed boards: the ENGINE gate
+   * (tool-turn.ts isPlainLoop) excludes supervisor sub-node + parent-rollup workers, and
+   * THIS method no-ops when the episode board was re-rooted as a goal tree (dagKind !=
+   * 'simple', set by goalDecomposed/goalRestructured). The latter is the authoritative
+   * decomposition check — timing-correct because goalDecomposed fires in PLANNING, before
+   * the first tool turn reaches stepBatch.
+   */
+  stepBatch(conversationScope: string, batchIndex: number, toolLabel: string, monitorScope?: string): void
 }
 
 import { randomUUID } from "node:crypto";
@@ -118,6 +140,32 @@ interface EpisodeState {
    * and rolls over to a fresh episode rather than missing the boundary.
    */
   terminal: boolean
+  /**
+   * BUG#1 P2 — what OWNS this episode's board. `'simple'` (the default) means the
+   * board is the requestStart single card / plain-loop step DAG, which the plain
+   * loop may drive. `'goal-tree'` means goalDecomposed/goalRestructured re-rooted the
+   * board as a REAL decomposed goal tree whose node status flows via goal:status-changed;
+   * the plain-loop step DAG must then stay silent (stepBatch no-ops) so it never
+   * double-drives / collides with the goal-tree node-id stream.
+   *
+   * This is the AUTHORITATIVE decomposition/supervisor-board signal (the engine's
+   * runCtx.goalsDecomposed is NOT — it flips true in PLANNING for every run, before
+   * any tree is known). It is set by the actual goalDecomposed call, which fires ONLY
+   * when a real tree is produced (runProactiveGoalDecomposition returns early otherwise).
+   */
+  dagKind: 'simple' | 'goal-tree'
+  /**
+   * BUG#1 P2 — the live plain-loop step DAG for THIS episode. Undefined until the
+   * first `stepBatch` seeds it (a plain interactive/background loop's first tool batch).
+   * `nodes` is the accumulated `step-<i>` node list re-emitted on each grow so the board
+   * grows in place; `activeStepNodeId` is the in-flight (executing) node settled by
+   * requestEnd/joinEpisodeEnd. Supervisor/decomposed runs never populate this (they own
+   * the board via their own node-id streams and never call stepBatch).
+   */
+  stepDag?: {
+    nodes: DagNodeShape[]
+    activeStepNodeId: string | undefined
+  }
 }
 
 function generateEpisodeId(): string {
@@ -170,7 +218,7 @@ export function createMonitorLifecycle(workspaceBus: WorkspaceBus): MonitorLifec
     // Drop the stale terminal entry so the re-insert refreshes insertion order.
     if (existing) episodes.delete(scopeKey)
     pruneEpisodes()
-    const fresh: EpisodeState = { episodeId: generateEpisodeId(), simpleNodeIds: [], terminal: false }
+    const fresh: EpisodeState = { episodeId: generateEpisodeId(), simpleNodeIds: [], terminal: false, dagKind: 'simple' }
     episodes.set(scopeKey, fresh)
     return fresh
   }
@@ -231,6 +279,45 @@ export function createMonitorLifecycle(workspaceBus: WorkspaceBus): MonitorLifec
     })
   }
 
+  /**
+   * Update a plain-loop step node's status IN MEMORY only (no WS emit). Used mid-batch:
+   * stepBatch marks the prior node 'completed' here, then re-emits the FULL dag_init, whose
+   * node list carries this updated status — so a separate task_update would be redundant
+   * (frontend setDAG REPLACES the root topology). Single source = the dag_init re-emit.
+   */
+  function setStepStatusInMemory(
+    episode: EpisodeState,
+    nodeId: string,
+    status: 'executing' | 'completed' | 'failed',
+  ): void {
+    const dag = episode.stepDag
+    if (!dag) return
+    const idx = dag.nodes.findIndex((n) => n.id === nodeId)
+    if (idx >= 0) dag.nodes[idx] = { ...dag.nodes[idx]!, status }
+  }
+
+  /**
+   * Settle the in-flight step-DAG node (if any) to a terminal state, on episode end.
+   * Idempotent: clears activeStepNodeId so a second end call is a no-op. Unlike the mid-batch
+   * path there is NO following dag_init here (the run is ending), so this DOES emit a
+   * task_update — the only way the final node reaches a terminal state on the board.
+   */
+  function settleActiveStepNode(episode: EpisodeState, emittedScope: string, failed: boolean): void {
+    const nodeId = episode.stepDag?.activeStepNodeId
+    if (!nodeId) return
+    episode.stepDag!.activeStepNodeId = undefined
+    const status = failed ? 'failed' : 'completed'
+    setStepStatusInMemory(episode, nodeId, status)
+    workspaceBus.emit('monitor:task_update', {
+      rootId: episode.episodeId,
+      nodeId,
+      status,
+      phase: 'observing',
+      completedAt: Date.now(),
+      conversationId: emittedScope,
+    })
+  }
+
   const lifecycle: MonitorLifecycle = {
     requestStart(conversationScope: string, userMessage: string, monitorScope?: string): void {
       const scopeKey = resolveScopeKey(conversationScope, monitorScope)
@@ -277,7 +364,12 @@ export function createMonitorLifecycle(workspaceBus: WorkspaceBus): MonitorLifec
       // board rather than spraying a sibling root.
       const scopeKey = resolveScopeKey(conversationScope, monitorScope)
       const episode = episodes.get(scopeKey)
-      if (episode) settleLatestCard(episode, scopeKey, false)
+      if (episode) {
+        settleLatestCard(episode, scopeKey, false)
+        // BUG#1 P2: the board is now a REAL decomposed goal tree — mark it so the plain-loop
+        // step DAG (stepBatch) stays silent and never double-drives the goal-tree node ids.
+        episode.dagKind = 'goal-tree'
+      }
       const payload = goalTreeToDagPayload(goalTree, scopeKey)
       getLoggerSafe().info('Monitor episode goal-decomposed', {
         scopeKey,
@@ -293,6 +385,8 @@ export function createMonitorLifecycle(workspaceBus: WorkspaceBus): MonitorLifec
       // episodeId) so a reactive re-plan updates this workspace in place.
       const scopeKey = resolveScopeKey(conversationScope, monitorScope)
       const episode = episodes.get(scopeKey)
+      // BUG#1 P2: a reactive re-plan also makes the board a goal tree — suppress the plain-loop DAG.
+      if (episode) episode.dagKind = 'goal-tree'
       const payload = goalTreeToDagPayload(goalTree, scopeKey)
       workspaceBus.emit('monitor:dag_restructure', withEpisodeRoot(payload, episode))
     },
@@ -316,6 +410,9 @@ export function createMonitorLifecycle(workspaceBus: WorkspaceBus): MonitorLifec
       // background) still has its OWN card settled rather than one card lingering
       // "executing" because a single shared slot was overwritten.
       settleLatestCard(episode, scopeKey, failed)
+      // BUG#1 P2: settle a plain-loop step DAG's last in-flight node too (its simple
+      // card was already superseded on the first batch, so settleLatestCard is a no-op).
+      settleActiveStepNode(episode, scopeKey, failed)
       // Mark the episode terminal (keep the entry) so the next request rolls over
       // to a fresh episode/workspace even if it arrives on the same tick.
       episode.terminal = true
@@ -334,6 +431,90 @@ export function createMonitorLifecycle(workspaceBus: WorkspaceBus): MonitorLifec
         failed,
       })
       settleLatestCard(episode, scopeKey, failed)
+      settleActiveStepNode(episode, scopeKey, failed)
+    },
+
+    stepBatch(conversationScope: string, batchIndex: number, toolLabel: string, monitorScope?: string): void {
+      // BUG#1 P2 — plain interactive/background loop only (the engine's suppression guard
+      // proves it: no supervisor, no goal-tree/decomposition owns this board). Grow the one
+      // static "executing" card into a live step DAG under the ACTIVE episode root. Never
+      // mints an episode: if none is open (or terminal) this is a no-op, matching joinEpisode.
+      const scopeKey = resolveScopeKey(conversationScope, monitorScope)
+      const episode = episodes.get(scopeKey)
+      if (!episode || episode.terminal) return
+      // AUTHORITATIVE decomposition/supervisor guard: once the board is a real goal tree
+      // (goalDecomposed/goalRestructured re-rooted it), the plain-loop step DAG must stay
+      // silent — its status stream is goal:status-changed, and driving step nodes here would
+      // collide with the goal-tree node ids. This is timing-correct: goalDecomposed runs in
+      // PLANNING, BEFORE any tool turn calls stepBatch, so dagKind is already 'goal-tree' by then.
+      if (episode.dagKind !== 'simple') {
+        getLoggerSafe().debug('Monitor plain-loop step suppressed (goal-tree board)', {
+          scopeKey,
+          episodeId: episode.episodeId,
+        })
+        return
+      }
+      const nodeId = `step-${batchIndex}`
+
+      if (!episode.stepDag) {
+        // First batch: supersede the simple `req-…` card (completed, not failed — it is
+        // being replaced by a richer live view, exactly as goalDecomposed does), then seed
+        // the step DAG. If batchIndex is not 0 (a defensive out-of-order first call) we still
+        // seed from THIS node so the board never desyncs.
+        settleLatestCard(episode, scopeKey, false)
+        const node: DagNodeShape = {
+          id: nodeId,
+          task: truncate(toolLabel, MAX_TASK_LABEL),
+          status: 'executing',
+          reviewStatus: 'none',
+          depth: 1,
+          dependsOn: [],
+        }
+        episode.stepDag = { nodes: [node], activeStepNodeId: nodeId }
+      } else {
+        // Subsequent batch: mark the prior in-flight node completed IN MEMORY (the dag_init
+        // re-emit below carries the updated status — no redundant per-batch task_update), then
+        // append this one.
+        const prior = episode.stepDag.activeStepNodeId
+        if (prior && prior !== nodeId) {
+          setStepStatusInMemory(episode, prior, 'completed')
+        }
+        // Guard against a duplicate index (e.g. a retry): only append a genuinely new node.
+        if (!episode.stepDag.nodes.some((n) => n.id === nodeId)) {
+          const prevId = episode.stepDag.nodes[episode.stepDag.nodes.length - 1]?.id
+          episode.stepDag.nodes.push({
+            id: nodeId,
+            task: truncate(toolLabel, MAX_TASK_LABEL),
+            status: 'executing',
+            reviewStatus: 'none',
+            depth: 1,
+            dependsOn: prevId ? [prevId] : [],
+          })
+        }
+        episode.stepDag.activeStepNodeId = nodeId
+      }
+
+      getLoggerSafe().debug('Monitor plain-loop step batch', {
+        scopeKey,
+        episodeId: episode.episodeId,
+        nodeId,
+        stepCount: episode.stepDag.nodes.length,
+      })
+
+      // Re-emit dag_init with ALL accumulated nodes (each carrying its latest status) under
+      // the episode root. setDAG REPLACES this root's topology, so the full list is required;
+      // the edges chain step→step so the DAG renders as a linear plan. Node ids are the SINGLE
+      // source (`step-<batchIndex>`) shared with the task_update stream above — no drift.
+      const edges: Array<{ source: string; target: string }> = []
+      for (const n of episode.stepDag.nodes) {
+        for (const dep of n.dependsOn) edges.push({ source: dep, target: n.id })
+      }
+      workspaceBus.emit('monitor:dag_init', {
+        rootId: episode.episodeId,
+        nodes: episode.stepDag.nodes.map((n) => ({ ...n })),
+        edges,
+        conversationId: scopeKey,
+      })
     },
   }
 

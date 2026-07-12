@@ -35,6 +35,9 @@ import type { TaskConfig } from "../../config/config.js";
 import { createInitialState, type AgentState } from "../../agents/agent-state.js";
 import { TaskPlanner } from "../../agents/autonomy/task-planner.js";
 import { getResilienceMessage } from "../../agents/resilience-messages.js";
+import { createMonitorLifecycle } from "../../dashboard/monitor-lifecycle.js";
+import type { WorkspaceBus } from "../../dashboard/workspace-bus.js";
+import type { GoalTree, GoalNode, GoalNodeId } from "../../goals/types.js";
 
 // Logger + strada-knowledge module mocks — copied from orchestrator.test.ts so the Orchestrator
 // boots without a real project / SQLite / network.
@@ -888,5 +891,218 @@ describe("Step 0 — v2 prologue fidelity gaps (behind the route flag; productio
     expect(toolResults.every((e) => e.appliedInstinctIds.includes("inst-1"))).toBe(true);
     // (c) … and the per-session store was CLEARED on teardown (no cross-run mis-attribution / leak).
     expect(store.get("chat-1")).toBeUndefined();
+  });
+});
+
+// ===========================================================================
+// BUG#1 P2 — live plain-loop step DAG, END-TO-END through the REAL port + REAL
+// MonitorLifecycle. This is the test that would have caught the DEAD-FEATURE guard
+// bug (goalsDecomposed===false is true only in a synthetic runCtx; the REAL spine
+// flips it in PLANNING before any tool turn). It drives the actual V2 spine and
+// asserts the monitor emissions the frontend consumes.
+// ===========================================================================
+
+function mkCapturingBus(): WorkspaceBus & { calls: Array<{ event: string; payload: unknown }> } {
+  const calls: Array<{ event: string; payload: unknown }> = [];
+  return {
+    calls,
+    emit(event: string, payload: unknown) {
+      calls.push({ event, payload });
+    },
+    on: vi.fn(),
+    off: vi.fn(),
+    shutdown: vi.fn().mockResolvedValue(undefined),
+  } as unknown as WorkspaceBus & { calls: Array<{ event: string; payload: unknown }> };
+}
+
+function mkGoalTree(): GoalTree {
+  const rootId = "goal_root" as GoalNodeId;
+  const childId = "goal_child_1" as GoalNodeId;
+  const now = Date.now();
+  const nodes = new Map<GoalNodeId, GoalNode>();
+  nodes.set(rootId, {
+    id: rootId, parentId: null, task: "Root", dependsOn: [], depth: 0,
+    status: "pending", createdAt: now, updatedAt: now,
+  });
+  nodes.set(childId, {
+    id: childId, parentId: rootId, task: "Child", dependsOn: [], depth: 1,
+    status: "pending", createdAt: now, updatedAt: now,
+  });
+  return { rootId, sessionId: "s", taskDescription: "d", nodes, createdAt: now };
+}
+
+/** A 2-tool-batch background run: PLANNING → tool batch 1 → tool batch 2 → terminal. */
+function scriptTwoBatchRun(provider: ReturnType<typeof mkScriptedProvider>): void {
+  provider.chat
+    .mockResolvedValueOnce(resp({ text: "plan", stopReason: "end_turn" })) // PLANNING → EXECUTING
+    .mockResolvedValueOnce(
+      resp({ text: "", stopReason: "tool_use", toolCalls: [{ id: "b1", name: "file_read", input: {} }] }),
+    )
+    .mockResolvedValueOnce(
+      resp({ text: "", stopReason: "tool_use", toolCalls: [{ id: "b2", name: "edit_file", input: { path: "a.cs" } }] }),
+    )
+    .mockResolvedValueOnce(resp({ text: "done", stopReason: "end_turn" })); // terminal
+}
+
+describe("BUG#1 P2 — plain-loop live step DAG (REAL port + REAL MonitorLifecycle)", () => {
+  it("PLAIN run (no decomposition) EMITS a step DAG: dag_init + per-batch task_update with ALIGNED ids", async () => {
+    const provider = mkScriptedProvider();
+    scriptTwoBatchRun(provider);
+    const h = buildHarness(provider); // no goalDecomposer → runProactiveGoalDecomposition is a no-op
+    const bus = mkCapturingBus();
+    const lc = createMonitorLifecycle(bus);
+    h.orch.setMonitorLifecycle(lc);
+    // The shell opens the episode before the run (orchestrator/background-executor requestStart).
+    // conversationScope for chatId "chat-1" (no conversationId) resolves to "chat-1".
+    lc.requestStart("chat-1", "do the thing");
+    bus.calls.length = 0; // drop the requestStart single-node dag_init; watch only the run's emissions.
+
+    const result = await drive(h.clock, h.runner.run(mkRequest(), mkIO("worker")));
+    // The run reached terminal after executing its tool batches (exact terminal status is a spine
+    // concern, not this test's subject — the SUBJECT is the monitor emissions below). Assert it ran.
+    expect(["completed", "blocked", "failed"]).toContain(result.status);
+    expect((h.tools.find((t) => t.name === "file_read")!.execute as ReturnType<typeof vi.fn>)).toHaveBeenCalled();
+
+    // The plain-loop DAG actually emitted — proving isPlainLoop admitted the run (goalsDecomposed was
+    // true at tool-turn time) AND plainLoopStepIndex was reached and advanced per batch.
+    const stepDagInits = bus.calls.filter(
+      (c) => c.event === "monitor:dag_init" &&
+        (c.payload as { nodes: Array<{ id: string }> }).nodes.some((n) => n.id.startsWith("step-")),
+    );
+    expect(stepDagInits.length).toBeGreaterThanOrEqual(1);
+
+    // ID ALIGNMENT + the counter actually advanced: batch 0 seeded step-0; batch 1 appended step-1.
+    // Two dag_inits carrying step nodes prove plainLoopStepIndex advanced 0 → 1 (two batches emitted).
+    expect(stepDagInits.length).toBeGreaterThanOrEqual(2);
+    const lastDag = stepDagInits[stepDagInits.length - 1]!.payload as {
+      rootId: string; nodes: Array<{ id: string; status: string }>;
+    };
+    const declaredIds = lastDag.nodes.map((n) => n.id);
+    expect(declaredIds).toEqual(["step-0", "step-1"]); // aligned, ordered id source
+    // LOW-2 single source: step-0's completion is conveyed by the dag_init re-emit (topology), not a
+    // redundant per-batch task_update. The final dag_init shows step-0 completed + step-1 executing.
+    expect(lastDag.nodes.find((n) => n.id === "step-0")!.status).toBe("completed");
+    expect(lastDag.nodes.find((n) => n.id === "step-1")!.status).toBe("executing");
+
+    // Any step task_update that IS emitted (e.g. requestEnd settle, not called in this test) must
+    // target an id a dag_init declared — no orphan node = no static-DAG bug.
+    const allDeclared = new Set<string>();
+    for (const d of stepDagInits) {
+      for (const n of (d.payload as { nodes: Array<{ id: string }> }).nodes) allDeclared.add(n.id);
+    }
+    const stepUpdates = bus.calls.filter(
+      (c) => c.event === "monitor:task_update" &&
+        String((c.payload as { nodeId: string }).nodeId).startsWith("step-"),
+    );
+    for (const u of stepUpdates) {
+      expect(allDeclared.has(String((u.payload as { nodeId: string }).nodeId))).toBe(true);
+    }
+    // All step emissions carried the EPISODE root, not a sibling.
+    const episodeRoot = lastDag.rootId;
+    for (const d of stepDagInits) expect((d.payload as { rootId: string }).rootId).toBe(episodeRoot);
+  });
+
+  it("DECOMPOSED run (goalDecomposed re-rooted the board) EMITS NO step nodes — stepBatch no-ops", async () => {
+    const provider = mkScriptedProvider();
+    scriptTwoBatchRun(provider);
+    const h = buildHarness(provider);
+    const bus = mkCapturingBus();
+    const lc = createMonitorLifecycle(bus);
+    h.orch.setMonitorLifecycle(lc);
+    lc.requestStart("chat-1", "do the thing");
+    // Simulate what runProactiveGoalDecomposition does in PLANNING when a real tree exists: it calls
+    // monitorLifecycle.goalDecomposed BEFORE any EXECUTING tool turn. This flips dagKind → 'goal-tree'.
+    lc.goalDecomposed("chat-1", mkGoalTree());
+    bus.calls.length = 0;
+
+    const result = await drive(h.clock, h.runner.run(mkRequest(), mkIO("worker")));
+    expect(["completed", "blocked", "failed"]).toContain(result.status);
+
+    // NO plain-loop step nodes were emitted — the goal-tree board owns node status, so the authoritative
+    // stepBatch guard suppressed every batch (even though the engine gate admitted the run).
+    const stepDagInits = bus.calls.filter(
+      (c) => c.event === "monitor:dag_init" &&
+        (c.payload as { nodes: Array<{ id: string }> }).nodes.some((n) => n.id.startsWith("step-")),
+    );
+    const stepUpdates = bus.calls.filter(
+      (c) => c.event === "monitor:task_update" &&
+        String((c.payload as { nodeId: string }).nodeId).startsWith("step-"),
+    );
+    expect(stepDagInits).toHaveLength(0);
+    expect(stepUpdates).toHaveLength(0);
+  });
+
+  it("SCOPE-KEY DIFFERENTIAL (conversationId !== chatId): a REAL decomposition suppresses step nodes end-to-end", async () => {
+    // THE regression test for the HIGH scope-key mismatch. On the web channel the client's
+    // conversationId (profileId) != chatId, so the monitor episode + stepBatch key off the RESOLVED
+    // scope (profileId) while the decomposition USED to key goalDecomposed off the RAW chatId. That
+    // flipped dagKind on a DIFFERENT episode than stepBatch reads → the plain-loop DAG collided with
+    // the goal tree. This drives the REAL spine WITH a real goalDecomposer (shouldDecompose→true) and a
+    // request whose conversationId ('profile-9') != chatId ('chat-1'), and asserts ZERO step-* nodes.
+    // Pre-fix (raw chatId) this FAILS: goalDecomposed('chat-1') misses the 'profile-9' episode → step
+    // nodes emit. Post-fix (resolved scope) goalDecomposed('profile-9') aligns → suppression holds.
+    const provider = mkScriptedProvider();
+    scriptTwoBatchRun(provider);
+
+    // A real goalDecomposer stub: shouldDecompose true, decomposeProactive returns a real 2-node tree
+    // seeded with the scope it is GIVEN (proving the decomposition path's scope == the monitor scope).
+    let decomposeScope: string | undefined;
+    const goalDecomposer = {
+      shouldDecompose: () => true,
+      decomposeProactive: async (sessionId: string) => {
+        decomposeScope = sessionId;
+        const t = mkGoalTree();
+        return { ...t, sessionId };
+      },
+      decomposeReactive: async () => null,
+    };
+
+    const clock = new FakeClock(0);
+    const channel = mkChannel();
+    const bus = mkCapturingBus();
+    const orch = new Orchestrator({
+      providerManager: {
+        getProvider: vi.fn(() => provider),
+        getActiveInfo: () => ({ providerName: "mock", model: "mock-model", isDefault: true }),
+        shutdown: vi.fn(),
+      },
+      tools: [mkTool("file_read"), mkTool("edit_file", true, ["a.cs"])],
+      channel,
+      projectPath: "/tmp/test-project",
+      readOnly: false,
+      requireConfirmation: false,
+      agentCoreClock: clock,
+      goalDecomposer, // REAL decomposition path fires in PLANNING (port.ts → runProactiveGoalDecomposition)
+    } as unknown as ConstructorParameters<typeof Orchestrator>[0]);
+    const lc = createMonitorLifecycle(bus);
+    orch.setMonitorLifecycle(lc);
+    const { port, gateway, seed, createHealthCore } = orch.createAgentCorePort();
+    const controlPlane = createControlPlane({ clock, seed, createHealthCore });
+    const runner = new V2AgentRunner({ controlPlane, gateway, orchestratorPort: port, clock } as V2RunnerDeps);
+
+    // The shell opens the episode under the RESOLVED scope (profileId), as the real orchestrator does.
+    const RESOLVED = "profile-9"; // resolveConversationScope("chat-1", "profile-9") === "profile-9"
+    lc.requestStart(RESOLVED, "do the thing");
+    bus.calls.length = 0;
+
+    const result = await drive(
+      clock,
+      runner.run(mkRequest({ chatId: "chat-1", conversationId: "profile-9" }), mkIO("worker")),
+    );
+    expect(["completed", "blocked", "failed"]).toContain(result.status);
+
+    // The REAL decomposition fired and keyed off the RESOLVED scope (profileId), NOT the raw chatId.
+    expect(decomposeScope).toBe(RESOLVED);
+    // And therefore ZERO plain-loop step nodes leaked onto the goal-tree board.
+    const stepDagInits = bus.calls.filter(
+      (c) => c.event === "monitor:dag_init" &&
+        (c.payload as { nodes: Array<{ id: string }> }).nodes.some((n) => n.id.startsWith("step-")),
+    );
+    const stepUpdates = bus.calls.filter(
+      (c) => c.event === "monitor:task_update" &&
+        String((c.payload as { nodeId: string }).nodeId).startsWith("step-"),
+    );
+    expect(stepDagInits).toHaveLength(0);
+    expect(stepUpdates).toHaveLength(0);
   });
 });

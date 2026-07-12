@@ -1103,6 +1103,16 @@ export class Orchestrator {
       executeToolCalls: (chatId, toolCalls, options) => this.executeToolCalls(chatId, toolCalls, options),
       emitToolResult: (chatId, tc, tr) => this.emitToolResult(chatId, tc, tr),
       buildToolBatchProgressSignal: (params) => this.buildToolBatchProgressSignal(params),
+      // BUG#1 P2: route the plain-loop live step DAG through the shell's MonitorLifecycle (lazy —
+      // setter-backed), under the active episode root. The engine gates this on its suppression
+      // guard, so it never collides with the supervisor/decomposed node-id streams.
+      emitPlainLoopStep: (params) =>
+        this.monitorLifecycle?.stepBatch(
+          params.conversationScope,
+          params.batchIndex,
+          params.toolLabel,
+          params.monitorScope,
+        ),
       // Step 9 (port assembly): the shell residue the port binds — provider resilience, session
       // compaction, checkpoint, ALS scope, epoch rollover, trajectory credit, terminal-reason map,
       // and the ModelGateway construction (silentStream stays in the shell).

@@ -261,7 +261,16 @@ export function createAgentCorePort(
         if (c.goalsDecomposed) return params.agentState;
         c.goalsDecomposed = true;
         return deps.runProactiveGoalDecomposition({
-          conversationScope: params.chatId,
+          // SCOPE-KEY ALIGNMENT (BUG#1 P2 HIGH): key the decomposition off the RESOLVED conversation
+          // scope, not the raw chatId. The monitor episode + stepBatch + requestStart/End all key off
+          // resolveConversationScope(chatId, conversationId) (= runCtx.conversationScope), and
+          // activeGoalTrees cleanup deletes by session.conversationScope (also resolved). Passing raw
+          // chatId here flipped monitorLifecycle.goalDecomposed's dagKind on a DIFFERENT map entry than
+          // stepBatch reads → on the web channel (conversationId=profileId≠chatId) the goal-tree
+          // suppression missed and the plain-loop step DAG collided with the goal tree. It ALSO leaked
+          // the tree (set by chatId, deleted by resolved scope). runCtx already carries the resolved
+          // scope (used for joinEpisodeEnd at :377).
+          conversationScope: c.conversationScope ?? params.chatId,
           userMessage: deps.sessionManager.extractLastUserMessage(c.session),
           chatId: params.chatId,
           session: c.session,
