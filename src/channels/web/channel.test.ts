@@ -922,6 +922,48 @@ describe("WebChannel offline final delivery (BUG#7 2b)", () => {
     await channel.disconnect();
   });
 
+  it("replays EVERY retained DAG root's board on reconnect (BUG#5 P1 — not just the newest)", async () => {
+    const channel = new WebChannel();
+    const firstSocket = createMockSocket();
+    (channel as unknown as { handleWsConnection: (ws: unknown) => void }).handleWsConnection(firstSocket);
+    const connected = firstSocket.getSentMessages().find((m) => m.type === "connected")!;
+    const chatId = String(connected.chatId);
+    const reconnectToken = String(connected.reconnectToken);
+
+    // Two distinct DAG roots, each with a dag_init + an incremental task_update. A single flat
+    // snapshot let root-B's dag_init clobber root-A's — losing root-A's board on reconnect.
+    const frame = (type: string, rootId: string, extra: Record<string, unknown> = {}): string =>
+      JSON.stringify({ type, payload: { rootId, ...extra }, timestamp: 1 });
+    channel.broadcastRaw(frame("monitor:dag_init", "root-A", { nodes: [{ id: "a1" }] }));
+    channel.broadcastRaw(frame("monitor:task_update", "root-A", { updates: { status: "completed" } }));
+    channel.broadcastRaw(frame("monitor:dag_init", "root-B", { nodes: [{ id: "b1" }] }));
+    channel.broadcastRaw(frame("monitor:task_update", "root-B", { updates: { status: "executing" } }));
+
+    firstSocket.close();
+
+    // Reconnect (reclaim the chatId) → replayMonitorState runs. BOTH roots' boards must come back.
+    const secondSocket = createMockSocket();
+    (channel as unknown as { handleWsConnection: (ws: unknown) => void }).handleWsConnection(secondSocket);
+    secondSocket.emit(
+      "message",
+      Buffer.from(JSON.stringify({ type: "session_init", chatId, reconnectToken })),
+    );
+
+    const monitorFrames = secondSocket
+      .getSentMessages()
+      .filter((m) => m.type === "monitor:dag_init" || m.type === "monitor:task_update");
+    const roots = new Set(
+      monitorFrames.map((m) => (m.payload as { rootId?: string } | undefined)?.rootId),
+    );
+    expect(roots.has("root-A")).toBe(true);
+    expect(roots.has("root-B")).toBe(true);
+    // Each root replayed its dag_init + its task_update — nothing clobbered.
+    expect(monitorFrames.filter((m) => m.type === "monitor:dag_init")).toHaveLength(2);
+    expect(monitorFrames.filter((m) => m.type === "monitor:task_update")).toHaveLength(2);
+
+    await channel.disconnect();
+  });
+
   it("does NOT buffer when the frame is delivered to a live socket", async () => {
     const channel = new WebChannel();
     const socket = createMockSocket();

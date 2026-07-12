@@ -22,6 +22,7 @@ import { loadConfigSafe } from "../../config/config.js";
 import { validateMediaAttachment, validateMagicBytes, normalizeMimeType } from "../../utils/media-processor.js";
 import { SETUP_QUERY_PARAM, type PostSetupBootstrapContext } from "../../common/setup-contract.js";
 import { resolveWebStaticDir } from "../../common/web-static-dir.js";
+import { LRUCache } from "../../common/lru-cache.js";
 import { WebIdentityStore, type WebIdentity } from "./web-identity-store.js";
 import { getLoggerSafe } from "../../utils/logger.js";
 import type {
@@ -200,8 +201,17 @@ export class WebChannel
   private readonly identityStore: WebIdentityStore;
   /** Optional emitter for workspace bus events from frontend monitor commands. */
   private workspaceBusEmitter: ((event: string, payload: unknown) => void) | null = null;
-  /** Cached monitor state for replaying to reconnecting clients. */
-  private lastMonitorSnapshot: string[] = [];
+  /**
+   * Cached monitor state for replaying to reconnecting clients, keyed PER DAG ROOT (episode).
+   * The frontend monitor store is multi-root (rootsById, MAX_ROOTS); a single flat snapshot
+   * lost every prior root's board on reconnect (BUG#5 P1) because each new dag_init clobbered
+   * it. Each root keeps its own bounded frame list (index 0 = dag_init/restructure). The LRUCache
+   * caps distinct roots at MAX_MONITOR_ROOTS (least-recently-touched evicted; an active root stays
+   * hot because appending an incremental reads — and so bumps — its bucket), mirroring the store.
+   */
+  private readonly lastMonitorSnapshotByRoot: LRUCache<string, string[]>;
+  /** The most-recently-opened monitor root — routes rootId-less (or evicted-root) incrementals. */
+  private lastMonitorRootKey: string | undefined;
   /**
    * Per-chatId buffer of answer-bearing frames (markdown/text/system) that could
    * NOT be delivered because no live socket was present at send time. Flushed to
@@ -218,6 +228,10 @@ export class WebChannel
   /** Interval between WebSocket liveness pings (terminates dead half-open sockets). */
   private static readonly WS_HEARTBEAT_MS = 30 * 1000;
   private static readonly MAX_MONITOR_SNAPSHOT_MESSAGES = 200;
+  /** Max distinct DAG roots retained for reconnect replay (mirrors the portal store's MAX_ROOTS). */
+  private static readonly MAX_MONITOR_ROOTS = 20;
+  /** Fallback root key for a dag_init/restructure that arrives without a rootId (defensive). */
+  private static readonly DEFAULT_MONITOR_ROOT = "__default__";
   /** Max buffered undelivered answer frames per chat before oldest is evicted. */
   private static readonly MAX_PENDING_DELIVERY_FRAMES = 20;
   /** Frame types worth buffering for offline replay (answer-bearing only). */
@@ -242,6 +256,7 @@ export class WebChannel
     private readonly options: WebChannelOptions = {},
   ) {
     this.identityStore = new WebIdentityStore(options.identityDbPath ?? ":memory:");
+    this.lastMonitorSnapshotByRoot = new LRUCache(WebChannel.MAX_MONITOR_ROOTS);
   }
 
   onMessage(handler: MessageHandler): void {
@@ -547,7 +562,8 @@ export class WebChannel
     // child process while the first is still running — a DoS/rate-limit
     // bypass (precedent: fix commit 6660012). Slot lifetime is
     // process-level, not chat-level.
-    this.lastMonitorSnapshot = [];
+    this.lastMonitorSnapshotByRoot.clear();
+    this.lastMonitorRootKey = undefined;
     this.pendingDelivery.clear();
 
     for (const [, pending] of this.pendingConfirmations) {
@@ -583,21 +599,31 @@ export class WebChannel
    * Used by the monitor bridge to fan-out workspace events.
    */
   broadcastRaw(message: string): void {
-    // Cache monitor messages for replay on reconnect
+    // Cache monitor messages PER ROOT for replay on reconnect (rootId lives at payload.rootId —
+    // the monitor-bridge envelope is {type, payload, timestamp}).
     try {
       const parsed = JSON.parse(message);
       const type = parsed?.type;
+      const rootId =
+        typeof parsed?.payload?.rootId === "string" ? (parsed.payload.rootId as string) : undefined;
       if (type === "monitor:dag_init" || type === "monitor:dag_restructure") {
-        // DAG init/restructure replaces all previous monitor state
-        this.lastMonitorSnapshot = [message];
+        // A DAG init/restructure resets ONLY this root's board (index 0 = the dag frame); the
+        // LRUCache evicts the oldest OTHER root past the cap (never this just-touched one).
+        const key = rootId ?? WebChannel.DEFAULT_MONITOR_ROOT;
+        this.lastMonitorSnapshotByRoot.set(key, [message]);
+        this.lastMonitorRootKey = key;
       } else if (type === "monitor:clear") {
-        this.lastMonitorSnapshot = [];
+        this.lastMonitorSnapshotByRoot.clear();
+        this.lastMonitorRootKey = undefined;
       } else if (typeof type === "string" && WebChannel.CACHEABLE_MONITOR_TYPES.has(type)) {
-        if (this.lastMonitorSnapshot.length >= WebChannel.MAX_MONITOR_SNAPSHOT_MESSAGES) {
+        // Route the incremental to its root's board (see resolveIncrementalRoot — preserves the
+        // prior flat-cache behavior of retaining a pre-dag_init incremental).
+        const target = this.resolveIncrementalRoot(rootId);
+        if (target.length >= WebChannel.MAX_MONITOR_SNAPSHOT_MESSAGES) {
           // Evict the oldest incremental message (preserve index 0 = dag_init/restructure)
-          this.lastMonitorSnapshot.splice(1, 1);
+          target.splice(1, 1);
         }
-        this.lastMonitorSnapshot.push(message);
+        target.push(message);
       }
     } catch {
       // Not JSON — don't cache
@@ -615,17 +641,38 @@ export class WebChannel
   }
 
   /**
+   * The frame list an incremental monitor frame belongs to: its own root when present, else the
+   * most-recently-opened root, else a freshly-opened default bucket — so a pre-dag_init incremental
+   * (a degenerate ordering) is still retained for replay, matching the prior flat-cache behavior.
+   */
+  private resolveIncrementalRoot(rootId: string | undefined): string[] {
+    const own = rootId ? this.lastMonitorSnapshotByRoot.get(rootId) : undefined;
+    if (own) return own;
+    const recent = this.lastMonitorRootKey
+      ? this.lastMonitorSnapshotByRoot.get(this.lastMonitorRootKey)
+      : undefined;
+    if (recent) return recent;
+    const fresh: string[] = [];
+    this.lastMonitorSnapshotByRoot.set(WebChannel.DEFAULT_MONITOR_ROOT, fresh);
+    this.lastMonitorRootKey = WebChannel.DEFAULT_MONITOR_ROOT;
+    return fresh;
+  }
+
+  /**
    * Replay cached monitor state to a single WebSocket client.
-   * Called after session init so reconnecting clients see the current DAG.
+   * Called after session init so reconnecting clients see the current DAG. Replays EVERY retained
+   * root's board (insertion order) — the frontend store keys by rootId, so cross-root ordering is
+   * irrelevant; within a root, index 0 (dag_init) precedes its incrementals.
    */
   private replayMonitorState(ws: WebSocket): void {
-    for (const msg of this.lastMonitorSnapshot) {
-      try {
-        if (ws.readyState === 1) {
+    for (const frames of this.lastMonitorSnapshotByRoot.values()) {
+      for (const msg of frames) {
+        if (ws.readyState !== 1) return;
+        try {
           ws.send(msg);
+        } catch {
+          return; // Connection lost during replay
         }
-      } catch {
-        break; // Connection lost during replay
       }
     }
   }
