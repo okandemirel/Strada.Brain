@@ -195,8 +195,12 @@ const KNOWN_PROVIDER_MODEL_ORDER = [
   "ollama",
 ] as const;
 
+// First-run defaults. These run before the model-intelligence catalog exists
+// (no DB yet), so they must be literals — but every id here is contract-tested
+// against the catalog seed list in `model-catalog-contract.test.ts`, so an id
+// can never silently drift out of existence again.
 const DEFAULT_PROVIDER_MODELS: Record<string, string> = {
-  claude: "claude-sonnet-4-6-20250514",
+  claude: "claude-sonnet-5",
   ollama: "llama3.3",
 };
 const MODEL_NAME_RE = /^[A-Za-z0-9._:/-]+$/;

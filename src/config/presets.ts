@@ -162,25 +162,25 @@ export const SYSTEM_PRESETS: Record<PresetName, SystemPreset> = {
   performance: {
     name: "performance",
     label: "Performance ($15-30/mo)",
-    description: "Claude Sonnet 4.6 + Gemini fallback. Best tool calling and code generation.",
+    description: "Claude Sonnet 5 + Gemini fallback. Best tool calling and code generation.",
     estimatedMonthlyCost: "$15-30",
     providerChain: "claude,gemini",
     providerModels: {
-      claude: "claude-sonnet-4-6-20250514",  // $3/$15 per 1M, best tool use
+      claude: "claude-sonnet-5",  // $3/$15 per 1M, best tool use
       gemini: "gemini-3-flash-preview",       // $0.50/$3.00 per 1M (fallback)
     },
     delegationTierLocal: "ollama:llama3.3",
     delegationTierCheap: "gemini:gemini-3-flash-preview",
-    delegationTierStandard: "claude:claude-sonnet-4-6-20250514",
-    delegationTierPremium: "claude:claude-sonnet-4-6-20250514",
+    delegationTierStandard: "claude:claude-sonnet-5",
+    delegationTierPremium: "claude:claude-sonnet-5",
     embeddingProvider: "openai",
     embeddingModel: "text-embedding-3-small",
     pricing: {
-      chat: { input: 3.00, output: 15.00, model: "claude-sonnet-4-6" },
+      chat: { input: 3.00, output: 15.00, model: "claude-sonnet-5" },
       embedding: { perMillion: 0.02, model: "text-embedding-3-small" },
       delegation: {
         cheap: { input: 0.50, output: 3.00, model: "gemini-3-flash" },
-        premium: { input: 3.00, output: 15.00, model: "claude-sonnet-4-6" },
+        premium: { input: 3.00, output: 15.00, model: "claude-sonnet-5" },
       },
     },
   },
@@ -195,26 +195,26 @@ export const SYSTEM_PRESETS: Record<PresetName, SystemPreset> = {
   premium: {
     name: "premium",
     label: "Premium ($50-100/mo)",
-    description: "Claude Opus 4.6 + GPT-5.2 fallback. Maximum intelligence, no compromises.",
+    description: "Claude Opus 5 + GPT-5.2 fallback. Maximum intelligence, no compromises.",
     estimatedMonthlyCost: "$50-100",
     providerChain: "claude,openai,deepseek",
     providerModels: {
-      claude: "claude-opus-4-6-20250514",    // $5/$25 per 1M, frontier
+      claude: "claude-opus-5",    // $5/$25 per 1M, frontier
       openai: "gpt-5.2",                     // $1.75/$14 per 1M (fallback)
       deepseek: "deepseek-chat",             // $0.28/$0.42 per 1M (cheap delegation)
     },
     delegationTierLocal: "ollama:llama3.3",
     delegationTierCheap: "deepseek:deepseek-chat",
-    delegationTierStandard: "claude:claude-sonnet-4-6-20250514",
-    delegationTierPremium: "claude:claude-opus-4-6-20250514",
+    delegationTierStandard: "claude:claude-sonnet-5",
+    delegationTierPremium: "claude:claude-opus-5",
     embeddingProvider: "openai",
     embeddingModel: "text-embedding-3-small",
     pricing: {
-      chat: { input: 5.00, output: 25.00, model: "claude-opus-4-6" },
+      chat: { input: 5.00, output: 25.00, model: "claude-opus-5" },
       embedding: { perMillion: 0.02, model: "text-embedding-3-small" },
       delegation: {
         cheap: { input: 0.28, output: 0.42, model: "deepseek-chat" },
-        premium: { input: 5.00, output: 25.00, model: "claude-opus-4-6" },
+        premium: { input: 5.00, output: 25.00, model: "claude-opus-5" },
       },
     },
   },
@@ -234,9 +234,9 @@ export const PROVIDER_MODEL_OPTIONS: Record<string, Array<{
   notes: string;
 }>> = {
   claude: [
-    { model: "claude-haiku-4-5-20251001", label: "Haiku 4.5", tier: "budget", inputPer1M: 1.00, outputPer1M: 5.00, contextWindow: "200K", notes: "Fastest Claude. Good for simple tasks and delegation." },
-    { model: "claude-sonnet-4-6-20250514", label: "Sonnet 4.6", tier: "standard", inputPer1M: 3.00, outputPer1M: 15.00, contextWindow: "1M", notes: "Best balance. Excellent tool calling and code generation." },
-    { model: "claude-opus-4-6-20250514", label: "Opus 4.6", tier: "premium", inputPer1M: 5.00, outputPer1M: 25.00, contextWindow: "1M", notes: "Frontier model. Maximum intelligence." },
+    { model: "claude-haiku-4-5", label: "Haiku 4.5", tier: "budget", inputPer1M: 1.00, outputPer1M: 5.00, contextWindow: "200K", notes: "Fastest Claude. Good for simple tasks and delegation." },
+    { model: "claude-sonnet-5", label: "Sonnet 5", tier: "standard", inputPer1M: 3.00, outputPer1M: 15.00, contextWindow: "1M", notes: "Best balance. Excellent tool calling and code generation." },
+    { model: "claude-opus-5", label: "Opus 5", tier: "premium", inputPer1M: 5.00, outputPer1M: 25.00, contextWindow: "1M", notes: "Frontier model. Maximum intelligence." },
   ],
   openai: [
     { model: "gpt-4.1-mini", label: "GPT-4.1 Mini", tier: "budget", inputPer1M: 0.40, outputPer1M: 1.60, contextWindow: "1M", notes: "Fast, cheap. Good for delegation." },

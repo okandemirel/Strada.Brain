@@ -51,23 +51,15 @@ export interface ModelInfo {
 function buildHardcoded(): Map<string, ModelInfo> {
   const now = Date.now();
   const entries: Array<Omit<ModelInfo, "lastUpdated">> = [
+    // Anthropic model IDs are complete as published — never append a date
+    // suffix to an alias. `claude-sonnet-4-6-20250514` and
+    // `claude-opus-4-6-20250514` were such fabrications (20250514 is Claude
+    // Opus 4's release date, pasted onto a 4.6 alias) and 404'd on every call.
     {
-      id: "claude-sonnet-4-6-20250514",
+      id: "claude-opus-5",
       provider: "claude",
       contextWindow: 1_000_000,
-      maxOutputTokens: 64_000,
-      inputPricePerMillion: 3,
-      outputPricePerMillion: 15,
-      supportsVision: true,
-      supportsThinking: true,
-      supportsToolCalling: true,
-      supportsStreaming: true,
-    },
-    {
-      id: "claude-opus-4-6-20250514",
-      provider: "claude",
-      contextWindow: 1_000_000,
-      maxOutputTokens: 64_000,
+      maxOutputTokens: 128_000,
       inputPricePerMillion: 5,
       outputPricePerMillion: 25,
       supportsVision: true,
@@ -76,10 +68,58 @@ function buildHardcoded(): Map<string, ModelInfo> {
       supportsStreaming: true,
     },
     {
-      id: "claude-haiku-4-5-20251001",
+      id: "claude-sonnet-5",
+      provider: "claude",
+      contextWindow: 1_000_000,
+      maxOutputTokens: 128_000,
+      inputPricePerMillion: 3,
+      outputPricePerMillion: 15,
+      supportsVision: true,
+      supportsThinking: true,
+      supportsToolCalling: true,
+      supportsStreaming: true,
+    },
+    {
+      id: "claude-opus-4-8",
+      provider: "claude",
+      contextWindow: 1_000_000,
+      maxOutputTokens: 128_000,
+      inputPricePerMillion: 5,
+      outputPricePerMillion: 25,
+      supportsVision: true,
+      supportsThinking: true,
+      supportsToolCalling: true,
+      supportsStreaming: true,
+    },
+    {
+      id: "claude-sonnet-4-6",
+      provider: "claude",
+      contextWindow: 1_000_000,
+      maxOutputTokens: 128_000,
+      inputPricePerMillion: 3,
+      outputPricePerMillion: 15,
+      supportsVision: true,
+      supportsThinking: true,
+      supportsToolCalling: true,
+      supportsStreaming: true,
+    },
+    {
+      id: "claude-opus-4-6",
+      provider: "claude",
+      contextWindow: 1_000_000,
+      maxOutputTokens: 128_000,
+      inputPricePerMillion: 5,
+      outputPricePerMillion: 25,
+      supportsVision: true,
+      supportsThinking: true,
+      supportsToolCalling: true,
+      supportsStreaming: true,
+    },
+    {
+      id: "claude-haiku-4-5",
       provider: "claude",
       contextWindow: 200_000,
-      maxOutputTokens: 8_000,
+      maxOutputTokens: 64_000,
       inputPricePerMillion: 1,
       outputPricePerMillion: 5,
       supportsVision: true,
@@ -942,6 +982,20 @@ export class ModelIntelligenceService {
     const lastRefresh = this.lastRefreshTimestamp || this.getLastRefresh();
     if (lastRefresh === 0) return true;
     return Date.now() - lastRefresh > this.refreshIntervalMs;
+  }
+
+  /**
+   * Every model currently in the registry.
+   *
+   * The registry is the merge of (a) the SQLite cache written by the last
+   * successful refresh and (b) the embedded seed list, so this reflects live
+   * catalog data whenever a refresh has ever succeeded on this machine, and
+   * degrades to the seed list otherwise. Callers that need to rank or offer
+   * models — delegation tier derivation, the setup wizard — read this rather
+   * than embedding their own list.
+   */
+  getAllModels(): ModelInfo[] {
+    return [...this.models.values()];
   }
 
   /** Total number of models currently in the registry. */

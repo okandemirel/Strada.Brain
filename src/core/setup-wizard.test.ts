@@ -306,7 +306,7 @@ describe("SetupWizard path validation", () => {
       OPENAI_MODEL: "gpt-5.4",
     }, homedir(), 3000);
 
-    expect(lines).toContain('CLAUDE_MODEL="claude-sonnet-4-6-20250514"');
+    expect(lines).toContain('CLAUDE_MODEL="claude-sonnet-5"');
     expect(lines).toContain('DEEPSEEK_MODEL="deepseek-chat"');
     expect(lines).toContain('GEMINI_MODEL="gemini-3-flash-preview"');
     expect(lines).toContain('OPENAI_MODEL="gpt-5.4"');

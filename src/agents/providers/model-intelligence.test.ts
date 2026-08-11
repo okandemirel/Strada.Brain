@@ -40,9 +40,15 @@ import { PROVIDER_MODEL_OPTIONS } from "../../config/presets.js";
 
 describe("HARDCODED_MODELS", () => {
   const expectedModels = [
-    "claude-sonnet-4-6-20250514",
-    "claude-opus-4-6-20250514",
-    "claude-haiku-4-5-20251001",
+    // Anthropic ids are complete as published — the previously-listed
+    // `claude-sonnet-4-6-20250514` / `claude-opus-4-6-20250514` appended Claude
+    // Opus 4's release date to a 4.6 alias and 404'd on every call.
+    "claude-opus-5",
+    "claude-sonnet-5",
+    "claude-opus-4-8",
+    "claude-sonnet-4-6",
+    "claude-opus-4-6",
+    "claude-haiku-4-5",
     "gpt-5.4",
     "gpt-5.2",
     "gemini-3.1-pro-preview",
@@ -64,8 +70,8 @@ describe("HARDCODED_MODELS", () => {
     "opencode/kimi-k2.6",
   ];
 
-  it("has all 22 default model entries", () => {
-    expect(HARDCODED_MODELS.size).toBe(22);
+  it("has all 25 default model entries", () => {
+    expect(HARDCODED_MODELS.size).toBe(25);
     for (const model of expectedModels) {
       expect(HARDCODED_MODELS.has(model), `missing: ${model}`).toBe(true);
     }
@@ -80,9 +86,12 @@ describe("HARDCODED_MODELS", () => {
 
   it("each entry has the expected provider name", () => {
     const providerMap: Record<string, string> = {
-      "claude-sonnet-4-6-20250514": "claude",
-      "claude-opus-4-6-20250514": "claude",
-      "claude-haiku-4-5-20251001": "claude",
+      "claude-opus-5": "claude",
+      "claude-sonnet-5": "claude",
+      "claude-opus-4-8": "claude",
+      "claude-sonnet-4-6": "claude",
+      "claude-opus-4-6": "claude",
+      "claude-haiku-4-5": "claude",
       "gpt-5.4": "openai",
       "gpt-5.2": "openai",
       "gemini-3.1-pro-preview": "gemini",
@@ -186,9 +195,9 @@ describe("ModelIntelligenceService", () => {
 
   it("getModelInfo returns hardcoded fallback for known models", () => {
     // Before initialize, models map is empty, but getModelInfo falls back to HARDCODED_MODELS
-    const info = service.getModelInfo("claude-sonnet-4-6-20250514");
+    const info = service.getModelInfo("claude-sonnet-5");
     expect(info).toBeDefined();
-    expect(info!.id).toBe("claude-sonnet-4-6-20250514");
+    expect(info!.id).toBe("claude-sonnet-5");
     expect(info!.provider).toBe("claude");
     expect(info!.contextWindow).toBe(1_000_000);
   });
@@ -374,9 +383,12 @@ describe("ModelIntelligenceService", () => {
     const openaiModels = service.getProviderModels("openai");
     const geminiModels = service.getProviderModels("gemini");
 
-    expect(claudeModels.length).toBe(3);
+    expect(claudeModels.length).toBe(6);
     expect(openaiModels.length).toBe(2);
     expect(geminiModels.length).toBe(2);
+    // Every returned entry really belongs to the requested provider — the
+    // count alone would still pass if filtering were broken in both directions.
+    expect(claudeModels.every((m) => m.provider === "claude")).toBe(true);
   });
 
   it("handles LiteLLM returning non-object JSON gracefully", async () => {
