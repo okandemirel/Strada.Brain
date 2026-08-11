@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { getLogger } from "../../utils/logger.js";
 
 export type ProviderSourceKind = "html" | "markdown" | "json" | "text";
@@ -15,7 +16,30 @@ export interface ProviderSourceRegistry {
   readonly providers: Record<string, ProviderOfficialSource[]>;
 }
 
+/**
+ * Repo-relative location of the registry file, kept for config defaults and
+ * documentation. NOT used to resolve the file at runtime — see
+ * {@link resolveDefaultRegistryPath}.
+ */
 export const DEFAULT_PROVIDER_SOURCE_REGISTRY_PATH = "src/agents/providers/provider-sources.json";
+
+/**
+ * Resolve the shipped registry next to THIS module rather than the process
+ * cwd.
+ *
+ * The old default was the cwd-relative string above, so a packaged install
+ * looked for `<user's Unity project>/src/agents/providers/provider-sources.json`
+ * — a path that exists only in a source checkout. It never threw: the loader
+ * warned and returned an empty registry, silently disabling provider
+ * official-source enrichment for every installed user.
+ *
+ * Module-relative works in both layouts: `src/agents/providers/` when running
+ * from source via tsx, `dist/agents/providers/` when running the built CLI
+ * (the build copies non-TS assets into dist).
+ */
+export function resolveDefaultRegistryPath(): string {
+  return join(dirname(fileURLToPath(import.meta.url)), "provider-sources.json");
+}
 
 export interface ProviderOfficialSignal {
   readonly kind: "command" | "feature" | "model";
@@ -223,9 +247,23 @@ function isProviderSource(value: unknown): value is ProviderOfficialSource {
       || ["html", "markdown", "json", "text"].includes((value as ProviderOfficialSource).kind as string));
 }
 
-export function loadProviderSourceRegistry(registryPath: string = DEFAULT_PROVIDER_SOURCE_REGISTRY_PATH): ProviderSourceRegistry {
+export function loadProviderSourceRegistry(registryPath?: string): ProviderSourceRegistry {
   const logger = getLogger();
-  const resolvedPath = resolve(process.cwd(), registryPath);
+  // An explicit path is the operator's, so it stays cwd-relative. With no
+  // path — or with the legacy repo-relative default that a stale config may
+  // still carry — resolve the copy that ships beside this module, falling back
+  // to cwd only if that is somehow absent.
+  const usingDefault =
+    registryPath === undefined || registryPath === DEFAULT_PROVIDER_SOURCE_REGISTRY_PATH;
+  let resolvedPath: string;
+  if (usingDefault) {
+    const beside = resolveDefaultRegistryPath();
+    resolvedPath = existsSync(beside)
+      ? beside
+      : resolve(process.cwd(), DEFAULT_PROVIDER_SOURCE_REGISTRY_PATH);
+  } else {
+    resolvedPath = resolve(process.cwd(), registryPath);
+  }
   if (!existsSync(resolvedPath)) {
     logger.warn("Provider source registry file not found", { registryPath: resolvedPath });
     return { version: 1, providers: {} };
