@@ -1,8 +1,10 @@
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach, beforeAll } from "vitest";
 import { mkdtempSync, writeFileSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { createLogger } from "../utils/logger.js";
 import { SessionManager, type SessionManagerDeps, type Session } from "./orchestrator-session-manager.js";
+import type { ConversationMessage } from "./providers/provider.interface.js";
 
 function createMockDeps(overrides?: Partial<SessionManagerDeps>): SessionManagerDeps {
   return {
@@ -20,6 +22,11 @@ function createMockDeps(overrides?: Partial<SessionManagerDeps>): SessionManager
 }
 
 describe("SessionManager", () => {
+  // The hard-cap trim path logs a warning; the logger is a process-wide singleton.
+  beforeAll(() => {
+    createLogger("error", "test.log");
+  });
+
   it("creates a new session for unknown chatId", () => {
     const sm = new SessionManager(createMockDeps());
     const session = sm.getOrCreateSession("chat-new");
@@ -210,6 +217,97 @@ describe("SessionManager", () => {
     // Should have trimmed some messages
     expect(session.messages.length).toBeLessThan(6);
     expect(trimmed.length).toBeGreaterThan(0);
+  });
+
+  describe("trimSession never leaves a provider-invalid head", () => {
+    /** The provider contract: history must start on a user turn, and a
+     *  tool_result must be preceded by its tool_use. Violating either is a
+     *  400 — and because the trim is persisted, every later request in the
+     *  session repeats it. */
+    function assertValidHead(session: { messages: ConversationMessage[] }) {
+      if (session.messages.length === 0) return;
+      const head = session.messages[0]!;
+      expect(head.role, `head role (got ${head.role})`).toBe("user");
+      if (Array.isArray(head.content)) {
+        const orphaned = head.content.some(
+          (b) => (b as { type?: string })?.type === "tool_result",
+        );
+        expect(orphaned, "head is an orphaned tool_result").toBe(false);
+      }
+    }
+
+    /** Build a session with no plain-user boundary anywhere, so the safe-boundary
+     *  search fails and the hard-cap fallback takes over — the path that used to
+     *  orphan. Every turn is assistant(tool_calls) → user(tool_result). */
+    function buildToolOnlySession(sm: SessionManager, pairs: number) {
+      const session = sm.getOrCreateSession("chat-trim");
+      sm.appendVisibleUserMessage(session, "kick off");
+      for (let i = 0; i < pairs; i++) {
+        session.messages.push({
+          role: "assistant",
+          content: "",
+          tool_calls: [{ id: `call-${i}`, type: "function", function: { name: "t", arguments: "{}" } }],
+        } as ConversationMessage);
+        session.messages.push({
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: `call-${i}`, content: "ok" }],
+        } as ConversationMessage);
+      }
+      return session;
+    }
+
+    it("repairs the head when the hard-cap fallback force-trims", () => {
+      const sm = new SessionManager(createMockDeps());
+      const session = buildToolOnlySession(sm, 12);
+      const before = session.messages.length;
+
+      const trimmed = sm.trimSession(session, 4); // hard cap = 8, well exceeded
+
+      expect(trimmed.length).toBeGreaterThan(0);
+      expect(session.messages.length).toBeLessThan(before);
+      assertValidHead(session);
+    });
+
+    it("never leaves an assistant turn leading the history", () => {
+      const sm = new SessionManager(createMockDeps());
+      const session = buildToolOnlySession(sm, 20);
+      sm.trimSession(session, 3);
+      assertValidHead(session);
+    });
+
+    it("keeps a legitimate multimodal user turn as a valid head", () => {
+      // A user message with ARRAY content is only invalid when it carries a
+      // tool_result; images/documents must survive.
+      const sm = new SessionManager(createMockDeps());
+      const session = sm.getOrCreateSession("chat-mm");
+      for (let i = 0; i < 6; i++) {
+        sm.appendVisibleUserMessage(session, `user-${i}`);
+        sm.appendVisibleAssistantMessage(session, `assistant-${i}`);
+      }
+      session.messages.push({
+        role: "user",
+        content: [{ type: "text", text: "look at this" }, { type: "image", source: {} }],
+      } as unknown as ConversationMessage);
+      sm.appendVisibleAssistantMessage(session, "seen");
+
+      sm.trimSession(session, 4);
+      assertValidHead(session);
+      // The multimodal turn must not have been dropped merely for being an array.
+      const kept = session.messages.some(
+        (m) => Array.isArray(m.content)
+          && m.content.some((b) => (b as { type?: string })?.type === "image"),
+      );
+      expect(kept).toBe(true);
+    });
+
+    it("removed messages are also dropped from the visible transcript", () => {
+      const sm = new SessionManager(createMockDeps());
+      const session = buildToolOnlySession(sm, 12);
+      const removed = sm.trimSession(session, 4);
+      for (const m of removed) {
+        expect(session.visibleMessages ?? []).not.toContain(m);
+      }
+    });
   });
 
   it("getPendingPlanReviewVisibleText returns null when no gate", () => {

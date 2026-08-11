@@ -328,8 +328,31 @@ export class SessionManager {
     if (session.messages.length <= maxMessages) return [];
 
     const overflow = session.messages.length - maxMessages;
+    /**
+     * A surviving conversation must START on a message the provider accepts:
+     * a user turn that is not an orphaned tool result. Anthropic and OpenAI
+     * both reject a history whose first message is an assistant turn, or whose
+     * `tool_result` has no preceding `tool_use` — with a 400, not a warning.
+     */
+    const isValidHead = (msg: ConversationMessage): boolean => {
+      if (msg.role !== "user") return false;
+      if (typeof msg.content === "string") return true;
+      // Multimodal user turns (images/documents) are fine; a tool_result block
+      // is not, because its matching tool_use has just been trimmed away.
+      return !(Array.isArray(msg.content)
+        && msg.content.some((b) => (b as { type?: string })?.type === "tool_result"));
+    };
+
     const trimMessages = (count: number): ConversationMessage[] => {
       const allRemoved = session.messages.splice(0, count);
+      // Repair the head after ANY trim. The safe-boundary path above already
+      // lands on a valid user turn so this is a no-op there, but the hard-cap
+      // fallbacks below cut at an arbitrary index and previously left the
+      // session permanently un-sendable: the trim is persisted, so every later
+      // request in that session repeated the same 400.
+      while (session.messages.length > 0 && !isValidHead(session.messages[0]!)) {
+        allRemoved.push(session.messages.shift()!);
+      }
       if (allRemoved.length === 0) {
         return allRemoved;
       }
@@ -387,7 +410,8 @@ export class SessionManager {
           return trimMessages(i);
         }
       }
-      // Last resort: trim at overflow, accepting potential orphaning
+      // Last resort: trim at overflow. trimMessages repairs the head, so this
+      // no longer orphans a tool_result or leaves an assistant turn leading.
       return trimMessages(overflow);
     }
 

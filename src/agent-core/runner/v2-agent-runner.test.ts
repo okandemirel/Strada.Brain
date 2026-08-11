@@ -253,6 +253,7 @@ function mkPort(provider: IAIProvider, opts: MockPortOptions = {}): Orchestrator
     recordHealthSuccess: ReturnType<typeof vi.fn>;
     classifyFailureForVerdict: ReturnType<typeof vi.fn>;
     onEpochRollover: ReturnType<typeof vi.fn>;
+    handlePlanPhase: ReturnType<typeof vi.fn>;
   };
 } {
   const setup = mkSetup();
@@ -283,6 +284,11 @@ function mkPort(provider: IAIProvider, opts: MockPortOptions = {}): Orchestrator
       return { callStalled: false, taskCancelReason: null, benign: false };
     }),
     onEpochRollover: vi.fn(),
+    // Spied so a test can assert WHICH phase the spine handed to the plan
+    // port — the REPLANNING regression is invisible from the result alone.
+    handlePlanPhase: vi.fn(async (p: { agentState: AgentState }) => ({
+      agentState: { ...p.agentState, phase: opts.planTransitionTo ?? AgentPhase.EXECUTING },
+    })),
   };
 
   const port: OrchestratorPort = {
@@ -304,9 +310,7 @@ function mkPort(provider: IAIProvider, opts: MockPortOptions = {}): Orchestrator
     dispatchEndTurn: spies.dispatchEndTurn,
     // Default mirrors v1's handlePlanPhaseTransition: a normal plan moves PLANNING→EXECUTING.
     // Tests override planTransitionTo to pin a specific target.
-    handlePlanPhase: async (p) => ({
-      agentState: { ...p.agentState, phase: opts.planTransitionTo ?? AgentPhase.EXECUTING },
-    }),
+    handlePlanPhase: spies.handlePlanPhase,
     decomposeGoalsIfPlanning: async (p) => p.agentState,
     executeToolCalls: spies.executeToolCalls,
     getInteractiveIterationLimit: () => opts.iterationLimit ?? 10,
@@ -443,6 +447,37 @@ describe("V2AgentRunner — clean run (PLANNING → EXECUTING → end_turn)", ()
     const finished = handles.events().filter((e) => e.type === "model.call.finished");
     expect(finished).toHaveLength(2);
     expect(started).toHaveLength(2);
+  });
+});
+
+describe("V2AgentRunner — REPLANNING is not an absorbing state", () => {
+  it("hands a REPLANNING turn to the plan port, so the run can return to EXECUTING", async () => {
+    // Regression: the spine gated its plan branch on `phase === PLANNING`
+    // only, while the port itself handles `PLANNING || REPLANNING` and owns
+    // the single REPLANNING→EXECUTING transition (orchestrator-loop-utils
+    // handlePlanPhaseTransition). A replan therefore parked the run in
+    // REPLANNING forever: write tools are stripped in that phase, the
+    // reflection boundary stops firing, and the run either ends early or
+    // burns its whole iteration budget making no progress.
+    const handles = mkPlane();
+    const gateway = new ModelGateway(
+      scriptedStream([
+        mkResponse({ text: "here is a plan" }),
+        mkResponse({ text: "revised plan" }),
+        mkResponse({ text: "done", stopReason: "end_turn" }),
+      ]),
+    );
+    // Turn 1 (PLANNING) lands in REPLANNING, reproducing the post-replan state.
+    const port = mkPort(mkProvider(), { planTransitionTo: AgentPhase.REPLANNING });
+    const runner = mkRunner(handles.plane, gateway, port, handles.clock);
+
+    await drive(handles.clock, runner.run(mkRequest(), mkIO("interactive")));
+
+    const phasesHandled = port.spies.handlePlanPhase.mock.calls.map(
+      (c: [{ agentState: AgentState }]) => c[0].agentState.phase,
+    );
+    expect(phasesHandled).toContain(AgentPhase.PLANNING);
+    expect(phasesHandled).toContain(AgentPhase.REPLANNING);
   });
 });
 

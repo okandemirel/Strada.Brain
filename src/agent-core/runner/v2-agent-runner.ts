@@ -507,8 +507,20 @@ export class V2AgentRunner implements AgentRunner {
           }
           consecutiveMaxTokens = 0; // reset on every non-(toolless-max_tokens) turn (v1 ~5346)
 
-          // PLANNING: plan-phase transition + goal decomposition (gauntlet #13,#14,#15).
-          if (state.phase === AgentPhase.PLANNING) {
+          // PLANNING / REPLANNING: plan-phase transition + goal decomposition
+          // (gauntlet #13,#14,#15).
+          //
+          // REPLANNING must enter this branch too. `handlePlanPhaseTransition`
+          // (orchestrator-loop-utils) is the ONLY code path that moves
+          // REPLANNING→EXECUTING, and it is reachable only through
+          // `port.handlePlanPhase` — which already accepts both phases. Gating
+          // on PLANNING alone made REPLANNING absorbing: every producer of that
+          // phase (reflection REPLAN, the end-turn verifier's replan arm, the
+          // reflection-override escalation) handed the spine a state it could
+          // never leave, and for the rest of the run write tools were stripped
+          // (allowWriteTools is false in REPLANNING) and the reflection
+          // boundary never fired again.
+          if (state.phase === AgentPhase.PLANNING || state.phase === AgentPhase.REPLANNING) {
             const prevPhase = state.phase;
             const plan = await port.handlePlanPhase({
               mode,
