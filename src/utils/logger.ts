@@ -105,6 +105,32 @@ const NOOP_LOGGER: LoggerLike = {
   error: () => undefined,
 };
 
+/**
+ * Redact secrets for EVERY transport, not just the ring buffer.
+ *
+ * Redaction used to live only inside `RingBufferTransport.log`, so a value the
+ * dashboard showed as `[REDACTED]` was written in clear text to the rotating
+ * log file on disk and to stdout — which is exactly where container log
+ * collectors and CI job logs pick it up. Running it as a shared winston format
+ * means the sanitized `info` object reaches Console, File and the ring buffer
+ * alike, and there is one place to audit.
+ *
+ * String leaves only, never the serialized JSON: the patterns can match
+ * characters that double as JSON delimiters, so sanitizing a serialized object
+ * would corrupt its structure.
+ */
+const redactSecretsFormat = winston.format((info) => {
+  if (typeof info.message === "string") {
+    info.message = sanitizeSecretsQuiet(info.message);
+  }
+  for (const key of Object.keys(info)) {
+    if (key === "message" || key === "level" || key === "timestamp") continue;
+    const value = (info as Record<string, unknown>)[key];
+    (info as Record<string, unknown>)[key] = sanitizeMetaValue(value);
+  }
+  return info;
+});
+
 export function createLogger(level: string, logFile: string): winston.Logger {
   if (logger) return logger;
 
@@ -113,6 +139,9 @@ export function createLogger(level: string, logFile: string): winston.Logger {
     format: winston.format.combine(
       winston.format.timestamp({ format: "YYYY-MM-DD HH:mm:ss" }),
       winston.format.errors({ stack: true }),
+      // Before json() so the redaction sees structured leaves, and before every
+      // transport so none of them can receive an unredacted line.
+      redactSecretsFormat(),
       winston.format.json()
     ),
     defaultMeta: { service: "strada-brain" },

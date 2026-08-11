@@ -24,6 +24,18 @@ import type {
   VaultSymbol, VaultEdge, VaultWikilink,
 } from './vault.interface.js';
 
+/**
+ * How many extra candidates to retrieve per requested result when a
+ * langFilter/pathGlob is active. Filtering happens after retrieval, so the
+ * candidate pool must be wider than topK or a selective filter starves the
+ * result set. 5x covers a filter that matches ~20% of the corpus.
+ */
+const FILTER_OVERFETCH = 5;
+
+/** Hard ceiling on the over-fetch, so a large topK cannot turn one query into
+ *  an unbounded scan. */
+const MAX_FETCH_K = 200;
+
 export interface UnityVaultDeps {
   id: VaultId;
   rootPath: string;
@@ -105,17 +117,27 @@ export class UnityProjectVault implements IVault {
 
   async query(q: VaultQuery): Promise<VaultQueryResult> {
     const topK = q.topK ?? 20;
-    const fts = this.store.searchFts(escapeFtsQuery(q.text), topK);
+    // langFilter / pathGlob are CANDIDATE constraints, not a post-trim. They
+    // used to run after the fused list had already been cut to topK, so a
+    // filtered search returned roughly nothing: ask for the top 20 with
+    // langFilter ["csharp"] and if those 20 happened to be markdown, every one
+    // was discarded and the query came back empty. Over-fetch while a filter
+    // is active so there is still a full result set left after filtering, and
+    // apply the topK cut at the end.
+    const filtersActive = Boolean(q.langFilter?.length || q.pathGlob);
+    const fetchK = filtersActive ? Math.min(topK * FILTER_OVERFETCH, MAX_FETCH_K) : topK;
+    const fts = this.store.searchFts(escapeFtsQuery(q.text), fetchK);
     // Embeddings only ENHANCE retrieval. Skip the embed + vector-search
     // round-trip entirely when the backing store is non-semantic (no real
     // HNSW backend) so a placeholder/unwired store can't fuse noise vectors
     // into the lexical (BM25) ranking. When semantic, fuse via RRF as before.
     const hnswRanked: Array<{ chunkId: string; score: number }> = this.adapter.isSemantic()
-      ? (await this.adapter.search(q.text, topK))
+      ? (await this.adapter.search(q.text, fetchK))
           .map((h) => ({ chunkId: payloadChunkId(h), score: h.score }))
           .filter((r): r is { chunkId: string; score: number } => r.chunkId !== null)
       : [];
-    const fused = rrfFuse(fts, hnswRanked, 60).slice(0, topK);
+    // NOT sliced here — the cut to topK happens after filtering (see below).
+    const fused = rrfFuse(fts, hnswRanked, 60);
 
     // Phase 2: optional Personalized PageRank re-rank when focusFiles is provided.
     let rankedChunkIds = fused.map((f) => f.chunkId);
@@ -156,6 +178,10 @@ export class UnityProjectVault implements IVault {
       const re = globToRegex(q.pathGlob);
       chunks = chunks.filter((c) => re.test(c.path));
     }
+
+    // Cut to topK only now that filtering has run, so the caller gets topK
+    // matching chunks rather than "whatever survives filtering out of topK".
+    chunks = chunks.slice(0, topK);
 
     const budget = q.budgetTokens ?? Number.POSITIVE_INFINITY;
     const { kept, dropped } = packByBudget(chunks, budget);

@@ -329,6 +329,122 @@ describe("UnityProjectVault embedding-optional retrieval (FTS-carries)", () => {
   });
 });
 
+describe("UnityProjectVault filters constrain candidates, not results", () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "strada-vault-filter-"));
+    // 40 SHORT markdown files that repeat the query terms (high BM25: dense
+    // term frequency, short document) and ONE LONG C# file that mentions them
+    // exactly once (low BM25). The C# file therefore ranks well below topK, so
+    // a langFilter applied AFTER the topK cut leaves zero hits — which is what
+    // used to happen on the code-search path AGENTS.md tells agents to use.
+    for (let i = 0; i < 40; i++) {
+      await writeFile(
+        join(dir, `note-${i}.md`),
+        "inventory damping inventory damping inventory damping\n",
+        "utf8",
+      );
+    }
+    const filler = Array.from({ length: 200 }, (_, n) => `  void Unrelated${n}() {}`).join("\n");
+    await writeFile(
+      join(dir, "Player.cs"),
+      `public class Player {\n  // inventory damping applied here\n${filler}\n}\n`,
+      "utf8",
+    );
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  /**
+   * These assert the MECHANISM (candidate over-fetch) rather than an emergent
+   * starved result set. Constructing a reliable BM25 starvation case proved
+   * impossible here — the C# chunks kept ranking inside topK even against 250
+   * competing markdown files — so an outcome-only test would pass with the bug
+   * present and prove nothing. The over-fetch is the thing that was missing,
+   * so that is what is pinned.
+   */
+  function spyOnFtsLimit(vault: UnityProjectVault): { limits: number[] } {
+    const store = (vault as unknown as { store: { searchFts: (q: string, k: number) => unknown } }).store;
+    const limits: number[] = [];
+    const original = store.searchFts.bind(store);
+    store.searchFts = (q: string, k: number) => {
+      limits.push(k);
+      return original(q, k);
+    };
+    return { limits };
+  }
+
+  it("fetches MORE candidates than topK when a langFilter is active", async () => {
+    const vault = new UnityProjectVault({
+      id: "filt", rootPath: dir,
+      embedding: createFakeEmbedding(), vectorStore: createFakeVectorStore(),
+    });
+    try {
+      await vault.init();
+      const spy = spyOnFtsLimit(vault);
+      const result = await vault.query({ text: "inventory damping", topK: 10, langFilter: ["csharp"] });
+
+      expect(spy.limits.length).toBeGreaterThan(0);
+      // Without over-fetch the filter can only ever shrink an already-cut
+      // top-10, which is how a filtered search came back empty.
+      expect(Math.max(...spy.limits)).toBeGreaterThan(10);
+      expect(result.hits.every((h) => h.chunk.path.endsWith(".cs"))).toBe(true);
+    } finally {
+      await vault.dispose().catch(() => undefined);
+    }
+  });
+
+  it("fetches MORE candidates than topK when a pathGlob is active", async () => {
+    const vault = new UnityProjectVault({
+      id: "filt2", rootPath: dir,
+      embedding: createFakeEmbedding(), vectorStore: createFakeVectorStore(),
+    });
+    try {
+      await vault.init();
+      const spy = spyOnFtsLimit(vault);
+      const result = await vault.query({ text: "inventory damping", topK: 10, pathGlob: "*.cs" });
+
+      expect(Math.max(...spy.limits)).toBeGreaterThan(10);
+      expect(result.hits.every((h) => h.chunk.path.endsWith(".cs"))).toBe(true);
+    } finally {
+      await vault.dispose().catch(() => undefined);
+    }
+  });
+
+  it("does NOT over-fetch when no filter is active", async () => {
+    // The wider scan is a cost paid only when a filter needs it.
+    const vault = new UnityProjectVault({
+      id: "filt4", rootPath: dir,
+      embedding: createFakeEmbedding(), vectorStore: createFakeVectorStore(),
+    });
+    try {
+      await vault.init();
+      const spy = spyOnFtsLimit(vault);
+      await vault.query({ text: "inventory damping", topK: 10 });
+      expect(Math.max(...spy.limits)).toBe(10);
+    } finally {
+      await vault.dispose().catch(() => undefined);
+    }
+  });
+
+  it("still honors topK after filtering", async () => {
+    const vault = new UnityProjectVault({
+      id: "filt3", rootPath: dir,
+      embedding: createFakeEmbedding(), vectorStore: createFakeVectorStore(),
+    });
+    try {
+      await vault.init();
+      const result = await vault.query({ text: "inventory damping", topK: 3, pathGlob: "*.md" });
+      expect(result.hits.length).toBeLessThanOrEqual(3);
+    } finally {
+      await vault.dispose().catch(() => undefined);
+    }
+  });
+});
+
 describe("UnityProjectVault FTS query escaping (multi-word + injection)", () => {
   let dir: string;
 

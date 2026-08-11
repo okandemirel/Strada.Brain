@@ -15,6 +15,7 @@
  */
 
 import type { TaggedGoalNode, NodeResult } from "./supervisor-types.js";
+import { getLoggerSafe } from "../utils/logger.js";
 import {
   buildSupervisorCanvasNodeUpdate,
   buildSupervisorCanvasSummaryUpdate,
@@ -367,7 +368,9 @@ export class SupervisorDispatcher {
         }
       }
 
-      // Safety: if no progress, break to avoid infinite loop (cycle in DAG)
+      // Safety: no progress means the remaining nodes form a dependency cycle
+      // (or depend on one). Stop scheduling — but the caller MUST be told which
+      // nodes were left out; see `findUnschedulableNodes`.
       if (wave.length === 0) break;
 
       for (const node of wave) {
@@ -377,6 +380,28 @@ export class SupervisorDispatcher {
     }
 
     return waves;
+  }
+
+  /**
+   * Nodes that `computeWaves` could not schedule — i.e. those in a dependency
+   * cycle, or depending on one.
+   *
+   * These used to vanish: `computeWaves` dropped them and `dispatch` returned
+   * results only for what it ran, so a goal whose LLM-authored plan contained a
+   * cycle reported every node it *did* run as successful and the caller saw a
+   * clean completion. The user was told work was finished that was never even
+   * scheduled. Surfacing them as failed results makes the existing
+   * success/failure aggregation report the truth.
+   */
+  findUnschedulableNodes(
+    nodes: TaggedGoalNode[],
+    waves: TaggedGoalNode[][],
+  ): TaggedGoalNode[] {
+    const scheduled = new Set<string>();
+    for (const wave of waves) {
+      for (const node of wave) scheduled.add(node.id as string);
+    }
+    return nodes.filter((n) => !scheduled.has(n.id as string));
   }
 
   // ---------------------------------------------------------------------------
@@ -398,6 +423,34 @@ export class SupervisorDispatcher {
   ): Promise<NodeResult[]> {
     const waves = this.computeWaves(nodes);
     const results: NodeResult[] = [];
+
+    // Nodes stuck in a dependency cycle are never scheduled. Record them as
+    // FAILED up front so they cannot be mistaken for work that succeeded.
+    const unschedulable = this.findUnschedulableNodes(nodes, waves);
+    for (const node of unschedulable) {
+      const reason =
+        "dependency cycle: this node's dependencies can never all resolve, so it was never scheduled";
+      results.push({
+        nodeId: node.id,
+        status: "failed",
+        output: "",
+        blockedReason: reason,
+        artifacts: [],
+        toolResults: [],
+        provider: node.assignedProvider ?? "unassigned",
+        model: "",
+        cost: 0,
+        duration: 0,
+      });
+      this.emitNodeNarrative(node, "failed", reason);
+    }
+    if (unschedulable.length > 0) {
+      getLoggerSafe().warn("Supervisor: goal contains a dependency cycle", {
+        unschedulableNodeIds: unschedulable.map((n) => n.id),
+        scheduled: nodes.length - unschedulable.length,
+        total: nodes.length,
+      });
+    }
     const failedNodeIds = new Set<string>();
     // A skipped node leaves its dependents unsatisfied just like a failed one,
     // so track skips too and propagate them transitively (a dependent of a

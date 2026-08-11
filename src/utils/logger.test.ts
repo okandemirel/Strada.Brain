@@ -7,6 +7,35 @@ describe("logger", () => {
     vi.resetModules();
   });
 
+  it("redacts secrets on the FILE transport, not just the ring buffer", async () => {
+    // Redaction used to run only inside RingBufferTransport, so a value the
+    // dashboard showed as [REDACTED] was written in clear text to the rotating
+    // log file and to stdout — where container log collectors and CI job logs
+    // pick it up.
+    const { mkdtempSync, readFileSync, existsSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const { tmpdir } = await import("node:os");
+    const dir = mkdtempSync(join(tmpdir(), "strada-logredact-"));
+    const logFile = join(dir, "redact.log");
+
+    const { createLogger } = await import("./logger.js");
+    const logger = createLogger("info", logFile);
+
+    const canary = "sk-ant-api03-CANARYSECRETVALUE1234567890abcdefXYZ";
+    logger.info("provider configured", { apiKey: canary, nested: { inner: canary } });
+    logger.info(`bare message containing ${canary} inline`);
+
+    // Winston's File transport writes asynchronously.
+    await new Promise((r) => setTimeout(r, 600));
+
+    expect(existsSync(logFile)).toBe(true);
+    const onDisk = readFileSync(logFile, "utf8");
+    expect(onDisk.length).toBeGreaterThan(0);
+    // The secret must appear nowhere: not in meta, not nested, not inline.
+    expect(onDisk).not.toContain("CANARYSECRETVALUE1234567890abcdefXYZ");
+    expect(onDisk).toMatch(/REDACTED/i);
+  });
+
   it("getLogger throws before createLogger is called", async () => {
     const { getLogger } = await import("./logger.js");
     expect(() => getLogger()).toThrow("Logger not initialized");

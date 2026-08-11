@@ -38,6 +38,74 @@ describe("MessageQueue – FIFO ordering", () => {
   });
 });
 
+describe("MessageQueue – queue mutation during an in-flight send", () => {
+  it("removes the entry it actually sent, not whatever is at the head", async () => {
+    // The FIFO branch reads entries[0], awaits the send, then removes. A retry
+    // timer legitimately unshifts its entry back to the HEAD during that await
+    // (it must, to preserve in-order delivery). A positional shift() then
+    // removed the WRONG entry: the re-queued message vanished — never sent,
+    // never resolved or rejected, so its caller hung forever — and the message
+    // that had just been sent stayed queued and went out a second time.
+    const sent: string[] = [];
+    const q = new MessageQueue<string>(
+      makeOpts<string>({
+        processItem: async (item) => {
+          sent.push(item);
+          if (item === "B") {
+            // Simulate the retry timer firing mid-await.
+            q.entries.unshift({
+              id: "requeued-A",
+              item: "A-retry",
+              priority: 0,
+              retries: 1,
+              enqueuedAt: Date.now(),
+              resolve: () => {},
+              reject: () => {},
+            });
+          }
+        },
+      }),
+    );
+
+    void q.enqueue("B");
+    await q.processQueue();
+
+    // The re-queued entry must survive — it was never sent.
+    expect(q.entries.map((e) => e.id)).toContain("requeued-A");
+    // ...and B must not still be queued for a second delivery.
+    expect(q.entries.some((e) => e.item === "B")).toBe(false);
+    expect(sent.filter((s) => s === "B")).toHaveLength(1);
+  });
+
+  it("removes the correct entry when the send fails and exhausts retries", async () => {
+    const q = new MessageQueue<string>(
+      makeOpts<string>({
+        maxRetries: 1,
+        processItem: async (item) => {
+          if (item === "B") {
+            q.entries.unshift({
+              id: "requeued-A",
+              item: "A-retry",
+              priority: 0,
+              retries: 1,
+              enqueuedAt: Date.now(),
+              resolve: () => {},
+              reject: () => {},
+            });
+            throw new Error("send failed");
+          }
+        },
+      }),
+    );
+
+    void q.enqueue("B").catch(() => undefined);
+    await q.processQueue();
+
+    expect(q.entries.map((e) => e.id)).toContain("requeued-A");
+    expect(q.entries.some((e) => e.item === "B")).toBe(false);
+  });
+});
+
 describe("MessageQueue – priority ordering", () => {
   it("sorts lower-priority-number items before higher", async () => {
     const order: number[] = [];

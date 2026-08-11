@@ -70,12 +70,21 @@ export async function enforceTierLimits(ctx: AgentDBTieringContext, tier: Memory
   const entries = Array.from(ctx.entries.values()).filter((e) => e.tier === tier);
 
   if (entries.length > maxEntries) {
-    // Sort by importance and last accessed
-    entries.sort((a, b) => {
-      const scoreA = a.importanceScore * 0.7 + (a.accessCount / 100) * 0.3;
-      const scoreB = b.importanceScore * 0.7 + (b.accessCount / 100) * 0.3;
-      return scoreA - scoreB;
-    });
+    // Sort by importance and access frequency, ascending — index 0 is evicted.
+    //
+    // NaN-safety is load-bearing here, not decorative: a comparator that ever
+    // returns NaN makes the sort order implementation-defined, which turns
+    // "evict the least valuable" into "evict something arbitrary" — including
+    // the most important memories in the tier. Every write path currently
+    // guards these fields, so this is hardening rather than a fix for an
+    // observed failure; the cost is one clamp per comparison and the downside
+    // of getting it wrong is silent, unrecoverable data loss.
+    const evictionScore = (e: { importanceScore: number; accessCount: number }): number => {
+      const importance = Number.isFinite(e.importanceScore) ? e.importanceScore : 0;
+      const access = Number.isFinite(e.accessCount) ? e.accessCount : 0;
+      return importance * 0.7 + (access / 100) * 0.3;
+    };
+    entries.sort((a, b) => evictionScore(a) - evictionScore(b));
 
     // Remove lowest scoring entries
     const toRemove = entries.slice(0, entries.length - maxEntries);

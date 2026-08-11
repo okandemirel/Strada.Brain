@@ -209,6 +209,36 @@ describe("enforceTierLimits", () => {
     expect(remaining.length).toBe(5);
   });
 
+  it("keeps the most important entries even when some scores are non-finite", async () => {
+    // Hardening guard, not a reproduction of an observed failure: every write
+    // path currently defaults these fields. But a comparator that returns NaN
+    // makes Array.sort's order implementation-defined, so eviction would stop
+    // being "least valuable first" and could silently delete the most
+    // important memories in the tier — unrecoverable, and invisible until
+    // someone notices the agent forgot something it was told to remember.
+    const entries = new Map<string, UnifiedMemoryEntry>();
+    entries.set("vital", makeEntry("vital", "must survive", {
+      tier: MemoryTier.Working,
+      importanceScore: 0.99 as NormalizedScore,
+      accessCount: 50,
+    }));
+    for (let i = 0; i < 7; i++) {
+      const e = makeEntry(`junk${i}`, `junk ${i}`, {
+        tier: MemoryTier.Working,
+        importanceScore: 0.01 as NormalizedScore,
+        accessCount: 0,
+      });
+      // Corrupt the score the way a bad row or a missing field would.
+      (e as { importanceScore: unknown }).importanceScore = i % 2 === 0 ? undefined : Number.NaN;
+      entries.set(`junk${i}`, e);
+    }
+
+    const ctx = makeTieringCtx(entries);
+    await enforceTierLimits(ctx, MemoryTier.Working);
+
+    expect(entries.has("vital")).toBe(true);
+  });
+
   it("should keep higher-scoring entries and remove lower-scoring ones", async () => {
     const entries = new Map<string, UnifiedMemoryEntry>();
     entries.set("low", makeEntry("low", "low", {

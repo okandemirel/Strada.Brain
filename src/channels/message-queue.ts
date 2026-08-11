@@ -158,7 +158,7 @@ export class MessageQueue<T> {
 
           try {
             const result = await this.opts.processItem(entry.item);
-            this.entries.shift();
+            this.removeEntry(entry);
             entry.resolve(result);
           } catch (error) {
             if (this.opts.isRateLimitError(error)) {
@@ -172,10 +172,10 @@ export class MessageQueue<T> {
             entry.retries++;
             if (entry.retries >= this.opts.maxRetries) {
               entry.reject(error instanceof Error ? error : new Error(String(error)));
-              this.entries.shift();
+              this.removeEntry(entry);
             } else {
               const delay = this.computeRetryDelay(entry.retries);
-              this.entries.shift();
+              this.removeEntry(entry);
               const timer = setTimeout(() => {
                 this.timerMap.delete(timer);
                 if (this.opts.isConnected && !this.opts.isConnected()) {
@@ -196,6 +196,23 @@ export class MessageQueue<T> {
     } finally {
       this.processing = false;
     }
+  }
+
+  /**
+   * Remove a specific entry by identity.
+   *
+   * NOT `entries.shift()`. The FIFO branch reads `entries[0]`, awaits the send,
+   * and only then removes it — but a retry timer can fire during that await and
+   * `unshift` its own entry back to the HEAD (which it must, to preserve
+   * in-order delivery). A positional `shift()` then removes the newly-inserted
+   * entry instead of the one that was just sent: the re-queued message is
+   * dropped forever (never sent, never resolved or rejected, so its caller
+   * hangs) and the sent message stays queued and is delivered a second time.
+   * Removing by identity is immune to the queue shifting under the await.
+   */
+  private removeEntry(entry: { id: string }): void {
+    const idx = this.entries.findIndex((e) => e.id === entry.id);
+    if (idx !== -1) this.entries.splice(idx, 1);
   }
 
   /**
