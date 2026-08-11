@@ -23,15 +23,42 @@ const OVERRIDE_KEY_PREFIX = "delegation_tier_override:";
 
 export class TierRouter {
   private readonly overrides = new Map<string, ModelTier>();
+  private tierMap: Record<ModelTier, string>;
 
   constructor(
-    private readonly tierMap: Record<ModelTier, string>,
+    tierMap: Record<ModelTier, string>,
     private readonly db?: Database.Database,
   ) {
+    this.tierMap = { ...tierMap };
     // Load persisted overrides from SQLite on construction
     if (this.db) {
       this.loadOverridesFromDb();
     }
+  }
+
+  /**
+   * Replace the tier→spec mapping for tiers the operator did NOT pin.
+   *
+   * Called after the model catalog is available (and again whenever it
+   * refreshes) so derived tiers track the current model generation without a
+   * restart. Entries whose configured value was non-empty are pins and are not
+   * passed here by the caller, so they can never be clobbered.
+   *
+   * A tier that derivation could not resolve is left at its existing value
+   * rather than being blanked — losing a working spec to a transient empty
+   * catalog would be worse than keeping a stale one.
+   */
+  applyDerivedTiers(derived: Partial<Record<ModelTier, string>>): void {
+    for (const [tier, spec] of Object.entries(derived) as Array<[ModelTier, string | undefined]>) {
+      if (spec && spec.trim()) {
+        this.tierMap[tier] = spec;
+      }
+    }
+  }
+
+  /** Current tier→spec mapping (pins and derived values merged). */
+  getTierMap(): Readonly<Record<ModelTier, string>> {
+    return { ...this.tierMap };
   }
 
   /**

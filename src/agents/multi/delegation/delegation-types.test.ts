@@ -328,7 +328,11 @@ describe("delegation config schema", () => {
     }
   });
 
-  it("validates all 4 tier env vars with provider:model format defaults", async () => {
+  it("defaults all 4 tiers to empty so they are derived from the live catalog", async () => {
+    // Tier defaults are deliberately empty. A hardcoded default freezes the
+    // model generation at release time and is how the previous defaults came to
+    // reference ids that no longer resolve. Empty means "derive from the
+    // catalog" (see tier-resolution.ts); a non-empty value is an operator pin.
     const { configSchema } = await import("../../../config/config.js");
     const result = configSchema.safeParse({
       unityProjectPath: "/tmp/test",
@@ -336,10 +340,27 @@ describe("delegation config schema", () => {
     });
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.data.delegationTierLocal).toBe("ollama:llama3.3");
-      expect(result.data.delegationTierCheap).toBe("deepseek:deepseek-chat");
-      expect(result.data.delegationTierStandard).toBe("claude:claude-sonnet-4-6-20250514");
-      expect(result.data.delegationTierPremium).toBe("claude:claude-opus-4-6-20250514");
+      expect(result.data.delegationTierLocal).toBe("");
+      expect(result.data.delegationTierCheap).toBe("");
+      expect(result.data.delegationTierStandard).toBe("");
+      expect(result.data.delegationTierPremium).toBe("");
+    }
+  });
+
+  it("still accepts an explicit provider:model pin for each tier", async () => {
+    const { configSchema } = await import("../../../config/config.js");
+    const result = configSchema.safeParse({
+      unityProjectPath: "/tmp/test",
+      anthropicApiKey: "sk-test-key-123456",
+      delegationTierLocal: "ollama:llama3.3",
+      delegationTierCheap: "deepseek:deepseek-chat",
+      delegationTierStandard: "claude:claude-sonnet-5",
+      delegationTierPremium: "claude:claude-opus-5",
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.delegationTierStandard).toBe("claude:claude-sonnet-5");
+      expect(result.data.delegationTierPremium).toBe("claude:claude-opus-5");
     }
   });
 

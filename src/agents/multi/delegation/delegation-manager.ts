@@ -178,6 +178,14 @@ export class DelegationManager {
     this.modelIntelligence = modelIntelligence;
   }
 
+  /**
+   * The tier router backing this manager. Exposed so the composition root can
+   * push freshly-derived tier specs in when the model catalog refreshes.
+   */
+  getTierRouter(): TierRouter {
+    return this.opts.tierRouter;
+  }
+
   // ===========================================================================
   // PUBLIC API
   // ===========================================================================

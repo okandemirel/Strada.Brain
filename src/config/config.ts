@@ -1522,38 +1522,67 @@ export function getCachedConfig(): Config | undefined {
 /**
  * Check if required API keys are present
  */
+/**
+ * Map every known provider name to its resolved credential (or `undefined`
+ * when the operator has not supplied one). Subscription-style auth counts as a
+ * credential — it is a usable path to the API even without a raw key.
+ *
+ * `ollama` is deliberately absent: it needs no credential, so callers must
+ * treat it as always-available rather than looking it up here.
+ *
+ * Exported so credential presence has ONE definition. `hasRequiredApiKeys`
+ * validates against it, and delegation tier derivation uses it to avoid
+ * pinning a tier to a provider this deployment cannot actually call.
+ */
+export function getProviderCredentialMap(config: Config): Record<string, string | undefined> {
+  const anthropic = config.anthropicApiKey ?? (
+    config.anthropicAuthMode === "claude-subscription" ? config.anthropicAuthToken : undefined
+  );
+  const openai =
+    config.openaiApiKey ??
+    (config.openaiAuthMode === "chatgpt-subscription" ||
+    Boolean(config.openaiSubscriptionAccessToken && config.openaiSubscriptionAccountId) ||
+    Boolean(config.openaiChatgptAuthFile)
+      ? "[chatgpt-subscription]"
+      : undefined);
+  return {
+    claude: anthropic,
+    anthropic,
+    openai,
+    deepseek: config.deepseekApiKey,
+    qwen: config.qwenApiKey,
+    kimi: config.kimiApiKey,
+    minimax: config.minimaxApiKey,
+    groq: config.groqApiKey,
+    mistral: config.mistralApiKey,
+    together: config.togetherApiKey,
+    fireworks: config.fireworksApiKey,
+    gemini: config.geminiApiKey,
+    opencode: config.opencodeApiKey,
+    openrouter: config.openrouterApiKey,
+  };
+}
+
+/**
+ * Provider names this deployment can actually reach: every provider with a
+ * credential, plus `ollama` (local, needs none).
+ */
+export function getAvailableProviderNames(config: Config): string[] {
+  const names = Object.entries(getProviderCredentialMap(config))
+    .filter(([, credential]) => Boolean(credential))
+    .map(([name]) => name);
+  // `claude` and `anthropic` are aliases of one credential; keep both so
+  // catalog entries recorded under either name resolve.
+  return [...new Set([...names, "ollama"])];
+}
+
 export function hasRequiredApiKeys(config: Config): { valid: boolean; missing: string[] } {
   const missing: string[] = [];
 
   // If a provider chain is specified, check that each provider in the chain has its key
   if (config.providerChain) {
     const names = config.providerChain.split(",").map((s) => s.trim());
-    const keyMap: Record<string, string | undefined> = {
-      claude: config.anthropicApiKey ?? (
-        config.anthropicAuthMode === "claude-subscription" ? config.anthropicAuthToken : undefined
-      ),
-      anthropic: config.anthropicApiKey ?? (
-        config.anthropicAuthMode === "claude-subscription" ? config.anthropicAuthToken : undefined
-      ),
-      openai:
-        config.openaiApiKey ??
-        (config.openaiAuthMode === "chatgpt-subscription" ||
-        Boolean(config.openaiSubscriptionAccessToken && config.openaiSubscriptionAccountId) ||
-        Boolean(config.openaiChatgptAuthFile)
-          ? "[chatgpt-subscription]"
-          : undefined),
-      deepseek: config.deepseekApiKey,
-      qwen: config.qwenApiKey,
-      kimi: config.kimiApiKey,
-      minimax: config.minimaxApiKey,
-      groq: config.groqApiKey,
-      mistral: config.mistralApiKey,
-      together: config.togetherApiKey,
-      fireworks: config.fireworksApiKey,
-      gemini: config.geminiApiKey,
-      opencode: config.opencodeApiKey,
-      openrouter: config.openrouterApiKey,
-    };
+    const keyMap = getProviderCredentialMap(config);
     for (const name of names) {
       if (name === "ollama") continue; // no key needed
       if (!keyMap[name]) {

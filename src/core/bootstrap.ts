@@ -1250,6 +1250,7 @@ async function bootstrapImpl(
     messageRouter,
   } = await initializeTaskRuntimeStage({
     daemonMode: Boolean(options.daemonMode),
+    metrics,
     config,
     logger,
     orchestrator,
@@ -1535,6 +1536,57 @@ async function bootstrapImpl(
       // (created earlier in bootstrap than the DelegationManager).
       if (modelIntelligence) {
         delegationManager?.setModelIntelligence(modelIntelligence);
+      }
+
+      // Derive delegation tiers the operator left empty from the live catalog.
+      // Pins (non-empty config values) are filtered out here, so they are never
+      // passed to the router as "derived" and can never be overwritten.
+      if (modelIntelligence && delegationManager) {
+        try {
+          const { resolveTierMap } = await import("../agents/multi/delegation/tier-resolution.js");
+          const { getAvailableProviderNames } = await import("../config/config.js");
+          const configuredTiers = config.delegation.tiers;
+          // Fold in what this deployment has actually observed. The store
+          // accumulates per `provider` AND per `provider::model`, and
+          // getBlendedProfile already weights observations against the static
+          // prior by sample count — so a model with little history returns
+          // something close to its baseline rather than a noisy extreme.
+          const behavioralScore = dynamicProfiles
+            ? (provider: string, modelId: string): number | undefined => {
+              const profile = dynamicProfiles.getBlendedProfile(provider, modelId);
+              if (!profile) return undefined;
+              const values = Object.values(profile.scores);
+              if (values.length === 0) return undefined;
+              return values.reduce((sum, v) => sum + v, 0) / values.length;
+            }
+            : undefined;
+          const { tiers: derivedTiers, derivations } = resolveTierMap({
+            configured: configuredTiers,
+            catalog: modelIntelligence.getAllModels(),
+            availableProviders: getAvailableProviderNames(config),
+            ...(behavioralScore ? { behavioralScore } : {}),
+          });
+          const derivedOnly = Object.fromEntries(
+            Object.entries(derivedTiers).filter(
+              ([tier]) => !configuredTiers[tier as keyof typeof configuredTiers]?.trim(),
+            ),
+          );
+          delegationManager.getTierRouter().applyDerivedTiers(derivedOnly);
+          for (const d of derivations) {
+            const line = { tier: d.tier, spec: d.spec, source: d.source, reason: d.reason };
+            if (d.source === "unresolved") {
+              logger.warn("Delegation tier unresolved", line);
+            } else {
+              logger.info("Delegation tier resolved", line);
+            }
+          }
+        } catch (error) {
+          // Tier derivation is an optimization, never a boot blocker: on failure
+          // the router keeps whatever the config gave it.
+          logger.warn("Delegation tier derivation failed; using configured tiers", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
       }
 
       await initializeMemoryConsolidationStage({

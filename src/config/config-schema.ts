@@ -842,10 +842,16 @@ export const configSchema = z
       .transform((s) => parseInt(s, 10))
       .pipe(z.number().int().min(1).max(10))
       .prefault("3"),
-    delegationTierLocal: z.string().default("ollama:llama3.3"),
-    delegationTierCheap: z.string().default("deepseek:deepseek-chat"),
-    delegationTierStandard: z.string().default("claude:claude-sonnet-4-6-20250514"),
-    delegationTierPremium: z.string().default("claude:claude-opus-4-6-20250514"),
+    // Delegation tiers are DERIVED from the live model catalog by default.
+    // An empty value means "let the scorer pick the best available model for
+    // this tier" (see `resolveTierMap` in delegation/tier-resolution.ts); a
+    // non-empty "provider:model" value is an operator PIN and is never
+    // overridden. Defaults are intentionally empty so a new install tracks the
+    // current model generation instead of a snapshot frozen at release time.
+    delegationTierLocal: z.string().default(""),
+    delegationTierCheap: z.string().default(""),
+    delegationTierStandard: z.string().default(""),
+    delegationTierPremium: z.string().default(""),
     delegationVerbosity: z.enum(["quiet", "normal", "verbose"]).default("normal"),
     delegationTypes: z.string().optional(),
 
