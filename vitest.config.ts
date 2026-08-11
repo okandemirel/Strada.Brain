@@ -9,6 +9,9 @@ export default defineConfig({
     // Native addons and long-running integration suites are more stable in forked workers.
     pool: "forks",
     include: ["src/**/*.test.ts", "tests/**/*.test.ts"],
+    benchmark: {
+      include: ["benchmarks/**/*.bench.ts"],
+    },
     coverage: {
       provider: "v8",
       include: ["src/**/*.ts"],

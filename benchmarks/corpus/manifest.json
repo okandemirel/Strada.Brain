@@ -1,0 +1,7 @@
+{
+  "S": {
+    "files": 500,
+    "sha256": "e5d075e965edd8483c4da909e4f7299d89ce36dcbb4d3565e6459e674800fb82",
+    "outDir": "benchmarks/corpus/unity-synth-v1-s"
+  }
+}

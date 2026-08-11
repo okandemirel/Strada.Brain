@@ -61,7 +61,12 @@
     "security:ssrf": "./pentest/scripts/test-ssrf.sh",
     "prepare": "node scripts/install-git-hooks.mjs",
     "hooks:install": "node scripts/install-git-hooks.mjs",
-    "audit:env": "node scripts/audit-env-coverage.mjs"
+    "audit:env": "node scripts/audit-env-coverage.mjs",
+    "test:coverage": "NODE_OPTIONS=--max-old-space-size=12288 vitest run --coverage",
+    "bench:corpus": "node scripts/bench/make-corpus.mjs --size S",
+    "bench": "vitest bench --run --outputJson=benchmarks/.report.json",
+    "bench:record": "npm run bench && node scripts/bench/gate.mjs --record",
+    "bench:check": "npm run bench && node scripts/bench/gate.mjs --check"
   },
   "keywords": [
     "unity",
@@ -117,6 +122,7 @@
     "@types/ws": "^8.18.1",
     "@typescript-eslint/eslint-plugin": "^8.58.0",
     "@typescript-eslint/parser": "^8.58.0",
+    "@vitest/coverage-v8": "^4.1.8",
     "eslint": "^9.16.0",
     "typescript": "^6.0.2",
     "vitest": "^4.1.8"

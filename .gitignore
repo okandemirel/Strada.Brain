@@ -41,3 +41,8 @@ coverage/
 # real one.
 src/channels/web/static/*
 !src/channels/web/static/index.html
+# Generated benchmark artifacts. The corpus is regenerated deterministically
+# from scripts/bench/make-corpus.mjs, but manifest.json (its content hash) and
+# the recorded baselines MUST be committed — the gate compares against them.
+benchmarks/.report.json
+benchmarks/corpus/unity-synth-v1-*/

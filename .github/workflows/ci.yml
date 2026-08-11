@@ -112,3 +112,76 @@ jobs:
 
       - name: Build
         run: npm run build
+
+  # Performance regression gate.
+  #
+  # Runs on its own job rather than inside `verify` so a timing regression is
+  # attributable at a glance and cannot be confused with a failing test. The
+  # corpus is regenerated from a fixed seed and its content hash is verified
+  # BEFORE anything is timed — a benchmark against a drifted corpus measures
+  # nothing.
+  bench:
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate pinned corpus
+        run: npm run bench:corpus
+
+      - name: Verify corpus is reproducible
+        run: node scripts/bench/make-corpus.mjs --size S --check
+
+      # The gate skips (and says so) when no baseline exists for this
+      # runner/Node combination, so a new runner never fails the build — it
+      # just reports that nobody has recorded a baseline there yet.
+      - name: Benchmark and gate on regression
+        run: npm run bench:check
+
+  # Coverage is reported, not gated. A hard threshold on a 48k-statement
+  # codebase mostly produces pressure to write shallow tests; the number is
+  # here so a drop is visible in the PR and can be discussed.
+  coverage:
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests with coverage
+        env:
+          CI: "1"
+        run: npm run test:coverage
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage/
+          retention-days: 14

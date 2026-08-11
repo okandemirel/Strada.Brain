@@ -1,0 +1,23 @@
+{
+  "key": "darwin-node26",
+  "node": "26.6.0",
+  "platform": "darwin",
+  "metrics": {
+    "benchmarks/micro/vault.bench.ts > vault.chunker > chunk the whole corpus": {
+      "mean": 2.519612,
+      "rme": 4.28
+    },
+    "benchmarks/micro/vault.bench.ts > vault.sqlite.write > index the corpus into a fresh DB": {
+      "mean": 161.889862,
+      "rme": 1.28
+    },
+    "benchmarks/micro/vault.bench.ts > vault.query.bm25 > single-term FTS": {
+      "mean": 0.142799,
+      "rme": 0.51
+    },
+    "benchmarks/micro/vault.bench.ts > vault.query.bm25 > multi-term FTS (natural-language shape)": {
+      "mean": 0.376071,
+      "rme": 0.67
+    }
+  }
+}
