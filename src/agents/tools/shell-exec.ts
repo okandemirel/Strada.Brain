@@ -1,5 +1,6 @@
 import { validatePath } from "../../security/path-guard.js";
 import { runProcess } from "../../utils/process-runner.js";
+import { buildShellEnv } from "./shell-env-policy.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "./tool.interface.js";
 
 const DEFAULT_TIMEOUT_MS = 30_000; // 30 seconds
@@ -178,12 +179,15 @@ export class ShellExecTool implements ITool {
 
     const startedAt = Date.now();
     try {
+      // Default-deny environment: the command is model-authored, so it must
+      // not inherit this process's credentials. See shell-env-policy.ts.
+      const { env: childEnv } = buildShellEnv(process.env);
       const result = await runProcess({
         command: "/bin/bash",
         args: ["-c", command],
         cwd,
         timeoutMs,
-        env: { ...process.env, FORCE_COLOR: "0" },
+        env: childEnv,
       });
       return {
         content: formatResult(command, result),

@@ -147,7 +147,7 @@ export class ToolRegistry {
     logger.info("Initializing tool registry...");
 
     // Register built-in tools
-    this.registerBuiltinTools(options);
+    this.registerBuiltinTools(options, _config);
 
     // Load Strada.MCP tools as first-class Brain tools when available.
     // Lazy import to break circular dependency: tool-registry <-> strada-mcp-tool-loader
@@ -474,7 +474,7 @@ export class ToolRegistry {
   // Private Methods
   // ============================================================================
 
-  private registerBuiltinTools(options: ToolRegistryOptions): void {
+  private registerBuiltinTools(options: ToolRegistryOptions, config?: Config): void {
     const { memoryManager, ragPipeline, metricsCollector, learningStorage, metricsStorage, vaultRegistry } = options;
 
     // Vault tools (gated on registry presence; bootstrap supplies it when vaults are available).
@@ -608,13 +608,22 @@ export class ToolRegistry {
       readOnly: true,
     });
 
-    // Shell operations
-    this.register(new ShellExecTool(), {
-      category: ToolCategories.SHELL,
-      dangerous: true,
-      requiresConfirmation: true,
-      readOnly: false,
-    });
+    // Shell operations — gated on SHELL_ENABLED.
+    //
+    // The flag was previously parsed into config and then read by nobody, so
+    // an operator who set SHELL_ENABLED=false still got a fully-registered
+    // arbitrary-command tool. When config is absent (tests constructing a bare
+    // registry) the tool registers, preserving existing behaviour.
+    if (config?.shellEnabled ?? true) {
+      this.register(new ShellExecTool(), {
+        category: ToolCategories.SHELL,
+        dangerous: true,
+        requiresConfirmation: true,
+        readOnly: false,
+      });
+    } else {
+      getLogger().info("shell_exec not registered (SHELL_ENABLED=false)");
+    }
 
     // Git operations
     this.register(new GitStatusTool(), {

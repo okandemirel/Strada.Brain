@@ -1,4 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
+import { createLogger } from "../utils/logger.js";
 import { ToolRegistry, ToolCategories, type ToolCategory, type ToolMetadata } from "./tool-registry.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "../agents/tools/tool.interface.js";
 import { ValidationError } from "../common/errors.js";
@@ -34,8 +35,48 @@ function createMetadata(overrides: Partial<ToolMetadata> = {}): Partial<ToolMeta
 describe("ToolRegistry", () => {
   let registry: ToolRegistry;
 
+  // initialize() logs; the logger is a process-wide singleton that tests must
+  // set up explicitly.
+  beforeAll(() => {
+    createLogger("error", "test.log");
+  });
+
   beforeEach(() => {
     registry = new ToolRegistry();
+  });
+
+  // ========================================================================
+  // SHELL_ENABLED gating
+  // ========================================================================
+
+  describe("shell_exec gating on SHELL_ENABLED", () => {
+    /** Minimal config stand-in — initialize() only reads `shellEnabled` here,
+     *  and its MCP/plugin steps degrade to no-ops without further fields. */
+    function configWith(shellEnabled: boolean) {
+      return { shellEnabled } as unknown as Parameters<ToolRegistry["initialize"]>[0];
+    }
+
+    it("registers shell_exec when SHELL_ENABLED is true", async () => {
+      const r = new ToolRegistry();
+      await r.initialize(configWith(true));
+      expect(r.has("shell_exec")).toBe(true);
+    });
+
+    it("does NOT register shell_exec when SHELL_ENABLED is false", async () => {
+      // Regression guard: the flag was parsed into config and then read by
+      // nobody, so an operator who disabled shell execution still got a
+      // fully-registered arbitrary-command tool.
+      const r = new ToolRegistry();
+      await r.initialize(configWith(false));
+      expect(r.has("shell_exec")).toBe(false);
+    });
+
+    it("still registers other tools when shell is disabled", async () => {
+      const r = new ToolRegistry();
+      await r.initialize(configWith(false));
+      // Disabling shell must not disable the rest of the toolset.
+      expect(r.getAvailableToolNames().length).toBeGreaterThan(5);
+    });
   });
 
   // ========================================================================
