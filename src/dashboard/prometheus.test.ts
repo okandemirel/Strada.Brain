@@ -215,6 +215,76 @@ describe.skipIf(!process.env["LOCAL_SERVER_TESTS"])("PrometheusMetrics", () => {
     expect(response.status).toBe(404);
   });
 
+  describe("counters derived from the collector snapshot", () => {
+    // Regression: PrometheusMetrics is constructed in the knowledge bootstrap
+    // stage and its reference is handed to nothing, so no code could ever call
+    // recordMessage / recordTokens / recordToolCall on it. (The orchestrator
+    // calls same-named methods on MetricsCollector — a different class.) The
+    // shipped Grafana dashboard therefore charted message, token and tool
+    // panels that were flat zero forever.
+
+    it("exports messages recorded on the collector, not just direct calls", async () => {
+      metrics.recordMessage();
+      metrics.recordMessage();
+
+      const text = await prometheus.getMetrics();
+      expect(text).toContain('strada_messages_total{status="success"} 2');
+    });
+
+    it("exports token usage recorded on the collector", async () => {
+      metrics.recordTokenUsage(100, 40, "openai");
+
+      const text = await prometheus.getMetrics();
+      expect(text).toContain('strada_tokens_total{type="input"} 100');
+      expect(text).toContain('strada_tokens_total{type="output"} 40');
+      expect(text).toContain('strada_tokens_total{type="total"} 140');
+    });
+
+    it("exports tool calls and errors recorded on the collector", async () => {
+      metrics.recordToolCall("file_read", 5, true);
+      metrics.recordToolCall("file_read", 5, true);
+      metrics.recordToolCall("shell_exec", 5, false, "boom");
+
+      const text = await prometheus.getMetrics();
+      expect(text).toContain('strada_tool_calls_total{tool="file_read",status="success"} 2');
+      expect(text).toContain('strada_tool_errors_total{tool="shell_exec"} 1');
+    });
+
+    it("advances counters by the delta — repeated scrapes do not double-count", async () => {
+      metrics.recordMessage();
+      await prometheus.getMetrics();
+      await prometheus.getMetrics();
+      await prometheus.getMetrics();
+
+      const text = await prometheus.getMetrics();
+      // Still 1: a monotonic counter must not re-add the snapshot total on
+      // every scrape.
+      expect(text).toContain('strada_messages_total{status="success"} 1');
+    });
+
+    it("observes tool DURATIONS, which the collector used to discard", async () => {
+      // MetricsCollector.recordToolCall accepted `durationMs` and dropped it
+      // (`_durationMs`), so the exported histogram had no observations and the
+      // Grafana tool-duration panel was empty.
+      metrics.recordToolCall("file_read", 250, true);
+      metrics.recordToolCall("file_read", 750, true);
+
+      const text = await prometheus.getMetrics();
+      expect(text).toContain('strada_tool_duration_seconds_count{tool="file_read"} 2');
+      expect(text).toMatch(/strada_tool_duration_seconds_sum\{tool="file_read"\} 1\b/);
+    });
+
+    it("keeps counting after more activity between scrapes", async () => {
+      metrics.recordMessage();
+      await prometheus.getMetrics();
+      metrics.recordMessage();
+      metrics.recordMessage();
+
+      const text = await prometheus.getMetrics();
+      expect(text).toContain('strada_messages_total{status="success"} 3');
+    });
+  });
+
   it("should reset metrics when requested", async () => {
     if ((await safeStart(prometheus)) === null) return;
 

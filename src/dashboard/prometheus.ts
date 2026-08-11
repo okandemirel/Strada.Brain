@@ -36,6 +36,10 @@ export class PrometheusMetrics {
   private llmLatencySeconds!: Histogram;
   private messageDurationSeconds!: Histogram;
 
+  /** Last snapshot value already folded into each monotonic counter, so a
+   *  scrape advances by the delta rather than double-counting the total. */
+  private readonly counterHighWater = new Map<string, number>();
+
   constructor(
     port: number,
     metrics: MetricsCollector,
@@ -49,6 +53,14 @@ export class PrometheusMetrics {
     this.register = new Registry();
 
     this.initializeMetrics();
+
+    // Histograms need each observation, not a periodic total, so subscribe to
+    // the collector's per-call hook. Counters are reconciled on scrape instead
+    // (see syncCountersFromSnapshot).
+    this.metrics.setToolCallObserver((tool, durationMs, success) => {
+      this.toolDurationSeconds.observe({ tool }, durationMs / 1000);
+      if (!success) this.toolErrorsTotal.inc({ tool }, 0);
+    });
   }
 
   /**
@@ -273,7 +285,9 @@ export class PrometheusMetrics {
    */
   private updateDynamicMetrics(): void {
     const snapshot = this.metrics.getSnapshot(this.getMemoryStats?.());
-    
+
+    this.syncCountersFromSnapshot(snapshot);
+
     // Update active sessions
     this.activeSessions.set(snapshot.activeSessions);
     
@@ -288,6 +302,62 @@ export class PrometheusMetrics {
     const pluginsStats = this.getPluginsStats?.();
     if (pluginsStats) {
       this.pluginsLoaded.set(pluginsStats.loaded);
+    }
+  }
+
+  /**
+   * Bring the Prometheus counters up to date from the in-memory collector.
+   *
+   * These counters were exported but never incremented: `PrometheusMetrics` is
+   * constructed in the knowledge bootstrap stage and its reference is never
+   * handed to anything, so no code could reach `recordMessage`, `recordTokens`
+   * or `recordToolCall`. (The orchestrator DOES call methods with those names —
+   * on `MetricsCollector`, a different class that happens to share them.) The
+   * result was a shipped Grafana dashboard whose message, token and tool panels
+   * were flat zero forever.
+   *
+   * Deriving them from the collector snapshot on scrape avoids threading the
+   * exporter through every call site, and the collector is already the single
+   * place all of this is recorded. Counters are monotonic, so we advance them
+   * by the delta since the last scrape rather than assigning absolutes.
+   */
+  private syncCountersFromSnapshot(snapshot: {
+    totalMessages: number;
+    totalTokens: { input: number; output: number };
+    toolCallCounts: Record<string, number>;
+    toolErrorCounts: Record<string, number>;
+  }): void {
+    const advance = (
+      current: number,
+      key: string,
+      apply: (delta: number) => void,
+    ): void => {
+      const previous = this.counterHighWater.get(key) ?? 0;
+      const delta = current - previous;
+      // A decrease means the collector reset (process restart / test reset);
+      // re-baseline instead of feeding a negative into a monotonic counter.
+      if (delta > 0) apply(delta);
+      if (delta !== 0) this.counterHighWater.set(key, current);
+    };
+
+    advance(snapshot.totalMessages, "messages", (d) =>
+      this.messagesTotal.inc({ status: "success" }, d));
+
+    advance(snapshot.totalTokens.input, "tokens:input", (d) => {
+      this.tokensTotal.inc({ type: "input" }, d);
+      this.tokensTotal.inc({ type: "total" }, d);
+    });
+    advance(snapshot.totalTokens.output, "tokens:output", (d) => {
+      this.tokensTotal.inc({ type: "output" }, d);
+      this.tokensTotal.inc({ type: "total" }, d);
+    });
+
+    for (const [tool, count] of Object.entries(snapshot.toolCallCounts)) {
+      advance(count, `tool:${tool}`, (d) =>
+        this.toolCallsTotal.inc({ tool, status: "success" }, d));
+    }
+    for (const [tool, count] of Object.entries(snapshot.toolErrorCounts)) {
+      advance(count, `toolerr:${tool}`, (d) => this.toolErrorsTotal.inc({ tool }, d));
     }
   }
 

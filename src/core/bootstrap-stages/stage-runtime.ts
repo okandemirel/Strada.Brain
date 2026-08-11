@@ -244,6 +244,9 @@ export async function initializeTaskRuntimeStage(
     identityManager?: IdentityStateManager;
     providerRouter?: Parameters<CommandHandler["setProviderRouter"]>[0];
     startupNotices: string[];
+    /** Shared in-memory collector. The MessageRouter records one message per
+     *  submitted batch here — see the note on MessageRouterOptions.metrics. */
+    metrics?: import("../../dashboard/metrics.js").MetricsCollector;
   },
   deps: TaskRuntimeStageDeps = {},
 ): Promise<TaskRuntimeStageResult> {
@@ -369,6 +372,7 @@ export async function initializeTaskRuntimeStage(
   }) ?? new MessageRouter(taskManager, commandHandler, params.channel, params.startupNotices, {
     burstWindowMs: params.config.tasks.messageBurstWindowMs,
     maxBurstMessages: params.config.tasks.messageBurstMaxMessages,
+    ...(params.metrics ? { metrics: params.metrics } : {}),
   });
 
   const progressReporter = deps.createProgressReporter

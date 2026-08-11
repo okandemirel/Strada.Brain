@@ -29,6 +29,16 @@ const MAX_QUEUE_NOTICE_COOLDOWNS = 500;
 export interface MessageRouterOptions {
   readonly burstWindowMs: number;
   readonly maxBurstMessages: number;
+  /**
+   * Shared metrics collector.
+   *
+   * Every channel message reaches the agent through this router, so this is
+   * the one place that sees them all. `Orchestrator.handleMessage` also records
+   * a message, but the primary channel → task → agent-runner path never calls
+   * it (it goes through `selectAgentRunner`), so the message counter — and the
+   * Grafana panel reading it — sat at zero for real traffic.
+   */
+  readonly metrics?: import("../dashboard/metrics.js").MetricsCollector;
 }
 
 interface PendingTaskBatch {
@@ -46,6 +56,7 @@ export class MessageRouter {
   private readonly queueNoticeCooldowns = new Map<string, number>();
   private readonly burstWindowMs: number;
   private readonly maxBurstMessages: number;
+  private readonly metrics?: MessageRouterOptions["metrics"];
   private startupNoticeTimer: ReturnType<typeof setTimeout> | null = null;
 
   dispose(): void {
@@ -90,6 +101,7 @@ export class MessageRouter {
 
     this.burstWindowMs = options.burstWindowMs;
     this.maxBurstMessages = options.maxBurstMessages;
+    this.metrics = options.metrics;
 
     // Auto-clear startup notice state after 60s — no need to track chats forever.
     // Store the handle so dispose() can cancel it; unref() so this one-shot timer
@@ -237,6 +249,10 @@ export class MessageRouter {
       .find((message) => typeof message.conversationId === "string" && message.conversationId.trim().length > 0)
       ?.conversationId;
     const logger = getLogger();
+
+    // One message per submitted batch: a burst that the router coalesced is
+    // one unit of work for the agent, which is what the counter should mean.
+    this.metrics?.recordMessage();
 
     logger.info("Message submitted as task", {
       chatId: batch.chatId,

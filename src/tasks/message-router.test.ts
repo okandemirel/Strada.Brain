@@ -58,6 +58,60 @@ describe("MessageRouter", () => {
     vi.useRealTimers();
   });
 
+  it("records one message per submitted batch on the collector", async () => {
+    // Regression: Orchestrator.handleMessage records a message, but the
+    // primary channel → task → agent-runner path never calls it (it goes
+    // through selectAgentRunner), so the counter — and the Grafana panel
+    // reading it — stayed at zero for all real traffic. Verified live: the
+    // exported strada_messages_total only started moving once this existed.
+    const recordMessage = vi.fn();
+    const router = new MessageRouter(
+      createTaskManager(submit) as never,
+      { handle } as unknown as CommandHandler,
+      { sendMarkdown, sendText } as never,
+      [],
+      { ...TEST_ROUTER_OPTIONS, metrics: { recordMessage } as never },
+    );
+
+    await router.route(createMessage("analyze the project"));
+    await vi.advanceTimersByTimeAsync(TEST_ROUTER_OPTIONS.burstWindowMs);
+
+    expect(recordMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("counts a coalesced burst as ONE message", async () => {
+    // The router batches consecutive messages into a single task; the counter
+    // should mean "units of work the agent received", not raw keystrokes.
+    const recordMessage = vi.fn();
+    const router = new MessageRouter(
+      createTaskManager(submit) as never,
+      { handle } as unknown as CommandHandler,
+      { sendMarkdown, sendText } as never,
+      [],
+      { ...TEST_ROUTER_OPTIONS, metrics: { recordMessage } as never },
+    );
+
+    await router.route(createMessage("first"));
+    await router.route(createMessage("second"));
+    await vi.advanceTimersByTimeAsync(TEST_ROUTER_OPTIONS.burstWindowMs);
+
+    expect(submit).toHaveBeenCalledTimes(1);
+    expect(recordMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("works without a metrics collector", async () => {
+    const router = new MessageRouter(
+      createTaskManager(submit) as never,
+      { handle } as unknown as CommandHandler,
+      { sendMarkdown, sendText } as never,
+      [],
+      TEST_ROUTER_OPTIONS,
+    );
+    await router.route(createMessage("no metrics wired"));
+    await vi.advanceTimersByTimeAsync(TEST_ROUTER_OPTIONS.burstWindowMs);
+    expect(submit).toHaveBeenCalledTimes(1);
+  });
+
   it("sends startup notices once before the first task", async () => {
     const router = new MessageRouter(
       createTaskManager(submit) as never,

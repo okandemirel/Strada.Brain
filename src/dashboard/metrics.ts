@@ -87,7 +87,29 @@ export class MetricsCollector {
     }
   }
 
-  recordToolCall(name: string, _durationMs: number, success: boolean, errorMessage?: string): void {
+  /**
+   * Optional per-call observer. The collector keeps only aggregate counts, so
+   * a consumer that needs the DISTRIBUTION of durations (a Prometheus
+   * histogram) has to see each observation as it happens. Before this existed
+   * the `durationMs` argument was accepted and dropped on the floor, which is
+   * why the exported `strada_tool_duration_seconds` histogram had no buckets.
+   */
+  private toolCallObserver?: (name: string, durationMs: number, success: boolean) => void;
+
+  /** Register the per-call observer. Replaces any previous one. */
+  setToolCallObserver(
+    observer: ((name: string, durationMs: number, success: boolean) => void) | undefined,
+  ): void {
+    this.toolCallObserver = observer;
+  }
+
+  recordToolCall(name: string, durationMs: number, success: boolean, errorMessage?: string): void {
+    // Observer failures must never break the caller's tool execution.
+    try {
+      this.toolCallObserver?.(name, durationMs, success);
+    } catch {
+      // ignore
+    }
     this.toolCallCounts.set(name, (this.toolCallCounts.get(name) ?? 0) + 1);
     if (!success) {
       this.toolErrorCounts.set(name, (this.toolErrorCounts.get(name) ?? 0) + 1);
