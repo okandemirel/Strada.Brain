@@ -27,6 +27,28 @@ const IGNORE_REGEX = /(^|\/)(Library|Temp|Logs|obj|bin|\.git|node_modules|\.stra
 // to install stat callbacks before subsequent writes register reliably.
 const POLLING_SETTLE_MS = 50;
 
+/**
+ * Poll interval when the caller does not specify one. Zero means "use native
+ * filesystem events".
+ *
+ * This used to default to 100 ms, which put chokidar into stat-polling mode for
+ * every vault in production — measured at roughly a quarter of a CPU core,
+ * continuously, on an idle tree, because every watched file is stat()ed ten
+ * times a second. The comment explaining it cited test-runner reliability on
+ * macOS FSEvents: a test workaround that leaked into the shipped default.
+ *
+ * Native events are correct almost everywhere. Polling remains available for
+ * the cases that genuinely need it — network filesystems, some container
+ * bind-mounts — via VAULT_WATCH_POLL_INTERVAL_MS.
+ */
+function defaultPollIntervalMs(): number {
+  const raw = process.env["VAULT_WATCH_POLL_INTERVAL_MS"];
+  if (!raw) return 0;
+  const parsed = Number.parseInt(raw, 10);
+  // A malformed value must not silently re-enable a CPU-burning poll loop.
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+}
+
 export class VaultWatcher {
   private watcher: FSWatcher | null = null;
   private dirty = new Set<string>();
@@ -39,7 +61,7 @@ export class VaultWatcher {
 
   async start(): Promise<void> {
     if (this.watcher) return;
-    const pollInterval = this.opts.pollIntervalMs ?? 100;
+    const pollInterval = this.opts.pollIntervalMs ?? defaultPollIntervalMs();
     const rootStats = await lstat(this.opts.root).catch(() => null);
     const rootIsFile = Boolean(rootStats?.isFile());
     this.watcher = chokidar.watch(this.opts.root, {

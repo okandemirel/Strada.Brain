@@ -93,6 +93,32 @@ describe("presets reference real models", () => {
   });
 });
 
+describe("provider-internal defaults reference real models", () => {
+  // The first pass fixed presets, the wizard and the seed catalog but missed
+  // ClaudeProvider's own constructor default and offline fallback list — the
+  // exact same fabricated ids, one layer down. A caller that constructs the
+  // provider without an explicit model gets the constructor default, so this
+  // is as user-facing as the wizard.
+  it("ClaudeProvider's default model exists in the catalog", async () => {
+    const { ClaudeProvider } = await import("../agents/providers/claude.js");
+    const provider = new ClaudeProvider({ mode: "api-key", apiKey: "sk-test" });
+    const model = (provider as unknown as { model: string }).model;
+    expect(SEED_IDS).toContain(model);
+    expect(DATE_SUFFIX_RE.test(model), `${model} has a date suffix`).toBe(false);
+  });
+
+  it("ClaudeProvider's offline fallback list contains only real ids", async () => {
+    const { ClaudeProvider } = await import("../agents/providers/claude.js");
+    const provider = new ClaudeProvider({ mode: "api-key", apiKey: "sk-test" });
+    const fallbacks = (provider as unknown as { fallbackModels(): string[] }).fallbackModels();
+    expect(fallbacks.length).toBeGreaterThan(0);
+    for (const id of fallbacks) {
+      expect(SEED_IDS, `fallback ${id}`).toContain(id);
+      expect(DATE_SUFFIX_RE.test(id), `${id} has a date suffix`).toBe(false);
+    }
+  });
+});
+
 describe("PROVIDER_MODEL_OPTIONS reference real models", () => {
   it("lists only Anthropic ids that exist in the seed catalog", () => {
     const offered = (PROVIDER_MODEL_OPTIONS["claude"] ?? []).map((o) => o.model);

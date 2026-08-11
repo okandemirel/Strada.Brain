@@ -9,7 +9,7 @@ import type {
   StreamCallback,
   ProviderCapabilities,
 } from "./provider.interface.js";
-import type { MessageContent } from "./provider-core.interface.js";
+import type { MessageContent, TokenUsage } from "./provider-core.interface.js";
 import { getLogger, getLoggerSafe } from "../../utils/logger.js";
 
 /**
@@ -37,7 +37,7 @@ export class ClaudeProvider implements IAIProvider, IStreamingProvider {
       | string
       | { mode: "api-key"; apiKey: string }
       | { mode: "claude-subscription"; authToken: string },
-    model = "claude-sonnet-4-6-20250514",
+    model = "claude-sonnet-5",
   ) {
     let normalizedAuth: { apiKey: string } | { authToken: string };
     if (typeof auth === "string") {
@@ -151,10 +151,13 @@ export class ClaudeProvider implements IAIProvider, IStreamingProvider {
   }
 
   private fallbackModels(): string[] {
+    // Offline fallback when models.list() is unreachable. Anthropic ids are
+    // complete as published — appending a date suffix to an alias produces an
+    // id that does not resolve, which is how the previous entries here 404'd.
     return [
-      "claude-sonnet-4-6-20250514",
-      "claude-opus-4-20250514",
-      "claude-haiku-4-5-20251001",
+      "claude-opus-5",
+      "claude-sonnet-5",
+      "claude-haiku-4-5",
     ];
   }
 
@@ -259,11 +262,38 @@ export class ClaudeProvider implements IAIProvider, IStreamingProvider {
       text,
       toolCalls,
       stopReason,
-      usage: {
-        inputTokens: response.usage.input_tokens,
-        outputTokens: response.usage.output_tokens,
-        totalTokens: response.usage.input_tokens + response.usage.output_tokens,
-      },
+      usage: buildUsage(response.usage),
     };
   }
+}
+
+/**
+ * Anthropic usage → TokenUsage.
+ *
+ * `input_tokens` is the UNCACHED remainder only: the true prompt size is
+ * `input_tokens + cache_creation_input_tokens + cache_read_input_tokens`.
+ * Summing only the first two fields under-reports the prompt as soon as prompt
+ * caching is enabled, which would silently under-bill every cost estimate and
+ * budget check that reads totalTokens.
+ *
+ * The cache counters are also the only way to tell whether caching is working
+ * at all — a cache_read of zero across repeated requests means a silent
+ * invalidator is in the prefix, and without exporting the number there is
+ * nothing to notice.
+ */
+function buildUsage(usage: {
+  input_tokens: number;
+  output_tokens: number;
+  cache_creation_input_tokens?: number | null;
+  cache_read_input_tokens?: number | null;
+}): TokenUsage {
+  const cacheCreation = usage.cache_creation_input_tokens ?? 0;
+  const cacheRead = usage.cache_read_input_tokens ?? 0;
+  return {
+    inputTokens: usage.input_tokens,
+    outputTokens: usage.output_tokens,
+    totalTokens: usage.input_tokens + cacheCreation + cacheRead + usage.output_tokens,
+    ...(cacheCreation > 0 ? { cacheCreationInputTokens: cacheCreation } : {}),
+    ...(cacheRead > 0 ? { cacheReadInputTokens: cacheRead } : {}),
+  };
 }
