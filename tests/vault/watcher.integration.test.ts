@@ -9,6 +9,47 @@ beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'watcher-')); });
 afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
 
 describe('VaultWatcher', () => {
+  it('sees a file written the instant start() resolves', async () => {
+    // start() must not resolve until the backend is actually armed. Chokidar's
+    // 'ready' only means the initial scan finished: measured on macOS with
+    // native FSEvents, writing immediately after 'ready' produced no event at
+    // all for 10 of 20 files. A settle window closes that gap.
+    //
+    // This is the failure the default-to-native-events change introduced, and
+    // it is invisible in production — the file the user just wrote simply never
+    // gets indexed, with nothing in the logs to say so.
+    //
+    // Two details are required to reproduce, and both are easy to lose:
+    //  - the write lands in a SUBDIRECTORY (the root is armed first; the lag
+    //    is in registering the recursive watches beneath it), and
+    //  - each attempt uses a FRESH directory (macOS keeps an FSEvents stream
+    //    warm per path, so re-watching the same directory hides the race).
+    //
+    // The race is probabilistic — roughly one attempt in five misses without
+    // the settle — so the loop trades ~12 s of runtime for enough attempts to
+    // make detection reliable. A single attempt would pass most of the time.
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const root = mkdtempSync(join(tmpdir(), 'watcher-fresh-'));
+      try {
+        mkdirSync(join(root, 'Assets', 'Scripts'), { recursive: true });
+        writeFileSync(join(root, 'Assets', 'Scripts', 'Existing.cs'), 'x');
+
+        const seen: string[] = [];
+        const w = new VaultWatcher({
+          root, debounceMs: 50,
+          onBatch: async (p) => { seen.push(...p); },
+        });
+        await w.start();
+        writeFileSync(join(root, 'Assets', 'Scripts', 'Fresh.cs'), 'namespace Game { class Fresh {} }');
+        await new Promise((r) => setTimeout(r, 1200));
+        await w.stop();
+        expect(seen, `attempt ${attempt}`).toContain('Assets/Scripts/Fresh.cs');
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    }
+  });
+
   it('debounces multiple writes into one batch', async () => {
     const batches: string[][] = [];
     const w = new VaultWatcher({

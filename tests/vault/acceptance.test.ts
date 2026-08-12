@@ -66,13 +66,25 @@ describe('Phase 1 acceptance', () => {
   it('a file added after startWatch is picked up', async () => {
     await vault.startWatch(150);
     writeFileSync(join(dir, 'Assets/Scripts/Boss.cs'), 'namespace Game { public class Boss : MonoBehaviour { public void Roar() {} } }');
-    await new Promise((r) => setTimeout(r, 1500));
-    const r = await buildProjectContext({
-      config: { vault: { enabled: true } },
-      vaultRegistry: reg,
-      userMessage: 'Boss',
-      contextBudget: 2000,
-    } as any);
+
+    // Poll for the file to appear rather than sleeping a fixed 1500 ms. The
+    // old fixed sleep was a race: watch latency is not bounded by any contract,
+    // and on macOS native FSEvents the first event after startWatch can land
+    // late enough to miss the window — measured failing about 1 run in 5.
+    // Polling keeps the assertion exactly as strong (the loop still ends in the
+    // same expect) while removing the dependency on a guessed duration.
+    const deadline = Date.now() + 10_000;
+    let r = '';
+    do {
+      await new Promise((res) => setTimeout(res, 50));
+      r = await buildProjectContext({
+        config: { vault: { enabled: true } },
+        vaultRegistry: reg,
+        userMessage: 'Boss',
+        contextBudget: 2000,
+      } as any);
+    } while (!r.includes('Boss') && Date.now() < deadline);
+
     expect(r).toContain('Boss');
     await vault.stopWatch();
   });
