@@ -136,6 +136,7 @@
   "overrides": {
     "protobufjs": "^7.5.5",
     "esbuild": "0.28.1",
-    "undici": "^6.27.0"
+    "undici": "^6.27.0",
+    "sharp": "^0.35.3"
   }
 }

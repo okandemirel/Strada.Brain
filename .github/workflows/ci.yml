@@ -157,8 +157,17 @@ jobs:
       # benchmarks only answer "is it fast": without it, a change to chunking,
       # BM25 weighting or fusion could get faster while returning worse
       # results, and CI would stay green.
-      - name: Build (retrieval quality reads dist/)
+      # Backend only. This job never serves the web portal, and it does not run
+      # `npm ci --prefix web-portal`, so the portal build has no dependencies to
+      # build with — and a failed portal build is deliberately fatal to
+      # `npm run build` (a package with a missing UI must not ship silently).
+      # STRADA_ALLOW_PORTAL_BUILD_FAILURE is the opt-out that exists for exactly
+      # this case; installing the portal's dependencies here would be a minute
+      # of CI time spent producing a UI nothing in this job looks at.
+      - name: Build backend (retrieval quality reads dist/)
         run: npm run build
+        env:
+          STRADA_ALLOW_PORTAL_BUILD_FAILURE: "1"
 
       - name: Gate on retrieval quality regression
         run: npm run bench:retrieval:check

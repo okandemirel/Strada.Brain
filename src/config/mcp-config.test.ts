@@ -23,11 +23,24 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
+/**
+ * The minimum a config must carry to validate at all. Supplied explicitly
+ * rather than inherited from process.env: spreading the ambient environment
+ * made these tests pass locally, where a .env file happens to define
+ * UNITY_PROJECT_PATH, and fail in CI, where it does not — the tests were
+ * green for a reason that had nothing to do with what they assert.
+ */
+function requiredEnv(projectPath: string) {
+  // UNITY_PROJECT_PATH is checked against the filesystem, not just parsed, so
+  // it has to be a directory that actually exists — the per-test temp dir.
+  return { ANTHROPIC_API_KEY: "sk-test-key-123", UNITY_PROJECT_PATH: projectPath };
+}
+
 function loadWith(fileContents?: string) {
   const path = join(dir, "mcp.json");
   if (fileContents !== undefined) writeFileSync(path, fileContents, "utf8");
   // An env override bypasses the config cache, so each case is independent.
-  return loadConfig({ ...process.env, MCP_CONFIG_PATH: path }).mcpServers;
+  return loadConfig({ ...requiredEnv(dir), MCP_CONFIG_PATH: path }).mcpServers;
 }
 
 describe("MCP server config", () => {
