@@ -26,7 +26,12 @@ import * as dotenv from "dotenv";
 import { loadConfig, loadConfigSafe, resetConfigCache } from "./config/config.js";
 import { createLogger } from "./utils/logger.js";
 import { Daemon } from "./gateway/daemon.js";
-import { bootstrap } from "./core/bootstrap.js";
+// NOTE: ./core/bootstrap.js is deliberately NOT imported statically. It pulls
+// in the entire agent/vault/provider stack: measured on its own, 313 ms and
+// 152 MB RSS against a 5 ms / 47 MB node+commander baseline — i.e. it was
+// ~60% of the CLI's cold start and ~100 MB of its footprint, paid by every
+// invocation including `--version`, `--help` and every command that never
+// bootstraps. It is imported dynamically at its single call site instead.
 import { createContainer } from "./core/di-container.js";
 import { shouldEnableDaemonMode } from "./core/daemon-mode.js";
 import { SetupWizard, buildSetupAccessUrl, buildSetupReadyUrl } from "./core/setup-wizard.js";
@@ -544,6 +549,7 @@ async function startApp(
 
     // Bootstrap the application
     const effectiveDaemonMode = shouldEnableDaemonMode(channelType, daemonMode);
+    const { bootstrap } = await import("./core/bootstrap.js");
     const app = await bootstrap({
       channelType,
       config,
