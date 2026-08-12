@@ -4,9 +4,20 @@
  * Manages plugin lifecycle including registration, dependency resolution,
  * initialization, and disposal.
  *
- * Plugins can optionally declare a permission manifest. When sandboxing is
- * enabled, plugins run in worker_threads with restricted access based on
- * their declared permissions.
+ * SECURITY: there is no sandbox. Plugins run in-process, on the main thread,
+ * with the full privileges of the host — `plugin.initialize()` is an ordinary
+ * await in doInitializeAll(). A plugin can read any file, open any socket, and
+ * spawn any process the Strada process can.
+ *
+ * This docstring used to claim that "when sandboxing is enabled, plugins run in
+ * worker_threads with restricted access based on their declared permissions."
+ * That was never true: `worker_threads` is imported nowhere in the codebase and
+ * `metadata.permissions` is read nowhere. The claim is worse than no
+ * documentation, because it invites treating an untrusted plugin as contained.
+ *
+ * Only load plugins you would be willing to run as a plain `import`, because
+ * that is exactly what happens. SkillManager registers skills through this same
+ * registry, so the same applies to them.
  */
 
 import { getLogger } from "../utils/logger.js";
@@ -27,19 +38,30 @@ function getLoggerSafe() {
  * Metadata describing a plugin's identity and capabilities.
  */
 /**
- * Permission manifest for plugin sandboxing.
- * Plugins declare what resources they need access to.
+ * Declared resource needs for a plugin.
+ *
+ * NOT ENFORCED. Nothing in the codebase reads these fields — they are
+ * documentation a plugin author writes about itself, and the registry neither
+ * validates nor restricts anything on their basis. The wording below is
+ * deliberately "declares", not "may": a plugin that declares no filesystem
+ * access can still read every file on the machine.
+ *
+ * They are kept because they are a useful, already-adopted description of
+ * intent, and because deleting them would break plugins that set them. Treat
+ * them as a manifest to read, never as a boundary to rely on. If a real
+ * sandbox is ever implemented, the characterization test in registry.test.ts
+ * fails and forces this comment to be revisited alongside it.
  */
 export interface PluginPermissions {
-  /** Filesystem paths the plugin may read/write (glob patterns) */
+  /** Filesystem paths the plugin declares it will read/write (glob patterns) */
   filesystem?: string[];
-  /** Network hosts the plugin may connect to */
+  /** Network hosts the plugin declares it will connect to */
   network?: string[];
-  /** Maximum CPU time per invocation in ms (default: 30_000) */
+  /** CPU time per invocation the plugin declares it needs, in ms */
   cpuTimeoutMs?: number;
-  /** Maximum memory in bytes (default: 128MB) */
+  /** Memory the plugin declares it needs, in bytes */
   memoryLimitBytes?: number;
-  /** Whether the plugin may spawn child processes (default: false) */
+  /** Whether the plugin declares that it spawns child processes */
   childProcess?: boolean;
 }
 
@@ -54,7 +76,7 @@ export interface PluginMetadata {
   capabilities: string[];
   /** Names of other plugins this plugin depends on */
   dependencies?: string[];
-  /** Permission manifest for sandboxed execution */
+  /** Self-declared resource needs. Not enforced — see PluginPermissions. */
   permissions?: PluginPermissions;
 }
 
