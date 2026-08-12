@@ -189,12 +189,17 @@ export class WorkspaceLeaseManager {
       };
     }
 
-    // Snapshot AFTER seeding so it reflects exactly what the lease started from.
-    const seedMtimes = this.snapshotMtimes(sourceRoot);
+    // Two snapshots, both taken after seeding.
+    //   leaseSeed  — the workspace as the agent received it. A file whose mtime
+    //                is unchanged here was not touched by the agent.
+    //   sourceSeed — the project as it stood when the lease was taken, so an
+    //                edit the user makes DURING the run is detectable.
+    const leaseSeed = this.snapshotMtimes(workspacePath, workspacePath);
+    const sourceSeed = this.snapshotMtimes(sourceRoot, sourceRoot);
 
     let released = false;
     const lease: WorkspaceLease = {
-      commit: async () => this.commitLease(sourceRoot, workspacePath, seedMtimes),
+      commit: async () => this.commitLease(sourceRoot, workspacePath, leaseSeed, sourceSeed),
       id,
       kind,
       sourceRoot,
@@ -278,7 +283,8 @@ export class WorkspaceLeaseManager {
   private async commitLease(
     sourceRoot: string,
     workspacePath: string,
-    seedMtimes: ReadonlyMap<string, number>,
+    leaseSeed: ReadonlyMap<string, number>,
+    sourceSeed: ReadonlyMap<string, number>,
   ): Promise<WorkspaceCommitResult> {
     const written: string[] = [];
     const conflicts: string[] = [];
@@ -287,7 +293,7 @@ export class WorkspaceLeaseManager {
     const walk = (dir: string): void => {
       for (const entry of readdirSync(dir, { withFileTypes: true })) {
         const full = join(dir, entry.name);
-        if (!this.shouldCopyEntry(workspacePath, full)) continue;
+        if (!this.shouldCommitEntry(workspacePath, full)) continue;
         if (entry.isDirectory()) {
           walk(full);
           continue;
@@ -297,16 +303,32 @@ export class WorkspaceLeaseManager {
         const rel = relative(workspacePath, full);
         const target = join(sourceRoot, rel);
 
+        // FIRST question: did the AGENT touch this file? Only its own work may
+        // travel back.
+        //
+        // Comparing the lease against the project instead is the mistake that
+        // made the first version of this destroy user data. A git-worktree
+        // lease — the DEFAULT kind — is seeded from HEAD, not from the working
+        // tree, so every file the user had modified-but-uncommitted differs
+        // from the lease. That read as "the agent changed it" and copied HEAD
+        // over the user's edit. Reproduced: a task whose agent only created an
+        // unrelated Board.cs reported written:[Board.cs, Player.cs] and
+        // reverted Player.cs to its committed contents.
+        const leaseSeeded = leaseSeed.get(rel);
+        if (leaseSeeded !== undefined && statSync(full).mtimeMs === leaseSeeded) {
+          continue; // present at seed time and never written to — not agent work
+        }
+
+        // SECOND question: did the USER change it while the agent ran? Their
+        // copy wins, and they are told rather than silently overwritten.
         if (existsSync(target)) {
-          if (readFileSync(target).equals(readFileSync(full))) continue; // untouched
-          // Conflict detection compares against the mtime recorded when the
-          // lease was seeded, not against a wall-clock timestamp. Date.now() is
-          // whole milliseconds while mtimeMs carries a fraction, so a file
-          // written in the same millisecond as the lease reads as "modified
-          // after" — measured at +0.63 ms, which flagged every fresh file as a
-          // conflict and silently discarded the agent's work.
-          const seeded = seedMtimes.get(rel);
-          if (seeded !== undefined && statSync(target).mtimeMs !== seeded) {
+          if (readFileSync(target).equals(readFileSync(full))) continue; // already identical
+          // Compared against the mtime recorded when the lease was taken, not a
+          // wall clock: Date.now() is whole milliseconds while mtimeMs carries
+          // a fraction, so a file written in the same millisecond as the lease
+          // reads as "modified after" — measured at +0.63 ms.
+          const sourceSeeded = sourceSeed.get(rel);
+          if (sourceSeeded === undefined || statSync(target).mtimeMs !== sourceSeeded) {
             conflicts.push(rel);
             continue;
           }
@@ -335,18 +357,37 @@ export class WorkspaceLeaseManager {
 
   /** Records every seeded file's mtime, so commit() can tell an edit the user
    *  made during the run from a file that merely shares the lease's timestamp. */
-  private snapshotMtimes(root: string): Map<string, number> {
+  private snapshotMtimes(root: string, excludeRoot: string): Map<string, number> {
     const seeded = new Map<string, number>();
     const walk = (dir: string): void => {
       for (const entry of readdirSync(dir, { withFileTypes: true })) {
         const full = join(dir, entry.name);
-        if (!this.shouldCopyEntry(root, full)) continue;
+        if (!this.shouldCommitEntry(excludeRoot, full)) continue;
         if (entry.isDirectory()) walk(full);
         else if (entry.isFile()) seeded.set(relative(root, full), statSync(full).mtimeMs);
       }
     };
     if (existsSync(root)) walk(root);
     return seeded;
+  }
+
+  /**
+   * Exclusions for the write-back walk.
+   *
+   * shouldCopyEntry keys off `sourceRoot !== this.projectRoot` to pick between
+   * the derived-copy list and the configured one. Walking a LEASE always takes
+   * the first branch, because a lease path is never the project root — so the
+   * configured excludes (Library, Temp, Logs, Builds, obj on a Unity project)
+   * were not applied and those directories could be pushed INTO the user's
+   * project. The write-back must use exactly the list the seed used.
+   */
+  private shouldCommitEntry(root: string, path: string): boolean {
+    if (path === root) return true;
+    const rel = path.slice(root.length).replace(/^[/\\]/, "");
+    if (!rel) return true;
+    const firstSegment = rel.split(/[/\\]/, 1)[0];
+    if (!firstSegment) return true;
+    return !this.fallbackExcludes.has(firstSegment) && !DERIVED_COPY_EXCLUDES.has(firstSegment);
   }
 
   private shouldCopyEntry(sourceRoot: string, sourcePath: string): boolean {

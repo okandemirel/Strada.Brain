@@ -14,6 +14,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { execSync } from "node:child_process";
 import { WorkspaceLeaseManager } from "./workspace-lease-manager.js";
 
 let source: string;
@@ -32,9 +33,23 @@ afterEach(() => {
 });
 
 function manager() {
-  // Force the temp-copy path: the git-worktree kind is a different mechanism
-  // and a Unity project is usually not a repository anyway.
   return new WorkspaceLeaseManager({ projectRoot: source, leaseRoot, preferGitWorktree: false });
+}
+
+/** The DEFAULT lease kind on a git project — neither production call site sets
+ *  forceTempCopy, so this is what a real task actually gets. */
+function gitManager() {
+  return new WorkspaceLeaseManager({
+    projectRoot: source,
+    leaseRoot,
+    additionalExcludes: ["Library", "Temp", "Logs", "Builds", "obj"],
+  });
+}
+
+function makeGitRepo(): void {
+  execSync("git init -q && git add -A && git -c user.email=a@b -c user.name=t commit -qm init", {
+    cwd: source,
+  });
 }
 
 describe("workspace lease commit", () => {
@@ -102,6 +117,61 @@ describe("workspace lease commit", () => {
     await lease.release();
 
     expect(existsSync(join(source, "Assets", "Scripts", "Existing.cs"))).toBe(true);
+  });
+
+  it("leaves a user's uncommitted edit alone on the default git-worktree lease", async () => {
+    // The bug this exists to prevent, and the reason the first version of these
+    // tests was worthless: they all forced temp-copy, and the DEFAULT kind on a
+    // git project is a worktree — seeded from HEAD, not the working tree. Every
+    // file the user had modified-but-uncommitted therefore differed from the
+    // lease, read as agent work, and was overwritten with its committed
+    // contents. Measured before the fix: an agent that created only an
+    // unrelated Board.cs reported written:[Board.cs, Player.cs] and reverted
+    // Player.cs.
+    makeGitRepo();
+    writeFileSync(join(source, "Assets", "Scripts", "Existing.cs"), "user uncommitted work", "utf8");
+
+    const lease = await gitManager().acquireLease({ label: "task-42", workerId: "42" });
+    expect(lease.kind).toBe("git-worktree");
+    // The agent touches only an unrelated file.
+    writeFileSync(join(lease.path, "Assets", "Scripts", "Board.cs"), "class Board {}", "utf8");
+
+    const result = await lease.commit();
+    await lease.release();
+
+    expect(result.written).toEqual([join("Assets", "Scripts", "Board.cs")]);
+    expect(readFileSync(join(source, "Assets", "Scripts", "Existing.cs"), "utf8")).toBe(
+      "user uncommitted work",
+    );
+  });
+
+  it("commits an agent edit on a git-worktree lease", async () => {
+    // The other half: skipping untouched files must not skip real work.
+    makeGitRepo();
+    const lease = await gitManager().acquireLease({ label: "task-43", workerId: "43" });
+    writeFileSync(join(lease.path, "Assets", "Scripts", "Existing.cs"), "agent edit", "utf8");
+
+    const result = await lease.commit();
+    await lease.release();
+
+    expect(result.written).toContain(join("Assets", "Scripts", "Existing.cs"));
+    expect(readFileSync(join(source, "Assets", "Scripts", "Existing.cs"), "utf8")).toBe("agent edit");
+  });
+
+  it("does not push excluded build directories into the project", async () => {
+    // commitLease walks the LEASE, and a lease path is never the project root,
+    // so the shared filter took its derived-copy branch and dropped the
+    // configured excludes — Library/Temp/Logs/Builds/obj could travel back into
+    // a Unity project that deliberately keeps them out.
+    const lease = await gitManager().acquireLease({ label: "t", forceTempCopy: true });
+    mkdirSync(join(lease.path, "Library"), { recursive: true });
+    writeFileSync(join(lease.path, "Library", "ArtifactDB"), "derived", "utf8");
+
+    const result = await lease.commit();
+    await lease.release();
+
+    expect(result.written).not.toContain(join("Library", "ArtifactDB"));
+    expect(existsSync(join(source, "Library", "ArtifactDB"))).toBe(false);
   });
 
   it("creates missing directories in the project", async () => {
