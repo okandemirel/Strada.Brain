@@ -8,6 +8,7 @@ import type {
   ProviderCapabilities,
   IStreamingProvider,
   ProviderCallOptions,
+  ResponseSchema,
   ProviderCallHooks,
 } from "./provider.interface.js";
 import type { MessageContent, AssistantMessage } from "./provider-core.interface.js";
@@ -106,7 +107,8 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
     systemPrompt: true,
     contextWindow: 1_050_000,
     thinkingSupported: false,
-    specialFeatures: ["function_calling", "json_mode"],
+    structuredOutput: true,
+    specialFeatures: ["function_calling", "json_mode", "structured_output"],
   };
   protected readonly auth: OpenAIProviderAuth;
   protected readonly model: string;
@@ -195,7 +197,9 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
     options?: ProviderCallOptions,
   ): Promise<ProviderResponse> {
     if (this.isChatGptSubscriptionMode()) {
-      return this.chatViaChatGptResponses(systemPrompt, messages, tools, undefined, options?.signal);
+      return this.chatViaChatGptResponses(
+        systemPrompt, messages, tools, undefined, options?.signal, options?.responseSchema,
+      );
     }
 
     const logger = getLogger();
@@ -209,7 +213,7 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
       toolCount: tools.length,
     });
 
-    const body = this.buildRequestBody(openaiMessages, openaiTools);
+    const body = this.buildRequestBody(openaiMessages, openaiTools, options?.responseSchema);
 
     const response = await this.fetchWithRetry(
       `${this.baseUrl}/chat/completions`,
@@ -234,7 +238,9 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
     options?: ProviderCallOptions,
   ): Promise<ProviderResponse> {
     if (this.isChatGptSubscriptionMode()) {
-      return this.chatViaChatGptResponses(systemPrompt, messages, tools, onChunk, options?.signal);
+      return this.chatViaChatGptResponses(
+        systemPrompt, messages, tools, onChunk, options?.signal, options?.responseSchema,
+      );
     }
 
     const logger = getLogger();
@@ -247,7 +253,7 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
       messageCount: openaiMessages.length,
     });
 
-    const body = this.buildRequestBody(openaiMessages, openaiTools);
+    const body = this.buildRequestBody(openaiMessages, openaiTools, options?.responseSchema);
     body["stream"] = true;
     body["stream_options"] = { include_usage: true };
 
@@ -394,6 +400,7 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
     tools: ToolDefinition[],
     onChunk?: StreamCallback,
     signal?: AbortSignal,
+    responseSchema?: ResponseSchema,
   ): Promise<ProviderResponse> {
     const logger = getLogger();
     let response: Response;
@@ -401,7 +408,7 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
       response = await this.fetchWithRetry(`${this.baseUrl}/responses`, {
         method: "POST",
         headers: await this.buildHeaders(),
-        body: JSON.stringify(this.buildChatGptResponsesRequest(systemPrompt, messages, tools)),
+        body: JSON.stringify(this.buildChatGptResponsesRequest(systemPrompt, messages, tools, responseSchema)),
         signal,
       });
     } catch (err) {
@@ -425,7 +432,7 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
       response = await this.fetchWithRetry(`${this.baseUrl}/responses`, {
         method: "POST",
         headers: await this.buildHeaders(),
-        body: JSON.stringify(this.buildChatGptResponsesRequest(systemPrompt, messages, tools)),
+        body: JSON.stringify(this.buildChatGptResponsesRequest(systemPrompt, messages, tools, responseSchema)),
         signal,
       });
     }
@@ -754,6 +761,7 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
   protected buildRequestBody(
     messages: OpenAIMessage[],
     tools: unknown,
+    responseSchema?: ResponseSchema,
   ): Record<string, unknown> {
     const body: Record<string, unknown> = {
       model: this.model,
@@ -762,6 +770,21 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
     };
     if (tools) {
       body["tools"] = tools;
+    }
+    if (responseSchema) {
+      // `strict: true` is what makes this constrained decoding rather than a
+      // hint. It requires the schema to be an object with
+      // additionalProperties:false and every property listed in `required` —
+      // ResponseSchema's docs say so, because a schema that violates it is
+      // rejected by the API rather than silently downgraded.
+      body["response_format"] = {
+        type: "json_schema",
+        json_schema: {
+          name: responseSchema.name,
+          schema: responseSchema.schema,
+          strict: true,
+        },
+      };
     }
     return body;
   }
@@ -1015,6 +1038,7 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
     systemPrompt: string,
     messages: ConversationMessage[],
     tools: ToolDefinition[],
+    responseSchema?: ResponseSchema,
   ): Record<string, unknown> {
     const body: Record<string, unknown> = {
       // Always the pinned Codex-supported model (NOT a churned per-call override).
@@ -1039,6 +1063,20 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
         parameters: tool.input_schema,
       }));
       body["tool_choice"] = "auto";
+    }
+
+    if (responseSchema) {
+      // The Responses API spells structured output as `text.format`, not the
+      // chat-completions `response_format`. Same constrained decoding, different
+      // envelope — sending the chat shape here is silently ignored.
+      body["text"] = {
+        format: {
+          type: "json_schema",
+          name: responseSchema.name,
+          schema: responseSchema.schema,
+          strict: true,
+        },
+      };
     }
 
     return body;

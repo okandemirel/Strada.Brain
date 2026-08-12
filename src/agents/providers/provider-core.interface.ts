@@ -210,6 +210,12 @@ export interface ProviderCapabilities {
   readonly systemPrompt: boolean;
   readonly contextWindow?: number;
   readonly thinkingSupported?: boolean;
+  /**
+   * Whether the provider can constrain a reply to a JSON Schema at decode time
+   * (ProviderCallOptions.responseSchema). Absent or false means a passed schema
+   * is ignored, so callers must keep their text-parsing fallback.
+   */
+  readonly structuredOutput?: boolean;
   readonly specialFeatures?: string[];
 }
 

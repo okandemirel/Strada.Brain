@@ -8,6 +8,8 @@ import type {
   ToolCall,
   StreamCallback,
   ProviderCapabilities,
+  ProviderCallOptions,
+  ResponseSchema,
 } from "./provider.interface.js";
 import type { MessageContent, TokenUsage } from "./provider-core.interface.js";
 import { getLogger, getLoggerSafe } from "../../utils/logger.js";
@@ -27,7 +29,8 @@ export class ClaudeProvider implements IAIProvider, IStreamingProvider {
     systemPrompt: true,
     contextWindow: 1_000_000,
     thinkingSupported: true,
-    specialFeatures: ["prompt_caching", "adaptive_thinking", "vision", "pdf_input"],
+    structuredOutput: true,
+    specialFeatures: ["prompt_caching", "adaptive_thinking", "vision", "pdf_input", "structured_output"],
   };
   private readonly client: Anthropic;
   private readonly model: string;
@@ -55,11 +58,11 @@ export class ClaudeProvider implements IAIProvider, IStreamingProvider {
     systemPrompt: string,
     messages: ConversationMessage[],
     tools: ToolDefinition[],
-    options?: { signal?: AbortSignal },
+    options?: ProviderCallOptions,
   ): Promise<ProviderResponse> {
     const logger = getLogger();
 
-    const request = this.buildRequest(systemPrompt, messages, tools);
+    const request = this.buildRequest(systemPrompt, messages, tools, options?.responseSchema);
 
     logger.debug("Claude API call", {
       model: this.model,
@@ -80,11 +83,11 @@ export class ClaudeProvider implements IAIProvider, IStreamingProvider {
     messages: ConversationMessage[],
     tools: ToolDefinition[],
     onChunk: StreamCallback,
-    options?: { signal?: AbortSignal },
+    options?: ProviderCallOptions,
   ): Promise<ProviderResponse> {
     const logger = getLogger();
 
-    const request = this.buildRequest(systemPrompt, messages, tools);
+    const request = this.buildRequest(systemPrompt, messages, tools, options?.responseSchema);
 
     logger.debug("Claude streaming API call", {
       model: this.model,
@@ -165,6 +168,7 @@ export class ClaudeProvider implements IAIProvider, IStreamingProvider {
     systemPrompt: string,
     messages: ConversationMessage[],
     tools: ToolDefinition[],
+    responseSchema?: ResponseSchema,
   ): Anthropic.MessageCreateParamsNonStreaming {
     const anthropicTools: Anthropic.ToolUnion[] = tools.map((t, i) => ({
       name: t.name,
@@ -187,7 +191,20 @@ export class ClaudeProvider implements IAIProvider, IStreamingProvider {
       system,
       messages: this.buildMessages(messages),
       tools: anthropicTools.length > 0 ? anthropicTools : undefined,
-    };
+      // Constrained decoding. `output_config.format` is the current shape; the
+      // older top-level `output_format` is deprecated. Omitted entirely when no
+      // schema was asked for, so ordinary calls are byte-identical to before.
+      ...(responseSchema
+        ? {
+            output_config: {
+              format: {
+                type: "json_schema" as const,
+                schema: responseSchema.schema,
+              },
+            },
+          }
+        : {}),
+    } as Anthropic.MessageCreateParamsNonStreaming;
   }
 
   private buildMessages(messages: ConversationMessage[]): Anthropic.MessageParam[] {

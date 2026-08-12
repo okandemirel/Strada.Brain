@@ -37,9 +37,32 @@ export interface ProviderCallHooks {
  * request (and may carry the per-call stall watchdog); `externalSignal` is the
  * task/control-plane abort (audit #6); `hooks` carries optional resilience callbacks.
  */
+/**
+ * A JSON Schema the response must conform to.
+ *
+ * Providers that support constrained decoding enforce this at the sampling
+ * level, so the reply is guaranteed-parseable JSON rather than JSON embedded in
+ * prose. Callers must still keep whatever fallback they had: providers without
+ * support ignore the field (`capabilities.structuredOutput` says which), and a
+ * schema is not a promise about the *contents* of the object, only its shape.
+ */
+export interface ResponseSchema {
+  /** Identifier sent to providers that require one (OpenAI). Keep it stable. */
+  readonly name: string;
+  /** JSON Schema. Must be an object schema with `additionalProperties: false`
+   *  for OpenAI's strict mode to accept it. */
+  readonly schema: Record<string, unknown>;
+}
+
 export interface ProviderCallOptions extends ProviderCallHooks {
   signal?: AbortSignal;
   externalSignal?: AbortSignal;
+  /**
+   * Constrain the reply to this schema. Optional and ignored by providers that
+   * cannot enforce it, so passing it never breaks a provider — it only removes
+   * the need to dig JSON out of prose on the ones that can.
+   */
+  responseSchema?: ResponseSchema;
 }
 
 /**

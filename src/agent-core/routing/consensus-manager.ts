@@ -43,6 +43,28 @@ function stripCodeFences(text: string): string {
  * String-aware counting means braces inside reasoning text (e.g. "the {component} is wrong")
  * don't corrupt the scan.
  */
+/**
+ * Shape requested from a reviewer that supports constrained decoding.
+ *
+ * The keys match what extractJsonVerdict already looks for, so a schema-capable
+ * provider and a prose-only one land in the same parser — the schema removes
+ * the digging, it does not create a second code path. `additionalProperties`
+ * must be false and every property listed in `required` or OpenAI rejects the
+ * schema outright rather than downgrading to a hint.
+ */
+const VERDICT_SCHEMA = {
+  name: "consensus_verdict",
+  schema: {
+    type: "object",
+    properties: {
+      approved: { type: "boolean", description: "true if the work under review is correct" },
+      reason: { type: "string", description: "one or two sentences justifying the verdict" },
+    },
+    required: ["approved", "reason"],
+    additionalProperties: false,
+  },
+} as const;
+
 function extractJsonVerdict(
   text: string,
   keys: readonly string[],
@@ -340,9 +362,17 @@ export class ConsensusManager {
     content: string,
   ): Promise<ProviderResponse> {
     const messages = [{ role: "user" as const, content }];
+    // Ask for a schema-constrained verdict. Providers that support constrained
+    // decoding return guaranteed-parseable JSON instead of a verdict buried in
+    // prose; the ones that do not ignore the field, which is why
+    // parseApproval's brace-scanner and keyword fallback stay exactly as they
+    // were. This narrows how often those fallbacks have to fire — it does not
+    // replace them, and it must not, because a schema constrains the shape of
+    // the reply and says nothing about whether the verdict inside is sound.
+    const callOptions = { responseSchema: VERDICT_SCHEMA };
     const ms = this.config.reviewTimeoutMs;
     if (!ms || ms <= 0) {
-      return provider.chat(systemPrompt, messages, []);
+      return provider.chat(systemPrompt, messages, [], callOptions);
     }
     // Request cancellation of the underlying call on timeout instead of merely abandoning
     // it: providers that thread `signal` into fetch abort the stalled request rather than
@@ -350,7 +380,7 @@ export class ConsensusManager {
     // whether the provider honors the signal, so the turn always fails CLOSED (verify()'s
     // catch turns this into "manual review required").
     const controller = new AbortController();
-    const chat = provider.chat(systemPrompt, messages, [], { signal: controller.signal });
+    const chat = provider.chat(systemPrompt, messages, [], { ...callOptions, signal: controller.signal });
     // If the timeout wins the race the abandoned chat still settles later; swallow its
     // (abort) rejection on a side chain so Node logs no unhandled rejection.
     chat.catch(() => { /* superseded by the timeout below */ });
