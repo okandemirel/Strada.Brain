@@ -1213,12 +1213,19 @@ export class BackgroundExecutor {
       // the whole lease write-only: the agent edited a temp copy, verified it,
       // reported success, and the project never received a byte.
       //
-      // An ABORTED run does not publish. A user who cancels, or a watchdog that
-      // kills a hung turn, is saying "stop" — landing half-written files in
-      // their project is not what they asked for. A run that merely FAILED does
-      // still publish: the edits exist, the user can read and revert them, and
-      // discarding them silently is the very behaviour this whole change fixes.
-      if (taskWorkspaceLease && !signal.aborted) {
+      // Commits UNCONDITIONALLY, including on abort and failure. A `!aborted`
+      // guard was tried and reverted: the stall detector aborts a task that
+      // stopped making progress, and measured on a real run that had already
+      // written 13 files, the guard threw all of them away. "The user said
+      // stop" and "a watchdog gave up" are not the same thing, and the executor
+      // cannot cheaply tell them apart here.
+      //
+      // The asymmetry decides it. Publishing work the user did not want leaves
+      // files they can read and delete — recoverable. Withholding work they did
+      // want destroys it with no way back — not recoverable. Their own edits
+      // are already protected by the conflict check, so publishing cannot
+      // clobber anything of theirs.
+      if (taskWorkspaceLease) {
         await Promise.resolve()
           .then(() => taskWorkspaceLease!.commit())
           .then((result) => {
