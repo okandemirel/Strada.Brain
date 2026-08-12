@@ -133,6 +133,24 @@ function getLoggerSafe() {
 }
 
 /**
+ * Entries added between event-loop yields during an index build.
+ *
+ * Sized so a slice stays in the low tens of milliseconds at typical dimensions
+ * (measured ~0.2 ms per addPoint at 384 dims), which keeps the process
+ * responsive without paying scheduler overhead per point.
+ */
+const HNSW_YIELD_EVERY = 128;
+
+/**
+ * setImmediate, not `await Promise.resolve()`: microtasks drain before the
+ * loop advances, so awaiting a resolved promise yields to nothing. Only a
+ * macrotask lets timers, I/O and pending callbacks actually run.
+ */
+function yieldToEventLoop(): Promise<void> {
+  return new Promise<void>((resolve) => setImmediate(resolve));
+}
+
+/**
  * HNSW Index Configuration
  */
 export interface HNSWConfig {
@@ -436,8 +454,19 @@ export class HNSWVectorStore implements IHNSWVectorStore {
       );
     }
 
-    // Add to HNSW index
-    for (const entry of entries) {
+    // Add to HNSW index, yielding to the event loop between slices.
+    //
+    // hnswlib's addPoint is a synchronous native call, so an unbroken loop
+    // holds the thread for the whole build. Measured at 384 dimensions: a
+    // 1 ms timer scheduled just before the loop fires 85 ms late on a 500-entry
+    // batch — i.e. the event loop is unavailable for 100% of the build, which
+    // scales linearly to 1,775 ms at 8,000 entries. During that window nothing
+    // else runs: no heartbeat, no cancellation, no channel message.
+    //
+    // Yielding does not reduce total CPU (it is the same work), it just stops
+    // the process from going deaf while doing it.
+    for (let i = 0; i < entries.length; i++) {
+      const entry = entries[i]!;
       const index = this.nextIndex++;
       const normalizedVector = this.normalizeVector(entry.vector);
 
@@ -446,6 +475,10 @@ export class HNSWVectorStore implements IHNSWVectorStore {
       this.idToIndex.set(entry.id, index);
       this.indexToId.set(index, entry.id);
       this.vectorsByIndex.set(index, Array.from(normalizedVector));
+
+      if ((i + 1) % HNSW_YIELD_EVERY === 0 && i + 1 < entries.length) {
+        await yieldToEventLoop();
+      }
     }
 
     // Quantize if enabled

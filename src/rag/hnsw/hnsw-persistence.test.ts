@@ -168,6 +168,42 @@ describeIfHnsw("HNSW vector persistence", () => {
     await reopened.shutdown();
   });
 
+  it("stays responsive to the event loop while building the index", async () => {
+    // hnswlib's addPoint is a synchronous native call, so an unbroken add loop
+    // holds the thread for the entire build — measured at 1,775 ms for 8,000
+    // entries, during which no heartbeat, cancellation or channel message can
+    // run. upsertBatch yields between slices to bound that.
+    //
+    // Asserting a millisecond bound would be flaky; this asserts the mechanism
+    // instead. A timer scheduled before the batch cannot possibly fire before
+    // the batch resolves unless the loop was actually yielded to.
+    // Needs more entries than the shared 500-element fixture allows, and
+    // enough of them to cross several yield slices.
+    const store = await createHNSWVectorStore(dir, {
+      dimensions: DIMENSIONS,
+      maxElements: 2000,
+      M: 8,
+      efConstruction: 50,
+      efSearch: 32,
+      metric: "cosine",
+      quantization: "none",
+    });
+    const entries = Array.from({ length: 600 }, (_, i) => entry(`c${i}`, i + 1));
+
+    let firedDuringBuild = false;
+    let finished = false;
+    const ticker = setInterval(() => {
+      if (!finished) firedDuringBuild = true;
+    }, 1);
+
+    await store.upsertBatch(entries);
+    finished = true;
+    clearInterval(ticker);
+    await store.shutdown();
+
+    expect(firedDuringBuild, "event loop ran during the index build").toBe(true);
+  });
+
   it("falls back to metadata when the sidecar is corrupt rather than losing the vectors", async () => {
     const ids = Array.from({ length: 5 }, (_, i) => `c${i}`);
     const store = await open();
