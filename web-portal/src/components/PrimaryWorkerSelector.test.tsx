@@ -13,12 +13,12 @@ describe('PrimaryWorkerSelectorSurface', () => {
           {
             name: 'Claude',
             configured: true,
-            models: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6-20250514'],
+            models: ['claude-haiku-4-5', 'claude-sonnet-5'],
             contextWindow: 1000000,
             thinkingSupported: true,
           },
         ]}
-        active={{ provider: 'Claude', model: 'claude-sonnet-4-6-20250514' }}
+        active={{ provider: 'Claude', model: 'claude-sonnet-5' }}
         open
         loading={false}
         modelsLoading={false}
@@ -29,10 +29,10 @@ describe('PrimaryWorkerSelectorSurface', () => {
       />,
     )
 
-    expect(html).toContain('Claude/claude-sonnet-4-6-20250514')
+    expect(html).toContain('Claude/claude-sonnet-5')
     expect(html).toContain('Claude')
-    expect(html).toContain('claude-haiku-4-5-20251001')
-    expect(html).toContain('claude-sonnet-4-6-20250514')
+    expect(html).toContain('claude-haiku-4-5')
+    expect(html).toContain('claude-sonnet-5')
   })
 })
 

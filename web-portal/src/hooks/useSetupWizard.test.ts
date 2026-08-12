@@ -25,8 +25,10 @@ describe('useSetupWizard helpers', () => {
   })
 
   it('prefers preset model defaults and otherwise falls back to curated provider defaults', () => {
+    // Comes from the backend's SYSTEM_PRESETS, which this file imports rather
+    // than duplicating — so this expectation has to move when the preset does.
     expect(buildProviderModelDefaults(['claude'], 'performance')).toEqual({
-      claude: 'claude-sonnet-4-6-20250514',
+      claude: 'claude-sonnet-5',
     })
 
     expect(buildProviderModelDefaults(['deepseek', 'gemini'], null)).toEqual({
@@ -79,7 +81,7 @@ describe('useSetupWizard helpers', () => {
 
   it('does not write OpenCode env vars when OpenCode is not enabled', () => {
     const config: Record<string, string> = {}
-    applyOpencodeConfig(config, new Set(['claude']), 'go', { claude: 'claude-sonnet-4-6-20250514' })
+    applyOpencodeConfig(config, new Set(['claude']), 'go', { claude: 'claude-sonnet-5' })
 
     expect(config.OPENCODE_BASE_URL).toBeUndefined()
     expect(config.OPENCODE_DEFAULT_MODEL).toBeUndefined()
