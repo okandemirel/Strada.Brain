@@ -1032,6 +1032,9 @@ describe("BackgroundExecutor - Pre-decomposed Tree Path", () => {
       id: "lease-task",
       path: "/tmp/task-lease",
       release,
+      // The lease contract now includes commit(); a stub without it would
+      // crash the executor's finally block instead of exercising the path.
+      commit: vi.fn().mockResolvedValue({ written: [], conflicts: [] }),
     };
     const acquireLease = vi.fn().mockResolvedValue(workspaceLease);
     const task = createTestTask(goalTree, {
@@ -1325,6 +1328,9 @@ describe("BackgroundExecutor - Pre-decomposed Tree Path", () => {
       id: "lease-1",
       workspaceId: "ws-1",
       release,
+      // The lease contract now includes commit(); a stub without it would
+      // crash the executor's finally block instead of exercising the path.
+      commit: vi.fn().mockResolvedValue({ written: [], conflicts: [] }),
     };
     const acquireLease = vi.fn().mockResolvedValue(workspaceLease);
     const usageRecorder = vi.fn();

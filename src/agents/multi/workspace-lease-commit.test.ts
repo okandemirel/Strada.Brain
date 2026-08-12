@@ -1,0 +1,118 @@
+/**
+ * Workspace lease write-back.
+ *
+ * A lease used to be write-only: createTempCopy() seeded it, the agent wrote
+ * into it, and release() deleted the directory. Measured on a live run — a task
+ * that asked for one C# file called file_write successfully against
+ * `<tmp>/strada-workspaces/task-<id>/Assets/Scripts/Board.cs`, read it back,
+ * ran quality checks on it, reported success, and the user's project never
+ * received a byte. The agent was doing the work and throwing it away, which
+ * presented to the user as "the agent produces nothing".
+ */
+
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, utimesSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { WorkspaceLeaseManager } from "./workspace-lease-manager.js";
+
+let source: string;
+let leaseRoot: string;
+
+beforeEach(() => {
+  source = mkdtempSync(join(tmpdir(), "lease-src-"));
+  leaseRoot = mkdtempSync(join(tmpdir(), "lease-root-"));
+  mkdirSync(join(source, "Assets", "Scripts"), { recursive: true });
+  writeFileSync(join(source, "Assets", "Scripts", "Existing.cs"), "original", "utf8");
+});
+
+afterEach(() => {
+  rmSync(source, { recursive: true, force: true });
+  rmSync(leaseRoot, { recursive: true, force: true });
+});
+
+function manager() {
+  // Force the temp-copy path: the git-worktree kind is a different mechanism
+  // and a Unity project is usually not a repository anyway.
+  return new WorkspaceLeaseManager({ projectRoot: source, leaseRoot, preferGitWorktree: false });
+}
+
+describe("workspace lease commit", () => {
+  it("copies a file the agent created back into the project", async () => {
+    const lease = await manager().acquireLease({ label: "t", forceTempCopy: true });
+    writeFileSync(join(lease.path, "Assets", "Scripts", "Board.cs"), "namespace PixelFlow { }", "utf8");
+
+    const result = await lease.commit();
+    await lease.release();
+
+    expect(result.written).toContain(join("Assets", "Scripts", "Board.cs"));
+    expect(readFileSync(join(source, "Assets", "Scripts", "Board.cs"), "utf8")).toBe(
+      "namespace PixelFlow { }",
+    );
+  });
+
+  it("copies a modification back", async () => {
+    const lease = await manager().acquireLease({ label: "t", forceTempCopy: true });
+    writeFileSync(join(lease.path, "Assets", "Scripts", "Existing.cs"), "edited", "utf8");
+
+    const result = await lease.commit();
+    await lease.release();
+
+    expect(result.written).toContain(join("Assets", "Scripts", "Existing.cs"));
+    expect(readFileSync(join(source, "Assets", "Scripts", "Existing.cs"), "utf8")).toBe("edited");
+  });
+
+  it("reports untouched files as neither written nor conflicting", async () => {
+    // cpSync preserves timestamps, so an mtime comparison would call every
+    // seeded file modified. Content is what decides.
+    const lease = await manager().acquireLease({ label: "t", forceTempCopy: true });
+    const result = await lease.commit();
+    await lease.release();
+
+    expect(result.written).toEqual([]);
+    expect(result.conflicts).toEqual([]);
+  });
+
+  it("refuses to overwrite a file the user changed while the agent worked", async () => {
+    const lease = await manager().acquireLease({ label: "t", forceTempCopy: true });
+    writeFileSync(join(lease.path, "Assets", "Scripts", "Existing.cs"), "agent version", "utf8");
+
+    // The user edits the same file after the lease was taken.
+    const target = join(source, "Assets", "Scripts", "Existing.cs");
+    writeFileSync(target, "user version", "utf8");
+    const future = new Date(Date.now() + 60_000);
+    utimesSync(target, future, future);
+
+    const result = await lease.commit();
+    await lease.release();
+
+    expect(result.conflicts).toContain(join("Assets", "Scripts", "Existing.cs"));
+    expect(result.written).not.toContain(join("Assets", "Scripts", "Existing.cs"));
+    expect(readFileSync(target, "utf8")).toBe("user version");
+  });
+
+  it("never deletes from the project", async () => {
+    // Deleting inside the lease must not propagate: a conservative write-back
+    // can lose nothing, and an agent that removes a file it misread would
+    // otherwise destroy the user's work.
+    const lease = await manager().acquireLease({ label: "t", forceTempCopy: true });
+    rmSync(join(lease.path, "Assets", "Scripts", "Existing.cs"));
+
+    await lease.commit();
+    await lease.release();
+
+    expect(existsSync(join(source, "Assets", "Scripts", "Existing.cs"))).toBe(true);
+  });
+
+  it("creates missing directories in the project", async () => {
+    const lease = await manager().acquireLease({ label: "t", forceTempCopy: true });
+    mkdirSync(join(lease.path, "Assets", "Editor"), { recursive: true });
+    writeFileSync(join(lease.path, "Assets", "Editor", "Tool.cs"), "class Tool {}", "utf8");
+
+    const result = await lease.commit();
+    await lease.release();
+
+    expect(result.written).toContain(join("Assets", "Editor", "Tool.cs"));
+    expect(existsSync(join(source, "Assets", "Editor", "Tool.cs"))).toBe(true);
+  });
+});

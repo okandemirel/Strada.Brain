@@ -986,8 +986,36 @@ export class BackgroundExecutor {
         workspaceLeaseRetained: !shouldReleaseLease,
       });
     } finally {
-      if (shouldReleaseLease) {
-        await managedWorkspaceLease?.release().catch((err) => {
+      if (shouldReleaseLease && managedWorkspaceLease) {
+        // Commit BEFORE release. release() deletes the lease directory, so
+        // skipping this makes the whole lease write-only: the agent edits a
+        // temp copy, verifies it, reports success, and the user's project never
+        // receives a byte. Measured before this existed — a one-file request
+        // wrote Assets/Scripts/Board.cs into
+        // <tmp>/strada-workspaces/task-<id>/ and it was deleted on release.
+        await Promise.resolve()
+          .then(() => managedWorkspaceLease.commit())
+          .then((result) => {
+            if (result.written.length > 0) {
+              getLogger().info("Workspace lease committed", {
+                files: result.written.length,
+                conflicts: result.conflicts.length,
+              });
+            }
+            if (result.conflicts.length > 0) {
+              // Not silent: the agent's version of these files is about to be
+              // deleted, and the user needs to know their edit won the race.
+              getLogger().warn("Workspace lease had conflicting files — source kept, agent copy discarded", {
+                conflicts: result.conflicts.slice(0, 20),
+              });
+            }
+          })
+          .catch((err) => {
+            getLogger().error("Workspace lease commit failed — agent work discarded", {
+              error: err instanceof Error ? err.message : String(err),
+            });
+          });
+        await managedWorkspaceLease.release().catch((err) => {
           getLogger().warn("Workspace lease release failed", { error: err instanceof Error ? err.message : String(err) });
         });
       }
@@ -1179,6 +1207,33 @@ export class BackgroundExecutor {
         this.failGoalExecution(task, task.goalTree, errMsg, 0);
       }
     } finally {
+      // Commit BEFORE release — release() deletes the lease directory. This is
+      // the task-scoped lease, the one a normal CLI request actually takes; the
+      // delegated-run lease below has the same pairing. Missing it here made
+      // the whole lease write-only: the agent edited a temp copy, verified it,
+      // reported success, and the project never received a byte.
+      if (taskWorkspaceLease) {
+        await Promise.resolve()
+          .then(() => taskWorkspaceLease!.commit())
+          .then((result) => {
+            if (result.written.length > 0) {
+              getLogger().info("Task workspace committed", {
+                files: result.written.length,
+                conflicts: result.conflicts.length,
+              });
+            }
+            if (result.conflicts.length > 0) {
+              getLogger().warn("Task workspace had conflicting files — project kept, agent copy discarded", {
+                conflicts: result.conflicts.slice(0, 20),
+              });
+            }
+          })
+          .catch((err) => {
+            getLogger().error("Task workspace commit failed — agent work discarded", {
+              error: err instanceof Error ? err.message : String(err),
+            });
+          });
+      }
       await taskWorkspaceLease?.release().catch((err) => {
         getLogger().warn("Task workspace lease release failed", { error: err instanceof Error ? err.message : String(err) });
       });

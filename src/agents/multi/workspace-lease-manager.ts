@@ -1,5 +1,5 @@
-import { existsSync, mkdirSync, cpSync, rmSync } from "node:fs";
-import { resolve, join, dirname, sep } from "node:path";
+import { existsSync, mkdirSync, cpSync, rmSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { resolve, join, dirname, sep, relative } from "node:path";
 import os from "node:os";
 import { randomUUID } from "node:crypto";
 import { runProcess } from "../../utils/process-runner.js";
@@ -14,6 +14,18 @@ export interface WorkspaceLeaseRequest {
   readonly sourceRoot?: string;
 }
 
+/** What a commit() moved, and what it refused to move. */
+export interface WorkspaceCommitResult {
+  /** Repo-relative paths copied back into the source root. */
+  readonly written: string[];
+  /**
+   * Paths skipped because the source-root copy changed after the lease was
+   * taken. Overwriting them would silently discard the user's own edit, so the
+   * caller is told instead.
+   */
+  readonly conflicts: string[];
+}
+
 export interface WorkspaceLease {
   readonly id: string;
   readonly kind: WorkspaceLeaseKind;
@@ -23,6 +35,21 @@ export interface WorkspaceLease {
   readonly label?: string;
   readonly workerId?: string;
   readonly createdAt: number;
+  /**
+   * Copy work done inside the lease back into the source root.
+   *
+   * Without this a lease was write-only: createTempCopy() seeded it, the agent
+   * wrote into it, and release() deleted the directory. Measured — a task that
+   * asked for one C# file called file_write successfully against
+   * `<tmp>/strada-workspaces/task-<id>/Assets/Scripts/Board.cs`, read it back,
+   * verified it, reported success, and the user's project never received a
+   * byte. The agent was doing the work and throwing it away.
+   *
+   * Deliberately conservative: it adds and updates files, and never deletes
+   * anything from the source root. A file whose source copy changed after the
+   * lease was taken is reported as a conflict rather than overwritten.
+   */
+  commit(): Promise<WorkspaceCommitResult>;
   release(): Promise<void>;
 }
 
@@ -162,8 +189,12 @@ export class WorkspaceLeaseManager {
       };
     }
 
+    // Snapshot AFTER seeding so it reflects exactly what the lease started from.
+    const seedMtimes = this.snapshotMtimes(sourceRoot);
+
     let released = false;
     const lease: WorkspaceLease = {
+      commit: async () => this.commitLease(sourceRoot, workspacePath, seedMtimes),
       id,
       kind,
       sourceRoot,
@@ -236,6 +267,61 @@ export class WorkspaceLeaseManager {
     this.removeDirectory(workspacePath);
   }
 
+  /**
+   * Walks the lease and copies changed/new files back into the source root.
+   *
+   * Only regular files under the same filter used to seed the lease are
+   * considered, so build output and ignored directories never travel back.
+   * Content is compared byte-for-byte rather than by mtime: cpSync preserves
+   * timestamps, so an unchanged file must not read as modified.
+   */
+  private async commitLease(
+    sourceRoot: string,
+    workspacePath: string,
+    seedMtimes: ReadonlyMap<string, number>,
+  ): Promise<WorkspaceCommitResult> {
+    const written: string[] = [];
+    const conflicts: string[] = [];
+    if (!existsSync(workspacePath)) return { written, conflicts };
+
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = join(dir, entry.name);
+        if (!this.shouldCopyEntry(workspacePath, full)) continue;
+        if (entry.isDirectory()) {
+          walk(full);
+          continue;
+        }
+        if (!entry.isFile()) continue;
+
+        const rel = relative(workspacePath, full);
+        const target = join(sourceRoot, rel);
+
+        if (existsSync(target)) {
+          if (readFileSync(target).equals(readFileSync(full))) continue; // untouched
+          // Conflict detection compares against the mtime recorded when the
+          // lease was seeded, not against a wall-clock timestamp. Date.now() is
+          // whole milliseconds while mtimeMs carries a fraction, so a file
+          // written in the same millisecond as the lease reads as "modified
+          // after" — measured at +0.63 ms, which flagged every fresh file as a
+          // conflict and silently discarded the agent's work.
+          const seeded = seedMtimes.get(rel);
+          if (seeded !== undefined && statSync(target).mtimeMs !== seeded) {
+            conflicts.push(rel);
+            continue;
+          }
+        }
+
+        mkdirSync(dirname(target), { recursive: true });
+        cpSync(full, target, { force: true });
+        written.push(rel);
+      }
+    };
+
+    walk(workspacePath);
+    return { written, conflicts };
+  }
+
   private async createTempCopy(sourceRoot: string, workspacePath: string): Promise<void> {
     mkdirSync(dirname(workspacePath), { recursive: true });
     cpSync(sourceRoot, workspacePath, {
@@ -245,6 +331,22 @@ export class WorkspaceLeaseManager {
       dereference: false,
       filter: (source) => this.shouldCopyEntry(sourceRoot, source),
     });
+  }
+
+  /** Records every seeded file's mtime, so commit() can tell an edit the user
+   *  made during the run from a file that merely shares the lease's timestamp. */
+  private snapshotMtimes(root: string): Map<string, number> {
+    const seeded = new Map<string, number>();
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = join(dir, entry.name);
+        if (!this.shouldCopyEntry(root, full)) continue;
+        if (entry.isDirectory()) walk(full);
+        else if (entry.isFile()) seeded.set(relative(root, full), statSync(full).mtimeMs);
+      }
+    };
+    if (existsSync(root)) walk(root);
+    return seeded;
   }
 
   private shouldCopyEntry(sourceRoot: string, sourcePath: string): boolean {

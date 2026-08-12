@@ -1358,8 +1358,32 @@ export class Orchestrator {
 
     const classification = this.taskClassifier?.classify(coarsePlanningPrompt);
     const shouldForceSupervisor = Boolean(params.goalTree);
+    // GoalDecomposer.shouldDecompose is a length check — `prompt.length >= 60`,
+    // and its own docstring calls it "a MINIMAL pre-filter: it only blocks
+    // obviously trivial messages". It is a VETO, not an activator.
+    //
+    // It used to sit in this condition as `&& !isDecomposable`, which made it
+    // sufficient on its own: any request longer than a tweet took the
+    // supervisor path and the classifier's verdict was discarded. Measured,
+    // "write one C# file under Assets/Scripts" is 113 characters and classifies
+    // as code-generation/moderate — below the configured "complex" threshold,
+    // so the classifier correctly said "no supervisor" and was overruled by the
+    // length check. That routed a one-file edit through goal decomposition, a
+    // wave planner and multi-agent dispatch.
+    //
+    // The classifier is the authority when there is one; the length heuristic
+    // only stands in when there is not. Making length a hard veto instead would
+    // be the opposite error — a genuinely complex short request ("refactor the
+    // auth module") would be permanently denied the supervisor.
+    //
+    // Measured, with the threshold at "complex":
+    //   "write one C# file under Assets/Scripts…"  113 chars, moderate -> direct
+    //   the four-script Pixel Flow request          313 chars, complex  -> supervisor
     const isDecomposable = this.goalDecomposer?.shouldDecompose(coarsePlanningPrompt) ?? false;
-    if (!shouldForceSupervisor && !isDecomposable && (!classification || !this.shouldActivateSupervisor(classification))) {
+    const meetsComplexity = classification
+      ? this.shouldActivateSupervisor(classification)
+      : isDecomposable;
+    if (!shouldForceSupervisor && !meetsComplexity) {
       return {
         path: fallbackPath,
         reason: "low_complexity",
