@@ -660,6 +660,10 @@ export function buildUserContent(
  *
  * Manages conversation sessions per chat and routes tool calls.
  */
+/** How much of a tool result reaches the debug log. Results can be whole
+ *  files; enough to identify what happened, not enough to flood. */
+const TOOL_RESULT_LOG_PREVIEW = 300;
+
 export class Orchestrator {
   private readonly vaultRegistry?: import("../vault/vault-registry.js").VaultRegistry;
   private readonly vaultWriteHookBudgetMs: number = 200;
@@ -4294,7 +4298,26 @@ export class Orchestrator {
       } else {
         result = await tool.execute(activeToolCall.input, toolContext);
       }
-      this.metrics?.recordToolCall(activeToolCall.name, Date.now() - toolStart, !result.isError, result.isError ? String(result.content).slice(0, 200) : undefined);
+      const toolDurationMs = Date.now() - toolStart;
+      this.metrics?.recordToolCall(activeToolCall.name, toolDurationMs, !result.isError, result.isError ? String(result.content).slice(0, 200) : undefined);
+      // Log the OUTCOME, not just the attempt.
+      //
+      // "Executing tool" was logged and nothing else, so a call that failed, was
+      // rejected, or wrote to somewhere unexpected looked identical in the logs
+      // to one that worked. That cost three live agent runs and a temporary
+      // console.error patched into file_write to discover that writes were
+      // landing in a leased temp workspace and being deleted — the logs alone
+      // could not distinguish "wrote the file" from "wrote it into the void".
+      //
+      // Preview only: results can be whole files. The logger's redaction format
+      // runs over this like any other field.
+      logger.debug("Tool executed", {
+        chatId,
+        tool: activeToolCall.name,
+        durationMs: toolDurationMs,
+        isError: Boolean(result.isError),
+        resultPreview: String(result.content ?? "").slice(0, TOOL_RESULT_LOG_PREVIEW),
+      });
       // Vault write-hook (Phase 1): on successful Edit/Write tool calls,
       // trigger a budget-aware reindex of the touched file so the next turn's
       // vault-backed context reflects the just-written change.
