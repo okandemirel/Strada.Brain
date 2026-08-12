@@ -69,7 +69,9 @@
     "bench:check": "npm run bench && node scripts/bench/gate.mjs --check",
     "bench:retrieval": "node scripts/bench/retrieval-quality.mjs",
     "bench:retrieval:record": "node scripts/bench/retrieval-quality.mjs --record",
-    "bench:retrieval:check": "node scripts/bench/retrieval-quality.mjs --check"
+    "bench:retrieval:check": "node scripts/bench/retrieval-quality.mjs --check",
+    "bench:swe-sharp:pin": "node scripts/bench/swe-sharp/fetch-tasks.mjs",
+    "bench:swe-sharp:check": "node scripts/bench/swe-sharp/fetch-tasks.mjs --check"
   },
   "keywords": [
     "unity",
