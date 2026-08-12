@@ -194,7 +194,7 @@ export class ClaudeProvider implements IAIProvider, IStreamingProvider {
       // Constrained decoding. `output_config.format` is the current shape; the
       // older top-level `output_format` is deprecated. Omitted entirely when no
       // schema was asked for, so ordinary calls are byte-identical to before.
-      ...(responseSchema
+      ...(responseSchema && this.capabilities.structuredOutput
         ? {
             output_config: {
               format: {

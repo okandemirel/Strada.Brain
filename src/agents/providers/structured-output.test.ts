@@ -87,6 +87,26 @@ describe("Anthropic structured output", () => {
   });
 });
 
+describe("structured output is gated on the declared capability", () => {
+  it("does not send response_format from a subclass that declares no support", async () => {
+    // Eight providers subclass OpenAIProvider and override `capabilities`
+    // without structuredOutput — OpenAI-compatible in shape, not in feature
+    // set, and several reject an unknown response_format with a 400. The
+    // consensus reviewer passes a schema to whatever provider it is handed, so
+    // the guard has to live at the provider, not at the caller.
+    const { DeepSeekProvider } = await import("./deepseek.js");
+    const provider = new DeepSeekProvider({ mode: "api-key", apiKey: "sk-test" });
+    expect(provider.capabilities.structuredOutput).toBeFalsy();
+
+    const body = (
+      provider as unknown as {
+        buildRequestBody(m: unknown[], t: unknown, s?: ResponseSchema): Record<string, unknown>;
+      }
+    ).buildRequestBody([], undefined, SCHEMA);
+    expect(body["response_format"]).toBeUndefined();
+  });
+});
+
 describe("OpenAI structured output", () => {
   it("sends response_format.json_schema with strict decoding on chat completions", async () => {
     const { OpenAIProvider } = await import("./openai.js");

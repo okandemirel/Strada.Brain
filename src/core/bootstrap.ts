@@ -1986,6 +1986,7 @@ async function bootstrapImpl(
       toolRegistry,
       identityManager,
       modelIntelligence,
+      mcpConnections,
       dynamicProfiles,
       dynamicProfilePersistence,
       dynamicProfilesFlushInterval,

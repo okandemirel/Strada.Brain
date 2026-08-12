@@ -60,7 +60,11 @@ const VECTOR_SIDECAR_FORMAT = "f64v1";
 const VECTOR_SIDECAR_MAGIC = 0x53_56_46_31; // "SVF1"
 const VECTOR_SIDECAR_HEADER_BYTES = 12; // magic + dimensions + count
 
-function writeVectorSidecar(file: string, vectors: Map<number, number[]>, dimensions: number): void {
+function writeVectorSidecar(
+  file: string,
+  vectors: Map<number, number[]>,
+  dimensions: number,
+): void {
   const entryBytes = 4 + dimensions * 8;
   const buffer = Buffer.allocUnsafe(VECTOR_SIDECAR_HEADER_BYTES + vectors.size * entryBytes);
   buffer.writeUInt32LE(VECTOR_SIDECAR_MAGIC, 0);
@@ -87,41 +91,69 @@ function writeVectorSidecar(file: string, vectors: Map<number, number[]>, dimens
   writeFileSync(file, buffer);
 }
 
-/** Returns null when the sidecar is absent or unreadable, so the caller can
- *  fall back to the vectors an older install left inside metadata.json. */
-function readVectorSidecar(file: string): Map<number, number[]> | null {
+/**
+ * Reads the sidecar. Returns null ONLY when the file does not exist; a file
+ * that exists but does not parse throws.
+ *
+ * Returning null for a corrupt file was a serious bug. Since saveIndex writes
+ * `vectorsByIndex: []` into metadata.json, a current-format store has no inline
+ * fallback — so "fall back to metadata" silently produced an EMPTY vector map.
+ * Nothing looked wrong (count() was right, search still worked off hnsw.index),
+ * but the next compaction found no vector for any chunk, skipped them all, and
+ * recreateIndex() then wiped the store. Measured: truncating the sidecar by 5
+ * bytes and removing 4 of 10 ids took count() from 10 to 0, and the empty index
+ * was persisted over the good one.
+ *
+ * Throwing is strictly better than the format this replaced: a half-written
+ * metadata.json used to fail JSON.parse and surface loudly. Losing the ability
+ * to open a corrupt index is recoverable — the caller reindexes. Silently
+ * opening one that destroys itself is not.
+ *
+ * @param expectedDimensions the store's configured width; a sidecar written at
+ *   a different width belongs to a different embedding model and must not be
+ *   loaded, or every later save throws mid-write with hnsw.index already
+ *   overwritten.
+ */
+function readVectorSidecar(file: string, expectedDimensions: number): Map<number, number[]> | null {
   if (!existsSync(file)) return null;
 
-  try {
-    const buffer = readFileSync(file);
-    if (buffer.length < VECTOR_SIDECAR_HEADER_BYTES) return null;
-    if (buffer.readUInt32LE(0) !== VECTOR_SIDECAR_MAGIC) return null;
+  const fail = (reason: string): never => {
+    throw new Error(
+      `HNSW vector sidecar at ${file} is unusable (${reason}). ` +
+        `Delete the index directory and reindex — continuing would load an empty ` +
+        `vector map and the next compaction would discard the index.`,
+    );
+  };
 
-    const dimensions = buffer.readUInt32LE(4);
-    const count = buffer.readUInt32LE(8);
-    const entryBytes = 4 + dimensions * 8;
-    if (buffer.length !== VECTOR_SIDECAR_HEADER_BYTES + count * entryBytes) return null;
+  const buffer = readFileSync(file);
+  if (buffer.length < VECTOR_SIDECAR_HEADER_BYTES) fail("shorter than its header");
+  if (buffer.readUInt32LE(0) !== VECTOR_SIDECAR_MAGIC) fail("bad magic");
 
-    const vectors = new Map<number, number[]>();
-    let offset = VECTOR_SIDECAR_HEADER_BYTES;
-    for (let i = 0; i < count; i++) {
-      const index = buffer.readUInt32LE(offset);
-      offset += 4;
-      const vector = new Array<number>(dimensions);
-      for (let d = 0; d < dimensions; d++) {
-        vector[d] = buffer.readDoubleLE(offset);
-        offset += 8;
-      }
-      vectors.set(index, vector);
-    }
-    return vectors;
-  } catch (err) {
-    getLoggerSafe().warn("[HNSW] vector sidecar unreadable, falling back to metadata", {
-      file,
-      error: err instanceof Error ? err.message : String(err),
-    });
-    return null;
+  const dimensions = buffer.readUInt32LE(4);
+  const count = buffer.readUInt32LE(8);
+  if (dimensions !== expectedDimensions) {
+    fail(`written for ${dimensions} dimensions, store is configured for ${expectedDimensions}`);
   }
+  const entryBytes = 4 + dimensions * 8;
+  if (buffer.length !== VECTOR_SIDECAR_HEADER_BYTES + count * entryBytes) {
+    fail(
+      `truncated: ${buffer.length} bytes, expected ${VECTOR_SIDECAR_HEADER_BYTES + count * entryBytes}`,
+    );
+  }
+
+  const vectors = new Map<number, number[]>();
+  let offset = VECTOR_SIDECAR_HEADER_BYTES;
+  for (let i = 0; i < count; i++) {
+    const index = buffer.readUInt32LE(offset);
+    offset += 4;
+    const vector = new Array<number>(dimensions);
+    for (let d = 0; d < dimensions; d++) {
+      vector[d] = buffer.readDoubleLE(offset);
+      offset += 8;
+    }
+    vectors.set(index, vector);
+  }
+  return vectors;
 }
 
 function getLoggerSafe() {
@@ -258,6 +290,14 @@ export class HNSWVectorStore implements IHNSWVectorStore {
   private nextIndex: number = 0;
   private searchTimes: number[] = [];
   private vectorsByIndex: Map<number, number[]> = new Map();
+  /**
+   * Batches currently mutating the index maps.
+   *
+   * upsertBatch parks at macrotask boundaries, so "a write is running" is no
+   * longer the same as "we are inside a synchronous call". Anything that
+   * recreates or rewrites the index has to wait for this to reach zero.
+   */
+  private writesInFlight = 0;
   private quantizedVectors: Map<number, QuantizedVector> = new Map();
   private isInitialized: boolean = false;
   private deletedIndices: Set<number> = new Set();
@@ -292,8 +332,8 @@ export class HNSWVectorStore implements IHNSWVectorStore {
     if (!hnswAvailable) {
       throw new Error(
         "hnswlib-node is not available. HNSW vector search requires the optional " +
-        "hnswlib-node native module. On Windows, install Python 3 and C++ Build Tools " +
-        "(npm install --global windows-build-tools) then run: npm install hnswlib-node",
+          "hnswlib-node native module. On Windows, install Python 3 and C++ Build Tools " +
+          "(npm install --global windows-build-tools) then run: npm install hnswlib-node",
       );
     }
 
@@ -454,31 +494,36 @@ export class HNSWVectorStore implements IHNSWVectorStore {
       );
     }
 
-    // Add to HNSW index, yielding to the event loop between slices.
-    //
-    // hnswlib's addPoint is a synchronous native call, so an unbroken loop
-    // holds the thread for the whole build. Measured at 384 dimensions: a
-    // 1 ms timer scheduled just before the loop fires 85 ms late on a 500-entry
-    // batch — i.e. the event loop is unavailable for 100% of the build, which
-    // scales linearly to 1,775 ms at 8,000 entries. During that window nothing
-    // else runs: no heartbeat, no cancellation, no channel message.
-    //
-    // Yielding does not reduce total CPU (it is the same work), it just stops
-    // the process from going deaf while doing it.
-    for (let i = 0; i < entries.length; i++) {
-      const entry = entries[i]!;
-      const index = this.nextIndex++;
-      const normalizedVector = this.normalizeVector(entry.vector);
+    this.writesInFlight++;
+    try {
+      // Add to HNSW index, yielding to the event loop between slices.
+      //
+      // hnswlib's addPoint is a synchronous native call, so an unbroken loop
+      // holds the thread for the whole build. Measured at 384 dimensions: a
+      // 1 ms timer scheduled just before the loop fires 85 ms late on a 500-entry
+      // batch — i.e. the event loop is unavailable for 100% of the build, which
+      // scales linearly to 1,775 ms at 8,000 entries. During that window nothing
+      // else runs: no heartbeat, no cancellation, no channel message.
+      //
+      // Yielding does not reduce total CPU (it is the same work), it just stops
+      // the process from going deaf while doing it.
+      for (let i = 0; i < entries.length; i++) {
+        const entry = entries[i]!;
+        const index = this.nextIndex++;
+        const normalizedVector = this.normalizeVector(entry.vector);
 
-      this.hnswIndex.addPoint(Array.from(normalizedVector), index);
-      this.chunks.set(index, entry.chunk as CodeChunk);
-      this.idToIndex.set(entry.id, index);
-      this.indexToId.set(index, entry.id);
-      this.vectorsByIndex.set(index, Array.from(normalizedVector));
+        this.hnswIndex.addPoint(Array.from(normalizedVector), index);
+        this.chunks.set(index, entry.chunk as CodeChunk);
+        this.idToIndex.set(entry.id, index);
+        this.indexToId.set(index, entry.id);
+        this.vectorsByIndex.set(index, Array.from(normalizedVector));
 
-      if ((i + 1) % HNSW_YIELD_EVERY === 0 && i + 1 < entries.length) {
-        await yieldToEventLoop();
+        if ((i + 1) % HNSW_YIELD_EVERY === 0 && i + 1 < entries.length) {
+          await yieldToEventLoop();
+        }
       }
+    } finally {
+      this.writesInFlight--;
     }
 
     // Quantize if enabled
@@ -526,10 +571,13 @@ export class HNSWVectorStore implements IHNSWVectorStore {
     // rebuildScheduled so a burst of removes can't stack multiple rebuilds.
     const total = this.chunks.size + this.deletedIndices.size;
     if (total > 0 && this.deletedIndices.size / total > 0.3 && !this.rebuildScheduled) {
-      getLoggerSafe().info("[HNSWVectorStore] Deleted ratio exceeded threshold, scheduling compaction", {
-        deleted: this.deletedIndices.size,
-        total,
-      });
+      getLoggerSafe().info(
+        "[HNSWVectorStore] Deleted ratio exceeded threshold, scheduling compaction",
+        {
+          deleted: this.deletedIndices.size,
+          total,
+        },
+      );
       this.rebuildScheduled = true;
       const runCompaction = async (): Promise<void> => {
         try {
@@ -550,7 +598,20 @@ export class HNSWVectorStore implements IHNSWVectorStore {
       if (this.writeSerializer) {
         void this.writeSerializer.withLock(runCompaction);
       } else {
-        setImmediate(() => { void runCompaction(); });
+        // No serializer injected (the RAG pipeline never injects one), so the
+        // rebuild runs on a bare macrotask. upsertBatch yields at macrotask
+        // boundaries to keep the event loop responsive, which hands this
+        // rebuild a guaranteed window to run against a half-written index — it
+        // would recreateIndex() out from under the parked batch, which then
+        // resumes writing at stale indices. Wait for writes to drain first.
+        const runWhenIdle = (): void => {
+          if (this.writesInFlight > 0) {
+            setImmediate(runWhenIdle);
+            return;
+          }
+          void runCompaction();
+        };
+        setImmediate(runWhenIdle);
       }
     }
 
@@ -775,6 +836,26 @@ export class HNSWVectorStore implements IHNSWVectorStore {
       });
     }
 
+    // Refuse to rebuild when vectors are missing for live chunks.
+    //
+    // recreateIndex() below clears chunks/idToIndex/indexToId, so a rebuild
+    // that collected fewer entries than it had chunks does not compact the
+    // index — it deletes the difference, permanently, and the next saveIndex
+    // writes that loss to disk. Skipping compaction costs some wasted space
+    // until the next restart; continuing costs the user their index.
+    //
+    // This is defence in depth behind readVectorSidecar, which now throws
+    // rather than returning an empty vector map. It stays because the
+    // invariant is worth enforcing at the point of destruction, whatever
+    // caused the vectors to go missing.
+    if (entries.length < this.chunks.size) {
+      getLoggerSafe().error(
+        "[HNSWVectorStore] Refusing to rebuild: vectors missing for live chunks",
+        { chunks: this.chunks.size, recoverable: entries.length },
+      );
+      return;
+    }
+
     getLoggerSafe().info("[HNSWVectorStore] Rebuilding with entries", { count: entries.length });
 
     // Recreate index and re-insert (this clears all internal maps)
@@ -817,7 +898,11 @@ export class HNSWVectorStore implements IHNSWVectorStore {
       quantizedVectors: this.config.quantization ? Array.from(this.quantizedVectors.entries()) : [],
     };
 
-    writeVectorSidecar(join(path, VECTOR_SIDECAR_FILE), this.vectorsByIndex, this.config.dimensions);
+    writeVectorSidecar(
+      join(path, VECTOR_SIDECAR_FILE),
+      this.vectorsByIndex,
+      this.config.dimensions,
+    );
 
     const metadataPath = join(path, "metadata.json");
     writeFileSync(metadataPath, JSON.stringify(metadata, null, 2), "utf-8");
@@ -852,7 +937,7 @@ export class HNSWVectorStore implements IHNSWVectorStore {
     // Prefer the binary sidecar; fall back to the vectors an older install
     // wrote inline so an upgrade does not lose its index. The next save
     // migrates it to the sidecar.
-    const sidecar = readVectorSidecar(join(path, VECTOR_SIDECAR_FILE));
+    const sidecar = readVectorSidecar(join(path, VECTOR_SIDECAR_FILE), this.config.dimensions);
     this.vectorsByIndex = sidecar ?? new Map(metadata.vectorsByIndex ?? []);
 
     if (metadata.deletedIndices) {

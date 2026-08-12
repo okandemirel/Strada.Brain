@@ -139,11 +139,16 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Generate pinned corpus
-        run: npm run bench:corpus
-
+      # Order matters. `bench:corpus` REWRITES benchmarks/corpus/manifest.json
+      # with whatever it just generated, so checking afterwards compares a fresh
+      # generation against a hash written seconds earlier — it always matches and
+      # can never detect drift. `--check` generates into a temp dir of its own, so
+      # it runs first, against the hash committed to the repository.
       - name: Verify corpus is reproducible
         run: node scripts/bench/make-corpus.mjs --size S --check
+
+      - name: Generate pinned corpus
+        run: npm run bench:corpus
 
       # The gate skips (and says so) when no baseline exists for this
       # runner/Node combination, so a new runner never fails the build — it

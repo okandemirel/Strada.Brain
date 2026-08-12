@@ -184,6 +184,13 @@ export interface ShutdownOptions {
   toolRegistry?: ToolRegistry;
   identityManager?: IdentityStateManager;
   modelIntelligence?: import("../agents/providers/model-intelligence.js").ModelIntelligenceService;
+  /**
+   * Live MCP server connections. Each holds a child process and its stdio
+   * pipes, so leaving them open outlives the agent and can keep the process
+   * from exiting. Registering them on the BootstrapDisposables stack is not
+   * enough — that stack only unwinds on the bootstrap FAILURE path.
+   */
+  mcpConnections?: ReadonlyArray<{ serverName: string; close(): Promise<void> }>;
   /** Tier 2 dynamic behavioral profile store — flushed on shutdown so learned per-model scores survive a restart. */
   dynamicProfiles?: { flush(): Promise<void> };
   /** SQLite handle backing the dynamic profiles — closed on shutdown to release the fd/WAL. */
@@ -383,6 +390,11 @@ export function createShutdownHandler(options: ShutdownOptions): () => Promise<v
 
       await runStep("toolRegistry", () => options.toolRegistry?.shutdown());
 
+      if (options.mcpConnections?.length) {
+        await runStep("mcpConnections", async () => {
+          for (const connection of options.mcpConnections!) await connection.close();
+        });
+      }
       if (options.modelIntelligence) {
         await runStep("modelIntelligence", () => options.modelIntelligence!.shutdown());
       }

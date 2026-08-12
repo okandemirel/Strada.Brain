@@ -129,6 +129,15 @@ describe("FTS rebuild on upgrade", () => {
   });
 
   it("does not rebuild a second time", () => {
+    // The obvious version of this test — open twice and assert the search
+    // still works — passes with the version guard deleted, because a rebuild
+    // that runs every time also produces a working index. It has to detect the
+    // rebuild itself.
+    //
+    // So: let the first open stamp the version, then break the FTS row by hand.
+    // A second open that rebuilds would repair it; one that correctly skips
+    // leaves it broken. Asserting the BROKEN state is what makes this test able
+    // to fail.
     const dbPath = join(dir, "index.db");
     const first = new SqliteVaultStore(dbPath);
     first.migrate();
@@ -136,16 +145,18 @@ describe("FTS rebuild on upgrade", () => {
     first.upsertChunk(CHUNK);
     first.close();
 
-    // A store opened again is already current, so the version stamp stays put
-    // and the rebuild is skipped — it must not run on every open.
     const raw = new Database(dbPath);
-    const version = (raw.prepare("PRAGMA user_version").get() as { user_version: number }).user_version;
+    expect(
+      (raw.prepare("PRAGMA user_version").get() as { user_version: number }).user_version,
+    ).toBeGreaterThan(0);
+    raw.prepare("DELETE FROM vault_chunks_fts").run();
     raw.close();
-    expect(version).toBeGreaterThan(0);
 
     const second = new SqliteVaultStore(dbPath);
     second.migrate();
-    expect(second.searchFts("update buff", 10).map((h) => h.chunkId)).toEqual(["c1"]);
+    // Still empty => migrate() did not re-run the rebuild. If the guard is
+    // removed this returns ["c1"] and the test fails, which is the point.
+    expect(second.searchFts("update buff", 10)).toEqual([]);
     second.close();
   });
 });

@@ -8,7 +8,7 @@
  * Graceful degradation: 1 provider = skip entirely.
  */
 
-import type { IAIProvider, ProviderResponse } from "../../agents/providers/provider.interface.js";
+import type { IAIProvider, ProviderResponse, ResponseSchema } from "../../agents/providers/provider.interface.js";
 import type { TaskClassification, OriginalOutput, ConsensusResult, ConsensusStrategy } from "./routing-types.js";
 import { getLogger } from "../../utils/logger.js";
 
@@ -261,6 +261,7 @@ export class ConsensusManager {
       params.reviewProvider,
       "You are a code review agent. Evaluate the proposed action for correctness and safety.",
       reviewPrompt,
+      VERDICT_SCHEMA,
     );
 
     const approved = this.parseApproval(response.text);
@@ -338,6 +339,7 @@ export class ConsensusManager {
       params.reviewProvider,
       "You compare AI responses for agreement.",
       comparisonPrompt,
+      VERDICT_SCHEMA,
     );
 
     const agreed = this.parseApproval(comparison.text);
@@ -356,20 +358,30 @@ export class ConsensusManager {
    * verify() catch only fires on a thrown error, never on an indefinitely-pending
    * promise. On timeout we throw so verify() fails CLOSED ("manual review required").
    */
+  /**
+   * @param responseSchema constrain the reply. Passed per call site, NOT set
+   *   here: only two of the three callers want a verdict. reExecuteStrategy
+   *   uses this same helper to RE-RUN the user's original request and then
+   *   compares its tool calls and text against the first attempt — forcing
+   *   `{approved, reason}` on that call would make the model emit a verdict
+   *   object instead of doing the work, and the comparison would be against
+   *   nothing.
+   */
   private async chatWithTimeout(
     provider: IAIProvider,
     systemPrompt: string,
     content: string,
+    responseSchema?: ResponseSchema,
   ): Promise<ProviderResponse> {
     const messages = [{ role: "user" as const, content }];
-    // Ask for a schema-constrained verdict. Providers that support constrained
-    // decoding return guaranteed-parseable JSON instead of a verdict buried in
-    // prose; the ones that do not ignore the field, which is why
-    // parseApproval's brace-scanner and keyword fallback stay exactly as they
-    // were. This narrows how often those fallbacks have to fire — it does not
-    // replace them, and it must not, because a schema constrains the shape of
-    // the reply and says nothing about whether the verdict inside is sound.
-    const callOptions = { responseSchema: VERDICT_SCHEMA };
+    // Providers that support constrained decoding return guaranteed-parseable
+    // JSON instead of a verdict buried in prose; the ones that do not ignore
+    // the field, which is why parseApproval's brace-scanner and keyword
+    // fallback stay exactly as they were. This narrows how often those
+    // fallbacks have to fire — it does not replace them, and it must not,
+    // because a schema constrains the shape of a reply and says nothing about
+    // whether the verdict inside it is sound.
+    const callOptions = responseSchema ? { responseSchema } : {};
     const ms = this.config.reviewTimeoutMs;
     if (!ms || ms <= 0) {
       return provider.chat(systemPrompt, messages, [], callOptions);

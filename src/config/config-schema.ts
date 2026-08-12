@@ -78,6 +78,23 @@ const commaSeparatedNumberList = z
   .optional();
 
 /** Config schema for validation */
+/**
+ * One external MCP server entry.
+ *
+ * Exported so loadMcpServers can validate entries individually and drop the
+ * bad ones. Without that, a single malformed entry in an optional integration
+ * file fails the whole config parse and Strada refuses to start — which is
+ * exactly the outcome the file-loading path documents that it prevents.
+ */
+export const mcpServerEntrySchema = z.object({
+  name: z.string().min(1),
+  command: z.string().min(1),
+  args: z.array(z.string()).default([]),
+  env: z.record(z.string(), z.string()).default({}),
+  startupTimeoutMs: z.coerce.number().int().positive().default(30_000),
+  enabled: boolFromString(true),
+});
+
 export const configSchema = z
   .object({
     // AI Providers
@@ -423,18 +440,7 @@ export const configSchema = z
     // privileges of the Strada process — but it does NOT inherit the parent's
     // environment: credentials must be listed per server in `env`, so adding a
     // third-party server never silently hands it every key the agent holds.
-    mcpServers: z
-      .array(
-        z.object({
-          name: z.string().min(1),
-          command: z.string().min(1),
-          args: z.array(z.string()).default([]),
-          env: z.record(z.string(), z.string()).default({}),
-          startupTimeoutMs: z.coerce.number().int().positive().default(30_000),
-          enabled: boolFromString(true),
-        }),
-      )
-      .default([]),
+    mcpServers: z.array(mcpServerEntrySchema).default([]),
 
     // Obsidian Integration
     obsidian: z.object({

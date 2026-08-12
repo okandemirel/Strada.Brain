@@ -771,7 +771,13 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
     if (tools) {
       body["tools"] = tools;
     }
-    if (responseSchema) {
+    // Gated on the capability, not merely on the caller passing a schema.
+    // Eight providers subclass this one and override `capabilities` without
+    // declaring structuredOutput — they are OpenAI-compatible in shape, not in
+    // feature set, and several reject an unknown response_format with a 400.
+    // A caller that passes a schema to every provider it is handed (the
+    // consensus reviewer does) must not turn that into a failed request.
+    if (responseSchema && this.capabilities.structuredOutput) {
       // `strict: true` is what makes this constrained decoding rather than a
       // hint. It requires the schema to be an object with
       // additionalProperties:false and every property listed in `required` —
@@ -1065,7 +1071,7 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
       body["tool_choice"] = "auto";
     }
 
-    if (responseSchema) {
+    if (responseSchema && this.capabilities.structuredOutput) {
       // The Responses API spells structured output as `text.format`, not the
       // chat-completions `response_format`. Same constrained decoding, different
       // envelope — sending the chat shape here is silently ignored.

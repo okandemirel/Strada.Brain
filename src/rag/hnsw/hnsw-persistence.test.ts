@@ -22,7 +22,7 @@ beforeAll(() => {
 });
 
 import { join } from "node:path";
-import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, statSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, statSync, truncateSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { createHNSWVectorStore, isHnswAvailable, type HNSWVectorStore } from "./hnsw-vector-store.js";
 import type { VectorEntry, CodeChunk } from "../rag.interface.js";
@@ -204,25 +204,62 @@ describeIfHnsw("HNSW vector persistence", () => {
     expect(firedDuringBuild, "event loop ran during the index build").toBe(true);
   });
 
-  it("falls back to metadata when the sidecar is corrupt rather than losing the vectors", async () => {
-    const ids = Array.from({ length: 5 }, (_, i) => `c${i}`);
+  it("refuses to open a truncated sidecar instead of silently loading nothing", async () => {
+    // This was a real regression, not a hypothetical. saveIndex writes
+    // `vectorsByIndex: []`, so a current-format store has NO inline fallback —
+    // and readVectorSidecar used to return null for a corrupt file, leaving an
+    // empty vector map. Nothing looked wrong: count() was right and search
+    // still worked off hnsw.index. Then the first compaction found no vector
+    // for any chunk and recreateIndex() wiped the store. Measured before the
+    // fix: truncating by 5 bytes and removing 4 of 10 ids took count() 10 -> 0,
+    // and the empty index was persisted over the good one.
     const store = await open();
-    await store.upsertBatch(ids.map((id, i) => entry(id, i + 1)));
-    const before = snapshot(store, ids);
+    await store.upsertBatch(Array.from({ length: 10 }, (_, i) => entry(`c${i}`, i + 1)));
     await store.saveIndex(dir);
-    const inline = inlineVectorsFor(store);
     await store.shutdown();
 
-    // A truncated sidecar next to an old-format metadata file: the reader must
-    // reject the former and fall through to the latter.
-    const metadataPath = join(dir, "metadata.json");
-    const metadata = JSON.parse(readFileSync(metadataPath, "utf-8"));
-    metadata.vectorsByIndex = inline;
-    writeFileSync(metadataPath, JSON.stringify(metadata, null, 2), "utf-8");
-    writeFileSync(join(dir, SIDECAR), Buffer.from([0, 1, 2, 3]));
+    const sidecar = join(dir, SIDECAR);
+    truncateSync(sidecar, statSync(sidecar).size - 5);
 
-    const reopened = await open();
-    expect(snapshot(reopened, ids)).toEqual(before);
-    await reopened.shutdown();
+    await expect(open()).rejects.toThrow(/unusable/);
   });
+
+  it("refuses a sidecar written for a different embedding width", async () => {
+    // Reopening a store with a different embedding provider would otherwise
+    // load wrong-width vectors, and every later save would throw from
+    // writeVectorSidecar — after hnsw.index had already been overwritten.
+    const store = await open();
+    await store.upsertBatch(Array.from({ length: 5 }, (_, i) => entry(`c${i}`, i + 1)));
+    await store.saveIndex(dir);
+    await store.shutdown();
+
+    await expect(
+      createHNSWVectorStore(dir, {
+        dimensions: DIMENSIONS * 2,
+        maxElements: 500,
+        M: 8,
+        efConstruction: 50,
+        efSearch: 32,
+        metric: "cosine",
+        quantization: "none",
+      }),
+    ).rejects.toThrow(/dimensions/);
+  });
+
+  it("does not destroy the index when a compaction finds vectors missing", async () => {
+    // Defence in depth behind the reader: recreateIndex() clears every map, so
+    // a rebuild that recovered fewer entries than it has chunks deletes the
+    // difference permanently. Losing compaction is recoverable; losing the
+    // index is not.
+    const store = await open();
+    await store.upsertBatch(Array.from({ length: 10 }, (_, i) => entry(`c${i}`, i + 1)));
+
+    // Simulate vectors having gone missing by whatever route.
+    (store as unknown as StoreInternals).vectorsByIndex.clear();
+    await store.rebuildIndex();
+
+    expect(store.count()).toBe(10);
+    await store.shutdown();
+  });
+
 });

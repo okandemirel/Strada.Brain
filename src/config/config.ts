@@ -16,6 +16,7 @@ import * as dotenv from "dotenv";
 import type { SecretPattern } from "../security/secret-sanitizer.js";
 import type { Result, ValidationResult, ValidationError } from "../types/index.js";
 import { resolveDotenvPath } from "../common/runtime-paths.js";
+import { mcpServerEntrySchema } from "./config-schema.js";
 import type { DelegationConfig } from "../agents/multi/delegation/delegation-types.js";
 import { getPreset } from "./presets.js";
 import type { Config } from "./config-types.js";
@@ -1058,16 +1059,37 @@ function loadMcpServers(env: Record<string, string | undefined>): unknown[] {
   if (!existsSync(path)) return [];
   try {
     const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
+    const keep = (entries: unknown[]): unknown[] => {
+      // Validate per entry and drop the bad ones. A malformed entry must cost
+      // the user that server, never their ability to start Strada — letting it
+      // reach the top-level schema turns an optional integration into a fatal
+      // config error.
+      const good: unknown[] = [];
+      for (const entry of entries) {
+        if (mcpServerEntrySchema.safeParse(entry).success) {
+          good.push(entry);
+          continue;
+        }
+        const name =
+          entry && typeof entry === "object" && "name" in entry
+            ? String((entry as { name: unknown }).name)
+            : "(unnamed)";
+        warnAboutMcpConfig(`MCP server "${name}" in ${path} is not a valid entry — skipping it`);
+      }
+      return good;
+    };
     // Accept both a bare array and the `{ "mcpServers": {...} }` object other
     // hosts use, so a config can be copied across without being rewritten.
-    if (Array.isArray(parsed)) return parsed;
+    if (Array.isArray(parsed)) return keep(parsed);
     if (parsed && typeof parsed === "object" && "mcpServers" in parsed) {
       const servers = (parsed as { mcpServers: unknown }).mcpServers;
-      if (Array.isArray(servers)) return servers;
+      if (Array.isArray(servers)) return keep(servers);
       if (servers && typeof servers === "object") {
         // Object form is keyed by server name; the name lives in the key.
-        return Object.entries(servers as Record<string, Record<string, unknown>>).map(
-          ([name, spec]) => ({ name, ...spec }),
+        return keep(
+          Object.entries(servers as Record<string, Record<string, unknown>>).map(
+            ([name, spec]) => ({ name, ...spec }),
+          ),
         );
       }
     }
