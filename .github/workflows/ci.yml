@@ -151,6 +151,18 @@ jobs:
       - name: Benchmark and gate on regression
         run: npm run bench:check
 
+      # Retrieval quality is machine-independent — same corpus, same index,
+      # same query set, no timing — so unlike the latency gate this one has a
+      # single baseline and runs everywhere. It exists because the timing
+      # benchmarks only answer "is it fast": without it, a change to chunking,
+      # BM25 weighting or fusion could get faster while returning worse
+      # results, and CI would stay green.
+      - name: Build (retrieval quality reads dist/)
+        run: npm run build
+
+      - name: Gate on retrieval quality regression
+        run: npm run bench:retrieval:check
+
   # Coverage is reported, not gated. A hard threshold on a 48k-statement
   # codebase mostly produces pressure to write shallow tests; the number is
   # here so a drop is visible in the PR and can be discussed.

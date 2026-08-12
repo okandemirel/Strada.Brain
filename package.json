@@ -66,7 +66,10 @@
     "bench:corpus": "node scripts/bench/make-corpus.mjs --size S",
     "bench": "vitest bench --run --outputJson=benchmarks/.report.json",
     "bench:record": "npm run bench && node scripts/bench/gate.mjs --record",
-    "bench:check": "npm run bench && node scripts/bench/gate.mjs --check"
+    "bench:check": "npm run bench && node scripts/bench/gate.mjs --check",
+    "bench:retrieval": "node scripts/bench/retrieval-quality.mjs",
+    "bench:retrieval:record": "node scripts/bench/retrieval-quality.mjs --record",
+    "bench:retrieval:check": "node scripts/bench/retrieval-quality.mjs --check"
   },
   "keywords": [
     "unity",

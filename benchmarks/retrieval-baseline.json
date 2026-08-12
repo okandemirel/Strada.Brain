@@ -1,0 +1,20 @@
+{
+  "corpus": "unity-synth-v1-s",
+  "chunks": 811,
+  "queries": 60,
+  "topK": 10,
+  "families": {
+    "exact": {
+      "ndcg10": 1,
+      "recall10": 1,
+      "mrr": 1,
+      "zeroHitQueries": 0
+    },
+    "split": {
+      "ndcg10": 0.0246,
+      "recall10": 0.03,
+      "mrr": 0.0549,
+      "zeroHitQueries": 43
+    }
+  }
+}
