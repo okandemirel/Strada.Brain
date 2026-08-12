@@ -32,6 +32,98 @@ export function isHnswAvailable(): boolean {
   return hnswAvailable;
 }
 
+/**
+ * Binary sidecar for the raw vectors.
+ *
+ * These used to live inside metadata.json, serialised by
+ * `JSON.stringify(metadata, null, 2)`. At the default 1536 dimensions a single
+ * vector costs 37.8 KiB as pretty-printed JSON (each float becomes a ~17-char
+ * decimal plus indentation), so the metadata string crosses V8's maximum string
+ * length (~537 MB) in the low five figures — measured: 13,000 vectors already
+ * throws `RangeError: Invalid string length`, against the 100,000 the index is
+ * configured to hold. Past that point saveIndex() throws and the index simply
+ * never persists.
+ *
+ * float64 is deliberate rather than float32: normalizeVector() returns
+ * number[], so the in-memory vectors carry double precision and narrowing them
+ * on write would quietly change search results after a reload. 12.0 KiB/vector
+ * against 37.8 KiB is still a 3.1x reduction, and a Buffer has no string-length
+ * ceiling at all — the same 13,000 vectors serialise to a 152 MiB buffer in
+ * ~95 ms.
+ */
+// Deliberately NOT "vectors.bin": that name belongs to the pre-HNSW legacy
+// format (a headerless Float32Array beside chunks.json) and initialize() still
+// probes for it to trigger migrateFromLegacy. Reusing it would route a
+// current-format store into the legacy migration path.
+const VECTOR_SIDECAR_FILE = "vectors.f64";
+const VECTOR_SIDECAR_FORMAT = "f64v1";
+const VECTOR_SIDECAR_MAGIC = 0x53_56_46_31; // "SVF1"
+const VECTOR_SIDECAR_HEADER_BYTES = 12; // magic + dimensions + count
+
+function writeVectorSidecar(file: string, vectors: Map<number, number[]>, dimensions: number): void {
+  const entryBytes = 4 + dimensions * 8;
+  const buffer = Buffer.allocUnsafe(VECTOR_SIDECAR_HEADER_BYTES + vectors.size * entryBytes);
+  buffer.writeUInt32LE(VECTOR_SIDECAR_MAGIC, 0);
+  buffer.writeUInt32LE(dimensions, 4);
+  buffer.writeUInt32LE(vectors.size, 8);
+
+  let offset = VECTOR_SIDECAR_HEADER_BYTES;
+  for (const [index, vector] of vectors) {
+    if (vector.length !== dimensions) {
+      // A row of the wrong width would silently shift every following entry,
+      // so refuse rather than write a file that reads back as garbage.
+      throw new Error(
+        `Vector for index ${index} has ${vector.length} dimensions, expected ${dimensions}`,
+      );
+    }
+    buffer.writeUInt32LE(index, offset);
+    offset += 4;
+    for (const value of vector) {
+      buffer.writeDoubleLE(value, offset);
+      offset += 8;
+    }
+  }
+
+  writeFileSync(file, buffer);
+}
+
+/** Returns null when the sidecar is absent or unreadable, so the caller can
+ *  fall back to the vectors an older install left inside metadata.json. */
+function readVectorSidecar(file: string): Map<number, number[]> | null {
+  if (!existsSync(file)) return null;
+
+  try {
+    const buffer = readFileSync(file);
+    if (buffer.length < VECTOR_SIDECAR_HEADER_BYTES) return null;
+    if (buffer.readUInt32LE(0) !== VECTOR_SIDECAR_MAGIC) return null;
+
+    const dimensions = buffer.readUInt32LE(4);
+    const count = buffer.readUInt32LE(8);
+    const entryBytes = 4 + dimensions * 8;
+    if (buffer.length !== VECTOR_SIDECAR_HEADER_BYTES + count * entryBytes) return null;
+
+    const vectors = new Map<number, number[]>();
+    let offset = VECTOR_SIDECAR_HEADER_BYTES;
+    for (let i = 0; i < count; i++) {
+      const index = buffer.readUInt32LE(offset);
+      offset += 4;
+      const vector = new Array<number>(dimensions);
+      for (let d = 0; d < dimensions; d++) {
+        vector[d] = buffer.readDoubleLE(offset);
+        offset += 8;
+      }
+      vectors.set(index, vector);
+    }
+    return vectors;
+  } catch (err) {
+    getLoggerSafe().warn("[HNSW] vector sidecar unreadable, falling back to metadata", {
+      file,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
+}
+
 function getLoggerSafe() {
   try {
     return getLogger();
@@ -685,9 +777,14 @@ export class HNSWVectorStore implements IHNSWVectorStore {
       idToIndex: Array.from(this.idToIndex.entries()),
       indexToId: Array.from(this.indexToId.entries()),
       deletedIndices: Array.from(this.deletedIndices),
-      vectorsByIndex: Array.from(this.vectorsByIndex.entries()),
+      // vectorsByIndex now lives in the binary sidecar written below. Kept out
+      // of the JSON on purpose — see writeVectorSidecar.
+      vectorsByIndex: [],
+      vectorsFormat: VECTOR_SIDECAR_FORMAT,
       quantizedVectors: this.config.quantization ? Array.from(this.quantizedVectors.entries()) : [],
     };
+
+    writeVectorSidecar(join(path, VECTOR_SIDECAR_FILE), this.vectorsByIndex, this.config.dimensions);
 
     const metadataPath = join(path, "metadata.json");
     writeFileSync(metadataPath, JSON.stringify(metadata, null, 2), "utf-8");
@@ -719,7 +816,11 @@ export class HNSWVectorStore implements IHNSWVectorStore {
     this.chunks = new Map(metadata.chunks);
     this.idToIndex = new Map(metadata.idToIndex);
     this.indexToId = new Map(metadata.indexToId);
-    this.vectorsByIndex = new Map(metadata.vectorsByIndex ?? []);
+    // Prefer the binary sidecar; fall back to the vectors an older install
+    // wrote inline so an upgrade does not lose its index. The next save
+    // migrates it to the sidecar.
+    const sidecar = readVectorSidecar(join(path, VECTOR_SIDECAR_FILE));
+    this.vectorsByIndex = sidecar ?? new Map(metadata.vectorsByIndex ?? []);
 
     if (metadata.deletedIndices) {
       this.deletedIndices = new Set(metadata.deletedIndices);
