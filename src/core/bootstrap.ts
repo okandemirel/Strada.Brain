@@ -1021,6 +1021,43 @@ async function bootstrapImpl(
     });
   }
 
+  // External MCP servers. Registered after skills so a user-configured server
+  // cannot shadow a built-in tool: names are namespaced `mcp__<server>__<tool>`
+  // anyway, but registration order decides who wins a collision.
+  const mcpServers = config.mcpServers.filter((s) => s.enabled);
+  const mcpConnections: Array<{ serverName: string; close(): Promise<void> }> = [];
+  if (mcpServers.length > 0) {
+    try {
+      const { connectMcpServers } = await import("../mcp/mcp-client.js");
+      const connections = await connectMcpServers(mcpServers);
+      for (const connection of connections) {
+        mcpConnections.push(connection);
+        for (const tool of connection.tools) {
+          try {
+            // dangerous/readOnly are deliberately conservative: an MCP tool is
+            // a third-party binary whose effects Strada cannot introspect, so
+            // it is not claimed to be read-only.
+            toolRegistry.register(tool, { category: "custom", dangerous: true, readOnly: false });
+          } catch (err) {
+            logger.warn("MCP tool registration failed", {
+              tool: tool.name,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+        }
+      }
+      // Without this the child processes outlive the agent and hold their
+      // stdio pipes open, so shutdown hangs.
+      disposables.push("mcpConnections", async () => {
+        for (const connection of mcpConnections) await connection.close();
+      });
+    } catch (mcpError) {
+      logger.warn("MCP server loading failed (non-fatal)", {
+        error: mcpError instanceof Error ? mcpError.message : String(mcpError),
+      });
+    }
+  }
+
   const { goalStorage, goalDecomposer, interruptedGoalTrees, crashContext } =
     initializeGoalContextStage({
       config,

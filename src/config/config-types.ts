@@ -712,6 +712,24 @@ export interface BudgetConfig {
 }
 
 /** Codebase Memory Vault configuration */
+/**
+ * One external MCP server Strada starts and speaks the Model Context Protocol
+ * to. Its tools reach the agent namespaced as `mcp__<name>__<tool>`.
+ *
+ * `env` is the ONLY environment the server receives beyond a minimal
+ * default-deny allowlist: it does not inherit the parent's credentials, so
+ * adding a third-party server never silently hands it every key the agent
+ * holds. There is no sandbox — the server runs with the process's privileges.
+ */
+export interface McpServerConfigEntry {
+  readonly name: string;
+  readonly command: string;
+  readonly args: readonly string[];
+  readonly env: Readonly<Record<string, string>>;
+  readonly startupTimeoutMs: number;
+  readonly enabled: boolean;
+}
+
 export interface VaultConfig {
   readonly enabled: boolean;
   readonly writeHookBudgetMs: number;
@@ -942,6 +960,9 @@ export interface Config {
 
   // Codebase Memory Vault
   readonly vault: VaultConfig;
+
+  // External MCP servers
+  readonly mcpServers: readonly McpServerConfigEntry[];
 
   // Obsidian Integration
   readonly obsidian: ObsidianConfig;

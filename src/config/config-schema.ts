@@ -415,6 +415,27 @@ export const configSchema = z
       }).prefault({}),
     }).prefault({}),
 
+    // External MCP servers.
+    //
+    // Each entry is an executable Strada starts and speaks the Model Context
+    // Protocol to; its tools are exposed to the agent namespaced as
+    // `mcp__<name>__<tool>`. There is no sandbox — an MCP server runs with the
+    // privileges of the Strada process — but it does NOT inherit the parent's
+    // environment: credentials must be listed per server in `env`, so adding a
+    // third-party server never silently hands it every key the agent holds.
+    mcpServers: z
+      .array(
+        z.object({
+          name: z.string().min(1),
+          command: z.string().min(1),
+          args: z.array(z.string()).default([]),
+          env: z.record(z.string(), z.string()).default({}),
+          startupTimeoutMs: z.coerce.number().int().positive().default(30_000),
+          enabled: boolFromString(true),
+        }),
+      )
+      .default([]),
+
     // Obsidian Integration
     obsidian: z.object({
       enabled: boolFromString(false),

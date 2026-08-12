@@ -8,7 +8,9 @@
  * - Zod schema integration
  */
 
-import { realpathSync, statSync } from "node:fs";
+import { realpathSync, statSync, existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { homedir } from "node:os";
 import { z } from "zod";
 import * as dotenv from "dotenv";
 import type { SecretPattern } from "../security/secret-sanitizer.js";
@@ -502,6 +504,7 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
     },
 
     vault: rawConfig.vault,
+    mcpServers: rawConfig.mcpServers,
     obsidian: rawConfig.obsidian,
   };
 
@@ -1024,6 +1027,8 @@ interface EnvVars {
   opencodeDefaultModel: string | undefined;
   // OpenRouter
   openrouterApiKey: string | undefined;
+  // External MCP servers (file-backed, not an env var — see loadMcpServers)
+  mcpServers: unknown[];
   // Obsidian Integration
   obsidian: {
     enabled: string | undefined;
@@ -1037,8 +1042,59 @@ interface EnvVars {
 /**
  * Load configuration from environment variables
  */
+/**
+ * Reads the external MCP server list.
+ *
+ * A file rather than an environment variable: server lists are structured
+ * (command, args, per-server env), they get long, and the per-server `env` is
+ * where credentials live — none of which survives being flattened into a shell
+ * variable. The path follows the convention other MCP hosts use.
+ *
+ * Every failure returns an empty list and logs, because a malformed MCP config
+ * must cost the user their MCP tools, never their ability to start Strada.
+ */
+function loadMcpServers(env: Record<string, string | undefined>): unknown[] {
+  const path = env["MCP_CONFIG_PATH"] ?? join(env["STRADA_HOME"] ?? homedir(), ".strada", "mcp.json");
+  if (!existsSync(path)) return [];
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
+    // Accept both a bare array and the `{ "mcpServers": {...} }` object other
+    // hosts use, so a config can be copied across without being rewritten.
+    if (Array.isArray(parsed)) return parsed;
+    if (parsed && typeof parsed === "object" && "mcpServers" in parsed) {
+      const servers = (parsed as { mcpServers: unknown }).mcpServers;
+      if (Array.isArray(servers)) return servers;
+      if (servers && typeof servers === "object") {
+        // Object form is keyed by server name; the name lives in the key.
+        return Object.entries(servers as Record<string, Record<string, unknown>>).map(
+          ([name, spec]) => ({ name, ...spec }),
+        );
+      }
+    }
+    warnAboutMcpConfig(`MCP config at ${path} has an unrecognised shape — ignoring it`);
+    return [];
+  } catch (err) {
+    warnAboutMcpConfig(
+      `MCP config at ${path} could not be read — ignoring it: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return [];
+  }
+}
+
+/**
+ * Config is parsed before the logger is constructed, so this cannot go through
+ * getLogger(). stderr is the only channel that exists this early, and staying
+ * silent would leave a user with a typo'd MCP config wondering why none of
+ * their tools appeared.
+ */
+function warnAboutMcpConfig(message: string): void {
+  // eslint-disable-next-line no-console -- see above: no logger exists yet
+  console.warn(`[config] ${message}`);
+}
+
 function loadFromEnv(env: Record<string, string | undefined>): EnvVars {
   return {
+    mcpServers: loadMcpServers(env),
     anthropicApiKey: env["ANTHROPIC_API_KEY"],
     anthropicAuthMode: env["ANTHROPIC_AUTH_MODE"],
     anthropicAuthToken: env["ANTHROPIC_AUTH_TOKEN"],

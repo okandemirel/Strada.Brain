@@ -87,6 +87,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.104.1",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "@slack/bolt": "^4.6.0",
     "@slack/types": "^2.20.0",
     "better-sqlite3": "^12.10.0",
