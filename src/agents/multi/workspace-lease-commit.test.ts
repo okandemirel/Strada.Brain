@@ -174,6 +174,22 @@ describe("workspace lease commit", () => {
     expect(existsSync(join(source, "Library", "ArtifactDB"))).toBe(false);
   });
 
+  it("treats a file the user created during the run as a conflict", async () => {
+    // The conflict gate used to be guarded by `seeded !== undefined`, so a path
+    // absent at seed time skipped the check entirely and was overwritten with
+    // force. A user who creates a file while the agent works would lose it to
+    // whatever the agent happened to write at the same path.
+    const lease = await manager().acquireLease({ label: "t", forceTempCopy: true });
+    writeFileSync(join(lease.path, "Assets", "Scripts", "New.cs"), "agent version", "utf8");
+    writeFileSync(join(source, "Assets", "Scripts", "New.cs"), "user version", "utf8");
+
+    const result = await lease.commit();
+    await lease.release();
+
+    expect(result.conflicts).toContain(join("Assets", "Scripts", "New.cs"));
+    expect(readFileSync(join(source, "Assets", "Scripts", "New.cs"), "utf8")).toBe("user version");
+  });
+
   it("creates missing directories in the project", async () => {
     const lease = await manager().acquireLease({ label: "t", forceTempCopy: true });
     mkdirSync(join(lease.path, "Assets", "Editor"), { recursive: true });

@@ -1212,7 +1212,13 @@ export class BackgroundExecutor {
       // delegated-run lease below has the same pairing. Missing it here made
       // the whole lease write-only: the agent edited a temp copy, verified it,
       // reported success, and the project never received a byte.
-      if (taskWorkspaceLease) {
+      //
+      // An ABORTED run does not publish. A user who cancels, or a watchdog that
+      // kills a hung turn, is saying "stop" — landing half-written files in
+      // their project is not what they asked for. A run that merely FAILED does
+      // still publish: the edits exist, the user can read and revert them, and
+      // discarding them silently is the very behaviour this whole change fixes.
+      if (taskWorkspaceLease && !signal.aborted) {
         await Promise.resolve()
           .then(() => taskWorkspaceLease!.commit())
           .then((result) => {

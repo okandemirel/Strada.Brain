@@ -14,6 +14,7 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { getLogger } from "../../../utils/logger.js";
 import type { IChannelAdapter, IncomingMessage } from "../../../channels/channel.interface.js";
 import type { IEventBus, LearningEventMap } from "../../../core/event-bus.js";
 import type { ITool } from "../../tools/tool.interface.js";
@@ -616,6 +617,30 @@ export class DelegationManager {
       throw error;
     } finally {
       clearTimeout(timeoutId);
+      // Commit BEFORE release, same as the two lease sites in
+      // background-executor. Without this a delegated sub-agent's file writes
+      // go into its lease and are deleted with it — the identical defect, one
+      // layer down, and easy to miss because the delegation path has its own
+      // lease lifecycle.
+      if (workspaceLease) {
+        await Promise.resolve()
+          .then(() => workspaceLease!.commit())
+          .then((result) => {
+            if (result.written.length > 0 || result.conflicts.length > 0) {
+              getLogger().info("Delegated workspace committed", {
+                subAgentId,
+                files: result.written.length,
+                conflicts: result.conflicts.length,
+              });
+            }
+          })
+          .catch((err) => {
+            getLogger().error("Delegated workspace commit failed — sub-agent work discarded", {
+              subAgentId,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          });
+      }
       await workspaceLease?.release().catch(() => {});
       this.cleanup(subAgentId);
     }
