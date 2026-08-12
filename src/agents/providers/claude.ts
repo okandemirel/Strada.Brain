@@ -59,27 +59,16 @@ export class ClaudeProvider implements IAIProvider, IStreamingProvider {
   ): Promise<ProviderResponse> {
     const logger = getLogger();
 
-    const anthropicMessages = this.buildMessages(messages);
-    const anthropicTools = tools.map((t) => ({
-      name: t.name,
-      description: t.description,
-      input_schema: t.input_schema as Anthropic.Tool.InputSchema,
-    }));
+    const request = this.buildRequest(systemPrompt, messages, tools);
 
     logger.debug("Claude API call", {
       model: this.model,
-      messageCount: anthropicMessages.length,
-      toolCount: anthropicTools.length,
+      messageCount: request.messages.length,
+      toolCount: request.tools?.length ?? 0,
     });
 
     const response = await this.client.messages.create(
-      {
-        model: this.model,
-        max_tokens: this.capabilities.maxTokens,
-        system: systemPrompt,
-        messages: anthropicMessages,
-        tools: anthropicTools.length > 0 ? anthropicTools : undefined,
-      },
+      request,
       options?.signal ? { signal: options.signal } : undefined,
     );
 
@@ -95,26 +84,15 @@ export class ClaudeProvider implements IAIProvider, IStreamingProvider {
   ): Promise<ProviderResponse> {
     const logger = getLogger();
 
-    const anthropicMessages = this.buildMessages(messages);
-    const anthropicTools = tools.map((t) => ({
-      name: t.name,
-      description: t.description,
-      input_schema: t.input_schema as Anthropic.Tool.InputSchema,
-    }));
+    const request = this.buildRequest(systemPrompt, messages, tools);
 
     logger.debug("Claude streaming API call", {
       model: this.model,
-      messageCount: anthropicMessages.length,
+      messageCount: request.messages.length,
     });
 
     const stream = this.client.messages.stream(
-      {
-        model: this.model,
-        max_tokens: this.capabilities.maxTokens,
-        system: systemPrompt,
-        messages: anthropicMessages,
-        tools: anthropicTools.length > 0 ? anthropicTools : undefined,
-      },
+      request,
       options?.signal ? { signal: options.signal } : undefined,
     );
 
@@ -159,6 +137,57 @@ export class ClaudeProvider implements IAIProvider, IStreamingProvider {
       "claude-sonnet-5",
       "claude-haiku-4-5",
     ];
+  }
+
+  /**
+   * Builds the request shared by chat() and chatStream(), including the prompt
+   * cache breakpoints.
+   *
+   * `prompt_caching` was already advertised in `capabilities.specialFeatures`,
+   * but `cache_control` appeared nowhere in the codebase — every request re-paid
+   * full input price for a prefix that barely changes between turns.
+   *
+   * Anthropic matches the cache against the request prefix in a fixed render
+   * order: tools, then system, then messages. Two breakpoints are placed:
+   *
+   *   1. the last tool  — covers the whole tool block
+   *   2. the system     — covers tools + system
+   *
+   * The longest matching prefix at or below a breakpoint wins, so breakpoint 1
+   * still yields a hit on turns where the system prompt changed but the tools
+   * did not. Two of the four allowed breakpoints are left unused, for caching
+   * the conversation prefix later.
+   *
+   * Below the model's minimum cacheable length (1024 tokens, 2048 on Haiku) the
+   * API ignores cache_control rather than erroring, so no size check is needed.
+   */
+  private buildRequest(
+    systemPrompt: string,
+    messages: ConversationMessage[],
+    tools: ToolDefinition[],
+  ): Anthropic.MessageCreateParamsNonStreaming {
+    const anthropicTools: Anthropic.ToolUnion[] = tools.map((t, i) => ({
+      name: t.name,
+      description: t.description,
+      input_schema: t.input_schema as Anthropic.Tool.InputSchema,
+      // Only the final tool carries the breakpoint: it marks the end of the
+      // tool block, and one breakpoint per tool would burn the budget of four.
+      ...(i === tools.length - 1 ? { cache_control: { type: "ephemeral" as const } } : {}),
+    }));
+
+    // An empty text block is rejected by the API, so a blank system prompt has
+    // to stay omitted rather than become a cached empty block.
+    const system: Anthropic.TextBlockParam[] | undefined = systemPrompt
+      ? [{ type: "text", text: systemPrompt, cache_control: { type: "ephemeral" } }]
+      : undefined;
+
+    return {
+      model: this.model,
+      max_tokens: this.capabilities.maxTokens,
+      system,
+      messages: this.buildMessages(messages),
+      tools: anthropicTools.length > 0 ? anthropicTools : undefined,
+    };
   }
 
   private buildMessages(messages: ConversationMessage[]): Anthropic.MessageParam[] {
@@ -270,15 +299,19 @@ export class ClaudeProvider implements IAIProvider, IStreamingProvider {
 /**
  * Anthropic usage → TokenUsage.
  *
- * `input_tokens` is the UNCACHED remainder only: the true prompt size is
- * `input_tokens + cache_creation_input_tokens + cache_read_input_tokens`.
- * Summing only the first two fields under-reports the prompt as soon as prompt
- * caching is enabled, which would silently under-bill every cost estimate and
- * budget check that reads totalTokens.
+ * Anthropic reports `input_tokens` as the UNCACHED remainder only, with the
+ * cached portion in separate counters. TokenUsage uses the opposite (and more
+ * common) convention — see its docs — where `inputTokens` is the whole prompt
+ * and the cache fields are subsets of it. So the parts are summed here, at the
+ * provider boundary, and the normalisation happens exactly once.
  *
- * The cache counters are also the only way to tell whether caching is working
- * at all — a cache_read of zero across repeated requests means a silent
- * invalidator is in the prefix, and without exporting the number there is
+ * Reporting the raw `input_tokens` instead would under-report the prompt by
+ * whatever the cache served, which is most of it on every turn after the
+ * first — silently shrinking every cost estimate and budget check downstream.
+ *
+ * The cache counters are also the only way to tell whether caching works at
+ * all: a cache_read that stays zero across repeated requests means a silent
+ * invalidator sits in the prefix, and without exporting the number there is
  * nothing to notice.
  */
 function buildUsage(usage: {
@@ -289,10 +322,11 @@ function buildUsage(usage: {
 }): TokenUsage {
   const cacheCreation = usage.cache_creation_input_tokens ?? 0;
   const cacheRead = usage.cache_read_input_tokens ?? 0;
+  const inputTokens = usage.input_tokens + cacheCreation + cacheRead;
   return {
-    inputTokens: usage.input_tokens,
+    inputTokens,
     outputTokens: usage.output_tokens,
-    totalTokens: usage.input_tokens + cacheCreation + cacheRead + usage.output_tokens,
+    totalTokens: inputTokens + usage.output_tokens,
     ...(cacheCreation > 0 ? { cacheCreationInputTokens: cacheCreation } : {}),
     ...(cacheRead > 0 ? { cacheReadInputTokens: cacheRead } : {}),
   };

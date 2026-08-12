@@ -268,6 +268,10 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
     let finishReason = "stop";
     let inputTokens = 0;
     let outputTokens = 0;
+    // OpenAI caches prompt prefixes automatically — no request-side opt-in —
+    // but the provider never surfaced the number, so the saving was invisible.
+    // This is the cached share of prompt_tokens, not an addition to it.
+    let cachedTokens = 0;
 
     if (!response.body) {
       throw new Error(`${this.name} streaming response has no body`);
@@ -334,6 +338,7 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
             if (chunk.usage) {
               inputTokens = chunk.usage.prompt_tokens ?? 0;
               outputTokens = chunk.usage.completion_tokens ?? 0;
+              cachedTokens = chunk.usage.prompt_tokens_details?.cached_tokens ?? 0;
             }
           } catch {
             // Ignore malformed SSE chunks
@@ -378,6 +383,7 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
         inputTokens,
         outputTokens,
         totalTokens: inputTokens + outputTokens,
+        ...(cachedTokens > 0 ? { cacheReadInputTokens: cachedTokens } : {}),
       },
     };
   }
@@ -536,10 +542,12 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
       }
 
       if (eventName === "response.completed" && data.response) {
+        const cached = data.response.usage?.input_tokens_details?.cached_tokens ?? 0;
         usage = {
           inputTokens: data.response.usage?.input_tokens ?? 0,
           outputTokens: data.response.usage?.output_tokens ?? 0,
           totalTokens: data.response.usage?.total_tokens ?? 0,
+          ...(cached > 0 ? { cacheReadInputTokens: cached } : {}),
         };
 
         if (!text) {
@@ -916,6 +924,7 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
     });
 
     const stopReason = OPENAI_STOP_REASON_MAP[choice.finish_reason] ?? "end_turn";
+    const cachedPromptTokens = data.usage?.prompt_tokens_details?.cached_tokens ?? 0;
 
     return {
       text,
@@ -925,6 +934,7 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
         inputTokens: data.usage?.prompt_tokens ?? 0,
         outputTokens: data.usage?.completion_tokens ?? 0,
         totalTokens: (data.usage?.prompt_tokens ?? 0) + (data.usage?.completion_tokens ?? 0),
+        ...(cachedPromptTokens > 0 ? { cacheReadInputTokens: cachedPromptTokens } : {}),
       },
     };
   }
@@ -1258,6 +1268,9 @@ export interface OpenAIResponse {
   usage?: {
     prompt_tokens: number;
     completion_tokens: number;
+    /** OpenAI caches prompt prefixes automatically; this is the cached share
+     *  of prompt_tokens (not an addition to it). */
+    prompt_tokens_details?: { cached_tokens?: number };
   };
 }
 
@@ -1278,6 +1291,7 @@ interface StreamSSEChunk {
   usage?: {
     prompt_tokens?: number;
     completion_tokens?: number;
+    prompt_tokens_details?: { cached_tokens?: number };
   };
 }
 
@@ -1355,6 +1369,7 @@ interface ChatGptSseEventData {
       input_tokens?: number;
       output_tokens?: number;
       total_tokens?: number;
+      input_tokens_details?: { cached_tokens?: number };
     };
     output?: ChatGptOutputItem[];
   };

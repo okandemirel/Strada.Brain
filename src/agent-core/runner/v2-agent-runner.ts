@@ -143,16 +143,33 @@ function mergeUsage(
     provider,
     inputTokens: (acc?.inputTokens ?? 0) + (usage?.inputTokens ?? 0),
     outputTokens: (acc?.outputTokens ?? 0) + (usage?.outputTokens ?? 0),
+    // Carried through rather than folded into inputTokens: the three are
+    // billed at different rates, and collapsing them here would make the
+    // cache's effect unmeasurable downstream.
+    cacheCreationInputTokens:
+      (acc?.cacheCreationInputTokens ?? 0) + (usage?.cacheCreationInputTokens ?? 0),
+    cacheReadInputTokens: (acc?.cacheReadInputTokens ?? 0) + (usage?.cacheReadInputTokens ?? 0),
   };
 }
 
-/** WorkerUsageEvent → the public AgentRunResult.usage (TokenUsage) shape. */
+/**
+ * WorkerUsageEvent → the public AgentRunResult.usage (TokenUsage) shape.
+ *
+ * The cache counters are subsets of inputTokens (see TokenUsage), so the total
+ * stays `inputTokens + outputTokens` — adding them would double-count. They are
+ * carried through rather than dropped so the run result can show what the
+ * prompt cache actually did.
+ */
 function toResultUsage(usage: WorkerUsageEvent | undefined): TokenUsage | undefined {
   if (!usage) return undefined;
+  const cacheCreation = usage.cacheCreationInputTokens ?? 0;
+  const cacheRead = usage.cacheReadInputTokens ?? 0;
   return {
     inputTokens: usage.inputTokens,
     outputTokens: usage.outputTokens,
     totalTokens: usage.inputTokens + usage.outputTokens,
+    ...(cacheCreation > 0 ? { cacheCreationInputTokens: cacheCreation } : {}),
+    ...(cacheRead > 0 ? { cacheReadInputTokens: cacheRead } : {}),
   };
 }
 

@@ -87,7 +87,27 @@ export type StopReason =
   | "stop_sequence" 
   | "tool_use";
 
-/** Token usage statistics */
+/**
+ * Token usage statistics.
+ *
+ * The cache fields are **subsets of `inputTokens`, never additions to it**.
+ * Every provider must normalise to this, because the upstream APIs disagree:
+ * OpenAI's `prompt_tokens_details.cached_tokens` and DeepSeek's
+ * `prompt_cache_hit_tokens` are already included in their prompt count, while
+ * Anthropic reports `input_tokens` as the *uncached remainder* with the cached
+ * portion carried in separate fields. Mixing the two conventions makes
+ * `inputTokens` mean different things per provider and lets any consumer that
+ * sums the parts double-count.
+ *
+ * So the invariants are:
+ *   inputTokens  = the full prompt, cached portion included
+ *   totalTokens  = inputTokens + outputTokens
+ *   cacheCreationInputTokens + cacheReadInputTokens <= inputTokens
+ *
+ * The cache fields are informational — they exist to show what the prompt
+ * cache is actually doing, and to price the cached share differently
+ * (Anthropic bills reads at ~0.1x and writes at ~1.25x of input).
+ */
 export interface TokenUsage {
   readonly inputTokens: number;
   readonly outputTokens: number;

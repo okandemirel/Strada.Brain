@@ -60,8 +60,13 @@ export interface WorkerArtifactMetadata {
 
 export interface WorkerUsageEvent {
   readonly provider: string;
+  /** The full prompt, cached portion included — see TokenUsage. */
   readonly inputTokens: number;
   readonly outputTokens: number;
+  /** Share of inputTokens written to the cache (Anthropic bills these ~1.25x). */
+  readonly cacheCreationInputTokens?: number;
+  /** Share of inputTokens served from the cache (billed ~0.1x on Anthropic). */
+  readonly cacheReadInputTokens?: number;
 }
 
 export interface WorkerExecutionEnvelope {
