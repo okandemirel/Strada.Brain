@@ -157,6 +157,23 @@ export class ToolRegistry {
       if (mcpRuntime) {
         this.stradaMcpRuntime = mcpRuntime;
         const result = registerStradaMcpTools(this, mcpRuntime.tools, mcpRuntime);
+        // Route batched operations through THIS registry.
+        //
+        // 22 MCP tool names lose to a built-in of the same name, so a direct
+        // `file_write` runs Brain's implementation while the same name inside
+        // batch_execute used to run Strada.MCP's — which has no 256 KB cap and
+        // writes no Unity .meta files, and disagreed about path rules besides.
+        // Injecting the resolver makes one name mean one implementation
+        // everywhere, for every shadowed tool at once.
+        for (const tool of mcpRuntime.tools) {
+          const resolverAware = tool as unknown as {
+            setToolResolver?: (resolver: { get(name: string): unknown }) => void;
+          };
+          if (typeof resolverAware.setToolResolver === "function") {
+            resolverAware.setToolResolver({ get: (name: string) => this.get(name) });
+            logger.debug("Routed Strada.MCP batch operations through the Brain registry");
+          }
+        }
         mcpRuntime.bindToolMetadataMap(this.metadata);
         logger.info("Loaded Strada.MCP tools into main toolchain", {
           sourcePath: mcpRuntime.source.path,
