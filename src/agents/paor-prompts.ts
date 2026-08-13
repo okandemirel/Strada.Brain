@@ -1,5 +1,5 @@
 import type { AgentState } from "./agent-state.js";
-import { buildExplicitTargetExecutionDirective } from "./prompt-targets.js";
+import { buildCreationExecutionDirective, buildExplicitTargetExecutionDirective } from "./prompt-targets.js";
 
 /**
  * Builds a planning prompt that asks the LLM to create a numbered plan.
@@ -39,6 +39,14 @@ export function buildPlanningPrompt(
   const explicitTargetDirective = buildExplicitTargetExecutionDirective(taskDescription);
   if (explicitTargetDirective) {
     lines.push("", explicitTargetDirective);
+  } else {
+    // Only one of the two ever applies: the explicit-target directive is the
+    // stronger instruction when the user named files, and this covers the
+    // greenfield case it deliberately skips.
+    const creationDirective = buildCreationExecutionDirective(taskDescription);
+    if (creationDirective) {
+      lines.push("", creationDirective);
+    }
   }
 
   if (learnedInsights && learnedInsights.length > 0) {

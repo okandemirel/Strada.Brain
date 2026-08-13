@@ -52,7 +52,13 @@ export class FileWriteTool implements ITool {
       return { content: "Error: 'path' is required", isError: true };
     }
 
-    const pathCheck = await validatePath(context.projectPath, relPath);
+    // allowMissingParents: this tool creates the directory chain itself
+    // (mkdir recursive, below). Without it the guard refused every write into a
+    // directory that did not already exist, so no tool could lay out a new
+    // folder structure.
+    const pathCheck = await validatePath(context.projectPath, relPath, {
+      allowMissingParents: true,
+    });
     if (!pathCheck.valid) {
       return { content: `Error: ${pathCheck.error}`, isError: true };
     }

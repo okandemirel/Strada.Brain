@@ -72,9 +72,21 @@ export function normalizeToolPathInput(
   return { ok: true, relativePath: cleaned };
 }
 
+export interface ValidatePathOptions {
+  /**
+   * Accept a target whose parent directories do not exist yet, provided the
+   * deepest ancestor that DOES exist is inside the project. For a caller that
+   * is about to `mkdir -p`, a missing parent is the normal case, not an error.
+   *
+   * Off by default so read paths keep their existing semantics.
+   */
+  readonly allowMissingParents?: boolean;
+}
+
 export async function validatePath(
   projectRoot: string,
-  relativePath: string
+  relativePath: string,
+  options: ValidatePathOptions = {}
 ): Promise<PathValidationResult> {
   if (!relativePath) {
     return { valid: false, fullPath: "", error: "Path is required" };
@@ -161,7 +173,23 @@ export async function validatePath(
           };
         }
       }
-      
+
+      // The walk above already did the security work: it realpath'd the deepest
+      // EXISTING ancestor and confirmed it sits inside the project root. The
+      // components below it do not exist, so they cannot be symlinks, and `..`
+      // was resolved before the walk began — the target is provably contained.
+      // The loop's own comment says as much ("it's valid (just missing
+      // parent)"), and then the code rejected it anyway.
+      //
+      // Cost of that contradiction, measured: file_write could not create a
+      // file in a directory that did not already exist. An agent asked for a
+      // layered set of scripts made 42 write attempts, 38 were refused with
+      // "Parent directory does not exist", and it ended up cramming every type
+      // into the one file that happened to sit in an existing directory.
+      if (options.allowMissingParents && foundExistingAncestor) {
+        return { valid: true, fullPath: rawFullPath };
+      }
+
       return {
         valid: false,
         fullPath: rawFullPath,

@@ -128,7 +128,11 @@ export class FileRenameTool implements ITool {
       return { content: `Error (old_path): ${oldCheck.error}`, isError: true };
     }
 
-    const newCheck = await validatePath(context.projectPath, newPath);
+    // The rename TARGET may point into a directory that does not exist yet;
+    // oldPath above must still resolve to something real.
+    const newCheck = await validatePath(context.projectPath, newPath, {
+      allowMissingParents: true,
+    });
     if (!newCheck.valid) {
       return { content: `Error (new_path): ${newCheck.error}`, isError: true };
     }

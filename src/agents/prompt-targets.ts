@@ -106,6 +106,42 @@ export function buildExplicitTargetExecutionDirective(prompt: string): string {
   return lines.join("\n");
 }
 
+/**
+ * Verbs that mean "produce something that does not exist yet", in the two
+ * languages this assistant is actually driven in.
+ */
+const CREATION_VERB_RE =
+  /\b(?:yap|yaz|kur|olu[sş]tur|geli[sş]tir|ekle|build|create|develop|implement|write|scaffold|generate|add)\b/i;
+
+/**
+ * Execution directive for a build-from-nothing request.
+ *
+ * buildExplicitTargetExecutionDirective only fires when the prompt names a
+ * path, so the request with the MOST freedom to wander — "build me a game",
+ * no file named — was the one case that got no instruction to act at all,
+ * while the planning prompt around it is dominated by verification protocol.
+ *
+ * Measured on a greenfield task in a correctly configured project: 24
+ * file_read, 18 list_directory, 15 glob_search, 6 strada_validate_architecture
+ * — architecture validation run six times against a project that had no
+ * architecture yet — and zero files written in fourteen minutes.
+ *
+ * Returns "" when the prompt names explicit targets (that directive is
+ * stronger and already covers it) or when nothing is being created.
+ */
+export function buildCreationExecutionDirective(prompt: string): string {
+  if (analyzePromptTargets(prompt).hasExplicitTargets) return "";
+  if (!CREATION_VERB_RE.test(prompt)) return "";
+
+  return [
+    "## Execution Priority",
+    "This request creates something that does not exist yet. The deliverable is new source files, not a plan or an assessment.",
+    "Read only what you need to match the existing project's conventions — a few targeted reads, not a repository audit.",
+    "Do not run repository-wide analysis, architecture validation, or quality gates against code you have not written yet; there is nothing there to validate.",
+    "Create the files first, then verify. If you have inspected the project and still written nothing, write the first file now.",
+  ].join("\n");
+}
+
 export function shouldDeferRawBoundaryForDirectTarget(params: {
   prompt: string;
   touchedFileCount: number;

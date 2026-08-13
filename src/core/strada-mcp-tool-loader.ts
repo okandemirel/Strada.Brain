@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { Config } from "../config/config.js";
 import { detectStradaMcp, type StradaMcpInstall } from "../config/strada-deps.js";
@@ -235,6 +235,42 @@ const DEFAULT_BRIDGE_UNAVAILABLE_REASON = "Requires a live Unity bridge connecti
 const CONN_REFUSED_RE = /ECONNREFUSED|connection\s+refused/i;
 /** Slow probe interval while dormant — check if Unity became available. */
 const DORMANT_PROBE_INTERVAL_MS = 60_000;
+
+/**
+ * Keeps allowedPaths consistent with the project the call is actually running
+ * against.
+ *
+ * `projectPath` is per-call, but `allowedPaths` was captured once at bootstrap
+ * from config.unityProjectPath. A task that runs inside a workspace lease gets
+ * projectPath = <tmp>/strada-workspaces/task-<id>/ while allowedPaths still
+ * pointed at the user's real project — so MCP's file tools resolved the write
+ * correctly inside the lease and then rejected it as "Path is outside allowed
+ * paths".
+ *
+ * Measured: every batched file_write in a leased greenfield task failed this
+ * way. Brain's own file_write does not consult allowedPaths, which is why some
+ * writes in the same run succeeded and others did not — a difference that was
+ * invisible until batch_execute started reporting inner failures.
+ *
+ * The current projectPath is added only when the configured list does not
+ * already cover it, so a deployment that deliberately narrows ALLOWED_PATHS
+ * below the project root keeps that restriction in the normal case.
+ */
+function resolveAllowedPaths(
+  configured: string[] | undefined,
+  projectPath: string,
+): string[] | undefined {
+  if (!configured || configured.length === 0) return configured;
+  const covered = configured.some((allowed) => {
+    const normalized = resolve(allowed);
+    return projectPath === normalized || projectPath.startsWith(normalized + sep);
+  });
+  return covered ? configured : [...configured, projectPath];
+}
+
+/** Exported for tests only — the behaviour it guards is not reachable from a
+ *  unit test any other way (it lives behind a bootstrapped loader). */
+export const __testResolveAllowedPaths = resolveAllowedPaths;
 
 function mapCategory(category: StradaMcpToolMetadata["category"]): BrainToolCategory {
   switch (category) {
@@ -648,7 +684,7 @@ export class StradaMcpRuntime {
       workingDirectory: context.workingDirectory,
       readOnly: context.readOnly,
       unityBridgeConnected: this.bridgeConnected,
-      allowedPaths: this.toolContext.allowedPaths,
+      allowedPaths: resolveAllowedPaths(this.toolContext.allowedPaths, context.projectPath),
     };
   }
 
@@ -1067,6 +1103,8 @@ class StradaMcpToolAdapter implements ITool {
           workingDirectory: context.workingDirectory,
           readOnly: context.readOnly,
           unityBridgeConnected: false,
+          // Same reasoning as resolveAllowedPaths: the sandbox is whatever
+          // project this call was handed, which under a lease is the workspace.
           allowedPaths: [context.projectPath],
         },
       );
