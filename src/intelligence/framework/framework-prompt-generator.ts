@@ -44,6 +44,11 @@ export class FrameworkPromptGenerator {
       sections.push(this.buildMCPSection(mcpSnapshot));
     }
 
+    const generatorDirective = mcpSnapshot ? buildGeneratorPreference(mcpSnapshot) : null;
+    if (generatorDirective) {
+      sections.push(generatorDirective);
+    }
+
     this.cachedSection = sections.length === 0 ? null : sections.join("\n\n");
     return this.cachedSection;
   }
@@ -201,4 +206,41 @@ export class FrameworkPromptGenerator {
 
     return lines.join("\n");
   }
+}
+
+/** Tools whose whole purpose is producing framework-shaped code. */
+const GENERATOR_TOOL_RE = /^strada_(create|scaffold)_/;
+
+/**
+ * States the preference the knowledge section only implied.
+ *
+ * The MCP section already lists every generator with its description and
+ * parameter names — including `moduleName`, which is exactly the argument an
+ * agent got wrong by sending `name` and had its call rejected. What was missing
+ * is any statement that these tools are the RIGHT way to create Strada-shaped
+ * code. Measured: a greenfield task with Strada.Core and Strada.Modules
+ * installed produced 19 hand-written files in a Modules/<Name>Module layout
+ * that looks like the framework's, references none of its APIs, and never
+ * called a generator.
+ *
+ * Deliberately scoped: emitted only when the framework is actually installed
+ * (this whole section is), and only lists generators that really exist in the
+ * live snapshot, so it can never advertise a tool the agent cannot call.
+ */
+function buildGeneratorPreference(snapshot: FrameworkAPISnapshot): string | null {
+  const generators = snapshot.tools
+    .filter((tool) => GENERATOR_TOOL_RE.test(tool.name))
+    .map((tool) => tool.name);
+  if (generators.length === 0) return null;
+
+  return [
+    "## Creating Strada Code",
+    "",
+    "This project has Strada installed. To create a new module, component, mediator or system, call the generator rather than writing the files by hand:",
+    ...generators.map((name) => `- \`${name}\``),
+    "",
+    "They produce the layout, base classes and registration the framework expects; hand-written files reproduce the folder shape but not the contracts.",
+    "Use their exact parameter names as listed above — a mismatched argument is rejected, and inside a batch the rejection is easy to miss.",
+    "Write files by hand only for code that is genuinely outside the framework's patterns.",
+  ].join("\n");
 }
