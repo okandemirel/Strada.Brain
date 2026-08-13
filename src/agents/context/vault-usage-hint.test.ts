@@ -63,11 +63,14 @@ describe("vault usage hint", () => {
     expect(buildToolUsageHints(false)).toBe("");
   });
 
-  it("tells the agent the index tracks its own edits", () => {
-    // Verified separately: a file written during a task is indexed in ~2s. An
-    // agent that assumes a stale index will re-read files it just wrote.
+  it("warns that the agent's own in-task writes may be missing", () => {
+    // The agent works in a leased copy while the vault watches the real project,
+    // so files it writes during the task are not indexed until the lease is
+    // committed. Claiming otherwise would send it to vault_search for a file it
+    // just wrote and get nothing back.
     const hint = buildToolUsageHints({ indexedFileCount: 100, frameworkFileCount: 0 });
-    expect(hint).toMatch(/live|reflects files written/i);
+    expect(hint).toMatch(/Files you write during this task may not/i);
+    expect(hint).toMatch(/file_read/);
   });
 });
 

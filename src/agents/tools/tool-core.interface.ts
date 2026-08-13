@@ -33,6 +33,20 @@ export interface IToolBase {
 export interface ToolContext {
   /** Absolute path to the Unity project root */
   projectPath: string;
+  /**
+   * The user's real project root, even when `projectPath` points at a leased
+   * workspace copy.
+   *
+   * Under a workspace lease `projectPath` becomes the lease directory, which is
+   * correct for reads and writes — that is where the work happens — but wrong
+   * for anything keyed to the project's identity. The vault is registered
+   * against the real root, so `resolveVaultForPath(projectPath)` missed on every
+   * leased task: measured, each vault_search fell back to querying every
+   * registered vault, returning Strada.Brain's own source alongside the
+   * project's and spending the token budget on both, while reporting "No vault
+   * indexed for projectPath".
+   */
+  sourceProjectPath?: string;
   /** Current working directory (may differ from projectPath) */
   workingDirectory: string;
   /** Whether the system is in read-only mode */

@@ -154,8 +154,13 @@ export class VaultSearchTool {
       if (!vault) {
         explicitMiss = true;
       }
-    } else if (context.projectPath) {
-      const projectVault = registry.resolveVaultForPath(context.projectPath, context.projectPath);
+    } else if (context.sourceProjectPath || context.projectPath) {
+      // sourceProjectPath first: under a workspace lease `projectPath` is the
+      // lease directory, which no vault is registered against, so resolving on
+      // it missed every time and silently downgraded the search to "all vaults"
+      // — including Strada.Brain's own source.
+      const lookupPath = context.sourceProjectPath ?? context.projectPath;
+      const projectVault = registry.resolveVaultForPath(lookupPath, lookupPath);
       if (projectVault) {
         // Default target set: the project CODE vault PLUS any registered
         // dev-knowledge vault(s), so vault_search consciously reaches the
@@ -171,7 +176,7 @@ export class VaultSearchTool {
         // that other project's notes.
         const knowledgeVaults = registry
           .list()
-          .filter((v) => v.kind === 'knowledge' && isVaultInsideProject(v, context.projectPath!));
+          .filter((v) => v.kind === 'knowledge' && isVaultInsideProject(v, lookupPath));
         const byId = new Map<string, IVault>();
         byId.set(projectVault.id, projectVault);
         for (const kv of knowledgeVaults) byId.set(kv.id, kv);

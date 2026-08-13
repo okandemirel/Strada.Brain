@@ -383,7 +383,8 @@ export function buildToolUsageHints(vault?: VaultAvailability | boolean): string
     "file path and line range.\n" +
     "- Start code and symbol lookup with `vault_search`. Reach for `glob_search`/`grep_search`/" +
     "`file_read` when you need exact bytes, a directory listing, or something the vault missed.\n" +
-    "- The index tracks edits live, so it reflects files written earlier in this task.\n"
+    "- The index covers the project as it stands on disk. Files you write during this task may not " +
+    "be in it yet — read those back with `file_read`, not `vault_search`.\n"
   );
 }
 

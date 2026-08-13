@@ -3919,6 +3919,9 @@ export class Orchestrator {
 
     const toolContext: ToolContext & { soulLoader?: SoulLoader | null; userProfileStore?: UserProfileStore } = {
       projectPath,
+      // Survives the lease swap above, so vault lookups still resolve to the
+      // project the vault is registered against.
+      sourceProjectPath: this.projectPath,
       workingDirectory,
       readOnly: this.readOnly,
       userId: options.userId,
