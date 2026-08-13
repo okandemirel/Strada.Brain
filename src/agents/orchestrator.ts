@@ -1092,6 +1092,10 @@ export class Orchestrator {
       // monitorLifecycle + stradaDeps are setter-backed (setMonitorLifecycle / runtime checkStradaDeps) → LAZY GETTERS.
       monitorLifecycle: () => this.monitorLifecycle,
       stradaDeps: () => this.stradaDeps,
+      // The conformance guard reads a written module directory from disk; with
+      // no root it cannot run and stays silent, which is how the gate shipped
+      // inert on its first run.
+      projectPath: () => this.projectPath,
       getContextBuilderContext: () => this.getContextBuilderDeps(),
       buildFreshRunSession: (request, queryText, supportsVision) =>
         this.buildFreshRunSession(request, queryText, supportsVision),

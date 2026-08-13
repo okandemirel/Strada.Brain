@@ -122,3 +122,25 @@ describe("module completeness gate", () => {
     expect(prompt).toContain("UiModule");
   });
 });
+
+describe("the gate is reachable from the autonomy bundle", () => {
+  it("receives a project path, so it is not inert", async () => {
+    // The first version of this gate shipped INERT: projectPath was added to
+    // SetupDeps and threaded into createAutonomyBundle, but no implementation
+    // provided the accessor, so it resolved to undefined and the guard could
+    // never read a module directory. Its first live run produced a module with
+    // no ModuleConfig and no .asmdef and said nothing at all.
+    const { createAutonomyBundle } = await import("../orchestrator-autonomy-tracker.js");
+    const bundle = createAutonomyBundle({
+      prompt: "build a module",
+      iterationBudget: 10,
+      stradaDeps: DEPS,
+      projectPath: "/proj",
+    });
+
+    const guard = bundle.stradaConformance as unknown as {
+      opts?: { projectPath?: string };
+    };
+    expect(guard.opts?.projectPath).toBe("/proj");
+  });
+});

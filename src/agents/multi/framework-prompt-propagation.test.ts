@@ -62,6 +62,26 @@ function systemPromptOf(orchestrator: Orchestrator): string {
   return (orchestrator as unknown as { systemPrompt: string }).systemPrompt;
 }
 
+describe("engine deps reach the conformance guard", () => {
+  it("provides projectPath, without which the module gate is inert", () => {
+    // The gate reads a written module directory from disk. `projectPath` was
+    // added to SetupDeps and threaded into createAutonomyBundle, but NO
+    // implementation supplied the accessor — so it resolved to undefined, the
+    // guard could never read anything, and the gate shipped silently inert. Its
+    // first live run watched a module appear with no ModuleConfig and no
+    // .asmdef and said nothing.
+    //
+    // Asserting on createAutonomyBundle alone does not catch that: the broken
+    // link was the orchestrator end of the chain.
+    const orchestrator = makeOrchestrator();
+    const deps = (orchestrator as unknown as { engine: { deps: Record<string, unknown> } }).engine
+      .deps;
+
+    expect(typeof deps["projectPath"]).toBe("function");
+    expect((deps["projectPath"] as () => string | undefined)()).toBe("/tmp/test-project");
+  });
+});
+
 describe("framework prompt propagation", () => {
   it("an orchestrator without a generator falls back to the static prompt", () => {
     // This is what every sub-agent and delegated agent used to get.
