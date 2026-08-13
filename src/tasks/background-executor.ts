@@ -1057,6 +1057,12 @@ export class BackgroundExecutor {
     const { task, signal, onProgress, externalSignal } = entry;
     const logger = getLogger();
     const taskOrchestrator = task.orchestrator ?? this.orchestrator;
+    // Every tool execution re-arms the inactivity window. `onProgress` here is
+    // the wrapped one, so the heartbeat re-arms the watchdog and is filtered
+    // before it can reach the user as a message.
+    taskOrchestrator.setLivenessCallback?.(() =>
+      onProgress({ kind: "heartbeat", message: "" } as TaskProgressUpdate),
+    );
     let taskWorkspaceLease: ManagedWorkspaceLease | undefined;
 
     if (!this.taskManager) {

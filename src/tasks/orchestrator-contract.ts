@@ -52,6 +52,18 @@ export interface IOrchestrator {
   createAgentCorePort(): unknown;
   /** The injected agent-core clock (SystemClock in prod, FakeClock in tests). */
   getAgentCoreClock(): unknown;
+  /**
+   * Called after every tool execution, purely so the task's inactivity watchdog
+   * can tell "working" from "hung".
+   *
+   * Attached to tool execution rather than to any one control path because a
+   * task that is running tools is not idle, whichever path is driving it. An
+   * earlier fix signalled liveness from supervisor node transitions only, and a
+   * plain-loop run was killed at 20 minutes regardless: measured, "no progress
+   * for 1200000ms" fired at 20:56:05 on a task whose last tool call was 20:55:16
+   * and whose next one landed at 20:56:24 — after it had been stopped.
+   */
+  setLivenessCallback?(callback: () => void): void;
 }
 
 // ─── Supervisor Admission Types ──────────────────────────────────────────────

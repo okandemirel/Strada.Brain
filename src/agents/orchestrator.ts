@@ -834,6 +834,8 @@ export class Orchestrator {
   >();
   /** Framework Knowledge Layer prompt generator (injected by bootstrap when available) */
   private frameworkPromptGenerator: FrameworkPromptGenerator | null = null;
+  /** Fired after every tool execution so the task watchdog can see activity. */
+  private onLiveness: (() => void) | null = null;
   /** Callback to hot-reload a newly created skill */
   private onSkillCreated?: (skillPath: string) => Promise<void>;
   private getSkillEntries?: () => readonly SkillEntry[];
@@ -1487,6 +1489,17 @@ export class Orchestrator {
   setFrameworkPromptGenerator(generator: FrameworkPromptGenerator): void {
     this.frameworkPromptGenerator = generator;
     this.rebuildBaseSystemPrompt();
+  }
+
+  /**
+   * Register a liveness signal fired after every tool execution.
+   *
+   * See IOrchestrator.setLivenessCallback: this hangs off tool execution rather
+   * than any single control path, because a task running tools is not idle no
+   * matter which path is driving it.
+   */
+  setLivenessCallback(callback: () => void): void {
+    this.onLiveness = callback;
   }
 
   private rebuildBaseSystemPrompt(): void {
@@ -4306,6 +4319,11 @@ export class Orchestrator {
         result = await tool.execute(activeToolCall.input, toolContext);
       }
       const toolDurationMs = Date.now() - toolStart;
+      // A tool just ran: whatever else is true, this task is not hung. Fired
+      // before anything that can throw, and regardless of the tool's outcome —
+      // a failing tool is still activity, and a task retrying a failure is
+      // exactly the case the watchdog must not mistake for silence.
+      this.onLiveness?.();
       this.metrics?.recordToolCall(activeToolCall.name, toolDurationMs, !result.isError, result.isError ? String(result.content).slice(0, 200) : undefined);
       // Log the OUTCOME, not just the attempt.
       //
