@@ -106,28 +106,45 @@ export async function initializeAIProvider(
       config.providerModels,
       baseUrlOverrides,
     );
-    // Graceful degradation: only abort boot if NOTHING healthy remains, or if the
-    // PRIMARY (first) provider in the chain failed. A non-primary fallback failing
-    // preflight (e.g. an expired Kimi key) must NOT take the whole app down — boot
-    // on the healthy survivors and surface a notice. (Previously ANY single failure
-    // threw NO_HEALTHY_AI_PROVIDER and aborted boot, so one bad key killed startup.)
+    // Graceful degradation: boot on whatever is healthy, and abort only when
+    // NOTHING is.
+    //
+    // An earlier version also aborted when the PRIMARY provider failed, healthy
+    // fallbacks or not — which defeats the point of configuring a chain. Measured:
+    // the ChatGPT subscription returned HTTP 429 usage_limit_reached with
+    // resets_in_seconds 580320 (6.7 days), and because OpenAI leads the chain,
+    // Strada.Brain could not start at all for those 6.7 days — with a healthy Kimi
+    // key sitting right behind it in the same chain. The error named only OpenAI,
+    // so nothing in it suggested a working fallback existed.
+    //
+    // The primary failing is worth saying loudly, because the user gets a different
+    // model than they asked for; it is not worth refusing to run.
     if (preflightResult.failures.length > 0) {
-      const primaryName = configuredNames[0]?.trim().toLowerCase();
-      const primaryHealthy = primaryName
-        ? preflightResult.passedProviderIds.includes(primaryName)
-        : preflightResult.passedProviderIds.length > 0;
-      if (preflightResult.passedProviderIds.length === 0 || !primaryHealthy) {
+      if (preflightResult.passedProviderIds.length === 0) {
         throw new AppError(
           `Configured AI providers failed preflight. ${formatProviderPreflightFailures(preflightResult.failures)}`,
           "NO_HEALTHY_AI_PROVIDER",
         );
       }
-      const notice = `Some configured AI providers failed preflight and were skipped: ${formatProviderPreflightFailures(preflightResult.failures)}`;
+
+      const primaryName = configuredNames[0]?.trim().toLowerCase();
+      const primaryFailed = Boolean(
+        primaryName && !preflightResult.passedProviderIds.includes(primaryName),
+      );
+      const notice = primaryFailed
+        ? `Primary AI provider "${primaryName}" failed preflight; running on "${preflightResult.passedProviderIds[0]}" instead. ${formatProviderPreflightFailures(preflightResult.failures)}`
+        : `Some configured AI providers failed preflight and were skipped: ${formatProviderPreflightFailures(preflightResult.failures)}`;
       notices.push(notice);
-      logger.warn("Some AI providers failed preflight; continuing with healthy providers", {
-        failed: preflightResult.failures.map((f) => f.providerId),
-        healthy: preflightResult.passedProviderIds,
-      });
+      logger.warn(
+        primaryFailed
+          ? "Primary AI provider failed preflight; falling back"
+          : "Some AI providers failed preflight; continuing with healthy providers",
+        {
+          failed: preflightResult.failures.map((f) => f.providerId),
+          healthy: preflightResult.passedProviderIds,
+          ...(primaryFailed ? { demotedPrimary: primaryName } : {}),
+        },
+      );
     }
 
     defaultProviderOrder = preflightResult.passedProviderIds;

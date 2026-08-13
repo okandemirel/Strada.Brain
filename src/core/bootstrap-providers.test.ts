@@ -206,6 +206,52 @@ describe("bootstrap-providers", () => {
 
       await expect(initializeAIProvider(config, logger)).rejects.toThrow(AppError);
     });
+
+    it("boots on a healthy fallback when the PRIMARY provider fails preflight", async () => {
+      // A chain exists so that one provider going down does not stop the work.
+      // This used to abort boot whenever the FIRST provider failed, healthy
+      // fallbacks or not.
+      //
+      // Measured: the ChatGPT subscription returned HTTP 429 usage_limit_reached
+      // with resets_in_seconds 580320 — 6.7 days. Because OpenAI leads the chain,
+      // Strada.Brain refused to start at all for those 6.7 days, with a healthy
+      // Kimi key configured directly behind it. The error named only OpenAI, so
+      // it did not even hint that a working provider was available.
+      const config = makeConfig({ providerChain: "openai,kimi" });
+      mockNormalizeProviderNames.mockReturnValue(["openai", "kimi"]);
+      mockHasUsableProviderConfig.mockReturnValue(true);
+      mockPreflightResponseProviders.mockResolvedValue({
+        passedProviderIds: ["kimi"],
+        failures: [{ providerId: "openai", error: "HTTP 429 usage limit reached" }],
+      });
+
+      const result = await initializeAIProvider(config, logger);
+
+      expect(result.manager).toBe(mockProviderManagerInstance);
+      // Said loudly: the user is getting a different model than they configured.
+      expect(logger.warn).toHaveBeenCalledWith(
+        "Primary AI provider failed preflight; falling back",
+        expect.objectContaining({ demotedPrimary: "openai", healthy: ["kimi"] }),
+      );
+      expect(result.notices.some((n) => /Primary AI provider "openai" failed/.test(n))).toBe(true);
+      expect(result.notices.some((n) => /running on "kimi"/.test(n))).toBe(true);
+    });
+
+    it("still refuses to boot when nothing in the chain is healthy", async () => {
+      // The one case that genuinely cannot proceed.
+      const config = makeConfig({ providerChain: "openai,kimi" });
+      mockNormalizeProviderNames.mockReturnValue(["openai", "kimi"]);
+      mockHasUsableProviderConfig.mockReturnValue(true);
+      mockPreflightResponseProviders.mockResolvedValue({
+        passedProviderIds: [],
+        failures: [
+          { providerId: "openai", error: "HTTP 429" },
+          { providerId: "kimi", error: "invalid key" },
+        ],
+      });
+
+      await expect(initializeAIProvider(config, logger)).rejects.toThrow(AppError);
+    });
   });
 
   // ========================================================================
