@@ -3,6 +3,7 @@ import { resolve, join, dirname, sep, relative } from "node:path";
 import os from "node:os";
 import { randomUUID } from "node:crypto";
 import { runProcess } from "../../utils/process-runner.js";
+import { getLoggerSafe } from "../../utils/logger.js";
 
 export type WorkspaceLeaseKind = "git-worktree" | "temp-copy";
 
@@ -74,12 +75,19 @@ export interface WorkspaceLeaseManagerOptions {
   readonly preferGitWorktree?: boolean;
   readonly commandRunner?: WorkspaceCommandRunner;
   readonly worktreeTimeoutMs?: number;
+  /**
+   * Timeout for checking out submodules into a fresh worktree. Separate from
+   * worktreeTimeoutMs because it can involve network fetches, which take far
+   * longer than the local `worktree add`.
+   */
+  readonly submoduleTimeoutMs?: number;
   /** Additional directory names to exclude from fallback temp-copy workspaces */
   readonly additionalExcludes?: readonly string[];
 }
 
 const DEFAULT_LEASE_ROOT = join(os.tmpdir(), "strada-workspaces");
 const DEFAULT_WORKTREE_TIMEOUT_MS = 30_000;
+const DEFAULT_SUBMODULE_TIMEOUT_MS = 300_000;
 const BASE_FALLBACK_COPY_EXCLUDES = new Set([
   ".git",
   "node_modules",
@@ -115,6 +123,7 @@ export class WorkspaceLeaseManager {
   private readonly preferGitWorktree: boolean;
   private readonly commandRunner: WorkspaceCommandRunner;
   private readonly worktreeTimeoutMs: number;
+  private readonly submoduleTimeoutMs: number;
   private readonly fallbackExcludes: Set<string>;
   private readonly activeLeases = new Map<string, WorkspaceLease>();
 
@@ -133,6 +142,7 @@ export class WorkspaceLeaseManager {
     this.preferGitWorktree = options.preferGitWorktree ?? true;
     this.commandRunner = options.commandRunner ?? runProcess;
     this.worktreeTimeoutMs = options.worktreeTimeoutMs ?? DEFAULT_WORKTREE_TIMEOUT_MS;
+    this.submoduleTimeoutMs = options.submoduleTimeoutMs ?? DEFAULT_SUBMODULE_TIMEOUT_MS;
     this.fallbackExcludes = options.additionalExcludes?.length
       ? new Set([...BASE_FALLBACK_COPY_EXCLUDES, ...options.additionalExcludes])
       : BASE_FALLBACK_COPY_EXCLUDES;
@@ -253,6 +263,49 @@ export class WorkspaceLeaseManager {
 
     if (result.exitCode !== 0) {
       throw new Error(result.stderr.trim() || "git worktree add failed");
+    }
+
+    await this.initSubmodules(workspacePath);
+  }
+
+  /**
+   * Check out the project's submodules inside the fresh worktree.
+   *
+   * `git worktree add` leaves submodule paths as empty directories, and the
+   * product's own installer puts Strada.Core and Strada.MCP there — it runs
+   * `git submodule add`. So without this the agent's workspace contains zero of
+   * the framework it is supposed to conform to, while the project it was seeded
+   * from has all of it.
+   *
+   * Measured on a full Pixel Flow build: the project held 295 Strada.Core .cs
+   * files and the workspace held none. `list_directory Packages/Submodules/
+   * Strada.Core` answered "directory not found", the glob for its sources found
+   * nothing, and the agent — having looked and found no framework — invented its
+   * own: a GameModuleConfig deriving from ScriptableObject and an .asmdef
+   * referencing Unity.ugui instead of Strada.Core.
+   *
+   * Failure here is logged, not thrown: a submodule that cannot be fetched
+   * should degrade the workspace, not kill the task.
+   */
+  private async initSubmodules(workspacePath: string): Promise<void> {
+    if (!existsSync(join(this.projectRoot, ".gitmodules"))) {
+      return;
+    }
+
+    const result = await this.commandRunner({
+      command: "git",
+      args: ["-C", workspacePath, "submodule", "update", "--init", "--recursive"],
+      cwd: workspacePath,
+      timeoutMs: this.submoduleTimeoutMs,
+    });
+
+    if (result.exitCode !== 0) {
+      getLoggerSafe().warn("Workspace submodules could not be checked out", {
+        workspacePath,
+        stderr: result.stderr.trim().slice(0, 500),
+        consequence:
+          "the agent's workspace is missing submodule content (e.g. Strada.Core), so framework-conformant output cannot be expected",
+      });
     }
   }
 
