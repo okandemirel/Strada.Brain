@@ -329,12 +329,61 @@ When fixing bugs or implementing changes, do not stop at the patch itself:
  * attached to the orchestrator. Recommending a tool the model cannot call
  * is actively harmful — it wastes turns on "tool not found" errors.
  */
-export function buildToolUsageHints(hasVault = false): string {
-  if (!hasVault) return "";
+/** What the project's vault actually holds, for an evidence-bearing hint. */
+export interface VaultAvailability {
+  /** Files indexed for THIS project. Zero means the hint must not sell the vault. */
+  readonly indexedFileCount: number;
+  /** Framework sources (Strada.Core/Modules) present in the index. */
+  readonly frameworkFileCount: number;
+}
+
+/**
+ * Tell the agent what the vault holds, not merely that one exists.
+ *
+ * The old hint fired on the mere presence of a vault registry and said "prefer
+ * vault_search over file_read". The registry is populated even when the
+ * PROJECT's vault is not indexed — the self-vault of Strada.Brain's own source
+ * always registers — so the agent was told to search a vault that could only
+ * answer with Strada.Brain's files.
+ *
+ * Measured: `vault_search` for "ModuleConfig Service SystemBase IComponent
+ * EntityMediator" came back `no vault hits`, and another returned five hits from
+ * Strada.Brain's own analysis notes with the hint "No vault indexed for
+ * projectPath". The agent tried it two or three times per run, learned it was
+ * useless, and fell back to raw scanning: one run spent 105 file_read, 21
+ * list_directory and 12 glob_search calls against a project whose 668 files —
+ * 341 of them Strada.Core sources — were sitting indexed and unused.
+ *
+ * So the hint now carries the counts. A claim the agent can check is worth more
+ * than an instruction it has already learned to distrust, and when nothing is
+ * indexed the honest thing is to say so rather than advertise a dead end.
+ */
+export function buildToolUsageHints(vault?: VaultAvailability | boolean): string {
+  // Legacy boolean call sites: no counts available, so say nothing rather than
+  // repeat the instruction that taught the agent to ignore this section.
+  if (!vault || vault === true) return "";
+
+  const { indexedFileCount, frameworkFileCount } = vault;
+  if (indexedFileCount <= 0) {
+    return (
+      "\n## Tool Usage Hints\n" +
+      "- This project is NOT indexed in the vault. Use `glob_search`/`grep_search`/`file_read` " +
+      "for code lookup; `vault_search` cannot answer questions about this project.\n"
+    );
+  }
+
+  const framework =
+    frameworkFileCount > 0
+      ? ` — including ${frameworkFileCount} framework source files (Strada.Core/Modules)`
+      : "";
   return (
     "\n## Tool Usage Hints\n" +
-    "- For code/symbol lookup, prefer `vault_search` over `file_read`. " +
-    "Only use `file_read` when you need exact bytes or a file not in the vault.\n"
+    `- This project is indexed in the vault: ${indexedFileCount} files${framework}, ` +
+    "searchable by symbol, type name, or natural language, returning ranked chunks with " +
+    "file path and line range.\n" +
+    "- Start code and symbol lookup with `vault_search`. Reach for `glob_search`/`grep_search`/" +
+    "`file_read` when you need exact bytes, a directory listing, or something the vault missed.\n" +
+    "- The index tracks edits live, so it reflects files written earlier in this task.\n"
   );
 }
 

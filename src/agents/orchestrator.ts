@@ -39,6 +39,7 @@ import {
   buildDepsContext,
   buildCapabilityManifest,
   buildToolUsageHints,
+  type VaultAvailability,
   buildIdentitySection,
   buildCrashNotificationSection,
 } from "./context/strada-knowledge.js";
@@ -1502,6 +1503,33 @@ export class Orchestrator {
     this.onLiveness = callback;
   }
 
+  /**
+   * Count what the vault holds for THIS project, for the tool-usage hint.
+   *
+   * Resolved by path rather than by registry presence: the self-vault of
+   * Strada.Brain's own source is always registered, and counting it would tell
+   * the agent this project is indexed when it is not — the exact mistake that
+   * made the old hint counterproductive.
+   *
+   * listFiles() is synchronous by design here; the prompt is rebuilt on a
+   * synchronous path and stats() is async.
+   */
+  private describeVaultAvailability(): VaultAvailability | undefined {
+    if (!this.vaultRegistry || !this.projectPath) return undefined;
+    try {
+      const vault = this.vaultRegistry.resolveVaultForPath(this.projectPath);
+      if (!vault) return { indexedFileCount: 0, frameworkFileCount: 0 };
+      const files = vault.listFiles();
+      const frameworkFileCount = files.filter((f) =>
+        /(^|\/)Strada\.(Core|Modules)(\/|$)/i.test(f.path.replace(/\\/g, "/")),
+      ).length;
+      return { indexedFileCount: files.length, frameworkFileCount };
+    } catch {
+      // A vault that cannot be read is a vault the agent should not be sent to.
+      return undefined;
+    }
+  }
+
   private rebuildBaseSystemPrompt(): void {
     const frameworkSection = this.frameworkPromptGenerator?.buildFrameworkKnowledgeSection();
     const knowledgeBase = frameworkSection
@@ -1517,7 +1545,7 @@ export class Orchestrator {
       buildProjectContext(this.projectPath) +
       buildDepsContext(this.stradaDeps) +
       buildCapabilityManifest() +
-      buildToolUsageHints(!!this.vaultRegistry) +
+      buildToolUsageHints(this.describeVaultAvailability()) +
       (this.readOnly ? getReadOnlySystemPrompt() : "") +
       (this.getIdentityState ? buildIdentitySection(this.getIdentityState()) : "") +
       (this.crashRecoveryContext ? buildCrashNotificationSection(this.crashRecoveryContext) : "");
