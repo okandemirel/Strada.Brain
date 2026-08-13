@@ -80,7 +80,18 @@ describe("WorkspaceLeaseManager", () => {
     await lease.release();
     await lease.release();
 
-    expect(calls[2]?.args).toEqual(["-C", projectRoot, "worktree", "remove", "--force", lease.path]);
+    // Located rather than indexed: seeding a worktree also reads submodules and
+    // the project's uncommitted state, and those calls must be free to move
+    // without this assertion breaking for the wrong reason.
+    const removeCall = calls.find((c) => c.args.includes("worktree") && c.args.includes("remove"));
+    expect(removeCall?.args).toEqual([
+      "-C",
+      projectRoot,
+      "worktree",
+      "remove",
+      "--force",
+      lease.path,
+    ]);
   });
 
   it("falls back to a temp copy when git worktree setup fails", async () => {

@@ -88,6 +88,46 @@ export interface WorkspaceLeaseManagerOptions {
 const DEFAULT_LEASE_ROOT = join(os.tmpdir(), "strada-workspaces");
 const DEFAULT_WORKTREE_TIMEOUT_MS = 30_000;
 const DEFAULT_SUBMODULE_TIMEOUT_MS = 300_000;
+/** Upper bound on uncommitted paths copied into a workspace, so a repo with a
+ *  huge dirty tree cannot turn every lease into a full project copy. */
+const MAX_UNCOMMITTED_ENTRIES = 2000;
+
+interface PorcelainEntry {
+  readonly path: string;
+  readonly deleted: boolean;
+}
+
+/**
+ * Parse `git status --porcelain=v1 -uall -z`.
+ *
+ * NUL-separated rather than line-based because paths may contain newlines, and
+ * the line-based form quotes and escapes them instead. Rename and copy entries
+ * carry a second NUL-terminated field (the original path) which must be
+ * consumed, and whose file has to go from the workspace.
+ */
+function parsePorcelainZ(stdout: string): PorcelainEntry[] {
+  const fields = stdout.split("\0");
+  const entries: PorcelainEntry[] = [];
+
+  for (let i = 0; i < fields.length; i++) {
+    const field = fields[i];
+    if (!field || field.length < 4) continue;
+    const x = field[0]!;
+    const y = field[1]!;
+    const path = field.slice(3);
+    if (!path) continue;
+
+    if (x === "R" || x === "C") {
+      const original = fields[++i];
+      if (original) entries.push({ path: original, deleted: x === "R" });
+      entries.push({ path, deleted: false });
+      continue;
+    }
+    entries.push({ path, deleted: x === "D" || y === "D" });
+  }
+
+  return entries;
+}
 const BASE_FALLBACK_COPY_EXCLUDES = new Set([
   ".git",
   "node_modules",
@@ -266,6 +306,70 @@ export class WorkspaceLeaseManager {
     }
 
     await this.initSubmodules(workspacePath);
+    await this.syncUncommittedState(workspacePath);
+  }
+
+  /**
+   * Carry the project's uncommitted state into the fresh worktree.
+   *
+   * `git worktree add ... HEAD` seeds from the last commit, so everything the
+   * user has not committed — edits in progress, new files, deletions — is absent
+   * from the workspace the agent works in. Asked to fix a bug in a file the user
+   * just edited, the agent reads the committed version instead and fixes
+   * something that is no longer there.
+   *
+   * Measured: the supported setup flow runs `git submodule add` for Strada.Core
+   * and Strada.MCP and does not commit, so a task started right after setup got
+   * a workspace with no .gitmodules and no framework at all — even with the
+   * submodule checkout above, which has nothing to check out from a HEAD that
+   * predates the install.
+   *
+   * commit() is unaffected: both seed snapshots are taken after this runs, so a
+   * file copied in here and never written to reads as "present at seed time,
+   * not agent work" and does not travel back.
+   */
+  private async syncUncommittedState(workspacePath: string): Promise<void> {
+    const result = await this.commandRunner({
+      command: "git",
+      args: ["-C", this.projectRoot, "status", "--porcelain=v1", "-uall", "-z"],
+      cwd: this.projectRoot,
+      timeoutMs: this.worktreeTimeoutMs,
+    });
+
+    if (result.exitCode !== 0) {
+      getLoggerSafe().warn("Could not read uncommitted project state for the workspace", {
+        stderr: result.stderr.trim().slice(0, 300),
+        consequence: "the agent sees the last commit, not the user's working tree",
+      });
+      return;
+    }
+
+    const entries = parsePorcelainZ(result.stdout);
+    const applied = entries.slice(0, MAX_UNCOMMITTED_ENTRIES);
+    if (entries.length > applied.length) {
+      // Never silently truncate: a partially seeded workspace that looks whole
+      // is worse than one the log says is partial.
+      getLoggerSafe().warn("Project has more uncommitted paths than the workspace seeds", {
+        total: entries.length,
+        seeded: applied.length,
+        skipped: entries.length - applied.length,
+      });
+    }
+
+    for (const { path: rel, deleted } of applied) {
+      // The lease root can sit inside the project; seeding a workspace with the
+      // contents of other workspaces would recurse.
+      const source = join(this.projectRoot, rel);
+      const target = join(workspacePath, rel);
+      if (isInsidePath(this.leaseRoot, source)) continue;
+
+      if (deleted || !existsSync(source)) {
+        rmSync(target, { recursive: true, force: true });
+        continue;
+      }
+      mkdirSync(dirname(target), { recursive: true });
+      cpSync(source, target, { recursive: true, force: true });
+    }
   }
 
   /**
