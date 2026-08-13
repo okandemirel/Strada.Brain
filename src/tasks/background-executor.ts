@@ -341,20 +341,46 @@ export class BackgroundExecutor {
    * Returns `true` if a watchdog terminal was emitted (so `requestFailed` should be
    * set by the caller); `false` for a genuine cancel (caller stays silent).
    */
-  private settleWatchdogAbortIfHung(task: Task, externalSignal: AbortSignal | undefined): boolean {
+  private settleWatchdogAbortIfHung(
+    task: Task,
+    externalSignal: AbortSignal | undefined,
+    abortReason?: unknown,
+  ): boolean {
     // A genuine external cancel: the user asked to stop. Stay silent.
     if (!externalSignal || externalSignal.aborted) {
       return false;
     }
-    // Only the combined signal aborted -> the inactivity watchdog tripped. Block the
-    // task with a clear "no progress" message instead of silently dropping it.
     if (!this.taskManager) {
       return false;
     }
+
+    // The combined signal aborted for a reason that is not the user. That is
+    // USUALLY the inactivity watchdog, but this branch used to assert it
+    // unconditionally and tell the user their task "made no progress" — advice
+    // to split the request that is actively wrong when the cause was something
+    // else. Measured on a real run: the task executed a tool and two LLM calls
+    // in the four seconds before it was blocked, and its last progress update
+    // was 2.5 minutes earlier, well inside the 10-minute inactivity window.
+    //
+    // The reason is now logged (nothing recorded it before, which is why that
+    // run could not be explained) and the message only claims stalling when the
+    // abort really came from the inactivity timer.
+    const reasonText = abortReason instanceof Error ? abortReason.message : String(abortReason ?? "");
+    const stalled = /made no progress/i.test(reasonText);
+    getLogger().warn("Task aborted without a user cancel", {
+      taskId: task.id,
+      reason: reasonText || "(no reason recorded)",
+      classifiedAs: stalled ? "inactivity-watchdog" : "other",
+    });
+
     const isTurkish = TURKISH_HINT_RE.test(task.prompt);
-    const message = isTurkish
-      ? "Görev ilerleme kaydetmeden takıldı, bu yüzden durduruldu. Lütfen tekrar deneyin ya da isteği daha küçük adımlara bölün."
-      : "The task stalled without making progress, so it was stopped. Please try again or break the request into smaller steps.";
+    const message = stalled
+      ? (isTurkish
+        ? "Görev ilerleme kaydetmeden takıldı, bu yüzden durduruldu. Lütfen tekrar deneyin ya da isteği daha küçük adımlara bölün."
+        : "The task stalled without making progress, so it was stopped. Please try again or break the request into smaller steps.")
+      : (isTurkish
+        ? `Görev tamamlanmadan durduruldu${reasonText ? ` (${reasonText})` : ""}. Yapılan değişiklikler korundu.`
+        : `The task was stopped before it finished${reasonText ? ` (${reasonText})` : ""}. Any changes it made have been kept.`);
     this.taskManager.block(task.id, message);
     return true;
   }
@@ -1108,7 +1134,7 @@ export class BackgroundExecutor {
         if (signal.aborted) {
           // Watchdog abort -> emit a terminal so the answer is not silently lost
           // (BUG#7); a genuine /cancel stays silent.
-          if (this.settleWatchdogAbortIfHung(task, externalSignal)) {
+          if (this.settleWatchdogAbortIfHung(task, externalSignal, signal.reason)) {
             requestFailed = true;
           }
           return;
@@ -1129,7 +1155,7 @@ export class BackgroundExecutor {
       }
 
       if (signal.aborted) {
-        if (this.settleWatchdogAbortIfHung(task, externalSignal)) {
+        if (this.settleWatchdogAbortIfHung(task, externalSignal, signal.reason)) {
           requestFailed = true;
         }
         return;
@@ -1156,7 +1182,7 @@ export class BackgroundExecutor {
         // Already cancelled -- don't overwrite the cancelled status. But if the
         // INACTIVITY watchdog (not a user /cancel) aborted, emit a terminal so the
         // result isn't silently dropped and the task isn't stuck "executing" (BUG#7).
-        if (this.settleWatchdogAbortIfHung(task, externalSignal)) {
+        if (this.settleWatchdogAbortIfHung(task, externalSignal, signal.reason)) {
           requestFailed = true;
         }
         return;
@@ -1188,7 +1214,7 @@ export class BackgroundExecutor {
         // silently lost and the task doesn't hang "executing" (BUG#7). The raw
         // abort error (e.g. "This operation was aborted") is deliberately NOT
         // surfaced to the user here.
-        if (this.settleWatchdogAbortIfHung(task, externalSignal)) {
+        if (this.settleWatchdogAbortIfHung(task, externalSignal, signal.reason)) {
           requestFailed = true;
         }
         return;
