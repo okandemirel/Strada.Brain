@@ -14,7 +14,6 @@ export { BackgroundExecutor } from "./background-executor.js";
 export { MessageRouter } from "./message-router.js";
 export { CommandHandler } from "./command-handler.js";
 export { ProgressReporter } from "./progress-reporter.js";
-export { TaskDecomposer } from "./task-decomposer.js";
 export { detectCommand } from "./command-detector.js";
 export {
   buildTaskProgressSummary,

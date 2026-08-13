@@ -49,6 +49,9 @@ import {
 // =============================================================================
 
 export interface DelegationManagerOptions {
+  /** Live framework knowledge for the delegated orchestrator — see the call
+   *  site; without it the sub-agent runs on the static prompt. */
+  readonly frameworkPromptGenerator?: () => import("../../../intelligence/framework/framework-prompt-generator.js").FrameworkPromptGenerator | undefined;
   readonly config: DelegationConfig;
   readonly tierRouter: TierRouter;
   readonly delegationLog: DelegationLog;
@@ -463,6 +466,17 @@ export class DelegationManager {
         vaultWriteHookBudgetMs: this.opts.vaultWriteHookBudgetMs,
         maxIterations: typeConfig.maxIterations,
       });
+
+      // A delegated agent that cannot see the installed framework writes code
+      // that only looks like it belongs to it. Without this it runs on the
+      // static STRADA_SYSTEM_PROMPT — no Core namespaces, no base classes, no
+      // MCP tool list, no generator guidance.
+      // A getter, not the instance: bootstrap builds the generator in a
+      // deferred async step that may finish after this manager is constructed.
+      const frameworkGenerator = this.opts.frameworkPromptGenerator?.();
+      if (frameworkGenerator) {
+        orchestrator.setFrameworkPromptGenerator(frameworkGenerator);
+      }
 
       const message: IncomingMessage = {
         channelType: "cli",

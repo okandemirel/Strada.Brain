@@ -44,6 +44,9 @@ export async function initializeMultiAgentDelegationStage(
   params: {
     config: Config;
     logger: winston.Logger;
+    /** Accessor for the live framework knowledge; a getter because bootstrap
+     *  builds it in a deferred async step that can finish after this stage. */
+    getFrameworkPromptGenerator?: () => import("../../intelligence/framework/framework-prompt-generator.js").FrameworkPromptGenerator | undefined;
     daemonMode: boolean;
     daemonStorage: DaemonStorage;
     daemonContext: import("../../daemon/daemon-cli.js").DaemonContext;
@@ -91,6 +94,9 @@ export async function initializeMultiAgentDelegationStage(
   agentBudgetTracker.initialize();
 
   const agentManagerOptions = {
+    // Sub-agents were the only orchestrators with no framework knowledge at
+    // all; a getter because bootstrap builds it in a deferred async step.
+    frameworkPromptGenerator: params.getFrameworkPromptGenerator,
     config: params.config.agent,
     registry: agentRegistry,
     budgetTracker: agentBudgetTracker,
@@ -183,6 +189,7 @@ export async function initializeMultiAgentDelegationStage(
     }
 
     const delegationManagerOptions = {
+      frameworkPromptGenerator: params.getFrameworkPromptGenerator,
       config: {
         enabled: true,
         maxDepth: params.config.delegation.maxDepth,

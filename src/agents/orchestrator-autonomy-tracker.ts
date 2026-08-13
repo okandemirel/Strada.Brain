@@ -21,6 +21,9 @@ export interface CreateAutonomyBundleParams {
   readonly prompt: string;
   readonly iterationBudget: number;
   readonly stradaDeps?: StradaDepsStatus;
+  /** Absolute project root — lets the conformance guard inspect a written
+   *  module directory. Omitted, that check stays quiet. */
+  readonly projectPath?: string;
   readonly projectWorldSummary?: string;
   readonly projectWorldFingerprint?: string;
   readonly includeControlLoopTracker?: boolean;
@@ -69,6 +72,9 @@ export function createAutonomyBundle(params: CreateAutonomyBundleParams): Autono
   const stradaConformance = new StradaConformanceGuard(params.stradaDeps, {
     enabled: params.conformanceEnabled,
     frameworkPathsOnly: params.conformanceFrameworkPathsOnly,
+    // Needed to inspect a written module directory on disk; without it the
+    // incomplete-module check cannot run and simply stays quiet.
+    projectPath: params.projectPath,
   });
   stradaConformance.trackPrompt(params.prompt);
 

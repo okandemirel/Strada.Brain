@@ -81,6 +81,8 @@ export interface SetupDeps extends ReflectionDeps, BudgetDeps {
   monitorLifecycle(): MonitorLifecycle | null;
   /** LAZY: re-assigned at runtime (checkStradaDeps). */
   stradaDeps(): StradaDepsStatus | undefined;
+  /** Absolute project root, for checks that need to read the project on disk. */
+  projectPath?(): string | undefined;
   /** The ContextBuilderDeps seam (mirrors getSupervisorRoutingContext) — buildSystemPromptWithContext runs on it. */
   getContextBuilderContext(): ContextBuilderDeps;
   buildFreshRunSession(request: AgentRunSetupInput, queryText: string, supportsVision: boolean): Session;
@@ -336,6 +338,7 @@ export async function setupAgentCoreRun(
           ? getInteractiveIterationLimit(deps)
           : getBackgroundEpochIterationLimit(deps),
       stradaDeps: deps.stradaDeps(),
+      projectPath: deps.projectPath?.(),
       projectWorldSummary,
       projectWorldFingerprint,
       includeControlLoopTracker: true,

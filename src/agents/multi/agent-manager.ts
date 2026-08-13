@@ -73,6 +73,16 @@ export interface MemoryConfig {
 
 /** Options for constructing an AgentManager */
 export interface AgentManagerOptions {
+  /**
+   * Live framework knowledge for sub-agent orchestrators.
+   *
+   * Only bootstrap's Orchestrator was given one, so every sub-agent and
+   * delegated agent fell back to the static STRADA_SYSTEM_PROMPT — no Core
+   * namespaces, no base classes, no MCP tool list, no generator guidance. In a
+   * multi-agent run that is most of the work being done by an agent that
+   * cannot see the framework it is supposed to conform to.
+   */
+  readonly frameworkPromptGenerator?: () => import("../../intelligence/framework/framework-prompt-generator.js").FrameworkPromptGenerator | undefined;
   readonly config: AgentConfig;
   readonly registry: AgentRegistry;
   readonly budgetTracker: AgentBudgetTracker;
@@ -651,6 +661,14 @@ export class AgentManager {
       },
     });
 
+    // Without this a sub-agent runs on the static STRADA_SYSTEM_PROMPT and
+    // cannot see the installed framework at all.
+    // A getter, not the instance: bootstrap builds the generator in a deferred
+    // async step that may finish after these managers are constructed.
+    const frameworkGenerator = this.opts.frameworkPromptGenerator?.();
+    if (frameworkGenerator) {
+      orchestrator.setFrameworkPromptGenerator(frameworkGenerator);
+    }
     if (this.workspaceBus) {
       orchestrator.setWorkspaceBus(this.workspaceBus);
     }

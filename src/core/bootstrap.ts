@@ -1232,10 +1232,17 @@ async function bootstrapImpl(
   });
 
   // Wire FrameworkPromptGenerator to the orchestrator (deferred: IIFE may complete before or after)
+  // Held so the agent/delegation stages can hand their orchestrators the same
+  // generator. They are constructed before this deferred wiring finishes, which
+  // is why they receive an accessor rather than the instance.
+  let frameworkPromptGenerator: import("../intelligence/framework/framework-prompt-generator.js").FrameworkPromptGenerator | undefined;
+  const getFrameworkPromptGenerator = () => frameworkPromptGenerator;
+
   const wireFrameworkPromptGenerator = async (store: FrameworkKnowledgeStore) => {
     try {
       const { FrameworkPromptGenerator } = await import("../intelligence/framework/framework-prompt-generator.js");
       const generator = new FrameworkPromptGenerator(store);
+      frameworkPromptGenerator = generator;
       orchestrator.setFrameworkPromptGenerator(generator);
       logger.debug("FrameworkPromptGenerator wired to orchestrator");
     } catch (fwErr) {
@@ -1528,6 +1535,7 @@ async function bootstrapImpl(
       };
 
       const multiAgentStage = await initializeMultiAgentDelegationStage({
+        getFrameworkPromptGenerator,
         config,
         logger,
         daemonMode: Boolean(options.daemonMode),

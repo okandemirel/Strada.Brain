@@ -1,3 +1,5 @@
+import { existsSync, readdirSync } from "node:fs";
+import { join as joinPath } from "node:path";
 import type { StradaDepsStatus } from "../../config/strada-deps.js";
 import { COMPILABLE_EXT, MUTATION_TOOLS, extractFilePath } from "./constants.js";
 import { expandExecutedToolCalls } from "./executed-tools.js";
@@ -33,12 +35,65 @@ function stringifyInput(input: Record<string, unknown>): string {
 export interface ConformanceGuardOptions {
   readonly enabled?: boolean;
   readonly frameworkPathsOnly?: boolean;
+  /** Absolute project root, needed to inspect a module directory on disk. */
+  readonly projectPath?: string;
+  /** Injected for tests; defaults to a real directory listing. */
+  readonly listDir?: (dir: string) => string[];
+}
+
+/**
+ * `Assets/Modules/<Name>/…` — the layout strada_create_module produces and the
+ * one an agent imitates by hand.
+ */
+const MODULE_PATH_RE = /(^|\/)Modules\/([^/]+)\//i;
+
+/**
+ * A Strada module is not just a folder shape. strada_create_module emits a
+ * `<Name>ModuleConfig` deriving from the framework's module-config base class
+ * (Configure/Initialize/Shutdown) and an .asmdef referencing Strada.Core.
+ * Without the first the module is never registered with the framework; without
+ * the second the code cannot compile against it at all.
+ *
+ * Measured: a greenfield task produced 19 hand-written files under
+ * Assets/Modules/GameModule/Scripts/{Domain,Models,Services} with neither. The
+ * directory looked right and the module did not exist as far as Strada was
+ * concerned.
+ *
+ * This checks the OUTCOME rather than which tool was used, so hand-writing
+ * stays legitimate as long as the result is complete.
+ */
+/** Recursive listing, flattened to file names — the pieces we look for can sit
+ *  at the module root or one level down. Missing directory reads as empty. */
+function defaultListDir(dir: string): string[] {
+  if (!existsSync(dir)) return [];
+  const names: string[] = [];
+  const walk = (current: string, depth: number): void => {
+    for (const entry of readdirSync(current, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        if (depth > 0) walk(joinPath(current, entry.name), depth - 1);
+        continue;
+      }
+      names.push(entry.name);
+    }
+  };
+  walk(dir, 2);
+  return names;
+}
+
+function moduleRootFor(filePath: string): string | null {
+  const normalized = filePath.replace(/\\/g, "/");
+  const match = MODULE_PATH_RE.exec(normalized);
+  if (!match) return null;
+  const idx = normalized.indexOf(match[0]);
+  return normalized.slice(0, idx + match[0].length).replace(/\/$/, "");
 }
 
 export class StradaConformanceGuard {
   private touchedFrameworkCode = false;
   private consultedAuthoritativeSource = false;
   private usedFrameworkGenerator = false;
+  /** Module roots this run wrote C# into, e.g. "Assets/Modules/GameModule". */
+  private readonly touchedModuleRoots = new Set<string>();
 
   constructor(
     private readonly deps?: StradaDepsStatus,
@@ -72,6 +127,10 @@ export class StradaConformanceGuard {
 
       if (!executedTool.isError && MUTATION_TOOLS.has(executedTool.toolName)) {
         const filePath = extractFilePath(executedTool.input);
+        if (filePath && isCompilableFile(filePath)) {
+          const moduleRoot = moduleRootFor(filePath);
+          if (moduleRoot) this.touchedModuleRoots.add(moduleRoot);
+        }
         if (filePath && isCompilableFile(filePath)) {
           if (this.opts?.frameworkPathsOnly === false || isInsideFrameworkPath(filePath, this.deps)) {
             this.touchedFrameworkCode = true;
@@ -109,7 +168,42 @@ export class StradaConformanceGuard {
     );
   }
 
+  /**
+   * Module roots written to this run that are missing the pieces a Strada
+   * module needs to exist: a *ModuleConfig.cs and an .asmdef.
+   *
+   * Read from disk rather than from what the agent wrote, so a module that
+   * already had them does not get flagged.
+   */
+  private incompleteModules(): string[] {
+    if (this.touchedModuleRoots.size === 0) return [];
+    const projectPath = this.opts?.projectPath;
+    if (!projectPath) return [];
+    const listDir = this.opts?.listDir ?? defaultListDir;
+
+    const incomplete: string[] = [];
+    for (const moduleRoot of this.touchedModuleRoots) {
+      const entries = listDir(joinPath(projectPath, moduleRoot));
+      const missing: string[] = [];
+      if (!entries.some((e: string) => /ModuleConfig\.cs$/i.test(e))) missing.push("a *ModuleConfig.cs");
+      if (!entries.some((e: string) => /\.asmdef$/i.test(e))) missing.push("an .asmdef");
+      if (missing.length > 0) incomplete.push(`${moduleRoot} (missing ${missing.join(" and ")})`);
+    }
+    return incomplete;
+  }
+
   getPrompt(): string | null {
+    const incomplete = this.incompleteModules();
+    if (incomplete.length > 0) {
+      return (
+        "[STRADA MODULE INCOMPLETE] These module directories are missing what makes them a module: " +
+        `${incomplete.join("; ")}. ` +
+        "A module without a *ModuleConfig.cs is never registered with the framework, and without an " +
+        ".asmdef it cannot compile against Strada.Core at all — the folder layout alone does nothing. " +
+        "Create them (strada_create_module produces both) before declaring the task complete."
+      );
+    }
+
     if (!this.needsConformanceReview()) {
       return null;
     }

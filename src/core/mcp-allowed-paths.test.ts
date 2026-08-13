@@ -18,7 +18,6 @@ import { describe, it, expect } from "vitest";
 import { join } from "node:path";
 
 // The helper is module-private; exercise it through the shape it guards.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- reaching a module-private helper
 const loader = (await import("./strada-mcp-tool-loader.js")) as any;
 
 /** Mirrors resolveAllowedPaths' contract; kept here so the test states it. */
