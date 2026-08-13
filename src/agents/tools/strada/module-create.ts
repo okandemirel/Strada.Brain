@@ -132,7 +132,18 @@ export class ModuleCreateTool implements ITool {
       if (includeModel) dirs.push(join(fullBase, "Scripts", "Models"));
       if (includeView) dirs.push(join(fullBase, "Scripts", "Views"));
       if (includeData) dirs.push(join(fullBase, "Scripts", "Data"));
-      if (includeTests) dirs.push(join(fullBase, "Tests"));
+      // Tests/Runtime and Tests/Editor, not a flat Tests/ — the framework's own
+      // DirectoryStructureConfig declares them as distinct component types
+      // (RuntimeTests, EditorTests) and Strada.Core follows its own rule:
+      // Tests/Runtime/Strada.Core.Tests.asmdef and
+      // Tests/Editor/Strada.Core.Editor.Tests.asmdef. A flat folder gives the
+      // agent no place to put an edit-mode test and no assembly to compile it
+      // in, so tests end up outside the module entirely — measured, a run put
+      // them under a separate Assets/Tests tree with an invented asmdef.
+      if (includeTests) {
+        dirs.push(join(fullBase, "Tests", "Runtime"));
+        dirs.push(join(fullBase, "Tests", "Editor"));
+      }
 
       await Promise.all(dirs.map(dir => mkdir(dir, { recursive: true })));
 
@@ -162,6 +173,49 @@ export class ModuleCreateTool implements ITool {
         "utf-8"
       );
       createdFiles.push(`${modulePath}/${name}.asmdef`);
+
+      // 1b. Test assemblies, one per test mode.
+      //
+      // A test folder without an .asmdef compiles into the default assembly,
+      // which cannot see the module's own assembly — so the tests do not
+      // reference the code they test. Unity needs the TestRunner references and
+      // the editor-only platform constraint spelled out per mode.
+      if (includeTests) {
+        const moduleAssembly = `Game.Modules.${name}`;
+        const testAssemblies: Array<{ dir: string; suffix: string; editorOnly: boolean }> = [
+          { dir: "Runtime", suffix: "Tests", editorOnly: false },
+          { dir: "Editor", suffix: "Editor.Tests", editorOnly: true },
+        ];
+        for (const spec of testAssemblies) {
+          const testAsmdefPath = join(fullBase, "Tests", spec.dir, `${moduleAssembly}.${spec.suffix}.asmdef`);
+          await writeFile(
+            testAsmdefPath,
+            JSON.stringify(
+              {
+                name: `${moduleAssembly}.${spec.suffix}`,
+                rootNamespace: `${namespace}.Tests`,
+                references: [
+                  moduleAssembly,
+                  STRADA_API.assemblyReferences.core,
+                  "UnityEngine.TestRunner",
+                  "UnityEditor.TestRunner",
+                ],
+                includePlatforms: spec.editorOnly ? ["Editor"] : [],
+                excludePlatforms: [],
+                allowUnsafeCode: false,
+                overrideReferences: true,
+                precompiledReferences: ["nunit.framework.dll"],
+                autoReferenced: false,
+                defineConstraints: ["UNITY_INCLUDE_TESTS"],
+              },
+              null,
+              2
+            ),
+            "utf-8"
+          );
+          createdFiles.push(`${modulePath}/Tests/${spec.dir}/${moduleAssembly}.${spec.suffix}.asmdef`);
+        }
+      }
 
       // 2. ModuleConfig
       const moduleConfigPath = join(fullBase, "Scripts", `${name}ModuleConfig.cs`);
