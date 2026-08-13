@@ -42,6 +42,18 @@ export interface DispatcherOptions {
   readonly conversationId?: string;
   readonly taskDescription?: string;
   readonly displayTaskLabels?: ReadonlyMap<string, string>;
+  /**
+   * Called on every node status change, purely as a liveness signal.
+   *
+   * The per-task inactivity watchdog is re-armed by progress updates, and the
+   * supervisor path only emits those at planning milestones — activation, goal
+   * decomposition, status summaries. Between them a wave can run tools for
+   * twenty minutes without producing one, and the watchdog then stops a task
+   * that is working and tells the user it made no progress. Measured exactly
+   * that: "Task made no progress for 1200000ms" fired four seconds after a tool
+   * call and two LLM calls.
+   */
+  readonly onLiveness?: () => void;
 }
 
 // =============================================================================
@@ -184,6 +196,7 @@ export class SupervisorDispatcher {
   private readonly executeNode: DispatcherOptions["executeNode"];
   private readonly config: DispatcherConfig;
   private readonly emitter?: DispatcherOptions["eventEmitter"];
+  private readonly onLiveness?: DispatcherOptions["onLiveness"];
   private readonly rootId?: string;
   private readonly conversationId?: string;
   private readonly taskDescription?: string;
@@ -195,6 +208,7 @@ export class SupervisorDispatcher {
     this.executeNode = options.executeNode;
     this.config = options.config;
     this.emitter = options.eventEmitter;
+    this.onLiveness = options.onLiveness;
     this.rootId = options.rootId;
     this.conversationId = options.conversationId;
     this.taskDescription = options.taskDescription;
@@ -227,6 +241,11 @@ export class SupervisorDispatcher {
     result?: Pick<NodeResult, "duration">,
     error?: string,
   ): void {
+    // Before the rootId guard: liveness is about the task being alive, not about
+    // anything watching it. rootId is only set when the monitor is attached, so
+    // gating on it would leave the headless background path — the one the
+    // watchdog actually kills — with no signal at all.
+    this.onLiveness?.();
     if (!this.rootId) {
       return;
     }

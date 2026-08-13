@@ -137,6 +137,9 @@ export interface SupervisorContext extends WorkerExecutionEnvelope {
   readonly goalTree?: GoalTree;
   readonly onGoalDecomposed?: (goalTree: GoalTree) => void;
   readonly reportUpdate?: (markdown: string) => Promise<void> | void;
+  /** Liveness ping on every node status change — re-arms the task inactivity
+   *  watchdog, which milestone-only progress updates leave to expire. */
+  readonly onLiveness?: () => void;
 }
 
 /** Aggregate result of a full supervisor execution run */

@@ -323,6 +323,8 @@ export interface SupervisorAdmissionRequest {
   ) => Promise<void> | void;
   readonly reportUpdate?: (markdown: string) => Promise<void> | void;
   readonly onGoalDecomposed?: (goalTree: GoalTree) => void;
+  /** Liveness ping per supervisor node transition — see SupervisorContext. */
+  readonly onLiveness?: () => void;
 }
 
 export type SupervisorAdmissionDecision =
@@ -1452,6 +1454,7 @@ export class Orchestrator {
         ...(supervisorGoalTree ? { goalTree: supervisorGoalTree } : {}),
         ...(params.onGoalDecomposed ? { onGoalDecomposed: params.onGoalDecomposed } : {}),
         ...(params.reportUpdate ? { reportUpdate: params.reportUpdate } : {}),
+        ...(params.onLiveness ? { onLiveness: params.onLiveness } : {}),
       });
       if (!result) {
         return {

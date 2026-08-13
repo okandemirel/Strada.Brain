@@ -425,6 +425,7 @@ export class SupervisorBrain {
             };
       const executeNodeFn = this.executeNodeFn;
       const dispatcher = new SupervisorDispatcher({
+        onLiveness: context.onLiveness,
         executeNode: (node: TaggedGoalNode, nodeSignal: AbortSignal) =>
           executeNodeFn(node, dispatchContext, nodeSignal),
         config: {

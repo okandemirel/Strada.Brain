@@ -416,6 +416,7 @@ export class BackgroundExecutor {
         onActivated?: (activation: { markdown: string }) => Promise<void> | void;
         reportUpdate?: (markdown: string) => Promise<void> | void;
         onGoalDecomposed?: (goalTree: GoalTree) => void;
+        onLiveness?: () => void;
       }) => Promise<SupervisorAdmissionDecision>;
     };
 
@@ -464,6 +465,10 @@ export class BackgroundExecutor {
         supervisorGoalStartedAt = Date.now();
         this.beginGoalExecution(task, goalTree, onProgress);
       },
+      // Every supervisor node transition re-arms the inactivity watchdog. The
+      // path otherwise only reports at planning milestones, so a wave running
+      // tools for twenty minutes looked identical to a hung task.
+      onLiveness: () => onProgress({ kind: "heartbeat", message: "" } as TaskProgressUpdate),
       onActivated: (activation) => {
         emitSupervisorProgress(normalizeSupervisorProgressMarkdown(activation.markdown));
       },
