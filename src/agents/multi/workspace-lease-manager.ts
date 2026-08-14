@@ -272,10 +272,47 @@ export class WorkspaceLeaseManager {
   }
 
   /** Release all active leases (call on shutdown). */
+  /**
+   * Release every outstanding lease, keeping the work in it.
+   *
+   * Shutdown used to release without committing, so a task interrupted mid-run
+   * had its files deleted along with the workspace. Measured: a run stopped by
+   * SIGINT had written Modules/PixelFlow/Tests/Runtime/DomainModelTests.cs into
+   * its lease; after "Shutdown complete" the file existed neither in the project
+   * nor anywhere under the lease root. The agent's work for that run was gone.
+   *
+   * The asymmetry decides it: publishing work the user did not end up wanting is
+   * recoverable — the files are in their project and git shows them — while
+   * discarding it is not. Interrupting a task is not a request to throw away
+   * what it already produced.
+   *
+   * A commit that fails must not block the release; the workspace still has to
+   * go, and a lease that cannot be committed is exactly the case where leaking
+   * the directory would be worst.
+   */
   async dispose(): Promise<void> {
     const leases = Array.from(this.activeLeases.values());
     this.activeLeases.clear();
-    await Promise.allSettled(leases.map((l) => l.release()));
+    await Promise.allSettled(
+      leases.map(async (lease) => {
+        try {
+          const result = await lease.commit();
+          if (result.written.length > 0 || result.conflicts.length > 0) {
+            getLoggerSafe().info("Workspace committed during shutdown", {
+              leaseId: lease.id,
+              written: result.written.length,
+              conflicts: result.conflicts.length,
+            });
+          }
+        } catch (err) {
+          getLoggerSafe().warn("Workspace could not be committed during shutdown", {
+            leaseId: lease.id,
+            err,
+          });
+        }
+        await lease.release();
+      }),
+    );
   }
 
   getActiveLeaseCount(): number {
