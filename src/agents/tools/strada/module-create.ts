@@ -61,7 +61,8 @@ export class ModuleCreateTool implements ITool {
       },
       include_tests: {
         type: "boolean",
-        description: "Include a Tests/ folder. Default: false",
+        description:
+          "Include Tests/Runtime and Tests/Editor, each with its own assembly. Default: true — tests are part of a module, not an extra. Pass false only for a module with genuinely nothing to test.",
       },
     },
     required: ["name"],
@@ -134,7 +135,13 @@ export class ModuleCreateTool implements ITool {
       const includeModel = input["include_model"] === true;
       const includeView = input["include_view"] === true;
       const includeData = input["include_data"] === true;
-      const includeTests = input["include_tests"] === true;
+      // Tests default ON, unlike the optional folders above: Strada.Core's
+      // DirectoryStructureConfig declares RuntimeTests and EditorTests as module
+      // component types, and the agent is told a module must carry its own
+      // Tests/Runtime to exist. Defaulting off contradicted both — measured, a
+      // run produced three sound modules and not one test folder, because the
+      // agent had no reason to pass a flag it was never told it needed.
+      const includeTests = input["include_tests"] !== false;
 
       if (includeController) dirs.push(join(fullBase, "Scripts", "Controllers"));
       if (includeEvents) dirs.push(join(fullBase, "Scripts", "Events"));

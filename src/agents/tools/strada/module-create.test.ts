@@ -34,11 +34,13 @@ describe("ModuleCreateTool", () => {
     expect(result.isError).toBeUndefined();
     expect(result.content).toContain("Module 'Combat' created");
 
-    // Should create 6 directories (root + Scripts + 4 subdirs under Scripts)
-    expect(mkdir).toHaveBeenCalledTimes(6);
+    // root + Scripts + 4 Scripts subdirs + Tests/Runtime + Tests/Editor.
+    // Tests are on by default: they are part of a module, not an extra. + Scripts + 4 subdirs under Scripts)
+    expect(mkdir).toHaveBeenCalledTimes(8);
 
-    // Should write asmdef + ModuleConfig + System + Interface + Impl = 5 files
-    expect(writeFile).toHaveBeenCalledTimes(5);
+    // asmdef + ModuleConfig + System + Interface + Impl, plus the two default
+    // test assemblies = 5 files
+    expect(writeFile).toHaveBeenCalledTimes(7);
 
     // Verify asmdef content
     const asmdefCall = vi.mocked(writeFile).mock.calls.find(
@@ -96,8 +98,8 @@ describe("ModuleCreateTool", () => {
     }, ctx);
 
     expect(result.isError).toBeUndefined();
-    // Only asmdef + ModuleConfig = 2 files
-    expect(writeFile).toHaveBeenCalledTimes(2);
+    // asmdef + ModuleConfig + the two default test assemblies = 4 files
+    expect(writeFile).toHaveBeenCalledTimes(4);
   });
 
   it("returns error for lowercase module name", async () => {
