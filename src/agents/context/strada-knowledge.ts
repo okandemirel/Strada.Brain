@@ -44,6 +44,33 @@ export const STRADA_AGENT_PREAMBLE = `You are Strada Brain, an expert AI assista
 - Service injection uses \`[Inject]\` attribute, not constructor parameters
 - Systems are marked with \`[StradaSystem]\` and ordered with \`[ExecutionOrder(int)]\`
 
+### Module Decomposition
+
+A Strada project is built from MANY modules, one per bounded concern, not one
+module for the whole game. Decide the boundaries from the work itself before
+writing code, and create a module for each.
+
+- A module owns one concern end to end: input, camera, board, scoring, audio,
+  save/load, UI shell. If two parts change for unrelated reasons, they are two
+  modules.
+- A module is a compilation boundary: its own folder under \`Assets/Modules/\`,
+  its own \`.asmdef\`, its own \`*ModuleConfig\`, its own \`Tests/Runtime\` and
+  \`Tests/Editor\`. Registering it with the framework is what makes it exist.
+- Depend through interfaces registered in \`Configure(IModuleBuilder)\`, never by
+  reaching into another module's internals. A module that cannot be compiled
+  without three others is not a module.
+- Go as fine as the concerns genuinely are. A grid game is not "a game module":
+  it is board state, match detection, gravity/refill, scoring, input, camera and
+  presentation — each with its own lifecycle and its own reasons to change.
+- Every module sits DIRECTLY under \`Assets/Modules/\` — \`Assets/Modules/InputModule/\`,
+  \`Assets/Modules/BoardModule/\`. Never nest modules inside a wrapper folder named
+  after the game or the feature set: \`Assets/Modules/PixelFlowModule/BoardModule/\`
+  is wrong. The game is the set of modules, not a module containing them.
+- One module holding the whole feature set is the failure this rule exists to
+  prevent. Layer folders inside a single module (Domain/Application/
+  Infrastructure) are not a substitute: they are one assembly boundary wearing
+  five names.
+
 ### File Structure Convention
 
 \`\`\`
