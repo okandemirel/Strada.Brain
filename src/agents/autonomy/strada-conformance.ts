@@ -39,6 +39,11 @@ export interface ConformanceGuardOptions {
   readonly projectPath?: string;
   /** Injected for tests; defaults to a real directory listing. */
   readonly listDir?: (dir: string) => string[];
+  /**
+   * Every .asmdef under a module, as paths relative to that module.
+   * Injected for tests; defaults to a real recursive walk.
+   */
+  readonly listAsmdefs?: (dir: string) => string[];
 }
 
 /**
@@ -64,6 +69,24 @@ const MODULE_PATH_RE = /(^|\/)Modules\/([^/]+)\//i;
  */
 /** Recursive listing, flattened to file names — the pieces we look for can sit
  *  at the module root or one level down. Missing directory reads as empty. */
+/** Every .asmdef under `dir`, as paths relative to it. */
+function defaultListAsmdefs(dir: string): string[] {
+  if (!existsSync(dir)) return [];
+  const found: string[] = [];
+  const walk = (current: string, prefix: string, depth: number): void => {
+    for (const entry of readdirSync(current, { withFileTypes: true })) {
+      const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        if (depth > 0) walk(joinPath(current, entry.name), rel, depth - 1);
+        continue;
+      }
+      if (/\.asmdef$/i.test(entry.name)) found.push(rel);
+    }
+  };
+  walk(dir, "", 4);
+  return found;
+}
+
 function defaultListDir(dir: string): string[] {
   if (!existsSync(dir)) return [];
   const names: string[] = [];
@@ -175,6 +198,48 @@ export class StradaConformanceGuard {
    * Read from disk rather than from what the agent wrote, so a module that
    * already had them does not get flagged.
    */
+  /**
+   * Code assemblies in a touched module that nothing tests.
+   *
+   * A module split into several assemblies is several compilation units, and a
+   * single test assembly referencing all of them defeats the split: a Domain
+   * test can reach Presentation, no layer can be tested in isolation, and a
+   * change anywhere rebuilds everything.
+   *
+   * Measured: a PixelFlow module with five code assemblies — Domain (22 files),
+   * Application (9), Infrastructure (8), Presentation (2), Core (1) — carried
+   * one Tests assembly at the module root that referenced all five. Four of the
+   * five assemblies had no test of their own.
+   *
+   * Pairing is by name, which is what the generator produces and what Unity
+   * shows in the Test Runner: assembly `X` is tested by `X.Tests` or
+   * `X.Editor.Tests`. A single-assembly module is satisfied by its own
+   * Tests/Runtime + Tests/Editor pair, so this only speaks up when a module
+   * really has grown extra assemblies.
+   */
+  private untestedAssemblies(): string[] {
+    if (this.touchedModuleRoots.size === 0) return [];
+    const projectPath = this.opts?.projectPath;
+    if (!projectPath) return [];
+    const listAsmdefs = this.opts?.listAsmdefs ?? defaultListAsmdefs;
+
+    const untested: string[] = [];
+    for (const moduleRoot of this.touchedModuleRoots) {
+      const paths = listAsmdefs(joinPath(projectPath, moduleRoot));
+      if (paths.length === 0) continue;
+
+      const names = paths.map((p) => p.replace(/\\/g, "/").split("/").pop()!.replace(/\.asmdef$/i, ""));
+      const testNames = new Set(names.filter((n) => /\.(Editor\.)?Tests$/i.test(n)));
+      const codeNames = names.filter((n) => !/\.(Editor\.)?Tests$/i.test(n));
+
+      for (const code of codeNames) {
+        const tested = testNames.has(`${code}.Tests`) || testNames.has(`${code}.Editor.Tests`);
+        if (!tested) untested.push(`${code} (in ${moduleRoot})`);
+      }
+    }
+    return untested;
+  }
+
   private incompleteModules(): string[] {
     if (this.touchedModuleRoots.size === 0) return [];
     const projectPath = this.opts?.projectPath;
@@ -201,6 +266,19 @@ export class StradaConformanceGuard {
         "A module without a *ModuleConfig.cs is never registered with the framework, and without an " +
         ".asmdef it cannot compile against Strada.Core at all — the folder layout alone does nothing. " +
         "Create them (strada_create_module produces both) before declaring the task complete."
+      );
+    }
+
+    const untested = this.untestedAssemblies();
+    if (untested.length > 0) {
+      return (
+        "[STRADA MODULE TESTS MISSING] These assemblies have no test assembly of their own: " +
+        `${untested.join("; ")}. ` +
+        "Each assembly is its own compilation unit, so each needs its own tests — " +
+        "`<Assembly>.Tests` under Tests/Runtime for play-mode and `<Assembly>.Editor.Tests` " +
+        "under Tests/Editor for edit-mode, each referencing only the assembly it tests. " +
+        "One shared test assembly referencing every layer defeats the split: no layer can be " +
+        "tested in isolation and a change anywhere rebuilds everything."
       );
     }
 
