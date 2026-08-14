@@ -129,6 +129,28 @@ export class CreateToolTool implements ITool {
       steps: input["steps"] as DynamicToolSpec["steps"],
     };
 
+    // Refuse to rebuild a tool that already exists.
+    //
+    // The factory's conflict check only looks at the PREFIXED name, so asking for
+    // `file_write` never collided with the built-in `file_write` — it quietly
+    // became `dynamic_file_write` and the agent got a second, worse writer.
+    //
+    // Measured: an agent asked create_tool for `file_write`, then `write_file`,
+    // then `write_minified_file`, each a shell-backed writer, without ever
+    // calling the real file_write once. The third wrote five .asmdef files
+    // through a shell that ate the JSON quoting and reported success on all
+    // five. Being told the tool already existed is what would have stopped this
+    // at the first request.
+    const existing = context.lookupTool?.(spec.name);
+    if (existing) {
+      return {
+        content:
+          `A tool named '${spec.name}' already exists — use it instead of creating another. ` +
+          `Its description: ${existing.description}`,
+        isError: true,
+      };
+    }
+
     // Create the tool via factory (factory checks for duplicates internally)
     const factory = resolveFactory(context);
     const prefixedName = `dynamic_${spec.name}`;
