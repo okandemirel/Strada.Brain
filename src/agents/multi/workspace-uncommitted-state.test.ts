@@ -139,4 +139,92 @@ describe("workspaces carry the user's uncommitted work", () => {
     );
     await lease.release();
   });
+
+  it("asks the runner not to truncate the listing", async () => {
+    // The default runner keeps the TAIL once output passes its cap, which is
+    // right for logs and wrong for a command whose output IS the data.
+    //
+    // Measured: a Unity project with 9002 uncommitted paths — 8796 of them under
+    // an untracked Library/ — had its first ~180 entries cut away. Gone with them
+    // were .gitmodules, both submodules and every Assets/Modules file. The
+    // workspace was seeded with Unity's cache and none of the project's code, git
+    // exited 0, and nothing reported it.
+    const root = committedRepo();
+    writeFileSync(join(root, "Assets", "New.cs"), "// new\n");
+
+    const seen: Array<Record<string, unknown>> = [];
+    const manager = new WorkspaceLeaseManager({
+      projectRoot: root,
+      leaseRoot: mkdtempSync(join(os.tmpdir(), "lease-root-")),
+      commandRunner: async (params) => {
+        seen.push(params as unknown as Record<string, unknown>);
+        const { execFileSync } = await import("node:child_process");
+        try {
+          const stdout = execFileSync(params.command, params.args, {
+            cwd: params.cwd,
+            encoding: "utf8",
+            maxBuffer: 64 * 1024 * 1024,
+          });
+          return { stdout, stderr: "", exitCode: 0, timedOut: false, durationMs: 1 };
+        } catch {
+          return { stdout: "", stderr: "", exitCode: 1, timedOut: false, durationMs: 1 };
+        }
+      },
+    });
+
+    const lease = await manager.acquireLease({ preferGitWorktree: true });
+
+    const statusCall = seen.find((c) => (c["args"] as string[])?.includes("status"));
+    expect(statusCall, "no git status call was made").toBeDefined();
+    expect(
+      Number(statusCall!["maxOutput"]),
+      "the status listing was left to the default cap and can be silently cut",
+    ).toBeGreaterThan(1_000_000);
+
+    await lease.release();
+  });
+
+  it("refuses a truncated listing rather than seeding a partial workspace", async () => {
+    // A complete -z listing ends with a NUL. Seeding from a cut one produces a
+    // workspace that looks whole and is missing whatever fell off the front.
+    const root = committedRepo();
+    // The file exists, so a truncated listing naming it WOULD be applied if the
+    // guard were off — that is what makes this test able to fail.
+    writeFileSync(join(root, "Assets", "Partial.cs"), "// partial\n");
+
+    const manager = new WorkspaceLeaseManager({
+      projectRoot: root,
+      leaseRoot: mkdtempSync(join(os.tmpdir(), "lease-root-")),
+      commandRunner: async (params) => {
+        if ((params.args ?? []).includes("status")) {
+          // Tail of a longer listing: no trailing NUL.
+          return {
+            stdout: "?? Assets/Partial.cs",
+            stderr: "",
+            exitCode: 0,
+            timedOut: false,
+            durationMs: 1,
+          };
+        }
+        const { execFileSync } = await import("node:child_process");
+        try {
+          const stdout = execFileSync(params.command, params.args, {
+            cwd: params.cwd,
+            encoding: "utf8",
+            maxBuffer: 64 * 1024 * 1024,
+          });
+          return { stdout, stderr: "", exitCode: 0, timedOut: false, durationMs: 1 };
+        } catch {
+          return { stdout: "", stderr: "", exitCode: 1, timedOut: false, durationMs: 1 };
+        }
+      },
+    });
+
+    const lease = await manager.acquireLease({ preferGitWorktree: true });
+
+    // Nothing from the truncated listing was applied.
+    expect(existsSync(join(lease.path, "Assets", "Partial.cs"))).toBe(false);
+
+    await lease.release();
+  });
 });

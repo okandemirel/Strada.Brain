@@ -80,6 +80,12 @@ export type WorkspaceCommandRunner = (params: {
   args: string[];
   cwd: string;
   timeoutMs: number;
+  /**
+   * Byte ceiling for captured output. The default runner keeps only the TAIL
+   * once output passes its cap, which is the right call for logs and the wrong
+   * one for a command whose output IS the data.
+   */
+  maxOutput?: number;
 }) => Promise<WorkspaceCommandResult>;
 
 export interface WorkspaceLeaseManagerOptions {
@@ -104,6 +110,8 @@ const DEFAULT_SUBMODULE_TIMEOUT_MS = 300_000;
 /** Upper bound on uncommitted paths copied into a workspace, so a repo with a
  *  huge dirty tree cannot turn every lease into a full project copy. */
 const MAX_UNCOMMITTED_ENTRIES = 2000;
+/** Ceiling for `git status -z` output; a large Unity project runs to hundreds of KB. */
+const GIT_STATUS_MAX_OUTPUT_BYTES = 32 * 1024 * 1024;
 
 interface PorcelainEntry {
   readonly path: string;
@@ -384,12 +392,32 @@ export class WorkspaceLeaseManager {
       args: ["-C", this.projectRoot, "status", "--porcelain=v1", "-uall", "-z"],
       cwd: this.projectRoot,
       timeoutMs: this.worktreeTimeoutMs,
+      // This output is data, not a log. The default runner keeps the TAIL when
+      // output grows past its cap, and a Unity project's `git status -uall` runs
+      // to hundreds of kilobytes because Library/ is untracked.
+      //
+      // Measured: a project with 9002 uncommitted paths had the first ~180
+      // entries cut away — .gitmodules, both submodules and every
+      // Assets/Modules file — leaving only Library/. The workspace was seeded
+      // with Unity's cache and none of the project's code, git exited 0, and
+      // nothing reported a thing.
+      maxOutput: GIT_STATUS_MAX_OUTPUT_BYTES,
     });
 
     if (result.exitCode !== 0) {
       getLoggerSafe().warn("Could not read uncommitted project state for the workspace", {
         stderr: result.stderr.trim().slice(0, 300),
         consequence: "the agent sees the last commit, not the user's working tree",
+      });
+      return;
+    }
+
+    // A complete -z listing ends with a NUL. Anything else means the output was
+    // cut, and a truncated list would seed a workspace that looks whole.
+    if (result.stdout.length > 0 && !result.stdout.endsWith("\0")) {
+      getLoggerSafe().warn("Uncommitted project state was truncated; workspace seeded from HEAD only", {
+        bytes: result.stdout.length,
+        consequence: "the agent may not see files the user has not committed",
       });
       return;
     }
