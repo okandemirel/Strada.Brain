@@ -25,6 +25,18 @@ export interface WorkspaceCommitResult {
    * caller is told instead.
    */
   readonly conflicts: string[];
+  /**
+   * Paths the agent deleted inside its workspace that still exist in the
+   * project. They are LEFT IN PLACE — removing a user's files is not something a
+   * commit should decide — but the divergence is reported so nobody has to
+   * discover it later.
+   *
+   * Measured: a run repaired four malformed .asmdef files, then removed them
+   * while restructuring. The project kept the original broken copies and nothing
+   * said so; the next run started from a project the previous one believed it
+   * had fixed.
+   */
+  readonly removed: string[];
 }
 
 export interface WorkspaceLease {
@@ -48,7 +60,8 @@ export interface WorkspaceLease {
    *
    * Deliberately conservative: it adds and updates files, and never deletes
    * anything from the source root. A file whose source copy changed after the
-   * lease was taken is reported as a conflict rather than overwritten.
+   * lease was taken is reported as a conflict rather than overwritten, and a
+   * file the agent deleted is reported in `removed` rather than acted on.
    */
   commit(): Promise<WorkspaceCommitResult>;
   release(): Promise<void>;
@@ -482,7 +495,8 @@ export class WorkspaceLeaseManager {
   ): Promise<WorkspaceCommitResult> {
     const written: string[] = [];
     const conflicts: string[] = [];
-    if (!existsSync(workspacePath)) return { written, conflicts };
+    const removed: string[] = [];
+    if (!existsSync(workspacePath)) return { written, conflicts, removed };
 
     const walk = (dir: string): void => {
       for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -535,7 +549,23 @@ export class WorkspaceLeaseManager {
     };
 
     walk(workspacePath);
-    return { written, conflicts };
+    // A file the agent removed is a decision it made about the project. We do not
+    // act on it — deleting a user's files is not a commit's call — but leaving it
+    // unsaid means the project silently diverges from what the agent believes it
+    // produced, and the next run inherits that gap.
+    for (const [rel] of leaseSeed) {
+      if (existsSync(join(workspacePath, rel))) continue;
+      if (!existsSync(join(sourceRoot, rel))) continue;
+      removed.push(rel);
+    }
+    if (removed.length > 0) {
+      getLoggerSafe().info("Workspace deletions left in place", {
+        count: removed.length,
+        sample: removed.slice(0, 5),
+      });
+    }
+
+    return { written, conflicts, removed };
   }
 
   private async createTempCopy(sourceRoot: string, workspacePath: string): Promise<void> {
