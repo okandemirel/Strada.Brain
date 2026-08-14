@@ -217,6 +217,45 @@ export class StradaConformanceGuard {
    * Tests/Runtime + Tests/Editor pair, so this only speaks up when a module
    * really has grown extra assemblies.
    */
+  /**
+   * Assembly names claimed by more than one .asmdef in a touched module.
+   *
+   * Unity requires assembly names to be unique across the whole project and
+   * refuses to compile when two .asmdef files claim the same one — every
+   * assembly in the project fails, not just the pair. Nothing else here catches
+   * it: the JSON is valid, the C# is valid, and script_validate is a syntax
+   * check, so the first sign is a project that will not build.
+   *
+   * Measured: asked to add tests, an agent created the framework's
+   * Tests/Runtime + Tests/Editor pair AND kept its own habit of a Tests/ root
+   * assembly, ending with Tests/YourGame.PixelFlow.Tests.asmdef and
+   * Tests/Runtime/YourGame.PixelFlow.Tests.asmdef claiming one name — plus six
+   * test files at the Tests root, belonging to neither mode.
+   */
+  private duplicateAssemblyNames(): string[] {
+    if (this.touchedModuleRoots.size === 0) return [];
+    const projectPath = this.opts?.projectPath;
+    if (!projectPath) return [];
+    const listAsmdefs = this.opts?.listAsmdefs ?? defaultListAsmdefs;
+
+    const duplicates: string[] = [];
+    for (const moduleRoot of this.touchedModuleRoots) {
+      const paths = listAsmdefs(joinPath(projectPath, moduleRoot));
+      const byName = new Map<string, string[]>();
+      for (const path of paths) {
+        const normalized = path.replace(/\\/g, "/");
+        const name = normalized.split("/").pop()!.replace(/\.asmdef$/i, "");
+        byName.set(name, [...(byName.get(name) ?? []), `${moduleRoot}/${normalized}`]);
+      }
+      for (const [name, locations] of byName) {
+        if (locations.length > 1) {
+          duplicates.push(`${name} (${locations.join(" and ")})`);
+        }
+      }
+    }
+    return duplicates;
+  }
+
   private untestedAssemblies(): string[] {
     if (this.touchedModuleRoots.size === 0) return [];
     const projectPath = this.opts?.projectPath;
@@ -266,6 +305,21 @@ export class StradaConformanceGuard {
         "A module without a *ModuleConfig.cs is never registered with the framework, and without an " +
         ".asmdef it cannot compile against Strada.Core at all — the folder layout alone does nothing. " +
         "Create them (strada_create_module produces both) before declaring the task complete."
+      );
+    }
+
+    // Ahead of the coverage gate: a duplicate name means nothing in the project
+    // compiles at all, which makes any advice about test coverage moot.
+    const duplicates = this.duplicateAssemblyNames();
+    if (duplicates.length > 0) {
+      return (
+        "[STRADA DUPLICATE ASSEMBLY] Two .asmdef files claim the same assembly name: " +
+        `${duplicates.join("; ")}. ` +
+        "Unity requires assembly names to be unique across the project and refuses to " +
+        "compile ANY assembly while a duplicate exists. Delete the one that does not belong " +
+        "or rename it, and make sure each test file sits under the assembly meant to compile " +
+        "it — a .cs beside a Tests/ root .asmdef belongs to neither Tests/Runtime nor " +
+        "Tests/Editor."
       );
     }
 
