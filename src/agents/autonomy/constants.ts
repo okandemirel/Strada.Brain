@@ -48,3 +48,39 @@ export function extractFilePath(input: Record<string, unknown>): string {
 export function isVerificationToolName(toolName: string): boolean {
   return VERIFY_TOOLS.has(toolName) || VERIFY_TOOL_NAME_RE.test(toolName);
 }
+
+/**
+ * Names and shapes that mean a tool changes things.
+ *
+ * Used for tools registered at runtime, which cannot appear in WRITE_OPERATIONS
+ * because they did not exist when it was written. Measured: an agent registered
+ * `dynamic_write_minified_file`, a shell-backed file writer, and the policy
+ * classified it as a non-write operation — so it ran with no confirmation, would
+ * have run in read-only mode, and corrupted five .asmdef files while reporting
+ * success.
+ *
+ * Deliberately broad. An unnecessary confirmation costs a prompt; an unguarded
+ * write costs a corrupted project, and in read-only mode it breaks a promise the
+ * user was given.
+ */
+const WRITE_VERB_RE =
+  /(^|_)(write|create|add|append|edit|update|modify|patch|delete|remove|rename|move|copy|save|generate|install|apply|format|fix|refactor|migrate|commit|push|exec|run|shell|bash)(_|$)/i;
+
+/** Parameter names that only make sense when something is being written. */
+const WRITE_PARAM_NAMES = new Set(["content", "contents", "text", "body", "data", "patch", "diff"]);
+
+/**
+ * Best-effort classification for a tool the allowlist does not know.
+ *
+ * Returns true when the name reads like a mutation, or when the parameters pair
+ * a target with a payload — the shape of every file writer.
+ */
+export function looksLikeWriteTool(toolName: string, tool?: { inputSchema?: unknown }): boolean {
+  if (WRITE_VERB_RE.test(toolName)) return true;
+
+  const schema = tool?.inputSchema as { properties?: Record<string, unknown> } | undefined;
+  const params = Object.keys(schema?.properties ?? {});
+  const hasTarget = params.some((p) => /^(path|file|file_path|filePath|filename|target)$/i.test(p));
+  const hasPayload = params.some((p) => WRITE_PARAM_NAMES.has(p.toLowerCase()));
+  return hasTarget && hasPayload;
+}

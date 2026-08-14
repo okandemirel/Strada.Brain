@@ -97,7 +97,7 @@ import {
 
   type CompletionReviewStageResult,
 } from "./autonomy/index.js";
-import { MUTATION_TOOLS, WRITE_OPERATIONS, extractFilePath, isVerificationToolName } from "./autonomy/constants.js";
+import { MUTATION_TOOLS, WRITE_OPERATIONS, looksLikeWriteTool, extractFilePath, isVerificationToolName } from "./autonomy/constants.js";
 import { DMPolicy, isDestructiveOperation, type DMPolicyConfig } from "../security/dm-policy.js";
 import {
   checkReadOnlyBlock,
@@ -4413,8 +4413,32 @@ export class Orchestrator {
     }
   }
 
+  /**
+   * Whether a tool call can change the project.
+   *
+   * A fixed allowlist cannot answer this for tools that did not exist when the
+   * list was written. Tools registered at runtime are not in WRITE_OPERATIONS,
+   * so every one of them read as non-write and skipped read-only mode, the
+   * plan-review gate and write confirmation alike.
+   *
+   * Measured: an agent registered `dynamic_write_minified_file` — a shell-backed
+   * file writer — and the policy classified it "non-write operations execute
+   * without interactive confirmation". It then wrote five .asmdef files through
+   * a shell, which ate the JSON quoting, and reported success on all five. The
+   * project was left with four assembly definitions Unity cannot parse.
+   *
+   * So: the allowlist first, then what the tool says about itself, and for a
+   * tool that says nothing, its shape. The default leans to "writes" because the
+   * costs are lopsided — an unnecessary confirmation is a prompt, an unguarded
+   * write is a corrupted project, and in read-only mode it is a broken promise.
+   */
   private isWriteOperation(toolName: string): boolean {
-    return WRITE_OPERATIONS.has(toolName);
+    if (WRITE_OPERATIONS.has(toolName)) return true;
+
+    // Registration is where this is decided — see registerTool, which applies the
+    // allowlist, the tool's own declaration, and finally its shape. Reading the
+    // result here keeps one source of truth instead of two that can disagree.
+    return this.toolMetadataByName.get(toolName)?.readOnly === false;
   }
 
   private registerTool(tool: ITool, metadata?: WorkerToolMetadata): void {
@@ -4436,7 +4460,11 @@ export class Orchestrator {
         metadata?.readOnly ??
         existingMetadata?.readOnly ??
         intrinsicMetadata?.isReadOnly ??
-        !WRITE_OPERATIONS.has(tool.name),
+        // Last resort for a tool nobody described: the allowlist AND its shape.
+        // `!WRITE_OPERATIONS.has(name)` alone declared every runtime-registered
+        // tool read-only, which is how a shell-backed file writer came to run
+        // with no confirmation and corrupt five .asmdef files.
+        (!WRITE_OPERATIONS.has(tool.name) && !looksLikeWriteTool(tool.name, tool)),
       controlPlaneOnly: Boolean(
         metadata?.controlPlaneOnly ?? existingMetadata?.controlPlaneOnly ?? defaultControlPlaneOnly,
       ),
