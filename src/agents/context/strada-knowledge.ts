@@ -582,6 +582,8 @@ export function buildProjectContext(arg: string | BuildProjectContextInput): str
 ## Current Project
 Project path: ${arg}
 - Treat this path as the active project root unless the user explicitly switches projects.
+- This path wins over any other. If the task, the instructions or the request name a different absolute path for this project, that path is stale — you may be working in a checkout of it, and your work only exists in the tree above. Reading or building the other one shows you a project without your changes.
+- The rule covers shell commands as much as file tools: anything that compiles, builds, verifies or inspects the project — a Unity -projectPath, a dotnet build, a grep — must be pointed at the path above. A clean compile from anywhere else is not evidence about your work.
 - For exact file facts (for example version numbers, package names, ports, line counts, env keys), verify by reading/searching the file instead of inferring from nearby files.
 - If the exact file/path does not exist, say that clearly instead of guessing from the closest match.
 - If multiple files could match the request, say that and disambiguate before stating a precise fact.
