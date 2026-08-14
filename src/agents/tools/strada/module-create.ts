@@ -96,8 +96,18 @@ export class ModuleCreateTool implements ITool {
       return { content: "Error: invalid namespace", isError: true };
     }
 
-    // Validate path with symlink resolution and sensitive file blocking
-    const pathCheck = await validatePath(context.projectPath, modulePath);
+    // Validate path with symlink resolution and sensitive file blocking.
+    //
+    // allowMissingParents: this tool lays down its own directory chain below
+    // (mkdir recursive, module root included), and the folder it is asked for
+    // is Assets/Modules/<Name>Module — which has no parent in a project that
+    // has no modules yet. Without this the guard refuses the very first module
+    // of every new project; measured on a from-scratch run, that is exactly
+    // what happened. Containment is unaffected: validatePath walks to the
+    // deepest EXISTING ancestor and proves it sits inside the project root.
+    const pathCheck = await validatePath(context.projectPath, modulePath, {
+      allowMissingParents: true,
+    });
     if (!pathCheck.valid) {
       return { content: `Error: ${pathCheck.error}`, isError: true };
     }
