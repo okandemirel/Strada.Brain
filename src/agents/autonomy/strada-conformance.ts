@@ -329,8 +329,10 @@ export class StradaConformanceGuard {
         "[STRADA MODULE TESTS MISSING] These assemblies have no test assembly of their own: " +
         `${untested.join("; ")}. ` +
         "Each assembly is its own compilation unit, so each needs its own tests — " +
-        "`<Assembly>.Tests` under Tests/Runtime for play-mode and `<Assembly>.Editor.Tests` " +
-        "under Tests/Editor for edit-mode, each referencing only the assembly it tests. " +
+        "`<Assembly>.Tests` for play-mode and `<Assembly>.Editor.Tests` for edit-mode, each " +
+        "referencing only the assembly it tests. Unity allows ONE .asmdef per folder, so give " +
+        "each its own directory (Tests/Runtime/<Assembly>/ and Tests/Editor/<Assembly>/); " +
+        "several .asmdef files in one folder makes the whole project fail to build. " +
         "One shared test assembly referencing every layer defeats the split: no layer can be " +
         "tested in isolation and a change anywhere rebuilds everything."
       );

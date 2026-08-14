@@ -60,6 +60,12 @@ describe("per-assembly test coverage", () => {
 
     const prompt = guard.getPrompt() ?? "";
     expect(prompt).toContain("STRADA MODULE TESTS MISSING");
+    // One .asmdef per folder, or the project does not build at all. Saying
+    // "give each assembly its own tests" without this sent an agent to write
+    // five test assemblies into a single Tests/Editor folder; Unity answered
+    // "contains multiple assembly definition files" and nothing compiled.
+    expect(prompt).toMatch(/ONE \.asmdef per folder/i);
+    expect(prompt).toMatch(/its own directory/i);
     for (const layer of ["Core", "Domain", "Application", "Infrastructure", "Presentation"]) {
       expect(prompt, `${layer} was not reported as untested`).toContain(
         `YourGame.PixelFlow.${layer}`,
