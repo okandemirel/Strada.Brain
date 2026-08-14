@@ -280,7 +280,12 @@ export function isDestructiveOperation(toolName: string, input: Record<string, u
       /python[23]?\s+-c\s/,                        // Python one-liner execution
       /node\s+-e\s/,                               // Node.js one-liner execution
       />\s*\/etc\//,                               // Redirect to /etc/
-      />\s*\/(?:dev|proc|sys|boot|root|var|home)\//,  // Redirect to system/user directories
+      // Redirect to system/user directories. /dev is handled separately below:
+      // writing to /dev/sda is destructive, writing to /dev/null is how every
+      // shell script discards output.
+      />\s*\/(?:proc|sys|boot|root|var|home)\//,
+      // Any /dev target except the discard and standard streams.
+      />\s*\/dev\/(?!null\b|stdout\b|stderr\b)/,
       />\s*~\//,                                     // Redirect to home directory
       />\s*\.\.\//,                                  // Redirect via path traversal
     ];
