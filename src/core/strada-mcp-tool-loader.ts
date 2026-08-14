@@ -35,6 +35,13 @@ interface StradaMcpToolMetadata {
   readonly requiredBridgeCapabilities?: readonly string[];
   readonly dangerous: boolean;
   readonly readOnly: boolean;
+  /**
+   * How long the tool says it may legitimately run.
+   *
+   * The default cap suits tools that answer in seconds; a tool that compiles a
+   * Unity project headlessly needs minutes and says so here.
+   */
+  readonly timeoutMs?: number;
 }
 
 interface StradaMcpToolLike {
@@ -1164,7 +1171,12 @@ export function registerStradaMcpTools(
       continue;
     }
 
-    registry.register(new StradaMcpToolAdapter(tool, runtime), {
+    // A tool that declares how long it may run gets that budget. The 30s
+    // default is right for tools that answer in seconds and wrong for one that
+    // compiles a Unity project headlessly: measured, unity_verify_change reached
+    // the agent for the first time and was killed at 30002ms on all three calls,
+    // so the offline verification it exists for never completed once.
+    registry.register(new StradaMcpToolAdapter(tool, runtime, tool.metadata.timeoutMs), {
       category: mapCategory(tool.metadata.category),
       dangerous: tool.metadata.dangerous,
       requiresConfirmation: tool.metadata.dangerous && !tool.metadata.readOnly,
