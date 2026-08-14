@@ -58,13 +58,26 @@ describe("module decomposition guidance", () => {
     expect(STRADA_AGENT_PREAMBLE).toContain("CombatModule/");
   });
 
-  it("forbids nesting modules inside a wrapper folder", () => {
-    // Measured: a run created Assets/Modules/PixelFlowModule/ and then reached
-    // for real modules inside it. The game is the set of modules, not a module
-    // that contains them — nesting hides every inner module from the flat
-    // Assets/Modules/ scan the tooling and the conventions assume.
-    expect(STRADA_AGENT_PREAMBLE).toMatch(/DIRECTLY under/);
-    expect(STRADA_AGENT_PREAMBLE).toMatch(/Never nest modules inside a wrapper folder/);
-    expect(STRADA_AGENT_PREAMBLE).toMatch(/PixelFlowModule\/BoardModule/);
+  it("allows a submodule that genuinely belongs to its parent", () => {
+    // Nesting is not the problem. A submodule that exists only to serve its
+    // parent, and would be meaningless beside it, is a legitimate shape.
+    expect(STRADA_AGENT_PREAMBLE).toMatch(/Nest a submodule only when it is genuinely PART OF/);
+    expect(STRADA_AGENT_PREAMBLE).toMatch(/GridRenderingModule/);
   });
+
+  it("gives the test for when a submodule should be top-level instead", () => {
+    // Without this the rule is a matter of taste; with it there is something to
+    // check: could another module depend on this just as well?
+    expect(STRADA_AGENT_PREAMBLE).toMatch(/another module could equally depend on/);
+  });
+
+  it("rejects a wrapper named after the game", () => {
+    // Measured: a run created Assets/Modules/PixelFlowModule/ and started
+    // placing real modules inside it. The game is not a concern, so it owns
+    // nothing and the wrapper only hides its children.
+    expect(STRADA_AGENT_PREAMBLE).toMatch(/named after the game or the feature set/);
+    expect(STRADA_AGENT_PREAMBLE).toMatch(/PixelFlowModule\/BoardModule/);
+    expect(STRADA_AGENT_PREAMBLE).toMatch(/PixelFlow is the game,\s+not a concern/);
+  });
+
 });

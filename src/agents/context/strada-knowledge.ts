@@ -62,10 +62,17 @@ writing code, and create a module for each.
 - Go as fine as the concerns genuinely are. A grid game is not "a game module":
   it is board state, match detection, gravity/refill, scoring, input, camera and
   presentation — each with its own lifecycle and its own reasons to change.
-- Every module sits DIRECTLY under \`Assets/Modules/\` — \`Assets/Modules/InputModule/\`,
-  \`Assets/Modules/BoardModule/\`. Never nest modules inside a wrapper folder named
-  after the game or the feature set: \`Assets/Modules/PixelFlowModule/BoardModule/\`
-  is wrong. The game is the set of modules, not a module containing them.
+- A top-level concern is a top-level module: it sits directly under
+  \`Assets/Modules/\` — \`Assets/Modules/InputModule/\`, \`Assets/Modules/BoardModule/\`.
+- Nest a submodule only when it is genuinely PART OF its parent's concern and
+  ships with it — \`BoardModule/GridRenderingModule/\` is reasonable if grid
+  rendering exists only to serve the board and would be meaningless beside it.
+  A submodule that another module could equally depend on belongs at the top
+  level instead.
+- Do NOT wrap everything in a folder named after the game or the feature set.
+  \`Assets/Modules/PixelFlowModule/BoardModule/\` is wrong: PixelFlow is the game,
+  not a concern, so it owns nothing and only hides its children. The game is the
+  set of modules, not a module containing them.
 - One module holding the whole feature set is the failure this rule exists to
   prevent. Layer folders inside a single module (Domain/Application/
   Infrastructure) are not a substitute: they are one assembly boundary wearing
