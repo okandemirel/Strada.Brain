@@ -119,17 +119,13 @@ export class ModuleCreateTool implements ITool {
 
     try {
       // Create directory structure
-      // Component folders sit directly under the module root. There is no
-      // Scripts/ layer: it grouped every code folder behind one name that says
-      // nothing about the module, while Editor/, Tests/ and Resources/ already
-      // lived at the root — so the tree was split by "is it code" rather than by
-      // concern. Strada.Core's DirectoryStructureConfig declares the same shape.
       const dirs = [
         fullBase,
-        join(fullBase, "Interfaces"),
-        join(fullBase, "Services"),
-        join(fullBase, "Systems"),
-        join(fullBase, "Components"),
+        join(fullBase, "Scripts"),
+        join(fullBase, "Scripts", "Systems"),
+        join(fullBase, "Scripts", "Services"),
+        join(fullBase, "Scripts", "Components"),
+        join(fullBase, "Scripts", "Mediators"),
       ];
 
       // Conditional directories
@@ -147,25 +143,12 @@ export class ModuleCreateTool implements ITool {
       // agent had no reason to pass a flag it was never told it needed.
       const includeTests = input["include_tests"] !== false;
 
-      const includeCommands = input["include_commands"] === true;
-      const includeEditor = input["include_editor"] === true;
-
-      if (includeController) dirs.push(join(fullBase, "Controllers"));
-      if (includeCommands) dirs.push(join(fullBase, "Commands"));
-      if (includeEvents) dirs.push(join(fullBase, "Events"));
-      if (includeSignals) dirs.push(join(fullBase, "Signals"));
-      if (includeModel) dirs.push(join(fullBase, "Models"));
-      if (includeView) dirs.push(join(fullBase, "Views"));
-      // Two folders, not one: the framework declares ConfigData and ValueObject
-      // as separate component types.
-      if (includeData) {
-        dirs.push(join(fullBase, "Data", "UnityObjects"));
-        dirs.push(join(fullBase, "Data", "ValueObjects"));
-      }
-      // Editor-only code needs its own folder AND its own assembly; without a
-      // place to put it, edit-mode code lands in the runtime assembly and the
-      // module stops building for a player.
-      if (includeEditor) dirs.push(join(fullBase, "Editor"));
+      if (includeController) dirs.push(join(fullBase, "Scripts", "Controllers"));
+      if (includeEvents) dirs.push(join(fullBase, "Scripts", "Events"));
+      if (includeSignals) dirs.push(join(fullBase, "Scripts", "Signals"));
+      if (includeModel) dirs.push(join(fullBase, "Scripts", "Models"));
+      if (includeView) dirs.push(join(fullBase, "Scripts", "Views"));
+      if (includeData) dirs.push(join(fullBase, "Scripts", "Data"));
       // Tests/Runtime and Tests/Editor, not a flat Tests/ — the framework's own
       // DirectoryStructureConfig declares them as distinct component types
       // (RuntimeTests, EditorTests) and Strada.Core follows its own rule:
@@ -252,27 +235,27 @@ export class ModuleCreateTool implements ITool {
       }
 
       // 2. ModuleConfig
-      const moduleConfigPath = join(fullBase, `${name}ModuleConfig.cs`);
+      const moduleConfigPath = join(fullBase, "Scripts", `${name}ModuleConfig.cs`);
       await writeFile(moduleConfigPath, generateModuleConfig(name, namespace, includeService), "utf-8");
-      createdFiles.push(`${modulePath}/${name}ModuleConfig.cs`);
+      createdFiles.push(`${modulePath}/Scripts/${name}ModuleConfig.cs`);
 
       // 3. Optional System
       if (includeSystem) {
-        const systemPath = join(fullBase, "Systems", `${name}System.cs`);
+        const systemPath = join(fullBase, "Scripts", "Systems", `${name}System.cs`);
         await writeFile(systemPath, generateSystem(name, namespace), "utf-8");
-        createdFiles.push(`${modulePath}/Systems/${name}System.cs`);
+        createdFiles.push(`${modulePath}/Scripts/Systems/${name}System.cs`);
       }
 
       // 4. Optional Service
       if (includeService) {
-        const interfacePath = join(fullBase, "Services", `I${name}Service.cs`);
-        const implPath = join(fullBase, "Services", `${name}Service.cs`);
+        const interfacePath = join(fullBase, "Scripts", "Services", `I${name}Service.cs`);
+        const implPath = join(fullBase, "Scripts", "Services", `${name}Service.cs`);
 
         await writeFile(interfacePath, generateServiceInterface(name, namespace), "utf-8");
         await writeFile(implPath, generateServiceImpl(name, namespace), "utf-8");
 
-        createdFiles.push(`${modulePath}/Services/I${name}Service.cs`);
-        createdFiles.push(`${modulePath}/Services/${name}Service.cs`);
+        createdFiles.push(`${modulePath}/Scripts/Services/I${name}Service.cs`);
+        createdFiles.push(`${modulePath}/Scripts/Services/${name}Service.cs`);
       }
 
       const result = [
@@ -284,24 +267,24 @@ export class ModuleCreateTool implements ITool {
         "Folder structure:",
         `  ${modulePath}/`,
         `  ├── ${name}.asmdef`,
-        `  ├── ${name}ModuleConfig.cs`,
-        `  ├── Interfaces/`,
-        includeService ? `  │   └── I${name}Service.cs` : `  │   └── (empty)`,
-        `  ├── Services/`,
-        includeService ? `  │   └── ${name}Service.cs` : `  │   └── (empty)`,
-        `  ├── Systems/`,
-        includeSystem ? `  │   └── ${name}System.cs` : `  │   └── (empty)`,
-        `  ├── Components/`,
-        `  │   └── (empty)`,
-        ...(includeTests
-          ? [`  └── Tests/`, `      ├── Runtime/`, `      └── Editor/`]
-          : []),
+        `  └── Scripts/`,
+        `      ├── ${name}ModuleConfig.cs`,
+        `      ├── Systems/`,
+        includeSystem ? `      │   └── ${name}System.cs` : `      │   └── (empty)`,
+        `      ├── Services/`,
+        includeService
+          ? `      │   ├── I${name}Service.cs\n      │   └── ${name}Service.cs`
+          : `      │   └── (empty)`,
+        `      ├── Components/`,
+        `      │   └── (empty)`,
+        `      └── Mediators/`,
+        `          └── (empty)`,
         "",
         `Next steps:`,
         `  1. Create a ${name}ModuleConfig ScriptableObject asset in Unity`,
         `  2. Add it to GameBootstrapper's module list`,
-        `  3. Add components in Components/`,
-        `  4. Implement system logic in Systems/${name}System.cs`,
+        `  3. Add components in Scripts/Components/ folder`,
+        `  4. Implement system logic in Scripts/Systems/${name}System.cs`,
       ].join("\n");
 
       return { content: result, metadata: { createdFiles } };

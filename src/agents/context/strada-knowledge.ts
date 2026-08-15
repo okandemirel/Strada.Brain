@@ -78,13 +78,6 @@ writing code, and create a module for each.
   Infrastructure) are not a substitute: they are one assembly boundary wearing
   five names.
 
-- Component folders sit DIRECTLY under the module root: \`Interfaces/\`,
-  \`Services/\`, \`Systems/\`, \`Components/\`, \`Commands/\`, \`Data/\`, \`Editor/\`,
-  \`Tests/\`. There is NO \`Scripts/\` folder — do not create one. It grouped every
-  code folder behind one name that says nothing about the module, while
-  \`Editor/\`, \`Tests/\` and \`Resources/\` already sat at the root, so the tree got
-  split by "is it code" instead of by concern.
-
 ### File Structure Convention
 
 \`\`\`
@@ -92,40 +85,28 @@ Assets/
 ├── Modules/
 │   ├── CoreModule/
 │   │   ├── Core.asmdef
-│   │   ├── CoreModuleConfig.cs           (ModuleConfig SO)
-│   │   ├── Interfaces/
-│   │   │   └── IGameService.cs
-│   │   ├── Services/
-│   │   │   └── GameService.cs
-│   │   ├── Systems/
-│   │   │   └── GameStateSystem.cs
-│   │   └── Tests/
-│   │       ├── Runtime/
-│   │       │   └── Core.Tests.asmdef
-│   │       └── Editor/
-│   │           └── Core.Editor.Tests.asmdef
+│   │   └── Scripts/
+│   │       ├── CoreModuleConfig.cs       (ModuleConfig SO)
+│   │       ├── Systems/
+│   │       │   └── GameStateSystem.cs
+│   │       └── Services/
+│   │           ├── IGameService.cs
+│   │           └── GameService.cs
 │   └── CombatModule/
 │       ├── Combat.asmdef
-│       ├── CombatModuleConfig.cs
-│       ├── Interfaces/
-│       │   └── ICombatService.cs
-│       ├── Services/
-│       │   └── CombatService.cs
-│       ├── Components/
-│       │   ├── HealthComponent.cs        (IComponent)
-│       │   └── DamageDealerComponent.cs
-│       ├── Systems/
-│       │   ├── DamageSystem.cs           (SystemBase)
-│       │   └── HealthSystem.cs
-│       ├── Commands/
-│       │   └── ApplyDamageCommand.cs
-│       ├── Data/
-│       │   ├── UnityObjects/             (ScriptableObject configs)
-│       │   └── ValueObjects/             (plain structs)
-│       ├── Editor/                       (edit-mode only, own asmdef)
-│       └── Tests/
-│           ├── Runtime/
-│           └── Editor/
+│       └── Scripts/
+│           ├── CombatModuleConfig.cs
+│           ├── Components/
+│           │   ├── HealthComponent.cs     (IComponent)
+│           │   └── DamageDealerComponent.cs
+│           ├── Systems/
+│           │   ├── DamageSystem.cs       (SystemBase)
+│           │   └── HealthSystem.cs
+│           ├── Services/
+│           │   ├── ICombatService.cs
+│           │   └── CombatService.cs
+│           └── Mediators/
+│               └── CombatEntityMediator.cs
 \`\`\`
 
 ## Your Capabilities
