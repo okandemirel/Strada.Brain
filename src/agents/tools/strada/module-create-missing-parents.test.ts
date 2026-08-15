@@ -16,7 +16,7 @@
 
 import { describe, it, expect, beforeAll } from "vitest";
 import { mkdtempSync, existsSync } from "node:fs";
-import { join } from "node:path";
+import { join, basename } from "node:path";
 import os from "node:os";
 import { createLogger } from "../../../utils/logger.js";
 import { ModuleCreateTool } from "./module-create.js";
@@ -54,15 +54,26 @@ describe("creating the first module in a project", () => {
     // Relaxing the missing-parent rule must not relax containment: the guard's
     // walk to the deepest existing ancestor is what proves the target is inside,
     // and that check has to survive.
+    //
+    // The escape target's parent is created for real. Which of the two refusals
+    // the guard reaches depends on what exists on disk above the project, and
+    // that differs by platform: from a project in /tmp, "../../outside" is
+    // /outside and does not exist, so the guard stops at the missing parent
+    // before it ever judges containment — while from a macOS project under
+    // /var/folders/…/T it lands somewhere real and the containment branch runs.
+    // Giving the target an existing parent OUTSIDE the project pins the case
+    // this test is about.
     const projectPath = emptyProject();
+    const outside = mkdtempSync(join(os.tmpdir(), "module-create-outside-"));
 
     const result = await run(projectPath, {
       name: "Escape",
       namespace: "Game.Modules.Escape",
-      path: "../../outside/EscapeModule",
+      path: join("..", basename(outside), "EscapeModule"),
     });
 
     expect(result.isError).toBe(true);
     expect(result.content).toMatch(/outside the project/i);
+    expect(existsSync(join(outside, "EscapeModule"))).toBe(false);
   });
 });
