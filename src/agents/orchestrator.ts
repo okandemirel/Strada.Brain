@@ -90,13 +90,10 @@ import {
   DEFAULT_CONTEXT_WINDOW,
 } from "./session-compaction.js";
 import {
-  parseCompletionReviewDecision,
   planVerifierPipeline,
   sanitizeVisibilityReviewDecision,
   InteractionPolicyStateMachine,
   userExplicitlyAskedForPlan,
-
-  type CompletionReviewStageResult,
 } from "./autonomy/index.js";
 import { MUTATION_TOOLS, WRITE_OPERATIONS, looksLikeWriteTool, extractFilePath, isVerificationToolName } from "./autonomy/constants.js";
 import { DMPolicy, isDestructiveOperation, type DMPolicyConfig } from "../security/dm-policy.js";
@@ -2509,7 +2506,6 @@ export class Orchestrator {
       recordRuntimeArtifactEvaluation: (p) => this.recordRuntimeArtifactEvaluation(p as Parameters<typeof this.recordRuntimeArtifactEvaluation>[0]),
       getTaskRunId: () => this.getTaskExecutionContext()?.taskRunId,
       synthesizeUserFacingResponse: (p) => this.synthesizeUserFacingResponse(p),
-      runCompletionReviewStages: (p) => this.runCompletionReviewStages(p),
       runVisibilityReview: (p) => this.runVisibilityReview(p),
       executeToolCalls: (chatId, toolCalls, opts) => this.executeToolCalls(chatId, toolCalls, opts),
       getLogRingBuffer: () => typeof getLogRingBuffer === "function" ? getLogRingBuffer() : [],
@@ -3925,22 +3921,6 @@ export class Orchestrator {
     return this.engine.runVisibilityReview(params);
   }
 
-  private async runCompletionReviewStages(params: {
-    chatId: string;
-    identityKey: string;
-    prompt: string;
-    state: AgentState;
-    draft: string;
-    plan: ReturnType<typeof planVerifierPipeline>;
-    strategy: SupervisorExecutionStrategy;
-    usageHandler?: (usage: TaskUsageEvent) => void;
-  }): Promise<{
-    decision: ReturnType<typeof parseCompletionReviewDecision>;
-    stageResults: CompletionReviewStageResult[];
-    usage?: ProviderResponse["usage"];
-  }> {
-    return this.engine.runCompletionReviewStages(params);
-  }
 
   private async reviewShellCommandWithProvider(
     chatId: string,

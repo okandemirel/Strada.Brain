@@ -1,4 +1,5 @@
 import type { AgentState } from "../agent-state.js";
+import { draftLeavesOpenInvestigations } from "./completion-review.js";
 import { sanitizePromptInjection } from "../orchestrator-text-utils.js";
 import type { TaskClassification } from "../../agent-core/routing/routing-types.js";
 import type { LogEntry } from "../../utils/logger.js";
@@ -8,11 +9,7 @@ import type {
   CompletionReviewStageResult,
 } from "./completion-review.js";
 import {
-  buildCompletionReviewGate,
-  buildCompletionReviewRequest,
   collectCompletionReviewEvidence,
-  hasOpenReviewFindingsForDraft,
-  mergeCompletionReviewDecisionWithStages,
   shouldRunCompletionReview,
 } from "./completion-review.js";
 import type { VerificationState } from "./self-verification.js";
@@ -120,15 +117,32 @@ export function planVerifierPipeline(params: {
     checks.push(sameErrorCheck);
   }
 
+  const unverifiedFailureCheck = buildUnverifiedFailureVerifierCheck(evidence);
+  if (unverifiedFailureCheck) {
+    checks.push(unverifiedFailureCheck);
+  }
+
   const gatingChecks = checks.filter((check) => check.gate);
   if (gatingChecks.length > 0) {
+    // "Replan" used to arrive only as an LLM review verdict. The deterministic
+    // equivalent was already here and unread: the same-error check exists
+    // precisely to say that the current approach is not working and a different
+    // one is needed, which is what a replan is. Every other gating check means
+    // "there is more to do on this approach" — continue.
+    const decision: VerifierPipelineDecision = gatingChecks.some(
+      (check) => check.name === ("same-error-repeat" as VerifierName),
+    )
+      ? "replan"
+      : "continue";
     return {
       evidence,
       checks,
       reviewRequired: false,
-      initialDecision: "continue",
-      gate: buildVerifierPipelineGate("continue", gatingChecks, evidence),
-      summary: "Static verifier checks still require more work.",
+      initialDecision: decision,
+      gate: buildVerifierPipelineGate(decision, gatingChecks, evidence),
+      summary: decision === "replan"
+        ? "The same error keeps recurring — the current approach needs replacing."
+        : "Static verifier checks still require more work.",
       buildToolsAvailable: params.buildToolsAvailable,
     };
   }
@@ -155,86 +169,47 @@ export function planVerifierPipeline(params: {
     };
   }
 
+  // What used to happen here was four LLM review stages — code, simplify,
+  // security, then a synthesizer. They were shown file paths, the draft's prose
+  // and tool summaries truncated to 200 characters, and never a line of code, so
+  // they could not check the thing they were named after. What they did catch,
+  // when they caught anything, is a draft that declares completion while leaving
+  // its own investigations open — and that is a property of the text, decidable
+  // here without spending four model calls on every task that writes a file.
+  if (draftLeavesOpenInvestigations(params.draft)) {
+    return {
+      evidence,
+      checks,
+      reviewRequired: false,
+      initialDecision: "continue",
+      gate: buildOpenInvestigationsGate(),
+      summary: "The draft declares completion while leaving its own investigations open.",
+      buildToolsAvailable: params.buildToolsAvailable,
+    };
+  }
+
   return {
     evidence,
     checks,
-    reviewRequired: true,
-    initialDecision: "continue",
-    summary: "Dynamic completion review is required before Strada can finish.",
+    reviewRequired: false,
+    initialDecision: "approve",
+    summary: "Static verifier checks passed and the draft leaves nothing open.",
     buildToolsAvailable: params.buildToolsAvailable,
   };
 }
 
-export function buildVerifierPipelineReviewRequest(params: {
-  prompt: string;
-  draft: string;
-  state: AgentState;
-  plan: VerifierPipelinePlan;
-}): string {
-  const checkSummary = params.plan.checks.length > 0
-    ? params.plan.checks
-      .map((check) => `- ${check.name}: ${check.status} — ${check.summary}`)
-      .join("\n")
-    : "(none)";
-
+/** Told to the agent when its own draft still has loose ends. */
+function buildOpenInvestigationsGate(): string {
   return [
-    buildCompletionReviewRequest({
-      prompt: params.prompt,
-      draft: params.draft,
-      state: params.state,
-      evidence: params.plan.evidence,
-      buildToolsAvailable: params.plan.buildToolsAvailable,
-    }),
+    "Your draft declares the work complete and then lists things you have not established:",
+    "open investigations, hedged runtime claims, or checks left for someone else to run.",
     "",
-    `Verifier pipeline status before review:\n${checkSummary}`,
-    "",
-    "Respect the verifier pipeline. If the current approach keeps failing a targeted repro/log/build/conformance check, prefer `replan` over another weak approval.",
+    "Close them or say plainly that they are unresolved. Confirm or eliminate each hypothesis,",
+    "run the verification that would settle it, and only then report completion.",
   ].join("\n");
 }
 
-export function finalizeVerifierPipelineReview(
-  plan: VerifierPipelinePlan,
-  decision: CompletionReviewDecision | null,
-  draft: string | null | undefined = "",
-  stageResults: readonly CompletionReviewStageResult[] = [],
-): VerifierPipelineResult {
-  const mergedDecision = mergeCompletionReviewDecisionWithStages(decision, stageResults);
-  const reviewCheck: VerifierCheck = buildCompletionReviewCheck(mergedDecision, draft);
-  const checks = [...plan.checks, reviewCheck];
 
-  if (!hasOpenReviewFindingsForDraft(mergedDecision, draft)) {
-    return {
-      decision: "approve",
-      summary: mergedDecision?.summary?.trim() || "Verifier review approved completion.",
-      checks,
-      evidence: plan.evidence,
-      reviewDecision: mergedDecision,
-      stageResults,
-    };
-  }
-
-  if (mergedDecision?.decision === "replan") {
-    return {
-      decision: "replan",
-      gate: buildVerifierPipelineGate("replan", [reviewCheck], plan.evidence, mergedDecision),
-      summary: mergedDecision.summary?.trim() || "Verifier review requested a replan.",
-      checks,
-      evidence: plan.evidence,
-      reviewDecision: mergedDecision,
-      stageResults,
-    };
-  }
-
-  return {
-    decision: "continue",
-    gate: buildCompletionReviewGate(mergedDecision, plan.evidence),
-    summary: mergedDecision?.summary?.trim() || "Verifier review requires more execution before completion.",
-    checks,
-    evidence: plan.evidence,
-    reviewDecision: mergedDecision,
-    stageResults,
-  };
-}
 
 export function collectVerifierPipelineEvidence(params: {
   state: AgentState;
@@ -427,24 +402,6 @@ function buildLogVerifierCheck(evidence: VerifierPipelineEvidence): VerifierChec
   };
 }
 
-function buildCompletionReviewCheck(
-  decision: CompletionReviewDecision | null,
-  draft: string | null | undefined = "",
-): VerifierCheck {
-  if (!hasOpenReviewFindingsForDraft(decision, draft)) {
-    return {
-      name: "completion-review",
-      status: "clean",
-      summary: decision?.summary?.trim() || "Completion review approved the result.",
-    };
-  }
-
-  return {
-    name: "completion-review",
-    status: "issues",
-    summary: decision?.summary?.trim() || "Completion review found remaining issues.",
-  };
-}
 
 function buildVerifierPipelineGate(
   decision: "continue" | "replan",
@@ -508,6 +465,49 @@ function buildUnityConsoleVerifierCheck(
 }
 
 const SAME_ERROR_REPEAT_THRESHOLD = 3;
+
+/**
+ * A completion claimed on top of failures nobody re-checked.
+ *
+ * This is what the four LLM review stages were actually catching when they
+ * caught anything: the agent hit failing steps, changed something, and declared
+ * the work done without running the verification that would settle it. The claim
+ * is unverifiable by inspection of prose — but "there were failures and no
+ * verification ran afterwards" is a fact about the step list, so it is decided
+ * here instead of being asked of a model that was never shown the code.
+ */
+function buildUnverifiedFailureVerifierCheck(
+  evidence: VerifierPipelineEvidence,
+): VerifierCheck | null {
+  // Narrow deliberately. This fires only when the agent CHANGED something in
+  // response to failures and then never checked: a read-only investigation that
+  // hit a failed read has nothing to verify, and an honest "I could not do this"
+  // report is the one completion that should not be argued with.
+  if (
+    evidence.recentFailures.length === 0 ||
+    evidence.verificationStepCount > 0 ||
+    evidence.mutationStepCount === 0 ||
+    evidence.hasTerminalFailureReport
+  ) {
+    return null;
+  }
+
+  return {
+    name: "unverified-failure" as VerifierName,
+    status: "issues",
+    summary: "Steps failed and nothing was verified afterwards.",
+    gate: [
+      "[UNVERIFIED FAILURE] Steps in this run failed and no verification has run since.",
+      "",
+      "Recent failures:",
+      ...evidence.recentFailures.slice(-3).map((f) => `- ${sanitizePromptInjection(f)}`),
+      "",
+      "Run the verification that would settle whether they are fixed — a build, the",
+      "relevant test, the console — and report what it returned. Do not declare the",
+      "work complete on the strength of having changed something.",
+    ].join("\n"),
+  };
+}
 
 function buildSameErrorVerifierCheck(
   evidence: VerifierPipelineEvidence,

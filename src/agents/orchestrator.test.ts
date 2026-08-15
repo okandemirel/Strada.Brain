@@ -934,11 +934,12 @@ describe("Orchestrator", () => {
     await vi.advanceTimersByTimeAsync(100);
     await promise;
 
-    // v2 PAOR: planner(1 PLANNING) + executor(1 tool turn + 1 draft + 2 completion review stages)
-    // + reviewer(1 code stage + 1 synthesis) + synth(1 user-facing synthesis)
+    // v2 PAOR: planner(1 PLANNING) + executor(1 tool turn + 1 draft) + synth(1 user-facing
+    // synthesis). The four LLM completion-review turns that used to sit between the draft and
+    // the synthesis are gone; the deterministic verifier decides now.
     expect(plannerProvider.chat).toHaveBeenCalledTimes(1);
-    expect(executorProvider.chat).toHaveBeenCalledTimes(4);
-    expect(reviewerProvider.chat).toHaveBeenCalledTimes(2);
+    expect(executorProvider.chat).toHaveBeenCalledTimes(2);
+    expect(reviewerProvider.chat).toHaveBeenCalledTimes(0);
     expect(synthProvider.chat).toHaveBeenCalledTimes(1);
     expect(plannerProvider.chat.mock.calls[0]?.[0]).toContain("Current worker role: planner");
     expect(plannerProvider.chat.mock.calls[0]?.[0]).toContain("Provider: planner");
@@ -3922,111 +3923,6 @@ describe("Orchestrator", () => {
     expect(mockChannel.sendMarkdown).toHaveBeenCalled();
   });
 
-  it("runs staged code, simplify, security, and synthesis reviews before approving completion", async () => {
-    const stagedReviewOrch = new Orchestrator({
-      providerManager: {
-        getProvider: () => mockProvider,
-        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
-        shutdown: vi.fn(),
-      } as any,
-      tools: [writeTool],
-      channel: mockChannel,
-      projectPath: "/tmp/test-project",
-      readOnly: false,
-      requireConfirmation: false,
-    });
-
-    mockProvider.chat
-      .mockResolvedValueOnce({
-        text: "Writing the result artifact",
-        toolCalls: [
-          { id: "tc-staged-review-write", name: "file_write", input: { path: "docs/result.md" } },
-        ],
-        stopReason: "tool_use",
-        usage: { inputTokens: 10, outputTokens: 20 },
-      })
-      .mockResolvedValueOnce({
-        text: "Result finalized.\nDONE",
-        toolCalls: [],
-        stopReason: "end_turn",
-        usage: { inputTokens: 10, outputTokens: 20 },
-      })
-      .mockResolvedValueOnce({
-        text: JSON.stringify({
-          status: "clean",
-          summary: "Code review is clean.",
-          findings: [],
-          requiredActions: [],
-          openInvestigations: [],
-        }),
-        toolCalls: [],
-        stopReason: "end_turn",
-        usage: { inputTokens: 10, outputTokens: 20 },
-      })
-      .mockResolvedValueOnce({
-        text: JSON.stringify({
-          status: "clean",
-          summary: "Simplify review is clean.",
-          findings: [],
-          requiredActions: [],
-          openInvestigations: [],
-        }),
-        toolCalls: [],
-        stopReason: "end_turn",
-        usage: { inputTokens: 10, outputTokens: 20 },
-      })
-      .mockResolvedValueOnce({
-        text: JSON.stringify({
-          status: "clean",
-          summary: "Security review is clean.",
-          findings: [],
-          requiredActions: [],
-          openInvestigations: [],
-        }),
-        toolCalls: [],
-        stopReason: "end_turn",
-        usage: { inputTokens: 10, outputTokens: 20 },
-      })
-      .mockResolvedValueOnce({
-        text: JSON.stringify({
-          decision: "approve",
-          summary: "All staged reviews approved completion.",
-          findings: [],
-          requiredActions: [],
-          closureStatus: "verified",
-          openInvestigations: [],
-          reviews: {
-            security: "clean",
-            code: "clean",
-            simplify: "clean",
-          },
-          logStatus: "clean",
-        }),
-        toolCalls: [],
-        stopReason: "end_turn",
-        usage: { inputTokens: 10, outputTokens: 20 },
-      });
-
-    const promise = stagedReviewOrch.handleMessage({
-      channelType: "cli",
-      chatId: "chat-staged-review",
-      userId: "user1",
-      text: "Produce the result artifact and finish only after full review",
-      timestamp: new Date(),
-    });
-    await vi.advanceTimersByTimeAsync(100);
-    await promise;
-
-    expect(mockProvider.chat).toHaveBeenCalledTimes(6);
-    expect(String(mockProvider.chat.mock.calls[2]?.[0] ?? "")).toContain("code review stage");
-    expect(String(mockProvider.chat.mock.calls[3]?.[0] ?? "")).toContain("simplify review stage");
-    expect(String(mockProvider.chat.mock.calls[4]?.[0] ?? "")).toContain("security review stage");
-    expect(String(mockProvider.chat.mock.calls[5]?.[0] ?? "")).toContain("completion review synthesizer");
-    expect(mockChannel.sendMarkdown).toHaveBeenCalledWith(
-      "chat-staged-review",
-      expect.stringContaining("Result finalized"),
-    );
-  });
 
   it("continues autonomously when a draft asks the user what to do next without a blocker", async () => {
     const listTool = createMockTool("list_directory");
@@ -4329,145 +4225,6 @@ DONE`,
   // pipeline's REPLAN of a clean model-declared DONE cannot extend the run on the v2 route (the
   // reflection-boundary ledger verdict honors modelProposedDone before the verifier runs, and the
   // EXECUTING end_turn arm is terminal). Un-skip with the same port fix.
-  it("replans internally when the verifier pipeline requests a new approach", async () => {
-    const replanningOrch = new Orchestrator({
-      providerManager: {
-        getProvider: () => mockProvider,
-        getActiveInfo: () => ({ providerName: "mock", model: "default", isDefault: true }),
-        shutdown: vi.fn(),
-      } as any,
-      tools: [readTool],
-      channel: mockChannel,
-      projectPath: "/tmp/test-project",
-      readOnly: false,
-      requireConfirmation: false,
-    });
-
-    const stageClean = {
-      text: JSON.stringify({ status: "clean", summary: "No issues found." }),
-      toolCalls: [] as never[],
-      stopReason: "end_turn" as const,
-      usage: { inputTokens: 5, outputTokens: 5 },
-    };
-
-    mockProvider.chat
-      // v2 PAOR: call #1 is the PLANNING turn; the tool loop starts on the EXECUTING turn.
-      .mockResolvedValueOnce({
-        text: "Plan: inspect the level asset and verify the real issue.",
-        toolCalls: [],
-        stopReason: "end_turn",
-        usage: { inputTokens: 10, outputTokens: 10 },
-      })
-      .mockResolvedValueOnce({
-        text: "Inspecting the level asset first.",
-        toolCalls: [
-          {
-            id: "tc-level-read-1",
-            name: "file_read",
-            input: { path: "Assets/Resources/Levels/Level_031.asset" },
-          },
-        ],
-        stopReason: "tool_use",
-        usage: { inputTokens: 10, outputTokens: 20 },
-      })
-      .mockResolvedValueOnce({
-        text: "All level assets are fixed and fully verified.\nDONE",
-        toolCalls: [],
-        stopReason: "end_turn",
-        usage: { inputTokens: 10, outputTokens: 20 },
-      })
-      // First completion review: 3 parallel stages + 1 synthesis (replan)
-      .mockResolvedValueOnce(stageClean)
-      .mockResolvedValueOnce(stageClean)
-      .mockResolvedValueOnce(stageClean)
-      .mockResolvedValueOnce({
-        text: JSON.stringify({
-          decision: "replan",
-          summary: "The current path did not verify the real failing behavior.",
-          findings: ["The asset was inspected, but the failing path itself was not reproduced."],
-          requiredActions: [
-            "Create a new plan around the concrete failing path before claiming success.",
-          ],
-          reviews: {
-            security: "not_applicable",
-            code: "issues",
-            simplify: "clean",
-          },
-          logStatus: "clean",
-        }),
-        toolCalls: [],
-        stopReason: "end_turn",
-        usage: { inputTokens: 10, outputTokens: 20 },
-      })
-      .mockResolvedValueOnce({
-        text: "1. Reproduce the failing path.\n2. Re-read the asset with that path in mind.",
-        toolCalls: [
-          {
-            id: "tc-level-read-2",
-            name: "file_read",
-            input: { path: "Assets/Resources/Levels/Level_031.asset" },
-          },
-        ],
-        stopReason: "tool_use",
-        usage: { inputTokens: 10, outputTokens: 20 },
-      })
-      .mockResolvedValueOnce({
-        text: "The real issue is isolated now.\nDONE",
-        toolCalls: [],
-        stopReason: "end_turn",
-        usage: { inputTokens: 10, outputTokens: 20 },
-      })
-      // Second completion review: 3 parallel stages + 1 synthesis (approve)
-      .mockResolvedValueOnce(stageClean)
-      .mockResolvedValueOnce(stageClean)
-      .mockResolvedValueOnce(stageClean)
-      .mockResolvedValueOnce({
-        text: JSON.stringify({
-          decision: "approve",
-          summary: "The verifier pipeline is now clean.",
-          findings: [],
-          requiredActions: [],
-          reviews: {
-            security: "not_applicable",
-            code: "clean",
-            simplify: "clean",
-          },
-          logStatus: "clean",
-        }),
-        toolCalls: [],
-        stopReason: "end_turn",
-        usage: { inputTokens: 10, outputTokens: 20 },
-      });
-
-    const promise = replanningOrch.handleMessage({
-      channelType: "cli",
-      chatId: "chat-verifier-replan",
-      userId: "user1",
-      text: "Find the real issue in the Unity level asset and keep going until it is verified",
-      timestamp: new Date(),
-    });
-    await vi.advanceTimersByTimeAsync(100);
-    await promise;
-
-    // 1 tool + 1 DONE + (3 stages + 1 synthesis replan) + 1 tool + 1 DONE + (3 stages + 1 synthesis approve) = 12
-    expect(mockProvider.chat.mock.calls.length).toBeGreaterThanOrEqual(8);
-    const flattenedMessages = mockProvider.chat.mock.calls.flatMap((call) => {
-      const messages = call[1] as Array<{ role: string; content: unknown }> | undefined;
-      return messages ?? [];
-    });
-    expect(flattenedMessages).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          role: "user",
-          content: expect.stringContaining("[VERIFIER PIPELINE: REPLAN REQUIRED]"),
-        }),
-      ]),
-    );
-    expect(mockChannel.sendMarkdown).toHaveBeenCalledWith(
-      "chat-verifier-replan",
-      expect.stringContaining("The real issue is isolated now."),
-    );
-  });
 
   it("keeps interactive intake-style ask_user tool calls internal when Strada can still inspect locally", async () => {
     const listTool = createMockTool("list_directory");
@@ -8359,8 +8116,9 @@ DONE`,
       await vi.advanceTimersByTimeAsync(100);
       await promise;
 
-      // Plan + 3 execution turns + reflect + 3 completion review stages + 1 synthesis
-      expect(mockProvider.chat).toHaveBeenCalledTimes(9);
+      // Plan + 3 execution turns + reflect + 1 synthesis. The three completion-review
+      // stages and their synthesizer are gone with the LLM review.
+      expect(mockProvider.chat).toHaveBeenCalledTimes(5);
       // Tool was executed 3 times
       expect(readTool.execute).toHaveBeenCalledTimes(3);
       // Final user-facing response strips internal DONE markers
@@ -8845,7 +8603,7 @@ DONE`,
 
       // The premature DONE after the failed step must have been overridden to CONTINUE (P1):
       // the run keeps working past it instead of completing early with the unverified claim.
-      expect(mockProvider.chat.mock.calls.length).toBeGreaterThanOrEqual(4);
+      expect(mockProvider.chat.mock.calls.length).toBeGreaterThanOrEqual(3);
       expect(result).not.toContain("Looks fixed now");
     });
 

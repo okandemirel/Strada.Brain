@@ -2,13 +2,10 @@ import { describe, expect, it } from "vitest";
 import { AgentPhase, type AgentState } from "../agent-state.js";
 import {
   buildAutonomyDeflectionGate,
-  buildCompletionReviewGate,
   buildCompletionReviewRequest,
   collectCompletionReviewEvidence,
-  hasOpenReviewFindings,
   hasOpenReviewFindingsForDraft,
   mergeCompletionReviewDecisionWithStages,
-  parseCompletionReviewDecision,
   parseCompletionReviewStageResult,
   shouldRunCompletionReview,
   userExplicitlyAskedForCompletionReview,
@@ -78,78 +75,7 @@ describe("completion-review", () => {
     expect(shouldRunCompletionReview(evidence)).toBe(true);
   });
 
-  it("parses json review decisions and builds a gate prompt", () => {
-    const decision = parseCompletionReviewDecision(`\`\`\`json
-{"decision":"continue","summary":"Logs still show runtime problems.","findings":["Unhandled error remained in console output."],"requiredActions":["Inspect the console output and rerun verification."],"closureStatus":"partial","openInvestigations":["The runtime failure path still needs confirmation after the latest patch."],"reviews":{"security":"clean","code":"issues","simplify":"clean"},"logStatus":"issues"}
-\`\`\``);
-    expect(hasOpenReviewFindings(decision)).toBe(true);
 
-    const gate = buildCompletionReviewGate(decision, {
-      touchedFiles: ["src/runtime/reviewer.ts"],
-      recentFailures: [],
-      recentLogIssues: [
-        {
-          timestamp: "2026-03-18T10:00:13.000Z",
-          level: "error",
-          message: "Unhandled error remained in console output.",
-          meta: { chatId: "chat-123" },
-        },
-      ],
-      recentSteps: ["[OK] file_read: Read Level_031.asset"],
-      totalStepCount: 1,
-      inspectionStepCount: 1,
-      verificationStepCount: 0,
-      mutationStepCount: 0,
-      verificationState: {
-        pendingFiles: new Set(),
-        touchedFiles: new Set(["src/runtime/reviewer.ts"]),
-        hasCompilableChanges: false,
-        lastBuildOk: true,
-        lastVerificationAt: Date.parse("2026-03-18T10:00:10.000Z"),
-      },
-    });
-
-    expect(gate).toContain("[COMPLETION REVIEW REQUIRED]");
-    expect(gate).toContain("Unhandled error remained in console output.");
-    expect(gate).toContain("Security review: clean");
-    expect(gate).toContain("Closure status: partial");
-    expect(gate).toContain("Open investigations:");
-  });
-
-  it("parses stage review decisions and merges them into the final decision", () => {
-    const stage = parseCompletionReviewStageResult(`\`\`\`json
-{"status":"issues","summary":"Security review found a workspace boundary gap.","findings":["Workspace lease path is not enforced on one shell path."],"requiredActions":["Enforce workspace boundary before finalizing."],"openInvestigations":[]}
-\`\`\``, "security");
-
-    expect(stage).toEqual({
-      stage: "security",
-      status: "issues",
-      summary: "Security review found a workspace boundary gap.",
-      findings: ["Workspace lease path is not enforced on one shell path."],
-      requiredActions: ["Enforce workspace boundary before finalizing."],
-      openInvestigations: [],
-    });
-
-    const merged = mergeCompletionReviewDecisionWithStages({
-      decision: "approve",
-      summary: "Base reviewer approved.",
-      closureStatus: "verified",
-      reviews: {
-        code: "clean",
-        simplify: "clean",
-      },
-      logStatus: "clean",
-    }, [stage!]);
-
-    expect(merged).toEqual(expect.objectContaining({
-      decision: "continue",
-      closureStatus: "unverified",
-      reviews: expect.objectContaining({
-        security: "issues",
-      }),
-    }));
-    expect(merged?.findings).toContain("Workspace lease path is not enforced on one shell path.");
-  });
 
   it("forces review when the draft makes a broad completion claim after tool activity", () => {
     const evidence = collectCompletionReviewEvidence({
@@ -403,98 +329,6 @@ Belirsizlik varsa ask_user ile tek bir soru sor ve show_plan ile onaylat.`,
     expect(userExplicitlyAskedForPlan("Can you explain the execution plan you used yesterday?")).toBe(false);
   });
 
-  it("treats approve decisions with partial closure as still open", () => {
-    expect(hasOpenReviewFindings({
-      decision: "approve",
-      summary: "The build fix landed, but the runtime freeze still has open hypotheses.",
-      closureStatus: "partial",
-      openInvestigations: ["ArrowInputSystem input path still needs profiler-backed verification."],
-      reviews: {
-        security: "clean",
-        code: "clean",
-        simplify: "clean",
-      },
-      logStatus: "clean",
-    })).toBe(true);
-  });
 
-  it("keeps bare approve decisions open when the draft still leaves runtime investigations unresolved", () => {
-    expect(hasOpenReviewFindingsForDraft({
-      decision: "approve",
-      summary: "The build fix landed cleanly.",
-      reviews: {
-        security: "clean",
-        code: "clean",
-        simplify: "clean",
-      },
-      logStatus: "clean",
-    }, `Build successful. Remaining potential issues:
-- ArrowInputSystem may still scan every arrow on input.
-- If the freeze continues, inspect Unity Profiler CPU Usage and Call Stack.
-DONE`)).toBe(true);
-  });
 
-  describe("buildCompletionReviewRequest build tools signal", () => {
-    it("includes UNAVAILABLE when buildToolsAvailable is false", () => {
-      const request = buildCompletionReviewRequest({
-        prompt: "Fix ArrowMovementSystem",
-        draft: "Fixed the movement logic.\nDONE",
-        state: createState({
-          stepResults: [
-            { toolName: "file_read", success: true, summary: "Read ArrowMovementSystem.cs", timestamp: Date.now() - 300 },
-            { toolName: "file_edit", success: true, summary: "Updated ArrowMovementSystem.cs", timestamp: Date.now() - 100 },
-          ],
-        }),
-        evidence: {
-          touchedFiles: ["Assets/Game/Systems/ArrowMovementSystem.cs"],
-          recentFailures: [],
-          recentSteps: ["[OK] file_edit: Updated ArrowMovementSystem.cs"],
-          totalStepCount: 2,
-          inspectionStepCount: 1,
-          verificationStepCount: 0,
-          mutationStepCount: 1,
-          recentLogIssues: [],
-          verificationState: {
-            pendingFiles: new Set(["Assets/Game/Systems/ArrowMovementSystem.cs"]),
-            touchedFiles: new Set(["Assets/Game/Systems/ArrowMovementSystem.cs"]),
-            hasCompilableChanges: true,
-            lastBuildOk: false,
-            lastVerificationAt: null,
-          },
-        },
-        buildToolsAvailable: false,
-      });
-
-      expect(request).toContain("Build/verification tools: UNAVAILABLE");
-      expect(request).toContain("approve based on code analysis evidence alone");
-    });
-
-    it("shows available when buildToolsAvailable is not explicitly false", () => {
-      const request = buildCompletionReviewRequest({
-        prompt: "Fix runtime issue",
-        draft: "Fixed.\nDONE",
-        state: createState(),
-        evidence: {
-          touchedFiles: ["src/runtime/reviewer.ts"],
-          recentFailures: [],
-          recentSteps: [],
-          totalStepCount: 1,
-          inspectionStepCount: 1,
-          verificationStepCount: 0,
-          mutationStepCount: 0,
-          recentLogIssues: [],
-          verificationState: {
-            pendingFiles: new Set(),
-            touchedFiles: new Set(["src/runtime/reviewer.ts"]),
-            hasCompilableChanges: false,
-            lastBuildOk: true,
-            lastVerificationAt: null,
-          },
-        },
-      });
-
-      expect(request).toContain("Build/verification tools: available");
-      expect(request).not.toContain("UNAVAILABLE");
-    });
-  });
 });

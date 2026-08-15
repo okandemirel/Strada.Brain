@@ -7,20 +7,9 @@ export type { VerificationState } from "./self-verification.js";
 export {
   buildAutonomyDeflectionGate,
   classifyAutonomyDrift,
-  COMPLETION_REVIEW_SYSTEM_PROMPT,
-  COMPLETION_REVIEW_SYNTHESIS_SYSTEM_PROMPT,
-  buildCompletionReviewGate,
-  buildCompletionReviewRequest,
-  buildCompletionReviewStageRequest,
-  buildCompletionReviewStageSystemPrompt,
-  buildCompletionReviewSynthesisRequest,
   collectCompletionReviewEvidence,
   draftLooksLikeInternalPlanArtifact,
   draftLooksLikeInternalToolingChecklist,
-  hasOpenReviewFindings,
-  mergeCompletionReviewDecisionWithStages,
-  parseCompletionReviewDecision,
-  parseCompletionReviewStageResult,
   shouldRunCompletionReview,
   userExplicitlyAskedForPlan,
 } from "./completion-review.js";
@@ -49,8 +38,6 @@ export type {
   ClarificationReviewEvidence,
 } from "./clarification-review.js";
 export {
-  buildVerifierPipelineReviewRequest,
-  finalizeVerifierPipelineReview,
   isTerminalFailureReport,
   planVerifierPipeline,
 } from "./verifier-pipeline.js";

@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { AgentPhase, type AgentState } from "../agent-state.js";
 import {
-  finalizeVerifierPipelineReview,
   planVerifierPipeline,
 } from "./verifier-pipeline.js";
 
@@ -154,7 +153,7 @@ describe("verifier-pipeline", () => {
     expect(plan.summary).toContain("No additional verifier review");
   });
 
-  it("forces completion review for read-only investigation work even when static verifier checks are clean", () => {
+  it("keeps the pipeline open for a draft that declares done and leaves its own questions open", () => {
     const plan = planVerifierPipeline({
       prompt: "Fix the runtime issue and keep going until the real issue is verified",
       draft: `Build successful. Strada.Core compatible fixes are complete.
@@ -184,106 +183,53 @@ DONE`,
       taskStartedAtMs: Date.now() - 1000,
     });
 
-    expect(plan.reviewRequired).toBe(true);
+    // The four LLM review stages used to decide this. What they were catching is
+    // a property of the text — a completion claim beside open investigations —
+    // and draftLeavesOpenInvestigations reads it without a model call.
     expect(plan.initialDecision).toBe("continue");
+    expect(plan.reviewRequired).toBe(false);
+    expect(plan.gate).toMatch(/investigations|unresolved/i);
   });
 
-  it("keeps the verifier pipeline open when completion review approves only a partial closure", () => {
+
+
+  it("asks for a replan when the same error keeps coming back", () => {
+    // "Replan" used to arrive only as an LLM review verdict. The deterministic
+    // equivalent was already here and unread: the same-error check exists to say
+    // the current approach is not working, which is what a replan is.
+    const sameFailure = {
+      toolName: "dotnet_build",
+      success: false,
+      summary: "error CS0103: the name 'Foo' does not exist in the current context",
+      timestamp: Date.now(),
+    };
     const plan = planVerifierPipeline({
-      prompt: "Analyze why the Unity editor freezes and keep going until the real issue is verified",
-      draft: "Build succeeded.\nDONE",
+      prompt: "Fix the build error",
+      draft: "Fixed it.\nDONE",
       state: createState({
         stepResults: [
-          { toolName: "file_read", success: true, summary: "Read ArrowInputSystem.cs", timestamp: Date.now() - 300 },
-          { toolName: "dotnet_build", success: true, summary: "Build passed", timestamp: Date.now() - 100 },
-        ],
-      }),
-      task: DEBUG_TASK,
-      verificationState: {
-        pendingFiles: new Set(),
-        touchedFiles: new Set(["src/runtime/arrow-input-system.ts"]),
-        hasCompilableChanges: false,
-        lastBuildOk: true,
-        lastVerificationAt: Date.now() - 100,
-      },
-      buildVerificationGate: null,
-      conformanceGate: null,
-      logEntries: [],
-      chatId: "chat-partial-closure",
-      taskStartedAtMs: Date.now() - 1000,
-    });
-
-    const result = finalizeVerifierPipelineReview(plan, {
-      decision: "approve",
-      summary: "The build fix is clean, but the runtime freeze still has open hypotheses.",
-      closureStatus: "partial",
-      openInvestigations: [
-        "ArrowInputSystem input path still needs profiler-backed verification.",
-      ],
-      findings: [],
-      requiredActions: [
-        "Continue with runtime-path inspection before declaring the task complete.",
-      ],
-      reviews: {
-        security: "clean",
-        code: "clean",
-        simplify: "clean",
-      },
-      logStatus: "clean",
-    });
-
-    expect(result.decision).toBe("continue");
-    expect(result.gate).toContain("[COMPLETION REVIEW REQUIRED]");
-    expect(result.gate).toContain("Open investigations:");
-  });
-
-  it("keeps the verifier pipeline open when the reviewer omits closure fields on a hedged success draft", () => {
-    const draft = `Build successful. Strada.Core compatible fixes are complete.
-
-Remaining potential issues:
-- ArrowInputSystem may still scan every arrow on input.
-- If the freeze continues, inspect Unity Profiler CPU Usage and Call Stack.
-DONE`;
-
-    const plan = planVerifierPipeline({
-      prompt: "Fix the runtime issue and keep going until the real issue is verified",
-      draft,
-      state: createState({
-        stepResults: [
-          { toolName: "file_read", success: true, summary: "Read ArrowInputSystem.cs", timestamp: Date.now() - 300 },
-          { toolName: "file_read", success: true, summary: "Read GameRenderer.cs", timestamp: Date.now() - 200 },
+          { ...sameFailure, timestamp: Date.now() - 300 },
+          { ...sameFailure, timestamp: Date.now() - 200 },
+          { ...sameFailure, timestamp: Date.now() - 100 },
         ],
       }),
       task: IMPLEMENTATION_TASK,
       verificationState: {
         pendingFiles: new Set(),
-        touchedFiles: new Set(),
+        touchedFiles: new Set(["Assets/A.cs"]),
         hasCompilableChanges: false,
         lastBuildOk: true,
-        lastVerificationAt: Date.now() - 100,
+        lastVerificationAt: Date.now() - 50,
       },
       buildVerificationGate: null,
       conformanceGate: null,
       logEntries: [],
-      chatId: "chat-hedged-approve",
+      chatId: "chat-same-error",
       taskStartedAtMs: Date.now() - 1000,
     });
 
-    const result = finalizeVerifierPipelineReview(plan, {
-      decision: "approve",
-      summary: "The compile fix is clean.",
-      findings: [],
-      requiredActions: [],
-      reviews: {
-        security: "clean",
-        code: "clean",
-        simplify: "clean",
-      },
-      logStatus: "clean",
-    }, draft);
-
-    expect(result.decision).toBe("continue");
-    expect(result.gate).toContain("[COMPLETION REVIEW REQUIRED]");
+    expect(plan.initialDecision).toBe("replan");
+    expect(plan.gate).toContain("REPLAN REQUIRED");
   });
 
   it("marks build check as not_applicable when buildToolsAvailable is false", () => {
@@ -372,48 +318,4 @@ DONE`;
     expect(plan.buildToolsAvailable).toBeUndefined();
   });
 
-  it("turns a completion review replan decision into a verifier replan gate", () => {
-    const plan = planVerifierPipeline({
-      prompt: "Fix the runtime issue",
-      draft: "All fixed.\nDONE",
-      state: createState({
-        stepResults: [
-          { toolName: "file_read", success: true, summary: "Read RuntimeReviewer.cs", timestamp: Date.now() - 500 },
-          { toolName: "file_edit", success: true, summary: "Updated RuntimeReviewer.cs", timestamp: Date.now() - 300 },
-        ],
-      }),
-      task: DEBUG_TASK,
-      verificationState: {
-        pendingFiles: new Set(),
-        touchedFiles: new Set(["src/runtime/reviewer.ts"]),
-        hasCompilableChanges: false,
-        lastBuildOk: true,
-        lastVerificationAt: Date.now() - 200,
-      },
-      buildVerificationGate: null,
-      conformanceGate: null,
-      logEntries: [],
-      chatId: "chat-review",
-      taskStartedAtMs: Date.now() - 1000,
-    });
-
-    expect(plan.reviewRequired).toBe(true);
-
-    const result = finalizeVerifierPipelineReview(plan, {
-      decision: "replan",
-      summary: "The current fix path still does not line up with the verified failing path.",
-      findings: ["The implementation changed code, but the failing path itself was never reproduced cleanly."],
-      requiredActions: ["Discard the current patch path and create a new plan around the real failing path."],
-      reviews: {
-        security: "clean",
-        code: "issues",
-        simplify: "clean",
-      },
-      logStatus: "clean",
-    });
-
-    expect(result.decision).toBe("replan");
-    expect(result.gate).toContain("[VERIFIER PIPELINE: REPLAN REQUIRED]");
-    expect(result.gate).toContain("Discard the current patch path");
-  });
 });

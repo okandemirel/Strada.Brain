@@ -36,7 +36,6 @@ import { buildResultProjection } from "./synthesis.js";
 import type { ResultProjectionParams, AgentRunResultProjection } from "../runner/orchestrator-port.js";
 import {
   runVisibilityReview,
-  runCompletionReviewStages,
   reviewShellCommandWithProvider,
 } from "./review.js";
 import {
@@ -154,9 +153,6 @@ export class AgentEngine {
     return runVisibilityReview(this.deps, params);
   }
 
-  runCompletionReviewStages(params: Parameters<typeof runCompletionReviewStages>[1]): ReturnType<typeof runCompletionReviewStages> {
-    return runCompletionReviewStages(this.deps, params);
-  }
 
   reviewShellCommandWithProvider(
     ...args: Parameters<typeof reviewShellCommandWithProvider> extends [unknown, ...infer R] ? R : never

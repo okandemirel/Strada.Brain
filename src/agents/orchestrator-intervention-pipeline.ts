@@ -34,7 +34,6 @@ import {
   type ClarificationIntervention,
 } from "./orchestrator-clarification.js";
 import type {
-  CompletionReviewStageResult,
 } from "./autonomy/completion-review.js";
 import type {
   LoopRecoveryBrief,
@@ -53,7 +52,6 @@ import type {
   WorkerToolTrace,
 } from "./supervisor/supervisor-types.js";
 import { planVerifierPipeline } from "./autonomy/verifier-pipeline.js";
-import { parseCompletionReviewDecision } from "./autonomy/completion-review.js";
 import {
   LOOP_RECOVERY_REVIEW_SYSTEM_PROMPT,
   buildLoopRecoveryReviewRequest,
@@ -67,7 +65,6 @@ import {
   shouldRunClarificationReview,
   decideInteractionBoundary,
   isTerminalFailureReport,
-  finalizeVerifierPipelineReview,
   buildVisibilityReviewGate,
   sanitizeVisibilityReviewDecision,
   shouldRunVisibilityReview,
@@ -90,7 +87,6 @@ import {
 } from "./autonomy/progress-assessment.js";
 import { shouldDeferRawBoundaryForDirectTarget } from "./prompt-targets.js";
 import type { Session } from "./orchestrator-session-manager.js";
-import { toPhaseOutcomeStatus as toPhaseOutcomeStatusModel } from "./orchestrator-phase-telemetry.js";
 import { getLogger, type LogEntry } from "../utils/logger.js";
 import { sanitizeSecrets } from "../security/secret-sanitizer.js";
 import { randomUUID } from "node:crypto";
@@ -211,20 +207,6 @@ export interface InterventionDeps {
     systemPrompt: string;
     usageHandler?: (usage: TaskUsageEvent) => void;
   }) => Promise<string>;
-  readonly runCompletionReviewStages: (params: {
-    chatId: string;
-    identityKey: string;
-    prompt: string;
-    state: AgentState;
-    draft: string;
-    plan: ReturnType<typeof planVerifierPipeline>;
-    strategy: SupervisorExecutionStrategy;
-    usageHandler?: (usage: TaskUsageEvent) => void;
-  }) => Promise<{
-    decision: ReturnType<typeof parseCompletionReviewDecision>;
-    stageResults: CompletionReviewStageResult[];
-    usage?: ProviderResponse["usage"];
-  }>;
   readonly runVisibilityReview: (params: {
     chatId: string;
     identityKey: string;
@@ -1425,118 +1407,34 @@ export async function resolveVerifierIntervention(
     }
   };
 
-  if (!plan.reviewRequired) {
-    if (plan.initialDecision === "approve") {
-      const visibilityGate = await runVisibilityReviewGate();
-      if (visibilityGate) {
-        return visibilityGate;
-      }
+  // The four LLM review stages that used to run here — code, simplify,
+  // security, then a synthesizer — were shown file paths, the draft prose and
+  // tool summaries truncated to 200 characters, never a line of code. The
+  // deterministic pipeline decides on its own now; planVerifierPipeline no
+  // longer asks for a review it cannot usefully get.
+  if (plan.initialDecision === "approve") {
+    const visibilityGate = await runVisibilityReviewGate();
+    if (visibilityGate) {
+      return visibilityGate;
     }
-    deps.recordRuntimeArtifactEvaluation({
-      chatId: params.chatId,
-      taskRunId: deps.getTaskRunId(),
-      decision: plan.initialDecision,
-      summary: plan.summary,
-      failureReason: params.draft,
-    });
-    return {
-      kind: toVerifierInterventionKind(plan.initialDecision),
-      gate: plan.gate,
-      result: {
-        decision: plan.initialDecision,
-        gate: plan.gate,
-        summary: plan.summary,
-        checks: plan.checks,
-        evidence: plan.evidence,
-      },
-    };
   }
-
-  try {
-    const stagedReview = await deps.runCompletionReviewStages({
-      chatId: params.chatId,
-      identityKey: params.identityKey,
-      prompt: params.prompt,
-      state: params.state,
-      draft: params.draft ?? "",
-      plan,
-      strategy: params.strategy,
-      usageHandler: params.usageHandler,
-    });
-    const result = finalizeVerifierPipelineReview(
-      plan,
-      stagedReview.decision,
-      params.draft,
-      stagedReview.stageResults,
-    );
-    deps.recordPhaseOutcome({
-      chatId: params.chatId,
-      identityKey: params.identityKey,
-      assignment: params.strategy.reviewer,
-      phase: "completion-review",
-      source: "completion-review",
-      status: toPhaseOutcomeStatusModel(result.decision),
-      task: params.strategy.task,
-      reason: result.summary,
-      telemetry: deps.buildPhaseOutcomeTelemetry({
-        usage: stagedReview.usage,
-        verifierDecision: result.decision,
-        state: params.state,
-        failureReason: params.draft,
-      }),
-    });
-    if (result.decision === "approve") {
-      const visibilityGate = await runVisibilityReviewGate();
-      if (visibilityGate) {
-        return visibilityGate;
-      }
-    }
-    deps.recordRuntimeArtifactEvaluation({
-      chatId: params.chatId,
-      taskRunId: deps.getTaskRunId(),
-      decision: result.decision,
-      summary: result.summary,
-      failureReason: params.draft,
-    });
-    return {
-      kind: toVerifierInterventionKind(result.decision),
-      gate: result.gate,
-      result,
-    };
-  } catch (error) {
-    getLogger().warn("Completion review provider failed", {
-      chatId: params.chatId,
-      provider: params.strategy.reviewer.providerName,
-      error: error instanceof Error ? error.message : String(error),
-    });
-    deps.recordPhaseOutcome({
-      chatId: params.chatId,
-      identityKey: params.identityKey,
-      assignment: params.strategy.reviewer,
-      phase: "completion-review",
-      source: "completion-review",
-      status: "failed",
-      task: params.strategy.task,
-      reason: "Completion review provider failed; falling back to conservative verifier gate.",
-      telemetry: deps.buildPhaseOutcomeTelemetry({
-        state: params.state,
-        failureReason: params.draft,
-      }),
-    });
-  }
-
-  const fallbackResult = finalizeVerifierPipelineReview(plan, null, params.draft);
   deps.recordRuntimeArtifactEvaluation({
     chatId: params.chatId,
     taskRunId: deps.getTaskRunId(),
-    decision: fallbackResult.decision,
-    summary: fallbackResult.summary,
+    decision: plan.initialDecision,
+    summary: plan.summary,
     failureReason: params.draft,
   });
   return {
-    kind: toVerifierInterventionKind(fallbackResult.decision),
-    gate: fallbackResult.gate,
-    result: fallbackResult,
+    kind: toVerifierInterventionKind(plan.initialDecision),
+    gate: plan.gate,
+    result: {
+      decision: plan.initialDecision,
+      gate: plan.gate,
+      summary: plan.summary,
+      checks: plan.checks,
+      evidence: plan.evidence,
+    },
   };
 }
 
