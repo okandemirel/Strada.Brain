@@ -34,9 +34,10 @@ describe("ModuleCreateTool", () => {
     expect(result.isError).toBeUndefined();
     expect(result.content).toContain("Module 'Combat' created");
 
-    // root + Scripts + 4 Scripts subdirs + Tests/Runtime + Tests/Editor.
-    // Tests are on by default: they are part of a module, not an extra. + Scripts + 4 subdirs under Scripts)
-    expect(mkdir).toHaveBeenCalledTimes(8);
+    // root + Interfaces + Services + Systems + Components + Tests/Runtime +
+    // Tests/Editor. Component folders sit at the module root — no Scripts layer.
+    // Tests are on by default: they are part of a module, not an extra.
+    expect(mkdir).toHaveBeenCalledTimes(7);
 
     // asmdef + ModuleConfig + System + Interface + Impl, plus the two default
     // test assemblies = 5 files
@@ -147,6 +148,8 @@ describe("ModuleCreateTool", () => {
     expect(mkdirCalls.some((d) => d.endsWith("Systems"))).toBe(true);
     expect(mkdirCalls.some((d) => d.endsWith("Services"))).toBe(true);
     expect(mkdirCalls.some((d) => d.endsWith("Components"))).toBe(true);
-    expect(mkdirCalls.some((d) => d.endsWith("Mediators"))).toBe(true);
+    // Mediators was never a folder the framework declared.
+    expect(mkdirCalls.some((d) => d.endsWith("Mediators"))).toBe(false);
+    expect(mkdirCalls.some((d) => d.endsWith("Interfaces"))).toBe(true);
   });
 });
