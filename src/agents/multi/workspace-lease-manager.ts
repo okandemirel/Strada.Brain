@@ -476,7 +476,31 @@ export class WorkspaceLeaseManager {
 
     const result = await this.commandRunner({
       command: "git",
-      args: ["-C", workspacePath, "submodule", "update", "--init", "--recursive"],
+      args: [
+        "-C",
+        workspacePath,
+        // Strada.Core and Strada.MCP are developed beside the game, so the
+        // supported setup wires them as submodules on local paths. Since the
+        // CVE-2022-39253 mitigation git refuses to clone those over the `file`
+        // transport, and it ignores the setting when it comes from repository
+        // config — there is nothing a user can put in their own project to
+        // allow it. It has to be given on the command line.
+        //
+        // Measured: with the submodules committed (so syncUncommittedState has
+        // nothing to copy in), the clone was the only path left and it failed
+        // with "transport 'file' not allowed". The agent got an empty
+        // Packages/Submodules and wrote modules against a framework that was
+        // not there.
+        //
+        // Scope: this one internal operation, on the project the user
+        // configured and the agent is already about to read and write.
+        "-c",
+        "protocol.file.allow=always",
+        "submodule",
+        "update",
+        "--init",
+        "--recursive",
+      ],
       cwd: workspacePath,
       timeoutMs: this.submoduleTimeoutMs,
     });
