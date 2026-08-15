@@ -10,6 +10,7 @@ import type {
 // FallbackChain's 90s first-response timer on the blocking chat() path (533b1e9).
 import { streamOrChatText } from "./providers/provider.interface.js";
 import { parseBatchOperations, type BatchOperation } from "./autonomy/batch-write-gate.js";
+import { warrantsSupervisor } from "../goals/tree-shape.js";
 import { ProviderHealthRegistry } from "./providers/provider-health.js";
 import { AgentEngine } from "../agent-core/engine/agent-engine.js";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -1368,7 +1369,13 @@ export class Orchestrator {
     }
 
     const classification = this.taskClassifier?.classify(coarsePlanningPrompt);
-    const shouldForceSupervisor = Boolean(params.goalTree);
+    // A goal tree used to force the supervisor unconditionally. The decomposer
+    // is told to return a single-node tree when a task does not need splitting,
+    // and it does — but nothing read that answer, so a one-goal tree still
+    // bought capability triage, a node runner and a cross-provider verification
+    // call, to run one agent loop. Read it: coordinate when there is something
+    // to coordinate.
+    const shouldForceSupervisor = warrantsSupervisor(params.goalTree);
     // GoalDecomposer.shouldDecompose is a length check — `prompt.length >= 60`,
     // and its own docstring calls it "a MINIMAL pre-filter: it only blocks
     // obviously trivial messages". It is a VETO, not an activator.
