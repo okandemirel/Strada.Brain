@@ -15,6 +15,21 @@ import {
   type ReflectionDecision,
 } from "./orchestrator-runtime-utils.js";
 import { shouldForceReplan } from "./failure-classifier.js";
+import { MUTATION_TOOLS, isVerificationToolName } from "./autonomy/constants.js";
+import type { StepErrorCategory } from "./orchestrator-runtime-utils.js";
+
+/**
+ * Failures worth a reflection round-trip on their first occurrence, because the
+ * agent cannot simply carry on past them.
+ */
+const BLOCKING_ERROR_CATEGORIES: ReadonlySet<StepErrorCategory> = new Set([
+  "build_failure",
+  "test_failure",
+  "validation",
+  "auth",
+  // A rejected plan stops the agent outright: it must revise before it writes.
+  "plan_rejected",
+]);
 import {
   transitionToVerifierReplan,
 } from "./orchestrator-phase-telemetry.js";
@@ -291,12 +306,34 @@ export function recordStepResultsAndCheckReflection(
     consecutiveErrors,
   };
 
-  const hasErrors = toolResults.some((tr) => tr.isError);
   const failedSteps = agentState.stepResults.filter((s) => !s.success);
+
+  // Reflection costs a model round-trip, and on a measured run those round-trips
+  // were where the time went: 33 minutes, 131 model calls, 62 tool executions,
+  // 99% of the wall clock spent in the model and 1% in tools.
+  //
+  // A single failed tool call does not need one. The error is already in the
+  // tool result the model reads on its very next turn, and most of the eleven
+  // failures in that run were one-offs the agent recovered from immediately.
+  // Reflect when a failure persists, or when it is the blocking kind.
+  const persistentFailure = consecutiveErrors >= 2;
+  const blockingFailure = newSteps.some(
+    (step) => !step.success && step.errorCategory && BLOCKING_ERROR_CATEGORIES.has(step.errorCategory),
+  );
+
+  // The interval counted every step alike, so three directory listings bought
+  // the same reflection as three file writes — and lookups were the large
+  // majority. Count only steps that changed something or verified something.
+  // The same two predicates autonomy's behavioural snapshot counts with, so the
+  // cadence and the progress assessment agree on what a step of progress is.
+  const consequentialSteps = agentState.stepResults.filter((step) =>
+    MUTATION_TOOLS.has(step.toolName) || isVerificationToolName(step.toolName),
+  ).length;
+
   const shouldReflect =
-    hasErrors ||
-    (agentState.stepResults.length > 0 &&
-      agentState.stepResults.length % reflectInterval === 0) ||
+    persistentFailure ||
+    blockingFailure ||
+    (consequentialSteps > 0 && consequentialSteps % reflectInterval === 0) ||
     shouldForceReplan(failedSteps);
 
   if (shouldReflect && agentState.phase === AgentPhase.EXECUTING) {

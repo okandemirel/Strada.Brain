@@ -29,6 +29,7 @@ export type StepErrorCategory =
   | "validation"
   | "auth"
   | "abort"
+  | "plan_rejected"
   | "unknown";
 
 const TIMEOUT_RE = /\btimed?\s*out\b|\bTimeout\b|\bDeadlineExceeded\b|stalled after \d+ms|operation was aborted/i;
@@ -37,6 +38,8 @@ const TOOL_UNAVAIL_RE = /\bunavailable\b|bridge.*(disconnect|unavailable)|Tool e
 export const BUILD_FAILURE_RE = /\b(?:build|compile|typecheck|lint)\b.*\b(?:fail|error)\w*\b|\b(?:fail|error)\w*\b.*\b(?:build|compile|typecheck|lint)\b|\bCS\d{4}\b|\bMSB\d{4}\b/i;
 export const TEST_FAILURE_RE = /\btest\w*.*fail\w*\b|\bassert\w*.*fail\w*\b|\bexpect\b.*\breceived\b/i;
 const VALIDATION_RE = /\bvalidation\b|\bschema\b.*\berror\b|\bInvalid argument\b/i;
+/** A rejected plan blocks the agent: it must revise before writing anything. */
+const PLAN_REJECTED_RE = /\bplan rejected\b|\bplan approval is still required\b/i;
 const AUTH_RE = /\b401\b|\b403\b|\bunauthorized\b|\bforbidden\b/i;
 
 /** Tool unavailability or generic execution failures — not blocking because the agent cannot fix them.
@@ -64,6 +67,7 @@ export function classifyStepErrorCategory(summary: string): StepErrorCategory {
   if (TEST_FAILURE_RE.test(summary)) return "test_failure";
   if (VALIDATION_RE.test(summary)) return "validation";
   if (AUTH_RE.test(summary)) return "auth";
+  if (PLAN_REJECTED_RE.test(summary)) return "plan_rejected";
   return "unknown";
 }
 
@@ -156,7 +160,7 @@ function isBlockingStepFailure(step: AgentState["stepResults"][number]): boolean
     return true;
   }
 
-  const BLOCKING_CATEGORIES: ReadonlySet<StepErrorCategory> = new Set(["build_failure", "test_failure", "validation", "auth"]);
+  const BLOCKING_CATEGORIES: ReadonlySet<StepErrorCategory> = new Set(["build_failure", "test_failure", "validation", "auth", "plan_rejected"]);
   if (step.errorCategory && BLOCKING_CATEGORIES.has(step.errorCategory)) {
     return true;
   }
