@@ -255,6 +255,19 @@ import type { AgentEvent } from "../agent-core/events/agent-event.js";
 const SELF_IMPROVEMENT_TOOLS: ReadonlySet<string> = new Set([
   "create_skill",
 ]);
+
+/**
+ * Phases in which a write may run.
+ *
+ * Mirrors buildWorkerToolDefinitions, which removes write tools from what the
+ * model is offered in the other three. Keeping both in one place is what stops
+ * the offer and the gate from drifting apart again.
+ */
+const PHASES_ALLOWING_WRITES: ReadonlySet<AgentPhase> = new Set([
+  AgentPhase.EXECUTING,
+  AgentPhase.COMPLETE,
+  AgentPhase.FAILED,
+]);
 const TYPING_INTERVAL_MS = 4000;
 
 // ─── Agent Core v2 — OrchestratorPort run-context (Phase 2d-2) ───────────────────────────────
@@ -4098,6 +4111,33 @@ export class Orchestrator {
     },
   ): Promise<ToolResult> {
     const { chatId, mode, options, toolContext, goalCtx, logger } = ctx;
+
+    // The phase's write restriction used to live only in
+    // buildWorkerToolDefinitions — that is, in what the model was SHOWN. A write
+    // named in a response anyway went straight to the tool, because the rule was
+    // a property of the menu rather than of the kitchen. Same shape as the
+    // batch_execute hole: a restriction enforced on one path, and everything
+    // arriving by another path exempt by construction.
+    //
+    // Applied only where the phase is known, so callers that attach no agent
+    // state keep their behaviour; this tightens a known case rather than
+    // guessing at unknown ones.
+    const phase = options.agentState?.phase;
+    if (
+      phase !== undefined &&
+      !PHASES_ALLOWING_WRITES.has(phase) &&
+      this.isWriteOperation(tc.name) &&
+      !SELF_IMPROVEMENT_TOOLS.has(tc.name)
+    ) {
+      return {
+        toolCallId: tc.id,
+        content:
+          `Write operations are not available while the agent is ${phase}. ` +
+          `Finish planning or reflecting first; writes run in the executing phase.`,
+        isError: true,
+      };
+    }
+
     let activeToolCall = tc;
     const interactiveResolution = await this.resolveInteractiveToolCall(
       chatId,
