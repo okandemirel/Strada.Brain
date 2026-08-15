@@ -74,8 +74,6 @@ export interface ToolContext {
   lookupTool?: (toolName: string) => IToolBase | undefined;
   /** Called after a skill is created on disk — triggers hot-reload in current session. */
   onSkillCreated?: (skillPath: string) => Promise<void>;
-  /** Per-orchestrator DynamicToolFactory instance (avoids module-level singleton leaks). */
-  dynamicToolFactory?: unknown;
 
   // ── Codebase Memory Vault (optional; provided when vault.enabled) ─────
 

@@ -34,9 +34,8 @@ const WRITE_TOOLS: ReadonlySet<string> = new Set([
   "dotnet_add_package",
   "dotnet_remove_package",
   "dotnet_new",
-  // NOTE: create_tool and remove_dynamic_tool are runtime-only and reversible.
-  // They use internal guards instead. create_skill writes to disk but also
-  // uses its own read-only check for a better error message.
+  // NOTE: create_skill writes to disk but uses its own read-only check, so it
+  // can give a better error message than this list would.
 ]);
 
 const READ_TOOLS: ReadonlySet<string> = new Set([
