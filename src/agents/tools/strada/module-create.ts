@@ -8,7 +8,7 @@ export class ModuleCreateTool implements ITool {
   readonly name = "strada_create_module";
   readonly description =
     "Create a new Strada.Core module with all necessary files following Strada conventions. " +
-    "Generates: ModuleConfig, asmdef, folder structure (Systems/, Services/, Components/, Mediators/, and optional Controllers/, Events/, Signals/, Models/, Views/, Data/).";
+    "Generates: ModuleConfig, asmdef, and the module folder structure the framework declares — Scripts/{Interfaces,Services,Systems,Components} plus Tests/Runtime and Tests/Editor, with optional Scripts/{Controllers,Commands,Events,Signals,Models,Views,Data} and an Editor/ folder.";
 
   readonly inputSchema = {
     type: "object",
@@ -58,6 +58,14 @@ export class ModuleCreateTool implements ITool {
       include_data: {
         type: "boolean",
         description: "Include a Data/ folder. Default: false",
+      },
+      include_commands: {
+        type: "boolean",
+        description: "Include a Scripts/Commands/ folder. Default: false",
+      },
+      include_editor: {
+        type: "boolean",
+        description: "Include an Editor/ folder at the module root for edit-mode code. Default: false",
       },
       include_tests: {
         type: "boolean",
@@ -119,13 +127,16 @@ export class ModuleCreateTool implements ITool {
 
     try {
       // Create directory structure
+      // These mirror Strada.Core's DirectoryStructureConfig exactly, so a module
+      // made by the Unity generator and one made here are the same module.
+      // Mediators is deliberately absent: the framework never declared it.
       const dirs = [
         fullBase,
         join(fullBase, "Scripts"),
-        join(fullBase, "Scripts", "Systems"),
+        join(fullBase, "Scripts", "Interfaces"),
         join(fullBase, "Scripts", "Services"),
+        join(fullBase, "Scripts", "Systems"),
         join(fullBase, "Scripts", "Components"),
-        join(fullBase, "Scripts", "Mediators"),
       ];
 
       // Conditional directories
@@ -143,12 +154,26 @@ export class ModuleCreateTool implements ITool {
       // agent had no reason to pass a flag it was never told it needed.
       const includeTests = input["include_tests"] !== false;
 
+      const includeCommands = input["include_commands"] === true;
+      const includeEditor = input["include_editor"] === true;
+
       if (includeController) dirs.push(join(fullBase, "Scripts", "Controllers"));
+      if (includeCommands) dirs.push(join(fullBase, "Scripts", "Commands"));
       if (includeEvents) dirs.push(join(fullBase, "Scripts", "Events"));
       if (includeSignals) dirs.push(join(fullBase, "Scripts", "Signals"));
       if (includeModel) dirs.push(join(fullBase, "Scripts", "Models"));
       if (includeView) dirs.push(join(fullBase, "Scripts", "Views"));
-      if (includeData) dirs.push(join(fullBase, "Scripts", "Data"));
+      // Two folders, not one: the framework declares ConfigData and ValueObject
+      // as separate component types.
+      if (includeData) {
+        dirs.push(join(fullBase, "Scripts", "Data", "UnityObjects"));
+        dirs.push(join(fullBase, "Scripts", "Data", "ValueObjects"));
+      }
+      // Editor-only code sits at the module root, beside Scripts/ and Tests/ —
+      // that is where the framework declares it, and it needs its own assembly
+      // or edit-mode code lands in the runtime one and the module stops
+      // building for a player.
+      if (includeEditor) dirs.push(join(fullBase, "Editor"));
       // Tests/Runtime and Tests/Editor, not a flat Tests/ — the framework's own
       // DirectoryStructureConfig declares them as distinct component types
       // (RuntimeTests, EditorTests) and Strada.Core follows its own rule:
@@ -275,9 +300,9 @@ export class ModuleCreateTool implements ITool {
         includeService
           ? `      │   ├── I${name}Service.cs\n      │   └── ${name}Service.cs`
           : `      │   └── (empty)`,
-        `      ├── Components/`,
-        `      │   └── (empty)`,
-        `      └── Mediators/`,
+        `      ├── Interfaces/`,
+        includeService ? `      │   └── I${name}Service.cs` : `      │   └── (empty)`,
+        `      └── Components/`,
         `          └── (empty)`,
         "",
         `Next steps:`,
