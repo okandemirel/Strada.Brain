@@ -89,9 +89,27 @@ describe("a generated module's folder layout", () => {
     expect(existsSync(join(base, "Scripts", "Art"))).toBe(false);
   });
 
-  it("creates no asset folders unless they were asked for", async () => {
+  it("creates the declared asset folders without being asked", async () => {
+    // The agent should not have to know these exist. Measured: while they had
+    // to be named, no generated module ever got one.
     const { base } = await create();
+    for (const folder of ["Prefabs", "Resources", "Settings", "Scriptables"]) {
+      expect(existsSync(join(base, folder)), `${folder} missing`).toBe(true);
+    }
+    expect(existsSync(join(base, "Art", "Textures"))).toBe(true);
+  });
+
+  it("creates none of them when explicitly given an empty list", async () => {
+    const { base } = await create({ asset_folders: [] });
     expect(existsSync(join(base, "Prefabs"))).toBe(false);
+    expect(existsSync(join(base, "Resources"))).toBe(false);
+    // The code half of the module is unaffected.
+    expect(existsSync(join(base, "Scripts", "Services"))).toBe(true);
+  });
+
+  it("creates only what was named when a list is given", async () => {
+    const { base } = await create({ asset_folders: ["Prefabs"] });
+    expect(existsSync(join(base, "Prefabs"))).toBe(true);
     expect(existsSync(join(base, "Resources"))).toBe(false);
   });
 

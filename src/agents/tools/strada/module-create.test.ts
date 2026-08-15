@@ -46,10 +46,11 @@ describe("ModuleCreateTool", () => {
     expect(result.isError).toBeUndefined();
     expect(result.content).toContain("Module 'Combat' created");
 
-    // root + Scripts + Scripts/{Interfaces,Services,Systems,Components} +
-    // Tests/Runtime + Tests/Editor. Tests are on by default: they are part of a
-    // module, not an extra.
-    expect(mkdir).toHaveBeenCalledTimes(8);
+    // The module root, plus every folder Strada.Core's declaration gives this
+    // component selection: Scripts and its four code folders, Tests/Runtime and
+    // Tests/Editor, and the eleven authored-asset folders a module gets by
+    // default. Counting them here is what catches the list silently changing.
+    expect(mkdir).toHaveBeenCalledTimes(19);
 
     // asmdef + ModuleConfig + System + Interface + Impl, plus the two default
     // test assemblies = 5 files

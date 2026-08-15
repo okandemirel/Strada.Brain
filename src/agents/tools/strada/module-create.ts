@@ -178,11 +178,15 @@ export class ModuleCreateTool implements ITool {
       if (includeEditor) components.add("EditorScripts");
       if (includeTests) components.add("RuntimeTests").add("EditorTests");
 
+      const declaredOptional = optionalFolderPaths(declared);
+      // Omitted means all of them. A module gets the authored-asset folders the
+      // framework declares without the agent having to know they exist — asking
+      // it to name them is how they went unmade. Pass an explicit list to narrow
+      // it, or an empty list for a module that holds no assets.
       const rawAssetFolders = input["asset_folders"];
       const assetFolders = Array.isArray(rawAssetFolders)
         ? rawAssetFolders.map((f) => String(f))
-        : [];
-      const declaredOptional = optionalFolderPaths(declared);
+        : declaredOptional;
       const unknown = assetFolders.filter(
         (f) => !declaredOptional.some((d) => d === f.replace(/\/+$/, "") || d.startsWith(`${f.replace(/\/+$/, "")}/`)),
       );
