@@ -1,6 +1,6 @@
 import { Orchestrator, createStreamingProgressTimeout } from "./orchestrator.js";
 import Database from "better-sqlite3";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ProviderResponse } from "./providers/provider.interface.js";
@@ -320,6 +320,16 @@ async function runWorkerTask(
 }
 
 describe("Orchestrator", () => {
+  // The shared /tmp/test-project fixture stands for a Unity project that has
+  // been opened at least once, so it carries the .sln the Editor generates.
+  // buildWorkerToolDefinitions withholds dotnet_build and dotnet_test from a
+  // project that has none — see orchestrator-tool-offer.test.ts — and the
+  // scenarios below drive those tools.
+  beforeAll(() => {
+    mkdirSync("/tmp/test-project", { recursive: true });
+    writeFileSync("/tmp/test-project/TestProject.sln", "");
+  });
+
   let mockProvider: ReturnType<typeof createMockProvider>;
   let mockChannel: ReturnType<typeof createMockChannel>;
   let readTool: ReturnType<typeof createMockTool>;

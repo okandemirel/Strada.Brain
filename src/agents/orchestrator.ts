@@ -11,6 +11,7 @@ import type {
 import { streamOrChatText } from "./providers/provider.interface.js";
 import { parseBatchOperations, type BatchOperation } from "./autonomy/batch-write-gate.js";
 import { warrantsSupervisor } from "../goals/tree-shape.js";
+import { DotnetProjectPresence, DOTNET_PROJECT_TOOLS } from "./dotnet-project-presence.js";
 import { ProviderHealthRegistry } from "./providers/provider-health.js";
 import { AgentEngine } from "../agent-core/engine/agent-engine.js";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -724,6 +725,18 @@ export class Orchestrator {
    *  Built alongside the registry by bootstrap; absent/unmapped ⇒ no revive (→ BLOCKED on down). */
   private readonly capabilityAdapters?: ReadonlyMap<string, CapabilityAdapter>;
   private readonly sessionManager: SessionManager;
+  /**
+   * Per-run answer to "is there anything for dotnet to build".
+   *
+   * Lazy: projectPath is assigned in the constructor body, after field
+   * initialisers run.
+   */
+  private dotnetProjectPresence: DotnetProjectPresence | null = null;
+  private get dotnetProject(): DotnetProjectPresence {
+    this.dotnetProjectPresence ??= new DotnetProjectPresence(this.projectPath);
+    return this.dotnetProjectPresence;
+  }
+
   private systemPrompt: string;
   private readonly getIdentityState?: () => IdentityState;
   private readonly crashRecoveryContext?: CrashRecoveryContext;
@@ -2456,6 +2469,15 @@ export class Orchestrator {
         return false;
       }
       if (metadata?.available === false) {
+        return false;
+      }
+      // The dotnet tools resolve availability once, at registration, from
+      // whether the CLI is on PATH. That is half the precondition: a Unity
+      // project has no .sln or .csproj until the Editor has generated them, and
+      // `dotnet build` without one answers MSB1003. Measured across two runs —
+      // three attempts, three MSB1003s — while unity_verify_change, which
+      // compiles headlessly with no Editor, sat in the same block unused.
+      if (DOTNET_PROJECT_TOOLS.has(definition.name) && !this.dotnetProject.check()) {
         return false;
       }
       if (!allowWriteTools && metadata?.readOnly === false) {
