@@ -573,6 +573,44 @@ export class V2AgentRunner implements AgentRunner {
               responseText,
               chatId: request.chatId,
             });
+            // A planning turn's tool calls reached handlePlanPhase as a COUNT and
+            // went no further: the branch continued, and whatever the model asked
+            // to read was discarded. A planner that opens a file to decide how to
+            // plan had that read thrown away and had to ask for it again on the
+            // next turn — one guaranteed round-trip per run that cannot do work.
+            //
+            // Safe to run because the phase's write restriction is enforced at
+            // the gate now and not only in what the model is offered: a write
+            // named here is refused there, rather than executed in the phase that
+            // exists to prevent it.
+            //
+            // The phase the plan transition just produced is kept:
+            // recordStepResultsAndCheckReflection can hand back a REFLECTING
+            // state, and letting that overwrite the move to EXECUTING would
+            // strand the run in the phase it just left.
+            if (outcome.response.toolCalls.length > 0) {
+              for (const tc of outcome.response.toolCalls) {
+                emit({ type: "tool.started", toolName: tc.name, toolCallId: tc.id });
+              }
+              const planned = await this.executeTools(setup, outcome.response, state);
+              for (const tr of planned.trace) {
+                toolTrace.push({ toolName: tr.toolName, toolCallId: tr.toolCallId, success: tr.success });
+                for (const f of tr.touchedFiles ?? []) touchedFiles.add(f);
+                emit({
+                  type: "tool.finished",
+                  toolName: tr.toolName,
+                  toolCallId: tr.toolCallId,
+                  success: tr.success,
+                  errorCategory: tr.errorCategory,
+                  touchedFiles: tr.touchedFiles,
+                });
+              }
+              if (planned.progressSignal) emit({ type: "narrative", signal: planned.progressSignal });
+              if (planned.advancedState) {
+                state = { ...planned.advancedState, phase: state.phase };
+              }
+            }
+
             const pc = phaseChangedEvent(prevPhase, state.phase);
             if (pc) emit(pc);
             emit({ type: "step.completed", step: stepNo, phase: state.phase });

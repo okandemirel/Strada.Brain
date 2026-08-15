@@ -259,6 +259,36 @@ describe("V2AgentRunner — REAL port + REAL gateway (provider.chat scripted)", 
     expect(phaseEvents.length).toBeGreaterThanOrEqual(1); // at least PLANNING→EXECUTING
   });
 
+  it("B2: a tool call made during PLANNING is executed, not discarded", async () => {
+    // The PLANNING branch passed `toolCallCount: response.toolCalls.length` to
+    // handlePlanPhase and then continued — the calls themselves were read as a
+    // number and thrown away. A planner that opens a file to decide how to plan
+    // had that read discarded and had to ask again on the next turn: one
+    // guaranteed round-trip per run that cannot do work.
+    //
+    // Safe to run because the phase's write restriction is enforced at the gate
+    // (d27e4eb4), not just in what the model is offered — a write named here is
+    // refused there rather than executed in the phase that exists to prevent it.
+    const provider = mkScriptedProvider();
+    provider.chat
+      .mockResolvedValueOnce(
+        resp({
+          text: "before planning I need to look at the file",
+          stopReason: "tool_use",
+          toolCalls: [{ id: "tc-plan-read", name: "file_read", input: { path: "a.cs" } }],
+        }),
+      )
+      .mockResolvedValue(resp({ text: "all done", stopReason: "end_turn" }));
+    const h = buildHarness(provider);
+    const readTool = h.tools.find((t) => t.name === "file_read")!;
+    const io = mkIO("worker");
+
+    const result = await drive(h.clock, h.runner.run(mkRequest(), io));
+
+    expect(readTool.execute, "the planning turn's tool call was discarded").toHaveBeenCalledTimes(1);
+    expect(result.toolTrace.map((t) => t.toolName)).toContain("file_read");
+  });
+
   it("C: interactive renders to the channel (real divergence)", async () => {
     const provider = mkScriptedProvider();
     provider.chat
