@@ -124,7 +124,19 @@ export class ShellExecTool implements ITool {
         isError: true,
       };
     }
-    const command = rawCommand.trim();
+    const requested = rawCommand.trim();
+
+    // The command string never passed through path-guard: only the working
+    // directory did, so an absolute path written inside the command walks past
+    // every check. Under a workspace lease the task text routinely carries the
+    // user's real project path, and the agent uses it — measured twice, and
+    // unchanged by saying so in the preamble. That path is not a different
+    // place; it is a stale name for the tree the agent is working in, so point
+    // it at the workspace and say so in the result.
+    const source = context.sourceProjectPath;
+    const redirected =
+      source && source !== context.projectPath && requested.includes(source);
+    const command = redirected ? requested.split(source).join(context.projectPath) : requested;
     if (!command) {
       return {
         content: "Error: 'command' is required (must be a non-empty string)",
@@ -190,7 +202,11 @@ export class ShellExecTool implements ITool {
         env: childEnv,
       });
       return {
-        content: formatResult(command, result),
+        content: redirected
+          ? `Note: this command named the project's source path, which does not hold your work. ` +
+            `It was redirected to your workspace at ${context.projectPath} — use that path directly.\n\n` +
+            formatResult(command, result)
+          : formatResult(command, result),
         metadata: {
           exitCode: result.exitCode,
           timedOut: result.timedOut,
