@@ -1,6 +1,12 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { validatePath, isValidCSharpIdentifier } from "../../../security/path-guard.js";
+import {
+  readDeclaredModuleFolders,
+  foldersForModule,
+  optionalFolderPaths,
+  CORE_INSTALL_PATH,
+} from "./module-folders.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "../tool.interface.js";
 import { STRADA_API } from "../../context/strada-api-reference.js";
 
@@ -8,7 +14,7 @@ export class ModuleCreateTool implements ITool {
   readonly name = "strada_create_module";
   readonly description =
     "Create a new Strada.Core module with all necessary files following Strada conventions. " +
-    "Generates: ModuleConfig, asmdef, and the module folder structure the framework declares — Scripts/{Interfaces,Services,Systems,Components} plus Tests/Runtime and Tests/Editor, with optional Scripts/{Controllers,Commands,Events,Signals,Models,Views,Data} and an Editor/ folder.";
+    "Generates: ModuleConfig, asmdef, and the module folder structure the framework declares — Scripts/{Interfaces,Services,Systems,Components} plus Tests/Runtime and Tests/Editor, Folders come from Strada.Core\u0027s DirectoryStructureConfig, so they always match what the Unity generator produces.";
 
   readonly inputSchema = {
     type: "object",
@@ -65,7 +71,7 @@ export class ModuleCreateTool implements ITool {
       },
       include_editor: {
         type: "boolean",
-        description: "Include an Editor/ folder at the module root for edit-mode code. Default: false",
+        description: "Include the module\u0027s edit-mode code folder, where the framework declares it. Default: false",
       },
       include_tests: {
         type: "boolean",
@@ -126,66 +132,74 @@ export class ModuleCreateTool implements ITool {
     const createdFiles: string[] = [];
 
     try {
-      // Create directory structure
-      // These mirror Strada.Core's DirectoryStructureConfig exactly, so a module
-      // made by the Unity generator and one made here are the same module.
-      // Mediators is deliberately absent: the framework never declared it.
-      const dirs = [
-        fullBase,
-        join(fullBase, "Scripts"),
-        join(fullBase, "Scripts", "Interfaces"),
-        join(fullBase, "Scripts", "Services"),
-        join(fullBase, "Scripts", "Systems"),
-        join(fullBase, "Scripts", "Components"),
-      ];
+      // The folder list is Strada.Core's, not ours. Keeping a copy here is what
+      // let this tool drift from the framework: it created Scripts/Mediators,
+      // which was never declared, and created neither Scripts/Interfaces nor
+      // Scripts/Editor, which were. Read the declaration instead — when the
+      // framework adds a folder, modules made here get it with no change.
+      const declared = readDeclaredModuleFolders(context.projectPath);
+      if (!declared) {
+        return {
+          content:
+            `Error: Strada.Core is not installed at ${CORE_INSTALL_PATH}, and it is where a module's ` +
+            `folder structure is declared. Install the framework first — guessing the structure is how a ` +
+            `module ends up in a shape the framework never agreed to.`,
+          isError: true,
+        };
+      }
 
-      // Conditional directories
       const includeController = input["include_controller"] === true;
       const includeEvents = input["include_events"] === true;
       const includeSignals = input["include_signals"] === true;
       const includeModel = input["include_model"] === true;
       const includeView = input["include_view"] === true;
       const includeData = input["include_data"] === true;
-      // Tests default ON, unlike the optional folders above: Strada.Core's
-      // DirectoryStructureConfig declares RuntimeTests and EditorTests as module
-      // component types, and the agent is told a module must carry its own
-      // Tests/Runtime to exist. Defaulting off contradicted both — measured, a
-      // run produced three sound modules and not one test folder, because the
-      // agent had no reason to pass a flag it was never told it needed.
-      const includeTests = input["include_tests"] !== false;
-
       const includeCommands = input["include_commands"] === true;
       const includeEditor = input["include_editor"] === true;
+      // Tests default ON, unlike everything else here: the framework declares
+      // RuntimeTests and EditorTests as module component types and the agent is
+      // told a module must carry its own Tests/Runtime to exist. Defaulting off
+      // contradicted both — measured, a run produced three sound modules and not
+      // one test folder, because the agent had no reason to pass a flag it was
+      // never told it needed.
+      const includeTests = input["include_tests"] !== false;
 
-      if (includeController) dirs.push(join(fullBase, "Scripts", "Controllers"));
-      if (includeCommands) dirs.push(join(fullBase, "Scripts", "Commands"));
-      if (includeEvents) dirs.push(join(fullBase, "Scripts", "Events"));
-      if (includeSignals) dirs.push(join(fullBase, "Scripts", "Signals"));
-      if (includeModel) dirs.push(join(fullBase, "Scripts", "Models"));
-      if (includeView) dirs.push(join(fullBase, "Scripts", "Views"));
-      // Two folders, not one: the framework declares ConfigData and ValueObject
-      // as separate component types.
-      if (includeData) {
-        dirs.push(join(fullBase, "Scripts", "Data", "UnityObjects"));
-        dirs.push(join(fullBase, "Scripts", "Data", "ValueObjects"));
+      // ComponentType names, as the framework spells them.
+      const components = new Set<string>();
+      if (includeService) components.add("Service").add("ServiceInterface");
+      if (includeSystem) components.add("EcsSystem").add("EcsComponent");
+      if (includeController) components.add("Controller");
+      if (includeCommands) components.add("Commands");
+      if (includeEvents) components.add("Events");
+      if (includeSignals) components.add("Signals");
+      if (includeModel) components.add("Model");
+      if (includeView) components.add("View");
+      if (includeData) components.add("ConfigData").add("ValueObject");
+      if (includeEditor) components.add("EditorScripts");
+      if (includeTests) components.add("RuntimeTests").add("EditorTests");
+
+      const rawAssetFolders = input["asset_folders"];
+      const assetFolders = Array.isArray(rawAssetFolders)
+        ? rawAssetFolders.map((f) => String(f))
+        : [];
+      const declaredOptional = optionalFolderPaths(declared);
+      const unknown = assetFolders.filter(
+        (f) => !declaredOptional.some((d) => d === f.replace(/\/+$/, "") || d.startsWith(`${f.replace(/\/+$/, "")}/`)),
+      );
+      if (unknown.length > 0) {
+        return {
+          content:
+            `Error: not declared as module folders: ${unknown.join(", ")}. ` +
+            `Strada.Core declares these: ${declaredOptional.join(", ")}.`,
+          isError: true,
+        };
       }
-      // Editor-only code sits at the module root, beside Scripts/ and Tests/ —
-      // that is where the framework declares it, and it needs its own assembly
-      // or edit-mode code lands in the runtime one and the module stops
-      // building for a player.
-      if (includeEditor) dirs.push(join(fullBase, "Editor"));
-      // Tests/Runtime and Tests/Editor, not a flat Tests/ — the framework's own
-      // DirectoryStructureConfig declares them as distinct component types
-      // (RuntimeTests, EditorTests) and Strada.Core follows its own rule:
-      // Tests/Runtime/Strada.Core.Tests.asmdef and
-      // Tests/Editor/Strada.Core.Editor.Tests.asmdef. A flat folder gives the
-      // agent no place to put an edit-mode test and no assembly to compile it
-      // in, so tests end up outside the module entirely — measured, a run put
-      // them under a separate Assets/Tests tree with an invented asmdef.
-      if (includeTests) {
-        dirs.push(join(fullBase, "Tests", "Runtime"));
-        dirs.push(join(fullBase, "Tests", "Editor"));
-      }
+
+      const createdDirs = foldersForModule(declared, components, assetFolders);
+      const dirs = [
+        fullBase,
+        ...createdDirs.map((rel) => join(fullBase, ...rel.split("/"))),
+      ];
 
       await Promise.all(dirs.map(dir => mkdir(dir, { recursive: true })));
 
@@ -291,25 +305,18 @@ export class ModuleCreateTool implements ITool {
         "",
         "Folder structure:",
         `  ${modulePath}/`,
-        `  ├── ${name}.asmdef`,
-        `  └── Scripts/`,
-        `      ├── ${name}ModuleConfig.cs`,
-        `      ├── Systems/`,
-        includeSystem ? `      │   └── ${name}System.cs` : `      │   └── (empty)`,
-        `      ├── Services/`,
-        includeService
-          ? `      │   ├── I${name}Service.cs\n      │   └── ${name}Service.cs`
-          : `      │   └── (empty)`,
-        `      ├── Interfaces/`,
-        includeService ? `      │   └── I${name}Service.cs` : `      │   └── (empty)`,
-        `      └── Components/`,
-        `          └── (empty)`,
+        // Listed from what was actually created, not from a second description
+        // of it: a summary that drifts from the disk teaches the agent to file
+        // its next file in a folder that is not there.
+        ...createdDirs.map((rel) => `  ${rel}/`),
         "",
         `Next steps:`,
         `  1. Create a ${name}ModuleConfig ScriptableObject asset in Unity`,
         `  2. Add it to GameBootstrapper's module list`,
-        `  3. Add components in Scripts/Components/ folder`,
-        `  4. Implement system logic in Scripts/Systems/${name}System.cs`,
+        `  3. Put ECS components in Scripts/Components/`,
+        includeSystem
+          ? `  4. Implement system logic in Scripts/Systems/${name}System.cs`
+          : `  4. Add systems under Scripts/Systems/ when you need them`,
       ].join("\n");
 
       return { content: result, metadata: { createdFiles } };

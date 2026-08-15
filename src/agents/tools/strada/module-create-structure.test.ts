@@ -23,6 +23,7 @@ import { join } from "node:path";
 import os from "node:os";
 import { createLogger } from "../../../utils/logger.js";
 import { ModuleCreateTool } from "./module-create.js";
+import { installCoreDeclaration } from "./core-declaration-fixture.js";
 
 beforeAll(() => {
   createLogger("error", "test.log");
@@ -30,6 +31,7 @@ beforeAll(() => {
 
 const create = async (input: Record<string, unknown> = {}) => {
   const projectPath = mkdtempSync(join(os.tmpdir(), "module-create-structure-"));
+  installCoreDeclaration(projectPath);
   const result = await new ModuleCreateTool().execute(
     { name: "Board", ...input },
     { projectPath } as never,
@@ -70,13 +72,50 @@ describe("a generated module's folder layout", () => {
     expect(existsSync(join(base, "Scripts", "Data", "ValueObjects"))).toBe(true);
   });
 
-  it("can create Commands under Scripts and Editor at the root", async () => {
-    // Editor/ is not code-under-Scripts: it compiles into its own edit-mode
-    // assembly, which is why the framework declares it beside Scripts/.
+  it("puts Commands and edit-mode code where the framework declares them", async () => {
+    // Both are code, so both are under Scripts/ — the declaration decides, and
+    // this test reads it rather than restating a guess.
     const { base } = await create({ include_commands: true, include_editor: true });
     expect(existsSync(join(base, "Scripts", "Commands"))).toBe(true);
-    expect(existsSync(join(base, "Editor"))).toBe(true);
-    expect(existsSync(join(base, "Scripts", "Editor"))).toBe(false);
+    expect(existsSync(join(base, "Scripts", "Editor"))).toBe(true);
+  });
+
+  it("creates an authored-asset folder at the module root when asked", async () => {
+    // Assets are not code: they sit beside Scripts/, and only when requested.
+    const { base } = await create({ asset_folders: ["Art", "Prefabs"] });
+    expect(existsSync(join(base, "Art", "Models"))).toBe(true);
+    expect(existsSync(join(base, "Art", "Textures"))).toBe(true);
+    expect(existsSync(join(base, "Prefabs"))).toBe(true);
+    expect(existsSync(join(base, "Scripts", "Art"))).toBe(false);
+  });
+
+  it("creates no asset folders unless they were asked for", async () => {
+    const { base } = await create();
+    expect(existsSync(join(base, "Prefabs"))).toBe(false);
+    expect(existsSync(join(base, "Resources"))).toBe(false);
+  });
+
+  it("refuses an asset folder the framework never declared", async () => {
+    const projectPath = mkdtempSync(join(os.tmpdir(), "module-create-structure-"));
+    installCoreDeclaration(projectPath);
+    const result = await new ModuleCreateTool().execute(
+      { name: "Board", asset_folders: ["Sounds"] },
+      { projectPath } as never,
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/Sounds/);
+  });
+
+  it("refuses to guess when the framework is not installed", async () => {
+    // A module whose shape the framework never agreed to is the failure this
+    // whole path exists to prevent, so there is no fallback structure.
+    const projectPath = mkdtempSync(join(os.tmpdir(), "module-create-nocore-"));
+    const result = await new ModuleCreateTool().execute(
+      { name: "Board" },
+      { projectPath } as never,
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content).toMatch(/Strada\.Core is not installed/);
   });
 
   it("describes the layout it actually created", async () => {

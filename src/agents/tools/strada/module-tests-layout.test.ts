@@ -23,6 +23,7 @@ import { mkdtempSync, existsSync, readFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import os from "node:os";
 import { ModuleCreateTool } from "./module-create.js";
+import { installCoreDeclaration } from "./core-declaration-fixture.js";
 import type { ToolContext } from "../tool-core.interface.js";
 
 let projectPath: string;
@@ -30,6 +31,7 @@ let projectPath: string;
 beforeEach(() => {
   projectPath = mkdtempSync(join(os.tmpdir(), "module-tests-"));
   mkdirSync(join(projectPath, "Assets", "Modules"), { recursive: true });
+  installCoreDeclaration(projectPath);
 });
 
 function context(): ToolContext {

@@ -86,27 +86,39 @@ Assets/
 │   ├── CoreModule/
 │   │   ├── Core.asmdef
 │   │   └── Scripts/
-│   │       ├── CoreModuleConfig.cs       (ModuleConfig SO)
-│   │       ├── Systems/
-│   │       │   └── GameStateSystem.cs
-│   │       └── Services/
-│   │           ├── IGameService.cs
-│   │           └── GameService.cs
+│   │       ├── CoreModuleConfig.cs        (ModuleConfig SO)
+│   │       ├── Interfaces/
+│   │       │   └── IGameService.cs
+│   │       ├── Services/
+│   │       │   └── GameService.cs
+│   │       └── Systems/
+│   │           └── GameStateSystem.cs
 │   └── CombatModule/
 │       ├── Combat.asmdef
-│       └── Scripts/
-│           ├── CombatModuleConfig.cs
-│           ├── Components/
-│           │   ├── HealthComponent.cs     (IComponent)
-│           │   └── DamageDealerComponent.cs
-│           ├── Systems/
-│           │   ├── DamageSystem.cs       (SystemBase)
-│           │   └── HealthSystem.cs
-│           ├── Services/
-│           │   ├── ICombatService.cs
-│           │   └── CombatService.cs
-│           └── Mediators/
-│               └── CombatEntityMediator.cs
+│       ├── Scripts/                       (all code, edit-mode included)
+│       │   ├── CombatModuleConfig.cs
+│       │   ├── Interfaces/
+│       │   │   └── ICombatService.cs
+│       │   ├── Services/
+│       │   │   └── CombatService.cs
+│       │   ├── Components/
+│       │   │   └── HealthComponent.cs     (IComponent)
+│       │   ├── Systems/
+│       │   │   └── DamageSystem.cs        (SystemBase)
+│       │   ├── Commands/
+│       │   ├── Data/
+│       │   │   ├── UnityObjects/          (ScriptableObject configs)
+│       │   │   └── ValueObjects/          (plain structs)
+│       │   └── Editor/                    (edit-mode code, own asmdef)
+│       ├── Tests/                         (own assemblies, beside Scripts/)
+│       │   ├── Runtime/
+│       │   └── Editor/
+│       ├── Art/                           (authored assets, module root)
+│       │   ├── Models/  Textures/  Materials/  Prefabs/
+│       ├── Prefabs/
+│       ├── Resources/
+│       ├── Scriptables/
+│       └── Settings/
 \`\`\`
 
 ## Your Capabilities

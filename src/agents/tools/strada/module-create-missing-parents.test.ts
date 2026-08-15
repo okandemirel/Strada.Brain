@@ -20,6 +20,7 @@ import { join, basename } from "node:path";
 import os from "node:os";
 import { createLogger } from "../../../utils/logger.js";
 import { ModuleCreateTool } from "./module-create.js";
+import { installCoreDeclaration } from "./core-declaration-fixture.js";
 
 beforeAll(() => {
   createLogger("error", "test.log");
@@ -27,7 +28,11 @@ beforeAll(() => {
 
 /** An empty project: no Assets/, no Modules/ — the state a new project is in. */
 function emptyProject(): string {
-  return mkdtempSync(join(os.tmpdir(), "module-create-parents-"));
+  const root = mkdtempSync(join(os.tmpdir(), "module-create-parents-"));
+  // Strada.Core declares the module folder structure; without it installed the
+  // tool refuses rather than guessing, which is not what these tests are about.
+  installCoreDeclaration(root);
+  return root;
 }
 
 const run = (projectPath: string, input: Record<string, unknown>) =>

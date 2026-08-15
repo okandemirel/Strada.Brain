@@ -12,6 +12,18 @@ vi.mock("node:fs/promises", () => ({
   mkdir: vi.fn().mockResolvedValue(undefined),
 }));
 
+// This suite runs against a project that only exists in mocks, so the on-disk
+// framework the tool reads its folder list from is not there. Supply the
+// declaration itself — the same text a real Strada.Core checkout carries.
+vi.mock("./module-folders.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./module-folders.js")>();
+  const { CORE_DECLARATION_SOURCE } = await import("./core-declaration-fixture.js");
+  return {
+    ...actual,
+    readDeclaredModuleFolders: () => actual.parseDeclaredFolders(CORE_DECLARATION_SOURCE),
+  };
+});
+
 import { isValidCSharpIdentifier } from "../../../security/path-guard.js";
 import { writeFile, mkdir } from "node:fs/promises";
 

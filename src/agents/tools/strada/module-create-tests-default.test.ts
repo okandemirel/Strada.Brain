@@ -23,6 +23,7 @@ import { join } from "node:path";
 import os from "node:os";
 import { createLogger } from "../../../utils/logger.js";
 import { ModuleCreateTool } from "./module-create.js";
+import { installCoreDeclaration } from "./core-declaration-fixture.js";
 
 beforeAll(() => {
   createLogger("error", "test.log");
@@ -30,6 +31,7 @@ beforeAll(() => {
 
 const create = async (input: Record<string, unknown>) => {
   const projectPath = mkdtempSync(join(os.tmpdir(), "module-create-tests-"));
+  installCoreDeclaration(projectPath);
   const result = await new ModuleCreateTool().execute(input, { projectPath } as never);
   expect(result.isError, `refused: ${result.content}`).toBeFalsy();
   return join(projectPath, "Assets", "Modules", `${String(input["name"])}Module`);
