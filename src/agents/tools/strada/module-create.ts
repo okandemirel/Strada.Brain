@@ -21,7 +21,7 @@ export class ModuleCreateTool implements ITool {
     properties: {
       name: {
         type: "string",
-        description: "Module name (e.g., 'Inventory', 'Combat', 'UI')",
+        description: "Module name (e.g., 'Inventory', 'Combat', 'UI'). A trailing 'Module' is accepted and not repeated, so 'Board' and 'BoardModule' produce the same module.",
       },
       path: {
         type: "string",
@@ -93,7 +93,14 @@ export class ModuleCreateTool implements ITool {
       };
     }
 
-    const name = String(input["name"] ?? "");
+    // "BoardModule" is what a module is called, so callers pass it — and every
+    // name below is composed off this one. Left raw it produced
+    // BoardModuleModuleConfig, an asset menu to match, and a
+    // BoardModuleModule/ folder. The suffix names the kind of thing, not this
+    // particular one, so it is stripped here and re-added where it belongs.
+    // Anchored: "Modulator" keeps its tail.
+    const rawName = String(input["name"] ?? "");
+    const name = /.Module$/.test(rawName) ? rawName.replace(/Module$/, "") : rawName;
     const modulePath = String(input["path"] ?? `Assets/Modules/${name}Module`);
     const namespace = String(input["namespace"] ?? `Game.Modules.${name}`);
     const includeSystem = input["include_system"] !== false;
