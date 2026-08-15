@@ -9,9 +9,9 @@ import type {
 // Streaming-first single-shot LLM call: a slow reasoning model must not trip the
 // FallbackChain's 90s first-response timer on the blocking chat() path (533b1e9).
 import { streamOrChatText } from "./providers/provider.interface.js";
+import { parseBatchOperations, type BatchOperation } from "./autonomy/batch-write-gate.js";
 import { ProviderHealthRegistry } from "./providers/provider-health.js";
 import { AgentEngine } from "../agent-core/engine/agent-engine.js";
-import { DynamicToolFactory } from "./tools/dynamic/dynamic-tool-factory.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
@@ -252,7 +252,7 @@ import type { AgentEvent } from "../agent-core/events/agent-event.js";
 
 /** Self-improvement tools bypass phase-based write filtering — they have their own guards. */
 const SELF_IMPROVEMENT_TOOLS: ReadonlySet<string> = new Set([
-  "create_tool", "create_skill", "remove_dynamic_tool",
+  "create_skill",
 ]);
 const TYPING_INTERVAL_MS = 4000;
 
@@ -840,8 +840,6 @@ export class Orchestrator {
   /** Callback to hot-reload a newly created skill */
   private onSkillCreated?: (skillPath: string) => Promise<void>;
   private getSkillEntries?: () => readonly SkillEntry[];
-  /** Per-orchestrator DynamicToolFactory (avoids module-level singleton leaks in multi-agent setups) */
-  private readonly dynamicToolFactory = new DynamicToolFactory();
 
   constructor(opts: {
     providerManager: ProviderManager;
@@ -3686,9 +3684,56 @@ export class Orchestrator {
         }
         return { approved: true };
       }
+      case "batch_execute": {
+        // A second dispatch path: batch_execute calls tool.execute on each of
+        // its operations directly, so none of them passes executeSingleToolCall
+        // and none reaches the cases above. Before this case existed the batch
+        // fell to `default` and was stamped approved without the operations
+        // array ever being read — measured, 368 writes reached disk that way,
+        // more than went through the gated path.
+        const parsed = parseBatchOperations(input);
+        if (parsed.kind === "unreviewable") {
+          return { approved: false, reason: `batch cannot be reviewed: ${parsed.reason}` };
+        }
+        return this.reviewBatchedOperations(chatId, parsed.operations, mode, options);
+      }
       default:
         return { approved: true };
     }
+  }
+
+  /**
+   * Apply the direct-call rules to each operation a batch would dispatch.
+   *
+   * One refusal refuses the batch: the operations run in sequence against a
+   * shared workspace, so approving the ones before a refused write would leave
+   * the project half-changed by a batch the agent was told it could not run.
+   */
+  private async reviewBatchedOperations(
+    chatId: string,
+    operations: readonly BatchOperation[],
+    mode: ToolExecutionMode,
+    options: ToolExecutionOptions,
+  ): Promise<SelfManagedWriteReview> {
+    for (const operation of operations) {
+      // Reads inside a batch are as free as reads outside one.
+      if (!this.isWriteOperation(operation.tool)) continue;
+
+      const review = await this.reviewSelfManagedWriteOperation(
+        chatId,
+        operation.tool,
+        operation.input,
+        mode,
+        options,
+      );
+      if (!review.approved) {
+        return {
+          approved: false,
+          reason: `batched ${operation.tool} was refused: ${review.reason ?? "no reason given"}`,
+        };
+      }
+    }
+    return { approved: true };
   }
 
 
@@ -3940,7 +3985,6 @@ export class Orchestrator {
       },
       lookupTool: (name) => this.tools.get(name),
       onSkillCreated: this.onSkillCreated,
-      dynamicToolFactory: this.dynamicToolFactory,
       vaultRegistry: this.vaultRegistry,
     };
 
@@ -4016,9 +4060,9 @@ export class Orchestrator {
     const name = tc.name;
     if (name === "ask_user" || name === "show_plan") return false;
     if (WRITE_OPERATIONS.has(name)) return false;
-    // Registry-mutating control tools self-guard but mutate this.tools via toolContext callbacks;
-    // keep them serial so concurrent registrations never race.
-    if (name === "create_tool" || name === "create_skill" || name === "remove_dynamic_tool") {
+    // create_skill mutates this.tools via a toolContext callback; keep it serial
+    // so concurrent registrations never race.
+    if (name === "create_skill") {
       return false;
     }
     // Require a POSITIVE read-only classification from the flattened metadata cache (which already
