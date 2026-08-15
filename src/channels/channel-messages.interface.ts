@@ -7,7 +7,7 @@
 /**
  * Supported channel types
  */
-export type ChannelType = "telegram" | "whatsapp" | "cli" | "web" | "discord" | "slack" | "matrix" | "irc" | "teams";
+export type ChannelType = "telegram" | "cli" | "web" | "discord" | "slack" | "teams";
 
 /** Hard cap for inbound user text across all channels. */
 export const MAX_INCOMING_TEXT_LENGTH = 16_000;

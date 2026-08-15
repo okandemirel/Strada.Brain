@@ -19,7 +19,6 @@ import { TelegramChannel } from "../channels/telegram/bot.js";
 import { CLIChannel } from "../channels/cli/repl.js";
 import { DiscordChannel } from "../channels/discord/bot.js";
 import { getDefaultSlashCommands } from "../channels/discord/commands.js";
-import { WhatsAppChannel } from "../channels/whatsapp/client.js";
 import { WebChannel } from "../channels/web/channel.js";
 
 
@@ -31,20 +30,11 @@ export async function initializeChannel(
   channelType: string,
   config: Config,
   auth: AuthManager,
-  logger: winston.Logger,
 ): Promise<IChannelAdapter> {
   switch (channelType) {
     case "cli":
       return new CLIChannel();
 
-    case "whatsapp": {
-      const sessionPath = config.whatsapp.sessionPath;
-      const allowedNumbers = config.whatsapp.allowedNumbers;
-      if (allowedNumbers.length === 0) {
-        logger.info("WHATSAPP_ALLOWED_NUMBERS is empty — WhatsApp is open to all senders");
-      }
-      return new WhatsAppChannel(sessionPath, allowedNumbers);
-    }
 
     case "discord": {
       if (!config.discord.botToken) {
@@ -73,42 +63,7 @@ export async function initializeChannel(
       return new SlackChannel(config.slack as { botToken: string; signingSecret: string; appToken?: string; socketMode?: boolean; allowedWorkspaces?: string[]; allowedUserIds?: string[] });
     }
 
-    case "matrix": {
-      const { MatrixChannel } = await import("../channels/matrix/channel.js");
-      const homeserver = config.matrix.homeserver;
-      const accessToken = config.matrix.accessToken;
-      const matrixUserId = config.matrix.userId;
-      const allowOpenAccess = config.matrix.allowOpenAccess;
-      const allowedUserIds = config.matrix.allowedUserIds;
-      const allowedRoomIds = config.matrix.allowedRoomIds;
-      if (!homeserver || !accessToken || !matrixUserId) {
-        throw new AppError(
-          "MATRIX_HOMESERVER, MATRIX_ACCESS_TOKEN, and MATRIX_USER_ID are required for Matrix channel",
-          "MISSING_MATRIX_CONFIG",
-        );
-      }
-      return new MatrixChannel(
-        homeserver,
-        accessToken,
-        matrixUserId,
-        allowedUserIds,
-        allowedRoomIds,
-        allowOpenAccess,
-      );
-    }
 
-    case "irc": {
-      const { IRCChannel } = await import("../channels/irc/channel.js");
-      const ircServer = config.irc.server;
-      const ircNick = config.irc.nick;
-      const allowOpenAccess = config.irc.allowOpenAccess;
-      const ircChannels = config.irc.channels;
-      const allowedUsers = config.irc.allowedUsers;
-      if (!ircServer) {
-        throw new AppError("IRC_SERVER is required for IRC channel", "MISSING_IRC_CONFIG");
-      }
-      return new IRCChannel(ircServer, ircNick, ircChannels, allowedUsers, allowOpenAccess);
-    }
 
     case "teams": {
       const { TeamsChannel } = await import("../channels/teams/channel.js");

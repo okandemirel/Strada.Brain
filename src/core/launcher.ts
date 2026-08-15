@@ -46,9 +46,6 @@ const QUICK_LAUNCH_FLAGS: ReadonlyArray<{
   { option: "telegram", channelType: "telegram" },
   { option: "discord", channelType: "discord" },
   { option: "slack", channelType: "slack" },
-  { option: "whatsapp", channelType: "whatsapp" },
-  { option: "matrix", channelType: "matrix" },
-  { option: "irc", channelType: "irc" },
   { option: "teams", channelType: "teams" },
 ];
 
@@ -57,10 +54,7 @@ const CHANNEL_LABELS: Record<SupportedChannelType, string> = {
   cli: "Interactive CLI",
   telegram: "Telegram bot",
   discord: "Discord bot",
-  whatsapp: "WhatsApp",
   slack: "Slack",
-  matrix: "Matrix",
-  irc: "IRC",
   teams: "Microsoft Teams",
 };
 

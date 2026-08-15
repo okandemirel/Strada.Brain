@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>AI-Powered Development Agent for Unity / Strada.Core Projects</strong><br/>
-  An autonomous coding agent that connects to a web dashboard, Telegram, Discord, Slack, WhatsApp, or your terminal &mdash; reads your codebase, writes code, runs builds, learns from its mistakes, and operates autonomously with a 24/7 daemon loop. Now with multi-agent orchestration, task delegation, memory consolidation, a deployment subsystem with approval gates, media sharing with LLM vision support, a configurable personality system via SOUL.md, control-plane clarification review, intelligent multi-provider routing with task-aware dynamic switching, confidence-based consensus verification, an autonomous Agent Core with OODA reasoning loop, an extensible skill ecosystem with SKILL.md manifests and a git-based registry, and Strada.MCP integration.
+  An autonomous coding agent that connects to a web dashboard, Telegram, Discord, Slack, or your terminal &mdash; reads your codebase, writes code, runs builds, learns from its mistakes, and operates autonomously with a 24/7 daemon loop. Now with multi-agent orchestration, task delegation, memory consolidation, a deployment subsystem with approval gates, media sharing with LLM vision support, a configurable personality system via SOUL.md, control-plane clarification review, intelligent multi-provider routing with task-aware dynamic switching, confidence-based consensus verification, an autonomous Agent Core with OODA reasoning loop, an extensible skill ecosystem with SKILL.md manifests and a git-based registry, and Strada.MCP integration.
 </p>
 
 <p align="center">
@@ -200,7 +200,7 @@ strada
 ./strada start --channel telegram
 ./strada start --channel discord
 ./strada start --channel slack
-./strada start --channel whatsapp
+./strada start --channel telegram
 
 # Always-on supervisor with auto-restart
 ./strada supervise --channel web
@@ -449,8 +449,7 @@ See **[docs/vault.md](docs/vault.md)** for the full reference (architecture, que
 ```
 +-----------------------------------------------------------------+
 |  Chat Channels + Web Portal (4-mode workspace, shadcn/ui + Magic UI) |
-|  Web | Telegram | Discord | Slack | WhatsApp | CLI | Matrix     |
-|  IRC | Teams                                                     |
+|  Web | Telegram | Discord | Slack | CLI | Teams                 |
 +------------------------------+----------------------------------+
                                |
                     IChannelAdapter interface

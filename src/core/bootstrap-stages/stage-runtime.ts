@@ -167,7 +167,7 @@ export async function initializeSessionRuntimeStage(
 ): Promise<SessionRuntimeStageResult> {
   const runtimePaths = resolveRuntimePaths({ moduleUrl: import.meta.url });
   const soulOverrides: Record<string, string> = {};
-  for (const channel of ["telegram", "discord", "slack", "whatsapp", "web"] as const) {
+  for (const channel of ["telegram", "discord", "slack", "web"] as const) {
     const envValue = process.env[`SOUL_FILE_${channel.toUpperCase()}`];
     if (envValue) {
       soulOverrides[channel] = envValue;

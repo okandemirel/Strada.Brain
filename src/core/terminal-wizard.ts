@@ -44,7 +44,7 @@ const RESPONSE_PROVIDER_CHOICES = [
 const EMBEDDING_PROVIDER_CHOICES = [
   "auto", "gemini", "openai", "mistral", "together", "fireworks", "qwen", "ollama",
 ] as const;
-const CHANNEL_CHOICES = ["web", "telegram", "discord", "slack", "whatsapp", "cli"] as const;
+const CHANNEL_CHOICES = ["web", "telegram", "discord", "slack", "cli"] as const;
 const LANGUAGE_CHOICES = ["en", "tr", "ja", "ko", "zh", "de", "es", "fr"] as const;
 const PROVIDER_ENV_KEY_MAP: Record<string, string> = {
   claude: "ANTHROPIC_API_KEY",

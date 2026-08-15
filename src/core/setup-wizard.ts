@@ -237,7 +237,7 @@ const CHANNEL_ENV_KEYS = [
   "WHATSAPP_SESSION_PATH", "WHATSAPP_ALLOWED_NUMBERS",
 ] as const;
 
-const KNOWN_CHANNELS = new Set(["web", "telegram", "discord", "slack", "whatsapp", "cli"]);
+const KNOWN_CHANNELS = new Set(["web", "telegram", "discord", "slack", "cli"]);
 
 const EMBEDDING_PROVIDER_ENV_KEYS: Record<string, string | null> = {
   openai: "OPENAI_API_KEY",

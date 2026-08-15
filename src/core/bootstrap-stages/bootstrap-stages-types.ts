@@ -241,7 +241,6 @@ export interface ProviderRuntimeStageDeps {
     channelType: string,
     config: Config,
     auth: AuthManager,
-    logger: winston.Logger,
   ) => Promise<IChannelAdapter>;
   isTransientEmbeddingVerificationError: (error: unknown) => boolean;
 }

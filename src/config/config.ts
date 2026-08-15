@@ -1734,9 +1734,6 @@ export function checkChannelConfig(
     | "telegram"
     | "discord"
     | "slack"
-    | "whatsapp"
-    | "matrix"
-    | "irc"
     | "teams"
     | "cli"
     | "web",
@@ -1774,23 +1771,8 @@ export function checkChannelConfig(
       }
       break;
 
-    case "whatsapp":
-      if (!config.whatsapp.sessionPath) {
-        errors.push("WHATSAPP_SESSION_PATH is required");
-      }
-      break;
 
-    case "matrix":
-      if (!config.matrix.homeserver || !config.matrix.accessToken || !config.matrix.userId) {
-        errors.push("MATRIX_HOMESERVER, MATRIX_ACCESS_TOKEN, and MATRIX_USER_ID are required");
-      }
-      break;
 
-    case "irc":
-      if (!config.irc.server) {
-        errors.push("IRC_SERVER is required");
-      }
-      break;
 
     case "teams":
       if (!config.teams.appId || !config.teams.appPassword) {

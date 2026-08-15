@@ -9,9 +9,6 @@ Channel adapters connect Strada.Brain to messaging platforms. Each adapter trans
 | Telegram | `TelegramChannel` | Grammy | Deny-all (must set allowlist) |
 | Discord | `DiscordChannel` | discord.js | Deny-all (must set user or role allowlist) |
 | Slack | `SlackChannel` | @slack/bolt | **Open-all** (must set allowlist for production) |
-| WhatsApp | `WhatsAppChannel` | @whiskeysockets/baileys | **Open-all** (set allowlist for production) |
-| Matrix | `MatrixChannel` | matrix-js-sdk | Deny-all unless `MATRIX_ALLOW_OPEN_ACCESS=true` |
-| IRC | `IRCChannel` | irc | Deny-all unless `IRC_ALLOW_OPEN_ACCESS=true` |
 | Teams | `TeamsChannel` | botbuilder | Deny-all unless `TEAMS_ALLOW_OPEN_ACCESS=true` |
 | Web | `WebChannel` | ws (WebSocket) | Localhost-only binding, Origin-gated browser access, reconnect/profile tokens |
 | CLI | `CLIChannel` | node:readline | No auth needed |
@@ -43,7 +40,7 @@ Normalized types decouple the orchestrator from any platform:
 
 - `IncomingMessage` — `{ channelType, chatId, userId, text, attachments?, replyTo?, timestamp }`
 - `OutgoingMessage` — `{ chatId, text, format?, attachments?, replyTo? }`
-- `ChannelType` — `"telegram" | "whatsapp" | "cli" | "web" | "discord" | "slack" | "matrix" | "irc" | "teams"`
+- `ChannelType` — `"telegram" | "cli" | "web" | "discord" | "slack" | "teams"`
 
 ## Message Flow
 
@@ -58,23 +55,23 @@ Platform event (Telegram message, Discord interaction, etc.)
   → Orchestrator calls channel.sendMarkdown() or streaming methods
 ```
 
-Not every adapter enforces inbound rate limits locally. Web and WhatsApp do; other channels rely more heavily on platform limits and the higher-level orchestrator/daemon guards.
+Not every adapter enforces inbound rate limits locally. Web does; other channels rely more heavily on platform limits and the higher-level orchestrator/daemon guards.
 
 Inbound auth defaults differ intentionally by channel:
 - Telegram and Discord are closed by default. Discord can authorize by user ID or role ID.
-- Slack and WhatsApp are open by default when their allowlists are empty.
-- Matrix, IRC, and Teams stay closed by default unless you configure allowlists or enable their explicit `*_ALLOW_OPEN_ACCESS` flag.
+- Slack is open by default when its allowlist is empty.
+- Teams stays closed by default unless you configure an allowlist or enable its explicit `*_ALLOW_OPEN_ACCESS` flag.
 
 ## Streaming
 
-Web, Telegram, Discord, Slack, WhatsApp, and CLI all implement streaming, but not every adapter uses a platform edit API:
+Web, Telegram, Discord, Slack, and CLI all implement streaming, but not every adapter uses a platform edit API:
 
 1. **Start:** Send placeholder message, return a `streamId`
 2. **Update:** Edit the same message with accumulated text (throttled)
 3. **Finalize:** Send complete final text, cancel pending throttle timers
 
 Throttle rates:
-- WhatsApp/Discord: 1 update/second (`setTimeout` queue)
+- Discord: 1 update/second (`setTimeout` queue)
 - Slack: 2 updates/second (`StreamingRateLimiter`)
 - Telegram: no client-side throttle (relies on Telegram's 30 edits/sec limit)
 - Web: real-time `stream_*` events over WebSocket
@@ -86,7 +83,7 @@ All `finalizeStreamingMessage` implementations fall back to sending a new messag
 
 Two distinct systems coexist intentionally:
 
-**Inbound (per-user):** `RateLimiter` from `src/security/rate-limiter.ts` — sliding window per minute/hour, token quotas, budget caps. Used by WhatsApp inline and orchestrator-level.
+**Inbound (per-user):** `RateLimiter` from `src/security/rate-limiter.ts` — sliding window per minute/hour, token quotas, budget caps. Used at orchestrator level.
 
 **Outbound (per-platform):**
 - Discord: Token bucket (50 req/sec global, 5/5sec per channel)
@@ -95,10 +92,9 @@ Two distinct systems coexist intentionally:
 
 ## Session Management
 
-- **WhatsApp:** Full per-channel session tracking. `Map<string, SessionState>` with 30-minute timeout, 5-minute cleanup interval.
 - **Web:** Uses `WebIdentityStore` plus reconnect tokens so a browser refresh can reclaim the live conversation until the reconnect TTL expires or the user clears the browser session.
 - **Other channels:** Session tracking is primarily handled by the orchestrator, not the channel adapter.
-- **Interactive channels only:** Telegram, Discord, Slack, WhatsApp, Web, and CLI track pending confirmations with timeout cleanup. IRC implements a text-based confirmation flow (the question plus numbered options; the next reply from the same nick/channel resolves it, with a no-reply timeout). Matrix and Teams do not implement confirmation dialogs.
+- **Interactive channels only:** Telegram, Discord, Slack, Web, and CLI track pending confirmations with timeout cleanup. Teams does not implement confirmation dialogs.
 
 ## Capability Matrix
 
@@ -107,10 +103,8 @@ Two distinct systems coexist intentionally:
 | Telegram | Yes (editMessageText) | Yes (sendChatAction) | Yes (InlineKeyboard) | No | No |
 | Discord | Yes (message.edit) | Yes (sendTyping) | Yes (ButtonBuilder) | No | Yes |
 | Slack | Yes (chat.update) | No-op | Yes (Block Kit) | Yes (uploadFile) | Yes |
-| WhatsApp | Yes (edit-in-place) | Yes (composing/paused) | Yes (numbered reply) | Yes (sendImage/sendDocument) | No |
 | Web | Yes (stream_update) | Yes (typing) | Yes (JSON dialog) | Yes (metadata) | No |
 | CLI | Yes (stdout rewrite) | No | Yes (readline) | No | No |
-| IRC | No | No | Yes (numbered reply) | No (text placeholder) | No |
 
 ## Web Channel
 
@@ -232,6 +226,5 @@ The web portal stores the current visible transcript in browser `sessionStorage`
 | `discord/rate-limiter.ts` | Token bucket + per-channel rate limiter |
 | `slack/app.ts` | Slack Bolt adapter (socket mode) |
 | `slack/rate-limiter.ts` | 4-tier sliding window + streaming limiter |
-| `whatsapp/client.ts` | Baileys adapter with session management |
 | `cli/repl.ts` | Readline REPL adapter |
 | `web/web-identity-store.ts` | Persistent browser identity + reconnect token store |

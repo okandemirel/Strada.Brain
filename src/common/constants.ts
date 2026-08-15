@@ -262,7 +262,7 @@ export const CHANNEL_DEFAULTS = {
   /** Default channel type */
   DEFAULT_TYPE: "web" as const,
   /** Supported channels */
-  SUPPORTED_TYPES: ["web", "telegram", "discord", "whatsapp", "cli", "slack", "matrix", "irc", "teams"] as const,
+  SUPPORTED_TYPES: ["web", "telegram", "discord", "cli", "slack", "teams"] as const,
   /** WhatsApp session path */
   WHATSAPP_SESSION_PATH: ".whatsapp-session",
 } as const;

@@ -33,11 +33,6 @@ vi.mock("../channels/discord/commands.js", () => ({
   getDefaultSlashCommands: vi.fn(() => [{ name: "help" }]),
 }));
 
-vi.mock("../channels/whatsapp/client.js", () => ({
-  WhatsAppChannel: vi.fn().mockImplementation(function (...args: unknown[]) {
-    return { name: "whatsapp", _args: args };
-  }),
-}));
 
 vi.mock("../channels/web/channel.js", () => ({
   WebChannel: vi.fn().mockImplementation(function (...args: unknown[]) {
@@ -152,65 +147,42 @@ describe("initializeChannel", () => {
     expect((channel as any).name).toBe("web");
   });
 
-  it("should return a WhatsAppChannel for 'whatsapp'", async () => {
-    const channel = await initializeChannel("whatsapp", makeConfig(), auth, logger);
-    expect(channel).toBeDefined();
-    expect((channel as any).name).toBe("whatsapp");
-  });
 
-  it("should log info when whatsapp allowedNumbers is empty", async () => {
-    await initializeChannel("whatsapp", makeConfig(), auth, logger);
-    expect(logger.info).toHaveBeenCalledWith(
-      expect.stringContaining("WHATSAPP_ALLOWED_NUMBERS is empty"),
-    );
-  });
 
-  it("should not log info when whatsapp allowedNumbers is non-empty", async () => {
-    const config = makeConfig({
-      whatsapp: { sessionPath: "/tmp/wa", allowedNumbers: ["+1234"] },
-    });
-    (logger.info as ReturnType<typeof vi.fn>).mockClear();
-    await initializeChannel("whatsapp", config, auth, logger);
-    const infoCalls = (logger.info as ReturnType<typeof vi.fn>).mock.calls;
-    const waLogCall = infoCalls.find(
-      (c: unknown[]) => typeof c[0] === "string" && c[0].includes("WHATSAPP_ALLOWED_NUMBERS"),
-    );
-    expect(waLogCall).toBeUndefined();
-  });
 
   // --- Missing token errors ---
 
   it("should throw MISSING_DISCORD_TOKEN when discord botToken is missing", async () => {
     const config = makeConfig({ discord: { botToken: "", guildId: "" } });
-    await expect(initializeChannel("discord", config, auth, logger)).rejects.toThrow(
+    await expect(initializeChannel("discord", config, auth)).rejects.toThrow(
       /DISCORD_BOT_TOKEN is required/,
     );
   });
 
   it("should return a DiscordChannel when discord botToken is provided", async () => {
     const config = makeConfig({ discord: { botToken: "abc123", guildId: "guild1" } });
-    const channel = await initializeChannel("discord", config, auth, logger);
+    const channel = await initializeChannel("discord", config, auth);
     expect(channel).toBeDefined();
     expect((channel as any).name).toBe("discord");
   });
 
   it("should throw MISSING_TELEGRAM_TOKEN when telegram botToken is missing", async () => {
     const config = makeConfig({ telegram: { botToken: "" } });
-    await expect(initializeChannel("telegram", config, auth, logger)).rejects.toThrow(
+    await expect(initializeChannel("telegram", config, auth)).rejects.toThrow(
       /TELEGRAM_BOT_TOKEN is required/,
     );
   });
 
   it("should return a TelegramChannel when telegram botToken is provided", async () => {
     const config = makeConfig({ telegram: { botToken: "tg-token" } });
-    const channel = await initializeChannel("telegram", config, auth, logger);
+    const channel = await initializeChannel("telegram", config, auth);
     expect(channel).toBeDefined();
     expect((channel as any).name).toBe("telegram");
   });
 
   it("should default to telegram channel for unknown channelType", async () => {
     const config = makeConfig({ telegram: { botToken: "tg-token" } });
-    const channel = await initializeChannel("unknown-channel", config, auth, logger);
+    const channel = await initializeChannel("unknown-channel", config, auth);
     expect((channel as any).name).toBe("telegram");
   });
 });

@@ -93,7 +93,7 @@ export async function initializeProviderRuntimeStage(
       params.logger,
       verifiedEmbedding.cachedEmbeddingProvider,
     ),
-    deps.initializeChannel(params.channelType, params.config, auth, params.logger),
+    deps.initializeChannel(params.channelType, params.config, auth),
   ] as const);
 
   const [providerSettled, memorySettled, channelSettled] = settled;
