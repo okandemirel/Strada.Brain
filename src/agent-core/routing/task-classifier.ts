@@ -151,12 +151,27 @@ export class TaskClassifier {
   private detectComplexity(prompt: string): TaskComplexity {
     const len = prompt.trim().length;
 
-    // Language-agnostic: complexity is a best-effort signal for metrics
-    // and phase prompts. It does NOT gate tool availability or supervisor
-    // activation (those decisions use shouldDecompose + LLM).
+    // Length-based tiers, and the ONLY input to whether a request takes the
+    // supervisor path: Orchestrator.shouldActivateSupervisor returns
+    // `classification.complexity === "complex"` and nothing else, so a request
+    // of 120 characters or more pays a goal-decomposition call and a shorter one
+    // does not. A previous version of this comment claimed the opposite — that
+    // complexity does not gate supervisor activation — and that claim was read,
+    // believed, and used to rule the classifier out as the cause of a one-line
+    // request being fanned into a seven-node goal tree, which is what it had
+    // done. See task-classifier-gating.test.ts, which pins the relationship.
     //
-    // Simple length-based tiers — no language-specific patterns.
-    // The LLM is the real judge of complexity.
+    // 120 characters is a crude proxy for "this is several pieces of work" and
+    // it is kept deliberately, not for lack of alternatives. The obvious
+    // replacement — counting the files or symbols a request names — scores zero
+    // on exactly the prose requests that most need decomposing, and a hard
+    // length veto would permanently deny the supervisor to a short but genuinely
+    // large request ("refactor the auth module"). What made the old behaviour
+    // expensive was not this line: it was that a decomposition returning a
+    // single goal still forced the whole supervisor apparatus. That is fixed
+    // where the answer is known (goals/tree-shape.ts), which leaves this as a
+    // pre-filter deciding only whether to pay ONE decomposition call — a job a
+    // cheap heuristic can honestly do.
     if (len < 20) return "trivial";
     if (len < 60) return "simple";
     if (len < 120) return "moderate";
