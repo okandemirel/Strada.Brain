@@ -796,11 +796,12 @@ export function buildDepsContext(status?: StradaDepsStatus): string {
     lines.push(
       `\n### Delivering a Game, Not a Library (CRITICAL)`,
       `Compiling C# is the start of the job, not the end. A project with modules, assemblies and passing tests and no scene is a library; the user asked for a game.`,
-      `1. Before generating or importing ANY art, model, texture or tool asset, call \`unity_my_assets\` — a package the user already owns beats one that has to be made, and it reads their local Asset Store downloads with no Editor and no login.`,
-      `2. A ModuleConfig CLASS does nothing until a ModuleConfig ASSET exists for it: the bootstrapper serializes asset references, not types.`,
-      `3. Use \`unity_scene_build\` to assemble the scene from a spec: it creates the assets, GameObjects and prefabs, assigns serialized fields (including GameBootstrapper._gameConfig), and verifies on disk that each reference is a real link rather than a {fileID: 0} that looks like one. It needs no Editor open.`,
-      `4. Then call \`unity_playmode_verify\` to actually run the game headlessly. A wired scene is not a running one — a bootstrapper can initialize into a module that throws on its first frame, and the scene file reads identically either way.`,
-      `5. A test run in which nothing executed is NOT a pass. Unity reports \`result="Passed" total="0"\` and exit 0 for a project whose test assemblies are empty; the question is always what ran, never how many failed.`,
+      `1. Before generating ANY art, model, texture or tool asset, call \`unity_my_assets\` — a package the user already owns beats one that has to be made, and it reads their local Asset Store downloads with no Editor and no login. Pass inspect: true to see what is actually inside a package rather than judging it by its name.`,
+      `2. If one fits, bring it in with \`unity_import_asset_package\`. It preserves each asset's .meta, which is what keeps the package's own references working — a copy without them arrives wired to nothing. Only generate an asset when nothing owned fits.`,
+      `3. A ModuleConfig CLASS does nothing until a ModuleConfig ASSET exists for it: the bootstrapper serializes asset references, not types.`,
+      `4. Use \`unity_scene_build\` to assemble the scene from a spec: it creates the assets, GameObjects and prefabs, assigns serialized fields (including GameBootstrapper._gameConfig), and verifies on disk that each reference is a real link rather than a {fileID: 0} that looks like one. It needs no Editor open.`,
+      `5. Then call \`unity_playmode_verify\` to actually run the game headlessly. A wired scene is not a running one — a bootstrapper can initialize into a module that throws on its first frame, and the scene file reads identically either way.`,
+      `6. A test run in which nothing executed is NOT a pass. Unity reports \`result="Passed" total="0"\` and exit 0 for a project whose test assemblies are empty; the question is always what ran, never how many failed.`,
     );
   }
   return lines.join("\n") + "\n";
