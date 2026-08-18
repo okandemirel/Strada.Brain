@@ -318,4 +318,36 @@ DONE`,
     expect(plan.buildToolsAvailable).toBeUndefined();
   });
 
+
+  it("carries an unassembled-game gate through to a blocking check", () => {
+    // The end of the chain: StradaConformanceGuard opens the gate, the pipeline
+    // has to turn it into an issue rather than let the draft's DONE stand.
+    const plan = planVerifierPipeline({
+      prompt: "Build the board module",
+      draft: "Nine modules created and compiling.\nDONE",
+      state: createState(),
+      task: DEBUG_TASK,
+      verificationState: {
+        pendingFiles: new Set(),
+        touchedFiles: new Set(["Assets/Modules/BoardModule/Scripts/BoardModuleConfig.cs"]),
+        hasCompilableChanges: false,
+        lastBuildOk: true,
+        lastVerificationAt: Date.now() - 100,
+      },
+      buildVerificationGate: null,
+      conformanceGate:
+        "[STRADA GAME NOT ASSEMBLED] This run wrote module code but the project is not a runnable game: no .unity scene was produced.",
+      logEntries: [],
+      chatId: "chat-scene",
+      taskStartedAtMs: Date.now() - 1000,
+    });
+
+    expect(plan.initialDecision).not.toBe("complete");
+    expect(plan.gate).toContain("GAME NOT ASSEMBLED");
+    // The summary names the gate that is actually open. It used to say every
+    // gate "needs authoritative verification", which sends a run missing a
+    // scene to read Strada.Core source instead.
+    expect(plan.gate).not.toContain("authoritative verification");
+  });
+
 });

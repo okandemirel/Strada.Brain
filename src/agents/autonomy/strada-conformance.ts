@@ -14,6 +14,7 @@ function moduleDir(projectPath: string, moduleRoot: string): string {
   return resolvePath(projectPath, moduleRoot);
 }
 import type { StradaDepsStatus } from "../../config/strada-deps.js";
+import { assessSceneWiring } from "./scene-wiring.js";
 import { COMPILABLE_EXT, MUTATION_TOOLS, extractFilePath } from "./constants.js";
 import { expandExecutedToolCalls } from "./executed-tools.js";
 
@@ -309,6 +310,30 @@ export class StradaConformanceGuard {
     return incomplete;
   }
 
+  /**
+   * Whether this run left behind a runnable game, or only code.
+   *
+   * Returns null when the question does not arise: no module code was written,
+   * the guard is disabled, or there is no project path to read.
+   */
+  private assessWiring(): ReturnType<typeof assessSceneWiring> | null {
+    if (this.opts?.enabled === false) return null;
+    if (this.touchedModuleRoots.size === 0) return null;
+    const projectPath = this.opts?.projectPath;
+    if (!projectPath) return null;
+    // No Assets directory on disk means there is nothing to read, not that the
+    // game is unassembled. The tracked module path came from tool input, which
+    // can name a path that was never written — an absent project is the absence
+    // of evidence, and this rule accuses only on evidence.
+    if (!existsSync(joinPath(projectPath, "Assets"))) return null;
+    try {
+      return assessSceneWiring(projectPath);
+    } catch {
+      // An unreadable project is not evidence that the game is unwired.
+      return null;
+    }
+  }
+
   getPrompt(): string | null {
     const incomplete = this.incompleteModules();
     if (incomplete.length > 0) {
@@ -333,6 +358,27 @@ export class StradaConformanceGuard {
         "or rename it, and make sure each test file sits under the assembly meant to compile " +
         "it — a .cs beside a Tests/ root .asmdef belongs to neither Tests/Runtime nor " +
         "Tests/Editor."
+      );
+    }
+
+    // A run that wrote module code and produced no scene delivered a library.
+    // Measured: nine modules, fifty C# files and sixteen test assemblies, all
+    // compiling, with no .unity, no ScriptableObject asset and no bootstrapper —
+    // and it reported success. Every rule above passed, because they all read
+    // the shape of code. This one reads the artifacts.
+    //
+    // Only when the run actually wrote module code: a question about the project
+    // owes nobody a scene.
+    const wiring = this.assessWiring();
+    if (wiring && !wiring.wired) {
+      return (
+        "[STRADA GAME NOT ASSEMBLED] This run wrote module code but the project is not a " +
+        `runnable game: ${wiring.problems.map((p) => p.detail).join("; ")}. ` +
+        "A ModuleConfig class does nothing until a ModuleConfig ASSET exists for it, and " +
+        "nothing runs until a scene holds a GameBootstrapper whose _gameConfig points at a " +
+        "GameBootstrapperConfig listing those assets. Use unity_scene_build with a scene spec " +
+        "to assemble and verify them; it needs no Unity Editor open. Do not report the task " +
+        "complete while the project only compiles."
       );
     }
 

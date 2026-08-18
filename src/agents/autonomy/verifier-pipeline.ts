@@ -369,10 +369,17 @@ function buildConformanceVerifierCheck(
   evidence: VerifierPipelineEvidence,
 ): VerifierCheck | null {
   if (conformanceGate) {
+    // The summary said "needs authoritative verification" for every gate. That
+    // is one of five, and it points a run blocked for a missing scene at the
+    // Strada.Core source instead of at the scene. The gate opens with its own
+    // tag; report that rather than a guess.
+    const tag = /^\[([A-Z0-9 .]+)\]/.exec(conformanceGate)?.[1];
     return {
       name: "conformance",
       status: "issues",
-      summary: "Strada.Core / Strada.Modules / Strada.MCP conformance still needs authoritative verification.",
+      summary: tag
+        ? `Strada conformance gate open: ${tag}.`
+        : "Strada framework conformance is not yet satisfied.",
       gate: conformanceGate,
     };
   }
