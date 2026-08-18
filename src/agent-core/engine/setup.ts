@@ -38,6 +38,7 @@ import { buildVaultProjectContext } from "../../agents/context/strada-knowledge.
 import { resolveIdentityKey, resolveConversationScope } from "../../agents/orchestrator-text-utils.js";
 import { canonicalizeProviderName } from "../../agents/providers/provider-identity.js";
 import { createAutonomyBundle } from "../../agents/orchestrator-autonomy-tracker.js";
+import { conformanceProjectPath } from "../../agents/autonomy/strada-conformance.js";
 import { getRecommendedMaxMessages, type ModelIntelligenceLookup } from "../../agents/providers/provider-knowledge.js";
 import { getLogger } from "../../utils/logger.js";
 import type { StradaDepsStatus } from "../../config/strada-deps.js";
@@ -338,7 +339,14 @@ export async function setupAgentCoreRun(
           ? getInteractiveIterationLimit(deps)
           : getBackgroundEpochIterationLimit(deps),
       stradaDeps: deps.stradaDeps(),
-      projectPath: deps.projectPath?.(),
+      // The lease, when there is one. Tools are given
+      // `workspacePath ?? projectPath` (orchestrator.ts:3981), so a run with a
+      // lease writes into a temp copy and the source root only receives it at
+      // commit. A guard pointed at the source root therefore reads the state
+      // the run started from for the whole run: it cannot see the module the
+      // run just created, the test it just wrote, or the scene it just
+      // assembled. It has to read the same tree the tools are writing to.
+      projectPath: conformanceProjectPath(request.workspaceLease?.path, deps.projectPath?.()),
       projectWorldSummary,
       projectWorldFingerprint,
       includeControlLoopTracker: true,

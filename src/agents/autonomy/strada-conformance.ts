@@ -221,6 +221,25 @@ function moduleRootFor(filePath: string): string | null {
   return normalized.slice(0, idx + match[0].length).replace(/\/$/, "");
 }
 
+/**
+ * Which tree the conformance rules should read.
+ *
+ * Tools are handed `workspacePath ?? projectPath` (orchestrator.ts:3981), so a
+ * run holding a lease writes into a temp copy and the source root receives it
+ * only at commit. A guard pointed at the source root therefore judges the state
+ * the run started from for its whole life — it cannot see the module the run
+ * just created, the test it just wrote, or the scene it just assembled, and
+ * every rule keyed on those reads stale ground.
+ *
+ * The rule is simply: read where the writes go.
+ */
+export function conformanceProjectPath(
+  leasePath: string | undefined,
+  sourceRoot: string | undefined,
+): string | undefined {
+  return leasePath ?? sourceRoot;
+}
+
 export class StradaConformanceGuard {
   private touchedFrameworkCode = false;
   private consultedAuthoritativeSource = false;
