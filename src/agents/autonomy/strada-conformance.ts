@@ -1,5 +1,18 @@
 import { existsSync, readdirSync } from "node:fs";
-import { join as joinPath } from "node:path";
+import { join as joinPath, resolve as resolvePath } from "node:path";
+
+/**
+ * Where a tracked module root actually lives on disk.
+ *
+ * Tool input carries whichever path shape the model produced. A relative one
+ * joins onto the project; an absolute one is already the answer, and joining it
+ * produces a path that exists nowhere — which read as "this module has no
+ * ModuleConfig.cs and no .asmdef" and accused a correctly-built module of being
+ * incomplete. resolve() is the one operation that is right for both.
+ */
+function moduleDir(projectPath: string, moduleRoot: string): string {
+  return resolvePath(projectPath, moduleRoot);
+}
 import type { StradaDepsStatus } from "../../config/strada-deps.js";
 import { COMPILABLE_EXT, MUTATION_TOOLS, extractFilePath } from "./constants.js";
 import { expandExecutedToolCalls } from "./executed-tools.js";
@@ -240,7 +253,7 @@ export class StradaConformanceGuard {
 
     const duplicates: string[] = [];
     for (const moduleRoot of this.touchedModuleRoots) {
-      const paths = listAsmdefs(joinPath(projectPath, moduleRoot));
+      const paths = listAsmdefs(moduleDir(projectPath, moduleRoot));
       const byName = new Map<string, string[]>();
       for (const path of paths) {
         const normalized = path.replace(/\\/g, "/");
@@ -264,7 +277,7 @@ export class StradaConformanceGuard {
 
     const untested: string[] = [];
     for (const moduleRoot of this.touchedModuleRoots) {
-      const paths = listAsmdefs(joinPath(projectPath, moduleRoot));
+      const paths = listAsmdefs(moduleDir(projectPath, moduleRoot));
       if (paths.length === 0) continue;
 
       const names = paths.map((p) => p.replace(/\\/g, "/").split("/").pop()!.replace(/\.asmdef$/i, ""));
@@ -287,7 +300,7 @@ export class StradaConformanceGuard {
 
     const incomplete: string[] = [];
     for (const moduleRoot of this.touchedModuleRoots) {
-      const entries = listDir(joinPath(projectPath, moduleRoot));
+      const entries = listDir(moduleDir(projectPath, moduleRoot));
       const missing: string[] = [];
       if (!entries.some((e: string) => /ModuleConfig\.cs$/i.test(e))) missing.push("a *ModuleConfig.cs");
       if (!entries.some((e: string) => /\.asmdef$/i.test(e))) missing.push("an .asmdef");
