@@ -790,8 +790,17 @@ export function buildDepsContext(status?: StradaDepsStatus): string {
       `2. If compile errors are found, use \`unity_fix_compile_loop\` to get diagnostics and fix recommendations, then apply fixes and re-verify.`,
       `3. Use \`unity_compile_status\` for a quick compile check without full verification.`,
       `4. NEVER declare a C# task complete without verifying Unity compilation succeeds.`,
-      `5. If the Unity bridge is disconnected, fall back to \`dotnet_build\` or file-level analysis.`,
+      `5. If the Unity bridge is disconnected, \`unity_verify_change\` still compiles headlessly — it needs no Editor. Do not reach for \`dotnet_build\`: a Unity project has no .sln until the Editor has been opened once, and it answers MSB1003.`,
       `Unity console error analysis is a CORE function — not optional. Treat compile verification as mandatory as running tests.`,
+    );
+    lines.push(
+      `\n### Delivering a Game, Not a Library (CRITICAL)`,
+      `Compiling C# is the start of the job, not the end. A project with modules, assemblies and passing tests and no scene is a library; the user asked for a game.`,
+      `1. Before generating or importing ANY art, model, texture or tool asset, call \`unity_my_assets\` — a package the user already owns beats one that has to be made, and it reads their local Asset Store downloads with no Editor and no login.`,
+      `2. A ModuleConfig CLASS does nothing until a ModuleConfig ASSET exists for it: the bootstrapper serializes asset references, not types.`,
+      `3. Use \`unity_scene_build\` to assemble the scene from a spec: it creates the assets, GameObjects and prefabs, assigns serialized fields (including GameBootstrapper._gameConfig), and verifies on disk that each reference is a real link rather than a {fileID: 0} that looks like one. It needs no Editor open.`,
+      `4. Then call \`unity_playmode_verify\` to actually run the game headlessly. A wired scene is not a running one — a bootstrapper can initialize into a module that throws on its first frame, and the scene file reads identically either way.`,
+      `5. A test run in which nothing executed is NOT a pass. Unity reports \`result="Passed" total="0"\` and exit 0 for a project whose test assemblies are empty; the question is always what ran, never how many failed.`,
     );
   }
   return lines.join("\n") + "\n";
