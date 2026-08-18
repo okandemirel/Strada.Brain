@@ -153,6 +153,14 @@ function defaultListDir(dir: string): string[] {
   return names;
 }
 
+/**
+ * How many times a run is asked to start the game before the gate gives up.
+ *
+ * Three is enough to be heard and few enough that a project which cannot comply
+ * still finishes and reports honestly.
+ */
+const NEVER_RUN_GATE_LIMIT = 3;
+
 /** Tools that actually run the game rather than inspect it. */
 const PLAYMODE_VERIFICATION_TOOLS: ReadonlySet<string> = new Set([
   "unity_playmode_verify",
@@ -172,6 +180,16 @@ export class StradaConformanceGuard {
   private usedFrameworkGenerator = false;
   /** Whether this run tried to run the game, not only to build it. */
   private attemptedPlaymodeVerification = false;
+  /**
+   * How many times the never-run gate has been raised.
+   *
+   * Any rule that depends on a tool being present has to be able to give up.
+   * unity_playmode_verify reaches a project through its Strada.MCP submodule, so
+   * a checkout that predates the tool cannot satisfy this gate however many
+   * times it is told to — and a gate that cannot be cleared stops being a rule
+   * and becomes a loop.
+   */
+  private neverRunGateRaised = 0;
   /** Module roots this run wrote C# into, e.g. "Assets/Modules/GameModule". */
   private readonly touchedModuleRoots = new Set<string>();
 
@@ -462,8 +480,9 @@ export class StradaConformanceGuard {
         "A ModuleConfig class does nothing until a ModuleConfig ASSET exists for it, and " +
         "nothing runs until a scene holds a GameBootstrapper whose _gameConfig points at a " +
         "GameBootstrapperConfig listing those assets. Use unity_scene_build with a scene spec " +
-        "to assemble and verify them; it needs no Unity Editor open. Do not report the task " +
-        "complete while the project only compiles."
+        "to assemble and verify them; it needs no Unity Editor open. If that tool is not among " +
+        "the ones you have, this project's Strada.MCP submodule predates it: say so plainly " +
+        "rather than reporting the task complete, because the project still only compiles."
       );
     }
 
@@ -509,13 +528,24 @@ export class StradaConformanceGuard {
     //
     // Only asked once the project is actually assembled, because a play-mode run
     // of an unassembled project has nothing to load.
-    if (!this.attemptedPlaymodeVerification && wiring?.wired === true) {
+    if (
+      !this.attemptedPlaymodeVerification &&
+      wiring?.wired === true &&
+      this.neverRunGateRaised < NEVER_RUN_GATE_LIMIT
+    ) {
+      this.neverRunGateRaised += 1;
+      const last = this.neverRunGateRaised === NEVER_RUN_GATE_LIMIT;
       return (
         "[STRADA GAME NEVER RUN] The scene is assembled and wired, but this run never started " +
         "the game. A wired scene is not a running one: a bootstrapper can initialize into a " +
         "module that throws on its first frame, and the scene file reads identically either way. " +
         "Run unity_playmode_verify — it enters play mode with no Editor open and fails on a " +
-        "failing test, an exception logged during play, or a run in which nothing executed."
+        "failing test, an exception logged during play, or a run in which nothing executed." +
+        (last
+          ? " This is the last time this is asked: if the tool is not among the ones you have, " +
+            "this project's Strada.MCP submodule predates it, and you should report the game as " +
+            "assembled but unverified rather than as done."
+          : "")
       );
     }
 

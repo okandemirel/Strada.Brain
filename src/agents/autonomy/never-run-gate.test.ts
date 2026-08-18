@@ -106,3 +106,41 @@ describe("a game that was built and never started", () => {
     expect(guard.getPrompt() ?? "").not.toContain("[STRADA GAME NEVER RUN]");
   });
 });
+
+describe("a project that cannot comply", () => {
+  it("gives up after three askings instead of looping forever", () => {
+    // unity_playmode_verify reaches a project through its Strada.MCP submodule.
+    // A checkout that predates the tool cannot satisfy this gate however often
+    // it is told to, and a gate that cannot be cleared is not a rule, it is a
+    // loop that burns the whole iteration budget.
+    const { root, configPath } = assembledProject();
+    const guard = guardFor(root, configPath);
+
+    const asked = [1, 2, 3].map(() => guard.getPrompt());
+    expect(asked.every((p) => p?.includes("[STRADA GAME NEVER RUN]"))).toBe(true);
+
+    expect(guard.getPrompt() ?? "").not.toContain("[STRADA GAME NEVER RUN]");
+  });
+
+  it("says on the last asking how to finish honestly", () => {
+    const { root, configPath } = assembledProject();
+    const guard = guardFor(root, configPath);
+
+    guard.getPrompt();
+    guard.getPrompt();
+    const last = guard.getPrompt();
+
+    expect(last).toContain("assembled but unverified");
+    expect(last).toContain("submodule");
+  });
+
+  it("does not spend an asking once the game has been run", () => {
+    const { root, configPath } = assembledProject();
+    const guard = guardFor(root, configPath);
+
+    guard.getPrompt();
+    guard.trackToolCall("unity_playmode_verify", { projectPath: root }, false);
+
+    expect(guard.getPrompt() ?? "").not.toContain("[STRADA GAME NEVER RUN]");
+  });
+});
