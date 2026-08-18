@@ -1,4 +1,4 @@
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join as joinPath, resolve as resolvePath } from "node:path";
 
 /**
@@ -58,6 +58,8 @@ export interface ConformanceGuardOptions {
    * Injected for tests; defaults to a real recursive walk.
    */
   readonly listAsmdefs?: (dir: string) => string[];
+  /** Contents of the .cs files under a test assembly's directory. */
+  readonly readTestSources?: (dir: string) => string[];
 }
 
 /**
@@ -99,6 +101,40 @@ function defaultListAsmdefs(dir: string): string[] {
   };
   walk(dir, "", 4);
   return found;
+}
+
+/**
+ * The C# sources under a test assembly's directory.
+ *
+ * Returns contents, not names: whether a folder is a test assembly or an empty
+ * shell is a question about what is inside the files, and a directory listing
+ * cannot answer it.
+ */
+function defaultTestSources(dir: string): string[] {
+  if (!existsSync(dir)) return [];
+  const sources: string[] = [];
+  const walk = (current: string, depth: number): void => {
+    for (const entry of readdirSync(current, { withFileTypes: true })) {
+      const full = joinPath(current, entry.name);
+      if (entry.isDirectory()) {
+        if (depth > 0) walk(full, depth - 1);
+        continue;
+      }
+      if (!entry.name.endsWith(".cs")) continue;
+      try {
+        sources.push(readFileSync(full, "utf8"));
+      } catch {
+        // Unreadable file: no evidence either way.
+      }
+    }
+  };
+  walk(dir, 3);
+  return sources;
+}
+
+/** Does this source actually declare a test NUnit will run? */
+function declaresTest(source: string): boolean {
+  return /\[\s*(Test|UnityTest|TestCase|TestCaseSource)\b/.test(source);
 }
 
 function defaultListDir(dir: string): string[] {
@@ -270,6 +306,40 @@ export class StradaConformanceGuard {
     return duplicates;
   }
 
+  /**
+   * Test assemblies whose directory holds no test.
+   *
+   * Only reports what it could actually read: a directory that is not on disk
+   * yields no sources and no accusation, in line with every other rule here.
+   */
+  private emptyTestAssemblies(): string[] {
+    if (this.touchedModuleRoots.size === 0) return [];
+    const projectPath = this.opts?.projectPath;
+    if (!projectPath) return [];
+    const listAsmdefs = this.opts?.listAsmdefs ?? defaultListAsmdefs;
+    const readSources = this.opts?.readTestSources ?? defaultTestSources;
+
+    const empty: string[] = [];
+    for (const moduleRoot of this.touchedModuleRoots) {
+      const root = moduleDir(projectPath, moduleRoot);
+      // listAsmdefs answers relative to the directory it was given, so the
+      // assembly's own folder has to be resolved back against that root.
+      for (const asmdefPath of listAsmdefs(root)) {
+        const normalized = asmdefPath.replace(/\\/g, "/");
+        const name = normalized.split("/").pop()!.replace(/\.asmdef$/i, "");
+        if (!/\.(Editor\.)?Tests$/i.test(name)) continue;
+
+        const slash = normalized.lastIndexOf("/");
+        const dir = slash === -1 ? root : joinPath(root, normalized.slice(0, slash));
+        if (!existsSync(dir)) continue;
+
+        const sources = readSources(dir);
+        if (!sources.some(declaresTest)) empty.push(`${name} (in ${moduleRoot})`);
+      }
+    }
+    return empty;
+  }
+
   private untestedAssemblies(): string[] {
     if (this.touchedModuleRoots.size === 0) return [];
     const projectPath = this.opts?.projectPath;
@@ -379,6 +449,26 @@ export class StradaConformanceGuard {
         "GameBootstrapperConfig listing those assets. Use unity_scene_build with a scene spec " +
         "to assemble and verify them; it needs no Unity Editor open. Do not report the task " +
         "complete while the project only compiles."
+      );
+    }
+
+    // A test assembly that contains no test satisfies every rule above: the
+    // .asmdef exists, its name matches its module, and the coverage rule is
+    // looking for exactly that name. Measured on two full runs — sixteen test
+    // assemblies each, and thirty-two of thirty-two directories held zero .cs
+    // files. The headless PlayMode run over one of them executed 0 tests and
+    // Unity still wrote result="Passed", because nothing failed.
+    //
+    // Counting the container rather than its contents is the same mistake as
+    // counting compile errors without checking that anything compiled.
+    const empty = this.emptyTestAssemblies();
+    if (empty.length > 0) {
+      return (
+        "[STRADA TEST ASSEMBLY EMPTY] These test assemblies contain no test at all: " +
+        `${empty.join("; ")}. ` +
+        "An .asmdef with no [Test] or [UnityTest] beside it compiles to an empty assembly, " +
+        "reports zero failures because it runs nothing, and makes the coverage rule pass while " +
+        "covering nothing. Write the tests, or delete the assembly and stop claiming it."
       );
     }
 
