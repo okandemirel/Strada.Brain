@@ -1,4 +1,5 @@
 import { access, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { parseTestRun } from "./nunit-results.js";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { beforeAll, afterEach, describe, expect, it } from "vitest";
@@ -173,8 +174,17 @@ describe.skipIf(!runLocalUnityFixtureTests)(
 
       const unityRun = await runUnityFixture(projectPath, unity.executable);
       expect(unityRun.exitCode).toBe(0);
-      expect(unityRun.results).toContain("result=");
-      expect(unityRun.results).toContain("Passed");
+
+      // Read the counts, not the substring. A run where two of three tests fail
+      // still contains "Passed" — every passing case carries it — so the old
+      // assertion held for a red run. And a run that executed nothing at all is
+      // not a pass: total must be above zero for the rest to mean anything.
+      const outcome = parseTestRun(unityRun.results);
+      expect(outcome, `no <test-run> in results XML:\n${unityRun.results.slice(0, 400)}`)
+        .not.toBeNull();
+      expect(outcome!.total).toBeGreaterThan(0);
+      expect(outcome!.failed, `failing tests:\n${unityRun.log.slice(-2000)}`).toBe(0);
+      expect(outcome!.result).toBe("Passed");
     });
   },
 );
@@ -276,7 +286,10 @@ async function runUnityFixture(projectPath: string, unityExecutable: string): Pr
     args: [
       "-batchmode",
       "-nographics",
-      "-quit",
+      // No -quit. The test runner owns the exit: it calls EditorApplication.Exit
+      // with a code that reflects the results. -quit makes the Editor quit on its
+      // own schedule instead, which returns 0 whatever the tests did and can cut
+      // the run off before the results XML is written.
       "-projectPath",
       projectPath,
       "-runTests",
