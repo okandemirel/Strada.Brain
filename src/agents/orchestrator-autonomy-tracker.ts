@@ -1,3 +1,5 @@
+import { getLogger } from "../utils/logger.js";
+import { hasDotnetProjectFile } from "./dotnet-project-presence.js";
 import {
   ErrorRecoveryEngine,
   ExecutionJournal,
@@ -41,9 +43,32 @@ export interface CreateAutonomyBundleParams {
   readonly progressAssessmentEnabled?: boolean;
 }
 
+/**
+ * A diagnostic line that cannot be the reason something fails.
+ *
+ * getLogger() throws when no logger has been created, which is correct for code
+ * that needs one and wrong for an observability line.
+ */
+function debugLog(message: string, meta: Record<string, unknown>): void {
+  try {
+    getLogger().debug(message, meta);
+  } catch {
+    // No logger in this context; the diagnostic is not worth an exception.
+  }
+}
+
 export function createAutonomyBundle(params: CreateAutonomyBundleParams): AutonomyBundle {
   const errorRecovery = new ErrorRecoveryEngine();
-  const taskPlanner = new TaskPlanner({ iterationBudget: params.iterationBudget });
+  // dotnet_build only when there is something for it to build. In a Unity
+  // project without a solution it is filtered out of the offered tools, so
+  // naming it in the verify checkpoint asks for a tool the run does not have.
+  const taskPlanner = new TaskPlanner({
+    iterationBudget: params.iterationBudget,
+    buildToolName:
+      params.projectPath && hasDotnetProjectFile(params.projectPath)
+        ? "dotnet_build"
+        : undefined,
+  });
   const selfVerification = new SelfVerification();
   const executionJournal = new ExecutionJournal(params.prompt);
   if (params.previousJournalSnapshot) {
@@ -77,6 +102,14 @@ export function createAutonomyBundle(params: CreateAutonomyBundleParams): Autono
     projectPath: params.projectPath,
   });
   stradaConformance.trackPrompt(params.prompt);
+  // One line per guard, so a run that produced no gate can be told apart from a
+  // run whose guards never saw the writes: goal decomposition gives each worker
+  // its own bundle, and the context that decides completion is not always the
+  // context that did the work.
+  debugLog("Conformance guard created", {
+    projectPath: params.projectPath ?? "(none)",
+    enabled: params.conformanceEnabled !== false,
+  });
 
   return { errorRecovery, taskPlanner, selfVerification, executionJournal, controlLoopTracker, stradaConformance };
 }

@@ -82,7 +82,16 @@ export interface TaskState {
 
 export interface TaskPlannerOptions {
   readonly iterationBudget?: number;
+  /**
+   * Which tool the verify checkpoint should name. Defaults to the one that
+   * works with no Editor and no solution file, because that is the shape of
+   * every Unity project this runs against before the Editor has opened it.
+   */
+  readonly buildToolName?: string;
 }
+
+/** Compiles headlessly, needs no Editor and no .sln — reachable in a fresh Unity project. */
+const DEFAULT_BUILD_TOOL = "unity_verify_change";
 
 // ─── Planner ────────────────────────────────────────────────────────────────────
 
@@ -90,6 +99,21 @@ export class TaskPlanner {
   private mutationsSinceVerify = 0;
   private consecutiveErrors = 0;
   private buildVerified = false;
+  /**
+   * The tool this checkpoint tells the run to use.
+   *
+   * It used to say "dotnet_build" unconditionally. A Unity project has no .sln
+   * until the Editor has been opened once, so dotnet_build answers MSB1003 and
+   * is removed from the offered tools for exactly that reason — leaving the
+   * checkpoint demanding, by name, a tool the run does not have. Measured: the
+   * run modified two files, was told to run dotnet_build, could not, never
+   * cleared the flag, and was eventually stopped by loop detection with
+   * "I got stuck on this task after multiple approaches".
+   *
+   * Any tool in VERIFY_TOOLS clears the flag, so naming the reachable one costs
+   * nothing and unblocks the run.
+   */
+  private readonly buildToolName: string;
   private iterationsUsed = 0;
   private budgetWindowIterationsUsed = 0;
   private errorHistory: string[] = [];
@@ -107,6 +131,7 @@ export class TaskPlanner {
   private readonly budgetWarningThreshold: number;
 
   constructor(options: TaskPlannerOptions = {}) {
+    this.buildToolName = options.buildToolName ?? DEFAULT_BUILD_TOOL;
     this.iterationBudget = Math.max(1, options.iterationBudget ?? DEFAULT_ITERATION_BUDGET);
     this.budgetWarningThreshold = Math.max(
       1,
@@ -441,7 +466,7 @@ export class TaskPlanner {
     if (this.mutationsSinceVerify >= VERIFY_THRESHOLD && !this.buildVerified) {
       parts.push(
         `[VERIFY] ${this.mutationsSinceVerify} files modified without build check. ` +
-          `Run dotnet_build before continuing.`,
+          `Run ${this.buildToolName} before continuing.`,
       );
     }
 

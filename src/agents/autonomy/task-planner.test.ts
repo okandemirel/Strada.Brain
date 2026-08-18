@@ -292,7 +292,11 @@ describe("TaskPlanner", () => {
 
       const injection = planner.getStateInjection();
       expect(injection).toContain("[VERIFY]");
-      expect(injection).toContain("Run dotnet_build");
+      // Names the tool that is actually reachable. This used to say
+      // dotnet_build unconditionally, and a Unity project has no .sln until the
+      // Editor has opened it once — so the tool is filtered out of the offered
+      // set and the checkpoint could never be cleared.
+      expect(injection).toContain("Run unity_verify_change");
     });
 
     it("should warn about stall when consecutive errors exceed threshold", () => {

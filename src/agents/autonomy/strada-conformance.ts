@@ -1,4 +1,5 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { getLogger } from "../../utils/logger.js";
 import { join as joinPath, resolve as resolvePath } from "node:path";
 
 /**
@@ -199,6 +200,11 @@ const PLAYMODE_VERIFICATION_TOOLS: ReadonlySet<string> = new Set([
  * statement of the paths that cannot drift from the paths it actually wrote.
  */
 /** Is this a file Unity will compile as part of the project? */
+/** Debug-only: did any guard actually observe a project write this run? */
+function logGuardWrite(toolName: string, filePath: string): void {
+  debugLog("Conformance guard saw a project write", { toolName, filePath });
+}
+
 function isInsideAssets(filePath: string): boolean {
   return /(^|\/)Assets\//i.test(filePath.replace(/\\/g, "/"));
 }
@@ -238,6 +244,20 @@ export function conformanceProjectPath(
   sourceRoot: string | undefined,
 ): string | undefined {
   return leasePath ?? sourceRoot;
+}
+
+/**
+ * A diagnostic line that cannot be the reason something fails.
+ *
+ * getLogger() throws when no logger has been created, which is correct for code
+ * that needs one and wrong for an observability line.
+ */
+function debugLog(message: string, meta: Record<string, unknown>): void {
+  try {
+    getLogger().debug(message, meta);
+  } catch {
+    // No logger in this context; the diagnostic is not worth an exception.
+  }
 }
 
 export class StradaConformanceGuard {
@@ -339,6 +359,7 @@ export class StradaConformanceGuard {
           const moduleRoot = moduleRootFor(filePath);
           if (moduleRoot) this.touchedModuleRoots.add(moduleRoot);
           if (isInsideAssets(filePath)) this.wroteProjectCode = true;
+          logGuardWrite(executedTool.toolName, filePath);
         }
         if (filePath && isCompilableFile(filePath)) {
           if (this.opts?.frameworkPathsOnly === false || isInsideFrameworkPath(filePath, this.deps)) {
