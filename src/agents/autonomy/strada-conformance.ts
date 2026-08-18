@@ -206,6 +206,17 @@ export class StradaConformanceGuard {
    * and becomes a loop.
    */
   private neverRunGateRaised = 0;
+  /**
+   * Tool-call count when the never-run gate was last raised.
+   *
+   * getPrompt() is not called once per turn — it is called wherever a caller
+   * wants to know whether a gate is open, and some of those calls discard the
+   * text. Counting calls spent the three-ask budget on questions nobody asked
+   * the agent, so the budget is spent per turn of actual work instead: the same
+   * gate raised again with no tool call in between is the same asking.
+   */
+  private neverRunGateRaisedAtCall: number | null = null;
+  private toolCallsSeen = 0;
   /** Module roots this run wrote C# into, e.g. "Assets/Modules/GameModule". */
   private readonly touchedModuleRoots = new Set<string>();
 
@@ -231,6 +242,8 @@ export class StradaConformanceGuard {
       content: output,
       isError,
     })) {
+      this.toolCallsSeen += 1;
+
       if (PLAYMODE_VERIFICATION_TOOLS.has(executedTool.toolName)) {
         // Tracked whether it passed or failed. A failed verification is the
         // agent's problem to solve and it already sees the error; this rule only
@@ -567,7 +580,10 @@ export class StradaConformanceGuard {
       wiring?.wired === true &&
       this.neverRunGateRaised < NEVER_RUN_GATE_LIMIT
     ) {
-      this.neverRunGateRaised += 1;
+      if (this.neverRunGateRaisedAtCall !== this.toolCallsSeen) {
+        this.neverRunGateRaised += 1;
+        this.neverRunGateRaisedAtCall = this.toolCallsSeen;
+      }
       const last = this.neverRunGateRaised === NEVER_RUN_GATE_LIMIT;
       return (
         "[STRADA GAME NEVER RUN] The scene is assembled and wired, but this run never started " +

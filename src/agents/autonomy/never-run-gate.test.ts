@@ -116,9 +116,16 @@ describe("a project that cannot comply", () => {
     const { root, configPath } = assembledProject();
     const guard = guardFor(root, configPath);
 
-    const asked = [1, 2, 3].map(() => guard.getPrompt());
+    // A turn of real work between askings, which is what spends the budget —
+    // repeated getPrompt() calls with nothing in between are one asking, because
+    // some callers ask and discard the answer.
+    const asked = [1, 2, 3].map(() => {
+      guard.trackToolCall("file_write", { path: configPath }, false);
+      return guard.getPrompt();
+    });
     expect(asked.every((p) => p?.includes("[STRADA GAME NEVER RUN]"))).toBe(true);
 
+    guard.trackToolCall("file_write", { path: configPath }, false);
     expect(guard.getPrompt() ?? "").not.toContain("[STRADA GAME NEVER RUN]");
   });
 
@@ -126,8 +133,11 @@ describe("a project that cannot comply", () => {
     const { root, configPath } = assembledProject();
     const guard = guardFor(root, configPath);
 
-    guard.getPrompt();
-    guard.getPrompt();
+    for (let i = 0; i < 2; i++) {
+      guard.trackToolCall("file_write", { path: configPath }, false);
+      guard.getPrompt();
+    }
+    guard.trackToolCall("file_write", { path: configPath }, false);
     const last = guard.getPrompt();
 
     expect(last).toContain("assembled but unverified");
@@ -142,5 +152,20 @@ describe("a project that cannot comply", () => {
     guard.trackToolCall("unity_playmode_verify", { projectPath: root }, false);
 
     expect(guard.getPrompt() ?? "").not.toContain("[STRADA GAME NEVER RUN]");
+  });
+});
+
+describe("what spends an asking", () => {
+  it("does not spend one on a repeated question in the same turn", () => {
+    // getPrompt() is called wherever a caller wants to know whether a gate is
+    // open, and some of those calls discard the text. Counting them spent the
+    // budget on questions the agent was never actually asked.
+    const { root, configPath } = assembledProject();
+    const guard = guardFor(root, configPath);
+
+    for (let i = 0; i < 10; i++) guard.getPrompt();
+
+    guard.trackToolCall("file_write", { path: configPath }, false);
+    expect(guard.getPrompt()).toContain("[STRADA GAME NEVER RUN]");
   });
 });
