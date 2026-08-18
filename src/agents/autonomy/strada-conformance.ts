@@ -487,6 +487,21 @@ export class StradaConformanceGuard {
       );
     }
 
+    const untested = this.untestedAssemblies();
+    if (untested.length > 0) {
+      return (
+        "[STRADA MODULE TESTS MISSING] These assemblies have no test assembly of their own: " +
+        `${untested.join("; ")}. ` +
+        "Each assembly is its own compilation unit, so each needs its own tests — " +
+        "`<Assembly>.Tests` for play-mode and `<Assembly>.Editor.Tests` for edit-mode, each " +
+        "referencing only the assembly it tests. Unity allows ONE .asmdef per folder, so give " +
+        "each its own directory (Tests/Runtime/<Assembly>/ and Tests/Editor/<Assembly>/); " +
+        "several .asmdef files in one folder makes the whole project fail to build. " +
+        "One shared test assembly referencing every layer defeats the split: no layer can be " +
+        "tested in isolation and a change anywhere rebuilds everything."
+      );
+    }
+
     // Assembled, tested and never run. The scene YAML can be perfectly wired
     // and the game still throw on its first frame — measured: breaking a single
     // reference to {fileID: 0} leaves a scene that opens fine and a bootstrapper
@@ -504,20 +519,6 @@ export class StradaConformanceGuard {
       );
     }
 
-    const untested = this.untestedAssemblies();
-    if (untested.length > 0) {
-      return (
-        "[STRADA MODULE TESTS MISSING] These assemblies have no test assembly of their own: " +
-        `${untested.join("; ")}. ` +
-        "Each assembly is its own compilation unit, so each needs its own tests — " +
-        "`<Assembly>.Tests` for play-mode and `<Assembly>.Editor.Tests` for edit-mode, each " +
-        "referencing only the assembly it tests. Unity allows ONE .asmdef per folder, so give " +
-        "each its own directory (Tests/Runtime/<Assembly>/ and Tests/Editor/<Assembly>/); " +
-        "several .asmdef files in one folder makes the whole project fail to build. " +
-        "One shared test assembly referencing every layer defeats the split: no layer can be " +
-        "tested in isolation and a change anywhere rebuilds everything."
-      );
-    }
 
     if (!this.needsConformanceReview()) {
       return null;
