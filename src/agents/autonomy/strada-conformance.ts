@@ -166,6 +166,22 @@ const PLAYMODE_VERIFICATION_TOOLS: ReadonlySet<string> = new Set([
   "unity_playmode_verify",
 ]);
 
+/**
+ * Every module root named anywhere in a block of text.
+ *
+ * Used on a generator's own report of what it created, which is the only
+ * statement of the paths that cannot drift from the paths it actually wrote.
+ */
+function moduleRootsIn(text: string): string[] {
+  if (!text) return [];
+  const roots = new Set<string>();
+  for (const line of text.split(/[\s,;]+/u)) {
+    const root = moduleRootFor(line);
+    if (root) roots.add(root);
+  }
+  return [...roots];
+}
+
 function moduleRootFor(filePath: string): string | null {
   const normalized = filePath.replace(/\\/g, "/");
   const match = MODULE_PATH_RE.exec(normalized);
@@ -227,6 +243,17 @@ export class StradaConformanceGuard {
         this.touchedFrameworkCode = true;
         if (!executedTool.isError) {
           this.usedFrameworkGenerator = true;
+          // The generator is the RECOMMENDED way to make a module, and this
+          // branch used to `continue` straight past the module-root recording
+          // below — so a run that followed the advice recorded no module roots,
+          // and every rule keyed on them went silent. The rules were inert on
+          // the primary path and only fired for hand-written modules.
+          //
+          // Read the roots out of what the tool reports it created, rather than
+          // rebuilding its naming convention here and drifting from it.
+          for (const root of moduleRootsIn(executedTool.output)) {
+            this.touchedModuleRoots.add(root);
+          }
         }
         continue;
       }
@@ -405,6 +432,13 @@ export class StradaConformanceGuard {
     const incomplete: string[] = [];
     for (const moduleRoot of this.touchedModuleRoots) {
       const entries = listDir(moduleDir(projectPath, moduleRoot));
+      // Nothing there is not proof of an incomplete module: a run that deletes
+      // a module records its root the same way a run that writes one does, and
+      // the only action that clears this gate would be re-creating what the
+      // user asked to remove. Every sibling rule here refuses to accuse on
+      // absent evidence; this one used to be the exception.
+      if (entries.length === 0) continue;
+
       const missing: string[] = [];
       if (!entries.some((e: string) => /ModuleConfig\.cs$/i.test(e))) missing.push("a *ModuleConfig.cs");
       if (!entries.some((e: string) => /\.asmdef$/i.test(e))) missing.push("an .asmdef");

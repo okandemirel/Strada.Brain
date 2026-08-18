@@ -82,6 +82,22 @@ function referenceIsNull(sceneText: string, fieldName: string): boolean | null {
   return match[1] === "0";
 }
 
+/**
+ * Is this a base class rather than a module's own config?
+ *
+ * An abstract ModuleConfig has no asset by definition, so requiring one turns a
+ * perfectly ordinary class hierarchy into an unclearable gate.
+ */
+function declaresAbstractConfig(path: string, io: SceneWiringIo): boolean {
+  try {
+    return /\babstract\s+(partial\s+)?class\b/.test(io.readFile(path));
+  } catch {
+    // Unreadable: no evidence that it is abstract, and no accusation either way
+    // beyond what the asset check already makes.
+    return false;
+  }
+}
+
 export function assessSceneWiring(
   projectPath: string,
   io: SceneWiringIo = defaultIo,
@@ -116,6 +132,13 @@ export function assessSceneWiring(
   const assetNames = new Set(configAssets.map((a) => basename(a, ".asset")));
   for (const cls of configClasses) {
     const name = basename(cls, ".cs");
+    // A class under a Tests/ root is a double or a fixture, not a module's
+    // config: demanding an asset for it blocks a correctly assembled game
+    // because someone wrote a test.
+    if (/\/Tests?\//i.test(cls.replace(/\\/g, "/"))) continue;
+    // An abstract base is never instantiated as an asset either.
+    if (declaresAbstractConfig(cls, io)) continue;
+
     if (!assetNames.has(name)) {
       problems.push({
         kind: "missing-config-asset",
