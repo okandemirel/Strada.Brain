@@ -237,7 +237,7 @@ export class SelfVerification {
     } else {
       lines.push(
         hasCsFiles
-          ? `\nUse unity_verify_change (preferred when bridge is connected) or dotnet_build to verify compilation and check Unity console for errors.`
+          ? `\nUse unity_verify_change to verify compilation and check the Unity console — it compiles headlessly and needs no bridge. Do not use dotnet_build: a Unity project has no .sln until the Editor has been opened once.`
           : `\nRun the most relevant verification tool or command before declaring the task complete.`,
       );
     }

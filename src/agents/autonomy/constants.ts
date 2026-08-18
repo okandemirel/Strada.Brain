@@ -27,6 +27,10 @@ export const VERIFY_TOOLS: ReadonlySet<string> = new Set([
   "unity_verify_change", "unity_compile_status", "unity_compile_wait",
   "unity_fix_compile_loop", "unity_test_run", "unity_test_results",
   "unity_playmode_test", "unity_editmode_test",
+  // Runs the game itself, with no Editor open — the strongest verification
+  // available here, and the only one that catches a scene that boots into a
+  // module that throws.
+  "unity_playmode_verify",
 ]);
 
 const VERIFY_TOOL_NAME_RE =
