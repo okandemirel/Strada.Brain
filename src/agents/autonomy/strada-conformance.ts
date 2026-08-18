@@ -86,6 +86,24 @@ const MODULE_PATH_RE = /(^|\/)Modules\/([^/]+)\//i;
 /** Recursive listing, flattened to file names — the pieces we look for can sit
  *  at the module root or one level down. Missing directory reads as empty. */
 /** Every .asmdef under `dir`, as paths relative to it. */
+/**
+ * The assembly name Unity actually enforces.
+ *
+ * It is the `name` field inside the .asmdef, not the file name. Reading the file
+ * name meant the duplicate check could not see the duplicates its own message
+ * described — two files called Board.asmdef both declaring "Game.Board" is a
+ * project Unity refuses to compile, and it read as two distinct assemblies.
+ */
+function assemblyNameOf(asmdefPath: string, fallback: string): string {
+  try {
+    const parsed = JSON.parse(readFileSync(asmdefPath, "utf8")) as { name?: unknown };
+    if (typeof parsed.name === "string" && parsed.name.trim() !== "") return parsed.name.trim();
+  } catch {
+    // Unreadable or malformed: the file name is the best remaining guess.
+  }
+  return fallback;
+}
+
 function defaultListAsmdefs(dir: string): string[] {
   if (!existsSync(dir)) return [];
   const found: string[] = [];
@@ -114,7 +132,15 @@ function defaultTestSources(dir: string): string[] {
   if (!existsSync(dir)) return [];
   const sources: string[] = [];
   const walk = (current: string, depth: number): void => {
-    for (const entry of readdirSync(current, { withFileTypes: true })) {
+    const entries = readdirSync(current, { withFileTypes: true });
+
+    // Unity's ownership rule, which this walk had backwards: a folder with its
+    // own .asmdef takes its sources OUT of the parent assembly. Counting them
+    // credited an empty test assembly with a nested assembly's tests, so the
+    // empty one — which Unity compiles and runs zero tests from — passed.
+    if (current !== dir && entries.some((e) => e.isFile() && e.name.endsWith(".asmdef"))) return;
+
+    for (const entry of entries) {
       const full = joinPath(current, entry.name);
       if (entry.isDirectory()) {
         if (depth > 0) walk(full, depth - 1);
@@ -172,6 +198,11 @@ const PLAYMODE_VERIFICATION_TOOLS: ReadonlySet<string> = new Set([
  * Used on a generator's own report of what it created, which is the only
  * statement of the paths that cannot drift from the paths it actually wrote.
  */
+/** Is this a file Unity will compile as part of the project? */
+function isInsideAssets(filePath: string): boolean {
+  return /(^|\/)Assets\//i.test(filePath.replace(/\\/g, "/"));
+}
+
 function moduleRootsIn(text: string): string[] {
   if (!text) return [];
   const roots = new Set<string>();
@@ -219,6 +250,17 @@ export class StradaConformanceGuard {
   private toolCallsSeen = 0;
   /** Module roots this run wrote C# into, e.g. "Assets/Modules/GameModule". */
   private readonly touchedModuleRoots = new Set<string>();
+  /**
+   * Whether this run wrote compilable code into the project at all.
+   *
+   * Separate from touchedModuleRoots on purpose. The module rules — is this a
+   * module, does it have tests, are its assembly names unique — are about the
+   * Modules/ convention and rightly key on it. Whether the run delivered a game
+   * is not: nothing obliges an agent to put its code under Assets/Modules/, and
+   * keying the scene and never-run gates on that folder made a game written
+   * under Assets/Scripts/ exempt from every one of them.
+   */
+  private wroteProjectCode = false;
 
   constructor(
     private readonly deps?: StradaDepsStatus,
@@ -267,6 +309,7 @@ export class StradaConformanceGuard {
           for (const root of moduleRootsIn(executedTool.output)) {
             this.touchedModuleRoots.add(root);
           }
+          this.wroteProjectCode = true;
         }
         continue;
       }
@@ -276,6 +319,7 @@ export class StradaConformanceGuard {
         if (filePath && isCompilableFile(filePath)) {
           const moduleRoot = moduleRootFor(filePath);
           if (moduleRoot) this.touchedModuleRoots.add(moduleRoot);
+          if (isInsideAssets(filePath)) this.wroteProjectCode = true;
         }
         if (filePath && isCompilableFile(filePath)) {
           if (this.opts?.frameworkPathsOnly === false || isInsideFrameworkPath(filePath, this.deps)) {
@@ -361,20 +405,24 @@ export class StradaConformanceGuard {
     if (!projectPath) return [];
     const listAsmdefs = this.opts?.listAsmdefs ?? defaultListAsmdefs;
 
-    const duplicates: string[] = [];
+    // Collected across every touched module, not per module: the constraint the
+    // message states is project-wide, and rebuilding the map inside the loop
+    // meant the same assembly name in two modules — the case that stops Unity
+    // compiling anything at all — never collided.
+    const byName = new Map<string, string[]>();
     for (const moduleRoot of this.touchedModuleRoots) {
-      const paths = listAsmdefs(moduleDir(projectPath, moduleRoot));
-      const byName = new Map<string, string[]>();
-      for (const path of paths) {
+      const root = moduleDir(projectPath, moduleRoot);
+      for (const path of listAsmdefs(root)) {
         const normalized = path.replace(/\\/g, "/");
-        const name = normalized.split("/").pop()!.replace(/\.asmdef$/i, "");
+        const fileName = normalized.split("/").pop()!.replace(/\.asmdef$/i, "");
+        const name = assemblyNameOf(joinPath(root, normalized), fileName);
         byName.set(name, [...(byName.get(name) ?? []), `${moduleRoot}/${normalized}`]);
       }
-      for (const [name, locations] of byName) {
-        if (locations.length > 1) {
-          duplicates.push(`${name} (${locations.join(" and ")})`);
-        }
-      }
+    }
+
+    const duplicates: string[] = [];
+    for (const [name, locations] of byName) {
+      if (locations.length > 1) duplicates.push(`${name} (${locations.join(" and ")})`);
     }
     return duplicates;
   }
@@ -399,11 +447,15 @@ export class StradaConformanceGuard {
       // assembly's own folder has to be resolved back against that root.
       for (const asmdefPath of listAsmdefs(root)) {
         const normalized = asmdefPath.replace(/\\/g, "/");
-        const name = normalized.split("/").pop()!.replace(/\.asmdef$/i, "");
+        const fileName = normalized.split("/").pop()!.replace(/\.asmdef$/i, "");
+        const name = assemblyNameOf(joinPath(root, normalized), fileName);
         if (!/\.(Editor\.)?Tests$/i.test(name)) continue;
 
         const slash = normalized.lastIndexOf("/");
-        const dir = slash === -1 ? root : joinPath(root, normalized.slice(0, slash));
+        // An .asmdef sitting at the module root would otherwise be credited with
+        // the module's entire production code as its "test sources".
+        if (slash === -1) continue;
+        const dir = joinPath(root, normalized.slice(0, slash));
         if (!existsSync(dir)) continue;
 
         const sources = readSources(dir);
@@ -424,7 +476,12 @@ export class StradaConformanceGuard {
       const paths = listAsmdefs(moduleDir(projectPath, moduleRoot));
       if (paths.length === 0) continue;
 
-      const names = paths.map((p) => p.replace(/\\/g, "/").split("/").pop()!.replace(/\.asmdef$/i, ""));
+      const root = moduleDir(projectPath, moduleRoot);
+      const names = paths.map((p) => {
+        const normalized = p.replace(/\\/g, "/");
+        const fileName = normalized.split("/").pop()!.replace(/\.asmdef$/i, "");
+        return assemblyNameOf(joinPath(root, normalized), fileName);
+      });
       const testNames = new Set(names.filter((n) => /\.(Editor\.)?Tests$/i.test(n)));
       const codeNames = names.filter((n) => !/\.(Editor\.)?Tests$/i.test(n));
 
@@ -468,7 +525,7 @@ export class StradaConformanceGuard {
    */
   private assessWiring(): ReturnType<typeof assessSceneWiring> | null {
     if (this.opts?.enabled === false) return null;
-    if (this.touchedModuleRoots.size === 0) return null;
+    if (!this.wroteProjectCode) return null;
     const projectPath = this.opts?.projectPath;
     if (!projectPath) return null;
     // No Assets directory on disk means there is nothing to read, not that the
@@ -522,7 +579,7 @@ export class StradaConformanceGuard {
     const wiring = this.assessWiring();
     if (wiring && !wiring.wired) {
       return (
-        "[STRADA GAME NOT ASSEMBLED] This run wrote module code but the project is not a " +
+        "[STRADA GAME NOT ASSEMBLED] This run wrote game code but the project is not a " +
         `runnable game: ${wiring.problems.map((p) => p.detail).join("; ")}. ` +
         "A ModuleConfig class does nothing until a ModuleConfig ASSET exists for it, and " +
         "nothing runs until a scene holds a GameBootstrapper whose _gameConfig points at a " +
