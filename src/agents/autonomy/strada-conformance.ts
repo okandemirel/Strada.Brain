@@ -153,6 +153,11 @@ function defaultListDir(dir: string): string[] {
   return names;
 }
 
+/** Tools that actually run the game rather than inspect it. */
+const PLAYMODE_VERIFICATION_TOOLS: ReadonlySet<string> = new Set([
+  "unity_playmode_verify",
+]);
+
 function moduleRootFor(filePath: string): string | null {
   const normalized = filePath.replace(/\\/g, "/");
   const match = MODULE_PATH_RE.exec(normalized);
@@ -165,6 +170,8 @@ export class StradaConformanceGuard {
   private touchedFrameworkCode = false;
   private consultedAuthoritativeSource = false;
   private usedFrameworkGenerator = false;
+  /** Whether this run tried to run the game, not only to build it. */
+  private attemptedPlaymodeVerification = false;
   /** Module roots this run wrote C# into, e.g. "Assets/Modules/GameModule". */
   private readonly touchedModuleRoots = new Set<string>();
 
@@ -190,6 +197,14 @@ export class StradaConformanceGuard {
       content: output,
       isError,
     })) {
+      if (PLAYMODE_VERIFICATION_TOOLS.has(executedTool.toolName)) {
+        // Tracked whether it passed or failed. A failed verification is the
+        // agent's problem to solve and it already sees the error; this rule only
+        // asks that the game was run at all, so that a failing attempt can never
+        // trap the run in a gate it has no way to clear.
+        this.attemptedPlaymodeVerification = true;
+      }
+
       if (STRADA_GENERATOR_TOOLS.has(executedTool.toolName)) {
         this.touchedFrameworkCode = true;
         if (!executedTool.isError) {
@@ -469,6 +484,23 @@ export class StradaConformanceGuard {
         "An .asmdef with no [Test] or [UnityTest] beside it compiles to an empty assembly, " +
         "reports zero failures because it runs nothing, and makes the coverage rule pass while " +
         "covering nothing. Write the tests, or delete the assembly and stop claiming it."
+      );
+    }
+
+    // Assembled, tested and never run. The scene YAML can be perfectly wired
+    // and the game still throw on its first frame — measured: breaking a single
+    // reference to {fileID: 0} leaves a scene that opens fine and a bootstrapper
+    // that logs "No configuration assigned!" the moment it starts.
+    //
+    // Only asked once the project is actually assembled, because a play-mode run
+    // of an unassembled project has nothing to load.
+    if (!this.attemptedPlaymodeVerification && wiring?.wired === true) {
+      return (
+        "[STRADA GAME NEVER RUN] The scene is assembled and wired, but this run never started " +
+        "the game. A wired scene is not a running one: a bootstrapper can initialize into a " +
+        "module that throws on its first frame, and the scene file reads identically either way. " +
+        "Run unity_playmode_verify — it enters play mode with no Editor open and fails on a " +
+        "failing test, an exception logged during play, or a run in which nothing executed."
       );
     }
 
