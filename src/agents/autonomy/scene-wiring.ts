@@ -98,6 +98,56 @@ function declaresAbstractConfig(path: string, io: SceneWiringIo): boolean {
   }
 }
 
+/**
+ * The guid Unity assigned to a script, from its .meta sidecar.
+ *
+ * An asset says which class it is by guid, never by file name — so a name is
+ * the one thing that cannot answer "does an asset exist for this config".
+ */
+function scriptGuid(path: string, io: SceneWiringIo): string | undefined {
+  try {
+    return /^guid:\s*([0-9a-f]{32})\s*$/m.exec(io.readFile(`${path}.meta`))?.[1];
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Config classes that some asset in the project is an instance of.
+ *
+ * Measured 2026-08-20: a scene assembled by unity_scene_build, verified on
+ * disk, and passing its play-mode boot test was reported unassembled — because
+ * the assets are named UIModule.asset while the class is UIModuleConfig, and
+ * the check compared names. A correctly built game accused of being a library
+ * sends the agent back to rebuild what it had already got right.
+ */
+function classesWithAnAsset(
+  files: readonly string[],
+  configClasses: readonly string[],
+  io: SceneWiringIo,
+): Set<string> {
+  const byGuid = new Map<string, string>();
+  for (const cls of configClasses) {
+    const guid = scriptGuid(cls, io);
+    if (guid) byGuid.set(guid, basename(cls, ".cs"));
+  }
+  if (byGuid.size === 0) return new Set();
+
+  const found = new Set<string>();
+  for (const asset of files.filter((f) => f.endsWith(".asset"))) {
+    let text: string;
+    try {
+      text = io.readFile(asset);
+    } catch {
+      continue;
+    }
+    const guid = /m_Script:\s*\{[^}]*\bguid:\s*([0-9a-f]{32})/i.exec(text)?.[1];
+    const cls = guid === undefined ? undefined : byGuid.get(guid);
+    if (cls !== undefined) found.add(cls);
+  }
+  return found;
+}
+
 export function assessSceneWiring(
   projectPath: string,
   io: SceneWiringIo = defaultIo,
@@ -130,6 +180,9 @@ export function assessSceneWiring(
   // A generated ModuleConfig CLASS does nothing until an ASSET exists for it:
   // the bootstrapper holds asset references, not types.
   const assetNames = new Set(configAssets.map((a) => basename(a, ".asset")));
+  // By guid first, because that is what Unity actually uses; the name rule
+  // stays as a fallback for a project whose .meta files are not on disk.
+  const backed = classesWithAnAsset(files, configClasses, io);
   for (const cls of configClasses) {
     const name = basename(cls, ".cs");
     // A class under a Tests/ root is a double or a fixture, not a module's
@@ -139,7 +192,7 @@ export function assessSceneWiring(
     // An abstract base is never instantiated as an asset either.
     if (declaresAbstractConfig(cls, io)) continue;
 
-    if (!assetNames.has(name)) {
+    if (!backed.has(name) && !assetNames.has(name)) {
       problems.push({
         kind: "missing-config-asset",
         detail: `${name}.cs has no ${name}.asset — the class exists but nothing references it`,

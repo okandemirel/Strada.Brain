@@ -124,3 +124,56 @@ describe("a delivered game", () => {
     expect(report.problems).toHaveLength(1);
   });
 });
+
+describe("an asset whose file name is not the class name", () => {
+  // Measured 2026-08-20 end to end: unity_scene_build assembled a scene from a
+  // real GDD run, verified every reference on disk, and its play-mode boot test
+  // passed — and this check called the project unassembled, because the tool
+  // names its assets UIModule.asset while the class is UIModuleConfig. A
+  // correctly built game accused of being a library sends the agent back to
+  // rebuild what it had already got right.
+  const CONFIG_ASSET = `
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_Script: {fileID: 11500000, guid: c0ffee00c0ffee00c0ffee00c0ffee00, type: 3}
+  m_Name: UIModule
+`;
+
+  it("recognises the asset by the script it instantiates", () => {
+    const io = project({
+      "/p/Assets/Modules/UI/UIModuleConfig.cs": "",
+      "/p/Assets/Modules/UI/UIModuleConfig.cs.meta": "guid: c0ffee00c0ffee00c0ffee00c0ffee00\n",
+      "/p/Assets/Settings/Modules/UIModule.asset": CONFIG_ASSET,
+      "/p/Assets/Scenes/Main.unity": WIRED_SCENE,
+    });
+
+    const report = assessSceneWiring("/p", io);
+
+    expect(report.problems, JSON.stringify(report.problems)).toEqual([]);
+    expect(report.wired).toBe(true);
+  });
+
+  it("still accuses when no asset instantiates the class", () => {
+    const io = project({
+      "/p/Assets/Modules/UI/UIModuleConfig.cs": "",
+      "/p/Assets/Modules/UI/UIModuleConfig.cs.meta": "guid: c0ffee00c0ffee00c0ffee00c0ffee00\n",
+      // An asset, but of some other script.
+      "/p/Assets/Settings/Other.asset": CONFIG_ASSET.replace("c0ffee00c0ffee00c0ffee00c0ffee00", "dddddddddddddddddddddddddddddddd"),
+      "/p/Assets/Scenes/Main.unity": WIRED_SCENE,
+    });
+
+    const report = assessSceneWiring("/p", io);
+
+    expect(report.problems.map((p) => p.kind)).toContain("missing-config-asset");
+  });
+
+  it("falls back to the name when the project has no .meta files", () => {
+    const io = project({
+      "/p/Assets/Modules/Board/BoardModuleConfig.cs": "",
+      "/p/Assets/Generated/BoardModuleConfig.asset": "",
+      "/p/Assets/Scenes/Main.unity": WIRED_SCENE,
+    });
+
+    expect(assessSceneWiring("/p", io).wired).toBe(true);
+  });
+});
