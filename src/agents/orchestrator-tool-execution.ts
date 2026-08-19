@@ -191,25 +191,65 @@ function jsonFailureSummary(content: string): string | undefined {
     return undefined;
   }
 
-  const found: string[] = [];
-  const visit = (node: unknown, depth: number): void => {
-    if (found.length > 0 || depth > 4 || node === null || typeof node !== "object") return;
-    // In priority order, not in the order the document happens to list them:
-    // a result carrying both "summary" and "error" should report the error.
-    const record = node as Record<string, unknown>;
-    for (const key of JSON_REASON_KEYS) {
-      const value = record[key];
-      if (typeof value === "string" && value.trim() !== "") {
-        found.push(`${key}: ${value.trim()}`);
-        return;
-      }
-    }
-    for (const value of Object.values(node as Record<string, unknown>)) {
-      if (Array.isArray(value)) value.forEach((v) => visit(v, depth + 1));
-      else visit(value, depth + 1);
-    }
-  };
-  visit(parsed, 0);
+  // In priority order, not in the order the document happens to list them:
+  // a result carrying both "summary" and "error" should report the error.
+  const atRoot = reasonKeyIn(parsed);
+  if (atRoot) return atRoot;
 
-  return found[0];
+  // A verdict document states its outcome at the top — status, plus the
+  // findings it counted. Measured on unity_verify_change, whose failure was
+  // logged as "message: Mono: successfully reloaded assembly": every console
+  // entry in its evidence carries a message, and a depth-first reader reaches
+  // the first log line long before it reaches the verdict.
+  const verdict = verdictSummary(parsed);
+  if (verdict) return verdict;
+
+  // Breadth-first for the rest, so a reason at the root of the evidence
+  // outranks one buried in a log the evidence happens to embed.
+  let level = childrenOf(parsed);
+  for (let depth = 1; depth <= 4 && level.length > 0; depth++) {
+    for (const node of level) {
+      const found = reasonKeyIn(node);
+      if (found) return found;
+    }
+    level = level.flatMap(childrenOf);
+  }
+
+  return undefined;
+}
+
+function reasonKeyIn(node: unknown): string | undefined {
+  if (node === null || typeof node !== "object") return undefined;
+  const record = node as Record<string, unknown>;
+  for (const key of JSON_REASON_KEYS) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim() !== "") return `${key}: ${value.trim()}`;
+  }
+  return undefined;
+}
+
+function childrenOf(node: unknown): unknown[] {
+  if (node === null || typeof node !== "object") return [];
+  const values = Array.isArray(node) ? node : Object.values(node as Record<string, unknown>);
+  return values.flatMap((value) => (Array.isArray(value) ? value : [value]));
+}
+
+/** "status: failed (compileIssues=27)" — the counts are the reason. */
+function verdictSummary(parsed: unknown): string | undefined {
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
+  const root = parsed as Record<string, unknown>;
+  const status = root["status"];
+  if (typeof status !== "string" || status.trim() === "") return undefined;
+
+  const summary = root["summary"];
+  const counts: string[] = [];
+  if (summary !== null && typeof summary === "object" && !Array.isArray(summary)) {
+    for (const [key, value] of Object.entries(summary as Record<string, unknown>)) {
+      // Zero findings and absent findings are not the reason anything failed.
+      if (typeof value === "number" && value !== 0) counts.push(`${key}=${value}`);
+      else if (value === false) counts.push(`${key}=false`);
+    }
+  }
+
+  return counts.length > 0 ? `status: ${status.trim()} (${counts.join(", ")})` : `status: ${status.trim()}`;
 }

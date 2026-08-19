@@ -75,3 +75,51 @@ describe("a result that is a document, not a sentence", () => {
     expect(firstMeaningfulLine("{not json at all\nsecond line")).toBe("{not json at all");
   });
 });
+
+describe("a verdict buried under its own evidence", () => {
+  // Measured on unity_verify_change at 23:52: the run's compile check failed and
+  // the log said detail:"message: Mono: successfully reloaded assembly". The
+  // verdict sits at the root; the console entries it attaches as evidence each
+  // carry a message, and a depth-first reader reaches those first.
+  const verifyResult = JSON.stringify({
+    status: "failed",
+    summary: { compileIssues: 27, testFailures: 0, buildSuccess: null },
+    evidence: {
+      console: {
+        entries: [
+          { message: "Mono: successfully reloaded assembly", type: "Log" },
+          { message: "Assets/Modules/Conveyor.cs(14,9): error CS0246", type: "Error" },
+        ],
+      },
+    },
+  });
+
+  it("reports the verdict, not the first line of the log it attached", () => {
+    expect(firstMeaningfulLine(verifyResult)).toBe("status: failed (compileIssues=27)");
+  });
+
+  it("keeps a stated reason ahead of the verdict when the tool gives one", () => {
+    const content = JSON.stringify({
+      status: "failed",
+      error: "no Unity editor found for this project",
+      summary: { compileIssues: 3 },
+    });
+
+    expect(firstMeaningfulLine(content)).toBe("error: no Unity editor found for this project");
+  });
+
+  it("names the status alone when nothing was counted", () => {
+    expect(firstMeaningfulLine(JSON.stringify({ status: "timeout", summary: {} }))).toBe(
+      "status: timeout",
+    );
+  });
+
+  it("prefers a shallow reason over one nested in attached evidence", () => {
+    const content = JSON.stringify({
+      evidence: { console: { entries: [{ message: "reloaded assembly" }] } },
+      failure: { reason: "compile never finished" },
+    });
+
+    expect(firstMeaningfulLine(content)).toBe("reason: compile never finished");
+  });
+});
