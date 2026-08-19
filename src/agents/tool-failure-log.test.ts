@@ -48,3 +48,30 @@ describe("what gets kept from a failure", () => {
     expect(firstMeaningfulLine("\n \n")).toBe("");
   });
 });
+
+describe("a result that is a document, not a sentence", () => {
+  it("reads the reason out of JSON instead of logging a brace", () => {
+    // Measured on batch_execute: the log said detail:"{" — the first line of a
+    // JSON document is a brace, and a log of that answers nothing.
+    const content = JSON.stringify({
+      ok: false,
+      results: [{ tool: "shell_exec", error: "shell command looks destructive" }],
+    });
+
+    expect(firstMeaningfulLine(content)).toBe("error: shell command looks destructive");
+  });
+
+  it("prefers the most direct field when several could serve", () => {
+    const content = JSON.stringify({ summary: "batch finished", error: "write refused" });
+
+    expect(firstMeaningfulLine(content)).toBe("error: write refused");
+  });
+
+  it("falls back to the text reading when the JSON says nothing useful", () => {
+    expect(firstMeaningfulLine('{"count": 3}')).toBe('{"count": 3}');
+  });
+
+  it("is not confused by text that merely starts with a brace", () => {
+    expect(firstMeaningfulLine("{not json at all\nsecond line")).toBe("{not json at all");
+  });
+});

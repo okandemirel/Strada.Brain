@@ -152,6 +152,13 @@ const DETAIL_HEADINGS = /^(problems?|errors?|failed|failures?):$/i;
  * beneath such a heading.
  */
 export function firstMeaningfulLine(content: string): string {
+  // A result that is JSON has no headline — its first line is "{" and a log of
+  // that says nothing at all. Measured on batch_execute, which reports its
+  // outcome as a document rather than a sentence. Pull the fields that carry the
+  // reason instead.
+  const fromJson = jsonFailureSummary(content);
+  if (fromJson) return fromJson.slice(0, 300);
+
   const lines = content.split("\n").map((l) => l.trim());
   const headline = lines.find((l) => l.length > 0) ?? "";
 
@@ -162,4 +169,47 @@ export function firstMeaningfulLine(content: string): string {
       : lines.slice(headingAt + 1).find((l) => l.length > 0);
 
   return (detail ? `${headline} ${detail}` : headline).slice(0, 300);
+}
+
+/** Fields a JSON tool result uses to say what went wrong, in order of directness. */
+const JSON_REASON_KEYS = ["error", "reason", "message", "detail", "summary"] as const;
+
+/**
+ * The failure a JSON result describes, or nothing when it is not JSON.
+ *
+ * Some tools answer with a document rather than a sentence, and the first line
+ * of a document is a brace.
+ */
+function jsonFailureSummary(content: string): string | undefined {
+  const trimmed = content.trim();
+  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return undefined;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return undefined;
+  }
+
+  const found: string[] = [];
+  const visit = (node: unknown, depth: number): void => {
+    if (found.length > 0 || depth > 4 || node === null || typeof node !== "object") return;
+    // In priority order, not in the order the document happens to list them:
+    // a result carrying both "summary" and "error" should report the error.
+    const record = node as Record<string, unknown>;
+    for (const key of JSON_REASON_KEYS) {
+      const value = record[key];
+      if (typeof value === "string" && value.trim() !== "") {
+        found.push(`${key}: ${value.trim()}`);
+        return;
+      }
+    }
+    for (const value of Object.values(node as Record<string, unknown>)) {
+      if (Array.isArray(value)) value.forEach((v) => visit(v, depth + 1));
+      else visit(value, depth + 1);
+    }
+  };
+  visit(parsed, 0);
+
+  return found[0];
 }
