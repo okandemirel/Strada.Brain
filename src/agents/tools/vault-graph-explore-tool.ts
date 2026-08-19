@@ -1,3 +1,4 @@
+import { vaultNotFound } from './vault-not-found.js';
 import type { IVault } from '../../vault/vault.interface.js';
 import type { ToolContext, ToolExecutionResult } from './tool.interface.js';
 
@@ -88,7 +89,7 @@ export class VaultGraphExploreTool {
     }
 
     if (!targetVaults.length) {
-      return { content: vaultId ? `vault not found: ${vaultId}` : 'no vaults registered', isError: true };
+      return { content: vaultId ? vaultNotFound(vaultId, registry.ids()) : 'no vaults registered', isError: true };
     }
 
     const started = Date.now();

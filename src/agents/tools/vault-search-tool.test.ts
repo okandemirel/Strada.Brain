@@ -22,6 +22,11 @@ function makeContext(
     vaultRegistry: {
       list: () => vaults,
       get: (id: string) => vaults.find((v) => (v as { id: string }).id === id),
+      resolve: (id: string) =>
+        vaults.find((v) => (v as { id: string }).id === id) ??
+        vaults.find((v) => (v as { kind?: string }).kind === id) ??
+        vaults.find((v) => (v as { id: string }).id.startsWith(`${id}:`)),
+      ids: () => vaults.map((v) => (v as { id: string }).id),
       resolveVaultForPath: () =>
         projectVaultId ? vaults.find((v) => (v as { id: string }).id === projectVaultId) : undefined,
     } as never,

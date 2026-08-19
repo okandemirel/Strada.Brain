@@ -128,6 +128,32 @@ export class VaultRegistry {
     this.names.delete(id);
   }
   get(id: VaultId): IVault | undefined { return this.vaults.get(id); }
+
+  /**
+   * The id a caller meant, when they did not have the exact one to hand.
+   *
+   * Ids are qualified ("self:strada-brain", "obsidian:3f2a1b9c") but the names
+   * that reach a caller are the kinds — vault_search's own description offers
+   * 'self' as an example. Measured on a live run: the agent followed that
+   * description and got "vault not found: self" twice.
+   *
+   * Exact id wins. Otherwise a kind, or an id prefix, but only when it picks
+   * out exactly one vault — an ambiguous guess is not a resolution.
+   */
+  resolve(requested: string): IVault | undefined {
+    const exact = this.vaults.get(requested);
+    if (exact) return exact;
+
+    const all = this.list();
+    const byKind = all.filter((v) => v.kind === requested);
+    if (byKind.length === 1) return byKind[0];
+
+    const byPrefix = all.filter((v) => v.id.startsWith(`${requested}:`));
+    return byPrefix.length === 1 ? byPrefix[0] : undefined;
+  }
+
+  /** Registered ids, for an error that can be acted on rather than guessed at. */
+  ids(): string[] { return [...this.vaults.keys()]; }
   list(): IVault[] { return [...this.vaults.values()]; }
 
   /**

@@ -1,3 +1,4 @@
+import { vaultNotFound } from './vault-not-found.js';
 import { resolve as pathResolve, sep as pathSep } from 'node:path';
 import type { VaultRegistry } from '../../vault/vault-registry.js';
 import type { IVault, VaultFile, VaultHit, VaultQuery } from '../../vault/vault.interface.js';
@@ -149,7 +150,7 @@ export class VaultSearchTool {
     let explicitMiss = false;
 
     if (vaultId) {
-      const vault = registry.get(vaultId);
+      const vault = registry.resolve(vaultId);
       targetVaults = vault ? [vault] : [];
       if (!vault) {
         explicitMiss = true;
@@ -195,7 +196,7 @@ export class VaultSearchTool {
 
     if (!targetVaults.length) {
       return {
-        content: vaultId ? `vault not found: ${vaultId}` : 'no vaults registered',
+        content: vaultId ? vaultNotFound(vaultId, registry.ids()) : 'no vaults registered',
         isError: explicitMiss,
       };
     }
