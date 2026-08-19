@@ -94,6 +94,7 @@ export function trackAndRecordToolResults(params: ToolTrackingParams): void {
       getLoggerSafe()?.info("Tool failed", {
         tool: tc.name,
         chatId,
+        target: failureTarget(tc.input),
         detail: firstMeaningfulLine(tr.content),
       });
     }
@@ -252,4 +253,32 @@ function verdictSummary(parsed: unknown): string | undefined {
   }
 
   return counts.length > 0 ? `status: ${status.trim()} (${counts.join(", ")})` : `status: ${status.trim()}`;
+}
+
+/**
+ * What the call was aimed at, when that is the whole of the story.
+ *
+ * "file_read failed: file not found" names no file, so a run that spent eight
+ * minutes probing paths that were not there could not be told apart from one
+ * making progress. Only the keys that identify a target — never free-form
+ * content, which would turn the log into a transcript.
+ */
+const TARGET_KEYS = [
+  "path",
+  "file_path",
+  "filePath",
+  "directory",
+  "dir",
+  "scenePath",
+  "pattern",
+] as const;
+
+export function failureTarget(input: unknown): string | undefined {
+  if (input === null || typeof input !== "object") return undefined;
+  const record = input as Record<string, unknown>;
+  for (const key of TARGET_KEYS) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim() !== "") return value.trim().slice(0, 160);
+  }
+  return undefined;
 }

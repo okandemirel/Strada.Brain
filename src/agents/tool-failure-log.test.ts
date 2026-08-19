@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { firstMeaningfulLine } from "./orchestrator-tool-execution.js";
+import { firstMeaningfulLine, failureTarget } from "./orchestrator-tool-execution.js";
 
 describe("what gets kept from a failure", () => {
   it("keeps the cause, not just the generic headline", () => {
@@ -121,5 +121,36 @@ describe("a verdict buried under its own evidence", () => {
     });
 
     expect(firstMeaningfulLine(content)).toBe("reason: compile never finished");
+  });
+});
+
+describe("what the call was aimed at", () => {
+  // Measured on the run of 2026-08-20: eight minutes of "file_read: file not
+  // found" and "list_directory: directory not found" with no path in any of
+  // them — indistinguishable from progress.
+  it("names the path a read missed", () => {
+    expect(failureTarget({ path: "Assets/Modules/Tray/TrayModule.cs" })).toBe(
+      "Assets/Modules/Tray/TrayModule.cs",
+    );
+  });
+
+  it("finds the target under whichever key the tool uses", () => {
+    expect(failureTarget({ directory: "Assets/Nowhere" })).toBe("Assets/Nowhere");
+    expect(failureTarget({ pattern: "**/*.prefab" })).toBe("**/*.prefab");
+  });
+
+  it("keeps free-form content out of the log", () => {
+    expect(failureTarget({ content: "a whole file body", query: "some prose" })).toBeUndefined();
+  });
+
+  it("truncates a path long enough to bury the line", () => {
+    const long = `Assets/${"deep/".repeat(80)}Thing.cs`;
+
+    expect(failureTarget({ path: long })!.length).toBe(160);
+  });
+
+  it("says nothing when the call had no target", () => {
+    expect(failureTarget({ recompile: true })).toBeUndefined();
+    expect(failureTarget(undefined)).toBeUndefined();
   });
 });
