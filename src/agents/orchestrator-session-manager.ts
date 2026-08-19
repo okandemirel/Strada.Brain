@@ -694,12 +694,20 @@ export class SessionManager {
    * the v2 end-turn boundary (portDispatchEndTurn) — v1 checked it via the deleted checkPendingBlocks
    * inside the loops (cutover Step 5); the FLIP left it unsurfaced until now.
    */
+  /** Rejections already reported, so one refusal cannot end several turns. */
+  private readonly consumedWriteRejections = new Set<string>();
+
   getPendingSelfManagedWriteRejectionVisibleText(
     session: Session,
     draft: string | null | undefined,
   ): string | null {
     const normalizedDraft = stripInternalDecisionMarkers(draft ?? "").trim();
-    if (normalizedDraft && !LOW_SIGNAL_EXECUTION_ACK_RE.test(normalizedDraft)) {
+    // An empty draft is not an acknowledgement. The guard used to read "if there
+    // IS a draft and it is not an ack, bail", so an empty one fell straight
+    // through — and a bare DONE/CONTINUE reflection normalizes to empty, which
+    // is a real boundary. The run was then told a rejection had stopped it when
+    // nothing had.
+    if (!normalizedDraft || !LOW_SIGNAL_EXECUTION_ACK_RE.test(normalizedDraft)) {
       return null;
     }
 
@@ -718,6 +726,14 @@ export class SessionManager {
           continue;
         }
 
+        // Each rejection stops the run once. The scan walks the whole history
+        // with no turn boundary, so without this a single old rejection ended
+        // every later turn as well — measured as four "execution stopped"
+        // reports in one run from far fewer refusals.
+        const fingerprint = block.content.slice(0, 200);
+        if (this.consumedWriteRejections.has(fingerprint)) continue;
+        this.consumedWriteRejections.add(fingerprint);
+
         const match = block.content.match(
           /for '([^']+)':\s*(.+?)\.\s*Choose a safer bounded operation/iu,
         );
@@ -728,7 +744,14 @@ export class SessionManager {
           "",
           `Reason: ${reason}.`,
           "",
-          "No safer bounded replacement was produced in the same turn.",
+          // The old closing line said "No safer bounded replacement was produced
+          // in the same turn", which described a capability that does not exist:
+          // nothing in the system can synthesize a replacement command, and the
+          // review contract has no field to carry one. Saying what the run can
+          // actually do is more use than reporting the absence of a machine that
+          // was never built.
+          "The reason above is the guidance you have. Propose a narrower command " +
+            "that does only what the task needs, or use a dedicated tool instead of the shell.",
         ].join("\n");
       }
     }
