@@ -47,6 +47,13 @@ export interface ToolContext {
    * indexed for projectPath".
    */
   sourceProjectPath?: string;
+  /**
+   * Absolute paths the user typed in their own message.
+   *
+   * Read-only authorization for exactly those files, so a design document
+   * outside the project can be read when the user asked for it by name.
+   */
+  userAuthorizedPaths?: readonly string[];
   /** Current working directory (may differ from projectPath) */
   workingDirectory: string;
   /** Whether the system is in read-only mode */

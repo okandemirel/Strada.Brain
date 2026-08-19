@@ -1,6 +1,7 @@
 import { readFile, stat } from "node:fs/promises";
 import { relative as pathRelative, resolve as pathResolve, sep as pathSep } from "node:path";
 import { validatePath } from "../../security/path-guard.js";
+import { isUserAuthorizedPath } from "../../security/user-authorized-paths.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "./tool.interface.js";
 import { FILE_LIMITS } from "../../common/constants.js";
 import type { IVault } from "../../vault/vault.interface.js";
@@ -105,6 +106,15 @@ export class FileReadTool implements ITool {
 
     const pathCheck = await validatePath(context.projectPath, relPath);
     if (!pathCheck.valid) {
+      // One exception, and only for reads: a file the user named in their own
+      // message. Confinement is right for every path the agent picks itself,
+      // and it also blocked the product's central case — "here is the design
+      // document, build the game" — because such a document lives outside the
+      // Unity project. The permission comes from the user having typed the
+      // path, which is narrower than widening confinement for everything.
+      if (isUserAuthorizedPath(relPath, context.userAuthorizedPaths)) {
+        return await readAuthorizedFile(relPath, offset, limit);
+      }
       return { content: `Error: ${pathCheck.error}`, isError: true };
     }
 
@@ -319,3 +329,44 @@ function scheduleReindex(vault: IVault, vaultRelPath: string): void {
   });
 }
 
+/**
+ * Read a file the user named themselves.
+ *
+ * Deliberately plain: no vault lookup, no reindexing, no write path. It exists
+ * to let the run see an input document that lives outside the project, and
+ * nothing more.
+ */
+async function readAuthorizedFile(
+  path: string,
+  offset: number,
+  limit: number,
+): Promise<{ content: string; isError?: boolean }> {
+  try {
+    const fileStat = await stat(path);
+    if (!fileStat.isFile()) {
+      return { content: `Error: ${path} is not a file`, isError: true };
+    }
+    if (fileStat.size > MAX_FILE_SIZE) {
+      return {
+        content: `Error: file too large (${Math.round(fileStat.size / 1024)}KB). Max: ${MAX_FILE_SIZE / 1024}KB. Use offset/limit.`,
+        isError: true,
+      };
+    }
+
+    const lines = (await readFile(path, "utf-8")).split("\n");
+    const selected = lines.slice(offset - 1, offset - 1 + limit);
+    const numbered = selected
+      .map((line, i) => `${String(offset + i).padStart(5)} | ${line}`)
+      .join("\n");
+
+    return {
+      content:
+        `File: ${path} (${lines.length} lines total, showing ${offset}-` +
+        `${Math.min(offset + limit - 1, lines.length)})\n` +
+        "Read on your authority: you named this path.\n\n" +
+        numbered,
+    };
+  } catch (error) {
+    return { content: `Error: could not read ${path}: ${String(error)}`, isError: true };
+  }
+}

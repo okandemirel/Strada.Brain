@@ -12,6 +12,7 @@ import { streamOrChatText } from "./providers/provider.interface.js";
 import { parseBatchOperations, type BatchOperation } from "./autonomy/batch-write-gate.js";
 import { warrantsSupervisor } from "../goals/tree-shape.js";
 import { DotnetProjectPresence, DOTNET_PROJECT_TOOLS } from "./dotnet-project-presence.js";
+import { extractUserAuthorizedPaths } from "../security/user-authorized-paths.js";
 import { ProviderHealthRegistry } from "./providers/provider-health.js";
 import { AgentEngine } from "../agent-core/engine/agent-engine.js";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -2491,6 +2492,22 @@ export class Orchestrator {
     });
   }
 
+  /**
+   * Absolute paths the user typed in their latest message for this chat.
+   *
+   * Read from the session each time rather than cached: the authorization is a
+   * property of what the user just asked for, not of the run.
+   */
+  private userAuthorizedPathsFor(chatId: string): readonly string[] {
+    try {
+      const session = this.sessionManager.getOrCreateSession(chatId);
+      return extractUserAuthorizedPaths(this.sessionManager.extractLastUserMessage(session));
+    } catch {
+      // No session, no authorization — the restrictive answer.
+      return [];
+    }
+  }
+
   private getClarificationContext(): ClarificationContext {
     return {
       interactionConfig: this.interactionConfig,
@@ -3989,6 +4006,11 @@ export class Orchestrator {
       // Survives the lease swap above, so vault lookups still resolve to the
       // project the vault is registered against.
       sourceProjectPath: this.projectPath,
+      // Files the user named in their own message, readable on that authority
+      // even when they sit outside the project. Derived per call from the
+      // session, so it is always this chat's most recent request and never
+      // accumulates across conversations.
+      userAuthorizedPaths: this.userAuthorizedPathsFor(chatId),
       workingDirectory,
       readOnly: this.readOnly,
       userId: options.userId,
