@@ -1,4 +1,5 @@
 import type { AgentPhase } from "./agent-state.js";
+import { getLoggerSafe } from "../utils/logger.js";
 import type { ExecutionJournal } from "./autonomy/execution-journal.js";
 import type { ToolCall, ToolResult } from "./providers/provider-core.interface.js";
 import type { WorkerRunResult, WorkerToolTrace } from "./supervisor/supervisor-types.js";
@@ -84,6 +85,19 @@ export function trackAndRecordToolResults(params: ToolTrackingParams): void {
     const tr = toolResults[i]!;
     const delegatedWorkerResult = tr.metadata?.["workerResult"] as WorkerRunResult | undefined;
 
+    // A failing tool leaves no trace anywhere: results go into the model's
+    // context and nowhere else, so after a run that called unity_scene_build
+    // twice and produced no scene there was no way to learn why. The verdict is
+    // the one thing worth keeping — enough of it to name the cause, not so much
+    // that a log becomes a transcript.
+    if (tr.isError) {
+      getLoggerSafe()?.info("Tool failed", {
+        tool: tc.name,
+        chatId,
+        detail: firstMeaningfulLine(tr.content),
+      });
+    }
+
     taskPlanner.trackToolCall(tc.name, tr.isError ?? false);
     selfVerification.track(tc.name, tc.input, tr);
     if (delegatedWorkerResult) {
@@ -123,4 +137,18 @@ export function trackAndRecordToolResults(params: ToolTrackingParams): void {
     providerName,
     modelId,
   });
+}
+
+/**
+ * The line of a tool result that says what went wrong.
+ *
+ * Tool failures often lead with a headline and then quote pages of compiler
+ * output; the headline is what identifies the failure.
+ */
+export function firstMeaningfulLine(content: string): string {
+  const line = content
+    .split("\n")
+    .map((l) => l.trim())
+    .find((l) => l.length > 0);
+  return (line ?? "").slice(0, 300);
 }
