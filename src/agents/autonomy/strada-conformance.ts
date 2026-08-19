@@ -623,10 +623,16 @@ export class StradaConformanceGuard {
         `runnable game: ${wiring.problems.map((p) => p.detail).join("; ")}. ` +
         "A ModuleConfig class does nothing until a ModuleConfig ASSET exists for it, and " +
         "nothing runs until a scene holds a GameBootstrapper whose _gameConfig points at a " +
-        "GameBootstrapperConfig listing those assets. Use unity_scene_build with a scene spec " +
-        "to assemble and verify them; it needs no Unity Editor open. If that tool is not among " +
-        "the ones you have, this project's Strada.MCP submodule predates it: say so plainly " +
-        "rather than reporting the task complete, because the project still only compiles."
+        "GameBootstrapperConfig listing those assets. Use unity_scene_build with a scene spec; it " +
+        "needs no Unity Editor open. The spec must carry three things or it assembles an empty " +
+        "scene: an asset of type Strada.Core.Bootstrap.GameBootstrapperConfig, an object with a " +
+        "Strada.Core.Bootstrap.GameBootstrapper component, and that component's _gameConfig field " +
+        "with kind \"reference\" pointing at the asset id. Measured: a run called the tool twice " +
+        "and produced a scene containing no bootstrapper at all, because its spec named neither. " +
+        "Anything the game spawns at runtime belongs in the same spec as an object with a " +
+        "prefabPath and keepInScene: false. If that tool is not among the ones you have, this " +
+        "project's Strada.MCP submodule predates it: say so plainly rather than reporting the " +
+        "task complete, because the project still only compiles."
       );
     }
 
