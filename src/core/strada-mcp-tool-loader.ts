@@ -685,6 +685,7 @@ export class StradaMcpRuntime {
     readOnly: boolean;
     unityBridgeConnected: boolean;
     allowedPaths?: string[];
+    userAuthorizedPaths?: readonly string[];
   } {
     return {
       projectPath: context.projectPath,
@@ -692,6 +693,17 @@ export class StradaMcpRuntime {
       readOnly: context.readOnly,
       unityBridgeConnected: this.bridgeConnected,
       allowedPaths: resolveAllowedPaths(this.toolContext.allowedPaths, context.projectPath),
+      // Carried across the boundary, or every MCP tool loses it. Measured: a run
+      // reached for the design document through batch_execute — an MCP tool —
+      // and was refused "Path resolves outside the project directory" for a file
+      // the user had named in the request that started the run. This adapter
+      // builds a new object, so a field that is not listed here does not exist
+      // on the other side.
+      //
+      // Deliberately not folded into allowedPaths: that also gates file_write,
+      // file_delete and file_rename, and naming a file to be read is not
+      // permission to overwrite it.
+      userAuthorizedPaths: context.userAuthorizedPaths,
     };
   }
 
