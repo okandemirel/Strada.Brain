@@ -99,3 +99,30 @@ describe("FileReadTool", () => {
     expect(result.content).toContain("    2 | line2");
   });
 });
+
+describe("what a failed read is told", () => {
+  // Measured across two live runs: five file_read failures answered "Parent
+  // directory does not exist". Every one of them was a file that was not
+  // there — the agent was sent looking for a directory problem it did not have.
+  it("reports a missing file as a missing file", async () => {
+    const result = await new FileReadTool().execute(
+      { path: "Assets/Nowhere/Deeper/Thing.cs" },
+      { projectPath: process.cwd() } as never,
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain("file not found");
+    expect(result.content).toContain("Assets/Nowhere/Deeper/Thing.cs");
+    expect(result.content).not.toContain("Parent directory");
+  });
+
+  it("leaves the confinement refusal saying what it means", async () => {
+    const result = await new FileReadTool().execute(
+      { path: "../../../etc/hosts" },
+      { projectPath: process.cwd() } as never,
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain("outside the project directory");
+  });
+});

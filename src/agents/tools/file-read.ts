@@ -122,7 +122,7 @@ export class FileReadTool implements ITool {
       if (isUserAuthorizedPath(relPath, authorized)) {
         return await readAuthorizedFile(relPath, offset, limit);
       }
-      return { content: `Error: ${pathCheck.error}`, isError: true };
+      return { content: `Error: ${readErrorFor(pathCheck.error, relPath)}`, isError: true };
     }
 
     // ── Vault-first read path ────────────────────────────────────────────
@@ -403,4 +403,18 @@ async function readAuthorizedFile(
  */
 function isRichDocument(path: string): boolean {
   return RICH_DOCUMENT_EXTENSIONS.some((ext) => path.toLowerCase().endsWith(ext));
+}
+
+/**
+ * The guard speaks for writers.
+ *
+ * A path with no parent directory is, to a reader, simply a file that is not
+ * there — and "Parent directory does not exist" sends the agent looking for a
+ * directory problem it does not have. Measured across two live runs: five
+ * reads answered that way, none of them about a directory. Confinement keeps
+ * its own wording, because that one means what it says.
+ */
+function readErrorFor(guardError: string | undefined, relPath: string): string {
+  if (guardError === "Parent directory does not exist") return `file not found: ${relPath}`;
+  return guardError ?? "path rejected";
 }
