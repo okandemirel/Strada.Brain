@@ -1,6 +1,7 @@
 import { readFile, stat } from "node:fs/promises";
 import { relative as pathRelative, resolve as pathResolve, sep as pathSep } from "node:path";
 import { validatePath } from "../../security/path-guard.js";
+import { docxToText, looksLikeZip } from "./docx-text.js";
 import { isUserAuthorizedPath } from "../../security/user-authorized-paths.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "./tool.interface.js";
 import { FILE_LIMITS } from "../../common/constants.js";
@@ -157,7 +158,14 @@ export class FileReadTool implements ITool {
         };
       }
 
-      const content = await readFile(pathCheck.fullPath, "utf-8");
+      const decoded = decodeDocument(pathCheck.fullPath, await readFile(pathCheck.fullPath));
+      if (decoded === null) {
+        return {
+          content: `Error: ${relPath} is not a text document this tool can read`,
+          isError: true,
+        };
+      }
+      const content = decoded;
       const lines = content.split("\n");
       const totalLines = lines.length;
       const selectedLines = lines.slice(offset - 1, offset - 1 + limit);
@@ -353,7 +361,15 @@ async function readAuthorizedFile(
       };
     }
 
-    const lines = (await readFile(path, "utf-8")).split("\n");
+    const raw = await readFile(path);
+    const text = decodeDocument(path, raw);
+    if (text === null) {
+      return {
+        content: `Error: ${path} is not a text document this tool can read`,
+        isError: true,
+      };
+    }
+    const lines = text.split("\n");
     const selected = lines.slice(offset - 1, offset - 1 + limit);
     const numbered = selected
       .map((line, i) => `${String(offset + i).padStart(5)} | ${line}`)
@@ -369,4 +385,19 @@ async function readAuthorizedFile(
   } catch (error) {
     return { content: `Error: could not read ${path}: ${String(error)}`, isError: true };
   }
+}
+
+/**
+ * The readable text of a file, whichever container it arrives in.
+ *
+ * A design document handed over by a person is usually a Word file, and UTF-8
+ * decoding turns one into noise — so the run reads gibberish and plans from
+ * nothing. Returns null when the bytes are not text this tool can present,
+ * which is a better answer than a screenful of binary.
+ */
+function decodeDocument(path: string, raw: Buffer): string | null {
+  if (/\.docx$/iu.test(path)) {
+    return looksLikeZip(raw) ? docxToText(raw) : null;
+  }
+  return raw.toString("utf-8");
 }

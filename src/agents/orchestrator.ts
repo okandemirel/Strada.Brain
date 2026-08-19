@@ -13,6 +13,7 @@ import { parseBatchOperations, type BatchOperation } from "./autonomy/batch-writ
 import { warrantsSupervisor } from "../goals/tree-shape.js";
 import { DotnetProjectPresence, DOTNET_PROJECT_TOOLS } from "./dotnet-project-presence.js";
 import { extractUserAuthorizedPaths } from "../security/user-authorized-paths.js";
+import { isFailedTerminalKey } from "./autonomy/terminal-outcome.js";
 import { ProviderHealthRegistry } from "./providers/provider-health.js";
 import { AgentEngine } from "../agent-core/engine/agent-engine.js";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -726,6 +727,8 @@ export class Orchestrator {
    *  Built alongside the registry by bootstrap; absent/unmapped ⇒ no revive (→ BLOCKED on down). */
   private readonly capabilityAdapters?: ReadonlyMap<string, CapabilityAdapter>;
   private readonly sessionManager: SessionManager;
+  /** Last terminal outcome surfaced to the user, for settling the episode. */
+  private lastTerminalMessageKey: string | undefined;
   /**
    * Per-run answer to "is there anything for dotnet to build".
    *
@@ -1161,7 +1164,15 @@ export class Orchestrator {
       portOnEpochRollover: (continued, epoch, agentState, runCtx) =>
         this.portOnEpochRollover(continued, epoch, agentState, runCtx),
       recordInRunTrajectoryCredit: (params) => this.recordInRunTrajectoryCredit(params),
-      mapTerminalReasonToMessageKey: (reason, status) => this.mapTerminalReasonToMessageKey(reason, status),
+      mapTerminalReasonToMessageKey: (reason, status) => {
+        const key = this.mapTerminalReasonToMessageKey(reason, status);
+        // Remembered so the episode can be settled honestly. A run that told the
+        // user "the AI provider is not responding" was still recorded as
+        // failed:false, because the settlement below defaults to success and
+        // nothing carried the terminal outcome out to it.
+        if (key !== undefined) this.lastTerminalMessageKey = key;
+        return key;
+      },
       createGateway: () => new ModelGateway(this.silentStream as unknown as SilentStreamPort),
     });
   }
@@ -3066,6 +3077,7 @@ export class Orchestrator {
         }, TYPING_INTERVAL_MS)
       : undefined;
 
+    let runFailed = false;
     try {
       // Agent Core v2 interactive driver — THE engine (cutover Step 5 deleted the v1
       // runAgentLoop and its route flag; every interactive turn runs the spine through the
@@ -3134,6 +3146,7 @@ export class Orchestrator {
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : "Unknown error";
       logger.error("Agent loop error", { chatId, error: errMsg });
+      runFailed = true;
       await this.sessionManager.sendVisibleAssistantText(chatId, session, classifyErrorMessage(error));
     } finally {
       // A root run marks its episode terminal (rolls the workspace over on the next
@@ -3141,7 +3154,10 @@ export class Orchestrator {
       // joinEpisodeEnd so it never prematurely terminates the shared parent episode —
       // the whole-goal episode stays open until the ROOT run's requestEnd.
       if (isMonitorRootRun) {
-        this.monitorLifecycle?.requestEnd(resolveConversationScope(chatId, conversationId));
+        this.monitorLifecycle?.requestEnd(
+          resolveConversationScope(chatId, conversationId),
+          runFailed || isFailedTerminalKey(this.lastTerminalMessageKey),
+        );
       } else {
         this.monitorLifecycle?.joinEpisodeEnd(resolveConversationScope(chatId, conversationId), false, monitorScope);
       }

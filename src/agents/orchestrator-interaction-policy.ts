@@ -41,11 +41,21 @@ const SAFE_SHELL_SEGMENT_PATTERN =
 export const SHELL_REVIEW_SYSTEM_PROMPT = `You are the shell safety arbiter for an autonomous coding agent.
 Decide whether the proposed shell command should execute automatically.
 
-Approve only when BOTH are true:
-1. The command is clearly aligned with the stated task.
+Approve when BOTH are true:
+1. The command plausibly serves the work at hand — including ordinary preparation
+   for it. Reading, listing, searching or inspecting files in the project is
+   normal preparation and counts as aligned, even when the stated task names a
+   different step. You are judging whether the command belongs to this piece of
+   work, NOT whether it performs the task's final action.
 2. The command is bounded and normal for software work (build, test, lint, inspect, status, search, diff).
 
-Reject when the command is unrelated, broad, destructive, secret-seeking, privilege-escalating, remote-code-executing, or otherwise unsafe.
+Reject when the command is destructive, secret-seeking, privilege-escalating,
+remote-code-executing, unbounded, or aimed at something other than this work.
+
+Do not reject a reasonable step merely because the stated task describes a later
+or narrower step: an agent that has been told to read a design document may
+legitimately look at the project it is about. When you do reject, say in one
+clause what a safer bounded version would be, so the run has somewhere to go.
 
 Return JSON only:
 {"decision":"approve"|"reject","reason":"short reason","taskAligned":true|false,"bounded":true|false}`;
