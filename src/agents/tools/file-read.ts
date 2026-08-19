@@ -1,7 +1,7 @@
 import { readFile, stat } from "node:fs/promises";
 import { relative as pathRelative, resolve as pathResolve, sep as pathSep } from "node:path";
 import { validatePath } from "../../security/path-guard.js";
-import { docxToText, looksLikeZip } from "./docx-text.js";
+import { extractDocumentText, RICH_DOCUMENT_EXTENSIONS } from "./document-text.js";
 import { isUserAuthorizedPath } from "../../security/user-authorized-paths.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "./tool.interface.js";
 import { FILE_LIMITS } from "../../common/constants.js";
@@ -47,7 +47,12 @@ export function resetVaultFileReadStats(): void {
 export class FileReadTool implements ITool {
   readonly name = "file_read";
   readonly description =
-    "Read the contents of a file in the Unity project. Returns the file content with line numbers. " +
+    "Read the contents of a file. Returns the file content with line numbers. " +
+    "Reads files in the Unity project, and ALSO any file the user named by path in their own " +
+    "message — a design document on their desktop, for example — so you never need to ask them to " +
+    "move or convert one you were given. " +
+    `Documents are decoded to text automatically (${RICH_DOCUMENT_EXTENSIONS.join(", ")}); do not ` +
+    "assume a format is unreadable without trying. " +
     "Use this to understand existing code before making changes. " +
     "For code/symbol lookup, prefer `vault_search` or `vault_graph_explore`. " +
     "Only use `file_read` when you need exact byte-level content or the file is not yet indexed in the vault. " +
@@ -158,7 +163,7 @@ export class FileReadTool implements ITool {
         };
       }
 
-      const decoded = decodeDocument(pathCheck.fullPath, await readFile(pathCheck.fullPath));
+      const decoded = extractDocumentText(pathCheck.fullPath, await readFile(pathCheck.fullPath));
       if (decoded === null) {
         return {
           content: `Error: ${relPath} is not a text document this tool can read`,
@@ -362,7 +367,7 @@ async function readAuthorizedFile(
     }
 
     const raw = await readFile(path);
-    const text = decodeDocument(path, raw);
+    const text = extractDocumentText(path, raw);
     if (text === null) {
       return {
         content: `Error: ${path} is not a text document this tool can read`,
@@ -387,17 +392,3 @@ async function readAuthorizedFile(
   }
 }
 
-/**
- * The readable text of a file, whichever container it arrives in.
- *
- * A design document handed over by a person is usually a Word file, and UTF-8
- * decoding turns one into noise — so the run reads gibberish and plans from
- * nothing. Returns null when the bytes are not text this tool can present,
- * which is a better answer than a screenful of binary.
- */
-function decodeDocument(path: string, raw: Buffer): string | null {
-  if (/\.docx$/iu.test(path)) {
-    return looksLikeZip(raw) ? docxToText(raw) : null;
-  }
-  return raw.toString("utf-8");
-}
