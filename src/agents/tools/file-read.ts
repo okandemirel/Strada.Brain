@@ -118,7 +118,8 @@ export class FileReadTool implements ITool {
       // document, build the game" — because such a document lives outside the
       // Unity project. The permission comes from the user having typed the
       // path, which is narrower than widening confinement for everything.
-      if (isUserAuthorizedPath(relPath, context.userAuthorizedPaths)) {
+      const authorized = context.userAuthorizedPaths;
+      if (isUserAuthorizedPath(relPath, authorized)) {
         return await readAuthorizedFile(relPath, offset, limit);
       }
       return { content: `Error: ${pathCheck.error}`, isError: true };
@@ -156,7 +157,7 @@ export class FileReadTool implements ITool {
       if (!fileStat.isFile()) {
         return { content: "Error: target is not a file", isError: true };
       }
-      if (fileStat.size > MAX_FILE_SIZE) {
+      if (!isRichDocument(pathCheck.fullPath) && fileStat.size > MAX_FILE_SIZE) {
         return {
           content: `Error: file too large (${Math.round(fileStat.size / 1024)}KB). Max: ${MAX_FILE_SIZE / 1024}KB. Use offset/limit.`,
           isError: true,
@@ -359,7 +360,7 @@ async function readAuthorizedFile(
     if (!fileStat.isFile()) {
       return { content: `Error: ${path} is not a file`, isError: true };
     }
-    if (fileStat.size > MAX_FILE_SIZE) {
+    if (!isRichDocument(path) && fileStat.size > MAX_FILE_SIZE) {
       return {
         content: `Error: file too large (${Math.round(fileStat.size / 1024)}KB). Max: ${MAX_FILE_SIZE / 1024}KB. Use offset/limit.`,
         isError: true,
@@ -392,3 +393,14 @@ async function readAuthorizedFile(
   }
 }
 
+/**
+ * Is the size gate meaningful for this file?
+ *
+ * The gate exists to bound how much text reaches the model. A .docx or .pdf is a
+ * compressed container: measured, a 1.26 MB Word file holds 77 KB of text, so
+ * checking the archive against a text budget refuses a document that is well
+ * within it. Containers are judged on what comes out of them instead.
+ */
+function isRichDocument(path: string): boolean {
+  return RICH_DOCUMENT_EXTENSIONS.some((ext) => path.toLowerCase().endsWith(ext));
+}

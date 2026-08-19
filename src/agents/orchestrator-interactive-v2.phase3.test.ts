@@ -337,6 +337,46 @@ describe("Step 3 — interactive route flip (v2 spine vs v1 loop, no double-rend
     expect(rendered.some((m) => m.includes("Unable to complete this task"))).toBe(true);
   });
 
+  it("flag ON (v2): a provider hard-stop settles the episode as FAILED, even mid-conversation", async () => {
+    // The defect this pins: the episode was settled with the default (false),
+    // so a run that told the user "Unable to complete this task" was recorded as
+    // a success. The first turn matters — an earlier fix read the outcome from a
+    // field written only when the session transcript is still empty, so it
+    // passed on a single-turn session and failed on any real conversation.
+    const clock = new FakeClock(0);
+    const channel = createMockChannel();
+    const ends: Array<[string, boolean]> = [];
+    const orch = makeOrchestrator({
+      provider: createSilentProvider(clock),
+      channel,
+      flagSet: resolveFlagSetById("v2-all-routes+full-control-plane"),
+      clock,
+      streamInitialTimeoutMs: 10_000_000,
+      streamStallTimeoutMs: 1000,
+    });
+    (orch as unknown as {
+      monitorLifecycle: unknown;
+    }).monitorLifecycle = {
+      requestEnd: (scope: string, failed = false) => { ends.push([scope, failed]); },
+      requestStart: () => {}, stepBatch: () => {}, joinEpisodeEnd: () => {},
+      goalDecomposed: () => {}, dagRestructure: () => {},
+    };
+
+    await orch.handleMessage({
+      channelType: "cli", chatId: "v2-fail-1", userId: "u1",
+      text: "go", timestamp: new Date(),
+    });
+
+    expect(
+      channel.sendMarkdown.mock.calls
+        .filter((c: unknown[]) => c[0] === "v2-fail-1")
+        .map((c: unknown[]) => c[1] as string)
+        .some((m: string) => m.includes("Unable to complete this task")),
+    ).toBe(true);
+    expect(ends.length).toBeGreaterThan(0);
+    expect(ends.every(([, failed]) => failed), `episode settled as ${JSON.stringify(ends)}`).toBe(true);
+  });
+
   it("renderInteractiveResilienceEvent maps each user-facing event to the right localized message", () => {
     // Direct unit test of the mapping table — deterministic coverage of the variants the integration
     // path can't easily trigger (backoff/ask_user/show_plan), keyed on the real getResilienceMessage text.

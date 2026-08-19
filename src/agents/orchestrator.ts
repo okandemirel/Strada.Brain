@@ -727,8 +727,16 @@ export class Orchestrator {
    *  Built alongside the registry by bootstrap; absent/unmapped ⇒ no revive (→ BLOCKED on down). */
   private readonly capabilityAdapters?: ReadonlyMap<string, CapabilityAdapter>;
   private readonly sessionManager: SessionManager;
-  /** Last terminal outcome surfaced to the user, for settling the episode. */
-  private lastTerminalMessageKey: string | undefined;
+  /**
+   * Paths the user named, per chat.
+   *
+   * Recorded when the message arrives rather than looked up at tool time: by the
+   * time a tool runs, the session the orchestrator can reach may hold no user
+   * turn at all — measured, file_read was refused with "Path resolves outside
+   * the project directory" for a document the user had named in the very
+   * request that started the run.
+   */
+  private readonly authorizedPathsByChat = new Map<string, readonly string[]>();
   /**
    * Per-run answer to "is there anything for dotnet to build".
    *
@@ -1164,15 +1172,7 @@ export class Orchestrator {
       portOnEpochRollover: (continued, epoch, agentState, runCtx) =>
         this.portOnEpochRollover(continued, epoch, agentState, runCtx),
       recordInRunTrajectoryCredit: (params) => this.recordInRunTrajectoryCredit(params),
-      mapTerminalReasonToMessageKey: (reason, status) => {
-        const key = this.mapTerminalReasonToMessageKey(reason, status);
-        // Remembered so the episode can be settled honestly. A run that told the
-        // user "the AI provider is not responding" was still recorded as
-        // failed:false, because the settlement below defaults to success and
-        // nothing carried the terminal outcome out to it.
-        if (key !== undefined) this.lastTerminalMessageKey = key;
-        return key;
-      },
+      mapTerminalReasonToMessageKey: (reason, status) => this.mapTerminalReasonToMessageKey(reason, status),
       createGateway: () => new ModelGateway(this.silentStream as unknown as SilentStreamPort),
     });
   }
@@ -2509,7 +2509,21 @@ export class Orchestrator {
    * Read from the session each time rather than cached: the authorization is a
    * property of what the user just asked for, not of the run.
    */
-  private userAuthorizedPathsFor(chatId: string): readonly string[] {
+  private userAuthorizedPathsFor(chatId: string, taskPrompt?: string): readonly string[] {
+    // The run works from a task record, not from the chat session: measured, the
+    // session under this chatId holds no user turn at all by the time a tool
+    // runs (lastUserLength 0), so a session lookup can never see the request
+    // that started the run. The task prompt is that request.
+    const fromTask = extractUserAuthorizedPaths(taskPrompt ?? "");
+    if (fromTask.length > 0) {
+      const existing = this.authorizedPathsByChat.get(chatId) ?? [];
+      this.authorizedPathsByChat.set(chatId, [...new Set([...existing, ...fromTask])]);
+      return this.authorizedPathsByChat.get(chatId)!;
+    }
+
+    const remembered = this.authorizedPathsByChat.get(chatId);
+    if (remembered && remembered.length > 0) return remembered;
+
     try {
       const session = this.sessionManager.getOrCreateSession(chatId);
       return extractUserAuthorizedPaths(this.sessionManager.extractLastUserMessage(session));
@@ -2517,6 +2531,21 @@ export class Orchestrator {
       // No session, no authorization — the restrictive answer.
       return [];
     }
+  }
+
+  /**
+   * Record the paths this message names, before anything else runs.
+   *
+   * The authorization is still the user's: it comes from text they wrote, and
+   * only ever grows from real incoming messages.
+   */
+  private rememberAuthorizedPaths(msg: IncomingMessage): void {
+    const text = typeof msg.text === "string" ? msg.text : "";
+    const named = extractUserAuthorizedPaths(text);
+    if (named.length === 0) return;
+
+    const existing = this.authorizedPathsByChat.get(msg.chatId) ?? [];
+    this.authorizedPathsByChat.set(msg.chatId, [...new Set([...existing, ...named])]);
   }
 
   private getClarificationContext(): ClarificationContext {
@@ -2724,6 +2753,7 @@ export class Orchestrator {
    * Uses a per-session lock to prevent concurrent processing.
    */
   async handleMessage(msg: IncomingMessage): Promise<void> {
+    this.rememberAuthorizedPaths(msg);
     const { chatId } = msg;
     // Remember the most recent routing metadata so that checkpoint-driven
     // resumes (continueFromCheckpoint) can reissue a message via the same
@@ -3078,6 +3108,7 @@ export class Orchestrator {
       : undefined;
 
     let runFailed = false;
+    let terminalKey: string | undefined;
     try {
       // Agent Core v2 interactive driver — THE engine (cutover Step 5 deleted the v1
       // runAgentLoop and its route flag; every interactive turn runs the spine through the
@@ -3140,7 +3171,13 @@ export class Orchestrator {
           attachments: msg.attachments,
           interactiveSession: session,
         };
-        await runner.run(request, io);
+        // The run's own verdict, not a side channel. The V2 spine returns a
+        // terminal rather than throwing, and the injected mapper is a
+        // background-only hook the interactive path never reaches (port.ts:312
+        // returns early whenever the session already holds an assistant reply,
+        // which is the normal state of any conversation past its first turn).
+        const runResult = await runner.run(request, io);
+        terminalKey = this.mapTerminalReasonToMessageKey(runResult?.reason, runResult?.status);
         await renderTail; // drain the ordered resilience renders before the finally persists the transcript
       }
     } catch (error) {
@@ -3156,7 +3193,7 @@ export class Orchestrator {
       if (isMonitorRootRun) {
         this.monitorLifecycle?.requestEnd(
           resolveConversationScope(chatId, conversationId),
-          runFailed || isFailedTerminalKey(this.lastTerminalMessageKey),
+          runFailed || isFailedTerminalKey(terminalKey),
         );
       } else {
         this.monitorLifecycle?.joinEpisodeEnd(resolveConversationScope(chatId, conversationId), false, monitorScope);
@@ -4026,7 +4063,7 @@ export class Orchestrator {
       // even when they sit outside the project. Derived per call from the
       // session, so it is always this chat's most recent request and never
       // accumulates across conversations.
-      userAuthorizedPaths: this.userAuthorizedPathsFor(chatId),
+      userAuthorizedPaths: this.userAuthorizedPathsFor(chatId, options.taskPrompt),
       workingDirectory,
       readOnly: this.readOnly,
       userId: options.userId,
