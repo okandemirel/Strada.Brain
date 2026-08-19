@@ -139,16 +139,27 @@ export function trackAndRecordToolResults(params: ToolTrackingParams): void {
   });
 }
 
+/** Headings under which a tool lists what actually went wrong. */
+const DETAIL_HEADINGS = /^(problems?|errors?|failed|failures?):$/i;
+
 /**
- * The line of a tool result that says what went wrong.
+ * What a tool result says went wrong.
  *
- * Tool failures often lead with a headline and then quote pages of compiler
- * output; the headline is what identifies the failure.
+ * The headline alone is often generic — unity_scene_build fails with "Scene NOT
+ * assembled." and puts the cause under a Problems: heading below, so a log that
+ * kept only the first line recorded that something failed and not why, which is
+ * the whole reason for logging it. This keeps the headline and the first detail
+ * beneath such a heading.
  */
 export function firstMeaningfulLine(content: string): string {
-  const line = content
-    .split("\n")
-    .map((l) => l.trim())
-    .find((l) => l.length > 0);
-  return (line ?? "").slice(0, 300);
+  const lines = content.split("\n").map((l) => l.trim());
+  const headline = lines.find((l) => l.length > 0) ?? "";
+
+  const headingAt = lines.findIndex((l) => DETAIL_HEADINGS.test(l));
+  const detail =
+    headingAt === -1
+      ? undefined
+      : lines.slice(headingAt + 1).find((l) => l.length > 0);
+
+  return (detail ? `${headline} ${detail}` : headline).slice(0, 300);
 }

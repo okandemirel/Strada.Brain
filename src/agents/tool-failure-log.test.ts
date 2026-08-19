@@ -11,13 +11,24 @@ import { describe, it, expect } from "vitest";
 import { firstMeaningfulLine } from "./orchestrator-tool-execution.js";
 
 describe("what gets kept from a failure", () => {
-  it("takes the headline, which is what names the cause", () => {
+  it("keeps the cause, not just the generic headline", () => {
+    // Measured: this exact failure logged as "Scene NOT assembled." and nothing
+    // else, which records that something broke and not what — the whole reason
+    // for logging it.
     const content =
       "Scene NOT assembled.\n" +
       "Created 3 artifact(s), assigned 0 field(s).\n" +
       "Problems:\n  boot.GameBootstrapper._gameConfig: unresolved reference 'cfg'";
 
-    expect(firstMeaningfulLine(content)).toBe("Scene NOT assembled.");
+    expect(firstMeaningfulLine(content)).toBe(
+      "Scene NOT assembled. boot.GameBootstrapper._gameConfig: unresolved reference 'cfg'",
+    );
+  });
+
+  it("keeps just the headline when there is no detail section", () => {
+    expect(firstMeaningfulLine("Error: no Unity editor found for this project.")).toBe(
+      "Error: no Unity editor found for this project.",
+    );
   });
 
   it("skips leading blank lines rather than reporting nothing", () => {
