@@ -74,6 +74,23 @@ const REFLECT_INTERVAL_AGENT_CORE = 3;
  * goalDecomposed for a REAL tree — runProactiveGoalDecomposition returns early without touching the
  * monitor when goalDecomposer.shouldDecompose is false), so that check lives in stepBatch (dagKind).
  */
+/**
+ * What the shell reviewer should be told the task is.
+ *
+ * A worker's session holds no user turn — it was handed a task, not a
+ * conversation — so the user-message lookup returns "" and the reviewer was
+ * given "Task: (not provided)". Measured: it then refused commands with "Task
+ * not provided; cannot verify alignment with the stated task", a reviewer
+ * failing for want of its one required input rather than because anything was
+ * wrong, at the cost of a turn each time.
+ */
+export function reviewTaskPrompt(
+  lastUserMessage: string | undefined,
+  taskDescription: string | undefined,
+): string {
+  return lastUserMessage || taskDescription || "";
+}
+
 export function isPlainLoop(runCtx: EngineRunContext): boolean {
   return runCtx.goalContext === undefined && runCtx.joinsParentEpisode === false;
 }
@@ -168,7 +185,15 @@ export async function portExecuteToolTurn(
         // where userId != chatId. The v1 background/worker loop does NOT thread it (@ :4642), so
         // keep byte-parity per route; unconditional threading is its own decision post-deletion.
         userId: runCtx.toolExecMode === "interactive" ? runCtx.userId : undefined,
-        taskPrompt: lastUserMessage,
+        // A worker's session holds no user turn — it was given a task, not a
+        // conversation — so extractLastUserMessage returns "" and the shell
+        // reviewer was handed "Task: (not provided)". Measured: it then refused
+        // commands with "Task not provided; cannot verify alignment with the
+        // stated task", which is a reviewer failing for lack of the one input
+        // it needs rather than because anything was wrong. The task description
+        // is right there in agent state, and is already used for drift
+        // detection twenty lines below.
+        taskPrompt: reviewTaskPrompt(lastUserMessage, agentState.taskDescription),
         sessionMessages: session.messages,
         onUsage: runCtx.onUsage,
         identityKey: runCtx.identityKey,
