@@ -801,7 +801,8 @@ export function buildDepsContext(status?: StradaDepsStatus): string {
       `3. A ModuleConfig CLASS does nothing until a ModuleConfig ASSET exists for it: the bootstrapper serializes asset references, not types.`,
       `4. Use \`unity_scene_build\` to assemble the scene from a spec: it creates the assets, GameObjects and prefabs, assigns serialized fields (including GameBootstrapper._gameConfig), and verifies on disk that each reference is a real link rather than a {fileID: 0} that looks like one. It needs no Editor open.`,
       `5. Then call \`unity_playmode_verify\` to actually run the game headlessly. A wired scene is not a running one — a bootstrapper can initialize into a module that throws on its first frame, and the scene file reads identically either way.`,
-      `6. A test run in which nothing executed is NOT a pass. Unity reports \`result="Passed" total="0"\` and exit 0 for a project whose test assemblies are empty; the question is always what ran, never how many failed.`,
+      `6. Keep a file under 200 lines. Strada.Core's shape exists to divide work — a command per action, a service for state and collaboration, a model for data, a system for per-frame work — and a class past that has usually stopped using it. A command is the cheapest cut: it takes one action out whole, with its own test.`,
+      `7. A test run in which nothing executed is NOT a pass. Unity reports \`result="Passed" total="0"\` and exit 0 for a project whose test assemblies are empty; the question is always what ran, never how many failed.`,
     );
   }
   return lines.join("\n") + "\n";

@@ -59,6 +59,8 @@ export interface ConformanceGuardOptions {
    * Injected for tests; defaults to a real recursive walk.
    */
   readonly listAsmdefs?: (dir: string) => string[];
+  /** Every .cs under a directory with its line count, for the length rule. */
+  readonly readSourceSizes?: (dir: string) => Array<{ path: string; lines: number }>;
   /** Contents of the .cs files under a test assembly's directory. */
   readonly readTestSources?: (dir: string) => string[];
 }
@@ -159,6 +161,29 @@ function defaultTestSources(dir: string): string[] {
   return sources;
 }
 
+/** Every .cs under a directory, with its path and line count. */
+function defaultSourceSizes(dir: string): Array<{ path: string; lines: number }> {
+  if (!existsSync(dir)) return [];
+  const sizes: Array<{ path: string; lines: number }> = [];
+  const walk = (current: string, depth: number): void => {
+    for (const entry of readdirSync(current, { withFileTypes: true })) {
+      const full = joinPath(current, entry.name);
+      if (entry.isDirectory()) {
+        if (depth > 0) walk(full, depth - 1);
+        continue;
+      }
+      if (!entry.name.endsWith(".cs")) continue;
+      try {
+        sizes.push({ path: entry.name, lines: readFileSync(full, "utf8").split("\n").length });
+      } catch {
+        // Unreadable file: no evidence either way.
+      }
+    }
+  };
+  walk(dir, 4);
+  return sizes;
+}
+
 /** Does this source actually declare a test NUnit will run? */
 function declaresTest(source: string): boolean {
   return /\[\s*(Test|UnityTest|TestCase|TestCaseSource)\b/.test(source);
@@ -187,6 +212,15 @@ function defaultListDir(dir: string): string[] {
  * still finishes and reports honestly.
  */
 const NEVER_RUN_GATE_LIMIT = 3;
+
+/**
+ * Where a class stops being one thing.
+ *
+ * Not a style preference: Strada.Core's whole shape — commands, services,
+ * models, systems — exists to divide work, and a file past this has usually
+ * stopped using it.
+ */
+const MAX_SOURCE_LINES = 200;
 
 /** Tools that actually run the game rather than inspect it. */
 const PLAYMODE_VERIFICATION_TOOLS: ReadonlySet<string> = new Set([
@@ -505,6 +539,36 @@ export class StradaConformanceGuard {
     return empty;
   }
 
+  /**
+   * Module sources past the line limit, worst first.
+   *
+   * Reads what is on disk, and stays silent when there is nothing to read —
+   * the same evidence rule every other check here follows.
+   */
+  private oversizedSources(): string[] {
+    if (this.touchedModuleRoots.size === 0) return [];
+    const projectPath = this.opts?.projectPath;
+    if (!projectPath) return [];
+    const readSizes = this.opts?.readSourceSizes ?? defaultSourceSizes;
+
+    const oversized: Array<{ label: string; lines: number }> = [];
+    for (const moduleRoot of this.touchedModuleRoots) {
+      const dir = moduleDir(projectPath, moduleRoot);
+      if (!existsSync(dir)) continue;
+
+      for (const source of readSizes(dir)) {
+        if (source.lines > MAX_SOURCE_LINES) {
+          oversized.push({ label: `${source.path} (${source.lines} lines)`, lines: source.lines });
+        }
+      }
+    }
+
+    return oversized
+      .sort((a, b) => b.lines - a.lines)
+      .slice(0, 5)
+      .map((entry) => entry.label);
+  }
+
   private untestedAssemblies(): string[] {
     if (this.touchedModuleRoots.size === 0) return [];
     const projectPath = this.opts?.projectPath;
@@ -653,6 +717,22 @@ export class StradaConformanceGuard {
         "An .asmdef with no [Test] or [UnityTest] beside it compiles to an empty assembly, " +
         "reports zero failures because it runs nothing, and makes the coverage rule pass while " +
         "covering nothing. Write the tests, or delete the assembly and stop claiming it."
+      );
+    }
+
+    // Strada.Core exists so work can be split — commands, services, models,
+    // systems — and a file that outgrows that is a file that stopped using the
+    // framework. The limit is a smell threshold, not a style rule: past it, a
+    // class is almost always doing several jobs that the pattern set already has
+    // homes for.
+    const oversized = this.oversizedSources();
+    if (oversized.length > 0) {
+      return (
+        "[STRADA FILE TOO LONG] These files are past " + `${MAX_SOURCE_LINES} lines: ` +
+        `${oversized.join("; ")}. ` +
+        "Split them the way the framework already divides work: a command per action, a service " +
+        "for state and collaboration, a model for data, a system for per-frame work. A command is " +
+        "usually the cheapest cut — it takes one action out whole, with its own test."
       );
     }
 
