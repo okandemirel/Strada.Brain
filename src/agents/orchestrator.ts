@@ -4322,10 +4322,21 @@ export class Orchestrator {
       }
     }
 
-    // Auto-disable tools that have failed repeatedly in this chat
+    // Auto-disable tools that have failed repeatedly in this chat.
+    //
+    // Except the ones whose job is to report failure. A verification tool
+    // answers isError when the VERIFICATION failed, not when the tool did:
+    // measured, unity_verify_change ran its headless compile perfectly three
+    // times, reported 27 compile errors each time, and was taken away from the
+    // run for being unreliable. The agent was then left writing C# with no way
+    // to find out whether it compiles — which is the state this tool exists to
+    // prevent.
     const chatToolErrors = this.toolConsecutiveErrors.get(chatId);
     const toolErrorCount = chatToolErrors?.get(activeToolCall.name) ?? 0;
-    if (toolErrorCount >= Orchestrator.MAX_CONSECUTIVE_TOOL_ERRORS) {
+    if (
+      toolErrorCount >= Orchestrator.MAX_CONSECUTIVE_TOOL_ERRORS &&
+      !isVerificationToolName(activeToolCall.name)
+    ) {
       return {
         toolCallId: activeToolCall.id,
         content: `Tool '${activeToolCall.name}' has failed ${toolErrorCount} consecutive times and is temporarily disabled for this conversation. Use a different approach or tool.`,
