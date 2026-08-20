@@ -521,9 +521,12 @@ export function detectPromptInjection(text: string): PromptInjectionDetection {
   //    dance (which could skip matches because of sticky lastIndex on a /g
   //    regex). We use a sentinel flag and count hits during replacement.
   let base64HitCount = 0;
-  working = working.replace(BASE64_BLOCK_RE, (match) => {
+  working = working.replace(BASE64_BLOCK_RE, (match, offset: number, whole: string) => {
     if (!BASE64_DELIMITER_RE.test(match)) {
       // Pure alnum — treat as identifier/hash, leave untouched.
+      return match;
+    }
+    if (looksLikeFilePath(match, whole.slice(offset + match.length))) {
       return match;
     }
     base64HitCount++;
@@ -716,4 +719,26 @@ export function extractNaturalLanguageDirectiveUpdates(params: {
   }
 
   return updates;
+}
+
+/**
+ * A long path is not a base64 payload.
+ *
+ * "/" counts as a base64 delimiter, so any run of 60+ path characters without
+ * a dot or underscore matched the block rule. Measured 2026-08-20: the failure
+ * log reported a missing file as "[base64:61ch].cs" — the redaction ate the
+ * one thing the line existed to say, and the longer the path the likelier it
+ * was eaten.
+ *
+ * Two signals, both cheap. A run immediately followed by a file extension is a
+ * path with its dot just outside the match. A run split into several
+ * word-sized segments by "/" is a path; base64 that happens to contain
+ * slashes does not divide into short, evenly-sized pieces.
+ */
+function looksLikeFilePath(match: string, after: string): boolean {
+  if (/^\.[A-Za-z0-9]{1,5}\b/.test(after)) return true;
+
+  const segments = match.split("/");
+  if (segments.length < 3) return false;
+  return segments.every((segment) => segment.length > 0 && segment.length <= 32);
 }
