@@ -220,7 +220,14 @@ export async function portExecuteToolTurn(
 
     // STEP B — control-loop tracker mark (per call), as v1 does.
     if (runCtx.controlLoopTracker) {
-      for (const tc of toolCalls) runCtx.controlLoopTracker.markToolExecution(tc.name);
+      for (const tc of toolCalls) {
+        // Fingerprint the call, not just the tool: reading forty different
+        // files is progress, reading one file forty times is not.
+        runCtx.controlLoopTracker.markToolExecution(
+          tc.name,
+          `${tc.name}:${JSON.stringify(tc.input ?? {}).slice(0, 300)}`,
+        );
+      }
       // The tracker's own read-only-stall check sits inside recordGate(), which
       // runs only once something else raises a gate. A run that does nothing
       // but read raises nothing, so the stall went unseen for 108 calls against

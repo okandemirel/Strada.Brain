@@ -47,10 +47,14 @@ export class ControlLoopTracker {
   private consecutiveNoToolGates = 0;
   private consecutiveReadOnlyToolCalls = 0;
   private readOnlyStallReported = false;
+  private lastReadOnlyFingerprint: string | null = null;
+  private sameReadOnlyFingerprintCount = 0;
   private mutationsSinceLastReset = false;
   private pruneIndex = 0;
 
   static readonly READ_ONLY_STALL_THRESHOLD = 8;
+  /** Measured: a legitimate document read ran to 39 calls; a real spin ran to 108. */
+  static readonly READ_ONLY_STREAK_LIMIT = 60;
 
   private readonly fpThreshold: number;
   private readonly hasCustomFpThreshold: boolean;
@@ -154,7 +158,7 @@ export class ControlLoopTracker {
     return this.mutationsSinceLastReset;
   }
 
-  markToolExecution(toolName?: string): void {
+  markToolExecution(toolName?: string, callFingerprint?: string): void {
     // Only reset stale analysis counter on mutation tools, not read-only tools
     // like file_read, grep_search, list_directory. When no toolName is provided
     // (backward compat), assume mutation to preserve existing behavior.
@@ -163,8 +167,17 @@ export class ControlLoopTracker {
       this.consecutiveReadOnlyToolCalls = 0;
       this.mutationsSinceLastReset = true;
       this.readOnlyStallReported = false;
+      this.lastReadOnlyFingerprint = null;
+      this.sameReadOnlyFingerprintCount = 0;
     } else {
       this.consecutiveReadOnlyToolCalls++;
+      const fingerprint = callFingerprint ?? toolName;
+      if (fingerprint === this.lastReadOnlyFingerprint) {
+        this.sameReadOnlyFingerprintCount++;
+      } else {
+        this.lastReadOnlyFingerprint = fingerprint;
+        this.sameReadOnlyFingerprintCount = 1;
+      }
     }
   }
 
@@ -178,15 +191,29 @@ export class ControlLoopTracker {
    * for exactly this was never reached. The counter was right; nobody asked it.
    */
   readOnlyStall(): { readonly calls: number; readonly reason: string } | null {
-    if (this.consecutiveReadOnlyToolCalls < ControlLoopTracker.READ_ONLY_STALL_THRESHOLD) {
-      return null;
+    // Repetition, not reading. Measured 2026-08-20 on two runs: one spent 42
+    // minutes making 171 calls to a single stats tool, and the next read a
+    // design document in 39 pieces. Counting read-only calls alone called both
+    // of them stuck — reading a long document in order is progress.
+    if (this.sameReadOnlyFingerprintCount >= ControlLoopTracker.READ_ONLY_STALL_THRESHOLD) {
+      return {
+        calls: this.sameReadOnlyFingerprintCount,
+        reason:
+          `Agent repeated the same read-only call ${this.sameReadOnlyFingerprintCount} times ` +
+          `without any file mutation.`,
+      };
     }
-    return {
-      calls: this.consecutiveReadOnlyToolCalls,
-      reason:
-        `Agent executed ${this.consecutiveReadOnlyToolCalls} consecutive read-only tool calls ` +
-        `without any file mutation.`,
-    };
+    // A streak this long is not exploration whatever it reads. Kept well above
+    // the document-reading case so ordinary research does not trip it.
+    if (this.consecutiveReadOnlyToolCalls >= ControlLoopTracker.READ_ONLY_STREAK_LIMIT) {
+      return {
+        calls: this.consecutiveReadOnlyToolCalls,
+        reason:
+          `Agent executed ${this.consecutiveReadOnlyToolCalls} consecutive read-only tool calls ` +
+          `without any file mutation.`,
+      };
+    }
+    return null;
   }
 
   /** True the first time a stall crosses the threshold, so a caller reports it once. */

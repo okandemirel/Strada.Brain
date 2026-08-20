@@ -528,8 +528,14 @@ describe("a run that only reads", () => {
   // longest read-only streak of 108 against a threshold of 8 — and no gate
   // raised the whole time. The check for this lives inside recordGate(), so it
   // was never reached. The counter was right; nothing asked it.
+  /** The same call, over and over — what a spin looks like. */
   function readOnly(tracker: ControlLoopTracker, times: number): void {
-    for (let i = 0; i < times; i++) tracker.markToolExecution("learning_stats");
+    for (let i = 0; i < times; i++) tracker.markToolExecution("learning_stats", "learning_stats:{}");
+  }
+
+  /** Distinct targets — what reading a document looks like. */
+  function readDistinct(tracker: ControlLoopTracker, times: number): void {
+    for (let i = 0; i < times; i++) tracker.markToolExecution("file_read", `file_read:{"path":"p${i}"}`);
   }
 
   it("answers the stall question without a gate being raised", () => {
@@ -575,5 +581,52 @@ describe("a run that only reads", () => {
     readOnly(tracker, 10);
 
     expect(tracker.takeUnreportedReadOnlyStall()?.calls).toBe(10);
+  });
+});
+
+describe("reading a document is not a stall", () => {
+  function readOnly(tracker: ControlLoopTracker, times: number): void {
+    for (let i = 0; i < times; i++) tracker.markToolExecution("learning_stats", "learning_stats:{}");
+  }
+  function readDistinct(tracker: ControlLoopTracker, times: number): void {
+    for (let i = 0; i < times; i++) tracker.markToolExecution("file_read", `file_read:{"path":"p${i}"}`);
+  }
+
+  // Measured 2026-08-20. Run 7 spent 42 minutes making 171 calls to one stats
+  // tool and reported nothing. Run 8, four minutes in, read the design document
+  // in 39 separate pieces — and the first version of this check called that a
+  // stall too. Both are read-only and only one of them is stuck.
+  it("stays quiet while distinct targets are being read", () => {
+    const tracker = new ControlLoopTracker();
+
+    readDistinct(tracker, 39);
+
+    expect(tracker.readOnlyStall(), "called an ordinary document read a stall").toBeNull();
+  });
+
+  it("catches the same call repeated", () => {
+    const tracker = new ControlLoopTracker();
+
+    readOnly(tracker, 8);
+
+    expect(tracker.readOnlyStall()?.reason).toMatch(/repeated the same read-only call/i);
+  });
+
+  it("still catches a streak long enough that its content cannot excuse it", () => {
+    const tracker = new ControlLoopTracker();
+
+    readDistinct(tracker, 60);
+
+    expect(tracker.readOnlyStall()?.calls).toBe(60);
+  });
+
+  it("a changed target restarts the repetition count", () => {
+    const tracker = new ControlLoopTracker();
+    readOnly(tracker, 7);
+
+    tracker.markToolExecution("file_read", 'file_read:{"path":"other"}');
+    readOnly(tracker, 7);
+
+    expect(tracker.readOnlyStall()).toBeNull();
   });
 });
