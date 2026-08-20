@@ -75,7 +75,9 @@ describe("initializeMultiAgentDelegationStage — agent enabled, fully injected 
     const fakeAgentBudgetTracker = { initialize: vi.fn() };
     const fakeAgentRegistry = { initialize: vi.fn() };
     const fakeDaemonStorage = { getDatabase: vi.fn(() => ({})) };
-    const fakeOrchestrator = { addTool: vi.fn() };
+    const fakeOrchestrator = {
+  // The stage shares the root's authorization store with every sub-agent.
+  authorizationStore: () => new Map<string, readonly string[]>(), addTool: vi.fn() };
     const fakeChannel = {};
     const fakeToolRegistry = { getAllTools: vi.fn(() => []) };
     const fakeProviderManager = { isAvailable: vi.fn(() => false) };
@@ -111,6 +113,14 @@ describe("initializeMultiAgentDelegationStage — agent enabled, fully injected 
     );
 
     expect(result.agentManager).toBe(fakeAgentManager);
+    // Measured 2026-08-20: goal decomposition rewrote the user's absolute path
+    // out of the sub-goal, so a sub-agent's Orchestrator could derive no
+    // authorization and refused the document its task was about. The store has
+    // to reach whoever builds an orchestrator.
+    expect(
+      (deps.createAgentManager.mock.calls[0]![0] as { authorizedPathsStore?: unknown }).authorizedPathsStore,
+      "the agent manager was not given the root's authorization store",
+    ).toBeDefined();
     expect(result.agentBudgetTracker).toBe(fakeAgentBudgetTracker);
     // delegation disabled → no delegationManager
     expect(result.delegationManager).toBeUndefined();
@@ -121,7 +131,7 @@ describe("initializeMultiAgentDelegationStage — agent enabled, fully injected 
     const fakeAgentBudgetTracker = { initialize: vi.fn() };
     const fakeAgentRegistry = { initialize: vi.fn() };
     const fakeDaemonStorage = { getDatabase: vi.fn(() => ({})) };
-    const fakeOrchestrator = { addTool: vi.fn() };
+    const fakeOrchestrator = { addTool: vi.fn(), authorizationStore: () => new Map<string, readonly string[]>() };
     const fakeToolRegistry = { getAllTools: vi.fn(() => []) };
     const fakeProviderManager = { isAvailable: vi.fn(() => false) };
     const fakeDaemonContext = {} as Record<string, unknown>;

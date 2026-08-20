@@ -757,6 +757,7 @@ describe("bootstrap-stages", () => {
     const tierRouter = { _tag: "tier-router" } as any;
     const delegationManager = { _tag: "delegation-manager" } as any;
     const orchestrator = {
+      authorizationStore: () => new Map<string, readonly string[]>(),
       addTool: vi.fn(),
     } as any;
     const daemonContext = {} as any;
@@ -1125,7 +1126,7 @@ describe("bootstrap-stages", () => {
       providerManager: {
         getProvider: vi.fn().mockReturnValue({ name: "mock-provider" }),
       } as any,
-      orchestrator: { addTool: vi.fn(), removeTool: vi.fn() } as any,
+      orchestrator: { addTool: vi.fn(), removeTool: vi.fn(), authorizationStore: () => new Map() } as any,
     }, {
       createChainDetector: vi.fn().mockReturnValue({ _tag: "detector" } as any),
       createChainSynthesizer: vi.fn().mockReturnValue(chainSynthesizer),
@@ -1176,7 +1177,7 @@ describe("bootstrap-stages", () => {
         getMetadata: vi.fn().mockReturnValue({ category: "builtin" }),
       } as any,
       taskManager: { _tag: "task-manager" } as any,
-      orchestrator: { _tag: "orchestrator" } as any,
+      orchestrator: { _tag: "orchestrator", authorizationStore: () => new Map() } as any,
       soulLoader: { _tag: "soul-loader" } as any,
       config: makeConfig(),
       providerManager,

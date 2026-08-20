@@ -93,7 +93,12 @@ export async function initializeMultiAgentDelegationStage(
     ?? new AgentBudgetTracker(params.daemonStorage);
   agentBudgetTracker.initialize();
 
+  // One authorization store for every orchestrator in the process: a
+  // sub-agent's prompt is the sub-goal, and decomposition drops the paths.
+  const authorizedPathsStore = params.orchestrator.authorizationStore();
+
   const agentManagerOptions = {
+    authorizedPathsStore,
     // Sub-agents were the only orchestrators with no framework knowledge at
     // all; a getter because bootstrap builds it in a deferred async step.
     frameworkPromptGenerator: params.getFrameworkPromptGenerator,
@@ -189,6 +194,7 @@ export async function initializeMultiAgentDelegationStage(
     }
 
     const delegationManagerOptions = {
+      authorizedPathsStore,
       frameworkPromptGenerator: params.getFrameworkPromptGenerator,
       config: {
         enabled: true,

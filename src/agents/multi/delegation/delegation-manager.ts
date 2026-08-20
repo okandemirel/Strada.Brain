@@ -49,6 +49,8 @@ import {
 // =============================================================================
 
 export interface DelegationManagerOptions {
+  /** One authorization store shared with the root Orchestrator — see AgentManagerOptions. */
+  readonly authorizedPathsStore?: Map<string, readonly string[]>;
   /** Live framework knowledge for the delegated orchestrator — see the call
    *  site; without it the sub-agent runs on the static prompt. */
   readonly frameworkPromptGenerator?: () => import("../../../intelligence/framework/framework-prompt-generator.js").FrameworkPromptGenerator | undefined;
@@ -465,6 +467,7 @@ export class DelegationManager {
         vaultRegistry: this.opts.vaultRegistry,
         vaultWriteHookBudgetMs: this.opts.vaultWriteHookBudgetMs,
         maxIterations: typeConfig.maxIterations,
+        authorizedPathsStore: this.opts.authorizedPathsStore,
       });
       // Carry the user's authorization across the instance boundary, keyed to
       // the delegate's own chat id — a worker cannot authorize itself, so this

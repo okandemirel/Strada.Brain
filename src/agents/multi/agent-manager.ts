@@ -74,6 +74,16 @@ export interface MemoryConfig {
 /** Options for constructing an AgentManager */
 export interface AgentManagerOptions {
   /**
+   * One authorization store shared with the root Orchestrator.
+   *
+   * A sub-agent's message is the sub-goal, not the user's request, and goal
+   * decomposition drops absolute paths from it — measured, "read
+   * /Users/okan/Downloads/PixelFlow_GDD.docx" became "read
+   * PixelFlow_GDD.docx", leaving the sub-agent unable to derive the
+   * authorization and refusing the document its task was about.
+   */
+  readonly authorizedPathsStore?: Map<string, readonly string[]>;
+  /**
    * Live framework knowledge for sub-agent orchestrators.
    *
    * Only bootstrap's Orchestrator was given one, so every sub-agent and
@@ -635,6 +645,7 @@ export class AgentManager {
       reRetrievalConfig: this.opts.reRetrievalConfig,
       embeddingProvider: this.opts.embeddingProvider,
       userProfileStore: profileStore,
+      authorizedPathsStore: this.opts.authorizedPathsStore,
       soulLoader: this.opts.soulLoader,
       dmPolicy: this.opts.dmPolicy,
       supervisorBrain: this.opts.supervisorBrain,

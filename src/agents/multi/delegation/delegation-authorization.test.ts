@@ -65,3 +65,52 @@ describe("carrying authorization across a delegation", () => {
     expect(child.userAuthorizedPathsSnapshot("c")).toEqual(["/a.docx"]);
   });
 });
+
+describe("one store, every orchestrator", () => {
+  // Measured 2026-08-20, after seeding the delegate fixed the delegation path
+  // and the refusal came back anyway: the run was decomposing into sub-goals,
+  // not delegating. Goal decomposition rewrote the user's
+  // "/Users/okan/Downloads/PixelFlow_GDD.docx" into a sub-goal that said only
+  // "PixelFlow_GDD.docx", so the sub-agent's Orchestrator had nothing to
+  // derive from and refused the document its task was about.
+  //
+  // Per-instance memory cannot survive that: the authorization has to be one
+  // store, keyed by chat, that every orchestrator in the process reads.
+  function withStore(store: Map<string, readonly string[]>): Orchestrator {
+    return Object.create(Orchestrator.prototype, {
+      authorizedPathsByChat: { value: store, writable: true },
+    }) as Orchestrator;
+  }
+
+  it("lets a sub-agent see what the root was told", () => {
+    const shared = new Map<string, readonly string[]>();
+    const root = withStore(shared);
+    const sub = withStore(shared);
+
+    root.seedUserAuthorizedPaths("cli-local", ["/Users/okan/Downloads/PixelFlow_GDD.docx"]);
+
+    expect(sub.userAuthorizedPathsSnapshot("cli-local")).toEqual([
+      "/Users/okan/Downloads/PixelFlow_GDD.docx",
+    ]);
+  });
+
+  it("keeps chats apart even when the store is shared", () => {
+    const shared = new Map<string, readonly string[]>();
+    const root = withStore(shared);
+    const sub = withStore(shared);
+
+    root.seedUserAuthorizedPaths("chat-a", ["/a.docx"]);
+
+    expect(sub.userAuthorizedPathsSnapshot("chat-b")).toEqual([]);
+  });
+
+  it("an orchestrator given no store keeps its own", () => {
+    const shared = new Map<string, readonly string[]>();
+    const root = withStore(shared);
+    const isolated = withStore(new Map());
+
+    root.seedUserAuthorizedPaths("cli-local", ["/a.docx"]);
+
+    expect(isolated.userAuthorizedPathsSnapshot("cli-local")).toEqual([]);
+  });
+});

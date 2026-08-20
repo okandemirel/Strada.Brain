@@ -736,7 +736,17 @@ export class Orchestrator {
    * the project directory" for a document the user had named in the very
    * request that started the run.
    */
-  private readonly authorizedPathsByChat = new Map<string, readonly string[]>();
+  /**
+   * Shared across every Orchestrator in the process when one is supplied.
+   *
+   * Authorization is a property of what the user typed, not of the instance
+   * that happened to receive it. Measured 2026-08-20: goal decomposition
+   * rewrote "read /Users/okan/Downloads/PixelFlow_GDD.docx" into a sub-goal
+   * that said only "read PixelFlow_GDD.docx", so the sub-agent's Orchestrator
+   * could derive nothing and refused the document its task was about. Keyed by
+   * chat id, so sharing the store never widens who may read what.
+   */
+  private readonly authorizedPathsByChat: Map<string, readonly string[]>;
   /**
    * Per-run answer to "is there anything for dotnet to build".
    *
@@ -910,6 +920,8 @@ export class Orchestrator {
     dmPolicy?: DMPolicy;
     sessionSummarizer?: SessionSummarizer;
     userProfileStore?: UserProfileStore;
+    /** Share one authorization store so a sub-agent inherits what the user named. */
+    authorizedPathsStore?: Map<string, readonly string[]>;
     autonomousDefaultEnabled?: boolean;
     autonomousDefaultHours?: number;
     interactionConfig?: InteractionConfig;
@@ -1002,6 +1014,7 @@ export class Orchestrator {
     this.dmPolicy = opts.dmPolicy ?? new DMPolicy(opts.channel, opts.dmPolicyConfig);
     this.sessionSummarizer = opts.sessionSummarizer;
     this.userProfileStore = opts.userProfileStore;
+    this.authorizedPathsByChat = opts.authorizedPathsStore ?? new Map<string, readonly string[]>();
     this.autonomousDefaultEnabled = opts.autonomousDefaultEnabled ?? false;
     this.autonomousDefaultHours = opts.autonomousDefaultHours ?? 24;
     this.interactionConfig = opts.interactionConfig ?? DEFAULT_INTERACTION_CONFIG;
@@ -2554,6 +2567,14 @@ export class Orchestrator {
    * Only ever widens, and only with paths the parent already holds: a worker
    * cannot authorize itself.
    */
+  /**
+   * The store itself, so sub-agent orchestrators can share it rather than each
+   * trying to re-derive authorization from a prompt that no longer carries it.
+   */
+  authorizationStore(): Map<string, readonly string[]> {
+    return this.authorizedPathsByChat;
+  }
+
   seedUserAuthorizedPaths(chatId: string, paths: readonly string[]): void {
     if (paths.length === 0) return;
     const existing = this.authorizedPathsByChat.get(chatId) ?? [];
