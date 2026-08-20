@@ -189,7 +189,11 @@ function jsonFailureSummary(content: string): string | undefined {
   try {
     parsed = JSON.parse(trimmed);
   } catch {
-    return undefined;
+    // A document too long to arrive whole still carries its reason near the
+    // front. Measured 2026-08-20: a truncated unity_verify_change result fell
+    // through to the text reading, whose first line is "{" — a log entry that
+    // says a tool failed and nothing else.
+    return reasonFromUnparsedJson(trimmed);
   }
 
   // In priority order, not in the order the document happens to list them:
@@ -285,4 +289,24 @@ export function failureTarget(input: unknown): string | undefined {
     if (typeof value === "string" && value.trim() !== "") return value.trim().slice(0, 160);
   }
   return undefined;
+}
+
+/**
+ * Pull a reason out of JSON that did not parse.
+ *
+ * Truncation is the usual cause, and it cuts the tail, so the fields that name
+ * the outcome are typically still present. Read them with a pattern rather
+ * than a parser, in the same priority order the parsed path uses.
+ */
+function reasonFromUnparsedJson(text: string): string | undefined {
+  for (const key of JSON_REASON_KEYS) {
+    const match = new RegExp(`"${key}"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)"`).exec(text);
+    const value = match?.[1]?.trim();
+    if (value) return `${key}: ${value.slice(0, 300)}`;
+  }
+  const status = /"status"\s*:\s*"([^"]+)"/.exec(text)?.[1];
+  if (status) return `status: ${status} (result truncated)`;
+  // Text that merely starts with a brace is text, not a broken document: only
+  // claim unreadability for something that actually looks like JSON.
+  return /"[A-Za-z_][\w]*"\s*:/.test(text) ? "unreadable result" : undefined;
 }

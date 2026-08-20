@@ -171,3 +171,31 @@ describe("a shell failure names the command", () => {
     expect(failureTarget({ command: "echo " + "x".repeat(400) })!.length).toBe(160);
   });
 });
+
+describe("a result too long to arrive whole", () => {
+  // Measured 2026-08-20: a unity_verify_change result came back truncated, so
+  // JSON.parse threw and the reader fell through to the text path — whose
+  // first line is "{". The log said a tool had failed and nothing else, for a
+  // result whose status and reason were both still in the fragment.
+  const truncated = '{\n  "status": "failed",\n  "reason": "Headless compile failed with 25 error(s).",\n  "compile": {\n    "sou';
+
+  it("reads the reason out of the fragment", () => {
+    expect(firstMeaningfulLine(truncated)).toBe("reason: Headless compile failed with 25 error(s).");
+  });
+
+  it("falls back to the status when no reason survived the cut", () => {
+    expect(firstMeaningfulLine('{\n  "status": "timeout",\n  "compile": {\n    "iss')).toBe(
+      "status: timeout (result truncated)",
+    );
+  });
+
+  it("says the result was unreadable rather than logging a brace", () => {
+    expect(firstMeaningfulLine('{\n  "compile": {\n    "isCompiling": tr')).toBe("unreadable result");
+  });
+
+  it("still prefers a parsed reason when the document is whole", () => {
+    expect(firstMeaningfulLine(JSON.stringify({ status: "failed", reason: "whole document" }))).toBe(
+      "reason: whole document",
+    );
+  });
+});
