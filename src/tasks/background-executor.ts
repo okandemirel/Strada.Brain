@@ -1199,6 +1199,18 @@ export class BackgroundExecutor {
         return;
       }
 
+      // How a run ended is the one thing a caller needs to decide whether the
+      // work is done — and it was never written down. Measured 2026-08-20: a
+      // run whose provider stopped responding was recorded "Task completed",
+      // and the log held nothing to say whether that came from a worker
+      // reporting success or from the fallthrough below.
+      getLogger().info("Task settling", {
+        taskId: task.id,
+        workerStatus: result.workerResult?.status ?? "(no worker result)",
+        reason: result.workerResult?.reason ?? "(none)",
+        outputLength: result.output?.length ?? 0,
+      });
+
       if (result.workerResult && result.workerResult.status === "failed") {
         requestFailed = true;
         this.taskManager.fail(
