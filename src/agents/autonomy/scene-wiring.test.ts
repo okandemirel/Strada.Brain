@@ -177,3 +177,60 @@ MonoBehaviour:
     expect(assessSceneWiring("/p", io).wired).toBe(true);
   });
 });
+
+describe("a prefab whose scripts do not exist", () => {
+  // Measured 2026-08-20: rather than calling unity_scene_build, an agent
+  // hand-wrote twenty-five .prefab files. The YAML parsed, the structure was
+  // right, the .meta files were there — and every m_Script guid in them was
+  // invented. Six references, six resolving to nothing. Unity loads that as
+  // "Missing (Mono Script)", and every check that reads shape rather than
+  // identity says the project is fine.
+  const REAL_GUID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  const INVENTED = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+  function prefabCiting(guid: string): string {
+    return `GameObject:\nMonoBehaviour:\n  m_Script: {fileID: 11500000, guid: ${guid}, type: 3}\n`;
+  }
+
+  it("names a prefab that cites a guid no script has", () => {
+    const io = project({
+      "/p/Assets/Modules/Board/BoardModuleConfig.cs": "",
+      "/p/Assets/Modules/Board/BoardModuleConfig.cs.meta": `guid: ${REAL_GUID}\n`,
+      "/p/Assets/Settings/BoardModuleConfig.asset": "",
+      "/p/Assets/Prefabs/Pig_Blue.prefab": prefabCiting(INVENTED),
+      "/p/Assets/Scenes/Main.unity": WIRED_SCENE,
+    });
+
+    const report = assessSceneWiring("/p", io);
+
+    const problem = report.problems.find((p) => p.kind === "dangling-script-reference");
+    expect(problem, JSON.stringify(report.problems)).toBeDefined();
+    expect(problem!.detail).toContain("Pig_Blue.prefab");
+    expect(report.wired).toBe(false);
+  });
+
+  it("stays quiet when the guid belongs to a script that exists", () => {
+    const io = project({
+      "/p/Assets/Modules/Board/BoardModuleConfig.cs": "",
+      "/p/Assets/Modules/Board/BoardModuleConfig.cs.meta": `guid: ${REAL_GUID}\n`,
+      "/p/Assets/Settings/BoardModuleConfig.asset": "",
+      "/p/Assets/Prefabs/Pig_Blue.prefab": prefabCiting(REAL_GUID),
+      "/p/Assets/Scenes/Main.unity": WIRED_SCENE,
+    });
+
+    expect(assessSceneWiring("/p", io).problems.filter((p) => p.kind === "dangling-script-reference")).toEqual([]);
+  });
+
+  it("accuses nothing when the project keeps no .meta files to check against", () => {
+    // Absence of evidence: without any .cs.meta to read, every guid looks
+    // invented and the rule would condemn a perfectly ordinary project.
+    const io = project({
+      "/p/Assets/Modules/Board/BoardModuleConfig.cs": "",
+      "/p/Assets/Settings/BoardModuleConfig.asset": "",
+      "/p/Assets/Prefabs/Pig_Blue.prefab": prefabCiting(INVENTED),
+      "/p/Assets/Scenes/Main.unity": WIRED_SCENE,
+    });
+
+    expect(assessSceneWiring("/p", io).problems.filter((p) => p.kind === "dangling-script-reference")).toEqual([]);
+  });
+});

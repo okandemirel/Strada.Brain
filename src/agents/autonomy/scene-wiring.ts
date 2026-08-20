@@ -19,7 +19,12 @@ import { join, basename } from "node:path";
  */
 
 export interface SceneWiringProblem {
-  readonly kind: "no-scene" | "missing-config-asset" | "no-bootstrapper" | "unwired-bootstrapper";
+  readonly kind:
+    | "no-scene"
+    | "missing-config-asset"
+    | "no-bootstrapper"
+    | "unwired-bootstrapper"
+    | "dangling-script-reference";
   readonly detail: string;
 }
 
@@ -148,6 +153,51 @@ function classesWithAnAsset(
   return found;
 }
 
+/**
+ * Prefabs and scenes whose components point at scripts that do not exist.
+ *
+ * Measured 2026-08-20: an agent hand-wrote twenty-five .prefab files rather
+ * than going through unity_scene_build, and every m_Script guid in them was
+ * invented — six references, six that resolve to nothing. The YAML parses, the
+ * structure is right, the .meta files are there, and Unity loads the lot as
+ * "Missing (Mono Script)". Unlike a wrong reference TYPE, which only running
+ * the game catches, a guid that is in no .meta file in the project can be
+ * caught by reading.
+ */
+function danglingScriptReferences(
+  files: readonly string[],
+  io: SceneWiringIo,
+): { readonly file: string; readonly count: number }[] {
+  const known = new Set<string>();
+  for (const meta of files.filter((f) => f.endsWith(".cs.meta"))) {
+    let text: string;
+    try {
+      text = io.readFile(meta);
+    } catch {
+      continue;
+    }
+    const guid = /^guid:\s*([0-9a-f]{32})\s*$/m.exec(text)?.[1];
+    if (guid) known.add(guid);
+  }
+  // No .meta files read means this project does not keep them where we can see
+  // them — absence of evidence, so accuse nothing.
+  if (known.size === 0) return [];
+
+  const out: { file: string; count: number }[] = [];
+  for (const asset of files.filter((f) => f.endsWith(".prefab") || f.endsWith(".unity"))) {
+    let text: string;
+    try {
+      text = io.readFile(asset);
+    } catch {
+      continue;
+    }
+    const refs = [...text.matchAll(/m_Script:\s*\{fileID:\s*-?\d+,\s*guid:\s*([0-9a-f]{32})/g)];
+    const missing = refs.filter((m) => !known.has(m[1]!)).length;
+    if (missing > 0) out.push({ file: asset, count: missing });
+  }
+  return out;
+}
+
 export function assessSceneWiring(
   projectPath: string,
   io: SceneWiringIo = defaultIo,
@@ -198,6 +248,16 @@ export function assessSceneWiring(
         detail: `${name}.cs has no ${name}.asset — the class exists but nothing references it`,
       });
     }
+  }
+
+  for (const dangling of danglingScriptReferences(files, io)) {
+    problems.push({
+      kind: "dangling-script-reference",
+      detail:
+        `${dangling.file} references ${dangling.count} script(s) by a guid no file in this ` +
+        `project has — Unity loads those components as Missing (Mono Script). Author prefabs ` +
+        `and scenes with unity_scene_build rather than by hand: it writes the guids Unity assigned.`,
+    });
   }
 
   let sawBootstrapper = false;
