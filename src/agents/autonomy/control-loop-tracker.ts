@@ -46,6 +46,7 @@ export class ControlLoopTracker {
   private readonly recoveryEpisodes = new Map<string, number>();
   private consecutiveNoToolGates = 0;
   private consecutiveReadOnlyToolCalls = 0;
+  private readOnlyStallReported = false;
   private mutationsSinceLastReset = false;
   private pruneIndex = 0;
 
@@ -161,9 +162,39 @@ export class ControlLoopTracker {
       this.consecutiveNoToolGates = 0;
       this.consecutiveReadOnlyToolCalls = 0;
       this.mutationsSinceLastReset = true;
+      this.readOnlyStallReported = false;
     } else {
       this.consecutiveReadOnlyToolCalls++;
     }
+  }
+
+  /**
+   * Is the run reading without getting anywhere?
+   *
+   * The same condition is checked inside recordGate(), which only runs when
+   * something else already raised a gate. Measured on 2026-08-20: a run made
+   * 108 consecutive read-only calls — 171 of them to one stats tool — against a
+   * threshold of 8, and raised no gate the whole time, so the check that exists
+   * for exactly this was never reached. The counter was right; nobody asked it.
+   */
+  readOnlyStall(): { readonly calls: number; readonly reason: string } | null {
+    if (this.consecutiveReadOnlyToolCalls < ControlLoopTracker.READ_ONLY_STALL_THRESHOLD) {
+      return null;
+    }
+    return {
+      calls: this.consecutiveReadOnlyToolCalls,
+      reason:
+        `Agent executed ${this.consecutiveReadOnlyToolCalls} consecutive read-only tool calls ` +
+        `without any file mutation.`,
+    };
+  }
+
+  /** True the first time a stall crosses the threshold, so a caller reports it once. */
+  takeUnreportedReadOnlyStall(): { readonly calls: number; readonly reason: string } | null {
+    const stall = this.readOnlyStall();
+    if (stall === null || this.readOnlyStallReported) return null;
+    this.readOnlyStallReported = true;
+    return stall;
   }
 
   markVerificationClean(_iteration: number): void {
@@ -172,6 +203,7 @@ export class ControlLoopTracker {
     this.consecutiveNoToolGates = 0;
     this.consecutiveReadOnlyToolCalls = 0;
     this.mutationsSinceLastReset = false;
+    this.readOnlyStallReported = false;
   }
 
   markMeaningfulFileEvidence(files: readonly string[], _iteration: number): void {

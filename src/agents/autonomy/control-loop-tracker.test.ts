@@ -522,3 +522,58 @@ describe("ControlLoopTracker", () => {
     expect(tracker.getConsecutiveReadOnlyToolCalls()).toBe(0);
   });
 });
+
+describe("a run that only reads", () => {
+  // Measured 2026-08-20: 565 tool calls, 171 of them to one stats tool, a
+  // longest read-only streak of 108 against a threshold of 8 — and no gate
+  // raised the whole time. The check for this lives inside recordGate(), so it
+  // was never reached. The counter was right; nothing asked it.
+  function readOnly(tracker: ControlLoopTracker, times: number): void {
+    for (let i = 0; i < times; i++) tracker.markToolExecution("learning_stats");
+  }
+
+  it("answers the stall question without a gate being raised", () => {
+    const tracker = new ControlLoopTracker();
+
+    readOnly(tracker, 8);
+
+    expect(tracker.readOnlyStall()?.calls).toBe(8);
+  });
+
+  it("stays quiet below the threshold", () => {
+    const tracker = new ControlLoopTracker();
+
+    readOnly(tracker, 7);
+
+    expect(tracker.readOnlyStall()).toBeNull();
+  });
+
+  it("a mutation clears it", () => {
+    const tracker = new ControlLoopTracker();
+    readOnly(tracker, 20);
+
+    tracker.markToolExecution("file_write");
+
+    expect(tracker.readOnlyStall()).toBeNull();
+  });
+
+  it("reports once per episode rather than on every call after", () => {
+    const tracker = new ControlLoopTracker();
+    readOnly(tracker, 10);
+
+    expect(tracker.takeUnreportedReadOnlyStall()).not.toBeNull();
+    readOnly(tracker, 5);
+    expect(tracker.takeUnreportedReadOnlyStall(), "reported the same stall twice").toBeNull();
+  });
+
+  it("reports again after the run makes progress and stalls anew", () => {
+    const tracker = new ControlLoopTracker();
+    readOnly(tracker, 10);
+    tracker.takeUnreportedReadOnlyStall();
+
+    tracker.markToolExecution("file_write");
+    readOnly(tracker, 10);
+
+    expect(tracker.takeUnreportedReadOnlyStall()?.calls).toBe(10);
+  });
+});

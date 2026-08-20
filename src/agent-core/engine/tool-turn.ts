@@ -12,6 +12,7 @@
  * Import rule (cycle safety): orchestrator-FREE leaves only — see engine-deps.js.
  */
 
+import { getLogger } from "../../utils/logger.js";
 import type { AgentState } from "../../agents/agent-state.js";
 import { createInitialState } from "../../agents/agent-state.js";
 import type { ToolCall, ToolResult, ConversationMessage } from "../../agents/providers/provider.interface.js";
@@ -220,6 +221,18 @@ export async function portExecuteToolTurn(
     // STEP B — control-loop tracker mark (per call), as v1 does.
     if (runCtx.controlLoopTracker) {
       for (const tc of toolCalls) runCtx.controlLoopTracker.markToolExecution(tc.name);
+      // The tracker's own read-only-stall check sits inside recordGate(), which
+      // runs only once something else raises a gate. A run that does nothing
+      // but read raises nothing, so the stall went unseen for 108 calls against
+      // a threshold of 8. Ask here, where every tool turn passes.
+      const stall = runCtx.controlLoopTracker.takeUnreportedReadOnlyStall();
+      if (stall) {
+        getLogger().warn("Read-only stall", {
+          chatId: runCtx.chatId,
+          calls: stall.calls,
+          reason: stall.reason,
+        });
+      }
     }
 
     // STEP D — consensus (non-fatal; gated on the managers existing).
