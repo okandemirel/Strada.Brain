@@ -75,6 +75,9 @@ Rules:
 - Sequential sub-goals should depend on their prerequisite
 - Set needsFurtherDecomposition=true ONLY for sub-goals that genuinely require multiple distinct implementation steps — most goals should be false
 - The TOTAL number of goals across all depths must not exceed ${maxNodes}
+- Cover every outcome the task names. If the task asks for a scene, a running build, a verified test pass, a published artifact — some sub-goal must PRODUCE that thing, and the plan is wrong without it
+- Never substitute a document about a deliverable for the deliverable. "Write a plan describing the scene layout" does not satisfy "deliver a scene"
+- A named deliverable may be scheduled late, but it may not be dropped: measured, three runs asked for a playable scene with prefabs and a verified play-mode run, and all three produced plans made only of "write the scripts"
 - Prefer fewer, well-scoped goals over many granular ones${providerHint}${budgetHint}${behavioralHint}
 
 Respond ONLY with JSON:

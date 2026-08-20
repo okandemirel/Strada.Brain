@@ -631,3 +631,36 @@ describe("GoalDecomposer", () => {
     });
   });
 });
+
+describe("what the decomposer is told about the task's own deliverables", () => {
+  // Measured across three runs on 2026-08-20. The task read: "Deliver a scene I
+  // can press play on: prefabs, references and the bootstrapper fully assigned,
+  // then verify it headlessly in play mode." Every plan came back as five or six
+  // steps of "implement the scripts" — no scene, no prefabs, no play-mode run.
+  // One plan turned the scene into a document ABOUT the scene.
+  //
+  // The rules the decomposer was given were all about the plan's shape: DAG,
+  // node count, parallelism. Nothing said the outcome the user asked for has to
+  // survive into it.
+  async function promptSentToModel(): Promise<string> {
+    const provider = createMockProvider([
+      JSON.stringify({ needsDecomposition: false, subGoals: [{ id: "s1", task: "everything", dependsOn: [] }] }),
+    ]);
+    const decomposer = new GoalDecomposer(provider, 3);
+    await decomposer.decomposeProactive("test-session", "Deliver a scene I can press play on and verify it");
+    const chat = provider.chat as unknown as { mock: { calls: unknown[][] } };
+    return JSON.stringify(chat.mock.calls);
+  }
+
+  it("requires every named outcome to be produced by some sub-goal", async () => {
+    expect(await promptSentToModel()).toMatch(/Cover every outcome the task names/i);
+  });
+
+  it("refuses a document about the deliverable as a substitute for it", async () => {
+    expect(await promptSentToModel()).toMatch(/Never substitute a document about a deliverable/i);
+  });
+
+  it("allows a deliverable to be scheduled late but not dropped", async () => {
+    expect(await promptSentToModel()).toMatch(/may not be dropped/i);
+  });
+});
