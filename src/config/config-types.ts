@@ -263,6 +263,7 @@ export type EnvVarName =
   | "TASK_INTERACTIVE_TOKEN_BUDGET"
   | "TASK_BACKGROUND_EPOCH_MAX_ITERATIONS"
   | "TASK_BACKGROUND_AUTO_CONTINUE"
+  | "TASK_INTERACTIVE_AUTO_CONTINUE"
   | "TASK_BACKGROUND_MAX_EPOCHS"
   | "INTERACTION_MODE"
   | "INTERACTION_HEARTBEAT_AFTER_MS"
@@ -621,6 +622,16 @@ export interface TaskConfig {
   readonly interactiveTokenBudget: number;
   readonly backgroundEpochMaxIterations: number;
   readonly backgroundAutoContinue: boolean;
+  /**
+   * Let an interactive run roll into another epoch when its iteration budget
+   * runs out, instead of stopping and asking for a follow-up.
+   *
+   * Off by default: an ordinary chat turn that stops and asks is correct
+   * behaviour, and a provider stuck in a tool-call loop must not spin forever.
+   * Turned on for a request that names its own finish line — "build the game
+   * this document describes" — where stopping half-built helps nobody.
+   */
+  readonly interactiveAutoContinue: boolean;
   readonly backgroundMaxEpochs: number;
 }
 
@@ -697,6 +708,7 @@ export const DEFAULT_TASK_CONFIG: TaskConfig = {
   interactiveTokenBudget: 500_000,
   backgroundEpochMaxIterations: 50,
   backgroundAutoContinue: true,
+  interactiveAutoContinue: false,
   backgroundMaxEpochs: 3,
 };
 

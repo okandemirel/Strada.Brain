@@ -316,6 +316,7 @@ function mkPort(provider: IAIProvider, opts: MockPortOptions = {}): Orchestrator
     getInteractiveIterationLimit: () => opts.iterationLimit ?? 10,
     getBackgroundEpochIterationLimit: () => opts.bgEpochLimit ?? opts.iterationLimit ?? 10,
     canAutoContinueBackgroundEpoch: () => opts.canContinueEpoch ?? false,
+    canAutoContinueInteractiveEpoch: () => false,
     onEpochRollover: spies.onEpochRollover,
     getLiveInteractiveTokenBudget: () => 100_000,
     getLiveOutputTokenCap: () => 100_000,

@@ -308,8 +308,13 @@ export class V2AgentRunner implements AgentRunner {
       let lastProvider = "unknown";
       let usageTotal: WorkerUsageEvent | undefined;
 
-      // The outer epoch loop exists ONLY for non-interactive (interactive = single epoch).
-      const maxEpochs = isInteractive(mode) ? 1 : Number.POSITIVE_INFINITY;
+      // Interactive used to be capped at a single epoch, so exhausting the
+      // iteration budget ended the run where a background run would have
+      // rolled over and carried on. Nothing about an interactive request makes
+      // unfinished work more finished — "build this game from the document"
+      // arrives the same way. Both now roll over; what stops the run is the
+      // budget, the gates, or the agent being done.
+      const maxEpochs = Number.POSITIVE_INFINITY;
       let epoch = 0;
       let stepNo = 0;
       // max_tokens continuation runaway guard (gauntlet #12): 3 consecutive truncated-with-no-tools
@@ -745,11 +750,11 @@ export class V2AgentRunner implements AgentRunner {
         } // end iteration for
 
         // ══ Epoch rollover (gauntlet #1,#22; non-interactive only) ════════════════════════
-        if (isInteractive(mode)) {
-          // 3.4: interactive exhausted its iteration budget (the inner `for` completed without an
-          // end_turn/done/stop). v1 (runAgentLoop "Hit max iterations") rendered a "send a follow-up"
-          // notice here; emit a distinct terminal so the interactive adapter renders it. terminalStatus
-          // stays "completed" (a benign budget-reached end, not a failure) — only an event is added.
+        if (isInteractive(mode) && !port.canAutoContinueInteractiveEpoch(epoch + 1)) {
+          // The iteration budget is spent and continuation is switched off or
+          // used up. v1 rendered a "send a follow-up" notice here; emit the
+          // distinct terminal so the interactive adapter still renders it.
+          // Status stays "completed" — a budget-reached end, not a failure.
           terminalReason = "max-iterations";
           emit({ type: "run.ending", reason: terminalReason });
           break;

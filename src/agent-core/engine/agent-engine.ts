@@ -29,6 +29,7 @@ import {
   getInteractiveIterationLimit,
   getBackgroundEpochIterationLimit,
   canAutoContinueBackgroundEpoch,
+  canAutoContinueInteractiveEpoch,
 } from "./budget.js";
 import type { PolicySeed } from "../control/policy.js";
 import { prepareIteration, type PrepareIterationParams, type PreparedIteration } from "./prepare-iteration.js";
@@ -132,6 +133,10 @@ export class AgentEngine {
 
   getBackgroundEpochIterationLimit(): number {
     return getBackgroundEpochIterationLimit(this.deps);
+  }
+
+  canAutoContinueInteractiveEpoch(completedEpochCount: number): boolean {
+    return canAutoContinueInteractiveEpoch(this.deps, completedEpochCount);
   }
 
   canAutoContinueBackgroundEpoch(completedEpochCount: number): boolean {

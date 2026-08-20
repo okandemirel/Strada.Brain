@@ -444,6 +444,7 @@ describe("loadConfig", () => {
       interactiveTokenBudget: 500000,
       backgroundEpochMaxIterations: 75,
       backgroundAutoContinue: false,
+        interactiveAutoContinue: false,
       backgroundMaxEpochs: 3,
     });
   });
@@ -562,6 +563,7 @@ describe("loadConfig", () => {
       interactiveTokenBudget: 500000,
       backgroundEpochMaxIterations: 50,
       backgroundAutoContinue: true,
+        interactiveAutoContinue: false,
       backgroundMaxEpochs: 3,
     });
     expect(config.logLevel).toBe("info");

@@ -286,6 +286,7 @@ export function createAgentCorePort(
       getInteractiveIterationLimit: () => engine.getInteractiveIterationLimit(),
       getBackgroundEpochIterationLimit: () => engine.getBackgroundEpochIterationLimit(),
       canAutoContinueBackgroundEpoch: (n) => engine.canAutoContinueBackgroundEpoch(n),
+      canAutoContinueInteractiveEpoch: (n) => engine.canAutoContinueInteractiveEpoch(n),
       onEpochRollover: (continued, epoch, agentState) =>
         deps.portOnEpochRollover(continued, epoch, agentState, ctx()),
       getLiveInteractiveTokenBudget: () => engine.getLiveInteractiveTokenBudget(),

@@ -155,6 +155,7 @@ export function validateConfig(raw: unknown): ConfigValidationResult {
       interactiveTokenBudget: rawConfig.taskInteractiveTokenBudget,
       backgroundEpochMaxIterations: rawConfig.taskBackgroundEpochMaxIterations,
       backgroundAutoContinue: rawConfig.taskBackgroundAutoContinue,
+      interactiveAutoContinue: rawConfig.taskInteractiveAutoContinue,
       backgroundMaxEpochs: rawConfig.taskBackgroundMaxEpochs,
     },
 
@@ -969,6 +970,7 @@ interface EnvVars {
   taskInteractiveTokenBudget: string | undefined;
   taskBackgroundEpochMaxIterations: string | undefined;
   taskBackgroundAutoContinue: string | undefined;
+  taskInteractiveAutoContinue: string | undefined;
   taskBackgroundMaxEpochs: string | undefined;
   // Interaction Policy
   interactionMode: string | undefined;
@@ -1376,6 +1378,7 @@ function loadFromEnv(env: Record<string, string | undefined>): EnvVars {
     taskInteractiveTokenBudget: env["TASK_INTERACTIVE_TOKEN_BUDGET"],
     taskBackgroundEpochMaxIterations: env["TASK_BACKGROUND_EPOCH_MAX_ITERATIONS"],
     taskBackgroundAutoContinue: env["TASK_BACKGROUND_AUTO_CONTINUE"],
+    taskInteractiveAutoContinue: env["TASK_INTERACTIVE_AUTO_CONTINUE"],
     taskBackgroundMaxEpochs: env["TASK_BACKGROUND_MAX_EPOCHS"],
     interactionMode: env["INTERACTION_MODE"],
     interactionHeartbeatAfterMs: env["INTERACTION_HEARTBEAT_AFTER_MS"],

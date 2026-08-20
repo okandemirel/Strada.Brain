@@ -424,6 +424,8 @@ export interface OrchestratorPort {
   getInteractiveIterationLimit(): number;
   getBackgroundEpochIterationLimit(): number;
   canAutoContinueBackgroundEpoch(completedEpochCount: number): boolean;
+  /** Interactive counterpart — off unless the run was asked to work to a finish line. */
+  canAutoContinueInteractiveEpoch(completedEpochCount: number): boolean;
   /**
    * GAP3 — replicate v1 runBackgroundTask's end-of-epoch side effects at the spine's background
    * epoch boundary (v1 @ a3de7d1 orchestrator.ts ~4587-4623). The spine's rollover was a bare `epoch++`, so on

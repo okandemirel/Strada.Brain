@@ -1011,6 +1011,7 @@ export const configSchema = z
       .pipe(z.number().int().min(1).max(10_000))
       .prefault("50"),
     taskBackgroundAutoContinue: boolFromString(true),
+    taskInteractiveAutoContinue: boolFromString(false),
     taskBackgroundMaxEpochs: z
       .string()
       .transform((s) => parseInt(s, 10))

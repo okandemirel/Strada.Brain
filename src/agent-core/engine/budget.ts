@@ -87,6 +87,21 @@ export function getBackgroundEpochIterationLimit(deps: BudgetDeps): number {
   return deps.maxIterations ? Math.min(deps.maxIterations, configLimit) : configLimit;
 }
 
+/**
+ * May an interactive run roll into another epoch rather than stop?
+ *
+ * Off unless the request asked for work that runs to a finish line. The
+ * epoch cap is shared with background runs — the question is whether to
+ * continue at all, not how many times.
+ */
+export function canAutoContinueInteractiveEpoch(deps: BudgetDeps, completedEpochCount: number): boolean {
+  if (!deps.taskConfig.interactiveAutoContinue) {
+    return false;
+  }
+  const maxEpochs = deps.taskConfig.backgroundMaxEpochs;
+  return maxEpochs === 0 || completedEpochCount < maxEpochs;
+}
+
 export function canAutoContinueBackgroundEpoch(deps: BudgetDeps, completedEpochCount: number): boolean {
   if (!deps.taskConfig.backgroundAutoContinue) {
     return false;
