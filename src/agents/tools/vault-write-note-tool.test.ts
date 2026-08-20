@@ -20,6 +20,11 @@ function makeContext(vaults: ReturnType<typeof makeVault>[]): ToolContext {
     vaultRegistry: {
       list: () => vaults,
       get: (id: string) => vaults.find((v) => v.id === id),
+      resolve: (id: string) =>
+        vaults.find((v) => v.id === id) ??
+        vaults.find((v) => (v as { kind?: string }).kind === id) ??
+        vaults.find((v) => v.id.startsWith(`${id}:`)),
+      ids: () => vaults.map((v) => v.id),
       resolveVaultForPath: (_path: string, _projectPath: string) => vaults[0] ?? undefined,
     } as never,
     projectPath: '/project',

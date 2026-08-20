@@ -1,3 +1,4 @@
+import { vaultNotFound } from './vault-not-found.js';
 import type { VaultRegistry } from '../../vault/vault-registry.js';
 import type { ToolContext, ToolExecutionResult } from './tool.interface.js';
 
@@ -18,10 +19,10 @@ export class VaultStatusTool {
   ): Promise<ToolExecutionResult> {
     const vaultId = input['vaultId'] as string | undefined;
     const vaults = vaultId
-      ? [this.registry.get(vaultId)].filter(Boolean)
+      ? [this.registry.resolve(vaultId)].filter(Boolean)
       : this.registry.list();
     if (!vaults.length) {
-      return { content: vaultId ? `vault not found: ${vaultId}` : 'no vaults registered' };
+      return { content: vaultId ? vaultNotFound(vaultId, this.registry.ids()) : 'no vaults registered' };
     }
     const lines: string[] = [];
     for (const v of vaults) {

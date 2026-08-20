@@ -11,7 +11,10 @@ const reg = {
     stats: vi.fn().mockResolvedValue({ fileCount: 10, chunkCount: 50, lastIndexedAt: 1, dbBytes: 2048 }),
   })),
   list: vi.fn(() => [{ id: 'unity:abc' }]),
+  ids: vi.fn(() => ['unity:abc']),
 } as any;
+// The tools resolve rather than look up exactly, so the stub answers both.
+(reg as { resolve: unknown }).resolve = reg.get;
 
 describe('vault tools', () => {
   it('VaultInitTool reports initialization', async () => {
@@ -28,6 +31,8 @@ describe('vault tools', () => {
     const createAndRegister = vi.fn().mockResolvedValue(vault);
     const t = new VaultInitTool({
       get: vi.fn(() => undefined),
+      resolve: vi.fn(() => undefined),
+      ids: vi.fn(() => []),
       createAndRegister,
     } as any);
 

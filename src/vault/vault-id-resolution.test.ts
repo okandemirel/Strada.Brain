@@ -78,3 +78,35 @@ describe('the miss the caller is told about', () => {
     expect(vaultNotFound('self', [])).toBe('vault not found: self (none registered)');
   });
 });
+
+describe("every vault tool an agent can call", () => {
+  // The first pass fixed vault_search, vault_write_note and vault_graph_explore
+  // and left three behind. Measured on the run of 2026-08-20:
+  // "vault_sync: vault not found: unity" — the same miss, from a tool the
+  // earlier fix never touched, and with no list of ids to correct from.
+  const TOOLS = [
+    "vault-sync-tool",
+    "vault-init-tool",
+    "vault-status-tool",
+    "vault-search-tool",
+    "vault-write-note-tool",
+    "vault-graph-explore-tool",
+  ];
+
+  it("resolves the id rather than demanding an exact match", async () => {
+    const { readFileSync } = await import("node:fs");
+    for (const tool of TOOLS) {
+      const source = readFileSync(`src/agents/tools/${tool}.ts`, "utf8");
+      expect(source, `${tool} still calls registry.get for a caller-supplied id`)
+        .not.toMatch(/registry\.get\(vaultId\)/);
+    }
+  });
+
+  it("names the ids that would have worked", async () => {
+    const { readFileSync } = await import("node:fs");
+    for (const tool of TOOLS) {
+      const source = readFileSync(`src/agents/tools/${tool}.ts`, "utf8");
+      expect(source, `${tool} reports a bare miss`).not.toMatch(/`vault not found: \$\{vaultId\}`/);
+    }
+  });
+});

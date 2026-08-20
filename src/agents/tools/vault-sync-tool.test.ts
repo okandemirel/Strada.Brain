@@ -8,7 +8,7 @@ import type { VaultRegistry } from "../../vault/vault-registry.js";
 
 describe("VaultSyncTool — registration metadata", () => {
   function makeRegistry(overrides: Partial<VaultRegistry> = {}): VaultRegistry {
-    return { get: vi.fn(() => undefined), ...overrides } as unknown as VaultRegistry;
+    return { get: vi.fn(() => undefined), resolve: vi.fn(() => undefined), ids: vi.fn(() => []), ...overrides } as unknown as VaultRegistry;
   }
 
   it("has name 'vault_sync'", () => {
@@ -44,7 +44,7 @@ describe("VaultSyncTool — registration metadata", () => {
 
 describe("VaultSyncTool — execute()", () => {
   function makeRegistry(vault: unknown): VaultRegistry {
-    return { get: vi.fn(() => vault) } as unknown as VaultRegistry;
+    return { get: vi.fn(() => vault), resolve: vi.fn(() => vault), ids: vi.fn(() => ((vault as { id?: string })?.id ? [(vault as { id: string }).id] : [])) } as unknown as VaultRegistry;
   }
 
   it("returns isError:true when vaultId is missing from input", async () => {
@@ -65,7 +65,7 @@ describe("VaultSyncTool — execute()", () => {
     const vault = {
       sync: vi.fn().mockResolvedValue({ changed: 3, durationMs: 42 }),
     };
-    const registry = { get: vi.fn(() => vault) } as unknown as VaultRegistry;
+    const registry = { get: vi.fn(() => vault), resolve: vi.fn(() => vault), ids: vi.fn(() => ((vault as { id?: string })?.id ? [(vault as { id: string }).id] : [])) } as unknown as VaultRegistry;
     const tool = new VaultSyncTool(registry);
     const result = await tool.execute({ vaultId: "my-vault" });
     expect(result.isError).toBeUndefined();
@@ -74,15 +74,15 @@ describe("VaultSyncTool — execute()", () => {
     expect(result.content).toContain("42");
   });
 
-  it("passes the vaultId to registry.get()", async () => {
+  it("passes the vaultId to the registry resolver", async () => {
     const vault = {
       sync: vi.fn().mockResolvedValue({ changed: 0, durationMs: 5 }),
     };
-    const get = vi.fn(() => vault);
-    const registry = { get } as unknown as VaultRegistry;
+    const resolve = vi.fn(() => vault);
+    const registry = { resolve, ids: vi.fn(() => []) } as unknown as VaultRegistry;
     const tool = new VaultSyncTool(registry);
     await tool.execute({ vaultId: "specific-id" });
-    expect(get).toHaveBeenCalledWith("specific-id");
+    expect(resolve).toHaveBeenCalledWith("specific-id");
   });
 
   it("returns isError:true when vaultId is undefined (coerced from input)", async () => {

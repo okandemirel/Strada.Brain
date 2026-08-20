@@ -1,3 +1,4 @@
+import { vaultNotFound } from './vault-not-found.js';
 import type { VaultRegistry } from '../../vault/vault-registry.js';
 import type { ToolContext, ToolExecutionResult } from './tool.interface.js';
 
@@ -18,8 +19,8 @@ export class VaultSyncTool {
   ): Promise<ToolExecutionResult> {
     const vaultId = input['vaultId'] as string | undefined;
     if (!vaultId) return { content: 'Missing required parameter: vaultId', isError: true };
-    const v = this.registry.get(vaultId);
-    if (!v) return { content: `vault not found: ${vaultId}`, isError: true };
+    const v = this.registry.resolve(vaultId);
+    if (!v) return { content: vaultNotFound(vaultId, this.registry.ids()), isError: true };
     const r = await v.sync();
     return { content: `sync ${vaultId}: ${r.changed} file(s) reindexed in ${r.durationMs}ms` };
   }

@@ -79,7 +79,7 @@ export class VaultGraphExploreTool {
 
     let targetVaults: IVault[];
     if (vaultId) {
-      const vault = registry.get(vaultId);
+      const vault = registry.resolve(vaultId);
       targetVaults = vault ? [vault] : [];
     } else if (context.projectPath) {
       const projectVault = registry.resolveVaultForPath(context.projectPath, context.projectPath);

@@ -1,3 +1,4 @@
+import { vaultNotFound } from './vault-not-found.js';
 import type { VaultRegistry } from '../../vault/vault-registry.js';
 import type { ToolContext, ToolExecutionResult } from './tool.interface.js';
 
@@ -31,7 +32,7 @@ export class VaultInitTool {
     let vault;
     try {
       vault = vaultId
-        ? this.registry.get(vaultId)
+        ? this.registry.resolve(vaultId)
         : await this.registry.createAndRegister(rootPath);
     } catch (err) {
       return {
@@ -40,7 +41,7 @@ export class VaultInitTool {
       };
     }
 
-    if (!vault) return { content: `vault not found: ${vaultId}`, isError: true };
+    if (!vault) return { content: vaultNotFound(vaultId, this.registry.ids()), isError: true };
     await vault.init();
     const watchable = vault as unknown;
     if (hasStartWatch(watchable)) {
