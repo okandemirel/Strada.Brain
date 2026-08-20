@@ -154,3 +154,20 @@ describe("what the call was aimed at", () => {
     expect(failureTarget(undefined)).toBeUndefined();
   });
 });
+
+describe("a shell failure names the command", () => {
+  // "shell_exec: Self-managed write review rejected" says a command was
+  // refused. Which one, and whether the agent then tried the same thing again,
+  // was unanswerable from the log.
+  it("treats the command as the target", () => {
+    expect(failureTarget({ command: "unity -batchmode -quit" })).toBe("unity -batchmode -quit");
+  });
+
+  it("keeps a path ahead of the command when a tool carries both", () => {
+    expect(failureTarget({ command: "cat x", path: "Assets/Thing.cs" })).toBe("Assets/Thing.cs");
+  });
+
+  it("truncates a command long enough to bury the line", () => {
+    expect(failureTarget({ command: "echo " + "x".repeat(400) })!.length).toBe(160);
+  });
+});

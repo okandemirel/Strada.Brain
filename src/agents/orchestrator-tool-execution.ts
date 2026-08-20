@@ -271,6 +271,10 @@ const TARGET_KEYS = [
   "dir",
   "scenePath",
   "pattern",
+  // For shell_exec the command IS the target. Measured: a run logged
+  // "shell_exec: Self-managed write review rejected" nine times with no way to
+  // tell which command was refused, or whether it was the same one each time.
+  "command",
 ] as const;
 
 export function failureTarget(input: unknown): string | undefined {
