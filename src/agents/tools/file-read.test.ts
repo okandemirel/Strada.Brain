@@ -126,3 +126,59 @@ describe("what a failed read is told", () => {
     expect(result.content).toContain("outside the project directory");
   });
 });
+
+describe("a miss inside a directory that exists", () => {
+  // Measured on the run of 2026-08-20: the agent wrote
+  // docs/PixelFlow_GDD_StructuredSummary.md, then tried three times to read
+  // docs/PixelFlow_StructuredBrief.md — its own file under a name it had
+  // misremembered. "File not found" gave it nothing to correct from.
+  it("names what the directory actually holds", async () => {
+    const root = mkdtempSync(join(tmpdir(), "strada-read-"));
+    mkdirSync(join(root, "docs"));
+    writeFileSync(join(root, "docs", "PixelFlow_GDD_StructuredSummary.md"), "x");
+    writeFileSync(join(root, "docs", "PixelFlow_GDD_RequirementsSummary.md"), "x");
+
+    const result = await new FileReadTool().execute(
+      { path: "docs/PixelFlow_StructuredBrief.md" },
+      { projectPath: root } as never,
+    );
+    rmSync(root, { recursive: true, force: true });
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain("file not found");
+    expect(result.content).toContain("PixelFlow_GDD_StructuredSummary.md");
+  });
+
+  it("prefers the names that start like the one asked for", async () => {
+    const root = mkdtempSync(join(tmpdir(), "strada-read-"));
+    mkdirSync(join(root, "docs"));
+    // Uppercase so the directory's own byte order puts them ahead of the close
+    // match: eight of them push it past the cut, and only ranking pulls it back.
+    for (let i = 0; i < 8; i++) writeFileSync(join(root, "docs", `AAA-unrelated-${i}.md`), "x");
+    writeFileSync(join(root, "docs", "PixelFlow_Notes.md"), "x");
+
+    const result = await new FileReadTool().execute(
+      { path: "docs/PixelFlow_Missing.md" },
+      { projectPath: root } as never,
+    );
+    rmSync(root, { recursive: true, force: true });
+
+    // Position, not mere presence: without ranking the directory's own order
+    // decides, and the one name worth seeing sits behind eight that are not.
+    const listed = result.content.split("that directory holds:")[1] ?? "";
+    expect(listed.indexOf("PixelFlow_Notes.md"), "the close match was not put first").toBe(1);
+  });
+
+  it("says nothing extra when the directory is not there either", async () => {
+    const root = mkdtempSync(join(tmpdir(), "strada-read-"));
+
+    const result = await new FileReadTool().execute(
+      { path: "nowhere/at/all.md" },
+      { projectPath: root } as never,
+    );
+    rmSync(root, { recursive: true, force: true });
+
+    expect(result.isError).toBe(true);
+    expect(result.content).not.toContain("that directory holds");
+  });
+});
