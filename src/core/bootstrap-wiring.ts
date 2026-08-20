@@ -8,6 +8,7 @@
 import { randomUUID } from "node:crypto";
 import { getLogger } from "../utils/logger.js";
 import { Orchestrator } from "../agents/orchestrator.js";
+import { extractUserAuthorizedPaths } from "../security/user-authorized-paths.js";
 import { DashboardServer } from "../dashboard/server.js";
 import { ProviderManager } from "../agents/providers/provider-manager.js";
 import { LearningPipeline } from "../learning/index.js";
@@ -96,6 +97,20 @@ export function wireMessageHandler(
       });
       taskRunId = taskPlanner.getTaskRunId() ?? undefined;
     }
+
+    // Remember what the user named BEFORE routing.
+    //
+    // The seeding used to live in Orchestrator.handleMessage, and this path
+    // never calls it: the message goes to the router, which submits a task.
+    // Measured 2026-08-20 across four runs — the request named
+    // /Users/okan/Downloads/PixelFlow_GDD.docx and every read of it came back
+    // "Path resolves outside the project directory", because the authorization
+    // was derived in a method the CLI never reaches. Seeding here covers every
+    // channel wired through this handler, not just the one that was measured.
+    orchestrator.seedUserAuthorizedPaths(
+      normalizedMsg.chatId,
+      extractUserAuthorizedPaths(typeof normalizedMsg.text === "string" ? normalizedMsg.text : ""),
+    );
 
     let routeError: unknown;
     await orchestrator.withTaskExecutionContext(

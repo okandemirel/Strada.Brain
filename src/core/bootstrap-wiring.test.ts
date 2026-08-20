@@ -63,6 +63,8 @@ function makeOrchestrator() {
   return {
     cleanupSessions: vi.fn(),
     withTaskExecutionContext: vi.fn(async (_ctx: any, fn: () => Promise<void>) => fn()),
+      // The wiring records what the user named before routing.
+      seedUserAuthorizedPaths: vi.fn(),
     buildTrajectoryReplayContext: vi.fn(async () => ({})),
   } as any;
 }
