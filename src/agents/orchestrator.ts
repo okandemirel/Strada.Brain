@@ -2539,6 +2539,32 @@ export class Orchestrator {
    * The authorization is still the user's: it comes from text they wrote, and
    * only ever grows from real incoming messages.
    */
+  /**
+   * Carry paths the user authorized into a run that did not receive their
+   * message.
+   *
+   * The authorization is evidence of what the user typed, and it lived in
+   * per-instance memory. Delegation builds a NEW Orchestrator (delegation
+   * manager, agent manager), so a delegated worker started with an empty map
+   * and refused the very file the request named. Measured 2026-08-20: the run
+   * decomposed into multi-agent work and the first read of
+   * /Users/okan/Downloads/PixelFlow_GDD.docx came back "Path resolves outside
+   * the project directory" — the document the task was about.
+   *
+   * Only ever widens, and only with paths the parent already holds: a worker
+   * cannot authorize itself.
+   */
+  seedUserAuthorizedPaths(chatId: string, paths: readonly string[]): void {
+    if (paths.length === 0) return;
+    const existing = this.authorizedPathsByChat.get(chatId) ?? [];
+    this.authorizedPathsByChat.set(chatId, [...new Set([...existing, ...paths])]);
+  }
+
+  /** Paths this run may read on the user's authority, for handing to a delegate. */
+  userAuthorizedPathsSnapshot(chatId: string): readonly string[] {
+    return this.authorizedPathsByChat.get(chatId) ?? [];
+  }
+
   private rememberAuthorizedPaths(msg: IncomingMessage): void {
     const text = typeof msg.text === "string" ? msg.text : "";
     const named = extractUserAuthorizedPaths(text);

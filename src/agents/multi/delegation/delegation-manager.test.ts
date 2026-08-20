@@ -37,6 +37,7 @@ let orchestratorHandleMessage: ReturnType<typeof vi.fn>;
 let orchestratorHasAgentCore: boolean;
 let scriptedRunnerRun: ReturnType<typeof vi.fn> | undefined;
 let orchestratorOpts: Record<string, unknown>;
+let seededAuthorizations: Array<[string, string[]]> = [];
 
 vi.mock("../../orchestrator.js", () => {
   return {
@@ -48,6 +49,11 @@ vi.mock("../../orchestrator.js", () => {
       // delegation falls back to the handleMessage path (the other tests' original behavior).
       this.createAgentCorePort = orchestratorHasAgentCore ? vi.fn() : undefined;
       this.getAgentCoreClock = orchestratorHasAgentCore ? vi.fn() : undefined;
+      // The real Orchestrator carries the user's authorization across the
+      // instance boundary; the mock has to offer the same seam.
+      this.seedUserAuthorizedPaths = vi.fn((chatId: string, paths: readonly string[]) => {
+        seededAuthorizations.push([chatId, [...paths]]);
+      });
       this.addTool = vi.fn();
       this.removeTool = vi.fn();
     }),
@@ -215,6 +221,8 @@ describe("DelegationManager", () => {
   let manager: DelegationManager;
 
   beforeEach(() => {
+    seededAuthorizations = [];
+
     vi.mocked(createProvider).mockReset();
     vi.mocked(createProvider).mockImplementation((config: { name: string; model?: string }) => ({
       name: config.name,
@@ -253,6 +261,42 @@ describe("DelegationManager", () => {
   });
 
   describe("delegate() sync", () => {
+    // Measured 2026-08-20: the run decomposed into multi-agent work and the
+    // worker's first read of the design document the task was about came back
+    // "Path resolves outside the project directory". Authorization lives in
+    // per-Orchestrator state, and delegation builds a new Orchestrator — so
+    // the evidence of what the user typed never crossed the boundary.
+    it("hands the parent's authorized paths down to the sub-agent", async () => {
+      await manager.delegate({
+        type: "code_review",
+        task: "Review this code",
+        parentAgentId: PARENT_AGENT_ID,
+        depth: 0,
+        mode: "sync",
+        toolContext: {
+          ...TEST_TOOL_CONTEXT,
+          userAuthorizedPaths: ["/Users/okan/Downloads/PixelFlow_GDD.docx"],
+        },
+      });
+
+      expect(seededAuthorizations, "the worker was handed nothing").toHaveLength(1);
+      expect(seededAuthorizations[0]![0]).toMatch(/^delegation-/);
+      expect(seededAuthorizations[0]![1]).toEqual(["/Users/okan/Downloads/PixelFlow_GDD.docx"]);
+    });
+
+    it("hands down nothing when the parent held nothing", async () => {
+      await manager.delegate({
+        type: "code_review",
+        task: "Review this code",
+        parentAgentId: PARENT_AGENT_ID,
+        depth: 0,
+        mode: "sync",
+        toolContext: TEST_TOOL_CONTEXT,
+      });
+
+      expect(seededAuthorizations[0]?.[1] ?? []).toEqual([]);
+    });
+
     it("spawns a sub-agent and returns captured result", async () => {
       const request: DelegationRequest = {
         type: "code_review",

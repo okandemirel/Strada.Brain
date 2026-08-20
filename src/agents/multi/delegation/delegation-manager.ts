@@ -466,6 +466,12 @@ export class DelegationManager {
         vaultWriteHookBudgetMs: this.opts.vaultWriteHookBudgetMs,
         maxIterations: typeConfig.maxIterations,
       });
+      // Carry the user's authorization across the instance boundary, keyed to
+      // the delegate's own chat id — a worker cannot authorize itself, so this
+      // only ever hands down what the parent already holds.
+      // The parent's tool context already carries what the user authorized.
+      const inherited = request.toolContext?.userAuthorizedPaths ?? [];
+      orchestrator.seedUserAuthorizedPaths(`delegation-${subAgentId}`, inherited);
 
       // A delegated agent that cannot see the installed framework writes code
       // that only looks like it belongs to it. Without this it runs on the
