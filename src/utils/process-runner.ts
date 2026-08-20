@@ -36,7 +36,21 @@ export function runProcess(opts: RunOptions): Promise<RunResult> {
       cwd: opts.cwd,
       stdio: ["ignore", "pipe", "pipe"],
       env: opts.env ?? process.env,
+      // Its own process group, so a timeout can reach what the command
+      // started. `bash -c "find / | head"` forks: signalling bash alone leaves
+      // find running, holding the stdout pipe this process is reading.
+      detached: true,
     });
+
+    /** Signal the command and everything it spawned, not just the shell. */
+    const killTree = (signal: NodeJS.Signals): void => {
+      try {
+        if (child.pid !== undefined) process.kill(-child.pid, signal);
+        else child.kill(signal);
+      } catch {
+        // Already gone, or never started: nothing to signal.
+      }
+    };
 
     child.stdout.on("data", (data: Buffer) => {
       stdout += data.toString();
@@ -53,17 +67,40 @@ export function runProcess(opts: RunOptions): Promise<RunResult> {
     });
 
     let killTimer: ReturnType<typeof setTimeout> | undefined;
+    let abandonTimer: ReturnType<typeof setTimeout> | undefined;
+    let settled = false;
+    const cap = (s: string) => (s.length > maxOutput ? s.slice(-maxOutput) : s);
+
+    const finish = (result: RunResult): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (killTimer) clearTimeout(killTimer);
+      if (abandonTimer) clearTimeout(abandonTimer);
+      resolve(result);
+    };
+
     const timer = setTimeout(() => {
       timedOut = true;
-      child.kill("SIGTERM");
-      killTimer = setTimeout(() => child.kill("SIGKILL"), 5000);
+      killTree("SIGTERM");
+      killTimer = setTimeout(() => killTree("SIGKILL"), 5000);
+      // 'close' waits for the stdio pipes, and a process we failed to kill
+      // holds them open. A timeout that can itself hang is not a timeout:
+      // measured, one `find /Users` ran 45 minutes past a 30-second limit and
+      // took the whole run with it. Answer regardless.
+      abandonTimer = setTimeout(() => {
+        finish({
+          stdout: cap(stdout),
+          stderr: cap(stderr),
+          exitCode: 124,
+          timedOut: true,
+          durationMs: Date.now() - start,
+        });
+      }, 8000);
     }, opts.timeoutMs);
 
     child.on("close", (code) => {
-      clearTimeout(timer);
-      if (killTimer) clearTimeout(killTimer);
-      const cap = (s: string) => (s.length > maxOutput ? s.slice(-maxOutput) : s);
-      resolve({
+      finish({
         stdout: cap(stdout),
         stderr: cap(stderr),
         exitCode: code ?? (timedOut ? 124 : 1),
@@ -73,9 +110,7 @@ export function runProcess(opts: RunOptions): Promise<RunResult> {
     });
 
     child.on("error", (err) => {
-      clearTimeout(timer);
-      if (killTimer) clearTimeout(killTimer);
-      resolve({
+      finish({
         stdout: "",
         stderr: err.message,
         exitCode: 127,
