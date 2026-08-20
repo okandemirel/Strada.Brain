@@ -1,3 +1,4 @@
+import { failureTarget } from "./orchestrator-tool-execution.js";
 import type {
   IAIProvider,
   ConversationMessage,
@@ -801,6 +802,15 @@ export class Orchestrator {
   /** Tracks consecutive errors per tool per chat to auto-disable repeatedly failing tools. */
   private readonly toolConsecutiveErrors = new Map<string, Map<string, number>>();
   private static readonly MAX_CONSECUTIVE_TOOL_ERRORS = 3;
+  /**
+   * How many failures on DIFFERENT targets before a tool is presumed broken.
+   *
+   * Kept well above the repeat threshold. Measured 2026-08-20: an agent probed
+   * seven files that did not exist, one in each of seven modules — ordinary
+   * exploration, every call a different path — and lost file_read for the rest
+   * of the run. The tool was fine; the paths were not.
+   */
+  private static readonly MAX_DISTINCT_TOOL_ERRORS = 12;
   private readonly soulLoader: SoulLoader | null;
   private readonly dmPolicy: DMPolicy;
   private readonly sessionSummarizer?: SessionSummarizer;
@@ -1281,14 +1291,39 @@ export class Orchestrator {
   }
 
   /** Update consecutive error counter for a tool in a given chat. Resets on success. */
-  private trackToolError(chatId: string, toolName: string, isError: boolean): void {
+  private trackToolError(chatId: string, toolName: string, isError: boolean, target?: string): void {
+    if (!this.toolConsecutiveErrors.has(chatId)) this.toolConsecutiveErrors.set(chatId, new Map());
+    const errs = this.toolConsecutiveErrors.get(chatId)!;
+    const repeatKey = `${toolName}\u0000${target ?? ""}`;
+
     if (isError) {
-      if (!this.toolConsecutiveErrors.has(chatId)) this.toolConsecutiveErrors.set(chatId, new Map());
-      const errs = this.toolConsecutiveErrors.get(chatId)!;
       errs.set(toolName, (errs.get(toolName) ?? 0) + 1);
+      errs.set(repeatKey, (errs.get(repeatKey) ?? 0) + 1);
     } else {
-      this.toolConsecutiveErrors.get(chatId)?.delete(toolName);
+      // A success clears both: the tool works, and it works on this target.
+      errs.delete(toolName);
+      errs.delete(repeatKey);
     }
+  }
+
+  /**
+   * Is this call worth refusing?
+   *
+   * Two questions, not one. The same call repeated is a loop and stops early.
+   * The same TOOL failing on target after target is only evidence the tool is
+   * broken once there have been many — an agent looking for files that are not
+   * there is doing its job, and taking file_read away for it leaves the run
+   * unable to read anything.
+   */
+  private toolIsCircuitBroken(chatId: string, toolName: string, target?: string): number | null {
+    const errs = this.toolConsecutiveErrors.get(chatId);
+    if (!errs) return null;
+
+    const repeats = errs.get(`${toolName}\u0000${target ?? ""}`) ?? 0;
+    if (repeats >= Orchestrator.MAX_CONSECUTIVE_TOOL_ERRORS) return repeats;
+
+    const anyTarget = errs.get(toolName) ?? 0;
+    return anyTarget >= Orchestrator.MAX_DISTINCT_TOOL_ERRORS ? anyTarget : null;
   }
 
 
@@ -4378,12 +4413,12 @@ export class Orchestrator {
     // run for being unreliable. The agent was then left writing C# with no way
     // to find out whether it compiles — which is the state this tool exists to
     // prevent.
-    const chatToolErrors = this.toolConsecutiveErrors.get(chatId);
-    const toolErrorCount = chatToolErrors?.get(activeToolCall.name) ?? 0;
-    if (
-      toolErrorCount >= Orchestrator.MAX_CONSECUTIVE_TOOL_ERRORS &&
-      !isVerificationToolName(activeToolCall.name)
-    ) {
+    const toolErrorCount = this.toolIsCircuitBroken(
+      chatId,
+      activeToolCall.name,
+      failureTarget(activeToolCall.input),
+    );
+    if (toolErrorCount !== null && !isVerificationToolName(activeToolCall.name)) {
       return {
         toolCallId: activeToolCall.id,
         content: `Tool '${activeToolCall.name}' has failed ${toolErrorCount} consecutive times and is temporarily disabled for this conversation. Use a different approach or tool.`,
@@ -4611,7 +4646,7 @@ export class Orchestrator {
       }
       emitSubstep(result.isError ? "skipped" : "done");
 
-      this.trackToolError(chatId, activeToolCall.name, !!result.isError);
+      this.trackToolError(chatId, activeToolCall.name, !!result.isError, failureTarget(activeToolCall.input));
 
       return {
         toolCallId: activeToolCall.id,
@@ -4629,7 +4664,7 @@ export class Orchestrator {
       });
       emitSubstep("skipped");
 
-      this.trackToolError(chatId, activeToolCall.name, true);
+      this.trackToolError(chatId, activeToolCall.name, true, failureTarget(activeToolCall.input));
 
       return {
         toolCallId: activeToolCall.id,
