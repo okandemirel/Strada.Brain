@@ -121,6 +121,15 @@ export function __resetProviderConcurrency(): void {
 export interface FetchWithRetryOptions {
   /** Maximum retry attempts (default 3) */
   maxRetries?: number;
+  /**
+   * Maximum retries for a TRANSPORT failure — fetch rejecting outright, as
+   * opposed to a server answering with a status. Defaults higher than
+   * maxRetries because there is nothing about the request to change: the
+   * network is unreachable, and only time fixes that.
+   */
+  networkMaxRetries?: number;
+  /** Ceiling on a single transport backoff (default 60s). */
+  networkMaxDelayMs?: number;
   /** Base delay in ms for exponential backoff (default 500) */
   baseDelayMs?: number;
   /** Maximum delay cap in ms (default 60_000) */
@@ -292,6 +301,16 @@ async function extractRateLimitDiagnostics(
 
 const DEFAULTS = {
   maxRetries: 3,
+  // Measured 2026-08-21: an internet outage during a run produced "fetch
+  // failed", the three status-retries were spent in 3.5 seconds, the run
+  // recorded a provider health failure and settled as blocked:ask_user — then
+  // sat waiting for an answer nobody would give for the next thirty-one
+  // minutes. A run is supposed to stop for budget or rate limits, not for a
+  // network that came back a few minutes later. Ten attempts capped at a
+  // minute each is about four minutes of patience, and it costs nothing: no
+  // work is possible while the network is down.
+  networkMaxRetries: 10,
+  networkMaxDelayMs: 60_000,
   baseDelayMs: 500,
   maxDelayMs: 60_000,
   callerName: "HTTP",
@@ -391,6 +410,8 @@ async function runFetchLoop(
   opts: FetchWithRetryOptions = {},
 ): Promise<Response> {
   const maxRetries = opts.maxRetries ?? DEFAULTS.maxRetries;
+  const networkMaxRetries = opts.networkMaxRetries ?? DEFAULTS.networkMaxRetries;
+  const networkMaxDelayMs = opts.networkMaxDelayMs ?? DEFAULTS.networkMaxDelayMs;
   const baseDelayMs = opts.baseDelayMs ?? DEFAULTS.baseDelayMs;
   const maxDelayMs = opts.maxDelayMs ?? DEFAULTS.maxDelayMs;
   const callerName = opts.callerName ?? DEFAULTS.callerName;
@@ -400,6 +421,9 @@ async function runFetchLoop(
 
   const logger = getLogger();
 
+  // Transport failures get their own budget, so a network blip cannot spend the
+  // status-retry allowance and a status storm cannot spend the network one.
+  let networkAttempt = 0;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     let response: Response;
     try {
@@ -410,15 +434,24 @@ async function runFetchLoop(
       if (opts.signal?.aborted) {
         throw err instanceof Error ? err : new Error(String(err));
       }
-      if (attempt === maxRetries) {
+      if (networkAttempt >= networkMaxRetries) {
         throw err instanceof Error ? err : new Error(String(err));
       }
-      logger.debug(`${callerName} network error, retrying`, {
-        attempt: attempt + 1,
+      const networkDelay = Math.min(
+        baseDelayMs * Math.pow(2, networkAttempt) + Math.random() * 100,
+        networkMaxDelayMs,
+      );
+      logger.warn(`${callerName} network error, retrying in ${Math.round(networkDelay)}ms`, {
+        attempt: networkAttempt + 1,
+        maxRetries: networkMaxRetries,
         error: err instanceof Error ? err.message : String(err),
       });
+      networkAttempt++;
+      // A transport failure is not a turn against the status budget: the server
+      // never answered, so nothing was learned about whether it would.
+      attempt--;
       // Don't pass signal to sleep — it may be expired from the fetch timeout
-      await sleep(baseDelayMs * Math.pow(2, attempt) + Math.random() * 100);
+      await sleep(networkDelay);
       continue;
     }
 

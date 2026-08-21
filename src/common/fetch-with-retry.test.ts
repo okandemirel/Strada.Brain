@@ -200,6 +200,93 @@ describe("fetchWithRetry — AbortSignal handling", () => {
   });
 });
 
+describe("fetchWithRetry — an outage is not a refusal", () => {
+  let fetchSpy: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    vi.useFakeTimers();
+    __resetProviderConcurrency();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+    __resetProviderConcurrency();
+  });
+
+  it("outlasts a network outage longer than the status-retry budget", async () => {
+    // Measured 2026-08-21: three status retries were spent in 3.5 seconds while
+    // the internet was down, and the run settled as blocked:ask_user.
+    for (let i = 0; i < 6; i++) fetchSpy.mockRejectedValueOnce(new Error("fetch failed"));
+    fetchSpy.mockResolvedValueOnce(new Response("ok", { status: 200 }));
+
+    const promise = fetchWithRetry(
+      "https://example.com/api",
+      { method: "GET" },
+      { maxRetries: 3, baseDelayMs: 100, callerName: "TestCaller" },
+    );
+
+    // Six backoffs at 100 * 2^n, well past what maxRetries: 3 would have allowed.
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    const response = await promise;
+    expect(response.ok).toBe(true);
+    expect(fetchSpy).toHaveBeenCalledTimes(7);
+  });
+
+  it("still gives up once the network budget is genuinely spent", async () => {
+    fetchSpy.mockRejectedValue(new Error("fetch failed"));
+
+    const promise = fetchWithRetry(
+      "https://example.com/api",
+      { method: "GET" },
+      { maxRetries: 3, baseDelayMs: 100, networkMaxRetries: 2, callerName: "TestCaller" },
+    );
+    const assertion = expect(promise).rejects.toThrow("fetch failed");
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    await assertion;
+    expect(fetchSpy).toHaveBeenCalledTimes(3);
+  });
+
+  it("caps a single backoff so patience never becomes a hang", async () => {
+    fetchSpy.mockRejectedValue(new Error("fetch failed"));
+
+    const promise = fetchWithRetry(
+      "https://example.com/api",
+      { method: "GET" },
+      { maxRetries: 3, baseDelayMs: 10_000, networkMaxRetries: 2, networkMaxDelayMs: 1_000, callerName: "T" },
+    );
+    const assertion = expect(promise).rejects.toThrow("fetch failed");
+
+    // Uncapped, the first backoff alone would be 10s; capped it is 1s.
+    await vi.advanceTimersByTimeAsync(3_000);
+    await assertion;
+    expect(fetchSpy).toHaveBeenCalledTimes(3);
+  });
+
+  it("propagates an abort during a network backoff instead of waiting it out", async () => {
+    const controller = new AbortController();
+    fetchSpy.mockImplementation(() => {
+      if (controller.signal.aborted) throw new Error("The operation was aborted");
+      throw new Error("fetch failed");
+    });
+
+    const promise = fetchWithRetry(
+      "https://example.com/api",
+      { method: "GET" },
+      { maxRetries: 3, baseDelayMs: 100, callerName: "TestCaller", signal: controller.signal },
+    );
+    const assertion = expect(promise).rejects.toThrow("aborted");
+
+    controller.abort(new Error("The operation was aborted"));
+    await vi.advanceTimersByTimeAsync(5_000);
+    await assertion;
+  });
+});
+
 describe("fetchWithRetry — per-provider concurrency limiter", () => {
   let fetchSpy: ReturnType<typeof vi.fn>;
 
