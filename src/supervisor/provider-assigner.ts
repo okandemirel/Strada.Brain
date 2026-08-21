@@ -14,6 +14,7 @@ import type {
   TaggedGoalNode,
 } from "./supervisor-types.js";
 import { canonicalizeProviderName } from "../agents/providers/provider-identity.js";
+import { ProviderHealthRegistry } from "../agents/providers/provider-health.js";
 
 // =============================================================================
 // PROVIDER DESCRIPTOR
@@ -44,15 +45,47 @@ const AFFINITY_THRESHOLD = 0.1; // 10% score difference for dependency affinity
 // PROVIDER ASSIGNER
 // =============================================================================
 
+/**
+ * Whether a provider is usable at this moment, from the live health registry.
+ *
+ * Separated so the assigner can be tested without a registry, and so a caller
+ * that knows better can say so.
+ */
+function defaultLiveness(providerName: string): boolean {
+  try {
+    return ProviderHealthRegistry.getInstance().isAvailable(providerName);
+  } catch {
+    // No registry (tests, early boot): absence of evidence is not evidence of
+    // a dead provider.
+    return true;
+  }
+}
+
 export class ProviderAssigner {
   private readonly providers: readonly ProviderDescriptor[];
   private readonly historyMap: Map<string, Map<string, number>> = new Map();
 
-  constructor(providers: readonly ProviderDescriptor[]) {
+  /**
+   * Asked at assignment time whether a provider can be given work right now.
+   *
+   * The descriptors are built once, at bootstrap. A provider that runs out of
+   * quota an hour into a run stays `healthy` in that snapshot forever, so goals
+   * keep being assigned to it — and each one fails, falls back, and blocks.
+   * Measured 2026-08-21, run 30: Kimi was out of quota before the run started,
+   * the descriptor said nothing about it, and five goals were handed to it and
+   * died. OpenCode was healthy throughout and got none of them.
+   */
+  private readonly isLive: (providerName: string) => boolean;
+
+  constructor(
+    providers: readonly ProviderDescriptor[],
+    isLive: (providerName: string) => boolean = defaultLiveness,
+  ) {
     this.providers = providers.map((provider) => ({
       ...provider,
       name: canonicalizeProviderName(provider.name) ?? provider.name,
     }));
+    this.isLive = isLive;
   }
 
   // ---------------------------------------------------------------------------
@@ -291,9 +324,9 @@ export class ProviderAssigner {
   // PRIVATE HELPERS
   // ---------------------------------------------------------------------------
 
-  /** Filter to only healthy providers */
+  /** Filter to providers that are healthy in the descriptor AND live right now. */
   private getHealthyProviders(): ProviderDescriptor[] {
-    return this.providers.filter((p) => p.healthy !== false);
+    return this.providers.filter((p) => p.healthy !== false && this.isLive(p.name));
   }
 
   /** Get success rate for a provider across given tags */

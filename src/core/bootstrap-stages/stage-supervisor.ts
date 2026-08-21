@@ -187,6 +187,9 @@ export function initializeSupervisorStage(
       ?? buildProviderDescriptors(params.providerManager);
 
     // 4. Create ProviderAssigner
+    // No liveness argument here on purpose: the assigner defaults to the live
+    // health registry, so a provider that dies an hour into a run stops being
+    // given goals without anything rebuilding these descriptors.
     const providerAssigner = deps.createProviderAssigner?.(descriptors)
       ?? new ProviderAssigner(descriptors);
     const verifyNode = createSupervisorNodeVerifier(params.providerManager);
