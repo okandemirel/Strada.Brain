@@ -16,7 +16,7 @@ import { DotnetProjectPresence, DOTNET_PROJECT_TOOLS } from "./dotnet-project-pr
 import { extractUserAuthorizedPaths } from "../security/user-authorized-paths.js";
 import { isFailedTerminalKey } from "./autonomy/terminal-outcome.js";
 import { ProviderHealthRegistry } from "./providers/provider-health.js";
-import { isQuotaStop } from "./orchestrator-runtime-utils.js";
+import { isQuotaStop, QUOTA_LIMIT_RE } from "./orchestrator-runtime-utils.js";
 import { AgentEngine } from "../agent-core/engine/agent-engine.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
@@ -3505,6 +3505,25 @@ export class Orchestrator {
    * `AbortSignal.timeout(this.streamInitialTimeoutMs)` composed with the external signal exactly
    * as before. Flag-ON: the deadline is a fresh RunClock CallScope token composed the same way.
    */
+  /**
+   * Whether a streaming error means this provider will refuse the next call too.
+   *
+   * The non-streaming fallback exists for a streaming GLITCH — the socket died,
+   * the stream went silent — and retrying the same provider without streaming
+   * is the right answer to that. It is the wrong answer to a refusal: a quota
+   * 403 will refuse the second call exactly as it refused the first.
+   *
+   * Measured 2026-08-21, run 31: six Kimi calls in twenty-five seconds, six
+   * 403s, alternating streaming and non-streaming, with the quota exhausted
+   * before the run began. Every second call was spent asking a provider that
+   * had just said no whether it still meant it.
+   */
+  private isProviderRefusal(error: unknown): boolean {
+    const message = error instanceof Error ? error.message : String(error ?? "");
+    if (/\b(?:401|403|429)\b/.test(message)) return true;
+    return QUOTA_LIMIT_RE.test(message) && /error|refus|denied|insufficient/i.test(message);
+  }
+
   private async silentStreamFallback(
     provider: IAIProvider,
     effectivePrompt: string,
@@ -3654,6 +3673,20 @@ export class Orchestrator {
           chatId,
           error: err instanceof Error ? err.message : "Unknown streaming error",
         });
+        // A refusal will refuse again. Record it so the health registry marks
+        // this provider down and the chain stops choosing it, then rethrow so
+        // the failover happens now rather than after a second wasted call.
+        if (this.isProviderRefusal(err)) {
+          const detail = err instanceof Error ? err.message : String(err);
+          recordProviderHealthFailure(ProviderHealthRegistry.getInstance(), provider.name, detail, {
+            isSingleProvider: isSingleProviderChain(provider),
+          });
+          getLogger().warn("Provider refused; not retrying it without streaming", {
+            chatId,
+            provider: provider.name,
+          });
+          throw err;
+        }
         // Non-cancel error → the same non-streaming fallback v1 runs, under a fresh scope.
         return await this.silentStreamFallback(
           provider, effectivePrompt, session, toolDefinitions, externalSignal, chatId, runClock,
