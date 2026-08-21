@@ -7,7 +7,7 @@ import type { ITool, ToolContext, ToolExecutionResult } from "./tool.interface.j
 import { FILE_LIMITS } from "../../common/constants.js";
 import type { IVault } from "../../vault/vault.interface.js";
 import { getLoggerSafe } from "../../utils/logger.js";
-import { nearbyNames } from "./nearby-names.js";
+import { nearbyNames, sameNameElsewhere } from "./nearby-names.js";
 
 const MAX_FILE_SIZE = FILE_LIMITS.MAX_FILE_SIZE;
 const MAX_LINES = FILE_LIMITS.MAX_LINES;
@@ -198,8 +198,16 @@ export class FileReadTool implements ITool {
       return { content: `${header}\n${numbered}` };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        // The name it asked for, wherever that name actually is, before the
+        // names beside where it looked. Measured 2026-08-21: six of seven
+        // misses in one run were this exact case, and the neighbouring names
+        // described a directory the file had never been in.
+        const elsewhere = await sameNameElsewhere(context.projectPath, pathCheck.fullPath);
+        const help = elsewhere.length > 0
+          ? ` — that name is at: ${elsewhere.join(", ")}`
+          : await nearbyNames(pathCheck.fullPath);
         return {
-          content: `Error: file not found: ${relPath}${await nearbyNames(pathCheck.fullPath)}`,
+          content: `Error: file not found: ${relPath}${help}`,
           isError: true,
         };
       }
