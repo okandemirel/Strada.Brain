@@ -16,6 +16,7 @@ import { DotnetProjectPresence, DOTNET_PROJECT_TOOLS } from "./dotnet-project-pr
 import { extractUserAuthorizedPaths } from "../security/user-authorized-paths.js";
 import { isFailedTerminalKey } from "./autonomy/terminal-outcome.js";
 import { ProviderHealthRegistry } from "./providers/provider-health.js";
+import { isQuotaStop } from "./orchestrator-runtime-utils.js";
 import { AgentEngine } from "../agent-core/engine/agent-engine.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
@@ -2473,6 +2474,26 @@ export class Orchestrator {
    * terminalReason assignments (v2-agent-runner.ts). A `failed` status without a recognized reason
    * still surfaces a generic abort (never a false success).
    */
+  /**
+   * Whether the run stopped because a provider has no quota left.
+   *
+   * The registry has known this all along — QUOTA_LIMIT_RE, recordQuotaExhausted,
+   * a long cooldown in the fallback chain. The only place it was not known is
+   * the sentence the user reads. Measured 2026-08-21: a run ended on Kimi's
+   * "You've reached your usage limit for this billing cycle. Your quota will be
+   * refreshed in the next cycle" and told the user "the AI provider is not
+   * responding. Please try again later or switch to a different provider." The
+   * provider had responded, precisely, and the advice was wrong.
+   */
+  private quotaStopped(): boolean {
+    try {
+      return isQuotaStop(ProviderHealthRegistry.getInstance().getAllEntries().values());
+    } catch {
+      // No registry, no claim: an unknown cause is not a quota cause.
+      return false;
+    }
+  }
+
   private mapTerminalReasonToMessageKey(
     reason: string | undefined,
     status: TerminalStatus | undefined,
@@ -2514,7 +2535,7 @@ export class Orchestrator {
     // Clean reasons (done / end_turn / plan-review / goal-handoff / user-cancel / task-winddown /
     // first-success-satisfied) → no message key (neutral fallback). But a hard-FAILED status with no
     // recognized reason must still avoid a false success.
-    if (status === "failed") return "provider_abort";
+    if (status === "failed") return this.quotaStopped() ? "provider_quota" : "provider_abort";
     return undefined;
   }
 

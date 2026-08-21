@@ -9,6 +9,9 @@
  */
 export const FAILED_TERMINAL_KEYS: ReadonlySet<string> = new Set([
   "provider_abort",
+  // A quota stop is a real stop: the work did not finish. It is not the
+  // agent's failure, but reporting it as success would hide an unfinished run.
+  "provider_quota",
   "task_stuck",
   "token_budget_exceeded",
 ]);

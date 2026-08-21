@@ -350,3 +350,24 @@ export function sanitizeToolResult(content: string, maxLength = MAX_TOOL_RESULT_
   }
   return result;
 }
+
+/** A health entry as this decision needs to see it. */
+export interface QuotaHealthView {
+  readonly status: string;
+  readonly lastError?: string;
+}
+
+/**
+ * Whether any provider is down because its quota ran out.
+ *
+ * Measured 2026-08-21: a run ended on Kimi's "You've reached your usage limit
+ * for this billing cycle" and told the user the provider was "not responding".
+ * The registry already recorded it as a quota exhaustion; only the sentence a
+ * person reads did not know.
+ */
+export function isQuotaStop(entries: Iterable<QuotaHealthView>): boolean {
+  for (const entry of entries) {
+    if (entry.status === "down" && QUOTA_LIMIT_RE.test(entry.lastError ?? "")) return true;
+  }
+  return false;
+}
