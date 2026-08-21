@@ -148,7 +148,14 @@ export interface SupervisorResult {
   readonly output: string;
   readonly totalNodes: number;
   readonly succeeded: number;
+  /**
+   * Counts genuine failures and nodes that stopped to ask a question alike —
+   * the aggregator folds blocked into this number. Read `blocked` beside it to
+   * tell the two apart; they call for opposite responses.
+   */
   readonly failed: number;
+  /** Nodes that stopped on a question rather than an error. */
+  readonly blocked: number;
   readonly skipped: number;
   readonly totalCost: number;
   readonly totalDuration: number;

@@ -1172,6 +1172,10 @@ export class BackgroundExecutor {
           nodes: supervisorResult.totalNodes,
           succeeded: supervisorResult.succeeded,
           failed: supervisorResult.failed,
+          // Read beside `failed`, which includes these: a node that stopped on
+          // a question and a node that hit a compiler error both landed in the
+          // same number, and they call for opposite responses.
+          blocked: supervisorResult.blocked,
           skipped: supervisorResult.skipped,
           // The tally says how many; this says which, and why. Without it a run
           // that ends "4 of 5 failed" cannot be acted on at all.

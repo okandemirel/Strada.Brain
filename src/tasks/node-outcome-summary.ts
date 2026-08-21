@@ -31,7 +31,12 @@ export function summariseNodeOutcomes(nodeResults: readonly NodeResult[]): strin
   for (const node of nodeResults) {
     if (node.status === "ok") continue;
     const reason = reasonFor(node).slice(0, MAX_REASON);
-    out.push(`${node.nodeId} ${node.status} on ${node.provider}: ${reason}`);
+    // The aggregator files a node carrying a blockedReason under "blocked" and
+    // then folds it into the failed count, so a settled run reported four
+    // failures whether they were compiler errors or an agent waiting on a
+    // decision. Those call for opposite responses; name which one this is.
+    const state = node.blockedReason && node.blockedReason.trim() !== "" ? "blocked" : node.status;
+    out.push(`${node.nodeId} ${state} on ${node.provider}: ${reason}`);
   }
   return out;
 }

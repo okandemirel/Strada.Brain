@@ -58,6 +58,21 @@ describe("saying which node failed and why", () => {
     expect(lines[0]).toContain("the error is here");
   });
 
+  it("calls a node that stopped to ask a question blocked, not failed", () => {
+    // The aggregator files a node with a blockedReason under "blocked" and then
+    // adds it into the failed count. Run 37 settled "failed: 4" and there was
+    // no way to tell an error from an agent waiting on a decision — two states
+    // that call for opposite responses.
+    const lines = summariseNodeOutcomes([
+      node({ nodeId: "n2", status: "failed", blockedReason: "which scoring rule applies?" }),
+      node({ nodeId: "n3", status: "failed", output: "CS0246" }),
+    ]);
+
+    expect(lines[0]).toContain("blocked");
+    expect(lines[0]).not.toContain("failed");
+    expect(lines[1]).toContain("failed");
+  });
+
   it("says which provider produced the failure", () => {
     // A node that failed on a dying provider and one that failed on its own
     // work need different responses.

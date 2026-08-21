@@ -561,6 +561,7 @@ export class SupervisorBrain {
         totalNodes: supervisorResult.totalNodes,
         succeeded: supervisorResult.succeeded,
         failed: supervisorResult.failed,
+        blocked: 0,
         skipped: supervisorResult.skipped,
         cost: supervisorResult.totalCost,
         duration: supervisorResult.totalDuration,
@@ -656,6 +657,10 @@ export class SupervisorBrain {
     const succeeded = nodeResults.filter((r) => r.status === "ok").length;
     const failed = nodeResults.filter((r) => r.status === "failed").length;
     const skipped = nodeResults.filter((r) => r.status === "skipped").length;
+    // A node carrying a blockedReason stopped on a question, not an error.
+    const blocked = nodeResults.filter(
+      (r) => r.blockedReason !== undefined && r.blockedReason.trim() !== "",
+    ).length;
 
     return {
       success: false,
@@ -664,6 +669,7 @@ export class SupervisorBrain {
       totalNodes: nodeResults.length,
       succeeded,
       failed,
+      blocked,
       skipped,
       totalCost: nodeResults.reduce((sum, r) => sum + r.cost, 0),
       totalDuration: nodeResults.reduce((max, r) => Math.max(max, r.duration), 0),
