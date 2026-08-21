@@ -298,7 +298,30 @@ export function failureTarget(input: unknown): string | undefined {
  * the outcome are typically still present. Read them with a pattern rather
  * than a parser, in the same priority order the parsed path uses.
  */
+/** What a truncated batch result can still say: how many operations failed, and the first reason. */
+function batchFailureSummary(text: string): string | undefined {
+  const firstFailureAt = text.search(/"success"\s*:\s*false/);
+  if (firstFailureAt < 0) {
+    return undefined;
+  }
+  const failures = text.match(/"success"\s*:\s*false/gu)?.length ?? 0;
+  const total = failures + (text.match(/"success"\s*:\s*true/gu)?.length ?? 0);
+  const reason = /"(?:error|message|reason)"\s*:\s*"((?:[^"\\]|\\.){1,200})"/.exec(
+    text.slice(firstFailureAt),
+  )?.[1];
+  const counted = `${failures} of ${total} operation(s) failed`;
+  return reason ? `${counted}: ${reason}` : counted;
+}
+
 function reasonFromUnparsedJson(text: string): string | undefined {
+  // Before the single-reason scan: a batch states no reason of its own — its
+  // reasons belong to the operations inside it, and how many failed is the part
+  // a single error message cannot carry. Measured 2026-08-21: a batch_execute
+  // of eight file reads was logged as "unreadable result"; the scan below would
+  // have quoted one missing file and said nothing about the other.
+  const batch = batchFailureSummary(text);
+  if (batch) return batch;
+
   for (const key of JSON_REASON_KEYS) {
     const match = new RegExp(`"${key}"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)"`).exec(text);
     const value = match?.[1]?.trim();
@@ -306,6 +329,7 @@ function reasonFromUnparsedJson(text: string): string | undefined {
   }
   const status = /"status"\s*:\s*"([^"]+)"/.exec(text)?.[1];
   if (status) return `status: ${status} (result truncated)`;
+
   // Text that merely starts with a brace is text, not a broken document: only
   // claim unreadability for something that actually looks like JSON.
   return /"[A-Za-z_][\w]*"\s*:/.test(text) ? "unreadable result" : undefined;

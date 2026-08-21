@@ -199,3 +199,29 @@ describe("a result too long to arrive whole", () => {
     );
   });
 });
+
+describe("a truncated batch result", () => {
+  it("counts the failures it can see instead of admitting defeat", () => {
+    // A batch of file reads, cut off mid-document by a length limit.
+    const truncated = [
+      '{',
+      '  "results": [',
+      '    { "tool": "file_read", "success": true, "content": "namespace Game {" },',
+      '    { "tool": "file_read", "success": false, "error": "file not found: Assets/Board/BoardState.cs" },',
+      '    { "tool": "file_read", "success": false, "error": "file not found: Assets/Board/CellData.cs" },',
+      '    { "tool": "file_read", "success": true, "content": "public class Scor',
+    ].join("\n");
+
+    const summary = firstMeaningfulLine(truncated);
+
+    expect(summary).toContain("2 of 4");
+    expect(summary).toContain("BoardState.cs");
+    expect(summary).not.toContain("unreadable");
+  });
+
+  it("does not describe a batch where every operation succeeded", () => {
+    const allFine = '{ "results": [ { "tool": "file_read", "success": true, "content": "abc';
+
+    expect(firstMeaningfulLine(allFine)).not.toContain("operation(s) failed");
+  });
+});
