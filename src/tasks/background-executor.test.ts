@@ -6,14 +6,14 @@ import type { GoalTree, GoalNode, GoalNodeId } from "../goals/types.js";
 import { generateGoalNodeId } from "../goals/types.js";
 import type { AgentRunRequest, AgentRunResult, IOStrategy } from "../agent-core/runner/index.js";
 
+// Shared spies rather than a fresh vi.fn() per call: a log nobody can read is
+// the same as a log nobody writes, and the commit summary below is asserted on.
+const logSpies = vi.hoisted(() => ({
+  info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(),
+}));
 vi.mock("../utils/logger.js", () => ({
-  getLoggerSafe: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
-  getLogger: () => ({
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-    debug: vi.fn(),
-  }),
+  getLoggerSafe: () => logSpies,
+  getLogger: () => logSpies,
 }));
 
 // Step 5 retarget: the executor now ALWAYS routes worker runs through the AgentRunner seam
@@ -1402,6 +1402,67 @@ describe("BackgroundExecutor - Pre-decomposed Tree Path", () => {
     expect(result.output).toBe("delegated ok");
     expect(result.workerResult?.visibleResponse).toBe("delegated ok");
     expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("says how many deletions a commit declined to apply", async () => {
+    logSpies.info.mockClear();
+    logSpies.warn.mockClear();
+    const workspaceLease = {
+      id: "lease-2",
+      workspaceId: "ws-2",
+      release: vi.fn().mockResolvedValue(undefined),
+      // The measured shape: files added, nothing conflicting, and deletions the
+      // commit declined. "files: 1, conflicts: 0" alone reads as a clean success.
+      commit: vi.fn().mockResolvedValue({
+        written: ["Assets/Modules/InputModule/Scripts/Services/IInputService.cs"],
+        conflicts: [],
+        removed: ["Assets/Modules/InputModule/Scripts/Interfaces/IInputService.cs"],
+      }),
+    };
+    const runWorkerTask = vi.fn().mockResolvedValue({
+      status: "completed",
+      finalSummary: "ok",
+      visibleResponse: "ok",
+      provider: "mock",
+      catalogVersion: "mock:default",
+      assignmentVersion: 0,
+      touchedFiles: [],
+      toolTrace: [],
+      verificationResults: [],
+      reviewFindings: [],
+      artifacts: [],
+    });
+    const workerOrchestrator = { runWorkerTask } as any;
+    const executor = new BackgroundExecutor({
+      orchestrator: workerOrchestrator,
+      workspaceLeaseManager: { acquireLease: vi.fn().mockResolvedValue(workspaceLease) } as any,
+    });
+
+    await executor.runWorkerEnvelope(workerOrchestrator, {
+      mode: "delegated",
+      prompt: "Do the thing",
+      signal: new AbortController().signal,
+      onProgress: vi.fn(),
+      chatId: "chat1",
+      taskRunId: "task_del:node1",
+      channelType: "web",
+      conversationId: "thread-1",
+      userId: "user-1",
+      workspaceSourceRoot: "/tmp/parent-workspace",
+      supervisorMode: "off",
+    });
+
+    expect(logSpies.info).toHaveBeenCalledWith(
+      "Workspace lease committed",
+      expect.objectContaining({ files: 1, conflicts: 0, deletionsDeclined: 1 }),
+    );
+    expect(logSpies.warn).toHaveBeenCalledWith(
+      expect.stringContaining("deletions were not applied"),
+      expect.objectContaining({
+        count: 1,
+        removed: ["Assets/Modules/InputModule/Scripts/Interfaces/IInputService.cs"],
+      }),
+    );
   });
 
 });

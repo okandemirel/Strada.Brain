@@ -1031,6 +1031,13 @@ export class BackgroundExecutor {
               getLogger().info("Workspace lease committed", {
                 files: result.written.length,
                 conflicts: result.conflicts.length,
+                deletionsDeclined: result.removed.length,
+              });
+            }
+            if (result.removed.length > 0) {
+              getLogger().warn("Workspace lease deletions were not applied — the source keeps files the agent removed", {
+                count: result.removed.length,
+                removed: result.removed.slice(0, 20),
               });
             }
             if (result.conflicts.length > 0) {
@@ -1298,6 +1305,18 @@ export class BackgroundExecutor {
               getLogger().info("Task workspace committed", {
                 files: result.written.length,
                 conflicts: result.conflicts.length,
+                // A commit that adds 15 files and silently declines 18 deletions
+                // is not the clean success "files: 15, conflicts: 0" reads as.
+                // Measured 2026-08-21: an agent deleted a duplicate interface it
+                // had just resolved, the deletion was declined, and the next run
+                // opened on 25 CS0101 errors it had already fixed once.
+                deletionsDeclined: result.removed.length,
+              });
+            }
+            if (result.removed.length > 0) {
+              getLogger().warn("Task workspace deletions were not applied — the project keeps files the agent removed", {
+                count: result.removed.length,
+                removed: result.removed.slice(0, 20),
               });
             }
             if (result.conflicts.length > 0) {
