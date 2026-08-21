@@ -78,7 +78,14 @@ Rules:
 - Cover every outcome the task names. If the task asks for a scene, a running build, a verified test pass, a published artifact — some sub-goal must PRODUCE that thing, and the plan is wrong without it
 - Never substitute a document about a deliverable for the deliverable. "Write a plan describing the scene layout" does not satisfy "deliver a scene"
 - A named deliverable may be scheduled late, but it may not be dropped: measured, three runs asked for a playable scene with prefabs and a verified play-mode run, and all three produced plans made only of "write the scripts"
-- Prefer fewer, well-scoped goals over many granular ones${providerHint}${budgetHint}${behavioralHint}
+- Prefer fewer, well-scoped goals over many granular ones
+
+When the task is to build or extend a GAME — a GDD, a design document, "make this game", or a description of one someone imagined:
+- The person asking may not be a developer or a prompt engineer. A design document plus "build this" is a COMPLETE instruction. Do not plan a goal whose output is a question for them, and do not plan a goal that writes a specification back at them: they already gave you one.
+- The plan must reach a game someone can play, not a library that compiles. Somewhere in it: a scene, prefabs, a view layer that puts those prefabs on screen, and a play-mode run that passes with no test filter.
+- Nothing renders by itself. Services and systems are deliberately NOT MonoBehaviours, so a plan made only of services and systems plans an empty screen. A goal must produce views: Strada.Core.Sync (EntityView on the prefab, EntityMediator and MediatorRegistry to bind state to it, ViewRegistry and ViewPool to spawn, ViewSyncRunner to drive) or Strada.Core.Patterns.View for plain views. Measured: a run delivered 85 scripts, 25 prefabs and 44 passing tests with zero MonoBehaviours and one GameObject in the scene.
+- Build WITH Strada.Core, not merely started by it. Its Communication instead of hand-rolled C# events, its Logging (StradaLog) instead of Debug.Log, its Modules and DI or its ECS as the design fits — you need not use every subsystem, but never plan your own version of one the framework already provides. Measured on the same run: 6 of Strada.Core's 194 public types used, 22 hand-rolled events, 37 Debug.Log calls.
+- Strada.MCP is how the project is built and checked: scene assembly, prefab work, compile verification and play-mode runs all have tools. A plan that ends at "write the code" has not verified anything.${providerHint}${budgetHint}${behavioralHint}
 
 Respond ONLY with JSON:
 {"nodes": [{"id": "s1", "task": "description", "dependsOn": [], "needsFurtherDecomposition": false}, ...]}`;
