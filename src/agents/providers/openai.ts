@@ -782,6 +782,11 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
     if (tools) {
       body["tools"] = tools;
     }
+    // Only when the provider declares it: an unknown key is a 400 on several
+    // OpenAI-compatible endpoints, and this one is not in the base spec.
+    if (this.capabilities.reasoningEffort) {
+      body["reasoning_effort"] = this.capabilities.reasoningEffort;
+    }
     // Gated on the capability, not merely on the caller passing a schema.
     // Eight providers subclass this one and override `capabilities` without
     // declaring structuredOutput — they are OpenAI-compatible in shape, not in

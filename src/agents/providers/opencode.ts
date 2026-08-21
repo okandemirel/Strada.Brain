@@ -45,6 +45,15 @@ export class OpencodeProvider extends OpenAIProvider {
     systemPrompt: true,
     contextWindow: 128_000,
     thinkingSupported: false,
+    // Measured 2026-08-21 against opencode.ai/zen/go with deepseek-v4-flash on
+    // a goal-decomposition prompt: default effort spent 1595 reasoning chunks
+    // before answering, "low" 876, "minimal" 497 — and minimal returned MORE
+    // answer (1623 characters) than low (1285). The model always gets there;
+    // the cost of thinking longer is latency, and latency is what a streaming
+    // stall timeout measures. OPENCODE_REASONING_EFFORT overrides it for a
+    // model or a workload that wants the deliberation.
+    reasoningEffort:
+      (process.env["OPENCODE_REASONING_EFFORT"] as ProviderCapabilities["reasoningEffort"]) ?? "low",
     specialFeatures: ["coding", "function_calling", "json_mode"],
   };
 

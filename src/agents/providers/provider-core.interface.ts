@@ -216,6 +216,20 @@ export interface ProviderCapabilities {
    * is ignored, so callers must keep their text-parsing fallback.
    */
   readonly structuredOutput?: boolean;
+  /**
+   * How hard a reasoning model should think, sent as `reasoning_effort`.
+   *
+   * Absent means the field is not sent at all — several OpenAI-compatible
+   * providers reject an unknown key with a 400, so this is opt-in per provider
+   * rather than a default.
+   *
+   * Measured 2026-08-21 on deepseek-v4-flash with a goal-decomposition prompt:
+   * default effort produced 1595 reasoning chunks before answering, "low" 876,
+   * "minimal" 497 — and minimal returned MORE answer (1623 characters) than
+   * low (1285). More thinking is not more output here; it is mostly more
+   * latency, and latency is what a streaming stall timeout measures.
+   */
+  readonly reasoningEffort?: "minimal" | "low" | "medium" | "high";
   readonly specialFeatures?: string[];
 }
 
