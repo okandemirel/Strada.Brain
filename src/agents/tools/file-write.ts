@@ -1,4 +1,5 @@
-import { writeFile, mkdir } from "node:fs/promises";
+import { writeFile, mkdir, stat } from "node:fs/promises";
+import { sameNameElsewhere } from "./nearby-names.js";
 import { dirname, extname } from "node:path";
 import { validatePath } from "../../security/path-guard.js";
 import {
@@ -73,6 +74,8 @@ export class FileWriteTool implements ITool {
     }
 
     try {
+      // Asked before the write, because afterwards every path exists.
+      const isNewFile = !(await pathExists(pathCheck.fullPath));
       await mkdir(dirname(pathCheck.fullPath), { recursive: true });
       await writeFile(pathCheck.fullPath, content, "utf-8");
 
@@ -96,12 +99,30 @@ export class FileWriteTool implements ITool {
 
       const lineCount = content.split("\n").length;
       const metaMsg = metaGenerated ? " (+.meta)" : "";
+      // Measured 2026-08-21, 12:25: an agent that could not find
+      // IInputService.cs where it looked wrote its own copy, and this tool
+      // said "File written" and nothing else. Twenty-five compile errors
+      // later it grepped, found both, and deleted one. Creating a second file
+      // under a name the project already uses is worth one sentence at the
+      // moment it happens.
+      const twin = isNewFile ? await sameNameElsewhere(context.projectPath, pathCheck.fullPath) : [];
+      const twinMsg = twin.length > 0 ? ` — note: that filename also exists at: ${twin.join(", ")}` : "";
       return {
-        content: `File written: ${relPath} (${lineCount} lines, ${byteLength} bytes)${metaMsg}`,
+        content: `File written: ${relPath} (${lineCount} lines, ${byteLength} bytes)${metaMsg}${twinMsg}`,
         metadata: { path: relPath, lineCount, byteLength, metaGenerated },
       };
     } catch {
       return { content: "Error: could not write file", isError: true };
     }
+  }
+}
+
+/** Whether a path is already there — asked before a write, never after. */
+async function pathExists(fullPath: string): Promise<boolean> {
+  try {
+    await stat(fullPath);
+    return true;
+  } catch {
+    return false;
   }
 }
