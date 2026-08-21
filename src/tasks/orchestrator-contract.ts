@@ -24,6 +24,12 @@ export interface ITaskManager {
   fail(id: string, error: string): void;
   block(id: string, reason: string): void;
   attachGoalRoot(taskId: string, goalRootId: string): void;
+  /**
+   * Resubmit a blocked goal tree, keeping every completed node and replaying
+   * the rest. Present since the dashboard's retry button; the executor now
+   * calls it too, so a run does not stop just because nobody is watching.
+   */
+  retryGoalRoot(goalRootId: string, nodeId?: string): unknown;
   hasActiveForegroundTasks(excludedChatIds?: readonly string[]): boolean;
 }
 

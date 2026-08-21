@@ -35,6 +35,7 @@ import type { BudgetTracker } from "../daemon/budget/budget-tracker.js";
 import type { UnifiedBudgetManager } from "../budget/unified-budget-manager.js";
 import { getLogger } from "../utils/logger.js";
 import { summariseNodeOutcomes } from "./node-outcome-summary.js";
+import { decideAutoResume, type AutoResumeState } from "./auto-resume.js";
 import { WorkspaceLeaseManager } from "../agents/multi/workspace-lease-manager.js";
 import type { WorkerRunRequest, WorkerRunResult } from "../agents/supervisor/supervisor-types.js";
 import {
@@ -1189,6 +1190,7 @@ export class BackgroundExecutor {
         if (supervisorResult.partial) {
           requestFailed = true;
           this.taskManager.block(task.id, supervisorResult.output);
+          this.autoResumeBlockedGoal(admission.supervisorGoalTree, supervisorResult.succeeded);
           return;
         }
         requestFailed = true;
@@ -1381,4 +1383,50 @@ export class BackgroundExecutor {
       });
     };
   }
+
+  /** Automatic resumes spent per goal root, with the progress each round reached. */
+  private readonly autoResumeState = new Map<string, AutoResumeState>();
+
+  /**
+   * Pick a partially-finished goal tree back up instead of leaving it blocked.
+   *
+   * Run 37 stopped here with four of five nodes unfinished and a person asleep.
+   * prepareTreeForRetry keeps what completed and resets the rest, so a resume
+   * costs only the work that failed. decideAutoResume holds the bounds.
+   */
+  private autoResumeBlockedGoal(tree: { rootId: string } | undefined, succeeded: number): void {
+    if (!tree?.rootId || !this.taskManager) return;
+    const rootId = tree.rootId;
+    const state = this.autoResumeState.get(rootId) ?? { attempts: 0, previousSucceeded: 0 };
+    const decision = decideAutoResume(state, succeeded);
+
+    if (!decision.resume) {
+      getLogger().warn("Blocked goal left for a person", {
+        goalRootId: rootId,
+        attempts: state.attempts,
+        reason: decision.reason,
+      });
+      this.autoResumeState.delete(rootId);
+      return;
+    }
+
+    this.autoResumeState.set(rootId, {
+      attempts: state.attempts + 1,
+      previousSucceeded: succeeded,
+    });
+    getLogger().info("Resuming blocked goal without waiting for a person", {
+      goalRootId: rootId,
+      attempt: state.attempts + 1,
+      reason: decision.reason,
+    });
+    try {
+      this.taskManager.retryGoalRoot(rootId);
+    } catch (error) {
+      getLogger().error("Automatic resume failed to resubmit the goal", {
+        goalRootId: rootId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
 }
