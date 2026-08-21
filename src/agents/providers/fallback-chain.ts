@@ -111,6 +111,9 @@ function isNonRetryableRequestError(error: unknown): boolean {
  * calls. Detection is by CONTENT only — the token count is intentionally ignored so
  * a dropped/absent usage frame is never mistaken for an empty answer (audit #18).
  */
+/** Long enough for a transient blip to pass, short enough not to stall a task. */
+const EMPTY_RESPONSE_RETRY_DELAY_MS = 1_500;
+
 function isEmptyProviderResponse(response: ProviderResponse): boolean {
   const hasText = typeof response.text === "string" && response.text.trim().length > 0;
   const hasToolCalls = Array.isArray(response.toolCalls) && response.toolCalls.length > 0;
@@ -496,7 +499,7 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
         }
 
         const safeMessages = this.stripImages(messages, provider);
-        const response = await this.runAttemptWithTimeout(provider, attempt, safeMessages);
+        let response = await this.runAttemptWithTimeout(provider, attempt, safeMessages);
         // A resolved-but-empty response (no text AND no tool calls) is NOT a
         // success: a silently-empty provider must not short-circuit the chain and
         // heal its own health while the loop's circuit breaker simultaneously
@@ -505,7 +508,28 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
         // token count is deliberately ignored (a dropped usage frame must not be
         // mistaken for an empty answer; audit #18).
         if (isEmptyProviderResponse(response)) {
-          throw new Error(`Provider "${provider.name}" returned an empty response (no text or tool calls)`);
+          // Falling through is the better answer when there is somewhere to fall
+          // to. When there is not, "retryable" has to mean something: measured
+          // 2026-08-22, run 39 died on six empty answers in nine seconds from
+          // the only live provider, and a direct probe two minutes later got a
+          // normal reply. The condition was transient and had already passed.
+          const somewhereToFallTo = this.providers
+            .slice(i + 1)
+            .some((p) => health.isAvailable(p.name));
+          if (somewhereToFallTo) {
+            throw new Error(`Provider "${provider.name}" returned an empty response (no text or tool calls)`);
+          }
+
+          logger.warn(`Empty response from the only live provider; asking once more (${label})`, {
+            provider: provider.name,
+          });
+          await sleep(EMPTY_RESPONSE_RETRY_DELAY_MS, externalSignal);
+          response = await this.runAttemptWithTimeout(provider, attempt, safeMessages);
+          if (isEmptyProviderResponse(response)) {
+            // Twice running is not a blip; a provider with nothing to say twice
+            // really has nothing to say.
+            throw new Error(`Provider "${provider.name}" returned an empty response (no text or tool calls)`);
+          }
         }
         health.recordSuccess(provider.name);
         const okMeta = this.attemptMeta[i];
