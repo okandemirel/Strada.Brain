@@ -495,6 +495,23 @@ export class ProviderHealthRegistry {
   }
 
   /** Load health state from disk (idempotent — safe to call multiple times). */
+  /**
+   * Who is currently not usable, and until when — for the boot line that proves
+   * the restore happened at all.
+   */
+  unavailableProviders(): string[] {
+    const out: string[] = [];
+    for (const [name, entry] of this.entries) {
+      if (!this.isAvailable(name)) {
+        const until = entry.cooldownUntil
+          ? ` until ${new Date(entry.cooldownUntil).toISOString()}`
+          : "";
+        out.push(`${name} (${entry.status}${until})`);
+      }
+    }
+    return out;
+  }
+
   load(path: string): void {
     this.persistPath = path;
     try {

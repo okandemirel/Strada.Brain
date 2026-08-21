@@ -409,9 +409,19 @@ async function bootstrapImpl(
     readOnly: config.security.readOnlyMode,
   });
 
-  // Restore provider health state from previous run
+  // Restore provider health state from previous run.
+  //
+  // Say what was restored. This step was silent for a day while a quota-blocked
+  // provider kept being handed goals, and the silence made it impossible to
+  // tell "the file was never read" from "the file was read and said nothing".
   const providerHealthPath = join(config.memory.dbPath, "provider-health.json");
-  ProviderHealthRegistry.getInstance().load(providerHealthPath);
+  const providerHealth = ProviderHealthRegistry.getInstance();
+  providerHealth.load(providerHealthPath);
+  logger.info("Provider health restored", {
+    path: providerHealthPath,
+    fileExists: existsSync(providerHealthPath),
+    unavailable: providerHealth.unavailableProviders(),
+  });
   if (runtimeProjectResolution.notice) {
     logger.warn("Runtime Unity project path mismatch detected", {
       configuredProjectPath: runtimeProjectResolution.configuredProjectPath,
