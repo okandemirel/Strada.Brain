@@ -681,6 +681,17 @@ export function buildUserContent(
 /** How much of a tool result reaches the debug log. Results can be whole
  *  files; enough to identify what happened, not enough to flood. */
 const TOOL_RESULT_LOG_PREVIEW = 300;
+/**
+ * A failed result gets more room than a successful one.
+ *
+ * A success needs a headline; a failure needs its reasons, and 300 characters
+ * ends exactly where those begin. Measured across 2026-08-21: every attempt to
+ * find out what evidence an agent had actually been handed hit this cut — a
+ * failing compile's preview stopped at "status: failed", and a failing
+ * play-mode run's stopped one line into the first assertion, before the
+ * captured output that explains it.
+ */
+const TOOL_FAILURE_LOG_PREVIEW = 1200;
 
 export class Orchestrator {
   private readonly vaultRegistry?: import("../vault/vault-registry.js").VaultRegistry;
@@ -4633,7 +4644,10 @@ export class Orchestrator {
         tool: activeToolCall.name,
         durationMs: toolDurationMs,
         isError: Boolean(result.isError),
-        resultPreview: String(result.content ?? "").slice(0, TOOL_RESULT_LOG_PREVIEW),
+        resultPreview: String(result.content ?? "").slice(
+          0,
+          result.isError ? TOOL_FAILURE_LOG_PREVIEW : TOOL_RESULT_LOG_PREVIEW,
+        ),
       });
       // Vault write-hook (Phase 1): on successful Edit/Write tool calls,
       // trigger a budget-aware reindex of the touched file so the next turn's
