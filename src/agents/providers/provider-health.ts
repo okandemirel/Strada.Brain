@@ -139,6 +139,31 @@ export class ProviderHealthRegistry {
    *   resetting to "healthy" so that a single tiny request cannot mask an
    *   ongoing overload situation. Only a real successful request fully heals.
    */
+  /**
+   * The one place an entry changes, and therefore the one place persistence
+   * has to be remembered.
+   *
+   * It was remembered in four of the five record methods. The fifth,
+   * recordFailure, is the one the chain's recovery probe calls — so run 37
+   * learned at 23:02 that Kimi was refusing, skipped it correctly for the rest
+   * of the hour, wrote none of that down, and run 38 booted free to hand it
+   * goals again. Hanging the write off the state change means the next record
+   * method added cannot forget.
+   *
+   * Only a real transition writes. A healthy provider answering a hundred
+   * calls stays healthy, changes nothing, and costs no I/O.
+   */
+  private setEntry(normalized: string, entry: ProviderHealthEntry): void {
+    const previous = this.entries.get(normalized);
+    this.entries.set(normalized, entry);
+    if (
+      previous?.status !== entry.status ||
+      previous?.cooldownUntil !== entry.cooldownUntil
+    ) {
+      this.persistNow();
+    }
+  }
+
   recordSuccess(providerName: string, kind: "real" | "probe" = "real"): void {
     const normalized = this.norm(providerName);
     const existing = this.entries.get(normalized);
@@ -147,7 +172,7 @@ export class ProviderHealthRegistry {
     if (kind === "probe") {
       // Probe success: downgrade severity but do NOT fully reset.
       // Keep downEpisodes so escalation stays if the provider fails again.
-      this.entries.set(normalized, {
+      this.setEntry(normalized, {
         status: "degraded",
         consecutiveFailures: Math.max(1, existing.consecutiveFailures - 1),
         lastFailureAt: existing.lastFailureAt,
@@ -157,7 +182,7 @@ export class ProviderHealthRegistry {
       // Intentionally do NOT delete downEpisodes — probe is not proof of health
     } else {
       // Real success: full reset
-      this.entries.set(normalized, {
+      this.setEntry(normalized, {
         status: "healthy",
         consecutiveFailures: 0,
         lastFailureAt: existing.lastFailureAt,
@@ -179,7 +204,7 @@ export class ProviderHealthRegistry {
       this.markDown(normalized, this.config.downCooldownMs, error, true);
     } else if (failures >= this.config.degradedThreshold) {
       const now = Date.now();
-      this.entries.set(normalized, {
+      this.setEntry(normalized, {
         status: "degraded",
         consecutiveFailures: failures,
         lastFailureAt: now,
@@ -188,7 +213,7 @@ export class ProviderHealthRegistry {
       });
     } else {
       const now = Date.now();
-      this.entries.set(normalized, {
+      this.setEntry(normalized, {
         status: "healthy",
         consecutiveFailures: failures,
         lastFailureAt: now,
@@ -228,7 +253,7 @@ export class ProviderHealthRegistry {
     const existingCooldown = existing?.cooldownUntil ?? 0;
     const cooldownUntil = existingCooldown > now ? existingCooldown : now + QUOTA_COOLDOWN_MS;
 
-    this.entries.set(normalized, {
+    this.setEntry(normalized, {
       status: "down",
       consecutiveFailures: this.nextFailureCount(normalized),
       lastFailureAt: now,
@@ -250,7 +275,7 @@ export class ProviderHealthRegistry {
     const existingCooldown = existing?.cooldownUntil ?? 0;
     const cooldownUntil = existingCooldown > now ? existingCooldown : now + SINGLE_PROVIDER_QUOTA_COOLDOWN_MS;
 
-    this.entries.set(normalized, {
+    this.setEntry(normalized, {
       status: "down",
       consecutiveFailures: this.nextFailureCount(normalized),
       lastFailureAt: now,
@@ -281,7 +306,7 @@ export class ProviderHealthRegistry {
     const existingCooldown = existing?.cooldownUntil ?? 0;
     const cooldownUntil = existingCooldown > desired ? existingCooldown : desired;
 
-    this.entries.set(normalized, {
+    this.setEntry(normalized, {
       status: "down",
       consecutiveFailures: this.nextFailureCount(normalized),
       lastFailureAt: now,
@@ -299,7 +324,7 @@ export class ProviderHealthRegistry {
       ? now + Math.min(baseCooldownMs * Math.pow(2, episodes), MAX_ADAPTIVE_COOLDOWN_MS)
       : now + baseCooldownMs;
 
-    this.entries.set(normalized, {
+    this.setEntry(normalized, {
       status: "down",
       consecutiveFailures: this.nextFailureCount(normalized),
       lastFailureAt: now,
