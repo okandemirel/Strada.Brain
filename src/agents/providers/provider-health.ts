@@ -11,6 +11,8 @@
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 
+import { canonicalizeProviderName } from "./provider-identity.js";
+
 export type ProviderHealthStatus = "healthy" | "degraded" | "down";
 
 export interface ProviderHealthEntry {
@@ -101,7 +103,18 @@ export class ProviderHealthRegistry {
   private readonly thinkingReEnableCounters = new Map<string, number>();
   private static readonly THINKING_RE_ENABLE_THRESHOLD = 3;
 
-  private norm(name: string): string { return name.trim().toLowerCase(); }
+  /**
+   * One provider, one name.
+   *
+   * ProviderAssigner canonicalizes before it asks ("kimi"); a 403 arrives under
+   * whatever the provider calls itself ("Kimi (Moonshot)"). Keying on the raw
+   * string let those two miss each other, and a miss reads as healthy — which
+   * is how a quota-blocked provider kept being handed goals for five runs.
+   * Unknown names still get their own entry via the lowercase fallback.
+   */
+  private norm(name: string): string {
+    return canonicalizeProviderName(name) ?? name.trim().toLowerCase();
+  }
 
   constructor(config: Partial<ProviderHealthConfig> = {}) {
     this.config = { ...resolveDefaultConfig(), ...config };
@@ -493,7 +506,9 @@ export class ProviderHealthRegistry {
       };
       if (raw.entries) {
         for (const [k, v] of raw.entries) {
-          this.entries.set(k, v);
+          // Re-key: files written before names were canonicalized hold the
+          // display name, and a cooldown nobody can look up is a cooldown lost.
+          this.entries.set(this.norm(k), v);
         }
       }
       if (raw.thinkingDisabled) {

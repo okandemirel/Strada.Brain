@@ -11,12 +11,26 @@ const DIRECT_PROVIDER_ALIASES = new Map<string, string>([
   ["moonshot", "kimi"],
 ]);
 
-const CANONICAL_PROVIDER_NAMES = new Set<string>([
-  "claude",
-  "anthropic",
-  "ollama",
-  ...Object.keys(PROVIDER_PRESETS),
-]);
+/**
+ * Built on first use, not at import.
+ *
+ * PROVIDER_PRESETS reaches this module through a cycle (provider-registry ->
+ * fallback-chain -> provider-health -> here), so at module-evaluation time the
+ * binding can still be undefined depending on who imported whom first. Reading
+ * it inside the function defers the question to a point where every module in
+ * the cycle has finished initializing.
+ */
+let canonicalProviderNames: Set<string> | undefined;
+
+function canonicalProviderNameSet(): Set<string> {
+  canonicalProviderNames ??= new Set<string>([
+    "claude",
+    "anthropic",
+    "ollama",
+    ...Object.keys(PROVIDER_PRESETS ?? {}),
+  ]);
+  return canonicalProviderNames;
+}
 
 function normalizeProviderKey(value: string): string {
   return value.trim().toLowerCase();
@@ -57,7 +71,7 @@ export function canonicalizeProviderName(value: string | null | undefined): stri
   if (!normalized) {
     return undefined;
   }
-  if (CANONICAL_PROVIDER_NAMES.has(normalized)) {
+  if (canonicalProviderNameSet().has(normalized)) {
     return normalized;
   }
 
@@ -66,13 +80,13 @@ export function canonicalizeProviderName(value: string | null | undefined): stri
     return DIRECT_PROVIDER_ALIASES.get(simplified);
   }
 
-  for (const canonicalName of CANONICAL_PROVIDER_NAMES) {
+  for (const canonicalName of canonicalProviderNameSet()) {
     if (simplifyProviderKey(canonicalName) === simplified) {
       return canonicalName;
     }
   }
 
-  for (const [canonicalName, preset] of Object.entries(PROVIDER_PRESETS)) {
+  for (const [canonicalName, preset] of Object.entries(PROVIDER_PRESETS ?? {})) {
     if (simplifyProviderKey(preset.label) === simplified) {
       return canonicalName;
     }
