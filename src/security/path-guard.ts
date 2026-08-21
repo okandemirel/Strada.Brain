@@ -83,6 +83,19 @@ export interface ValidatePathOptions {
   readonly allowMissingParents?: boolean;
 }
 
+/**
+ * The refusal, with the boundary it is talking about.
+ *
+ * Measured 2026-08-21: an agent working inside a workspace lease worked out
+ * for itself that two copies of the project existed and tried to list the
+ * lease directory to find its own. It was told "Path resolves outside the
+ * project directory" and nothing else — a refusal that withholds the one fact
+ * that answers it. Naming the root turns a dead end into a redirection.
+ */
+function outsideProjectError(projectRoot: string): string {
+  return `Path resolves outside the project directory (${resolve(projectRoot)})`;
+}
+
 export async function validatePath(
   projectRoot: string,
   relativePath: string,
@@ -129,7 +142,7 @@ export async function validatePath(
         return {
           valid: false,
           fullPath: rawFullPath,
-          error: "Path resolves outside the project directory",
+          error: outsideProjectError(projectRoot),
         };
       }
       // Parent is valid; use the raw resolved path for the new file
@@ -148,7 +161,7 @@ export async function validatePath(
             return {
               valid: false,
               fullPath: rawFullPath,
-              error: "Path resolves outside the project directory",
+              error: outsideProjectError(projectRoot),
             };
           }
           foundExistingAncestor = true;
@@ -169,7 +182,7 @@ export async function validatePath(
           return {
             valid: false,
             fullPath: rawFullPath,
-            error: "Path resolves outside the project directory",
+            error: outsideProjectError(projectRoot),
           };
         }
       }
@@ -208,7 +221,7 @@ export async function validatePath(
       return {
         valid: false,
         fullPath: realFullPath,
-        error: "Path resolves outside the project directory",
+        error: outsideProjectError(projectRoot),
       };
     }
   } else {
@@ -222,7 +235,7 @@ export async function validatePath(
       return {
         valid: false,
         fullPath: rawFullPath,
-        error: "Path resolves outside the project directory",
+        error: outsideProjectError(projectRoot),
       };
     }
   }
