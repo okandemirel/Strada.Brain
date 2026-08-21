@@ -59,4 +59,26 @@ describe("whether a project can render anything", () => {
     expect(result?.hasViews).toBe(false);
     expect(result?.scriptCount).toBe(1);
   });
+
+  it("reports a scene with no camera", () => {
+    // Measured 2026-08-21: every prefab carried a SpriteRenderer and the only
+    // scene held one GameObject and no Camera. Views would not have helped.
+    const result = assessViewLayer("/p", io({
+      "/p/Assets/Modules/Board/CubeView.cs": "public class CubeView : MonoBehaviour { }",
+      "/p/Assets/Modules/Board/Prefabs/Cube.prefab": "SpriteRenderer:",
+      "/p/Assets/Scenes/Gameplay.unity": "GameObject:\nTransform:",
+    }));
+
+    expect(result?.camerslessScenes).toEqual(["Gameplay.unity"]);
+  });
+
+  it("says nothing about a scene that has one", () => {
+    const result = assessViewLayer("/p", io({
+      "/p/Assets/Modules/Board/CubeView.cs": "public class CubeView : MonoBehaviour { }",
+      "/p/Assets/Modules/Board/Prefabs/Cube.prefab": "SpriteRenderer:",
+      "/p/Assets/Scenes/Gameplay.unity": "GameObject:\nCamera:\n  m_Enabled: 1",
+    }));
+
+    expect(result?.camerslessScenes).toEqual([]);
+  });
 });

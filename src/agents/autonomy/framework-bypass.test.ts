@@ -127,7 +127,12 @@ describe("the gate the guard actually raises", () => {
 
     const scenes = join(root, "Assets", "Scenes");
     mkdirSync(scenes, { recursive: true });
-    writeFileSync(join(scenes, "Main.unity"), "  _gameConfig: {fileID: 11400000, guid: abc}");
+    // With a Camera: a cameraless scene stops at its own gate, which is not the
+    // one this file exercises.
+    writeFileSync(
+      join(scenes, "Main.unity"),
+      "Camera:\n  m_Enabled: 1\n  _gameConfig: {fileID: 11400000, guid: abc}",
+    );
     return { root, configPath };
   }
 

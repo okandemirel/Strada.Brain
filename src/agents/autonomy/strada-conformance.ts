@@ -737,6 +737,19 @@ export class StradaConformanceGuard {
     // directly and never go through a scene, so nothing above this line could
     // have caught it.
     const views = this.assessViews();
+    // Ahead of the view question: a scene with no camera draws nothing at all,
+    // so views would not help. Measured 2026-08-21: every prefab carried a
+    // SpriteRenderer and the only scene held one GameObject and no Camera.
+    if (views && views.camerslessScenes.length > 0) {
+      return (
+        "[STRADA NO CAMERA] " +
+        `${views.camerslessScenes.join(", ")} holds no Camera, so nothing in it is drawn — ` +
+        "not the prefabs, not a view layer, nothing. Every prefab in this project already " +
+        "carries a renderer, so this is the first thing between the game and a picture. Add a " +
+        "camera to the scene spec you pass to unity_scene_build." +
+        this.alsoOpen()
+      );
+    }
     if (views && !views.hasViews) {
       return (
         "[STRADA NOTHING RENDERS] This project has " +

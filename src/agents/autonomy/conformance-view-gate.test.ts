@@ -45,7 +45,13 @@ function assembledProject(): { root: string; configPath: string; scripts: string
 
   const scenes = join(root, "Assets", "Scenes");
   mkdirSync(scenes, { recursive: true });
-  writeFileSync(join(scenes, "Main.unity"), "  _gameConfig: {fileID: 11400000, guid: abc}");
+  // With a Camera: the cameraless case is tested on its own below, and without
+  // one here every case would stop at that gate instead of the one it means to
+  // exercise.
+  writeFileSync(
+    join(scenes, "Main.unity"),
+    "Camera:\n  m_Enabled: 1\n  _gameConfig: {fileID: 11400000, guid: abc}",
+  );
 
   return { root, configPath, scripts };
 }
@@ -102,5 +108,21 @@ describe("a game that is assembled and renders nothing", () => {
     const { root } = assembledProject();
 
     expect(guardFor(root).getPrompt() ?? "").not.toContain("[STRADA NOTHING RENDERS]");
+  });
+
+  it("puts a missing camera ahead of the missing views", () => {
+    const { root, configPath } = assembledProject();
+    writeFileSync(
+      join(root, "Assets", "Scenes", "Main.unity"),
+      "GameObject:\n  _gameConfig: {fileID: 11400000, guid: abc}",
+    );
+    const guard = guardFor(root);
+    guard.trackToolCall("file_write", { path: configPath }, false);
+
+    const prompt = guard.getPrompt() ?? "";
+
+    expect(prompt).toContain("[STRADA NO CAMERA]");
+    expect(prompt).toContain("Main.unity");
+    expect(prompt).toContain("already");
   });
 });

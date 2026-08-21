@@ -750,12 +750,23 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
 
   /**
    * Extract reasoning/thinking content from a streaming SSE delta.
-   * Accumulated separately from user-visible text and attached to tool calls.
-   * Override in subclasses for providers with thinking mode (e.g., Kimi K2.5).
+   *
+   * `reasoning_content` is the de-facto field for OpenAI-compatible reasoning
+   * models — DeepSeek and Kimi both use it — so the base reads it rather than
+   * leaving every such provider to discover the problem for itself.
+   *
+   * Measured 2026-08-21: deepseek-v4-flash on OpenCode streamed 691
+   * reasoning_content deltas and no content. The base returned undefined for
+   * every one, so the stream looked silent, the provider was declared to have
+   * "returned an empty response", the chain failed over to a provider that was
+   * out of quota, and the task blocked sixty seconds after the run started. The
+   * model was working the whole time.
+   *
+   * Subclasses still override for fields of their own.
    */
   protected extractStreamReasoning(delta: Record<string, unknown> | undefined): string | undefined {
-    void delta; // unused in base — subclasses override
-    return undefined;
+    const reasoning = delta?.["reasoning_content"] ?? delta?.["reasoning"];
+    return typeof reasoning === "string" && reasoning !== "" ? reasoning : undefined;
   }
 
   protected buildRequestBody(

@@ -241,6 +241,8 @@ export interface ViewLayerAssessment {
   readonly hasViews: boolean;
   readonly prefabCount: number;
   readonly scriptCount: number;
+  /** Scenes that hold no Camera. Without one, nothing is drawn at all. */
+  readonly camerslessScenes: readonly string[];
 }
 
 /** Strada.Core's own bridge from simulation to scene, plus Unity's base class. */
@@ -293,10 +295,26 @@ export function assessViewLayer(
     if (VIEW_MARKERS.some((marker) => text.includes(marker))) viewScripts++;
   }
 
+  // A scene with no camera renders nothing, whatever else is right. Measured
+  // 2026-08-21: every prefab carried a SpriteRenderer and the only scene held
+  // one GameObject and no Camera — so the question "what puts a prefab on
+  // screen" had a second answer nobody had asked for.
+  const cameraless: string[] = [];
+  for (const scene of files.filter((f) => f.endsWith(".unity"))) {
+    let text: string;
+    try {
+      text = io.readFile(scene);
+    } catch {
+      continue;
+    }
+    if (!/^Camera:/mu.test(text)) cameraless.push(scene.slice(scene.lastIndexOf("/") + 1));
+  }
+
   return {
     hasViews: viewScripts > 0,
     prefabCount: prefabs.length,
     scriptCount: scripts.length,
+    camerslessScenes: cameraless,
   };
 }
 
