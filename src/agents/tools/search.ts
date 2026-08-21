@@ -3,6 +3,7 @@ import { resolve, extname } from "node:path";
 import { glob } from "glob";
 import { validatePath } from "../../security/path-guard.js";
 import type { ITool, ToolContext, ToolExecutionResult } from "./tool.interface.js";
+import { nearbyNames } from "./nearby-names.js";
 
 /**
  * Reject glob patterns that could escape the project directory.
@@ -261,7 +262,14 @@ export class ListDirectoryTool implements ITool {
       };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        return { content: "Error: directory not found", isError: true };
+        // file_read has answered a miss with the names beside it since 2026-08-20;
+        // listing a directory is the same question and was still answered with
+        // four words that do not even repeat the path back. Measured 2026-08-21,
+        // 12:12, mid-run: "Error: directory not found", and nothing to try next.
+        return {
+          content: `Error: directory not found: ${relPath}${await nearbyNames(pathCheck.fullPath)}`,
+          isError: true,
+        };
       }
       return { content: "Error: could not list directory", isError: true };
     }
