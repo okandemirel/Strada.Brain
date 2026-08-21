@@ -322,6 +322,21 @@ const BYPASS_RULES: ReadonlyArray<{
     floor: 5,
   },
   {
+    // Measured 2026-08-21: PigSystem declared [Inject] for three services and
+    // then reached for GameBootstrapper.Services.TryGet in OnUpdate whenever
+    // they were null — every frame. The boot check's own wiring report said all
+    // three WERE registered, so the fallback was never needed; it was masking a
+    // question nobody had asked. A green suite over a workaround is still green.
+    what: "service-locator lookups beside [Inject]",
+    mine: /GameBootstrapper\.Services\s*\??\.\s*TryGet|GameBootstrapper\.Services\s*\??\.\s*Get\b/gu,
+    theirs: /$^/u,
+    instead:
+      "the container that already holds them — Strada.Core injects every registered system in " +
+      "SystemRunner.Initialize, and unity_playmode_verify now prints one [StradaWiring] line per " +
+      "system saying whether each dependency is registered. Read that before adding a fallback",
+    floor: 2,
+  },
+  {
     what: "UnityEngine.Debug.Log",
     mine: /\bDebug\.Log(?:Warning|Error)?\s*\(/gu,
     theirs: /\bStradaLog\b/u,
