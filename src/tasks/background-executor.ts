@@ -34,6 +34,7 @@ import { estimateCost } from "../security/rate-limiter.js";
 import type { BudgetTracker } from "../daemon/budget/budget-tracker.js";
 import type { UnifiedBudgetManager } from "../budget/unified-budget-manager.js";
 import { getLogger } from "../utils/logger.js";
+import { summariseNodeOutcomes } from "./node-outcome-summary.js";
 import { WorkspaceLeaseManager } from "../agents/multi/workspace-lease-manager.js";
 import type { WorkerRunRequest, WorkerRunResult } from "../agents/supervisor/supervisor-types.js";
 import {
@@ -1172,6 +1173,9 @@ export class BackgroundExecutor {
           succeeded: supervisorResult.succeeded,
           failed: supervisorResult.failed,
           skipped: supervisorResult.skipped,
+          // The tally says how many; this says which, and why. Without it a run
+          // that ends "4 of 5 failed" cannot be acted on at all.
+          outcomes: summariseNodeOutcomes(supervisorResult.nodeResults),
         });
 
         if (supervisorResult.success) {
