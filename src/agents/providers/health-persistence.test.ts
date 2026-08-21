@@ -1,12 +1,17 @@
 /**
  * A quota that ran out must survive a kill.
  *
- * Health state was written only on a clean shutdown. Measured 2026-08-21: the
- * persistence file never existed, because every run that day ended with a hard
- * kill — so each new process started blind, assigned goals to a provider whose
- * quota had run out hours earlier, and spent its first minute discovering that
- * by failing on it. An eight-hour cooldown that resets every process start is
- * not a cooldown.
+ * Health state was written only on a clean shutdown, and every run on
+ * 2026-08-21 ended with a hard kill — so nothing a run learned about a dead
+ * provider reached the next one. An eight-hour cooldown that resets on every
+ * process start is not a cooldown.
+ *
+ * A correction, because the original note here was wrong and wrong in a way
+ * worth remembering: it claimed the persistence file "never existed". It did
+ * exist, under ~/.strada — the boot log printed the path relative and I read
+ * it as project-relative, checked the wrong directory, found nothing, and
+ * wrote the absence into a docblock as fact. The defect these tests cover is
+ * real (writes happened only at shutdown); the evidence cited for it was not.
  */
 
 import { mkdtempSync, existsSync, readFileSync, rmSync } from "node:fs";
