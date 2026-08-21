@@ -1151,6 +1151,22 @@ export class BackgroundExecutor {
           return;
         }
 
+        // The settle logging on the worker path did not cover this one, and
+        // this is the path a supervised run takes. Measured 2026-08-21: a run
+        // whose agent wrote "I got blocked so we can move forward together"
+        // was recorded completed, failed:false, and nothing said which node
+        // reported what.
+        getLogger().info("Task settling", {
+          taskId: task.id,
+          route: "supervisor",
+          success: supervisorResult.success,
+          partial: supervisorResult.partial,
+          nodes: supervisorResult.totalNodes,
+          succeeded: supervisorResult.succeeded,
+          failed: supervisorResult.failed,
+          skipped: supervisorResult.skipped,
+        });
+
         if (supervisorResult.success) {
           this.taskManager.complete(task.id, supervisorResult.output);
           return;
