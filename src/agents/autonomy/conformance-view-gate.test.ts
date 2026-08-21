@@ -70,6 +70,25 @@ describe("a game that is assembled and renders nothing", () => {
     expect(prompt).toContain("deliberately NOT");
   });
 
+  it("comes before the reimplementation gate, and names it", () => {
+    // A game nobody can see is a bigger fact than which event bus it uses, and
+    // the run must hear both rather than discovering the second after the first.
+    const { root, configPath, scripts } = assembledProject();
+    writeFileSync(
+      join(scripts, "Events.cs"),
+      Array.from({ length: 8 }, (_, i) => `public event Action E${i};`).join("\n"),
+    );
+    const guard = guardFor(root);
+    guard.trackToolCall("file_write", { path: configPath }, false);
+
+    const prompt = guard.getPrompt() ?? "";
+
+    expect(prompt).toContain("[STRADA NOTHING RENDERS]");
+    expect(prompt).toContain("Also still true");
+    expect(prompt).toContain("reimplements subsystems");
+    expect(prompt).toContain("not fixed by adding views");
+  });
+
   it("clears once something derives from MonoBehaviour", () => {
     const { root, configPath, scripts } = assembledProject();
     writeFileSync(join(scripts, "CubeView.cs"), "public class CubeView : MonoBehaviour {}");

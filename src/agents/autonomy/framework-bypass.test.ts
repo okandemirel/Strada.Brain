@@ -105,6 +105,22 @@ describe("the gate the guard actually raises", () => {
     return { root, configPath };
   }
 
+  it("names the rendering problem too, instead of hiding it behind this one", () => {
+    // Measured 2026-08-21: an agent told to stop reimplementing spent that time
+    // building a fourth service-and-system pair for rendering, because the gate
+    // that would have said nothing renders was queued behind this one.
+    const { root, configPath } = project();
+    const guard = new StradaConformanceGuard(deps, { projectPath: root, enabled: true });
+    guard.trackToolCall("file_write", { path: configPath }, false);
+
+    const prompt = guard.getPrompt() ?? "";
+
+    // This project HAS a view (CubeView), so only the bypass is open and there
+    // is nothing else to mention.
+    expect(prompt).toContain("[STRADA REIMPLEMENTED]");
+    expect(prompt).not.toContain("Also still true");
+  });
+
   it("blocks a run that reimplemented a subsystem, counting what it wrote", () => {
     const { root, configPath } = project();
     const guard = new StradaConformanceGuard(deps, { projectPath: root, enabled: true });

@@ -645,6 +645,29 @@ export class StradaConformanceGuard {
     }
   }
 
+  /**
+   * The other gates standing open, named but not spelled out.
+   *
+   * getPrompt returns one gate, so a run hears about the second problem only
+   * after the first closes. Measured 2026-08-21: an agent told to stop
+   * reimplementing spent that time building a fourth service-and-system pair
+   * for rendering — it never heard that nothing in the project could render at
+   * all, because that gate was behind this one.
+   */
+  private alsoOpen(): string {
+    // Only one direction is reachable: the rendering gate is returned first, so
+    // a run reaches the reimplementation gate only once views exist and there is
+    // nothing left to mention. The reverse — reimplementation still open while
+    // nothing renders — is the case measured on 2026-08-21, when an agent told
+    // to stop reimplementing spent that time building a fourth
+    // service-and-system pair for rendering, never having heard that nothing in
+    // the project could render at all.
+    return this.assessBypass().length === 0
+      ? ""
+      : " Also still true, and not fixed by adding views: this project reimplements " +
+        "subsystems Strada.Core provides.";
+  }
+
   private assessBypass(): ReturnType<typeof assessFrameworkBypass> {
     if (this.opts?.enabled === false) return [];
     if (!this.wroteProjectCode) return [];
@@ -706,27 +729,6 @@ export class StradaConformanceGuard {
     //
     // Only when the run actually wrote module code: a question about the project
     // owes nobody a scene.
-    // Written its own version of something the framework ships. Measured
-    // 2026-08-21: 22 hand-rolled public events against 0 uses of Communication,
-    // 37 Debug.Log calls against 0 uses of StradaLog — 6 of Strada.Core's 194
-    // public types used at all. The project took SystemBase for a tick,
-    // [Inject] for wiring, a ModuleConfig for registration, and wrote a plain
-    // C# game inside the shell. Every rule here passed, because none of them
-    // asked what the framework was for.
-    const bypasses = this.assessBypass();
-    if (bypasses.length > 0) {
-      return (
-        "[STRADA REIMPLEMENTED] This project built its own version of things Strada.Core " +
-        "already provides: " +
-        bypasses.map((b) => `${b.count} ${b.what} (use ${b.instead})`).join("; ") +
-        ". This is not a style note — a hand-rolled equivalent misses what the framework's " +
-        "version is wired into: its logging carries module categories and levels the editor " +
-        "tools read, its bus is what the module graph and the dependency views are built on. " +
-        "Read the subsystem before replacing it; if it genuinely does not fit, say why rather " +
-        "than working around it silently."
-      );
-    }
-
     // A game that is assembled and renders nothing. Measured 2026-08-21 on a
     // delivered project: 85 C# files, 25 prefabs, 44 passing play-mode tests,
     // and zero MonoBehaviours, zero uses of Strada.Core's view layer, one
@@ -748,7 +750,30 @@ export class StradaConformanceGuard {
         "IView for plain non-entity views. Services and systems are deliberately NOT " +
         "MonoBehaviours — do not make them one; add views that observe them. Read the framework " +
         "before writing this: the types above are in Packages/Submodules/Strada.Core/Runtime/Sync " +
-        "and Runtime/Patterns."
+        "and Runtime/Patterns." +
+        this.alsoOpen()
+      );
+    }
+
+    // Written its own version of something the framework ships. Measured
+    // 2026-08-21: 22 hand-rolled public events against 0 uses of Communication,
+    // 37 Debug.Log calls against 0 uses of StradaLog — 6 of Strada.Core's 194
+    // public types used at all. The project took SystemBase for a tick,
+    // [Inject] for wiring, a ModuleConfig for registration, and wrote a plain
+    // C# game inside the shell. Every rule here passed, because none of them
+    // asked what the framework was for.
+    const bypasses = this.assessBypass();
+    if (bypasses.length > 0) {
+      return (
+        "[STRADA REIMPLEMENTED] This project built its own version of things Strada.Core " +
+        "already provides: " +
+        bypasses.map((b) => `${b.count} ${b.what} (use ${b.instead})`).join("; ") +
+        ". This is not a style note — a hand-rolled equivalent misses what the framework's " +
+        "version is wired into: its logging carries module categories and levels the editor " +
+        "tools read, its bus is what the module graph and the dependency views are built on. " +
+        "Read the subsystem before replacing it; if it genuinely does not fit, say why rather " +
+        "than working around it silently." +
+        ""
       );
     }
 
