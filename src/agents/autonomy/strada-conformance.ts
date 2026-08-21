@@ -15,7 +15,7 @@ function moduleDir(projectPath: string, moduleRoot: string): string {
   return resolvePath(projectPath, moduleRoot);
 }
 import type { StradaDepsStatus } from "../../config/strada-deps.js";
-import { assessSceneWiring } from "./scene-wiring.js";
+import { assessSceneWiring, assessViewLayer } from "./scene-wiring.js";
 import { COMPILABLE_EXT, MUTATION_TOOLS, extractFilePath } from "./constants.js";
 import { expandExecutedToolCalls } from "./executed-tools.js";
 
@@ -645,6 +645,19 @@ export class StradaConformanceGuard {
     }
   }
 
+  private assessViews(): ReturnType<typeof assessViewLayer> | null {
+    if (this.opts?.enabled === false) return null;
+    if (!this.wroteProjectCode) return null;
+    const projectPath = this.opts?.projectPath;
+    if (!projectPath) return null;
+    if (!existsSync(joinPath(projectPath, "Assets"))) return null;
+    try {
+      return assessViewLayer(projectPath);
+    } catch {
+      return null;
+    }
+  }
+
   getPrompt(): string | null {
     const incomplete = this.incompleteModules();
     if (incomplete.length > 0) {
@@ -680,6 +693,31 @@ export class StradaConformanceGuard {
     //
     // Only when the run actually wrote module code: a question about the project
     // owes nobody a scene.
+    // A game that is assembled and renders nothing. Measured 2026-08-21 on a
+    // delivered project: 85 C# files, 25 prefabs, 44 passing play-mode tests,
+    // and zero MonoBehaviours, zero uses of Strada.Core's view layer, one
+    // GameObject in the scene. Every service was correct and a player would
+    // have seen an empty screen. The tests passed because they call services
+    // directly and never go through a scene, so nothing above this line could
+    // have caught it.
+    const views = this.assessViews();
+    if (views && !views.hasViews) {
+      return (
+        "[STRADA NOTHING RENDERS] This project has " +
+        `${views.prefabCount} prefab(s) and ${views.scriptCount} script(s), and not one of those ` +
+        "scripts derives from MonoBehaviour or touches Strada.Core's view layer. Nothing can put " +
+        "a prefab on screen, so nothing is playable — passing tests do not change that, because " +
+        "they call services directly and never go through a scene. Strada.Core provides this " +
+        "bridge and it is the supported way: Strada.Core.Sync.EntityView (a MonoBehaviour on the " +
+        "prefab), EntityMediator and MediatorRegistry to bind an entity to its view, ViewRegistry " +
+        "and ViewPool for spawning, ViewSyncRunner to drive them, and Strada.Core.Patterns.View / " +
+        "IView for plain non-entity views. Services and systems are deliberately NOT " +
+        "MonoBehaviours — do not make them one; add views that observe them. Read the framework " +
+        "before writing this: the types above are in Packages/Submodules/Strada.Core/Runtime/Sync " +
+        "and Runtime/Patterns."
+      );
+    }
+
     const wiring = this.assessWiring();
     if (wiring && !wiring.wired) {
       return (

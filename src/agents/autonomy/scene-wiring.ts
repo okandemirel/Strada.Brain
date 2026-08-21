@@ -235,3 +235,67 @@ export function assessSceneWiring(
     problems,
   };
 }
+
+/** Whether anything in the project can put a GameObject on screen. */
+export interface ViewLayerAssessment {
+  readonly hasViews: boolean;
+  readonly prefabCount: number;
+  readonly scriptCount: number;
+}
+
+/** Strada.Core's own bridge from simulation to scene, plus Unity's base class. */
+const VIEW_MARKERS = [
+  ": MonoBehaviour",
+  "EntityView",
+  "EntityMediator",
+  "MediatorRegistry",
+  "ViewRegistry",
+  "ViewSyncRunner",
+  "IViewPool",
+  ": View\n",
+  ": View ",
+  "IView",
+];
+
+/**
+ * Whether a run that built a game built anything that renders.
+ *
+ * Measured 2026-08-21 on a delivered project: 85 C# files, 25 prefabs, 44
+ * passing play-mode tests — and zero MonoBehaviours, zero uses of Strada.Core's
+ * View, EntityView, EntityMediator or ViewRegistry, and one GameObject in the
+ * only scene. Every service and system was correct and nothing could be seen.
+ * The tests passed because they call services directly and never go through a
+ * scene.
+ *
+ * Only accuses when there is something to render: prefabs exist and project
+ * code was written. A simulation with no prefabs owes nobody a view.
+ */
+export function assessViewLayer(
+  projectPath: string,
+  io: SceneWiringIo = defaultIo,
+): ViewLayerAssessment | null {
+  const assets = join(projectPath, "Assets");
+  if (!io.exists(assets)) return null;
+
+  const files = io.listFiles(assets).slice(0, 4000);
+  const prefabs = files.filter((f) => f.endsWith(".prefab"));
+  const scripts = files.filter((f) => f.endsWith(".cs") && !/[/\\]Tests?[/\\]/u.test(f));
+  if (prefabs.length === 0 || scripts.length === 0) return null;
+
+  let viewScripts = 0;
+  for (const script of scripts) {
+    let text: string;
+    try {
+      text = io.readFile(script);
+    } catch {
+      continue;
+    }
+    if (VIEW_MARKERS.some((marker) => text.includes(marker))) viewScripts++;
+  }
+
+  return {
+    hasViews: viewScripts > 0,
+    prefabCount: prefabs.length,
+    scriptCount: scripts.length,
+  };
+}
