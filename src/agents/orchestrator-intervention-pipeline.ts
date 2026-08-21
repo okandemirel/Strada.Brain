@@ -1273,6 +1273,15 @@ export async function resolveVerifierIntervention(
     // answer that, and cheap enough to log every time.
     getLogger().info("Conformance gate raised", {
       gate: /^\[([A-Z0-9 .]+)\]/.exec(conformanceGate)?.[1] ?? "untagged",
+      // The tag answers "did it fire". It does not answer "at what", and one
+      // tag covers several rules — REIMPLEMENTED fires for a hand-rolled event
+      // bus, a Debug.Log, and a service-locator lookup alike. Carry the first
+      // line of the finding so the log says which, on what file.
+      detail: conformanceGate
+        .replace(/^\[[A-Z0-9 .]+\]\s*/u, "")
+        .split("\n")
+        .find((line) => line.trim() !== "")
+        ?.slice(0, 200),
     });
   }
   const hasExplicitVerifyTools = params.availableToolNames
