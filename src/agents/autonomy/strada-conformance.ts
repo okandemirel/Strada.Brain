@@ -15,7 +15,7 @@ function moduleDir(projectPath: string, moduleRoot: string): string {
   return resolvePath(projectPath, moduleRoot);
 }
 import type { StradaDepsStatus } from "../../config/strada-deps.js";
-import { assessSceneWiring, assessViewLayer } from "./scene-wiring.js";
+import { assessFrameworkBypass, assessSceneWiring, assessViewLayer } from "./scene-wiring.js";
 import { COMPILABLE_EXT, MUTATION_TOOLS, extractFilePath } from "./constants.js";
 import { expandExecutedToolCalls } from "./executed-tools.js";
 
@@ -645,6 +645,19 @@ export class StradaConformanceGuard {
     }
   }
 
+  private assessBypass(): ReturnType<typeof assessFrameworkBypass> {
+    if (this.opts?.enabled === false) return [];
+    if (!this.wroteProjectCode) return [];
+    const projectPath = this.opts?.projectPath;
+    if (!projectPath) return [];
+    if (!existsSync(joinPath(projectPath, "Assets"))) return [];
+    try {
+      return assessFrameworkBypass(projectPath);
+    } catch {
+      return [];
+    }
+  }
+
   private assessViews(): ReturnType<typeof assessViewLayer> | null {
     if (this.opts?.enabled === false) return null;
     if (!this.wroteProjectCode) return null;
@@ -693,6 +706,27 @@ export class StradaConformanceGuard {
     //
     // Only when the run actually wrote module code: a question about the project
     // owes nobody a scene.
+    // Written its own version of something the framework ships. Measured
+    // 2026-08-21: 22 hand-rolled public events against 0 uses of Communication,
+    // 37 Debug.Log calls against 0 uses of StradaLog — 6 of Strada.Core's 194
+    // public types used at all. The project took SystemBase for a tick,
+    // [Inject] for wiring, a ModuleConfig for registration, and wrote a plain
+    // C# game inside the shell. Every rule here passed, because none of them
+    // asked what the framework was for.
+    const bypasses = this.assessBypass();
+    if (bypasses.length > 0) {
+      return (
+        "[STRADA REIMPLEMENTED] This project built its own version of things Strada.Core " +
+        "already provides: " +
+        bypasses.map((b) => `${b.count} ${b.what} (use ${b.instead})`).join("; ") +
+        ". This is not a style note — a hand-rolled equivalent misses what the framework's " +
+        "version is wired into: its logging carries module categories and levels the editor " +
+        "tools read, its bus is what the module graph and the dependency views are built on. " +
+        "Read the subsystem before replacing it; if it genuinely does not fit, say why rather " +
+        "than working around it silently."
+      );
+    }
+
     // A game that is assembled and renders nothing. Measured 2026-08-21 on a
     // delivered project: 85 C# files, 25 prefabs, 44 passing play-mode tests,
     // and zero MonoBehaviours, zero uses of Strada.Core's view layer, one

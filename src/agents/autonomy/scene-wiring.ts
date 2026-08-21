@@ -299,3 +299,80 @@ export function assessViewLayer(
     scriptCount: scripts.length,
   };
 }
+
+/** A thing the project built for itself that Strada.Core already provides. */
+export interface FrameworkBypass {
+  readonly what: string;
+  readonly count: number;
+  readonly instead: string;
+}
+
+const BYPASS_RULES: ReadonlyArray<{
+  what: string;
+  mine: RegExp;
+  theirs: RegExp;
+  instead: string;
+  floor: number;
+}> = [
+  {
+    what: "hand-rolled C# events",
+    mine: /\bpublic\s+event\s/gu,
+    theirs: /\b(?:IEventBus|EventBus|ISignal|SignalBus)\b|\.(?:Publish|Subscribe)\s*[(<]/u,
+    instead: "Strada.Core.Communication (Runtime/Communication) — 11 public types, none used",
+    floor: 5,
+  },
+  {
+    what: "UnityEngine.Debug.Log",
+    mine: /\bDebug\.Log(?:Warning|Error)?\s*\(/gu,
+    theirs: /\bStradaLog\b/u,
+    instead: "Strada.Core.Logging.StradaLog (Runtime/Logging) — levels and LogModule categories",
+    floor: 10,
+  },
+];
+
+/**
+ * Where the project wrote its own version of something the framework ships.
+ *
+ * Not "which subsystems went unused" — a game owes nobody a state machine.
+ * This counts only reimplementation: the project built the thing AND never
+ * touched the one that was already there.
+ *
+ * Measured 2026-08-21 on a delivered project: 22 hand-rolled public events
+ * against 0 uses of Communication's 11 types, and 37 Debug.Log calls against 0
+ * uses of Logging's 10. Six of Strada.Core's 194 public types were used at all.
+ * The project inherited SystemBase to get a tick, took [Inject], registered a
+ * ModuleConfig, and wrote a plain C# game inside the shell.
+ */
+export function assessFrameworkBypass(
+  projectPath: string,
+  io: SceneWiringIo = defaultIo,
+): FrameworkBypass[] {
+  const assets = join(projectPath, "Assets");
+  if (!io.exists(assets)) return [];
+
+  const scripts = io
+    .listFiles(assets)
+    .slice(0, 4000)
+    .filter((f) => f.endsWith(".cs") && !/[/\\]Tests?[/\\]/u.test(f));
+  if (scripts.length === 0) return [];
+
+  const sources: string[] = [];
+  for (const script of scripts) {
+    try {
+      sources.push(io.readFile(script));
+    } catch {
+      // Unreadable file: absence of evidence, not evidence of bypass.
+    }
+  }
+
+  const out: FrameworkBypass[] = [];
+  for (const rule of BYPASS_RULES) {
+    if (sources.some((text) => rule.theirs.test(text))) continue;
+    const count = sources.reduce(
+      (total, text) => total + (text.match(rule.mine)?.length ?? 0),
+      0,
+    );
+    if (count >= rule.floor) out.push({ what: rule.what, count, instead: rule.instead });
+  }
+  return out;
+}
