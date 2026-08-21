@@ -231,6 +231,20 @@ const PROVIDER_FAILURE_LIMIT = 5;
 export const QUOTA_LIMIT_RE = /quota|limit|billing|cycle|exceeded|usage/i;
 
 /**
+ * The provider saying when it will be back.
+ *
+ * "for this billing cycle", "refreshed in the next cycle", "monthly limit" —
+ * these name a window measured in days, not minutes. The short cooldown that
+ * protects a lone provider from an eight-hour bench is worse than useless
+ * against one of these: it guarantees the next attempt fails too, and (measured
+ * 2026-08-21) handed the dead provider a fresh batch of goals every fifteen
+ * minutes. Match only wording that commits to a cycle; a bare "quota exceeded"
+ * may still be a per-minute cap and keeps the short bench.
+ */
+const QUOTA_CYCLE_EXHAUSTED_RE =
+  /billing cycle|next cycle|next billing|monthly (?:quota|limit)|quota (?:will be )?(?:refresh|reset)(?:ed|s)?(?: in| at| on)? (?:the )?next/i;
+
+/**
  * A provider response with no usable output: no visible text AND no tool calls.
  * Detection is by CONTENT only — the token count is intentionally ignored, because a
  * reasoning-only turn reports non-zero tokens yet produces no usable output, and a
@@ -299,7 +313,7 @@ export function recordProviderHealthFailure(
   if (registry.recordQuotaHardStop && QUOTA_HARD_STOP_RE.test(errorMsg)) {
     registry.recordQuotaHardStop(providerName, Number.NaN, errorMsg);
   } else if (/\b403\b/.test(errorMsg) && QUOTA_LIMIT_RE.test(errorMsg)) {
-    if (single && registry.recordQuotaExhaustedShort) {
+    if (single && registry.recordQuotaExhaustedShort && !QUOTA_CYCLE_EXHAUSTED_RE.test(errorMsg)) {
       registry.recordQuotaExhaustedShort(providerName, errorMsg);
     } else {
       registry.recordQuotaExhausted(providerName, errorMsg);
