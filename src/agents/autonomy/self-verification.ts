@@ -41,6 +41,10 @@ export class SelfVerification {
   private unityConsoleErrors: string[] = [];
   private unityErrorResolutionAttempts = 0;
   private static readonly MAX_UNITY_ERROR_ATTEMPTS = 10;
+  /** Test files changed since a tool last RAN tests, as opposed to compiling them. */
+  private pendingTestFiles = new Set<string>();
+  private testRunAttempts = 0;
+  private static readonly MAX_TEST_RUN_ATTEMPTS = 3;
 
   /** Reset for new task. */
   reset(): void {
@@ -51,6 +55,8 @@ export class SelfVerification {
     this.lastVerificationAt = null;
     this.unityConsoleErrors = [];
     this.unityErrorResolutionAttempts = 0;
+    this.pendingTestFiles = new Set();
+    this.testRunAttempts = 0;
   }
 
   /**
@@ -72,6 +78,9 @@ export class SelfVerification {
           if (dotIdx !== -1 && COMPILABLE_EXT.has(file.slice(dotIdx))) {
             this.hasCompilableChanges = true;
           }
+          if (looksLikeTestFile(file)) {
+            this.pendingTestFiles.add(file);
+          }
         }
       }
 
@@ -83,6 +92,17 @@ export class SelfVerification {
         if (ok) {
           this.pendingFiles.clear();
           this.hasCompilableChanges = false;
+        }
+        // A compile is not a test run. unity_verify_change says so itself —
+        // "Test assemblies are NOT built by this check" — and measured
+        // 2026-08-21 an agent read that sentence nineteen times, wrote two
+        // test files, and never ran one. Only a tool that RUNS tests settles
+        // whether the tests a run wrote actually pass.
+        if (runsTests(executedTool.toolName, executedTool.input)) {
+          this.testRunAttempts++;
+          if (ok) {
+            this.pendingTestFiles.clear();
+          }
         }
       }
 
@@ -104,7 +124,19 @@ export class SelfVerification {
    * Check if verification is needed before exit. O(1).
    */
   needsVerification(): boolean {
-    return (this.hasCompilableChanges && this.lastBuildOk !== true) || this.hasUnresolvedUnityErrors();
+    return (this.hasCompilableChanges && this.lastBuildOk !== true)
+      || this.hasUnresolvedUnityErrors()
+      || this.hasUnrunTests();
+  }
+
+  /**
+   * Tests were written and never run — unless the run has already tried and
+   * failed enough times that asking again only costs turns. The cap matters:
+   * a gate with no way out cannot be satisfied by an honest failure report.
+   */
+  private hasUnrunTests(): boolean {
+    return this.pendingTestFiles.size > 0
+      && this.testRunAttempts < SelfVerification.MAX_TEST_RUN_ATTEMPTS;
   }
 
   /** Check if there are unresolved Unity console errors. */
@@ -224,6 +256,16 @@ export class SelfVerification {
     ];
     if (rest > 0) lines.push(`  ... and ${rest} more`);
 
+    if (this.hasUnrunTests()) {
+      lines.push(
+        ``,
+        `[TESTS NOT RUN] You changed test files and no tool has run them:`,
+        ...[...this.pendingTestFiles].slice(0, 5).map(f => `  - ${f}`),
+        `A clean compile does not run tests — unity_verify_change says so itself.`,
+        `Run unity_playmode_verify. A test that has never run is not evidence of anything.`,
+      );
+    }
+
     if (this.unityConsoleErrors.length > 0) {
       lines.push(
         `\n[UNITY CONSOLE ERRORS - Attempt ${this.unityErrorResolutionAttempts}/${SelfVerification.MAX_UNITY_ERROR_ATTEMPTS}]`,
@@ -269,4 +311,36 @@ function isVerificationTool(toolName: string, input: Record<string, unknown>): b
 
   const command = typeof input["command"] === "string" ? input["command"].trim() : "";
   return command.length > 0 && VERIFICATION_SHELL_COMMAND_RE.test(command);
+}
+
+/** A path that holds tests rather than the code under test. */
+export function looksLikeTestFile(path: string): boolean {
+  const normalized = path.replace(/\\/gu, "/");
+  // A Tests/ directory is a Tests/ directory whatever its casing.
+  if (/(?:^|\/)[Tt]ests?\//u.test(normalized)) {
+    return true;
+  }
+  // Case matters in the filename: ScoringServiceTests.cs is a test file and
+  // Latest.cs is not, and lowercasing first makes them the same string.
+  return /Tests?\.(?:cs|ts|tsx|js)$/u.test(normalized)
+    || /\.(?:test|spec)\.(?:ts|tsx|js)$/u.test(normalized);
+}
+
+/** Tools that RUN tests, as opposed to compiling the assemblies that hold them. */
+const TEST_RUNNING_TOOLS: ReadonlySet<string> = new Set([
+  "unity_playmode_verify", "unity_test_run", "unity_playmode_test",
+  "unity_editmode_test", "dotnet_test",
+]);
+
+const TEST_RUNNING_SHELL_RE = /\b(?:vitest|jest|pytest|dotnet\s+test|npm\s+(?:run\s+)?test|yarn\s+test)\b/iu;
+
+function runsTests(toolName: string, input: Record<string, unknown>): boolean {
+  if (TEST_RUNNING_TOOLS.has(toolName)) {
+    return true;
+  }
+  if (toolName !== "shell_exec") {
+    return false;
+  }
+  const command = typeof input["command"] === "string" ? input["command"] : "";
+  return TEST_RUNNING_SHELL_RE.test(command);
 }

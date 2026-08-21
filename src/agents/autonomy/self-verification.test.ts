@@ -3,9 +3,11 @@ import { SelfVerification } from "./self-verification.js";
 
 describe("SelfVerification", () => {
   it("accepts verification-oriented shell commands as a clean verification signal", () => {
+    // Assets/Thing.cs, not Assets/Test.cs: a filename ending in Test.cs marks a
+    // test file, and those are deliberately not settled by a typecheck.
     const verifier = new SelfVerification();
 
-    verifier.track("file_write", { path: "Assets/Test.cs" }, {
+    verifier.track("file_write", { path: "Assets/Thing.cs" }, {
       toolCallId: "tc-write",
       content: "written",
       isError: false,
@@ -20,7 +22,7 @@ describe("SelfVerification", () => {
 
     expect(verifier.needsVerification()).toBe(false);
     expect(verifier.getState().pendingFiles.size).toBe(0);
-    expect(verifier.getState().touchedFiles.has("Assets/Test.cs")).toBe(true);
+    expect(verifier.getState().touchedFiles.has("Assets/Thing.cs")).toBe(true);
     expect(verifier.getState().lastVerificationAt).not.toBeNull();
   });
 
