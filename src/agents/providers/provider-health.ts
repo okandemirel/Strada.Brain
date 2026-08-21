@@ -192,6 +192,7 @@ export class ProviderHealthRegistry {
    */
   recordOverloaded(providerName: string, error: string): void {
     this.markDown(this.norm(providerName), OVERLOAD_COOLDOWN_MS, error, true);
+    this.persistNow();
   }
 
   /**
@@ -221,6 +222,7 @@ export class ProviderHealthRegistry {
       lastError: error.slice(0, 200),
       cooldownUntil,
     });
+    this.persistNow();
   }
 
   /**
@@ -242,6 +244,7 @@ export class ProviderHealthRegistry {
       lastError: error.slice(0, 200),
       cooldownUntil,
     });
+    this.persistNow();
   }
 
   /**
@@ -272,6 +275,7 @@ export class ProviderHealthRegistry {
       lastError: error.slice(0, 200),
       cooldownUntil,
     });
+    this.persistNow();
   }
 
   /** Shared helper: mark a provider as "down" with escalating cooldown. */
@@ -460,8 +464,26 @@ export class ProviderHealthRegistry {
     }
   }
 
+  /**
+   * Where to write a long cooldown the moment it is recorded.
+   *
+   * Set by load(), which bootstrap calls with the same path the shutdown hook
+   * saves to. Measured 2026-08-21: the file never existed, because saving
+   * happened only on a clean shutdown and every run that day ended with a hard
+   * kill. Each new process therefore started blind, assigned goals to a
+   * provider whose quota had run out hours earlier, and spent its first minute
+   * discovering that by failing.
+   */
+  private persistPath: string | null = null;
+
+  /** Write now, for facts that must survive a kill. Best-effort, like save(). */
+  private persistNow(): void {
+    if (this.persistPath) this.save(this.persistPath);
+  }
+
   /** Load health state from disk (idempotent — safe to call multiple times). */
   load(path: string): void {
+    this.persistPath = path;
     try {
       if (!existsSync(path)) return;
       const raw = JSON.parse(readFileSync(path, "utf8")) as {
