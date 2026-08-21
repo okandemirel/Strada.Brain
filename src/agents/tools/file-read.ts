@@ -123,7 +123,15 @@ export class FileReadTool implements ITool {
       if (isUserAuthorizedPath(relPath, authorized)) {
         return await readAuthorizedFile(relPath, offset, limit);
       }
-      return { content: `Error: ${readErrorFor(pathCheck.error, relPath)}`, isError: true };
+      // The same help the ENOENT path gives. Measured 2026-08-21, 15:38: two
+      // reads thirty seconds apart, one answered "that name is at: ..." and the
+      // other bare — the difference being whether the missing file's PARENT
+      // existed, which is nothing the caller did differently.
+      const guardMessage = readErrorFor(pathCheck.error, relPath);
+      const guardHelp = guardMessage.startsWith("file not found")
+        ? await missHelp(context.projectPath, pathResolve(context.projectPath, relPath))
+        : "";
+      return { content: `Error: ${guardMessage}${guardHelp}`, isError: true };
     }
 
     // ── Vault-first read path ────────────────────────────────────────────
@@ -198,16 +206,8 @@ export class FileReadTool implements ITool {
       return { content: `${header}\n${numbered}` };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        // The name it asked for, wherever that name actually is, before the
-        // names beside where it looked. Measured 2026-08-21: six of seven
-        // misses in one run were this exact case, and the neighbouring names
-        // described a directory the file had never been in.
-        const elsewhere = await sameNameElsewhere(context.projectPath, pathCheck.fullPath);
-        const help = elsewhere.length > 0
-          ? ` — that name is at: ${elsewhere.join(", ")}`
-          : await nearbyNames(pathCheck.fullPath);
         return {
-          content: `Error: file not found: ${relPath}${help}`,
+          content: `Error: file not found: ${relPath}${await missHelp(context.projectPath, pathCheck.fullPath)}`,
           isError: true,
         };
       }
@@ -426,6 +426,21 @@ function isRichDocument(path: string): boolean {
  * reads answered that way, none of them about a directory. Confinement keeps
  * its own wording, because that one means what it says.
  */
+/**
+ * What to add to a miss: the name it asked for, wherever that name actually is,
+ * before the names beside where it looked.
+ *
+ * Measured 2026-08-21: six of seven misses in one run named a file that existed
+ * under exactly that name in a different directory, and the neighbouring names
+ * described a directory the file had never been in.
+ */
+async function missHelp(projectRoot: string, fullPath: string): Promise<string> {
+  const elsewhere = await sameNameElsewhere(projectRoot, fullPath);
+  return elsewhere.length > 0
+    ? ` — that name is at: ${elsewhere.join(", ")}`
+    : await nearbyNames(fullPath);
+}
+
 function readErrorFor(guardError: string | undefined, relPath: string): string {
   if (guardError === "Parent directory does not exist") return `file not found: ${relPath}`;
   return guardError ?? "path rejected";

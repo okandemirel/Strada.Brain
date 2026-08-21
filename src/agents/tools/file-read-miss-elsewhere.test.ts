@@ -49,4 +49,16 @@ describe("a file that is somewhere else", () => {
     expect(result.isError).toBe(true);
     expect(result.content).toContain("Notes.txt");
   });
+
+  it("helps the same way when the missing file's parent does not exist either", () => {
+    // Measured live: two reads thirty seconds apart, one helped and one bare,
+    // the only difference being whether the parent directory existed.
+    return new FileReadTool()
+      .execute({ path: "Assets/Modules/BoardModule/Scripts/Interfaces/BoardState.cs" }, context)
+      .then((result) => {
+        expect(result.isError).toBe(true);
+        expect(result.content).toContain("file not found");
+        expect(result.content).toContain(join("Assets/Modules/BoardModule/Scripts/Models", "BoardState.cs"));
+      });
+  });
 });
