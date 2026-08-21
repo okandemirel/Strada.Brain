@@ -79,4 +79,15 @@ describe("completionOmitsNamedDeliverables", () => {
 
     expect(completionOmitsNamedDeliverables(TASK, draft)).toEqual([]);
   });
+
+  it("does not quote a sentence fragment back as if it were a name", () => {
+    const task = [
+      "- Combo has types but is not wired into scoring.",
+      "- A PlayMode test that plays a level to a win.",
+    ].join("\n");
+
+    const missing = completionOmitsNamedDeliverables(task, "Done. Everything builds.");
+
+    expect(missing).toEqual(["Combo has types", "A PlayMode test"]);
+  });
 });

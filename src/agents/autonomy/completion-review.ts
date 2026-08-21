@@ -442,13 +442,36 @@ function enumeratedDeliverableLabels(prompt: string): string[] {
     const body = item[1] ?? "";
     // "Power-ups: 0 files. Implement them." — the label is what precedes the colon;
     // without one, the opening words carry the name.
-    const head = body.includes(":") ? body.slice(0, body.indexOf(":")) : body.split(/\s+/u).slice(0, 4).join(" ");
+    const head = body.includes(":") ? body.slice(0, body.indexOf(":")) : openingWords(body);
     const label = head.trim();
     if (label) {
       labels.push(label);
     }
   }
   return labels;
+}
+
+/**
+ * The opening words of a deliverable written without a colon, ending on a word
+ * that can end a phrase. "Combo has types but is not wired into scoring" cut at
+ * four words reads "Combo has types but", which is a sentence fragment quoted
+ * back at the agent as if it were a name.
+ */
+function openingWords(body: string): string {
+  const words = body.split(/\s+/u).slice(0, 4);
+  while (words.length > 1 && LABEL_TAIL_STOPWORDS.has(stripPunctuation(words[words.length - 1] ?? ""))) {
+    words.pop();
+  }
+  return words.join(" ");
+}
+
+const LABEL_TAIL_STOPWORDS = new Set([
+  "and", "or", "but", "that", "which", "with", "for", "to", "a", "an", "the",
+  "of", "in", "on", "is", "are", "has", "have", "was", "were", "it", "its",
+]);
+
+function stripPunctuation(word: string): string {
+  return word.toLowerCase().replace(/[^a-z0-9]/gu, "");
 }
 
 const DELIVERABLE_STOPWORDS = new Set([
