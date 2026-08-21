@@ -8,7 +8,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import type { Config } from "../config/config.js";
 import { type DurationMs } from "../types/index.js";
 import { createLogger } from "../utils/logger.js";
@@ -418,7 +418,12 @@ async function bootstrapImpl(
   const providerHealth = ProviderHealthRegistry.getInstance();
   providerHealth.load(providerHealthPath);
   logger.info("Provider health restored", {
-    path: providerHealthPath,
+    // Absolute, deliberately. A relative ".strada-memory/provider-health.json"
+    // is resolved against the process CWD, which is not the project directory;
+    // printing it relative sent an investigation to the wrong file for an hour
+    // and produced a confident "persistence is broken" about a file that was
+    // being written correctly somewhere else.
+    path: resolve(providerHealthPath),
     fileExists: existsSync(providerHealthPath),
     unavailable: providerHealth.unavailableProviders(),
   });
