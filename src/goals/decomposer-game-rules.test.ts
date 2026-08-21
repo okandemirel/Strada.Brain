@@ -56,6 +56,16 @@ describe("planning a game", () => {
     expect(prompt).toContain("no test filter");
   });
 
+  it("has the plan decide which modules render, before planning them", async () => {
+    const prompt = await decompositionPrompt();
+
+    // Not every module gets a MonoBehaviour — that is the exception, not the shape.
+    expect(prompt).toContain("Most modules are mechanics");
+    expect(prompt).toContain("does not get one by default");
+    expect(prompt).toContain("its own goals");
+    expect(prompt).toContain("do not sprinkle rendering through every module");
+  });
+
   it("says nothing renders by itself, and names the framework's bridge", async () => {
     const prompt = await decompositionPrompt();
 
