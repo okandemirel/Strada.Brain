@@ -396,6 +396,87 @@ function isVerificationStep(toolName: string, summary: string): boolean {
 
 
 
+/**
+ * Deliverables the task enumerated that a completion claim never mentions.
+ *
+ * The sibling check above asks whether a draft admits its own loose ends. It
+ * cannot ask the other question — whether the draft is silent about something
+ * the task asked for — because that needs the task text, not just the draft.
+ * Measured across this project's runs: a task naming five deliverables was
+ * reported complete with three of them at zero files, and nothing objected,
+ * because every check on the path read only the draft.
+ *
+ * Deliberately conservative. It fires only on a task that enumerates its
+ * deliverables as a list of two or more, only when the draft claims
+ * completion, and only for a label carrying a word distinctive enough to
+ * look for. Silence about a named deliverable is the signal; this makes no
+ * claim about whether the deliverable is any good.
+ */
+export function completionOmitsNamedDeliverables(
+  prompt: string | null | undefined,
+  draft: string | null | undefined,
+): string[] {
+  const draftText = draft?.trim() ?? "";
+  if (!draftText || !draftClaimsCompletion(draftText)) {
+    return [];
+  }
+  const labels = enumeratedDeliverableLabels(prompt ?? "");
+  if (labels.length < 2) {
+    return [];
+  }
+  const haystack = collapseForMention(draftText);
+  return labels.filter((label) => {
+    const term = distinctiveTerm(label);
+    return term !== null && !haystack.includes(term);
+  });
+}
+
+/** Bullet or numbered lines that read as a deliverable, in the order the task listed them. */
+function enumeratedDeliverableLabels(prompt: string): string[] {
+  const labels: string[] = [];
+  for (const rawLine of prompt.split("\n")) {
+    const item = /^\s*(?:[-*\u2022]|\d+[.)])\s+(.+)$/u.exec(rawLine.trim());
+    if (!item) {
+      continue;
+    }
+    const body = item[1] ?? "";
+    // "Power-ups: 0 files. Implement them." — the label is what precedes the colon;
+    // without one, the opening words carry the name.
+    const head = body.includes(":") ? body.slice(0, body.indexOf(":")) : body.split(/\s+/u).slice(0, 4).join(" ");
+    const label = head.trim();
+    if (label) {
+      labels.push(label);
+    }
+  }
+  return labels;
+}
+
+const DELIVERABLE_STOPWORDS = new Set([
+  "that", "this", "with", "from", "into", "then", "them", "they", "have", "will",
+  "must", "make", "also", "each", "when", "what", "your", "there", "which", "should",
+  "implement", "implements", "add", "adds", "the", "and", "for", "its", "per",
+]);
+
+/** The longest word worth searching for in a label, or null when none is distinctive. */
+function distinctiveTerm(label: string): string | null {
+  const words = label
+    .toLowerCase()
+    .split(/[^a-z0-9]+/u)
+    .filter((word) => word.length >= 4 && !DELIVERABLE_STOPWORDS.has(word));
+  if (words.length === 0) {
+    return null;
+  }
+  return words.reduce((longest, word) => (word.length > longest.length ? word : longest));
+}
+
+/**
+ * "Power-ups", "power ups" and "powerups" are the same word to a reader, and a
+ * draft that used a different one of them has not been silent.
+ */
+function collapseForMention(text: string): string {
+  return text.toLowerCase().replace(/[^a-z0-9]+/gu, "");
+}
+
 export function draftLeavesOpenInvestigations(draft: string | null | undefined): boolean {
   const normalized = draft?.trim() ?? "";
   if (!normalized) {

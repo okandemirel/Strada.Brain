@@ -1,5 +1,5 @@
 import type { AgentState } from "../agent-state.js";
-import { draftLeavesOpenInvestigations } from "./completion-review.js";
+import { completionOmitsNamedDeliverables, draftLeavesOpenInvestigations } from "./completion-review.js";
 import { sanitizePromptInjection } from "../orchestrator-text-utils.js";
 import type { TaskClassification } from "../../agent-core/routing/routing-types.js";
 import type { LogEntry } from "../../utils/logger.js";
@@ -176,6 +176,19 @@ export function planVerifierPipeline(params: {
   // when they caught anything, is a draft that declares completion while leaving
   // its own investigations open — and that is a property of the text, decidable
   // here without spending four model calls on every task that writes a file.
+  const unaddressed = completionOmitsNamedDeliverables(params.prompt, params.draft);
+  if (unaddressed.length > 0) {
+    return {
+      evidence,
+      checks,
+      reviewRequired: false,
+      initialDecision: "continue",
+      gate: buildUnaddressedDeliverablesGate(unaddressed),
+      summary: `The draft reports completion without accounting for ${unaddressed.length} named deliverable(s).`,
+      buildToolsAvailable: params.buildToolsAvailable,
+    };
+  }
+
   if (draftLeavesOpenInvestigations(params.draft)) {
     return {
       evidence,
@@ -210,6 +223,17 @@ function buildOpenInvestigationsGate(): string {
 }
 
 
+
+/** Told to the agent when it reports completion without accounting for what the task named. */
+function buildUnaddressedDeliverablesGate(missing: readonly string[]): string {
+  return [
+    "You are reporting the work complete, but the task named deliverables your report never mentions:",
+    ...missing.map((item) => `- ${item}`),
+    "",
+    "A deliverable may be built, or it may be genuinely blocked and said so plainly.",
+    "It may not simply go unmentioned. Deliver each one, or name it and say what stopped you.",
+  ].join("\n");
+}
 
 export function collectVerifierPipelineEvidence(params: {
   state: AgentState;

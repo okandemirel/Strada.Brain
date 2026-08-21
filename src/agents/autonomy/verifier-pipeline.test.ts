@@ -350,4 +350,34 @@ DONE`,
     expect(plan.gate).not.toContain("authoritative verification");
   });
 
+  it("refuses a completion that walks past deliverables the task named", () => {
+    const plan = planVerifierPipeline({
+      prompt: [
+        "Continue building the game.",
+        "- Power-ups: 0 files. Implement them as the GDD specifies.",
+        "- Lose condition: 0 files. A game you cannot lose is not the game.",
+        "- A PlayMode test that plays a level to a win, and one to a loss.",
+      ].join("\n"),
+      draft: "Done. The lose condition is implemented and verified.",
+      state: createState(),
+      task: IMPLEMENTATION_TASK,
+      verificationState: {
+        pendingFiles: new Set(),
+        touchedFiles: new Set(["Assets/Modules/GameFlow/LoseCondition.cs"]),
+        hasCompilableChanges: false,
+        lastBuildOk: true,
+        lastVerificationAt: Date.now() - 100,
+      },
+      buildVerificationGate: null,
+      conformanceGate: null,
+      logEntries: [],
+      chatId: "chat-deliverables",
+      taskStartedAtMs: Date.now() - 1000,
+    });
+
+    expect(plan.initialDecision).toBe("continue");
+    expect(plan.gate).toContain("Power-ups");
+    expect(plan.gate).toContain("PlayMode test");
+    expect(plan.gate).not.toContain("Lose condition");
+  });
 });
