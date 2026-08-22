@@ -246,6 +246,8 @@ function defaultListDir(dir: string): string[] {
  * still finishes and reports honestly.
  */
 const NEVER_RUN_GATE_LIMIT = 3;
+/** Same shape as the sibling above: ask three times, then say it is the last. */
+const UNBOUND_PREFABS_GATE_LIMIT = 3;
 
 /**
  * Where a class stops being one thing.
@@ -343,6 +345,8 @@ export class StradaConformanceGuard {
    * times it is told to — and a gate that cannot be cleared stops being a rule
    * and becomes a loop.
    */
+  private unboundPrefabsRaised = 0;
+  private unboundPrefabsRaisedAtCall: number | null = null;
   private neverRunGateRaised = 0;
   /**
    * Tool-call count when the never-run gate was last raised.
@@ -886,7 +890,12 @@ export class StradaConformanceGuard {
     // exist and that nothing can reach. It names the file to fix, which the
     // general gate cannot.
     const unbound = this.unboundPrefabConfigs();
-    if (unbound.length > 0) {
+    if (unbound.length > 0 && this.unboundPrefabsRaised < UNBOUND_PREFABS_GATE_LIMIT) {
+      if (this.unboundPrefabsRaisedAtCall !== this.toolCallsSeen) {
+        this.unboundPrefabsRaised += 1;
+        this.unboundPrefabsRaisedAtCall = this.toolCallsSeen;
+      }
+      const lastAsk = this.unboundPrefabsRaised === UNBOUND_PREFABS_GATE_LIMIT;
       return (
         "[STRADA PREFABS UNBOUND] These configs declare prefab fields and no asset instance " +
         `exists for them: ${unbound.join(", ")}. Unity resolves a config to its data through ` +
@@ -897,7 +906,11 @@ export class StradaConformanceGuard {
         "Create the asset, assign every prefab field, and give the scene something that reads it. " +
         "Measured: twenty-five prefabs, three GameObject fields, no asset instance, a PlayMode " +
         "suite of 44 passing tests, and one hundred and twenty captured frames that were all the " +
-        "same empty sky."
+          "same empty sky." +
+          (lastAsk
+            ? " This is the last time this is asked. If it is still unbound when you finish, the " +
+              "game does not render and must be reported that way rather than as delivered."
+            : "")
       );
     }
 

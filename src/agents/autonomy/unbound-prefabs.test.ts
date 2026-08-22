@@ -126,4 +126,25 @@ describe("a config that holds prefabs and was never instantiated", () => {
     expect(prompt).toContain("unity_scene_build");
     expect(prompt).toContain('kind "prefab"');
   });
+
+  it("does not ask the same thing forever", () => {
+    // Measured: this gate fired seven times in one run, worded identically each
+    // time, while the asset stayed missing. Its sibling counts its raises and
+    // says which is the last; a message that never escalates is easy to read
+    // past.
+    const { root, configPath } = project({ prefabFields: true, assetReferencingIt: false });
+    const guard = new StradaConformanceGuard(deps, { projectPath: root, enabled: true });
+
+    const prompts: string[] = [];
+    for (let i = 0; i < 4; i++) {
+      guard.trackToolCall("file_write", { path: configPath }, false);
+      const p = guard.getPrompt();
+      if (p?.includes("PREFABS UNBOUND")) prompts.push(p);
+    }
+
+    expect(prompts.length, "the gate never stops repeating").toBeLessThanOrEqual(3);
+    expect(prompts.at(-1), "the final ask says nothing about being final").toContain(
+      "last time",
+    );
+  });
 });
