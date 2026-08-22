@@ -30,6 +30,11 @@ export interface ITaskManager {
    * calls it too, so a run does not stop just because nobody is watching.
    */
   retryGoalRoot(goalRootId: string, nodeId?: string): unknown;
+  /**
+   * Plan a stalled goal again from scratch with the failure reasons as input.
+   * Replaying the same tree cannot get past an obstacle the plan itself has.
+   */
+  replanGoalRoot(goalRootId: string, failureReasons?: readonly string[]): unknown;
   hasActiveForegroundTasks(excludedChatIds?: readonly string[]): boolean;
 }
 

@@ -303,6 +303,41 @@ export class TaskManager extends EventEmitter {
     });
   }
 
+  /**
+   * Plan a stalled goal again from scratch, with the failure reasons as input.
+   *
+   * retryGoalRoot replays the same tree, which is right while rounds are still
+   * completing nodes and useless once they are not. This deliberately submits
+   * without a goalTree so decomposition runs afresh: the failed steps come back
+   * as context to plan around, not as a tree to re-execute.
+   */
+  replanGoalRoot(goalRootId: string, failureReasons: readonly string[] = []): Task | null {
+    const task = this.storage.findLatestByGoalRoot(goalRootId);
+    if (!task || ACTIVE_STATUSES.has(task.status) || task.status === TaskStatus.completed) {
+      return null;
+    }
+
+    const lines = [this.buildReplayPrompt(task, "replan")];
+    if (failureReasons.length > 0) {
+      lines.push("", "What the last two rounds could not get past:");
+      for (const reason of failureReasons.slice(0, 10)) {
+        lines.push(`- ${sanitizeSecrets(reason)}`);
+      }
+    }
+
+    return this.submit(task.chatId, task.channelType, lines.join("\n"), {
+      origin: task.origin ?? "user",
+      triggerName: task.triggerName,
+      forceSharedPlanning: true,
+      userContent: task.userContent,
+      attachments: task.attachments,
+      orchestrator: task.orchestrator,
+      conversationId: task.conversationId,
+      userId: task.userId,
+      parentId: task.id,
+    });
+  }
+
   resumeGoalRoot(goalRootId: string): Task | null {
     const task = this.storage.findLatestByGoalRoot(goalRootId);
     if (!task || ACTIVE_STATUSES.has(task.status) || task.status === TaskStatus.completed) {
@@ -532,9 +567,11 @@ export class TaskManager extends EventEmitter {
     }
   }
 
-  private buildReplayPrompt(task: Task, mode: "retry" | "resume"): string {
+  private buildReplayPrompt(task: Task, mode: "retry" | "resume" | "replan"): string {
     const preface = mode === "resume"
       ? "Previous background execution was interrupted. Resume from the strongest checkpoint, preserve completed work, and only redo what is necessary."
+      : mode === "replan"
+      ? "The previous plan was attempted and then attempted again, and the second round finished nothing the first had not. Do not repeat it. Work out why those steps could not be completed and produce a different plan — a different decomposition, a different order, or smaller steps that sidestep whatever blocked the last one. Completed work still stands; keep it."
       : "Previous background execution failed or stalled. First analyze the failure cause briefly, then continue from the strongest checkpoint instead of restarting blindly.";
     const lines = [preface, "", `Original request: ${task.prompt}`];
 
