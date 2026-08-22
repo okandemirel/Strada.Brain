@@ -82,7 +82,20 @@ export class VaultWatcher {
       followSymlinks: false,
       usePolling: pollInterval > 0,
       interval: pollInterval > 0 ? pollInterval : undefined,
-      ignored: (path) => IGNORE_REGEX.test(path.replaceAll('\\', '/')),
+      // Judged relative to the vault root, not absolutely.
+      //
+      // The pattern excludes .strada among others, and the dev-knowledge vault
+      // is rooted at <project>/.strada/knowledge — so every absolute path
+      // beneath it matched and that watcher ignored its own vault entirely. It
+      // had never fired: notes edited during a run stayed in the index as they
+      // were, and a plan was still reading a project that had been deleted.
+      // A Library or .git folder *inside* a vault is still ignored, which is
+      // what the rule was for.
+      ignored: (path) => {
+        const rel = relative(this.opts.root, path).replaceAll('\\', '/');
+        if (rel === '' || rel.startsWith('..')) return false;
+        return IGNORE_REGEX.test('/' + rel);
+      },
     });
     const computeRel = (absPath: string): string => {
       return rootIsFile
