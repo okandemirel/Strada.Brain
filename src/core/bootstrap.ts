@@ -895,7 +895,14 @@ async function bootstrapImpl(
         // each incident.
         try {
           const { frameworkVaultTargets } = await import("../vault/framework-vault-targets.js");
-          for (const target of frameworkVaultTargets(stradaDeps, process.cwd())) {
+          // installRoot, not cwd: runtime-paths chdirs the process to the Strada
+          // home at startup, so cwd here is ~/.strada and the vault registered
+          // under the name "Strada.Brain" indexed the config directory instead
+          // of this system's source. installRoot is derived from the module's
+          // own location and survives the chdir.
+          const { resolveRuntimePaths } = await import("../common/runtime-paths.js");
+          const brainRoot = resolveRuntimePaths({ moduleUrl: import.meta.url }).installRoot;
+          for (const target of frameworkVaultTargets(stradaDeps, brainRoot)) {
             if (!existsSync(target.rootPath)) continue;
             const hash = createHash("sha1").update(target.rootPath).digest("hex").slice(0, 8);
             const id = `generic:${hash}`;

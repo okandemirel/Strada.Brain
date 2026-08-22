@@ -72,4 +72,16 @@ describe("which codebases get indexed", () => {
 
     expect(block).toContain("existsSync(target.rootPath)");
   });
+
+  it("does not take this system's root from the working directory", () => {
+    // Startup chdirs the process to the Strada home, so cwd is ~/.strada.
+    // Measured 2026-08-22: the vault registered as "Strada.Brain" built a 30MB
+    // index of the config directory and none of this system's source.
+    const source = readFileSync("src/core/bootstrap.ts", "utf8");
+    const at = source.indexOf("frameworkVaultTargets(");
+    const call = source.slice(source.lastIndexOf("\n", at - 400), at + 120);
+
+    expect(call).not.toContain("frameworkVaultTargets(stradaDeps, process.cwd())");
+    expect(call).toContain("installRoot");
+  });
 });
