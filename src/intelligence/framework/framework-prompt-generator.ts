@@ -78,6 +78,32 @@ export class FrameworkPromptGenerator {
       lines.push("");
     }
 
+    // Concrete classes, grouped by namespace.
+    //
+    // The extractor captures every public type; this section used to render
+    // only the abstract ones, so 306 of Strada.Core's 355 classes reached
+    // nobody. ViewRegistry, ViewSyncRunner and StradaLog were among them —
+    // exactly the names a plan needs in order to put something on screen or to
+    // log without reaching for Debug.Log. Names and namespaces only: a plan
+    // needs to know what exists, and can read the source for signatures.
+    const concrete = snapshot.classes.filter((c) => !c.isAbstract);
+    if (concrete.length > 0) {
+      const byNamespace = new Map<string, string[]>();
+      for (const cls of concrete) {
+        const bucket = byNamespace.get(cls.namespace) ?? [];
+        bucket.push(cls.name);
+        byNamespace.set(cls.namespace, bucket);
+      }
+      lines.push("### Classes by namespace");
+      for (const [ns, names] of [...byNamespace].sort((a, b) => a[0].localeCompare(b[0]))) {
+        const shown = names.slice(0, 40);
+        const rest = names.length - shown.length;
+        lines.push(`- \`${ns}\`: ${shown.join(", ")}${rest > 0 ? ` (+${rest} more)` : ""}`);
+      }
+      lines.push("");
+    }
+
+
     // Key interfaces
     if (snapshot.interfaces.length > 0) {
       lines.push("### Interfaces");
