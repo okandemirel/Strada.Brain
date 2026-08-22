@@ -11,6 +11,40 @@ import { join as joinPath, resolve as resolvePath } from "node:path";
  * ModuleConfig.cs and no .asmdef" and accused a correctly-built module of being
  * incomplete. resolve() is the one operation that is right for both.
  */
+/** Every file under a directory, bounded so a stray Library folder cannot hang a check. */
+function walkFiles(dir: string, budget = 4000): string[] {
+  const out: string[] = [];
+  const stack = [dir];
+  while (stack.length > 0 && out.length < budget) {
+    const current = stack.pop()!;
+    let entries;
+    try {
+      entries = readdirSync(current, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      const full = joinPath(current, entry.name);
+      if (entry.isDirectory()) stack.push(full);
+      else out.push(full);
+    }
+  }
+  return out;
+}
+
+/** Does any .asset under Assets point at this script's guid? */
+function anyAssetReferences(assetsRoot: string, guid: string): boolean {
+  for (const file of walkFiles(assetsRoot)) {
+    if (!file.endsWith(".asset")) continue;
+    try {
+      if (readFileSync(file, "utf8").includes(guid)) return true;
+    } catch {
+      // Unreadable asset: cannot prove a reference, keep looking.
+    }
+  }
+  return false;
+}
+
 function moduleDir(projectPath: string, moduleRoot: string): string {
   return resolvePath(projectPath, moduleRoot);
 }
@@ -507,6 +541,64 @@ export class StradaConformanceGuard {
    * Only reports what it could actually read: a directory that is not on disk
    * yields no sources and no accusation, in line with every other rule here.
    */
+  /**
+   * Configs that hold prefabs and that nothing ever instantiated.
+   *
+   * A ScriptableObject declaring GameObject fields is how prefabs reach run
+   * time. Writing the class is half of it; the other half is the .asset that
+   * holds the references, and without it every field is null and nothing
+   * spawns. Unity records the link by script guid — the .cs.meta names the
+   * guid, an .asset points back at it — so that is what this follows rather
+   * than the class name, which appears nowhere in the asset.
+   *
+   * Measured 2026-08-22: twenty-five prefabs, a config with three GameObject
+   * fields, zero assets pointing at its guid, and a project whose entire
+   * PlayMode suite passed while every captured frame was empty sky.
+   */
+  private unboundPrefabConfigs(): string[] {
+    if (this.touchedModuleRoots.size === 0) return [];
+    const projectPath = this.opts?.projectPath;
+    if (!projectPath) return [];
+
+    const assetsRoot = joinPath(projectPath, "Assets");
+    if (!existsSync(assetsRoot)) return [];
+
+    const out: string[] = [];
+    for (const moduleRoot of this.touchedModuleRoots) {
+      const root = moduleDir(projectPath, moduleRoot);
+      if (!existsSync(root)) continue;
+
+      for (const script of walkFiles(root)) {
+        if (!script.endsWith(".cs")) continue;
+        let source: string;
+        try {
+          source = readFileSync(script, "utf8");
+        } catch {
+          continue; // Unreadable: absence of evidence.
+        }
+
+        const prefabFields = source.match(
+          /\[SerializeField\][^;]{0,120}\bGameObject\b[^;]{0,80};/gu,
+        );
+        if (!prefabFields || prefabFields.length === 0) continue;
+
+        let guid: string | undefined;
+        try {
+          guid = /guid:\s*([a-f0-9]{32})/u.exec(readFileSync(`${script}.meta`, "utf8"))?.[1];
+        } catch {
+          continue; // No .meta yet: Unity has not imported it, so say nothing.
+        }
+        if (!guid) continue;
+
+        if (!anyAssetReferences(assetsRoot, guid)) {
+          const name = script.split(/[/\\]/u).pop()?.replace(/\.cs$/u, "") ?? script;
+          out.push(`${name} (${prefabFields.length} prefab field(s), no .asset instance)`);
+        }
+      }
+    }
+    return out;
+  }
+
   private emptyTestAssemblies(): string[] {
     if (this.touchedModuleRoots.size === 0) return [];
     const projectPath = this.opts?.projectPath;
@@ -787,6 +879,23 @@ export class StradaConformanceGuard {
         "Read the subsystem before replacing it; if it genuinely does not fit, say why rather " +
         "than working around it silently." +
         ""
+      );
+    }
+
+    // Before the broad "not assembled" complaint, the specific one: prefabs that
+    // exist and that nothing can reach. It names the file to fix, which the
+    // general gate cannot.
+    const unbound = this.unboundPrefabConfigs();
+    if (unbound.length > 0) {
+      return (
+        "[STRADA PREFABS UNBOUND] These configs declare prefab fields and no asset instance " +
+        `exists for them: ${unbound.join(", ")}. Unity resolves a config to its data through ` +
+        "an .asset that points at the script's guid; with no such asset every field is null at " +
+        "run time and no prefab will ever be spawned, however many prefabs sit in the project. " +
+        "Create the asset, assign each prefab to its field, and make sure something in the " +
+        "scene reads it. Measured: twenty-five prefabs, three GameObject fields, no asset " +
+        "instance, a PlayMode suite of 44 passing tests, and one hundred and twenty captured " +
+        "frames that were all the same empty sky."
       );
     }
 

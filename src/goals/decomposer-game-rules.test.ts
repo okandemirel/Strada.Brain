@@ -89,4 +89,39 @@ describe("planning a game", () => {
     expect(prompt).toContain("Strada.MCP");
     expect(prompt).toContain('ends at "write the code"');
   });
+
+  it("knows a prefab nothing references is invisible", async () => {
+    // Measured 2026-08-22: twenty-five prefabs, twenty-five sprites, a config
+    // class declaring three GameObject fields — and zero .asset instances of
+    // it, so nothing held a reference to any prefab at run time. Making the
+    // asset is not a detail discovered later; it is the step between having
+    // prefabs and having a game.
+    const prompt = await decompositionPrompt();
+
+    expect(prompt).toContain("nothing references is invisible");
+    expect(prompt).toContain("assign the references");
+  });
+
+  it("refuses to call a scene holding only a bootstrapper a scene", async () => {
+    const prompt = await decompositionPrompt();
+
+    expect(prompt).toContain("only a bootstrapper");
+    expect(prompt).toContain("what the scene contains");
+  });
+
+  it("plans levels as work when the design has levels", async () => {
+    const prompt = await decompositionPrompt();
+
+    expect(prompt.toLowerCase()).toContain("level");
+    expect(prompt).toContain("progression");
+  });
+
+  it("does not accept a green suite as proof that anything was drawn", async () => {
+    // Forty-four of forty-four passed while every captured frame was the same
+    // empty sky. Tests prove the simulation; only a frame proves the game.
+    const prompt = await decompositionPrompt();
+
+    expect(prompt).toContain("captured frame");
+    expect(prompt).toContain("identical");
+  });
 });
