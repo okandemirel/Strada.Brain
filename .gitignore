@@ -2,6 +2,12 @@ node_modules/
 dist/
 web-portal/dist/
 .env
+# Every variant, not just the exact name. Two backups of .env — .env.bak.191546
+# and .env.backup-loglevel — were tracked and pushed with a live API key in
+# them, because the rule above matches one filename and a backup is never
+# called that.
+.env.*
+!.env.example
 *.log
 *.tsbuildinfo
 .DS_Store
