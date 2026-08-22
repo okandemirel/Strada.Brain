@@ -559,6 +559,70 @@ export class StradaConformanceGuard {
    * fields, zero assets pointing at its guid, and a project whose entire
    * PlayMode suite passed while every captured frame was empty sky.
    */
+  /**
+   * References in a module's assets that resolve to nothing.
+   *
+   * Measured 2026-08-22: RenderingModuleConfig.asset carried
+   * `_prefabs: {guid: 6813063e...}` while the prefab config it meant to point
+   * at had a different guid. The C# turned the resulting null into an empty
+   * ScriptableObject — `_prefabs != null ? _prefabs : CreateInstance<...>()` —
+   * so the spawner received no prefabs, nothing was logged, and a suite of 44
+   * passing tests sat over a game that drew an empty sky.
+   *
+   * Unity's built-in guids (the all-zero forms carried by every prefab) and
+   * anything a package owns are not dangling. Flagging those would bury the one
+   * that matters.
+   */
+  private danglingAssetReferences(): string[] {
+    if (this.touchedModuleRoots.size === 0) return [];
+    const projectPath = this.opts?.projectPath;
+    if (!projectPath) return [];
+    const assetsRoot = joinPath(projectPath, "Assets");
+    if (!existsSync(assetsRoot)) return [];
+
+    const known = new Set<string>();
+    for (const base of [assetsRoot, joinPath(projectPath, "Packages")]) {
+      if (!existsSync(base)) continue;
+      for (const file of walkFiles(base)) {
+        if (!file.endsWith(".meta")) continue;
+        try {
+          const g = /guid:\s*([a-f0-9]{32})/u.exec(readFileSync(file, "utf8"))?.[1];
+          if (g) known.add(g);
+        } catch {
+          // Unreadable meta: cannot learn its guid, so cannot judge it.
+        }
+      }
+    }
+    if (known.size === 0) return [];
+
+    const out: string[] = [];
+    for (const moduleRoot of this.touchedModuleRoots) {
+      const root = moduleDir(projectPath, moduleRoot);
+      if (!existsSync(root)) continue;
+      for (const file of walkFiles(root)) {
+        if (!file.endsWith(".asset")) continue;
+        let body: string;
+        try {
+          body = readFileSync(file, "utf8");
+        } catch {
+          continue;
+        }
+        const missing = new Set<string>();
+        for (const m of body.matchAll(/guid:\s*([a-f0-9]{32})/gu)) {
+          const g = m[1]!;
+          // Unity's built-in resources use an all-zero guid with one nibble set.
+          if (/^0{16}[0-9a-f]0{15}$/u.test(g)) continue;
+          if (!known.has(g)) missing.add(g);
+        }
+        if (missing.size > 0) {
+          const name = file.split(/[/\\]/u).pop()?.replace(/\.asset$/u, "") ?? file;
+          out.push(`${name} -> ${[...missing].map((g) => g.slice(0, 8)).join(", ")}`);
+        }
+      }
+    }
+    return out;
+  }
+
   private unboundPrefabConfigs(): string[] {
     if (this.touchedModuleRoots.size === 0) return [];
     const projectPath = this.opts?.projectPath;
@@ -889,6 +953,22 @@ export class StradaConformanceGuard {
     // Before the broad "not assembled" complaint, the specific one: prefabs that
     // exist and that nothing can reach. It names the file to fix, which the
     // general gate cannot.
+    // A reference that resolves to nothing, before the broader complaints. The
+    // config exists and looks assigned; only the guid says otherwise.
+    const dangling = this.danglingAssetReferences();
+    if (dangling.length > 0) {
+      return (
+        "[STRADA REFERENCE DANGLING] These assets reference a guid that no asset in this " +
+        `project has: ${dangling.join("; ")}. Unity resolves such a field to null, and a config ` +
+        "written as `_field != null ? _field : CreateInstance<...>()` turns that null into an " +
+        "empty object silently — no error, no warning, and nothing spawned at run time. Point the " +
+        "field at the asset that exists, or create the asset the guid names. Measured: a project " +
+        "with 44 of 44 tests passing drew an empty sky because one reference pointed at a guid " +
+        "that had never existed."
+      );
+    }
+
+
     const unbound = this.unboundPrefabConfigs();
     if (unbound.length > 0 && this.unboundPrefabsRaised < UNBOUND_PREFABS_GATE_LIMIT) {
       if (this.unboundPrefabsRaisedAtCall !== this.toolCallsSeen) {
