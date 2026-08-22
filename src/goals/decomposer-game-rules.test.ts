@@ -8,6 +8,8 @@
  * run today, and each one was typed because its absence had already cost hours.
  */
 
+import { readFileSync } from "node:fs";
+
 import { describe, expect, it, vi } from "vitest";
 import type { IAIProvider, ProviderResponse } from "../providers/types.js";
 import { GoalDecomposer } from "./goal-decomposer.js";
@@ -123,5 +125,50 @@ describe("planning a game", () => {
 
     expect(prompt).toContain("captured frame");
     expect(prompt).toContain("identical");
+  });
+
+  it("plans against the framework as it actually is, not as remembered", async () => {
+    // The orchestrator, the agent stage and the delegation manager all received
+    // the live API read from Strada.Core's own source at startup; planning was
+    // the one place it never reached, so every plan was written against prose
+    // typed after an incident. This is that gap closed.
+    const { provider, prompts } = recordingProvider();
+    const decomposer = new GoalDecomposer(provider, 2);
+    decomposer.setDecompositionContext({
+      providerCount: 1,
+      frameworkKnowledge: () => "## Strada.Core Framework Knowledge (live)\n- `Strada.Core.Sync`",
+    });
+
+    await decomposer.decomposeProactive("build the game in the GDD");
+
+    expect(prompts()).toContain("Strada.Core Framework Knowledge (live)");
+    expect(prompts()).toContain("read from their own source");
+  });
+
+  it("says nothing extra when no snapshot has been taken yet", async () => {
+    // Boot wires the generator asynchronously; a plan made before it lands must
+    // not carry an empty heading pretending to be knowledge.
+    const { provider, prompts } = recordingProvider();
+    const decomposer = new GoalDecomposer(provider, 2);
+    decomposer.setDecompositionContext({ providerCount: 1, frameworkKnowledge: () => null });
+
+    await decomposer.decomposeProactive("build the game in the GDD");
+
+    expect(prompts()).not.toContain("read from their own source");
+  });
+
+  it("is what bootstrap actually supplies", () => {
+    // Proving the decomposer uses the getter says nothing about whether anyone
+    // passes one. Removing the boot wiring left every other test in this file
+    // green, which is exactly the gap this asserts.
+    const source = readFileSync("src/core/bootstrap.ts", "utf8");
+    const at = source.indexOf("initializeSupervisorStage({");
+    const call = source.slice(at, source.indexOf("});", at));
+
+    expect(at, "the supervisor stage call moved; this measures nothing").toBeGreaterThan(-1);
+    expect(call, "planning is constructed without the live framework API").toContain(
+      "getFrameworkKnowledge",
+    );
+    expect(call).toContain("buildFrameworkKnowledgeSection()");
   });
 });

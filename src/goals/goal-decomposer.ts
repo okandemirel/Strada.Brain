@@ -47,9 +47,23 @@ export interface DecompositionContext {
   readonly maxTotalNodes?: number;
   /** Summary of primary provider's behavioral strengths for smart decomposition */
   readonly providerStrengths?: string;
+  /**
+   * Live framework API, read from Strada.Core / Modules / MCP themselves.
+   *
+   * A getter, not a string: the generator is wired asynchronously at boot and
+   * does not exist yet when this context is set. Planning was the one place
+   * this knowledge never reached — the orchestrator, the agent stage and the
+   * delegation manager all received it, so every plan was written against
+   * prose typed after an incident while execution worked from the source.
+   */
+  readonly frameworkKnowledge?: () => string | null;
 }
 
 function buildProactivePrompt(ctx?: DecompositionContext): string {
+  const frameworkSection = ctx?.frameworkKnowledge?.();
+  const frameworkHint = frameworkSection
+    ? `\n\nThe frameworks below were read from their own source at startup. Plan against what they actually provide, not against what a similar framework would:\n\n${frameworkSection}`
+    : "";
   const providerCount = ctx?.providerCount ?? 1;
   const maxNodes = ctx?.maxTotalNodes ?? 12;
   const budgetHint = ctx?.remainingBudgetUsd != null && ctx.remainingBudgetUsd > 0
@@ -90,7 +104,7 @@ When the task is to build or extend a GAME — a GDD, a design document, "make t
 - Read the design for its shape and plan to that shape. If it names levels, level data, progression and the flow between them are their own goals, and so is whatever the design says happens between one level and the next. A game the design describes as level-based is not delivered by a single playable board.
 - A green suite is not proof that anything was drawn. Tests exercise the simulation; only a captured frame shows the game. Plan a play-mode capture and read it: frames that are all identical, or a flat colour, mean nothing is rendering however many tests pass. Measured: forty-four of forty-four passing while all one hundred and twenty captured frames were the same empty sky.
 - Build WITH Strada.Core, not merely started by it. Its Communication instead of hand-rolled C# events, its Logging (StradaLog) instead of Debug.Log, its Modules and DI or its ECS as the design fits — you need not use every subsystem, but never plan your own version of one the framework already provides. Measured on the same run: 6 of Strada.Core's 194 public types used, 22 hand-rolled events, 37 Debug.Log calls.
-- Strada.MCP is how the project is built and checked: scene assembly, prefab work, compile verification and play-mode runs all have tools. A plan that ends at "write the code" has not verified anything.${providerHint}${budgetHint}${behavioralHint}
+- Strada.MCP is how the project is built and checked: scene assembly, prefab work, compile verification and play-mode runs all have tools. A plan that ends at "write the code" has not verified anything.${providerHint}${budgetHint}${behavioralHint}${frameworkHint}
 
 Respond ONLY with JSON:
 {"nodes": [{"id": "s1", "task": "description", "dependsOn": [], "needsFurtherDecomposition": false}, ...]}`;

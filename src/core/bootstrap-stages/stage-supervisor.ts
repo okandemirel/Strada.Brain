@@ -153,6 +153,9 @@ export function initializeSupervisorStage(
     logger: winston.Logger;
     providerManager: ProviderManager;
     goalDecomposer?: GoalDecomposer;
+    /** Live framework API, read from Strada.Core / Modules / MCP themselves.
+     *  A getter because the generator is wired asynchronously after this runs. */
+    getFrameworkKnowledge?: () => string | null;
   },
   deps: SupervisorStageDeps = {},
 ): SupervisorStageResult {
@@ -207,6 +210,7 @@ export function initializeSupervisorStage(
       maxTotalNodes: descriptors.length <= 1 ? 8 : 12,
       contextWindow,
       providerStrengths,
+      frameworkKnowledge: params.getFrameworkKnowledge,
     });
 
     // 6. Create SupervisorBrain

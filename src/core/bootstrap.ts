@@ -1171,6 +1171,9 @@ async function bootstrapImpl(
   }
 
   const { supervisorBrain } = initializeSupervisorStage({
+    // Planning gets the same live framework API the orchestrator already had.
+    getFrameworkKnowledge: () =>
+      getFrameworkPromptGenerator()?.buildFrameworkKnowledgeSection() ?? null,
     config,
     logger,
     providerManager,
