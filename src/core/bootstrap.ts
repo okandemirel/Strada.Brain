@@ -885,6 +885,51 @@ async function bootstrapImpl(
         logger.warn("[vault] generic auto-register failed", { err });
       }
 
+        // The codebases every plan is written against.
+        //
+        // Both registrations above are pinned to the Unity project, so the only
+        // thing this system ever indexed was the game it was building. The
+        // frameworks it is supposed to have mastered — and its own source —
+        // were searchable nowhere, and the knowledge that should come from
+        // reading them arrived instead as prose rules typed into a prompt after
+        // each incident.
+        try {
+          const { frameworkVaultTargets } = await import("../vault/framework-vault-targets.js");
+          for (const target of frameworkVaultTargets(stradaDeps, process.cwd())) {
+            if (!existsSync(target.rootPath)) continue;
+            const hash = createHash("sha1").update(target.rootPath).digest("hex").slice(0, 8);
+            const id = `generic:${hash}`;
+            if (vaultRegistry.list().some((v) => v.id === id)) continue;
+            const vault = await runtimeVaultFactory.create({
+              id,
+              rootPath: target.rootPath,
+              kind: "generic",
+            });
+            vaultRegistry.register(vault, target.name);
+            logger.info("[vault] registered framework vault", {
+              id: vault.id,
+              name: target.name,
+              rootPath: target.rootPath,
+            });
+            void (async () => {
+              try {
+                await vault.init();
+                await vault.startWatch(config.vault?.debounceMs ?? 800);
+                logger.info(`[vault] async init complete for ${vault.id} (${target.name})`);
+              } catch (err) {
+                logger.warn(`[vault] async init failed for ${vault.id} (${target.name})`, {
+                  error: err instanceof Error ? err.message : String(err),
+                });
+              }
+            })();
+          }
+        } catch (err) {
+          logger.warn("[vault] framework vault registration failed", {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+
+
       // LIVING VAULT (A) — dedicated per-project dev-knowledge vault rooted at
       // `<unityProjectPath>/.strada/knowledge/`. It ACCUMULATES dev-time
       // knowledge (task-completion notes, learned heuristics, clean-success
