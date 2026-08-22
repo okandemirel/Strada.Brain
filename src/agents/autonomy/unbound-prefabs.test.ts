@@ -114,4 +114,16 @@ describe("a config that holds prefabs and was never instantiated", () => {
 
     expect(prompt.toLowerCase()).toMatch(/never be spawned|nothing will spawn|no prefab/u);
   });
+
+  it("names the tool that can fix it", () => {
+    // A gate that says what is wrong and not what to do gets repeated. Its
+    // sibling gate names unity_scene_build and its spec; this one fired five
+    // times in twenty minutes while saying only that the asset was missing.
+    const { root, configPath } = project({ prefabFields: true, assetReferencingIt: false });
+
+    const prompt = promptFor(root, configPath) ?? "";
+
+    expect(prompt).toContain("unity_scene_build");
+    expect(prompt).toContain('kind "prefab"');
+  });
 });

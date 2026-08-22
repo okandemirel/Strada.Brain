@@ -892,10 +892,12 @@ export class StradaConformanceGuard {
         `exists for them: ${unbound.join(", ")}. Unity resolves a config to its data through ` +
         "an .asset that points at the script's guid; with no such asset every field is null at " +
         "run time and no prefab will ever be spawned, however many prefabs sit in the project. " +
-        "Create the asset, assign each prefab to its field, and make sure something in the " +
-        "scene reads it. Measured: twenty-five prefabs, three GameObject fields, no asset " +
-        "instance, a PlayMode suite of 44 passing tests, and one hundred and twenty captured " +
-        "frames that were all the same empty sky."
+        "unity_scene_build creates it: its spec takes assets as {id, type, path, fields}, and a " +
+        "field of kind \"prefab\" resolves to a saved prefab asset rather than a scene instance. " +
+        "Create the asset, assign every prefab field, and give the scene something that reads it. " +
+        "Measured: twenty-five prefabs, three GameObject fields, no asset instance, a PlayMode " +
+        "suite of 44 passing tests, and one hundred and twenty captured frames that were all the " +
+        "same empty sky."
       );
     }
 
