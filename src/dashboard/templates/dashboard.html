@@ -1,0 +1,110 @@
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Strada Brain Dashboard</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #0f1117; color: #e1e4e8; padding: 20px;
+  }
+  h1 { color: #58a6ff; margin-bottom: 20px; font-size: 1.5rem; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin-bottom: 24px; }
+  .card {
+    background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+    padding: 16px; text-align: center;
+  }
+  .card .label { color: #8b949e; font-size: 0.85rem; margin-bottom: 4px; }
+  .card .value { font-size: 1.8rem; font-weight: 700; color: #58a6ff; }
+  .card .sub { color: #8b949e; font-size: 0.75rem; margin-top: 4px; }
+  .section { margin-bottom: 24px; }
+  .section h2 { color: #c9d1d9; font-size: 1.1rem; margin-bottom: 12px; border-bottom: 1px solid #30363d; padding-bottom: 8px; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid #21262d; }
+  th { color: #8b949e; font-size: 0.8rem; text-transform: uppercase; }
+  td { font-size: 0.9rem; }
+  .bar-container { background: #21262d; border-radius: 4px; height: 20px; overflow: hidden; }
+  .bar { height: 100%; border-radius: 4px; transition: width 0.3s; }
+  .bar-input { background: #3fb950; }
+  .bar-output { background: #f85149; }
+  .badge { padding: 2px 8px; border-radius: 12px; font-size: 0.75rem; }
+  .badge-ok { background: #238636; color: #fff; }
+  .badge-err { background: #da3633; color: #fff; }
+  .badge-warn { background: #f0883e; color: #000; }
+  .badge-info { background: #58a6ff; color: #fff; }
+  .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #3fb950; margin-right: 6px; }
+  .status-dot.readonly { background: #f0883e; }
+  .readonly-banner {
+    background: linear-gradient(90deg, #f0883e 0%, #da3633 100%);
+    color: #fff;
+    padding: 12px 20px;
+    margin: -20px -20px 20px -20px;
+    font-weight: 600;
+    text-align: center;
+    display: none;
+  }
+  .readonly-banner.active { display: block; }
+  #last-update { color: #484f58; font-size: 0.75rem; }
+</style>
+</head>
+<body>
+<div id="readonly-banner" class="readonly-banner">\u{1F512} READ-ONLY MODE ACTIVE - Write operations are disabled</div>
+<h1><span id="status-dot" class="status-dot"></span>Strada Brain Dashboard</h1>
+<div class="grid" id="cards"></div>
+
+<div class="section">
+  <h2>Tool Usage</h2>
+  <table id="tool-table">
+    <thead><tr><th>Tool</th><th>Calls</th><th>Errors</th><th>Distribution</th></tr></thead>
+    <tbody></tbody>
+  </table>
+</div>
+
+<div class="section">
+  <h2>Recent Token Usage</h2>
+  <div id="token-chart" style="height:120px;display:flex;align-items:flex-end;gap:2px;"></div>
+</div>
+
+<div class="section" id="identity-section">
+  <h2>Agent Identity</h2>
+  <div id="identity-panel"><p style="color:#8b949e">Loading...</p></div>
+</div>
+
+<div class="section" id="trigger-history-section">
+  <h2>Trigger History</h2>
+  <div id="trigger-history"><p style="color:#8b949e">Loading...</p></div>
+</div>
+
+<div class="section" id="maintenance-section">
+  <h2>Maintenance</h2>
+  <div id="maintenance-panel"><p style="color:#8b949e">Loading...</p></div>
+  <h3 style="color:#c9d1d9;font-size:0.95rem;margin:16px 0 8px 0">Memory Consolidation</h3>
+  <div id="consolidation-panel"><p style="color:#8b949e">Loading...</p></div>
+</div>
+
+<div class="section" id="chain-resilience-section">
+  <h2>Chain Resilience</h2>
+  <div id="chain-resilience-panel"><p style="color:#8b949e">Loading...</p></div>
+</div>
+
+<div class="section" id="agents-section" style="display:none">
+  <h2>Agents</h2>
+  <div id="agents-panel"><p style="color:#8b949e">Loading...</p></div>
+</div>
+
+<div class="section" id="delegations-section" style="display:none">
+  <h2>Delegations</h2>
+  <div id="delegations-panel"><p style="color:#8b949e">Loading...</p></div>
+</div>
+
+<div class="section" id="deployment-section" style="display:none">
+  <h2>Deployment</h2>
+  <div id="deployment-panel"><p style="color:#8b949e">Loading...</p></div>
+</div>
+
+<p id="last-update"></p>
+
+<script>__DASHBOARD_SCRIPT__</script>
+</body>
+</html>

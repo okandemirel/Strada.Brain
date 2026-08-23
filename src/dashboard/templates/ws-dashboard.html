@@ -1,0 +1,250 @@
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Strada Brain WebSocket Dashboard</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f1117; color: #e1e4e8; padding: 20px; }
+  h1 { color: #58a6ff; margin-bottom: 20px; font-size: 1.5rem; display: flex; align-items: center; gap: 10px; }
+  .status-indicator { width: 10px; height: 10px; border-radius: 50%; background: #da3633; transition: background 0.3s; }
+  .status-indicator.connected { background: #3fb950; }
+  .status-indicator.connecting { background: #d29922; animation: pulse 1s infinite; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin-bottom: 24px; }
+  .card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; text-align: center; transition: transform 0.2s; }
+  .card:hover { transform: translateY(-2px); border-color: #58a6ff; }
+  .card .label { color: #8b949e; font-size: 0.85rem; margin-bottom: 4px; }
+  .card .value { font-size: 1.8rem; font-weight: 700; color: #58a6ff; }
+  .card .sub { color: #8b949e; font-size: 0.75rem; margin-top: 4px; }
+  .section { margin-bottom: 24px; }
+  .section h2 { color: #c9d1d9; font-size: 1.1rem; margin-bottom: 12px; border-bottom: 1px solid #30363d; padding-bottom: 8px; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid #21262d; }
+  th { color: #8b949e; font-size: 0.8rem; text-transform: uppercase; }
+  .bar-container { background: #21262d; border-radius: 4px; height: 20px; overflow: hidden; }
+  .bar { height: 100%; border-radius: 4px; transition: width 0.3s; }
+  .bar-input { background: #3fb950; }
+  .controls { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; margin-bottom: 24px; }
+  .command-buttons { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  .btn { background: #238636; color: white; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 0.9rem; transition: background 0.2s; }
+  .btn:hover { background: #2ea043; }
+  .btn.secondary { background: #1f6feb; }
+  .btn:disabled { background: #30363d; cursor: not-allowed; }
+  .auth-form { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 20px; margin-bottom: 24px; max-width: 400px; }
+  .auth-form input { width: 100%; padding: 10px; margin-bottom: 12px; background: #0f1117; border: 1px solid #30363d; border-radius: 6px; color: #e1e4e8; }
+  #last-update { color: #484f58; font-size: 0.75rem; margin-top: 10px; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<h1><span id="ws-status" class="status-indicator"></span> Strada Brain WebSocket Dashboard</h1>
+
+<div id="auth-section" class="auth-form hidden">
+  <h3>Authentication Required</h3>
+  <input type="password" id="auth-token" placeholder="Enter auth token...">
+  <button class="btn" onclick="authenticate()">Authenticate</button>
+  <p id="auth-error" style="color: #f85149; margin-top: 8px;"></p>
+</div>
+
+<div id="dashboard-content" class="hidden">
+  <div id="controls-section" class="controls hidden">
+    <h3>Available Commands</h3>
+    <div id="command-buttons" class="command-buttons"></div>
+  </div>
+  <div class="grid" id="cards"></div>
+  <div class="section">
+    <h2>Tool Usage</h2>
+    <table id="tool-table">
+      <thead><tr><th>Tool</th><th>Calls</th><th>Errors</th><th>Distribution</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</div>
+
+<p id="last-update">Connecting...</p>
+
+<script>
+const WS_URL = 'ws://' + window.location.host + '/ws';
+const BOOTSTRAP_AUTH_TOKEN = __BOOTSTRAP_AUTH_TOKEN__;
+const BOOTSTRAP_COMMANDS = __BOOTSTRAP_COMMANDS__;
+let ws = null, reconnectAttempts = 0, isAuthenticated = false, requiresAuth = false, authInFlight = false;
+const els = {
+  status: document.getElementById('ws-status'),
+  authSection: document.getElementById('auth-section'),
+  authToken: document.getElementById('auth-token'),
+  authError: document.getElementById('auth-error'),
+  dashboard: document.getElementById('dashboard-content'),
+  controls: document.getElementById('controls-section'),
+  commandButtons: document.getElementById('command-buttons'),
+  cards: document.getElementById('cards'),
+  toolTable: document.querySelector('#tool-table tbody'),
+  lastUpdate: document.getElementById('last-update')
+};
+
+function connect() {
+  els.status.className = 'status-indicator connecting';
+  els.lastUpdate.textContent = 'Connecting...';
+  ws = new WebSocket(WS_URL);
+  
+  ws.onopen = () => {
+    els.status.className = 'status-indicator connected';
+    els.lastUpdate.textContent = 'Connected';
+    reconnectAttempts = 0;
+  };
+  
+  ws.onmessage = (event) => {
+    try { handleMessage(JSON.parse(event.data)); } catch (e) { console.error('Invalid message:', e); }
+  };
+  
+  ws.onclose = () => {
+    els.status.className = 'status-indicator';
+    els.lastUpdate.textContent = 'Disconnected';
+    els.dashboard.classList.add('hidden');
+    isAuthenticated = false;
+    authInFlight = false;
+    if (reconnectAttempts < 5) {
+      reconnectAttempts++;
+      setTimeout(connect, 1000 * reconnectAttempts);
+    }
+  };
+}
+
+function handleMessage(msg) {
+  switch (msg.type) {
+    case 'auth':
+      requiresAuth = msg.payload?.requiresAuth;
+      if (requiresAuth && !isAuthenticated) {
+        if (BOOTSTRAP_AUTH_TOKEN && !authInFlight) {
+          authInFlight = true;
+          ws.send(JSON.stringify({ type: 'auth', payload: { token: BOOTSTRAP_AUTH_TOKEN } }));
+          return;
+        }
+        els.authSection.classList.remove('hidden');
+        els.dashboard.classList.add('hidden');
+      } else {
+        els.authSection.classList.add('hidden');
+        els.dashboard.classList.remove('hidden');
+      }
+      break;
+    case 'auth_success':
+      isAuthenticated = true;
+      authInFlight = false;
+      els.authSection.classList.add('hidden');
+      els.dashboard.classList.remove('hidden');
+      els.authError.textContent = '';
+      renderCommandButtons();
+      break;
+    case 'auth_error':
+      authInFlight = false;
+      els.authError.textContent = msg.payload?.message || 'Authentication failed';
+      if (!BOOTSTRAP_AUTH_TOKEN) {
+        els.authSection.classList.remove('hidden');
+      }
+      break;
+    case 'metrics':
+      updateDashboard(msg.payload);
+      break;
+    case 'command_result':
+      els.lastUpdate.textContent = (msg.payload?.success ? 'Completed: ' : 'Failed: ') + formatCommandLabel(msg.payload?.command || 'command');
+      break;
+    case 'ping':
+      ws.send(JSON.stringify({ type: 'pong' }));
+      break;
+  }
+}
+
+function authenticate() {
+  const token = els.authToken.value.trim();
+  if (!token) return;
+  authInFlight = true;
+  ws.send(JSON.stringify({ type: 'auth', payload: { token } }));
+}
+
+function sendCommand(command, data) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  ws.send(JSON.stringify({ type: 'command', payload: { command, data } }));
+}
+
+function renderCommandButtons() {
+  els.commandButtons.innerHTML = '';
+  if (!Array.isArray(BOOTSTRAP_COMMANDS) || BOOTSTRAP_COMMANDS.length === 0) {
+    els.controls.classList.add('hidden');
+    return;
+  }
+
+  els.controls.classList.remove('hidden');
+  for (const command of BOOTSTRAP_COMMANDS) {
+    if (typeof command !== 'string' || !command.trim()) continue;
+    const button = document.createElement('button');
+    button.className = 'btn';
+    button.textContent = formatCommandLabel(command);
+    button.addEventListener('click', () => sendCommand(command));
+    els.commandButtons.appendChild(button);
+  }
+}
+
+function formatCommandLabel(command) {
+  return String(command)
+    .split(/[_-]/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
+function updateDashboard(data) {
+  els.cards.innerHTML = [
+    card('Uptime', fmtDuration(data.uptime)),
+    card('Messages', fmt(data.totalMessages)),
+    card('Input Tokens', fmt(data.totalTokens?.input || 0)),
+    card('Output Tokens', fmt(data.totalTokens?.output || 0)),
+    card('Active Sessions', data.activeSessions),
+    card('Connected Clients', data.connectedClients || 0),
+  ].join('');
+  
+  const tools = Object.entries(data.toolCallCounts || {}).sort((a, b) => b[1] - a[1]);
+  const maxCalls = Math.max(...tools.map(t => t[1]), 1);
+  els.toolTable.innerHTML = tools.map(([name, calls]) => {
+    const errors = (data.toolErrorCounts || {})[name] || 0;
+    const pct = (calls / maxCalls * 100).toFixed(0);
+    return `<tr><td>${esc(name)}</td><td>${calls}</td><td>${errors}</td>
+      <td><div class="bar-container"><div class="bar bar-input" style="width:${pct}%"></div></div></td></tr>`;
+  }).join('');
+  
+  els.lastUpdate.textContent = 'Last update: ' + new Date().toLocaleTimeString();
+}
+
+function card(label, value, sub) {
+  return `<div class="card"><div class="label">${esc(label)}</div><div class="value">${esc(value)}</div>
+    ${sub ? `<div class="sub">${esc(sub)}</div>` : ''}</div>`;
+}
+
+function esc(s) {
+  const d = document.createElement('div');
+  d.textContent = String(s);
+  return d.innerHTML;
+}
+
+function fmt(n) {
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
+  return n.toString();
+}
+
+function fmtDuration(ms) {
+  const s = Math.floor(ms / 1000);
+  const m = Math.floor(s / 60);
+  const h = Math.floor(m / 60);
+  const d = Math.floor(h / 24);
+  if (d > 0) return d + 'd ' + (h % 24) + 'h';
+  if (h > 0) return h + 'h ' + (m % 60) + 'm';
+  if (m > 0) return m + 'm ' + (s % 60) + 's';
+  return s + 's';
+}
+
+els.authToken.addEventListener('keypress', (e) => { if (e.key === 'Enter') authenticate(); });
+renderCommandButtons();
+connect();
+</script>
+</body>
+</html>
