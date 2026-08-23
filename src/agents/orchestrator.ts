@@ -505,6 +505,8 @@ interface ToolExecutionOptions {
   workspaceLease?: WorkspaceLease;
   /** Goal tree context for substep emission to workspace bus. */
   goalContext?: import("../tasks/types.js").GoalContext;
+  /** Project root for the deterministic shell-review allowlist (review.ts). */
+  projectPath?: string;
 }
 
 interface SelfManagedWriteReview {
@@ -3920,7 +3922,11 @@ export class Orchestrator {
         if (isDestructiveOperation(toolName, input)) {
           return { approved: false, reason: "shell command looks destructive" };
         }
-        return this.reviewShellCommandWithProvider(chatId, command, mode, options, input);
+        // Thread the project root so the deterministic project-scoped allowlist
+        // can pre-approve canonical build/test/run commands (Unity batchmode,
+        // dotnet build) before the LLM reviewer — the gate/reviewer deadlock
+        // measured on 2026-08-23 must not recur.
+        return this.reviewShellCommandWithProvider(chatId, command, mode, { ...options, projectPath: this.projectPath }, input);
       }
       case "file_rename": {
         const oldPath = this.normalizeInteractiveText(input["old_path"]);

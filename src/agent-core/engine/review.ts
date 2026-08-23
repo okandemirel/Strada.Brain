@@ -38,6 +38,7 @@ import {
   planVerifierPipeline,
 } from "../../agents/autonomy/index.js";
 import { isVerificationToolName } from "../../agents/autonomy/constants.js";
+import { matchProjectScopedAllowlist } from "../../agents/autonomy/project-shell-allowlist.js";
 import {
   SHELL_REVIEW_SYSTEM_PROMPT,
   parseShellReviewDecision,
@@ -70,6 +71,8 @@ export interface ReviewShellOptions {
   taskPrompt?: string;
   sessionMessages?: ConversationMessage[];
   onUsage?: (usage: TaskUsageEvent) => void;
+  /** The project the command runs against — enables the deterministic project-scoped allowlist. */
+  projectPath?: string;
 }
 
 export interface SelfManagedWriteReview {
@@ -218,6 +221,26 @@ export async function reviewShellCommandWithProvider(
     "reviewed whether a write-capable shell command should run autonomously",
   );
   const reviewTask = deps.taskClassifier.classify(taskPrompt || command);
+
+  // Deterministic pre-approval for canonical project-scoped build/test/run
+  // commands (Unity batchmode, dotnet build/test). Measured 2026-08-23: the LLM
+  // reviewer rejected the exact Unity -runTests invocation the GAME NEVER RUN
+  // gate demanded ("looks destructive"), deadlocking delivery. These patterns
+  // are bounded by construction; everything else still goes to the reviewer.
+  const allowlisted = matchProjectScopedAllowlist(command, options.projectPath);
+  if (allowlisted) {
+    recordPhaseOutcome(deps, {
+      chatId,
+      identityKey,
+      assignment: reviewAssignment,
+      phase: "shell-review",
+      source: "shell-review",
+      status: "approved",
+      task: reviewTask,
+      reason: `Deterministic allowlist: ${allowlisted.rule}`,
+    });
+    return { approved: true, reason: `deterministic allowlist (${allowlisted.rule})` };
+  }
 
   try {
     const response = await streamOrChatText(

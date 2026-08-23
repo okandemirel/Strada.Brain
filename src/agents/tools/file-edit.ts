@@ -76,7 +76,24 @@ export class FileEditTool implements ITool {
     }
 
     try {
-      const content = await readFile(pathCheck.fullPath, "utf-8");
+      let content: string;
+      try {
+        content = await readFile(pathCheck.fullPath, "utf-8");
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code === "ENOENT") {
+          // Measured 2026-08-23 (PixelFlow): a run whose earlier writes were
+          // lost burned turn after turn editing files it remembered creating.
+          // The generic old_string miss hid the real fact — the file is not on
+          // disk at all. Say so, and name the tool that creates files.
+          return {
+            content:
+              `Error: file not found: ${relPath} — there is nothing to edit. ` +
+              `Create it with file_write first (parent directories are created automatically).`,
+            isError: true,
+          };
+        }
+        throw e;
+      }
 
       if (!content.includes(oldString)) {
         return {
