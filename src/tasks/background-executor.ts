@@ -57,6 +57,7 @@ import {
 } from "../dashboard/workspace-events.js";
 // Single source for the per-task inactivity default (config-only; config has no dep on tasks).
 import { DEFAULT_TASK_INACTIVITY_TIMEOUT_MS } from "../config/config.js";
+import { terminalMessage } from "./terminal-message.js";
 
 const GOAL_CANVAS_SUMMARY_WIDTH = 320;
 
@@ -1252,7 +1253,7 @@ export class BackgroundExecutor {
         requestFailed = true;
         this.taskManager.fail(
           task.id,
-          result.workerResult.reason ?? (result.output || "Task failed"),
+          terminalMessage(result.workerResult.reason, result.output, "Task failed"),
         );
         return;
       }
@@ -1261,7 +1262,7 @@ export class BackgroundExecutor {
         requestFailed = true;
         this.taskManager.block(
           task.id,
-          result.workerResult.reason ?? (result.output || "Task blocked"),
+          terminalMessage(result.workerResult.reason, result.output, "Task blocked"),
         );
         return;
       }

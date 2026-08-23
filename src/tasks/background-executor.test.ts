@@ -1509,6 +1509,48 @@ describe("BackgroundExecutor - Blocked worker results", () => {
     expect(mockTaskManager.fail).not.toHaveBeenCalled();
   });
 
+  /**
+   * Measured 2026-08-23 on run 53: the agent stopped to ask which project to
+   * build, the control plane wrote the tag `blocked:ask_user`, and
+   * `reason ?? (output || ...)` stored that sixteen-character tag as the whole
+   * result. The question — the only part anyone could act on — was discarded,
+   * and an unattended run sat blocked on a question it would not repeat.
+   */
+  it("blocks with the question the worker asked, not the tag for asking", async () => {
+    const question =
+      "UNITY_PROJECT_PATH points at PixelFlow-Clean but the open editor is Lodestone. Which should I build?";
+    const executor = new BackgroundExecutor({
+      orchestrator: {
+        runWorkerTask: vi.fn().mockResolvedValue({
+          status: "blocked",
+          finalSummary: question,
+          visibleResponse: question,
+          provider: "mock",
+          catalogVersion: "mock:default",
+          assignmentVersion: 0,
+          touchedFiles: [],
+          toolTrace: [],
+          verificationResults: [],
+          reviewFindings: [],
+          artifacts: [],
+          reason: "blocked:ask_user",
+        }),
+      } as any,
+    });
+
+    const mockTaskManager = {
+      updateStatus: vi.fn(), complete: vi.fn(), fail: vi.fn(), block: vi.fn(),
+    };
+    executor.setTaskManager(mockTaskManager as any);
+
+    const ac = new AbortController();
+    executor.enqueue(createTestTask(), ac.signal, vi.fn());
+
+    await vi.waitFor(() => {
+      expect(mockTaskManager.block).toHaveBeenCalledWith("task_test123", question);
+    });
+  });
+
   it("marks decomposed tasks blocked when a child worker returns blocked", async () => {
     const goalTree = buildTestGoalTree();
     const executor = new BackgroundExecutor({
