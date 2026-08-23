@@ -230,6 +230,23 @@ export interface ProviderCapabilities {
    * latency, and latency is what a streaming stall timeout measures.
    */
   readonly reasoningEffort?: "minimal" | "low" | "medium" | "high";
+  /**
+   * How long this provider may stay silent before its first token, in ms,
+   * overriding the chain-wide budget.
+   *
+   * The chain's budget exists to catch an endpoint that has stopped answering,
+   * and 90s is right for one that normally replies in seconds. It is wrong for a
+   * queued free tier, where the wait is the queue and not a fault: measured
+   * 2026-08-23 on opencode.ai/zen/go with ox-alpha-free, five identical
+   * three-word requests returned their first byte at 4.1s, 11.9s, 26.3s, 64s and
+   * 70s. A real request carries far more prefill, and the run died at 90s.
+   *
+   * Declared by the provider because only the provider knows which endpoint it
+   * is talking to. Undefined means "use the chain's budget", which is what every
+   * provider that answers promptly should do — a longer budget is not free, it
+   * is how long a genuinely dead endpoint stalls the run before failover.
+   */
+  readonly firstResponseTimeoutMs?: number;
   readonly specialFeatures?: string[];
 }
 

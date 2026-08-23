@@ -341,6 +341,22 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
    * abort — surfacing a RETRYABLE error the caller's catch counts as a failure → fail
    * over. With attemptTimeoutMs <= 0 the attempt runs unbounded (back-compat).
    */
+  /**
+   * The first-response budget for one provider: its own declaration, or the
+   * chain's.
+   *
+   * A declared value wins outright rather than being clamped to the chain's,
+   * because the point of declaring one is to say the chain's is wrong for this
+   * endpoint — in either direction. Nonsense (zero, negative, NaN) falls back to
+   * the chain rather than disabling the protection.
+   */
+  private firstResponseBudgetFor(provider: IAIProvider): number {
+    const declared = provider.capabilities?.firstResponseTimeoutMs;
+    return typeof declared === "number" && Number.isFinite(declared) && declared > 0
+      ? declared
+      : this.attemptTimeoutMs;
+  }
+
   private async runAttemptWithTimeout(
     provider: IAIProvider & Partial<IStreamingProvider>,
     attempt: (
@@ -353,6 +369,12 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
     if (this.attemptTimeoutMs <= 0) {
       return attempt(provider, messages, { markActivity: () => {}, onBackoff: () => {} });
     }
+    // Per provider, because only the provider knows which endpoint it is talking
+    // to. A queued free tier is silent for reasons that are not a fault, and one
+    // chain-wide number cannot be right for it and for an endpoint that answers
+    // in two seconds at the same time. Only consulted when the chain has a
+    // budget at all: a chain with timeouts disabled stays disabled.
+    const budgetMs = this.firstResponseBudgetFor(provider);
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
     let settled = false;
@@ -368,10 +390,10 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
       // surface it as rate-limiting; otherwise it is a genuinely unresponsive endpoint.
       reject(rateLimited
         ? new RateLimitedError(
-            `Provider "${provider.name}" rate-limited (HTTP 429) — retry backoff exceeded the ${this.attemptTimeoutMs}ms first-response budget`,
+            `Provider "${provider.name}" rate-limited (HTTP 429) — retry backoff exceeded the ${budgetMs}ms first-response budget`,
           )
         : new FirstResponseTimeoutError(
-            `Provider "${provider.name}" sent no response within ${this.attemptTimeoutMs}ms (unresponsive endpoint or model)`,
+            `Provider "${provider.name}" sent no response within ${budgetMs}ms (unresponsive endpoint or model)`,
           ));
     };
     // markActivity proves the endpoint is genuinely streaming → PERMANENTLY clear the
@@ -392,13 +414,13 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
       if (info.status === 429) rateLimited = true;
       if (timer) clearTimeout(timer);
       const extend = Number.isFinite(info.delayMs) && info.delayMs > 0 ? info.delayMs : 0;
-      timer = setTimeout(fire, this.attemptTimeoutMs + extend);
+      timer = setTimeout(fire, budgetMs + extend);
     };
     let reject!: (reason: unknown) => void;
     try {
       return await new Promise<ProviderResponse>((res, rej) => {
         reject = rej;
-        timer = setTimeout(fire, this.attemptTimeoutMs);
+        timer = setTimeout(fire, budgetMs);
         attempt(provider, messages, { markActivity, onBackoff, timeoutSignal: controller.signal })
           .then((r) => { settled = true; res(r); })
           .catch((e: unknown) => { settled = true; rej(e instanceof Error ? e : new Error(String(e))); });

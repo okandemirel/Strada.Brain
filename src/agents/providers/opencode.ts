@@ -35,6 +35,19 @@ export const OPENCODE_GO_BASE_URL = "https://opencode.ai/zen/go/v1";
  * @see https://opencode.ai/zen
  * @see https://opencode.ai/go
  */
+/**
+ * OPENCODE_FIRST_RESPONSE_TIMEOUT_MS, when it is a usable number.
+ *
+ * A malformed value returns undefined so the measured default stands: an env
+ * typo must not silently disable the protection or shrink it to nothing.
+ */
+function readTimeoutOverride(): number | undefined {
+  const raw = process.env["OPENCODE_FIRST_RESPONSE_TIMEOUT_MS"];
+  if (raw === undefined || raw.trim() === "") return undefined;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
 export class OpencodeProvider extends OpenAIProvider {
   override readonly capabilities: ProviderCapabilities = {
     maxTokens: 8192,
@@ -54,6 +67,19 @@ export class OpencodeProvider extends OpenAIProvider {
     // model or a workload that wants the deliberation.
     reasoningEffort:
       (process.env["OPENCODE_REASONING_EFFORT"] as ProviderCapabilities["reasoningEffort"]) ?? "low",
+    // Zen/Go's free tier queues, and the wait is the queue rather than a fault.
+    // Measured 2026-08-23 against ox-alpha-free with an identical three-word
+    // prompt, five times: first byte at 4.1s, 11.9s, 26.3s, 64s and 70s. The
+    // chain's 90s budget is the right shape — it is disarmed permanently by the
+    // first chunk, so this buys patience before the answer starts and costs
+    // nothing once it does — but the wrong size here, and two runs died at 90s
+    // on a request carrying far more prefill than three words.
+    //
+    // 300s is a queue-spike allowance, not a licence to hang: a genuinely dead
+    // endpoint still fails over, five minutes later instead of ninety seconds.
+    // Set OPENCODE_FIRST_RESPONSE_TIMEOUT_MS to trade that patience back for
+    // faster failover on a paid model that answers in seconds.
+    firstResponseTimeoutMs: readTimeoutOverride() ?? 300_000,
     specialFeatures: ["coding", "function_calling", "json_mode"],
   };
 
