@@ -44,6 +44,7 @@ import {
   buildProjectContext,
   buildDepsContext,
   buildCapabilityManifest,
+  STRADA_STATIC_FRAMEWORK_KNOWLEDGE,
   buildToolUsageHints,
   type VaultAvailability,
   buildIdentitySection,
@@ -1633,8 +1634,15 @@ export class Orchestrator {
 
   private rebuildBaseSystemPrompt(): void {
     const frameworkSection = this.frameworkPromptGenerator?.buildFrameworkKnowledgeSection();
+    // Live section alone was a NAME LIST: namespaces and 40-per-namespace class
+    // names, no usage contracts. Measured 2026-08-23 (PixelFlow): a run given
+    // only that invented its own module shapes — Models/Systems folders, a
+    // hand-rolled config — because nothing in context showed how ModuleConfig,
+    // [Inject], [StradaSystem] or EntityMediator actually wire. The static
+    // knowledge carries those contracts; the live list carries the current
+    // inventory. A run needs BOTH.
     const knowledgeBase = frameworkSection
-      ? STRADA_AGENT_PREAMBLE + frameworkSection
+      ? STRADA_AGENT_PREAMBLE + frameworkSection + "\n\n" + STRADA_STATIC_FRAMEWORK_KNOWLEDGE
       : STRADA_SYSTEM_PROMPT; // fallback to static knowledge
 
     // Note: vault context is intentionally NOT folded in here. It is
