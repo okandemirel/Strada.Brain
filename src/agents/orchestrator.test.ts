@@ -3782,9 +3782,18 @@ describe("Orchestrator", () => {
     await vi.advanceTimersByTimeAsync(100);
     await promise;
 
-    // Orchestrator makes at least 6 provider calls (plan, actions, reviews);
+    // Orchestrator makes at least 5 provider calls (plan, actions, reviews);
     // exact count varies with internal clarification / review / retry logic.
-    expect(mockProvider.chat.mock.calls.length).toBeGreaterThanOrEqual(6);
+    // Measured 2026-08-23: one call FEWER than the historical six is correct
+    // here — `dotnet build` inside the project now passes the deterministic
+    // shell-review allowlist without an extra reviewer round-trip, while the
+    // conformance intervention (read Strada.Core guidance, confirm, review)
+    // still runs end to end.
+    expect(mockProvider.chat.mock.calls.length).toBeGreaterThanOrEqual(5);
+    const sawCoreGuidanceRead = mockProvider.chat.mock.calls.some((call) =>
+      JSON.stringify(call).includes("Packages/Strada.Core/README.md"),
+    );
+    expect(sawCoreGuidanceRead).toBe(true);
     // The orchestrator processes the Strada framework project: verify it ran
     // through the full review pipeline (including conformance-aware verifier)
     // by checking that tool calls were forwarded and text responses were sent.

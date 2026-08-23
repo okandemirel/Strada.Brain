@@ -223,24 +223,13 @@ export async function reviewShellCommandWithProvider(
   const reviewTask = deps.taskClassifier.classify(taskPrompt || command);
 
   // Deterministic pre-approval for canonical project-scoped build/test/run
-  // commands (Unity batchmode, dotnet build/test). Measured 2026-08-23: the LLM
-  // reviewer rejected the exact Unity -runTests invocation the GAME NEVER RUN
-  // gate demanded ("looks destructive"), deadlocking delivery. These patterns
-  // are bounded by construction; everything else still goes to the reviewer.
+  // commands (Unity batchmode, dotnet build/test inside this project) may
+  // OVERRIDE a reviewer rejection below. Measured 2026-08-23: the reviewer
+  // rejected the exact Unity -runTests invocation the GAME NEVER RUN gate
+  // demanded ("looks destructive"), deadlocking delivery. The review still
+  // runs — its evidence stays in the trace — but an allowlisted command cannot
+  // end in "rejected"/"inconclusive".
   const allowlisted = matchProjectScopedAllowlist(command, options.projectPath);
-  if (allowlisted) {
-    recordPhaseOutcome(deps, {
-      chatId,
-      identityKey,
-      assignment: reviewAssignment,
-      phase: "shell-review",
-      source: "shell-review",
-      status: "approved",
-      task: reviewTask,
-      reason: `Deterministic allowlist: ${allowlisted.rule}`,
-    });
-    return { approved: true, reason: `deterministic allowlist (${allowlisted.rule})` };
-  }
 
   try {
     const response = await streamOrChatText(
@@ -305,6 +294,25 @@ export async function reviewShellCommandWithProvider(
           failureReason: command,
         }),
       });
+      if (allowlisted) {
+        // The allowlist is the authority on what bounded project development
+        // looks like; a reviewer misread must not deadlock a delivery gate
+        // that is demanding this exact command.
+        recordPhaseOutcome(deps, {
+          chatId,
+          identityKey,
+          assignment: reviewAssignment,
+          phase: "shell-review",
+          source: "shell-review",
+          status: "approved",
+          task: reviewTask,
+          reason: `Deterministic allowlist override of reviewer rejection: ${allowlisted.rule}`,
+        });
+        return {
+          approved: true,
+          reason: `deterministic allowlist overrode reviewer rejection (${allowlisted.rule})`,
+        };
+      }
       return { approved: false, reason: decision.reason || "shell review rejected the command" };
     }
   } catch {
@@ -328,6 +336,13 @@ export async function reviewShellCommandWithProvider(
     return {
       approved: true,
       reason: "shell review fallback approved a bounded development command",
+    };
+  }
+
+  if (allowlisted) {
+    return {
+      approved: true,
+      reason: `deterministic allowlist resolved an inconclusive review (${allowlisted.rule})`,
     };
   }
 
