@@ -23,6 +23,12 @@ export interface ITaskManager {
   complete(id: string, result: string): void;
   fail(id: string, error: string): void;
   block(id: string, reason: string): void;
+  /**
+   * Append a visibility notice to an already-blocked task and re-announce it on
+   * the channel. Used when automatic resume/replan budgets are exhausted — the
+   * decision must reach the person waiting, not only the log file.
+   */
+  appendTaskNotice(id: string, notice: string): void;
   attachGoalRoot(taskId: string, goalRootId: string): void;
   /**
    * Resubmit a blocked goal tree, keeping every completed node and replaying

@@ -1193,6 +1193,7 @@ export class BackgroundExecutor {
           requestFailed = true;
           this.taskManager.block(task.id, supervisorResult.output);
           this.autoResumeBlockedGoal(
+            task,
             admission.supervisorGoalTree,
             supervisorResult.succeeded,
             summariseNodeOutcomes(supervisorResult.nodeResults),
@@ -1406,6 +1407,7 @@ export class BackgroundExecutor {
    * costs only the work that failed. decideAutoResume holds the bounds.
    */
   private autoResumeBlockedGoal(
+    task: Task,
     tree: { rootId: string } | undefined,
     succeeded: number,
     nodeOutcomes: readonly string[] = [],
@@ -1427,6 +1429,19 @@ export class BackgroundExecutor {
         reason: decision.reason,
       });
       this.autoResumeState.delete(rootId);
+      // The log line above is invisible to whoever is waiting on the channel.
+      // Measured 2026-08-23 (PixelFlow run): a chat task sat 'blocked' in
+      // silence while the log explained itself to nobody. Say it where the
+      // person is, with the way back in.
+      try {
+        this.taskManager.appendTaskNotice(
+          task.id,
+          `Goal is paused after ${state.attempts} automatic resume(s) and ${state.replans} replan(s): ${decision.reason}. ` +
+            `Send a follow-up message (e.g. "continue" or instructions fixing the blocker) and I will pick the goal back up.`,
+        );
+      } catch {
+        // Visibility is best-effort; the task stays blocked either way.
+      }
       return;
     }
 

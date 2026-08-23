@@ -115,3 +115,41 @@ export function foldersForModule(
 export function optionalFolderPaths(declared: DeclaredFolder[]): string[] {
   return declared.filter((f) => f.optional && !f.component).map((f) => f.path);
 }
+
+/**
+ * One-line framework-presence status for startup notices.
+ *
+ * Measured 2026-08-23 (PixelFlow run): nothing told a run AT START that the
+ * target was a Strada.Core project — the agent discovered the framework only
+ * by tripping over strada_create_module's error, and one earlier run built a
+ * vanilla dotnet project beside it instead. The runtime knows this fact the
+ * moment it resolves UNITY_PROJECT_PATH; now it says so, on every channel.
+ *
+ * Returns null when there is no Unity project configured.
+ */
+export function describeFrameworkInstall(
+  projectPath: string | undefined,
+  exists: (path: string) => boolean = existsSync,
+): string | null {
+  if (!projectPath) return null;
+  const declaration = declarationPathFor(projectPath);
+  if (exists(declaration)) {
+    return (
+      "Strada.Core framework detected at " + CORE_INSTALL_PATH +
+      " — this is a Strada project: build game code as Strada modules with the " +
+      "strada_create_* tools, and read the framework's Runtime/ sources before " +
+      "writing anything a framework subsystem already provides."
+    );
+  }
+  if (exists(join(projectPath, CORE_INSTALL_PATH))) {
+    return (
+      "Strada.Core directory present at " + CORE_INSTALL_PATH +
+      " but its module structure declaration (" + DECLARATION_PATH + ") was not found — " +
+      "strada_create_module will refuse until the framework checkout is complete."
+    );
+  }
+  return (
+    "No Strada.Core at " + CORE_INSTALL_PATH + " — strada_create_module and friends will refuse " +
+    "until the framework is installed there."
+  );
+}

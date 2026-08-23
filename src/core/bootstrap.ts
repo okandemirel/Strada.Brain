@@ -54,6 +54,7 @@ import {
 } from "./bootstrap-stages.js";
 import type * as winston from "winston";
 import { resolveRuntimeUnityProjectPath } from "./runtime-unity-project.js";
+import { describeFrameworkInstall } from "../agents/tools/strada/module-folders.js";
 import type { GoalStorage } from "../goals/goal-storage.js";
 
 // Learning system imports
@@ -558,6 +559,14 @@ async function bootstrapImpl(
   );
   if (runtimeProjectResolution.notice) {
     runtimeStageNotices.push(runtimeProjectResolution.notice);
+  }
+  // Say whether this is a Strada.Core project UP FRONT. The conformance gates
+  // catch reimplementations after the fact; a run that never hears the framework
+  // exists may build a vanilla dotnet project beside it instead (measured
+  // 2026-08-23, PixelFlow). One line at start beats a gate at the end.
+  const frameworkNotice = describeFrameworkInstall(config.unityProjectPath);
+  if (frameworkNotice) {
+    runtimeStageNotices.push(frameworkNotice);
   }
   const providerManager = providerInit.manager;
   const activityRegistry = new ChannelActivityRegistry();

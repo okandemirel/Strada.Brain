@@ -464,6 +464,23 @@ export class TaskManager extends EventEmitter {
   }
 
   /**
+   * Append a visibility notice to an already-blocked task and re-announce it.
+   *
+   * Used when automatic resume/replan budgets are exhausted: the decision used
+   * to live only in the log file while the person on the channel saw silence
+   * (measured 2026-08-23). The notice names what was tried and how to continue.
+   */
+  appendTaskNotice(taskId: TaskId, notice: string): void {
+    const task = this.storage.load(taskId);
+    if (!task) return;
+    const existing = task.result?.trim() ?? "";
+    const combined = `${existing}${existing ? "\n\n" : ""}${sanitizeSecrets(notice)}`;
+    this.storage.updateBlocked(taskId, combined);
+    this.emit("task:blocked", taskId, combined);
+    getLogger().info("Task notice appended", { taskId, noticeLength: notice.length });
+  }
+
+  /**
    * Update task status.
    */
   updateStatus(taskId: TaskId, status: TaskStatus): void {

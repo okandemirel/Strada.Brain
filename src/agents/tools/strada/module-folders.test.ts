@@ -13,6 +13,7 @@ import {
   parseDeclaredFolders,
   foldersForModule,
   optionalFolderPaths,
+  describeFrameworkInstall,
   readDeclaredModuleFolders,
   declarationPathFor,
 } from "./module-folders.js";
@@ -171,5 +172,32 @@ describe("the real Strada.Core declaration", () => {
       `${f.path}|${f.mandatory}|${f.optional}|${f.component ?? "-"}`;
 
     expect(fixture.map(shape).sort()).toEqual(real.map(shape).sort());
+  });
+});
+
+describe("describeFrameworkInstall — the runtime says what the project is", () => {
+  // Measured 2026-08-23: a run given an empty Strada Unity skeleton built a
+  // vanilla dotnet project beside the framework because nothing at startup
+  // said the framework was there.
+  const yes = () => true;
+  const no = () => false;
+
+  it("announces the framework when the declaration exists", () => {
+    const msg = describeFrameworkInstall("/proj", yes);
+    expect(msg).toContain("Strada.Core framework detected");
+    expect(msg).toContain("strada_create_");
+  });
+
+  it("names the missing declaration when only the directory exists", () => {
+    const msg = describeFrameworkInstall("/proj", (p) => !p.includes("DirectoryStructureConfig"));
+    expect(msg).toContain("module structure declaration");
+  });
+
+  it("reports absence without a framework directory", () => {
+    expect(describeFrameworkInstall("/plain", no)).toContain("No Strada.Core");
+  });
+
+  it("is silent without a configured Unity project", () => {
+    expect(describeFrameworkInstall(undefined)).toBeNull();
   });
 });
