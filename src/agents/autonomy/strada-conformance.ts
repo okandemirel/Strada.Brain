@@ -946,6 +946,31 @@ export class StradaConformanceGuard {
     }
   }
 
+  /**
+   * Conditions that must hold before this work counts as delivered, and do not.
+   *
+   * Separate from getPrompt() on purpose. A gate is an ASK, and an ask has to be
+   * able to give up — three refusals and it goes quiet, or it stops being a rule
+   * and becomes a loop. Going quiet was then read as satisfied: measured on run
+   * 52, [STRADA NOTHING DRAWN] fired three times, fell silent on the fourth, and
+   * the run finished `failed: false` with a 123-character success message for a
+   * game whose sixty captured frames were identical. The gate's own last words
+   * are "say the game does not render rather than reporting it as delivered",
+   * and nothing checked whether that happened.
+   *
+   * So the budget governs how often the agent is ASKED, and this governs what
+   * may be CLAIMED. It never goes quiet, and it costs no extra turn — it is read
+   * once, where a run would otherwise report success.
+   */
+  unmetDeliveryConditions(): readonly string[] {
+    const unmet: string[] = [];
+    const notDrawn = this.nothingDrawnReason();
+    if (notDrawn !== null) {
+      unmet.push(`the game has never been observed to render: ${notDrawn}`);
+    }
+    return unmet;
+  }
+
   getPrompt(): string | null {
     const incomplete = this.incompleteModules();
     if (incomplete.length > 0) {

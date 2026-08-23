@@ -318,6 +318,40 @@ async function runInteractiveLoopRecovery(
 
 // ─── Background end-turn handler ────────────────────────────────────────────────
 
+/**
+ * The report a run owes when every verifier approved and the thing asked for
+ * still is not there.
+ *
+ * The conformance gates are asks, and an ask must be able to give up or it turns
+ * into a loop. But going quiet was read as satisfied: measured on run 52,
+ * [STRADA NOTHING DRAWN] fired three times, fell silent on the fourth, and the
+ * run finished with a 123-character success message for a game whose sixty
+ * captured frames were identical. The gate's own last words were "say the game
+ * does not render rather than reporting it as delivered" — advice with nothing
+ * behind it.
+ *
+ * Returns null when there is nothing outstanding, so the ordinary path is
+ * untouched.
+ */
+function notDeliveredReport(
+  conformance: StradaConformanceGuard,
+  finalText: string,
+): { text: string; reason: string } | null {
+  const unmet = conformance.unmetDeliveryConditions();
+  if (unmet.length === 0) return null;
+
+  const reason = unmet.join("; ");
+  return {
+    reason,
+    text: (
+      `${finalText}\n\n` +
+      `NOT DELIVERED — ${reason}. ` +
+      "This is the run's own measurement, not a review: the work above is real, " +
+      "but it does not yet add up to the thing that was asked for."
+    ).trim(),
+  };
+}
+
 export async function handleBgEndTurn(
   agentState: AgentState,
   ctx: BgEndTurnContext,
@@ -587,6 +621,40 @@ export async function handleBgEndTurn(
 
   // 6. Approved finish path
   const surfacedFinalText = finalBoundary.visibleText ?? finalText;
+  // Blocked rather than failed: nothing went wrong, the work simply stopped
+  // short of what was asked for, and blocked is the outcome the resume and
+  // replan paths already read as "there is more to do here".
+  const bgNotDelivered = notDeliveredReport(ctx.stradaConformance, surfacedFinalText);
+  if (bgNotDelivered) {
+    ctx.appendVisibleAssistantMessage(ctx.session, bgNotDelivered.text);
+    ctx.recordPhaseOutcome({
+      chatId: ctx.chatId,
+      identityKey: ctx.identityKey,
+      assignment: ctx.currentAssignment,
+      phase: toExecutionPhaseModel(agentState.phase),
+      status: "blocked",
+      task: ctx.executionStrategy.task,
+      reason: bgNotDelivered.reason,
+      telemetry: ctx.buildPhaseOutcomeTelemetry({
+        state: agentState,
+        usage: ctx.responseUsage,
+        verifierDecision: "approve",
+        failureReason: bgNotDelivered.reason,
+      }),
+    });
+    await ctx.persistSessionToMemory(
+      ctx.chatId,
+      ctx.getVisibleTranscript(ctx.session),
+      /* force */ true,
+    );
+    return {
+      flow: "done",
+      visibleText: bgNotDelivered.text,
+      newState: agentState,
+      status: "blocked",
+    };
+  }
+
   if (surfacedFinalText) {
     ctx.appendVisibleAssistantMessage(ctx.session, surfacedFinalText);
   }
@@ -843,6 +911,44 @@ export async function handleInteractiveEndTurn(
 
     // 4c. Approved path
     const finalText = visibilityDecision.visibleText?.trim() ?? "";
+
+    // Approved by every verifier, and still not delivered.
+    //
+    // The conformance gates are asks, and an ask must be able to give up or it
+    // becomes a loop. But going quiet was being read as satisfied: measured on
+    // run 52, [STRADA NOTHING DRAWN] fired three times, fell silent on the
+    // fourth, and the run reported success for a game whose sixty captured
+    // frames were identical. Its own last words were "say the game does not
+    // render rather than reporting it as delivered" — advice with nothing
+    // behind it.
+    //
+    // Blocked rather than failed: nothing went wrong, the work simply stopped
+    // short of what was asked for, and blocked is the outcome the resume and
+    // replan paths already read as "there is more to do here".
+    const notDelivered = notDeliveredReport(ctx.stradaConformance, finalText);
+    if (notDelivered) {
+      ctx.recordPhaseOutcome({
+        chatId: ctx.chatId,
+        identityKey: ctx.identityKey,
+        assignment: ctx.currentAssignment,
+        phase: toExecutionPhaseModel(agentState.phase),
+        status: "blocked",
+        task: ctx.executionStrategy.task,
+        reason: notDelivered.reason,
+        telemetry: ctx.buildPhaseOutcomeTelemetry({
+          state: agentState,
+          usage: ctx.responseUsage,
+          verifierDecision: "approve",
+          failureReason: notDelivered.reason,
+        }),
+      });
+      return {
+        flow: "done",
+        visibleText: notDelivered.text,
+        newState: agentState,
+        status: "blocked",
+      };
+    }
     ctx.recordPhaseOutcome({
       chatId: ctx.chatId,
       identityKey: ctx.identityKey,
