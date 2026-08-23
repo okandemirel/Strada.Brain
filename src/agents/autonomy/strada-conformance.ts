@@ -1,4 +1,5 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { getLogger } from "../../utils/logger.js";
 import { join as joinPath, resolve as resolvePath } from "node:path";
 
@@ -248,6 +249,8 @@ function defaultListDir(dir: string): string[] {
 const NEVER_RUN_GATE_LIMIT = 3;
 /** Same shape as the sibling above: ask three times, then say it is the last. */
 const UNBOUND_PREFABS_GATE_LIMIT = 3;
+/** Same shape again: ask three times, then say which was the last. */
+const NOTHING_DRAWN_GATE_LIMIT = 3;
 
 /**
  * Where a class stops being one thing.
@@ -345,6 +348,8 @@ export class StradaConformanceGuard {
    * times it is told to — and a gate that cannot be cleared stops being a rule
    * and becomes a loop.
    */
+  private nothingDrawnRaised = 0;
+  private nothingDrawnRaisedAtCall: number | null = null;
   private unboundPrefabsRaised = 0;
   private unboundPrefabsRaisedAtCall: number | null = null;
   private neverRunGateRaised = 0;
@@ -573,6 +578,42 @@ export class StradaConformanceGuard {
    * anything a package owns are not dangling. Flagging those would bury the one
    * that matters.
    */
+  /**
+   * Has anything ever been seen on screen?
+   *
+   * Frames are captured by unity_playmode_verify into <project>/Recordings.
+   * Measured across a full session: 120 of them, every one byte-for-byte
+   * identical and all of them empty sky, while the suite grew from 33 tests to
+   * 54 and reported green throughout. Tests prove the simulation; only a frame
+   * proves the game, and nothing here had ever asked for one.
+   */
+  private nothingDrawnReason(): string | null {
+    if (this.touchedModuleRoots.size === 0) return null;
+    // A game that was never run cannot have frames, and the gate for that says
+    // so far better. Only ask about the picture once someone has tried to make
+    // one.
+    if (!this.attemptedPlaymodeVerification) return null;
+    const projectPath = this.opts?.projectPath;
+    if (!projectPath) return null;
+
+    const recordings = joinPath(projectPath, "Recordings");
+    if (!existsSync(recordings)) return "no frame has ever been captured";
+    const frames = walkFiles(recordings, 400).filter((f) => f.endsWith(".png"));
+    if (frames.length === 0) return "no frame has ever been captured";
+
+    const digests = new Set<string>();
+    for (const frame of frames.slice(0, 60)) {
+      try {
+        digests.add(createHash("sha1").update(readFileSync(frame)).digest("hex"));
+      } catch {
+        // An unreadable frame proves nothing either way.
+      }
+      if (digests.size > 1) return null;
+    }
+    if (digests.size === 0) return null;
+    return `all ${frames.length} captured frames are identical`;
+  }
+
   private danglingAssetReferences(): string[] {
     if (this.touchedModuleRoots.size === 0) return [];
     const projectPath = this.opts?.projectPath;
@@ -1062,6 +1103,30 @@ export class StradaConformanceGuard {
         "several .asmdef files in one folder makes the whole project fail to build. " +
         "One shared test assembly referencing every layer defeats the split: no layer can be " +
         "tested in isolation and a change anywhere rebuilds everything."
+      );
+    }
+
+    // Last, because it is the least specific complaint: every gate above names
+    // something to fix, while this one only knows the outcome. Placed earlier it
+    // shadowed all of them.
+    const notDrawn = this.nothingDrawnReason();
+    if (notDrawn !== null && this.nothingDrawnRaised < NOTHING_DRAWN_GATE_LIMIT) {
+      if (this.nothingDrawnRaisedAtCall !== this.toolCallsSeen) {
+        this.nothingDrawnRaised += 1;
+        this.nothingDrawnRaisedAtCall = this.toolCallsSeen;
+      }
+      const lastAsk = this.nothingDrawnRaised === NOTHING_DRAWN_GATE_LIMIT;
+      return (
+        `[STRADA NOTHING DRAWN] This game has never been observed to render: ${notDrawn}. ` +
+        "A passing suite proves the simulation, not the picture — measured on this project, 54 " +
+        "tests went green while all 120 captured frames were the same empty sky. Run " +
+        "unity_playmode_verify with captureFrames set, then read what came back: frames that are " +
+        "all identical, or one flat colour, mean nothing is being drawn however many tests pass. " +
+        "Start a level the design describes, capture, and check the frames differ from each other." +
+        (lastAsk
+          ? " This is the last time this is asked. If no frame has differed by the time you " +
+            "finish, say the game does not render rather than reporting it as delivered."
+          : "")
       );
     }
 
