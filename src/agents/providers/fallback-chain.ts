@@ -114,6 +114,15 @@ function isNonRetryableRequestError(error: unknown): boolean {
 /** Long enough for a transient blip to pass, short enough not to stall a task. */
 const EMPTY_RESPONSE_RETRY_DELAY_MS = 1_500;
 
+/**
+ * Pause before asking a stalled provider again.
+ *
+ * Short on purpose: a first-response stall has already cost the whole budget,
+ * and the measured recovery was immediate — the endpoint that stayed silent past
+ * 300s answered a fresh request 8 seconds later.
+ */
+const FIRST_RESPONSE_STALL_RETRY_DELAY_MS = 2_000;
+
 function isEmptyProviderResponse(response: ProviderResponse): boolean {
   const hasText = typeof response.text === "string" && response.text.trim().length > 0;
   const hasToolCalls = Array.isArray(response.toolCalls) && response.toolCalls.length > 0;
@@ -431,6 +440,58 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
   }
 
   /**
+   * One attempt, and a second one if the provider went silent and there is
+   * nowhere else to go.
+   *
+   * Falling over is the right answer to a stall when something can be fallen
+   * over to. When the chain is one provider deep it is not an answer at all: the
+   * call simply dies, and "All providers failed" describes a chain of one that
+   * blinked. Measured 2026-08-23 on run 52, the only live provider stayed silent
+   * past its 300s budget once, and direct requests to the same endpoint before
+   * and after returned first bytes in 2.7s, 7.9s and 16s. The condition was a
+   * queue spike that had already passed by the time the task was told it was
+   * fatal.
+   *
+   * Deliberately narrow. Only a silence — a 429, a quota stop, an auth failure
+   * and an aborted call all mean something the endpoint actually told us, and
+   * asking again would either be rude or pointless. And only once: a provider
+   * silent through two full budgets is not blinking.
+   */
+  private async attemptSurvivingOneStall(
+    provider: IAIProvider & Partial<IStreamingProvider>,
+    attempt: (
+      provider: IAIProvider & Partial<IStreamingProvider>,
+      messages: ConversationMessage[],
+      ctl: AttemptControl,
+    ) => Promise<ProviderResponse>,
+    messages: ConversationMessage[],
+    index: number,
+    label: string,
+    externalSignal?: AbortSignal,
+  ): Promise<ProviderResponse> {
+    try {
+      return await this.runAttemptWithTimeout(provider, attempt, messages);
+    } catch (error) {
+      if (!(error instanceof FirstResponseTimeoutError) || externalSignal?.aborted) {
+        throw error;
+      }
+      const health = ProviderHealthRegistry.getInstance();
+      const somewhereToFallTo = this.providers
+        .slice(index + 1)
+        .some((p) => health.isAvailable(p.name));
+      if (somewhereToFallTo) {
+        throw error;
+      }
+
+      getLogger().warn(`The only live provider went silent; asking once more (${label})`, {
+        provider: provider.name,
+      });
+      await sleep(FIRST_RESPONSE_STALL_RETRY_DELAY_MS, externalSignal);
+      return this.runAttemptWithTimeout(provider, attempt, messages);
+    }
+  }
+
+  /**
    * Try each provider in order, falling back on transient errors.
    * Non-retryable errors (400, auth) are re-thrown immediately.
    */
@@ -521,7 +582,9 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
         }
 
         const safeMessages = this.stripImages(messages, provider);
-        let response = await this.runAttemptWithTimeout(provider, attempt, safeMessages);
+        let response = await this.attemptSurvivingOneStall(
+          provider, attempt, safeMessages, i, label, externalSignal,
+        );
         // A resolved-but-empty response (no text AND no tool calls) is NOT a
         // success: a silently-empty provider must not short-circuit the chain and
         // heal its own health while the loop's circuit breaker simultaneously

@@ -94,7 +94,10 @@ describe("the budget the error message quotes", () => {
       await vi.advanceTimersByTimeAsync(120_000);
       expect(await Promise.race([settled, Promise.resolve("pending")])).toBe("pending");
 
-      await vi.advanceTimersByTimeAsync(200_000);
+      // Two budgets plus the pause between them: a lone provider that goes
+      // silent is asked once more before the chain gives up, so the failure
+      // arrives after 300s + 2s + 300s, not after the first 300s.
+      await vi.advanceTimersByTimeAsync(700_000);
       expect(await settled).toContain("300000ms");
     } finally {
       vi.useRealTimers();
