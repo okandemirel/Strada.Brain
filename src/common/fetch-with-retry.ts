@@ -472,9 +472,21 @@ async function runFetchLoop(
       const fetchInit = opts.signal ? { ...init, signal: opts.signal } : init;
       response = await fetch(url, fetchInit);
     } catch (err) {
-      // If the signal itself caused the abort, don't retry — propagate immediately
-      if (opts.signal?.aborted) {
-        throw err instanceof Error ? err : new Error(String(err));
+      // An abort is ours, not the network's.
+      //
+      // Callers pass their signal in the fetch init — openai.ts does at four
+      // call sites — and this only ever asked opts.signal. So a stall watchdog
+      // or a task cancel looked exactly like a transport failure and was
+      // retried ten times, backing off to a minute each, against a signal that
+      // could never become un-aborted. Measured 2026-08-22: ten such retries
+      // across two hours, every one carrying "This operation was aborted",
+      // while the provider answered a direct request in three seconds.
+      const effectiveSignal = opts.signal ?? (init as { signal?: AbortSignal }).signal;
+      const wasAborted =
+        effectiveSignal?.aborted === true ||
+        (err instanceof Error && (err.name === "AbortError" || /\baborted\b/iu.test(err.message)));
+      if (wasAborted) {
+        throw err instanceof Error ? err : new Error(describeThrown(err));
       }
       if (networkAttempt >= networkMaxRetries) {
         // Say it out loud before leaving. Measured 2026-08-22: a provider went
