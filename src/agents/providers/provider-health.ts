@@ -63,6 +63,15 @@ function resolveDefaultConfig(): ProviderHealthConfig {
 const MAX_ADAPTIVE_COOLDOWN_MS = 10 * 60 * 1000; // 10 minutes
 const OVERLOAD_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
 const QUOTA_COOLDOWN_MS = 8 * 60 * 60 * 1000; // 8 hours
+
+/**
+ * A rejected credential does not heal on its own.
+ *
+ * Same length as the quota cooldown, for a different reason: a quota waits for a
+ * clock, a revoked key waits for a person. Neither will come back inside a run,
+ * and both should stop costing attempts immediately.
+ */
+const CREDENTIAL_COOLDOWN_MS = QUOTA_COOLDOWN_MS;
 const SINGLE_PROVIDER_QUOTA_COOLDOWN_MS = 15 * 60 * 1000; // 15 minutes (when no fallbacks exist)
 
 /**
@@ -239,6 +248,30 @@ export class ProviderHealthRegistry {
    */
   recordOverloadedShort(providerName: string, error: string): void {
     this.markDown(this.norm(providerName), 30_000, error, false);
+  }
+
+  /**
+   * Record a rejected credential (HTTP 401, or a 403 that is not about quota).
+   *
+   * Measured 2026-08-23 on run 55: a provider whose key had been revoked failed
+   * preflight, was reported as failed, and was then tried six more times during
+   * the run. Each 401 was classified non-retryable, which ended the whole chain
+   * call rather than the provider's turn in it, and one of them blocked the
+   * task. Nothing ever recorded that the provider was unusable, so every call
+   * rediscovered it.
+   *
+   * The cooldown is long because the fix is a human action, not a wait.
+   */
+  recordCredentialRejected(providerName: string, error: string): void {
+    const normalized = this.norm(providerName);
+    const now = Date.now();
+    this.setEntry(normalized, {
+      status: "down",
+      consecutiveFailures: this.nextFailureCount(normalized),
+      lastFailureAt: now,
+      lastError: error.slice(0, 200),
+      cooldownUntil: now + CREDENTIAL_COOLDOWN_MS,
+    });
   }
 
   /**

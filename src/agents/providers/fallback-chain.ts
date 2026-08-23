@@ -86,6 +86,23 @@ const RATE_LIMIT_RE = /\b429\b|rate.?limit/i;
  */
 const QUOTA_HARD_STOP_RE = new RegExp(QUOTA_EXHAUSTED_PHRASE, "i");
 
+/**
+ * Internal-only wrapper marking a STREAMING attempt that failed AFTER it already
+ * delivered output chunks to the consumer. The wrapper never escapes this module:
+ * tryWithFallback unwraps it and rethrows {@link MidStreamFailureError.underlying}
+ * so downstream error taxonomy (rate-limit / quota / abort classification) keeps
+ * working unchanged.
+ */
+class MidStreamFailureError extends Error {
+  constructor(
+    readonly providerName: string,
+    readonly underlying: unknown,
+  ) {
+    super(`stream failed after partial output was delivered by "${providerName}"`);
+    this.name = "MidStreamFailureError";
+  }
+}
+
 function isNonRetryableRequestError(error: unknown): boolean {
   const msg = error instanceof Error ? error.message : String(error);
   if (REASONING_CONTENT_RE.test(msg)) return false;
@@ -100,10 +117,26 @@ function isNonRetryableRequestError(error: unknown): boolean {
   // auth/request error — retryable so the chain fails over to a healthy sibling.
   if (MODEL_UNSUPPORTED_RE.test(msg)) return false;
   if (/\b400\b/.test(msg) && BAD_REQUEST_RE.test(msg)) return true;
-  if (/\b403\b/.test(msg) && QUOTA_LIMIT_RE.test(msg)) return false;
-  if (/\b40[13]\b/.test(msg)) return true;
+  // 401/403 used to end the chain here. They are handled on their own path now:
+  // a rejected credential is about THIS provider's key, and says nothing about
+  // the sibling that might answer perfectly well. A 400 is different — it is
+  // about the request, and the next provider would reject it identically.
   if (INVALID_TOOL_RE.test(msg)) return true;
   return false;
+}
+
+/**
+ * A credential the provider refused: HTTP 401, or a 403 that is not about quota.
+ *
+ * Measured 2026-08-23 on run 55: a provider whose key had been revoked failed
+ * preflight, was reported as failed — and was tried six more times during the
+ * run, each 401 ending the whole chain call rather than that provider's turn in
+ * it. One of them blocked the task.
+ */
+function isCredentialRejection(error: unknown): boolean {
+  const msg = error instanceof Error ? error.message : String(error);
+  if (/\b403\b/.test(msg) && QUOTA_LIMIT_RE.test(msg)) return false;
+  return /\b40[13]\b/.test(msg);
 }
 
 /**
@@ -299,15 +332,28 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
     onChunk: StreamCallback,
     options?: ProviderCallOptions,
   ): Promise<ProviderResponse> {
+    // Whether ANY byte of this call already reached the consumer. Once true, a
+    // failing attempt must NOT fail over to the next provider: the consumer is
+    // holding half a response and appending a second provider's full text to it
+    // is corruption, not fallback (measured 2026-08-23: a mid-stream 500 on the
+    // primary concatenated a truncated answer with the fallback's complete one).
+    // The chain instead rethrows the ORIGINAL error; the run-level retry then
+    // re-executes the whole turn cleanly against whichever provider answers.
+    let emittedAny = false;
     return this.tryWithFallback("streaming", (provider, safeMessages, ctl) => {
       const opts = { ...this.withTimeoutSignal(options, ctl.timeoutSignal), onBackoff: ctl.onBackoff };
-      if (supportsStreaming(provider)) {
-        // The first chunk proves the provider is responding → clear the first-response
-        // timer so a long, healthy stream is never cut short.
-        const activityAwareChunk: StreamCallback = (chunk) => { ctl.markActivity(); return onChunk(chunk); };
-        return provider.chatStream(systemPrompt, safeMessages, tools, activityAwareChunk, opts);
-      }
-      return provider.chat(systemPrompt, safeMessages, tools, opts);
+      const attempt = supportsStreaming(provider)
+        ? provider.chatStream(
+            systemPrompt,
+            safeMessages,
+            tools,
+            (chunk) => { ctl.markActivity(); emittedAny = true; return onChunk(chunk); },
+            opts,
+          )
+        : provider.chat(systemPrompt, safeMessages, tools, opts);
+      return attempt.catch((err) => (
+        emittedAny ? Promise.reject(new MidStreamFailureError(provider.name, err)) : Promise.reject(err)
+      ));
     }, messages, options?.externalSignal);
   }
 
@@ -670,6 +716,10 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
         }
         return response;
       } catch (error) {
+        // Unwrap the internal mid-stream marker FIRST so every downstream branch
+        // (messages, health/cooldowns, taxonomy) keys on the REAL provider error.
+        const midStream = error instanceof MidStreamFailureError ? error : null;
+        if (midStream) error = midStream.underlying;
         const errorMsg = error instanceof Error ? error.message : String(error);
         lastError = error instanceof Error ? error : new Error(String(error));
 
@@ -797,6 +847,32 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
               provider: provider.name,
             });
           }
+        }
+
+        // A streaming attempt that already delivered output must not fail over: the
+        // consumer holds half a response, and a second provider's full text appended
+        // to it is corruption. The provider's health/cooldown handling above already
+        // ran on the unwrapped error; rethrow the ORIGINAL error so classification and
+        // the run-level retry keep their usual taxonomy.
+        if (midStream) {
+          logger.error(`Mid-stream failure after partial output (${label}), not trying fallbacks`, {
+            provider: provider.name,
+            error: sanitizeSecrets(errorMsg),
+          });
+          throw lastError;
+        }
+
+        // Before the non-retryable check, because this is the case that used to
+        // be swept into it. Benched for the session so no later call rediscovers
+        // it, then treated as an ordinary provider failure so the loop moves on
+        // to a sibling that may be perfectly healthy.
+        if (isCredentialRejection(error)) {
+          health.recordCredentialRejected(provider.name, errorMsg);
+          logger.error(`Provider credential rejected; benched for this session (${label})`, {
+            provider: provider.name,
+            error: sanitizeSecrets(errorMsg),
+          });
+          continue;
         }
 
         if (isNonRetryableRequestError(error)) {

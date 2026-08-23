@@ -254,17 +254,32 @@ describe("FallbackChainProvider", () => {
 
   // Guard: a GENUINE auth 401 stays non-retryable (don't hammer every sibling with a
   // request that will fail identically). Proves the carve-out is scoped to model errors.
-  it("still treats a genuine auth 401 as non-retryable (rethrows without trying siblings)", async () => {
+  /**
+   * This asserted the opposite until 2026-08-23: a genuine auth 401 ended the
+   * chain call without trying siblings. Run 55 showed what that costs. A
+   * provider whose key had been revoked failed preflight, was reported as
+   * failed, and was then tried six more times during the run — each 401 ending
+   * the whole call rather than that provider's turn in it, and one of them
+   * blocking the task, while a healthy provider sat untried beside it.
+   *
+   * A rejected credential is about THIS provider's key and says nothing about
+   * the sibling. A 400 is different — it is about the request, and the sibling
+   * would reject it identically; that case still ends the call, and is asserted
+   * in credential-rejected.test.ts. Visibility is not lost: the rejection is
+   * logged as an error and preflight already reports it as a startup notice.
+   */
+  it("fails over past a rejected credential, and benches the provider", async () => {
     const p1 = { ...createMockProvider(), name: "kimi" };
     (p1.chat as ReturnType<typeof vi.fn>).mockRejectedValue(
       new Error("Kimi API error 401: invalid_authentication: The API key is invalid or expired"),
     );
-    const p2 = { ...createMockProvider({ text: "should-not-reach" }), name: "openai" };
+    const p2 = { ...createMockProvider({ text: "healthy-sibling" }), name: "openai" };
 
     const chain = new FallbackChainProvider([p1, p2]);
 
-    await expect(chain.chat("sys", [], [])).rejects.toThrow();
-    expect(p2.chat).not.toHaveBeenCalled();
+    await expect(chain.chat("sys", [], [])).resolves.toMatchObject({ text: "healthy-sibling" });
+    expect(p2.chat).toHaveBeenCalled();
+    expect(ProviderHealthRegistry.getInstance().isAvailable("kimi")).toBe(false);
   });
 
   it("falls back to a later provider for listModels", async () => {
@@ -871,5 +886,68 @@ describe("FallbackChainProvider", () => {
       expect(recordHardStop).toHaveBeenCalledWith("opencode", Number.NaN, expect.any(String));
       expect(health.isAvailable("opencode")).toBe(false);
     });
+  });
+});
+
+describe("FallbackChainProvider mid-stream failure handling", () => {
+  beforeEach(() => {
+    ProviderHealthRegistry.resetInstance();
+  });
+
+  function streamingProvider(
+    name: string,
+    behavior: (onChunk: (c: string) => void) => Promise<ProviderResponse>,
+  ): IAIProvider {
+    return {
+      ...createMockProvider(),
+      name,
+      capabilities: { ...createMockProvider().capabilities, streaming: true },
+      chatStream: vi.fn(async (_sp: string, _m: ConversationMessage[], _t: ToolDefinition[], onChunk: (c: string) => void) => behavior(onChunk)),
+    } as IAIProvider;
+  }
+
+  it("does NOT append the fallback's full text after a partial stream was delivered", async () => {
+    // Measured 2026-08-23: provider A streamed half its answer, then died with a 500;
+    // the chain fell over and B's COMPLETE answer was appended to A's truncated one —
+    // the consumer read a corrupted interleaved response. The chain must instead
+    // rethrow so the run-level retry re-executes the whole turn cleanly.
+    const broken = streamingProvider("broken", async (onChunk) => {
+      onChunk("partial ans");
+      throw new Error("HTTP 500 upstream connect error");
+    });
+    const healthy = createMockProvider({ text: "complete answer" });
+    const chain = new FallbackChainProvider([broken, healthy]);
+
+    const chunks: string[] = [];
+    await expect(chain.chatStream("sys", [], [], (c) => { chunks.push(c); }))
+      .rejects.toThrow(/upstream connect error/);
+    expect(chunks).toEqual(["partial ans"]);
+    expect(healthy.chat).not.toHaveBeenCalled();
+  });
+
+  it("still fails over when NOTHING was delivered yet (first-response failure)", async () => {
+    const silent = streamingProvider("silent", async () => {
+      throw new Error("HTTP 503 temporarily unavailable");
+    });
+    const healthy = createMockProvider({ text: "from-fallback" });
+    const chain = new FallbackChainProvider([silent, healthy]);
+
+    const chunks: string[] = [];
+    const result = await chain.chatStream("sys", [], [], (c) => { chunks.push(c); });
+    expect(result.text).toBe("from-fallback");
+    expect(chunks).toEqual([]);
+  });
+
+  it("records the failed provider's health before refusing to fail over", async () => {
+    const broken = streamingProvider("broken", async (onChunk) => {
+      onChunk("half");
+      throw new Error("stream reset by peer");
+    });
+    const chain = new FallbackChainProvider([broken]);
+    const health = ProviderHealthRegistry.getInstance();
+    const recordFailure = vi.spyOn(health, "recordFailure");
+
+    await expect(chain.chatStream("sys", [], [], () => {})).rejects.toThrow(/stream reset by peer/);
+    expect(recordFailure).toHaveBeenCalledWith("broken", expect.stringContaining("stream reset"));
   });
 });
