@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
 
@@ -43,32 +44,36 @@ function trackedFiles(): string[] {
 
 describe("nothing tracked carries a credential", () => {
   it("finds no live-looking key in any tracked file", () => {
+    // One `git ls-files`, then read with fs and match with the real regex.
+    //
+    // Two earlier versions of this were useless. Spawning `git show` per file
+    // took thirty seconds and timed out under the full suite; handing these
+    // JavaScript patterns to `git grep` matched nothing at all, because its
+    // engine has no \b and no (?:...) — and the failure was silent, so the
+    // check passed while seeing nothing. Both passed a staged, key-bearing
+    // file straight through.
     const offenders: string[] = [];
 
     for (const file of trackedFiles()) {
       if (IS_TEST_SOURCE.test(file)) continue;
       let body: string;
       try {
-        body = execFileSync("git", ["show", `HEAD:${file}`], {
-          encoding: "utf8",
-          maxBuffer: 16 * 1024 * 1024,
-        });
+        body = readFileSync(file, "utf8");
       } catch {
-        continue; // binary, deleted, or unreadable at HEAD
+        continue; // binary, deleted, or unreadable in the working tree
       }
       if (body.length > 2_000_000) continue;
 
       for (const [name, shape] of SECRET_SHAPES) {
         for (const line of body.split("\n")) {
-          const hit = shape.exec(line);
-          if (!hit || ALLOWED.test(line)) continue;
+          if (!shape.test(line) || ALLOWED.test(line)) continue;
           offenders.push(`${file}: ${name}`);
           break;
         }
       }
     }
 
-    expect(offenders, `tracked files carry credentials:\n${offenders.join("\n")}`).toEqual([]);
+    expect([...new Set(offenders)], `tracked files carry credentials:\n${offenders.join("\n")}`).toEqual([]);
   });
 
   it("tracks no env file except the example", () => {

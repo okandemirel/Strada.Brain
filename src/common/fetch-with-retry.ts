@@ -328,6 +328,48 @@ const DEFAULTS = {
  * returns), correctly bounding simultaneous in-flight connections per provider key. A
  * throw/timeout releases the permit in a finally, so a permit can never leak.
  */
+/**
+ * What was thrown, in words a log line can carry.
+ *
+ * `String(err)` renders a plain object as "[object Object]", and that is what
+ * nine of ten retry lines said while OpenCode was unreachable on 2026-08-22.
+ * Even an Error is not enough on its own: fetch throws TypeError("fetch
+ * failed") and puts the reason — ECONNREFUSED, ENOTFOUND, a socket timeout —
+ * in `cause`. Follow the chain, name the code, and cap the result so a large
+ * object cannot flood the log.
+ */
+export function describeThrown(err: unknown, depth = 0): string {
+  if (err === null || err === undefined) return String(err);
+  if (typeof err === "string") return err === "" ? "(empty string thrown)" : err;
+  if (typeof err !== "object") return String(err);
+
+  const parts: string[] = [];
+  const record = err as Record<string, unknown>;
+  if (err instanceof Error && err.message !== "") parts.push(err.message);
+
+  for (const key of ["code", "errno", "syscall", "hostname"]) {
+    const value = record[key];
+    if (typeof value === "string" || typeof value === "number") parts.push(`${key}=${value}`);
+  }
+
+  if (parts.length === 0) {
+    try {
+      const json = JSON.stringify(err);
+      parts.push(json === undefined || json === "{}" ? `(${Object.prototype.toString.call(err)})` : json);
+    } catch {
+      parts.push(`(${Object.prototype.toString.call(err)})`);
+    }
+  }
+
+  // fetch nests the real reason one level down; two is as deep as it goes.
+  const cause = record["cause"];
+  if (cause !== undefined && cause !== null && depth < 2) {
+    parts.push(`caused by ${describeThrown(cause, depth + 1)}`);
+  }
+
+  return parts.join(" ").slice(0, 300);
+}
+
 export async function fetchWithRetry(
   url: string,
   init: RequestInit,
@@ -435,7 +477,16 @@ async function runFetchLoop(
         throw err instanceof Error ? err : new Error(String(err));
       }
       if (networkAttempt >= networkMaxRetries) {
-        throw err instanceof Error ? err : new Error(String(err));
+        // Say it out loud before leaving. Measured 2026-08-22: a provider went
+        // unreachable, ten attempts were spent over nearly two hours, and the
+        // budget ran out without a single line — the run then sat alive and
+        // silent for four more, and the only way to learn what had happened was
+        // to count retry warnings by hand.
+        logger.error(`${callerName} gave up: ${networkMaxRetries} network attempts exhausted`, {
+          attempts: networkMaxRetries,
+          error: describeThrown(err),
+        });
+        throw err instanceof Error ? err : new Error(describeThrown(err));
       }
       const networkDelay = Math.min(
         baseDelayMs * Math.pow(2, networkAttempt) + Math.random() * 100,
