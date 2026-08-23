@@ -266,6 +266,40 @@ const PLAYMODE_VERIFICATION_TOOLS: ReadonlySet<string> = new Set([
   "unity_playmode_verify",
 ]);
 
+/** Tools that answer what art the user already owns, before any is made. */
+const OWNED_ASSET_SEARCH_TOOLS: ReadonlySet<string> = new Set([
+  "unity_my_assets",
+]);
+
+/**
+ * Files that carry art rather than behaviour.
+ *
+ * Deliberately not `.prefab` or `.mat`: those compose art that already exists,
+ * and a run that assembles a bought model into a prefab is doing the right
+ * thing. What this catches is a source asset being *originated* — a sprite
+ * written out pixel by pixel, a mesh generated — which is the moment the
+ * question "does the user already have one of these" stops being answerable.
+ */
+const ART_SOURCE_EXT: ReadonlySet<string> = new Set([
+  ".png", ".jpg", ".jpeg", ".tga", ".psd", ".bmp", ".gif", ".exr",
+  ".fbx", ".obj", ".blend", ".dae", ".glb", ".gltf",
+  ".wav", ".mp3", ".ogg", ".aiff",
+]);
+
+/**
+ * Asked twice, not three times.
+ *
+ * The other gates name work the agent must do to clear them. This one names a
+ * single read-only lookup, so a run that has heard it twice and still not run
+ * it is not going to.
+ */
+const ASSETS_UNSOURCED_GATE_LIMIT = 2;
+
+function isArtSourceFile(filePath: string): boolean {
+  const dotIdx = filePath.lastIndexOf(".");
+  return dotIdx !== -1 && ART_SOURCE_EXT.has(filePath.slice(dotIdx).toLowerCase());
+}
+
 /**
  * Every module root named anywhere in a block of text.
  *
@@ -363,6 +397,12 @@ export class StradaConformanceGuard {
    * gate raised again with no tool call in between is the same asking.
    */
   private neverRunGateRaisedAtCall: number | null = null;
+  /** Whether this run asked what art the user already owns. */
+  private searchedOwnedAssets = false;
+  /** Art files this run originated inside Assets/, newest last. */
+  private readonly authoredArtFiles = new Set<string>();
+  private assetsUnsourcedRaised = 0;
+  private assetsUnsourcedRaisedAtCall: number | null = null;
   private toolCallsSeen = 0;
   /** Module roots this run wrote C# into, e.g. "Assets/Modules/GameModule". */
   private readonly touchedModuleRoots = new Set<string>();
@@ -402,6 +442,13 @@ export class StradaConformanceGuard {
     })) {
       this.toolCallsSeen += 1;
 
+      if (OWNED_ASSET_SEARCH_TOOLS.has(executedTool.toolName)) {
+        // Tracked whether it matched anything or not. "The user owns nothing
+        // that fits" is a real answer and clears this gate; the rule asks that
+        // the question was put, not that it was answered favourably.
+        this.searchedOwnedAssets = true;
+      }
+
       if (PLAYMODE_VERIFICATION_TOOLS.has(executedTool.toolName)) {
         // Tracked whether it passed or failed. A failed verification is the
         // agent's problem to solve and it already sees the error; this rule only
@@ -432,6 +479,10 @@ export class StradaConformanceGuard {
 
       if (!executedTool.isError && MUTATION_TOOLS.has(executedTool.toolName)) {
         const filePath = extractFilePath(executedTool.input);
+        if (filePath && isInsideAssets(filePath) && isArtSourceFile(filePath)) {
+          this.authoredArtFiles.add(filePath.replace(/\\/g, "/"));
+          logGuardWrite(executedTool.toolName, filePath);
+        }
         if (filePath && isCompilableFile(filePath)) {
           const moduleRoot = moduleRootFor(filePath);
           if (moduleRoot) this.touchedModuleRoots.add(moduleRoot);
@@ -1103,6 +1154,38 @@ export class StradaConformanceGuard {
         "several .asmdef files in one folder makes the whole project fail to build. " +
         "One shared test assembly referencing every layer defeats the split: no layer can be " +
         "tested in isolation and a change anywhere rebuilds everything."
+      );
+    }
+
+    // Before the outcome gates, because this one is cheapest to clear and the
+    // only one whose window closes: once the art exists, the question of whether
+    // the user already had it has stopped being worth asking.
+    if (
+      this.authoredArtFiles.size > 0 &&
+      !this.searchedOwnedAssets &&
+      this.assetsUnsourcedRaised < ASSETS_UNSOURCED_GATE_LIMIT
+    ) {
+      if (this.assetsUnsourcedRaisedAtCall !== this.toolCallsSeen) {
+        this.assetsUnsourcedRaised += 1;
+        this.assetsUnsourcedRaisedAtCall = this.toolCallsSeen;
+      }
+      const made = [...this.authoredArtFiles];
+      const lastAsk = this.assetsUnsourcedRaised === ASSETS_UNSOURCED_GATE_LIMIT;
+      return (
+        `[STRADA ASSETS UNSOURCED] This run originated ${made.length} art file(s) without ever ` +
+        `asking what the user already owns: ${made.slice(0, 5).join(", ")}` +
+        (made.length > 5 ? `, and ${made.length - 5} more` : "") +
+        ". Run unity_my_assets first — it searches the Asset Store packages already downloaded " +
+        "on this machine, needs no Editor, no login and no network, and reports what is inside " +
+        "each package rather than only its name. A model the user bought beats one that has to " +
+        "be drawn, and the design here asks for dimensional stages: measured on this project, " +
+        "25 sprites and zero meshes shipped while an owned 3D vehicle package with two .fbx " +
+        "meshes sat unread on disk." +
+        (lastAsk
+          ? " This is the last time this is asked. If the tool is not among the ones you have, " +
+            "this project's Strada.MCP submodule predates it — say so rather than silently " +
+            "making everything from scratch."
+          : "")
       );
     }
 
