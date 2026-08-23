@@ -110,6 +110,12 @@ export interface ToolRegistryOptions {
   getDaemonStatus?: () =>
     | import("../daemon/daemon-types.js").DaemonStatusSnapshot
     | undefined;
+  /**
+   * Called when the registry comes up missing something a caller was entitled
+   * to expect. The notice reaches the boot report and the user's first message,
+   * rather than only the log file.
+   */
+  onDegraded?: (notice: string) => void;
 }
 
 export class ToolRegistry {
@@ -178,15 +184,32 @@ export class ToolRegistry {
           version: mcpRuntime.source.version,
           registered: result.registered,
           skipped: result.skipped,
+          // Names, not just the count. Which 22 lost is the only part of this
+          // anyone ever needs: it is how you tell "the agent was never offered
+          // that tool" from "the agent was offered it and did not call it",
+          // and those two have opposite fixes.
+          shadowedByBuiltin: result.shadowed,
           resources: mcpRuntime.resources.length,
           prompts: mcpRuntime.prompts.length,
           bridgeState: mcpRuntime.getStatus().bridgeState,
         });
       }
     } catch (error) {
-      logger.warn("Failed to load Strada.MCP tools", {
-        error: error instanceof Error ? error.message : String(error),
-      });
+      // Not a warning line and nothing else. Measured 2026-08-23: a Unity
+      // project whose vendored Strada.MCP had never had `npm install` run in it
+      // threw "Cannot find package 'zod'" here, and the run continued with ZERO
+      // Unity tools — no scene build, no play-mode verification, no asset
+      // lookup. Two runs died that way, and the only trace was this one warn
+      // among 847 info lines. A run that cannot touch Unity at all must say so
+      // where the user reads, not where the log rotates.
+      const detail = error instanceof Error ? error.message : String(error);
+      logger.error("Failed to load Strada.MCP tools", { error: detail });
+      options.onDegraded?.(
+        "Unity toolchain unavailable: Strada.MCP failed to load, so this session has none of " +
+          "its Unity tools — no scene building, no play-mode verification, no Asset Store " +
+          `lookup. Cause: ${detail}. A vendored Strada.MCP needs its dependencies installed ` +
+          "(`npm install` in Packages/Submodules/Strada.MCP) before any of them exist.",
+      );
     }
 
     // Load plugin tools

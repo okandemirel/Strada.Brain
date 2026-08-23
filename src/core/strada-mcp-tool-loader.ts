@@ -1169,17 +1169,33 @@ class StradaMcpToolAdapter implements ITool {
   }
 }
 
+/**
+ * The outcome of loading Strada.MCP's tools into the Brain registry.
+ *
+ * `shadowed` carries names, not a count. A bare "skipped: 22" says something
+ * was dropped and refuses to say what: chasing one missing tool through that
+ * number meant reading the loader, the registry and the built-in list by hand
+ * to prove a tool the agent never called was in fact available to it. The names
+ * cost one log field and answer the question outright.
+ */
+export interface StradaMcpRegistrationResult {
+  readonly registered: number;
+  readonly skipped: number;
+  /** MCP tools that lost their name to a built-in, in registration order. */
+  readonly shadowed: readonly string[];
+}
+
 export function registerStradaMcpTools(
   registry: ToolRegistryLike,
   tools: readonly StradaMcpToolLike[],
   runtime?: StradaMcpRuntime,
-): { registered: number; skipped: number } {
+): StradaMcpRegistrationResult {
   let registered = 0;
-  let skipped = 0;
+  const shadowed: string[] = [];
 
   for (const tool of tools) {
     if (registry.has(tool.name)) {
-      skipped++;
+      shadowed.push(tool.name);
       continue;
     }
 
@@ -1201,5 +1217,5 @@ export function registerStradaMcpTools(
     registered++;
   }
 
-  return { registered, skipped };
+  return { registered, skipped: shadowed.length, shadowed };
 }

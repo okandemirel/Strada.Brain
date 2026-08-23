@@ -109,6 +109,8 @@ export async function initializeToolRegistryStage(params: {
   metricsStorage?: MetricsStorage;
   vaultRegistry?: import("../../vault/vault-registry.js").VaultRegistry;
   getIdentityState?: () => import("../../identity/identity-state.js").IdentityState;
+  /** Where a missing capability goes so the user hears about it. */
+  onDegraded?: (notice: string) => void;
 }, deps: ToolRegistryStageDeps = {}): Promise<void> {
   await params.toolRegistry.initialize(params.config, {
     memoryManager: params.memoryManager,
@@ -119,6 +121,7 @@ export async function initializeToolRegistryStage(params: {
     vaultRegistry: params.vaultRegistry,
     getIdentityState: params.getIdentityState,
     getDaemonStatus: deps.getDaemonStatus,
+    onDegraded: params.onDegraded,
   });
 }
 

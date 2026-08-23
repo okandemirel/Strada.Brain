@@ -1044,6 +1044,7 @@ async function bootstrapImpl(
       metricsStorage,
       vaultRegistry,
       getIdentityState: identityManager ? () => identityManager!.getState() : undefined,
+      onDegraded: (notice) => startupNotices.push(notice),
     },
     {
       getDaemonStatus: () => heartbeatLoop?.getDaemonStatus(),

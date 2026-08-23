@@ -37,7 +37,7 @@ describe("registerStradaMcpTools", () => {
       },
     ]);
 
-    expect(result).toEqual({ registered: 1, skipped: 0 });
+    expect(result).toEqual({ registered: 1, skipped: 0, shadowed: [] });
     expect(register).toHaveBeenCalledTimes(1);
     expect(register.mock.calls[0]?.[1]).toMatchObject({
       category: "custom",
@@ -97,7 +97,7 @@ describe("registerStradaMcpTools", () => {
       },
     ]);
 
-    expect(result).toEqual({ registered: 0, skipped: 1 });
+    expect(result).toEqual({ registered: 0, skipped: 1, shadowed: ["file_read"] });
     expect(registry.register).not.toHaveBeenCalled();
   });
 
@@ -167,5 +167,61 @@ export function bootstrap(options) {
     expect(result?.source.path).toBe(pkgRoot);
     expect(result?.tools).toHaveLength(1);
     expect(result?.tools[0]?.name).toBe("mcp_echo");
+  });
+});
+
+/**
+ * A count is not a finding.
+ *
+ * "skipped: 22" was the only record of which MCP tools never reached the agent.
+ * Tracing one of them — unity_my_assets, which a run had never called — meant
+ * reading the loader, the registry and the built-in list by hand to establish
+ * that it had in fact been available all along. The names distinguish "never
+ * offered" from "offered and ignored", and those have opposite fixes.
+ */
+describe("what the loader reports about tools it dropped", () => {
+  const shadowedTool = (name: string) => ({
+    name,
+    description: name,
+    inputSchema: { type: "object", properties: {} },
+    metadata: {
+      category: "file" as const,
+      requiresBridge: false,
+      dangerous: false,
+      readOnly: true,
+    },
+    execute: vi.fn(),
+  });
+
+  it("names every tool that lost to a built-in, in order", () => {
+    const registry = {
+      has: vi.fn((name: string) => name !== "unity_my_assets"),
+      register: vi.fn(),
+    };
+
+    const result = registerStradaMcpTools(registry, [
+      shadowedTool("file_read"),
+      shadowedTool("unity_my_assets"),
+      shadowedTool("file_write"),
+    ]);
+
+    expect(result.shadowed).toEqual(["file_read", "file_write"]);
+    expect(result.registered).toBe(1);
+  });
+
+  it("keeps the count and the names agreeing", () => {
+    const registry = {
+      has: vi.fn().mockReturnValue(true),
+      register: vi.fn(),
+    };
+
+    const result = registerStradaMcpTools(registry, [
+      shadowedTool("a"),
+      shadowedTool("b"),
+      shadowedTool("c"),
+    ]);
+
+    expect(result.skipped).toBe(result.shadowed.length);
+    expect(result.skipped).toBe(3);
   });
 });
