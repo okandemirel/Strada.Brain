@@ -4195,11 +4195,17 @@ export class Orchestrator {
     mode: ToolExecutionMode,
     reason: string,
   ): ToolResult {
+    // A rejection that names no alternative sends the run back to the same
+    // rejected shape. Measured 2026-08-24 (PixelFlow overnight): a run kept
+    // re-submitting `python3 -c` to massage level JSON — each rejection said
+    // only "looks destructive", so the loop never taught itself the tool route.
+    const guidance = /python\d?\s+-c\b|node\s+-e\b|perl\s+-e\b/i.test(reason + "")
+      ? " Inline interpreters are always refused in this mode. Do the same work with the file tools: file_read to inspect, file_write to create or replace, file_edit for targeted changes."
+      : " Choose a safer bounded operation and continue without waiting for user approval.";
     return {
       toolCallId,
       content:
-        `Self-managed write review rejected (${mode} mode) for '${toolName}': ${reason}. ` +
-        "Choose a safer bounded operation and continue without waiting for user approval.",
+        `Self-managed write review rejected (${mode} mode) for '${toolName}': ${reason}.${guidance}`,
       isError: true,
     };
   }
