@@ -123,6 +123,9 @@ const EMPTY_RESPONSE_RETRY_DELAY_MS = 1_500;
  */
 const FIRST_RESPONSE_STALL_RETRY_DELAY_MS = 2_000;
 
+/** For a provider that never said how long it needs; the historical value. */
+const DEFAULT_PROBE_TIMEOUT_MS = 15_000;
+
 function isEmptyProviderResponse(response: ProviderResponse): boolean {
   const hasText = typeof response.text === "string" && response.text.trim().length > 0;
   const hasToolCalls = Array.isArray(response.toolCalls) && response.toolCalls.length > 0;
@@ -351,6 +354,31 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
    * over. With attemptTimeoutMs <= 0 the attempt runs unbounded (back-compat).
    */
   /**
+   * How long to wait for a recovery probe to answer.
+   *
+   * This was a flat 15s, and it is the ONLY way out of cooldown — a provider
+   * that cannot answer the probe is skipped forever. So the number has to be one
+   * the provider could actually meet.
+   *
+   * Measured 2026-08-23 on run 54: OpenCode's queue returns first bytes anywhere
+   * between 2.7s and 70s, it declares a 300s first-response budget for exactly
+   * that reason, and the probe timed out at 15s. Every provider went to
+   * cooldown, the probe could never clear it, and the task died with "All
+   * providers are in cooldown. Try again later." — a state it could not leave.
+   *
+   * A provider that has told us how long it needs is believed here too. Capping
+   * it lower would just reintroduce the same bug at a different number: a probe
+   * stricter than the call it gates says a provider is dead while it is merely
+   * slow.
+   */
+  private probeBudgetFor(provider: IAIProvider): number {
+    const declared = provider.capabilities?.firstResponseTimeoutMs;
+    return typeof declared === "number" && Number.isFinite(declared) && declared > 0
+      ? declared
+      : DEFAULT_PROBE_TIMEOUT_MS;
+  }
+
+  /**
    * The first-response budget for one provider: its own declaration, or the
    * chain's.
    *
@@ -556,7 +584,7 @@ export class FallbackChainProvider implements IAIProvider, IStreamingProvider {
             "Reply with OK",
             [{ role: "user", content: "health check" }] as ConversationMessage[],
             [], // no tools
-            { signal: AbortSignal.timeout(15_000) },
+            { signal: AbortSignal.timeout(this.probeBudgetFor(provider)) },
           );
           health.recordSuccess(provider.name, "probe");
           logger.info("Provider health probe succeeded (probe-only recovery)", { provider: provider.name });

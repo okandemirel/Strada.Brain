@@ -16,6 +16,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { FallbackChainProvider } from "./fallback-chain.js";
 import type { IAIProvider } from "./provider.interface.js";
+import { ProviderHealthRegistry } from "./provider-health.js";
 
 const mockLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
 vi.mock("../../utils/logger.js", () => ({
@@ -139,4 +140,123 @@ describe("what OpenCode declares", () => {
       expect(await load(bad)).toBe(await load());
     }
   });
+});
+
+
+/**
+ * The probe that is the only way out of cooldown.
+ *
+ * It was a flat 15s. Measured 2026-08-23 on run 54: OpenCode's queue returns
+ * first bytes between 2.7s and 70s, it declares 300s for that reason, and the
+ * probe timed out at 15s. Every provider went to cooldown, the probe could never
+ * clear it, and the task died with "All providers are in cooldown. Try again
+ * later." — a state nothing could leave.
+ */
+describe("the recovery probe's budget", () => {
+  const probeBudget = (chain: FallbackChainProvider, provider: IAIProvider): number =>
+    (chain as unknown as { probeBudgetFor: (p: IAIProvider) => number })
+      .probeBudgetFor(provider);
+
+  it("believes what the provider said it needs", () => {
+    const chain = new FallbackChainProvider([silentProvider()], { attemptTimeoutMs: 90_000 });
+
+    expect(probeBudget(chain, silentProvider(300_000))).toBe(300_000);
+  });
+
+  it("is never stricter than the call it gates", () => {
+    // A probe that gives less time than the request would get calls a slow
+    // provider dead, and there is no other route back.
+    const chain = new FallbackChainProvider([silentProvider()], { attemptTimeoutMs: 90_000 });
+    const declared = 300_000;
+
+    expect(probeBudget(chain, silentProvider(declared))).toBeGreaterThanOrEqual(declared);
+  });
+
+  it("keeps the historical 15s for a provider that declared nothing", () => {
+    const chain = new FallbackChainProvider([silentProvider()], { attemptTimeoutMs: 90_000 });
+
+    expect(probeBudget(chain, silentProvider())).toBe(15_000);
+  });
+
+  it("falls back rather than trusting a nonsense declaration", () => {
+    const chain = new FallbackChainProvider([silentProvider()], { attemptTimeoutMs: 90_000 });
+
+    for (const nonsense of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(probeBudget(chain, silentProvider(nonsense))).toBe(15_000);
+    }
+  });
+});
+
+
+/**
+ * The probe budget, exercised where it is actually used.
+ *
+ * The tests above check the number; this checks that the number reaches the
+ * AbortSignal. Reverting the call site to its hardcoded 15s left every one of
+ * them green — a correct helper that nothing called.
+ */
+describe("the probe as it actually runs", () => {
+  /**
+   * Real timers, small numbers.
+   *
+   * The first attempt at this test used fake timers, and vitest's fake timers do
+   * not drive AbortSignal.timeout — so it passed with the budget wired in AND
+   * with the hardcoded 15s put back. A test that cannot fail is not evidence.
+   * Timing the rejection is crude but it does fail: at 15s the call cannot come
+   * back inside this test's deadline.
+   */
+  const neverAnswers = (declared?: number) =>
+    ({
+      name: "Slow",
+      capabilities: {
+        maxTokens: 100, streaming: false, toolCalling: false, vision: false,
+        systemPrompt: true, contextWindow: 1000,
+        ...(declared === undefined ? {} : { firstResponseTimeoutMs: declared }),
+      },
+      // Honours the abort, as a real provider does. A mock that ignores it hangs
+      // whatever the deadline is, and the deadline is the thing under test.
+      chat: vi.fn((_s: string, _m: unknown, _t: unknown, options?: { signal?: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          options?.signal?.addEventListener("abort", () =>
+            reject(new Error("The operation was aborted due to timeout")),
+          );
+        }),
+      ),
+      isAvailable: () => Promise.resolve(true),
+    }) as unknown as IAIProvider;
+
+  /**
+   * Unhealthy AND past its cooldown — both halves are required, and only that
+   * combination makes the chain probe rather than skip.
+   *
+   * The cooldown is minutes long and there is no public way to shorten it, so
+   * the entry is expired directly. Without this the loop skips the provider as
+   * unavailable, no probe runs at all, and a test aimed at the probe measures
+   * nothing — which is how the first version of this passed with the hardcoded
+   * timeout restored.
+   */
+  const stageRecovering = (name: string) => {
+    ProviderHealthRegistry.resetInstance();
+    const health = ProviderHealthRegistry.getInstance();
+    // Enough failures to leave "healthy": one is tolerated, and a tolerated
+    // failure is not a provider in recovery.
+    for (let i = 0; i < 5; i += 1) health.recordFailure(name, "earlier outage");
+    const entries = (health as unknown as {
+      entries: Map<string, { cooldownUntil: number }>;
+    }).entries;
+    for (const entry of entries.values()) entry.cooldownUntil = Date.now() - 1;
+    expect(health.isRecovering(name)).toBe(true);
+  };
+
+  it("aborts the probe on the provider's own deadline, not a hardcoded one", async () => {
+    stageRecovering("Slow");
+    const chain = new FallbackChainProvider([neverAnswers(200)], { attemptTimeoutMs: 600_000 });
+
+    const startedAt = Date.now();
+    await expect(chain.chat("sys", [{ role: "user", content: "hi" }], [])).rejects.toThrow();
+
+    // Under the old hardcoded 15s this cannot return in time at all.
+    expect(Date.now() - startedAt).toBeLessThan(4_000);
+    ProviderHealthRegistry.resetInstance();
+  }, 5_000);
 });
