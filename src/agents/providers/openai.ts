@@ -29,6 +29,10 @@ import {
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
+import {
+  isReasoningEffortRejection,
+  recoverReasoningEffort,
+} from "./reasoning-effort-rejection.js";
 
 const MAX_RETRIES = 3;
 export const MAX_SSE_BUFFER_BYTES = 1 * 1024 * 1024; // 1 MB
@@ -213,17 +217,12 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
       toolCount: tools.length,
     });
 
-    const body = this.buildRequestBody(openaiMessages, openaiTools, options?.responseSchema);
-
-    const response = await this.fetchWithRetry(
-      `${this.baseUrl}/chat/completions`,
-      {
-        method: "POST",
-        headers: await this.buildHeaders(),
-        body: JSON.stringify(body),
-        signal: options?.signal,
-      },
-      { onBackoff: options?.onBackoff },
+    // Rebuilt per attempt, not built once: a retry after the endpoint corrects
+    // our reasoning_effort must carry the corrected value, and a body captured
+    // beforehand would carry the rejected one straight back.
+    const response = await this.postChatCompletion(
+      () => this.buildRequestBody(openaiMessages, openaiTools, options?.responseSchema),
+      { signal: options?.signal, onBackoff: options?.onBackoff },
     );
 
     const data = (await response.json()) as OpenAIResponse;
@@ -253,19 +252,14 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
       messageCount: openaiMessages.length,
     });
 
-    const body = this.buildRequestBody(openaiMessages, openaiTools, options?.responseSchema);
-    body["stream"] = true;
-    body["stream_options"] = { include_usage: true };
-
-    const response = await this.fetchWithRetry(
-      `${this.baseUrl}/chat/completions`,
-      {
-        method: "POST",
-        headers: await this.buildHeaders(),
-        body: JSON.stringify(body),
-        signal: options?.signal,
+    const response = await this.postChatCompletion(
+      () => {
+        const body = this.buildRequestBody(openaiMessages, openaiTools, options?.responseSchema);
+        body["stream"] = true;
+        body["stream_options"] = { include_usage: true };
+        return body;
       },
-      { onBackoff: options?.onBackoff },
+      { signal: options?.signal, onBackoff: options?.onBackoff },
     );
 
     let text = "";
@@ -769,6 +763,71 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
     return typeof reasoning === "string" && reasoning !== "" ? reasoning : undefined;
   }
 
+  /**
+   * What the endpoint corrected us to, once it has.
+   *
+   * `undefined` means never corrected; `null` means corrected to "send nothing".
+   * Held per instance rather than per class: two providers can share this base
+   * and serve models that disagree about reasoning.
+   */
+  private reasoningEffortOverride?: ProviderCapabilities["reasoningEffort"] | null;
+
+  /** The reasoning_effort in force: the endpoint's correction if we have one. */
+  protected effectiveReasoningEffort(): ProviderCapabilities["reasoningEffort"] | undefined {
+    if (this.reasoningEffortOverride !== undefined) {
+      return this.reasoningEffortOverride ?? undefined;
+    }
+    return this.capabilities.reasoningEffort;
+  }
+
+  /**
+   * Run a chat request, letting the endpoint correct our reasoning_effort once.
+   *
+   * The retry costs one request, happens at most once per provider instance, and
+   * only for an error that names the parameter or the refusal. Everything else
+   * is rethrown untouched — a 400 has many causes and retrying the wrong one
+   * buries the real error behind a second identical failure.
+   */
+  protected async postChatCompletion(
+    buildBody: () => Record<string, unknown>,
+    init: { signal?: AbortSignal; onBackoff?: (info: { status: number; delayMs: number }) => void },
+  ): Promise<Response> {
+    const send = async (): Promise<Response> =>
+      this.fetchWithRetry(
+        `${this.baseUrl}/chat/completions`,
+        {
+          method: "POST",
+          headers: await this.buildHeaders(),
+          body: JSON.stringify(buildBody()),
+          signal: init.signal,
+        },
+        { onBackoff: init.onBackoff },
+      );
+
+    try {
+      return await send();
+    } catch (error) {
+      const asked = this.effectiveReasoningEffort();
+      const message = error instanceof Error ? error.message : String(error);
+      if (
+        this.reasoningEffortOverride !== undefined ||
+        asked === undefined ||
+        !isReasoningEffortRejection(message)
+      ) {
+        throw error;
+      }
+
+      this.reasoningEffortOverride = recoverReasoningEffort(message, asked);
+      getLogger().warn(`${this.name} corrected its reasoning_effort`, {
+        model: this.model,
+        rejected: asked,
+        nowUsing: this.reasoningEffortOverride ?? "(omitted)",
+        endpointSaid: message.slice(0, 200),
+      });
+      return send();
+    }
+  }
+
   protected buildRequestBody(
     messages: OpenAIMessage[],
     tools: unknown,
@@ -784,8 +843,9 @@ export class OpenAIProvider implements IAIProvider, IStreamingProvider {
     }
     // Only when the provider declares it: an unknown key is a 400 on several
     // OpenAI-compatible endpoints, and this one is not in the base spec.
-    if (this.capabilities.reasoningEffort) {
-      body["reasoning_effort"] = this.capabilities.reasoningEffort;
+    const effort = this.effectiveReasoningEffort();
+    if (effort) {
+      body["reasoning_effort"] = effort;
     }
     // Gated on the capability, not merely on the caller passing a schema.
     // Eight providers subclass this one and override `capabilities` without
